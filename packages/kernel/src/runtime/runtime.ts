@@ -120,9 +120,10 @@ export class KernelRuntime {
   private processTokenHandle: { tokenOf(): string | undefined; dispose(): void } | undefined
   private hubUrlValue: string
   private pluginHost: PluginHost | undefined
-  /** Startup lifecycle fact (read-only for service wiring; flipped synchronously right after `resume` — see `start()`). */
+  /** Startup lifecycle fact (read-only for service wiring; flipped once `resume` and `reconcile` both complete — see `start()`). */
   #started = false
   private startPromise: Promise<void> | undefined
+  private nodeJoinGraceDone = false
   private needsStartupAlignment = true
   private bootAlignModelEpoch = -1
   private bootAlignProfileEpoch = -1
@@ -481,7 +482,7 @@ export class KernelRuntime {
     }
   }
 
-  /** Startup lifecycle fact (read-only): true once `start()` completes (same synchronous slice after `harness.resume`). */
+  /** Startup lifecycle fact (read-only): true once `start()` completes (`harness.resume` + `pluginHost.reconcile`). */
   get started(): boolean {
     return this.#started
   }
@@ -499,7 +500,7 @@ export class KernelRuntime {
       // /ws/node gateway (listen-before-start); waiting without a listener is a no-op bounded sleep,
       // so `autoResume` startup (kernel opened and started before any server) skips it entirely.
       const graceMs = this.init.nodeJoinGraceMs ?? 0
-      if (graceMs > 0 && !this.init.autoResume) {
+      if (graceMs > 0 && !this.init.autoResume && !this.nodeJoinGraceDone) {
         const needed = new Set<string>()
         for (const meta of this.store.listConvs()) {
           if (meta.nodeId === 'local' || meta.nodeId === '') continue
@@ -514,6 +515,7 @@ export class KernelRuntime {
           isOnline: (nodeId) => this.envFabric.isOnline(nodeId),
           onNodeChanged: (listener) => this.envFabric.registry.onNodeChanged(listener),
         })
+        this.nodeJoinGraceDone = true
       }
       if (this.pluginHost) await this.pluginHost.start()
       // Converge recovered / initial conversations once all plugins have mounted runtime providers
@@ -527,20 +529,22 @@ export class KernelRuntime {
       ) {
         await this.modelsRegistry.alignConversations()
         this.needsStartupAlignment = false
+        this.bootAlignModelEpoch = this.modelsRegistry.alignmentEpoch
+        this.bootAlignProfileEpoch = this.svc.profilesSvc.mutationEpoch
       }
       this.harness.resume()
-      // Flipped synchronously right after resume (zero awaits in between): whenever `isStarted()` is true,
-      // the scheduler has already left its paused state.
-      this.#started = true
       if (this.pluginHost) await this.pluginHost.reconcile()
+      // Flip only after `harness.resume()` and `pluginHost.reconcile()` both succeed: a failed reconcile
+      // leaves `#started === false` so retrying `start()` re-runs reconcile and the HTTP `503 hub_starting`
+      // gate continues holding external traffic until startup converges.
+      if (!this.closed) this.#started = true
     })()
     this.startPromise = attempt
     try {
       await attempt
-    } catch (error) {
+    } finally {
       // Clear in-flight handle only if it is still this attempt (avoids clobbering concurrent retries).
       if (this.startPromise === attempt) this.startPromise = undefined
-      throw error
     }
   }
 
