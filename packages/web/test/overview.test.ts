@@ -2623,6 +2623,30 @@ test('buildSidebarGroupedWorkingSet and sidebar group-by persistence: per-group 
   assert.equal(byProfile.groups[2]!.canCreateConversation, true)
   assert.equal(byProfile.omittedQuietCount, 2)
 
+  // 有会话的角色优先于 0 会话空闲角色，同时两组各自保留站位顺序
+  const emptyAssistantCards = buildCards(
+    coderQuiet.slice(0, 1),
+    new Map(),
+    { profiles, plugins },
+  )
+  const emptyAssistantStandings = buildAgentStandings({
+    profiles,
+    conversations: coderQuiet.slice(0, 1),
+    plugins,
+    locale: 'zh-CN',
+  })
+  const populatedFirst = buildSidebarGroupedWorkingSet({
+    groupBy: 'profile',
+    cards: emptyAssistantCards,
+    activeConversationIds: new Set(),
+    agentStandings: emptyAssistantStandings,
+  })
+  assert.deepEqual(
+    populatedFirst.groups.map((g) => g.profileId),
+    ['coder', 'assistant', 'researcher'],
+    'populated profile groups lead 0-conversation creatable profiles while preserving standing order in each tier',
+  )
+
   // 搜索态：突破单组上限，仅返回命中分组
   const profileSearch = buildSidebarGroupedWorkingSet({
     groupBy: 'profile',

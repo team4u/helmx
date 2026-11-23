@@ -258,6 +258,19 @@ button, a, input, select, textarea { touch-action: manipulation; }
     width: 38px;
     height: 38px;
   }
+  .sidebar-working-set-header,
+  .sidebar-group-by-btn,
+  .sidebar-overview-section-head,
+  .sidebar-overview-section-toggle {
+    min-height: 32px;
+    height: 32px;
+  }
+  .sidebar-header-icon-btn,
+  .sidebar-section-plus-slot,
+  .sidebar-section-new-topic-btn {
+    width: 28px;
+    height: 28px;
+  }
   /* 移动端抽屉 Rail 保持与桌面端一致：品牌标识与空间切换按钮（对话 / 视图 / 设置）保留在顶部，
      语言与主题按钮保持底部对齐，顶部用通栏分隔线与上方空间隔离。 */
   .activity-rail-footer {

@@ -607,9 +607,10 @@ test('Sidebar 工作集分组切换（按状态 / 按角色 / 按节点）：还
     )
     await act(async () => {})
 
-    // 默认按状态：分组按钮打开菜单不冒泡到 .nav-item（防误关移动端抽屉）
+    // 默认按状态：分组下拉直接展示当前维度，打开菜单不冒泡到 .nav-item（防误关移动端抽屉）
     const groupTrigger = document.body.querySelector<HTMLButtonElement>('.sidebar-group-by-btn')!
     assert.ok(groupTrigger !== null)
+    assert.equal(groupTrigger.querySelector('.sidebar-group-by-label')?.textContent, '按状态')
     await act(async () => {
       groupTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
       groupTrigger.click()
@@ -622,16 +623,27 @@ test('Sidebar 工作集分组切换（按状态 / 按角色 / 按节点）：还
       byProfileOption.click()
     })
     assert.equal(window.localStorage.getItem(SIDEBAR_GROUP_BY_STORAGE_KEY), 'profile')
+    assert.equal(groupTrigger.querySelector('.sidebar-group-by-label')?.textContent, '按角色')
 
     // 按角色分组：保留全部三个可见角色，包含 0 会话的「调研专员」；且高频 coder 不会挤掉 assistant
     const profileSections = [...document.body.querySelectorAll<HTMLElement>('.sidebar-overview-section-profile')]
     assert.equal(profileSections.length, 3)
+    assert.equal(document.body.querySelectorAll('.sidebar-overview-section-head .overview-section-dot').length, 0, '组头不渲染冗余状态点')
     assert.ok(document.body.textContent!.includes('助理早期话题'), '按角色独立截断，高频角色不会挤掉其他角色')
     assert.ok(document.body.textContent!.includes('调研专员'), '0 会话可见角色仍保留站位')
-    // coder 组内隐藏重复角色元信息，且底部查看全部透传 group=profile
+    // coder 组内隐藏重复角色元信息，展开态省略计数以免与 + 粘连；折叠后才显示计数
     const coderSection = profileSections.find((s) => s.dataset.groupKey === 'profile:coder')!
     assert.equal(coderSection.querySelectorAll('.sidebar-overview-meta-profile').length, 0, '按角色分组时行内省略重复角色名')
     assert.equal(coderSection.querySelectorAll('.sidebar-overview-item').length, 5, '每角色组内独立保留 5 条近期会话')
+    assert.ok(coderSection.querySelector('.sidebar-overview-section-count') === null, '按角色展开态不在行尾堆叠数字与 +')
+    const coderToggle = coderSection.querySelector<HTMLButtonElement>('.sidebar-overview-section-toggle')!
+    await act(async () => {
+      coderToggle.click()
+    })
+    assert.equal(coderSection.querySelector('.sidebar-overview-section-count')?.textContent, '5', '折叠态显示分组会话计数')
+    await act(async () => {
+      coderToggle.click()
+    })
 
     // 点 0 会话角色行直进待命页并关闭抽屉
     const emptyAgentBtn = document.body.querySelector<HTMLButtonElement>('.sidebar-overview-section-empty-agent')!
@@ -666,6 +678,7 @@ test('Sidebar 工作集分组切换（按状态 / 按角色 / 按节点）：还
       byNodeOption.click()
     })
     assert.equal(window.localStorage.getItem(SIDEBAR_GROUP_BY_STORAGE_KEY), 'node')
+    assert.equal(groupTrigger.querySelector('.sidebar-group-by-label')?.textContent, '按节点')
     const nodeKeys = [...document.body.querySelectorAll<HTMLElement>('.sidebar-overview-section-node')].map(
       (s) => s.dataset.groupKey,
     )

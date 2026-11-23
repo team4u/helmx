@@ -298,10 +298,6 @@ export const shellMessages = {
   },
 
   // Sidebar conversation working set & quick switcher
-  'shell.sidebar.workingSetTitle': {
-    en: 'Working set',
-    'zh-CN': '工作集',
-  },
   'shell.sidebar.sectionRecent': {
     en: 'Recent',
     'zh-CN': '近期',

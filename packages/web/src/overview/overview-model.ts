@@ -1030,7 +1030,19 @@ export function buildSidebarGroupedWorkingSet(input: {
       })
     }
 
-    return { groups, totalRootCount, omittedQuietCount, searchActive: false }
+    const populatedGroups: SidebarWorkingSetGroup[] = []
+    const emptyGroups: SidebarWorkingSetGroup[] = []
+    for (const group of groups) {
+      if (group.cards.length > 0) populatedGroups.push(group)
+      else emptyGroups.push(group)
+    }
+
+    return {
+      groups: [...populatedGroups, ...emptyGroups],
+      totalRootCount,
+      omittedQuietCount,
+      searchActive: false,
+    }
   }
 
   // groupBy === 'node'

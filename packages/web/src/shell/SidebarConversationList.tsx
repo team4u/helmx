@@ -716,56 +716,54 @@ export function SidebarConversationList({
       </div>
 
       <div className="sidebar-group sidebar-overview-group">
-        <div className="sidebar-group-header">
-          <span>{t('shell.sidebar.workingSetTitle')}</span>
+        <div className="sidebar-group-header sidebar-working-set-header">
+          <DropdownMenu open={groupMenuOpen} onOpenChange={setGroupMenuOpen}>
+            <Tooltip content={t('shell.overview.groupByLabel')} side="top">
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="sidebar-group-by-btn"
+                  aria-label={`${t('shell.overview.groupByLabel')}: ${currentGroupLabel}`}
+                  aria-haspopup="menu"
+                  aria-expanded={groupMenuOpen}
+                >
+                  <span className="sidebar-group-by-label">{currentGroupLabel}</span>
+                  <HelmxIcon name="chevrons-up-down" size={12} className="sidebar-group-by-chevron" />
+                </button>
+              </DropdownMenuTrigger>
+            </Tooltip>
+            <DropdownMenuPortal>
+              <DropdownMenuContent className="pane-more-popover" align="start" sideOffset={4}>
+                {groupByOptions.map((option) => {
+                  const selected = groupBy === option.value
+                  return (
+                    <DropdownMenuItem
+                      key={option.value}
+                      className="sidebar-group-by-item"
+                      data-group-by-option={option.value}
+                      data-active={selected ? 'true' : undefined}
+                      aria-checked={selected}
+                      onSelect={() => handleSelectGroupBy(option.value)}
+                    >
+                      <span className="pane-more-item-label">
+                        <HelmxIcon name={option.icon} size={13} />
+                        {option.label}
+                      </span>
+                      {selected && <HelmxIcon name="check" size={12} className="sidebar-group-by-item-check" />}
+                    </DropdownMenuItem>
+                  )
+                })}
+              </DropdownMenuContent>
+            </DropdownMenuPortal>
+          </DropdownMenu>
           <div className="sidebar-group-header-actions">
-            <DropdownMenu open={groupMenuOpen} onOpenChange={setGroupMenuOpen}>
-              <Tooltip content={`${t('shell.overview.groupByLabel')}: ${currentGroupLabel}`} side="top">
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-icon-xs sidebar-group-by-btn"
-                    style={{ color: groupBy !== 'status' ? 'var(--accent)' : undefined }}
-                    aria-label={t('shell.overview.groupByLabel')}
-                    aria-haspopup="menu"
-                    aria-expanded={groupMenuOpen}
-                  >
-                    <HelmxIcon name="layers" size={12} />
-                  </button>
-                </DropdownMenuTrigger>
-              </Tooltip>
-              <DropdownMenuPortal>
-                <DropdownMenuContent className="pane-more-popover" align="end" sideOffset={4}>
-                  {groupByOptions.map((option) => {
-                    const selected = groupBy === option.value
-                    return (
-                      <DropdownMenuItem
-                        key={option.value}
-                        className="sidebar-group-by-item"
-                        data-group-by-option={option.value}
-                        data-active={selected ? 'true' : undefined}
-                        aria-checked={selected}
-                        onSelect={() => handleSelectGroupBy(option.value)}
-                      >
-                        <span className="pane-more-item-label">
-                          <HelmxIcon name={option.icon} size={13} />
-                          {option.label}
-                        </span>
-                        {selected && <HelmxIcon name="check" size={12} className="sidebar-group-by-item-check" />}
-                      </DropdownMenuItem>
-                    )
-                  })}
-                </DropdownMenuContent>
-              </DropdownMenuPortal>
-            </DropdownMenu>
             <Tooltip
               content={filterOpen ? t('shell.agents.collapseFilters') : t('shell.sidebar.overviewFilter')}
               side="top"
             >
               <button
                 type="button"
-                className="btn btn-ghost btn-icon-xs"
-                style={{ color: filterOpen ? 'var(--accent)' : undefined }}
+                className={`sidebar-header-icon-btn${filterOpen ? ' is-active' : ''}`}
                 aria-label={t('shell.sidebar.overviewFilter')}
                 aria-pressed={filterOpen}
                 onClick={() => {
@@ -777,7 +775,7 @@ export function SidebarConversationList({
                   }
                 }}
               >
-                <HelmxIcon name="list-filter" size={12} />
+                <HelmxIcon name="search" size={13} />
               </button>
             </Tooltip>
           </div>
@@ -835,17 +833,20 @@ export function SidebarConversationList({
                     className="sidebar-overview-section sidebar-overview-section-profile sidebar-overview-section-empty-profile"
                     data-group-key={group.key}
                   >
-                    <button
-                      type="button"
-                      className="sidebar-overview-section-toggle sidebar-overview-section-empty-agent"
-                      title={t('shell.agents.newTopicUnder', { label: group.label })}
-                      aria-label={t('shell.agents.newTopicUnder', { label: group.label })}
-                      onClick={() => openStandby(profileId)}
-                    >
-                      <HelmxIcon name="bot" size={11} className="sidebar-overview-section-icon" />
-                      <span className="sidebar-overview-section-title">{group.label}</span>
-                      <HelmxIcon name="plus" size={11} className="sidebar-overview-section-plus" />
-                    </button>
+                    <div className="sidebar-overview-section-head">
+                      <button
+                        type="button"
+                        className="sidebar-overview-section-toggle sidebar-overview-section-empty-agent"
+                        title={t('shell.agents.newTopicUnder', { label: group.label })}
+                        aria-label={t('shell.agents.newTopicUnder', { label: group.label })}
+                        onClick={() => openStandby(profileId)}
+                      >
+                        <span className="sidebar-overview-section-title">{group.label}</span>
+                        <span className="sidebar-section-plus-slot" aria-hidden="true">
+                          <HelmxIcon name="plus" size={13} className="sidebar-overview-section-plus" />
+                        </span>
+                      </button>
+                    </div>
                   </section>
                 )
               }
@@ -856,6 +857,7 @@ export function SidebarConversationList({
                 group.kind === 'bucket' && group.bucket === 'quiet' && !workingSet.searchActive
                   ? t('shell.sidebar.sectionRecent')
                   : group.label
+              const showCount = group.kind !== 'profile' || collapsed
               return (
                 <section
                   key={group.key}
@@ -871,46 +873,32 @@ export function SidebarConversationList({
                       aria-expanded={!collapsed}
                       onClick={() => toggleGroupCollapsed(group.key)}
                     >
-                      <HelmxIcon
-                        name={collapsed ? 'chevron-right' : 'chevron-down'}
-                        size={11}
-                        className="sidebar-overview-section-chevron"
-                      />
-                      {group.kind === 'bucket' && group.bucket !== undefined && (
-                        <span
-                          className={`overview-section-dot overview-section-dot-${group.bucket}`}
-                          aria-hidden="true"
-                        />
-                      )}
-                      {group.kind === 'profile' && (
-                        <HelmxIcon name="bot" size={11} className="sidebar-overview-section-icon" />
-                      )}
-                      {group.kind === 'node' && (
-                        <HelmxIcon
-                          name={group.nodeId === 'local' ? 'laptop' : 'server'}
-                          size={11}
-                          className="sidebar-overview-section-icon"
-                        />
-                      )}
                       <span
                         className={`sidebar-overview-section-title${group.kind === 'node' && group.nodeId !== 'local' ? ' mono' : ''}`}
                       >
                         {sectionTitle}
                       </span>
-                      <span className="sidebar-overview-section-count tabular-nums">{group.cards.length}</span>
+                      <HelmxIcon
+                        name={collapsed ? 'chevron-right' : 'chevron-down'}
+                        size={12}
+                        className="sidebar-overview-section-chevron"
+                      />
+                      {showCount && (
+                        <span className="sidebar-overview-section-count tabular-nums">{group.cards.length}</span>
+                      )}
                     </button>
                     {group.kind === 'profile' && group.canCreateConversation === true && group.profileId !== undefined && (
                       <Tooltip content={t('shell.agents.newTopicUnder', { label: group.label })} side="top">
                         <button
                           type="button"
-                          className="btn btn-ghost btn-icon-xs sidebar-section-new-topic-btn"
+                          className="sidebar-section-new-topic-btn"
                           aria-label={t('shell.agents.newTopicUnder', { label: group.label })}
                           onClick={(e) => {
                             e.stopPropagation()
                             openStandby(group.profileId!)
                           }}
                         >
-                          <HelmxIcon name="plus" size={11} />
+                          <HelmxIcon name="plus" size={13} />
                         </button>
                       </Tooltip>
                     )}

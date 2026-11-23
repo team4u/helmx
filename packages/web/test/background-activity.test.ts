@@ -888,10 +888,10 @@ test('zh-CN sidebar render: conversations working set shows Chinese chrome copy 
   })
   const html = renderSidebar(store)
   assert.ok(html.includes('>会话总览</span>'), 'top overview entry renders zh-CN copy')
-  assert.ok(html.includes('<span>工作集</span>'), 'working set group title renders zh-CN copy')
+  assert.ok(html.includes('按状态'), 'working set group-by switcher renders zh-CN copy')
   assert.ok(html.includes('筛选会话'), 'filter tooltip/aria-label renders zh-CN')
   assert.ok(!html.includes('已归档历史'), 'archived conversations are governed in #/overview, not duplicated in the sidebar')
-  assert.ok(!html.includes('<span>Working set</span>'), 'no leftover English group title under zh-CN')
+  assert.ok(!html.includes('By status'), 'no leftover English group-by copy under zh-CN')
 })
 
 test('SidebarConversationList switches copy immediately on setLocale (en -> zh-CN -> en)', { timeout: 60_000 }, async () => {
@@ -905,19 +905,19 @@ test('SidebarConversationList switches copy immediately on setLocale (en -> zh-C
   const root: Root = createRoot(host)
   try {
     await act(async () => { root.render(e(Harness)) })
-    const groupTitle = host.querySelector('.sidebar-overview-group .sidebar-group-header > span')
-    assert.ok(groupTitle !== null, 'working set group header renders')
-    assert.equal(groupTitle.textContent, 'Working set', 'renders the en catalog copy by default')
+    const groupTitle = host.querySelector('.sidebar-overview-group .sidebar-group-by-label')
+    assert.ok(groupTitle !== null, 'working set group-by switcher renders')
+    assert.equal(groupTitle.textContent, 'By status', 'renders the en catalog copy by default')
 
     await act(async () => { store.setLocale('zh-CN') })
     assert.equal(store.getPrefsSlice().locale, 'zh-CN')
-    const groupTitleZh = host.querySelector('.sidebar-overview-group .sidebar-group-header > span')
+    const groupTitleZh = host.querySelector('.sidebar-overview-group .sidebar-group-by-label')
     assert.ok(groupTitleZh !== null)
-    assert.equal(groupTitleZh.textContent, '工作集', 'locale switch re-renders shell chrome in place')
+    assert.equal(groupTitleZh.textContent, '按状态', 'locale switch re-renders shell chrome in place')
 
     await act(async () => { store.setLocale('en') })
     assert.equal(store.getPrefsSlice().locale, 'en')
-    assert.equal(host.querySelector('.sidebar-overview-group .sidebar-group-header > span')?.textContent, 'Working set', 'switching back to en restores English immediately')
+    assert.equal(host.querySelector('.sidebar-overview-group .sidebar-group-by-label')?.textContent, 'By status', 'switching back to en restores English immediately')
   } finally {
     localStorage.removeItem('helmx:locale')
     await act(async () => { root.unmount() })
