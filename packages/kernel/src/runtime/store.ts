@@ -446,10 +446,10 @@ export class HelmxStore {
       })
     }
     this.enqueue(async () => {
-      await this.db.run(
-        `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, owned_by, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at)
+      const upsertSql = `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, owned_by, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, owned_by=excluded.owned_by, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, run_duration_ms=excluded.run_duration_ms, run_started_at=excluded.run_started_at, updated_at=excluded.updated_at`,
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, owned_by=excluded.owned_by, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, run_duration_ms=excluded.run_duration_ms, run_started_at=excluded.run_started_at, updated_at=excluded.updated_at`
+      const upsertParams = [
         snap.id,
         snap.title,
         snap.profileId,
@@ -471,15 +471,22 @@ export class HelmxStore {
         snap.runStartedAt ?? null,
         snap.createdAt,
         snap.updatedAt,
-      )
-      // Title changes must update the title column across every FTS row for this conversation (routed via helmx_fts_map).
-      if (titleChanged) {
-        await this.db.run(
+      ] as const
+      if (!titleChanged) {
+        await this.db.run(upsertSql, ...upsertParams)
+        return
+      }
+      // Title changes must update helmx_conversations and helmx_conversation_fts atomically in the same transaction
+      // so a crash or SQL failure between the two statements never leaves persisted title and FTS rows out of sync.
+      const redactedTitle = this.ftsRedact(snap.title)
+      await this.db.transaction(async (tx) => {
+        await tx.run(upsertSql, ...upsertParams)
+        await tx.run(
           'UPDATE helmx_conversation_fts SET title = ? WHERE rowid IN (SELECT fts_rowid FROM helmx_fts_map WHERE conversation_id = ?)',
-          this.ftsRedact(snap.title),
+          redactedTitle,
           snap.id,
         )
-      }
+      })
     })
   }
 

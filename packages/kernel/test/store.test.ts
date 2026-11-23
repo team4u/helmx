@@ -305,6 +305,39 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
     await rm(base, { recursive: true, force: true })
   })
 
+  it('upsertConv title change updates helmx_conversations and helmx_conversation_fts in the same transaction (FTS failure rolls back main table)', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'fts-title-tx-'))
+    const { store, database } = await openStoreAt(base)
+    try {
+      store.upsertConv(conv(50, { title: 'original-title' }))
+      store.indexFts(50, 'entry:1', 'original-title', 'atomic title test body')
+      await store.flushPublic()
+
+      const fixture = attachFaults(database)
+      fixture.failNext('UPDATE helmx_conversation_fts')
+      store.upsertConv(conv(50, { title: 'broken-new-title', updatedAt: 2000 }))
+      await assert.rejects(
+        () => store.flushPublic(),
+        (e: unknown) => e instanceof HelmxError && e.code === 'store_flush_failed',
+      )
+      await store.close()
+      await database.close()
+
+      // Reopen from disk: transaction rollback must have kept main table and FTS completely in sync at 'original-title'.
+      const reopened = await openStoreAt(base)
+      try {
+        assert.equal(reopened.store.getConv(50)?.title, 'original-title')
+        assert.equal((await reopened.store.search('original-title')).length, 1)
+        assert.equal((await reopened.store.search('broken-new-title')).length, 0)
+      } finally {
+        await reopened.store.close()
+        await reopened.database.close()
+      }
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
   it('FTS atomic rebuild: failure rolls back preserving previous index (never fakes success)', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'rebuild-'))
     const { store, database } = await openStoreAt(base)
