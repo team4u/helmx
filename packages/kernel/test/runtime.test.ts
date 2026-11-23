@@ -311,6 +311,86 @@ describe('Ask CAS and persistence boundaries', { timeout: 60_000 }, () => {
     }
   })
 
+  it('CAS against live conversation stateChangeSeq: createAsk own blocked bump does not self-supersede, later state advance supersedes, unwatermarked client seq conflict rejects 409', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 't9-live-cas'))
+    try {
+      // 1) Caller captures current stateChangeSeq before createAsk; createAsk bumps seq via setPendingAskCount,
+      //    yet with no other state transition the ask must answer cleanly (not self-supersede).
+      const seqBefore1 = kernel.getConversation(1).stateChangeSeq
+      const ask1Promise = kernel.createAsk({
+        conversationId: 1,
+        title: 'no external change',
+        expectedStateSeq: seqBefore1,
+        fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+      })
+      await waitFor(() => kernel.listAsks('pending').length === 1 && kernel.getConversation(1).status === 'blocked')
+      const ask1 = kernel.listAsks('pending')[0]!
+      const res1 = await kernel.answerAsk(ask1.id, { confirm: 'true' }, seqBefore1)
+      assert.equal(res1.status, 'answered')
+      assert.deepEqual((await ask1Promise).answers, { confirm: 'true' })
+
+      // 2) After createAsk, an external conversation update advances stateChangeSeq -> answerAsk auto-supersedes.
+      const seqBefore2 = kernel.getConversation(1).stateChangeSeq
+      const ask2Promise = kernel.createAsk({
+        conversationId: 1,
+        title: 'superseded after update',
+        expectedStateSeq: seqBefore2,
+        fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+      })
+      await waitFor(() => kernel.listAsks('pending').length === 1 && kernel.getConversation(1).status === 'blocked')
+      const ask2 = kernel.listAsks('pending')[0]!
+      await kernel.updateConversation(1, { title: 'state moved forward' })
+      const res2 = await kernel.answerAsk(ask2.id, { confirm: 'true' }, seqBefore2)
+      assert.equal(res2.status, 'superseded')
+      const settled2 = await ask2Promise
+      assert.equal(settled2.status, 'superseded')
+      assert.deepEqual(settled2.answers, {})
+
+      // 3) Unwatermarked ask: client supplying a stale expectedStateSeq gets 409 without cancelling the ask.
+      const ask3Promise = kernel.createAsk({
+        conversationId: 1,
+        title: 'client seq guard',
+        fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+      })
+      await waitFor(() => kernel.listAsks('pending').length === 1 && kernel.getConversation(1).status === 'blocked')
+      const ask3 = kernel.listAsks('pending')[0]!
+      const seqWhilePending = kernel.getConversation(1).stateChangeSeq
+      await kernel.updateConversation(1, { title: 'another advance' })
+      await assert.rejects(
+        () => kernel.answerAsk(ask3.id, { confirm: 'true' }, seqWhilePending),
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_conflict' && err.status === 409,
+      )
+      const currentSeq = kernel.getConversation(1).stateChangeSeq
+      const res3 = await kernel.answerAsk(ask3.id, { confirm: 'true' }, currentSeq)
+      assert.equal(res3.status, 'answered')
+      assert.equal((await ask3Promise).status, 'answered')
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('createConversation validates ownedBy before creating SDK conversation (no orphan pi_conversations row across restart)', { timeout: 60_000 }, async () => {
+    const dir = join(root, 't9-ownedby-preflight')
+    const kernel = await openRuntime(dir)
+    try {
+      const initialIds = kernel.listConversations().map((c) => c.id)
+      await assert.rejects(
+        () => kernel.createConversation({ title: 'should-not-exist', ownedBy: 'invalid-owner' as never }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      )
+      assert.deepEqual(kernel.listConversations().map((c) => c.id), initialIds)
+    } finally {
+      await kernel.close()
+    }
+    // Reopen triggers recover() scanning pi_conversations: an orphan SDK row would have resurrected here.
+    const reopened = await openRuntime(dir)
+    try {
+      assert.equal(reopened.listConversations().length, 1)
+    } finally {
+      await reopened.close()
+    }
+  })
+
   it('persisted pending asks remain across restart alongside diagnostic notice (no silent discard)', { timeout: 60_000 }, async () => {
     const dir = join(root, 't10')
     const kernel = await openRuntime(dir)
@@ -1465,6 +1545,40 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
       // FTS indexes the post-transform text.
       const hits = await kernel.search('normalized')
       assert.ok(hits.length >= 1)
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('input hook transform with malformed attachments rejects with invalid_hook_result (never raw TypeError)', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'p6-bad-attachments'))
+    try {
+      let badAttachments: unknown = 'not-an-array'
+      await kernel.plugins.register({
+        id: 'test:bad-attachments',
+        definePlugin(ctx) {
+          ctx.hook.onInput((payload) => ({
+            action: 'transform',
+            value: {
+              ...payload,
+              input: { ...payload.input, attachments: badAttachments as never },
+            },
+          }))
+        },
+      })
+      for (const candidate of [
+        'not-an-array',
+        [null],
+        ['art-1'],
+        [{ id: '', name: 'a.txt', mimeType: 'text/plain', size: 1 }],
+        [{ id: 'art-1', name: 'a.txt', mimeType: 'text/plain', size: -1 }],
+      ]) {
+        badAttachments = candidate
+        await assert.rejects(
+          () => kernel.submitInput(1, 'hello'),
+          (err: unknown) => err instanceof HelmxError && err.code === 'invalid_hook_result',
+        )
+      }
     } finally {
       await kernel.close()
     }

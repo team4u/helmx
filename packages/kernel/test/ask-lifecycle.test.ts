@@ -551,4 +551,101 @@ describe('Ask CAS semantics preservation', { timeout: 60_000 }, () => {
       await ctx.close()
     }
   })
+
+  it('CAS checks live conversation stateChangeSeq atomically: advances supersede, unmatched client seq on unwatermarked ask returns 409, concurrent answerAsk settles once', { timeout: 60_000 }, async () => {
+    const ctx = await openService()
+    try {
+      const makeConv = (stateChangeSeq: number) => ({
+        id: 1,
+        title: 'conv-1',
+        profileId: 'assistant',
+        tags: [],
+        nodeId: 'local',
+        cwd: '/tmp',
+        model: '',
+        thinkingLevel: '',
+        unread: false,
+        pinned: false,
+        stateChangeSeq,
+        completionSeq: 0,
+        runDurationMs: 0,
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      })
+      ctx.store.upsertConv(makeConv(5))
+      await ctx.store.flushPublic()
+
+      // 1) Matching live stateChangeSeq (5 <= 5): answers normally.
+      const p1 = ctx.service.createAsk({ ...baseSpec, id: 'cas-match', expectedStateSeq: 5, title: 'match' })
+      await new Promise((r) => setTimeout(r, 20))
+      const ans1 = await ctx.service.answerAsk('cas-match', { x: 'ok' }, 5)
+      assert.equal(ans1.status, 'answered')
+      assert.equal((await assertSettlesWithin(p1, 2_000, 'cas-match')).status, 'answered')
+
+      // 2) Live stateChangeSeq advances past persisted watermark (6 > 5): auto-settles as superseded without fake answers.
+      const p2 = ctx.service.createAsk({ ...baseSpec, id: 'cas-stale', expectedStateSeq: 5, title: 'stale' })
+      await new Promise((r) => setTimeout(r, 20))
+      ctx.store.upsertConv(makeConv(6))
+      await ctx.store.flushPublic()
+
+      const res2 = await ctx.service.answerAsk('cas-stale', { x: 'late' }, 5)
+      assert.equal(res2.status, 'superseded')
+      const settled2 = await assertSettlesWithin(p2, 2_000, 'cas-stale superseded')
+      assert.equal(settled2.status, 'superseded')
+      assert.deepEqual(settled2.answers, {})
+      const persisted2 = ctx.store.getAsk('cas-stale')!
+      assert.equal(persisted2.status, 'superseded')
+      assert.equal(persisted2.resultJson, undefined)
+
+      // 3) Unwatermarked ask + client-supplied expectedStateSeq vs live stateChangeSeq (6): mismatch -> 409 (ask stays pending), match -> answered.
+      const p3 = ctx.service.createAsk({ ...baseSpec, id: 'cas-client-only', title: 'client seq' })
+      await new Promise((r) => setTimeout(r, 20))
+      await assert.rejects(
+        () => ctx.service.answerAsk('cas-client-only', { x: 'old' }, 5),
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_conflict' && err.status === 409,
+      )
+      assert.equal(ctx.store.getAsk('cas-client-only')!.status, 'pending')
+      const res3 = await ctx.service.answerAsk('cas-client-only', { x: 'fresh' }, 6)
+      assert.equal(res3.status, 'answered')
+      assert.deepEqual((await assertSettlesWithin(p3, 2_000, 'cas-client-only')).answers, { x: 'fresh' })
+
+      // 4) Concurrent answerAsk in the same tick: atomic mirror flip lets exactly one succeed and rejects the other with 409.
+      const p4 = ctx.service.createAsk({ ...baseSpec, id: 'cas-race', expectedStateSeq: 6, title: 'race' })
+      await new Promise((r) => setTimeout(r, 20))
+      const [first, second] = await Promise.allSettled([
+        ctx.service.answerAsk('cas-race', { x: 'winner' }, 6),
+        ctx.service.answerAsk('cas-race', { x: 'loser' }, 6),
+      ])
+      assert.equal(first.status, 'fulfilled')
+      assert.equal(second.status, 'rejected')
+      assert.ok(second.reason instanceof HelmxError && second.reason.code === 'ask_already_settled')
+      assert.deepEqual((await assertSettlesWithin(p4, 2_000, 'cas-race')).answers, { x: 'winner' })
+    } finally {
+      await ctx.close()
+    }
+  })
+
+  it('corrupted AskRow specJson in mirror fails explicitly with store_data_corrupted instead of raw SyntaxError/TypeError', { timeout: 60_000 }, async () => {
+    const ctx = await openService()
+    try {
+      const asksMap = (ctx.store as unknown as { asks: Map<string, { id: string; conversationId: number; specJson: string; status: string; createdAt: number }> }).asks
+      asksMap.set('corrupt-1', {
+        id: 'corrupt-1',
+        conversationId: 1,
+        specJson: '{"not":"an-ask-spec"}',
+        status: 'pending',
+        createdAt: 1,
+      })
+      assert.throws(
+        () => ctx.service.getAsk('corrupt-1'),
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_data_corrupted',
+      )
+      await assert.rejects(
+        () => ctx.service.answerAsk('corrupt-1', { x: 'v' }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_data_corrupted',
+      )
+    } finally {
+      await ctx.close()
+    }
+  })
 })
