@@ -172,6 +172,7 @@ export function ComposerInputShell({
               onPick={onPickSlash}
               onClose={onCloseSlash}
               anchorRef={composerBoxRef}
+              inputRef={textareaRef}
             />
           ) : null}
           <CompletionPopover
@@ -181,6 +182,7 @@ export function ComposerInputShell({
             onPick={onPickCompletion}
             onClose={onCloseCompletion}
             anchorRef={composerBoxRef}
+            inputRef={textareaRef}
           />
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">

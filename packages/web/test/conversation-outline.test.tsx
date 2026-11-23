@@ -16,6 +16,8 @@ import {
   summarizeOutlineText,
 } from '../src/conversation/outline-model.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
+import { resetServerClock } from '../src/lib/server-clock.js'
+import { flushMacrotask } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 
@@ -37,6 +39,7 @@ describe("conversation-outline", () => {
     host?.remove()
     host = undefined
     document.body.innerHTML = ''
+    resetServerClock()
   })
 
   // ---------------------------------------------------------------------------
@@ -542,13 +545,14 @@ describe("conversation-outline", () => {
   })
 
   test('ConversationPane 顶栏浮层展示创建时间/累计运行/已结算轮次/实时计时，大纲顶栏与助手行展示单轮与累计耗时', { timeout: 60_000 }, async () => {
+    resetServerClock()
     const createdAt = new Date(2026, 10, 10, 14, 0, 0).getTime()
     const now = Date.now()
     const conv: ConversationSummary = {
       ...makeConv(20),
       status: 'working',
       runDurationMs: 65_000,
-      runStartedAt: now - 10_400,
+      runStartedAt: now - 10_100,
       completionSeq: 2,
       createdAt,
       updatedAt: now,
@@ -599,7 +603,7 @@ describe("conversation-outline", () => {
     assert.match(metaGrid.textContent ?? '', /已结算轮次/)
     assert.match(metaGrid.textContent ?? '', /2/)
 
-    // 关闭标题浮层并打开大纲浮层
+    // 关闭标题浮层并立即打开大纲浮层，冲刷宏任务确认标题浮层延迟 FocusScope 复位不会抢回焦点并误关大纲
     await act(async () => {
       titleBtn.click()
     })
@@ -608,6 +612,7 @@ describe("conversation-outline", () => {
     await act(async () => {
       outlineBtn.click()
     })
+    await flushMacrotask()
     const summaryEl = document.querySelector<HTMLElement>('.conversation-outline-summary')
     assert.ok(summaryEl !== null, 'outline header renders cumulative summary when totalRunMs > 0')
     assert.match(summaryEl.textContent ?? '', /共 2 轮 · 累计 1m15s/)

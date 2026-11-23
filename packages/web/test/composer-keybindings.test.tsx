@@ -25,7 +25,7 @@ import assert from 'node:assert/strict'
 import { describe, afterEach, test } from 'node:test'
 import * as React from 'react'
 import { jsonResponse } from '@helmx/test-kit'
-import { ensureHappyDom, waitForCondition } from './helpers/dom-harness.js'
+import { ensureHappyDom, flushMacrotask, waitForCondition } from './helpers/dom-harness.js'
 import type {
   ComposerScopeProps,
   ConversationDetail,
@@ -752,103 +752,114 @@ describe("composer-keybindings", () => {
       }
       return jsonResponse({})
     }) as typeof fetch
-    const store = makeTestStore({
-      profiles: [profile],
-      skills,
-      plugins: [
-        { id: 'builtin:profile', name: 'profile', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
-        { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: false, hooks: [], actions: [], tools: [] },
-      ],
-      models: [
-        {
-          id: 'magpie/auto/glm-5.3',
-          provider: 'magpie',
-          modelId: 'auto/glm-5.3',
-          available: true,
-          thinkingLevels: ['off', 'low', 'medium', 'high', 'max'],
+    try {
+      const store = makeTestStore({
+        profiles: [profile],
+        skills,
+        plugins: [
+          { id: 'builtin:profile', name: 'profile', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
+          { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: false, hooks: [], actions: [], tools: [] },
+        ],
+        models: [
+          {
+            id: 'magpie/auto/glm-5.3',
+            provider: 'magpie',
+            modelId: 'auto/glm-5.3',
+            available: true,
+            thinkingLevels: ['off', 'low', 'medium', 'high', 'max'],
+          },
+        ],
+        modelDefaults: {
+          defaultModel: 'magpie/auto/glm-5.3',
+          defaultThinkingLevel: 'max',
+          modelThinkingLevels: {},
         },
-      ],
-      modelDefaults: {
-        defaultModel: 'magpie/auto/glm-5.3',
-        defaultThinkingLevel: 'max',
-        modelThinkingLevels: {},
-      },
-      uiContributions: [
-        {
-          pluginId: 'builtin:memory',
-          surface: 'composer.completer',
-          spec: { id: 'mem', label: '记忆', trigger: '@', source: { kind: 'doc', name: 'refs', itemsField: 'items' } },
+        uiContributions: [
+          {
+            pluginId: 'builtin:memory',
+            surface: 'composer.completer',
+            spec: { id: 'mem', label: '记忆', trigger: '@', source: { kind: 'doc', name: 'refs', itemsField: 'items' } },
+          },
+        ],
+        pluginDocs: {
+          'builtin:memory/refs': { items: [{ id: 'm-1', label: '@memory', insertText: '@memory ' }] },
         },
-      ],
-      pluginDocs: {
-        'builtin:memory/refs': { items: [{ id: 'm-1', label: '@memory', insertText: '@memory ' }] },
-      },
-    })
+      })
 
-    const host = mountTree(
-      e(HostStoreProviders, { value: store }, e(AgentStandbyPane, { profileId: 'assistant', isSplit: true })),
-      'split',
-    )
-    await waitForCondition(() => /glm-5\.3/.test(host.querySelector<HTMLButtonElement>('button.composer-model-button')?.textContent ?? ''))
+      const host = mountTree(
+        e(HostStoreProviders, { value: store }, e(AgentStandbyPane, { profileId: 'assistant', isSplit: true })),
+        'split',
+      )
+      await waitForCondition(() => /glm-5\.3/.test(host.querySelector<HTMLButtonElement>('button.composer-model-button')?.textContent ?? ''))
 
-    const modelBtn = host.querySelector<HTMLButtonElement>('button.composer-model-button')!
-    assert.match(modelBtn.textContent ?? '', /glm-5\.3/, 'first paint inherits the global default model short name')
-    assert.match(modelBtn.textContent ?? '', /· max/, 'first paint inherits the global default thinking level')
+      const modelBtn = host.querySelector<HTMLButtonElement>('button.composer-model-button')!
+      assert.match(modelBtn.textContent ?? '', /glm-5\.3/, 'first paint inherits the global default model short name')
+      assert.match(modelBtn.textContent ?? '', /· max/, 'first paint inherits the global default thinking level')
 
-    const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
-    const reverseTab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
-    await act(async () => {
-      ta.dispatchEvent(reverseTab)
-    })
-    assert.equal(reverseTab.defaultPrevented, false)
-    assert.equal(host.querySelector('.composer-model-level')?.textContent, '· max')
+      const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+      const reverseTab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+      await act(async () => {
+        ta.dispatchEvent(reverseTab)
+      })
+      assert.equal(reverseTab.defaultPrevented, false)
+      assert.equal(host.querySelector('.composer-model-level')?.textContent, '· max')
 
-    // Ctrl+L targets the split panel only, opening the StandbyModelPicker and auto-focusing the search
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'primary' } }))
-    })
-    assert.ok(document.body.querySelector('.composer-model-popover') === null, 'a primary event never opens the split standby picker')
+      // Ctrl+L targets the split panel only, opening the StandbyModelPicker and auto-focusing the search
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'primary' } }))
+      })
+      assert.ok(document.body.querySelector('.composer-model-popover') === null, 'a primary event never opens the split standby picker')
 
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
-    })
-    const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-    assert.ok(popover !== null, 'split Ctrl+L opens the standby model popover')
-    assert.ok(popover.querySelector('button.composer-model-refresh-btn') !== null, 'the standby model popover includes the dynamic refresh button')
-    assert.ok(document.activeElement === popover.querySelector('input[aria-label="Search models"]'), 'auto-focuses the search input')
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
+      })
+      const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+      assert.ok(popover !== null, 'split Ctrl+L opens the standby model popover')
+      assert.ok(popover.querySelector('button.composer-model-refresh-btn') !== null, 'the standby model popover includes the dynamic refresh button')
+      assert.ok(document.activeElement === popover.querySelector('input[aria-label="Search models"]'), 'auto-focuses the search input')
 
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
-    })
-    assert.ok(document.body.querySelector('.composer-model-popover') === null)
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
+      })
+      assert.ok(document.body.querySelector('.composer-model-popover') === null)
 
-    // Static '/' skill completion: filters disabled-plugin managed skills; picking /skill:review inserts text
-    await act(async () => {
-      typeInto(ta, '/rev')
-    })
-    const slashPopover = host.querySelector<HTMLElement>('.composer-popover')
-    assert.ok(slashPopover, "typing / on the standby pane opens the static command & skill menu")
-    assert.match(slashPopover.textContent ?? '', /\/skill:review/)
-    assert.doesNotMatch(slashPopover.textContent ?? '', /herdr-only/)
+      // Static '/' skill completion: filters disabled-plugin managed skills; picking /skill:review inserts text.
+      // Flush macrotasks so StandbyModelPicker's deferred FocusScope onCloseAutoFocus (returning focus to textarea)
+      // definitely fires while CommandPopover is open — focusing the owner textarea must never dismiss it.
+      await act(async () => {
+        typeInto(ta, '/rev')
+      })
+      await flushMacrotask()
+      const slashPopover = host.querySelector<HTMLElement>('.composer-popover')
+      assert.ok(slashPopover, "typing / on the standby pane opens the static command & skill menu")
+      assert.match(slashPopover.textContent ?? '', /\/skill:review/)
+      assert.doesNotMatch(slashPopover.textContent ?? '', /herdr-only/)
 
-    await act(async () => {
-      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-    })
-    assert.equal(ta.value, '/skill:review ', 'picking a skill writes back only the trigger word; no conversation created')
+      await act(async () => {
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      })
+      assert.equal(ta.value, '/skill:review ', 'picking a skill writes back only the trigger word; no conversation created')
 
-    // The generic '@' completion popover also works on the standby pane (coexists with '/' skill completion and Ctrl+L)
-    await act(async () => {
-      typeInto(ta, '/skill:review @mem')
-    })
-    await act(async () => {})
-    const atPopover = host.querySelector<HTMLElement>('.composer-completion-popover')
-    assert.ok(atPopover, 'typing @ on the standby pane must open the CompletionPopover')
-    assert.match(atPopover.textContent ?? '', /@memory/)
-    await act(async () => {
-      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-    })
-    assert.equal(ta.value, '/skill:review @memory ', 'Enter picking an @ candidate completes only the trigger text; no conversation created')
-    globalThis.fetch = originalFetchA
+      // The generic '@' completion popover also works on the standby pane (coexists with '/' skill completion and Ctrl+L)
+      await act(async () => {
+        typeInto(ta, '/skill:review @mem')
+      })
+      await act(async () => {})
+      // Re-focusing the owner textarea while CompletionPopover is open must not dismiss it either.
+      await act(async () => {
+        ta.blur()
+        ta.focus()
+      })
+      const atPopover = host.querySelector<HTMLElement>('.composer-completion-popover')
+      assert.ok(atPopover, 'typing @ on the standby pane must open the CompletionPopover')
+      assert.match(atPopover.textContent ?? '', /@memory/)
+      await act(async () => {
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      })
+      assert.equal(ta.value, '/skill:review @memory ', 'Enter picking an @ candidate completes only the trigger text; no conversation created')
+    } finally {
+      globalThis.fetch = originalFetchA
+    }
   })
 
   test('Composer submit keys: Enter steer, Ctrl/Cmd+Enter followUp, Shift+Enter newline, Alt+Enter alias forbidden', { timeout: 60_000 }, async () => {

@@ -388,7 +388,20 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                   {conversation.title === '' ? t('conv.pane.titleFallback', { id: conversationId }) : conversation.title}
                 </button>
               </PopoverTrigger>
-              <PopoverContent align="start" sideOffset={6} portalled className="pane-title-popover">
+              <PopoverContent
+                align="start"
+                sideOffset={6}
+                portalled
+                className="pane-title-popover"
+                onCloseAutoFocus={(event) => {
+                  // Radix FocusScope defers close auto-focus via setTimeout(0); if another
+                  // control/overlay already claimed focus, never steal focus back and dismiss it.
+                  const active = document.activeElement
+                  if (active !== null && active !== document.body && active !== document.documentElement) {
+                    event.preventDefault()
+                  }
+                }}
+              >
                 <div className="pane-title-popover-heading">
                   {conversation.title === '' ? t('conv.pane.titleFallback', { id: conversationId }) : conversation.title}
                 </div>
