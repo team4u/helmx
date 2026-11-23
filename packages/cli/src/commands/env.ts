@@ -105,6 +105,7 @@ async function runStreamed(ctx: CommandContext, body: EnvExecRequest): Promise<v
           }
           const frame = raw as Extract<EnvExecStreamFrame, { type: 'output' }>
           if (ctx.json) ctx.io.out(`${JSON.stringify(frame)}\n`)
+          else if (frame.stream === 'stderr') ctx.io.err(frame.text)
           else ctx.io.out(frame.text)
           return
         }

@@ -52,6 +52,28 @@ test('NDJSON consumes first output chunk immediately without waiting for termina
   assert.equal(code, 0)
 })
 
+test('env exec --stream human mode routes stdout and stderr frames to their respective streams', { timeout: 60_000 }, async () => {
+  const frames = [
+    { type: 'output', stream: 'stdout', text: 'out-1\n' },
+    { type: 'output', stream: 'stderr', text: 'err-1\n' },
+    { type: 'output', stream: 'stdout', text: 'out-2\n' },
+    { type: 'output', stream: 'stderr', text: 'err-2\n' },
+    { type: 'exit', ok: true, exitCode: 0, timedOut: false },
+  ]
+  const body = frames.map((f) => JSON.stringify(f)).join('\n') + '\n'
+  let out = ''
+  let err = ''
+  const code = await runCli(['env', 'exec', '--stream', '--', 'build'], {
+    env: { HELMX_HUB_URL: 'http://127.0.0.1:3202', HELMX_TOKEN: 'tok-stream' },
+    stdout: (text) => { out += text },
+    stderr: (text) => { err += text },
+    fetch: async () => new Response(body, { headers: { 'content-type': 'application/x-ndjson' } }),
+  })
+  assert.equal(code, 0)
+  assert.equal(out, 'out-1\nout-2\n')
+  assert.equal(err, 'err-1\nerr-2\n')
+})
+
 test('NDJSON premature stream end never treats unknown result as success', { timeout: 60_000 }, async () => {
   const result = await consume([{ type: 'output', stream: 'stdout', text: 'started' }])
   assert.equal(result.code, 1)
