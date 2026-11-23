@@ -41,9 +41,11 @@ import {
   getStoredLocalePreference,
   getStoredPreference,
   getStoredQuietNotify,
+  getStoredSidebarConvMode,
   nextThemePreference,
   persistLocalePreference,
   persistQuietNotify,
+  persistSidebarConvMode,
   persistThemePreference,
   resolveBrowserLocale,
   resolveLocale,
@@ -57,6 +59,7 @@ import {
   type HelmxStoreValue,
   type LocalePreference,
   type ResolvedTarget,
+  type SidebarConversationMode,
   type ThemeMode,
   type ThemePreference,
   type ToastNotice,
@@ -233,6 +236,7 @@ export class HelmxExternalStore {
       localePreference,
       locale,
       quietNotifyEnabled: getStoredQuietNotify(),
+      sidebarConvMode: getStoredSidebarConvMode(),
     }
     this.pluginsUiSlice = {
       plugins: this.liveState.plugins,
@@ -362,6 +366,7 @@ export class HelmxExternalStore {
       setLocale: this.setLocale,
       setLocalePreference: this.setLocalePreference,
       setQuietNotify: this.setQuietNotify,
+      setSidebarConvMode: this.setSidebarConvMode,
       checkAuth: this.checkAuth,
       onAuthenticated: this.onAuthenticated,
       logout: () => {
@@ -599,7 +604,8 @@ export class HelmxExternalStore {
       prev.themePreference === next.themePreference &&
       prev.locale === next.locale &&
       prev.localePreference === next.localePreference &&
-      prev.quietNotifyEnabled === next.quietNotifyEnabled
+      prev.quietNotifyEnabled === next.quietNotifyEnabled &&
+      prev.sidebarConvMode === next.sidebarConvMode
     ) {
       return
     }
@@ -612,6 +618,7 @@ export class HelmxExternalStore {
       this.recomputeConversationBackground(plan, { panelsOrConversations: false, locale: true })
     }
     if (next.quietNotifyEnabled !== prev.quietNotifyEnabled) plan.domains.add('quietNotify')
+    if (next.sidebarConvMode !== prev.sidebarConvMode) plan.domains.add('sidebarConvMode')
     this.emit(plan)
   }
 
@@ -1003,6 +1010,11 @@ export class HelmxExternalStore {
     }
     persistQuietNotify(true)
     this.patchPrefs({ quietNotifyEnabled: true })
+  }
+
+  setSidebarConvMode = (next: SidebarConversationMode): void => {
+    persistSidebarConvMode(next)
+    this.patchPrefs({ sidebarConvMode: next })
   }
 
   // ---- Notices & Auth & Logout ----------------------------------------------

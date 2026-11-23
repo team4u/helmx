@@ -293,11 +293,56 @@ export const shellMessages = {
     en: 'Toggle selection for this conversation tree',
     'zh-CN': '切换选择此会话树',
   },
-  'shell.overview.railTooltip': { en: 'Conversation overview', 'zh-CN': '会话总览' },
+  'shell.overview.railTooltip': {
+    en: 'Conversation overview (full view)',
+    'zh-CN': '全屏会话总览',
+  },
   'shell.overview.drawerPeek': { en: 'Peek in drawer', 'zh-CN': '抽屉速览' },
   'shell.overview.batchProtected': {
     en: 'Managed or protected conversations are excluded from bulk management',
     'zh-CN': '托管或受保护会话不参与批量管理',
+  },
+
+  // Sidebar conversation display mode switcher & compact overview list
+  'shell.sidebar.convModeLabel': {
+    en: 'Conversation list display mode',
+    'zh-CN': '会话列表展示模式',
+  },
+  'shell.sidebar.convModeAgentsTooltip': {
+    en: 'Group conversations by agent',
+    'zh-CN': '按智能体分组展示会话',
+  },
+  'shell.sidebar.convModeOverview': {
+    en: 'Overview',
+    'zh-CN': '总览',
+  },
+  'shell.sidebar.convModeOverviewTooltip': {
+    en: 'Show compact status overview list for quick switching',
+    'zh-CN': '以会话总览精简列表展示，便于快速切换',
+  },
+  'shell.sidebar.overviewFilter': {
+    en: 'Filter conversations',
+    'zh-CN': '筛选会话',
+  },
+  'shell.sidebar.overviewFilterPlaceholder': {
+    en: 'Filter conversations or status...',
+    'zh-CN': '筛选会话、角色或状态...',
+  },
+  'shell.sidebar.overviewEmpty': {
+    en: 'No active conversations yet',
+    'zh-CN': '暂无活跃会话',
+  },
+  'shell.sidebar.overviewExpandSub': {
+    en: 'Show {count} more sub-conversations',
+    'zh-CN': '展开其余 {count} 个子会话',
+  },
+  'shell.sidebar.overviewCollapseSub': {
+    en: 'Collapse sub-conversations',
+    'zh-CN': '收起子会话',
+  },
+  'shell.sidebar.overviewSubBadge': {
+    en: '{count} sub-conversations',
+    'zh-CN': '{count} 个子会话',
   },
 
   // Batch archive/restore notices (verb interpolated: Archive/Restore, 归档/恢复)

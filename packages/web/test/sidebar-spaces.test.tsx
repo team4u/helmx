@@ -10,6 +10,11 @@ import { test } from 'node:test'
 import * as React from 'react'
 import type { ConversationSummary, PluginUiContribution } from '@helmx/protocol'
 import { spaceForTarget, type LocalePreference, type ResolvedTarget, type SidebarSpace } from '../src/lib/types.js'
+import {
+  getStoredSidebarConvMode,
+  persistSidebarConvMode,
+  SIDEBAR_CONV_MODE_STORAGE_KEY,
+} from '../src/lib/theme-preferences.js'
 import type { LiveState } from '../src/lib/live-state.js'
 import { makeTestStore } from './helpers/store.js'
 import type { HelmxExternalStore, HelmxStoreActions } from '../src/lib/helmx-store.js'
@@ -814,4 +819,249 @@ test('Sidebar 独立折叠箭头与批量筛选全选安全：箭头折叠不导
     /0 selected/,
     '筛选条件变化导致已选会话不可见时自动裁剪 selectedIds',
   )
+})
+
+test('Sidebar 对话模式偏好持久化：默认 agents，切 overview 写入 storage，切回 agents 清理键且异常安全降级', { timeout: 60_000 }, () => {
+  const backing = new Map<string, string>()
+  const fakeStorage: Storage = {
+    get length() { return backing.size },
+    clear: () => backing.clear(),
+    key: (i) => [...backing.keys()][i] ?? null,
+    getItem: (k) => backing.get(k) ?? null,
+    setItem: (k, v) => { backing.set(k, v) },
+    removeItem: (k) => { backing.delete(k) },
+  }
+
+  assert.equal(getStoredSidebarConvMode(fakeStorage), 'agents')
+  persistSidebarConvMode('overview', fakeStorage)
+  assert.equal(backing.get(SIDEBAR_CONV_MODE_STORAGE_KEY), 'overview')
+  assert.equal(getStoredSidebarConvMode(fakeStorage), 'overview')
+
+  persistSidebarConvMode('agents', fakeStorage)
+  assert.equal(backing.has(SIDEBAR_CONV_MODE_STORAGE_KEY), false, 'default agents mode clears explicit key')
+  assert.equal(getStoredSidebarConvMode(fakeStorage), 'agents')
+
+  backing.set(SIDEBAR_CONV_MODE_STORAGE_KEY, 'invalid-mode')
+  assert.equal(getStoredSidebarConvMode(fakeStorage), 'agents')
+
+  const throwingStorage = {
+    getItem: () => { throw new Error('blocked') },
+    setItem: () => { throw new Error('blocked') },
+    removeItem: () => { throw new Error('blocked') },
+  }
+  assert.equal(getStoredSidebarConvMode(throwingStorage), 'agents')
+  assert.doesNotThrow(() => persistSidebarConvMode('overview', throwingStorage))
+})
+
+test('Sidebar 展示模式切换与总览精简列表：分段器切换、四态分节、分屏在场、后代展开、搜索防藏匿与移动端防误关', { timeout: 60_000 }, async () => {
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    conversations: [
+      conv({ id: 10, title: '审批主任务', profileId: 'assistant', status: 'idle', createdAt: 9000 }),
+      conv({ id: 11, parentConversationId: 10, title: '待审批子代理', profileId: 'assistant', status: 'blocked', pendingAskCount: 1, pendingAskSince: Date.now() - 12_000, createdAt: 9200 }),
+      conv({ id: 12, parentConversationId: 10, title: '已完成调研', profileId: 'assistant', status: 'idle', createdAt: 9100 }),
+      conv({ id: 20, title: '远程重构中', profileId: 'coder', nodeId: 'gpu-1', status: 'working', doing: '执行类型检查', runStartedAt: Date.now() - 35_000, createdAt: 8000 }),
+      conv({ id: 30, title: '未读汇报', profileId: 'assistant', status: 'done', unread: true, runDurationMs: 95_000, createdAt: 7000 }),
+      conv({ id: 40, title: '历史安静话题', profileId: 'coder', status: 'idle', runDurationMs: 120_000, createdAt: 6000 }),
+      conv({ id: 41, parentConversationId: 40, title: '安静历史子会话', profileId: 'coder', status: 'idle', createdAt: 6100 }),
+    ],
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '编码专员' },
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 20 },
+    splitTarget: { kind: 'conversation', conversationId: 11 },
+    focusedPanel: 'primary',
+  })
+
+  let closeCount = 0
+  let shellBubbleCount = 0
+  try {
+    render(
+      store,
+      e(
+        'div',
+        {
+          onClick: (event: React.MouseEvent<HTMLDivElement>) => {
+            if ((event.target as HTMLElement).closest('.nav-item')) {
+              shellBubbleCount += 1
+            }
+          },
+        },
+        e(LiveSidebar, {
+          onClose: () => { closeCount += 1 },
+        }),
+      ),
+    )
+    await act(async () => {})
+
+    // 1) 默认处于「智能体」模式，顶部呈现双模式分段器
+    const modeSwitch = document.body.querySelector('.sidebar-conv-mode-switch')
+    assert.ok(modeSwitch !== null, '应渲染展示模式分段切换器')
+    assert.ok(document.body.querySelector('.agent-standing-group') !== null, '默认渲染智能体站位列表')
+    assert.ok(document.body.querySelector('.sidebar-overview-group') === null)
+
+    // 2) 点击切到「总览」模式：立即渲染四态分节并写入 localStorage
+    const overviewTab = [...modeSwitch.querySelectorAll<HTMLButtonElement>('button')].find((btn) =>
+      btn.textContent?.includes('总览'),
+    )!
+    assert.ok(overviewTab !== undefined)
+    await act(async () => {
+      overviewTab.click()
+    })
+    assert.equal(store.getPrefsSlice().sidebarConvMode, 'overview')
+    assert.equal(localStorage.getItem(SIDEBAR_CONV_MODE_STORAGE_KEY), 'overview')
+    assert.ok(document.body.querySelector('.sidebar-overview-group') !== null, '切换到侧栏精简总览列表')
+    assert.ok(document.body.querySelector('.agent-standing-group') === null)
+
+    // 校验四态分节顺序：需处理 -> 进行中 -> 未读完成 -> 近期安静
+    const sectionTitles = [...document.body.querySelectorAll('.sidebar-overview-section-title')].map((el) => el.textContent)
+    assert.deepEqual(sectionTitles, ['需处理', '进行中', '未读完成', '近期安静'])
+
+    // 校验窄栏信息密度：不渲染已完成/安静会话的静态累计耗时，保留角色/@节点/运行摘要
+    assert.ok(!document.body.textContent!.includes('累计'), '窄栏精简总览不展示静态累计耗时')
+    const runningItem = [...document.body.querySelectorAll('.sidebar-overview-item')].find((el) =>
+      el.textContent?.includes('远程重构中'),
+    )!
+    assert.ok(runningItem.className.includes('nav-item-active'), '主屏当前会话在侧栏总览中精准高亮')
+    assert.equal(runningItem.querySelector('.nav-pane-tag')?.textContent, '主')
+    assert.ok(runningItem.textContent!.includes('编码专员'))
+    assert.ok(runningItem.textContent!.includes('@gpu-1'))
+    assert.ok(runningItem.textContent!.includes('执行类型检查'))
+
+    // 3) 待审批子会话 #11 自动浮现在父项 #10 下方：父项呈分支弱态且可点击回到根 #10，子行呈现分屏微标
+    const waitingRootItem = [...document.body.querySelectorAll('.sidebar-overview-item')].find((el) =>
+      el.textContent?.includes('审批主任务'),
+    )!
+    assert.ok(waitingRootItem.className.includes('sidebar-overview-item-branch'), '分屏查看子会话时父项呈弱归属态')
+    const descendantRows = [...document.body.querySelectorAll('.sidebar-overview-descendant')]
+    assert.equal(descendantRows.length, 1, '默认仅自动浮现活跃/待审批子会话 #11，安静后代收拢')
+    assert.ok(descendantRows[0]!.textContent!.includes('待审批子代理'))
+    assert.ok(descendantRows[0]!.className.includes('nav-item-split'))
+    assert.equal(descendantRows[0]!.querySelector('.nav-pane-tag')?.textContent, '分')
+
+    // 点击父项 #10：因审批子会话已作为子行可见，父项打开根会话 #10，且正常触发导航与关闭移动端抽屉
+    await act(async () => {
+      waitingRootItem.querySelector<HTMLButtonElement>('.sidebar-overview-open')!.click()
+    })
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 10 })
+    assert.equal(closeCount, 1)
+    assert.equal(shellBubbleCount, 1)
+
+    // 4) 点击安静树的紧凑子会话展开开关：展开安静子会话 #41，且不触发导航、不冒泡关移动端抽屉
+    const quietItem = [...document.body.querySelectorAll('.sidebar-overview-item')].find((el) =>
+      el.textContent?.includes('历史安静话题'),
+    )!
+    const descToggleBtn = quietItem.querySelector<HTMLButtonElement>('button.sidebar-overview-desc-toggle')!
+    assert.ok(descToggleBtn !== null, '含安静子会话的条目渲染紧凑展开按钮')
+    await act(async () => {
+      descToggleBtn.click()
+    })
+    assert.equal(closeCount, 1, '展开子会话不得关闭移动端抽屉')
+    assert.equal(shellBubbleCount, 1, '展开子会话不得冒泡到外层 .nav-item')
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 10 }, '展开子会话不切换当前会话')
+    assert.ok(document.body.textContent!.includes('安静历史子会话'), '展开后渲染安静子会话行')
+
+    // 点击展开出的子会话 #41：直达该子会话并关闭抽屉
+    const quietSubBtn = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-overview-descendant .nav-item-main')].find((el) =>
+      el.textContent?.includes('安静历史子会话'),
+    )!
+    await act(async () => {
+      quietSubBtn.click()
+    })
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 41 })
+    assert.equal(closeCount, 2)
+
+    // 5) 折叠「近期安静」分节，再搜索「历史安静话题」：搜索防藏匿自动临时展开；清空后恢复原折叠态
+    const quietSectionToggle = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-overview-section-toggle')].find((el) =>
+      el.textContent?.includes('近期安静'),
+    )!
+    await act(async () => {
+      quietSectionToggle.click()
+    })
+    assert.equal(quietSectionToggle.getAttribute('aria-expanded'), 'false')
+    assert.ok(!document.body.textContent!.includes('历史安静话题'), '折叠后该分节内条目隐藏')
+
+    const filterBtn = document.body.querySelector<HTMLButtonElement>('button[aria-label="筛选会话"]')!
+    await act(async () => {
+      filterBtn.click()
+    })
+    const input = document.body.querySelector<HTMLInputElement>('.sidebar-search-input')!
+    await act(async () => {
+      setInputValue(input, '历史安静')
+    })
+    assert.ok(document.body.textContent!.includes('历史安静话题'), '搜索激活时临时展开已折叠的命中分节')
+
+    await act(async () => {
+      setInputValue(input, '')
+    })
+    assert.ok(!document.body.textContent!.includes('历史安静话题'), '清空搜索后无损恢复原折叠态')
+
+    // 6) 批量模式：已折叠分节内的条目不计入全选；勾选不关移动端抽屉；切回智能体模式自动清理
+    const bulkBtn = document.body.querySelector<HTMLButtonElement>('button[aria-label="批量管理会话"]')!
+    await act(async () => {
+      bulkBtn.click()
+    })
+    const selectAllBtn = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar button')].find((b) =>
+      b.textContent?.includes('全选'),
+    )!
+    await act(async () => {
+      selectAllBtn.click()
+    })
+    assert.match(
+      document.body.querySelector('.batch-bar-count')?.textContent ?? '',
+      /已选择 3 项/,
+      '折叠分节内的第 4 棵树绝不进入批量全选集合',
+    )
+
+    // 点击批量模式下的会话主项：只切换勾选，不冒泡关抽屉也不切换当前会话
+    const prevBubble = shellBubbleCount
+    const prevClose = closeCount
+    const runningBtnInBatch = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-overview-open')].find((el) =>
+      el.textContent?.includes('远程重构中'),
+    )!
+    await act(async () => {
+      runningBtnInBatch.click()
+    })
+    assert.equal(shellBubbleCount, prevBubble, '批量勾选不得冒泡关闭移动端抽屉')
+    assert.equal(closeCount, prevClose)
+    assert.match(document.body.querySelector('.batch-bar-count')?.textContent ?? '', /已选择 2 项/)
+
+    // 切回「智能体」模式：清理 localStorage 键并恢复智能体站位视图
+    const agentsTab = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-conv-mode-switch button')].find((btn) =>
+      btn.textContent?.includes('智能体'),
+    )!
+    await act(async () => {
+      agentsTab.click()
+    })
+    assert.equal(store.getPrefsSlice().sidebarConvMode, 'agents')
+    assert.equal(localStorage.getItem(SIDEBAR_CONV_MODE_STORAGE_KEY), null)
+    assert.ok(document.body.querySelector('.agent-standing-group') !== null)
+    assert.ok(document.body.querySelector('.sidebar-batch-bar') === null, '切模式后批量状态自然卸除')
+  } finally {
+    localStorage.removeItem(SIDEBAR_CONV_MODE_STORAGE_KEY)
+  }
+})
+
+test('Sidebar 总览模式空态与新话题入口：0 活跃会话展示温和空态与单候选新话题直进待命', { timeout: 60_000 }, async () => {
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    sidebarConvMode: 'overview',
+    conversations: [],
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+    primaryTarget: { kind: 'agent', profileId: 'assistant' },
+  })
+  let closeCount = 0
+  render(store, e(LiveSidebar, { onClose: () => { closeCount += 1 } }))
+  await act(async () => {})
+
+  assert.ok(document.body.querySelector('.sidebar-overview-empty') !== null, '0 活跃会话渲染空态')
+  assert.ok(document.body.textContent!.includes('暂无活跃会话'))
+  const newTopicBtn = document.body.querySelector<HTMLButtonElement>('.sidebar-overview-empty-action')!
+  assert.ok(newTopicBtn !== null, '空态提供快捷新话题按钮')
+  await act(async () => {
+    newTopicBtn.click()
+  })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'agent', profileId: 'assistant' })
+  assert.equal(closeCount, 1)
 })

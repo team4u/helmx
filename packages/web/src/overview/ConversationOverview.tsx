@@ -67,14 +67,14 @@ import { BatchActionBar } from '../ui/BatchActionBar.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
-import { isConversationArchived } from '../conversation/archive-model.js'
 import { ConversationStatusDot, RemoteNodeTag } from '../shell/SidebarPrimitives.js'
-import { buildAgentStandings, isConversationArchivable, isConversationBulkSelectable, type AgentStanding } from '../shell/sidebar-model.js'
+import { isConversationArchivable, isConversationBulkSelectable, type AgentStanding } from '../shell/sidebar-model.js'
 import { archiveBatchNotice, patchConversationsArchived } from '../shell/archive-ops.js'
 import { useBatchConversationDelete } from '../shell/use-batch-conversation-delete.js'
 import { useGlobalAttention } from '../shell/use-attention-indicator.js'
 import { formatDurationMs, formatFullTimestamp, formatStopwatchMs } from '../lib/format.js'
 import {
+  buildNewTopicCandidates,
   buildOverviewCards,
   filterOverviewCards,
   groupOverviewCards,
@@ -604,33 +604,19 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     openTarget({ kind: 'conversation', conversationId }, { split: true })
   }
 
-  // 顶栏「新话题」候选：与侧栏站位同源（buildAgentStandings），仅人类可选
+  // 顶栏「新话题」候选：与侧栏总览模式共用 buildNewTopicCandidates，仅人类可选
   // 且可见的角色可开新聊；最近活跃根会话所属角色置顶，其余按站位序。
-  const newTopicCandidates = useMemo(() => {
-    const standings = buildAgentStandings({
-      profiles,
-      conversations,
-      plugins,
-      sidebarItems: groupedUi.sidebarItems,
-      locale,
-    })
-    const creatable = standings.filter((standing) => standing.canCreateConversation)
-    const latestRootProfileId =
-      conversations
-        .filter((c) => c.parentConversationId === undefined && !isConversationArchived(c))
-        .reduce<ConversationSummary | null>(
-          (best, c) =>
-            best === null || c.updatedAt > best.updatedAt || (c.updatedAt === best.updatedAt && c.id > best.id)
-              ? c
-              : best,
-          null,
-        )?.profileId ?? null
-    return [...creatable].sort((a, b) => {
-      if (a.profileId === latestRootProfileId) return -1
-      if (b.profileId === latestRootProfileId) return 1
-      return a.order - b.order || a.profileId.localeCompare(b.profileId)
-    })
-  }, [profiles, conversations, plugins, groupedUi.sidebarItems, locale])
+  const newTopicCandidates = useMemo(
+    () =>
+      buildNewTopicCandidates({
+        profiles,
+        conversations,
+        plugins,
+        sidebarItems: groupedUi.sidebarItems,
+        locale,
+      }),
+    [profiles, conversations, plugins, groupedUi.sidebarItems, locale],
+  )
 
   const openNewTopic = (profileId: string): void => {
     openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined)

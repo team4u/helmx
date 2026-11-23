@@ -15,8 +15,14 @@
  */
 
 import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
+import { isConversationArchived } from '../conversation/archive-model.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { ConversationBackgroundIndex } from '../shell/background-activity-model.js'
+import {
+  buildAgentStandings,
+  type AgentStanding,
+  type AgentStandingsInput,
+} from '../shell/sidebar-model.js'
 import {
   aggregateAttentionTrees,
   composeHonestTreeSummary,
@@ -108,6 +114,18 @@ export interface OverviewDescendant {
 /** 卡内后代芯片默认上限（超出折叠为「还有 N 个」）。 */
 export const OVERVIEW_DESCENDANT_LIMIT = 5
 
+/** 判断单条后代会话是否带有活跃或需关注信号（working / blocked / error / 待答 Ask / 后台在途）。 */
+export function isOverviewDescendantActive(descendant: OverviewDescendant): boolean {
+  const { conv, backgroundActive } = descendant
+  return (
+    conv.status === 'working' ||
+    conv.status === 'blocked' ||
+    conv.status === 'error' ||
+    backgroundActive ||
+    conv.pendingAskCount > 0
+  )
+}
+
 /**
  * 构建总览卡片（全部根树，含安静树）：排序为桶序 + root.createdAt 倒序。
  * 后代芯片排序：有信号的（working/blocked/error/后台在途）优先，其后按
@@ -131,18 +149,16 @@ export function buildOverviewCards(input: {
   for (const aggregate of aggregateAttentionTrees(input)) {
     const descendantsAll = aggregate.members
       .filter((member) => member.id !== aggregate.root.id)
-      .map((member) => ({
-        member,
-        signal:
-          member.status === 'working' ||
-          member.status === 'blocked' ||
-          member.status === 'error' ||
-          input.background.get(member.id)?.active === true ||
-          member.pendingAskCount > 0,
-      }))
+      .map((member) => {
+        const entry: OverviewDescendant = {
+          conv: member,
+          backgroundActive: input.background.get(member.id)?.active === true,
+        }
+        return { entry, signal: isOverviewDescendantActive(entry) }
+      })
       .sort((a, b) => {
         if (a.signal !== b.signal) return a.signal ? -1 : 1
-        return b.member.createdAt - a.member.createdAt || b.member.id - a.member.id
+        return b.entry.conv.createdAt - a.entry.conv.createdAt || b.entry.conv.id - a.entry.conv.id
       })
     cards.push({
       root: aggregate.root,
@@ -164,10 +180,7 @@ export function buildOverviewCards(input: {
       }),
       managed: false,
       memberIds: aggregate.members.map((member) => member.id),
-      descendants: descendantsAll.map((entry) => ({
-        conv: entry.member,
-        backgroundActive: input.background.get(entry.member.id)?.active === true,
-      })),
+      descendants: descendantsAll.map((item) => item.entry),
       hiddenDescendantCount: Math.max(0, descendantsAll.length - OVERVIEW_DESCENDANT_LIMIT),
     })
   }
@@ -177,6 +190,31 @@ export function buildOverviewCards(input: {
       b.root.createdAt - a.root.createdAt ||
       b.root.id - a.root.id,
   )
+}
+
+/**
+ * 推导「新话题」候选角色列表（全屏总览与侧栏总览模式共用）：
+ * 仅保留人类可新建对话的可见角色，最近活跃的未归档根会话所属角色置顶，
+ * 其余按站位 order 与 profileId 字典序稳定排列。
+ */
+export function buildNewTopicCandidates(input: AgentStandingsInput): AgentStanding[] {
+  const standings = buildAgentStandings(input)
+  const creatable = standings.filter((standing) => standing.canCreateConversation)
+  const latestRootProfileId =
+    input.conversations
+      .filter((c) => c.parentConversationId === undefined && !isConversationArchived(c))
+      .reduce<ConversationSummary | null>(
+        (best, c) =>
+          best === null || c.updatedAt > best.updatedAt || (c.updatedAt === best.updatedAt && c.id > best.id)
+            ? c
+            : best,
+        null,
+      )?.profileId ?? null
+  return [...creatable].sort((a, b) => {
+    if (a.profileId === latestRootProfileId) return -1
+    if (b.profileId === latestRootProfileId) return 1
+    return a.order - b.order || a.profileId.localeCompare(b.profileId)
+  })
 }
 
 /** 总览筛选条件（空串表示不过滤）。 */
@@ -196,6 +234,17 @@ export function overviewNodeKey(conv: Pick<ConversationSummary, 'nodeId'>): stri
   return conv.nodeId === undefined || conv.nodeId === '' ? 'local' : conv.nodeId
 }
 
+/** 判断单条后代会话是否直接命中搜索词（标题子串或精确数字/#id）。 */
+export function overviewDescendantMatchesQuery(descendant: OverviewDescendant, query: string): boolean {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return false
+  const idNeedle = needle.startsWith('#') ? needle.slice(1) : needle
+  if (/^\d+$/.test(idNeedle)) {
+    return descendant.conv.id === Number(idNeedle)
+  }
+  return descendant.conv.title.toLowerCase().includes(needle)
+}
+
 /** 卡片是否命中标题/摘要搜索：根标题、角色标签、诚实摘要、后代标题做
  * 大小写不敏感子串匹配；纯数字或 #id 形态按会话号精确匹配（含后代）。 */
 function overviewCardMatchesQuery(card: OverviewCard, query: string): boolean {
@@ -209,10 +258,9 @@ function overviewCardMatchesQuery(card: OverviewCard, query: string): boolean {
   if (/^\d+$/.test(idNeedle)) {
     const wanted = Number(idNeedle)
     if (card.root.id === wanted) return true
-    if (card.descendants.some((descendant) => descendant.conv.id === wanted)) return true
-    return false
+    return card.descendants.some((descendant) => descendant.conv.id === wanted)
   }
-  return card.descendants.some((descendant) => descendant.conv.title.toLowerCase().includes(needle))
+  return card.descendants.some((descendant) => overviewDescendantMatchesQuery(descendant, needle))
 }
 
 /**
@@ -574,6 +622,101 @@ export function overviewCardsNeedLiveClock(
         : card.descendants.slice(0, OVERVIEW_DESCENDANT_LIMIT)
     for (const descendant of shownDescendants) {
       if (resolveOverviewDescendantChipAnchor(descendant) !== undefined) return true
+    }
+  }
+  return false
+}
+
+// ---------------------------------------------------------------------------
+// 侧栏精简总览列表纯函数（窄栏后代展示切片、主项直达裁决与秒表门控）
+// ---------------------------------------------------------------------------
+
+/** 侧栏总览单棵树的后代展示切片。 */
+export interface SidebarOverviewDescendantsSlice {
+  /** 当前应渲染为缩进子行的后代列表（沿用 card.descendants 的确定性排序）。 */
+  visible: OverviewDescendant[]
+  /** 仍收拢在折叠开关后的安静后代数。 */
+  hiddenCount: number
+  /** 是否存在可手动展开/收起的安静后代（全为自动浮现的活跃后代时无需渲染多余开关）。 */
+  hasCollapsibleQuiet: boolean
+}
+
+/**
+ * 解析侧栏精简总览中单棵树的后代子行切片：
+ * - 手动展开（expanded=true）时展示全量后代；
+ * - 未手动展开时，自动浮现活跃/待处理后代、当前主/分屏正在查看的后代、
+ *   以及搜索激活时直接命中的后代；安静历史后代收拢计入 hiddenCount，
+ *   保持窄栏紧凑的同时不遮蔽正在处理或正在查看的现场。
+ */
+export function resolveSidebarOverviewDescendants(input: {
+  card: OverviewCard
+  expanded: boolean
+  activeConversationIds: ReadonlySet<number>
+  query?: string
+}): SidebarOverviewDescendantsSlice {
+  const { card, expanded, activeConversationIds, query = '' } = input
+  if (card.descendants.length === 0) {
+    return { visible: [], hiddenCount: 0, hasCollapsibleQuiet: false }
+  }
+  const trimmedQuery = query.trim()
+  const isAutoVisible = (descendant: OverviewDescendant): boolean =>
+    isOverviewDescendantActive(descendant) ||
+    activeConversationIds.has(descendant.conv.id) ||
+    (trimmedQuery !== '' && overviewDescendantMatchesQuery(descendant, trimmedQuery))
+
+  const autoVisibleCount = card.descendants.filter(isAutoVisible).length
+  const hasCollapsibleQuiet = autoVisibleCount < card.descendants.length
+
+  if (expanded) {
+    return {
+      visible: card.descendants,
+      hiddenCount: 0,
+      hasCollapsibleQuiet,
+    }
+  }
+  const visible = card.descendants.filter(isAutoVisible)
+  return {
+    visible,
+    hiddenCount: card.descendants.length - visible.length,
+    hasCollapsibleQuiet,
+  }
+}
+
+/**
+ * 侧栏总览主项点击直达目标裁决：
+ * - 当树内存在等待审批的子会话且该子会话已作为独立子行展现在下方时，
+ *   主项固定打开根会话（父行进父、子行进子，避免进了审批子会话后点不回根会话）；
+ * - 否则回落 card.targetConversationId（一键直达待审批现场或根会话）。
+ */
+export function resolveSidebarOverviewPrimaryTarget(
+  card: OverviewCard,
+  visibleDescendants: ReadonlyArray<OverviewDescendant>,
+): number {
+  if (
+    card.targetConversationId !== card.root.id &&
+    visibleDescendants.some((descendant) => descendant.conv.id === card.targetConversationId)
+  ) {
+    return card.root.id
+  }
+  return card.targetConversationId
+}
+
+/**
+ * 侧栏精简总览实时秒表门控：仅检查当前可见（未折叠分节）卡片及其可见子行，
+ * 全员安静/已完成或所在分节被折叠时返回 false（零定时器开销）。
+ */
+export function sidebarOverviewCardsNeedLiveClock(
+  cards: ReadonlyArray<OverviewCard>,
+  visibleDescendantsByRoot: ReadonlyMap<number, ReadonlyArray<OverviewDescendant>>,
+): boolean {
+  for (const card of cards) {
+    if (resolveOverviewCardWaitingSince(card) !== undefined) return true
+    if (resolveOverviewCardRunStartedAt(card) !== undefined) return true
+    const visibleDescendants = visibleDescendantsByRoot.get(card.root.id)
+    if (visibleDescendants !== undefined) {
+      for (const descendant of visibleDescendants) {
+        if (resolveOverviewDescendantChipAnchor(descendant) !== undefined) return true
+      }
     }
   }
   return false

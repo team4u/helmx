@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
 import { useBatchConversationDelete } from './use-batch-conversation-delete.js'
@@ -436,10 +436,12 @@ function AgentConversationRow({
 export function AgentStandingsGroup({
   store,
   background,
+  headerLeading,
   onNavigate,
 }: {
   store: SidebarStoreView
   background: ConversationBackgroundIndex
+  headerLeading?: ReactNode
   onNavigate?: () => void
 }) {
   const { t } = useWebLocale()
@@ -528,7 +530,7 @@ export function AgentStandingsGroup({
   return (
     <div className="sidebar-group agent-standing-group">
       <div className="sidebar-group-header">
-        <span>{t('shell.agents.groupTitle')}</span>
+        {headerLeading ?? <span>{t('shell.agents.groupTitle')}</span>}
         <div className="sidebar-group-header-actions">
           <Tooltip content={filterOpen ? t('shell.agents.collapseFilters') : t('shell.agents.filter')} side="top">
             <button

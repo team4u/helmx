@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react'
-import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
+import { HelmxIcon, SegmentedControl, Tooltip } from '@helmx/plugin-client'
 import {
   useAuthConnection,
   useConversations,
@@ -14,7 +14,14 @@ import {
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { LocaleMenuButton } from '../ui/LocaleMenuButton.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type SidebarSpace } from '../lib/types.js'
+import {
+  isSameResolvedTarget,
+  resolveTargetString,
+  CENTER_TARGETS,
+  spaceForTarget,
+  type SidebarConversationMode,
+  type SidebarSpace,
+} from '../lib/types.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
 import { formatModShortcut } from './shortcuts-model.js'
 import {
@@ -29,9 +36,9 @@ import {
   type SidebarStoreView,
   type SidebarViewItem,
 } from './sidebar-model.js'
-import type { ConversationBackgroundIndex } from './background-activity-model.js'
 import { AgentStandingsGroup } from './SidebarAgentStandings.js'
 import { ArchivedConversationsGroup } from './SidebarArchivedConversations.js'
+import { SidebarOverviewList } from './SidebarOverviewList.js'
 import { useGlobalAttention } from './use-attention-indicator.js'
 import { useSidebarBadges } from './use-sidebar-badges.js'
 import {
@@ -375,7 +382,7 @@ function SettingsNavGroup({ store, onNavigate }: { store: SidebarStoreView; onNa
 
 export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   const { sseConnected } = useAuthConnection()
-  const { theme, themePreference, locale, quietNotifyEnabled } = useThemePreferencesState()
+  const { theme, themePreference, locale, quietNotifyEnabled, sidebarConvMode } = useThemePreferencesState()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
   const groupedUi = useGroupedUi()
   const plugins = usePlugins()
@@ -387,6 +394,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
     pushNotice,
     openSpace,
     setQuietNotify,
+    setSidebarConvMode,
     setActiveModal,
     toggleSidebarCollapsed,
     toggleTheme,
@@ -427,9 +435,10 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   const space = spaceForTarget(primaryTarget)
 
   // 全局并发态势（总览入口脉冲灯点 + Rail/移动端快捷导航的总览灯点 + 后台在途
-  // 索引）：badge doc 的按需加载内聚在 Hook（ensurePluginDoc 幂等，移动端合着
-  // 抽屉也不漏后台任务）。插件停用后其 UI 贡献与 doc 均从 store 消失，态势自然归零。
-  const { indicator: attentionIndicator, background } = useGlobalAttention()
+  // 索引 + 正在查看会话集合）：badge doc 的按需加载内聚在 Hook（ensurePluginDoc
+  // 幂等，移动端合着抽屉也不漏后台任务）。插件停用后其 UI 贡献与 doc 均从 store
+  // 消失，态势自然归零。
+  const { indicator: attentionIndicator, background, viewedConversationIds } = useGlobalAttention()
 
   // 插件全局快捷入口（sidebar.item quickEntry，最薄通用声明）：仅收当前启用
   // 插件确实注册了的 screen（插件停用后贡献即时消失，入口零残留）；点击走标准
@@ -459,6 +468,27 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
       : space === 'views'
         ? t('shell.sidebar.viewsHeader')
         : t('shell.sidebar.spaceHeaderSettings')
+
+  const convModeSwitcher = (
+    <SegmentedControl<SidebarConversationMode>
+      className="sidebar-conv-mode-switch"
+      value={sidebarConvMode}
+      onValueChange={setSidebarConvMode}
+      aria-label={t('shell.sidebar.convModeLabel')}
+      items={[
+        {
+          value: 'agents',
+          label: <span>{t('shell.agents.groupTitle')}</span>,
+          title: t('shell.sidebar.convModeAgentsTooltip'),
+        },
+        {
+          value: 'overview',
+          label: <span>{t('shell.sidebar.convModeOverview')}</span>,
+          title: t('shell.sidebar.convModeOverviewTooltip'),
+        },
+      ]}
+    />
+  )
 
   return (
     <aside className="helmx-sidebar">
@@ -566,12 +596,27 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         </div>
 
         <div className="sidebar-scroll">
-          {/* 会话总览入口收敛为侧栏头部搜索钮旁的素图标钮（仅对话空间）；
-              逐树态势明细只在 #/overview 总览页呈现。 */}
+          {/* 全屏会话总览入口收敛在侧栏头部搜索钮旁（仅对话空间）；
+              下方对话列表支持在「智能体分组」与「总览精简列表」两种展示模式间切换。 */}
           {space === 'conversations' ? (
             <>
               <PendingAsksPanel store={sidebarStore} />
-              <AgentStandingsGroup store={sidebarStore} background={background} onNavigate={onClose} />
+              {sidebarConvMode === 'overview' ? (
+                <SidebarOverviewList
+                  store={sidebarStore}
+                  background={background}
+                  viewedConversationIds={viewedConversationIds}
+                  headerLeading={convModeSwitcher}
+                  onNavigate={onClose}
+                />
+              ) : (
+                <AgentStandingsGroup
+                  store={sidebarStore}
+                  background={background}
+                  headerLeading={convModeSwitcher}
+                  onNavigate={onClose}
+                />
+              )}
               <ArchivedConversationsGroup background={background} onNavigate={onClose} />
             </>
           ) : space === 'views' ? (

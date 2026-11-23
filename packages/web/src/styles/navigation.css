@@ -131,12 +131,14 @@
 }
 
 /* 智能体会话列表统一采用极简纸面分阶：Hover 轻垫层、Active 实底微垫层（无投影、无竖线），
- * 让父行待命与子会话选中保持同一视觉语言，且不与 Hover 撞色。 */
-.sidebar-context .agent-standing-group .nav-item:hover {
+ * 让父行待命、子会话选中与精简总览列表保持同一视觉语言，且不与 Hover 撞色。 */
+.sidebar-context .agent-standing-group .nav-item:hover,
+.sidebar-context .sidebar-overview-group .nav-item:hover {
   --nav-row-bg: var(--nav-list-hover-bg);
 }
 
-.sidebar-context .agent-standing-group .nav-item:not(.nav-item-active):not(.nav-item-split):has(.nav-item-row-actions [aria-expanded="true"]) {
+.sidebar-context .agent-standing-group .nav-item:not(.nav-item-active):not(.nav-item-split):has(.nav-item-row-actions [aria-expanded="true"]),
+.sidebar-context .sidebar-overview-group .nav-item:not(.nav-item-active):not(.nav-item-split):has(.nav-item-row-actions [aria-expanded="true"]) {
   --nav-row-bg: var(--nav-list-hover-bg);
   color: var(--fg);
 }
@@ -185,9 +187,11 @@
   color: var(--nav-active-muted);
 }
 
-/* 智能体会话列表选中态（待命父行 + 子会话行）：统一扁平纸面高亮，无投影、无边框、无左侧竖线 */
+/* 智能体会话列表与侧栏精简总览选中态：统一扁平纸面高亮，无投影、无边框、无左侧竖线 */
 .sidebar-context .agent-standing-group .nav-item.nav-item-active:hover,
 .sidebar-context .agent-standing-group .nav-item.nav-item-active,
+.sidebar-context .sidebar-overview-group .nav-item.nav-item-active:hover,
+.sidebar-context .sidebar-overview-group .nav-item.nav-item-active,
 .sidebar-context .nav-item.nav-item-sub.nav-item-active:hover,
 .sidebar-context .nav-item.nav-item-sub.nav-item-active {
   --nav-row-bg: var(--nav-list-active-bg);
@@ -747,5 +751,318 @@
   font-size: 13px;
   font-weight: 600;
 }
+
+/* --------------------------------------------------------------------------
+ * 对话列表展示模式切换（智能体 / 总览）与侧栏精简总览列表
+ * -------------------------------------------------------------------------- */
+
+.agent-standing-group > .sidebar-group-header:has(.sidebar-conv-mode-switch),
+.sidebar-overview-group > .sidebar-group-header {
+  height: auto;
+  min-height: 26px;
+  padding: 0 2px 2px 4px;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.sidebar-conv-mode-switch {
+  padding: 2px;
+  gap: 1px;
+  border-radius: 6px;
+}
+
+.sidebar-conv-mode-switch .segmented-control-btn {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  border-radius: 4px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.sidebar-overview-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sidebar-overview-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-overview-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px 0 4px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  text-align: left;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.sidebar-overview-section-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.sidebar-overview-section-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sidebar-overview-section-chevron {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+}
+
+.sidebar-overview-section-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-overview-section-count {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--fg-subtle);
+}
+
+.sidebar-overview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-overview-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* 紧凑双行项：纸面分阶高亮，第一行锚定状态灯/标题/行尾动作，第二行对齐标题左缘呈现精简态势元信息 */
+.sidebar-overview-item {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 2px;
+  min-height: 40px;
+  padding: 5px 8px;
+}
+
+.sidebar-overview-item-quiet .sidebar-overview-open .nav-item-label {
+  font-weight: 400;
+}
+
+.sidebar-overview-item-branch,
+.sidebar-context .nav-item.sidebar-overview-item-branch {
+  color: var(--fg);
+}
+
+.sidebar-overview-item.is-selected {
+  --nav-row-bg: color-mix(in srgb, var(--accent) 10%, transparent);
+  background: var(--nav-row-bg);
+}
+
+.sidebar-overview-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+  min-height: 20px;
+}
+
+.sidebar-overview-group .nav-status-slot {
+  width: 8px;
+}
+
+.sidebar-overview-group .status-dot {
+  width: 6px;
+  height: 6px;
+}
+
+.sidebar-overview-open {
+  min-height: 20px;
+}
+
+.sidebar-overview-open .nav-item-label {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.sidebar-overview-head-meta {
+  gap: 4px;
+}
+
+/* 悬停菜单严格锚定在第一行（.sidebar-overview-head）右端，绝不跨行遮挡第二行元信息或子会话开关 */
+@media (hover: hover) {
+  .sidebar-overview-head .nav-item-row-actions {
+    right: 0;
+  }
+}
+
+.sidebar-overview-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 14px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--fg-muted);
+}
+
+.sidebar-overview-meta-text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sidebar-overview-meta-profile {
+  flex-shrink: 0;
+  max-width: 48%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-overview-meta-node {
+  flex-shrink: 0;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10.5px;
+}
+
+.sidebar-overview-meta-time {
+  flex-shrink: 0;
+  color: var(--fg-secondary);
+  font-size: 10.5px;
+}
+
+.sidebar-overview-meta-warn {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--warn);
+}
+
+.sidebar-overview-meta-err {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--err);
+}
+
+.sidebar-overview-meta-summary {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-overview-meta-sep {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+}
+
+/* 紧凑子会话展开开关：分支图标 + 计数，占宽极小、点击拦截冒泡 */
+.sidebar-overview-desc-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  height: 16px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.sidebar-overview-desc-toggle:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.sidebar-overview-desc-toggle.is-expanded {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.sidebar-overview-desc-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sidebar-overview-descendants {
+  padding-left: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-overview-descendant {
+  min-height: 26px;
+  padding: 3px 8px;
+}
+
+.sidebar-overview-desc-time {
+  font-size: 10px;
+  color: var(--fg-muted);
+}
+
+.sidebar-overview-desc-time.is-warn {
+  color: var(--warn);
+}
+
+.sidebar-overview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.sidebar-overview-empty-action {
+  gap: 4px;
+}
+
 
 

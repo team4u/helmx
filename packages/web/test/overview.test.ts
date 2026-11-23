@@ -21,11 +21,14 @@ import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 import type { ResolvedSidebarBadge, SidebarViewItem } from '../src/shell/sidebar-model.js'
 import type { ConversationBackgroundIndex } from '../src/shell/background-activity-model.js'
 import {
+  buildNewTopicCandidates,
   buildOverviewCards,
   filterOverviewCards,
   groupOverviewCards,
+  isOverviewDescendantActive,
   overviewBucketCounts,
   overviewCardsNeedLiveClock,
+  overviewDescendantMatchesQuery,
   overviewFilterParamsRepair,
   overviewNodeKey,
   overviewNodeOptions,
@@ -34,6 +37,9 @@ import {
   parseOverviewFilterParams,
   resolveOverviewCardTiming,
   resolveOverviewDescendantChipTiming,
+  resolveSidebarOverviewDescendants,
+  resolveSidebarOverviewPrimaryTarget,
+  sidebarOverviewCardsNeedLiveClock,
   OVERVIEW_DESCENDANT_LIMIT,
 } from '../src/overview/overview-model.js'
 import { formatLocationHash, hashHasPrimaryTarget, parseLocationHash, shouldPushLocationHistory } from '../src/lib/url-hash-model.js'
@@ -2286,4 +2292,112 @@ test('ConversationOverview DOM: renders live waiting/running stopwatches, settle
     globalThis.setInterval = origSetInterval
     resetServerClock()
   }
+})
+
+// ---------------------------------------------------------------------------
+// 共享纯函数：新话题候选与侧栏精简总览后代切片 / 主项裁决 / 秒表门控
+// ---------------------------------------------------------------------------
+
+test('buildNewTopicCandidates: latest active root profile leads, archived roots ignored, hidden plugins excluded', { timeout: 60_000 }, () => {
+  const candidates = buildNewTopicCandidates({
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '编码专员' },
+      { id: 'writer', name: '写作助手' },
+      { id: 'hidden', name: '已停用插件角色', managedByPlugin: 'builtin:off' },
+    ],
+    conversations: [
+      conv({ id: 1, profileId: 'assistant', updatedAt: 5000 }),
+      conv({ id: 2, profileId: 'coder', updatedAt: 9000 }),
+      conv({ id: 3, profileId: 'writer', updatedAt: 12000, tags: [ARCHIVED_TAG] }),
+    ],
+    plugins: [{ id: 'builtin:off', enabled: false }],
+    locale: 'zh-CN',
+  })
+  assert.deepEqual(
+    candidates.map((c) => c.profileId),
+    ['coder', 'assistant', 'writer'],
+    'latest unarchived root profile leads; archived roots do not steal top slot; disabled plugin profiles stay hidden',
+  )
+})
+
+test('resolveSidebarOverviewDescendants & resolveSidebarOverviewPrimaryTarget: auto-surfaces active/viewed/matched descendants and avoids root-vs-child jump deadlock', { timeout: 60_000 }, () => {
+  const cards = buildCards([
+    conv({ id: 10, title: '主任务', status: 'idle', createdAt: 9000 }),
+    conv({ id: 11, parentConversationId: 10, title: '审批子代理', status: 'blocked', pendingAskCount: 1, pendingAskSince: 5000, createdAt: 9200 }),
+    conv({ id: 12, parentConversationId: 10, title: '历史调研子代理', status: 'idle', createdAt: 9100 }),
+    conv({ id: 13, parentConversationId: 10, title: '已完成子代理', status: 'done', createdAt: 9050 }),
+  ])
+  const card = cards[0]!
+  assert.equal(card.targetConversationId, 11)
+  assert.equal(isOverviewDescendantActive(card.descendants[0]!), true)
+  assert.equal(isOverviewDescendantActive(card.descendants[1]!), false)
+
+  // 1) 未手动展开：活跃/待审批子会话自动浮现，安静子会话折叠计入 hiddenCount
+  const defaultSlice = resolveSidebarOverviewDescendants({
+    card,
+    expanded: false,
+    activeConversationIds: new Set(),
+  })
+  assert.deepEqual(defaultSlice.visible.map((d) => d.conv.id), [11])
+  assert.equal(defaultSlice.hiddenCount, 2)
+  assert.equal(defaultSlice.hasCollapsibleQuiet, true)
+  // 待审批子会话已作为独立子行可见 → 主项打开根会话 #10，子行开 #11，互不死锁
+  assert.equal(resolveSidebarOverviewPrimaryTarget(card, defaultSlice.visible), 10)
+  // 若无可见子行兜底 → 仍直达 targetConversationId (#11)
+  assert.equal(resolveSidebarOverviewPrimaryTarget(card, []), 11)
+
+  // 2) 正在主屏/分屏查看安静子会话 #12 → 自动浮现，不再隐藏当前所在位置
+  const viewedSlice = resolveSidebarOverviewDescendants({
+    card,
+    expanded: false,
+    activeConversationIds: new Set([12]),
+  })
+  assert.deepEqual(viewedSlice.visible.map((d) => d.conv.id), [11, 12])
+  assert.equal(viewedSlice.hiddenCount, 1)
+
+  // 3) 搜索命中安静子会话标题或 #id → 自动浮现命中项
+  assert.equal(overviewDescendantMatchesQuery(card.descendants[1]!, '调研'), true)
+  assert.equal(overviewDescendantMatchesQuery(card.descendants[1]!, '#12'), true)
+  assert.equal(overviewDescendantMatchesQuery(card.descendants[1]!, '不存在'), false)
+  const searchSlice = resolveSidebarOverviewDescendants({
+    card,
+    expanded: false,
+    activeConversationIds: new Set(),
+    query: '调研',
+  })
+  assert.deepEqual(searchSlice.visible.map((d) => d.conv.id), [11, 12])
+
+  // 4) 手动展开：展示全部后代，hiddenCount 归零，仍保留 hasCollapsibleQuiet 供收起
+  const expandedSlice = resolveSidebarOverviewDescendants({
+    card,
+    expanded: true,
+    activeConversationIds: new Set(),
+  })
+  assert.deepEqual(expandedSlice.visible.map((d) => d.conv.id), [11, 12, 13])
+  assert.equal(expandedSlice.hiddenCount, 0)
+  assert.equal(expandedSlice.hasCollapsibleQuiet, true)
+})
+
+test('sidebarOverviewCardsNeedLiveClock: returns false for quiet trees and true when visible card or descendant has stopwatch anchor', { timeout: 60_000 }, () => {
+  const quietCards = buildCards([
+    conv({ id: 1, status: 'idle', runDurationMs: 120_000 }),
+    conv({ id: 2, status: 'done', unread: true, runDurationMs: 60_000 }),
+  ])
+  assert.equal(sidebarOverviewCardsNeedLiveClock(quietCards, new Map()), false)
+
+  const runningCards = buildCards([
+    conv({ id: 3, status: 'working', runStartedAt: 10_000 }),
+  ])
+  assert.equal(sidebarOverviewCardsNeedLiveClock(runningCards, new Map()), true)
+
+  // 仅子会话有秒表起点（根会话为安静占位）时，只看可见子行决定是否开表
+  const childOnlyCards = buildCards([
+    conv({ id: 4, status: 'idle' }),
+    conv({ id: 41, parentConversationId: 4, status: 'working', runStartedAt: 20_000 }),
+  ])
+  assert.equal(
+    sidebarOverviewCardsNeedLiveClock(childOnlyCards, new Map([[4, childOnlyCards[0]!.descendants]])),
+    true,
+  )
 })

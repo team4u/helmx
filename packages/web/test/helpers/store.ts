@@ -28,6 +28,7 @@ export type TestStoreOverrides = Omit<
   | 'setLocale'
   | 'setLocalePreference'
   | 'setQuietNotify'
+  | 'setSidebarConvMode'
   | 'checkAuth'
   | 'onAuthenticated'
   | 'logout'
@@ -88,7 +89,7 @@ function hydrationSurface(store: HelmxExternalStore): StoreHydrationSurface {
 export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternalStore {
   const {
     authReady, authConfigured, authenticated, authError, connectionError, sseConnected, kernelBootId,
-    theme, themePreference, locale, localePreference, quietNotifyEnabled,
+    theme, themePreference, locale, localePreference, quietNotifyEnabled, sidebarConvMode,
     conversations, conversationDetails, conversationLives, pendingAsks, resolvedAsksByConv,
     plugins, uiContributions, pluginDocs, nodes, nodesLoaded,
     conversationArtifacts, loadErrors,
@@ -128,6 +129,7 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
     locale: locale ?? 'en',
     localePreference: localePreference ?? locale ?? 'en',
     quietNotifyEnabled: quietNotifyEnabled ?? false,
+    sidebarConvMode: sidebarConvMode ?? 'agents',
   })
   hydrate.patchCatalog({
     profiles: profiles ?? [],
