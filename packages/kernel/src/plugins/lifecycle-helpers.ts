@@ -305,7 +305,6 @@ export async function teardownPlugin(
   opts: { stopServices: boolean },
   clearRegistrations?: (state: PluginState) => void,
 ): Promise<void> {
-  const pluginId = state.definition.id;
   const stopErrors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> = opts.stopServices
     ? await stopPluginServices(state)
     : [];
@@ -550,6 +549,9 @@ export async function disposePlugins(
     } catch (err) {
       errors.push({ pluginId: state.definition.id, error: toJsonSafeError(err) });
     } finally {
+      const releaseTsRoot = state.releaseTsRoot;
+      state.releaseTsRoot = undefined;
+      releaseTsRoot?.();
       state.phase = 'idle';
       tracker.removePlugin(state.definition.id);
       removeRegistries(state.definition.id);

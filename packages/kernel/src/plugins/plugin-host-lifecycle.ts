@@ -6,9 +6,12 @@ import { join } from 'node:path';
 import {
   HelmxError,
   type HelmxPluginContext,
+  type PluginBuildProvider,
   type PluginDefinition,
   type PluginManifestProjection,
 } from '@helmx/protocol';
+import { registerPluginTsRoot } from './backend-ts-loader.js';
+import { getDefinitionTsRoot } from './external-loader.js';
 import {
   assertNotLocked,
   getActiveEnabledPluginIds,
@@ -56,6 +59,7 @@ export const dryRunManifestSinks = new WeakMap<
 export interface PluginLifecycleContext extends PluginTransitionContext {
   host: PluginHostBackend;
   providers?: PluginProviderPort;
+  buildProvider?: PluginBuildProvider;
   servicesStarted: boolean;
   servicesReconciled: boolean;
   redactText?: (text: string) => string;
@@ -137,6 +141,11 @@ export async function runRegisterTransaction(
   if (wantsEnabled) assertDependenciesSatisfied(ctx.plugins, pluginId, dependencies);
   const dataDir = join(ctx.dataDir, 'plugins', pluginDataDirName(pluginId));
   mkdirSync(dataDir, { recursive: true });
+  const tsRootDir = getDefinitionTsRoot(definition);
+  const releaseTsRoot =
+    tsRootDir !== undefined
+      ? registerPluginTsRoot(tsRootDir, { transform: ctx.buildProvider?.transformBackendTs })
+      : undefined;
 
   const state: PluginState = {
     definition,
@@ -150,6 +159,7 @@ export async function runRegisterTransaction(
     providers: [],
     configSchema: null,
     hostReleases: new Set(),
+    ...(releaseTsRoot !== undefined ? { releaseTsRoot } : {}),
     stopWindow: false,
     ...(isolate ? { isolateFailure: true } : {}),
   };

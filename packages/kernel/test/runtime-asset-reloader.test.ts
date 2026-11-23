@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { AssetReloader } from '../src/runtime/asset-reloader.js'
 
@@ -401,6 +404,50 @@ describe('AssetReloader unit tests', { timeout: 60_000 }, () => {
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0]!.title, 'Asset hot-reload watcher failed')
     assert.equal(notifications[0]!.error, watcherErr)
+
+    await reloader.close()
+  })
+
+  it('watches top-level dataDir non-recursively and attaches targeted recursive watchers only to profiles/ and skills/', { timeout: 60_000 }, async (t) => {
+    const dir = await mkdtemp(join(tmpdir(), 'helmx-asset-reloader-targeted-'))
+    t.after(() => rm(dir, { recursive: true, force: true }))
+    await mkdir(join(dir, 'profiles'), { recursive: true })
+    await mkdir(join(dir, 'skills'), { recursive: true })
+    await mkdir(join(dir, 'artifacts', '1'), { recursive: true })
+    await mkdir(join(dir, 'installed-plugins', 'demo', 'node_modules'), { recursive: true })
+
+    const created: Array<{ dir: string; recursive: boolean | undefined; onChange: (paths: string[]) => void }> = []
+    let profileInvalidations = 0
+    let reloadModelsCount = 0
+
+    const reloader = new AssetReloader({
+      dataDir: dir,
+      reloadModels: async () => {
+        reloadModelsCount += 1
+      },
+      invalidateProfiles: () => {
+        profileInvalidations += 1
+      },
+      reloadPluginConfig: async () => {},
+      notifyError: () => {},
+      createWatcher: (watchDir, onChange, opts) => {
+        created.push({ dir: watchDir, recursive: opts.recursive, onChange })
+        return { start() {}, close() {} }
+      },
+    })
+
+    reloader.start()
+    assert.equal(created.length, 3)
+    const rootWatch = created.find((w) => w.dir === dir)
+    const profilesWatch = created.find((w) => w.dir === join(dir, 'profiles'))
+    const skillsWatch = created.find((w) => w.dir === join(dir, 'skills'))
+    assert.equal(rootWatch?.recursive, false)
+    assert.equal(profilesWatch?.recursive, true)
+    assert.equal(skillsWatch?.recursive, true)
+
+    profilesWatch!.onChange(['assistant/profile.json'])
+    assert.equal(profileInvalidations, 1)
+    assert.equal(reloadModelsCount, 0)
 
     await reloader.close()
   })

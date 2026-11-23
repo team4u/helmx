@@ -7,7 +7,6 @@
  * upgrade process restarts and replaces the old connection). Bounded in-memory promise: settled by cancel,
  * timeout, `registry.close`, or matching commit, never dangling. Matches the pre-split inline implementation.
  */
-import { HelmxError } from '@helmx/protocol'
 import type { NodeUpgradeResult } from '@helmx/protocol'
 
 /** Upgrade waiter: bounded in-memory promise resolved only by a matching heartbeat commit. */

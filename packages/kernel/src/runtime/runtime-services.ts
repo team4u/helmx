@@ -140,6 +140,7 @@ export function assembleRuntimeServices(
   let tracker: ConversationTracker
   let nodes: NodeManager
   let conversations: ConversationService
+  let agentSpawn: RuntimeAgentSpawn
 
   const events = new EventHub({
     initialSeq: options.store.eventSeqNow,
@@ -326,6 +327,7 @@ export function assembleRuntimeServices(
     dataDir: init.dataDir,
     toolDeps: { defaultCwd: init.cwd },
     evictConversationBase: (id) => envFabric.evictConversation(id),
+    onConversationDeleted: (id) => agentSpawn?.deleteConversationSessions(id),
     managedConversations: ownership.managedConversations,
     cancelAsksByConversation: async (id) => {
       await asks.cancelByConversation(id)
@@ -350,7 +352,7 @@ export function assembleRuntimeServices(
   })
 
   // ---- Native subagent spawning ----
-  const agentSpawn = new RuntimeAgentSpawn({
+  agentSpawn = new RuntimeAgentSpawn({
     store: options.store,
     toolDeps,
     harness: init.harness,
@@ -391,6 +393,7 @@ export function assembleRuntimeServices(
     dataDir: init.dataDir,
     externalModels: init.externalModels !== undefined,
     reloadModels: () => runtime.reloadModels(),
+    invalidateProfiles: () => profilesSvc.invalidateCache(),
     reloadPluginConfig: async () => {
       // Invalidate in-memory snapshots (e.g. AuthService) when `config.json` is edited/cleared externally, then reload plugin config mirror.
       await configSvc.invalidateCache()

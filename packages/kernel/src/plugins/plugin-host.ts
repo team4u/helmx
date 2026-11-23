@@ -49,7 +49,6 @@ import { CapabilityServiceRegistry } from './capability-service-registry.js';
 import {
   CapabilityRegistry,
   type ActionCallerIdentity,
-  type ActionInvocationSurface,
   type DerivedToolSpec,
   type PluginRouteEntry,
   parseQualifiedActionId,
@@ -438,12 +437,13 @@ export class PluginHost {
   async getClientModule(
     pluginId: string,
     moduleRef: string,
-    options?: { chunk?: string; hash?: string },
+    options?: { chunk?: string; hash?: string; metadataOnly?: boolean },
   ): Promise<PluginClientBundle> {
     this.assertNotDisposed();
     return this.uiRegistry.getClientModule(pluginId, moduleRef, {
       chunk: options?.chunk,
       hash: options?.hash,
+      metadataOnly: options?.metadataOnly,
       getPluginLifecycle: this.getPluginLifecycle,
       dataDir: this.options.dataDir,
       isDisposed: () => this.disposed,
@@ -638,12 +638,21 @@ export class PluginHost {
     this.releaseConversationDeletedListener = undefined;
     releaseConvDeleted?.();
     await this.gate.drain();
-    await disposePlugins(
-      this.plugins,
-      (state) => teardownPluginState(state, { stopServices: true }, this.registries()),
-      this.tracker,
-      (id) => removePluginRegistries(id, this.registries()),
-    );
+    const statesSnapshot = [...this.plugins.values()];
+    try {
+      await disposePlugins(
+        this.plugins,
+        (state) => teardownPluginState(state, { stopServices: true }, this.registries()),
+        this.tracker,
+        (id) => removePluginRegistries(id, this.registries()),
+      );
+    } finally {
+      for (const state of statesSnapshot) {
+        const release = state.releaseTsRoot;
+        state.releaseTsRoot = undefined;
+        release?.();
+      }
+    }
   }
 
   beginSpawnTask(pluginId: string, spawnId: string): void { this.tracker.begin(pluginId, `spawn:${spawnId}`); }
@@ -674,6 +683,7 @@ export class PluginHost {
       dataDir: this.options.dataDir,
       host: this.options.host,
       providers: this.options.providers,
+      buildProvider: this.options.buildProvider,
       servicesStarted: this.servicesStarted,
       servicesReconciled: this.servicesReconciled,
       redactText: (text) => this.redactProjectionText(text),

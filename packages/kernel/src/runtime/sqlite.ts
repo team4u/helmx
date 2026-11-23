@@ -58,6 +58,13 @@ CREATE TABLE IF NOT EXISTS helmx_asks (
   created_at INTEGER NOT NULL,
   settled_at INTEGER
 );
+CREATE INDEX IF NOT EXISTS helmx_asks_conv ON helmx_asks (conversation_id);
+CREATE TABLE IF NOT EXISTS helmx_fts_map (
+  conversation_id INTEGER NOT NULL,
+  entry_id TEXT NOT NULL,
+  fts_rowid INTEGER NOT NULL UNIQUE,
+  PRIMARY KEY (conversation_id, entry_id)
+);
 CREATE TABLE IF NOT EXISTS helmx_artifacts (
   id TEXT PRIMARY KEY,
   conversation_id INTEGER NOT NULL,
@@ -109,14 +116,21 @@ CREATE TABLE IF NOT EXISTS helmx_tombstones (
  * Bump whenever the FTS5 tokenizer or indexed column shape changes so startup detects
  * the mismatch (and recovers from mid-rebuild crashes) and rebuilds the derived index once.
  */
-export const FTS_SCHEMA_VERSION = 2
+export const FTS_SCHEMA_VERSION = 3
 export const FTS_SCHEMA_VERSION_KEY = 'fts_schema_version'
 
 /**
- * Separate FTS5 table creation: `trigram` enables CJK/substring full-text indexing across `title` and `body`.
- * The `body` column stores redacted plain text (secret values are never persisted).
+ * Separate FTS5 table creation: `trigram` enables CJK/substring full-text indexing across `title` and `body`,
+ * paired with `helmx_fts_map` B-tree `(conversation_id, entry_id) -> fts_rowid` so point updates and deletes
+ * never scan `UNINDEXED` virtual-table columns. The `body` column stores redacted plain text.
  */
 const FTS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS helmx_fts_map (
+  conversation_id INTEGER NOT NULL,
+  entry_id TEXT NOT NULL,
+  fts_rowid INTEGER NOT NULL UNIQUE,
+  PRIMARY KEY (conversation_id, entry_id)
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS helmx_conversation_fts USING fts5(
   conversation_id UNINDEXED,
   entry_id UNINDEXED,
@@ -150,6 +164,7 @@ async function ensureFtsSchema(
     )
     if (current !== undefined) return
     await tx.exec(FTS_SCHEMA)
+    await tx.exec('DELETE FROM helmx_fts_map')
     const hasConvs = await tx.get<{ present: number }>('SELECT 1 AS present FROM helmx_conversations LIMIT 1')
     const initialVersion = !piHistoryPresent && hasConvs === undefined ? FTS_SCHEMA_VERSION : 0
     await tx.run(

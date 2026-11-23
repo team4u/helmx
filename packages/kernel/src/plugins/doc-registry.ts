@@ -402,7 +402,6 @@ export class PluginDocRegistry {
     assertUsable: () => void,
   ): PluginSessionDocHandle<TState> {
     const store = this.options.sessionStore;
-    const assertConversationExists = this.options.assertConversationExists!;
     const emitSessionDocUpdated = this.options.emitSessionDocUpdated;
     const emit = (conversationId: number, value: unknown, deleted?: boolean): void => {
       if (!isPublic) return;

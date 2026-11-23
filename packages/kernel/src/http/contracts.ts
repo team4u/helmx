@@ -169,7 +169,7 @@ export interface PluginHost {
   getClientModule(
     pluginId: string,
     moduleRef: string,
-    options?: { chunk?: string; hash?: string },
+    options?: { chunk?: string; hash?: string; metadataOnly?: boolean },
   ): Promise<{ code: string; contentHash: string; gzipped?: Uint8Array; exports?: string[] }>
   /**
    * Static self-check of external plugin source (`POST /api/plugins/doctor`, body `{ path?, id? }`):

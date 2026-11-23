@@ -55,11 +55,13 @@ export class AskService {
   }
 
   listPendingByConversation(conversationId: number): AskSpec[] {
-    return this.listAsks('pending').filter((a) => a.conversationId === conversationId)
+    return this.store
+      .listAsksByConversation(conversationId, 'pending')
+      .map((row) => JSON.parse(row.specJson) as AskSpec)
   }
 
   pendingCount(conversationId: number): AskSpec[]['length'] {
-    return this.listPendingByConversation(conversationId).length
+    return this.store.countAsksByConversation(conversationId, 'pending')
   }
 
   getAsk(id: string): AskSpec | undefined {

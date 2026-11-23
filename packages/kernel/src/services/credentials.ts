@@ -12,7 +12,6 @@ import {
   atomicWriteJson,
   isPrivateMode,
   readJsonFileOptional,
-  readTextFile,
 } from './atomic-file.js'
 import { withFileLock, withProcessFileLock } from './file-lock.js'
 import { isJsonObject } from '@helmx/protocol'
@@ -127,6 +126,17 @@ export class CredentialService {
   async list(): Promise<string[]> {
     const store = await this.readStore()
     return Object.keys(store.providers).sort()
+  }
+
+  /** Read all configured provider API keys in a single `credentials.json` read (restricted to trusted in-process callers). */
+  async listAll(): Promise<Record<string, string>> {
+    const store = await this.readStore()
+    const out: Record<string, string> = {}
+    for (const id of Object.keys(store.providers).sort()) {
+      const value = store.providers[id]?.value
+      if (value) out[id] = value
+    }
+    return out
   }
 
   /**

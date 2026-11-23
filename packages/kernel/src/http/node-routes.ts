@@ -11,7 +11,7 @@ import { decodeSegment } from './route-match.js'
 import type { KernelRuntimeLike } from './contracts.js'
 import { assertBodySchema, NODE_ID_PATTERN_SOURCE, requireUtf16LengthAtMost, ValidationError } from './validate.js'
 import type { RouteContext } from './route-context.js'
-import { parseOptionalJsonObjectBody, readOptionalJsonBody } from './route-context.js'
+import { parseOptionalJsonObjectBody } from './route-context.js'
 
 export async function handleNodeDomain(
   ctx: RouteContext,
@@ -317,11 +317,15 @@ export async function handleEnvExecDomain(
     // - final frame on completion `{ type: 'exit', ok, exitCode, timedOut }` (must follow tail flush);
     // - mid-stream error `{ type: 'error', error: { code, message, details? } }` (never fabricate exit).
     const encoder = new TextEncoder()
-    let buffered = ''
-    const streamRedactor = kernel.stash?.createStreamingRedactor?.() ?? {
-      push(text: string) { buffered += text; return '' },
-      flush() { const safe = redactText(buffered); buffered = ''; return safe },
+    const makeStreamRedactor = () => {
+      let buffered = ''
+      return kernel.stash?.createStreamingRedactor?.() ?? {
+        push(text: string) { buffered += text; return '' },
+        flush() { const safe = redactText(buffered); buffered = ''; return safe },
+      }
     }
+    const stdoutRedactor = makeStreamRedactor()
+    const stderrRedactor = makeStreamRedactor()
     const streamAbort = new AbortController()
     const executionSignal = AbortSignal.any([ctx.request.signal, streamAbort.signal])
     // Named `readableStream` to avoid shadowing the outer `stream` boolean flag in request body.
@@ -337,13 +341,18 @@ export async function handleEnvExecDomain(
         }
         try {
           const result = await kernel.execEnv(request, (chunk) => {
-            const safe = streamRedactor.push(chunk.text)
+            const activeRedactor = chunk.stream === 'stderr' ? stderrRedactor : stdoutRedactor
+            const safe = activeRedactor.push(chunk.text)
             if (safe !== '') write({ type: 'output', stream: chunk.stream, text: safe })
           }, executionSignal)
-          // Final frame must come after flushing tail buffer so no stash/token survives concatenation.
-          const tail = streamRedactor.flush()
-          if (tail !== '') {
-            write({ type: 'output', stream: 'stdout' as const, text: tail })
+          // Final frame must come after flushing both per-stream tail buffers so interleaved stdout/stderr never corrupt partial secret matches.
+          const stdoutTail = stdoutRedactor.flush()
+          if (stdoutTail !== '') {
+            write({ type: 'output', stream: 'stdout' as const, text: stdoutTail })
+          }
+          const stderrTail = stderrRedactor.flush()
+          if (stderrTail !== '') {
+            write({ type: 'output', stream: 'stderr' as const, text: stderrTail })
           }
           write({
             type: 'exit',

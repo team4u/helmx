@@ -6,7 +6,8 @@
  * - Spill persists the full text when UTF-8 byte length exceeds 32 KiB and returns a 4 KiB head preview;
  * - All written text and model previews pass through SecretStash redaction while keeping existing placeholders intact.
  */
-import { mkdir, readFile, readdir, realpath, rm, stat } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { mkdir, open, readFile, readdir, realpath, rm, stat } from 'node:fs/promises'
 import { join, sep } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { HelmxError, isArtifactKind, type ArtifactKind, type ArtifactMetadata } from '@helmx/protocol'
@@ -148,6 +149,13 @@ export type { ArtifactKind, ArtifactMetadata }
  */
 function artifactRelPath(conversationId: number, storedName: string): string {
   return `artifacts/${String(conversationId)}/${storedName}`
+}
+
+function artifactReadOpenFlags(): number {
+  if (process.platform !== 'win32' && typeof fsConstants.O_NOFOLLOW === 'number') {
+    return fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+  }
+  return fsConstants.O_RDONLY
 }
 
 export class ArtifactService {
@@ -432,6 +440,47 @@ export class ArtifactService {
   }
 
   /**
+   * Positioned partial artifact read (`fh.read`) used by paginated `read_artifact` so reading a 4 KiB page
+   * never copies the entire 15 MiB file into memory.
+   */
+  async readSlice(id: string, offset: number, maxBytes: number): Promise<{ slice: Buffer; totalSize: number }> {
+    const metadata = await this.get(id)
+    const targetReal = await this.resolveStoredPath(metadata)
+    let fh: Awaited<ReturnType<typeof open>>
+    try {
+      fh = await open(targetReal, artifactReadOpenFlags())
+    } catch (error) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new HelmxError('artifact_file_missing', `artifact file missing: ${metadata.id}`, 404, {
+          artifactId: metadata.id,
+        })
+      }
+      throw error
+    }
+    try {
+      const info = await fh.stat()
+      const totalSize = info.size
+      if (offset >= totalSize || maxBytes <= 0) {
+        return { slice: Buffer.alloc(0), totalSize }
+      }
+      const toRead = Math.min(maxBytes, totalSize - offset)
+      const buf = Buffer.allocUnsafe(toRead)
+      let bytesReadTotal = 0
+      while (bytesReadTotal < toRead) {
+        const { bytesRead } = await fh.read(buf, bytesReadTotal, toRead - bytesReadTotal, offset + bytesReadTotal)
+        if (bytesRead === 0) break
+        bytesReadTotal += bytesRead
+      }
+      return {
+        slice: bytesReadTotal === buf.byteLength ? buf : buf.subarray(0, bytesReadTotal),
+        totalSize,
+      }
+    } finally {
+      await fh.close()
+    }
+  }
+
+  /**
    * Oversized tool-output spill:
    * - `<= 32 KiB`: returned verbatim (no artifact created);
    * - `> 32 KiB`: writes full content to `tool-spill-<callId>.txt` (through stash redaction) and
@@ -450,27 +499,29 @@ export class ArtifactService {
     if (totalBytes <= SPILL_THRESHOLD_BYTES) {
       return { text: safeText }
     }
-    const fileName = toSpillFileName(callId)
-    const absPath = join(this.convDir(conversationId), fileName)
-    await atomicWriteFile(absPath, safeText)
-    const metadata: ArtifactMetadata = {
-      id: randomUUID(),
-      conversationId,
-      kind: 'spill',
-      name: fileName,
-      path: artifactRelPath(conversationId, fileName),
-      mimeType: 'text/plain',
-      size: totalBytes,
-      createdAt: Date.now(),
-    }
-    this.repository.put(metadata)
-    const head = truncateUtf8Safe(safeText, PREVIEW_HEAD_BYTES)
-    const tail = truncateUtf8Tail(safeText, 256)
-    const text2 =
-      `${head}\n\n...[output too long, truncated. Full result (${totalBytes} bytes) written to artifact]...\n\n` +
-      `--- tail summary ---\n${tail}\n\n` +
-      `[Artifact] id=${metadata.id} path=${metadata.path} (call tool read_artifact to get full text)`
-    return { text: text2, artifact: metadata }
+    return this.runOnConversationChain(conversationId, async () => {
+      const fileName = toSpillFileName(callId)
+      const absPath = join(this.convDir(conversationId), fileName)
+      await atomicWriteFile(absPath, safeText)
+      const metadata: ArtifactMetadata = {
+        id: randomUUID(),
+        conversationId,
+        kind: 'spill',
+        name: fileName,
+        path: artifactRelPath(conversationId, fileName),
+        mimeType: 'text/plain',
+        size: totalBytes,
+        createdAt: Date.now(),
+      }
+      this.repository.put(metadata)
+      const head = truncateUtf8Safe(safeText, PREVIEW_HEAD_BYTES)
+      const tail = truncateUtf8Tail(safeText, 256)
+      const text2 =
+        `${head}\n\n...[output too long, truncated. Full result (${totalBytes} bytes) written to artifact]...\n\n` +
+        `--- tail summary ---\n${tail}\n\n` +
+        `[Artifact] id=${metadata.id} path=${metadata.path} (call tool read_artifact to get full text)`
+      return { text: text2, artifact: metadata }
+    })
   }
 
   /**

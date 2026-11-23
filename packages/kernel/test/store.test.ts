@@ -1036,6 +1036,65 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
       await rm(base, { recursive: true, force: true })
     }
   })
+
+  it('FTS v3 helmx_fts_map handles point index/title/remove/delete without full scan and coalesces setEventSeq bursts in-queue', { timeout: 60_000 }, async () => {
+    assert.equal(FTS_SCHEMA_VERSION, 3)
+    const { store, database, dir } = await openStore()
+    try {
+      store.upsertConv(conv(77, { title: 'Alpha Project' }))
+      store.indexFts(77, 'input:req-1', 'Alpha Project', 'first bravo needle message')
+      store.indexFts(77, 'entry:42', 'Alpha Project', 'second delta payload')
+
+      // Cross-title-and-body multi-term AND query works intact.
+      const initialHits = await store.search('Alpha needle')
+      assert.equal(initialHits.length, 1)
+      assert.equal(initialHits[0]!.conversationId, 77)
+
+      // Title update rewrites FTS rows via helmx_fts_map rowids.
+      store.upsertConv(conv(77, { title: 'Omega Project' }))
+      assert.equal((await store.search('Alpha needle')).length, 0)
+      assert.equal((await store.search('Omega needle')).length, 1)
+
+      // Point removal deletes only the targeted TEXT entry_id.
+      store.removeFtsEntries(77, ['entry:42'])
+      assert.equal((await store.search('delta')).length, 0)
+      assert.equal((await store.search('Omega needle')).length, 1)
+
+      // Burst of 50 setEventSeq calls coalesces in-queue without timers while preserving flushPublic() FIFO.
+      let seqWrites = 0
+      const realDb = database.db as unknown as { run: (sql: string, ...params: unknown[]) => Promise<unknown> }
+      const origRun = realDb.run.bind(database.db)
+      realDb.run = (sql: string, ...params: unknown[]) => {
+        if (sql.includes('INSERT INTO helmx_seq')) seqWrites += 1
+        return origRun(sql, ...params)
+      }
+      for (let s = 1; s <= 50; s += 1) {
+        store.setEventSeq(s)
+      }
+      assert.equal(store.eventSeqNow, 50)
+      await store.flushPublic()
+      assert.ok(seqWrites >= 1 && seqWrites <= 2, `expected coalesced helmx_seq writes (1..2), got ${seqWrites}`)
+
+      // Secondary per-conversation index cleanup on deleteConv.
+      store.putAsk({
+        id: 'ask-77',
+        conversationId: 77,
+        specJson: JSON.stringify({ id: 'ask-77', title: 'q', status: 'pending', fields: [] }),
+        status: 'pending',
+        createdAt: 100,
+      })
+      store.putPluginSessionDoc('builtin:workflow', 'runs', 77, '{"ok":true}')
+      store.deleteConv(77)
+      assert.equal(store.listAsksByConversation(77).length, 0)
+      assert.equal(store.getPluginSessionDoc('builtin:workflow', 'runs', 77), undefined)
+      assert.equal((await store.search('Omega')).length, 0)
+      await store.flushPublic()
+    } finally {
+      await store.close()
+      await database.close()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 function assertValidHighlights(hit: SearchHit, expectedTerms: readonly string[]): void {

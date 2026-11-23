@@ -45,6 +45,8 @@ export interface HubHandlerOptions {
    * Kernel HTTP behavior does not vary based on adjacent `web/dist` files).
    */
   webDistDir?: string | false
+  /** Optional pre-validated StaticServe instance created eagerly by `startHub`. */
+  staticServe?: StaticServe
   /** Composition-root product routes (see `ProductRouteHandler`); consulted after auth, before core dispatch. */
   productRoutes?: ProductRouteHandler
 }
@@ -68,7 +70,10 @@ export function createHubHandler(
   const webDistDir = options.webDistDir
   const productRoutes = options.productRoutes
   // Directory resolution cache (per handler instance, caches successful resolutions only): dir -> StaticServe
-  let staticServeCache: StaticCacheEntry | null = null
+  let staticServeCache: StaticCacheEntry | null =
+    options.staticServe !== undefined && typeof webDistDir === 'string'
+      ? { dir: webDistDir, serve: options.staticServe }
+      : null
   const resolveStaticServe = async (): Promise<StaticServe | undefined> => {
     if (webDistDir === false || webDistDir === undefined) return undefined
     const dir = webDistDir
@@ -234,7 +239,9 @@ function bearerToken(request: Request): string | undefined {
 
 /** Check whether the decoded segments match a plugin route declared as public. */
 function isPublicPluginRoute(kernel: KernelRuntimeLike, method: string, segments: string[]): boolean {
-  if (segments.length === 0 || segments[0] !== 'api') return false
+  if (segments.length < 4 || segments[0] !== 'api' || segments[1] !== 'plugins' || segments[3] !== 'routes') {
+    return false
+  }
   let routes
   try {
     routes = kernel.plugins.listRoutes()

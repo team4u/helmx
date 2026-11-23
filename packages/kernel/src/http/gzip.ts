@@ -11,10 +11,23 @@
  *   Node adapter passes it through verbatim; merge Vary with existing values (e.g. Origin from CORS) and Accept-Encoding;
  * - On compression failure, fall back to identity (identical bytes, always accepted by clients; no content fallback).
  */
-import { gzipSync } from 'node:zlib'
+import { promisify } from 'node:util'
+import { gzip as gzipCallback, gzipSync } from 'node:zlib'
+
+const gzipAsync = promisify(gzipCallback)
 
 /** JSON response compression threshold (bytes): below this, compression gains do not outweigh CPU and TLS framing overhead. */
 const GZIP_MIN_BYTES = 1024
+
+/** Payloads at or above 32 KiB offload compression to async zlib so large responses do not stall the event loop, while smaller payloads stay synchronous to avoid libuv threadpool contention. */
+export const ASYNC_GZIP_THRESHOLD_BYTES = 32 * 1024
+
+export function compressGzip(input: Uint8Array): Buffer | Promise<Buffer> {
+  if (input.byteLength < ASYNC_GZIP_THRESHOLD_BYTES) {
+    return gzipSync(input)
+  }
+  return gzipAsync(input)
+}
 
 /** Maximum JSON response size buffered for synchronous gzip compression (4 MiB, aligned with plugin-route JSON redaction cap). */
 export const GZIP_JSON_MAX_BYTES = 4 * 1024 * 1024
@@ -177,7 +190,7 @@ export async function gzipJsonResponse(request: Request, response: Response): Pr
   if (raw.byteLength < GZIP_MIN_BYTES) return identityResponse()
   let compressed: Uint8Array
   try {
-    compressed = gzipSync(raw)
+    compressed = await compressGzip(raw)
   } catch {
     // zlib will not fail for valid buffers; if it ever does, identity encoding is always acceptable to clients
     // (identical bytes, not a content fallback).

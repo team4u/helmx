@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { errorResponse, jsonOk, type ProductRouteHandler } from '@helmx/kernel';
-import { isHubActivityBusy, type HubActivityCounts } from '@helmx/protocol';
+import { BodyError, isHubActivityBusy, readBody, type HubActivityCounts } from '@helmx/protocol';
 import { isBlockedVersionActive, isStrictSemver, readBlockedRelease, resolveBlockedCooldownMs } from '@helmx/env-io';
 import { readUpdateReady, type UpdateReadyRecord } from '@helmx/env-io/hub-payload';
 import type { HubUpdaterHandle } from './updater.js';
@@ -28,6 +28,8 @@ export interface HubUpdateRoutesDeps {
   /** Test seam replacing the detached handoff spawn. */
   spawnHandoff?: (ready: UpdateReadyRecord, control: { endpoint: string; instanceId: string } | null) => Promise<{ pid: number }>;
 }
+
+const MAX_APPLY_BODY_BYTES = 64 * 1024;
 
 /**
  * Spawn the payload's own update handoff: a detached, release-locked helper that stops this Hub
@@ -54,13 +56,30 @@ async function defaultSpawnHandoff(ready: UpdateReadyRecord, control: { endpoint
       HELMX_HANDOFF_LAUNCH_ID: randomUUID(),
     },
   });
-  child.unref();
-  if (child.pid === undefined) throw new Error('update handoff process pid unavailable after spawn (internal error)');
-  return { pid: child.pid };
+  const pid = await new Promise<number>((resolve, reject) => {
+    const onError = (error: Error): void => {
+      child.removeListener('spawn', onSpawn);
+      reject(error);
+    };
+    const onSpawn = (): void => {
+      child.removeListener('error', onError);
+      child.on('error', () => {});
+      child.unref();
+      if (child.pid === undefined) {
+        reject(new Error('update handoff process pid unavailable after spawn (internal error)'));
+        return;
+      }
+      resolve(child.pid);
+    };
+    child.once('error', onError);
+    child.once('spawn', onSpawn);
+  });
+  return { pid };
 }
 
 export function createHubUpdateRoutes(deps: HubUpdateRoutesDeps): ProductRouteHandler {
   const spawnHandoff = deps.spawnHandoff ?? defaultSpawnHandoff;
+  let applyInFlight = false;
   return async (request: Request): Promise<Response | undefined> => {
     const url = new URL(request.url);
     const normalized = url.pathname.replace(/\/+$/, '');
@@ -111,45 +130,69 @@ export function createHubUpdateRoutes(deps: HubUpdateRoutesDeps): ProductRouteHa
     if (deps.root === null || deps.updater === null) {
       return errorResponse(undefined, 409, 'hub_update_unmanaged', 'this Hub is not running from a payload-managed install root; update it the way it was deployed (e.g. rebuild the image, or helmx update from the host)');
     }
-    let force = false;
-    const contentType = request.headers.get('content-type') ?? '';
-    if (contentType.startsWith('application/json')) {
-      const text = await request.text();
-      if (text.trim() !== '') {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          return errorResponse(undefined, 400, 'invalid_json', 'body must be valid JSON');
-        }
-        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-          return errorResponse(undefined, 400, 'invalid_body', 'body must be a JSON object');
-        }
-        const rawForce = (parsed as Record<string, unknown>)['force'];
-        if (rawForce !== undefined && typeof rawForce !== 'boolean') {
-          return errorResponse(undefined, 400, 'invalid_body', 'force must be a boolean');
-        }
-        force = rawForce === true;
-      }
+    if (applyInFlight) {
+      return errorResponse(undefined, 409, 'hub_update_in_progress', 'another Hub update apply request is already in progress');
     }
-    const ready = await readUpdateReady(deps.root).catch(() => null);
-    if (ready === null) {
-      return errorResponse(undefined, 409, 'no_staged_update', 'no staged update is waiting; run helmx update (or wait for the background check) first');
-    }
-    const blocked = await readBlockedRelease(deps.root);
-    if (isBlockedVersionActive(blocked, ready.version, new Date(), resolveBlockedCooldownMs())) {
-      return errorResponse(undefined, 409, 'update_blocked_cooldown', `version ${ready.version} is blocked (${blocked!.reason}) and inside the retry cooldown`);
-    }
-    const counts = deps.kernel.activitySnapshot();
-    if (!force && isHubActivityBusy(counts)) {
-      return errorResponse(undefined, 409, 'hub_busy', 'the Hub has live work (conversations, tools, compaction, or queued input); retry when idle or pass force', { counts });
-    }
-    const control = await readHubControlRecord(deps.kernel.dataDir).catch(() => null);
+    applyInFlight = true;
     try {
-      const spawned = await spawnHandoff(ready, control !== null ? { endpoint: control.endpoint, instanceId: control.instanceId } : null);
-      return jsonOk(undefined, { ok: true, switching: true, targetVersion: ready.version, handoffPid: spawned.pid }, { status: 202 });
-    } catch (error) {
-      return errorResponse(undefined, 500, 'handoff_spawn_failed', error instanceof Error ? error.message : String(error));
+      let force = false;
+      const contentType = request.headers.get('content-type') ?? '';
+      if (contentType.startsWith('application/json')) {
+        let rawBytes: Uint8Array;
+        try {
+          rawBytes = await readBody(request, MAX_APPLY_BODY_BYTES);
+        } catch (error) {
+          if (error instanceof BodyError) {
+            return errorResponse(undefined, error.status, error.code, error.message);
+          }
+          throw error;
+        }
+        if (rawBytes.byteLength > 0) {
+          let text: string;
+          try {
+            text = new TextDecoder('utf-8', { fatal: true }).decode(rawBytes);
+          } catch {
+            return errorResponse(undefined, 400, 'invalid_json', 'body must be valid UTF-8 JSON');
+          }
+          if (text.trim() !== '') {
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(text);
+            } catch {
+              return errorResponse(undefined, 400, 'invalid_json', 'body must be valid JSON');
+            }
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+              return errorResponse(undefined, 400, 'invalid_body', 'body must be a JSON object');
+            }
+            const rawForce = (parsed as Record<string, unknown>)['force'];
+            if (rawForce !== undefined && typeof rawForce !== 'boolean') {
+              return errorResponse(undefined, 400, 'invalid_body', 'force must be a boolean');
+            }
+            force = rawForce === true;
+          }
+        }
+      }
+      const ready = await readUpdateReady(deps.root).catch(() => null);
+      if (ready === null) {
+        return errorResponse(undefined, 409, 'no_staged_update', 'no staged update is waiting; run helmx update (or wait for the background check) first');
+      }
+      const blocked = await readBlockedRelease(deps.root);
+      if (isBlockedVersionActive(blocked, ready.version, new Date(), resolveBlockedCooldownMs())) {
+        return errorResponse(undefined, 409, 'update_blocked_cooldown', `version ${ready.version} is blocked (${blocked!.reason}) and inside the retry cooldown`);
+      }
+      const counts = deps.kernel.activitySnapshot();
+      if (!force && isHubActivityBusy(counts)) {
+        return errorResponse(undefined, 409, 'hub_busy', 'the Hub has live work (conversations, tools, compaction, or queued input); retry when idle or pass force', { counts });
+      }
+      const control = await readHubControlRecord(deps.kernel.dataDir).catch(() => null);
+      try {
+        const spawned = await spawnHandoff(ready, control !== null ? { endpoint: control.endpoint, instanceId: control.instanceId } : null);
+        return jsonOk(undefined, { ok: true, switching: true, targetVersion: ready.version, handoffPid: spawned.pid }, { status: 202 });
+      } catch (error) {
+        return errorResponse(undefined, 500, 'handoff_spawn_failed', error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      applyInFlight = false;
     }
   };
 }

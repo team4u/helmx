@@ -459,48 +459,74 @@ export function createReadArtifactTool(
           isError: true,
         }
       }
-      let buffer: Buffer
+      let windowBuf: Buffer
+      let totalSize: number
       try {
-        buffer = Buffer.from(await deps.artifacts.readBuffer(id))
+        if (typeof deps.artifacts.readSlice === 'function') {
+          const res = await deps.artifacts.readSlice(id, offset, limit + 8)
+          windowBuf = res.slice
+          totalSize = res.totalSize
+        } else {
+          const full = Buffer.from(await deps.artifacts.readBuffer(id))
+          totalSize = full.length
+          windowBuf = offset < totalSize ? full.subarray(offset, Math.min(totalSize, offset + limit + 8)) : Buffer.alloc(0)
+        }
       } catch (error) {
         return {
           output: [{ type: 'text', text: `artifact_read_failed: ${deps.redact(String(error))}` }],
           isError: true,
         }
       }
-      if (offset > buffer.length) {
+      if (offset > totalSize) {
         return {
-          output: [{ type: 'text', text: `offset_out_of_range: ${offset} > ${buffer.length}` }],
+          output: [{ type: 'text', text: `offset_out_of_range: ${offset} > ${totalSize}` }],
           isError: true,
         }
       }
-      if (offset === buffer.length) {
+      if (offset === totalSize) {
         return {
           output: [
-            { type: 'text', text: `[artifact ${id} bytes ${offset}-${offset}/${buffer.length}]\n(EOF reached)` },
+            { type: 'text', text: `[artifact ${id} bytes ${offset}-${offset}/${totalSize}]\n(EOF reached)` },
           ],
           structuredOutput: { id, offset, chunk: '' } as JsonValue,
           // Persist lightweight pagination metadata only (`ARTIFACT_READ_META_SCHEMA`); never duplicate chunk text.
           details: { id, offset, bytes: 0 } as JsonValue,
         }
       }
-      // UTF-8 boundary alignment: if `offset` or `end` lands inside a multi-byte sequence, advance `start` to the
-      // next valid leading byte and step `safeEnd` back to a leading byte (ensures forward progress without U+FFFD replacement).
-      let start = offset
-      while (start < buffer.length && (buffer[start]! & 0xc0) === 0x80) start += 1
-      const end = Math.min(buffer.length, offset + limit)
-      let safeEnd = Math.max(end, start)
-      while (safeEnd < buffer.length && (buffer[safeEnd]! & 0xc0) === 0x80) safeEnd -= 1
-      // Fallback: when `limit=1` and `start` is a multi-byte lead byte, `safeEnd` could align back to `start`;
-      // advance past that character so each page reads at least one full character.
-      while (safeEnd <= start && safeEnd < buffer.length) {
-        safeEnd += 1
-        while (safeEnd < buffer.length && (buffer[safeEnd]! & 0xc0) === 0x80) safeEnd += 1
+      // UTF-8 boundary alignment within the positioned slice (`windowBuf` starts at `offset` with up to 8 lookahead bytes):
+      // if `offset` or `end` lands inside a multi-byte sequence, advance `relStart` to the next leading byte and step
+      // `relSafeEnd` back to a leading byte (ensures forward progress without U+FFFD replacement).
+      let relStart = 0
+      while (offset + relStart < totalSize && relStart < windowBuf.length && (windowBuf[relStart]! & 0xc0) === 0x80) {
+        relStart += 1
       }
-      const slice = buffer.subarray(start, safeEnd)
+      const relEnd = Math.min(windowBuf.length, limit)
+      let relSafeEnd = Math.max(relEnd, relStart)
+      while (
+        offset + relSafeEnd < totalSize &&
+        relSafeEnd < windowBuf.length &&
+        (windowBuf[relSafeEnd]! & 0xc0) === 0x80
+      ) {
+        relSafeEnd -= 1
+      }
+      // Fallback: when `limit=1` and `relStart` is a multi-byte lead byte, `relSafeEnd` could align back to `relStart`;
+      // advance past that character so each page reads at least one full character.
+      while (relSafeEnd <= relStart && offset + relSafeEnd < totalSize && relSafeEnd < windowBuf.length) {
+        relSafeEnd += 1
+        while (
+          offset + relSafeEnd < totalSize &&
+          relSafeEnd < windowBuf.length &&
+          (windowBuf[relSafeEnd]! & 0xc0) === 0x80
+        ) {
+          relSafeEnd += 1
+        }
+      }
+      const start = offset + relStart
+      const safeEnd = offset + relSafeEnd
+      const slice = windowBuf.subarray(relStart, relSafeEnd)
       const chunk = slice.toString('utf8')
-      const hasMore = safeEnd < buffer.length
-      const header = `[artifact ${id} bytes ${offset}-${safeEnd}/${buffer.length}${start > offset ? ` (offset ${offset} landed mid-character; started at ${start})` : ''}]`
+      const hasMore = safeEnd < totalSize
+      const header = `[artifact ${id} bytes ${offset}-${safeEnd}/${totalSize}${start > offset ? ` (offset ${offset} landed mid-character; started at ${start})` : ''}]`
       const text = hasMore ? `${header}\n${chunk}\n[nextOffset=${safeEnd}]` : `${header}\n${chunk}`
       // Emit `nextOffset` only when more bytes remain so no undefined fields leak (JSON-safe).
       const structured: Record<string, unknown> = { id, offset, chunk }

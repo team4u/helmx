@@ -85,7 +85,12 @@ export class TunnelTable {
 
   /** Gateway Duplex handoff: auth already succeeded (`acceptTunnel` returned true); if pending already failed to settle, `grant` destroys the incoming stream without leaking. */
   grant(tunnelId: string, duplex: Duplex): void {
-    this.#pending.get(tunnelId)?.grant(duplex)
+    const pending = this.#pending.get(tunnelId)
+    if (pending === undefined) {
+      duplex.destroy()
+      return
+    }
+    pending.grant(duplex)
   }
 
   /**

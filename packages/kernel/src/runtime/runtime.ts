@@ -64,7 +64,7 @@ import type { EnvFabric } from '../env/index.js'
 import { NodeForwardService, type NodeForwardEvent, type NodeForwardInput, type NodeForwardSession } from '../env/forward.js'
 import type { EventHub, SessionDocEventHub } from './events.js'
 import type { HelmxDatabase } from './sqlite.js'
-import type { HelmxStore } from './store.js'
+import { summaryOf, type HelmxStore } from './store.js'
 import { THINKING_LEVELS } from './models.js'
 import type { HelmxPluginConfigStore } from './plugin-config-store.js'
 import type { ConversationService } from './conversation-service.js'
@@ -74,7 +74,6 @@ import type { ModelRegistry } from './model-registry.js'
 import {
   completeConversationTextHelper,
   profileDirectoryHelper,
-  summaryOfFallback,
 } from './runtime-helpers.js'
 import {
   createGlobalDocumentStore,
@@ -124,6 +123,9 @@ export class KernelRuntime {
   /** Startup lifecycle fact (read-only for service wiring; flipped synchronously right after `resume` — see `start()`). */
   #started = false
   private startPromise: Promise<void> | undefined
+  private needsStartupAlignment = true
+  private bootAlignModelEpoch = -1
+  private bootAlignProfileEpoch = -1
   private closed = false
   #fatalError: HelmxError | undefined
   private fatalStorageNotified = false
@@ -309,7 +311,9 @@ export class KernelRuntime {
       packageStore,
     )
 
-    await ensureInitialConversation({
+    const modelEpochBeforeRecover = this.modelsRegistry.alignmentEpoch
+    const profileEpochBeforeRecover = this.svc.profilesSvc.mutationEpoch
+    const initialDeferred = await ensureInitialConversation({
       harness: this.harness,
       store: this.store,
       tracker: this.svc.tracker,
@@ -317,13 +321,20 @@ export class KernelRuntime {
       cwd: this.init.cwd,
     })
     this.svc.asks.reportOrphans()
-    const recoveredConvs = await recoverExistingConversations({
+    const recovered = await recoverExistingConversations({
       conversations: this.conversations,
       harness: this.harness,
       store: this.store,
       defaultCwd: this.svc.toolDeps.defaultCwd,
     })
-    if (this.store.needsFtsRebuild || recoveredConvs > 0) {
+    this.bootAlignModelEpoch = this.modelsRegistry.alignmentEpoch
+    this.bootAlignProfileEpoch = this.svc.profilesSvc.mutationEpoch
+    this.needsStartupAlignment =
+      initialDeferred ||
+      recovered.deferredTierAlignment ||
+      this.bootAlignModelEpoch !== modelEpochBeforeRecover ||
+      this.bootAlignProfileEpoch !== profileEpochBeforeRecover
+    if (this.store.needsFtsRebuild || recovered.recoveredCount > 0) {
       await this.rebuildFts()
     }
     this.svc.assetReloader.start()
@@ -507,8 +518,16 @@ export class KernelRuntime {
       if (this.pluginHost) await this.pluginHost.start()
       // Converge recovered / initial conversations once all plugins have mounted runtime providers
       // and model tiers (covers cold-boot deferred `tier/*` resolution and provider thinking-level clamps)
-      // before resuming the durable scheduler; already-aligned conversations are an idempotent no-op.
-      await this.modelsRegistry.alignConversations()
+      // before resuming the durable scheduler; skip the full scan when neither tiers/providers/defaults
+      // nor profiles changed since recovery already aligned every conversation.
+      if (
+        this.needsStartupAlignment ||
+        this.modelsRegistry.alignmentEpoch !== this.bootAlignModelEpoch ||
+        this.svc.profilesSvc.mutationEpoch !== this.bootAlignProfileEpoch
+      ) {
+        await this.modelsRegistry.alignConversations()
+        this.needsStartupAlignment = false
+      }
       this.harness.resume()
       // Flipped synchronously right after resume (zero awaits in between): whenever `isStarted()` is true,
       // the scheduler has already left its paused state.
@@ -1085,7 +1104,7 @@ export class KernelRuntime {
     try {
       return this.conversations.withOwnership(this.svc.tracker.summaryOf(id))
     } catch {
-      return this.conversations.withOwnership(summaryOfFallback(meta, 'idle', 0))
+      return this.conversations.withOwnership(summaryOf(meta, 'idle', 0))
     }
   }
 

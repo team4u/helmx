@@ -236,6 +236,8 @@ export interface PluginState {
   configSchema: Record<string, PluginConfigFieldSchema> | null;
   /** Host lifecycle resource release handles acquired during this enablement cycle. */
   hostReleases: Set<() => void>;
+  /** Backend TS loader root release handle bound to the registered external plugin instance lifetime. */
+  releaseTsRoot?: () => void;
   /** True while awaiting service `stop()` chain; opens `STOP_WINDOW_HOST_CALLS` and final doc writes. */
   stopWindow: boolean;
   /** Most recent load/enable failure diagnostic (`status: 'failed'`). */

@@ -316,6 +316,12 @@ export class CapabilityRegistry {
   private actions = new Map<string, Map<string, ActionEntry>>();
   private tools = new Map<string, Map<string, ToolEntry>>();
   private routes = new Map<string, StoredPluginRoute[]>();
+  private mutationEpoch = 0;
+  private cachedUnscopedTools?: {
+    epoch: number;
+    activeKey: string;
+    list: DerivedToolSpec[];
+  };
 
   registerAction<TIn, TOut>(pluginId: string, spec: PluginActionSpec<TIn, TOut>): void {
     assertValidId('action', spec.id);
@@ -727,6 +733,7 @@ export class CapabilityRegistry {
       ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
       handler: spec.handler as (input: never, context: PluginActionContext) => unknown,
     });
+    this.mutationEpoch += 1;
   }
 
   registerTool<TIn>(pluginId: string, spec: PluginToolSpec<TIn>): void {
@@ -816,6 +823,7 @@ export class CapabilityRegistry {
     // Save a snapshot copy so caller mutations after registration cannot bypass prompt validation.
     const storedToolSpec: PluginToolSpec<TIn> = { ...spec, ...prompt };
     pluginTools.set(spec.name, { pluginId, spec: storedToolSpec as PluginToolSpec });
+    this.mutationEpoch += 1;
   }
 
   registerRoute(pluginId: string, spec: PluginRouteSpec): void {
@@ -976,9 +984,27 @@ export class CapabilityRegistry {
     return out;
   }
 
+  private cloneDerivedToolList(list: ReadonlyArray<DerivedToolSpec>): DerivedToolSpec[] {
+    return list.map((spec) => ({
+      ...spec,
+      ...(spec.scope !== undefined ? { scope: cloneScope(spec.scope) } : {}),
+      ...(spec.promptGuidelines !== undefined ? { promptGuidelines: [...spec.promptGuidelines] } : {}),
+    }));
+  }
+
   listTools(activePluginIds: Iterable<string>, conversation?: ConversationSummary): DerivedToolSpec[] {
+    const activeList = Array.isArray(activePluginIds) ? activePluginIds : [...activePluginIds];
+    const activeKey = activeList.join('\0');
+    if (
+      conversation === undefined &&
+      this.cachedUnscopedTools !== undefined &&
+      this.cachedUnscopedTools.epoch === this.mutationEpoch &&
+      this.cachedUnscopedTools.activeKey === activeKey
+    ) {
+      return this.cloneDerivedToolList(this.cachedUnscopedTools.list);
+    }
     const out: DerivedToolSpec[] = [];
-    for (const pluginId of activePluginIds) {
+    for (const pluginId of activeList) {
       const pluginTools = this.tools.get(pluginId);
       if (pluginTools) {
         for (const tool of pluginTools.values()) {
@@ -1046,14 +1072,27 @@ export class CapabilityRegistry {
         }
       }
     }
-    const dups = out.filter((t, i) => out.findIndex((x) => x.name === t.name) !== i);
-    if (dups.length > 0) {
+    const seenNames = new Set<string>();
+    const duplicateNames = new Set<string>();
+    for (const tool of out) {
+      if (seenNames.has(tool.name)) duplicateNames.add(tool.name);
+      else seenNames.add(tool.name);
+    }
+    if (duplicateNames.size > 0) {
+      const duplicates = [...duplicateNames];
       throw new HelmxError(
         'duplicate_tool_name',
-        `Plugin tool name conflict (provider-safe names must be unique): ${[...new Set(dups.map((d) => d.name))].join(', ')}`,
+        `Plugin tool name conflict (provider-safe names must be unique): ${duplicates.join(', ')}`,
         500,
-        { duplicates: [...new Set(dups.map((d) => d.name))] },
+        { duplicates },
       );
+    }
+    if (conversation === undefined) {
+      this.cachedUnscopedTools = {
+        epoch: this.mutationEpoch,
+        activeKey,
+        list: this.cloneDerivedToolList(out),
+      };
     }
     return out;
   }
@@ -1326,11 +1365,13 @@ export class CapabilityRegistry {
     this.tools.get(pluginId)?.clear();
     const r = this.routes.get(pluginId);
     if (r) r.length = 0;
+    this.mutationEpoch += 1;
   }
 
   removePlugin(pluginId: string): void {
     this.actions.delete(pluginId);
     this.tools.delete(pluginId);
     this.routes.delete(pluginId);
+    this.mutationEpoch += 1;
   }
 }

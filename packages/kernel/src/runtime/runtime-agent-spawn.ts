@@ -195,6 +195,14 @@ export class RuntimeAgentSpawn {
     }
   }
 
+  /** Purge session aliases and structured-output slots bound to a deleted child conversation. */
+  deleteConversationSessions(conversationId: number): void {
+    for (const [sessionId, convId] of [...this.agentSessions.entries()]) {
+      if (convId === conversationId) this.agentSessions.delete(sessionId)
+    }
+    this.structuredOutputSessions.delete(conversationId)
+  }
+
   /**
    * `Profile.restrictToCwd` guardrail at the spawn entry: when the parent conversation's Profile restricts
    * to its cwd, an explicitly requested `nodeId` must stay on the parent's node and an explicitly requested
@@ -227,7 +235,11 @@ export class RuntimeAgentSpawn {
       )
     }
     if (request.cwd !== undefined) {
-      const violation = cwdScopeViolationText(request.cwd, parent.cwd)
+      const parentPlatform = resolveTargetPlatform(
+        parentNodeId,
+        trustedPlatformFromEnvFabric(this.deps.envFabric),
+      )
+      const violation = cwdScopeViolationText(request.cwd, parent.cwd, parentPlatform)
       if (violation !== undefined) {
         throw new HelmxError('path_outside_workspace', violation, 403, {
           parentConversationId: request.parentConversationId,

@@ -326,27 +326,27 @@ test('replay: safe read-only tools read and read_artifact automatically replay t
   )
 
   // ---- 2) read_artifact hits r2.close() during phase: 'execute' ----
-  const origReadBuffer = r2.artifacts.readBuffer.bind(r2.artifacts)
+  const origReadSlice = r2.artifacts.readSlice.bind(r2.artifacts)
   let artEntered!: () => void
   const waitArtEntered = new Promise<void>((resolve) => {
     artEntered = resolve
   })
-  let allowReadBufferReturn!: () => void
-  const gateReadBuffer = new Promise<void>((resolve) => {
-    allowReadBufferReturn = resolve
+  let allowReadSliceReturn!: () => void
+  const gateReadSlice = new Promise<void>((resolve) => {
+    allowReadSliceReturn = resolve
   })
-  r2.artifacts.readBuffer = (async (...args: Parameters<typeof origReadBuffer>) => {
+  r2.artifacts.readSlice = (async (...args: Parameters<typeof origReadSlice>) => {
     artEntered()
-    await gateReadBuffer
-    return origReadBuffer(...args)
-  }) as typeof r2.artifacts.readBuffer
+    await gateReadSlice
+    return origReadSlice(...args)
+  }) as typeof r2.artifacts.readSlice
 
   f2.setResponses([fauxAssistantMessage([fauxToolCall('read_artifact', { id: art.id })], { stopReason: 'toolUse' })])
   void r2.submitInput(1, 'read artifact').catch(() => {})
   await waitArtEntered
   const closePromise2 = r2.close()
   await delay(80)
-  allowReadBufferReturn()
+  allowReadSliceReturn()
   await closePromise2
 
   let capturedArtContext: TranscriptContext | undefined

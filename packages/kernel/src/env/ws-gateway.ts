@@ -10,23 +10,36 @@ export interface NodeWsGatewayOptions {
   registry: NodeRegistry
   path?: string
   registerTimeoutMs?: number
+  maxPayload?: number
   log?: (message: string) => void
 }
 export interface NodeWsGateway { readonly onlineCount: number; close(): Promise<void> }
+
+/** Max WS frame size after registration (accommodates 64 MiB base64 binary transfer + JSON RPC envelope). */
+const DEFAULT_MAX_WS_PAYLOAD_BYTES = 128 * 1024 * 1024
+/** Tight pre-registration frame cap to reject oversized unauthenticated payloads immediately. */
+const PRE_REGISTER_MAX_BYTES = 64 * 1024
 
 export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOptions): NodeWsGateway {
   const {
     registry,
     path = '/ws/node',
     registerTimeoutMs = 10_000,
+    maxPayload = DEFAULT_MAX_WS_PAYLOAD_BYTES,
     // Never swallow single-send/dispatch errors silently (honest discipline): defaults to console.error;
     // only terminates the connection when the socket is already non-OPEN (send failure caused by disconnect).
     log = (message: string) => console.error(`[helmx] node gateway: ${message}`),
   } = options
-  const wss = new WebSocketServer({ noServer: true })
+  const wss = new WebSocketServer({ noServer: true, maxPayload })
   let closing: Promise<void> | undefined
   const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
-    const url = new URL(request.url ?? '/', 'http://localhost')
+    let url: URL
+    try {
+      url = new URL(request.url ?? '/', 'http://localhost')
+    } catch {
+      socket.destroy()
+      return
+    }
     if (url.pathname !== path) return
     if (closing) { socket.destroy(); return }
     wss.handleUpgrade(request, socket, head, (ws) => handleConnection(ws, url.searchParams.get('nodeId')))
@@ -38,6 +51,7 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
     let registering = false
     let registered = false
     const registerTimer = setTimeout(() => ws.close(4001, 'register timeout'), registerTimeoutMs)
+    registerTimer.unref()
     const local = {
       async register(input: NodeRegisterInput): Promise<NodeRegisterResult> {
         if (registering || registered || !input || (routedNodeId !== null && routedNodeId !== input.nodeId)) {
@@ -65,6 +79,19 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
       },
       on: (dispatch) => {
         ws.on('message', (raw) => {
+          if (!registered) {
+            const bytes = typeof raw === 'string'
+              ? Buffer.byteLength(raw)
+              : Array.isArray(raw)
+                ? raw.reduce((sum, buf) => sum + buf.length, 0)
+                : raw instanceof ArrayBuffer
+                  ? raw.byteLength
+                  : raw.length
+            if (bytes > PRE_REGISTER_MAX_BYTES) {
+              ws.close(1009, 'register frame exceeds byte limit')
+              return
+            }
+          }
           let data: unknown
           try { data = JSON.parse(raw.toString()) } catch { ws.close(1007, 'invalid JSON'); return }
           if (!data || typeof data !== 'object' || Array.isArray(data)) { ws.close(1007, 'invalid RPC frame'); return }

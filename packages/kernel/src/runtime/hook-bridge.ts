@@ -28,7 +28,7 @@ import {
 } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
-import type { PluginHost } from '../plugins/index.js'
+import type { DerivedToolSpec, PluginHost } from '../plugins/index.js'
 import {
   actionCliCommand,
   projectActionPromptSection,
@@ -143,16 +143,24 @@ export class HookBridge {
   ): Promise<{ readonly messages: readonly Message[] } | undefined> {
     const host = this.options.pluginHost()
     const runtimeTools = getCurrentTools(request.messages)
+    const unscopedPluginTools = host !== undefined ? host.listTools() : []
+    const unscopedByName = new Map<string, DerivedToolSpec>()
+    for (const spec of unscopedPluginTools) unscopedByName.set(spec.name, spec)
+    const scopedPluginTools =
+      host !== undefined && unscopedByName.size > 0 ? host.listTools(summary) : []
     // Scope filtering: plugin tools are registered globally on the harness (`helmx-plugins`), so out-of-scope
     // conversations must not see their declarations — filter to available tools for this conversation before
     // entering hooks while retaining kernel tools.
-    const effectiveTools = host !== undefined ? this.scopeLocalTools(host, summary, runtimeTools) : runtimeTools
+    const effectiveTools =
+      unscopedByName.size > 0
+        ? this.scopeLocalTools(runtimeTools, unscopedByName, scopedPluginTools)
+        : runtimeTools
     const original = request.messages as unknown as Array<Record<string, unknown>>
     const payload: BeforeTurnHookPayload = {
       conversation: summary,
       inputs: this.options.currentRunInputs(conversationId),
       tools: effectiveTools.map((spec) => {
-        const schemas = this.resolveToolSchemas(spec.name)
+        const schemas = this.resolveToolSchemas(spec.name, unscopedByName)
         return {
           name: spec.name,
           description: spec.description,
@@ -172,7 +180,7 @@ export class HookBridge {
     // Host final scoped projection: regardless of whether hooks transformed, overwrite `prompt.tools.*`
     // sections according to final active tools (only active tools enter the prompt; disabled/stripped tools
     // have their sections cleared immediately, leaving no phantom prompts). Uses live PluginHost declarations.
-    const activeTools = this.activeToolPrompts(summary, effectiveTools, outcome)
+    const activeTools = this.activeToolPrompts(scopedPluginTools, effectiveTools, outcome)
     const outcomeSections = outcome?.action === 'transform'
       ? outcome.value.sections
       : payload.sections
@@ -213,14 +221,13 @@ export class HookBridge {
    * plugin tools). Runtime `assertScopeAllows` still enforces at execution; this eliminates request-level leaks.
    */
   private scopeLocalTools<T extends { name: string }>(
-    host: PluginHost,
-    summary: ConversationSummary,
     requestTools: T[],
+    globalByName: ReadonlyMap<string, DerivedToolSpec>,
+    scopedSpecs: ReadonlyArray<DerivedToolSpec>,
   ): T[] {
-    const globalNames = new Set(host.listTools().map((tool) => tool.name))
-    if (globalNames.size === 0) return requestTools
-    const localNames = new Set(host.listTools(summary).map((tool) => tool.name))
-    return requestTools.filter((tool) => !globalNames.has(tool.name) || localNames.has(tool.name))
+    if (globalByName.size === 0) return requestTools
+    const localNames = new Set(scopedSpecs.map((tool) => tool.name))
+    return requestTools.filter((tool) => !globalByName.has(tool.name) || localNames.has(tool.name))
   }
 
   /**
@@ -263,13 +270,11 @@ export class HookBridge {
    * When hooks do not transform, all SDK-resolved request tools are permitted.
    */
   private activeToolPrompts(
-    summary: ConversationSummary,
+    declared: ReadonlyArray<DerivedToolSpec>,
     requestTools: Array<{ name: string }>,
     outcome: { action: string; value?: unknown } | undefined,
   ): Array<{ name: string; promptSnippet?: string; promptGuidelines?: string[] }> {
-    const host = this.options.pluginHost()
-    if (!host) return []
-    const declared = host.listTools(summary)
+    if (declared.length === 0) return []
     const requestNames = new Set(requestTools.map((tool) => tool.name))
     const finalNames =
       outcome?.action === 'transform'
@@ -311,13 +316,19 @@ export class HookBridge {
   }
 
   /** Resolve declared schemas for a tool from explicit resolver, live plugin tools, or registered kernel tools. */
-  private resolveToolSchemas(toolName: string): ToolSchemaEntry {
+  private resolveToolSchemas(
+    toolName: string,
+    preloadedPluginTools?: ReadonlyMap<string, DerivedToolSpec>,
+  ): ToolSchemaEntry {
     if (this.options.getToolSchemas !== undefined) {
       return this.options.getToolSchemas(toolName) ?? {}
     }
     const host = this.options.pluginHost()
     if (host !== undefined) {
-      const pluginSpec = host.listTools().find((t) => t.name === toolName)
+      const pluginSpec =
+        preloadedPluginTools !== undefined
+          ? preloadedPluginTools.get(toolName)
+          : host.listTools().find((t) => t.name === toolName)
       if (pluginSpec !== undefined) {
         return {
           ...(pluginSpec.structuredOutputSchema !== undefined

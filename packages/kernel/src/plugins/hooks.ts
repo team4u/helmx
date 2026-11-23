@@ -268,7 +268,6 @@ export class HookPipeline<K extends HookName> {
     isolatedErrors?: IsolatedHookError[];
   }> {
     assertHookPayload(this.name, payload);
-    const allowed = HOOK_ALLOWED_ACTIONS[this.name];
     const isolate = this.name === 'turn_settled';
     const isolatedErrors: IsolatedHookError[] = [];
     const isolateError = (hook: RegisteredHook<K>, err: unknown): void => {
@@ -304,67 +303,20 @@ export class HookPipeline<K extends HookName> {
         isolateError(hook, err);
         continue;
       }
-      if (result === undefined || result === null) continue;
-      if (!isObj(result) || typeof result.action !== 'string') {
-        const err = new HelmxError(
-          'invalid_hook_result',
-          `Plugin ${hook.pluginId} ${this.name} hook returned an invalid result (missing action field)`,
-          500,
-          { pluginId: hook.pluginId, hook: this.name, result },
-        );
+      let normalized: Extract<HookResult<HookPayloadMap[K]>, { action: 'transform' | 'handled' | 'block' }> | undefined;
+      try {
+        normalized = this.normalizeResult(hook, result);
+      } catch (err) {
         if (!isolate) throw err;
         isolateError(hook, err);
         continue;
       }
-      if (!allowed.has(result.action)) {
-        const err = new HelmxError(
-          'invalid_hook_result',
-          `Plugin ${hook.pluginId} ${this.name} hook returned unsupported action "${result.action}" (allowed: ${[...allowed].join('|')})`,
-          500,
-          { pluginId: hook.pluginId, hook: this.name, allowed: [...allowed] },
-        );
-        if (!isolate) throw err;
-        isolateError(hook, err);
+      if (normalized === undefined) continue;
+      if (normalized.action === 'transform') {
+        current = normalized.value as HookPayloadMap[K];
         continue;
       }
-      if (result.action === 'continue') continue;
-      if (result.action === 'transform') {
-        if (result.value === undefined) {
-          const err = new HelmxError(
-            'invalid_hook_result',
-            `Plugin ${hook.pluginId} ${this.name} hook returned transform without value`,
-            500,
-            { pluginId: hook.pluginId, hook: this.name },
-          );
-          if (!isolate) throw err;
-          isolateError(hook, err);
-          continue;
-        }
-        try {
-          assertHookPayload(this.name, result.value);
-        } catch (err) {
-          if (!isolate) throw err;
-          isolateError(hook, err);
-          continue;
-        }
-        current = result.value;
-        continue;
-      }
-      if (result.action === 'block') {
-        if (typeof result.reason !== 'string' || result.reason.length === 0) {
-          const err = new HelmxError(
-            'invalid_hook_result',
-            `Plugin ${hook.pluginId} ${this.name} hook returned block without a non-empty reason`,
-            500,
-            { pluginId: hook.pluginId, hook: this.name },
-          );
-          if (!isolate) throw err;
-          isolateError(hook, err);
-          continue;
-        }
-        return { finalPayload: current, shortCircuit: result };
-      }
-      return { finalPayload: current, shortCircuit: result }; // handled
+      return { finalPayload: current, shortCircuit: normalized };
     }
     return {
       finalPayload: current,

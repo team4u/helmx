@@ -54,6 +54,7 @@ export interface ContextUsageHost {
 }
 
 export class ContextUsageRefresh {
+  private static readonly MAX_CONCURRENT_REFRESHES = 4
   /** conversation -> cached usage value (read synchronously by summaryOf; undefined = not yet computed). */
   private readonly cache = new Map<number, ConversationContextUsage>()
   /** conversation -> fingerprint of last published usage (prevents duplicate conversation.upsert). */
@@ -68,8 +69,27 @@ export class ContextUsageRefresh {
   private readonly dirty = new Set<number>()
   /** Conversations whose on-demand readiness (e.g. opening detail or post-turn settle) should publish initial `conversation.upsert`. */
   private readonly notifyInitial = new Set<number>()
+  /** Active concurrent `refreshOnce` executions (bounded so startup recovery of many conversations does not stampede SQLite). */
+  private activeSlots = 0
+  private readonly slotWaiters: Array<() => void> = []
 
   constructor(private readonly host: ContextUsageHost) {}
+
+  private async withConcurrencySlot<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.activeSlots >= ContextUsageRefresh.MAX_CONCURRENT_REFRESHES) {
+      await new Promise<void>((resolve) => {
+        this.slotWaiters.push(resolve)
+      })
+    }
+    this.activeSlots += 1
+    try {
+      return await fn()
+    } finally {
+      this.activeSlots -= 1
+      const next = this.slotWaiters.shift()
+      next?.()
+    }
+  }
 
   /** Synchronously read cached usage without scheduling. */
   peek(conversationId: number): ConversationContextUsage | undefined {
@@ -101,7 +121,7 @@ export class ContextUsageRefresh {
       return
     }
     this.pending.add(conversationId)
-    void this.refreshOnce(conversationId)
+    void this.withConcurrencySlot(() => this.refreshOnce(conversationId))
       .catch((error: unknown) => {
         if (this.host.isClosing?.()) return
         // Log refresh errors honestly without overwriting stale cache or blocking the observe path.
@@ -219,6 +239,7 @@ export class ContextUsageRefresh {
 
   /** Single refresh: read real ContextView + model context window + live compaction state; publish only if changed. */
   private async refreshOnce(conversationId: number): Promise<void> {
+    if (this.host.isClosing?.()) return
     const meta = this.host.store.getConv(conversationId)
     if (!meta) return
     // Generation guard: captured before await (also catches unobserved = undefined); concurrent re-observe or

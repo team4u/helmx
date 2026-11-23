@@ -105,10 +105,13 @@ export class HelmxStore {
   private readonly redactFn: ((text: string) => string) | undefined
   private readonly convs = new Map<number, ConvMeta>()
   private readonly asks = new Map<string, AskRow>()
+  private readonly asksByConv = new Map<number, Set<string>>()
   private readonly artifacts = new Map<string, ArtifactRow>()
+  private readonly artifactsByConv = new Map<number, Set<string>>()
   private readonly pluginDocs = new Map<string, string>() // pluginId\0name -> json
   /** Per-conversation plugin document mirror: `pluginId\0name\0conversationId -> json`. */
   private readonly pluginSessionDocs = new Map<string, string>()
+  private readonly sessionDocsByConv = new Map<number, Set<string>>()
   /** Per-plugin keyed KV mirror: `pluginId -> namespace -> key -> { valueJson, updatedAt }`. */
   private readonly pluginKv = new Map<string, Map<string, Map<string, { valueJson: string; updatedAt: number }>>>()
   /** Logical deletion tombstones: prevents re-importing SDK-retained history after restarts. */
@@ -122,6 +125,9 @@ export class HelmxStore {
   /** First persistence error; once set, the store enters failed state and rejects subsequent writes. */
   private firstError: unknown = undefined
   private eventSeq = 0
+  /** Coalesced target value for in-queue `helmx_seq` flushes (updated in place before the queued task starts). */
+  private pendingEventSeq: number | undefined = undefined
+  private seqFlushQueued = false
   private ftsSchemaVersion = 0
   /** Serializes concurrent `rebuildFts` invocations so overlays and swaps never interleave. */
   private ftsRebuildChain: Promise<void> = Promise.resolve()
@@ -135,6 +141,22 @@ export class HelmxStore {
     this.onError = options.onError
     this.onDiagnostic = options.onDiagnostic
     this.redactFn = options.redact
+  }
+
+  private addConvIndex(index: Map<number, Set<string>>, conversationId: number, key: string): void {
+    let set = index.get(conversationId)
+    if (set === undefined) {
+      set = new Set()
+      index.set(conversationId, set)
+    }
+    set.add(key)
+  }
+
+  private removeConvIndex(index: Map<number, Set<string>>, conversationId: number, key: string): void {
+    const set = index.get(conversationId)
+    if (set === undefined) return
+    set.delete(key)
+    if (set.size === 0) index.delete(conversationId)
   }
 
   /** First persistence failure error (read-only; `undefined` when healthy). */
@@ -219,6 +241,7 @@ export class HelmxStore {
         createdAt: row.created_at,
         settledAt: row.settled_at ?? undefined,
       })
+      this.addConvIndex(this.asksByConv, row.conversation_id, row.id)
     }
     for (const row of await this.db.all<{
       id: string
@@ -248,6 +271,7 @@ export class HelmxStore {
         size: row.size,
         createdAt: row.created_at,
       })
+      this.addConvIndex(this.artifactsByConv, row.conversation_id, row.id)
     }
     for (const row of await this.db.all<{ plugin_id: string; name: string; value: string }>(
       'SELECT plugin_id, name, value FROM helmx_plugin_docs',
@@ -262,7 +286,9 @@ export class HelmxStore {
         `helmx_plugin_session_docs#${row.plugin_id}:${row.name}#${row.conversation_id}.value`,
         row.value,
       )
-      this.pluginSessionDocs.set(`${row.plugin_id}\0${row.name}\0${row.conversation_id}`, row.value)
+      const sessionKey = `${row.plugin_id}\0${row.name}\0${row.conversation_id}`
+      this.pluginSessionDocs.set(sessionKey, row.value)
+      this.addConvIndex(this.sessionDocsByConv, row.conversation_id, sessionKey)
     }
     for (const row of await this.db.all<{
       plugin_id: string
@@ -306,7 +332,8 @@ export class HelmxStore {
 
   /**
    * Persist event sequence: accepts non-negative safe integers only and never regresses monotonically.
-   * Enqueued on the FIFO tail chain so DB writes match queue order and stale writes cannot rewind the sequence.
+   * Coalesces bursts in-queue on the FIFO tail chain (updating `pendingEventSeq` in place if the queued task
+   * has not started executing yet, with zero timers and 100% strict `flushPublic()` FIFO semantics).
    */
   setEventSeq(seq: number): void {
     if (!Number.isSafeInteger(seq) || seq < 0) {
@@ -314,14 +341,22 @@ export class HelmxStore {
         seq,
       })
     }
+    this.assertWritable()
     if (seq < this.eventSeq) return // Reject regression: keep the higher watermark
     this.eventSeq = seq
-    this.enqueue(() =>
-      this.db.run(
+    this.pendingEventSeq = seq
+    if (this.seqFlushQueued) return
+    this.seqFlushQueued = true
+    this.enqueue(async () => {
+      this.seqFlushQueued = false
+      const target = this.pendingEventSeq
+      this.pendingEventSeq = undefined
+      if (target === undefined) return
+      await this.db.run(
         "INSERT INTO helmx_seq (key, value) VALUES ('events', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        seq,
-      ),
-    )
+        target,
+      )
+    })
   }
 
   // ---------------- conversations ----------------
@@ -408,10 +443,10 @@ export class HelmxStore {
         snap.createdAt,
         snap.updatedAt,
       )
-      // Title changes must update the title column across every FTS row for this conversation (not just one).
+      // Title changes must update the title column across every FTS row for this conversation (routed via helmx_fts_map).
       if (titleChanged) {
         await this.db.run(
-          'UPDATE helmx_conversation_fts SET title = ? WHERE conversation_id = ?',
+          'UPDATE helmx_conversation_fts SET title = ? WHERE rowid IN (SELECT fts_rowid FROM helmx_fts_map WHERE conversation_id = ?)',
           this.ftsRedact(snap.title),
           snap.id,
         )
@@ -431,16 +466,21 @@ export class HelmxStore {
     if (this.ftsRebuildOverlay !== null) {
       this.ftsRebuildOverlay.push({ op: 'deleteConv', conversationId: id })
     }
-    for (const [askId, row] of this.asks) {
-      if (row.conversationId === id) this.asks.delete(askId)
+    const askIds = this.asksByConv.get(id)
+    if (askIds !== undefined) {
+      for (const askId of askIds) this.asks.delete(askId)
+      this.asksByConv.delete(id)
     }
-    for (const [artifactId, row] of this.artifacts) {
-      if (row.conversationId === id) this.artifacts.delete(artifactId)
+    const artifactIds = this.artifactsByConv.get(id)
+    if (artifactIds !== undefined) {
+      for (const artifactId of artifactIds) this.artifacts.delete(artifactId)
+      this.artifactsByConv.delete(id)
     }
-    // Synchronously purge per-conversation document mirror (DB rows deleted in the same transaction below to avoid orphans).
-    for (const key of [...this.pluginSessionDocs.keys()]) {
-      const convId = Number(key.split('\0')[2])
-      if (convId === id) this.pluginSessionDocs.delete(key)
+    // Synchronously purge per-conversation document mirror via secondary index (DB rows deleted in the same transaction below).
+    const sessionKeys = this.sessionDocsByConv.get(id)
+    if (sessionKeys !== undefined) {
+      for (const key of sessionKeys) this.pluginSessionDocs.delete(key)
+      this.sessionDocsByConv.delete(id)
     }
     this.enqueue(() =>
       this.db.transaction(async (tx) => {
@@ -452,7 +492,11 @@ export class HelmxStore {
         await tx.run('DELETE FROM helmx_conversations WHERE id = ?', id)
         await tx.run('DELETE FROM helmx_asks WHERE conversation_id = ?', id)
         await tx.run('DELETE FROM helmx_artifacts WHERE conversation_id = ?', id)
-        await tx.run('DELETE FROM helmx_conversation_fts WHERE conversation_id = ?', id)
+        await tx.run(
+          'DELETE FROM helmx_conversation_fts WHERE rowid IN (SELECT fts_rowid FROM helmx_fts_map WHERE conversation_id = ?)',
+          id,
+        )
+        await tx.run('DELETE FROM helmx_fts_map WHERE conversation_id = ?', id)
         await tx.run('DELETE FROM helmx_plugin_session_docs WHERE conversation_id = ?', id)
       }),
     )
@@ -467,6 +511,30 @@ export class HelmxStore {
       .sort((a, b) => a.createdAt - b.createdAt)
   }
 
+  listAsksByConversation(conversationId: number, status?: string): AskRow[] {
+    const ids = this.asksByConv.get(conversationId)
+    if (ids === undefined || ids.size === 0) return []
+    const out: AskRow[] = []
+    for (const id of ids) {
+      const row = this.asks.get(id)
+      if (row === undefined) continue
+      if (status !== undefined && row.status !== status) continue
+      out.push({ ...row })
+    }
+    return out.sort((a, b) => a.createdAt - b.createdAt)
+  }
+
+  countAsksByConversation(conversationId: number, status?: string): number {
+    const ids = this.asksByConv.get(conversationId)
+    if (ids === undefined || ids.size === 0) return 0
+    if (status === undefined) return ids.size
+    let count = 0
+    for (const id of ids) {
+      if (this.asks.get(id)?.status === status) count += 1
+    }
+    return count
+  }
+
   getAsk(id: string): AskRow | undefined {
     const row = this.asks.get(id)
     return row ? { ...row } : undefined
@@ -474,12 +542,15 @@ export class HelmxStore {
 
   /**
    * Earliest `createdAt` (epoch ms) among currently pending AskDocs for `conversationId`,
-   * derived directly from the in-memory `asks` mirror (zero dual-write).
+   * derived directly from the per-conversation `asksByConv` index (O(k), zero dual-write).
    */
   earliestPendingAskCreatedAt(conversationId: number): number | undefined {
+    const ids = this.asksByConv.get(conversationId)
+    if (ids === undefined || ids.size === 0) return undefined
     let earliest: number | undefined
-    for (const row of this.asks.values()) {
-      if (row.conversationId !== conversationId || row.status !== 'pending') continue
+    for (const id of ids) {
+      const row = this.asks.get(id)
+      if (row === undefined || row.status !== 'pending') continue
       if (earliest === undefined || row.createdAt < earliest) {
         earliest = row.createdAt
       }
@@ -493,7 +564,12 @@ export class HelmxStore {
    */
   putAsk(row: AskRow): void {
     this.assertWritable()
+    const prev = this.asks.get(row.id)
+    if (prev !== undefined && prev.conversationId !== row.conversationId) {
+      this.removeConvIndex(this.asksByConv, prev.conversationId, row.id)
+    }
     this.asks.set(row.id, { ...row })
+    this.addConvIndex(this.asksByConv, row.conversationId, row.id)
     this.enqueue(() =>
       this.db.run(
         `INSERT INTO helmx_asks (id, conversation_id, owner_plugin_id, spec, status, result, expected_state_seq, created_at, settled_at)
@@ -523,8 +599,17 @@ export class HelmxStore {
   // ---------------- artifacts ----------------
 
   listArtifacts(conversationId?: number): ArtifactRow[] {
+    if (conversationId !== undefined) {
+      const ids = this.artifactsByConv.get(conversationId)
+      if (ids === undefined || ids.size === 0) return []
+      const out: ArtifactRow[] = []
+      for (const id of ids) {
+        const row = this.artifacts.get(id)
+        if (row !== undefined) out.push({ ...row })
+      }
+      return out.sort((a, b) => a.createdAt - b.createdAt)
+    }
     return [...this.artifacts.values()]
-      .filter((a) => (conversationId === undefined ? true : a.conversationId === conversationId))
       .map((a) => ({ ...a }))
       .sort((a, b) => a.createdAt - b.createdAt)
   }
@@ -539,7 +624,12 @@ export class HelmxStore {
     if (!isArtifactKind(row.kind)) {
       throw new HelmxError('validation_error', `Invalid artifact kind: ${String(row.kind)}`, 400, { id: row.id, kind: row.kind })
     }
+    const prev = this.artifacts.get(row.id)
+    if (prev !== undefined && prev.conversationId !== row.conversationId) {
+      this.removeConvIndex(this.artifactsByConv, prev.conversationId, row.id)
+    }
     this.artifacts.set(row.id, { ...row })
+    this.addConvIndex(this.artifactsByConv, row.conversationId, row.id)
     this.enqueue(() =>
       this.db.run(
         `INSERT INTO helmx_artifacts (id, conversation_id, kind, name, path, mime_type, size, created_at)
@@ -559,12 +649,11 @@ export class HelmxStore {
 
   deleteArtifactsByConversation(conversationId: number): string[] {
     this.assertWritable()
-    const removed: string[] = []
-    for (const [id, row] of this.artifacts) {
-      if (row.conversationId === conversationId) {
-        removed.push(id)
-        this.artifacts.delete(id)
-      }
+    const ids = this.artifactsByConv.get(conversationId)
+    const removed: string[] = ids ? [...ids] : []
+    if (ids !== undefined) {
+      for (const id of ids) this.artifacts.delete(id)
+      this.artifactsByConv.delete(conversationId)
     }
     this.enqueue(() =>
       this.db.run('DELETE FROM helmx_artifacts WHERE conversation_id = ?', conversationId),
@@ -646,7 +735,9 @@ export class HelmxStore {
         valueJson,
       )
     }
-    this.pluginSessionDocs.set(`${pluginId}\0${name}\0${conversationId}`, valueJson)
+    const sessionKey = `${pluginId}\0${name}\0${conversationId}`
+    this.pluginSessionDocs.set(sessionKey, valueJson)
+    this.addConvIndex(this.sessionDocsByConv, conversationId, sessionKey)
     this.enqueue(() =>
       this.db.run(
         `INSERT INTO helmx_plugin_session_docs (plugin_id, name, conversation_id, value, updated_at)
@@ -663,7 +754,9 @@ export class HelmxStore {
 
   deletePluginSessionDoc(pluginId: string, name: string, conversationId: number): void {
     this.assertWritable()
-    this.pluginSessionDocs.delete(`${pluginId}\0${name}\0${conversationId}`)
+    const sessionKey = `${pluginId}\0${name}\0${conversationId}`
+    this.pluginSessionDocs.delete(sessionKey)
+    this.removeConvIndex(this.sessionDocsByConv, conversationId, sessionKey)
     this.enqueue(() =>
       this.db.run(
         'DELETE FROM helmx_plugin_session_docs WHERE plugin_id = ? AND name = ? AND conversation_id = ?',
@@ -677,8 +770,14 @@ export class HelmxStore {
   /** Delete all per-conversation documents belonging to a plugin (unload cleanup; dedicated `plugin_id` column ensures exact match). */
   deletePluginSessionDocs(pluginId: string): void {
     this.assertWritable()
+    const prefix = pluginId + '\0'
     for (const key of [...this.pluginSessionDocs.keys()]) {
-      if (key.startsWith(pluginId + '\0')) this.pluginSessionDocs.delete(key)
+      if (!key.startsWith(prefix)) continue
+      this.pluginSessionDocs.delete(key)
+      const convId = Number(key.split('\0')[2])
+      if (Number.isSafeInteger(convId)) {
+        this.removeConvIndex(this.sessionDocsByConv, convId, key)
+      }
     }
     this.enqueue(() =>
       this.db.run('DELETE FROM helmx_plugin_session_docs WHERE plugin_id = ?', pluginId),
@@ -846,17 +945,32 @@ export class HelmxStore {
     }
     this.enqueue(() =>
       this.db.transaction(async (tx) => {
-        await tx.run(
-          'DELETE FROM helmx_conversation_fts WHERE conversation_id = ? AND entry_id = ?',
+        const existing = await tx.get<{ fts_rowid: number }>(
+          'SELECT fts_rowid FROM helmx_fts_map WHERE conversation_id = ? AND entry_id = ?',
           conversationId,
           entryId,
         )
+        if (existing !== undefined) {
+          await tx.run('DELETE FROM helmx_conversation_fts WHERE rowid = ?', existing.fts_rowid)
+          await tx.run(
+            'DELETE FROM helmx_fts_map WHERE conversation_id = ? AND entry_id = ?',
+            conversationId,
+            entryId,
+          )
+        }
         await tx.run(
           'INSERT INTO helmx_conversation_fts (conversation_id, entry_id, title, body) VALUES (?, ?, ?, ?)',
           conversationId,
           entryId,
           safeTitle,
           safeBody,
+        )
+        const inserted = await tx.get<{ rid: number }>('SELECT last_insert_rowid() AS rid')
+        await tx.run(
+          'INSERT INTO helmx_fts_map (conversation_id, entry_id, fts_rowid) VALUES (?, ?, ?)',
+          conversationId,
+          entryId,
+          inserted!.rid,
         )
       }),
     )
@@ -939,11 +1053,19 @@ export class HelmxStore {
     this.enqueue(() =>
       this.db.transaction(async (tx) => {
         for (const entryId of ids) {
-          await tx.run(
-            'DELETE FROM helmx_conversation_fts WHERE conversation_id = ? AND entry_id = ?',
+          const existing = await tx.get<{ fts_rowid: number }>(
+            'SELECT fts_rowid FROM helmx_fts_map WHERE conversation_id = ? AND entry_id = ?',
             conversationId,
             entryId,
           )
+          if (existing !== undefined) {
+            await tx.run('DELETE FROM helmx_conversation_fts WHERE rowid = ?', existing.fts_rowid)
+            await tx.run(
+              'DELETE FROM helmx_fts_map WHERE conversation_id = ? AND entry_id = ?',
+              conversationId,
+              entryId,
+            )
+          }
         }
       }),
     )
@@ -1024,13 +1146,23 @@ export class HelmxStore {
 
       await this.db.transaction(async (tx) => {
         await tx.exec('DELETE FROM helmx_conversation_fts')
+        await tx.exec('DELETE FROM helmx_fts_map')
+        let nextRowId = 0
         for (const [conversationId, entryId, title, body] of batch.values()) {
+          nextRowId += 1
           await tx.run(
-            'INSERT INTO helmx_conversation_fts (conversation_id, entry_id, title, body) VALUES (?, ?, ?, ?)',
+            'INSERT INTO helmx_conversation_fts (rowid, conversation_id, entry_id, title, body) VALUES (?, ?, ?, ?, ?)',
+            nextRowId,
             conversationId,
             entryId,
             title,
             body,
+          )
+          await tx.run(
+            'INSERT INTO helmx_fts_map (conversation_id, entry_id, fts_rowid) VALUES (?, ?, ?)',
+            conversationId,
+            entryId,
+            nextRowId,
           )
         }
         await tx.run(

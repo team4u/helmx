@@ -79,7 +79,7 @@ export class SecretStash {
         prefixes.set(value, prefix)
       }
       let matched = 0
-      const tail = text.slice(-Math.max(value.length - 1, 0))
+      const tail = value.length > 1 ? text.slice(-(value.length - 1)) : ''
       for (let index = 0; index < tail.length; index++) {
         const char = tail[index]!
         while (matched > 0 && char !== value[matched]) matched = prefix[matched - 1]!

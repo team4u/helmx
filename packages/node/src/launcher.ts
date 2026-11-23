@@ -326,8 +326,10 @@ export async function runForegroundLauncher(
   }
   let stopError: string | undefined;
   let shutdownPromise: Promise<void> | undefined;
+  let wakePoll: (() => void) | undefined;
   const shutdown = (reason: string): void => {
     if (shutdownPromise !== undefined) return;
+    wakePoll?.();
     shutdownPromise = (async () => {
       try {
         const record = await readPidRecord(dataDir);
@@ -348,35 +350,49 @@ export async function runForegroundLauncher(
   process.once('SIGINT', onSigint);
   process.once('SIGTERM', onSigterm);
 
-  for (;;) {
-    if (shutdownPromise !== undefined) break;
-    let record: PidRecord | null;
-    try {
-      record = await readPidRecord(dataDir);
-    } catch (error) {
-      stopError = `launcher failed to read pid record: ${error instanceof Error ? error.message : String(error)}`;
-      break;
-    }
-    if (record === null) {
-      // Daemon stopped cleanly and deleted `node.pid`.
-      break;
-    }
-    if (!isAlive(record.pid)) {
-      const response = await controlRequest(
-        record.endpoint,
-        { type: 'status', instanceId: record.instanceId },
-        CONTROL_TIMEOUT_MS,
-        { pid: record.pid, instanceId: record.instanceId },
-      ).catch(() => null);
-      if (response === null || response.ok !== true) {
-        stopError = `daemon pid ${record.pid} exited and control channel could not be verified; launcher exiting (run helmx-node start to restart)`;
+  try {
+    for (;;) {
+      if (shutdownPromise !== undefined) break;
+      let record: PidRecord | null;
+      try {
+        record = await readPidRecord(dataDir);
+      } catch (error) {
+        stopError = `launcher failed to read pid record: ${error instanceof Error ? error.message : String(error)}`;
         break;
       }
+      if (record === null) {
+        // Daemon stopped cleanly and deleted `node.pid`.
+        break;
+      }
+      if (!isAlive(record.pid)) {
+        const response = await controlRequest(
+          record.endpoint,
+          { type: 'status', instanceId: record.instanceId },
+          CONTROL_TIMEOUT_MS,
+          { pid: record.pid, instanceId: record.instanceId },
+        ).catch(() => null);
+        if (response === null || response.ok !== true) {
+          stopError = `daemon pid ${record.pid} exited and control channel could not be verified; launcher exiting (run helmx-node start to restart)`;
+          break;
+        }
+      }
+      if (shutdownPromise !== undefined) break;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          wakePoll = undefined;
+          resolve();
+        }, pollMs);
+        wakePoll = () => {
+          wakePoll = undefined;
+          clearTimeout(timer);
+          resolve();
+        };
+      });
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  } finally {
+    process.removeListener('SIGINT', onSigint);
+    process.removeListener('SIGTERM', onSigterm);
   }
-  process.removeListener('SIGINT', onSigint);
-  process.removeListener('SIGTERM', onSigterm);
   if (shutdownPromise !== undefined) await shutdownPromise;
   if (stopError !== undefined) io.err(`error: ${stopError}\n`);
   return stopError === undefined ? 0 : 1;

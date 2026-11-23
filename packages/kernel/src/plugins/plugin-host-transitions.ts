@@ -121,7 +121,13 @@ export function purgePluginEntries(
     'plugins' | 'tracker' | 'capabilityRegistry' | 'capabilityServiceRegistry' | 'uiRegistry' | 'docRegistry'
   >,
 ): void {
-  const wasEnabled = ctx.plugins.get(pluginId)?.enabled === true;
+  const existing = ctx.plugins.get(pluginId);
+  const wasEnabled = existing?.enabled === true;
+  if (existing?.releaseTsRoot !== undefined) {
+    const release = existing.releaseTsRoot;
+    existing.releaseTsRoot = undefined;
+    release();
+  }
   ctx.plugins.delete(pluginId);
   ctx.tracker.removePlugin(pluginId);
   removePluginRegistries(pluginId, ctx, wasEnabled);

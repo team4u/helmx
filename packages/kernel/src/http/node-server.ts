@@ -17,7 +17,7 @@ import { createHubHandler } from './hub.js'
 import { createStaticServe } from './static.js'
 import { HelmxError } from '@helmx/protocol'
 import { attachNodeWsGateway, attachNodeTunnelGateway, type EnvFabric, type NodeWsGateway } from '../env/index.js'
-import type { HubHandle, KernelRuntimeLike, StartHubOptions } from './contracts.js'
+import type { HubHandle, StartHubOptions } from './contracts.js'
 
 const DEFAULT_PORT = 3202
 const DEFAULT_HOSTNAME = '127.0.0.1'
@@ -83,16 +83,12 @@ interface NodeHubHandle extends HubHandle {
 
 export async function startHub(options: StartHubOptions): Promise<NodeHubHandle> {
   const { kernel, webDistDir } = options
-  const handler = createHubHandler({
-    kernel,
-    ...(webDistDir !== undefined ? { webDistDir } : {}),
-    ...(options.productRoutes !== undefined ? { productRoutes: options.productRoutes } : {}),
-  })
-  // Validate explicit static directory eagerly at startup (fail fast): invalid dir refuses to start
-  // with a structured diagnostic (matching `web_dist_invalid` on first-request path) rather than deferring failure.
+  // Validate explicit static directory eagerly at startup (fail fast) and reuse the resulting StaticServe
+  // in `createHubHandler` instead of creating a second instance on first request.
+  let staticServe: Awaited<ReturnType<typeof createStaticServe>> | undefined
   if (typeof webDistDir === 'string') {
     try {
-      await createStaticServe(webDistDir)
+      staticServe = await createStaticServe(webDistDir)
     } catch (err) {
       if (err instanceof HelmxError) throw err
       throw new HelmxError(
@@ -103,6 +99,12 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
       )
     }
   }
+  const handler = createHubHandler({
+    kernel,
+    ...(webDistDir !== undefined ? { webDistDir } : {}),
+    ...(staticServe !== undefined ? { staticServe } : {}),
+    ...(options.productRoutes !== undefined ? { productRoutes: options.productRoutes } : {}),
+  })
   const port = options.port ?? DEFAULT_PORT
   const hostname = options.hostname ?? DEFAULT_HOSTNAME
 

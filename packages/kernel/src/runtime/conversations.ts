@@ -122,6 +122,11 @@ export class ConversationTracker {
   private readonly activityBusyListeners = new Set<() => void>()
   /** Last computed aggregate busy predicate (drives idle→busy transition detection). */
   private activityBusyAggregate = false
+  /** Incremental O(1) running activity totals across `this.mirrors`. */
+  private busyActiveTotal = 0
+  private busyCompactionsTotal = 0
+  private busyQueuedTotal = 0
+  private busySettlingTotal = 0
   /** conversation -> taskId of last notified compaction failure (prevents duplicate notifications across snapshots;
    * intentionally survives stopObserving so re-observing within the same runtime never re-notifies the same failure). */
   private readonly notifiedCompactionFailures = new Map<number, number>()
@@ -305,6 +310,8 @@ export class ConversationTracker {
     const inboxItems = inbox?.items ?? []
     mirror.inbox = inboxItems
     this.adoptInputsFromInbox(id, inboxItems)
+    this.syncMirrorBusyContribution(mirror)
+    this.noteActivityMutation()
     // Populate context usage cache on initial attach (initial read path for restart/fork/new conversations),
     // including idle conversations so opening a historical conversation displays its usage pill.
     this.usage.schedule(id)
@@ -334,6 +341,7 @@ export class ConversationTracker {
     // so subsequent adopts only emit on actual status/doing transitions instead of pushing redundant working frames.
     if (this.store.getConv(id)) mirror.lastSummaryKey = summaryKeyOf(this.summaryOf(id))
     // Recovered active runs/queues make the runtime busy from the very first mirror write.
+    this.syncMirrorBusyContribution(mirror)
     this.noteActivityMutation()
   }
 
@@ -412,11 +420,28 @@ export class ConversationTracker {
     // then clear mirror and global settledRuns prefix keys so repeated create/delete cycles never leak entries.
     const settledWaiters = mirror?.settledWaiters ?? []
     for (const resolve of settledWaiters) resolve()
+    if (mirror !== undefined) {
+      this.busyActiveTotal -= mirror.busyActive
+      this.busyCompactionsTotal -= mirror.busyCompactions
+      this.busyQueuedTotal -= mirror.busyQueued
+      this.busySettlingTotal -= mirror.busySettling
+      mirror.busyActive = 0
+      mirror.busyCompactions = 0
+      mirror.busyQueued = 0
+      mirror.busySettling = 0
+    }
     this.mirrors.delete(id)
     this.lastEntryIds.delete(id)
     for (const runKey of this.settledRuns) {
       if (runKey.startsWith(`${id}:`)) this.settledRuns.delete(runKey)
     }
+    this.noteActivityMutation()
+  }
+
+  /** Permanent conversation deletion cleanup: detaches observer and clears compaction failure dedupe state. */
+  deleteConversation(id: number): void {
+    this.stopObserving(id)
+    this.notifiedCompactionFailures.delete(id)
   }
 
   /** Scan backwards from tail when the initial 50-entry view window contained only hidden entries. */
@@ -537,6 +562,7 @@ export class ConversationTracker {
     const mirror = this.mirrorOf(conversationId)
     if (mirror.settledInflight === 0) mirror.settledError = undefined
     mirror.settledInflight += 1
+    this.syncMirrorBusyContribution(mirror)
     this.noteActivityMutation()
   }
 
@@ -544,6 +570,7 @@ export class ConversationTracker {
     const mirror = this.mirrors.get(conversationId)
     if (mirror === undefined || mirror.settledInflight === 0) return
     mirror.settledInflight -= 1
+    this.syncMirrorBusyContribution(mirror)
     this.noteActivityMutation()
     if (mirror.settledInflight > 0) return
     const waiters = mirror.settledWaiters
@@ -584,18 +611,28 @@ export class ConversationTracker {
    * complete live view — idle conversations simply contribute zero. A pending approval whose run
    * already ended is durable state (AskDoc + CAS watermarks survive restart) and does not count.
    */
+  private syncMirrorBusyContribution(mirror: ConversationMirror): void {
+    const nextActive: 0 | 1 = mirror.live?.run !== undefined ? 1 : 0
+    const nextCompactions = mirror.live?.compactions?.length ?? 0
+    const nextQueued: 0 | 1 = (mirror.inbox?.length ?? 0) > 0 ? 1 : 0
+    const nextSettling: 0 | 1 = mirror.settledInflight > 0 ? 1 : 0
+    this.busyActiveTotal += nextActive - mirror.busyActive
+    this.busyCompactionsTotal += nextCompactions - mirror.busyCompactions
+    this.busyQueuedTotal += nextQueued - mirror.busyQueued
+    this.busySettlingTotal += nextSettling - mirror.busySettling
+    mirror.busyActive = nextActive
+    mirror.busyCompactions = nextCompactions
+    mirror.busyQueued = nextQueued
+    mirror.busySettling = nextSettling
+  }
+
   activitySnapshot(): HubActivityCounts {
-    let activeConversations = 0
-    let activeCompactions = 0
-    let queuedConversations = 0
-    let settlingConversations = 0
-    for (const mirror of this.mirrors.values()) {
-      if (mirror.live?.run !== undefined) activeConversations += 1
-      activeCompactions += mirror.live?.compactions?.length ?? 0
-      if ((mirror.inbox?.length ?? 0) > 0) queuedConversations += 1
-      if (mirror.settledInflight > 0) settlingConversations += 1
+    return {
+      activeConversations: this.busyActiveTotal,
+      activeCompactions: this.busyCompactionsTotal,
+      queuedConversations: this.busyQueuedTotal,
+      settlingConversations: this.busySettlingTotal,
     }
-    return { activeConversations, activeCompactions, queuedConversations, settlingConversations }
   }
 
   /**
@@ -926,6 +963,7 @@ export class ConversationTracker {
     }
     // Every snapshot application is a potential run/compaction/queue mutation: recompute the busy
     // aggregate so an idle→busy flip rewrites the activity heartbeat synchronously (see adopt header).
+    this.syncMirrorBusyContribution(mirror)
     this.noteActivityMutation()
   }
 
@@ -965,10 +1003,30 @@ export class ConversationTracker {
     if (queuedEmpty) {
       // Do not emit idle views (terminal flushes are handled by emitSettled); however, if inputs were previously
       // queued and the authoritative inbox is now empty, emit a cleanup frame so client pills do not linger.
-      if ((mirror?.lastEmittedLive?.queuedInputs?.length ?? 0) === 0) return
+      if ((mirror?.lastEmittedLive?.queuedInputs?.length ?? 0) === 0) {
+        this.clearLiveTimer(id)
+        if (mirror !== undefined) {
+          mirror.pendingLive = undefined
+          mirror.liveDirty = false
+        }
+        return
+      }
       const cleanup = deriveConversationLive(id, live, Date.now(), inboxItems)
       this.sendLiveNow(id, cleanup)
       return
+    }
+    // Defer `deriveConversationLive` per-token allocations while `liveTimer` is already armed and the inbox queue
+    // has not changed; `flushPendingLive` derives once from the latest mirror when the 75ms timer fires.
+    if (mirror !== undefined && mirror.liveTimer !== undefined) {
+      const prevInbox = mirror.lastEmittedInbox
+      const inboxUnchanged =
+        prevInbox === inboxItems ||
+        ((prevInbox?.length ?? 0) === 0 && (inboxItems?.length ?? 0) === 0)
+      if (inboxUnchanged) {
+        mirror.pendingLive = undefined
+        mirror.liveDirty = true
+        return
+      }
     }
     const snapshot = deriveConversationLive(id, live, Date.now(), inboxItems)
     const prevEmitted = mirror?.lastEmittedLive
@@ -984,6 +1042,7 @@ export class ConversationTracker {
     }
     const m = this.mirrorOf(id)
     m.pendingLive = snapshot
+    m.liveDirty = false
     if (m.liveTimer !== undefined) return
     const timer = setTimeout(() => {
       m.liveTimer = undefined
@@ -998,18 +1057,27 @@ export class ConversationTracker {
     this.clearLiveTimer(id)
     const mirror = this.mirrorOf(id)
     mirror.pendingLive = undefined
+    mirror.liveDirty = false
     mirror.lastEmittedLive = snapshot
+    mirror.lastEmittedInbox = mirror.inbox
     this.events.onLiveChanged?.(snapshot)
   }
 
   /** Flush pending snapshot inside throttle window (runs on timer expiry or immediate queue change). */
   private flushPendingLive(id: number): void {
     const mirror = this.mirrors.get(id)
-    const snapshot = mirror?.pendingLive
-    if (mirror === undefined || snapshot === undefined) return
+    if (mirror === undefined) return
+    const snapshot =
+      mirror.pendingLive ??
+      (mirror.liveDirty
+        ? deriveConversationLive(id, mirror.live, Date.now(), mirror.inbox)
+        : undefined)
     mirror.pendingLive = undefined
+    mirror.liveDirty = false
+    if (snapshot === undefined) return
     if (mirror.lastEmittedLive !== undefined && sameConversationLiveContent(mirror.lastEmittedLive, snapshot)) return
     mirror.lastEmittedLive = snapshot
+    mirror.lastEmittedInbox = mirror.inbox
     this.events.onLiveChanged?.(snapshot)
   }
 
@@ -1017,7 +1085,10 @@ export class ConversationTracker {
   private flushLiveFinal(conversationId: number): void {
     this.clearLiveTimer(conversationId)
     const mirror = this.mirrors.get(conversationId)
-    if (mirror !== undefined) mirror.pendingLive = undefined
+    if (mirror !== undefined) {
+      mirror.pendingLive = undefined
+      mirror.liveDirty = false
+    }
     if (this.events.onLiveChanged === undefined) return
     const snapshot = deriveConversationLive(
       conversationId,
@@ -1035,6 +1106,7 @@ export class ConversationTracker {
     }
     const m = this.mirrorOf(conversationId)
     m.lastEmittedLive = snapshot
+    m.lastEmittedInbox = m.inbox
     this.events.onLiveChanged(snapshot)
   }
 

@@ -148,9 +148,8 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
       policy.onSkipped();
       continue;
     }
-    // Enable backend TS transpilation for the plugin root; released on failure, retained across process lifetime on success.
+    // Enable backend TS transpilation during scan/import; `PluginHost.register` retains its own ref for the registered instance lifetime.
     const releaseTsRoot = registerPluginTsRoot(dirPath, { transform });
-    let committed = false;
     try {
       const entryPath = await resolvePluginEntry(dirPath);
       const definition = await importScanDefinition(dirPath, entryPath, existingIds);
@@ -169,14 +168,13 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
       const normalized = normalizeDefinition(definition, dirPath);
       existingIds.add(normalized.id);
       await plugins.register(normalized, { enabled: false, isolateFailure: true });
-      committed = true;
       registered.push(normalized.id);
     } catch (err) {
       // Single-directory fault fallback registration (scan/load phase; define/enable failures during
       // `register` are already absorbed by `isolateFailure` and never reach here): do not block other directories.
       await registerScanFailure(plugins, dirPath, entry.name, existingIds, 'scan', err);
     } finally {
-      if (!committed) releaseTsRoot();
+      releaseTsRoot();
     }
   }
 }

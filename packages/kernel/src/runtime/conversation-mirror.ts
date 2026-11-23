@@ -93,10 +93,14 @@ export interface ConversationMirror {
   lastSeenEntryId: number
   /** Pending throttled live snapshot (latest snapshot inside throttle window; flushed forcefully on settlement). */
   pendingLive: ConversationLive | undefined
+  /** True when streaming tokens arrived while `liveTimer` was already armed, deferring `deriveConversationLive` until timer fire. */
+  liveDirty: boolean
   /** Throttled live flush timer (must be cleared on stopObserving/close to prevent post-deletion ghost events). */
   liveTimer: ReturnType<typeof setTimeout> | undefined
   /** Most recently emitted live frame (structural dedupe without per-tick JSON.stringify allocations). */
   lastEmittedLive: ConversationLive | undefined
+  /** Last inbox array reference observed at emit time (fast-paths queue-unchanged check while `liveTimer` is armed). */
+  lastEmittedInbox: ReadonlyArray<InboxItemShape> | undefined
   /** Semantic fingerprint of last emitted summary (status|doing|pendingAsk; suppresses duplicates). */
   lastSummaryKey: string | undefined
   /** Unique token per observe session; deleted along with mirror on stopObserving so stale async results cannot re-populate. */
@@ -107,6 +111,11 @@ export interface ConversationMirror {
   lastIndexedAssistantEntryId: number | undefined
   /** Count of pending AskDocs (drives blocked status and CAS watermarks). */
   pendingAskCount: number
+  /** Cached O(1) busy-counter contributions for `ConversationTracker.activitySnapshot()`. */
+  busyActive: 0 | 1
+  busyCompactions: number
+  busyQueued: 0 | 1
+  busySettling: 0 | 1
 }
 
 export function createConversationMirror(): ConversationMirror {
@@ -127,13 +136,19 @@ export function createConversationMirror(): ConversationMirror {
     lastEmittedEntry: 0,
     lastSeenEntryId: 0,
     pendingLive: undefined,
+    liveDirty: false,
     liveTimer: undefined,
     lastEmittedLive: undefined,
+    lastEmittedInbox: undefined,
     lastSummaryKey: undefined,
     observeGeneration: undefined,
     lastAssistant: undefined,
     lastIndexedAssistantEntryId: undefined,
     pendingAskCount: 0,
+    busyActive: 0,
+    busyCompactions: 0,
+    busyQueued: 0,
+    busySettling: 0,
   }
 }
 

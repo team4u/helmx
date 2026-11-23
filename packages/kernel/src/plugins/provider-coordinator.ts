@@ -2,7 +2,7 @@
  * Coordinates mounting, unmounting, and lifecycle guards for plugin model `Provider`s.
  */
 import type { Provider } from '@earendil-works/pi-ai';
-import { HelmxError, isJsonObject, isPlainObject } from '@helmx/protocol';
+import { HelmxError, isPlainObject } from '@helmx/protocol';
 import {
   toJsonSafeError,
   type JsonSafeErrorInfo,

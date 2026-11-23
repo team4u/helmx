@@ -19,8 +19,6 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { realpathSync } from 'node:fs';
 import { UsageError, type NodeCliIo } from './cli-context.js';
-import { resolveServiceEntry } from './service-entry.js';
-import { defaultSpawnDaemon } from './launcher.js';
 import { COMMANDS } from './commands/index.js';
 import type { ParsedCli } from './commands/shared.js';
 
