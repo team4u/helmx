@@ -979,3 +979,98 @@ describe('EventHub SSE idle heartbeat', { timeout: 60_000 }, () => {
     controller.abort()
   })
 })
+
+describe('EventHub transient conversation.live.delta protocol', { timeout: 60_000 }, () => {
+  it('emits full conversation.live on baseline then compact LCP conversation.live.delta, resetting after terminal upsert/delete/inactive', { timeout: 60_000 }, async () => {
+    const { hub } = makeFixture({ keepaliveMs: 0 })
+    const inProcessFrames: Array<{ live: { text: string; rev?: number } }> = []
+    const hostDispatched: Array<{ type: string; live?: { text: string; rev?: number } }> = []
+    hub.subscribeTransientLive((f) => inProcessFrames.push(f))
+    hub.setHostDispatcher((ev) => {
+      hostDispatched.push(ev as { type: string; live?: { text: string; rev?: number } })
+    })
+
+    const controller = new AbortController()
+    const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
+    const frames: Array<{ event: string; data: unknown }> = []
+    const reading = readAll(response, (text) => {
+      for (const f of parseSse(text)) frames.push(f)
+    })
+    await waitFor(() => frames.length >= 1)
+
+    const longPrefix = 'A'.repeat(2000)
+    // 1. First transient live -> full `conversation.live` with rev: 1
+    hub.publishTransientLive({
+      conversationId: 7,
+      text: longPrefix,
+      tools: [],
+      generation: {
+        taskId: 1,
+        attempt: 1,
+        message: { content: [{ type: 'text', text: longPrefix }], usage: { output: 100 } },
+      },
+      updatedAt: 1000,
+    })
+    // 2. Second transient live -> compact `conversation.live.delta` (baseRev: 1 -> rev: 2)
+    hub.publishTransientLive({
+      conversationId: 7,
+      text: longPrefix + ' world',
+      tools: [],
+      generation: {
+        taskId: 1,
+        attempt: 1,
+        message: { content: [{ type: 'text', text: longPrefix + ' world' }], usage: { output: 102 } },
+      },
+      updatedAt: 1100,
+    })
+    await waitFor(() => frames.length >= 3)
+
+    assert.equal(frames[1]?.event, 'conversation.live')
+    const f1 = frames[1]?.data as { live: { text: string; rev?: number } }
+    assert.equal(f1.live.rev, 1)
+    assert.equal(f1.live.text.length, 2000)
+
+    assert.equal(frames[2]?.event, 'conversation.live.delta')
+    const f2 = frames[2]?.data as { delta: { baseRev: number; rev: number; text?: [number, string] } }
+    assert.equal(f2.delta.baseRev, 1)
+    assert.equal(f2.delta.rev, 2)
+    assert.deepEqual(f2.delta.text, [2000, ' world'])
+    assert.ok(JSON.stringify(f2).length < 400, 'delta frame must stay compact instead of resending 2KB prefix')
+
+    // In-process listeners & host dispatcher still receive un-stamped full ConversationLive (no `rev`)
+    assert.equal(inProcessFrames.length, 2)
+    assert.equal(inProcessFrames[0]?.live.rev, undefined)
+    assert.equal(inProcessFrames[1]?.live.text, longPrefix + ' world')
+    assert.equal(hostDispatched[1]?.live?.rev, undefined)
+
+    // Newly connecting client receives exact rev: 2 baseline in currentSnapshot() and resumed frame
+    const snap = hub.currentSnapshot()
+    const snapLive = snap.conversationLives?.find((l) => l.conversationId === 7)
+    assert.equal(snapLive?.rev, 2)
+    assert.equal(snapLive?.text, longPrefix + ' world')
+
+    // 3. Terminal conversation.upsert clears delta baseline -> next live emits full `conversation.live` (rev: 3)
+    hub.publish('conversation.upsert', { ...summary(7, 'done'), status: 'idle' })
+    hub.publishTransientLive({ conversationId: 7, text: 'new turn', tools: [], updatedAt: 1200 })
+    await waitFor(() => frames.length >= 5)
+    assert.equal(frames[4]?.event, 'conversation.live')
+    assert.equal((frames[4]?.data as { live: { rev?: number; text: string } }).live.rev, 3)
+    assert.equal((frames[4]?.data as { live: { rev?: number; text: string } }).live.text, 'new turn')
+
+    // 4. Inactive live clears delta baseline -> subsequent active live emits full `conversation.live`
+    hub.publishTransientLive({ conversationId: 7, text: '', tools: [], updatedAt: 1300 })
+    hub.publishTransientLive({ conversationId: 7, text: 'after idle', tools: [], updatedAt: 1400 })
+    await waitFor(() => frames.length >= 7)
+    assert.equal(frames[5]?.event, 'conversation.live.delta')
+    assert.equal(frames[6]?.event, 'conversation.live')
+    assert.equal((frames[6]?.data as { live: { text: string } }).live.text, 'after idle')
+
+    // 5. conversation.deleted clears rev and baseline completely
+    hub.publish('conversation.deleted', { conversationId: 7 })
+    assert.equal(hub.currentSnapshot().conversationLives, undefined)
+
+    controller.abort()
+    await reading
+    hub.close()
+  })
+})

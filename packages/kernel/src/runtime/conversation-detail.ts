@@ -24,6 +24,14 @@ import type { HelmxStore } from './store.js'
 
 /** Maximum encoded pagination cursor length (base64url; rejects oversized cursors to prevent abuse). */
 const DETAIL_CURSOR_MAX_LENGTH = 2048
+/** Max per-conversation rewind-interval cache entries (bounded eviction prevents leaks across delete cycles). */
+const REWIND_CACHE_MAX_ENTRIES = 256
+
+interface RewindCacheEntry {
+  readonly stateChangeSeq: number
+  readonly lastEntryId: number
+  readonly cuts: RewindInterval[]
+}
 
 interface ConversationDetailHost {
   readonly harness: Harness
@@ -40,7 +48,37 @@ interface ConversationDetailHost {
 }
 
 export class ConversationDetailService {
+  private readonly rewindCache = new Map<number, RewindCacheEntry>()
+
   constructor(private readonly host: ConversationDetailHost) {}
+
+  private putRewindCache(id: number, stateChangeSeq: number, lastEntryId: number, cuts: RewindInterval[]): void {
+    if (lastEntryId <= 0) return
+    if (!this.rewindCache.has(id) && this.rewindCache.size >= REWIND_CACHE_MAX_ENTRIES) {
+      const oldest = this.rewindCache.keys().next().value
+      if (oldest !== undefined) this.rewindCache.delete(oldest)
+    }
+    this.rewindCache.set(id, { stateChangeSeq, lastEntryId, cuts })
+  }
+
+  private async resolveRewindIntervals(
+    id: number,
+    summary: ConversationSummary,
+    conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
+  ): Promise<RewindInterval[]> {
+    const lastEntryId = summary.lastEntryId ?? 0
+    if (lastEntryId > 0) {
+      const cached = this.rewindCache.get(id)
+      if (cached !== undefined && cached.stateChangeSeq === summary.stateChangeSeq && cached.lastEntryId === lastEntryId) {
+        return cached.cuts
+      }
+    }
+    const cuts = await this.host.collectRewindIntervals(conversation)
+    if (lastEntryId > 0) {
+      this.putRewindCache(id, summary.stateChangeSeq, lastEntryId, cuts)
+    }
+    return cuts
+  }
 
   /**
    * Fetch conversation details (summary + paginated timeline):
@@ -90,8 +128,24 @@ export class ConversationDetailService {
     if (options?.cursor !== undefined) {
       sdkCursor = this.decodeDetailCursor(id, options.cursor)
     }
-    const rewindCuts = await this.host.collectRewindIntervals(conversation)
-    const { collected, nextCursor } = await this.pageVisibleEntries(conversation, id, limit, sdkCursor, rewindCuts)
+    // Descending first-page invariant: every `helmx.rewind` entry is appended strictly after its
+    // `throughEntryId`, so descending scans from the tail always encounter every covering marker before
+    // any covered older entry. Skip the redundant full ascending pre-scan on Page 1 and collect cuts inline.
+    const collectInline = sdkCursor === undefined
+    const rewindCuts = collectInline
+      ? []
+      : await this.resolveRewindIntervals(id, summary, conversation)
+    const { collected, nextCursor } = await this.pageVisibleEntries(
+      conversation,
+      id,
+      limit,
+      sdkCursor,
+      rewindCuts,
+      collectInline,
+    )
+    if (collectInline && nextCursor === undefined && (summary.lastEntryId ?? 0) > 0) {
+      this.putRewindCache(id, summary.stateChangeSeq, summary.lastEntryId!, [...rewindCuts])
+    }
 
     // HTTP detail boundary projection: filter pi.system + strip signatures + truncate safe plain-text tool results
     // (see entry-projection.ts). SSE / waitForInput never go through this projection.
@@ -121,7 +175,7 @@ export class ConversationDetailService {
         entryId,
       })
     }
-    this.host.getConversation(id)
+    const summary = this.host.getConversation(id)
     const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
     const page = await conversation.entries(
@@ -145,7 +199,7 @@ export class ConversationDetailService {
         entryId,
       })
     }
-    const rewindCuts = await this.host.collectRewindIntervals(conversation)
+    const rewindCuts = await this.resolveRewindIntervals(id, summary, conversation)
     if (raw.kind !== 'helmx.rewind' && coveredByRewind(entryId, rewindCuts)) {
       throw new HelmxError('not_found', `entry ${entryId} was hidden by in-place overwrite & resend`, 404, {
         conversationId: id,
@@ -164,6 +218,7 @@ export class ConversationDetailService {
     limit: number,
     initialCursor: unknown,
     rewindCuts: RewindInterval[],
+    collectRewindsInline = false,
   ): Promise<{
     collected: Array<{ id: number; kind: string; model?: readonly unknown[]; data?: unknown }>
     nextCursor: unknown
@@ -185,6 +240,10 @@ export class ConversationDetailService {
         model?: readonly unknown[]
         data?: unknown
       }>) {
+        if (collectRewindsInline && raw.kind === 'helmx.rewind') {
+          const interval = rewindIntervalOf(raw)
+          if (interval !== undefined) rewindCuts.push(interval)
+        }
         // Keep helmx.rewind markers (for SSE consistency and frontend interval deduplication), hide older entries
         // inside closed rewind intervals, and hide internal pi.system records from detail timelines.
         const numericId = Number(raw.id)

@@ -319,6 +319,8 @@ export interface ConversationLive {
   /** Inputs currently queued in pi.inbox awaiting effect (steer takes precedence over followUp); omitted or empty when nothing is queued. */
   queuedInputs?: QueuedConversationInput[]
   updatedAt: number
+  /** Server-assigned monotonic per-conversation live revision (stamps full frames & snapshots so subsequent `conversation.live.delta` frames verify exact continuity). */
+  rev?: number
 }
 
 /** Generic streaming execution facts of the current generation (the kernel only passes observed facts through, never computes rates;

@@ -493,9 +493,10 @@ export function SidebarConversationList({
         background,
         profiles: store.profiles,
         plugins: store.plugins,
+        viewedConversationIds,
         t,
       }),
-    [store.conversations, background, store.profiles, store.plugins, t],
+    [store.conversations, background, store.profiles, store.plugins, viewedConversationIds, t],
   )
 
   const workingSet = useMemo(

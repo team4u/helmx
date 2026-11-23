@@ -615,6 +615,7 @@ describe('EventHub transient conversation.live separation and ring defaults', { 
           thinking: 'think [REDACTED]',
           tools: [],
           updatedAt: 1000,
+          rev: 1,
         },
       })
       assert.equal(hub.seq, 0, 'transient SSE frame must not increment durable seq')

@@ -28,7 +28,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { encodeSessionDocSubParam, HelmxError } from '@helmx/protocol'
+import { diffConversationLive, encodeSessionDocSubParam, HelmxError } from '@helmx/protocol'
 import type {
   ConversationLive,
   ConversationSummary,
@@ -36,6 +36,7 @@ import type {
   HelmxEventFrame,
   HelmxResumedFrame,
   HelmxSnapshot,
+  HelmxTransientLiveDeltaFrame,
   HelmxTransientLiveFrame,
   MaybePromise,
   PublicPluginSessionDoc,
@@ -118,6 +119,10 @@ export class EventHub {
   private readonly transientListeners = new Set<(frame: HelmxTransientLiveFrame) => void>()
   /** Latest active live views per conversation (reconciled into `HelmxResumedFrame.conversationLives`). */
   private readonly latestLives = new Map<number, ConversationLive>()
+  /** Exact redacted+stamped live snapshot last broadcast to SSE streams (baseline for `conversation.live.delta`). */
+  private readonly latestLiveDeltaBase = new Map<number, ConversationLive>()
+  /** Monotonic per-conversation live revision counter for delta continuity validation. */
+  private readonly liveRevs = new Map<number, number>()
   /** Internal host event dispatcher (installed by runtime; invoked once per publish as the single dispatch boundary). */
   private hostDispatcher: HostEventDispatcher | undefined
   private readonly snapshot: SnapshotProvider
@@ -174,6 +179,8 @@ export class EventHub {
     this.transientStreamSenders.clear()
     this.transientListeners.clear()
     this.latestLives.clear()
+    this.latestLiveDeltaBase.clear()
+    this.liveRevs.clear()
     this.hostDispatcher = undefined
   }
 
@@ -228,13 +235,27 @@ export class EventHub {
    */
   publishTransientLive(live: ConversationLive): MaybePromise<void> | undefined {
     const validated = validateAndRedactConversationLive(live, (t) => this.redact(t))
-    if (isActiveLiveView(validated)) {
-      this.latestLives.set(validated.conversationId, validated)
+    const nextRev = (this.liveRevs.get(validated.conversationId) ?? 0) + 1
+    this.liveRevs.set(validated.conversationId, nextRev)
+    const stamped: ConversationLive = { ...validated, rev: nextRev }
+    const prevBase = this.latestLiveDeltaBase.get(stamped.conversationId)
+    let chunk: Uint8Array
+    if (prevBase !== undefined && prevBase.rev !== undefined) {
+      const deltaFrame: HelmxTransientLiveDeltaFrame = {
+        delta: diffConversationLive(prevBase, stamped, prevBase.rev, nextRev),
+      }
+      chunk = encodeSseChunk('conversation.live.delta', deltaFrame)
     } else {
-      this.latestLives.delete(validated.conversationId)
+      const fullFrame: HelmxTransientLiveFrame = { live: stamped }
+      chunk = encodeSseChunk('conversation.live', fullFrame)
     }
-    const frame: HelmxTransientLiveFrame = { live: validated }
-    const chunk = encodeSseChunk('conversation.live', frame)
+    if (isActiveLiveView(stamped)) {
+      this.latestLives.set(stamped.conversationId, stamped)
+      this.latestLiveDeltaBase.set(stamped.conversationId, stamped)
+    } else {
+      this.latestLives.delete(stamped.conversationId)
+      this.latestLiveDeltaBase.delete(stamped.conversationId)
+    }
     for (const send of [...this.transientStreamSenders]) {
       try {
         send(chunk)
@@ -242,9 +263,10 @@ export class EventHub {
         // isolate broken stream sender (stream cleanup already ran on shutdown)
       }
     }
+    const listenerFrame: HelmxTransientLiveFrame = { live: validated }
     for (const listen of [...this.transientListeners]) {
       try {
-        listen(frame)
+        listen(listenerFrame)
       } catch {
         // isolate broken programmatic listener
       }
@@ -264,6 +286,9 @@ export class EventHub {
     if (event.type === 'conversation.upsert' && 'conversation' in event) {
       const conv = event.conversation as ConversationSummary
       if (conv.status !== 'working' && conv.status !== 'blocked') {
+        // Clients clear/rewrite their local live slot on terminal upsert, so drop the delta baseline
+        // to force the next publishTransientLive to emit a self-contained full `conversation.live` frame.
+        this.latestLiveDeltaBase.delete(conv.id)
         const existing = this.latestLives.get(conv.id)
         if (existing !== undefined) {
           if ((existing.queuedInputs?.length ?? 0) > 0) {
@@ -280,7 +305,10 @@ export class EventHub {
         }
       }
     } else if (event.type === 'conversation.deleted' && 'conversationId' in event) {
-      this.latestLives.delete((event as { conversationId: number }).conversationId)
+      const id = (event as { conversationId: number }).conversationId
+      this.latestLives.delete(id)
+      this.latestLiveDeltaBase.delete(id)
+      this.liveRevs.delete(id)
     }
   }
 
@@ -313,6 +341,21 @@ export class EventHub {
   currentSnapshot(): HelmxSnapshot {
     const snap = this.snapshot()
     const redacted = redactJsonValue(pruneUndefined(snap, new WeakSet()), (t) => this.redact(t)) as HelmxSnapshot
+    // Align snapshot conversationLives with the active SSE delta baseline (carrying exact `rev`) so newly
+    // connecting clients seamlessly consume subsequent shared `conversation.live.delta` frames.
+    if (this.latestLiveDeltaBase.size > 0) {
+      const aligned: ConversationLive[] = []
+      const seen = new Set<number>()
+      for (const item of redacted.conversationLives ?? []) {
+        const base = this.latestLiveDeltaBase.get(item.conversationId)
+        aligned.push(base !== undefined ? base : item)
+        seen.add(item.conversationId)
+      }
+      for (const [conversationId, base] of this.latestLiveDeltaBase) {
+        if (!seen.has(conversationId)) aligned.push(base)
+      }
+      redacted.conversationLives = aligned
+    }
     return { ...redacted, seq: Math.max(snap.seq, this.seqValue), bootId: this.bootId, serverTime: Date.now() }
   }
 

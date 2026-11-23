@@ -527,6 +527,10 @@ export class ConversationService {
     return this.profileAlignment.alignConversationModel(id, emitEvent)
   }
 
+  async alignAllConversations(): Promise<void> {
+    return this.profileAlignment.alignAllConversations()
+  }
+
   async alignProfileConversations(profileId: string): Promise<void> {
     return this.profileAlignment.alignProfileConversations(profileId)
   }

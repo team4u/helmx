@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { isPluginSummaryActive as protocolIsPluginSummaryActive } from '@helmx/protocol/browser'
 import type { ConversationDetail, ConversationLive, ConversationSummary, HelmxSnapshot } from '@helmx/protocol'
-import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveFrame, emptyLiveState, entryMatchesReference, isPluginSummaryActive, mergeConversationDetail, omitPluginDocLoadErrors, reconcilePluginsState, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
+import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveDeltaFrame, applyTransientLiveFrame, emptyLiveState, entryMatchesReference, isPluginSummaryActive, mergeConversationDetail, omitPluginDocLoadErrors, reconcilePluginsState, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
 import { normalizeModelCatalogInfo } from '../src/lib/api.js'
 import type { NodeInfo } from '@helmx/protocol'
 
@@ -591,4 +591,95 @@ test('reconcilePluginsState 按摘要对账 plugins/uiContributions/pluginDocs�
   assert.equal(recoverRes.inactivePluginIds.has('fail'), false)
   assert.equal(recoverRes.invalidatedDocPluginIds.has('fail'), true)
   assert.equal(isPluginSummaryActive, protocolIsPluginSummaryActive, 'Web live-state 必须直接复用 @helmx/protocol/browser 共享活跃谓词')
+})
+
+test('applyTransientLiveDeltaFrame 增量合并文本/思考/generation 块并严格校验 baseRev', { timeout: 60_000 }, () => {
+  const baseLive: ConversationLive = {
+    conversationId: 1,
+    text: 'hello',
+    thinking: 'step 1',
+    tools: [],
+    generation: {
+      taskId: 5,
+      attempt: 1,
+      message: {
+        content: [
+          { type: 'thinking', thinking: 'step 1' },
+          { type: 'text', text: 'hello' },
+        ],
+        usage: { output: 10 },
+      },
+    },
+    updatedAt: 100,
+    rev: 1,
+  }
+  const s0 = applyTransientLiveFrame(emptyLiveState(), { live: baseLive })
+  const s1 = applyTransientLiveDeltaFrame(s0, {
+    delta: {
+      conversationId: 1,
+      baseRev: 1,
+      rev: 2,
+      updatedAt: 150,
+      text: [5, ' world'],
+      thinking: [6, ' + step 2'],
+      generation: {
+        mode: 'patch',
+        taskId: 5,
+        attempt: 1,
+        blocks: [
+          { op: 'thinking', patch: [6, ' + step 2'] },
+          { op: 'text', patch: [5, ' world'] },
+        ],
+        usage: { output: 18 },
+      },
+    },
+  })
+  assert.equal(s1.conversationLives[1]?.text, 'hello world')
+  assert.equal(s1.conversationLives[1]?.thinking, 'step 1 + step 2')
+  assert.equal(s1.conversationLives[1]?.rev, 2)
+  assert.equal(s1.conversationLives[1]?.generation?.message?.usage?.output, 18)
+
+  // Cross-chunk redaction rewrite (prefix steps back)
+  const s2 = applyTransientLiveDeltaFrame(s1, {
+    delta: {
+      conversationId: 1,
+      baseRev: 2,
+      rev: 3,
+      updatedAt: 180,
+      text: [6, '[REDACTED]'],
+    },
+  })
+  assert.equal(s2.conversationLives[1]?.text, 'hello [REDACTED]')
+  assert.equal(s2.conversationLives[1]?.rev, 3)
+
+  // baseRev mismatch throws explicitly for clean SSE re-sync
+  assert.throws(
+    () =>
+      applyTransientLiveDeltaFrame(s2, {
+        delta: { conversationId: 1, baseRev: 2, rev: 4, updatedAt: 190, text: [0, 'x'] },
+      }),
+    /mismatch/,
+  )
+})
+
+test('SseParser 支持大分片多 chunk 线性拼接并在超 4 MiB 上限时显式抛错', { timeout: 60_000 }, () => {
+  const messages: Array<{ event: string; data: string }> = []
+  const parser = new SseParser((msg) => messages.push(msg))
+  const body = 'x'.repeat(200_000)
+  const raw = `event: conversation.live\r\ndata: ${body}\r\n\r\n`
+  // Feed in 1 KiB chunks to exercise scanFrom incremental scanning across 200 chunks
+  for (let offset = 0; offset < raw.length; offset += 1024) {
+    parser.push(raw.slice(offset, offset + 1024))
+  }
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0]?.event, 'conversation.live')
+  assert.equal(messages[0]?.data.length, 200_000)
+
+  // Exceeding 4 MiB across multi-line data triggers explicit limit error
+  const oversized = new SseParser(() => {})
+  oversized.push(`data: ${'a'.repeat(2 * 1024 * 1024)}\n`)
+  assert.throws(
+    () => oversized.push(`data: ${'b'.repeat(2 * 1024 * 1024 + 10)}\n`),
+    /client receive limit/,
+  )
 })

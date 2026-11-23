@@ -779,4 +779,78 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
       await db2.close()
     }
   })
+
+  it('deduplicates onAssistantText by entryId across repeated streaming snapshots, skips history on adoptInitial, and resets on rewind invalidation', { timeout: 60_000 }, async () => {
+    const dir = join(root, `fts-dedup-${Date.now()}`)
+    const database = await openHelmxDatabase(dir)
+    const store = new HelmxStore(database)
+    await store.load()
+    const { models, faux } = makeFauxModels()
+    const registry = createRegistry()
+    const harness = await Harness.open(
+      database.storage,
+      { models: () => models, registry, settings: { followUpMode: 'all' } },
+      BACKGROUND_CONTEXT,
+    )
+    harness.resume()
+    try {
+      const conv = await harness.createConversation(
+        { ownership: { kind: 'ownerless' }, agent: { model: { provider: 'faux', modelId: 'faux-1' } } },
+        BACKGROUND_CONTEXT,
+      )
+      const id = conv.id as number
+      store.upsertConv(convMeta(id))
+
+      // Run Turn 1 BEFORE observing to create historical pi.assistant entry
+      faux.setResponses([fauxAssistantMessage('historical answer from turn 1')])
+      await conv.submit({ type: 'input', content: 'turn 1' }, BACKGROUND_CONTEXT)
+      await conv.waitForIdle(BACKGROUND_CONTEXT)
+
+      const indexed: Array<{ id: number; entryId: number; text: string }> = []
+      const tracker = new ConversationTracker({
+        harness,
+        store,
+        events: {
+          onSummaryChanged: () => {},
+          onInputCommitted: () => {},
+          onAssistantText: (cid, entryId, text) => {
+            tracker.recordAssistantText(cid, entryId, text)
+            indexed.push({ id: cid, entryId, text })
+          },
+          onTurnSettled: () => {},
+        },
+      })
+
+      // 1. adoptInitial must NOT re-invoke onAssistantText for pre-existing pi.assistant, while seeding getLastAssistantText
+      await tracker.observe(id)
+      assert.equal(indexed.length, 0, 'adoptInitial must not re-index pre-existing pi.assistant')
+      assert.equal(tracker.getLastAssistantText(id), 'historical answer from turn 1')
+
+      // 2. Run Turn 2 with a multi-chunk response; during streaming adopt() fires many times,
+      //    yet onAssistantText must fire AT MOST ONCE per committed pi.assistant entryId
+      faux.setResponses([fauxAssistantMessage('turn 2 streaming answer ' + 'word '.repeat(200))])
+      await conv.submit({ type: 'input', content: 'turn 2' }, BACKGROUND_CONTEXT)
+      await conv.waitForIdle(BACKGROUND_CONTEXT)
+      await waitFor(() => indexed.length >= 1, 5_000)
+
+      // Drive extra writes (e.g. helmx.note) that trigger more adopt() calls without a new pi.assistant
+      await conv.submit({ type: 'write', entry: { kind: 'helmx.note', data: { ping: 1 } } }, BACKGROUND_CONTEXT)
+      await conv.submit({ type: 'write', entry: { kind: 'helmx.note', data: { ping: 2 } } }, BACKGROUND_CONTEXT)
+      await new Promise((r) => setTimeout(r, 80))
+
+      const turn2EntryIds = indexed.map((item) => item.entryId)
+      assert.equal(new Set(turn2EntryIds).size, turn2EntryIds.length, 'each pi.assistant entryId must be indexed once, never repeated on subsequent adopt() snapshots')
+      assert.equal(indexed.length, 1)
+      const indexedNumericId = indexed[0]!.entryId
+
+      // 3. invalidateLastAssistantWithin clears both lastAssistant and the dedup watermark
+      tracker.invalidateLastAssistantWithin(id, indexedNumericId, indexedNumericId)
+      assert.equal(tracker.getLastAssistantText(id), undefined)
+      tracker.close()
+    } finally {
+      await harness.close(BACKGROUND_CONTEXT)
+      await store.close()
+      await database.close()
+    }
+  })
 })

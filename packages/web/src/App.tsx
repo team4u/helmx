@@ -278,9 +278,9 @@ function HelmxShellInner({
 
   // Version awareness and auto refresh: mounted once globally (sleeps when no production entry is detected).
   const versionWatch = useVersionWatcher()
-  // 全局并发态势（与桌面折叠 Rail 同源 indicator；排除正在查看的根树）。
+  // 全局并发态势（与侧栏总览入口及 #/overview 三活跃桶 1:1 同源的 indicator）。
   // 抽屉关闭时也保持计算——badge doc 的发现与按需加载内聚在 Hook；移动端
-  // 快捷导航簇与 Rail 微标共用同一 indicator。
+  // 快捷导航簇与侧栏总览入口共用同一 indicator。
   const attention = useGlobalAttention()
   const groupedUi = useGroupedUi()
   const conversations = useConversations()
@@ -394,9 +394,9 @@ function HelmxShellInner({
           <HelmxIcon name="menu" />
         </button>
         {/* 移动端免开汉堡的一键直达：首个 quickEntry 插件视图 + 会话总览
-            （tone 灯点同源 indicator，主屏已停在入口目标时就地隐藏）；
+            （计数徽标同源 indicator，主屏已停在入口目标时就地隐藏）；
             quickEntry 徽标由插件 sidebarItem 的通用 badge 声明驱动；
-            桌面由折叠 Rail 承担同源入口，此处渲染 null。 */}
+            桌面由侧栏总览导航行承担同源入口，此处渲染 null。 */}
         <MobileQuickNav indicator={attention.indicator} quickEntry={firstQuickEntry} quickEntryBadge={quickEntryBadge} />
         {sidebarOpen && (
           <button

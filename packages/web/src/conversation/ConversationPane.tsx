@@ -124,7 +124,7 @@ export interface ConversationPaneProps {
 export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDrawer, onCloseDrawer, staged = true }: ConversationPaneProps) {
   const detail = useConversationDetail(conversationId)
   const summary = useConversationSummary(conversationId)
-  const live = useConversationLive(conversationId)
+  const live = useConversationLive(conversationId, staged)
   const groupedUi = useGroupedUi()
   const convArtifacts = useConversationArtifacts(conversationId)
   const detailError = useLoadError(`conversation:${conversationId}`)

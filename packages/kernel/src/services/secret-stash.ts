@@ -15,6 +15,8 @@ export class SecretStash {
   /** Global value-based redactions: value -> reference count (multiple registrations stack until all are disposed). */
   private readonly globalRedactions = new Map<string, number>()
   private redactionEpoch = 0
+  /** Lazily compiled global redaction regex; invalidated whenever the distinct key set changes. */
+  private compiledPattern: RegExp | undefined
 
   /**
    * Register a global value-based redaction: `redact()` replaces this value with `[REDACTED]`.
@@ -23,25 +25,41 @@ export class SecretStash {
    */
   addRedaction(value: string): () => void {
     if (typeof value !== 'string' || value === '') throw new Error('addRedaction requires a non-empty string')
-    this.globalRedactions.set(value, (this.globalRedactions.get(value) ?? 0) + 1)
+    const prev = this.globalRedactions.get(value) ?? 0
+    this.globalRedactions.set(value, prev + 1)
+    if (prev === 0) this.compiledPattern = undefined
     const epoch = this.redactionEpoch
     let removed = false
     return () => {
       if (removed || epoch !== this.redactionEpoch) return
       removed = true
       const count = this.globalRedactions.get(value) ?? 0
-      if (count <= 1) this.globalRedactions.delete(value)
-      else this.globalRedactions.set(value, count - 1)
+      if (count <= 1) {
+        this.globalRedactions.delete(value)
+        this.compiledPattern = undefined
+      } else {
+        this.globalRedactions.set(value, count - 1)
+      }
     }
+  }
+
+  private getCompiledPattern(): RegExp | undefined {
+    if (this.globalRedactions.size === 0) return undefined
+    if (this.compiledPattern === undefined) {
+      const escaped = [...this.globalRedactions.keys()]
+        .sort((a, b) => b.length - a.length)
+        .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      this.compiledPattern = new RegExp(`\\[REDACTED\\]|${escaped.join('|')}`, 'g')
+    }
+    this.compiledPattern.lastIndex = 0
+    return this.compiledPattern
   }
 
   /** Replace all registered secret values with `[REDACTED]`; existing `[REDACTED]` markers stay intact. */
   redact(text: string): string {
-    if (this.globalRedactions.size === 0) return text
-    const escaped = [...this.globalRedactions.keys()]
-      .sort((a, b) => b.length - a.length)
-      .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    const pattern = new RegExp(`\\[REDACTED\\]|${escaped.join('|')}`, 'g')
+    if (text === '' || this.globalRedactions.size === 0) return text
+    const pattern = this.getCompiledPattern()
+    if (pattern === undefined) return text
     return text.replace(pattern, (match) => (match === REDACTED_MARKER ? match : REDACTED_MARKER))
   }
 
@@ -74,17 +92,12 @@ export class SecretStash {
       push: (text) => {
         pending += text
         let keep = 0
-        const values = [...this.globalRedactions.keys()]
-        for (const value of values) if (value) keep = Math.max(keep, overlap(value, pending))
+        for (const value of this.globalRedactions.keys()) if (value) keep = Math.max(keep, overlap(value, pending))
         const last = pending.charCodeAt(pending.length - 1)
         if (last >= 0xd800 && last <= 0xdbff) keep = Math.max(keep, 1)
         let cut = pending.length - keep
-        const escaped = values
-          .filter(Boolean)
-          .sort((a, b) => b.length - a.length)
-          .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-        if (escaped.length) {
-          const pattern = new RegExp(`\\[REDACTED\\]|${escaped.join('|')}`, 'g')
+        const pattern = this.getCompiledPattern()
+        if (pattern !== undefined) {
           for (const match of pending.matchAll(pattern)) {
             if (match.index < cut && match.index + match[0].length > cut) { cut = match.index; break }
             if (match.index >= cut) break
@@ -105,6 +118,7 @@ export class SecretStash {
   /** Clear all global redaction registrations and invalidate existing disposers. */
   clear(): void {
     this.globalRedactions.clear()
+    this.compiledPattern = undefined
     this.redactionEpoch += 1
   }
 }

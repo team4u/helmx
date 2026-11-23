@@ -50,7 +50,17 @@ export class ConversationProfileService {
   constructor(private readonly host: ConversationProfileHost) {}
 
   /** Report Profile read failures separately from missing profiles so corrupt files aren't mistaken for unconfigured models. */
-  async readProfile(profileId: string): Promise<Profile | undefined> {
+  async readProfile(
+    profileId: string,
+    profileCache?: Map<string, Promise<Profile | undefined>>,
+  ): Promise<Profile | undefined> {
+    if (profileCache !== undefined) {
+      const cached = profileCache.get(profileId)
+      if (cached !== undefined) return cached
+      const loading = this.readProfile(profileId)
+      profileCache.set(profileId, loading)
+      return loading
+    }
     try {
       assertProfileId(profileId)
     } catch (error) {
@@ -77,8 +87,9 @@ export class ConversationProfileService {
   async resolveEffectiveModelDetails(
     override: string | undefined,
     profileId: string,
+    profileCache?: Map<string, Promise<Profile | undefined>>,
   ): Promise<ResolvedModelRef | undefined> {
-    const profile = await this.readProfile(profileId)
+    const profile = await this.readProfile(profileId, profileCache)
     if (profile === undefined) {
       throw new HelmxError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
     }
@@ -106,8 +117,9 @@ export class ConversationProfileService {
     profileId: string,
     modelRef?: { provider: string; modelId: string },
     tierThinkingLevel?: string,
+    profileCache?: Map<string, Promise<Profile | undefined>>,
   ): Promise<string | undefined> {
-    const profile = await this.readProfile(profileId)
+    const profile = await this.readProfile(profileId, profileCache)
     if (!profile) throw new HelmxError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
     const perModel = modelRef !== undefined ? this.host.modelThinkingLevelOf(modelRef) : undefined
     return resolveClampedThinkingLevel({
@@ -129,17 +141,28 @@ export class ConversationProfileService {
   }
 
   /** Inherit model and thinking level separately; always reconcile against SDK to heal restarts and historical fork snapshots. */
-  async alignConversationModel(id: number, emitEvent = false): Promise<void> {
+  async alignConversationModel(
+    id: number,
+    emitEvent = false,
+    profileCache?: Map<string, Promise<Profile | undefined>>,
+  ): Promise<void> {
+    const batchProfiles = profileCache ?? new Map<string, Promise<Profile | undefined>>()
     await this.withConversationChange(id, async () => {
       const meta = this.host.store.getConv(id)
       if (!meta) return
-      const resolved = await this.resolveEffectiveModelDetails(meta.modelOverride, meta.profileId)
+      const resolved = await this.resolveEffectiveModelDetails(meta.modelOverride, meta.profileId, batchProfiles)
       const effective = resolved?.canonicalRef
       const ref = resolved ? { provider: resolved.provider, modelId: resolved.modelId } : undefined
       // Also persist the clamped result of an explicit override; otherwise SDK/summary converge while the mirror keeps
       // the raw override, causing the next alignment pass to still see "effective != override".
       const clampedOverride = clampThinkingLevelForModel(this.host.models(), ref, meta.thinkingLevelOverride)
-      const thinking = await this.resolveEffectiveThinkingLevel(clampedOverride, meta.profileId, ref, resolved?.tierThinkingLevel)
+      const thinking = await this.resolveEffectiveThinkingLevel(
+        clampedOverride,
+        meta.profileId,
+        ref,
+        resolved?.tierThinkingLevel,
+        batchProfiles,
+      )
       const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
       if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       const agent = await conversation.agent(BACKGROUND_CONTEXT)
@@ -174,12 +197,29 @@ export class ConversationProfileService {
     })
   }
 
+  /** Re-align every conversation using a per-batch Profile read cache (reads each distinct Profile file at most once). */
+  async alignAllConversations(): Promise<void> {
+    const batchProfiles = new Map<string, Promise<Profile | undefined>>()
+    for (const meta of this.host.store.listConvs()) {
+      try {
+        await this.alignConversationModel(meta.id, true, batchProfiles)
+      } catch (err) {
+        // If an inherited Profile/global `tier/<id>` became unmounted (e.g. tiers plugin disabled
+        // or removed with --force), skip aligning that conversation instead of aborting alignment
+        // for unaffected conversations; active submissions still fail loudly with 404 model_tier_not_found.
+        if (err instanceof HelmxError && err.code === 'model_tier_not_found') continue
+        throw err
+      }
+    }
+  }
+
   /** Immediate inheritance cascade after saving a Profile (explicit overrides stay protected by each resolution chain). */
   async alignProfileConversations(profileId: string): Promise<void> {
+    const batchProfiles = new Map<string, Promise<Profile | undefined>>()
     for (const meta of this.host.store.listConvs()) {
       if (meta.profileId !== profileId) continue
       try {
-        await this.alignConversationModel(meta.id, true)
+        await this.alignConversationModel(meta.id, true, batchProfiles)
       } catch (err) {
         // Match `alignAllConversations`: skip conversations whose inherited `tier/<id>` is currently
         // unmounted so unrelated Profile metadata edits are not blocked; active submissions still fail with 404.

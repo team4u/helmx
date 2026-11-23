@@ -16,7 +16,7 @@
  * 诚实性：摘要只呈现真实 lastError / doing / backgroundSummary / 后代运行
  * 计数，绝不编造进度百分比；tone 只是既有五态事实的聚合灯色。逐树明细的
  * 展示形态是会话总览（overview-model 消费 aggregateAttentionTrees），侧栏
- * 只保留总览入口的脉冲灯点与真实摘要。
+ * 总览入口与移动端快捷总览按钮消费同源全局计数徽标与灯色。
  */
 
 import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
@@ -51,7 +51,11 @@ function isMachineActive(
   return conv.status === 'working' || background.get(conv.id)?.active === true
 }
 
-/** 全局态势微标（移动端汉堡 / 桌面折叠 Rail / 侧栏总览入口消费；排除正在查看的根树）。 */
+/**
+ * 全局态势微标（移动端快捷总览按钮与侧栏总览入口消费）：
+ * 与会话总览 `#/overview` 三活跃桶 1:1 同源对账——`needs_attention` 与
+ * `running` 始终计全量活跃根树，仅 `unread_done` 对正在查看的根会话做乐观已读。
+ */
 export interface GlobalAttentionIndicator {
   /** 需关注树数（error 或等待人类）。 */
   needsAttentionCount: number
@@ -89,10 +93,14 @@ export interface AttentionTreeAggregate {
 }
 
 /**
- * 按根会话树聚合全量事实（态势与总览共享的唯一聚合口径）：
+ * 按根会话树聚合全量事实（态势微标、侧栏工作集与会话总览共享的唯一聚合口径）：
  * - 沿 resolveNotificationRootId 上溯归树；根按 createdAt 倒序（同刻 id 倒序）；
  * - 暴露边界：已归档根树、根会话 Profile 被已停用插件托管的树不产出；
  *   sidebarSection 接管的会话照常纳入；
+ * - 乐观已读：若传入 viewedConversationIds，正在查看的根会话不进入
+ *   `unread_done`（与 useUnreadSync 的前台自动清未读同源，消除网络返回前
+ *   窗口期的计数与绿点错位）；`needs_attention` 与 `running` 绝不做当前
+ *   会话排除，保证所有页面的全局态势计数与总览 1:1 稳定一致；
  * - 安静树（bucket === null）也产出——总览「全部」筛选需要。
  */
 export function aggregateAttentionTrees(input: {
@@ -100,7 +108,10 @@ export function aggregateAttentionTrees(input: {
   background: ConversationBackgroundIndex
   profiles: ReadonlyArray<Profile>
   plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
+  /** 当前正在查看的会话 ID（仅用于 unread_done 乐观已读；缺省不做乐观已读）。 */
+  viewedConversationIds?: ReadonlySet<number>
 }): AttentionTreeAggregate[] {
+  const viewed = input.viewedConversationIds ?? EMPTY_VIEWED
   const byId = new Map<number, ConversationSummary>(
     input.conversations.map((conversation) => [conversation.id, conversation] as const),
   )
@@ -145,7 +156,7 @@ export function aggregateAttentionTrees(input: {
       ? 'needs_attention'
       : hasMachineActive
         ? 'running'
-        : !isAutomatedRoot && root.status === 'done' && root.unread === true
+        : !isAutomatedRoot && root.status === 'done' && root.unread === true && !viewed.has(root.id)
           ? 'unread_done'
           : null
 
@@ -187,24 +198,18 @@ export function aggregateAttentionTrees(input: {
 }
 
 /**
- * 构建全局态势微标（汉堡/Rail/侧栏总览入口的同源 indicator）：
- * - 聚合口径见 aggregateAttentionTrees（树成员、桶归属）；
- * - 按「成员级排除」重算：只剔除当前主屏/分屏正在查看的那一个会话的信号
- *   ——同根其他后代的 Ask / 运行事实绝不被正在查看的面板抹掉；整棵树的
- *   信号都落在被查看会话上时该树才退出计数。
+ * 构建全局态势微标（移动端总览按钮与侧栏总览入口的同源 indicator）：
+ * 直接汇总 aggregateAttentionTrees 的三桶结果与最高优先级灯色
+ * （error > blocked > running > done），与 `#/overview` 桶计数 1:1 同源对账。
  */
 export function buildAttentionModel(input: {
   conversations: ReadonlyArray<ConversationSummary>
   background: ConversationBackgroundIndex
   profiles: ReadonlyArray<Profile>
   plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
-  /** 当前主屏/分屏正在查看的会话 ID（成员级排除；缺省不排除任何信号）。 */
+  /** 当前正在查看的会话 ID（透传给 aggregateAttentionTrees 做 unread_done 乐观已读）。 */
   viewedConversationIds?: ReadonlySet<number>
-  /** Locale translator（后代运行计数文案）；缺省英文桥接。 */
-  t?: WebMessageTranslator
 }): GlobalAttentionIndicator {
-  const viewed = input.viewedConversationIds ?? EMPTY_VIEWED
-
   let needsAttentionCount = 0
   let runningCount = 0
   let unreadDoneCount = 0
@@ -212,36 +217,21 @@ export function buildAttentionModel(input: {
   let toneRank = 0
   let tone: GlobalAttentionTone = null
   for (const aggregate of aggregateAttentionTrees(input)) {
-    const { root, members } = aggregate
-
-    // 微标成员级排除：剔除正在查看的会话信号后重算桶（同根其他后代的
-    // Ask/运行事实保留；整树信号都在被查看会话上才退出计数）。
-    let viewedHasError = false
-    let viewedHasWaiting = false
-    let viewedHasMachineActive = false
-    for (const member of members) {
-      if (viewed.has(member.id)) continue
-      if (member.status === 'error') viewedHasError = true
-      if (isWaitingForHuman(member)) viewedHasWaiting = true
-      if (isMachineActive(member, input.background)) viewedHasMachineActive = true
-    }
-    const isAutomatedRoot = root.ownedBy === 'helmx'
-    const indicatorBucket: AttentionBucket | null = viewedHasError || viewedHasWaiting
-      ? 'needs_attention'
-      : !isAutomatedRoot && viewedHasMachineActive
-        ? 'running'
-        : !isAutomatedRoot && !viewed.has(root.id) && root.status === 'done' && root.unread === true
-          ? 'unread_done'
-          : null
-
-    if (indicatorBucket === null) continue
-
+    if (aggregate.bucket === null) continue
+    // 自动化顶层根树：后台运行/完成保持静默，仅在 error/blocked 时计入全局态势微标。
+    if (aggregate.root.ownedBy === 'helmx' && aggregate.bucket !== 'needs_attention') continue
     totalCount += 1
-    if (indicatorBucket === 'needs_attention') needsAttentionCount += 1
-    else if (indicatorBucket === 'running') runningCount += 1
+    if (aggregate.bucket === 'needs_attention') needsAttentionCount += 1
+    else if (aggregate.bucket === 'running') runningCount += 1
     else unreadDoneCount += 1
     const indicatorTone: Exclude<GlobalAttentionTone, null> =
-      indicatorBucket === 'needs_attention' ? (viewedHasError ? 'error' : 'blocked') : indicatorBucket === 'running' ? 'running' : 'done'
+      aggregate.bucket === 'needs_attention'
+        ? aggregate.hasError
+          ? 'error'
+          : 'blocked'
+        : aggregate.bucket === 'running'
+          ? 'running'
+          : 'done'
     if (TONE_RANK[indicatorTone] > toneRank) {
       toneRank = TONE_RANK[indicatorTone]
       tone = indicatorTone
@@ -280,16 +270,9 @@ export function composeHonestTreeSummary(input: {
 }
 
 /**
- * 全量聚合微标的输入条目：一棵树的桶归属与聚合灯色（不绑定展示形态）。
- */
-export interface AttentionIndicatorEntry {
-  bucket: AttentionBucket
-  tone: Exclude<GlobalAttentionTone, null>
-}
-
-/**
- * 收集当前主屏/分屏正在查看的会话 ID（微标成员级排除的输入——精确到会话，
- * 不上卷整棵根树：同根其他后代的 Ask / 运行事实不允许被正在查看的面板抹掉）。
+ * 收集当前主屏/分屏/顶层抽屉/关联弹窗正在查看的会话 ID：
+ * 供 aggregateAttentionTrees 的 `unread_done` 乐观已读与卡片绿点即时消除使用
+ * （与 useUnreadSync 的前台可见会话口径严格同源）。
  */
 export function collectViewedConversationIds(input: {
   primaryTarget: ResolvedTarget | null
@@ -322,35 +305,8 @@ const TONE_RANK: Record<Exclude<GlobalAttentionTone, null>, number> = {
 const EMPTY_VIEWED: ReadonlySet<number> = new Set()
 
 /**
- * 全量聚合微标（不做任何排除）：按桶计数，tone 取最高优先级
- * （error > blocked > running > done）；无任何信号时 tone 为 null。
- * 供无「正在查看」概念的调用方使用；带排除语义的微标走 buildAttentionModel。
- */
-export function resolveGlobalAttentionIndicator(
-  items: ReadonlyArray<AttentionIndicatorEntry>,
-): GlobalAttentionIndicator {
-  let needsAttentionCount = 0
-  let runningCount = 0
-  let unreadDoneCount = 0
-  let totalCount = 0
-  let toneRank = 0
-  let tone: GlobalAttentionTone = null
-  for (const item of items) {
-    totalCount += 1
-    if (item.bucket === 'needs_attention') needsAttentionCount += 1
-    else if (item.bucket === 'running') runningCount += 1
-    else unreadDoneCount += 1
-    if (TONE_RANK[item.tone] > toneRank) {
-      toneRank = TONE_RANK[item.tone]
-      tone = item.tone
-    }
-  }
-  return { needsAttentionCount, runningCount, unreadDoneCount, totalCount, tone }
-}
-
-/**
- * 态势可读摘要（汉堡/Rail 的 aria-label / title 附加段）：只列出非零桶，
- * 以「 · 」连接；无信号返回空串（调用方据此不加后缀）。
+ * 态势可读摘要（移动端总览按钮与侧栏总览入口的 aria-label / title 附加段）：
+ * 只列出非零桶，以「 · 」连接；无信号返回空串（调用方据此不加后缀）。
  */
 export function composeAttentionSummary(
   indicator: GlobalAttentionIndicator,
