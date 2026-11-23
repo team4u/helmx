@@ -544,6 +544,125 @@ describe("conversation-outline", () => {
     assert.equal(labels().length, 5)
   })
 
+  test('ConversationPane 大纲当前项粒度：同一回合多个标题仅「当前读到的标题节」一个 is-current，滚动推进时随之移动且父提问不铺底色', { timeout: 60_000 }, async () => {
+    // 机制替身：IO 交出「越过基线区」的包装行；滚动几何与标题位置随 scrollTop 联动（远离底部 → 固定 96px 基线）
+    class FakeIO {
+      static instances: FakeIO[] = []
+      readonly targets = new Set<Element>()
+      disconnected = false
+      constructor(private readonly cb: (entries: unknown[]) => void) {
+        FakeIO.instances.push(this)
+      }
+      observe(target: Element): void { this.targets.add(target) }
+      unobserve(): void {}
+      disconnect(): void { this.disconnected = true }
+      deliver(entries: Array<{ target: Element; isIntersecting: boolean }>): void {
+        this.cb(entries.map((entry) => ({ ...entry, intersectionRatio: entry.isIntersecting ? 1 : 0 })))
+      }
+    }
+    const conv = makeConv(12)
+    const entries: ConversationEntry[] = [
+      { id: '101', kind: 'helmx.input', data: { id: 'q1', text: '介绍内核架构', origin: 'human' }, createdAt: 1000 },
+      {
+        id: '102',
+        kind: 'pi.assistant',
+        model: [
+          { role: 'assistant', content: [{ type: 'text', text: '# 微内核\n正文一\n## 插件宿主\n正文二\n## 编排引擎\n正文三' }] },
+        ],
+      },
+      { id: '103', kind: 'helmx.input', data: { id: 'q2', text: '继续深入', origin: 'human' }, createdAt: 2000 },
+      {
+        id: '104',
+        kind: 'pi.assistant',
+        model: [{ role: 'assistant', content: [{ type: 'text', text: '后续回答\n'.repeat(600) }] }],
+      },
+    ]
+    const store = makeTestStore({ conversations: [conv], conversationDetails: { 12: { ...conv, entries } } })
+    const savedIO = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
+    ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeIO as unknown as typeof IntersectionObserver
+    const origGBCR = Element.prototype.getBoundingClientRect
+    let scrollTop = 0
+    const headingDocTops = new Map<Element, number>()
+    try {
+      host = document.createElement('div')
+      document.body.appendChild(host)
+      await act(async () => {
+        root = createRoot(host!)
+        root.render(e(HostStoreProviders, { value: store }, e(ConversationPane, { conversationId: 12 })))
+      })
+      const scroller = host.querySelector<HTMLElement>('.timeline-scroll')!
+      const turn = host.querySelector<HTMLElement>('[data-entry-id="102"]')!
+      const headings = [...turn.querySelectorAll<HTMLElement>('.msg-ai-body h1, .msg-ai-body h2')]
+      assert.equal(headings.length, 3, '回合内渲染三个标题 DOM')
+      // 文档内偏移：h1=600，h2=900，h3=1300；scrollHeight=12000/视口 800 → 距底远大于 240，基线固定 96px
+      headingDocTops.set(headings[0]!, 600)
+      headingDocTops.set(headings[1]!, 900)
+      headingDocTops.set(headings[2]!, 1300)
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => 12000 })
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, get: () => 800 })
+      Object.defineProperty(scroller, 'scrollTop', {
+        configurable: true,
+        get: () => scrollTop,
+        set: (v: number) => {
+          scrollTop = Math.max(0, Math.min(v, 11200))
+        },
+      })
+      Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
+        const base = headingDocTops.get(this)
+        if (base !== undefined) {
+          const top = base - scrollTop
+          return { top, bottom: top + 28, left: 0, right: 0, width: 0, height: 28, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+        }
+        if (this === scroller) {
+          return { top: 0, bottom: 800, left: 0, right: 0, width: 0, height: 800, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+        }
+        return origGBCR.call(this)
+      }
+      scrollTop = 810 // h1 top=-210、h2 top=90（越过）、h3 top=490（未越过）
+      const io = FakeIO.instances[FakeIO.instances.length - 1]!
+      const wrappers = [...host.querySelectorAll<HTMLElement>('[data-entry-id]')]
+      io.deliver([
+        { target: wrappers[0]!, isIntersecting: true },
+        { target: wrappers[1]!, isIntersecting: true },
+        { target: wrappers[2]!, isIntersecting: false },
+        { target: wrappers[3]!, isIntersecting: false },
+      ])
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+
+      // 打开浮层：当前项有且只有一个，且是第二个标题「插件宿主」；第一/第三个标题与父提问均不高亮
+      await act(async () => {
+        host!.querySelector<HTMLButtonElement>('.conversation-outline-trigger')!.click()
+      })
+      const currentItems = (): HTMLElement[] =>
+        [...document.querySelectorAll<HTMLElement>('.conversation-outline-item.is-current')]
+      assert.equal(currentItems().length, 1, '任何时刻至多一个 is-current（根因回归：同回合三标题不再一起高亮）')
+      assert.match(currentItems()[0]!.className, /conversation-outline-heading-h2/)
+      assert.match(currentItems()[0]!.textContent ?? '', /插件宿主/)
+
+      // 下滚使第三个标题越过基线 → 当前项推进到「编排引擎」，仍只有一个
+      scrollTop = 1210 // h3 top=90
+      await act(async () => {
+        scroller.dispatchEvent(new Event('scroll'))
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      })
+      assert.equal(currentItems().length, 1)
+      assert.match(currentItems()[0]!.textContent ?? '', /编排引擎/)
+
+      // 回到回合开头（无标题越过）→ 回退为该回合首个节点（首个标题），父提问行依旧不铺底色
+      scrollTop = 0
+      await act(async () => {
+        scroller.dispatchEvent(new Event('scroll'))
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      })
+      assert.equal(currentItems().length, 1)
+      assert.match(currentItems()[0]!.textContent ?? '', /微内核/)
+      assert.equal(document.querySelectorAll('.conversation-outline-human.is-current').length, 0, '助手回合激活时父提问行不高亮')
+    } finally {
+      Element.prototype.getBoundingClientRect = origGBCR
+      ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = savedIO
+    }
+  })
+
   test('ConversationPane 顶栏浮层展示创建时间/累计运行/已结算轮次/实时计时，大纲顶栏与助手行展示单轮与累计耗时', { timeout: 60_000 }, async () => {
     resetServerClock()
     const createdAt = new Date(2026, 10, 10, 14, 0, 0).getTime()

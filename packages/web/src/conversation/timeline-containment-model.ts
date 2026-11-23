@@ -14,7 +14,8 @@
  * intersection means "row top has passed the container top + OUTLINE_ACTIVE_LINE_PX baseline",
  * aligning with outline-model.resolveActiveOutlineEntryId's "last anchor past the baseline,
  * first anchor when none has passed" semantics, without forcing layout on the whole list via
- * getBoundingClientRect for offscreen rows.
+ * getBoundingClientRect for offscreen rows. Near the scroll bottom the baseline widens
+ * (resolveOutlineReadingBaseline) so a short trailing section that can never cross 96px still activates.
  */
 
 import type { TimelineItem } from './timeline-model.js'
@@ -188,20 +189,43 @@ export function supportsTimelineContainment(): boolean {
 export const OUTLINE_ACTIVE_LINE_PX = 96
 
 /**
- * Derive the active anchor index from the set of currently intersecting anchor indexes (the IO-path decision core):
- * - take the last intersecting anchor in DOM (index) order, aligning with resolveActiveOutlineEntryId's
+ * Near-bottom zone (px): when the distance to the scroll bottom is below this value the reading baseline expands
+ * linearly toward the viewport bottom (reaching it exactly when stuck to the bottom). Same threshold as the
+ * timeline "back to bottom" button, i.e. the same "near the end" notion.
+ */
+export const OUTLINE_BOTTOM_ZONE_PX = 240
+
+/**
+ * Resolve the reading baseline (px from the container's visible top) for the current scroll position:
+ * - far from the bottom (distance >= OUTLINE_BOTTOM_ZONE_PX): the fixed 96px top baseline;
+ * - approaching the bottom: the baseline grows linearly to the viewport height, so once the container is stuck to
+ *   the bottom every row still on screen counts as passed. Without this, a short trailing section whose heading can
+ *   never cross 96px (the container cannot scroll further) would stay unhighlighted in favour of an earlier section;
+ *   the linear ramp keeps the hand-over continuous while scrolling instead of flipping at a single threshold.
+ */
+export function resolveOutlineReadingBaseline(distanceFromBottomPx: number, viewportHeightPx: number): number {
+  const viewport = Number.isFinite(viewportHeightPx) ? Math.max(0, viewportHeightPx) : OUTLINE_ACTIVE_LINE_PX
+  const distance = Number.isFinite(distanceFromBottomPx) ? Math.max(0, distanceFromBottomPx) : OUTLINE_BOTTOM_ZONE_PX
+  if (distance >= OUTLINE_BOTTOM_ZONE_PX) return OUTLINE_ACTIVE_LINE_PX
+  const ramp = 1 - distance / OUTLINE_BOTTOM_ZONE_PX
+  return OUTLINE_ACTIVE_LINE_PX + (viewport - OUTLINE_ACTIVE_LINE_PX) * ramp
+}
+
+/**
+ * Derive the active anchor index from the set of anchors that passed the reading baseline (the IO-path decision core):
+ * - take the last passed anchor in DOM (index) order, aligning with resolveActiveOutlineEntryId's
  *   "last anchor past the baseline" semantics (the observer's rootMargin narrows the intersection zone's
  *   bottom edge to the baseline; a row intersects iff its top has passed the baseline and its body is not far taller than the viewport);
  * - an empty set (all anchors below the baseline, e.g. just opened or scrolled to the very top) falls back to the first anchor;
  * - no anchors returns -1.
  */
 export function resolveActiveAnchorIndex(
-  intersecting: ReadonlySet<number>,
+  passedBaseline: ReadonlySet<number>,
   anchorCount: number,
 ): number {
   if (anchorCount === 0) return -1
   let max = -1
-  for (const idx of intersecting) {
+  for (const idx of passedBaseline) {
     if (idx < 0 || idx >= anchorCount) continue
     if (idx > max) max = idx
   }

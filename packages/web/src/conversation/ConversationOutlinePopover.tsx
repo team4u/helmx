@@ -11,23 +11,23 @@ import {
 import {
   countOutlineTurns,
   filterOutlineNodes,
+  type OutlineAnchor,
   type OutlineFilterMode,
   type OutlineNode,
 } from './outline-model.js'
 
-export interface OutlineJumpTarget {
-  entryId: string
-  headingIndex?: number
-  /** 回合内业务卡二级锚（AssistantTurn 顶层 tool.view 卡的 tool key）。 */
-  cardId?: string
+/** 大纲节点跳转目标：时间线包装 entryId + 回合内二级锚（headingIndex / cardId）+ 节点 key。 */
+export interface OutlineJumpTarget extends OutlineAnchor {
   nodeKey?: string
 }
 
 export interface ConversationOutlinePopoverProps {
   nodes: ReadonlyArray<OutlineNode>
-  /** 当前视口阅读位置对应的激活 entryId。 */
-  activeEntryId?: string
-  /** 当前大纲节点的唯一 key；文档大纲使用它区分同一 entryId 下的不同标题。 */
+  /**
+   * 当前阅读位置对应的大纲节点唯一 key（唯一激活通路，任何时刻至多一个 `is-current`）：
+   * 会话大纲由 `resolveOutlineNodeKey` 从阅读锚点推导（同一助手回合内精确到当前读到的标题节），
+   * 文档大纲用 `outline:markdown:<index>` 区分同一 entryId 下的不同标题。
+   */
   activeNodeKey?: string
   /** 触发按钮文案，默认「大纲」。 */
   triggerLabel?: string
@@ -68,7 +68,6 @@ export interface ConversationOutlinePopoverProps {
  */
 export function ConversationOutlinePopover({
   nodes,
-  activeEntryId,
   activeNodeKey,
   triggerLabel,
   triggerTitle,
@@ -151,13 +150,6 @@ export function ConversationOutlinePopover({
     }
     if (activeNodeKey !== undefined) {
       const idx = filtered.findIndex((n) => n.key === activeNodeKey)
-      if (idx >= 0) {
-        setSelectedIdx(idx)
-        return
-      }
-    }
-    if (activeEntryId !== undefined) {
-      const idx = filtered.findIndex((n) => n.entryId === activeEntryId)
       if (idx >= 0) {
         setSelectedIdx(idx)
         return
@@ -318,9 +310,7 @@ export function ConversationOutlinePopover({
             ) : (
               filtered.map((node, idx) => {
                 const isSelected = idx === selectedIdx
-                const isActive = activeNodeKey !== undefined
-                  ? node.key === activeNodeKey
-                  : activeEntryId !== undefined && node.entryId === activeEntryId
+                const isActive = activeNodeKey !== undefined && node.key === activeNodeKey
 
                 if (node.kind === 'divider') {
                   return (

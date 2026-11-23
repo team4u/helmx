@@ -10,14 +10,18 @@ import { HostStoreProviders } from './helpers/host-store.js'
 import { renderToString } from 'react-dom/server'
 import {
   CONTAINMENT_INTRINSIC_PX,
+  OUTLINE_ACTIVE_LINE_PX,
+  OUTLINE_BOTTOM_ZONE_PX,
   containmentClassName,
   estimateContainmentBucket,
   resolveActiveAnchorIndex,
   resolveCharsPerLine,
   resolveContainmentClass,
+  resolveOutlineReadingBaseline,
   supportsTimelineContainment,
   timelineAnchorId,
 } from '../src/conversation/timeline-containment-model.js'
+import type { OutlineAnchor } from '../src/conversation/outline-model.js'
 import { LazyMount } from '../src/ui/LazyMount.js'
 import { MarkdownView } from '../src/conversation/MarkdownView.js'
 import {
@@ -150,6 +154,32 @@ describe("timeline-containment", () => {
     assert.equal(resolveActiveAnchorIndex(new Set([9]), 5), 0)
   })
 
+  test('resolveOutlineReadingBaseline：远离底部固定 96px，近底区线性展开到视口下缘，贴底时恰为视口高', { timeout: 60_000 }, () => {
+    const viewport = 800
+    // 距底 ≥ 近底区（240px）：固定顶部基线
+    assert.equal(resolveOutlineReadingBaseline(OUTLINE_BOTTOM_ZONE_PX, viewport), OUTLINE_ACTIVE_LINE_PX)
+    assert.equal(resolveOutlineReadingBaseline(5000, viewport), OUTLINE_ACTIVE_LINE_PX)
+    // 贴底（含橡皮筋负值）：基线 = 视口高 → 屏幕内最后一行也算越过
+    assert.equal(resolveOutlineReadingBaseline(0, viewport), viewport)
+    assert.equal(resolveOutlineReadingBaseline(-40, viewport), viewport)
+    // 线性插值：距底 120px（半程）时基线位于 96 与 800 的中点
+    const mid = resolveOutlineReadingBaseline(OUTLINE_BOTTOM_ZONE_PX / 2, viewport)
+    assert.ok(Math.abs(mid - (OUTLINE_ACTIVE_LINE_PX + (viewport - OUTLINE_ACTIVE_LINE_PX) / 2)) < 1e-9)
+    // 单调：越靠近底部基线越大，绝不在阈值处跳变
+    let prev = resolveOutlineReadingBaseline(OUTLINE_BOTTOM_ZONE_PX, viewport)
+    for (let d = OUTLINE_BOTTOM_ZONE_PX - 1; d >= 0; d -= 1) {
+      const next = resolveOutlineReadingBaseline(d, viewport)
+      assert.ok(next >= prev, `基线随距底减小单调不减（d=${d}: ${next} < ${prev}）`)
+      prev = next
+    }
+    // 非法输入防御：视口高非法回退 96；距底非法视为远离底部
+    assert.equal(resolveOutlineReadingBaseline(0, Number.NaN), OUTLINE_ACTIVE_LINE_PX)
+    assert.equal(resolveOutlineReadingBaseline(Number.NaN, viewport), OUTLINE_ACTIVE_LINE_PX)
+    // 小视口（< 96px）：贴底时基线收敛到视口高，不超过 96
+    assert.equal(resolveOutlineReadingBaseline(0, 50), 50)
+    assert.ok(resolveOutlineReadingBaseline(OUTLINE_BOTTOM_ZONE_PX / 2, 50) <= OUTLINE_ACTIVE_LINE_PX)
+  })
+
   test('supportsTimelineContainment：happy-dom 环境为 true；CSS 不可用时为 false', { timeout: 60_000 }, () => {
     assert.equal(supportsTimelineContainment(), true)
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'CSS')
@@ -191,7 +221,7 @@ describe("timeline-containment", () => {
     live?: ConversationLive
     highlightedEntry?: { conversationId: number; entryId: string } | null
     outlineScrollRequest?: OutlineScrollRequest | null
-    onActiveEntryChange?: (entryId: string | undefined) => void
+    onActiveOutlineChange?: (anchor: OutlineAnchor | undefined) => void
   }
 
   async function renderTimeline(opts: RenderOptions): Promise<ReturnType<typeof makeTestStore>> {
@@ -215,7 +245,7 @@ describe("timeline-containment", () => {
             onRequestEdit: () => {},
             ...(opts.live !== undefined ? { live: opts.live } : {}),
             ...(opts.outlineScrollRequest !== undefined ? { outlineScrollRequest: opts.outlineScrollRequest } : {}),
-            ...(opts.onActiveEntryChange !== undefined ? { onActiveEntryChange: opts.onActiveEntryChange } : {}),
+            ...(opts.onActiveOutlineChange !== undefined ? { onActiveOutlineChange: opts.onActiveOutlineChange } : {}),
           }),
         ),
       )
@@ -302,7 +332,7 @@ describe("timeline-containment", () => {
 
     // 第二阶段：带 headingIndex 的定位请求 → 解除隔离后滚动到精确 <h2>
     const scrolled: Array<{ el: HTMLElement; wrapperClass: string }> = []
-    const activeCalls: Array<string | undefined> = []
+    const activeCalls: Array<OutlineAnchor | undefined> = []
     const origScrollIntoView = HTMLElement.prototype.scrollIntoView
     HTMLElement.prototype.scrollIntoView = function () {
       const wrapper = this.closest('[data-entry-id]')
@@ -312,7 +342,7 @@ describe("timeline-containment", () => {
       await renderTimeline({
         entries,
         outlineScrollRequest: { entryId: '2', headingIndex: 1, tick: 1 },
-        onActiveEntryChange: (id) => activeCalls.push(id),
+        onActiveOutlineChange: (anchor) => activeCalls.push(anchor),
       })
       assert.ok(scrolled.length > 0, '大纲定位触发 scrollIntoView')
       const last = scrolled[scrolled.length - 1]!
@@ -321,7 +351,11 @@ describe("timeline-containment", () => {
       assert.equal(/\btl-cv-/.test(last.wrapperClass), false, '滚动发生时目标行已解除渲染隔离（真实布局测量）')
       const wrapper = host!.querySelector<HTMLElement>('[data-entry-id="2"]')
       assert.match(wrapper?.className ?? '', /entry-highlighted/, '目标回合触发闪烁高亮')
-      assert.ok(activeCalls.includes('2'), '定位后同步通知当前激活锚点')
+      assert.deepEqual(
+        activeCalls[activeCalls.length - 1],
+        { entryId: '2', headingIndex: 1 },
+        '定位后同步通知当前激活锚点：精确到被点击的标题（而非整个回合）',
+      )
     } finally {
       HTMLElement.prototype.scrollIntoView = origScrollIntoView
     }
@@ -368,10 +402,10 @@ describe("timeline-containment", () => {
     const savedIO = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
     ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeIntersectionObserver
     try {
-      const activeCalls: Array<string | undefined> = []
+      const activeCalls: Array<OutlineAnchor | undefined> = []
       await renderTimeline({
         entries: [humanEntry('1', '一'), humanEntry('2', '二'), humanEntry('3', '三'), humanEntry('4', '四')],
-        onActiveEntryChange: (id) => activeCalls.push(id),
+        onActiveOutlineChange: (anchor) => activeCalls.push(anchor),
       })
       const io = FakeIntersectionObserver.instances[FakeIntersectionObserver.instances.length - 1]
       assert.ok(io, '渲染后建立阅读锚点观察器')
@@ -387,13 +421,13 @@ describe("timeline-containment", () => {
         { target: anchors[2]!, isIntersecting: true },
         { target: anchors[3]!, isIntersecting: false },
       ])
-      assert.equal(activeCalls[activeCalls.length - 1], '3')
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '3' })
       // 第四行也越过 → 激活推进
       io.deliver([{ target: anchors[3]!, isIntersecting: true }])
-      assert.equal(activeCalls[activeCalls.length - 1], '4')
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '4' })
       // 上滚：第四行离开 → 激活回退
       io.deliver([{ target: anchors[3]!, isIntersecting: false }])
-      assert.equal(activeCalls[activeCalls.length - 1], '3')
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '3' })
 
       // 滚动事件不得触发整列 rect 测量（IO 路径零 getBoundingClientRect）
       const origGBCR = Element.prototype.getBoundingClientRect
@@ -435,7 +469,7 @@ describe("timeline-containment", () => {
                 conversation: conv,
                 detailEntries,
                 onRequestEdit: () => {},
-                onActiveEntryChange: () => {},
+                onActiveOutlineChange: () => {},
               }),
             ),
           )
@@ -455,24 +489,229 @@ describe("timeline-containment", () => {
     }
   })
 
-  test('无 IO 环境退化路径：rAF 节流整列测量，语义同 resolveActiveOutlineEntryId', { timeout: 60_000 }, async () => {
+  test('无 IO 环境退化路径：rAF 节流仅测量基线下方屏幕内的行，语义同 resolveActiveOutlineEntryId', { timeout: 60_000 }, async () => {
     const savedIO = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
     ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = undefined
-    const activeCalls: Array<string | undefined> = []
+    const activeCalls: Array<OutlineAnchor | undefined> = []
     try {
       await renderTimeline({
         entries: [humanEntry('1', '一'), humanEntry('2', '二'), humanEntry('3', '三')],
-        onActiveEntryChange: (id) => activeCalls.push(id),
+        onActiveOutlineChange: (anchor) => activeCalls.push(anchor),
       })
       // happy-dom 中所有 rect top=0（均未越过基准线下方）→ 激活最后一个锚点
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
-      assert.equal(activeCalls[activeCalls.length - 1], '3')
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '3' })
       // 滚动事件再触发一次测量：结果不变（去重，不重复上报）
       const callsBefore = activeCalls.length
       host!.querySelector('.timeline-scroll')!.dispatchEvent(new Event('scroll'))
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
       assert.equal(activeCalls.length, callsBefore)
     } finally {
+      ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = savedIO
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // 5b. 大纲当前项粒度：回合内标题节 / 近底基线展开 / 跳转锁定
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 浏览器一致的滚动几何替身：scrollTop 写入截断到 [0, scrollHeight-clientHeight]；标题位置随
+   * scrollTop 联动（top = 文档内偏移 - scrollTop），与真实布局几何一致。
+   */
+  function installScrollGeometry(
+    scroller: HTMLElement,
+    geometry: { scrollHeight: number; clientHeight: number },
+    headingTops: Map<Element, number>,
+  ): { setScrollTop(top: number): number; scrollAndFlush(): Promise<void> } {
+    let scrollTop = 0
+    let clientHeight = geometry.clientHeight
+    const maxTop = (): number => Math.max(0, geometry.scrollHeight - clientHeight)
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => geometry.scrollHeight })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, get: () => clientHeight })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = Math.max(0, Math.min(v, maxTop()))
+      },
+    })
+    const orig = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
+      const base = headingTops.get(this)
+      if (base !== undefined) {
+        const top = base - scrollTop
+        return { top, bottom: top + 28, left: 0, right: 0, width: 0, height: 28, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+      }
+      if (this === scroller) {
+        return { top: 0, bottom: clientHeight, left: 0, right: 0, width: 0, height: clientHeight, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      }
+      return orig.call(this)
+    }
+    return {
+      setScrollTop: (top: number): number => {
+        scrollTop = Math.max(0, Math.min(top, maxTop()))
+        return scrollTop
+      },
+      scrollAndFlush: async (): Promise<void> => {
+        await act(async () => {
+          scroller.dispatchEvent(new Event('scroll'))
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        })
+      },
+    }
+  }
+
+  test('大纲当前项粒度：同一回合内多个标题时激活锚点精确到当前读到的标题节，任一时刻只有一个', { timeout: 60_000 }, async () => {
+    const savedIO = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
+    ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeIntersectionObserver
+    const orig = Element.prototype.getBoundingClientRect
+    try {
+      // 一个回合两个标题（远离底部：距底 ≥ 240px，基线固定 96px）
+      const entries = [
+        humanEntry('1', '问'),
+        assistantEntry('2', '# 第一节\n正文一\n## 第二节\n正文二'),
+        humanEntry('3', '追问'),
+        assistantEntry('4', '后续很长的回答\n'.repeat(400)),
+      ]
+      const activeCalls: Array<OutlineAnchor | undefined> = []
+      await renderTimeline({ entries, onActiveOutlineChange: (anchor) => activeCalls.push(anchor) })
+      const scroller = host!.querySelector<HTMLElement>('.timeline-scroll')!
+      const turn = host!.querySelector<HTMLElement>('[data-entry-id="2"]')!
+      const headings = [...turn.querySelectorAll<HTMLElement>('.msg-ai-body h1, .msg-ai-body h2')]
+      assert.equal(headings.length, 2, '回合内渲染两个标题 DOM')
+      // 文档内偏移：h1=600，h2=900；距底 = 12000-500-800 ≫ 240 → 基线固定 96px。
+      // scrollTop=500 → h1 top=100（未越过 96 基线），h2 top=400（未越过）
+      const headingTops = new Map<Element, number>([[headings[0]!, 600], [headings[1]!, 900]])
+      const geo = installScrollGeometry(scroller, { scrollHeight: 12000, clientHeight: 800 }, headingTops)
+      geo.setScrollTop(500)
+      const io = FakeIntersectionObserver.instances[FakeIntersectionObserver.instances.length - 1]!
+      const wrappers = [...host!.querySelectorAll<HTMLElement>('[data-entry-id]')]
+
+      // 回合 2 越过基线、回合 3/4 尚未；回合内 h1/h2 均未越过 → 回合级锚点（首个节点）
+      io.deliver([
+        { target: wrappers[0]!, isIntersecting: true },
+        { target: wrappers[1]!, isIntersecting: true },
+        { target: wrappers[2]!, isIntersecting: false },
+        { target: wrappers[3]!, isIntersecting: false },
+      ])
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '2' }, '回合内尚无标题越过基线 → 回合级锚点（首个节点）')
+
+      // 下滚 10px：h1 top=90 ≤ 96 越过，h2 top=390 未越过 → 精确到 h1（headingIndex 0）
+      geo.setScrollTop(510)
+      await geo.scrollAndFlush()
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '2', headingIndex: 0 }, '当前项 = 第一个标题节')
+
+      // 继续下滚 300px：h2 top=90 越过 → 精确到 h2（headingIndex 1），且不会同时点亮 h1
+      geo.setScrollTop(810)
+      await geo.scrollAndFlush()
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '2', headingIndex: 1 }, '当前项推进到第二个标题节')
+
+      // 上滚回 h1/h2 都未越过 → 回退回合级锚点
+      geo.setScrollTop(0)
+      await geo.scrollAndFlush()
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '2' }, '标题都退回基线下方后回退为回合对应节点')
+    } finally {
+      Element.prototype.getBoundingClientRect = orig
+      ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = savedIO
+    }
+  })
+
+  test('近底阅读基线展开：贴底时末节标题即使越不过 96px 也判定为当前项，远离底部后回退到前一节', { timeout: 60_000 }, async () => {
+    const savedIO = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
+    ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeIntersectionObserver
+    const orig = Element.prototype.getBoundingClientRect
+    try {
+      const entries = [
+        humanEntry('1', '问'),
+        assistantEntry('2', '# 第一节\n正文一\n## 尾节\n正文二'),
+      ]
+      const activeCalls: Array<OutlineAnchor | undefined> = []
+      await renderTimeline({ entries, onActiveOutlineChange: (anchor) => activeCalls.push(anchor) })
+      const scroller = host!.querySelector<HTMLElement>('.timeline-scroll')!
+      const turn = host!.querySelector<HTMLElement>('[data-entry-id="2"]')!
+      const headings = [...turn.querySelectorAll<HTMLElement>('.msg-ai-body h1, .msg-ai-body h2')]
+      // 文档内偏移：h1=1600，h2=2300；scrollHeight=3000，视口 800 → 最大 scrollTop=2200
+      // 贴底：h1 top=-600，h2 top=100（> 96，固定基线下永远越不过）
+      const headingTops = new Map<Element, number>([[headings[0]!, 1600], [headings[1]!, 2300]])
+      const geo = installScrollGeometry(scroller, { scrollHeight: 3000, clientHeight: 800 }, headingTops)
+      geo.setScrollTop(2200)
+      const io = FakeIntersectionObserver.instances[FakeIntersectionObserver.instances.length - 1]!
+      const wrappers = [...host!.querySelectorAll<HTMLElement>('[data-entry-id]')]
+      // 固定基线区内：h1 与回合 2 相交、h2 未相交（top=100 > 96）
+      io.deliver([
+        { target: wrappers[0]!, isIntersecting: true },
+        { target: wrappers[1]!, isIntersecting: true },
+      ])
+      assert.deepEqual(
+        activeCalls[activeCalls.length - 1],
+        { entryId: '2', headingIndex: 1 },
+        '贴底时基线展开到视口下缘：末节标题（top=100）成为当前项，而不是停留在第一节',
+      )
+
+      // 远离底部（距底 500 ≥ 240）：基线回到 96px → h2 top=600 未越过 → 当前项回退到第一节
+      geo.setScrollTop(1700)
+      await geo.scrollAndFlush()
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '2', headingIndex: 0 }, '远离底部后固定基线：当前项回退到第一个标题节')
+    } finally {
+      Element.prototype.getBoundingClientRect = orig
+      ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = savedIO
+    }
+  })
+
+  test('大纲跳转锁定：被点击的节点在用户滚动接管前不被滚动派生判定覆盖（含贴底情形）', { timeout: 60_000 }, async () => {
+    const savedIO = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver
+    ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeIntersectionObserver
+    const orig = Element.prototype.getBoundingClientRect
+    const origScrollIntoView = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = function () {}
+    try {
+      const entries = [
+        humanEntry('1', '问'),
+        assistantEntry('2', '# 第一节\n正文一\n## 第二节\n正文二'),
+        humanEntry('3', '追问'),
+        assistantEntry('4', '收尾回答'),
+      ]
+      const activeCalls: Array<OutlineAnchor | undefined> = []
+      await renderTimeline({
+        entries,
+        // 点击第二个标题（headingIndex=1）
+        outlineScrollRequest: { entryId: '2', headingIndex: 1, tick: 1 },
+        onActiveOutlineChange: (anchor) => activeCalls.push(anchor),
+      })
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '2', headingIndex: 1 }, '跳转后立即以被点击的标题为当前项')
+
+      const scroller = host!.querySelector<HTMLElement>('.timeline-scroll')!
+      const turn = host!.querySelector<HTMLElement>('[data-entry-id="2"]')!
+      const headings = [...turn.querySelectorAll<HTMLElement>('.msg-ai-body h1, .msg-ai-body h2')]
+      // 落定几何（scrollIntoView block:start）：h2 top=0、h1 top=-300；贴底使后续行（3/4）也在屏幕内
+      const headingTops = new Map<Element, number>([[headings[0]!, -300], [headings[1]!, 0]])
+      const geo = installScrollGeometry(scroller, { scrollHeight: 2000, clientHeight: 800 }, headingTops)
+      geo.setScrollTop(1200)
+      const io = FakeIntersectionObserver.instances[FakeIntersectionObserver.instances.length - 1]!
+      const wrappers = [...host!.querySelectorAll<HTMLElement>('[data-entry-id]')]
+      // 平滑滚动过程中的中间帧：后续回合 3 也越过固定基线、贴底使全部相交 → 派生判定会指向别的节点
+      io.deliver([
+        { target: wrappers[0]!, isIntersecting: true },
+        { target: wrappers[1]!, isIntersecting: true },
+        { target: wrappers[2]!, isIntersecting: true },
+        { target: wrappers[3]!, isIntersecting: false },
+      ])
+      await geo.scrollAndFlush()
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '2', headingIndex: 1 }, '滚动动画与落定期间保持被点击的标题，不闪成别的节点')
+      assert.equal(activeCalls.length, 1, '锁定期间不发布任何滚动派生的激活项')
+
+      // 用户滚轮接管 → 释放锁定 → 恢复滚动派生（回合 3 越过基线 → 当前项为该提问）
+      await act(async () => {
+        const wheel = new Event('wheel', { bubbles: true, cancelable: false })
+        Object.defineProperty(wheel, 'deltaY', { value: 120 })
+        scroller.dispatchEvent(wheel)
+      })
+      io.deliver([{ target: wrappers[3]!, isIntersecting: false }])
+      assert.deepEqual(activeCalls[activeCalls.length - 1], { entryId: '3' }, '用户接管后恢复滚动派生判定')
+    } finally {
+      HTMLElement.prototype.scrollIntoView = origScrollIntoView
+      Element.prototype.getBoundingClientRect = orig
       ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = savedIO
     }
   })

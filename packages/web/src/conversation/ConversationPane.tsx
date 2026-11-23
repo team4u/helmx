@@ -43,7 +43,7 @@ import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationOutlinePopover, type OutlineJumpTarget } from './ConversationOutlinePopover.js'
 import { ConversationTimeline, type OutlineScrollRequest } from './ConversationTimeline.js'
-import { buildConversationOutline } from './outline-model.js'
+import { buildConversationOutline, resolveOutlineNodeKey, type OutlineAnchor } from './outline-model.js'
 import { resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
 import { useWorkbenchTabs } from './workbench-hooks.js'
 import { buildTimelineItems, type EditRequestTarget } from './timeline-model.js'
@@ -150,7 +150,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const [sendingInFlight, setSendingInFlight] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'reset' | 'delete' | null>(null)
   const [outlineScrollReq, setOutlineScrollReq] = useState<OutlineScrollRequest | null>(null)
-  const [activeOutlineEntryId, setActiveOutlineEntryId] = useState<string | undefined>(undefined)
+  const [activeOutlineAnchor, setActiveOutlineAnchor] = useState<OutlineAnchor | undefined>(undefined)
   const [loadingOlderOutline, setLoadingOlderOutline] = useState(false)
   const outlineTickRef = useRef(0)
   const prefillTickRef = useRef(0)
@@ -178,6 +178,12 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     () => buildConversationOutline(timelineItems, { latestAssistantTurnFailed: conversation?.status === 'error' }),
     [timelineItems, conversation?.status],
   )
+  // 大纲当前项唯一通路：阅读锚点（entryId + 回合内 headingIndex / cardId）映射为单个节点 key，
+  // 同一助手回合的多个标题节点不会一起高亮。
+  const activeOutlineNodeKey = useMemo(
+    () => (activeOutlineAnchor === undefined ? undefined : resolveOutlineNodeKey(outlineNodes, activeOutlineAnchor)),
+    [outlineNodes, activeOutlineAnchor],
+  )
 
   useEffect(() => {
     if (detail === undefined) {
@@ -191,7 +197,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     prevConversationIdRef.current = conversationId
     setMoreOpen(false)
     setOutlineScrollReq(null)
-    setActiveOutlineEntryId(undefined)
+    setActiveOutlineAnchor(undefined)
     setPrefill(null)
   }, [conversationId])
 
@@ -439,7 +445,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         <div className="pane-actions">
           <ConversationOutlinePopover
             nodes={outlineNodes}
-            activeEntryId={activeOutlineEntryId}
+            activeNodeKey={activeOutlineNodeKey}
             totalRunMs={conversation.runDurationMs}
             liveTiming={conversation}
             summaryTurnCount={conversation.completionSeq > 0 ? conversation.completionSeq : undefined}
@@ -671,7 +677,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         timelineItems={timelineItems}
         sendingPending={sendingPending}
         outlineScrollRequest={outlineScrollReq}
-        onActiveEntryChange={setActiveOutlineEntryId}
+        onActiveOutlineChange={setActiveOutlineAnchor}
         {...(live !== undefined ? { live } : {})}
         starters={profileStarters}
         onRequestEdit={requestEdit}

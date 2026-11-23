@@ -36,6 +36,7 @@ import {
   timelineAnchorId,
   type ContainmentExclusions,
 } from './timeline-containment-model.js'
+import type { OutlineAnchor } from './outline-model.js'
 import {
   buildActiveEntryIndex,
   buildAssistantModelBoundaries,
@@ -62,7 +63,8 @@ export interface ConversationTimelineProps {
   timelineItems?: ReadonlyArray<TimelineItem>
   sendingPending?: boolean
   outlineScrollRequest?: OutlineScrollRequest | null
-  onActiveEntryChange?: (entryId: string | undefined) => void
+  /** 当前阅读位置对应的大纲激活锚点（entryId + 回合内 headingIndex / 卡片 cardId）。 */
+  onActiveOutlineChange?: (anchor: OutlineAnchor | undefined) => void
   onRequestEdit: (target: EditRequestTarget) => void
   onRequestStarter?: (text: string) => void
   starters?: ProfileStarterPrompt[]
@@ -75,7 +77,7 @@ export function ConversationTimeline({
   timelineItems,
   sendingPending = false,
   outlineScrollRequest,
-  onActiveEntryChange,
+  onActiveOutlineChange,
   onRequestEdit,
   onRequestStarter,
   starters,
@@ -181,7 +183,7 @@ export function ConversationTimeline({
     anchorSignature,
     highlightedEntry,
     outlineScrollRequest,
-    onActiveEntryChange,
+    onActiveOutlineChange,
     onConversationSwitch: clearProcessToggle,
     fetchEarlierEntries,
   })
