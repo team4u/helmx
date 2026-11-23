@@ -55,7 +55,6 @@ import {
   parseQualifiedActionId,
 } from './capability-registry.js';
 import { UiRegistry } from './ui-registry.js';
-import { jsonClone } from './shared.js';
 import type {
   PluginConfigStore,
   PluginHostOptions,
@@ -72,6 +71,7 @@ import {
   getActiveEnabledPluginIds,
   getIdleActivePluginIds,
   isPluginStateActive,
+  resolveEffectiveConfig,
 } from './lifecycle-helpers.js';
 import { PluginHostGate } from './plugin-host-gate.js';
 import { enabledStatesInDependencyOrder, enabledStatesInReconcileOrder } from './plugin-host-deps.js';
@@ -648,6 +648,8 @@ export class PluginHost {
 
   beginSpawnTask(pluginId: string, spawnId: string): void { this.tracker.begin(pluginId, `spawn:${spawnId}`); }
   endSpawnTask(pluginId: string, spawnId: string): void { this.tracker.end(pluginId, `spawn:${spawnId}`); }
+  beginTask(pluginId: string, label: string): void { this.tracker.begin(pluginId, label); }
+  endTask(pluginId: string, label: string): void { this.tracker.end(pluginId, label); }
   withTask<T>(pluginId: string, label: string, fn: () => Promise<T>): Promise<T> { return this.tracker.withTask(pluginId, label, fn); }
   activeTaskCount(pluginId: string): number { this.assertNotDisposed(); return this.tracker.activeCount(pluginId); }
 
@@ -742,15 +744,7 @@ export class PluginHost {
     state: PluginState,
     stored: Record<string, unknown> = this.configStore ? this.configStore.get(state.definition.id) : {},
   ): Record<string, unknown> {
-    // Schema defaults act as baseline fallback, overridden by explicit persisted values.
-    const schema = state.configSchema ?? {};
-    const merged: Record<string, unknown> = {};
-    for (const [key, field] of Object.entries(schema)) {
-      if (field.default !== undefined) {
-        merged[key] = field.secret === true ? String(field.default) : jsonClone(field.default);
-      }
-    }
-    return { ...merged, ...stored };
+    return resolveEffectiveConfig(state.configSchema, stored);
   }
 
   private redactProjectionText(text: string): string {

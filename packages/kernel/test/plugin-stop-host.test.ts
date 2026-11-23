@@ -243,6 +243,10 @@ class StopWindowBackend implements PluginHostBackend {
     },
     getNodeHubUrl: () => undefined,
     nodePlatform: () => 'linux',
+    listNodes: () => {
+      this.record('nodeIpc.listNodes')
+      return [{ id: 'local', kind: 'local' as const, online: true }]
+    },
   }
   async openTunnel(_nodeId: string, _target: NodeTunnelTarget): Promise<PassThrough> {
     this.record('openTunnel')
@@ -324,6 +328,7 @@ test('disable stop window allows cleanup subset (reads / cancels / IPC cleanup /
       { label: 'cancelAsk', run: (host) => host.cancelAsk('ask-1', 'cancelled').then(() => ok.push('cancelAsk')) },
       { label: 'redact', run: (host) => { host.redact('secret'); ok.push('redact') } },
       { label: 'nodeIpc.isOnline', run: (host) => { assert.equal(host.nodeIpc.isOnline('remote-1'), true); ok.push('nodeIpc.isOnline') } },
+      { label: 'nodeIpc.listNodes', run: (host) => { assert.equal(host.nodeIpc.listNodes?.().length, 1); ok.push('nodeIpc.listNodes') } },
       { label: 'openTunnel', run: (host) => host.openTunnel('remote-1', { host: '127.0.0.1', port: 9000 }).then((stream) => { stream.destroy(); ok.push('openTunnel') }) },
       { label: 'doc.final.write', run: async (host) => void (await Promise.resolve(host)) },
     ],
@@ -339,6 +344,7 @@ test('disable stop window allows cleanup subset (reads / cancels / IPC cleanup /
     'cancelAsk',
     'redact',
     'nodeIpc.isOnline',
+    'nodeIpc.listNodes',
     'openTunnel',
     'emitEvent:probe.stopped',
   ]) {
@@ -354,6 +360,7 @@ test('disable stop window allows cleanup subset (reads / cancels / IPC cleanup /
     'cancelAsk',
     'redact',
     'nodeIpc.isOnline',
+    'nodeIpc.listNodes',
     'openTunnel',
   ])
   await host.dispose()
@@ -366,6 +373,7 @@ test('dispose stop window permits cleanup subset (including final doc writes and
     name: 'stop-dispose',
     definePlugin(ctx) {
       // Matches real stop usage: doc handle created in definePlugin, written at the end of stop.
+      ctx.configSchema({ drainMode: { type: 'string', default: 'graceful' } })
       const finalDoc = ctx.doc<Record<string, unknown>>('dispose-final', {})
       ctx.service({
         id: 'svc',
@@ -374,6 +382,8 @@ test('dispose stop window permits cleanup subset (including final doc writes and
           // dispose() sets this.disposed = true before calling stop: ordinary assertNotDisposed
           // guards would reject, so the controlled stop window selectively opens for the cleanup subset.
           await new Promise((resolve) => setTimeout(resolve, 5))
+          assert.equal((ctx.getConfig() as { drainMode?: string }).drainMode, 'graceful')
+          seen.push('getConfig')
           assert.equal(ctx.host.listConversations().length >= 1, true)
           seen.push('listConversations')
           await ctx.host.cancelAsk('ask-d', 'cancelled')
@@ -382,6 +392,8 @@ test('dispose stop window permits cleanup subset (including final doc writes and
           seen.push('abortConversation')
           assert.equal(ctx.host.nodeIpc.isOnline('remote-1'), true)
           seen.push('nodeIpc.isOnline')
+          assert.equal(ctx.host.nodeIpc.listNodes?.().length, 1)
+          seen.push('nodeIpc.listNodes')
           // Intentionally leave cleanup tunnel open to verify teardown hostReleases destroys it on stop exit.
           await ctx.host.openTunnel('remote-1', { host: '127.0.0.1', port: 9000 })
           seen.push('openTunnel')
@@ -398,10 +410,12 @@ test('dispose stop window permits cleanup subset (including final doc writes and
   await host.dispose().then(
   )
   assert.deepEqual(seen, [
+    'getConfig',
     'listConversations',
     'cancelAsk',
     'abortConversation',
     'nodeIpc.isOnline',
+    'nodeIpc.listNodes',
     'openTunnel',
     'doc.set',
     'emitEvent',
@@ -480,6 +494,7 @@ test('stop window closes after stop returns: any old ctx call (including cleanup
     () => captured.handles!.host.cancelAsk('a', 'cancelled'),
     () => captured.handles!.host.emitEvent('x', { type: 'x' }),
     () => captured.handles!.host.nodeIpc.isOnline('remote-1'),
+    () => captured.handles!.host.nodeIpc.listNodes?.(),
     () => captured.handles!.host.openTunnel('remote-1', { host: '127.0.0.1', port: 9000 }),
     () => captured.handles!.host.redact('x'),
     () => captured.handles!.doc.set({ phase: 'late' }),

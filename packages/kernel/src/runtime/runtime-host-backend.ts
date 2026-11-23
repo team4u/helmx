@@ -8,7 +8,7 @@
  * - Normalize boundary errors consistently (e.g., `normalizeProfileBoundaryError`, `FileNotFoundError -> 404 not_found`).
  */
 
-import { HelmxError, isValidProfileId } from '@helmx/protocol'
+import { HelmxError, isValidProfileId, type MaybePromise } from '@helmx/protocol'
 import { FileNotFoundError, atomicWriteFile, withFileLock } from '../services/index.js'
 import type { PluginHostBackend, PluginKvStore, PluginSessionDocStore } from '../plugins/index.js'
 import type { HelmxStore } from './store.js'
@@ -60,6 +60,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
       isOnline: (nodeId) => runtime.envFabric.isOnline(nodeId),
       getNodeHubUrl: (nodeId) => runtime.envFabric.getNodeHubUrl(nodeId),
       nodePlatform: (nodeId) => runtime.envFabric.nodePlatformOf(nodeId),
+      listNodes: () => structuredClone(runtime.nodes.listNodesSync()),
     },
     openTunnel: (nodeId, target, signal) => runtime.envFabric.openTunnel(nodeId, target, signal),
     dispatchTrigger: (event) => runtime.dispatchTrigger(event),
@@ -107,8 +108,12 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
         output: runtime.stash.redact(res.output),
       }
     },
-    onEvent: (type, listener) => runtime.onEvent(type, listener),
-    emitEvent: (type, payload, options) => runtime.emitHostEvent(type, payload, options),
+    onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void {
+      return runtime.onEvent(type, listener)
+    },
+    emitEvent(type: string, payload: unknown, options?: { broadcast?: boolean }): MaybePromise<void> {
+      return runtime.emitHostEvent(type, payload, options)
+    },
   }
 }
 

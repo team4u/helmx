@@ -29,7 +29,7 @@ import type { UiRegistry } from './ui-registry.js';
 import type { PluginDocRegistry } from './doc-registry.js';
 import type { PluginKvRegistry } from './kv-registry.js';
 import { assertValidId, idempotentRelease, jsonClone } from './shared.js';
-import { isPluginStateActive } from './lifecycle-helpers.js';
+import { isPluginStateActive, resolveEffectiveConfig } from './lifecycle-helpers.js';
 import { assertValidProviderShape } from './provider-coordinator.js';
 import { wrapHostApi, type HostApiDependencies } from './host-api.js';
 import type {
@@ -176,6 +176,30 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
     assertContextUsable(state, epoch, `kv ${namespace} handle`);
   };
 
+  /**
+   * Config reads remain valid during `defining`, active `idle`, and the controlled `stopWindow`
+   * (plugins read config during define, runtime, and service stop), and reject with
+   * `409 plugin_context_closed` once disabled or after epoch advance.
+   */
+  const assertConfigUsable = () => {
+    if (state.stopWindow && isRegisteredState(state) && state.epoch === epoch) {
+      return;
+    }
+    assertNotDisposed();
+    if (
+      !isRegisteredState(state) ||
+      epoch !== state.epoch ||
+      state.phase === 'deactivating' ||
+      !(state.phase === 'defining' || state.enabled)
+    ) {
+      throw new HelmxError(
+        'plugin_context_closed',
+        `Plugin ${pluginId} context has closed (disabled or entered a new enablement cycle); cannot read config`,
+        409,
+      );
+    }
+  };
+
   const addHook = <N extends HookName>(name: N, fn: HookHandler<N>, opts?: HookOptions) => {
     assertOpen(`add ${name} hook`);
     (pipelines.get(name) as unknown as HookPipeline<N>).add(pluginId, fn, opts?.priority ?? 0);
@@ -187,7 +211,11 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
   const ctx: HelmxPluginContext = {
     pluginId,
     dataDir: state.dataDir,
-    getConfig: () => (configStore ? configStore.get(pluginId) : {}) as never,
+    getConfig: () => {
+      assertConfigUsable();
+      const stored = configStore ? configStore.get(pluginId) : {};
+      return resolveEffectiveConfig(state.configSchema, stored) as never;
+    },
     configSchema: (schema) => {
       assertOpen('declare configSchema');
       if (state.configSchema) {
@@ -256,6 +284,17 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
     consume: <T,>(capabilityId: string) => {
       assertContextUsable(state, epoch, `consume ${capabilityId}`);
       return capabilityServiceRegistry.consume<T>(capabilityId, getActivePluginIds());
+    },
+
+    onCapabilityChanged: (capabilityId: string, listener: () => void): (() => void) => {
+      assertContextUsable(state, epoch, `onCapabilityChanged ${capabilityId}`);
+      const unsubscribe = capabilityServiceRegistry.onCapabilityChanged(capabilityId, listener);
+      const release = idempotentRelease(unsubscribe);
+      state.hostReleases.add(release);
+      return () => {
+        state.hostReleases.delete(release);
+        release();
+      };
     },
 
     service: (spec: PluginServiceSpec) => {

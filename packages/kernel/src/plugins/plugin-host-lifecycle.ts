@@ -103,7 +103,9 @@ async function runDefinition(state: PluginState, ctx: PluginLifecycleContext): P
 
 function assertEnableCommitChecks(state: PluginState, ctx: PluginLifecycleContext): void {
   const pluginId = state.definition.id;
-  ctx.uiRegistry.assertCrossPluginUnique(pluginId, getActiveEnabledPluginIds(ctx.plugins));
+  const activePluginIds = getActiveEnabledPluginIds(ctx.plugins);
+  ctx.uiRegistry.assertCrossPluginUnique(pluginId, activePluginIds);
+  ctx.capabilityRegistry.assertCrossPluginUnique(pluginId, activePluginIds);
   validateUiDeclarations(pluginId, true, ctx);
   assertDependenciesSatisfied(ctx.plugins, pluginId, state.dependencies);
 }
@@ -248,7 +250,9 @@ export async function runEnableTransaction(
   let persistedEnabled = false;
   try {
     await runDefinition(state, ctx);
-    ctx.uiRegistry.assertCrossPluginUnique(pluginId, getActiveEnabledPluginIds(ctx.plugins));
+    const activePluginIds = getActiveEnabledPluginIds(ctx.plugins);
+    ctx.uiRegistry.assertCrossPluginUnique(pluginId, activePluginIds);
+    ctx.capabilityRegistry.assertCrossPluginUnique(pluginId, activePluginIds);
     ctx.ensureTransientSessionDocListener?.(pluginId);
     await precompilePluginClientModules(state, ctx);
     await registerProviders(state, ctx.providers);

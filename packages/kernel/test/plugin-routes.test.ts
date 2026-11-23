@@ -12,6 +12,7 @@ import { test } from 'node:test'
 import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import { createHubHandler } from '../src/http/hub.js'
 import type { KernelRuntimeLike } from '../src/http/contracts.js'
+import { PLUGIN_ROUTE_JSON_REDACT_MAX_BYTES } from '../src/http/plugin-routes.js'
 import { PluginHost } from '../src/plugins/index.js'
 import { SecretStash } from '../src/services/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
@@ -360,6 +361,267 @@ test('ctx.route: redacts text/*, application/json, +json, and SSE responses whil
     assert.equal(binText, `BIN:${secretA}:TAIL`, 'binary streams must pass through untouched without buffering')
   } finally {
     releaseSecondBinaryChunk()
+    await env.close()
+  }
+})
+
+test('ctx.route: open SSE stream blocks plugin.disable with 409 plugin_has_live_tasks until close, cancel, abort, or error while buffered responses release immediately', { timeout: 60_000 }, async () => {
+  const stash = new SecretStash()
+  const secret = 'sk-sse-live-secret-98765'
+  stash.addRedaction(secret)
+
+  let sseController: ReadableStreamDefaultController<Uint8Array> | undefined
+  let sseCancelled = false
+
+  const env = await makeRouteHarness(
+    [
+      {
+        id: 'ext:sse',
+        definePlugin(ctx) {
+          ctx.route({
+            method: 'GET',
+            path: '/events',
+            handler: () => {
+              sseCancelled = false
+              const stream = new ReadableStream<Uint8Array>({
+                start(controller) {
+                  sseController = controller
+                  controller.enqueue(new TextEncoder().encode(`data: open ${secret}\n\n`))
+                },
+                cancel() {
+                  sseCancelled = true
+                },
+              })
+              return new Response(stream, {
+                status: 200,
+                headers: { 'content-type': 'text/event-stream' },
+              })
+            },
+          })
+          ctx.route({
+            method: 'GET',
+            path: '/buffered-json',
+            handler: () => Response.json({ ok: true }),
+          })
+          ctx.route({
+            method: 'GET',
+            path: '/buffered-text',
+            handler: () => new Response(`hello ${secret}`, { headers: { 'content-type': 'text/plain' } }),
+          })
+          ctx.route({
+            method: 'GET',
+            path: '/empty',
+            handler: () => new Response(null, { status: 204 }),
+          })
+        },
+      },
+    ],
+    stash,
+  )
+
+  try {
+    const prefix = `/api/plugins/${encodeURIComponent('ext:sse')}/routes`
+
+    // 1. Ordinary buffered responses release liveTasks immediately even if body is never read
+    const bufJson = await env.req(`${prefix}/buffered-json`)
+    assert.equal(bufJson.status, 200)
+    assert.equal(env.host.activeTaskCount('ext:sse'), 0, 'buffered JSON must not hold liveTasks')
+
+    const bufText = await env.req(`${prefix}/buffered-text`)
+    assert.equal(bufText.status, 200)
+    assert.equal(env.host.activeTaskCount('ext:sse'), 0, 'buffered text must not hold liveTasks')
+    assert.equal(await bufText.text(), 'hello [REDACTED]')
+
+    const emptyRes = await env.req(`${prefix}/empty`)
+    assert.equal(emptyRes.status, 204)
+    assert.equal(env.host.activeTaskCount('ext:sse'), 0)
+
+    // 2. Open SSE stream holds liveTasks and blocks plugin.disable with 409 until closed
+    const sseRes = await env.req(`${prefix}/events`)
+    assert.equal(sseRes.status, 200)
+    assert.equal(env.host.activeTaskCount('ext:sse'), 1, 'open SSE stream must hold liveTasks')
+    await assert.rejects(
+      () => env.host.disable('ext:sse'),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks' && err.status === 409,
+    )
+    sseController!.enqueue(new TextEncoder().encode('data: done\n\n'))
+    sseController!.close()
+    const sseText = await sseRes.text()
+    assert.ok(!sseText.includes(secret))
+    assert.match(sseText, /\[REDACTED\]/)
+    assert.match(sseText, /data: done/)
+    assert.equal(env.host.activeTaskCount('ext:sse'), 0, 'closing SSE stream must release liveTasks')
+
+    // 3. Consumer cancel releases liveTasks and cancels upstream stream
+    const cancelRes = await env.req(`${prefix}/events`)
+    assert.equal(env.host.activeTaskCount('ext:sse'), 1)
+    await cancelRes.body!.cancel('client-gone')
+    assert.equal(env.host.activeTaskCount('ext:sse'), 0, 'cancelling SSE body must release liveTasks')
+    assert.equal(sseCancelled, true, 'cancelling SSE body must propagate cancel to upstream stream')
+
+    // 4. Request signal abort immediately releases liveTasks and cancels upstream stream
+    const abortController = new AbortController()
+    const abortRes = await env.req(`${prefix}/events`, { signal: abortController.signal })
+    assert.equal(env.host.activeTaskCount('ext:sse'), 1)
+    abortController.abort(new Error('disconnect'))
+    assert.equal(env.host.activeTaskCount('ext:sse'), 0, 'aborting request.signal must release liveTasks promptly')
+    assert.equal(sseCancelled, true)
+    await abortRes.body!.cancel().catch(() => {})
+
+    // 5. Upstream stream error releases liveTasks cleanly
+    const errRes = await env.req(`${prefix}/events`)
+    assert.equal(env.host.activeTaskCount('ext:sse'), 1)
+    sseController!.error(new Error('upstream boom'))
+    await assert.rejects(() => errRes.text())
+    assert.equal(env.host.activeTaskCount('ext:sse'), 0, 'upstream stream error must release liveTasks')
+
+    // Now disable succeeds cleanly
+    await env.host.disable('ext:sse')
+    assert.equal(env.host.get('ext:sse')?.enabled, false)
+  } finally {
+    await env.close()
+  }
+})
+
+test('ctx.route: text/* and application/x-ndjson stream without full-body buffering; >4 MiB JSON streams cleanly without truncation', { timeout: 60_000 }, async () => {
+  const stash = new SecretStash()
+  const secret = 'sk-stream-boundary-secret-55555'
+  stash.addRedaction(secret)
+
+  let releaseTextGate!: () => void
+  const textGate = new Promise<void>((resolve) => {
+    releaseTextGate = resolve
+  })
+  let releaseNdjsonGate!: () => void
+  const ndjsonGate = new Promise<void>((resolve) => {
+    releaseNdjsonGate = resolve
+  })
+  let releaseHugeJsonTail!: () => void
+  const hugeJsonGate = new Promise<void>((resolve) => {
+    releaseHugeJsonTail = resolve
+  })
+
+  const chunkPayloadSize = 64 * 1024
+  const prefixChunkCount = Math.ceil((PLUGIN_ROUTE_JSON_REDACT_MAX_BYTES + chunkPayloadSize) / chunkPayloadSize)
+  const fillerChunk = 'a'.repeat(chunkPayloadSize)
+
+  const env = await makeRouteHarness(
+    [
+      {
+        id: 'ext:streams',
+        definePlugin(ctx) {
+          ctx.route({
+            method: 'GET',
+            path: '/text-stream',
+            handler: () => {
+              const enc = new TextEncoder()
+              const stream = new ReadableStream<Uint8Array>({
+                async start(controller) {
+                  controller.enqueue(enc.encode(`chunk1:${secret.slice(0, 12)}`))
+                  await textGate
+                  controller.enqueue(enc.encode(`${secret.slice(12)}:chunk2`))
+                  controller.close()
+                },
+              })
+              return new Response(stream, {
+                status: 200,
+                headers: { 'content-type': 'text/plain; charset=utf-8' },
+              })
+            },
+          })
+          ctx.route({
+            method: 'GET',
+            path: '/ndjson-stream',
+            handler: () => {
+              const enc = new TextEncoder()
+              const stream = new ReadableStream<Uint8Array>({
+                async start(controller) {
+                  controller.enqueue(enc.encode(`{"seq":1,"tok":"${secret.slice(0, 14)}`))
+                  await ndjsonGate
+                  controller.enqueue(enc.encode(`${secret.slice(14)}"}\n{"seq":2,"ok":true}\n`))
+                  controller.close()
+                },
+              })
+              return new Response(stream, {
+                status: 200,
+                headers: { 'content-type': 'application/x-ndjson' },
+              })
+            },
+          })
+          ctx.route({
+            method: 'GET',
+            path: '/huge-json',
+            handler: () => {
+              const enc = new TextEncoder()
+              const stream = new ReadableStream<Uint8Array>({
+                async start(controller) {
+                  controller.enqueue(enc.encode(`{"head":"${secret}","pad":"`))
+                  for (let i = 0; i < prefixChunkCount; i += 1) {
+                    controller.enqueue(enc.encode(fillerChunk))
+                  }
+                  // Straddle a secret across the streaming transition boundary & gate the tail
+                  controller.enqueue(enc.encode(`","mid":"${secret.slice(0, 11)}`))
+                  await hugeJsonGate
+                  controller.enqueue(enc.encode(`${secret.slice(11)}","tail":"${secret}","end":true}`))
+                  controller.close()
+                },
+              })
+              return new Response(stream, {
+                status: 200,
+                headers: { 'content-type': 'application/json; charset=utf-8' },
+              })
+            },
+          })
+        },
+      },
+    ],
+    stash,
+  )
+
+  try {
+    const prefix = `/api/plugins/${encodeURIComponent('ext:streams')}/routes`
+
+    // 1. text/plain stream returns immediately BEFORE textGate opens (proves zero full-body buffering)
+    const textRes = await env.req(`${prefix}/text-stream`)
+    assert.equal(textRes.status, 200)
+    assert.equal(env.host.activeTaskCount('ext:streams'), 1)
+    releaseTextGate()
+    const textBody = await textRes.text()
+    assert.equal(textBody, 'chunk1:[REDACTED]:chunk2')
+    assert.equal(env.host.activeTaskCount('ext:streams'), 0)
+
+    // 2. application/x-ndjson stream returns immediately BEFORE ndjsonGate opens
+    const ndjsonRes = await env.req(`${prefix}/ndjson-stream`)
+    assert.equal(ndjsonRes.status, 200)
+    assert.equal(env.host.activeTaskCount('ext:streams'), 1)
+    releaseNdjsonGate()
+    const ndjsonBody = await ndjsonRes.text()
+    assert.ok(!ndjsonBody.includes(secret))
+    const lines = ndjsonBody.trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
+    assert.deepEqual(lines, [
+      { seq: 1, tok: '[REDACTED]' },
+      { seq: 2, ok: true },
+    ])
+    assert.equal(env.host.activeTaskCount('ext:streams'), 0)
+
+    // 3. Oversized (>4 MiB) JSON switches to streaming redaction once cap is crossed (before tail gate opens!)
+    const hugeRes = await env.req(`${prefix}/huge-json`)
+    assert.equal(hugeRes.status, 200)
+    assert.equal(env.host.activeTaskCount('ext:streams'), 1, 'oversized JSON stream must stay tracked until EOF')
+    releaseHugeJsonTail()
+    const hugeBody = await hugeRes.text()
+    assert.ok(!hugeBody.includes(secret), 'all secrets in oversized JSON must be redacted')
+    const parsed = JSON.parse(hugeBody) as { head: string; pad: string; mid: string; tail: string; end: boolean }
+    assert.equal(parsed.head, '[REDACTED]')
+    assert.equal(parsed.pad.length, prefixChunkCount * chunkPayloadSize, 'oversized JSON must not truncate bytes')
+    assert.equal(parsed.mid, '[REDACTED]')
+    assert.equal(parsed.tail, '[REDACTED]')
+    assert.equal(parsed.end, true)
+    assert.equal(env.host.activeTaskCount('ext:streams'), 0)
+  } finally {
+    releaseTextGate()
+    releaseNdjsonGate()
+    releaseHugeJsonTail()
     await env.close()
   }
 })
