@@ -2,10 +2,17 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   HelmxError,
+  applyConversationLiveDelta,
+  applyTextPrefix,
+  diffConversationLive,
+  diffTextPrefix,
   encodeSessionDocSubParam,
   parseSessionDocSubParam,
+  sameConversationLiveContent,
+  sameQueuedInputs,
   type ConversationDetail,
   type ConversationLive,
+  type ConversationLiveDelta,
   type ConversationLiveEvent,
   type ConversationSummary,
   type HelmxEvent,
@@ -14,6 +21,7 @@ import {
   type HelmxHostNodeIpcPort,
   type HelmxPluginContext,
   type HelmxResumedFrame,
+  type HelmxTransientLiveDeltaFrame,
   type HelmxTransientLiveFrame,
   type HostEventEmitPayload,
   type HostEventMap,
@@ -374,4 +382,107 @@ test('HostEventMap, typed onEvent/emitEvent overloads, and plugin/client contrac
   assert.equal(serviceSpec.reconcileAfter?.[0], 'builtin:workflow')
   assert.equal(docOpts.durable, false)
   assert.equal(nodeIpc.listNodes?.()[0]?.id, 'local')
+})
+
+test('live-delta: diffTextPrefix / applyTextPrefix handle append, cross-chunk redaction rewind, retry reset, and bounds rejection', { timeout: 60_000 }, () => {
+  // Pure append fast path
+  const appendPatch = diffTextPrefix('hello', 'hello world')
+  assert.deepEqual(appendPatch, [5, ' world'])
+  assert.equal(applyTextPrefix('hello', appendPatch, 'text'), 'hello world')
+
+  // Cross-chunk redaction step-back: secret suffix replaced with [REDACTED]
+  const redactedPatch = diffTextPrefix('token=sk-12', 'token=[REDACTED] done')
+  assert.deepEqual(redactedPatch, [6, '[REDACTED] done'])
+  assert.equal(applyTextPrefix('token=sk-12', redactedPatch, 'text'), 'token=[REDACTED] done')
+
+  // Full reset (retry)
+  const resetPatch = diffTextPrefix('old attempt', 'fresh attempt')
+  assert.deepEqual(resetPatch, [0, 'fresh attempt'])
+  assert.equal(applyTextPrefix('old attempt', resetPatch, 'text'), 'fresh attempt')
+
+  // Strict bounds and format rejection
+  assert.throws(() => applyTextPrefix('abc', [4, 'x'], 'text'), /bounds/)
+  assert.throws(() => applyTextPrefix('abc', [-1, 'x'], 'text'), /bounds/)
+  assert.throws(() => applyTextPrefix('abc', [1.5, 'x'], 'text'), /bounds/)
+  assert.throws(() => applyTextPrefix('abc', [1, 42], 'text'), /bounds/)
+  assert.throws(() => applyTextPrefix('abc', 'bad', 'text'), /format/)
+})
+
+test('live-delta: diffConversationLive / applyConversationLiveDelta round-trip multi-block generation and reject mismatches', { timeout: 60_000 }, () => {
+  const base: ConversationLive = {
+    conversationId: 42,
+    text: 'Hello',
+    thinking: 'Plan step 1',
+    tools: [{ id: 't1', name: 'read', status: 'running' }],
+    queuedInputs: [{ id: 'q1', text: 'next', origin: 'human', createdAt: 100 }],
+    generation: {
+      taskId: 10,
+      attempt: 1,
+      message: {
+        content: [
+          { type: 'thinking', thinking: 'Plan step 1' },
+          { type: 'text', text: 'Hello' },
+        ],
+        usage: { output: 20 },
+      },
+    },
+    updatedAt: 1000,
+    rev: 1,
+  }
+  const next: ConversationLive = {
+    conversationId: 42,
+    text: 'Hello world',
+    thinking: 'Plan step 1\nstep 2',
+    tools: [{ id: 't1', name: 'read', status: 'running' }],
+    queuedInputs: [{ id: 'q1', text: 'next', origin: 'human', createdAt: 100 }],
+    generation: {
+      taskId: 10,
+      attempt: 1,
+      message: {
+        content: [
+          { type: 'thinking', thinking: 'Plan step 1\nstep 2' },
+          { type: 'text', text: 'Hello world' },
+          { type: 'toolCall', name: 'bash', arguments: { command: 'ls' } },
+        ],
+        usage: { output: 35 },
+      },
+    },
+    updatedAt: 1100,
+    rev: 2,
+  }
+
+  assert.equal(sameConversationLiveContent(base, { ...base, updatedAt: 9999, rev: 99 }), true)
+  assert.equal(sameConversationLiveContent(base, next), false)
+  assert.equal(sameQueuedInputs(undefined, []), true)
+  assert.equal(sameQueuedInputs(base.queuedInputs, next.queuedInputs), true)
+
+  const delta: ConversationLiveDelta = diffConversationLive(base, next, 1, 2)
+  const frame: HelmxTransientLiveDeltaFrame = { delta }
+  assert.equal(frame.delta.tools, undefined, 'unchanged tools omitted from delta')
+  assert.equal(frame.delta.queuedInputs, undefined, 'unchanged queuedInputs omitted from delta')
+  assert.deepEqual(frame.delta.text, [5, ' world'])
+  assert.deepEqual(frame.delta.thinking, [11, '\nstep 2'])
+  assert.equal(frame.delta.generation?.mode, 'patch')
+
+  const reconstructed = applyConversationLiveDelta(base, delta)
+  assert.deepEqual(reconstructed, next)
+
+  // Clearing optional fields (thinking, queuedInputs, generation)
+  const cleared: ConversationLive = {
+    conversationId: 42,
+    text: '',
+    tools: [],
+    updatedAt: 1200,
+    rev: 3,
+  }
+  const clearDelta = diffConversationLive(next, cleared, 2, 3)
+  assert.equal(clearDelta.thinking, null)
+  assert.equal(clearDelta.queuedInputs, null)
+  assert.equal(clearDelta.generation, null)
+  assert.deepEqual(applyConversationLiveDelta(next, clearDelta), cleared)
+
+  // Strict rejection on missing prev, baseRev mismatch, or non-monotonic rev
+  assert.throws(() => applyConversationLiveDelta(undefined, delta), /mismatch/)
+  assert.throws(() => applyConversationLiveDelta({ ...base, rev: 9 }, delta), /mismatch/)
+  assert.throws(() => applyConversationLiveDelta(base, { ...delta, rev: 1 }), /metadata/)
 })

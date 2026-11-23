@@ -690,3 +690,39 @@ test('plugin factory sanity: metadata and icons contain no emoji', { timeout: 60
   const profilesCheck: Profile[] = []
   assert.ok(catalogCheck && profilesCheck)
 })
+
+test('performance: tiers write actions reuse a single ModelCatalog fetch per set/replace/remove', { timeout: 60_000 }, async () => {
+  const env = await openHelmxEnv()
+  try {
+    const { kernel } = env.app
+    let listModelsCalls = 0
+    const origListModels = kernel.listModels.bind(kernel)
+    kernel.listModels = async () => {
+      listModelsCalls += 1
+      return origListModels()
+    }
+
+    listModelsCalls = 0
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'scout',
+      model: 'faux/fast',
+      thinkingLevel: 'low',
+    })
+    assert.equal(listModelsCalls, 1, 'tiers set must reuse one ModelCatalog fetch')
+
+    listModelsCalls = 0
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'replace', {
+      tiers: {
+        scout: { model: 'faux/fast', thinkingLevel: 'low' },
+        coder: { model: 'faux/workhorse', thinkingLevel: 'medium' },
+      },
+    })
+    assert.equal(listModelsCalls, 1, 'tiers replace must reuse one ModelCatalog fetch')
+
+    listModelsCalls = 0
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'remove', { id: 'coder' })
+    assert.equal(listModelsCalls, 1, 'tiers remove must reuse one ModelCatalog fetch')
+  } finally {
+    await env.close()
+  }
+})

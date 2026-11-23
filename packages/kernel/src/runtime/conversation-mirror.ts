@@ -95,16 +95,16 @@ export interface ConversationMirror {
   pendingLive: ConversationLive | undefined
   /** Throttled live flush timer (must be cleared on stopObserving/close to prevent post-deletion ghost events). */
   liveTimer: ReturnType<typeof setTimeout> | undefined
-  /** Content fingerprint of last emitted live frame (suppresses identical frames). */
-  lastLiveKey: string | undefined
-  /** Content fingerprint of last emitted queuedInputs (drives 0ms queue/dequeue flushes; unset counts as '[]'). */
-  lastQueuedLiveKey: string | undefined
+  /** Most recently emitted live frame (structural dedupe without per-tick JSON.stringify allocations). */
+  lastEmittedLive: ConversationLive | undefined
   /** Semantic fingerprint of last emitted summary (status|doing|pendingAsk; suppresses duplicates). */
   lastSummaryKey: string | undefined
   /** Unique token per observe session; deleted along with mirror on stopObserving so stale async results cannot re-populate. */
   observeGeneration: symbol | undefined
   /** Cache of latest assistant text (data source for getLastAssistantText). */
   lastAssistant: { entryId: number; text: string } | undefined
+  /** Latest pi.assistant entry ID already forwarded to onAssistantText/FTS (prevents redundant FTS5 re-indexing on streaming ticks). */
+  lastIndexedAssistantEntryId: number | undefined
   /** Count of pending AskDocs (drives blocked status and CAS watermarks). */
   pendingAskCount: number
 }
@@ -128,11 +128,11 @@ export function createConversationMirror(): ConversationMirror {
     lastSeenEntryId: 0,
     pendingLive: undefined,
     liveTimer: undefined,
-    lastLiveKey: undefined,
-    lastQueuedLiveKey: undefined,
+    lastEmittedLive: undefined,
     lastSummaryKey: undefined,
     observeGeneration: undefined,
     lastAssistant: undefined,
+    lastIndexedAssistantEntryId: undefined,
     pendingAskCount: 0,
   }
 }

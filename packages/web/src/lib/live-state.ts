@@ -1,4 +1,5 @@
 import {
+  applyConversationLiveDelta,
   isPluginSummaryActive,
   type AskSpec,
   type ConversationDetail,
@@ -8,6 +9,7 @@ import {
   type HelmxEventFrame,
   type HelmxResumedFrame,
   type HelmxSnapshot,
+  type HelmxTransientLiveDeltaFrame,
   type HelmxTransientLiveFrame,
   type NodeInfo,
   type PluginActivityLike,
@@ -405,6 +407,30 @@ export function applyTransientLiveFrame(state: LiveState, frame: HelmxTransientL
 }
 
 /**
+ * 应用非顺序瞬态 `conversation.live.delta` 差量帧：按 `(baseRev -> rev)` 与 LCP 前缀
+ * 增量拼接文本/思考/块内容；校验失败或 rev 失配时显式抛错，由 SSE 状态机清空游标重同步。
+ */
+export function applyTransientLiveDeltaFrame(state: LiveState, frame: HelmxTransientLiveDeltaFrame): LiveState {
+  if (frame === null || typeof frame !== 'object') {
+    throw new Error('Invalid transient conversation.live.delta frame format')
+  }
+  const delta = (frame as { delta?: unknown }).delta
+  if (
+    delta === null ||
+    typeof delta !== 'object' ||
+    typeof (delta as { conversationId?: unknown }).conversationId !== 'number'
+  ) {
+    throw new Error('Invalid transient conversation.live.delta frame format')
+  }
+  const conversationId = (delta as { conversationId: number }).conversationId
+  const nextLive = applyConversationLiveDelta(state.conversationLives[conversationId], delta)
+  return {
+    ...state,
+    conversationLives: { ...state.conversationLives, [conversationId]: nextLive },
+  }
+}
+
+/**
  * 应用 `resumed` 控制帧携带的活跃会话实时视图集合，对账断线期间未进入
  * 持久回放环形缓冲区的瞬态 `conversation.live` 状态。
  */
@@ -532,28 +558,44 @@ export interface SseMessage { event: string; data: string }
 /** ReadableStream 的 chunk 不对应 SSE 帧边界；支持 CRLF、分段、多 data 行与注释。 */
 export class SseParser {
   private buffer = ''
+  private scanFrom = 0
   private eventName = 'message'
   private data: string[] = []
+  private dataBytes = 0
   constructor(private readonly onMessage: (message: SseMessage) => void) {}
   push(chunk: string): void {
+    if (chunk === '') return
     this.buffer += chunk
-    if (this.buffer.length + this.data.join('').length > 4 * 1024 * 1024) throw new Error('Live events exceeded the client receive limit')
-    let index: number
-    while ((index = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, index).replace(/\r$/, '')
-      this.buffer = this.buffer.slice(index + 1)
+    if (this.buffer.length + this.dataBytes > 4 * 1024 * 1024) {
+      throw new Error('Live events exceeded the client receive limit')
+    }
+    let cursor = 0
+    let index = this.buffer.indexOf('\n', this.scanFrom)
+    while (index >= 0) {
+      const end = index > cursor && this.buffer.charCodeAt(index - 1) === 13 ? index - 1 : index
+      const line = this.buffer.slice(cursor, end)
+      cursor = index + 1
       if (line === '') {
         if (this.data.length) this.onMessage({ event: this.eventName, data: this.data.join('\n') })
         this.eventName = 'message'
         this.data = []
+        this.dataBytes = 0
       } else if (!line.startsWith(':')) {
         const colon = line.indexOf(':')
         const name = colon < 0 ? line : line.slice(0, colon)
         const value = colon < 0 ? '' : line.slice(colon + 1).replace(/^ /, '')
         if (name === 'event') this.eventName = value
-        else if (name === 'data') this.data.push(value)
+        else if (name === 'data') {
+          this.data.push(value)
+          this.dataBytes += value.length
+        }
       }
+      index = this.buffer.indexOf('\n', cursor)
     }
+    if (cursor > 0) {
+      this.buffer = this.buffer.slice(cursor)
+    }
+    this.scanFrom = this.buffer.length
   }
 }
 

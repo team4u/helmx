@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useSyncExternalStore } from 'react'
+import { createContext, useCallback, useContext, useRef, useSyncExternalStore } from 'react'
 import type {
   ActionManifest,
   ArtifactMetadata,
@@ -332,8 +332,35 @@ export function useConversationBackgroundSlice(): ConversationBackgroundSlice {
 
 // ---- Per-Key / Per-Conversation Hooks -------------------------------------
 
-export function useConversationLive(conversationId: number | undefined): ConversationLive | undefined {
-  return useKeyedSlice(subscribeLiveById, readLiveById, conversationId, undefined)
+export function useConversationLive(
+  conversationId: number | undefined,
+  active = true,
+): ConversationLive | undefined {
+  const external = useContext(HelmxExternalStoreContext)
+  const frozenRef = useRef<{ id: number | undefined; live: ConversationLive | undefined }>({
+    id: conversationId,
+    live: external !== null && conversationId !== undefined ? readLiveById(external, conversationId) : undefined,
+  })
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      external !== null && active && conversationId !== undefined
+        ? subscribeLiveById(external, conversationId, listener)
+        : NOOP_UNSUBSCRIBE,
+    [external, conversationId, active],
+  )
+  const getSnapshot = (): ConversationLive | undefined | typeof UNSET => {
+    if (external === null) return UNSET
+    if (conversationId === undefined) return undefined
+    if (!active && frozenRef.current.id === conversationId) {
+      return frozenRef.current.live
+    }
+    const current = readLiveById(external, conversationId)
+    frozenRef.current = { id: conversationId, live: current }
+    return current
+  }
+  const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  if (value !== UNSET) return value
+  throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
 }
 
 export function useConversationDetail(conversationId: number | undefined): ConversationDetail | undefined {

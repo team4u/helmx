@@ -189,19 +189,7 @@ export function assembleRuntimeServices(
       externalModels: init.externalModels !== undefined,
       events,
       pluginHost: () => runtime.plugins,
-      alignAllConversations: async () => {
-        for (const meta of options.store.listConvs()) {
-          try {
-            await conversations.alignConversationModel(meta.id, true)
-          } catch (err) {
-            // If an inherited Profile/global `tier/<id>` became unmounted (e.g. tiers plugin disabled
-            // or removed with --force), skip aligning that conversation instead of aborting alignment
-            // for unaffected conversations; active submissions still fail loudly with 404 model_tier_not_found.
-            if (err instanceof HelmxError && err.code === 'model_tier_not_found') continue
-            throw err
-          }
-        }
-      },
+      alignAllConversations: () => conversations.alignAllConversations(),
     },
     init.modelsInstance,
     { model: init.defaultModel },

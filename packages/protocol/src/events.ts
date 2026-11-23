@@ -10,6 +10,7 @@
 import type { AskSpec } from './ask.js'
 import type { Profile } from './assets.js'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from './conversation.js'
+import type { ConversationLiveDelta } from './live-delta.js'
 import type { NodeInfo } from './env-rpc.js'
 import { HelmxError } from './error.js'
 import type { PluginSummary, PublicPluginDoc, PublicPluginSessionDoc } from './plugin-dto.js'
@@ -91,6 +92,16 @@ export interface ConversationEntryEvent {
  */
 export interface HelmxTransientLiveFrame {
   live: ConversationLive
+}
+
+/**
+ * Incremental transient conversation live frame (`event: conversation.live.delta`,
+ * `data: JSON.stringify({ delta })`). Never advances `EventHub.seq` and never enters
+ * the durable replay ring buffer; carries LCP prefix/suffix patches against the prior
+ * revision (`baseRev -> rev`) on the same `/api/events` stream.
+ */
+export interface HelmxTransientLiveDeltaFrame {
+  delta: ConversationLiveDelta
 }
 
 /**

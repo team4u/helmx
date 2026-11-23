@@ -824,4 +824,85 @@ describe("helmx-store-rerender-isolation", () => {
     assert.equal(seenContexts.length, 3)
     assert.ok(seenContexts[0] === seenContexts[2], '同 pluginId 换 hash 期间 memoized PluginClientContext 引用保持稳定')
   })
+
+  test('useConversationLive(id, active=false) 在隐藏保活期间冻结快照零重渲染，恢复 active=true 后立即对齐最新流式帧', { timeout: 60_000 }, async () => {
+    const store = new HelmxExternalStore({
+      primaryTarget: { kind: 'conversation', conversationId: 1 },
+      splitTarget: null,
+      drawerStack: [],
+      activeModal: null,
+    })
+    store.updateLive((prev) => applySnapshot(prev, makeSnapshot()))
+    store.updateLive((prev) =>
+      applyTransientLiveFrame(prev, {
+        live: { conversationId: 1, text: 'frame-1', tools: [], updatedAt: 100 },
+      }),
+    )
+
+    let renderCount = 0
+    let observedText = ''
+    const Probe = ({ active }: { active: boolean }): React.ReactNode => {
+      const live = useConversationLive(1, active)
+      renderCount++
+      observedText = live?.text ?? ''
+      return <div data-testid="frozen-live">{observedText}</div>
+    }
+
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    let root: Root | undefined
+    mountedCleanups.push(async () => {
+      const r = root
+      if (r !== undefined) await act(async () => { r.unmount() })
+      store.dispose()
+      host.remove()
+    })
+
+    const renderWithActive = (active: boolean): React.JSX.Element => (
+      <HelmxExternalStoreContext.Provider value={store}>
+        <Probe active={active} />
+      </HelmxExternalStoreContext.Provider>
+    )
+
+    // 1. 活跃挂载读取 frame-1
+    await act(async () => {
+      root = createRoot(host)
+      root.render(renderWithActive(true))
+    })
+    assert.equal(observedText, 'frame-1')
+
+    // 2. 切为隐藏保活（active = false）：保留 frame-1（不坍塌 DOM），后续 5 帧推送产生 0 次重渲染
+    await act(async () => {
+      root!.render(renderWithActive(false))
+    })
+    assert.equal(observedText, 'frame-1', '切入隐藏态时保留最后可见 live 快照不坍塌')
+    renderCount = 0
+
+    for (let i = 2; i <= 6; i++) {
+      await act(async () => {
+        store.updateLive((prev) =>
+          applyTransientLiveFrame(prev, {
+            live: { conversationId: 1, text: `frame-${i}`, tools: [], updatedAt: 100 * i },
+          }),
+        )
+      })
+    }
+    assert.equal(renderCount, 0, 'active=false 隐藏态下收到 live 推送必须 0 次重渲染')
+    assert.equal(observedText, 'frame-1')
+
+    // 3. 恢复可见（active = true）：立即追平到 frame-6，且恢复实时订阅
+    await act(async () => {
+      root!.render(renderWithActive(true))
+    })
+    assert.equal(observedText, 'frame-6', '恢复 active=true 后立即对齐最新 live 快照')
+
+    await act(async () => {
+      store.updateLive((prev) =>
+        applyTransientLiveFrame(prev, {
+          live: { conversationId: 1, text: 'frame-7', tools: [], updatedAt: 700 },
+        }),
+      )
+    })
+    assert.equal(observedText, 'frame-7', '恢复 active=true 后继续响应后续 live 推送')
+  })
 })

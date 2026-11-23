@@ -60,3 +60,34 @@ test('ordinary streaming output flushes without waiting for fixed 4KiB buffer wh
   assert.equal(stream.push('credential'), '[REDACTED]')
   assert.equal(stream.flush(), '')
 })
+
+test('SecretStash cached regex invalidates cleanly on distinct add, duplicate add, disposer removal, and clear', { timeout: 60_000 }, () => {
+  const stash = new SecretStash()
+  assert.equal(stash.redact('hello world'), 'hello world')
+
+  // Distinct keys + duplicate reference count for first key
+  const d1 = stash.addRedaction('alpha-secret')
+  const d1Dup = stash.addRedaction('alpha-secret')
+  const d2 = stash.addRedaction('beta-secret')
+  assert.equal(stash.redact('alpha-secret and beta-secret'), '[REDACTED] and [REDACTED]')
+
+  // Removing one duplicate ref keeps alpha-secret active
+  d1()
+  assert.equal(stash.redact('alpha-secret and beta-secret'), '[REDACTED] and [REDACTED]')
+
+  // Removing last ref for alpha-secret invalidates regex immediately while preserving beta-secret
+  d1Dup()
+  assert.equal(stash.redact('alpha-secret and beta-secret'), 'alpha-secret and [REDACTED]')
+
+  // Streaming redactor created after key mutation observes the updated compiled pattern
+  const stream = stash.createStreamingRedactor()
+  assert.equal(stream.push('alpha-secret beta-') + stream.push('secret') + stream.flush(), 'alpha-secret [REDACTED]')
+
+  // Removing last remaining key or calling clear() restores pass-through
+  d2()
+  assert.equal(stash.redact('beta-secret'), 'beta-secret')
+  stash.addRedaction('gamma-secret')
+  assert.equal(stash.redact('gamma-secret'), '[REDACTED]')
+  stash.clear()
+  assert.equal(stash.redact('gamma-secret'), 'gamma-secret')
+})

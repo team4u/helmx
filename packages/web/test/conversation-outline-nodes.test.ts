@@ -557,3 +557,23 @@ test('sameOutlineAnchor：entryId / headingIndex / cardId 三元组逐字段比�
   assert.equal(sameOutlineAnchor({ entryId: '2', cardId: 'tool:c1' }, { entryId: '2', cardId: 'tool:c2' }), false)
 })
 
+test('多段助手正文单遍标题扫描：跨段代码围栏不误识别标题，headingIndex 跨段连续递增', { timeout: 60_000 }, () => {
+  const items = buildTimelineItems([
+    humanEntry('1', '给出多段示例'),
+    assistantTextEntry('2', '# 第一节\n```md\n# 围栏内伪标题一'),
+    toolCallEntry('3', 'call-1', 'subagent', { prompt: '执行子任务' }),
+    toolResultEntry('4', 'call-1', 'subagent'),
+    assistantTextEntry('5', '# 仍处于未闭合围栏内的伪标题二\n```\n## 第二节\n正文。'),
+  ], { toolViews: TOOL_VIEWS })
+  const nodes = buildConversationOutline(items)
+  assert.deepEqual(kindsOf(nodes), ['human', 'heading', 'card', 'heading'])
+  assert.deepEqual(
+    nodes
+      .filter((n): n is OutlineHeadingNode => n.kind === 'heading')
+      .map((h) => [h.headingIndex, h.level, h.text]),
+    [
+      [0, 1, '第一节'],
+      [1, 2, '第二节'],
+    ],
+  )
+})

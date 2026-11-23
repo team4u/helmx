@@ -4,6 +4,7 @@
  */
 
 export * from './conversation.js'
+export * from './live-delta.js'
 export * from './activity.js'
 export * from './ask.js'
 export * from './artifact.js'

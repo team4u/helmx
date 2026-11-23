@@ -1974,4 +1974,101 @@ describe("sse-resume", () => {
       await h.close()
     }
   })
+
+  test('瞬态 conversation.live.delta 按 LCP 增量更新实时视图，baseRev 失配时强制全量重同步', { timeout: 60_000 }, async () => {
+    localStorage.setItem('helmx:token', 't1')
+    const h = await mountProvider()
+    try {
+      const first = snapshotConnection(h, {
+        bootId: 'b1',
+        seq: 5,
+        conversations: [{ ...conv(1, '流式差量'), status: 'working' }],
+        pendingAsks: [],
+        plugins: [],
+        ui: [],
+      })
+      await h.waitFor((o) => o.sseConnected === true)
+
+      // 1. 基准全量 live 帧（rev: 1）
+      first.send(
+        `event: conversation.live\ndata: ${JSON.stringify({
+          live: {
+            conversationId: 1,
+            text: 'hello',
+            tools: [],
+            generation: {
+              taskId: 3,
+              attempt: 1,
+              message: { content: [{ type: 'text', text: 'hello' }], usage: { output: 5 } },
+            },
+            updatedAt: 100,
+            rev: 1,
+          },
+        })}\n\n`,
+      )
+      await h.waitFor(() => h.store().conversationLives[1]?.text === 'hello')
+
+      // 2. 差量帧（baseRev: 1 -> rev: 2）追加正文与 generation block，不消耗 durable seq
+      first.send(
+        `event: conversation.live.delta\ndata: ${JSON.stringify({
+          delta: {
+            conversationId: 1,
+            baseRev: 1,
+            rev: 2,
+            updatedAt: 150,
+            text: [5, ' world'],
+            generation: {
+              mode: 'patch',
+              taskId: 3,
+              attempt: 1,
+              blocks: [{ op: 'text', patch: [5, ' world'] }],
+              usage: { output: 8 },
+            },
+          },
+        })}\n\n`,
+      )
+      await h.waitFor(() => h.store().conversationLives[1]?.text === 'hello world')
+      assert.equal(h.store().conversationLives[1]?.rev, 2)
+      assert.equal(h.store().conversationLives[1]?.generation?.message?.usage?.output, 8)
+
+      // 3. baseRev 失配（跳过 rev 2 直接给 baseRev: 99）-> 客户端立即作废凭据并全量重连
+      let secondUrl = ''
+      let second: ControlledStream | undefined
+      h.nextEvents((url, signal) => {
+        secondUrl = url
+        const c = controlledStream(signal)
+        second = c
+        return c
+      })
+      first.send(
+        `event: conversation.live.delta\ndata: ${JSON.stringify({
+          delta: {
+            conversationId: 1,
+            baseRev: 99,
+            rev: 100,
+            updatedAt: 200,
+            text: [0, 'corrupt'],
+          },
+        })}\n\n`,
+      )
+      await h.waitFor(() => h.eventsUrls.length >= 2 && second !== undefined)
+      assert.equal(secondUrl, '/api/events', 'delta rev 失配后必须清空凭据走全量快照同步')
+      second!.send(
+        snapshotFrame({
+          bootId: 'b1',
+          seq: 6,
+          conversations: [{ ...conv(1, '流式差量'), status: 'working' }],
+          conversationLives: [{ conversationId: 1, text: 'recovered', tools: [], updatedAt: 250, rev: 10 }],
+          pendingAsks: [],
+          plugins: [],
+          ui: [],
+        }),
+      )
+      await h.waitFor((o) => o.sseConnected === true && h.store().conversationLives[1]?.text === 'recovered')
+      second!.end()
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    } finally {
+      await h.close()
+    }
+  })
 })

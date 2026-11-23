@@ -1,7 +1,7 @@
 /** builtin:tiers: semantic model tiers (`tier/<id>`) and reusable preset templates. */
 import {
   HelmxError, MODEL_TIER_DESCRIPTION_MAX_LENGTH,
-  type ModelTiersCapability, type ModelTierSpec, type PluginDefinition,
+  type ModelCatalog, type ModelTiersCapability, type ModelTierSpec, type PluginDefinition,
 } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { readTiersSkillAsset } from './tiers/assets.js'
@@ -102,10 +102,10 @@ export function createTiersPlugin(): PluginDefinition {
         },
       })
 
-      const buildListPayload = async () => {
+      const buildListPayload = async (catalog?: ModelCatalog) => {
         const state = readState()
         return {
-          tiers: projectTierEntries(state.tiers, await ctx.host.listModels()),
+          tiers: projectTierEntries(state.tiers, catalog ?? await ctx.host.listModels()),
           templates: sortTemplates(state.templates),
           ...(state.activeTemplate ? { activeTemplate: state.activeTemplate } : {}),
           autoInjectCatalog: autoInjectEnabled(),
@@ -119,7 +119,7 @@ export function createTiersPlugin(): PluginDefinition {
         for (const spec of Object.values(nextTiers)) assertTargetModelNotDisabled(catalog, spec.model)
         assertRemovedTiersNotInUse(removed, catalog, profiles, opts.force)
         await persist({ tiers: nextTiers, templates: current.templates, ...(opts.activeTemplate ? { activeTemplate: opts.activeTemplate } : {}) })
-        return buildListPayload()
+        return buildListPayload(catalog)
       }
 
       ctx.service({
@@ -153,7 +153,7 @@ export function createTiersPlugin(): PluginDefinition {
         idempotent: true,
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: LIST_OUTPUT_SCHEMA,
-        handler: buildListPayload,
+        handler: () => buildListPayload(),
       })
 
       ctx.action({
@@ -169,14 +169,15 @@ export function createTiersPlugin(): PluginDefinition {
           enqueueWrite(async () => {
             const id = assertTierId(input.id)
             const spec = normalizeTierSpec({ model: assertConcreteModelRef(input.model), ...(input.thinkingLevel !== undefined ? { thinkingLevel: input.thinkingLevel } : {}), ...(input.description !== undefined ? { description: input.description } : {}) }, id)
-            assertTargetModelNotDisabled(await ctx.host.listModels(), spec.model)
+            const catalog = await ctx.host.listModels()
+            assertTargetModelNotDisabled(catalog, spec.model)
             const cur = readState()
             if (!Object.hasOwn(cur.tiers, id) && Object.keys(cur.tiers).length >= MAX_TIERS_COUNT) {
               throw new HelmxError('validation_error', `At most ${MAX_TIERS_COUNT} model tiers are allowed`, 400, { maxTiers: MAX_TIERS_COUNT })
             }
             const nextTiers = { ...cur.tiers, [id]: spec }
             await persist({ tiers: nextTiers, templates: cur.templates })
-            const tiers = projectTierEntries(nextTiers, await ctx.host.listModels())
+            const tiers = projectTierEntries(nextTiers, catalog)
             return { tier: tiers.find((e) => e.id === id)!, tiers }
           }),
       })
@@ -197,7 +198,7 @@ export function createTiersPlugin(): PluginDefinition {
             const nextTiers = { ...cur.tiers }
             delete nextTiers[id]
             await persist({ tiers: nextTiers, templates: cur.templates })
-            return { removed: id, tiers: projectTierEntries(nextTiers, await ctx.host.listModels()) }
+            return { removed: id, tiers: projectTierEntries(nextTiers, catalog) }
           }),
       })
 

@@ -10,6 +10,7 @@ import type {
   HelmxEventFrame,
   HelmxResumedFrame,
   HelmxSnapshot,
+  HelmxTransientLiveDeltaFrame,
   HelmxTransientLiveFrame,
 } from '@helmx/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
@@ -20,6 +21,7 @@ import {
   applyEventFrame,
   applyResumedFrame,
   applySnapshot,
+  applyTransientLiveDeltaFrame,
   applyTransientLiveFrame,
   extractDocErrorPluginId,
   isConfigOnlyPluginChange,
@@ -243,6 +245,13 @@ function handleTransientLiveFrame(payload: unknown, ctx: FrameHandlerContext): v
   observeLiveFrameClocks([(payload as HelmxTransientLiveFrame).live])
 }
 
+function handleTransientLiveDeltaFrame(payload: unknown, ctx: FrameHandlerContext): void {
+  if (ctx.streamState.mode === null) throw new Error('Live connection missing the initial snapshot')
+  const frame = payload as HelmxTransientLiveDeltaFrame
+  ctx.store.updateLive((state) => applyTransientLiveDeltaFrame(state, frame))
+  observeLiveFrameClocks([frame?.delta])
+}
+
 /**
  * 帧内 ConversationLive 的 updatedAt 喂给时钟偏差估计（server-clock）。
  */
@@ -462,6 +471,7 @@ export function useSseEvents({ store, authenticated, logout, unreadSync }: UseSs
             if (message.event === 'snapshot') handleSnapshotFrame(payload, ctx)
             else if (message.event === 'resumed') handleResumedFrame(payload, ctx)
             else if (message.event === 'conversation.live') handleTransientLiveFrame(payload, ctx)
+            else if (message.event === 'conversation.live.delta') handleTransientLiveDeltaFrame(payload, ctx)
             else handleEventFrame(payload, ctx)
           } catch (error) {
             store.sseCursor = null

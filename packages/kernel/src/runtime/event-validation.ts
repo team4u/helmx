@@ -166,6 +166,7 @@ const CONVERSATION_LIVE_CHECKER = Compile(
     thinking: Type.Optional(Type.String()),
     queuedInputs: Type.Optional(Type.Array(Type.Unknown())),
     generation: Type.Optional(LIVE_GENERATION_SCHEMA),
+    rev: Type.Optional(SafePositiveInt),
   }),
 )
 
@@ -466,7 +467,18 @@ export function validateAndRedactConversationLive(
   redact: (text: string) => string,
 ): ConversationLive {
   const clean = pruneUndefined(payload, new WeakSet())
-  const redacted = redactJsonValue(clean, (t) => redact(t))
+  // Per-frame memo for large strings: `live.text` / `live.thinking` often share the exact string value
+  // with `live.generation.message.content` blocks, so memoizing avoids running regex redaction twice.
+  const largeStringCache = new Map<string, string>()
+  const memoizedRedact = (text: string): string => {
+    if (text.length < 128) return redact(text)
+    const hit = largeStringCache.get(text)
+    if (hit !== undefined) return hit
+    const out = redact(text)
+    largeStringCache.set(text, out)
+    return out
+  }
+  const redacted = redactJsonValue(clean, memoizedRedact)
   const live = parseEventShape(
     CONVERSATION_LIVE_CHECKER,
     redacted,

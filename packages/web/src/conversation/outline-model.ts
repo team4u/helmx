@@ -201,25 +201,26 @@ export function summarizeOutlineText(text: string, attachmentCount = 0, t?: WebM
  * - strictly ignore comment lines inside ``` or ~~~ code fences (e.g. `# bash comment`);
  * - extract H1~H3 only (H4~H6 are too fine-grained and would add noise).
  */
-export function extractMarkdownHeadings(markdown: string): ExtractedHeading[] {
-  if (typeof markdown !== 'string' || markdown === '') return []
-  const headings: ExtractedHeading[] = []
+function scanHeadingsFromMarkdown(
+  markdown: string,
+  state: { activeFence: string | null },
+  out: ExtractedHeading[],
+): void {
+  if (typeof markdown !== 'string' || markdown === '') return
   const lines = markdown.split(/\r?\n/)
-  let activeFence: string | null = null
-
   for (const rawLine of lines) {
     const trimmedStart = rawLine.trimStart().replace(/^(?:>\s*)+/, '')
     const fenceMatch = /^(`{3,}|~{3,})/.exec(trimmedStart)
     if (fenceMatch !== null) {
       const marker = fenceMatch[1]!
-      if (activeFence === null) {
-        activeFence = marker[0]!
-      } else if (trimmedStart.startsWith(activeFence.repeat(3))) {
-        activeFence = null
+      if (state.activeFence === null) {
+        state.activeFence = marker[0]!
+      } else if (trimmedStart.startsWith(state.activeFence.repeat(3))) {
+        state.activeFence = null
       }
       continue
     }
-    if (activeFence !== null) continue
+    if (state.activeFence !== null) continue
 
     const match = /^(#{1,3})\s+(.+?)\s*#*$/.exec(trimmedStart)
     if (match === null) continue
@@ -228,11 +229,16 @@ export function extractMarkdownHeadings(markdown: string): ExtractedHeading[] {
     const text = stripInlineMarkdown(rawTitle)
     if (text === '') continue
     const level = hashes.length as 1 | 2 | 3
-    headings.push({
+    out.push({
       level,
       text: truncateLabel(text, HEADING_MAX_CHARS),
     })
   }
+}
+
+export function extractMarkdownHeadings(markdown: string): ExtractedHeading[] {
+  const headings: ExtractedHeading[] = []
+  scanHeadingsFromMarkdown(markdown, { activeFence: null }, headings)
   return headings
 }
 
@@ -368,23 +374,29 @@ function appendAssistantNodes(
       textSegments.push(seg)
     }
   }
-  const fullMarkdown = textSegments.map((seg) => seg.text).join('\n\n')
-  const hasText = fullMarkdown.trim() !== ''
-  const headings = hasText ? extractMarkdownHeadings(fullMarkdown) : []
+  // Single linear pass across all text segments carrying shared fence state (avoids O(M^2) re-scanning).
+  const fenceState: { activeFence: string | null } = { activeFence: null }
+  const headingsPerSegment: ExtractedHeading[][] = []
+  let totalHeadings = 0
+  let hasText = false
+  for (const seg of textSegments) {
+    if (!hasText && seg.text.trim() !== '') hasText = true
+    const segHeadings: ExtractedHeading[] = []
+    scanHeadingsFromMarkdown(seg.text, fenceState, segHeadings)
+    headingsPerSegment.push(segHeadings)
+    totalHeadings += segHeadings.length
+  }
+  const fullMarkdown = hasText && totalHeadings === 0 ? textSegments.map((seg) => seg.text).join('\n\n') : ''
 
   let bodyEmitted = false
   let cardEmitted = false
   let headingCursor = 0
-  let accumulatedText = ''
+  let textSegIndex = 0
   for (const seg of turn.segments) {
     if (seg.kind === 'text') {
-      if (headings.length > 0) {
-        // Keep heading nodes in true timeline order with body/cards. Re-parse the accumulated
-        // body so fence state carries across segments while headingIndex keeps matching DOM order.
-        accumulatedText = accumulatedText === '' ? seg.text : `${accumulatedText}\n\n${seg.text}`
-        const parsed = extractMarkdownHeadings(accumulatedText)
-        for (; headingCursor < parsed.length; headingCursor++) {
-          const heading = parsed[headingCursor]!
+      const segHeadings = headingsPerSegment[textSegIndex++] ?? []
+      if (totalHeadings > 0) {
+        for (const heading of segHeadings) {
           out.push({
             kind: 'heading',
             key: `outline:heading:${turn.key}:${headingCursor}`,
@@ -394,8 +406,9 @@ function appendAssistantNodes(
             text: heading.text,
             ...(parentHumanKey !== undefined ? { parentHumanKey } : {}),
           })
+          headingCursor += 1
         }
-      } else if (!bodyEmitted) {
+      } else if (hasText && !bodyEmitted) {
         bodyEmitted = true
         out.push({
           kind: 'assistant',
@@ -420,7 +433,7 @@ function appendAssistantNodes(
       out.push(buildToolCardNode(turn, seg.tool, anchorId, parentHumanKey))
     }
   }
-  if (!bodyEmitted && headings.length === 0 && !cardEmitted) {
+  if (!bodyEmitted && totalHeadings === 0 && !cardEmitted) {
     const status: OutlineAssistantStatus = turn.live ? 'generating' : failed ? 'failed' : 'no-content'
     out.push({
       kind: 'assistant',

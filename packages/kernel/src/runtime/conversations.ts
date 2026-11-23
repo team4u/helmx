@@ -39,7 +39,7 @@ import type {
   TurnOutcome,
   TurnSettledPayload,
 } from '@helmx/protocol'
-import { HelmxError, isHubActivityBusy } from '@helmx/protocol'
+import { HelmxError, isHubActivityBusy, sameConversationLiveContent, sameQueuedInputs } from '@helmx/protocol'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness, ConversationView, Observation, Observer } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
@@ -274,6 +274,26 @@ export class ConversationTracker {
     }
     mirror.lastEmittedEntry = watermark
     mirror.lastSeenEntryId = seenEntryId
+    // Seed latest persisted assistant watermark (and in-memory lastAssistant cache) so subsequent streaming
+    // adopt ticks do not re-trigger FTS5 trigram indexing for historical assistant entries already persisted before observe.
+    for (let i = view.entries.length - 1; i >= 0; i -= 1) {
+      const entry = view.entries[i] as
+        | { kind: string; id: number; model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }> }
+        | undefined
+      if (entry === undefined) continue
+      if (entry.kind === 'helmx.rewind' || entry.kind === 'pi.reset') break
+      if (entry.kind === 'pi.assistant') {
+        const text = assistantTextOfEntry(entry)
+        if (text !== '') {
+          const numericId = Number(entry.id)
+          if (Number.isFinite(numericId)) {
+            mirror.lastIndexedAssistantEntryId = numericId
+            mirror.lastAssistant ??= { entryId: numericId, text }
+          }
+          break
+        }
+      }
+    }
     if (usageWatermark >= 0) this.usage.advanceWatermarkTo(id, usageWatermark)
     const windowEntries = view.entries as never as ReadonlyArray<EntryRecordLike>
     let initialLastEntryId = latestVisibleEntryIdOf(windowEntries)
@@ -743,7 +763,8 @@ export class ConversationTracker {
     // compaction state changes, schedule an async refresh (deduplicated synchronously; awaiting in observe is forbidden).
     this.usage.noteBoundary(id, view, prev, live)
 
-    // Assistant text: take the newest pi.assistant entry at the window tail.
+    // Assistant text: take the newest pi.assistant entry at the window tail, strictly deduplicated by entry ID
+    // so 100ms streaming progress snapshots never repeatedly re-index the same persisted assistant text into FTS5.
     // Stop scanning backward immediately upon hitting helmx.rewind / pi.reset: right after an in-place rewrite
     // appends a truncation marker (before a new answer exists), older pi.assistant entries are superseded and must
     // never re-trigger onAssistantText to pollute FTS5 with stale answers.
@@ -754,8 +775,11 @@ export class ConversationTracker {
       if (entry === undefined) continue
       if (entry.kind === 'helmx.rewind' || entry.kind === 'pi.reset') break
       if (entry.kind === 'pi.assistant') {
+        const numericId = Number(entry.id)
+        if (Number.isFinite(numericId) && mirror.lastIndexedAssistantEntryId === numericId) break
         const text = assistantTextOfEntry(entry)
         if (text !== '') {
+          if (Number.isFinite(numericId)) mirror.lastIndexedAssistantEntryId = numericId
           this.events.onAssistantText(id, entry.id, text)
           break
         }
@@ -941,20 +965,18 @@ export class ConversationTracker {
     if (queuedEmpty) {
       // Do not emit idle views (terminal flushes are handled by emitSettled); however, if inputs were previously
       // queued and the authoritative inbox is now empty, emit a cleanup frame so client pills do not linger.
-      const prevQueued = mirror?.lastQueuedLiveKey
-      if (prevQueued === undefined || prevQueued === '[]') return
+      if ((mirror?.lastEmittedLive?.queuedInputs?.length ?? 0) === 0) return
       const cleanup = deriveConversationLive(id, live, Date.now(), inboxItems)
       this.sendLiveNow(id, cleanup)
       return
     }
     const snapshot = deriveConversationLive(id, live, Date.now(), inboxItems)
-    const key = this.liveKeyOf(snapshot)
-    // Align previous-queue fingerprint: uninitialized means empty '[]' (so first empty queue never falsely skips throttle);
+    const prevEmitted = mirror?.lastEmittedLive
+    // Align previous-queue check: uninitialized counts as empty (so first empty queue never falsely bypasses throttle);
     // only actual queue changes bypass the 75ms throttle.
-    const queuedKey = JSON.stringify(snapshot.queuedInputs ?? [])
-    const prevQueuedKey = mirror?.lastQueuedLiveKey ?? '[]'
-    if (key === mirror?.lastLiveKey && queuedKey === prevQueuedKey) return
-    if (queuedKey !== prevQueuedKey) {
+    const queuedChanged = !sameQueuedInputs(prevEmitted?.queuedInputs, snapshot.queuedInputs)
+    if (!queuedChanged && prevEmitted !== undefined && sameConversationLiveContent(prevEmitted, snapshot)) return
+    if (queuedChanged) {
       // Immediate priority for queue enqueue/dequeue: cancel timer and flush synchronously without waiting 75ms.
       this.clearLiveTimer(id)
       this.sendLiveNow(id, snapshot)
@@ -971,26 +993,12 @@ export class ConversationTracker {
     m.liveTimer = timer
   }
 
-  /** Live frame content fingerprint: text/thinking/tools/generation/queuedInputs (single formula shared by send and dedupe).
-   * generation participates in fingerprinting so pure tool-call argument streaming (while text/thinking remain empty)
-   * is not suppressed by unchanged snapshots. */
-  private liveKeyOf(snapshot: ConversationLive): string {
-    return JSON.stringify([
-      snapshot.text,
-      snapshot.thinking ?? '',
-      snapshot.tools,
-      snapshot.generation ?? null,
-      snapshot.queuedInputs ?? [],
-    ])
-  }
-
-  /** Synchronously send one live frame (shared by terminal flushes / queue cleanup) and record both fingerprints. */
+  /** Synchronously send one live frame (shared by terminal flushes / queue cleanup) and record the emitted snapshot. */
   private sendLiveNow(id: number, snapshot: ConversationLive): void {
     this.clearLiveTimer(id)
     const mirror = this.mirrorOf(id)
     mirror.pendingLive = undefined
-    mirror.lastLiveKey = this.liveKeyOf(snapshot)
-    mirror.lastQueuedLiveKey = JSON.stringify(snapshot.queuedInputs ?? [])
+    mirror.lastEmittedLive = snapshot
     this.events.onLiveChanged?.(snapshot)
   }
 
@@ -1000,8 +1008,8 @@ export class ConversationTracker {
     const snapshot = mirror?.pendingLive
     if (mirror === undefined || snapshot === undefined) return
     mirror.pendingLive = undefined
-    mirror.lastLiveKey = this.liveKeyOf(snapshot)
-    mirror.lastQueuedLiveKey = JSON.stringify(snapshot.queuedInputs ?? [])
+    if (mirror.lastEmittedLive !== undefined && sameConversationLiveContent(mirror.lastEmittedLive, snapshot)) return
+    mirror.lastEmittedLive = snapshot
     this.events.onLiveChanged?.(snapshot)
   }
 
@@ -1017,12 +1025,16 @@ export class ConversationTracker {
       Date.now(),
       mirror?.inbox,
     )
-    const key = this.liveKeyOf(snapshot)
-    const queuedKey = JSON.stringify(snapshot.queuedInputs ?? [])
-    if (key === mirror?.lastLiveKey && queuedKey === (mirror?.lastQueuedLiveKey ?? '[]')) return
+    const prevEmitted = mirror?.lastEmittedLive
+    if (
+      prevEmitted !== undefined &&
+      sameConversationLiveContent(prevEmitted, snapshot) &&
+      sameQueuedInputs(prevEmitted.queuedInputs, snapshot.queuedInputs)
+    ) {
+      return
+    }
     const m = this.mirrorOf(conversationId)
-    m.lastLiveKey = key
-    m.lastQueuedLiveKey = queuedKey
+    m.lastEmittedLive = snapshot
     this.events.onLiveChanged(snapshot)
   }
 
@@ -1428,10 +1440,14 @@ export class ConversationTracker {
    * answer via getLastAssistantText while earlier turns outside the interval stay valid. */
   invalidateLastAssistantWithin(conversationId: number, from: number, through: number): void {
     const mirror = this.mirrors.get(conversationId)
-    const cached = mirror?.lastAssistant
-    if (cached === undefined) return
-    if (cached.entryId >= from && cached.entryId <= through) {
-      mirror!.lastAssistant = undefined
+    if (mirror === undefined) return
+    const cached = mirror.lastAssistant
+    if (cached !== undefined && cached.entryId >= from && cached.entryId <= through) {
+      mirror.lastAssistant = undefined
+    }
+    const indexedId = mirror.lastIndexedAssistantEntryId
+    if (indexedId !== undefined && indexedId >= from && indexedId <= through) {
+      mirror.lastIndexedAssistantEntryId = undefined
     }
   }
 }
