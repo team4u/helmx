@@ -458,8 +458,8 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   }, [overviewParams, isSplit, setScreenParams])
 
   const cards = useMemo(
-    () => buildOverviewCards({ conversations, background, profiles, plugins, t }),
-    [conversations, background, profiles, plugins, t],
+    () => buildOverviewCards({ conversations, background, profiles, plugins, viewedConversationIds, t }),
+    [conversations, background, profiles, plugins, viewedConversationIds, t],
   )
   const archivedCards = useMemo(
     () => buildArchivedOverviewCards({ conversations, background, profiles, plugins }),

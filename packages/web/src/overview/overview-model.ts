@@ -171,6 +171,8 @@ export function buildOverviewCards(input: {
   background: ConversationBackgroundIndex
   profiles: ReadonlyArray<Profile>
   plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
+  /** 当前正在查看的会话 ID（透传给 aggregateAttentionTrees 做 unread_done 乐观已读）。 */
+  viewedConversationIds?: ReadonlySet<number>
   /** Locale translator（摘要与后代计数文案）；缺省英文桥接。 */
   t?: WebMessageTranslator
 }): OverviewCard[] {

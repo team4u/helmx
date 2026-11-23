@@ -630,7 +630,7 @@ test('ConversationOverview renders the card grid with honest facts and directly 
   }
 })
 
-test('ConversationOverview hides the unread completion light as soon as the conversation becomes viewed', { timeout: 60_000 }, async () => {
+test('ConversationOverview clears the unread completion light and bucket count immediately when the conversation becomes viewed', { timeout: 60_000 }, async () => {
   const store = overviewStore({
     conversations: [
       conv({ id: 8, status: 'done', unread: true }),
@@ -646,12 +646,18 @@ test('ConversationOverview hides the unread completion light as soon as the conv
       root = createRoot(container)
       root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview)))
     })
-    const unreadCard = [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) => card.textContent?.includes('#8'))
-    const readCard = [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) => card.textContent?.includes('#9'))
-    assert.ok(unreadCard?.querySelector('.status-dot-done'), 'unread completed card has a done light')
-    assert.ok(readCard?.querySelector('.status-dot-done') === null, 'read completed card has no unread light')
-    await act(async () => store.openTarget({ kind: 'conversation', conversationId: 8 }))
-    assert.ok(unreadCard?.querySelector('.status-dot-done') === null, 'opening the conversation hides its light immediately before the PATCH response')
+    const findCard = (id: number) =>
+      [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) => card.textContent?.includes(`#${id}`))
+    const unreadTab = () =>
+      [...container.querySelectorAll<HTMLElement>('.segmented-control-btn')].find((btn) =>
+        btn.textContent?.includes('Unread'),
+      )
+    assert.ok(findCard(8)?.querySelector('.status-dot-done'), 'unread completed card has a done light')
+    assert.ok(findCard(9)?.querySelector('.status-dot-done') === null, 'read completed card has no unread light')
+    assert.ok(unreadTab()?.textContent?.includes('1'), 'unread bucket pill starts at 1 before viewing')
+    await act(async () => store.openTarget({ kind: 'conversation', conversationId: 8 }, { split: true }))
+    assert.ok(findCard(8)?.querySelector('.status-dot-done') === null, 'opening the conversation hides its light immediately before the PATCH response')
+    assert.ok(unreadTab()?.textContent?.includes('0'), 'opening the conversation drops the overview unread bucket count to 0 immediately')
   } finally {
     await act(async () => root?.unmount())
     container.remove()

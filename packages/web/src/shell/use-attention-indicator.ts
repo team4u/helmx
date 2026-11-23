@@ -5,7 +5,7 @@
  * doc / 当前导航目标）推导后台在途索引与态势微标，并自洽发现、按需加载
  * workbench badge doc——不依赖侧栏抽屉是否展开（移动端合着抽屉时后台
  * 任务也不失明；ensurePluginDoc 幂等，多处挂载不重复请求）。
- * 侧栏总览入口、移动端汉堡微标与桌面折叠 Rail 微标共用本 Hook 的同源输出。
+ * 侧栏总览入口、移动端快捷总览按钮与会话总览页共用本 Hook 的同源输出。
  */
 import { useEffect, useMemo } from 'react'
 import {
@@ -19,7 +19,6 @@ import {
   useProfilesSlice,
   useStoreActions,
 } from '../lib/store-context.js'
-import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
 import {
   buildAttentionModel,
@@ -28,9 +27,9 @@ import {
 } from './attention-model.js'
 
 export interface GlobalAttentionValue {
-  /** 全局态势微标（成员级排除正在查看的会话）。 */
+  /** 全局态势微标（与 `#/overview` 三活跃桶 1:1 同源，仅 `unread_done` 做乐观已读）。 */
   indicator: GlobalAttentionIndicator
-  /** 当前可见的主屏/分屏/会话弹窗目标，用于即时隐藏已查看的未读完成提示。 */
+  /** 当前可见的主屏/分屏/顶层抽屉/关联弹窗目标，用于 `unread_done` 乐观已读与卡片绿点即时消除。 */
   viewedConversationIds: ReadonlySet<number>
   /** 后台在途索引（与会话行单灯位、插件 SDK 快照共享同一事实源）。 */
   background: ConversationBackgroundIndex
@@ -46,7 +45,6 @@ export function useGlobalAttention(): GlobalAttentionValue {
   const plugins = usePlugins()
   const { profiles } = useProfilesSlice()
   const { ensurePluginDoc } = useStoreActions()
-  const { t } = useWebLocale()
 
   const background = backgroundSnapshot.byConversation
   useEffect(() => {
@@ -63,8 +61,8 @@ export function useGlobalAttention(): GlobalAttentionValue {
     [primaryTarget, splitTarget, drawerStack, activeModal],
   )
   const indicator = useMemo(
-    () => buildAttentionModel({ conversations, background, profiles, plugins, viewedConversationIds, t }),
-    [conversations, background, profiles, plugins, viewedConversationIds, t],
+    () => buildAttentionModel({ conversations, background, profiles, plugins, viewedConversationIds }),
+    [conversations, background, profiles, plugins, viewedConversationIds],
   )
   return { indicator, background, viewedConversationIds }
 }

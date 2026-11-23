@@ -1,16 +1,14 @@
 /**
  * 全局并发态势（attention）测试：
- * - 纯函数契约：aggregateAttentionTrees（根树聚合、三桶归属、代表位与直达
- *   目标、暴露边界——已归档根树/停用插件托管 Profile 不进态势、sidebarSection
- *   接管的会话仍纳入）、buildAttentionModel（indicator 成员级排除）、
- *   collectViewedConversationIds / resolveGlobalAttentionIndicator（排除正在
- *   查看的根树、tone 优先级 error > blocked > running > done）、
- *   composeHonestTreeSummary / composeAttentionSummary（只列非零桶）；
+ * - 纯函数契约：aggregateAttentionTrees（根树聚合、三桶归属、unread_done 乐观
+ *   已读、代表位与直达目标、暴露边界——已归档根树/停用插件托管 Profile 不进态势、
+ *   sidebarSection 接管的会话仍纳入）、buildAttentionModel（全局态势计数与
+ *   #/overview 三桶 1:1 对账、tone 优先级 error > blocked > running > done）、
+ *   collectViewedConversationIds、composeHonestTreeSummary / composeAttentionSummary；
  * - 命令面板态势优先排序：selectRecentConversationsForPalette 可选 background
  *   索引（需处理 > 运行中 > 未读完成 > 其余按 updatedAt 倒序）；
- * - Sidebar 渲染与交互：会话总览脉冲入口挂在待审批下方、智能体站位上方，
- *   同源 tone 灯点与真实摘要副文、全安静时零灯零副文、点击直达 #/overview、
- *   分屏按钮钉右分屏、Rail「会话总览」按钮同源态势微标与 aria 摘要；
+ * - Sidebar 渲染与交互：会话总览入口挂在对话列表顶部，同源全局计数徽标不随
+ *   切换当前活跃会话而跳变、全安静时零徽标、点击直达 #/overview；
  * - 挂载路径：useGlobalAttention 自洽发现并按需加载 workbench badge doc
  *   （移动端合着抽屉也不漏后台任务）；
  * - 命令面板渲染：会话行（最近 + 匹配）行首灯槽对齐展示 ConversationStatusDot。
@@ -32,9 +30,9 @@ import {
   collectViewedConversationIds,
   composeAttentionSummary,
   composeHonestTreeSummary,
-  resolveGlobalAttentionIndicator,
   type GlobalAttentionIndicator,
 } from '../src/shell/attention-model.js'
+import { buildOverviewCards, overviewBucketCounts } from '../src/overview/overview-model.js'
 import { selectRecentConversationsForPalette } from '../src/shell/shortcuts-model.js'
 import { makeTestStore, HelmxExternalStoreContext, type TestStoreOverrides } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
@@ -84,10 +82,10 @@ function aggregate(
   })
 }
 
-/** 无翻译器调用（英文桥接）时的微标构建捷径（成员级排除语义）。 */
+/** 微标构建捷径（全局态势口径，仅 unread_done 随 viewedConversationIds 乐观已读）。 */
 function buildIndicator(
   conversations: ConversationSummary[],
-  viewedConversationIds: ReadonlySet<number>,
+  viewedConversationIds: ReadonlySet<number> = new Set(),
   background: ConversationBackgroundIndex = new Map(),
 ): GlobalAttentionIndicator {
   return buildAttentionModel({
@@ -213,64 +211,108 @@ test('representative and target selection are deterministic on recency ties', { 
 // 纯函数：indicator（微标聚合）与摘要
 // ---------------------------------------------------------------------------
 
-test('collectViewedConversationIds: exact main/split conversation ids (member-level, no root rollup)', { timeout: 60_000 }, () => {
+test('collectViewedConversationIds: collects exact main, split, top drawer and conversation-scoped modal ids', { timeout: 60_000 }, () => {
   const viewed = collectViewedConversationIds({
     primaryTarget: { kind: 'conversation', conversationId: 11 },
     splitTarget: { kind: 'conversation', conversationId: 2 },
+    drawerStack: [
+      { kind: 'conversation', conversationId: 99 },
+      { kind: 'conversation', conversationId: 33 },
+    ],
+    activeModal: { kind: 'workspace-file', conversationId: 44, path: 'README.md' },
   })
-  assert.deepEqual([...viewed].sort((a, b) => a - b), [2, 11], 'only the exact viewed conversations are excluded, never the whole root tree')
+  assert.deepEqual([...viewed].sort((a, b) => a - b), [2, 11, 33, 44], 'only main, split, top drawer, and modal conversation ids are marked viewed')
   const nonConversation = collectViewedConversationIds({
     primaryTarget: { kind: 'agent', profileId: 'assistant' },
     splitTarget: null,
   })
-  assert.equal(nonConversation.size, 0, 'agent/screen targets exclude nothing')
+  assert.equal(nonConversation.size, 0, 'agent/screen targets mark no conversation as viewed')
 })
 
-test('resolveGlobalAttentionIndicator: aggregate-all counting with tone priority error > blocked > running > done', { timeout: 60_000 }, () => {
-  const entries = [
-    { bucket: 'needs_attention' as const, tone: 'error' as const },
-    { bucket: 'needs_attention' as const, tone: 'blocked' as const },
-    { bucket: 'running' as const, tone: 'running' as const },
-    { bucket: 'unread_done' as const, tone: 'done' as const },
+test('buildAttentionModel: global counts stay invariant across viewed active sessions, apply optimistic read only to unread_done, and reconcile 1:1 with overview buckets', { timeout: 60_000 }, () => {
+  // Reproduces the reported mobile mismatch: root #555 is working itself, while
+  // root #332 is idle with working child #502. Switching between standby, #555,
+  // #332, or split view must keep the global running count steady at 2.
+  const twoRunningTrees = [
+    conv({ id: 555, status: 'working', createdAt: 9500, updatedAt: 9500 }),
+    conv({ id: 332, status: 'idle', createdAt: 9000, updatedAt: 9000 }),
+    conv({ id: 502, parentConversationId: 332, status: 'working', createdAt: 9100, updatedAt: 9100 }),
   ]
-  const full = resolveGlobalAttentionIndicator(entries)
+  for (const viewed of [new Set<number>(), new Set([555]), new Set([332]), new Set([555, 332]), new Set([502])]) {
+    const indicator = buildIndicator(twoRunningTrees, viewed)
+    const counts = overviewBucketCounts(
+      buildOverviewCards({
+        conversations: twoRunningTrees,
+        background: new Map(),
+        profiles: [],
+        plugins: [],
+        viewedConversationIds: viewed,
+      }),
+    )
+    assert.deepEqual(
+      [indicator.needsAttentionCount, indicator.runningCount, indicator.unreadDoneCount, indicator.totalCount, indicator.tone],
+      [0, 2, 0, 2, 'running'],
+      `running trees stay stably counted at 2 for viewed=[${[...viewed].join(',')}]`,
+    )
+    assert.equal(indicator.runningCount, counts.running, 'indicator runningCount reconciles 1:1 with overview running bucket')
+    assert.equal(indicator.totalCount, counts.needs_attention + counts.running + counts.unread_done)
+  }
+
+  // needs_attention (error / blocked) is never subtracted by viewing the conversation itself,
+  // and tone strictly follows error > blocked > running > done > null.
+  const mixed = [
+    conv({ id: 1, status: 'error', lastError: 'boom', createdAt: 9000 }),
+    conv({ id: 2, status: 'blocked', createdAt: 8900 }),
+    conv({ id: 3, status: 'working', createdAt: 8800 }),
+    conv({ id: 4, status: 'done', unread: true, createdAt: 8700 }),
+    conv({ id: 41, parentConversationId: 4, status: 'idle', createdAt: 8750 }),
+    conv({ id: 5, status: 'idle', createdAt: 8600 }),
+  ]
+  const allUnviewed = buildIndicator(mixed, new Set())
   assert.deepEqual(
-    [full.needsAttentionCount, full.runningCount, full.unreadDoneCount, full.totalCount, full.tone],
+    [allUnviewed.needsAttentionCount, allUnviewed.runningCount, allUnviewed.unreadDoneCount, allUnviewed.totalCount, allUnviewed.tone],
     [2, 1, 1, 4, 'error'],
-    'error outranks every other tone',
   )
-  assert.equal(resolveGlobalAttentionIndicator([]).tone, null)
-})
-
-test('member-level exclusion: viewing one descendant never erases a sibling ask in the same root tree', { timeout: 60_000 }, () => {
-  const conversations = [
-    conv({ id: 1, status: 'idle', createdAt: 9000, updatedAt: 9000 }),
-    conv({ id: 11, parentConversationId: 1, status: 'blocked', createdAt: 9100, updatedAt: 9100 }),
-    conv({ id: 12, parentConversationId: 1, status: 'blocked', createdAt: 9200, updatedAt: 9200 }),
-  ]
-  // Viewing descendant 11 (main) while sibling 12 still waits: the badge must keep alerting.
-  const siblingWaiting = buildIndicator(conversations, new Set([11]))
-  assert.equal(siblingWaiting.needsAttentionCount, 1, 'the sibling blocked ask keeps the badge counting')
-  assert.equal(siblingWaiting.tone, 'blocked')
-  // Viewing the only waiting member: the tree's whole signal sits on the viewed conversation -> silent.
-  const allViewed = buildIndicator(conversations, new Set([11, 12]))
-  assert.equal(allViewed.totalCount, 0, 'no self-alerting when every signal is on the viewed conversation')
-  assert.equal(allViewed.tone, null)
-  // Viewed root with an un-viewed working child: the running fact still counts.
-  const rootViewed = buildIndicator(
+  // Viewing error #1 and blocked #2 keeps both counted; viewing unread child #41 does not clear root #4.
+  const viewingActiveAndChild = buildIndicator(mixed, new Set([1, 2, 3, 41]))
+  assert.deepEqual(
     [
-      conv({ id: 2, status: 'idle', createdAt: 8000, updatedAt: 8000 }),
-      conv({ id: 21, parentConversationId: 2, status: 'working', createdAt: 8100, updatedAt: 8100 }),
+      viewingActiveAndChild.needsAttentionCount,
+      viewingActiveAndChild.runningCount,
+      viewingActiveAndChild.unreadDoneCount,
+      viewingActiveAndChild.totalCount,
+      viewingActiveAndChild.tone,
     ],
-    new Set([2]),
+    [2, 1, 1, 4, 'error'],
   )
-  assert.equal(rootViewed.runningCount, 1, 'viewing the root does not erase the running descendant')
-  // Viewed unread-done root: read-on-view honestly silences only that tree.
-  const unreadRoot = buildIndicator([conv({ id: 3, status: 'done', unread: true })], new Set([3]))
-  assert.equal(unreadRoot.totalCount, 0, 'viewing the unread completion drops it from the badge')
-  // error 树在 waiting 树之上有最高 tone 优先级（error > blocked）。
-  const errorTree = buildIndicator([conv({ id: 4, status: 'error', lastError: 'boom' }), conv({ id: 5, status: 'blocked' })], new Set())
-  assert.equal(errorTree.tone, 'error', 'an error tree outranks blocked trees in the aggregate tone')
+  // Viewing unread_done root #4 optimistically clears it in BOTH indicator and overview buckets.
+  const viewingUnreadRoot = new Set([4])
+  const afterRead = buildIndicator(mixed, viewingUnreadRoot)
+  const overviewAfterRead = overviewBucketCounts(
+    buildOverviewCards({
+      conversations: mixed,
+      background: new Map(),
+      profiles: [],
+      plugins: [],
+      viewedConversationIds: viewingUnreadRoot,
+    }),
+  )
+  assert.deepEqual(
+    [afterRead.needsAttentionCount, afterRead.runningCount, afterRead.unreadDoneCount, afterRead.totalCount, afterRead.tone],
+    [2, 1, 0, 3, 'error'],
+  )
+  assert.deepEqual(
+    [overviewAfterRead.needs_attention, overviewAfterRead.running, overviewAfterRead.unread_done],
+    [afterRead.needsAttentionCount, afterRead.runningCount, afterRead.unreadDoneCount],
+    'optimistic unread_done read reconciles 1:1 between indicator and overview bucket counts',
+  )
+
+  // Tone hierarchy verification: blocked > running > done > null.
+  assert.equal(buildIndicator([conv({ id: 10, status: 'blocked' }), conv({ id: 11, status: 'working' })]).tone, 'blocked')
+  assert.equal(buildIndicator([conv({ id: 11, status: 'working' }), conv({ id: 12, status: 'done', unread: true })]).tone, 'running')
+  assert.equal(buildIndicator([conv({ id: 12, status: 'done', unread: true })]).tone, 'done')
+  assert.equal(buildIndicator([conv({ id: 12, status: 'done', unread: true })], new Set([12])).tone, null)
+  assert.equal(buildIndicator([]).tone, null)
 })
 
 test('composeAttentionSummary lists only non-zero buckets', { timeout: 60_000 }, () => {
@@ -354,6 +396,15 @@ test('Sidebar places the overview entry at the top of the conversations list wit
   assert.ok(entryHtml.includes('sidebar-overview-entry-badge'), 'the same-source count badge rides the overview nav row when a tree has a signal')
   assert.ok(entryHtml.includes('data-tone="error"'), 'the badge states the honest top tone (error leads the scenario)')
   assert.ok(entryHtml.includes('>2<'), 'the badge states the honest signal-tree count (error tree + working tree)')
+
+  // Switching primaryTarget onto the running root (#2) keeps the sidebar overview count steady at 2.
+  const viewingRunningStore = attentionScenarioStore()
+  viewingRunningStore.openTarget({ kind: 'conversation', conversationId: 2 })
+  const viewingRunningHtml = renderSidebar(viewingRunningStore)
+  const runningEntryIdx = viewingRunningHtml.indexOf('sidebar-overview-entry')
+  const runningEntryEnd = viewingRunningHtml.indexOf('sidebar-new-topic-btn', runningEntryIdx)
+  const runningEntryHtml = viewingRunningHtml.slice(runningEntryIdx, runningEntryEnd < 0 ? undefined : runningEntryEnd)
+  assert.ok(runningEntryHtml.includes('>2<'), 'viewing an active conversation keeps the sidebar overview badge count unchanged')
 
   const quietHtml = renderSidebar(
     sidebarStore({
