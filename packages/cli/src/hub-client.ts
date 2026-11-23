@@ -9,6 +9,14 @@ import type { Io } from './options.js'
 
 export const DEFAULT_HUB_URL = 'http://127.0.0.1:3202'
 const DEFAULT_TIMEOUT_MS = 30_000
+const MAX_STREAM_FRAME_BYTES = 4 * 1024 * 1024
+
+function exceedsStreamFrameLimit(text: string): boolean {
+  return (
+    text.length > MAX_STREAM_FRAME_BYTES ||
+    (text.length > (MAX_STREAM_FRAME_BYTES >> 2) && Buffer.byteLength(text, 'utf8') > MAX_STREAM_FRAME_BYTES)
+  )
+}
 
 const normalizeUrl = (url: string): string => url.trim().replace(/\/+$/, '')
 
@@ -281,12 +289,26 @@ export class HubClient {
   ): Promise<void> {
     const headers = this.authHeaders({ accept: 'application/x-ndjson' })
     if (opts.body !== undefined) headers['content-type'] = 'application/json'
-    const response = await this.fetchHub(`${method} ${path}`, path, {
-      method,
-      headers,
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-      signal: opts.signal,
-    })
+    const connectController = new AbortController()
+    const connectTimer = setTimeout(() => connectController.abort(), this.timeoutMs)
+    connectTimer.unref?.()
+    let response: Response
+    try {
+      response = await this.fetchHub(
+        `${method} ${path}`,
+        path,
+        {
+          method,
+          headers,
+          body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+          signal: AbortSignal.any([connectController.signal, ...(opts.signal ? [opts.signal] : [])]),
+        },
+        { callerSignal: opts.signal, connectTimeoutLabel: 'connection timed out' },
+      )
+    } finally {
+      clearTimeout(connectTimer)
+    }
+    if (opts.signal?.aborted) throw new CliError(`stream cancelled: ${method} ${path}`, 'aborted')
     if (!response.ok) throw await this.toCliError(response, `${method} ${path}`)
     if (!response.body) {
       throw new CliError(`Hub did not return a streaming response body (${method} ${path})`, 'invalid_response')
@@ -298,11 +320,10 @@ export class HubClient {
     }
     const reader = response.body.getReader()
     const decoder = new TextDecoder('utf-8', { fatal: true })
-    const maxFrameBytes = 2 * 1024 * 1024
     let buffer = ''
     const consume = (line: string): void => {
       if (line.trim() === '') return
-      if (Buffer.byteLength(line, 'utf8') > maxFrameBytes) {
+      if (exceedsStreamFrameLimit(line)) {
         throw new CliError('Hub NDJSON frame exceeded maximum size limit', 'invalid_response')
       }
       let value: unknown
@@ -316,19 +337,30 @@ export class HubClient {
         opts.signal?.throwIfAborted()
         const { done, value } = await this.readChunkWithAbort(reader, opts.signal)
         if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let newline = buffer.indexOf('\n')
+        const decoded = decoder.decode(value, { stream: true })
+        if (decoded.length === 0) continue
+        buffer += decoded
+        let cursor = 0
+        let newline = buffer.indexOf('\n', cursor)
         while (newline !== -1) {
-          consume(buffer.slice(0, newline))
-          buffer = buffer.slice(newline + 1)
-          newline = buffer.indexOf('\n')
+          const line =
+            newline > cursor && buffer.charCodeAt(newline - 1) === 13
+              ? buffer.slice(cursor, newline - 1)
+              : buffer.slice(cursor, newline)
+          cursor = newline + 1
+          consume(line)
+          newline = buffer.indexOf('\n', cursor)
         }
-        if (Buffer.byteLength(buffer, 'utf8') > maxFrameBytes) {
+        if (cursor > 0) {
+          buffer = cursor < buffer.length ? buffer.slice(cursor) : ''
+        }
+        if (exceedsStreamFrameLimit(buffer)) {
           throw new CliError('Hub NDJSON frame exceeded maximum size limit', 'invalid_response')
         }
       }
       opts.signal?.throwIfAborted()
       buffer += decoder.decode()
+      if (buffer.endsWith('\r')) buffer = buffer.slice(0, -1)
       consume(buffer)
     } catch (err) {
       if (opts.signal?.aborted || (err instanceof Error && err.name === 'AbortError')) {
@@ -379,26 +411,72 @@ export class HubClient {
     const reader = (response.body as ReadableStream<Uint8Array>).getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-    try {
-      for (;;) {
-        const { done, value } = await this.readChunkWithAbort(reader, listeners.signal)
-        if (done) break
-        buffer = (buffer + decoder.decode(value, { stream: true })).replaceAll('\r\n', '\n')
-        let boundary = buffer.indexOf('\n\n')
-        while (boundary !== -1) {
-          const block = buffer.slice(0, boundary)
-          buffer = buffer.slice(boundary + 2)
-          boundary = buffer.indexOf('\n\n')
-          let event = 'message'
-          const dataLines: string[] = []
-          for (const line of block.split('\n')) {
-            if (line.startsWith('event:')) event = line.slice(6).trim()
-            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
-          }
-          if (dataLines.length === 0) continue // comment or keepalive frame
+    let pendingCr = false
+    const processBufferFrames = (): void => {
+      let cursor = 0
+      let boundary = buffer.indexOf('\n\n', cursor)
+      while (boundary !== -1) {
+        const block = buffer.slice(cursor, boundary)
+        cursor = boundary + 2
+        if (exceedsStreamFrameLimit(block)) {
+          throw new CliError('Hub SSE frame exceeded maximum size limit', 'invalid_response')
+        }
+        let event = 'message'
+        const dataLines: string[] = []
+        let lineStart = 0
+        while (lineStart <= block.length) {
+          const nl = block.indexOf('\n', lineStart)
+          const line = nl === -1 ? block.slice(lineStart) : block.slice(lineStart, nl)
+          if (line.startsWith('event:')) event = line.slice(6).trim()
+          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+          if (nl === -1) break
+          lineStart = nl + 1
+        }
+        if (dataLines.length > 0) {
           listeners.onFrame({ event, data: dataLines.join('\n') })
           if (callerAborted()) throw new CliError('cancelled', 'aborted')
         }
+        boundary = buffer.indexOf('\n\n', cursor)
+      }
+      if (cursor > 0) {
+        buffer = cursor < buffer.length ? buffer.slice(cursor) : ''
+      }
+      if (exceedsStreamFrameLimit(buffer)) {
+        throw new CliError('Hub SSE frame exceeded maximum size limit', 'invalid_response')
+      }
+    }
+    try {
+      for (;;) {
+        const { done, value } = await this.readChunkWithAbort(reader, listeners.signal)
+        if (done) {
+          let tail = decoder.decode()
+          if (pendingCr) {
+            tail = `\r${tail}`
+            pendingCr = false
+          }
+          if (tail.length > 0) {
+            if (tail.includes('\r')) tail = tail.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
+            buffer += tail
+            processBufferFrames()
+          }
+          break
+        }
+        let chunkText = decoder.decode(value, { stream: true })
+        if (chunkText.length === 0) continue
+        if (pendingCr) {
+          chunkText = `\r${chunkText}`
+          pendingCr = false
+        }
+        if (chunkText.charCodeAt(chunkText.length - 1) === 13) {
+          pendingCr = true
+          chunkText = chunkText.slice(0, -1)
+        }
+        if (chunkText.length === 0) continue
+        if (chunkText.includes('\r')) {
+          chunkText = chunkText.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
+        }
+        buffer += chunkText
+        processBufferFrames()
       }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {

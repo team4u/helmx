@@ -62,7 +62,7 @@ export function artifactsCommands(): CommandSpec[] {
           )
         }
         const buffer = await fsp.readFile(resolvedPath)
-        bytes = new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
+        bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
       } catch (err) {
         if (err instanceof CliError) throw err
         throw new CliError(

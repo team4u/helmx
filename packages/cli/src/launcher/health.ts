@@ -11,9 +11,10 @@ export interface HubHealthStatus {
   authenticated: boolean;
 }
 
-/** Connect host for health probes: wildcard listen addresses are probed on loopback. */
+/** Connect host for health probes: wildcard listen addresses are probed on loopback; IPv6 literals are bracketed. */
 function connectHost(host: string | undefined): string {
-  if (host === undefined || host === '' || host === '0.0.0.0' || host === '::') return '127.0.0.1';
+  if (host === undefined || host === '' || host === '0.0.0.0' || host === '::' || host === '[::]') return '127.0.0.1';
+  if (host.includes(':') && !host.startsWith('[')) return `[${host}]`;
   return host;
 }
 

@@ -101,13 +101,16 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
   }
 }
 
+let cachedCoreCommands: CommandSpec[] | undefined
+
 export function coreCommands(): CommandSpec[] {
+  if (cachedCoreCommands !== undefined) return cachedCoreCommands
   const commands = [
     ...authCommands(),
     ...doctorCommands(),
     updateCommand,
-  ...startCommands,
-  ...serviceCommands,
+    ...startCommands,
+    ...serviceCommands,
     ...conversationsCommands(),
     ...askCommands(),
     ...asksCommands(),
@@ -123,5 +126,6 @@ export function coreCommands(): CommandSpec[] {
     ...apiCommands(),
   ]
   assertCommandTableValid(commands)
+  cachedCoreCommands = commands
   return commands
 }

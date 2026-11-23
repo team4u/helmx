@@ -333,7 +333,7 @@ export function pathDiagLines(requested: string, resolvedPath: string, ctx: Comm
   return `\n  requested path=${requested}\n  resolved path=${resolvedPath}\n  CLI cwd=${ctx.cwd}${hint}`
 }
 
-/** Download a binary Response completely into memory before writing to caller's resolved output path. */
+/** Stream a binary Response into a sibling temp file and atomically rename to caller's resolved output path. */
 export async function writeDownloadedOutput(
   ctx: CommandContext,
   response: Response,
@@ -341,21 +341,14 @@ export async function writeDownloadedOutput(
   what: string,
 ): Promise<void> {
   const fsp = await import('node:fs/promises')
+  const { randomUUID } = await import('node:crypto')
   const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, output)
-  let buffer: Buffer
+  const tmpPath = path.join(path.dirname(resolvedPath), `.helmx-dl-${process.pid}-${randomUUID().slice(0, 8)}.tmp`)
+  let handle: Awaited<ReturnType<typeof fsp.open>> | undefined
   try {
-    buffer = Buffer.from(await response.arrayBuffer())
+    handle = await fsp.open(tmpPath, 'w')
   } catch (err) {
-    throw new CliError(
-      `failed to download ${what} content (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
-      'download_failed',
-      1,
-      pathDetails(output, resolvedPath, ctx, sessionCwd),
-    )
-  }
-  try {
-    await fsp.writeFile(resolvedPath, buffer)
-  } catch (err) {
+    await response.body?.cancel().catch(() => {})
     throw new CliError(
       `failed to write ${what} file (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
       'write_failed',
@@ -363,6 +356,53 @@ export async function writeDownloadedOutput(
       pathDetails(output, resolvedPath, ctx, sessionCwd),
     )
   }
-  if (ctx.json) printValue(ctx.io, { written: resolvedPath, bytes: buffer.byteLength }, true)
-  else ctx.io.out(`wrote ${resolvedPath} (${buffer.byteLength} bytes)\n`)
+
+  let totalBytes = 0
+  let phase: 'download' | 'write' = 'download'
+  try {
+    if (response.body !== null) {
+      const reader = response.body.getReader()
+      try {
+        for (;;) {
+          phase = 'download'
+          const { done, value } = await reader.read()
+          if (done) break
+          if (value.byteLength > 0) {
+            phase = 'write'
+            let written = 0
+            while (written < value.byteLength) {
+              const { bytesWritten } = await handle.write(value, written, value.byteLength - written)
+              written += bytesWritten
+            }
+            totalBytes += value.byteLength
+          }
+        }
+      } finally {
+        reader.releaseLock()
+      }
+    }
+    phase = 'write'
+    await handle.close()
+    handle = undefined
+    await fsp.rename(tmpPath, resolvedPath)
+  } catch (err) {
+    if (handle !== undefined) await handle.close().catch(() => {})
+    await fsp.rm(tmpPath, { force: true }).catch(() => {})
+    if (phase === 'download') {
+      throw new CliError(
+        `failed to download ${what} content (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
+        'download_failed',
+        1,
+        pathDetails(output, resolvedPath, ctx, sessionCwd),
+      )
+    }
+    throw new CliError(
+      `failed to write ${what} file (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
+      'write_failed',
+      1,
+      pathDetails(output, resolvedPath, ctx, sessionCwd),
+    )
+  }
+  if (ctx.json) printValue(ctx.io, { written: resolvedPath, bytes: totalBytes }, true)
+  else ctx.io.out(`wrote ${resolvedPath} (${totalBytes} bytes)\n`)
 }

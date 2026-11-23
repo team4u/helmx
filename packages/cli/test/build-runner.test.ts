@@ -356,6 +356,7 @@ test('ok', { timeout: 60_000 }, () => {
   // isolated: pragma override, process.env/chdir/stdin/stderr/kill(SIGKILL), unpaired process.on, unregister, mock.timers/method, worker_threads, DOM+backend mix, non-DOM globalThis write
   const isoCases: Array<[string, string]> = [
     ['pragma opt-out', `// @test-isolation: process\nimport test from 'node:test'\ntest('x', { timeout: 60_000 }, () => {})`],
+    ['block-comment pragma opt-out', `/*\n * @test-isolation: process\n */\nimport test from 'node:test'\ntest('x', { timeout: 60_000 }, () => {})`],
     ['process.env write', `process.env.FOO = 'bar'`],
     ['non-zero process.kill', `process.kill(1234, 'SIGKILL')`],
     ['unpaired process.on', `process.on('SIGTERM', () => {})`],
@@ -374,6 +375,14 @@ test('ok', { timeout: 60_000 }, () => {
     assert.equal(r.pool, 'isolated', `${label}: expected isolated, got ${r.pool} (${r.reasons.join(', ')})`)
     assert.equal(r.pure, false)
   }
+
+  // Pragma text embedded inside string literals after imports must NOT force isolation (rescuing build-runner.test.ts itself)
+  const selfClassification = analyzeTestFilePurity(ts, fileURLToPath(import.meta.url))
+  assert.equal(
+    selfClassification.pool,
+    'node-shared',
+    `build-runner.test.ts must classify as node-shared rather than isolated (${selfClassification.reasons.join(', ')})`,
+  )
 })
 
 test('test-sharding: AST cache skips TypeScript on warm hit and invalidates when test file or helper changes', { timeout: 60_000 }, () => {

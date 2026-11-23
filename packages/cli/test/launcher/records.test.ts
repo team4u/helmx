@@ -31,6 +31,7 @@ import {
   resolveBlockedCooldownMs,
 } from '../../src/launcher/layout.js';
 import { UsageError } from '../../src/launcher/io.js';
+import { hubHealthUrl } from '../../src/launcher/health.js';
 
 test('hub.pid round-trips and rejects invalid shapes explicitly', { timeout: 60_000 }, async (t) => {
   const root = useTempDir(t, 'helmx-launcher-pid-');
@@ -205,4 +206,14 @@ test('install/data isolation guard rejects nesting in both directions', { timeou
   const installInside = path.join(dataDir, 'programs', 'helmx-hub');
   mkdirSync(installInside, { recursive: true });
   assert.throws(() => assertInstallIsolation(installInside, dataDir, {}), /must not overlap/);
+});
+
+test('hubHealthUrl: maps wildcards to loopback and brackets IPv6 literals', { timeout: 60_000 }, () => {
+  assert.equal(hubHealthUrl(3202), 'http://127.0.0.1:3202/api/auth/status');
+  assert.equal(hubHealthUrl(3202, '0.0.0.0'), 'http://127.0.0.1:3202/api/auth/status');
+  assert.equal(hubHealthUrl(3202, '::'), 'http://127.0.0.1:3202/api/auth/status');
+  assert.equal(hubHealthUrl(3202, '[::]'), 'http://127.0.0.1:3202/api/auth/status');
+  assert.equal(hubHealthUrl(3202, '::1'), 'http://[::1]:3202/api/auth/status');
+  assert.equal(hubHealthUrl(3202, '[::1]'), 'http://[::1]:3202/api/auth/status');
+  assert.equal(hubHealthUrl(3202, '192.168.1.10'), 'http://192.168.1.10:3202/api/auth/status');
 });

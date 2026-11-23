@@ -17,20 +17,21 @@
  * registry metadata, SRI-verified download, shell-free npm runner) comes from the update engine
  * in `update/`; this module only defines the Hub payload layout policy.
  */
-import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import * as tar from 'tar';
+import { atomicWriteJson } from './atomic-write.js';
 import {
   downloadVerifiedTarball,
   fetchLatestVersion,
+  readStateJson,
+  runControlledProcess,
   runNpm,
   stageRelease as engineStageRelease,
   type StageExtractor,
 } from './update/index.js';
-import { killProcessTree } from './node-shell-config-io.js';
 import { isStrictSemver } from '@helmx/protocol';
 
 
@@ -225,39 +226,20 @@ function lastLines(text: string, count: number): string {
 
 /** Run `node <entry> check` with a hard timeout; surfaces bounded output tail on failure. */
 async function runPayloadSelfCheck(entry: string, timeoutMs: number): Promise<void> {
-  const result = await new Promise<{ code: number | null; error?: Error; stdout: string; stderr: string }>(
-    (resolve) => {
-      let stdout = '';
-      let stderr = '';
-      let settled = false;
-      const child = spawn(process.execPath, [entry, 'check'], {
-        cwd: path.dirname(entry),
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: process.platform !== 'win32',
-        windowsHide: true,
-      });
-      child.stdout?.on('data', (chunk: Buffer) => {
-        if (stdout.length < CHECK_OUTPUT_LIMIT) stdout += chunk.toString('utf8');
-      });
-      child.stderr?.on('data', (chunk: Buffer) => {
-        if (stderr.length < CHECK_OUTPUT_LIMIT) stderr += chunk.toString('utf8');
-      });
-      const finish = (code: number | null, error?: Error): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve({ code, error, stdout, stderr });
-      };
-      const timer = setTimeout(() => {
-        if (child.pid !== undefined) killProcessTree(child.pid);
-        finish(null, new Error(`payload self-check timed out (${timeoutMs}ms) and was terminated`));
-      }, timeoutMs);
-      child.on('error', (error) => finish(null, error));
-      child.on('close', (code) => finish(code));
-    },
-  );
-  if (result.error !== undefined) {
-    throw new Error(`payload self-check failed to run (${entry}): ${result.error.message}`);
+  let result;
+  try {
+    result = await runControlledProcess(process.execPath, [entry, 'check'], {
+      cwd: path.dirname(entry),
+      timeoutMs,
+      maxOutputChars: CHECK_OUTPUT_LIMIT,
+    });
+  } catch (error) {
+    throw new Error(
+      `payload self-check failed to run (${entry}): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (result.timedOut) {
+    throw new Error(`payload self-check failed to run (${entry}): payload self-check timed out (${timeoutMs}ms) and was terminated`);
   }
   if (result.code !== 0) {
     throw new Error(
@@ -531,12 +513,10 @@ export function updateReadyPath(root: string): string {
 
 /** Strict reader; `null` only on ENOENT, corrupt records throw. */
 export async function readUpdateReady(root: string): Promise<UpdateReadyRecord | null> {
-  const { readStateJson } = await import('./update/state.js');
   return await readStateJson(updateReadyPath(root), validateUpdateReady, 'update-ready.json');
 }
 
 export async function writeUpdateReady(root: string, record: UpdateReadyRecord): Promise<void> {
-  const { atomicWriteJson } = await import('./atomic-write.js');
   validateUpdateReady(record);
   await atomicWriteJson(updateReadyPath(root), record, { mode: 0o600 });
 }

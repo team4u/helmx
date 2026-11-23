@@ -313,6 +313,7 @@ export interface SpawnedDetachedHub {
   launchId: string;
   listenUrl: string;
   logPath: string;
+  logStartOffset: number;
   startTime: number | null;
 }
 
@@ -376,7 +377,7 @@ export async function spawnDetachedHubRelease(options: SpawnDetachedHubOptions):
       exitDetail: () => exitDetail,
     });
     assertListenUrlMatches(listenUrl, options.config);
-    return { pid, launchId, listenUrl, logPath: logFile, startTime };
+    return { pid, launchId, listenUrl, logPath: logFile, logStartOffset: startOffset, startTime };
   } catch (error) {
     killProcessTree(pid);
     await waitForPidExit(pid, 5_000, isAlive).catch(() => undefined);

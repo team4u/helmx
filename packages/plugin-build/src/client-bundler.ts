@@ -7,9 +7,10 @@
  *   Bearer-safe Blob URL lazy loading (e.g. Mermaid diagram engines).
  */
 import { basename, join, relative } from 'node:path';
-import { gzipSync } from 'node:zlib';
+import { promisify } from 'node:util';
+import { gzip, gzipSync } from 'node:zlib';
 import { HelmxError, PLUGIN_CLIENT_CSS_EXPORT, type PluginClientNpmRoot } from '@helmx/protocol';
-import { build } from 'esbuild';
+import { build, transform } from 'esbuild';
 import {
   collectDynamicImportTargets,
   collectStaticImportClosure,
@@ -178,6 +179,9 @@ export async function compileClientBundle(params: {
   return { mainJs, entryExports, list, chunks };
 }
 
+const gzipAsync = promisify(gzip);
+const ASYNC_GZIP_THRESHOLD_BYTES = 32 * 1024;
+
 async function convergeSingleBundle(
   pluginId: string,
   moduleRef: string,
@@ -186,6 +190,20 @@ async function convergeSingleBundle(
   css: string,
 ): Promise<string> {
   try {
+    if (virtualFiles.size === 1) {
+      const transformed = await transform(virtualFiles.get(entryBaseName)!, {
+        loader: 'js',
+        format: 'esm',
+        target: 'es2022',
+        sourcemap: false,
+        minifyWhitespace: true,
+        minifyIdentifiers: true,
+        minifySyntax: true,
+        logLevel: 'silent',
+        sourcefile: entryBaseName,
+      });
+      return appendCssExport(transformed.code, css);
+    }
     const pass2 = await build({
       stdin: {
         contents: virtualFiles.get(entryBaseName)!,
@@ -200,6 +218,7 @@ async function convergeSingleBundle(
       sourcemap: false,
       minifyWhitespace: true,
       minifyIdentifiers: true,
+      minifySyntax: true,
       logLevel: 'silent',
       plugins: [
         {
@@ -358,9 +377,10 @@ async function convergeSplitBundles(params: {
     await Promise.all(
       Array.from(allUnits).map(async (unitName) => {
         const code = await bundleUnit(unitName, false);
+        const codeBuf = Buffer.from(code, 'utf8');
         let gzipped: Uint8Array | undefined;
         try {
-          gzipped = gzipSync(Buffer.from(code, 'utf8'));
+          gzipped = codeBuf.byteLength >= ASYNC_GZIP_THRESHOLD_BYTES ? await gzipAsync(codeBuf) : gzipSync(codeBuf);
         } catch {
           /* ignore */
         }

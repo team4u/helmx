@@ -13,7 +13,13 @@ export interface HygieneReport {
   stats: { testCalls: number; skipCalls: number; todoCalls: number; subtestCalls: number }
 }
 
-export declare function analyzeTestSource(tsModule: typeof ts, filePath: string, source: string): HygieneReport
+export declare function parseTestSourceFile(tsModule: typeof ts, filePath: string, source: string): ts.SourceFile
+export declare function analyzeTestSource(
+  tsModule: typeof ts,
+  filePath: string,
+  source: string,
+  existingSourceFile?: ts.SourceFile,
+): HygieneReport
 export declare function collectAllTestFiles(repoRoot: string): string[]
 export declare function toPosixPath(filePath: string): string
 export declare function resolveInRepoRelativePath(

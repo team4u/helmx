@@ -4,10 +4,12 @@
  * directory (entry `.mjs` + `.mjs.gz`, split chunks `.js` + `.js.gz`, and `manifest.json`)
  * sharing the exact `__helmx_shared_*` and `__helmx_import_chunk` ABI of `compilePluginClientModule`.
  */
-import { cpSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { gzipSync } from 'node:zlib';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import fsp from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { gzip, gzipSync } from 'node:zlib';
 import {
   HelmxError,
   PREBUILT_CLIENT_MANIFEST_FILE,
@@ -20,12 +22,27 @@ import {
   type PrebuiltClientManifest,
   type PrebuiltClientModuleEntry,
 } from '@helmx/protocol';
-import { atomicWriteFileSync } from '@helmx/env-io';
+import { renameAtomically } from '@helmx/env-io';
+import { compileClientBundle } from './client-bundler.js';
 import {
-  compilePluginClientModule,
+  assertEntryInsideRoot,
   realPathOrThrow,
   safeFileName,
-} from './client-compiler.js';
+} from './client-paths.js';
+
+const gzipAsync = promisify(gzip);
+const ASYNC_GZIP_THRESHOLD_BYTES = 32 * 1024;
+
+async function compressAsset(bytes: Buffer): Promise<Uint8Array> {
+  return bytes.byteLength >= ASYNC_GZIP_THRESHOLD_BYTES ? await gzipAsync(bytes) : gzipSync(bytes);
+}
+
+async function writeBundleFile(filePath: string, content: string | Uint8Array): Promise<void> {
+  await fsp.writeFile(filePath, content, { mode: 0o644 });
+  if (process.platform !== 'win32') {
+    await fsp.chmod(filePath, 0o644);
+  }
+}
 
 const CLIENT_ENTRY_PATTERN = /\.(ts|tsx)$/;
 const DECLARATION_FILE_PATTERN = /\.d\.[cm]?ts$/i;
@@ -99,40 +116,67 @@ export async function buildPluginClientBundleDir(
     }
   }
 
-  const workDir = mkdtempSync(join(tmpdir(), 'helmx-prebuilt-build-'));
-  const cacheDir = join(workDir, 'cache');
-  const stagingOut = join(workDir, 'out');
-  mkdirSync(stagingOut, { recursive: true });
+  const resolvedEntries = targetModules.map((moduleRef) => {
+    assertModuleRefShape(pluginId, moduleRef);
+    return {
+      moduleRef,
+      entryReal: assertEntryInsideRoot(pluginId, rootReal, moduleRef),
+    };
+  });
+
+  const resolvedOut = resolve(outDir);
+  const outParent = dirname(resolvedOut);
+  const stagingOut = join(outParent, `.${basename(resolvedOut)}.staging-${process.pid}-${randomUUID().slice(0, 8)}`);
+  let stagingCreated = false;
 
   try {
     const manifestModules: Record<string, PrebuiltClientModuleEntry> = {};
     let totalBytes = 0;
 
-    for (const moduleRef of targetModules) {
-      const bundle = await compilePluginClientModule(pluginId, rootReal, moduleRef, cacheDir, {
+    for (const { moduleRef, entryReal } of resolvedEntries) {
+      const built = await compileClientBundle({
+        pluginId,
+        rootReal,
+        entryReal,
+        moduleRef,
+        stagingDir: stagingOut,
         npmRoots,
       });
-      const baseName = safeFileName(moduleRef);
-      const entryFile = `${baseName}.${bundle.contentHash}.mjs`;
-      const entryGz = bundle.gzipped ?? gzipSync(Buffer.from(bundle.code, 'utf8'));
-      atomicWriteFileSync(join(stagingOut, entryFile), bundle.code);
-      atomicWriteFileSync(join(stagingOut, `${entryFile}.gz`), entryGz);
-      totalBytes += Buffer.byteLength(bundle.code, 'utf8') + entryGz.byteLength;
-
-      const chunkNames = Object.keys(bundle.chunks ?? {}).sort();
-      for (const chunkName of chunkNames) {
-        const chunkData = bundle.chunks![chunkName]!;
-        const chunkFile = prebuiltChunkFileName(entryFile, chunkName, pluginId);
-        const chunkGz = chunkData.gzipped ?? gzipSync(Buffer.from(chunkData.code, 'utf8'));
-        atomicWriteFileSync(join(stagingOut, chunkFile), chunkData.code);
-        atomicWriteFileSync(join(stagingOut, `${chunkFile}.gz`), chunkGz);
-        totalBytes += Buffer.byteLength(chunkData.code, 'utf8') + chunkGz.byteLength;
+      if (!stagingCreated) {
+        mkdirSync(stagingOut, { recursive: true });
+        stagingCreated = true;
       }
+
+      const baseName = safeFileName(moduleRef);
+      const contentHash = built.list.contentHash;
+      const entryFile = `${baseName}.${contentHash}.mjs`;
+      const entryCodeBytes = Buffer.from(built.mainJs, 'utf8');
+      const entryGz = await compressAsset(entryCodeBytes);
+      await Promise.all([
+        writeBundleFile(join(stagingOut, entryFile), built.mainJs),
+        writeBundleFile(join(stagingOut, `${entryFile}.gz`), entryGz),
+      ]);
+      totalBytes += entryCodeBytes.byteLength + entryGz.byteLength;
+
+      const chunkNames = Object.keys(built.chunks).sort();
+      await Promise.all(
+        chunkNames.map(async (chunkName) => {
+          const chunkData = built.chunks[chunkName]!;
+          const chunkFile = prebuiltChunkFileName(entryFile, chunkName, pluginId);
+          const chunkCodeBytes = Buffer.from(chunkData.code, 'utf8');
+          const chunkGz = chunkData.gzipped ?? (await compressAsset(chunkCodeBytes));
+          await Promise.all([
+            writeBundleFile(join(stagingOut, chunkFile), chunkData.code),
+            writeBundleFile(join(stagingOut, `${chunkFile}.gz`), chunkGz),
+          ]);
+          totalBytes += chunkCodeBytes.byteLength + chunkGz.byteLength;
+        }),
+      );
 
       manifestModules[moduleRef] = {
         entryFile,
-        contentHash: bundle.contentHash,
-        exports: [...bundle.exports],
+        contentHash,
+        exports: [...built.entryExports],
         ...(chunkNames.length > 0 ? { chunks: chunkNames } : {}),
       };
     }
@@ -143,13 +187,27 @@ export async function buildPluginClientBundleDir(
     };
     const manifest = assertPrebuiltClientManifest(manifestRaw, stagingOut);
     const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
-    atomicWriteFileSync(join(stagingOut, PREBUILT_CLIENT_MANIFEST_FILE), manifestText);
+    await writeBundleFile(join(stagingOut, PREBUILT_CLIENT_MANIFEST_FILE), manifestText);
     totalBytes += Buffer.byteLength(manifestText, 'utf8');
 
-    const resolvedOut = resolve(outDir);
-    rmSync(resolvedOut, { recursive: true, force: true });
-    mkdirSync(dirname(resolvedOut), { recursive: true });
-    cpSync(stagingOut, resolvedOut, { recursive: true });
+    let backupOut: string | undefined;
+    try {
+      if (existsSync(resolvedOut)) {
+        backupOut = `${stagingOut}.prev`;
+        await renameAtomically(resolvedOut, backupOut);
+      }
+      await renameAtomically(stagingOut, resolvedOut);
+      stagingCreated = false;
+    } catch (swapErr) {
+      if (backupOut !== undefined && !existsSync(resolvedOut) && existsSync(backupOut)) {
+        await renameAtomically(backupOut, resolvedOut).catch(() => {});
+      }
+      throw swapErr;
+    } finally {
+      if (backupOut !== undefined) {
+        rmSync(backupOut, { recursive: true, force: true });
+      }
+    }
 
     return {
       pluginId,
@@ -160,6 +218,8 @@ export async function buildPluginClientBundleDir(
       totalBytes,
     };
   } finally {
-    rmSync(workDir, { recursive: true, force: true });
+    if (stagingCreated) {
+      rmSync(stagingOut, { recursive: true, force: true });
+    }
   }
 }

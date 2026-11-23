@@ -87,6 +87,58 @@ export function sharedShimPlugin(): EsbuildPlugin {
 // Controlled npm dependency resolution & containment
 // ---------------------------------------------------------------------------
 
+interface ContainmentBuildCache {
+  readonly realpath: Map<string, string | null>;
+  readonly packageDirOf: Map<string, string | null>;
+  readonly packageJson: Map<string, Record<string, unknown> | null>;
+  readonly regularFile: Map<string, boolean>;
+}
+
+function createContainmentBuildCache(): ContainmentBuildCache {
+  return {
+    realpath: new Map(),
+    packageDirOf: new Map(),
+    packageJson: new Map(),
+    regularFile: new Map(),
+  };
+}
+
+function cachedRealpath(cache: ContainmentBuildCache, targetPath: string): string | null {
+  if (cache.realpath.has(targetPath)) return cache.realpath.get(targetPath)!;
+  const resolved = realpathOrNull(targetPath);
+  cache.realpath.set(targetPath, resolved);
+  return resolved;
+}
+
+function cachedFindPackageDirOf(cache: ContainmentBuildCache, filePath: string): string | null {
+  if (cache.packageDirOf.has(filePath)) return cache.packageDirOf.get(filePath)!;
+  const pkgDir = findPackageDirOf(filePath);
+  cache.packageDirOf.set(filePath, pkgDir);
+  return pkgDir;
+}
+
+function cachedPackageJson(cache: ContainmentBuildCache, pkgDir: string): Record<string, unknown> | null {
+  if (cache.packageJson.has(pkgDir)) return cache.packageJson.get(pkgDir)!;
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const raw = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as unknown;
+    if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+      parsed = raw as Record<string, unknown>;
+    }
+  } catch {
+    parsed = null;
+  }
+  cache.packageJson.set(pkgDir, parsed);
+  return parsed;
+}
+
+function cachedIsRegularFile(cache: ContainmentBuildCache, filePath: string): boolean {
+  if (cache.regularFile.has(filePath)) return cache.regularFile.get(filePath)!;
+  const ok = isRegularFile(filePath);
+  cache.regularFile.set(filePath, ok);
+  return ok;
+}
+
 function splitNpmSpecifier(spec: string): { pkg: string; sub: string } {
   const parts = spec.split('/');
   if (spec.startsWith('@')) {
@@ -95,13 +147,9 @@ function splitNpmSpecifier(spec: string): { pkg: string; sub: string } {
   return { pkg: parts[0] ?? spec, sub: parts.slice(1).join('/') };
 }
 
-function resolveNpmPackageEntry(pkgDir: string, spec: string): string | null {
-  let pkg: Record<string, unknown>;
-  try {
-    pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+function resolveNpmPackageEntry(pkgDir: string, spec: string, cache: ContainmentBuildCache): string | null {
+  const pkg = cachedPackageJson(cache, pkgDir);
+  if (pkg === null) return null;
   const { sub } = splitNpmSpecifier(spec);
   const exportKey = sub === '' ? '.' : `./${sub}`;
   const candidates: string[] = [];
@@ -134,7 +182,7 @@ function resolveNpmPackageEntry(pkgDir: string, spec: string): string | null {
   for (const rel of candidates) {
     if (typeof rel !== 'string' || rel === '') continue;
     const abs = rel.startsWith('./') ? join(pkgDir, rel.slice(2)) : join(pkgDir, rel);
-    const real = realpathOrNull(abs);
+    const real = cachedRealpath(cache, abs);
     if (real !== null && isInside(pkgDir, real) && existsSync(real)) return real;
   }
   return null;
@@ -147,17 +195,18 @@ function resolveNpmPackageEntry(pkgDir: string, spec: string): string | null {
 function resolveNpmSpecifier(
   spec: string,
   npmRoots: ReadonlyArray<PluginClientNpmRoot>,
+  cache: ContainmentBuildCache,
 ): { path: string; pkgDir: string } | null {
   for (const root of npmRoots) {
     if (!root.specifiers.includes(spec)) continue;
-    const nmReal = realpathOrNull(join(root.packageRoot, 'node_modules'));
+    const nmReal = cachedRealpath(cache, join(root.packageRoot, 'node_modules'));
     if (nmReal === null) continue;
     const { pkg, sub } = splitNpmSpecifier(spec);
     const pkgCandidate = resolve(nmReal, pkg);
     if (!isInside(nmReal, pkgCandidate)) continue;
-    const pkgReal = realpathOrNull(pkgCandidate);
+    const pkgReal = cachedRealpath(cache, pkgCandidate);
     if (pkgReal === null) continue;
-    const entry = resolveNpmPackageEntry(pkgReal, sub === '' ? pkg : `${pkg}/${sub}`);
+    const entry = resolveNpmPackageEntry(pkgReal, sub === '' ? pkg : `${pkg}/${sub}`, cache);
     if (entry === null) continue;
     return { path: entry, pkgDir: pkgReal };
   }
@@ -179,8 +228,8 @@ function isAbsoluteImport(spec: string): boolean {
   return isAbsolute(spec) || isAbsoluteTargetPath(spec);
 }
 
-function isValidOwningPackage(pkgReal: string | null, fileReal: string): pkgReal is string {
-  return pkgReal !== null && isInsideClientSource(pkgReal, fileReal) && isRegularFile(join(pkgReal, 'package.json'));
+function isValidOwningPackage(pkgReal: string | null, fileReal: string, cache: ContainmentBuildCache): pkgReal is string {
+  return pkgReal !== null && isInsideClientSource(pkgReal, fileReal) && cachedIsRegularFile(cache, join(pkgReal, 'package.json'));
 }
 
 /**
@@ -193,6 +242,7 @@ function resolveTransitiveNpmPackageDir(
   resolveDir: string,
   resolvedPath: string,
   fileReal: string,
+  cache: ContainmentBuildCache,
 ): string | null {
   // 1. Verify via the lexical `node_modules/<pkg>` slot reachable from `resolveDir`.
   if (!specifier.startsWith('#') && resolveDir !== '') {
@@ -208,8 +258,8 @@ function resolveTransitiveNpmPackageDir(
         const nmDir = join(dir, 'node_modules');
         const pkgCandidate = resolve(nmDir, ...pkgParts);
         if (isInside(nmDir, pkgCandidate)) {
-          const pkgReal = realpathOrNull(pkgCandidate);
-          if (isValidOwningPackage(pkgReal, fileReal)) return pkgReal;
+          const pkgReal = cachedRealpath(cache, pkgCandidate);
+          if (isValidOwningPackage(pkgReal, fileReal, cache)) return pkgReal;
         }
         const parent = dirname(dir);
         if (parent === dir) break;
@@ -224,12 +274,12 @@ function resolveTransitiveNpmPackageDir(
     return null;
   }
   if (normalizedResolved.includes(nmMarker)) {
-    const lexicalPkgDir = findPackageDirOf(normalizedResolved);
-    const pkgReal = lexicalPkgDir !== null ? realpathOrNull(lexicalPkgDir) : null;
-    return isValidOwningPackage(pkgReal, fileReal) ? pkgReal : null;
+    const lexicalPkgDir = cachedFindPackageDirOf(cache, normalizedResolved);
+    const pkgReal = lexicalPkgDir !== null ? cachedRealpath(cache, lexicalPkgDir) : null;
+    return isValidOwningPackage(pkgReal, fileReal, cache) ? pkgReal : null;
   }
-  const realPkgDir = findPackageDirOf(fileReal);
-  return isValidOwningPackage(realPkgDir, fileReal) ? realPkgDir : null;
+  const realPkgDir = cachedFindPackageDirOf(cache, fileReal);
+  return isValidOwningPackage(realPkgDir, fileReal, cache) ? realPkgDir : null;
 }
 
 function resolveInternal(b: PluginBuild, args: OnResolveArgs) {
@@ -251,9 +301,12 @@ export function containmentPlugin(
   entryReal: string,
   npmRoots: ReadonlyArray<PluginClientNpmRoot> = [],
 ): EsbuildPlugin {
+  const cache = createContainmentBuildCache();
+  cache.realpath.set(rootReal, rootReal);
+  cache.realpath.set(entryReal, entryReal);
   const authorizedNpmDirs = new Set<string>();
   const authorizeNpmPackageDir = (pkgDir: string): string | null => {
-    const real = realpathOrNull(pkgDir);
+    const real = cachedRealpath(cache, pkgDir);
     if (real === null) return null;
     authorizedNpmDirs.add(real);
     return real;
@@ -278,7 +331,7 @@ export function containmentPlugin(
         }
         const importer = args.importer || 'entry';
         if (args.kind === 'entry-point') {
-          const real = realpathOrNull(args.path);
+          const real = cachedRealpath(cache, args.path);
           if (real !== null && real === entryReal && isInsideClientSource(rootReal, real)) {
             return null;
           }
@@ -305,7 +358,7 @@ export function containmentPlugin(
           };
         }
 
-        const importerReal = args.importer !== '' ? realpathOrNull(args.importer) : null;
+        const importerReal = args.importer !== '' ? cachedRealpath(cache, args.importer) : null;
         const importerNpmDir = importerReal !== null ? authorizedNpmDirOf(importerReal) : null;
 
         if (isRelativeSpecifier(args.path)) {
@@ -314,7 +367,7 @@ export function containmentPlugin(
           if (resolved.external || (resolved.namespace !== '' && resolved.namespace !== 'file') || !isAbsolute(resolved.path)) {
             return null;
           }
-          const real = realpathOrNull(resolved.path);
+          const real = cachedRealpath(cache, resolved.path);
           if (importerNpmDir !== null) {
             if (real !== null && isInsideClientSource(importerNpmDir, real)) return null;
             return {
@@ -334,7 +387,7 @@ export function containmentPlugin(
         if (importerNpmDir !== null) {
           const resolved = await resolveInternal(b, args);
           if (resolved.errors.length > 0 || !resolved.path) {
-            const peerNpm = resolveNpmSpecifier(args.path, npmRoots);
+            const peerNpm = resolveNpmSpecifier(args.path, npmRoots, cache);
             if (peerNpm !== null) {
               authorizeNpmPackageDir(peerNpm.pkgDir);
               return { path: peerNpm.path };
@@ -344,7 +397,7 @@ export function containmentPlugin(
           if (resolved.external || (resolved.namespace !== '' && resolved.namespace !== 'file') || !isAbsolute(resolved.path)) {
             return null;
           }
-          const real = realpathOrNull(resolved.path);
+          const real = cachedRealpath(cache, resolved.path);
           if (real === null) {
             return {
               errors: [{
@@ -352,7 +405,7 @@ export function containmentPlugin(
               }],
             };
           }
-          const transitivePkgDir = resolveTransitiveNpmPackageDir(args.path, args.resolveDir, resolved.path, real);
+          const transitivePkgDir = resolveTransitiveNpmPackageDir(args.path, args.resolveDir, resolved.path, real, cache);
           if (transitivePkgDir !== null) {
             authorizeNpmPackageDir(transitivePkgDir);
             return null;
@@ -365,7 +418,7 @@ export function containmentPlugin(
           };
         }
 
-        const npm = resolveNpmSpecifier(args.path, npmRoots);
+        const npm = resolveNpmSpecifier(args.path, npmRoots, cache);
         if (npm !== null) {
           authorizeNpmPackageDir(npm.pkgDir);
           return { path: npm.path };
@@ -383,7 +436,7 @@ export function containmentPlugin(
         if (args.kind === 'import-rule') {
           const resolved = await resolveInternal(b, args);
           if (resolved.errors.length > 0 || !resolved.path) return null;
-          const real = realpathOrNull(resolved.path);
+          const real = cachedRealpath(cache, resolved.path);
           if (real !== null && isInsideClientSource(rootReal, real)) return null;
           return {
             errors: [{
@@ -402,7 +455,7 @@ export function containmentPlugin(
 
       b.onLoad({ filter: /.*/ }, (args) => {
         if (args.namespace !== 'file') return null;
-        const real = realpathOrNull(args.path);
+        const real = cachedRealpath(cache, args.path);
         if (real === null) return null;
         if (!isInsideClientSource(rootReal, real) && !isNpmAuthorized(real)) {
           return {
