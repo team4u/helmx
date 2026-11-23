@@ -24,10 +24,16 @@ export type {
   PluginSessionDocState,
   PluginSlotPortItem,
 } from './host-port.js'
-export type { HostModelEntry, HostModelsSlice } from '@helmx/protocol/browser'
+export type { HostModelEntry, HostModelsSlice, HostNodesSlice, HostProfilesSlice } from '@helmx/protocol/browser'
 
 // ---- Plugin context (usePluginContext) and factory ----
-export { PluginClientContext, createPluginClientContext, resolveWorkbenchPanelTabId, usePluginContext } from './plugin-context.js'
+export {
+  PluginClientContext,
+  assertValidPluginRoutePath,
+  createPluginClientContext,
+  resolveWorkbenchPanelTabId,
+  usePluginContext,
+} from './plugin-context.js'
 export { ScreenParamsContext, useScreenParams } from './screen-params.js'
 export type { ScreenParamsScope } from '@helmx/protocol/browser'
 
@@ -57,7 +63,16 @@ export {
 } from './docs.js'
 export type { PluginDocLoadStatus, PluginDocState, PluginSessionDocOptions } from './docs.js'
 export type { ConversationHookOptions, ConversationHookResult } from './conversation-hooks.js'
-export { useConversation, useConversations, useHostModels, usePluginConfig, usePlugins, useSharedNowMs } from './conversation-hooks.js'
+export {
+  useConversation,
+  useConversations,
+  useHostModels,
+  useHostNodes,
+  useHostProfiles,
+  usePluginConfig,
+  usePlugins,
+  useSharedNowMs,
+} from './conversation-hooks.js'
 export { ToolActivityContext, useToolActivity } from './tool-activity.js'
 export type { ToolActivityRegistry } from './tool-activity.js'
 export {

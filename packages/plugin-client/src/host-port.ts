@@ -22,6 +22,8 @@ import type {
   ConversationSummary,
   HelmxLocale,
   HostModelsSlice,
+  HostNodesSlice,
+  HostProfilesSlice,
   LocaleTranslator,
   PluginSlotContributionSpec,
   UsePluginsResult,
@@ -168,6 +170,30 @@ export interface PluginClientHostPort {
    */
   refreshModels?(): Promise<{ errors?: Record<string, string> }>
 
+  // ---- Compute nodes catalog (optional capability; all members reference-stable across renders) ----
+  /**
+   * One-shot read of the host compute node list slice (`GET /api/nodes` /
+   * SSE `snapshot.nodes` + `node.changed`; never exposes node access tokens).
+   * `undefined` = the capability is not injected OR initial load has not
+   * completed (gated on `nodesLoaded` — a pre-load empty array never leaks out
+   * as "no nodes" truth); `[]` = loaded and genuinely empty.
+   */
+  getNodes?(): HostNodesSlice | undefined
+  /** Subscribe to node list revisions (listener fired after getNodes() would return a new reference). */
+  subscribeNodes?(listener: () => void): () => void
+
+  // ---- Profile catalog (optional capability; all members reference-stable across renders) ----
+  /**
+   * One-shot read of the host Profile catalog slice (`GET /api/profiles` /
+   * SSE `profile.changed`; excludes `SYSTEM.md` bodies).
+   * `undefined` = the capability is not injected OR initial load has not
+   * completed (gated on `profilesLoaded` — a pre-load empty array never leaks
+   * out as "no profiles" truth); `[]` = loaded and genuinely empty.
+   */
+  getProfiles?(): HostProfilesSlice | undefined
+  /** Subscribe to profile catalog revisions (listener fired after getProfiles() would return a new reference). */
+  subscribeProfiles?(listener: () => void): () => void
+
   // ---- Plugin docs ----
   /** Keyed read of a plugin public doc (`${pluginId}/${docName}`; undefined when absent). */
   getPluginDocValue(docKey: string): unknown
@@ -184,8 +210,15 @@ export interface PluginClientHostPort {
   /** Explicit manual reconnect for a conversation-scoped session doc subscription. */
   retrySessionDoc?(key: PluginSessionDocKey): void
 
-  // ---- Actions & input ----
+  // ---- Actions, routes & input ----
   invokePluginAction(pluginId: string, actionId: string, input: unknown, conversationId?: number): Promise<unknown>
+  /**
+   * Authenticated HTTP fetch scoped to `/api/plugins/<encodeURIComponent(pluginId)>/routes<path>`.
+   * The host injects Bearer auth without exposing the raw token to plugins and returns the raw
+   * `Response` untouched (preserving binary streams, FormData, SSE bodies, status codes, headers).
+   * Optional so minimal/custom hosts can omit it (`ctx.fetchRoute` rejects explicitly when unwired).
+   */
+  fetchPluginRoute?(pluginId: string, path: string, init?: RequestInit): Promise<Response>
   submitConversationInput(
     conversationId: number,
     input: { text: string; origin: 'human' | 'agent' | 'trigger'; whenBusy?: WhenBusy },

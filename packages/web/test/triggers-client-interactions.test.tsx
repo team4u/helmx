@@ -53,6 +53,7 @@ describe("triggers-client-interactions", () => {
         actionCalls.push({ actionId, input })
         return {}
       },
+      fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
       submitInput: async () => {},
       openScreen: (t) => {
         screenCalls.push(t)

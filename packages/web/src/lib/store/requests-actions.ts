@@ -194,7 +194,11 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
       const list = await nodesApi.list()
       if (epoch !== host.requests.sessionEpoch) return undefined
       const sorted = sortNodes(list)
-      host.updateLive((state) => (state.nodes === nodesBeforeRequest ? { ...state, nodes: sorted } : state))
+      host.updateLive((state) =>
+        state.nodes === nodesBeforeRequest || !state.nodesLoaded
+          ? { ...state, nodes: sorted, nodesLoaded: true }
+          : state,
+      )
       return host.getLiveState().nodes
     } catch (error) {
       if (epoch === host.requests.sessionEpoch) {

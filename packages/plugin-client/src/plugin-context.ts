@@ -90,6 +90,59 @@ function assertConversationId(id: number, label: string): void {
   }
 }
 
+/**
+ * Strictly validates a plugin-relative route path for `ctx.fetchRoute(path, init?)`:
+ * - must be a non-empty string starting with `/` (never relative or a full URL);
+ * - must not start with `//`, contain `\`, contain `#` fragments, or contain ASCII control characters;
+ * - pathname (before `?`) must have at least one non-empty segment (`/` alone, `//`, and trailing `/`
+ *   are rejected to match kernel `ctx.route` rules);
+ * - every pathname segment must have valid percent-encoding and must not resolve to `.` or `..` (or `\`).
+ */
+export function assertValidPluginRoutePath(path: string): void {
+  if (typeof path !== 'string' || path.length === 0) {
+    throw new Error('fetchRoute path must be a non-empty string starting with "/"')
+  }
+  if (!path.startsWith('/')) {
+    throw new Error(`fetchRoute path must start with "/": ${path}`)
+  }
+  if (path.startsWith('//')) {
+    throw new Error(`fetchRoute path must not start with "//": ${path}`)
+  }
+  if (path.includes('#')) {
+    throw new Error(`fetchRoute path must not contain a "#" fragment: ${path}`)
+  }
+  if (path.includes('\\')) {
+    throw new Error(`fetchRoute path must not contain "\\": ${path}`)
+  }
+  if (/[\u0000-\u001f\u007f]/.test(path)) {
+    throw new Error('fetchRoute path must not contain control characters')
+  }
+  const queryIndex = path.indexOf('?')
+  const pathname = queryIndex === -1 ? path : path.slice(0, queryIndex)
+  if (pathname === '/') {
+    throw new Error(`fetchRoute path must have at least one non-empty path segment: ${path}`)
+  }
+  for (const seg of pathname.slice(1).split('/')) {
+    if (seg.length === 0) {
+      throw new Error(`fetchRoute path must not contain empty path segments ("//" or trailing "/"): ${path}`)
+    }
+    let decoded = seg
+    if (seg.includes('%')) {
+      try {
+        decoded = decodeURIComponent(seg)
+      } catch {
+        throw new Error(`fetchRoute path contains invalid percent-encoding in segment "${seg}": ${path}`)
+      }
+    }
+    if (seg === '.' || seg === '..' || decoded === '.' || decoded === '..') {
+      throw new Error(`fetchRoute path must not contain dot segments ("." or ".."): ${path}`)
+    }
+    if (decoded.includes('\\')) {
+      throw new Error(`fetchRoute path must not contain an encoded backslash in segment "${seg}": ${path}`)
+    }
+  }
+}
+
 const BUILTIN_WORKBENCH_TABS = new Set(['artifacts', 'files'])
 
 /**
@@ -137,6 +190,13 @@ export function createPluginClientContext(
         input,
         options?.conversationId ?? conversationId,
       )
+    },
+    fetchRoute: async (path, init) => {
+      assertValidPluginRoutePath(path)
+      if (port.fetchPluginRoute === undefined) {
+        throw new Error(`fetchRoute is unavailable: host port does not implement fetchPluginRoute (plugin ${pluginId})`)
+      }
+      return await port.fetchPluginRoute(pluginId, path, init)
     },
     submitInput: async (text, options) => {
       const target = options?.conversationId ?? conversationId
