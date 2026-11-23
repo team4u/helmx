@@ -103,9 +103,10 @@ test('paths: resolveDataDir priority (override > env > default) and ensureDataDi
   assert.throws(() => resolveDataDir(''), /empty/)
   assert.throws(() => resolveDataDir('relative/path'), /absolute path/)
   await ensureDataDir(dir)
-  for (const sub of ['profiles', 'skills', 'workflows', 'plugins', 'installed-plugins', 'artifacts', 'cache']) {
+  for (const sub of ['profiles', 'skills', 'plugins', 'installed-plugins', 'artifacts', 'cache']) {
     assert.ok(existsSync(join(dir, sub)), `should create ${sub}`)
   }
+  assert.ok(!existsSync(join(dir, 'workflows')), 'workflows dir belongs to builtin:workflow, not kernel dataDir layout')
   await ensureDataDir(dir)
 })
 

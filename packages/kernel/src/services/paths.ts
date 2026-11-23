@@ -27,7 +27,6 @@ export function resolveDataDir(override?: string): string {
 const DATA_SUBDIRS = [
   'profiles',
   'skills',
-  'workflows',
   'plugins',
   'installed-plugins',
   'artifacts',

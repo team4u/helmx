@@ -7,6 +7,7 @@ import {
   type ActionManifest,
   type HelmxHostApi,
   type HelmxHostOpenTunnelPort,
+  type MaybePromise,
   type NodeTunnelTarget,
   type PluginActionContext,
   type PluginSummary,
@@ -172,6 +173,14 @@ export function wrapHostApi(
                 nodePlatform: (nodeId: string): string | undefined => {
                   guard('host.nodeIpc.nodePlatform');
                   return backend.nodeIpc!.nodePlatform?.(nodeId);
+                },
+              }
+            : {}),
+          ...(backend.nodeIpc.listNodes !== undefined
+            ? {
+                listNodes: () => {
+                  guard('host.nodeIpc.listNodes');
+                  return structuredClone(backend.nodeIpc!.listNodes!());
                 },
               }
             : {}),
@@ -411,15 +420,16 @@ export function wrapHostApi(
     cancelAsk: (askId, reason) => tracked('host.cancelAsk', () => backend.cancelAsk(askId, reason)),
 
     // 13. events
-    onEvent: (type, listener) =>
-      acquire(`host.onEvent:${type}`)(() =>
+    onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void {
+      return acquire(`host.onEvent:${type}`)(() =>
         backend.onEvent(type, (payload: unknown) =>
           deps.tracker.withTask(pluginId, `event:${type}`, async () => {
             await listener(payload);
           }),
         ),
-      ),
-    emitEvent: (type, payload, options) => {
+      );
+    },
+    emitEvent(type: string, payload: unknown, options?: { broadcast?: boolean }): MaybePromise<void> {
       guard('host.emitEvent');
       return backend.emitEvent(type, payload, options);
     },

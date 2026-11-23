@@ -23,7 +23,12 @@ import {
   type PluginManifestProjection,
   type PluginSummary,
 } from '@helmx/protocol';
-import { PluginHost, type PluginHostBackend, type PluginKvStore } from './plugin-host.js';
+import {
+  PluginHost,
+  type PluginHostBackend,
+  type PluginKvStore,
+  type PluginSessionDocStore,
+} from './plugin-host.js';
 import { dryRunManifestSinks } from './plugin-host-lifecycle.js';
 import { nextPluginGeneration, registerPluginTsRoot } from './backend-ts-loader.js';
 import {
@@ -47,6 +52,43 @@ class DoctorDocStore {
     for (const key of [...this.values.keys()]) {
       if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.values.delete(key);
     }
+  }
+  async flush(): Promise<void> {}
+}
+
+/** Ephemeral in-memory sessionDoc store used during `doctor` registration checks (touches no durable storage). */
+class DoctorSessionDocStore implements PluginSessionDocStore {
+  private values = new Map<string, Map<string, Map<number, string>>>();
+  get(pluginId: string, name: string, conversationId: number): string | undefined {
+    return this.values.get(pluginId)?.get(name)?.get(conversationId);
+  }
+  put(pluginId: string, name: string, conversationId: number, valueJson: string): void {
+    let byName = this.values.get(pluginId);
+    if (!byName) {
+      byName = new Map();
+      this.values.set(pluginId, byName);
+    }
+    let byConv = byName.get(name);
+    if (!byConv) {
+      byConv = new Map();
+      byName.set(name, byConv);
+    }
+    byConv.set(conversationId, valueJson);
+  }
+  delete(pluginId: string, name: string, conversationId: number): void {
+    const byName = this.values.get(pluginId);
+    const byConv = byName?.get(name);
+    if (!byName || !byConv) return;
+    byConv.delete(conversationId);
+    if (byConv.size === 0) byName.delete(name);
+    if (byName.size === 0) this.values.delete(pluginId);
+  }
+  deletePlugin(pluginId: string): void {
+    this.values.delete(pluginId);
+  }
+  listConversationIds(pluginId: string, name: string): number[] {
+    const byConv = this.values.get(pluginId)?.get(name);
+    return byConv ? [...byConv.keys()].sort((a, b) => a - b) : [];
   }
   async flush(): Promise<void> {}
 }
@@ -99,7 +141,8 @@ class DoctorKvStore implements PluginKvStore {
 /**
  * Doctor backend: every runtime `ctx.host.*` capability throws 501 explicitly (never mocks data).
  * Only read-only structural primitives required to construct/register (`isClosing`, identity `redact`,
- * no-op `emitEvent` for registration summary notifications) are provided.
+ * no-op `onEvent` for top-level listener registration, and no-op `emitEvent` for registration summary
+ * notifications) are provided.
  */
 function doctorBackend(): PluginHostBackend {
   const unavailable = (what: string): never => {
@@ -122,7 +165,8 @@ function doctorBackend(): PluginHostBackend {
     nodeIpc: undefined,
     openTunnel: undefined,
     listActiveSpawnExecutions: () => [],
-    // Event emission fires at registration completion (plugin.changed): safe no-op with no SSE consumers.
+    // Event subscription/emission during definePlugin & registration summary (plugin.changed): safe no-op with no SSE consumers.
+    onEvent: () => () => {},
     emitEvent: () => {},
     withFileLock: <T,>(_path: string, fn: () => Promise<T>): Promise<T> => fn(),
   };
@@ -224,6 +268,7 @@ async function doctorPluginDirInternal(
           dataDir: scratch,
           host: doctorBackend(),
           docs: new DoctorDocStore(),
+          sessionDocs: new DoctorSessionDocStore(),
           kv: new DoctorKvStore(),
           deferServices: true,
           buildProvider: options.buildProvider,

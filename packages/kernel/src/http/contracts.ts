@@ -148,6 +148,9 @@ export interface PluginHost {
    * route requests (`409 plugin_has_live_tasks` rather than tearing down mid-request). No-op if unprovided.
    */
   withTask?<T>(pluginId: string, label: string, fn: () => Promise<T>): Promise<T>
+  /** Optional synchronous task token hooks for long-lived streaming route responses (falls back to `withTask`). */
+  beginTask?(pluginId: string, label: string): void
+  endTask?(pluginId: string, label: string): void
   /** Read a plugin public document; private/disabled/missing all map to 404 (auth cannot bypass visibility). */
   getPublicDoc(pluginId: string, name: string): Promise<PublicPluginDoc> | PublicPluginDoc
   /**

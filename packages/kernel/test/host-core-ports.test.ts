@@ -666,4 +666,75 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       await runtime.close()
     }
   })
+
+  await t.test('ctx.host.nodeIpc.listNodes() + typed onEvent/emitEvent: real KernelRuntime wiring, defensive clone, and expiry', { timeout: 60_000 }, async (sub) => {
+    const rtDir = useTempDir(sub, 'helmx-host-nodes-rt-')
+    const { models } = makeFauxModels()
+    const runtime = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: rtDir,
+      cwd: rtDir,
+      models,
+      model: 'faux/faux-1',
+    })
+    try {
+      // Issue a BYOM node token so listNodes returns both local and a registered remote node (without leaking token!)
+      const issued = await runtime.issueNodeToken('node-gpu')
+      assert.ok(issued.token.length > 0)
+
+      let realHost: HelmxHostApi | undefined
+      const deletedIds: number[] = []
+      const notifications: string[] = []
+      await runtime.plugins.register(
+        {
+          id: 'p:nodes-events',
+          definePlugin(ctx) {
+            realHost = ctx.host
+            // Typed onEvent overload infers ConversationDeletedEvent and NotificationEvent without manual casts
+            ctx.host.onEvent('conversation.deleted', (ev) => {
+              deletedIds.push(ev.conversationId)
+            })
+            ctx.host.onEvent('notification', (ev) => {
+              notifications.push(`${ev.level}:${ev.title}`)
+            })
+          },
+        },
+        { enabled: true },
+      )
+      assert.ok(realHost)
+      assert.equal(typeof realHost!.nodeIpc.listNodes, 'function')
+
+      const nodes = realHost!.nodeIpc.listNodes!()
+      assert.deepEqual(
+        nodes.map((n) => ({ id: n.id, kind: n.kind, online: n.online })),
+        [
+          { id: 'local', kind: 'local', online: true },
+          { id: 'node-gpu', kind: 'byom', online: false },
+        ],
+      )
+      assert.ok(!JSON.stringify(nodes).includes(issued.token), 'listNodes snapshot must never expose node tokens')
+
+      // Defensive clone: mutating returned node/health does not corrupt subsequent reads
+      nodes[0]!.hostname = 'mutated-host'
+      if (nodes[0]!.health) nodes[0]!.health.cpuCount = -999
+      const fresh = realHost!.nodeIpc.listNodes!()
+      assert.notEqual(fresh[0]!.hostname, 'mutated-host')
+      assert.notEqual(fresh[0]!.health?.cpuCount, -999)
+
+      // Typed emitEvent delivers notification and conversation.deleted triggers typed listener
+      await realHost!.emitEvent('notification', { level: 'info', title: 'hello', body: 'world' })
+      assert.deepEqual(notifications, ['info:hello'])
+      const conv = await runtime.createConversation({ cwd: rtDir, title: 'temp' })
+      await runtime.deleteConversation(conv.id)
+      assert.deepEqual(deletedIds, [conv.id])
+
+      await runtime.plugins.disable('p:nodes-events')
+      assert.throws(
+        () => realHost!.nodeIpc.listNodes!(),
+        (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired' && err.status === 409,
+      )
+    } finally {
+      await runtime.close()
+    }
+  })
 })
