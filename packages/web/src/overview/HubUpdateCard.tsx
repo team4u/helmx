@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { Button, Card, HelmxIcon, Stack } from '@helmx/plugin-client'
 import { apiRequest, ApiClientError } from '../lib/api.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -123,77 +123,85 @@ export function HubUpdateCard(props: HubUpdateCardProps): ReactNode | null {
 
   if (phase === 'switched') {
     return (
-      <div className="hub-update-card hub-update-card-switched" role="status">
-        <HelmxIcon name="check" size={14} />
-        <span className="hub-update-card-text">
-          {t('shell.hubUpdate.switched', { version: targetOrCurrentVersion })}
-        </span>
-        <button type="button" className="hub-update-card-action" onClick={() => window.location.reload()}>
-          {t('shell.hubUpdate.reload')}
-        </button>
-      </div>
+      <Card variant="subtle" className="hub-update-card hub-update-card-switched" role="status">
+        <Stack direction="horizontal" gap="sm" align="center" wrap>
+          <HelmxIcon name="check" size={14} />
+          <span className="hub-update-card-text">
+            {t('shell.hubUpdate.switched', { version: targetOrCurrentVersion })}
+          </span>
+          <Button size="sm" className="hub-update-card-action" onClick={() => window.location.reload()}>
+            {t('shell.hubUpdate.reload')}
+          </Button>
+        </Stack>
+      </Card>
     )
   }
   if (phase === 'switching') {
     return (
-      <div className="hub-update-card hub-update-card-switching" role="status">
-        <HelmxIcon name="loader" size={14} />
-        <span className="hub-update-card-text">
-          {t('shell.hubUpdate.switching', { version: targetOrCurrentVersion })}
-        </span>
-      </div>
+      <Card variant="subtle" className="hub-update-card hub-update-card-switching" role="status">
+        <Stack direction="horizontal" gap="sm" align="center" wrap>
+          <HelmxIcon name="loader" size={14} className="spin-slow" />
+          <span className="hub-update-card-text">
+            {t('shell.hubUpdate.switching', { version: targetOrCurrentVersion })}
+          </span>
+        </Stack>
+      </Card>
     )
   }
   if (phase === 'error') {
     const readyVersion = status?.active === true ? (status.readyVersion ?? null) : null
     return (
-      <div className="hub-update-card" role="status">
-        <HelmxIcon name="alert-circle" size={14} />
-        {readyVersion !== null ? (
-          <span className="hub-update-card-text">
-            {t('shell.hubUpdate.ready', {
-              current: status?.currentVersion ?? '?',
-              version: readyVersion,
-            })}
-          </span>
-        ) : targetOrCurrentVersion !== '' ? (
-          <span className="hub-update-card-text">
-            {t('shell.hubUpdate.switching', { version: targetOrCurrentVersion })}
-          </span>
-        ) : null}
-        {phaseDetail !== null ? (
-          <span className="hub-update-card-error">{phaseDetail}</span>
-        ) : null}
-        {readyVersion !== null ? (
-          <button type="button" className="hub-update-card-action" disabled={applying} onClick={() => void apply(false)}>
-            {t('shell.hubUpdate.apply')}
-          </button>
-        ) : null}
-      </div>
+      <Card variant="subtle" className="hub-update-card" role="status">
+        <Stack direction="horizontal" gap="sm" align="center" wrap>
+          <HelmxIcon name="alert-circle" size={14} />
+          {readyVersion !== null ? (
+            <span className="hub-update-card-text">
+              {t('shell.hubUpdate.ready', {
+                current: status?.currentVersion ?? '?',
+                version: readyVersion,
+              })}
+            </span>
+          ) : targetOrCurrentVersion !== '' ? (
+            <span className="hub-update-card-text">
+              {t('shell.hubUpdate.switching', { version: targetOrCurrentVersion })}
+            </span>
+          ) : null}
+          {phaseDetail !== null ? (
+            <span className="hub-update-card-error">{phaseDetail}</span>
+          ) : null}
+          {readyVersion !== null ? (
+            <Button size="sm" className="hub-update-card-action" pending={applying} onClick={() => void apply(false)}>
+              {t('shell.hubUpdate.apply')}
+            </Button>
+          ) : null}
+        </Stack>
+      </Card>
     )
   }
   if (status === null || status.readyVersion == null || status.active !== true) return null
   return (
-    <div className="hub-update-card" role="status">
-      <HelmxIcon name="download" size={14} />
-      <span className="hub-update-card-text">
-        {t('shell.hubUpdate.ready', {
-          current: status.currentVersion ?? '?',
-          version: status.readyVersion,
-        })}
-      </span>
-      {busyCounts !== null ? (
-        <span className="hub-update-card-busy">{t('shell.hubUpdate.busy', { counts: busyCounts })}</span>
-      ) : null}
-      {busyCounts !== null ? (
-        <button type="button" className="hub-update-card-action" disabled={applying} onClick={() => void apply(true)}>
-          {t('shell.hubUpdate.forceApply')}
-        </button>
-      ) : (
-        <button type="button" className="hub-update-card-action" disabled={applying} onClick={() => void apply(false)}>
-          {t('shell.hubUpdate.apply')}
-        </button>
-      )}
-    </div>
+    <Card variant="subtle" className="hub-update-card" role="status">
+      <Stack direction="horizontal" gap="sm" align="center" wrap>
+        <HelmxIcon name="download" size={14} />
+        <span className="hub-update-card-text">
+          {t('shell.hubUpdate.ready', {
+            current: status.currentVersion ?? '?',
+            version: status.readyVersion,
+          })}
+        </span>
+        {busyCounts !== null ? (
+          <span className="hub-update-card-busy">{t('shell.hubUpdate.busy', { counts: busyCounts })}</span>
+        ) : null}
+        {busyCounts !== null ? (
+          <Button size="sm" className="hub-update-card-action" pending={applying} onClick={() => void apply(true)}>
+            {t('shell.hubUpdate.forceApply')}
+          </Button>
+        ) : (
+          <Button size="sm" className="hub-update-card-action" pending={applying} onClick={() => void apply(false)}>
+            {t('shell.hubUpdate.apply')}
+          </Button>
+        )}
+      </Stack>
+    </Card>
   )
 }

@@ -1,6 +1,6 @@
-import { useId, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { authApi } from '../lib/api.js'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { Button, Card, Field, HelmxIcon, IconButton, Input, Stack } from '@helmx/plugin-client'
 import { useAuthConnection, useStoreActions, useThemePreferencesState } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { LocaleMenuButton } from '../ui/LocaleMenuButton.js'
@@ -10,8 +10,6 @@ export function AuthGate() {
   const { theme, themePreference } = useThemePreferencesState()
   const { onAuthenticated, toggleTheme } = useStoreActions()
   const { t } = useWebLocale()
-  const passwordId = useId()
-  const confirmId = useId()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -53,96 +51,92 @@ export function AuthGate() {
   }
 
   return (
-    <div className="auth-gate" style={{ height: '100dvh' }}>
-      <form
-        onSubmit={(e) => void handleSubmit(e)}
-        className="card auth-gate-card"
-      >
-        <div className="auth-gate-header">
-          <div className="auth-gate-brand">
-            <HelmxIcon name="sparkles" size={18} />
-            <span className="auth-gate-title">{t('shell.auth.consoleTitle')}</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <LocaleMenuButton
-              className="btn btn-ghost btn-icon-sm sidebar-locale-toggle"
-              iconSize={14}
-              tooltipSide="top"
-              menuSide="bottom"
-              menuAlign="end"
-            />
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon-sm"
-              onClick={toggleTheme}
-              title={themeLabel}
-              aria-label={themeLabel}
-            >
-              <HelmxIcon
-                name={
-                  themePreference === 'system'
-                    ? 'monitor'
-                    : themePreference === 'light'
-                      ? 'sun'
-                      : 'moon'
-                }
-                size={14}
-              />
-            </button>
-          </div>
-        </div>
+    <div className="auth-gate">
+      <Card className="auth-gate-card">
+        <form onSubmit={(e) => void handleSubmit(e)}>
+          <Stack direction="vertical" gap="lg">
+            <div className="auth-gate-header">
+              <div className="auth-gate-brand">
+                <HelmxIcon name="sparkles" size={18} />
+                <span className="auth-gate-title">{t('shell.auth.consoleTitle')}</span>
+              </div>
+              <Stack direction="horizontal" gap="xs" align="center">
+                <LocaleMenuButton
+                  className="sidebar-locale-toggle"
+                  iconSize={14}
+                  tooltipSide="top"
+                  menuSide="bottom"
+                  menuAlign="end"
+                />
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  icon={
+                    <HelmxIcon
+                      name={
+                        themePreference === 'system'
+                          ? 'monitor'
+                          : themePreference === 'light'
+                            ? 'sun'
+                            : 'moon'
+                      }
+                      size={14}
+                    />
+                  }
+                  label={themeLabel}
+                  onClick={toggleTheme}
+                />
+              </Stack>
+            </div>
 
-        <div className="auth-gate-desc">
-          {isSetup ? t('shell.auth.setupDesc') : t('shell.auth.unlockDesc')}
-        </div>
+            <div className="auth-gate-desc">
+              {isSetup ? t('shell.auth.setupDesc') : t('shell.auth.unlockDesc')}
+            </div>
 
-        {error && (
-          <div className="callout callout-error" role="alert">
-            <HelmxIcon name="alert-circle" size={14} />
-            <span>{error}</span>
-          </div>
-        )}
+            {error && (
+              <div className="callout callout-error" role="alert">
+                <HelmxIcon name="alert-circle" size={14} />
+                <span>{error}</span>
+              </div>
+            )}
 
-        <div className="auth-gate-field">
-          <label className="auth-gate-label" htmlFor={passwordId}>
-            {isSetup ? t('shell.auth.setPasswordLabel') : t('shell.auth.passwordLabel')}
-          </label>
-          <input
-            id={passwordId}
-            type="password"
-            className="input"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder={isSetup ? t('shell.auth.setPasswordPlaceholder') : t('shell.auth.passwordPlaceholder')}
-            autoComplete={isSetup ? 'new-password' : 'current-password'}
-            autoFocus
-            required
-          />
-        </div>
-
-        {isSetup && (
-          <div className="auth-gate-field">
-            <label className="auth-gate-label" htmlFor={confirmId}>
-              {t('shell.auth.confirmLabel')}
-            </label>
-            <input
-              id={confirmId}
-              type="password"
-              className="input"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              placeholder={t('shell.auth.confirmPlaceholder')}
-              autoComplete="new-password"
+            <Field
+              label={isSetup ? t('shell.auth.setPasswordLabel') : t('shell.auth.passwordLabel')}
               required
-            />
-          </div>
-        )}
+            >
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={isSetup ? t('shell.auth.setPasswordPlaceholder') : t('shell.auth.passwordPlaceholder')}
+                autoComplete={isSetup ? 'new-password' : 'current-password'}
+                autoFocus
+              />
+            </Field>
 
-        <button type="submit" className="btn btn-primary" disabled={submitting}>
-          <HelmxIcon name="lock" size={13} />
-          <span>{submitting ? t('shell.auth.verifying') : isSetup ? t('shell.auth.initialize') : t('shell.auth.unlock')}</span>
-        </button>
-      </form>
+            {isSetup && (
+              <Field label={t('shell.auth.confirmLabel')} required>
+                <Input
+                  type="password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  placeholder={t('shell.auth.confirmPlaceholder')}
+                  autoComplete="new-password"
+                />
+              </Field>
+            )}
+
+            <Button
+              type="submit"
+              variant="primary"
+              icon={<HelmxIcon name="lock" size={13} />}
+              pending={submitting}
+            >
+              {submitting ? t('shell.auth.verifying') : isSetup ? t('shell.auth.initialize') : t('shell.auth.unlock')}
+            </Button>
+          </Stack>
+        </form>
+      </Card>
     </div>
   )
 }

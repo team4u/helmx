@@ -409,9 +409,6 @@
   color: var(--fg-muted);
   font-size: 12px;
 }
-.hub-upgraded-notice .hub-update-card-dismiss {
-  border-color: transparent;
-}
 
 /* ==========================================================================
  * 命令面板（CommandPaletteModal）

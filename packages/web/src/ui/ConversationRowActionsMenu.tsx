@@ -28,6 +28,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   HelmxIcon,
+  IconButton,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useStoreActions } from '../lib/store-context.js'
@@ -116,15 +117,14 @@ export function ConversationRowActionsMenu({
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="btn btn-ghost btn-icon-xs"
-          title={menuLabel}
+        <IconButton
+          variant="ghost"
+          size="xs"
+          icon={<HelmxIcon name="more" size={13} />}
+          label={menuLabel}
           aria-label={t('conv.row.menuAria', { id: conversation.id, label: menuLabel })}
           onClick={(e) => e.stopPropagation()}
-        >
-          <HelmxIcon name="more" size={13} />
-        </button>
+        />
       </DropdownMenuTrigger>
       <DropdownMenuPortal>
         <DropdownMenuContent className="pane-more-popover" align="end" sideOffset={4}>

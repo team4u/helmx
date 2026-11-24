@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { ClientComponentRef, ComposerController } from '@helmx/protocol/browser'
-import { HelmxIcon, createPluginClientContext, PluginClientContext, PluginScope, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
+import { Button, HelmxIcon, LoadingState, createPluginClientContext, PluginClientContext, PluginScope, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
 import { usePluginClientHash } from '../lib/store-context.js'
@@ -117,9 +117,8 @@ function ClientPluginUiView({
 
   if (client.phase === 'loading') {
     return (
-      <div className="callout" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-        <HelmxIcon name="loader" size={13} className="spin-slow" />
-        <span>{t('ui.pluginUi.loading', { pluginId })}</span>
+      <div className="callout">
+        <LoadingState label={t('ui.pluginUi.loading', { pluginId })} iconSize={13} />
       </div>
     )
   }
@@ -130,9 +129,9 @@ function ClientPluginUiView({
         <div>
           <strong>{t('ui.pluginUi.loadFailedTitle', { pluginId })}</strong>
           <p className="selectable">{client.message}</p>
-          <button type="button" className="btn btn-sm" onClick={() => { setClient({ phase: 'loading' }); setRetry((value) => value + 1) }}>
+          <Button size="sm" onClick={() => { setClient({ phase: 'loading' }); setRetry((value) => value + 1) }}>
             {t('ui.pluginUi.retry')}
-          </button>
+          </Button>
         </div>
       </div>
     )

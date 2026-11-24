@@ -38,6 +38,7 @@ import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from '
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import {
+  Button,
   Checkbox,
   DropdownMenu,
   DropdownMenuContent,
@@ -45,10 +46,12 @@ import {
   DropdownMenuPortal,
   DropdownMenuTrigger,
   HelmxIcon,
+  IconButton,
   PluginSlot,
   SearchBox,
   SegmentedControl,
   Select,
+  Stack,
   Tooltip,
   useSharedNowMs,
 } from '@helmx/plugin-client'
@@ -332,17 +335,17 @@ const OverviewCardView = memo(function OverviewCardView({
         {!batchMode && (
           <span className="overview-card-actions" onClick={(e) => e.stopPropagation()}>
             <Tooltip content={t('shell.overview.drawerPeek')} side="top">
-              <button
-                type="button"
-                className="btn btn-ghost btn-icon-xs overview-card-peek-btn"
+              <IconButton
+                variant="ghost"
+                size="xs"
+                className="overview-card-peek-btn"
+                icon={<HelmxIcon name="panel-right" size={13} />}
                 aria-label={t('shell.overview.drawerPeek')}
                 onClick={(e) => {
                   e.stopPropagation()
                   onDrawerPeek(card.targetConversationId)
                 }}
-              >
-                <HelmxIcon name="panel-right" size={13} />
-              </button>
+              />
             </Tooltip>
             <ConversationRowActionsMenu
               conversation={card.root}
@@ -812,33 +815,35 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
         </div>
         <div className="primary-center-topbar-actions pane-actions">
           {singleNewTopicCandidate !== null && (
-            <button
-              type="button"
-              className="btn btn-sm overview-newtopic-btn"
+            <Button
+              size="sm"
+              className="overview-newtopic-btn"
+              icon={<HelmxIcon name="plus" size={12} />}
               aria-label={t('conv.pane.newTopic')}
               title={t('shell.agents.newTopicUnder', { label: singleNewTopicCandidate.label })}
               onClick={() => {
                 openNewTopic(singleNewTopicCandidate.profileId)
               }}
             >
-              <HelmxIcon name="plus" size={12} />
               <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
-            </button>
+            </Button>
           )}
           {newTopicCandidates.length > 1 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="btn btn-sm overview-newtopic-btn"
+                <Button
+                  size="sm"
+                  className="overview-newtopic-btn"
+                  icon={<HelmxIcon name="plus" size={12} />}
                   aria-label={t('conv.pane.newTopic')}
                   title={t('conv.pane.newTopicTitle')}
                   aria-haspopup="menu"
                 >
-                  <HelmxIcon name="plus" size={12} />
-                  <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
-                  <HelmxIcon name="chevron-down" size={11} />
-                </button>
+                  <Stack inline direction="horizontal" gap="xs" align="center">
+                    <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
+                    <HelmxIcon name="chevron-down" size={11} />
+                  </Stack>
+                </Button>
               </DropdownMenuTrigger>
               <DropdownMenuPortal>
                 <DropdownMenuContent className="pane-more-popover" align="end" sideOffset={4}>
@@ -963,15 +968,15 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           />
         </div>
         <Tooltip content={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')} side="top">
-          <button
-            type="button"
-            className={`btn btn-ghost btn-icon-xs overview-batch-toggle${batch.batchMode ? ' is-active' : ''}`}
+          <IconButton
+            variant="ghost"
+            size="xs"
+            className={`overview-batch-toggle${batch.batchMode ? ' is-active' : ''}`}
+            icon="check-square"
             aria-label={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
             aria-pressed={batch.batchMode}
             onClick={batch.toggleBatchMode}
-          >
-            <HelmxIcon name="check-square" size={12} />
-          </button>
+          />
         </Tooltip>
       </div>
 
@@ -983,13 +988,13 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               <span className="callout-text">
                 {t('shell.overview.automatedNeedsAttention', { count: automatedNeedsAttentionCount })}
               </span>
-              <button
-                type="button"
-                className="btn btn-xs overview-automated-banner-btn"
+              <Button
+                size="xs"
+                className="overview-automated-banner-btn"
                 onClick={() => applyFilterParam({ source: 'automated', bucket: 'needs_attention' })}
               >
                 {t('shell.overview.viewAutomatedAttention')}
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -1005,10 +1010,10 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               onExit={batch.exitBatchMode}
               onToggleSelectAll={batch.toggleSelectAll}
               extraActions={
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={effectiveArchivableSelectedIds.length === 0 || batch.deleting || archiving}
+                <Button
+                  size="sm"
+                  pending={archiving}
+                  disabled={effectiveArchivableSelectedIds.length === 0 || batch.deleting}
                   onClick={() => void executeBatchArchive()}
                 >
                   {isArchivedView
@@ -1018,7 +1023,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                     : archiving
                       ? t('shell.agents.archiving')
                       : t('shell.agents.archiveCount', { count: effectiveArchivableSelectedIds.length })}
-                </button>
+                </Button>
               }
               confirmOpen={batch.confirmOpen}
               onConfirmOpenChange={batch.setConfirmOpen}
@@ -1037,26 +1042,28 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
             {isArchivedView && archivedCards.length === 0 ? (
               <div className="overview-empty">
                 <span>{t('shell.overview.emptyArchived')}</span>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm overview-clear-filters"
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="overview-clear-filters"
                   onClick={clearAllFilters}
                 >
                   {t('shell.overview.clearFilters')}
-                </button>
+                </Button>
               </div>
             ) : !isArchivedView && !anyFilterActive && sourcePoolTotal === 0 ? (
               <div className="overview-empty">{t('shell.overview.emptySystem')}</div>
             ) : (
               <div className="overview-empty">
                 <span>{t('shell.overview.emptyFiltered')}</span>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm overview-clear-filters"
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="overview-clear-filters"
                   onClick={clearAllFilters}
                 >
                   {t('shell.overview.clearFilters')}
-                </button>
+                </Button>
               </div>
             )}
           </div>

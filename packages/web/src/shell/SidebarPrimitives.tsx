@@ -1,5 +1,5 @@
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
+import { HelmxIcon, IconButton, Tooltip } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { sidebarPaneTagLabel, type SidebarTargetPresence } from './sidebar-model.js'
@@ -32,14 +32,14 @@ export function HoverIconButton({
 }) {
   return (
     <Tooltip content={title} side="top">
-      <button
-        type="button"
-        className={`btn btn-ghost btn-icon-xs${className ? ` ${className}` : ''}`}
+      <IconButton
+        variant="ghost"
+        size="xs"
+        className={className}
+        icon={<HelmxIcon name={icon} size={13} />}
         aria-label={title}
         onClick={onClick}
-      >
-        <HelmxIcon name={icon} size={13} />
-      </button>
+      />
     </Tooltip>
   )
 }
@@ -126,8 +126,7 @@ export function RemoteNodeTag({ nodeId }: { nodeId: string }) {
   const { t } = useWebLocale()
   return (
     <span
-      className="mono"
-      style={{ fontSize: 10.5, color: 'var(--fg-muted)', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+      className="mono remote-node-tag"
       title={t('shell.node.title', { id: nodeId })}
     >
       @{nodeId}

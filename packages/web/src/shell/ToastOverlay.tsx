@@ -1,4 +1,4 @@
-import { HelmxIcon } from '@helmx/plugin-client'
+import { Button, HelmxIcon, IconButton } from '@helmx/plugin-client'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { useConversations, useNotices, useStoreActions } from '../lib/store-context.js'
 import { resolveTargetString, type ResolvedTarget, type ToastNotice } from '../lib/types.js'
@@ -78,26 +78,27 @@ function ToastOverlayList({ notices }: { notices: ReadonlyArray<ToastNotice> }) 
                 </div>
               )}
               {actionTarget && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm toast-action-btn"
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="toast-action-btn"
                   onClick={() => {
                     openTarget(actionTarget)
                     dismissNotice(n.id)
                   }}
                 >
-                  <span>{t('shell.toast.view')}</span>
-                </button>
+                  {t('shell.toast.view')}
+                </Button>
               )}
             </div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm btn-icon-xs toast-close-btn"
+            <IconButton
+              variant="ghost"
+              size="xs"
+              className="toast-close-btn"
+              icon="x"
               aria-label={t('shell.toast.dismiss')}
               onClick={() => dismissNotice(n.id)}
-            >
-              <HelmxIcon name="x" size={12} />
-            </button>
+            />
           </div>
         )
       })}

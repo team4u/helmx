@@ -1,6 +1,8 @@
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { resolveLocalizedText, type CommandSpec, type ConversationSummary } from '@helmx/protocol/browser'
 import {
+  Badge,
+  Button,
   Dialog,
   DialogClose,
   DialogContent,
@@ -9,6 +11,7 @@ import {
   DialogTitle,
   HelmxIcon,
   SearchBox,
+  Stack,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { searchApi } from '../lib/api.js'
@@ -684,17 +687,18 @@ export function CommandPaletteModal({
                 </span>
               )}
               <DialogClose asChild>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs palette-close-btn"
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="palette-close-btn"
                   aria-label={t('common.close')}
                 >
-                  <span className="palette-close-desktop badge badge-neutral">{t('modals.palette.escToClose')}</span>
+                  <Badge tone="neutral" className="palette-close-desktop">{t('modals.palette.escToClose')}</Badge>
                   <span className="palette-close-mobile">
                     <HelmxIcon name="x" size={13} />
                     <span className="palette-close-mobile-label">{t('common.close')}</span>
                   </span>
-                </button>
+                </Button>
               </DialogClose>
             </div>
 
@@ -705,22 +709,21 @@ export function CommandPaletteModal({
                     <span className="palette-preview-title">
                       {resolveLocalizedText(previewCmd.spec.title, locale)} · {previewCmd.pluginId}
                     </span>
-                    <span className="palette-preview-actions">
+                    <Stack direction="horizontal" gap="xs" align="center" className="palette-preview-actions">
                       {previewCmd.spec.actionId !== undefined && previewMatchingCommand !== undefined && (
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-primary"
+                        <Button
+                          variant="primary"
+                          size="sm"
                           onClick={() => {
                             close()
                             invokePluginCommand(previewMatchingCommand)
                           }}
                         >
                           {t('modals.palette.runAction')}
-                        </button>
+                        </Button>
                       )}
-                      <button
-                        type="button"
-                        className="btn btn-sm"
+                      <Button
+                        size="sm"
                         onClick={() => {
                           setPreviewCmd(null)
                           inputRef.current?.focus()
@@ -728,8 +731,8 @@ export function CommandPaletteModal({
                         aria-label={t('modals.palette.closePreview')}
                       >
                         {t('common.collapse')}
-                      </button>
-                    </span>
+                      </Button>
+                    </Stack>
                   </div>
                   <PluginUiView
                     pluginId={previewCmd.pluginId}
