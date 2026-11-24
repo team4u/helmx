@@ -11,10 +11,16 @@
  *   不预写任何发布说明，避免与实际发布结果漂移。
  */
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { commitSubjectsSince, prependChangelogSection, resolvePreviousTag } from './lib/release-notes.mjs';
+import {
+  commitSubjectsSince,
+  normalizeReleaseNotesInput,
+  prependChangelogSection,
+  readChangelogSection,
+  resolvePreviousTag,
+} from './lib/release-notes.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -63,6 +69,7 @@ function printHelp() {
   --prerelease [id]     自增预发布号（缺省 id 为 beta；发 beta dist-tag）
 
 守卫与流程选项:
+  --notes-file <路径>   指定手工精选的 Markdown 变更说明（写入 CHANGELOG.md 对应版本小节）
   --dry-run             模拟运行：只预览变更明细与计划动作，不修改任何文件
   --skip-verify         跳过本地全量质量门禁（typecheck/lint/check:hygiene/build/test:all；
                         流水线仍会全量重验，此项只是本地提速逃生口）
@@ -72,7 +79,8 @@ function printHelp() {
 
 说明:
   - 版本单一来源是 packages/payload/package.json；脚本会锁步更新全部 packages/<pkg>/package.json。
-  - GitHub Release 与 Release notes 由流水线 notes 作业在 npm 发布后生成，本地不预写。
+  - 若 CHANGELOG.md 已包含目标版本小节（## vX.Y.Z (YYYY-MM-DD)），脚本直接沿用而不覆盖；
+    流水线 notes 作业也会优先复用 CHANGELOG.md 中的该小节来生成 GitHub Release 正文。
 `);
 }
 
@@ -86,7 +94,14 @@ function parseCliArgs() {
     else if (arg === '--push') options.push = true;
     else if (arg === '--allow-dirty') options.allowDirty = true;
     else if (arg === '--allow-non-main') options.allowNonMain = true;
-    else if (arg === '--patch' || arg === '--minor' || arg === '--major') options.bumpType = arg.slice(2);
+    else if (arg === '--notes-file') {
+      const value = args[i + 1];
+      if (!value || value.startsWith('--')) {
+        console.error('--notes-file 需要指定文件路径（--help 查看用法）');
+        process.exit(1);
+      }
+      options.notesFile = args[++i];
+    } else if (arg === '--patch' || arg === '--minor' || arg === '--major') options.bumpType = arg.slice(2);
     else if (arg === '--prerelease') {
       options.bumpType = 'prerelease';
       if (args[i + 1] && !args[i + 1].startsWith('--')) options.preId = args[++i];
@@ -198,12 +213,36 @@ function main() {
   }
   console.log(`当前分支: ${branch}`);
 
-  // 2. 变更明细预览（与流水线 notes 作业同一提炼逻辑：上个 tag..HEAD，滤 chore(release)/merge）
+  // 2. 变更明细预览（优先沿用 CHANGELOG.md 已有小节或 --notes-file，缺省按上个 tag..HEAD 自动汇总）
   const prevTag = resolvePreviousTag('HEAD');
-  const changelog = prevTag ? commitSubjectsSince(prevTag) : '';
+  const changelogPath = path.resolve(rootDir, 'CHANGELOG.md');
+  const existingSection = readChangelogSection(changelogPath, targetVersion);
+  let changelogSourceLabel;
+  let changelogBody;
+  if (options.notesFile) {
+    if (existingSection !== null) {
+      throw new Error(`CHANGELOG.md 已存在 v${targetVersion} 小节，与 --notes-file 冲突；请先移除该小节或省略 --notes-file`);
+    }
+    const notesPath = path.resolve(process.cwd(), options.notesFile);
+    if (!existsSync(notesPath)) {
+      throw new Error(`--notes-file 指定的文件不存在: ${notesPath}`);
+    }
+    changelogBody = normalizeReleaseNotesInput(readFileSync(notesPath, 'utf8'), targetVersion);
+    changelogSourceLabel = `--notes-file (${options.notesFile})`;
+  } else if (existingSection !== null) {
+    if (!existingSection.body) {
+      throw new Error(`CHANGELOG.md 中的 v${targetVersion} 小节正文为空，请补充内容后再发版`);
+    }
+    changelogBody = existingSection.body;
+    changelogSourceLabel = `CHANGELOG.md 已有 v${targetVersion} (${existingSection.date}) 小节（直接沿用）`;
+  } else {
+    changelogBody = prevTag ? commitSubjectsSince(prevTag) : '';
+    changelogSourceLabel = prevTag ? `自动汇总提交（${prevTag}..HEAD）` : '首次发布';
+  }
   console.log(`基准版本: ${prevTag ?? '（首次发布）'}`);
-  console.log('\n流水线将渲染的变更明细:');
-  console.log(changelog || '-（无可列出的提交）');
+  console.log(`变更来源: ${changelogSourceLabel}`);
+  console.log('\n将写入/复用的变更明细:');
+  console.log(changelogBody || '-（无可列出的提交）');
   console.log('');
 
   // 3. 本地全量质量门禁（流水线会重验，这里提前拦截省一轮 CI）
@@ -224,21 +263,24 @@ function main() {
   }
 
   if (options.dryRun) {
-    console.log(`[模拟运行] 未执行任何修改。计划: 锁步 bump ${updatedPreviewCount()} 个 package.json → 提交 chore(release): v${targetVersion} → ${options.push ? '推送 main + tag' : '（未指定 --push，不会推送）'} v${targetVersion}`);
+    console.log(`[模拟运行] 未执行任何修改。计划: 锁步 bump ${updatedPreviewCount()} 个 package.json → ${existingSection !== null ? '沿用' : '更新'} CHANGELOG.md → 提交 chore(release): v${targetVersion} → ${options.push ? '推送 main + tag' : '（未指定 --push，不会推送）'} v${targetVersion}`);
     return;
   }
 
-  // 4. 锁步 bump + CHANGELOG 追加 + 仅提交发版文件 + 轻量 tag
+  // 4. 锁步 bump + CHANGELOG 更新/沿用 + 仅提交发版文件 + 轻量 tag
   const updated = bumpWorkspaceVersions(targetVersion);
   console.log(`锁步更新版本至 ${targetVersion}（${updated.length} 个 package.json）`);
-  const changelogPath = path.resolve(rootDir, 'CHANGELOG.md');
-  prependChangelogSection({
-    version: targetVersion,
-    date: new Date().toISOString().slice(0, 10),
-    subjects: prevTag ? changelog : '-（首次发布）',
-    changelogPath,
-  });
-  console.log(`CHANGELOG.md 已追加 v${targetVersion} 小节（随包分发的已安装版本变更日志）`);
+  if (existingSection !== null) {
+    console.log(`CHANGELOG.md 已包含 v${targetVersion} (${existingSection.date}) 小节，直接沿用`);
+  } else {
+    prependChangelogSection({
+      version: targetVersion,
+      date: new Date().toISOString().slice(0, 10),
+      subjects: options.notesFile || prevTag ? changelogBody : '-（首次发布）',
+      changelogPath,
+    });
+    console.log(`CHANGELOG.md 已追加 v${targetVersion} 小节（随包分发的已安装版本变更日志）`);
+  }
   const releaseFiles = [...updated.map((rel) => rel.replaceAll('\\', '/')), 'CHANGELOG.md'];
   // --allow-dirty 场景下索引可能含用户已暂存的其他改动：先暂存发版文件，再以 `git commit --only -- <paths>`
   // 严格限定本次提交仅包含发版文件，绝不通过无路径 commit 混入用户暂存改动。

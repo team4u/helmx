@@ -24,7 +24,7 @@
 
 ## 变更日志（CHANGELOG.md）
 
-`pnpm release` 在锁步 bump 的同时把新版本小节（`## vX.Y.Z (日期)` + 与流水线 notes 作业同一提炼逻辑的提交明细）**追加到仓库根 `CHANGELOG.md` 顶部**，随 `chore(release)` 提交一起进 tag。该文件随后打进 Hub payload 根（manifest `changelog` 条目），是 Web 端「版本与更新」界面（已安装版本变更日志，离线可读）的唯一数据源；GitHub Release 正文仍由流水线 notes 作业在 npm 发布后渲染，二者内容同源。
+`pnpm release` 在锁步 bump 的同时维护仓库根 `CHANGELOG.md`（`## vX.Y.Z (日期)`），随 `chore(release)` 提交一起进 tag。变更正文支持三种来源（按优先级）：① `CHANGELOG.md` 中已预先写好目标版本 `## vX.Y.Z (YYYY-MM-DD)` 小节时直接沿用不覆盖；② 通过 `--notes-file <路径>` 传入人工精选的 Markdown 变更说明并写入顶部；③ 未提供人工变更说明时自动提炼上一 tag 至 `HEAD` 的提交明细（过滤 `chore(release)` 与 merge 提交）。该文件随后打进 Hub payload 根（manifest `changelog` 条目），是 Web 端「版本与更新」界面（已安装版本变更日志，离线可读）的唯一数据源；GitHub Release 正文由流水线 notes 作业在 npm 发布后渲染，优先复用 `CHANGELOG.md` 中对应版本小节的内容，二者保持同源。
 
 ## npm 制品发布（每个制品一个 manifest 权威）
 
@@ -74,13 +74,13 @@ git push origin v0.1.0
 # 4. 在 Actions 观察 verify → build → npm-publish → notes
 ```
 
-脚本细节（`pnpm release --help` 全量）：`--skip-verify` 跳过本地门禁（流水线仍会全量重验）；`--allow-dirty` / `--allow-non-main` 为边缘场景豁免，默认要求干净工作区与 main 分支；版本单一来源是 `packages/payload/package.json`，脚本锁步更新全部 `packages/*/package.json`。
+脚本细节（`pnpm release --help` 全量）：`--notes-file <路径>` 传入人工精选变更说明；`--skip-verify` 跳过本地门禁（流水线仍会全量重验）；`--allow-dirty` / `--allow-non-main` 为边缘场景豁免，默认要求干净工作区与 main 分支；版本单一来源是 `packages/payload/package.json`，脚本锁步更新全部 `packages/*/package.json`。
 
 ## 发版记录（GitHub Release notes）
 
-`notes` 作业在 `npm-publish` 成功结束后创建 GitHub Release，正文两部分（`scripts/lib/release-notes.mjs` 装配，本地 `scripts/release.mjs` 复用同一变更明细提炼逻辑）：
+`notes` 作业在 `npm-publish` 成功结束后创建 GitHub Release，正文两部分（`scripts/lib/release-notes.mjs` 装配，与 `scripts/release.mjs` 共享提炼与解析逻辑）：
 
-- **变更明细**：上一 tag 至本次 tag 的提交列表（过滤 `chore(release):` 与 merge 提交）；
+- **变更明细**：若 `CHANGELOG.md` 已包含本次 `tag` 对应小节则优先复用其正文，否则回退为上一 tag 至本次 tag 的提交列表（过滤 `chore(release):` 与 merge 提交）；
 - **制品发布状态**：三行状态原样渲染 `npm-publish` 作业的实际输出（发布成功 / 占位跳过 / 未完成），**绝不伪称已发布**。
 
 诚实约束与幂等行为：

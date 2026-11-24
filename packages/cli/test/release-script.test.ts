@@ -20,6 +20,7 @@ const releaseScriptSrc = path.join(repoRoot, 'scripts', 'release.mjs')
 const releaseNotesSrc = path.join(repoRoot, 'scripts', 'lib', 'release-notes.mjs')
 // Windows 上绝对路径必须经 file:// URL 才能被 ESM loader 接受
 const { assertPnpmArgsShellSafe } = await import(pathToFileURL(releaseScriptSrc).href)
+const { assembleReleaseNotes } = await import(pathToFileURL(releaseNotesSrc).href)
 
 function gitIn(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv): string {
   const res = spawnSync('git', args, { cwd, encoding: 'utf8', env })
@@ -179,6 +180,81 @@ test('release.mjs --allow-dirty: commits only release files via --only and prese
   assert.equal(tracked.git(['log', '-1', '--pretty=format:%B']).trim(), 'chore(release): v0.1.2')
   assert.deepEqual(tracked.git(['diff', '--cached', '--name-only']).trim().split('\n'), ['notes.txt'])
   assert.match(readFileSync(path.join(tracked.dir, 'CHANGELOG.md'), 'utf8'), /## v0\.1\.2 \(\d{4}-\d{2}-\d{2}\)\n\n- feat\(cli\): add feature/)
+})
+
+test('release.mjs: reuses pre-written CHANGELOG.md section and supports --notes-file cleanly', { timeout: 60_000 }, (t) => {
+  // Case 1: pre-written CHANGELOG.md section already committed on main
+  const curated = makeFixtureRepo(useTempDir(t, 'helmx-release-curated-'), '0.1.1', { withChangelog: true })
+  curated.git(['tag', 'v0.1.1'])
+  const curatedBody = '### 工作台\n\n- **会话总览**：主舞台支持筛选与批量管理。'
+  writeFileSync(
+    path.join(curated.dir, 'CHANGELOG.md'),
+    `# Changelog\n\n## v0.2.0 (2026-11-24)\n\n${curatedBody}\n\n## v0.1.1 (2026-01-01)\n\n- init\n`,
+  )
+  curated.git(['add', 'CHANGELOG.md'])
+  curated.git(['commit', '-m', 'docs: add v0.2.0 curated changelog'])
+
+  const dry = curated.runRelease(['--minor', '--dry-run', '--skip-verify'])
+  assert.equal(dry.status, 0, `dry-run failed:\n${dry.stderr}`)
+  assert.match(dry.stdout, /CHANGELOG\.md 已有 v0\.2\.0 \(2026-11-24\) 小节（直接沿用）/)
+  assert.match(dry.stdout, /会话总览/)
+
+  // Passing --notes-file when target section already exists fails explicitly
+  const conflictNotes = path.join(curated.dir, 'notes.md')
+  writeFileSync(conflictNotes, '- override attempt\n')
+  const conflict = curated.runRelease(['0.2.0', '--notes-file', 'notes.md', '--allow-dirty', '--skip-verify'])
+  assert.notEqual(conflict.status, 0)
+  assert.match(conflict.stderr, /冲突/)
+
+  // Clean repo (remove untracked scratch file): reusing already-committed CHANGELOG.md works without --allow-dirty
+  curated.git(['clean', '-fd'])
+  const res1 = curated.runRelease(['0.2.0', '--skip-verify'])
+  assert.equal(res1.status, 0, `release with pre-written CHANGELOG failed:\nstdout: ${res1.stdout}\nstderr: ${res1.stderr}`)
+  const changelogAfter = readFileSync(path.join(curated.dir, 'CHANGELOG.md'), 'utf8')
+  assert.equal(changelogAfter.match(/^## v0\.2\.0 \(/gm)?.length, 1, 'must not duplicate v0.2.0 section')
+  assert.match(changelogAfter, /主舞台支持筛选与批量管理/)
+
+  // release-notes.mjs reuses the curated section verbatim in GitHub Release notes
+  const assembled = assembleReleaseNotes({
+    tag: 'v0.2.0',
+    prevTag: 'v0.1.1',
+    payloadStatus: 'published @helmx/hub@0.2.0',
+    cliStatus: 'published @helmx/cli@0.2.0',
+    nodeStatus: 'published @helmx/node@0.2.0',
+    changelogPath: path.join(curated.dir, 'CHANGELOG.md'),
+  })
+  assert.match(assembled, /## 变更明细（v0\.1\.1\.\.v0\.2\.0）/)
+  assert.match(assembled, /主舞台支持筛选与批量管理/)
+  assert.doesNotMatch(assembled, /docs: add v0\.2\.0 curated changelog/)
+
+  // Case 2: --notes-file on a clean repo writes curated notes (stripping matching heading if present)
+  const fromFile = makeFixtureRepo(useTempDir(t, 'helmx-release-notes-file-'), '0.1.1', { withChangelog: true })
+  fromFile.git(['tag', 'v0.1.1'])
+  writeFileSync(path.join(fromFile.dir, 'notes.txt'), 'internal change\n')
+  fromFile.git(['add', 'notes.txt'])
+  fromFile.git(['commit', '-m', 'refactor: internal plumbing'])
+
+  const extNotesDir = useTempDir(t, 'helmx-release-notes-src-')
+  const mismatchedFile = path.join(extNotesDir, 'mismatch.md')
+  writeFileSync(mismatchedFile, '## v0.9.9 (2026-11-24)\n\n- wrong version\n')
+  const mismatch = fromFile.runRelease(['0.2.0', '--notes-file', mismatchedFile, '--skip-verify'])
+  assert.notEqual(mismatch.status, 0)
+  assert.match(mismatch.stderr, /不一致/)
+
+  const emptyFile = path.join(extNotesDir, 'empty.md')
+  writeFileSync(emptyFile, '   \n')
+  const emptyRes = fromFile.runRelease(['0.2.0', '--notes-file', emptyFile, '--skip-verify'])
+  assert.notEqual(emptyRes.status, 0)
+  assert.match(emptyRes.stderr, /为空/)
+
+  const validFile = path.join(extNotesDir, 'v0.2.0.md')
+  writeFileSync(validFile, '## v0.2.0 (2026-11-24)\n\n### 新特性\n\n- 用户可感知亮点。\n')
+  const res2 = fromFile.runRelease(['0.2.0', '--notes-file', validFile, '--skip-verify'])
+  assert.equal(res2.status, 0, `release --notes-file failed:\nstdout: ${res2.stdout}\nstderr: ${res2.stderr}`)
+  const written = readFileSync(path.join(fromFile.dir, 'CHANGELOG.md'), 'utf8')
+  assert.equal(written.match(/^## v0\.2\.0 \(/gm)?.length, 1)
+  assert.match(written, /### 新特性\n\n- 用户可感知亮点。/)
+  assert.doesNotMatch(written, /internal plumbing/)
 })
 
 test('assertPnpmArgsShellSafe: pnpm gate arguments stay shell-inert (the .cmd shim must go through cmd.exe)', { timeout: 60_000 }, () => {

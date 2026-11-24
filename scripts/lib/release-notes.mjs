@@ -4,12 +4,15 @@
  *   the three honest artifact status lines from the npm-publish job passed via
  *   HELMX_RELEASE_{PAYLOAD,CLI,NODE}_STATUS env vars;
  * - scripts/release.mjs (local orchestration): imports commitSubjectsSince()/resolvePreviousTag()
- *   to preview the changelog before tagging.
+ *   and curated-changelog helpers to preview/write CHANGELOG.md before tagging.
  *
  * Honesty constraints: the artifact status section renders the npm-publish job's actual outputs
  * verbatim (published / skipped-as-placeholder / did-not-complete); this module never fabricates
- * a publish result. The changelog is commit subjects between the previous tag and the release
- * commit, with chore(release) commits and merge-commit subjects filtered out.
+ * a publish result. For the changelog section, when CHANGELOG.md already carries a curated section
+ * matching the release tag (`## vX.Y.Z (YYYY-MM-DD)`), that exact section is reused so GitHub
+ * Release notes and the in-app offline changelog stay aligned; otherwise it falls back to commit
+ * subjects between the previous tag and the release commit (with chore(release) and merge
+ * commits filtered out).
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -17,6 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const FILTERED_SUBJECT = [/^chore\(release\):/, /^Merge (branch|pull request|remote-tracking branch|tag)/];
+const CHANGELOG_SECTION_PATTERN = /^## v(\d+\.\d+\.\d+(?:[-+][\w.-]+)?) \((\d{4}-\d{2}-\d{2})\)\s*$/;
 
 /** Run git in the current working directory, returning stdout; throws with stderr on failure. */
 function runGit(args) {
@@ -44,10 +48,74 @@ export function commitSubjectsSince(baseRef) {
 }
 
 /**
- * Assemble the full release notes body. prevTag may be null (first release): the changelog
- * section then states so instead of guessing a range.
+ * Extract one version's section from CHANGELOG.md markdown using the exact heading contract
+ * shared with Hub's offline changelog parser (`## vX.Y.Z (YYYY-MM-DD)`).
  */
-export function assembleReleaseNotes({ tag, prevTag, payloadStatus, cliStatus, nodeStatus }) {
+export function extractChangelogSection(text, version) {
+  const lines = text.split(/\r?\n/);
+  let current = null;
+  for (const line of lines) {
+    const match = CHANGELOG_SECTION_PATTERN.exec(line);
+    if (match !== null) {
+      if (current !== null && current.version === version) {
+        return { version: current.version, date: current.date, body: current.body.join('\n').trim() };
+      }
+      current = { version: match[1], date: match[2], body: [] };
+      continue;
+    }
+    if (current !== null) current.body.push(line);
+  }
+  if (current !== null && current.version === version) {
+    return { version: current.version, date: current.date, body: current.body.join('\n').trim() };
+  }
+  return null;
+}
+
+/** Read and extract one version's section from disk; returns null when the file or section is absent. */
+export function readChangelogSection(changelogPath, version) {
+  if (!changelogPath || !existsSync(changelogPath)) return null;
+  return extractChangelogSection(readFileSync(changelogPath, 'utf8'), version);
+}
+
+/**
+ * Validate and normalize curated release notes input (e.g. from `--notes-file`):
+ * allows an optional leading `## v<targetVersion> (YYYY-MM-DD)` heading (stripped so
+ * `prependChangelogSection` writes a single heading), rejects mismatched or nested version
+ * headings, and refuses empty bodies.
+ */
+export function normalizeReleaseNotesInput(raw, targetVersion) {
+  const normalized = raw.replace(/\r\n/g, '\n').trim();
+  if (!normalized) {
+    throw new Error('release notes 内容为空，拒绝写入空的变更日志');
+  }
+  const lines = normalized.split('\n');
+  const firstMatch = CHANGELOG_SECTION_PATTERN.exec(lines[0]);
+  let bodyLines = lines;
+  if (firstMatch !== null) {
+    if (firstMatch[1] !== targetVersion) {
+      throw new Error(`notes 文件标题版本 v${firstMatch[1]} 与目标版本 v${targetVersion} 不一致`);
+    }
+    bodyLines = lines.slice(1);
+  }
+  for (const line of bodyLines) {
+    if (CHANGELOG_SECTION_PATTERN.test(line)) {
+      throw new Error(`notes 正文不得包含额外版本标题行: ${line}`);
+    }
+  }
+  const body = bodyLines.join('\n').trim();
+  if (!body) {
+    throw new Error('release notes 标题后正文为空，拒绝写入空的变更日志');
+  }
+  return body;
+}
+
+/**
+ * Assemble the full release notes body. When CHANGELOG.md already has a curated section for
+ * `tag`, reuse its body verbatim; otherwise fall back to commit subjects since `prevTag`
+ * (or state first release when `prevTag` is null). Pass `changelogPath: null` to bypass
+ * CHANGELOG.md lookup explicitly.
+ */
+export function assembleReleaseNotes({ tag, prevTag, payloadStatus, cliStatus, nodeStatus, changelogPath }) {
   if (!/^v\d+\.\d+\.\d+/.test(tag)) {
     throw new Error(`tag must look like v<semver>, got: ${tag}`);
   }
@@ -60,10 +128,18 @@ export function assembleReleaseNotes({ tag, prevTag, payloadStatus, cliStatus, n
       throw new Error(`missing ${label} artifact status line (HELMX_RELEASE_${label.toUpperCase()}_STATUS) — refusing to assemble notes without the npm-publish job's actual outputs`);
     }
   }
-  const changelog = prevTag ? commitSubjectsSince(prevTag) : '';
-  const changelogSection = prevTag
-    ? changelog || '-（上一版本以来无可列出的提交）'
-    : '-（首次发布）';
+  const version = tag.slice(1);
+  const resolvedChangelogPath = changelogPath === undefined ? path.resolve(process.cwd(), 'CHANGELOG.md') : changelogPath;
+  const curated = resolvedChangelogPath ? readChangelogSection(resolvedChangelogPath, version) : null;
+  let changelogSection;
+  if (curated && curated.body.trim() !== '') {
+    changelogSection = curated.body;
+  } else {
+    const changelog = prevTag ? commitSubjectsSince(prevTag) : '';
+    changelogSection = prevTag
+      ? changelog || '-（上一版本以来无可列出的提交）'
+      : '-（首次发布）';
+  }
   return [
     `## 变更明细（${prevTag ? `${prevTag}..${tag}` : '首次发布'}）`,
     '',
@@ -82,7 +158,7 @@ export function assembleReleaseNotes({ tag, prevTag, payloadStatus, cliStatus, n
 
 /**
  * Prepend one version section to the repo's CHANGELOG.md (the shipped installed-version
- * changelog): `## vX.Y.Z (date)` + the same filtered commit list the GitHub Release notes use.
+ * changelog): `## vX.Y.Z (date)` + curated markdown or the filtered commit list.
  * Creates the file (with its header) when absent; refuses to prepend a duplicate version.
  */
 export function prependChangelogSection({ version, date, subjects, changelogPath }) {
@@ -98,7 +174,7 @@ export function prependChangelogSection({ version, date, subjects, changelogPath
   if (!existing.startsWith('# Changelog')) {
     throw new Error(`${changelogPath} does not start with the "# Changelog" header; refusing to prepend`);
   }
-  if (new RegExp(`^## v${version.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')} \\(\\d{4}-`, 'm').test(existing)) {
+  if (extractChangelogSection(existing, version) !== null) {
     throw new Error(`CHANGELOG.md already has a section for v${version}; refusing to prepend a duplicate`);
   }
   const rest = existing.slice('# Changelog\n'.length).replace(/^\s+/, '');
