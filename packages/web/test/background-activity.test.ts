@@ -887,7 +887,7 @@ test('zh-CN sidebar render: conversations working set shows Chinese chrome copy 
     ],
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('>会话总览</span>'), 'top overview entry renders zh-CN copy')
+  assert.ok(html.includes('aria-label="会话总览"'), 'header overview button renders zh-CN copy')
   assert.ok(html.includes('按状态'), 'working set group-by switcher renders zh-CN copy')
   assert.ok(html.includes('筛选会话'), 'filter tooltip/aria-label renders zh-CN')
   assert.ok(!html.includes('已归档历史'), 'archived conversations are governed in #/overview, not duplicated in the sidebar')

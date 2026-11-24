@@ -1,7 +1,7 @@
 /**
  * 侧栏空间切换、工作集快速切换与双语交互测试（happy-dom + 真实 React 事件）：
  * - Activity Rail 对话/视图/设置三空间切换与总览空间归属；
- * - 顶置「会话总览」行（带同源态势计数徽标与分屏微标）与常驻「新话题」行（单/多角色、移动端防误关）；
+ * - 侧栏顶栏「会话总览」按钮（带同源态势计数角标）与分组栏「新话题」按钮（单/多角色、空态引导、移动端防误关）；
  * - 工作集：活跃全量 + 近期截断（SIDEBAR_RECENT_QUIET_LIMIT）+ 在场保底 + 底部「查看全部」；
  * - 侧栏搜索：突破近期上限、搜索防藏匿自动展开分节与命中后代、Esc 两段清空/收起、带 ?sp.q 跳转总览；
  * - 行命中范围、非模态行菜单、后代展开移动端防误关、分屏焦点同步与 Rail 语言切换。
@@ -97,22 +97,24 @@ function render(store: HelmxExternalStore, element: React.ReactElement): void {
   root.render(e(HostStoreProviders, { value: store }, element))
 }
 
-test('Sidebar 空间切换：对话空间渲染顶置总览与工作集，视图/设置空间各自独立渲染且记住总览目标', { timeout: 60_000 }, async () => {
+test('Sidebar 空间切换：对话空间顶栏渲染总览入口与工作集，视图/设置空间各自独立渲染且记住总览目标', { timeout: 60_000 }, async () => {
   const store = makeStore()
   render(store, e(LiveSidebar))
   await act(async () => {})
 
   const body = document.body
   assert.ok(body.querySelector('.activity-rail'), '应渲染 Activity Rail')
-  assert.ok(body.querySelector('.sidebar-overview-entry'), '对话空间置顶渲染会话总览入口')
+  assert.ok(body.querySelector('.sidebar-header .sidebar-overview-open-btn'), '对话空间顶栏渲染会话总览入口')
+  assert.ok(body.querySelector('.sidebar-overview-entry') === null, '旧顶置会话总览整行已移除')
   assert.ok(body.querySelector('.sidebar-overview-group'), '对话空间渲染工作集')
   assert.ok(!body.textContent!.includes('Herdr 终端'), '默认不渲染视图空间项')
 
-  // 点顶置总览行进入 #/overview，对话空间 Rail 按钮保持激活高亮
+  // 点顶栏总览钮进入 #/overview，按钮点亮且对话空间 Rail 按钮保持激活高亮
   await act(async () => {
-    body.querySelector<HTMLButtonElement>('.sidebar-overview-entry .nav-item-main')!.click()
+    body.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')!.click()
   })
   assert.deepEqual(store.getPrimaryTarget(), { kind: 'overview' })
+  assert.ok(body.querySelector('.sidebar-overview-open-btn')?.classList.contains('is-active'), '主屏停总览时顶栏总览按钮点亮')
   const convSpaceBtn = body.querySelector<HTMLButtonElement>('button[aria-label="Conversations space"]')!
   assert.ok(convSpaceBtn.classList.contains('rail-btn-active'), '主屏停总览时对话空间图标保持高亮')
 
@@ -222,8 +224,8 @@ test('Sidebar 工作集截断、在场保底、近期排序与全量搜索透传
   assert.ok(document.body.querySelector('.sidebar-search-input') === null, '空输入再按 Esc 收起筛选框')
 })
 
-test('Sidebar 顶置新话题入口：单角色直进待命；多角色下拉不误关移动端抽屉，选角后进待命并关闭', { timeout: 60_000 }, async () => {
-  // 1) 单角色：直点进待命页并调用 onClose
+test('Sidebar 分组栏新话题入口与空态引导：单角色直进待命；多角色下拉不误关移动端抽屉，选角后进待命并关闭', { timeout: 60_000 }, async () => {
+  // 1) 单角色：直点进待命页并调用 onClose，同时 0 会话空态提供显式新话题引导按钮
   const singleStore = makeTestStore({
     locale: 'zh-CN',
     conversations: [],
@@ -235,6 +237,8 @@ test('Sidebar 顶置新话题入口：单角色直进待命；多角色下拉不
   await act(async () => {})
 
   assert.ok(document.body.querySelector('.sidebar-overview-empty') !== null, '0 会话渲染温和空态')
+  const emptyNewBtn = document.body.querySelector<HTMLButtonElement>('.sidebar-overview-empty .sidebar-empty-new-topic-btn')!
+  assert.ok(emptyNewBtn !== null, '0 会话空态内渲染显式新话题引导按钮')
   const singleBtn = document.body.querySelector<HTMLButtonElement>('.sidebar-new-topic-btn')!
   assert.ok(singleBtn.classList.contains('is-active'), '停在待命页时新话题入口高亮')
   await act(async () => {
@@ -242,6 +246,11 @@ test('Sidebar 顶置新话题入口：单角色直进待命；多角色下拉不
   })
   assert.deepEqual(singleStore.getPrimaryTarget(), { kind: 'agent', profileId: 'assistant' })
   assert.equal(closeCount, 1)
+  await act(async () => {
+    emptyNewBtn.click()
+  })
+  assert.deepEqual(singleStore.getPrimaryTarget(), { kind: 'agent', profileId: 'assistant' })
+  assert.equal(closeCount, 2)
 
   // 2) 多角色：打开下拉不冒泡到外层 .nav-item 关闭抽屉，选具体角色才导航并关闭
   const multiStore = makeStore()
@@ -510,7 +519,8 @@ test('Sidebar Rail 底部语言按钮紧邻主题按钮：三态菜单（auto/en
   })
   const triggerAfter = document.body.querySelector('.activity-rail-footer button.sidebar-locale-toggle') as HTMLButtonElement | null
   assert.equal(triggerAfter?.getAttribute('aria-label'), '界面语言')
-  assert.ok(document.body.textContent?.includes('会话总览'))
+  assert.equal(document.body.querySelector('.sidebar-overview-open-btn')?.getAttribute('aria-label'), '会话总览')
+  assert.equal(document.body.querySelector('.sidebar-group-by-label')?.textContent, '按状态')
 
   const navDesc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages') ?? Object.getOwnPropertyDescriptor(navigator, 'languages')
   Object.defineProperty(navigator, 'languages', { value: ['zh-CN'], configurable: true })

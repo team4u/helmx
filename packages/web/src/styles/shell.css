@@ -728,8 +728,8 @@
 }
 
 
-/* 全局态势计数徽标（tone 染色）：移动端汉堡按钮 .mobile-nav-toggle 与
- * Activity Rail 对话空间按钮消费；计数 = 同源 indicator.totalCount（有信号的树数，
+/* 全局态势计数徽标（tone 染色）：移动端汉堡按钮 .mobile-nav-toggle、
+ * Activity Rail 对话空间按钮与侧栏顶栏总览按钮共用；计数 = 同源 indicator.totalCount（有信号的树数，
  * 99+ 折叠），tone = 聚合灯色；有信号才渲染，全安静零徽标。 */
 .overview-count-badge {
   position: absolute;

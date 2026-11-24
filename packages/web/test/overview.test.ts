@@ -927,18 +927,17 @@ test('Sidebar overview entry: top primary nav row opens #/overview with the same
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
-    // Rail 总览按钮与侧栏头部重复小图标均已移除，唯一收敛到对话空间顶置导航行
+    // Rail 总览按钮与旧顶置整行均已移除，唯一收敛到侧栏顶栏总览按钮
     assert.ok(container.querySelector('.rail-overview-btn') === null, 'the rail overview button is gone for good')
-    assert.ok(container.querySelector('.sidebar-overview-open-btn') === null, 'the duplicate header icon button is gone')
-    const overviewRow = container.querySelector<HTMLElement>('.sidebar-overview-entry')
-    const overviewBtn = overviewRow?.querySelector<HTMLButtonElement>('.nav-item-main') ?? null
-    assert.ok(overviewRow !== null && overviewBtn !== null, 'the top overview nav row renders in conversations space')
+    assert.ok(container.querySelector('.sidebar-overview-entry') === null, 'the legacy top overview nav row is gone')
+    const overviewBtn = container.querySelector<HTMLButtonElement>('.sidebar-header .sidebar-overview-open-btn')
+    assert.ok(overviewBtn !== null, 'the header overview button renders in conversations space')
     assert.ok(
       overviewBtn.getAttribute('aria-label')?.includes('Conversation overview'),
-      'the nav row label states the overview',
+      'the button label states the overview',
     )
-    const badge = overviewRow.querySelector<HTMLElement>('.sidebar-overview-entry-badge[data-tone="running"]')
-    assert.ok(badge !== null, 'the same-source attention count badge rides the overview row')
+    const badge = overviewBtn.querySelector<HTMLElement>('.sidebar-overview-entry-badge[data-tone="running"]')
+    assert.ok(badge !== null, 'the same-source attention count badge rides the header overview button')
     assert.ok(badge.textContent === '1', 'the badge states the honest signal-tree count (1 working tree)')
     await act(async () => {
       overviewBtn.click()
@@ -991,7 +990,7 @@ test('Sidebar overview entry: top primary nav row opens #/overview with the same
   })
   const html = renderToString(e(HelmxExternalStoreContext.Provider, { value: quiet }, e(Sidebar)))
   assert.ok(!html.includes('rail-overview-btn'), 'the rail overview button never renders')
-  assert.ok(html.includes('sidebar-overview-entry'), 'the top overview nav row always renders in conversations space')
+  assert.ok(html.includes('sidebar-overview-open-btn'), 'the header overview button always renders in conversations space')
   assert.ok(!html.includes('sidebar-overview-entry-badge'), 'no count badge without any signal')
 })
 

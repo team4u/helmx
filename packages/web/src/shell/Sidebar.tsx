@@ -437,6 +437,10 @@ export function Sidebar({
 
   const space = spaceForTarget(primaryTarget)
   const { indicator: attentionIndicator, background, viewedConversationIds } = useGlobalAttention()
+  const overviewPresence = resolveSidebarTargetPresence(sidebarStore, (target) => target.kind === 'overview')
+  const attentionSummary = composeAttentionSummary(attentionIndicator, t)
+  const overviewLabel =
+    attentionSummary !== '' ? `${t('shell.overview.title')} · ${attentionSummary}` : t('shell.overview.title')
 
   const railQuickEntries = useMemo(
     () =>
@@ -502,11 +506,11 @@ export function Sidebar({
             />
             <span>{spaceHeaderLabel}</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div className="sidebar-header-actions">
             <Tooltip content={quietNotifyTooltip} side="bottom">
               <button
                 type="button"
-                className="btn btn-sm btn-icon"
+                className="btn btn-sm btn-icon-sm"
                 aria-label={quietNotifyTooltip}
                 aria-pressed={quietNotifyEnabled}
                 onClick={() => {
@@ -519,17 +523,41 @@ export function Sidebar({
             <Tooltip content={t('shell.sidebar.openCommandPalette')} side="bottom">
               <button
                 type="button"
-                className="btn btn-sm btn-icon"
+                className="btn btn-sm btn-icon-sm"
                 aria-label={t('shell.sidebar.openCommandPalette')}
                 onClick={() => setActiveModal({ kind: 'command-palette' })}
               >
                 <HelmxIcon name="search" size={13} />
               </button>
             </Tooltip>
+            {space === 'conversations' && (
+              <Tooltip content={overviewLabel} side="bottom">
+                <button
+                  type="button"
+                  className={`btn btn-sm btn-icon-sm sidebar-overview-open-btn${overviewPresence.active ? ' is-active' : overviewPresence.splitSecondary ? ' is-split' : ''}${overviewPresence.focused ? ' nav-item-focused' : ''}`}
+                  aria-label={overviewLabel}
+                  aria-current={overviewPresence.active ? 'page' : undefined}
+                  onClick={() => {
+                    openTarget({ kind: 'overview' })
+                    onClose?.()
+                  }}
+                >
+                  <HelmxIcon name="activity" size={13} />
+                  {attentionIndicator.totalCount > 0 && attentionIndicator.tone !== null && (
+                    <span
+                      className="overview-count-badge sidebar-overview-entry-badge"
+                      data-tone={attentionIndicator.tone}
+                    >
+                      {sidebarBadgeCountLabel(attentionIndicator.totalCount)}
+                    </span>
+                  )}
+                </button>
+              </Tooltip>
+            )}
             <Tooltip content={collapseWithShortcut} side="bottom">
               <button
                 type="button"
-                className="btn btn-sm btn-icon desktop-sidebar-collapse-btn"
+                className="btn btn-sm btn-icon-sm desktop-sidebar-collapse-btn"
                 aria-label={t('shell.sidebar.collapseNav')}
                 onClick={() => toggleSidebarCollapsed?.()}
               >
@@ -540,7 +568,7 @@ export function Sidebar({
               <Tooltip content={t('shell.nav.closeNav')} side="bottom">
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm mobile-sidebar-close"
+                  className="btn btn-ghost btn-sm btn-icon-sm mobile-sidebar-close"
                   aria-label={t('shell.nav.closeNav')}
                   onClick={onClose}
                 >
@@ -556,7 +584,6 @@ export function Sidebar({
             <SidebarConversationList
               store={sidebarStore}
               background={background}
-              attentionIndicator={attentionIndicator}
               viewedConversationIds={viewedConversationIds}
               onNavigate={onClose}
             />

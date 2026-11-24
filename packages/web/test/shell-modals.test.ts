@@ -942,12 +942,13 @@ test('删除回退仿真：主屏/分屏/抽屉命中被删会话时回该智能
   assert.equal(r3.drawerClosed, false)
 })
 
-test('SSR 渲染回归：Sidebar 渲染顶置总览/新话题/工作集与极简无 Emoji 验证', { timeout: 60_000 }, () => {
+test('SSR 渲染回归：Sidebar 渲染顶栏总览/分组栏新话题/工作集与极简无 Emoji 验证', { timeout: 60_000 }, () => {
   const store = makeTestStore()
   const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
-  // 顶置总览与新话题入口，工作集过滤按钮；侧栏不再包含批量管理栏与双模式分段器
-  assert.ok(html.includes('sidebar-overview-entry'), '应渲染顶置会话总览导航行')
+  // 顶栏总览与分组栏新话题入口，工作集过滤按钮；侧栏不再包含批量管理栏与双模式分段器
+  assert.ok(html.includes('sidebar-overview-open-btn'), '应渲染顶栏会话总览按钮')
+  assert.ok(!html.includes('sidebar-conv-primary-nav'), '旧顶置一级导航区已收敛')
   assert.ok(html.includes('sidebar-new-topic-btn'), '应渲染新话题入口')
   assert.ok(html.includes('aria-label="Filter conversations"'), '应渲染工作集过滤按钮')
   assert.ok(!html.includes('sidebar-conv-mode-switch'), '双模式分段器已移除')
@@ -1087,7 +1088,9 @@ test('Sidebar 分屏混开 SSR 回归：主屏会话 + 分屏待命且聚焦分�
   assert.ok(html.includes('sidebar-overview-item-quiet nav-item-split'), '主屏非聚焦会话行呈分屏在场态')
   assert.ok(html.includes('<span class="nav-pane-tag" title="Open in main view">Main</span>'), '主屏会话行带「主」微标')
   assert.ok(html.includes('sidebar-new-topic-btn is-active nav-item-focused'), '分屏聚焦的待命新话题入口点亮并带焦点态')
-  assert.ok(html.includes('<span class="nav-pane-tag" title="Open in split view">Split</span>'), '分屏待命入口带「分」微标')
+  const newTopicBtnStart = html.indexOf('sidebar-new-topic-btn is-active nav-item-focused')
+  const newTopicBtnHtml = html.slice(newTopicBtnStart, html.indexOf('>', newTopicBtnStart))
+  assert.ok(newTopicBtnHtml.includes('aria-current="page"'), '分屏聚焦的待命新话题按钮带 aria-current="page"')
 })
 
 test('ToastOverlay：悬停或聚焦暂停自动关闭计时器，移开后恢复自动关闭', { timeout: 60_000 }, async () => {
