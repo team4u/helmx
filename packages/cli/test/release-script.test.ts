@@ -2,7 +2,9 @@
  * End-to-end tests for `scripts/release.mjs` in isolated temporary Git repositories:
  * - Strict SemVer 2.0.0 validation (aligned with `@helmx/protocol` `isStrictSemver`, forbidding `+build` metadata);
  * - Existing tag guard executes before modifying workspace `package.json`, `CHANGELOG.md`, or creating a commit;
- * - `--allow-dirty` commits only release files via `git commit --only -- <paths>`, leaving user staged changes intact.
+ * - `--allow-dirty` commits only release files via `git commit --only -- <paths>`, leaving user staged changes intact;
+ * - the release commit subject survives intact (`shell: false`): cmd.exe used to split
+ *   `-m "chore(release): v0.1.2"` on spaces/parens and git treated `v0.1.2)` as a pathspec.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -16,6 +18,7 @@ import { sanitizedHostEnv, useTempDir } from './helpers/cli-harness.js'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const releaseScriptSrc = path.join(repoRoot, 'scripts', 'release.mjs')
 const releaseNotesSrc = path.join(repoRoot, 'scripts', 'lib', 'release-notes.mjs')
+const { assertPnpmArgsShellSafe } = await import(releaseScriptSrc)
 
 function gitIn(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv): string {
   const res = spawnSync('git', args, { cwd, encoding: 'utf8', env })
@@ -148,6 +151,9 @@ test('release.mjs --allow-dirty: commits only release files via --only and prese
 
   const commitFiles1 = fresh.git(['show', '--name-only', '--pretty=format:', 'HEAD']).trim().split('\n').sort()
   assert.deepEqual(commitFiles1, ['CHANGELOG.md', 'packages/cli/package.json', 'packages/payload/package.json'])
+  // 提交信息必须完整：shell:true 下 cmd.exe 会按空格/括号拆分 `-m "chore(release): v0.1.2"`，
+  // 使 git 把 `v0.1.2)` 当作 pathspec 而失败（Windows CI 回归）。
+  assert.equal(fresh.git(['log', '-1', '--pretty=format:%B']).trim(), 'chore(release): v0.1.2')
   assert.equal(fresh.git(['rev-parse', 'v0.1.2']).trim(), fresh.git(['rev-parse', 'HEAD']).trim())
 
   const stagedAfter1 = fresh.git(['diff', '--cached', '--name-only']).trim().split('\n').sort()
@@ -169,6 +175,19 @@ test('release.mjs --allow-dirty: commits only release files via --only and prese
 
   const commitFiles2 = tracked.git(['show', '--name-only', '--pretty=format:', 'HEAD']).trim().split('\n').sort()
   assert.deepEqual(commitFiles2, ['CHANGELOG.md', 'packages/cli/package.json', 'packages/payload/package.json'])
+  assert.equal(tracked.git(['log', '-1', '--pretty=format:%B']).trim(), 'chore(release): v0.1.2')
   assert.deepEqual(tracked.git(['diff', '--cached', '--name-only']).trim().split('\n'), ['notes.txt'])
   assert.match(readFileSync(path.join(tracked.dir, 'CHANGELOG.md'), 'utf8'), /## v0\.1\.2 \(\d{4}-\d{2}-\d{2}\)\n\n- feat\(cli\): add feature/)
+})
+
+test('assertPnpmArgsShellSafe: pnpm gate arguments stay shell-inert (the .cmd shim must go through cmd.exe)', { timeout: 60_000 }, () => {
+  // 门禁实际使用的全部命令名（build / typecheck:only / lint / check:hygiene / test:all:run）必须放行
+  assert.doesNotThrow(() => assertPnpmArgsShellSafe(['build']));
+  assert.doesNotThrow(() => assertPnpmArgsShellSafe(['typecheck:only']));
+  assert.doesNotThrow(() => assertPnpmArgsShellSafe(['check:hygiene']));
+  assert.doesNotThrow(() => assertPnpmArgsShellSafe(['test:all:run']));
+  // 任何含 cmd.exe 元字符 / 空格的参数显式拒绝，绝不静默经 shell 执行
+  for (const bad of ['--foo bar', 'a&b', 'a|b', 'a>b', 'a(b)', 'a;b', 'x\ny', '', '--run=echo hi']) {
+    assert.throws(() => assertPnpmArgsShellSafe([bad]), /pnpm 参数含 shell 元字符/, `must reject ${JSON.stringify(bad)}`);
+  }
 })

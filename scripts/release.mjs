@@ -18,8 +18,17 @@ import { commitSubjectsSince, prependChangelogSection, resolvePreviousTag } from
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-function run(cmd, args, { allowFailure = false } = {}) {
-  const res = spawnSync(cmd, args, { cwd: rootDir, encoding: 'utf-8', shell: process.platform === 'win32' });
+/**
+ * 子进程执行纪律：`shell: true` 会让 cmd.exe 按 & | ( ) 空格重新切分参数，
+ * `-m "chore(release): v1.2.3"` 会被拆成多个 token（`v1.2.3)` 被 git 当作 pathspec）。
+ * - git 是真实可执行文件：零 shell 直接 spawn，参数原样传递（Windows CI 回归修复）。
+ * - pnpm 在 Windows 是 .cmd 垫片，Node 禁止 shell:false 直接 spawn .cmd，只能经 shell；
+ *   其参数全部来自本脚本内的字面量命令名，这里用白名单校验封死「参数含 shell 元字符」的隐患。
+ */
+const PNPM_SAFE_ARG_RE = /^[A-Za-z0-9:_-]+$/;
+
+function run(cmd, args, { allowFailure = false, shell = false } = {}) {
+  const res = spawnSync(cmd, args, { cwd: rootDir, encoding: 'utf-8', shell, windowsHide: true });
   if (res.status !== 0 && !allowFailure) {
     throw new Error(`${cmd} ${args.join(' ')} 失败 (exit ${res.status}):\n${res.stderr || res.stdout || '(无输出)'}`);
   }
@@ -28,6 +37,18 @@ function run(cmd, args, { allowFailure = false } = {}) {
 
 function git(args, options) {
   return run('git', args, options);
+}
+
+function pnpm(args, options) {
+  assertPnpmArgsShellSafe(args);
+  return run('pnpm', args, { ...options, shell: process.platform === 'win32' });
+}
+
+/** pnpm 经 shell 执行前的参数白名单守卫（导出供单测锁定）。 */
+export function assertPnpmArgsShellSafe(args) {
+  for (const arg of args) {
+    if (!PNPM_SAFE_ARG_RE.test(arg)) throw new Error(`pnpm 参数含 shell 元字符，拒绝经 shell 执行: ${arg}`);
+  }
 }
 
 function printHelp() {
@@ -189,15 +210,15 @@ function main() {
   if (options.skipVerify) {
     console.log('提示: --skip-verify 跳过本地门禁（release.yml 仍会全量验证）。');
   } else {
-    for (const [label, cmdArgs] of [
-      ['build', ['pnpm', ['build']]],
-      ['typecheck', ['pnpm', ['typecheck:only']]],
-      ['lint', ['pnpm', ['lint']]],
-      ['check:hygiene', ['pnpm', ['check:hygiene']]],
-      ['test:all', ['pnpm', ['test:all:run']]],
+    for (const [label, pnpmArgs] of [
+      ['build', ['build']],
+      ['typecheck', ['typecheck:only']],
+      ['lint', ['lint']],
+      ['check:hygiene', ['check:hygiene']],
+      ['test:all', ['test:all:run']],
     ]) {
       console.log(`- ${label}...`);
-      run(cmdArgs[0], cmdArgs[1]);
+      pnpm(pnpmArgs);
     }
     console.log('本地门禁全部通过。\n');
   }
