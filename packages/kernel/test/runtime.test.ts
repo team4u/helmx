@@ -2706,4 +2706,103 @@ describe('KernelRuntime start and close concurrency', { timeout: 60_000 }, () =>
       await kernel.close()
     }
   })
+
+  it('reconcile failure leaves runtime.started false so retrying start() re-runs pending reconciles and only then marks started', { timeout: 60_000 }, async () => {
+    const dir = await makeTempDir('helmx-rt-reconcile-retry-')
+    const { models } = makeFauxModels()
+    const runtime = await KernelRuntime.open({
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/faux-1',
+      models,
+      autoResume: false,
+    })
+    try {
+      let firstReconciles = 0
+      let flakyReconciles = 0
+      let lastReconciles = 0
+      let failFlakyOnce = true
+      const startedObservedInReconcile: boolean[] = []
+
+      await runtime.plugins.register({
+        id: 'builtin:rec-first',
+        definePlugin: (ctx) => {
+          ctx.service({
+            id: 'first-svc',
+            start() {},
+            stop() {},
+            reconcile() {
+              startedObservedInReconcile.push(runtime.started)
+              firstReconciles += 1
+            },
+          })
+        },
+      })
+      await runtime.plugins.register({
+        id: 'builtin:rec-flaky',
+        definePlugin: (ctx) => {
+          ctx.service({
+            id: 'flaky-svc',
+            reconcileAfter: ['builtin:rec-first'],
+            start() {},
+            stop() {},
+            reconcile() {
+              startedObservedInReconcile.push(runtime.started)
+              flakyReconciles += 1
+              if (failFlakyOnce) {
+                failFlakyOnce = false
+                throw new Error('transient reconcile error')
+              }
+            },
+          })
+        },
+      })
+      await runtime.plugins.register({
+        id: 'builtin:rec-last',
+        definePlugin: (ctx) => {
+          ctx.service({
+            id: 'last-svc',
+            reconcileAfter: ['builtin:rec-flaky'],
+            start() {},
+            stop() {},
+            reconcile() {
+              startedObservedInReconcile.push(runtime.started)
+              lastReconciles += 1
+            },
+          })
+        },
+      })
+
+      assert.equal(runtime.started, false)
+      await assert.rejects(
+        () => runtime.start(),
+        (err: unknown) => err instanceof HelmxError && err.code === 'plugin_service_reconcile_failed',
+      )
+      assert.equal(runtime.started, false, 'failed reconcile must leave runtime.started false')
+      assert.equal(firstReconciles, 1)
+      assert.equal(flakyReconciles, 1)
+      assert.equal(lastReconciles, 0)
+
+      // Retry must NOT skip due to stale #started; already-reconciled services stay skipped while pending ones converge.
+      await runtime.start()
+      assert.equal(runtime.started, true, 'runtime.started flips true only once reconcile succeeds')
+      assert.equal(firstReconciles, 1, 'already-reconciled service must not re-run on retry')
+      assert.equal(flakyReconciles, 2, 'failed service must re-run on retry')
+      assert.equal(lastReconciles, 1, 'downstream service must run once upstream reconcile succeeds')
+      assert.deepEqual(
+        startedObservedInReconcile,
+        [false, false, false, false],
+        'runtime.started must remain false while reconcile is still executing',
+      )
+
+      // Subsequent start() after convergence is an idempotent no-op.
+      await runtime.start()
+      assert.equal(firstReconciles, 1)
+      assert.equal(flakyReconciles, 2)
+      assert.equal(lastReconciles, 1)
+    } finally {
+      await runtime.close()
+      await cleanupDir(dir)
+    }
+  })
 })
