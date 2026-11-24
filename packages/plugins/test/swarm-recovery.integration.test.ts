@@ -12,9 +12,15 @@ import { join } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
 import { createPluginBuildProvider } from '@helmx/plugin-build'
+import { KernelRuntime } from '@helmx/kernel'
 import { createHelmx } from '../../hub/src/app.js'
+import { createProfilePlugin } from '../src/profile.js'
+import { createSwarmPlugin } from '../src/swarm.js'
+import { createWorkflowPlugin } from '../src/workflow.js'
+import { createWorktreePlugin } from '../src/worktree.js'
 import {
   createGitTemplate,
+  deferred,
   makeFauxProvider,
   useTempDir,
   waitFor,
@@ -746,6 +752,478 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       assert.match(coordReportText, /@workerC/)
     } finally {
       await app2.close()
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // int11: pi_submissions status='unanswered' 恢复 — 不误标 notified/read、:r1 绕开去重真正重投、耗尽可见失败且零死循环
+  // ---------------------------------------------------------------------------
+
+  test('swarm-int11: unanswered pi_submissions do not mark seq notified/read, retry with distinct :r1 requestId, and stop with visible blocker/notification on exhaustion without hot-looping', { timeout: 60_000 }, async (t) => {
+    const root = useTempDir(t, 'helmx-swarm-unanswered-int-')
+    const env1 = await openSwarmEnv(root, gitTemplate)
+    let groupId = ''
+    let coordId = 0
+    let workerAId = 0
+    let workerBId = 0
+    let soloRetryGroupId = ''
+    let soloRetryCoordId = 0
+    let soloExhaustGroupId = ''
+    let soloExhaustCoordId = 0
+    let coordCompletionBefore = 0
+    let workerACompletionBefore = 0
+    let workerBCompletionBefore = 0
+    let soloRetryCompletionBefore = 0
+    let soloExhaustCompletionBefore = 0
+
+    const seedUnansweredSubmission = async (
+      convId: number,
+      requestId: string,
+      promptText: string,
+    ): Promise<void> => {
+      const started = deferred<void>()
+      env1.faux.setResponses([
+        (_ctx: unknown, _opts: unknown, signal?: AbortSignal) => {
+          started.resolve()
+          return new Promise<never>((_resolve, reject) => {
+            const onAbort = () => reject(new Error('aborted'))
+            if (signal?.aborted) { onAbort(); return }
+            signal?.addEventListener('abort', onAbort, { once: true })
+          })
+        },
+      ] as never)
+      await env1.app.kernel.submitInput(convId, promptText, { origin: 'agent', requestId })
+      await started.promise
+      await env1.app.kernel.abortConversation(convId)
+      await env1.app.kernel.waitForIdle(convId)
+      const sub = await env1.app.kernel.getConversationSubmission(convId, requestId)
+      assert.equal(sub?.status, 'unanswered', `expected real SQLite pi_submissions status='unanswered' for ${requestId}`)
+    }
+
+    try {
+      const coord = await env1.app.kernel.createConversation({ title: 'Unanswered Coord', profileId: 'assistant', cwd: env1.repoDir })
+      coordId = coord.id
+      const created = (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Unanswered Recovery Squad',
+        conversationId: coord.id,
+      })) as { groupId: string }
+      groupId = created.groupId
+
+      const convA = await env1.app.kernel.createConversation({
+        title: 'Worker A',
+        profileId: 'assistant',
+        cwd: env1.repoDir,
+        tags: [WORKER_TAG],
+      })
+      workerAId = convA.id
+      const convB = await env1.app.kernel.createConversation({
+        title: 'Worker B',
+        profileId: 'assistant',
+        cwd: env1.repoDir,
+        tags: [WORKER_TAG],
+      })
+      workerBId = convB.id
+
+      const soloRetryCoord = await env1.app.kernel.createConversation({ title: 'Solo Retry Coord', profileId: 'assistant', cwd: env1.repoDir })
+      soloRetryCoordId = soloRetryCoord.id
+      soloRetryGroupId = (
+        (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+          title: 'Solo Report Retry',
+          conversationId: soloRetryCoord.id,
+        })) as { groupId: string }
+      ).groupId
+
+      const soloExhaustCoord = await env1.app.kernel.createConversation({ title: 'Solo Exhaust Coord', profileId: 'assistant', cwd: env1.repoDir })
+      soloExhaustCoordId = soloExhaustCoord.id
+      soloExhaustGroupId = (
+        (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+          title: 'Solo Report Exhaust',
+          conversationId: soloExhaustCoord.id,
+        })) as { groupId: string }
+      ).groupId
+
+      // Seed real status='unanswered' rows in pi_submissions before simulating crash state in meta.json:
+      // 1) coordinator report attempt 0 (swarm-report:<gid>:1-1)
+      // 2) workerA wakeup attempt 0 (swarm-wakeup:<gid>:workerA:2-2)
+      // 3) workerB wakeup attempt 1 (swarm-wakeup:<gid>:workerB:3-3:r1) -> already exhausted!
+      // 4) soloRetryCoord report attempt 0 (same seq 1-1, no newer posts -> must emit exact :r1!)
+      // 5) soloExhaustCoord report attempt 1 (swarm-report:<gid>:1-1:r1) -> exhausted, visible error notification, no loop!
+      await seedUnansweredSubmission(coordId, `swarm-report:${groupId}:1-1`, 'Aborted coordinator report #1')
+      await seedUnansweredSubmission(workerAId, `swarm-wakeup:${groupId}:workerA:2-2`, 'Aborted workerA wakeup #2')
+      await seedUnansweredSubmission(workerBId, `swarm-wakeup:${groupId}:workerB:3-3:r1`, 'Aborted workerB retry wakeup #3')
+      await seedUnansweredSubmission(soloRetryCoordId, `swarm-report:${soloRetryGroupId}:1-1`, 'Aborted solo report #1')
+      await seedUnansweredSubmission(soloExhaustCoordId, `swarm-report:${soloExhaustGroupId}:1-1:r1`, 'Aborted solo retry report #1')
+      coordCompletionBefore = env1.app.kernel.getConversation(coordId).completionSeq
+      workerACompletionBefore = env1.app.kernel.getConversation(workerAId).completionSeq
+      workerBCompletionBefore = env1.app.kernel.getConversation(workerBId).completionSeq
+      soloRetryCompletionBefore = env1.app.kernel.getConversation(soloRetryCoordId).completionSeq
+      soloExhaustCompletionBefore = env1.app.kernel.getConversation(soloExhaustCoordId).completionSeq
+    } finally {
+      await env1.close()
+    }
+
+    const groupDir = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId)
+    const metaPath = join(groupDir, 'meta.json')
+    const boardPath = join(groupDir, 'board.jsonl')
+    const now = Date.now()
+    const posts: BoardPost[] = [
+      {
+        groupId,
+        seq: 1,
+        from: 'workerA',
+        to: ['coordinator'],
+        resolvedTargets: ['coordinator'],
+        wake: true,
+        kind: 'review',
+        refs: [],
+        body: 'Critical review finding #1 that must survive unanswered report recovery.',
+        createdAt: now - 30,
+      },
+      {
+        groupId,
+        seq: 2,
+        from: 'coordinator',
+        to: ['workerA'],
+        resolvedTargets: ['workerA'],
+        wake: true,
+        kind: 'brief',
+        refs: [],
+        body: 'Task #2 for workerA after unanswered wakeup.',
+        createdAt: now - 20,
+      },
+      {
+        groupId,
+        seq: 3,
+        from: 'coordinator',
+        to: ['workerB'],
+        resolvedTargets: ['workerB'],
+        wake: true,
+        kind: 'brief',
+        refs: [],
+        body: 'Task #3 for workerB whose retry already went unanswered.',
+        createdAt: now - 10,
+      },
+    ]
+    writeFileSync(boardPath, `${posts.map((p) => JSON.stringify(p)).join('\n')}\n`, 'utf8')
+
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
+    meta.headSeq = 3
+    meta.coordinatorNotifiedSeq = 0
+    meta.coordinatorPendingSeq = 1
+    meta.inflightReport = {
+      requestId: `swarm-report:${groupId}:1-1`,
+      fromSeq: 1,
+      toSeq: 1,
+      baseCompletionSeq: 0,
+      hadActiveWorkers: false,
+    }
+    meta.members = [
+      {
+        name: 'workerA',
+        conversationId: workerAId,
+        profileId: 'assistant',
+        access: 'readwrite',
+        isolation: 'inherit',
+        nodeId: 'local',
+        cwd: env1.repoDir,
+        lifecycle: 'active',
+        readCursorSeq: 1,
+        pendingWakeupSeq: 2,
+        lastWakeTaskSeq: 2,
+        inflightWakeup: {
+          requestId: `swarm-wakeup:${groupId}:workerA:2-2`,
+          fromSeq: 2,
+          toSeq: 2,
+          baseCompletionSeq: 0,
+        },
+        createdAt: now - 20,
+      },
+      {
+        name: 'workerB',
+        conversationId: workerBId,
+        profileId: 'assistant',
+        access: 'readwrite',
+        isolation: 'inherit',
+        nodeId: 'local',
+        cwd: env1.repoDir,
+        lifecycle: 'active',
+        readCursorSeq: 0,
+        pendingWakeupSeq: 3,
+        lastWakeTaskSeq: 3,
+        inflightWakeup: {
+          requestId: `swarm-wakeup:${groupId}:workerB:3-3:r1`,
+          fromSeq: 3,
+          toSeq: 3,
+          baseCompletionSeq: 0,
+          attempt: 1,
+        },
+        createdAt: now - 10,
+      },
+    ]
+    writeFileSync(metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8')
+
+    const writeSoloReportFixture = (gid: string, reqId: string, attempt?: number) => {
+      const dir = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', gid)
+      const mPath = join(dir, 'meta.json')
+      const bPath = join(dir, 'board.jsonl')
+      const soloPost: BoardPost = {
+        groupId: gid,
+        seq: 1,
+        from: 'solo',
+        to: ['coordinator'],
+        resolvedTargets: ['coordinator'],
+        wake: true,
+        kind: 'done',
+        refs: [],
+        body: `Solo report payload for ${gid}.`,
+        createdAt: now - 5,
+      }
+      writeFileSync(bPath, `${JSON.stringify(soloPost)}\n`, 'utf8')
+      const m = JSON.parse(readFileSync(mPath, 'utf8')) as CollabGroupRecord
+      m.headSeq = 1
+      m.coordinatorNotifiedSeq = 0
+      m.coordinatorPendingSeq = 1
+      m.inflightReport = {
+        requestId: reqId,
+        fromSeq: 1,
+        toSeq: 1,
+        baseCompletionSeq: 0,
+        hadActiveWorkers: false,
+        ...(attempt !== undefined ? { attempt } : {}),
+      }
+      writeFileSync(mPath, `${JSON.stringify(m, null, 2)}\n`, 'utf8')
+      return mPath
+    }
+    const soloRetryMetaPath = writeSoloReportFixture(soloRetryGroupId, `swarm-report:${soloRetryGroupId}:1-1`)
+    const soloExhaustMetaPath = writeSoloReportFixture(soloExhaustGroupId, `swarm-report:${soloExhaustGroupId}:1-1:r1`, 1)
+
+    // Restart 1: workerA receives :r1 wakeup; soloRetryCoord receives exact :r1 report bypassing SQLite dedup;
+    // soloExhaustCoord keeps coordinatorNotifiedSeq=0 + exhausted=true + emits error notification;
+    // workerB keeps readCursorSeq=0 + exhausted=true + visible system [blocker].
+    const faux2 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
+    setSwarmRoleResponses(faux2, {
+      workerA: [
+        fauxAssistantMessage(
+          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Worker A delivered after :r1 recovery.' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('Worker A done.'),
+      ],
+      coordinator: [
+        fauxAssistantMessage('Coordinator processed recovered report 1.'),
+        fauxAssistantMessage('Coordinator processed recovered report 2.'),
+        fauxAssistantMessage('Coordinator processed recovered report 3.'),
+      ],
+    })
+
+    const app2 = await createHelmx({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: env1.dataDir,
+      cwd: env1.repoDir,
+      model: 'faux/faux-1',
+      providers: [faux2.provider],
+      autoStart: false,
+    })
+    const errorNotifications: Array<{ title?: string; body?: string; level?: string }> = []
+    let unsubNotif: (() => void) | undefined
+    let blockerCountAfterBoot1 = 0
+    try {
+      unsubNotif = app2.kernel.events.subscribe((frame) => {
+        if (frame.event.type === 'notification') {
+          const payload = frame.event as { title?: string; body?: string; level?: string }
+          if (payload.level === 'error') errorNotifications.push(payload)
+        }
+      })
+      await app2.kernel.start()
+      await waitFor(
+        () =>
+          isSettledStatus(app2.kernel.getConversation(workerAId).status) &&
+          app2.kernel.getConversation(workerAId).completionSeq > workerACompletionBefore &&
+          isSettledStatus(app2.kernel.getConversation(coordId).status) &&
+          app2.kernel.getConversation(coordId).completionSeq > coordCompletionBefore &&
+          isSettledStatus(app2.kernel.getConversation(soloRetryCoordId).status) &&
+          app2.kernel.getConversation(soloRetryCoordId).completionSeq > soloRetryCompletionBefore &&
+          app2.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0,
+        { timeoutMs: 10_000 },
+      )
+      await app2.kernel.waitForIdle(workerAId)
+      await app2.kernel.waitForIdle(coordId)
+      await app2.kernel.waitForIdle(soloRetryCoordId)
+
+      const workerADetail = await app2.kernel.getConversationDetail(workerAId, { limit: 30 })
+      const retryWakeEntry = workerADetail.entries.find(
+        (e) => e.kind === 'helmx.input' && (e.data as { id?: string } | undefined)?.id === `swarm-wakeup:${groupId}:workerA:2-2:r1`,
+      )
+      assert.ok(retryWakeEntry !== undefined, 'workerA must receive distinct :r1 wakeup bypassing unanswered requestId dedup')
+
+      const soloRetryDetail = await app2.kernel.getConversationDetail(soloRetryCoordId, { limit: 30 })
+      const soloRetryEntry = soloRetryDetail.entries.find(
+        (e) => e.kind === 'helmx.input' && (e.data as { id?: string } | undefined)?.id === `swarm-report:${soloRetryGroupId}:1-1:r1`,
+      )
+      assert.ok(soloRetryEntry !== undefined, 'soloRetryCoord must receive exact :r1 report bypassing SQLite unanswered dedup')
+      const soloRetryMetaAfter = JSON.parse(readFileSync(soloRetryMetaPath, 'utf8')) as CollabGroupRecord
+      assert.equal(soloRetryMetaAfter.coordinatorNotifiedSeq, 1)
+      assert.equal(soloRetryMetaAfter.reportRecovery, undefined)
+
+      const soloExhaustMetaAfter = JSON.parse(readFileSync(soloExhaustMetaPath, 'utf8')) as CollabGroupRecord
+      assert.equal(soloExhaustMetaAfter.coordinatorNotifiedSeq, 0, 'exhausted unanswered coordinator report must NOT mark seq notified')
+      assert.equal(soloExhaustMetaAfter.reportRecovery?.exhausted, true)
+      assert.equal(app2.kernel.getConversation(soloExhaustCoordId).completionSeq, soloExhaustCompletionBefore)
+      assert.ok(
+        errorNotifications.some((n) => (n.title ?? '').includes(soloExhaustGroupId) || (n.body ?? '').includes('unanswered')),
+        `exhausted coordinator report must emit visible error notification, got ${JSON.stringify(errorNotifications)}`,
+      )
+
+      const coordDetail = await app2.kernel.getConversationDetail(coordId, { limit: 30 })
+      const coordReportEntries = coordDetail.entries.filter(
+        (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
+      )
+      assert.ok(coordReportEntries.length >= 1, 'coordinator must receive recovered board report')
+      assert.match(JSON.stringify(coordReportEntries), /Critical review finding #1 that must survive unanswered report recovery\./)
+
+      const read = (await app2.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
+      assert.equal(read.posts.filter((p) => p.kind === 'done' && p.from === 'workerA').length, 1)
+      const blockersB = read.posts.filter((p) => p.kind === 'blocker' && p.from === 'system' && p.body.includes('@workerB'))
+      assert.equal(blockersB.length, 1, 'exhausted unanswered workerB wakeup must escalate exactly 1 visible system blocker')
+      blockerCountAfterBoot1 = blockersB.length
+
+      const metaAfterBoot1 = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
+      const memberB = metaAfterBoot1.members.find((m) => m.name === 'workerB')!
+      assert.equal(memberB.readCursorSeq, 0, 'exhausted unanswered workerB must NOT falsely mark readCursorSeq as read')
+      assert.equal(memberB.wakeupRecovery?.exhausted, true)
+      assert.equal(app2.kernel.getConversation(workerBId).completionSeq, workerBCompletionBefore, 'exhausted workerB must not be woken again')
+      const workerBDetail = await app2.kernel.getConversationDetail(workerBId, { limit: 30 })
+      assert.equal(
+        workerBDetail.entries.filter((e) => e.kind === 'helmx.input').length,
+        1,
+        'exhausted workerB must have only the pre-restart aborted input and zero redelivered wakeups',
+      )
+    } finally {
+      unsubNotif?.()
+      await app2.close()
+    }
+
+    // Restart 2: verify zero infinite loop (no new wakeup to workerB, no new report to soloExhaustCoord, no duplicate blocker)
+    const faux3 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
+    faux3.setResponses([])
+    const app3 = await createHelmx({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: env1.dataDir,
+      cwd: env1.repoDir,
+      model: 'faux/faux-1',
+      providers: [faux3.provider],
+    })
+    try {
+      await waitFor(() => app3.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      const read2 = (await app3.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
+      assert.equal(
+        read2.posts.filter((p) => p.kind === 'blocker' && p.from === 'system' && p.body.includes('@workerB')).length,
+        blockerCountAfterBoot1,
+        'second restart must not emit duplicate blockers or hot-loop',
+      )
+      assert.equal(app3.kernel.getConversation(workerBId).completionSeq, workerBCompletionBefore)
+      assert.equal(app3.kernel.getConversation(soloExhaustCoordId).completionSeq, soloExhaustCompletionBefore)
+    } finally {
+      await app3.close()
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // int12: 启动恢复拓扑顺序 — 即使 builtin:swarm 先于 workflow/worktree 注册，reconcileAfter 仍保证严格顺序且 start 期不提前触发 worktree/submitInput
+  // ---------------------------------------------------------------------------
+
+  test('swarm-int12: swarm-core reconcileAfter orders reconciliation strictly after workflow and worktree regardless of plugin registration order', { timeout: 60_000 }, async (t) => {
+    const root = useTempDir(t, 'helmx-swarm-reconcile-order-')
+    const env1 = await openSwarmEnv(root, gitTemplate)
+    let orphanWtId = ''
+    try {
+      const coord = await env1.app.kernel.createConversation({ title: 'Order Coord', profileId: 'assistant', cwd: env1.repoDir })
+      const orphanConv = await env1.app.kernel.createConversation({ title: 'Orphan WT Conv', profileId: 'assistant', cwd: env1.repoDir })
+      const acquired = (await env1.app.kernel.plugins.invokeAction(
+        'builtin:worktree',
+        'acquire_worktree',
+        {
+          conversationId: orphanConv.id,
+          parentConversationId: coord.id,
+          requestCwd: env1.repoDir,
+          hold: { holdId: 'grp_rev_order:orphan', label: 'Orphan hold for registration-order test' },
+        },
+        {},
+        { surface: 'plugin', callerPluginId: SWARM_PLUGIN_ID },
+      )) as { worktreeId: string }
+      orphanWtId = acquired.worktreeId
+    } finally {
+      await env1.close()
+    }
+
+    // Reopen KernelRuntime with REVERSED plugin registration order: swarm BEFORE workflow and worktree!
+    const faux2 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
+    faux2.setResponses([])
+    const kernel = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: env1.dataDir,
+      cwd: env1.repoDir,
+      model: 'faux/faux-1',
+      providers: [faux2.provider],
+      autoResume: false,
+    })
+    try {
+      const reconcileOrder: string[] = []
+      const wrapReconcile = (pluginDef: ReturnType<typeof createSwarmPlugin>) => ({
+        ...pluginDef,
+        definePlugin(ctx: Parameters<typeof pluginDef.definePlugin>[0]) {
+          const origService = ctx.service.bind(ctx)
+          const wrappedCtx = {
+            ...ctx,
+            service(spec: Parameters<typeof ctx.service>[0]) {
+              const origReconcile = spec.reconcile
+              return origService({
+                ...spec,
+                ...(origReconcile
+                  ? {
+                      async reconcile() {
+                        reconcileOrder.push(`${pluginDef.id}:begin`)
+                        await origReconcile()
+                        reconcileOrder.push(`${pluginDef.id}:end`)
+                      },
+                    }
+                  : {}),
+              })
+            },
+          }
+          return pluginDef.definePlugin(wrappedCtx)
+        },
+      })
+
+      await kernel.plugins.register(createProfilePlugin())
+      // Deliberately register swarm BEFORE workflow and worktree!
+      await kernel.plugins.register(wrapReconcile(createSwarmPlugin()))
+      await kernel.plugins.register(wrapReconcile(createWorkflowPlugin()))
+      await kernel.plugins.register(wrapReconcile(createWorktreePlugin()))
+
+      await kernel.start()
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+
+      assert.deepEqual(
+        reconcileOrder,
+        [
+          'builtin:workflow:begin',
+          'builtin:workflow:end',
+          'builtin:worktree:begin',
+          'builtin:worktree:end',
+          'builtin:swarm:begin',
+          'builtin:swarm:end',
+        ],
+        `reconcile must run workflow -> worktree -> swarm even when swarm is registered first, got ${JSON.stringify(reconcileOrder)}`,
+      )
+
+      const inspect = (await kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
+        worktreeId: orphanWtId,
+        diff: false,
+      })) as { exists: boolean }
+      assert.equal(inspect.exists, false, 'orphan swarm worktree hold must be reclaimed during swarm.reconcile() after worktree.reconcile()')
+    } finally {
+      await kernel.close()
     }
   })
 })

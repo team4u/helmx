@@ -3,6 +3,7 @@
  */
 import { HelmxError, type ConversationSummary, type DispatchToolsCapability, type MaybePromise, type PluginDefinition } from '@helmx/protocol'
 import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
+import { WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID } from './contracts.js'
 import {
   BOARD_BADGES_DOC_NAME,
   BOARD_VIEW_DOC_NAME,
@@ -145,6 +146,7 @@ export function createSwarmPlugin(): PluginDefinition {
 
       ctx.service({
         id: 'swarm-core',
+        reconcileAfter: [WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID],
         liveTasks() {
           const labels = [...liveTasks.keys(), ...groupsRuntime.liveTaskLabels()]
           if (!active) return labels

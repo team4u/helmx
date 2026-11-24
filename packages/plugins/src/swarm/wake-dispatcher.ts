@@ -5,7 +5,11 @@ import type { HelmxPluginContext } from '@helmx/protocol'
 import {
   BOARD_REPORT_RENDERER,
   BOARD_WAKEUP_RENDERER,
+  hasPendingDeliverableWakeup,
+  isIdleCatchupExhausted,
   isLifecycleTeardownError,
+  isPendingReportExhausted,
+  withRetryAttemptSuffix,
   type BoardPost,
   type CollabGroupRecord,
   type GroupMemberState,
@@ -34,6 +38,7 @@ export interface WakeDispatcherPorts {
   readonly wakeupLockPath: (groupId: string, memberName: string) => string
   readonly resolveMemberLive: (conversationId: number) => MemberLiveSnapshot
   readonly getBusyActiveMemberNames: (group: CollabGroupRecord, excludeConvId?: number) => Set<string>
+  readonly onWakeupRecoveryFailed?: (groupId: string, memberName: string, fromSeq: number, toSeq: number, err: unknown) => Promise<void>
 }
 
 export type WakeDispatcher = ReturnType<typeof createWakeDispatcher>
@@ -51,23 +56,26 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
 
   const shouldSendCoordinatorIdleCatchup = (group: CollabGroupRecord, excludeConvId?: number): boolean =>
     group.lastReportHadActiveWorkers === true &&
+    !isIdleCatchupExhausted(group) &&
     ports.getBusyActiveMemberNames(group, excludeConvId).size === 0 &&
     !hasInflightWakeupsForGroup(group.id) &&
     findIdleCatchupAnchorPost(group, ports.getPosts(group.id)) !== undefined
 
   const canFlushCoordinator = (group: CollabGroupRecord, excludeConvId?: number): boolean =>
-    shouldFlushCoordinatorReport({
-      group,
-      posts: ports.getPosts(group.id),
-      busyMemberNames: ports.getBusyActiveMemberNames(group, excludeConvId),
-    }) || shouldSendCoordinatorIdleCatchup(group, excludeConvId)
+    (!isPendingReportExhausted(group) &&
+      shouldFlushCoordinatorReport({
+        group,
+        posts: ports.getPosts(group.id),
+        busyMemberNames: ports.getBusyActiveMemberNames(group, excludeConvId),
+      })) ||
+    shouldSendCoordinatorIdleCatchup(group, excludeConvId)
 
   const executeSingleMemberWakeup = async (groupId: string, memberName: string, fromTurnSettled: boolean): Promise<void> => {
     if (!ports.isAlive()) return
     const coord = ports.getCoordinator()
     const group = ports.getGroup(groupId)
     const member = group?.status === 'active' ? group.members.find((m) => m.name === memberName && m.lifecycle === 'active') : undefined
-    if (!group || !member || member.pendingWakeupSeq <= member.readCursorSeq) return
+    if (!group || !member || !hasPendingDeliverableWakeup(member)) return
 
     const summary = coord.readConversationOrUndefined(member.conversationId)
     if (
@@ -84,16 +92,23 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
     const toSeq = member.pendingWakeupSeq
     const selected = selectPostsForMemberWakeup(member, ports.getPosts(groupId), fromSeq, toSeq)
     if (selected.length === 0) {
-      await ports.updateMember(groupId, memberName, (t) => { t.readCursorSeq = Math.max(t.readCursorSeq, toSeq) })
+      await ports.updateMember(groupId, memberName, (t) => {
+        t.readCursorSeq = Math.max(t.readCursorSeq, toSeq)
+        delete t.wakeupRecovery
+      })
       return
     }
 
     const envelope = formatWorkerWakeupEnvelope({ group, member, posts: selected, fromSeq, toSeq })
-    const requestId = `swarm-wakeup:${groupId}:${memberName}:${fromSeq}-${toSeq}`
+    const attempt =
+      member.wakeupRecovery !== undefined && !member.wakeupRecovery.exhausted && toSeq <= member.wakeupRecovery.toSeq
+        ? member.wakeupRecovery.nextAttempt
+        : 0
+    const requestId = withRetryAttemptSuffix(`swarm-wakeup:${groupId}:${memberName}:${fromSeq}-${toSeq}`, attempt)
     const baseCompletionSeq = summary.completionSeq
 
     await ports.updateMember(groupId, memberName, (t) => {
-      t.inflightWakeup = { requestId, fromSeq, toSeq, baseCompletionSeq }
+      t.inflightWakeup = { requestId, fromSeq, toSeq, baseCompletionSeq, ...(attempt > 0 ? { attempt } : {}) }
     })
 
     try {
@@ -112,13 +127,21 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
         t.readCursorSeq = Math.max(t.readCursorSeq, toSeq)
         t.lastWakeCompletionSeq = baseCompletionSeq
         delete t.inflightWakeup
+        delete t.wakeupRecovery
       })
     } catch (err) {
+      const teardown = isLifecycleTeardownError(err)
       await ports.updateMember(groupId, memberName, (t) => {
         if (t.inflightWakeup?.requestId === requestId) delete t.inflightWakeup
         if (t.lastWakeCompletionSeq === baseCompletionSeq) delete t.lastWakeCompletionSeq
+        if (!teardown && attempt > 0) t.wakeupRecovery = { toSeq, nextAttempt: attempt, exhausted: true }
       }).catch(() => {})
-      if (!isLifecycleTeardownError(err)) coord.reportError(`协作组 ${groupId} 成员 @${memberName} 唤醒投递失败`, err)
+      if (!teardown) {
+        coord.reportError(`协作组 ${groupId} 成员 @${memberName} 唤醒投递失败`, err)
+        if (attempt > 0) {
+          await ports.onWakeupRecoveryFailed?.(groupId, memberName, fromSeq, toSeq, err).catch(() => {})
+        }
+      }
     }
   }
 
@@ -172,6 +195,7 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
     const hasPending = group.coordinatorPendingSeq > group.coordinatorNotifiedSeq
     const canFlushPending =
       hasPending &&
+      !isPendingReportExhausted(group) &&
       shouldFlushCoordinatorReport({ group, posts: allPosts, busyMemberNames: ports.getBusyActiveMemberNames(group, excludeConvId) })
     const isIdleCatchup = !hasPending && shouldSendCoordinatorIdleCatchup(group, excludeConvId)
     if (!canFlushPending && !isIdleCatchup) return
@@ -189,16 +213,19 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
     let fromSeq: number
     let toSeq: number
     let selected: BoardPost[]
-    let requestId: string
+    let baseRequestId: string
     if (canFlushPending) {
       fromSeq = group.coordinatorNotifiedSeq + 1
       toSeq = group.coordinatorPendingSeq
       selected = selectPostsForCoordinatorReport(allPosts, fromSeq, toSeq)
       if (selected.length === 0) {
-        await ports.updateGroupMeta(groupId, (d) => { d.coordinatorNotifiedSeq = Math.max(d.coordinatorNotifiedSeq, toSeq) })
+        await ports.updateGroupMeta(groupId, (d) => {
+          d.coordinatorNotifiedSeq = Math.max(d.coordinatorNotifiedSeq, toSeq)
+          delete d.reportRecovery
+        })
         return
       }
-      requestId = `swarm-report:${groupId}:${fromSeq}-${toSeq}`
+      baseRequestId = `swarm-report:${groupId}:${fromSeq}-${toSeq}`
     } else {
       const anchor = findIdleCatchupAnchorPost(group, allPosts)
       if (!anchor) return
@@ -206,8 +233,14 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
       toSeq = group.headSeq
       selected = selectPostsForCoordinatorReport(allPosts, fromSeq, toSeq)
       if (selected.length === 0) selected = [anchor]
-      requestId = `swarm-report-idle:${groupId}:${group.headSeq}:${coordSummary.completionSeq}`
+      baseRequestId = `swarm-report-idle:${groupId}:${group.headSeq}:${coordSummary.completionSeq}`
     }
+
+    const attempt =
+      group.reportRecovery !== undefined && !group.reportRecovery.exhausted && toSeq <= group.reportRecovery.toSeq
+        ? group.reportRecovery.nextAttempt
+        : 0
+    const requestId = withRetryAttemptSuffix(baseRequestId, attempt)
 
     const { view, localizedHeadline } = synthesizeBoardView({
       group,
@@ -220,7 +253,7 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
     const hadActiveWorkers = view.activeWorkingMembers.length > 0
 
     await ports.updateGroupMeta(groupId, (d) => {
-      d.inflightReport = { requestId, fromSeq, toSeq, baseCompletionSeq, hadActiveWorkers }
+      d.inflightReport = { requestId, fromSeq, toSeq, baseCompletionSeq, hadActiveWorkers, ...(attempt > 0 ? { attempt } : {}) }
     })
     lastCoordReportCompletionSeq.set(groupId, baseCompletionSeq)
 
@@ -236,11 +269,16 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
         if (hadActiveWorkers) d.lastReportHadActiveWorkers = true
         else delete d.lastReportHadActiveWorkers
         delete d.inflightReport
+        delete d.reportRecovery
       })
     } catch (err) {
+      const teardown = isLifecycleTeardownError(err)
       if (lastCoordReportCompletionSeq.get(groupId) === baseCompletionSeq) lastCoordReportCompletionSeq.delete(groupId)
-      await ports.updateGroupMeta(groupId, (d) => { if (d.inflightReport?.requestId === requestId) delete d.inflightReport }).catch(() => {})
-      if (!isLifecycleTeardownError(err)) coord.reportError(`协作组 ${groupId} 主控汇总投递失败`, err)
+      await ports.updateGroupMeta(groupId, (d) => {
+        if (d.inflightReport?.requestId === requestId) delete d.inflightReport
+        if (!teardown && attempt > 0) d.reportRecovery = { toSeq, nextAttempt: attempt, exhausted: true }
+      }).catch(() => {})
+      if (!teardown) coord.reportError(`协作组 ${groupId} 主控汇总投递失败`, err)
     }
   }
 

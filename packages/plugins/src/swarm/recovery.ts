@@ -75,7 +75,7 @@ export function inspectBoardWalLines(rawBoard: string, groupId: string, headSeq:
   }
 }
 
-export type InflightIntentStatus = 'missing_conv' | 'active' | 'settled' | 'uncommitted'
+export type InflightIntentStatus = 'missing_conv' | 'active' | 'settled' | 'unanswered' | 'uncommitted'
 
 export async function classifyInflightIntent(
   host: Pick<HelmxHostApi, 'getConversationSubmission'>,
@@ -87,7 +87,9 @@ export async function classifyInflightIntent(
   try {
     const sub = await host.getConversationSubmission(conversationId, intent.requestId)
     if (sub === undefined) return 'uncommitted'
-    return sub.status === 'queued' || sub.status === 'placed' ? 'active' : 'settled'
+    if (sub.status === 'queued' || sub.status === 'placed') return 'active'
+    if (sub.status === 'done') return 'settled'
+    return 'unanswered'
   } catch (err) {
     if (err instanceof HelmxError && err.code === 'not_found') return 'missing_conv'
     throw err
@@ -107,7 +109,7 @@ function matchesMemberWakeOrNudgeInput(
   taskSeq: number,
 ): boolean {
   if (entry.kind !== 'helmx.input' || !isJsonObject(entry.data) || typeof entry.data['id'] !== 'string') return false
-  const id = entry.data['id']
+  const id = entry.data['id'].replace(/:r\d+$/, '')
   if (id === `swarm-nudge:${groupId}:${memberName}:${taskSeq}`) return true
   const prefix = `swarm-wakeup:${groupId}:${memberName}:`
   if (!id.startsWith(prefix)) return false

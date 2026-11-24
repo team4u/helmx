@@ -16,8 +16,10 @@ import {
   createKeyedQueue,
   groupClosedError,
   groupNotFoundError,
+  hasPendingDeliverableWakeup,
   isEnoent,
   isLifecycleTeardownError,
+  isPendingReportExhausted,
   swarmError,
   type AppendPostDraft,
   type BoardPost,
@@ -46,7 +48,6 @@ export function createCollabGroupRuntime(
   const groupQueue = createKeyedQueue()
   const managedWorkerReleases = new Map<number, () => void>()
   let stopping = false
-  let orphanWorktreesReconciled = false
 
   const isAlive = (): boolean => {
     const coord = getCoordinator()
@@ -114,7 +115,7 @@ export function createCollabGroupRuntime(
       if (m.lifecycle !== 'active' || m.conversationId === excludeConvId) continue
       if (coord.settlingWorkers.has(m.conversationId)) { busy.add(m.name); continue }
       const s = coord.readConversationOrUndefined(m.conversationId)
-      if (s && (s.status === 'working' || s.status === 'blocked' || m.pendingWakeupSeq > m.readCursorSeq)) busy.add(m.name)
+      if (s && (s.status === 'working' || s.status === 'blocked' || hasPendingDeliverableWakeup(m))) busy.add(m.name)
     }
     return busy
   }
@@ -220,7 +221,7 @@ export function createCollabGroupRuntime(
             if (existing.wake) {
               for (const target of existing.resolvedTargets) {
                 const m = target !== 'coordinator' ? current.members.find((i) => i.name === target && i.lifecycle === 'active') : undefined
-                if (m && m.pendingWakeupSeq > m.readCursorSeq) membersToWake.push(m.name)
+                if (m && hasPendingDeliverableWakeup(m)) membersToWake.push(m.name)
               }
             }
             if (
@@ -318,11 +319,17 @@ export function createCollabGroupRuntime(
       return createdPost
     }
 
-    for (const memberName of membersToWake) void dispatcher.deliverWorkerWakeup(validId, memberName)
-    if (shouldNotifyCoordinator) {
-      const latest = groupsById.get(validId)
-      if (latest && shouldFlushCoordinatorReport({ group: latest, posts: postsByGroup.get(validId) ?? [], busyMemberNames: getBusyActiveMemberNames(latest) })) {
-        void dispatcher.scheduleCoordinatorReport(validId, COORDINATOR_BATCH_WINDOW_MS)
+    if (!draft.deferDelivery) {
+      for (const memberName of membersToWake) void dispatcher.deliverWorkerWakeup(validId, memberName)
+      if (shouldNotifyCoordinator) {
+        const latest = groupsById.get(validId)
+        if (
+          latest &&
+          !isPendingReportExhausted(latest) &&
+          shouldFlushCoordinatorReport({ group: latest, posts: postsByGroup.get(validId) ?? [], busyMemberNames: getBusyActiveMemberNames(latest) })
+        ) {
+          void dispatcher.scheduleCoordinatorReport(validId, COORDINATOR_BATCH_WINDOW_MS)
+        }
       }
     }
     return createdPost
@@ -336,6 +343,18 @@ export function createCollabGroupRuntime(
     reportLockPath: (id) => join(groupDirOf(id), 'report.lock'),
     wakeupLockPath: (id, name) => join(groupDirOf(id), `wakeup-${name}.lock`),
     resolveMemberLive, getBusyActiveMemberNames,
+    onWakeupRecoveryFailed: async (groupId, memberName, fromSeq, toSeq, err) => {
+      const safeErr = ctx.host.redact(err instanceof Error ? err.message : String(err))
+      await appendPost(groupId, {
+        from: 'system',
+        to: ['coordinator'],
+        resolvedTargets: ['coordinator'],
+        wake: true,
+        kind: 'blocker',
+        refs: [toSeq],
+        body: `Member @${memberName} wakeup recovery retry (#${fromSeq}..#${toSeq}) failed: ${safeErr}`,
+      })
+    },
   })
 
   const projections = createBoardProjections({
@@ -386,7 +405,6 @@ export function createCollabGroupRuntime(
   return {
     async loadAllFromDisk() {
       stopping = false
-      orphanWorktreesReconciled = false
       releaseAllManagedWorkers()
       groupsById.clear()
       postsByGroup.clear()
@@ -411,8 +429,7 @@ export function createCollabGroupRuntime(
         if (g.status !== 'active') continue
         for (const m of [...g.members]) {
           if (m.lifecycle !== 'active') continue
-          if (!getCoordinator().readConversationOrUndefined(m.conversationId)) await healing.reconcileDeletedWorker(g.id, m.conversationId)
-          else ensureWorkerManaged(m.conversationId)
+          if (getCoordinator().readConversationOrUndefined(m.conversationId)) ensureWorkerManaged(m.conversationId)
         }
       }
       projections.syncIndex()
@@ -422,12 +439,21 @@ export function createCollabGroupRuntime(
     async reconcileOrphansOnBoot() {
       if (stopping) return
       await reconcileOrphanConversations(ctx, groupsById.values())
-      orphanWorktreesReconciled = await reconcileOrphanWorktreeHolds(ctx, groupsById.values(), logDiagnostic)
     },
 
     async reconcileRecoveredGroups() {
       if (!isAlive()) return
-      if (!orphanWorktreesReconciled) orphanWorktreesReconciled = await reconcileOrphanWorktreeHolds(ctx, groupsById.values(), logDiagnostic)
+      // Phase 1: Reconcile pre-crash inflightReport and deleted active workers before orphan worktree
+      // cleanup and before any live wakeups/reports are dispatched.
+      for (const g of [...groupsById.values()]) {
+        if (!isAlive()) return
+        if (g.status === 'active') await healing.prepareGroupRecovery(g.id)
+      }
+      if (!isAlive()) return
+      // Phase 2: Reclaim true orphan builtin:swarm worktree holds (runs after builtin:worktree.reconcile()
+      // and Phase 1 hold releases, and before Phase 3 dispatches any live recovery turns).
+      await reconcileOrphanWorktreeHolds(ctx, groupsById.values(), logDiagnostic)
+      // Phase 3: Reconcile member inflight wakeups/nudges, resume pending work, and flush coordinator reports.
       for (const g of [...groupsById.values()]) {
         if (!isAlive()) return
         if (g.status === 'active') await healing.reconcileSingleRecoveredGroup(g.id)
