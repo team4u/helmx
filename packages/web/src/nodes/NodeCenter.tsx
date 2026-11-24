@@ -1,10 +1,10 @@
 import type * as React from 'react'
 import { useMemo, useState } from 'react'
-import { Button, CardGrid } from '@helmx/plugin-client'
+import { Button, CardGrid, EmptyState } from '@helmx/plugin-client'
 import type { WebMessageKey } from '../i18n/catalog.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useLocationTargets, useNodes, useStoreActions } from '../lib/store-context.js'
-import { SystemCenterEmpty, SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { NodeCard } from './NodeCard.js'
 import { NodeDetailDrawer } from './NodeDetailDrawer.js'
@@ -142,16 +142,26 @@ export function NodeCenter({
           ))}
         </CardGrid>
       ) : (
-        <SystemCenterEmpty
+        <EmptyState
+          prominent
+          icon="search"
           title={t('nodes.emptyTitle')}
           hint={t('nodes.emptyHint')}
           hintSubtle
-          showReset={Boolean(query) || activeTab !== 'all'}
-          resetLabel={t('nodes.resetFilters')}
-          onReset={() => {
-            setQuery('')
-            setActiveTab('all')
-          }}
+          action={
+            Boolean(query) || activeTab !== 'all' ? (
+              <Button
+                size="sm"
+                icon="rotate-ccw"
+                onClick={() => {
+                  setQuery('')
+                  setActiveTab('all')
+                }}
+              >
+                {t('nodes.resetFilters')}
+              </Button>
+            ) : undefined
+          }
         />
       )}
     </SystemCenterShell>

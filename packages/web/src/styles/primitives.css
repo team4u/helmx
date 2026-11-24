@@ -489,6 +489,32 @@
   border-color: transparent;
   box-shadow: none;
 }
+.search-box-toolbar {
+  min-width: min(260px, 100%);
+  flex: 1;
+  max-width: 420px;
+}
+.search-box-toolbar > .input,
+.search-box-toolbar > input {
+  font-size: 13px;
+}
+.search-box-clear {
+  flex-shrink: 0;
+  padding: 2px;
+  height: auto;
+  color: var(--fg-subtle);
+}
+.search-box-clear:hover {
+  color: var(--fg);
+}
+@media (max-width: 680px) {
+  .search-box-toolbar {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+    flex: 1 1 100%;
+  }
+}
 
 .palette-close-btn {
   height: 22px;
@@ -529,7 +555,7 @@
   flex-wrap: wrap;
 }
 
-/* 统一空状态原语 */
+/* 统一空状态原语（宿主五大中心 + 插件 + 工作台共用） */
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -554,6 +580,19 @@
   color: var(--fg);
   margin: 0;
 }
+.empty-state-hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+  max-width: 360px;
+  margin: 0;
+}
+.empty-state-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 2px;
+}
 .empty-state-compact {
   padding: 16px 8px;
   min-height: 60px;
@@ -561,6 +600,27 @@
 }
 .empty-state-compact .empty-state-title {
   font-size: 12px;
+}
+.empty-state-prominent {
+  gap: 10px;
+  padding: 60px 20px;
+  min-height: 0;
+  color: var(--fg-muted);
+}
+.empty-state-prominent .empty-state-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  color: var(--fg-subtle);
+  margin-bottom: 4px;
+}
+.empty-state-prominent .empty-state-title {
+  font-size: 14px;
+}
+.empty-state-prominent .empty-state-hint {
+  max-width: 320px;
 }
 
 /* 表单两列网格对齐原语 */
@@ -678,14 +738,62 @@
  * 供全屏一级主舞台、扩展插件视图（Herdr / Swarm / Triggers / Magpie）统一排版
  * ========================================================================== */
 
+/* ScreenHost 唯一垂直滚动舞台（替代借穿会话专用 .timeline-scroll + .timeline-inner）：
+   容器自身不设 padding，由内层 .screen-container 按 data-screen-layout 决定留白与最大宽度；
+   标题去重与空页头收敛由 ScreenHostContext 结构化完成，零双滚动条，零 :has() 补丁。 */
+.screen-host-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  --screen-gutter: 24px;
+}
+
+.screen-host-body > .callout {
+  width: calc(100% - 2 * var(--screen-gutter));
+  max-width: 1480px;
+  margin: 20px auto;
+  box-sizing: border-box;
+}
+
+/* 未使用 <Screen>（无 data-screen-layout）的插件自定义根节点兜底留白与最大宽度 */
+.screen-host-body > [data-plugin-id] > :not([data-screen-layout]) {
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding-inline: var(--screen-gutter);
+  box-sizing: border-box;
+}
+
+.screen-host-body > [data-plugin-id] > :not([data-screen-layout]):first-child {
+  padding-top: 20px;
+}
+
+.screen-host-body > [data-plugin-id] > :not([data-screen-layout]):last-child {
+  padding-bottom: 28px;
+}
+
 .screen-container {
   display: flex;
   flex-direction: column;
   gap: 14px;
   width: 100%;
-  height: 100%;
-  overflow-y: auto;
   box-sizing: border-box;
+}
+
+.screen-container[data-screen-layout="contained"] {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 20px var(--screen-gutter, 24px) 28px;
+}
+
+/* 全出血全屏视图（<Screen layout="full-bleed">）：释放舞台宽限与留白，供宽表、双栏或画布贴边铺开 */
+.screen-container[data-screen-layout="full-bleed"] {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  flex: 1 0 auto;
 }
 
 .screen-header {
@@ -710,44 +818,6 @@
 
 .screen-header > .stack-row {
   margin-left: auto;
-}
-
-/* ScreenHost 已渲染顶栏 .pane-topbar 时抑制内层重复大标题，保留副标题与右侧动作栏；
-   If an inner page header has only a title without subtitle/actions, the whole bar collapses to zero to avoid double headers.
-   仅匹配公共壳类（.screen-header 等），宿主样式绝不点名插件私有类名（host-styles-boundary 门禁锁定）。 */
-.screen-host-stage .screen-header .screen-title,
-.screen-host-stage .screen-header > .screen-section-title {
-  display: none;
-}
-
-.screen-host-stage .screen-header:not(:has(.screen-subtitle, .stack-row, button, a, input, select)) {
-  display: none;
-}
-
-.screen-host-stage .screen-header > button:last-child:not(:first-child) {
-  margin-left: auto;
-}
-
-/* 全屏视图舞台宽度：覆盖 .timeline-inner 的会话列宽（--conversation-max-width），
-   宽屏（如 4 列看板）获得舒展的全出血空间；窄屏 / 分屏由 width:100% +
-   max-width 自然收敛，零横向溢出。原内联 maxWidth:1100 已移入本规则统一管理。 */
-.screen-host-stage {
-  max-width: 1480px;
-}
-
-/* 全出血全屏视图（<Screen layout="full-bleed">）：释放舞台宽限与滚动容器留白，供宽表、双栏或画布贴边铺开 */
-.screen-container[data-screen-layout="full-bleed"] {
-  max-width: none;
-  padding: 0;
-}
-
-.screen-host-stage:has([data-screen-layout="full-bleed"]) {
-  max-width: none;
-  width: 100%;
-}
-
-.timeline-scroll:has(> .screen-host-stage [data-screen-layout="full-bleed"]) {
-  padding: 0;
 }
 
 .screen-title {
@@ -919,8 +989,8 @@
  * 搜索框统一规范（全站唯一搜索外观）：
  *   - 搜索输入一律用 type="text"，禁止 type="search"（原生自带清除 X，
  *     会与自定义清除按钮叠出双 X，且易产生双层描边/高亮套高亮）。
- *   - 外观统一交给容器类（.search-box / .primary-search-box /
- *   .plugin-search-box / .sidebar-search），内层 input 必须
+ *   - 外观统一交给容器类（.search-box / .search-box-toolbar /
+ *     .sidebar-search），内层 input 必须
  *     border: none; background: transparent，避免高亮套高亮。
  *   - 清除按钮最多一个，由容器类内的自定义按钮提供。
  *   - 兜底：即使误用 type="search"，也强制去掉原生清除按钮。
@@ -1358,7 +1428,7 @@ input::placeholder {
 
 /*
  * 注意：搜索输入框不再使用独立原语 .search-input（已删，死代码）。
- * 搜索框一律采用容器结构：.search-box / .primary-search-box / .plugin-search-box /
+ * 搜索框一律采用容器结构：.search-box / .search-box-toolbar /
  * .sidebar-search，描边/背景/focus 高亮由容器提供，内层 input 透明无边框，
  * 并由文件末尾的统一兑底块中和全局 input 规则（见「搜索框统一规范兑底」）。
  */

@@ -125,7 +125,7 @@ test('PluginCenter SSR：渲染搜索框、统计徽章与卡片网格', { timeo
   assert.match(html, /class="[^"]*primary-center[^"]*"/)
 
   // 2. 搜索框与搜索图标
-  assert.match(html, /class="[^"]*primary-search-box[^"]*"/)
+  assert.match(html, /class="[^"]*search-box-toolbar[^"]*"/)
   assert.match(html, /placeholder="[^"]*Search/)
 
   // 3. 统计指标显示（无故障态时不展示异常计数）
@@ -185,7 +185,7 @@ test('PluginCenter DOM 交互：搜索过滤实时联动', { timeout: 60_000 }, 
   assert.equal(cards.length, 5)
 
   // 搜索框输入 "workflow"
-  const searchInput = host.querySelector<HTMLInputElement>('.primary-search-box input')
+  const searchInput = host.querySelector<HTMLInputElement>('.search-box-toolbar input')
   assert.ok(searchInput, '应存在搜索输入框')
 
   await act(async () => {

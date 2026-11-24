@@ -78,6 +78,8 @@ test('host-facing symbols (port / context / factory / explicit-addressing hooks)
     'createTimelineToolCallsStore',
     'useTimelineToolCalls',
     'ScreenParamsContext',
+    'ScreenHostContext',
+    'useScreenHost',
   ] as const) {
     assert.ok(name in SDK, `host-facing symbol ${name} must be exported`)
     assert.ok((SDK as Record<string, unknown>)[name] !== undefined, `host-facing symbol ${name} must not be undefined`)

@@ -97,9 +97,13 @@ describe("screen-host-shell", () => {
     )
     const warnBox = host?.querySelector('.callout.callout-warn')
     assert.ok(warnBox, '缺失插件视图时应渲染 .callout.callout-warn')
+    assert.ok(host?.querySelector('.screen-host-body[data-screen-host="true"]'), '缺失插件视图也位于单一 .screen-host-body 舞台容器内')
+    assert.ok(host?.querySelector('.timeline-scroll') === null, 'ScreenHost 不再借穿会话专用 .timeline-scroll')
+    assert.ok(host?.querySelector('.timeline-inner') === null, 'ScreenHost 不再借穿会话专用 .timeline-inner')
 
-    // 2) 已注册 client screen 渲染时，内层 Screen 包裹于 .screen-host-stage[data-screen-host="true"]，
-    // 且主/分屏分别从 primaryTarget / splitTarget 注入标准 ScreenProps 并把 setParams 路由到对应面板；
+    // 2) 已注册 client screen 渲染时，内层 Screen 包裹于单层 .screen-host-body[data-screen-host="true"]，
+    // ScreenHostContext(hosted=true) 使内层 Screen 结构化省略重复 .screen-title 并保留副标题与动作栏；
+    // 主/分屏分别从 primaryTarget / splitTarget 注入标准 ScreenProps 并把 setParams 路由到对应面板；
     // 嵌套子组件（不经 slotProps）经 useScreenParams 读取宿主建立的同一 scope。
     const { useScreenParams } = await import('@helmx/plugin-client')
     const receivedProps: Array<Record<string, unknown>> = []
@@ -158,10 +162,13 @@ describe("screen-host-shell", () => {
     await flushMacrotask(0)
 
     const topbar = host?.querySelector('.pane-topbar')
-    const stage = host?.querySelector<HTMLElement>('.screen-host-stage[data-screen-host="true"]')
+    const stage = host?.querySelector<HTMLElement>('.screen-host-body[data-screen-host="true"]')
     assert.ok(topbar, 'ScreenHost 应保留唯一宿主顶栏 .pane-topbar')
-    assert.ok(stage, 'ScreenHost 应标注 .screen-host-stage[data-screen-host="true"]')
-    assert.ok(stage.querySelector('.screen-header .screen-heading .screen-title'), '内层 Screen 存在标准 .screen-header > .screen-heading > .screen-title 供 CSS 去重')
+    assert.ok(stage, 'ScreenHost 应渲染单一滚动舞台 .screen-host-body[data-screen-host="true"]')
+    assert.ok(host?.querySelector('.timeline-scroll') === null, 'ScreenHost 不再嵌套 .timeline-scroll')
+    assert.ok(host?.querySelector('.timeline-inner') === null, 'ScreenHost 不再嵌套 .timeline-inner')
+    assert.ok(stage.querySelector('.screen-header') !== null, '存在 subtitle/actions 时保留 .screen-header')
+    assert.ok(stage.querySelector('.screen-title') === null, 'hosted 下内层 Screen 结构化省略重复 .screen-title（零 CSS display:none 补丁）')
     assert.ok(stage.querySelector('.screen-subtitle'), '副标题应保留')
     assert.ok(stage.querySelector('button'), '右侧动作按钮应保留')
     assert.ok(stage.querySelector('[data-nested-scope="yes"]'), '嵌套子组件经 useScreenParams 读到宿主建立的屏内 scope')
@@ -202,6 +209,73 @@ describe("screen-host-shell", () => {
       { patch: { tab: 'overview' }, options: { split: false, push: true } },
       { patch: { tab: 'logs' }, options: { split: true, push: false } },
     ])
+
+    // 3) 仅传 title 的 Screen 在 ScreenHost 内完全不渲染空 .screen-header；full-bleed 正常打标且无双滚动容器
+    seedPluginClientModule(
+      'ext-demo',
+      'modes.tsx',
+      {
+        TitleOnly: () => (
+          <Screen title="仅主标题">
+            <div data-testid="title-only-body">纯正文</div>
+          </Screen>
+        ),
+        FullBleed: () => (
+          <Screen layout="full-bleed" title="全出血画布">
+            <div data-testid="canvas-body">宽画布</div>
+          </Screen>
+        ),
+      },
+      'demo-hash-2',
+    )
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/plugins/ext-demo/client.mjs')) {
+        return new Response('', { status: 200, headers: { 'x-helmx-client-hash': 'demo-hash-2' } })
+      }
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+
+    const modesStore = makeTestStore({
+      primaryTarget: { kind: 'screen', pluginId: 'ext-demo', screenId: 'title-only' },
+      uiContributions: [
+        {
+          pluginId: 'ext-demo',
+          surface: 'screen',
+          spec: { id: 'title-only', label: '仅主标题', client: { module: 'modes.tsx', export: 'TitleOnly' } },
+        },
+        {
+          pluginId: 'ext-demo',
+          surface: 'screen',
+          spec: { id: 'full-bleed', label: '全出血画布', client: { module: 'modes.tsx', export: 'FullBleed' } },
+        },
+      ],
+    })
+
+    mount(
+      <HostStoreProviders value={modesStore}>
+        <ScreenHost pluginId="ext-demo" screenId="title-only" />
+      </HostStoreProviders>,
+    )
+    await flushMacrotask(0)
+    const titleOnlyStage = host?.querySelector<HTMLElement>('.screen-host-body[data-screen-host="true"]')
+    assert.ok(titleOnlyStage !== null && titleOnlyStage !== undefined)
+    assert.ok(titleOnlyStage.querySelector('.screen-header') === null, '仅传 title 时 hosted Screen 不渲染空 .screen-header')
+    assert.ok(titleOnlyStage.querySelector('.screen-title') === null, 'hosted Screen 不渲染重复 .screen-title')
+    assert.equal(titleOnlyStage.querySelector('.screen-container')?.getAttribute('data-screen-layout'), 'contained')
+    assert.equal(titleOnlyStage.querySelector('[data-testid="title-only-body"]')?.textContent, '纯正文')
+
+    mount(
+      <HostStoreProviders value={modesStore}>
+        <ScreenHost pluginId="ext-demo" screenId="full-bleed" />
+      </HostStoreProviders>,
+    )
+    await flushMacrotask(0)
+    const fullBleedStage = host?.querySelector<HTMLElement>('.screen-host-body[data-screen-host="true"]')
+    assert.ok(fullBleedStage !== null && fullBleedStage !== undefined)
+    assert.ok(host?.querySelector('.timeline-scroll') === null)
+    assert.ok(fullBleedStage.querySelector('.screen-header') === null)
+    assert.equal(fullBleedStage.querySelector('.screen-container')?.getAttribute('data-screen-layout'), 'full-bleed')
+    assert.equal(fullBleedStage.querySelector('[data-testid="canvas-body"]')?.textContent, '宽画布')
   })
 
   test('CommandPaletteModal 单键快捷键徽章、聚焦分屏上下文与空查询排序', { timeout: 60_000 }, async () => {

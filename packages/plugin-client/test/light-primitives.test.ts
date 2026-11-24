@@ -50,6 +50,7 @@ const {
 const { usePluginAction } = await import('../src/ui/use-plugin-action.js')
 const { PluginClientContext } = await import('../src/plugin-context.js')
 const { EmptyState } = await import('../src/ui/EmptyState.js')
+const { Tabs, TabsList, TabsTrigger } = await import('../src/ui/Tabs.js')
 const { DockTray, DockTrayRow } = await import('../src/ui/DockTray.js')
 const { ConfirmDialog } = await import('../src/ui/AlertDialog.js')
 
@@ -70,25 +71,51 @@ test('SearchBox SSR: compact default container, type="text", no clear button whe
   assert.ok(!html.includes('<button'), 'no clear button for an empty value (at most one clear control)')
 })
 
-test('SearchBox SSR: toolbar variant classes are caller-chosen; clear button appears for a non-empty value', { timeout: 60_000 }, () => {
+test('SearchBox SSR: toolbar variant renders search-box-toolbar and standard search-box-clear', { timeout: 60_000 }, () => {
   const html = renderToString(
+    e(
+      SearchBox,
+      {
+        variant: 'toolbar',
+        value: 'magpie',
+        onChange: () => {},
+        clearLabel: 'Clear search',
+      },
+    ),
+  )
+  assert.ok(html.includes('class="search-box search-box-toolbar"'), 'toolbar variant renders .search-box.search-box-toolbar')
+  assert.ok(html.includes('class="btn btn-ghost btn-sm search-box-clear"'), 'clear button defaults to .search-box-clear')
+  assert.ok(html.includes('aria-label="Clear search"'), 'clear button carries the accessible name')
+  assert.ok(html.includes('value="magpie"'), 'controlled value renders')
+
+  const extended = renderToString(
+    e(SearchBox, {
+      variant: 'toolbar',
+      className: 'search-box extra-filter-box',
+      value: '',
+      onChange: () => {},
+    }),
+  )
+  assert.ok(
+    extended.includes('class="search-box search-box-toolbar extra-filter-box"'),
+    'toolbar variant merges caller className without duplicating search-box',
+  )
+
+  const custom = renderToString(
     e(
       SearchBox,
       {
         value: 'magpie',
         onChange: () => {},
-        className: 'primary-search-box',
+        className: 'sidebar-search',
         inputClassName: 'sidebar-search-input',
-        clearButtonClassName: 'btn btn-ghost btn-sm primary-search-clear',
-        clearLabel: 'Clear search',
+        clearButtonClassName: 'btn btn-ghost btn-icon-xs sidebar-search-clear',
       },
     ),
   )
-  assert.ok(html.includes('class="primary-search-box"'), 'container class is caller-chosen')
-  assert.ok(html.includes('sidebar-search-input'), 'input class extension lands on the inner input')
-  assert.ok(html.includes('primary-search-clear'), 'clear button class extension lands')
-  assert.ok(html.includes('aria-label="Clear search"'), 'clear button carries the accessible name')
-  assert.ok(html.includes('value="magpie"'), 'controlled value renders')
+  assert.ok(custom.includes('class="sidebar-search"'), 'default variant preserves custom container override')
+  assert.ok(custom.includes('sidebar-search-input'), 'input class extension lands on the inner input')
+  assert.ok(custom.includes('sidebar-search-clear'), 'clear button class override lands')
 })
 
 test('SearchBox DOM: typing emits unwrapped values and the clear button resets to empty string', { timeout: 60_000 }, async () => {
@@ -181,6 +208,59 @@ test('EmptyState SSR: host vocabulary with optional icon/title/hint and compact 
   assert.ok(plain.includes('class="empty-state"'), 'default density, no icon/title slots rendered')
   assert.ok(!plain.includes('empty-state-icon'), 'icon slot is opt-in')
   assert.ok(plain.includes('nothing selected'))
+})
+
+test('EmptyState SSR: string icon renders HelmxIcon, prominent stage density, hintSubtle, and action slot', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(EmptyState, {
+      prominent: true,
+      icon: 'search',
+      iconSize: 22,
+      title: 'No matching models',
+      hint: 'Try adjusting your query',
+      hintSubtle: true,
+      action: e(Button, { size: 'sm', onClick: () => {} }, 'Reset filters'),
+    }),
+  )
+  assert.ok(html.includes('class="empty-state empty-state-prominent"'), 'prominent stage density applies .empty-state-prominent')
+  assert.ok(html.includes('class="empty-state-icon"'), 'icon wrapper renders')
+  assert.ok(html.includes('<svg'), 'string icon resolves to HelmxIcon svg rather than raw text')
+  assert.ok(html.includes('width="22"'), 'explicit iconSize passes through to HelmxIcon')
+  assert.ok(!html.includes('>search<'), 'icon name string must not leak as literal text')
+  assert.ok(html.includes('class="empty-state-hint text-subtle"'), 'hintSubtle appends .text-subtle')
+  assert.ok(html.includes('class="empty-state-action"'), 'action renders inside .empty-state-action')
+  assert.ok(html.includes('Reset filters'))
+
+  const defaultProminentIcon = renderToString(
+    e(EmptyState, { prominent: true, icon: 'layers', title: 'No tiers' }),
+  )
+  assert.ok(defaultProminentIcon.includes('width="28"'), 'prominent string icon defaults to 28px')
+  assert.ok(!defaultProminentIcon.includes('empty-state-action'), 'omitted action renders no empty slot')
+})
+
+test('Tabs SSR: variant="pills" renders helmx-tabs-pills, tabs-pills, tabs-pill, and active ARIA state', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(
+      Tabs,
+      { value: 'enabled', variant: 'pills' },
+      e(
+        TabsList,
+        { 'aria-label': 'Filter by status' },
+        e(TabsTrigger, { value: 'all' }, 'All'),
+        e(TabsTrigger, { value: 'enabled' }, 'Enabled'),
+      ),
+    ),
+  )
+  assert.ok(html.includes('helmx-tabs helmx-tabs-pills'), 'root container carries helmx-tabs-pills')
+  assert.ok(html.includes('class="tabs-pills"'), 'TabsList uses public .tabs-pills class')
+  assert.ok(html.includes('role="tablist"'), 'TabsList exposes role="tablist"')
+  assert.ok(html.includes('aria-label="Filter by status"'))
+  assert.ok(html.includes('class="tabs-pill"'), 'inactive trigger uses .tabs-pill')
+  assert.ok(html.includes('class="tabs-pill is-active"'), 'active trigger carries .is-active')
+  assert.ok(html.includes('data-state="active"'))
+  assert.ok(html.includes('aria-selected="true"'))
+  assert.ok(html.includes('data-state="inactive"'))
+  assert.ok(html.includes('aria-selected="false"'))
 })
 
 // ---------------------------------------------------------------------------

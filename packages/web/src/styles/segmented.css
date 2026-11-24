@@ -1,9 +1,16 @@
 /* ==========================================================================
- * 分段控制器与 Tabs 原语
+ * 分段控制器、胶囊筛选与 Tabs 原语
  * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
  * ========================================================================== */
+
+.helmx-tabs,
+.helmx-tabs-underline,
+.tabs-content {
+  min-width: 0;
+}
+
 /* ==========================================================================
- * 分段控制器原语（SegmentedControl & Tabs）
+ * 分段控制器原语（SegmentedControl & Tabs variant="segmented"）
  * ========================================================================== */
 
 .helmx-tabs-segmented {
@@ -60,3 +67,86 @@
   cursor: not-allowed;
 }
 
+.helmx-tabs-sm .segmented-control-btn {
+  height: 22px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.helmx-tabs-md .segmented-control-btn {
+  height: 26px;
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+
+/* ==========================================================================
+ * 分类胶囊原语（Tabs variant="pills"）
+ * ========================================================================== */
+
+.helmx-tabs-pills {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.tabs-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  max-width: 100%;
+  padding-bottom: 2px;
+}
+
+.tabs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  box-sizing: border-box;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.tabs-pill:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  color: var(--fg);
+}
+
+.tabs-pill.is-active,
+.tabs-pill[data-state='active'] {
+  background: var(--bg-elevated);
+  color: var(--nav-active-fg);
+  border-color: var(--accent);
+}
+
+.tabs-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tabs-pill:disabled,
+.tabs-pill[data-disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.helmx-tabs-sm .tabs-pill {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11.5px;
+}
+
+.helmx-tabs-md .tabs-pill {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}

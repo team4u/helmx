@@ -1,9 +1,9 @@
 import type * as React from 'react'
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Callout, CardGrid, HelmxIcon, Select, Stack, type SelectOption } from '@helmx/plugin-client'
+import { Button, Callout, CardGrid, EmptyState, HelmxIcon, Select, Stack, type SelectOption } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useLocationTargets, useNodes, useSkills, useStoreActions } from '../lib/store-context.js'
-import { SystemCenterEmpty, SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { SkillCard } from './SkillCard.js'
 import { SkillDetailDrawer } from './SkillDetailDrawer.js'
@@ -266,15 +266,25 @@ export function SkillCenter({
           ))}
         </CardGrid>
       ) : (
-        <SystemCenterEmpty
+        <EmptyState
+          prominent
+          icon="search"
           title={t('skills.center.emptyTitle')}
           hint={t('skills.center.emptyHint')}
-          showReset={Boolean(query) || activeTab !== 'all'}
-          resetLabel={t('skills.center.resetFilters')}
-          onReset={() => {
-            setQuery('')
-            setActiveTab('all')
-          }}
+          action={
+            Boolean(query) || activeTab !== 'all' ? (
+              <Button
+                size="sm"
+                icon="rotate-ccw"
+                onClick={() => {
+                  setQuery('')
+                  setActiveTab('all')
+                }}
+              >
+                {t('skills.center.resetFilters')}
+              </Button>
+            ) : undefined
+          }
         />
       )}
     </SystemCenterShell>

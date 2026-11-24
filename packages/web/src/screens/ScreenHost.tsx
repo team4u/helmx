@@ -5,7 +5,7 @@
  */
 import * as React from 'react'
 import { useMemo } from 'react'
-import { HelmxIcon, ScreenParamsContext } from '@helmx/plugin-client'
+import { HelmxIcon, ScreenHostContext, ScreenParamsContext, type ScreenHostState } from '@helmx/plugin-client'
 import { resolveLocalizedText, type ScreenParamsScope, type ScreenSpec } from '@helmx/protocol/browser'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useGroupedUi, useLocationTargets, useStoreActions } from '../lib/store-context.js'
@@ -13,6 +13,8 @@ import type { ResolvedTarget } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
+
+const HOSTED_SCREEN_STATE: ScreenHostState = Object.freeze({ hosted: true })
 
 export interface ScreenHostProps {
   pluginId: string
@@ -83,7 +85,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
             )}
           </div>
         </div>
-        <div className="timeline-scroll">
+        <div className="screen-host-body" data-screen-host="true">
           <div className="callout callout-warn">
             <HelmxIcon name="alert-triangle" size={13} />
             <span>
@@ -116,8 +118,8 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
           )}
         </div>
       </div>
-      <div className="timeline-scroll">
-        <div className="timeline-inner screen-host-stage" data-screen-host="true">
+      <div className="screen-host-body" data-screen-host="true">
+        <ScreenHostContext.Provider value={HOSTED_SCREEN_STATE}>
           <ScreenParamsContext.Provider value={screenScope}>
             <PluginUiView
               pluginId={pluginId}
@@ -126,7 +128,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
               label={t('shell.screen.viewLabel', { id: screenId })}
             />
           </ScreenParamsContext.Provider>
-        </div>
+        </ScreenHostContext.Provider>
       </div>
     </div>
   )

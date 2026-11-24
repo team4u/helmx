@@ -8,6 +8,7 @@ import { ensureHappyDom } from './helpers/dom-harness.js'
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
 const { Tabs, TabsList, TabsTrigger, TabsContent, SegmentedControl } = await import('@helmx/plugin-client')
+const { SystemCenterToolbar } = await import('../src/ui/SystemCenterShell.js')
 
 // ---------------------------------------------------------------------------
 // 1. SSR 渲染与数据属性（data-state="active"）契约测试
@@ -362,4 +363,185 @@ test('键盘导航：Roving tabindex 确保当前选项卡 tabindex=0，非激�
 
   root.unmount()
   host.remove()
+})
+
+// ---------------------------------------------------------------------------
+// 4. Tabs variant="pills"（系统中心分类筛选胶囊：语义、交互、去重与键盘导航）
+// ---------------------------------------------------------------------------
+
+test('SSR：Tabs variant="pills" 渲染胶囊筛选条（helmx-tabs-pills / tabs-pills / tabs-pill）', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    React.createElement(
+      Tabs,
+      { value: 'enabled', variant: 'pills' },
+      React.createElement(
+        TabsList,
+        { 'aria-label': 'Filter plugins' },
+        React.createElement(TabsTrigger, { value: 'all' }, 'All'),
+        React.createElement(TabsTrigger, { value: 'enabled' }, 'Enabled'),
+        React.createElement(TabsTrigger, { value: 'disabled', disabled: true }, 'Disabled'),
+      ),
+    ),
+  )
+
+  assert.match(html, /class="[^"]*helmx-tabs-pills[^"]*"/, '根容器应带 helmx-tabs-pills')
+  assert.match(html, /class="[^"]*tabs-pills[^"]*"/, 'TabsList 应使用公共类 tabs-pills')
+  assert.match(html, /role="tablist"/, 'TabsList 应具备 role="tablist"')
+  assert.match(html, /class="[^"]*tabs-pill[^"]*is-active[^"]*"/, '激活胶囊应同步 .is-active')
+  assert.match(html, /data-state="active"/, '激活胶囊应带 data-state="active"')
+  assert.match(html, /aria-selected="true"/, '激活胶囊应带 aria-selected="true"')
+  assert.match(html, /data-disabled=""/, '禁用胶囊应带 data-disabled')
+})
+
+test('DOM：Tabs variant="pills" 点击（含 mousedown+click）仅触发一次 onValueChange，且支持左右方向键与 roving tabindex', { timeout: 60_000 }, async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+
+  const changes: string[] = []
+  function ControlledPills() {
+    const [active, setActive] = React.useState('all')
+    return React.createElement(
+      Tabs,
+      {
+        value: active,
+        variant: 'pills',
+        onValueChange: (nextVal: string) => {
+          changes.push(nextVal)
+          setActive(nextVal)
+        },
+      },
+      React.createElement(
+        TabsList,
+        { 'aria-label': 'Category filters' },
+        React.createElement(TabsTrigger, { value: 'all' }, 'All'),
+        React.createElement(TabsTrigger, { value: 'local' }, 'Local'),
+        React.createElement(TabsTrigger, { value: 'remote' }, 'Remote'),
+      ),
+    )
+  }
+
+  try {
+    await act(async () => {
+      root.render(React.createElement(ControlledPills))
+    })
+
+    const getTriggers = () => Array.from(host.querySelectorAll<HTMLButtonElement>('.tabs-pill'))
+    assert.equal(getTriggers().length, 3)
+    assert.equal(getTriggers()[0]!.getAttribute('aria-selected'), 'true')
+    assert.equal(getTriggers()[0]!.getAttribute('data-state'), 'active')
+    assert.ok(getTriggers()[0]!.classList.contains('is-active'))
+
+    // 1) 模拟真实指针点击序列（mousedown + click）：onValueChange 仅触发一次
+    await act(async () => {
+      const target = getTriggers()[1]!
+      target.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }))
+      target.dispatchEvent(new MouseEvent('click', { button: 0, bubbles: true }))
+    })
+    assert.deepEqual(changes, ['local'], '真实 mousedown+click 序列不得重复触发 onValueChange')
+    assert.equal(getTriggers()[1]!.getAttribute('aria-selected'), 'true')
+    assert.equal(getTriggers()[1]!.getAttribute('data-state'), 'active')
+    assert.ok(getTriggers()[1]!.classList.contains('is-active'))
+    assert.equal(getTriggers()[0]!.classList.contains('is-active'), false)
+
+    // 2) Roving tabindex：当前激活项为 0，非激活项为 -1
+    await act(async () => {
+      getTriggers()[1]!.focus()
+    })
+    assert.equal(getTriggers()[0]!.getAttribute('tabindex'), '-1')
+    assert.equal(getTriggers()[1]!.getAttribute('tabindex'), '0')
+    assert.equal(getTriggers()[2]!.getAttribute('tabindex'), '-1')
+
+    // 3) ArrowRight 切换至 remote，ArrowLeft 回到 local
+    await act(async () => {
+      getTriggers()[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    assert.deepEqual(changes, ['local', 'remote'], 'ArrowRight 应导航并激活下一个胶囊')
+    assert.equal(getTriggers()[2]!.getAttribute('aria-selected'), 'true')
+    assert.equal(getTriggers()[2]!.getAttribute('data-state'), 'active')
+    assert.ok(getTriggers()[2]!.classList.contains('is-active'))
+
+    await act(async () => {
+      const activeEl = document.activeElement as HTMLElement | null
+      activeEl?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    assert.deepEqual(changes, ['local', 'remote', 'local'], 'ArrowLeft 应导航回前一个胶囊')
+    assert.equal(getTriggers()[1]!.getAttribute('aria-selected'), 'true')
+
+    // 4) 程序化 .click()（无前置 mousedown，兼容单测与辅助技术）：同样触发一次
+    await act(async () => {
+      getTriggers()[0]!.click()
+    })
+    assert.deepEqual(changes, ['local', 'remote', 'local', 'all'])
+    assert.equal(getTriggers()[0]!.getAttribute('aria-selected'), 'true')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('DOM：SystemCenterToolbar 使用 Radix Tabs pills 与 SearchBox toolbar，支持方向键切换分类胶囊', { timeout: 60_000 }, async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+
+  const selected: string[] = []
+  function ToolbarHarness() {
+    const [query, setQuery] = React.useState('')
+    const [activePill, setActivePill] = React.useState<'all' | 'enabled' | 'disabled'>('all')
+    return React.createElement(SystemCenterToolbar<'all' | 'enabled' | 'disabled'>, {
+      query,
+      onQueryChange: setQuery,
+      searchPlaceholder: 'Search items',
+      searchAriaLabel: 'Search items',
+      clearSearchLabel: 'Clear',
+      filterAriaLabel: 'Status filter',
+      pills: [
+        { key: 'all', label: 'All', count: 5 },
+        { key: 'enabled', label: 'Enabled', count: 3 },
+        { key: 'disabled', label: 'Disabled', count: 2 },
+      ],
+      activePill,
+      onSelectPill: (key) => {
+        selected.push(key)
+        setActivePill(key)
+      },
+    })
+  }
+
+  try {
+    await act(async () => {
+      root.render(React.createElement(ToolbarHarness))
+    })
+
+    assert.ok(host.querySelector('.search-box.search-box-toolbar') !== null, '应渲染 SearchBox toolbar 变体')
+    const tablist = host.querySelector<HTMLElement>('.tabs-pills[role="tablist"]')
+    assert.ok(tablist !== null, '应渲染 Radix TabsList .tabs-pills')
+    assert.equal(tablist.getAttribute('aria-label'), 'Status filter')
+
+    const pills = Array.from(host.querySelectorAll<HTMLButtonElement>('.tabs-pill[role="tab"]'))
+    assert.equal(pills.length, 3)
+    assert.equal(pills[0]!.getAttribute('aria-selected'), 'true')
+
+    await act(async () => {
+      pills[0]!.focus()
+      pills[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+      await new Promise((r) => setTimeout(r, 20))
+    })
+
+    assert.deepEqual(selected, ['enabled'])
+    assert.equal(pills[1]!.getAttribute('aria-selected'), 'true')
+    assert.equal(pills[1]!.getAttribute('data-state'), 'active')
+    assert.equal(pills[1]!.getAttribute('tabindex'), '0')
+    assert.equal(pills[0]!.getAttribute('tabindex'), '-1')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
 })

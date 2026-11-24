@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, forwardRef } from 'react'
+import React, { createContext, useContext, useRef, useState, forwardRef } from 'react'
 import * as TabsPrimitive from '@radix-ui/react-tabs'
 import type {
   TabsVariant,
@@ -16,11 +16,60 @@ export type {
   TabsContextValue,
 }
 
+type ResolvedTabsVariant = 'underline' | 'segmented' | 'pills'
+
+const ROOT_VARIANT_CLASS: Record<TabsVariant, string> = {
+  underline: 'helmx-tabs-underline',
+  default: 'helmx-tabs-underline',
+  segmented: 'helmx-tabs-segmented',
+  pills: 'helmx-tabs-pills',
+}
+
+const ROOT_SIZE_CLASS: Record<TabsSize, string> = {
+  sm: 'helmx-tabs-sm',
+  md: 'helmx-tabs-md',
+}
+
+const LIST_VARIANT_CLASS: Record<ResolvedTabsVariant, string> = {
+  underline: 'tabs-bar',
+  segmented: 'segmented-control',
+  pills: 'tabs-pills',
+}
+
+const TRIGGER_VARIANT_CLASS: Record<ResolvedTabsVariant, string> = {
+  underline: 'tab-btn',
+  segmented: 'segmented-control-btn',
+  pills: 'tabs-pill',
+}
+
+const TRIGGER_ACTIVE_CLASS: Record<ResolvedTabsVariant, string> = {
+  underline: 'tab-btn-active',
+  segmented: 'is-active',
+  pills: 'is-active',
+}
+
+function hasClassToken(className: string, token: string): boolean {
+  if (className === '') return false
+  return className.split(/\s+/).includes(token)
+}
+
+function resolveListVariant(variant: TabsVariant, className: string): ResolvedTabsVariant {
+  if (variant === 'segmented' || hasClassToken(className, 'segmented-control')) return 'segmented'
+  if (variant === 'pills' || hasClassToken(className, 'tabs-pills')) return 'pills'
+  return 'underline'
+}
+
+function resolveTriggerVariant(variant: TabsVariant, className: string): ResolvedTabsVariant {
+  if (variant === 'segmented' || hasClassToken(className, 'segmented-control-btn')) return 'segmented'
+  if (variant === 'pills' || hasClassToken(className, 'tabs-pill')) return 'pills'
+  return 'underline'
+}
+
 const TabsContext = createContext<TabsContextValue>({
   variant: 'underline',
 })
 
-const TabsListContext = createContext<{ variant: TabsVariant }>({
+const TabsListContext = createContext<{ variant: ResolvedTabsVariant }>({
   variant: 'underline',
 })
 
@@ -34,8 +83,22 @@ export const Tabs = forwardRef<React.ComponentRef<typeof TabsPrimitive.Root>, Ta
     const isControlled = value !== undefined
     const [uncontrolledValue, setUncontrolledValue] = useState(defaultValue ?? '')
     const activeValue = isControlled ? value : uncontrolledValue
+    const activeValueRef = useRef(activeValue)
+    activeValueRef.current = activeValue
+    // Coalesce duplicate activation callbacks within the same pointer/keyboard
+    // turn (e.g. Radix mousedown -> focus -> click) before React re-renders.
+    const pendingEmissionRef = useRef<string | undefined>(undefined)
 
     const handleValueChange = (newVal: string) => {
+      if (newVal === activeValueRef.current || newVal === pendingEmissionRef.current) {
+        return
+      }
+      pendingEmissionRef.current = newVal
+      queueMicrotask(() => {
+        if (pendingEmissionRef.current === newVal) {
+          pendingEmissionRef.current = undefined
+        }
+      })
       if (!isControlled) {
         setUncontrolledValue(newVal)
       }
@@ -51,8 +114,8 @@ export const Tabs = forwardRef<React.ComponentRef<typeof TabsPrimitive.Root>, Ta
 
     const rootClass = [
       'helmx-tabs',
-      variant && `helmx-tabs-${variant}`,
-      size && `helmx-tabs-${size}`,
+      ROOT_VARIANT_CLASS[variant],
+      size ? ROOT_SIZE_CLASS[size] : undefined,
       className,
     ]
       .filter(Boolean)
@@ -62,8 +125,7 @@ export const Tabs = forwardRef<React.ComponentRef<typeof TabsPrimitive.Root>, Ta
       <TabsContext.Provider value={contextValue}>
         <TabsPrimitive.Root
           ref={ref}
-          value={value}
-          defaultValue={defaultValue}
+          value={activeValue}
           onValueChange={handleValueChange}
           className={rootClass}
           {...props}
@@ -82,11 +144,10 @@ export const TabsList = forwardRef<React.ComponentRef<typeof TabsPrimitive.List>
   function TabsList({ variant: variantProp, size: _size, className = '', ...props }, ref) {
     const context = useContext(TabsContext)
     const variant = variantProp ?? context.variant
-    const isSegmented = variant === 'segmented' || className.includes('segmented-control')
-    const resolvedVariant: TabsVariant = isSegmented ? 'segmented' : 'underline'
+    const resolvedVariant = resolveListVariant(variant, className)
 
-    const defaultBaseClass = resolvedVariant === 'segmented' ? 'segmented-control' : 'tabs-bar'
-    const listClass = className.includes(defaultBaseClass)
+    const defaultBaseClass = LIST_VARIANT_CLASS[resolvedVariant]
+    const listClass = hasClassToken(className, defaultBaseClass)
       ? className
       : [defaultBaseClass, className].filter(Boolean).join(' ')
 
@@ -103,25 +164,50 @@ export interface TabsTriggerProps extends React.ComponentPropsWithoutRef<typeof 
 }
 
 export const TabsTrigger = forwardRef<React.ComponentRef<typeof TabsPrimitive.Trigger>, TabsTriggerProps>(
-  function TabsTrigger({ variant: variantProp, className = '', value, onClick, ...props }, ref) {
+  function TabsTrigger(
+    { variant: variantProp, className = '', value, disabled, onClick, onMouseDown, onBlur, ...props },
+    ref,
+  ) {
     const rootContext = useContext(TabsContext)
     const listContext = useContext(TabsListContext)
     const variant = variantProp ?? listContext.variant ?? rootContext.variant
-    const isSegmented = variant === 'segmented' || className.includes('segmented-control-btn')
+    const resolvedVariant = resolveTriggerVariant(variant, className)
 
     const isActive = rootContext.value !== undefined && rootContext.value === value
-    const defaultBaseClass = isSegmented ? 'segmented-control-btn' : 'tab-btn'
-    const activeClass = isSegmented
-      ? (isActive ? ' is-active' : '')
-      : (isActive ? ' tab-btn-active' : '')
+    const defaultBaseClass = TRIGGER_VARIANT_CLASS[resolvedVariant]
+    const activeToken = TRIGGER_ACTIVE_CLASS[resolvedVariant]
 
-    const triggerClass = className.includes(defaultBaseClass)
-      ? `${className}${isActive && !className.includes(activeClass.trim()) ? activeClass : ''}`
-      : `${defaultBaseClass}${activeClass} ${className}`.trim()
+    const triggerClass = [
+      hasClassToken(className, defaultBaseClass) ? undefined : defaultBaseClass,
+      isActive && !hasClassToken(className, activeToken) ? activeToken : undefined,
+      className || undefined,
+    ]
+      .filter(Boolean)
+      .join(' ')
+
+    const mouseDownActivatedRef = useRef(false)
+
+    const handleMouseDown = (e: React.MouseEvent<HTMLButtonElement>) => {
+      onMouseDown?.(e)
+      if (!disabled && e.button === 0 && !e.ctrlKey) {
+        mouseDownActivatedRef.current = true
+      }
+    }
+
+    const handleBlur = (e: React.FocusEvent<HTMLButtonElement>) => {
+      mouseDownActivatedRef.current = false
+      onBlur?.(e)
+    }
 
     const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
       onClick?.(e)
-      if (rootContext.onValueChange && rootContext.value !== value) {
+      if (mouseDownActivatedRef.current) {
+        mouseDownActivatedRef.current = false
+        return
+      }
+      // Fallback for programmatic `.click()` (e.g. happy-dom tests or assistive
+      // tech invoking click without a preceding pointer mousedown).
+      if (!disabled && rootContext.onValueChange && rootContext.value !== value) {
         rootContext.onValueChange(value)
       }
     }
@@ -130,7 +216,10 @@ export const TabsTrigger = forwardRef<React.ComponentRef<typeof TabsPrimitive.Tr
       <TabsPrimitive.Trigger
         ref={ref}
         value={value}
+        disabled={disabled}
         className={triggerClass}
+        onMouseDown={handleMouseDown}
+        onBlur={handleBlur}
         onClick={handleClick}
         {...props}
       />
