@@ -4,7 +4,7 @@
  */
 import { useMemo } from 'react'
 import type * as React from 'react'
-import { HelmxIcon, Select } from '@helmx/plugin-client'
+import { HelmxIcon, Input, Select } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useNodes } from '../lib/store-context.js'
 import { buildNodeSelectOptions } from '../modals/nodes-modal-model.js'
@@ -62,10 +62,11 @@ export function ComposerEnvFields({
       </span>
       <span className="composer-env-item composer-env-cwd-wrap">
         <HelmxIcon name="folder" size={12} className="composer-env-cwd-icon" />
-        <input
-          className="input mono composer-env-cwd-input"
+        <Input
+          mono
+          className="composer-env-cwd-input"
           aria-label={cwdAriaLabel}
-          aria-invalid={cwdInvalid}
+          invalid={cwdInvalid}
           value={cwd}
           disabled={disabled}
           placeholder={cwdPlaceholder}

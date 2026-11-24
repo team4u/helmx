@@ -6,8 +6,10 @@ import type {
   ProfileStarterPrompt,
 } from '@helmx/protocol/browser'
 import {
+  Button,
   createTimelineToolCallsStore,
   HelmxIcon,
+  LoadingState,
   TimelineToolCallsContext,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -315,16 +317,13 @@ export function ConversationTimeline({
         {hasLeadingCenterSlot ? (
           <div className="timeline-center-slot">
             {hasOlderCursor ? (
-              <button type="button" className="btn btn-ghost btn-sm timeline-load-older-btn" disabled={loadingOlder} onClick={loadEarlierEntries}>
+              <Button variant="ghost" size="sm" pending={loadingOlder} className="timeline-load-older-btn" onClick={loadEarlierEntries}>
                 {loadingOlder ? t('conv.timeline.loadingHistory') : t('conv.timeline.loadEarlier')}
-              </button>
+              </Button>
             ) : null}
             {historyError ? <p className="callout callout-error" role="alert">{historyError}</p> : null}
             {loading ? (
-              <div className="timeline-loading-state">
-                <HelmxIcon name="loader" size={14} className="spin-slow" />
-                {t('conv.timeline.loadingConversation')}
-              </div>
+              <LoadingState label={t('conv.timeline.loadingConversation')} iconSize={14} className="timeline-loading-state" />
             ) : null}
             {showEmptyState ? (
               <div className="timeline-empty-state">

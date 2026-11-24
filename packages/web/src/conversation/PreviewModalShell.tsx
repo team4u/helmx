@@ -1,5 +1,8 @@
 import { useState, type ReactNode, type RefObject } from 'react'
 import {
+  Badge,
+  Button,
+  Callout,
   CopyButton,
   Dialog,
   DialogClose,
@@ -8,6 +11,8 @@ import {
   DialogPortal,
   DialogTitle,
   HelmxIcon,
+  IconButton,
+  LoadingState,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'
@@ -77,56 +82,64 @@ export function PreviewModalShell({
                   {title}
                 </DialogTitle>
                 {state.phase === 'loaded' ? (
-                  <span className="badge badge-neutral mono tabular-nums">{formatBytes(state.blob.size)}</span>
+                  <Badge tone="neutral" mono className="tabular-nums">{formatBytes(state.blob.size)}</Badge>
                 ) : fallbackSize !== undefined ? (
-                  <span className="badge badge-neutral mono tabular-nums">{formatBytes(fallbackSize)}</span>
+                  <Badge tone="neutral" mono className="tabular-nums">{formatBytes(fallbackSize)}</Badge>
                 ) : null}
                 {headerBadges}
               </span>
               <span className="preview-modal-actions">
                 {headerActions}
                 {!isMobile ? (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
+                  <Button
+                    size="sm"
+                    icon={<HelmxIcon name={desktopFullscreen ? 'minimize-2' : 'maximize-2'} size={12} />}
                     onClick={() => setDesktopFullscreen((v) => !v)}
                     title={desktopFullscreen ? t('conv.artifact.windowModeTitle') : t('conv.artifact.fullscreenTitle')}
                   >
-                    <HelmxIcon name={desktopFullscreen ? 'minimize-2' : 'maximize-2'} size={12} />
                     {desktopFullscreen ? t('conv.artifact.windowLabel') : t('conv.pane.fullscreen')}
-                  </button>
+                  </Button>
                 ) : null}
                 {copyText !== undefined && copyText !== null ? (
                   <CopyButton text={copyText} label={isMobile ? undefined : t('conv.artifact.copy')} className="btn btn-sm" />
                 ) : null}
-                <button type="button" className="btn btn-sm" onClick={onDownload} title={t('common.download')}>
-                  <HelmxIcon name="download" size={12} />
-                  {!isMobile ? t('common.download') : null}
-                </button>
+                {isMobile ? (
+                  <IconButton
+                    variant="default"
+                    size="sm"
+                    icon={<HelmxIcon name="download" size={12} />}
+                    label={t('common.download')}
+                    onClick={onDownload}
+                  />
+                ) : (
+                  <Button
+                    size="sm"
+                    icon={<HelmxIcon name="download" size={12} />}
+                    onClick={onDownload}
+                    title={t('common.download')}
+                  >
+                    {t('common.download')}
+                  </Button>
+                )}
                 <DialogClose asChild>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-icon-sm"
+                  <IconButton
+                    icon={<HelmxIcon name="x" size={14} />}
+                    variant="ghost"
+                    size="sm"
                     title={t('conv.artifact.closeTitle')}
                     aria-label={t('conv.artifact.closeAria')}
-                  >
-                    <HelmxIcon name="x" size={14} />
-                  </button>
+                  />
                 </DialogClose>
               </span>
             </div>
             <div className="modal-body preview-modal-body" ref={modalBodyRef}>
               {state.phase === 'loading' ? (
-                <div className="preview-modal-loading">
-                  <HelmxIcon name="loader" size={14} className="spin-slow" />
-                  {loadingLabel}
-                </div>
+                <LoadingState label={loadingLabel} iconSize={14} className="preview-modal-loading" />
               ) : null}
               {state.phase === 'error' ? (
-                <div className="callout callout-error">
-                  <HelmxIcon name="alert-circle" size={13} />
-                  <span>{errorLabel}</span>
-                </div>
+                <Callout tone="err">
+                  <span className="callout-text">{errorLabel}</span>
+                </Callout>
               ) : null}
               {children}
             </div>

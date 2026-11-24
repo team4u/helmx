@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { Button, ErrorText } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
 import { useNodes, useStoreActions } from '../lib/store-context.js'
@@ -133,22 +133,23 @@ export function SessionEnvBar({
       />
       {blocked ? (
         <span className="composer-env-actions">
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            disabled={saving || validationError !== null}
+          <Button
+            variant="primary"
+            size="sm"
+            icon="check"
+            pending={saving}
+            disabled={validationError !== null}
             onClick={() => void save()}
           >
-            {saving ? <HelmxIcon name="loader" size={11} className="spin-slow" /> : <HelmxIcon name="check" size={11} />}
             {t('common.save')}
-          </button>
-          <button type="button" className="btn btn-sm" disabled={saving} onClick={cancel}>
+          </Button>
+          <Button size="sm" disabled={saving} onClick={cancel}>
             {t('common.cancel')}
-          </button>
+          </Button>
         </span>
       ) : null}
       {error !== null ? (
-        <span className="composer-env-error" role="alert" title={error}>{error}</span>
+        <ErrorText live className="composer-env-error" title={error}>{error}</ErrorText>
       ) : draftNode !== undefined && !draftNode.online && draft.nodeId !== 'local' ? (
         <span className="composer-env-warn">{t('composer.env.nodeOfflineAfterSave')}</span>
       ) : null}

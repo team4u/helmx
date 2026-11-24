@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ArtifactMetadata, ConversationSummary } from '@helmx/protocol/browser'
-import { EmptyState, HelmxIcon, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
+import { Badge, Button, EmptyState, HelmxIcon, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import {
   useConversationArtifacts,
   useConversationDetail,
@@ -105,9 +105,9 @@ function ArtifactCard({
           <span className="artifact-card-name">{artifact.name}</span>
         </button>
         <div className="artifact-card-meta">
-          <span className={artifact.kind === 'registered' ? 'badge badge-accent' : 'badge badge-neutral'}>
+          <Badge tone={artifact.kind === 'registered' ? 'accent' : 'neutral'}>
             {artifactKindLabel(artifact.kind, t)}
-          </span>
+          </Badge>
           <span
             className="artifact-card-format"
             title={mimeRedundant ? artifact.mimeType : undefined}
@@ -126,27 +126,29 @@ function ArtifactCard({
         </div>
       </div>
       <div className="artifact-card-actions">
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs artifact-action-btn"
+        <Button
+          variant="ghost"
+          size="xs"
+          icon="eye"
+          className="artifact-action-btn"
           aria-label={t('conv.attachment.previewName', { name: artifact.name })}
           title={t('conv.workbench.preview')}
           onClick={() => onPreview(artifact)}
         >
-          <HelmxIcon name="eye" size={12} />
-          <span>{t('conv.workbench.preview')}</span>
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs artifact-action-btn"
+          {t('conv.workbench.preview')}
+        </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          icon="download"
+          pending={isDownloading}
+          className="artifact-action-btn"
           aria-label={t('conv.workbench.downloadName', { name: artifact.name })}
           title={t('common.download')}
-          disabled={isDownloading}
           onClick={() => onDownload(artifact)}
         >
-          <HelmxIcon name={isDownloading ? 'loader' : 'download'} size={12} />
-          <span>{isDownloading ? t('conv.workbench.downloading') : t('common.download')}</span>
-        </button>
+          {isDownloading ? t('conv.workbench.downloading') : t('common.download')}
+        </Button>
       </div>
     </div>
   )
@@ -193,7 +195,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
       <section className="artifact-section" aria-label={t('conv.workbench.registeredSectionAria')}>
         <div className="artifact-section-head">
           <span className="artifact-section-title">{t('conv.workbench.deliverablesTitle')}</span>
-          <span className="badge badge-neutral tabular-nums">{deliverables.length}</span>
+          <Badge tone="neutral" className="tabular-nums">{deliverables.length}</Badge>
         </div>
         {deliverables.length === 0 ? (
           <div className="artifact-empty-hint">{t('conv.workbench.noDeliverables')}</div>
@@ -223,7 +225,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
           >
             <HelmxIcon name={spillExpanded ? 'chevron-down' : 'chevron-right'} size={13} />
             <span className="artifact-spill-title">{t('conv.workbench.spillTitle')}</span>
-            <span className="badge badge-neutral tabular-nums">{spills.length}</span>
+            <Badge tone="neutral" className="tabular-nums">{spills.length}</Badge>
             <span className="artifact-spill-hint">{spillExpanded ? t('common.collapse') : t('conv.workbench.clickToExpand')}</span>
           </button>
           {spillExpanded ? (
@@ -380,7 +382,7 @@ export function WorkbenchView(props: WorkbenchViewProps) {
         value={activeTab}
         onValueChange={handleTabChange}
         variant="underline"
-        style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+        className="workbench-tabs-root"
       >
         <TabsList asChild>
           <div className="tabs-bar">
@@ -393,9 +395,12 @@ export function WorkbenchView(props: WorkbenchViewProps) {
                 >
                   <span>{tab.label}</span>
                   {tab.count > 0 ? (
-                    <span className={`badge ${tab.tone === 'warn' ? 'badge-warn' : tab.tone === 'accent' ? 'badge-accent' : 'badge-neutral'} tabular-nums`}>
+                    <Badge
+                      tone={tab.tone === 'warn' ? 'warn' : tab.tone === 'accent' ? 'accent' : 'neutral'}
+                      className="tabular-nums"
+                    >
                       {tab.count}
-                    </span>
+                    </Badge>
                   ) : null}
                 </TabsTrigger>
               ))}
@@ -439,7 +444,7 @@ export function WorkbenchView(props: WorkbenchViewProps) {
       {footerParts.length > 0 ? (
         <div className="workbench-footer">
           {footerParts.map((part) => (
-            <span key={part} className="badge badge-neutral">{part}</span>
+            <Badge key={part} tone="neutral">{part}</Badge>
           ))}
         </div>
       ) : null}

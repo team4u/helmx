@@ -1,6 +1,6 @@
 import { memo, useContext, useMemo, useState } from 'react'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
-import { CopyButton, HelmxIcon, ToolActivityContext, useSharedNowMs } from '@helmx/plugin-client'
+import { CopyButton, HelmxIcon, IconButton, ToolActivityContext, useSharedNowMs } from '@helmx/plugin-client'
 import { MarkdownView } from './MarkdownView.js'
 import { StepGroup, TraceRow } from './TimelineRows.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'
@@ -256,27 +256,24 @@ function AssistantTurnContent({
             <span className="msg-hover-bar">
               {lastText !== '' ? <CopyButton text={lastText} /> : null}
               {isLatestTurn && onRegenerate !== undefined ? (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  title={t('conv.turn.regenerate')}
-                  aria-label={t('conv.turn.regenerate')}
-                  disabled={regenerating}
+                <IconButton
+                  icon={<HelmxIcon name="rotate-cw" size={12} />}
+                  variant="ghost"
+                  size="xs"
+                  pending={regenerating}
+                  label={t('conv.turn.regenerate')}
                   onClick={() => void regenerateTurn()}
-                >
-                  <HelmxIcon name={regenerating ? 'loader' : 'rotate-cw'} size={12} className={regenerating ? 'spin-slow' : undefined} />
-                </button>
+                />
               ) : null}
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                title={t('conv.turn.forkFromHere')}
-                aria-label={t('conv.turn.forkFromHere')}
-                disabled={forking || turn.entryIds.length === 0}
+              <IconButton
+                icon={<HelmxIcon name="git-fork" size={12} />}
+                variant="ghost"
+                size="xs"
+                pending={forking}
+                disabled={turn.entryIds.length === 0}
+                label={t('conv.turn.forkFromHere')}
                 onClick={() => void forkFromHere()}
-              >
-                <HelmxIcon name={forking ? 'loader' : 'git-fork'} size={12} />
-              </button>
+              />
             </span>
           ) : null}
         </div>

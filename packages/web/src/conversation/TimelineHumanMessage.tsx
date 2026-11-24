@@ -3,7 +3,7 @@
  */
 import { memo, useId, useState } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { CopyButton, HelmxIcon } from '@helmx/plugin-client'
+import { CopyButton, HelmxIcon, IconButton } from '@helmx/plugin-client'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatFullTimestamp, formatMessageTime } from '../lib/format.js'
@@ -146,28 +146,24 @@ export const TimelineHumanMessage = memo(function TimelineHumanMessage({
         <span className="msg-hover-bar">
           <CopyButton text={item.text} />
           {item.origin === 'human' ? (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              title={item.queuedMode !== undefined ? t('conv.human.withdrawQueueAndEdit') : t('conv.human.editAndResend')}
-              aria-label={item.queuedMode !== undefined ? t('conv.human.withdrawQueueAndEdit') : t('conv.human.editAndResend')}
-              disabled={withdrawing}
+            <IconButton
+              icon={<HelmxIcon name="edit" size={12} />}
+              variant="ghost"
+              size="xs"
+              pending={withdrawing}
+              label={item.queuedMode !== undefined ? t('conv.human.withdrawQueueAndEdit') : t('conv.human.editAndResend')}
               onClick={() => void editRequest()}
-            >
-              <HelmxIcon name={withdrawing ? 'loader' : 'edit'} size={12} className={withdrawing ? 'spin-slow' : undefined} />
-            </button>
+            />
           ) : null}
           {item.queuedMode === undefined ? (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              title={t('conv.human.forkFromMessage')}
-              aria-label={t('conv.human.forkFromMessage')}
-              disabled={forking}
+            <IconButton
+              icon={<HelmxIcon name="git-fork" size={12} />}
+              variant="ghost"
+              size="xs"
+              pending={forking}
+              label={t('conv.human.forkFromMessage')}
               onClick={() => void forkFromHere()}
-            >
-              <HelmxIcon name={forking ? 'loader' : 'git-fork'} size={12} />
-            </button>
+            />
           ) : null}
         </span>
         {hasHumanTime ? (

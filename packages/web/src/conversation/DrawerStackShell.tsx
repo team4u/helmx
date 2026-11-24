@@ -12,12 +12,14 @@
  */
 import { Activity, Suspense, lazy, useEffect, useRef } from 'react'
 import {
+  Button,
   Dialog,
   DialogContent,
   DialogOverlay,
   DialogPortal,
   DialogTitle,
   HelmxIcon,
+  IconButton,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -198,16 +200,17 @@ export function DrawerStackShell({ activeConversationId, inline = false }: Drawe
           <div className="drawer-stack-header">
             <div className="drawer-stack-nav">
               {prevLabel !== undefined ? (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost drawer-stack-back-btn"
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon="arrow-left"
+                  className="drawer-stack-back-btn"
                   aria-label={t('conv.drawer.backAria', { label: prevLabel })}
                   title={t('conv.drawer.backAria', { label: prevLabel })}
                   onClick={popDrawer}
                 >
-                  <HelmxIcon name="arrow-left" size={13} />
                   <span className="drawer-stack-back-label">{t('conv.drawer.backLabel')}</span>
-                </button>
+                </Button>
               ) : null}
               <nav className="drawer-stack-crumbs" aria-label={t('conv.drawer.breadcrumbAria')}>
                 {drawerStack.map((frame, index) => {
@@ -241,9 +244,11 @@ export function DrawerStackShell({ activeConversationId, inline = false }: Drawe
             <div className="drawer-stack-actions">
               {topFrame.kind === 'conversation' ? (
                 <>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost drawer-stack-split-btn"
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<HelmxIcon name="columns" size={12} />}
+                    className="drawer-stack-split-btn"
                     aria-label={t('conv.drawer.openSplit')}
                     title={t('conv.drawer.openSplit')}
                     onClick={() => {
@@ -251,32 +256,31 @@ export function DrawerStackShell({ activeConversationId, inline = false }: Drawe
                       closeAllDrawers()
                     }}
                   >
-                    <HelmxIcon name="columns" size={12} />
                     <span className="pane-action-label">{t('conv.drawer.splitLabel')}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost conversation-drawer-primary-btn drawer-stack-fullscreen-btn"
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<HelmxIcon name="external-link" size={12} />}
+                    className="conversation-drawer-primary-btn drawer-stack-fullscreen-btn"
                     aria-label={t('conv.pane.openFullscreen')}
                     title={t('conv.pane.openFullscreenTitle')}
                     onClick={() => {
                       openTarget({ kind: 'conversation', conversationId: topFrame.conversationId })
                     }}
                   >
-                    <HelmxIcon name="external-link" size={12} />
                     <span className="pane-action-label">{t('conv.pane.fullscreen')}</span>
-                  </button>
+                  </Button>
                 </>
               ) : null}
-              <button
-                type="button"
-                className="btn btn-ghost btn-icon-sm drawer-stack-close-btn"
-                aria-label={t('conv.drawer.closeAll')}
-                title={t('conv.drawer.closeAll')}
+              <IconButton
+                icon={<HelmxIcon name="x" size={14} />}
+                variant="ghost"
+                size="sm"
+                className="drawer-stack-close-btn"
+                label={t('conv.drawer.closeAll')}
                 onClick={closeAllDrawers}
-              >
-                <HelmxIcon name="x" size={14} />
-              </button>
+              />
             </div>
           </div>
 

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationAttachmentRef, ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
 import {
+  Badge,
+  Button,
   ConfirmDialog,
   DropdownMenu,
   DropdownMenuContent,
@@ -10,11 +12,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   HelmxIcon,
+  IconButton,
+  Input,
   Popover,
   PopoverContent,
   PopoverTrigger,
   Tooltip,
   useSharedNowMs,
+  type BadgeTone,
 } from '@helmx/plugin-client'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import {
@@ -307,9 +312,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         <div className="pane-error-row">
           <p>{t('conv.pane.loadFailed', { id: conversationId, error: detailError })}</p>
           <span className="pane-error-actions">
-            <button className="btn" onClick={() => void loadConversationDetail(conversationId, true)}>{t('common.retry')}</button>
+            <Button onClick={() => void loadConversationDetail(conversationId, true)}>{t('common.retry')}</Button>
             {isDrawer && onCloseDrawer !== undefined ? (
-              <button type="button" className="btn btn-sm btn-ghost conversation-drawer-close-btn" aria-label={t('conv.pane.closeDrawerAria')} onClick={onCloseDrawer}>{t('common.close')}</button>
+              <Button size="sm" variant="ghost" className="conversation-drawer-close-btn" aria-label={t('conv.pane.closeDrawerAria')} onClick={onCloseDrawer}>{t('common.close')}</Button>
             ) : isSplit && onCloseSplit !== undefined ? <CloseSplitButton onCloseSplit={onCloseSplit} /> : null}
           </span>
         </div>
@@ -319,13 +324,18 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
 
   if (conversation === undefined) {
     return (
-      <div className={isSplit ? 'helmx-split-pane' : 'helmx-pane'} style={{ alignItems: 'center', justifyContent: 'center', color: 'var(--fg-muted)', fontSize: 12 }}>
+      <div className={`${isSplit ? 'helmx-split-pane' : 'helmx-pane'} pane-loading`}>
         {t('conv.pane.loading', { id: conversationId })}
         {isDrawer && onCloseDrawer !== undefined ? (
           <span className="pane-loading-split-close">
-            <button type="button" className="btn btn-sm btn-ghost conversation-drawer-close-btn" aria-label={t('conv.pane.closeDrawerAria')} onClick={onCloseDrawer}>
-              <HelmxIcon name="x" size={14} />
-            </button>
+            <IconButton
+              icon={<HelmxIcon name="x" size={14} />}
+              variant="ghost"
+              size="sm"
+              className="conversation-drawer-close-btn"
+              aria-label={t('conv.pane.closeDrawerAria')}
+              onClick={onCloseDrawer}
+            />
           </span>
         ) : isSplit && onCloseSplit !== undefined ? (
           <span className="pane-loading-split-close">
@@ -339,7 +349,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const sendingPending = sendingPendingVisible(sendingInFlight, conversation.status)
   // 计数与色调由插件 public-doc badge 与内置产物共同决定。
   const workbenchCount = workbenchBadge.totalCount
-  const workbenchBadgeClass = workbenchBadge.tone === 'warn' ? 'badge-warn' : workbenchBadge.tone === 'accent' ? 'badge-accent' : 'badge-neutral'
+  const workbenchBadgeTone: BadgeTone = workbenchBadge.tone === 'warn' ? 'warn' : workbenchBadge.tone === 'accent' ? 'accent' : 'neutral'
   const currentNodeId = conversation.nodeId || 'local'
   const envSubtitle = formatEnvSubtitle(
     {
@@ -438,9 +448,10 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             </button>
           ) : null}
           {renaming ? (
-            <input
-              className="input"
-              style={{ maxWidth: 320, height: 26 }}
+            <Input
+              size="sm"
+              className="pane-title-rename-input"
+              aria-label={t('conv.pane.renameConversation')}
               value={titleDraft}
               autoFocus
               onChange={(e) => setTitleDraft(e.target.value)}
@@ -528,22 +539,23 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           {/* 抽屉是叠加在主语境之上的检视面（任务会话 / 子代理轨迹 / 总览直达共用），
               「新话题」属于主屏导航动作，在抽屉里只会把底下主屏带走——一律不渲染。 */}
           {canCreateThread && !isDrawer ? (
-            <button
-              type="button"
-              className="btn btn-sm"
+            <Button
+              size="sm"
+              icon={<HelmxIcon name="plus" size={12} />}
+              pending={actionPending === 'new-thread'}
               aria-label={t('conv.pane.newTopic')}
               title={t('conv.pane.newTopicTitle')}
-              disabled={actionPending !== null}
+              disabled={actionPending !== null && actionPending !== 'new-thread'}
               onClick={startNewThread}
             >
-              <HelmxIcon name={actionPending === 'new-thread' ? 'loader' : 'plus'} size={12} />
               <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
-            </button>
+            </Button>
           ) : null}
           {(workbenchCount > 0 || hasWorkbenchPanel || hasAnyArtifacts) ? (
-            <button
-              type="button"
-              className={`btn btn-sm${workbenchOpen && !isDrawer ? ' btn-primary' : ''}`}
+            <Button
+              size="sm"
+              variant={workbenchOpen && !isDrawer ? 'primary' : 'default'}
+              icon={<HelmxIcon name="panel-right" size={12} />}
               aria-label={workbenchCount > 0 ? t('conv.pane.workbenchWithCount', { count: workbenchCount }) : t('conv.pane.workbench')}
               title={t('conv.pane.workbenchTitle')}
               onClick={() => {
@@ -555,15 +567,20 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                 openWorkbenchDrawer({ tab: target, conversationId })
               }}
             >
-              <HelmxIcon name="panel-right" size={12} />
               <span className="pane-action-label">{t('conv.pane.workbench')}</span>
-              {workbenchCount > 0 && <span className={`badge ${workbenchBadgeClass} tabular-nums`}>{workbenchCount}</span>}
-            </button>
+              {workbenchCount > 0 && (
+                <Badge tone={workbenchBadgeTone} className="tabular-nums">
+                  {workbenchCount}
+                </Badge>
+              )}
+            </Button>
           ) : null}
           {isDrawer && onCloseDrawer !== undefined ? (
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost conversation-drawer-primary-btn"
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<HelmxIcon name="external-link" size={12} />}
+              className="conversation-drawer-primary-btn"
               aria-label={t('conv.pane.openFullscreen')}
               title={t('conv.pane.openFullscreenTitle')}
               onClick={() => {
@@ -571,9 +588,8 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                 openTarget({ kind: 'conversation', conversationId })
               }}
             >
-              <HelmxIcon name="external-link" size={12} />
               <span className="pane-action-label">{t('conv.pane.fullscreen')}</span>
-            </button>
+            </Button>
           ) : isSplit && onCloseSplit !== undefined ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
@@ -593,16 +609,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               }}
             >
               <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  aria-label={t('conv.pane.moreActions')}
-                  title={t('conv.pane.moreActions')}
-                  aria-expanded={moreOpen}
+                <IconButton
                   ref={moreButtonRef}
-                >
-                  <HelmxIcon name="more" size={14} />
-                </button>
+                  icon={<HelmxIcon name="more" size={14} />}
+                  variant="ghost"
+                  size="sm"
+                  label={t('conv.pane.moreActions')}
+                  aria-expanded={moreOpen}
+                />
               </DropdownMenuTrigger>
               <DropdownMenuPortal>
                 <DropdownMenuContent
@@ -707,15 +721,16 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           </span>
           {isDrawer && onCloseDrawer !== undefined ? (
             <Tooltip content={t('conv.pane.closeChildDrawer')} side="bottom">
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost conversation-drawer-close-btn"
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<HelmxIcon name="x" size={13} />}
+                className="conversation-drawer-close-btn"
                 aria-label={t('conv.pane.closeDrawerAria')}
                 onClick={onCloseDrawer}
               >
-                <HelmxIcon name="x" size={13} />
                 <span className="pane-action-label">{t('common.close')}</span>
-              </button>
+              </Button>
             </Tooltip>
           ) : null}
         </div>
@@ -736,7 +751,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           {conversation.ownedBy !== undefined ? (
             <>
               <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
-              <span className="badge badge-neutral">{t('conv.pane.ownerBadge', { owner: conversation.ownedBy })}</span>
+              <Badge tone="neutral">{t('conv.pane.ownerBadge', { owner: conversation.ownedBy })}</Badge>
             </>
           ) : null}
         </div>

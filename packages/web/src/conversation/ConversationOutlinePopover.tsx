@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { HelmxIcon, Popover, PopoverContent, PopoverTrigger, useSharedNowMs } from '@helmx/plugin-client'
+import {
+  Badge,
+  Button,
+  HelmxIcon,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  SearchBox,
+  useSharedNowMs,
+} from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   formatDurationMs,
@@ -231,18 +240,18 @@ export function ConversationOutlinePopover({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={`btn btn-sm conversation-outline-trigger${open ? ' is-open' : ''}`}
+        <Button
+          size="sm"
+          icon={<HelmxIcon name="list-tree" size={12} />}
+          className={`conversation-outline-trigger${open ? ' is-open' : ''}`}
           aria-label={t('conv.outline.nav', { label: effectiveAccessibilityLabel })}
           title={triggerTitle ?? t('conv.outline.triggerTitle', { count: displayCount })}
         >
-          <HelmxIcon name="list-tree" size={12} />
           <span className="pane-action-label">{effectiveTriggerLabel}</span>
           {displayCount > 0 ? (
-            <span className="badge badge-neutral tabular-nums">{displayCount}</span>
+            <Badge tone="neutral" className="tabular-nums">{displayCount}</Badge>
           ) : null}
-        </button>
+        </Button>
       </PopoverTrigger>
       {!forceMount || open ? (
       <PopoverContent
@@ -265,31 +274,19 @@ export function ConversationOutlinePopover({
         onKeyDown={handleKeyDown}
       >
           <div className="conversation-outline-header">
-            <div className="search-box conversation-outline-search">
-              <HelmxIcon name="search" size={13} />
-              <input
-                ref={searchInputRef}
-                type="text"
-                aria-label={t('conv.outline.filter', { label: effectiveAccessibilityLabel })}
-                placeholder={effectiveSearchPlaceholder}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-              {query !== '' ? (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-icon-xs"
-                  aria-label={t('conv.outline.clearSearchAria')}
-                  title={t('conv.outline.clearSearch')}
-                  onClick={() => {
-                    setQuery('')
-                    searchInputRef.current?.focus()
-                  }}
-                >
-                  <HelmxIcon name="x" size={11} />
-                </button>
-              ) : null}
-            </div>
+            <SearchBox
+              className="search-box conversation-outline-search"
+              inputRef={searchInputRef}
+              value={query}
+              onChange={setQuery}
+              placeholder={effectiveSearchPlaceholder}
+              ariaLabel={t('conv.outline.filter', { label: effectiveAccessibilityLabel })}
+              clearLabel={t('conv.outline.clearSearchAria')}
+              clearButtonClassName="btn btn-ghost btn-icon-xs"
+              icon={<HelmxIcon name="search" size={13} />}
+              clearIcon={<HelmxIcon name="x" size={11} />}
+              onCleared={() => searchInputRef.current?.focus()}
+            />
             {hasFilterableNodes && showModeToggle ? (
               <div className="segmented-control conversation-outline-mode" role="group" aria-label={t('conv.outline.modeSwitch')}>
                 {(
@@ -321,15 +318,16 @@ export function ConversationOutlinePopover({
 
           {hasEarlierHistory && onLoadEarlierHistory !== undefined ? (
             <div className="conversation-outline-earlier-bar">
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs conversation-outline-earlier-btn"
-                disabled={loadingEarlierHistory}
+              <Button
+                variant="ghost"
+                size="xs"
+                icon={<HelmxIcon name="arrow-up" size={11} />}
+                pending={loadingEarlierHistory}
+                className="conversation-outline-earlier-btn"
                 onClick={() => onLoadEarlierHistory()}
               >
-                <HelmxIcon name={loadingEarlierHistory ? 'loader' : 'arrow-up'} size={11} className={loadingEarlierHistory ? 'spin-slow' : undefined} />
                 {loadingEarlierHistory ? t('conv.outline.loadingEarlier') : t('conv.outline.loadEarlier')}
-              </button>
+              </Button>
             </div>
           ) : null}
 

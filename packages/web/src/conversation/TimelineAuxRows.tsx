@@ -4,7 +4,7 @@
  */
 import { useState } from 'react'
 import type { AskSpec, ConversationSummary } from '@helmx/protocol/browser'
-import { HelmxIcon, useSharedNowMs } from '@helmx/plugin-client'
+import { Button, HelmxIcon, useSharedNowMs } from '@helmx/plugin-client'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatStopwatchMs, resolveConversationTiming } from '../lib/format.js'
@@ -120,32 +120,32 @@ export function TurnErrorNotice({
         {editTarget !== undefined ? (
           <>
             {' '}
-            <button
-              type="button"
-              className="btn btn-primary btn-xs"
+            <Button
+              variant="primary"
+              size="xs"
+              icon="rotate-cw"
+              pending={retrying}
               title={t('conv.turnFailed.retryTitle')}
               aria-label={t('conv.turnFailed.retryTitle')}
-              disabled={retrying}
               onClick={() => {
                 setRetrying(true)
                 void onRetryTurn(editTarget).finally(() => setRetrying(false))
               }}
             >
-              <HelmxIcon name={retrying ? 'loader' : 'rotate-cw'} size={12} className={retrying ? 'spin-slow' : undefined} />
               {t('conv.turnFailed.retryNow')}
-            </button>
+            </Button>
             {' '}
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<HelmxIcon name="edit" size={12} />}
               title={t('conv.turnFailed.editLatest')}
               aria-label={t('conv.turnFailed.editLatest')}
               disabled={retrying}
               onClick={() => onRequestEdit(editTarget)}
             >
-              <HelmxIcon name="edit" size={12} />
               {t('conv.human.editAndResend')}
-            </button>
+            </Button>
           </>
         ) : null}
       </span>
