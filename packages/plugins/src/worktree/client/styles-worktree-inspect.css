@@ -32,13 +32,6 @@
   padding: 0 5px;
 }
 
-.worktree-inspect-error {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-}
-
 .worktree-inspect-empty {
   font-size: 11px;
   color: var(--fg-subtle);
@@ -59,11 +52,4 @@
 .worktree-inspect-note {
   font-size: 11px;
   color: var(--fg-muted);
-}
-
-.worktree-inspect-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
 }

@@ -198,7 +198,9 @@ test('单卡后台子代理 Resume：派发 run({ resumeFromRunId, conversationI
   })
   const ui = h.mountNode(e(WorkflowWorkbenchPanel, { conversation: parent }))
   try {
-    const resumeBtn = [...ui.container.querySelectorAll('.wf-node-actions button')].find((b) => (b.textContent ?? '').includes('Resume')) as HTMLButtonElement | undefined
+    const resumeBtn = [...ui.container.querySelectorAll('.wf-node-actions button')].find((b) =>
+      (b.getAttribute('aria-label') ?? b.textContent ?? '').includes('Resume'),
+    ) as HTMLButtonElement | undefined
     assert.ok(resumeBtn !== undefined)
     await act(async () => {
       resumeBtn.click()
@@ -218,7 +220,9 @@ test('单卡后台子代理 Resume：派发 run({ resumeFromRunId, conversationI
 
     h.setRuns(1, [{ ...failedSub, resumedByRunId: 'wf_sub_resumed' }])
     assert.equal(
-      [...ui.container.querySelectorAll('.wf-node-actions button')].some((b) => (b.textContent ?? '').includes('Resume')),
+      [...ui.container.querySelectorAll('.wf-node-actions button')].some((b) =>
+        (b.getAttribute('aria-label') ?? b.textContent ?? '').includes('Resume'),
+      ),
       false,
       'resumedByRunId 已接管后隐藏恢复按钮',
     )

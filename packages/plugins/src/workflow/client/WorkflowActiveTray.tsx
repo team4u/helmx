@@ -8,9 +8,10 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helmx/protocol'
 import {
+  Badge,
+  Button,
   DockTray,
   DockTrayRow,
-  HelmxIcon,
   formatStopwatchMs,
   resolveLocalizedText,
   useConversation,
@@ -159,9 +160,9 @@ function ActiveTrayInner(props: {
         idText={item.conversationId !== undefined && !item.isFallbackTitle ? `#${item.conversationId}` : undefined}
         badge={
           item.progress !== undefined ? (
-            <span className="badge badge-neutral dock-tray-badge tabular-nums">
+            <Badge tone="neutral" className="dock-tray-badge tabular-nums">
               {`${item.progress.done}/${item.progress.total}`}
-            </span>
+            </Badge>
           ) : undefined
         }
         elapsed={itemElapsed}
@@ -177,17 +178,17 @@ function ActiveTrayInner(props: {
         openAriaLabel={openAria}
         actions={
           item.canAbort && item.runId !== undefined ? (
-            <button
-              type="button"
-              className="btn btn-xs btn-danger"
+            <Button
+              variant="danger"
+              size="xs"
+              icon="square"
               disabled={abortCtl.pending}
               title={t(COPY.abort)}
               aria-label={t(COPY.abort)}
               onClick={() => void abortCtl.run('abort', { runId: item.runId! }, { key: `abort:${item.runId!}` })}
             >
-              <HelmxIcon name="square" size={11} />
               <span className="dock-tray-action-label">{t(COPY.abort)}</span>
-            </button>
+            </Button>
           ) : undefined
         }
       />
@@ -206,25 +207,26 @@ function ActiveTrayInner(props: {
       statusLabel={statusLabel(hasBlocked ? 'blocked' : 'working', locale)}
       badge={
         singleItem?.progress !== undefined ? (
-          <span className="badge badge-neutral dock-tray-badge tabular-nums">
+          <Badge tone="neutral" className="dock-tray-badge tabular-nums">
             {`${singleItem.progress.done}/${singleItem.progress.total}`}
-          </span>
+          </Badge>
         ) : undefined
       }
       count={expanded || singleItem === undefined ? countText : singleItem.title}
       frontline={frontline}
       elapsed={trayElapsed}
       barAction={
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs dock-tray-workbench dock-tray-workbench-btn"
+        <Button
+          variant="ghost"
+          size="xs"
+          icon="workflow"
+          className="dock-tray-workbench dock-tray-workbench-btn"
           title={t(COPY.trayWorkbench)}
           aria-label={t(COPY.trayWorkbench)}
           onClick={() => ctx.openWorkbench('tasks')}
         >
-          <HelmxIcon name="workflow" size={11} />
           <span className="dock-tray-action-label">{t(COPY.trayWorkbench)}</span>
-        </button>
+        </Button>
       }
     >
       {summary.items.map(renderRow)}

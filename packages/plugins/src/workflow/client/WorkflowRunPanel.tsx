@@ -7,15 +7,19 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkbenchPanelProps } from '@helmx/protocol'
 import {
+  Badge,
+  Button,
   Callout,
   EmptyState,
   HelmxIcon,
+  Input,
   KvGrid,
   LoadingState,
   MarkdownText,
   PopoverContent,
   PopoverRoot,
   PopoverTrigger,
+  Stack,
   StatusLight,
   formatCompactTimestamp,
   formatOffsetMs,
@@ -28,7 +32,6 @@ import {
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
 import {
   COPY,
-  SPIN_CLASS,
   actionFailedNotice,
   replayAcceptedNotice,
   replayMetaText,
@@ -198,29 +201,30 @@ function WorkflowRunCard(props: WorkflowRunCardProps): ReactNode {
           <span className="wf-run-title" title={displayName}>
             {displayName}
           </span>
-          {displayRun.savedName ? <span className="badge badge-neutral">{t(COPY.runSavedBadge)}</span> : null}
+          {displayRun.savedName ? <Badge tone="neutral">{t(COPY.runSavedBadge)}</Badge> : null}
           {totalNodes > 0 ? (
-            <span className="badge badge-neutral tabular-nums">{`${doneNodes}/${totalNodes}`}</span>
+            <Badge tone="neutral" className="tabular-nums">{`${doneNodes}/${totalNodes}`}</Badge>
           ) : null}
           <WorkflowTimingClock run={displayRun} className="wf-run-elapsed" />
         </button>
 
         <div className="wf-run-actions">
           {displayRun.status === 'running' ? (
-            <button
-              type="button"
-              className="btn btn-xs btn-danger"
+            <Button
+              variant="danger"
+              size="xs"
+              icon="square"
               disabled={actionCtl.pending}
               onClick={() => void actionCtl.run('abort', { runId: displayRun.id }, { key: `abort:${displayRun.id}` })}
             >
-              <HelmxIcon name="square" size={11} />
-              <span>{t(COPY.abort)}</span>
-            </button>
+              {t(COPY.abort)}
+            </Button>
           ) : null}
           {canResume ? (
-            <button
-              type="button"
-              className="btn btn-xs"
+            <Button
+              size="xs"
+              icon="rotate-cw"
+              pending={actionCtl.pendingKey === `resume:${displayRun.id}`}
               disabled={actionCtl.pending}
               onClick={() =>
                 void actionCtl.run(
@@ -236,17 +240,15 @@ function WorkflowRunCard(props: WorkflowRunCardProps): ReactNode {
                 )
               }
             >
-              <HelmxIcon name="rotate-cw" size={11} className={actionCtl.pendingKey === `resume:${displayRun.id}` ? SPIN_CLASS : undefined} />
-              <span>{t(COPY.resume)}</span>
-            </button>
+              {t(COPY.resume)}
+            </Button>
           ) : null}
           {canReplay ? (
             <PopoverRoot open={replayOpen} onOpenChange={setReplayOpen}>
               <PopoverTrigger asChild>
-                <button type="button" className="btn btn-xs" disabled={actionCtl.pending}>
-                  <HelmxIcon name="rotate-cw" size={11} />
-                  <span>{t(COPY.replay)}</span>
-                </button>
+                <Button size="xs" icon="rotate-cw" disabled={actionCtl.pending}>
+                  {t(COPY.replay)}
+                </Button>
               </PopoverTrigger>
               <PopoverContent align="end" className="wf-replay-popover">
                 <div className="wf-replay-form">
@@ -255,9 +257,11 @@ function WorkflowRunCard(props: WorkflowRunCardProps): ReactNode {
                   </div>
                   <div className="wf-replay-hint">{t(COPY.replayHint)}</div>
                   <div className="wf-replay-row">
-                    <input
+                    <Input
                       type="text"
+                      size="sm"
                       className="wf-replay-input"
+                      invalid={replayError !== undefined}
                       placeholder={t(COPY.replayArgsPlaceholder)}
                       value={replayArgs}
                       onChange={(e) => {
@@ -265,15 +269,15 @@ function WorkflowRunCard(props: WorkflowRunCardProps): ReactNode {
                         setReplayError(undefined)
                       }}
                     />
-                    <button
-                      type="button"
-                      className="btn btn-xs"
+                    <Button
+                      size="xs"
+                      icon="play"
+                      pending={actionCtl.pendingKey === `replay:${displayRun.id}`}
                       disabled={actionCtl.pending}
                       onClick={handleReplay}
                     >
-                      <HelmxIcon name="play" size={11} className={actionCtl.pendingKey === `replay:${displayRun.id}` ? SPIN_CLASS : undefined} />
-                      <span>{t(COPY.replaySubmit)}</span>
-                    </button>
+                      {t(COPY.replaySubmit)}
+                    </Button>
                   </div>
                   {replayError ? <Callout tone="err">{replayError}</Callout> : null}
                 </div>
@@ -303,7 +307,7 @@ function WorkflowRunCard(props: WorkflowRunCardProps): ReactNode {
                         <StatusLight status={executionLightStatus(section.status)} label={statusLabel(section.status, locale)} />
                         <span className="wf-phase-title">{section.title}</span>
                         {section.totalCount > 0 ? (
-                          <span className="badge badge-neutral tabular-nums">{`${section.doneCount}/${section.totalCount}`}</span>
+                          <Badge tone="neutral" className="tabular-nums">{`${section.doneCount}/${section.totalCount}`}</Badge>
                         ) : null}
                       </div>
                     ) : null}
@@ -341,10 +345,9 @@ function WorkflowRunCard(props: WorkflowRunCardProps): ReactNode {
               <div className="wf-result-box">
                 <div className="wf-result-header">
                   <span className="trace-section-label">{t(COPY.runResultSection)}</span>
-                  <button type="button" className="btn btn-ghost btn-xs" onClick={onToggleResult}>
-                    <HelmxIcon name={resultOpen ? 'chevron-down' : 'chevron-right'} size={11} />
-                    <span>{t(resultOpen ? COPY.runCollapseResult : COPY.runExpandResult)}</span>
-                  </button>
+                  <Button variant="ghost" size="xs" icon={resultOpen ? 'chevron-down' : 'chevron-right'} onClick={onToggleResult}>
+                    {t(resultOpen ? COPY.runCollapseResult : COPY.runExpandResult)}
+                  </Button>
                 </div>
                 {resultOpen ? (
                   inspected.loading ? (
@@ -352,9 +355,9 @@ function WorkflowRunCard(props: WorkflowRunCardProps): ReactNode {
                   ) : inspected.error ? (
                     <Callout tone="err">
                       <div>{inspected.error}</div>
-                      <button type="button" className="btn btn-xs" onClick={inspected.retry}>
+                      <Button size="xs" onClick={inspected.retry}>
                         {t(COPY.retry)}
-                      </button>
+                      </Button>
                     </Callout>
                   ) : typeof inspected.result === 'string' ? (
                     <MarkdownText text={inspected.result} />
@@ -461,30 +464,28 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
         <span className="wf-workbench-title">
           <HelmxIcon name="workflow" size={14} />
           <span>{t(COPY.workbenchTitle)}</span>
-          {tree.length > 0 ? <span className="badge badge-neutral tabular-nums">{tree.length}</span> : null}
+          {tree.length > 0 ? <Badge tone="neutral" className="tabular-nums">{tree.length}</Badge> : null}
         </span>
-        <div className="stack-row">
+        <Stack direction="horizontal" gap="sm" align="center" wrap>
           {conversationId !== undefined && resumableRuns.length > 0 ? (
-            <button
-              type="button"
-              className="btn btn-xs"
-              disabled={batchResumeCtl.pending}
+            <Button
+              size="xs"
+              icon="rotate-cw"
+              pending={batchResumeCtl.pending}
               title={t(COPY.workbenchResumeTitle)}
               onClick={handleResumeFailed}
             >
-              <HelmxIcon name="rotate-cw" size={12} className={batchResumeCtl.pending ? SPIN_CLASS : undefined} />
-              <span>{workbenchResumeFailedButton(resumableRuns.length, locale)}</span>
-            </button>
+              {workbenchResumeFailedButton(resumableRuns.length, locale)}
+            </Button>
           ) : null}
-          <button
-            type="button"
-            className="btn btn-xs"
+          <Button
+            size="xs"
+            icon="folder"
             onClick={() => ctx.openScreen(`screen:${ctx.pluginId}/library`)}
           >
-            <HelmxIcon name="folder" size={11} />
-            <span>{t(COPY.workbenchLibrary)}</span>
-          </button>
-        </div>
+            {t(COPY.workbenchLibrary)}
+          </Button>
+        </Stack>
       </div>
 
       {conversationId === undefined ? (
@@ -494,9 +495,9 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
       ) : runsStatus === 'error' && runs.length === 0 ? (
         <Callout tone="err">
           <div>{t(COPY.workbenchLoadError)}</div>
-          <button type="button" className="btn btn-xs" onClick={retryRuns}>
+          <Button size="xs" onClick={retryRuns}>
             {t(COPY.retry)}
-          </button>
+          </Button>
         </Callout>
       ) : tree.length === 0 ? (
         <EmptyState compact title={t(COPY.workbenchNoRuns)} />

@@ -7,8 +7,10 @@
 import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
+  Badge,
   Callout,
   HelmxIcon,
+  IconButton,
   KvGrid,
   PluginSlot,
   StatusLight,
@@ -23,7 +25,6 @@ import {
 import type { WorkflowNodeState, WorkflowRunSummary, WorktreeExecutionDescriptor } from '../../contracts.js'
 import {
   COPY,
-  SPIN_CLASS,
   actionFailedNotice,
   attemptBadge,
   resumeInitiatedNotice,
@@ -254,19 +255,18 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
         </span>
       ) : null}
       {isAction ? (
-        <span className="badge badge-neutral">
-          <span>{t(COPY.actionLabel)}</span>
-        </span>
+        <Badge tone="neutral">{t(COPY.actionLabel)}</Badge>
       ) : null}
       {node.worktree ? (
-        <span
-          className={`badge badge-neutral wf-wt-badge${worktreeIsManaged ? ' wf-wt-badge-compact' : ''}`}
+        <Badge
+          tone="neutral"
+          icon="git-branch"
+          className={`wf-wt-badge${worktreeIsManaged ? ' wf-wt-badge-compact' : ''}`}
           title={worktreeTooltip}
           aria-label={worktreeTooltip}
         >
-          <HelmxIcon name="git-branch" size={11} />
           {!worktreeIsManaged ? <span className="wf-wt-branch">{node.worktree.branch}</span> : null}
-        </span>
+        </Badge>
       ) : null}
       <ElapsedClock
         active={isRunning}
@@ -307,38 +307,34 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
 
         <div className="wf-node-actions">
           {convId !== undefined && hasDetailContent ? (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
+            <IconButton
+              variant="ghost"
+              size="xs"
+              icon={detailsOpen ? 'chevron-down' : 'chevron-right'}
               aria-expanded={detailsOpen}
               aria-controls={detailsId}
-              aria-label={t(detailsOpen ? COPY.collapseDetails : COPY.expandDetails)}
-              title={t(detailsOpen ? COPY.collapseDetails : COPY.expandDetails)}
+              label={t(detailsOpen ? COPY.collapseDetails : COPY.expandDetails)}
               onClick={() => setDetailsOpen((v) => !v)}
-            >
-              <HelmxIcon name={detailsOpen ? 'chevron-down' : 'chevron-right'} size={11} />
-            </button>
+            />
           ) : null}
           {showAbort && run !== undefined ? (
-            <button
-              type="button"
-              className="btn btn-xs btn-danger wf-node-icon-btn"
+            <IconButton
+              variant="danger"
+              size="xs"
+              icon="square"
               disabled={actionCtl.pending}
-              title={t(COPY.abort)}
-              aria-label={t(COPY.abort)}
+              label={t(COPY.abort)}
               onClick={() => void actionCtl.run('abort', { runId: run.id }, { key: `abort:${run.id}` })}
-            >
-              <HelmxIcon name="square" size={11} />
-              <span className="wf-sr-only">{t(COPY.abort)}</span>
-            </button>
+            />
           ) : null}
           {showResume && run !== undefined ? (
-            <button
-              type="button"
-              className="btn btn-xs wf-node-icon-btn"
+            <IconButton
+              variant="default"
+              size="xs"
+              icon="rotate-cw"
+              pending={actionCtl.pendingKey === `resume:${run.id}`}
               disabled={actionCtl.pending}
-              title={t(COPY.resume)}
-              aria-label={t(COPY.resume)}
+              label={t(COPY.resume)}
               onClick={() =>
                 void actionCtl.run(
                   'run',
@@ -352,10 +348,7 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
                   },
                 )
               }
-            >
-              <HelmxIcon name="rotate-cw" size={11} className={actionCtl.pendingKey === `resume:${run.id}` ? SPIN_CLASS : undefined} />
-              <span className="wf-sr-only">{t(COPY.resume)}</span>
-            </button>
+            />
           ) : null}
           {node.worktree !== undefined ? (
             <PluginSlot
@@ -377,14 +370,14 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
 
       {hasMetaRow ? (
         <div className="wf-node-meta">
-          {node.cached ? <span className="badge badge-warn">{t(COPY.runCachedBadge)}</span> : null}
+          {node.cached ? <Badge tone="warn">{t(COPY.runCachedBadge)}</Badge> : null}
           {node.attempt !== undefined && node.attempt > 1 ? (
-            <span className="badge badge-neutral">{attemptBadge(node.attempt, locale)}</span>
+            <Badge tone="neutral">{attemptBadge(node.attempt, locale)}</Badge>
           ) : null}
           {node.gate !== undefined ? (
-            <span className={`badge ${node.gate.ok ? 'badge-ok' : 'badge-err'}`}>
+            <Badge tone={node.gate.ok ? 'ok' : 'err'}>
               {t(node.gate.ok ? COPY.runGatePassed : COPY.runGateFailed)}
-            </span>
+            </Badge>
           ) : null}
           {stats.length > 0 ? <span className="wf-node-stats tabular-nums">{stats.join(' · ')}</span> : null}
         </div>

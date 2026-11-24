@@ -197,16 +197,6 @@
   white-space: nowrap;
 }
 
-.magpie-quota-account-badge {
-  flex-shrink: 0;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--bg-subtle);
-  color: var(--fg-muted);
-  font-size: 10.5px;
-  line-height: 1.5;
-}
-
 .magpie-quota-window-row {
   display: flex;
   align-items: center;

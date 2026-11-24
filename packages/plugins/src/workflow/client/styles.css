@@ -105,10 +105,6 @@
   min-width: 0;
 }
 
-.wf-workbench-head .stack-row {
-  flex-wrap: wrap;
-}
-
 .wf-workbench-title {
   display: inline-flex;
   align-items: center;
@@ -350,22 +346,6 @@
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
-}
-
-.wf-node-icon-btn {
-  padding: 0 5px;
-}
-
-.wf-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 .wf-node-meta {

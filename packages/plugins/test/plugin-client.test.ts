@@ -762,6 +762,10 @@ function createComponentHarness<P>(initialProps: P) {
     HelmxIcon: (props: Record<string, unknown>) => ({ type: 'HelmxIcon', props }),
     CopyButton: (props: Record<string, unknown>) => ({ type: 'CopyButton', props }),
     Callout: (props: Record<string, unknown>) => ({ type: 'Callout', props }),
+    Button: (props: Record<string, unknown>) => ({ type: 'Button', props }),
+    IconButton: (props: Record<string, unknown>) => ({ type: 'IconButton', props }),
+    Badge: (props: Record<string, unknown>) => ({ type: 'Badge', props }),
+    LoadingState: (props: Record<string, unknown>) => ({ type: 'LoadingState', props }),
     Dialog: (props: Record<string, unknown>) => ({ type: 'Dialog', props }),
     DialogPortal: (props: Record<string, unknown>) => ({ type: 'DialogPortal', props }),
     DialogOverlay: (props: Record<string, unknown>) => ({ type: 'DialogOverlay', props }),
@@ -1042,7 +1046,7 @@ test('MermaidCodeBlock 编译产物交互状态：加载态、chunk 失败后展
 
     const retryBtn = collectNodes(
       tree,
-      (n) => n.type === 'button' && collectText(n).includes('Retry'),
+      (n) => (n.type === 'button' || n.type === harness.ui.Button) && collectText(n).includes('Retry'),
     )[0]
     assert.ok(retryBtn && typeof retryBtn.props.onClick === 'function', '失败态必须提供 Retry 按钮')
 
@@ -1171,7 +1175,7 @@ test('MermaidPreviewModal 编译产物状态：独立按需加载 mermaid，失�
 
       const retryBtn = collectNodes(
         tree,
-        (n) => n.type === 'button' && collectText(n).includes('Retry'),
+        (n) => (n.type === 'button' || n.type === harness.ui.Button) && collectText(n).includes('Retry'),
       )[0]
       assert.ok(retryBtn && typeof retryBtn.props.onClick === 'function', '弹窗错误态应提供 Retry 按钮')
 

@@ -34,7 +34,6 @@
 }
 
 .sw-panel-head { flex-wrap: wrap; }
-.sw-panel-head-actions { gap: 6px; }
 
 .sw-panel-head-left {
   display: inline-flex;

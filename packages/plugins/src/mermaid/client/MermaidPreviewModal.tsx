@@ -1,8 +1,8 @@
 /** Fullscreen zoom/pan Mermaid preview modal (Radix Dialog, wheel zoom, pointer-capture pan, Esc close). */
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode, type WheelEvent } from 'react'
 import {
-  Callout, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle,
-  HelmxIcon, usePluginContext, usePluginLocale, usePluginTranslator,
+  Badge, Button, Callout, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle,
+  HelmxIcon, IconButton, usePluginContext, usePluginLocale, usePluginTranslator,
 } from '@helmx/plugin-client'
 import { renderMermaidSvg } from './mermaid-loader.ts'
 import { MERMAID_COPY as C, mermaidModalStatus } from './copy.ts'
@@ -92,19 +92,17 @@ export function MermaidPreviewModal({ code, svg, onClose }: { code: string; svg?
             <div className="modal-header mermaid-modal-header">
               <DialogTitle className="modal-title mermaid-modal-title">{t(C.previewTitle)}</DialogTitle>
               <div className="mermaid-modal-actions">
-                <span className="badge badge-neutral mono tabular-nums">{Math.round(scale * 100)}%</span>
-                <button type="button" className="btn btn-sm" onClick={() => zoomBy(STEP)} title={t(C.zoomInTitle)}><HelmxIcon name="zoom-in" size={12} /></button>
-                <button type="button" className="btn btn-sm" onClick={() => zoomBy(-STEP)} title={t(C.zoomOutTitle)}><HelmxIcon name="zoom-out" size={12} /></button>
-                <button type="button" className="btn btn-sm" onClick={resetView} title={t(C.resetTitle)}>{t(C.reset)}</button>
-                <button type="button" className="btn btn-sm" onClick={() => setView((v) => (v === 'diagram' ? 'source' : 'diagram'))}>
+                <Badge tone="neutral" mono className="tabular-nums">{Math.round(scale * 100)}%</Badge>
+                <IconButton variant="default" size="sm" icon="zoom-in" onClick={() => zoomBy(STEP)} label={t(C.zoomInTitle)} />
+                <IconButton variant="default" size="sm" icon="zoom-out" onClick={() => zoomBy(-STEP)} label={t(C.zoomOutTitle)} />
+                <Button size="sm" onClick={resetView} title={t(C.resetTitle)}>{t(C.reset)}</Button>
+                <Button size="sm" onClick={() => setView((v) => (v === 'diagram' ? 'source' : 'diagram'))}>
                   {view === 'diagram' ? t(C.viewSource) : t(C.viewDiagram)}
-                </button>
+                </Button>
                 <CopyButton text={code} label={t(C.copySource)} />
               </div>
               <DialogClose asChild>
-                <button type="button" className="btn btn-ghost btn-sm mermaid-modal-close" title={t(C.closeTitle)} aria-label={t(C.close)}>
-                  <HelmxIcon name="x" size={13} />
-                </button>
+                <IconButton variant="ghost" size="sm" icon="x" className="mermaid-modal-close" label={t(C.close)} title={t(C.closeTitle)} />
               </DialogClose>
             </div>
             <div className="modal-body modal-body-flush">
@@ -130,9 +128,9 @@ export function MermaidPreviewModal({ code, svg, onClose }: { code: string; svg?
                     <div className="mermaid-error-body">
                       <span className="selectable">{error}</span>
                       <div className="mermaid-error-actions">
-                        <button type="button" className="btn btn-sm" onClick={() => { setError(null); setRenderedSvg(null); setRetryCount((n) => n + 1) }}>
-                          <HelmxIcon name="refresh-cw" size={12} />{t(C.retry)}
-                        </button>
+                        <Button size="sm" icon="refresh-cw" onClick={() => { setError(null); setRenderedSvg(null); setRetryCount((n) => n + 1) }}>
+                          {t(C.retry)}
+                        </Button>
                       </div>
                     </div>
                   </Callout>

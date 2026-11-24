@@ -299,5 +299,5 @@ export function postDigestLine(body: string, maxChars = 120): string {
   return first.length <= maxChars ? first : `${first.slice(0, maxChars - 1)}…`
 }
 
-export const postKindBadgeClass = (k: BoardPostKind): string =>
-  k === 'done' ? 'badge-ok' : k === 'blocker' ? 'badge-err' : k === 'stall' || k === 'review' ? 'badge-warn' : k === 'brief' || k === 'handoff' ? 'badge-accent' : 'badge-neutral'
+export const postKindBadgeTone = (k: BoardPostKind): 'ok' | 'err' | 'warn' | 'accent' | 'neutral' =>
+  k === 'done' ? 'ok' : k === 'blocker' ? 'err' : k === 'stall' || k === 'review' ? 'warn' : k === 'brief' || k === 'handoff' ? 'accent' : 'neutral'
