@@ -1,6 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
-import { ConfirmDialog, DetailDrawer, HelmxIcon } from '@helmx/plugin-client'
+import {
+  Badge,
+  Button,
+  Callout,
+  ConfirmDialog,
+  DetailDrawer,
+  EmptyState,
+  MonoId,
+  Stack,
+} from '@helmx/plugin-client'
 import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -374,20 +383,20 @@ export function ModelDetailDrawer({
         titleClassName="break-word"
         titleExtra={
           isNewCustom ? (
-            <span className="badge badge-neutral">{t('models.customBadge')}</span>
+            <Badge tone="neutral">{t('models.customBadge')}</Badge>
           ) : (
             <>
               {provider?.configured ? (
-                <span className="badge badge-ok">{t('models.configured')}</span>
+                <Badge tone="ok">{t('models.configured')}</Badge>
               ) : (
-                <span className="badge badge-neutral">{t('models.notConfigured')}</span>
+                <Badge tone="neutral">{t('models.notConfigured')}</Badge>
               )}
-              {provider?.dynamic && <span className="badge badge-neutral">{t('models.dynamicSyncBadge')}</span>}
-              {provider?.custom && <span className="badge badge-neutral">{t('models.customBadge')}</span>}
+              {provider?.dynamic && <Badge tone="neutral">{t('models.dynamicSyncBadge')}</Badge>}
+              {provider?.custom && <Badge tone="neutral">{t('models.customBadge')}</Badge>}
             </>
           )
         }
-        meta={isNewCustom ? undefined : provider?.id}
+        meta={!isNewCustom && provider?.id ? <MonoId value={provider.id} /> : undefined}
         metaClassName="text-subtle break-word"
         aria-label={
           isNewCustom
@@ -398,7 +407,7 @@ export function ModelDetailDrawer({
         }
         closeLabel={t('common.close')}
         footer={
-          <div className="flex-row-between">
+          <Stack direction="horizontal" gap="sm" align="center" justify="between" className="flex-1">
             <div className="flex-1">
               {saveSuccess && (
                 <span className="text-subtle" role="status">
@@ -406,34 +415,29 @@ export function ModelDetailDrawer({
                 </span>
               )}
               {saveError && (
-                <div className="callout callout-error" role="alert">
-                  <HelmxIcon name="alert-circle" size={13} />
-                  <span className="callout-text">{saveError}</span>
-                </div>
+                <Callout tone="err">
+                  <span className="callout-text" role="alert">{saveError}</span>
+                </Callout>
               )}
             </div>
-            <button
-              type="button"
-              className="btn btn-primary"
+            <Button
+              variant="primary"
+              icon="check"
+              pending={saving}
               onClick={handleSaveProvider}
-              disabled={saving || (!isNewCustom && !provider)}
+              disabled={!isNewCustom && !provider}
             >
-              <HelmxIcon name="check" size={14} />
-              <span>
-                {saving
-                  ? t('models.saving')
-                  : isNewCustom
-                    ? t('models.custom.createAction')
-                    : t('models.saveConfig')}
-              </span>
-            </button>
-          </div>
+              {saving
+                ? t('models.saving')
+                : isNewCustom
+                  ? t('models.custom.createAction')
+                  : t('models.saveConfig')}
+            </Button>
+          </Stack>
         }
       >
         {!isNewCustom && !provider ? (
-          <div className="primary-center-empty">
-            <div className="primary-center-empty-text">{t('models.drawer.noSelection')}</div>
-          </div>
+          <EmptyState title={t('models.drawer.noSelection')} />
         ) : (
           <>
             <ProviderCredentialsSection

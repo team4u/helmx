@@ -1,6 +1,6 @@
 import type * as React from 'react'
 import { useEffect, useMemo, useState } from 'react'
-import { HelmxIcon, Select, type SelectOption } from '@helmx/plugin-client'
+import { Button, Callout, CardGrid, HelmxIcon, Select, Stack, type SelectOption } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useLocationTargets, useNodes, useSkills, useStoreActions } from '../lib/store-context.js'
 import { SystemCenterEmpty, SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
@@ -162,15 +162,14 @@ export function SkillCenter({
       icon="sparkles"
       title={t('skills.center.title')}
       headerActions={
-        <button
-          type="button"
-          className="btn btn-sm"
+        <Button
+          size="sm"
+          icon="refresh-cw"
           onClick={handleRefresh}
           title={scope === undefined ? t('skills.center.refreshTitle') : t('skills.scope.reloadTitle')}
         >
-          <HelmxIcon name="refresh-cw" size={12} />
           <span className="pane-action-label">{t('common.refresh')}</span>
-        </button>
+        </Button>
       }
       toolbar={
         <SystemCenterToolbar
@@ -203,36 +202,37 @@ export function SkillCenter({
         scope !== undefined ? (
           <div className="skill-scope-diagnostics">
             {scopeLoadError !== null && (
-              <div className="callout callout-error" role="alert">
-                <HelmxIcon name="alert-circle" size={13} />
-                <span className="callout-text">{t('skills.scope.loadFailed', { error: scopeLoadError })}</span>
-                <button type="button" className="btn btn-sm" onClick={() => setReloadSeq((seq) => seq + 1)}>
-                  <HelmxIcon name="rotate-ccw" size={12} />
-                  <span>{t('skills.scope.retry')}</span>
-                </button>
-              </div>
+              <Callout tone="err">
+                <Stack direction="horizontal" gap="sm" align="center" wrap>
+                  <span className="callout-text" role="alert">
+                    {t('skills.scope.loadFailed', { error: scopeLoadError })}
+                  </span>
+                  <Button size="sm" icon="rotate-ccw" onClick={() => setReloadSeq((seq) => seq + 1)}>
+                    {t('skills.scope.retry')}
+                  </Button>
+                </Stack>
+              </Callout>
             )}
             {scopeLoadError === null && nodeUnavailable !== undefined && (
-              <div className="callout callout-warn" role="alert">
-                <HelmxIcon name="alert-triangle" size={13} />
-                <span className="callout-text">{t('skills.scope.nodeUnavailable', { reason: nodeUnavailable })}</span>
-              </div>
+              <Callout tone="warn">
+                <span className="callout-text" role="alert">
+                  {t('skills.scope.nodeUnavailable', { reason: nodeUnavailable })}
+                </span>
+              </Callout>
             )}
             {disconnectedNotice && (
-              <div className="callout callout-warn" role="alert">
-                <HelmxIcon name="alert-triangle" size={13} />
-                <span className="callout-text">
+              <Callout tone="warn">
+                <span className="callout-text" role="alert">
                   {t('skills.scope.nodeOfflineWarning', { node: selectedNodeRecord.id })}
                 </span>
-              </div>
+              </Callout>
             )}
             {scopeLoadError === null && shadowedNodeSkillIds.length > 0 && (
-              <div className="callout" role="status">
-                <HelmxIcon name="layers" size={13} />
-                <span className="callout-text">
+              <Callout tone="info">
+                <span className="callout-text" role="status">
                   {t('skills.scope.shadowed', { ids: shadowedNodeSkillIds.join(', ') })}
                 </span>
-              </div>
+              </Callout>
             )}
             {scopeLoading && scopeLoadError === null && (
               <div className="skill-scope-loading text-subtle" role="status">
@@ -255,7 +255,7 @@ export function SkillCenter({
       }
     >
       {filteredSkills.length > 0 ? (
-        <div className="primary-center-grid">
+        <CardGrid minWidth="md" gap="md">
           {filteredSkills.map((skill) => (
             <SkillCard
               key={skill.id}
@@ -264,7 +264,7 @@ export function SkillCenter({
               onSelect={() => handleSelectSkill(skill.id)}
             />
           ))}
-        </div>
+        </CardGrid>
       ) : (
         <SystemCenterEmpty
           title={t('skills.center.emptyTitle')}

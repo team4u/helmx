@@ -10,14 +10,25 @@ import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/brow
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
 import {
+  Badge,
+  Button,
+  Callout,
+  Card,
   ConfirmDialog,
   DetailDrawer,
   EmptyState,
+  Field,
+  HelperText,
   HelmxIcon,
+  Input,
+  LoadingState,
   ModelPickerControl,
+  MonoId,
   MultiSelect,
   Select,
+  Stack,
   Switch,
+  Textarea,
 } from '@helmx/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalGroupedUi, useOptionalLocale, useOptionalNodes, useOptionalProfiles, useOptionalStoreActions } from '../lib/store-context.js'
@@ -130,7 +141,7 @@ export function PluginConfigForm({
   )
 
   if (entries.length === 0) {
-    return <div className="text-subtle">{t('plugins.config.empty')}</div>
+    return <HelperText>{t('plugins.config.empty')}</HelperText>
   }
 
   const save = async () => {
@@ -167,8 +178,8 @@ export function PluginConfigForm({
   }
 
   return (
-    <div className="flex-col">
-      <div className="config-fields flex-col">
+    <Stack direction="vertical" gap="sm">
+      <Stack direction="vertical" gap="sm" className="config-fields">
         {entries.map(([key, schema]) => {
           const fieldId = `helmx-plugin-config-${pluginId}-${key}`
           const source = config.sources?.[key]
@@ -176,27 +187,35 @@ export function PluginConfigForm({
           const isRequiredWithoutDefault = schema.required === true && schema.default === undefined
           const canReset =
             !isRequiredWithoutDefault && canResetConfigField(schema, source, config.values?.[key])
+          const isBoolean = schema.type === 'boolean'
+          const fieldTitle =
+            schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key
           return (
-            <div key={key} className="form-grid plugin-config-row">
-              <label htmlFor={fieldId} className="form-grid-label plugin-config-field-label">
-                {schema.secret === true && <HelmxIcon name="lock" size={11} />}
-                <span className="plugin-config-field-name">
-                  {schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key}
+            <Field
+              key={key}
+              layout="horizontal"
+              htmlFor={isBoolean ? false : fieldId}
+              required={schema.required === true}
+              className="plugin-config-row"
+              label={
+                <span className="plugin-config-field-label">
+                  {schema.secret === true && <HelmxIcon name="lock" size={11} />}
+                  <span className="plugin-config-field-name">{fieldTitle}</span>
+                  {source === 'configured' && (
+                    <Badge tone="neutral" className="plugin-config-source-tag" title={t('plugins.config.configuredTitle')}>
+                      {t('plugins.config.configured')}
+                    </Badge>
+                  )}
+                  {source === 'default' && (
+                    <span className="text-subtle plugin-config-source-tag" title={t('plugins.config.defaultTitle')}>
+                      {t('common.default')}
+                    </span>
+                  )}
                 </span>
-                {schema.required && <span className="text-err">*</span>}
-                {source === 'configured' && (
-                  <span className="badge badge-neutral plugin-config-source-tag" title={t('plugins.config.configuredTitle')}>
-                    {t('plugins.config.configured')}
-                  </span>
-                )}
-                {source === 'default' && (
-                  <span className="text-subtle plugin-config-source-tag" title={t('plugins.config.defaultTitle')}>
-                    {t('common.default')}
-                  </span>
-                )}
-              </label>
+              }
+            >
               <div className="plugin-config-field-value">
-                {schema.type === 'boolean' ? (
+                {isBoolean ? (
                   <Switch
                     id={fieldId}
                     checked={values[key] === true}
@@ -205,12 +224,9 @@ export function PluginConfigForm({
                   />
                 ) : schema.type === 'string[]' && schema.enum !== undefined ? (
                   <MultiSelect
-                    id={fieldId}
                     inline={inline}
                     popoverClassName="helmx-select-popover-wide"
-                    aria-label={
-                      schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key
-                    }
+                    aria-label={fieldTitle}
                     value={Array.isArray(values[key]) ? values[key] : []}
                     options={buildEnumConfigOptions(
                       schema.enum,
@@ -220,9 +236,7 @@ export function PluginConfigForm({
                     onValuesChange={(next) => setValues((prev) => ({ ...prev, [key]: next }))}
                   />
                 ) : schema.type === 'string[]' ? (
-                  <textarea
-                    id={fieldId}
-                    className="input"
+                  <Textarea
                     rows={3}
                     placeholder={
                       schema.description !== undefined
@@ -237,12 +251,9 @@ export function PluginConfigForm({
                   />
                 ) : schema.enum !== undefined ? (
                   <Select
-                    id={fieldId}
                     inline={inline}
                     popoverClassName="helmx-select-popover-wide"
-                    aria-label={
-                      schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key
-                    }
+                    aria-label={fieldTitle}
                     value={String(values[key] ?? '')}
                     options={buildEnumConfigOptions(
                       schema.enum,
@@ -257,9 +268,7 @@ export function PluginConfigForm({
                     }
                   />
                 ) : schema.type === 'number' ? (
-                  <input
-                    id={fieldId}
-                    className="input"
+                  <Input
                     type="number"
                     min={schema.minimum}
                     max={schema.maximum}
@@ -276,9 +285,7 @@ export function PluginConfigForm({
                 ) : schema.format === 'model' ? (
                   <ModelPickerControl
                     buttonId={fieldId}
-                    buttonAriaLabel={
-                      schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key
-                    }
+                    buttonAriaLabel={fieldTitle}
                     buttonTitle={String(values[key] ?? '') || t('plugins.config.modelUnset')}
                     placeholderLabel={t('plugins.config.modelUnset')}
                     effectiveModel={String(values[key] ?? '') || undefined}
@@ -296,12 +303,9 @@ export function PluginConfigForm({
                   />
                 ) : schema.format === 'node' || schema.format === 'profile' ? (
                   <Select
-                    id={fieldId}
                     inline={inline}
                     popoverClassName="helmx-select-popover-wide"
-                    aria-label={
-                      schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key
-                    }
+                    aria-label={fieldTitle}
                     value={String(values[key] ?? '')}
                     options={
                       schema.format === 'node'
@@ -311,9 +315,8 @@ export function PluginConfigForm({
                     onChange={(event) => setValues((prev) => ({ ...prev, [key]: event.target.value }))}
                   />
                 ) : (
-                  <input
-                    id={fieldId}
-                    className={schema.secret ? 'input mono' : 'input'}
+                  <Input
+                    mono={schema.secret === true}
                     type={schema.secret ? 'password' : 'text'}
                     placeholder={
                       schema.secret
@@ -337,35 +340,33 @@ export function PluginConfigForm({
                   />
                 )}
                 {canReset && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-xs"
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    icon="rotate-ccw"
                     disabled={saving || resettingKey !== null}
                     onClick={() => void resetField(key)}
                     title={schema.secret ? t('plugins.config.clearSecretTitle') : t('plugins.config.resetDefaultTitle')}
                   >
-                    <HelmxIcon name="rotate-ccw" size={11} />
-                    <span>{schema.secret ? t('plugins.config.clear') : t('plugins.config.reset')}</span>
-                  </button>
+                    {schema.secret ? t('plugins.config.clear') : t('plugins.config.reset')}
+                  </Button>
                 )}
               </div>
-            </div>
+            </Field>
           )
         })}
-      </div>
+      </Stack>
       {error && (
-        <div className="callout callout-error" role="alert">
-          <HelmxIcon name="alert-circle" size={13} />
-          <span className="callout-text selectable">{error}</span>
-        </div>
+        <Callout tone="err">
+          <span className="callout-text selectable" role="alert">{error}</span>
+        </Callout>
       )}
       <div>
-        <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => void save()}>
-          <HelmxIcon name="check" size={12} />
-          <span>{saved ? t('plugins.config.saved') : t('plugins.config.save')}</span>
-        </button>
+        <Button variant="primary" size="sm" icon="check" pending={saving} onClick={() => void save()}>
+          {saved ? t('plugins.config.saved') : t('plugins.config.save')}
+        </Button>
       </div>
-    </div>
+    </Stack>
   )
 }
 
@@ -600,30 +601,29 @@ export function PluginDetailDrawer({
       titleExtra={
         <>
           {versionLabel && (
-            <span className="badge badge-neutral mono" title={t('plugins.card.versionTitle', { version: versionLabel })}>
+            <Badge tone="neutral" mono title={t('plugins.card.versionTitle', { version: versionLabel })}>
               {versionLabel}
-            </span>
+            </Badge>
           )}
           {plugin?.locked && (
-            <span className="badge badge-warn" title={t('plugins.card.lockedTitle')}>
-              <HelmxIcon name="lock" size={10} />
-              <span>{t('plugins.resident')}</span>
-            </span>
+            <Badge tone="warn" icon="lock" title={t('plugins.card.lockedTitle')}>
+              {t('plugins.resident')}
+            </Badge>
           )}
           {plugin?.dependencies && plugin.dependencies.length > 0 && (
-            <span
-              className="badge badge-neutral"
+            <Badge
+              tone="neutral"
+              icon="network"
               title={t('plugins.drawer.dependenciesTitle', {
                 deps: plugin.dependencies.join(t('plugins.desc.listSeparator')),
               })}
             >
-              <HelmxIcon name="network" size={10} />
-              <span>{t('plugins.drawer.dependenciesCount', { count: plugin.dependencies.length })}</span>
-            </span>
+              {t('plugins.drawer.dependenciesCount', { count: plugin.dependencies.length })}
+            </Badge>
           )}
         </>
       }
-      meta={plugin?.id}
+      meta={plugin?.id ? <MonoId value={plugin.id} /> : undefined}
       metaClassName="text-subtle break-word"
       belowTitle={
         plugin ? (
@@ -631,7 +631,7 @@ export function PluginDetailDrawer({
             <div className="plugin-drawer-desc">{getPluginDescription(plugin, locale, t)}</div>
             {isPluginFailed(plugin) && plugin.error && (
               <div className="plugin-drawer-failed-note" role="note">
-                <span className="badge badge-err">{t('plugins.drawer.failedToLoad')}</span>
+                <Badge tone="err">{t('plugins.drawer.failedToLoad')}</Badge>
                 <span className="mono selectable">
                   {t('plugins.drawer.failedNoteDetail', {
                     code: plugin.error.code,
@@ -674,400 +674,408 @@ export function PluginDetailDrawer({
         />
       }
     >
-            {!plugin ? (
-              <EmptyState>{t('plugins.drawer.noSelection')}</EmptyState>
-            ) : (
-              <>
-                {/* Quick actions and enable/disable bar */}
-                <div className="plugin-drawer-action-bar">
-                  <div className="plugin-drawer-status-wrap">
-                    <span className="text-subtle">{t('plugins.drawer.currentStatus')}</span>
-                    {isPluginFailed(plugin) ? (
-                      <span className="badge badge-err" title={t('plugins.drawer.errorBadgeTitle')}>
-                        <HelmxIcon name="alert-circle" size={10} />
-                        <span>{t('plugins.status.error')}</span>
-                      </span>
-                    ) : isPluginSummaryActive(plugin) ? (
-                      <span className="badge badge-ok">
-                        <HelmxIcon name="check" size={10} />
-                        <span>{t('common.enabled')}</span>
-                      </span>
-                    ) : (
-                      <span className="badge badge-neutral">{t('common.disabled')}</span>
-                    )}
-                  </div>
-                  <div className="plugin-drawer-screen-actions">
-                    {primaryScreen !== null && actions !== null && (
-                      <>
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          title={
-                            pluginScreens.length > 1
-                              ? t('plugins.drawer.openMainViewMultiTitle', {
-                                  screenId: primaryScreen.screenId,
-                                  count: pluginScreens.length,
-                                })
-                              : t('plugins.drawer.openMainViewTitle')
-                          }
-                          onClick={() =>
-                            actions.openTarget({
-                              kind: 'screen',
-                              pluginId: primaryScreen.pluginId,
+      {!plugin ? (
+        <EmptyState>{t('plugins.drawer.noSelection')}</EmptyState>
+      ) : (
+        <>
+          {/* Quick actions and enable/disable bar */}
+          <Card variant="subtle" className="plugin-drawer-action-card">
+            <Stack direction="horizontal" gap="md" align="center" justify="between" wrap>
+              <Stack direction="horizontal" gap="sm" align="center" className="plugin-drawer-status-wrap">
+                <span className="text-subtle">{t('plugins.drawer.currentStatus')}</span>
+                {isPluginFailed(plugin) ? (
+                  <Badge tone="err" icon="alert-circle" title={t('plugins.drawer.errorBadgeTitle')}>
+                    {t('plugins.status.error')}
+                  </Badge>
+                ) : isPluginSummaryActive(plugin) ? (
+                  <Badge tone="ok" icon="check">
+                    {t('common.enabled')}
+                  </Badge>
+                ) : (
+                  <Badge tone="neutral">{t('common.disabled')}</Badge>
+                )}
+              </Stack>
+              <Stack direction="horizontal" gap="xs" align="center" justify="end" wrap className="plugin-drawer-screen-actions">
+                {primaryScreen !== null && actions !== null && (
+                  <>
+                    <Button
+                      size="sm"
+                      icon="play"
+                      title={
+                        pluginScreens.length > 1
+                          ? t('plugins.drawer.openMainViewMultiTitle', {
                               screenId: primaryScreen.screenId,
+                              count: pluginScreens.length,
                             })
-                          }
-                        >
-                          <HelmxIcon name="play" size={12} />
-                          <span>{t('plugins.openView')}</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-sm split-toggle-btn plugin-drawer-split-btn"
-                          title={t('plugins.drawer.openSplitTitle')}
-                          onClick={() =>
-                            actions.openTarget(
-                              {
-                                kind: 'screen',
-                                pluginId: primaryScreen.pluginId,
-                                screenId: primaryScreen.screenId,
-                              },
-                              { split: true },
-                            )
-                          }
-                        >
-                          <HelmxIcon name="columns" size={12} />
-                          <span>{t('plugins.drawer.openSplit')}</span>
-                        </button>
-                      </>
-                    )}
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${plugin.enabled ? 'btn' : 'btn-primary'}`}
-                      disabled={plugin.locked || toggling}
-                      onClick={() => void handleToggle(plugin, plugin.enabled ? false : true)}
+                          : t('plugins.drawer.openMainViewTitle')
+                      }
+                      onClick={() =>
+                        actions.openTarget({
+                          kind: 'screen',
+                          pluginId: primaryScreen.pluginId,
+                          screenId: primaryScreen.screenId,
+                        })
+                      }
                     >
-                      {plugin.enabled ? (
-                        <>
-                          <HelmxIcon name="square" size={12} />
-                          <span>{t('plugins.drawer.disablePlugin')}</span>
-                        </>
-                      ) : (
-                        <>
-                          <HelmxIcon name="play" size={12} />
-                          <span>{t('plugins.drawer.enablePlugin')}</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {actionError && (
-                  <div className="callout callout-error" role="alert">
-                    <HelmxIcon name="alert-circle" size={13} />
-                    <span className="callout-text selectable">{actionError}</span>
-                  </div>
+                      {t('plugins.openView')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      icon="columns"
+                      className="split-toggle-btn plugin-drawer-split-btn"
+                      title={t('plugins.drawer.openSplitTitle')}
+                      onClick={() =>
+                        actions.openTarget(
+                          {
+                            kind: 'screen',
+                            pluginId: primaryScreen.pluginId,
+                            screenId: primaryScreen.screenId,
+                          },
+                          { split: true },
+                        )
+                      }
+                    >
+                      {t('plugins.drawer.openSplit')}
+                    </Button>
+                  </>
                 )}
+                <Button
+                  variant={plugin.enabled ? 'default' : 'primary'}
+                  size="sm"
+                  icon={plugin.enabled ? 'square' : 'play'}
+                  disabled={plugin.locked || toggling}
+                  onClick={() => void handleToggle(plugin, plugin.enabled ? false : true)}
+                >
+                  {plugin.enabled
+                    ? t('plugins.drawer.disablePlugin')
+                    : t('plugins.drawer.enablePlugin')}
+                </Button>
+              </Stack>
+            </Stack>
+          </Card>
 
-                {/* Managed plugin package: source metadata + update/uninstall (hidden for built-in or unmanaged plugins) */}
-                {plugin?.managed && (
-                  <div className="plugin-drawer-section plugin-package-section">
-                    <h4 className="plugin-drawer-section-title">
-                      <HelmxIcon name="boxes" size={13} />
-                      <span>{t('plugins.package.sectionTitle')}</span>
-                    </h4>
-                    <div className="plugin-package-meta">
-                      <div className="form-grid form-grid-align-start">
-                        <span className="form-grid-label"><span>{t('plugins.package.sourceLabel')}</span></span>
-                        <div className="form-grid-value">
-                          <div className="plugin-package-source-row">
-                            <span className="badge badge-neutral mono" data-source-kind={plugin.managed.source.kind}>
-                              {pluginSourceBadgeLabel(plugin.managed.source, t)}
-                            </span>
-                            <span className="mono selectable plugin-package-source-text">
-                              {pluginSourceDisplayText(plugin.managed.source)}
-                            </span>
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-xs"
-                              disabled={packageOp !== 'idle' || externalUpdating}
-                              onClick={() => {
-                                if (editingSource) {
-                                  setEditingSource(false)
-                                  setSourceDraft('')
-                                } else {
-                                  setEditingSource(true)
-                                  setSourceDraft(plugin.managed!.source.raw)
-                                }
-                              }}
-                            >
-                              {editingSource ? t('common.cancel') : t('plugins.package.changeSource')}
-                            </button>
-                          </div>
-                          {editingSource && (() => {
-                            const draftTrimmed = sourceDraft.trim()
-                            const draftHint = detectPluginSourceKind(draftTrimmed, t)
-                            const draftSubmittable = draftTrimmed !== '' && isInstallSourceSubmittable(draftTrimmed)
-                            return (
-                              <div className="plugin-package-source-editor">
-                                <input
-                                  className="input mono"
-                                  type="text"
-                                  value={sourceDraft}
-                                  placeholder={t('plugins.package.newSourcePlaceholder')}
-                                  aria-label={t('plugins.package.changeSource')}
-                                  spellCheck={false}
-                                  autoComplete="off"
-                                  disabled={packageOp !== 'idle' || externalUpdating}
-                                  onChange={(e) => setSourceDraft(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' && draftSubmittable) {
-                                      e.preventDefault()
-                                      void handleUpdatePackage()
-                                    }
-                                  }}
-                                />
-                                {draftTrimmed !== '' && (
-                                  <span
-                                    className={`plugin-source-hint${draftHint.kind === 'unknown' ? ' is-unknown' : ''}`}
-                                    data-source-kind={draftHint.kind}
-                                  >
-                                    {draftHint.label}
-                                  </span>
-                                )}
-                              </div>
-                            )
-                          })()}
-                        </div>
-                      </div>
-                      {plugin.managed.installedVersion !== '' && (
-                        <div className="form-grid">
-                          <span className="form-grid-label"><span>{t('plugins.package.installedVersionLabel')}</span></span>
-                          <span className="form-grid-value mono">{plugin.managed.installedVersion}</span>
-                        </div>
-                      )}
-                      {formatInstalledAt(plugin.managed.installedAt, locale) !== '' && (
-                        <div className="form-grid">
-                          <span className="form-grid-label"><span>{t('plugins.package.installedAtLabel')}</span></span>
-                          <span className="form-grid-value">{formatInstalledAt(plugin.managed.installedAt, locale)}</span>
-                        </div>
-                      )}
-                    </div>
-                    <div className="plugin-package-actions">
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        disabled={
-                          packageOp !== 'idle' ||
-                          externalUpdating ||
-                          (editingSource && !isInstallSourceSubmittable(sourceDraft))
+          {actionError && (
+            <Callout tone="err">
+              <span className="callout-text selectable" role="alert">{actionError}</span>
+            </Callout>
+          )}
+
+          {/* Managed plugin package: source metadata + update/uninstall (hidden for built-in or unmanaged plugins) */}
+          {plugin?.managed && (
+            <Card
+              variant="subtle"
+              className="plugin-package-section"
+              title={
+                <Stack direction="horizontal" gap="xs" align="center" inline>
+                  <HelmxIcon name="boxes" size={13} />
+                  <span>{t('plugins.package.sectionTitle')}</span>
+                </Stack>
+              }
+            >
+              <Stack direction="vertical" gap="sm" className="plugin-package-meta">
+                <Field
+                  label={t('plugins.package.sourceLabel')}
+                  htmlFor={false}
+                  layout="horizontal"
+                >
+                  <Stack direction="horizontal" gap="xs" align="center" wrap className="plugin-package-source-row">
+                    <Badge tone="neutral" mono data-source-kind={plugin.managed.source.kind}>
+                      {pluginSourceBadgeLabel(plugin.managed.source, t)}
+                    </Badge>
+                    <span className="mono selectable plugin-package-source-text">
+                      {pluginSourceDisplayText(plugin.managed.source)}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      disabled={packageOp !== 'idle' || externalUpdating}
+                      onClick={() => {
+                        if (editingSource) {
+                          setEditingSource(false)
+                          setSourceDraft('')
+                        } else {
+                          setEditingSource(true)
+                          setSourceDraft(plugin.managed!.source.raw)
                         }
-                        onClick={() => void handleUpdatePackage()}
-                      >
-                        <HelmxIcon
-                          name="refresh-cw"
-                          size={12}
-                          className={packageOp === 'updating' || externalUpdating ? 'spin' : undefined}
+                      }}
+                    >
+                      {editingSource ? t('common.cancel') : t('plugins.package.changeSource')}
+                    </Button>
+                  </Stack>
+                  {editingSource && (() => {
+                    const draftTrimmed = sourceDraft.trim()
+                    const draftHint = detectPluginSourceKind(draftTrimmed, t)
+                    const draftSubmittable = draftTrimmed !== '' && isInstallSourceSubmittable(draftTrimmed)
+                    return (
+                      <Stack direction="vertical" gap="xs" className="plugin-package-source-editor">
+                        <Input
+                          mono
+                          type="text"
+                          value={sourceDraft}
+                          invalid={draftTrimmed !== '' && draftHint.kind === 'unknown'}
+                          placeholder={t('plugins.package.newSourcePlaceholder')}
+                          aria-label={t('plugins.package.changeSource')}
+                          spellCheck={false}
+                          autoComplete="off"
+                          disabled={packageOp !== 'idle' || externalUpdating}
+                          onChange={(e) => setSourceDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && draftSubmittable) {
+                              e.preventDefault()
+                              void handleUpdatePackage()
+                            }
+                          }}
                         />
-                        <span>
-                          {packageOp === 'updating' || externalUpdating
-                            ? t('plugins.package.updating')
-                            : t('plugins.package.updatePlugin')}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-danger btn-sm"
-                        disabled={packageOp !== 'idle' || externalUpdating}
-                        onClick={() => setConfirmRemoveOpen(true)}
-                      >
-                        <HelmxIcon name="trash-2" size={12} />
-                        <span>{packageOp === 'removing' ? t('plugins.package.uninstalling') : t('plugins.package.uninstallPlugin')}</span>
-                      </button>
-                    </div>
-                    {updateDoctorReport && <PluginDoctorChecks report={updateDoctorReport} />}
-                  </div>
-                )}
-
-                {/* Failure diagnostics box: structured stage, error code and full message */}
-                {plugin.error && (
-                  <div className="callout callout-error" role="alert">
-                    <HelmxIcon name="alert-circle" size={13} />
-                    <div className="plugin-diagnostic-body">
-                      <div className="plugin-diagnostic-title">{t('plugins.drawer.diagnosticTitle')}</div>
-                      <div className="text-subtle">
-                        {t('plugins.drawer.diagnosticMetaPrefix', {
-                          stage: pluginErrorStageLabel(plugin.error.stage, t),
-                        })}
-                        <span className="mono">{plugin.error.code}</span>
-                      </div>
-                      <div className="selectable plugin-diagnostic-message">{plugin.error.message}</div>
-                    </div>
-                  </div>
-                )}
-
-                {/* 409 plugin_in_use confirmation: informed forced disable */}
-                {inUseConfirm && inUseConfirm.plugin.id === plugin.id && (
-                  <div className="callout callout-warn" role="alert">
-                    <HelmxIcon name="alert-triangle" size={13} />
-                    <div className="plugin-inuse-body">
-                      <div className="plugin-diagnostic-title">{t('plugins.drawer.inUseTitle')}</div>
-                      <div className="text-subtle">{t('plugins.drawer.inUseHint')}</div>
-                      <ul className="plugin-inuse-list">
-                        {inUseConfirm.usages.map((usage) => (
-                          <li key={`${usage.kind}/${usage.id}`} title={`${usage.kind}/${usage.id}`}>
-                            {usage.label}
-                          </li>
-                        ))}
-                      </ul>
-                      <div className="plugin-inuse-actions">
-                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setInUseConfirm(null)}>
-                          {t('common.cancel')}
-                        </button>
-                        <button type="button" className="btn btn-danger btn-sm" disabled={toggling} onClick={() => void handleForceDisable()}>
-                          <HelmxIcon name="square" size={12} />
-                          <span>{t('plugins.drawer.forceDisable')}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Capability inventory */}
-                <div className="plugin-drawer-section">
-                  <h4 className="plugin-drawer-section-title">
-                    <HelmxIcon name="boxes" size={13} />
-                    <span>{t('plugins.drawer.capabilities')}</span>
-                  </h4>
-                  <div className="plugin-drawer-capabilities">
-                    {/* Tools */}
-                    <div className="plugin-capability-group">
-                      <div className="plugin-capability-group-header">
-                        <HelmxIcon name="wrench" size={11} />
-                        <span className="plugin-capability-group-title">
-                          Tools ({plugin.tools.length})
-                        </span>
-                      </div>
-                      {plugin.tools.length > 0 ? (
-                        <div className="plugin-capability-tags">
-                          {plugin.tools.map((tool) => (
-                            <span key={tool} className="plugin-capability-tag mono" title={tool}>
-                              {tool}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-subtle">{t('plugins.drawer.noTools')}</div>
-                      )}
-                    </div>
-
-                    {/* Actions */}
-                    <div className="plugin-capability-group">
-                      <div className="plugin-capability-group-header">
-                        <HelmxIcon name="zap" size={11} />
-                        <span className="plugin-capability-group-title">
-                          Actions ({plugin.actions.length})
-                        </span>
-                      </div>
-                      {plugin.actions.length > 0 ? (
-                        <div className="plugin-capability-tags">
-                          {plugin.actions.map((act) => (
-                            <span key={act} className="plugin-capability-tag mono" title={act}>
-                              {act}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-subtle">{t('plugins.drawer.noActions')}</div>
-                      )}
-                    </div>
-
-                    {/* Hooks */}
-                    <div className="plugin-capability-group">
-                      <div className="plugin-capability-group-header">
-                        <HelmxIcon name="layers" size={11} />
-                        <span className="plugin-capability-group-title">
-                          Hooks ({plugin.hooks.length})
-                        </span>
-                      </div>
-                      {plugin.hooks.length > 0 ? (
-                        <div className="plugin-capability-tags">
-                          {plugin.hooks.map((hook) => (
-                            <span key={hook} className="plugin-capability-tag mono" title={hook}>
-                              {hook}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-subtle">{t('plugins.drawer.noHooks')}</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Dynamic configuration options */}
-                <div className="plugin-drawer-section">
-                  <h4 className="plugin-drawer-section-title">
-                    <HelmxIcon name="sliders" size={13} />
-                    <span>{t('plugins.drawer.configuration')}</span>
-                  </h4>
-                  {loadingConfig ? (
-                    <div className="loading-state">
-                      <HelmxIcon name="loader" size={13} className="spin-slow" />
-                      <span>{t('plugins.drawer.loadingConfig')}</span>
-                    </div>
-                  ) : configError ? (
-                    <div className="callout callout-error" role="alert">
-                      <HelmxIcon name="alert-circle" size={13} />
-                      <span className="callout-text selectable">{configError}</span>
-                    </div>
-                  ) : config && config.pluginId === plugin.id ? (
-                    <PluginConfigForm
-                      key={plugin.id}
-                      pluginId={plugin.id}
-                      config={config}
-                      locale={locale}
-                      inline={inline}
-                      onSaved={() => void reloadConfig(plugin.id)}
-                    />
-                  ) : (
-                    <div className="text-subtle">{t('plugins.drawer.configUnavailable')}</div>
-                  )}
-                </div>
-
-                {/* Extension settings panels */}
-                {settingsPanels.length > 0 && (
-                  <div className="plugin-drawer-section">
-                    <h4 className="plugin-drawer-section-title">
-                      <HelmxIcon name="layout" size={13} />
-                      <span>
-                        {settingsPanels.length > 1
-                          ? t('plugins.drawer.settingsPanelsCount', { count: settingsPanels.length })
-                          : resolveLocalizedText(settingsPanels[0]!.spec.label, locale) ||
-                            t('plugins.drawer.settingsPanels')}
-                      </span>
-                    </h4>
-                    {settingsPanels.map((panel) => (
-                      <div
-                        key={`${panel.pluginId}/${panel.spec.id}`}
-                        className="plugin-settings-panels"
-                      >
-                        {settingsPanels.length > 1 && (
-                          <div className="plugin-settings-panel-title">
-                            {resolveLocalizedText(panel.spec.label, locale) || panel.spec.id}
-                          </div>
+                        {draftTrimmed !== '' && (
+                          <span
+                            className={`plugin-source-hint${draftHint.kind === 'unknown' ? ' is-unknown' : ''}`}
+                            data-source-kind={draftHint.kind}
+                          >
+                            {draftHint.label}
+                          </span>
                         )}
-                        <PluginUiView
-                          pluginId={plugin.id}
-                          spec={panel.spec}
-                          label={t('plugins.drawer.settingsPanelLabel', { id: panel.spec.id })}
-                        />
-                      </div>
-                    ))}
-                  </div>
+                      </Stack>
+                    )
+                  })()}
+                </Field>
+                {plugin.managed.installedVersion !== '' && (
+                  <Field
+                    label={t('plugins.package.installedVersionLabel')}
+                    htmlFor={false}
+                    layout="horizontal"
+                  >
+                    <span className="form-grid-value mono">{plugin.managed.installedVersion}</span>
+                  </Field>
                 )}
-              </>
+                {formatInstalledAt(plugin.managed.installedAt, locale) !== '' && (
+                  <Field
+                    label={t('plugins.package.installedAtLabel')}
+                    htmlFor={false}
+                    layout="horizontal"
+                  >
+                    <span className="form-grid-value">{formatInstalledAt(plugin.managed.installedAt, locale)}</span>
+                  </Field>
+                )}
+              </Stack>
+              <Stack direction="horizontal" gap="sm" align="center" wrap className="plugin-package-actions">
+                <Button
+                  size="sm"
+                  icon={
+                    <HelmxIcon
+                      name="refresh-cw"
+                      size={12}
+                      className={packageOp === 'updating' || externalUpdating ? 'spin' : undefined}
+                    />
+                  }
+                  disabled={
+                    packageOp !== 'idle' ||
+                    externalUpdating ||
+                    (editingSource && !isInstallSourceSubmittable(sourceDraft))
+                  }
+                  onClick={() => void handleUpdatePackage()}
+                >
+                  {packageOp === 'updating' || externalUpdating
+                    ? t('plugins.package.updating')
+                    : t('plugins.package.updatePlugin')}
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  icon="trash-2"
+                  disabled={packageOp !== 'idle' || externalUpdating}
+                  onClick={() => setConfirmRemoveOpen(true)}
+                >
+                  {packageOp === 'removing' ? t('plugins.package.uninstalling') : t('plugins.package.uninstallPlugin')}
+                </Button>
+              </Stack>
+              {updateDoctorReport && <PluginDoctorChecks report={updateDoctorReport} />}
+            </Card>
+          )}
+
+          {/* Failure diagnostics box: structured stage, error code and full message */}
+          {plugin.error && (
+            <Callout tone="err">
+              <div className="plugin-diagnostic-body" role="alert">
+                <div className="plugin-diagnostic-title">{t('plugins.drawer.diagnosticTitle')}</div>
+                <div className="text-subtle">
+                  {t('plugins.drawer.diagnosticMetaPrefix', {
+                    stage: pluginErrorStageLabel(plugin.error.stage, t),
+                  })}
+                  <span className="mono">{plugin.error.code}</span>
+                </div>
+                <div className="selectable plugin-diagnostic-message">{plugin.error.message}</div>
+              </div>
+            </Callout>
+          )}
+
+          {/* 409 plugin_in_use confirmation: informed forced disable */}
+          {inUseConfirm && inUseConfirm.plugin.id === plugin.id && (
+            <Callout tone="warn">
+              <div className="plugin-inuse-body" role="alert">
+                <div className="plugin-diagnostic-title">{t('plugins.drawer.inUseTitle')}</div>
+                <div className="text-subtle">{t('plugins.drawer.inUseHint')}</div>
+                <ul className="plugin-inuse-list">
+                  {inUseConfirm.usages.map((usage) => (
+                    <li key={`${usage.kind}/${usage.id}`} title={`${usage.kind}/${usage.id}`}>
+                      {usage.label}
+                    </li>
+                  ))}
+                </ul>
+                <Stack direction="horizontal" gap="sm" align="center" justify="end" className="plugin-inuse-actions">
+                  <Button variant="ghost" size="sm" onClick={() => setInUseConfirm(null)}>
+                    {t('common.cancel')}
+                  </Button>
+                  <Button variant="danger" size="sm" icon="square" disabled={toggling} onClick={() => void handleForceDisable()}>
+                    {t('plugins.drawer.forceDisable')}
+                  </Button>
+                </Stack>
+              </div>
+            </Callout>
+          )}
+
+          {/* Capability inventory */}
+          <Card
+            variant="subtle"
+            title={
+              <Stack direction="horizontal" gap="xs" align="center" inline>
+                <HelmxIcon name="boxes" size={13} />
+                <span>{t('plugins.drawer.capabilities')}</span>
+              </Stack>
+            }
+          >
+            <div className="plugin-drawer-capabilities">
+              {/* Tools */}
+              <div className="plugin-capability-group">
+                <div className="plugin-capability-group-header">
+                  <HelmxIcon name="wrench" size={11} />
+                  <span className="plugin-capability-group-title">
+                    Tools ({plugin.tools.length})
+                  </span>
+                </div>
+                {plugin.tools.length > 0 ? (
+                  <Stack direction="horizontal" gap="xs" align="center" wrap className="plugin-capability-tags">
+                    {plugin.tools.map((tool) => (
+                      <Badge key={tool} tone="neutral" mono title={tool}>
+                        {tool}
+                      </Badge>
+                    ))}
+                  </Stack>
+                ) : (
+                  <HelperText>{t('plugins.drawer.noTools')}</HelperText>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="plugin-capability-group">
+                <div className="plugin-capability-group-header">
+                  <HelmxIcon name="zap" size={11} />
+                  <span className="plugin-capability-group-title">
+                    Actions ({plugin.actions.length})
+                  </span>
+                </div>
+                {plugin.actions.length > 0 ? (
+                  <Stack direction="horizontal" gap="xs" align="center" wrap className="plugin-capability-tags">
+                    {plugin.actions.map((act) => (
+                      <Badge key={act} tone="neutral" mono title={act}>
+                        {act}
+                      </Badge>
+                    ))}
+                  </Stack>
+                ) : (
+                  <HelperText>{t('plugins.drawer.noActions')}</HelperText>
+                )}
+              </div>
+
+              {/* Hooks */}
+              <div className="plugin-capability-group">
+                <div className="plugin-capability-group-header">
+                  <HelmxIcon name="layers" size={11} />
+                  <span className="plugin-capability-group-title">
+                    Hooks ({plugin.hooks.length})
+                  </span>
+                </div>
+                {plugin.hooks.length > 0 ? (
+                  <Stack direction="horizontal" gap="xs" align="center" wrap className="plugin-capability-tags">
+                    {plugin.hooks.map((hook) => (
+                      <Badge key={hook} tone="neutral" mono title={hook}>
+                        {hook}
+                      </Badge>
+                    ))}
+                  </Stack>
+                ) : (
+                  <HelperText>{t('plugins.drawer.noHooks')}</HelperText>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          {/* Dynamic configuration options */}
+          <Card
+            variant="subtle"
+            title={
+              <Stack direction="horizontal" gap="xs" align="center" inline>
+                <HelmxIcon name="sliders" size={13} />
+                <span>{t('plugins.drawer.configuration')}</span>
+              </Stack>
+            }
+          >
+            {loadingConfig ? (
+              <LoadingState label={t('plugins.drawer.loadingConfig')} />
+            ) : configError ? (
+              <Callout tone="err">
+                <span className="callout-text selectable" role="alert">{configError}</span>
+              </Callout>
+            ) : config && config.pluginId === plugin.id ? (
+              <PluginConfigForm
+                key={plugin.id}
+                pluginId={plugin.id}
+                config={config}
+                locale={locale}
+                inline={inline}
+                onSaved={() => void reloadConfig(plugin.id)}
+              />
+            ) : (
+              <HelperText>{t('plugins.drawer.configUnavailable')}</HelperText>
             )}
+          </Card>
+
+          {/* Extension settings panels */}
+          {settingsPanels.length > 0 && (
+            <Card
+              variant="subtle"
+              title={
+                <Stack direction="horizontal" gap="xs" align="center" inline>
+                  <HelmxIcon name="layout" size={13} />
+                  <span>
+                    {settingsPanels.length > 1
+                      ? t('plugins.drawer.settingsPanelsCount', { count: settingsPanels.length })
+                      : resolveLocalizedText(settingsPanels[0]!.spec.label, locale) ||
+                        t('plugins.drawer.settingsPanels')}
+                  </span>
+                </Stack>
+              }
+            >
+              {settingsPanels.map((panel) => (
+                <div
+                  key={`${panel.pluginId}/${panel.spec.id}`}
+                  className="plugin-settings-panels"
+                >
+                  {settingsPanels.length > 1 && (
+                    <div className="plugin-settings-panel-title">
+                      {resolveLocalizedText(panel.spec.label, locale) || panel.spec.id}
+                    </div>
+                  )}
+                  <PluginUiView
+                    pluginId={plugin.id}
+                    spec={panel.spec}
+                    label={t('plugins.drawer.settingsPanelLabel', { id: panel.spec.id })}
+                  />
+                </div>
+              ))}
+            </Card>
+          )}
+        </>
+      )}
     </DetailDrawer>
   )
 }

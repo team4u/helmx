@@ -1,7 +1,16 @@
 import type * as React from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import type { ModelProviderSummary, ProviderConfig } from '@helmx/protocol/browser'
-import { HelmxIcon, Tabs, TabsContent, TabsList, TabsTrigger } from '@helmx/plugin-client'
+import {
+  Badge,
+  Button,
+  CardGrid,
+  HelmxIcon,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { assetsApi } from '../lib/api.js'
 import {
@@ -328,25 +337,24 @@ export function ModelCenter({
       wrapContent={false}
       headerActions={
         <>
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
+          <Button
+            variant="primary"
+            size="sm"
+            icon="plus"
             onClick={handleOpenCreateCustom}
             title={t('models.addCustomGatewayTitle')}
           >
-            <HelmxIcon name="plus" size={12} />
             <span className="pane-action-label">{t('models.addCustomGateway')}</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm"
+          </Button>
+          <Button
+            size="sm"
+            icon={<HelmxIcon name="refresh-cw" size={12} className={refreshingCatalog ? 'spin' : undefined} />}
             onClick={handleRefreshAll}
             disabled={refreshingCatalog}
             title={t('models.refreshCatalogTitle')}
           >
-            <HelmxIcon name="refresh-cw" size={12} className={refreshingCatalog ? 'spin' : undefined} />
             <span className="pane-action-label">{t('models.refreshCatalog')}</span>
-          </button>
+          </Button>
         </>
       }
       belowTopbar={
@@ -365,9 +373,9 @@ export function ModelCenter({
           </Tabs>
           <div className="model-defaults-status">
             <HelmxIcon name="sliders" size={13} />
-            <span className={`badge ${defaultModelInfo?.defaultModel ? 'badge-ok' : 'badge-neutral'}`}>
+            <Badge tone={defaultModelInfo?.defaultModel ? 'ok' : 'neutral'}>
               {defaultModelInfo?.defaultModel ? t('models.configured') : t('models.defaults.notSet')}
-            </span>
+            </Badge>
             {defaultModelInfo?.defaultModel ? (
               <span>
                 {t('models.defaults.currentPrefix')} <strong className="mono">{defaultModelInfo.defaultModel}</strong>
@@ -430,14 +438,14 @@ export function ModelCenter({
               showReset={Boolean(query) || statusTab !== 'all'}
               resetLabel={t('models.resetFilters')}
               resetIcon={false}
-              resetButtonClassName="btn btn-sm btn-ghost"
+              resetVariant="ghost"
               onReset={() => {
                 setQuery('')
                 setStatusTab('all')
               }}
             />
           ) : (
-            <div className="primary-center-grid">
+            <CardGrid minWidth="md" gap="md">
               {filteredProviders.map((provider) => (
                 <ModelCard
                   key={provider.id}
@@ -446,7 +454,7 @@ export function ModelCenter({
                   onSelect={() => handleSelectProvider(provider.id)}
                 />
               ))}
-            </div>
+            </CardGrid>
           )}
         </TabsContent>
         <TabsContent value="defaults" className="primary-center-content">

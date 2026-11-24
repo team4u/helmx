@@ -1,5 +1,15 @@
 import React, { useMemo } from 'react'
-import { HelmxIcon, Select } from '@helmx/plugin-client'
+import {
+  Button,
+  Callout,
+  Card,
+  Field,
+  HelmxIcon,
+  Input,
+  Select,
+  Stack,
+  Textarea,
+} from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ProviderItem } from './model-center-model.js'
 
@@ -92,72 +102,68 @@ export function ProviderCredentialsSection({
   )
 
   return (
-    <div className="section-flat">
-      <div className="section-flat-header flex-row-between">
-        <div className="flex-row">
+    <Card
+      variant="subtle"
+      title={
+        <Stack direction="horizontal" gap="xs" align="center" inline>
           <HelmxIcon name="key" size={14} />
-          <span className="section-flat-title">{t('models.drawer.credentialsSection')}</span>
-        </div>
-        {!isNewCustom && provider?.dynamic && (
-          <button
-            type="button"
-            className="btn btn-xs btn-ghost"
+          <span>{t('models.drawer.credentialsSection')}</span>
+        </Stack>
+      }
+      actions={
+        !isNewCustom && provider?.dynamic ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            icon={<HelmxIcon name="refresh-cw" size={12} className={refreshingCatalog ? 'spin' : undefined} />}
             onClick={onRefreshCatalog}
             disabled={refreshingCatalog}
             title={t('models.drawer.resyncTitle')}
           >
-            <HelmxIcon
-              name="refresh-cw"
-              size={12}
-              className={refreshingCatalog ? 'spin' : ''}
-            />
-            <span>{refreshingCatalog ? t('models.refreshing') : t('models.refreshCatalog')}</span>
-          </button>
-        )}
-      </div>
-      <div className="form-grid">
+            {refreshingCatalog ? t('models.refreshing') : t('models.refreshCatalog')}
+          </Button>
+        ) : undefined
+      }
+    >
+      <Stack direction="vertical" gap="md">
         {isNewCustom && (
-          <>
-            <label htmlFor="model-drawer-custom-id" className="form-grid-label">
-              {t('models.custom.idLabel')}
-            </label>
-            <div className="flex-col-xs">
-              <input
-                id="model-drawer-custom-id"
-                type="text"
-                className="input mono"
-                value={customId}
-                onChange={(e) => onCustomIdChange(e.target.value)}
-                placeholder={t('models.custom.idPlaceholder')}
-                autoComplete="off"
-              />
-            </div>
-          </>
+          <Field
+            label={t('models.custom.idLabel')}
+            htmlFor="model-drawer-custom-id"
+            required
+            layout="horizontal"
+          >
+            <Input
+              mono
+              value={customId}
+              onChange={(e) => onCustomIdChange(e.target.value)}
+              placeholder={t('models.custom.idPlaceholder')}
+              autoComplete="off"
+            />
+          </Field>
         )}
 
         {endpointEditable && (
           <>
-            <label htmlFor="model-drawer-custom-label" className="form-grid-label">
-              {t('models.custom.labelLabel')}
-            </label>
-            <div className="flex-col-xs">
-              <input
-                id="model-drawer-custom-label"
-                type="text"
-                className="input"
+            <Field
+              label={t('models.custom.labelLabel')}
+              htmlFor="model-drawer-custom-label"
+              layout="horizontal"
+            >
+              <Input
                 value={customLabel}
                 onChange={(e) => onCustomLabelChange(e.target.value)}
                 placeholder={t('models.custom.labelPlaceholder')}
                 autoComplete="off"
               />
-            </div>
+            </Field>
 
-            <label htmlFor="model-drawer-custom-protocol" className="form-grid-label">
-              {t('models.custom.protocolLabel')}
-            </label>
-            <div className="flex-col-xs">
+            <Field
+              label={t('models.custom.protocolLabel')}
+              htmlFor="model-drawer-custom-protocol"
+              layout="horizontal"
+            >
               <Select
-                id="model-drawer-custom-protocol"
                 value={customProtocol}
                 options={protocolOptions}
                 inline={inline}
@@ -165,66 +171,66 @@ export function ProviderCredentialsSection({
                   onCustomProtocolChange(e.target.value === 'anthropic' ? 'anthropic' : 'openai')
                 }
               />
-            </div>
+            </Field>
           </>
         )}
 
-        <label htmlFor="model-drawer-api-key" className="form-grid-label">
-          {t('models.apiKey')}
-        </label>
-        <div className="flex-col-xs">
-          {!isNewCustom && provider?.pluginId ? (
-            <>
+        {!isNewCustom && provider?.pluginId ? (
+          <Field
+            label={t('models.apiKey')}
+            htmlFor={false}
+            hint={t('models.apiKey.pluginManagedHint')}
+            layout="horizontal"
+          >
+            <Stack direction="vertical" gap="xs">
               <div className="form-grid-value" title={t('models.apiKey.pluginKeyTitle')}>
                 {t('models.apiKey.pluginManaged', { pluginId: provider.pluginId })}
               </div>
-              <span className="text-subtle">
-                {t('models.apiKey.pluginManagedHint')}
-              </span>
               {canOpenPluginSettings ? (
                 <div>
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-secondary"
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    icon="puzzle"
                     onClick={() => onOpenPluginSettings(provider.pluginId!)}
                   >
-                    <HelmxIcon name="puzzle" size={12} />
-                    <span>{t('models.plugin.openSettings', { pluginId: provider.pluginId })}</span>
-                  </button>
+                    {t('models.plugin.openSettings', { pluginId: provider.pluginId })}
+                  </Button>
                 </div>
               ) : null}
-            </>
-          ) : (
-            <>
-              <input
-                id="model-drawer-api-key"
-                type="password"
-                className="input"
-                value={apiKey}
-                onChange={(e) => onApiKeyChange(e.target.value)}
-                placeholder={
-                  !isNewCustom && provider?.configured
-                    ? t('models.apiKey.placeholderConfigured')
-                    : t('models.apiKey.placeholderEnter')
-                }
-                autoComplete="off"
-              />
-              <span className="text-subtle">
-                {t('models.apiKey.secretHint')}
-              </span>
-            </>
-          )}
-        </div>
+            </Stack>
+          </Field>
+        ) : (
+          <Field
+            label={t('models.apiKey')}
+            htmlFor="model-drawer-api-key"
+            hint={t('models.apiKey.secretHint')}
+            layout="horizontal"
+          >
+            <Input
+              type="password"
+              value={apiKey}
+              onChange={(e) => onApiKeyChange(e.target.value)}
+              placeholder={
+                !isNewCustom && provider?.configured
+                  ? t('models.apiKey.placeholderConfigured')
+                  : t('models.apiKey.placeholderEnter')
+              }
+              autoComplete="off"
+            />
+          </Field>
+        )}
 
-        <label htmlFor="model-drawer-base-url" className="form-grid-label">
-          {t('models.endpoint')}
-        </label>
-        <div className="flex-col-xs">
-          {endpointEditable ? (
-            <input
-              id="model-drawer-base-url"
-              type="text"
-              className="input mono"
+        {endpointEditable ? (
+          <Field
+            label={t('models.endpoint')}
+            htmlFor="model-drawer-base-url"
+            hint={endpointHint}
+            required
+            layout="horizontal"
+          >
+            <Input
+              mono
               value={baseUrl}
               onChange={(e) => onBaseUrlChange(e.target.value)}
               placeholder={
@@ -234,94 +240,96 @@ export function ProviderCredentialsSection({
                   : t('models.endpoint.defaultUrlPlaceholder'))
               }
             />
-          ) : (
+          </Field>
+        ) : (
+          <Field
+            label={t('models.endpoint')}
+            htmlFor={false}
+            hint={endpointHint}
+            layout="horizontal"
+          >
             <div className="form-grid-value mono break-word" title={t('models.endpoint.readOnlyTitle')}>
               {provider?.baseUrl || '—'}
             </div>
-          )}
-          <span className="text-subtle">{endpointHint}</span>
-        </div>
+          </Field>
+        )}
 
         {endpointEditable && (
-          <>
-            <label htmlFor="model-drawer-custom-models" className="form-grid-label form-grid-align-start">
-              {t('models.custom.modelsLabel')}
-            </label>
-            <div className="flex-col-xs">
-              <textarea
-                id="model-drawer-custom-models"
-                className="input mono"
-                rows={4}
-                value={customModelsText}
-                onChange={(e) => onCustomModelsTextChange(e.target.value)}
-                placeholder={t('models.custom.modelsPlaceholder')}
-              />
-              <span className="text-subtle">{t('models.custom.modelsHint')}</span>
-            </div>
-          </>
+          <Field
+            label={t('models.custom.modelsLabel')}
+            htmlFor="model-drawer-custom-models"
+            hint={t('models.custom.modelsHint')}
+            required
+            layout="horizontal"
+          >
+            <Textarea
+              mono
+              rows={4}
+              value={customModelsText}
+              onChange={(e) => onCustomModelsTextChange(e.target.value)}
+              placeholder={t('models.custom.modelsPlaceholder')}
+            />
+          </Field>
         )}
-      </div>
+      </Stack>
 
       {/* Connectivity test and destructive actions */}
       {!isNewCustom && provider && (canTestConnection || provider.configured || (provider.custom === true && hasDeleteCustomGateway)) && (
-        <div className="flex-row-between flex-row-wrap">
-          <div className="flex-row">
+        <Stack direction="horizontal" gap="sm" align="center" justify="between" wrap>
+          <Stack direction="horizontal" gap="sm" align="center">
             {canTestConnection && (
-              <button
-                type="button"
-                className="btn btn-sm"
+              <Button
+                size="sm"
+                icon="activity"
+                pending={testing}
                 onClick={onTest}
-                disabled={testing}
               >
-                <HelmxIcon name="activity" size={12} />
-                <span>{testing ? t('models.test.testing') : t('models.test.action')}</span>
-              </button>
+                {testing ? t('models.test.testing') : t('models.test.action')}
+              </Button>
             )}
-          </div>
+          </Stack>
 
-          <div className="flex-row">
+          <Stack direction="horizontal" gap="sm" align="center">
             {provider.configured && !provider.pluginId && (
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost text-err"
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="trash"
+                className="text-err"
                 onClick={onRequestDeleteCredential}
                 disabled={deleting}
               >
-                <HelmxIcon name="trash" size={12} />
-                <span>{t('models.credentials.delete')}</span>
-              </button>
+                {t('models.credentials.delete')}
+              </Button>
             )}
             {provider.custom === true && hasDeleteCustomGateway && (
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost text-err"
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="trash"
+                className="text-err"
                 onClick={onRequestDeleteGateway}
                 disabled={deleting}
               >
-                <HelmxIcon name="trash" size={12} />
-                <span>{t('models.custom.deleteAction')}</span>
-              </button>
+                {t('models.custom.deleteAction')}
+              </Button>
             )}
-          </div>
-        </div>
+          </Stack>
+        </Stack>
       )}
 
       {testResult && (
-        <div
-          className={`callout ${testResult.success ? 'callout-ok' : 'callout-error'}`}
-          role={testResult.success ? 'status' : 'alert'}
-        >
-          <HelmxIcon
-            name={testResult.success ? 'check' : 'alert-circle'}
-            size={13}
-          />
-          <span className="callout-text selectable">
+        <Callout tone={testResult.success ? 'ok' : 'err'}>
+          <span
+            className="callout-text selectable"
+            role={testResult.success ? 'status' : 'alert'}
+          >
             {testResult.message}
             {testResult.latencyMs !== undefined &&
               t('models.test.latency', { ms: testResult.latencyMs })}
           </span>
-        </div>
+        </Callout>
       )}
-    </div>
+    </Card>
   )
 }

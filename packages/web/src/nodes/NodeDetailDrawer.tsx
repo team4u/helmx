@@ -1,5 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { copyToClipboard, CopyButton, DetailDrawer, HelmxIcon, PluginSlot } from '@helmx/plugin-client'
+import {
+  Badge,
+  Button,
+  Callout,
+  Card,
+  copyToClipboard,
+  CopyButton,
+  DetailDrawer,
+  EmptyState,
+  Field,
+  HelmxIcon,
+  Input,
+  KvGrid,
+  MonoId,
+  PluginSlot,
+  Stack,
+} from '@helmx/plugin-client'
 import { nodesApi } from '../lib/api.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -273,302 +289,323 @@ export function NodeDetailDrawer({
       titleExtra={
         <>
           {!isNew && (
-            <span
-              className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'}`}
+            <Badge
+              tone={isOnline ? 'ok' : 'neutral'}
+              icon={isOnline ? 'check' : 'circle'}
             >
-              <HelmxIcon name={isOnline ? 'check' : 'circle'} size={10} />
-              <span>{isOnline ? t('common.online') : t('common.offline')}</span>
-            </span>
+              {isOnline ? t('common.online') : t('common.offline')}
+            </Badge>
           )}
           {isLocal && (
-            <span className="badge badge-neutral">{t('nodes.local')}</span>
+            <Badge tone="neutral">{t('nodes.local')}</Badge>
           )}
           {node?.version && (
-            <span className="badge badge-neutral mono">
+            <Badge tone="neutral" mono>
               {node.version.startsWith('v') ? node.version : `v${node.version}`}
-            </span>
+            </Badge>
           )}
         </>
       }
-      meta={!isNew && node?.id ? node.id : undefined}
+      meta={!isNew && node?.id ? <MonoId value={node.id} /> : undefined}
       metaClassName="text-subtle break-word"
       icon={<HelmxIcon name={iconName} size={22} />}
       aria-label={displayName}
       closeLabel={t('common.close')}
       footer={
-        <button type="button" className="btn btn-sm" onClick={onClose}>
+        <Button size="sm" onClick={onClose}>
           {t('common.close')}
-        </button>
+        </Button>
       }
     >
-            {!node && !isNew ? (
-              <div className="primary-center-empty">{t('nodes.drawer.noSelection')}</div>
-            ) : (
-              <>
-                {/* 1. Node system overview */}
-                {!isNew && node && (
-                  <section className="section-flat">
-                    <div className="section-flat-header">
-                      <HelmxIcon name="cpu" size={13} />
-                      <span className="section-flat-title">{t('nodes.drawer.overview')}</span>
-                    </div>
-
-                    <div className="form-grid">
-                      <span className="form-grid-label">{t('nodes.drawer.os')}</span>
-                      <span className="mono selectable form-grid-value">
-                        {node.os || node.platform || '--'}
-                      </span>
-
-                      <span className="form-grid-label">{t('nodes.drawer.arch')}</span>
-                      <span className="mono selectable form-grid-value">
-                        {node.arch || '--'}
-                      </span>
-
-                      <span className="form-grid-label">{t('nodes.drawer.version')}</span>
-                      <span className="mono selectable form-grid-value">
-                        {node.version || '--'}
-                      </span>
-
-                      <span className="form-grid-label">{t('nodes.drawer.hostname')}</span>
-                      <span className="mono selectable form-grid-value">
-                        {node.hostname || '--'}
-                      </span>
-
-                      <span className="form-grid-label">{t('nodes.drawer.cwd')}</span>
-                      <span className="mono selectable form-grid-value">
-                        {node.cwd || '--'}
-                      </span>
-
-                      <span className="form-grid-label">{t('nodes.drawer.channel')}</span>
-                      <span className="mono selectable form-grid-value">
+      {!node && !isNew ? (
+        <EmptyState title={t('nodes.drawer.noSelection')} />
+      ) : (
+        <>
+          {/* 1. Node system overview */}
+          {!isNew && node && (
+            <Card
+              variant="subtle"
+              title={
+                <Stack direction="horizontal" gap="xs" align="center" inline>
+                  <HelmxIcon name="cpu" size={13} />
+                  <span>{t('nodes.drawer.overview')}</span>
+                </Stack>
+              }
+            >
+              <KvGrid
+                items={[
+                  {
+                    key: t('nodes.drawer.os'),
+                    value: <span className="mono selectable">{node.os || node.platform || '--'}</span>,
+                  },
+                  {
+                    key: t('nodes.drawer.arch'),
+                    value: <span className="mono selectable">{node.arch || '--'}</span>,
+                  },
+                  {
+                    key: t('nodes.drawer.version'),
+                    value: <span className="mono selectable">{node.version || '--'}</span>,
+                  },
+                  {
+                    key: t('nodes.drawer.hostname'),
+                    value: <span className="mono selectable">{node.hostname || '--'}</span>,
+                  },
+                  {
+                    key: t('nodes.drawer.cwd'),
+                    value: <span className="mono selectable">{node.cwd || '--'}</span>,
+                  },
+                  {
+                    key: t('nodes.drawer.channel'),
+                    value: (
+                      <span className="mono selectable">
                         {node.hubUrl || (isLocal ? t('nodes.drawer.localIpc') : '--')}
                       </span>
+                    ),
+                  },
+                  {
+                    key: t('nodes.drawer.uptime'),
+                    value: <span className="mono selectable">{uptime}</span>,
+                  },
+                ]}
+              />
+            </Card>
+          )}
 
-                      <span className="form-grid-label">{t('nodes.drawer.uptime')}</span>
-                      <span className="mono selectable form-grid-value">{uptime}</span>
-                    </div>
-                  </section>
-                )}
+          {/* 1.5 Plugin extension slots (other plugins inject node sections into builtin:node/detail-section) */}
+          {!isNew && node && (
+            <PluginSlot
+              ownerPluginId="builtin:node"
+              name={NODE_DETAIL_SECTION_SLOT}
+              slotProps={{
+                nodeId: node.id,
+                isLocal,
+                isOnline,
+                isNew: false,
+              }}
+            />
+          )}
 
-                {/* 1.5 Plugin extension slots (other plugins inject node sections into builtin:node/detail-section) */}
-                {!isNew && node && (
-                  <PluginSlot
-                    ownerPluginId="builtin:node"
-                    name={NODE_DETAIL_SECTION_SLOT}
-                    slotProps={{
-                      nodeId: node.id,
-                      isLocal,
-                      isOnline,
-                      isNew: false,
-                    }}
-                  />
-                )}
-
-                {/* 2. Node health check */}
-                {!isNew && node && (
-                  <section className="section-flat">
-                    <div className="section-flat-header flex-row-between">
-                      <div className="flex-row">
-                        <HelmxIcon name="activity" size={13} />
-                        <span className="section-flat-title">{t('nodes.drawer.healthSection')}</span>
-                      </div>
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        disabled={checkingHealth}
-                        onClick={() => void handleHealthCheck()}
-                      >
-                        <HelmxIcon name="activity" size={12} />
-                        <span>{checkingHealth ? t('nodes.drawer.checking') : t('nodes.drawer.healthAction')}</span>
-                      </button>
-                    </div>
-
-                    <div className="form-grid">
-                      <span className="form-grid-label">{t('nodes.drawer.cpuUsage')}</span>
-                      <span className="mono selectable form-grid-value">
+          {/* 2. Node health check */}
+          {!isNew && node && (
+            <Card
+              variant="subtle"
+              title={
+                <Stack direction="horizontal" gap="xs" align="center" inline>
+                  <HelmxIcon name="activity" size={13} />
+                  <span>{t('nodes.drawer.healthSection')}</span>
+                </Stack>
+              }
+              actions={
+                <Button
+                  size="sm"
+                  icon="activity"
+                  pending={checkingHealth}
+                  onClick={() => void handleHealthCheck()}
+                >
+                  {checkingHealth ? t('nodes.drawer.checking') : t('nodes.drawer.healthAction')}
+                </Button>
+              }
+            >
+              <KvGrid
+                items={[
+                  {
+                    key: t('nodes.drawer.cpuUsage'),
+                    value: (
+                      <span className="mono selectable">
                         {health?.cpuUsagePercent !== undefined
                           ? `${health.cpuUsagePercent}%`
                           : '--'}
                       </span>
-
-                      <span className="form-grid-label">{t('nodes.drawer.systemLoad')}</span>
-                      <span className="mono selectable form-grid-value">
+                    ),
+                  },
+                  {
+                    key: t('nodes.drawer.systemLoad'),
+                    value: (
+                      <span className="mono selectable">
                         {health?.loadAvg
                           ? `${health.loadAvg[0]?.toFixed(2) ?? '--'} / ${health.loadAvg[1]?.toFixed(2) ?? '--'} / ${health.loadAvg[2]?.toFixed(2) ?? '--'}`
                           : health?.load1 !== undefined
                             ? `${health.load1} / ${health.load5 ?? '--'} / ${health.load15 ?? '--'}`
                             : '--'}
                       </span>
-
-                      <span className="form-grid-label">{t('nodes.drawer.memUsage')}</span>
-                      <span className="mono selectable form-grid-value">
+                    ),
+                  },
+                  {
+                    key: t('nodes.drawer.memUsage'),
+                    value: (
+                      <span className="mono selectable">
                         {memUsage?.label ??
                           (health?.memTotalBytes !== undefined
                             ? formatBytes(health.memTotalBytes)
                             : '--')}
                       </span>
-
-                      <span className="form-grid-label">{t('nodes.drawer.diskSpace')}</span>
-                      <span className="mono selectable form-grid-value">
+                    ),
+                  },
+                  {
+                    key: t('nodes.drawer.diskSpace'),
+                    value: (
+                      <span className="mono selectable">
                         {diskUsage?.label ??
                           (health?.diskTotalBytes !== undefined
                             ? formatBytes(health.diskTotalBytes)
                             : '--')}
                       </span>
-                    </div>
+                    ),
+                  },
+                ]}
+              />
 
-                    {healthResult && (
-                      <div
-                        className={`callout ${healthResult.updateAvailable ? 'callout-warn' : 'callout-ok'}`}
-                        role="status"
-                      >
-                        <HelmxIcon
-                          name={healthResult.updateAvailable ? 'alert-triangle' : 'check'}
-                          size={13}
-                        />
-                        <span className="callout-text">
-                          {healthResult.updateAvailable
-                            ? t('nodes.drawer.updateAvailable', { version: healthResult.latestVersion })
-                            : t('nodes.drawer.upToDate')}
-                        </span>
-                      </div>
-                    )}
+              {healthResult && (
+                <Callout tone={healthResult.updateAvailable ? 'warn' : 'ok'}>
+                  <span className="callout-text" role="status">
+                    {healthResult.updateAvailable
+                      ? t('nodes.drawer.updateAvailable', { version: healthResult.latestVersion })
+                      : t('nodes.drawer.upToDate')}
+                  </span>
+                </Callout>
+              )}
 
-                    {healthError && (
-                      <div className="callout callout-error" role="alert">
-                        <HelmxIcon name="alert-circle" size={13} />
-                        <span className="callout-text">{healthError}</span>
-                      </div>
-                    )}
-                  </section>
-                )}
+              {healthError && (
+                <Callout tone="err">
+                  <span className="callout-text" role="alert">{healthError}</span>
+                </Callout>
+              )}
+            </Card>
+          )}
 
-                {/* 3. Remote node access token and start command (when the node is remote or used to enroll a new node) */}
-                {(!isLocal || isNew) && (
-                  <section className="section-flat border-accent">
-                    <div className="section-flat-header">
-                      <HelmxIcon name="key" size={13} />
-                      <span className="section-flat-title">{t('nodes.drawer.enrollSection')}</span>
-                    </div>
+          {/* 3. Remote node access token and start command (when the node is remote or used to enroll a new node) */}
+          {(!isLocal || isNew) && (
+            <Card
+              variant="subtle"
+              className="border-accent"
+              title={
+                <Stack direction="horizontal" gap="xs" align="center" inline>
+                  <HelmxIcon name="key" size={13} />
+                  <span>{t('nodes.drawer.enrollSection')}</span>
+                </Stack>
+              }
+            >
+              {isNew && (
+                <Field
+                  label={t('nodes.drawer.nodeId')}
+                  htmlFor="new-node-id-input"
+                  layout="horizontal"
+                >
+                  <Input
+                    mono
+                    invalid={tokenError !== null}
+                    placeholder={t('nodes.drawer.nodeIdPlaceholder')}
+                    value={newNodeId}
+                    onChange={(e) => setNewNodeId(e.target.value)}
+                  />
+                </Field>
+              )}
 
-                    {isNew && (
-                      <div className="form-grid">
-                        <label htmlFor="new-node-id-input" className="form-grid-label">
-                          {t('nodes.drawer.nodeId')}
-                        </label>
-                        <input
-                          id="new-node-id-input"
-                          type="text"
-                          className="input mono"
-                          placeholder={t('nodes.drawer.nodeIdPlaceholder')}
-                          value={newNodeId}
-                          onChange={(e) => setNewNodeId(e.target.value)}
-                        />
-                      </div>
-                    )}
+              <Stack direction="horizontal" gap="sm" align="center">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon="key"
+                  pending={issuing}
+                  disabled={isNew && !newNodeId.trim()}
+                  onClick={() => void handleIssueToken()}
+                >
+                  {issuedToken ? t('nodes.drawer.reissueToken') : t('nodes.drawer.issueToken')}
+                </Button>
+              </Stack>
 
-                    <div className="flex-row">
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-primary"
-                        disabled={issuing || (isNew && !newNodeId.trim())}
-                        onClick={() => void handleIssueToken()}
-                      >
-                        <HelmxIcon name="key" size={12} />
-                        <span>{issuedToken ? t('nodes.drawer.reissueToken') : t('nodes.drawer.issueToken')}</span>
-                      </button>
-                    </div>
+              {tokenError && (
+                <Callout tone="err">
+                  <span className="callout-text" role="alert">{tokenError}</span>
+                </Callout>
+              )}
 
-                    {tokenError && (
-                      <div className="callout callout-error" role="alert">
-                        <HelmxIcon name="alert-circle" size={13} />
-                        <span className="callout-text">{tokenError}</span>
-                      </div>
-                    )}
+              {issuedToken && (
+                <Stack direction="vertical" gap="xs">
+                  <div className="text-subtle">{t('nodes.drawer.tokenLabel')}</div>
+                  <Stack direction="horizontal" gap="sm" align="center" wrap>
+                    <code className="code-box selectable flex-1 mono">
+                      {issuedToken}
+                    </code>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={copiedToken ? 'check' : 'copy'}
+                      onClick={() => void handleCopyToken()}
+                      title={t('nodes.drawer.copyToken')}
+                    >
+                      {copiedToken ? t('nodes.drawer.copied') : t('nodes.drawer.copyToken')}
+                    </Button>
+                  </Stack>
+                </Stack>
+              )}
 
-                    {issuedToken && (
-                      <div className="flex-col">
-                        <div className="text-subtle">{t('nodes.drawer.tokenLabel')}</div>
-                        <div className="flex-row flex-row-wrap">
-                          <code className="code-box selectable flex-1 mono">
-                            {issuedToken}
-                          </code>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => void handleCopyToken()}
-                            title={t('nodes.drawer.copyToken')}
-                          >
-                            <HelmxIcon name={copiedToken ? 'check' : 'copy'} size={12} />
-                            <span>{copiedToken ? t('nodes.drawer.copied') : t('nodes.drawer.copyToken')}</span>
-                          </button>
-                        </div>
-                      </div>
-                    )}
+              {guide && (
+                <Stack direction="vertical" gap="xs">
+                  <div className="text-subtle">{t('nodes.drawer.oneLineLabel')}</div>
+                  <Stack direction="horizontal" gap="sm" align="center" wrap>
+                    <code className="code-box selectable flex-1 mono">
+                      {guide.oneLineCommand}
+                    </code>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={copiedCmd ? 'check' : 'copy'}
+                      onClick={() => void handleCopyCmd()}
+                      title={t('nodes.drawer.copyCommandTitle')}
+                    >
+                      {copiedCmd ? t('nodes.drawer.copied') : t('nodes.drawer.copyCommand')}
+                    </Button>
+                  </Stack>
 
-                    {guide && (
-                      <div className="flex-col">
-                        <div className="text-subtle">{t('nodes.drawer.oneLineLabel')}</div>
-                        <div className="flex-row flex-row-wrap">
-                          <code className="code-box selectable flex-1 mono">
-                            {guide.oneLineCommand}
-                          </code>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => void handleCopyCmd()}
-                            title={t('nodes.drawer.copyCommandTitle')}
-                          >
-                            <HelmxIcon name={copiedCmd ? 'check' : 'copy'} size={12} />
-                            <span>{copiedCmd ? t('nodes.drawer.copied') : t('nodes.drawer.copyCommand')}</span>
-                          </button>
-                        </div>
+                  <div className="text-subtle">
+                    {t('nodes.drawer.maintenanceLabel')}
+                  </div>
+                  <Stack direction="horizontal" gap="sm" align="center" wrap>
+                    <code className="code-box selectable flex-1 mono">
+                      {guide.startDaemonCommand}
+                    </code>
+                    <CopyButton text={guide.startDaemonCommand} />
+                  </Stack>
+                  <Stack direction="horizontal" gap="sm" align="center" wrap>
+                    <code className="code-box selectable flex-1 mono">
+                      {guide.doctorCommand}
+                    </code>
+                    <CopyButton text={guide.doctorCommand} />
+                  </Stack>
+                </Stack>
+              )}
+            </Card>
+          )}
 
-                        <div className="text-subtle">
-                          {t('nodes.drawer.maintenanceLabel')}
-                        </div>
-                        <div className="flex-row flex-row-wrap">
-                          <code className="code-box selectable flex-1 mono">
-                            {guide.startDaemonCommand}
-                          </code>
-                          <CopyButton text={guide.startDaemonCommand} />
-                        </div>
-                        <div className="flex-row flex-row-wrap">
-                          <code className="code-box selectable flex-1 mono">
-                            {guide.doctorCommand}
-                          </code>
-                          <CopyButton text={guide.doctorCommand} />
-                        </div>
-                      </div>
-                    )}
-                  </section>
-                )}
-
-                {/* 4. Registered tool capabilities */}
-                {!isNew && (
-                  <section className="section-flat">
-                    <div className="section-flat-header">
-                      <HelmxIcon name="wrench" size={13} />
-                      <span className="section-flat-title">{t('nodes.drawer.toolsSection')}</span>
-                    </div>
-
-                    <div className="primary-card-pills">
-                      {tools.map((tool) => (
-                        <span
-                          key={tool}
-                          className="primary-card-pill mono"
-                          title={t('nodes.drawer.toolTitle', { tool })}
-                        >
-                          <HelmxIcon name="terminal" size={11} />
-                          <span>{tool}</span>
-                        </span>
-                      ))}
-                    </div>
-                  </section>
-                )}
-              </>
-            )}
-
+          {/* 4. Registered tool capabilities */}
+          {!isNew && (
+            <Card
+              variant="subtle"
+              title={
+                <Stack direction="horizontal" gap="xs" align="center" inline>
+                  <HelmxIcon name="wrench" size={13} />
+                  <span>{t('nodes.drawer.toolsSection')}</span>
+                </Stack>
+              }
+            >
+              <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
+                {tools.map((tool) => (
+                  <Badge
+                    key={tool}
+                    tone="neutral"
+                    mono
+                    icon="terminal"
+                    title={t('nodes.drawer.toolTitle', { tool })}
+                  >
+                    {tool}
+                  </Badge>
+                ))}
+              </Stack>
+            </Card>
+          )}
+        </>
+      )}
     </DetailDrawer>
   )
 }

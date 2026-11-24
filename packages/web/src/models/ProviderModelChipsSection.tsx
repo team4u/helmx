@@ -1,5 +1,13 @@
 import React, { useMemo } from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
+import {
+  Badge,
+  Button,
+  Card,
+  HelperText,
+  HelmxIcon,
+  SearchBox,
+  Stack,
+} from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ProviderItem, ProviderModelItem } from './model-center-model.js'
 
@@ -71,47 +79,47 @@ export function ProviderModelChipsSection({
   )
 
   return (
-    <div className="section-flat">
-      <div className="section-flat-header flex-row-between">
-        <div className="flex-row">
+    <Card
+      variant="subtle"
+      title={
+        <Stack direction="horizontal" gap="xs" align="center" inline>
           <HelmxIcon name="cpu" size={14} />
-          <span className="section-flat-title">{t('models.models.section')}</span>
-        </div>
-        <span className="badge badge-neutral mono tabular-nums">
+          <span>{t('models.models.section')}</span>
+        </Stack>
+      }
+      actions={
+        <Badge tone="neutral" mono className="tabular-nums">
           {t('models.models.countBadge', {
             enabled: enabledCount,
             total: models.length,
           })}
-        </span>
-      </div>
-
-      <p className="text-subtle">
+        </Badge>
+      }
+    >
+      <HelperText>
         {filterEligible ? t('models.models.hint') : t('models.models.filterRequiresConfig')}
-      </p>
+      </HelperText>
 
       {models.length === 0 ? (
-        <div className="text-subtle">
+        <HelperText>
           {provider.dynamic
             ? t('models.models.emptyDynamic')
             : t('models.models.emptyStatic')}
-        </div>
+        </HelperText>
       ) : (
         <div className="models model-chips-container">
           <div className="mbulk model-chips-toolbar">
-            <div className="search-box flex-1">
-              <HelmxIcon name="search" size={13} />
-              <input
-                type="text"
-                placeholder={t('models.models.filterPlaceholder')}
-                value={modelFilter}
-                onChange={(e) => onModelFilterChange(e.target.value)}
-                aria-label={t('models.models.filterAria')}
-              />
-            </div>
+            <SearchBox
+              className="search-box flex-1"
+              value={modelFilter}
+              onChange={onModelFilterChange}
+              placeholder={t('models.models.filterPlaceholder')}
+              ariaLabel={t('models.models.filterAria')}
+            />
             <div className="model-chips-actions">
-              <button
-                type="button"
-                className="text action"
+              <Button
+                variant="secondary"
+                size="sm"
                 disabled={!filterEligible}
                 onClick={() => onSelectAll(matchedIds)}
                 title={hasModelFilter ? t('models.models.enableMatchesTitle') : t('models.models.enableAll')}
@@ -119,10 +127,10 @@ export function ProviderModelChipsSection({
                 {hasModelFilter
                   ? t('models.models.enableMatches', { count: filteredModels.length })
                   : t('models.models.enableAll')}
-              </button>
-              <button
-                type="button"
-                className="text action"
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
                 disabled={!filterEligible}
                 onClick={() => onClearAll(matchedIds)}
                 title={hasModelFilter ? t('models.models.disableMatchesTitle') : t('models.models.disableAll')}
@@ -130,7 +138,7 @@ export function ProviderModelChipsSection({
                 {hasModelFilter
                   ? t('models.models.disableMatches', { count: filteredModels.length })
                   : t('models.models.disableAll')}
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -140,9 +148,9 @@ export function ProviderModelChipsSection({
             aria-label={t('models.models.selectAria')}
           >
             {visibleModels.length === 0 ? (
-              <span className="text-subtle">
+              <HelperText>
                 {t('models.models.noMatches')}
-              </span>
+              </HelperText>
             ) : (
               visibleModels.map((model) => {
                 const isChecked = Boolean(model.enabled)
@@ -197,6 +205,6 @@ export function ProviderModelChipsSection({
           )}
         </div>
       )}
-    </div>
+    </Card>
   )
 }

@@ -1,6 +1,6 @@
 import type * as React from 'react'
 import { useMemo, useState } from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { Button, CardGrid } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   useLocationTargets,
@@ -141,10 +141,9 @@ export function ProfileCenter({
       icon="bot"
       title={t('profiles.center.title')}
       headerActions={
-        <button type="button" className="btn btn-sm" onClick={handleCreateNew}>
-          <HelmxIcon name="plus" size={12} />
+        <Button size="sm" icon="plus" onClick={handleCreateNew}>
           <span className="pane-action-label">{t('profiles.center.newProfile')}</span>
-        </button>
+        </Button>
       }
       toolbar={
         <SystemCenterToolbar
@@ -172,7 +171,7 @@ export function ProfileCenter({
       }
     >
       {filteredProfiles.length > 0 ? (
-        <div className="primary-center-grid">
+        <CardGrid minWidth="md" gap="md">
           {filteredProfiles.map((p) => (
             <ProfileCard
               key={p.id}
@@ -182,7 +181,7 @@ export function ProfileCenter({
               onSelect={() => handleSelectProfile(p.id)}
             />
           ))}
-        </div>
+        </CardGrid>
       ) : (
         <SystemCenterEmpty
           title={t('profiles.center.emptyTitle')}

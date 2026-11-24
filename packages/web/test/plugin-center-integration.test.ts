@@ -132,7 +132,7 @@ test('PluginCenter SSR：渲染搜索框、统计徽章与卡片网格', { timeo
   assert.doesNotMatch(html, /个异常/)
 
   // 5. 响应式自适应网格与所有卡片
-  assert.match(html, /class="[^"]*primary-center-grid[^"]*"/)
+  assert.match(html, /class="[^"]*helmx-card-grid[^"]*"/)
   assert.match(html, /data-plugin-id="builtin:profile"/)
   assert.match(html, /data-plugin-id="builtin:workflow"/)
   assert.match(html, /data-plugin-id="builtin:herdr"/)

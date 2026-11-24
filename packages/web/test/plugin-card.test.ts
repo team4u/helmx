@@ -106,7 +106,7 @@ test('PluginCard：SSR 渲染包含图标、名称、版本、常驻标签与能
   )
 
   // 1. 卡片主体类名与插件 ID 标记
-  assert.match(html, /class="[^"]*plugin-card[^"]*"/)
+  assert.match(html, /class="[^"]*helmx-select-card[^"]*plugin-card[^"]*"/)
   assert.match(html, /data-plugin-id="builtin:workflow"/)
 
   // 2. 名称与 ID
@@ -118,13 +118,13 @@ test('PluginCard：SSR 渲染包含图标、名称、版本、常驻标签与能
 
   // 4. 常驻锁定标签（locked: true）
   assert.match(html, /Resident/)
-  assert.match(html, /plugin-card-locked-badge/)
+  assert.match(html, /class="[^"]*badge badge-neutral[^"]*"[^>]*title="Resident core plugin/)
 
-  // 5. 能力胶囊徽章（Tools / Actions / Hooks）
+  // 5. 能力徽章（Tools / Actions / Hooks）
   assert.match(html, /2 Tools/)
   assert.match(html, /2 Actions/)
   assert.match(html, /1 Hooks/)
-  assert.match(html, /class="[^"]*plugin-card-pill[^"]*"/)
+  assert.match(html, /class="[^"]*badge badge-neutral mono[^"]*"/)
 
   // 6. Switch 开关渲染且因 locked 处于禁用态
   assert.match(html, /role="switch"/)
@@ -160,7 +160,7 @@ test('PluginCard：点击卡片主体及按键触发 onSelect 回调', { timeout
   const cardEl = container.querySelector('.plugin-card') as HTMLElement
   assert.ok(cardEl, '必须渲染 .plugin-card 容器')
   assert.equal(cardEl.tagName, 'ARTICLE', '含内部操作控件的卡片外层使用语义 article 而非嵌套 role=button')
-  const openBtn = cardEl.querySelector<HTMLButtonElement>('.primary-card-open')
+  const openBtn = cardEl.querySelector<HTMLButtonElement>('.helmx-select-card-trigger')
   assert.ok(openBtn !== null && openBtn.tagName === 'BUTTON', '卡片标题区应由原生 button 承载键盘无障碍入口')
 
   // 点击卡片主体触发一次 onSelect

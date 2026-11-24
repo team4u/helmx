@@ -240,7 +240,7 @@ test('NodeCard: SSR renders node name, architecture badge, online indicator with
     ),
   )
 
-  assert.match(localHtml, /primary-card/)
+  assert.match(localHtml, /helmx-select-card/)
   assert.match(localHtml, /本机开发微内核/)
   assert.match(localHtml, /local/)
   assert.match(localHtml, /linux \/ x64/)
@@ -310,16 +310,24 @@ test('NodeCard: click and Enter/Space keyboard interaction activate onSelect', {
     )
   })
 
-  const card = container.querySelector('.primary-card') as HTMLButtonElement
-  assert.ok(card, 'must render .primary-card')
-  assert.equal(card.tagName, 'BUTTON', 'NodeCard uses a native button element for keyboard and pointer accessibility')
-  assert.equal(card.getAttribute('type'), 'button')
-  assert.equal(card.getAttribute('aria-pressed'), 'false')
+  const card = container.querySelector('.helmx-select-card') as HTMLElement
+  assert.ok(card, 'must render .helmx-select-card')
+  assert.equal(card.tagName, 'ARTICLE', 'NodeCard renders semantic article container via SelectCard')
+  const trigger = card.querySelector('.helmx-select-card-trigger') as HTMLButtonElement
+  assert.ok(trigger, 'SelectCard exposes a native trigger button for keyboard accessibility')
+  assert.equal(trigger.tagName, 'BUTTON')
+  assert.equal(trigger.getAttribute('type'), 'button')
+  assert.equal(trigger.getAttribute('aria-pressed'), 'false')
+
+  act(() => {
+    trigger.click()
+  })
+  assert.equal(selectCount, 1)
 
   act(() => {
     card.click()
   })
-  assert.equal(selectCount, 1)
+  assert.equal(selectCount, 2)
 
   act(() => {
     root.unmount()
@@ -443,7 +451,7 @@ test('NodeCenter: SSR renders top bar, search toolbar, category pills, grid flow
   assert.match(html, /离线/)
 
   // 3. Card grid
-  assert.match(html, /primary-center-grid/)
+  assert.match(html, /helmx-card-grid/)
   assert.match(html, /本机开发微内核/)
   assert.match(html, /GPU 推理集群节点 A/)
   assert.match(html, /离线备用计算节点/)

@@ -2,7 +2,7 @@ import type * as React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSummary } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { Button, CardGrid, HelmxIcon } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ApiClientError, pluginsApi } from '../lib/api.js'
 import { useLocationTargets, useOptionalGroupedUi, usePlugins, useStoreActions } from '../lib/store-context.js'
@@ -278,32 +278,30 @@ export function PluginCenter({
       headerActions={
         <>
           {managedPlugins.length > 0 && (
-            <button
-              type="button"
-              className="btn btn-sm"
+            <Button
+              size="sm"
+              icon={<HelmxIcon name="refresh-cw" size={12} className={batchUpdate !== null ? 'spin' : undefined} />}
               disabled={batchUpdate !== null || updatingIds.size > 0}
               title={t('plugins.center.updateAllTitle')}
               aria-label={t('plugins.center.updateAllAria')}
               onClick={() => void handleUpdateAll()}
             >
-              <HelmxIcon name="refresh-cw" size={12} className={batchUpdate !== null ? 'spin' : undefined} />
               <span className="pane-action-label">
                 {batchUpdate !== null
                   ? t('plugins.center.updatingAllProgress', { current: batchUpdate.current, total: batchUpdate.total })
                   : t('plugins.center.updateAll', { count: managedPlugins.length })}
               </span>
-            </button>
+            </Button>
           )}
-          <button
-            type="button"
-            className="btn btn-sm"
+          <Button
+            size="sm"
+            icon="download"
             title={t('plugins.center.installTitle')}
             aria-label={t('plugins.installPlugin')}
             onClick={() => setInstallOpen(true)}
           >
-            <HelmxIcon name="download" size={12} />
             <span className="pane-action-label">{t('plugins.installPlugin')}</span>
-          </button>
+          </Button>
         </>
       }
       toolbar={
@@ -344,7 +342,7 @@ export function PluginCenter({
       }
     >
       {filteredPlugins.length > 0 ? (
-        <div className="primary-center-grid">
+        <CardGrid minWidth="md" gap="md">
           {filteredPlugins.map((plugin) => (
             <PluginCard
               key={plugin.id}
@@ -358,7 +356,7 @@ export function PluginCenter({
               updateDisabled={batchUpdate !== null || updatingIds.size > 0}
             />
           ))}
-        </div>
+        </CardGrid>
       ) : (
         <SystemCenterEmpty
           title={t('plugins.center.emptyTitle')}

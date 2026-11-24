@@ -1,168 +1,30 @@
 /* ==========================================================================
- * 对话画布补充细节与全屏插件中心
+ * 全屏插件中心专属补充样式（外框/网格/分区/表单已收口至 SDK CardGrid/SelectCard/Card/Field）
  * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
  * ========================================================================== */
 
 /* --------------------------------------------------------------------------
- * 全屏插件中心：插件卡片（容器/顶栏/检索框/网格/空态复用 .primary-center-*）
+ * 全屏插件中心：插件卡片补充细节
  * -------------------------------------------------------------------------- */
 
-.plugin-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px 16px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
-  cursor: pointer;
-  position: relative;
-  min-height: 136px;
-  min-width: 0;
-  box-sizing: border-box;
-}
-
-.plugin-card:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.plugin-card-header > .primary-card-open {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.plugin-card:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-subtle);
-}
-
-.plugin-card.is-selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-.plugin-card.is-disabled {
+/* 已停用插件卡仍可点击打开抽屉排查/重启用：弱化透明度但保持 pointer 交互态 */
+.helmx-select-card.plugin-card.is-disabled {
   opacity: 0.72;
+  cursor: pointer;
 }
 
-.plugin-card.is-disabled:hover {
+.helmx-select-card.plugin-card.is-disabled:hover {
   opacity: 0.9;
-}
-
-.plugin-card-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.plugin-card-meta {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-}
-
-.plugin-card-title-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  width: 100%;
-}
-
-.plugin-card-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: left;
 }
 
 .plugin-card-version {
   font-size: 10.5px;
+  font-weight: 400;
   color: var(--fg-muted);
   font-family: var(--font-mono, monospace);
-}
-
-.plugin-card-locked-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
-  background: var(--bg-subtle);
-  color: var(--fg-muted);
-}
-
-.plugin-card-id {
-  font-size: 11px;
-  color: var(--fg-subtle);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: left;
-  width: 100%;
-}
-
-.plugin-card-desc {
-  font-size: 12px;
-  color: var(--fg-secondary);
-  line-height: 1.45;
-  min-height: 34px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.plugin-card-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-
-.plugin-card-pills {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.plugin-card-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: var(--radius-pill);
-  font-size: 10.5px;
-  font-weight: 500;
-  border: 1px solid var(--border);
-  background: var(--bg-subtle);
-  color: var(--fg-muted);
-  font-family: var(--font-mono, monospace);
-  white-space: nowrap;
 }
 
 .plugin-card-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
   flex-shrink: 0;
 }
 
@@ -178,18 +40,17 @@
   flex-shrink: 0;
 }
 
-/* 时间线内嵌自定义卡片重置内边距与外框，由内部 spec 自行定义结构 */
-[data-entry-id] > .plugin-card {
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  min-height: unset;
-  cursor: default;
+.plugin-card-error-summary {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--err);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* --------------------------------------------------------------------------
- * 全屏插件中心：插件详情抽屉内部区块（外层抽屉壳复用 SDK DetailDrawer / .primary-drawer-*）
+ * 全屏插件中心：插件详情抽屉内部区块（外层抽屉壳复用 SDK DetailDrawer / Card）
  * -------------------------------------------------------------------------- */
 
 .plugin-drawer-desc {
@@ -201,65 +62,22 @@
   word-break: break-word;
 }
 
-.plugin-drawer-action-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
+.plugin-drawer-action-card {
   padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-subtle);
 }
 
-.plugin-drawer-status-wrap {
+.plugin-drawer-failed-note {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-
-/* 抽屉操作区：视图快捷打开（主屏/右屏）与启停按钮；窄屏自动折行不溢出 */
-.plugin-drawer-screen-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
   gap: 6px;
   flex-wrap: wrap;
+  margin-top: 4px;
 }
 
-.plugin-drawer-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-subtle);
-}
-
-.plugin-drawer-section-title {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--fg);
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* 故障态卡片：发丝红边提示但不劫持全局布局 */
-.plugin-card.is-failed {
-  border-color: var(--err-border);
-}
-
-.plugin-card-error-summary {
-  margin-top: 3px;
+.plugin-drawer-failed-note .mono {
   font-size: 11px;
   color: var(--err);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  word-break: break-all;
 }
 
 /* 故障诊断框与占用确认内容排版 */
@@ -292,16 +110,18 @@
 }
 
 .plugin-inuse-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
   margin-top: 4px;
 }
 
 /* 配置字段：标签与默认/已配置标记不拆字碰撞，控件与单字段重置微操作同行 */
-.form-grid.plugin-config-row {
+.helmx-field-horizontal.plugin-config-row {
   grid-template-columns: minmax(140px, 176px) minmax(0, 1fr);
+}
+
+@media (max-width: 680px) {
+  .helmx-field-horizontal.plugin-config-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .plugin-config-field-label {
@@ -330,7 +150,9 @@
   min-width: 0;
 }
 
-.plugin-config-field-value .input {
+.plugin-config-field-value .input,
+.plugin-config-field-value .textarea,
+.plugin-config-field-value .helmx-select {
   flex: 1;
   min-width: 0;
 }
@@ -364,21 +186,6 @@
   font-family: var(--font-mono, monospace);
 }
 
-.plugin-capability-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.plugin-capability-tag {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--fg-secondary);
-}
-
 @media (max-width: 860px) {
   .plugin-drawer-split-btn,
   .plugin-card-split-btn {
@@ -398,13 +205,6 @@
   gap: 14px;
 }
 
-.plugin-install-input-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
 .plugin-source-hint {
   font-size: 11px;
   color: var(--fg-muted);
@@ -412,6 +212,7 @@
   align-items: center;
   gap: 4px;
 }
+
 .plugin-source-hint.is-unknown {
   color: var(--warn);
 }
@@ -422,9 +223,6 @@
 }
 
 .plugin-install-doctor {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -448,6 +246,7 @@
   color: var(--ok);
   margin-top: 1px;
 }
+
 .plugin-doctor-check.is-failed .plugin-doctor-check-mark {
   color: var(--err);
 }
@@ -474,51 +273,12 @@
   gap: 10px;
 }
 
-.plugin-package-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.plugin-package-source-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.plugin-package-source-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 6px;
-}
-
 .plugin-package-source-text {
   font-size: 11.5px;
   color: var(--fg-secondary);
   word-break: break-all;
 }
 
-.plugin-package-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
 .plugin-remove-confirm {
   max-width: 460px;
-}
-
-.plugin-drawer-failed-note {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 4px;
-}
-.plugin-drawer-failed-note .mono {
-  font-size: 11px;
-  color: var(--err);
-  word-break: break-all;
 }

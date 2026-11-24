@@ -261,7 +261,7 @@ test('ProfileCard: SSR structure, badges, skill pills and zero emoji', { timeout
     ),
   )
 
-  assert.match(systemHtml, /class="[^"]*primary-card[^"]*is-selected[^"]*"/)
+  assert.match(systemHtml, /class="[^"]*helmx-select-card[^"]*is-selected[^"]*"/)
   assert.match(systemHtml, /SuperAgent 中枢/)
   assert.match(systemHtml, /superagent/)
   assert.match(systemHtml, /系统全局总控与中枢协调路由/)
@@ -849,7 +849,7 @@ test('ProfileCard: inherited model, node and cwd, conversation count, bottom-rig
     const text = host.textContent ?? ''
     const modelLabel = host.querySelector('.primary-card-pills .primary-card-pill-label')
     const modelSuffix = host.querySelector('.primary-card-pills .primary-card-pill-suffix')
-    const modelPill = modelLabel?.closest('.primary-card-pill')
+    const modelPill = modelLabel?.closest('.badge')
     assert.equal(modelLabel?.textContent, 'claude-3-7-sonnet')
     assert.equal(modelSuffix?.textContent, '· high')
     assert.equal(

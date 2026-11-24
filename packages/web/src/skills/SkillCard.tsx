@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { SkillSummary } from '@helmx/protocol/browser'
-import { copyToClipboard, HelmxIcon } from '@helmx/plugin-client'
+import { Badge, Button, copyToClipboard, SelectCard, Stack, type BadgeTone } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { getSkillSourceBadge } from './skill-center-model.js'
 
@@ -12,14 +12,12 @@ export interface SkillCardProps {
 
 /**
  * One skill card in the full-screen skill center:
- * - a responsive grid cell following the 1px hairline border and restrained
- *   low-saturation design system;
+ * - built on SelectCard (<article> + <button aria-pressed> + sibling footer);
  * - header shows the name, effective source badge (built-in / shared /
  *   workspace / plugin) and the monospace ID;
  * - middle shows the description;
- * - footer shows the one-click-copy `/skill:<id>` command pill and the
- *   reference file count (omitted when 0);
- * - mouse click and keyboard accessibility (Enter / Space) both activate;
+ * - footer shows the one-click-copy `/skill:<id>` command button and the
+ *   reference file count badge (omitted when 0);
  * - follows the zero-emoji rule and Fast Refresh conventions strictly.
  */
 export function SkillCard({
@@ -53,86 +51,65 @@ export function SkillCard({
     }, 1500)
   }
 
-  const badgeClass =
-    sourceBadge.variant === 'builtin'
-      ? 'badge badge-neutral'
-      : sourceBadge.variant === 'plugin'
-        ? 'badge badge-neutral mono'
-        : sourceBadge.variant === 'agents'
-          ? 'badge badge-accent'
-          : 'badge badge-neutral'
-
-  const cardClasses = [
-    'primary-card',
-    'skill-card',
-    selected && 'is-selected',
-  ]
-    .filter(Boolean)
-    .join(' ')
+  const badgeTone: BadgeTone = sourceBadge.variant === 'agents' ? 'accent' : 'neutral'
 
   return (
-    <article
-      className={cardClasses}
-      onClick={onSelect}
+    <SelectCard
+      className="skill-card"
+      selected={selected}
+      onSelect={onSelect}
       data-skill-id={skill.id}
-    >
-      {/* Top header: title/source badge/ID left-aligned */}
-      <div className="primary-card-header">
-        <button
-          type="button"
-          className="primary-card-open"
-          aria-pressed={selected}
-          onClick={(e) => {
-            e.stopPropagation()
-            onSelect()
-          }}
-        >
-          <div className="primary-card-meta">
-            <div className="primary-card-title-row">
-              <span className="primary-card-name" title={skill.name || skill.id}>
-                {skill.name || skill.id}
-              </span>
-              <span className={badgeClass} title={t('skills.card.sourceTitle', { label: sourceBadge.label })}>
-                {sourceBadge.label}
-              </span>
-            </div>
-            <div className="primary-card-id mono text-subtle break-word" title={skill.id}>
-              {skill.id}
-            </div>
-          </div>
-        </button>
-      </div>
-
-      {/* Middle: description */}
-      <div className="primary-card-desc" title={description}>
-        {description}
-      </div>
-
-      {/* Bottom: slash command quick copy and reference file count (omitted when 0) */}
-      <div className="primary-card-footer">
-        <div className="primary-card-pills">
-          <button
-            type="button"
-            className="primary-card-pill mono"
+      title={
+        <span className="primary-card-title-row">
+          <span className="primary-card-name" title={skill.name || skill.id}>
+            {skill.name || skill.id}
+          </span>
+          <Badge
+            tone={badgeTone}
+            mono={sourceBadge.variant === 'plugin'}
+            title={t('skills.card.sourceTitle', { label: sourceBadge.label })}
+          >
+            {sourceBadge.label}
+          </Badge>
+        </span>
+      }
+      subtitle={
+        <span className="mono break-word" title={skill.id}>
+          {skill.id}
+        </span>
+      }
+      footer={
+        <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
+          <Button
+            variant="secondary"
+            size="xs"
+            pill
+            icon={copied ? 'check' : 'copy'}
+            className="mono"
             title={t('skills.card.copyCommandTitle', { command: slashCommand })}
             aria-label={t('skills.card.copyCommandTitle', { command: slashCommand })}
             onClick={(e) => void handleCopyCommand(e)}
             onKeyDown={(e) => e.stopPropagation()}
           >
-            <HelmxIcon name={copied ? 'check' : 'copy'} size={10} />
-            <span>{copied ? t('skills.card.copied') : slashCommand}</span>
-          </button>
+            {copied ? t('skills.card.copied') : slashCommand}
+          </Button>
           {refCount > 0 && (
-            <span
-              className="primary-card-pill tabular-nums"
+            <Badge
+              tone="neutral"
+              icon="file-text"
+              className="tabular-nums"
               title={t('skills.card.referenceFiles', { count: refCount })}
             >
-              <HelmxIcon name="file-text" size={11} />
               <span aria-label={t('skills.card.referenceFiles', { count: refCount })}>{refCount}</span>
-            </span>
+            </Badge>
           )}
-        </div>
+        </Stack>
+      }
+    >
+      {/* Middle: description */}
+      <div className="primary-card-desc" title={description}>
+        {description}
       </div>
-    </article>
+    </SelectCard>
   )
 }

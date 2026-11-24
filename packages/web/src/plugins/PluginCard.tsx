@@ -1,7 +1,16 @@
 import React, { useMemo } from 'react'
 import type { PluginSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
-import { HelmxIcon, StatusLight, Switch } from '@helmx/plugin-client'
+import {
+  Badge,
+  Button,
+  HelmxIcon,
+  IconButton,
+  SelectCard,
+  Stack,
+  StatusLight,
+  Switch,
+} from '@helmx/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
 import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
@@ -24,10 +33,10 @@ export interface PluginCardProps {
 
 /**
  * 全屏插件中心单张插件卡片视图组件：
- * - 响应式网格流单元，遵循 1px 发丝边框与克制低饱和设计规范；
+ * - 基于 SelectCard（<article> + <button aria-pressed> + 兄弟 footer/actions 槽位）；
  * - 顶部展示名称、ID（严格靠左对齐）、版本与常驻徽章，零图标杂音；
  * - 中部展示简要功能说明；
- * - 底部展示能力胶囊小徽章（Tools / Actions / Hooks）与快捷启停开关；
+ * - 底部展示能力徽章（Tools / Actions / Hooks）与快捷启停开关；
  * - 全程零 Emoji，符合无障碍与键盘导航规范。
  */
 export function PluginCard({
@@ -71,13 +80,8 @@ export function PluginCard({
         ? t('plugins.card.switchDisableTitle')
         : t('plugins.card.switchEnableTitle')
 
-  const handleCardClick = () => {
-    onSelect()
-  }
-
   const cardClasses = [
     'plugin-card',
-    selected && 'is-selected',
     active ? 'is-enabled' : 'is-disabled',
     failed && 'is-failed',
   ]
@@ -87,62 +91,158 @@ export function PluginCard({
   const versionLabel = plugin.version ? `v${plugin.version.replace(/^v/, '')}` : null
 
   return (
-    <article
+    <SelectCard
       className={cardClasses}
-      onClick={handleCardClick}
+      selected={selected}
+      tone={failed ? 'danger' : 'default'}
+      onSelect={onSelect}
       data-plugin-id={plugin.id}
-    >
-      {/* Top header: title/version/locked badge + ID left-aligned */}
-      <div className="plugin-card-header">
-        <button
-          type="button"
-          className="primary-card-open"
-          aria-pressed={selected}
-          onClick={(e) => {
-            e.stopPropagation()
-            onSelect()
-          }}
-        >
-          <div className="plugin-card-meta">
-            <div className="plugin-card-title-row">
-              <span className="plugin-card-name" title={name}>
-                {name}
-              </span>
-              {versionLabel && (
-                <span className="plugin-card-version" title={t('plugins.card.versionTitle', { version: versionLabel })}>
-                  {versionLabel}
-                </span>
-              )}
-              {isLocked && (
-                <span className="plugin-card-locked-badge" title={t('plugins.card.lockedTitle')}>
-                  <HelmxIcon name="lock" size={10} />
-                  <span>{t('plugins.resident')}</span>
-                </span>
-              )}
-              {isPluginFailed(plugin) && (
-                <StatusLight
-                  status="failed"
-                  label={t('plugins.status.error')}
-                />
-              )}
-            </div>
-            <div className="plugin-card-id mono" title={plugin.id}>
-              {plugin.id}
-            </div>
-          </div>
-        </button>
-      </div>
+      title={
+        <span className="primary-card-title-row">
+          <span className="primary-card-name" title={name}>
+            {name}
+          </span>
+          {versionLabel && (
+            <span className="plugin-card-version" title={t('plugins.card.versionTitle', { version: versionLabel })}>
+              {versionLabel}
+            </span>
+          )}
+          {isLocked && (
+            <Badge tone="neutral" icon="lock" title={t('plugins.card.lockedTitle')}>
+              {t('plugins.resident')}
+            </Badge>
+          )}
+          {failed && (
+            <StatusLight
+              tone="failed"
+              label={t('plugins.status.error')}
+            />
+          )}
+        </span>
+      }
+      subtitle={
+        <span className="mono break-word" title={plugin.id}>
+          {plugin.id}
+        </span>
+      }
+      footer={
+        <>
+          <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
+            {(plugin.tools?.length ?? 0) > 0 && (
+              <Badge tone="neutral" mono icon="wrench" title={t('plugins.card.toolsTitle', { count: plugin.tools.length })}>
+                {`${plugin.tools.length} Tools`}
+              </Badge>
+            )}
+            {(plugin.actions?.length ?? 0) > 0 && (
+              <Badge tone="neutral" mono icon="zap" title={t('plugins.card.actionsTitle', { count: plugin.actions.length })}>
+                {`${plugin.actions.length} Actions`}
+              </Badge>
+            )}
+            {(plugin.hooks?.length ?? 0) > 0 && (
+              <Badge tone="neutral" mono icon="layers" title={t('plugins.card.hooksTitle', { count: plugin.hooks.length })}>
+                {`${plugin.hooks.length} Hooks`}
+              </Badge>
+            )}
+          </Stack>
 
+          <Stack direction="horizontal" gap="xs" align="center" className="plugin-card-actions">
+            {plugin.managed !== undefined && onUpdate !== undefined && (
+              <IconButton
+                variant="default"
+                size="xs"
+                icon={<HelmxIcon name="refresh-cw" size={10} className={updating ? 'spin' : undefined} />}
+                className="plugin-card-update-btn"
+                disabled={updating || updateDisabled}
+                title={updating ? t('plugins.package.updating') : t('plugins.card.updateTitle')}
+                aria-label={t('plugins.card.updateAria', { name })}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void onUpdate()
+                }}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                }}
+              />
+            )}
+            {primaryScreen !== null && actions !== null && (
+              <>
+                <Button
+                  size="xs"
+                  icon="play"
+                  className="plugin-card-open-btn"
+                  title={t('plugins.card.openViewTitle')}
+                  aria-label={t('plugins.card.openViewAria', { name })}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    actions.openTarget({
+                      kind: 'screen',
+                      pluginId: primaryScreen.pluginId,
+                      screenId: primaryScreen.screenId,
+                    })
+                  }}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                  }}
+                >
+                  {t('plugins.openView')}
+                </Button>
+                <IconButton
+                  variant="default"
+                  size="xs"
+                  icon="columns"
+                  className="split-toggle-btn plugin-card-split-btn"
+                  title={t('plugins.card.openSplitTitle')}
+                  aria-label={t('plugins.card.openSplitAria', { name })}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    actions.openTarget(
+                      {
+                        kind: 'screen',
+                        pluginId: primaryScreen.pluginId,
+                        screenId: primaryScreen.screenId,
+                      },
+                      { split: true },
+                    )
+                  }}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                  }}
+                />
+              </>
+            )}
+            <div
+              className="plugin-card-switch-wrap"
+              onClick={(e) => {
+                e.stopPropagation()
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+              }}
+            >
+              <Switch
+                checked={plugin.enabled}
+                disabled={isSwitchDisabled}
+                onChange={(checked) => {
+                  void onToggle(checked)
+                }}
+                aria-label={t('plugins.card.switchAria', { name })}
+                title={switchTitle}
+              />
+            </div>
+          </Stack>
+        </>
+      }
+    >
       {/* Middle: short description (with an error summary on failure for quick triage without opening the drawer) */}
       <div
-        className="plugin-card-desc"
+        className="primary-card-desc"
         title={
-          isPluginFailed(plugin) && plugin.error?.message
+          failed && plugin.error?.message
             ? `${description}\n${plugin.error.message}`
             : description
         }
       >
-        {isPluginFailed(plugin) && plugin.error?.message ? (
+        {failed && plugin.error?.message ? (
           <>
             {description}
             <div className="plugin-card-error-summary">{plugin.error.message}</div>
@@ -151,116 +251,6 @@ export function PluginCard({
           description
         )}
       </div>
-
-      {/* Bottom bar: capability pills + enable/disable switch */}
-      <div className="plugin-card-footer">
-        <div className="plugin-card-pills">
-          {(plugin.tools?.length ?? 0) > 0 && (
-            <span className="plugin-card-pill" title={t('plugins.card.toolsTitle', { count: plugin.tools.length })}>
-              <HelmxIcon name="wrench" size={11} />
-              <span>{`${plugin.tools.length} Tools`}</span>
-            </span>
-          )}
-          {(plugin.actions?.length ?? 0) > 0 && (
-            <span className="plugin-card-pill" title={t('plugins.card.actionsTitle', { count: plugin.actions.length })}>
-              <HelmxIcon name="zap" size={11} />
-              <span>{`${plugin.actions.length} Actions`}</span>
-            </span>
-          )}
-          {(plugin.hooks?.length ?? 0) > 0 && (
-            <span className="plugin-card-pill" title={t('plugins.card.hooksTitle', { count: plugin.hooks.length })}>
-              <HelmxIcon name="layers" size={11} />
-              <span>{`${plugin.hooks.length} Hooks`}</span>
-            </span>
-          )}
-        </div>
-
-        <div className="plugin-card-actions">
-          {plugin.managed !== undefined && onUpdate !== undefined && (
-            <button
-              type="button"
-              className="btn btn-xs plugin-card-update-btn"
-              disabled={updating || updateDisabled}
-              title={updating ? t('plugins.package.updating') : t('plugins.card.updateTitle')}
-              aria-label={t('plugins.card.updateAria', { name })}
-              onClick={(e) => {
-                e.stopPropagation()
-                void onUpdate()
-              }}
-              onKeyDown={(e) => {
-                e.stopPropagation()
-              }}
-            >
-              <HelmxIcon name="refresh-cw" size={10} className={updating ? 'spin' : undefined} />
-            </button>
-          )}
-          {primaryScreen !== null && actions !== null && (
-            <>
-              <button
-                type="button"
-                className="btn btn-xs plugin-card-open-btn"
-                title={t('plugins.card.openViewTitle')}
-                aria-label={t('plugins.card.openViewAria', { name })}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  actions.openTarget({
-                    kind: 'screen',
-                    pluginId: primaryScreen.pluginId,
-                    screenId: primaryScreen.screenId,
-                  })
-                }}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                }}
-              >
-                <HelmxIcon name="play" size={10} />
-                <span>{t('plugins.openView')}</span>
-              </button>
-              <button
-                type="button"
-                className="btn btn-xs split-toggle-btn plugin-card-split-btn"
-                title={t('plugins.card.openSplitTitle')}
-                aria-label={t('plugins.card.openSplitAria', { name })}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  actions.openTarget(
-                    {
-                      kind: 'screen',
-                      pluginId: primaryScreen.pluginId,
-                      screenId: primaryScreen.screenId,
-                    },
-                    { split: true },
-                  )
-                }}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                }}
-              >
-                <HelmxIcon name="columns" size={10} />
-              </button>
-            </>
-          )}
-          <div
-            className="plugin-card-switch-wrap"
-            onClick={(e) => {
-              e.stopPropagation()
-            }}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-            }}
-          >
-            <Switch
-              checked={plugin.enabled}
-              disabled={isSwitchDisabled}
-              onChange={(checked) => {
-                void onToggle(checked)
-              }}
-              aria-label={t('plugins.card.switchAria', { name })}
-              title={switchTitle}
-            />
-          </div>
-        </div>
-      </div>
-    </article>
+    </SelectCard>
   )
 }

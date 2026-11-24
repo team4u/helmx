@@ -1,5 +1,5 @@
 import React from 'react'
-import { HelmxIcon, StatusLight } from '@helmx/plugin-client'
+import { Badge, HelmxIcon, SelectCard, Stack, StatusLight } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatUptime } from '../modals/nodes-modal-model.js'
 import {
@@ -18,16 +18,11 @@ export interface NodeCardProps {
 
 /**
  * Compute node card view (NodeCard):
- * - uses the shared .primary-card structure with 1px hairline borders;
- * - header: status pulse indicator (breathing animation when online, neutral
- *   when offline), HelmxIcon (laptop for local, server for remote), node name
- *   and the mono node ID;
- * - middle: platform/OS and CPU architecture badges (e.g. linux / x64),
- *   version and host uptime;
- * - bottom: online/offline connection badge plus supported tool capability
- *   pills (bash / read / write / edit, ...);
- * - interaction: click and Enter / Space keyboard activation; the selected
- *   state highlights .is-selected;
+ * - built on SelectCard (<article> + <button aria-pressed> + sibling footer);
+ * - header: leading icon block, status pulse indicator (done when online,
+ *   idle when offline), node name, local/version badges and mono node ID;
+ * - middle: platform/OS and CPU architecture badge, hostname and host uptime;
+ * - bottom: supported tool capability badges (bash / read / write / edit, ...);
  * - strictly zero Emoji and Fast Refresh compliant.
  */
 export function NodeCard({
@@ -50,60 +45,68 @@ export function NodeCard({
       ? node.tools
       : ['bash', 'read', 'write', 'edit']
 
-  const cardClasses = [
-    'primary-card',
-    'node-card',
-    selected && 'is-selected',
-    isOnline ? 'is-online' : 'is-offline',
-  ]
-    .filter(Boolean)
-    .join(' ')
-
   return (
-    <button
-      type="button"
-      className={cardClasses}
-      aria-pressed={selected}
-      onClick={onSelect}
+    <SelectCard
+      className={`node-card ${isOnline ? 'is-online' : 'is-offline'}`}
+      selected={selected}
+      onSelect={onSelect}
       data-node-id={node.id}
-    >
-      {/* Header: status light, node icon, node name, ID */}
-      <div className="primary-card-header">
-        <div className="primary-card-icon-wrap">
-          <HelmxIcon name={iconName} size={18} />
-        </div>
-        <div className="primary-card-meta">
-          <div className="primary-card-title-row">
-            <StatusLight
-              status={isOnline ? 'online' : 'offline'}
-              label={isOnline ? t('common.online') : t('common.offline')}
-            />
-            <span className="primary-card-name" title={displayName}>
-              {displayName}
-            </span>
-            {isLocal && (
-              <span className="badge badge-neutral" title={t('nodes.localTitle')}>
-                {t('nodes.local')}
-              </span>
-            )}
-            {version && (
-              <span className="badge badge-neutral mono" title={t('nodes.versionTitle', { version })}>
-                {version}
-              </span>
-            )}
-          </div>
-          <div className="primary-card-id mono text-subtle break-word" title={node.id}>
-            {node.id}
-          </div>
-        </div>
-      </div>
-
-      {/* Middle: platform, architecture and runtime overview */}
-      <div className="flex-row-wrap">
-        {platformArch !== '--' && (
-          <span className="badge badge-neutral mono" title={t('nodes.platformTitle')}>
-            {platformArch}
+      title={
+        <span className="primary-card-head-with-icon">
+          <span className="primary-card-icon-wrap" aria-hidden="true">
+            <HelmxIcon name={iconName} size={18} />
           </span>
+          <span className="primary-card-meta">
+            <span className="primary-card-title-row">
+              <StatusLight
+                tone={isOnline ? 'done' : 'idle'}
+                label={isOnline ? t('common.online') : t('common.offline')}
+              />
+              <span className="primary-card-name" title={displayName}>
+                {displayName}
+              </span>
+              {isLocal && (
+                <Badge tone="neutral" title={t('nodes.localTitle')}>
+                  {t('nodes.local')}
+                </Badge>
+              )}
+              {version && (
+                <Badge tone="neutral" mono title={t('nodes.versionTitle', { version })}>
+                  {version}
+                </Badge>
+              )}
+            </span>
+            <span className="primary-card-id mono text-subtle break-word" title={node.id}>
+              {node.id}
+            </span>
+          </span>
+        </span>
+      }
+      footer={
+        <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
+          {tools.slice(0, 4).map((tool) => (
+            <Badge key={tool} tone="neutral" mono icon="terminal" title={t('nodes.cardToolTitle', { tool })}>
+              {tool}
+            </Badge>
+          ))}
+          {tools.length > 4 && (
+            <Badge
+              tone="neutral"
+              className="tabular-nums"
+              title={t('nodes.moreTools', { count: tools.length - 4 })}
+            >
+              +{tools.length - 4}
+            </Badge>
+          )}
+        </Stack>
+      }
+    >
+      {/* Middle: platform, architecture and runtime overview */}
+      <Stack direction="horizontal" gap="xs" align="center" wrap>
+        {platformArch !== '--' && (
+          <Badge tone="neutral" mono title={t('nodes.platformTitle')}>
+            {platformArch}
+          </Badge>
         )}
         {node.hostname && (
           <span className="mono text-subtle break-word" title={t('nodes.hostnameTitle', { hostname: node.hostname })}>
@@ -115,27 +118,7 @@ export function NodeCard({
             {uptime}
           </span>
         )}
-      </div>
-
-      {/* Bottom: capability pills (connection state lives in the single header status light) */}
-      <div className="primary-card-footer">
-        <div className="primary-card-pills">
-          {tools.slice(0, 4).map((tool) => (
-            <span key={tool} className="primary-card-pill mono" title={t('nodes.cardToolTitle', { tool })}>
-              <HelmxIcon name="terminal" size={10} />
-              <span>{tool}</span>
-            </span>
-          ))}
-          {tools.length > 4 && (
-            <span
-              className="primary-card-pill text-subtle tabular-nums"
-              title={t('nodes.moreTools', { count: tools.length - 4 })}
-            >
-              +{tools.length - 4}
-            </span>
-          )}
-        </div>
-      </div>
-    </button>
+      </Stack>
+    </SelectCard>
   )
 }

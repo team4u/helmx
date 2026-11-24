@@ -1,5 +1,5 @@
 import React from 'react'
-import { StatusLight } from '@helmx/plugin-client'
+import { Badge, SelectCard, Stack, StatusLight } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { summarizeCardModels, type ProviderItem } from './model-center-model.js'
 
@@ -11,15 +11,11 @@ export interface ModelCardProps {
 
 /**
  * Single provider card in the full-screen model center:
- * - responsive grid-flow cell following the 1px hairline-border, restrained
- *   low-saturation design rules;
- * - header shows the provider name, ID and configuration badge
- *   (configured / not configured);
+ * - built on SelectCard (<article> + <button aria-pressed> + sibling footer);
+ * - header shows the provider name, status light, badges and mono ID;
  * - middle shows the capability description plus a preview of configured
  *   model short names (first 3 + remaining count);
- * - footer shows the available model count;
- * - click or Enter / Space activates the selection; the selected state adds
- *   the .is-selected class;
+ * - footer shows the available model count badge;
  * - strictly zero Emoji and WAI-ARIA keyboard-accessible interactions.
  */
 export function ModelCard({
@@ -29,44 +25,36 @@ export function ModelCard({
 }: ModelCardProps): React.JSX.Element {
   const { t } = useWebLocale()
 
-  const cardClasses = [
-    'primary-card',
-    selected && 'is-selected',
-    provider.configured ? 'is-configured' : 'is-unconfigured',
-  ]
-    .filter(Boolean)
-    .join(' ')
-
   const { previewNames, remainingCount } = provider.configured
     ? summarizeCardModels(provider, 3)
     : { previewNames: [], remainingCount: 0 }
 
   return (
-    <button
-      type="button"
-      className={cardClasses}
-      onClick={onSelect}
-      aria-pressed={selected}
+    <SelectCard
+      className={provider.configured ? 'is-configured' : 'is-unconfigured'}
+      selected={selected}
+      onSelect={onSelect}
       aria-label={t('models.cardAria', { name: provider.name })}
+      title={
+        <span className="primary-card-title-row">
+          <span className="primary-card-name" title={provider.name}>
+            {provider.name}
+          </span>
+          <StatusLight
+            tone={provider.configured ? 'done' : 'pending'}
+            label={provider.configured ? t('models.configured') : t('models.notConfigured')}
+          />
+          {provider.dynamic && <Badge tone="neutral">{t('models.dynamicBadge')}</Badge>}
+          {provider.custom && <Badge tone="neutral">{t('models.customBadge')}</Badge>}
+        </span>
+      }
+      subtitle={<span className="mono break-word">{provider.id}</span>}
+      footer={
+        <Badge tone="neutral" mono className="tabular-nums">
+          {t('models.modelsAvailable', { count: provider.modelsCount })}
+        </Badge>
+      }
     >
-      {/* Header: name, status badge, ID left-aligned */}
-      <div className="primary-card-header">
-        <div className="primary-card-meta">
-          <div className="primary-card-title-row">
-            <span className="primary-card-name" title={provider.name}>
-              {provider.name}
-            </span>
-            <StatusLight
-              status={provider.configured ? 'configured' : 'not-configured'}
-              label={provider.configured ? t('models.configured') : t('models.notConfigured')}
-            />
-            {provider.dynamic && <span className="badge badge-neutral">{t('models.dynamicBadge')}</span>}
-            {provider.custom && <span className="badge badge-neutral">{t('models.customBadge')}</span>}
-          </div>
-          <span className="text-subtle mono break-word">{provider.id}</span>
-        </div>
-      </div>
-
       {/* Middle: description */}
       <div className="primary-card-desc">
         {provider.description || t('models.cardFallbackDescription')}
@@ -74,29 +62,23 @@ export function ModelCard({
 
       {/* Configured providers show the first 3 available model names plus the remaining count */}
       {previewNames.length > 0 && (
-        <div className="primary-card-pills">
+        <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
           {previewNames.map((name) => (
-            <span key={name} className="primary-card-pill mono" title={name}>
+            <Badge key={name} tone="neutral" mono title={name}>
               {name}
-            </span>
+            </Badge>
           ))}
           {remainingCount > 0 && (
-            <span
-              className="primary-card-pill tabular-nums"
+            <Badge
+              tone="neutral"
+              className="tabular-nums"
               title={t('models.moreModels', { count: remainingCount })}
             >
               +{remainingCount}
-            </span>
+            </Badge>
           )}
-        </div>
+        </Stack>
       )}
-
-      {/* Bottom: available model count */}
-      <div className="primary-card-footer">
-        <span className="badge badge-neutral mono tabular-nums">
-          {t('models.modelsAvailable', { count: provider.modelsCount })}
-        </span>
-      </div>
-    </button>
+    </SelectCard>
   )
 }
