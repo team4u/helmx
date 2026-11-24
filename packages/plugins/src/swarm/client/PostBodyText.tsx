@@ -3,7 +3,7 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
-import { MarkdownText, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
+import { Button, MarkdownText, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
 import { previewPostBody } from './board-model.ts'
 import { SW_BODY_COLLAPSE, SW_BODY_EXPAND } from './copy.ts'
 import { linkifyPostRefs, parseSwarmPostHref } from './model-post-nav.ts'
@@ -39,14 +39,15 @@ export function PostBodyText(props: PostBodyTextProps): ReactNode {
         <MarkdownText text={renderedText} onLinkClick={props.onRefClick ? handleLinkClick : undefined} />
       </div>
       {props.collapsible ? (
-        <button
-          type="button"
-          className="btn btn-xs btn-ghost sw-panel-post-toggle"
+        <Button
+          variant="ghost"
+          size="xs"
+          className="sw-panel-post-toggle"
           aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
         >
-          <span>{resolveLocalizedText(expanded ? SW_BODY_COLLAPSE : SW_BODY_EXPAND, locale)}</span>
-        </button>
+          {resolveLocalizedText(expanded ? SW_BODY_COLLAPSE : SW_BODY_EXPAND, locale)}
+        </Button>
       ) : null}
     </div>
   )

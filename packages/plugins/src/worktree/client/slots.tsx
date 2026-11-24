@@ -12,17 +12,22 @@
  */
 import './styles-worktree-inspect.css'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { MouseEvent, ReactNode } from 'react'
 import {
+  Badge,
+  Button,
+  Callout,
   CopyButton,
   HelmxIcon,
+  IconButton,
+  KvGrid,
+  Stack,
   resolveLocalizedText,
   usePluginContext,
   usePluginLocale,
 } from '@helmx/plugin-client'
 import {
   WT_COPY,
-  WT_SPIN,
   buildWorktreeReviewRequest,
   buildWorktreeSelector,
   parseWorktreeInspectResult,
@@ -143,27 +148,29 @@ export function WorktreeInspectSlot(props: WorktreeInspectSlotProps): ReactNode 
   return (
     <div className="worktree-inspect">
       <div className="worktree-inspect-header">
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs"
+        <Button
+          variant="ghost"
+          size="xs"
+          icon={open ? 'chevron-down' : 'chevron-right'}
           onClick={() => setOpen((v) => !v)}
           title={resolveLocalizedText(open ? WT_COPY.collapseTitle : WT_COPY.expandTitle, locale)}
         >
-          <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
-          <HelmxIcon name="git-branch" size={11} />
-          {resolveLocalizedText(WT_COPY.overview, locale)}
-        </button>
+          <Stack direction="horizontal" gap="xs" align="center" inline>
+            <HelmxIcon name="git-branch" size={11} />
+            <span>{resolveLocalizedText(WT_COPY.overview, locale)}</span>
+          </Stack>
+        </Button>
         {open && data !== undefined ? (
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs"
-            disabled={loading}
+          <Button
+            variant="ghost"
+            size="xs"
+            icon="rotate-cw"
+            pending={loading}
             onClick={() => void load()}
             title={resolveLocalizedText(WT_COPY.reinspectTitle, locale)}
           >
-            <HelmxIcon name="rotate-cw" size={11} className={loading ? WT_SPIN : undefined} />
             {resolveLocalizedText(WT_COPY.refresh, locale)}
-          </button>
+          </Button>
         ) : null}
       </div>
       {open ? (
@@ -172,49 +179,57 @@ export function WorktreeInspectSlot(props: WorktreeInspectSlotProps): ReactNode 
             <div className="worktree-inspect-empty">{resolveLocalizedText(WT_COPY.inspecting, locale)}</div>
           ) : null}
           {error !== undefined ? (
-            <div className="callout callout--error worktree-inspect-error">
-              <div>{wtInspectFailed(error, locale)}</div>
-              <button type="button" className="btn btn-xs" onClick={() => void load()}>
-                {resolveLocalizedText(WT_COPY.retry, locale)}
-              </button>
-            </div>
+            <Callout tone="err">
+              <Stack gap="xs" align="start">
+                <div>{wtInspectFailed(error, locale)}</div>
+                <Button size="xs" onClick={() => void load()}>
+                  {resolveLocalizedText(WT_COPY.retry, locale)}
+                </Button>
+              </Stack>
+            </Callout>
           ) : null}
           {data !== undefined ? (
             <>
               {unavailableText !== undefined ? (
-                <div className="callout callout--warning">{wtUnavailableCta(unavailableText, locale)}</div>
+                <Callout tone="warn">{wtUnavailableCta(unavailableText, locale)}</Callout>
               ) : null}
-              <div className="kv-grid">
-                <span className="kv-key">{resolveLocalizedText(WT_COPY.kvBranch, locale)}</span>
-                <span className="kv-val mono">
-                  {data.currentBranch ?? data.branch}
-                  {data.branchChanged === true ? (
-                    <span className="badge badge-warn" title={wtBranchMismatchTitle(data.branch, locale)}>
-                      {resolveLocalizedText(WT_COPY.branchMismatch, locale)}
-                    </span>
-                  ) : null}
-                </span>
-                <span className="kv-key">{resolveLocalizedText(WT_COPY.kvBase, locale)}</span>
-                <span className="kv-val mono" title={data.baseCommit !== '' ? data.baseCommit : undefined}>
-                  {data.baseCommit !== ''
-                    ? wtBaseValue(data.baseCommit, data.diffBase, locale)
-                    : resolveLocalizedText(WT_COPY.noBase, locale)}
-                </span>
-                <span className="kv-key">{resolveLocalizedText(WT_COPY.kvDirty, locale)}</span>
-                <span className="kv-val">{wtDirtyCount(data.dirtyFileCount, data.dirtyFilesTruncated, locale)}</span>
-                {data.commitsAhead !== undefined ? (
-                  <>
-                    <span className="kv-key">{resolveLocalizedText(WT_COPY.kvAhead, locale)}</span>
-                    <span className="kv-val">{wtAheadCount(data.commitsAhead, locale)}</span>
-                  </>
-                ) : null}
-                {data.currentHead !== undefined ? (
-                  <>
-                    <span className="kv-key">{resolveLocalizedText(WT_COPY.kvHead, locale)}</span>
-                    <span className="kv-val mono">{data.currentHead.slice(0, 12)}</span>
-                  </>
-                ) : null}
-              </div>
+              <KvGrid
+                items={[
+                  {
+                    key: resolveLocalizedText(WT_COPY.kvBranch, locale),
+                    value: (
+                      <span className="mono">
+                        {data.currentBranch ?? data.branch}
+                        {data.branchChanged === true ? (
+                          <Badge tone="warn" title={wtBranchMismatchTitle(data.branch, locale)}>
+                            {resolveLocalizedText(WT_COPY.branchMismatch, locale)}
+                          </Badge>
+                        ) : null}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: resolveLocalizedText(WT_COPY.kvBase, locale),
+                    value: (
+                      <span className="mono" title={data.baseCommit !== '' ? data.baseCommit : undefined}>
+                        {data.baseCommit !== ''
+                          ? wtBaseValue(data.baseCommit, data.diffBase, locale)
+                          : resolveLocalizedText(WT_COPY.noBase, locale)}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: resolveLocalizedText(WT_COPY.kvDirty, locale),
+                    value: wtDirtyCount(data.dirtyFileCount, data.dirtyFilesTruncated, locale),
+                  },
+                  ...(data.commitsAhead !== undefined
+                    ? [{ key: resolveLocalizedText(WT_COPY.kvAhead, locale), value: wtAheadCount(data.commitsAhead, locale) }]
+                    : []),
+                  ...(data.currentHead !== undefined
+                    ? [{ key: resolveLocalizedText(WT_COPY.kvHead, locale), value: <span className="mono">{data.currentHead.slice(0, 12)}</span> }]
+                    : []),
+                ]}
+              />
               {data.dirtyFiles.length > 0 ? (
                 <pre className="code-block-pre worktree-inspect-files">
                   <code>{data.dirtyFiles.join('\n')}</code>
@@ -238,9 +253,7 @@ export function WorktreeInspectSlot(props: WorktreeInspectSlotProps): ReactNode 
                   <div className="trace-section-label">
                     {resolveLocalizedText(WT_COPY.diffPreviewSection, locale)}
                     {data.diffTruncated ? (
-                      <span className="badge badge-neutral">
-                        {resolveLocalizedText(WT_COPY.diffTruncated, locale)}
-                      </span>
+                      <Badge tone="neutral">{resolveLocalizedText(WT_COPY.diffTruncated, locale)}</Badge>
                     ) : null}
                   </div>
                   <pre className="code-block-pre workflow-node-pre worktree-inspect-diff selectable">
@@ -252,19 +265,18 @@ export function WorktreeInspectSlot(props: WorktreeInspectSlotProps): ReactNode 
               ) : null}
             </>
           ) : null}
-          <div className="worktree-inspect-actions">
-            <button
-              type="button"
-              className="btn btn-xs"
-              disabled={sending}
+          <Stack direction="horizontal" gap="xs" align="center" wrap>
+            <Button
+              size="xs"
+              icon="git-pull-request"
+              pending={sending}
               onClick={sendReview}
               title={resolveLocalizedText(WT_COPY.reviewTitle, locale)}
             >
-              <HelmxIcon name="git-pull-request" size={11} />
               {resolveLocalizedText(WT_COPY.reviewButton, locale)}
-            </button>
+            </Button>
             <CopyButton text={reviewText} label={resolveLocalizedText(WT_COPY.copyReview, locale)} />
-          </div>
+          </Stack>
         </div>
       ) : null}
     </div>
@@ -278,29 +290,43 @@ export function WorktreeCleanupSlot(props: WorktreeCleanupSlotProps): ReactNode 
   const { worktree, nodeId, compact } = props
   if (worktree === undefined) return null
 
-  const label = resolveLocalizedText(WT_COPY.cleanupLabel, locale)
+  const handleCleanup = (e: MouseEvent<HTMLButtonElement>): void => {
+    e.stopPropagation()
+    if (cleaning) return
+    setCleaning(true)
+    ctx
+      .callAction('cleanup_worktree', buildWorktreeSelector(worktree, nodeId), { pluginId: 'builtin:worktree' })
+      .then(() => ctx.notify(wtCleanupDone(worktree.branch, locale)))
+      .catch((err: unknown) =>
+        ctx.notify(wtCleanupFailed(err instanceof Error ? err.message : String(err), locale), 'error'),
+      )
+      .finally(() => setCleaning(false))
+  }
+
+  if (compact === true) {
+    return (
+      <IconButton
+        variant="default"
+        size="xs"
+        icon="trash-2"
+        pending={cleaning}
+        className="worktree-cleanup-compact"
+        label={resolveLocalizedText(WT_COPY.cleanupAria, locale)}
+        title={resolveLocalizedText(WT_COPY.cleanupTitle, locale)}
+        onClick={handleCleanup}
+      />
+    )
+  }
+
   return (
-    <button
-      type="button"
-      className={`btn btn-xs${compact === true ? ' worktree-cleanup-compact' : ''}`}
-      disabled={cleaning}
-      title={compact === true ? resolveLocalizedText(WT_COPY.cleanupTitle, locale) : undefined}
-      aria-label={compact === true ? resolveLocalizedText(WT_COPY.cleanupAria, locale) : undefined}
-      onClick={(e) => {
-        e.stopPropagation()
-        if (cleaning) return
-        setCleaning(true)
-        ctx
-          .callAction('cleanup_worktree', buildWorktreeSelector(worktree, nodeId), { pluginId: 'builtin:worktree' })
-          .then(() => ctx.notify(wtCleanupDone(worktree.branch, locale)))
-          .catch((err: unknown) =>
-            ctx.notify(wtCleanupFailed(err instanceof Error ? err.message : String(err), locale), 'error'),
-          )
-          .finally(() => setCleaning(false))
-      }}
+    <Button
+      variant="default"
+      size="xs"
+      icon="trash-2"
+      pending={cleaning}
+      onClick={handleCleanup}
     >
-      <HelmxIcon name={cleaning ? 'loader' : 'trash-2'} size={11} className={cleaning ? WT_SPIN : undefined} />
-      {compact === true ? null : label}
-    </button>
+      {resolveLocalizedText(WT_COPY.cleanupLabel, locale)}
+    </Button>
   )
 }

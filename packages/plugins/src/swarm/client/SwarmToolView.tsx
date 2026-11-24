@@ -4,8 +4,8 @@
 import { useId, useMemo, useState, type ReactNode } from 'react'
 import type { ToolViewProps } from '@helmx/protocol'
 import {
-  HelmxIcon, StatusLight, ToolCallDetails, formatDurationMs, resolveLocalizedText,
-  usePluginContext, usePluginDoc, usePluginLocale, useToolActivity, type HelmxLocale,
+  Badge, HelmxIcon, StatusLight, ToolCallDetails, formatDurationMs, resolveLocalizedText,
+  usePluginContext, usePluginDoc, usePluginLocale, useToolActivity, type HelmxLocale, type StatusLightTone,
 } from '@helmx/plugin-client'
 import { SWARM_WORKBENCH_PANEL_ID, type SwarmIndexDoc } from './models.ts'
 import { isPlainObject, resolveConversationBoardLink } from './board-model.ts'
@@ -106,7 +106,7 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
     ? props.startedAt !== undefined && nowMs !== undefined ? Math.max(0, nowMs - props.startedAt) : undefined
     : props.durationMs
 
-  const lightStatus = isRunning ? 'running' : isError ? 'error' : 'done'
+  const lightTone: StatusLightTone = isRunning ? 'working' : isError ? 'failed' : 'done'
   const lightLabel = isRunning ? C.traceStatusRunning(locale) : isError ? C.traceStatusError(locale) : C.traceStatusDone(locale)
   const errorLine = isError && typeof props.result === 'string' ? (props.result.split(/\r?\n/, 1)[0] ?? '').trim() : ''
   const title = resolveLocalizedText(TOOL_TITLES[props.toolName] ?? C.TRACE_UNKNOWN_TOOL, locale)
@@ -146,8 +146,8 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
           {displaySummary ? <span className={`trace-tool-summary${isError ? ' sw-trace-error' : ''}`} title={displaySummary}>{displaySummary}</span> : null}
         </span>
         <span className="trace-row-right sw-trace-right">
-          {seqBadge ? <span className="badge badge-neutral sw-trace-badge tabular-nums">{seqBadge}</span> : null}
-          <StatusLight status={lightStatus} label={lightLabel} />
+          {seqBadge ? <Badge tone="neutral" className="sw-trace-badge tabular-nums">{seqBadge}</Badge> : null}
+          <StatusLight tone={lightTone} label={lightLabel} />
           {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
           <HelmxIcon name={clickTarget?.kind === 'member' ? 'external-link' : clickTarget === undefined && detailsOpen ? 'chevron-down' : 'chevron-right'} size={11} />
         </span>

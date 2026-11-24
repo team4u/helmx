@@ -1,6 +1,6 @@
 /** builtin:mermaid client component: on-demand ```mermaid code-block rendering with lazy fullscreen modal. */
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
-import { Callout, CopyButton, HelmxIcon, LoadingState, usePluginContext, usePluginTranslator } from '@helmx/plugin-client'
+import { Button, Callout, CopyButton, HelmxIcon, LoadingState, usePluginContext, usePluginTranslator } from '@helmx/plugin-client'
 import type { MarkdownCodeBlockProps } from '@helmx/protocol'
 import { renderMermaidSvg } from './mermaid-loader.ts'
 import { MERMAID_COPY as C } from './copy.ts'
@@ -49,10 +49,9 @@ function LazyMermaidPreviewModal({ code, svg, onClose }: { code: string; svg: st
         <div className="mermaid-error-body">
           <span className="selectable">{loadError}</span>
           <div className="mermaid-error-actions">
-            <button type="button" className="btn btn-sm" onClick={() => setAttempt((n) => n + 1)}>
-              <HelmxIcon name="refresh-cw" size={12} />
+            <Button size="sm" icon="refresh-cw" onClick={() => setAttempt((n) => n + 1)}>
               {t(C.retry)}
-            </button>
+            </Button>
           </div>
         </div>
       </Callout>
@@ -118,10 +117,9 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
       <div className="code-block-header">
         <span>mermaid</span>
         <span className="code-block-header-actions">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setZoomOpen(true)} title={t(C.zoomIn)}>
-            <HelmxIcon name="maximize" size={12} />
+          <Button variant="ghost" size="sm" icon="maximize" onClick={() => setZoomOpen(true)} title={t(C.zoomIn)}>
             {t(C.zoomIn)}
-          </button>
+          </Button>
           <CopyButton text={code} label={t(C.copySource)} />
         </span>
       </div>
@@ -133,10 +131,9 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
             <div className="mermaid-error-body">
               <span className="selectable">{error}</span>
               <div className="mermaid-error-actions">
-                <button type="button" className="btn btn-sm" onClick={() => { setError(null); setSvg(null); setRetryCount((n) => n + 1) }}>
-                  <HelmxIcon name="refresh-cw" size={12} />
+                <Button size="sm" icon="refresh-cw" onClick={() => { setError(null); setSvg(null); setRetryCount((n) => n + 1) }}>
                   {t(C.retry)}
-                </button>
+                </Button>
               </div>
               <pre className="code-block-pre code-block-pre-flush selectable"><code>{code}</code></pre>
             </div>

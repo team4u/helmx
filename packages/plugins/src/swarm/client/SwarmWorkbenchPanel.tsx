@@ -4,13 +4,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { WorkbenchPanelProps } from '@helmx/protocol'
 import {
-  Callout, Checkbox, Dialog, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle,
-  HelmxIcon, StatusLight, Tooltip, formatModelShortName, resolveLocalizedText,
-  useConversations, usePluginContext, usePluginDoc, usePluginLocale, usePluginSessionDoc, type LocalizedText,
+  Badge, Button, Callout, Checkbox, Dialog, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle,
+  EmptyState, HelmxIcon, IconButton, LoadingState, Stack, StatusLight, Tooltip, formatModelShortName, resolveLocalizedText,
+  useConversations, usePluginContext, usePluginDoc, usePluginLocale, usePluginSessionDoc,
+  type BadgeTone, type LocalizedText, type StatusLightTone,
 } from '@helmx/plugin-client'
 import type { SwarmIndexDoc } from './models.ts'
 import {
-  extractPostRefs, mergeBoardViewWithRead, parseBoardView, postDigestLine, postKindBadgeClass,
+  extractPostRefs, mergeBoardViewWithRead, parseBoardView, postDigestLine, postKindBadgeTone,
   resolveConversationBoardLink, shouldCollapsePostBody, type BoardViewDoc,
 } from './board-model.ts'
 import { buildSwarmPanelModel } from './model-panel.ts'
@@ -24,8 +25,8 @@ import { PostBodyText } from './PostBodyText.tsx'
 import { SwarmPostPeekPopover } from './SwarmPostPeekPopover.tsx'
 
 const RECENT_LIMIT_COLLAPSED = 6
-const LIVE_STATE_LIGHT: Record<string, string> = {
-  working: 'running', blocked: 'blocked', error: 'failed', done: 'done', missing: 'pending', idle: 'idle',
+const LIVE_STATE_LIGHT: Record<string, StatusLightTone> = {
+  working: 'working', blocked: 'blocked', error: 'failed', done: 'done', missing: 'pending', idle: 'idle',
 }
 
 export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): ReactNode {
@@ -141,24 +142,21 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
   if (conversationId === undefined || (!link && !hasArchivedTag)) {
     return (
       <div className="sw-panel">
-        <div className="empty-state empty-state-compact">
-          <p className="empty-state-title">{t(C.PANEL_EMPTY_TITLE)}</p>
-          <p className="empty-state-hint">{t(C.PANEL_EMPTY_HINT)}</p>
-        </div>
+        <EmptyState compact title={t(C.PANEL_EMPTY_TITLE)} hint={t(C.PANEL_EMPTY_HINT)} />
       </div>
     )
   }
   if (loading) {
-    return <div className="sw-panel"><div className="loading-state" role="status">{t(C.PANEL_LOADING)}</div></div>
+    return <div className="sw-panel"><LoadingState label={t(C.PANEL_LOADING)} /></div>
   }
   if (!model || !effectiveBoard) {
     return (
       <div className="sw-panel">
         <Callout tone={loadError ? 'err' : 'warn'} title={t(C.PANEL_STATUS_LOAD_FAILED)}>
           {loadError ? <p className="sw-panel-error-text">{loadError}</p> : null}
-          <button type="button" className="btn btn-xs" onClick={fallback.reload}>
-            <HelmxIcon name="rotate-cw" size={11} /><span>{t(C.PANEL_RETRY)}</span>
-          </button>
+          <Button size="xs" icon="rotate-cw" onClick={fallback.reload}>
+            {t(C.PANEL_RETRY)}
+          </Button>
         </Callout>
       </div>
     )
@@ -227,38 +225,38 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
 
   const peekPost = peekTargetSeq !== undefined ? effectiveBoard.posts.find((p) => p.seq === peekTargetSeq) : undefined
   const jumpBackTop = jumpBackStack[jumpBackStack.length - 1]
-  const statusLight = model.status === 'attention' ? 'blocked' : model.status === 'completed' ? 'done' : 'running'
-  const statusBadge = model.status === 'attention' ? 'badge-warn' : model.status === 'completed' ? 'badge-neutral' : 'badge-accent'
+  const statusLight: StatusLightTone = model.status === 'attention' ? 'blocked' : model.status === 'completed' ? 'done' : 'working'
+  const statusBadgeTone: BadgeTone = model.status === 'attention' ? 'warn' : model.status === 'completed' ? 'neutral' : 'accent'
 
   return (
     <div ref={panelRef} className="sw-panel">
       <div className="sw-panel-head">
         <span className="sw-panel-head-left">
-          <StatusLight status={statusLight} label={C.panelStatusLabel(model.status, locale)} />
+          <StatusLight tone={statusLight} label={C.panelStatusLabel(model.status, locale)} />
           <span className="sw-panel-title" title={effectiveBoard.group.title}>{effectiveBoard.group.title}</span>
-          <span className={`badge ${statusBadge}`}>{C.panelStatusLabel(model.status, locale)}</span>
-          <span className="badge badge-neutral tabular-nums">{`${model.progress.done}/${model.progress.total}`}</span>
+          <Badge tone={statusBadgeTone}>{C.panelStatusLabel(model.status, locale)}</Badge>
+          <Badge tone="neutral" className="tabular-nums">{`${model.progress.done}/${model.progress.total}`}</Badge>
           {groupTiming ? (
             <Tooltip content={groupTiming.tooltip} className="sw-timing-tooltip">
               <span className="sw-panel-elapsed tabular-nums">{groupTiming.label}</span>
             </Tooltip>
           ) : null}
         </span>
-        <span className="stack-row sw-panel-head-actions">
+        <Stack direction="horizontal" gap="xs" align="center" className="sw-panel-head-actions">
           {isFallbackData ? (
             <>
-              <span className="badge badge-neutral">{t(C.PANEL_FALLBACK_NOTE)}</span>
-              <button type="button" className="btn btn-xs" onClick={fallback.reload}>
-                <HelmxIcon name="rotate-cw" size={11} /><span>{t(C.PANEL_REFRESH)}</span>
-              </button>
+              <Badge tone="neutral">{t(C.PANEL_FALLBACK_NOTE)}</Badge>
+              <Button size="xs" icon="rotate-cw" onClick={fallback.reload}>
+                {t(C.PANEL_REFRESH)}
+              </Button>
             </>
           ) : null}
           {isCoordinatorActive ? (
-            <button type="button" className="btn btn-xs sw-panel-close-btn" disabled={busyAction !== undefined} onClick={openCloseDialog}>
-              <HelmxIcon name="check-circle" size={11} /><span>{t(C.PANEL_CLOSE_GROUP)}</span>
-            </button>
+            <Button size="xs" icon="check-circle" className="sw-panel-close-btn" disabled={busyAction !== undefined} onClick={openCloseDialog}>
+              {t(C.PANEL_CLOSE_GROUP)}
+            </Button>
           ) : null}
-        </span>
+        </Stack>
       </div>
 
       {headlineText ? <p className={`sw-panel-headline sw-panel-headline-${model.headlineTone}`}>{headlineText}</p> : null}
@@ -273,7 +271,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
       <div className="sw-panel-section">
         <div className="sw-panel-section-head">
           <span className="sw-panel-section-title">{t(C.PANEL_MEMBERS_TITLE)}</span>
-          <span className="badge badge-neutral tabular-nums">{model.rows.length}</span>
+          <Badge tone="neutral" className="tabular-nums">{model.rows.length}</Badge>
         </div>
         {model.rows.length === 0 ? (
           <div className="sw-panel-empty-hint">{t(C.PANEL_MEMBERS_EMPTY)}</div>
@@ -294,11 +292,11 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                     onClick={() => ctx.openConversationDrawer(row.conversationId)}
                   >
                     <span className="sw-panel-member-main">
-                      <StatusLight status={LIVE_STATE_LIGHT[row.liveState] ?? 'pending'} label={C.memberLiveStateLabel(row.liveState, locale)} />
+                      <StatusLight tone={LIVE_STATE_LIGHT[row.liveState] ?? 'pending'} label={C.memberLiveStateLabel(row.liveState, locale)} />
                       <span className="sw-panel-member-name">@{row.name}</span>
-                      {row.lifecycle === 'archived' ? <span className="badge badge-neutral">{t(C.PANEL_MEMBER_ARCHIVED)}</span> : null}
-                      <span className="badge badge-neutral">{C.memberAccessLabel(row.access, locale)}</span>
-                      {row.model ? <span className="badge badge-neutral mono sw-panel-member-model" title={row.model}>{formatModelShortName(row.model)}</span> : null}
+                      {row.lifecycle === 'archived' ? <Badge tone="neutral">{t(C.PANEL_MEMBER_ARCHIVED)}</Badge> : null}
+                      <Badge tone="neutral">{C.memberAccessLabel(row.access, locale)}</Badge>
+                      {row.model ? <Badge tone="neutral" mono className="sw-panel-member-model" title={row.model}>{formatModelShortName(row.model)}</Badge> : null}
                       {row.doing ? <span className="sw-panel-member-doing" title={row.doing}>{row.doing}</span> : null}
                       {timing ? (
                         <Tooltip content={timing.tooltip} className="sw-timing-tooltip">
@@ -314,9 +312,9 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                     ) : null}
                   </button>
                   {canAbort ? (
-                    <button type="button" className="btn btn-xs btn-danger sw-panel-member-abort" disabled={busyAction !== undefined} onClick={() => runAbortMember(row.name)}>
-                      <HelmxIcon name="square" size={11} /><span>{t(C.ACTION_ABORT)}</span>
-                    </button>
+                    <Button variant="danger" size="xs" icon="square" className="sw-panel-member-abort" disabled={busyAction !== undefined} onClick={() => runAbortMember(row.name)}>
+                      {t(C.ACTION_ABORT)}
+                    </Button>
                   ) : null}
                 </div>
               )
@@ -329,7 +327,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
         <div className="sw-panel-section">
           <div className="sw-panel-section-head">
             <span className="sw-panel-section-title">{t(C.PANEL_RETAINED_TITLE)}</span>
-            <span className="badge badge-warn tabular-nums">{model.retainedWorktrees.length}</span>
+            <Badge tone="warn" className="tabular-nums">{model.retainedWorktrees.length}</Badge>
           </div>
           <ul className="sw-panel-retained">
             {model.retainedWorktrees.map((item) => (
@@ -345,28 +343,25 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
       <div className="sw-panel-section">
         <div className="sw-panel-section-head">
           <span className="sw-panel-section-title">{t(C.PANEL_ACTIVITY_TITLE)}</span>
-          <button type="button" className="btn btn-xs btn-ghost sw-panel-history-toggle" aria-expanded={historyExpanded} onClick={() => setHistoryExpanded((v) => !v)}>
-            <HelmxIcon name={historyExpanded ? 'chevron-up' : 'chevron-down'} size={11} />
-            <span>{t(historyExpanded ? C.PANEL_HISTORY_COLLAPSE : C.PANEL_HISTORY_TOGGLE)}</span>
-          </button>
+          <Button variant="ghost" size="xs" icon={historyExpanded ? 'chevron-up' : 'chevron-down'} className="sw-panel-history-toggle" aria-expanded={historyExpanded} onClick={() => setHistoryExpanded((v) => !v)}>
+            {t(historyExpanded ? C.PANEL_HISTORY_COLLAPSE : C.PANEL_HISTORY_TOGGLE)}
+          </Button>
         </div>
 
         {jumpBackTop !== undefined ? (
           <div className="sw-panel-jump-back" role="status">
-            <button type="button" className="btn btn-xs btn-ghost sw-panel-jump-back-btn" onClick={handleJumpBack}>
-              <HelmxIcon name="arrow-left" size={11} /><span>{C.jumpBackLabel(jumpBackTop, locale)}</span>
-              {jumpBackStack.length > 1 ? <span className="badge badge-neutral tabular-nums">{jumpBackStack.length}</span> : null}
-            </button>
-            <button type="button" className="btn btn-xs btn-ghost btn-icon-sm sw-panel-jump-back-clear" aria-label={t(C.JUMP_BACK_DISMISS)} title={t(C.JUMP_BACK_DISMISS)} onClick={() => setJumpBackStack([])}>
-              <HelmxIcon name="x" size={11} />
-            </button>
+            <Button variant="ghost" size="xs" icon="arrow-left" className="sw-panel-jump-back-btn" onClick={handleJumpBack}>
+              <span>{C.jumpBackLabel(jumpBackTop, locale)}</span>
+              {jumpBackStack.length > 1 ? <Badge tone="neutral" className="tabular-nums">{jumpBackStack.length}</Badge> : null}
+            </Button>
+            <IconButton variant="ghost" size="sm" icon="x" className="sw-panel-jump-back-clear" label={t(C.JUMP_BACK_DISMISS)} onClick={() => setJumpBackStack([])} />
           </div>
         ) : null}
 
         {readState.hasEarlier ? (
-          <button type="button" className="btn btn-xs btn-ghost sw-panel-load-earlier" disabled={readState.loadingEarlier || readState.loading} onClick={readState.loadEarlier}>
-            <HelmxIcon name="chevron-up" size={11} /><span>{t(readState.loadingEarlier ? C.PANEL_LOADING_EARLIER : C.PANEL_LOAD_EARLIER)}</span>
-          </button>
+          <Button variant="ghost" size="xs" icon="chevron-up" className="sw-panel-load-earlier" disabled={readState.loadingEarlier || readState.loading} onClick={readState.loadEarlier}>
+            {t(readState.loadingEarlier ? C.PANEL_LOADING_EARLIER : C.PANEL_LOAD_EARLIER)}
+          </Button>
         ) : null}
 
         {model.recentPosts.length === 0 ? (
@@ -379,7 +374,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
               return (
                 <li key={post.seq} data-post-seq={post.seq} className={`sw-panel-post${highlightedSeq === post.seq ? ' sw-panel-post-highlighted' : ''}`}>
                   <div className="sw-panel-post-head">
-                    <span className={`badge ${postKindBadgeClass(post.kind)}`}>{C.postKindLabel(post.kind, locale)}</span>
+                    <Badge tone={postKindBadgeTone(post.kind)}>{C.postKindLabel(post.kind, locale)}</Badge>
                     <span className="sw-panel-post-from">{`${post.from === 'coordinator' ? 'coordinator' : `@${post.from}`} -> ${C.panelPostTargets(post)}`}</span>
                     <span className="sw-panel-post-meta">
                       {postTime ? (
@@ -422,12 +417,12 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
         ) : null}
 
         {readState.error ? (
-          <div className="sw-panel-empty-hint stack-row">
+          <Stack direction="horizontal" gap="sm" align="center" className="sw-panel-empty-hint">
             <span>{readState.error}</span>
-            <button type="button" className="btn btn-xs" onClick={readState.retry}>
-              <HelmxIcon name="rotate-cw" size={11} /><span>{t(C.PANEL_RETRY)}</span>
-            </button>
-          </div>
+            <Button size="xs" icon="rotate-cw" onClick={readState.retry}>
+              {t(C.PANEL_RETRY)}
+            </Button>
+          </Stack>
         ) : null}
       </div>
 
@@ -446,8 +441,8 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
               </div>
               {closeError ? <Callout tone="err" title={t(C.PANEL_CLOSE_DIALOG_TITLE)}><p className="sw-panel-error-text">{closeError}</p></Callout> : null}
               <div className="sw-close-dialog-actions">
-                <button type="button" className="btn btn-sm" disabled={busyAction === 'close_group'} onClick={() => { setCloseDialogOpen(false); setCloseError(undefined) }}>{t(C.PANEL_CANCEL)}</button>
-                <button type="button" className="btn btn-sm btn-primary sw-close-dialog-confirm" disabled={busyAction === 'close_group'} onClick={confirmCloseGroup}>{t(C.PANEL_CLOSE_CONFIRM)}</button>
+                <Button size="sm" disabled={busyAction === 'close_group'} onClick={() => { setCloseDialogOpen(false); setCloseError(undefined) }}>{t(C.PANEL_CANCEL)}</Button>
+                <Button variant="primary" size="sm" pending={busyAction === 'close_group'} className="sw-close-dialog-confirm" onClick={confirmCloseGroup}>{t(C.PANEL_CLOSE_CONFIRM)}</Button>
               </div>
             </DialogContent>
           </DialogPortal>

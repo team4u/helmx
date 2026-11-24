@@ -138,13 +138,6 @@
   flex-shrink: 0;
 }
 
-.tg-run-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 @media (max-width: 680px) {
   .tg-table-wrap .helmx-table-wrap {
     border: none;

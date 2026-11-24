@@ -2,8 +2,8 @@
  * Inline peek popover for Swarm board `#seq` references (Fast Refresh compliant).
  */
 import type { ReactNode, RefObject } from 'react'
-import { Callout, HelmxIcon, Popover, PopoverAnchor, PopoverContent, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
-import { extractPostRefs, postKindBadgeClass, type BoardPost } from './board-model.ts'
+import { Badge, Button, Callout, HelmxIcon, IconButton, LoadingState, Popover, PopoverAnchor, PopoverContent, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
+import { extractPostRefs, postKindBadgeTone, type BoardPost } from './board-model.ts'
 import * as C from './copy.ts'
 import { currentPeekSeq, previousPeekSeq, type PostPeekState } from './model-post-nav.ts'
 import { PostBodyText } from './PostBodyText.tsx'
@@ -39,27 +39,25 @@ export function SwarmPostPeekPopover(props: SwarmPostPeekPopoverProps): ReactNod
         <div className="sw-peek-head">
           <div className="sw-peek-head-left">
             {prevSeq !== undefined ? (
-              <button type="button" className="btn btn-xs btn-ghost sw-peek-back-btn" aria-label={C.peekBackLabel(prevSeq, locale)} title={C.peekBackLabel(prevSeq, locale)} onClick={onBack}>
-                <HelmxIcon name="arrow-left" size={11} /><span className="mono tabular-nums">{`#${prevSeq}`}</span>
-              </button>
+              <Button variant="ghost" size="xs" icon="arrow-left" className="sw-peek-back-btn" aria-label={C.peekBackLabel(prevSeq, locale)} title={C.peekBackLabel(prevSeq, locale)} onClick={onBack}>
+                <span className="mono tabular-nums">{`#${prevSeq}`}</span>
+              </Button>
             ) : null}
-            <span className="badge badge-neutral mono tabular-nums sw-peek-seq">{`#${targetSeq}`}</span>
+            <Badge tone="neutral" mono className="tabular-nums sw-peek-seq">{`#${targetSeq}`}</Badge>
             {post ? (
               <>
-                <span className={`badge ${postKindBadgeClass(post.kind)}`}>{C.postKindLabel(post.kind, locale)}</span>
+                <Badge tone={postKindBadgeTone(post.kind)}>{C.postKindLabel(post.kind, locale)}</Badge>
                 <span className="sw-peek-from">{`${post.from === 'coordinator' ? 'coordinator' : `@${post.from}`} -> ${C.panelPostTargets(post)}`}</span>
               </>
             ) : null}
           </div>
           <div className="sw-peek-head-actions">
             {post ? (
-              <button type="button" className="btn btn-xs btn-ghost sw-peek-locate-btn" onClick={() => onLocate(post.seq)}>
-                <HelmxIcon name="corner-down-right" size={11} /><span>{resolveLocalizedText(C.PEEK_LOCATE, locale)}</span>
-              </button>
+              <Button variant="ghost" size="xs" icon="corner-down-right" className="sw-peek-locate-btn" onClick={() => onLocate(post.seq)}>
+                {resolveLocalizedText(C.PEEK_LOCATE, locale)}
+              </Button>
             ) : null}
-            <button type="button" className="btn btn-xs btn-ghost btn-icon-sm sw-peek-close-btn" aria-label={resolveLocalizedText(C.PEEK_CLOSE, locale)} title={resolveLocalizedText(C.PEEK_CLOSE, locale)} onClick={onClose}>
-              <HelmxIcon name="x" size={12} />
-            </button>
+            <IconButton variant="ghost" size="sm" icon="x" className="sw-peek-close-btn" label={resolveLocalizedText(C.PEEK_CLOSE, locale)} onClick={onClose} />
           </div>
         </div>
 
@@ -83,13 +81,13 @@ export function SwarmPostPeekPopover(props: SwarmPostPeekPopoverProps): ReactNod
               ) : null}
             </>
           ) : loading ? (
-            <div className="loading-state sw-peek-status" role="status">{C.peekLoadingLabel(targetSeq, locale)}</div>
+            <LoadingState label={C.peekLoadingLabel(targetSeq, locale)} className="sw-peek-status" />
           ) : error ? (
             <Callout tone="err" title={resolveLocalizedText(C.PEEK_LOAD_FAILED, locale)}>
               <p className="sw-panel-error-text">{error}</p>
-              <button type="button" className="btn btn-xs" onClick={onRetry}>
-                <HelmxIcon name="rotate-cw" size={11} /><span>{resolveLocalizedText(C.PANEL_RETRY, locale)}</span>
-              </button>
+              <Button size="xs" icon="rotate-cw" onClick={onRetry}>
+                {resolveLocalizedText(C.PANEL_RETRY, locale)}
+              </Button>
             </Callout>
           ) : (
             <div className="sw-peek-not-found">{C.peekNotFoundLabel(targetSeq, locale)}</div>

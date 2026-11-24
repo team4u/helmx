@@ -5,6 +5,7 @@
 import './styles.css'
 import type { ReactNode } from 'react'
 import {
+  Button,
   HelmxIcon,
   KvGrid,
   LoadingState,
@@ -54,14 +55,13 @@ export function TriggersSettingsPanel(): ReactNode {
       )}
       <div className="tg-note">{t(TRIGGERS_SETTINGS_NOTE)}</div>
       <div>
-        <button
-          type="button"
-          className="btn btn-xs"
+        <Button
+          size="xs"
+          icon="external-link"
           onClick={() => ctx.openScreen('screen:builtin:triggers/manager')}
         >
-          <HelmxIcon name="external-link" size={11} />
-          <span>{t(TRIGGERS_OPEN_MANAGER)}</span>
-        </button>
+          {t(TRIGGERS_OPEN_MANAGER)}
+        </Button>
       </div>
     </ScreenSection>
   )

@@ -8,7 +8,9 @@ import './styles.css'
 import type { ReactNode } from 'react'
 import type { ComposerStatusSlotProps } from '@helmx/protocol/browser'
 import {
+  Badge,
   HelmxIcon,
+  IconButton,
   Popover,
   PopoverClose,
   PopoverContent,
@@ -114,7 +116,7 @@ function PopoverAccountSection({
           {displayName}
         </span>
         {showActiveBadge && isPrimary ? (
-          <span className="magpie-quota-account-badge">{t(MAGPIE_COMPOSER_ACTIVE_ACCOUNT)}</span>
+          <Badge tone="neutral">{t(MAGPIE_COMPOSER_ACTIVE_ACCOUNT)}</Badge>
         ) : null}
       </div>
       {account.windows.length > 0 ? (
@@ -251,29 +253,21 @@ export function MagpieComposerQuotaStatus(props: ComposerStatusSlotProps): React
           </div>
           <div className="magpie-quota-popover-actions">
             {ageLabel ? <span className="magpie-quota-popover-age">{ageLabel}</span> : null}
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon-xs"
-              disabled={refreshAction.pending}
+            <IconButton
+              variant="ghost"
+              size="xs"
+              icon="refresh-cw"
+              pending={refreshAction.pending}
               onClick={handleManualRefresh}
-              aria-label={t(MAGPIE_COMPOSER_REFRESH_NOW)}
-              title={t(MAGPIE_COMPOSER_REFRESH_NOW)}
-            >
-              <HelmxIcon
-                name={refreshAction.pending ? 'loader' : 'refresh-cw'}
-                size={12}
-                className={refreshAction.pending ? 'spin-slow' : undefined}
-              />
-            </button>
+              label={t(MAGPIE_COMPOSER_REFRESH_NOW)}
+            />
             <PopoverClose asChild>
-              <button
-                type="button"
-                className="btn btn-ghost btn-icon-xs"
-                aria-label={t(MAGPIE_COMPOSER_CLOSE)}
-                title={t(MAGPIE_COMPOSER_CLOSE)}
-              >
-                <HelmxIcon name="x" size={12} />
-              </button>
+              <IconButton
+                variant="ghost"
+                size="xs"
+                icon="x"
+                label={t(MAGPIE_COMPOSER_CLOSE)}
+              />
             </PopoverClose>
           </div>
         </div>

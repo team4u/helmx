@@ -14,13 +14,6 @@
   user-select: text;
 }
 
-/* Vertical stacking (horizontal reuses the host .stack-row; the host has no generic vertical primitive, so this is DSL-private) */
-.jr-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 .jr-metric-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

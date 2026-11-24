@@ -4,7 +4,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helmx/protocol'
 import {
-  DockTray, DockTrayRow, HelmxIcon, Tooltip, resolveLocalizedText,
+  Badge, Button, DockTray, DockTrayRow, Tooltip, resolveLocalizedText,
   useConversation, useConversations, usePluginContext, usePluginDoc, usePluginLocale, usePluginSessionDoc,
 } from '@helmx/plugin-client'
 import { SWARM_WORKBENCH_PANEL_ID, type SwarmIndexDoc } from './models.ts'
@@ -61,17 +61,17 @@ function SwarmTrayRow(props: { item: SwarmTrayItem; nowMs: number | undefined; b
       onOpen={() => ctx.openConversationDrawer(item.conversationId)}
       openAriaLabel={`@${item.name} — ${C.trayRowOpenLabel(item.name, locale)}`}
       actions={
-        <button
-          type="button"
-          className="btn btn-xs btn-danger"
+        <Button
+          variant="danger"
+          size="xs"
+          icon="square"
           disabled={props.busy}
           title={resolveLocalizedText(C.ACTION_ABORT, locale)}
           aria-label={resolveLocalizedText(C.ACTION_ABORT, locale)}
           onClick={() => props.onAbort(`abort:${item.name}`, item.name)}
         >
-          <HelmxIcon name="square" size={11} />
           <span className="dock-tray-action-label">{resolveLocalizedText(C.ACTION_ABORT, locale)}</span>
-        </button>
+        </Button>
       }
     />
   )
@@ -124,7 +124,11 @@ function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }
       toggleTitle={groupTiming ? `${baseTitle}\n${groupTiming.tooltip}` : baseTitle}
       status={hasBlocked ? 'blocked' : 'running'}
       statusLabel={countText}
-      badge={<span className="badge badge-neutral dock-tray-badge sw-tray-badge tabular-nums">{C.trayProgress(summary.doneCount, summary.activeCount, locale)}</span>}
+      badge={
+        <Badge tone="neutral" className="dock-tray-badge sw-tray-badge tabular-nums">
+          {C.trayProgress(summary.doneCount, summary.activeCount, locale)}
+        </Badge>
+      }
       count={summary.items.length > 1 || expanded ? countText : undefined}
       frontline={
         headlineItem ? (
@@ -135,16 +139,16 @@ function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }
       }
       elapsed={groupTiming?.label}
       barAction={
-        <button
-          type="button"
-          className="btn btn-xs dock-tray-workbench sw-tray-workbench"
+        <Button
+          size="xs"
+          icon="network"
+          className="dock-tray-workbench sw-tray-workbench"
           title={resolveLocalizedText(C.TRAY_WORKBENCH, locale)}
           aria-label={resolveLocalizedText(C.TRAY_WORKBENCH, locale)}
           onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_ID, { groupId: board.group.id })}
         >
-          <HelmxIcon name="network" size={11} />
           <span className="dock-tray-action-label">{resolveLocalizedText(C.TRAY_WORKBENCH, locale)}</span>
-        </button>
+        </Button>
       }
     >
       {summary.items.map((item) => (

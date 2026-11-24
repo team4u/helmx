@@ -15,6 +15,7 @@ import type { ConversationSummary, ScreenProps } from '@helmx/protocol'
 import {
   Badge,
   Button,
+  Callout,
   ConfirmDialog,
   DataTable,
   DetailDrawer,
@@ -23,6 +24,7 @@ import {
   KvGrid,
   Screen,
   ScreenSection,
+  Stack,
   StatusLight,
   Tooltip,
   formatDurationMs,
@@ -105,10 +107,9 @@ import {
 
 function ActionError({ message }: { message: string }): ReactNode {
   return (
-    <div className="callout callout-error" role="alert">
-      <HelmxIcon name="alert-circle" size={13} />
+    <Callout tone="err">
       <span className="callout-text">{message}</span>
-    </div>
+    </Callout>
   )
 }
 
@@ -551,10 +552,9 @@ function TriggerDetailDrawer({
           </ScreenSection>
 
           {cronJob.lastError !== undefined && cronJob.lastError !== '' ? (
-            <div className="callout callout-error" role="alert">
-              <HelmxIcon name="alert-circle" size={13} />
+            <Callout tone="err">
               <span className="callout-text selectable">{cronJob.lastError}</span>
-            </div>
+            </Callout>
           ) : null}
         </>
       ) : webhook !== undefined ? (
@@ -578,24 +578,22 @@ function TriggerDetailDrawer({
               onOpen={openConversation}
             />
           ) : (
-            <div className="tg-run-actions">
-              <button
-                type="button"
-                className="btn btn-xs"
+            <Stack direction="horizontal" gap="sm" align="center" wrap>
+              <Button
+                size="xs"
+                icon="panel-right"
                 onClick={() => peekConversation(targetConversationId)}
               >
-                <HelmxIcon name="panel-right" size={11} />
-                <span>{t(TRIGGERS_PEEK_CONVERSATION)} #{targetConversationId}</span>
-              </button>
-              <button
-                type="button"
-                className="btn btn-xs"
+                {t(TRIGGERS_PEEK_CONVERSATION)} #{targetConversationId}
+              </Button>
+              <Button
+                size="xs"
+                icon="external-link"
                 onClick={() => openConversation(targetConversationId)}
               >
-                <HelmxIcon name="external-link" size={11} />
-                <span>{t(TRIGGERS_OPEN_CONVERSATION)}</span>
-              </button>
-            </div>
+                {t(TRIGGERS_OPEN_CONVERSATION)}
+              </Button>
+            </Stack>
           )}
         </ScreenSection>
       ) : (

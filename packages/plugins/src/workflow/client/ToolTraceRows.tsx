@@ -10,9 +10,12 @@ import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TimelineRendererProps, ToolViewProps } from '@helmx/protocol'
 import {
+  Badge,
+  Button,
   Callout,
   CopyButton,
   HelmxIcon,
+  IconButton,
   KvGrid,
   MarkdownText,
   StatusLight,
@@ -249,27 +252,29 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
             </span>
           ) : null}
           {childId !== undefined && childSummary?.profileId ? (
-            <span
-              className="badge badge-neutral wf-trace-badge wf-trace-profile"
+            <Badge
+              tone="neutral"
+              className="wf-trace-badge wf-trace-profile"
               title={`@${childSummary.profileId}`}
             >
-              <span>{`@${childSummary.profileId}`}</span>
-            </span>
+              {`@${childSummary.profileId}`}
+            </Badge>
           ) : null}
           {worktreeBranch !== undefined ? (
-            <span
-              className={`badge badge-neutral wf-trace-badge wf-wt-badge${worktreeIsManaged ? ' wf-wt-badge-compact' : ''}`}
+            <Badge
+              tone="neutral"
+              icon="git-branch"
+              className={`wf-trace-badge wf-wt-badge${worktreeIsManaged ? ' wf-wt-badge-compact' : ''}`}
               title={worktreeTooltip}
               aria-label={worktreeTooltip}
             >
-              <HelmxIcon name="git-branch" size={10} />
               {!worktreeIsManaged ? <span className="wf-wt-branch">{worktreeBranch}</span> : null}
-            </span>
+            </Badge>
           ) : null}
           {!isLatest ? (
-            <span className="badge badge-neutral wf-trace-badge">
-              <span>{t(COPY.resumedBelow)}</span>
-            </span>
+            <Badge tone="neutral" className="wf-trace-badge">
+              {t(COPY.resumedBelow)}
+            </Badge>
           ) : null}
           {displaySummary ? (
             <span className={`trace-tool-summary${isError ? ' wf-trace-error' : ''}`} title={displaySummary}>
@@ -387,7 +392,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
             {title}
           </span>
           {totalNodes > 0 ? (
-            <span className="badge badge-neutral wf-trace-badge tabular-nums">{`${doneNodes}/${totalNodes}`}</span>
+            <Badge tone="neutral" className="wf-trace-badge tabular-nums">{`${doneNodes}/${totalNodes}`}</Badge>
           ) : null}
           {summaryText ? (
             <span className={`trace-tool-summary${isError ? ' wf-trace-error' : ''}`} title={summaryText}>
@@ -447,9 +452,9 @@ function ReportExpandedBody(props: { view: BackgroundReportView; onOpenChild?: (
           {
             key: t(COPY.reportKvSubagent),
             value: onOpenChild ? (
-              <button type="button" className="btn btn-ghost btn-xs" onClick={onOpenChild}>
+              <Button variant="ghost" size="xs" onClick={onOpenChild}>
                 {view.name ? `${view.name} (#${view.executionConversationId})` : `#${view.executionConversationId}`}
-              </button>
+              </Button>
             ) : (
               <span>{view.name ? `${view.name} (#${view.executionConversationId})` : `#${view.executionConversationId}`}</span>
             ),
@@ -483,11 +488,11 @@ function ReportExpandedBody(props: { view: BackgroundReportView; onOpenChild?: (
           <div className="trace-section-label">{t(COPY.reportOtherTasks)}</div>
           <div className="wf-report-tasks">
             {view.otherRunningTasks.map((task) => (
-              <span key={task.runId} className="badge badge-neutral wf-report-task-item">
+              <Badge key={task.runId} tone="neutral" className="wf-report-task-item">
                 {!isPlaceholderRunName(task.name, task.runId) ? <span>{task.name}</span> : null}
                 <span className="mono">{task.runId}</span>
                 <span>{t(task.kind === 'subagent' ? COPY.subagentLabel : COPY.workflowLabel)}</span>
-              </span>
+              </Badge>
             ))}
           </div>
         </div>
@@ -556,15 +561,13 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
           ) : null}
           <CopyButton text={view.rawText} className="btn btn-ghost btn-xs" />
           {convId !== undefined ? (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              title={traceOpenChildLabel(convId, locale)}
-              aria-label={traceOpenChildLabel(convId, locale)}
+            <IconButton
+              variant="ghost"
+              size="xs"
+              icon="external-link"
+              label={traceOpenChildLabel(convId, locale)}
               onClick={() => ctx.openConversationDrawer(convId)}
-            >
-              <HelmxIcon name="external-link" size={11} />
-            </button>
+            />
           ) : null}
         </span>
       </div>

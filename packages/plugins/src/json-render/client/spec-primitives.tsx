@@ -30,6 +30,7 @@ import {
   PluginSlot,
   Select,
   Stack,
+  Switch,
   Tabs,
   TabsList,
   TabsTrigger,
@@ -147,9 +148,9 @@ function StackImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
   const gap = evalIn<unknown>(node.props['gap'], ctx.scope)
   const style = typeof gap === 'number' && Number.isFinite(gap) ? { gap } : undefined
   return (
-    <div className={direction === 'horizontal' ? 'stack-row' : 'jr-stack'} style={style}>
+    <Stack direction={direction === 'horizontal' ? 'horizontal' : 'vertical'} gap="md" style={style}>
       {ctx.renderChildren(node.children)}
-    </div>
+    </Stack>
   )
 }
 
@@ -302,11 +303,11 @@ function CalloutImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderC
   )
 }
 
-const STEP_STATUS_META: Record<string, { icon: string; cls: string }> = {
-  pending: { icon: 'circle', cls: 'badge-neutral' },
-  running: { icon: 'loader', cls: 'badge-accent' },
-  done: { icon: 'check', cls: 'badge-ok' },
-  failed: { icon: 'x', cls: 'badge-err' },
+const STEP_STATUS_META: Record<string, { icon: string; tone: BadgeTone }> = {
+  pending: { icon: 'circle', tone: 'neutral' },
+  running: { icon: 'loader', tone: 'accent' },
+  done: { icon: 'check', tone: 'ok' },
+  failed: { icon: 'x', tone: 'err' },
 }
 
 function StepsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
@@ -325,9 +326,10 @@ function StepsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
         return (
           <div key={i} className="row">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-              <span className={`badge ${meta.cls}`}>
-                <HelmxIcon name={meta.icon} size={10} className={item.status === 'running' ? 'spin-slow' : undefined} />
-              </span>
+              <Badge
+                tone={meta.tone}
+                icon={<HelmxIcon name={meta.icon} size={10} className={item.status === 'running' ? 'spin-slow' : undefined} />}
+              />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
                 <span style={{ fontSize: 12.5 }}>{item.title}</span>
                 {item.detail !== '' && <span style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{item.detail}</span>}
@@ -354,7 +356,7 @@ function BarListImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderC
     : []
   const globalMax = Math.max(1, ...items.map((it) => it.max ?? it.value))
   return (
-    <div className="jr-stack" style={{ gap: 6 }}>
+    <Stack gap="xs" style={{ gap: 6 }}>
       {items.map((item, i) => {
         const ratio = Math.max(0, Math.min(1, item.value / globalMax))
         return (
@@ -384,7 +386,7 @@ function BarListImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderC
           </div>
         )
       })}
-    </div>
+    </Stack>
   )
 }
 
@@ -448,7 +450,7 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
                 ))}
                 {rowActions.length > 0 && (
                   <td style={{ textAlign: 'right' }}>
-                    <div className="stack-row" style={{ justifyContent: 'flex-end' }}>
+                    <Stack direction="horizontal" gap="sm" justify="end">
                       {rowActions.map((ra, k) => (
                         <RowActionButton
                           key={k}
@@ -459,7 +461,7 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
                           onClick={() => ctx.runAction(ra['action'], rowScope, `${pendingKey}-${k}`)}
                         />
                       ))}
-                    </div>
+                    </Stack>
                   </td>
                 )}
               </tr>
@@ -628,53 +630,21 @@ function SwitchImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
     // Trigger the action with the new boolean injected as $value
     ctx.runAction(node.props['action'], { ...ctx.scope, $value: !checked }, pendingKey)
   }
+  const labelContent =
+    pending || label !== '' ? (
+      <Stack direction="horizontal" gap="xs" align="center" inline>
+        {pending && <HelmxIcon name="loader" size={12} className="spin-slow" />}
+        {label !== '' ? <span>{label}</span> : null}
+      </Stack>
+    ) : undefined
   return (
-    <button
-      type="button"
+    <Switch
+      checked={checked}
       disabled={pending || node.props['action'] === undefined}
-      onClick={toggle}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 8,
-        background: 'transparent',
-        border: 'none',
-        cursor: 'pointer',
-        fontSize: 12.5,
-        color: 'var(--fg-secondary)',
-        padding: 0,
-      }}
-    >
-      <span
-        style={{
-          position: 'relative',
-          display: 'inline-block',
-          width: 28,
-          height: 16,
-          borderRadius: 999,
-          background: checked ? 'var(--accent)' : 'var(--bg-muted)',
-          border: `1px solid ${checked ? 'var(--accent)' : 'var(--border-strong)'}`,
-          transition: 'background 120ms ease',
-          flexShrink: 0,
-        }}
-      >
-        <span
-          style={{
-            position: 'absolute',
-            top: 1.5,
-            left: checked ? 13 : 1.5,
-            width: 11,
-            height: 11,
-            borderRadius: 999,
-            background: 'var(--bg-elevated)',
-            boxShadow: 'var(--shadow-sm)',
-            transition: 'left 120ms ease',
-          }}
-        />
-      </span>
-      {pending && <HelmxIcon name="loader" size={12} />}
-      {label}
-    </button>
+      onChange={() => toggle()}
+      label={labelContent}
+      aria-label={label !== '' ? label : 'Toggle'}
+    />
   )
 }
 
@@ -860,18 +830,16 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   const fallback = node.children.length > 0 ? <SpecNodeList nodes={node.children} ctx={ctx} /> : undefined
   if (name === '') {
     return (
-      <div className="callout callout--warning">
-        <HelmxIcon name="alert-triangle" size={13} />
+      <Callout tone="warn">
         <span>{tr(ctx, JSON_RENDER_SLOT_MISSING_NAME)}</span>
-      </div>
+      </Callout>
     )
   }
   if (ctx.pluginId === undefined) {
     return (
-      <div className="callout callout--warning">
-        <HelmxIcon name="alert-triangle" size={13} />
+      <Callout tone="warn">
         <span>{tr(ctx, JSON_RENDER_SLOT_NO_HOST)}</span>
-      </div>
+      </Callout>
     )
   }
   return (
@@ -917,10 +885,9 @@ function SpecNodeView({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRender
     case 'Slot': return <SlotImpl node={node} ctx={ctx} />
     default:
       return (
-        <div className="callout callout--warning">
-          <HelmxIcon name="alert-triangle" size={13} />
+        <Callout tone="warn">
           <span>{jsonRenderUnknownComponent(node.component, ctx.locale)}</span>
-        </div>
+        </Callout>
       )
   }
 }

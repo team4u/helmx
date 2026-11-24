@@ -5,8 +5,12 @@
 import './styles.css'
 import type { ReactNode } from 'react'
 import {
+  Badge,
+  Button,
+  Callout,
   formatTime,
   HelmxIcon,
+  KvGrid,
   LoadingState,
   usePluginAction,
   usePluginConfig,
@@ -51,9 +55,9 @@ import {
 
 function ActionError({ message }: { message: string }): ReactNode {
   return (
-    <div className="callout callout--error" role="alert">
+    <Callout tone="err">
       <span>{message}</span>
-    </div>
+    </Callout>
   )
 }
 
@@ -61,30 +65,23 @@ function StatusSummary({ status, refreshIntervalSec }: { status: MagpieStatusVie
   const locale = usePluginLocale()
   const t = usePluginTranslator()
   return (
-    <div className="kv-list">
-      <div className="kv-key">{t(MAGPIE_KV_GATEWAY_URL)}</div>
-      <div className="kv-val">{status.gatewayUrl || '—'}</div>
-      <div className="kv-key">{t(MAGPIE_KV_LOCAL_LOOPBACK)}</div>
-      <div className="kv-val">{boolLabel(status.local, locale)}</div>
-      <div className="kv-key">{t(MAGPIE_KV_REACHABLE)}</div>
-      <div className="kv-val">
-        <span className={`badge badge-${status.reachable ? 'ok' : 'warn'}`}>
-          <span>{boolLabel(status.reachable, locale)}</span>
-        </span>
-      </div>
-      <div className="kv-key">{status.reachable ? t(MAGPIE_KV_MODELS) : t(MAGPIE_KV_MODELS_CACHED)}</div>
-      <div className="kv-val">{status.modelCount}</div>
-      <div className="kv-key">{t(MAGPIE_KV_AUTO_REFRESH)}</div>
-      <div className="kv-val mono tabular-nums">{magpieRefreshIntervalLabel(refreshIntervalSec, locale)}</div>
-      <div className="kv-key">{t(MAGPIE_KV_LAST_REFRESHED)}</div>
-      <div className="kv-val">{formatTime(status.lastRefreshedAt) || '—'}</div>
-      {status.lastError !== undefined ? (
-        <>
-          <div className="kv-key">{t(MAGPIE_KV_LAST_ERROR)}</div>
-          <div className="kv-val">{status.lastError}</div>
-        </>
-      ) : null}
-    </div>
+    <KvGrid
+      items={[
+        { key: t(MAGPIE_KV_GATEWAY_URL), value: status.gatewayUrl || '—' },
+        { key: t(MAGPIE_KV_LOCAL_LOOPBACK), value: boolLabel(status.local, locale) },
+        {
+          key: t(MAGPIE_KV_REACHABLE),
+          value: <Badge tone={status.reachable ? 'ok' : 'warn'}>{boolLabel(status.reachable, locale)}</Badge>,
+        },
+        { key: status.reachable ? t(MAGPIE_KV_MODELS) : t(MAGPIE_KV_MODELS_CACHED), value: status.modelCount },
+        {
+          key: t(MAGPIE_KV_AUTO_REFRESH),
+          value: <span className="mono tabular-nums">{magpieRefreshIntervalLabel(refreshIntervalSec, locale)}</span>,
+        },
+        { key: t(MAGPIE_KV_LAST_REFRESHED), value: formatTime(status.lastRefreshedAt) || '—' },
+        ...(status.lastError !== undefined ? [{ key: t(MAGPIE_KV_LAST_ERROR), value: status.lastError }] : []),
+      ]}
+    />
   )
 }
 
@@ -144,9 +141,7 @@ function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNo
                 <td>{q.account ?? '—'}</td>
                 <td>{q.windowLabel ?? '—'}</td>
                 <td>
-                  <span className={`badge badge-${quotaRowTone(q)}`}>
-                    <span>{quotaRowRemainingText(q)}</span>
-                  </span>
+                  <Badge tone={quotaRowTone(q)}>{quotaRowRemainingText(q)}</Badge>
                 </td>
                 <td>{q.resetText ?? '—'}</td>
               </tr>
@@ -179,19 +174,14 @@ export function MagpieSettingsPanel(): ReactNode {
           <HelmxIcon name="server" size={13} />
           <span>{t(MAGPIE_TITLE)}</span>
         </div>
-        <button
-          type="button"
-          className="btn btn-xs"
-          disabled={refreshAction.pending}
+        <Button
+          size="xs"
+          icon="refresh-cw"
+          pending={refreshAction.pending}
           onClick={() => void refreshAction.run('refresh', {})}
         >
-          <HelmxIcon
-            name={refreshAction.pending ? 'loader' : 'refresh-cw'}
-            size={11}
-            className={refreshAction.pending ? 'spin-slow' : undefined}
-          />
-          <span>{refreshAction.pending ? t(MAGPIE_REFRESHING) : t(MAGPIE_REFRESH)}</span>
-        </button>
+          {refreshAction.pending ? t(MAGPIE_REFRESHING) : t(MAGPIE_REFRESH)}
+        </Button>
       </div>
       {status.summaryText !== '' ? <div className="screen-subtitle">{status.summaryText}</div> : null}
       {refreshAction.error !== undefined ? <ActionError message={refreshAction.error} /> : null}

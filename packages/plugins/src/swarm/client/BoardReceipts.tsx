@@ -3,7 +3,7 @@
  */
 import type { ReactNode } from 'react'
 import type { TimelineRendererProps } from '@helmx/protocol'
-import { HelmxIcon, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
+import { Badge, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import { parseBoardReportMeta, parseBoardWakeupMeta } from './board-model.ts'
 import { SWARM_WORKBENCH_PANEL_ID } from './models.ts'
 import { SW_BOARD_REPORT_PILL, SW_BOARD_WAKEUP_PILL, SW_PILL_OPEN_WORKBENCH, swReceiptCountLabel } from './copy.ts'
@@ -28,10 +28,9 @@ export function SwarmBoardReportPill(props: TimelineRendererProps): ReactNode {
       aria-label={resolveLocalizedText(SW_PILL_OPEN_WORKBENCH, locale)}
       onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_ID, focusSeq !== undefined ? { postSeq: focusSeq } : undefined)}
     >
-      <span className="badge badge-accent">
-        <HelmxIcon name="network" size={11} />
-        <span>{resolveLocalizedText(SW_BOARD_REPORT_PILL, locale)}</span>
-      </span>
+      <Badge tone="accent" icon="network">
+        {resolveLocalizedText(SW_BOARD_REPORT_PILL, locale)}
+      </Badge>
       {seqLabel !== undefined ? <span className="sw-receipt-seq mono tabular-nums">{seqLabel}</span> : null}
       {meta.postCount !== undefined ? (
         <span className="sw-receipt-count tabular-nums">{swReceiptCountLabel(meta.postCount, locale)}</span>
@@ -54,14 +53,13 @@ export function SwarmBoardWakeupPill(props: TimelineRendererProps): ReactNode {
       aria-label={resolveLocalizedText(SW_PILL_OPEN_WORKBENCH, locale)}
       onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_ID, focusSeq !== undefined ? { postSeq: focusSeq } : undefined)}
     >
-      <span className="badge badge-neutral">
-        <HelmxIcon name="bell" size={11} />
-        <span>{resolveLocalizedText(SW_BOARD_WAKEUP_PILL, locale)}</span>
-      </span>
+      <Badge tone="neutral" icon="bell">
+        {resolveLocalizedText(SW_BOARD_WAKEUP_PILL, locale)}
+      </Badge>
       {meta.workerName ? (
-        <span className="badge badge-neutral mono" title={`@${meta.workerName}`}>
-          <span>@{meta.workerName}</span>
-        </span>
+        <Badge tone="neutral" mono title={`@${meta.workerName}`}>
+          @{meta.workerName}
+        </Badge>
       ) : null}
       {seqLabel !== undefined ? <span className="sw-receipt-seq mono tabular-nums">{seqLabel}</span> : null}
       {meta.postCount !== undefined ? (
