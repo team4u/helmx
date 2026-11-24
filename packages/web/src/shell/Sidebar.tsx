@@ -565,16 +565,15 @@ export function Sidebar({
               </button>
             </Tooltip>
             {onClose && (
-              <Tooltip content={t('shell.nav.closeNav')} side="bottom">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm btn-icon-sm mobile-sidebar-close"
-                  aria-label={t('shell.nav.closeNav')}
-                  onClick={onClose}
-                >
-                  <HelmxIcon name="x" size={14} />
-                </button>
-              </Tooltip>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm btn-icon-sm mobile-sidebar-close"
+                title={t('shell.nav.closeNav')}
+                aria-label={t('shell.nav.closeNav')}
+                onClick={onClose}
+              >
+                <HelmxIcon name="x" size={14} />
+              </button>
             )}
           </div>
         </div>

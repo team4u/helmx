@@ -369,6 +369,12 @@ test('App mobile shell: hamburger button carries the attention count badge (no s
       dispatchTouch(stage, 'touchend', [{ clientX: 165, clientY: 322 }], 210)
     })
     assert.ok(shell.classList.contains('sidebar-open'), 'right swipe opens the mobile sidebar drawer')
+    const sidebar = container.querySelector<HTMLElement>('.helmx-sidebar')!
+    const closeBtn = sidebar.querySelector<HTMLButtonElement>('.mobile-sidebar-close')!
+    assert.ok(sidebar !== null && closeBtn !== null)
+    assert.ok(document.activeElement === sidebar, 'right swipe focuses the sidebar dialog container')
+    assert.ok(document.activeElement !== closeBtn, 'right swipe does not focus the close button')
+    assert.ok(document.body.querySelector('.helmx-tooltip-content') === null, 'right swipe does not open a tooltip')
 
     // 抽屉打开时左滑关闭
     await act(async () => {
@@ -501,7 +507,17 @@ test('mobile sidebar drawer: closed inert/visibility reachability, modal focus e
     assert.equal(hasBlockingOverlay(document), false, 'open mobile sidebar dialog itself must not block left-swipe-to-close')
     const closeBtn = sidebar.querySelector<HTMLButtonElement>('.mobile-sidebar-close')!
     assert.ok(closeBtn !== null)
-    assert.ok(document.activeElement === closeBtn, 'opening mobile drawer moves focus to the close button inside sidebar')
+    assert.ok(document.activeElement === sidebar, 'opening mobile drawer moves focus to the sidebar dialog container')
+    assert.ok(document.activeElement !== closeBtn, 'opening mobile drawer does not pre-focus the close button')
+    assert.ok(document.body.querySelector('.helmx-tooltip-content') === null, 'opening mobile drawer does not trigger a tooltip')
+    assert.equal(closeBtn.getAttribute('title'), closeBtn.getAttribute('aria-label'))
+    await act(async () => {
+      closeBtn.focus()
+    })
+    assert.ok(document.body.querySelector('.helmx-tooltip-content') === null, 'focusing mobile close button does not open a Radix tooltip')
+    await act(async () => {
+      sidebar.focus()
+    })
 
     // 3. Tab trap cycles focus inside the open mobile drawer
     const focusables = Array.from(sidebar.querySelectorAll<HTMLElement>('button:not([disabled])')).filter((el) => {
@@ -511,6 +527,23 @@ test('mobile sidebar drawer: closed inert/visibility reachability, modal focus e
     assert.ok(focusables.length >= 2)
     const firstFocusable = focusables[0]!
     const lastFocusable = focusables[focusables.length - 1]!
+
+    const tabFromSidebarForward = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    await act(async () => {
+      window.dispatchEvent(tabFromSidebarForward)
+    })
+    assert.equal(tabFromSidebarForward.defaultPrevented, true, 'Tab from drawer container moves focus to first control')
+    assert.ok(document.activeElement === firstFocusable)
+
+    await act(async () => {
+      sidebar.focus()
+    })
+    const tabFromSidebarBackward = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+    await act(async () => {
+      window.dispatchEvent(tabFromSidebarBackward)
+    })
+    assert.equal(tabFromSidebarBackward.defaultPrevented, true, 'Shift+Tab from drawer container wraps to last control')
+    assert.ok(document.activeElement === lastFocusable)
 
     await act(async () => {
       lastFocusable.focus()
@@ -550,7 +583,8 @@ test('mobile sidebar drawer: closed inert/visibility reachability, modal focus e
     await act(async () => {
       toggleBtn.click()
     })
-    assert.ok(document.activeElement === closeBtn)
+    assert.ok(document.activeElement === sidebar)
+    assert.ok(document.body.querySelector('.helmx-tooltip-content') === null)
     await act(async () => {
       closeBtn.click()
     })

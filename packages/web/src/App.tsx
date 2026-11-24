@@ -473,9 +473,7 @@ function HelmxShellInner({
       if (!sidebar) return
       const active = document.activeElement
       if (active instanceof HTMLElement && sidebar.contains(active)) return
-      const closeBtn = sidebar.querySelector<HTMLElement>('.mobile-sidebar-close:not([disabled])')
-      const target = closeBtn ?? listFocusableElements(sidebar)[0] ?? sidebar
-      target.focus()
+      sidebar.focus({ preventScroll: true })
       return
     }
 
@@ -487,7 +485,7 @@ function HelmxShellInner({
         active === document.body ||
         (sidebar !== null && active instanceof Node && sidebar.contains(active))
       if (focusLostOrInsideSidebar) {
-        mobileNavToggleRef.current?.focus()
+        mobileNavToggleRef.current?.focus({ preventScroll: true })
       }
     }
   }, [isMobileDrawerOpen, isDrawerViewport, activeModal, drawerStack.length])
@@ -527,7 +525,7 @@ function HelmxShellInner({
           event.preventDefault()
           last.focus()
         }
-      } else if (!insideSidebar || active === last) {
+      } else if (!insideSidebar || active === last || active === sidebar) {
         event.preventDefault()
         first.focus()
       }

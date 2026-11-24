@@ -140,6 +140,10 @@ button, a, input, select, textarea { touch-action: manipulation; }
     pointer-events: auto;
     transition: transform 150ms ease, visibility 0s;
   }
+  .helmx-sidebar:focus,
+  .helmx-sidebar:focus-visible {
+    outline: none;
+  }
   .sidebar-open .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 71; background: var(--bg-backdrop); border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
   .mobile-nav-toggle {
     display: inline-flex;
