@@ -5,7 +5,7 @@
  */
 import { useRef } from 'react'
 import type * as React from 'react'
-import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
+import { Badge, HelmxIcon, IconButton, Tooltip, type BadgeTone } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { SlashMenuItem } from '../lib/commands-model.js'
 import { formatBytes } from '../lib/format.js'
@@ -21,7 +21,8 @@ export interface ComposerAttachmentItem {
   icon: string
   badge?: {
     label: string
-    className: string
+    tone?: BadgeTone
+    className?: string
   }
   removeDisabled?: boolean
   onRemove: () => void
@@ -131,18 +132,19 @@ export function ComposerInputShell({
                   <span className="attachment-chip-name">{att.name}</span>
                   <span className="attachment-chip-size mono tabular-nums">{formatBytes(att.size)}</span>
                   {att.badge !== undefined ? (
-                    <span className={att.badge.className}>{att.badge.label}</span>
+                    <Badge tone={att.badge.tone ?? 'neutral'} className={att.badge.className}>
+                      {att.badge.label}
+                    </Badge>
                   ) : null}
                   <Tooltip content={t('composer.standby.removeAttachmentTitle', { name: att.name })} side="top">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-icon-xs"
+                    <IconButton
+                      icon={<HelmxIcon name="x" size={10} />}
+                      variant="ghost"
+                      size="xs"
                       aria-label={t('composer.standby.removeAttachmentTitle', { name: att.name })}
                       disabled={att.removeDisabled}
                       onClick={att.onRemove}
-                    >
-                      <HelmxIcon name="x" size={10} />
-                    </button>
+                    />
                   </Tooltip>
                 </span>
               ))}
@@ -186,15 +188,15 @@ export function ComposerInputShell({
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
               <Tooltip content={uploadButtonLabel} side="top">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm composer-icon-button"
+                <IconButton
+                  icon={<HelmxIcon name="plus" size={19} />}
+                  variant="ghost"
+                  size="sm"
+                  className="composer-icon-button"
                   aria-label={uploadButtonLabel}
                   disabled={uploadDisabled}
                   onClick={onOpenFilePicker}
-                >
-                  <HelmxIcon name="plus" size={19} />
-                </button>
+                />
               </Tooltip>
               {modelPicker}
               <input

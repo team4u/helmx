@@ -1,11 +1,13 @@
 import type { WhenBusy } from '@helmx/protocol/browser'
 import {
+  Button,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuRoot,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   HelmxIcon,
+  IconButton,
   Tooltip,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -52,10 +54,14 @@ export function ComposerSendControls({
   return (
     <span className="composer-toolbar-right">
       {!working || editingEntryId !== null ? (
-        <button
-          type="button"
-          className="btn btn-sm btn-primary btn-pill btn-send"
-          disabled={inFlight || envBlocker.blocked || text.trim() === ''}
+        <IconButton
+          variant="primary"
+          size="md"
+          pill
+          pending={inFlight}
+          disabled={envBlocker.blocked || text.trim() === ''}
+          className="btn-send"
+          icon={<HelmxIcon name="arrow-up" size={18} />}
           onClick={() => void send()}
           title={editingEntryId !== null
             ? working
@@ -73,57 +79,55 @@ export function ComposerSendControls({
                   ? t('composer.command.runningAria')
                   : t('composer.sendControls.send')
           }
-        >
-          <HelmxIcon name={inFlight ? 'loader' : 'arrow-up'} size={18} className={inFlight ? 'spin-slow' : undefined} />
-        </button>
+        />
       ) : text.trim() === '' ? (
         <Tooltip content={t('composer.sendControls.stopExecution')} side="top">
-          <button
-            type="button"
-            className="btn btn-sm btn-danger btn-pill btn-send composer-abort-button"
+          <IconButton
+            variant="danger"
+            size="md"
+            pill
+            className="btn-send composer-abort-button"
+            icon={<HelmxIcon name="square" size={14} />}
             onClick={() => void abortTurn()}
             aria-label={t('composer.sendControls.stopExecution')}
-          >
-            <HelmxIcon name="square" size={14} />
-          </button>
+          />
         </Tooltip>
       ) : mobile ? (
         <div className="composer-busy-mobile-actions">
-          <button
-            type="button"
-            className="btn btn-sm btn-danger btn-pill btn-icon-sm composer-abort-button"
+          <IconButton
+            variant="danger"
+            size="sm"
+            pill
+            className="composer-abort-button"
+            icon={<HelmxIcon name="square" size={12} />}
             onClick={() => void abortTurn()}
-            title={t('composer.sendControls.stopExecution')}
-            aria-label={t('composer.sendControls.stopExecution')}
-          >
-            <HelmxIcon name="square" size={12} />
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-primary composer-mobile-steer-btn composer-steer-action"
+            label={t('composer.sendControls.stopExecution')}
+          />
+          <Button
+            variant="primary"
+            size="sm"
+            icon="corner-down-right"
+            pending={inFlight}
             disabled={busyDisabled}
+            className="composer-mobile-steer-btn composer-steer-action"
             onClick={() => void send('steer')}
             title={t('composer.sendControls.steerHint')}
             aria-label={uploading > 0 ? t('composer.sendControls.uploading', { count: uploading }) : t('composer.sendControls.steer')}
           >
-            <HelmxIcon
-              name={inFlight ? 'loader' : 'corner-down-right'}
-              size={13}
-              className={inFlight ? 'spin-slow' : undefined}
-            />
-            <span>{t('composer.sendControls.steerShort')}</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary composer-mobile-queue-btn"
+            {t('composer.sendControls.steerShort')}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="clock"
             disabled={busyDisabled}
+            className="composer-mobile-queue-btn"
             onClick={() => void send('followUp')}
             title={t('composer.sendControls.queueHint')}
             aria-label={t('composer.sendControls.queueSend')}
           >
-            <HelmxIcon name="clock" size={13} />
-            <span>{t('composer.sendControls.queue')}</span>
-          </button>
+            {t('composer.sendControls.queue')}
+          </Button>
         </div>
       ) : (
         <DropdownMenuRoot>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { SegmentedControl } from '@helmx/plugin-client'
+import { Badge, SegmentedControl } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
 import { useStoreActions } from '../lib/store-context.js'
@@ -147,7 +147,7 @@ export function WorkspaceFilePreviewModal({
       modalBodyRef={modalBodyRef}
       headerBadges={
         lineBadge !== null ? (
-          <span className="badge badge-neutral mono tabular-nums">{lineBadge}</span>
+          <Badge tone="neutral" mono className="tabular-nums">{lineBadge}</Badge>
         ) : undefined
       }
       headerActions={

@@ -1,7 +1,21 @@
 import { useId, useMemo, useState } from 'react'
 import type { AskFieldSpec, AskSpec } from '@helmx/protocol/browser'
 import { asksApi } from '../lib/api.js'
-import { HelmxIcon, PopoverContent, PopoverRoot, PopoverTrigger, Select, StatusLight } from '@helmx/plugin-client'
+import {
+  Button,
+  Callout,
+  Field,
+  HelperText,
+  HelmxIcon,
+  IconButton,
+  Input,
+  PopoverContent,
+  PopoverRoot,
+  PopoverTrigger,
+  Select,
+  Stack,
+  StatusLight,
+} from '@helmx/plugin-client'
 import { useConversations, usePendingAsks, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { collectSubtreeIds } from './ancestry-model.js'
@@ -61,9 +75,7 @@ function AskFieldInput({
   value,
   onChange,
   disabled,
-  inputId,
 }: {
-  inputId: string
   field: AskFieldSpec
   value: string
   onChange: (v: string) => void
@@ -80,7 +92,6 @@ function AskFieldInput({
     ]
     return (
       <Select
-        id={inputId}
         value={value}
         disabled={disabled}
         options={options}
@@ -90,41 +101,37 @@ function AskFieldInput({
   }
   if (field.type === 'confirm') {
     return (
-      <span className="ask-dock-confirm-actions">
-        <button
-          type="button"
-          className={`btn btn-sm ${value === 'true' ? 'btn-primary' : ''}`}
+      <Stack direction="horizontal" inline gap="xs" className="ask-dock-confirm-actions">
+        <Button
+          variant={value === 'true' ? 'primary' : 'default'}
+          size="sm"
+          icon={<HelmxIcon name="check" size={12} />}
           disabled={disabled}
           onClick={() => onChange('true')}
         >
-          <HelmxIcon name="check" size={12} />
           {t('composer.ask.approve')}
-        </button>
-        <button
-          type="button"
-          className={`btn btn-sm ${value === 'false' ? 'btn-danger' : ''}`}
+        </Button>
+        <Button
+          variant={value === 'false' ? 'danger' : 'default'}
+          size="sm"
+          icon={<HelmxIcon name="x" size={12} />}
           disabled={disabled}
           onClick={() => onChange('false')}
         >
-          <HelmxIcon name="x" size={12} />
           {t('composer.ask.reject')}
-        </button>
-      </span>
+        </Button>
+      </Stack>
     )
   }
   return (
-    <span className="ask-dock-input-wrap">
-      <input
-        id={inputId}
-        className="input"
-        type="text"
-        value={value}
-        disabled={disabled}
-        placeholder={field.label}
-        onChange={(e) => onChange(e.target.value)}
-        autoComplete="off"
-      />
-    </span>
+    <Input
+      type="text"
+      value={value}
+      disabled={disabled}
+      placeholder={field.label}
+      onChange={(e) => onChange(e.target.value)}
+      autoComplete="off"
+    />
   )
 }
 
@@ -188,20 +195,19 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
       }}
     >
       <div className="ask-dock-header">
-        <StatusLight status="blocked" label={t('composer.ask.awaitingApproval')} />
+        <StatusLight tone="blocked" label={t('composer.ask.awaitingApproval')} />
         <span className="ask-dock-title">{ask.title}</span>
         {(ask.ownerPluginId !== undefined || ask.expectedStateSeq !== undefined) && (
           /* 机器元数据（owner 插件 / CAS seq）不再是常驻徽章：小号 info 入口 + 可访问 Popover。 */
           <PopoverRoot>
             <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs ask-dock-meta-btn"
-                aria-label={t('composer.ask.metaAria')}
-                title={t('composer.ask.metaAria')}
-              >
-                <HelmxIcon name="info" size={12} />
-              </button>
+              <IconButton
+                icon="info"
+                variant="ghost"
+                size="xs"
+                className="ask-dock-meta-btn"
+                label={t('composer.ask.metaAria')}
+              />
             </PopoverTrigger>
             <PopoverContent align="start" className="ask-dock-meta-popover">
               <div className="kv-list">
@@ -219,24 +225,25 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
                 ) : null}
               </div>
               {ask.expectedStateSeq !== undefined ? (
-                <div className="ask-dock-meta-hint">{t('composer.ask.casTitle')}</div>
+                <HelperText className="ask-dock-meta-hint">{t('composer.ask.casTitle')}</HelperText>
               ) : null}
             </PopoverContent>
           </PopoverRoot>
         )}
         {source !== undefined ? (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm ask-dock-source-btn"
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<HelmxIcon name="corner-down-right" size={11} />}
+            className="ask-dock-source-btn"
             title={source.title !== ''
               ? t('composer.ask.openChildTitle', { id: source.conversationId, title: source.title })
               : t('composer.ask.openChildDrawer', { id: source.conversationId })}
             aria-label={t('composer.ask.openChildDrawer', { id: source.conversationId })}
             onClick={() => openConversationDrawer(source.conversationId)}
           >
-            <HelmxIcon name="corner-down-right" size={11} />
             {t('composer.ask.fromSource', { id: source.conversationId })}
-          </button>
+          </Button>
         ) : null}
       </div>
       {visibleDescription !== undefined ? (
@@ -246,14 +253,15 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
       ) : null}
       {snapshot !== undefined ? (
         <div className="ask-dock-snapshot">
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm ask-dock-snapshot-btn"
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<HelmxIcon name={snapshotOpen ? 'chevron-down' : 'chevron-right'} size={12} />}
+            className="ask-dock-snapshot-btn"
             onClick={() => setSnapshotOpen((v) => !v)}
           >
-            <HelmxIcon name={snapshotOpen ? 'chevron-down' : 'chevron-right'} size={12} />
             {t('composer.ask.terminalSnapshot')}
-          </button>
+          </Button>
           {snapshotOpen ? (
             <pre className="code-block-pre selectable ask-dock-snapshot-pre">
               <code>{snapshot.text}</code>
@@ -262,15 +270,16 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
         </div>
       ) : null}
       {ask.fields.length > 0 ? (
-        <div className="ask-dock-fields">
+        <Stack gap="sm" className="ask-dock-fields">
           {ask.fields.map((field) => (
-            <div key={field.name} className="ask-dock-field">
-              <label htmlFor={field.type === 'confirm' ? undefined : `${formId}-${field.name}`} className="ask-dock-label">
-                {field.label}
-                {field.required === true ? <span className="ask-dock-required">*</span> : null}
-              </label>
+            <Field
+              key={field.name}
+              className="ask-dock-field"
+              label={field.label}
+              required={field.required === true}
+              htmlFor={field.type === 'confirm' ? false : `${formId}-${field.name}`}
+            >
               <AskFieldInput
-                inputId={`${formId}-${field.name}`}
                 field={field}
                 value={answers[field.name] ?? ''}
                 disabled={submitting !== null}
@@ -282,31 +291,35 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
                   }
                 }}
               />
-            </div>
+            </Field>
           ))}
-        </div>
+        </Stack>
       ) : null}
       {error !== null ? (
-        <div className="callout callout-error">
-          <HelmxIcon name="alert-circle" size={13} />
+        <Callout tone="err">
           <span className="callout-text">{error}</span>
-        </div>
+        </Callout>
       ) : null}
-      <div className="ask-dock-actions">
-        <button type="button" className="btn" disabled={submitting !== null} onClick={() => void cancel()}>
+      <Stack direction="horizontal" justify="end" wrap gap="sm" className="ask-dock-actions">
+        <Button
+          pending={submitting === 'cancel'}
+          disabled={submitting !== null && submitting !== 'cancel'}
+          onClick={() => void cancel()}
+        >
           {t('common.cancel')}
-        </button>
+        </Button>
         {!isSingleConfirm ? (
-          <button
+          <Button
             type="submit"
-            className="btn btn-primary"
-            disabled={submitting !== null || missingRequired.length > 0}
+            variant="primary"
+            icon={<HelmxIcon name="check" size={12} />}
+            pending={submitting === 'answer'}
+            disabled={(submitting !== null && submitting !== 'answer') || missingRequired.length > 0}
           >
-            <HelmxIcon name={submitting === 'answer' ? 'loader' : 'check'} size={12} />
             {t('composer.ask.submit')}
-          </button>
+          </Button>
         ) : null}
-      </div>
+      </Stack>
     </form>
   )
 }
@@ -330,7 +343,7 @@ function AskDockActive({
   )
   if (pending.length === 0) return null
   return (
-    <div className="ask-dock-stack">
+    <Stack gap="sm" className="ask-dock-stack">
       {pending.map((ask) => (
         <AskCard
           key={ask.id}
@@ -345,7 +358,7 @@ function AskDockActive({
             : {})}
         />
       ))}
-    </div>
+    </Stack>
   )
 }
 

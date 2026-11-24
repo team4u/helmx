@@ -23,7 +23,7 @@
 import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolEditDiff } from '@helmx/protocol/browser'
-import { HelmxIcon, CopyButton } from '@helmx/plugin-client'
+import { Button, CopyButton, HelmxIcon } from '@helmx/plugin-client'
 import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'
@@ -246,10 +246,16 @@ function ResultCopyGate({
       ? t('conv.copy.fetchingTitle')
       : t('conv.copy.truncatedTitle')
   return (
-    <button type="button" className="btn btn-ghost btn-sm" disabled title={title} aria-label={t('conv.copy.disabledAria', { label })}>
-      <HelmxIcon name="copy" size={12} />
-      <span>{label}</span>
-    </button>
+    <Button
+      variant="ghost"
+      size="sm"
+      icon={<HelmxIcon name="copy" size={12} />}
+      disabled
+      title={title}
+      aria-label={t('conv.copy.disabledAria', { label })}
+    >
+      {label}
+    </Button>
   )
 }
 
@@ -665,14 +671,14 @@ function ArtifactEntry({ tool, conversationId }: { tool: ToolTrace; conversation
   const artifactRef = tool.artifactRef
   if (artifactRef === undefined) return null
   return (
-    <button
-      type="button"
-      className="btn btn-sm btn-primary"
+    <Button
+      variant="primary"
+      size="sm"
+      icon={<HelmxIcon name="external-link" size={12} />}
       onClick={() => setActiveModal({ kind: 'artifact-preview', artifactId: artifactRef, conversationId })}
     >
-      <HelmxIcon name="external-link" size={12} />
       {t('conv.tool.openFullArtifact', { id: artifactRef })}
-    </button>
+    </Button>
   )
 }
 

@@ -20,6 +20,10 @@
   color: var(--fg);
 }
 
+.conversation-outline-trigger > span {
+  display: contents;
+}
+
 .conversation-outline-popover[data-state='closed'] {
   display: none;
 }

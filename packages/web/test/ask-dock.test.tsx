@@ -353,7 +353,18 @@ describe("ask-dock", () => {
     assert.equal(cards.length, 2, 'AskCard renders as a semantic <form>')
 
     // 1. Context snapshot does NOT hide ask.description; single-confirm hides redundant Submit button
+    //    and renders confirm Field as role="group" + aria-labelledby (no orphan <label>), with StatusLight tone="blocked".
     const ctxCard = cards[0]!
+    assert.equal(
+      ctxCard.querySelector('.ask-dock-header .helmx-status-light')?.getAttribute('data-tone'),
+      'blocked',
+      'AskCard header StatusLight uses strongly-typed tone="blocked"',
+    )
+    const confirmField = ctxCard.querySelector('.ask-dock-field')
+    assert.equal(confirmField?.getAttribute('role'), 'group', 'confirm Field uses role="group" instead of orphan <label>')
+    const confirmLabelId = confirmField?.getAttribute('aria-labelledby') ?? ''
+    assert.ok(confirmLabelId !== '', 'confirm Field exposes aria-labelledby')
+    assert.equal(ctxCard.querySelector(`#${CSS.escape(confirmLabelId)}`)?.textContent, 'Decision')
     assert.match(ctxCard.querySelector('.ask-dock-desc')?.textContent ?? '', /Needs confirmation before running rm -rf build\//)
     const ctxSubmitBtns = [...ctxCard.querySelectorAll('.ask-dock-actions button')].filter((b) =>
       b.textContent?.includes('Submit'),

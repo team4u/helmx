@@ -218,13 +218,9 @@
 }
 
 .timeline-loading-state {
-  display: flex;
-  align-items: center;
   justify-content: center;
   gap: 8px;
   padding: 48px 0;
-  color: var(--fg-muted);
-  font-size: 12px;
 }
 
 .timeline-empty-state {
@@ -728,6 +724,10 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.code-block-loading {
+  padding: 9px 12px;
 }
 
 .code-block-header .btn-ghost {
@@ -1877,6 +1877,19 @@ pre {
   text-overflow: ellipsis;
 }
 
+.pane-title-rename-input {
+  max-width: 320px;
+}
+
+/* SDK Button wraps children in a <span>; unwrap it in topbar & drawer-stack
+   action buttons so responsive .pane-action-label/.drawer-stack-back-label and
+   sibling <Badge> nodes participate directly in .btn's flex gap and collapse
+   with zero ghost gap on narrow viewports. */
+.conversation-topbar .pane-actions .btn > span,
+.drawer-stack-header .btn > span {
+  display: contents;
+}
+
 /* 顶栏标题点击详情浮层 / 分屏按钮容器 / 抽屉精简环境条 */
 .pane-title-btn {
   border: none;
@@ -1949,6 +1962,12 @@ pre {
 }
 
 /* 工作台抽屉页签与产物分栏（覆盖 modals.css 的 .tabs-bar / .tab-btn） */
+.workbench-tabs-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
 .helmx-workbench-view .tabs-bar,
 .helmx-workbench .tabs-bar {
   justify-content: space-between;
@@ -2130,11 +2149,6 @@ pre {
   gap: 4px;
   flex-shrink: 0;
 }
-.artifact-action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
 .artifact-spill-section {
   border-top: 1px solid var(--border);
   padding-top: 10px;
@@ -2217,6 +2231,13 @@ pre {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.pane-loading {
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  font-size: 12px;
 }
 
 .pane-loading-split-close {

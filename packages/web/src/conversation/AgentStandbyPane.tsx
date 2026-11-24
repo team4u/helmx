@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { COMPOSER_STATUS_SLOT, type ComposerStatusSlotProps, type ConversationSummary, type Profile } from '@helmx/protocol/browser'
-import { HelmxIcon, PluginSlot, Tooltip, useHostModels } from '@helmx/plugin-client'
+import { Button, HelmxIcon, IconButton, PluginSlot, Stack, Tooltip, useHostModels } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi, type ModelCatalogDefaults } from '../lib/api.js'
 import {
@@ -323,9 +323,9 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           <div className="timeline-empty-state" role="alert">
             <HelmxIcon name="alert-triangle" size={20} />
             <span>{t('composer.standby.profileLoadFailed', { error: profilesLoadError })}</span>
-            <button type="button" className="btn btn-sm" onClick={() => void refreshAssets()}>
+            <Button size="sm" onClick={() => void refreshAssets()}>
               {t('common.retry')}
-            </button>
+            </Button>
           </div>
         ) : !assetsLoaded ? (
           <div className="timeline-empty-state" role="status">
@@ -336,9 +336,9 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           <div className="timeline-empty-state" role="alert">
             <HelmxIcon name="circle-slash" size={20} />
             <span>{t('composer.standby.profileMissing', { profileId })}</span>
-            <button type="button" className="btn btn-sm" onClick={() => openTarget({ kind: 'profiles' })}>
+            <Button size="sm" onClick={() => openTarget({ kind: 'profiles' })}>
               {t('composer.standby.goToProfiles')}
-            </button>
+            </Button>
           </div>
         ) : !humanSelectable ? (
           <div className="timeline-empty-state" role="alert">
@@ -354,20 +354,20 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
             {showZeroModelCta ? (
               <div className="callout callout-warn" role="status">
                 <HelmxIcon name="alert-triangle" size={14} />
-                <div className="flex-col-xs flex-1">
+                <Stack gap="xs" className="flex-1">
                   <strong>{t('composer.standby.noModelsTitle')}</strong>
                   <span className="callout-text">{t('composer.standby.noModelsHint')}</span>
                   <div>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-xs"
+                    <Button
+                      variant="primary"
+                      size="xs"
+                      icon="key"
                       onClick={() => openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)}
                     >
-                      <HelmxIcon name="key" size={12} />
-                      <span>{t('composer.standby.configureModels')}</span>
-                    </button>
+                      {t('composer.standby.configureModels')}
+                    </Button>
                   </div>
-                </div>
+                </Stack>
               </div>
             ) : null}
             {profile.starters !== undefined && profile.starters.length > 0 ? (
@@ -515,7 +515,8 @@ function StandbyComposer({
         icon: 'file',
         badge: {
           label: t('composer.standby.attachmentPending'),
-          className: 'badge badge-neutral agent-standby-attachment-state',
+          tone: 'neutral',
+          className: 'agent-standby-attachment-state',
         },
         removeDisabled: busy,
         onRemove: () => updateStandbyDraft(draftKey, { localFiles: draft.localFiles.filter((item) => item.key !== att.key) }),
@@ -527,7 +528,8 @@ function StandbyComposer({
         icon: 'paperclip',
         badge: {
           label: t('composer.standby.attachmentUploaded'),
-          className: 'badge badge-ok agent-standby-attachment-state',
+          tone: 'ok',
+          className: 'agent-standby-attachment-state',
         },
         removeDisabled: busy,
         onRemove: () => updateStandbyDraft(draftKey, { uploaded: draft.uploaded.filter((item) => item.artifactId !== att.artifactId) }),
@@ -554,9 +556,8 @@ function StandbyComposer({
                 {t('composer.standby.anchoredNotice', { id: draft.conversationId! })}
               </span>
               <Tooltip content={t('composer.standby.openCreatedInPanel')} side="top">
-                <button
-                  type="button"
-                  className="btn btn-sm"
+                <Button
+                  size="sm"
                   onClick={() => {
                     if (draft.conversationId === undefined) return
                     openTarget(
@@ -566,16 +567,16 @@ function StandbyComposer({
                   }}
                 >
                   {t('composer.standby.viewConversation')}
-                </button>
+                </Button>
               </Tooltip>
             </div>
           ) : null}
           {draft.error !== null ? (
             <div className="agent-standby-error callout callout-error" role="alert">
               <span className="agent-standby-error-text">{draft.error}</span>
-              <button type="button" className="btn btn-sm" disabled={busy} onClick={onSend}>
+              <Button size="sm" disabled={busy} onClick={onSend}>
                 {t('common.retry')}
-              </button>
+              </Button>
             </div>
           ) : null}
         </>
@@ -628,16 +629,18 @@ function StandbyComposer({
       }
       sendControls={
         <span className="composer-toolbar-right">
-          <button
-            type="button"
-            className="btn btn-sm btn-primary btn-pill btn-send"
+          <IconButton
+            variant="primary"
+            size="md"
+            pill
+            pending={inFlight}
             disabled={sendDisabled}
+            className="btn-send"
+            icon={<HelmxIcon name="arrow-up" size={18} />}
             onClick={onSend}
             title={envError !== null ? envError : t('composer.standby.sendTitle')}
             aria-label={busy ? t('composer.standby.sendingAria') : runningCommand !== null ? t('composer.command.runningAria') : t('composer.sendControls.send')}
-          >
-            <HelmxIcon name={inFlight ? 'loader' : 'arrow-up'} size={18} className={inFlight ? 'spin-slow' : undefined} />
-          </button>
+          />
         </span>
       }
       statusRow={

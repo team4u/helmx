@@ -5,7 +5,7 @@
  */
 import type * as React from 'react'
 import type { Profile } from '@helmx/protocol/browser'
-import { HelmxIcon, ModelPickerControl, useHostModels } from '@helmx/plugin-client'
+import { Button, HelmxIcon, ModelPickerControl, useHostModels } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ModelCatalogDefaults } from '../lib/api.js'
 import { useModels, useNodes } from '../lib/store-context.js'
@@ -130,9 +130,8 @@ export function StandbyEnvBar({
             cwd: profile.cwd ? t('composer.standby.envSuffix', { value: profile.cwd }) : '',
           })}
         </span>
-        <button
-          type="button"
-          className="btn btn-sm"
+        <Button
+          size="sm"
           disabled={disabled}
           onClick={() => {
             if (disabled) return
@@ -144,7 +143,7 @@ export function StandbyEnvBar({
           }}
         >
           {t('composer.standby.customEnvButton')}
-        </button>
+        </Button>
       </div>
     )
   }
@@ -166,15 +165,14 @@ export function StandbyEnvBar({
         }}
         onCwdChange={(nextCwd) => updateStandbyDraft(draftKey, { envCwd: nextCwd })}
       />
-      <button
-        type="button"
-        className="btn btn-sm"
+      <Button
+        size="sm"
         disabled={disabled}
         onClick={onResetToDefault}
         title={disabled ? t('composer.standby.envLockedTitle') : t('composer.standby.clearEnvTitle')}
       >
         {t('composer.standby.restoreDefaults')}
-      </button>
+      </Button>
       <span className="composer-env-hint">{t('composer.standby.envEffectOnSend')}</span>
       {draftNode !== undefined && !draftNode.online && draft.envNodeId !== 'local' ? (
         <span className="composer-env-warn">{t('composer.standby.nodeOfflineWarn')}</span>

@@ -1,4 +1,5 @@
 import type { ReactNode, RefObject } from 'react'
+import { Callout } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'
 import { MAX_PREVIEW_TEXT_BYTES } from './artifact-preview-text.js'
@@ -69,13 +70,13 @@ export function FilePreviewBody({
     return <iframe src={blobUrl} title={name} className="preview-modal-pdf" />
   }
   if (!isTextLike || textState === 'binary') {
-    return <div className="callout">{t('conv.artifact.noInlinePreview')}</div>
+    return <Callout tone="info">{t('conv.artifact.noInlinePreview')}</Callout>
   }
   if (textState === 'exceeded') {
     return (
-      <div className="callout">
+      <Callout tone="info">
         {t('conv.artifact.textExceededDefault', { limit: formatBytes(MAX_PREVIEW_TEXT_BYTES) })}
-      </div>
+      </Callout>
     )
   }
   if (markdown && view === 'rich' && text !== null) {

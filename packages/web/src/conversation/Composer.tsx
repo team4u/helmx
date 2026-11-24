@@ -1,7 +1,7 @@
 import { memo, useCallback, useId, useMemo, useRef } from 'react'
 import type { ComposerScopeProps, ConversationSummary, WhenBusy } from '@helmx/protocol/browser'
 import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT } from '@helmx/protocol/browser'
-import { HelmxIcon, PluginSlot, useSharedNowMs } from '@helmx/plugin-client'
+import { Button, HelmxIcon, PluginSlot, useSharedNowMs } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
 import { pluginSlashCommandsFor } from '../lib/commands-model.js'
@@ -296,16 +296,17 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
                   <HelmxIcon name="edit" size={12} />
                   <span>{working ? t('conv.composer.editingWorking') : t('conv.composer.editingIdle')}</span>
                 </span>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm composer-edit-cancel"
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  icon="x"
+                  className="composer-edit-cancel"
                   onClick={cancelEdit}
                   title={t('conv.composer.cancelEditTitle')}
                 >
-                  <HelmxIcon name="x" size={12} />
                   <span>{t('common.cancel')}</span>
                   <span className="kbd-hint composer-inline-kbd">Esc</span>
-                </button>
+                </Button>
               </div>
             ) : null}
           </>
