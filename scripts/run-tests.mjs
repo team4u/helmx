@@ -329,5 +329,8 @@ process.on('SIGQUIT', () => terminate('received SIGQUIT', 131, 'SIGQUIT'));
 process.on('SIGTERM', () => terminate('received SIGTERM', 143, 'SIGTERM'));
 
 suiteTimer = setTimeout(() => {
-  terminate(`suite total timeout (${timeoutMs}ms; tunable via HELMX_TEST_SUITE_TIMEOUT_MS)`, 124);
+  const hint = shardWorkerMode
+    ? '; look for the last "[shard-worker] file i/N <path>" line above to identify the hung file'
+    : '';
+  terminate(`suite total timeout (${timeoutMs}ms; tunable via HELMX_TEST_SUITE_TIMEOUT_MS)${hint}`, 124);
 }, timeoutMs);

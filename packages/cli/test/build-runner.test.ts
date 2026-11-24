@@ -628,6 +628,15 @@ test('B1', { timeout: 60_000 }, () => { log('B:test1'); assert.ok(true) })
     )
     assert.equal(res.status, 0, `shard-worker failed: stderr=${res.stderr}\nstdout=${res.stdout}`)
 
+    // Progress diagnostics land on stderr: a boot line, then one line per file in execution order,
+    // and no stall warnings on a healthy run. In CI the last "[shard-worker] file i/N" line is
+    // what names the file a silently hung shard was running when run-tests.mjs killed it.
+    assert.match(res.stderr, /\[shard-worker\] boot pool=node-shared files=2 pid=\d+/)
+    const firstFileLine = res.stderr.indexOf('[shard-worker] file 1/2 a.test.ts')
+    const secondFileLine = res.stderr.indexOf('[shard-worker] file 2/2 b.test.ts')
+    assert.ok(firstFileLine > 0 && secondFileLine > firstFileLine, `progress lines missing or out of order:\n${res.stderr}`)
+    assert.doesNotMatch(res.stderr, /\[shard-worker\] stall:/, 'a healthy shard must not emit stall warnings')
+
     const order = readFileSync(orderFile, 'utf8').trim().split('\n')
     assert.deepEqual(order, [
       'A:before',
@@ -690,6 +699,34 @@ test('F1', { timeout: 60_000 }, () => { assert.equal(1, 2) })
     assert.equal(failRecorded.counts.failed, 1)
     assert.equal(failRecorded.files['fail.test.ts'], undefined, 'failed file durations must not pollute timing cache')
     assert.ok((failRecorded.files['b.test.ts'] ?? 0) >= 1, 'subsequent passing files still execute and record timings')
+
+    // Stall watchdog: manifest `stallWarnMs` overrides the 120s default; a test that stays silent
+    // past the window is named in a warning (repeated while stuck), and the watchdog never keeps
+    // the process alive after the file completes.
+    const slowFile = path.join(dir, 'slow.test.ts')
+    const slowManifest = path.join(dir, 'manifest-slow.json')
+    writeFileSync(
+      slowFile,
+      `import test from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
+test('S1', { timeout: 60_000 }, async () => { await delay(450) })
+`,
+    )
+    writeFileSync(
+      slowManifest,
+      JSON.stringify({ pool: 'pure', repoRoot: dir, files: ['slow.test.ts'], stallWarnMs: 150 }),
+    )
+    const slowRes = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, 'scripts', 'run-tests.mjs'), '--shard-worker', slowManifest],
+      { cwd: repoRoot, env, encoding: 'utf8', timeout: 60_000 },
+    )
+    assert.equal(slowRes.status, 0, `slow shard-worker failed: stderr=${slowRes.stderr}\nstdout=${slowRes.stdout}`)
+    assert.match(
+      slowRes.stderr,
+      /\[shard-worker\] stall: no test event for \d+ms while running file 1\/1 slow\.test\.ts \(last event: [a-z:]+\)/,
+      `stall warning must name the silent file:\n${slowRes.stderr}`,
+    )
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

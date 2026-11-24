@@ -9,6 +9,11 @@
  * - Executes `resetSharedHappyDom()` cleanly between files in `dom-shared` shards.
  * - Feeds per-file events into ONE standard `spec` reporter per shard (exact test counts,
  *   clean failure summary) and writes exact per-file wall durations to `timingOutputPath`.
+ * - Emits stderr progress diagnostics (`[shard-worker] boot` / `file i/N <path>`) plus a stall
+ *   watchdog that re-warns while no test event arrives, so a hung shard killed by the suite
+ *   timeout in `run-tests.mjs` leaves a trail naming the exact file it was running. Without
+ *   these lines a silent shard (e.g. stuck during module load before the first `▶` line) is
+ *   undiagnosable from the interleaved multi-shard CI log.
  */
 import { once } from 'node:events';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -18,6 +23,8 @@ import { run } from 'node:test';
 import { spec } from 'node:test/reporters';
 
 const ROOT_SUMMARY_DIAGNOSTIC_RE = /^(tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)\s/;
+/** Default silence window before the stall watchdog warns; manifest `stallWarnMs` overrides (0 disables). */
+const DEFAULT_STALL_WARN_MS = 120_000;
 
 function writeJsonAtomic(filePath, data) {
   try {
@@ -50,13 +57,49 @@ async function main() {
     files = [],
     timingOutputPath = null,
     testTimeoutMs = 20_000,
+    stallWarnMs = DEFAULT_STALL_WARN_MS,
   } = manifest;
+
+  // First line the process ever prints: its absence in the log means the hang is before this
+  // module even ran (tsx / esbuild boot), not inside a test file.
+  console.error(`[shard-worker] boot pool=${pool} files=${files.length} pid=${process.pid}`);
 
   let resetDomFn = null;
   if (pool === 'dom-shared') {
     const mod = await import('./dom-shard-preload.mjs');
     resetDomFn = mod.resetSharedHappyDom;
   }
+
+  // Stall watchdog: armed per file (covering module load too, before any test event exists) and
+  // re-armed on each warning so a hung file keeps logging until run-tests.mjs kills the tree.
+  let stallTimer = null;
+  let stallAnchorMs = 0;
+  let stallLabel = '';
+  let lastEventType = 'none';
+  const touchProgress = (type) => {
+    stallAnchorMs = performance.now();
+    lastEventType = type;
+  };
+  const disarmStallWatchdog = () => {
+    if (stallTimer) clearInterval(stallTimer);
+    stallTimer = null;
+  };
+  const armStallWatchdog = (label) => {
+    if (!(stallWarnMs > 0)) return;
+    disarmStallWatchdog();
+    stallLabel = label;
+    lastEventType = 'none';
+    touchProgress('file-start');
+    stallTimer = setInterval(() => {
+      const idleMs = Math.round(performance.now() - stallAnchorMs);
+      console.error(
+        `[shard-worker] stall: no test event for ${idleMs}ms while running ${stallLabel} ` +
+          `(last event: ${lastEventType}); if this repeats until the suite timeout, this file is hung`,
+      );
+      touchProgress('stall-warning');
+    }, stallWarnMs);
+    stallTimer.unref?.();
+  };
 
   const totals = {
     tests: 0,
@@ -83,6 +126,9 @@ async function main() {
     const fileStartMs = performance.now();
     let fileSuccess = true;
     let sawSummary = false;
+    const fileLabel = `file ${idx + 1}/${files.length} ${relPath.split(path.sep).join('/')}`;
+    console.error(`[shard-worker] ${fileLabel}`);
+    armStallWatchdog(fileLabel);
 
     try {
       const stream = run({
@@ -93,6 +139,7 @@ async function main() {
       });
 
       for await (const ev of stream) {
+        touchProgress(ev.type);
         if (ev.type === 'test:summary') {
           sawSummary = true;
           if (!ev.data?.success) {
@@ -141,6 +188,7 @@ async function main() {
       anyFailed = true;
       console.error(`[shard-worker] error running ${relPath}:`, err);
     } finally {
+      disarmStallWatchdog();
       const elapsedMs = Math.max(1, Math.round(performance.now() - fileStartMs));
       if (fileSuccess) {
         perFileTimings[relPath.split(path.sep).join('/')] = elapsedMs;
