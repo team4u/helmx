@@ -590,10 +590,18 @@
   flex-shrink: 0;
 }
 
-.activity-rail-brand .status-dot {
+.activity-rail-status-light {
   position: absolute;
   right: 4px;
   bottom: 4px;
+  display: inline-flex;
+}
+
+.activity-rail-brand .activity-rail-status-light .helmx-status-light {
+  overflow: visible;
+}
+
+.activity-rail-brand .activity-rail-status-light .status-dot {
   width: 6px;
   height: 6px;
   box-shadow: 0 0 0 2px var(--bg-muted);

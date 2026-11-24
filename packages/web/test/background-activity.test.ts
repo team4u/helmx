@@ -367,10 +367,18 @@ function renderSidebar(store: HelmxExternalStore): string {
 }
 
 
-/** Count conversation status lights (excluding the ActivityRail SSE status-dot-connected dot). */
+/** Strip the ActivityRail SSE status light wrapper so sidebar assertions only observe conversation lights. */
+function sidebarConversationHtml(html: string): string {
+  const idx = html.indexOf('class="sidebar-context"')
+  return idx === -1 ? html : html.slice(idx)
+}
+
+/** Count conversation status lights (excluding the ActivityRail SSE StatusLight). */
 function countStatusLights(html: string): number {
   return (
-    html.match(/class="status-dot(?: status-dot-(?:working|blocked|done|error|background))?"/g) ?? []
+    sidebarConversationHtml(html).match(
+      /class="status-dot(?: status-dot-(?:working|blocked|done|error|background))?"/g,
+    ) ?? []
   ).length
 }
 
@@ -444,7 +452,7 @@ test('done conversation + background in flight: the green dot yields and only th
   })
   const html = renderSidebar(store)
   assert.ok(html.includes('class="status-dot status-dot-background"'), 'the background in-flight hollow ring is the sole light')
-  assert.ok(!html.includes('class="status-dot status-dot-done"'), 'the done green dot must yield, never side by side with the hollow ring')
+  assert.ok(!sidebarConversationHtml(html).includes('class="status-dot status-dot-done"'), 'the done green dot must yield, never side by side with the hollow ring')
   assert.ok(html.includes('title="Completed · background task: 1 Running"'), 'the tooltip states completed + background summary')
   assert.equal(countStatusLights(html), 1, 'the collapsed standing row carries exactly one light')
 })
@@ -664,7 +672,7 @@ test('Sidebar render: idle/done conversations with compacting=true render the ba
     }),
   )
   assert.ok(doneHtml.includes('class="status-dot status-dot-background"'), 'done + compacting must render the background hollow ring')
-  assert.ok(!doneHtml.includes('class="status-dot status-dot-done"'), 'the done green dot must yield')
+  assert.ok(!sidebarConversationHtml(doneHtml).includes('class="status-dot status-dot-done"'), 'the done green dot must yield')
   assert.ok(doneHtml.includes('title="Completed · background task: Compacting context"'))
   assert.equal(countStatusLights(doneHtml), 1)
 
@@ -923,4 +931,27 @@ test('SidebarConversationList switches copy immediately on setLocale (en -> zh-C
     await act(async () => { root.unmount() })
     host.remove()
   }
+})
+
+test('ActivityRail StatusDot renders unified StatusLight with role="img", aria-label, data-tone and tooltip', { timeout: 60_000 }, () => {
+  const connectedHtml = renderSidebar(sidebarStore({ sseConnected: true, locale: 'en' }))
+  const connectedBrand = connectedHtml.match(/<div class="activity-rail-brand"[\s\S]*?<\/div>/)?.[0] ?? ''
+  assert.ok(connectedBrand.includes('class="activity-rail-status-light"'), 'wraps StatusLight with positioning class')
+  assert.ok(connectedBrand.includes('role="img"'), 'StatusLight exposes role="img"')
+  assert.ok(connectedBrand.includes('data-tone="done"'), 'connected SSE renders tone="done"')
+  assert.ok(connectedBrand.includes('aria-label="Live connection healthy"'), 'connected SSE exposes accessible label')
+  assert.ok(connectedBrand.includes('title="Live connection healthy"'), 'connected SSE preserves hover tooltip')
+
+  const disconnectedHtml = renderSidebar(sidebarStore({ sseConnected: false, locale: 'en' }))
+  const disconnectedBrand = disconnectedHtml.match(/<div class="activity-rail-brand"[\s\S]*?<\/div>/)?.[0] ?? ''
+  assert.ok(disconnectedBrand.includes('role="img"'), 'disconnected StatusLight exposes role="img"')
+  assert.ok(disconnectedBrand.includes('data-tone="idle"'), 'disconnected SSE renders tone="idle"')
+  assert.ok(
+    disconnectedBrand.includes('aria-label="Live connection lost, reconnecting"'),
+    'disconnected SSE exposes accessible label',
+  )
+  assert.ok(
+    disconnectedBrand.includes('title="Live connection lost, reconnecting"'),
+    'disconnected SSE preserves hover tooltip',
+  )
 })

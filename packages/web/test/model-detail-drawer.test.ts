@@ -341,7 +341,7 @@ test('ModelDetailDrawer SSR: thinking and context-window tags render adjacently 
   // thinking first, window after
   assert.match(
     html,
-    />Thinking models<\/span><span class="badge mi-effort mchip-tag mtell">200k context<\/span>/,
+    />Thinking models<\/span><\/span><span class="badge badge-neutral mi-effort mchip-tag mtell"><span>200k context<\/span><\/span>/,
   )
   assert.ok(html.indexOf('Thinking models') < html.indexOf('200k context'), 'the thinking tag must precede the window tag')
 

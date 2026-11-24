@@ -1,5 +1,5 @@
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { HelmxIcon, IconButton, Tooltip } from '@helmx/plugin-client'
+import { HelmxIcon, IconButton, StatusLight, Tooltip } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { sidebarPaneTagLabel, type SidebarTargetPresence } from './sidebar-model.js'
@@ -11,11 +11,11 @@ import {
 
 export function StatusDot({ connected }: { connected: boolean }) {
   const { t } = useWebLocale()
+  const label = connected ? t('shell.status.liveHealthy') : t('shell.status.liveLost')
   return (
-    <span
-      className={`status-dot ${connected ? 'status-dot-done status-dot-connected' : 'status-dot-disconnected'}`}
-      title={connected ? t('shell.status.liveHealthy') : t('shell.status.liveLost')}
-    />
+    <span className="activity-rail-status-light" title={label}>
+      <StatusLight tone={connected ? 'done' : 'idle'} label={label} />
+    </span>
   )
 }
 

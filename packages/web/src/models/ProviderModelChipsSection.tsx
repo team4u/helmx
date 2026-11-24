@@ -175,9 +175,9 @@ export function ProviderModelChipsSection({
                     </span>
                     <span>{model.name}</span>
                     {model.tags?.map((tag) => (
-                      <span key={tag} className="badge mi-effort mchip-tag mtell">
+                      <Badge key={tag} tone="neutral" className="mi-effort mchip-tag mtell">
                         {tag}
-                      </span>
+                      </Badge>
                     ))}
                   </button>
                 )

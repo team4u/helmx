@@ -196,18 +196,23 @@ describe("triggers-client-interactions", () => {
         trigger!.click()
       })
       assert.deepEqual(spy.actionCalls[0], { actionId: 'cron_trigger', input: { id: 'daily-report' } }, '触发 cron_trigger')
-      // 在途期间：同一守卫的全部行按钮统一 disabled，不出现「看似可点实际无动作」
+      // 在途期间：同一守卫的全部行按钮统一 disabled，且仅当前触发按钮带 aria-busy="true"
       const allRowButtons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(
         (b) => b.textContent?.includes('Trigger now') || b.textContent?.includes('Delete'),
       )
       assert.equal(allRowButtons.length, 5, 'cron 2行×2 + webhook 1行×1 = 5 个行按钮')
+      assert.equal(trigger!.getAttribute('aria-busy'), 'true', '发起动作的按钮应标记 aria-busy="true"')
       for (const b of allRowButtons) {
         assert.equal(b.disabled, true, `在途时行按钮统一禁用：${b.textContent}`)
+        if (b !== trigger) {
+          assert.equal(b.getAttribute('aria-busy'), null, `其余行按钮不得误标 aria-busy：${b.textContent}`)
+        }
       }
-      // 恢复后重新可点
+      // 恢复后重新可点且移除 aria-busy
       await act(async () => {
         release?.()
       })
+      assert.equal(trigger!.getAttribute('aria-busy'), null, '完成后移除 aria-busy')
       for (const b of allRowButtons) {
         assert.equal(b.disabled, false, `完成后恢复可点：${b.textContent}`)
       }
@@ -242,6 +247,11 @@ describe("triggers-client-interactions", () => {
         confirmCronBtn.click()
       })
       assert.deepEqual(spy.actionCalls[1], { actionId: 'cron_delete', input: { id: 'daily-report' } }, '触发 cron_delete')
+      assert.equal(del[0]!.getAttribute('aria-busy'), 'true', 'cron_delete 在途时仅目标删除按钮带 aria-busy="true"')
+      for (const b of allRowButtons) {
+        assert.equal(b.disabled, true)
+        if (b !== del[0]) assert.equal(b.getAttribute('aria-busy'), null, `其余行按钮不得带 aria-busy：${b.textContent}`)
+      }
       await act(async () => {
         release?.()
       })
@@ -260,6 +270,11 @@ describe("triggers-client-interactions", () => {
         confirmWhBtn.click()
       })
       assert.deepEqual(spy.actionCalls[2], { actionId: 'webhook_delete', input: { id: 'ci' } }, '触发 webhook_delete')
+      assert.equal(del[2]!.getAttribute('aria-busy'), 'true', 'webhook_delete 在途时仅目标删除按钮带 aria-busy="true"')
+      for (const b of allRowButtons) {
+        assert.equal(b.disabled, true)
+        if (b !== del[2]) assert.equal(b.getAttribute('aria-busy'), null, `其余行按钮不得带 aria-busy：${b.textContent}`)
+      }
       await act(async () => {
         release?.()
       })

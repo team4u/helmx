@@ -121,12 +121,14 @@ function RowAction({
   label,
   iconName,
   disabled,
+  pending,
   danger,
   onClick,
 }: {
   label: string
   iconName: string
   disabled?: boolean
+  pending?: boolean
   danger?: boolean
   onClick: () => void
 }): ReactNode {
@@ -135,7 +137,8 @@ function RowAction({
       size="xs"
       variant={danger === true ? 'danger' : 'default'}
       icon={iconName}
-      pending={disabled === true}
+      disabled={disabled === true}
+      pending={pending === true}
       onClick={onClick}
     >
       {label}
@@ -235,12 +238,14 @@ function CronTable({
                       label={t(TRIGGERS_TRIGGER_NOW)}
                       iconName="zap"
                       disabled={actions.pending}
+                      pending={actions.pendingKey === `trigger:${job.id}`}
                       onClick={() => void actions.run('cron_trigger', { id: job.id }, { key: `trigger:${job.id}` })}
                     />
                     <RowAction
                       label={t(TRIGGERS_DELETE)}
                       iconName="trash-2"
                       disabled={actions.pending}
+                      pending={actions.pendingKey === `delete:${job.id}`}
                       danger
                       onClick={() => onRequestDelete(job.id)}
                     />
@@ -335,6 +340,7 @@ function WebhookTable({
                       label={t(TRIGGERS_DELETE)}
                       iconName="trash-2"
                       disabled={actions.pending}
+                      pending={actions.pendingKey === `webhook-delete:${hook.id}`}
                       danger
                       onClick={() => onRequestDelete(hook.id)}
                     />
@@ -494,6 +500,7 @@ function TriggerDetailDrawer({
               size="sm"
               icon="trash-2"
               disabled={actions.pending}
+              pending={actions.pendingKey === `delete:${cronJob.id}`}
               onClick={() => onRequestDelete({ kind: 'cron', id: cronJob.id })}
             >
               {t(TRIGGERS_DELETE)}
@@ -503,6 +510,7 @@ function TriggerDetailDrawer({
               size="sm"
               icon="zap"
               disabled={actions.pending}
+              pending={actions.pendingKey === `trigger:${cronJob.id}`}
               onClick={() => void actions.run('cron_trigger', { id: cronJob.id }, { key: `trigger:${cronJob.id}` })}
             >
               {t(TRIGGERS_TRIGGER_NOW)}
@@ -514,6 +522,7 @@ function TriggerDetailDrawer({
             size="sm"
             icon="trash-2"
             disabled={actions.pending}
+            pending={actions.pendingKey === `webhook-delete:${webhook.id}`}
             onClick={() => onRequestDelete({ kind: 'webhook', id: webhook.id })}
           >
             {t(TRIGGERS_DELETE)}
