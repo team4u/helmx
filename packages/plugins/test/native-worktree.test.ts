@@ -3020,6 +3020,73 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
     }
   })
 
+  it('真实 PluginHost before_turn：Swarm hold 注入上下文，释放后撤销上下文', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't22-context-hook')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new MemoryKvStore()
+    const { host, close } = await openWorkflowPluginHost({ repoDir: repo, dataDir: join(dir, 'data'), docs })
+    const caller = { surface: 'plugin' as const, callerPluginId: 'builtin:swarm' }
+    const baseTurn = {
+      conversation: makeConversationSummary({ id: 31, cwd: repo, model: '', createdAt: 1, updatedAt: 1 }),
+      inputs: [],
+      tools: [{ name: 'cleanup_worktree', description: 'cleanup', inputSchema: {}, execute: async () => undefined }],
+      sections: [],
+      messages: [],
+    }
+    try {
+      const ordinary = await host.runHook('before_turn', {
+        ...baseTurn,
+        conversation: { ...baseTurn.conversation, id: 32 },
+      })
+      assert.equal(ordinary.action, 'transform')
+      if (ordinary.action !== 'transform') throw new Error('无记录的 before_turn 应仅剥离无效 cleanup 工具')
+      assert.ok(!ordinary.value.sections.some((section) => section.id === WORKTREE_CONTEXT_SECTION_ID), '普通会话不得收到 worktree 上下文')
+      assert.ok(!ordinary.value.tools.some((tool) => tool.name === 'cleanup_worktree'), '无受管工作树时 cleanup 工具应被剥离')
+
+      const acquired = (await host.invokeAction(
+        'builtin:worktree',
+        'acquire_worktree',
+        {
+          conversationId: 31,
+          parentConversationId: 1,
+          requestCwd: repo,
+          hold: { holdId: 'group:author', label: 'swarm author' },
+        },
+        {},
+        caller,
+      )) as { worktreeId: string }
+
+      const injected = await host.runHook('before_turn', baseTurn)
+      assert.equal(injected.action, 'transform')
+      if (injected.action !== 'transform') throw new Error('before_turn 应返回 transform')
+      const context = injected.value.sections.find((section) => section.id === WORKTREE_CONTEXT_SECTION_ID)
+      assert.ok(context, '真实 before_turn 应注入 worktree_context')
+      assert.ok(context!.text.includes(acquired.worktreeId), '注入段落应包含真实 worktreeId')
+      assert.ok(injected.value.tools.some((tool) => tool.name === 'cleanup_worktree'), '活跃 hold 不应剥离 cleanup 工具')
+
+      await host.invokeAction(
+        'builtin:worktree',
+        'release_worktree_hold',
+        { worktreeId: acquired.worktreeId, holdId: 'group:author' },
+        {},
+        caller,
+      )
+      const afterRelease = await host.runHook('before_turn', {
+        ...baseTurn,
+        sections: injected.value.sections,
+      })
+      assert.equal(afterRelease.action, 'transform')
+      if (afterRelease.action !== 'transform') throw new Error('释放后 before_turn 应返回 transform 以撤销旧段落')
+      assert.ok(!afterRelease.value.sections.some((section) => section.id === WORKTREE_CONTEXT_SECTION_ID), '释放 hold 后不得保留旧上下文')
+      assert.ok(afterRelease.value.tools.some((tool) => tool.name === 'cleanup_worktree'), '解除 hold 不会移除仍 active 的工作树')
+    } finally {
+      await close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('before_turn 上下文段落：hold 记录注入、spawn 记录（无 hold）与 removed 记录不注入', {
     timeout: 60_000,
   }, async () => {

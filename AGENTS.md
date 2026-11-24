@@ -4,7 +4,7 @@
 
 ## 1. 环境、隔离与破坏性变更授权（最高优先级）
 
-- **工作目录（所有 Agent 通用，含非 Helmx 的外部 Agent）**：主仓位于 `/root/code/helm`。改代码前先核实 `pwd` 与 `git worktree list`：**若当前 `cwd` 已在任意独立 Git Worktree 中，直接就地开发**，不要二次切树；**若仍在共享主工作树 `/root/code/helm`，除纯文档等轻量例外（见第 6 节）外严禁直接改代码**。此时优先用当前宿主的原生 worktree 隔离（Helmx 内传 `isolation: 'worktree'`；Claude Code、Codex 等外部 Agent 用其内置 worktree 机制），**禁用 `/tmp`**；仅在宿主不会自动分配（手工开发、或新建集成树）时统一落到 `/root/code/helm-worktrees/<name>`。三类 worktree 的目录边界与回收方式见第 6 节。开发智能体的继承 `cwd` 可能位于旧仓库，每次开工先显式 `cd`。
+- **工作目录（所有 Agent 通用，含非 Helmx 的外部 Agent）**：Helmx 主仓位于 `/root/code/helm`。改代码前先核实 `pwd`、当前目录所属 Git 仓库的 `git rev-parse --path-format=absolute --git-common-dir` 与 `/root/code/helm` 的同一结果，并用 `git worktree list --porcelain` 确认当前路径是该仓库登记的工作树。**只有当前目录属于 Helmx 主仓，且宿主、人类或协调者已明确将该工作树分配给当前任务时，才可直接就地开发**；仓库不匹配或任务归属不明时，停止写入并询问，不得因为当前目录恰好是 worktree 就默认获得使用权。若仍在共享主工作树 `/root/code/helm`，除纯文档等轻量例外（见第 6 节）外严禁直接改代码。此时优先用当前宿主的原生 worktree 隔离（Helmx 内传 `isolation: 'worktree'`；Claude Code、Codex 等外部 Agent 用其内置 worktree 机制），**禁用 `/tmp`**；仅在宿主不会自动分配（手工开发、或新建集成树）时统一落到 `/root/code/helm-worktrees/<name>`。三类 worktree 的目录边界与回收方式见第 6 节。开发智能体的继承 `cwd` 可能位于旧仓库，每次开工先显式 `cd`。
 - **历史仓库严格只读**：`/root/code/botx`、`/root/code/botd`、`/root/code/herdr` 仅可参考代码与 `node_modules` 验证 SDK / 协议行为，**绝不修改**。
 - **运行数据隔离**：数据目录仅限 `~/.helmx`（或 `HELMX_DATA_DIR` 覆盖值），与 `~/.botx`、`~/.botd` 完全隔离，不得读写旧系统运行数据。
 - **端口铁律**：Web dev 固定 `3201`（`strictPort: true`，代理 `/api`、`/ws`），内核 Hub 固定 `3202`（`HELMX_PORT=3202`）。**永不占用 `3000`（外部）、`3001/3002`（botd）、`3101/3102`（botx）**。
@@ -77,11 +77,11 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 
 ## 6. 开发流程与多智能体协作
 
-- **Worktree 隔离开发（所有 Agent 通用）**：不强制使用子代理；无论单代理开发还是拆分子代理、无论是否经 Helmx 派生，所有代码开发必须在独立 worktree 中完成，禁止直接在共享主工作树 `/root/code/helm` 改代码或使用 `/tmp`。开工前核实实际 worktree 绝对路径与基线；合回主干（`main`）前须先合入最新主干并在该 worktree 内跑通验证。本仓存在三类互不混用的 worktree，**目录边界与回收方式严禁混用**：
+- **Worktree 隔离开发（所有 Agent 通用）**：不强制使用子代理；无论单代理开发还是拆分子代理、无论是否经 Helmx 派生，所有代码开发必须在独立 worktree 中完成，禁止直接在共享主工作树 `/root/code/helm` 改代码或使用 `/tmp`。开工前核实实际 worktree 绝对路径、它属于 Helmx 主仓、该树由当前任务持有，以及基线提交；任何一项无法确认时先询问，不得直接写入。合回主干（`main`）前须先合入最新主干并在该 worktree 内跑通验证。本仓存在三类互不混用的 worktree，**目录边界与回收方式严禁混用**：
 
   | 类型 | 路径与分支特征 | 由谁分配 | 回收方式（严禁跨类操作） |
   | :--- | :--- | :--- | :--- |
-  | **Helmx 受管树** | `/root/code/.helmx-worktrees/<repo>-<shortId>`，分支 `helmx/spawn-<shortId>` | `builtin:worktree`（`subagent` / DSL `agent()` / Swarm 派工传 `isolation: 'worktree'`） | 仅限 `cleanup_worktree` 工具、`helmx worktrees cleanup` 或 `swarm_close_group`；**禁止裸 `rm -rf` 或 `git worktree remove`**（会绕过租约账本留下孤儿登记） |
+  | **Helmx 受管树** | 目标节点主工作树同级 `.helmx-worktrees/<repo>-<shortId>`，分支 `helmx/spawn-<shortId>`；本机示例 `/root/code/.helmx-worktrees/helm-<shortId>`，远端路径与分隔符依节点平台而定，实际坐标以 execution metadata / `worktreeId` 为准 | `builtin:worktree`（`subagent` / DSL `agent()` / Swarm 派工传 `isolation: 'worktree'`） | 仅限 `cleanup_worktree` 工具、`helmx worktrees cleanup` 或 `swarm_close_group`；**禁止裸 `rm -rf` 或 `git worktree remove`**（会绕过租约账本留下孤儿登记） |
   | **外部宿主受管树** | 宿主自定（如 `.claude/worktrees/*`），非 `/tmp` | Claude Code / Codex / Paseo 等宿主的内置 worktree 机制 | 按对应宿主机制回收 |
   | **手工开发 / 集成树** | `/root/code/helm-worktrees/<name>`，分支 `feat/*` 或 `fix/*`（**禁用 `helmx/spawn-*`、`helmx/wf-*` 受管前缀**） | 人类或任意 Agent 手工 `git -C /root/code/helm worktree add -b <branch> /root/code/helm-worktrees/<name> main` | 确认合入后 `git worktree remove` + `git branch -d` |
 

@@ -21,7 +21,7 @@ flowchart TD
 
 主工作树以 Git 权威清单定位：执行 `git worktree list --porcelain -z` 取首条登记即主工作树根目录——即使派生时已处于某个隔离 worktree 内，也总能定位到真正主仓，绝不以 `dirname` 猜根，也不会嵌套出 `.helmx-worktrees/.helmx-worktrees`。隔离目录建在主工作树同级：
 
-- 目录：`<主仓同级>/.helmx-worktrees/<repo>-<shortId>`
+- 目录：目标节点的 `<主工作树同级>/.helmx-worktrees/<repo>-<shortId>`；远端节点的平台路径与分隔符可能不同，实际坐标以 execution metadata / `worktreeId` 为准。
 - 分支：`helmx/spawn-<shortId>`，基于分配时刻记录的 `baseCommit` 创建（不追易变 HEAD——锁内创建瞬间主仓 HEAD 可能已被推进）
 - 源状态：如实记录源工作区是否脏（`dirtySource`）。源仓库脏时明确告知：隔离树基于 HEAD 创建，不包含源工作区未提交的改动。
 - 上下文注入：每次启动（新建与 `resume`）都向子代理提示词末尾注入 `<worktree_context>`，内容含 `worktreeId`、`path`、`branch`、`baseCommit`、`baseBranch`（若有）与 `dirtySource` 提示，并提醒子代理在结束回合前运行 `git add` 与 `git commit` 保持工作区干净。

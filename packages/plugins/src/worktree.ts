@@ -15,7 +15,7 @@ import { resolvePluginClientAssets } from './asset-paths.js'
 import { WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID } from './contracts.js'
 import { WorktreeIsolation } from './worktree/isolation.js'
 import { registerWorktreeActions } from './worktree/actions.js'
-import { resolveWorktreeContextSection } from './worktree/worktree-context.js'
+import { resolveWorktreeContextSection, WORKTREE_CONTEXT_SECTION_ID } from './worktree/worktree-context.js'
 import {
   AGENT_BINDINGS_KV_NAMESPACE,
   LEASES_KV_NAMESPACE,
@@ -69,17 +69,22 @@ export function createWorktreePlugin(): PluginDefinition {
       }, { priority: 200 })
 
       ctx.hook.onBeforeTurn((turn) => {
-        // 经 acquire_worktree 只改写 cwd 的会话（如 Swarm 成员）没有 agent_spawn 提示词尾注，
-        // 每回合按最新登记事实注入同一份 <worktree_context>；spawn 路径记录无 hold，不重复。
+        // acquire_worktree 会话没有 agent_spawn 尾注；按当前 hold 更新唯一命名段落，释放 hold 后撤销旧信息。
         const contextSection = resolveWorktreeContextSection(isolation.allocator.getForConversation(turn.conversation.id))
+        const sections = turn.sections.filter((section) => section.id !== WORKTREE_CONTEXT_SECTION_ID)
+        if (contextSection !== undefined) sections.push(contextSection)
+        const sectionsChanged = sections.length !== turn.sections.length || sections.some((section, i) => {
+          const previous = turn.sections[i]
+          return previous?.id !== section.id || previous.text !== section.text
+        })
         const stripCleanupTool = !isolation.allocator.hasActiveRecords() && turn.tools.some((tool) => tool.name === 'cleanup_worktree')
-        if (contextSection === undefined && !stripCleanupTool) return
+        if (!sectionsChanged && !stripCleanupTool) return
         return {
           action: 'transform',
           value: {
             ...turn,
             ...(stripCleanupTool ? { tools: turn.tools.filter((tool) => tool.name !== 'cleanup_worktree') } : {}),
-            ...(contextSection !== undefined ? { sections: [...turn.sections, contextSection] } : {}),
+            ...(sectionsChanged ? { sections } : {}),
           },
         }
       })
