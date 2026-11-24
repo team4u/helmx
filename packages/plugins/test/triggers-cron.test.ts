@@ -991,3 +991,41 @@ test('落盘失败防 0ms 热循环与并发写串行回滚：claim / overlap-sk
   await h.runtime.settle()
   assert.equal(overlapFlushes, 2, 'overlap-skip flush 失败必须退避，不在 T10 产生 0ms 死循环')
 })
+
+test('findActiveRun 抛错防 0ms 热循环：按 60s 退避重排并通知，恢复后正常投递', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0))
+  await ready(h)
+  await h.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'active-check-err',
+    schedule: '*/5 * * * *',
+    text: 'ping',
+    catchUp: true,
+  })
+
+  let checkCalls = 0
+  let shouldThrow = true
+  h.findActiveRunImpl = () => {
+    checkCalls += 1
+    if (shouldThrow) throw new Error('sqlite busy during listConversations')
+    return undefined
+  }
+
+  await h.clock.advance(5 * MIN) // T0_5: findActiveRun throws once -> must back off 60s, not loop at 0ms
+  await h.runtime.settle()
+  assert.equal(checkCalls, 1, 'findActiveRun 抛错必须 60s 退避，绝不在同一毫秒 0ms 无限重试')
+  assert.equal(h.dispatched.length, 0)
+  assert.ok(h.events.some((e) => e.type === 'notification'), 'findActiveRun 失败必须发出错误通知')
+
+  // 推进 30s（未到 60s 退避点）：不提前重试
+  await h.clock.advance(30_000)
+  await h.runtime.settle()
+  assert.equal(checkCalls, 1)
+
+  // 恢复后推进至 T0_5 + 60s：自动重试并投递
+  shouldThrow = false
+  await h.clock.advance(30_000)
+  await h.runtime.settle()
+  assert.equal(checkCalls, 2)
+  assert.equal(h.dispatched.length, 1)
+  assert.equal(h.dispatched[0]!.envelope.id, `cron:active-check-err:${T0_5}`)
+})

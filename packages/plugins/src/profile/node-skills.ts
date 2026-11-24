@@ -118,12 +118,16 @@ function buildNodeSkillsCacheKey(nodeId: string, cwd: string, options?: NodeSkil
 }
 
 function cloneAndRedactSkills(skills: readonly SkillSummary[], redact: (text: string) => string): SkillSummary[] {
-  return skills.map((skill) => ({
-    ...skill,
-    name: skill.name !== '' ? redact(skill.name) : skill.id,
-    ...(skill.description !== undefined && skill.description !== '' ? { description: redact(skill.description) } : {}),
-    references: [...skill.references],
-  }))
+  return skills.map((skill) => {
+    const safeId = redact(skill.id)
+    return {
+      ...skill,
+      id: safeId,
+      name: skill.name !== '' ? redact(skill.name) : safeId,
+      ...(skill.description !== undefined && skill.description !== '' ? { description: redact(skill.description) } : {}),
+      references: skill.references.map(redact),
+    }
+  })
 }
 
 /**
@@ -233,19 +237,20 @@ async function readNodeFileBounded(
   redact: (text: string) => string,
   withinDir?: string,
 ): Promise<NodeFileRead> {
+  const safePath = redact(path)
   const canonical = await env.canonicalPath(path, BACKGROUND_CONTEXT)
   if (!canonical.ok) {
     if (isAbsentFileError(canonical.error)) return { kind: 'absent' }
     return {
       kind: 'refused',
-      reason: `解析 ${path} 真实路径失败（${canonical.error.code}）：${redact(canonical.error.message)}`,
+      reason: `解析 ${safePath} 真实路径失败（${canonical.error.code}）：${redact(canonical.error.message)}`,
     }
   }
   const realPath = canonical.value
   if (withinDir !== undefined && !isPathWithin(realPath, withinDir)) {
     return {
       kind: 'refused',
-      reason: `${path} 解析到技能目录之外，拒绝读取`,
+      reason: `${safePath} 解析到技能目录之外，拒绝读取`,
     }
   }
 
@@ -255,42 +260,42 @@ async function readNodeFileBounded(
     if (isAbsentFileError(openedR.error)) return { kind: 'absent' }
     return {
       kind: 'refused',
-      reason: `读取 ${path} 失败（${openedR.error.code}）：${redact(openedR.error.message)}`,
+      reason: `读取 ${safePath} 失败（${openedR.error.code}）：${redact(openedR.error.message)}`,
     }
   }
   const reader = openedR.value
   try {
     const infoR = await reader.info(BACKGROUND_CONTEXT)
     if (!infoR.ok) {
-      return { kind: 'refused', reason: `读取 ${path} 元信息失败（${infoR.error.code}）：${redact(infoR.error.message)}` }
+      return { kind: 'refused', reason: `读取 ${safePath} 元信息失败（${infoR.error.code}）：${redact(infoR.error.message)}` }
     }
     const info = infoR.value
     if (info.kind !== 'file') {
-      return { kind: 'refused', reason: `${path} 在打开后不是普通文件（kind=${info.kind}），拒绝读取` }
+      return { kind: 'refused', reason: `${safePath} 在打开后不是普通文件（kind=${info.kind}），拒绝读取` }
     }
     if (info.size > MAX_NODE_SKILL_FILE_BYTES) {
-      return { kind: 'refused', reason: `${path} 为 ${info.size} 字节，超过 ${MAX_NODE_SKILL_FILE_BYTES} 字节读取上限，正文未读取` }
+      return { kind: 'refused', reason: `${safePath} 为 ${info.size} 字节，超过 ${MAX_NODE_SKILL_FILE_BYTES} 字节读取上限，正文未读取` }
     }
 
     const readR = await reader.read(0, MAX_NODE_SKILL_FILE_BYTES + 1, BACKGROUND_CONTEXT)
     if (!readR.ok) {
-      return { kind: 'refused', reason: `读取 ${path} 失败（${readR.error.code}）：${redact(readR.error.message)}` }
+      return { kind: 'refused', reason: `读取 ${safePath} 失败（${readR.error.code}）：${redact(readR.error.message)}` }
     }
     const bytes = readR.value
     if (bytes.byteLength > MAX_NODE_SKILL_FILE_BYTES) {
-      return { kind: 'refused', reason: `${path} 读取到 ${bytes.byteLength} 字节，超过 ${MAX_NODE_SKILL_FILE_BYTES} 字节上限，正文不采用` }
+      return { kind: 'refused', reason: `${safePath} 读取到 ${bytes.byteLength} 字节，超过 ${MAX_NODE_SKILL_FILE_BYTES} 字节上限，正文不采用` }
     }
 
     const afterR = await reader.info(BACKGROUND_CONTEXT)
     if (!afterR.ok) {
-      return { kind: 'refused', reason: `读取 ${path} 后复核元信息失败（${afterR.error.code}）：${redact(afterR.error.message)}` }
+      return { kind: 'refused', reason: `读取 ${safePath} 后复核元信息失败（${afterR.error.code}）：${redact(afterR.error.message)}` }
     }
     const after = afterR.value
     if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) {
-      return { kind: 'refused', reason: `${path} 读取期间发生变化（size ${info.size} -> ${after.size}），不采用可能不完整的快照` }
+      return { kind: 'refused', reason: `${safePath} 读取期间发生变化（size ${info.size} -> ${after.size}），不采用可能不完整的快照` }
     }
     if (bytes.byteLength !== after.size) {
-      return { kind: 'refused', reason: `${path} 实读 ${bytes.byteLength} 字节与稳定大小 ${after.size} 不一致，不采用可能不完整的快照` }
+      return { kind: 'refused', reason: `${safePath} 实读 ${bytes.byteLength} 字节与稳定大小 ${after.size} 不一致，不采用可能不完整的快照` }
     }
     return { kind: 'content', text: NODE_SKILL_UTF8_DECODER.decode(bytes) }
   } finally {
@@ -319,7 +324,7 @@ async function collectNodeReferences(
     if (listed.error.code === 'not_found') return [] // 并发删除：该层按空处理
     throw new HelmxError(
       'node_skill_read_failed',
-      `列出节点技能目录 ${rel === '' ? dir : `${dir}/${rel}`} 失败（${listed.error.code}）：${redact(listed.error.message)}`,
+      `列出节点技能目录 ${redact(rel === '' ? dir : `${dir}/${rel}`)} 失败（${listed.error.code}）：${redact(listed.error.message)}`,
       502,
     )
   }
@@ -411,7 +416,7 @@ async function scanNodeSkillsInner(
         return {
           kind: 'ok',
           skills: cloneAndRedactSkills(cached.skills, redact),
-          ...(cached.shadowedSkillIds.length > 0 ? { shadowedSkillIds: [...cached.shadowedSkillIds] } : {}),
+          ...(cached.shadowedSkillIds.length > 0 ? { shadowedSkillIds: cached.shadowedSkillIds.map(redact) } : {}),
         }
       }
       hostCache!.delete(cacheKey)
@@ -491,7 +496,7 @@ async function scanNodeSkillsInner(
 
     type CandidateOutcome =
       | { kind: 'skip' }
-      | { kind: 'ok'; summary: SkillSummary }
+      | { kind: 'ok'; rawId: string; summary: SkillSummary }
       | { kind: 'unavailable'; reason: string }
 
     const outcomes = new Array<CandidateOutcome>(toScan.length)
@@ -506,6 +511,7 @@ async function scanNodeSkillsInner(
           nextIdx += 1
           if (idx >= toScan.length) return
           const skillName = toScan[idx]!
+          const safeSkillName = redact(skillName)
           const skillDir = joinUnderCwd(realRoot, skillName)
           const skillMdR = await readNodeFileBounded(env, joinUnderCwd(skillDir, 'SKILL.md'), redact, skillDir)
           if (skillMdR.kind === 'absent') {
@@ -513,7 +519,7 @@ async function scanNodeSkillsInner(
             continue // 无 SKILL.md：不是技能，常态跳过
           }
           if (skillMdR.kind === 'refused') {
-            outcomes[idx] = { kind: 'unavailable', reason: `节点技能 ${skillName} 读取失败：${skillMdR.reason}` }
+            outcomes[idx] = { kind: 'unavailable', reason: `节点技能 ${safeSkillName} 读取失败：${skillMdR.reason}` }
             stopRoot = true
             return
           }
@@ -538,18 +544,19 @@ async function scanNodeSkillsInner(
           if (references.length > MAX_NODE_SKILL_REFERENCES) {
             outcomes[idx] = {
               kind: 'unavailable',
-              reason: `节点技能 ${skillName} 含 ${references.length} 个 references 文件，超过 ${MAX_NODE_SKILL_REFERENCES} 上限，未纳入该目录技能。`,
+              reason: `节点技能 ${safeSkillName} 含 ${references.length} 个 references 文件，超过 ${MAX_NODE_SKILL_REFERENCES} 上限，未纳入该目录技能。`,
             }
             stopRoot = true
             return
           }
           outcomes[idx] = {
             kind: 'ok',
+            rawId: skillName,
             summary: {
-              id: skillName,
-              name: frontmatter.name !== '' ? redact(frontmatter.name) : skillName,
+              id: safeSkillName,
+              name: frontmatter.name !== '' ? redact(frontmatter.name) : safeSkillName,
               ...(frontmatter.description !== '' ? { description: redact(frontmatter.description) } : {}),
-              references,
+              references: references.map(redact),
               // managedByPlugin deliberately stripped: a node may only host normal skills, never host-managed plugin skills.
               source: 'node',
             },
@@ -564,16 +571,16 @@ async function scanNodeSkillsInner(
         unavailableReasons.push(outcome.reason)
         break
       }
-      byId.set(outcome.summary.id, outcome.summary)
+      byId.set(outcome.rawId, outcome.summary)
     }
   }
 
   const skills = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
-  const sortedShadowedIds = [...shadowedSkillIds].sort((a, b) => a.localeCompare(b))
+  const sortedShadowedIds = [...shadowedSkillIds].map(redact).sort((a, b) => a.localeCompare(b))
   if (unavailableReasons.length > 0) {
     return {
       kind: 'unavailable',
-      reason: unavailableReasons.join('; '),
+      reason: redact(unavailableReasons.join('; ')),
       ...(skills.length > 0 ? { skills } : {}),
       ...(sortedShadowedIds.length > 0 ? { shadowedSkillIds: sortedShadowedIds } : {}),
     }
@@ -624,11 +631,12 @@ export async function readNodeSkillFile(
     // HelmxError（校验 / 离线 / not_found / 已显式化的读取失败）原样上抛；
     // 意外异常（宿主端口未接线 / 远端连接中途丢失等）统一显式 502，绝不伪装成功。
     if (err instanceof HelmxError) throw err
+    const safeSkillId = host.redact(skillId)
     throw new HelmxError(
       'node_skill_read_failed',
-      `reading node skill '${skillId}' on node '${nodeIdInput ?? 'local'}' failed unexpectedly (${errorCodeOf(err)}): ${host.redact(errorMessageOf(err))}`,
+      `reading node skill '${safeSkillId}' on node '${nodeIdInput ?? 'local'}' failed unexpectedly (${errorCodeOf(err)}): ${host.redact(errorMessageOf(err))}`,
       502,
-      { skillId },
+      { skillId: safeSkillId },
     )
   }
 }
@@ -641,32 +649,35 @@ async function readNodeSkillFileInner(
   path: string,
   options?: NodeSkillScanOptions,
 ): Promise<string> {
+  const redact = (text: string): string => host.redact(text)
+  const safeSkillId = redact(skillId)
+  const safePath = redact(path)
   try {
     assertSkillId(skillId)
   } catch (err) {
-    throw new HelmxError('validation_error', `Invalid skill id: ${err instanceof Error ? err.message : String(err)}`, 400, { skillId })
+    throw new HelmxError('validation_error', `Invalid skill id: ${redact(errorMessageOf(err))}`, 400, { skillId: safeSkillId })
   }
   let rel: string
   try {
     rel = assertSafeSkillRelativePath(path)
   } catch (err) {
-    throw new HelmxError('validation_error', `Invalid skill-relative path: ${err instanceof Error ? err.message : String(err)}`, 400, { skillId, path })
+    throw new HelmxError('validation_error', `Invalid skill-relative path: ${redact(errorMessageOf(err))}`, 400, { skillId: safeSkillId, path: safePath })
   }
+  const safeRel = redact(rel)
   const nodeId = nodeIdInput ?? 'local'
   const rawRoots = resolveNodeSkillRoots(nodeId, cwd, options)
   if (rawRoots.length === 0) {
-    throw new HelmxError('not_found', `skill does not exist: ${skillId}`, 404, { skillId })
+    throw new HelmxError('not_found', `skill does not exist: ${safeSkillId}`, 404, { skillId: safeSkillId })
   }
-  const redact = (text: string): string => host.redact(text)
 
   if (nodeId !== 'local') {
     try {
       if (!host.nodeIpc.isOnline(nodeId)) {
-        throw new HelmxError('node_offline', `node '${nodeId}' is offline; cannot read node skill '${skillId}' (refusing to fall back to Hub skills)`, 409, { nodeId, skillId })
+        throw new HelmxError('node_offline', `node '${nodeId}' is offline; cannot read node skill '${safeSkillId}' (refusing to fall back to Hub skills)`, 409, { nodeId, skillId: safeSkillId })
       }
     } catch (err) {
       if (err instanceof HelmxError) throw err
-      throw new HelmxError('node_offline', `checking node '${nodeId}' online state failed (${errorCodeOf(err)}): ${redact(errorMessageOf(err))}`, 409, { nodeId, skillId })
+      throw new HelmxError('node_offline', `checking node '${nodeId}' online state failed (${errorCodeOf(err)}): ${redact(errorMessageOf(err))}`, 409, { nodeId, skillId: safeSkillId })
     }
   }
 
@@ -678,20 +689,21 @@ async function readNodeSkillFileInner(
       'node_skill_read_failed',
       `acquiring execution env for node '${nodeId}' failed (${errorCodeOf(err)}): ${redact(errorMessageOf(err))}`,
       502,
-      { nodeId, skillId },
+      { nodeId, skillId: safeSkillId },
     )
   }
 
   const seenRoots = new Set<string>()
   for (const rawRoot of rawRoots) {
+    const safeRawRoot = redact(rawRoot)
     const canonical = await env.canonicalPath(rawRoot, BACKGROUND_CONTEXT)
     if (!canonical.ok) {
       if (isAbsentRootError(canonical.error)) continue
       throw new HelmxError(
         'node_skill_read_failed',
-        `resolving node skill root '${rawRoot}' failed (${canonical.error.code}): ${redact(canonical.error.message)}`,
+        `resolving node skill root '${safeRawRoot}' failed (${canonical.error.code}): ${redact(canonical.error.message)}`,
         502,
-        { nodeId, skillId },
+        { nodeId, skillId: safeSkillId },
       )
     }
     const realRoot = canonical.value
@@ -705,17 +717,17 @@ async function readNodeSkillFileInner(
       if (isAbsentRootError(dirInfoR.error)) continue
       throw new HelmxError(
         'node_skill_read_failed',
-        `inspecting node skill '${skillId}' on node '${nodeId}' failed (${dirInfoR.error.code}): ${redact(dirInfoR.error.message)}`,
+        `inspecting node skill '${safeSkillId}' on node '${nodeId}' failed (${dirInfoR.error.code}): ${redact(dirInfoR.error.message)}`,
         502,
-        { nodeId, skillId },
+        { nodeId, skillId: safeSkillId },
       )
     }
     if (dirInfoR.value.kind === 'symlink') {
       throw new HelmxError(
         'node_skill_read_failed',
-        `reading node skill '${skillId}' on node '${nodeId}' failed: skill directory is a symlink`,
+        `reading node skill '${safeSkillId}' on node '${nodeId}' failed: skill directory is a symlink`,
         502,
-        { nodeId, skillId },
+        { nodeId, skillId: safeSkillId },
       )
     }
     if (dirInfoR.value.kind !== 'directory') continue
@@ -725,27 +737,27 @@ async function readNodeSkillFileInner(
       if (isAbsentRootError(skillRealR.error)) continue
       throw new HelmxError(
         'node_skill_read_failed',
-        `resolving node skill '${skillId}' on node '${nodeId}' failed (${skillRealR.error.code}): ${redact(skillRealR.error.message)}`,
+        `resolving node skill '${safeSkillId}' on node '${nodeId}' failed (${skillRealR.error.code}): ${redact(skillRealR.error.message)}`,
         502,
-        { nodeId, skillId },
+        { nodeId, skillId: safeSkillId },
       )
     }
     const skillReal = skillRealR.value
     if (!isPathWithin(skillReal, realRoot)) {
       throw new HelmxError(
         'node_skill_read_failed',
-        `reading node skill '${skillId}' on node '${nodeId}' failed: skill directory resolves outside skills root`,
+        `reading node skill '${safeSkillId}' on node '${nodeId}' failed: skill directory resolves outside skills root`,
         502,
-        { nodeId, skillId },
+        { nodeId, skillId: safeSkillId },
       )
     }
 
     const skillMdRead = await readNodeFileBounded(env, joinUnderCwd(skillReal, 'SKILL.md'), redact, skillReal)
     if (skillMdRead.kind === 'absent') continue
     if (skillMdRead.kind === 'refused') {
-      throw new HelmxError('node_skill_read_failed', `reading node skill '${skillId}' (SKILL.md) on node '${nodeId}' failed: ${skillMdRead.reason}`, 502, {
+      throw new HelmxError('node_skill_read_failed', `reading node skill '${safeSkillId}' (SKILL.md) on node '${nodeId}' failed: ${skillMdRead.reason}`, 502, {
         nodeId,
-        skillId,
+        skillId: safeSkillId,
         path: 'SKILL.md',
       })
     }
@@ -760,19 +772,19 @@ async function readNodeSkillFileInner(
     const read = await readNodeFileBounded(env, target, redact, skillReal)
     if (read.kind === 'absent') {
       // This root owns skillId: do not fall through to lower-priority roots.
-      throw new HelmxError('not_found', `skill does not exist: ${skillId}`, 404, { skillId, path: rel })
+      throw new HelmxError('not_found', `skill does not exist: ${safeSkillId}`, 404, { skillId: safeSkillId, path: safeRel })
     }
     if (read.kind === 'refused') {
-      throw new HelmxError('node_skill_read_failed', `reading node skill '${skillId}' (${rel}) on node '${nodeId}' failed: ${read.reason}`, 502, {
+      throw new HelmxError('node_skill_read_failed', `reading node skill '${safeSkillId}' (${safeRel}) on node '${nodeId}' failed: ${read.reason}`, 502, {
         nodeId,
-        skillId,
-        path: rel,
+        skillId: safeSkillId,
+        path: safeRel,
       })
     }
     return read.text
   }
 
-  throw new HelmxError('not_found', `skill does not exist: ${skillId}`, 404, { skillId, path: rel })
+  throw new HelmxError('not_found', `skill does not exist: ${safeSkillId}`, 404, { skillId: safeSkillId, path: safeRel })
 }
 
 /** before_turn 显式注入段（节点技能库不可用说明；reason 已脱敏，此处统一转义）。 */

@@ -67,8 +67,8 @@ interface MagpieProviderHandle {
   provider: Provider
   /** 当前已安装模型（最新目录在前，仅当前 root 名下）。 */
   models(): readonly PiMagpieModel[]
-  /** 目录是否已成功同步过至少一次（本启用周期内）。 */
-  synced(): boolean
+  /** 目录是否已针对当前（或指定）网关快照成功同步过至少一次（本启用周期内）。 */
+  synced(snapshot?: MagpieGatewayRef): boolean
   /** Latest unconfigured loopback idle connection error (cleared on sync or thrown error). */
   lastIdleError(): { root: string; error: string } | undefined
   /** Hand off an already-fetched `/v1/models` payload for the next `refreshModels` on the same gateway snapshot (avoids double HTTP fetch). */
@@ -125,9 +125,17 @@ function requestParams(
 export function createMagpieProvider(options: MagpieProviderOptions): MagpieProviderHandle {
   const { gateway, fetchImpl, onCatalogChange } = options
   let models: PiMagpieModel[] = []
-  let syncedOnce = false
+  let syncedGateway: MagpieGatewayRef | undefined
   let lastIdleProbeError: { root: string; error: string } | undefined
   let prefetchedCatalog: { gateway: MagpieGatewayRef; entries: MagpieModelEntry[] } | undefined
+
+  const isSameCurrentGateway = (snapshot: MagpieGatewayRef): boolean => {
+    try {
+      return sameGateway(snapshot, gateway())
+    } catch {
+      return false
+    }
+  }
 
   const install = (next: PiMagpieModel[]): void => {
     models = next
@@ -169,10 +177,10 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
         const restored = (context.stored.models as readonly PiMagpieModel[]).filter(
           (model) => model?.provider === MAGPIE_PROVIDER_ID && isModelType(model, 'chat') && servedByRoot(model, gw.root),
         )
-        if (!(await context.publish({ update: () => install([...restored]) }))) return
+        if (!(await context.publish({ update: () => { if (isSameCurrentGateway(gw)) install([...restored]) } }))) return
       } else if (models.length > 0) {
         // 首次刷新前内存里可能有上个网关的残留目录：同样不冒充本网关缓存。
-        if (!(await context.publish({ update: () => install([]) }))) return
+        if (!(await context.publish({ update: () => { if (isSameCurrentGateway(gw)) install([]) } }))) return
       }
       if (!context.allowNetwork || context.signal.aborted) return
       // 2) 网络刷新：未显式配置且默认 loopback 拒绝连接时按空闲未检测到处理（不污染全局
@@ -186,6 +194,9 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
             ? primed.entries
             : await fetchCatalog(gw.root, gw.token, context.signal, fetchImpl)
       } catch (error) {
+        if (!isSameCurrentGateway(gw)) {
+          throw new HelmxError('magpie_gateway_changed', '网关配置已变化，刷新结果未采用，请重新刷新目录', 409)
+        }
         const message = error instanceof Error ? error.message : String(error)
         const cachedCount = models.filter((model) => servedByRoot(model, gw.root)).length
         if (!gw.configuredRoot && isLoopbackConnectionError(error)) {
@@ -212,18 +223,22 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
       const next = toPiModels(entries, gw.root)
       // 发布前守卫：fetch 期间配置已切换（root/token 任一变化）的挂起结果
       // 绝不发布到新网关名下（publish 会返回 false，由调用方世代判定）。
-      if (!sameGateway(gw, gateway())) {
+      if (!isSameCurrentGateway(gw)) {
         throw new HelmxError('magpie_gateway_changed', '网关配置已变化，刷新结果未采用，请重新刷新目录', 409)
       }
       const published = await context.publish({
         persist: { models: next, checkedAt: Date.now() },
         update: () => {
+          if (!isSameCurrentGateway(gw)) return
           install(next)
-          syncedOnce = true
+          syncedGateway = gw
           lastIdleProbeError = undefined
         },
       })
       if (!published) return
+      if (!isSameCurrentGateway(gw)) {
+        throw new HelmxError('magpie_gateway_changed', '网关配置已变化，刷新结果未采用，请重新刷新目录', 409)
+      }
       onCatalogChange?.({ gateway: gw, ok: true, modelCount: next.length })
     },
     stream: (model, context, streamOptions) => {
@@ -239,7 +254,7 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
   return {
     provider,
     models: () => models.filter((model) => servedByRoot(model, gateway().root)),
-    synced: () => syncedOnce,
+    synced: (snapshot) => syncedGateway !== undefined && sameGateway(syncedGateway, snapshot ?? gateway()),
     lastIdleError: () => lastIdleProbeError,
     primePrefetchedCatalog(gwSnapshot, entries) {
       prefetchedCatalog = { gateway: gwSnapshot, entries }

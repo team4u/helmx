@@ -1204,3 +1204,102 @@ test('node-skills optimizations: shadowed Hub IDs skip SKILL.md/references IO, c
   assert.match(overCap.reason, new RegExp(String(MAX_NODE_SKILL_REFERENCES)))
   assert.ok(bucketListCalls <= 6, `must early-exit at 513 files instead of scanning all 10 buckets (scanned ${bucketListCalls})`)
 })
+
+test('node skill ID / fallback name / references / shadowedSkillIds / diagnostics / readNodeSkillFile errors are redacted', { timeout: 60_000 }, async (t) => {
+  const { MAX_NODE_SKILL_FILE_BYTES, readNodeSkillFile } = await import('../src/profile.js')
+  const secretA = 'sk-id-secret-alpha'
+  const secretB = 'sk-id-secret-beta'
+  const ws = mkdtempSync(join(tmpdir(), 'helmx-node-skills-id-redact-'))
+  t.after(() => rmSync(ws, { recursive: true, force: true }))
+
+  // Skill with secret in directory id, omitted frontmatter.name (falls back to id), and secret in reference path
+  writeNodeSkill(
+    ws,
+    `tool-${secretA}-${secretB}`,
+    '---\ndescription: safe body\n---\n# body\n',
+    { [`references/${secretA}.md`]: 'ref' },
+  )
+  writeNodeSkill(ws, `hub-${secretA}`, SKILL_MD('Hub Shadowed', 'desc'))
+
+  let activeSecrets = [secretA]
+  const dynamicRedact = (text: string): string => {
+    let out = text
+    for (const s of activeSecrets) out = out.split(s).join('[REDACTED]')
+    return out
+  }
+  const baseEnv = new NodeExecutionEnv({ cwd: ws })
+  const host = {
+    nodeIpc: { isOnline: () => true },
+    redact: dynamicRedact,
+    executionEnv: () => baseEnv,
+  }
+  let fakeNow = 50_000
+
+  // 1) Fresh scan redacts secretA from id, fallback name, references, and shadowedSkillIds
+  const fresh = await scanNodeSkills(host as never, 'local', ws, {
+    shadowedIds: new Set([`hub-${secretA}`]),
+    cacheTtlMs: 5_000,
+    now: () => fakeNow,
+  })
+  assert.equal(fresh.kind, 'ok')
+  assert.equal(JSON.stringify(fresh).includes(secretA), false, 'fresh scan output must not leak secret in skill id/name/refs/shadowedSkillIds')
+  assert.equal(fresh.skills[0]!.id, `tool-[REDACTED]-${secretB}`)
+  assert.equal(fresh.skills[0]!.name, `tool-[REDACTED]-${secretB}`)
+  assert.deepEqual(fresh.skills[0]!.references, ['references/[REDACTED].md'])
+  assert.deepEqual(fresh.shadowedSkillIds, ['hub-[REDACTED]'])
+
+  // 2) Cache hit re-redacts newly registered secretB from id, fallback name, references, and shadowedSkillIds
+  activeSecrets = [secretA, secretB]
+  fakeNow += 1_000
+  const cached = await scanNodeSkills(host as never, 'local', ws, {
+    shadowedIds: new Set([`hub-${secretA}`]),
+    cacheTtlMs: 5_000,
+    now: () => fakeNow,
+  })
+  assert.equal(cached.kind, 'ok')
+  assert.equal(JSON.stringify(cached).includes(secretA), false)
+  assert.equal(JSON.stringify(cached).includes(secretB), false, 'cache hit must re-redact newly added secret from skill id/name')
+  assert.equal(cached.skills[0]!.id, 'tool-[REDACTED]-[REDACTED]')
+  assert.equal(cached.skills[0]!.name, 'tool-[REDACTED]-[REDACTED]')
+
+  // 3) before_turn system prompt catalog must not leak secret in skill id
+  const env = await makeEnv({ redact: dynamicRedact })
+  t.after(() => env.close())
+  const catalog = skillSection(await runBeforeTurn(env, makeTurn(ws)))
+  assert.ok(catalog !== undefined)
+  assert.equal(catalog.includes(secretA), false)
+  assert.equal(catalog.includes(secretB), false)
+  assert.ok(catalog.includes('tool-[REDACTED]-[REDACTED]'))
+
+  // 4) Unavailable diagnostic redacts skill id & path (e.g. oversized SKILL.md)
+  const badWs = mkdtempSync(join(tmpdir(), 'helmx-node-skills-bad-id-'))
+  t.after(() => rmSync(badWs, { recursive: true, force: true }))
+  writeNodeSkill(badWs, `big-${secretA}`, 'x'.repeat(MAX_NODE_SKILL_FILE_BYTES + 16))
+  const badHost = {
+    nodeIpc: { isOnline: () => true },
+    redact: dynamicRedact,
+    executionEnv: () => new NodeExecutionEnv({ cwd: badWs }),
+  }
+  const unavail = await scanNodeSkills(badHost as never, 'local', badWs, { cacheTtlMs: 0 })
+  assert.equal(unavail.kind, 'unavailable')
+  assert.equal(unavail.reason.includes(secretA), false, 'unavailable diagnostic must redact skill id and path')
+  assert.ok(unavail.reason.includes('[REDACTED]'))
+
+  // 5) readNodeSkillFile errors (validation_error / not_found / node_offline) redact skillId & path in message and details
+  const assertErrRedacted = async (fn: () => Promise<unknown>, expectedCode: string): Promise<void> => {
+    try {
+      await fn()
+      assert.fail(`expected ${expectedCode}`)
+    } catch (err) {
+      assert.ok(err instanceof HelmxError)
+      assert.equal(err.code, expectedCode)
+      assert.equal(err.message.includes(secretA), false, `${expectedCode} message must redact secret: ${err.message}`)
+      assert.equal(JSON.stringify(err.details ?? {}).includes(secretA), false, `${expectedCode} details must redact secret`)
+    }
+  }
+  await assertErrRedacted(() => readNodeSkillFile(host as never, 'local', ws, `../${secretA}`, 'SKILL.md'), 'validation_error')
+  await assertErrRedacted(() => readNodeSkillFile(host as never, 'local', ws, 'valid-id', `../${secretA}`), 'validation_error')
+  await assertErrRedacted(() => readNodeSkillFile(host as never, 'local', ws, `missing-${secretA}`, 'SKILL.md'), 'not_found')
+  const offlineHost = { ...host, nodeIpc: { isOnline: () => false } }
+  await assertErrRedacted(() => readNodeSkillFile(offlineHost as never, 'remote-1', ws, `remote-${secretA}`, 'SKILL.md'), 'node_offline')
+})

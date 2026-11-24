@@ -25,7 +25,7 @@
  */
 import { COMPOSER_STATUS_SLOT, HelmxError, type PluginDefinition, type TurnSettledPayload } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
-import { toPiModels, type PiMagpieModel } from './magpie/catalog.js'
+import { servedByRoot, toPiModels, type PiMagpieModel } from './magpie/catalog.js'
 import {
   DEFAULT_MAGPIE_REFRESH_INTERVAL_SEC,
   DEFAULT_MAGPIE_ROOT,
@@ -299,8 +299,19 @@ export function createMagpiePlugin(): PluginDefinition {
         }
       }
 
+      const isCurrentGateway = (snapshot: MagpieGatewayRef): boolean => {
+        try {
+          return sameGateway(snapshot, gateway())
+        } catch {
+          return false
+        }
+      }
+
+      const gatewayChangedError = (): HelmxError =>
+        new HelmxError('magpie_gateway_changed', '网关配置已变化，刷新结果未采用，请重新刷新目录', 409)
+
       const modelsForSnapshot = (snapshot: MagpieGatewayRef): PiMagpieModel[] =>
-        handle.models().filter((model) => model.baseUrl.startsWith(snapshot.root))
+        handle.models().filter((model) => servedByRoot(model, snapshot.root))
 
       /** Pre-publish guard: write into the doc only while the snapshot is still the effective config. */
       const writeStatus = (
@@ -309,7 +320,12 @@ export function createMagpiePlugin(): PluginDefinition {
         options?: { clearLastError?: boolean; clearQuotasError?: boolean; skipIfUnchanged?: boolean },
       ): void => {
         if (stopping) return
-        const currentGateway = gateway()
+        let currentGateway: MagpieGatewayRef
+        try {
+          currentGateway = gateway()
+        } catch {
+          return
+        }
         if (!sameGateway(snapshot, currentGateway)) return
         const prev = status.get()
         const sameRoot = prev.gatewayUrl === snapshot.root
@@ -359,7 +375,7 @@ export function createMagpiePlugin(): PluginDefinition {
         kept: boolean,
         options?: { preserveQuotasOnError?: boolean; skipIfUnchanged?: boolean },
       ): Promise<void> => {
-        if (stopping) return
+        if (stopping || !isCurrentGateway(snapshot)) return
         const { controller, done } = beginRequest()
         try {
           const prev = status.get()
@@ -377,7 +393,7 @@ export function createMagpiePlugin(): PluginDefinition {
             quotas = options?.preserveQuotasOnError && sameRoot ? prev.quotas : []
             diagnostics.push(`quotas unavailable: ${quotaErr}`)
           }
-          if (stopping || controller.signal.aborted) return
+          if (stopping || controller.signal.aborted || !isCurrentGateway(snapshot)) return
           const now = Date.now()
           writeStatus(
             snapshot,
@@ -464,7 +480,7 @@ export function createMagpiePlugin(): PluginDefinition {
               if (stopping || controller.signal.aborted) return
               const snapshotInner = gateway()
               const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
-              if (stopping || controller.signal.aborted) return
+              if (stopping || controller.signal.aborted || !isCurrentGateway(snapshotInner)) return
               const error = result.errors['magpie']
               if (error !== undefined) {
                 publishCatalogStatus(snapshotInner, false, error)
@@ -476,12 +492,16 @@ export function createMagpiePlugin(): PluginDefinition {
                 return
               }
               publishCatalogStatus(snapshotInner, true)
-              if (stopping || controller.signal.aborted) return
+              if (stopping || controller.signal.aborted || !isCurrentGateway(snapshotInner)) return
               await refreshSidecar(snapshotInner, true)
             } catch (error) {
               if (stopping || controller.signal.aborted) return
               // Composition-layer port exception (not a gateway diagnostic): record honestly, do not block startup
-              publishCatalogStatus(gateway(), false, error)
+              try {
+                publishCatalogStatus(gateway(), false, error)
+              } catch {
+                /* invalid gateway config surfaces on explicit actions */
+              }
             } finally {
               done()
             }
@@ -503,7 +523,12 @@ export function createMagpiePlugin(): PluginDefinition {
         if (stopping) return
         const model = payload.conversation.model
         if (!model.startsWith(`${MAGPIE_PROVIDER_ID}/`)) return
-        const snapshot = gateway()
+        let snapshot: MagpieGatewayRef
+        try {
+          snapshot = gateway()
+        } catch {
+          return
+        }
         // No await: never blocks turn_settled; failures only enter diagnostics, retried at the next settled
         void refreshSidecar(snapshot, true, { skipIfUnchanged: true }).catch((error) => {
           if (stopping) return
@@ -574,6 +599,7 @@ export function createMagpiePlugin(): PluginDefinition {
             try {
               entries = await fetchCatalog(snapshot.root, snapshot.token, controller.signal, fetchImpl)
             } catch (error) {
+              if (!isCurrentGateway(snapshot)) throw gatewayChangedError()
               const message = sanitizeError(error)
               publishCatalogStatus(snapshot, false, message, { skipIfUnchanged: true })
               throw new HelmxError(
@@ -585,12 +611,14 @@ export function createMagpiePlugin(): PluginDefinition {
             } finally {
               done()
             }
+            if (!isCurrentGateway(snapshot)) throw gatewayChangedError()
             const candidate = toPiModels(entries, snapshot.root)
             const currentModels = modelsForSnapshot(snapshot)
-            const changed = !handle.synced() || catalogFingerprint(candidate) !== catalogFingerprint(currentModels)
+            const changed = !handle.synced(snapshot) || catalogFingerprint(candidate) !== catalogFingerprint(currentModels)
             if (changed) {
               handle.primePrefetchedCatalog(snapshot, entries)
               const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
+              if (!isCurrentGateway(snapshot)) throw gatewayChangedError()
               const idleError = handle.lastIdleError()
               const error = result.errors['magpie'] ?? (idleError?.root === snapshot.root ? idleError.error : undefined)
               publishCatalogStatus(snapshot, error === undefined, error)
@@ -605,12 +633,15 @@ export function createMagpiePlugin(): PluginDefinition {
             } else {
               publishCatalogStatus(snapshot, true, undefined, { skipIfUnchanged: true })
             }
+            if (!isCurrentGateway(snapshot)) throw gatewayChangedError()
             await refreshSidecar(snapshot, false, { preserveQuotasOnError: true, skipIfUnchanged: true })
+            if (!isCurrentGateway(snapshot)) throw gatewayChangedError()
             const doc = status.get()
             return { refreshed: true, modelCount: doc.modelCount, reachable: true }
           }
 
           const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
+          if (!isCurrentGateway(snapshot)) throw gatewayChangedError()
           const idleError = handle.lastIdleError()
           const error = result.errors['magpie'] ?? (idleError?.root === snapshot.root ? idleError.error : undefined)
           publishCatalogStatus(snapshot, error === undefined, error)
@@ -623,6 +654,7 @@ export function createMagpiePlugin(): PluginDefinition {
             )
           }
           await refreshSidecar(snapshot, false)
+          if (!isCurrentGateway(snapshot)) throw gatewayChangedError()
           const doc = status.get()
           return { refreshed: true, modelCount: doc.modelCount, reachable: true }
         },

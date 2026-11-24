@@ -1252,3 +1252,88 @@ test('magpie25: onlyIfChanged 目录变化仅请求一次 /v1/models、turn_sett
   }
 })
 
+test('magpie26: normalizeRoot / resolveGateway 严格拒绝 userinfo、query、hash、反斜杠、前导斜杠与控制字符', { timeout: 60_000 }, () => {
+  const rejected = [
+    'http://user:pass@127.0.0.1:3425',
+    'http://@127.0.0.1:3425',
+    'mailto:foo@bar.com',
+    '///etc/passwd',
+    'http://///etc/passwd',
+    'http://127.0.0.1:3425?foo=bar',
+    'http://127.0.0.1:3425#frag',
+    'http://127.0.0.1:3425\\evil',
+    'http://127.0.0.1:3425\n/v1',
+    'http://127.0.0.1:3425\t/v1',
+    'http://',
+  ]
+  for (const bad of rejected) {
+    assert.equal(normalizeRoot(bad), undefined, `normalizeRoot 必须拒绝非法地址: ${JSON.stringify(bad)}`)
+    assert.throws(
+      () => resolveGateway({ gatewayUrl: bad }, {}),
+      (err: unknown) => err instanceof HelmxError && err.code === 'magpie_invalid_gateway_url' && err.status === 400,
+      `resolveGateway 必须对 ${JSON.stringify(bad)} 显式报 400 magpie_invalid_gateway_url`,
+    )
+  }
+  assert.equal(normalizeRoot('[::1]:3425'), 'http://[::1]:3425')
+  assert.equal(normalizeRoot('https://gw.example.com/proxy/v1/'), 'https://gw.example.com/proxy')
+})
+
+test('magpie27: refresh(onlyIfChanged / full) 在途切网关拒 409 且不向旧网关拉配额；新网关空目录不误判已同步', { timeout: 60_000 }, async () => {
+  let releaseGate1: (() => void) | undefined
+  let releaseGate2: (() => void) | undefined
+  const backendA: FakeBackend = { models: CATALOG, quotas: QUOTAS }
+  const backendB: FakeBackend = { models: { data: [] }, quotas: { data: [] } }
+  const ROOT_B = 'http://127.0.0.1:4425'
+  const ROOT_C = 'http://127.0.0.1:4426'
+  const env = await makeEnv({ backendAtDefault: backendA })
+  env.backends.set(ROOT_B, backendB)
+  env.backends.set(ROOT_C, { models: { data: CATALOG.data.slice(0, 1) }, quotas: { data: [] } })
+  try {
+    await env.host.enable(MAGPIE)
+    await waitFor(() => statusDoc(env).reachable === true && statusDoc(env).modelCount === 5)
+
+    // 1) onlyIfChanged=true 在 /v1/models 挂起期间切网关：必须抛 409 magpie_gateway_changed 且不得再请求旧网关 /v1/magpie/quotas
+    backendA.gateModels = new Promise<void>((r) => { releaseGate1 = r })
+    env.fetchState.calls.length = 0
+    const pendingPoll = env.host.invokeAction(MAGPIE, 'refresh', { onlyIfChanged: true })
+    await waitFor(() => env.fetchState.calls.some((c) => c.includes('/v1/models') && c.includes(DEFAULT_MAGPIE_ROOT)))
+    await env.host.setConfig(MAGPIE, { gatewayUrl: ROOT_B })
+    releaseGate1!()
+    await assert.rejects(
+      () => pendingPoll,
+      (err: unknown) => err instanceof HelmxError && err.code === 'magpie_gateway_changed' && err.status === 409,
+    )
+    assert.equal(
+      env.fetchState.calls.some((c) => c.includes('/v1/magpie/quotas') && c.includes(DEFAULT_MAGPIE_ROOT)),
+      false,
+      '切网关后绝不向旧网关发起配额请求',
+    )
+
+    // 2) 切到空目录的新网关 B 后调用 onlyIfChanged=true：synced 按网关隔离，不能因旧网关已同步过而跳过 refreshModels
+    const refreshCallsBeforeB = env.refreshCalls.length
+    const resB = (await env.host.invokeAction(MAGPIE, 'refresh', { onlyIfChanged: true })) as { refreshed: boolean; modelCount: number }
+    assert.equal(resB.refreshed, true)
+    assert.equal(resB.modelCount, 0)
+    assert.equal(env.refreshCalls.length, refreshCallsBeforeB + 1, '新网关首次 onlyIfChanged 必须触发一次完整 refreshModels 同步')
+
+    // 3) 完整 refresh 在途切网关到 C：同样返回 409 magpie_gateway_changed 且不向 B 发起配额请求
+    backendB.gateModels = new Promise<void>((r) => { releaseGate2 = r })
+    env.fetchState.calls.length = 0
+    const pendingFull = env.host.invokeAction(MAGPIE, 'refresh', {})
+    await waitFor(() => env.fetchState.calls.some((c) => c.includes('/v1/models') && c.includes(ROOT_B)))
+    await env.host.setConfig(MAGPIE, { gatewayUrl: ROOT_C })
+    releaseGate2!()
+    await assert.rejects(
+      () => pendingFull,
+      (err: unknown) => err instanceof HelmxError && err.code === 'magpie_gateway_changed' && err.status === 409,
+    )
+    assert.equal(
+      env.fetchState.calls.some((c) => c.includes('/v1/magpie/quotas') && c.includes(ROOT_B)),
+      false,
+      '完整刷新在途切网关后绝不向旧网关 B 发起配额请求',
+    )
+  } finally {
+    await env.close()
+  }
+})
+

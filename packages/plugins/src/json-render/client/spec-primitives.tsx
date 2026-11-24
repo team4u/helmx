@@ -12,8 +12,9 @@
  * submit states, misuse notices) resolves from copy.ts against the
  * render-context locale; any text declared in the spec itself (titles,
  * labels, options) is model output and passes through verbatim. Primitives
- * are invoked as plain functions (see SpecNodeView), so hooks are not an
- * option — the locale flows in through the render context.
+ * are rendered as distinct React components by SpecNodeView (keeping per-node
+ * hook counts stable across component changes), with the locale flowing in
+ * through the render context.
  */
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react'
 import { HelmxIcon, Select, Checkbox, Tabs, TabsList, TabsTrigger, PluginSlot, MarkdownText } from '@helmx/plugin-client'
@@ -70,6 +71,14 @@ function str(value: unknown, fallback = ''): string {
 
 function bool(value: unknown): boolean {
   return value === true
+}
+
+function ownProp<T>(record: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined
+}
+
+function asPlainObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 }
 
 /** Re-evaluate inside a primitive (e.g. $row injection for Table row actions: local scope override). */
@@ -153,7 +162,7 @@ function TextImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   const rawText = evalIn<unknown>(node.props['text'] ?? node.props['content'], ctx.scope)
   const lineClamp = evalIn<unknown>(node.props['lineClamp'], ctx.scope)
   const text = typeof rawText === 'string' ? rawText : formatSpecText(rawText)
-  const style: Record<string, unknown> = { ...(TEXT_VARIANT_STYLE[variant] ?? {}) }
+  const style: Record<string, unknown> = { ...(ownProp(TEXT_VARIANT_STYLE, variant) ?? {}) }
   if (typeof lineClamp === 'number' && lineClamp > 0) {
     style['display'] = '-webkit-box'
     style['WebkitLineClamp'] = lineClamp
@@ -261,7 +270,7 @@ function CalloutImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderC
   const tone = str(evalIn(node.props['tone'], ctx.scope), 'info')
   const title = str(evalIn(node.props['title'], ctx.scope))
   const text = str(evalIn(node.props['text'], ctx.scope))
-  const cls = CALLOUT_TONE_CLASS[tone] ?? 'callout'
+  const cls = ownProp(CALLOUT_TONE_CLASS, tone) ?? 'callout'
   const iconName =
     tone === 'warn' ? 'alert-triangle' : tone === 'err' ? 'alert-circle' : tone === 'ok' ? 'check-circle' : 'alert-circle'
   return (
@@ -295,7 +304,7 @@ function StepsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
   return (
     <div className="list">
       {items.map((item, i) => {
-        const meta = STEP_STATUS_META[item.status] ?? STEP_STATUS_META['pending']!
+        const meta = ownProp(STEP_STATUS_META, item.status) ?? STEP_STATUS_META['pending']!
         return (
           <div key={i} className="row">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
@@ -372,13 +381,17 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
       }))
     : []
   const rawRows = evalIn<unknown>(node.props['rows'], ctx.scope)
-  const rows: Array<Record<string, unknown>> = Array.isArray(rawRows) ? (rawRows as Array<Record<string, unknown>>) : []
+  const rows: Array<Record<string, unknown>> = Array.isArray(rawRows)
+    ? rawRows.map(asPlainObject).filter((r): r is Record<string, unknown> => r !== null)
+    : []
   // rowActions keep their raw templates: {$row.xxx} inside them depends on
   // the row-level scope — evaluating at the outer layer would interpolate them
   // into empty strings too early (unrecoverable at click time); they are
   // evaluated at row-render time with $row injected
   const rawRowActions = node.props['rowActions']
-  const rowActions = Array.isArray(rawRowActions) ? (rawRowActions as Array<Record<string, unknown>>) : []
+  const rowActions = Array.isArray(rawRowActions)
+    ? rawRowActions.map(asPlainObject).filter((ra): ra is Record<string, unknown> => ra !== null)
+    : []
   const empty = str(evalIn(node.props['empty'], ctx.scope))
 
   const columnKeys = columns.length > 0 ? columns.map((c) => c.key) : rows[0] !== undefined ? Object.keys(rows[0]!) : []
@@ -414,7 +427,7 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
             return (
               <tr key={i}>
                 {columnKeys.map((key, j) => (
-                  <td key={j}>{formatSpecText(row[key])}</td>
+                  <td key={j}>{formatSpecText(ownProp(row, key))}</td>
                 ))}
                 {rowActions.length > 0 && (
                   <td style={{ textAlign: 'right' }}>
@@ -719,7 +732,7 @@ function ButtonImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
   const pendingKey = useId()
   const pending = ctx.isPending(pendingKey)
   const succeeded = ctx.isSucceeded?.(pendingKey) === true
-  const cls = BUTTON_VARIANT_CLASS[variant] ?? 'btn'
+  const cls = ownProp(BUTTON_VARIANT_CLASS, variant) ?? 'btn'
   const iconState = actionIconState(pending, succeeded, icon)
   return (
     <button
@@ -736,9 +749,15 @@ function ButtonImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
 }
 
 function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
-  const rawActions = evalIn<unknown>(node.props['actions'], ctx.scope)
+  // Keep inline action descriptors raw so `a['action']` is evaluated lazily by
+  // `resolveSpecAction` (preserves raw `helmx:send` targets instead of collapsing
+  // missing bindings into `undefined`).
+  const actionsProp = node.props['actions']
+  const rawActions = typeof actionsProp === 'string' ? evalIn<unknown>(actionsProp, ctx.scope) : actionsProp
   const actionBarId = useId()
-  const actions = Array.isArray(rawActions) ? (rawActions as Array<Record<string, unknown>>) : []
+  const actions = Array.isArray(rawActions)
+    ? rawActions.map(asPlainObject).filter((a): a is Record<string, unknown> => a !== null)
+    : []
   if (actions.length > 0) {
     return (
       <div className="stack-row">
@@ -750,7 +769,7 @@ function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
           const pendingKey = `${actionBarId}-${i}`
           const pending = ctx.isPending(pendingKey)
           const succeeded = ctx.isSucceeded?.(pendingKey) === true
-          const cls = BUTTON_VARIANT_CLASS[variant] ?? 'btn'
+          const cls = ownProp(BUTTON_VARIANT_CLASS, variant) ?? 'btn'
           const iconState = actionIconState(pending, succeeded, icon)
           return (
             <button
@@ -773,13 +792,24 @@ function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
 }
 
 function TabsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
-  const rawTabs = evalIn<unknown>(node.props['tabs'], ctx.scope)
+  // Keep inline tab entries raw: eagerly evaluating `node.props['tabs']` would
+  // recursively resolve child templates (`$row`, `$value`, pointer keys, and
+  // `helmx:send` targets) in the outer scope before child primitives mount, and
+  // would break `TabChildren`'s `useMemo` reference stability.
+  const tabsProp = node.props['tabs']
+  const rawTabs = typeof tabsProp === 'string' ? evalIn<unknown>(tabsProp, ctx.scope) : tabsProp
   const tabs = Array.isArray(rawTabs)
-    ? (rawTabs as Array<Record<string, unknown>>).map((t, i) => ({
-        id: str(t['id'], `tab-${i}`),
-        label: str(t['label'] ?? t['title'], jsonRenderTabFallbackTitle(i + 1, ctx.locale)),
-        childrenRaw: t['children'],
-      }))
+    ? rawTabs
+        .map((entry, i) => {
+          const t = asPlainObject(entry)
+          if (t === null) return null
+          return {
+            id: str(evalIn(t['id'], ctx.scope), `tab-${i}`),
+            label: str(evalIn(t['label'] ?? t['title'], ctx.scope), jsonRenderTabFallbackTitle(i + 1, ctx.locale)),
+            childrenRaw: t['children'],
+          }
+        })
+        .filter((t): t is { id: string; label: string; childrenRaw: unknown } => t !== null)
     : []
   const [activeId, setActiveId] = useState(tabs[0]?.id)
   const active = tabs.find((t) => t.id === activeId) ?? tabs[0]
@@ -799,7 +829,7 @@ function TabsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
       </TabsList>
       {active !== undefined && (
         <div style={{ padding: '12px 4px' }}>
-          <TabChildren childrenRaw={active.childrenRaw} ctx={ctx} />
+          <TabChildren key={active.id} childrenRaw={active.childrenRaw} ctx={ctx} />
         </div>
       )}
     </Tabs>
@@ -855,55 +885,42 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
 }
 
 // ---------------------------------------------------------------------------
-// Dispatch table
+// Component dispatch (static switch: immune to prototype-chain lookups and
+// guarantees distinct React fibers / stable hook counts across component swaps)
 // ---------------------------------------------------------------------------
-
-type SpecPrimitiveImpl = (args: { node: NormalizedSpecNode; ctx: SpecRenderContext }) => ReactNode
-
-/** Primitive-name contract private to this plugin (migrated out of protocol; registry at the end of this file). */
-type SpecPrimitiveName =
-  | 'Stack' | 'Card' | 'Text' | 'Badge' | 'Markdown'
-  | 'MetricGrid' | 'MetricCard' | 'KeyValueList' | 'Callout'
-  | 'Steps' | 'BarList' | 'Table' | 'Accordion'
-  | 'TextInput' | 'Select' | 'Switch' | 'CheckboxGroup'
-  | 'Button' | 'ActionBar' | 'Tabs' | 'Slot'
-
-const PRIMITIVES: Record<SpecPrimitiveName, SpecPrimitiveImpl> = {
-  Stack: StackImpl,
-  Card: CardImpl,
-  Text: TextImpl,
-  Badge: BadgeImpl,
-  Markdown: MarkdownImpl,
-  MetricGrid: MetricGridImpl,
-  MetricCard: MetricCardImpl,
-  KeyValueList: KeyValueListImpl,
-  Callout: CalloutImpl,
-  Steps: StepsImpl,
-  BarList: BarListImpl,
-  Table: TableImpl,
-  Accordion: AccordionImpl,
-  TextInput: TextInputImpl,
-  Select: SelectImpl,
-  Switch: SwitchImpl,
-  CheckboxGroup: CheckboxGroupImpl,
-  Button: ButtonImpl,
-  ActionBar: ActionBarImpl,
-  Tabs: TabsImpl,
-  Slot: SlotImpl,
-}
 
 /** Render one normalized node (unknown components get an explicit notice, never silently swallowed). */
 function SpecNodeView({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }): ReactNode {
-  const impl = (PRIMITIVES as Record<string, SpecPrimitiveImpl | undefined>)[node.component]
-  if (impl === undefined) {
-    return (
-      <div className="callout callout--warning">
-        <HelmxIcon name="alert-triangle" size={13} />
-        <span>{jsonRenderUnknownComponent(node.component, ctx.locale)}</span>
-      </div>
-    )
+  switch (node.component) {
+    case 'Stack': return <StackImpl node={node} ctx={ctx} />
+    case 'Card': return <CardImpl node={node} ctx={ctx} />
+    case 'Text': return <TextImpl node={node} ctx={ctx} />
+    case 'Badge': return <BadgeImpl node={node} ctx={ctx} />
+    case 'Markdown': return <MarkdownImpl node={node} ctx={ctx} />
+    case 'MetricGrid': return <MetricGridImpl node={node} ctx={ctx} />
+    case 'MetricCard': return <MetricCardImpl node={node} ctx={ctx} />
+    case 'KeyValueList': return <KeyValueListImpl node={node} ctx={ctx} />
+    case 'Callout': return <CalloutImpl node={node} ctx={ctx} />
+    case 'Steps': return <StepsImpl node={node} ctx={ctx} />
+    case 'BarList': return <BarListImpl node={node} ctx={ctx} />
+    case 'Table': return <TableImpl node={node} ctx={ctx} />
+    case 'Accordion': return <AccordionImpl node={node} ctx={ctx} />
+    case 'TextInput': return <TextInputImpl node={node} ctx={ctx} />
+    case 'Select': return <SelectImpl node={node} ctx={ctx} />
+    case 'Switch': return <SwitchImpl node={node} ctx={ctx} />
+    case 'CheckboxGroup': return <CheckboxGroupImpl node={node} ctx={ctx} />
+    case 'Button': return <ButtonImpl node={node} ctx={ctx} />
+    case 'ActionBar': return <ActionBarImpl node={node} ctx={ctx} />
+    case 'Tabs': return <TabsImpl node={node} ctx={ctx} />
+    case 'Slot': return <SlotImpl node={node} ctx={ctx} />
+    default:
+      return (
+        <div className="callout callout--warning">
+          <HelmxIcon name="alert-triangle" size={13} />
+          <span>{jsonRenderUnknownComponent(node.component, ctx.locale)}</span>
+        </div>
+      )
   }
-  return impl({ node, ctx })
 }
 
 /** Render a list of normalized nodes. */
