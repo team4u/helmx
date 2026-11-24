@@ -116,17 +116,40 @@ function checkConversationSummary(v: unknown): string | null {
   );
 }
 
+function checkConversationAttachmentRef(v: unknown): string | null {
+  if (!isObj(v)) return 'each item in field attachments must be a ConversationAttachmentRef object';
+  return (
+    (typeof v.id === 'string' && v.id.trim().length > 0 ? null : 'field attachment.id must be a non-empty string') ??
+    reqString(v, 'name') ??
+    reqString(v, 'mimeType') ??
+    (typeof v.size === 'number' && Number.isSafeInteger(v.size) && v.size >= 0
+      ? null
+      : 'field attachment.size must be a non-negative safe integer')
+  );
+}
+
 function checkConversationInput(v: unknown): string | null {
   if (!isObj(v)) return 'each input item must be ConversationInput';
-  return (
+  let err =
     reqString(v, 'id') ??
     strAllowEmpty(v, 'text') ??
-    (['human', 'agent', 'trigger'].includes(String(v.origin)) ? null : 'field origin must be human|agent|trigger') ??
-    (v.whenBusy === undefined || ['steer', 'followUp', 'reject'].includes(String(v.whenBusy))
+    (typeof v.origin === 'string' && ['human', 'agent', 'trigger'].includes(v.origin)
+      ? null
+      : 'field origin must be human|agent|trigger') ??
+    (v.whenBusy === undefined ||
+    (typeof v.whenBusy === 'string' && ['steer', 'followUp', 'reject'].includes(v.whenBusy))
       ? null
       : 'field whenBusy must be steer|followUp|reject if present') ??
-    reqNonNegativeInt(v, 'createdAt')
-  );
+    reqNonNegativeInt(v, 'createdAt') ??
+    (v.meta === undefined || isObj(v.meta) ? null : 'field meta must be a plain object if present');
+  if (err) return err;
+  if (v.attachments !== undefined) {
+    if (!Array.isArray(v.attachments)) return 'field attachments must be an array if present';
+    for (const item of v.attachments as unknown[]) {
+      if ((err = checkConversationAttachmentRef(item))) return err;
+    }
+  }
+  return null;
 }
 
 const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
@@ -182,9 +205,10 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
       (v.reattach === undefined || isObj(v.reattach) ? null : 'field reattach must be an object if present') ??
       (v.isolation === undefined || typeof v.isolation === 'string' ? null : 'field isolation must be a string if present') ??
       (v.schema === undefined || isObj(v.schema) ? null : 'field schema must be an object if present') ??
-      (v.attachments === undefined || (Array.isArray(v.attachments) && v.attachments.every((a) => typeof a === 'string'))
+      (v.attachments === undefined ||
+      (Array.isArray(v.attachments) && v.attachments.every((a) => typeof a === 'string' && a.trim().length > 0))
         ? null
-        : 'field attachments must be a string array if present') ??
+        : 'field attachments must be a non-empty string array if present') ??
       (v.meta === undefined || isObj(v.meta) ? null : 'field meta must be a plain object if present') ??
       (v.onResolved === undefined || typeof v.onResolved === 'function' ? null : 'field onResolved must be a function if present') ??
       (v.onGateResult === undefined || typeof v.onGateResult === 'function' ? null : 'field onGateResult must be a function if present') ??

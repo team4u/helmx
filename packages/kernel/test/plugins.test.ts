@@ -4041,3 +4041,101 @@ test('concurrent register race with colliding tool or CLI command commits only o
     }
   }
 });
+
+test('input/before_turn/turn_settled hooks validate ConversationInput attachments and meta schemas; ConversationInputPipeline enforces boundary independently', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  try {
+    let transformedInput: unknown;
+    await host.register({
+      id: 'p:input-attachment-schema',
+      definePlugin: (ctx) => {
+        ctx.hook.onInput((payload) => ({
+          action: 'transform',
+          value: { ...payload, input: transformedInput as never },
+        }));
+        ctx.hook.onBeforeTurn(() => undefined);
+        ctx.hook.onAgentSpawn(async (req, next) => {
+          await next(req);
+        });
+      },
+    });
+    const baseInput = {
+      id: 'in-1',
+      text: 'hello',
+      origin: 'human' as const,
+      createdAt: 1_000,
+    };
+    const validRef = { id: 'art-1', name: 'note.txt', mimeType: 'text/plain', size: 0 };
+
+    // Valid attachments + meta pass transform validation.
+    transformedInput = { ...baseInput, meta: { trace: 'ok' }, attachments: [validRef] };
+    const ok = await host.runHook('input', { conversationId: 1, input: baseInput });
+    assert.equal(ok.action, 'transform');
+
+    const invalidInputs: unknown[] = [
+      { ...baseInput, attachments: 'not-array' },
+      { ...baseInput, attachments: [null] },
+      { ...baseInput, attachments: ['art-1'] },
+      { ...baseInput, attachments: [{ ...validRef, id: '   ' }] },
+      { ...baseInput, attachments: [{ ...validRef, name: '' }] },
+      { ...baseInput, attachments: [{ ...validRef, mimeType: '' }] },
+      { ...baseInput, attachments: [{ ...validRef, size: -1 }] },
+      { ...baseInput, attachments: [{ ...validRef, size: 1.5 }] },
+      { ...baseInput, meta: 'not-an-object' },
+      { ...baseInput, meta: [] },
+    ];
+    for (const bad of invalidInputs) {
+      transformedInput = bad;
+      await assertRejectsCode(
+        () => host.runHook('input', { conversationId: 1, input: baseInput }),
+        'invalid_hook_result',
+      );
+      await assertRejectsCode(
+        () =>
+          host.runHook('before_turn', {
+            conversation: makeConversation(1),
+            inputs: [bad as never],
+            tools: [],
+            sections: [],
+            messages: [],
+          }),
+        'invalid_hook_result',
+      );
+    }
+
+    // agent_spawn rejects blank attachment IDs.
+    await assertRejectsCode(
+      () =>
+        host.runHookAround(
+          'agent_spawn',
+          { parentConversationId: 1, prompt: 'go', attachments: ['   '] },
+          async () => ({}),
+        ),
+      'invalid_hook_result',
+    );
+  } finally {
+    await host.dispose();
+  }
+
+  // Defense-in-depth: ConversationInputPipeline.prepareInput also rejects malformed hook attachments
+  // directly with invalid_hook_result (never raw TypeError) even if runInputHook bypasses HookPipeline.
+  const { ConversationInputPipeline } = await import('../src/runtime/conversation-input.js');
+  for (const badAttachments of ['not-array', [null], [{ id: '', name: 'a', mimeType: 'text/plain', size: 1 }]]) {
+    const pipeline = new ConversationInputPipeline({
+      harness: {} as never,
+      store: {} as never,
+      tracker: {} as never,
+      stash: { redact: (t: string) => t } as never,
+      runInputHook: async (p) => {
+        const typed = p as { conversationId: number; input: Record<string, unknown> };
+        return {
+          action: 'transform',
+          value: { conversationId: typed.conversationId, input: { ...typed.input, attachments: badAttachments } },
+        };
+      },
+      resolveAuthorizedAttachments: async () => [],
+      assertMutationGuard: () => {},
+    });
+    await assertRejectsCode(() => pipeline.prepareInput(1, 'hi', undefined, undefined), 'invalid_hook_result');
+  }
+});

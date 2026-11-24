@@ -12,7 +12,7 @@
  */
 
 import type { ArtifactKind, ConversationOwnership, ConversationStatus, ConversationSummary, SearchHit } from '@helmx/protocol'
-import { HelmxError, compareCodeUnit, isArtifactKind } from '@helmx/protocol'
+import { HelmxError, compareCodeUnit, isArtifactKind, isPlainObject } from '@helmx/protocol'
 import type { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node'
 import { emitDiagnostic, type KernelDiagnosticSink } from './diagnostics.js'
 import {
@@ -191,11 +191,19 @@ export class HelmxStore {
     }>(
       'SELECT id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, owned_by, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at FROM helmx_conversations',
     )) {
+      if (row.owned_by !== null && row.owned_by !== 'human' && row.owned_by !== 'helmx') {
+        throw new HelmxError(
+          'store_data_corrupted',
+          `Persisted data corrupted (helmx_conversations#${row.id}.owned_by): invalid ownership '${String(row.owned_by)}'`,
+          500,
+          { id: row.id, ownedBy: row.owned_by },
+        )
+      }
       this.convs.set(row.id, {
         id: row.id,
         title: row.title,
         profileId: row.profile_id,
-        tags: parseStoredJson<string[]>(`helmx_conversations#${row.id}.tags`, row.tags),
+        tags: parseStoredStringArray(`helmx_conversations#${row.id}.tags`, row.tags),
         parentConversationId: row.parent_conversation_id ?? undefined,
         parentToolCallId: row.parent_tool_call_id || undefined,
         ownedBy: row.owned_by === 'helmx' ? 'helmx' : 'human',
@@ -228,14 +236,27 @@ export class HelmxStore {
     }>(
       'SELECT id, conversation_id, owner_plugin_id, spec, status, result, expected_state_seq, created_at, settled_at FROM helmx_asks',
     )) {
-      parseStoredJson<unknown>(`helmx_asks#${row.id}.spec`, row.spec)
-      if (row.result !== null) parseStoredJson<unknown>(`helmx_asks#${row.id}.result`, row.result)
+      if (!isValidAskStatus(row.status)) {
+        throw new HelmxError(
+          'store_data_corrupted',
+          `Persisted data corrupted (helmx_asks#${row.id}.status): invalid ask status '${String(row.status)}'`,
+          500,
+          { id: row.id, status: row.status },
+        )
+      }
+      parseStoredAskSpec(`helmx_asks#${row.id}.spec`, row.spec, {
+        id: row.id,
+        conversationId: row.conversation_id,
+        status: row.status,
+        expectedStateSeq: row.expected_state_seq ?? undefined,
+      })
+      if (row.result !== null) parseStoredAskResult(`helmx_asks#${row.id}.result`, row.result)
       this.asks.set(row.id, {
         id: row.id,
         conversationId: row.conversation_id,
         ownerPluginId: row.owner_plugin_id ?? undefined,
         specJson: row.spec,
-        status: row.status as AskRow['status'],
+        status: row.status,
         resultJson: row.result ?? undefined,
         expectedStateSeq: row.expected_state_seq ?? undefined,
         createdAt: row.created_at,
@@ -401,6 +422,14 @@ export class HelmxStore {
 
   upsertConv(meta: ConvMeta): void {
     this.assertWritable()
+    if (!Array.isArray(meta.tags) || meta.tags.some((t) => typeof t !== 'string')) {
+      throw new HelmxError(
+        'validation_error',
+        `Invalid conversation tags for conversation ${meta.id}: expected string array`,
+        400,
+        { id: meta.id },
+      )
+    }
     const prev = this.convs.get(meta.id)
     const titleChanged = prev?.title !== meta.title
     // Deep-copy snapshot: SQL parameters bind to snapshot values so subsequent caller mutations cannot affect queued writes.
@@ -417,10 +446,10 @@ export class HelmxStore {
       })
     }
     this.enqueue(async () => {
-      await this.db.run(
-        `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, owned_by, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at)
+      const upsertSql = `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, owned_by, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, owned_by=excluded.owned_by, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, run_duration_ms=excluded.run_duration_ms, run_started_at=excluded.run_started_at, updated_at=excluded.updated_at`,
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, owned_by=excluded.owned_by, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, run_duration_ms=excluded.run_duration_ms, run_started_at=excluded.run_started_at, updated_at=excluded.updated_at`
+      const upsertParams = [
         snap.id,
         snap.title,
         snap.profileId,
@@ -442,15 +471,22 @@ export class HelmxStore {
         snap.runStartedAt ?? null,
         snap.createdAt,
         snap.updatedAt,
-      )
-      // Title changes must update the title column across every FTS row for this conversation (routed via helmx_fts_map).
-      if (titleChanged) {
-        await this.db.run(
+      ] as const
+      if (!titleChanged) {
+        await this.db.run(upsertSql, ...upsertParams)
+        return
+      }
+      // Title changes must update helmx_conversations and helmx_conversation_fts atomically in the same transaction
+      // so a crash or SQL failure between the two statements never leaves persisted title and FTS rows out of sync.
+      const redactedTitle = this.ftsRedact(snap.title)
+      await this.db.transaction(async (tx) => {
+        await tx.run(upsertSql, ...upsertParams)
+        await tx.run(
           'UPDATE helmx_conversation_fts SET title = ? WHERE rowid IN (SELECT fts_rowid FROM helmx_fts_map WHERE conversation_id = ?)',
-          this.ftsRedact(snap.title),
+          redactedTitle,
           snap.id,
         )
-      }
+      })
     })
   }
 
@@ -564,6 +600,21 @@ export class HelmxStore {
    */
   putAsk(row: AskRow): void {
     this.assertWritable()
+    if (!isValidAskStatus(row.status)) {
+      throw new HelmxError('validation_error', `Invalid ask status: ${String(row.status)}`, 400, {
+        id: row.id,
+        status: row.status,
+      })
+    }
+    parseStoredAskSpec(`helmx_asks#${row.id}.spec`, row.specJson, {
+      id: row.id,
+      conversationId: row.conversationId,
+      status: row.status,
+      expectedStateSeq: row.expectedStateSeq,
+    })
+    if (row.resultJson !== undefined) {
+      parseStoredAskResult(`helmx_asks#${row.id}.result`, row.resultJson)
+    }
     const prev = this.asks.get(row.id)
     if (prev !== undefined && prev.conversationId !== row.conversationId) {
       this.removeConvIndex(this.asksByConv, prev.conversationId, row.id)
@@ -1270,6 +1321,14 @@ function cloneConv(meta: ConvMeta): ConvMeta {
 
 /** Validate persisted JSON: fails explicitly on corruption (with location context) rather than falling back to empty values. */
 function parseStoredJson<T>(what: string, raw: string): T {
+  if (typeof raw !== 'string') {
+    throw new HelmxError(
+      'store_data_corrupted',
+      `Persisted data corrupted (${what}): expected JSON string, got ${raw === null ? 'null' : typeof raw}`,
+      500,
+      { what },
+    )
+  }
   try {
     return JSON.parse(raw) as T
   } catch (cause) {
@@ -1280,6 +1339,115 @@ function parseStoredJson<T>(what: string, raw: string): T {
       { what, raw: raw.slice(0, 200), cause: String(cause) },
     )
   }
+}
+
+function parseStoredStringArray(what: string, raw: string): string[] {
+  const parsed = parseStoredJson<unknown>(what, raw)
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+    throw new HelmxError(
+      'store_data_corrupted',
+      `Persisted data corrupted (${what}): expected JSON array of strings`,
+      500,
+      { what, raw: raw.slice(0, 200) },
+    )
+  }
+  return parsed
+}
+
+function isValidAskStatus(value: unknown): value is AskRow['status'] {
+  return value === 'pending' || value === 'answered' || value === 'cancelled' || value === 'superseded'
+}
+
+function parseStoredAskSpec(
+  what: string,
+  raw: string,
+  expected: { id: string; conversationId: number; status: AskRow['status']; expectedStateSeq?: number },
+): Record<string, unknown> {
+  const parsed = parseStoredJson<unknown>(what, raw)
+  const corrupted = (reason: string): HelmxError =>
+    new HelmxError(
+      'store_data_corrupted',
+      `Persisted data corrupted (${what}): ${reason}`,
+      500,
+      { what, raw: raw.slice(0, 200) },
+    )
+  if (!isPlainObject(parsed)) throw corrupted('expected JSON object for AskSpec')
+  if (typeof parsed.id !== 'string' || parsed.id.length === 0) throw corrupted('missing or invalid spec.id')
+  if (parsed.id !== expected.id) throw corrupted(`spec.id '${parsed.id}' does not match row id '${expected.id}'`)
+  if (typeof parsed.title !== 'string') throw corrupted('missing or invalid spec.title')
+  if (!isValidAskStatus(parsed.status)) throw corrupted(`invalid spec.status '${String(parsed.status)}'`)
+  if (parsed.status !== expected.status) {
+    throw corrupted(`spec.status '${parsed.status}' does not match row status '${expected.status}'`)
+  }
+  if (parsed.conversationId !== undefined) {
+    if (!Number.isInteger(parsed.conversationId) || parsed.conversationId !== expected.conversationId) {
+      throw corrupted(`spec.conversationId '${String(parsed.conversationId)}' does not match row conversationId ${expected.conversationId}`)
+    }
+  }
+  if (parsed.createdAt !== undefined && (typeof parsed.createdAt !== 'number' || !Number.isFinite(parsed.createdAt))) {
+    throw corrupted('invalid spec.createdAt')
+  }
+  if (parsed.expectedStateSeq !== undefined) {
+    if (
+      typeof parsed.expectedStateSeq !== 'number' ||
+      !Number.isSafeInteger(parsed.expectedStateSeq) ||
+      parsed.expectedStateSeq < 0
+    ) {
+      throw corrupted('invalid spec.expectedStateSeq')
+    }
+    if (expected.expectedStateSeq !== undefined && parsed.expectedStateSeq !== expected.expectedStateSeq) {
+      throw corrupted(`spec.expectedStateSeq ${parsed.expectedStateSeq} does not match row expectedStateSeq ${expected.expectedStateSeq}`)
+    }
+  }
+  if (parsed.description !== undefined && typeof parsed.description !== 'string') {
+    throw corrupted('invalid spec.description')
+  }
+  if (parsed.ownerPluginId !== undefined && typeof parsed.ownerPluginId !== 'string') {
+    throw corrupted('invalid spec.ownerPluginId')
+  }
+  if (!Array.isArray(parsed.fields)) throw corrupted('spec.fields must be an array')
+  for (const field of parsed.fields as unknown[]) {
+    if (
+      !isPlainObject(field) ||
+      typeof field.name !== 'string' ||
+      field.name.length === 0 ||
+      typeof field.label !== 'string' ||
+      (field.type !== 'text' && field.type !== 'select' && field.type !== 'confirm')
+    ) {
+      throw corrupted('spec.fields contains an invalid field entry')
+    }
+    if (field.required !== undefined && typeof field.required !== 'boolean') {
+      throw corrupted(`field '${field.name}' has invalid required flag`)
+    }
+    if (field.type === 'select') {
+      if (
+        !Array.isArray(field.options) ||
+        (field.options as unknown[]).some(
+          (o) =>
+            !isPlainObject(o) ||
+            typeof o.value !== 'string' ||
+            o.value.length === 0 ||
+            (o.label !== undefined && typeof o.label !== 'string'),
+        )
+      ) {
+        throw corrupted(`select field '${field.name}' has invalid options`)
+      }
+    }
+  }
+  return parsed
+}
+
+function parseStoredAskResult(what: string, raw: string): Record<string, string> {
+  const parsed = parseStoredJson<unknown>(what, raw)
+  if (!isPlainObject(parsed) || Object.values(parsed).some((v) => typeof v !== 'string')) {
+    throw new HelmxError(
+      'store_data_corrupted',
+      `Persisted data corrupted (${what}): expected JSON object mapping field names to strings`,
+      500,
+      { what, raw: raw.slice(0, 200) },
+    )
+  }
+  return parsed as Record<string, string>
 }
 
 export function convStatusOf(
