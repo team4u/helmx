@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useRef, useState, forwardRef } from 'react'
+import React, { createContext, useContext, useEffect, useRef, useState, forwardRef } from 'react'
 import * as TabsPrimitive from '@radix-ui/react-tabs'
 import type {
   TabsVariant,
@@ -165,7 +165,7 @@ export interface TabsTriggerProps extends React.ComponentPropsWithoutRef<typeof 
 
 export const TabsTrigger = forwardRef<React.ComponentRef<typeof TabsPrimitive.Trigger>, TabsTriggerProps>(
   function TabsTrigger(
-    { variant: variantProp, className = '', value, disabled, onClick, onMouseDown, onBlur, ...props },
+    { variant: variantProp, className = '', value, disabled, onClick, onMouseDown, onKeyDown, onBlur, ...props },
     ref,
   ) {
     const rootContext = useContext(TabsContext)
@@ -185,28 +185,42 @@ export const TabsTrigger = forwardRef<React.ComponentRef<typeof TabsPrimitive.Tr
       .filter(Boolean)
       .join(' ')
 
-    const mouseDownActivatedRef = useRef(false)
+    const suppressNextClickRef = useRef(false)
+
+    useEffect(() => {
+      if (!isActive) {
+        suppressNextClickRef.current = false
+      }
+    }, [rootContext.value, isActive])
 
     const handleMouseDown = (e: React.MouseEvent<HTMLButtonElement>) => {
+      suppressNextClickRef.current = true
       onMouseDown?.(e)
-      if (!disabled && e.button === 0 && !e.ctrlKey) {
-        mouseDownActivatedRef.current = true
+    }
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+      if (e.target === e.currentTarget && (e.key === ' ' || e.key === 'Enter')) {
+        suppressNextClickRef.current = true
       }
+      onKeyDown?.(e)
     }
 
     const handleBlur = (e: React.FocusEvent<HTMLButtonElement>) => {
-      mouseDownActivatedRef.current = false
+      suppressNextClickRef.current = false
       onBlur?.(e)
     }
 
     const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
       onClick?.(e)
-      if (mouseDownActivatedRef.current) {
-        mouseDownActivatedRef.current = false
+      if (suppressNextClickRef.current) {
+        suppressNextClickRef.current = false
         return
       }
-      // Fallback for programmatic `.click()` (e.g. happy-dom tests or assistive
-      // tech invoking click without a preceding pointer mousedown).
+      if (e.defaultPrevented || e.ctrlKey || e.button !== 0) {
+        return
+      }
+      // Fallback for pure programmatic `.click()` (e.g. happy-dom tests or assistive
+      // tech invoking click without a preceding pointer mousedown or keyboard keydown).
       if (!disabled && rootContext.onValueChange && rootContext.value !== value) {
         rootContext.onValueChange(value)
       }
@@ -219,6 +233,7 @@ export const TabsTrigger = forwardRef<React.ComponentRef<typeof TabsPrimitive.Tr
         disabled={disabled}
         className={triggerClass}
         onMouseDown={handleMouseDown}
+        onKeyDown={handleKeyDown}
         onBlur={handleBlur}
         onClick={handleClick}
         {...props}

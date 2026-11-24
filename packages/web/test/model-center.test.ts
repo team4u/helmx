@@ -1153,6 +1153,17 @@ test('ModelCenter: All/Configured filter pills, configured-card first-3 model pr
     ) as HTMLElement | undefined
     assert.ok(configuredTab, 'ModelCenter must render the Configured filter pill')
 
+    // Every filter pill tab's aria-controls must resolve to a real role="tabpanel" in DOM
+    const filterPills = Array.from(container.querySelectorAll('.tabs-pills [role="tab"]'))
+    assert.ok(filterPills.length > 0, 'ModelCenter must render filter pill tabs')
+    for (const pill of filterPills) {
+      const controlsId = pill.getAttribute('aria-controls')
+      assert.ok(controlsId && controlsId.length > 0, 'ModelCenter filter pill tab must carry aria-controls')
+      const panel = container.querySelector(`[id="${CSS.escape(controlsId)}"]`)
+      assert.ok(panel !== null, `ModelCenter pill aria-controls=${controlsId} must point to a real DOM panel`)
+      assert.equal(panel.getAttribute('role'), 'tabpanel')
+    }
+
     await act(async () => {
       configuredTab.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })

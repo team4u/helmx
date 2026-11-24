@@ -4,11 +4,14 @@ import assert from 'node:assert/strict'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
 import { ensureHappyDom } from './helpers/dom-harness.js'
+import type { SystemCenterShellProps } from '../src/ui/SystemCenterShell.js'
 
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
 const { Tabs, TabsList, TabsTrigger, TabsContent, SegmentedControl } = await import('@helmx/plugin-client')
-const { SystemCenterToolbar } = await import('../src/ui/SystemCenterShell.js')
+const { SystemCenterShell, SystemCenterToolbar } = await import('../src/ui/SystemCenterShell.js')
+const { HostStoreProviders } = await import('./helpers/host-store.js')
+const { makeTestStore } = await import('./helpers/store.js')
 
 // ---------------------------------------------------------------------------
 // 1. SSR 渲染与数据属性（data-state="active"）契约测试
@@ -526,6 +529,9 @@ test('DOM：SystemCenterToolbar 使用 Radix Tabs pills 与 SearchBox toolbar，
     const pills = Array.from(host.querySelectorAll<HTMLButtonElement>('.tabs-pill[role="tab"]'))
     assert.equal(pills.length, 3)
     assert.equal(pills[0]!.getAttribute('aria-selected'), 'true')
+    for (const pill of pills) {
+      assert.equal(pill.hasAttribute('aria-controls'), false, '独立渲染 SystemCenterToolbar 不得输出悬空 aria-controls')
+    }
 
     await act(async () => {
       pills[0]!.focus()
@@ -538,6 +544,290 @@ test('DOM：SystemCenterToolbar 使用 Radix Tabs pills 与 SearchBox toolbar，
     assert.equal(pills[1]!.getAttribute('data-state'), 'active')
     assert.equal(pills[1]!.getAttribute('tabindex'), '0')
     assert.equal(pills[0]!.getAttribute('tabindex'), '-1')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('DOM：SystemCenterShell + SystemCenterToolbar 的每个 [role="tab"] aria-controls 均指向真实 [role="tabpanel"]', { timeout: 60_000 }, async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const store = makeTestStore({ locale: 'en' })
+
+  function ShellToolbarHarness() {
+    const [query, setQuery] = React.useState('')
+    const [activePill, setActivePill] = React.useState<'all' | 'enabled'>('all')
+    return React.createElement(
+      HostStoreProviders,
+      { value: store },
+      React.createElement(
+        SystemCenterShell,
+        {
+          dataView: 'test-center',
+          isSplitActive: false,
+          onToggleSplit: () => {},
+          icon: 'layers',
+          title: 'Test Center',
+          toolbar: React.createElement(SystemCenterToolbar<'all' | 'enabled'>, {
+            query,
+            onQueryChange: setQuery,
+            searchPlaceholder: 'Search',
+            searchAriaLabel: 'Search',
+            clearSearchLabel: 'Clear',
+            filterAriaLabel: 'Status filter',
+            pills: [
+              { key: 'all', label: 'All', count: 2 },
+              { key: 'enabled', label: 'Enabled', count: 1 },
+            ],
+            activePill,
+            onSelectPill: setActivePill,
+          }),
+        } as SystemCenterShellProps,
+        React.createElement('div', { className: 'test-center-cards' }, 'Cards'),
+      ),
+    )
+  }
+
+  try {
+    await act(async () => {
+      root.render(React.createElement(ShellToolbarHarness))
+    })
+    const tabs = Array.from(host.querySelectorAll<HTMLElement>('[role="tab"]'))
+    assert.equal(tabs.length, 2)
+    for (const tab of tabs) {
+      const controlsId = tab.getAttribute('aria-controls')
+      assert.ok(controlsId && controlsId.length > 0, '中心壳内每个 [role="tab"] 必须携带 aria-controls')
+      const panel = host.querySelector(`[id="${CSS.escape(controlsId)}"]`)
+      assert.ok(panel !== null, `aria-controls=${controlsId} 必须指向真实 DOM 元素`)
+      assert.equal(panel.getAttribute('role'), 'tabpanel', '目标面板必须具备 role="tabpanel"')
+    }
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 3. TabsTrigger 事件裁决回归测试（Ctrl-click / 右键 / 异步受控键盘 / 纯程序化 click）
+// ---------------------------------------------------------------------------
+
+test('DOM：TabsTrigger Ctrl-click 与非主按键 mousedown+click 被 Radix 拒绝，绝不通过 fallback 激活', { timeout: 60_000 }, async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const changes: string[] = []
+
+  function Harness() {
+    const [val, setVal] = React.useState('a')
+    return React.createElement(
+      Tabs,
+      {
+        value: val,
+        onValueChange: (next) => {
+          changes.push(next)
+          setVal(next)
+        },
+      },
+      React.createElement(
+        TabsList,
+        { 'aria-label': 'Filter' },
+        React.createElement(TabsTrigger, { value: 'a' }, 'A'),
+        React.createElement(TabsTrigger, { value: 'b' }, 'B'),
+      ),
+    )
+  }
+
+  try {
+    await act(async () => {
+      root.render(React.createElement(Harness))
+    })
+    const [, tabB] = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+    assert.ok(tabB !== undefined)
+
+    // 1) mousedown(ctrlKey=true) + click
+    await act(async () => {
+      tabB.dispatchEvent(new MouseEvent('mousedown', { button: 0, ctrlKey: true, bubbles: true, cancelable: true }))
+      tabB.dispatchEvent(new MouseEvent('click', { button: 0, ctrlKey: true, bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(changes, [], 'mousedown(ctrlKey=true)+click 不得触发 onValueChange')
+    assert.equal(tabB.getAttribute('aria-selected'), 'false')
+
+    // 2) 非主按键（button: 2）mousedown + click
+    await act(async () => {
+      tabB.dispatchEvent(new MouseEvent('mousedown', { button: 2, bubbles: true, cancelable: true }))
+      tabB.dispatchEvent(new MouseEvent('click', { button: 2, bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(changes, [], '非主按键 mousedown+click 不得触发 onValueChange')
+    assert.equal(tabB.getAttribute('aria-selected'), 'false')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('DOM：受控父级异步未更新 value 时，keydown(Enter/Space) + click 各只触发一次 onValueChange', { timeout: 60_000 }, async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const enterChanges: string[] = []
+  const spaceChanges: string[] = []
+
+  try {
+    // 1) keydown('Enter') + click（受控 value 保持 'a' 不变）
+    await act(async () => {
+      root.render(
+        React.createElement(
+          Tabs,
+          {
+            value: 'a',
+            onValueChange: (next) => {
+              enterChanges.push(next)
+            },
+          },
+          React.createElement(
+            TabsList,
+            { 'aria-label': 'Async Enter' },
+            React.createElement(TabsTrigger, { value: 'a' }, 'A'),
+            React.createElement(TabsTrigger, { value: 'b' }, 'B'),
+          ),
+        ),
+      )
+    })
+    let [, tabB] = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+    await act(async () => {
+      tabB!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      tabB!.dispatchEvent(new MouseEvent('click', { button: 0, bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(enterChanges, ['b'], 'Enter + click 在受控未同步更新时绝不能重复回调 [b, b]')
+
+    // 2) keydown(' ') + click（受控 value 保持 'a' 不变）
+    await act(async () => {
+      root.render(
+        React.createElement(
+          Tabs,
+          {
+            value: 'a',
+            onValueChange: (next) => {
+              spaceChanges.push(next)
+            },
+          },
+          React.createElement(
+            TabsList,
+            { 'aria-label': 'Async Space' },
+            React.createElement(TabsTrigger, { value: 'a' }, 'A'),
+            React.createElement(TabsTrigger, { value: 'b' }, 'B'),
+          ),
+        ),
+      )
+    })
+    ;[, tabB] = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+    await act(async () => {
+      tabB!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }))
+      tabB!.dispatchEvent(new MouseEvent('click', { button: 0, bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(spaceChanges, ['b'], 'Space + click 在受控未同步更新时绝不能重复回调 [b, b]')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('DOM：受控/非受控纯程序化 .click() 及 keydown(Enter) 切走再切回后 .click() 均正常单次触发', { timeout: 60_000 }, async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+
+  const controlledChanges: string[] = []
+  const uncontrolledChanges: string[] = []
+
+  function ControlledHarness() {
+    const [val, setVal] = React.useState('a')
+    return React.createElement(
+      Tabs,
+      {
+        value: val,
+        onValueChange: (next) => {
+          controlledChanges.push(next)
+          setVal(next)
+        },
+      },
+      React.createElement(
+        TabsList,
+        { 'aria-label': 'Controlled click' },
+        React.createElement(TabsTrigger, { value: 'a' }, 'A'),
+        React.createElement(TabsTrigger, { value: 'b' }, 'B'),
+      ),
+    )
+  }
+
+  try {
+    // 1) 受控模式：纯程序化 .click() + keydown('Enter') 无 click 切走再切回后 .click()
+    await act(async () => {
+      root.render(React.createElement(ControlledHarness))
+    })
+    const getControlledTabs = () => Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+
+    await act(async () => {
+      getControlledTabs()[1]!.click()
+    })
+    assert.deepEqual(controlledChanges, ['b'], '受控纯程序化 .click() 触发一次')
+    assert.equal(getControlledTabs()[1]!.getAttribute('aria-selected'), 'true')
+
+    await act(async () => {
+      getControlledTabs()[0]!.click()
+    })
+    assert.deepEqual(controlledChanges, ['b', 'a'])
+
+    // 仅派发 keydown('Enter') 切到 B（无后续 click），再切回 A，随后对 B 调纯程序化 .click()
+    await act(async () => {
+      getControlledTabs()[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(controlledChanges, ['b', 'a', 'b'])
+    await act(async () => {
+      getControlledTabs()[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(controlledChanges, ['b', 'a', 'b', 'a'])
+    await act(async () => {
+      getControlledTabs()[1]!.click()
+    })
+    assert.deepEqual(controlledChanges, ['b', 'a', 'b', 'a', 'b'], '切走再切回后 .click() 不得被残留 suppress 标志吞掉')
+
+    // 2) 非受控模式：纯程序化 .click() 单次触发
+    await act(async () => {
+      root.render(
+        React.createElement(
+          Tabs,
+          {
+            defaultValue: 'a',
+            onValueChange: (next) => {
+              uncontrolledChanges.push(next)
+            },
+          },
+          React.createElement(
+            TabsList,
+            { 'aria-label': 'Uncontrolled click' },
+            React.createElement(TabsTrigger, { value: 'a' }, 'A'),
+            React.createElement(TabsTrigger, { value: 'b' }, 'B'),
+          ),
+        ),
+      )
+    })
+    const uncontrolledTabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+    await act(async () => {
+      uncontrolledTabs[1]!.click()
+    })
+    assert.deepEqual(uncontrolledChanges, ['b'], '非受控纯程序化 .click() 触发一次')
+    assert.equal(uncontrolledTabs[1]!.getAttribute('aria-selected'), 'true')
   } finally {
     await act(async () => {
       root.unmount()

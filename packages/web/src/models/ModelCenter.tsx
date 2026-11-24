@@ -1,5 +1,5 @@
 import type * as React from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import type { ModelProviderSummary, ProviderConfig } from '@helmx/protocol/browser'
 import {
   Badge,
@@ -77,6 +77,7 @@ export function ModelCenter({
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [statusTab, setStatusTab] = useState<ProviderFilterTab>('all')
+  const providersPanelId = useId()
 
   const [catalog, setCatalog] = useState<ModelProviderSummary[]>([])
   const [savedDefaultOverride, setSavedDefaultOverride] = useState<DefaultModelInfo | null>(null)
@@ -421,6 +422,7 @@ export function ModelCenter({
         <TabsContent value="providers" className="primary-center-content">
           <SystemCenterToolbar
             className="model-toolbar-inline"
+            controlsId={providersPanelId}
             query={query}
             onQueryChange={setQuery}
             searchPlaceholder={t('models.searchPlaceholder')}
@@ -431,40 +433,42 @@ export function ModelCenter({
             activePill={statusTab}
             onSelectPill={setStatusTab}
           />
-          {filteredProviders.length === 0 ? (
-            <EmptyState
-              prominent
-              icon="search"
-              iconSize={22}
-              title={t('models.emptyTitle')}
-              hint={t('models.emptyHint')}
-              action={
-                Boolean(query) || statusTab !== 'all' ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setQuery('')
-                      setStatusTab('all')
-                    }}
-                  >
-                    {t('models.resetFilters')}
-                  </Button>
-                ) : undefined
-              }
-            />
-          ) : (
-            <CardGrid minWidth="md" gap="md">
-              {filteredProviders.map((provider) => (
-                <ModelCard
-                  key={provider.id}
-                  provider={provider}
-                  selected={selectedProviderId === provider.id}
-                  onSelect={() => handleSelectProvider(provider.id)}
-                />
-              ))}
-            </CardGrid>
-          )}
+          <div id={providersPanelId} role="tabpanel">
+            {filteredProviders.length === 0 ? (
+              <EmptyState
+                prominent
+                icon="search"
+                iconSize={22}
+                title={t('models.emptyTitle')}
+                hint={t('models.emptyHint')}
+                action={
+                  Boolean(query) || statusTab !== 'all' ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setQuery('')
+                        setStatusTab('all')
+                      }}
+                    >
+                      {t('models.resetFilters')}
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <CardGrid minWidth="md" gap="md">
+                {filteredProviders.map((provider) => (
+                  <ModelCard
+                    key={provider.id}
+                    provider={provider}
+                    selected={selectedProviderId === provider.id}
+                    onSelect={() => handleSelectProvider(provider.id)}
+                  />
+                ))}
+              </CardGrid>
+            )}
+          </div>
         </TabsContent>
         <TabsContent value="defaults" className="primary-center-content">
           <GlobalDefaultsPanel

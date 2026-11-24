@@ -4,9 +4,11 @@
  * Empty states are rendered directly via `@helmx/plugin-client` `<EmptyState prominent />`.
  * Zero Emoji; Fast Refresh compliant (components & types only).
  */
-import type * as React from 'react'
+import * as React from 'react'
 import { Badge, HelmxIcon, SearchBox, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import { CloseSplitButton, SplitToggleButton } from './SplitControls.js'
+
+const SystemCenterPanelContext = React.createContext<string | undefined>(undefined)
 
 export interface SystemCenterCategoryPill<K extends string = string> {
   key: K
@@ -26,6 +28,8 @@ export interface SystemCenterToolbarProps<K extends string = string> {
   pills: ReadonlyArray<SystemCenterCategoryPill<K>>
   activePill: K
   onSelectPill: (key: K) => void
+  /** Explicit tabpanel ID for aria-controls; defaults to enclosing SystemCenterShell panel ID. */
+  controlsId?: string
 }
 
 export function SystemCenterToolbar<K extends string = string>({
@@ -40,7 +44,10 @@ export function SystemCenterToolbar<K extends string = string>({
   pills,
   activePill,
   onSelectPill,
+  controlsId,
 }: SystemCenterToolbarProps<K>): React.JSX.Element {
+  const inheritedControlsId = React.useContext(SystemCenterPanelContext)
+  const resolvedControlsId = controlsId ?? inheritedControlsId
   return (
     <div className={className ? `primary-center-toolbar ${className}` : 'primary-center-toolbar'}>
       {leading}
@@ -59,7 +66,7 @@ export function SystemCenterToolbar<K extends string = string>({
       >
         <TabsList aria-label={filterAriaLabel}>
           {pills.map((pill) => (
-            <TabsTrigger key={pill.key} value={pill.key}>
+            <TabsTrigger key={pill.key} value={pill.key} aria-controls={resolvedControlsId}>
               <span>{pill.label}</span>
               <Badge className="tabular-nums">{pill.count}</Badge>
             </TabsTrigger>
@@ -106,30 +113,39 @@ export function SystemCenterShell({
   children,
   overlays,
 }: SystemCenterShellProps): React.JSX.Element {
+  const panelId = React.useId()
   const rootClass = `primary-center${className ? ` ${className}` : ''}${isSplit ? ' is-split' : ''}`
   return (
-    <div className={rootClass} data-view={dataView}>
-      <div className="primary-center-topbar pane-topbar">
-        <div className="primary-center-title-wrap pane-title-group">
-          <div className="primary-center-title">
-            <HelmxIcon name={icon} size={14} />
-            <span>{title}</span>
+    <SystemCenterPanelContext.Provider value={wrapContent ? panelId : undefined}>
+      <div className={rootClass} data-view={dataView}>
+        <div className="primary-center-topbar pane-topbar">
+          <div className="primary-center-title-wrap pane-title-group">
+            <div className="primary-center-title">
+              <HelmxIcon name={icon} size={14} />
+              <span>{title}</span>
+            </div>
+          </div>
+          <div className="primary-center-topbar-actions pane-actions">
+            {headerActions}
+            {isSplit ? (
+              <CloseSplitButton onCloseSplit={onCloseSplit} />
+            ) : (
+              <SplitToggleButton isSplitActive={isSplitActive} onToggleSplit={onToggleSplit} />
+            )}
           </div>
         </div>
-        <div className="primary-center-topbar-actions pane-actions">
-          {headerActions}
-          {isSplit ? (
-            <CloseSplitButton onCloseSplit={onCloseSplit} />
-          ) : (
-            <SplitToggleButton isSplitActive={isSplitActive} onToggleSplit={onToggleSplit} />
-          )}
-        </div>
+        {belowTopbar}
+        {toolbar}
+        {diagnostics}
+        {wrapContent ? (
+          <div id={panelId} role="tabpanel" className="primary-center-content">
+            {children}
+          </div>
+        ) : (
+          children
+        )}
+        {overlays}
       </div>
-      {belowTopbar}
-      {toolbar}
-      {diagnostics}
-      {wrapContent ? <div className="primary-center-content">{children}</div> : children}
-      {overlays}
-    </div>
+    </SystemCenterPanelContext.Provider>
   )
 }
