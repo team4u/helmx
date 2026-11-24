@@ -386,3 +386,14 @@ export interface TurnSettledPayload {
   error?: string
   settledAt: number
 }
+
+/** Derive initial fallback title from first input: strip fenced code blocks, unwrap inline code, collapse whitespace, keep first 36 chars. */
+export function deriveConversationTitle(text: string): string {
+  const stripped = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return stripped.slice(0, 36) || 'New conversation'
+}

@@ -39,7 +39,13 @@ import type {
   TurnOutcome,
   TurnSettledPayload,
 } from '@helmx/protocol'
-import { HelmxError, isHubActivityBusy, sameConversationLiveContent, sameQueuedInputs } from '@helmx/protocol'
+import {
+  HelmxError,
+  deriveConversationTitle,
+  isHubActivityBusy,
+  sameConversationLiveContent,
+  sameQueuedInputs,
+} from '@helmx/protocol'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness, ConversationView, Observation, Observer } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
@@ -1551,7 +1557,7 @@ function lastErrorOf(
 
 // Inputs use durable input.id (requestId) as tracking identity, requiring no temporary key allocation.
 
-export { deriveTitle }
+export { deriveConversationTitle as deriveTitle }
 
 /** Compute latest visible entry ID (excluding `pi.system` and entries covered by `helmx.rewind`; `0` when none). */
 function latestVisibleEntryIdOf(entries: ReadonlyArray<EntryRecordLike>): number {
@@ -1570,15 +1576,4 @@ function latestVisibleEntryIdOf(entries: ReadonlyArray<EntryRecordLike>): number
     if (numeric > latest) latest = numeric
   }
   return latest
-}
-
-/** Title from first input: strip code blocks and newlines, keeping the first 36 meaningful characters. */
-function deriveTitle(text: string): string {
-  const stripped = text
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`([^`]*)`/g, '$1')
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return stripped.slice(0, 36) || 'New conversation'
 }

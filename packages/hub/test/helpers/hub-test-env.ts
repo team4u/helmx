@@ -56,6 +56,8 @@ export type HubTestApp = Awaited<ReturnType<typeof createHelmx>>
 
 export interface CreateHubTestAppOptions extends HelmxOptions {
   fauxOptions?: FauxProviderOptions
+  /** 默认关闭后台 `builtin:title` 首轮自动命名，避免抢占共享 `faux` 响应队列；需要测自动命名时传 `true` 或直调 `createHelmx`。 */
+  enableAutoTitle?: boolean
 }
 
 /** 启动挂载 faux provider 的真实 `createHelmx` 实例（默认使用 `providers`，传 `models` 时回退外部 Models 实例）。 */
@@ -65,7 +67,15 @@ export async function createHubTestApp(options: CreateHubTestAppOptions = {}): P
   faux: FauxProviderHandle
   models?: ModelsRegistry
 }> {
-  const { fauxOptions, models: providedModels, providers: providedProviders, buildProvider, model, ...rest } = options
+  const {
+    fauxOptions,
+    models: providedModels,
+    providers: providedProviders,
+    buildProvider,
+    model,
+    enableAutoTitle = false,
+    ...rest
+  } = options
   const faux = makeFauxProvider(fauxOptions)
   const app = await createHelmx({
     buildProvider: buildProvider ?? createPluginBuildProvider(),
@@ -76,6 +86,9 @@ export async function createHubTestApp(options: CreateHubTestAppOptions = {}): P
     ...(providedModels !== undefined && providedProviders !== undefined ? { providers: providedProviders } : {}),
     ...rest,
   })
+  if (!enableAutoTitle && app.kernel.plugins.get('builtin:title')?.enabled) {
+    await app.kernel.plugins.setConfig('builtin:title', { autoTitle: false })
+  }
   return {
     app,
     kernel: app.kernel,

@@ -102,6 +102,9 @@ export async function openSwarmEnv(root: string, gitTemplate: GitTemplate): Prom
     model: 'faux/faux-1',
     providers: [faux.provider],
   })
+  if (app.kernel.plugins.get('builtin:title')?.enabled) {
+    await app.kernel.plugins.setConfig('builtin:title', { autoTitle: false })
+  }
   faux.setResponses([])
   return {
     dataDir,

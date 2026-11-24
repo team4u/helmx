@@ -436,12 +436,12 @@ test('插件配置分层：磁盘不固化 default、sources 三态溯源、null
   await rejectsCode(store.set('ext:req', { token: 42 }, reqSchema), 'validation_error', 400)
 })
 
-test('createHelmx 全部 11 个内置插件的只读契约投影完整暴露 presentationMetaSchema', { timeout: 60_000 }, async (t) => {
+test('createHelmx 全部 12 个内置插件的只读契约投影完整暴露 presentationMetaSchema', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helmx-hub-manifests-')
   const { app, kernel } = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
     const initial = kernel.plugins.listManifests()
-    assert.equal(initial.length, 11)
+    assert.equal(initial.length, 12)
     assert.ok(initial.every((m) => m.id.startsWith('builtin:') && m.status === 'active'))
 
     const wfManifest = kernel.plugins.getManifest('builtin:workflow')
@@ -469,6 +469,10 @@ test('createHelmx 全部 11 个内置插件的只读契约投影完整暴露 pre
 
     const tiersManifest = kernel.plugins.getManifest('builtin:tiers')
     assert.equal(tiersManifest.actions.find((a) => a.id === 'replace')?.visibility, 'ui')
+
+    const titleManifest = kernel.plugins.getManifest('builtin:title')
+    assert.equal(titleManifest.actions.find((a) => a.id === 'generate')?.exposeToPrompt, false)
+    assert.equal(titleManifest.ui.find((u) => u.surface === 'commandPalette')?.spec.slash, 'title')
   } finally {
     await app.close()
   }

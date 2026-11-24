@@ -27,7 +27,7 @@ flowchart TD
         Swarm["builtin:swarm 对等协同黑板"]
         Profile["builtin:profile 角色技能底座"]
         Memory["builtin:memory 长期记忆"]
-        Others["builtin:triggers / magpie / json-render / mermaid / token-speed / tiers"]
+        Others["builtin:triggers / magpie / json-render / mermaid / token-speed / tiers / title"]
         External["外部插件"]
     end
     Plugins --> Core
@@ -113,7 +113,7 @@ flowchart TD
 `@helmx/hub` 的 `createHelmx()`（`packages/hub/src/app.ts`）只做三件事：
 
 1. **注入构建实现**：默认注入 `@helmx/plugin-build` 的 provider（client.tsx 编译 + 外部 TS 转译），调用方可整体替换；内核机制与构建工具分离。
-2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:worktree`、`builtin:swarm`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed`、`builtin:tiers` 十一个内置插件全部默认启用。启动后由统一的 `service.reconcile()` 按依赖拓扑与 `reconcileAfter` 软序执行恢复对账（`builtin:workflow` 先收敛遗留子会话，随后 `builtin:worktree` 回收崩溃租约、`builtin:swarm` 完成协作组对账）。随后从数据目录加载外部插件。启停规则和各插件的用途见 [内置插件清单](../plugins/overview.md#当前状态)。
+2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:worktree`、`builtin:swarm`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed`、`builtin:tiers`、`builtin:title` 十二个内置插件全部默认启用。启动后由统一的 `service.reconcile()` 按依赖拓扑与 `reconcileAfter` 软序执行恢复对账（`builtin:workflow` 先收敛遗留子会话，随后 `builtin:worktree` 回收崩溃租约、`builtin:swarm` 完成协作组对账）。随后从数据目录加载外部插件。启停规则和各插件的用途见 [内置插件清单](../plugins/overview.md#当前状态)。
 3. **统一启动**：全部插件注册后执行 `kernel.start()`——先按依赖拓扑对全体服务 `prepare()`，再依次 `start()`，恢复 SDK 调度器后统一执行 `reconcile()`。
 
 直接使用 `KernelRuntime.open()` 时不隐式注册任何内置插件，可独立验证内核机制；使用 `createHelmx()` 得到完整产品。Web 静态目录托管属于产品层：直接使用内核 HTTP handler 时缺省只服务 API，提供 `webDistDir` 才启用静态托管。

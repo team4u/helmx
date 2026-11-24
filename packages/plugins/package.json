@@ -73,6 +73,14 @@
     "./tiers/contracts": {
       "types": "./dist/tiers/contracts.d.ts",
       "import": "./dist/tiers/contracts.js"
+    },
+    "./title": {
+      "types": "./dist/title.d.ts",
+      "import": "./dist/title.js"
+    },
+    "./title/contracts": {
+      "types": "./dist/title/contracts.d.ts",
+      "import": "./dist/title/contracts.js"
     }
   },
   "scripts": {

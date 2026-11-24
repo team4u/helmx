@@ -11,6 +11,7 @@ import { createTriggersPlugin } from '@helmx/plugins/triggers';
 import { createMagpiePlugin } from '@helmx/plugins/magpie';
 import { createTokenSpeedPlugin } from '@helmx/plugins/token-speed';
 import { createTiersPlugin } from '@helmx/plugins/tiers';
+import { createTitlePlugin } from '@helmx/plugins/title';
 
 export type HelmxOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'> & {
   /**
@@ -36,7 +37,7 @@ export async function createHelmx(options: HelmxOptions = {}) {
     autoResume: false,
   });
   try {
-    // Default-enabled (11): profile (locked), workflow, worktree, swarm, memory, json-render, mermaid, triggers, magpie, token-speed, tiers.
+    // Default-enabled (12): profile (locked), workflow, worktree, swarm, memory, json-render, mermaid, triggers, magpie, token-speed, tiers, title.
     // Post-startup recovery ordering (workflow child-session convergence before worktree crashed-lease
     // reclamation) is enforced by PluginHost.reconcile() topological order via service.reconcileAfter,
     // independent of plugin registration order here.
@@ -51,6 +52,7 @@ export async function createHelmx(options: HelmxOptions = {}) {
     await kernel.plugins.register(createMagpiePlugin());
     await kernel.plugins.register(createTokenSpeedPlugin());
     await kernel.plugins.register(createTiersPlugin());
+    await kernel.plugins.register(createTitlePlugin());
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
     // Run `prepare -> start` across all registered plugins before resuming the SDK scheduler.
     // Two-phase boot (autoStart: false) defers this to the entrypoint after the HTTP listener opens.
