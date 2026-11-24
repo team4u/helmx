@@ -705,3 +705,318 @@ test('Sidebar 工作集分组切换（按状态 / 按角色 / 按节点）：还
     window.localStorage.removeItem(SIDEBAR_GROUP_BY_STORAGE_KEY)
   }
 })
+
+function installSidebarBatchFetchStub(): {
+  patches: Array<{ id: number; tags?: string[] }>
+  bulkDeletes: number[][]
+  restore: () => void
+} {
+  const originalFetch = globalThis.fetch
+  const patches: Array<{ id: number; tags?: string[] }> = []
+  const bulkDeletes: number[][] = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method ?? 'GET'
+    const patchMatch = /^\/api\/conversations\/(\d+)$/.exec(url)
+    if (patchMatch !== null && method === 'PATCH') {
+      const body = init?.body === undefined ? {} : (JSON.parse(String(init.body)) as { tags?: string[] })
+      patches.push({ id: Number(patchMatch[1]), tags: body.tags })
+      return new Response(JSON.stringify({ id: Number(patchMatch[1]), tags: body.tags ?? [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (url === '/api/conversations/bulk-delete' && method === 'POST') {
+      const body = init?.body === undefined ? {} : (JSON.parse(String(init.body)) as { ids?: number[] })
+      const ids = body.ids ?? []
+      bulkDeletes.push(ids)
+      return new Response(JSON.stringify({ deleted: ids, failures: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+  return {
+    patches,
+    bulkDeletes,
+    restore: () => {
+      globalThis.fetch = originalFetch
+    },
+  }
+}
+
+test('Sidebar 批量管理：开关切换、单选/全选/清空、折叠收敛、搜索全选与移动端防误关', { timeout: 60_000 }, async () => {
+  window.localStorage.removeItem(SIDEBAR_GROUP_BY_STORAGE_KEY)
+  const quietConvs = Array.from({ length: SIDEBAR_RECENT_QUIET_LIMIT + 2 }, (_, idx) => {
+    const id = idx + 100
+    return conv({
+      id,
+      title: `近期对话 ${id}`,
+      profileId: 'assistant',
+      createdAt: id * 1000,
+      updatedAt: id * 1000,
+    })
+  })
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    conversations: [
+      conv({ id: 10, title: '在跑主线', profileId: 'assistant', status: 'working', doing: '处理中', createdAt: 500_000, updatedAt: 500_000 }),
+      conv({ id: 11, parentConversationId: 10, title: '运行子会话', profileId: 'assistant', status: 'blocked', pendingAskCount: 1, createdAt: 500_100, updatedAt: 500_100 }),
+      ...quietConvs,
+    ],
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+    primaryTarget: { kind: 'conversation', conversationId: 10 },
+  })
+  let closeCount = 0
+  let navBubbleCount = 0
+  try {
+    render(
+      store,
+      e(
+        'div',
+        {
+          onClick: (event: React.MouseEvent<HTMLDivElement>) => {
+            if ((event.target as HTMLElement).closest('.nav-item')) navBubbleCount += 1
+          },
+        },
+        e(LiveSidebar, { onClose: () => { closeCount += 1 } }),
+      ),
+    )
+    await act(async () => {})
+
+    assert.ok(document.body.querySelector('.sidebar-batch-bar') === null, '默认不渲染批量操作栏')
+    const toggleBtn = document.body.querySelector<HTMLButtonElement>('.sidebar-batch-toggle')!
+    assert.ok(toggleBtn !== null, '工作集分组栏渲染批量管理开关')
+    await act(async () => {
+      toggleBtn.click()
+    })
+
+    const batchBar = document.body.querySelector('.sidebar-batch-bar')
+    assert.ok(batchBar !== null, '点击批量管理开关展开操作栏')
+    assert.equal(toggleBtn.getAttribute('aria-pressed'), 'true')
+    assert.equal(document.body.querySelectorAll('.sidebar-batch-checkbox').length, 9, '仅可见工作集行渲染勾选框（1 进行中 + 8 近期）')
+    assert.equal(document.body.querySelectorAll('.nav-item-row-actions').length, 0, '批量模式下隐藏行尾操作菜单')
+
+    // 1) 行点击 / 标题按钮 / 勾选框 / 可见子会话行均只切换对应根树勾选态，不导航也不关抽屉
+    const runningRow = [...document.body.querySelectorAll<HTMLElement>('.sidebar-overview-item')].find((el) =>
+      el.textContent?.includes('在跑主线'),
+    )!
+    const runningOpenBtn = runningRow.querySelector<HTMLButtonElement>('.sidebar-overview-open')!
+    const runningCheckBtn = runningRow.querySelector<HTMLButtonElement>('.sidebar-batch-checkbox [role="checkbox"]')!
+    const subRow = document.body.querySelector<HTMLElement>('.sidebar-overview-descendant')!
+
+    await act(async () => {
+      runningOpenBtn.click()
+    })
+    assert.ok(runningRow.classList.contains('is-selected'), '点击标题按钮选中根会话')
+    assert.equal(runningOpenBtn.getAttribute('aria-pressed'), 'true')
+    assert.equal(runningCheckBtn.getAttribute('aria-checked'), 'true')
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 10 }, '批量模式点击不导航')
+    assert.equal(closeCount, 0)
+    assert.equal(navBubbleCount, 0)
+
+    await act(async () => {
+      subRow.click()
+    })
+    assert.ok(!runningRow.classList.contains('is-selected'), '点击子会话行反选对应根会话且不导航不关抽屉')
+    assert.equal(closeCount, 0)
+    assert.equal(navBubbleCount, 0)
+
+    await act(async () => {
+      runningRow.click()
+    })
+    assert.ok(runningRow.classList.contains('is-selected'), '点击行外缘切换根会话勾选')
+    await act(async () => {
+      runningCheckBtn.click()
+    })
+    assert.ok(!runningRow.classList.contains('is-selected'), '点击勾选框取消选中')
+    assert.equal(closeCount, 0)
+    assert.equal(navBubbleCount, 0)
+
+    // 2) 分支展开按钮在批量模式下仍只切换子会话展开态
+    const quietRow = [...document.body.querySelectorAll<HTMLElement>('.sidebar-overview-item')].find((el) =>
+      el.textContent?.includes('近期对话 109'),
+    )!
+    assert.ok(!quietRow.classList.contains('is-selected'))
+    const descToggle = runningRow.querySelector<HTMLButtonElement>('button.sidebar-overview-desc-toggle')!
+    await act(async () => {
+      descToggle.click()
+    })
+    assert.equal(descToggle.getAttribute('aria-expanded'), 'true', '批量模式下仍可展开子会话')
+    assert.equal(closeCount, 0)
+    assert.equal(navBubbleCount, 0)
+
+    // 3) 全选仅覆盖当前可见未折叠项（9 项，不含被近期上限省略的 #100/#101）
+    const selectAllBtn = [...batchBar.querySelectorAll<HTMLButtonElement>('.batch-bar-actions button')]
+      .find((btn) => btn.textContent === '全选')!
+    await act(async () => {
+      selectAllBtn.click()
+    })
+    assert.ok(batchBar.textContent?.includes('已选择 9 项'))
+    const clearBtn = [...batchBar.querySelectorAll<HTMLButtonElement>('.batch-bar-actions button')]
+      .find((btn) => btn.textContent === '清空')!
+    assert.ok(clearBtn !== undefined, '全选后按钮切换为清空')
+
+    // 折叠「近期」分节：不可见的 8 项自动从已选集收敛出局，只保留「进行中」的 1 项
+    const recentToggle = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-overview-section-toggle')].find((el) =>
+      el.textContent?.includes('近期'),
+    )!
+    await act(async () => {
+      recentToggle.click()
+    })
+    assert.ok(batchBar.textContent?.includes('已选择 1 项'), '折叠分节后不可见项自动收敛剔除')
+    await act(async () => {
+      recentToggle.click()
+    })
+    assert.ok(batchBar.textContent?.includes('已选择 1 项'), '重新展开后已收敛出的项不会自行复活')
+    const reSelectAllBtn = [...batchBar.querySelectorAll<HTMLButtonElement>('.batch-bar-actions button')]
+      .find((btn) => btn.textContent === '全选')!
+    assert.ok(reSelectAllBtn !== undefined)
+    await act(async () => {
+      reSelectAllBtn.click()
+    })
+    assert.ok(batchBar.textContent?.includes('已选择 9 项'))
+    const reClearBtn = [...batchBar.querySelectorAll<HTMLButtonElement>('.batch-bar-actions button')]
+      .find((btn) => btn.textContent === '清空')!
+    await act(async () => {
+      reClearBtn.click()
+    })
+    assert.ok(batchBar.textContent?.includes('已选择 0 项'))
+
+    // 4) 搜索突破近期上限：搜索「近期对话」后全选覆盖全部 10 条命中项
+    const filterBtn = document.body.querySelector<HTMLButtonElement>('button[aria-label="筛选会话"]')!
+    await act(async () => {
+      filterBtn.click()
+    })
+    const searchInput = document.body.querySelector<HTMLInputElement>('.sidebar-search-input')!
+    await act(async () => {
+      setInputValue(searchInput, '近期对话')
+    })
+    assert.equal(document.body.querySelectorAll('.sidebar-overview-item').length, 10, '搜索命中全部 10 条近期对话')
+    const selectMatchedAllBtn = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar .batch-bar-actions button')]
+      .find((btn) => btn.textContent === '全选')!
+    await act(async () => {
+      selectMatchedAllBtn.click()
+    })
+    assert.ok(document.body.querySelector('.sidebar-batch-bar')?.textContent?.includes('已选择 10 项'), '搜索态全选覆盖全部命中项')
+
+    // 5) 退出批量模式：清空选择并恢复普通点击直达导航
+    const exitBtn = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar .batch-bar-header button')]
+      .find((btn) => btn.textContent === '退出')!
+    await act(async () => {
+      exitBtn.click()
+    })
+    assert.ok(document.body.querySelector('.sidebar-batch-bar') === null)
+    assert.equal(document.body.querySelectorAll('.sidebar-batch-checkbox').length, 0)
+    const row101 = [...document.body.querySelectorAll<HTMLElement>('.sidebar-overview-item')].find((el) =>
+      el.textContent?.includes('近期对话 101'),
+    )!
+    await act(async () => {
+      row101.click()
+    })
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 101 }, '退出批量模式恢复点击打开会话')
+    assert.equal(closeCount, 1)
+  } finally {
+    if (root) {
+      await act(async () => {
+        root!.unmount()
+      })
+      root = null
+    }
+    window.localStorage.removeItem(SIDEBAR_GROUP_BY_STORAGE_KEY)
+  }
+})
+
+test('Sidebar 批量管理：全选归档与确认删除请求、通知及自动退出批量模式', { timeout: 60_000 }, async () => {
+  window.localStorage.removeItem(SIDEBAR_GROUP_BY_STORAGE_KEY)
+  const stub = installSidebarBatchFetchStub()
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    conversations: [
+      conv({ id: 1, title: '会话一', tags: ['keep'], createdAt: 1000, updatedAt: 1000 }),
+      conv({ id: 2, title: '会话二', tags: [], createdAt: 2000, updatedAt: 2000 }),
+    ],
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+    primaryTarget: { kind: 'conversation', conversationId: 1 },
+  })
+  try {
+    render(store, e(LiveSidebar))
+    await act(async () => {})
+
+    // 1) 全选批量归档
+    await act(async () => {
+      document.body.querySelector<HTMLButtonElement>('.sidebar-batch-toggle')!.click()
+    })
+    const selectAllForArchive = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar .batch-bar-actions button')]
+      .find((btn) => btn.textContent === '全选')!
+    await act(async () => {
+      selectAllForArchive.click()
+    })
+    const archiveBtn = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar .batch-bar-actions button')]
+      .find((btn) => btn.textContent === '归档 (2)')!
+    assert.ok(archiveBtn !== undefined && !archiveBtn.disabled)
+    await act(async () => {
+      archiveBtn.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    assert.deepEqual(
+      stub.patches.map((item) => ({ id: item.id, tags: item.tags })).sort((a, b) => a.id - b.id),
+      [
+        { id: 1, tags: ['keep', 'helmx:archived'] },
+        { id: 2, tags: ['helmx:archived'] },
+      ],
+      '批量归档对所有选中会话保留原 tags 并追加 helmx:archived',
+    )
+    assert.ok(store.getNotices().some((n) => n.title === '批量归档完成'), '批量归档完成触发通知')
+    assert.ok(document.body.querySelector('.sidebar-batch-bar') === null, '批量归档后自动退出批量模式')
+
+    // 2) 全选批量删除：取消不发请求，确认发单次 bulk-delete 并自动退出
+    await act(async () => {
+      document.body.querySelector<HTMLButtonElement>('.sidebar-batch-toggle')!.click()
+    })
+    const selectAllForDelete = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar .batch-bar-actions button')]
+      .find((btn) => btn.textContent === '全选')!
+    await act(async () => {
+      selectAllForDelete.click()
+    })
+    const deleteBtn = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar .batch-bar-actions button')]
+      .find((btn) => btn.textContent === '删除 (2)')!
+    assert.ok(deleteBtn !== undefined && !deleteBtn.disabled)
+
+    await act(async () => {
+      deleteBtn.click()
+    })
+    const cancelBtn = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find((btn) => btn.textContent?.trim() === '取消')!
+    assert.ok(cancelBtn !== undefined, '批量删除先弹确认对话框')
+    await act(async () => {
+      cancelBtn.click()
+    })
+    assert.deepEqual(stub.bulkDeletes, [], '取消确认不发起 bulk-delete')
+
+    await act(async () => {
+      deleteBtn.click()
+    })
+    const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find((btn) => btn.textContent?.trim() === '删除会话')!
+    assert.ok(confirmBtn !== undefined)
+    await act(async () => {
+      confirmBtn.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    assert.equal(stub.bulkDeletes.length, 1, '确认删除发起单次 bulk-delete')
+    assert.deepEqual([...stub.bulkDeletes[0]!].sort((a, b) => a - b), [1, 2])
+    assert.ok(store.getNotices().some((n) => n.title === '批量删除完成'), '批量删除完成触发通知')
+    assert.ok(document.body.querySelector('.sidebar-batch-bar') === null, '批量删除后自动退出批量模式')
+  } finally {
+    stub.restore()
+    if (root) {
+      await act(async () => {
+        root!.unmount()
+      })
+      root = null
+    }
+    window.localStorage.removeItem(SIDEBAR_GROUP_BY_STORAGE_KEY)
+  }
+})

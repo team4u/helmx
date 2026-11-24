@@ -1,6 +1,6 @@
 /**
  * Shared batch conversation selection & bulk-delete state machine used by
- * ConversationOverview.
+ * ConversationOverview and SidebarConversationList.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { WebMessageTranslator } from '../i18n/catalog.js'

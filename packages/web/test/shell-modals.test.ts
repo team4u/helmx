@@ -884,6 +884,11 @@ test('批量删除导航契约：Sidebar 不做二次导航，回退统一由 Pr
     'utf8',
   )
   assert.match(overviewSource, /useBatchConversationDelete/, '总览大盘复用共享批量删除钩子')
+  const sidebarListSource = readFileSync(
+    new URL('../src/shell/SidebarConversationList.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(sidebarListSource, /useBatchConversationDelete/, '侧栏工作集复用共享批量删除钩子')
 })
 
 test('删除回退仿真：主屏/分屏/抽屉命中被删会话时回该智能体待命态', { timeout: 60_000 }, () => {
@@ -946,13 +951,14 @@ test('SSR 渲染回归：Sidebar 渲染顶栏总览/分组栏新话题/工作集
   const store = makeTestStore()
   const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
-  // 顶栏总览与分组栏新话题入口，工作集过滤按钮；侧栏不再包含批量管理栏与双模式分段器
+  // 顶栏总览与分组栏新话题/批量管理入口，工作集过滤按钮；默认不展开批量操作栏，双模式分段器已移除
   assert.ok(html.includes('sidebar-overview-open-btn'), '应渲染顶栏会话总览按钮')
   assert.ok(!html.includes('sidebar-conv-primary-nav'), '旧顶置一级导航区已收敛')
   assert.ok(html.includes('sidebar-new-topic-btn'), '应渲染新话题入口')
   assert.ok(html.includes('aria-label="Filter conversations"'), '应渲染工作集过滤按钮')
+  assert.ok(html.includes('aria-label="Manage conversations in bulk"'), '侧栏工作集分组栏应渲染批量管理开关')
+  assert.ok(!html.includes('sidebar-batch-bar'), '未开启批量模式时不渲染侧栏批量操作栏')
   assert.ok(!html.includes('sidebar-conv-mode-switch'), '双模式分段器已移除')
-  assert.ok(!html.includes('aria-label="Manage conversations in bulk"'), '批量管理已收敛到全屏总览')
 
   // 极简无 Emoji 铁律验证
   const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u

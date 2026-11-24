@@ -1,6 +1,6 @@
 /**
  * Shared batch management toolbar and destructive-delete confirmation dialog
- * used by ConversationOverview.
+ * used by ConversationOverview and SidebarConversationList.
  */
 import type { ReactNode } from 'react'
 import { ConfirmDialog } from '@helmx/plugin-client'

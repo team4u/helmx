@@ -12,12 +12,15 @@
  *   - 0 会话空态额外提供显式「+ 新话题」引导按钮；
  *   - 超限时底部呈现「查看全部 N 个会话」直达 #/overview（透传当前分组维度）；
  *   - 侧栏搜索突破近期上限检索全量未归档人类根树，底部提供带 ?sp.q 透传的「在会话总览中查看匹配」；
- * - 职责边界：侧栏专注快速切换与新开话题，不包含批量管理栏、不渲染已归档分组（均归一到 #/overview）；
- * - 移动端防误关契约：工具栏按钮与空态引导按钮不挂 .nav-item，展开子会话与行尾动作菜单均显式 stopPropagation，
+ * - 职责边界：侧栏专注快速切换、新开话题与当前工作集的批量选择/全选/归档/删除
+ *   （已归档治理仍归一到 #/overview）；
+ * - 移动端防误关契约：工具栏按钮、批量操作栏与空态引导按钮不挂 .nav-item，批量模式下的行点击、
+ *   勾选框、子会话行以及展开子会话和行尾动作菜单均显式 stopPropagation，
  *   避免冒泡触发 App 外层 .nav-item 关闭移动端抽屉。
  */
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import {
+  Checkbox,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -31,7 +34,10 @@ import {
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatStopwatchMs } from '../lib/format.js'
 import { useAuthConnection, useProfilesSlice, useStoreActions } from '../lib/store-context.js'
+import { BatchActionBar } from '../ui/BatchActionBar.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
+import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
+import { useBatchConversationDelete } from './use-batch-conversation-delete.js'
 import {
   buildNewTopicCandidates,
   buildOverviewCards,
@@ -53,6 +59,8 @@ import {
   activeConversationIdsOf,
   buildAgentStandings,
   getConversationPresence,
+  isConversationArchivable,
+  isConversationBulkSelectable,
   openAgentStandby,
   presenceNavClassSuffix,
   resolveSidebarTargetPresence,
@@ -275,10 +283,14 @@ interface SidebarWorkingSetTreeItemProps {
   viewedConversationIds: ReadonlySet<number>
   hideProfileMeta?: boolean
   hideNodeMeta?: boolean
+  batchMode: boolean
+  selectable: boolean
+  selected: boolean
   onOpenConversation: (conversationId: number) => void
   onDrawerPeek: (conversationId: number) => void
   onOpenSplit: (conversationId: number) => void
   onToggleExpanded: (rootConversationId: number) => void
+  onToggleSelect: (conversationId: number) => void
 }
 
 function sameSidebarPresence(a: SidebarStoreView, b: SidebarStoreView): boolean {
@@ -299,10 +311,14 @@ const SidebarWorkingSetTreeItem = memo(
     viewedConversationIds,
     hideProfileMeta = false,
     hideNodeMeta = false,
+    batchMode,
+    selectable,
+    selected,
     onOpenConversation,
     onDrawerPeek,
     onOpenSplit,
     onToggleExpanded,
+    onToggleSelect,
   }: SidebarWorkingSetTreeItemProps): ReactNode {
     const { t } = useWebLocale()
     const rootPresence = getConversationPresence(store, card.root.id)
@@ -401,18 +417,49 @@ const SidebarWorkingSetTreeItem = memo(
     return (
       <div className="sidebar-overview-tree">
         <div
-          className={`nav-item sidebar-overview-item sidebar-overview-item-${card.bucket}${presenceNavClassSuffix(rootPresence)}${isBranchActive ? ' sidebar-overview-item-branch' : ''}`}
+          className={`nav-item sidebar-overview-item sidebar-overview-item-${card.bucket}${presenceNavClassSuffix(rootPresence)}${isBranchActive ? ' sidebar-overview-item-branch' : ''}${batchMode ? ' is-batch-mode' : ''}${selected ? ' is-selected' : ''}`}
           onClick={(e) => {
+            if (batchMode) {
+              e.stopPropagation()
+              if (!shouldSkipNavRowClick(e.target, e.currentTarget) && selectable) {
+                onToggleSelect(card.root.id)
+              }
+              return
+            }
             if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
             onOpenConversation(primaryTargetId)
           }}
         >
           <div className="sidebar-overview-head">
+            {batchMode && (
+              <span className="sidebar-batch-check" onClick={(e) => e.stopPropagation()}>
+                <Checkbox
+                  className="sidebar-batch-checkbox"
+                  checked={selected}
+                  aria-label={titleText}
+                  disabled={!selectable}
+                  title={selectable ? undefined : t('shell.overview.batchProtected')}
+                  onChange={() => {
+                    if (selectable) onToggleSelect(card.root.id)
+                  }}
+                />
+              </span>
+            )}
             <button
               type="button"
               className="nav-item-main nav-open sidebar-overview-open"
-              onClick={() => onOpenConversation(primaryTargetId)}
-              aria-current={rootPresence.active ? 'page' : undefined}
+              onClick={(e) => {
+                if (batchMode) {
+                  e.stopPropagation()
+                  if (selectable) onToggleSelect(card.root.id)
+                  return
+                }
+                onOpenConversation(primaryTargetId)
+              }}
+              aria-current={!batchMode && rootPresence.active ? 'page' : undefined}
+              aria-pressed={batchMode ? selected : undefined}
+              aria-label={batchMode ? `${titleText} · ${t('shell.overview.batchToggleCard')}` : undefined}
+              disabled={batchMode && !selectable}
               title={titleText}
             >
               <span className="nav-status-slot">
@@ -424,29 +471,33 @@ const SidebarWorkingSetTreeItem = memo(
               </span>
               <span className="nav-item-label">{titleText}</span>
             </button>
-            <span className="nav-item-meta sidebar-overview-head-meta">
-              <SidebarPaneTag paneTag={rootPresence.paneTag} />
-              <span className="nav-item-row-actions" onClick={(e) => e.stopPropagation()}>
-                <ConversationRowActionsMenu
-                  conversation={card.root}
-                  enableDelete
-                  prependItems={[
-                    {
-                      key: 'drawer-peek',
-                      icon: 'panel-right',
-                      label: t('shell.overview.drawerPeek'),
-                      onSelect: () => onDrawerPeek(card.targetConversationId),
-                    },
-                    {
-                      key: 'open-split',
-                      icon: 'columns',
-                      label: t('shell.sidebar.openInRightSplit'),
-                      onSelect: () => onOpenSplit(card.targetConversationId),
-                    },
-                  ]}
-                />
+            {(rootPresence.paneTag !== null || !batchMode) && (
+              <span className="nav-item-meta sidebar-overview-head-meta">
+                <SidebarPaneTag paneTag={rootPresence.paneTag} />
+                {!batchMode && (
+                  <span className="nav-item-row-actions" onClick={(e) => e.stopPropagation()}>
+                    <ConversationRowActionsMenu
+                      conversation={card.root}
+                      enableDelete
+                      prependItems={[
+                        {
+                          key: 'drawer-peek',
+                          icon: 'panel-right',
+                          label: t('shell.overview.drawerPeek'),
+                          onSelect: () => onDrawerPeek(card.targetConversationId),
+                        },
+                        {
+                          key: 'open-split',
+                          icon: 'columns',
+                          label: t('shell.sidebar.openInRightSplit'),
+                          onSelect: () => onOpenSplit(card.targetConversationId),
+                        },
+                      ]}
+                    />
+                  </span>
+                )}
               </span>
-            </span>
+            )}
           </div>
 
           {(hasMetaContent || showDescendantToggle) && (
@@ -508,7 +559,11 @@ const SidebarWorkingSetTreeItem = memo(
                 descendant={descendant}
                 store={store}
                 viewedConversationIds={viewedConversationIds}
+                batchMode={batchMode}
+                selectable={selectable}
+                rootConversationId={card.root.id}
                 onOpenConversation={onOpenConversation}
+                onToggleSelect={onToggleSelect}
               />
             ))}
           </div>
@@ -524,17 +579,25 @@ const SidebarWorkingSetTreeItem = memo(
     prev.viewedConversationIds === next.viewedConversationIds &&
     prev.hideProfileMeta === next.hideProfileMeta &&
     prev.hideNodeMeta === next.hideNodeMeta &&
+    prev.batchMode === next.batchMode &&
+    prev.selectable === next.selectable &&
+    prev.selected === next.selected &&
     prev.onOpenConversation === next.onOpenConversation &&
     prev.onDrawerPeek === next.onDrawerPeek &&
     prev.onOpenSplit === next.onOpenSplit &&
-    prev.onToggleExpanded === next.onToggleExpanded,
+    prev.onToggleExpanded === next.onToggleExpanded &&
+    prev.onToggleSelect === next.onToggleSelect,
 )
 
 interface SidebarWorkingSetDescendantRowProps {
   descendant: OverviewDescendant
   store: SidebarStoreView
   viewedConversationIds: ReadonlySet<number>
+  batchMode: boolean
+  selectable: boolean
+  rootConversationId: number
   onOpenConversation: (conversationId: number) => void
+  onToggleSelect: (conversationId: number) => void
 }
 
 /** 缩进单行子会话。 */
@@ -543,7 +606,11 @@ const SidebarWorkingSetDescendantRow = memo(
     descendant,
     store,
     viewedConversationIds,
+    batchMode,
+    selectable,
+    rootConversationId,
     onOpenConversation,
+    onToggleSelect,
   }: SidebarWorkingSetDescendantRowProps): ReactNode {
     const { t } = useWebLocale()
     const presence = getConversationPresence(store, descendant.conv.id)
@@ -562,7 +629,12 @@ const SidebarWorkingSetDescendantRow = memo(
       ? `${descendantBranchLabel} · ${descendantSignals.join(' · ')}`
       : descendantBranchLabel
 
-    const handleActivate = (_e: MouseEvent): void => {
+    const handleActivate = (e: MouseEvent): void => {
+      if (batchMode) {
+        e.stopPropagation()
+        if (selectable) onToggleSelect(rootConversationId)
+        return
+      }
       onOpenConversation(descendant.conv.id)
     }
 
@@ -570,6 +642,13 @@ const SidebarWorkingSetDescendantRow = memo(
       <div
         className={`nav-item nav-item-sub sidebar-overview-descendant${presenceNavClassSuffix(presence)}`}
         onClick={(e) => {
+          if (batchMode) {
+            e.stopPropagation()
+            if (!shouldSkipNavRowClick(e.target, e.currentTarget) && selectable) {
+              onToggleSelect(rootConversationId)
+            }
+            return
+          }
           if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
           handleActivate(e)
         }}
@@ -578,7 +657,8 @@ const SidebarWorkingSetDescendantRow = memo(
           type="button"
           className="nav-item-main nav-open"
           onClick={handleActivate}
-          aria-current={presence.active ? 'page' : undefined}
+          aria-current={!batchMode && presence.active ? 'page' : undefined}
+          disabled={batchMode && !selectable}
           title={titleText}
         >
           <span className="nav-status-slot">
@@ -619,7 +699,11 @@ const SidebarWorkingSetDescendantRow = memo(
     prev.descendant === next.descendant &&
     sameSidebarPresence(prev.store, next.store) &&
     prev.viewedConversationIds === next.viewedConversationIds &&
-    prev.onOpenConversation === next.onOpenConversation,
+    prev.batchMode === next.batchMode &&
+    prev.selectable === next.selectable &&
+    prev.rootConversationId === next.rootConversationId &&
+    prev.onOpenConversation === next.onOpenConversation &&
+    prev.onToggleSelect === next.onToggleSelect,
 )
 
 export function SidebarConversationList({
@@ -744,6 +828,42 @@ export function SidebarConversationList({
     () => cardGroups.flatMap((group) => (activeCollapsedKeys.has(group.key) ? [] : group.cards)),
     [cardGroups, activeCollapsedKeys],
   )
+
+  const [archiving, setArchiving] = useState(false)
+  const selectableCardIds = useMemo(
+    () => renderedCards.filter((card) => isConversationBulkSelectable(card.root)).map((card) => card.root.id),
+    [renderedCards],
+  )
+  const batch = useBatchConversationDelete({
+    selectableIds: selectableCardIds,
+    pushNotice: store.pushNotice,
+    t,
+    busy: archiving,
+  })
+  const effectiveArchivableSelectedIds = useMemo(
+    () =>
+      renderedCards
+        .filter((card) => batch.selectedIds.has(card.root.id) && isConversationArchivable(card.root))
+        .map((card) => card.root.id),
+    [renderedCards, batch.selectedIds],
+  )
+
+  const executeBatchArchive = async (): Promise<void> => {
+    if (effectiveArchivableSelectedIds.length === 0 || archiving || batch.deleting) return
+    setArchiving(true)
+    try {
+      const archivableSet = new Set(effectiveArchivableSelectedIds)
+      const convs = renderedCards
+        .filter((card) => archivableSet.has(card.root.id))
+        .map((card) => card.root)
+      if (convs.length === 0) return
+      const outcome = await patchConversationsArchived(convs, true)
+      store.pushNotice(archiveBatchNotice(true, outcome, t))
+      batch.exitBatchMode()
+    } finally {
+      setArchiving(false)
+    }
+  }
 
   const descendantSlicesByRoot = useMemo(() => {
     const map = new Map<number, SidebarOverviewDescendantsSlice>()
@@ -876,6 +996,21 @@ export function SidebarConversationList({
               <HelmxIcon name="list-filter" size={13} />
             </button>
           </Tooltip>
+          <Tooltip
+            content={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
+            side="top"
+          >
+            <button
+              type="button"
+              className={`sidebar-header-icon-btn sidebar-batch-toggle${batch.batchMode ? ' is-active' : ''}`}
+              aria-label={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
+              aria-pressed={batch.batchMode}
+              disabled={batch.deleting || archiving}
+              onClick={batch.toggleBatchMode}
+            >
+              <HelmxIcon name="check-square" size={13} />
+            </button>
+          </Tooltip>
           <SidebarNewTopicButton
             candidates={newTopicCandidates}
             store={store}
@@ -907,6 +1042,36 @@ export function SidebarConversationList({
               else setSearchOpen(false)
             }
           }}
+        />
+      )}
+
+      {batch.batchMode && (
+        <BatchActionBar
+          className="sidebar-batch-bar"
+          selectedCount={batch.selectedIds.size}
+          selectableCount={selectableCardIds.length}
+          isAllSelected={batch.isAllSelected}
+          deleting={batch.deleting}
+          busy={archiving}
+          exitTitle={t('shell.agents.exitBulk')}
+          onExit={batch.exitBatchMode}
+          onToggleSelectAll={batch.toggleSelectAll}
+          extraActions={
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={effectiveArchivableSelectedIds.length === 0 || batch.deleting || archiving}
+              onClick={() => void executeBatchArchive()}
+            >
+              {archiving
+                ? t('shell.agents.archiving')
+                : t('shell.agents.archiveCount', { count: effectiveArchivableSelectedIds.length })}
+            </button>
+          }
+          confirmOpen={batch.confirmOpen}
+          onConfirmOpenChange={batch.setConfirmOpen}
+          onRequestDelete={batch.requestDeleteConfirm}
+          onConfirmDelete={() => void batch.executeBatchDelete()}
         />
       )}
 
@@ -1025,10 +1190,14 @@ export function SidebarConversationList({
                           viewedConversationIds={viewedConversationIds}
                           hideProfileMeta={groupBy === 'profile'}
                           hideNodeMeta={groupBy === 'node'}
+                          batchMode={batch.batchMode}
+                          selectable={isConversationBulkSelectable(card.root)}
+                          selected={batch.selectedIds.has(card.root.id)}
                           onOpenConversation={openConversation}
                           onDrawerPeek={openConversationDrawer}
                           onOpenSplit={openSplit}
                           onToggleExpanded={toggleCardExpanded}
+                          onToggleSelect={batch.toggleSelect}
                         />
                       ))}
                     </div>
