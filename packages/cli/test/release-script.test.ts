@@ -11,14 +11,15 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isStrictSemver } from '@helmx/protocol'
 import { sanitizedHostEnv, useTempDir } from './helpers/cli-harness.js'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const releaseScriptSrc = path.join(repoRoot, 'scripts', 'release.mjs')
 const releaseNotesSrc = path.join(repoRoot, 'scripts', 'lib', 'release-notes.mjs')
-const { assertPnpmArgsShellSafe } = await import(releaseScriptSrc)
+// Windows 上绝对路径必须经 file:// URL 才能被 ESM loader 接受
+const { assertPnpmArgsShellSafe } = await import(pathToFileURL(releaseScriptSrc).href)
 
 function gitIn(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv): string {
   const res = spawnSync('git', args, { cwd, encoding: 'utf8', env })

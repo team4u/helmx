@@ -53,7 +53,7 @@ import {
 import { buildAgentStandings } from '../src/shell/sidebar-model.js'
 import { formatLocationHash, hashHasPrimaryTarget, parseLocationHash, shouldPushLocationHistory } from '../src/lib/url-hash-model.js'
 import { spaceForTarget } from '../src/lib/types.js'
-import { waitForCondition } from './helpers/dom-harness.js'
+import { flushMacrotask, waitForCondition } from './helpers/dom-harness.js'
 import { makeTestStore, HelmxExternalStoreContext, type TestStoreOverrides } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 
@@ -1909,16 +1909,27 @@ test('ConversationOverview protected card keeps the view-only menu actions (peek
       'drawer peek works on automated cards',
     )
 
-    // Settled automated card (#8) exposes Delete in its menu
+    // Settled automated card (#8) exposes Delete in its menu. Opening the previous menu attached
+    // Radix DismissableLayer's document-level pointer listener; its cleanup runs on a later
+    // macrotask after the Portal unmounts. Flush those tasks first (same discipline as the other
+    // menu tests' settle()), otherwise the next trigger's pointerdown is consumed as an outside
+    // click and the second menu never opens. The modal drawer must also be closed first.
+    store.popDrawer()
+    await waitForCondition(() => store.getDrawerStack().length === 0)
+    await waitForCondition(() => document.querySelectorAll('.helmx-dropdown-content').length === 0)
+    await flushMacrotask()
+    await flushMacrotask()
     const settledTrigger = cards[1]!.querySelector<HTMLButtonElement>('.overview-card-actions button[aria-haspopup="menu"]')
     assert.ok(settledTrigger !== null)
     await act(async () => {
       settledTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
     })
-    const settledItems = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].filter((el) =>
-      el.closest('.helmx-dropdown-content') !== null,
-    )
-    assert.ok(settledItems.some((el) => el.textContent?.includes('Delete')), 'settled automated card exposes Delete')
+    const settledMenuItems = () =>
+      [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].filter((el) =>
+        el.closest('.helmx-dropdown-content') !== null,
+      )
+    await waitForCondition(() => settledMenuItems().some((el) => el.textContent?.includes('Delete')))
+    assert.ok(settledMenuItems().some((el) => el.textContent?.includes('Delete')), 'settled automated card exposes Delete')
   } finally {
     await act(async () => {
       root?.unmount()
