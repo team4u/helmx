@@ -1,11 +1,14 @@
 import React, { useId } from 'react'
 import { HelmxIcon } from '../icons.js'
+import { mergeAriaDescribedBy, useFieldContext } from './field-context.js'
 
 export interface CheckboxProps {
   checked: boolean
   onChange: (checked: boolean) => void
   disabled?: boolean
   indeterminate?: boolean
+  invalid?: boolean
+  required?: boolean
   label?: React.ReactNode
   id?: string
   name?: string
@@ -13,6 +16,7 @@ export interface CheckboxProps {
   className?: string
   style?: React.CSSProperties
   'aria-label'?: string
+  'aria-describedby'?: string
 }
 
 /**
@@ -27,6 +31,8 @@ export function Checkbox({
   onChange,
   disabled = false,
   indeterminate = false,
+  invalid,
+  required,
   label,
   id,
   name,
@@ -34,12 +40,17 @@ export function Checkbox({
   className = '',
   style,
   'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
 }: CheckboxProps) {
   const generatedId = useId()
-  const checkboxId = id ?? generatedId
+  const field = useFieldContext()
+  const hasOwnLabel = label !== undefined && label !== null && label !== ''
+  const checkboxId = id ?? (hasOwnLabel ? generatedId : (field?.controlId ?? generatedId))
+  const resolvedInvalid = invalid ?? field?.invalid ?? false
+  const resolvedRequired = required ?? (field?.required === true ? true : undefined)
+  const resolvedDescribedBy = mergeAriaDescribedBy(ariaDescribedBy, field?.describedBy)
 
-  const handleClick = (e: React.MouseEvent) => {
-    e.preventDefault()
+  const handleClick = () => {
     if (!disabled) {
       onChange(!checked)
     }
@@ -64,6 +75,9 @@ export function Checkbox({
       name={name}
       aria-checked={indeterminate ? 'mixed' : checked}
       aria-label={ariaLabel ?? (typeof label === 'string' ? label : undefined)}
+      aria-invalid={resolvedInvalid ? true : undefined}
+      aria-required={resolvedRequired}
+      aria-describedby={resolvedDescribedBy}
       disabled={disabled}
       className={buttonClass}
       onClick={handleClick}
@@ -78,23 +92,14 @@ export function Checkbox({
     </button>
   )
 
-  if (label === undefined || label === null || label === '') {
-    return (
-      <span className={wrapClass} style={style} title={title}>
-        {checkboxBox}
-      </span>
-    )
-  }
-
   return (
-    <label
-      htmlFor={checkboxId}
-      className={wrapClass}
-      style={style}
-      title={title}
-    >
+    <span className={wrapClass} style={style} title={title}>
       {checkboxBox}
-      <span className="helmx-checkbox-label">{label}</span>
-    </label>
+      {hasOwnLabel ? (
+        <label htmlFor={checkboxId} className="helmx-checkbox-label">
+          {label}
+        </label>
+      ) : null}
+    </span>
   )
 }

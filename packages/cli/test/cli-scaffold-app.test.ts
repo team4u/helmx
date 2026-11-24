@@ -15,13 +15,38 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import ts from 'typescript'
+import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helmx/protocol'
 import { doctorPluginDir } from '../../kernel/src/plugins/plugin-doctor.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
+import { SCAFFOLD_CLIENT_APP_TSX, SCAFFOLD_CLIENT_INDEX_TSX } from '../src/commands/scaffold-templates.js'
 import {
   makeCliEnv,
   runCliCaptured,
   useTempDir,
 } from './helpers/cli-harness.js'
+
+function collectPluginClientImports(sourceText: string): { rootValues: string[]; disallowedSubpaths: string[] } {
+  const sf = ts.createSourceFile('client.tsx', sourceText, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX)
+  const rootValues: string[] = []
+  const disallowedSubpaths: string[] = []
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue
+    const spec = stmt.moduleSpecifier.text
+    if (spec.startsWith('@helmx/plugin-client/')) {
+      disallowedSubpaths.push(spec)
+      continue
+    }
+    if (spec !== '@helmx/plugin-client' || stmt.importClause?.isTypeOnly) continue
+    const bindings = stmt.importClause?.namedBindings
+    if (bindings !== undefined && ts.isNamedImports(bindings)) {
+      for (const el of bindings.elements) {
+        if (!el.isTypeOnly) rootValues.push((el.propertyName ?? el.name).text)
+      }
+    }
+  }
+  return { rootValues, disallowedSubpaths }
+}
 
 /** Emoji pattern (common emoticon and symbol ranges; generated text must contain zero Emoji). */
 const EMOJI_PATTERN = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/u
@@ -87,18 +112,31 @@ test('plugins init --template app: backend and frontend content contracts', { ti
   assert.ok(index.includes("target: 'screen:desk-app/main'"), 'sidebar entry should target this plugin screen')
 
   const client = await fsp.readFile(path.join(dir, 'client', 'index.tsx'), 'utf8')
-  for (const primitive of ['Screen', 'ScreenSection', 'DataTable', 'KvGrid', 'Checkbox', 'usePluginDoc', 'usePluginContext']) {
+  for (const primitive of ['Screen', 'ScreenSection', 'DataTable', 'KvGrid', 'Checkbox', 'Button', 'Field', 'Input', 'usePluginDoc', 'usePluginContext']) {
     assert.ok(client.includes(primitive), `frontend should use host primitive/hook ${primitive}`)
   }
   assert.ok(client.includes('export function MainScreen'), 'frontend should export MainScreen matching screen declaration')
   assert.ok(!/\b(font-medium|text-subtle|text-xs)\b/.test(client), 'must not contain pseudo-Tailwind class names')
   assert.ok(client.includes("'items'"), 'frontend subscribes to matching public doc')
 
-  // Zero private CSS by default: no stylesheet artifact, host public form control class only
+  // Zero private CSS by default: no stylesheet artifact, host SDK primitives only
   await assert.rejects(fsp.access(path.join(dir, 'client', 'styles.css')), 'app template must not generate client/styles.css')
   assert.ok(!client.includes("import './styles.css'"), 'frontend must not import a private stylesheet')
-  assert.ok(client.includes('className="input"'), 'text input must reuse the host public .input class')
   assert.ok(!/\bapp-(form|input|done|col-check)\b/.test(client), 'frontend must not use private app-* layout classes')
+
+  // Every runtime symbol imported from @helmx/plugin-client in scaffold templates must stay in PLUGIN_CLIENT_SHARED_EXPORTS
+  const allowedExports = new Set<string>(PLUGIN_CLIENT_SHARED_EXPORTS)
+  for (const [label, src] of [
+    ['SCAFFOLD_CLIENT_INDEX_TSX', SCAFFOLD_CLIENT_INDEX_TSX],
+    ['SCAFFOLD_CLIENT_APP_TSX', SCAFFOLD_CLIENT_APP_TSX],
+  ] as const) {
+    const { rootValues, disallowedSubpaths } = collectPluginClientImports(src)
+    assert.deepEqual(disallowedSubpaths, [], `${label} must not import internal @helmx/plugin-client/* subpaths`)
+    assert.ok(rootValues.length > 0, `${label} should import shared primitives from @helmx/plugin-client`)
+    for (const sym of rootValues) {
+      assert.ok(allowedExports.has(sym), `${label} imports ${sym} which is missing from PLUGIN_CLIENT_SHARED_EXPORTS`)
+    }
+  }
 
   // Zero-Emoji invariant across all generated files
   for (const f of await scaffoldFiles(dir)) {

@@ -13,10 +13,13 @@ import './styles.css'
 import type { ReactNode } from 'react'
 import type { ConversationSummary, ScreenProps } from '@helmx/protocol'
 import {
+  Badge,
+  Button,
   ConfirmDialog,
   DataTable,
   DetailDrawer,
   HelmxIcon,
+  IconButton,
   KvGrid,
   Screen,
   ScreenSection,
@@ -33,6 +36,7 @@ import {
   usePluginLocale,
   usePluginTranslator,
   useSharedNowMs,
+  type StatusLightTone,
   type UsePluginActionResult,
 } from '@helmx/plugin-client'
 import {
@@ -108,6 +112,10 @@ function ActionError({ message }: { message: string }): ReactNode {
   )
 }
 
+function triggerHealthTone(status: 'error' | 'blocked' | 'working'): StatusLightTone {
+  return status === 'error' ? 'failed' : status
+}
+
 function RowAction({
   label,
   iconName,
@@ -122,19 +130,15 @@ function RowAction({
   onClick: () => void
 }): ReactNode {
   return (
-    <button
-      type="button"
-      className={`btn btn-xs ${danger === true ? 'btn-danger' : ''}`}
-      disabled={disabled === true}
+    <Button
+      size="xs"
+      variant={danger === true ? 'danger' : 'default'}
+      icon={iconName}
+      pending={disabled === true}
       onClick={onClick}
     >
-      <HelmxIcon
-        name={disabled === true ? 'loader' : iconName}
-        size={11}
-        className={disabled === true ? 'spin-slow' : undefined}
-      />
-      <span>{label}</span>
-    </button>
+      {label}
+    </Button>
   )
 }
 
@@ -199,9 +203,9 @@ function CronTable({
               >
                 <td data-label="ID" className="mono">
                   <span className="tg-id-cell">
-                    {showLight && health.status !== null ? (
+                    {showLight && (health.status === 'error' || health.status === 'blocked' || health.status === 'working') ? (
                       <StatusLight
-                        status={health.status}
+                        tone={triggerHealthTone(health.status)}
                         label={triggerRunStatusLabel(health.status, locale)}
                       />
                     ) : null}
@@ -211,9 +215,9 @@ function CronTable({
                 <td data-label={t(TRIGGERS_COL_SCHEDULE)} className="mono">{job.schedule}</td>
                 <td data-label={t(TRIGGERS_COL_COMMAND)} className="cell-ellipsis" title={job.text}>{job.text}</td>
                 <td data-label={t(TRIGGERS_COL_ENABLED)}>
-                  <span className={`badge badge-${job.enabled ? 'ok' : 'neutral'}`}>
-                    <span>{job.enabled ? t(TRIGGERS_ENABLED) : t(TRIGGERS_DISABLED)}</span>
-                  </span>
+                  <Badge tone={job.enabled ? 'ok' : 'neutral'}>
+                    {job.enabled ? t(TRIGGERS_ENABLED) : t(TRIGGERS_DISABLED)}
+                  </Badge>
                 </td>
                 <td data-label={t(TRIGGERS_COL_LAST_RUN)}>{formatTime(job.lastRunAt) || '—'}</td>
                 <td data-label={t(TRIGGERS_COL_NEXT_RUN)}>{formatTime(job.nextRunAt) || '—'}</td>
@@ -307,9 +311,9 @@ function WebhookTable({
               >
                 <td data-label="ID" className="mono">
                   <span className="tg-id-cell">
-                    {showLight && health.status !== null ? (
+                    {showLight && (health.status === 'error' || health.status === 'blocked' || health.status === 'working') ? (
                       <StatusLight
-                        status={health.status}
+                        tone={triggerHealthTone(health.status)}
                         label={triggerRunStatusLabel(health.status, locale)}
                       />
                     ) : null}
@@ -402,14 +406,13 @@ function TriggerRunRow({
         </span>
       </button>
       <Tooltip content={t(TRIGGERS_OPEN_CONVERSATION)} side="top">
-        <button
-          type="button"
-          className="btn btn-ghost btn-icon-xs tg-run-open-btn"
+        <IconButton
+          icon="external-link"
+          size="xs"
+          className="tg-run-open-btn"
           aria-label={`${t(TRIGGERS_OPEN_CONVERSATION)} #${run.id}`}
           onClick={() => onOpen(run.id)}
-        >
-          <HelmxIcon name="external-link" size={12} />
-        </button>
+        />
       </Tooltip>
     </div>
   )
@@ -468,11 +471,11 @@ function TriggerDetailDrawer({
       titleClassName="break-word mono"
       titleExtra={
         cronJob !== undefined ? (
-          <span className={`badge badge-${cronJob.enabled ? 'ok' : 'neutral'}`}>
+          <Badge tone={cronJob.enabled ? 'ok' : 'neutral'}>
             {cronJob.enabled ? t(TRIGGERS_ENABLED) : t(TRIGGERS_DISABLED)}
-          </span>
+          </Badge>
         ) : webhook !== undefined ? (
-          <span className="badge badge-neutral">Webhook</span>
+          <Badge tone="neutral">Webhook</Badge>
         ) : undefined
       }
       belowTitle={
@@ -485,35 +488,35 @@ function TriggerDetailDrawer({
       footer={
         cronJob !== undefined ? (
           <div className="flex-row-between" style={{ width: '100%' }}>
-            <button
-              type="button"
-              className="btn btn-sm btn-danger"
+            <Button
+              variant="danger"
+              size="sm"
+              icon="trash-2"
               disabled={actions.pending}
               onClick={() => onRequestDelete({ kind: 'cron', id: cronJob.id })}
             >
-              <HelmxIcon name="trash-2" size={12} />
-              <span>{t(TRIGGERS_DELETE)}</span>
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
+              {t(TRIGGERS_DELETE)}
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              icon="zap"
               disabled={actions.pending}
               onClick={() => void actions.run('cron_trigger', { id: cronJob.id }, { key: `trigger:${cronJob.id}` })}
             >
-              <HelmxIcon name="zap" size={12} />
-              <span>{t(TRIGGERS_TRIGGER_NOW)}</span>
-            </button>
+              {t(TRIGGERS_TRIGGER_NOW)}
+            </Button>
           </div>
         ) : webhook !== undefined ? (
-          <button
-            type="button"
-            className="btn btn-sm btn-danger"
+          <Button
+            variant="danger"
+            size="sm"
+            icon="trash-2"
             disabled={actions.pending}
             onClick={() => onRequestDelete({ kind: 'webhook', id: webhook.id })}
           >
-            <HelmxIcon name="trash-2" size={12} />
-            <span>{t(TRIGGERS_DELETE)}</span>
-          </button>
+            {t(TRIGGERS_DELETE)}
+          </Button>
         ) : undefined
       }
     >

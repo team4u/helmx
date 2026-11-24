@@ -5,7 +5,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ProfileDetailSlotProps } from '@helmx/protocol'
-import { HelmxIcon, Switch, usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
+import {
+  Button,
+  ErrorText,
+  HelmxIcon,
+  Switch,
+  Textarea,
+  usePluginContext,
+  usePluginLocale,
+  usePluginTranslator,
+} from '@helmx/plugin-client'
 import {
   MEMORY_COPY as C,
   memoryCharCount,
@@ -294,7 +303,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
       </div>
 
       {view.error !== null && (
-        <div className="badge badge-warn memory-section-error" role="alert"><span>{view.error}</span></div>
+        <ErrorText live className="memory-section-error">{view.error}</ErrorText>
       )}
 
       {view.memory === null ? (
@@ -305,9 +314,9 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
           ) : (
             <>
               <span>{t(C.loadFailed)}</span>
-              <button type="button" className="btn btn-secondary btn-sm" disabled={view.busy !== null} onClick={() => void load(effectiveId, token)}>
+              <Button variant="secondary" size="sm" disabled={view.busy !== null} onClick={() => void load(effectiveId, token)}>
                 {t(C.retry)}
-              </button>
+              </Button>
             </>
           )}
         </div>
@@ -321,8 +330,9 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
               {effectiveDraft ? memoryLineCount(effectiveDraft.split('\n').length, locale) : ''}
             </span>
           </div>
-          <textarea
-            className="input mono memory-section-textarea"
+          <Textarea
+            mono
+            className="memory-section-textarea"
             rows={8}
             placeholder={t(C.placeholder)}
             value={effectiveDraft}
@@ -331,15 +341,16 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
             aria-label={t(C.textareaLabel)}
           />
           <div className="flex-row memory-section-actions">
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              disabled={disabled || view.busy !== null || dreamLocksContent || !dirty}
+            <Button
+              variant="primary"
+              size="sm"
+              icon="save"
+              pending={view.busy === 'save'}
+              disabled={disabled || (view.busy !== null && view.busy !== 'save') || dreamLocksContent || !dirty}
               onClick={() => void handleSave()}
             >
-              {view.busy === 'save' ? <HelmxIcon name="loader" size={13} className="spin-slow" /> : <HelmxIcon name="save" size={13} />}
-              <span>{view.busy === 'save' ? t(C.saving) : t(C.save)}</span>
-            </button>
+              {view.busy === 'save' ? t(C.saving) : t(C.save)}
+            </Button>
             {dirty && <span className="text-subtle">{t(C.dirtyHint)}</span>}
           </div>
           <MemoryDreamBlock
@@ -391,19 +402,20 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
           <span>{t(C.dreamTitle)}</span>
         </span>
         <div className="flex-row memory-dream-actions">
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            disabled={disabled || busy !== null || statusLoading || props.memoryBusy}
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="moon-star"
+            pending={busy === 'run'}
+            disabled={disabled || (busy !== null && busy !== 'run') || statusLoading || props.memoryBusy}
             onClick={props.onRun}
           >
-            {busy === 'run' ? <HelmxIcon name="loader" size={13} className="spin-slow" /> : <HelmxIcon name="moon-star" size={13} />}
-            <span>{busy === 'run' ? t(C.dreamRunning) : t(C.dreamRun)}</span>
-          </button>
+            {busy === 'run' ? t(C.dreamRunning) : t(C.dreamRun)}
+          </Button>
           {autoConfig !== null && (
-            <button type="button" className="btn btn-ghost btn-sm" disabled={disabled || busy !== null} onClick={props.onAutoToggle}>
-              <span>{autoConfig.enabled ? t(C.dreamPause) : t(C.dreamResume)}</span>
-            </button>
+            <Button variant="ghost" size="sm" disabled={disabled || busy !== null} onClick={props.onAutoToggle}>
+              {autoConfig.enabled ? t(C.dreamPause) : t(C.dreamResume)}
+            </Button>
           )}
         </div>
       </div>
@@ -423,13 +435,13 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
       {props.refreshFailed && (
         <div className="memory-dream-refresh-error" role="alert">
           <span>{t(C.dreamRefreshFailed)}</span>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={disabled || busy !== null || props.memoryBusy} onClick={props.onRefreshRetry}>
+          <Button variant="secondary" size="sm" disabled={disabled || busy !== null || props.memoryBusy} onClick={props.onRefreshRetry}>
             {t(C.retry)}
-          </button>
+          </Button>
         </div>
       )}
       {notice !== null && <div className="text-subtle memory-dream-notice">{notice}</div>}
-      {error !== null && <div className="badge badge-warn memory-section-error" role="alert"><span>{error}</span></div>}
+      {error !== null && <ErrorText live className="memory-section-error">{error}</ErrorText>}
       <div className="text-subtle">{t(C.dreamGlobalHint)}</div>
     </div>
   )

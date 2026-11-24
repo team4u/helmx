@@ -24,13 +24,14 @@ test('Switch：基础状态、受控 checked、WAI-ARIA 属性与零 Emoji', { t
     }),
   )
 
-  assert.match(offHtml, /class="helmx-switch-wrap"/)
+  assert.match(offHtml, /<span class="helmx-switch-wrap">/)
   assert.match(offHtml, /role="switch"/)
   assert.match(offHtml, /aria-checked="false"/)
   assert.match(offHtml, /id="gateway-switch"/)
   assert.match(offHtml, /class="helmx-switch"/)
   assert.match(offHtml, /class="helmx-switch-thumb"/)
-  assert.match(offHtml, /class="helmx-switch-label">网关状态<\/span>/)
+  assert.match(offHtml, /<label for="gateway-switch" class="helmx-switch-label">网关状态<\/label>/)
+  assert.doesNotMatch(offHtml, /<label[^>]*>[\s\S]*<button/, 'Switch <label> must be a sibling of <button>, never wrapping it')
   assert.doesNotMatch(offHtml, /is-checked/)
   // 零 Emoji 保证
   assert.doesNotMatch(offHtml, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}]/u)
@@ -88,12 +89,13 @@ test('Checkbox：未选、勾选、半选（indeterminate）、无障碍与零 E
     }),
   )
 
-  assert.match(uncheckedHtml, /class="helmx-checkbox-wrap"/)
+  assert.match(uncheckedHtml, /<span class="helmx-checkbox-wrap">/)
   assert.match(uncheckedHtml, /role="checkbox"/)
   assert.match(uncheckedHtml, /aria-checked="false"/)
   assert.match(uncheckedHtml, /id="item-chk"/)
   assert.match(uncheckedHtml, /class="helmx-checkbox"/)
-  assert.match(uncheckedHtml, /class="helmx-checkbox-label">多选条目<\/span>/)
+  assert.match(uncheckedHtml, /<label for="item-chk" class="helmx-checkbox-label">多选条目<\/label>/)
+  assert.doesNotMatch(uncheckedHtml, /<label[^>]*>[\s\S]*<button/, 'Checkbox <label> must be a sibling of <button>, never wrapping it')
   assert.doesNotMatch(uncheckedHtml, /is-checked/)
   assert.doesNotMatch(uncheckedHtml, /is-indeterminate/)
   assert.doesNotMatch(uncheckedHtml, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}]/u)

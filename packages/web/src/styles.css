@@ -23,3 +23,4 @@
 @import './styles/standby.css' layer(host-components);
 @import './styles/outline.css' layer(host-components);
 @import './styles/overview.css' layer(host-components);
+@import './styles/utilities.css' layer(host-components);

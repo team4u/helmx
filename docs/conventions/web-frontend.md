@@ -29,9 +29,12 @@ Web 主控台基于 React 19 + Vite 6（`packages/web`），交互原语统一 R
 
 ## 设计系统原语与 CSS 架构
 
-- **严禁大面积内联样式**（`style={{ ... }}`）：除极少数动态计算的尺寸/坐标外，排版、间距与颜色一律使用设计系统原语类与 CSS 变量；
-- 常用通用类速查：分栏 `.modal-body-split` / `.modal-sidebar`；列表行 `.list-item-btn`；平坦分节 `.section-flat` 系列；表单 `.form-grid` / `.form-grid-label`；空状态 `.empty-state`；表格 `.helmx-table-wrap` / `.helmx-table`（统一内边距、12.5px 字体、表头 `var(--bg-subtle)`、`tr:hover`）；插件页面 `.screen-container` / `.screen-header` / `.screen-section`；工具栏行 `.screen-toolbar` / `.screen-toolbar-actions`（内含 `.search-box` 自动获得伸展权重）；键值 `.kv-grid` / `.kv-list`；提示横幅 `.callout`（`.callout-warn/-error/-ok`）；加载态 `.loading-state`；
-- **插件布局原语组件**（`@helmx/plugin-client` 导出，优先复用不要手写 div+className）：`Screen`（页面容器+页头）、`ScreenSection`（分节）、`ScreenToolbar`（页头与正文之间的工具栏行）、`DataTable`（统一 loading/empty 的表格外壳）、`KvGrid`（键值概览）、`DetailDrawer`（右侧详情抽屉外壳）、`SearchBox`、`EmptyState`、`LoadingState`、`StatusLight`、`ThinkingLevelControl`；屏内嵌套组件读参数用 `useScreenParams()`（宿主 `ScreenHost` 建立的屏内 scope，非全屏上下文返回 `null`）；
+- **严禁大面积内联样式**（`style={{ ... }}`）：除极少数动态计算的尺寸/坐标外，排版、间距与颜色一律使用设计系统原语组件、公共原语类与 CSS 变量（间距阶梯 `--space-1`..`--space-6` = `4/8/12/16/20/24px`）；
+- 常用通用类速查（定义在 `primitives.css` 与位于 `@layer host-components` 末尾的 `utilities.css`，插件优先使用下方 SDK 组件而非手拼类）：通用弹性布局与文本修饰 `.flex-1` / `.flex-row` / `.flex-row-between` / `.flex-row-wrap` / `.flex-col` / `.flex-col-xs` / `.text-muted` / `.text-subtle` / `.text-err` / `.mono` / `.nowrap` / `.break-word`；平坦分节 `.section-flat` 系列；表单 `.form-grid` / `.form-grid-label` / `.input` / `.input-sm` / `.textarea`（含 `[aria-invalid='true']` 统一错误描边）；空状态 `.empty-state`；表格 `.helmx-table-wrap` / `.helmx-table`（统一内边距、12.5px 字体、表头 `var(--bg-subtle)`、`tr:hover`）；插件页面 `.screen-container` / `.screen-header` / `.screen-section`；工具栏行 `.screen-toolbar` / `.screen-toolbar-actions`（内含 `.search-box` 自动获得伸展权重）；键值 `.kv-grid` / `.kv-list`；提示横幅 `.callout`（`.callout-warn/-error/-ok`）；加载态 `.loading-state`；
+- **插件布局、表单与展示原语组件**（全部由 `@helmx/plugin-client` 根入口导出，优先复用不要手写 div+className；外部插件不得导入 `@helmx/plugin-client/pure`）：
+  - 页面与容器：`Screen`（页面容器+页头）、`ScreenSection`（分节）、`ScreenToolbar`（页头与正文之间的工具栏行）、`Stack`（间距映射 `--space-1..5` 的弹性排布）、`Card`（静态结构化容器，含 `elevated | subtle` 与 `default | warn | danger`）、`SelectCard` + `CardGrid`（主舞台可点选对象卡与窄分屏防溢出响应网格）、`DataTable`（统一 loading/empty 的组合式表格外壳）、`KvGrid`（键值概览）、`DetailDrawer`（右侧详情抽屉外壳）；
+  - 表单与操作：`Button` / `IconButton`（强类型变体/尺寸、`pending` 忙态与 `forwardRef` 兼容 Radix `asChild`）、`Input` / `Textarea`、`Field` / `HelperText` / `ErrorText`（非包裹式 `<label htmlFor>` 与 `FieldContext` 自动贯通 `Input` / `Textarea` / `Select` / `MultiSelect` / `Switch` / `Checkbox`；多控件或自带 label 控件传 `htmlFor={false}`）；
+  - 展示与反馈：`Badge`、`MonoId`（截断等宽标识 + 一键复制）、`SearchBox`、`EmptyState`、`LoadingState`、`StatusLight`（推荐传强类型 `tone: StatusLightTone` + `label`/`aria-label`，同时导出 `STATUS_LIGHT_TONES` / `normalizeStatusLightTone` / `isKnownStatusLightStatus`）、`Callout`、`ModelPickerControl`；屏内嵌套组件读参数用 `useScreenParams()`（宿主 `ScreenHost` 建立的屏内 scope，非全屏上下文返回 `null`）；
 - **强制样式复用铁律**：全仓所有插件必须优先复用主框架设计系统原语，严禁在插件内复制通用表格、页面布局、键值列表或提示条样式；插件本地 `.css` 只写业务特异结构（如 Mermaid 缩放画布、Workflow DAG 卡片）。
 
 ### Radix UI 唯一无头交互原语底座

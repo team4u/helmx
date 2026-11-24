@@ -4,6 +4,7 @@ import { HelmxIcon } from '../icons.js'
 import { usePluginTranslator } from '../i18n.js'
 import { uiCopy } from '../ui-copy.js'
 import { Checkbox } from './Checkbox.js'
+import { FieldContext, mergeAriaDescribedBy, useFieldContext } from './field-context.js'
 import { Popover, PopoverContent, PopoverTrigger } from './Popover.js'
 import { useOverlayChildStyle } from './overlay-stack.js'
 import { usePluginScopeId } from './plugin-scope.js'
@@ -23,7 +24,10 @@ export interface BaseSelectProps<T extends string = string> {
   className?: string
   style?: React.CSSProperties
   size?: 'sm' | 'md'
+  invalid?: boolean
+  required?: boolean
   'aria-label'?: string
+  'aria-describedby'?: string
   id?: string
   name?: string
   direction?: 'down' | 'up' | 'auto'
@@ -90,7 +94,10 @@ function SingleSelectInner<T extends string = string>({
   className = '',
   style,
   size,
+  invalid,
+  required,
   'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
   id,
   name,
   direction = 'auto',
@@ -102,7 +109,11 @@ function SingleSelectInner<T extends string = string>({
   const t = usePluginTranslator()
   const resolvedPlaceholder = placeholder ?? t(uiCopy.select)
   const generatedId = useId()
-  const selectId = id ?? generatedId
+  const field = useFieldContext()
+  const selectId = id ?? field?.controlId ?? generatedId
+  const resolvedInvalid = invalid ?? field?.invalid ?? false
+  const resolvedRequired = required ?? (field?.required === true ? true : undefined)
+  const resolvedDescribedBy = mergeAriaDescribedBy(ariaDescribedBy, field?.describedBy)
   const [internalOpen, setInternalOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
 
@@ -144,6 +155,7 @@ function SingleSelectInner<T extends string = string>({
           }
         }}
         disabled={disabled}
+        required={resolvedRequired}
         name={name}
         open={isOpen}
         onOpenChange={handleOpenChange}
@@ -153,6 +165,9 @@ function SingleSelectInner<T extends string = string>({
           className="helmx-select-trigger"
           disabled={disabled}
           aria-label={ariaLabel}
+          aria-invalid={resolvedInvalid ? true : undefined}
+          aria-required={resolvedRequired}
+          aria-describedby={resolvedDescribedBy}
           aria-haspopup="listbox"
         >
           {prefixIcon ? <HelmxIcon name={prefixIcon} size={12} className="helmx-select-prefix" /> : null}
@@ -227,7 +242,10 @@ function MultiSelectInner<T extends string = string>({
   className = '',
   style,
   size,
+  invalid,
+  required,
   'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
   id,
   name,
   direction = 'auto',
@@ -242,7 +260,11 @@ function MultiSelectInner<T extends string = string>({
   const t = usePluginTranslator()
   const resolvedPlaceholder = placeholder ?? t(uiCopy.select)
   const generatedId = useId()
-  const selectId = id ?? generatedId
+  const field = useFieldContext()
+  const selectId = id ?? field?.controlId ?? generatedId
+  const resolvedInvalid = invalid ?? field?.invalid ?? false
+  const resolvedRequired = required ?? (field?.required === true ? true : undefined)
+  const resolvedDescribedBy = mergeAriaDescribedBy(ariaDescribedBy, field?.describedBy)
   const listboxId = `${selectId}-listbox`
   const [internalOpen, setInternalOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -535,13 +557,17 @@ function MultiSelectInner<T extends string = string>({
         <PopoverTrigger asChild>
           <button
             type="button"
+            role="combobox"
             id={selectId}
             className="helmx-select-trigger"
             disabled={disabled}
             aria-label={ariaLabel}
+            aria-invalid={resolvedInvalid ? true : undefined}
+            aria-required={resolvedRequired}
+            aria-describedby={resolvedDescribedBy}
             aria-haspopup="listbox"
             aria-expanded={isOpen}
-            aria-controls={isOpen ? listboxId : undefined}
+            aria-controls={listboxId}
           >
             {prefixIcon ? <HelmxIcon name={prefixIcon} size={12} className="helmx-select-prefix" /> : null}
             {triggerLabel}
@@ -558,7 +584,7 @@ function MultiSelectInner<T extends string = string>({
             className={`helmx-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
             style={{ position: 'relative', marginTop: 4, ...layeredPopoverStyle }}
           >
-            {contentNode}
+            <FieldContext.Provider value={null}>{contentNode}</FieldContext.Provider>
           </div>
         ) : (
           <PopoverContent
@@ -567,7 +593,7 @@ function MultiSelectInner<T extends string = string>({
             avoidCollisions
             className={`helmx-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
           >
-            {contentNode}
+            <FieldContext.Provider value={null}>{contentNode}</FieldContext.Provider>
           </PopoverContent>
         )}
       </Popover>

@@ -20,9 +20,25 @@ import { Fragment } from 'react'
 import { renderToString } from 'react-dom/server'
 import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helmx/protocol'
 import * as HelmxPluginClient from '../src/index.js'
+import * as HelmxPluginClientPure from '../src/pure.js'
 import { Screen, ScreenSection, ScreenToolbar, DataTable, KvGrid } from '../src/primitives.js'
 import { StatusLight } from '../src/ui/StatusLight.js'
-import { normalizeStatusLightTone, statusLightDotClass } from '../src/ui/status-light-model.js'
+import {
+  STATUS_LIGHT_TONES,
+  isKnownStatusLightStatus,
+  normalizeStatusLightTone,
+  statusLightDotClass,
+} from '../src/ui/status-light-model.js'
+import { Button, IconButton } from '../src/ui/Button.js'
+import { Badge } from '../src/ui/Badge.js'
+import { Stack } from '../src/ui/Stack.js'
+import { Input, Textarea } from '../src/ui/Input.js'
+import { Field, HelperText, ErrorText } from '../src/ui/Field.js'
+import { Card, SelectCard, CardGrid } from '../src/ui/Card.js'
+import { MonoId } from '../src/ui/MonoId.js'
+import { Select, MultiSelect } from '../src/ui/Select.js'
+import { Switch } from '../src/ui/Switch.js'
+import { Checkbox } from '../src/ui/Checkbox.js'
 import { PluginClientContext } from '../src/plugin-context.js'
 
 const e = React.createElement
@@ -137,10 +153,6 @@ test('ScreenToolbar: main area and right-aligned actions cluster render on one .
   const noActions = renderToString(e(ScreenToolbar, null, e('div', { className: 'search-box' }, 'search')))
   assert.doesNotMatch(noActions, /screen-toolbar-actions/, 'omitted actions render no empty cluster')
 })
-
-function Button(props: { children?: React.ReactNode }): React.ReactNode {
-  return e('button', { type: 'button' }, props.children)
-}
 
 test('DataTable: the loading state renders the unified loading row (role=status) and not children', { timeout: 60_000 }, () => {
   const html = renderToString(
@@ -304,4 +316,301 @@ test('Screen: layout defaults to contained, supports full-bleed, and stamps data
   )
   assert.match(pluginScreen, /data-screen-layout="full-bleed"/)
   assert.match(pluginScreen, /data-plugin-id="builtin:herdr"/)
+})
+
+test('StatusLight: explicit tone mode, connection aliases, pure exports, and prototype-safe predicate', { timeout: 60_000 }, () => {
+  assert.deepEqual([...STATUS_LIGHT_TONES], ['working', 'blocked', 'done', 'failed', 'aborted', 'pending', 'idle'])
+  assert.equal(HelmxPluginClient.STATUS_LIGHT_TONES, STATUS_LIGHT_TONES)
+  assert.equal(HelmxPluginClient.normalizeStatusLightTone, normalizeStatusLightTone)
+  assert.equal(HelmxPluginClient.isKnownStatusLightStatus, isKnownStatusLightStatus)
+  assert.equal(HelmxPluginClientPure.STATUS_LIGHT_TONES, STATUS_LIGHT_TONES)
+  assert.equal(HelmxPluginClientPure.normalizeStatusLightTone, normalizeStatusLightTone)
+  assert.equal(HelmxPluginClientPure.isKnownStatusLightStatus, isKnownStatusLightStatus)
+
+  assert.equal(normalizeStatusLightTone('connected'), 'done')
+  assert.equal(normalizeStatusLightTone('disconnected'), 'idle')
+  assert.equal(normalizeStatusLightTone('constructor'), 'pending')
+  assert.equal(normalizeStatusLightTone('toString'), 'pending')
+  assert.equal(isKnownStatusLightStatus('connected'), true)
+  assert.equal(isKnownStatusLightStatus('RUNNING'), true)
+  assert.equal(isKnownStatusLightStatus('weird-state'), false)
+  assert.equal(isKnownStatusLightStatus('constructor'), false)
+  assert.equal(isKnownStatusLightStatus(''), false)
+  assert.equal(isKnownStatusLightStatus(undefined), false)
+
+  const withLabel = renderToString(e(StatusLight, { tone: 'done', label: 'Connected' }))
+  assert.match(withLabel, /data-tone="done"/)
+  assert.match(withLabel, /aria-label="Connected"/)
+  assert.match(withLabel, /helmx-sr-only">Connected<\/span>/)
+
+  const withAriaOnly = renderToString(e(StatusLight, { tone: 'blocked', 'aria-label': 'Degraded link' }))
+  assert.match(withAriaOnly, /data-tone="blocked"/)
+  assert.match(withAriaOnly, /aria-label="Degraded link"/)
+  assert.doesNotMatch(withAriaOnly, /helmx-sr-only/)
+
+  // Rich ReactNode label wires aria-labelledby to the sr-only span so role="img" always has an accessible name
+  const richToneHtml = renderToString(
+    e(StatusLight, { tone: 'done', label: e('span', null, 'Connected') } as unknown as Parameters<typeof StatusLight>[0]),
+  )
+  const richDoc = new Window().document
+  richDoc.body.innerHTML = richToneHtml
+  const richImg = richDoc.querySelector('[role="img"]')
+  const richSr = richDoc.querySelector('.helmx-sr-only')
+  assert.ok(richImg !== null && richSr !== null)
+  assert.ok(richSr.id.length > 0 && richImg.getAttribute('aria-labelledby') === richSr.id)
+  assert.equal(richSr.textContent, 'Connected')
+
+  // Blank string label in tone mode still falls back to tone so role="img" is never nameless
+  const blankToneHtml = renderToString(e(StatusLight, { tone: 'failed', label: '   ' }))
+  assert.match(blankToneHtml, /aria-label="failed"/)
+  assert.doesNotMatch(blankToneHtml, /helmx-sr-only/)
+
+  // Blank aria-label + empty rich node label falls back to tone instead of wiring aria-labelledby to empty text
+  const emptyRichToneHtml = renderToString(
+    e(StatusLight, { tone: 'done', 'aria-label': '   ', label: e('span', null) }),
+  )
+  assert.match(emptyRichToneHtml, /aria-label="done"/)
+  assert.doesNotMatch(emptyRichToneHtml, /aria-labelledby=/)
+  assert.doesNotMatch(emptyRichToneHtml, /helmx-sr-only/)
+})
+
+test('Button and IconButton: variants, sizes, pending busy state, and required accessible name (SSR)', { timeout: 60_000 }, () => {
+  const defaultBtn = renderToString(e(Button, null, 'Save'))
+  assert.match(defaultBtn, /<button[^>]*type="button"[^>]*class="btn"/)
+  assert.match(defaultBtn, /<span>Save<\/span>/)
+
+  const primarySm = renderToString(e(Button, { variant: 'primary', size: 'sm', pill: true, icon: 'check' }, 'Apply'))
+  assert.match(primarySm, /class="btn btn-primary btn-sm btn-pill"/)
+  assert.match(primarySm, /<svg/)
+
+  const dangerSm = renderToString(e(Button, { variant: 'danger', size: 'sm' }, 'Delete'))
+  assert.match(dangerSm, /class="btn btn-danger btn-sm"/)
+  assert.doesNotMatch(dangerSm, /btn-danger-sm/)
+
+  const pendingBtn = renderToString(e(Button, { variant: 'secondary', size: 'xs', icon: 'save', pending: true, 'aria-busy': false }, 'Saving'))
+  assert.match(pendingBtn, /class="btn btn-secondary btn-xs"/)
+  assert.match(pendingBtn, /disabled=""/)
+  assert.match(pendingBtn, /aria-busy="true"/, 'pending=true must not be overridden by caller aria-busy=false')
+  assert.match(pendingBtn, /spin-slow/)
+
+  const iconBtn = renderToString(e(IconButton, { icon: 'refresh-cw', label: 'Refresh', size: 'sm' }))
+  assert.match(iconBtn, /class="btn btn-ghost btn-icon-sm"/)
+  assert.match(iconBtn, /aria-label="Refresh"/)
+  assert.match(iconBtn, /title="Refresh"/)
+
+  const iconBtnPending = renderToString(e(IconButton, { icon: 'trash-2', 'aria-label': 'Remove', variant: 'danger', size: 'xs', pending: true, 'aria-busy': false }))
+  assert.match(iconBtnPending, /class="btn btn-danger btn-icon-xs"/)
+  assert.match(iconBtnPending, /aria-busy="true"/, 'IconButton pending=true must not be overridden by caller aria-busy=false')
+  assert.match(iconBtnPending, /spin-slow/)
+
+  const iconBtnFallbackAria = renderToString(e(IconButton, { icon: 'x', label: '   ', 'aria-label': 'Close' }))
+  assert.match(iconBtnFallbackAria, /aria-label="Close"/)
+  assert.doesNotMatch(iconBtnFallbackAria, /title="/)
+
+  assert.throws(
+    () => renderToString(e(IconButton, { icon: 'x', label: '' })),
+    /non-empty/,
+    'IconButton must reject empty label',
+  )
+  assert.throws(
+    () => renderToString(e(IconButton, { icon: 'x', label: '   ' })),
+    /non-empty/,
+    'IconButton must reject whitespace-only label',
+  )
+  assert.throws(
+    () => renderToString(e(IconButton, { icon: 'x', 'aria-label': '   ' })),
+    /non-empty/,
+    'IconButton must reject whitespace-only aria-label',
+  )
+})
+
+test('Badge and Stack: static host classes without inline style hacks (SSR)', { timeout: 60_000 }, () => {
+  const badgeHtml = renderToString(e(Badge, { tone: 'ok', icon: 'check', mono: true }, 'v1.2.3'))
+  assert.match(badgeHtml, /class="badge badge-ok mono"/)
+  assert.match(badgeHtml, /<span>v1\.2\.3<\/span>/)
+
+  const stackHtml = renderToString(
+    e(Stack, { direction: 'horizontal', gap: 'md', align: 'center', justify: 'between', wrap: true, inline: true }, 'A', 'B'),
+  )
+  assert.match(
+    stackHtml,
+    /class="helmx-stack helmx-stack-inline helmx-stack-horizontal helmx-stack-gap-md helmx-stack-align-center helmx-stack-justify-between helmx-stack-wrap"/,
+  )
+  assert.doesNotMatch(stackHtml, /style=/)
+})
+
+test('Field, Input, Textarea, Select, MultiSelect, Switch, Checkbox: FieldContext wiring and non-wrapping labels (SSR)', { timeout: 60_000 }, () => {
+  const inputFieldHtml = renderToString(
+    e(
+      Field,
+      { label: 'API Key', hint: 'Stored encrypted', error: 'Key is required', required: true },
+      e(Input, { size: 'sm', mono: true, 'aria-describedby': 'custom-note', value: '', readOnly: true }),
+    ),
+  )
+  const doc = new Window().document
+  doc.body.innerHTML = inputFieldHtml
+  const label = doc.querySelector('label.helmx-field-label')
+  const input = doc.querySelector('input.input.input-sm.mono')
+  const errEl = doc.querySelector('p.helmx-error-text')
+  const hintEl = doc.querySelector('p.helmx-helper-text')
+  assert.ok(label !== null && input !== null && errEl !== null && hintEl !== null)
+  assert.ok(!label.contains(input), 'Field label must never wrap children controls')
+  assert.equal(label.getAttribute('for'), input.id)
+  assert.equal(input.getAttribute('aria-invalid'), 'true')
+  assert.equal(input.hasAttribute('required'), true)
+  assert.equal(input.getAttribute('aria-describedby'), `custom-note ${errEl.id} ${hintEl.id}`)
+  assert.equal(errEl.getAttribute('role'), null, 'static per-field ErrorText omits role="alert" by default')
+
+  const liveErrHtml = renderToString(e(ErrorText, { live: true }, 'Submit failed'))
+  assert.match(liveErrHtml, /role="alert"/)
+  const helperHtml = renderToString(e(HelperText, null, 'Optional note'))
+  assert.match(helperHtml, /class="helmx-helper-text"/)
+
+  // Explicit caller overrides beat FieldContext
+  const overrideHtml = renderToString(
+    e(
+      Field,
+      { label: 'Notes', error: 'Too long', required: true },
+      e(Textarea, { id: 'notes-custom', invalid: false, required: false, mono: true }),
+    ),
+  )
+  const doc2 = new Window().document
+  doc2.body.innerHTML = overrideHtml
+  const textarea = doc2.querySelector('textarea.textarea.mono')
+  assert.ok(textarea !== null)
+  assert.equal(textarea.id, 'notes-custom')
+  assert.equal(textarea.getAttribute('aria-invalid'), null)
+  assert.equal(textarea.hasAttribute('required'), false)
+
+  // Select + MultiSelect + Switch + Checkbox wiring, plus MultiSelect inner Checkbox isolation
+  const controlsHtml = renderToString(
+    e(
+      Fragment,
+      null,
+      e(
+        Field,
+        { label: 'Region', error: 'Select a region', required: true },
+        e(Select, { value: 'us', options: [{ value: 'us', label: 'US' }], onChange: () => {} }),
+      ),
+      e(
+        Field,
+        { label: 'Scopes', error: 'Pick at least one' },
+        e(MultiSelect, {
+          open: true,
+          inline: true,
+          value: [],
+          options: [{ value: 'read', label: 'Read' }],
+        }),
+      ),
+      e(
+        Field,
+        { label: 'Enable sync', hint: 'Runs hourly' },
+        e(Switch, { checked: true, onChange: () => {} }),
+      ),
+      e(
+        Field,
+        { label: 'Notifications', htmlFor: false, error: 'Choose an option' },
+        e(Checkbox, { checked: false, onChange: () => {}, label: 'Email alerts' }),
+      ),
+    ),
+  )
+  const doc3 = new Window().document
+  doc3.body.innerHTML = controlsHtml
+  const fields = [...doc3.querySelectorAll('.helmx-field')]
+  assert.equal(fields.length, 4)
+
+  // 1) Single Select
+  const selectLabel = fields[0]!.querySelector('label.helmx-field-label')
+  const selectTrigger = fields[0]!.querySelector('.helmx-select-trigger')
+  assert.ok(selectLabel !== null && selectTrigger !== null)
+  assert.equal(selectLabel.getAttribute('for'), selectTrigger.id)
+  assert.equal(selectTrigger.getAttribute('aria-invalid'), 'true')
+  assert.equal(selectTrigger.getAttribute('aria-required'), 'true')
+  assert.ok((selectTrigger.getAttribute('aria-describedby') ?? '').includes('-error'))
+
+  // 2) MultiSelect trigger gets aria-invalid, inner option Checkbox does NOT inherit parent FieldContext
+  const multiTrigger = fields[1]!.querySelector('.helmx-select-trigger')
+  const innerCheckbox = fields[1]!.querySelector('[role="checkbox"]')
+  assert.ok(multiTrigger !== null && innerCheckbox !== null)
+  assert.equal(multiTrigger.getAttribute('aria-invalid'), 'true')
+  assert.equal(innerCheckbox.getAttribute('aria-invalid'), null, 'MultiSelect inner option Checkbox must be isolated from outer FieldContext')
+  assert.ok(innerCheckbox.id !== multiTrigger.id, 'inner option Checkbox must not reuse MultiSelect trigger ID')
+
+  // 3) Switch without own label connects to Field <label htmlFor>
+  const switchLabel = fields[2]!.querySelector('label.helmx-field-label')
+  const switchBtn = fields[2]!.querySelector('[role="switch"]')
+  assert.ok(switchLabel !== null && switchBtn !== null)
+  assert.equal(switchLabel.getAttribute('for'), switchBtn.id)
+  assert.ok((switchBtn.getAttribute('aria-describedby') ?? '').includes('-hint'))
+
+  // 4) Group Field (htmlFor={false}) renders role="group" + aria-labelledby, zero nested <label>
+  assert.equal(fields[3]!.getAttribute('role'), 'group')
+  const groupSpan = fields[3]!.querySelector('span.helmx-field-label')
+  assert.ok(groupSpan !== null)
+  assert.equal(fields[3]!.getAttribute('aria-labelledby'), groupSpan.id)
+  const checkboxEl = fields[3]!.querySelector('[role="checkbox"]')
+  assert.ok(checkboxEl !== null)
+  assert.equal(checkboxEl.getAttribute('aria-invalid'), 'true')
+  assert.equal(fields[3]!.querySelectorAll('label label').length, 0, 'must never produce nested <label> elements')
+})
+
+test('Card, SelectCard, CardGrid, and MonoId: accessible landmarks, sibling actions, and truncation (SSR)', { timeout: 60_000 }, () => {
+  const cardHtml = renderToString(
+    e(
+      Card,
+      {
+        variant: 'subtle',
+        tone: 'danger',
+        title: 'Danger Zone',
+        subtitle: 'Irreversible actions',
+        actions: e(Button, { variant: 'danger', size: 'sm' }, 'Delete'),
+        footer: e('span', null, 'Requires confirmation'),
+      },
+      e('p', null, 'Removes all stored tokens.'),
+    ),
+  )
+  const doc = new Window().document
+  doc.body.innerHTML = cardHtml
+  const section = doc.querySelector('section.helmx-card.helmx-card-subtle.helmx-card-danger')
+  const heading = doc.querySelector('h3.helmx-card-title')
+  assert.ok(section !== null && heading !== null)
+  assert.equal(section.getAttribute('aria-labelledby'), heading.id)
+
+  const gridHtml = renderToString(
+    e(
+      CardGrid,
+      { minWidth: 'sm', gap: 'lg' },
+      e(
+        SelectCard,
+        {
+          title: 'vmi-bot',
+          subtitle: 'Sync connector',
+          selected: true,
+          tone: 'warn',
+          actions: e(Switch, { checked: true, onChange: () => {}, 'aria-label': 'Toggle vmi-bot' }),
+          footer: e(MonoId, { value: 'bot_1234567890abcdef', display: 'bot_1234...cdef' }),
+          onSelect: () => {},
+        },
+        e('p', null, 'Body text'),
+      ),
+    ),
+  )
+  const doc2 = new Window().document
+  doc2.body.innerHTML = gridHtml
+  const grid = doc2.querySelector('.helmx-card-grid.helmx-card-grid-sm.helmx-card-grid-gap-lg')
+  const article = doc2.querySelector('article.helmx-select-card.is-selected.helmx-select-card-warn')
+  const trigger = doc2.querySelector('button.helmx-select-card-trigger')
+  const switchBtn = doc2.querySelector('[role="switch"]')
+  const monoCode = doc2.querySelector('code.helmx-mono-id-code')
+  const copyBtn = doc2.querySelector('button.helmx-mono-id-copy')
+  assert.ok(grid !== null && article !== null && trigger !== null && switchBtn !== null && monoCode !== null && copyBtn !== null)
+  assert.equal(trigger.getAttribute('aria-pressed'), 'true')
+  assert.ok(!trigger.contains(switchBtn), 'actions Switch must be a sibling of the trigger button, never nested inside it')
+  assert.equal(article.getAttribute('role'), null, 'SelectCard article must not wear role="button" over interactive descendants')
+  assert.equal(monoCode.getAttribute('title'), 'bot_1234567890abcdef')
+  assert.equal(monoCode.textContent, 'bot_1234...cdef')
+
+  const plainMono = renderToString(e(MonoId, { value: 'id-999', copyable: false }))
+  assert.match(plainMono, /helmx-mono-id-code/)
+  assert.doesNotMatch(plainMono, /helmx-mono-id-copy/)
 })

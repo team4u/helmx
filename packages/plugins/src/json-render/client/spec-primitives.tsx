@@ -17,7 +17,26 @@
  * through the render context.
  */
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react'
-import { HelmxIcon, Select, Checkbox, Tabs, TabsList, TabsTrigger, PluginSlot, MarkdownText } from '@helmx/plugin-client'
+import {
+  Badge,
+  Button,
+  Callout,
+  Card,
+  Checkbox,
+  Field,
+  HelmxIcon,
+  Input,
+  MarkdownText,
+  PluginSlot,
+  Select,
+  Stack,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  type BadgeTone,
+  type ButtonVariant,
+  type CalloutProps,
+} from '@helmx/plugin-client'
 import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
 import { resolveLocalizedText } from '@helmx/plugin-client'
 import { evaluateSpecValue, type EvalScope } from './evaluator.ts'
@@ -138,15 +157,12 @@ function CardImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   const title = str(evalIn(node.props['title'], ctx.scope))
   const subtitle = str(evalIn(node.props['subtitle'], ctx.scope))
   return (
-    <div className="card jr-card">
-      {(title !== '' || subtitle !== '') && (
-        <div className="jr-card-header">
-          {title !== '' && <div className="jr-card-title">{title}</div>}
-          {subtitle !== '' && <div className="jr-card-subtitle">{subtitle}</div>}
-        </div>
-      )}
+    <Card
+      title={title !== '' ? title : undefined}
+      subtitle={subtitle !== '' ? subtitle : undefined}
+    >
       {ctx.renderChildren(node.children)}
-    </div>
+    </Card>
   )
 }
 
@@ -172,16 +188,23 @@ function TextImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   return <div style={style}>{text}</div>
 }
 
+const VALID_BADGE_TONES: Readonly<Record<string, BadgeTone>> = {
+  neutral: 'neutral',
+  accent: 'accent',
+  ok: 'ok',
+  warn: 'warn',
+  err: 'err',
+}
+
 function BadgeImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
   const tone = str(evalIn(node.props['tone'], ctx.scope), 'neutral')
   const icon = str(evalIn(node.props['icon'], ctx.scope))
   const rawText = evalIn<unknown>(node.props['text'] ?? node.props['label'], ctx.scope)
-  const validTone = ['neutral', 'accent', 'ok', 'warn', 'err'].includes(tone) ? tone : 'neutral'
+  const validTone: BadgeTone = ownProp(VALID_BADGE_TONES, tone) ?? 'neutral'
   return (
-    <span className={`badge badge-${validTone}`}>
-      {icon !== '' && <HelmxIcon name={icon} size={11} />}
+    <Badge tone={validTone} icon={icon !== '' ? icon : undefined}>
       {formatSpecText(rawText)}
-    </span>
+    </Badge>
   )
 }
 
@@ -259,29 +282,23 @@ function KeyValueRow({ label, value }: { label: string; value: string }) {
   )
 }
 
-const CALLOUT_TONE_CLASS: Record<string, string> = {
-  info: 'callout',
-  warn: 'callout callout--warning',
-  err: 'callout callout--error',
-  ok: 'callout callout--success',
+const VALID_CALLOUT_TONES: Readonly<Record<string, NonNullable<CalloutProps['tone']>>> = {
+  info: 'info',
+  warn: 'warn',
+  err: 'err',
+  ok: 'ok',
 }
 
 function CalloutImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
   const tone = str(evalIn(node.props['tone'], ctx.scope), 'info')
   const title = str(evalIn(node.props['title'], ctx.scope))
   const text = str(evalIn(node.props['text'], ctx.scope))
-  const cls = ownProp(CALLOUT_TONE_CLASS, tone) ?? 'callout'
-  const iconName =
-    tone === 'warn' ? 'alert-triangle' : tone === 'err' ? 'alert-circle' : tone === 'ok' ? 'check-circle' : 'alert-circle'
+  const validTone = ownProp(VALID_CALLOUT_TONES, tone) ?? 'info'
   return (
-    <div className={cls}>
-      <HelmxIcon name={iconName} size={13} style={{ flexShrink: 0, marginTop: 2 }} />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-        {title !== '' && <div style={{ fontWeight: 600 }}>{title}</div>}
-        {text !== '' && <div>{text}</div>}
-        {ctx.renderChildren(node.children)}
-      </div>
-    </div>
+    <Callout tone={validTone} title={title !== '' ? title : undefined}>
+      {text !== '' && <div>{text}</div>}
+      {ctx.renderChildren(node.children)}
+    </Callout>
   )
 }
 
@@ -454,13 +471,6 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
   )
 }
 
-/** Confirm/loading icon for interactive buttons: pending wins over succeeded (no stale check mark during a new request round). */
-function actionIconState(pending: boolean, succeeded: boolean, icon: string): { name: string | null; className?: string } {
-  if (pending) return { name: 'loader', className: 'spin-slow' }
-  if (succeeded) return { name: 'check' }
-  return icon !== '' ? { name: icon } : { name: null }
-}
-
 function RowActionButton({
   label,
   tone,
@@ -474,18 +484,22 @@ function RowActionButton({
   succeeded: boolean
   onClick: () => void
 }) {
-  const cls =
+  const variant: ButtonVariant =
     tone === 'danger' || tone === 'err'
-      ? 'btn btn-sm btn-danger'
+      ? 'danger'
       : tone === 'primary' || tone === 'accent'
-        ? 'btn btn-sm btn-primary'
-        : 'btn btn-sm'
-  const icon = actionIconState(pending, succeeded, '')
+        ? 'primary'
+        : 'default'
   return (
-    <button type="button" className={cls} disabled={pending} aria-busy={pending} onClick={onClick}>
-      {icon.name !== null && <HelmxIcon name={icon.name} size={11} className={icon.className} />}
+    <Button
+      variant={variant}
+      size="sm"
+      pending={pending}
+      icon={succeeded ? 'check' : undefined}
+      onClick={onClick}
+    >
       {label}
-    </button>
+    </Button>
   )
 }
 
@@ -535,17 +549,17 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
   const pendingKey = useId()
   const pending = ctx.isPending(pendingKey)
   const succeeded = ctx.isSucceeded?.(pendingKey) === true
+  const fieldLabel =
+    label !== '' ? (
+      <>
+        {label}
+        {secret && <span style={{ color: 'var(--warn)' }}>{tr(ctx, JSON_RENDER_SECRET_TAG)}</span>}
+      </>
+    ) : undefined
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-      {label !== '' && (
-        <span style={{ fontSize: 12, color: 'var(--fg-secondary)' }}>
-          {label}
-          {secret && <span style={{ color: 'var(--warn)' }}>{tr(ctx, JSON_RENDER_SECRET_TAG)}</span>}
-        </span>
-      )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-        <input
-          className="input"
+    <Field label={fieldLabel}>
+      <Stack direction="horizontal" gap="xs" align="center">
+        <Input
           style={{ flex: 1, minWidth: 0 }}
           type={secret ? 'password' : 'text'}
           value={text}
@@ -554,28 +568,22 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
           onChange={(e) => setText(e.target.value)}
         />
         {node.props['action'] !== undefined && (
-          <button
-            type="button"
-            className="btn btn-sm"
+          <Button
+            size="sm"
             style={{ flexShrink: 0 }}
-            disabled={pending}
-            aria-busy={pending}
+            pending={pending}
+            icon={succeeded ? 'check' : undefined}
             onClick={() => ctx.runAction(node.props['action'], { ...ctx.scope, $value: text }, pendingKey)}
           >
-            {pending ? (
-              <HelmxIcon name="loader" size={12} className="spin-slow" />
-            ) : succeeded ? (
-              <HelmxIcon name="check" size={12} />
-            ) : null}
             {pending
               ? tr(ctx, JSON_RENDER_INPUT_SUBMITTING)
               : succeeded
                 ? tr(ctx, JSON_RENDER_INPUT_SUBMITTED)
                 : tr(ctx, JSON_RENDER_INPUT_SUBMIT)}
-          </button>
+          </Button>
         )}
-      </div>
-    </label>
+      </Stack>
+    </Field>
   )
 }
 
@@ -593,8 +601,7 @@ function SelectImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
       }))
     : []
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-      {label !== '' && <span style={{ fontSize: 12, color: 'var(--fg-secondary)' }}>{label}</span>}
+    <Field label={label !== '' ? label : undefined}>
       <Select
         value={selected}
         options={options}
@@ -605,7 +612,7 @@ function SelectImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
           }
         }}
       />
-    </label>
+    </Field>
   )
 }
 
@@ -688,9 +695,8 @@ function CheckboxGroupImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecR
   const pendingKey = useId()
   const pending = ctx.isPending(pendingKey)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {label !== '' && <span style={{ fontSize: 12, color: 'var(--fg-secondary)' }}>{label}</span>}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <Field label={label !== '' ? label : undefined} htmlFor={false}>
+      <Stack gap="xs">
         {options.map((o) => (
           <Checkbox
             key={o.value}
@@ -707,21 +713,22 @@ function CheckboxGroupImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecR
             }}
           />
         ))}
-      </div>
+      </Stack>
       {pending && (
         <span style={{ fontSize: 11, color: 'var(--fg-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <HelmxIcon name="loader" size={11} />
+          <HelmxIcon name="loader" size={11} className="spin-slow" />
           {tr(ctx, JSON_RENDER_SUBMITTING_HINT)}
         </span>
       )}
-    </div>
+    </Field>
   )
 }
 
-const BUTTON_VARIANT_CLASS: Record<string, string> = {
-  primary: 'btn btn-primary',
-  danger: 'btn btn-danger',
-  ghost: 'btn btn-ghost',
+const VALID_BUTTON_VARIANTS: Readonly<Record<string, ButtonVariant>> = {
+  primary: 'primary',
+  secondary: 'secondary',
+  danger: 'danger',
+  ghost: 'ghost',
 }
 
 function ButtonImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
@@ -732,19 +739,17 @@ function ButtonImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
   const pendingKey = useId()
   const pending = ctx.isPending(pendingKey)
   const succeeded = ctx.isSucceeded?.(pendingKey) === true
-  const cls = ownProp(BUTTON_VARIANT_CLASS, variant) ?? 'btn'
-  const iconState = actionIconState(pending, succeeded, icon)
+  const resolvedVariant: ButtonVariant = ownProp(VALID_BUTTON_VARIANTS, variant) ?? 'default'
   return (
-    <button
-      type="button"
-      className={cls}
-      disabled={pending || node.props['action'] === undefined}
-      aria-busy={pending}
+    <Button
+      variant={resolvedVariant}
+      pending={pending}
+      disabled={node.props['action'] === undefined}
+      icon={succeeded ? 'check' : icon !== '' ? icon : undefined}
       onClick={() => ctx.runAction(node.props['action'], ctx.scope, pendingKey)}
     >
-      {iconState.name !== null && <HelmxIcon name={iconState.name} size={12} className={iconState.className} />}
       {label}
-    </button>
+    </Button>
   )
 }
 
@@ -760,7 +765,7 @@ function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
     : []
   if (actions.length > 0) {
     return (
-      <div className="stack-row">
+      <Stack direction="horizontal" gap="xs" wrap align="center">
         {actions.map((a, i) => {
           const label = str(evalIn(a['label'], ctx.scope), tr(ctx, JSON_RENDER_ACTION_LABEL_FALLBACK))
           const icon = str(evalIn(a['icon'], ctx.scope))
@@ -769,26 +774,23 @@ function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
           const pendingKey = `${actionBarId}-${i}`
           const pending = ctx.isPending(pendingKey)
           const succeeded = ctx.isSucceeded?.(pendingKey) === true
-          const cls = ownProp(BUTTON_VARIANT_CLASS, variant) ?? 'btn'
-          const iconState = actionIconState(pending, succeeded, icon)
+          const resolvedVariant: ButtonVariant = ownProp(VALID_BUTTON_VARIANTS, variant) ?? 'default'
           return (
-            <button
+            <Button
               key={i}
-              type="button"
-              className={cls}
-              disabled={pending}
-              aria-busy={pending}
+              variant={resolvedVariant}
+              pending={pending}
+              icon={succeeded ? 'check' : icon !== '' ? icon : undefined}
               onClick={() => ctx.runAction(a['action'], ctx.scope, pendingKey)}
             >
-              {iconState.name !== null && <HelmxIcon name={iconState.name} size={12} className={iconState.className} />}
               {label}
-            </button>
+            </Button>
           )
         })}
-      </div>
+      </Stack>
     )
   }
-  return <div className="stack-row">{ctx.renderChildren(node.children)}</div>
+  return <Stack direction="horizontal" gap="xs" wrap align="center">{ctx.renderChildren(node.children)}</Stack>
 }
 
 function TabsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {

@@ -791,6 +791,50 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
   assert.notEqual(badFrontend.status, 0, 'invalid DataTable columns prop must fail tsc --noEmit')
   await fsp.writeFile(clientPath, origClient, 'utf8')
 
+  // Pure-shim compatibility check (BEFORE symlinking @types/react):
+  // Standard React 19 ARIA attributes (e.g. aria-autocomplete/aria-modal/aria-valuemin/valuemax/valuenow)
+  // and the new SDK primitives must typecheck cleanly against the bundled fallback shim alone.
+  const shimProbePath = path.join(appDir, 'client', 'shim-aria-probe.tsx')
+  await fsp.writeFile(
+    shimProbePath,
+    [
+      "import type { PointerEvent, ReactNode } from 'react'",
+      "import { Badge, Button, Card, CardGrid, Field, IconButton, Input, MonoId, SelectCard, Stack, StatusLight, Textarea } from '@helmx/plugin-client'",
+      'export function ShimAriaProbe(): ReactNode {',
+      '  const handlePointer = (e: PointerEvent<HTMLDivElement>) => { void e.pointerId; void e.pointerType }',
+      '  return (',
+      '    <div role="dialog" aria-modal="true" data-probe="ok" onPointerDown={handlePointer} onPointerCancel={handlePointer} onLostPointerCapture={handlePointer}>',
+      '      <CardGrid minWidth="sm" gap="md">',
+      '        <Card title="Metrics" subtitle="Live" variant="subtle">',
+      '          <Stack direction="horizontal" gap="sm" align="center">',
+      '            <StatusLight tone="done" label="Connected" />',
+      '            <Badge tone="ok" mono>v1</Badge>',
+      '            <MonoId value="conn_01" />',
+      '            <IconButton icon="x" label="Close" size="xs" />',
+      '          </Stack>',
+      '          <Field label="Threshold" hint="0-100">',
+      '            <Input aria-autocomplete="list" aria-valuemin={0} aria-valuemax={100} aria-valuenow={42} />',
+      '          </Field>',
+      '          <Textarea rows={2} aria-multiline="true" />',
+      '          <Button variant="primary" size="sm">Save</Button>',
+      '        </Card>',
+      '        <SelectCard title="Node A" onSelect={() => {}} />',
+      '      </CardGrid>',
+      '    </div>',
+      '  )',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+  const shimProbeRes = runTscNoEmit(path.join(appDir, 'tsconfig.json'), appDir)
+  assert.equal(
+    shimProbeRes.status,
+    0,
+    `standalone pure-shim tsc --noEmit failed on React 19 ARIA + SDK primitives:\n${shimProbeRes.stdout}\n${shimProbeRes.stderr}`,
+  )
+  await fsp.unlink(shimProbePath)
+
   // Coexistence check: when real @types/react and @types/node exist in node_modules, they win cleanly without conflict
   const reactTypesReal = realpathSync.native(path.join(cliTestRepoRoot, 'packages/plugin-client/node_modules/@types/react'))
   const nodeTypesReal = realpathSync.native(path.join(cliTestRepoRoot, 'node_modules/@types/node'))

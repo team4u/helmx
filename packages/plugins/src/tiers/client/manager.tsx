@@ -2,8 +2,29 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol'
 import {
-  Callout, ConfirmDialog, EmptyState, HelmxIcon, ModelPickerControl, Screen, ScreenSection, ScreenToolbar,
-  formatModelShortName, formatTime, useHostModels, usePluginContext, usePluginDoc, usePluginLocale, usePluginTranslator,
+  Badge,
+  Button,
+  Callout,
+  Card,
+  ConfirmDialog,
+  EmptyState,
+  Field,
+  Input,
+  LoadingState,
+  ModelPickerControl,
+  Screen,
+  ScreenSection,
+  ScreenToolbar,
+  Stack,
+  formatModelShortName,
+  formatTime,
+  useHostModels,
+  usePluginContext,
+  usePluginDoc,
+  usePluginLocale,
+  usePluginTranslator,
+  type BadgeTone,
+  type LocalizedText,
 } from '@helmx/plugin-client'
 import {
   TIERS_STATE_DOC, buildStarterDraftRows, isDraftDirty, parseTiersStateDoc,
@@ -15,12 +36,12 @@ import {
 } from './copy.ts'
 import './styles.css'
 
-const STATUS_BADGE = {
-  available: { tone: 'badge-ok', copy: C.statusAvailable },
-  disabled: { tone: 'badge-warn', copy: C.statusDisabled },
-  unavailable: { tone: 'badge-warn', copy: C.statusUnavailable },
-  draft: { tone: 'badge-neutral', copy: C.statusDraft },
-} as const
+const STATUS_BADGE: Readonly<Record<'available' | 'disabled' | 'unavailable' | 'draft', { tone: BadgeTone; copy: LocalizedText }>> = {
+  available: { tone: 'ok', copy: C.statusAvailable },
+  disabled: { tone: 'warn', copy: C.statusDisabled },
+  unavailable: { tone: 'warn', copy: C.statusUnavailable },
+  draft: { tone: 'neutral', copy: C.statusDraft },
+}
 const VALIDATION_ERROR_COPY = { id_required: C.errIdRequired, duplicate_id: C.errDuplicateId, model_required: C.errModelRequired } as const
 
 export function TiersManagerScreen(_props: ScreenProps): ReactNode {
@@ -85,7 +106,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
   if (rawDoc === undefined) {
     return (
       <Screen title={t(C.screenTitle)} subtitle={t(C.screenSubtitle)}>
-        <div className="loading-state" role="status"><HelmxIcon name="loader" size={14} className="spin-slow" /><span>{t(C.loading)}</span></div>
+        <LoadingState label={t(C.loading)} />
       </Screen>
     )
   }
@@ -97,19 +118,35 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
       <ScreenToolbar
         actions={
           <>
-            {dirty && <span className="badge badge-warn">{t(C.unsavedBadge)}</span>}
+            {dirty && <Badge tone="warn">{t(C.unsavedBadge)}</Badge>}
             {draft.length === 0 && (
-              <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { mutateDraft(() => buildStarterDraftRows(locale)); setInitialized(true) }}>
-                <HelmxIcon name="sparkles" size={13} /><span>{t(C.fillStarter)}</span>
-              </button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon="sparkles"
+                disabled={busy}
+                onClick={() => { mutateDraft(() => buildStarterDraftRows(locale)); setInitialized(true) }}
+              >
+                {t(C.fillStarter)}
+              </Button>
             )}
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => mutateDraft((prev) => [...prev, { key: `new:${nextRowCounter.current++}`, id: '', model: '', thinkingLevel: '', description: '' }])}>
-              <HelmxIcon name="plus" size={13} /><span>{t(C.addRow)}</span>
-            </button>
-            {dirty && <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => mutateDraft(() => tiersRecordToDraftRows(parsed.tiers))}><span>{t(C.discard)}</span></button>}
-            <button type="button" className="btn btn-primary btn-sm" disabled={busy || !dirty} onClick={() => void saveAll()}>
-              <HelmxIcon name="check" size={13} /><span>{busy ? t(C.saving) : t(C.saveAll)}</span>
-            </button>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="plus"
+              disabled={busy}
+              onClick={() => mutateDraft((prev) => [...prev, { key: `new:${nextRowCounter.current++}`, id: '', model: '', thinkingLevel: '', description: '' }])}
+            >
+              {t(C.addRow)}
+            </Button>
+            {dirty && (
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => mutateDraft(() => tiersRecordToDraftRows(parsed.tiers))}>
+                {t(C.discard)}
+              </Button>
+            )}
+            <Button variant="primary" size="sm" icon="check" pending={busy} disabled={!dirty} onClick={() => void saveAll()}>
+              {busy ? t(C.saving) : t(C.saveAll)}
+            </Button>
           </>
         }
       >
@@ -123,24 +160,29 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
         {draft.length === 0 ? (
           <EmptyState icon="layers" title={t(C.emptyTitle)} hint={t(C.emptyHint)} />
         ) : (
-          <div className="tiers-list">
+          <Stack gap="md">
             {draft.map((row) => {
               const badge = STATUS_BADGE[resolveTierRowStatus(row.model, models)]
               const placeholder = !row.model && row.thinkingLevel ? tiersPickModelWithHint(row.thinkingLevel, locale) : t(C.pickModel)
               const buttonTitle = row.model ? (row.thinkingLevel ? `${row.model} · ${row.thinkingLevel}` : row.model) : placeholder
               const patch = (p: Partial<TierDraftRow>) => mutateDraft((prev) => prev.map((r) => (r.key === row.key ? { ...r, ...p } : r)))
               return (
-                <div key={row.key} className="tiers-card">
+                <Card key={row.key} className="tiers-row-card">
                   <div className="tiers-card-top">
-                    <label className="tiers-field">
-                      <span className="tiers-field-label">{t(C.fieldId)}</span>
+                    <Field label={t(C.fieldId)}>
                       <div className="tiers-id-wrap">
                         <span className="mono tiers-id-prefix">tier/</span>
-                        <input type="text" className="input mono" value={row.id} disabled={busy} placeholder={t(C.fieldIdPlaceholder)} onChange={(e) => patch({ id: e.target.value })} />
+                        <Input
+                          type="text"
+                          mono
+                          value={row.id}
+                          disabled={busy}
+                          placeholder={t(C.fieldIdPlaceholder)}
+                          onChange={(e) => patch({ id: e.target.value })}
+                        />
                       </div>
-                    </label>
-                    <div className="tiers-field">
-                      <span className="tiers-field-label">{t(C.fieldModel)}</span>
+                    </Field>
+                    <Field label={t(C.fieldModel)} htmlFor={false}>
                       <ModelPickerControl
                         buttonAriaLabel={`${t(C.fieldModel)}${row.id.trim() ? ` · tier/${row.id.trim()}` : ''}`}
                         effectiveModel={row.model || undefined}
@@ -158,37 +200,59 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                         onApply={(model, level) => patch({ model, thinkingLevel: level ?? '' })}
                         onResetDefault={() => patch({ model: '', thinkingLevel: '' })}
                       />
-                    </div>
+                    </Field>
                     <div className="tiers-card-actions">
-                      <span className={`badge ${badge.tone}`}>{t(badge.copy)}</span>
-                      <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => mutateDraft((prev) => prev.filter((r) => r.key !== row.key))}>
-                        <HelmxIcon name="trash-2" size={13} /><span>{t(C.removeRow)}</span>
-                      </button>
+                      <Badge tone={badge.tone}>{t(badge.copy)}</Badge>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon="trash-2"
+                        disabled={busy}
+                        onClick={() => mutateDraft((prev) => prev.filter((r) => r.key !== row.key))}
+                      >
+                        {t(C.removeRow)}
+                      </Button>
                     </div>
                   </div>
-                  <label className="tiers-field">
-                    <span className="tiers-field-label">{t(C.fieldDescription)}</span>
-                    <input type="text" className="input" maxLength={240} value={row.description} disabled={busy} placeholder={t(C.fieldDescriptionPlaceholder)} onChange={(e) => patch({ description: e.target.value })} />
-                  </label>
-                </div>
+                  <Field label={t(C.fieldDescription)}>
+                    <Input
+                      type="text"
+                      maxLength={240}
+                      value={row.description}
+                      disabled={busy}
+                      placeholder={t(C.fieldDescriptionPlaceholder)}
+                      onChange={(e) => patch({ description: e.target.value })}
+                    />
+                  </Field>
+                </Card>
               )
             })}
-          </div>
+          </Stack>
         )}
       </ScreenSection>
 
       <ScreenSection title={t(C.templatesSection)}>
         <p className="text-muted">{t(C.templateSaveTitle)}</p>
         <div className="tiers-template-form">
-          {([['id', C.templateIdLabel, C.templateIdPlaceholder, 'input mono'], ['name', C.templateNameLabel, C.templateNamePlaceholder, 'input'], ['desc', C.templateDescLabel, C.templateDescPlaceholder, 'input']] as const).map(([field, label, ph, cls]) => (
-            <label key={field} className="tiers-field">
-              <span className="tiers-field-label">{t(label)}</span>
-              <input type="text" className={cls} value={tplForm[field]} disabled={busy || savedCount === 0} placeholder={t(ph)} onChange={(e) => setTplForm((prev) => ({ ...prev, [field]: e.target.value }))} />
-            </label>
+          {([
+            ['id', C.templateIdLabel, C.templateIdPlaceholder, true],
+            ['name', C.templateNameLabel, C.templateNamePlaceholder, false],
+            ['desc', C.templateDescLabel, C.templateDescPlaceholder, false],
+          ] as const).map(([field, label, ph, mono]) => (
+            <Field key={field} label={t(label)}>
+              <Input
+                type="text"
+                mono={mono}
+                value={tplForm[field]}
+                disabled={busy || savedCount === 0}
+                placeholder={t(ph)}
+                onChange={(e) => setTplForm((prev) => ({ ...prev, [field]: e.target.value }))}
+              />
+            </Field>
           ))}
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy || savedCount === 0} onClick={() => void handleSaveTemplate()}>
-            <HelmxIcon name="layers" size={13} /><span>{t(C.templateSaveBtn)}</span>
-          </button>
+          <Button variant="secondary" size="sm" icon="layers" disabled={busy || savedCount === 0} onClick={() => void handleSaveTemplate()}>
+            {t(C.templateSaveBtn)}
+          </Button>
         </div>
 
         {parsed.templates.length === 0 ? (
@@ -204,26 +268,26 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                   <tr key={tpl.id}>
                     <td>
                       <div className="flex-col-xs">
-                        <span className="flex-row"><strong>{tpl.name}</strong>{parsed.activeTemplate === tpl.id && <span className="badge badge-ok">{t(C.templateActiveBadge)}</span>}</span>
+                        <span className="flex-row"><strong>{tpl.name}</strong>{parsed.activeTemplate === tpl.id && <Badge tone="ok">{t(C.templateActiveBadge)}</Badge>}</span>
                         <span className="mono text-subtle">{tpl.id}</span>
                         {tpl.description && <span className="text-subtle">{tpl.description}</span>}
                       </div>
                     </td>
                     <td>
-                      <div className="tiers-roster-pills">
+                      <Stack direction="horizontal" gap="xs" wrap>
                         {Object.entries(tpl.tiers).map(([tid, spec]) => (
-                          <span key={tid} className="badge badge-neutral mono" title={spec.model}>
+                          <Badge key={tid} tone="neutral" mono title={spec.model}>
                             tier/{tid} → {formatModelShortName(spec.model)}{spec.thinkingLevel ? ` · ${spec.thinkingLevel}` : ''}
-                          </span>
+                          </Badge>
                         ))}
-                      </div>
+                      </Stack>
                     </td>
                     <td className="mono text-muted">{tpl.updatedAt > 0 ? formatTime(tpl.updatedAt) : '—'}</td>
                     <td>
-                      <div className="tiers-row-actions">
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
+                      <Stack direction="horizontal" gap="xs" align="center">
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           disabled={busy}
                           onClick={() => void runAction(async () => {
                             await ctx.callAction('apply_template', { id: tpl.id })
@@ -231,10 +295,12 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                             return tiersTemplateAppliedNotice(tpl.name, locale)
                           })}
                         >
-                          <span>{t(C.templateApply)}</span>
-                        </button>
-                        <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setPendingDelete(tpl)}><span>{t(C.templateDelete)}</span></button>
-                      </div>
+                          {t(C.templateApply)}
+                        </Button>
+                        <Button variant="ghost" size="sm" disabled={busy} onClick={() => setPendingDelete(tpl)}>
+                          {t(C.templateDelete)}
+                        </Button>
+                      </Stack>
                     </td>
                   </tr>
                 ))}

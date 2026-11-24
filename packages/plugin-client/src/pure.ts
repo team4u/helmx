@@ -10,6 +10,12 @@
  */
 export { resolveEffectiveThinkingLevel } from './ui/model-picker-model.js'
 export {
+  STATUS_LIGHT_TONES,
+  normalizeStatusLightTone,
+  isKnownStatusLightStatus,
+} from './ui/status-light-model.js'
+export type { StatusLightTone } from './ui/status-light-model.js'
+export {
   formatDurationMs,
   formatStopwatchMs,
   formatOffsetMs,

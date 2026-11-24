@@ -29,7 +29,16 @@ const { renderToString } = await import('react-dom/server')
 const { createRoot } = await import('react-dom/client')
 const { SearchBox } = await import('../src/ui/SearchBox.js')
 const { LoadingState } = await import('../src/ui/LoadingState.js')
-const { Tooltip, TooltipProvider } = await import('../src/ui/Tooltip.js')
+const { Tooltip, TooltipProvider, TooltipRoot, TooltipTrigger, TooltipContent } = await import('../src/ui/Tooltip.js')
+const { Popover, PopoverTrigger, PopoverContent } = await import('../src/ui/Popover.js')
+const { Dialog, DialogContent, DialogTitle, DialogClose } = await import('../src/ui/Dialog.js')
+const { Button, IconButton } = await import('../src/ui/Button.js')
+const { SelectCard } = await import('../src/ui/Card.js')
+const { Switch } = await import('../src/ui/Switch.js')
+const { Checkbox } = await import('../src/ui/Checkbox.js')
+const { MonoId } = await import('../src/ui/MonoId.js')
+const { Field } = await import('../src/ui/Field.js')
+const { Input } = await import('../src/ui/Input.js')
 const {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -834,6 +843,265 @@ test('MultiSelect DOM: exposes aria-activedescendant, aria-controls, and stable 
     assert.ok(charlieOpt !== null && charlieOpt.textContent?.includes('Charlie'))
     assert.equal(listbox.getAttribute('aria-activedescendant'), charlieOpt.id)
     assert.equal(combobox.getAttribute('aria-activedescendant'), charlieOpt.id)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Button / IconButton Radix asChild ref & event merging, SelectCard isolation
+// ---------------------------------------------------------------------------
+
+test('Button and IconButton: forwardRef and event merging work inside Radix PopoverTrigger, DialogClose, and TooltipTrigger asChild', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  let popOpen = false
+  let dialogOpen = true
+  let closeClicked = 0
+  const tooltipBtnRef = React.createRef<HTMLButtonElement>()
+
+  try {
+    const render = async () => {
+      await act(async () => {
+        root.render(
+          e(
+            TooltipProvider,
+            {
+              delayDuration: 0,
+              children: e(
+                'div',
+                null,
+                e(
+                  Popover,
+                  { open: popOpen, onOpenChange: (next) => { popOpen = next } },
+                  e(PopoverTrigger, { asChild: true }, e(Button, { variant: 'secondary', size: 'sm' }, 'Open menu')),
+                  e(PopoverContent, { portalled: false }, e('div', { 'data-testid': 'pop-body' }, 'Menu body')),
+                ),
+                e(
+                  Dialog,
+                  { open: dialogOpen, onOpenChange: (next) => { dialogOpen = next }, inline: true },
+                  e(
+                    DialogContent,
+                    null,
+                    e(DialogTitle, null, 'Confirm'),
+                    e(
+                      DialogClose,
+                      { asChild: true },
+                      e(IconButton, {
+                        icon: 'x',
+                        label: 'Close modal',
+                        onClick: () => { closeClicked++ },
+                      }),
+                    ),
+                  ),
+                ),
+                e(
+                  TooltipRoot,
+                  { open: true },
+                  e(
+                    TooltipTrigger,
+                    { asChild: true },
+                    e(Button, { ref: tooltipBtnRef, variant: 'ghost', size: 'xs' }, 'Hint target'),
+                  ),
+                  e(TooltipContent, null, 'Helpful tip'),
+                ),
+              ),
+            },
+          ),
+        )
+      })
+    }
+
+    await render()
+    assert.ok(tooltipBtnRef.current instanceof HTMLButtonElement, 'Button must forward DOM ref through Radix TooltipTrigger asChild')
+
+    const popTrigger = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Open menu'))
+    assert.ok(popTrigger !== undefined)
+    await act(async () => {
+      popTrigger.click()
+    })
+    assert.equal(popOpen, true, 'PopoverTrigger asChild must toggle Popover when Button is clicked')
+
+    const closeBtn = container.querySelector<HTMLButtonElement>('button[aria-label="Close modal"]')
+    assert.ok(closeBtn !== null)
+    await act(async () => {
+      closeBtn.click()
+    })
+    assert.equal(closeClicked, 1, 'IconButton onClick must merge cleanly with DialogClose asChild')
+    assert.equal(dialogOpen, false, 'DialogClose asChild must close Dialog when IconButton is clicked')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('SelectCard: card body and trigger fire onSelect once while sibling actions, interactive children, and disabled state remain isolated', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  let selects = 0
+  let toggled = 0
+  let checkboxToggled = 0
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          'div',
+          null,
+          e('p', { className: 'outside-note' }, 'External selected note'),
+          e(
+            SelectCard,
+            {
+              title: 'Connector A',
+              subtitle: 'Online',
+              selected: false,
+              onSelect: () => { selects++ },
+              actions: e(Switch, {
+                checked: true,
+                onChange: () => { toggled++ },
+                label: 'Active',
+                'aria-label': 'Toggle Connector A',
+              }),
+              footer: e('span', { className: 'footer-meta' }, 'Updated just now'),
+            },
+            e('div', { className: 'body-text' }, 'Card summary'),
+            e(Checkbox, {
+              checked: false,
+              onChange: () => { checkboxToggled++ },
+              label: 'Enable sync',
+            }),
+            e(MonoId, { value: 'conn_abc123' }),
+          ),
+          e(SelectCard, {
+            title: 'Disabled Card',
+            disabled: true,
+            onSelect: () => { selects += 100 },
+          }),
+        ),
+      )
+    })
+
+    const articles = container.querySelectorAll<HTMLElement>('article.helmx-select-card')
+    assert.equal(articles.length, 2)
+    const activeCard = articles[0]!
+    const disabledCard = articles[1]!
+
+    // 1) Clicking primary trigger fires onSelect exactly once (no bubble duplication)
+    const trigger = activeCard.querySelector<HTMLButtonElement>('button.helmx-select-card-trigger')
+    assert.ok(trigger !== null)
+    await act(async () => {
+      trigger.click()
+    })
+    assert.equal(selects, 1)
+
+    // 2) Clicking card body text or non-interactive footer fires onSelect
+    const bodyText = activeCard.querySelector<HTMLElement>('.body-text')
+    const footerMeta = activeCard.querySelector<HTMLElement>('.footer-meta')
+    assert.ok(bodyText !== null && footerMeta !== null)
+    await act(async () => {
+      bodyText.click()
+      footerMeta.click()
+    })
+    assert.equal(selects, 3)
+
+    // 3) Clicking actions Switch (button and sibling label) toggles Switch without firing onSelect
+    const switchBtn = activeCard.querySelector<HTMLButtonElement>('[role="switch"]')
+    const switchLabel = activeCard.querySelector<HTMLLabelElement>('label.helmx-switch-label')
+    assert.ok(switchBtn !== null && switchLabel !== null)
+    assert.ok(!switchLabel.contains(switchBtn), 'Switch label must be a sibling of its button')
+    assert.equal(switchLabel.getAttribute('for'), switchBtn.id)
+    await act(async () => {
+      switchBtn.click()
+      switchLabel.click()
+    })
+    assert.equal(toggled, 2)
+    assert.equal(selects, 3)
+
+  // 4) Clicking MonoId CopyButton inside children does not fire onSelect
+    const copyBtn = activeCard.querySelector<HTMLButtonElement>('.helmx-mono-id-copy')
+    assert.ok(copyBtn !== null)
+    await act(async () => {
+      copyBtn.click()
+    })
+    assert.equal(selects, 3)
+
+    // 5) Clicking a sibling Checkbox <label> inside body toggles Checkbox once without firing onSelect
+    const checkboxLabel = activeCard.querySelector<HTMLLabelElement>('label.helmx-checkbox-label')
+    const checkboxBtn = activeCard.querySelector<HTMLButtonElement>('[role="checkbox"]')
+    assert.ok(checkboxLabel !== null && checkboxBtn !== null)
+    assert.ok(!checkboxLabel.contains(checkboxBtn), 'Checkbox label must be a sibling of its button')
+    assert.equal(checkboxLabel.getAttribute('for'), checkboxBtn.id)
+    await act(async () => {
+      checkboxLabel.click()
+    })
+    assert.equal(checkboxToggled, 1, 'clicking sibling Checkbox label toggles Checkbox once')
+    assert.equal(selects, 3, 'clicking Checkbox label inside SelectCard must not trigger onSelect')
+
+    // 6) Text selection outside this SelectCard does NOT suppress onSelect, while selection inside DOES
+    const outsideNote = container.querySelector<HTMLElement>('.outside-note')
+    assert.ok(outsideNote !== null && outsideNote.firstChild !== null && bodyText.firstChild !== null)
+    const selection = window.getSelection()
+    assert.ok(selection !== null)
+    const outsideRange = document.createRange()
+    outsideRange.selectNodeContents(outsideNote.firstChild)
+    selection.removeAllRanges()
+    selection.addRange(outsideRange)
+    await act(async () => {
+      bodyText.click()
+    })
+    assert.equal(selects, 4, 'selection outside SelectCard must not block selecting this card')
+
+    const insideRange = document.createRange()
+    insideRange.selectNodeContents(bodyText.firstChild)
+    selection.removeAllRanges()
+    selection.addRange(insideRange)
+    await act(async () => {
+      bodyText.click()
+    })
+    assert.equal(selects, 4, 'selection inside SelectCard must suppress onSelect while copying text')
+    selection.removeAllRanges()
+
+    // 7) Disabled card suppresses both article click and trigger click
+    const disabledTrigger = disabledCard.querySelector<HTMLButtonElement>('button.helmx-select-card-trigger')
+    assert.ok(disabledTrigger !== null && disabledTrigger.disabled === true)
+    await act(async () => {
+      disabledCard.click()
+      disabledTrigger.click()
+    })
+    assert.equal(selects, 4)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('Field: label htmlFor resolves to the exact nested Input DOM element', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          Field,
+          { label: 'Webhook URL', hint: 'HTTPS endpoint' },
+          e(Input, { placeholder: 'https://example.com/hook' }),
+        ),
+      )
+    })
+    const label = container.querySelector<HTMLLabelElement>('label.helmx-field-label')
+    const input = container.querySelector<HTMLInputElement>('input.input')
+    assert.ok(label !== null && input !== null)
+    assert.ok(document.getElementById(label.htmlFor) === input)
   } finally {
     await act(async () => {
       root.unmount()

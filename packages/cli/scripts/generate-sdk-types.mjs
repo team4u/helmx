@@ -494,6 +494,19 @@ declare namespace React {
     readonly shiftKey: boolean;
   }
 
+  interface PointerEvent<T = Element> extends MouseEvent<T, globalThis.PointerEvent> {
+    readonly pointerId: number;
+    readonly pressure: number;
+    readonly tangentialPressure: number;
+    readonly tiltX: number;
+    readonly tiltY: number;
+    readonly twist: number;
+    readonly width: number;
+    readonly height: number;
+    readonly pointerType: 'mouse' | 'pen' | 'touch';
+    readonly isPrimary: boolean;
+  }
+
   interface KeyboardEvent<T = Element> extends SyntheticEvent<T, globalThis.KeyboardEvent> {
     readonly altKey: boolean;
     readonly code: string;
@@ -506,7 +519,76 @@ declare namespace React {
 
   type EventHandler<E extends SyntheticEvent<any, any>> = (event: E) => void;
 
-  interface HTMLAttributes<T = HTMLElement> extends RefAttributes<T> {
+  type Booleanish = boolean | 'true' | 'false';
+
+  interface AriaAttributes {
+    'aria-activedescendant'?: string | undefined;
+    'aria-atomic'?: Booleanish | undefined;
+    'aria-autocomplete'?: 'none' | 'inline' | 'list' | 'both' | undefined;
+    'aria-braillelabel'?: string | undefined;
+    'aria-brailleroledescription'?: string | undefined;
+    'aria-busy'?: Booleanish | undefined;
+    'aria-checked'?: boolean | 'false' | 'mixed' | 'true' | undefined;
+    'aria-colcount'?: number | undefined;
+    'aria-colindex'?: number | undefined;
+    'aria-colindextext'?: string | undefined;
+    'aria-colspan'?: number | undefined;
+    'aria-controls'?: string | undefined;
+    'aria-current'?: boolean | 'false' | 'true' | 'page' | 'step' | 'location' | 'date' | 'time' | undefined;
+    'aria-describedby'?: string | undefined;
+    'aria-description'?: string | undefined;
+    'aria-details'?: string | undefined;
+    'aria-disabled'?: Booleanish | undefined;
+    'aria-dropeffect'?: 'none' | 'copy' | 'execute' | 'link' | 'move' | 'popup' | undefined;
+    'aria-errormessage'?: string | undefined;
+    'aria-expanded'?: Booleanish | undefined;
+    'aria-flowto'?: string | undefined;
+    'aria-grabbed'?: Booleanish | undefined;
+    'aria-haspopup'?: boolean | 'false' | 'true' | 'menu' | 'listbox' | 'tree' | 'grid' | 'dialog' | undefined;
+    'aria-hidden'?: Booleanish | undefined;
+    'aria-invalid'?: boolean | 'false' | 'true' | 'grammar' | 'spelling' | undefined;
+    'aria-keyshortcuts'?: string | undefined;
+    'aria-label'?: string | undefined;
+    'aria-labelledby'?: string | undefined;
+    'aria-level'?: number | undefined;
+    'aria-live'?: 'off' | 'assertive' | 'polite' | undefined;
+    'aria-modal'?: Booleanish | undefined;
+    'aria-multiline'?: Booleanish | undefined;
+    'aria-multiselectable'?: Booleanish | undefined;
+    'aria-orientation'?: 'horizontal' | 'vertical' | undefined;
+    'aria-owns'?: string | undefined;
+    'aria-placeholder'?: string | undefined;
+    'aria-posinset'?: number | undefined;
+    'aria-pressed'?: boolean | 'false' | 'mixed' | 'true' | undefined;
+    'aria-readonly'?: Booleanish | undefined;
+    'aria-relevant'?:
+      | 'additions'
+      | 'additions removals'
+      | 'additions text'
+      | 'all'
+      | 'removals'
+      | 'removals additions'
+      | 'removals text'
+      | 'text'
+      | 'text additions'
+      | 'text removals'
+      | undefined;
+    'aria-required'?: Booleanish | undefined;
+    'aria-roledescription'?: string | undefined;
+    'aria-rowcount'?: number | undefined;
+    'aria-rowindex'?: number | undefined;
+    'aria-rowindextext'?: string | undefined;
+    'aria-rowspan'?: number | undefined;
+    'aria-selected'?: Booleanish | undefined;
+    'aria-setsize'?: number | undefined;
+    'aria-sort'?: 'none' | 'ascending' | 'descending' | 'other' | undefined;
+    'aria-valuemax'?: number | undefined;
+    'aria-valuemin'?: number | undefined;
+    'aria-valuenow'?: number | undefined;
+    'aria-valuetext'?: string | undefined;
+  }
+
+  interface HTMLAttributes<T = HTMLElement> extends AriaAttributes, RefAttributes<T> {
     id?: string | undefined;
     className?: string | undefined;
     style?: CSSProperties | undefined;
@@ -514,11 +596,45 @@ declare namespace React {
     role?: string | undefined;
     tabIndex?: number | undefined;
     hidden?: boolean | undefined;
+    accessKey?: string | undefined;
+    autoCapitalize?: string | undefined;
+    autoCorrect?: string | undefined;
+    contentEditable?: Booleanish | 'inherit' | 'plaintext-only' | undefined;
+    dir?: string | undefined;
+    draggable?: Booleanish | undefined;
+    enterKeyHint?: 'enter' | 'done' | 'go' | 'next' | 'previous' | 'search' | 'send' | undefined;
+    inert?: boolean | undefined;
+    inputMode?: 'none' | 'text' | 'tel' | 'url' | 'email' | 'numeric' | 'decimal' | 'search' | undefined;
+    lang?: string | undefined;
+    popover?: '' | 'auto' | 'manual' | undefined;
+    slot?: string | undefined;
+    spellCheck?: Booleanish | undefined;
+    translate?: 'yes' | 'no' | undefined;
+    dangerouslySetInnerHTML?: { __html: string } | undefined;
     children?: ReactNode | undefined;
     onClick?: EventHandler<MouseEvent<T>> | undefined;
     onDoubleClick?: EventHandler<MouseEvent<T>> | undefined;
+    onContextMenu?: EventHandler<MouseEvent<T>> | undefined;
+    onMouseDown?: EventHandler<MouseEvent<T>> | undefined;
+    onMouseUp?: EventHandler<MouseEvent<T>> | undefined;
+    onMouseMove?: EventHandler<MouseEvent<T>> | undefined;
     onMouseEnter?: EventHandler<MouseEvent<T>> | undefined;
     onMouseLeave?: EventHandler<MouseEvent<T>> | undefined;
+    onMouseOver?: EventHandler<MouseEvent<T>> | undefined;
+    onMouseOut?: EventHandler<MouseEvent<T>> | undefined;
+    onPointerDown?: EventHandler<PointerEvent<T>> | undefined;
+    onPointerUp?: EventHandler<PointerEvent<T>> | undefined;
+    onPointerMove?: EventHandler<PointerEvent<T>> | undefined;
+    onPointerEnter?: EventHandler<PointerEvent<T>> | undefined;
+    onPointerLeave?: EventHandler<PointerEvent<T>> | undefined;
+    onPointerOver?: EventHandler<PointerEvent<T>> | undefined;
+    onPointerOut?: EventHandler<PointerEvent<T>> | undefined;
+    onPointerCancel?: EventHandler<PointerEvent<T>> | undefined;
+    onGotPointerCapture?: EventHandler<PointerEvent<T>> | undefined;
+    onLostPointerCapture?: EventHandler<PointerEvent<T>> | undefined;
+    onTouchStart?: EventHandler<SyntheticEvent<T>> | undefined;
+    onTouchMove?: EventHandler<SyntheticEvent<T>> | undefined;
+    onTouchEnd?: EventHandler<SyntheticEvent<T>> | undefined;
     onFocus?: EventHandler<FocusEvent<T>> | undefined;
     onBlur?: EventHandler<FocusEvent<T>> | undefined;
     onKeyDown?: EventHandler<KeyboardEvent<T>> | undefined;
@@ -526,10 +642,31 @@ declare namespace React {
     onChange?: EventHandler<ChangeEvent<T>> | undefined;
     onInput?: EventHandler<FormEvent<T>> | undefined;
     onSubmit?: EventHandler<FormEvent<T>> | undefined;
-    [attr: string]: unknown;
+    onReset?: EventHandler<FormEvent<T>> | undefined;
+    onInvalid?: EventHandler<FormEvent<T>> | undefined;
+    onSelect?: EventHandler<SyntheticEvent<T>> | undefined;
+    onScroll?: EventHandler<SyntheticEvent<T>> | undefined;
+    onWheel?: EventHandler<SyntheticEvent<T>> | undefined;
+    onCopy?: EventHandler<SyntheticEvent<T>> | undefined;
+    onCut?: EventHandler<SyntheticEvent<T>> | undefined;
+    onPaste?: EventHandler<SyntheticEvent<T>> | undefined;
+    onDrag?: EventHandler<SyntheticEvent<T>> | undefined;
+    onDragStart?: EventHandler<SyntheticEvent<T>> | undefined;
+    onDragEnd?: EventHandler<SyntheticEvent<T>> | undefined;
+    onDragEnter?: EventHandler<SyntheticEvent<T>> | undefined;
+    onDragLeave?: EventHandler<SyntheticEvent<T>> | undefined;
+    onDragOver?: EventHandler<SyntheticEvent<T>> | undefined;
+    onDrop?: EventHandler<SyntheticEvent<T>> | undefined;
+    onAnimationStart?: EventHandler<SyntheticEvent<T>> | undefined;
+    onAnimationEnd?: EventHandler<SyntheticEvent<T>> | undefined;
+    onTransitionEnd?: EventHandler<SyntheticEvent<T>> | undefined;
+    [data: \`data-\${string}\`]: unknown;
   }
 
   interface InputHTMLAttributes<T = HTMLInputElement> extends HTMLAttributes<T> {
+    accept?: string | undefined;
+    alt?: string | undefined;
+    capture?: boolean | 'user' | 'environment' | undefined;
     type?: string | undefined;
     value?: string | number | readonly string[] | undefined;
     defaultValue?: string | number | readonly string[] | undefined;
@@ -539,11 +676,24 @@ declare namespace React {
     disabled?: boolean | undefined;
     readOnly?: boolean | undefined;
     required?: boolean | undefined;
+    form?: string | undefined;
+    formAction?: string | undefined;
+    formNoValidate?: boolean | undefined;
+    height?: number | string | undefined;
+    list?: string | undefined;
+    multiple?: boolean | undefined;
     name?: string | undefined;
     min?: string | number | undefined;
     max?: string | number | undefined;
+    minLength?: number | undefined;
+    maxLength?: number | undefined;
     step?: string | number | undefined;
+    size?: number | undefined;
+    src?: string | undefined;
+    pattern?: string | undefined;
+    autoComplete?: string | undefined;
     autoFocus?: boolean | undefined;
+    width?: number | string | undefined;
   }
 
   interface TextareaHTMLAttributes<T = HTMLTextAreaElement> extends HTMLAttributes<T> {
@@ -553,14 +703,24 @@ declare namespace React {
     disabled?: boolean | undefined;
     readOnly?: boolean | undefined;
     required?: boolean | undefined;
+    form?: string | undefined;
     rows?: number | undefined;
     cols?: number | undefined;
+    minLength?: number | undefined;
+    maxLength?: number | undefined;
     name?: string | undefined;
+    autoComplete?: string | undefined;
+    autoFocus?: boolean | undefined;
+    wrap?: string | undefined;
   }
 
   interface ButtonHTMLAttributes<T = HTMLButtonElement> extends HTMLAttributes<T> {
     type?: 'submit' | 'reset' | 'button' | undefined;
     disabled?: boolean | undefined;
+    form?: string | undefined;
+    formAction?: string | undefined;
+    formNoValidate?: boolean | undefined;
+    autoFocus?: boolean | undefined;
     name?: string | undefined;
     value?: string | number | readonly string[] | undefined;
   }

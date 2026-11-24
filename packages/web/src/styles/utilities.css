@@ -1,0 +1,17 @@
+/* ==========================================================================
+ * 通用无内联布局与文本修饰工具类（位于 @layer host-components 最末尾，
+ * 确保修饰类可稳定覆盖前面宿主分片的默认样式，同时仍低于 @layer plugin-ui）
+ * ========================================================================== */
+
+.flex-1 { flex: 1; min-width: 0; }
+.flex-row { display: flex; align-items: center; gap: 6px; }
+.flex-row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.flex-row-wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.flex-col { display: flex; flex-direction: column; gap: 6px; }
+.flex-col-xs { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.border-accent { border-color: var(--accent) !important; }
+.text-muted { font-size: 12px; color: var(--fg-muted); }
+.text-subtle { font-size: 11px; color: var(--fg-subtle); }
+.text-err { color: var(--err); }
+.nowrap { white-space: nowrap; }
+.break-word { white-space: normal; word-break: break-word; overflow-wrap: anywhere; min-width: 0; }

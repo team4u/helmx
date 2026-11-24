@@ -54,34 +54,9 @@
   width: 100%;
 }
 
-.jr-card-wrap > .card {
+.jr-card-wrap > .card,
+.jr-card-wrap > .helmx-card {
   margin: 0;
   width: 100%;
   box-sizing: border-box;
-}
-
-/* Card primitives: vertical flow and component spacing rhythm (12px breathing room, no 0px edge-hugging). */
-.jr-card {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.jr-card-header {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.jr-card-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.jr-card-subtitle {
-  font-size: 11.5px;
-  color: var(--fg-muted);
 }

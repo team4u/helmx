@@ -9,12 +9,16 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol'
 import {
+  Badge,
+  Button,
   Callout,
+  CardGrid,
   ConfirmDialog,
   CopyButton,
   DetailDrawer,
   EmptyState,
   HelmxIcon,
+  Input,
   KvGrid,
   LoadingState,
   Screen,
@@ -22,6 +26,7 @@ import {
   ScreenToolbar,
   SearchBox,
   Select,
+  SelectCard,
   formatBytes,
   formatTime,
   resolveLocalizedText,
@@ -186,9 +191,9 @@ function WorkflowLibraryDrawer(props: {
         title={item.name}
         titleExtra={
           <>
-            <span className="badge badge-neutral tabular-nums">{formatBytes(item.size)}</span>
-            <span className="badge badge-neutral tabular-nums">{formatTime(item.updatedAt)}</span>
-            {item.metadataError ? <span className="badge badge-warn">{t(COPY.libMetadataBadge)}</span> : null}
+            <Badge tone="neutral" className="tabular-nums">{formatBytes(item.size)}</Badge>
+            <Badge tone="neutral" className="tabular-nums">{formatTime(item.updatedAt)}</Badge>
+            {item.metadataError ? <Badge tone="warn">{t(COPY.libMetadataBadge)}</Badge> : null}
           </>
         }
         icon={<HelmxIcon name="workflow" size={18} />}
@@ -198,18 +203,18 @@ function WorkflowLibraryDrawer(props: {
         closeIcon={<HelmxIcon name="x" size={14} />}
         footer={
           <>
-            <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={onClose}>
               {t(COPY.close)}
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost btn-danger"
-              disabled={deleteCtl.pending}
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              icon="trash-2"
+              pending={deleteCtl.pending}
               onClick={() => setConfirmOpen(true)}
             >
-              <HelmxIcon name="trash-2" size={12} />
-              <span>{t(COPY.delete)}</span>
-            </button>
+              {t(COPY.delete)}
+            </Button>
           </>
         }
       >
@@ -220,23 +225,23 @@ function WorkflowLibraryDrawer(props: {
         <div className="wf-drawer-section">
           <div className="wf-section-head">
             <span className="trace-section-label">{t(COPY.libSourceSection)}</span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
+            <Button
+              variant="ghost"
+              size="xs"
+              icon={<HelmxIcon name="rotate-cw" size={11} className={detailLoading ? SPIN_CLASS : undefined} />}
               disabled={detailLoading}
               onClick={() => void loadDetail()}
             >
-              <HelmxIcon name="rotate-cw" size={11} className={detailLoading ? SPIN_CLASS : undefined} />
-              <span>{t(COPY.refresh)}</span>
-            </button>
+              {t(COPY.refresh)}
+            </Button>
           </div>
           {detailLoading && detail === undefined ? <LoadingState label={t(COPY.loading)} /> : null}
           {detailError ? (
             <Callout tone="err">
               <div>{detailError}</div>
-              <button type="button" className="btn btn-xs" onClick={() => void loadDetail()}>
+              <Button size="xs" onClick={() => void loadDetail()}>
                 {t(COPY.retry)}
-              </button>
+              </Button>
             </Callout>
           ) : null}
           {detail !== undefined ? (
@@ -261,9 +266,10 @@ function WorkflowLibraryDrawer(props: {
                 aria-label={t(COPY.libRunSelectAria)}
               />
             </div>
-            <input
+            <Input
               type="text"
               className="wf-lib-args"
+              invalid={argsError !== undefined}
               placeholder={t(COPY.libArgsPlaceholder)}
               value={argsDraft}
               onChange={(e) => {
@@ -271,16 +277,16 @@ function WorkflowLibraryDrawer(props: {
                 setArgsError(undefined)
               }}
             />
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={runCtl.pending || conversationOptions.length === 0}
+            <Button
+              size="sm"
+              icon="play"
+              pending={runCtl.pending}
+              disabled={conversationOptions.length === 0}
               title={conversationOptions.length === 0 ? t(COPY.libNoConversations) : undefined}
               onClick={handleRun}
             >
-              <HelmxIcon name={runCtl.pending ? 'loader' : 'play'} size={11} className={runCtl.pending ? SPIN_CLASS : undefined} />
-              <span>{t(COPY.run)}</span>
-            </button>
+              {t(COPY.run)}
+            </Button>
           </div>
           {argsError ? <Callout tone="err">{argsError}</Callout> : null}
         </div>
@@ -339,10 +345,14 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
       }
       subtitle={libSubtitle(items?.length ?? 0, locale)}
       actions={
-        <button type="button" className="btn btn-sm" disabled={loading} onClick={() => void reload()}>
-          <HelmxIcon name="rotate-cw" size={12} className={loading ? SPIN_CLASS : undefined} />
-          <span>{t(COPY.refresh)}</span>
-        </button>
+        <Button
+          size="sm"
+          icon={<HelmxIcon name="rotate-cw" size={12} className={loading ? SPIN_CLASS : undefined} />}
+          disabled={loading}
+          onClick={() => void reload()}
+        >
+          {t(COPY.refresh)}
+        </Button>
       }
     >
       <ScreenSection>
@@ -362,9 +372,9 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
         {error ? (
           <Callout tone="err">
             <div>{error}</div>
-            <button type="button" className="btn btn-xs" onClick={() => void reload()}>
+            <Button size="xs" onClick={() => void reload()}>
               {t(COPY.retry)}
-            </button>
+            </Button>
           </Callout>
         ) : null}
         {items !== undefined && items.length === 0 && !error ? (
@@ -379,20 +389,30 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
         ) : null}
 
         {filtered !== undefined && filtered.length > 0 ? (
-          <div className="wf-lib-grid">
+          <CardGrid className="wf-lib-grid">
             {filtered.map((item) => (
-              <button
+              <SelectCard
                 key={item.name}
-                type="button"
-                className={`wf-lib-card${item.metadataError ? ' wf-lib-card-warn' : ''}`}
-                onClick={() => props.setParams({ wf: item.name })}
+                selected={selectedName === item.name}
+                tone={item.metadataError ? 'warn' : 'default'}
+                onSelect={() => props.setParams({ wf: item.name })}
+                title={
+                  <span className="wf-lib-card-head">
+                    <HelmxIcon name="workflow" size={14} />
+                    <span className="wf-lib-card-name" title={item.path ?? item.name}>
+                      {item.name}
+                    </span>
+                  </span>
+                }
+                footer={
+                  <>
+                    <span className="wf-lib-card-facts tabular-nums">
+                      {formatTime(item.updatedAt)} · {formatBytes(item.size)}
+                    </span>
+                    <HelmxIcon name="chevron-right" size={12} />
+                  </>
+                }
               >
-                <div className="wf-lib-card-head">
-                  <HelmxIcon name="workflow" size={14} />
-                  <strong className="wf-lib-card-name" title={item.path ?? item.name}>
-                    {item.name}
-                  </strong>
-                </div>
                 {item.metadataError ? (
                   <div className="wf-lib-card-warn-text">{libMetadataErrorText(firstLineOf(item.metadataError, 120), locale)}</div>
                 ) : (
@@ -407,15 +427,9 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
                     ) : null}
                   </>
                 )}
-                <div className="wf-lib-card-footer">
-                  <span className="wf-lib-card-facts tabular-nums">
-                    {formatTime(item.updatedAt)} · {formatBytes(item.size)}
-                  </span>
-                  <HelmxIcon name="chevron-right" size={12} />
-                </div>
-              </button>
+              </SelectCard>
             ))}
-          </div>
+          </CardGrid>
         ) : null}
       </ScreenSection>
 

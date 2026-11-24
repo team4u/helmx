@@ -299,6 +299,29 @@
   }
 }
 
+/* 通用图标旋转动效（供 Button pending / LoadingState 等公共原语复用） */
+@keyframes convSpin360 {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin,
+.spin-slow {
+  animation: convSpin360 1.1s linear infinite;
+}
+
+.spin {
+  animation-duration: 0.9s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin,
+  .spin-slow {
+    animation: none;
+  }
+}
+
 /* 统一状态灯（纯指示灯，不渲染可见状态文字）：执行/状态卡主状态位。
    复用上方 .status-dot 视觉词汇（base/working/blocked/done/error/background 均在本文件），
    这里补充 aborted 菱形（非灰色、与 blocked 实心圆区分）与 pending 空心中性环；
@@ -925,6 +948,14 @@
   line-height: 28px;
 }
 
+.input-sm {
+  height: 26px;
+  line-height: 24px;
+  padding: 0 7px;
+  font-size: 12px;
+  border-radius: var(--radius-xs);
+}
+
 textarea.input,
 textarea.textarea,
 .textarea {
@@ -942,6 +973,20 @@ textarea.textarea,
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+.input[aria-invalid='true'],
+.select[aria-invalid='true'],
+.textarea[aria-invalid='true'] {
+  border-color: var(--err);
+  background: color-mix(in srgb, var(--err-bg) 35%, var(--bg-elevated));
+}
+
+.input[aria-invalid='true']:focus,
+.select[aria-invalid='true']:focus,
+.textarea[aria-invalid='true']:focus {
+  border-color: var(--err);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 22%, transparent);
+}
+
 .input:disabled,
 .select:disabled,
 .textarea:disabled,
@@ -954,6 +999,361 @@ input:disabled {
 .textarea::placeholder,
 input::placeholder {
   color: var(--fg-muted);
+}
+
+/* ==========================================================================
+ * 通用间距布局、表单字段、结构化卡片、可点选网格卡与等宽 ID 原语
+ * 供宿主与 @helmx/plugin-client 共享（Stack / Field / Card / SelectCard /
+ * CardGrid / MonoId）；全部通过静态类名映射 --space-*，零内联样式依赖。
+ * ========================================================================== */
+
+.helmx-stack {
+  display: flex;
+  min-width: 0;
+}
+
+.helmx-stack-inline {
+  display: inline-flex;
+}
+
+.helmx-stack-vertical {
+  flex-direction: column;
+}
+
+.helmx-stack-horizontal {
+  flex-direction: row;
+}
+
+.helmx-stack-wrap {
+  flex-wrap: wrap;
+}
+
+.helmx-stack-gap-none { gap: 0; }
+.helmx-stack-gap-xs { gap: var(--space-1); }
+.helmx-stack-gap-sm { gap: var(--space-2); }
+.helmx-stack-gap-md { gap: var(--space-3); }
+.helmx-stack-gap-lg { gap: var(--space-4); }
+.helmx-stack-gap-xl { gap: var(--space-5); }
+
+.helmx-stack-align-start { align-items: flex-start; }
+.helmx-stack-align-center { align-items: center; }
+.helmx-stack-align-end { align-items: flex-end; }
+.helmx-stack-align-stretch { align-items: stretch; }
+.helmx-stack-align-baseline { align-items: baseline; }
+
+.helmx-stack-justify-start { justify-content: flex-start; }
+.helmx-stack-justify-center { justify-content: center; }
+.helmx-stack-justify-end { justify-content: flex-end; }
+.helmx-stack-justify-between { justify-content: space-between; }
+
+/* Field / HelperText / ErrorText */
+.helmx-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.helmx-field-horizontal {
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-1) var(--space-3);
+}
+
+.helmx-field-label-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.helmx-field-horizontal .helmx-field-label-row {
+  padding-top: 6px;
+}
+
+.helmx-field-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-secondary);
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.helmx-field-required {
+  color: var(--err);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.helmx-field-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.helmx-helper-text {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.helmx-error-text {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--err);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 680px) {
+  .helmx-field-horizontal {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .helmx-field-horizontal .helmx-field-label-row {
+    padding-top: 0;
+  }
+}
+
+/* Card：纯静态结构化容器，不承载整卡点击，保留既有 .card / .section-flat 公共契约 */
+.helmx-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.helmx-card-subtle {
+  background: var(--bg-subtle);
+}
+
+.helmx-card-warn {
+  border-color: var(--warn-border);
+  background: color-mix(in srgb, var(--warn-bg) 35%, var(--bg-elevated));
+}
+
+.helmx-card-subtle.helmx-card-warn {
+  background: color-mix(in srgb, var(--warn-bg) 45%, var(--bg-subtle));
+}
+
+.helmx-card-danger {
+  border-color: var(--err-border);
+  background: color-mix(in srgb, var(--err-bg) 35%, var(--bg-elevated));
+}
+
+.helmx-card-subtle.helmx-card-danger {
+  background: color-mix(in srgb, var(--err-bg) 45%, var(--bg-subtle));
+}
+
+.helmx-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.helmx-card-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.helmx-card-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg);
+  line-height: 1.35;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.helmx-card-warn .helmx-card-title {
+  color: var(--warn);
+}
+
+.helmx-card-danger .helmx-card-title {
+  color: var(--err);
+}
+
+.helmx-card-subtitle {
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.helmx-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.helmx-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.helmx-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line-2);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+/* SelectCard：主舞台可点选对象卡，采用独立主触发按钮 + 兄弟动作槽模型 */
+.helmx-select-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+  cursor: pointer;
+  position: relative;
+  min-width: 0;
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.helmx-select-card:hover:not(.is-disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+}
+
+.helmx-select-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.helmx-select-card-warn {
+  border-color: var(--warn-border);
+}
+
+.helmx-select-card-danger {
+  border-color: var(--err-border);
+}
+
+.helmx-select-card > .helmx-card-footer {
+  margin-top: auto;
+}
+
+.helmx-select-card.is-disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.helmx-select-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.helmx-select-card-trigger {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+
+.helmx-select-card-trigger:disabled {
+  cursor: not-allowed;
+}
+
+.helmx-select-card-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* CardGrid：响应式卡片网格，min(100%, ...) 保证窄分屏/移动端不横向溢出 */
+.helmx-card-grid {
+  display: grid;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+.helmx-card-grid-sm {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+}
+
+.helmx-card-grid-md {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+}
+
+.helmx-card-grid-lg {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+}
+
+.helmx-card-grid-gap-sm { gap: var(--space-2); }
+.helmx-card-grid-gap-md { gap: var(--space-3); }
+.helmx-card-grid-gap-lg { gap: var(--space-4); }
+
+/* MonoId：等宽标识符 + 截断 + 一键复制 */
+.helmx-mono-id {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.helmx-mono-id-code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.helmx-mono-id-copy {
+  flex-shrink: 0;
 }
 
 /*

@@ -1,9 +1,12 @@
 import React, { useId } from 'react'
+import { mergeAriaDescribedBy, useFieldContext } from './field-context.js'
 
 export interface SwitchProps {
   checked: boolean
   onChange: (checked: boolean) => void
   disabled?: boolean
+  invalid?: boolean
+  required?: boolean
   label?: React.ReactNode
   id?: string
   name?: string
@@ -11,6 +14,7 @@ export interface SwitchProps {
   className?: string
   style?: React.CSSProperties
   'aria-label'?: string
+  'aria-describedby'?: string
 }
 
 /**
@@ -23,6 +27,8 @@ export function Switch({
   checked,
   onChange,
   disabled = false,
+  invalid,
+  required,
   label,
   id,
   name,
@@ -30,12 +36,19 @@ export function Switch({
   className = '',
   style,
   'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
 }: SwitchProps) {
   const generatedId = useId()
-  const switchId = id ?? generatedId
+  const field = useFieldContext()
+  const hasOwnLabel = label !== undefined && label !== null && label !== ''
+  // When Switch renders its own <label htmlFor>, keep a self-contained ID so
+  // an enclosing <Field> label does not collide with the inner label.
+  const switchId = id ?? (hasOwnLabel ? generatedId : (field?.controlId ?? generatedId))
+  const resolvedInvalid = invalid ?? field?.invalid ?? false
+  const resolvedRequired = required ?? (field?.required === true ? true : undefined)
+  const resolvedDescribedBy = mergeAriaDescribedBy(ariaDescribedBy, field?.describedBy)
 
-  const handleClick = (e: React.MouseEvent) => {
-    e.preventDefault()
+  const handleClick = () => {
     if (!disabled) {
       onChange(!checked)
     }
@@ -60,6 +73,9 @@ export function Switch({
       name={name}
       aria-checked={checked}
       aria-label={ariaLabel ?? (typeof label === 'string' ? label : undefined)}
+      aria-invalid={resolvedInvalid ? true : undefined}
+      aria-required={resolvedRequired}
+      aria-describedby={resolvedDescribedBy}
       disabled={disabled}
       className={buttonClass}
       onClick={handleClick}
@@ -70,23 +86,14 @@ export function Switch({
     </button>
   )
 
-  if (label === undefined || label === null || label === '') {
-    return (
-      <span className={wrapClass} style={style} title={title}>
-        {switchButton}
-      </span>
-    )
-  }
-
   return (
-    <label
-      htmlFor={switchId}
-      className={wrapClass}
-      style={style}
-      title={title}
-    >
+    <span className={wrapClass} style={style} title={title}>
       {switchButton}
-      <span className="helmx-switch-label">{label}</span>
-    </label>
+      {hasOwnLabel ? (
+        <label htmlFor={switchId} className="helmx-switch-label">
+          {label}
+        </label>
+      ) : null}
+    </span>
   )
 }

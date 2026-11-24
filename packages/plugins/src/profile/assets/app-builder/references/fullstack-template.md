@@ -110,6 +110,9 @@ import {
   ScreenSection,
   DataTable,
   Checkbox,
+  Button,
+  Field,
+  Input,
 } from '@helmx/plugin-client'
 
 interface Item { id: string; title: string; done: boolean; createdAt: number }
@@ -142,23 +145,25 @@ export function MainScreen(): ReactNode {
       <ScreenSection
         title="Add an item"
         titleExtra={
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            disabled={pending || draft.trim() === ''}
+          <Button
+            variant="primary"
+            size="sm"
+            pending={pending}
+            disabled={draft.trim() === ''}
             onClick={() => void add()}
           >
             Add
-          </button>
+          </Button>
         }
       >
-        <input
-          className="input"
-          value={draft}
-          placeholder="Type a todo and press Enter..."
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void add() }}
-        />
+        <Field label="Item title">
+          <Input
+            value={draft}
+            placeholder="Type a todo and press Enter..."
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void add() }}
+          />
+        </Field>
       </ScreenSection>
 
       <ScreenSection title="Item list">

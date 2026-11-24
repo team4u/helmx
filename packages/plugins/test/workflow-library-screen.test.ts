@@ -145,7 +145,7 @@ function setControlledValue(input: HTMLInputElement, value: string): void {
   })
 }
 
-test('工作流库 Screen：原生 button 卡片网格渲染元数据诊断；点击回写 wf；深链 q 恢复搜索', { timeout: 60_000 }, async () => {
+test('工作流库 Screen：CardGrid + SelectCard 渲染元数据诊断；点击回写 wf；深链 q 恢复搜索', { timeout: 60_000 }, async () => {
   const h = createWorkflowHostHarness({
     conversationId: 1,
     conversations: [],
@@ -156,14 +156,16 @@ test('工作流库 Screen：原生 button 卡片网格渲染元数据诊断；�
   const ui = h.mountNode(e(WorkflowLibraryScreen, props))
   try {
     await act(async () => {})
-    const cards = [...ui.container.querySelectorAll('button.wf-lib-card')] as HTMLButtonElement[]
-    assert.equal(cards.length, 3, '所有卡片必须是原生 button')
+    const cards = [...ui.container.querySelectorAll('article.helmx-select-card')] as HTMLElement[]
+    const triggers = [...ui.container.querySelectorAll('button.helmx-select-card-trigger')] as HTMLButtonElement[]
+    assert.equal(cards.length, 3, '所有卡片复用 SelectCard 容器')
+    assert.equal(triggers.length, 3, '每张卡片具备独立原生 button 主触发器')
     assert.match(ui.container.textContent!, /Workflow Library/)
     assert.match(ui.container.textContent!, /发布流程/)
     assert.match(ui.container.textContent!, /Metadata error: meta\.name is required/)
     assert.ok(document.body.querySelector('.wf-lib-drawer') === null)
 
-    await act(async () => { cards[0]!.click() })
+    await act(async () => { triggers[0]!.click() })
     assert.deepEqual(props.setParamsCalls.filter((x) => 'wf' in x), [{ wf: 'release' }])
 
     // 深链 q 参数恢复搜索框并过滤卡片
@@ -173,7 +175,7 @@ test('工作流库 Screen：原生 button 卡片网格渲染元数据诊断；�
     const search = ui.container.querySelector('input[aria-label="Search workflow library"]') as HTMLInputElement | null
     assert.ok(search !== null)
     assert.equal(search.value, 'audit')
-    assert.equal(ui.container.querySelectorAll('button.wf-lib-card').length, 1)
+    assert.equal(ui.container.querySelectorAll('article.helmx-select-card').length, 1)
   } finally {
     ui.unmount()
   }

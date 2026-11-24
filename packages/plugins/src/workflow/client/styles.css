@@ -540,38 +540,15 @@
 }
 
 .wf-lib-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.wf-lib-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-elevated, var(--bg));
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.wf-lib-card:hover {
-  border-color: var(--border-strong, var(--accent));
-}
-
-.wf-lib-card-warn {
-  border-color: color-mix(in srgb, var(--warn) 50%, var(--border));
+  margin-top: var(--space-3);
 }
 
 .wf-lib-card-head {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .wf-lib-card-name {
@@ -586,6 +563,8 @@
   font-size: 13px;
   color: var(--fg-secondary);
   line-height: 1.45;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .wf-lib-card-desc-empty {
@@ -596,25 +575,24 @@
 .wf-lib-card-warn-text {
   font-size: 12px;
   color: var(--warn);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .wf-lib-card-phases {
   font-size: 12px;
   color: var(--fg-muted);
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.wf-lib-card-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: auto;
-  padding-top: 6px;
-  border-top: 1px solid var(--border);
+.wf-lib-card-facts {
   font-size: 12px;
   color: var(--fg-muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .wf-drawer-section {

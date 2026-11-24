@@ -260,7 +260,7 @@ export default {
 
 /**
  * Frontend for the app template: uses only @helmx/plugin-client host primitives (Screen/ScreenSection/KvGrid/
- * DataTable/Checkbox) + host public CSS classes (.input / .btn); zero private stylesheet by default — add scoped
+ * DataTable/Checkbox/Field/Input/Button); zero private stylesheet by default — add scoped
  * custom CSS only when the host vocabulary is genuinely insufficient; zero Emoji; 13px body text.
  */
 export const SCAFFOLD_CLIENT_APP_TSX = `import { useState, type ReactNode } from 'react'
@@ -272,6 +272,9 @@ import {
   DataTable,
   KvGrid,
   Checkbox,
+  Button,
+  Field,
+  Input,
 } from '@helmx/plugin-client'
 
 interface Item {
@@ -309,25 +312,27 @@ export function MainScreen(): ReactNode {
       <ScreenSection
         title="Add Item"
         titleExtra={
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            disabled={pending || draft.trim() === ''}
+          <Button
+            variant="primary"
+            size="sm"
+            pending={pending}
+            disabled={draft.trim() === ''}
             onClick={() => void add()}
           >
             Add
-          </button>
+          </Button>
         }
       >
-        <input
-          className="input"
-          value={draft}
-          placeholder="Enter item title and press Enter..."
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void add()
-          }}
-        />
+        <Field label="Item title">
+          <Input
+            value={draft}
+            placeholder="Enter item title and press Enter..."
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void add()
+            }}
+          />
+        </Field>
       </ScreenSection>
 
       <ScreenSection title="Overview">
