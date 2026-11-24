@@ -369,6 +369,69 @@ describe('Ask CAS and persistence boundaries', { timeout: 60_000 }, () => {
     }
   })
 
+  it('CAS survives process restart: creation self-bump persists across close/reopen so first answer succeeds, while post-restart state advance still supersedes', { timeout: 60_000 }, async () => {
+    const dir = join(root, 't9-live-cas-restart')
+    const kernel1 = await openRuntime(dir)
+    let ask1Id = ''
+    let seq1 = 0
+    try {
+      seq1 = kernel1.getConversation(1).stateChangeSeq
+      const p1 = kernel1.createAsk({
+        conversationId: 1,
+        title: 'restart confirm',
+        expectedStateSeq: seq1,
+        fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+      })
+      void p1.catch(() => {})
+      await waitFor(() => kernel1.listAsks('pending').length === 1 && kernel1.getConversation(1).status === 'blocked')
+      ask1Id = kernel1.listAsks('pending')[0]!.id
+      assert.equal(kernel1.getConversation(1).stateChangeSeq, seq1 + 1)
+    } finally {
+      await kernel1.close()
+    }
+
+    // Reopen fresh runtime (zero in-memory AskService state): answering with original seq1 must succeed, not supersede.
+    const kernel2 = await openRuntime(dir)
+    let ask2Id = ''
+    let seq2 = 0
+    try {
+      const restored = kernel2.listAsks('pending').find((a) => a.id === ask1Id)
+      assert.ok(restored, 'pending ask must survive restart')
+      assert.equal(restored.expectedStateSeq, seq1, 'client-facing expectedStateSeq must remain unchanged')
+      assert.equal(kernel2.getConversation(1).stateChangeSeq, seq1 + 1)
+
+      await assert.rejects(
+        () => kernel2.answerAsk(ask1Id, { confirm: 'true' }, seq1 - 1),
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_conflict' && err.status === 409,
+      )
+      const answered = await kernel2.answerAsk(ask1Id, { confirm: 'true' }, seq1)
+      assert.equal(answered.status, 'answered')
+
+      // Create a second watermarked ask, then restart and mutate conversation state -> must supersede.
+      seq2 = kernel2.getConversation(1).stateChangeSeq
+      const p2 = kernel2.createAsk({
+        conversationId: 1,
+        title: 'restart supersede',
+        expectedStateSeq: seq2,
+        fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+      })
+      void p2.catch(() => {})
+      await waitFor(() => kernel2.listAsks('pending').length === 1 && kernel2.getConversation(1).status === 'blocked')
+      ask2Id = kernel2.listAsks('pending')[0]!.id
+    } finally {
+      await kernel2.close()
+    }
+
+    const kernel3 = await openRuntime(dir)
+    try {
+      await kernel3.updateConversation(1, { title: 'advanced after restart' })
+      const superseded = await kernel3.answerAsk(ask2Id, { confirm: 'true' }, seq2)
+      assert.equal(superseded.status, 'superseded')
+    } finally {
+      await kernel3.close()
+    }
+  })
+
   it('createConversation validates ownedBy before creating SDK conversation (no orphan pi_conversations row across restart)', { timeout: 60_000 }, async () => {
     const dir = join(root, 't9-ownedby-preflight')
     const kernel = await openRuntime(dir)

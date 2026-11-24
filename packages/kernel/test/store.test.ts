@@ -515,6 +515,18 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
         name: 'asks.result = non-string value',
         sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, result, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'answered', fields: [] })}', 'answered', '{"x":42}', 1)`,
       },
+      {
+        name: 'asks.expected_state_seq below spec.expectedStateSeq',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, expected_state_seq, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'pending', expectedStateSeq: 5, fields: [] })}', 'pending', 4, 1)`,
+      },
+      {
+        name: 'asks.expected_state_seq present without spec.expectedStateSeq',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, expected_state_seq, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'pending', fields: [] })}', 'pending', 5, 1)`,
+      },
+      {
+        name: 'asks.spec.expectedStateSeq missing from expected_state_seq column',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, expected_state_seq, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'pending', expectedStateSeq: 5, fields: [] })}', 'pending', NULL, 1)`,
+      },
     ]
 
     for (const tc of cases) {

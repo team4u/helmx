@@ -2259,11 +2259,13 @@ test('POST /api/env/exec stream=true: isolates stdout/stderr streaming redactors
   localStash.addRedaction('sk-CROSS-BOUNDARY')
 
   const makeExecHandler = (chunks: Array<{ stream: 'stdout' | 'stderr'; text: string }>) => {
-    const kernel = makeKernel()
-    kernel.stash = localStash
-    kernel.execEnv = async (_req, onChunk) => {
-      for (const chunk of chunks) onChunk?.(chunk)
-      return { ok: true, exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 1 }
+    const kernel: KernelRuntimeLike = {
+      ...makeKernel(),
+      stash: localStash,
+      execEnv: async (_req, onChunk) => {
+        for (const chunk of chunks) onChunk?.(chunk)
+        return { ok: true, exitCode: 0, output: '', timedOut: false }
+      },
     }
     return createHubHandler({ kernel })
   }

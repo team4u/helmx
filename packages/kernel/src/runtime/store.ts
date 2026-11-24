@@ -1387,6 +1387,18 @@ function parseStoredAskSpec(
   if (parsed.createdAt !== undefined && (typeof parsed.createdAt !== 'number' || !Number.isFinite(parsed.createdAt))) {
     throw corrupted('invalid spec.createdAt')
   }
+  if (expected.expectedStateSeq !== undefined) {
+    if (
+      typeof expected.expectedStateSeq !== 'number' ||
+      !Number.isSafeInteger(expected.expectedStateSeq) ||
+      expected.expectedStateSeq < 0
+    ) {
+      throw corrupted('invalid row expectedStateSeq')
+    }
+    if (parsed.expectedStateSeq === undefined) {
+      throw corrupted(`row expectedStateSeq ${expected.expectedStateSeq} present without spec.expectedStateSeq`)
+    }
+  }
   if (parsed.expectedStateSeq !== undefined) {
     if (
       typeof parsed.expectedStateSeq !== 'number' ||
@@ -1395,8 +1407,13 @@ function parseStoredAskSpec(
     ) {
       throw corrupted('invalid spec.expectedStateSeq')
     }
-    if (expected.expectedStateSeq !== undefined && parsed.expectedStateSeq !== expected.expectedStateSeq) {
-      throw corrupted(`spec.expectedStateSeq ${parsed.expectedStateSeq} does not match row expectedStateSeq ${expected.expectedStateSeq}`)
+    if (expected.expectedStateSeq === undefined) {
+      throw corrupted(`spec.expectedStateSeq ${parsed.expectedStateSeq} missing from row expectedStateSeq`)
+    }
+    // `expected_state_seq` persists the effective live CAS ceiling (spec.expectedStateSeq plus any creation-time
+    // `onConvPendingChanged` self-bump), so it must always be >= spec.expectedStateSeq.
+    if (expected.expectedStateSeq < parsed.expectedStateSeq) {
+      throw corrupted(`row expectedStateSeq ${expected.expectedStateSeq} is below spec.expectedStateSeq ${parsed.expectedStateSeq}`)
     }
   }
   if (parsed.description !== undefined && typeof parsed.description !== 'string') {

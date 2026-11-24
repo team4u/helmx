@@ -36,11 +36,11 @@ export class AskService {
   private readonly store: HelmxStore
   private readonly waiters = new Map<string, Array<(outcome: WaiterOutcome) => void>>()
   /**
-   * Effective CAS watermark ceiling for asks whose own `onConvPendingChanged` transition bumped the
-   * conversation's `stateChangeSeq` right after creation (when `spec.expectedStateSeq` matched the
-   * pre-pending `stateChangeSeq`), so entering `blocked` does not immediately self-supersede the ask.
+   * Transient synchronous re-entrancy guard active ONLY while `onConvPendingChanged` runs inside `createAsk`:
+   * bridges the single-tick window between `onConvPendingChanged` advancing `stateChangeSeq` and the immediate
+   * `putAsk` that persists the effective CAS ceiling into `helmx_asks.expected_state_seq`.
    */
-  private readonly selfBumpedWatermarks = new Map<string, number>()
+  private readonly creatingPendingSeq = new Map<string, number>()
   private readonly onEvent: (type: string, payload: unknown) => void
   private readonly onConvPendingChanged: (conversationId: number) => void
   /** Conversation existence validation port (injected by host; omitted in standalone AskService unit tests). */
@@ -157,21 +157,37 @@ export class AskService {
         // data is not guaranteed intact, so fail explicitly without publishing ask.upsert or faking success.
         await this.store.flushPublic()
         const seqBeforePending = this.store.getConv(spec.conversationId)?.stateChangeSeq
-        this.onConvPendingChanged(spec.conversationId)
+        if (spec.expectedStateSeq !== undefined && seqBeforePending === spec.expectedStateSeq) {
+          this.creatingPendingSeq.set(id, spec.expectedStateSeq)
+        }
+        try {
+          this.onConvPendingChanged(spec.conversationId)
+        } finally {
+          this.creatingPendingSeq.delete(id)
+        }
         const seqAfterPending = this.store.getConv(spec.conversationId)?.stateChangeSeq
         if (
           spec.expectedStateSeq !== undefined &&
           seqBeforePending !== undefined &&
           seqAfterPending !== undefined &&
           spec.expectedStateSeq === seqBeforePending &&
-          seqAfterPending > seqBeforePending &&
-          this.store.getAsk(id)?.status === 'pending'
+          seqAfterPending > seqBeforePending
         ) {
-          this.selfBumpedWatermarks.set(id, seqAfterPending)
+          const currentRow = this.store.getAsk(id)
+          if (currentRow !== undefined && currentRow.status === 'pending') {
+            // Persist the creation-time self-bump as the effective live CAS ceiling in `helmx_asks.expected_state_seq`
+            // while preserving `spec.expectedStateSeq` unchanged as the client-facing watermark, so restarts never
+            // lose the self-bump and falsely supersede the first approval.
+            this.store.putAsk({
+              ...currentRow,
+              expectedStateSeq: seqAfterPending,
+            })
+            await this.store.flushPublic()
+          }
         }
         this.onEvent('ask.upsert', full)
       } catch (error) {
-        this.selfBumpedWatermarks.delete(id)
+        this.creatingPendingSeq.delete(id)
         push({ failure: error })
       }
     })()
@@ -179,8 +195,9 @@ export class AskService {
   }
 
   /**
-   * Submit answers: atomic CAS check (client seq vs stored watermark + live conversation stateChangeSeq)
-   * -> value validation -> settle. Zero awaits between state reads and the mirror transition in `settle`.
+   * Submit answers: atomic CAS check (client seq vs declared spec watermark + live conversation stateChangeSeq
+   * vs persisted effective CAS ceiling) -> value validation -> settle. Zero awaits between state reads and the
+   * mirror transition in `settle`.
    */
   async answerAsk(
     id: string,
@@ -195,24 +212,30 @@ export class AskService {
     if (row.status !== 'pending') {
       throw new HelmxError('ask_already_settled', `AskDoc is already in ${row.status} state`, 409)
     }
+    const spec = parseAskSpecRow(row)
+    const declaredWatermark = spec.expectedStateSeq
 
-    // Client-supplied seq differs from persisted watermark -> 409 stale view (never silently overwrite).
-    if (expectedStateSeq !== undefined && row.expectedStateSeq !== undefined && expectedStateSeq !== row.expectedStateSeq) {
+    // Client-supplied seq differs from declared AskDoc watermark -> 409 stale view (never silently overwrite).
+    if (expectedStateSeq !== undefined && declaredWatermark !== undefined && expectedStateSeq !== declaredWatermark) {
       throw new HelmxError(
         'ask_state_conflict',
-        `expectedStateSeq=${expectedStateSeq} does not match persisted AskDoc watermark ${row.expectedStateSeq} (stale client view)`,
+        `expectedStateSeq=${expectedStateSeq} does not match persisted AskDoc watermark ${declaredWatermark} (stale client view)`,
         409,
-        { askId: id, clientSeq: expectedStateSeq, storedSeq: row.expectedStateSeq },
+        { askId: id, clientSeq: expectedStateSeq, storedSeq: declaredWatermark },
       )
     }
 
     // Authoritative live conversation stateChangeSeq check (synchronous, zero awaits before mirror settle):
-    // - If the AskDoc declared expectedStateSeq and the conversation has advanced past it -> auto-supersede.
+    // - If the AskDoc declared expectedStateSeq, compare live stateChangeSeq against the persisted effective CAS ceiling
+    //   (`row.expectedStateSeq`, including any creation-time `onConvPendingChanged` self-bump); if advanced -> supersede.
     // - If the AskDoc declared no watermark but the client supplied expectedStateSeq and live seq disagrees -> 409.
     const conv = this.store.getConv(row.conversationId)
-    if (row.expectedStateSeq !== undefined && conv !== undefined) {
-      const effectiveWatermark = this.selfBumpedWatermarks.get(id) ?? row.expectedStateSeq
-      if (conv.stateChangeSeq > effectiveWatermark) {
+    if (declaredWatermark !== undefined && conv !== undefined) {
+      const inSelfPendingBump = this.creatingPendingSeq.get(id) === declaredWatermark
+      const effectiveCeiling = inSelfPendingBump
+        ? Math.max(row.expectedStateSeq ?? declaredWatermark, conv.stateChangeSeq)
+        : (row.expectedStateSeq ?? declaredWatermark)
+      if (conv.stateChangeSeq > effectiveCeiling) {
         return this.settle(id, 'superseded')
       }
     } else if (expectedStateSeq !== undefined && conv !== undefined && conv.stateChangeSeq !== expectedStateSeq) {
@@ -224,7 +247,6 @@ export class AskService {
       )
     }
 
-    const spec = parseAskSpecRow(row)
     validateAnswersAgainstFields(spec, answers)
 
     const stored: Record<string, string> = {}
@@ -280,7 +302,6 @@ export class AskService {
       const settledSpec: AskSpec = { ...spec, status }
       // Never write fake answers on cancelled/superseded (result is populated only for answered).
       const answers = status === 'answered' ? (options.answers ?? {}) : undefined
-      this.selfBumpedWatermarks.delete(id)
       this.store.putAsk({
         ...row,
         status,
@@ -297,7 +318,6 @@ export class AskService {
       for (const waiter of waiters) waiter({ askId: id, status, answers })
       return settledSpec
     } catch (error) {
-      this.selfBumpedWatermarks.delete(id)
       // Any failure in putAsk (incl. sync mirror rejection), flush, callback, or event publish: drain waiters and settle
       // each with failure (no hangs, no fake terminal states), then rethrow honestly.
       const waiters = this.waiters.get(id) ?? []
