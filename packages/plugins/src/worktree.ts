@@ -15,6 +15,7 @@ import { resolvePluginClientAssets } from './asset-paths.js'
 import { WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID } from './contracts.js'
 import { WorktreeIsolation } from './worktree/isolation.js'
 import { registerWorktreeActions } from './worktree/actions.js'
+import { resolveWorktreeContextSection } from './worktree/worktree-context.js'
 import {
   AGENT_BINDINGS_KV_NAMESPACE,
   LEASES_KV_NAMESPACE,
@@ -68,13 +69,17 @@ export function createWorktreePlugin(): PluginDefinition {
       }, { priority: 200 })
 
       ctx.hook.onBeforeTurn((turn) => {
-        if (isolation.allocator.hasActiveRecords()) return
-        if (!turn.tools.some((tool) => tool.name === 'cleanup_worktree')) return
+        // 经 acquire_worktree 只改写 cwd 的会话（如 Swarm 成员）没有 agent_spawn 提示词尾注，
+        // 每回合按最新登记事实注入同一份 <worktree_context>；spawn 路径记录无 hold，不重复。
+        const contextSection = resolveWorktreeContextSection(isolation.allocator.getForConversation(turn.conversation.id))
+        const stripCleanupTool = !isolation.allocator.hasActiveRecords() && turn.tools.some((tool) => tool.name === 'cleanup_worktree')
+        if (contextSection === undefined && !stripCleanupTool) return
         return {
           action: 'transform',
           value: {
             ...turn,
-            tools: turn.tools.filter((tool) => tool.name !== 'cleanup_worktree'),
+            ...(stripCleanupTool ? { tools: turn.tools.filter((tool) => tool.name !== 'cleanup_worktree') } : {}),
+            ...(contextSection !== undefined ? { sections: [...turn.sections, contextSection] } : {}),
           },
         }
       })
