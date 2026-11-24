@@ -98,8 +98,10 @@ jobs:
           const tag = process.env.GITHUB_REF_NAME || '';
           const tagVersion = /^v(.+)$/.exec(tag)?.[1] ?? '';
           if (!tagVersion) fail(`release tag must look like v<semver>, got "${tag}"`);
-          if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(tagVersion)) {
-            fail(`version "${tagVersion}" in tag "${tag}" is not valid semver`);
+          // Keep in lockstep with @helmx/protocol isStrictSemver (SemVer 2.0.0 strict grammar).
+          const STRICT_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+          if (!STRICT_SEMVER_RE.test(tagVersion)) {
+            fail(`version "${tagVersion}" in tag "${tag}" is not valid strict semver`);
           }
           out('version', tagVersion);
 
@@ -400,7 +402,7 @@ jobs:
               echo "::error::node npm package ${name} is missing the required external dependency ${dep}."
               exit 1
             fi
-            if ! printf '%s' "$ver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            if ! printf '%s' "$ver" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
               echo "::error::node npm package ${name} dependency ${dep}@${ver} is not an exact version pin (floating ranges would break the dual-package self-upgrade binding)."
               exit 1
             fi

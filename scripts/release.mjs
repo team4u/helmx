@@ -82,15 +82,21 @@ function parseCliArgs() {
   return options;
 }
 
-/** 纯数字三元组 + 可选预发布段的极简 semver 解析（够用即止，不做完整 semver）。 */
-function parseSemverLoose(version) {
-  const m = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$/.exec(version);
-  if (!m) throw new Error(`版本号不符合 x.y.z[-预发布] 形态: ${version}`);
+/**
+ * 严格 SemVer 2.0.0 校验（禁止 +build 元数据，与 @helmx/protocol isStrictSemver 预发布语法一致）：
+ * 主/次/修订号与纯数字预发布标识符禁止前导零，预发布标识符不可为空。
+ */
+const STRICT_RELEASE_SEMVER_RE =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?$/;
+
+export function parseSemverStrict(version) {
+  const m = STRICT_RELEASE_SEMVER_RE.exec(version);
+  if (!m) throw new Error(`版本号不符合严格 SemVer（x.y.z[-预发布]，禁止 build 元数据）: ${version}`);
   return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), pre: m[4] ?? null };
 }
 
-function bumpSemver(current, bumpType, preId = 'beta') {
-  const cur = parseSemverLoose(current);
+export function bumpSemver(current, bumpType, preId = 'beta') {
+  const cur = parseSemverStrict(current);
   if (bumpType === 'patch') return `${cur.major}.${cur.minor}.${cur.patch + 1}`;
   if (bumpType === 'minor') return `${cur.major}.${cur.minor + 1}.0`;
   if (bumpType === 'major') return `${cur.major + 1}.0.0`;
@@ -136,10 +142,11 @@ function main() {
   const options = parseCliArgs();
   const payloadPkg = JSON.parse(readFileSync(path.join(rootDir, 'packages/payload/package.json'), 'utf-8'));
   const currentVersion = payloadPkg.version;
+  parseSemverStrict(currentVersion);
 
   let targetVersion = options.version;
   if (!targetVersion) targetVersion = bumpSemver(currentVersion, options.bumpType ?? 'patch', options.preId);
-  parseSemverLoose(targetVersion);
+  parseSemverStrict(targetVersion);
   if (targetVersion === currentVersion) {
     throw new Error(`目标版本 ${targetVersion} 与当前版本相同，无需发版`);
   }
@@ -149,7 +156,7 @@ function main() {
   console.log(`目标版本: ${targetVersion}${targetVersion.includes('-') ? '（预发布 → beta dist-tag）' : ''}`);
   console.log(`模拟运行: ${options.dryRun ? '是' : '否'}\n`);
 
-  // 1. 工作区守卫：干净树 + main 分支（或显式豁免且 HEAD 与 origin/main 一致）
+  // 1. 工作区/分支/tag 守卫：干净树 + main 分支（或显式豁免且 HEAD 与 origin/main 一致）+ tag 未占用
   if (!options.allowDirty) {
     const status = git(['status', '--porcelain'], { allowFailure: true });
     if (status.stdout.trim()) throw new Error('工作区存在未提交改动，请先提交或贮藏（或 --allow-dirty 自担风险）');
@@ -163,6 +170,10 @@ function main() {
     if (!remote.trim() || local !== remote.trim()) {
       throw new Error('--allow-non-main 要求 HEAD 与 origin/main 完全一致，先同步再发版');
     }
+  }
+  const tag = `v${targetVersion}`;
+  if (git(['rev-parse', '-q', '--verify', `refs/tags/${tag}`], { allowFailure: true }).status === 0) {
+    throw new Error(`tag ${tag} 已存在，拒绝重复打 tag`);
   }
   console.log(`当前分支: ${branch}`);
 
@@ -196,7 +207,7 @@ function main() {
     return;
   }
 
-  // 4. 锁步 bump + CHANGELOG 追加 + 提交 + 轻量 tag
+  // 4. 锁步 bump + CHANGELOG 追加 + 仅提交发版文件 + 轻量 tag
   const updated = bumpWorkspaceVersions(targetVersion);
   console.log(`锁步更新版本至 ${targetVersion}（${updated.length} 个 package.json）`);
   const changelogPath = path.resolve(rootDir, 'CHANGELOG.md');
@@ -207,12 +218,11 @@ function main() {
     changelogPath,
   });
   console.log(`CHANGELOG.md 已追加 v${targetVersion} 小节（随包分发的已安装版本变更日志）`);
-  git(['add', ...updated.map((rel) => rel.replaceAll('\\', '/')), 'CHANGELOG.md']);
-  git(['commit', '-m', `chore(release): v${targetVersion}`]);
-  const tag = `v${targetVersion}`;
-  if (git(['rev-parse', '-q', '--verify', `refs/tags/${tag}`], { allowFailure: true }).status === 0) {
-    throw new Error(`tag ${tag} 已存在，拒绝重复打 tag`);
-  }
+  const releaseFiles = [...updated.map((rel) => rel.replaceAll('\\', '/')), 'CHANGELOG.md'];
+  // --allow-dirty 场景下索引可能含用户已暂存的其他改动：先暂存发版文件，再以 `git commit --only -- <paths>`
+  // 严格限定本次提交仅包含发版文件，绝不通过无路径 commit 混入用户暂存改动。
+  git(['add', '--', ...releaseFiles]);
+  git(['commit', '--only', '-m', `chore(release): v${targetVersion}`, '--', ...releaseFiles]);
   git(['tag', tag]);
   console.log(`已创建提交 chore(release): v${targetVersion} 与轻量 tag ${tag}`);
 
@@ -242,9 +252,11 @@ function updatedPreviewCount() {
     }).length;
 }
 
-try {
-  main();
-} catch (err) {
-  console.error(`\n发版流程终止: ${err.message}`);
-  process.exit(1);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (err) {
+    console.error(`\n发版流程终止: ${err.message}`);
+    process.exit(1);
+  }
 }

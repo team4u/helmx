@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
+import { flagsFromSchema } from '../src/actions.js'
 import {
   makeCliEnv,
   parseCliError,
@@ -732,4 +733,85 @@ test('action visibility: ui and internal actions are hidden from dynamic CLI com
   const badRes = await runCliCaptured(['gadget', 'broken', '--json'], makeCliEnv(badHub.url, dir))
   assert.equal(badRes.code, 1)
   assert.equal(parseCliError(badRes).code, 'invalid_manifest')
+})
+
+test('enum and const schemas preserve real number/boolean/string/json types for flags and positionals', { timeout: 60_000 }, async (t) => {
+  const schema = {
+    type: 'object',
+    properties: {
+      level: { enum: [1, 2, 3] },
+      enabled: { enum: [true, false] },
+      mode: { enum: ['fast', 'deep'] },
+      fixedNum: { const: 42 },
+      fixedBool: { const: false },
+      fixedStr: { const: 'ok' },
+      choice: { enum: [1, 'auto'] },
+      empty: { enum: [] },
+      nothing: { const: null },
+    },
+    additionalProperties: false,
+  }
+  const byName = new Map(flagsFromSchema(schema).flags.map((f) => [f.name, f.type]))
+  assert.equal(byName.get('level'), 'number')
+  assert.equal(byName.get('enabled'), 'boolean')
+  assert.equal(byName.get('mode'), 'string')
+  assert.equal(byName.get('fixed-num'), 'number')
+  assert.equal(byName.get('fixed-bool'), 'boolean')
+  assert.equal(byName.get('fixed-str'), 'string')
+  assert.equal(byName.get('choice'), 'json')
+  assert.equal(byName.get('empty'), 'json')
+  assert.equal(byName.get('nothing'), 'json')
+
+  const dir = useTempDir(t, 'helmx-cli-dyn-enum-')
+  const manifest = {
+    pluginId: 'builtin:gadget',
+    id: 'deploy',
+    description: 'Deploy with typed enums',
+    inputSchema: schema,
+    outputSchema: { type: 'object' },
+    cli: {
+      command: ['gadget', 'deploy'],
+      positional: [{ field: 'level' }, { field: 'enabled' }],
+    },
+  }
+  const hub = await startActionsHub([manifest], {}, t)
+  const env = makeCliEnv(hub.url, dir)
+  const lastInput = (): Record<string, unknown> =>
+    ((hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } } | undefined)?.body)?.input ?? {}
+
+  // Flags pass exact primitive / JSON types
+  const byFlags = await runCliCaptured(
+    ['gadget', 'deploy', '--level', '2', '--enabled=false', '--mode', 'fast', '--fixed-num', '42', '--fixed-bool=false', '--fixed-str', 'ok', '--choice', '1', '--nothing', 'null', '--json'],
+    env,
+  )
+  assert.equal(byFlags.code, 0, byFlags.err)
+  assert.deepEqual(lastInput(), {
+    level: 2,
+    enabled: false,
+    mode: 'fast',
+    fixedNum: 42,
+    fixedBool: false,
+    fixedStr: 'ok',
+    choice: 1,
+    nothing: null,
+  })
+
+  // Bare boolean enum flag defaults to true; mixed enum JSON string parses as string
+  const bareBool = await runCliCaptured(['gadget', 'deploy', '--enabled', '--choice', '"auto"', '--json'], env)
+  assert.equal(bareBool.code, 0, bareBool.err)
+  assert.deepEqual(lastInput(), { enabled: true, choice: 'auto' })
+
+  // Positionals also coerce number/boolean enums to real types
+  const byPos = await runCliCaptured(['gadget', 'deploy', '3', 'false', '--json'], env)
+  assert.equal(byPos.code, 0, byPos.err)
+  assert.deepEqual(lastInput(), { level: 3, enabled: false })
+
+  // Invalid number/boolean enum values fail explicitly at the CLI boundary
+  const badNumFlag = await runCliCaptured(['gadget', 'deploy', '--level', 'two', '--json'], env)
+  assert.equal(badNumFlag.code, 1)
+  assert.equal(parseCliError(badNumFlag).code, 'invalid_flag_value')
+
+  const badBoolPos = await runCliCaptured(['gadget', 'deploy', '2', 'yes', '--json'], env)
+  assert.equal(badBoolPos.code, 1)
+  assert.equal(parseCliError(badBoolPos).code, 'invalid_flag_value')
 })

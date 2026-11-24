@@ -13,6 +13,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { updateCliCredentials } from '../src/credentials.js'
 import { CliError } from '../src/errors.js'
+import { DEFAULT_HUB_URL, resolveEndpoint } from '../src/hub-client.js'
 import {
   formatAskWaiting,
   formatConversationTiming,
@@ -1431,6 +1432,62 @@ test('origin binding: cli-token only authenticates the matching Hub and omits to
   assert.equal(probe.code, 0, probe.err)
   assert.equal(JSON.parse(probe.out).configured, true, 'new Hub must not receive old Hub token')
   assert.equal(JSON.parse(probe.out).authenticated, false, 'new Hub must not receive old Hub token')
+})
+
+test('origin binding: missing or blank hubUrl in stored credentials never forwards token to any Hub', { timeout: 60_000 }, async (t) => {
+  // Direct unit boundary checks on resolveEndpoint
+  assert.deepEqual(
+    resolveEndpoint({ HELMX_HUB_URL: 'https://arbitrary.example:3202' }, { token: 'tok-unbound' }),
+    { baseUrl: 'https://arbitrary.example:3202', token: undefined },
+  )
+  assert.deepEqual(
+    resolveEndpoint({ HELMX_HUB_URL: DEFAULT_HUB_URL }, { token: 'tok-unbound' }),
+    { baseUrl: DEFAULT_HUB_URL, token: undefined },
+  )
+  assert.deepEqual(
+    resolveEndpoint({}, { token: 'tok-unbound' }),
+    { baseUrl: DEFAULT_HUB_URL, token: undefined },
+  )
+  assert.deepEqual(
+    resolveEndpoint({ HELMX_HUB_URL: 'https://arbitrary.example:3202' }, { hubUrl: '   ', token: 'tok-unbound' }),
+    { baseUrl: 'https://arbitrary.example:3202', token: undefined },
+  )
+  assert.deepEqual(
+    resolveEndpoint({}, { hubUrl: '   ', token: 'tok-unbound' }),
+    { baseUrl: DEFAULT_HUB_URL, token: undefined },
+  )
+  // Trailing slash normalization matches same Hub; explicit HELMX_TOKEN still takes precedence
+  assert.deepEqual(
+    resolveEndpoint({ HELMX_HUB_URL: 'http://127.0.0.1:4100/' }, { hubUrl: 'http://127.0.0.1:4100', token: 'tok-bound' }),
+    { baseUrl: 'http://127.0.0.1:4100', token: 'tok-bound' },
+  )
+  assert.deepEqual(
+    resolveEndpoint({ HELMX_HUB_URL: 'https://arbitrary.example:3202', HELMX_TOKEN: 'tok-explicit' }, { token: 'tok-unbound' }),
+    { baseUrl: 'https://arbitrary.example:3202', token: 'tok-explicit' },
+  )
+
+  // End-to-end: on-disk cli-token without hubUrl must not leak Authorization to HELMX_HUB_URL
+  const dir = useTempDir(t, 'helmx-cli-no-huburl-')
+  await fsp.writeFile(path.join(dir, 'cli-token'), JSON.stringify({ token: 'tok-unbound' }), { mode: 0o600 })
+  const hub = await startMockHub(
+    {
+      'GET /api/auth/status': (_body, req) => ({
+        body: { configured: true, authenticated: req.headers['authorization'] !== undefined },
+      }),
+      'GET /api/conversations': () => ({ body: [] }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir, { HELMX_TOKEN: '' })
+
+  const probe = await runCliCaptured(['status', '--json'], env)
+  assert.equal(probe.code, 0, probe.err)
+  assert.equal(JSON.parse(probe.out).authenticated, false, 'missing hubUrl must not attach stored token')
+  assert.equal(hub.recorded.hits.find((h) => h.path === '/api/auth/status')?.authorization, undefined)
+
+  const list = await runCliCaptured(['conversations', 'list', '--json'], env)
+  assert.equal(list.code, 1)
+  assert.equal(parseCliError(list).code, 'unauthorized')
 })
 
 test('corrupt cli-token errors explicitly; HELMX_TOKEN env var bypasses disk reads', { timeout: 60_000 }, async (t) => {

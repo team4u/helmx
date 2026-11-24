@@ -294,7 +294,8 @@ test('env exec --stream: consumes NDJSON chunk by chunk without buffering the fu
   )
   const r = await runCliCaptured(['env', 'exec', '--stream', '--node', 'gpu-box', '--', 'build'], makeCliEnv(hub.url, dir))
   assert.equal(r.code, 0, r.err)
-  assert.equal(r.out, 'line1\nwarn\nline2\n')
+  assert.equal(r.out, 'line1\nline2\n')
+  assert.equal(r.err, 'warn\n')
   const hit = hub.hits.find((h) => h.path === '/api/env/exec')!
   assert.deepEqual(hit.body, { command: ['build'], nodeId: 'gpu-box', stream: true })
   await hub.close()
@@ -323,6 +324,7 @@ test('env exec --stream --json: emits one JSON line per frame including terminal
       'POST /api/env/exec': (_body, _req, res) => {
         res.writeHead(200, { 'content-type': 'application/x-ndjson' })
         res.write(`${JSON.stringify({ type: 'output', stream: 'stdout', text: 'step1\n' })}\n`)
+        res.write(`${JSON.stringify({ type: 'output', stream: 'stderr', text: 'note\n' })}\n`)
         res.end(`${JSON.stringify({ type: 'exit', ok: true, exitCode: 0, timedOut: false })}\n`)
         return null
       },
@@ -331,9 +333,11 @@ test('env exec --stream --json: emits one JSON line per frame including terminal
   )
   const r = await runCliCaptured(['env', 'exec', '--stream', '--json', '--', 'build'], makeCliEnv(hub.url, dir))
   assert.equal(r.code, 0, r.err)
+  assert.equal(r.err, '')
   const lines = r.out.trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
   assert.deepEqual(lines[0], { type: 'output', stream: 'stdout', text: 'step1\n' })
-  assert.deepEqual(lines[1], { type: 'exit', ok: true, exitCode: 0, timedOut: false })
+  assert.deepEqual(lines[1], { type: 'output', stream: 'stderr', text: 'note\n' })
+  assert.deepEqual(lines[2], { type: 'exit', ok: true, exitCode: 0, timedOut: false })
   // Streaming request carries stream: true in body
   assert.equal((hub.hits.find((h) => h.path === '/api/env/exec')?.body as { stream?: boolean }).stream, true)
 })
