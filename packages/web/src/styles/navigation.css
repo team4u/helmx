@@ -147,10 +147,15 @@
   transition: background 120ms ease, color 120ms ease;
 }
 
-.sidebar-header-icon-btn:hover,
+.sidebar-header-icon-btn:hover:not(:disabled),
 .sidebar-header-icon-btn[aria-expanded="true"] {
   background: var(--bg-hover);
   color: var(--fg);
+}
+
+.sidebar-header-icon-btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
 }
 
 .sidebar-header-icon-btn.is-active {
@@ -808,6 +813,39 @@
 
 .sidebar-overview-head-meta {
   gap: 4px;
+}
+
+.sidebar-batch-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 2px 0 6px;
+}
+
+.sidebar-batch-check {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.sidebar-batch-checkbox {
+  flex-shrink: 0;
+}
+
+.sidebar-overview-item.is-batch-mode .sidebar-overview-meta {
+  padding-left: 35px;
+}
+
+.sidebar-context .sidebar-overview-group .nav-item.sidebar-overview-item.is-selected {
+  --nav-row-bg: color-mix(in srgb, var(--accent) 9%, var(--bg-subtle));
+  background: var(--nav-row-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.sidebar-context .sidebar-overview-group .nav-item.sidebar-overview-item.is-selected:hover {
+  --nav-row-bg: color-mix(in srgb, var(--accent) 13%, var(--bg-subtle));
+  background: var(--nav-row-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 /* 悬停菜单严格锚定在第一行（.sidebar-overview-head）右端，绝不跨行遮挡第二行元信息或子会话开关 */
