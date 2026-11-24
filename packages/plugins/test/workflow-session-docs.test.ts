@@ -27,7 +27,11 @@ import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-h
 import type { WorkflowRunBadgesDocState, WorkflowRunSessionDocState, WorkflowRunSummary } from '../src/contracts.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
-import { createRunsProjection, MAX_PROJECTED_RUNS_PER_CONVERSATION } from '../src/workflow/projection.js'
+import {
+  createRunsProjection,
+  enforceRunsShardByteBudget,
+  MAX_PROJECTED_RUNS_PER_CONVERSATION,
+} from '../src/workflow/projection.js'
 import { createHelmx } from '../../hub/src/app.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, MemoryKvStore, makeConversationSummary } from './helpers/plugin-test-env.js'
@@ -782,4 +786,119 @@ test('runs 分片节点/进度瘦身与 1.5 MiB 字节预算保护、conversatio
   })
   assert.equal(exceedRes.status, 'failed')
   assert.match(exceedRes.error ?? '', /actionCap|exceeded|3/i)
+})
+
+// ---------------------------------------------------------------------------
+// 分片字节预算的算法复杂度：字节账本 vs 朴素整体重序列化
+// ---------------------------------------------------------------------------
+
+/** 旧实现（参考）：每个阶段每处理一个 run 就重新 stringify 整个分片。 */
+function legacyShardBudget(runs: WorkflowRunSummary[], maxBytes: number): { runs: WorkflowRunSummary[]; json: string } {
+  let current = runs
+  let json = JSON.stringify({ runs: current })
+  if (Buffer.byteLength(json, 'utf8') <= maxBytes) return { runs: current, json }
+  const trimmed = [...current]
+  for (let i = trimmed.length - 1; i >= 0 && Buffer.byteLength(json, 'utf8') > maxBytes; i--) {
+    if (trimmed[i]!.status !== 'running') {
+      trimmed.splice(i, 1)
+      json = JSON.stringify({ runs: trimmed })
+    }
+  }
+  current = trimmed
+  if (Buffer.byteLength(json, 'utf8') <= maxBytes) return { runs: current, json }
+  const compact = current.map((r) => ({ ...r }))
+  for (let i = compact.length - 1; i >= 0 && Buffer.byteLength(json, 'utf8') > maxBytes; i--) {
+    const r = compact[i]!
+    delete r.progress
+    if (r.nodes !== undefined && r.nodes.length > 16) r.nodes = r.nodes.slice(-16)
+    json = JSON.stringify({ runs: compact })
+  }
+  for (let i = compact.length - 1; i >= 0 && Buffer.byteLength(json, 'utf8') > maxBytes; i--) {
+    delete compact[i]!.nodes
+    json = JSON.stringify({ runs: compact })
+  }
+  while (compact.length > 0 && Buffer.byteLength(json, 'utf8') > maxBytes) {
+    compact.pop()
+    json = JSON.stringify({ runs: compact })
+  }
+  return { runs: compact, json }
+}
+
+function makeFatRun(index: number, status: 'running' | 'completed' | 'failed'): WorkflowRunSummary {
+  return {
+    id: `wf_budget_${String(index).padStart(3, '0')}`,
+    name: `budget-${index}`,
+    conversationId: 1,
+    status,
+    createdAt: 100 + index,
+    updatedAt: 200 + index,
+    nodes: Array.from({ length: 24 }, (_, i) => ({
+      id: `n-${i}`,
+      kind: 'agent',
+      label: `node-${i}`,
+      status: i === 0 && status === 'running' ? ('running' as const) : ('done' as const),
+      prompt: `P${index}`.repeat(60),
+      startedAt: i,
+    })),
+    progress: Array.from({ length: 20 }, (_, i) => ({ kind: 'log' as const, message: `log-${index}-${i}-${'L'.repeat(80)}`, at: i })),
+  }
+}
+
+test('分片字节预算：字节账本实现在预算内/超界的每条路径上都与朴素整体重序列化逐字节一致，且序列化总量与分片大小线性相关', { timeout: 60_000 }, () => {
+  const scenarios: Array<{ label: string; runs: WorkflowRunSummary[]; maxBytes: number }> = [
+    { label: '空分片', runs: [], maxBytes: 1024 },
+    { label: '预算内直接返回', runs: [makeFatRun(0, 'running'), makeFatRun(1, 'completed')], maxBytes: 1 << 20 },
+    {
+      label: '全部 running → 走压缩 progress/nodes 路径',
+      runs: Array.from({ length: 40 }, (_, i) => makeFatRun(i, 'running')),
+      maxBytes: 16 * 1024,
+    },
+    {
+      label: '终态为主 → 先丢最旧终态',
+      runs: Array.from({ length: 40 }, (_, i) => makeFatRun(i, i % 4 === 0 ? 'running' : i % 2 === 0 ? 'failed' : 'completed')),
+      maxBytes: 16 * 1024,
+    },
+    {
+      label: '极端小预算 → 删 nodes 直到 pop 空',
+      runs: Array.from({ length: 12 }, (_, i) => makeFatRun(i, 'running')),
+      maxBytes: 64,
+    },
+  ]
+
+  for (const { label, runs, maxBytes } of scenarios) {
+    const inputSnapshot = JSON.stringify(runs)
+    const actual = enforceRunsShardByteBudget(runs, maxBytes)
+    const expected = legacyShardBudget(runs, maxBytes)
+    assert.equal(JSON.stringify(runs), inputSnapshot, `${label}: 输入 runs 及其元素不得被修改`)
+    assert.equal(actual.json, expected.json, `${label}: json 必须与朴素实现逐字节一致`)
+    assert.equal(JSON.stringify(actual.runs), JSON.stringify(expected.runs), `${label}: 返回的 runs 必须一致`)
+    assert.equal(actual.json, JSON.stringify({ runs: actual.runs }), `${label}: json 必须就是返回 runs 的序列化`)
+    assert.ok(Buffer.byteLength(actual.json, 'utf8') <= Math.max(maxBytes, Buffer.byteLength('{"runs":[]}', 'utf8')), `${label}: 结果必须落在预算内`)
+  }
+
+  // 复杂度用“实际序列化字节总量”度量（确定性，不看墙钟）：朴素实现是 O(runs × 总量)，
+  // 字节账本每个 run 最多重算两次（压缩 progress/nodes、删 nodes），总量与分片大小线性相关。
+  const runs = Array.from({ length: 60 }, (_, i) => makeFatRun(i, 'running'))
+  const totalBytes = runs.reduce((sum, r) => sum + Buffer.byteLength(JSON.stringify(r), 'utf8'), 0)
+  const measureSerializedBytes = (fn: () => unknown): number => {
+    const original = JSON.stringify
+    let serialized = 0
+    ;(JSON as { stringify: typeof JSON.stringify }).stringify = ((...args: Parameters<typeof JSON.stringify>) => {
+      const out = original(...args)
+      if (typeof out === 'string') serialized += out.length
+      return out
+    }) as typeof JSON.stringify
+    try {
+      fn()
+    } finally {
+      JSON.stringify = original
+    }
+    return serialized
+  }
+  const budget = 8 * 1024
+  const linear = measureSerializedBytes(() => enforceRunsShardByteBudget(runs, budget))
+  const quadratic = measureSerializedBytes(() => legacyShardBudget(runs, budget))
+  assert.ok(quadratic > 10 * totalBytes, `参考实现应体现重复整体序列化（quadratic=${quadratic}, total=${totalBytes}）`)
+  assert.ok(linear <= 4 * totalBytes + 4096, `字节账本序列化总量必须与分片大小线性相关（linear=${linear}, total=${totalBytes}）`)
+  assert.equal(enforceRunsShardByteBudget(runs, budget).json, legacyShardBudget(runs, budget).json)
 })
