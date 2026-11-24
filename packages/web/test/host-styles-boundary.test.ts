@@ -157,17 +157,12 @@ const SDK_SEMANTIC_CLASS_ALLOWLIST: Readonly<Record<string, string>> = {
   // （web SkillDetailDrawer / workflow WorkflowLibraryDrawer），
   // 视觉由并列的 mono / text-subtle 承担；如需专属视觉，定义单独提交并移出本登记。
   'primary-drawer-id': 'detail drawer meta-line semantic marker; visuals carried by sibling mono/text-subtle',
-  // 架构复审裁决（board #67）：空态第二行语义标记（swarm workbench 面板与 SDK
-  // EmptyState），继承 .empty-state 的色彩排版，无独立样式诉求。
-  'empty-state-hint': 'empty-state secondary line semantic marker; inherits .empty-state styling',
   // 门禁首跑发现的同类存量（model-picker 线引入）：ModelPicker 刷新按钮 /
   // 档位 chip 的语义锚点，视觉由 btn / segmented-control-btn 家族承担。
   'composer-model-refresh-btn': 'ModelPicker refresh button semantic anchor; visuals carried by btn family',
   'composer-model-level-chip': 'ModelPicker level chip semantic anchor; visuals carried by segmented-control-btn',
-  // AST 升级覆盖局部变量与映射表后浮现的既有语义根/面板标记：
+  // AST 升级覆盖局部变量与映射表后浮现的既有语义根标记：
   'helmx-select-multi': 'MultiSelect root semantic marker; visuals carried by sibling .helmx-select and .helmx-select-multi-option',
-  'helmx-tabs': 'Tabs root semantic marker; visuals carried by variant/list/trigger classes (.helmx-tabs-segmented / .tabs-bar / .segmented-control)',
-  'tabs-content': 'TabsContent panel semantic marker; panel layout owned by host screen or caller className',
 }
 
 /** 递归收集目录下的 .ts/.tsx 源文件。 */
@@ -392,7 +387,17 @@ test('样式边界：SDK 组件字面 className 词元 ⊆ 宿主 CSS 类名集 
   const { tokens, origins } = collectSdkClassTokens()
   assert.ok(tokens.size >= 180, `SDK 词元提取异常（仅 ${tokens.size} 个，应覆盖局部变量与映射表）`)
   // 守卫 AST 升级能力：模块级类名映射表与局部拼接变量必须纳入覆盖
-  for (const expected of ['btn-primary', 'btn-inline', 'btn-icon', 'badge-ok', 'helmx-stack-horizontal', 'is-active']) {
+  for (const expected of [
+    'btn-primary',
+    'btn-inline',
+    'btn-icon',
+    'badge-ok',
+    'helmx-stack-horizontal',
+    'is-active',
+    'helmx-tabs-pills',
+    'tabs-pills',
+    'tabs-pill',
+  ]) {
     assert.ok(tokens.has(expected), `AST 收集器应覆盖映射表/局部变量词元 .${expected}`)
   }
 
@@ -433,6 +438,32 @@ test('样式边界：.btn-inline 归属 primitives.css，旧 .callout--* 与 .tr
       assert.ok(!css.includes(legacyCallout), `分片 ${name} 不得保留历史兼容类 ${legacyCallout}`)
     }
     assert.ok(!css.includes('.trace-inline-btn'), `分片 ${name} 不得保留已收口的旧类 .trace-inline-btn`)
+  }
+})
+
+test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Tabs pills 归属公共分片，无 :has() 补丁与旧类残留', { timeout: 60_000 }, () => {
+  const segmented = readFileSync(join(STYLES_DIR, 'segmented.css'), 'utf8')
+  const centers = readFileSync(join(STYLES_DIR, 'centers.css'), 'utf8')
+  const strippedPrimitives = stripCssComments(primitives)
+
+  for (const selector of [
+    '.screen-host-body',
+    '.search-box-toolbar',
+    '.search-box-clear',
+    '.empty-state-prominent',
+    '.empty-state-action',
+  ]) {
+    assert.ok(ownsRule(primitives, selector), `primitives.css 应定义公共原语规则 ${selector}`)
+  }
+  assert.ok(!strippedPrimitives.includes('.screen-host-stage'), 'primitives.css 不得再包含 .screen-host-stage')
+  assert.ok(!strippedPrimitives.includes(':has('), 'primitives.css 不得再包含 :has() 舞台补丁')
+
+  for (const selector of ['.helmx-tabs-pills', '.tabs-pills', '.tabs-pill']) {
+    assert.ok(ownsRule(segmented, selector), `segmented.css 应定义 Tabs pills 规则 ${selector}`)
+  }
+
+  for (const stale of ['.primary-category-pill', '.primary-center-empty', '.primary-search-box']) {
+    assert.ok(!centers.includes(stale), `centers.css 不得再残留旧类 ${stale}`)
   }
 })
 
