@@ -12,6 +12,8 @@ helmx swarm create-group --conversation-id 42 --title '检查导出模块' --jso
 
 主控分配具体任务，协调接口和分支合入。成员可单独指定 Profile、目标计算节点（`nodeId`）、工作目录（`cwd`）、模型和思考档位；`nodeId` 覆盖 Profile 与主控所在节点（显式传 `local` 可切回 Hub 本机），远端节点必须提供 `cwd` 或匹配的 Profile `cwd`，且节点离线时在创建会话前即返回 `409 node_offline`。并发写代码的成员应各有独立的 Git worktree；注意主控本机的 `git merge` 仅适用于同节点上的工作树，跨节点工作树需在各自节点上处理合入。Swarm 通过 `builtin:worktree` 分配工作树，并在协作期间持有租约，避免被清理。`readonly` 是任务约定，成员仍保有原来的工具权限。 [Git Worktree 的隔离范围](../workflows/worktree-and-gate.md)
 
+带 worktree 的成员每回合都会收到 `builtin:worktree` 注入的 `<worktree_context>` 系统段落（含 `branch`、`path`、`baseCommit`、源工作区是否脏，以及结束回合前 `git commit` 的提醒），与 `subagent` 隔离派生的提示词尾注同源；成员据此知道自己在哪条受管分支上工作。
+
 ## 看板消息
 
 每个协作组维护一条单线递增序号的共享黑板。`board_post` 的 `to` 决定谁收到消息，可填 `coordinator` 或活跃成员名（可选前导 `@`）；只有主控和人工调用可以用 `all`。找不到或已归档的收件人会使操作失败；剔除发帖者自身后没有任何活跃可唤醒目标（如自寻址或空组 `all`）会返回 `409 swarm_no_active_targets`，防止静默掉棒。

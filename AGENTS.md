@@ -4,7 +4,7 @@
 
 ## 1. 环境、隔离与破坏性变更授权（最高优先级）
 
-- **工作目录**：主仓位于 `/root/code/helm`，改代码开发必须在同级独立 worktree（`../helm-worktrees/<name>`，禁用 `/tmp`）中完成（纯文档等轻量例外见第 6 节）；开发智能体的继承 `cwd` 可能位于旧仓库，每次开工先显式 `cd`。
+- **工作目录（所有 Agent 通用，含非 Helmx 的外部 Agent）**：主仓位于 `/root/code/helm`。改代码前先核实 `pwd` 与 `git worktree list`：**若当前 `cwd` 已在任意独立 Git Worktree 中，直接就地开发**，不要二次切树；**若仍在共享主工作树 `/root/code/helm`，除纯文档等轻量例外（见第 6 节）外严禁直接改代码**。此时优先用当前宿主的原生 worktree 隔离（Helmx 内传 `isolation: 'worktree'`；Claude Code、Codex 等外部 Agent 用其内置 worktree 机制），**禁用 `/tmp`**；仅在宿主不会自动分配（手工开发、或新建集成树）时统一落到 `/root/code/helm-worktrees/<name>`。三类 worktree 的目录边界与回收方式见第 6 节。开发智能体的继承 `cwd` 可能位于旧仓库，每次开工先显式 `cd`。
 - **历史仓库严格只读**：`/root/code/botx`、`/root/code/botd`、`/root/code/herdr` 仅可参考代码与 `node_modules` 验证 SDK / 协议行为，**绝不修改**。
 - **运行数据隔离**：数据目录仅限 `~/.helmx`（或 `HELMX_DATA_DIR` 覆盖值），与 `~/.botx`、`~/.botd` 完全隔离，不得读写旧系统运行数据。
 - **端口铁律**：Web dev 固定 `3201`（`strictPort: true`，代理 `/api`、`/ws`），内核 Hub 固定 `3202`（`HELMX_PORT=3202`）。**永不占用 `3000`（外部）、`3001/3002`（botd）、`3101/3102`（botx）**。
@@ -17,6 +17,7 @@ HELMX_PORT=3202 pnpm dev        # 前后端一起（Web 3201 -> Hub 3202）
 HELMX_PORT=3202 pnpm dev:kernel # 只起内核
 pnpm dev:web                   # 只起前端（需内核已在 3202）
 pnpm link:bins                 # 可选：在 /usr/local/bin 挂载 helmx / helmx-node / helmx-hub 源码命令
+pnpm install --prefer-offline && pnpm build   # 新建独立 worktree 后首次必跑：补齐依赖与跨包构建产物（node_modules/ 与 dist/ 均被 gitignore）
 pnpm verify                    # 一键全量验收（单次构建 + typecheck:only + lint + check:hygiene + test:all:run；增量异常可加 HELMX_CLEAN_DIST=1）
 pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all # 独立分步验收等价命令
 ```
@@ -76,9 +77,17 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 
 ## 6. 开发流程与多智能体协作
 
-- **Worktree 隔离开发**：不强制使用子代理；无论单代理开发还是拆分子代理，所有代码开发必须在主仓同级独立 worktree（`/root/code/helm-worktrees/<name>`，即 `../helm-worktrees/<name>`）中完成，禁止直接在共享主工作树 `/root/code/helm` 改代码或使用 `/tmp`。开工前核实实际 worktree 绝对路径与基线；合回主干（`main`）前须先合入最新主干并在该 worktree 内跑通验证。
-- **多子代理并行与集成合入**：多个子代理并行开发时，每个写代码的子代理必须独占各自的 `../helm-worktrees/<task>`（提示词写明绝对路径与允许修改范围），**严禁将子代理分支逐个直接合入主干**。必须按序执行：① 新建独立的集成 worktree（`../helm-worktrees/<integration>`），将各子代理改动先合并进该集成 worktree；② 再把最新主干（`main`）合入该集成 worktree 并解决冲突；③ 在集成 worktree 内跑通构建、门禁与测试且确认无误后，才允许合回主干。
-- **合并后清理收尾**：改动合回主干（`main`）后必须完成清理：① 按第 5 节「进程 kill 纪律」停止本轮自己启动的所有服务与后台进程（如 `dev`、Hub `3202`、Web `3201`、临时 `helmx-node` 或测试验收服务，严禁误杀他人或其它 worktree 的进程）；② 确认各工作与集成 worktree 已合入且无保留未提交改动后，移除对应 `../helm-worktrees/<name>`（`git worktree remove`）并删除已合并临时分支（`git branch -d`）；③ 清理自建临时 `HELMX_DATA_DIR` 等测试目录，确认主仓 `git status` 干净。
+- **Worktree 隔离开发（所有 Agent 通用）**：不强制使用子代理；无论单代理开发还是拆分子代理、无论是否经 Helmx 派生，所有代码开发必须在独立 worktree 中完成，禁止直接在共享主工作树 `/root/code/helm` 改代码或使用 `/tmp`。开工前核实实际 worktree 绝对路径与基线；合回主干（`main`）前须先合入最新主干并在该 worktree 内跑通验证。本仓存在三类互不混用的 worktree，**目录边界与回收方式严禁混用**：
+
+  | 类型 | 路径与分支特征 | 由谁分配 | 回收方式（严禁跨类操作） |
+  | :--- | :--- | :--- | :--- |
+  | **Helmx 受管树** | `/root/code/.helmx-worktrees/<repo>-<shortId>`，分支 `helmx/spawn-<shortId>` | `builtin:worktree`（`subagent` / DSL `agent()` / Swarm 派工传 `isolation: 'worktree'`） | 仅限 `cleanup_worktree` 工具、`helmx worktrees cleanup` 或 `swarm_close_group`；**禁止裸 `rm -rf` 或 `git worktree remove`**（会绕过租约账本留下孤儿登记） |
+  | **外部宿主受管树** | 宿主自定（如 `.claude/worktrees/*`），非 `/tmp` | Claude Code / Codex / Paseo 等宿主的内置 worktree 机制 | 按对应宿主机制回收 |
+  | **手工开发 / 集成树** | `/root/code/helm-worktrees/<name>`，分支 `feat/*` 或 `fix/*`（**禁用 `helmx/spawn-*`、`helmx/wf-*` 受管前缀**） | 人类或任意 Agent 手工 `git -C /root/code/helm worktree add -b <branch> /root/code/helm-worktrees/<name> main` | 确认合入后 `git worktree remove` + `git branch -d` |
+
+  受管树基于分配时刻的主仓 HEAD 创建（不含源工作区未提交改动）；其分支**不会自动合入** `main`，须由主控或人类按下一款「集成合入」流程合入后再回收。
+- **多子代理并行与集成合入**：多个 Agent 并行开发时（含多个 `helmx/spawn-*` 受管分支、Swarm 多写手分支、或多个外部 Agent 分支），每个写代码的 Agent 必须独占各自的工作树（提示词写明绝对路径与允许修改范围），**严禁将各分支逐个直接合入主干**。必须按序执行：① 新建独立的集成 worktree（`/root/code/helm-worktrees/<integration>`），将各分支先合并进该集成 worktree；② 再把最新主干（`main`）合入该集成 worktree 并解决冲突；③ 在集成 worktree 内跑通构建、门禁与测试且确认无误后，才允许合回主干。主控本机的 `git merge` 仅适用于同节点工作树，跨节点分支需在各自节点处理合入。
+- **合并后清理收尾**：改动合回主干（`main`）后必须完成清理：① 按第 5 节「进程 kill 纪律」停止本轮自己启动的所有服务与后台进程（如 `dev`、Hub `3202`、Web `3201`、临时 `helmx-node` 或测试验收服务，严禁误杀他人或其它 worktree 的进程）；② 确认各工作与集成 worktree 已合入且无保留未提交改动后按类型回收——手工树 `git worktree remove` 并删除已合并临时分支（`git branch -d`）；受管树经 `cleanup_worktree`（传 `mergedInto` 与 `deleteBranch: true`）或 `swarm_close_group` 回收；③ 清理自建临时 `HELMX_DATA_DIR` 等测试目录，确认主仓 `git status` 干净。
 - **轻量改动例外**：仅修改独立文档（如 `AGENTS.md`、`docs/`、`README.md` 等，不涉及源码、脚本、构建配置或受测试校验的包内资产）时，可直接在主仓修改并跳过独立 worktree 与构建/测试跑批。
 - **改动所有权**：已有的修改、暂存和未跟踪文件默认属于用户或其他代理；先记录状态，所有权不明时保留并询问。禁止为清理或同步而重置、清除或覆盖这些改动。
 - **恢复纪律**：禁止从移动中的 `HEAD` 盲目恢复文件，包括 `git show HEAD:<file> > <file>`；恢复前固定基线并核实文件来源，只按确认的文件操作。发现误覆盖时立即停止写入，保留现场并查找快照、reflog 或其他恢复来源。
@@ -91,3 +100,4 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 - **编排引擎**：`docs/workflows/dsl-guide.md`（JS DSL 权威参考）· `worktree-and-gate.md`（Worktree 生命周期与 Gate 门禁）· `journaling-recovery.md`（账本重放与断点恢复）
 - **插件生态**：`docs/plugins/overview.md`（契约总纲）· `plugin-development.md`（外部插件开发实战）及各内置插件同名文档：`profile / workflow / worktree / swarm / memory / triggers / magpie / json-render / mermaid / token-speed / tiers`
 - **Web 约定**：`docs/conventions/web-frontend.md`（设计系统）· `docs/conventions/web-navigation.md`（URL Hash 与导航）
+- **工程排障速查**：`.helmx/skills/helmx-troubleshooting/SKILL.md`（长测试后台跑法与断连防护、合并后 `HEAD^{tree}` 一致免重跑、happy-dom / Radix / TypeScript 踩坑、fork worktree 导致 bash `spawn_error` 的恢复）——Helmx 自动扫描 `.helmx/skills/`，**非 Helmx 的外部 Agent 需主动读取该文件**
