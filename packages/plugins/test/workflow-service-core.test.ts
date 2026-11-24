@@ -229,10 +229,14 @@ function makeEnv(
     ...hostOverrides,
   }
   const service = new WorkflowService({ dataDir, kv, host })
-  t.after(async () => {
-    await service.close().catch(() => {})
-    rmSync(dataDir, { recursive: true, force: true })
-  })
+  // after 钩子不受测试 timeout 覆盖：close() 若因残留 run 永不收敛会静默拖死整个分片，显式给钩子超时让故障可见。
+  t.after(
+    async () => {
+      await service.close().catch(() => {})
+      rmSync(dataDir, { recursive: true, force: true })
+    },
+    timeout,
+  )
   return { dataDir, kv, service, guardedAborts }
 }
 
@@ -798,12 +802,15 @@ test('resume 并发防双接管：首个 resume flush 窗口内第二个并发 r
   const flushGate = new Promise<void>((resolve) => {
     releaseFlush = resolve
   })
+  // 门闩落下的确定性信号：替代固定 sleep（慢 runner 上 40ms 可能还没走到这里，409 断言先失败则门闩永不释放、close() 挂死）。
+  const flushEntered = deferred<void>()
   let holdNextFlush = false
   const kv: WorkflowKvStore<RunHeader> = {
     ...baseKv,
     flush: async () => {
       if (holdNextFlush) {
         holdNextFlush = false
+        flushEntered.resolve()
         await flushGate
       }
       await baseKv.flush()
@@ -820,13 +827,16 @@ test('resume 并发防双接管：首个 resume flush 窗口内第二个并发 r
   })
   holdNextFlush = true
   const first = env.service.run({ resumeFromRunId: 'wf_conc0000001' })
-  await new Promise((resolve) => setTimeout(resolve, 40))
-  await assert.rejects(
-    () => env.service.run({ resumeFromRunId: 'wf_conc0000001' }),
-    (error: unknown) => error instanceof HelmxError && error.code === 'conflict',
-    '并发启动窗口内必须 409 拦截双接管',
-  )
-  releaseFlush!()
+  try {
+    await flushEntered.promise
+    await assert.rejects(
+      () => env.service.run({ resumeFromRunId: 'wf_conc0000001' }),
+      (error: unknown) => error instanceof HelmxError && error.code === 'conflict',
+      '并发启动窗口内必须 409 拦截双接管',
+    )
+  } finally {
+    releaseFlush!()
+  }
   const summary = await first
   await env.service.wait(summary.id)
   assert.equal(env.service.getRun(summary.id).result, 7)
@@ -932,8 +942,15 @@ test('startWorkflowRun 命名优先级与 label 边界校验，及 agent title �
 // 并发注册时序 / 停机屏障 / emitEvent 收口 / settledAt 防漂移
 // ---------------------------------------------------------------------------
 
+/**
+ * 首次 flush 阻塞的 KV：把 run 卡在「已 active.set + 已 saveHeader、尚未驱动执行」的启动窗口内。
+ * `entered` 在门闩真正落下时 resolve——此后 runId 必已捕获、run 必已在 active 表中。
+ * 消费方必须 `await entered` 再取 runId（固定 sleep 在慢 runner 上不够，断言先失败会导致门闩永不释放、
+ * `service.close()` 在 after 钩子里无限等待且不受测试超时覆盖，整个分片静默挂死），并在 finally 中 release()。
+ */
 function makeGatedSnapshotKv(): {
   kv: WorkflowKvStore<RunHeader>
+  entered: Promise<void>
   capturedRunId(): string
   release(): void
 } {
@@ -942,9 +959,11 @@ function makeGatedSnapshotKv(): {
   const released = new Promise<void>((resolve) => {
     release = resolve
   })
+  const entered = deferred<void>()
   let firstFlush = true
   let runId = ''
   return {
+    entered: entered.promise,
     capturedRunId: () => runId,
     release,
     kv: {
@@ -956,6 +975,7 @@ function makeGatedSnapshotKv(): {
       async flush() {
         if (firstFlush) {
           firstFlush = false
+          entered.resolve()
           await released
         }
         await inner.flush()
@@ -975,43 +995,51 @@ async function assertPending(promise: Promise<unknown>, ms: number): Promise<voi
 test('run 注册时序：启动窗口内 wait() 不得假返回，放行 running 快照后才拿真实结果', timeout, async (t) => {
   const gated = makeGatedSnapshotKv()
   const env = makeEnv(t, async () => 'ok', undefined, gated.kv)
-  const runPromise = env.service.run({
-    conversationId: 1,
-    script: 'export const meta = { name: "wait-gate", description: "test" }\nreturn 42',
-  })
-  await new Promise((resolve) => setTimeout(resolve, 20))
-  const runId = gated.capturedRunId()
-  assert.ok(runId !== '')
+  try {
+    const runPromise = env.service.run({
+      conversationId: 1,
+      script: 'export const meta = { name: "wait-gate", description: "test" }\nreturn 42',
+    })
+    await gated.entered
+    const runId = gated.capturedRunId()
+    assert.ok(runId !== '')
 
-  const waitPromise = env.service.wait(runId)
-  await assertPending(waitPromise, 80)
+    const waitPromise = env.service.wait(runId)
+    await assertPending(waitPromise, 80)
 
-  gated.release()
-  const summary = await runPromise
-  assert.equal(summary.status, 'running')
-  assert.equal(await waitPromise, 42)
-  assert.equal(env.service.getRun(runId).status, 'completed')
+    gated.release()
+    const summary = await runPromise
+    assert.equal(summary.status, 'running')
+    assert.equal(await waitPromise, 42)
+    assert.equal(env.service.getRun(runId).status, 'completed')
+  } finally {
+    gated.release()
+  }
 })
 
 test('run 注册时序：启动窗口内 abort() 返回时 run 必已终态', timeout, async (t) => {
   const gated = makeGatedSnapshotKv()
   const env = makeEnv(t, async () => 'ok', undefined, gated.kv)
-  const runPromise = env.service.run({
-    conversationId: 1,
-    script: 'export const meta = { name: "abort-gate", description: "test" }\nreturn 7',
-  })
-  await new Promise((resolve) => setTimeout(resolve, 20))
-  const runId = gated.capturedRunId()
-  assert.ok(runId !== '')
+  try {
+    const runPromise = env.service.run({
+      conversationId: 1,
+      script: 'export const meta = { name: "abort-gate", description: "test" }\nreturn 7',
+    })
+    await gated.entered
+    const runId = gated.capturedRunId()
+    assert.ok(runId !== '')
 
-  const abortPromise = env.service.abort(runId)
-  await assertPending(abortPromise, 80)
+    const abortPromise = env.service.abort(runId)
+    await assertPending(abortPromise, 80)
 
-  gated.release()
-  await runPromise
-  await abortPromise
-  const final = env.service.getRun(runId)
-  assert.equal(final.status, 'aborted')
+    gated.release()
+    await runPromise
+    await abortPromise
+    const final = env.service.getRun(runId)
+    assert.equal(final.status, 'aborted')
+  } finally {
+    gated.release()
+  }
 })
 
 test('停机屏障：init 完成后、active.set 前复查 closed，close 与 run 启动并发时越障启动显式拒绝', timeout, async (t) => {
