@@ -111,7 +111,16 @@ export function createPluginClientHostPort(store: HelmxExternalStore): PluginCli
       } else {
         headers.delete('Authorization')
       }
-      return fetch(url, { ...init, headers })
+      const res = await fetch(url, { ...init, headers })
+      if (
+        res.status === 401 &&
+        typeof window !== 'undefined' &&
+        store.getAuthenticated() &&
+        getStoredToken() === token
+      ) {
+        window.dispatchEvent(new Event('helmx:unauthorized'))
+      }
+      return res
     },
     submitConversationInput: async (conversationId, input) => {
       await conversationsApi.submitInput(conversationId, {
