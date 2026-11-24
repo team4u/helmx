@@ -92,6 +92,9 @@ async function main() {
     touchProgress('file-start');
     stallTimer = setInterval(() => {
       const idleMs = Math.round(performance.now() - stallAnchorMs);
+      // Fixed-cadence tick: events may have kept flowing since it was armed, so only a full
+      // silence window counts as a stall (otherwise a healthy >stallWarnMs file is misreported).
+      if (idleMs < stallWarnMs) return;
       console.error(
         `[shard-worker] stall: no test event for ${idleMs}ms while running ${stallLabel} ` +
           `(last event: ${lastEventType}); if this repeats until the suite timeout, this file is hung`,
