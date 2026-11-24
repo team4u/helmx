@@ -9,7 +9,9 @@
  * - Always cleans up `handle`, control server, and signal listeners on exit.
  */
 import process from 'node:process';
+import type { NodeInstallMode } from '@helmx/protocol';
 import { logPathOf, readPidRecord, writePidRecord, removePidFile, type NodeCliIo } from './cli-context.js';
+import { detectNodeInstallMode } from './service-entry.js';
 import {
   controlEndpoint,
   createControlServer,
@@ -179,6 +181,7 @@ async function prefetchNodeVersion(): Promise<string | undefined> {
 /** Start the per-instance control server before connecting so `status` is available immediately. */
 async function setupControlServer(args: {
   control: { instanceId: string; endpoint: string };
+  installMode: NodeInstallMode;
   handle: () => DaemonHandle | undefined;
   daemonState: () => DaemonReadyState;
   controller: AbortController;
@@ -193,6 +196,7 @@ async function setupControlServer(args: {
       pid: process.pid,
       state: args.daemonState(),
       ...(reportedVersion !== undefined ? { version: reportedVersion } : {}),
+      installMode: args.installMode,
     }),
     onStop: async (): Promise<void> => {
       args.controller.abort();
@@ -269,12 +273,14 @@ export async function runDaemonProcess(options: {
 
   const handoff = parseUpgradeHandoffEnv(io.env);
   const pendingActivation = io.env?.['HELMX_NODE_PENDING_ACTIVATION'] === '1' && handoff !== undefined;
+  const installMode = io.installMode ?? detectNodeInstallMode();
   let upgradeReplaced = false;
 
   let controlServer: ControlServer | undefined;
   if (control !== undefined) {
     controlServer = await setupControlServer({
       control,
+      installMode,
       handle: () => handle,
       daemonState: () => (handle !== undefined && handle.isConnected() ? 'registered' : 'starting'),
       controller,
@@ -291,8 +297,9 @@ export async function runDaemonProcess(options: {
       { hubUrl, token },
       {
         dataDir,
-        // Only controlled instances support upgrade handoffs.
-        ...(control !== undefined
+        installMode,
+        // Only controlled release instances support npm self-upgrade handoffs; source/link mode is strictly exempt.
+        ...(control !== undefined && installMode !== 'source'
           ? {
               prepareUpgradeReplacement: (release, context) =>
                 prepareNodeReplacement(release, context, {

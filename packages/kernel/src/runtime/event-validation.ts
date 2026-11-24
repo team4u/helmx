@@ -247,12 +247,23 @@ const PLUGIN_DOC_UPDATED_CHECKER = Compile(
   }),
 )
 
+const NODE_AUTO_UPGRADE_SCHEMA = Type.Object({
+  status: Type.Enum(['pending', 'upgrading', 'failed', 'source_skipped', 'unknown_mode', 'not_supported'] as const),
+  targetVersion: NonEmptyString,
+  attempts: SafeNonNegativeInt,
+  updatedAt: Type.Number(),
+  nextRetryAt: Type.Optional(Type.Number()),
+  reason: Type.Optional(Type.String()),
+})
+
 const NODE_CHANGED_CHECKER = Compile(
   Type.Object({
     node: Type.Object({
       id: NonEmptyString,
       kind: Type.Enum(['local', 'byom'] as const),
       online: Type.Boolean(),
+      installMode: Type.Optional(Type.Enum(['source', 'release'] as const)),
+      autoUpgrade: Type.Optional(NODE_AUTO_UPGRADE_SCHEMA),
     }),
     removed: Type.Optional(Type.Boolean()),
   }),

@@ -398,6 +398,71 @@ process.env.HELMX_TEST_SUITE_TIMEOUT_MS = '999'`,
   assert.equal(report.stats.testCalls, 1)
 })
 
+test('hygiene: teardown hooks must declare their own timeout because test timeouts do not cover hooks', { timeout: 60_000 }, () => {
+  // TestContext form inside a test callback: awaiting close()/dispose() without a hook timeout is flagged;
+  // the hook timeout option or a shared const options object clears it.
+  const ctxSrc = (hookCall: string) => `import test from 'node:test'
+const hookOpts = { timeout: 60_000 } as const
+test('outer', { timeout: 60_000 }, async (t) => {
+  ${hookCall}
+})`
+  assert.deepEqual(rulesOf(ctxSrc(`await t.after(async () => { await kernel.close() })`)), ['hook-timeout-missing'])
+  assert.deepEqual(rulesOf(ctxSrc(`t.after(async () => { await kernel.close() }, { timeout: 60_000 })`)), [])
+  assert.deepEqual(rulesOf(ctxSrc(`t.after(async () => { await kernel.close() }, hookOpts)`)), [])
+  // Nested arrows and non-await call positions still count as teardown; a sync no-teardown hook does not.
+  assert.deepEqual(rulesOf(ctxSrc(`t.after(() => Promise.all(kernels.map(async (k) => { await k.dispose() })))`)), ['hook-timeout-missing'])
+  assert.deepEqual(rulesOf(ctxSrc(`t.after(() => { resetHappyDom() })`)), [])
+  // TestContext alias is resolved structurally from the callback parameter, not by guessing `t`.
+  assert.deepEqual(
+    rulesOf(`import { it } from 'node:test'
+it('outer', { timeout: 60_000 }, async (ctx) => {
+  ctx.after(async () => { env.stop() })
+})`),
+    ['hook-timeout-missing'],
+  )
+  // A hook callback passed by identifier is statically opaque: not flagged (no false positive).
+  assert.deepEqual(rulesOf(ctxSrc(`t.after(cleanup)`)), [])
+  // Unrelated `.after(...)` on an arbitrary object is not a node:test hook.
+  assert.deepEqual(
+    rulesOf(`import test from 'node:test'
+test('outer', { timeout: 60_000 }, () => {
+  router.after(async () => { pool.close() })
+})`),
+    [],
+  )
+
+  // Named imports (after/afterEach/beforeEach/before), namespace import and default-import `test.after`.
+  const named = `import { after, afterEach, beforeEach } from 'node:test'
+const opts = { timeout: 60_000 } as const
+after(async () => { await app.close() })
+afterEach(() => servers.map((s) => s.disconnect()))
+beforeEach('seed', opts, async () => { await seed.stop() })
+before(async () => { await pool.terminate() })`
+  const namedReport = analyzeTestSource(ts, 'sample.test.ts', `import { before } from 'node:test'\n${named}`)
+  assert.deepEqual(namedReport.violations.map((v) => v.rule), ['hook-timeout-missing', 'hook-timeout-missing', 'hook-timeout-missing'])
+  assert.equal(namedReport.stats.hookCalls, 4)
+  assert.deepEqual(
+    rulesOf(`import * as nt from 'node:test'
+nt.after(async () => { await app.close() }, { timeout: 60_000 })
+nt.afterEach(async () => { await app.close() })`),
+    ['hook-timeout-missing'],
+  )
+  assert.deepEqual(
+    rulesOf(`import test from 'node:test'
+test.after(async () => { await app.close() }, { timeout: 60_000 })
+test.before(async () => { await app.close() })`),
+    ['hook-timeout-missing'],
+  )
+  // Name-first signature: options sit in the second slot.
+  assert.deepEqual(rulesOf(`import { after } from 'node:test'
+after('cleanup', { timeout: 60_000 }, async () => { await app.close() })
+after('cleanup', async () => { await app.close() })`), ['hook-timeout-missing'])
+  // Unresolvable options identifier is not silently accepted as a timeout.
+  assert.deepEqual(rulesOf(`import { after } from 'node:test'
+import { externalOpts } from './opts.js'
+after(async () => { await app.close() }, externalOpts)`), ['hook-timeout-missing'])
+})
+
 test('hygiene: Windows backslash paths normalize to POSIX repo-relative paths and still detect cross-package helpers', { timeout: 60_000 }, () => {
   const winRepo = 'D:\\a\\helmx\\helmx'
   assert.equal(

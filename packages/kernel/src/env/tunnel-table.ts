@@ -111,6 +111,17 @@ export class TunnelTable {
     }
   }
 
+  /** Whether the node currently owns any pending or active passthrough tunnels. */
+  hasForNode(nodeId: string): boolean {
+    for (const pending of this.#pending.values()) {
+      if (pending.nodeId === nodeId) return true
+    }
+    for (const active of this.#active.values()) {
+      if (active.nodeId === nodeId) return true
+    }
+    return false
+  }
+
   /** Test-only helper: in-flight and active tunnel counts. */
   counts(): { pending: number; active: number } {
     return { pending: this.#pending.size, active: this.#active.size }

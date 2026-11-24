@@ -220,7 +220,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
   t.after(() => {
     if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
     rmSync(seedDir, { recursive: true, force: true })
-  })
+  }, { timeout: 60_000 })
   try {
     // ---- 1) 子进程制造真实遗留（慢速流式中途 SIGKILL；cwd/env 全临时，无端口）----
     child = spawn(process.execPath, [tsxCli, seederPath], {
@@ -265,7 +265,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     t.after(async () => {
       await kernel.close().catch(() => {})
       rmSync(dataDir, { recursive: true, force: true })
-    })
+    }, { timeout: 60_000 })
     const rootInputs: Array<{ conversationId: number; origin?: string; kind?: string }> = []
     kernel.events.subscribe((frame: HelmxEventFrame) => {
       const e = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string; data?: { origin?: string; meta?: { kind?: string } } } }
@@ -384,7 +384,7 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
   t.after(() => {
     if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
     rmSync(seedDir, { recursive: true, force: true })
-  })
+  }, { timeout: 60_000 })
   try {
     child = spawn(process.execPath, [tsxCli, seederPath], {
       cwd: KERNEL_DIR,
@@ -420,7 +420,7 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
     t.after(async () => {
       await kernel.close().catch(() => {})
       rmSync(dataDir, { recursive: true, force: true })
-    })
+    }, { timeout: 60_000 })
 
     // human 红线覆盖恢复窗口：paused 相位对 human 归属会话拒绝持久标记。
     kernel.markConversationOwnership(childId, 'human')
@@ -510,7 +510,7 @@ process.kill(process.pid, 'SIGKILL')
     await kernelAfterKill?.close().catch(() => {})
     rmSync(seedDir, { recursive: true, force: true })
     rmSync(sigkillDir, { recursive: true, force: true })
-  })
+  }, { timeout: 60_000 })
 
   try {
     child = spawn(process.execPath, [tsxCli, seederPath], {
@@ -603,7 +603,7 @@ process.kill(process.pid, 'SIGKILL')
     await k1.close().catch(() => {})
     await k2?.close().catch(() => {})
     rmSync(closeDir, { recursive: true, force: true })
-  })
+  }, { timeout: 60_000 })
   await k1.plugins.register(createWorkflowPlugin())
   await k1.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
   await k1.start()
@@ -742,7 +742,7 @@ process.kill(process.pid, 'SIGKILL')
     if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
     await recoveredKernel?.close().catch(() => {})
     rmSync(baseDir, { recursive: true, force: true })
-  })
+  }, { timeout: 60_000 })
 
   try {
     child = spawn(process.execPath, [tsxCli, seederPath], {

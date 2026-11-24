@@ -19,7 +19,7 @@ const LIMIT = 64 * 1024 * 1024;
 test('envBinaryReaderRead rejects oversized length with invalid without materializing bytes', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'b64-limit-reader-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
-  t.after(() => server.dispose());
+  t.after(() => server.dispose(), { timeout: 60_000 });
   await fs.writeFile(path.join(dir, 'small.bin'), Buffer.from([1, 2, 3]));
   const opened = await server.envOpenBinaryReader({ path: 'small.bin' });
   assert.equal(opened.ok, true);
@@ -43,7 +43,7 @@ test('envBinaryReaderRead rejects oversized length with invalid without material
 test('envWriteFile rejects oversized base64 payload before decoding', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'b64-limit-write-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
-  t.after(() => server.dispose());
+  t.after(() => server.dispose(), { timeout: 60_000 });
 
   // Encoded limit accounts for 4/3 base64 expansion; oversized input is rejected prior to decoding.
   const huge = 'A'.repeat(Math.ceil(LIMIT / 3) * 4 + 4);
@@ -61,7 +61,7 @@ test('envWriteFile rejects oversized base64 payload before decoding', { timeout:
 test('envWriteFile rejects writes whose decoded UTF-8 byte count exceeds the limit', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'b64-limit-decode-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
-  t.after(() => server.dispose());
+  t.after(() => server.dispose(), { timeout: 60_000 });
 
   // Character count is below the limit, while encoded UTF-8 bytes exceed it; both write and append must reject.
   const bigUtf8 = '中'.repeat(Math.floor(LIMIT / 3) + 1);
@@ -77,7 +77,7 @@ test('envWriteFile rejects writes whose decoded UTF-8 byte count exceeds the lim
 test('envReadBinaryFile explicitly returns invalid when file exceeds limit instead of truncating', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'b64-limit-read-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
-  t.after(() => server.dispose());
+  t.after(() => server.dispose(), { timeout: 60_000 });
 
   // Create a sparse logical 64MiB + 1 file via truncate.
   await fs.writeFile(path.join(dir, 'huge.bin'), Buffer.from([0]));
@@ -91,7 +91,7 @@ test('envReadBinaryFile explicitly returns invalid when file exceeds limit inste
 test('valid 64MiB base64 write succeeds without padding deducting from byte quota', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-base64-boundary-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
-  t.after(() => server.dispose());
+  t.after(() => server.dispose(), { timeout: 60_000 });
   const encodedLength = Math.ceil(LIMIT / 3) * 4;
   // Standard base64 for all-zero 64MiB has two trailing padding chars whose decoded bytes are excluded.
   const result = await server.envWriteFile({
@@ -111,7 +111,7 @@ test('envReadTextFile enforces 64MiB cap, and readers enforce maxOpenReaders and
     maxOpenReaders: 2,
     readerIdleTtlMs: 30,
   });
-  t.after(() => server.dispose());
+  t.after(() => server.dispose(), { timeout: 60_000 });
 
   // Sparse 64MiB + 1 text file is rejected before reading into memory.
   await fs.writeFile(path.join(dir, 'huge.txt'), 'x');

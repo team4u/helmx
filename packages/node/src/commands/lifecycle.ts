@@ -6,6 +6,7 @@ import { UsageError } from '../cli-context.js';
 import { readPidRecord } from '../cli-context.js';
 import { startDaemon } from '../launcher.js';
 import { runDaemonProcess } from '../daemon-process.js';
+import { detectNodeInstallMode } from '../service-entry.js';
 import {
   flagString,
   readNodeIdentityStrict,
@@ -28,7 +29,10 @@ export async function connectCommand(ctx: CommandContext): Promise<number> {
   const identity = await readNodeIdentity(dataDir);
   if (identity === null) throw new Error('failed to read identity after writing it (internal error)');
   if (parsed.flags.get('once') === true) {
-    const handle = await runNodeDaemonHandle({ hubUrl, token }, { dataDir });
+    const handle = await runNodeDaemonHandle(
+      { hubUrl, token },
+      { dataDir, ...(io.installMode !== undefined ? { installMode: io.installMode } : {}) },
+    );
     const ok = await handle.waitUntilRegistered(15_000);
     const reason = ok ? undefined : handle.lastRejectReason();
     await handle.close();
@@ -185,14 +189,17 @@ export async function statusCommand(ctx: CommandContext): Promise<number> {
   const { readNodeIdentity } = await import('../daemon/index.js');
   const identity = await readNodeIdentity(dataDir);
   const daemon = await statusDaemon(io, dataDir);
-  // Version priority: live daemon control-channel report -> staged current.json -> package.json.
+  const installMode = daemon.installMode ?? io.installMode ?? detectNodeInstallMode();
+  // Version priority: live daemon control-channel report -> mode-aware offline version
+  // (source mode always reads own package.json and ignores stale current.json; release prefers current.json).
   const { resolveEffectiveNodeVersion } = await import('../daemon/upgrader.js');
-  const version = daemon.version ?? (await resolveEffectiveNodeVersion(dataDir));
+  const version = daemon.version ?? (await resolveEffectiveNodeVersion(dataDir, installMode));
   const payload = {
     bound: identity !== null,
     ...(identity !== null ? { nodeId: identity.nodeId, hubUrl: identity.hubUrl ?? null } : {}),
     dataDir,
     version,
+    installMode,
     pid: daemon.pid,
     pidAlive: daemon.pidAlive,
     ...(daemon.state !== undefined ? { state: daemon.state } : {}),
@@ -214,6 +221,7 @@ export async function statusCommand(ctx: CommandContext): Promise<number> {
     ...(identity?.hubUrl ? [`hub:      ${identity.hubUrl}`] : []),
     `daemon:   ${processLine}`,
     `version:  ${version}`,
+    `mode:     ${installMode}`,
     `dataDir:  ${dataDir}`,
     ...(daemon.detail !== undefined ? [`detail:   ${daemon.detail}`] : []),
   ];

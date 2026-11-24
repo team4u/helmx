@@ -27,6 +27,7 @@ import type {
   EnvExecOutputEvent,
   NodeEnvRpcFunctions,
   NodeHeartbeatInput,
+  NodeInstallMode,
   NodeRegisterInput,
   NodeRegisterResult,
 } from '@helmx/protocol';
@@ -215,6 +216,7 @@ async function startManagedDaemon(options: {
   upgradeAttemptId?: string;
   pendingActivation?: boolean;
   withPrepare: boolean;
+  installMode?: NodeInstallMode;
 }): Promise<HostStub> {
   const stub: HostStub = {
     daemon: undefined as never,
@@ -228,6 +230,8 @@ async function startManagedDaemon(options: {
     hubUrl: options.hubUrl,
     identity: { nodeId: options.nodeId ?? 'up-a', token: 'up-a:secret-a' },
     dataDir: options.dataDir,
+    // Existing upgrade RPC wiring tests exercise release-mode behavior; source-mode exemption is tested explicitly below.
+    installMode: options.installMode ?? 'release',
     reconnectBaseDelayMs: 60,
     reconnectMaxDelayMs: 250,
     ...(options.withPrepare
@@ -355,9 +359,70 @@ test('register reports getNodeVersion() and options.upgradeAttemptId', { timeout
     const reg = hub.registrations[0];
     assert.ok(reg !== undefined);
     assert.equal(reg?.version, getNodeVersion(), 'register should report actual running package version');
+    assert.equal(reg?.installMode, 'release');
     assert.equal(reg?.upgradeAttemptId, 'att-reg-1');
   } finally {
     await stub.daemon.close().catch(() => undefined);
+    await hub.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('source mode daemon: registers installMode=source with source package.json version and rejects upgrade RPC without writing current.json', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helmx-node-src-rpc-');
+  const hub = await startHubFixture({ expectedToken: 'up-a:secret-a' });
+  // Pre-seed a historical current.json from an older npm release to ensure source mode ignores it completely.
+  const staleCurrent = {
+    version: '8.8.8',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    entries: { entryPath: '/nonexistent/staged/dist/cli.js' },
+  };
+  await fs.writeFile(path.join(dir, 'current.json'), `${JSON.stringify(staleCurrent)}\n`, 'utf8');
+  let prepareCalled = false;
+  // Omit installMode to exercise default runtime detection under tsx source checkout.
+  const daemon = await createNodeDaemon({
+    hubUrl: hub.url,
+    identity: { nodeId: 'up-a', token: 'up-a:secret-a' },
+    dataDir: dir,
+    reconnectBaseDelayMs: 60,
+    reconnectMaxDelayMs: 250,
+    prepareUpgradeReplacement: async () => {
+      prepareCalled = true;
+      return { pid: 999999, commit: async () => undefined, abort: async () => undefined };
+    },
+  });
+  try {
+    assert.equal(await daemon.waitUntilRegistered(10_000), true);
+    const reg = hub.registrations[0];
+    assert.ok(reg !== undefined);
+    assert.equal(reg.installMode, 'source', 'source checkout daemon must report installMode=source');
+    assert.equal(reg.version, getNodeVersion(), 'source daemon must report own package.json version, not stale current.json');
+
+    // Local upgrade() rejects with source_mode even when prepareUpgradeReplacement is wired.
+    await assert.rejects(
+      () => daemon.upgrade({ targetVersion: '9.9.9', force: true }),
+      (error: Error & { code?: string }) =>
+        error.code === 'source_mode' && /source_mode/.test(error.message) && /restart/.test(error.message),
+    );
+
+    // Hub-invoked nodeUpgrade RPC rejects with code=source_mode and leaves node undrained and responsive.
+    const rpc = hub.nodeRpc();
+    assert.ok(rpc?.nodeUpgrade !== undefined);
+    const rpcRes = await rpc!.nodeUpgrade!({ targetVersion: '9.9.9', force: true });
+    assert.equal(rpcRes.ok, false);
+    assert.equal(!rpcRes.ok && rpcRes.error.code, 'source_mode');
+    assert.match(!rpcRes.ok ? rpcRes.error.message : '', /source_mode/);
+    assert.equal(prepareCalled, false, 'source mode must never invoke prepareUpgradeReplacement');
+    assert.equal(daemon.isUpgrading(), false, 'source mode rejection must not enter upgrading state');
+
+    // Historical current.json must remain untouched (never overwritten by npm release staging).
+    assert.deepEqual(await readCurrentRelease(dir), staleCurrent);
+
+    // Normal envExec continues working (not drained).
+    const execRes = await rpc!.envExec({ execId: 'src-still-live', command: 'echo ok', timeout: 10 });
+    assert.equal(execRes.ok, true);
+  } finally {
+    await daemon.close().catch(() => undefined);
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -417,7 +482,7 @@ test('upgrade success path: draining gate activates, commits once, invokes host 
   t.after(async () => {
     await stub.daemon.close().catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
 
   await seedStagedRelease(dir, '9.9.9');
@@ -463,7 +528,7 @@ test('upgrade same-version no-op (upgraded:false) restores flags/gate and stays 
     await stub.daemon.close().catch(() => undefined);
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
 
   // Target == current running version without force: engine immediately returns upgraded:false (no staging/network)
@@ -498,7 +563,7 @@ test('upgrade failure rolls back, clears gate, restores reconnect, and accepts c
   t.after(async () => {
     await stub.daemon.close().catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
   const port = hub.port;
 
@@ -539,7 +604,7 @@ test('UpgradeCommitUnconfirmedError (via cause chain): no rollback, stays draini
     await stub.daemon.close().catch(() => undefined);
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
 
   await seedStagedRelease(dir, '7.7.7');
@@ -570,7 +635,7 @@ test('concurrent upgrade rejects as busy without sharing result; retryable after
     await stub.daemon.close().catch(() => undefined);
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
   await seedStagedRelease(dir, '9.9.9');
   await seedStagedRelease(dir, '8.8.8');
@@ -640,7 +705,7 @@ test('pendingActivation candidate rejects new commands until confirmUpgrade reco
     await stub.daemon.close().catch(() => undefined);
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
   const rpc = hub.nodeRpc()!;
 
@@ -689,7 +754,7 @@ test('commit survives disconnect in memory and retries in heartbeats on new conn
   t.after(async () => {
     await stub.daemon.close().catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
 
   // Non-candidate daemon confirmUpgrade skips identity check (ordinary heartbeat reporting path)

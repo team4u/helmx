@@ -4,7 +4,7 @@
 import { UsageError, readPidRecord } from '../cli-context.js';
 import { controlRequest, CONTROL_UPGRADE_TIMEOUT_MS, validateUpgradeResult } from '../control.js';
 import { flagString, resolveHubUrl, type CommandContext } from './shared.js';
-import { resolveServiceEntry } from '../service-entry.js';
+import { detectNodeInstallMode, resolveServiceEntry, SOURCE_MODE_UPGRADE_MESSAGE } from '../service-entry.js';
 
 export async function upgradeCommand(ctx: CommandContext): Promise<number> {
   const { io, parsed, dataDir, emit } = ctx;
@@ -12,26 +12,35 @@ export async function upgradeCommand(ctx: CommandContext): Promise<number> {
   const targetVersion = flagString(parsed, 'version');
   const check = parsed.flags.get('check') === true;
   const force = parsed.flags.get('force') === true;
+  const installMode = io.installMode ?? detectNodeInstallMode();
   // `--check` is read-only and never starts a daemon or mutates state.
   if (check) {
     const { checkNodeUpgrade } = await import('../daemon/upgrader.js');
     const result = await checkNodeUpgrade(dataDir, {
       ...(registryUrl !== undefined ? { registryUrl } : {}),
+      installMode,
     });
     if (parsed.json) {
-      emit({ ok: true, ...result, dataDir });
+      emit({ ok: true, ...result, installMode, dataDir });
     } else {
       const lines = [
         `current:  ${result.currentVersion}`,
         `latest:   ${result.latestVersion}`,
         `update:   ${result.updateAvailable ? 'available' : 'up to date'}`,
+        `mode:     ${installMode}`,
       ];
+      if (installMode === 'source') {
+        lines.push('note:     source/link mode disables npm self-upgrade; update source checkout and restart manually');
+      }
       if (result.blocked !== undefined) {
         lines.push(`blocked:  ${result.blocked.version} since ${result.blocked.at} (${result.blocked.reason})`);
       }
       io.out(`${lines.join('\n')}\n`);
     }
     return 0;
+  }
+  if (installMode === 'source') {
+    throw new UsageError(SOURCE_MODE_UPGRADE_MESSAGE, 'source_mode');
   }
   // Executing an upgrade requires a live managed daemon.
   const record = await readPidRecord(dataDir);

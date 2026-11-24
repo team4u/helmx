@@ -3,7 +3,8 @@
  * pnpm check:hygiene — static test hygiene checks (TypeScript Compiler API, zero new deps).
  *
  * Rules are documented in the scripts/lib/test-hygiene.mjs header comment:
- *   timeout-missing / skip-without-reason / suite-timeout-env（AGENTS §5）。
+ *   timeout-missing / skip-without-reason / suite-timeout-env / unsafe-dom-assert /
+ *   hook-timeout-missing（AGENTS §5）。
  * Newly added t.test calls and cross-package test helper imports receive additional AST checks
  * in --changed/--files mode; existing code remains visible to the historical rules without
  * forcing a broad test rewrite.
@@ -346,7 +347,7 @@ const ts = requireFromRoot('typescript');
 const shouldCheckNewRules = opts.changed || opts.files.length > 0;
 const addedLines = shouldCheckNewRules ? collectAddedLines({ base: opts.base, files }) : new Map();
 const allViolations = [];
-const totals = { testCalls: 0, skipCalls: 0, todoCalls: 0, subtestCalls: 0, helperImports: 0 };
+const totals = { testCalls: 0, skipCalls: 0, todoCalls: 0, subtestCalls: 0, hookCalls: 0, helperImports: 0 };
 for (const rel of files) {
   const abs = path.isAbsolute(rel) ? rel : path.join(repoRoot, rel);
   let source;
@@ -368,6 +369,7 @@ for (const rel of files) {
   totals.skipCalls += report.stats.skipCalls;
   totals.todoCalls += report.stats.todoCalls;
   totals.subtestCalls += report.stats.subtestCalls;
+  totals.hookCalls += report.stats.hookCalls;
   totals.helperImports += extraViolations.filter((v) => v.rule === 'cross-package-test-helper').length;
 }
 
@@ -383,7 +385,7 @@ const ruleSummary = Object.entries(byRule)
   .join(' / ');
 console.error(
   `[check-hygiene] stats: test/it ${totals.testCalls} (skip ${totals.skipCalls}, todo ${totals.todoCalls});` +
-    ` t.test subtests: ${totals.subtestCalls}; cross-package test helper imports: ${totals.helperImports}`,
+    ` t.test subtests: ${totals.subtestCalls}; hooks: ${totals.hookCalls}; cross-package test helper imports: ${totals.helperImports}`,
 );
 if (allViolations.length > 0) {
   console.error(`[check-hygiene] ${allViolations.length} violation(s) (${ruleSummary}), exiting 1`);

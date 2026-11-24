@@ -144,6 +144,19 @@ export function rpcFailureToHelmxError(
       nodeError: error,
     })
   }
+  if (error.code === 'source_mode') {
+    return new HelmxError(
+      'node_upgrade_source_mode',
+      `Node ${nodeId} runs in source/link mode (source_mode) and cannot self-upgrade from npm (${error.message})`,
+      501,
+      {
+        nodeId,
+        installMode: 'source',
+        reason: 'source_mode',
+        nodeError: error,
+      },
+    )
+  }
   if (error.code === 'not_supported') {
     return new HelmxError('node_upgrade_not_supported', `Node ${nodeId} does not support ${action} (${error.message})`, 501, {
       nodeId,

@@ -178,7 +178,7 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
   after(async () => {
     await kernel.close()
     await cleanupDir(root)
-  })
+  }, { timeout: 60_000 })
 
   async function requestFile(id: number, query: string): Promise<Response> {
     return handler(

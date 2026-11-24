@@ -170,7 +170,7 @@ test('start -d / status / stop: registered comes from genuine ACK, stop exits cl
   const hub = await startHubFixture({ expectedToken: 'rev-lc:s3cret' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   await bindIdentityFromJoinToken(dir, 'rev-lc:s3cret', hub.url);
 
   // CLI process A: background start
@@ -231,7 +231,7 @@ test('start -d / status / stop: registered comes from genuine ACK, stop exits cl
 test('three independent CLI child processes can start, query, and stop the same daemon instance', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helmx-cli-processes-');
   const hub = await startHubFixture({ expectedToken: 'cli-process:s' });
-  t.after(async () => { await runCli(['stop', '--data-dir', dir, '--json']); await hub.close(); await fs.rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { await runCli(['stop', '--data-dir', dir, '--json']); await hub.close(); await fs.rm(dir, { recursive: true, force: true }); }, { timeout: 60_000 });
   await bindIdentityFromJoinToken(dir, 'cli-process:s', hub.url);
   const childCli = (args: string[]): Promise<Captured> => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), fileURLToPath(new URL('../src/cli.ts', import.meta.url)), ...args, '--data-dir', dir, '--json'], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...sanitizedHostEnv(), HELMX_HUB_URL: hub.url } });
@@ -263,7 +263,7 @@ test('restart: old instance exits cleanly over control channel and new instance 
   const hub = await startHubFixture({ expectedToken: 'rev-rst:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   await bindIdentityFromJoinToken(dir, 'rev-rst:s', hub.url);
 
   const first = await runCli(['start', '-d', '--data-dir', dir, '--json']);
@@ -323,7 +323,7 @@ test('start -d passes no token in argv or env; child argv contains only start --
   const hub = await startHubFixture({ expectedToken: 'rev-nt:s3cret' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   await bindIdentityFromJoinToken(dir, 'rev-nt:s3cret', hub.url);
 
   let capturedEnv: NodeJS.ProcessEnv | undefined;
@@ -356,7 +356,7 @@ test('control channel rejects unknown instance nonce without harming unrelated p
   const hub = await startHubFixture({ expectedToken: 'rev-nonce:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   await bindIdentityFromJoinToken(dir, 'rev-nonce:s', hub.url);
 
   const start = await runCli(['start', '-d', '--data-dir', dir, '--json']);
@@ -414,7 +414,7 @@ test('duplicate start is rejected after control channel verification (already_ru
   const hub = await startHubFixture({ expectedToken: 'rev-dup:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   await bindIdentityFromJoinToken(dir, 'rev-dup:s', hub.url);
 
   const first = await runCli(['start', '-d', '--data-dir', dir, '--json']);
@@ -512,7 +512,7 @@ test('corrupt pid file and leftover start lock fail explicitly without silent re
   const hub = await startHubFixture({ expectedToken: 'rev-lock:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   await fs.rm(path.join(dir, 'node.pid'), { force: true });
   await bindIdentityFromJoinToken(dir, 'rev-lock:s', hub.url);
   const lockStart = await runCli(['start', '-d', '--data-dir', dir, '--json']);
@@ -600,7 +600,7 @@ test('start -d clean start/stop leaves no orphan control socket and leaks no tok
   const hub = await startHubFixture({ expectedToken: 'rev-clean:s3cret-value' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   await bindIdentityFromJoinToken(dir, 'rev-clean:s3cret-value', hub.url);
 
   const start = await runCli(['start', '-d', '--data-dir', dir, '--json']);
@@ -655,7 +655,7 @@ test('connect foreground prints connecting before registration, ready state afte
   const hub = await startHubFixture({ expectedToken: 'rev-conn:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   const outputs: string[] = [];
   const runPromise = runCli(['connect', hub.url, '--token', 'rev-conn:s', '--data-dir', dir], {
     out: (text) => {
@@ -681,7 +681,7 @@ test('connect --once exits after single attempt and reports auth rejection truth
   const hub = await startHubFixture({ expectedToken: 'right:s', reject: true });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   const r = await runCli(['connect', hub.url, '--token', 'wrong:s', '--data-dir', dir, '--once', '--json']);
   assert.equal(r.code, 1);
   const payload = JSON.parse(r.out) as { ok: boolean; registered: boolean };

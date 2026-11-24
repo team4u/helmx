@@ -224,7 +224,7 @@ afterEach(async () => {
     }
     rmSync(h.dataDir, { recursive: true, force: true })
   }
-})
+}, { timeout: 60_000 })
 
 function track<T extends Harness>(h: T): T {
   harnesses.push(h)

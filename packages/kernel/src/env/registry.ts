@@ -30,6 +30,7 @@ import {
   type NodeEnvRpcFunctions,
   type NodeHealthSnapshot,
   type NodeHeartbeatInput,
+  type NodeInstallMode,
   type NodeRegisterInput,
   type NodeTunnelOpenInput,
   type NodeTunnelTarget,
@@ -109,6 +110,8 @@ export interface NodeConnection {
   platform: string
   /** Software version reported by the node (omitted if invalid or unprovided). */
   version?: string
+  /** Runtime install mode reported by the node (`source` | `release`); omitted for older daemons. */
+  installMode?: NodeInstallMode
   /** Upgrade attempt ID carried by the candidate (heartbeat commit reconciles against it). */
   upgradeAttemptId?: string
   /** Hub URL configured on the node (for remote managed child processes connecting back). */
@@ -292,15 +295,18 @@ export class NodeRegistry {
     attach: (local: HubConnectionLocal) => BirpcReturn<NodeSideFunctions, HubConnectionLocal>,
   ): Promise<RegisterOutcome> {
     if (this.#closed) return { accepted: false, reason: 'registry closed' }
-    const { nodeId, token, hostname, platform, hubUrl, version, upgradeAttemptId } = input ?? ({} as NodeRegisterInput)
+    const { nodeId, token, hostname, platform, hubUrl, version, installMode, upgradeAttemptId } = input ?? ({} as NodeRegisterInput)
     if (typeof nodeId !== 'string' || nodeId === 'local' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
       return { accepted: false, reason: 'invalid nodeId' }
     }
     if (typeof token !== 'string' || token.length === 0) return { accepted: false, reason: 'missing token' }
-    // Boundary validation: when present, `version` / `upgradeAttemptId` must be non-empty strings;
-    // reject invalid types or empty strings explicitly (never silently drop, which would break upgrade reconciliation).
+    // Boundary validation: when present, `version` / `upgradeAttemptId` must be non-empty strings, and
+    // `installMode` must be `'source'` or `'release'`; reject invalid values explicitly rather than dropping them.
     if (version !== undefined && (typeof version !== 'string' || version === '')) {
       return { accepted: false, reason: 'invalid version' }
+    }
+    if (installMode !== undefined && installMode !== 'source' && installMode !== 'release') {
+      return { accepted: false, reason: 'invalid installMode' }
     }
     if (upgradeAttemptId !== undefined && (typeof upgradeAttemptId !== 'string' || upgradeAttemptId === '')) {
       return { accepted: false, reason: 'invalid upgradeAttemptId' }
@@ -353,6 +359,7 @@ export class NodeRegistry {
       hostname: typeof hostname === 'string' ? hostname : '',
       platform: typeof platform === 'string' ? platform : '',
       ...(version !== undefined ? { version } : {}),
+      ...(installMode !== undefined ? { installMode } : {}),
       ...(upgradeAttemptId !== undefined ? { upgradeAttemptId } : {}),
       ...(typeof hubUrl === 'string' && hubUrl !== '' ? { hubUrl } : {}),
       ...(health !== undefined ? { health } : {}),
@@ -400,6 +407,17 @@ export class NodeRegistry {
     } catch {
       return false
     }
+  }
+
+  /** Whether the node currently has pending or active passthrough tunnels. */
+  hasActiveTunnels(nodeId: string): boolean {
+    return this.#tunnels.hasForNode(nodeId)
+  }
+
+  /** Whether the node currently has active streaming exec output sinks (Hub-initiated remote execs in flight). */
+  hasActiveOutputSinks(nodeId: string): boolean {
+    const set = this.#outputSinks.get(nodeId)
+    return set !== undefined && set.size > 0
   }
 
   /** Test-only helper: counts of pending and active tunnels. */

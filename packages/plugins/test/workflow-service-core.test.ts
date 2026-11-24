@@ -331,7 +331,7 @@ test('resumeFromRunId：由新 run 的 replayedFrom 单键原子派生 resumedBy
   t.after(async () => {
     await service.close().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
-  })
+  }, { timeout: 60_000 })
 
   const first = await service.run(
     {
@@ -1149,7 +1149,7 @@ test('settledAt 覆盖恢复标终态与优雅挂起：suspend 保持 phase=susp
   })
   t.after(async () => {
     await revived.close()
-  })
+  }, { timeout: 60_000 })
   await revived.init()
   const recoveredSummary = revived.getRun(running.id)
   assert.equal(recoveredSummary.status, 'failed')

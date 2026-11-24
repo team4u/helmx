@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
+import type { NodeInstallMode } from '@helmx/protocol';
 import { readCurrentRelease, readLogTailBounded, requireReleaseEntry, withCrossProcessFileLock } from '@helmx/env-io';
 import {
   isAliveOf,
@@ -24,7 +25,7 @@ import {
   type PidRecord,
   UsageError,
 } from './cli-context.js';
-import { cliSelfEntry } from './service-entry.js';
+import { cliSelfEntry, detectNodeInstallMode } from './service-entry.js';
 import {
   controlEndpoint,
   controlRequest,
@@ -198,13 +199,18 @@ function inheritExecArgv(): string[] {
 }
 
 /**
- * Resolve the daemon launch target: `current.json` takes precedence (so upgraded releases are used);
- * falls back to `selfEntry` when no release is staged. Broken `current.json` targets fail explicitly.
+ * Resolve the daemon launch target:
+ * - In `source` mode (source/link checkout): always ignore historical `current.json` releases and
+ *   keep launching `selfEntry` so npm releases never hijack development nodes;
+ * - In `release` mode: `current.json` takes precedence (so upgraded releases are used), falling
+ *   back to `selfEntry` when no release is staged; broken `current.json` targets fail explicitly.
  */
-async function resolveDaemonLaunchTarget(
+export async function resolveDaemonLaunchTarget(
   dataDir: string,
   selfEntry: string,
+  installMode: NodeInstallMode = detectNodeInstallMode(),
 ): Promise<{ entryPath: string }> {
+  if (installMode === 'source') return { entryPath: selfEntry };
   const current = await readCurrentRelease(dataDir);
   if (current === null) return { entryPath: selfEntry };
   const entryPath = requireReleaseEntry(current, 'entryPath');
@@ -251,13 +257,15 @@ export async function startDaemon(
     const instanceId = randomBytes(16).toString('hex');
     const endpoint = controlEndpoint(dataDir, instanceId, NODE_CONTROL_PRODUCT);
     const spawnDaemon = io.spawnDaemon ?? defaultSpawnDaemon;
-    const target = await resolveDaemonLaunchTarget(dataDir, cliSelfEntry());
+    const selfEntry = cliSelfEntry();
+    const installMode = io.installMode ?? detectNodeInstallMode();
+    const target = await resolveDaemonLaunchTarget(dataDir, selfEntry, installMode);
     const args = [target.entryPath, 'start', '--data-dir', dataDir];
     if (effectiveHub !== '') args.push('--hub', effectiveHub);
     const { pid, readyState, logPath } = await spawnDaemon({
       nodePath: process.execPath,
       args,
-      execArgv: target.entryPath === cliSelfEntry() ? inheritExecArgv() : [],
+      execArgv: target.entryPath === selfEntry ? inheritExecArgv() : [],
       dataDir,
       env: {
         ...process.env,

@@ -16,7 +16,15 @@
  *                         notDeepEqual / notDeepStrictEqual on DOM nodes / Window is
  *                         forbidden (likewise notEqual / notStrictEqual when both sides are
  *                         DOM nodes), because on failure util.inspect walks the whole
- *                         DOM/React Fiber tree and can hang or OOM.
+ *                         DOM/React Fiber tree and can hang or OOM;
+ *   hook-timeout-missing  a before/beforeEach/after/afterEach hook (named import, namespace
+ *                         import, default-import `test.after(...)`, or the TestContext
+ *                         `t.after(...)` inside a test callback) whose function body calls a
+ *                         teardown method (close/dispose/stop/kill/terminate/disconnect/quit/
+ *                         destroy/shutdown) must declare options.timeout (its own object or a
+ *                         shared const). Hooks are NOT covered by the test timeout: a hung
+ *                         cleanup awaits forever, emits no test:fail, and silently kills the
+ *                         whole shard until the suite timeout.
  *
  * Recognition scope: named imports of node:test (test/it/describe, including as aliases),
  * default imports, and namespace imports (import * as nt then nt.test/nt.it/nt.describe,
@@ -37,8 +45,8 @@ const ENV_VAR = 'HELMX_TEST_SUITE_TIMEOUT_MS';
 const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];
 
 /**
- * @typedef {{ file: string, line: number, rule: 'timeout-missing' | 'skip-without-reason' | 'suite-timeout-env' | 'unsafe-dom-assert', message: string }} HygieneViolation
- * @typedef {{ violations: HygieneViolation[], stats: { testCalls: number, skipCalls: number, todoCalls: number, subtestCalls: number } }} HygieneReport
+ * @typedef {{ file: string, line: number, rule: 'timeout-missing' | 'skip-without-reason' | 'suite-timeout-env' | 'unsafe-dom-assert' | 'hook-timeout-missing', message: string }} HygieneViolation
+ * @typedef {{ violations: HygieneViolation[], stats: { testCalls: number, skipCalls: number, todoCalls: number, subtestCalls: number, hookCalls: number } }} HygieneReport
  */
 
 const ASSERT_METHODS = new Set([
@@ -61,6 +69,19 @@ const SINGLE_ARG_DOM_UNSAFE = new Set([
 ]);
 const BOTH_ARG_DOM_UNSAFE = new Set(['notEqual', 'notStrictEqual']);
 
+const HOOK_NAMES = new Set(['before', 'beforeEach', 'after', 'afterEach']);
+/** Methods whose call inside a hook body marks it as a teardown that can await forever. */
+const TEARDOWN_METHODS = new Set([
+  'close',
+  'dispose',
+  'stop',
+  'kill',
+  'terminate',
+  'disconnect',
+  'quit',
+  'destroy',
+  'shutdown',
+]);
 const DOM_RETURNING_METHODS = new Set([
   'querySelector',
   'getElementById',
@@ -191,10 +212,11 @@ function isDomNodeExpr(ts, expr, lookupDomVar, lookupDomListVar) {
   return false;
 }
 
-/** Collect node:test import bindings: testFn (test/it, incl. aliases), describe, namespaces. */
+/** Collect node:test import bindings: testFn (test/it, incl. aliases), describe, hook fns, namespaces. */
 function collectTestBindings(ts, sourceFile) {
   /** @type {Set<string>} */ const testFn = new Set();
   /** @type {Set<string>} */ const describeFn = new Set();
+  /** @type {Set<string>} */ const hookFn = new Set();
   /** @type {Set<string>} */ const namespaces = new Set();
   for (const st of sourceFile.statements) {
     if (!ts.isImportDeclaration(st)) continue;
@@ -209,11 +231,74 @@ function collectTestBindings(ts, sourceFile) {
         const imported = (el.propertyName ?? el.name).text; // with an as alias, propertyName is the source name
         if (imported === 'test' || imported === 'it') testFn.add(el.name.text);
         else if (imported === 'describe') describeFn.add(el.name.text);
+        else if (HOOK_NAMES.has(imported)) hookFn.add(el.name.text);
       }
     }
     if (nb && ts.isNamespaceImport(nb)) namespaces.add(nb.name.text);
   }
-  return { testFn, describeFn, namespaces };
+  return { testFn, describeFn, hookFn, namespaces };
+}
+
+/**
+ * Names of the first parameters of callbacks passed to test/it/describe (and `x.test` subtest)
+ * calls: those are the TestContext aliases in scope, so `t.after(...)` / `ctx.afterEach(...)`
+ * are recognized structurally rather than by guessing the parameter name.
+ */
+function collectContextParamNames(ts, sourceFile, bindings) {
+  /** @type {Set<string>} */ const names = new Set();
+  const isTestCallbackCallee = (callee) => {
+    if (classifyCallee(ts, callee, bindings) !== null) return true;
+    return (
+      ts.isPropertyAccessExpression(callee) &&
+      callee.name.text === 'test' &&
+      ts.isIdentifier(callee.expression) &&
+      !bindings.testFn.has(callee.expression.text)
+    );
+  };
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && isTestCallbackCallee(node.expression)) {
+      const last = node.arguments[node.arguments.length - 1];
+      if (last && ts.isFunctionLike(last) && last.parameters[0] && ts.isIdentifier(last.parameters[0].name)) {
+        names.add(last.parameters[0].name.text);
+      }
+    }
+    node.forEachChild(visit);
+  };
+  visit(sourceFile);
+  return names;
+}
+
+/**
+ * Classify the callee of a hook CallExpression (before/beforeEach/after/afterEach).
+ * @returns {{ kind: string, form: 'named' | 'namespace' | 'default' | 'ctx' } | null}
+ */
+function classifyHookCall(ts, callee, bindings, ctxNames) {
+  if (ts.isIdentifier(callee)) {
+    return bindings.hookFn.has(callee.text) ? { kind: callee.text, form: 'named' } : null;
+  }
+  if (!ts.isPropertyAccessExpression(callee) || !HOOK_NAMES.has(callee.name.text)) return null;
+  const receiver = callee.expression;
+  const kind = callee.name.text;
+  if (ts.isIdentifier(receiver)) {
+    if (ctxNames.has(receiver.text)) return { kind, form: 'ctx' };
+    if (bindings.testFn.has(receiver.text)) return { kind, form: 'default' }; // default import: test.after(...)
+    if (bindings.namespaces.has(receiver.text)) return { kind, form: 'namespace' }; // import * as nt → nt.after(...)
+  }
+  return null;
+}
+
+/** Teardown method names called anywhere inside the hook function (nested arrows included). */
+function teardownCallsIn(ts, fnNode) {
+  /** @type {Set<string>} */ const found = new Set();
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const name = node.expression.name.text;
+      if (TEARDOWN_METHODS.has(name)) found.add(name);
+    }
+    node.forEachChild(visit);
+  };
+  visit(fnNode);
+  return found;
 }
 
 /** Unwrap as const / type assertions / satisfies to expose the real initializer. */
@@ -363,11 +448,12 @@ function isAssignmentToSuiteEnv(ts, node) {
 export function analyzeTestSource(ts, filePath, source, existingSourceFile = undefined) {
   const sourceFile = existingSourceFile ?? parseTestSourceFile(ts, filePath, source);
   const bindings = collectTestBindings(ts, sourceFile);
+  const ctxNames = collectContextParamNames(ts, sourceFile, bindings);
   const assertBindings = collectAssertBindings(ts, sourceFile);
   const consts = collectTopLevelConsts(ts, sourceFile);
   /** @type {HygieneViolation[]} */
   const violations = [];
-  const stats = { testCalls: 0, skipCalls: 0, todoCalls: 0, subtestCalls: 0 };
+  const stats = { testCalls: 0, skipCalls: 0, todoCalls: 0, subtestCalls: 0, hookCalls: 0 };
 
   const scopeStack = [{ domVars: new Map(), domListVars: new Map() }];
   const lookupScope = (kind, name) => {
@@ -440,6 +526,25 @@ export function analyzeTestSource(ts, filePath, source, existingSourceFile = und
             rule: 'unsafe-dom-assert',
             message: `assert.${assertMethod}(...) must not be called on DOM/Window nodes (on failure util.inspect walks the DOM/Fiber tree and can hang or OOM); use assert.ok(el === null, ...) or assert.ok(a === b, ...) instead`,
           });
+        }
+      }
+
+      const hook = classifyHookCall(ts, node.expression, bindings, ctxNames);
+      if (hook) {
+        stats.hookCalls += 1;
+        const fnArg = [...node.arguments].reverse().find((a) => ts.isFunctionLike(unwrapAssertion(ts, a)));
+        const teardown = fnArg ? teardownCallsIn(ts, fnArg) : new Set();
+        if (teardown.size > 0) {
+          const { object: options, unresolvedName } = resolveOptionsArg(ts, node.arguments, consts);
+          const hasTimeout = Boolean(findOptionProp(ts, options, 'timeout')) || unresolvedName !== null;
+          if (!hasTimeout) {
+            violations.push({
+              file: filePath,
+              line: lineOf(node),
+              rule: 'hook-timeout-missing',
+              message: `${hook.kind}(...) hook awaits teardown (${[...teardown].join('/')}) but declares no timeout: hooks are not covered by the test timeout, so a hung cleanup never emits test:fail and silently kills the whole shard; pass { timeout: 60_000 }`,
+            });
+          }
         }
       }
 

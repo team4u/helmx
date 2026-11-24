@@ -72,48 +72,72 @@ export function slimProjectedRun(run: WorkflowRunSummary): WorkflowRunSummary {
   }
 }
 
-function enforceRunsShardByteBudget(
+/** `{"runs":[]}` plus one comma between adjacent elements: the only bytes outside the per-run JSON. */
+const RUNS_SHARD_WRAPPER_BYTES = Buffer.byteLength('{"runs":[]}', 'utf8')
+const RUNS_SHARD_SEPARATOR_BYTES = 1
+
+/**
+ * 字节账本而非反复整体序列化：分片 JSON 恒等于 `{"runs":[` + 各 run 自身 JSON 以逗号拼接 + `]}`，
+ * 总字节数因此可加——每个 run 只序列化一次，删除/压缩时只重算那一个 run 并增量更新总量。
+ * 旧实现在每个阶段每处理一个 run 就重新 stringify 整个分片（O(runs × 总量)），100 个超界 run
+ * 要序列化上百次数十 MB；这里输出与旧实现字节级一致，调用方与 digest 不变。
+ */
+export function enforceRunsShardByteBudget(
   runs: WorkflowRunSummary[],
   maxBytes = MAX_RUNS_SHARD_BYTES,
 ): { runs: WorkflowRunSummary[]; json: string } {
-  let current = runs
-  let json = JSON.stringify({ runs: current })
-  if (Buffer.byteLength(json, 'utf8') <= maxBytes) {
-    return { runs: current, json }
+  const items = runs.map((run) => {
+    // `JSON.stringify(undefined)` yields the value undefined (not a string) whereas inside an array
+    // it serializes as `null`; normalize so the join below stays byte-identical for any input.
+    const json = JSON.stringify(run) ?? 'null'
+    return { run, json, bytes: Buffer.byteLength(json, 'utf8') }
+  })
+  let sum = 0
+  for (const item of items) sum += item.bytes
+  const totalBytes = () =>
+    RUNS_SHARD_WRAPPER_BYTES + sum + Math.max(0, items.length - 1) * RUNS_SHARD_SEPARATOR_BYTES
+  const resync = (item: (typeof items)[number]): void => {
+    item.json = JSON.stringify(item.run)
+    const next = Buffer.byteLength(item.json, 'utf8')
+    sum += next - item.bytes
+    item.bytes = next
   }
+  const assemble = (): { runs: WorkflowRunSummary[]; json: string } => ({
+    runs: items.map((item) => item.run),
+    json: `{"runs":[${items.map((item) => item.json).join(',')}]}`,
+  })
+
+  if (totalBytes() <= maxBytes) return assemble()
 
   // Phase 1: drop oldest terminal runs first while keeping running runs intact.
-  const trimmed = [...current]
-  for (let i = trimmed.length - 1; i >= 0 && Buffer.byteLength(json, 'utf8') > maxBytes; i--) {
-    if (trimmed[i]!.status !== 'running') {
-      trimmed.splice(i, 1)
-      json = JSON.stringify({ runs: trimmed })
+  for (let i = items.length - 1; i >= 0 && totalBytes() > maxBytes; i--) {
+    if (items[i]!.run.status !== 'running') {
+      sum -= items[i]!.bytes
+      items.splice(i, 1)
     }
   }
-  current = trimmed
-  if (Buffer.byteLength(json, 'utf8') <= maxBytes) {
-    return { runs: current, json }
-  }
+  if (totalBytes() <= maxBytes) return assemble()
 
   // Phase 2: strip progress and cap nodes on remaining runs from oldest to newest.
-  const compact = current.map((r) => ({ ...r }))
-  for (let i = compact.length - 1; i >= 0 && Buffer.byteLength(json, 'utf8') > maxBytes; i--) {
-    const r = compact[i]!
+  for (const item of items) item.run = { ...item.run }
+  for (let i = items.length - 1; i >= 0 && totalBytes() > maxBytes; i--) {
+    const item = items[i]!
+    const r = item.run
     delete r.progress
     if (r.nodes !== undefined && r.nodes.length > 16) {
       r.nodes = r.nodes.slice(-16)
     }
-    json = JSON.stringify({ runs: compact })
+    resync(item)
   }
-  for (let i = compact.length - 1; i >= 0 && Buffer.byteLength(json, 'utf8') > maxBytes; i--) {
-    delete compact[i]!.nodes
-    json = JSON.stringify({ runs: compact })
+  for (let i = items.length - 1; i >= 0 && totalBytes() > maxBytes; i--) {
+    delete items[i]!.run.nodes
+    resync(items[i]!)
   }
-  while (compact.length > 0 && Buffer.byteLength(json, 'utf8') > maxBytes) {
-    compact.pop()
-    json = JSON.stringify({ runs: compact })
+  while (items.length > 0 && totalBytes() > maxBytes) {
+    const popped = items.pop()!
+    sum -= popped.bytes
   }
-  return { runs: compact, json }
+  return assemble()
 }
 
 function digestOfJson(json: string): string {

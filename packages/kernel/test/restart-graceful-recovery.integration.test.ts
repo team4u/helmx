@@ -192,7 +192,7 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
     models: models1,
     autoResume: false,
   })
-  t.after(() => runtime1.close().catch(() => {}))
+  t.after(() => runtime1.close().catch(() => {}), { timeout: 60_000 })
 
   const lifecycleOrder: string[] = []
   await runtime1.plugins.register({
@@ -247,7 +247,7 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
     models: models2,
     autoResume: false,
   })
-  t.after(() => runtime2.close().catch(() => {}))
+  t.after(() => runtime2.close().catch(() => {}), { timeout: 60_000 })
   await runtime2.start()
   await runtime2.waitForIdle(1)
 
@@ -364,7 +364,7 @@ test('replay: safe read-only tools read and read_artifact automatically replay t
     models: m3,
     autoResume: false,
   })
-  t.after(() => r3.close().catch(() => {}))
+  t.after(() => r3.close().catch(() => {}), { timeout: 60_000 })
   await r3.start()
   await r3.waitForIdle(1)
   assert.equal(await r3.getLastAssistantText(1), 'read_artifact replay succeeded')

@@ -1237,7 +1237,7 @@ test('安全红线：crashRecoveries > 3 熔断、配置校验与 HELMX_AUTO_REC
   })
   t.after(async () => {
     await kCfg.close().catch(() => {})
-  })
+  }, { timeout: 60_000 })
   await kCfg.plugins.register(createWorkflowPlugin())
   await assert.rejects(
     () => kCfg.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: 'not-a-boolean' as unknown as boolean }),

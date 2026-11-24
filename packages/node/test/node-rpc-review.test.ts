@@ -114,7 +114,7 @@ test('envExec never leaks host HELMX_TOKEN into children while honoring managed 
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
 
   // 1) Default (inheritEnv omitted): host token must be stripped while base env inherits
   await server.envExec({
@@ -182,7 +182,7 @@ test('onExecOutput chunking preserves surrogate pairs across chunk boundaries', 
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
 
   const emoji = '😀'; // U+1F600: high surrogate + low surrogate
   const payload = `AB${emoji}CD${emoji}E${emoji}FG${emoji}H`;
@@ -213,7 +213,7 @@ test('maxOutputChunkChars=1 with emoji advances every step and finishes without 
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
 
   // Pre-fix bug: safeChunkEnd(text, offset=0, limit=1) backed off to 0 at leading emoji -> end===offset infinite loop.
   const emoji = '🚀';
@@ -246,7 +246,7 @@ test('onExecOutput callback throwing kills process tree immediately with callbac
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
 
   // Pre-fix double bug: 1) swallowed callback exceptions let child run until timeout;
   // 2) cancelling inside callback left SDK promise unsettled — race fallback forces callback_error.
@@ -282,7 +282,7 @@ test('envWriteFile base64 strict validation rejects illegal characters explicitl
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
 
   // Node Buffer.from(x, 'base64') silently ignores '!' etc. — must reject explicitly
   const bad = await server.envWriteFile({ path: 'x.bin', content: 'QQ!Q', encoding: 'base64' });
@@ -316,7 +316,7 @@ test('envExec explicitly rejects duplicate in-flight execId', { timeout: 60_000 
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
 
   const slow = server.envExec({ execId: 'dup', command: 'sleep 5', timeout: 30 });
   await delay(200);
@@ -338,7 +338,7 @@ test('dispose tracks draining waiters per call so rejected duplicate execId neve
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
 
   // Pre-fix bug: Map<execId, Promise> let rejected second call overwrite first promise and remove it
   // from dispose wait set upon early settlement. Switching to Set<Promise> tracks each call independently.
@@ -364,7 +364,7 @@ test('dispose waits for active exec calls to settle with zero active entries on 
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
 
   const slow = server.envExec({ execId: 'd1', command: 'sleep 3', timeout: 60 });
   await delay(250);
@@ -393,7 +393,7 @@ test('upgrade draining covers TCP tunnels: rejects new tunnels while active tunn
   t.after(async () => {
     for (const s of sockets) s.destroy();
     await new Promise<void>((resolve) => echoServer.close(() => resolve()));
-  });
+  }, { timeout: 60_000 });
   const streams: PassThrough[] = [];
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
@@ -406,7 +406,7 @@ test('upgrade draining covers TCP tunnels: rejects new tunnels while active tunn
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  });
+  }, { timeout: 60_000 });
 
   const active = await server.nodeTunnelOpen({ tunnelId: 'tcp-live', host: '127.0.0.1', port });
   assert.equal(active.ok, true);
@@ -435,7 +435,7 @@ test('envCleanup rejects explicitly when draining or disposed (process-tree cwd 
   t.after(async () => {
     await server.dispose().catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  });
+  }, { timeout: 60_000 });
 
   server.setDraining(true);
   await assert.rejects(

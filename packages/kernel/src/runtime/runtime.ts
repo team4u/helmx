@@ -170,6 +170,8 @@ export class KernelRuntime {
       externalSkillRoots: options.externalSkillRoots,
       buildProvider: options.buildProvider,
       nodeUpgradeTimeoutMs: options.nodeUpgradeTimeoutMs ?? 120_000,
+      autoUpgradeNodes: options.autoUpgradeNodes,
+      nodeAutoUpgradePolicy: options.nodeAutoUpgradePolicy,
     })
     try {
       await runtime.initialize()
@@ -537,7 +539,10 @@ export class KernelRuntime {
       // Flip only after `harness.resume()` and `pluginHost.reconcile()` both succeed: a failed reconcile
       // leaves `#started === false` so retrying `start()` re-runs reconcile and the HTTP `503 hub_starting`
       // gate continues holding external traffic until startup converges.
-      if (!this.closed) this.#started = true
+      if (!this.closed) {
+        this.#started = true
+        this.nodes.notifyHubReady()
+      }
     })()
     this.startPromise = attempt
     try {
@@ -558,6 +563,37 @@ export class KernelRuntime {
   // ------------------------------------------------------------------
   // Node management delegation (NodeManager)
   // ------------------------------------------------------------------
+
+  /**
+   * Synchronous Hub-side check for active work bound to `nodeId` (gates automatic node upgrades).
+   * Returns a human-readable busy reason when active work exists, or `undefined` when idle.
+   *
+   * Boundary: inspects Hub-tracked conversations bound to `nodeId` (active runs, queued inbox,
+   * compactions, settling `turn_settled` hooks), pending/active passthrough tunnels, active
+   * foreground port-forwarding sessions, and in-flight Hub-initiated remote execs. External
+   * processes outside Hub are not visible here; any narrow race after this check falls through
+   * safely to the node daemon's own `setDraining(true)` + active-workload drain loop.
+   */
+  describeNodeBusy(nodeId: string): string | undefined {
+    let busyConvs = 0
+    for (const meta of this.store.listConvs()) {
+      if (meta.nodeId !== nodeId) continue
+      if (this.svc.tracker.isConversationBusy(meta.id)) busyConvs += 1
+    }
+    if (busyConvs > 0) {
+      return `active conversation(s) bound to node (${busyConvs})`
+    }
+    if (this.envFabric.registry.hasActiveTunnels(nodeId)) {
+      return 'active passthrough tunnel(s) on node'
+    }
+    if (this.nodeForward?.list().some((forward) => forward.nodeId === nodeId)) {
+      return 'active port-forwarding session(s) on node'
+    }
+    if (this.envFabric.registry.hasActiveOutputSinks(nodeId) || this.nodes.activeExecCount(nodeId) > 0) {
+      return 'in-flight remote exec(s) on node'
+    }
+    return undefined
+  }
 
   async listNodes(): Promise<NodeInfo[]> {
     return this.nodes.listNodes()

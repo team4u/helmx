@@ -658,11 +658,53 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
       () => hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: false }, removed: 'true' as never }),
       /removed/,
     )
+    assert.throws(
+      () => hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: true, installMode: 'dev' as never } }),
+      /node\.changed/,
+    )
+    assert.throws(
+      () =>
+        hub.publish('node.changed', {
+          node: {
+            id: 'x',
+            kind: 'byom',
+            online: true,
+            autoUpgrade: { status: 'bogus' as never, targetVersion: '0.2.0', attempts: 1, updatedAt: 1 },
+          },
+        }),
+      /node\.changed/,
+    )
     assert.throws(() => hub.publish('node.changed', 'gpu-box'), /node\.changed/)
     assert.equal(hub.seq, 1, 'invalid input must not advance seq')
     assert.deepEqual(persistedSeqs, [1], 'invalid input must not persist seq')
-    hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: true } })
-    assert.equal(hub.seq, 2)
+    hub.publish('node.changed', {
+      node: {
+        id: 'x',
+        kind: 'byom',
+        online: true,
+        installMode: 'source',
+        autoUpgrade: { status: 'source_skipped', targetVersion: '0.2.0', attempts: 0, updatedAt: 100, reason: 'source_mode' },
+      },
+    })
+    // Legacy node omitting installMode with unknown_mode autoUpgrade (and legacy NodeInfo omitting both fields) remain valid.
+    hub.publish('node.changed', {
+      node: {
+        id: 'legacy-code2',
+        kind: 'byom',
+        online: true,
+        autoUpgrade: {
+          status: 'unknown_mode',
+          targetVersion: '0.2.0',
+          attempts: 0,
+          updatedAt: 101,
+          reason: 'unknown_mode: legacy node did not report installMode; restart or upgrade helmx-node manually once',
+        },
+      },
+    })
+    hub.publish('node.changed', {
+      node: { id: 'legacy-minimal', kind: 'byom', online: true },
+    })
+    assert.equal(hub.seq, 4)
   })
 
   it('profile.changed accepts enveloped and unwrapped shapes, preserving the full Profile payload and removed flag', { timeout: 60_000 }, () => {

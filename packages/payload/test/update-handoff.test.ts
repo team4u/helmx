@@ -118,7 +118,7 @@ async function spawnControlFixture(
     },
   });
   await server.listening;
-  t.after(() => server.close());
+  t.after(() => server.close(), { timeout: 60_000 });
   await atomicWriteJson(
     hubControlRecordPath(dataDir),
     {

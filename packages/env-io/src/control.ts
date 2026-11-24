@@ -101,6 +101,8 @@ export interface ControlResponse {
   state?: string;
   /** Running version reported by the target process, when known. */
   version?: string;
+  /** Runtime install mode reported by the target process (`source` | `release`), when known. */
+  installMode?: 'source' | 'release';
   result?: unknown;
   error?: string;
 }
@@ -177,7 +179,7 @@ export interface ControlServer {
 export function createControlServer(options: {
   endpoint: string;
   instanceId: string;
-  onStatus: () => { pid: number; state: string; version?: string };
+  onStatus: () => { pid: number; state: string; version?: string; installMode?: 'source' | 'release' };
   onStop: () => Promise<void>;
   /** Local trusted upgrade handler; passes result through and rejects `stop` while in flight. */
   onUpgrade?: (input: unknown) => Promise<unknown>;
@@ -301,7 +303,14 @@ export function createControlServer(options: {
       }
       if (request.type === 'status') {
         const snapshot = onStatus();
-        reply({ ok: true, pid: snapshot.pid, instanceId, state: snapshot.state, ...(snapshot.version !== undefined ? { version: snapshot.version } : {}) });
+        reply({
+          ok: true,
+          pid: snapshot.pid,
+          instanceId,
+          state: snapshot.state,
+          ...(snapshot.version !== undefined ? { version: snapshot.version } : {}),
+          ...(snapshot.installMode !== undefined ? { installMode: snapshot.installMode } : {}),
+        });
         return;
       }
       if (request.type === 'stop') {

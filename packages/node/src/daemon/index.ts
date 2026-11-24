@@ -6,12 +6,14 @@
 
 import type {
   NodeConnectInput,
+  NodeInstallMode,
   NodeUpgradeCheckInput,
   NodeUpgradeCheckResult,
   NodeUpgradeCommit,
   NodeUpgradeResult,
   NodeUpgradeRpcInput,
 } from '@helmx/protocol';
+import { detectNodeInstallMode } from '../service-entry.js';
 import type { NodeEnvRpcServerOptions } from './env-rpc-server.js';
 import type { PerformNodeUpgradeOptions } from './upgrader.js';
 import {
@@ -72,6 +74,8 @@ export interface NodeDaemonOptions {
   upgradeAttemptId?: string;
   /** Candidate pending-activation mode: starts draining until `confirmUpgrade` verifies activation. */
   pendingActivation?: boolean;
+  /** Runtime install mode override for testing (defaults to `detectNodeInstallMode()`). */
+  installMode?: NodeInstallMode;
 }
 
 export interface NodeDaemon {
@@ -113,9 +117,12 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
   const log = (message: string): void => writeLog(message.replaceAll(identity.token, '[REDACTED]'));
   const hub = assertValidHubUrl(hubUrl);
 
+  const installMode = options.installMode ?? detectNodeInstallMode();
+
   let connection!: DaemonConnectionManager;
   const upgrader = createDaemonUpgradeController({
     dataDir,
+    installMode,
     prepareUpgradeReplacement: options.prepareUpgradeReplacement,
     onUpgradeReplaced: options.onUpgradeReplaced,
     upgradeAttemptId: options.upgradeAttemptId,
@@ -132,6 +139,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
     hubUrl,
     identity,
     dataDir,
+    installMode,
     envServer,
     reconnectBaseDelayMs,
     reconnectMaxDelayMs,
@@ -170,6 +178,7 @@ export async function runNodeDaemonHandle(
     onUpgradeReplaced?: NodeDaemonOptions['onUpgradeReplaced'];
     upgradeAttemptId?: string;
     pendingActivation?: boolean;
+    installMode?: NodeInstallMode;
   } = {},
 ): Promise<NodeDaemon> {
   const dataDir = resolveNodeDataDir(options.dataDir);
@@ -182,6 +191,7 @@ export async function runNodeDaemonHandle(
     ...(options.onUpgradeReplaced !== undefined ? { onUpgradeReplaced: options.onUpgradeReplaced } : {}),
     ...(options.upgradeAttemptId !== undefined ? { upgradeAttemptId: options.upgradeAttemptId } : {}),
     ...(options.pendingActivation !== undefined ? { pendingActivation: options.pendingActivation } : {}),
+    ...(options.installMode !== undefined ? { installMode: options.installMode } : {}),
   });
   if (options.signal) {
     const signal = options.signal;

@@ -15,6 +15,7 @@ import { Harness, createRegistry, type Registry, type SessionEnd } from '@earend
 import { HelmxError } from '@helmx/protocol'
 import { CredentialService, ProviderService, ensureDataDir, resolveDataDir } from '../services/index.js'
 import type { PluginBuildProvider } from '@helmx/protocol'
+import type { NodeAutoUpgradeRetryPolicy } from './node-auto-upgrade.js'
 import {
   createDiagnosticEmitter,
   type KernelDiagnosticEmitter,
@@ -50,6 +51,10 @@ export interface KernelBootOptions {
    */
   providers?: ReadonlyArray<Provider>
   nodeUpgradeTimeoutMs?: number
+  /** Override automatic node version-follow (defaults to enabled unless `HELMX_AUTO_UPGRADE_NODES=0|false|off|no`). */
+  autoUpgradeNodes?: boolean
+  /** Retry/busy-poll timing overrides for automatic node upgrades (for tests). */
+  nodeAutoUpgradePolicy?: NodeAutoUpgradeRetryPolicy
   /** Machine-level shared skill roots scanned together (defaults to `defaultExternalSkillRoots()`, i.e.
    * `~/.agents/skills`; pass `[]` for full test isolation). */
   externalSkillRoots?: readonly string[]

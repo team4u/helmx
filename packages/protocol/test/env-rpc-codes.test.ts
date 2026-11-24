@@ -6,10 +6,16 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  type NodeAutoUpgradePhase,
+  type NodeAutoUpgradeStatus,
   type NodeEnvRpcFunctions,
+  type NodeInfo,
+  type NodeInstallMode,
+  type NodeRegisterInput,
   type NodeTunnelErrorCode,
   type NodeTunnelOpenInput,
   type NodeTunnelTarget,
+  type NodeUpgradeErrorCode,
   type RpcEnvError,
   type RpcExecutionErrorCode,
   type RpcFileErrorCode,
@@ -48,6 +54,68 @@ describe('env-rpc error code unions: node_draining', () => {
       nodeTunnelOpen: async (): Promise<{ ok: false; error: RpcEnvError }> => ({ ok: false, error: drainingError }),
     } as unknown as Pick<NodeEnvRpcFunctions, 'envExec' | 'nodeTunnelOpen'>
     assert.equal(rpc, rpc)
+  })
+
+  it('NodeUpgradeErrorCode source_mode is allowed on RpcEnvError without polluting RpcFileErrorCode', { timeout: 60_000 }, () => {
+    const code: NodeUpgradeErrorCode = 'source_mode'
+    const err: RpcEnvError = { code, message: 'source_mode: manual restart required' }
+    assert.equal(err.code, 'source_mode')
+    // @ts-expect-error source_mode is not a file operation error code
+    const badFile: RpcFileErrorCode = 'source_mode'
+    void badFile
+  })
+})
+
+describe('env-rpc installMode and autoUpgrade DTOs', () => {
+  it('NodeInfo and NodeRegisterInput accept optional installMode and autoUpgrade while remaining backward compatible', { timeout: 60_000 }, () => {
+    const mode: NodeInstallMode = 'source'
+    const phases: readonly NodeAutoUpgradePhase[] = [
+      'pending',
+      'upgrading',
+      'failed',
+      'source_skipped',
+      'unknown_mode',
+      'not_supported',
+    ]
+    const autoUpgrade: NodeAutoUpgradeStatus = {
+      status: 'source_skipped',
+      targetVersion: '0.2.0',
+      attempts: 0,
+      updatedAt: 1_700_000_000_000,
+      reason: 'source_mode',
+    }
+    const unknownModeUpgrade: NodeAutoUpgradeStatus = {
+      status: 'unknown_mode',
+      targetVersion: '0.2.0',
+      attempts: 0,
+      updatedAt: 1_700_000_000_000,
+      reason: 'unknown_mode: legacy node did not report installMode; restart or upgrade manually once',
+    }
+    const legacyNode: NodeInfo = { id: 'legacy-1', kind: 'byom', online: true }
+    const legacySkippedNode: NodeInfo = { id: 'legacy-2', kind: 'byom', online: true, autoUpgrade: unknownModeUpgrade }
+    const modernNode: NodeInfo = { id: 'dev-1', kind: 'byom', online: true, installMode: mode, autoUpgrade }
+    const reg: NodeRegisterInput = {
+      nodeId: 'dev-1',
+      token: 'dev-1:s',
+      hostname: 'devbox',
+      platform: 'linux',
+      installMode: mode,
+    }
+    const legacyReg: NodeRegisterInput = {
+      nodeId: 'legacy-1',
+      token: 'legacy-1:s',
+      hostname: 'oldbox',
+      platform: 'linux',
+    }
+    assert.deepEqual(phases, ['pending', 'upgrading', 'failed', 'source_skipped', 'unknown_mode', 'not_supported'])
+    assert.equal(legacyNode.installMode, undefined)
+    assert.equal(legacyNode.autoUpgrade, undefined)
+    assert.equal(legacySkippedNode.installMode, undefined)
+    assert.equal(legacySkippedNode.autoUpgrade?.status, 'unknown_mode')
+    assert.equal(modernNode.installMode, 'source')
+    assert.equal(modernNode.autoUpgrade?.status, 'source_skipped')
+    assert.equal(reg.installMode, 'source')
+    assert.equal(legacyReg.installMode, undefined)
   })
 })
 

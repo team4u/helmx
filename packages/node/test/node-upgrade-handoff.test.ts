@@ -319,7 +319,7 @@ test('prepareNodeReplacement: real IPC ready -> activate -> activated writes new
   const hub = await startHubFixture({ expectedToken: 'cand:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'a'.repeat(32), endpoint: '/tmp/old.sock' };
   const { replacement, store, error } = await prepareWithFixture({ dir, hubUrl: hub.url, mode: 'candidate', oldRecord });
@@ -378,7 +378,7 @@ test('prepareNodeReplacement throws UpgradeCommitUnconfirmedError when activate 
   const hub = await startHubFixture({ expectedToken: 'cand:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'c'.repeat(32), endpoint: '/tmp/old3.sock' };
   const { replacement, store, error } = await prepareWithFixture({
@@ -423,7 +423,7 @@ test('prepareNodeReplacement rolls back safely if candidate disconnects IPC afte
   const hub = await startHubFixture({ expectedToken: 'cand:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'e'.repeat(32), endpoint: '/tmp/old5.sock' };
   const { replacement, store, error } = await prepareWithFixture({
@@ -464,7 +464,7 @@ test('prepareNodeReplacement: abort before activate kills candidate without touc
   const hub = await startHubFixture({ expectedToken: 'cand:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'd'.repeat(32), endpoint: '/tmp/old4.sock' };
   const { replacement, store, error } = await prepareWithFixture({ dir, hubUrl: hub.url, mode: 'candidate', oldRecord });
@@ -496,16 +496,77 @@ test('upgrade --check queries offline without starting daemon (injected fetch fi
   assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, '--check must not start daemon');
 });
 
-test('upgrade without managed daemon explicitly tells user to run helmx-node start first', { timeout: 60_000 }, async (t) => {
+test('upgrade without managed daemon explicitly tells user to run helmx-node start first (release mode)', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helmx-handoff-norun-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
   await bindIdentityFromJoinToken(dir, 'upg-norun:s', 'http://127.0.0.1:1');
-  const r = await runCli(['upgrade', '--data-dir', dir, '--json']);
+  const r = await runCli(['upgrade', '--data-dir', dir, '--json'], { installMode: 'release' });
   assert.equal(r.code, 1);
   const envelope = JSON.parse(r.err) as { error: { message: string } };
   assert.match(envelope.error.message, /run helmx-node start/);
+});
+
+test('source mode CLI: upgrade rejects with source_mode without creating current.json, and start/status ignore historical current.json', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('helmx-handoff-source-');
+  t.after(async () => {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  });
+  await bindIdentityFromJoinToken(dir, 'src-cli:s', 'http://127.0.0.1:1');
+
+  // 1. Default runtime (running src/cli.ts via tsx) detects source mode and refuses upgrade immediately.
+  const upg = await runCli(['upgrade', '--data-dir', dir, '--json']);
+  assert.equal(upg.code, 1);
+  assert.equal(upg.out, '');
+  const envelope = JSON.parse(upg.err) as { error: { code: string; message: string } };
+  assert.equal(envelope.error.code, 'source_mode');
+  assert.match(envelope.error.message, /source_mode/);
+  assert.match(envelope.error.message, /restart/);
+  assert.equal(await fs.stat(path.join(dir, 'current.json')).then(() => true, () => false), false, 'source mode upgrade refusal must not create current.json');
+
+  // 2. Historical current.json pointing to a staged npm release must be ignored by source-mode status and start.
+  const stagedEntry = path.join(dir, 'releases', '7.7.7', 'dist', 'cli.js');
+  await fs.mkdir(path.dirname(stagedEntry), { recursive: true });
+  await fs.writeFile(stagedEntry, '#!/usr/bin/env node\n', 'utf8');
+  await fs.writeFile(
+    path.join(dir, 'current.json'),
+    `${JSON.stringify({ version: '7.7.7', updatedAt: new Date().toISOString(), entries: { entryPath: stagedEntry } })}\n`,
+    'utf8',
+  );
+
+  const st = await runCli(['status', '--data-dir', dir, '--json']);
+  assert.equal(st.code, 0, st.err);
+  const stPayload = JSON.parse(st.out) as { version: string; installMode: string };
+  assert.equal(stPayload.installMode, 'source');
+  assert.notEqual(stPayload.version, '7.7.7', 'source status must not report stale current.json version');
+
+  // 3. start -d in source mode spawns source entry (ignoring stagedEntry), whereas release mode launches stagedEntry.
+  const sourceSpawnedArgs: string[][] = [];
+  const srcStart = await runCli(['start', '-d', '--data-dir', dir, '--json'], {
+    isAlive: () => false,
+    spawnDaemon: async (opts) => {
+      sourceSpawnedArgs.push([...opts.args]);
+      return { pid: 11111, readyState: 'starting', logPath: path.join(dir, 'node.log') };
+    },
+  });
+  assert.equal(srcStart.code, 0, srcStart.err);
+  assert.equal(sourceSpawnedArgs.length, 1);
+  assert.ok(sourceSpawnedArgs[0]![0]!.endsWith(path.join('src', 'cli.ts')), `source start must keep src/cli.ts, got ${sourceSpawnedArgs[0]![0]}`);
+  await fs.rm(path.join(dir, 'node.pid'), { force: true });
+
+  const releaseSpawnedArgs: string[][] = [];
+  const relStart = await runCli(['start', '-d', '--data-dir', dir, '--json'], {
+    installMode: 'release',
+    isAlive: () => false,
+    spawnDaemon: async (opts) => {
+      releaseSpawnedArgs.push([...opts.args]);
+      return { pid: 22222, readyState: 'starting', logPath: path.join(dir, 'node.log') };
+    },
+  });
+  assert.equal(relStart.code, 0, relStart.err);
+  assert.equal(releaseSpawnedArgs.length, 1);
+  assert.equal(releaseSpawnedArgs[0]![0], stagedEntry, 'release mode start must keep current.json precedence');
 });
 
 test('upgrade flag validation: --check is mutually exclusive with --version and --force', { timeout: 60_000 }, async () => {
@@ -547,7 +608,7 @@ test('control channel upgrade request: rejects clearly when unready/invalid and 
   const hub = await startHubFixture({ expectedToken: 'upg-ctl:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   const record = await startManagedDaemon(t, dir, hub.url);
 
   const request = (type: string, extra: Record<string, unknown> = {}): Promise<{ ok: boolean; error?: string; result?: unknown } | null> =>
@@ -581,11 +642,11 @@ test('control channel upgrade request: rejects clearly when unready/invalid and 
   const status = await request('status');
   assert.ok(status !== null && status.ok === true, 'status must be available');
 
-  // upgrade reaches daemon (which injects prepare; invalid target version rejects proving path reached handler)
+  // upgrade reaches daemon (real source-mode child process rejects with source_mode/not_supported)
   const upgrade = await request('upgrade', { input: { targetVersion: 'not-semver' } });
   assert.ok(upgrade !== null, 'upgrade request must receive a reply');
   assert.equal(upgrade.ok, false);
-  assert.match(upgrade.error ?? '', /invalid|SemVer|reject/);
+  assert.match(upgrade.error ?? '', /source_mode|not_supported|invalid|SemVer|reject/);
 
   // stop works normally when not upgrading
   const stopped = await runCli(['stop', '--data-dir', dir, '--json']);
@@ -602,7 +663,7 @@ test('start -d: stop rejects with upgrade_in_progress while upgrade runs (real i
   const hub = await startHubFixture({ expectedToken: 'upg-ctl:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   const record = await startManagedDaemon(t, dir, hub.url);
 
   // Exercise the protocol path directly with an invalid target version (fails fast without fabricating install)
@@ -655,11 +716,11 @@ test('foreground start without control env acts as launcher: spawns and tracks m
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     child?.kill('SIGKILL');
-  });
+  }, { timeout: 60_000 });
   const hub = await startHubFixture({ expectedToken: 'upg-launch:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   await bindIdentityFromJoinToken(dir, 'upg-launch:s', hub.url);
 
   // launcher child runs tsx source entry in foreground
@@ -827,7 +888,7 @@ test('launcher shutdown awaits slow stop replies (>200ms) before returning', { t
   let control: Awaited<ReturnType<typeof startFixtureControl>> | undefined;
   t.after(async () => {
     await control?.close();
-  });
+  }, { timeout: 60_000 });
 
   let stdout = '';
   const launcherPromise = runNodeCli(['start', '--data-dir', dir], {
@@ -879,14 +940,14 @@ test('upgrade output keeps replacement pid from result and renders old pid as pr
   });
   t.after(async () => {
     await control.close();
-  });
+  }, { timeout: 60_000 });
   // PID record points to old daemon (current process): envelope pid=old, result.pid=424242.
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });
   t.after(async () => {
     await fs.rm(path.join(dir, 'node.pid'), { force: true }).catch(() => undefined);
   });
 
-  const r = await runCli(['upgrade', '--data-dir', dir, '--json'], { isAlive: () => true });
+  const r = await runCli(['upgrade', '--data-dir', dir, '--json'], { isAlive: () => true, installMode: 'release' });
   assert.equal(r.code, 0, r.err);
   const payload = JSON.parse(r.out) as { pid: number; previousPid: number; upgraded: boolean };
   assert.equal(payload.pid, 424242, 'replacement pid must not be overwritten by envelope pid');
@@ -906,9 +967,9 @@ test('upgrade allows valid no-op result without candidate pid when version alrea
   t.after(async () => {
     await control.close();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });
-  const result = await runCli(['upgrade', '--version', '0.1.0', '--data-dir', dir, '--json'], { isAlive: () => true });
+  const result = await runCli(['upgrade', '--version', '0.1.0', '--data-dir', dir, '--json'], { isAlive: () => true, installMode: 'release' });
   assert.equal(result.code, 0, result.err);
   const payload = JSON.parse(result.out) as { upgraded: boolean; pid?: number; previousPid: number };
   assert.equal(payload.upgraded, false);
@@ -925,13 +986,13 @@ test('upgrade rejects invalid result envelopes missing ok/upgraded/pid with non-
   const control = await startFixtureControl({ dataDir: dir, instanceId, upgradeResult: { foo: 'bar' } });
   t.after(async () => {
     await control.close();
-  });
+  }, { timeout: 60_000 });
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });
   t.after(async () => {
     await fs.rm(path.join(dir, 'node.pid'), { force: true }).catch(() => undefined);
   });
 
-  const r = await runCli(['upgrade', '--data-dir', dir, '--json'], { isAlive: () => true });
+  const r = await runCli(['upgrade', '--data-dir', dir, '--json'], { isAlive: () => true, installMode: 'release' });
   assert.equal(r.code, 1);
   assert.equal(r.out, '', 'invalid result must not emit success JSON');
   const envelope = JSON.parse(r.err) as { error: { code: string; message: string } };
@@ -948,7 +1009,7 @@ test('status prefers live control-channel version and falls back to current.json
   const control = await startFixtureControl({ dataDir: dir, instanceId, statusVersion: '99.9.9' });
   t.after(async () => {
     await control.close();
-  });
+  }, { timeout: 60_000 });
   // Local current.json points to another version: only used as fallback when no live daemon exists.
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
@@ -959,17 +1020,18 @@ test('status prefers live control-channel version and falls back to current.json
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });
 
   // Live instance reports 99.9.9 over control channel: must override local current.json.
-  const live = await runCli(['status', '--data-dir', dir, '--json'], { isAlive: () => true });
+  const live = await runCli(['status', '--data-dir', dir, '--json'], { isAlive: () => true, installMode: 'release' });
   assert.equal(live.code, 0, live.err);
   const livePayload = JSON.parse(live.out) as { version: string; state: string };
   assert.equal(livePayload.version, '99.9.9', 'control channel reported version must win');
   assert.equal(livePayload.state, 'registered');
 
-  // No live instance (pid file removed): falls back to version in current.json.
+  // No live instance (pid file removed): release mode falls back to version in current.json.
   await fs.rm(path.join(dir, 'node.pid'), { force: true });
-  const offline = await runCli(['status', '--data-dir', dir, '--json']);
+  const offline = await runCli(['status', '--data-dir', dir, '--json'], { installMode: 'release' });
   assert.equal(offline.code, 0, offline.err);
-  const offlinePayload = JSON.parse(offline.out) as { version: string; pid: number | null };
-  assert.equal(offlinePayload.version, '0.0.1-current', 'current.json provides fallback when no live instance exists');
+  const offlinePayload = JSON.parse(offline.out) as { version: string; pid: number | null; installMode: string };
+  assert.equal(offlinePayload.version, '0.0.1-current', 'current.json provides fallback when no live instance exists in release mode');
+  assert.equal(offlinePayload.installMode, 'release');
   assert.equal(offlinePayload.pid, null);
 });

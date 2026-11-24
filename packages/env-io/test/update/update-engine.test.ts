@@ -1470,7 +1470,7 @@ test('runControlledProcess: enforces per-stream tail-retaining output cap and ki
           // already dead
         }
       }
-    });
+    }, { timeout: 60_000 });
 
     const pending = runControlledProcess(process.execPath, [runner, grandPidFile], {
       cwd: dir,

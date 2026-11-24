@@ -36,7 +36,7 @@ before(async () => {
 after(async () => {
   await host.dispose().catch(() => undefined)
   await cleanupDir(dataDir)
-})
+}, { timeout: 60_000 })
 
 // ---------------------------------------------------------------------------
 // 1. Plugin dynamic route dispatch guard

@@ -141,7 +141,7 @@ test('stop prefers the verified control channel when the hub wrote a control rec
     },
   });
   await server.listening;
-  t.after(() => server.close());
+  t.after(() => server.close(), { timeout: 60_000 });
   await atomicWriteJson(path.join(dataDir, 'hub-control.json'), {
     instanceId,
     endpoint,

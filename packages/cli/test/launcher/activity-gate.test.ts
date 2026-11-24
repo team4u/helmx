@@ -249,7 +249,7 @@ test('a detached hub without /proc startTime can verify identity via hub-control
   });
   t.after(async () => {
     await server.close();
-  });
+  }, { timeout: 60_000 });
   await server.listening;
   await fsp.writeFile(
     hubControlRecordPath(dir),

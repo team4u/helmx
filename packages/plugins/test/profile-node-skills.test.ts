@@ -334,7 +334,7 @@ test('before_turn injects node skills into the available_skills catalog (source 
   writeFileSync(join(brokenDir, 'SKILL.md'), '---\nmanagedByPlugin:\n---\nbody\n')
 
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   const sections = await runBeforeTurn(env, makeTurn(workspace))
   const catalog = skillSection(sections)
   assert.ok(catalog !== undefined, 'catalog section present (helmx-cli + node skill)')
@@ -370,7 +370,7 @@ test('same-name priority: Hub dataDir skill wins the catalog and load_skill; the
   t.after(() => rmSync(workspace, { recursive: true, force: true }))
   writeNodeSkill(workspace, 'shared-name', SKILL_MD('Node Variant', 'node description must not surface'))
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   writeHubSkill(env.dataDir, 'shared-name', SKILL_MD('Hub Variant', 'hub description wins'))
   env.backend.conversations.set(1, makeConversation(1, { cwd: workspace }))
 
@@ -398,7 +398,7 @@ test('node skills are isolated per conversation (nodeId, cwd) — another worksp
   })
   writeNodeSkill(wsA, 'ws-a-only', SKILL_MD('A Only', 'from workspace A'))
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
 
   const catalogA = skillSection(await runBeforeTurn(env, makeTurn(wsA)))
   const catalogB = skillSection(await runBeforeTurn(env, makeTurn(wsB)))
@@ -412,7 +412,7 @@ test('remote node skills route through executionEnv(nodeId, cwd) with an online 
   writeNodeSkill(workspace, 'remote-skill', SKILL_MD('Remote Skill', 'lives on the remote node'))
   let onlineChecked: string[] = []
   const env = await makeEnv({ online: (nodeId) => (onlineChecked.push(nodeId), true) })
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
 
   const turn = makeTurn(workspace, { nodeId: 'remote-1' })
   const catalog = skillSection(await runBeforeTurn(env, turn))
@@ -428,7 +428,7 @@ test('remote node offline: explicit unavailable section (never silently empty), 
   t.after(() => rmSync(workspace, { recursive: true, force: true }))
   writeNodeSkill(workspace, 'remote-skill', SKILL_MD('Remote Skill', 'unreachable while offline'))
   const env = await makeEnv({ online: () => false })
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   env.backend.conversations.set(1, makeConversation(1, { cwd: workspace, nodeId: 'remote-1' }))
 
   const sections = await runBeforeTurn(env, makeTurn(workspace, { nodeId: 'remote-1' }))
@@ -453,7 +453,7 @@ test('isOnline throwing (unwired host capability) is stated explicitly, never tr
       throw new HelmxError('node_ipc_unavailable', '测试桩未接线 nodeIpc', 501)
     },
   })
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
 
   const sections = await runBeforeTurn(env, makeTurn(workspace, { nodeId: 'remote-1' }))
   const unavailable = sections.find((s) => s.id === 'profile.node-skills-unavailable')
@@ -475,7 +475,7 @@ test('load_skill reads node SKILL.md and references precisely (latest node conte
     { 'references/guide.md': '# guide v1\n' },
   )
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   env.backend.conversations.set(1, makeConversation(1, { cwd: workspace }))
 
   const md = await loadSkillOk(env, 1, { skillId: 'node-tool' })
@@ -499,7 +499,7 @@ test('load_skill rejects traversal / absolute / backslash paths on the node bran
   t.after(() => rmSync(workspace, { recursive: true, force: true }))
   writeNodeSkill(workspace, 'node-tool', SKILL_MD('Node Tool', 'd'))
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   env.backend.conversations.set(1, makeConversation(1, { cwd: workspace }))
 
   for (const path of ['../outside.md', 'references/../../outside.md', '/etc/passwd', 'a\\b.md']) {
@@ -513,7 +513,7 @@ test('load_skill on a node skill missing everywhere is a plain 404 (no fabricati
   const workspace = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
   t.after(() => rmSync(workspace, { recursive: true, force: true }))
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   env.backend.conversations.set(1, makeConversation(1, { cwd: workspace }))
 
   const err = await loadSkillErr(env, 1, { skillId: 'never-exists' })
@@ -527,7 +527,7 @@ test('Profile whitelist applies to node skills with the same rule as Hub skills 
   writeNodeSkill(workspace, 'node-tool', SKILL_MD('Node Tool', 'd'))
   writeNodeSkill(workspace, 'node-other', SKILL_MD('Node Other', 'd'))
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   const assistant = await (env.backend as unknown as { profiles: { get(id: string): Promise<unknown> } }).profiles.get('assistant')
   assert.ok(assistant !== undefined)
   // 通过宿主 profiles 端口保存白名单（只允许 node-tool）。
@@ -611,7 +611,7 @@ test('listDir permission failure surfaces as an explicit unavailable section (ne
             : { ok: true, value: [] as FileInfo[] },
       }),
   })
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
 
   const sections = await runBeforeTurn(env, makeTurn(workspace, { nodeId: 'remote-1' }))
   const unavailable = sections.find((s) => s.id === 'profile.node-skills-unavailable')
@@ -701,7 +701,7 @@ test('load_skill on the node branch reports a mid-read size change explicitly (5
         },
       }),
   })
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   env.backend.conversations.set(1, makeConversation(1, { cwd: workspace, nodeId: 'remote-1' }))
 
   const err = await loadSkillErr(env, 1, { skillId: 'node-tool' })
@@ -715,7 +715,7 @@ test('node catalog name/description are redacted before entering the system prom
   t.after(() => rmSync(workspace, { recursive: true, force: true }))
   writeNodeSkill(workspace, 'leaky', '---\nname: leaky\ndescription: token sk-secret-value inside\n---\nbody\n')
   const env = await makeEnv({ redact: (text) => text.replace(/sk-secret-value/g, '[REDACTED]') })
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
 
   const catalog = skillSection(await runBeforeTurn(env, makeTurn(workspace)))
   assert.ok(catalog !== undefined)
@@ -745,7 +745,7 @@ async function actionErr(
 
 test('skill_catalog / skill_read action manifests: exposeToPrompt:false, scope excludes sessions, idempotent, no cli.command override', { timeout: 60_000 }, async (t) => {
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   const manifests = env.host
     .listActions()
     .filter((m) => m.pluginId === 'builtin:profile' && (m.id === 'skill_catalog' || m.id === 'skill_read'))
@@ -768,7 +768,7 @@ test('scope ACL: every conversation-carrying call is rejected 403 before the han
   t.after(() => rmSync(ws, { recursive: true, force: true }))
   writeNodeSkill(ws, 'ws-skill', SKILL_MD('WS Skill', 'never reached through a session context'))
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   env.backend.conversations.set(1, makeConversation(1, { cwd: ws }))
 
   // 会话上下文（无论是否携带显式坐标）一律 403——会话坐标绑定路径已按安全裁定移除
@@ -791,7 +791,7 @@ test('skill_catalog: context-free calls require explicit nodeId (cwd optional); 
   writeNodeSkill(ws, 'explicit-skill', SKILL_MD('Explicit', 'discovered via explicit coordinates'))
   // 默认桩对一切 nodeId 报在线；显式关闭后 ghost-node 在边界被拒（local 恒不查 isOnline）
   const env = await makeEnv({ online: () => false })
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
 
   for (const input of [{}, { cwd: ws }, { nodeId: '  ' }]) {
     const err = await actionErr(env, 'skill_catalog', input)
@@ -840,7 +840,7 @@ test('skill_catalog: same-name node skill is shadowed — the Hub version stays 
   writeNodeSkill(ws, 'shared-name', SKILL_MD('Node Variant', 'node description must not surface'))
   writeNodeSkill(ws, 'node-only', SKILL_MD('Node Only', 'node supplement'))
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   writeHubSkill(env.dataDir, 'shared-name', SKILL_MD('Hub Variant', 'hub description wins'))
 
   const catalog = (await env.host.invokeAction('builtin:profile', 'skill_catalog', { nodeId: 'local', cwd: ws })) as {
@@ -861,7 +861,7 @@ test('skill_catalog: an offline remote nodeId is rejected at the input boundary;
   t.after(() => rmSync(ws, { recursive: true, force: true }))
   writeNodeSkill(ws, 'remote-skill', SKILL_MD('Remote', 'unreachable while offline'))
   const env = await makeEnv({ online: () => false })
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   writeHubSkill(env.dataDir, 'hub-skill', SKILL_MD('Hub Skill', 'hub side'))
 
   // 未注册/已断线（isOnline 语义下不可区分）→ 输入边界 400，诚实措辞不谎称能区分
@@ -873,7 +873,7 @@ test('skill_catalog: an offline remote nodeId is rejected at the input boundary;
   // TOCTOU 竞态：边界核验时在线、扫描预检时掉线 → 扫描层显式 nodeUnavailable（Hub 目录仍返回）
   let onlineCalls = 0
   const envRace = await makeEnv({ online: () => (onlineCalls += 1) === 1 })
-  t.after(() => envRace.close())
+  t.after(() => envRace.close(), { timeout: 60_000 })
   writeHubSkill(envRace.dataDir, 'hub-skill', SKILL_MD('Hub Skill', 'still listed through the race'))
   const catalog = (await envRace.host.invokeAction('builtin:profile', 'skill_catalog', { nodeId: 'remote-1', cwd: ws })) as {
     nodeId: string
@@ -894,7 +894,7 @@ test('skill_read: Hub hit wins first; node-only ids read live from the node (SKI
   writeNodeSkill(ws, 'shared-name', SKILL_MD('Node Variant', 'unreachable node body'))
   writeNodeSkill(ws, 'node-only', SKILL_MD('Node Only', 'node body'), { 'references/guide.md': '# node guide\n' })
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   writeHubSkill(env.dataDir, 'shared-name', SKILL_MD('Hub Variant', 'hub body wins'))
 
   const hubRead = (await env.host.invokeAction('builtin:profile', 'skill_read', { skillId: 'shared-name', nodeId: 'local', cwd: ws })) as { text: string }
@@ -928,7 +928,7 @@ test('skill_read: session-context calls are excluded by scope; context-free expl
   writeNodeSkill(wsB, 'ws-b-skill', SKILL_MD('B Skill', 'from workspace B'))
   // online:()=>false 使未注册 nodeId 在边界被拒；local 靶点恒不查 isOnline
   const env = await makeEnv({ online: () => false })
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   env.backend.conversations.set(1, makeConversation(1, { cwd: wsA }))
 
   // 会话上下文（无论 body 给什么坐标）一律 403——Profile.skills 白名单语义只归 load_skill
@@ -959,7 +959,7 @@ test('skill_read: an offline race after the boundary still fails explicitly (409
   writeNodeSkill(ws, 'node-tool', SKILL_MD('Node Tool', 'drops offline mid-call'))
   let onlineCalls = 0
   const env = await makeEnv({ online: () => (onlineCalls += 1) === 1 })
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
 
   const err = await actionErr(env, 'skill_read', { skillId: 'node-tool', nodeId: 'remote-1', cwd: ws })
   assert.equal(err.code, 'node_offline', 'the read layer keeps its explicit offline semantics for races')
@@ -970,7 +970,7 @@ test('remote node machine roots (~/.helmx/skills > ~/.agents/skills > <cwd>/.hel
   const ws = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
   t.after(() => rmSync(ws, { recursive: true, force: true }))
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
 
   // Seed Hub, node ~/.helmx/skills, node ~/.agents/skills, and workspace <cwd>/.helmx/skills
   writeHubSkill(env.dataDir, 'hub-wins', SKILL_MD('Hub Wins', 'from hub'))
@@ -1081,7 +1081,7 @@ test('before_turn deduplicates profiles.get(profileId) to a single lookup per tu
   const ws = mkdtempSync(join(tmpdir(), 'helmx-profile-dedup-'))
   t.after(() => rmSync(ws, { recursive: true, force: true }))
   const env = await makeEnv()
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
 
   let getCount = 0
   const originalGet = env.backend.profiles.get.bind(env.backend.profiles)
@@ -1264,7 +1264,7 @@ test('node skill ID / fallback name / references / shadowedSkillIds / diagnostic
 
   // 3) before_turn system prompt catalog must not leak secret in skill id
   const env = await makeEnv({ redact: dynamicRedact })
-  t.after(() => env.close())
+  t.after(() => env.close(), { timeout: 60_000 })
   const catalog = skillSection(await runBeforeTurn(env, makeTurn(ws)))
   assert.ok(catalog !== undefined)
   assert.equal(catalog.includes(secretA), false)

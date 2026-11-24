@@ -1,12 +1,64 @@
 /**
- * Resolves CLI entrypoints: `cliSelfEntry()` for spawning detached daemons from source or dist,
- * and `resolveServiceEntry()` for OS startup services (which require compiled `dist/cli.js`).
+ * Resolves CLI entrypoints and runtime install mode:
+ * - `detectNodeInstallMode()` distinguishes source/link checkouts (`source`) from published/staged
+ *   npm release artifacts (`release`) strictly by module/package layout (never by package version);
+ * - `cliSelfEntry()` resolves this package's own CLI entrypoint (`src/cli.ts` or `dist/cli.js`);
+ * - `resolveServiceEntry()` resolves compiled `dist/cli.js` for OS startup services.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { realpathSync } from 'node:fs';
+import type { NodeInstallMode } from '@helmx/protocol';
 import { UsageError } from './cli-context.js';
+
+export const SOURCE_MODE_UPGRADE_MESSAGE =
+  'not_supported (source_mode): helmx-node is running in source/link mode; npm self-upgrade is disabled — update the source repository and restart helmx-node manually';
+
+/**
+ * Detect whether `@helmx/node` is running from a source/link checkout (`source`) or a published /
+ * staged npm release artifact (`release`).
+ *
+ * Rules (never inferred from package version):
+ * 1. TypeScript module paths (`.ts` / `.mts` / `.cts`, e.g. `link-bins` -> `tsx` -> `src/cli.ts`)
+ *    are always `source`;
+ * 2. Compiled JS inside a package root that still contains `src/cli.ts` or declares `"private": true`
+ *    (e.g. repo `packages/node/dist/cli.js` / `npm link`) is `source`;
+ * 3. Published npm bundles (`npm install -g @helmx/node`, staged `releases/<ver>/...`, or assembled
+ *    `dist-node/dist/cli.js`) have none of those markers and resolve to `release`.
+ */
+export function detectNodeInstallMode(selfPath: string = fileURLToPath(import.meta.url)): NodeInstallMode {
+  let resolved = path.resolve(selfPath);
+  try {
+    resolved = realpathSync(resolved);
+  } catch {
+    // Path may be synthetic in tests; fall back to lexical resolution.
+  }
+  const ext = path.extname(resolved).toLowerCase();
+  if (ext === '.ts' || ext === '.mts' || ext === '.cts') {
+    return 'source';
+  }
+  let dir = path.dirname(resolved);
+  for (let depth = 0; depth < 3; depth += 1) {
+    const pkgPath = path.join(dir, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      if (fs.existsSync(path.join(dir, 'src', 'cli.ts'))) return 'source';
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
+          private?: unknown;
+        };
+        if (pkg.private === true) return 'source';
+      } catch {
+        // Malformed/unreadable package.json: do not fabricate source mode.
+      }
+      return 'release';
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return 'release';
+}
 
 /**
  * Resolve this package's own CLI entrypoint (`src/cli.ts` in source mode, `dist/cli.js` when built).
