@@ -366,8 +366,14 @@ test('resolveSpawnTarget: unmappable POSIX sourceCwd on remote win32 target reje
 // spawnAgent entry guard: Profile.restrictToCwd confines explicit request cwd to the parent cwd
 // ---------------------------------------------------------------------------
 
-/** Minimal spawnAgent fixture: store/hookBridge stubs; the sentinel proves execution passed the guard. */
-function spawnEntryGuard(options: { restricted: boolean; parentCwd: string; parentNodeId?: string }) {
+/**
+ * Minimal spawnAgent fixture: store/hookBridge stubs; the sentinel proves execution passed the guard.
+ * `platform` pins the Hub platform explicitly: the POSIX fixture cwds must not depend on the host
+ * runner (a POSIX cwd is unmappable for a win32 local node, so the guard would defer to the later
+ * unmappable_posix_root rejection instead of the path_outside_workspace under test).
+ */
+function spawnEntryGuard(options: { restricted: boolean; parentCwd: string; parentNodeId?: string; platform?: 'linux' | 'win32' }) {
+  const hubPlatform = options.platform ?? 'linux'
   const spawn = new RuntimeAgentSpawn({
     store: {
       getConv: () => ({
@@ -383,7 +389,7 @@ function spawnEntryGuard(options: { restricted: boolean; parentCwd: string; pare
     tracker: {} as never,
     conversations: {} as never,
     events: {} as never,
-    envFabric: {} as never,
+    envFabric: { hubPlatform: () => hubPlatform } as never,
     modelsRegistry: {} as never,
     hookBridge: {
       runHookAround: async () => {
