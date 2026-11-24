@@ -57,3 +57,37 @@ test('Hash 边界：未编码的多余路径段不能冒充合法目标', { time
   assert.deepEqual(parseLocationHash('#/views/a/b/c').primaryTarget, { kind: 'profiles' })
   assert.equal(parseLocationHash('#/c/1?split=views/a/b/c').splitTarget, null)
 })
+
+test('Hash 边界：screen/overview sp.* 与 ssp.* 参数不做二次解码，百分号与保留字符往返无损', { timeout: 60_000 }, () => {
+  const trickyValues = [
+    '100%',
+    '100% done',
+    'a%2Fb',
+    '50%25',
+    '%E0%A4%A',
+    'a+b&c=d?#e',
+    '中文 / 检索 %20',
+  ]
+  for (const val of trickyValues) {
+    const screenState: WorkspaceLocationState = {
+      primaryTarget: { kind: 'screen', pluginId: 'builtin:workflow', screenId: 'runs', params: { q: val, filter: 'all' } },
+      splitTarget: { kind: 'screen', pluginId: 'builtin:workflow', screenId: 'runs', params: { q: val } },
+      drawerStack: [],
+      activeModal: null,
+    }
+    const once = parseLocationHash(formatLocationHash(screenState))
+    assert.deepEqual(once, screenState, `screen roundtrip failed for ${val}`)
+    // 二次往返幂等：绝不出现 50%25 -> 50% -> 丢弃 的二次解码退化
+    assert.deepEqual(parseLocationHash(formatLocationHash(once)), screenState, `screen double-roundtrip failed for ${val}`)
+
+    const overviewState: WorkspaceLocationState = {
+      primaryTarget: { kind: 'overview', params: { q: val } },
+      splitTarget: null,
+      drawerStack: [],
+      activeModal: null,
+    }
+    const onceOverview = parseLocationHash(formatLocationHash(overviewState))
+    assert.deepEqual(onceOverview, overviewState, `overview roundtrip failed for ${val}`)
+    assert.deepEqual(parseLocationHash(formatLocationHash(onceOverview)), overviewState, `overview double-roundtrip failed for ${val}`)
+  }
+})

@@ -18,7 +18,7 @@
 import type { ComponentType } from 'react'
 import { PLUGIN_CLIENT_CSS_EXPORT, type PluginSummary } from '@helmx/protocol/browser'
 import { scopePluginCss } from '@helmx/plugin-client'
-import { getStoredToken } from './api.js'
+import { getStoredToken, notifyUnauthorizedResponse } from './api.js'
 import { isPluginSummaryActive } from './live-state.js'
 
 export interface LoadedClientModule {
@@ -487,6 +487,7 @@ async function fetchChunkText(
     )
   }
   if (!res.ok) {
+    notifyUnauthorizedResponse(res)
     let message = `HTTP ${res.status}`
     try {
       const body = (await res.json()) as { error?: { code?: string; message?: string } }
@@ -614,6 +615,7 @@ async function fetchModuleText(
     )
   }
   if (!res.ok) {
+    notifyUnauthorizedResponse(res)
     let errorCode: string | undefined
     let message = `HTTP ${res.status}`
     try {

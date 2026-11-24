@@ -158,7 +158,7 @@ function formatTargetEnvParams(target: ResolvedTarget): Array<[string, string]> 
   return pairs
 }
 
-/** Strictly parse one `sp.<k>=<v>` / `ssp.<k>=<v>` param: invalid keys / empty values / invalid encodings return null. */
+/** Strictly parse one `sp.<k>=<v>` / `ssp.<k>=<v>` param: invalid keys / empty values return null (`URLSearchParams` already decoded the query value once). */
 function parseNamespacedParam(
   rawKey: string,
   rawValue: string,
@@ -168,12 +168,7 @@ function parseNamespacedParam(
   const key = rawKey.slice(prefix.length)
   if (key === '' || !SCREEN_PARAM_KEY_PATTERN.test(key) || isPrototypeParamKey(key)) return null
   if (rawValue === '') return null
-  try {
-    const value = decodeURIComponent(rawValue)
-    return value === '' ? null : { key, value }
-  } catch {
-    return null
-  }
+  return { key, value: rawValue }
 }
 
 /** Extract namespaced screen params from the query string; invalid entries and duplicate keys are dropped (silent intrusion hardening). */

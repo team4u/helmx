@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 
-const { pluginsApi } = await import('../src/lib/api.js')
+const { ApiClientError, artifactsApi, conversationsApi, pluginsApi } = await import('../src/lib/api.js')
 
 interface CapturedRequest {
   path: string
@@ -73,5 +73,42 @@ test('pluginsApi.disable：显式 force === false 时不携带请求体', { time
     assert.equal(requests[0]?.body, undefined, 'force: false 等价于未传')
   } finally {
     restore()
+  }
+})
+
+test('独立 Bearer 二进制 fetch（uploadArtifact / fetchWorkspaceFileBlob / artifactsApi.fetchBlob）401 统一派发 helmx:unauthorized', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  const events: string[] = []
+  const onUnauthorized = (ev: Event): void => {
+    events.push(ev.type)
+  }
+  window.addEventListener('helmx:unauthorized', onUnauthorized)
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ error: { code: 'unauthorized', message: 'token expired' } }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    })) as typeof fetch
+  try {
+    const file = new File([new Uint8Array([1, 2, 3])], 'demo.bin', { type: 'application/octet-stream' })
+    await assert.rejects(
+      () => conversationsApi.uploadArtifact(7, file),
+      (err: unknown) => err instanceof ApiClientError && err.status === 401,
+    )
+    await assert.rejects(
+      () => conversationsApi.fetchWorkspaceFileBlob(7, 'README.md'),
+      (err: unknown) => err instanceof ApiClientError && err.status === 401,
+    )
+    await assert.rejects(
+      () => artifactsApi.fetchBlob('art-1'),
+      (err: unknown) => err instanceof ApiClientError && err.status === 401,
+    )
+    assert.deepEqual(
+      events,
+      ['helmx:unauthorized', 'helmx:unauthorized', 'helmx:unauthorized'],
+      '三条独立二进制 Bearer 通道收到 401 均须触发统一 helmx:unauthorized 事件',
+    )
+  } finally {
+    window.removeEventListener('helmx:unauthorized', onUnauthorized)
+    globalThis.fetch = originalFetch
   }
 })

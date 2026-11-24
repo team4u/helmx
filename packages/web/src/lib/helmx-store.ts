@@ -169,6 +169,7 @@ export class HelmxExternalStore {
   private pluginsUiSlice: PluginsUiSlice
   private pluginsSnapshot: UsePluginsResult
   private hostModelsSlice: HostModelsSlice | undefined = undefined
+  private modelsLoaded = false
   private hostNodesSlice: HostNodesSlice | undefined = undefined
   private hostProfilesSlice: HostProfilesSlice | undefined = undefined
   private summaryById = new Map<number, ConversationSummary>()
@@ -192,6 +193,8 @@ export class HelmxExternalStore {
   private batchPlan: NotifyPlan | null = null
 
   private noticeSequence = 0
+  private authCheckEpoch = 0
+  private authCheckController: AbortController | null = null
   private readonly infoNoticeDurationMs: number
   private readonly noticeTimers = new Map<string, NoticeTimerEntry>()
   private logoutImpl: (() => void) | null = null
@@ -427,6 +430,7 @@ export class HelmxExternalStore {
   }
 
   dispose(): void {
+    this.cancelInFlightAuthCheck()
     this.navActions.clearEscTimer()
     this.clearAllNoticeTimers()
     this.requests.dispose()
@@ -692,15 +696,28 @@ export class HelmxExternalStore {
       plan.domains.add('hostProfiles')
       changed = true
     }
+    const prevModelsLoaded = this.modelsLoaded
+    const nextModelsLoaded =
+      patch.assetsLoaded === false
+        ? false
+        : patch.models !== undefined
+          ? true
+          : prevModelsLoaded
+    if (nextModelsLoaded !== prevModelsLoaded) {
+      this.modelsLoaded = nextModelsLoaded
+      changed = true
+    }
     if (next.models !== prev.models || next.modelDefaults !== prev.modelDefaults) {
       plan.domains.add('models')
       changed = true
     }
+    const prevHostModelsReady = prev.assetsLoaded && prevModelsLoaded
+    const nextHostModelsReady = next.assetsLoaded && nextModelsLoaded
     if (
-      next.assetsLoaded !== prev.assetsLoaded ||
-      (next.assetsLoaded && (next.models !== prev.models || next.modelDefaults !== prev.modelDefaults))
+      nextHostModelsReady !== prevHostModelsReady ||
+      (nextHostModelsReady && (next.models !== prev.models || next.modelDefaults !== prev.modelDefaults))
     ) {
-      this.hostModelsSlice = next.assetsLoaded ? { models: next.models, ...next.modelDefaults } : undefined
+      this.hostModelsSlice = nextHostModelsReady ? { models: next.models, ...next.modelDefaults } : undefined
       plan.domains.add('hostModels')
       changed = true
     }
@@ -1120,12 +1137,24 @@ export class HelmxExternalStore {
     }
   }
 
+  private cancelInFlightAuthCheck(): void {
+    this.authCheckEpoch += 1
+    this.authCheckController?.abort()
+    this.authCheckController = null
+  }
+
   checkAuth = async (): Promise<void> => {
+    this.cancelInFlightAuthCheck()
+    const epoch = this.authCheckEpoch
+    const controller = new AbortController()
+    this.authCheckController = controller
     this.patchAuth({ authError: null })
     try {
-      const status = await authApi.status()
+      const status = await authApi.status({ signal: controller.signal })
+      if (epoch !== this.authCheckEpoch || controller.signal.aborted) return
       this.patchAuth({ authConfigured: status.configured, authenticated: status.authenticated, authReady: true })
     } catch (error) {
+      if (epoch !== this.authCheckEpoch || controller.signal.aborted) return
       this.patchAuth({
         authReady: true,
         authError: this.translate({
@@ -1133,16 +1162,22 @@ export class HelmxExternalStore {
           'zh-CN': `无法连接 Helmx 内核：${errorText(error)}`,
         }),
       })
+    } finally {
+      if (this.authCheckController === controller) {
+        this.authCheckController = null
+      }
     }
   }
 
   onAuthenticated = async (token: string): Promise<void> => {
+    this.cancelInFlightAuthCheck()
     setStoredToken(token)
     this.patchAuth({ authConfigured: true, authError: null, authenticated: true })
   }
 
   /** Resets non-URL timers and caches before the provider resets window.history. */
   prepareLogoutHistoryReset(): void {
+    this.cancelInFlightAuthCheck()
     this.navActions.clearEscTimer()
     this.clearAllNoticeTimers()
     this.requests.resetOnLogout()
@@ -1157,6 +1192,7 @@ export class HelmxExternalStore {
 
   /** Clears all reactive store slices in one atomic batch on logout. */
   finishLogoutStateReset(): void {
+    this.cancelInFlightAuthCheck()
     const plan = emptyPlan()
     this.patchAuth({ authenticated: false, sseConnected: false, connectionError: null }, plan, true)
     this.navActions.resetSpaceMemory({ settings: { kind: 'profiles' } })

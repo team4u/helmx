@@ -34,7 +34,11 @@ import {
 } from './live-state.js'
 import { evictPluginClientCache, reconcilePluginClientCache } from './plugin-client.js'
 import { observeServerEpoch } from './server-clock.js'
-import { evictSessionDocsOfConversation, evictSessionDocSubscriptions } from './session-docs.js'
+import {
+  evictSessionDocsOfConversation,
+  evictSessionDocSubscriptions,
+  restoreSessionDocSubscriptions,
+} from './session-docs.js'
 import { standbyFallbackTarget } from './space-navigation.js'
 import {
   isArtifactsWatermarkCurrent,
@@ -84,6 +88,30 @@ function computeReconnectBackoffMs(retry: number): number {
   )
 }
 
+function syncDeletedConversationNav(
+  store: HelmxExternalStore,
+  deletedConversationId: number,
+  deletedSummary: ConversationSummary | undefined,
+): void {
+  const fallback = standbyFallbackTarget(deletedSummary)
+  const primaryTarget = store.getPrimaryTarget()
+  const splitTarget = store.getSplitTarget()
+  const activeModal = store.getActiveModal()
+  const primaryHit =
+    primaryTarget.kind === 'conversation' && primaryTarget.conversationId === deletedConversationId
+  const splitHit =
+    splitTarget?.kind === 'conversation' && splitTarget.conversationId === deletedConversationId
+  const drawerHit = store.getDrawerStack().some((frame) => frame.conversationId === deletedConversationId)
+  const modalHit =
+    (activeModal?.kind === 'artifact-preview' || activeModal?.kind === 'workspace-file') &&
+    activeModal.conversationId === deletedConversationId
+  if (primaryHit || splitHit || drawerHit || modalHit) store.pendingHistoryMode = 'replace'
+  if (primaryHit) store.applyPrimaryTarget(fallback)
+  if (splitHit) store.setSplitTarget(null)
+  if (drawerHit) store.pruneConversationFromDrawerStack(deletedConversationId)
+  if (modalHit) store.setActiveModal(null)
+}
+
 function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (ctx.streamState.mode !== null) throw new Error('Live connection received a duplicate snapshot control frame')
   const snap = payload as HelmxSnapshot
@@ -94,8 +122,14 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
   const prevLive = store.getLiveState()
   const prevPlugins = prevLive.plugins
   const prevDetails = prevLive.conversationDetails
-  const prevConversationIds = new Set(prevLive.conversations.map((c) => c.id))
+  const prevConversationById = new Map<number, ConversationSummary>(prevLive.conversations.map((c) => [c.id, c]))
   const nextConversationIds = new Set(snap.conversations.map((c) => c.id))
+  const deletedConversations = new Map<number, ConversationSummary>()
+  for (const [prevId, prevSummary] of prevConversationById) {
+    if (!nextConversationIds.has(prevId)) {
+      deletedConversations.set(prevId, prevSummary)
+    }
+  }
 
   ctx.streamState.mode = 'fresh'
   store.requests.resetOnSnapshot()
@@ -105,6 +139,7 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
   // 断线期间增量对账插件客户端缓存：保留启用且 hash 未变的模块与样式，仅逐出变更/停用项。
   reconcilePluginClientCache(snap.plugins)
 
+  const prevPluginById = new Map(prevPlugins.map((p) => [p.id, p]))
   const nextPluginById = new Map(snap.plugins.map((p) => [p.id, p]))
   const stalePluginIds = new Set<string>()
   for (const prevPlugin of prevPlugins) {
@@ -127,11 +162,20 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
       evictSessionDocSubscriptions(nextPlugin.id)
     }
   }
-  for (const prevId of prevConversationIds) {
-    if (!nextConversationIds.has(prevId)) {
-      evictSessionDocsOfConversation(prevId)
-      store.requests.artifactsWatermarks.delete(prevId)
-    }
+  for (const deletedId of deletedConversations.keys()) {
+    evictSessionDocsOfConversation(deletedId)
+    store.requests.artifactsWatermarks.delete(deletedId)
+    store.requests.prevVisibleConversationIds.delete(deletedId)
+  }
+  // 插件恢复 active：在已删除会话完成 evict 后再恢复，确保已删会话绝不被复活。
+  for (const nextPlugin of snap.plugins) {
+    if (!isPluginSummaryActive(nextPlugin)) continue
+    const prevPlugin = prevPluginById.get(nextPlugin.id)
+    const becameOrReloadedActive =
+      prevPlugin === undefined ||
+      !isPluginSummaryActive(prevPlugin) ||
+      !sameClientHashes(prevPlugin.clientHashes, nextPlugin.clientHashes)
+    restoreSessionDocSubscriptions(nextPlugin.id, { includePermanentErrors: becameOrReloadedActive })
   }
 
   // loadErrors 仅清理已被停用/移除/hash 变更插件的旧 doc 错误以及已删除会话的错误。
@@ -180,6 +224,11 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
     }
     return changed ? next : prev
   })
+
+  // 断线期间已被删除的可见会话：先同步导航、分屏、抽屉与弹窗，避免后续可见集合刷新向已删会话发 404 请求。
+  for (const [deletedId, deletedSummary] of deletedConversations) {
+    syncDeletedConversationNav(store, deletedId, deletedSummary)
+  }
 
   ctx.resetRetry()
   ctx.announceLive()
@@ -279,6 +328,8 @@ function dispatchFrameSideEffects(
       evictPluginClientCache(event.plugin.id)
       if (!isPluginSummaryActive(event.plugin)) {
         evictSessionDocSubscriptions(event.plugin.id)
+      } else {
+        restoreSessionDocSubscriptions(event.plugin.id)
       }
       void store.refreshAssets()
     }
@@ -328,19 +379,25 @@ function dispatchFrameSideEffects(
   if (deletedConversationId !== undefined) {
     unreadSync.unreadClearInFlight.current.delete(deletedConversationId)
     unreadSync.unreadClearedSeq.current.delete(deletedConversationId)
-    const fallback = standbyFallbackTarget(deletedSummary)
-    const primaryTarget = store.getPrimaryTarget()
-    const splitTarget = store.getSplitTarget()
-    const primaryHit =
-      primaryTarget.kind === 'conversation' && primaryTarget.conversationId === deletedConversationId
-    const splitHit =
-      splitTarget?.kind === 'conversation' && splitTarget.conversationId === deletedConversationId
-    const drawerHit = store.getDrawerStack().some((frame) => frame.conversationId === deletedConversationId)
-    if (primaryHit || splitHit || drawerHit) store.pendingHistoryMode = 'replace'
-    if (primaryHit) store.applyPrimaryTarget(fallback)
-    if (splitHit) store.setSplitTarget(null)
-    if (drawerHit) store.pruneConversationFromDrawerStack(deletedConversationId)
+    store.requests.abortRequestKey(`conversation:${deletedConversationId}`)
+    store.requests.abortRequestKey(`history:${deletedConversationId}`)
+    store.requests.abortRequestKey(`artifacts:${deletedConversationId}`)
+    store.requests.artifactsWatermarks.delete(deletedConversationId)
+    store.requests.prevVisibleConversationIds.delete(deletedConversationId)
+    syncDeletedConversationNav(store, deletedConversationId, deletedSummary)
+    store.setLoadErrors((prev) => {
+      const kConv = `conversation:${deletedConversationId}`
+      const kHist = `history:${deletedConversationId}`
+      const kArt = `artifacts:${deletedConversationId}`
+      if (!Object.hasOwn(prev, kConv) && !Object.hasOwn(prev, kHist) && !Object.hasOwn(prev, kArt)) return prev
+      const next = { ...prev }
+      delete next[kConv]
+      delete next[kHist]
+      delete next[kArt]
+      return next
+    })
     store.setConversationArtifacts((prev) => {
+      if (!Object.hasOwn(prev, deletedConversationId)) return prev
       const next = { ...prev }
       delete next[deletedConversationId]
       return next

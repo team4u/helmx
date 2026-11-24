@@ -32,10 +32,13 @@ import {
   seedPluginClientModule,
 } from '../src/lib/plugin-client.js'
 import {
+  bindSessionDocRuntime,
   getSessionDocState,
   resetSessionDocSubscriptions,
+  sessionDocTimings,
   subscribeSessionDoc,
 } from '../src/lib/session-docs.js'
+import { artifactsApi, setStoredToken } from '../src/lib/api.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
 
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -2068,6 +2071,306 @@ describe("sse-resume", () => {
       second!.end()
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
     } finally {
+      await h.close()
+    }
+  })
+
+  test('plugin re-enable restores still-mounted sessionDoc subscriptions across plugin.changed, snapshot, and syncPlugins without resurrecting deleted conversations', { timeout: 60_000 }, async () => {
+    resetSessionDocSubscriptions()
+    const origDebounce = sessionDocTimings.subscribeDebounceMs
+    sessionDocTimings.subscribeDebounceMs = 0
+    let streamRev = 0
+    const restoreRuntime = bindSessionDocRuntime(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      const subs = url.searchParams.getAll('sub')
+      streamRev++
+      const encoder = new TextEncoder()
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const sub of subs) {
+            const [encPlugin, encName, convStr] = sub.split('/')
+            const pluginId = decodeURIComponent(encPlugin!)
+            const name = decodeURIComponent(encName!)
+            const conversationId = Number(convStr)
+            const frame = {
+              action: 'snapshot',
+              pluginId,
+              name,
+              conversationId,
+              seq: 1,
+              doc: { pluginId, name, conversationId, value: `rev-${streamRev}-c${conversationId}` },
+            }
+            controller.enqueue(encoder.encode(`event: snapshot\ndata: ${JSON.stringify(frame)}\n\n`))
+          }
+        },
+      })
+      return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+    })
+
+    const h = await mountProvider()
+    const key1 = { pluginId: 're:p', docName: 'runs', conversationId: 1 }
+    const key2 = { pluginId: 're:p', docName: 'runs', conversationId: 2 }
+    const off1 = subscribeSessionDoc(key1, () => {})
+    const off2 = subscribeSessionDoc(key2, () => {})
+    try {
+      const activePlugin = {
+        id: 're:p', name: 'Re-enable P', locked: false, enabled: true, status: 'active' as const,
+        hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h1' },
+      }
+      const disabledPlugin = { ...activePlugin, enabled: false, status: 'disabled' as const }
+
+      let first: ControlledStream | undefined
+      h.nextEvents((_u, sig) => { first = controlledStream(sig); return first })
+      first!.send(snapshotFrame({
+        bootId: 'boot-re',
+        seq: 1,
+        conversations: [conv(1, 'Alive'), conv(2, 'WillDelete')],
+        pendingAsks: [],
+        plugins: [activePlugin],
+        ui: [],
+      }))
+      await h.waitFor((o) => o.sseConnected === true && getSessionDocState(key1).hasValue && getSessionDocState(key2).hasValue)
+
+      // 1. Disable -> re-enable via SSE plugin.changed restores still-mounted subscriptions
+      first!.send(eventFrame(2, { type: 'plugin.changed', plugin: disabledPlugin, ui: [] }))
+      await h.waitFor(() => getSessionDocState(key1).error?.includes('disabled') === true)
+      first!.send(eventFrame(3, { type: 'plugin.changed', plugin: activePlugin, ui: [] }))
+      await h.waitFor(() => getSessionDocState(key1).hasValue && getSessionDocState(key1).error === undefined)
+
+      // 2. Disable -> re-enable via HTTP syncPlugins restores still-mounted subscriptions
+      act(() => { h.store().syncPlugins([disabledPlugin]) })
+      assert.ok(getSessionDocState(key1).error?.includes('disabled'))
+      act(() => { h.store().syncPlugins([activePlugin]) })
+      await h.waitFor(() => getSessionDocState(key1).hasValue && getSessionDocState(key1).error === undefined)
+
+      // 3. Disable plugin, disconnect, then reconnect snapshot re-enables plugin AND deletes conv 2:
+      //    conv 1 recovers, conv 2 MUST stay terminated as deleted!
+      first!.send(eventFrame(4, { type: 'plugin.changed', plugin: disabledPlugin, ui: [] }))
+      await h.waitFor(() => getSessionDocState(key1).error?.includes('disabled') === true)
+      let second: ControlledStream | undefined
+      h.nextEvents((_u, sig) => { second = controlledStream(sig); return second })
+      first!.end()
+      await h.waitFor(() => second !== undefined)
+      second!.send(snapshotFrame({
+        bootId: 'boot-re-2',
+        seq: 10,
+        conversations: [conv(1, 'Alive')],
+        pendingAsks: [],
+        plugins: [activePlugin],
+        ui: [],
+      }))
+      await h.waitFor((o) => o.sseConnected === true && getSessionDocState(key1).hasValue)
+      assert.equal(getSessionDocState(key1).error, undefined, 'conv 1 must recover on snapshot plugin re-enable')
+      assert.ok(
+        getSessionDocState(key2).error?.includes('Conversation 2 deleted'),
+        `conv 2 deleted in same snapshot must NOT be resurrected (got ${String(getSessionDocState(key2).error)})`,
+      )
+      second!.end()
+    } finally {
+      off1()
+      off2()
+      restoreRuntime()
+      sessionDocTimings.subscribeDebounceMs = origDebounce
+      resetSessionDocSubscriptions()
+      await h.close()
+    }
+  })
+
+  test('reconnect snapshot deleting visible conversations syncs primary fallback, split, drawerStack, modal, and suppresses 404 detail/artifact requests', { timeout: 60_000 }, async () => {
+    const detailRequested: number[] = []
+    const artifactsRequested: number[] = []
+    const historyLog: Array<{ method: 'push' | 'replace'; hash: string }> = []
+    const originalPush = history.pushState.bind(history)
+    const originalReplace = history.replaceState.bind(history)
+    history.pushState = ((data: unknown, unused: string, url?: string | URL | null) => {
+      historyLog.push({ method: 'push', hash: url === undefined ? window.location.hash : String(url) })
+      return originalPush(data, unused, url)
+    }) as typeof history.pushState
+    history.replaceState = ((data: unknown, unused: string, url?: string | URL | null) => {
+      historyLog.push({ method: 'replace', hash: url === undefined ? window.location.hash : String(url) })
+      return originalReplace(data, unused, url)
+    }) as typeof history.replaceState
+
+    const c1 = { ...conv(1, 'PrimaryRemote'), nodeId: 'gpu-1', cwd: '/remote/p1', stateChangeSeq: 1, lastEntryId: 10 }
+    const c2 = { ...conv(2, 'SplitConv'), stateChangeSeq: 1, lastEntryId: 20 }
+    const c3 = { ...conv(3, 'TopDrawerConv'), stateChangeSeq: 1, lastEntryId: 30 }
+    const c4 = { ...conv(4, 'LowerDrawerSurviving'), stateChangeSeq: 2, lastEntryId: 40 }
+
+    const h = await mountProvider({
+      hash: '#/c/1?split=c/2&drawer=c/4&drawer=c/3&drawer=wb@3/artifacts&modal=file&conv=2&path=README.md',
+      onFetch: (path) => {
+        const artMatch = /^\/api\/conversations\/(\d+)\/artifacts/.exec(path)
+        if (artMatch) {
+          artifactsRequested.push(Number(artMatch[1]))
+          return new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        const detailMatch = /^\/api\/conversations\/(\d+)/.exec(path)
+        if (detailMatch) {
+          const id = Number(detailMatch[1])
+          detailRequested.push(id)
+          const found = [c1, c2, c3, c4].find((c) => c.id === id)
+          return new Response(JSON.stringify({ ...(found ?? conv(id, `c${id}`)), entries: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return undefined
+      },
+    })
+
+    try {
+      let first: ControlledStream | undefined
+      h.nextEvents((_u, sig) => { first = controlledStream(sig); return first })
+      first!.send(snapshotFrame({
+        bootId: 'boot-del-1',
+        seq: 1,
+        conversations: [c1, c2, c3, c4],
+        pendingAsks: [],
+        plugins: [],
+        ui: [],
+      }))
+      await h.waitFor((o) => o.sseConnected === true && o.conversations === 4)
+      await h.waitFor(() => h.store().conversationDetails[1] !== undefined && h.store().conversationDetails[2] !== undefined)
+
+      // Clear recorded fetches & history before reconnect snapshot deletes #1, #2, #3 (only #4 survives)
+      detailRequested.length = 0
+      artifactsRequested.length = 0
+      historyLog.length = 0
+
+      let second: ControlledStream | undefined
+      h.nextEvents((_u, sig) => { second = controlledStream(sig); return second })
+      first!.end()
+      await h.waitFor(() => second !== undefined)
+      second!.send(snapshotFrame({
+        bootId: 'boot-del-2',
+        seq: 1,
+        conversations: [c4],
+        pendingAsks: [],
+        plugins: [],
+        ui: [],
+      }))
+      await h.waitFor((o) => o.sseConnected === true && o.conversations === 1)
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)) })
+
+      // 1. Primary fell back to standby preserving remote nodeId + cwd
+      assert.deepEqual(h.store().primaryTarget, {
+        kind: 'agent',
+        profileId: 'assistant',
+        nodeId: 'gpu-1',
+        cwd: '/remote/p1',
+      })
+      // 2. Split closed, drawerStack pruned #3 + wb@3 leaving only surviving #4, modal bound to #2 closed
+      assert.equal(h.store().splitTarget, null)
+      assert.deepEqual(h.store().drawerStack, [{ kind: 'conversation', conversationId: 4 }])
+      assert.equal(h.store().activeModal, null)
+      // 3. History write-back used replace (no dead push entry)
+      assert.ok(historyLog.length > 0 && historyLog.every((entry) => entry.method === 'replace'), `expected replace-only history sync, got ${JSON.stringify(historyLog)}`)
+      // 4. Zero detail/artifact fetches for deleted conversations #1, #2, #3; surviving newly-top drawer #4 IS refreshed
+      for (const deletedId of [1, 2, 3]) {
+        assert.equal(detailRequested.includes(deletedId), false, `deleted conversation #${deletedId} must not trigger detail GET`)
+        assert.equal(artifactsRequested.includes(deletedId), false, `deleted conversation #${deletedId} must not trigger artifacts GET`)
+      }
+      assert.ok(detailRequested.includes(4), 'newly exposed surviving top drawer #4 must refresh detail')
+      second!.end()
+    } finally {
+      history.pushState = originalPush
+      history.replaceState = originalReplace
+      await h.close()
+    }
+  })
+
+  test('initial snapshot preserves unseen deep-link conversation target honestly without rewriting', { timeout: 60_000 }, async () => {
+    const h = await mountProvider({
+      hash: '#/c/999',
+      onFetch: (path) => {
+        if (path.startsWith('/api/conversations/999')) {
+          return new Response(JSON.stringify({ error: { code: 'not_found', message: 'missing' } }), {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return undefined
+      },
+    })
+    try {
+      let first: ControlledStream | undefined
+      h.nextEvents((_u, sig) => { first = controlledStream(sig); return first })
+      first!.send(snapshotFrame({
+        bootId: 'boot-deep',
+        seq: 1,
+        conversations: [conv(1, 'Existing')],
+        pendingAsks: [],
+        plugins: [],
+        ui: [],
+      }))
+      await h.waitFor((o) => o.sseConnected === true)
+      assert.deepEqual(h.store().primaryTarget, { kind: 'conversation', conversationId: 999 }, 'unseen deep-link conversation must stay intact on initial snapshot')
+      first!.end()
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('401 on standalone bearer binary fetch or plugin module fetch triggers unified logout via HelmxStoreProvider', { timeout: 60_000 }, async () => {
+    setStoredToken('live-tok')
+    const h = await mountProvider({
+      onFetch: (path) => {
+        if (path.startsWith('/api/artifacts/') || path.includes('/client.mjs')) {
+          return new Response(JSON.stringify({ error: { code: 'unauthorized', message: 'expired' } }), {
+            status: 401,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return undefined
+      },
+    })
+    try {
+      let first: ControlledStream | undefined
+      h.nextEvents((_u, sig) => { first = controlledStream(sig); return first })
+      first!.send(snapshotFrame({
+        bootId: 'boot-401',
+        seq: 1,
+        conversations: [conv(1, 'AuthCheck')],
+        pendingAsks: [],
+        plugins: [],
+        ui: [],
+      }))
+      await h.waitFor((o) => o.authenticated === true && o.sseConnected === true)
+
+      // 1. Binary artifact fetch 401 -> unified logout clears auth + token
+      await act(async () => {
+        await assert.rejects(() => artifactsApi.fetchBlob('art-401'))
+      })
+      await h.waitFor((o) => o.authenticated === false)
+      assert.equal(localStorage.getItem('helmx:token'), null)
+
+      // 2. Re-authenticate, then plugin module fetch 401 -> unified logout again
+      let second: ControlledStream | undefined
+      h.nextEvents((_u, sig) => { second = controlledStream(sig); return second })
+      await act(async () => {
+        await h.store().onAuthenticated('live-tok-2')
+      })
+      await h.waitFor(() => second !== undefined)
+      second!.send(snapshotFrame({
+        bootId: 'boot-401',
+        seq: 2,
+        conversations: [conv(1, 'AuthCheck')],
+        pendingAsks: [],
+        plugins: [],
+        ui: [],
+      }))
+      await h.waitFor((o) => o.authenticated === true && o.sseConnected === true)
+      await act(async () => {
+        await assert.rejects(
+          () => loadPluginClientModule('p:auth', 'index.tsx', 'h1'),
+          (err: unknown) => err instanceof PluginClientError && err.status === 401,
+        )
+      })
+      await h.waitFor((o) => o.authenticated === false)
+      assert.equal(localStorage.getItem('helmx:token'), null)
+      second!.end()
+    } finally {
+      setStoredToken(null)
       await h.close()
     }
   })
