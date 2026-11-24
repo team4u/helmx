@@ -328,6 +328,39 @@
   color: var(--fg-muted);
 }
 
+/* 插件斜杠命令执行中状态条：与历史编辑提示条保持统一几何结构 */
+.composer-command-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 10px 0;
+  padding: 4px 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  min-width: 0;
+}
+
+.composer-command-banner-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--fg-secondary);
+}
+.composer-command-banner-text svg {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+.composer-command-banner-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .attachment-chip {
   display: inline-flex;
   align-items: center;

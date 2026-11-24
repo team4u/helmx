@@ -5,6 +5,7 @@
 import { useLayoutEffect, useMemo } from 'react'
 import type { ConversationSummary, HelmxLocale, Profile } from '@helmx/protocol/browser'
 import { buildSlashMenuItems, type QualifiedCommand, type SlashMenuItem } from '../lib/commands-model.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useGroupedUi, usePlugins, useSkills, useStoreActions } from '../lib/store-context.js'
 import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
 import type { SkillScope } from '../skills/skill-scope-model.js'
@@ -56,6 +57,7 @@ export function useComposerCompletions({
   const plugins = usePlugins()
   const skills = useSkills()
   const { invokePluginAction } = useStoreActions()
+  const { t } = useWebLocale()
 
   useLayoutEffect(() => {
     autoGrowTextarea(textareaRef.current)
@@ -87,8 +89,8 @@ export function useComposerCompletions({
     [profile, skills, enabledPluginIds, scopedSkillCatalog.catalog],
   )
   const slashMenuItems = useMemo(
-    () => buildSlashMenuItems(availableSkills, slashPluginCommands, onRunPluginCommand, locale),
-    [availableSkills, slashPluginCommands, onRunPluginCommand, locale],
+    () => buildSlashMenuItems(availableSkills, slashPluginCommands, onRunPluginCommand, locale, t),
+    [availableSkills, slashPluginCommands, onRunPluginCommand, locale, t],
   )
 
   return {

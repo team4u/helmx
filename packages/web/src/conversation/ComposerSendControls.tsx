@@ -23,6 +23,7 @@ export interface ComposerSendControlsProps {
   editingEntryId: number | null
   sending: boolean
   uploading: number
+  commandRunning?: boolean
   envBlocker: SessionEnvBlocker
   text: string
   isMobile?: boolean
@@ -35,6 +36,7 @@ export function ComposerSendControls({
   editingEntryId,
   sending,
   uploading,
+  commandRunning = false,
   envBlocker,
   text,
   isMobile,
@@ -44,7 +46,8 @@ export function ComposerSendControls({
   const { t } = useWebLocale()
   const detectedMobile = useIsMobile(680)
   const mobile = isMobile ?? detectedMobile
-  const busyDisabled = sending || uploading > 0 || envBlocker.blocked
+  const inFlight = sending || uploading > 0 || commandRunning
+  const busyDisabled = inFlight || envBlocker.blocked
 
   return (
     <span className="composer-toolbar-right">
@@ -52,7 +55,7 @@ export function ComposerSendControls({
         <button
           type="button"
           className="btn btn-sm btn-primary btn-pill btn-send"
-          disabled={sending || uploading > 0 || envBlocker.blocked || text.trim() === ''}
+          disabled={inFlight || envBlocker.blocked || text.trim() === ''}
           onClick={() => void send()}
           title={editingEntryId !== null
             ? working
@@ -61,9 +64,17 @@ export function ComposerSendControls({
             : envBlocker.blocked
               ? envBlocker.reason ?? t('composer.env.saveOrCancelFirst')
               : t('composer.sendControls.sendTitle')}
-          aria-label={editingEntryId !== null ? t('composer.sendControls.updateShort') : uploading > 0 ? t('composer.sendControls.uploading', { count: uploading }) : t('composer.sendControls.send')}
+          aria-label={
+            editingEntryId !== null
+              ? t('composer.sendControls.updateShort')
+              : uploading > 0
+                ? t('composer.sendControls.uploading', { count: uploading })
+                : commandRunning
+                  ? t('composer.command.runningAria')
+                  : t('composer.sendControls.send')
+          }
         >
-          <HelmxIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
+          <HelmxIcon name={inFlight ? 'loader' : 'arrow-up'} size={18} className={inFlight ? 'spin-slow' : undefined} />
         </button>
       ) : text.trim() === '' ? (
         <Tooltip content={t('composer.sendControls.stopExecution')} side="top">
@@ -96,9 +107,9 @@ export function ComposerSendControls({
             aria-label={uploading > 0 ? t('composer.sendControls.uploading', { count: uploading }) : t('composer.sendControls.steer')}
           >
             <HelmxIcon
-              name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
+              name={inFlight ? 'loader' : 'corner-down-right'}
               size={13}
-              className={sending || uploading > 0 ? 'spin-slow' : undefined}
+              className={inFlight ? 'spin-slow' : undefined}
             />
             <span>{t('composer.sendControls.steerShort')}</span>
           </button>
@@ -126,9 +137,9 @@ export function ComposerSendControls({
               aria-label={uploading > 0 ? t('composer.sendControls.uploading', { count: uploading }) : editingEntryId !== null ? t('composer.sendControls.updateShort') : t('composer.sendControls.steer')}
             >
               <HelmxIcon
-                name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
+                name={inFlight ? 'loader' : 'corner-down-right'}
                 size={14}
-                className={sending || uploading > 0 ? 'spin-slow' : undefined}
+                className={inFlight ? 'spin-slow' : undefined}
               />
               <span className="composer-action-label">{editingEntryId !== null ? t('composer.sendControls.updateLabel') : t('composer.sendControls.insertLabel')}</span>
             </button>

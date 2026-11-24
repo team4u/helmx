@@ -13,6 +13,7 @@ import {
   type HelmxLocale,
   type NotificationEvent,
 } from '@helmx/protocol/browser'
+import { createWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { matchesUiScope } from './types.js'
 import { summarizeSingleLine } from './format.js'
 
@@ -94,6 +95,12 @@ export function commandHint(spec: CommandSpec, pluginId: string, locale: HelmxLo
   return spec.actionPluginId ?? pluginId
 }
 
+/** 统一格式化插件命令展示标签：有 slash 时为 `/slash · title`，否则为 `title`。 */
+export function formatPluginCommandLabel(cmd: QualifiedCommand, locale: HelmxLocale): string {
+  const title = resolveLocalizedText(cmd.spec.title, locale)
+  return cmd.spec.slash !== undefined ? `/${cmd.spec.slash} · ${title}` : title
+}
+
 /** 斜杠菜单条目：apply 回填草稿（内置命令/技能）；run 直接执行（插件 action 命令，不回填）。 */
 export interface SlashMenuItem {
   id: string
@@ -113,11 +120,12 @@ export function buildSlashMenuItems(
   pluginSlash: ReadonlyArray<QualifiedCommand>,
   runPluginCommand: (cmd: QualifiedCommand) => void,
   locale: HelmxLocale,
+  t: WebMessageTranslator = createWebTranslator(locale),
 ): SlashMenuItem[] {
   const builtin: SlashMenuItem[] = [
-    { id: '/new', label: '/new', hint: 'Start new topic', apply: '/new' },
-    { id: '/clear', label: '/clear', hint: 'Reset context', apply: '/clear' },
-    { id: '/compact', label: '/compact', hint: 'Compact context', apply: '/compact' },
+    { id: '/new', label: '/new', hint: t('composer.command.newHint'), apply: '/new' },
+    { id: '/clear', label: '/clear', hint: t('composer.command.clearHint'), apply: '/clear' },
+    { id: '/compact', label: '/compact', hint: t('composer.command.compactHint'), apply: '/compact' },
   ]
   const skills: SlashMenuItem[] = visibleSkills.map((s) => ({
     id: `/${SKILL_SLASH_PREFIX}${s.id}`,
@@ -172,6 +180,8 @@ export interface PluginSlashExecDeps {
   pushNotice: (notice: NotificationEvent) => void
   /** 通知正文中命令 title（LocalizedText 显示文案）的解析 locale。 */
   locale: HelmxLocale
+  /** 可选显示文案翻译器；缺省按 deps.locale 解析。 */
+  t?: WebMessageTranslator
   conversationId?: number
 }
 
@@ -179,20 +189,21 @@ export interface PluginSlashExecDeps {
 export async function executePluginSlashAction(cmd: QualifiedCommand, deps: PluginSlashExecDeps): Promise<void> {
   const actionId = cmd.spec.actionId
   if (actionId === undefined) throw new Error('Plugin command has no bound action')
+  const t = deps.t ?? createWebTranslator(deps.locale)
   try {
     await deps.invokePluginAction(commandActionPluginId(cmd), actionId, cmd.spec.input, deps.conversationId)
     deps.pushNotice({
       type: 'notification',
       level: 'info',
-      title: 'Command executed',
-      body: `${cmd.spec.slash !== undefined ? `/${cmd.spec.slash} · ` : ''}${resolveLocalizedText(cmd.spec.title, deps.locale)}`,
+      title: t('composer.command.executed'),
+      body: formatPluginCommandLabel(cmd, deps.locale),
       ...(deps.conversationId !== undefined ? { conversationId: deps.conversationId } : {}),
     })
   } catch (err: unknown) {
     deps.pushNotice({
       type: 'notification',
       level: 'error',
-      title: `Command failed: /${cmd.spec.slash ?? cmd.spec.id}`,
+      title: t('composer.command.failed', { command: `/${cmd.spec.slash ?? cmd.spec.id}` }),
       body: err instanceof Error ? err.message : String(err),
       ...(deps.conversationId !== undefined ? { conversationId: deps.conversationId } : {}),
     })

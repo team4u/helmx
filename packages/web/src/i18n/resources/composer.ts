@@ -253,6 +253,10 @@ export const composerMessages = {
   'composer.command.compactHint': { en: 'Compact context', 'zh-CN': '精简上下文' },
   'composer.command.header': { en: 'Commands and skills', 'zh-CN': '命令与技能' },
   'composer.command.noMatches': { en: 'No matching commands or skills', 'zh-CN': '没有匹配的命令或技能' },
+  'composer.command.running': { en: 'Running {label}…', 'zh-CN': '正在执行 {label}…' },
+  'composer.command.runningAria': { en: 'Running command', 'zh-CN': '命令执行中' },
+  'composer.command.executed': { en: 'Command executed', 'zh-CN': '命令已执行' },
+  'composer.command.failed': { en: 'Command failed: {command}', 'zh-CN': '命令执行失败：{command}' },
 
   // ---- Completion popover & sources ----
   'composer.completion.triggerMentions': { en: 'Mentions and completion', 'zh-CN': '引用与补全' },

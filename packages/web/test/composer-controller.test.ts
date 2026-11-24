@@ -221,6 +221,9 @@ test('LocalizedText 命令元数据：hint 与通知正文按 locale 解析，�
     () => {},
     'zh-CN',
   )
+  assert.equal(items.find((i) => i.id === '/new')?.hint, '开始新话题')
+  assert.equal(items.find((i) => i.id === '/clear')?.hint, '重置上下文')
+  assert.equal(items.find((i) => i.id === '/compact')?.hint, '精简上下文')
   assert.equal(items.find((i) => i.id === 'plugin:p1/cmd-p1')?.hint, '归档它。')
   assert.equal(items.find((i) => i.id === 'plugin:p2/cmd-p2')?.hint, '清理')
   const enItems = buildSlashMenuItems(
@@ -229,20 +232,37 @@ test('LocalizedText 命令元数据：hint 与通知正文按 locale 解析，�
     () => {},
     'en',
   )
+  assert.equal(enItems.find((i) => i.id === '/new')?.hint, 'Start new topic')
   assert.equal(enItems.find((i) => i.id === 'plugin:p2/cmd-p2')?.hint, 'Clean')
 
-  // executePluginSlashAction：成功通知正文中的 title 按注入 locale 解析
-  const notices: Array<{ level: string; body?: string }> = []
+  // executePluginSlashAction：成功/失败通知标题与正文按注入 locale 解析
+  const notices: Array<{ level: string; title: string; body?: string }> = []
   await executePluginSlashAction(
     cmd('p3', { slash: 'ping', actionId: 'ping', title: { en: 'Ping', 'zh-CN': '探测' } }),
     {
       invokePluginAction: async () => undefined,
-      pushNotice: (n) => { notices.push(n as { level: string; body?: string }) },
+      pushNotice: (n) => { notices.push(n as { level: string; title: string; body?: string }) },
       locale: 'zh-CN',
     },
   )
   assert.equal(notices.length, 1)
+  assert.equal(notices[0]!.title, '命令已执行')
   assert.equal(notices[0]!.body, '/ping · 探测', '通知正文消费解析后的 title 显示文案')
+  await assert.rejects(
+    executePluginSlashAction(
+      cmd('p3', { slash: 'ping', actionId: 'ping', title: { en: 'Ping', 'zh-CN': '探测' } }),
+      {
+        invokePluginAction: async () => { throw new Error('down') },
+        pushNotice: (n) => { notices.push(n as { level: string; title: string; body?: string }) },
+        locale: 'zh-CN',
+      },
+    ),
+    /down/,
+  )
+  assert.equal(notices.length, 2)
+  assert.equal(notices[1]!.level, 'error')
+  assert.equal(notices[1]!.title, '命令执行失败：/ping')
+  assert.equal(notices[1]!.body, 'down')
 })
 
 test('commandsForConversation: ⌘K and / share the same scope filtering', { timeout: 60_000 }, () => {
@@ -657,5 +677,112 @@ test('a failing plugin slash keeps the original draft and diagnoses explicitly',
     })
     assert.equal(textareaOf(app.host).value, '/archive')
     assert.ok(app.store.getNotices().some((notice: { title: string }) => String(notice.title).includes('Command failed')))
+  } finally { app.unmount(); restore() }
+})
+
+test('plugin slash pick clears partial token optimistically, shows in-flight banner + spinner, and settles cleanly', { timeout: 60_000 }, async () => {
+  const restore = stubFetch([], true)
+  const app = mountComposer(summary(34, 'idle'), archiveCommandUi)
+  let resolveAction!: () => void
+  const actionPromise = new Promise<void>((r) => { resolveAction = r })
+  ;(app.store.actions as unknown as { invokePluginAction: () => Promise<unknown> }).invokePluginAction = () => actionPromise
+  try {
+    const ta = textareaOf(app.host)
+    await act(async () => { typeInto(ta, '备注 /arch') })
+    assert.ok(app.host.querySelector('.composer-popover') !== null, 'partial slash opens popover')
+
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.equal(ta.value, '备注 ', 'partial /arch token is cleared immediately while action is in-flight')
+    assert.ok(app.host.querySelector('.composer-popover') === null, 'popover closes on pick')
+    const banner = app.host.querySelector('.composer-command-banner')
+    assert.ok(banner !== null, 'in-flight command banner renders while pending')
+    assert.match(banner.textContent ?? '', /\/archive/)
+    assert.ok(banner.querySelector('.spin-slow') !== null, 'banner renders spinning loader')
+    const sendBtn = app.host.querySelector<HTMLButtonElement>('button.btn-send')
+    assert.ok(sendBtn !== null)
+    assert.equal(sendBtn.disabled, true, 'send button is disabled while command runs')
+    assert.ok(sendBtn.querySelector('.spin-slow') !== null, 'send button shows spinner while command runs')
+
+    await act(async () => {
+      resolveAction()
+      await actionPromise
+    })
+    assert.ok(app.host.querySelector('.composer-command-banner') === null, 'banner clears on completion')
+    assert.equal(ta.value, '备注 ')
+    assert.ok(app.store.getNotices().some((n: { level: string; body?: string }) => n.level === 'info' && String(n.body).includes('/archive')))
+  } finally { app.unmount(); restore() }
+})
+
+test('failing plugin slash rolls back untouched draft but preserves user edits made during execution', { timeout: 60_000 }, async () => {
+  const restore = stubFetch([], true)
+  const appA = mountComposer(summary(35, 'idle'), archiveCommandUi)
+  let rejectA!: (err: Error) => void
+  const promiseA = new Promise<void>((_res, rej) => { rejectA = rej })
+  ;(appA.store.actions as unknown as { invokePluginAction: () => Promise<unknown> }).invokePluginAction = () => promiseA
+  try {
+    const ta = textareaOf(appA.host)
+    await act(async () => { typeInto(ta, '草稿前缀 /arch') })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.equal(ta.value, '草稿前缀 ', 'clears optimistically while pending')
+    assert.ok(appA.host.querySelector('.composer-command-banner') !== null)
+    await act(async () => {
+      rejectA(new Error('boom'))
+      await promiseA.catch(() => {})
+    })
+    assert.equal(ta.value, '草稿前缀 /arch', 'untouched draft rolls back on failure')
+    assert.ok(appA.host.querySelector('.composer-command-banner') === null, 'banner clears on failure')
+  } finally { appA.unmount(); restore() }
+
+  const restoreB = stubFetch([], true)
+  const appB = mountComposer(summary(36, 'idle'), archiveCommandUi)
+  let rejectB!: (err: Error) => void
+  const promiseB = new Promise<void>((_res, rej) => { rejectB = rej })
+  ;(appB.store.actions as unknown as { invokePluginAction: () => Promise<unknown> }).invokePluginAction = () => promiseB
+  try {
+    const ta = textareaOf(appB.host)
+    await act(async () => { typeInto(ta, '/arch') })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.equal(ta.value, '')
+    await act(async () => { typeInto(ta, '新内容') })
+    await act(async () => {
+      rejectB(new Error('boom'))
+      await promiseB.catch(() => {})
+    })
+    assert.equal(ta.value, '新内容', 'failure never overwrites user input typed while command ran')
+    assert.ok(appB.host.querySelector('.composer-command-banner') === null)
+  } finally { appB.unmount(); restoreB() }
+})
+
+test('direct plugin slash Enter on working conversation clears optimistically, shows banner, and keeps abort button enabled', { timeout: 60_000 }, async () => {
+  const restore = stubFetch([], true)
+  const app = mountComposer(summary(37, 'working'), archiveCommandUi)
+  let resolveAction!: () => void
+  const actionPromise = new Promise<void>((r) => { resolveAction = r })
+  ;(app.store.actions as unknown as { invokePluginAction: () => Promise<unknown> }).invokePluginAction = () => actionPromise
+  try {
+    const ta = textareaOf(app.host)
+    await act(async () => { typeInto(ta, '/archive') })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.equal(ta.value, '', 'exact slash clears optimistically on Enter')
+    assert.ok(app.host.querySelector('.composer-command-banner') !== null)
+    const abortBtn = app.host.querySelector<HTMLButtonElement>('.composer-abort-button')
+    assert.ok(abortBtn !== null && !abortBtn.disabled, 'abort button remains enabled while plugin command runs')
+
+    await act(async () => {
+      resolveAction()
+      await actionPromise
+    })
+    assert.ok(app.host.querySelector('.composer-command-banner') === null)
   } finally { app.unmount(); restore() }
 })

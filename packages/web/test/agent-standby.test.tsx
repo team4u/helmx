@@ -84,6 +84,7 @@ const state = {
   submitGate: undefined as Gate | undefined,
   uploadGate: undefined as Gate | undefined,
   assetsGate: undefined as Gate | undefined,
+  actionGate: undefined as Gate | undefined,
   createFailures: 0,
   submitFailures: 0,
   uploadFailures: 0,
@@ -114,6 +115,7 @@ function resetState(): void {
   state.submitGate = undefined
   state.uploadGate = undefined
   state.assetsGate = undefined
+  state.actionGate = undefined
   state.createFailures = 0
   state.submitFailures = 0
   state.uploadFailures = 0
@@ -199,6 +201,7 @@ function installFetch(): void {
       const actionId = decodeURIComponent(actionMatch[2]!)
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
       state.actionCalls.push({ pluginId, actionId, body })
+      if (state.actionGate !== undefined) await state.actionGate.promise
       if (state.actionError !== undefined) {
         return jsonResponse({ error: { code: 'action_failed', message: state.actionError } }, 500)
       }
@@ -1078,6 +1081,55 @@ describe("agent-standby", () => {
     assert.equal(input.value, '/ping', 'a failed plugin command keeps the original draft')
     assert.ok(document.body.textContent?.includes('Command failed: /ping'), 'an explicit error notice')
     assert.equal(state.createCalls.length, 0)
+  })
+
+  test('draft-state plugin slash commands: optimistic clear, in-flight banner + spinner, and rollback on untouched failure', { timeout: 60_000 }, async () => {
+    state.plugins = [
+      { id: 'p1', name: 'p1', locked: false, enabled: true, hooks: [], actions: ['ping'], tools: [] },
+    ]
+    state.ui = [
+      {
+        pluginId: 'p1',
+        surface: 'command',
+        spec: { id: 'ping', title: '诊断探针', slash: 'ping', actionId: 'ping' },
+      },
+    ]
+    const gate = makeGate()
+    state.actionGate = gate
+
+    await mount('#/a/assistant')
+    const input = textarea(MAIN_LABEL)
+    act(() => { typeInto(input, '草稿前缀 /pi') })
+    await settle()
+    assert.ok(document.querySelector('.agent-standby-pane .composer-popover') !== null)
+
+    await act(async () => { pressEnter(input) })
+    await waitForCondition(() => state.actionCalls.length === 1)
+    assert.equal(input.value, '草稿前缀 ', 'partial token clears optimistically while in-flight')
+    const banner = document.querySelector('.agent-standby-pane .composer-command-banner')
+    assert.ok(banner !== null, 'running banner shows while command is in-flight')
+    assert.match(banner.textContent ?? '', /\/ping/)
+    const sendBtn = document.querySelector<HTMLButtonElement>('.agent-standby-pane button.btn-send')
+    assert.ok(sendBtn !== null)
+    assert.equal(sendBtn.disabled, true, 'send button disables while plugin command runs')
+    assert.ok(sendBtn.querySelector('.spin-slow') !== null, 'send button spins while plugin command runs')
+
+    gate.resolve()
+    await waitForCondition(() => document.querySelector('.agent-standby-pane .composer-command-banner') === null)
+
+    const failGate = makeGate()
+    state.actionGate = failGate
+    state.actionError = 'plugin offline'
+    act(() => { typeInto(input, '保留前文 /pi') })
+    await settle()
+    await act(async () => { pressEnter(input) })
+    await waitForCondition(() => state.actionCalls.length === 2)
+    assert.equal(input.value, '保留前文 ', 'clears optimistically while pending')
+    assert.ok(document.querySelector('.agent-standby-pane .composer-command-banner') !== null)
+
+    failGate.resolve()
+    await waitForCondition(() => document.querySelector('.agent-standby-pane .composer-command-banner') === null)
+    assert.equal(input.value, '保留前文 /pi', 'untouched draft rolls back after failure')
   })
 
   // ---------------------------------------------------------------------------

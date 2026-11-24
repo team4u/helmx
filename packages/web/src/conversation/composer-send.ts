@@ -96,9 +96,11 @@ export interface ComposerSendApi {
   editingEntryId: number | null
   sending: boolean
   uploading: number
+  /** Active in-flight plugin slash command (null when idle). */
+  runningCommand: QualifiedCommand | null
   /** Environment block state (send button disable + hint). */
   envBlocker: SessionEnvBlocker
-  /** Send or upload in flight (shared by the env bar's sendBlocked and button disable). */
+  /** Send, upload, or plugin command in flight (shared by the env bar's sendBlocked and button disable). */
   sendInFlight: boolean
   /** Replace the whole draft text (advances the live draft version like user
    * typing; anchor/attachments untouched). */
@@ -126,8 +128,8 @@ export interface ComposerSendApi {
   /** Submit explicit text (consumes no draft / edit anchor / attachments;
    * rejects honestly on failure). */
   sendExplicit: (raw: string, whenBusy?: WhenBusy) => Promise<void>
-  /** Execute a plugin command from the slash menu (trigger word consumed only
-   * on success; stable identity). */
+  /** Execute a plugin command from the slash menu (optimistic trigger cleanup
+   * with rollback on untouched failure; stable identity). */
   runPluginCommand: (cmd: QualifiedCommand) => void
   /** SessionEnvBar block report (stable identity, for its blocker effect deps). */
   handleEnvBlocker: (blocker: SessionEnvBlocker) => void
@@ -144,11 +146,13 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
   const [editingEntryId, setEditingEntryId] = useState<number | null>(null)
   const [sending, setSending] = useState(false)
   const [uploading, setUploading] = useState(0)
+  const [runningCommand, setRunningCommand] = useState<QualifiedCommand | null>(null)
   const [envBlocker, setEnvBlocker] = useState<SessionEnvBlocker>(ENV_BLOCKER_CLEAR)
   const sendingRef = useRef(false)
   const uploadingRef = useRef(0)
   const envBlockedRef = useRef(false)
   const commandPendingRef = useRef(false)
+  const commandGenRef = useRef(0)
   const withdrawingRef = useRef(false)
   const mountedRef = useRef(true)
   useEffect(() => {
@@ -176,7 +180,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       hasDraftText: live.text.trim() !== '',
       editingEntry: live.targetEntryId !== null,
       hasAttachments: live.attachments.length > 0,
-      busy: sendingRef.current || uploadingRef.current > 0,
+      busy: sendingRef.current || uploadingRef.current > 0 || commandPendingRef.current,
     }
     sink.current = snap
     sink.publish?.(snap)
@@ -213,7 +217,10 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     prevConversationIdRef.current = conversation.id
     lastPrefillRef.current = null
     lastPrefillTickRef.current = null
+    commandGenRef.current += 1
+    commandPendingRef.current = false
     setEditingEntryId(null)
+    setRunningCommand(null)
   }, [conversation.id])
 
   // Prefill (edit and resend): any prefill reference change triggers it, and
@@ -234,7 +241,8 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
         live.attachments.length > 0 ||
         live.targetEntryId !== null ||
         sendingRef.current ||
-        uploadingRef.current > 0
+        uploadingRef.current > 0 ||
+        commandPendingRef.current
       ) {
         pushNotice({
           type: 'notification',
@@ -309,27 +317,62 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
         invokePluginAction,
         pushNotice,
         locale,
+        t,
         conversationId: conversation.id,
       }),
-    [invokePluginAction, pushNotice, locale, conversation.id],
+    [invokePluginAction, pushNotice, locale, t, conversation.id],
   )
 
-  // Consume the trigger word only after the command succeeds; when the user
-  // already modified the draft, the new content must not be overwritten.
+  // Optimistically remove the trigger/command text while tracking an in-flight
+  // command state; restore the original draft on failure only if the user has
+  // not modified it in the meantime.
+  const executePluginCommand = useCallback(
+    async (cmd: QualifiedCommand, mode: 'token' | 'clear', strict: boolean): Promise<void> => {
+      if (commandPendingRef.current) {
+        if (strict) throw new Error('Current draft empty or a composer operation is already in flight')
+        return
+      }
+      const gen = ++commandGenRef.current
+      commandPendingRef.current = true
+      setRunningCommand(cmd)
+      const el = textareaRef.current
+      const before = liveDraftRef.current
+      const currentTarget = before.targetEntryId
+      const caret = el?.selectionStart ?? before.text.length
+      const resolved = mode === 'token' ? removeTokenBeforeCaret(before.text, caret) : { next: '', nextCaret: 0 }
+      const expectedAfterClear = draftVersionOf(resolved.next, currentTarget, attachments)
+      setText(resolved.next)
+      syncLiveDraft(resolved.next, currentTarget, attachments)
+      if (mode === 'token' && el !== null && el.isConnected) {
+        focusWithCaret(el, resolved.nextCaret)
+      }
+      publishHiddenDirty()
+      try {
+        await runPluginCommandFrom(cmd)
+      } catch (error) {
+        if (
+          mountedRef.current &&
+          gen === commandGenRef.current &&
+          shouldRestoreEditOnFailure(liveDraftRef.current, expectedAfterClear)
+        ) {
+          setText(before.text)
+          syncLiveDraft(before.text, currentTarget, attachments)
+        }
+        if (strict) throw error
+      } finally {
+        if (gen === commandGenRef.current) {
+          commandPendingRef.current = false
+          if (mountedRef.current) setRunningCommand(null)
+          publishHiddenDirty()
+        }
+      }
+    },
+    [attachments, publishHiddenDirty, runPluginCommandFrom, syncLiveDraft, textareaRef],
+  )
+
   const runPluginCommandImpl = useCallback((cmd: QualifiedCommand): void => {
-    if (commandPendingRef.current) return
-    commandPendingRef.current = true
-    const el = textareaRef.current
-    const before = liveDraftRef.current
-    const caret = el?.selectionStart ?? before.text.length
-    const { next, nextCaret } = removeTokenBeforeCaret(before.text, caret)
-    void runPluginCommandFrom(cmd).then(() => {
-      if (!shouldRestoreEditOnFailure(liveDraftRef.current, before)) return
-      setText(next)
-      syncLiveDraft(next, editingEntryId, attachments)
-      if (el !== null) focusWithCaret(el, nextCaret)
-    }).catch(() => { /* The action call already sent an explicit failure notice; keep the draft. */ }).finally(() => { commandPendingRef.current = false })
-  }, [editingEntryId, attachments, syncLiveDraft, runPluginCommandFrom])
+    void executePluginCommand(cmd, 'token', false)
+  }, [executePluginCommand])
   // Slash menu entries persist across renders: the entry point takes the
   // latest implementation through a stable wrapper (instead of writing a
   // latest ref during render).
@@ -430,7 +473,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
   /** ↑ queued-withdraw re-edit: withdraw the newest human queued input from
    * pi.inbox first, then prefill text and attachments. */
   const withdrawQueuedInput = useCallback(async (queued: QueuedConversationInput): Promise<void> => {
-    if (withdrawingRef.current || sendingRef.current || uploadingRef.current > 0) return
+    if (withdrawingRef.current || sendingRef.current || uploadingRef.current > 0 || commandPendingRef.current) return
     withdrawingRef.current = true
     try {
       const res = await conversationsApi.withdraw(conversation.id, queued.submissionId)
@@ -510,19 +553,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     const pluginCmd = matchExactPluginSlash(payload, slashPluginCommands)
     const editing = editingEntryId !== null
     if (!editing && pluginCmd !== undefined) {
-      commandPendingRef.current = true
-      const before = liveDraftRef.current
-      try {
-        await runPluginCommandFrom(pluginCmd)
-        if (shouldRestoreEditOnFailure(liveDraftRef.current, before)) {
-          setText('')
-          syncLiveDraft('', editingEntryId, attachments)
-        }
-      } catch (error) {
-        if (strict) throw error
-      } finally {
-        commandPendingRef.current = false
-      }
+      await executePluginCommand(pluginCmd, 'clear', strict)
       return
     }
     // Management commands like /new appearing inside edited text are just the
@@ -580,7 +611,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       onSendingChange?.(false)
       publishHiddenDirty()
     }
-  }, [text, attachments, editingEntryId, working, runSlashCommand, syncLiveDraft, onSendingChange, notifyError, pushNotice, conversation.id, uploadingRef, envBlocker, runPluginCommandFrom, slashPluginCommands, publishHiddenDirty, t])
+  }, [text, attachments, editingEntryId, working, runSlashCommand, syncLiveDraft, onSendingChange, notifyError, pushNotice, conversation.id, uploadingRef, envBlocker, executePluginCommand, slashPluginCommands, publishHiddenDirty, t])
 
   // Explicit text submission: consumes no draft / edit anchor / attachments
   // (content not typed by the user, e.g. plugin command output). Shares the
@@ -633,9 +664,9 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       hasDraftText: text.trim() !== '',
       editingEntry: editingEntryId !== null,
       hasAttachments: attachments.length > 0,
-      busy: sending || uploading > 0,
+      busy: sending || uploading > 0 || runningCommand !== null,
     }),
-    [text, editingEntryId, attachments, sending, uploading],
+    [text, editingEntryId, attachments, sending, uploading, runningCommand],
   )
   if (dirtySink != null) dirtySink.current = dirtySnapshot
   // Sync the external bridge on change; clear on unmount by the instance key (the dep array
@@ -655,8 +686,9 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     editingEntryId,
     sending,
     uploading,
+    runningCommand,
     envBlocker,
-    sendInFlight: sending || uploading > 0,
+    sendInFlight: sending || uploading > 0 || runningCommand !== null,
     setDraftState,
     insertTextState,
     readLiveDraft,

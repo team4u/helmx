@@ -27,6 +27,7 @@ import { collectEnabledPluginIds, isHumanSelectableProfile } from '../shell/side
 import { standbySkillScope } from '../skills/skill-scope-model.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
+import { ComposerCommandBanner } from './ComposerCommandBanner.js'
 import { ComposerInputShell, type ComposerAttachmentItem } from './ComposerInputShell.js'
 import { StandbyEnvBar, StandbyModelPicker } from './StandbyControls.js'
 import { focusWithCaret } from './composer-controller.js'
@@ -98,12 +99,21 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     [groupedUi.commands, anchoredConversation],
   )
   const commandPendingRef = useRef(false)
-  const [commandPending, setCommandPending] = useState(false)
+  const [runningCommand, setRunningCommand] = useState<QualifiedCommand | null>(null)
+  const commandGenRef = useRef(0)
+  const prevDraftKeyRef = useRef(draftKey)
   const mountedRef = useRef(true)
   useEffect(() => {
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
+  useEffect(() => {
+    if (prevDraftKeyRef.current === draftKey) return
+    prevDraftKeyRef.current = draftKey
+    commandGenRef.current += 1
+    commandPendingRef.current = false
+    setRunningCommand(null)
+  }, [draftKey])
 
   useEffect(() => {
     const record = getStandbyDraft(draftKey)
@@ -192,30 +202,38 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   const executeStandbyPluginCommand = useCallback((cmd: QualifiedCommand, mode: 'token' | 'clear'): void => {
     const record = getStandbyDraft(draftKey)
     if (commandPendingRef.current || record.sending) return
+    const gen = ++commandGenRef.current
     commandPendingRef.current = true
-    setCommandPending(true)
+    setRunningCommand(cmd)
     const el = textareaRef.current
     const epoch = currentStandbyDraftEpoch()
     const beforeText = record.text
     const caret = el?.selectionStart ?? beforeText.length
     const resolved = mode === 'token' ? removeTokenBeforeCaret(beforeText, caret) : { next: '', nextCaret: 0 }
+    updateStandbyDraft(draftKey, { text: resolved.next })
+    if (mode === 'token' && el !== null && el.isConnected) focusWithCaret(el, resolved.nextCaret)
     void executePluginSlashAction(cmd, {
       invokePluginAction,
       pushNotice,
       locale,
+      t,
       ...(record.conversationId !== undefined ? { conversationId: record.conversationId } : {}),
-    }).then(() => {
-      if (epoch !== currentStandbyDraftEpoch()) return
-      if (getStandbyDraft(draftKey).text !== beforeText) return
-      updateStandbyDraft(draftKey, { text: resolved.next })
-      if (mode === 'token' && el !== null && el.isConnected) focusWithCaret(el, resolved.nextCaret)
     }).catch(() => {
-      /* The action call already sent an explicit failure notice; keep the draft. */
+      if (
+        mountedRef.current &&
+        epoch === currentStandbyDraftEpoch() &&
+        gen === commandGenRef.current &&
+        getStandbyDraft(draftKey).text === resolved.next
+      ) {
+        updateStandbyDraft(draftKey, { text: beforeText })
+      }
     }).finally(() => {
-      commandPendingRef.current = false
-      if (mountedRef.current) setCommandPending(false)
+      if (gen === commandGenRef.current) {
+        commandPendingRef.current = false
+        if (mountedRef.current) setRunningCommand(null)
+      }
     })
-  }, [draftKey, invokePluginAction, locale, pushNotice])
+  }, [draftKey, invokePluginAction, locale, pushNotice, t])
 
   const runPluginCommand = useStableCallback((cmd: QualifiedCommand): void => {
     executeStandbyPluginCommand(cmd, 'token')
@@ -382,7 +400,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           envError={envError}
           anchored={draft.conversationId !== undefined}
           anchoredConversation={anchoredConversation}
-          commandPending={commandPending}
+          runningCommand={runningCommand}
           slashPluginCommands={slashPluginCommands}
           onRunPluginCommand={runPluginCommand}
           isSplit={isSplit}
@@ -404,7 +422,7 @@ interface StandbyComposerProps {
   envError: string | null
   anchored: boolean
   anchoredConversation: ConversationSummary | undefined
-  commandPending: boolean
+  runningCommand: QualifiedCommand | null
   slashPluginCommands: ReadonlyArray<QualifiedCommand>
   onRunPluginCommand: (cmd: QualifiedCommand) => void
   isSplit?: boolean
@@ -422,7 +440,7 @@ function StandbyComposer({
   envError,
   anchored,
   anchoredConversation,
-  commandPending,
+  runningCommand,
   slashPluginCommands,
   onRunPluginCommand,
   isSplit,
@@ -435,7 +453,8 @@ function StandbyComposer({
   const { locale, t } = useWebLocale()
   const isMobile = useIsMobile(680)
   const busy = draft.sending
-  const sendDisabled = busy || commandPending || draft.text.trim() === '' || envError !== null
+  const inFlight = busy || runningCommand !== null
+  const sendDisabled = inFlight || draft.text.trim() === '' || envError !== null
   const configLocked = busy || anchored
   const effectiveModel = anchoredConversation?.model || resolveStandbyEffectiveModel(
     draft.model,
@@ -561,6 +580,7 @@ function StandbyComposer({
           ) : null}
         </>
       }
+      boxBanner={runningCommand !== null ? <ComposerCommandBanner command={runningCommand} /> : undefined}
       attachments={attachmentItems}
       textareaRef={textareaRef}
       textareaAriaLabel={t('composer.standby.firstMessageAria', { name: profile.name || profile.id })}
@@ -614,9 +634,9 @@ function StandbyComposer({
             disabled={sendDisabled}
             onClick={onSend}
             title={envError !== null ? envError : t('composer.standby.sendTitle')}
-            aria-label={busy ? t('composer.standby.sendingAria') : t('composer.sendControls.send')}
+            aria-label={busy ? t('composer.standby.sendingAria') : runningCommand !== null ? t('composer.command.runningAria') : t('composer.sendControls.send')}
           >
-            <HelmxIcon name={busy ? 'loader' : 'arrow-up'} size={18} className={busy ? 'spin-slow' : undefined} />
+            <HelmxIcon name={inFlight ? 'loader' : 'arrow-up'} size={18} className={inFlight ? 'spin-slow' : undefined} />
           </button>
         </span>
       }

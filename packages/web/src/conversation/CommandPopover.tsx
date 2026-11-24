@@ -69,8 +69,8 @@ export function CommandPopover({
   const commitItem = (item: PopoverItem | undefined): void => {
     if (item === undefined) return
     if (item.run !== undefined) {
-      item.run()
       onClose()
+      item.run()
     } else if (item.apply !== undefined) {
       onPick(item.apply)
     }

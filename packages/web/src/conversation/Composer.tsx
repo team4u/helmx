@@ -13,6 +13,7 @@ import {
 } from '../lib/store-context.js'
 import { conversationSkillScope } from '../skills/skill-scope-model.js'
 import { AskDock } from './AskDock.js'
+import { ComposerCommandBanner } from './ComposerCommandBanner.js'
 import { ComposerInputShell, type ComposerAttachmentItem } from './ComposerInputShell.js'
 import { ComposerSendControls } from './ComposerSendControls.js'
 import { ModelPicker } from './ModelPicker.js'
@@ -112,6 +113,7 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
     editingEntryId,
     sending,
     uploading,
+    runningCommand,
     envBlocker,
     sendInFlight,
     setDraftState,
@@ -285,23 +287,28 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
         </>
       }
       boxBanner={
-        editingEntryId !== null ? (
-          <div className="composer-edit-banner" role="status">
-            <span className="composer-edit-banner-text">
-              <HelmxIcon name="edit" size={12} />
-              <span>{working ? t('conv.composer.editingWorking') : t('conv.composer.editingIdle')}</span>
-            </span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm composer-edit-cancel"
-              onClick={cancelEdit}
-              title={t('conv.composer.cancelEditTitle')}
-            >
-              <HelmxIcon name="x" size={12} />
-              <span>{t('common.cancel')}</span>
-              <span className="kbd-hint composer-inline-kbd">Esc</span>
-            </button>
-          </div>
+        editingEntryId !== null || runningCommand !== null ? (
+          <>
+            {runningCommand !== null ? <ComposerCommandBanner command={runningCommand} /> : null}
+            {editingEntryId !== null ? (
+              <div className="composer-edit-banner" role="status">
+                <span className="composer-edit-banner-text">
+                  <HelmxIcon name="edit" size={12} />
+                  <span>{working ? t('conv.composer.editingWorking') : t('conv.composer.editingIdle')}</span>
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm composer-edit-cancel"
+                  onClick={cancelEdit}
+                  title={t('conv.composer.cancelEditTitle')}
+                >
+                  <HelmxIcon name="x" size={12} />
+                  <span>{t('common.cancel')}</span>
+                  <span className="kbd-hint composer-inline-kbd">Esc</span>
+                </button>
+              </div>
+            ) : null}
+          </>
         ) : undefined
       }
       attachments={attachmentItems}
@@ -343,6 +350,7 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
           editingEntryId={editingEntryId}
           sending={sending}
           uploading={uploading}
+          commandRunning={runningCommand !== null}
           envBlocker={envBlocker}
           text={text}
           isMobile={isMobile}
