@@ -20,6 +20,7 @@
  */
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import {
+  Button,
   Checkbox,
   DropdownMenu,
   DropdownMenuContent,
@@ -28,6 +29,7 @@ import {
   DropdownMenuTrigger,
   HelmxIcon,
   SearchBox,
+  Stack,
   Tooltip,
   useSharedNowMs,
 } from '@helmx/plugin-client'
@@ -184,33 +186,35 @@ function SidebarEmptyNewTopicButton({
   const singleCandidate = candidates.length === 1 ? (candidates[0] ?? null) : null
   if (singleCandidate !== null) {
     return (
-      <button
-        type="button"
-        className="btn btn-sm sidebar-empty-new-topic-btn"
+      <Button
+        size="sm"
+        className="sidebar-empty-new-topic-btn"
+        icon={<HelmxIcon name="plus" size={12} />}
         title={t('shell.agents.newTopicUnder', { label: singleCandidate.label })}
         aria-label={t('conv.pane.newTopic')}
         onClick={() => onSelectProfile(singleCandidate.profileId)}
       >
-        <HelmxIcon name="plus" size={12} />
-        <span>{t('conv.pane.newTopic')}</span>
-      </button>
+        {t('conv.pane.newTopic')}
+      </Button>
     )
   }
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="btn btn-sm sidebar-empty-new-topic-btn"
+        <Button
+          size="sm"
+          className="sidebar-empty-new-topic-btn"
+          icon={<HelmxIcon name="plus" size={12} />}
           title={t('conv.pane.newTopic')}
           aria-label={t('conv.pane.newTopic')}
           aria-haspopup="menu"
         >
-          <HelmxIcon name="plus" size={12} />
-          <span>{t('conv.pane.newTopic')}</span>
-          <HelmxIcon name="chevron-down" size={11} />
-        </button>
+          <Stack inline direction="horizontal" gap="xs" align="center">
+            <span>{t('conv.pane.newTopic')}</span>
+            <HelmxIcon name="chevron-down" size={11} />
+          </Stack>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuPortal>
         <DropdownMenuContent className="pane-more-popover" align="start" sideOffset={4}>
@@ -1057,16 +1061,16 @@ export function SidebarConversationList({
           onExit={batch.exitBatchMode}
           onToggleSelectAll={batch.toggleSelectAll}
           extraActions={
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={effectiveArchivableSelectedIds.length === 0 || batch.deleting || archiving}
+            <Button
+              size="sm"
+              pending={archiving}
+              disabled={effectiveArchivableSelectedIds.length === 0 || batch.deleting}
               onClick={() => void executeBatchArchive()}
             >
               {archiving
                 ? t('shell.agents.archiving')
                 : t('shell.agents.archiveCount', { count: effectiveArchivableSelectedIds.length })}
-            </button>
+            </Button>
           }
           confirmOpen={batch.confirmOpen}
           onConfirmOpenChange={batch.setConfirmOpen}

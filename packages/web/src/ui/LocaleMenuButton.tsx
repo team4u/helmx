@@ -6,6 +6,7 @@ import {
   DropdownMenuRoot,
   DropdownMenuTrigger,
   HelmxIcon,
+  IconButton,
   Tooltip,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -26,7 +27,7 @@ export interface LocaleMenuButtonProps {
  * offers Auto (follow browser) / English / 简体中文 right alongside the theme toggle.
  */
 export function LocaleMenuButton({
-  className = 'btn btn-ghost btn-sm sidebar-locale-toggle',
+  className = 'sidebar-locale-toggle',
   iconSize = 16,
   tooltipSide = 'right',
   menuSide = 'right',
@@ -61,14 +62,14 @@ export function LocaleMenuButton({
     <DropdownMenuRoot open={open} onOpenChange={setOpen}>
       <Tooltip content={tooltipText} side={tooltipSide}>
         <DropdownMenuTrigger asChild>
-          <button
-            type="button"
+          <IconButton
+            variant="ghost"
+            size="sm"
             className={className}
+            icon={<HelmxIcon name="globe" size={iconSize} />}
             aria-label={triggerLabel}
             aria-expanded={open}
-          >
-            <HelmxIcon name="globe" size={iconSize} />
-          </button>
+          />
         </DropdownMenuTrigger>
       </Tooltip>
       <DropdownMenuPortal>

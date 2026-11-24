@@ -5,7 +5,7 @@
  * - 未随附 changelog（老 payload / 特殊部署）如实显示空态，不装假数据。
  */
 import { useEffect, useState, type ReactNode } from 'react'
-import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, HelmxIcon } from '@helmx/plugin-client'
+import { Badge, Callout, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, HelmxIcon, IconButton, LoadingState } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { apiRequest, ApiClientError } from '../lib/api.js'
 import { useIsMobile } from '../conversation/composer-model.js'
@@ -63,44 +63,43 @@ export function HubChangelogModal({ from, onClose, inline = false }: { from?: st
                 <HelmxIcon name="file-text" size={14} />
                 <DialogTitle className="modal-title preview-modal-title">{t('shell.hubChangelog.title')}</DialogTitle>
                 {data !== null ? (
-                  <span className="badge badge-neutral mono tabular-nums">v{data.version}</span>
+                  <Badge tone="neutral" mono className="tabular-nums">v{data.version}</Badge>
                 ) : null}
                 {data?.from !== undefined ? (
-                  <span className="badge badge-neutral tabular-nums">
+                  <Badge tone="neutral" className="tabular-nums">
                     {data.fromMatched === true
                       ? t('shell.hubChangelog.range', { from: data.from, count: sections.length })
                       : t('shell.hubChangelog.rangeOlder', { from: data.from, count: sections.length })}
-                  </span>
+                  </Badge>
                 ) : null}
               </span>
               <span className="preview-modal-actions">
                 <DialogClose asChild>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-icon-sm"
-                    title={t('shell.hubChangelog.closeTitle')}
-                    aria-label={t('shell.hubChangelog.closeTitle')}
-                  >
-                    <HelmxIcon name="x" size={14} />
-                  </button>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    icon={<HelmxIcon name="x" size={14} />}
+                    label={t('shell.hubChangelog.closeTitle')}
+                  />
                 </DialogClose>
               </span>
             </div>
             <div className="modal-body hub-changelog-body">
               {state.phase === 'loading' ? (
-                <div className="preview-modal-loading">
-                  <HelmxIcon name="loader" size={14} className="spin-slow" />
-                  {t('shell.hubChangelog.loading')}
-                </div>
+                <LoadingState
+                  label={t('shell.hubChangelog.loading')}
+                  iconSize={14}
+                  className="preview-modal-loading"
+                />
               ) : null}
               {state.phase === 'error' ? (
-                <div className="callout callout-error">{state.message}</div>
+                <Callout tone="err">{state.message}</Callout>
               ) : null}
               {state.phase === 'loaded' && data !== null && data.available !== true ? (
-                <div className="callout">{t('shell.hubChangelog.absent')}</div>
+                <Callout>{t('shell.hubChangelog.absent')}</Callout>
               ) : null}
               {state.phase === 'loaded' && data !== null && data.available === true && sections.length === 0 ? (
-                <div className="callout">{t('shell.hubChangelog.emptyRange')}</div>
+                <Callout>{t('shell.hubChangelog.emptyRange')}</Callout>
               ) : null}
               {sections.map((section) => (
                 <section key={section.version} className="hub-changelog-section">

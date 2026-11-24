@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode, type RefObject } from 'react'
-import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
+import { Badge, Button, HelmxIcon, IconButton, Tooltip } from '@helmx/plugin-client'
 import {
   useAuthConnection,
   useConversations,
@@ -31,7 +31,6 @@ import {
   resolveSidebarTargetPresence,
   shouldSkipNavRowClick,
   sidebarBadgeCountLabel,
-  sidebarBadgeToneClass,
   type SidebarStoreView,
   type SidebarViewItem,
 } from './sidebar-model.js'
@@ -62,7 +61,7 @@ function ViewNavGroup({ store }: { store: SidebarStoreView }) {
     <div className="sidebar-group">
       <div className="sidebar-group-header">{t('shell.sidebar.viewsHeader')}</div>
       {clientItems.map((item) => (
-        <div key={`client:${item.pluginId}/${item.spec.id}`} style={{ padding: '0 10px 6px' }}>
+        <div key={`client:${item.pluginId}/${item.spec.id}`} className="sidebar-client-item">
           <PluginUiView pluginId={item.pluginId} spec={item.spec} label={t('shell.sidebar.itemLabel', { id: item.spec.id })} />
         </div>
       ))}
@@ -74,7 +73,6 @@ function ViewNavGroup({ store }: { store: SidebarStoreView }) {
           <div
             key={view.key}
             className={`nav-item${presenceNavClassSuffix(presence)}`}
-            style={{ cursor: 'pointer' }}
             onClick={(e) => {
               if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
               store.openTarget(view.target)
@@ -94,9 +92,12 @@ function ViewNavGroup({ store }: { store: SidebarStoreView }) {
             <span className="nav-item-meta">
               <SidebarPaneTag paneTag={presence.paneTag} />
               {badge !== null && !badge.dot && badge.count > 0 && (
-                <span className={`badge ${sidebarBadgeToneClass(badge.tone)} tabular-nums sidebar-view-badge`}>
+                <Badge
+                  tone={badge.tone === 'error' ? 'err' : badge.tone}
+                  className="tabular-nums sidebar-view-badge"
+                >
                   {sidebarBadgeCountLabel(badge.count)}
-                </span>
+                </Badge>
               )}
               {badge !== null && badge.dot && (
                 <span className="sidebar-view-badge-dot" data-tone={badge.tone} aria-hidden="true" />
@@ -164,14 +165,14 @@ function RailChangelogButton(): ReactNode {
   const label = t('shell.hubChangelog.entry')
   return (
     <Tooltip content={label} side="right">
-      <button
-        type="button"
-        className="btn btn-ghost btn-sm sidebar-changelog-toggle"
+      <IconButton
+        variant="ghost"
+        size="sm"
+        className="sidebar-changelog-toggle"
+        icon={<HelmxIcon name="file-text" size={16} />}
         aria-label={label}
         onClick={() => setActiveModal({ kind: 'hub-changelog' })}
-      >
-        <HelmxIcon name="file-text" size={16} />
-      </button>
+      />
     </Tooltip>
   )
 }
@@ -309,23 +310,25 @@ function ActivityRail({
       <div className="activity-rail-footer">
         <LocaleMenuButton tooltipSide="right" menuSide="right" menuAlign="end" />
         <Tooltip content={themeTooltip} side="right">
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm sidebar-theme-toggle"
+          <IconButton
+            variant="ghost"
+            size="sm"
+            className="sidebar-theme-toggle"
+            icon={
+              <HelmxIcon
+                name={
+                  themePreference === 'system'
+                    ? 'monitor'
+                    : themePreference === 'light'
+                      ? 'sun'
+                      : 'moon'
+                }
+                size={16}
+              />
+            }
             aria-label={themeAriaLabel}
             onClick={onToggleTheme}
-          >
-            <HelmxIcon
-              name={
-                themePreference === 'system'
-                  ? 'monitor'
-                  : themePreference === 'light'
-                    ? 'sun'
-                    : 'moon'
-              }
-              size={16}
-            />
-          </button>
+          />
         </Tooltip>
         <RailChangelogButton />
       </div>
@@ -508,33 +511,33 @@ export function Sidebar({
           </div>
           <div className="sidebar-header-actions">
             <Tooltip content={quietNotifyTooltip} side="bottom">
-              <button
-                type="button"
-                className="btn btn-sm btn-icon-sm"
+              <IconButton
+                variant="default"
+                size="sm"
+                icon={quietNotifyEnabled && readBrowserNotificationPermission() === 'granted' ? 'bell' : 'bell-off'}
                 aria-label={quietNotifyTooltip}
                 aria-pressed={quietNotifyEnabled}
                 onClick={() => {
                   void setQuietNotify(!quietNotifyEnabled)
                 }}
-              >
-                <HelmxIcon name={quietNotifyEnabled && readBrowserNotificationPermission() === 'granted' ? 'bell' : 'bell-off'} size={13} />
-              </button>
+              />
             </Tooltip>
             <Tooltip content={t('shell.sidebar.openCommandPalette')} side="bottom">
-              <button
-                type="button"
-                className="btn btn-sm btn-icon-sm"
+              <IconButton
+                variant="default"
+                size="sm"
+                icon="search"
                 aria-label={t('shell.sidebar.openCommandPalette')}
                 onClick={() => setActiveModal({ kind: 'command-palette' })}
-              >
-                <HelmxIcon name="search" size={13} />
-              </button>
+              />
             </Tooltip>
             {space === 'conversations' && (
               <Tooltip content={overviewLabel} side="bottom">
-                <button
-                  type="button"
-                  className={`btn btn-sm btn-icon-sm sidebar-overview-open-btn${overviewPresence.active ? ' is-active' : overviewPresence.splitSecondary ? ' is-split' : ''}${overviewPresence.focused ? ' nav-item-focused' : ''}`}
+                <Button
+                  variant="default"
+                  size="sm"
+                  className={`btn-icon-sm sidebar-overview-open-btn${overviewPresence.active ? ' is-active' : overviewPresence.splitSecondary ? ' is-split' : ''}${overviewPresence.focused ? ' nav-item-focused' : ''}`}
+                  icon="activity"
                   aria-label={overviewLabel}
                   aria-current={overviewPresence.active ? 'page' : undefined}
                   onClick={() => {
@@ -542,38 +545,36 @@ export function Sidebar({
                     onClose?.()
                   }}
                 >
-                  <HelmxIcon name="activity" size={13} />
-                  {attentionIndicator.totalCount > 0 && attentionIndicator.tone !== null && (
+                  {attentionIndicator.totalCount > 0 && attentionIndicator.tone !== null ? (
                     <span
                       className="overview-count-badge sidebar-overview-entry-badge"
                       data-tone={attentionIndicator.tone}
                     >
                       {sidebarBadgeCountLabel(attentionIndicator.totalCount)}
                     </span>
-                  )}
-                </button>
+                  ) : null}
+                </Button>
               </Tooltip>
             )}
             <Tooltip content={collapseWithShortcut} side="bottom">
-              <button
-                type="button"
-                className="btn btn-sm btn-icon-sm desktop-sidebar-collapse-btn"
+              <IconButton
+                variant="default"
+                size="sm"
+                className="desktop-sidebar-collapse-btn"
+                icon="chevron-left"
                 aria-label={t('shell.sidebar.collapseNav')}
                 onClick={() => toggleSidebarCollapsed?.()}
-              >
-                <HelmxIcon name="chevron-left" size={13} />
-              </button>
+              />
             </Tooltip>
             {onClose && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm btn-icon-sm mobile-sidebar-close"
-                title={t('shell.nav.closeNav')}
-                aria-label={t('shell.nav.closeNav')}
+              <IconButton
+                variant="ghost"
+                size="sm"
+                className="mobile-sidebar-close"
+                icon={<HelmxIcon name="x" size={14} />}
+                label={t('shell.nav.closeNav')}
                 onClick={onClose}
-              >
-                <HelmxIcon name="x" size={14} />
-              </button>
+              />
             )}
           </div>
         </div>

@@ -3,7 +3,7 @@
  * used by ConversationOverview and SidebarConversationList.
  */
 import type { ReactNode } from 'react'
-import { ConfirmDialog } from '@helmx/plugin-client'
+import { Button, ConfirmDialog } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export interface BatchActionBarProps {
@@ -49,34 +49,35 @@ export function BatchActionBar({
           <span className="batch-bar-count tabular-nums">
             {t('shell.batch.selected', { count: selectedCount })}
           </span>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs"
+          <Button
+            variant="ghost"
+            size="xs"
             disabled={anyBusy}
             title={exitTitle}
             onClick={onExit}
           >
             {t('shell.batch.exit')}
-          </button>
+          </Button>
         </div>
         <div className="batch-bar-actions">
-          <button
-            type="button"
-            className="btn btn-sm"
+          <Button
+            size="sm"
             disabled={selectableCount === 0 || anyBusy}
             onClick={onToggleSelectAll}
           >
             {isAllSelected ? t('shell.batch.clear') : t('shell.batch.selectAll')}
-          </button>
+          </Button>
           {extraActions}
-          <button
-            type="button"
-            className="btn btn-sm btn-danger-sm"
-            disabled={selectedCount === 0 || anyBusy}
+          <Button
+            variant="danger"
+            size="sm"
+            className="btn-danger-sm"
+            pending={deleting}
+            disabled={selectedCount === 0 || busy}
             onClick={onRequestDelete}
           >
             {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: selectedCount })}
-          </button>
+          </Button>
         </div>
       </div>
       <ConfirmDialog

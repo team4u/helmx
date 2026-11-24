@@ -15,7 +15,7 @@ import {
   type ExoticComponent,
   type ReactNode,
 } from 'react'
-import { HelmxIcon, TooltipProvider } from '@helmx/plugin-client'
+import { Button, HelmxIcon, Stack, TooltipProvider } from '@helmx/plugin-client'
 import { ConversationPane } from './conversation/ConversationPane.js'
 import { ConversationWindowStage } from './conversation/ConversationWindowStage.js'
 import { standbyDraftKey } from './conversation/standby-model.js'
@@ -122,23 +122,23 @@ class LazyLoadBoundary extends Component<LazyLoadBoundaryProps, LazyLoadBoundary
           <div className="lazy-load-error-body">
             <strong>{labels.title}</strong>
             <p>{this.state.error}</p>
-            <div className="lazy-load-error-actions">
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
+            <Stack direction="horizontal" gap="sm" align="center" className="lazy-load-error-actions">
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={() => {
                   this.setState({ error: null })
                   this.props.onRetry()
                 }}
               >
                 {labels.retry}
-              </button>
+              </Button>
               {this.props.onDismiss !== undefined && (
-                <button type="button" className="btn btn-sm" onClick={this.props.onDismiss}>
+                <Button size="sm" onClick={this.props.onDismiss}>
                   {labels.close}
-                </button>
+                </Button>
               )}
-            </div>
+            </Stack>
           </div>
         </div>
       </div>
@@ -355,9 +355,9 @@ function VersionBannerSlot() {
           ? t('shell.version.bannerWithHint', { hint: versionDeferHint(snap.deferReason, t) })
           : t('shell.version.banner')}
       </span>
-      <button type="button" className="btn btn-sm" onClick={snap.reloadNow}>
+      <Button size="sm" onClick={snap.reloadNow}>
         {t('shell.version.refreshNow')}
-      </button>
+      </Button>
     </div>
   )
 }
@@ -536,7 +536,7 @@ function HelmxShellInner({
 
   if (!authReady) {
     return (
-      <div className="app-loading-screen" style={{ height: '100dvh' }}>
+      <div className="app-loading-screen">
         {t('shell.loading.connecting')}
       </div>
     )
@@ -547,7 +547,7 @@ function HelmxShellInner({
       <div className="connection-screen" role="alert">
         <strong>{t('shell.connection.cannotConnect')}</strong>
         <p>{authError}</p>
-        <button className="btn btn-primary" onClick={() => void checkAuth()}>{t('shell.connection.reconnect')}</button>
+        <Button variant="primary" onClick={() => void checkAuth()}>{t('shell.connection.reconnect')}</Button>
       </div>
     )
   }
@@ -597,23 +597,23 @@ function HelmxShellInner({
           }
         }}
       >
-        <button
+        <Button
           ref={mobileNavToggleRef}
-          type="button"
-          className="btn btn-ghost mobile-nav-toggle"
+          variant="ghost"
+          className="mobile-nav-toggle"
+          icon={<HelmxIcon name="menu" />}
           title={mobileNavToggleLabel}
           aria-label={mobileNavToggleLabel}
           aria-expanded={isDrawerViewport ? sidebarOpen : undefined}
           aria-controls={isDrawerViewport ? MOBILE_SIDEBAR_ID : undefined}
           onClick={() => setSidebarOpen((open) => !open)}
         >
-          <HelmxIcon name="menu" />
-          {attention.indicator.totalCount > 0 && attention.indicator.tone !== null && (
+          {attention.indicator.totalCount > 0 && attention.indicator.tone !== null ? (
             <span className="overview-count-badge mobile-nav-badge" data-tone={attention.indicator.tone}>
               {sidebarBadgeCountLabel(attention.indicator.totalCount)}
             </span>
-          )}
-        </button>
+          ) : null}
+        </Button>
         {/* 移动端首个 quickEntry 插件视图一键直达（会话总览与态势计数已合并进
             左上角汉堡按钮，省回顶栏宽度）；无插件 quickEntry 或已停在该视图时返回 null。 */}
         <MobileQuickNav quickEntry={firstQuickEntry} quickEntryBadge={quickEntryBadge} />

@@ -280,6 +280,13 @@ describe("screen-host-shell", () => {
     )
     const form = host?.querySelector('form')
     assert.ok(form)
+    assert.ok(host?.querySelector('.helmx-card.auth-gate-card'), 'AuthGate 应使用 Card 原语渲染')
+    const authLabels = [...(host?.querySelectorAll('label.helmx-field-label') ?? [])]
+    const authInputs = [...(host?.querySelectorAll('input.input') ?? [])]
+    assert.equal(authLabels.length, 2, '初始化态应渲染两个 Field 标签')
+    assert.equal(authInputs.length, 2, '初始化态应渲染两个 Input 控件')
+    assert.equal(authLabels[0]?.getAttribute('for'), authInputs[0]?.getAttribute('id'), '密码 Field 应与 Input 绑定 htmlFor/id')
+    assert.equal(authLabels[1]?.getAttribute('for'), authInputs[1]?.getAttribute('id'), '确认密码 Field 应与 Input 绑定 htmlFor/id')
     await act(async () => {
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     })

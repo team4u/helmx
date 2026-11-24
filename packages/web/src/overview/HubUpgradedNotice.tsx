@@ -6,7 +6,7 @@
  *   直到下次版本变化才重新出现——主动一键切换不经过这里（切换完成卡自带引导）。
  */
 import { useState, type ReactNode } from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { Button, Card, HelmxIcon, Stack } from '@helmx/plugin-client'
 import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { markSeenVersion, readSeenVersion } from './hub-changelog-seen.js'
@@ -36,23 +36,26 @@ export function HubUpgradedNotice(props: { pollMs?: number }): ReactNode | null 
   }
 
   return (
-    <div className="hub-update-card hub-upgraded-notice" role="status">
-      <HelmxIcon name="check-circle" size={14} />
-      <span className="hub-update-card-text">
-        {t('shell.hubChangelog.upgraded', { from: upgradedFrom, version: currentVersion })}
-      </span>
-      {status.changelogAvailable === true ? (
-        <button type="button" className="hub-update-card-action" onClick={openChangelog}>
-          {t('shell.hubChangelog.viewChanges')}
-        </button>
-      ) : null}
-      <button
-        type="button"
-        className="hub-update-card-action hub-update-card-dismiss"
-        onClick={dismiss}
-      >
-        {t('shell.hubChangelog.dismiss')}
-      </button>
-    </div>
+    <Card variant="subtle" className="hub-update-card hub-upgraded-notice" role="status">
+      <Stack direction="horizontal" gap="sm" align="center" wrap>
+        <HelmxIcon name="check-circle" size={14} />
+        <span className="hub-update-card-text">
+          {t('shell.hubChangelog.upgraded', { from: upgradedFrom, version: currentVersion })}
+        </span>
+        {status.changelogAvailable === true ? (
+          <Button size="sm" className="hub-update-card-action" onClick={openChangelog}>
+            {t('shell.hubChangelog.viewChanges')}
+          </Button>
+        ) : null}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="hub-update-card-action hub-update-card-dismiss"
+          onClick={dismiss}
+        >
+          {t('shell.hubChangelog.dismiss')}
+        </Button>
+      </Stack>
+    </Card>
   )
 }

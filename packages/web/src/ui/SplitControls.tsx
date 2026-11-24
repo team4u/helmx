@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
+import { Button, HelmxIcon, IconButton, Tooltip } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export interface CloseSplitButtonProps {
@@ -21,15 +21,16 @@ export function CloseSplitButton({
   const effectiveLabel = label ?? t('ui.split.closeView')
   return (
     <Tooltip content={t('ui.split.closeThisView')} side="bottom">
-      <button
-        type="button"
-        className="btn btn-sm btn-ghost split-close-btn"
+      <Button
+        variant="ghost"
+        size="sm"
+        className="split-close-btn"
+        icon={<HelmxIcon name="x" size={13} />}
         aria-label={effectiveLabel}
         onClick={onCloseSplit}
       >
-        <HelmxIcon name="x" size={13} />
         <span className="pane-action-label">{effectiveLabel}</span>
-      </button>
+      </Button>
     </Tooltip>
   )
 }
@@ -55,14 +56,14 @@ export function SplitToggleButton({
   const tooltipLabel = isSplitActive ? t('ui.split.closeThisView') : t('ui.split.toggleTitle')
   return (
     <Tooltip content={tooltipLabel} side="bottom">
-      <button
-        type="button"
-        className={`btn btn-sm split-toggle-btn${isSplitActive ? ' btn-primary split-active' : ''}`}
+      <IconButton
+        variant={isSplitActive ? 'primary' : 'default'}
+        size="sm"
+        className={`split-toggle-btn${isSplitActive ? ' split-active' : ''}`}
+        icon={<HelmxIcon name="columns" size={12} />}
         aria-label={actionLabel}
         onClick={onToggleSplit}
-      >
-        <HelmxIcon name="columns" size={12} />
-      </button>
+      />
     </Tooltip>
   )
 }
