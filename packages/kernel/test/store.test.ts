@@ -305,6 +305,39 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
     await rm(base, { recursive: true, force: true })
   })
 
+  it('upsertConv title change updates helmx_conversations and helmx_conversation_fts in the same transaction (FTS failure rolls back main table)', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'fts-title-tx-'))
+    const { store, database } = await openStoreAt(base)
+    try {
+      store.upsertConv(conv(50, { title: 'original-title' }))
+      store.indexFts(50, 'entry:1', 'original-title', 'atomic title test body')
+      await store.flushPublic()
+
+      const fixture = attachFaults(database)
+      fixture.failNext('UPDATE helmx_conversation_fts')
+      store.upsertConv(conv(50, { title: 'broken-new-title', updatedAt: 2000 }))
+      await assert.rejects(
+        () => store.flushPublic(),
+        (e: unknown) => e instanceof HelmxError && e.code === 'store_flush_failed',
+      )
+      await store.close()
+      await database.close()
+
+      // Reopen from disk: transaction rollback must have kept main table and FTS completely in sync at 'original-title'.
+      const reopened = await openStoreAt(base)
+      try {
+        assert.equal(reopened.store.getConv(50)?.title, 'original-title')
+        assert.equal((await reopened.store.search('original-title')).length, 1)
+        assert.equal((await reopened.store.search('broken-new-title')).length, 0)
+      } finally {
+        await reopened.store.close()
+        await reopened.database.close()
+      }
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
   it('FTS atomic rebuild: failure rolls back preserving previous index (never fakes success)', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'rebuild-'))
     const { store, database } = await openStoreAt(base)
@@ -336,7 +369,7 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
     store.putAsk({
       id: 'ask-del',
       conversationId: 11,
-      specJson: JSON.stringify({ id: 'ask-del', status: 'pending', fields: [] }),
+      specJson: JSON.stringify({ id: 'ask-del', title: 'del', status: 'pending', fields: [] }),
       status: 'pending',
       createdAt: 50,
     })
@@ -434,6 +467,129 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
     })
     await db3.close()
     await rm(base, { recursive: true, force: true })
+  })
+
+  it('load fails explicitly with store_data_corrupted on structurally invalid persisted JSON/enums; write boundaries reject bad shapes', { timeout: 60_000 }, async () => {
+    const cases: Array<{ name: string; sql: string }> = [
+      {
+        name: 'conversations.tags = null',
+        sql: "INSERT INTO helmx_conversations (id, title, profile_id, tags, cwd, created_at, updated_at) VALUES (1, 't', 'assistant', 'null', '/tmp', 1, 1)",
+      },
+      {
+        name: 'conversations.tags = [123]',
+        sql: "INSERT INTO helmx_conversations (id, title, profile_id, tags, cwd, created_at, updated_at) VALUES (1, 't', 'assistant', '[123]', '/tmp', 1, 1)",
+      },
+      {
+        name: 'conversations.owned_by = rogue',
+        sql: "INSERT INTO helmx_conversations (id, title, profile_id, tags, owned_by, cwd, created_at, updated_at) VALUES (1, 't', 'assistant', '[]', 'rogue', '/tmp', 1, 1)",
+      },
+      {
+        name: 'asks.status = invalid',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'pending', fields: [] })}', 'bogus', 1)`,
+      },
+      {
+        name: 'asks.spec = null',
+        sql: "INSERT INTO helmx_asks (id, conversation_id, spec, status, created_at) VALUES ('a1', 1, 'null', 'pending', 1)",
+      },
+      {
+        name: 'asks.spec = empty object',
+        sql: "INSERT INTO helmx_asks (id, conversation_id, spec, status, created_at) VALUES ('a1', 1, '{}', 'pending', 1)",
+      },
+      {
+        name: 'asks.spec = mismatched id',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'other', title: 't', status: 'pending', fields: [] })}', 'pending', 1)`,
+      },
+      {
+        name: 'asks.spec = non-array fields',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'pending', fields: 'bad' })}', 'pending', 1)`,
+      },
+      {
+        name: 'asks.spec = invalid field type',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'pending', fields: [{ name: 'x', label: 'X', type: 'bogus' }] })}', 'pending', 1)`,
+      },
+      {
+        name: 'asks.result = array',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, result, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'answered', fields: [] })}', 'answered', '[]', 1)`,
+      },
+      {
+        name: 'asks.result = non-string value',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, result, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'answered', fields: [] })}', 'answered', '{"x":42}', 1)`,
+      },
+      {
+        name: 'asks.expected_state_seq below spec.expectedStateSeq',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, expected_state_seq, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'pending', expectedStateSeq: 5, fields: [] })}', 'pending', 4, 1)`,
+      },
+      {
+        name: 'asks.expected_state_seq present without spec.expectedStateSeq',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, expected_state_seq, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'pending', fields: [] })}', 'pending', 5, 1)`,
+      },
+      {
+        name: 'asks.spec.expectedStateSeq missing from expected_state_seq column',
+        sql: `INSERT INTO helmx_asks (id, conversation_id, spec, status, expected_state_seq, created_at) VALUES ('a1', 1, '${JSON.stringify({ id: 'a1', title: 't', status: 'pending', expectedStateSeq: 5, fields: [] })}', 'pending', NULL, 1)`,
+      },
+    ]
+
+    for (const tc of cases) {
+      const base = await mkdtemp(join(dir, 'corrupt-shape-'))
+      try {
+        const db = await openHelmxDatabase(base)
+        await db.db.run(tc.sql)
+        await db.close()
+        const reopenedDb = await openHelmxDatabase(base)
+        try {
+          const reopenedStore = new HelmxStore(reopenedDb)
+          await assert.rejects(
+            () => reopenedStore.load(),
+            (e: unknown) => e instanceof HelmxError && e.code === 'store_data_corrupted',
+            `expected store_data_corrupted for ${tc.name}`,
+          )
+        } finally {
+          await reopenedDb.close()
+        }
+      } finally {
+        await rm(base, { recursive: true, force: true })
+      }
+    }
+
+    // Write-boundary guards reject structurally invalid inputs without polluting mirrors.
+    const base = await mkdtemp(join(dir, 'write-guard-'))
+    const { store, database } = await openStoreAt(base)
+    try {
+      assert.throws(
+        () => store.upsertConv(conv(99, { tags: [123 as never] })),
+        (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
+      )
+      assert.equal(store.getConv(99), undefined)
+      assert.throws(
+        () =>
+          store.putAsk({
+            id: 'bad-ask',
+            conversationId: 1,
+            specJson: 'null',
+            status: 'pending',
+            createdAt: 1,
+          }),
+        (e: unknown) => e instanceof HelmxError && e.code === 'store_data_corrupted',
+      )
+      assert.equal(store.getAsk('bad-ask'), undefined)
+      assert.throws(
+        () =>
+          store.putAsk({
+            id: 'bad-res',
+            conversationId: 1,
+            specJson: JSON.stringify({ id: 'bad-res', title: 't', status: 'answered', fields: [] }),
+            status: 'answered',
+            resultJson: '{"x":123}',
+            createdAt: 1,
+          }),
+        (e: unknown) => e instanceof HelmxError && e.code === 'store_data_corrupted',
+      )
+      assert.equal(store.getAsk('bad-res'), undefined)
+    } finally {
+      await store.close()
+      await database.close()
+      await rm(base, { recursive: true, force: true })
+    }
   })
 
   it('convStatusOf: blocked (pending Ask) takes precedence over working', { timeout: 60_000 }, () => {

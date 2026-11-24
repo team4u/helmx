@@ -462,6 +462,11 @@ class EventBackend {
             sessionDocEvents.push(`${event.pluginId}:${event.name}:${event.conversationId}`)
           }
         }
+        if (type === 'plugin.changed') {
+          for (const listener of [...(listeners.get(type) ?? [])]) {
+            void listener(payload)
+          }
+        }
       },
       getConversation(id: number): ConversationSummary {
         if (deleted.has(id)) throw new HelmxError('not_found', `会话不存在：${id}`, 404)
@@ -878,7 +883,20 @@ test('文档写入节流常量与窗口配置存在性', { timeout: 60_000 }, ()
   assert.equal(typeof definition.clientRoot, 'string')
 })
 
-test('配置热更新：修改 slidingWindowMs 动态更新现有与新建会话的滑动窗口宽度', { timeout: 60_000 }, async () => {
+test('配置热更新：修改 slidingWindowMs 经 plugin.changed 即时热生效并覆盖节流待写帧，扩大窗口回溯已保留样本', { timeout: 60_000 }, async () => {
+  // 1) SlidingWindow 扩大窗口宽度时必须回溯 start 指针，重新纳入保留窗口内的旧样本
+  const sw = new SlidingWindow(1000, MIN_SPAN)
+  sw.record(100, 100, 1)
+  sw.record(600, 100, 1)
+  sw.record(1200, 100, 1)
+  // window=1000 @1200: 仅 [600, 1200] 200 tok / 600ms = 333.33 tok/s
+  assert.ok(Math.abs(sw.getTps(1200) - (200 * 1000) / 600) < 1e-6)
+  // 扩窗到 2000ms @1200: 回溯纳入 t=100 -> 300 tok / 1100ms = 272.73 tok/s
+  sw.setWindowMs(2000)
+  assert.ok(Math.abs(sw.getTps(1200) - (300 * 1000) / 1100) < 1e-6, '扩窗后应立即重新计入已保留样本')
+
+  // 2) 插件装配：setConfig 触发 plugin.changed 后，运行中会话无需等待下一帧即刻刷新 sessionDoc，
+  //    且取消节流窗口内排队中的旧 windowMs 待写定时器（防倒灌回旧值）
   const { MemoryConfigStore } = await import('./helpers/plugin-test-env.js')
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-token-speed-cfg-'))
   const backend = new EventBackend()
@@ -901,11 +919,27 @@ test('配置热更新：修改 slidingWindowMs 动态更新现有与新建会话
     await backend.dispatch('conversation.live', liveEvent(CONV, 0, { taskId: 1, attempt: 1 }))
     await backend.dispatch('conversation.live', liveEvent(CONV, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
     assert.equal(docOf(CONV)?.windowMs, 1000)
+    // 节流窗口内再推一帧（140ms < 100+120ms），形成挂起定时器（带旧 windowMs=1000）
+    await backend.dispatch('conversation.live', liveEvent(CONV, 140, { taskId: 1, attempt: 1, message: message([text('a'.repeat(800))]) }))
+    assert.equal(docOf(CONV)?.outputTokens, 100, '节流期内尚未落盘')
 
+    // 变更配置：无需后续 live 帧，plugin.changed 应立刻以新 windowMs=2500 发布并取消旧待写定时器
     await host.setConfig(TOKEN_SPEED_PLUGIN_ID, { slidingWindowMs: 2500 })
-    await backend.dispatch('conversation.live', liveEvent(CONV, 300, { taskId: 1, attempt: 1, message: message([text('a'.repeat(800))]) }))
-    await new Promise((r) => setTimeout(r, 150))
-    assert.equal(docOf(CONV)?.windowMs, 2500, '更新 slidingWindowMs 后实时测量立即采用新窗口宽度')
+    assert.equal(docOf(CONV)?.windowMs, 2500, 'setConfig 后经 plugin.changed 即时刷新运行会话 windowMs')
+    assert.equal(docOf(CONV)?.outputTokens, 200, '挂起尾帧按新 windowMs 立即发布')
+
+    // 等待超过 120ms 节流周期：旧定时器已取消，绝不倒灌回 windowMs=1000
+    await new Promise((r) => setTimeout(r, 160))
+    assert.equal(docOf(CONV)?.windowMs, 2500, '旧节流定时器不得倒灌旧 windowMs')
+
+    // 删除后迟到帧遇 404 时立即清理瞬态状态，不再为已删会话挂起定时器
+    backend.deletedConversations.add(CONV)
+    await backend.dispatch('conversation.deleted', { type: 'conversation.deleted', conversationId: CONV })
+    const writesBeforeLate = backend.sessionDocEvents.length
+    await backend.dispatch('conversation.live', liveEvent(CONV, 300, { taskId: 2, attempt: 1, message: message([text('z'.repeat(400))]) }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 320, { taskId: 2, attempt: 1, message: message([text('z'.repeat(800))]) }))
+    await new Promise((r) => setTimeout(r, 160))
+    assert.equal(backend.sessionDocEvents.length, writesBeforeLate, '已删会话迟到帧遇 404 后不残留定时器与写入')
   } finally {
     await host.dispose()
     rmSync(dataDir, { recursive: true, force: true })

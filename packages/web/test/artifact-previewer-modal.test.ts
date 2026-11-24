@@ -410,3 +410,84 @@ test('产物 Markdown 预览复用会话回合同一套样式与字体计算契�
     resetBody()
   }
 })
+
+test('FilePreviewBody：textState="binary"（含文本类文件解码失败回退）显示明确不支持在线预览提示而非卡在读取中', { timeout: 60_000 }, async () => {
+  const { FilePreviewBody } = await import('../src/conversation/FilePreviewBody.js')
+  const { HostStoreProviders } = await import('./helpers/host-store.js')
+  const store = buildStore({ artifacts: [] })
+  resetBody()
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const markdownPreviewRef = React.createRef<HTMLDivElement>()
+
+  try {
+    await act(async () => {
+      root.render(
+        React.createElement(
+          HostStoreProviders,
+          { value: store },
+          React.createElement(FilePreviewBody, {
+            name: 'corrupt.md',
+            mime: 'text/markdown',
+            blobUrl: 'blob:test-binary',
+            text: null,
+            textState: 'binary',
+            isTextLike: true,
+            markdown: true,
+            view: 'rich',
+            language: 'markdown',
+            markdownPreviewRef,
+          }),
+        ),
+      )
+    })
+
+    const callout = host.querySelector('.callout')
+    assert.ok(callout !== null, 'binary textState must render an explicit .callout prompt')
+    assert.match(callout.textContent ?? '', /no inline preview|暂不支持在线预览/i)
+    assert.ok(host.querySelector('.preview-modal-code') === null, 'binary textState must not fall through to CodeBlockView readingText placeholder')
+  } finally {
+    act(() => { root.unmount() })
+    resetBody()
+  }
+
+  // Also verify ArtifactPreviewModal when a text-like blob fails text() decoding -> transitions to binary callout
+  installObjectUrlShim()
+  const brokenBlob = new Blob([new Uint8Array([0xff, 0xfe, 0x00])], { type: 'text/plain' })
+  brokenBlob.text = () => Promise.reject(new Error('decode failed'))
+  const brokenMeta = artifactMeta(
+    makeArtifact('art-broken-text', new Uint8Array([0xff, 0xfe, 0x00]), 'broken.txt', 'text/plain'),
+    7,
+  )
+  const origFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes('/api/artifacts/art-broken-text')) {
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/plain' }),
+        blob: async () => brokenBlob,
+      } as unknown as Response
+    }
+    return new Response('not found', { status: 404 })
+  }) as typeof fetch
+  const brokenStore = buildStore({ artifacts: [] })
+  brokenStore.setConversationArtifacts({ 7: [brokenMeta] })
+  const modalHost = document.createElement('div')
+  document.body.appendChild(modalHost)
+  const modalRoot = mount(modalHost, brokenStore, 'art-broken-text', 7)
+  try {
+    await flush()
+    const modalCallout = document.querySelector('.modal-body .callout')
+    assert.ok(modalCallout !== null, 'failed text decode must render explicit .callout notice')
+    assert.match(modalCallout.textContent ?? '', /no inline preview|暂不支持在线预览/i)
+    assert.ok(document.querySelector('.preview-modal-code') === null, 'must not stay stuck in CodeBlockView readingText')
+  } finally {
+    globalThis.fetch = origFetch
+    act(() => { modalRoot.unmount() })
+    resetBody()
+  }
+})

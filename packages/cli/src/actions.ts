@@ -35,14 +35,27 @@ function manifestLabel(manifest: ActionManifest): string {
   return `${manifest.pluginId}.${manifest.id}`
 }
 
+function primitiveFlagType(value: unknown): 'string' | 'number' | 'boolean' | undefined {
+  if (typeof value === 'number') return 'number'
+  if (typeof value === 'boolean') return 'boolean'
+  if (typeof value === 'string') return 'string'
+  return undefined
+}
+
 /** Coerce a simple JSON Schema property type to a flag type; object/array/untyped schemas use json (or whole --input). */
 function flagTypeOf(schema: unknown): FlagSpec['type'] | undefined {
   if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return undefined
   const s = schema as { type?: unknown; enum?: unknown; const?: unknown }
   if (s.type === 'number' || s.type === 'integer') return 'number'
   if (s.type === 'boolean') return 'boolean'
-  if (s.type === 'string' || Array.isArray(s.enum) || 'const' in s) return 'string'
+  if (s.type === 'string') return 'string'
   if (s.type === 'object' || s.type === 'array') return 'json'
+  if ('const' in s) return primitiveFlagType(s.const) ?? 'json'
+  if (Array.isArray(s.enum) && s.enum.length > 0) {
+    const first = primitiveFlagType(s.enum[0])
+    if (first !== undefined && s.enum.every((v) => primitiveFlagType(v) === first)) return first
+    return 'json'
+  }
   // Untyped loose schemas (including $ref / combinators / any JSON value such as workflow args)
   // are parsed as JSON (with server-side schema validation as fallback), preserving fidelity over plain strings.
   return 'json'

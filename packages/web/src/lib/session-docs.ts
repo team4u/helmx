@@ -25,7 +25,7 @@ import {
   type PublicPluginSessionDoc,
   type SessionDocMultiplexFrame,
 } from '@helmx/protocol/browser'
-import { getStoredToken } from './api.js'
+import { getStoredToken, notifyUnauthorizedResponse } from './api.js'
 import { readSseChunkWithDeadline, SseParser } from './live-state.js'
 
 export interface SessionDocKey {
@@ -33,6 +33,8 @@ export interface SessionDocKey {
   docName: string
   conversationId: number
 }
+
+type TerminationKind = 'plugin_disabled' | 'conversation_deleted' | 'invalid_key'
 
 const keyString = (key: SessionDocKey): string => `${key.pluginId}\u0000${key.docName}\u0000${key.conversationId}`
 
@@ -52,10 +54,10 @@ interface EntryState {
   lastSeq: number
   connected: boolean
   error?: string
-  /** 非重试 4xx 标记（停止自动重试，直到显式 retrySessionDoc）。 */
+  /** 非重试 4xx 标记（停止自动重试，直到显式 retrySessionDoc 或插件重新启用）。 */
   permanentError?: boolean
-  /** 终态原因（插件停用/会话删除/非法订阅键）：置位后永不重连。 */
-  terminated?: string
+  /** 终态原因（插件停用/会话删除/非法订阅键）：置位后不自动重连；仅 plugin_disabled 在插件恢复 active 时可恢复。 */
+  terminated?: { kind: TerminationKind; message: string }
   /** getSnapshot 缓存（引用稳定，值未变时复用）。 */
   snapshot?: { value?: unknown; hasValue: boolean; deleted: boolean; error?: string; connected: boolean }
 }
@@ -171,7 +173,7 @@ function collectActiveSubscriptions(): SubscribedEntryItem[] {
       })
       items.push({ id, entry, param })
     } catch (err) {
-      terminateEntry(entry, err instanceof Error ? err.message : String(err))
+      terminateEntry(entry, 'invalid_key', err instanceof Error ? err.message : String(err))
     }
   }
   items.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
@@ -246,16 +248,138 @@ function syncMultiplexStream(gen: number): void {
   connectMultiplexStream(items, signature, gen)
 }
 
-function connectMultiplexStream(items: SubscribedEntryItem[], signature: string, gen: number): void {
+function buildMultiplexUrl(items: readonly SubscribedEntryItem[]): string {
+  const params = new URLSearchParams()
+  for (const item of items) params.append('sub', item.param)
+  return `/api/session-docs/events?${params.toString()}`
+}
+
+function entryLabel(key: SessionDocKey): string {
+  return `${key.pluginId}/${key.docName}#${key.conversationId}`
+}
+
+function markEntryUnavailable(entry: EntryState, msg: string, permanent: boolean): void {
+  if (!entry.alive || entry.refs <= 0 || entry.terminated !== undefined) return
+  entry.error = `Conversation document subscription unavailable (${entryLabel(entry.key)}): ${msg}`
+  entry.connected = false
+  if (permanent) entry.permanentError = true
+  notify(entry)
+}
+
+function handleUnauthorizedStream(items: readonly SubscribedEntryItem[], signature: string): void {
+  stream.haltedSignature = signature
+  for (const item of items) {
+    if (!item.entry.alive || item.entry.refs <= 0 || item.entry.terminated !== undefined) continue
+    if (item.entry.connected) {
+      item.entry.connected = false
+      notify(item.entry)
+    }
+  }
+  notifyUnauthorizedResponse({ status: 401 })
+}
+
+type ProbeSubsetResult =
+  | { kind: 'ok' }
+  | { kind: 'aborted' }
+  | { kind: 'unauthorized' }
+  | { kind: 'transient'; message: string }
+  | { kind: 'permanent'; message: string }
+
+type BisectOutcome =
+  | { outcome: 'done'; badCount: number }
+  | { outcome: 'aborted' }
+  | { outcome: 'unauthorized' }
+  | { outcome: 'transient'; message: string }
+
+async function probeMultiplexSubset(
+  subset: readonly SubscribedEntryItem[],
+  signal: AbortSignal,
+  isStreamActive: () => boolean,
+): Promise<ProbeSubsetResult> {
+  if (!isStreamActive()) return { kind: 'aborted' }
+  const token = tokenProvider()
+  let res: Response
+  try {
+    res = await resolvedFetch(buildMultiplexUrl(subset), {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal,
+    })
+  } catch (error) {
+    if (signal.aborted || !isStreamActive()) return { kind: 'aborted' }
+    return { kind: 'transient', message: error instanceof Error ? error.message : String(error) }
+  }
+  if (!isStreamActive()) {
+    void res.body?.cancel().catch(() => {})
+    return { kind: 'aborted' }
+  }
+  if (res.status === 401) {
+    void res.body?.cancel().catch(() => {})
+    return { kind: 'unauthorized' }
+  }
+  if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+    const message = await responseErrorMessage(res)
+    if (!isStreamActive()) return { kind: 'aborted' }
+    return { kind: 'permanent', message }
+  }
+  if (!res.ok || !res.body) {
+    const message = await responseErrorMessage(res)
+    if (!isStreamActive()) return { kind: 'aborted' }
+    return { kind: 'transient', message }
+  }
+  await res.body.cancel().catch(() => {})
+  if (!isStreamActive()) return { kind: 'aborted' }
+  return { kind: 'ok' }
+}
+
+/**
+ * Divide-and-conquer isolation for a failed multi-target 4xx multiplex request:
+ * narrows down only the offending subscription(s) so valid subscriptions stay
+ * healthy and immediately reconnect without the invalid tuple(s).
+ */
+async function isolateMultiplexPermanentErrors(
+  items: readonly SubscribedEntryItem[],
+  signal: AbortSignal,
+  isStreamActive: () => boolean,
+): Promise<BisectOutcome> {
+  const bisect = async (subset: readonly SubscribedEntryItem[]): Promise<BisectOutcome> => {
+    const probe = await probeMultiplexSubset(subset, signal, isStreamActive)
+    if (probe.kind === 'ok') return { outcome: 'done', badCount: 0 }
+    if (probe.kind === 'aborted') return { outcome: 'aborted' }
+    if (probe.kind === 'unauthorized') return { outcome: 'unauthorized' }
+    if (probe.kind === 'transient') return { outcome: 'transient', message: probe.message }
+    if (subset.length === 1) {
+      markEntryUnavailable(subset[0]!.entry, probe.message, true)
+      return { outcome: 'done', badCount: 1 }
+    }
+    const mid = Math.floor(subset.length / 2)
+    const left = await bisect(subset.slice(0, mid))
+    if (left.outcome !== 'done') return left
+    const right = await bisect(subset.slice(mid))
+    if (right.outcome !== 'done') return right
+    return { outcome: 'done', badCount: left.badCount + right.badCount }
+  }
+
+  const mid = Math.floor(items.length / 2)
+  const left = await bisect(items.slice(0, mid))
+  if (left.outcome !== 'done') return left
+  const right = await bisect(items.slice(mid))
+  if (right.outcome !== 'done') return right
+  return { outcome: 'done', badCount: left.badCount + right.badCount }
+}
+
+function connectMultiplexStream(
+  items: SubscribedEntryItem[],
+  signature: string,
+  gen: number,
+  allowProbe = true,
+): void {
   if (gen !== generation || stream.activeSignature !== signature || items.length === 0) return
   const myConn = stream.connEpoch
   const controller = new AbortController()
   stream.controller = controller
 
-  const params = new URLSearchParams()
-  for (const item of items) params.append('sub', item.param)
-  const url = `/api/session-docs/events?${params.toString()}`
-  const streamLabel = items.map((item) => `${item.entry.key.pluginId}/${item.entry.key.docName}#${item.entry.key.conversationId}`).join(', ')
+  const url = buildMultiplexUrl(items)
+  const streamLabel = items.map((item) => entryLabel(item.entry.key)).join(', ')
 
   const isStreamActive = (): boolean =>
     gen === generation &&
@@ -292,28 +416,40 @@ function connectMultiplexStream(items: SubscribedEntryItem[], signature: string,
         return
       }
       if (res.status === 401) {
-        stream.haltedSignature = signature
-        for (const item of items) {
-          if (!item.entry.alive || item.entry.refs <= 0 || item.entry.terminated !== undefined) continue
-          if (item.entry.connected) {
-            item.entry.connected = false
-            notify(item.entry)
-          }
-        }
-        if (typeof window !== 'undefined') window.dispatchEvent(new Event('helmx:unauthorized'))
+        void res.body?.cancel().catch(() => {})
+        handleUnauthorizedStream(items, signature)
         return
       }
       if (res.status >= 400 && res.status < 500 && res.status !== 429) {
         const msg = await responseErrorMessage(res)
         if (!isStreamActive()) return
+        if (items.length === 1) {
+          stream.haltedSignature = signature
+          markEntryUnavailable(items[0]!.entry, msg, true)
+          return
+        }
+        if (allowProbe) {
+          const isolated = await isolateMultiplexPermanentErrors(items, controller.signal, isStreamActive)
+          if (isolated.outcome === 'aborted') return
+          if (isolated.outcome === 'unauthorized') {
+            handleUnauthorizedStream(items, signature)
+            return
+          }
+          if (isolated.outcome === 'transient') {
+            throw new Error(isolated.message)
+          }
+          if (isolated.badCount > 0) {
+            syncMultiplexStream(gen)
+            return
+          }
+          // Every subset probed healthy (race or batch-level limit): retry full batch once without re-probing.
+          stream.connEpoch++
+          connectMultiplexStream(items, signature, gen, false)
+          return
+        }
         stream.haltedSignature = signature
         for (const item of items) {
-          if (!item.entry.alive || item.entry.refs <= 0 || item.entry.terminated !== undefined) continue
-          const label = `${item.entry.key.pluginId}/${item.entry.key.docName}#${item.entry.key.conversationId}`
-          item.entry.error = `Conversation document subscription unavailable (${label}): ${msg}`
-          item.entry.connected = false
-          item.entry.permanentError = true
-          notify(item.entry)
+          markEntryUnavailable(item.entry, msg, false)
         }
         return
       }
@@ -478,7 +614,7 @@ export function subscribeSessionDoc(key: SessionDocKey, listener: () => void): (
       })
       scheduleStreamSync()
     } catch (err) {
-      terminateEntry(entry, err instanceof Error ? err.message : String(err))
+      terminateEntry(entry, 'invalid_key', err instanceof Error ? err.message : String(err))
     }
   }
   return () => {
@@ -514,19 +650,25 @@ function teardownEntry(entry: EntryState): void {
   }
 }
 
-/** 终止一个条目：显式报错给仍挂载的订阅者（保留至全部退订），永不重连。 */
-function terminateEntry(entry: EntryState, message: string): void {
+/** 终止一个条目：显式报错给仍挂载的订阅者（保留至全部退订），不自动重连；仅 plugin_disabled 在插件重新启用时恢复。 */
+function terminateEntry(entry: EntryState, kind: TerminationKind, message: string): void {
   if (entry.refs <= 0) {
     teardownEntry(entry)
     return
   }
+  const id = keyString(entry.key)
   entry.connected = false
-  entry.terminated = message
+  entry.permanentError = undefined
+  entry.terminated = { kind, message }
   entry.error = message
   entry.value = undefined
   entry.hasValue = false
   entry.deleted = false
   entry.snapshot = undefined
+  if (stream.streamKeys.has(id)) {
+    stream.activeSignature = ''
+    stream.haltedSignature = undefined
+  }
   notify(entry)
 }
 
@@ -537,12 +679,13 @@ export function resetSessionDocSubscriptions(): void {
   for (const entry of [...entries.values()]) teardownEntry(entry)
 }
 
-/** 插件停用/卸载：向仍挂载的订阅者显式报错，中止其全部订阅且不再重连。 */
+/** 插件停用/卸载：向仍挂载的订阅者显式报错，中止其全部订阅且不再重连（不覆盖会话删除/非法键终态）。 */
 export function evictSessionDocSubscriptions(pluginId: string): void {
   let changed = false
   for (const entry of [...entries.values()]) {
     if (entry.key.pluginId !== pluginId) continue
-    terminateEntry(entry, `Plugin ${pluginId} disabled; conversation document subscription aborted`)
+    if (entry.terminated !== undefined && entry.terminated.kind !== 'plugin_disabled') continue
+    terminateEntry(entry, 'plugin_disabled', `Plugin ${pluginId} disabled; conversation document subscription aborted`)
     changed = true
   }
   if (changed) {
@@ -551,12 +694,45 @@ export function evictSessionDocSubscriptions(pluginId: string): void {
   }
 }
 
-/** 会话删除：显式报错并中止该会话全部订阅缓存。 */
+/** 插件重新启用/恢复 active：恢复仍挂载且因插件停用（及可选非重试 4xx）暂停的订阅并重同步共享流；绝不复活已删除会话或非法键。 */
+export function restoreSessionDocSubscriptions(
+  pluginId: string,
+  opts?: { includePermanentErrors?: boolean },
+): void {
+  const includePermanentErrors = opts?.includePermanentErrors !== false
+  let changed = false
+  for (const entry of [...entries.values()]) {
+    if (entry.key.pluginId !== pluginId || !entry.alive || entry.refs <= 0) continue
+    const recoverableDisabled = entry.terminated?.kind === 'plugin_disabled'
+    const recoverablePermanent = includePermanentErrors && entry.terminated === undefined && entry.permanentError === true
+    if (!recoverableDisabled && !recoverablePermanent) continue
+    entry.terminated = undefined
+    entry.permanentError = undefined
+    entry.error = undefined
+    entry.deleted = false
+    entry.lastSeq = -1
+    entry.snapshot = undefined
+    notify(entry)
+    changed = true
+  }
+  if (changed) {
+    stream.activeSignature = ''
+    stream.haltedSignature = undefined
+    scheduleStreamSync()
+  }
+}
+
+/** 会话删除：显式报错并中止该会话全部订阅缓存（优先级高于插件停用终态）。 */
 export function evictSessionDocsOfConversation(conversationId: number): void {
   let changed = false
   for (const entry of [...entries.values()]) {
     if (entry.key.conversationId === conversationId) {
-      terminateEntry(entry, `Conversation ${conversationId} deleted; conversation document subscription aborted`)
+      if (entry.terminated?.kind === 'invalid_key') continue
+      terminateEntry(
+        entry,
+        'conversation_deleted',
+        `Conversation ${conversationId} deleted; conversation document subscription aborted`,
+      )
       changed = true
     }
   }

@@ -2251,3 +2251,76 @@ test('jsonOk redaction allows shared-reference acyclic DAGs with undefined prope
   assert.equal(res.status, 200)
   assert.deepEqual(res.body, { left: { label: 'shared-ok' }, right: { label: 'shared-ok' } })
 })
+
+test('POST /api/env/exec stream=true: isolates stdout/stderr streaming redactors, preserves tail stream attribution, and avoids cross-stream secret concatenation', { timeout: 60_000 }, async () => {
+  const localStash = new SecretStash()
+  localStash.addRedaction('sk-OUTSECRET-12345')
+  localStash.addRedaction('sk-ERRSECRET-67890')
+  localStash.addRedaction('sk-CROSS-BOUNDARY')
+
+  const makeExecHandler = (chunks: Array<{ stream: 'stdout' | 'stderr'; text: string }>) => {
+    const kernel: KernelRuntimeLike = {
+      ...makeKernel(),
+      stash: localStash,
+      execEnv: async (_req, onChunk) => {
+        for (const chunk of chunks) onChunk?.(chunk)
+        return { ok: true, exitCode: 0, output: '', timedOut: false }
+      },
+    }
+    return createHubHandler({ kernel })
+  }
+
+  const readNdjson = async (res: Response): Promise<Array<Record<string, unknown>>> => {
+    const text = await res.text()
+    return text
+      .trim()
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+  }
+
+  // 1) Interleaved split secrets on stdout & stderr redact independently; cross-stream prefix/suffix do NOT concatenate.
+  const h1 = makeExecHandler([
+    { stream: 'stdout', text: 'out:sk-OUTSEC' },
+    { stream: 'stderr', text: 'err:sk-ERRSEC' },
+    { stream: 'stdout', text: 'RET-12345|tail:sk-CROSS-' },
+    { stream: 'stderr', text: 'RET-67890|BOUNDARY' },
+  ])
+  const r1 = await h1(
+    new Request('http://127.0.0.1:3202/api/env/exec', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ command: 'echo test', stream: true }),
+    }),
+  )
+  assert.equal(r1.status, 200)
+  const frames1 = await readNdjson(r1)
+  const stdoutText = frames1
+    .filter((f) => f.type === 'output' && f.stream === 'stdout')
+    .map((f) => String(f.text))
+    .join('')
+  const stderrText = frames1
+    .filter((f) => f.type === 'output' && f.stream === 'stderr')
+    .map((f) => String(f.text))
+    .join('')
+  assert.equal(stdoutText, 'out:[REDACTED]|tail:sk-CROSS-')
+  assert.equal(stderrText, 'err:[REDACTED]|BOUNDARY')
+  assert.equal(frames1[frames1.length - 1]?.type, 'exit')
+
+  // 2) stderr-only trailing secret prefix flushes with stream='stderr' (never misattributed to stdout).
+  const h2 = makeExecHandler([{ stream: 'stderr', text: 'sk-OUTSEC' }])
+  const r2 = await h2(
+    new Request('http://127.0.0.1:3202/api/env/exec', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ command: 'echo err', stream: true }),
+    }),
+  )
+  assert.equal(r2.status, 200)
+  const frames2 = await readNdjson(r2)
+  assert.deepEqual(
+    frames2.filter((f) => f.type === 'output'),
+    [{ type: 'output', stream: 'stderr', text: 'sk-OUTSEC' }],
+  )
+  assert.equal(frames2[frames2.length - 1]?.type, 'exit')
+})

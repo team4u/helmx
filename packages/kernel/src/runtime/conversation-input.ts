@@ -19,7 +19,7 @@ import type {
   GuardedMutationExpectation,
   WhenBusy,
 } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, isPlainObject } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 import { redactJsonValue } from '../redact.js'
 import type { SecretStash } from '../services/index.js'
@@ -268,7 +268,14 @@ export class ConversationInputPipeline {
     let finalInput: ConversationInput = payload.input
     let finalWhenBusy: WhenBusy | undefined = opts?.whenBusy
     if (hookOutcome?.action === 'transform') {
-      const value = hookOutcome.value as typeof payload
+      const value = hookOutcome.value as Partial<typeof payload> | null | undefined
+      if (!isPlainObject(value) || !isPlainObject(value.input)) {
+        throw new HelmxError(
+          'invalid_hook_result',
+          'input hook transform value must be an object with { conversationId, input }',
+          500,
+        )
+      }
       if (value.conversationId !== id) {
         throw new HelmxError(
           'input_identity_changed',
@@ -276,7 +283,10 @@ export class ConversationInputPipeline {
           400,
         )
       }
-      finalInput = value.input
+      finalInput = value.input as ConversationInput
+      if (finalInput.attachments !== undefined) {
+        assertValidInputAttachments(finalInput.attachments)
+      }
       finalWhenBusy = finalInput.whenBusy ?? finalWhenBusy
     }
     finalWhenBusy = finalWhenBusy ?? 'steer'
@@ -354,5 +364,36 @@ export class ConversationInputPipeline {
           : undefined,
     })
     return { submissionId }
+  }
+}
+
+/** Defense-in-depth boundary check for hook-transformed `input.attachments` before mapping/re-authorizing IDs. */
+function assertValidInputAttachments(attachments: unknown): asserts attachments is ConversationAttachmentRef[] {
+  if (!Array.isArray(attachments)) {
+    throw new HelmxError(
+      'invalid_hook_result',
+      'input hook transform field attachments must be an array of ConversationAttachmentRef objects',
+      500,
+    )
+  }
+  for (const item of attachments) {
+    if (
+      !isPlainObject(item) ||
+      typeof item.id !== 'string' ||
+      item.id.trim().length === 0 ||
+      typeof item.name !== 'string' ||
+      item.name.length === 0 ||
+      typeof item.mimeType !== 'string' ||
+      item.mimeType.length === 0 ||
+      typeof item.size !== 'number' ||
+      !Number.isSafeInteger(item.size) ||
+      item.size < 0
+    ) {
+      throw new HelmxError(
+        'invalid_hook_result',
+        'input hook transform field attachments contains an invalid ConversationAttachmentRef entry',
+        500,
+      )
+    }
   }
 }

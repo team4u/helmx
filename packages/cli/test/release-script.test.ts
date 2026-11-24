@@ -1,0 +1,174 @@
+/**
+ * End-to-end tests for `scripts/release.mjs` in isolated temporary Git repositories:
+ * - Strict SemVer 2.0.0 validation (aligned with `@helmx/protocol` `isStrictSemver`, forbidding `+build` metadata);
+ * - Existing tag guard executes before modifying workspace `package.json`, `CHANGELOG.md`, or creating a commit;
+ * - `--allow-dirty` commits only release files via `git commit --only -- <paths>`, leaving user staged changes intact.
+ */
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { isStrictSemver } from '@helmx/protocol'
+import { sanitizedHostEnv, useTempDir } from './helpers/cli-harness.js'
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+const releaseScriptSrc = path.join(repoRoot, 'scripts', 'release.mjs')
+const releaseNotesSrc = path.join(repoRoot, 'scripts', 'lib', 'release-notes.mjs')
+
+function gitIn(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv): string {
+  const res = spawnSync('git', args, { cwd, encoding: 'utf8', env })
+  if (res.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed (exit ${res.status}):\n${res.stderr}\n${res.stdout}`)
+  }
+  return res.stdout
+}
+
+function makeFixtureRepo(dir: string, initialVersion = '0.1.1', opts: { withChangelog?: boolean } = {}) {
+  const env: NodeJS.ProcessEnv = {
+    ...sanitizedHostEnv(),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: path.join(dir, '.empty-gitconfig'),
+  }
+  writeFileSync(path.join(dir, '.empty-gitconfig'), '')
+  mkdirSync(path.join(dir, 'scripts', 'lib'), { recursive: true })
+  mkdirSync(path.join(dir, 'packages', 'payload'), { recursive: true })
+  mkdirSync(path.join(dir, 'packages', 'cli'), { recursive: true })
+  copyFileSync(releaseScriptSrc, path.join(dir, 'scripts', 'release.mjs'))
+  copyFileSync(releaseNotesSrc, path.join(dir, 'scripts', 'lib', 'release-notes.mjs'))
+  writeFileSync(
+    path.join(dir, 'packages', 'payload', 'package.json'),
+    `${JSON.stringify({ name: '@helmx/payload', private: true, version: initialVersion }, null, 2)}\n`,
+  )
+  writeFileSync(
+    path.join(dir, 'packages', 'cli', 'package.json'),
+    `${JSON.stringify({ name: '@helmx/cli', private: true, version: initialVersion }, null, 2)}\n`,
+  )
+  writeFileSync(path.join(dir, 'notes.txt'), 'initial\n')
+  if (opts.withChangelog) {
+    writeFileSync(path.join(dir, 'CHANGELOG.md'), `# Changelog\n\n## v${initialVersion} (2026-01-01)\n\n- init\n`)
+  }
+  gitIn(dir, ['init', '-b', 'main'], env)
+  gitIn(dir, ['config', 'user.email', 'release-test@example.com'], env)
+  gitIn(dir, ['config', 'user.name', 'Release Test'], env)
+  gitIn(dir, ['config', 'commit.gpgsign', 'false'], env)
+  gitIn(dir, ['config', 'tag.gpgsign', 'false'], env)
+  gitIn(dir, ['add', '.'], env)
+  gitIn(dir, ['commit', '-m', 'feat(core): initial commit'], env)
+  return {
+    dir,
+    env,
+    git: (args: readonly string[]) => gitIn(dir, args, env),
+    runRelease: (args: readonly string[]) =>
+      spawnSync(process.execPath, [path.join(dir, 'scripts', 'release.mjs'), ...args], {
+        cwd: dir,
+        encoding: 'utf8',
+        timeout: 30_000,
+        env,
+      }),
+  }
+}
+
+test('release.mjs: enforces strict SemVer 2.0.0 without build metadata', { timeout: 60_000 }, (t) => {
+  const fixture = makeFixtureRepo(useTempDir(t, 'helmx-release-script-'), '0.1.1')
+
+  const invalidVersions = [
+    '01.2.3',
+    '1.02.3',
+    '1.2.03',
+    '1.2.3-',
+    '1.2.3-.',
+    '1.2.3-.1',
+    '1.2.3-beta.',
+    '1.2.3-beta..1',
+    '1.2.3-01',
+    '1.2.3-beta.01',
+    '1.2.3+build.1',
+    '1.2.3-beta.1+build.1',
+    '1.2.3-beta_1',
+  ]
+  for (const bad of invalidVersions) {
+    const res = fixture.runRelease([bad, '--dry-run', '--skip-verify'])
+    assert.notEqual(res.status, 0, `expected invalid version "${bad}" to fail`)
+    assert.match(res.stderr, /严格 SemVer/, `unexpected stderr for "${bad}": ${res.stderr}`)
+  }
+
+  // Invalid --prerelease preId also fails strict validation
+  const badPreId = fixture.runRelease(['--prerelease', '01', '--dry-run', '--skip-verify'])
+  assert.notEqual(badPreId.status, 0, 'leading-zero numeric preId must be rejected')
+  assert.match(badPreId.stderr, /严格 SemVer/)
+
+  // Valid strict SemVer versions pass dry-run and match @helmx/protocol isStrictSemver
+  const validVersions = ['0.1.2', '1.2.3-beta.1', '1.2.3-0', '1.2.3-0alpha', '1.2.3-rc-1.0']
+  for (const ok of validVersions) {
+    assert.equal(isStrictSemver(ok), true, `sanity: ${ok} must be valid strict SemVer`)
+    const res = fixture.runRelease([ok, '--dry-run', '--skip-verify'])
+    assert.equal(res.status, 0, `expected valid version "${ok}" to succeed:\nstdout: ${res.stdout}\nstderr: ${res.stderr}`)
+  }
+
+  const validPreId = fixture.runRelease(['--prerelease', 'rc', '--dry-run', '--skip-verify'])
+  assert.equal(validPreId.status, 0, `expected --prerelease rc to succeed:\n${validPreId.stderr}`)
+  assert.match(validPreId.stdout, /目标版本: 0\.1\.2-rc\.1/)
+})
+
+test('release.mjs: checks existing tag before modifying version files, CHANGELOG.md, or committing', { timeout: 60_000 }, (t) => {
+  const fixture = makeFixtureRepo(useTempDir(t, 'helmx-release-script-'), '0.1.1')
+  fixture.git(['tag', 'v0.1.2'])
+  const headBefore = fixture.git(['rev-parse', 'HEAD']).trim()
+  const payloadBefore = readFileSync(path.join(fixture.dir, 'packages', 'payload', 'package.json'), 'utf8')
+  const cliBefore = readFileSync(path.join(fixture.dir, 'packages', 'cli', 'package.json'), 'utf8')
+
+  // Fails fast in --dry-run too
+  const dry = fixture.runRelease(['0.1.2', '--dry-run', '--skip-verify'])
+  assert.notEqual(dry.status, 0)
+  assert.match(dry.stderr, /tag v0\.1\.2 已存在/)
+
+  // Fails before mutating files or creating any commit in real run
+  const real = fixture.runRelease(['0.1.2', '--skip-verify'])
+  assert.notEqual(real.status, 0)
+  assert.match(real.stderr, /tag v0\.1\.2 已存在/)
+  assert.equal(fixture.git(['rev-parse', 'HEAD']).trim(), headBefore, 'HEAD commit must remain untouched')
+  assert.equal(readFileSync(path.join(fixture.dir, 'packages', 'payload', 'package.json'), 'utf8'), payloadBefore)
+  assert.equal(readFileSync(path.join(fixture.dir, 'packages', 'cli', 'package.json'), 'utf8'), cliBefore)
+  assert.equal(existsSync(path.join(fixture.dir, 'CHANGELOG.md')), false, 'CHANGELOG.md must not be created')
+  assert.equal(fixture.git(['status', '--porcelain']).trim(), '', 'working tree must remain clean')
+})
+
+test('release.mjs --allow-dirty: commits only release files via --only and preserves user staged changes', { timeout: 60_000 }, (t) => {
+  // Case 1: brand-new untracked CHANGELOG.md + user staged modified file + user staged new file + unstaged dirty file
+  const fresh = makeFixtureRepo(useTempDir(t, 'helmx-release-script-'), '0.1.1', { withChangelog: false })
+  writeFileSync(path.join(fresh.dir, 'notes.txt'), 'staged-edit\n')
+  writeFileSync(path.join(fresh.dir, 'user-staged-new.txt'), 'keep-staged\n')
+  fresh.git(['add', 'notes.txt', 'user-staged-new.txt'])
+  writeFileSync(path.join(fresh.dir, 'user-unstaged.txt'), 'leave-untracked\n')
+
+  const res1 = fresh.runRelease(['0.1.2', '--allow-dirty', '--skip-verify'])
+  assert.equal(res1.status, 0, `release --allow-dirty failed:\nstdout: ${res1.stdout}\nstderr: ${res1.stderr}`)
+
+  const commitFiles1 = fresh.git(['show', '--name-only', '--pretty=format:', 'HEAD']).trim().split('\n').sort()
+  assert.deepEqual(commitFiles1, ['CHANGELOG.md', 'packages/cli/package.json', 'packages/payload/package.json'])
+  assert.equal(fresh.git(['rev-parse', 'v0.1.2']).trim(), fresh.git(['rev-parse', 'HEAD']).trim())
+
+  const stagedAfter1 = fresh.git(['diff', '--cached', '--name-only']).trim().split('\n').sort()
+  assert.deepEqual(stagedAfter1, ['notes.txt', 'user-staged-new.txt'], 'user staged files must stay staged and excluded from release commit')
+  assert.match(fresh.git(['status', '--porcelain']), /\?\? user-unstaged\.txt/)
+
+  // Case 2: already-tracked CHANGELOG.md + prior tag + user staged edits remain preserved
+  const tracked = makeFixtureRepo(useTempDir(t, 'helmx-release-script-'), '0.1.1', { withChangelog: true })
+  tracked.git(['tag', 'v0.1.1'])
+  writeFileSync(path.join(tracked.dir, 'notes.txt'), 'v2-feature\n')
+  tracked.git(['add', 'notes.txt'])
+  tracked.git(['commit', '-m', 'feat(cli): add feature'])
+
+  writeFileSync(path.join(tracked.dir, 'notes.txt'), 'wip-staged\n')
+  tracked.git(['add', 'notes.txt'])
+
+  const res2 = tracked.runRelease(['--patch', '--allow-dirty', '--skip-verify'])
+  assert.equal(res2.status, 0, `release --patch --allow-dirty failed:\nstdout: ${res2.stdout}\nstderr: ${res2.stderr}`)
+
+  const commitFiles2 = tracked.git(['show', '--name-only', '--pretty=format:', 'HEAD']).trim().split('\n').sort()
+  assert.deepEqual(commitFiles2, ['CHANGELOG.md', 'packages/cli/package.json', 'packages/payload/package.json'])
+  assert.deepEqual(tracked.git(['diff', '--cached', '--name-only']).trim().split('\n'), ['notes.txt'])
+  assert.match(readFileSync(path.join(tracked.dir, 'CHANGELOG.md'), 'utf8'), /## v0\.1\.2 \(\d{4}-\d{2}-\d{2}\)\n\n- feat\(cli\): add feature/)
+})

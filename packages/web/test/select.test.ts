@@ -367,11 +367,19 @@ test('Select multiple: 点击复选框仅触发一次 onChange，支持键盘导
       root.render(renderSelect())
     })
 
-    // 2. Keyboard navigation skips disabled Beta and toggles Charlie on Enter
+    // 2. Keyboard navigation skips disabled Beta and toggles Charlie on Enter,
+    //    and exposes aria-activedescendant / aria-controls / option IDs
     const viewport = container.querySelector<HTMLElement>('.helmx-select-viewport')
     const listbox = container.querySelector<HTMLElement>('[role="listbox"]')
-    assert.ok(viewport !== null && listbox !== null)
+    const trigger = container.querySelector<HTMLButtonElement>('.helmx-select-trigger')
+    const searchCombobox = container.querySelector<HTMLInputElement>('.helmx-select-search input')
+    assert.ok(viewport !== null && listbox !== null && trigger !== null && searchCombobox !== null)
     assert.equal(listbox.getAttribute('aria-multiselectable'), 'true')
+    assert.ok(listbox.id.length > 0, 'listbox must carry a deterministic id')
+    assert.equal(trigger.getAttribute('aria-controls'), listbox.id, 'open trigger must reference listbox via aria-controls')
+    assert.equal(searchCombobox.getAttribute('role'), 'combobox', 'searchable input exposes combobox role')
+    assert.equal(searchCombobox.getAttribute('aria-controls'), listbox.id)
+    assert.equal(listbox.getAttribute('aria-activedescendant'), null, 'no active descendant before navigation')
 
     await act(async () => {
       viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
@@ -379,8 +387,25 @@ test('Select multiple: 点击复选框仅触发一次 onChange，支持键盘导
     await act(async () => {
       viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
     })
-    const highlighted = container.querySelector('[role="option"][data-highlighted]')
-    assert.ok(highlighted?.textContent?.includes('Charlie'), 'ArrowDown skips disabled option to highlight Charlie')
+    const highlighted = container.querySelector<HTMLElement>('[role="option"][data-highlighted]')
+    assert.ok(highlighted !== null && highlighted.textContent?.includes('Charlie'), 'ArrowDown skips disabled option to highlight Charlie')
+    assert.ok(highlighted.id.length > 0, 'each multi-select option must carry a stable id')
+    assert.equal(listbox.getAttribute('aria-activedescendant'), highlighted.id, 'listbox aria-activedescendant tracks active option id')
+    assert.equal(searchCombobox.getAttribute('aria-activedescendant'), highlighted.id, 'search combobox aria-activedescendant tracks active option id')
+    assert.ok(document.getElementById(highlighted.id) === highlighted, 'aria-activedescendant resolves to the active option node')
+
+    await act(async () => {
+      viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))
+    })
+    const endOption = container.querySelector<HTMLElement>('[role="option"][data-highlighted]')
+    assert.ok(endOption !== null && endOption.textContent?.includes('Echo'))
+    assert.equal(listbox.getAttribute('aria-activedescendant'), endOption.id, 'End updates aria-activedescendant to last enabled option')
+
+    await act(async () => {
+      viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
+      viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
+    })
+    assert.equal(listbox.getAttribute('aria-activedescendant'), highlighted.id, 'ArrowUp returns active descendant to Charlie')
 
     await act(async () => {
       viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
@@ -395,6 +420,8 @@ test('Select multiple: 点击复选框仅触发一次 onChange，支持键盘导
       nativeValueSetter?.call(searchInput, 'zzz-no-hit')
       searchInput.dispatchEvent(new Event('input', { bubbles: true }))
     })
+    assert.equal(listbox.getAttribute('aria-activedescendant'), null, 'clearing active index removes stale aria-activedescendant')
+    assert.equal(searchCombobox.getAttribute('aria-activedescendant'), null)
     const emptyElEn = container.querySelector<HTMLElement>('.helmx-select-empty')
     assert.ok(emptyElEn !== null)
     assert.equal(emptyElEn.textContent, 'No matching options')

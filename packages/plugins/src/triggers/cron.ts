@@ -508,7 +508,13 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       // Overlap protection for automated jobs: if a previous run is still working/blocked,
       // advance nextRunAt and record the skip rather than piling up concurrent runs.
       if (job.targetConversationId === undefined && deps.findActiveRun !== undefined) {
-        const activeRun = deps.findActiveRun(job.id)
+        let activeRun: ConversationSummary | undefined
+        try {
+          activeRun = deps.findActiveRun(job.id)
+        } catch (err) {
+          backoffOnFailure(`cron job ${id} active-run check failed`, err)
+          return
+        }
         if (activeRun !== undefined) {
           const reason = `previous run #${activeRun.id} is still ${activeRun.status}`
           try {

@@ -342,3 +342,44 @@ test('HubUpgradedNotice dismiss hides immediately without waiting for parent rer
   })
   assert.ok(mounted.host.querySelector('.hub-upgraded-notice') === null, 'dismiss hides notice immediately')
 })
+
+test('HubUpdateCard times out honestly across continuous transient network failures during switch', { timeout: 60_000 }, async (t) => {
+  const { mountDomRoot } = await import('./helpers/dom-harness.js')
+  let stage: 'staged' | 'offline' = 'staged'
+  let offlineAttempts = 0
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/hub-update/apply') {
+      stage = 'offline'
+      return Response.json({ ok: true, switching: true, targetVersion: '1.3.0' }, { status: 202 })
+    }
+    if (path === '/api/hub-update/status') {
+      if (stage === 'staged') {
+        return Response.json({ active: true, currentVersion: '1.2.0', readyVersion: '1.3.0', lastError: null, blocked: null })
+      }
+      offlineAttempts += 1
+      throw new Error('ECONNREFUSED')
+    }
+    return Response.json({})
+  }) as typeof fetch
+  t.after(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  const mounted = await mountDomRoot(
+    React.createElement(HubUpdateCard, { pollMs: 5_000, switchPollMs: 10, switchTimeoutMs: 45 }),
+  )
+  t.after(mounted.unmount)
+  await waitForCondition(() => mounted.host.querySelector('.hub-update-card-action') !== null)
+
+  const applyBtn = mounted.host.querySelector('.hub-update-card-action') as HTMLButtonElement
+  await act(async () => {
+    applyBtn.click()
+  })
+  assert.ok(mounted.host.querySelector('.hub-update-card-switching') !== null)
+
+  await waitForCondition(() => mounted.host.querySelector('.hub-update-card-error') !== null)
+  assert.ok(offlineAttempts >= 2, 'must keep retrying across transient failures until timeout budget expires')
+  assert.match(mounted.host.querySelector('.hub-update-card-error')?.textContent ?? '', /1\.3\.0/)
+})

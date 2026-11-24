@@ -1395,3 +1395,128 @@ test('PluginConfigForm：支持 string[]（自由多行与 enum MultiSelect）�
     container.remove()
   }
 })
+
+test('PluginDetailDrawer：切换插件清空占用确认与错误、丢弃迟到 409，并固定原目标 pluginId 执行强制停用', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const originalGetConfig = pluginsApi.getConfig
+  pluginsApi.getConfig = async () => ({ values: {}, schema: {} })
+
+  const pluginA = makePlugin({ id: 'ext:alpha', name: 'Alpha Plugin', enabled: true, locked: false })
+  const pluginB = makePlugin({ id: 'ext:beta', name: 'Beta Plugin', enabled: true, locked: false })
+
+  try {
+    // 1. Trigger 409 plugin_in_use on Alpha, then switch directly to Beta (open stays true):
+    //    Alpha's inUseConfirm must disappear immediately and never carry over to Beta.
+    const toggleCalls: Array<{ id: string; targetEnabled?: boolean; options?: { force?: boolean } }> = []
+    let rejectLateA: ((err: Error) => void) | undefined
+    let mode: 'sync-in-use' | 'deferred-in-use' | 'allow' = 'sync-in-use'
+
+    const onToggleEnabled = async (
+      target: PluginSummary,
+      targetEnabled?: boolean,
+      options?: { force?: boolean },
+    ) => {
+      toggleCalls.push({ id: target.id, targetEnabled, options })
+      if (mode === 'sync-in-use') {
+        throw new ApiClientError('plugin_in_use', 'in use', 409, {
+          pluginId: target.id,
+          usages: [{ kind: 'cron_job', id: `job-${target.id}`, label: `Usage for ${target.id}` }],
+        })
+      }
+      if (mode === 'deferred-in-use') {
+        await new Promise<void>((_, reject) => {
+          rejectLateA = reject
+        })
+      }
+    }
+
+    const renderDrawer = (plugin: PluginSummary) =>
+      e(PluginDetailDrawer, {
+        plugin,
+        open: true,
+        inline: true,
+        onClose: () => {},
+        onToggleEnabled,
+        toggling: false,
+      })
+
+    await act(async () => {
+      root.render(renderDrawer(pluginA))
+    })
+
+    const getDisableBtn = () =>
+      Array.from(container.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('Disable plugin'),
+      ) as HTMLButtonElement | undefined
+
+    await act(async () => {
+      getDisableBtn()!.click()
+    })
+    assert.ok(container.querySelector('.callout-warn') !== null, 'Alpha should display inUseConfirm')
+    assert.match(container.querySelector('.callout-warn')?.textContent ?? '', /Usage for ext:alpha/)
+
+    // Switch directly to Beta while drawer remains open
+    await act(async () => {
+      root.render(renderDrawer(pluginB))
+    })
+    assert.ok(container.querySelector('.callout-warn') === null, 'switching to Beta must clear Alpha inUseConfirm')
+    assert.ok(container.querySelector('.callout-error') === null, 'switching to Beta must clear action errors')
+
+    // 2. Late 409 from Alpha arriving after switching to Beta must be discarded
+    await act(async () => {
+      root.render(renderDrawer(pluginA))
+    })
+    mode = 'deferred-in-use'
+    await act(async () => {
+      getDisableBtn()!.click()
+    })
+    assert.ok(rejectLateA !== undefined)
+
+    await act(async () => {
+      root.render(renderDrawer(pluginB))
+    })
+    await act(async () => {
+      rejectLateA!(
+        new ApiClientError('plugin_in_use', 'late alpha in use', 409, {
+          pluginId: pluginA.id,
+          usages: [{ kind: 'cron_job', id: 'late-a', label: 'Late usage from Alpha' }],
+        }),
+      )
+    })
+    assert.ok(container.querySelector('.callout-warn') === null, 'late 409 from Alpha must not leak into Beta')
+
+    // 3. Force disable operates on the captured target plugin (even if prop snapshot updates for same id)
+    mode = 'sync-in-use'
+    await act(async () => {
+      root.render(renderDrawer(pluginA))
+    })
+    await act(async () => {
+      getDisableBtn()!.click()
+    })
+    assert.ok(container.querySelector('.callout-warn') !== null)
+
+    // Rerender with updated Alpha object reference, then click Force disable
+    await act(async () => {
+      root.render(renderDrawer({ ...pluginA, version: '2.0.0' }))
+    })
+    mode = 'allow'
+    const forceBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Force disable'),
+    ) as HTMLButtonElement | undefined
+    assert.ok(forceBtn !== undefined)
+    await act(async () => {
+      forceBtn.click()
+    })
+    const lastCall = toggleCalls[toggleCalls.length - 1]
+    assert.deepEqual(lastCall, { id: 'ext:alpha', targetEnabled: false, options: { force: true } })
+  } finally {
+    pluginsApi.getConfig = originalGetConfig
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})

@@ -63,14 +63,14 @@ export async function runServiceStartBarrier(
       await onIsolatedFailure(state, err);
     }
   }
-  let startedIdx = 0;
+  const started: PluginState[] = [];
   for (const state of prepared) {
     try {
       await startServices(state);
-      startedIdx += 1;
+      started.push(state);
     } catch (err) {
       if (state.isolateFailure !== true) {
-        await rollbackStartBarrier(prepared.slice(0, startedIdx));
+        await rollbackStartBarrier(started);
         throw err;
       }
       await onIsolatedFailure(state, err);

@@ -38,7 +38,7 @@
  *    via `npm install -g` into an isolated prefix (the one-shot install story);
  * 8. golden sequence (PAYLOAD_NPM_SMOKE=1): the globally installed `helmx` installs a real Hub
  *    payload tarball (`update --tarball --version`: unpack → candidate-root npm install → check →
- *    commit → launch → health gate), `update --status` reports the running hub, and `update --stop`
+ *    commit → launch → health gate), top-level `status --json` reports the running hub, and `stop`
  *    shuts it down cleanly — the only place the CLI artifact and the real payload artifact meet
  *    before a release ships.
  *
@@ -742,14 +742,14 @@ test('node tarball acceptance: npm pack → npm install -g into an isolated pref
     }
     assert.ok(!members.some((m) => m.includes('node_modules')), 'the node tarball must not carry node_modules');
 
-    // The one-shot story itself: install -g from the real tarball into an isolated prefix (the four
+    // The one-shot story itself: install -g from the real tarball into an isolated prefix (the two
     // external dependencies resolve and download from the registry).
     const prefix = path.join(outsideRoot, 'global-prefix');
     runCommand('npm', ['install', '-g', tgz, '--prefix', prefix, '--no-audit', '--no-fund'], outsideRoot, 180_000);
     const binPath = path.join(prefix, 'bin', 'helmx-node');
     assert.ok(existsSync(binPath), `npm install -g must create the helmx-node bin link under ${prefix}/bin`);
 
-    // Dependency resolution proof at the installed location: the four external packages landed
+    // Dependency resolution proof at the installed location: the two external packages landed
     // beside the bundle and resolved to the exact pinned versions (transitive dependencies of
     // those packages are npm's business, not this artifact's contract).
     const installedPkgDir = path.join(prefix, 'lib', 'node_modules', ...nodePackageName.split('/'));
@@ -1049,13 +1049,13 @@ test('payload prebuilt mermaid: unpacked plugins.tgz serves mermaid & chunks wit
  * CLI golden sequence (real npm network acceptance, gated like the payload e2e above): the
  * globally installed `helmx` installs a real Hub payload tarball into its own release root
  * (`update --tarball --version`: unpack → candidate-root npm install → check → commit → launch →
- * health gate — the first `helmx update` defaults to install and start), `update --status`
- * reflects the running release, and `update --stop` shuts it down cleanly. This is the only
+ * health gate — the first `helmx update` defaults to install and start), top-level `status --json`
+ * reflects the running release, and top-level `stop` shuts it down cleanly. This is the only
  * place the CLI artifact and the real payload artifact meet before a release ships.
  *
- * Note: the user-facing update surface (`helmx update --check/--watch/--status/--stop/--channel/
- * --interval-ms/--tarball+--version`, no --start) is implemented CLI-side on the bundled-in launcher's
- * typed API; this sequence pins the distribution contract against it.
+ * Note: the user-facing lifecycle surface splits updates (`helmx update --check/--channel/
+ * --version/--tarball/--force`) from top-level lifecycle commands (`helmx start/stop/restart/status`);
+ * this sequence pins the distribution contract against those actual commands.
  */
 test('cli golden sequence: installed helmx updates from a real payload tarball, health-gates, and stops', {
   timeout: 600_000,
@@ -1067,6 +1067,9 @@ test('cli golden sequence: installed helmx updates from a real payload tarball, 
 }, async () => {
   const payloadPkg = JSON.parse(readFileSync(path.join(stagingDir, 'package.json'), 'utf-8'));
   const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helmx-cli-golden-'));
+  const installRoot = path.join(outsideRoot, 'install-root');
+  const dataDir = path.join(outsideRoot, 'hub-data');
+  const binPath = path.join(outsideRoot, 'global-prefix', 'bin', 'helmx');
   try {
     // 1. Real tarballs: cli (published form) + Hub payload (the update target).
     const packDir = path.join(outsideRoot, 'pack');
@@ -1079,23 +1082,21 @@ test('cli golden sequence: installed helmx updates from a real payload tarball, 
     // 2. One-shot install of the CLI, exactly as a member machine would do it.
     const prefix = path.join(outsideRoot, 'global-prefix');
     runCommand('npm', ['install', '-g', cliTgz, '--prefix', prefix, '--no-audit', '--no-fund'], outsideRoot, 120_000);
-    const binPath = path.join(prefix, 'bin', 'helmx');
     assert.ok(existsSync(binPath), 'npm install -g must create the helmx bin link');
 
-    // 3. update --tarball --version: the first update installs and starts (default action; there is
-    //    no --start flag on the new surface). The install root and the hub data dir stay separate
-    //    trees by contract; the port is an ephemeral claim, not a guess.
-    const installRoot = path.join(outsideRoot, 'install-root');
-    const dataDir = path.join(outsideRoot, 'hub-data');
+    // 3. update --tarball --version: the first update installs and starts. The install root and the
+    //    hub data dir stay separate trees by contract; the port is an ephemeral claim, not a guess.
     const port = await freePort();
     const updateEnv: NodeJS.ProcessEnv = {
       ...process.env,
       HELMX_HUB_INSTALL_ROOT: installRoot,
+      HELMX_HUB_URL: `http://127.0.0.1:${port}`,
       HELMX_PORT: String(port),
       HELMX_HOST: '127.0.0.1',
       HELMX_DATA_DIR: dataDir,
     };
     delete updateEnv.NODE_PATH;
+    delete updateEnv.HELMX_TOKEN;
     const update = spawnSync(binPath, ['update', '--tarball', payloadTgz, '--version', payloadPkg.version], {
       cwd: outsideRoot, encoding: 'utf8', timeout: 420_000, env: updateEnv,
     });
@@ -1105,10 +1106,12 @@ test('cli golden sequence: installed helmx updates from a real payload tarball, 
       `helmx update --tarball failed (exit ${update.status})\nstdout: ${update.stdout}\nstderr: ${update.stderr}`,
     );
 
-    // 4. update --status: the committed release is current and the hub is running and healthy.
-    const status = spawnSync(binPath, ['update', '--status', '--json'], { cwd: outsideRoot, encoding: 'utf8', timeout: 50_000, env: updateEnv });
-    assert.equal(status.status, 0, `helmx update --status --json failed\nstdout: ${status.stdout}\nstderr: ${status.stderr}`);
-    const snapshot = JSON.parse(status.stdout);
+    // 4. status --json: the committed release is current and the hub is running and healthy.
+    const status = spawnSync(binPath, ['status', '--json'], { cwd: outsideRoot, encoding: 'utf8', timeout: 50_000, env: updateEnv });
+    assert.equal(status.status, 0, `helmx status --json failed\nstdout: ${status.stdout}\nstderr: ${status.stderr}`);
+    const statusBody = JSON.parse(status.stdout);
+    const snapshot = statusBody.localHub;
+    assert.ok(snapshot !== null && snapshot !== undefined, `helmx status --json must expose localHub snapshot: ${status.stdout}`);
     assert.equal(snapshot.current?.version, payloadPkg.version);
     assert.ok(snapshot.running !== null, 'the hub must be running after the default install-and-start update');
     assert.equal(snapshot.running.port, port);
@@ -1127,19 +1130,35 @@ test('cli golden sequence: installed helmx updates from a real payload tarball, 
     assert.equal(compiled.status, 0, compiled.stderr);
     assert.deepEqual(JSON.parse(compiled.stdout).manifest.modules['client.tsx'].exports, ['Panel']);
 
-    // 5. update --stop: identity-verified shutdown, leaving no pid file behind.
-    const stop = spawnSync(binPath, ['update', '--stop'], { cwd: outsideRoot, encoding: 'utf8', timeout: 120_000, env: updateEnv });
-    assert.equal(stop.status, 0, `helmx update --stop failed\nstdout: ${stop.stdout}\nstderr: ${stop.stderr}`);
-    const after = spawnSync(binPath, ['update', '--status', '--json'], { cwd: outsideRoot, encoding: 'utf8', timeout: 50_000, env: updateEnv });
-    const afterSnapshot = JSON.parse(after.stdout);
-    assert.equal(afterSnapshot.running, null, 'no hub may keep running after update --stop');
+    // 5. stop: identity-verified shutdown, leaving no pid file behind; offline status still exposes localHub.
+    const stop = spawnSync(binPath, ['stop'], { cwd: outsideRoot, encoding: 'utf8', timeout: 120_000, env: updateEnv });
+    assert.equal(stop.status, 0, `helmx stop failed\nstdout: ${stop.stdout}\nstderr: ${stop.stderr}`);
+    const after = spawnSync(binPath, ['status', '--json'], { cwd: outsideRoot, encoding: 'utf8', timeout: 50_000, env: updateEnv });
+    assert.equal(after.status, 1, `helmx status --json after stop must exit 1 (hub_unreachable)\nstdout: ${after.stdout}\nstderr: ${after.stderr}`);
+    const afterEnvelope = JSON.parse(after.stderr);
+    assert.equal(afterEnvelope.error?.code, 'hub_unreachable');
+    const afterSnapshot = afterEnvelope.error?.details?.localHub;
+    assert.ok(afterSnapshot !== null && afterSnapshot !== undefined, `offline helmx status --json must expose details.localHub: ${after.stderr}`);
+    assert.equal(afterSnapshot.running, null, 'no hub may keep running after stop');
     assert.equal(afterSnapshot.current?.version, payloadPkg.version, 'the committed release survives the stop');
     assert.ok(readdirSync(path.join(installRoot, 'releases')).length >= 1, 'release directories are retained for rollback');
   } finally {
     // Best-effort cleanup: stop anything the sequence may have left running before dropping the tree.
-    spawnSync(path.join(outsideRoot, 'global-prefix', 'bin', 'helmx'), ['update', '--stop'], {
-      cwd: outsideRoot, timeout: 60_000, env: { ...process.env, HELMX_HUB_INSTALL_ROOT: path.join(outsideRoot, 'install-root') },
-    });
-    rmSync(outsideRoot, { recursive: true, force: true });
+    try {
+      if (existsSync(binPath)) {
+        const cleanupEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          HELMX_HUB_INSTALL_ROOT: installRoot,
+          HELMX_DATA_DIR: dataDir,
+        };
+        delete cleanupEnv.NODE_PATH;
+        delete cleanupEnv.HELMX_TOKEN;
+        spawnSync(binPath, ['stop'], {
+          cwd: outsideRoot, timeout: 60_000, env: cleanupEnv,
+        });
+      }
+    } finally {
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
   }
 });

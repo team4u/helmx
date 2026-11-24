@@ -128,11 +128,18 @@ button, a, input, select, textarea { touch-action: manipulation; }
     top: 0;
     z-index: 72;
     transform: translateX(-100%);
-    transition: transform 150ms ease;
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 150ms ease, visibility 0s linear 150ms;
     padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom);
   }
-  .sidebar-open .helmx-sidebar { transform: translateX(0); }
+  .sidebar-open .helmx-sidebar {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    transition: transform 150ms ease, visibility 0s;
+  }
   .sidebar-open .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 71; background: var(--bg-backdrop); border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
   .mobile-nav-toggle {
     display: inline-flex;

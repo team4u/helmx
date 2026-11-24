@@ -311,6 +311,149 @@ describe('Ask CAS and persistence boundaries', { timeout: 60_000 }, () => {
     }
   })
 
+  it('CAS against live conversation stateChangeSeq: createAsk own blocked bump does not self-supersede, later state advance supersedes, unwatermarked client seq conflict rejects 409', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 't9-live-cas'))
+    try {
+      // 1) Caller captures current stateChangeSeq before createAsk; createAsk bumps seq via setPendingAskCount,
+      //    yet with no other state transition the ask must answer cleanly (not self-supersede).
+      const seqBefore1 = kernel.getConversation(1).stateChangeSeq
+      const ask1Promise = kernel.createAsk({
+        conversationId: 1,
+        title: 'no external change',
+        expectedStateSeq: seqBefore1,
+        fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+      })
+      await waitFor(() => kernel.listAsks('pending').length === 1 && kernel.getConversation(1).status === 'blocked')
+      const ask1 = kernel.listAsks('pending')[0]!
+      const res1 = await kernel.answerAsk(ask1.id, { confirm: 'true' }, seqBefore1)
+      assert.equal(res1.status, 'answered')
+      assert.deepEqual((await ask1Promise).answers, { confirm: 'true' })
+
+      // 2) After createAsk, an external conversation update advances stateChangeSeq -> answerAsk auto-supersedes.
+      const seqBefore2 = kernel.getConversation(1).stateChangeSeq
+      const ask2Promise = kernel.createAsk({
+        conversationId: 1,
+        title: 'superseded after update',
+        expectedStateSeq: seqBefore2,
+        fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+      })
+      await waitFor(() => kernel.listAsks('pending').length === 1 && kernel.getConversation(1).status === 'blocked')
+      const ask2 = kernel.listAsks('pending')[0]!
+      await kernel.updateConversation(1, { title: 'state moved forward' })
+      const res2 = await kernel.answerAsk(ask2.id, { confirm: 'true' }, seqBefore2)
+      assert.equal(res2.status, 'superseded')
+      const settled2 = await ask2Promise
+      assert.equal(settled2.status, 'superseded')
+      assert.deepEqual(settled2.answers, {})
+
+      // 3) Unwatermarked ask: client supplying a stale expectedStateSeq gets 409 without cancelling the ask.
+      const ask3Promise = kernel.createAsk({
+        conversationId: 1,
+        title: 'client seq guard',
+        fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+      })
+      await waitFor(() => kernel.listAsks('pending').length === 1 && kernel.getConversation(1).status === 'blocked')
+      const ask3 = kernel.listAsks('pending')[0]!
+      const seqWhilePending = kernel.getConversation(1).stateChangeSeq
+      await kernel.updateConversation(1, { title: 'another advance' })
+      await assert.rejects(
+        () => kernel.answerAsk(ask3.id, { confirm: 'true' }, seqWhilePending),
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_conflict' && err.status === 409,
+      )
+      const currentSeq = kernel.getConversation(1).stateChangeSeq
+      const res3 = await kernel.answerAsk(ask3.id, { confirm: 'true' }, currentSeq)
+      assert.equal(res3.status, 'answered')
+      assert.equal((await ask3Promise).status, 'answered')
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('CAS survives process restart: creation self-bump persists across close/reopen so first answer succeeds, while post-restart state advance still supersedes', { timeout: 60_000 }, async () => {
+    const dir = join(root, 't9-live-cas-restart')
+    const kernel1 = await openRuntime(dir)
+    let ask1Id = ''
+    let seq1 = 0
+    try {
+      seq1 = kernel1.getConversation(1).stateChangeSeq
+      const p1 = kernel1.createAsk({
+        conversationId: 1,
+        title: 'restart confirm',
+        expectedStateSeq: seq1,
+        fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+      })
+      void p1.catch(() => {})
+      await waitFor(() => kernel1.listAsks('pending').length === 1 && kernel1.getConversation(1).status === 'blocked')
+      ask1Id = kernel1.listAsks('pending')[0]!.id
+      assert.equal(kernel1.getConversation(1).stateChangeSeq, seq1 + 1)
+    } finally {
+      await kernel1.close()
+    }
+
+    // Reopen fresh runtime (zero in-memory AskService state): answering with original seq1 must succeed, not supersede.
+    const kernel2 = await openRuntime(dir)
+    let ask2Id = ''
+    let seq2 = 0
+    try {
+      const restored = kernel2.listAsks('pending').find((a) => a.id === ask1Id)
+      assert.ok(restored, 'pending ask must survive restart')
+      assert.equal(restored.expectedStateSeq, seq1, 'client-facing expectedStateSeq must remain unchanged')
+      assert.equal(kernel2.getConversation(1).stateChangeSeq, seq1 + 1)
+
+      await assert.rejects(
+        () => kernel2.answerAsk(ask1Id, { confirm: 'true' }, seq1 - 1),
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_conflict' && err.status === 409,
+      )
+      const answered = await kernel2.answerAsk(ask1Id, { confirm: 'true' }, seq1)
+      assert.equal(answered.status, 'answered')
+
+      // Create a second watermarked ask, then restart and mutate conversation state -> must supersede.
+      seq2 = kernel2.getConversation(1).stateChangeSeq
+      const p2 = kernel2.createAsk({
+        conversationId: 1,
+        title: 'restart supersede',
+        expectedStateSeq: seq2,
+        fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+      })
+      void p2.catch(() => {})
+      await waitFor(() => kernel2.listAsks('pending').length === 1 && kernel2.getConversation(1).status === 'blocked')
+      ask2Id = kernel2.listAsks('pending')[0]!.id
+    } finally {
+      await kernel2.close()
+    }
+
+    const kernel3 = await openRuntime(dir)
+    try {
+      await kernel3.updateConversation(1, { title: 'advanced after restart' })
+      const superseded = await kernel3.answerAsk(ask2Id, { confirm: 'true' }, seq2)
+      assert.equal(superseded.status, 'superseded')
+    } finally {
+      await kernel3.close()
+    }
+  })
+
+  it('createConversation validates ownedBy before creating SDK conversation (no orphan pi_conversations row across restart)', { timeout: 60_000 }, async () => {
+    const dir = join(root, 't9-ownedby-preflight')
+    const kernel = await openRuntime(dir)
+    try {
+      const initialIds = kernel.listConversations().map((c) => c.id)
+      await assert.rejects(
+        () => kernel.createConversation({ title: 'should-not-exist', ownedBy: 'invalid-owner' as never }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      )
+      assert.deepEqual(kernel.listConversations().map((c) => c.id), initialIds)
+    } finally {
+      await kernel.close()
+    }
+    // Reopen triggers recover() scanning pi_conversations: an orphan SDK row would have resurrected here.
+    const reopened = await openRuntime(dir)
+    try {
+      assert.equal(reopened.listConversations().length, 1)
+    } finally {
+      await reopened.close()
+    }
+  })
+
   it('persisted pending asks remain across restart alongside diagnostic notice (no silent discard)', { timeout: 60_000 }, async () => {
     const dir = join(root, 't10')
     const kernel = await openRuntime(dir)
@@ -1465,6 +1608,40 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
       // FTS indexes the post-transform text.
       const hits = await kernel.search('normalized')
       assert.ok(hits.length >= 1)
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('input hook transform with malformed attachments rejects with invalid_hook_result (never raw TypeError)', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'p6-bad-attachments'))
+    try {
+      let badAttachments: unknown = 'not-an-array'
+      await kernel.plugins.register({
+        id: 'test:bad-attachments',
+        definePlugin(ctx) {
+          ctx.hook.onInput((payload) => ({
+            action: 'transform',
+            value: {
+              ...payload,
+              input: { ...payload.input, attachments: badAttachments as never },
+            },
+          }))
+        },
+      })
+      for (const candidate of [
+        'not-an-array',
+        [null],
+        ['art-1'],
+        [{ id: '', name: 'a.txt', mimeType: 'text/plain', size: 1 }],
+        [{ id: 'art-1', name: 'a.txt', mimeType: 'text/plain', size: -1 }],
+      ]) {
+        badAttachments = candidate
+        await assert.rejects(
+          () => kernel.submitInput(1, 'hello'),
+          (err: unknown) => err instanceof HelmxError && err.code === 'invalid_hook_result',
+        )
+      }
     } finally {
       await kernel.close()
     }
@@ -2704,6 +2881,105 @@ describe('KernelRuntime start and close concurrency', { timeout: 60_000 }, () =>
       assert.equal(localOverride.cwd, dir)
     } finally {
       await kernel.close()
+    }
+  })
+
+  it('reconcile failure leaves runtime.started false so retrying start() re-runs pending reconciles and only then marks started', { timeout: 60_000 }, async () => {
+    const dir = await makeTempDir('helmx-rt-reconcile-retry-')
+    const { models } = makeFauxModels()
+    const runtime = await KernelRuntime.open({
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/faux-1',
+      models,
+      autoResume: false,
+    })
+    try {
+      let firstReconciles = 0
+      let flakyReconciles = 0
+      let lastReconciles = 0
+      let failFlakyOnce = true
+      const startedObservedInReconcile: boolean[] = []
+
+      await runtime.plugins.register({
+        id: 'builtin:rec-first',
+        definePlugin: (ctx) => {
+          ctx.service({
+            id: 'first-svc',
+            start() {},
+            stop() {},
+            reconcile() {
+              startedObservedInReconcile.push(runtime.started)
+              firstReconciles += 1
+            },
+          })
+        },
+      })
+      await runtime.plugins.register({
+        id: 'builtin:rec-flaky',
+        definePlugin: (ctx) => {
+          ctx.service({
+            id: 'flaky-svc',
+            reconcileAfter: ['builtin:rec-first'],
+            start() {},
+            stop() {},
+            reconcile() {
+              startedObservedInReconcile.push(runtime.started)
+              flakyReconciles += 1
+              if (failFlakyOnce) {
+                failFlakyOnce = false
+                throw new Error('transient reconcile error')
+              }
+            },
+          })
+        },
+      })
+      await runtime.plugins.register({
+        id: 'builtin:rec-last',
+        definePlugin: (ctx) => {
+          ctx.service({
+            id: 'last-svc',
+            reconcileAfter: ['builtin:rec-flaky'],
+            start() {},
+            stop() {},
+            reconcile() {
+              startedObservedInReconcile.push(runtime.started)
+              lastReconciles += 1
+            },
+          })
+        },
+      })
+
+      assert.equal(runtime.started, false)
+      await assert.rejects(
+        () => runtime.start(),
+        (err: unknown) => err instanceof HelmxError && err.code === 'plugin_service_reconcile_failed',
+      )
+      assert.equal(runtime.started, false, 'failed reconcile must leave runtime.started false')
+      assert.equal(firstReconciles, 1)
+      assert.equal(flakyReconciles, 1)
+      assert.equal(lastReconciles, 0)
+
+      // Retry must NOT skip due to stale #started; already-reconciled services stay skipped while pending ones converge.
+      await runtime.start()
+      assert.equal(runtime.started, true, 'runtime.started flips true only once reconcile succeeds')
+      assert.equal(firstReconciles, 1, 'already-reconciled service must not re-run on retry')
+      assert.equal(flakyReconciles, 2, 'failed service must re-run on retry')
+      assert.equal(lastReconciles, 1, 'downstream service must run once upstream reconcile succeeds')
+      assert.deepEqual(
+        startedObservedInReconcile,
+        [false, false, false, false],
+        'runtime.started must remain false while reconcile is still executing',
+      )
+
+      // Subsequent start() after convergence is an idempotent no-op.
+      await runtime.start()
+      assert.equal(firstReconciles, 1)
+      assert.equal(flakyReconciles, 2)
+      assert.equal(lastReconciles, 1)
+    } finally {
+      await runtime.close()
+      await cleanupDir(dir)
     }
   })
 })

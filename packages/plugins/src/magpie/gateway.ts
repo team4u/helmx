@@ -22,14 +22,29 @@ import type { QuotaEntry } from './quota.js'
 // 网关配置解析
 // ---------------------------------------------------------------------------
 
+function hasControlOrSpace(text: string): boolean {
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i)
+    if (code <= 0x20 || code === 0x7f) return true
+  }
+  return false
+}
+
 /**
  * 网关根地址归一化：补 scheme、去尾斜杠与尾 /v1，使 /v1/models 等可直接拼接。
- * 非 URL 输入返回 undefined。
+ * 非 URL 输入（含控制/空白字符、反斜杠、前导斜杠、userinfo `@`、query 或 hash）返回 undefined。
  */
 export function normalizeRoot(input: string | undefined): string | undefined {
   const raw = (input ?? '').trim()
   if (!raw) return undefined
+  if (hasControlOrSpace(raw) || raw.startsWith('/') || raw.includes('\\') || raw.includes('?') || raw.includes('#')) {
+    return undefined
+  }
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`
+  const afterScheme = withScheme.slice(withScheme.indexOf('://') + 3)
+  const slashIdx = afterScheme.indexOf('/')
+  const authority = slashIdx >= 0 ? afterScheme.slice(0, slashIdx) : afterScheme
+  if (!authority || authority.includes('@')) return undefined
   let url: URL
   try {
     url = new URL(withScheme)
@@ -37,7 +52,9 @@ export function normalizeRoot(input: string | undefined): string | undefined {
     return undefined
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
-  if (!url.hostname) return undefined
+  if (!url.hostname || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') {
+    return undefined
+  }
   let path = url.pathname.replace(/\/+$/, '')
   path = path.replace(/\/v1$/i, '')
   return `${url.origin}${path}`

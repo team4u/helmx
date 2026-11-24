@@ -152,7 +152,7 @@ export function normalizeSpec(spec: unknown, locale: HelmxLocale = DEFAULT_HELMX
           claimSpecNode(budget, depth)
           return { component: DEGRADED_COMPONENT, props: { reason: jsonRenderElementCycle(id, locale) }, children: [] }
         }
-        const elem = asRecord(elements[id])
+        const elem = Object.prototype.hasOwnProperty.call(elements, id) ? asRecord(elements[id]) : null
         if (elem === null) return null
         const component = readComponentName(elem)
         if (component === '') return null

@@ -53,12 +53,39 @@ import { extractRailQuickEntries, sidebarBadgeCountLabel } from './shell/sidebar
 import { useSidebarBadges } from './shell/use-sidebar-badges.js'
 import { MobileQuickNav } from './shell/MobileQuickNav.js'
 import { useMobileDrawerSwipe } from './shell/use-mobile-drawer-swipe.js'
-import { useIsMobileViewport } from './lib/use-media-query.js'
+import { useIsMobileViewport, useMaxWidthMediaQuery } from './lib/use-media-query.js'
 import { loadSplitRatio, saveSplitRatio } from './shell/split-ratio-model.js'
 import { SplitResizeHandle } from './ui/SplitResizeHandle.js'
 
 /** SSE 断线横幅展示防抖：短于 1500ms 的瞬断或页面初始握手不闪现重连提示。 */
 const CONNECTION_BANNER_DELAY_MS = 1500
+/** Matches `@media (max-width: 860px)` off-canvas mobile sidebar breakpoint in `responsive.css`. */
+const MOBILE_DRAWER_MAX_WIDTH = 860
+const MOBILE_SIDEBAR_ID = 'helmx-mobile-sidebar'
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled]):not([type="hidden"])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ')
+
+function listFocusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((el) => {
+    if (el.hasAttribute('disabled') || el.getAttribute('aria-hidden') === 'true') return false
+    let cur: HTMLElement | null = el
+    while (cur !== null && cur !== container) {
+      if (cur.hidden || cur.hasAttribute('inert')) return false
+      if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
+        const style = window.getComputedStyle(cur)
+        if (style.display === 'none' || style.visibility === 'hidden') return false
+      }
+      cur = cur.parentElement
+    }
+    return true
+  })
+}
 
 const LazyRetryContext = createContext<(() => void) | undefined>(undefined)
 
@@ -352,7 +379,12 @@ function HelmxShellInner({
   const [showConnectionBanner, setShowConnectionBanner] = useState(false)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const panesRef = useRef<HTMLDivElement | null>(null)
+  const mobileNavToggleRef = useRef<HTMLButtonElement | null>(null)
+  const sidebarRef = useRef<HTMLElement | null>(null)
+  const wasMobileDrawerOpenRef = useRef(false)
   const isMobileViewport = useIsMobileViewport()
+  const isDrawerViewport = useMaxWidthMediaQuery(MOBILE_DRAWER_MAX_WIDTH)
+  const isMobileDrawerOpen = isDrawerViewport && sidebarOpen
   const openMobileSidebar = useCallback(() => setSidebarOpen(true), [])
   const closeMobileSidebar = useCallback(() => setSidebarOpen(false), [])
   useMobileDrawerSwipe({
@@ -425,6 +457,85 @@ function HelmxShellInner({
     }
   }, [activeModal, drawerStack.length])
 
+  useEffect(() => {
+    if (!isDrawerViewport && sidebarOpen) {
+      setSidebarOpen(false)
+    }
+  }, [isDrawerViewport, sidebarOpen])
+
+  // Mobile modal sidebar focus entry on open and restoration on close.
+  useEffect(() => {
+    const wasOpen = wasMobileDrawerOpenRef.current
+    wasMobileDrawerOpenRef.current = isMobileDrawerOpen
+
+    if (isMobileDrawerOpen && !wasOpen) {
+      const sidebar = sidebarRef.current
+      if (!sidebar) return
+      const active = document.activeElement
+      if (active instanceof HTMLElement && sidebar.contains(active)) return
+      const closeBtn = sidebar.querySelector<HTMLElement>('.mobile-sidebar-close:not([disabled])')
+      const target = closeBtn ?? listFocusableElements(sidebar)[0] ?? sidebar
+      target.focus()
+      return
+    }
+
+    if (!isMobileDrawerOpen && wasOpen && isDrawerViewport && activeModal === null && drawerStack.length === 0) {
+      const active = document.activeElement
+      const sidebar = sidebarRef.current
+      const focusLostOrInsideSidebar =
+        active === null ||
+        active === document.body ||
+        (sidebar !== null && active instanceof Node && sidebar.contains(active))
+      if (focusLostOrInsideSidebar) {
+        mobileNavToggleRef.current?.focus()
+      }
+    }
+  }, [isMobileDrawerOpen, isDrawerViewport, activeModal, drawerStack.length])
+
+  // Escape dismissal and modal Tab focus trap while mobile sidebar drawer is open.
+  useEffect(() => {
+    if (!isMobileDrawerOpen) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        if (event.defaultPrevented) return
+        event.preventDefault()
+        setSidebarOpen(false)
+        return
+      }
+      if (event.key !== 'Tab') return
+      const sidebar = sidebarRef.current
+      if (!sidebar) return
+      const active = document.activeElement
+      if (
+        active instanceof HTMLElement &&
+        !sidebar.contains(active) &&
+        active.closest('[role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"]') !== null
+      ) {
+        return
+      }
+      const focusables = listFocusableElements(sidebar)
+      if (focusables.length === 0) {
+        event.preventDefault()
+        sidebar.focus()
+        return
+      }
+      const first = focusables[0]!
+      const last = focusables[focusables.length - 1]!
+      const insideSidebar = active instanceof HTMLElement && sidebar.contains(active)
+      if (event.shiftKey) {
+        if (!insideSidebar || active === first || active === sidebar) {
+          event.preventDefault()
+          last.focus()
+        }
+      } else if (!insideSidebar || active === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isMobileDrawerOpen])
+
   if (!authReady) {
     return (
       <div className="app-loading-screen" style={{ height: '100dvh' }}>
@@ -489,10 +600,13 @@ function HelmxShellInner({
         }}
       >
         <button
+          ref={mobileNavToggleRef}
           type="button"
           className="btn btn-ghost mobile-nav-toggle"
           title={mobileNavToggleLabel}
           aria-label={mobileNavToggleLabel}
+          aria-expanded={isDrawerViewport ? sidebarOpen : undefined}
+          aria-controls={isDrawerViewport ? MOBILE_SIDEBAR_ID : undefined}
           onClick={() => setSidebarOpen((open) => !open)}
         >
           <HelmxIcon name="menu" />
@@ -506,16 +620,25 @@ function HelmxShellInner({
             左上角汉堡按钮，省回顶栏宽度）；无插件 quickEntry 或已停在该视图时返回 null。 */}
         <MobileQuickNav quickEntry={firstQuickEntry} quickEntryBadge={quickEntryBadge} />
         {sidebarOpen && (
-          <button
-            type="button"
+          <div
             className="sidebar-backdrop"
-            aria-label={t('shell.nav.closeNav')}
+            aria-hidden="true"
             onClick={() => setSidebarOpen(false)}
           />
         )}
-        <Sidebar onClose={() => setSidebarOpen(false)} />
+        <Sidebar
+          id={MOBILE_SIDEBAR_ID}
+          drawerMode={isDrawerViewport}
+          drawerOpen={sidebarOpen}
+          sidebarRef={sidebarRef}
+          onClose={closeMobileSidebar}
+        />
 
-        <main className="helmx-main-stage">
+        <main
+          className="helmx-main-stage"
+          aria-hidden={isMobileDrawerOpen || undefined}
+          inert={isMobileDrawerOpen || undefined}
+        >
           {showConnectionBanner && !sseConnected && (
             <div className="connection-banner" role="status">
               <span>{connectionError ?? t('shell.connection.syncing')}</span>

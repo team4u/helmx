@@ -388,3 +388,184 @@ test('App mobile shell: hamburger button carries the attention count badge (no s
     window.history.replaceState(null, '', originalHash || '#')
   }
 })
+
+test('mobile sidebar drawer: closed inert/visibility reachability, modal focus entry, Tab trap, Escape dismiss, and focus restoration', { timeout: 60_000 }, async () => {
+  const { readFileSync } = await import('node:fs')
+  const { dirname, join } = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+  const originalFetch = globalThis.fetch
+  const originalMatchMedia = window.matchMedia
+  const originalWidth = window.innerWidth
+  const originalHeight = window.innerHeight
+  const originalHash = window.location.hash
+  const happyDomWindow = window as unknown as { happyDOM?: { setViewport?: (v: { width: number; height: number }) => void } }
+  const encoder = new TextEncoder()
+  const jsonResponse = (body: unknown): Response =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+
+  happyDomWindow.happyDOM?.setViewport?.({ width: 390, height: 800 })
+  Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true })
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width'),
+    media: query,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent() { return false },
+  })) as typeof window.matchMedia
+  window.history.replaceState(null, '', '#/a/assistant')
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/auth/status') return jsonResponse({ configured: true, authenticated: true })
+    if (path === '/api/events') {
+      return new Response(
+        hangingEventStream((send) => {
+          send(
+            encoder.encode(
+              `event: snapshot\ndata: ${JSON.stringify({
+                bootId: 'test-boot',
+                seq: 1,
+                conversations: [],
+                pendingAsks: [],
+                plugins: [],
+                ui: [],
+              })}\n\n`,
+            ),
+          )
+        }, { signal: init?.signal }),
+        { status: 200 },
+      )
+    }
+    if (path === '/api/profiles') return jsonResponse([{ id: 'assistant', name: 'Assistant' }])
+    return jsonResponse([])
+  }) as typeof fetch
+
+  // Verify responsive.css hides closed mobile sidebar from visibility/hit-testing and exposes it when open.
+  // Unwrap the top-level `@layer host-components { ... }` wrapper because happy-dom's CSS parser skips `@layer`.
+  const responsiveCss = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../src/responsive.css'),
+    'utf8',
+  ).replace(/@layer\s+host-components\s*\{([\s\S]*)\}\s*$/, '$1')
+  const styleEl = document.createElement('style')
+  styleEl.textContent = responsiveCss
+  document.head.appendChild(styleEl)
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(App))
+    })
+    const deadline = Date.now() + 3000
+    while (container.querySelector('.helmx-shell') === null && Date.now() < deadline) {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 15))
+      })
+    }
+
+    const shell = container.querySelector<HTMLElement>('.helmx-shell')!
+    const toggleBtn = container.querySelector<HTMLButtonElement>('.mobile-nav-toggle')!
+    const sidebar = container.querySelector<HTMLElement>('.helmx-sidebar')!
+    const main = container.querySelector<HTMLElement>('main.helmx-main-stage')!
+
+    // 1. Closed mobile drawer: inert + aria-hidden + CSS visibility:hidden & pointer-events:none
+    assert.equal(toggleBtn.getAttribute('aria-expanded'), 'false')
+    assert.equal(toggleBtn.getAttribute('aria-controls'), sidebar.id)
+    assert.equal(sidebar.getAttribute('aria-hidden'), 'true', 'closed mobile sidebar must be aria-hidden')
+    assert.ok(sidebar.hasAttribute('inert'), 'closed mobile sidebar must be inert')
+    assert.equal(sidebar.getAttribute('role'), null)
+    assert.equal(main.hasAttribute('inert'), false, 'main stage is interactive while mobile sidebar is closed')
+    assert.equal(getComputedStyle(sidebar).visibility, 'hidden', 'closed mobile sidebar must not be visually focusable')
+    assert.equal(getComputedStyle(sidebar).pointerEvents, 'none')
+
+    // 2. Open mobile drawer via toggle click -> focus moves inside sidebar, main becomes inert, dialog semantics active
+    toggleBtn.focus()
+    await act(async () => {
+      toggleBtn.click()
+    })
+    assert.ok(shell.classList.contains('sidebar-open'))
+    assert.equal(toggleBtn.getAttribute('aria-expanded'), 'true')
+    assert.equal(sidebar.getAttribute('role'), 'dialog')
+    assert.equal(sidebar.getAttribute('aria-modal'), 'true')
+    assert.equal(sidebar.getAttribute('aria-hidden'), null)
+    assert.equal(sidebar.hasAttribute('inert'), false)
+    assert.ok(main.hasAttribute('inert'), 'background main stage must be inert while mobile drawer is open')
+    assert.equal(main.getAttribute('aria-hidden'), 'true')
+    assert.equal(getComputedStyle(sidebar).visibility, 'visible')
+    assert.equal(getComputedStyle(sidebar).pointerEvents, 'auto')
+    assert.equal(hasBlockingOverlay(document), false, 'open mobile sidebar dialog itself must not block left-swipe-to-close')
+    const closeBtn = sidebar.querySelector<HTMLButtonElement>('.mobile-sidebar-close')!
+    assert.ok(closeBtn !== null)
+    assert.ok(document.activeElement === closeBtn, 'opening mobile drawer moves focus to the close button inside sidebar')
+
+    // 3. Tab trap cycles focus inside the open mobile drawer
+    const focusables = Array.from(sidebar.querySelectorAll<HTMLElement>('button:not([disabled])')).filter((el) => {
+      const s = getComputedStyle(el)
+      return s.display !== 'none' && s.visibility !== 'hidden'
+    })
+    assert.ok(focusables.length >= 2)
+    const firstFocusable = focusables[0]!
+    const lastFocusable = focusables[focusables.length - 1]!
+
+    await act(async () => {
+      lastFocusable.focus()
+    })
+    const tabForward = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    await act(async () => {
+      window.dispatchEvent(tabForward)
+    })
+    assert.equal(tabForward.defaultPrevented, true, 'Tab at last drawer control wraps to first')
+    assert.ok(document.activeElement === firstFocusable)
+
+    await act(async () => {
+      firstFocusable.focus()
+    })
+    const tabBackward = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+    await act(async () => {
+      window.dispatchEvent(tabBackward)
+    })
+    assert.equal(tabBackward.defaultPrevented, true, 'Shift+Tab at first drawer control wraps to last')
+    assert.ok(document.activeElement === lastFocusable)
+
+    // 4. Escape closes the drawer, restores main interactivity, and returns focus to toggleBtn
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    await act(async () => {
+      window.dispatchEvent(esc)
+    })
+    assert.equal(esc.defaultPrevented, true)
+    assert.ok(!shell.classList.contains('sidebar-open'))
+    assert.equal(toggleBtn.getAttribute('aria-expanded'), 'false')
+    assert.ok(sidebar.hasAttribute('inert'))
+    assert.equal(sidebar.getAttribute('aria-hidden'), 'true')
+    assert.equal(main.hasAttribute('inert'), false)
+    assert.equal(main.getAttribute('aria-hidden'), null)
+    assert.ok(document.activeElement === toggleBtn, 'Escape dismissal restores focus to mobile nav toggle button')
+
+    // 5. Reopen and close via .mobile-sidebar-close button -> also restores focus to toggleBtn
+    await act(async () => {
+      toggleBtn.click()
+    })
+    assert.ok(document.activeElement === closeBtn)
+    await act(async () => {
+      closeBtn.click()
+    })
+    assert.ok(!shell.classList.contains('sidebar-open'))
+    assert.ok(document.activeElement === toggleBtn, 'close button dismissal restores focus to mobile nav toggle button')
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+    styleEl.remove()
+    globalThis.fetch = originalFetch
+    window.matchMedia = originalMatchMedia
+    Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true })
+    happyDomWindow.happyDOM?.setViewport?.({ width: originalWidth, height: originalHeight })
+    window.history.replaceState(null, '', originalHash || '#')
+  }
+})

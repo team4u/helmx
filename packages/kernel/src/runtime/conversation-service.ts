@@ -556,6 +556,21 @@ export class ConversationService {
 
   async createConversation(init: ConversationInit = {}): Promise<ConversationSummary> {
     this.assertWritable()
+    if (init.ownedBy !== undefined && init.ownedBy !== 'human' && init.ownedBy !== 'helmx') {
+      throw new HelmxError(
+        'validation_error',
+        `invalid conversation ownership: expected 'human' | 'helmx', got ${String(init.ownedBy)}`,
+        400,
+        { ownedBy: init.ownedBy },
+      )
+    }
+    if (init.tags !== undefined && (!Array.isArray(init.tags) || init.tags.some((t) => typeof t !== 'string'))) {
+      throw new HelmxError(
+        'validation_error',
+        'conversation tags must be a string array',
+        400,
+      )
+    }
     const profileId = await this.resolveProfileForCreate(init)
     const profile = await this.readProfile(profileId)
     let frozenModelOverride: string | undefined
@@ -633,14 +648,6 @@ export class ConversationService {
       },
       BACKGROUND_CONTEXT,
     )
-    if (init.ownedBy !== undefined && init.ownedBy !== 'human' && init.ownedBy !== 'helmx') {
-      throw new HelmxError(
-        'validation_error',
-        `invalid conversation ownership: expected 'human' | 'helmx', got ${String(init.ownedBy)}`,
-        400,
-        { ownedBy: init.ownedBy },
-      )
-    }
     const id = conv.id as number
     const now = Date.now()
     this.store.upsertConv({

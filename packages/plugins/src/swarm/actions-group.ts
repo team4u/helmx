@@ -300,6 +300,7 @@ export function createGroupHandlers(
           draft.retainedWorktrees = retainedWorktrees
           delete draft.lastReportHadActiveWorkers
           delete draft.inflightReport
+          delete draft.reportRecovery
           delete draft.peerHopsSinceCoordinator
           if (input.summary?.trim()) draft.closeSummary = input.summary.trim()
           for (const m of draft.members) {
@@ -309,6 +310,8 @@ export function createGroupHandlers(
             m.archivedAt = now
             if (timing.runDurationMs !== undefined) m.runDurationMs = timing.runDurationMs
             if (timing.turnCount !== undefined) m.turnCount = timing.turnCount
+            delete m.wakeupRecovery
+            delete m.nudgeRecovery
           }
           return { group: draft, result: undefined }
         })

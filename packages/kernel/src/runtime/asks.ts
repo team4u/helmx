@@ -1,5 +1,5 @@
 /**
- * AskService: lean AskDoc lifecycle + client-vs-stored expectedStateSeq optimistic check.
+ * AskService: AskDoc lifecycle + atomic CAS check against persisted watermark and live conversation stateChangeSeq.
  *
  * Key semantics (honesty first):
  * - createAsk performs full validation first (field types / unique names / pre-allocated ID shape &
@@ -11,12 +11,14 @@
  * - true persistence boundary sits at the end of the store chain: create and settle await store.flushPublic() before resolving or
  *   publishing terminal events; if SQL fails, createAsk rejects explicitly with store_flush_failed;
  * - answer validation rejects unknown fields, non-strings, out-of-range select options, and invalid confirm values;
- * - CAS validates client-supplied expectedStateSeq against persisted spec.expectedStateSeq (mismatched seq -> 409);
+ * - CAS validates client-supplied expectedStateSeq against persisted spec.expectedStateSeq (mismatched seq -> 409)
+ *   and atomically checks the conversation's live stateChangeSeq (if advanced past watermark -> auto-settles as superseded;
+ *   if no ask watermark is set and client seq disagrees with live stateChangeSeq -> 409);
  * - after restart, pending asks remain and emit diagnostic notifications.
  */
 
 import type { AskCreateSpec, AskResult, AskSpec } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, isPlainObject } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 
 import type { HelmxStore } from './store.js'
@@ -33,6 +35,12 @@ type WaiterOutcome = AskSettled | { failure: unknown }
 export class AskService {
   private readonly store: HelmxStore
   private readonly waiters = new Map<string, Array<(outcome: WaiterOutcome) => void>>()
+  /**
+   * Transient synchronous re-entrancy guard active ONLY while `onConvPendingChanged` runs inside `createAsk`:
+   * bridges the single-tick window between `onConvPendingChanged` advancing `stateChangeSeq` and the immediate
+   * `putAsk` that persists the effective CAS ceiling into `helmx_asks.expected_state_seq`.
+   */
+  private readonly creatingPendingSeq = new Map<string, number>()
   private readonly onEvent: (type: string, payload: unknown) => void
   private readonly onConvPendingChanged: (conversationId: number) => void
   /** Conversation existence validation port (injected by host; omitted in standalone AskService unit tests). */
@@ -51,13 +59,13 @@ export class AskService {
   }
 
   listAsks(status?: string): AskSpec[] {
-    return this.store.listAsks(status).map((row) => JSON.parse(row.specJson) as AskSpec)
+    return this.store.listAsks(status).map((row) => parseAskSpecRow(row))
   }
 
   listPendingByConversation(conversationId: number): AskSpec[] {
     return this.store
       .listAsksByConversation(conversationId, 'pending')
-      .map((row) => JSON.parse(row.specJson) as AskSpec)
+      .map((row) => parseAskSpecRow(row))
   }
 
   pendingCount(conversationId: number): AskSpec[]['length'] {
@@ -66,7 +74,7 @@ export class AskService {
 
   getAsk(id: string): AskSpec | undefined {
     const row = this.store.getAsk(id)
-    return row ? (JSON.parse(row.specJson) as AskSpec) : undefined
+    return row ? parseAskSpecRow(row) : undefined
   }
 
   /**
@@ -148,38 +156,97 @@ export class AskService {
         // True persistence boundary: putAsk only updates the mirror and queues SQL; if flushPublic fails,
         // data is not guaranteed intact, so fail explicitly without publishing ask.upsert or faking success.
         await this.store.flushPublic()
-        this.onConvPendingChanged(spec.conversationId)
+        const seqBeforePending = this.store.getConv(spec.conversationId)?.stateChangeSeq
+        if (spec.expectedStateSeq !== undefined && seqBeforePending === spec.expectedStateSeq) {
+          this.creatingPendingSeq.set(id, spec.expectedStateSeq)
+        }
+        try {
+          this.onConvPendingChanged(spec.conversationId)
+        } finally {
+          this.creatingPendingSeq.delete(id)
+        }
+        const seqAfterPending = this.store.getConv(spec.conversationId)?.stateChangeSeq
+        if (
+          spec.expectedStateSeq !== undefined &&
+          seqBeforePending !== undefined &&
+          seqAfterPending !== undefined &&
+          spec.expectedStateSeq === seqBeforePending &&
+          seqAfterPending > seqBeforePending
+        ) {
+          const currentRow = this.store.getAsk(id)
+          if (currentRow !== undefined && currentRow.status === 'pending') {
+            // Persist the creation-time self-bump as the effective live CAS ceiling in `helmx_asks.expected_state_seq`
+            // while preserving `spec.expectedStateSeq` unchanged as the client-facing watermark, so restarts never
+            // lose the self-bump and falsely supersede the first approval.
+            this.store.putAsk({
+              ...currentRow,
+              expectedStateSeq: seqAfterPending,
+            })
+            await this.store.flushPublic()
+          }
+        }
         this.onEvent('ask.upsert', full)
       } catch (error) {
+        this.creatingPendingSeq.delete(id)
         push({ failure: error })
       }
     })()
     return settled
   }
 
-  /** Submit answers: watermark check -> value validation -> settle. */
+  /**
+   * Submit answers: atomic CAS check (client seq vs declared spec watermark + live conversation stateChangeSeq
+   * vs persisted effective CAS ceiling) -> value validation -> settle. Zero awaits between state reads and the
+   * mirror transition in `settle`.
+   */
   async answerAsk(
     id: string,
     answers: Record<string, string>,
     expectedStateSeq?: number,
   ): Promise<AskSpec> {
+    if (expectedStateSeq !== undefined && (!Number.isSafeInteger(expectedStateSeq) || expectedStateSeq < 0)) {
+      throw new HelmxError('validation_error', 'expectedStateSeq must be a non-negative safe integer', 400)
+    }
     const row = this.store.getAsk(id)
     if (!row) throw new HelmxError('not_found', `AskDoc not found: ${id}`, 404)
     if (row.status !== 'pending') {
       throw new HelmxError('ask_already_settled', `AskDoc is already in ${row.status} state`, 409)
     }
+    const spec = parseAskSpecRow(row)
+    const declaredWatermark = spec.expectedStateSeq
 
-    // Client-supplied seq differs from persisted watermark -> 409 stale view (never silently overwrite).
-    if (expectedStateSeq !== undefined && row.expectedStateSeq !== undefined && expectedStateSeq !== row.expectedStateSeq) {
+    // Client-supplied seq differs from declared AskDoc watermark -> 409 stale view (never silently overwrite).
+    if (expectedStateSeq !== undefined && declaredWatermark !== undefined && expectedStateSeq !== declaredWatermark) {
       throw new HelmxError(
         'ask_state_conflict',
-        `expectedStateSeq=${expectedStateSeq} does not match persisted AskDoc watermark ${row.expectedStateSeq} (stale client view)`,
+        `expectedStateSeq=${expectedStateSeq} does not match persisted AskDoc watermark ${declaredWatermark} (stale client view)`,
         409,
-        { askId: id, clientSeq: expectedStateSeq, storedSeq: row.expectedStateSeq },
+        { askId: id, clientSeq: expectedStateSeq, storedSeq: declaredWatermark },
       )
     }
 
-    const spec = JSON.parse(row.specJson) as AskSpec
+    // Authoritative live conversation stateChangeSeq check (synchronous, zero awaits before mirror settle):
+    // - If the AskDoc declared expectedStateSeq, compare live stateChangeSeq against the persisted effective CAS ceiling
+    //   (`row.expectedStateSeq`, including any creation-time `onConvPendingChanged` self-bump); if advanced -> supersede.
+    // - If the AskDoc declared no watermark but the client supplied expectedStateSeq and live seq disagrees -> 409.
+    const conv = this.store.getConv(row.conversationId)
+    if (declaredWatermark !== undefined && conv !== undefined) {
+      const inSelfPendingBump = this.creatingPendingSeq.get(id) === declaredWatermark
+      const effectiveCeiling = inSelfPendingBump
+        ? Math.max(row.expectedStateSeq ?? declaredWatermark, conv.stateChangeSeq)
+        : (row.expectedStateSeq ?? declaredWatermark)
+      if (conv.stateChangeSeq > effectiveCeiling) {
+        return this.settle(id, 'superseded')
+      }
+    } else if (expectedStateSeq !== undefined && conv !== undefined && conv.stateChangeSeq !== expectedStateSeq) {
+      throw new HelmxError(
+        'ask_state_conflict',
+        `expectedStateSeq=${expectedStateSeq} does not match current conversation stateChangeSeq ${conv.stateChangeSeq} (stale client view)`,
+        409,
+        { askId: id, clientSeq: expectedStateSeq, currentSeq: conv.stateChangeSeq },
+      )
+    }
+
     validateAnswersAgainstFields(spec, answers)
 
     const stored: Record<string, string> = {}
@@ -227,8 +294,11 @@ export class AskService {
   ): Promise<AskSpec> {
     const row = this.store.getAsk(id)
     if (!row) throw new HelmxError('not_found', `AskDoc not found: ${id}`, 404)
+    if (row.status !== 'pending') {
+      throw new HelmxError('ask_already_settled', `AskDoc is already in ${row.status} state`, 409)
+    }
     try {
-      const spec = JSON.parse(row.specJson) as AskSpec
+      const spec = parseAskSpecRow(row)
       const settledSpec: AskSpec = { ...spec, status }
       // Never write fake answers on cancelled/superseded (result is populated only for answered).
       const answers = status === 'answered' ? (options.answers ?? {}) : undefined
@@ -258,9 +328,55 @@ export class AskService {
   }
 }
 
+/** Parse and structurally validate a persisted AskRow specJson (fails loudly with store_data_corrupted instead of raw SyntaxError/TypeError). */
+function parseAskSpecRow(row: { id: string; specJson: string }): AskSpec {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(row.specJson)
+  } catch (cause) {
+    throw new HelmxError(
+      'store_data_corrupted',
+      `Persisted AskDoc spec corrupted (ask ${row.id}): JSON parse failed: ${String(cause)}`,
+      500,
+      { askId: row.id, cause: String(cause) },
+    )
+  }
+  if (
+    !isPlainObject(parsed) ||
+    typeof parsed.id !== 'string' ||
+    parsed.id.length === 0 ||
+    !Number.isInteger(parsed.conversationId) ||
+    (parsed.conversationId as number) <= 0 ||
+    typeof parsed.title !== 'string' ||
+    (parsed.status !== 'pending' &&
+      parsed.status !== 'answered' &&
+      parsed.status !== 'cancelled' &&
+      parsed.status !== 'superseded') ||
+    typeof parsed.createdAt !== 'number' ||
+    !Number.isFinite(parsed.createdAt) ||
+    !Array.isArray(parsed.fields) ||
+    parsed.fields.some(
+      (f) =>
+        !isPlainObject(f) ||
+        typeof f.name !== 'string' ||
+        f.name.length === 0 ||
+        typeof f.label !== 'string' ||
+        (f.type !== 'text' && f.type !== 'select' && f.type !== 'confirm'),
+    )
+  ) {
+    throw new HelmxError(
+      'store_data_corrupted',
+      `Persisted AskDoc spec corrupted (ask ${row.id}): invalid AskSpec structure`,
+      500,
+      { askId: row.id },
+    )
+  }
+  return parsed as unknown as AskSpec
+}
+
 /** Full boundary validation for AskCreateSpec (rejects every invalid shape before persisting). */
 function validateAskSpec(spec: AskCreateSpec): void {
-  if (spec === null || typeof spec !== 'object') {
+  if (spec === null || typeof spec !== 'object' || Array.isArray(spec)) {
     throw new HelmxError('validation_error', 'AskDoc spec must be an object')
   }
   // Caller-supplied ID must be a non-empty string without silent normalization.
@@ -282,7 +398,7 @@ function validateAskSpec(spec: AskCreateSpec): void {
     throw new HelmxError('validation_error', 'AskDoc ownerPluginId must be a string')
   }
   if (spec.expectedStateSeq !== undefined) {
-    if (!Number.isInteger(spec.expectedStateSeq) || (spec.expectedStateSeq as number) < 0) {
+    if (!Number.isSafeInteger(spec.expectedStateSeq) || (spec.expectedStateSeq as number) < 0) {
       throw new HelmxError('validation_error', 'expectedStateSeq must be a non-negative integer')
     }
   }

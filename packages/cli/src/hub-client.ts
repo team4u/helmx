@@ -39,11 +39,13 @@ export interface HubEndpoint {
  * the credential file — never send an old Hub's token when HELMX_HUB_URL points elsewhere.
  */
 export function resolveEndpoint(env: NodeJS.ProcessEnv, credential: { hubUrl?: string; token?: string }): HubEndpoint {
-  const envUrl = env['HELMX_HUB_URL']?.trim()
-  const baseUrl = normalizeUrl(envUrl || credential.hubUrl || DEFAULT_HUB_URL)
+  const envUrl = normalizeUrl(env['HELMX_HUB_URL'] ?? '')
+  const credUrl = normalizeUrl(credential.hubUrl ?? '')
+  const baseUrl = envUrl || credUrl || DEFAULT_HUB_URL
   if (env['HELMX_TOKEN']) return { baseUrl, token: env['HELMX_TOKEN'] }
-  // Without env URL, baseUrl comes from credential.hubUrl (or default), so the token shares the same origin
-  const sameHub = !envUrl || !credential.hubUrl || normalizeUrl(credential.hubUrl) === baseUrl
+  // Attach the stored token only when the credential file records a non-empty hubUrl matching baseUrl;
+  // missing/blank hubUrl cannot prove origin, so never forward the token to an arbitrary HELMX_HUB_URL.
+  const sameHub = credUrl !== '' && credUrl === baseUrl
   return { baseUrl, token: sameHub ? credential.token : undefined }
 }
 

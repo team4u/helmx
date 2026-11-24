@@ -668,3 +668,176 @@ test('usePluginAction DOM: synchronous mutex prevents double submit, exposes pen
   })
   container.remove()
 })
+
+test('usePluginAction DOM: exception inside onSuccess does not report server success as request failure or wedge mutex', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  const notices: Array<{ msg: string; tone: string | undefined }> = []
+  const hookErrors: string[] = []
+  const callErrors: string[] = []
+  let throwInHookSuccess = false
+  let callCount = 0
+
+  const pluginCtx = {
+    pluginId: 'builtin:act-demo',
+    callAction: async (actionId: string) => {
+      callCount += 1
+      return { ok: true, actionId, seq: callCount }
+    },
+    fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
+    submitInput: async () => {},
+    openScreen: () => {},
+    openSplitScreen: () => {},
+    openConversationDrawer: () => {},
+    openArtifact: () => {},
+    openWorkbench: () => {},
+    closeWorkbench: () => {},
+    notify: (msg: string, tone?: string) => {
+      notices.push({ msg, tone })
+    },
+    getPluginDoc: async () => undefined,
+    getPluginSessionDoc: async () => undefined,
+    theme: 'dark' as const,
+    locale: 'en' as const,
+    translate: (text: unknown) => (typeof text === 'string' ? text : ''),
+  }
+
+  let api: ReturnType<typeof usePluginAction> | undefined
+  function Harness() {
+    api = usePluginAction({
+      notifyError: true,
+      onSuccess: () => {
+        if (throwInHookSuccess) throw new Error('hook callback bug')
+      },
+      onError: (msg) => {
+        hookErrors.push(msg)
+      },
+    })
+    return e('div', { 'data-pending': String(api.pending), 'data-key': api.pendingKey ?? '', 'data-err': api.error ?? '' })
+  }
+
+  try {
+    await act(async () => {
+      root.render(e(PluginClientContext.Provider, { value: pluginCtx }, e(Harness)))
+    })
+
+    // 1. Per-call onSuccess throws after server action succeeds
+    let caughtCallErr: unknown
+    await act(async () => {
+      try {
+        await api!.run('save', { id: 1 }, {
+          onSuccess: () => {
+            throw new Error('per-call callback bug')
+          },
+          onError: (msg) => {
+            callErrors.push(msg)
+          },
+        })
+      } catch (err) {
+        caughtCallErr = err
+      }
+    })
+    assert.ok(caughtCallErr instanceof Error && caughtCallErr.message === 'per-call callback bug')
+    assert.equal(container.querySelector('div')?.getAttribute('data-err'), '', 'error state must stay clear when server action succeeded')
+    assert.equal(container.querySelector('div')?.getAttribute('data-pending'), 'false', 'pending must reset after onSuccess throws')
+    assert.equal(container.querySelector('div')?.getAttribute('data-key'), '')
+    assert.deepEqual(notices, [], 'notifyError must not fire when server action succeeded')
+    assert.deepEqual(callErrors, [], 'per-call onError must not fire when server action succeeded')
+    assert.deepEqual(hookErrors, [], 'hook-level onError must not fire when server action succeeded')
+
+    // 2. Hook-level onSuccess throws after server action succeeds, and mutex is not wedged
+    throwInHookSuccess = true
+    let caughtHookErr: unknown
+    await act(async () => {
+      try {
+        await api!.run('save', { id: 2 })
+      } catch (err) {
+        caughtHookErr = err
+      }
+    })
+    assert.ok(caughtHookErr instanceof Error && caughtHookErr.message === 'hook callback bug')
+    assert.equal(container.querySelector('div')?.getAttribute('data-err'), '')
+    assert.equal(container.querySelector('div')?.getAttribute('data-pending'), 'false')
+    assert.deepEqual(notices, [])
+    assert.deepEqual(hookErrors, [])
+
+    // 3. Subsequent call succeeds cleanly without stuck mutex
+    throwInHookSuccess = false
+    let thirdResult: unknown
+    await act(async () => {
+      thirdResult = await api!.run('save', { id: 3 })
+    })
+    assert.deepEqual(thirdResult, { ok: true, actionId: 'save', seq: 3 })
+    assert.equal(callCount, 3)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('MultiSelect DOM: exposes aria-activedescendant, aria-controls, and stable option IDs during keyboard navigation', { timeout: 60_000 }, async () => {
+  const { MultiSelect } = await import('../src/ui/Select.js')
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  const options = [
+    { value: 'a', label: 'Alpha' },
+    { value: 'b', label: 'Beta', disabled: true },
+    { value: 'c', label: 'Charlie' },
+    { value: 'd', label: 'Delta' },
+    { value: 'e', label: 'Echo' },
+  ]
+
+  try {
+    await act(async () => {
+      root.render(
+        e(MultiSelect, {
+          open: true,
+          inline: true,
+          value: [],
+          options,
+          'aria-label': 'Pick items',
+        }),
+      )
+    })
+
+    const trigger = container.querySelector<HTMLButtonElement>('.helmx-select-trigger')
+    const combobox = container.querySelector<HTMLInputElement>('.helmx-select-search input[role="combobox"]')
+    const listbox = container.querySelector<HTMLElement>('[role="listbox"]')
+    const viewport = container.querySelector<HTMLElement>('.helmx-select-viewport')
+    assert.ok(trigger !== null && combobox !== null && listbox !== null && viewport !== null)
+    assert.ok(listbox.id.length > 0)
+    assert.equal(trigger.getAttribute('aria-controls'), listbox.id)
+    assert.equal(combobox.getAttribute('aria-controls'), listbox.id)
+    assert.equal(listbox.getAttribute('aria-activedescendant'), null)
+    assert.equal(combobox.getAttribute('aria-activedescendant'), null)
+
+    await act(async () => {
+      viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    })
+    const firstOpt = container.querySelector<HTMLElement>('[role="option"][data-highlighted]')
+    assert.ok(firstOpt !== null && firstOpt.textContent?.includes('Alpha'))
+    assert.equal(listbox.getAttribute('aria-activedescendant'), firstOpt.id)
+    assert.equal(combobox.getAttribute('aria-activedescendant'), firstOpt.id)
+    assert.ok(document.getElementById(firstOpt.id) === firstOpt)
+
+    // ArrowDown skips disabled Beta and highlights Charlie
+    await act(async () => {
+      viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    })
+    const charlieOpt = container.querySelector<HTMLElement>('[role="option"][data-highlighted]')
+    assert.ok(charlieOpt !== null && charlieOpt.textContent?.includes('Charlie'))
+    assert.equal(listbox.getAttribute('aria-activedescendant'), charlieOpt.id)
+    assert.equal(combobox.getAttribute('aria-activedescendant'), charlieOpt.id)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})

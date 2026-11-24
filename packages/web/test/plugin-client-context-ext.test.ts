@@ -375,3 +375,116 @@ test('ctx.fetchRoute：宿主命名空间拼装、权威 Bearer 注入与覆写�
   }
   assert.equal(captured.length, beforeInvalid, 'rejected paths must never issue a fetch request')
 })
+
+test('ctx.fetchRoute：401 派发统一 helmx:unauthorized（不重复通知、保留原始响应且隔离过期/未登录态）', { timeout: 60_000 }, async (t) => {
+  const originalFetch = globalThis.fetch
+  let unauthorizedCount = 0
+  let autoLogoutOnEvent = true
+
+  const store = makeTestStore({ authenticated: true })
+  const onUnauthorized = () => {
+    unauthorizedCount += 1
+    if (autoLogoutOnEvent) {
+      store.actions.logout()
+    }
+  }
+  window.addEventListener('helmx:unauthorized', onUnauthorized)
+
+  t.after(() => {
+    window.removeEventListener('helmx:unauthorized', onUnauthorized)
+    globalThis.fetch = originalFetch
+    setStoredToken(null)
+  })
+
+  let pendingFirst: ((res: Response) => void) | undefined
+  let pendingSecond: ((res: Response) => void) | undefined
+  let pendingStale: ((res: Response) => void) | undefined
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/concurrent-1')) {
+      return await new Promise<Response>((resolve) => { pendingFirst = resolve })
+    }
+    if (url.endsWith('/concurrent-2')) {
+      return await new Promise<Response>((resolve) => { pendingSecond = resolve })
+    }
+    if (url.endsWith('/stale-inflight')) {
+      return await new Promise<Response>((resolve) => { pendingStale = resolve })
+    }
+    if (url.endsWith('/forbidden')) {
+      return new Response(JSON.stringify({ error: { code: 'forbidden' } }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    if (url.endsWith('/ok')) {
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ error: { code: 'unauthorized', message: 'expired' } }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Probe': 'raw-401' },
+    })
+  }) as typeof fetch
+
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 1)
+
+  // 1. Non-401 responses never dispatch helmx:unauthorized
+  setStoredToken('tok-1')
+  assert.equal((await ctx.fetchRoute('/ok')).status, 200)
+  assert.equal((await ctx.fetchRoute('/forbidden')).status, 403)
+  assert.equal(unauthorizedCount, 0)
+  assert.equal(store.getAuthenticated(), true)
+
+  // 2. Single 401 dispatches helmx:unauthorized once and returns the raw 401 Response untouched
+  const res401 = await ctx.fetchRoute('/protected')
+  assert.equal(unauthorizedCount, 1, '401 dispatches helmx:unauthorized once')
+  assert.equal(store.getAuthenticated(), false, 'logout resets authenticated state')
+  assert.equal(res401.status, 401)
+  assert.equal(res401.headers.get('X-Auth-Probe'), 'raw-401')
+  assert.deepEqual(await res401.json(), { error: { code: 'unauthorized', message: 'expired' } })
+
+  // 3. Already unauthenticated 401 does not emit duplicate helmx:unauthorized
+  const unauthRes = await ctx.fetchRoute('/public-check')
+  assert.equal(unauthRes.status, 401)
+  assert.equal(unauthorizedCount, 1, 'unauthenticated 401 must not re-dispatch helmx:unauthorized')
+
+  // 4. Concurrent in-flight 401s after re-auth notify only once
+  await store.onAuthenticated('tok-2')
+  assert.equal(store.getAuthenticated(), true)
+  const p1 = ctx.fetchRoute('/concurrent-1')
+  const p2 = ctx.fetchRoute('/concurrent-2')
+  while (pendingFirst === undefined || pendingSecond === undefined) {
+    await Promise.resolve()
+  }
+  pendingFirst(new Response('expired-1', { status: 401 }))
+  const r1 = await p1
+  pendingSecond(new Response('expired-2', { status: 401 }))
+  const r2 = await p2
+  assert.equal(r1.status, 401)
+  assert.equal(r2.status, 401)
+  assert.equal(unauthorizedCount, 2, 'concurrent 401s coalesce into a single helmx:unauthorized')
+  assert.equal(store.getAuthenticated(), false)
+
+  // 5. Stale in-flight request from an earlier token must not log out a newer authenticated session
+  await store.onAuthenticated('tok-old')
+  const stalePromise = ctx.fetchRoute('/stale-inflight')
+  while (pendingStale === undefined) {
+    await Promise.resolve()
+  }
+  store.actions.logout()
+  await store.onAuthenticated('tok-new')
+  pendingStale(new Response('stale-expired', { status: 401 }))
+  const staleRes = await stalePromise
+  assert.equal(staleRes.status, 401)
+  assert.equal(unauthorizedCount, 2, 'stale 401 from superseded token must not dispatch helmx:unauthorized')
+  assert.equal(store.getAuthenticated(), true, 'new session remains authenticated')
+
+  // 6. Fresh request with the new token still dispatches helmx:unauthorized on 401
+  autoLogoutOnEvent = false
+  const fresh401 = await ctx.fetchRoute('/protected')
+  assert.equal(fresh401.status, 401)
+  assert.equal(unauthorizedCount, 3, '401 under current token dispatches helmx:unauthorized')
+})

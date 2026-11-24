@@ -24,7 +24,7 @@ import {
 } from '../live-state.js'
 import { reconcilePluginClientCache } from '../plugin-client.js'
 import { isAbortError, type StoreRequestManager } from '../request-manager.js'
-import { evictSessionDocSubscriptions } from '../session-docs.js'
+import { evictSessionDocSubscriptions, restoreSessionDocSubscriptions } from '../session-docs.js'
 import { defaultConversationDetailLimit, type ToastNotice } from '../types.js'
 import { isConversationStatusActive } from '../use-unread-sync.js'
 import { ASSET_LOAD_FAILURE_TITLES, emptyPlan, reconcileArtifactList } from './helpers.js'
@@ -125,18 +125,32 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
       pluginsApi.listActions({ signal }),
     ]).then((results) => {
       if (isStale()) return
+      const plan = emptyPlan()
       const patch: Partial<CatalogSlice> = {}
+      const loadErrors = host.getLoadErrorsMap()
+      let nextErrors: Record<string, string> | undefined
       if (results[0].status === 'fulfilled') {
         const catalog = results[0].value
         const { models, ...modelDefaults } = catalog
         patch.models = models
         patch.modelDefaults = modelDefaults
+        if (Object.hasOwn(loadErrors, 'assets:models')) {
+          nextErrors = { ...loadErrors }
+          delete nextErrors['assets:models']
+        }
+      } else if (!isAbortError(results[0].reason)) {
+        const nextMessage = errorText(results[0].reason)
+        if (loadErrors['assets:models'] !== nextMessage) {
+          nextErrors = { ...loadErrors, 'assets:models': nextMessage }
+        }
       }
       if (results[1].status === 'fulfilled') patch.providers = results[1].value
       if (results[2].status === 'fulfilled') patch.credentials = results[2].value
       if (results[3].status === 'fulfilled') patch.skills = results[3].value
       if (results[4].status === 'fulfilled') patch.actions = results[4].value
-      host.patchCatalog(patch)
+      host.patchCatalog(patch, plan, true)
+      if (nextErrors !== undefined) host.setLoadErrors(nextErrors, plan, true)
+      host.emit(plan)
       results.forEach((result, index) => {
         if (result.status === 'rejected' && !isAbortError(result.reason)) {
           host.pushNotice({
@@ -182,6 +196,13 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
     reconcilePluginClientCache(reconciled.state.plugins)
     for (const pluginId of reconciled.inactivePluginIds) {
       evictSessionDocSubscriptions(pluginId)
+    }
+    for (const plugin of reconciled.state.plugins) {
+      if (isPluginSummaryActive(plugin)) {
+        restoreSessionDocSubscriptions(plugin.id, {
+          includePermanentErrors: reconciled.invalidatedDocPluginIds.has(plugin.id),
+        })
+      }
     }
 
     host.emit(plan)

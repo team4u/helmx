@@ -698,3 +698,134 @@ test('reconcile validates service specs, rejects cycles explicitly, and isolates
 
   await host.dispose()
 })
+
+test('global start barrier rollback stops every started plugin in reverse order even after isolated plugins fail start()', { timeout: 60_000 }, async () => {
+  // Case 1: isolated failure mid-list followed by both built-in and isolated started plugins before a built-in failure.
+  const host1 = makeHost({ deferServices: true })
+  const events1: string[] = []
+  await host1.register({
+    id: 'builtin:a',
+    definePlugin: (ctx) => {
+      ctx.service({
+        id: 'svc-a',
+        start() { events1.push('start:a') },
+        stop() { events1.push('stop:a') },
+      })
+    },
+  })
+  await host1.register(
+    {
+      id: 'ext:b-fail',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'svc-b',
+          prepare() { events1.push('prepare:b') },
+          start() {
+            events1.push('start:b-fail')
+            throw new Error('isolated start boom')
+          },
+          stop() { events1.push('stop:b') },
+        })
+      },
+    },
+    { isolateFailure: true },
+  )
+  await host1.register({
+    id: 'builtin:c',
+    definePlugin: (ctx) => {
+      ctx.service({
+        id: 'svc-c',
+        start() { events1.push('start:c') },
+        stop() { events1.push('stop:c') },
+      })
+    },
+  })
+  await host1.register(
+    {
+      id: 'ext:d-ok',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'svc-d',
+          start() { events1.push('start:d') },
+          stop() { events1.push('stop:d') },
+        })
+      },
+    },
+    { isolateFailure: true },
+  )
+  await host1.register({
+    id: 'builtin:e-fail',
+    definePlugin: (ctx) => {
+      ctx.service({
+        id: 'svc-e',
+        start() {
+          events1.push('start:e-fail')
+          throw new Error('builtin start boom')
+        },
+        stop() { events1.push('stop:e') },
+      })
+    },
+  })
+
+  await assertRejectsCode(() => host1.start(), 'plugin_service_start_failed', 500)
+  assert.equal(host1.get('ext:b-fail')?.status, 'failed')
+  assert.equal(host1.get('ext:b-fail')?.error?.code, 'plugin_service_start_failed')
+  assert.deepEqual(
+    events1,
+    ['prepare:b', 'start:a', 'start:b-fail', 'start:c', 'start:d', 'start:e-fail', 'stop:d', 'stop:c', 'stop:a'],
+    'rollback must stop all actually started plugins (including those after an isolated failure) in exact reverse order',
+  )
+  await host1.dispose()
+
+  // Case 2: isolated plugin is first and fails start(), followed by a built-in that starts and a built-in that fails.
+  const host2 = makeHost({ deferServices: true })
+  const events2: string[] = []
+  await host2.register(
+    {
+      id: 'ext:first-fail',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'svc-1',
+          start() {
+            events2.push('start:1-fail')
+            throw new Error('first isolated fail')
+          },
+          stop() { events2.push('stop:1') },
+        })
+      },
+    },
+    { isolateFailure: true },
+  )
+  await host2.register({
+    id: 'builtin:second-ok',
+    definePlugin: (ctx) => {
+      ctx.service({
+        id: 'svc-2',
+        start() { events2.push('start:2') },
+        stop() { events2.push('stop:2') },
+      })
+    },
+  })
+  await host2.register({
+    id: 'builtin:third-fail',
+    definePlugin: (ctx) => {
+      ctx.service({
+        id: 'svc-3',
+        start() {
+          events2.push('start:3-fail')
+          throw new Error('third builtin fail')
+        },
+        stop() { events2.push('stop:3') },
+      })
+    },
+  })
+
+  await assertRejectsCode(() => host2.start(), 'plugin_service_start_failed', 500)
+  assert.equal(host2.get('ext:first-fail')?.status, 'failed')
+  assert.deepEqual(
+    events2,
+    ['start:1-fail', 'start:2', 'start:3-fail', 'stop:2'],
+    'rollback must stop builtin:second-ok even when the first isolated plugin failed start()',
+  )
+  await host2.dispose()
+})

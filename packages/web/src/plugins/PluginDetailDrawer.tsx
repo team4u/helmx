@@ -399,8 +399,19 @@ export function PluginDetailDrawer({
   // 409 plugin_in_use 占用确认：保存待确认的占用清单与目标插件
   const [inUseConfirm, setInUseConfirm] = useState<{ plugin: PluginSummary; usages: PluginUsageItem[] } | null>(null)
 
-  // 代数并发保护：快速切换插件时迟到的旧响应不得写入新插件配置
+  // 代数并发保护：快速切换插件时迟到的旧响应不得写入新插件配置或状态
+  const mountedRef = useRef(true)
   const configGeneration = useRef(0)
+  const actionGeneration = useRef(0)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      configGeneration.current += 1
+      actionGeneration.current += 1
+    }
+  }, [])
 
   const reloadConfig = async (id: string) => {
     const generation = ++configGeneration.current
@@ -408,45 +419,53 @@ export function PluginDetailDrawer({
     setConfigError(null)
     try {
       const result = await pluginsApi.getConfig(id)
-      if (configGeneration.current !== generation) return
+      if (!mountedRef.current || configGeneration.current !== generation) return
       setConfig({ ...result, pluginId: id })
     } catch (err) {
-      if (configGeneration.current !== generation) return
+      if (!mountedRef.current || configGeneration.current !== generation) return
       setConfig(null)
       setConfigError(err instanceof Error ? err.message : String(err))
     } finally {
-      if (configGeneration.current === generation) {
+      if (mountedRef.current && configGeneration.current === generation) {
         setLoadingConfig(false)
       }
     }
   }
 
   useEffect(() => {
+    configGeneration.current += 1
+    actionGeneration.current += 1
+    setConfig(null)
+    setConfigError(null)
+    setActionError(null)
+    setPackageOp('idle')
+    setConfirmRemoveOpen(false)
+    setInUseConfirm(null)
     if (open && plugin?.id) {
       void reloadConfig(plugin.id)
     } else {
-      configGeneration.current += 1
-      setConfig(null)
       setLoadingConfig(false)
-      setConfigError(null)
-      setActionError(null)
-      setPackageOp('idle')
-      setConfirmRemoveOpen(false)
-      setInUseConfirm(null)
     }
   }, [open, plugin?.id])
 
-  const handleToggle = async (targetEnabled?: boolean, options?: { force?: boolean }) => {
-    if (!plugin || plugin.locked || toggling) return
+  const handleToggle = async (
+    targetPlugin: PluginSummary,
+    targetEnabled?: boolean,
+    options?: { force?: boolean },
+  ) => {
+    if (targetPlugin.locked || toggling) return
+    const generation = ++actionGeneration.current
     setActionError(null)
+    setInUseConfirm(null)
     try {
-      await onToggleEnabled(plugin, targetEnabled, options)
+      await onToggleEnabled(targetPlugin, targetEnabled, options)
     } catch (err) {
+      if (!mountedRef.current || actionGeneration.current !== generation) return
       if (err instanceof ApiClientError && err.status === 409 && err.code === 'plugin_in_use') {
-        // 持久资源占用：展示占用清单供用户知情后选择强制停用
+        // 持久资源占用：展示占用清单供用户知情后选择强制停用（固定原始 targetPlugin）
         const usages = extractPluginUsages(err.details)
         if (usages.length > 0) {
-          setInUseConfirm({ plugin, usages })
+          setInUseConfirm({ plugin: targetPlugin, usages })
         } else {
           setActionError(t('plugins.drawer.disableInUseError'))
         }
@@ -461,10 +480,12 @@ export function PluginDetailDrawer({
   // 受管插件包：重新拉取安装来源最新版本并重载（源未变化时 changed=false，如实回显）。
   const handleUpdatePackage = async () => {
     if (!plugin?.managed || packageOp !== 'idle') return
+    const targetPlugin = plugin
+    const generation = ++actionGeneration.current
     setPackageOp('updating')
     setActionError(null)
     try {
-      const result = await pluginsApi.update(plugin.id)
+      const result = await pluginsApi.update(targetPlugin.id)
       const versionLabel = result.record.version || t('plugins.package.unknownVersion')
       const noticeBody = result.changed
         ? t('plugins.package.updatedBody', {
@@ -477,42 +498,54 @@ export function PluginDetailDrawer({
         level: 'info',
         title: t('plugins.package.updateNoticeTitle'),
         body: t('plugins.package.updateNoticeBody', {
-          name: resolveLocalizedText(plugin.name, locale) || plugin.id,
+          name: resolveLocalizedText(targetPlugin.name, locale) || targetPlugin.id,
           detail: noticeBody,
         }),
       })
       onPackageChanged?.()
     } catch (err) {
-      setActionError(pluginPackageErrorText(err, t('plugins.package.action.update'), t))
+      if (mountedRef.current && actionGeneration.current === generation) {
+        setActionError(pluginPackageErrorText(err, t('plugins.package.action.update'), t))
+      }
     } finally {
-      setPackageOp('idle')
+      if (mountedRef.current && actionGeneration.current === generation) {
+        setPackageOp('idle')
+      }
     }
   }
 
   // 受管插件包卸载：确认后清理安装目录与注册记录；成功后关闭抽屉并刷新列表。
   const handleRemovePackage = async () => {
     if (!plugin?.managed || packageOp !== 'idle') return
+    const targetPlugin = plugin
+    const generation = ++actionGeneration.current
     setPackageOp('removing')
     setActionError(null)
     try {
-      await pluginsApi.remove(plugin.id)
+      await pluginsApi.remove(targetPlugin.id)
       actions?.pushNotice({
         type: 'notification',
         level: 'info',
         title: t('plugins.package.removeNoticeTitle'),
         body: t('plugins.package.removeNoticeBody', {
-          name: resolveLocalizedText(plugin.name, locale) || plugin.id,
-          id: plugin.id,
+          name: resolveLocalizedText(targetPlugin.name, locale) || targetPlugin.id,
+          id: targetPlugin.id,
         }),
       })
-      setConfirmRemoveOpen(false)
-      onRemoved?.()
+      if (mountedRef.current && actionGeneration.current === generation) {
+        setConfirmRemoveOpen(false)
+        onRemoved?.()
+      }
       onPackageChanged?.()
     } catch (err) {
-      setActionError(pluginPackageErrorText(err, t('plugins.package.action.uninstall'), t))
-      setConfirmRemoveOpen(false)
+      if (mountedRef.current && actionGeneration.current === generation) {
+        setActionError(pluginPackageErrorText(err, t('plugins.package.action.uninstall'), t))
+        setConfirmRemoveOpen(false)
+      }
     } finally {
-      setPackageOp('idle')
+      if (mountedRef.current && actionGeneration.current === generation) {
+        setPackageOp('idle')
+      }
     }
   }
 
@@ -520,7 +553,7 @@ export function PluginDetailDrawer({
     const pending = inUseConfirm
     if (!pending) return
     setInUseConfirm(null)
-    await handleToggle(false, { force: true })
+    await handleToggle(pending.plugin, false, { force: true })
   }
 
   const versionLabel = plugin?.version ? `v${plugin.version.replace(/^v/, '')}` : null
@@ -693,7 +726,7 @@ export function PluginDetailDrawer({
                       type="button"
                       className={`btn btn-sm ${plugin.enabled ? 'btn' : 'btn-primary'}`}
                       disabled={plugin.locked || toggling}
-                      onClick={() => void handleToggle(plugin.enabled ? false : true)}
+                      onClick={() => void handleToggle(plugin, plugin.enabled ? false : true)}
                     >
                       {plugin.enabled ? (
                         <>
@@ -780,7 +813,7 @@ export function PluginDetailDrawer({
                 )}
 
                 {/* 409 plugin_in_use confirmation: informed forced disable */}
-                {inUseConfirm && (
+                {inUseConfirm && inUseConfirm.plugin.id === plugin.id && (
                   <div className="callout callout-warn" role="alert">
                     <HelmxIcon name="alert-triangle" size={13} />
                     <div className="plugin-inuse-body">
@@ -896,6 +929,7 @@ export function PluginDetailDrawer({
                     </div>
                   ) : config && config.pluginId === plugin.id ? (
                     <PluginConfigForm
+                      key={plugin.id}
                       pluginId={plugin.id}
                       config={config}
                       locale={locale}
