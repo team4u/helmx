@@ -8,11 +8,10 @@
  * - always type="text" (never type="search", which would stack a native clear
  *   X on top of the custom clear button);
  * - at most one clear button, rendered only when the value is non-empty;
+ * - semantic `variant="default" | "toolbar"` picks the host `.search-box` /
+ *   `.search-box-toolbar` & `.search-box-clear` vocabulary without hand-wiring
+ *   custom container/button classes;
  * - no portal, no window access — renderToString works directly.
- *
- * The container class is caller-chosen among the host common vocabulary
- * (.search-box compact / .primary-search-box toolbar / .plugin-search-box /
- * screen-local containers), so this file introduces no new CSS theme.
  *
  * This file only exports components and TS types (Fast Refresh friendly).
  */
@@ -21,21 +20,41 @@ import { HelmxIcon } from '../icons.js'
 import { usePluginTranslator } from '../i18n.js'
 import { uiCopy } from '../ui-copy.js'
 
+export type SearchBoxVariant = 'default' | 'toolbar'
+
+const VARIANT_CONTAINER_CLASS: Record<SearchBoxVariant, string> = {
+  default: 'search-box',
+  toolbar: 'search-box search-box-toolbar',
+}
+
+const DEFAULT_CLEAR_BUTTON_CLASS = 'btn btn-ghost btn-sm search-box-clear'
+
+function mergeClassTokens(base: string, extra?: string): string {
+  if (extra === undefined || extra.trim() === '') return base
+  const seen = new Set(base.split(/\s+/).filter(Boolean))
+  const appended = extra
+    .split(/\s+/)
+    .filter((token) => token !== '' && !seen.has(token))
+  return appended.length > 0 ? `${base} ${appended.join(' ')}` : base
+}
+
 export interface SearchBoxProps {
   /** Current query value (fully controlled). */
   value: string
   /** Emits the next input value (already unwrapped from the DOM event). */
   onChange: (nextValue: string) => void
+  /** Visual density/width variant ('default' compact .search-box, 'toolbar' primary-stage toolbar spec). */
+  variant?: SearchBoxVariant
   placeholder?: string
   /** Accessible name of the input (mirrors the visible placeholder intent). */
   ariaLabel?: string
   /** title + aria-label of the single clear button (defaults to the shared UI locale). */
   clearLabel?: string
-  /** Container class: pick from the host common vocabulary (defaults to the compact .search-box). */
+  /** Container class: extends `variant="toolbar"`, or overrides the default `.search-box` container. */
   className?: string
   /** Extra classes for the inner input (e.g. sidebar-search-input). */
   inputClassName?: string
-  /** Clear button classes (defaults to the ghost sm button; center variants add their -clear class). */
+  /** Clear button classes (defaults to `btn btn-ghost btn-sm search-box-clear`). */
   clearButtonClassName?: string
   /** Leading icon node (defaults to the search glyph). */
   icon?: ReactNode
@@ -60,12 +79,13 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
   const {
     value,
     onChange,
+    variant = 'default',
     placeholder,
     ariaLabel,
     clearLabel = t(uiCopy.clear),
-    className = 'search-box',
+    className,
     inputClassName,
-    clearButtonClassName = 'btn btn-ghost btn-sm',
+    clearButtonClassName,
     icon = <HelmxIcon name="search" size={14} />,
     clearIcon = <HelmxIcon name="x" size={12} />,
     inputRef,
@@ -75,8 +95,14 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
     clearable = true,
     onCleared,
   } = props
+  const containerClass =
+    variant === 'toolbar'
+      ? mergeClassTokens(VARIANT_CONTAINER_CLASS.toolbar, className)
+      : (className ?? VARIANT_CONTAINER_CLASS[variant])
+  const clearClass = clearButtonClassName ?? DEFAULT_CLEAR_BUTTON_CLASS
+
   return (
-    <div className={className} style={style}>
+    <div className={containerClass} style={style}>
       {icon}
       <input
         ref={inputRef}
@@ -96,7 +122,7 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
       {clearable && value !== '' && (
         <button
           type="button"
-          className={clearButtonClassName}
+          className={clearClass}
           title={clearLabel}
           aria-label={clearLabel}
           disabled={disabled}

@@ -36,6 +36,8 @@ export {
 } from './plugin-context.js'
 export { ScreenParamsContext, useScreenParams } from './screen-params.js'
 export type { ScreenParamsScope } from '@helmx/protocol/browser'
+export { ScreenHostContext, useScreenHost } from './screen-host.js'
+export type { ScreenHostState } from './screen-host.js'
 
 // ---- i18n: locale & translation (plugin-consumable hooks + locale essentials) ----
 export { usePluginLocale, usePluginTranslator } from './i18n.js'
@@ -173,7 +175,7 @@ export type {
 export { MonoId } from './ui/MonoId.js'
 export type { MonoIdProps } from './ui/MonoId.js'
 export { SearchBox } from './ui/SearchBox.js'
-export type { SearchBoxProps } from './ui/SearchBox.js'
+export type { SearchBoxProps, SearchBoxVariant } from './ui/SearchBox.js'
 export { EmptyState } from './ui/EmptyState.js'
 export type { EmptyStateProps } from './ui/EmptyState.js'
 export { LoadingState } from './ui/LoadingState.js'

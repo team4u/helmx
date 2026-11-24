@@ -5,6 +5,7 @@ import {
   Badge,
   Button,
   CardGrid,
+  EmptyState,
   HelmxIcon,
   Tabs,
   TabsContent,
@@ -22,7 +23,7 @@ import {
   useStoreActions,
 } from '../lib/store-context.js'
 import type { ModelsCenterTab } from '../lib/types.js'
-import { SystemCenterEmpty, SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { GlobalDefaultsPanel, type DefaultModelInfo } from './GlobalDefaultsPanel.js'
 import { ModelCard } from './ModelCard.js'
@@ -431,18 +432,26 @@ export function ModelCenter({
             onSelectPill={setStatusTab}
           />
           {filteredProviders.length === 0 ? (
-            <SystemCenterEmpty
+            <EmptyState
+              prominent
+              icon="search"
               iconSize={22}
               title={t('models.emptyTitle')}
               hint={t('models.emptyHint')}
-              showReset={Boolean(query) || statusTab !== 'all'}
-              resetLabel={t('models.resetFilters')}
-              resetIcon={false}
-              resetVariant="ghost"
-              onReset={() => {
-                setQuery('')
-                setStatusTab('all')
-              }}
+              action={
+                Boolean(query) || statusTab !== 'all' ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setQuery('')
+                      setStatusTab('all')
+                    }}
+                  >
+                    {t('models.resetFilters')}
+                  </Button>
+                ) : undefined
+              }
             />
           ) : (
             <CardGrid minWidth="md" gap="md">

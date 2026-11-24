@@ -2,11 +2,11 @@ import type * as React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSummary } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
-import { Button, CardGrid, HelmxIcon } from '@helmx/plugin-client'
+import { Button, CardGrid, EmptyState, HelmxIcon } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ApiClientError, pluginsApi } from '../lib/api.js'
 import { useLocationTargets, useOptionalGroupedUi, usePlugins, useStoreActions } from '../lib/store-context.js'
-import { SystemCenterEmpty, SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { PluginCard } from './PluginCard.js'
 import { PluginDetailDrawer } from './PluginDetailDrawer.js'
@@ -358,16 +358,26 @@ export function PluginCenter({
           ))}
         </CardGrid>
       ) : (
-        <SystemCenterEmpty
+        <EmptyState
+          prominent
+          icon="search"
           title={t('plugins.center.emptyTitle')}
           hint={t('plugins.center.emptyHint')}
           hintSubtle
-          showReset={Boolean(query) || statusFilter !== 'all'}
-          resetLabel={t('plugins.center.resetSearch')}
-          onReset={() => {
-            setQuery('')
-            setStatusFilter('all')
-          }}
+          action={
+            Boolean(query) || statusFilter !== 'all' ? (
+              <Button
+                size="sm"
+                icon="rotate-ccw"
+                onClick={() => {
+                  setQuery('')
+                  setStatusFilter('all')
+                }}
+              >
+                {t('plugins.center.resetSearch')}
+              </Button>
+            ) : undefined
+          }
         />
       )}
     </SystemCenterShell>

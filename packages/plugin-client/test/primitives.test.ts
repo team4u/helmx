@@ -22,6 +22,7 @@ import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helmx/protocol'
 import * as HelmxPluginClient from '../src/index.js'
 import * as HelmxPluginClientPure from '../src/pure.js'
 import { Screen, ScreenSection, ScreenToolbar, DataTable, KvGrid } from '../src/primitives.js'
+import { ScreenHostContext } from '../src/screen-host.js'
 import { StatusLight } from '../src/ui/StatusLight.js'
 import {
   STATUS_LIGHT_TONES,
@@ -128,6 +129,79 @@ test('Screen: a passed header replaces the default header entirely; with everyth
   const bare = renderToString(e(Screen, null, e('div', null, 'x')))
   assert.match(bare, /screen-container/)
   assert.doesNotMatch(bare, /screen-header/, 'no header is rendered without title/subtitle/actions/header')
+})
+
+test('Screen: ScreenHostContext(hosted=true) omits duplicate title and collapses empty header structurally (SSR)', { timeout: 60_000 }, () => {
+  const win = new Window()
+
+  // 1) Hosted with title only: zero .screen-header and zero .screen-title (no empty DOM)
+  const titleOnly = renderToString(
+    e(
+      ScreenHostContext.Provider,
+      { value: { hosted: true } },
+      e(Screen, { title: 'Duplicate Title' }, e('div', null, 'body')),
+    ),
+  )
+  win.document.body.innerHTML = titleOnly
+  assert.ok(win.document.body.querySelector('.screen-header') === null, 'hosted title-only Screen must not render .screen-header')
+  assert.ok(win.document.body.querySelector('.screen-title') === null, 'hosted title-only Screen must not render .screen-title')
+  assert.equal(win.document.body.querySelector('.screen-container')?.getAttribute('data-screen-layout'), 'contained')
+
+  // 2) Hosted with title + subtitle + actions: omits .screen-title while preserving subtitle & actions
+  const withSubAndActions = renderToString(
+    e(
+      ScreenHostContext.Provider,
+      { value: { hosted: true } },
+      e(
+        Screen,
+        {
+          title: 'Duplicate Title',
+          subtitle: '3 active rules',
+          actions: e('button', { type: 'button' }, 'Reload'),
+        },
+        e('div', null, 'body'),
+      ),
+    ),
+  )
+  win.document.body.innerHTML = withSubAndActions
+  const header = win.document.body.querySelector('.screen-header')
+  assert.ok(header !== null, 'hosted Screen with subtitle/actions still renders .screen-header')
+  assert.ok(header.querySelector('.screen-title') === null, 'hosted Screen omits duplicate .screen-title')
+  assert.equal(header.querySelector('.screen-subtitle')?.textContent, '3 active rules')
+  assert.equal(header.querySelector('.stack-row button')?.textContent, 'Reload')
+
+  // 3) Hosted with title + actions (subtitle omitted): keeps actions without rendering .screen-title
+  const actionsOnlyHosted = renderToString(
+    e(
+      ScreenHostContext.Provider,
+      { value: { hosted: true } },
+      e(
+        Screen,
+        {
+          title: 'Duplicate Title',
+          actions: e('button', { type: 'button' }, 'Create'),
+        },
+        e('div', null, 'body'),
+      ),
+    ),
+  )
+  win.document.body.innerHTML = actionsOnlyHosted
+  assert.ok(win.document.body.querySelector('.screen-title') === null)
+  assert.equal(win.document.body.querySelector('.screen-header .stack-row button')?.textContent, 'Create')
+
+  // 4) Hosted with explicit custom header: custom header renders untouched
+  const customHosted = renderToString(
+    e(
+      ScreenHostContext.Provider,
+      { value: { hosted: true } },
+      e(Screen, { header: e('div', { className: 'custom-hosted-header' }, 'Custom'), layout: 'full-bleed' }, e('div', null, 'body')),
+    ),
+  )
+  win.document.body.innerHTML = customHosted
+  assert.equal(win.document.body.querySelector('.custom-hosted-header')?.textContent, 'Custom')
+  assert.equal(win.document.body.querySelector('.screen-container')?.getAttribute('data-screen-layout'), 'full-bleed')
+
+  void win.close()
 })
 
 test('ScreenSection: an optional title renders screen-section / screen-section-title', { timeout: 60_000 }, () => {

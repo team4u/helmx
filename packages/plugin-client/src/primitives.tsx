@@ -11,12 +11,17 @@
  */
 import { Children, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { usePluginTranslator } from './i18n.js'
+import { useScreenHost } from './screen-host.js'
 import { uiCopy } from './ui-copy.js'
 import { LoadingState } from './ui/LoadingState.js'
 import { usePluginScopeId } from './ui/plugin-scope.js'
 
 function joinClass(...parts: Array<string | undefined>): string {
   return parts.filter(Boolean).join(' ')
+}
+
+function hasRenderable(node: ReactNode): boolean {
+  return node !== undefined && node !== null && typeof node !== 'boolean'
 }
 
 // ---------------------------------------------------------------------------
@@ -47,16 +52,25 @@ export interface ScreenProps {
 }
 
 /**
- * Full-screen page container: unified vertical scrolling, spacing and header
+ * Full-screen page container: unified vertical rhythm, layout width and header
  * layout. header/title/subtitle/actions are composable — passing header ignores
  * the other three; when none is passed, no header is rendered.
+ * When mounted inside the host ScreenHost (ScreenHostContext.hosted === true)
+ * without a custom `header`, omits the duplicate `.screen-title` structurally
+ * and collapses `.screen-header` entirely when neither `subtitle` nor `actions`
+ * remain (zero hidden DOM, zero CSS `:has()` patching).
  * Stamps data-screen-layout (contained | full-bleed) and, when rendered inside
  * a plugin PluginClientContext, data-plugin-id so scoped plugin CSS matches.
  */
 export function Screen(props: ScreenProps): ReactNode {
   const { className, layout = 'contained', header, title, subtitle, actions, children } = props
   const pluginScopeId = usePluginScopeId()
-  const hasHeader = header !== undefined || title !== undefined || subtitle !== undefined || actions !== undefined
+  const { hosted } = useScreenHost()
+  const hasCustomHeader = hasRenderable(header)
+  const showTitle = !hosted && hasRenderable(title)
+  const showSubtitle = hasRenderable(subtitle)
+  const showActions = hasRenderable(actions)
+  const hasHeader = hasCustomHeader || showTitle || showSubtitle || showActions
   return (
     <div
       className={joinClass('screen-container', className)}
@@ -64,15 +78,15 @@ export function Screen(props: ScreenProps): ReactNode {
       data-plugin-id={pluginScopeId}
     >
       {hasHeader &&
-        (header !== undefined ? (
+        (hasCustomHeader ? (
           header
         ) : (
           <div className="screen-header">
             <div className="screen-heading">
-              {title !== undefined && <div className="screen-title">{title}</div>}
-              {subtitle !== undefined && <span className="screen-subtitle">{subtitle}</span>}
+              {showTitle && <div className="screen-title">{title}</div>}
+              {showSubtitle && <span className="screen-subtitle">{subtitle}</span>}
             </div>
-            {actions !== undefined && <div className="stack-row">{actions}</div>}
+            {showActions && <div className="stack-row">{actions}</div>}
           </div>
         ))}
       {children}

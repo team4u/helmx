@@ -1221,7 +1221,7 @@ test('SkillCenter: SSR renders the top bar, search bar, grid flow and zero-emoji
   // Search bar and category tabs
   assert.ok(html.includes('primary-center-toolbar'), 'must include the primary-center-toolbar')
   assert.ok(html.includes('Search skill name, ID, description or reference files'), 'must include the search placeholder')
-  assert.ok(html.includes('primary-category-pill'), 'must include the category filter pills')
+  assert.ok(html.includes('tabs-pill'), 'must include the category filter pills')
   assert.ok(html.includes('All'), 'must include the All tab')
   assert.ok(html.includes('Built-in'), 'must include the Built-in tab')
   assert.ok(html.includes('Shared'), 'must include the Shared tab')
@@ -1251,7 +1251,7 @@ test('SkillCenter: renders the empty state with zero emoji when nothing matches'
     ),
   )
 
-  assert.ok(html.includes('primary-center-empty'), 'primary-center-empty must render without data')
+  assert.ok(html.includes('empty-state-prominent'), 'empty-state-prominent must render without data')
   assert.ok(html.includes('No matching skills'), 'must hint that no skills match')
   assert.doesNotMatch(html, emojiRegex, 'the empty state must contain no emoji')
 })
@@ -1327,7 +1327,7 @@ test('SkillCenter: interactive filtering, search and drawer wiring (openTarget)'
   })
 
   // 1. Search filtering
-  const searchInput = host.querySelector('.primary-search-box input') as HTMLInputElement
+  const searchInput = host.querySelector('.search-box-toolbar input') as HTMLInputElement
   assert.ok(searchInput, 'the search input must be found')
 
   await act(async () => {
@@ -1339,7 +1339,7 @@ test('SkillCenter: interactive filtering, search and drawer wiring (openTarget)'
   assert.ok(cards[0]!.textContent?.includes('数据库迁移演练'))
 
   // 2. Clear the search
-  const clearBtn = host.querySelector('.primary-search-clear') as HTMLButtonElement
+  const clearBtn = host.querySelector('.search-box-clear') as HTMLButtonElement
   assert.ok(clearBtn, 'the clear-search button must appear')
   await act(async () => {
     clearBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -1348,7 +1348,7 @@ test('SkillCenter: interactive filtering, search and drawer wiring (openTarget)'
   assert.equal(cards.length, 6, 'clearing the search restores all cards')
 
   // 3. Category pill filtering
-  const pills = Array.from(host.querySelectorAll('.primary-category-pill')) as HTMLButtonElement[]
+  const pills = Array.from(host.querySelectorAll('.tabs-pill')) as HTMLButtonElement[]
   const builtinPill = pills.find((p) => p.textContent?.includes('Built-in'))
   assert.ok(builtinPill, 'the Built-in pill must be found')
 
@@ -1754,7 +1754,7 @@ test('SkillCenter: 节点深链渲染合并目录、节点分类与显式诊断�
     const { host, root } = await renderSkillCenter(store)
 
     // 节点分类 pill 计数为 1；卡片渲染节点徽章
-    const nodePill = Array.from(host.querySelectorAll('.primary-category-pill')).find((p) =>
+    const nodePill = Array.from(host.querySelectorAll('.tabs-pill')).find((p) =>
       p.textContent?.includes('Node'),
     )
     assert.ok(nodePill, '节点分类 pill 必须渲染')

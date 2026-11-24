@@ -1,10 +1,11 @@
 /**
- * Shared full-screen primary-stage shell, search/filter toolbar, and empty
- * state primitives for the five System Centers (Profiles, Plugins, Skills,
- * Nodes, Models). Zero Emoji; Fast Refresh compliant (components & types only).
+ * Shared full-screen primary-stage shell and search/filter toolbar primitives
+ * for the five System Centers (Profiles, Plugins, Skills, Nodes, Models).
+ * Empty states are rendered directly via `@helmx/plugin-client` `<EmptyState prominent />`.
+ * Zero Emoji; Fast Refresh compliant (components & types only).
  */
 import type * as React from 'react'
-import { Badge, Button, HelmxIcon, SearchBox, type ButtonVariant } from '@helmx/plugin-client'
+import { Badge, HelmxIcon, SearchBox, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import { CloseSplitButton, SplitToggleButton } from './SplitControls.js'
 
 export interface SystemCenterCategoryPill<K extends string = string> {
@@ -44,80 +45,27 @@ export function SystemCenterToolbar<K extends string = string>({
     <div className={className ? `primary-center-toolbar ${className}` : 'primary-center-toolbar'}>
       {leading}
       <SearchBox
-        className="primary-search-box"
-        clearButtonClassName="btn btn-ghost btn-sm primary-search-clear"
+        variant="toolbar"
         value={query}
         onChange={onQueryChange}
         placeholder={searchPlaceholder}
         ariaLabel={searchAriaLabel}
         clearLabel={clearSearchLabel}
       />
-      <div className="primary-category-pills" role="tablist" aria-label={filterAriaLabel}>
-        {pills.map((pill) => {
-          const isActive = activePill === pill.key
-          return (
-            <button
-              key={pill.key}
-              type="button"
-              role="tab"
-              aria-selected={isActive}
-              className={`primary-category-pill${isActive ? ' is-active' : ''}`}
-              onClick={() => onSelectPill(pill.key)}
-            >
+      <Tabs
+        value={activePill}
+        onValueChange={(nextValue) => onSelectPill(nextValue as K)}
+        variant="pills"
+      >
+        <TabsList aria-label={filterAriaLabel}>
+          {pills.map((pill) => (
+            <TabsTrigger key={pill.key} value={pill.key}>
               <span>{pill.label}</span>
               <Badge className="tabular-nums">{pill.count}</Badge>
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-export interface SystemCenterEmptyProps {
-  icon?: string
-  iconSize?: number
-  title: string
-  hint: string
-  hintSubtle?: boolean
-  showReset?: boolean
-  resetLabel?: string
-  resetIcon?: boolean
-  resetVariant?: ButtonVariant
-  onReset?: () => void
-}
-
-export function SystemCenterEmpty({
-  icon = 'search',
-  iconSize = 28,
-  title,
-  hint,
-  hintSubtle = false,
-  showReset = false,
-  resetLabel,
-  resetIcon = true,
-  resetVariant = 'default',
-  onReset,
-}: SystemCenterEmptyProps): React.JSX.Element {
-  return (
-    <div className="primary-center-empty">
-      <div className="primary-center-empty-icon">
-        <HelmxIcon name={icon} size={iconSize} />
-      </div>
-      <div className="primary-center-empty-text">{title}</div>
-      <div className={hintSubtle ? 'primary-center-empty-hint text-subtle' : 'primary-center-empty-hint'}>
-        {hint}
-      </div>
-      {showReset && onReset !== undefined && resetLabel !== undefined && (
-        <Button
-          variant={resetVariant}
-          size="sm"
-          icon={resetIcon ? 'rotate-ccw' : undefined}
-          onClick={onReset}
-        >
-          {resetLabel}
-        </Button>
-      )}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
     </div>
   )
 }

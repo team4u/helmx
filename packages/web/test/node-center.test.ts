@@ -441,9 +441,9 @@ test('NodeCenter: SSR renders top bar, search toolbar, category pills, grid flow
   assert.match(html, /Connect node/)
 
   // 2. Search bar and category pills
-  assert.match(html, /primary-search-box/)
+  assert.match(html, /search-box-toolbar/)
   assert.match(html, /Search node ID, name, platform, version or OS/)
-  assert.match(html, /primary-category-pill/)
+  assert.match(html, /tabs-pill/)
   assert.match(html, /All/)
   assert.match(html, /本机/)
   assert.match(html, /Remote/)
@@ -523,7 +523,7 @@ test('NodeCenter: empty node list renders a friendly empty state with reset butt
     ),
   )
 
-  assert.match(html, /primary-center-empty/)
+  assert.match(html, /empty-state-prominent/)
   assert.match(html, /No matching compute nodes/)
   assert.doesNotMatch(html, EMOJI_REGEX)
 })

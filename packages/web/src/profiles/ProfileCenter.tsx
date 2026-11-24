@@ -1,6 +1,6 @@
 import type * as React from 'react'
 import { useMemo, useState } from 'react'
-import { Button, CardGrid } from '@helmx/plugin-client'
+import { Button, CardGrid, EmptyState } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   useLocationTargets,
@@ -8,7 +8,7 @@ import {
   useProfilesSlice,
   useStoreActions,
 } from '../lib/store-context.js'
-import { SystemCenterEmpty, SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { ProfileCard } from './ProfileCard.js'
 import { ProfileDetailDrawer } from './ProfileDetailDrawer.js'
@@ -183,15 +183,25 @@ export function ProfileCenter({
           ))}
         </CardGrid>
       ) : (
-        <SystemCenterEmpty
+        <EmptyState
+          prominent
+          icon="search"
           title={t('profiles.center.emptyTitle')}
           hint={t('profiles.center.emptyHint')}
-          showReset={Boolean(query) || effectiveTab !== 'all'}
-          resetLabel={t('profiles.center.resetFilters')}
-          onReset={() => {
-            setQuery('')
-            setActiveTab('all')
-          }}
+          action={
+            Boolean(query) || effectiveTab !== 'all' ? (
+              <Button
+                size="sm"
+                icon="rotate-ccw"
+                onClick={() => {
+                  setQuery('')
+                  setActiveTab('all')
+                }}
+              >
+                {t('profiles.center.resetFilters')}
+              </Button>
+            ) : undefined
+          }
         />
       )}
     </SystemCenterShell>

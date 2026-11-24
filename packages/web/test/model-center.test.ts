@@ -649,7 +649,7 @@ test('ModelCenter SSR: renders the top bar, tabs, search box, category pills and
   assert.match(html, /Global default/)
 
   // 3. Search box and placeholder
-  assert.match(html, /class="[^"]*primary-search-box[^"]*"/)
+  assert.match(html, /class="[^"]*search-box-toolbar[^"]*"/)
   assert.match(html, /placeholder="Search provider name, ID or included models\.\.\."/)
 
   // 4. Card grid flow
