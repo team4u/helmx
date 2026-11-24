@@ -23,10 +23,11 @@
  * - In-process execution disclosure: doctor/register/enable run plugin code inside the Hub process with
  *   full host permissions; this manager enforces managed path boundaries only, never claiming sandboxing.
  */
-import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { cp, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rename, rm, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { resolveNpmCommand, runControlledProcess, type ResolveNpmCommandIo } from '@helmx/env-io';
-import { HelmxError, type PluginBuildProvider, type PluginInstallResult, type PluginPackageRecord, type PluginRemoveResult, type PluginPackageSource, type PluginSummary, type PluginUpdateResult } from '@helmx/protocol';
+import { compareCodeUnit, HelmxError, type PluginBuildProvider, type PluginInstallResult, type PluginPackageRecord, type PluginRemoveResult, type PluginPackageSource, type PluginSummary, type PluginUpdateResult } from '@helmx/protocol';
 import { verifyDeclaredPrebuiltDir } from './external-loader.js';
 import { parsePluginSource } from './package-source.js';
 import { externalPluginsDir } from './plugin-dir-name.js';
@@ -134,6 +135,8 @@ export interface PackageManagerHost {
   /** Safety preflight before update swap: reject 409 on live tasks / busy providers without touching old instance or dir. */
   assertManagedPluginUpdateSafe(pluginId: string): Promise<void> | void;
   updateManagedPlugin(pluginId: string, dir: string, options: { keepEnabled: boolean }): Promise<{ summary: PluginSummary }>;
+  /** Broadcast updated `plugin.changed` after package record persistence so SSE listeners receive `managed` metadata. */
+  notifyManagedPluginChanged(pluginId: string): void;
   removeManagedPlugin(pluginId: string): Promise<{ wasEnabled: boolean }>;
   /**
    * Purge persisted plugin data (global docs + session docs) on remove and await durable DELETE flush;
@@ -366,8 +369,9 @@ export class PluginPackageManager {
             summary = { ...registered.summary, ...(fallback !== undefined ? { enabled: fallback.enabled } : {}) };
           }
         }
+        let record: PluginPackageRecord;
         try {
-          const record = await this.store.save({
+          record = await this.store.save({
             pluginId: registered.pluginId,
             source: parsed,
             installPath: target,
@@ -375,11 +379,6 @@ export class PluginPackageManager {
             installedAt: Date.now(),
             updatedAt: Date.now(),
           });
-          return {
-            record,
-            summary: this.attachManaged(summary, record),
-            ...(enableError !== undefined ? { enableError } : {}),
-          };
         } catch (err) {
           // persist failed: deregister instance after delete directory whole rollback. deregister failed (such as in-flight task 409)
           // when never for still register run instance rm hollow out source directory - - keep now state and such as errors.
@@ -419,6 +418,12 @@ export class PluginPackageManager {
             },
           );
         }
+        this.host.notifyManagedPluginChanged(registered.pluginId);
+        return {
+          record,
+          summary: this.attachManaged(summary, record),
+          ...(enableError !== undefined ? { enableError } : {}),
+        };
       } finally {
         // staging all amount clean up; rollback path under target already separate delete, without going through staging
         void inPlace;
@@ -517,6 +522,7 @@ export class PluginPackageManager {
       installedAt: existingRecord.installedAt,
       updatedAt: Date.now(),
     });
+    this.host.notifyManagedPluginChanged(pluginId);
     return {
       record: updated,
       summary: this.attachManaged(summary, updated),
@@ -542,17 +548,20 @@ export class PluginPackageManager {
   /**
    * Atomically update an installed plugin package:
    * 1. Safety preflight (409 on live tasks / busy providers; old instance and directory untouched);
-   * 2. Re-fetch into staging -> install runtime deps -> full doctor preflight;
-   * 3. Swap: rename old directory to staging backup -> move new payload into managed directory ->
+   * 2. Re-fetch into staging (from `options.source` when provided, otherwise `record.source`) -> install runtime deps -> full doctor preflight;
+   * 3. Short-circuit with `changed: false` (no reload) when directory tree digest matches a healthy existing installation;
+   * 4. Swap: rename old directory to staging backup -> move new payload into managed directory ->
    *    re-register while keeping enabled state -> delete backup on success;
-   * 4. On swap failure, restore backup directory and reload the old instance (surfaces rollback error if restore fails).
+   * 5. On swap failure, restore backup directory and reload the old instance (surfaces rollback error if restore fails).
    */
-  async update(pluginId: string): Promise<PluginUpdateResult> {
+  async update(pluginId: string, options: { source?: string } = {}): Promise<PluginUpdateResult> {
+    const overrideSource = options.source !== undefined ? parsePluginSource(options.source, this.cwd) : undefined;
     return this.enqueue(async () => {
       const record = this.store.getRecord(pluginId);
       if (record === undefined) {
         throw new HelmxError('unknown_plugin_package', `plugin ${pluginId} has no managed install record (only managed packages can be updated)`, 404, { pluginId });
       }
+      const targetSource = overrideSource ?? record.source;
       // 1. Safety preflight: reject when live tasks or busy providers exist without modifying anything.
       await this.host.assertManagedPluginUpdateSafe(pluginId);
       await this.ensureStagingRoot();
@@ -561,9 +570,9 @@ export class PluginPackageManager {
       let switched = false;
       try {
         // 2. Staging fetch + dependencies + doctor preflight (leaves live directory untouched).
-        const payloadDir = await this.fetchIntoStaging(record.source, staging);
+        const payloadDir = await this.fetchIntoStaging(targetSource, staging);
         await this.installRuntimeDeps(payloadDir);
-        const identified = await this.identifyPlugin(payloadDir, record.source);
+        const identified = await this.identifyPlugin(payloadDir, targetSource);
         if (identified.pluginId !== pluginId) {
           throw new HelmxError(
             'plugin_package_id_changed',
@@ -579,12 +588,49 @@ export class PluginPackageManager {
             'plugin_package_doctor_failed',
             `Plugin package update preflight failed (${first ? `${first.label}: ${first.error!.message}` : 'unknown check failed'}); keeping existing installation`,
             422,
-            { source: record.source, staging: payloadDir, report },
+            { source: targetSource, staging: payloadDir, report },
           );
         }
         const target = record.installPath;
         assertInsideDataDir(this.pluginsDir(), target);
         const previousVersion = record.version;
+        // 2b. Short-circuit reload when target directory exists, plugin is healthy, and content digest is identical.
+        const currentSummary = this.host.listSummaries().find((s) => s.id === pluginId);
+        const targetIsHealthy =
+          currentSummary !== undefined &&
+          currentSummary.error === undefined &&
+          currentSummary.status !== 'failed';
+        if (targetIsHealthy && (await isDirectoryPath(target))) {
+          const [currentDigest, nextDigest] = await Promise.all([
+            computeDirectoryDigest(target),
+            computeDirectoryDigest(payloadDir),
+          ]);
+          if (currentDigest === nextDigest) {
+            if (samePackageSource(record.source, targetSource)) {
+              return {
+                record,
+                summary: this.attachManaged(currentSummary, record),
+                changed: false,
+                previousVersion,
+              };
+            }
+            const updated = await this.store.save({
+              pluginId,
+              source: targetSource,
+              installPath: target,
+              version: currentSummary.version ?? record.version,
+              installedAt: record.installedAt,
+              updatedAt: Date.now(),
+            });
+            this.host.notifyManagedPluginChanged(pluginId);
+            return {
+              record: updated,
+              summary: this.attachManaged(currentSummary, updated),
+              changed: false,
+              previousVersion,
+            };
+          }
+        }
         // 3. atomic switch: old directory -> staging backup, new payload -> managed directory
         if (await pathExists(target)) {
           await rename(target, backup);
@@ -603,16 +649,16 @@ export class PluginPackageManager {
           const { summary } = await this.host.updateManagedPlugin(pluginId, target, { keepEnabled: true });
           const updated = await this.store.save({
             pluginId,
-            source: record.source,
+            source: targetSource,
             installPath: target,
             version: summary.version ?? '',
             installedAt: record.installedAt,
             updatedAt: Date.now(),
           });
+          this.host.notifyManagedPluginChanged(pluginId);
           return {
             record: updated,
             summary: this.attachManaged(summary, updated),
-            // version string not change but content heavy sync still is fact change (local source edit after update); such as true
             changed: true,
             previousVersion,
           };
@@ -870,6 +916,59 @@ async function pathExists(target: string): Promise<boolean> {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw err;
   }
+}
+
+async function isDirectoryPath(target: string): Promise<boolean> {
+  try {
+    return (await stat(target)).isDirectory();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
+const DIGEST_SKIP_FILES = new Set(['node_modules/.package-lock.json']);
+const DIGEST_SKIP_DIRS = new Set(['.staging', 'node_modules/.cache']);
+
+/** Deterministic SHA-256 digest of a directory tree, skipping non-deterministic npm metadata. */
+async function computeDirectoryDigest(rootDir: string): Promise<string> {
+  const hash = createHash('sha256');
+  const visit = async (absDir: string, relDir: string): Promise<void> => {
+    const entries = await readdir(absDir, { withFileTypes: true });
+    entries.sort((a, b) => compareCodeUnit(a.name, b.name));
+    for (const entry of entries) {
+      const rel = relDir === '' ? entry.name : `${relDir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (DIGEST_SKIP_DIRS.has(rel)) continue;
+        hash.update(`D:${rel}\0`);
+        await visit(join(absDir, entry.name), rel);
+      } else if (entry.isFile()) {
+        if (DIGEST_SKIP_FILES.has(rel)) continue;
+        const content = await readFile(join(absDir, entry.name));
+        hash.update(`F:${rel}\0${content.byteLength}\0`);
+        hash.update(content);
+        hash.update('\0');
+      } else if (entry.isSymbolicLink()) {
+        if (DIGEST_SKIP_FILES.has(rel) || DIGEST_SKIP_DIRS.has(rel)) continue;
+        const linkTarget = await readlink(join(absDir, entry.name));
+        hash.update(`L:${rel}\0${linkTarget}\0`);
+      } else {
+        hash.update(`O:${rel}\0`);
+      }
+    }
+  };
+  await visit(rootDir, '');
+  return hash.digest('hex');
+}
+
+function samePackageSource(a: PluginPackageSource, b: PluginPackageSource): boolean {
+  if (a.kind !== b.kind || a.raw !== b.raw) return false;
+  if (a.kind === 'npm' && b.kind === 'npm') return a.spec === b.spec;
+  if (a.kind === 'git' && b.kind === 'git') {
+    return a.repo === b.repo && a.ref === b.ref && a.subdirectory === b.subdirectory;
+  }
+  if (a.kind === 'local' && b.kind === 'local') return a.path === b.path;
+  return false;
 }
 
 /** Read plugin.json id or package.json name/helmx.id (used only as directory-name hint). */

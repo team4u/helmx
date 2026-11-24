@@ -262,6 +262,9 @@ function makeEnv(runner?: PackageRunner): TestEnv {
       summaries.set(pluginId, { id: pluginId, version: readPluginVersionFromDir(join(dataDir, 'installed-plugins', pluginId)), enabled: entry.enabled })
       return { summary: toSummary(summaries, pluginId) }
     },
+    notifyManagedPluginChanged(pluginId: string) {
+      hostCalls.push(`notify:${pluginId}`)
+    },
     assertManagedPluginUpdateSafe(pluginId: string) {
       hostCalls.push(`assert-safe:${pluginId}`)
       const entry = registered.get(pluginId)
@@ -969,6 +972,66 @@ test('createPackageRunner: routes npm through resolveNpmCommand (Windows-safe), 
     }
   } finally {
     rmSync(workDir, { recursive: true, force: true })
+  }
+})
+
+test('install, local reinstall, and update notify host after record persistence; unchanged source skips reload with changed:false', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  const observedOnNotify: Array<{ id: string; version?: string; sourceRaw?: string }> = []
+  const origNotify = env.host.notifyManagedPluginChanged.bind(env.host)
+  env.host.notifyManagedPluginChanged = (pluginId: string) => {
+    const rec = env.store.getRecord(pluginId)
+    observedOnNotify.push({ id: pluginId, version: rec?.version, sourceRaw: rec?.source.raw })
+    origNotify(pluginId)
+  }
+  try {
+    const userSrc = writeLocalPlugin(env.cwd, 'notify-plugin', '1.0.0')
+    const installed = await env.manager.install(userSrc, { enable: true })
+    assert.equal(installed.record.version, '1.0.0')
+    assert.deepEqual(observedOnNotify.at(-1), { id: 'notify-plugin', version: '1.0.0', sourceRaw: userSrc })
+    assert.ok(env.hostCalls.includes('notify:notify-plugin'))
+
+    // Idempotent local reinstall notifies after persisting new version
+    writeLocalPlugin(env.cwd, 'notify-plugin', '1.1.0')
+    await env.manager.install(userSrc)
+    assert.deepEqual(observedOnNotify.at(-1), { id: 'notify-plugin', version: '1.1.0', sourceRaw: userSrc })
+
+    // Update with identical source tree short-circuits reload, preserves updatedAt, and reports changed:false
+    const callsBeforeNoop = env.hostCalls.length
+    const notifyCountBeforeNoop = observedOnNotify.length
+    const recordBeforeNoop = env.store.getRecord('notify-plugin')!
+    const noop = await env.manager.update('notify-plugin')
+    assert.equal(noop.changed, false)
+    assert.equal(noop.previousVersion, '1.1.0')
+    assert.equal(noop.record.updatedAt, recordBeforeNoop.updatedAt)
+    assert.ok(!env.hostCalls.slice(callsBeforeNoop).includes('update:notify-plugin'), 'unchanged update must skip reload')
+    assert.equal(observedOnNotify.length, notifyCountBeforeNoop)
+
+    // Edit source code without bumping version string -> digest differs -> reloads and reports changed:true
+    writeFileSync(join(userSrc, 'index.mjs'), `${PLUGIN_SRC('notify-plugin', '1.1.0')}\n// code edited\n`)
+    const codeEdited = await env.manager.update('notify-plugin')
+    assert.equal(codeEdited.changed, true)
+    assert.ok(env.hostCalls.slice(callsBeforeNoop).includes('update:notify-plugin'), 'edited files must trigger reload')
+    assert.deepEqual(observedOnNotify.at(-1), { id: 'notify-plugin', version: '1.1.0', sourceRaw: userSrc })
+
+    // Switch source to another local directory (new version): updates record.source and notifies after save
+    const nextSrc = writeLocalPlugin(join(env.cwd, 'next'), 'notify-plugin', '2.0.0')
+    const switched = await env.manager.update('notify-plugin', { source: nextSrc })
+    assert.equal(switched.changed, true)
+    assert.equal(switched.previousVersion, '1.1.0')
+    assert.equal(switched.record.version, '2.0.0')
+    assert.equal(switched.record.source.kind, 'local')
+    if (switched.record.source.kind === 'local') {
+      assert.equal(switched.record.source.path, nextSrc)
+    }
+    assert.deepEqual(observedOnNotify.at(-1), { id: 'notify-plugin', version: '2.0.0', sourceRaw: nextSrc })
+
+    // Switch source to mismatched plugin id -> 409; invalid source -> 400
+    const otherSrc = writeLocalPlugin(join(env.cwd, 'wrong'), 'other-id', '1.0.0')
+    await assertRejectsCode(() => env.manager.update('notify-plugin', { source: otherSrc }), 'plugin_package_id_changed', 409)
+    await assertRejectsCode(() => env.manager.update('notify-plugin', { source: 'file:///bad' }), 'validation_error', 400)
+  } finally {
+    env.close()
   }
 })
 

@@ -201,36 +201,144 @@ test('plugins install: passes source, sets enable in --enable body, checks human
   assert.equal(hub.hits.length, 2)
 })
 
-test('plugins update: POST /api/plugins/:id/update (with URI encoding) and human output', { timeout: 60_000 }, async (t) => {
+test('plugins update: POST /api/plugins/:id/update (with URI encoding), --source, and human output', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helmx-cli-dx-')
   const hub = await startMockHub(
     {
-      'POST /api/plugins/my%3Apl/update': () => ({
-        body: {
-          record: {
-            id: 'inst-1',
-            pluginId: 'my:pl',
-            source: { kind: 'npm', raw: 'npm:my-pl@^1.2.0', spec: 'my-pl@^1.2.0' },
-            installPath: '/data/plugins/my:pl',
-            version: '1.3.0',
-            installedAt: 1_700_000_000_000,
-            updatedAt: 1_700_000_100_000,
+      'POST /api/plugins/my%3Apl/update': (body) => {
+        const src = (body as { source?: string }).source
+        return {
+          body: {
+            record: {
+              id: 'inst-1',
+              pluginId: 'my:pl',
+              source: { kind: 'npm', raw: src ?? 'npm:my-pl@^1.2.0', spec: (src ?? 'npm:my-pl@^1.2.0').slice(4) },
+              installPath: '/data/plugins/my:pl',
+              version: src ? '2.0.0' : '1.3.0',
+              installedAt: 1_700_000_000_000,
+              updatedAt: 1_700_000_100_000,
+            },
+            summary: makePluginSummary({ id: 'my:pl' }),
+            changed: true,
+            previousVersion: '1.2.0',
           },
-          summary: makePluginSummary({ id: 'my:pl' }),
-          changed: true,
-          previousVersion: '1.2.0',
-        },
-      }),
+        }
+      },
     },
     { autoRegisterCleanup: t },
   )
-  const r = await runCliCaptured(['plugins', 'update', 'my:pl'], makeCliEnv(hub.url, dataDir))
+  const env = makeCliEnv(hub.url, dataDir)
+  const r = await runCliCaptured(['plugins', 'update', 'my:pl'], env)
   assert.equal(r.code, 0, r.err)
   assert.equal(hub.hits[0]!.path, '/api/plugins/my%3Apl/update')
   assert.equal(hub.hits[0]!.method, 'POST')
   assert.deepEqual(hub.hits[0]!.body, {})
   assert.ok(r.out.includes('my:pl'))
   assert.ok(r.out.includes('1.2.0 -> 1.3.0'))
+
+  const rSrc = await runCliCaptured(['plugins', 'update', 'my:pl', '--source', 'npm:my-pl@2.0.0', '--json'], env)
+  assert.equal(rSrc.code, 0, rSrc.err)
+  assert.deepEqual(hub.hits[1]!.body, { source: 'npm:my-pl@2.0.0' })
+  assert.equal((JSON.parse(rSrc.out) as { record: { version: string } }).record.version, '2.0.0')
+
+  // Validation guards without contacting Hub
+  const missing = await runCliCaptured(['plugins', 'update', '--json'], env)
+  assert.notEqual(missing.code, 0)
+  assert.equal(parseCliError(missing).code, 'missing_id')
+  const conflictId = await runCliCaptured(['plugins', 'update', 'my:pl', '--all', '--json'], env)
+  assert.notEqual(conflictId.code, 0)
+  assert.equal(parseCliError(conflictId).code, 'conflicting_flags')
+  const conflictSrc = await runCliCaptured(['plugins', 'update', '--all', '--source', 'npm:x', '--json'], env)
+  assert.notEqual(conflictSrc.code, 0)
+  assert.equal(parseCliError(conflictSrc).code, 'conflicting_flags')
+  const emptySrc = await runCliCaptured(['plugins', 'update', 'my:pl', '--source', '   ', '--json'], env)
+  assert.notEqual(emptySrc.code, 0)
+  assert.equal(parseCliError(emptySrc).code, 'invalid_flag_value')
+  assert.equal(hub.hits.length, 2, 'validation failures must not hit Hub')
+})
+
+test('plugins update --all: updates only managed plugins sequentially, handles mixed results and empty managed list', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
+  const managedMeta = (id: string, version: string) => ({
+    installId: `inst-${id}`,
+    installedVersion: version,
+    installedAt: 1_700_000_000_000,
+    source: { kind: 'local' as const, raw: `/src/${id}`, path: `/src/${id}` },
+  })
+  let pluginsList = [
+    makePluginSummary({ id: 'builtin:profile', locked: true }),
+    makePluginSummary({ id: 'manual-pl' }),
+    makePluginSummary({ id: 'pl-up', version: '1.0.0', managed: managedMeta('pl-up', '1.0.0') }),
+    makePluginSummary({ id: 'pl-same', version: '1.0.0', managed: managedMeta('pl-same', '1.0.0') }),
+    makePluginSummary({ id: 'pl-fail', version: '1.0.0', managed: managedMeta('pl-fail', '1.0.0') }),
+  ]
+  const hub = await startMockHub(
+    {
+      'GET /api/plugins': () => ({ body: pluginsList }),
+      'POST /api/plugins/pl-up/update': () => ({
+        body: {
+          record: { id: 'inst-pl-up', pluginId: 'pl-up', source: managedMeta('pl-up', '1.0.0').source, installPath: '/d/pl-up', version: '2.0.0', installedAt: 1, updatedAt: 2 },
+          summary: makePluginSummary({ id: 'pl-up', version: '2.0.0', managed: managedMeta('pl-up', '2.0.0') }),
+          changed: true,
+          previousVersion: '1.0.0',
+        },
+      }),
+      'POST /api/plugins/pl-same/update': () => ({
+        body: {
+          record: { id: 'inst-pl-same', pluginId: 'pl-same', source: managedMeta('pl-same', '1.0.0').source, installPath: '/d/pl-same', version: '1.0.0', installedAt: 1, updatedAt: 1 },
+          summary: makePluginSummary({ id: 'pl-same', version: '1.0.0', managed: managedMeta('pl-same', '1.0.0') }),
+          changed: false,
+          previousVersion: '1.0.0',
+        },
+      }),
+      'POST /api/plugins/pl-fail/update': () => ({
+        status: 409,
+        body: { error: { code: 'plugin_has_live_tasks', message: 'plugin pl-fail has active tasks' } },
+      }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dataDir)
+
+  // Mixed outcome: human mode prints per-plugin progress and exits non-zero
+  const mixedHuman = await runCliCaptured(['plugins', 'update', '--all'], env)
+  assert.notEqual(mixedHuman.code, 0)
+  assert.match(mixedHuman.out, /\[1\/3\] Updated pl-up: 1\.0\.0 -> 2\.0\.0/)
+  assert.match(mixedHuman.out, /\[2\/3\] Unchanged pl-same \(1\.0\.0\)/)
+  assert.match(mixedHuman.out, /\[3\/3\] Failed pl-fail \(plugin_has_live_tasks\)/)
+  assert.match(mixedHuman.out, /Summary: 1 updated, 1 unchanged, 1 failed \(3 total\)/)
+
+  // Mixed outcome: --json prints full structured summary and exits non-zero
+  const mixedJson = await runCliCaptured(['plugins', 'update', '--all', '--json'], env)
+  assert.notEqual(mixedJson.code, 0)
+  const parsed = JSON.parse(mixedJson.out) as { total: number; updated: number; unchanged: number; failed: number; results: Array<{ pluginId: string; status: string }> }
+  assert.equal(parsed.total, 3)
+  assert.equal(parsed.updated, 1)
+  assert.equal(parsed.unchanged, 1)
+  assert.equal(parsed.failed, 1)
+  assert.deepEqual(parsed.results.map((x) => [x.pluginId, x.status]), [
+    ['pl-up', 'updated'],
+    ['pl-same', 'unchanged'],
+    ['pl-fail', 'failed'],
+  ])
+
+  // Success when all managed plugins succeed
+  pluginsList = [
+    makePluginSummary({ id: 'pl-up', version: '1.0.0', managed: managedMeta('pl-up', '1.0.0') }),
+    makePluginSummary({ id: 'pl-same', version: '1.0.0', managed: managedMeta('pl-same', '1.0.0') }),
+  ]
+  const okAll = await runCliCaptured(['plugins', 'update', '--all', '--json'], env)
+  assert.equal(okAll.code, 0, okAll.err)
+  assert.equal((JSON.parse(okAll.out) as { failed: number }).failed, 0)
+
+  // Empty managed plugins -> exits 0 cleanly
+  pluginsList = [makePluginSummary({ id: 'builtin:profile', locked: true })]
+  const emptyHuman = await runCliCaptured(['plugins', 'update', '--all'], env)
+  assert.equal(emptyHuman.code, 0, emptyHuman.err)
+  assert.match(emptyHuman.out, /No managed external plugins installed/)
+  const emptyJson = await runCliCaptured(['plugins', 'update', '--all', '--json'], env)
+  assert.equal(emptyJson.code, 0, emptyJson.err)
+  assert.deepEqual(JSON.parse(emptyJson.out), { total: 0, updated: 0, unchanged: 0, failed: 0, results: [] })
 })
 
 test('plugins remove: --json non-interactive, --yes bypass, and non-interactive without --yes confirmation check', { timeout: 60_000 }, async (t) => {

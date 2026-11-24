@@ -5,12 +5,12 @@ import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalLocale } from '../lib/store-context.js'
 import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helmx/plugin-client'
 import {
-  buildDoctorCheckItems,
   detectPluginSourceKind,
   extractDoctorReport,
   isInstallSourceSubmittable,
   pluginPackageErrorText,
 } from './plugin-package-model.js'
+import { PluginDoctorChecks } from './PluginDoctorChecks.js'
 
 export interface PluginInstallModalProps {
   open: boolean
@@ -171,35 +171,7 @@ export function PluginInstallModal({
               </div>
             )}
 
-            {doctorReport && (
-              <div className="plugin-install-doctor" data-doctor-ok={doctorReport.ok}>
-                {(doctorReport.checks ?? []).map((check) => {
-                  const item = buildDoctorCheckItems(doctorReport).find((c) => c.id === check.id)
-                  return (
-                    <div
-                      key={check.id}
-                      className={`plugin-doctor-check${check.error === undefined ? '' : ' is-failed'}`}
-                    >
-                      <span className="plugin-doctor-check-mark">
-                        {check.error === undefined ? (
-                          <HelmxIcon name="check" size={11} />
-                        ) : (
-                          <HelmxIcon name="x" size={11} />
-                        )}
-                      </span>
-                      <span className="plugin-doctor-check-body">
-                        <span className="plugin-doctor-check-label">{check.label}</span>
-                        {item && !item.ok && (
-                          <span className="plugin-doctor-check-error mono selectable">
-                            {item.errorText}
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+            {doctorReport && <PluginDoctorChecks report={doctorReport} />}
           </div>
 
           <div className="modal-footer">

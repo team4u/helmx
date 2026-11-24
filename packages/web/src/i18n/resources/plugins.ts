@@ -85,11 +85,32 @@ export const pluginsMessages = {
     en: 'Open {name} in right split',
     'zh-CN': '在右侧分屏打开 {name}',
   },
+  'plugins.card.updateTitle': {
+    en: 'Update plugin from source',
+    'zh-CN': '从安装来源更新插件',
+  },
+  'plugins.card.updateAria': { en: 'Update {name}', 'zh-CN': '更新 {name}' },
   'plugins.card.switchAria': { en: '{name} switch', 'zh-CN': '{name} 开关' },
 
   // PluginCenter
   'plugins.center.title': { en: 'Plugin Center', 'zh-CN': '扩展插件中心' },
   'plugins.center.tabViews': { en: 'With views', 'zh-CN': '应用视图' },
+  'plugins.center.updateAll': {
+    en: 'Update all ({count})',
+    'zh-CN': '全部更新（{count}）',
+  },
+  'plugins.center.updateAllAria': {
+    en: 'Update all managed plugins',
+    'zh-CN': '更新全部受管插件',
+  },
+  'plugins.center.updateAllTitle': {
+    en: 'Re-fetch and update all managed external plugins sequentially',
+    'zh-CN': '依次从安装来源拉取并更新全部受管外部插件',
+  },
+  'plugins.center.updatingAllProgress': {
+    en: 'Updating ({current}/{total})…',
+    'zh-CN': '正在更新（{current}/{total}）…',
+  },
   'plugins.center.installTitle': {
     en: 'Install external plugins from npm, Git or a local path',
     'zh-CN': '从 npm、Git 或本地路径安装外部插件',
@@ -177,6 +198,30 @@ export const pluginsMessages = {
     en: 'Plugin package updated',
     'zh-CN': '插件包已更新',
   },
+  'plugins.package.updateFailedNoticeTitle': {
+    en: 'Plugin package update failed',
+    'zh-CN': '插件包更新失败',
+  },
+  'plugins.package.updateAllDoneTitle': {
+    en: 'Plugins updated',
+    'zh-CN': '插件批量更新完成',
+  },
+  'plugins.package.updateAllPartialTitle': {
+    en: 'Plugin batch update partially failed',
+    'zh-CN': '部分插件更新失败',
+  },
+  'plugins.package.batchUpdatedCount': {
+    en: '{count} updated',
+    'zh-CN': '已更新 {count} 个',
+  },
+  'plugins.package.batchUnchangedCount': {
+    en: '{count} unchanged',
+    'zh-CN': '{count} 个无变化',
+  },
+  'plugins.package.batchFailedCount': {
+    en: '{count} failed',
+    'zh-CN': '{count} 个失败',
+  },
   'plugins.package.updateNoticeBody': { en: '{name}: {detail}', 'zh-CN': '{name}：{detail}' },
   'plugins.package.removeNoticeTitle': {
     en: 'Plugin package uninstalled',
@@ -188,13 +233,18 @@ export const pluginsMessages = {
   },
   'plugins.package.sectionTitle': { en: 'Package', 'zh-CN': '包管理' },
   'plugins.package.sourceLabel': { en: 'Source', 'zh-CN': '来源' },
+  'plugins.package.changeSource': { en: 'Change source', 'zh-CN': '更换来源' },
+  'plugins.package.newSourcePlaceholder': {
+    en: 'npm:pkg@^2.0.0 / git:repo@tag / /abs/path',
+    'zh-CN': 'npm:pkg@^2.0.0 / git:repo@tag / 本地路径',
+  },
   'plugins.package.installedVersionLabel': {
     en: 'Installed version',
     'zh-CN': '已安装版本',
   },
   'plugins.package.installedAtLabel': { en: 'Installed at', 'zh-CN': '安装时间' },
   'plugins.package.updating': { en: 'Updating…', 'zh-CN': '正在更新…' },
-  'plugins.package.checkUpdates': { en: 'Check for updates', 'zh-CN': '检查更新' },
+  'plugins.package.updatePlugin': { en: 'Update plugin', 'zh-CN': '更新插件' },
   'plugins.package.uninstalling': { en: 'Uninstalling…', 'zh-CN': '正在卸载…' },
   'plugins.package.uninstallPlugin': { en: 'Uninstall plugin', 'zh-CN': '卸载插件' },
   'plugins.package.confirmUninstallAria': {

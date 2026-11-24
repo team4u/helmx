@@ -188,7 +188,7 @@ helmx plugins reload my-plugin
 
 - **doctor 四层检查**逐项真实执行：manifest 合法性与入口越根 → backend TS 转译与代际导入 → register 临时 PluginHost 真实执行 `definePlugin`（与生产同一校验链：action/tool/ui/doc/sessionDoc/kv/service/provider 形状、重复、scope，内置临时内存 `doc` / `sessionDoc` 存储并放行顶层 `ctx.host.onEvent` 注册）→ client 编译并校验具名导出真实存在（悬空 `export` 在此暴露，不留到运行期渲染空白）。检查使用独立代际号（`?helmxgen=N`），不影响已注册实例；doctor 专用后端对运行期 `ctx.host.*` 读写调用一律 501 显式拒绝——`definePlugin` 顶层依赖运行期宿主查询/变更的插件在此如实失败，这是设计而非缺陷。
 - **reload 安全链**：在途任务预检（`409 plugin_has_live_tasks`）→ dry-run 完整 doctor 预检（失败则旧实例保持不动，`422 plugin_reload_preflight_failed` 附完整报告）→ 新代际切换（失败用旧代回滚）→ 启用状态保持。内置插件禁止热重载（403）。
-- **受管包安装**（区别于手放置入目录）：`helmx plugins install npm:<spec>|git:<repo>[@<ref>]|<https-git-url>|<本地路径> [--enable]`、`helmx plugins update <id>`、`helmx plugins remove <id> [--yes]`。同一规范本地目录重复执行 `helmx plugins install` 会原地幂等热更新（保留既有 `ctx.doc` 数据，未显式传 `enable: false` 时确保启用）；不同来源覆盖既有插件 ID 仍诚实拒绝 `409 plugin_package_already_installed`。安装启用即在 Hub 内执行可信插件代码，无沙箱；来源由 Hub 解析，本地路径相对 Hub 主机。
+- **受管包安装**（区别于手放置入目录）：`helmx plugins install npm:<spec>|git:<repo>[@<ref>]|<https-git-url>|<本地路径> [--enable]`、`helmx plugins update [<id>] [--all] [--source <source>]`（`--all` 顺序更新全部受管外部插件，`--source` 支持保留既有 `ctx.doc`/`ctx.kv` 数据换源升版；内容未变时跳过重载并回报 `changed: false`）、`helmx plugins remove <id> [--yes]`。同一规范本地目录重复执行 `helmx plugins install` 会原地幂等热更新（保留既有 `ctx.doc` 数据，未显式传 `enable: false` 时确保启用）；不同来源覆盖既有插件 ID 仍诚实拒绝 `409 plugin_package_already_installed`。安装启用即在 Hub 内执行可信插件代码，无沙箱；来源由 Hub 解析，本地路径相对 Hub 主机。
 
 ## 常见进阶模式
 

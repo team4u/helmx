@@ -327,7 +327,8 @@ test('PluginDetailDrawer：managed 受管插件展示来源徽章、来源原文
   assert.match(html, /Package/)
   assert.match(html, /npm:my-plugin@1\.0\.0/)
   assert.match(html, /data-source-kind="npm"/)
-  assert.match(html, /Check for updates/)
+  assert.match(html, /Update plugin/)
+  assert.match(html, /Change source/)
   assert.match(html, /Uninstall plugin/)
 })
 
@@ -390,7 +391,7 @@ test('PluginDetailDrawer：更新操作调用 update 并回调刷新，changed=f
       )
     })
 
-    const updateBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Check for updates'))
+    const updateBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Update plugin'))
     assert.ok(updateBtn, '受管插件必须提供更新按钮')
 
     await act(async () => {
@@ -646,9 +647,248 @@ test('PluginInstallModal & PluginDetailDrawer：zh-CN locale 渲染中文安装�
   )
   assert.match(drawerHtml, /包管理/)
   assert.match(drawerHtml, /来源/)
+  assert.match(drawerHtml, /更换来源/)
   assert.match(drawerHtml, /已安装版本/)
   assert.match(drawerHtml, /安装时间/)
-  assert.match(drawerHtml, /检查更新/)
+  assert.match(drawerHtml, /更新插件/)
   assert.match(drawerHtml, /卸载插件/)
-  assert.doesNotMatch(drawerHtml, /Check for updates/)
+  assert.doesNotMatch(drawerHtml, /Update plugin/)
+})
+
+test('PluginDetailDrawer：更换来源提交新 source 更新并支持 422 doctor 诊断展示', { timeout: 60_000 }, async () => {
+  const { PluginDetailDrawer } = await import('../src/plugins/PluginDetailDrawer.js')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  const originalGetConfig = pluginsApi.getConfig
+  const originalUpdate = pluginsApi.update
+  const capturedCalls: Array<{ id: string; source?: string }> = []
+  let failDoctor = false
+
+  pluginsApi.getConfig = async () => ({ values: {}, schema: {} })
+  pluginsApi.update = async (id: string, opts?: { source?: string }): Promise<PluginUpdateResult> => {
+    capturedCalls.push({ id, source: opts?.source })
+    if (failDoctor) {
+      throw new ApiClientError('plugin_package_doctor_failed', 'doctor failed', 422, {
+        report: {
+          dir: '/staging/p',
+          ok: false,
+          checks: [
+            { id: 'manifest', label: 'Manifest check' },
+            { id: 'backend', label: 'Backend load', error: { code: 'bad_entry', message: 'broken' } },
+          ],
+        },
+      })
+    }
+    return {
+      record: {
+        id: 'rec-1',
+        pluginId: id,
+        source: { kind: 'npm', raw: opts?.source ?? 'npm:my-plugin@1.0.0', spec: 'my-plugin@^2.0.0' },
+        installPath: '/data/plugins/my-plugin',
+        version: '2.0.0',
+        installedAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      summary: makeManagedPlugin({ version: '2.0.0' }),
+      changed: true,
+      previousVersion: '1.0.0',
+    }
+  }
+
+  const store = makeTestStore({})
+  try {
+    await act(async () => {
+      root.render(
+        e(HostStoreProviders, { value: store },
+          e(PluginDetailDrawer, {
+            plugin: makeManagedPlugin(), open: true, inline: true,
+            onClose: () => {}, onToggleEnabled: async () => {}, toggling: false,
+          })),
+      )
+    })
+
+    const changeBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Change source'))
+    assert.ok(changeBtn, '应提供更换来源按钮')
+    await act(async () => {
+      changeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+
+    const sourceInput = host.querySelector<HTMLInputElement>('input[aria-label="Change source"]')
+    assert.ok(sourceInput, '展开后应展示来源输入框')
+    await act(async () => { typeIntoInput(sourceInput, 'npm:my-plugin@^2.0.0') })
+
+    const updateBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Update plugin'))
+    assert.ok(updateBtn)
+    await act(async () => {
+      updateBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+
+    assert.deepEqual(capturedCalls[0], { id: 'my-plugin', source: 'npm:my-plugin@^2.0.0' })
+    assert.ok(host.querySelector('input[aria-label="Change source"]') === null, '更新成功后应收起编辑框')
+
+    // 422 doctor report renders structured checks in drawer
+    failDoctor = true
+    const updateBtnAfter = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Update plugin'))
+    assert.ok(updateBtnAfter)
+    await act(async () => {
+      updateBtnAfter.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    const doctorBox = host.querySelector('.plugin-install-doctor')
+    assert.ok(doctorBox, '422 更新失败应渲染 doctor 检查项')
+    assert.match(doctorBox.textContent ?? '', /bad_entry: broken/)
+  } finally {
+    pluginsApi.getConfig = originalGetConfig
+    pluginsApi.update = originalUpdate
+    await act(async () => { root.unmount() })
+    host.remove()
+  }
+})
+
+test('PluginCard：仅受管插件渲染快捷更新图标按钮，点击不触发卡片选中', { timeout: 60_000 }, async () => {
+  const { PluginCard } = await import('../src/plugins/PluginCard.js')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  let selectCount = 0
+  let updateCount = 0
+  const builtinHtml = renderToString(
+    e(PluginCard, {
+      plugin: makeManagedPlugin({ id: 'builtin:workflow', managed: undefined }),
+      selected: false,
+      onSelect: () => {},
+      onToggle: () => {},
+      onUpdate: () => {},
+    }),
+  )
+  assert.doesNotMatch(builtinHtml, /plugin-card-update-btn/, '非受管插件不得渲染更新按钮')
+
+  try {
+    await act(async () => {
+      root.render(
+        e(PluginCard, {
+          plugin: makeManagedPlugin(),
+          selected: false,
+          onSelect: () => { selectCount++ },
+          onToggle: () => {},
+          onUpdate: () => { updateCount++ },
+        }),
+      )
+    })
+
+    const updateBtn = host.querySelector<HTMLButtonElement>('.plugin-card-update-btn')
+    assert.ok(updateBtn, '受管插件必须渲染快捷更新按钮')
+    await act(async () => {
+      updateBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(updateCount, 1)
+    assert.equal(selectCount, 0, '点击快捷更新按钮不得触发卡片选中')
+  } finally {
+    await act(async () => { root.unmount() })
+    host.remove()
+  }
+})
+
+test('PluginCenter：顶栏「全部更新」顺序更新、汇总通知、部分失败处理与卡片单插件更新', { timeout: 60_000 }, async () => {
+  const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  const originalUpdate = pluginsApi.update
+  const originalList = pluginsApi.list
+  const builtinPlugin: PluginSummary = {
+    id: 'builtin:profile', name: 'Profile', version: '1.0.0', locked: true, enabled: true,
+    hooks: [], actions: [], tools: [],
+  }
+  const managedA = makeManagedPlugin({ id: 'ext-a', name: 'Ext A', version: '1.0.0' })
+  const managedB = makeManagedPlugin({ id: 'ext-b', name: 'Ext B', version: '1.0.0' })
+
+  // 1. Without managed plugins: "Update all" button is hidden
+  const storeNoManaged = makeTestStore({ plugins: [builtinPlugin], primaryTarget: { kind: 'plugins' } })
+  const noManagedHtml = renderToString(e(HostStoreProviders, { value: storeNoManaged }, e(PluginCenter)))
+  assert.doesNotMatch(noManagedHtml, /Update all/)
+
+  // 2. With managed plugins: "Update all (2)" executes sequentially, handles partial failure, and syncs list
+  const updateOrder: string[] = []
+  let failB = false
+  let listCalls = 0
+  pluginsApi.list = async () => {
+    listCalls += 1
+    return [builtinPlugin, managedA, managedB]
+  }
+  pluginsApi.update = async (id: string): Promise<PluginUpdateResult> => {
+    updateOrder.push(id)
+    if (id === 'ext-b' && failB) {
+      throw new ApiClientError('plugin_has_live_tasks', 'busy', 409)
+    }
+    return {
+      record: {
+        id: `rec-${id}`,
+        pluginId: id,
+        source: { kind: 'npm', raw: `npm:${id}@1.0.0`, spec: `${id}@1.0.0` },
+        installPath: `/data/plugins/${id}`,
+        version: id === 'ext-a' ? '2.0.0' : '1.0.0',
+        installedAt: 1,
+        updatedAt: 2,
+      },
+      summary: id === 'ext-a' ? { ...managedA, version: '2.0.0' } : managedB,
+      changed: id === 'ext-a',
+      previousVersion: '1.0.0',
+    }
+  }
+
+  const store = makeTestStore({
+    plugins: [builtinPlugin, managedA, managedB],
+    primaryTarget: { kind: 'plugins' },
+  })
+
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
+    })
+
+    const updateAllBtn = host.querySelector<HTMLButtonElement>('button[aria-label="Update all managed plugins"]')
+    assert.ok(updateAllBtn, '存在受管插件时必须渲染全部更新按钮')
+    assert.match(updateAllBtn.textContent ?? '', /Update all \(2\)/)
+
+    // All succeed: ext-a updated, ext-b unchanged
+    await act(async () => {
+      updateAllBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(updateOrder, ['ext-a', 'ext-b'])
+    assert.equal(listCalls, 1)
+    assert.equal(store.getNotices().at(-1)?.level, 'info')
+    assert.match(store.getNotices().at(-1)?.body ?? '', /1 updated, 1 unchanged/)
+
+    // Partial failure: ext-b fails 409, notice reports error summary
+    failB = true
+    updateOrder.length = 0
+    await act(async () => {
+      updateAllBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(updateOrder, ['ext-a', 'ext-b'])
+    assert.equal(listCalls, 2)
+    assert.equal(store.getNotices().at(-1)?.level, 'error')
+    assert.match(store.getNotices().at(-1)?.body ?? '', /1 updated, 1 failed/)
+
+    // Single card quick update button
+    updateOrder.length = 0
+    const cardBtnA = host.querySelector<HTMLButtonElement>('[data-plugin-id="ext-a"] .plugin-card-update-btn')
+    assert.ok(cardBtnA, '受管卡片应有快捷更新按钮')
+    await act(async () => {
+      cardBtnA.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(updateOrder, ['ext-a'])
+    assert.equal(listCalls, 3)
+    assert.equal(store.getNotices().at(-1)?.level, 'info')
+    assert.match(store.getNotices().at(-1)?.body ?? '', /Ext A: Updated to 2\.0\.0/)
+  } finally {
+    pluginsApi.update = originalUpdate
+    pluginsApi.list = originalList
+    await act(async () => { root.unmount() })
+    host.remove()
+  }
 })

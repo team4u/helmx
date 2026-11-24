@@ -456,26 +456,130 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'update'],
-    description: 'Update an installed external plugin package and reload (POST /api/plugins/:id/update; target must be a managed installation)',
-    positional: '<id>',
+    description:
+      'Update an installed external plugin package (or --all managed packages) and reload (POST /api/plugins/:id/update; optional --source <source> switches/upgrades pinned sources while preserving plugin data)',
+    flags: [
+      {
+        name: 'all',
+        type: 'boolean',
+        help: 'update all managed external plugins sequentially (mutually exclusive with <id> and --source)',
+      },
+      {
+        name: 'source',
+        type: 'string',
+        help: 'optional new package source to switch/upgrade to while preserving plugin data (single plugin only)',
+      },
+    ],
+    positional: '[<id>]',
     async run(ctx: CommandContext) {
-      const id = requirePositional(ctx.positionals, 0, 'id')
-      assertNoExtraPositionals(ctx.positionals, 1)
+      const all = ctx.flags.get('all') === true
+      const hasSource = ctx.flags.has('source')
+      const rawSource = ctx.flags.get('source')
+      const id = ctx.positionals[0]
+      if (all && id !== undefined) {
+        throw new CliError('<id> and --all are mutually exclusive', 'conflicting_flags')
+      }
+      if (all && hasSource) {
+        throw new CliError('--all and --source are mutually exclusive', 'conflicting_flags')
+      }
+      if (!all && id === undefined) {
+        throw new CliError('missing target: provide <id> or --all', 'missing_id')
+      }
+      assertNoExtraPositionals(ctx.positionals, id !== undefined ? 1 : 0)
+      if (hasSource && (typeof rawSource !== 'string' || rawSource.trim() === '')) {
+        throw new CliError('--source cannot be empty', 'invalid_flag_value')
+      }
+      const source = typeof rawSource === 'string' ? rawSource.trim() : undefined
       const hub = await ctx.hub()
-      const result = await hub.post<PluginUpdateResult>(`/api/plugins/${encodeURIComponent(id)}/update`)
-      if (ctx.json) {
-        printResult(ctx, result)
+      const ver = (v: string): string => (v === '' ? 'unknown version' : v)
+      if (!all) {
+        const path = `/api/plugins/${encodeURIComponent(id!)}/update`
+        const result =
+          source !== undefined
+            ? await hub.post<PluginUpdateResult>(path, { source })
+            : await hub.post<PluginUpdateResult>(path)
+        if (ctx.json) {
+          printResult(ctx, result)
+          return
+        }
+        if (result.changed) {
+          ctx.io.out(`Updated ${result.record.pluginId}: ${ver(result.previousVersion)} -> ${ver(result.record.version)}\n`)
+        } else {
+          ctx.io.out(`${result.record.pluginId} source unchanged; no update (current ${ver(result.record.version)})\n`)
+        }
+        ctx.io.out(
+          `Install directory (Hub host): ${result.record.installPath}; status: ${result.summary.enabled ? 'enabled' : 'disabled'}\n`,
+        )
         return
       }
-      const ver = (v: string): string => (v === '' ? 'unknown version' : v)
-      if (result.changed) {
-        ctx.io.out(`Updated ${result.record.pluginId}: ${ver(result.previousVersion)} -> ${ver(result.record.version)}\n`)
-      } else {
-        ctx.io.out(`${result.record.pluginId} source unchanged; no update (current ${ver(result.record.version)})\n`)
+      const list = await hub.get<PluginSummary[]>('/api/plugins')
+      const managed = Array.isArray(list) ? list.filter((p) => p.managed !== undefined) : []
+      if (managed.length === 0) {
+        if (ctx.json) {
+          printResult(ctx, { total: 0, updated: 0, unchanged: 0, failed: 0, results: [] })
+        } else {
+          ctx.io.out('No managed external plugins installed.\n')
+        }
+        return
       }
-      ctx.io.out(
-        `Install directory (Hub host): ${result.record.installPath}; status: ${result.summary.enabled ? 'enabled' : 'disabled'}\n`,
-      )
+      interface BatchUpdateItem {
+        pluginId: string
+        status: 'updated' | 'unchanged' | 'failed'
+        result?: PluginUpdateResult
+        error?: { code: string; message: string }
+      }
+      const results: BatchUpdateItem[] = []
+      let updatedCount = 0
+      let unchangedCount = 0
+      let failedCount = 0
+      for (let i = 0; i < managed.length; i += 1) {
+        const plugin = managed[i]!
+        try {
+          const result = await hub.post<PluginUpdateResult>(`/api/plugins/${encodeURIComponent(plugin.id)}/update`)
+          if (result.changed) {
+            updatedCount += 1
+            results.push({ pluginId: plugin.id, status: 'updated', result })
+            if (!ctx.json) {
+              ctx.io.out(
+                `[${i + 1}/${managed.length}] Updated ${plugin.id}: ${ver(result.previousVersion)} -> ${ver(result.record.version)}\n`,
+              )
+            }
+          } else {
+            unchangedCount += 1
+            results.push({ pluginId: plugin.id, status: 'unchanged', result })
+            if (!ctx.json) {
+              ctx.io.out(`[${i + 1}/${managed.length}] Unchanged ${plugin.id} (${ver(result.record.version)})\n`)
+            }
+          }
+        } catch (err) {
+          failedCount += 1
+          const code = err instanceof CliError ? err.code : 'plugin_package_update_failed'
+          const message = err instanceof Error ? err.message : String(err)
+          results.push({ pluginId: plugin.id, status: 'failed', error: { code, message } })
+          if (!ctx.json) {
+            ctx.io.out(`[${i + 1}/${managed.length}] Failed ${plugin.id} (${code}): ${message}\n`)
+          }
+        }
+      }
+      if (ctx.json) {
+        printResult(ctx, {
+          total: managed.length,
+          updated: updatedCount,
+          unchanged: unchangedCount,
+          failed: failedCount,
+          results,
+        })
+      } else {
+        ctx.io.out(
+          `Summary: ${updatedCount} updated, ${unchangedCount} unchanged, ${failedCount} failed (${managed.length} total)\n`,
+        )
+      }
+      if (failedCount > 0) {
+        throw new CliError(
+          `${failedCount} of ${managed.length} plugin update(s) failed`,
+          'plugin_update_partial_failed',
+        )
+      }
     },
   })
 

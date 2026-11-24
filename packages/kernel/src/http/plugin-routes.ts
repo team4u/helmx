@@ -89,12 +89,13 @@ export async function handlePluginsDomain(
     }
     return jsonOk(redactor, await kernel.plugins.reloadExternalPlugin(pluginId))
   }
-  // Managed plugin package update (POST /api/plugins/:id/update).
+  // Managed plugin package update (POST /api/plugins/:id/update; optional body { source? }).
   if (third === 'update' && method === 'POST' && fourth === undefined) {
     if (kernel.plugins.updatePluginPackage === undefined) {
       return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin package updates')
     }
-    return jsonOk(redactor, await kernel.plugins.updatePluginPackage(pluginId))
+    const opts = await parseOptionalJsonObjectBody(ctx.request, parsePluginUpdateBody)
+    return jsonOk(redactor, await kernel.plugins.updatePluginPackage(pluginId, opts))
   }
   // Managed plugin package removal (POST /api/plugins/:id/remove).
   if (third === 'remove' && method === 'POST' && fourth === undefined) {
@@ -222,6 +223,20 @@ function parsePluginDisableBody(body: Record<string, unknown>): { force?: boolea
     'plugins disable body',
   )
   return body.force !== undefined ? { force: body.force as boolean } : {}
+}
+
+/** POST /api/plugins/:id/update body: optional non-empty `source` string for switching/upgrading pinned sources. */
+function parsePluginUpdateBody(body: Record<string, unknown>): { source?: string } {
+  assertBodySchema(
+    {
+      type: 'object',
+      properties: { source: { type: 'string', pattern: '\\S' } },
+      additionalProperties: false,
+    },
+    body,
+    'plugins update body',
+  )
+  return body.source !== undefined ? { source: body.source as string } : {}
 }
 
 /**

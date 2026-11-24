@@ -9,17 +9,20 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { PluginDoctorReport, PluginPackageSource } from '@helmx/protocol'
+import type { PluginDoctorReport, PluginPackageSource, PluginSummary, PluginUpdateResult } from '@helmx/protocol'
 import {
   buildDoctorCheckItems,
   buildDoctorConclusion,
   detectPluginSourceKind,
   extractDoctorReport,
+  formatBatchUpdateSummary,
   formatInstalledAt,
+  formatUpdateResultDetail,
   isGitSource,
   isInstallSourceSubmittable,
   isLocalSource,
   isNpmSource,
+  listManagedPlugins,
   pluginPackageErrorText,
   pluginSourceBadgeLabel,
   pluginSourceDisplayText,
@@ -248,4 +251,47 @@ test('plugin-package-model：zh-CN 翻译器生成中文来源标签、doctor �
   assert.match(pluginPackageErrorText(err409, '卸载', zh), /卸载失败：插件存在在途任务（plugin_has_live_tasks）/)
   assert.equal(pluginPackageErrorText(new Error('boom'), '更新', zh), '更新失败：boom')
   assert.equal(pluginPackageErrorText('raw', '安装', zh), '安装失败')
+})
+
+test('listManagedPlugins / formatUpdateResultDetail / formatBatchUpdateSummary：筛选受管插件并生成双语更新摘要', { timeout: 60_000 }, () => {
+  const en = createWebTranslator('en')
+  const zh = createWebTranslator('zh-CN')
+  const managedSummary: PluginSummary = {
+    id: 'ext-1',
+    name: 'Ext 1',
+    version: '1.0.0',
+    locked: false,
+    enabled: true,
+    hooks: [],
+    actions: [],
+    tools: [],
+    managed: { source: npmSource, installId: 'inst-1', installedVersion: '1.0.0', installedAt: 1000 },
+  }
+  const unmanagedSummary: PluginSummary = {
+    id: 'builtin:profile',
+    name: 'Profile',
+    version: '1.0.0',
+    locked: true,
+    enabled: true,
+    hooks: [],
+    actions: [],
+    tools: [],
+  }
+  assert.deepEqual(listManagedPlugins([unmanagedSummary, managedSummary]).map((p) => p.id), ['ext-1'])
+
+  const changedResult: PluginUpdateResult = {
+    record: { id: 'inst-1', pluginId: 'ext-1', source: npmSource, installPath: '/p', version: '2.0.0', installedAt: 1, updatedAt: 2 },
+    summary: managedSummary,
+    changed: true,
+    previousVersion: '1.0.0',
+  }
+  const unchangedResult: PluginUpdateResult = { ...changedResult, changed: false }
+  assert.equal(formatUpdateResultDetail(changedResult, en), 'Updated to 2.0.0 (was 1.0.0)')
+  assert.equal(formatUpdateResultDetail(changedResult, zh), '已更新到 2.0.0（此前 1.0.0）')
+  assert.equal(formatUpdateResultDetail(unchangedResult, en), 'Source unchanged; still at 2.0.0')
+  assert.equal(formatUpdateResultDetail(unchangedResult, zh), '源未变化，当前仍为 2.0.0')
+
+  assert.equal(formatBatchUpdateSummary({ updated: 2, unchanged: 1, failed: 1 }, en), '2 updated, 1 unchanged, 1 failed')
+  assert.equal(formatBatchUpdateSummary({ updated: 2, unchanged: 1, failed: 1 }, zh), '已更新 2 个、1 个无变化、1 个失败')
+  assert.equal(formatBatchUpdateSummary({ updated: 0, unchanged: 0, failed: 0 }, zh), '0 个无变化')
 })

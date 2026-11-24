@@ -193,8 +193,8 @@ export interface PluginHost {
    * Returns HTTP 501 when unwired.
    */
   installPluginPackage?(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
-  /** Update a managed plugin package (`POST /api/plugins/:id/update`): re-fetches source, runs doctor, atomically replaces, and reloads. */
-  updatePluginPackage?(pluginId: string): Promise<PluginUpdateResult>
+  /** Update a managed plugin package (`POST /api/plugins/:id/update`, optional `{ source }`): re-fetches source, runs doctor, atomically replaces, and reloads. */
+  updatePluginPackage?(pluginId: string, options?: { source?: string }): Promise<PluginUpdateResult>
   /** Remove a managed plugin package (`POST /api/plugins/:id/remove`): protects built-ins, live tasks, and providers; only deletes managed local copies. */
   removePluginPackage?(pluginId: string): Promise<PluginRemoveResult>
 }

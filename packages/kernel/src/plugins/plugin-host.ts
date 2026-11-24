@@ -408,9 +408,15 @@ export class PluginHost {
     return this.requirePackageManager().install(source, options);
   }
 
-  updatePluginPackage(pluginId: string): Promise<PluginUpdateResult> {
+  updatePluginPackage(pluginId: string, options: { source?: string } = {}): Promise<PluginUpdateResult> {
     this.assertNotDisposed();
-    return this.requirePackageManager().update(pluginId);
+    return this.requirePackageManager().update(pluginId, options);
+  }
+
+  notifyPluginChanged(pluginId: string): void {
+    if (this.disposed) return;
+    const state = this.plugins.get(pluginId);
+    if (state !== undefined) this.emitPluginChanged(state);
   }
 
   removePluginPackage(pluginId: string): Promise<PluginRemoveResult> {

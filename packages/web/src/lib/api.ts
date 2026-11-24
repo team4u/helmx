@@ -644,9 +644,13 @@ export const pluginsApi = {
       source,
       ...(enable ? { enable: true } : {}),
     }),
-  /** 更新已安装的外部插件包（POST /api/plugins/:id/update）。 */
-  update: (id: string) =>
-    apiRequest<PluginUpdateResult>('POST', `/api/plugins/${encodeURIComponent(id)}/update`),
+  /** 更新已安装的外部插件包（POST /api/plugins/:id/update；可选 source 换源升级）。 */
+  update: (id: string, opts?: { source?: string }) =>
+    apiRequest<PluginUpdateResult>(
+      'POST',
+      `/api/plugins/${encodeURIComponent(id)}/update`,
+      opts?.source !== undefined ? { source: opts.source } : undefined,
+    ),
   /** 移除已安装的外部插件包（POST /api/plugins/:id/remove）。 */
   remove: (id: string) =>
     apiRequest<PluginRemoveResult>('POST', `/api/plugins/${encodeURIComponent(id)}/remove`),

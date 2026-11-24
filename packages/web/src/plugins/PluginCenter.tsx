@@ -17,6 +17,12 @@ import {
   summarizePlugins,
   type PluginStatusFilter,
 } from './plugin-center-model.js'
+import {
+  formatBatchUpdateSummary,
+  formatUpdateResultDetail,
+  listManagedPlugins,
+  pluginPackageErrorText,
+} from './plugin-package-model.js'
 
 const PLUGIN_STATUS_TABS: PluginStatusFilter[] = ['all', 'views', 'enabled', 'disabled']
 
@@ -44,8 +50,22 @@ export function PluginCenter({
   const [statusFilter, setStatusFilter] = useState<PluginStatusFilter>('all')
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [installOpen, setInstallOpen] = useState(false)
+  const [updatingIds, setUpdatingIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [batchUpdate, setBatchUpdate] = useState<{ current: number; total: number } | null>(null)
   const [refreshTick, setRefreshTick] = useState(0)
   const refreshGeneration = useRef(0)
+  const updatingRef = useRef<Set<string>>(new Set())
+  const batchRunningRef = useRef(false)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  const managedPlugins = useMemo(() => listManagedPlugins(plugins), [plugins])
 
   const statusSummary = useMemo(() => summarizePlugins(plugins, groupedUi), [plugins, groupedUi])
   const pills = useMemo(
@@ -157,6 +177,89 @@ export function PluginCenter({
     }
   }
 
+  const handleUpdateSingle = async (plugin: PluginSummary): Promise<void> => {
+    if (!plugin.managed || batchRunningRef.current || updatingRef.current.has(plugin.id)) return
+    updatingRef.current.add(plugin.id)
+    setUpdatingIds(new Set(updatingRef.current))
+    const displayName = resolveLocalizedText(plugin.name, locale) || plugin.id
+    try {
+      const result = await pluginsApi.update(plugin.id)
+      if (!mountedRef.current) return
+      pushNotice({
+        type: 'notification',
+        level: 'info',
+        title: t('plugins.package.updateNoticeTitle'),
+        body: t('plugins.package.updateNoticeBody', {
+          name: displayName,
+          detail: formatUpdateResultDetail(result, t),
+        }),
+      })
+      handlePackageChanged()
+    } catch (err) {
+      if (!mountedRef.current) return
+      pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: t('plugins.package.updateFailedNoticeTitle'),
+        body: t('plugins.package.updateNoticeBody', {
+          name: displayName,
+          detail: pluginPackageErrorText(err, t('plugins.package.action.update'), t),
+        }),
+      })
+    } finally {
+      updatingRef.current.delete(plugin.id)
+      if (mountedRef.current) {
+        setUpdatingIds(new Set(updatingRef.current))
+      }
+    }
+  }
+
+  const handleUpdateAll = async (): Promise<void> => {
+    if (batchRunningRef.current || updatingRef.current.size > 0) return
+    const targets = listManagedPlugins(plugins)
+    if (targets.length === 0) return
+    batchRunningRef.current = true
+    let updated = 0
+    let unchanged = 0
+    const failures: string[] = []
+    try {
+      for (let i = 0; i < targets.length; i += 1) {
+        if (!mountedRef.current) break
+        const target = targets[i]!
+        updatingRef.current.add(target.id)
+        setUpdatingIds(new Set(updatingRef.current))
+        setBatchUpdate({ current: i + 1, total: targets.length })
+        try {
+          const result = await pluginsApi.update(target.id)
+          if (result.changed) updated += 1
+          else unchanged += 1
+        } catch (err) {
+          const displayName = resolveLocalizedText(target.name, locale) || target.id
+          failures.push(`${displayName}: ${pluginPackageErrorText(err, t('plugins.package.action.update'), t)}`)
+        } finally {
+          updatingRef.current.delete(target.id)
+          if (mountedRef.current) {
+            setUpdatingIds(new Set(updatingRef.current))
+          }
+        }
+      }
+      if (!mountedRef.current) return
+      handlePackageChanged()
+      const summary = formatBatchUpdateSummary({ updated, unchanged, failed: failures.length }, t)
+      pushNotice({
+        type: 'notification',
+        level: failures.length > 0 ? 'error' : 'info',
+        title: failures.length > 0 ? t('plugins.package.updateAllPartialTitle') : t('plugins.package.updateAllDoneTitle'),
+        body: failures.length > 0 ? `${summary} (${failures.join('; ')})` : summary,
+      })
+    } finally {
+      batchRunningRef.current = false
+      if (mountedRef.current) {
+        setBatchUpdate(null)
+      }
+    }
+  }
+
   const { isSplitActive, toggleSplit } = usePaneSplitToggle({
     isSplit,
     onCloseSplit,
@@ -173,16 +276,35 @@ export function PluginCenter({
       icon="puzzle"
       title={t('plugins.center.title')}
       headerActions={
-        <button
-          type="button"
-          className="btn btn-sm"
-          title={t('plugins.center.installTitle')}
-          aria-label={t('plugins.installPlugin')}
-          onClick={() => setInstallOpen(true)}
-        >
-          <HelmxIcon name="download" size={12} />
-          <span className="pane-action-label">{t('plugins.installPlugin')}</span>
-        </button>
+        <>
+          {managedPlugins.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={batchUpdate !== null || updatingIds.size > 0}
+              title={t('plugins.center.updateAllTitle')}
+              aria-label={t('plugins.center.updateAllAria')}
+              onClick={() => void handleUpdateAll()}
+            >
+              <HelmxIcon name="refresh-cw" size={12} className={batchUpdate !== null ? 'spin' : undefined} />
+              <span className="pane-action-label">
+                {batchUpdate !== null
+                  ? t('plugins.center.updatingAllProgress', { current: batchUpdate.current, total: batchUpdate.total })
+                  : t('plugins.center.updateAll', { count: managedPlugins.length })}
+              </span>
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-sm"
+            title={t('plugins.center.installTitle')}
+            aria-label={t('plugins.installPlugin')}
+            onClick={() => setInstallOpen(true)}
+          >
+            <HelmxIcon name="download" size={12} />
+            <span className="pane-action-label">{t('plugins.installPlugin')}</span>
+          </button>
+        </>
       }
       toolbar={
         <SystemCenterToolbar
@@ -207,6 +329,7 @@ export function PluginCenter({
               handleTogglePlugin(plugin, targetEnabled, options)
             }
             toggling={togglingId === selectedPlugin?.id}
+            externalUpdating={batchUpdate !== null || (selectedPlugin ? updatingIds.has(selectedPlugin.id) : false)}
             onPackageChanged={handlePackageChanged}
             onRemoved={() => openPluginTarget(undefined)}
             inline={inlineDrawer}
@@ -230,6 +353,9 @@ export function PluginCenter({
               onSelect={() => openPluginTarget(plugin.id)}
               onToggle={(enabled) => handleTogglePlugin(plugin, enabled)}
               toggling={togglingId === plugin.id}
+              onUpdate={plugin.managed !== undefined ? () => handleUpdateSingle(plugin) : undefined}
+              updating={updatingIds.has(plugin.id)}
+              updateDisabled={batchUpdate !== null || updatingIds.size > 0}
             />
           ))}
         </div>

@@ -5,7 +5,7 @@ import {
   pluginErrorStageLabel,
   type PluginUsageItem,
 } from './plugin-card-model.js'
-import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
+import type { HelmxLocale, PluginDoctorReport, PluginSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
@@ -24,11 +24,16 @@ import { useOptionalGroupedUi, useOptionalLocale, useOptionalNodes, useOptionalP
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { buildModelPickerControlCopy, useModelPickerControlAdapter } from '../conversation/model-picker-adapter.js'
 import {
+  detectPluginSourceKind,
+  extractDoctorReport,
   formatInstalledAt,
+  formatUpdateResultDetail,
+  isInstallSourceSubmittable,
   pluginPackageErrorText,
   pluginSourceBadgeLabel,
   pluginSourceDisplayText,
 } from './plugin-package-model.js'
+import { PluginDoctorChecks } from './PluginDoctorChecks.js'
 import {
   buildEnumConfigOptions,
   buildNodeConfigOptions,
@@ -58,6 +63,8 @@ export interface PluginDetailDrawerProps {
   onPackageChanged?: () => void
   /** 卸载成功后请求父级关闭抽屉（列表已无该插件）。 */
   onRemoved?: () => void
+  /** 外部（如插件中心全部更新或卡片快捷更新）正在更新，需同步锁定抽屉包操作。 */
+  externalUpdating?: boolean
   /** 显式指定是否内联渲染（便于测试与 SSR 统一断言） */
   inline?: boolean
 }
@@ -380,6 +387,7 @@ export function PluginDetailDrawer({
   toggling,
   onPackageChanged,
   onRemoved,
+  externalUpdating = false,
   inline = false,
 }: PluginDetailDrawerProps): React.JSX.Element {
   const storeLocale = useOptionalLocale()
@@ -395,6 +403,9 @@ export function PluginDetailDrawer({
   const [actionError, setActionError] = useState<string | null>(null)
   // 包管理互斥状态：idle | updating | removing（与启停 toggling 独立）
   const [packageOp, setPackageOp] = useState<'idle' | 'updating' | 'removing'>('idle')
+  const [editingSource, setEditingSource] = useState(false)
+  const [sourceDraft, setSourceDraft] = useState('')
+  const [updateDoctorReport, setUpdateDoctorReport] = useState<PluginDoctorReport | null>(null)
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false)
   // 409 plugin_in_use 占用确认：保存待确认的占用清单与目标插件
   const [inUseConfirm, setInUseConfirm] = useState<{ plugin: PluginSummary; usages: PluginUsageItem[] } | null>(null)
@@ -439,6 +450,9 @@ export function PluginDetailDrawer({
     setConfigError(null)
     setActionError(null)
     setPackageOp('idle')
+    setEditingSource(false)
+    setSourceDraft('')
+    setUpdateDoctorReport(null)
     setConfirmRemoveOpen(false)
     setInUseConfirm(null)
     if (open && plugin?.id) {
@@ -477,22 +491,22 @@ export function PluginDetailDrawer({
     }
   }
 
-  // 受管插件包：重新拉取安装来源最新版本并重载（源未变化时 changed=false，如实回显）。
+  // 受管插件包：重新拉取安装来源最新版本并重载（源未变化时 changed=false，如实回显）；展开换源时携带新来源。
   const handleUpdatePackage = async () => {
-    if (!plugin?.managed || packageOp !== 'idle') return
+    if (!plugin?.managed || packageOp !== 'idle' || externalUpdating) return
+    const nextSource = editingSource ? sourceDraft.trim() : undefined
+    if (editingSource && (nextSource === undefined || !isInstallSourceSubmittable(nextSource))) return
     const targetPlugin = plugin
     const generation = ++actionGeneration.current
     setPackageOp('updating')
     setActionError(null)
+    setUpdateDoctorReport(null)
     try {
-      const result = await pluginsApi.update(targetPlugin.id)
-      const versionLabel = result.record.version || t('plugins.package.unknownVersion')
-      const noticeBody = result.changed
-        ? t('plugins.package.updatedBody', {
-            version: versionLabel,
-            previous: result.previousVersion || t('plugins.package.unknownVersion'),
-          })
-        : t('plugins.package.unchangedBody', { version: versionLabel })
+      const result =
+        nextSource !== undefined
+          ? await pluginsApi.update(targetPlugin.id, { source: nextSource })
+          : await pluginsApi.update(targetPlugin.id)
+      const noticeBody = formatUpdateResultDetail(result, t)
       actions?.pushNotice({
         type: 'notification',
         level: 'info',
@@ -502,10 +516,15 @@ export function PluginDetailDrawer({
           detail: noticeBody,
         }),
       })
+      if (mountedRef.current && actionGeneration.current === generation) {
+        setEditingSource(false)
+        setSourceDraft('')
+      }
       onPackageChanged?.()
     } catch (err) {
       if (mountedRef.current && actionGeneration.current === generation) {
         setActionError(pluginPackageErrorText(err, t('plugins.package.action.update'), t))
+        setUpdateDoctorReport(extractDoctorReport(err))
       }
     } finally {
       if (mountedRef.current && actionGeneration.current === generation) {
@@ -758,16 +777,68 @@ export function PluginDetailDrawer({
                       <span>{t('plugins.package.sectionTitle')}</span>
                     </h4>
                     <div className="plugin-package-meta">
-                      <div className="form-grid">
+                      <div className="form-grid form-grid-align-start">
                         <span className="form-grid-label"><span>{t('plugins.package.sourceLabel')}</span></span>
-                        <span className="form-grid-value">
-                          <span className="badge badge-neutral mono" data-source-kind={plugin.managed.source.kind}>
-                            {pluginSourceBadgeLabel(plugin.managed.source, t)}
-                          </span>
-                          <span className="mono selectable plugin-package-source-text">
-                            {pluginSourceDisplayText(plugin.managed.source)}
-                          </span>
-                        </span>
+                        <div className="form-grid-value">
+                          <div className="plugin-package-source-row">
+                            <span className="badge badge-neutral mono" data-source-kind={plugin.managed.source.kind}>
+                              {pluginSourceBadgeLabel(plugin.managed.source, t)}
+                            </span>
+                            <span className="mono selectable plugin-package-source-text">
+                              {pluginSourceDisplayText(plugin.managed.source)}
+                            </span>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs"
+                              disabled={packageOp !== 'idle' || externalUpdating}
+                              onClick={() => {
+                                if (editingSource) {
+                                  setEditingSource(false)
+                                  setSourceDraft('')
+                                } else {
+                                  setEditingSource(true)
+                                  setSourceDraft(plugin.managed!.source.raw)
+                                }
+                              }}
+                            >
+                              {editingSource ? t('common.cancel') : t('plugins.package.changeSource')}
+                            </button>
+                          </div>
+                          {editingSource && (() => {
+                            const draftTrimmed = sourceDraft.trim()
+                            const draftHint = detectPluginSourceKind(draftTrimmed, t)
+                            const draftSubmittable = draftTrimmed !== '' && isInstallSourceSubmittable(draftTrimmed)
+                            return (
+                              <div className="plugin-package-source-editor">
+                                <input
+                                  className="input mono"
+                                  type="text"
+                                  value={sourceDraft}
+                                  placeholder={t('plugins.package.newSourcePlaceholder')}
+                                  aria-label={t('plugins.package.changeSource')}
+                                  spellCheck={false}
+                                  autoComplete="off"
+                                  disabled={packageOp !== 'idle' || externalUpdating}
+                                  onChange={(e) => setSourceDraft(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && draftSubmittable) {
+                                      e.preventDefault()
+                                      void handleUpdatePackage()
+                                    }
+                                  }}
+                                />
+                                {draftTrimmed !== '' && (
+                                  <span
+                                    className={`plugin-source-hint${draftHint.kind === 'unknown' ? ' is-unknown' : ''}`}
+                                    data-source-kind={draftHint.kind}
+                                  >
+                                    {draftHint.label}
+                                  </span>
+                                )}
+                              </div>
+                            )
+                          })()}
+                        </div>
                       </div>
                       {plugin.managed.installedVersion !== '' && (
                         <div className="form-grid">
@@ -783,15 +854,38 @@ export function PluginDetailDrawer({
                       )}
                     </div>
                     <div className="plugin-package-actions">
-                      <button className="btn btn-sm" disabled={packageOp !== 'idle'} onClick={() => void handleUpdatePackage()}>
-                        <HelmxIcon name="refresh-cw" size={12} />
-                        <span>{packageOp === 'updating' ? t('plugins.package.updating') : t('plugins.package.checkUpdates')}</span>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        disabled={
+                          packageOp !== 'idle' ||
+                          externalUpdating ||
+                          (editingSource && !isInstallSourceSubmittable(sourceDraft))
+                        }
+                        onClick={() => void handleUpdatePackage()}
+                      >
+                        <HelmxIcon
+                          name="refresh-cw"
+                          size={12}
+                          className={packageOp === 'updating' || externalUpdating ? 'spin' : undefined}
+                        />
+                        <span>
+                          {packageOp === 'updating' || externalUpdating
+                            ? t('plugins.package.updating')
+                            : t('plugins.package.updatePlugin')}
+                        </span>
                       </button>
-                      <button className="btn btn-danger btn-sm" disabled={packageOp !== 'idle'} onClick={() => setConfirmRemoveOpen(true)}>
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        disabled={packageOp !== 'idle' || externalUpdating}
+                        onClick={() => setConfirmRemoveOpen(true)}
+                      >
                         <HelmxIcon name="trash-2" size={12} />
                         <span>{packageOp === 'removing' ? t('plugins.package.uninstalling') : t('plugins.package.uninstallPlugin')}</span>
                       </button>
                     </div>
+                    {updateDoctorReport && <PluginDoctorChecks report={updateDoctorReport} />}
                   </div>
                 )}
 

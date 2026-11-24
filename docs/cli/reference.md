@@ -194,7 +194,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx plugins install <source> [--enable]`** — 从 npm/Git/本地路径安装。source 四种写法：`npm:<spec>`、`git:<repo>[@<ref>]`（可含子目录）、HTTPS Git URL（`#<ref>` 可选）、本地路径（相对 Hub 主机解析）。对同一规范本地目录重复执行 `install` 会原地幂等热更新（保留既有 `ctx.doc` 数据，且未显式 `enable: false` 时确保启用）；不同来源试图覆盖既有插件 ID 仍返回 `409 plugin_package_already_installed`。**安装并启用即在 Hub 进程内执行可信插件代码（无沙箱），仅装可信来源**。
 
-**`helmx plugins update <id>` / `helmx plugins remove <id> [--yes]`** — 更新（源未变时 `changed: false` 幂等回报）与移除（破坏性：停用 + 清理 Hub 主机安装目录与记录；TTY 需输入 yes，非交互环境无 `--yes` 显式拒绝 `confirmation_required`）。
+**`helmx plugins update [<id>] [--all] [--source <source>]` / `helmx plugins remove <id> [--yes]`** — 更新（源与目录内容未变时跳过热重载并如实回报 `changed: false`；`--all` 顺序更新全部受管外部插件；`--source <source>` 支持对锁版本/换源插件保留持久化数据无损升版）与移除（破坏性：停用 + 清理 Hub 主机安装目录与记录；TTY 需输入 yes，非交互环境无 `--yes` 显式拒绝 `confirmation_required`）。
 
 **`helmx actions list`** — 全部插件动作清单（`GET /api/actions`）。
 

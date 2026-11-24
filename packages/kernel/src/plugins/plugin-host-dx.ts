@@ -35,6 +35,7 @@ interface DxReloadHostPort extends ReloadablePluginHost {
   list(): PluginSummary[];
   enable(pluginId: string): Promise<void>;
   reloadExternalPlugin(pluginId: string, options?: { doctor?: boolean }): Promise<PluginReloadResult>;
+  notifyPluginChanged(pluginId: string): void;
 }
 
 export interface DxCoordinatorDeps {
@@ -194,6 +195,9 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
         details: { pluginId },
       });
       return { summary };
+    },
+    notifyManagedPluginChanged: (pluginId) => {
+      deps.host.notifyPluginChanged(pluginId);
     },
     removeManagedPlugin: async (pluginId) => {
       const current = deps.host.list().find((s) => s.id === pluginId);

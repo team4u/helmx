@@ -563,3 +563,90 @@ test('受管包跨重启恢复：config.json.pluginPackages 持久驱动 managed
     await second.app.close()
   }
 })
+
+test('受管包 SSE 事件与换源升版：install/update 最终 plugin.changed 携带完整 managed，无变更返回 changed:false，传 source 跨源升版保留 ctx.doc', { timeout: 60_000 }, async (t) => {
+  const srcParent = useTempDir(t, 'helmx-pkg-sse-update-')
+  const writeStatefulPkg = (parent: string, version: string, tag: string): string => {
+    const dir = join(parent, 'sse-up-app')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'plugin.json'), JSON.stringify({ id: 'sse-up-app', version, main: 'index.mjs' }, null, 2))
+    writeFileSync(
+      join(dir, 'index.mjs'),
+      `export default {
+  id: 'sse-up-app',
+  version: ${JSON.stringify(version)},
+  definePlugin(ctx) {
+    const notes = ctx.doc('notes', { items: [] }, { public: true })
+    ctx.action({
+      id: 'add_note',
+      description: 'Append note',
+      inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false },
+      outputSchema: { type: 'object', properties: { count: { type: 'number' }, tag: { type: 'string' } }, required: ['count', 'tag'], additionalProperties: false },
+      async handler(input) {
+        notes.update((cur) => ({ items: [...cur.items, input.text] }))
+        await notes.flush()
+        return { count: notes.get().items.length, tag: ${JSON.stringify(tag)} }
+      },
+    })
+  },
+}
+`,
+    )
+    return dir
+  }
+
+  const events: Array<{ id?: string; version?: string; managed?: { installedVersion?: string; source?: { raw?: string } } }> = []
+  const off = env.kernel.onEvent('plugin.changed', (payload) => {
+    const plugin = (payload as { plugin?: { id?: string; version?: string; managed?: { installedVersion?: string; source?: { raw?: string } } } })?.plugin
+    if (plugin?.id === 'sse-up-app') events.push(plugin)
+  })
+
+  try {
+    const srcV1 = writeStatefulPkg(join(srcParent, 'v1'), '1.0.0', 'v1')
+    const installed = await env.call('POST', '/api/plugins/install', { source: srcV1, enable: true })
+    assert.equal(installed.status, 200)
+    assert.equal(events.at(-1)?.managed?.installedVersion, '1.0.0')
+    assert.equal(events.at(-1)?.managed?.source?.raw, srcV1)
+
+    // Save a doc item before update
+    const added = await env.call('POST', '/api/actions/sse-up-app/add_note', { input: { text: 'keep-me' } })
+    assert.equal(added.status, 200)
+    assert.deepEqual(added.body, { count: 1, tag: 'v1' })
+
+    // No-op update -> changed: false
+    const noop = await env.call('POST', '/api/plugins/sse-up-app/update')
+    assert.equal(noop.status, 200)
+    assert.equal(noop.body.changed, false)
+
+    // Same-source bump -> changed: true + final plugin.changed carries updated managed.installedVersion
+    writeStatefulPkg(join(srcParent, 'v1'), '1.1.0', 'v1.1')
+    const eventsBeforeV11 = events.length
+    const updated11 = await env.call('POST', '/api/plugins/sse-up-app/update')
+    assert.equal(updated11.status, 200)
+    assert.equal(updated11.body.changed, true)
+    assert.equal(events.slice(eventsBeforeV11).at(-1)?.managed?.installedVersion, '1.1.0')
+
+    // Invalid update bodies -> 400
+    assert.equal((await env.call('POST', '/api/plugins/sse-up-app/update', { extra: true })).status, 400)
+    assert.equal((await env.call('POST', '/api/plugins/sse-up-app/update', { source: '' })).status, 400)
+
+    // Cross-source upgrade via { source: srcV2 } -> preserves ctx.doc data and updates managed.source
+    const srcV2 = writeStatefulPkg(join(srcParent, 'v2'), '2.0.0', 'v2')
+    const eventsBeforeV2 = events.length
+    const switched = await env.call('POST', '/api/plugins/sse-up-app/update', { source: srcV2 })
+    assert.equal(switched.status, 200)
+    assert.equal(switched.body.changed, true)
+    assert.equal(switched.body.record.version, '2.0.0')
+    assert.equal(switched.body.record.source.raw, srcV2)
+    assert.equal(events.slice(eventsBeforeV2).at(-1)?.managed?.installedVersion, '2.0.0')
+    assert.equal(events.slice(eventsBeforeV2).at(-1)?.managed?.source?.raw, srcV2)
+
+    const docAfter = await env.call('GET', '/api/plugins/sse-up-app/docs/notes')
+    assert.equal(docAfter.status, 200)
+    assert.deepEqual(docAfter.body.value, { items: ['keep-me'] })
+
+    await env.call('POST', '/api/plugins/sse-up-app/remove')
+  } finally {
+    off()
+  }
+})

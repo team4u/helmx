@@ -5,7 +5,7 @@
  * doctor 结构化检查结果的展示条目化、HTTP 错误诊断文案。
  * 仅做前端输入引导；最终解析与校验由 Hub 安装器裁决。
  */
-import type { HelmxLocale, PluginDoctorReport, PluginPackageSource } from '@helmx/protocol/browser'
+import type { HelmxLocale, PluginDoctorReport, PluginPackageSource, PluginSummary, PluginUpdateResult } from '@helmx/protocol/browser'
 import { isAbsoluteTargetPath } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
@@ -173,4 +173,36 @@ function isDoctorReportShape(value: unknown): value is PluginDoctorReport {
     const err = c.error as Record<string, unknown>
     return typeof err.code === 'string' && typeof err.message === 'string'
   })
+}
+
+/** 筛选出由包管理器托管、支持更新与卸载的外部插件。 */
+export function listManagedPlugins(plugins: readonly PluginSummary[]): PluginSummary[] {
+  return plugins.filter((plugin) => plugin.managed !== undefined)
+}
+
+/** 格式化单插件更新结果详情文案（区分真实升级与源无变化）。 */
+export function formatUpdateResultDetail(
+  result: PluginUpdateResult,
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
+  const versionLabel = result.record.version || t('plugins.package.unknownVersion')
+  return result.changed
+    ? t('plugins.package.updatedBody', {
+        version: versionLabel,
+        previous: result.previousVersion || t('plugins.package.unknownVersion'),
+      })
+    : t('plugins.package.unchangedBody', { version: versionLabel })
+}
+
+/** 格式化批量更新汇总文案（仅拼接非零项，全零兜底 0 个无变化）。 */
+export function formatBatchUpdateSummary(
+  counts: { updated: number; unchanged: number; failed: number },
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
+  const parts: string[] = []
+  if (counts.updated > 0) parts.push(t('plugins.package.batchUpdatedCount', { count: counts.updated }))
+  if (counts.unchanged > 0) parts.push(t('plugins.package.batchUnchangedCount', { count: counts.unchanged }))
+  if (counts.failed > 0) parts.push(t('plugins.package.batchFailedCount', { count: counts.failed }))
+  if (parts.length === 0) return t('plugins.package.batchUnchangedCount', { count: 0 })
+  return parts.join(t('plugins.desc.listSeparator'))
 }

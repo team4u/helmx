@@ -371,6 +371,7 @@ function makeTestPackageManager(dataDir: string, pluginId: string, runner: Packa
       async updateManagedPlugin() {
         return { summary: makePluginSummary({ id: pluginId, name: 'x', enabled: false }) }
       },
+      notifyManagedPluginChanged() {},
       async removeManagedPlugin() {
         return { wasEnabled: false }
       },

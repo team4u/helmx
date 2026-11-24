@@ -17,6 +17,9 @@ export interface PluginCardProps {
   onSelect: () => void
   onToggle: (enabled: boolean) => Promise<void> | void
   toggling?: boolean
+  onUpdate?: () => Promise<void> | void
+  updating?: boolean
+  updateDisabled?: boolean
 }
 
 /**
@@ -33,6 +36,9 @@ export function PluginCard({
   onSelect,
   onToggle,
   toggling = false,
+  onUpdate,
+  updating = false,
+  updateDisabled = false,
 }: PluginCardProps): React.JSX.Element {
   const storeLocale = useOptionalLocale()
   const groupedUi = useOptionalGroupedUi()
@@ -170,6 +176,24 @@ export function PluginCard({
         </div>
 
         <div className="plugin-card-actions">
+          {plugin.managed !== undefined && onUpdate !== undefined && (
+            <button
+              type="button"
+              className="btn btn-xs plugin-card-update-btn"
+              disabled={updating || updateDisabled}
+              title={updating ? t('plugins.package.updating') : t('plugins.card.updateTitle')}
+              aria-label={t('plugins.card.updateAria', { name })}
+              onClick={(e) => {
+                e.stopPropagation()
+                void onUpdate()
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+              }}
+            >
+              <HelmxIcon name="refresh-cw" size={10} className={updating ? 'spin' : undefined} />
+            </button>
+          )}
           {primaryScreen !== null && actions !== null && (
             <>
               <button

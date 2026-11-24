@@ -183,7 +183,8 @@
 }
 
 .plugin-card-open-btn,
-.plugin-card-split-btn {
+.plugin-card-split-btn,
+.plugin-card-update-btn {
   color: var(--fg-muted);
 }
 
@@ -495,8 +496,21 @@
   gap: 6px;
 }
 
+.plugin-package-source-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.plugin-package-source-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 .plugin-package-source-text {
-  margin-left: 6px;
   font-size: 11.5px;
   color: var(--fg-secondary);
   word-break: break-all;
