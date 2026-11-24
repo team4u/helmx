@@ -4,13 +4,13 @@ import type * as ts from 'typescript'
 export interface HygieneViolation {
   file: string
   line: number
-  rule: 'timeout-missing' | 'skip-without-reason' | 'suite-timeout-env' | 'unsafe-dom-assert'
+  rule: 'timeout-missing' | 'skip-without-reason' | 'suite-timeout-env' | 'unsafe-dom-assert' | 'hook-timeout-missing'
   message: string
 }
 
 export interface HygieneReport {
   violations: HygieneViolation[]
-  stats: { testCalls: number; skipCalls: number; todoCalls: number; subtestCalls: number }
+  stats: { testCalls: number; skipCalls: number; todoCalls: number; subtestCalls: number; hookCalls: number }
 }
 
 export declare function parseTestSourceFile(tsModule: typeof ts, filePath: string, source: string): ts.SourceFile
