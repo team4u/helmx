@@ -28,16 +28,16 @@
   position: relative;
 }
 
-.sidebar-overview-open-btn.is-active,
-.sidebar-overview-open-btn.is-active:hover:not(:disabled) {
+.btn.sidebar-overview-open-btn.is-active,
+.btn.sidebar-overview-open-btn.is-active:hover:not(:disabled) {
   background: var(--nav-active-bg);
   color: var(--nav-active-fg);
   border-color: transparent;
   box-shadow: var(--seg-edge);
 }
 
-.sidebar-overview-open-btn.is-split,
-.sidebar-overview-open-btn.is-split:hover:not(:disabled) {
+.btn.sidebar-overview-open-btn.is-split,
+.btn.sidebar-overview-open-btn.is-split:hover:not(:disabled) {
   background: var(--nav-split-bg);
   color: var(--fg);
   border-color: var(--border);
@@ -131,53 +131,37 @@
   flex-shrink: 0;
 }
 
-.sidebar-header-icon-btn {
+/* 侧栏分组头 24px 紧凑图标按钮：叠加于 IconButton(.btn.btn-ghost.btn-icon-xs)，
+ * 用双类选择器在级联顺序（navigation.css 先于 primitives.css）下无 !important 保持 24px 尺寸；
+ * 普通开关激活态由 primitives.css .btn-ghost.is-active / .btn-icon-xs.is-active 统一提供。 */
+.btn.sidebar-header-icon-btn {
   width: 24px;
   height: 24px;
-  padding: 0;
-  border: none;
   border-radius: var(--radius-xs);
-  background: transparent;
   color: var(--fg-muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
 }
 
-.sidebar-header-icon-btn:hover:not(:disabled),
-.sidebar-header-icon-btn[aria-expanded="true"] {
+.btn.sidebar-header-icon-btn:hover:not(:disabled),
+.btn.sidebar-header-icon-btn[aria-expanded="true"] {
   background: var(--bg-hover);
   color: var(--fg);
 }
 
-.sidebar-header-icon-btn:disabled {
-  opacity: 0.48;
-  cursor: not-allowed;
-}
-
-.sidebar-header-icon-btn.is-active {
-  background: var(--accent-bg);
-  color: var(--accent);
-}
-
-.sidebar-header-icon-btn.sidebar-new-topic-btn.is-active,
-.sidebar-header-icon-btn.sidebar-new-topic-btn.is-active:hover {
+.btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-active,
+.btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-active:hover:not(:disabled) {
   background: var(--nav-active-bg);
   color: var(--nav-active-fg);
   box-shadow: var(--seg-edge);
 }
 
-.sidebar-header-icon-btn.sidebar-new-topic-btn.is-split,
-.sidebar-header-icon-btn.sidebar-new-topic-btn.is-split:hover {
+.btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-split,
+.btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-split:hover:not(:disabled) {
   background: var(--nav-split-bg);
   color: var(--fg);
   box-shadow: inset 0 0 0 1px var(--border);
 }
 
-.sidebar-header-icon-btn:focus-visible {
+.btn.sidebar-header-icon-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -702,8 +686,7 @@
   color: var(--fg);
 }
 
-.sidebar-section-plus-slot,
-.sidebar-section-new-topic-btn {
+.sidebar-section-plus-slot {
   width: 24px;
   height: 24px;
   padding: 0;
@@ -715,25 +698,32 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-}
-
-.sidebar-section-plus-slot {
   margin-left: auto;
 }
 
-.sidebar-section-new-topic-btn {
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+.btn.sidebar-section-new-topic-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-xs);
+  color: var(--fg-subtle);
 }
 
-.sidebar-section-new-topic-btn:hover {
+.btn.sidebar-section-new-topic-btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--fg);
 }
 
-.sidebar-section-new-topic-btn:focus-visible {
+.btn.sidebar-section-new-topic-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+@media (max-width: 860px) {
+  .btn.sidebar-header-icon-btn,
+  .btn.sidebar-section-new-topic-btn {
+    width: 28px;
+    height: 28px;
+  }
 }
 
 .sidebar-group-by-item {

@@ -16,6 +16,7 @@ import type { ReactNode } from 'react'
 import { usePluginContext } from './plugin-context.js'
 import { usePluginTranslator } from './i18n.js'
 import { uiCopy } from './ui-copy.js'
+import { Button } from './ui/Button.js'
 
 export interface ToolCallDetailsProps {
   /** Raw input of the tool call (strings pass through, objects are pretty-printed as JSON). */
@@ -69,9 +70,9 @@ export function ToolCallDetails({ input, result, artifactRef, defaultOpen = fals
           </div>
         ) : null}
         {artifactRef !== undefined && artifactRef !== '' ? (
-          <button type="button" className="btn btn-xs" onClick={() => ctx.openArtifact(artifactRef)}>
+          <Button size="xs" onClick={() => ctx.openArtifact(artifactRef)}>
             {t(uiCopy.openFullArtifact)} #{artifactRef}
-          </button>
+          </Button>
         ) : null}
       </div>
     </details>

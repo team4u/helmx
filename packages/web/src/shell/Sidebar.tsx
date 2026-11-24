@@ -516,7 +516,7 @@ export function Sidebar({
                 size="sm"
                 icon={quietNotifyEnabled && readBrowserNotificationPermission() === 'granted' ? 'bell' : 'bell-off'}
                 aria-label={quietNotifyTooltip}
-                aria-pressed={quietNotifyEnabled}
+                active={quietNotifyEnabled}
                 onClick={() => {
                   void setQuietNotify(!quietNotifyEnabled)
                 }}

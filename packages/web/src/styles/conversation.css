@@ -1588,25 +1588,6 @@ pre {
   color: var(--fg-muted);
 }
 
-/* 展开体内轻量文字按钮（展开剩余/展开全部/原始数据） */
-.trace-inline-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  width: fit-content;
-  font-size: 11.5px;
-  color: var(--fg-muted);
-  background: transparent;
-  border: none;
-  padding: 2px 4px;
-  cursor: pointer;
-  border-radius: var(--radius-xs);
-}
-.trace-inline-btn:hover {
-  color: var(--fg);
-  background: var(--bg-hover);
-}
-
 /* 行差异表：旧/新行号 + 符号 + 内容；待执行片段形态无行号列 */
 .trace-diff {
   display: flex;
