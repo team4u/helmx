@@ -28,6 +28,7 @@ import {
   DropdownMenuPortal,
   DropdownMenuTrigger,
   HelmxIcon,
+  IconButton,
   SearchBox,
   Stack,
   Tooltip,
@@ -131,15 +132,15 @@ function SidebarNewTopicButton({
     const label = t('shell.agents.newTopicUnder', { label: singleCandidate.label })
     return (
       <Tooltip content={label} side="top">
-        <button
-          type="button"
+        <IconButton
+          variant="ghost"
+          size="xs"
           className={buttonClassName}
+          icon={<HelmxIcon name="plus" size={13} />}
           aria-label={t('conv.pane.newTopic')}
           aria-current={standbyPresence.active ? 'page' : undefined}
           onClick={() => onSelectProfile(singleCandidate.profileId)}
-        >
-          <HelmxIcon name="plus" size={13} />
-        </button>
+        />
       </Tooltip>
     )
   }
@@ -148,15 +149,15 @@ function SidebarNewTopicButton({
     <DropdownMenu>
       <Tooltip content={t('conv.pane.newTopic')} side="top">
         <DropdownMenuTrigger asChild>
-          <button
-            type="button"
+          <IconButton
+            variant="ghost"
+            size="xs"
             className={buttonClassName}
+            icon={<HelmxIcon name="plus" size={13} />}
             aria-label={t('conv.pane.newTopic')}
             aria-haspopup="menu"
             aria-current={standbyPresence.active ? 'page' : undefined}
-          >
-            <HelmxIcon name="plus" size={13} />
-          </button>
+          />
         </DropdownMenuTrigger>
       </Tooltip>
       <DropdownMenuPortal>
@@ -983,11 +984,13 @@ export function SidebarConversationList({
             content={filterOpen ? t('shell.agents.collapseFilters') : t('shell.sidebar.overviewFilter')}
             side="top"
           >
-            <button
-              type="button"
-              className={`sidebar-header-icon-btn${filterOpen ? ' is-active' : ''}`}
+            <IconButton
+              variant="ghost"
+              size="xs"
+              className="sidebar-header-icon-btn"
+              icon={<HelmxIcon name="list-filter" size={13} />}
               aria-label={t('shell.sidebar.overviewFilter')}
-              aria-pressed={filterOpen}
+              active={filterOpen}
               onClick={() => {
                 if (filterOpen) {
                   setSearch('')
@@ -996,24 +999,22 @@ export function SidebarConversationList({
                   setSearchOpen(true)
                 }
               }}
-            >
-              <HelmxIcon name="list-filter" size={13} />
-            </button>
+            />
           </Tooltip>
           <Tooltip
             content={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
             side="top"
           >
-            <button
-              type="button"
-              className={`sidebar-header-icon-btn sidebar-batch-toggle${batch.batchMode ? ' is-active' : ''}`}
+            <IconButton
+              variant="ghost"
+              size="xs"
+              className="sidebar-header-icon-btn sidebar-batch-toggle"
+              icon={<HelmxIcon name="check-square" size={13} />}
               aria-label={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
-              aria-pressed={batch.batchMode}
+              active={batch.batchMode}
               disabled={batch.deleting || archiving}
               onClick={batch.toggleBatchMode}
-            >
-              <HelmxIcon name="check-square" size={13} />
-            </button>
+            />
           </Tooltip>
           <SidebarNewTopicButton
             candidates={newTopicCandidates}
@@ -1162,17 +1163,17 @@ export function SidebarConversationList({
                     </button>
                     {group.kind === 'profile' && group.canCreateConversation === true && group.profileId !== undefined && (
                       <Tooltip content={t('shell.agents.newTopicUnder', { label: group.label })} side="top">
-                        <button
-                          type="button"
+                        <IconButton
+                          variant="ghost"
+                          size="xs"
                           className="sidebar-section-new-topic-btn"
+                          icon={<HelmxIcon name="plus" size={13} />}
                           aria-label={t('shell.agents.newTopicUnder', { label: group.label })}
                           onClick={(e) => {
                             e.stopPropagation()
                             openStandby(group.profileId!)
                           }}
-                        >
-                          <HelmxIcon name="plus" size={13} />
-                        </button>
+                        />
                       </Tooltip>
                     )}
                   </div>

@@ -101,10 +101,14 @@ const DIFF_FOLD_ROWS = 32
 function DiffFoldButton({ hidden, expanded, onToggle }: { hidden: number; expanded: boolean; onToggle: () => void }): ReactNode {
   const { t } = useWebLocale()
   return (
-    <button type="button" className="trace-inline-btn trace-diff-more" onClick={onToggle}>
-      <HelmxIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
+    <Button
+      variant="inline"
+      className="trace-diff-more"
+      icon={expanded ? 'chevron-up' : 'chevron-down'}
+      onClick={onToggle}
+    >
       {expanded ? t('common.collapse') : t('conv.diff.expandRemaining', { count: hidden })}
-    </button>
+    </Button>
   )
 }
 
@@ -189,10 +193,9 @@ function TruncatedOutputFooter({
         <span className="callout-text">
           {t('conv.trunc.fetchFailed', { error: resultFetch.error ?? t('conv.trunc.unknownError') })}
         </span>
-        <button type="button" className="trace-inline-btn" onClick={resultFetch.load}>
-          <HelmxIcon name="rotate-ccw" size={11} />
+        <Button variant="inline" icon="rotate-ccw" onClick={resultFetch.load}>
           {t('conv.trunc.retryFetch')}
-        </button>
+        </Button>
       </div>
     )
   }
@@ -208,19 +211,14 @@ function TruncatedOutputFooter({
         {hiddenNote !== undefined ? `${hiddenNote} · ${note}` : note}
         {tool.artifactRef !== undefined ? t('conv.trunc.spillNote') : ''}
       </span>
-      <button
-        type="button"
-        className="trace-inline-btn"
-        disabled={resultFetch.phase === 'loading'}
+      <Button
+        variant="inline"
+        icon="download"
+        pending={resultFetch.phase === 'loading'}
         onClick={resultFetch.load}
       >
-        <HelmxIcon
-          name={resultFetch.phase === 'loading' ? 'loader' : 'download'}
-          size={11}
-          className={resultFetch.phase === 'loading' ? 'spin-slow' : undefined}
-        />
         {resultFetch.phase === 'loading' ? t('conv.trunc.fetchingFullText') : t('conv.trunc.expandFullText', { total })}
-      </button>
+      </Button>
     </div>
   )
 }
@@ -274,10 +272,14 @@ function RawToolData({ tool, resultFetch, defaultOpen = false }: { tool: ToolTra
   if (inputJson === undefined && tool.resultText === undefined && metaJson === undefined) return null
   return (
     <div className="trace-raw">
-      <button type="button" className="trace-inline-btn" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
+      <Button
+        variant="inline"
+        icon={open ? 'chevron-down' : 'chevron-right'}
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
         {t('conv.raw.toggle')}
-      </button>
+      </Button>
       {open ? (
         <div className="trace-raw-body">
           {inputJson !== undefined ? (
@@ -432,10 +434,13 @@ function WriteToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
           </div>
           <SyntaxCode code={expanded ? data.content : slice!.visible} language={data.language} />
           {foldable ? (
-            <button type="button" className="trace-inline-btn" onClick={() => setExpanded((v) => !v)}>
-              <HelmxIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
+            <Button
+              variant="inline"
+              icon={expanded ? 'chevron-up' : 'chevron-down'}
+              onClick={() => setExpanded((v) => !v)}
+            >
               {expanded ? t('common.collapse') : t('conv.tool.expandAll', { count: data.lineCount! })}
-            </button>
+            </Button>
           ) : null}
         </div>
       )}
@@ -490,10 +495,13 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
               hiddenNote={foldable && !expanded ? t('conv.tool.collapsedBelow', { count: slice.hiddenLines }) : undefined}
             />
           ) : foldable ? (
-            <button type="button" className="trace-inline-btn" onClick={() => setExpanded((v) => !v)}>
-              <HelmxIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
+            <Button
+              variant="inline"
+              icon={expanded ? 'chevron-up' : 'chevron-down'}
+              onClick={() => setExpanded((v) => !v)}
+            >
               {expanded ? t('common.collapse') : t('conv.tool.expandAll', { count: slice.totalLines })}
-            </button>
+            </Button>
           ) : null}
           <span className="trace-tool-note">{t('conv.read.headPreviewNote')}</span>
         </>
@@ -524,10 +532,13 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
               hiddenNote={foldable && !expanded ? t('conv.tool.collapsedBelow', { count: slice.hiddenLines }) : undefined}
             />
           ) : foldable ? (
-            <button type="button" className="trace-inline-btn" onClick={() => setExpanded((v) => !v)}>
-              <HelmxIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
+            <Button
+              variant="inline"
+              icon={expanded ? 'chevron-up' : 'chevron-down'}
+              onClick={() => setExpanded((v) => !v)}
+            >
               {expanded ? t('common.collapse') : t('conv.tool.expandAll', { count: slice.totalLines })}
-            </button>
+            </Button>
           ) : null}
         </div>
       )}
@@ -586,10 +597,13 @@ function BashToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
           ) : slice.hiddenLines > 0 ? (
             <div className="trace-out-foot">
               {!expanded ? <span className="trace-tool-note">{t('conv.tool.collapsedAbove', { count: slice.hiddenLines })}</span> : null}
-              <button type="button" className="trace-inline-btn" onClick={() => setExpanded((value) => !value)}>
-                <HelmxIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
+              <Button
+                variant="inline"
+                icon={expanded ? 'chevron-up' : 'chevron-down'}
+                onClick={() => setExpanded((value) => !value)}
+              >
                 {expanded ? t('common.collapse') : t('conv.tool.expandAll', { count: slice.totalLines })}
-              </button>
+              </Button>
             </div>
           ) : null}
         </>
@@ -645,10 +659,13 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
               hiddenNote={slice.hiddenLines > 0 && !resultExpanded ? t('conv.tool.collapsedBelow', { count: slice.hiddenLines }) : undefined}
             />
           ) : slice.hiddenLines > 0 ? (
-            <button type="button" className="trace-inline-btn" onClick={() => setResultExpanded((value) => !value)}>
-              <HelmxIcon name={resultExpanded ? 'chevron-up' : 'chevron-down'} size={11} />
+            <Button
+              variant="inline"
+              icon={resultExpanded ? 'chevron-up' : 'chevron-down'}
+              onClick={() => setResultExpanded((value) => !value)}
+            >
               {resultExpanded ? t('common.collapse') : t('conv.tool.expandAll', { count: slice.totalLines })}
-            </button>
+            </Button>
           ) : null}
         </>
       ) : (

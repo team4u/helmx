@@ -40,6 +40,7 @@ import { MonoId } from '../src/ui/MonoId.js'
 import { Select, MultiSelect } from '../src/ui/Select.js'
 import { Switch } from '../src/ui/Switch.js'
 import { Checkbox } from '../src/ui/Checkbox.js'
+import { ToolCallDetails } from '../src/tool-details.js'
 import { PluginClientContext } from '../src/plugin-context.js'
 
 const e = React.createElement
@@ -480,6 +481,20 @@ test('Button and IconButton: variants, sizes, pending busy state, and required a
   const iconBtnFallbackAria = renderToString(e(IconButton, { icon: 'x', label: '   ', 'aria-label': 'Close' }))
   assert.match(iconBtnFallbackAria, /aria-label="Close"/)
   assert.doesNotMatch(iconBtnFallbackAria, /title="/)
+  assert.doesNotMatch(iconBtnFallbackAria, /aria-pressed=/)
+
+  const inlineBtn = renderToString(e(Button, { variant: 'inline', icon: 'chevron-down' }, 'Expand'))
+  assert.match(inlineBtn, /class="btn btn-inline"/)
+  assert.match(inlineBtn, /width="11"/)
+  assert.match(inlineBtn, /<span>Expand<\/span>/)
+
+  const activeToggle = renderToString(e(IconButton, { icon: 'list-filter', label: 'Filter', size: 'xs', active: true }))
+  assert.match(activeToggle, /class="btn btn-ghost btn-icon-xs is-active"/)
+  assert.match(activeToggle, /aria-pressed="true"/)
+
+  const inactiveToggle = renderToString(e(IconButton, { icon: 'list-filter', label: 'Filter', size: 'xs', active: false }))
+  assert.match(inactiveToggle, /class="btn btn-ghost btn-icon-xs"/)
+  assert.match(inactiveToggle, /aria-pressed="false"/)
 
   assert.throws(
     () => renderToString(e(IconButton, { icon: 'x', label: '' })),
@@ -496,6 +511,49 @@ test('Button and IconButton: variants, sizes, pending busy state, and required a
     /non-empty/,
     'IconButton must reject whitespace-only aria-label',
   )
+})
+
+test('ToolCallDetails: bootstraps artifact trigger via SDK Button size="xs" (SSR)', { timeout: 60_000 }, () => {
+  const pluginCtx = {
+    pluginId: 'builtin:workflow',
+    callAction: async () => ({}),
+    fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
+    submitInput: async () => {},
+    openScreen: () => {},
+    openSplitScreen: () => {},
+    openConversationDrawer: () => {},
+    openArtifact: () => {},
+    openWorkbench: () => {},
+    closeWorkbench: () => {},
+    notify: () => {},
+    getPluginDoc: async () => undefined,
+    getPluginSessionDoc: async () => undefined,
+    theme: 'dark' as const,
+    locale: 'en' as const,
+    translate: (text: unknown) => (typeof text === 'string' ? text : ''),
+  }
+
+  const withArtifact = renderToString(
+    e(
+      PluginClientContext.Provider,
+      { value: pluginCtx },
+      e(ToolCallDetails, { input: { cmd: 'ls' }, result: 'ok', artifactRef: 'art_42', defaultOpen: true }),
+    ),
+  )
+  assert.match(
+    withArtifact,
+    /<button[^>]*type="button"[^>]*class="btn btn-xs"[^>]*><span>[\s\S]*?#[\s\S]*?art_42<\/span><\/button>/,
+    'ToolCallDetails artifact button must render through SDK Button size="xs"',
+  )
+
+  const withoutArtifact = renderToString(
+    e(
+      PluginClientContext.Provider,
+      { value: pluginCtx },
+      e(ToolCallDetails, { input: { cmd: 'ls' }, result: 'ok', artifactRef: '' }),
+    ),
+  )
+  assert.doesNotMatch(withoutArtifact, /<button/, 'empty artifactRef must not render an artifact button')
 })
 
 test('Badge and Stack: static host classes without inline style hacks (SSR)', { timeout: 60_000 }, () => {

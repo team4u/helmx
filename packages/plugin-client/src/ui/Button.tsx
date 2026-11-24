@@ -11,13 +11,13 @@
 import * as React from 'react'
 import { HelmxIcon } from '../icons.js'
 
-export type ButtonVariant = 'default' | 'primary' | 'secondary' | 'ghost' | 'danger'
+export type ButtonVariant = 'default' | 'primary' | 'secondary' | 'ghost' | 'danger' | 'inline'
 export type ButtonSize = 'xs' | 'sm' | 'md'
 
 export interface ButtonProps extends React.ComponentPropsWithoutRef<'button'> {
-  /** Visual prominence variant (default `'default'` uses primary ink `.btn`). */
+  /** Visual prominence variant (default `'default'` uses primary ink `.btn`; `'inline'` renders a compact borderless text micro-action). */
   variant?: ButtonVariant
-  /** Control height / density tier (default `'md'`). */
+  /** Control height / density tier (default `'md'`; omitted on `'inline'` keeps compact inline typography and 11px icons). */
   size?: ButtonSize
   /** Render pill-shaped corners (`.btn-pill`). */
   pill?: boolean
@@ -49,6 +49,8 @@ export type IconButtonProps = Omit<React.ComponentPropsWithoutRef<'button'>, 'ch
     size?: ButtonSize
     /** Render circular/pill corners (`.btn-pill`). */
     pill?: boolean
+    /** Toggle state: when provided, wires `aria-pressed` (unless explicitly overridden) and attaches `.is-active` while `true`. */
+    active?: boolean
     /** Busy state: disables the button, sets `aria-busy`, and renders a spinning loader. */
     pending?: boolean
   }
@@ -59,6 +61,7 @@ const VARIANT_CLASS: Record<ButtonVariant, string> = {
   secondary: 'btn btn-secondary',
   ghost: 'btn btn-ghost',
   danger: 'btn btn-danger',
+  inline: 'btn btn-inline',
 }
 
 const SIZE_CLASS: Record<ButtonSize, string> = {
@@ -79,6 +82,8 @@ const ICON_PX: Record<ButtonSize, number> = {
   xs: 12,
 }
 
+const INLINE_ICON_PX = 11
+
 function joinClass(...parts: Array<string | undefined>): string {
   return parts.filter(Boolean).join(' ')
 }
@@ -86,9 +91,8 @@ function joinClass(...parts: Array<string | undefined>): string {
 function renderIconNode(
   icon: string | React.ReactNode | undefined,
   pending: boolean,
-  size: ButtonSize,
+  px: number,
 ): React.ReactNode {
-  const px = ICON_PX[size]
   if (pending) {
     return <HelmxIcon name="loader" size={px} className="spin-slow" />
   }
@@ -103,7 +107,7 @@ function renderIconNode(
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   {
     variant = 'default',
-    size = 'md',
+    size,
     pill = false,
     icon,
     pending = false,
@@ -116,19 +120,21 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
   },
   ref,
 ) {
+  const resolvedSize: ButtonSize = size ?? 'md'
   const resolvedClass = joinClass(
     VARIANT_CLASS[variant],
-    SIZE_CLASS[size] || undefined,
+    SIZE_CLASS[resolvedSize] || undefined,
     pill ? 'btn-pill' : undefined,
     className,
   )
-  const leading = renderIconNode(icon, pending, size)
+  const iconPx = variant === 'inline' && size === undefined ? INLINE_ICON_PX : ICON_PX[resolvedSize]
+  const leading = renderIconNode(icon, pending, iconPx)
   return (
     <button
-      {...rest}
       ref={ref}
       type={type}
       className={resolvedClass}
+      {...rest}
       disabled={disabled || pending}
       aria-busy={pending ? true : ariaBusy}
     >
@@ -151,6 +157,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(f
     variant = 'ghost',
     size = 'md',
     pill = false,
+    active,
     pending = false,
     disabled = false,
     type = 'button',
@@ -158,6 +165,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(f
     title,
     'aria-label': ariaLabel,
     'aria-busy': ariaBusy,
+    'aria-pressed': ariaPressed,
     className,
     ...rest
   },
@@ -173,20 +181,22 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(f
     VARIANT_CLASS[variant],
     ICON_BTN_SIZE_CLASS[size],
     pill ? 'btn-pill' : undefined,
+    active === true ? 'is-active' : undefined,
     className,
   )
   return (
     <button
-      {...rest}
       ref={ref}
       type={type}
       className={resolvedClass}
+      {...rest}
       disabled={disabled || pending}
       aria-busy={pending ? true : ariaBusy}
+      aria-pressed={ariaPressed ?? active}
       aria-label={accessibleName}
       title={title ?? resolvedLabel}
     >
-      {renderIconNode(icon, pending, size)}
+      {renderIconNode(icon, pending, ICON_PX[size])}
     </button>
   )
 })

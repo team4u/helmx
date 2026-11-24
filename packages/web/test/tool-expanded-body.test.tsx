@@ -219,7 +219,7 @@ test('edit 成功但元数据缺失/非法：显式诊断并默认展开原始�
     )
     assert.match(m.host.textContent ?? '', /missing or invalid/)
     assert.ok(m.host.querySelector('.trace-diff') === null, '不渲染任何差异表')
-    const rawBtn = m.host.querySelector('.trace-raw .trace-inline-btn') as HTMLElement
+    const rawBtn = m.host.querySelector('.trace-raw .btn-inline') as HTMLElement
     assert.ok(rawBtn)
     assert.equal(rawBtn.getAttribute('aria-expanded'), 'true', '原始数据默认展开')
     assert.match(m.host.textContent ?? '', /"oldText": "x"/)
@@ -312,7 +312,7 @@ test('edit 大输入超预算：明确提示跳过差异计算，保留原始参
     )
     assert.match(m.host.textContent ?? '', /Hunk diff not computed/)
     assert.ok(m.host.querySelector('.trace-diff') === null)
-    const rawBtn = m.host.querySelector('.trace-raw .trace-inline-btn') as HTMLElement
+    const rawBtn = m.host.querySelector('.trace-raw .btn-inline') as HTMLElement
     assert.ok(rawBtn)
     await act(async () => {
       rawBtn.click()
@@ -531,7 +531,7 @@ test('通用工具：键值展示多行入参；原始数据展开保留完整 J
     )
     assert.match(m.host.textContent ?? '', /是否继续部署？/)
     assert.ok(m.host.querySelector('.trace-kv'), '键值形态渲染')
-    const rawBtn = m.host.querySelector('.trace-raw .trace-inline-btn') as HTMLElement
+    const rawBtn = m.host.querySelector('.trace-raw .btn-inline') as HTMLElement
     assert.equal(rawBtn.getAttribute('aria-expanded'), 'false', '原始数据默认收起')
     await act(async () => {
       rawBtn.click()
@@ -1262,7 +1262,7 @@ test('TraceRow：replaceRow=true 卡片统一提供宿主输入/输出展开开�
     const copyOut = [...panel.querySelectorAll('button')].find((b) => b.textContent?.includes('Copy output')) as HTMLButtonElement | undefined
     assert.ok(copyOut !== undefined && copyOut.disabled === true, '截断态输出复制受门禁保护')
 
-    const rawBtn = panel.querySelector<HTMLButtonElement>('.trace-raw .trace-inline-btn')
+    const rawBtn = panel.querySelector<HTMLButtonElement>('.trace-raw .btn-inline')
     assert.ok(rawBtn !== null)
     await act(async () => {
       rawBtn.click()

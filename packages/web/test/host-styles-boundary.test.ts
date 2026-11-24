@@ -22,6 +22,10 @@ const navigation = readFileSync(join(STYLES_DIR, 'navigation.css'), 'utf8')
 const ownsRule = (css: string, selector: string): boolean =>
   new RegExp(`(^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{`).test(css)
 
+function stripCssComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, ' '))
+}
+
 test('样式边界：通用状态灯词汇完整归属 primitives.css（base/色调/空心环/动效/减动效）', { timeout: 60_000 }, () => {
   for (const selector of [
     '.status-dot',
@@ -137,12 +141,13 @@ test('样式边界：宿主分片零插件私有类名选择器（消除宿主�
  * 字面 className 词元必须 ⊆ 宿主样式分片类名集 ∪ SDK_SEMANTIC_CLASS_ALLOWLIST。
  *
  * 提取用 TypeScript AST 只收「类名句法位置」的字面量（className/class JSX
- * 属性、joinClass 实参、?? 与三元操作数、模板字面量静态段、*ClassName 形参
- * 默认值与对象属性），图标名 / 文案等非类名字符串不会误入；动态拼接的运行时
- * 类名（外部传入的 className 值）不属 SDK 词汇，不在静态面内。
+ * 属性、joinClass/clsx/cn 实参、同作用域局部类名变量初始化器、模块级常量映射表
+ * `MAP[key]` 对象字面量值、?? / || / && 与三元操作数、数组 .filter/.join、
+ * 模板字面量静态段、*ClassName 形参默认值与对象属性），图标名 / 文案等非类名
+ * 字符串不会误入；动态拼接的运行时外部 className 不属 SDK 词汇，不在静态面内。
  *
  * 「DOM 在用但 CSS 故意不定义」的语义类是合法形态，但必须在此显式登记并
- * 写明缘由，防止孤儿词汇静默扩散；为登记类补视觉定义时须单独提交并同车移出。
+ * 写明缘由，防止孤儿词汇静默扩散；一旦宿主 CSS 补齐真实定义，双向门禁强制移出。
  */
 const SDK_SRC_DIR = join(__dirname, '../../plugin-client/src')
 
@@ -159,6 +164,10 @@ const SDK_SEMANTIC_CLASS_ALLOWLIST: Readonly<Record<string, string>> = {
   // 档位 chip 的语义锚点，视觉由 btn / segmented-control-btn 家族承担。
   'composer-model-refresh-btn': 'ModelPicker refresh button semantic anchor; visuals carried by btn family',
   'composer-model-level-chip': 'ModelPicker level chip semantic anchor; visuals carried by segmented-control-btn',
+  // AST 升级覆盖局部变量与映射表后浮现的既有语义根/面板标记：
+  'helmx-select-multi': 'MultiSelect root semantic marker; visuals carried by sibling .helmx-select and .helmx-select-multi-option',
+  'helmx-tabs': 'Tabs root semantic marker; visuals carried by variant/list/trigger classes (.helmx-tabs-segmented / .tabs-bar / .segmented-control)',
+  'tabs-content': 'TabsContent panel semantic marker; panel layout owned by host screen or caller className',
 }
 
 /** 递归收集目录下的 .ts/.tsx 源文件。 */
@@ -180,7 +189,7 @@ interface TokenCollector {
 
 function pushTokens(collector: TokenCollector, text: string): void {
   for (const token of text.split(/\s+/)) {
-    if (/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(token)) {
+    if (/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(token) && !token.endsWith('-')) {
       collector.tokens.add(token)
       const origins = collector.origins.get(token) ?? new Set<string>()
       origins.add(collector.file)
@@ -189,46 +198,151 @@ function pushTokens(collector: TokenCollector, text: string): void {
   }
 }
 
-/** 只在「类名句法位置」递归收集字符串字面量。 */
-function collectInClassPosition(expr: ts.Expression | undefined, sourceFile: ts.SourceFile, collector: TokenCollector): void {
-  if (expr === undefined) return
+function unwrapTypeExpression(expr: ts.Expression): ts.Expression {
+  let cur = expr
+  while (
+    ts.isParenthesizedExpression(cur) ||
+    ts.isAsExpression(cur) ||
+    ts.isSatisfiesExpression(cur) ||
+    ts.isNonNullExpression(cur)
+  ) {
+    cur = cur.expression
+  }
+  return cur
+}
+
+function bindingDeclaresName(binding: ts.BindingName, name: string): boolean {
+  if (ts.isIdentifier(binding)) return binding.text === name
+  for (const element of binding.elements) {
+    if (ts.isOmittedExpression(element)) continue
+    if (bindingDeclaresName(element.name, name)) return true
+  }
+  return false
+}
+
+/**
+ * 沿词法作用域链查找同文件内的局部变量或模块级常量初始化器：
+ * - 遇到函数形参同名绑定即停止向上，避免误撞外层模块常量；
+ * - 块级声明仅匹配出现在引用之前的声明，模块顶层常量允许前后声明。
+ */
+function findLocalInitializer(name: string, fromNode: ts.Node, sourceFile: ts.SourceFile): ts.Expression | undefined {
+  const refPos = fromNode.getStart(sourceFile)
+  let cur: ts.Node | undefined = fromNode
+  while (cur !== undefined) {
+    if (ts.isBlock(cur) || ts.isSourceFile(cur) || ts.isModuleBlock(cur)) {
+      const isTopLevel = ts.isSourceFile(cur) || ts.isModuleBlock(cur)
+      for (const stmt of cur.statements) {
+        if (!ts.isVariableStatement(stmt)) continue
+        for (const decl of stmt.declarationList.declarations) {
+          if (
+            ts.isIdentifier(decl.name) &&
+            decl.name.text === name &&
+            decl.initializer !== undefined &&
+            (isTopLevel || decl.getStart(sourceFile) < refPos)
+          ) {
+            return decl.initializer
+          }
+        }
+      }
+    }
+    if (ts.isFunctionLike(cur)) {
+      for (const param of cur.parameters) {
+        if (bindingDeclaresName(param.name, name)) return undefined
+      }
+    }
+    cur = cur.parent
+  }
+  return undefined
+}
+
+/** 只在「类名句法位置」递归收集字符串字面量（追踪局部变量与常量映射表）。 */
+function collectInClassPosition(
+  expr: ts.Expression | undefined,
+  sourceFile: ts.SourceFile,
+  collector: TokenCollector,
+  seen: Set<ts.Node>,
+): void {
+  if (expr === undefined || seen.has(expr)) return
+  seen.add(expr)
+
   if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
     pushTokens(collector, expr.text)
     return
   }
   if (ts.isJsxExpression(expr)) {
-    collectInClassPosition(expr.expression, sourceFile, collector)
+    collectInClassPosition(expr.expression, sourceFile, collector, seen)
+    return
+  }
+  if (
+    ts.isParenthesizedExpression(expr) ||
+    ts.isAsExpression(expr) ||
+    ts.isSatisfiesExpression(expr) ||
+    ts.isNonNullExpression(expr)
+  ) {
+    collectInClassPosition(expr.expression, sourceFile, collector, seen)
     return
   }
   if (ts.isTemplateExpression(expr)) {
     pushTokens(collector, expr.head.text)
-    for (const span of expr.templateSpans) pushTokens(collector, span.literal.text)
-    return
-  }
-  if (ts.isConditionalExpression(expr)) {
-    collectInClassPosition(expr.whenTrue, sourceFile, collector)
-    collectInClassPosition(expr.whenFalse, sourceFile, collector)
-    return
-  }
-  if (
-    ts.isBinaryExpression(expr) &&
-    (expr.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || expr.operatorToken.kind === ts.SyntaxKind.BarBarToken)
-  ) {
-    collectInClassPosition(expr.left, sourceFile, collector)
-    collectInClassPosition(expr.right, sourceFile, collector)
-    return
-  }
-  if (ts.isCallExpression(expr)) {
-    // 仅类名拼接助手（joinClass/clsx/cn）的实参属类名位置；其它调用的
-    // 内部字符串（文案、图标名）不收。
-    const callee = expr.expression.getText(sourceFile)
-    if (/^(joinClass|clsx|cn)$/.test(callee)) {
-      for (const arg of expr.arguments) collectInClassPosition(arg as ts.Expression, sourceFile, collector)
+    let prev = expr.head.text
+    for (const span of expr.templateSpans) {
+      if (!prev.endsWith('-')) collectInClassPosition(span.expression, sourceFile, collector, seen)
+      const lit = span.literal.text
+      const cleaned = lit.startsWith('-') ? lit.replace(/^-[a-zA-Z0-9_-]*/, '') : lit
+      pushTokens(collector, cleaned)
+      prev = lit
     }
     return
   }
-  if (ts.isParenthesizedExpression(expr)) {
-    collectInClassPosition(expr.expression, sourceFile, collector)
+  if (ts.isConditionalExpression(expr)) {
+    collectInClassPosition(expr.whenTrue, sourceFile, collector, seen)
+    collectInClassPosition(expr.whenFalse, sourceFile, collector, seen)
+    return
+  }
+  if (ts.isBinaryExpression(expr)) {
+    const op = expr.operatorToken.kind
+    if (op === ts.SyntaxKind.QuestionQuestionToken || op === ts.SyntaxKind.BarBarToken) {
+      collectInClassPosition(expr.left, sourceFile, collector, seen)
+      collectInClassPosition(expr.right, sourceFile, collector, seen)
+    } else if (op === ts.SyntaxKind.AmpersandAmpersandToken) {
+      collectInClassPosition(expr.right, sourceFile, collector, seen)
+    }
+    return
+  }
+  if (ts.isArrayLiteralExpression(expr)) {
+    for (const el of expr.elements) {
+      if (!ts.isSpreadElement(el)) collectInClassPosition(el, sourceFile, collector, seen)
+    }
+    return
+  }
+  if (ts.isIdentifier(expr)) {
+    const init = findLocalInitializer(expr.text, expr, sourceFile)
+    if (init !== undefined) collectInClassPosition(init, sourceFile, collector, seen)
+    return
+  }
+  if (ts.isElementAccessExpression(expr) && ts.isIdentifier(expr.expression)) {
+    const init = findLocalInitializer(expr.expression.text, expr.expression, sourceFile)
+    if (init !== undefined) {
+      const target = unwrapTypeExpression(init)
+      if (ts.isObjectLiteralExpression(target)) {
+        for (const prop of target.properties) {
+          if (ts.isPropertyAssignment(prop)) {
+            collectInClassPosition(prop.initializer, sourceFile, collector, seen)
+          }
+        }
+      }
+    }
+    return
+  }
+  if (ts.isCallExpression(expr)) {
+    // 仅类名拼接助手（joinClass/clsx/cn）与数组/字符串尾调用（.filter/.join/.trim）
+    // 属类名位置；其它函数调用内部字符串（文案、图标名）绝不误收。
+    const callee = expr.expression
+    if (ts.isIdentifier(callee) && /^(joinClass|clsx|cn)$/.test(callee.text)) {
+      for (const arg of expr.arguments) collectInClassPosition(arg as ts.Expression, sourceFile, collector, seen)
+    } else if (ts.isPropertyAccessExpression(callee) && /^(trim|join|filter)$/.test(callee.name.text)) {
+      collectInClassPosition(callee.expression, sourceFile, collector, seen)
+    }
   }
 }
 
@@ -248,16 +362,13 @@ function collectSdkClassTokens(): TokenCollector {
     )
     const visit = (node: ts.Node): void => {
       if (ts.isJsxAttribute(node) && isClassNameIdentifier(node.name.getText(sourceFile))) {
-        collectInClassPosition(node.initializer as ts.Expression | undefined, sourceFile, collector)
-      } else if (ts.isPropertyAssignment(node)) {
-        const key = node.name.getText(sourceFile)
-        if (isClassNameIdentifier(key) && (ts.isStringLiteral(node.initializer) || ts.isNoSubstitutionTemplateLiteral(node.initializer))) {
-          pushTokens(collector, node.initializer.text)
-        }
+        collectInClassPosition(node.initializer as ts.Expression | undefined, sourceFile, collector, new Set())
+      } else if (ts.isPropertyAssignment(node) && isClassNameIdentifier(node.name.getText(sourceFile))) {
+        collectInClassPosition(node.initializer, sourceFile, collector, new Set())
       } else if (ts.isBindingElement(node) && node.initializer !== undefined) {
         const name = (node.propertyName ?? node.name).getText(sourceFile)
-        if (isClassNameIdentifier(name) && ts.isStringLiteral(node.initializer) && node.name !== undefined) {
-          pushTokens(collector, node.initializer.text)
+        if (isClassNameIdentifier(name)) {
+          collectInClassPosition(node.initializer, sourceFile, collector, new Set())
         }
       }
       ts.forEachChild(node, visit)
@@ -272,12 +383,18 @@ test('样式边界：SDK 组件字面 className 词元 ⊆ 宿主 CSS 类名集 
   for (const { css } of readdirSync(STYLES_DIR)
     .filter((name) => name.endsWith('.css'))
     .map((name) => ({ name, css: readFileSync(join(STYLES_DIR, name), 'utf8') }))) {
-    for (const match of css.matchAll(/\.([a-zA-Z0-9_-]+)/g)) hostClasses.add(match[1]!)
+    for (const match of stripCssComments(css).matchAll(/\.([a-zA-Z_-][a-zA-Z0-9_-]*)/g)) {
+      hostClasses.add(match[1]!)
+    }
   }
   assert.ok(hostClasses.size > 500, '应能从宿主样式分片解析出类名集')
 
   const { tokens, origins } = collectSdkClassTokens()
-  assert.ok(tokens.size > 50, `SDK 词元提取异常（仅 ${tokens.size} 个）`)
+  assert.ok(tokens.size >= 180, `SDK 词元提取异常（仅 ${tokens.size} 个，应覆盖局部变量与映射表）`)
+  // 守卫 AST 升级能力：模块级类名映射表与局部拼接变量必须纳入覆盖
+  for (const expected of ['btn-primary', 'btn-inline', 'btn-icon', 'badge-ok', 'helmx-stack-horizontal', 'is-active']) {
+    assert.ok(tokens.has(expected), `AST 收集器应覆盖映射表/局部变量词元 .${expected}`)
+  }
 
   const violations: string[] = []
   for (const token of [...tokens].sort()) {
@@ -290,10 +407,32 @@ test('样式边界：SDK 组件字面 className 词元 ⊆ 宿主 CSS 类名集 
     `SDK 引用了宿主未定义且未登记的类名（需在宿主 CSS 补定义，或在 SDK_SEMANTIC_CLASS_ALLOWLIST 显式登记并写明缘由）：\n${violations.join('\n')}`,
   )
 
-  // 登记表自身纪律：每个登记项必须仍被 SDK 引用（防僵尸登记），且必须带缘由。
+  // 登记表双向纪律：每个登记项必须仍被 SDK 引用，且宿主 CSS 中尚未定义（防僵尸豁免项滞留）。
   for (const [name, reason] of Object.entries(SDK_SEMANTIC_CLASS_ALLOWLIST)) {
     assert.ok(reason.trim().length > 0, `语义类 .${name} 登记必须写明缘由`)
     assert.ok(tokens.has(name), `语义类 .${name} 已不被 SDK 引用，应移出登记表`)
+    assert.ok(!hostClasses.has(name), `语义类 .${name} 已在宿主 CSS 中拥有真实定义，应移出语义类豁免登记表`)
+  }
+})
+
+test('样式边界：.btn-inline 归属 primitives.css，旧 .callout--* 与 .trace-inline-btn 彻底清零', { timeout: 60_000 }, () => {
+  const shards = readdirSync(STYLES_DIR)
+    .filter((name) => name.endsWith('.css'))
+    .map((name) => ({ name, css: readFileSync(join(STYLES_DIR, name), 'utf8') }))
+  assert.ok(shards.length > 0, '应能读取宿主样式分片')
+
+  assert.ok(ownsRule(primitives, '.btn-inline'), 'primitives.css 应定义行内轻量按钮原语 .btn-inline')
+  for (const selector of ['.btn-ghost.is-active', '.btn-icon.is-active', '.btn-icon-sm.is-active', '.btn-icon-xs.is-active']) {
+    assert.ok(primitives.includes(selector), `primitives.css 应定义按钮激活态 ${selector}`)
+  }
+  for (const { name, css } of shards) {
+    if (name !== 'primitives.css') {
+      assert.ok(!ownsRule(css, '.btn-inline'), `分片 ${name} 不得重复定义 .btn-inline`)
+    }
+    for (const legacyCallout of ['.callout--warning', '.callout--error', '.callout--success']) {
+      assert.ok(!css.includes(legacyCallout), `分片 ${name} 不得保留历史兼容类 ${legacyCallout}`)
+    }
+    assert.ok(!css.includes('.trace-inline-btn'), `分片 ${name} 不得保留已收口的旧类 .trace-inline-btn`)
   }
 })
 
@@ -338,10 +477,6 @@ function listCssFiles(dir: string): string[] {
     else if (entry.name.endsWith('.css')) out.push(full)
   }
   return out.sort()
-}
-
-function stripCssComments(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, ' '))
 }
 
 function extractCssVarRefs(text: string): Array<{ name: string; line: number }> {

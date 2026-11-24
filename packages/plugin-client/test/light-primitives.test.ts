@@ -1021,6 +1021,84 @@ test('Button and IconButton: forwardRef and event merging work inside Radix Popo
   }
 })
 
+test('Button variant="inline" and IconButton active: inline compact icon sizing and aria-pressed / is-active contract', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          'div',
+          null,
+          e(Button, { variant: 'inline', icon: 'chevron-down', id: 'inline-default' }, 'Expand'),
+          e(Button, { variant: 'inline', icon: 'download', pending: true, id: 'inline-pending' }, 'Loading'),
+          e(Button, { variant: 'inline', size: 'sm', icon: 'chevron-up', id: 'inline-sm' }, 'Collapse'),
+          e(IconButton, { icon: 'list-filter', label: 'Action only', id: 'icon-plain' }),
+          e(IconButton, { icon: 'list-filter', label: 'Filter off', active: false, id: 'icon-off' }),
+          e(IconButton, { icon: 'list-filter', label: 'Filter on', size: 'xs', active: true, id: 'icon-on' }),
+          e(IconButton, {
+            icon: 'check-square',
+            label: 'Mixed toggle',
+            active: true,
+            'aria-pressed': 'mixed',
+            id: 'icon-mixed',
+          }),
+          e(IconButton, {
+            icon: 'bell',
+            label: 'Explicit false',
+            active: true,
+            'aria-pressed': false,
+            id: 'icon-explicit-false',
+          }),
+        ),
+      )
+    })
+
+    const inlineDefault = container.querySelector<HTMLButtonElement>('#inline-default')!
+    assert.equal(inlineDefault.className, 'btn btn-inline')
+    assert.equal(inlineDefault.querySelector('svg')?.getAttribute('width'), '11', 'inline Button defaults to 11px compact icon')
+    assert.equal(inlineDefault.querySelector('span')?.textContent, 'Expand')
+
+    const inlinePending = container.querySelector<HTMLButtonElement>('#inline-pending')!
+    assert.equal(inlinePending.className, 'btn btn-inline')
+    assert.equal(inlinePending.disabled, true)
+    assert.equal(inlinePending.getAttribute('aria-busy'), 'true')
+    assert.equal(inlinePending.querySelector('svg')?.getAttribute('width'), '11')
+    assert.ok(inlinePending.querySelector('svg')?.getAttribute('class')?.includes('spin-slow'))
+
+    const inlineSm = container.querySelector<HTMLButtonElement>('#inline-sm')!
+    assert.equal(inlineSm.className, 'btn btn-inline btn-sm')
+    assert.equal(inlineSm.querySelector('svg')?.getAttribute('width'), '13', 'explicit size overrides inline default icon size')
+
+    const iconPlain = container.querySelector<HTMLButtonElement>('#icon-plain')!
+    assert.equal(iconPlain.hasAttribute('aria-pressed'), false, 'active=undefined must not emit aria-pressed')
+    assert.equal(iconPlain.classList.contains('is-active'), false)
+
+    const iconOff = container.querySelector<HTMLButtonElement>('#icon-off')!
+    assert.equal(iconOff.getAttribute('aria-pressed'), 'false')
+    assert.equal(iconOff.classList.contains('is-active'), false)
+
+    const iconOn = container.querySelector<HTMLButtonElement>('#icon-on')!
+    assert.equal(iconOn.getAttribute('aria-pressed'), 'true')
+    assert.equal(iconOn.classList.contains('is-active'), true)
+    assert.equal(iconOn.className, 'btn btn-ghost btn-icon-xs is-active')
+
+    const iconMixed = container.querySelector<HTMLButtonElement>('#icon-mixed')!
+    assert.equal(iconMixed.getAttribute('aria-pressed'), 'mixed', 'explicit aria-pressed takes precedence over active')
+    assert.equal(iconMixed.classList.contains('is-active'), true)
+
+    const iconExplicitFalse = container.querySelector<HTMLButtonElement>('#icon-explicit-false')!
+    assert.equal(iconExplicitFalse.getAttribute('aria-pressed'), 'false', 'explicit aria-pressed=false takes precedence over active=true')
+    assert.equal(iconExplicitFalse.classList.contains('is-active'), true)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
 test('SelectCard: card body and trigger fire onSelect once while sibling actions, interactive children, and disabled state remain isolated', { timeout: 60_000 }, async () => {
   const container = document.createElement('div')
   document.body.appendChild(container)
