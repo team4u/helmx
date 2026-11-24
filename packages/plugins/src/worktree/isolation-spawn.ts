@@ -10,6 +10,7 @@ import {
   type AgentSpawnRequest,
 } from '@helmx/protocol'
 import { worktreeExecutionMeta, type WorktreeExecutionDescriptor } from '../contracts.js'
+import { worktreeContextPrompt } from './worktree-context.js'
 import type { ManagedWorktreeRecord, WorktreeAllocator } from './worktree.js'
 import type { WorktreeStore } from './worktree-store.js'
 import type { WorktreeIsolationDeps } from './isolation.js'
@@ -18,25 +19,6 @@ export interface IsolationSpawnContext {
   deps: WorktreeIsolationDeps
   allocator: WorktreeAllocator
   store: WorktreeStore
-}
-
-function worktreeContextPrompt(record: ManagedWorktreeRecord): string {
-  const lines = [
-    '当前工作目录为独立 Git Worktree：',
-    `- worktreeId: ${record.id}`,
-    `- path: ${record.path}`,
-    `- branch: ${record.branch}`,
-    ...(record.baseCommit !== '' ? [`- baseCommit: ${record.baseCommit.slice(0, 12)}`] : []),
-    ...(record.baseBranch !== undefined && record.baseBranch !== '' ? [`- baseBranch: ${record.baseBranch}`] : []),
-    ...(record.parentWorktreeId !== undefined && record.parentWorktreeId !== ''
-      ? [`- parentWorktreeId: ${record.parentWorktreeId}`]
-      : []),
-    record.dirtySource
-      ? '- 注意：源工作区存在未提交修改，本隔离工作树基于源 HEAD 创建，不包含源工作区未提交的改动。'
-      : '- 源工作区干净。',
-    '请在结束回合前运行 git add 与 git commit 提交全部改动，保持工作区干净。',
-  ]
-  return `\n\n<worktree_context>\n${lines.join('\n')}\n</worktree_context>`
 }
 
 function toExecutionDescriptor(record: ManagedWorktreeRecord): WorktreeExecutionDescriptor {

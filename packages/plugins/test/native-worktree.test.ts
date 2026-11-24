@@ -59,6 +59,11 @@ import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/worktree/i
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
 import { cleanupPresentationMetaSchema } from '../src/worktree/actions.js'
+import {
+  resolveWorktreeContextSection,
+  WORKTREE_CONTEXT_SECTION_ID,
+  worktreeContextPrompt,
+} from '../src/worktree/worktree-context.js'
 import { actionToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
 import { PluginHost, type PluginHostBackend, type PluginKvStore } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
@@ -3011,6 +3016,100 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       }
     } finally {
       await close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('before_turn 上下文段落：hold 记录注入、spawn 记录（无 hold）与 removed 记录不注入', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't22-context-section')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    // 源工作区留未提交改动，验证 dirtySource 诚实提示进入段落。
+    writeFileSync(join(repo, 'uncommitted.txt'), 'dirty\n')
+    const th = await openSpawnHarness(repo, join(dir, 'data'))
+    try {
+      // 1) Swarm 式长占用：acquire_worktree 带 hold → 会话每回合应拿到 worktree 上下文段落。
+      const held = await th.isolation.acquireWorktree({
+        conversationId: 31,
+        parentConversationId: 1,
+        hold: { pluginId: 'builtin:swarm', holdId: 'grp-9:author', label: 'swarm author' },
+      })
+      // 与生产 worktree.ts 同一 store 读写（harness 的 allocator 与 isolation 各持独立缓存实例）。
+      const heldRecord = th.isolation.getForConversation(31)
+      assert.ok(heldRecord, 'acquireWorktree 应绑定会话 31')
+      const section = resolveWorktreeContextSection(heldRecord)
+      assert.ok(section, '带 hold 的活跃记录应产出上下文段落')
+      assert.equal(section.id, WORKTREE_CONTEXT_SECTION_ID)
+      const text = section.text
+      assert.ok(text.startsWith('<worktree_context>\n') && text.endsWith('\n</worktree_context>'), '段落用 worktree_context 包裹')
+      assert.ok(text.includes(`- branch: ${held.branch}`), '段落须含受管分支名')
+      assert.ok(text.includes(`- path: ${held.path}`), '段落须含工作树路径')
+      assert.ok(text.includes(`- baseCommit: ${held.baseCommit.slice(0, 12)}`), 'baseCommit 截断到 12 位')
+      assert.ok(text.includes('不包含源工作区未提交的改动'), 'dirty 源须给出诚实提示')
+      assert.ok(text.includes('git add') && text.includes('git commit'), '段落须提醒结束回合前提交改动')
+
+      // 2) 与 agent_spawn 提示词尾注同源：两者共享同一组事实行，不产生分歧。
+      const prompt = worktreeContextPrompt(heldRecord)
+      assert.ok(
+        prompt.includes(text.slice('<worktree_context>\n'.length, -'\n</worktree_context>'.length)),
+        '段落正文应与提示词尾注正文完全一致（单一事实源）',
+      )
+
+      // 3) 释放 hold 后（记录仍 active）→ 不再注入：上下文回归仅提示词尾注路径。
+      await th.isolation.releaseWorktreeHold({
+        worktreeId: held.worktreeId,
+        pluginId: 'builtin:swarm',
+        holdId: 'grp-9:author',
+      })
+      const releasedRecord = th.isolation.getForConversation(31)
+      assert.ok(releasedRecord && releasedRecord.status === 'active', '释放 hold 不改变 active 状态')
+      assert.equal(resolveWorktreeContextSection(releasedRecord), undefined, '无 hold 的活跃记录不注入段落')
+
+      // 4) 无记录 / removed 记录 → 不注入。
+      assert.equal(resolveWorktreeContextSection(undefined), undefined, '无记录不注入')
+      assert.equal(
+        resolveWorktreeContextSection({ ...heldRecord, status: 'removed' }),
+        undefined,
+        'removed 记录不注入',
+      )
+    } finally {
+      await th.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('spawn 路径记录无 hold：不产生 before_turn 段落（上下文已由提示词尾注提供，不重复）', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't22-context-spawn-no-section')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const th = await openSpawnHarness(repo, join(dir, 'data'))
+    try {
+      let childId = 0
+      th.faux.setResponses([fauxAssistantMessage('完成')])
+      await th.spawnIsolated({
+        parentConversationId: 1,
+        prompt: 'spawn 任务',
+        isolation: 'worktree',
+        onResolved: (info: AgentExecutionInfo) => {
+          childId = info.conversationId ?? 0
+        },
+      } as never)
+      assert.ok(childId > 0)
+      const spawnRecord = th.isolation.getForConversation(childId)
+      assert.ok(spawnRecord, 'spawn 路径应绑定子会话')
+      assert.equal(spawnRecord.hold, undefined, 'spawn 路径记录不带 hold')
+      assert.equal(
+        resolveWorktreeContextSection(spawnRecord),
+        undefined,
+        'spawn 记录不注入 before_turn 段落（避免与提示词尾注重复）',
+      )
+      // 提示词尾注仍然存在（既有契约不变）。
+      const prompt = await childPromptText(th.harness, childId)
+      assert.ok(prompt.includes('<worktree_context>'), 'spawn 提示词尾注契约保持不变')
+    } finally {
+      await th.close()
       rmSync(dir, { recursive: true, force: true })
     }
   })
