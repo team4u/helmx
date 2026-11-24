@@ -157,7 +157,7 @@ describe('WorkflowService listRuns integrity', () => {
       resume.resolve()
       await activeService.close()
       await service.close()
-    })
+    }, { timeout: 60_000 })
     const active = await activeService.run({ conversationId: 1, script: META('hist-int-active') + 'return await agent("hang")' })
     await ready.promise
     let runs = activeService.listRuns()
@@ -235,7 +235,7 @@ describe('WorkflowService listRuns integrity', () => {
     t.after(async () => {
       for (const gate of resume) gate.resolve()
       await service.close()
-    })
+    }, { timeout: 60_000 })
     const olderActive = await service.run({ conversationId: 1, script: META('ord-a') + 'return await agent("hang-a")' })
     await ready[0]!.promise
     const settled = await service.run({ conversationId: 1, script: META('ord-mid') + 'return 1' })

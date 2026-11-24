@@ -155,13 +155,13 @@ beforeEach(async () => {
   const handle = await startHub({ kernel, port: 0 })
   hubUrl = handle.url
   closeHub = () => handle.close()
-})
+}, { timeout: 60_000 })
 
 afterEach(async () => {
   sessionDocHub?.close()
   await closeHub?.()
   await cleanupDir(dataDir)
-})
+}, { timeout: 60_000 })
 
 function authInit(): RequestInit {
   return { headers: { authorization: `Bearer ${token}` } }

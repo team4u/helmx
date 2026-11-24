@@ -44,7 +44,7 @@ test('control roundtrip: status answers with product-owned state, mismatched ins
     onStop: async () => {},
   })
   await server.listening
-  t.after(() => server.close())
+  t.after(() => server.close(), { timeout: 60_000 })
 
   const status = await controlRequest(endpoint, { type: 'status', instanceId }, CONTROL_TIMEOUT_MS, {
     pid: process.pid,
@@ -82,7 +82,7 @@ test('control stop runs the handler, replies, and closes the server', { timeout:
     },
   })
   await server.listening
-  t.after(() => server.close())
+  t.after(() => server.close(), { timeout: 60_000 })
 
   const reply = await controlRequest(endpoint, { type: 'stop', instanceId }, 15_000, { pid: process.pid, instanceId })
   assert.ok(reply !== null && reply.ok === true)
@@ -105,7 +105,7 @@ test('controlRequest settles immediately on server disconnect and preserves spli
   })
   t.after(async () => {
     await new Promise<void>((resolve) => dropServer.close(() => resolve()))
-  })
+  }, { timeout: 60_000 })
 
   const startMs = Date.now()
   const dropped = await controlRequest(disconnectEndpoint, { type: 'status', instanceId: 'd'.repeat(32) }, 30_000)
@@ -128,7 +128,7 @@ test('controlRequest settles immediately on server disconnect and preserves spli
     },
   })
   await server.listening
-  t.after(() => server.close())
+  t.after(() => server.close(), { timeout: 60_000 })
 
   // Split multi-byte UTF-8 frame mid-codepoint on client -> server write and verify server StringDecoder
   const rawPayload = Buffer.from(
@@ -191,7 +191,7 @@ test('controlRequest settles immediately on server disconnect and preserves spli
   })
   t.after(async () => {
     await new Promise<void>((resolve) => splitServer.close(() => resolve()))
-  })
+  }, { timeout: 60_000 })
 
   const clientRes = await controlRequest(splitSrvEndpoint, { type: 'status', instanceId: utf8Instance }, 5_000, {
     pid: process.pid,

@@ -35,7 +35,7 @@ async function fixture(t: TestContext): Promise<{ dir: string; kernel: Runtime }
   t.after(async () => {
     await kernel.close()
     await cleanupDir(dir)
-  })
+  }, { timeout: 60_000 })
   return { dir, kernel }
 }
 

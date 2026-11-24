@@ -319,7 +319,7 @@ test('prepareNodeReplacement: real IPC ready -> activate -> activated writes new
   const hub = await startHubFixture({ expectedToken: 'cand:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'a'.repeat(32), endpoint: '/tmp/old.sock' };
   const { replacement, store, error } = await prepareWithFixture({ dir, hubUrl: hub.url, mode: 'candidate', oldRecord });
@@ -378,7 +378,7 @@ test('prepareNodeReplacement throws UpgradeCommitUnconfirmedError when activate 
   const hub = await startHubFixture({ expectedToken: 'cand:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'c'.repeat(32), endpoint: '/tmp/old3.sock' };
   const { replacement, store, error } = await prepareWithFixture({
@@ -423,7 +423,7 @@ test('prepareNodeReplacement rolls back safely if candidate disconnects IPC afte
   const hub = await startHubFixture({ expectedToken: 'cand:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'e'.repeat(32), endpoint: '/tmp/old5.sock' };
   const { replacement, store, error } = await prepareWithFixture({
@@ -464,7 +464,7 @@ test('prepareNodeReplacement: abort before activate kills candidate without touc
   const hub = await startHubFixture({ expectedToken: 'cand:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
 
   const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'd'.repeat(32), endpoint: '/tmp/old4.sock' };
   const { replacement, store, error } = await prepareWithFixture({ dir, hubUrl: hub.url, mode: 'candidate', oldRecord });
@@ -547,7 +547,7 @@ test('control channel upgrade request: rejects clearly when unready/invalid and 
   const hub = await startHubFixture({ expectedToken: 'upg-ctl:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   const record = await startManagedDaemon(t, dir, hub.url);
 
   const request = (type: string, extra: Record<string, unknown> = {}): Promise<{ ok: boolean; error?: string; result?: unknown } | null> =>
@@ -602,7 +602,7 @@ test('start -d: stop rejects with upgrade_in_progress while upgrade runs (real i
   const hub = await startHubFixture({ expectedToken: 'upg-ctl:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   const record = await startManagedDaemon(t, dir, hub.url);
 
   // Exercise the protocol path directly with an invalid target version (fails fast without fabricating install)
@@ -655,11 +655,11 @@ test('foreground start without control env acts as launcher: spawns and tracks m
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     child?.kill('SIGKILL');
-  });
+  }, { timeout: 60_000 });
   const hub = await startHubFixture({ expectedToken: 'upg-launch:s' });
   t.after(async () => {
     await hub.close();
-  });
+  }, { timeout: 60_000 });
   await bindIdentityFromJoinToken(dir, 'upg-launch:s', hub.url);
 
   // launcher child runs tsx source entry in foreground
@@ -827,7 +827,7 @@ test('launcher shutdown awaits slow stop replies (>200ms) before returning', { t
   let control: Awaited<ReturnType<typeof startFixtureControl>> | undefined;
   t.after(async () => {
     await control?.close();
-  });
+  }, { timeout: 60_000 });
 
   let stdout = '';
   const launcherPromise = runNodeCli(['start', '--data-dir', dir], {
@@ -879,7 +879,7 @@ test('upgrade output keeps replacement pid from result and renders old pid as pr
   });
   t.after(async () => {
     await control.close();
-  });
+  }, { timeout: 60_000 });
   // PID record points to old daemon (current process): envelope pid=old, result.pid=424242.
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });
   t.after(async () => {
@@ -906,7 +906,7 @@ test('upgrade allows valid no-op result without candidate pid when version alrea
   t.after(async () => {
     await control.close();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });
   const result = await runCli(['upgrade', '--version', '0.1.0', '--data-dir', dir, '--json'], { isAlive: () => true });
   assert.equal(result.code, 0, result.err);
@@ -925,7 +925,7 @@ test('upgrade rejects invalid result envelopes missing ok/upgraded/pid with non-
   const control = await startFixtureControl({ dataDir: dir, instanceId, upgradeResult: { foo: 'bar' } });
   t.after(async () => {
     await control.close();
-  });
+  }, { timeout: 60_000 });
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });
   t.after(async () => {
     await fs.rm(path.join(dir, 'node.pid'), { force: true }).catch(() => undefined);
@@ -948,7 +948,7 @@ test('status prefers live control-channel version and falls back to current.json
   const control = await startFixtureControl({ dataDir: dir, instanceId, statusVersion: '99.9.9' });
   t.after(async () => {
     await control.close();
-  });
+  }, { timeout: 60_000 });
   // Local current.json points to another version: only used as fallback when no live daemon exists.
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(

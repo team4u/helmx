@@ -64,7 +64,7 @@ async function bootHub(t: import('node:test').TestContext): Promise<{ child: Chi
   stderrText.set(child, stderr);
   t.after(() => {
     if (child.exitCode === null) child.kill('SIGKILL');
-  });
+  }, { timeout: 60_000 });
   await waitFor(
     () => stdout.includes('Helmx Hub:'),
     { timeoutMs: 60_000, intervalMs: 50, message: `hub readiness banner did not appear (stderr: ${stderr.slice(-400)})` },

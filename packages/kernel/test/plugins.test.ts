@@ -2385,7 +2385,7 @@ test('in-flight client module compile regression: unregister then re-register sa
       },
     },
   });
-  t.after(() => host.dispose());
+  t.after(() => host.dispose(), { timeout: 60_000 });
 
   const clientDir = join(dataDir, 'client-src');
   mkdirSync(clientDir, { recursive: true });
@@ -2427,7 +2427,7 @@ test('in-flight client module compile regression: unregister then re-register sa
 
 test('clientHashes: precompiled on register/enable, carried in list/get/plugin.changed, cleared on disable/unregister', { timeout: 60_000 }, async (t) => {
   const host = makeHost();
-  t.after(() => host.dispose());
+  t.after(() => host.dispose(), { timeout: 60_000 });
 
   const changedSummaries = () =>
     eventPayloads
@@ -2504,7 +2504,7 @@ test('clientHashes: precompiled on register/enable, carried in list/get/plugin.c
 
 test('clientHashes: precompile failure preserves explicit error and isolated failure diagnostic without fabricating hashes', { timeout: 60_000 }, async (t) => {
   const host = makeHost();
-  t.after(() => host.dispose());
+  t.after(() => host.dispose(), { timeout: 60_000 });
 
   const brokenRoot = join(dataDir, 'broken-client');
   mkdirSync(brokenRoot, { recursive: true });
@@ -2560,7 +2560,7 @@ test('clientHashes: precompile failure preserves explicit error and isolated fai
 
 test('pluginSummaryOf / emitPluginChanged: deactivating window and enabled+lastError never leak active status, clientHashes, or UI', { timeout: 60_000 }, async (t) => {
   const host = makeHost();
-  t.after(() => host.dispose());
+  t.after(() => host.dispose(), { timeout: 60_000 });
 
   const clientRoot = join(dataDir, 'deactivating-client');
   mkdirSync(clientRoot, { recursive: true });
@@ -2617,7 +2617,7 @@ test('pluginSummaryOf / emitPluginChanged: deactivating window and enabled+lastE
 
 test('clientHashes: reloadExternalPlugin recompiles and emits updated clientHashes immediately', { timeout: 60_000 }, async (t) => {
   const host = makeHost();
-  t.after(() => host.dispose());
+  t.after(() => host.dispose(), { timeout: 60_000 });
 
   const pluginDir = join(dataDir, 'installed-plugins', 'ext-hash-reload');
   mkdirSync(join(pluginDir, 'client'), { recursive: true });
@@ -2668,7 +2668,7 @@ test('clientHashes: reloadExternalPlugin recompiles and emits updated clientHash
 test('HTTP client.mjs main module ?hash=: immutable cache on match, 304 on ETag, 409 client_module_stale on mismatch, no-cache without hash', { timeout: 60_000 }, async (t) => {
   const auth = new AuthService(dataDir);
   const httpHost = makeHost();
-  t.after(() => httpHost.dispose());
+  t.after(() => httpHost.dispose(), { timeout: 60_000 });
 
   const clientRoot = join(dataDir, 'http-client-hash');
   mkdirSync(clientRoot, { recursive: true });
@@ -2775,7 +2775,7 @@ test('ctx.doc durable: false keeps state strictly in memory (zero store I/O, clo
     },
   };
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeHostApi(events), docs: spyDocs });
-  t.after(() => host.dispose());
+  t.after(() => host.dispose(), { timeout: 60_000 });
 
   let privDoc!: PluginDocHandle<{ count: number }>;
   let pubDoc!: PluginDocHandle<{ phase: string; items: string[] }>;
@@ -2878,7 +2878,7 @@ test('ctx.sessionDoc durable: false works without sessionDocs store, performs ze
 
   // 1. Works even with sessionDocs omitted completely.
   const noStoreHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: hostApi, docs });
-  t.after(() => noStoreHost.dispose());
+  t.after(() => noStoreHost.dispose(), { timeout: 60_000 });
   await noStoreHost.register({
     id: 'p:transient-no-store',
     definePlugin: (ctx) => {
@@ -2896,7 +2896,7 @@ test('ctx.sessionDoc durable: false works without sessionDocs store, performs ze
     docs,
     sessionDocs: spySessionDocs,
   });
-  t.after(() => host.dispose());
+  t.after(() => host.dispose(), { timeout: 60_000 });
 
   let transientHandle!: PluginSessionDocHandle<{ tps: number } | null>;
   await host.register({
@@ -2943,7 +2943,7 @@ test('PluginSummary.publicConfig filters secret fields, merges defaults, redacts
     config: cfgStore,
     redactText: (text) => text.replaceAll('sk-live-secret', '[REDACTED]'),
   });
-  t.after(() => host.dispose());
+  t.after(() => host.dispose(), { timeout: 60_000 });
 
   await host.register({
     id: 'p:cfg-no-schema',
@@ -3025,7 +3025,7 @@ test('PluginHost.getManifest / listManifests: stably sorted read-only projection
     },
     redactText: (text) => text.replaceAll('PLUGIN_SECRET_MARKER', '[REDACTED]'),
   });
-  t.after(() => host.dispose());
+  t.after(() => host.dispose(), { timeout: 60_000 });
 
   await host.register({
     id: 'a:dep',

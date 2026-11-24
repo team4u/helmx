@@ -56,7 +56,7 @@ function makeEnv(
       events.close()
       rmSync(dataDir, { recursive: true, force: true })
     }
-  })
+  }, { timeout: 60_000 })
   return { dataDir, kv, service, updates }
 }
 

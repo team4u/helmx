@@ -70,7 +70,7 @@ test('updater cycle: stages a newer release and writes the ready record; same ve
     log: (line) => logs.push(line),
   });
   assert.ok(updater !== null);
-  t.after(() => updater.stop());
+  t.after(() => updater.stop(), { timeout: 60_000 });
 
   await updater.triggerCheck();
   const ready = await readUpdateReady(root);
@@ -99,7 +99,7 @@ test('updater cycle: registry failures are recorded honestly and never throw out
     intervalMs: 3_600_000,
   });
   assert.ok(updater !== null);
-  t.after(() => updater.stop());
+  t.after(() => updater.stop(), { timeout: 60_000 });
   await updater.triggerCheck(); // must not reject
   assert.match(updater.status().lastError ?? '', /registry unreachable/);
   assert.equal(updater.status().readyVersion, null);
@@ -121,7 +121,7 @@ test('hub-update routes: unmanaged hubs and missing candidates refuse honestly',
   // Managed but nothing staged.
   const updater = startHubUpdater({ root, pkgName: '@fake/hub', env: {}, dataDir: kernel.dataDir, core: fakeCore({ latest: '1.0.0' }), intervalMs: 3_600_000 });
   assert.ok(updater !== null);
-  t.after(() => updater.stop());
+  t.after(() => updater.stop(), { timeout: 60_000 });
   const managed = createHubUpdateRoutes({ updater, kernel, root, changelog: { available: false, sourcePath: null, sections: [], version: '1.0.0' }, upgrade: { upgradedFrom: null } });
   const noCandidate = await managed(makeApply());
   assert.ok(noCandidate !== undefined && noCandidate.status === 409);
@@ -136,7 +136,7 @@ test('hub-update apply: busy gate defers, force bypasses, accepted switch answer
   const kernel = { activitySnapshot: () => counts, dataDir: join(root, 'data') };
   const updater = startHubUpdater({ root, pkgName: '@fake/hub', env: {}, dataDir: kernel.dataDir, core: fakeCore({ latest: '1.1.0' }), intervalMs: 3_600_000 });
   assert.ok(updater !== null);
-  t.after(() => updater.stop());
+  t.after(() => updater.stop(), { timeout: 60_000 });
   const spawned: unknown[] = [];
   const routes = createHubUpdateRoutes({
     updater,
@@ -186,7 +186,7 @@ test('hub-update apply: enforces single-flight 409 lock, rejects >64KiB body wit
   const kernel = { activitySnapshot: () => emptyCounts(), dataDir: join(root, 'data') };
   const updater = startHubUpdater({ root, pkgName: '@fake/hub', env: {}, dataDir: kernel.dataDir, core: fakeCore({ latest: '1.1.0' }), intervalMs: 3_600_000 });
   assert.ok(updater !== null);
-  t.after(() => updater.stop());
+  t.after(() => updater.stop(), { timeout: 60_000 });
 
   let releaseHandoff!: () => void;
   let handoffEntered!: () => void;

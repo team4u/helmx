@@ -365,7 +365,7 @@ test('doctor performs read-only WS Hub probe (zero register calls, zero eviction
   t.after(async () => {
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   await writeNodeIdentity(dir, { nodeId: 'doctor-hub-node', token, hubUrl: hub.url });
   const report = await runNodeDoctor({
     dataDir: dir,
@@ -402,7 +402,7 @@ test('doctor probe does not disrupt an online daemon with the same nodeId', { ti
   t.after(async () => {
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  });
+  }, { timeout: 60_000 });
   const daemon = await createNodeDaemon({
     hubUrl: hub.url,
     identity: { nodeId: 'doctor-live-node', token },

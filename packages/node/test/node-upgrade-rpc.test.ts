@@ -417,7 +417,7 @@ test('upgrade success path: draining gate activates, commits once, invokes host 
   t.after(async () => {
     await stub.daemon.close().catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
 
   await seedStagedRelease(dir, '9.9.9');
@@ -463,7 +463,7 @@ test('upgrade same-version no-op (upgraded:false) restores flags/gate and stays 
     await stub.daemon.close().catch(() => undefined);
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
 
   // Target == current running version without force: engine immediately returns upgraded:false (no staging/network)
@@ -498,7 +498,7 @@ test('upgrade failure rolls back, clears gate, restores reconnect, and accepts c
   t.after(async () => {
     await stub.daemon.close().catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
   const port = hub.port;
 
@@ -539,7 +539,7 @@ test('UpgradeCommitUnconfirmedError (via cause chain): no rollback, stays draini
     await stub.daemon.close().catch(() => undefined);
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
 
   await seedStagedRelease(dir, '7.7.7');
@@ -570,7 +570,7 @@ test('concurrent upgrade rejects as busy without sharing result; retryable after
     await stub.daemon.close().catch(() => undefined);
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
   await seedStagedRelease(dir, '9.9.9');
   await seedStagedRelease(dir, '8.8.8');
@@ -640,7 +640,7 @@ test('pendingActivation candidate rejects new commands until confirmUpgrade reco
     await stub.daemon.close().catch(() => undefined);
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
   const rpc = hub.nodeRpc()!;
 
@@ -689,7 +689,7 @@ test('commit survives disconnect in memory and retries in heartbeats on new conn
   t.after(async () => {
     await stub.daemon.close().catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, { timeout: 60_000 });
   assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
 
   // Non-candidate daemon confirmUpgrade skips identity check (ordinary heartbeat reporting path)

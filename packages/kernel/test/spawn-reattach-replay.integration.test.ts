@@ -144,7 +144,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
     model: 'faux/faux-1',
     models,
   })
-  t.after(() => runtime.close().catch(() => {}))
+  t.after(() => runtime.close().catch(() => {}), { timeout: 60_000 })
 
   // First spawn a real child conversation
   faux.setResponses([fauxAssistantMessage('initial child done')])
@@ -401,7 +401,7 @@ test('PluginToolSpec.replay: safe replays across runtime.close() and SIGKILL; un
     models: m2,
     autoResume: false,
   })
-  t.after(() => r2.close().catch(() => {}))
+  t.after(() => r2.close().catch(() => {}), { timeout: 60_000 })
   await r2.plugins.register({
     id: 'test:replay-close',
     name: 'Replayable plugin tool',
@@ -657,7 +657,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     models: m1b,
     autoResume: false,
   })
-  t.after(() => r1b.close().catch(() => {}))
+  t.after(() => r1b.close().catch(() => {}), { timeout: 60_000 })
   await r1b.plugins.register({
     id: 'test:pause-helper',
     name: 'Pause tool',
@@ -770,7 +770,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     models: m2b,
     autoResume: false,
   })
-  t.after(() => r2b.close().catch(() => {}))
+  t.after(() => r2b.close().catch(() => {}), { timeout: 60_000 })
   await r2b.plugins.register({
     id: 'test:prefill-pause',
     name: 'Post-structured pause',
@@ -872,7 +872,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     models: m3b,
     autoResume: false,
   })
-  t.after(() => r3b.close().catch(() => {}))
+  t.after(() => r3b.close().catch(() => {}), { timeout: 60_000 })
   await r3b.plugins.register({
     id: 'test:heal-pause',
     name: 'Pause during heal',
@@ -933,7 +933,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     models: m4b,
     autoResume: true,
   })
-  t.after(() => r4b.close().catch(() => {}))
+  t.after(() => r4b.close().catch(() => {}), { timeout: 60_000 })
   let plainGate: AgentGateResult | undefined
   const reattachedPlain = await r4b.spawnAgent({
     parentConversationId: 1,

@@ -38,7 +38,7 @@ before(async () => {
 after(async () => {
   await server.dispose().catch(() => undefined)
   await cleanupDir(rootDir)
-})
+}, { timeout: 60_000 })
 
 /** Spawn a long-lived child with `target` as cwd (only for real occupancy testing). */
 function holdProcess(target: string): { pid: number; stop: () => Promise<void> } {

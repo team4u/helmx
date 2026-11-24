@@ -17,7 +17,7 @@ test('local tunnel: dispose closes active and in-flight connections and rejects 
   t.after(async () => {
     for (const socket of sockets) socket.destroy()
     await new Promise<void>((resolve) => server.close(() => resolve()))
-  })
+  }, { timeout: 60_000 })
   const fabric = createEnvFabric({})
   const duplex = await fabric.openTunnel('local', { port })
   const closed = once(duplex, 'close')

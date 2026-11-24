@@ -148,7 +148,7 @@ before(async () => {
 after(async () => {
   await openaiGateway.stop()
   await anthropicGateway.stop()
-})
+}, { timeout: 60_000 })
 
 const ENV_VARS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY'] as const
 let envBackup: Record<string, string | undefined> = {}

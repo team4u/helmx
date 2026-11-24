@@ -126,7 +126,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
   t.after(async () => {
     await env.kernel.close()
     rmSync(dir, { recursive: true, force: true })
-  })
+  }, { timeout: 60_000 })
   return env
 }
 

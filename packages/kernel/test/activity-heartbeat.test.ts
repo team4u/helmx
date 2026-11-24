@@ -30,7 +30,7 @@ describe('activity heartbeat writer', { timeout: 60_000 }, () => {
   after(async () => {
     for (const heart of hearts) await heart.stop().catch(() => undefined);
     await cleanupDir(root);
-  });
+  }, { timeout: 60_000 });
 
   test('hubActivityFilePath places the heartbeat at the data dir root', () => {
     assert.equal(hubActivityFilePath('/data'), path.join('/data', 'hub-activity.json'));
@@ -55,7 +55,7 @@ describe('activity heartbeat writer', { timeout: 60_000 }, () => {
     hearts.push(heart);
     t.after(() => {
       void heart.stop();
-    });
+    }, { timeout: 60_000 });
 
     const file = hubActivityFilePath(dir);
     const first = await parseFile(file);
@@ -97,7 +97,7 @@ describe('activity heartbeat writer', { timeout: 60_000 }, () => {
     hearts.push(heart);
     t.after(() => {
       void heart.stop();
-    });
+    }, { timeout: 60_000 });
 
     await parseFile(file); // initial write landed
     counts = { activeConversations: 2, activeCompactions: 1, queuedConversations: 0, settlingConversations: 0 };
@@ -133,7 +133,7 @@ describe('activity heartbeat writer', { timeout: 60_000 }, () => {
     hearts.push(heart);
     t.after(() => {
       void heart.stop();
-    });
+    }, { timeout: 60_000 });
 
     await fsp.rm(dir, { recursive: true, force: true });
     await fsp.writeFile(dir, 'occupied by a file'); // the data dir path is now a file: writes fail

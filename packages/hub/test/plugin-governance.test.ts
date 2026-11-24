@@ -215,7 +215,7 @@ export default { id: 'svc-fail', name: 'svc-fail', async definePlugin(ctx) {
 
 test('PluginHost 治理：内置注册严格抛错、手动启用失败透传、inUse/引用探针/liveTasks 门禁与三态语义', { timeout: 60_000 }, async (t) => {
   const fixture = makeHostFixture(useTempDir(t, 'helmx-gov-host-'))
-  t.after(() => fixture.close())
+  t.after(() => fixture.close(), { timeout: 60_000 })
 
   // 1. 内置插件注册失败严格阻断（不降级 failed）
   await rejectsCode(
@@ -326,7 +326,7 @@ test('PluginHost 治理：内置注册严格抛错、手动启用失败透传、
 
 test('Hook 隔离契约：turn_settled 隔离单插件抛错/坏返回并保留最新合法载荷，before_turn 严格 fail-closed，handled 正常短路', { timeout: 60_000 }, async (t) => {
   const f1 = makeHostFixture(useTempDir(t, 'helmx-gov-hook1-'))
-  t.after(() => f1.close())
+  t.after(() => f1.close(), { timeout: 60_000 })
 
   const seen: Array<{ outcome: string; error?: string }> = []
   await f1.host.register({ id: 'broken-settler', definePlugin: (ctx) => { ctx.hook.onTurnSettled(() => { throw new Error('boom in settler') }, { priority: 10 }) } })
@@ -350,7 +350,7 @@ test('Hook 隔离契约：turn_settled 隔离单插件抛错/坏返回并保留�
 
   // handled 短路与非法初始载荷直接报错
   const f2 = makeHostFixture(useTempDir(t, 'helmx-gov-hook2-'))
-  t.after(() => f2.close())
+  t.after(() => f2.close(), { timeout: 60_000 })
   let downstreamRan = false
   await f2.host.register({ id: 'handled:settle', definePlugin: (ctx) => { ctx.hook.onTurnSettled(() => ({ action: 'handled', result: { settled: true } }), { priority: 10 }) } })
   await f2.host.register({ id: 'after:settle', definePlugin: (ctx) => { ctx.hook.onTurnSettled(() => { downstreamRan = true; return { action: 'continue' } }) } })
@@ -389,7 +389,7 @@ test('插件配置分层：磁盘不固化 default、sources 三态溯源、null
   t.after(async () => {
     await host.dispose()
     await base.close()
-  })
+  }, { timeout: 60_000 })
 
   await host.register({
     id: 'ext:cfg',
