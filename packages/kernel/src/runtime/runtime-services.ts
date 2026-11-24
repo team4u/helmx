@@ -40,6 +40,7 @@ import { buildManagedEnv } from './tools.js'
 import { HelmxPluginConfigStore } from './plugin-config-store.js'
 import { ConversationService } from './conversation-service.js'
 import { NodeManager } from './node-manager.js'
+import type { NodeAutoUpgradeRetryPolicy } from './node-auto-upgrade.js'
 import { ModelRegistry } from './model-registry.js'
 import { HookBridge, prepareToolResultWith } from './hook-bridge.js'
 import { RuntimeToolRegistry } from './tool-registry.js'
@@ -70,6 +71,8 @@ export interface RuntimeServicesInit extends BootstrappedKernelContext {
   /** Plugin build port (`KernelBootOptions.buildProvider` passthrough; Hub injects default implementation). */
   buildProvider?: PluginBuildProvider
   nodeUpgradeTimeoutMs: number
+  autoUpgradeNodes?: boolean
+  nodeAutoUpgradePolicy?: NodeAutoUpgradeRetryPolicy
 }
 
 export interface AssembledRuntimeServices {
@@ -241,6 +244,16 @@ export function assembleRuntimeServices(
     toolDeps,
     events,
     nodeUpgradeTimeoutMs: init.nodeUpgradeTimeoutMs,
+    autoUpgradeNodes: init.autoUpgradeNodes,
+    autoUpgradePolicy: init.nodeAutoUpgradePolicy,
+    isHubReady: () => runtime.started,
+    describeNodeBusy: (nodeId) => runtime.describeNodeBusy(nodeId),
+    log: (message) =>
+      init.emitDiagnostic({
+        level: 'info',
+        source: 'nodes.auto-upgrade',
+        message,
+      }),
     convOf: (id) => requireConv(options.store, id),
   })
 

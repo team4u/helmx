@@ -710,6 +710,18 @@ test('node bundle: help and honest error paths run for real from the single file
     assert.notEqual(restart.status, 0, 'restart without a bound identity must not exit 0');
     assert.match(restart.stderr, /"error"/, 'the --json failure envelope must land on stderr');
     assert.match(restart.stderr, /missing_identity/, 'the honest failure code must identify the missing identity binding');
+
+    // Assembled publishable bundle must self-identify as release mode (never source mode).
+    const status = spawnSync(process.execPath, [path.join(nodeStagingDir, 'dist/cli.js'), 'status', '--json'], {
+      cwd: dataDir,
+      encoding: 'utf8',
+      timeout: 50_000,
+      env: { ...process.env, HELMX_DATA_DIR: dataDir },
+    });
+    assert.equal(status.status, 0, `helmx-node status expected exit 0, got ${status.status}\nstderr: ${status.stderr}`);
+    const statusJson = JSON.parse(status.stdout) as { installMode?: string; version?: string };
+    assert.equal(statusJson.installMode, 'release', 'assembled npm release bundle must detect installMode=release');
+    assert.match(statusJson.version ?? '', /^\d+\.\d+\.\d+/);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }

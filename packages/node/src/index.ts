@@ -70,4 +70,15 @@ export {
   type NodeServiceSpecOptions,
   type NodeServiceStatus,
 } from './daemon/service.js';
-export { runNodeCli, isDirectRun, resolveServiceEntry, defaultSpawnDaemon, controlEndpoint, type NodeCliIo, type DaemonReadyState, type PidRecord } from './cli.js';
+export {
+  runNodeCli,
+  isDirectRun,
+  detectNodeInstallMode,
+  resolveDaemonLaunchTarget,
+  resolveServiceEntry,
+  defaultSpawnDaemon,
+  controlEndpoint,
+  type NodeCliIo,
+  type DaemonReadyState,
+  type PidRecord,
+} from './cli.js';

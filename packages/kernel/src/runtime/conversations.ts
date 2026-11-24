@@ -604,6 +604,18 @@ export class ConversationTracker {
     return (this.mirrors.get(conversationId)?.live?.compactions?.length ?? 0) > 0
   }
 
+  /** Whether the conversation currently has any Hub-tracked active work (run, queued inbox, compaction, or turn_settled in flight). */
+  isConversationBusy(conversationId: number): boolean {
+    const mirror = this.mirrors.get(conversationId)
+    if (mirror === undefined) return false
+    return (
+      mirror.busyActive > 0 ||
+      mirror.busyCompactions > 0 ||
+      mirror.busyQueued > 0 ||
+      mirror.busySettling > 0
+    )
+  }
+
   /**
    * Aggregate activity counts over live mirrors for the runtime's activity snapshot (the Hub's
    * process-private heartbeat file backing the launcher's update busy-gate):

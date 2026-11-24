@@ -18,6 +18,7 @@ import type {
   NodeEnvRpcFunctions,
   NodeHealthSnapshot,
   NodeHeartbeatInput,
+  NodeInstallMode,
   NodeRegisterInput,
   NodeRegisterResult,
   NodeUpgradeCheckInput,
@@ -107,6 +108,7 @@ export interface DaemonConnectionManagerDeps {
   hubUrl: string;
   identity: NodeIdentity;
   dataDir: string;
+  installMode: NodeInstallMode;
   envServer: Omit<NodeEnvRpcServerOptions, 'defaultCwd' | 'onExecOutput'>;
   reconnectBaseDelayMs: number;
   reconnectMaxDelayMs: number;
@@ -382,6 +384,7 @@ export function createDaemonConnectionManager(deps: DaemonConnectionManagerDeps)
               platform: process.platform,
               hubUrl,
               version: getNodeVersion(),
+              installMode: deps.installMode,
               ...(deps.upgradeAttemptId !== undefined ? { upgradeAttemptId: deps.upgradeAttemptId } : {}),
               ...(health !== undefined ? { health } : {}),
             })

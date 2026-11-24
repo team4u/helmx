@@ -25,6 +25,30 @@ export interface NodeHealthSnapshot {
   diskTotalBytes?: number
 }
 
+/** Runtime install mode of `@helmx/node` (`source` = repo/link checkout, `release` = published npm artifact). */
+export type NodeInstallMode = 'source' | 'release'
+
+/** Hub-side automatic node version-follow state exposed on `NodeInfo` and `node.changed` for observability. */
+export type NodeAutoUpgradePhase =
+  | 'pending'
+  | 'upgrading'
+  | 'failed'
+  | 'source_skipped'
+  | 'unknown_mode'
+  | 'not_supported'
+
+/** Hub-side automatic node upgrade status snapshot (optional on `NodeInfo` for backward compatibility). */
+export interface NodeAutoUpgradeStatus {
+  status: NodeAutoUpgradePhase
+  targetVersion: string
+  attempts: number
+  updatedAt: number
+  /** Next scheduled retry timestamp (ms since epoch) while pending/failed backoff is armed. */
+  nextRetryAt?: number
+  /** Diagnostic summary (busy workload reason, source_mode/unknown_mode notice, or last failure message). */
+  reason?: string
+}
+
 /** Node summary (`GET /api/nodes` and SSE `snapshot.nodes` / `node.changed`). */
 export interface NodeInfo {
   id: string
@@ -34,12 +58,16 @@ export interface NodeInfo {
   platform?: string
   /** Software version currently running on the node (e.g. `0.1.0`). */
   version?: string
+  /** Runtime install mode reported by the node (`source` | `release`); omitted for older daemons or offline nodes. */
+  installMode?: NodeInstallMode
   connectedAt?: number
   lastSeenAt?: number
   /** The real reachable address the node used to connect to the Hub (for remote managed processes to dial back). */
   hubUrl?: string
   /** Node health snapshot piggybacked on the latest register or heartbeat. */
   health?: NodeHealthSnapshot
+  /** Hub-side automatic version-follow state when an auto-upgrade is pending, running, failed, or terminally skipped. */
+  autoUpgrade?: NodeAutoUpgradeStatus
 }
 
 /** Node canary upgrade failure isolation record (`<dataDir>/update-blocked.json`). */
@@ -106,6 +134,8 @@ export interface NodeRegisterInput {
   platform: string
   /** Software version currently running on the node (e.g. `0.1.0`). */
   version?: string
+  /** Runtime install mode (`source` = repo/link checkout, `release` = published npm artifact). Optional for older daemons. */
+  installMode?: NodeInstallMode
   /** Upgrade attempt ID: echoed by the new daemon reconnecting after an upgrade, for the Hub to reconcile and confirm. */
   upgradeAttemptId?: string
   /** Hub address configured on the node side (for remote managed subprocesses to dial back). */
@@ -204,13 +234,16 @@ export interface RpcLineScan {
   firstLineBytes: number
 }
 
+/** Node upgrade-specific RPC error codes (kept separate from `RpcFileErrorCode` and `RpcExecutionErrorCode`). */
+export type NodeUpgradeErrorCode = 'source_mode'
+
 /**
  * Unified RPC error envelope: drain-period rejections of `envExec` and `nodeTunnelOpen`
  * carry `node_draining` through this union (file operations and read-only discovery RPCs
  * such as `envPathUsage` / `nodeHostEnv` are not drained).
  */
 export interface RpcEnvError {
-  code: RpcFileErrorCode | RpcExecutionErrorCode | NodeTunnelErrorCode
+  code: RpcFileErrorCode | RpcExecutionErrorCode | NodeTunnelErrorCode | NodeUpgradeErrorCode
   message: string
   spillPath?: string
 }

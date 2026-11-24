@@ -16,7 +16,8 @@ import rawFs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { isStrictSemver, type NodeUpgradeCheckResult, type NodeUpgradeResult } from '@helmx/protocol';
+import { isStrictSemver, type NodeInstallMode, type NodeUpgradeCheckResult, type NodeUpgradeResult } from '@helmx/protocol';
+import { detectNodeInstallMode } from '../service-entry.js';
 import {
   UpgradeCommitUnconfirmedError,
   UpgradeRejectedError,
@@ -69,7 +70,7 @@ export type {
 export type StagedNodeRelease = StagedRelease;
 export type PreparedNodeReplacement = PreparedReplacement;
 export type PerformNodeUpgradeOptions = PerformUpdateOptions;
-export type CheckNodeUpgradeOptions = CheckForUpdateOptions;
+export type CheckNodeUpgradeOptions = CheckForUpdateOptions & { installMode?: NodeInstallMode };
 
 let cachedPackageVersion: string | undefined;
 
@@ -105,8 +106,16 @@ export function getNodeVersion(): string {
   return cachedPackageVersion;
 }
 
-/** Resolve effective node version for offline CLI status: `current.json` takes precedence over own package version. */
-export async function resolveEffectiveNodeVersion(dataDir: string): Promise<string> {
+/**
+ * Resolve effective node version for offline CLI status and update checks:
+ * - In `source` mode: always return this source package's `package.json` version (ignore stale `current.json`);
+ * - In `release` mode: `current.json` takes precedence over own package version.
+ */
+export async function resolveEffectiveNodeVersion(
+  dataDir: string,
+  installMode: NodeInstallMode = detectNodeInstallMode(),
+): Promise<string> {
+  if (installMode === 'source') return getNodeVersion();
   const current = await readCurrentRelease(dataDir);
   return current?.version ?? getNodeVersion();
 }
@@ -135,7 +144,10 @@ export async function checkNodeUpgrade(
   dataDir: string,
   options?: CheckNodeUpgradeOptions,
 ): Promise<NodeUpgradeCheckResult> {
-  return checkForUpdate(dataDir, makeNodeUpdateSpec(), options);
+  const { installMode, ...rest } = options ?? {};
+  const currentVersion =
+    rest.currentVersion ?? (await resolveEffectiveNodeVersion(dataDir, installMode));
+  return checkForUpdate(dataDir, makeNodeUpdateSpec(), { ...rest, currentVersion });
 }
 
 export async function stageReleaseFromNpm(

@@ -10,15 +10,20 @@ import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
 import { access, chmod, mkdir, readFile, statfs, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmxError, isValidNodeId, type EnvExecRequest, type EnvExecResponse, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helmx/protocol'
-import { sha256hex, type EnvFabric } from '../env/index.js'
+import { HelmxError, isValidNodeId, type EnvExecRequest, type EnvExecResponse, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeInstallMode, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helmx/protocol'
+import { HelmxUpgradeBusyError, sha256hex, type EnvFabric } from '../env/index.js'
 import type { ConfigService } from '../services/index.js'
 import type { SecretStash } from '../services/index.js'
 import { isAbsoluteTargetPath, runShell } from './tools.js'
 import { normalizePathForTarget, targetPlatformForNode } from './target-platform.js'
 import { buildPosixHostShim, buildWindowsCmdWrapper, buildWindowsPosixShim, type CliShimPlan } from './cli-shim.js'
 import type { HelmxToolDeps } from './tool-deps.js'
-import { compareStrictSemVer, hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmxError, safeJson, unwrapUpgradeCheckRpc, validateUpgradeResult } from './semver.js'
+import { hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmxError, safeJson, unwrapUpgradeCheckRpc, validateUpgradeResult } from './semver.js'
+import {
+  NodeAutoUpgradeCoordinator,
+  resolveAutoUpgradeNodesEnabled,
+  type NodeAutoUpgradeRetryPolicy,
+} from './node-auto-upgrade.js'
 
 /** Background refresh interval for local disk stats (unref timer, never blocks process exit). */
 const LOCAL_DISK_REFRESH_MS = 30_000
@@ -32,6 +37,16 @@ interface NodeManagerOptions {
   readonly events: { publish(type: 'notification', payload: unknown): void; publish(type: 'node.changed', payload: unknown): void }
   /** Node upgrade confirmation timeout in milliseconds (default 120000). */
   readonly nodeUpgradeTimeoutMs: number
+  /** Explicit auto-upgrade toggle override (defaults to `resolveAutoUpgradeNodesEnabled(process.env)`). */
+  readonly autoUpgradeNodes?: boolean
+  /** Retry/busy-poll timing overrides for automatic node upgrades (for tests). */
+  readonly autoUpgradePolicy?: NodeAutoUpgradeRetryPolicy
+  /** Whether Hub startup + recovery + reconcile have completed (`KernelRuntime.started`). */
+  readonly isHubReady?: () => boolean
+  /** Synchronous check for Hub-visible active work bound to a node (`undefined` when idle). */
+  readonly describeNodeBusy?: (nodeId: string) => string | undefined
+  /** Structured diagnostic log sink (defaults to stderr). */
+  readonly log?: (message: string) => void
 }
 
 /**
@@ -48,6 +63,7 @@ export class NodeManager {
   private readonly toolDeps: HelmxToolDeps
   private readonly events: NodeManagerOptions['events']
   readonly NODE_UPGRADE_TIMEOUT_MS: number
+  private readonly autoUpgradeOverride: boolean | undefined
   /** Node token index registered in config.json (nodeId -> sha256(token)). */
   private readonly nodeTokenIndex = new Map<string, string>()
   /** Disposers for plaintext token redaction entries registered per nodeId. */
@@ -60,8 +76,10 @@ export class NodeManager {
   private localDiskRefreshTimer: NodeJS.Timeout | undefined
   /** In-flight local disk stats refresh (singleflight to prevent stacking). */
   private localDiskRefreshing: Promise<void> = Promise.resolve()
-  /** Auto-upgrade deduplication: attempt at most one automatic upgrade round per node per process lifecycle. */
-  readonly #autoUpgradeAttempted = new Set<string>()
+  /** In-flight `execEnv` counts per nodeId (backs the auto-upgrade busy gate for standalone remote execs). */
+  private readonly activeExecCounts = new Map<string, number>()
+  /** Automatic node version-follow coordinator (Hub-pinned version, startup/busy gates, backoff retry, source exemption). */
+  private readonly autoUpgrade: NodeAutoUpgradeCoordinator
 
   /** Conversation metadata resolver (host injects store.getConv + 404 semantics). */
   private readonly convOf: (conversationId: number) => { nodeId?: string; cwd: string }
@@ -74,12 +92,48 @@ export class NodeManager {
     this.toolDeps = options.toolDeps
     this.events = options.events
     this.NODE_UPGRADE_TIMEOUT_MS = options.nodeUpgradeTimeoutMs
+    this.autoUpgradeOverride = options.autoUpgradeNodes
     this.convOf = options.convOf
+    const log = options.log ?? ((message: string) => console.error(message))
+    const isHubReady = options.isHubReady ?? (() => true)
+    const describeNodeBusy = options.describeNodeBusy ?? ((nodeId: string) => (this.activeExecCount(nodeId) > 0 ? 'in-flight remote exec(s) on node' : undefined))
+    this.autoUpgrade = new NodeAutoUpgradeCoordinator({
+      isEnabled: () => this.autoUpgradeEnabled,
+      isHubReady,
+      getTargetVersion: () => hubVersion(),
+      getOnlineNode: (nodeId) => this.envFabric.registry.get(nodeId),
+      listOnlineNodeIds: () => this.envFabric.registry.list().map((conn) => conn.nodeId),
+      hasNode: (nodeId) => this.hasNode(nodeId),
+      hasUpgradeInFlight: (nodeId) => this.envFabric.registry.hasUpgradeWaiter(nodeId),
+      describeNodeBusy,
+      runUpgrade: (nodeId, targetVersion) => this.upgradeNode(nodeId, { targetVersion }),
+      publishNodeChanged: (nodeId) => {
+        if (!this.hasNode(nodeId)) return
+        const conn = this.envFabric.registry.get(nodeId)
+        this.events.publish('node.changed', {
+          type: 'node.changed',
+          node: this.byomNodeInfo(nodeId, conn),
+        })
+      },
+      publishNotification: (payload) => this.events.publish('notification', payload),
+      log,
+      policy: options.autoUpgradePolicy,
+    })
   }
 
-  /** Auto-upgrade runs only when HELMX_AUTO_UPGRADE_NODES=1 is explicitly enabled (disabled by default). */
+  /** Auto-upgrade is enabled by default; disable explicitly via option or `HELMX_AUTO_UPGRADE_NODES=0|false|off|no`. */
   private get autoUpgradeEnabled(): boolean {
-    return process.env['HELMX_AUTO_UPGRADE_NODES'] === '1'
+    return this.autoUpgradeOverride ?? resolveAutoUpgradeNodesEnabled(process.env)
+  }
+
+  /** Number of in-flight `execEnv` calls targeting `nodeId` (read-only busy-gate signal). */
+  activeExecCount(nodeId: string): number {
+    return this.activeExecCounts.get(nodeId) ?? 0
+  }
+
+  /** Signal that Hub startup + recovery + reconcile have completed, waking any pending auto-upgrades. */
+  notifyHubReady(): void {
+    this.autoUpgrade.onHubReady()
   }
 
   get cliBinDir(): string | undefined {
@@ -170,6 +224,7 @@ export class NodeManager {
       throw new HelmxError('not_found', `node not found: ${nodeId}`, 404, { nodeId })
     }
     this.nodeTokenIndex.delete(nodeId)
+    this.autoUpgrade.onNodeRemoved(nodeId)
     await this.persistNodeTokens()
     this.releaseTokenRedactions(nodeId)
     // Sever any in-flight connection first (may fire onNodeChanged offline callback, which skips because
@@ -307,7 +362,20 @@ export class NodeManager {
    * Assemble NodeInfo for a registered (byom) node: shared by onNodeChanged events and listNodesSync
    * (single source of truth for optional field projection, eliminating duplicate assembly logic).
    */
-  byomNodeInfo(nodeId: string, conn: { hostname?: string; platform?: string; version?: string; hubUrl?: string; connectedAt?: number; lastSeenAt?: number; health?: NodeHealthSnapshot } | undefined): NodeInfo {
+  byomNodeInfo(
+    nodeId: string,
+    conn: {
+      hostname?: string
+      platform?: string
+      version?: string
+      installMode?: NodeInstallMode
+      hubUrl?: string
+      connectedAt?: number
+      lastSeenAt?: number
+      health?: NodeHealthSnapshot
+    } | undefined,
+  ): NodeInfo {
+    const autoUpgrade = this.autoUpgrade.statusOf(nodeId)
     return {
       id: nodeId,
       kind: 'byom',
@@ -315,10 +383,12 @@ export class NodeManager {
       ...(conn?.hostname !== undefined ? { hostname: conn.hostname } : {}),
       ...(conn?.platform !== undefined ? { platform: conn.platform } : {}),
       ...(conn?.version !== undefined ? { version: conn.version } : {}),
+      ...(conn?.installMode !== undefined ? { installMode: conn.installMode } : {}),
       ...(conn?.hubUrl !== undefined ? { hubUrl: conn.hubUrl } : {}),
       ...(conn?.connectedAt !== undefined ? { connectedAt: conn.connectedAt } : {}),
       ...(conn?.lastSeenAt !== undefined ? { lastSeenAt: conn.lastSeenAt } : {}),
       ...(conn?.health !== undefined ? { health: conn.health } : {}),
+      ...(autoUpgrade !== undefined ? { autoUpgrade } : {}),
     }
   }
 
@@ -355,7 +425,7 @@ export class NodeManager {
   // ------------------------------------------------------------------
 
   /** Upgrade preflight: reject local, 404 unknown, 409 offline; returns current online connection. */
-  private requireUpgradableConnection(nodeId: string): { version?: string; rpc: NodeEnvRpcFunctions } {
+  private requireUpgradableConnection(nodeId: string): { version?: string; installMode?: NodeInstallMode; rpc: NodeEnvRpcFunctions } {
     if (nodeId === 'local') {
       throw new HelmxError('cannot_upgrade_local', 'local runs in-process with Hub; upgrade Hub to upgrade local', 400, { nodeId })
     }
@@ -396,6 +466,12 @@ export class NodeManager {
 
   /**
    * Trigger a node upgrade (POST /api/nodes/:id/upgrade):
+   * - Explicit manual upgrades reject confirmed `installMode === 'source'` nodes immediately (501
+   *   `node_upgrade_source_mode`), while still allowing legacy daemons that omit `installMode`
+   *   so operators can explicitly bootstrap older release daemons (daemons without `nodeUpgrade`
+   *   return 501 `node_upgrade_not_supported`; source daemons rejecting at RPC map to 501
+   *   `node_upgrade_source_mode`). Automatic Hub-driven follow is fail-closed in
+   *   `NodeAutoUpgradeCoordinator` (`installMode === 'release'` only).
    * 1. Resolve exact targetVersion (normalize explicit version; if omitted, check first and pick latest);
    *    resolve previousVersion from the node's reported current version (check if missing, never fabricate 'unknown'
    *    which would never match commit confirmation);
@@ -412,17 +488,33 @@ export class NodeManager {
     input: { targetVersion?: string; registryUrl?: string; force?: boolean } = {},
   ): Promise<NodeUpgradeResult> {
     const conn = this.requireUpgradableConnection(nodeId)
+    if (conn.installMode === 'source') {
+      throw new HelmxError(
+        'node_upgrade_source_mode',
+        `node ${nodeId} is running in source/link mode (source_mode); npm self-upgrade is not supported — update the source repository and restart helmx-node manually`,
+        501,
+        { nodeId, installMode: 'source', reason: 'source_mode' },
+      )
+    }
     if (conn.rpc.nodeUpgrade === undefined) {
       throw new HelmxError('node_upgrade_not_supported', `node ${nodeId} does not support upgrades (outdated @helmx/node)`, 501, { nodeId })
     }
     const { targetVersion, previousVersion } = await this.resolveUpgradeVersions(nodeId, conn.version, input)
     const attemptId = randomBytes(16).toString('hex')
-    const waiter = this.envFabric.registry.beginUpgrade(nodeId, {
-      attemptId,
-      targetVersion,
-      previousVersion,
-      timeoutMs: this.NODE_UPGRADE_TIMEOUT_MS,
-    })
+    let waiter: ReturnType<EnvFabric['registry']['beginUpgrade']>
+    try {
+      waiter = this.envFabric.registry.beginUpgrade(nodeId, {
+        attemptId,
+        targetVersion,
+        previousVersion,
+        timeoutMs: this.NODE_UPGRADE_TIMEOUT_MS,
+      })
+    } catch (error) {
+      if (error instanceof HelmxUpgradeBusyError) {
+        throw new HelmxError('node_upgrade_busy', error.message, 409, { nodeId })
+      }
+      throw error
+    }
     // Ensure non-commit exit paths always clean up the waiter so future upgrades do not stay locked.
     const finallyCancel = (): void => {
       waiter.cancel(new HelmxError('node_upgrade_cancelled', `upgrade waiter for node ${nodeId} terminated`, 502))
@@ -609,28 +701,6 @@ export class NodeManager {
     return value
   }
 
-  /**
-   * Auto-upgrade eligible nodes when HELMX_AUTO_UPGRADE_NODES=1: triggers only when strict SemVer lags behind Hub;
-   * deduplicated (once per node); failures emit a warning notification without blocking registration.
-   */
-  async autoUpgradeIfEligible(nodeId: string, version: string | undefined): Promise<void> {
-    if (!this.autoUpgradeEnabled) return
-    if (this.#autoUpgradeAttempted.has(nodeId)) return
-    if (version === undefined || !isStrictSemVer(version)) return
-    const hub = hubVersion()
-    if (compareStrictSemVer(version, hub) >= 0) return
-    this.#autoUpgradeAttempted.add(nodeId)
-    try {
-      await this.upgradeNode(nodeId, { targetVersion: hub })
-    } catch (error) {
-      this.events.publish('notification', {
-        level: 'warning',
-        title: `Auto-upgrade failed for node ${nodeId}`,
-        body: String(error instanceof Error ? error.message : error),
-      })
-    }
-  }
-
   // ------------------------------------------------------------------
   // Cross-node command execution (execEnv)
   // ------------------------------------------------------------------
@@ -649,24 +719,31 @@ export class NodeManager {
       throw new HelmxError('validation_error', 'command must be a string or string array', 400)
     }
     const { nodeId, cwd } = this.resolveExecTarget(req)
-    const result = await runShell(this.toolDeps, req.command as string, {
-      ...(cwd !== undefined ? { cwd } : {}),
-      nodeId,
-      conversationId: req.conversationId,
-      ...(req.env === undefined ? {} : { env: req.env }),
-      ...(req.timeoutMs === undefined ? {} : { timeoutMs: req.timeoutMs }),
-      signal,
-      // Streaming mode: forward chunk callbacks (caller handles throttling); Hub-side aggregate cap matches
-      // runShell's STREAM_AGGREGATE_LIMIT_BYTES (avoiding redundant 64 MiB buffering leaks—streaming clients
-      // already receive all chunks, and terminal output only aggregates for diagnostics, throwing output_limit_exceeded
-      // if exceeded without changing the frame protocol).
-      ...(onChunk !== undefined ? { onOutputChunk: onChunk } : {}),
-    })
-    return {
-      ok: result.ok,
-      exitCode: result.exitCode,
-      output: result.output,
-      timedOut: result.timedOut,
+    this.activeExecCounts.set(nodeId, (this.activeExecCounts.get(nodeId) ?? 0) + 1)
+    try {
+      const result = await runShell(this.toolDeps, req.command as string, {
+        ...(cwd !== undefined ? { cwd } : {}),
+        nodeId,
+        conversationId: req.conversationId,
+        ...(req.env === undefined ? {} : { env: req.env }),
+        ...(req.timeoutMs === undefined ? {} : { timeoutMs: req.timeoutMs }),
+        signal,
+        // Streaming mode: forward chunk callbacks (caller handles throttling); Hub-side aggregate cap matches
+        // runShell's STREAM_AGGREGATE_LIMIT_BYTES (avoiding redundant 64 MiB buffering leaks—streaming clients
+        // already receive all chunks, and terminal output only aggregates for diagnostics, throwing output_limit_exceeded
+        // if exceeded without changing the frame protocol).
+        ...(onChunk !== undefined ? { onOutputChunk: onChunk } : {}),
+      })
+      return {
+        ok: result.ok,
+        exitCode: result.exitCode,
+        output: result.output,
+        timedOut: result.timedOut,
+      }
+    } finally {
+      const remaining = (this.activeExecCounts.get(nodeId) ?? 1) - 1
+      if (remaining <= 0) this.activeExecCounts.delete(nodeId)
+      else this.activeExecCounts.set(nodeId, remaining)
     }
   }
 
@@ -735,18 +812,22 @@ export class NodeManager {
    * Bind underlying node connection change events:
    * - Node connects/disconnects -> publish node.changed SSE event (real-time Web/CLI awareness);
    * - When removeNode severs a connection, it clears the index first so the offline callback is skipped;
-   * - If a newly connected node lags behind Hub version and HELMX_AUTO_UPGRADE_NODES=1 is set, trigger auto-upgrade asynchronously.
+   * - Feed online/offline transitions into `NodeAutoUpgradeCoordinator` (respects Hub startup/recovery
+   *   gate, node busy gate, fail-closed `installMode === 'release'` gating, and backoff retry).
    */
   bindEvents(): void {
     this.envFabric.registry.onNodeChanged((nodeId, online) => {
       if (!online && !this.hasNode(nodeId)) return
+      if (!online) {
+        this.autoUpgrade.onNodeOffline(nodeId)
+      }
       const conn = online ? this.envFabric.registry.get(nodeId) : undefined
       this.events.publish('node.changed', {
         type: 'node.changed',
         node: this.byomNodeInfo(nodeId, conn),
       })
       if (online && conn !== undefined) {
-        void this.autoUpgradeIfEligible(nodeId, conn.version)
+        this.autoUpgrade.onNodeOnline(nodeId)
       }
     })
   }
@@ -763,8 +844,9 @@ export class NodeManager {
     await this.ensureLocalDiskStats()
   }
 
-  /** Dispose: clear disk stats timer, release token redactions, and await any in-flight refresh. */
+  /** Dispose: stop auto-upgrade timers, clear disk stats timer, release token redactions, and await any in-flight refresh. */
   async dispose(): Promise<void> {
+    this.autoUpgrade.dispose()
     if (this.localDiskRefreshTimer !== undefined) {
       clearInterval(this.localDiskRefreshTimer)
       this.localDiskRefreshTimer = undefined

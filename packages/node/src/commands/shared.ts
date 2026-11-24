@@ -2,6 +2,7 @@
  * Shared command-layer context and cross-command helpers.
  * Depends only on `cli-context`, `control`, and `daemon`, keeping command handlers decoupled.
  */
+import type { NodeInstallMode } from '@helmx/protocol';
 import { UsageError, type NodeCliIo } from '../cli-context.js';
 import { readPidRecord } from '../cli-context.js';
 import { readNodeIdentity } from '../daemon/index.js';
@@ -62,6 +63,8 @@ export async function statusDaemon(io: NodeCliIo, dataDir: string): Promise<{
   pidStale?: boolean;
   /** Running version reported by the daemon over the control channel. */
   version?: string;
+  /** Install mode reported by the daemon over the control channel. */
+  installMode?: NodeInstallMode;
   detail?: string;
 }> {
   const { controlRequest, CONTROL_TIMEOUT_MS } = await import('../control.js');
@@ -74,11 +77,14 @@ export async function statusDaemon(io: NodeCliIo, dataDir: string): Promise<{
     instanceId: record.instanceId,
   });
   if (response !== null && response.ok === true) {
+    const installMode: NodeInstallMode | undefined =
+      response.installMode === 'source' || response.installMode === 'release' ? response.installMode : undefined;
     return {
       pid: record.pid,
       pidAlive: true,
       state: response.state === 'registered' ? 'registered' : 'starting',
       version: typeof response.version === 'string' && response.version !== '' ? response.version : undefined,
+      ...(installMode !== undefined ? { installMode } : {}),
     };
   }
   if (isAlive(record.pid)) {

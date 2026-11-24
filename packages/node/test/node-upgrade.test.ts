@@ -26,6 +26,8 @@ import {
   type StagedNodeRelease,
   type PreparedNodeReplacement,
 } from '../src/daemon/upgrader.js';
+import { detectNodeInstallMode } from '../src/service-entry.js';
+import { resolveDaemonLaunchTarget } from '../src/launcher.js';
 
 const NODE_PACKAGE_NAME = '@helmx/node';
 
@@ -121,16 +123,112 @@ test('getNodeVersion: reads package.json and honors HELMX_VERSION_OVERRIDE', { t
   }
 });
 
-test('resolveEffectiveNodeVersion: prefers current.json and falls back to own package version', { timeout: 60_000 }, async () => {
+test('detectNodeInstallMode: distinguishes source/link checkouts from published release artifacts without using version', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helmx-node-mode-');
+  try {
+    // 1. TypeScript source entry (link-bins -> tsx -> packages/node/src/cli.ts) is always source, even with high version.
+    const tsSrcPkg = path.join(dir, 'ts-src-pkg');
+    await fs.mkdir(path.join(tsSrcPkg, 'src'), { recursive: true });
+    await fs.writeFile(path.join(tsSrcPkg, 'package.json'), JSON.stringify({ name: '@helmx/node', version: '99.9.9' }), 'utf8');
+    await fs.writeFile(path.join(tsSrcPkg, 'src', 'cli.ts'), 'export {};\n', 'utf8');
+    assert.equal(detectNodeInstallMode(path.join(tsSrcPkg, 'src', 'cli.ts')), 'source');
+
+    // 2. Compiled workspace dist/cli.js (e.g. npm link on Windows) alongside src/cli.ts or private:true is source.
+    const workspacePkg = path.join(dir, 'workspace-pkg');
+    await fs.mkdir(path.join(workspacePkg, 'dist'), { recursive: true });
+    await fs.mkdir(path.join(workspacePkg, 'src'), { recursive: true });
+    await fs.writeFile(
+      path.join(workspacePkg, 'package.json'),
+      JSON.stringify({ name: '@helmx/node', private: true, version: '99.9.9', dependencies: { '@helmx/protocol': 'workspace:*' } }),
+      'utf8',
+    );
+    await fs.writeFile(path.join(workspacePkg, 'src', 'cli.ts'), 'export {};\n', 'utf8');
+    await fs.writeFile(path.join(workspacePkg, 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
+    assert.equal(detectNodeInstallMode(path.join(workspacePkg, 'dist', 'cli.js')), 'source');
+    if (process.platform !== 'win32') {
+      const linkBin = path.join(dir, 'helmx-node-link.js');
+      await fs.symlink(path.join(workspacePkg, 'dist', 'cli.js'), linkBin);
+      assert.equal(detectNodeInstallMode(linkBin), 'source');
+    }
+
+    // 3. Published/staged npm release artifact (no src/cli.ts, not private, no workspace: deps) is release even at 0.0.1.
+    const releasePkg = path.join(dir, 'releases', '0.0.1', 'node_modules', '@helmx', 'node');
+    await fs.mkdir(path.join(releasePkg, 'dist'), { recursive: true });
+    await fs.writeFile(
+      path.join(releasePkg, 'package.json'),
+      JSON.stringify({
+        name: '@helmx/node',
+        version: '0.0.1',
+        bin: { 'helmx-node': './dist/cli.js' },
+        dependencies: { birpc: '2.9.0', ws: '8.18.0' },
+      }),
+      'utf8',
+    );
+    await fs.writeFile(path.join(releasePkg, 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
+    assert.equal(detectNodeInstallMode(path.join(releasePkg, 'dist', 'cli.js')), 'release');
+
+    // 4. Current repo test runtime (running src/*.ts via tsx) detects source by default.
+    assert.equal(detectNodeInstallMode(), 'source');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveEffectiveNodeVersion: release prefers current.json; source ignores current.json and reports own package version', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helmx-node-upgrade-');
-  assert.equal(await resolveEffectiveNodeVersion(dir), getNodeVersion());
-  await writeCurrentRelease(dir, {
-    version: '3.2.1',
-    updatedAt: new Date().toISOString(),
-    entries: { entryPath: '/x/dist/cli.js' },
-  });
-  assert.equal(await resolveEffectiveNodeVersion(dir), '3.2.1');
-  await fs.rm(dir, { recursive: true, force: true });
+  try {
+    assert.equal(await resolveEffectiveNodeVersion(dir, 'release'), getNodeVersion());
+    assert.equal(await resolveEffectiveNodeVersion(dir, 'source'), getNodeVersion());
+    await writeCurrentRelease(dir, {
+      version: '3.2.1',
+      updatedAt: new Date().toISOString(),
+      entries: { entryPath: '/x/dist/cli.js' },
+    });
+    assert.equal(await resolveEffectiveNodeVersion(dir, 'release'), '3.2.1');
+    assert.equal(
+      await resolveEffectiveNodeVersion(dir, 'source'),
+      getNodeVersion(),
+      'source mode must never misreport staged current.json version',
+    );
+    // Default in source test runner also ignores current.json.
+    assert.equal(await resolveEffectiveNodeVersion(dir), getNodeVersion());
+
+    // Even a corrupt current.json must not break source mode version resolution.
+    await fs.writeFile(path.join(dir, 'current.json'), '{ corrupt', 'utf8');
+    assert.equal(await resolveEffectiveNodeVersion(dir, 'source'), getNodeVersion());
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveDaemonLaunchTarget: source ignores current.json; release keeps current.json precedence and explicit missing-entry error', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helmx-node-launch-target-');
+  try {
+    const selfEntry = path.join(dir, 'src', 'cli.ts');
+    const stagedEntry = path.join(dir, 'releases', '1.2.3', 'dist', 'cli.js');
+    await fs.mkdir(path.dirname(stagedEntry), { recursive: true });
+    await fs.writeFile(stagedEntry, '#!/usr/bin/env node\n', 'utf8');
+
+    // No current.json -> both modes fall back to selfEntry.
+    assert.deepEqual(await resolveDaemonLaunchTarget(dir, selfEntry, 'release'), { entryPath: selfEntry });
+    assert.deepEqual(await resolveDaemonLaunchTarget(dir, selfEntry, 'source'), { entryPath: selfEntry });
+
+    // Valid current.json -> release launches staged entry; source ignores it and keeps selfEntry.
+    await writeCurrentRelease(dir, {
+      version: '1.2.3',
+      updatedAt: new Date().toISOString(),
+      entries: { entryPath: stagedEntry },
+    });
+    assert.deepEqual(await resolveDaemonLaunchTarget(dir, selfEntry, 'release'), { entryPath: stagedEntry });
+    assert.deepEqual(await resolveDaemonLaunchTarget(dir, selfEntry, 'source'), { entryPath: selfEntry });
+
+    // Missing staged target -> release fails explicitly; source still ignores stale current.json.
+    await fs.rm(stagedEntry);
+    await assert.rejects(() => resolveDaemonLaunchTarget(dir, selfEntry, 'release'), /missing entry/);
+    assert.deepEqual(await resolveDaemonLaunchTarget(dir, selfEntry, 'source'), { entryPath: selfEntry });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -187,6 +285,19 @@ test('checkNodeUpgrade: queries the @helmx/node package latest and falls back to
   const result2 = await checkNodeUpgrade(dir2, { fetchFn: makeRegistryFetch('0.0.1').fetchFn });
   assert.equal(result2.currentVersion, getNodeVersion());
   assert.equal(result2.updateAvailable, false);
+
+  // Source mode checkNodeUpgrade ignores stale current.json and reports own source package.json version.
+  await writeCurrentRelease(dir2, {
+    version: '8.8.8',
+    updatedAt: new Date().toISOString(),
+    entries: { entryPath: '/stale/dist/cli.js' },
+  });
+  const resultSrc = await checkNodeUpgrade(dir2, { installMode: 'source', fetchFn: makeRegistryFetch('9.0.0').fetchFn });
+  assert.equal(resultSrc.currentVersion, getNodeVersion());
+  assert.equal(resultSrc.updateAvailable, true);
+  const resultRel = await checkNodeUpgrade(dir2, { installMode: 'release', fetchFn: makeRegistryFetch('9.0.0').fetchFn });
+  assert.equal(resultRel.currentVersion, '8.8.8');
+
   await fs.rm(dir, { recursive: true, force: true });
   await fs.rm(dir2, { recursive: true, force: true });
 });

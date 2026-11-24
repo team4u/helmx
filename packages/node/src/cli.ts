@@ -23,8 +23,8 @@ import { COMMANDS } from './commands/index.js';
 import type { ParsedCli } from './commands/shared.js';
 
 // Re-exported for tests and `@helmx/node` consumers after modularization.
-export { defaultSpawnDaemon } from './launcher.js';
-export { resolveServiceEntry } from './service-entry.js';
+export { defaultSpawnDaemon, resolveDaemonLaunchTarget } from './launcher.js';
+export { detectNodeInstallMode, resolveServiceEntry } from './service-entry.js';
 export { controlEndpoint, type DaemonReadyState } from './control.js';
 export type { NodeCliIo, PidRecord } from './cli-context.js';
 
@@ -180,6 +180,7 @@ export async function runNodeCli(argv: readonly string[] = [], ioInput: Partial<
     isAlive: ioInput.isAlive,
     ...(ioInput.readyTimeoutMs !== undefined ? { readyTimeoutMs: ioInput.readyTimeoutMs } : {}),
     ...(ioInput.serviceEntry !== undefined ? { serviceEntry: ioInput.serviceEntry } : {}),
+    ...(ioInput.installMode !== undefined ? { installMode: ioInput.installMode } : {}),
   };
   const emit = (value: unknown): void => {
     io.out(`${typeof value === 'string' ? value : JSON.stringify(value, null, 2)}\n`);

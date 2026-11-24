@@ -5,6 +5,7 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import type { NodeInstallMode } from '@helmx/protocol';
 import { atomicWriteJson, isProcessAlive, waitForPidExit } from '@helmx/env-io';
 
 /** Injectable I/O hooks allowing tests to swap real process spawning and stdio. */
@@ -34,6 +35,8 @@ export interface NodeCliIo {
   launcherPollMs?: number;
   /** Service install entrypoint override (defaults to compiled `dist/cli.js`). */
   serviceEntry?: string;
+  /** Runtime install mode override for testing (defaults to `detectNodeInstallMode()`). */
+  installMode?: NodeInstallMode;
 }
 
 /** Usage or input validation error; its `code` is emitted in `--json` error envelopes. */

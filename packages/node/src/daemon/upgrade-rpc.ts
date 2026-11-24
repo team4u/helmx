@@ -6,6 +6,7 @@
 
 import process from 'node:process';
 import type {
+  NodeInstallMode,
   NodeUpgradeCheckInput,
   NodeUpgradeCheckResult,
   NodeUpgradeCommit,
@@ -14,6 +15,7 @@ import type {
   RpcEnvError,
   RpcResult,
 } from '@helmx/protocol';
+import { SOURCE_MODE_UPGRADE_MESSAGE } from '../service-entry.js';
 import {
   UpgradeCommitUnconfirmedError,
   UpgradeRejectedError,
@@ -102,7 +104,7 @@ function rpcErrorOf(error: unknown): RpcEnvError {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof UpgradeRejectedError) return { code: 'invalid', message };
   const code = (error as { code?: unknown } | null | undefined)?.code;
-  if (code === 'invalid' || code === 'not_supported' || code === 'aborted') {
+  if (code === 'invalid' || code === 'not_supported' || code === 'source_mode' || code === 'aborted') {
     return { code, message };
   }
   return { code: 'unknown', message };
@@ -133,6 +135,7 @@ async function unwrapRpc<T>(result: Promise<RpcResult<T>>): Promise<T> {
 
 export interface DaemonUpgradeControllerDeps {
   dataDir: string;
+  installMode: NodeInstallMode;
   prepareUpgradeReplacement?: PerformNodeUpgradeOptions['prepareReplacement'];
   onUpgradeReplaced?: (pid: number) => void;
   upgradeAttemptId?: string;
@@ -184,6 +187,15 @@ export function createDaemonUpgradeController(deps: DaemonUpgradeControllerDeps)
   ): Promise<RpcResult<NodeUpgradeResult>> => {
     if (deps.isClosed()) {
       return Promise.resolve({ ok: false, error: { code: 'invalid', message: 'daemon is closed; rejecting upgrade request' } });
+    }
+    if (deps.installMode === 'source') {
+      return Promise.resolve({
+        ok: false,
+        error: {
+          code: 'source_mode',
+          message: SOURCE_MODE_UPGRADE_MESSAGE,
+        },
+      });
     }
     if (upgradeActive || upgradeInFlight !== undefined) {
       return Promise.resolve({
