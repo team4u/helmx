@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react'
+import { useMemo, type ReactNode, type RefObject } from 'react'
 import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
 import {
   useAuthConnection,
@@ -374,7 +374,21 @@ function SettingsNavGroup({ store, onNavigate }: { store: SidebarStoreView; onNa
   )
 }
 
-export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
+export interface SidebarProps {
+  onClose?: () => void
+  id?: string
+  drawerMode?: boolean
+  drawerOpen?: boolean
+  sidebarRef?: RefObject<HTMLElement | null>
+}
+
+export function Sidebar({
+  onClose,
+  id,
+  drawerMode = false,
+  drawerOpen = false,
+  sidebarRef,
+}: SidebarProps = {}) {
   const { sseConnected } = useAuthConnection()
   const { theme, themePreference, locale, quietNotifyEnabled } = useThemePreferencesState()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
@@ -448,8 +462,21 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         ? t('shell.sidebar.viewsHeader')
         : t('shell.sidebar.spaceHeaderSettings')
 
+  const isModalDrawerOpen = drawerMode && drawerOpen
+  const isDrawerHidden = drawerMode && !drawerOpen
+
   return (
-    <aside className="helmx-sidebar">
+    <aside
+      id={id}
+      ref={sidebarRef}
+      className="helmx-sidebar"
+      role={isModalDrawerOpen ? 'dialog' : undefined}
+      aria-modal={isModalDrawerOpen ? true : undefined}
+      aria-label={isModalDrawerOpen ? t('shell.sidebar.mainNavigation') : undefined}
+      aria-hidden={isDrawerHidden ? true : undefined}
+      inert={isDrawerHidden || undefined}
+      tabIndex={isModalDrawerOpen ? -1 : undefined}
+    >
       <ActivityRail
         sseConnected={sseConnected}
         theme={theme}

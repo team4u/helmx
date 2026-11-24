@@ -243,12 +243,20 @@ function MultiSelectInner<T extends string = string>({
   const resolvedPlaceholder = placeholder ?? t(uiCopy.select)
   const generatedId = useId()
   const selectId = id ?? generatedId
+  const listboxId = `${selectId}-listbox`
   const [internalOpen, setInternalOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [activeIndex, setActiveIndex] = useState(-1)
 
   const isControlled = openProp !== undefined
   const isOpen = isControlled ? openProp : internalOpen
+
+  useEffect(() => {
+    if (!isOpen) {
+      setSearchTerm('')
+      setActiveIndex(-1)
+    }
+  }, [isOpen])
 
   const handleOpenChange = (nextOpen: boolean) => {
     if (!isControlled) {
@@ -398,6 +406,10 @@ function MultiSelectInner<T extends string = string>({
     }
   }
 
+  const activeOption =
+    activeIndex >= 0 && activeIndex < filteredOptions.length ? filteredOptions[activeIndex] : undefined
+  const activeOptionId = activeOption && !activeOption.disabled ? `${listboxId}-opt-${activeIndex}` : undefined
+
   const contentNode = (
     <div
       className="helmx-select-viewport"
@@ -409,6 +421,11 @@ function MultiSelectInner<T extends string = string>({
         <div className="helmx-select-search" onClick={(e) => e.stopPropagation()}>
           <input
             type="text"
+            role="combobox"
+            aria-expanded={isOpen}
+            aria-controls={listboxId}
+            aria-autocomplete="list"
+            aria-activedescendant={activeOptionId}
             value={searchTerm}
             onChange={(e) => {
               setSearchTerm(e.target.value)
@@ -444,10 +461,12 @@ function MultiSelectInner<T extends string = string>({
 
       {/* Option list */}
       <div
+        id={listboxId}
         role="listbox"
         aria-multiselectable="true"
         aria-label={ariaLabel}
-        tabIndex={-1}
+        aria-activedescendant={activeOptionId}
+        tabIndex={0}
       >
         {filteredOptions.length === 0 ? (
           <div className="helmx-select-empty">
@@ -457,9 +476,11 @@ function MultiSelectInner<T extends string = string>({
           filteredOptions.map((opt, idx) => {
             const isSelected = selectedSet.has(opt.value)
             const isHighlighted = idx === activeIndex && !opt.disabled
+            const optionId = `${listboxId}-opt-${idx}`
             return (
               <div
                 key={opt.value}
+                id={optionId}
                 role="option"
                 tabIndex={-1}
                 aria-selected={isSelected}
@@ -471,7 +492,10 @@ function MultiSelectInner<T extends string = string>({
                 }}
                 onClick={(e) => {
                   e.preventDefault()
-                  if (!opt.disabled) toggleValue(opt.value)
+                  if (!opt.disabled) {
+                    setActiveIndex(idx)
+                    toggleValue(opt.value)
+                  }
                 }}
               >
                 <span
@@ -517,6 +541,7 @@ function MultiSelectInner<T extends string = string>({
             aria-label={ariaLabel}
             aria-haspopup="listbox"
             aria-expanded={isOpen}
+            aria-controls={isOpen ? listboxId : undefined}
           >
             {prefixIcon ? <HelmxIcon name={prefixIcon} size={12} className="helmx-select-prefix" /> : null}
             {triggerLabel}

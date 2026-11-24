@@ -101,6 +101,7 @@ export function usePluginAction<TResult = unknown>(
         setPendingKey(key)
         setError(undefined)
       }
+      let result: T
       try {
         const callOpts =
           callOptions?.pluginId !== undefined || callOptions?.conversationId !== undefined
@@ -109,16 +110,11 @@ export function usePluginAction<TResult = unknown>(
                 ...(callOptions.conversationId !== undefined ? { conversationId: callOptions.conversationId } : {}),
               }
             : undefined
-        const result = (await ctxRef.current.callAction(
+        result = (await ctxRef.current.callAction(
           actionId,
           input,
           callOpts,
         )) as T
-        if (mountedRef.current) {
-          callOptions?.onSuccess?.(result)
-          optionsRef.current?.onSuccess?.(result as unknown as TResult, actionId)
-        }
-        return result
       } catch (err) {
         const formatter = optionsRef.current?.formatError ?? defaultFormatError
         const message = formatter(err, actionId)
@@ -137,6 +133,14 @@ export function usePluginAction<TResult = unknown>(
           setPendingKey(undefined)
         }
       }
+
+      // Run success callbacks outside the callAction try/catch so a client callback
+      // bug never misreports a succeeded server action as a request failure.
+      if (mountedRef.current) {
+        callOptions?.onSuccess?.(result)
+        optionsRef.current?.onSuccess?.(result as unknown as TResult, actionId)
+      }
+      return result
     },
     [],
   )

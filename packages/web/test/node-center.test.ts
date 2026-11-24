@@ -26,6 +26,7 @@ import {
 import { NodeCard } from '../src/nodes/NodeCard.js'
 import { NodeDetailDrawer } from '../src/nodes/NodeDetailDrawer.js'
 import { NodeCenter } from '../src/nodes/NodeCenter.js'
+import { nodesApi } from '../src/lib/api.js'
 import { createWebTranslator } from '../src/i18n/catalog.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
@@ -643,6 +644,142 @@ test('NodeCenter locale switch: setLocale re-renders en -> zh-CN -> en in place'
     assert.match(container.textContent ?? '', /Remote/)
   } finally {
     localStorage.removeItem('helmx:locale')
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('NodeDetailDrawer: binds one-time token to nodeId, clears on switch/close/id edit, and discards late responses', { timeout: 60_000 }, async () => {
+  const originalIssueToken = nodesApi.issueToken
+  const originalCheckUpgrade = nodesApi.checkUpgrade
+  const store = makeTestStore({ locale: 'en' })
+
+  const nodeA: NodeInfo = { id: 'node-alpha', kind: 'byom', online: true, os: 'linux', arch: 'x64' }
+  const nodeB: NodeInfo = { id: 'node-beta', kind: 'byom', online: true, os: 'linux', arch: 'arm64' }
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  const issuedCallbacks: string[] = []
+
+  const renderDrawer = (props: { node: NodeInfo | null; open: boolean; isNew?: boolean }) =>
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(NodeDetailDrawer, {
+        node: props.node,
+        open: props.open,
+        isNew: props.isNew ?? false,
+        inline: true,
+        onClose: () => {},
+        onTokenIssued: (tok: string) => issuedCallbacks.push(tok),
+      }),
+    )
+
+  try {
+    // 1. Issue token for nodeA -> visible in nodeA, cleared immediately on switch to nodeB
+    nodesApi.issueToken = async (nodeId: string) => ({ nodeId, token: `tok-for-${nodeId}`, createdAt: 1000 })
+    await act(async () => {
+      root.render(renderDrawer({ node: nodeA, open: true }))
+    })
+    const findIssueBtn = () =>
+      Array.from(container.querySelectorAll('button')).find((b) =>
+        /Issue access token|Reissue token/i.test(b.textContent ?? ''),
+      ) as HTMLButtonElement | undefined
+
+    await act(async () => {
+      findIssueBtn()!.click()
+    })
+    assert.ok(container.textContent?.includes('tok-for-node-alpha'), 'token appears for nodeA')
+    assert.deepEqual(issuedCallbacks, ['tok-for-node-alpha'])
+
+    // Switch to nodeB -> nodeA token must NOT leak into nodeB or its connect command
+    await act(async () => {
+      root.render(renderDrawer({ node: nodeB, open: true }))
+    })
+    assert.equal(container.textContent?.includes('tok-for-node-alpha'), false, 'nodeA token must clear on switch to nodeB')
+    assert.ok(container.textContent?.includes('<TOKEN>'), 'nodeB guide falls back to placeholder token')
+
+    // Close and reopen nodeA -> previously issued one-time token stays cleared
+    await act(async () => {
+      root.render(renderDrawer({ node: nodeA, open: false }))
+    })
+    await act(async () => {
+      root.render(renderDrawer({ node: nodeA, open: true }))
+    })
+    assert.equal(container.textContent?.includes('tok-for-node-alpha'), false, 'closing drawer clears one-time token')
+
+    // 2. Late issueToken & checkUpgrade responses from nodeA arriving after switching to nodeB must be discarded
+    let resolveLateToken: ((val: { nodeId: string; token: string; createdAt: number }) => void) | undefined
+    let resolveLateHealth: ((val: { currentVersion: string; latestVersion: string; updateAvailable: boolean; platform: string; arch: string }) => void) | undefined
+    nodesApi.issueToken = () =>
+      new Promise((resolve) => {
+        resolveLateToken = resolve
+      })
+    nodesApi.checkUpgrade = () =>
+      new Promise((resolve) => {
+        resolveLateHealth = resolve
+      })
+
+    await act(async () => {
+      findIssueBtn()!.click()
+    })
+    const healthBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      /Health check/i.test(b.textContent ?? ''),
+    ) as HTMLButtonElement | undefined
+    assert.ok(healthBtn !== undefined)
+    await act(async () => {
+      healthBtn.click()
+    })
+    assert.ok(resolveLateToken !== undefined && resolveLateHealth !== undefined)
+
+    // Switch to nodeB before nodeA requests settle
+    await act(async () => {
+      root.render(renderDrawer({ node: nodeB, open: true }))
+    })
+    assert.equal(findIssueBtn()!.disabled, false, 'switching nodes resets issuing spinner so nodeB is immediately actionable')
+
+    await act(async () => {
+      resolveLateToken!({ nodeId: 'node-alpha', token: 'late-secret-alpha', createdAt: 2000 })
+      resolveLateHealth!({
+        currentVersion: '0.1.0',
+        latestVersion: '9.9.9',
+        updateAvailable: true,
+        platform: 'linux',
+        arch: 'x64',
+      })
+    })
+    assert.equal(container.textContent?.includes('late-secret-alpha'), false, 'late token from nodeA must be discarded')
+    assert.equal(container.textContent?.includes('9.9.9'), false, 'late health check from nodeA must be discarded')
+    assert.deepEqual(issuedCallbacks, ['tok-for-node-alpha'], 'onTokenIssued must not fire for discarded late token')
+
+    // 3. In isNew mode, editing newNodeId clears previously issued token
+    nodesApi.issueToken = async (nodeId: string) => ({ nodeId, token: `new-tok-${nodeId}`, createdAt: 3000 })
+    await act(async () => {
+      root.render(renderDrawer({ node: null, open: true, isNew: true }))
+    })
+    const idInput = container.querySelector<HTMLInputElement>('#new-node-id-input')
+    assert.ok(idInput !== null)
+    const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      setInputValue?.call(idInput, 'worker-one')
+      idInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      findIssueBtn()!.click()
+    })
+    assert.ok(container.textContent?.includes('new-tok-worker-one'))
+
+    await act(async () => {
+      setInputValue?.call(idInput, 'worker-two')
+      idInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    assert.equal(container.textContent?.includes('new-tok-worker-one'), false, 'changing newNodeId must clear prior one-time token')
+  } finally {
+    nodesApi.issueToken = originalIssueToken
+    nodesApi.checkUpgrade = originalCheckUpgrade
     await act(async () => {
       root.unmount()
     })

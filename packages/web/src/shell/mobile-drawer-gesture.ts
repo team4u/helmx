@@ -133,9 +133,9 @@ export function endDrawerSwipe(
   return null
 }
 
-/** 检测页面当前是否挂载了交互浮层（Radix Dialog/AlertDialog/Menu/Listbox/Popover，忽略 Tooltip）。 */
+/** 检测页面当前是否挂载了交互浮层（Radix Dialog/AlertDialog/Menu/Listbox/Popover，忽略 Tooltip 与侧栏抽屉自身）。 */
 export function hasBlockingOverlay(doc: Document): boolean {
-  if (doc.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]') !== null) {
+  if (doc.querySelector('[role="dialog"]:not(.helmx-sidebar), [role="alertdialog"], [role="menu"], [role="listbox"]') !== null) {
     return true
   }
   const poppers = doc.querySelectorAll('[data-radix-popper-content-wrapper]')

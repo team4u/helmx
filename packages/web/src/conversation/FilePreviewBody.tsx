@@ -68,7 +68,7 @@ export function FilePreviewBody({
   if (isPdf) {
     return <iframe src={blobUrl} title={name} className="preview-modal-pdf" />
   }
-  if (!isTextLike) {
+  if (!isTextLike || textState === 'binary') {
     return <div className="callout">{t('conv.artifact.noInlinePreview')}</div>
   }
   if (textState === 'exceeded') {
