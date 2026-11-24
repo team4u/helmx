@@ -1,6 +1,6 @@
 import type * as React from 'react'
 import { useMemo, useState } from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { Button, CardGrid } from '@helmx/plugin-client'
 import type { WebMessageKey } from '../i18n/catalog.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useLocationTargets, useNodes, useStoreActions } from '../lib/store-context.js'
@@ -97,15 +97,14 @@ export function NodeCenter({
       icon="cpu"
       title={t('nodes.title')}
       headerActions={
-        <button
-          type="button"
-          className="btn btn-sm"
+        <Button
+          size="sm"
+          icon="plus"
           onClick={() => setIsAddingNew(true)}
           title={t('nodes.connectTitle')}
         >
-          <HelmxIcon name="plus" size={12} />
           <span className="pane-action-label">{t('nodes.connect')}</span>
-        </button>
+        </Button>
       }
       toolbar={
         <SystemCenterToolbar
@@ -132,7 +131,7 @@ export function NodeCenter({
       }
     >
       {filteredNodes.length > 0 ? (
-        <div className="primary-center-grid">
+        <CardGrid minWidth="md" gap="md">
           {filteredNodes.map((node) => (
             <NodeCard
               key={node.id}
@@ -141,7 +140,7 @@ export function NodeCenter({
               onSelect={() => handleSelectNode(node.id)}
             />
           ))}
-        </div>
+        </CardGrid>
       ) : (
         <SystemCenterEmpty
           title={t('nodes.emptyTitle')}

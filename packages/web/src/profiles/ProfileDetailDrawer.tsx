@@ -16,14 +16,25 @@ import {
   validateStarterDrafts,
 } from './profile-center-model.js'
 import {
+  Badge,
+  Button,
+  Callout,
+  Card,
   Checkbox,
   ConfirmDialog,
   DetailDrawer,
-  HelmxIcon,
+  ErrorText,
+  Field,
+  HelperText,
+  IconButton,
+  Input,
   ModelPickerControl,
+  MonoId,
   PluginSlot,
   Select,
+  Stack,
   Switch,
+  Textarea,
 } from '@helmx/plugin-client'
 import { useNodes, useSkills } from '../lib/store-context.js'
 import { summarizeSingleLine } from '../lib/format.js'
@@ -361,57 +372,57 @@ export function ProfileDetailDrawer({
       titleClassName="break-word"
       titleExtra={
         isSystem ? (
-          <span className="badge badge-warn" title={t('profiles.drawer.systemPillTitle')}>
-            <HelmxIcon name="lock" size={10} />
-            <span>{t('profiles.card.systemPill')}</span>
-          </span>
+          <Badge tone="warn" icon="lock" title={t('profiles.drawer.systemPillTitle')}>
+            {t('profiles.card.systemPill')}
+          </Badge>
         ) : undefined
       }
-      meta={!isNew && form.id ? form.id : undefined}
+      meta={!isNew && form.id ? <MonoId value={form.id} /> : undefined}
       metaClassName="text-subtle break-word"
       aria-label={titleText}
       closeLabel={t('common.close')}
       footer={
-        <div className="flex-row-between">
+        <Stack direction="horizontal" gap="sm" align="center" justify="between" className="flex-1">
           <div>
             {canDelete && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm text-err"
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="trash"
+                className="text-err"
                 disabled={isSaving || isDeleting}
                 onClick={() => setShowDeleteConfirm(true)}
               >
-                <HelmxIcon name="trash" size={13} />
-                <span>{t('profiles.drawer.delete')}</span>
-              </button>
+                {t('profiles.drawer.delete')}
+              </Button>
             )}
           </div>
 
-          <div className="flex-row">
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
+          <Stack direction="horizontal" gap="sm" align="center">
+            <Button
+              variant="ghost"
+              size="sm"
               disabled={isSaving || isDeleting}
               onClick={handleRequestClose}
             >
               {t('common.cancel')}
-            </button>
+            </Button>
 
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
+            <Button
+              variant="primary"
+              size="sm"
+              icon="check"
+              pending={isSaving}
               disabled={
-                isSaving ||
-                  isDeleting ||
+                isDeleting ||
                   (isNew && !profileIdValid(form.id.trim()))
               }
               onClick={() => void handleSave()}
             >
-              <HelmxIcon name={isSaving ? 'loader' : 'check'} size={13} />
-              <span>{isSaving ? t('profiles.drawer.saving') : t('profiles.drawer.save')}</span>
-            </button>
-          </div>
-        </div>
+              {isSaving ? t('profiles.drawer.saving') : t('profiles.drawer.save')}
+            </Button>
+          </Stack>
+        </Stack>
       }
       aux={
         <>
@@ -446,332 +457,321 @@ export function ProfileDetailDrawer({
         </>
       }
     >
-            {error && (
-              <div className="callout callout-error" role="alert">
-                <HelmxIcon name="alert-circle" size={14} />
-                <span className="callout-text">{error}</span>
-              </div>
-            )}
+      {error && (
+        <Callout tone="err">
+          <span className="callout-text" role="alert">{error}</span>
+        </Callout>
+      )}
 
-            {/* Basic fields */}
-            <section className="section-flat">
-              <div className="form-grid">
-                <label htmlFor="profile-form-id" className="form-grid-label">
-                  {t('profiles.drawer.field.id')}
-                </label>
-                <div className="form-grid-value">
-                  {isNew ? (
-                    <input
-                      id="profile-form-id"
-                      type="text"
-                      className="input mono"
-                      placeholder={t('profiles.drawer.field.idPlaceholder')}
-                      value={form.id}
+      {/* Basic fields */}
+      <Card variant="subtle">
+        <Stack direction="vertical" gap="md">
+          <Field
+            label={t('profiles.drawer.field.id')}
+            htmlFor="profile-form-id"
+            required={isNew}
+            layout="horizontal"
+          >
+            {isNew ? (
+              <Input
+                mono
+                placeholder={t('profiles.drawer.field.idPlaceholder')}
+                value={form.id}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    id: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''),
+                  }))
+                }
+              />
+            ) : (
+              <Input mono value={form.id} disabled readOnly />
+            )}
+          </Field>
+
+          <Field
+            label={t('profiles.drawer.field.name')}
+            htmlFor="profile-form-name"
+            layout="horizontal"
+          >
+            <Input
+              placeholder={t('profiles.drawer.field.namePlaceholder')}
+              value={form.name}
+              onChange={(e) =>
+                setForm((prev) => ({ ...prev, name: e.target.value }))
+              }
+            />
+          </Field>
+
+          <Field
+            label={t('profiles.drawer.field.defaultModel')}
+            htmlFor="profile-form-model"
+            hint={t('profiles.drawer.modelHint')}
+            layout="horizontal"
+          >
+            {/* 共享模型选择器（与 Composer/全局默认同一实现）：行内思考档位
+                chips 一并提交 model+level；点击行体仅应用模型，档位回落
+                跟随默认链（保存时省略 thinkingLevel 键）。 */}
+            <ModelPickerControl
+              buttonId="profile-form-model"
+              buttonAriaLabel={t('profiles.drawer.field.defaultModel')}
+              buttonTitle={form.model || t('profiles.modelOption.followSystemDefault')}
+              placeholderLabel={t('profiles.modelOption.followSystemDefault')}
+              effectiveModel={form.model}
+              activeThinkingLevel={form.thinkingLevel}
+              resetLabel={t('profiles.modelOption.followSystemDefault')}
+              resetTitle={t('profiles.modelOption.followSystemDefault')}
+              popoverSide={inline ? 'bottom' : 'top'}
+              enableShortcut={false}
+              disabled={isSaving || isDeleting}
+              {...pickerAdapter}
+              onApply={(model, level) =>
+                setForm((prev) => ({ ...prev, model, thinkingLevel: level ?? '' }))
+              }
+              onResetDefault={() =>
+                setForm((prev) => ({ ...prev, model: '', thinkingLevel: '' }))
+              }
+            />
+          </Field>
+
+          <Field
+            label={t('profiles.drawer.field.defaultNode')}
+            htmlFor="profile-form-node"
+            layout="horizontal"
+          >
+            <Select
+              value={form.nodeId}
+              options={nodeOptions}
+              popoverClassName="helmx-select-popover-wide"
+              className="w-full mono"
+              inline={inline}
+              placeholder={t('profiles.drawer.unboundNode')}
+              onChange={(e) =>
+                setForm((prev) => ({ ...prev, nodeId: e.target.value }))
+              }
+            />
+          </Field>
+
+          <Field
+            label={t('profiles.drawer.field.cwd')}
+            htmlFor="profile-form-cwd"
+            layout="horizontal"
+          >
+            <Input
+              mono
+              placeholder={t('profiles.drawer.field.cwdPlaceholder')}
+              value={form.cwd}
+              onChange={(e) =>
+                setForm((prev) => ({ ...prev, cwd: e.target.value }))
+              }
+            />
+          </Field>
+
+          <Field
+            label={t('profiles.drawer.field.restrictToCwd')}
+            htmlFor="profile-form-restrict-cwd"
+            hint={t('profiles.drawer.field.restrictToCwdHint')}
+            layout="horizontal"
+          >
+            <Switch
+              checked={form.restrictToCwd}
+              onChange={(val) =>
+                setForm((prev) => ({ ...prev, restrictToCwd: val }))
+              }
+            />
+          </Field>
+        </Stack>
+      </Card>
+
+      {/* System prompt section */}
+      <Card
+        variant="subtle"
+        title={t('profiles.drawer.system.title')}
+        actions={
+          <span className="mono profile-editor-meta">
+            {form.system
+              ? t('profiles.drawer.system.charsAndLines', {
+                  chars: form.system.length,
+                  lines: form.system.split('\n').length,
+                })
+              : t('profiles.drawer.system.chars', { chars: form.system.length })}
+          </span>
+        }
+      >
+        <Field htmlFor="profile-form-system" hint={t('profiles.drawer.system.hint')}>
+          <Textarea
+            mono
+            className="profile-editor-textarea"
+            rows={10}
+            placeholder={t('profiles.drawer.system.placeholder')}
+            value={form.system}
+            onChange={(e) =>
+              setForm((prev) => ({ ...prev, system: e.target.value, systemEdited: true }))
+            }
+            aria-label={t('profiles.drawer.system.aria')}
+          />
+        </Field>
+      </Card>
+
+      {/* Plugin extension slots (e.g. builtin:memory long-term memory section) */}
+      <PluginSlot
+        ownerPluginId="builtin:profile"
+        name={PROFILE_DETAIL_SECTION_SLOT}
+        slotProps={{
+          profileId: form.id.trim(),
+          isNew,
+          disabled: isSaving || isDeleting,
+        }}
+      />
+
+      {/* Empty-conversation starters (max 6) */}
+      <Card
+        variant="subtle"
+        title={t('profiles.drawer.starters.title')}
+        actions={
+          <span className="mono profile-editor-meta">
+            {form.starters.length}/{PROFILE_STARTERS_MAX_ITEMS}
+          </span>
+        }
+      >
+        <div className="profile-starters-list">
+          {form.starters.length === 0 ? (
+            <HelperText className="profile-starters-empty">
+              {t('profiles.drawer.starters.empty')}
+            </HelperText>
+          ) : (
+            form.starters.map((starter, index) => {
+              const issue = validateStarterDraft(starter, t)
+              return (
+                <div key={starter.key} className="profile-starter-item">
+                  <div className="profile-starter-fields">
+                    <Input
+                      className="profile-starter-label"
+                      placeholder={t('profiles.drawer.starters.labelPlaceholder')}
+                      value={starter.label}
+                      invalid={issue !== null}
+                      aria-label={t('profiles.drawer.starters.labelAria', { index: index + 1 })}
                       onChange={(e) =>
                         setForm((prev) => ({
                           ...prev,
-                          id: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''),
+                          starters: prev.starters.map((item) =>
+                            item.key === starter.key ? { ...item, label: e.target.value } : item,
+                          ),
                         }))
                       }
                     />
-                  ) : (
-                    <input
-                      id="profile-form-id"
-                      type="text"
-                      className="input mono"
-                      value={form.id}
-                      disabled
-                      readOnly
+                    <Textarea
+                      className="profile-starter-prompt"
+                      rows={2}
+                      placeholder={t('profiles.drawer.starters.promptPlaceholder')}
+                      value={starter.prompt}
+                      invalid={issue !== null}
+                      aria-label={t('profiles.drawer.starters.promptAria', { index: index + 1 })}
+                      onChange={(e) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          starters: prev.starters.map((item) =>
+                            item.key === starter.key ? { ...item, prompt: e.target.value } : item,
+                          ),
+                        }))
+                      }
                     />
-                  )}
-                </div>
-
-                <label htmlFor="profile-form-name" className="form-grid-label">
-                  {t('profiles.drawer.field.name')}
-                </label>
-                <div className="form-grid-value">
-                  <input
-                    id="profile-form-name"
-                    type="text"
-                    className="input"
-                    placeholder={t('profiles.drawer.field.namePlaceholder')}
-                    value={form.name}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, name: e.target.value }))
-                    }
-                  />
-                </div>
-
-                <label htmlFor="profile-form-model" className="form-grid-label">
-                  {t('profiles.drawer.field.defaultModel')}
-                </label>
-                <div className="form-grid-value">
-                  {/* 共享模型选择器（与 Composer/全局默认同一实现）：行内思考档位
-                      chips 一并提交 model+level；点击行体仅应用模型，档位回落
-                      跟随默认链（保存时省略 thinkingLevel 键）。 */}
-                  <ModelPickerControl
-                    buttonId="profile-form-model"
-                    buttonAriaLabel={t('profiles.drawer.field.defaultModel')}
-                    buttonTitle={form.model || t('profiles.modelOption.followSystemDefault')}
-                    placeholderLabel={t('profiles.modelOption.followSystemDefault')}
-                    effectiveModel={form.model}
-                    activeThinkingLevel={form.thinkingLevel}
-                    resetLabel={t('profiles.modelOption.followSystemDefault')}
-                    resetTitle={t('profiles.modelOption.followSystemDefault')}
-                    popoverSide={inline ? 'bottom' : 'top'}
-                    enableShortcut={false}
+                  </div>
+                  {issue !== null ? (
+                    <ErrorText live className="profile-starter-error">
+                      {issue}
+                    </ErrorText>
+                  ) : null}
+                  <IconButton
+                    icon="trash-2"
+                    variant="ghost"
+                    size="sm"
+                    className="profile-starter-remove"
+                    label={t('profiles.drawer.starters.deleteAria', { index: index + 1 })}
+                    title={t('profiles.drawer.starters.deleteTitle')}
                     disabled={isSaving || isDeleting}
-                    {...pickerAdapter}
-                    onApply={(model, level) =>
-                      setForm((prev) => ({ ...prev, model, thinkingLevel: level ?? '' }))
-                    }
-                    onResetDefault={() =>
-                      setForm((prev) => ({ ...prev, model: '', thinkingLevel: '' }))
-                    }
-                  />
-                  <span className="text-subtle">{t('profiles.drawer.modelHint')}</span>
-                </div>
-
-                <label htmlFor="profile-form-node" className="form-grid-label">
-                  {t('profiles.drawer.field.defaultNode')}
-                </label>
-                <div className="form-grid-value">
-                  <Select
-                    id="profile-form-node"
-                    value={form.nodeId}
-                    options={nodeOptions}
-                    popoverClassName="helmx-select-popover-wide"
-                    className="w-full mono"
-                    inline={inline}
-                    placeholder={t('profiles.drawer.unboundNode')}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, nodeId: e.target.value }))
+                    onClick={() =>
+                      setForm((prev) => ({
+                        ...prev,
+                        starters: prev.starters.filter((item) => item.key !== starter.key),
+                      }))
                     }
                   />
                 </div>
+              )
+            })
+          )}
+        </div>
+        <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="plus"
+            className="profile-starter-add"
+            disabled={isSaving || isDeleting || startersAtLimit(form.starters)}
+            onClick={() =>
+              setForm((prev) => ({
+                ...prev,
+                starters: [...prev.starters, { key: createStarterKey(), label: '', prompt: '' }],
+              }))
+            }
+          >
+            {t('profiles.drawer.starters.add')}
+          </Button>
+        </div>
+      </Card>
 
-                <label htmlFor="profile-form-cwd" className="form-grid-label">
-                  {t('profiles.drawer.field.cwd')}
-                </label>
-                <div className="form-grid-value">
-                  <input
-                    id="profile-form-cwd"
-                    type="text"
-                    className="input mono"
-                    placeholder={t('profiles.drawer.field.cwdPlaceholder')}
-                    value={form.cwd}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, cwd: e.target.value }))
-                    }
-                  />
-                </div>
-
-                <label htmlFor="profile-form-restrict-cwd" className="form-grid-label">
-                  {t('profiles.drawer.field.restrictToCwd')}
-                </label>
-                <div className="form-grid-value flex-col">
-                  <Switch
-                    id="profile-form-restrict-cwd"
-                    checked={form.restrictToCwd}
-                    onChange={(val) =>
-                      setForm((prev) => ({ ...prev, restrictToCwd: val }))
-                    }
-                    label={t('profiles.drawer.field.restrictToCwd')}
-                  />
-                  <div className="profile-editor-hint">
-                    {t('profiles.drawer.field.restrictToCwdHint')}
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {/* System prompt section */}
-            <section className="section-flat">
-              <div className="section-flat-header flex-row-between">
-                <span className="section-flat-title">{t('profiles.drawer.system.title')}</span>
-                <span className="mono profile-editor-meta">
-                  {form.system
-                    ? t('profiles.drawer.system.charsAndLines', {
-                        chars: form.system.length,
-                        lines: form.system.split('\n').length,
-                      })
-                    : t('profiles.drawer.system.chars', { chars: form.system.length })}
-                </span>
-              </div>
-              <textarea
-                id="profile-form-system"
-                className="input mono profile-editor-textarea"
-                rows={10}
-                placeholder={t('profiles.drawer.system.placeholder')}
-                value={form.system}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, system: e.target.value, systemEdited: true }))
-                }
-                aria-label={t('profiles.drawer.system.aria')}
-              />
-              <div className="profile-editor-hint">
-                {t('profiles.drawer.system.hint')}
-              </div>
-            </section>
-
-            {/* Plugin extension slots (e.g. builtin:memory long-term memory section) */}
-            <PluginSlot
-              ownerPluginId="builtin:profile"
-              name={PROFILE_DETAIL_SECTION_SLOT}
-              slotProps={{
-                profileId: form.id.trim(),
-                isNew,
-                disabled: isSaving || isDeleting,
-              }}
-            />
-
-            {/* Empty-conversation starters (max 6) */}
-            <section className="section-flat">
-              <div className="section-flat-header profile-starters-header">
-                <span className="section-flat-title">{t('profiles.drawer.starters.title')}</span>
-                <span className="mono profile-editor-meta">
-                  {form.starters.length}/{PROFILE_STARTERS_MAX_ITEMS}
-                </span>
-              </div>
-              <div className="profile-starters-list">
-                {form.starters.length === 0 ? (
-                  <div className="text-subtle profile-starters-empty">
-                    {t('profiles.drawer.starters.empty')}
-                  </div>
-                ) : (
-                  form.starters.map((starter, index) => {
-                    const issue = validateStarterDraft(starter, t)
-                    return (
-                      <div key={starter.key} className="profile-starter-item">
-                        <div className="profile-starter-fields">
-                          <input
-                            type="text"
-                            className="input profile-starter-label"
-                            placeholder={t('profiles.drawer.starters.labelPlaceholder')}
-                            value={starter.label}
-                            aria-label={t('profiles.drawer.starters.labelAria', { index: index + 1 })}
-                            onChange={(e) =>
-                              setForm((prev) => ({
-                                ...prev,
-                                starters: prev.starters.map((item) =>
-                                  item.key === starter.key ? { ...item, label: e.target.value } : item,
-                                ),
-                              }))
-                            }
-                          />
-                          <textarea
-                            className="input profile-starter-prompt"
-                            rows={2}
-                            placeholder={t('profiles.drawer.starters.promptPlaceholder')}
-                            value={starter.prompt}
-                            aria-label={t('profiles.drawer.starters.promptAria', { index: index + 1 })}
-                            onChange={(e) =>
-                              setForm((prev) => ({
-                                ...prev,
-                                starters: prev.starters.map((item) =>
-                                  item.key === starter.key ? { ...item, prompt: e.target.value } : item,
-                                ),
-                              }))
-                            }
-                          />
-                        </div>
-                        {issue !== null ? (
-                          <div className="profile-starter-error" role="alert">
-                            {issue}
-                          </div>
+      {/* Skill allowlist */}
+      <Card
+        variant="subtle"
+        title={t('profiles.drawer.skills.title')}
+        actions={
+          <Switch
+            id="profile-form-skills-switch"
+            checked={form.useAllSkills}
+            onChange={(val) =>
+              setForm((prev) => ({ ...prev, useAllSkills: val }))
+            }
+            label={t('profiles.card.allSkills')}
+          />
+        }
+      >
+        {form.useAllSkills ? (
+          <HelperText>
+            {t('profiles.drawer.skills.allHint')}
+          </HelperText>
+        ) : (
+          <Stack direction="vertical" gap="sm" className="profile-skills-scroll">
+            {availableSkills.length === 0 ? (
+              <HelperText>{t('profiles.drawer.skills.empty')}</HelperText>
+            ) : (
+              availableSkills.map((s) => {
+                const desc = summarizeSingleLine(s.description)
+                return (
+                  <Checkbox
+                    key={s.id}
+                    checked={form.selectedSkillIds.includes(s.id)}
+                    onChange={(checked) => handleToggleSkill(s.id, checked)}
+                    label={
+                      <span className="profile-skill-option-label">
+                        <span className="flex-row text-muted">
+                          <span>{s.name}</span>
+                          <span className="mono text-subtle">({s.id})</span>
+                        </span>
+                        {desc !== '' ? (
+                          <span className="profile-skill-desc" title={s.description}>
+                            {desc}
+                          </span>
                         ) : null}
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm profile-starter-remove"
-                          aria-label={t('profiles.drawer.starters.deleteAria', { index: index + 1 })}
-                          title={t('profiles.drawer.starters.deleteTitle')}
-                          disabled={isSaving || isDeleting}
-                          onClick={() =>
-                            setForm((prev) => ({
-                              ...prev,
-                              starters: prev.starters.filter((item) => item.key !== starter.key),
-                            }))
-                          }
-                        >
-                          <HelmxIcon name="trash-2" size={12} />
-                        </button>
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm profile-starter-add"
-                disabled={isSaving || isDeleting || startersAtLimit(form.starters)}
-                onClick={() =>
-                  setForm((prev) => ({
-                    ...prev,
-                    starters: [...prev.starters, { key: createStarterKey(), label: '', prompt: '' }],
-                  }))
-                }
-              >
-                <HelmxIcon name="plus" size={12} />
-                <span>{t('profiles.drawer.starters.add')}</span>
-              </button>
-            </section>
-
-            {/* Skill allowlist */}
-            <section className="section-flat">
-              <div className="section-flat-header flex-row-between">
-                <span className="section-flat-title">{t('profiles.drawer.skills.title')}</span>
-                <Switch
-                  id="profile-form-skills-switch"
-                  checked={form.useAllSkills}
-                  onChange={(val) =>
-                    setForm((prev) => ({ ...prev, useAllSkills: val }))
-                  }
-                  label={t('profiles.card.allSkills')}
-                />
-              </div>
-
-              {form.useAllSkills ? (
-                <div className="text-subtle">
-                  {t('profiles.drawer.skills.allHint')}
-                </div>
-              ) : (
-                <div
-                  className="flex-col"
-                  style={{
-                    maxHeight: 180,
-                    overflowY: 'auto',
-                  }}
-                >
-                  {availableSkills.length === 0 ? (
-                    <div className="text-subtle">{t('profiles.drawer.skills.empty')}</div>
-                  ) : (
-                    availableSkills.map((s) => {
-                      const desc = summarizeSingleLine(s.description)
-                      return (
-                        <Checkbox
-                          key={s.id}
-                          checked={form.selectedSkillIds.includes(s.id)}
-                          onChange={(checked) => handleToggleSkill(s.id, checked)}
-                          label={
-                            <span className="flex-col" style={{ gap: 1 }}>
-                              <span className="flex-row text-muted">
-                                <span>{s.name}</span>
-                                <span className="mono text-subtle">({s.id})</span>
-                              </span>
-                              {desc !== '' ? (
-                                <span className="profile-skill-desc" title={s.description}>
-                                  {desc}
-                                </span>
-                              ) : null}
-                            </span>
-                          }
-                        />
-                      )
-                    })
-                  )}
-                </div>
-              )}
-            </section>
+                      </span>
+                    }
+                  />
+                )
+              })
+            )}
+          </Stack>
+        )}
+      </Card>
     </DetailDrawer>
   )
 }

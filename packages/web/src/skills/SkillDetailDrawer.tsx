@@ -1,7 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { SkillSummary } from '@helmx/protocol/browser'
-import { DetailDrawer, EmptyState, HelmxIcon, CopyButton, Select } from '@helmx/plugin-client'
-import type { SelectOption } from '@helmx/plugin-client'
+import {
+  Badge,
+  Callout,
+  CopyButton,
+  DetailDrawer,
+  EmptyState,
+  HelmxIcon,
+  MonoId,
+  Select,
+  type BadgeTone,
+  type SelectOption,
+} from '@helmx/plugin-client'
 import { CodeBlockView, MarkdownView } from '../conversation/MarkdownView.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -120,14 +130,8 @@ export function SkillDetailDrawer({
   }, [skill?.id, activePath, open, readSkill, initialContent])
 
   const sourceBadge = skill ? getSkillSourceBadge(skill, t) : null
-  const badgeClass =
-    sourceBadge?.variant === 'builtin'
-      ? 'badge badge-neutral'
-      : sourceBadge?.variant === 'plugin'
-        ? 'badge badge-neutral mono'
-        : sourceBadge?.variant === 'agents' || sourceBadge?.variant === 'node'
-          ? 'badge badge-accent'
-          : 'badge badge-neutral'
+  const badgeTone: BadgeTone =
+    sourceBadge?.variant === 'agents' || sourceBadge?.variant === 'node' ? 'accent' : 'neutral'
 
   const fileOptions: Array<SelectOption<string>> = files.map((f) => ({
     value: f.path,
@@ -150,12 +154,16 @@ export function SkillDetailDrawer({
       titleClassName="break-word"
       titleExtra={
         sourceBadge ? (
-          <span className={badgeClass} title={t('skills.card.sourceTitle', { label: sourceBadge.label })}>
+          <Badge
+            tone={badgeTone}
+            mono={sourceBadge.variant === 'plugin'}
+            title={t('skills.card.sourceTitle', { label: sourceBadge.label })}
+          >
             {sourceBadge.label}
-          </span>
+          </Badge>
         ) : undefined
       }
-      meta={skill ? skill.id : undefined}
+      meta={skill ? <MonoId value={skill.id} /> : undefined}
       metaClassName="text-subtle break-word"
       belowTitle={
         <>
@@ -243,12 +251,13 @@ export function SkillDetailDrawer({
                           </button>
                         </div>
                       )}
-                      <span
-                        className="badge badge-neutral tabular-nums skill-reader-index"
+                      <Badge
+                        tone="neutral"
+                        className="tabular-nums skill-reader-index"
                         title={t('skills.drawer.fileIndexTitle', { index: activeIndex + 1, total: files.length })}
                       >
                         {`${activeIndex + 1}/${files.length}`}
-                      </span>
+                      </Badge>
                       <span
                         className="skill-reader-lines tabular-nums"
                         title={t('skills.drawer.linesTitle', { file: activeDisplayPath })}
@@ -268,10 +277,11 @@ export function SkillDetailDrawer({
                     {/* Body reading area */}
                     <div className="skill-reader-body" data-mode={richText ? 'rich' : 'source'}>
                       {error ? (
-                        <div className="callout callout-error" role="alert">
-                          <HelmxIcon name="alert-circle" size={13} />
-                          <span className="callout-text">{t('skills.drawer.readFailed', { error })}</span>
-                        </div>
+                        <Callout tone="err">
+                          <span className="callout-text" role="alert">
+                            {t('skills.drawer.readFailed', { error })}
+                          </span>
+                        </Callout>
                       ) : loading && content === '' ? (
                         <div className="skill-reader-placeholder text-subtle">
                           <HelmxIcon name="loader" size={13} className="spin" />

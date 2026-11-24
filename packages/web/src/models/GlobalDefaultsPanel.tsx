@@ -1,5 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { HelmxIcon, ModelPickerControl } from '@helmx/plugin-client'
+import {
+  Button,
+  Callout,
+  Card,
+  Field,
+  HelperText,
+  HelmxIcon,
+  IconButton,
+  ModelPickerControl,
+  Stack,
+} from '@helmx/plugin-client'
 import { assetsApi } from '../lib/api.js'
 import { useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -162,20 +172,23 @@ export function GlobalDefaultsPanel({
 
   return (
     <div className="model-defaults-panel">
-      <div className="section-flat">
-        <div className="section-flat-header">
-          <HelmxIcon name="sliders" size={14} />
-          <span className="section-flat-title">{t('models.defaults.section')}</span>
-        </div>
-        <p className="text-muted">
-          {t('models.defaults.inheritanceHelp')}
-        </p>
-
-        <div className="form-grid form-grid-align-start">
-          <label htmlFor="model-defaults-model" className="form-grid-label">
-            {t('models.defaults.modelLabel')}
-          </label>
-          <div className="flex-col-xs">
+      <Card
+        variant="subtle"
+        title={
+          <Stack direction="horizontal" gap="xs" align="center" inline>
+            <HelmxIcon name="sliders" size={14} />
+            <span>{t('models.defaults.section')}</span>
+          </Stack>
+        }
+        subtitle={t('models.defaults.inheritanceHelp')}
+      >
+        <Stack direction="vertical" gap="md">
+          <Field
+            label={t('models.defaults.modelLabel')}
+            htmlFor="model-defaults-model"
+            hint={t('models.defaults.modelHint')}
+            layout="horizontal"
+          >
             <ModelPickerControl
               buttonId="model-defaults-model"
               buttonAriaLabel={t('models.defaults.modelAria')}
@@ -199,13 +212,14 @@ export function GlobalDefaultsPanel({
                 setFormLevel('')
               }}
             />
-            <span className="text-subtle">{t('models.defaults.modelHint')}</span>
-          </div>
+          </Field>
 
-          <label htmlFor="model-defaults-compaction-model" className="form-grid-label">
-            {t('models.defaults.compactionLabel')}
-          </label>
-          <div className="flex-col-xs">
+          <Field
+            label={t('models.defaults.compactionLabel')}
+            htmlFor="model-defaults-compaction-model"
+            hint={t('models.defaults.compactionHint')}
+            layout="horizontal"
+          >
             <ModelPickerControl
               buttonId="model-defaults-compaction-model"
               buttonAriaLabel={t('models.defaults.compactionAria')}
@@ -229,26 +243,25 @@ export function GlobalDefaultsPanel({
                 setFormCompactionLevel('')
               }}
             />
-            <span className="text-subtle">{t('models.defaults.compactionHint')}</span>
-          </div>
-        </div>
+          </Field>
+        </Stack>
 
         <div className="model-defaults-permodel">
           <div className="model-defaults-permodel-head">
             <span className="model-defaults-permodel-title">{t('models.defaults.perModelTitle')}</span>
-            <button
-              type="button"
-              className="btn btn-ghost"
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="plus"
               onClick={() => setPerModelRows((rows) => [...rows, { key: nextPerModelRowKey++, model: '', level: '' }])}
               disabled={saving}
             >
-              <HelmxIcon name="plus" size={14} />
-              <span>{t('models.defaults.perModelAdd')}</span>
-            </button>
+              {t('models.defaults.perModelAdd')}
+            </Button>
           </div>
-          <p className="text-muted">{t('models.defaults.perModelHelp')}</p>
+          <HelperText>{t('models.defaults.perModelHelp')}</HelperText>
           {perModelRows.length === 0 && (
-            <p className="text-subtle">{t('models.defaults.perModelEmpty')}</p>
+            <HelperText>{t('models.defaults.perModelEmpty')}</HelperText>
           )}
           {perModelRows.map((row, index) => (
             <div className="model-defaults-row" key={row.key}>
@@ -278,44 +291,40 @@ export function GlobalDefaultsPanel({
                   )
                 }
               />
-              <button
-                type="button"
-                className="model-defaults-row-remove"
+              <IconButton
+                icon="x"
+                variant="ghost"
+                size="sm"
                 onClick={() => setPerModelRows((rows) => rows.filter((existing) => existing.key !== row.key))}
                 disabled={saving}
-                title={t('models.defaults.perModelRemove')}
-                aria-label={t('models.defaults.perModelRemove')}
-              >
-                <HelmxIcon name="x" size={14} />
-              </button>
+                label={t('models.defaults.perModelRemove')}
+              />
             </div>
           ))}
         </div>
 
-        <div className="model-defaults-form-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
+        <Stack direction="horizontal" gap="sm" align="center" className="model-defaults-form-actions">
+          <Button
+            variant="primary"
+            icon="check"
+            pending={saving}
             onClick={handleSave}
-            disabled={saving}
           >
-            <HelmxIcon name="check" size={14} />
-            <span>{saving ? t('models.saving') : t('models.defaults.save')}</span>
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={handleReset} disabled={saving}>
-            <span>{t('models.defaults.reset')}</span>
-          </button>
+            {saving ? t('models.saving') : t('models.defaults.save')}
+          </Button>
+          <Button variant="ghost" onClick={handleReset} disabled={saving}>
+            {t('models.defaults.reset')}
+          </Button>
           {saveSuccess && (
             <span className="text-subtle" role="status">{t('models.saveSuccess')}</span>
           )}
-        </div>
+        </Stack>
         {saveError && (
-          <div className="callout callout-error" role="alert">
-            <HelmxIcon name="alert-circle" size={13} />
-            <span className="callout-text">{saveError}</span>
-          </div>
+          <Callout tone="err">
+            <span className="callout-text" role="alert">{saveError}</span>
+          </Callout>
         )}
-      </div>
+      </Card>
     </div>
   )
 }

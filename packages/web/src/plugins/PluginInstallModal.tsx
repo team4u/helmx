@@ -3,7 +3,21 @@ import { DEFAULT_HELMX_LOCALE, type PluginDoctorReport } from '@helmx/protocol/b
 import { pluginsApi } from '../lib/api.js'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalLocale } from '../lib/store-context.js'
-import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helmx/plugin-client'
+import {
+  Button,
+  Callout,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  Field,
+  IconButton,
+  Input,
+  Switch,
+} from '@helmx/plugin-client'
 import {
   detectPluginSourceKind,
   extractDoctorReport,
@@ -93,36 +107,35 @@ export function PluginInstallModal({
             role="dialog"
             aria-label={t('plugins.installPlugin')}
           >
-          <div className="modal-header">
-            <DialogTitle className="modal-title">{t('plugins.installPlugin')}</DialogTitle>
-            <DialogClose asChild>
-              <button
-                className="btn btn-ghost btn-sm"
-                aria-label={t('common.close')}
-                title={t('common.close')}
-                disabled={installing}
+            <div className="modal-header">
+              <DialogTitle className="modal-title">{t('plugins.installPlugin')}</DialogTitle>
+              <DialogClose asChild>
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  icon="x"
+                  label={t('common.close')}
+                  disabled={installing}
+                />
+              </DialogClose>
+            </div>
+
+            <div className="modal-body plugin-install-form">
+              <DialogDescription className="visually-hidden">
+                {t('plugins.install.description')}
+              </DialogDescription>
+
+              <Field
+                label={t('plugins.install.sourceLabel')}
+                htmlFor="plugin-install-source"
+                layout="horizontal"
               >
-                <HelmxIcon name="x" size={14} />
-              </button>
-            </DialogClose>
-          </div>
-
-          <div className="modal-body plugin-install-form">
-            <DialogDescription className="visually-hidden">
-              {t('plugins.install.description')}
-            </DialogDescription>
-
-            <div className="form-grid form-grid-align-start">
-              <label htmlFor="plugin-install-source" className="form-grid-label">
-                <span>{t('plugins.install.sourceLabel')}</span>
-              </label>
-              <div className="plugin-install-input-wrap">
-                <input
-                  id="plugin-install-source"
-                  className="input mono"
+                <Input
+                  mono
                   type="text"
                   placeholder="npm:pkg@1.0.0 / git:repo@ref / https://…git / /abs/path"
                   value={source}
+                  invalid={trimmed !== '' && hint.kind === 'unknown'}
                   spellCheck={false}
                   autoComplete="off"
                   disabled={installing}
@@ -142,65 +155,56 @@ export function PluginInstallModal({
                     {hint.label}
                   </span>
                 )}
-              </div>
-            </div>
+              </Field>
 
-            <div className="form-grid">
-              <span className="form-grid-label">
-                <span>{t('plugins.install.enableAfterInstall')}</span>
-              </span>
-              <Switch
-                checked={enableAfterInstall}
-                onChange={setEnableAfterInstall}
-                disabled={installing}
-                label={enableAfterInstall ? t('plugins.install.enableNow') : t('plugins.install.keepDisabled')}
-              />
-            </div>
+              <Field
+                label={t('plugins.install.enableAfterInstall')}
+                htmlFor={false}
+                layout="horizontal"
+              >
+                <Switch
+                  checked={enableAfterInstall}
+                  onChange={setEnableAfterInstall}
+                  disabled={installing}
+                  label={enableAfterInstall ? t('plugins.install.enableNow') : t('plugins.install.keepDisabled')}
+                />
+              </Field>
 
-            <div className="callout callout-warn plugin-install-security" role="note">
-              <HelmxIcon name="shield-alert" size={13} />
-              <span className="callout-text">
-                {t('plugins.install.securityWarning')}
-              </span>
-            </div>
+              <Callout tone="warn">
+                <span className="callout-text plugin-install-security" role="note">
+                  {t('plugins.install.securityWarning')}
+                </span>
+              </Callout>
 
-            {errorText && (
-              <div className="callout callout-error" role="alert">
-                <HelmxIcon name="alert-circle" size={13} />
-                <span className="callout-text selectable">{errorText}</span>
-              </div>
-            )}
-
-            {doctorReport && <PluginDoctorChecks report={doctorReport} />}
-          </div>
-
-          <div className="modal-footer">
-            <DialogClose asChild>
-              <button className="btn btn-ghost btn-sm" disabled={installing}>
-                {t('common.cancel')}
-              </button>
-            </DialogClose>
-            <button
-              className="btn btn-primary btn-sm"
-              disabled={!submittable}
-              onClick={() => void handleInstall()}
-            >
-              {installing ? (
-                <>
-                  <HelmxIcon name="loader" size={12} />
-                  <span>{t('plugins.install.installing')}</span>
-                </>
-              ) : (
-                <>
-                  <HelmxIcon name="download" size={12} />
-                  <span>{t('plugins.install.submit')}</span>
-                </>
+              {errorText && (
+                <Callout tone="err">
+                  <span className="callout-text selectable" role="alert">{errorText}</span>
+                </Callout>
               )}
-            </button>
-          </div>
-        </DialogContent>
-      </DialogOverlay>
-    </DialogPortal>
-  </Dialog>
+
+              {doctorReport && <PluginDoctorChecks report={doctorReport} />}
+            </div>
+
+            <div className="modal-footer">
+              <DialogClose asChild>
+                <Button variant="ghost" size="sm" disabled={installing}>
+                  {t('common.cancel')}
+                </Button>
+              </DialogClose>
+              <Button
+                variant="primary"
+                size="sm"
+                icon="download"
+                pending={installing}
+                disabled={!submittable}
+                onClick={() => void handleInstall()}
+              >
+                {installing ? t('plugins.install.installing') : t('plugins.install.submit')}
+              </Button>
+            </div>
+          </DialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </Dialog>
   )
 }

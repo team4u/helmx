@@ -4,7 +4,7 @@
  * Nodes, Models). Zero Emoji; Fast Refresh compliant (components & types only).
  */
 import type * as React from 'react'
-import { HelmxIcon, SearchBox } from '@helmx/plugin-client'
+import { Badge, Button, HelmxIcon, SearchBox, type ButtonVariant } from '@helmx/plugin-client'
 import { CloseSplitButton, SplitToggleButton } from './SplitControls.js'
 
 export interface SystemCenterCategoryPill<K extends string = string> {
@@ -65,7 +65,7 @@ export function SystemCenterToolbar<K extends string = string>({
               onClick={() => onSelectPill(pill.key)}
             >
               <span>{pill.label}</span>
-              <span className="badge tabular-nums">{pill.count}</span>
+              <Badge className="tabular-nums">{pill.count}</Badge>
             </button>
           )
         })}
@@ -83,7 +83,7 @@ export interface SystemCenterEmptyProps {
   showReset?: boolean
   resetLabel?: string
   resetIcon?: boolean
-  resetButtonClassName?: string
+  resetVariant?: ButtonVariant
   onReset?: () => void
 }
 
@@ -96,7 +96,7 @@ export function SystemCenterEmpty({
   showReset = false,
   resetLabel,
   resetIcon = true,
-  resetButtonClassName = 'btn btn-sm',
+  resetVariant = 'default',
   onReset,
 }: SystemCenterEmptyProps): React.JSX.Element {
   return (
@@ -109,10 +109,14 @@ export function SystemCenterEmpty({
         {hint}
       </div>
       {showReset && onReset !== undefined && resetLabel !== undefined && (
-        <button type="button" className={resetButtonClassName} onClick={onReset}>
-          {resetIcon && <HelmxIcon name="rotate-ccw" size={12} />}
-          <span>{resetLabel}</span>
-        </button>
+        <Button
+          variant={resetVariant}
+          size="sm"
+          icon={resetIcon ? 'rotate-ccw' : undefined}
+          onClick={onReset}
+        >
+          {resetLabel}
+        </Button>
       )}
     </div>
   )

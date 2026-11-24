@@ -475,8 +475,8 @@ test('ModelCard SSR: renders provider card header, badges, description and model
   )
 
   // 1. Card class names and structure
-  assert.match(html, /class="[^"]*primary-card[^"]*"/)
-  assert.match(html, /class="[^"]*primary-card-header[^"]*"/)
+  assert.match(html, /class="[^"]*helmx-select-card[^"]*"/)
+  assert.match(html, /class="[^"]*helmx-select-card-header[^"]*"/)
 
   // 2. Provider name and ID (.mono)
   assert.match(html, /DeepSeek/)
@@ -560,9 +560,9 @@ test('ModelDetailDrawer SSR: inline={true} renders the credentials form, connect
     ),
   )
 
-  // 1. Drawer title and metadata
+  // 1. Drawer title and metadata (MonoId)
   assert.match(html, /OpenAI/)
-  assert.match(html, /class="[^"]*mono[^"]*"[^>]*>openai<\/div>/)
+  assert.match(html, /class="[^"]*helmx-mono-id-code[^"]*"[^>]*>openai<\/code>/)
 
   // 2. Form fields (API key input; built-in provider endpoint read-only, never a fake editable input)
   assert.match(html, /API key/)
@@ -653,7 +653,7 @@ test('ModelCenter SSR: renders the top bar, tabs, search box, category pills and
   assert.match(html, /placeholder="Search provider name, ID or included models\.\.\."/)
 
   // 4. Card grid flow
-  assert.match(html, /class="[^"]*primary-center-grid[^"]*"/)
+  assert.match(html, /class="[^"]*helmx-card-grid[^"]*"/)
   assert.match(html, /Anthropic/)
   assert.match(html, /OpenAI/)
   assert.match(html, /DeepSeek/)
@@ -1144,7 +1144,7 @@ test('ModelCenter: All/Configured filter pills, configured-card first-3 model pr
       )
     })
 
-    const cardsBefore = Array.from(container.querySelectorAll('.primary-card'))
+    const cardsBefore = Array.from(container.querySelectorAll('.helmx-select-card'))
     assert.equal(cardsBefore.length, 2)
     assert.match(cardsBefore[0]?.textContent ?? '', /Anthropic/, 'configured cards render first')
 
@@ -1156,7 +1156,7 @@ test('ModelCenter: All/Configured filter pills, configured-card first-3 model pr
     await act(async () => {
       configuredTab.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
-    const cardsAfter = Array.from(container.querySelectorAll('.primary-card'))
+    const cardsAfter = Array.from(container.querySelectorAll('.helmx-select-card'))
     assert.equal(cardsAfter.length, 1)
     assert.match(cardsAfter[0]?.textContent ?? '', /Anthropic/)
 

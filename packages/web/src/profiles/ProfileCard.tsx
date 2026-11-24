@@ -7,7 +7,15 @@ import {
   resolveEffectiveProfileModel,
   summarizeProfileActivity,
 } from './profile-center-model.js'
-import { HelmxIcon, StatusLight } from '@helmx/plugin-client'
+import {
+  Badge,
+  Button,
+  HelmxIcon,
+  SelectCard,
+  Stack,
+  StatusLight,
+  type StatusLightTone,
+} from '@helmx/plugin-client'
 import {
   useOptionalConversations,
   useOptionalPlugins,
@@ -25,26 +33,26 @@ export interface ProfileCardProps {
   onStartChat?: () => void
 }
 
-/** Activity state → StatusLight status word (tone shapes + visible label carry the semantics). */
-const ACTIVITY_LIGHT_STATUS: Record<
+/** Activity state → strongly typed StatusLightTone. */
+const ACTIVITY_LIGHT_TONE: Record<
   'working' | 'blocked' | 'error' | 'plugin-disabled' | 'active' | 'idle',
-  string
+  StatusLightTone
 > = {
   working: 'working',
   blocked: 'blocked',
   error: 'failed',
-  'plugin-disabled': 'disabled',
-  active: 'active',
+  'plugin-disabled': 'idle',
+  active: 'working',
   idle: 'idle',
 }
 
 /**
  * Agent profile card:
- * - renders the .primary-card visual spec, compactly showing the profile
- *   name/ID, system lock, activity state, effective model (with thinking
- *   level / global-inheritance markers), node and working directory, skill
- *   count, and the bottom-right direct-conversation button;
- * - keyboard Enter/Space and click open the right detail drawer;
+ * - built on SelectCard (<article> + <button aria-pressed> + sibling footer),
+ *   compactly showing the profile name/ID, system lock, activity state,
+ *   effective model (with thinking level / global-inheritance markers), node
+ *   and working directory, skill count, and the bottom-right direct-conversation
+ *   button;
  * - follows the zero-emoji and zero-inline-style rules strictly.
  */
 export function ProfileCard({
@@ -100,108 +108,96 @@ export function ProfileCard({
     : t('profiles.card.defaultCwd', { nodeId: location.nodeId })
 
   return (
-    <article
+    <SelectCard
       data-profile-id={profile.id}
-      className={`primary-card${selected ? ' is-selected' : ''}`}
-      onClick={onSelect}
+      selected={selected}
+      onSelect={onSelect}
+      title={
+        <span className="primary-card-title-row">
+          <span className="primary-card-name" title={displayName}>
+            {displayName}
+          </span>
+          {isSystem && (
+            <Badge tone="neutral" mono icon="lock" title={t('profiles.card.systemPillTitle')}>
+              {t('profiles.card.systemPill')}
+            </Badge>
+          )}
+          <StatusLight
+            tone={ACTIVITY_LIGHT_TONE[activity.stateKind]}
+            label={activity.stateLabel}
+            className="primary-card-activity tabular-nums"
+          />
+        </span>
+      }
+      subtitle={<span className="mono break-word">{profile.id}</span>}
+      footer={
+        <>
+          <span className="text-subtle tabular-nums">
+            {activity.conversationCount > 0
+              ? t('profiles.card.linkedConversations', { count: activity.conversationCount })
+              : t('profiles.card.noLinkedConversations')}
+          </span>
+          <Button
+            size="sm"
+            icon="message-square"
+            disabled={activity.managingPluginDisabled}
+            title={
+              activity.managingPluginDisabled
+                ? t('profiles.card.chatDisabledTitle')
+                : t('profiles.card.startConversationTitle', { name: displayName })
+            }
+            onClick={handleChatClick}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            {t('profiles.card.conversationAction')}
+          </Button>
+        </>
+      }
     >
-      <div className="primary-card-header">
-        <button
-          type="button"
-          className="primary-card-open"
-          aria-pressed={selected}
-          onClick={(event) => {
-            event.stopPropagation()
-            onSelect()
-          }}
-        >
-          <div className="primary-card-meta">
-            <div className="primary-card-title-row">
-              <span className="primary-card-name" title={displayName}>
-                {displayName}
-              </span>
-              {isSystem && (
-                <span className="primary-card-pill mono" title={t('profiles.card.systemPillTitle')}>
-                  <HelmxIcon name="lock" size={10} />
-                  <span>{t('profiles.card.systemPill')}</span>
-                </span>
-              )}
-              <StatusLight
-                status={ACTIVITY_LIGHT_STATUS[activity.stateKind]}
-                label={activity.stateLabel}
-                className="primary-card-activity tabular-nums"
-              />
-            </div>
-            <span className="mono text-subtle break-word">{profile.id}</span>
-          </div>
-        </button>
-      </div>
-
       <div className="primary-card-desc" title={profile.description || undefined}>
         {profile.description || t('profiles.card.noDescription')}
       </div>
 
-      <div className="flex-col-xs">
-        <div
-          className="flex-row primary-card-location text-subtle mono"
+      <Stack direction="vertical" gap="xs">
+        <Stack
+          direction="horizontal"
+          gap="xs"
+          align="start"
+          className="primary-card-location text-subtle mono"
           title={t('profiles.card.locationTitle', { location: locationText })}
         >
           <HelmxIcon name={location.isRemoteNode ? 'server' : 'laptop'} size={11} />
           <span className="break-word">{locationText}</span>
-        </div>
+        </Stack>
 
-        <div className="primary-card-pills">
+        <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
           {shortModelName ? (
-            <span className="primary-card-pill mono" title={modelTitle}>
-              <HelmxIcon name="cpu" size={10} />
-              <span className="primary-card-pill-label">{shortModelName}</span>
-              {effectiveModel.thinkingLevel && (
-                <span className="primary-card-pill-suffix">· {effectiveModel.thinkingLevel}</span>
-              )}
-            </span>
+            <Badge tone="neutral" mono icon="cpu" title={modelTitle}>
+              <span className="primary-card-pill-inner">
+                <span className="primary-card-pill-label">{shortModelName}</span>
+                {effectiveModel.thinkingLevel && (
+                  <span className="primary-card-pill-suffix">· {effectiveModel.thinkingLevel}</span>
+                )}
+              </span>
+            </Badge>
           ) : (
-            <span className="primary-card-pill" title={modelTitle}>
-              <HelmxIcon name="cpu" size={10} />
+            <Badge tone="neutral" icon="cpu" title={modelTitle}>
               <span className="primary-card-pill-label">{t('profiles.card.followGlobalDefault')}</span>
-            </span>
+            </Badge>
           )}
           {effectiveModel.source === 'global' && (
-            <span
-              className="primary-card-pill"
+            <Badge
+              tone="neutral"
               title={t('profiles.card.inheritModel', { model: effectiveModel.model ?? '' })}
             >
-              <span>{t('profiles.card.globalDefault')}</span>
-            </span>
+              {t('profiles.card.globalDefault')}
+            </Badge>
           )}
-          <span className="primary-card-pill" title={t('profiles.card.skillsTitle', { label: skillsLabel })}>
-            <HelmxIcon name="wrench" size={10} />
-            <span className="primary-card-pill-label">{skillsLabel}</span>
-          </span>
-        </div>
-      </div>
-
-      <div className="primary-card-footer">
-        <span className="text-subtle tabular-nums">
-          {activity.conversationCount > 0
-            ? t('profiles.card.linkedConversations', { count: activity.conversationCount })
-            : t('profiles.card.noLinkedConversations')}
-        </span>
-        <button
-          type="button"
-          className="btn btn-sm"
-          disabled={activity.managingPluginDisabled}
-          title={
-            activity.managingPluginDisabled
-              ? t('profiles.card.chatDisabledTitle')
-              : t('profiles.card.startConversationTitle', { name: displayName })
-          }
-          onClick={handleChatClick}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          <HelmxIcon name="message-square" size={12} />
-          <span>{t('profiles.card.conversationAction')}</span>
-        </button>
-      </div>
-    </article>
+          <Badge tone="neutral" icon="wrench" title={t('profiles.card.skillsTitle', { label: skillsLabel })}>
+            {skillsLabel}
+          </Badge>
+        </Stack>
+      </Stack>
+    </SelectCard>
   )
 }

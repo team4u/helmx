@@ -1,6 +1,6 @@
 import React from 'react'
 import type { PluginDoctorReport } from '@helmx/protocol/browser'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon, Stack } from '@helmx/plugin-client'
 import { buildDoctorCheckItems } from './plugin-package-model.js'
 
 export interface PluginDoctorChecksProps {
@@ -13,7 +13,7 @@ export interface PluginDoctorChecksProps {
 export function PluginDoctorChecks({ report }: PluginDoctorChecksProps): React.JSX.Element {
   const items = buildDoctorCheckItems(report)
   return (
-    <div className="plugin-install-doctor" data-doctor-ok={report.ok}>
+    <Stack direction="vertical" gap="sm" className="plugin-install-doctor" data-doctor-ok={report.ok}>
       {items.map((item) => (
         <div
           key={item.id}
@@ -32,6 +32,6 @@ export function PluginDoctorChecks({ report }: PluginDoctorChecksProps): React.J
           </span>
         </div>
       ))}
-    </div>
+    </Stack>
   )
 }

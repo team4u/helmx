@@ -512,7 +512,7 @@ test('SkillCard: SSR structure, source badge, reference pills and the zero-emoji
   )
 
   // Structure assertions
-  assert.ok(html.includes('primary-card'), 'must include the primary-card class')
+  assert.ok(html.includes('helmx-select-card'), 'must include the helmx-select-card class')
   assert.ok(html.includes('skill-card'), 'must include the skill-card class')
   assert.ok(html.includes('Helmx 命令行操作手册'), 'must show the skill name (zh fixture)')
   assert.ok(html.includes('helmx-cli'), 'must show the skill ID')
@@ -654,7 +654,7 @@ test('SkillCard: mouse click and keyboard accessibility activation', { timeout: 
   const card = host.querySelector('.skill-card') as HTMLElement
   assert.ok(card, 'the card DOM node must be found')
   assert.equal(card.tagName, 'ARTICLE', 'card container uses article to avoid nested interactive controls')
-  const openBtn = card.querySelector<HTMLButtonElement>('.primary-card-open')
+  const openBtn = card.querySelector<HTMLButtonElement>('.helmx-select-card-trigger')
   assert.ok(openBtn !== null && openBtn.tagName === 'BUTTON', 'card header exposes a native button for keyboard activation')
 
   // Click card surface activation
@@ -1229,7 +1229,7 @@ test('SkillCenter: SSR renders the top bar, search bar, grid flow and zero-emoji
   assert.ok(html.includes('Plugins'), 'must include the Plugins tab')
 
   // Card grid
-  assert.ok(html.includes('primary-center-grid'), 'must include the primary-center-grid')
+  assert.ok(html.includes('helmx-card-grid'), 'must include the helmx-card-grid')
   assert.ok(html.includes('Helmx 命令行操作手册'), 'the grid must render mock skill cards (zh fixture)')
   assert.ok(html.includes('工程代码审查规范'), 'the grid must render mock skill cards (zh fixture)')
 

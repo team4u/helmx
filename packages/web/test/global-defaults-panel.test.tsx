@@ -178,8 +178,8 @@ test('GlobalDefaultsPanel: per-model rows render from saved defaults; remove + s
     assert.match(panel.container.textContent ?? '', /Per-model thinking defaults/)
 
     // Removing the row and saving submits the complete map in the same request.
-    const removeBtn = panel.container.querySelector('button.model-defaults-row-remove') as HTMLButtonElement
-    assert.ok(removeBtn, 'row remove button must render')
+    const removeBtn = panel.container.querySelector('.model-defaults-row button[aria-label="Remove this entry"]') as HTMLButtonElement
+    assert.ok(removeBtn, 'row remove icon button must render')
     await click(removeBtn)
     assert.ok(panel.container.querySelector('#model-defaults-permodel-0') === null, 'row disappears after removal')
 

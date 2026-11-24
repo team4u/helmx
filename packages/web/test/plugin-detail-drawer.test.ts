@@ -991,11 +991,11 @@ test('PluginConfigForm：长标签与「默认 / 已配置」徽章防拆字碰�
       onSaved: () => {},
     }),
   )
-  assert.match(html, /form-grid plugin-config-row/)
-  assert.match(html, /form-grid-label plugin-config-field-label/)
+  assert.match(html, /helmx-field helmx-field-horizontal plugin-config-row/)
+  assert.match(html, /class="helmx-field-label"><span class="plugin-config-field-label">/)
   assert.match(html, /plugin-config-field-name">agent 启动超时（毫秒）<\/span>/)
   assert.match(html, /text-subtle plugin-config-source-tag"[^>]*>Default<\/span>/)
-  assert.match(html, /badge badge-neutral plugin-config-source-tag"[^>]*>Configured<\/span>/)
+  assert.match(html, /badge badge-neutral plugin-config-source-tag"[^>]*><span>Configured<\/span><\/span>/)
 })
 
 test('PluginConfigForm：字段 label/description 属 LocalizedText，按 locale 解析后渲染', { timeout: 60_000 }, () => {
