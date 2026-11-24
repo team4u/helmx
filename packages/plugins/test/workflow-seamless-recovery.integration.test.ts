@@ -278,16 +278,23 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
     })
     await k2.start()
 
-    await waitFor(async () => {
-      const inspected = (await k2!.plugins.invokeAction('builtin:workflow', 'inspect', { runId })) as { run: WorkflowRunSummary }
-      return inspected.run.status === 'completed'
-    }, { timeoutMs: 20_000 })
+    // `inspect` 对 active run 返回的是内存态摘要：结算管线先改内存头再异步落盘（saveDetail → saveHeader → flush），
+    // 慢盘上该窗口可跨越多个轮询周期，若只等 inspect 翻到 completed 就读落盘头会读到旧值。恢复的正确性以落盘
+    // RunHeader 为准，故直接等待持久化头收敛为 completed + settled。
+    await waitFor(
+      () => {
+        const header = readPersistedHeader(k2!, runId)
+        return header.status === 'completed' && header.phase === 'settled'
+      },
+      { timeoutMs: 20_000 },
+    )
 
     const finalRun = ((await k2.plugins.invokeAction('builtin:workflow', 'inspect', { runId })) as { run: WorkflowRunSummary }).run
     assert.equal(finalRun.id, runId, '必须原 runId 收敛')
     assert.deepEqual(finalRun.result, { ok: true, tag: 't1-recovered' })
 
     const finalHeader = readPersistedHeader(k2, runId)
+    assert.equal(finalHeader.status, 'completed')
     assert.equal(finalHeader.phase, 'settled', '恢复完成后 phase 必须收敛为 settled')
     assert.equal(finalHeader.crashRecoveries, undefined, '优雅恢复不计异常崩溃')
 
