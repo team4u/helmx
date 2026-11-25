@@ -1573,7 +1573,7 @@ input::placeholder {
 }
 
 .dock-tray-frontline {
-  flex: 0 100 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1583,10 +1583,7 @@ input::placeholder {
 }
 
 .dock-tray-count {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 0 0 auto;
   white-space: nowrap;
   color: var(--fg-secondary);
   font-size: 11.5px;
