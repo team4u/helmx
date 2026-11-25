@@ -218,11 +218,153 @@ const DOCKER_WRITE_SUBCOMMANDS: ReadonlySet<string> = new Set([
 
 const CURL_MUTATING_METHODS: ReadonlySet<string> = new Set(['POST', 'PUT', 'DELETE', 'PATCH'])
 
+/** Daemon binaries with no safe read-only invocation in plan mode (`helmx-hub` ignores `--help` and starts a server). */
+const HELMX_BLOCKED_BINARIES: ReadonlySet<string> = new Set(['helmx-hub', 'helmx-node'])
+
+const HELMX_GLOBAL_BOOL_FLAGS: ReadonlySet<string> = new Set(['json'])
+const HELMX_GLOBAL_VALUE_FLAGS: ReadonlySet<string> = new Set(['hub', 'hub-url', 'url', 'token', 'data-dir'])
+
+const HELMX_READONLY_SINGLE_COMMANDS: ReadonlySet<string> = new Set(['status', 'doctor', 'search', 'api'])
+
+const HELMX_READONLY_CORE_TWO_WORD: ReadonlySet<string> = new Set([
+  'conversations list',
+  'conversations get',
+  'conversations entry',
+  'conversations file',
+  'profiles list',
+  'profiles get',
+  'skills list',
+  'skills read',
+  'models list',
+  'models providers',
+  'models default',
+  'models filter',
+  'providers list',
+  'credentials list',
+  'asks list',
+  'artifacts list',
+  'artifacts get',
+  'nodes list',
+  'nodes forwards',
+  'nodes forward-inspect',
+  'nodes upgrade',
+  'plugins list',
+  'plugins manifest',
+  'plugins client',
+  'plugins doctor',
+  'plugins config',
+  'plugins doc',
+  'actions list',
+])
+
+const HELMX_READONLY_PLUGIN_TWO_WORD: ReadonlySet<string> = new Set([
+  'plan get',
+  'memory get',
+  'memory dream_status',
+  'tiers list',
+  'magpie status',
+  'magpie quota',
+  'cron list',
+  'webhook list',
+  'workflows list',
+  'workflows get',
+  'workflows runs',
+  'workflows inspect',
+  'worktrees list',
+  'worktrees inspect',
+  'swarm board-read',
+  'swarm board-status',
+  'swarm inspect-worker',
+  'swarm list-groups',
+  'profile list_mentionable',
+  'profile skill_catalog',
+  'profile skill_read',
+])
+
+const HELMX_TWO_WORD_GROUPS: ReadonlySet<string> = new Set(
+  [...HELMX_READONLY_CORE_TWO_WORD, ...HELMX_READONLY_PLUGIN_TWO_WORD].map((cmd) => cmd.split(' ', 1)[0]!),
+)
+
+/** Flags that mutate Hub state, write local files, or stream indefinitely on `helmx` subcommands. */
+const HELMX_ALWAYS_BLOCKED_FLAGS: ReadonlySet<string> = new Set([
+  'output',
+  'set',
+  'unset',
+  'disable',
+  'clear',
+  'delete',
+  'force',
+  'yes',
+  'attach',
+  'replace-from',
+  'wait',
+  'field',
+  'thinking',
+  'model-thinking',
+  'compaction',
+  'compaction-thinking',
+  'watch',
+])
+
+/** Known value-taking flags across global and allowed read-only `helmx` commands so values are never misread as positionals/flags. */
+const HELMX_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  ...HELMX_GLOBAL_VALUE_FLAGS,
+  'profile',
+  'profile-id',
+  'conversation',
+  'conversation-id',
+  'node',
+  'node-id',
+  'cwd',
+  'limit',
+  'cursor',
+  'parent',
+  'path',
+  'status',
+  'tag',
+  'owned-by',
+  'format',
+  'group-id',
+  'run-id',
+  'worktree-id',
+  'worker-conversation-id',
+  'member-name',
+  'coordinator-conversation-id',
+  'since-seq',
+  'seqs',
+  'model',
+  'name',
+  'id',
+  'query',
+  'skill-id',
+  'module',
+  'chunk',
+  'registry',
+  'input',
+])
+
+/** Dual read/write core commands whose read-only mode accepts only global flags (rejects any write/unknown flag, fail-closed). */
+const HELMX_GLOBAL_ONLY_FLAG_COMMANDS: ReadonlySet<string> = new Set([
+  'api',
+  'models default',
+  'models filter',
+  'plugins config',
+])
+
+const HELMX_NODES_UPGRADE_ALLOWED_FLAGS: ReadonlySet<string> = new Set([
+  ...HELMX_GLOBAL_BOOL_FLAGS,
+  ...HELMX_GLOBAL_VALUE_FLAGS,
+  'check',
+  'current',
+  'registry',
+])
+
 const ENV_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/
 
 function commandBaseName(cmd: string): string {
-  const idx = cmd.lastIndexOf('/')
-  return idx >= 0 ? cmd.slice(idx + 1) : cmd
+  const idx = Math.max(cmd.lastIndexOf('/'), cmd.lastIndexOf('\\'))
+  const base = idx >= 0 ? cmd.slice(idx + 1) : cmd
+  return base.replace(/\.(?:exe|cmd|bat|ps1)$/i, '').toLowerCase()
 }
 
 function skipBalancedParen(
@@ -669,6 +811,206 @@ function validateGitArgs(args: string[]): ReadOnlyShellValidationResult {
   return { ok: true }
 }
 
+interface ParsedHelmxFlag {
+  name: string
+  inline: string | undefined
+  raw: string
+  isShort: boolean
+}
+
+function isCleanHelmxHelp(args: readonly string[]): boolean {
+  let hasHelp = false
+  for (const tok of args) {
+    if (tok === '--') return false
+    if (tok === '--help' || tok === '-h') {
+      hasHelp = true
+      continue
+    }
+    if (tok === '--json') continue
+    if (tok.startsWith('-')) return false
+  }
+  return hasHelp
+}
+
+function isCleanHelmxVersion(args: readonly string[]): boolean {
+  let hasVersion = false
+  for (const tok of args) {
+    if (tok === '--version' || tok === '-V') {
+      hasVersion = true
+      continue
+    }
+    if (tok === '--json') continue
+    return false
+  }
+  return hasVersion
+}
+
+function consumeHelmxGlobalOption(
+  args: readonly string[],
+  idx: number,
+): { consumed: number } | { error: string } | undefined {
+  const tok = args[idx]!
+  if (tok === '--json') return { consumed: 1 }
+  if (!tok.startsWith('--') || tok.length <= 2) return undefined
+  const eq = tok.indexOf('=')
+  const name = eq === -1 ? tok.slice(2) : tok.slice(2, eq)
+  if (!HELMX_GLOBAL_VALUE_FLAGS.has(name)) return undefined
+  if (eq !== -1) return { consumed: 1 }
+  const next = args[idx + 1]
+  if (next === undefined || next === '--' || (next.startsWith('--') && next.length > 2)) {
+    return { error: `helmx option '--${name}' is missing a value` }
+  }
+  return { consumed: 2 }
+}
+
+function parseHelmxSubArgs(
+  subArgs: readonly string[],
+): { ok: true; flags: ParsedHelmxFlag[]; positionals: string[] } | { ok: false; reason: string } {
+  const flags: ParsedHelmxFlag[] = []
+  const positionals: string[] = []
+  let i = 0
+  while (i < subArgs.length) {
+    const tok = subArgs[i]!
+    if (tok === '--') {
+      positionals.push(...subArgs.slice(i + 1))
+      break
+    }
+    if (tok.startsWith('--') && tok.length > 2) {
+      const eq = tok.indexOf('=')
+      const name = eq === -1 ? tok.slice(2) : tok.slice(2, eq)
+      const inline = eq === -1 ? undefined : tok.slice(eq + 1)
+      flags.push({ name, inline, raw: tok, isShort: false })
+      if (inline === undefined && HELMX_VALUE_FLAGS.has(name)) {
+        const next = subArgs[i + 1]
+        if (next === undefined || next === '--' || (next.startsWith('--') && next.length > 2)) {
+          return { ok: false, reason: `helmx option '--${name}' is missing a value` }
+        }
+        i += 2
+        continue
+      }
+      i += 1
+      continue
+    }
+    if (tok.startsWith('-') && !tok.startsWith('--') && tok.length >= 2) {
+      if (tok === '-o' || tok.startsWith('-o')) {
+        return { ok: false, reason: `helmx option '${tok}' writes local files and is blocked in read-only plan mode` }
+      }
+      flags.push({ name: tok.slice(1), inline: undefined, raw: tok, isShort: true })
+      i += 1
+      continue
+    }
+    positionals.push(tok)
+    i += 1
+  }
+  return { ok: true, flags, positionals }
+}
+
+function validateHelmxArgs(args: readonly string[]): ReadOnlyShellValidationResult {
+  if (args.length === 0 || isCleanHelmxHelp(args) || isCleanHelmxVersion(args)) {
+    return { ok: true }
+  }
+
+  let idx = 0
+  while (idx < args.length) {
+    const consumed = consumeHelmxGlobalOption(args, idx)
+    if (consumed === undefined) break
+    if ('error' in consumed) return { ok: false, reason: consumed.error }
+    idx += consumed.consumed
+  }
+
+  if (idx >= args.length) {
+    return { ok: false, reason: 'helmx requires an allowlisted read-only subcommand in read-only plan mode' }
+  }
+
+  const first = args[idx]!
+  if (first === '--' || first.startsWith('-')) {
+    return { ok: false, reason: `helmx option '${first}' before subcommand is not allowed in read-only plan mode` }
+  }
+  idx += 1
+
+  let commandKey: string
+  let isPluginCommand = false
+  if (HELMX_READONLY_SINGLE_COMMANDS.has(first)) {
+    commandKey = first
+  } else if (HELMX_TWO_WORD_GROUPS.has(first)) {
+    while (idx < args.length) {
+      const consumed = consumeHelmxGlobalOption(args, idx)
+      if (consumed === undefined) break
+      if ('error' in consumed) return { ok: false, reason: consumed.error }
+      idx += consumed.consumed
+    }
+    if (idx >= args.length) {
+      return { ok: false, reason: `helmx ${first} requires an allowlisted read-only subcommand in read-only plan mode` }
+    }
+    const second = args[idx]!
+    if (second === '--' || second.startsWith('-')) {
+      return { ok: false, reason: `helmx ${first} option '${second}' before subcommand is not allowed in read-only plan mode` }
+    }
+    idx += 1
+    commandKey = `${first} ${second}`
+    if (HELMX_READONLY_CORE_TWO_WORD.has(commandKey)) {
+      isPluginCommand = false
+    } else if (HELMX_READONLY_PLUGIN_TWO_WORD.has(commandKey)) {
+      isPluginCommand = true
+    } else {
+      return { ok: false, reason: `helmx ${commandKey} is not allowed in read-only plan mode` }
+    }
+  } else {
+    return { ok: false, reason: `helmx ${first} is not allowed in read-only plan mode` }
+  }
+
+  const parsed = parseHelmxSubArgs(args.slice(idx))
+  if (!parsed.ok) return parsed
+
+  for (const flag of parsed.flags) {
+    if (!flag.isShort && HELMX_ALWAYS_BLOCKED_FLAGS.has(flag.name)) {
+      return { ok: false, reason: `helmx ${commandKey} option '--${flag.name}' is blocked in read-only plan mode` }
+    }
+    if (!isPluginCommand && !flag.isShort && flag.name === 'input') {
+      return { ok: false, reason: `helmx ${commandKey} option '--input' is blocked in read-only plan mode` }
+    }
+  }
+
+  if (HELMX_GLOBAL_ONLY_FLAG_COMMANDS.has(commandKey)) {
+    for (const flag of parsed.flags) {
+      if (flag.isShort || (!HELMX_GLOBAL_BOOL_FLAGS.has(flag.name) && !HELMX_GLOBAL_VALUE_FLAGS.has(flag.name))) {
+        return { ok: false, reason: `helmx ${commandKey} option '${flag.raw}' is not allowed in read-only plan mode` }
+      }
+    }
+  }
+
+  if (commandKey === 'api') {
+    const method = parsed.positionals[0]
+    if (method === undefined) {
+      return { ok: false, reason: 'helmx api requires HTTP method GET and a path in read-only plan mode' }
+    }
+    if (method.toUpperCase() !== 'GET') {
+      return { ok: false, reason: `helmx api ${method.toUpperCase()} is blocked in read-only plan mode (only GET is allowed)` }
+    }
+    if (parsed.positionals.length !== 2) {
+      return { ok: false, reason: 'helmx api GET requires a single <path> argument in read-only plan mode' }
+    }
+  } else if (commandKey === 'nodes upgrade') {
+    let checkEnabled = false
+    for (const flag of parsed.flags) {
+      if (flag.isShort || !HELMX_NODES_UPGRADE_ALLOWED_FLAGS.has(flag.name)) {
+        return { ok: false, reason: `helmx nodes upgrade option '${flag.raw}' is blocked in read-only plan mode` }
+      }
+      if (flag.name === 'check') {
+        if (flag.inline !== undefined && flag.inline !== 'true') {
+          return { ok: false, reason: `helmx nodes upgrade requires '--check' in read-only plan mode (got '${flag.raw}')` }
+        }
+        checkEnabled = true
+      }
+    }
+    if (!checkEnabled) {
+      return { ok: false, reason: 'helmx nodes upgrade requires --check in read-only plan mode' }
+    }
+  }
+
+  return { ok: true }
+}
+
 function validateWordSequence(words: string[]): ReadOnlyShellValidationResult {
   let idx = 0
   while (idx < words.length) {
@@ -678,16 +1020,63 @@ function validateWordSequence(words: string[]): ReadOnlyShellValidationResult {
       continue
     }
     const base = commandBaseName(w)
-    if (base === 'command' || base === 'time' || base === 'nice' || base === 'nohup') {
+    if (base === 'command' || base === 'time' || base === 'nohup') {
       idx += 1
       while (idx < words.length && words[idx]!.startsWith('-')) idx += 1
+      continue
+    }
+    if (base === 'nice') {
+      idx += 1
+      while (idx < words.length) {
+        const arg = words[idx]!
+        if (arg === '--') {
+          idx += 1
+          break
+        }
+        if (arg === '-n' || arg === '--adjustment') {
+          idx += 2
+          continue
+        }
+        if (arg.startsWith('-')) {
+          idx += 1
+          continue
+        }
+        break
+      }
+      continue
+    }
+    if (base === 'exec') {
+      idx += 1
+      while (idx < words.length) {
+        const arg = words[idx]!
+        if (arg === '--') {
+          idx += 1
+          break
+        }
+        if (arg === '-a') {
+          idx += 2
+          continue
+        }
+        if (arg.startsWith('-')) {
+          idx += 1
+          continue
+        }
+        break
+      }
       continue
     }
     if (base === 'env') {
       idx += 1
       while (idx < words.length) {
         const arg = words[idx]!
-        if (arg === '-u' || arg === '--unset') {
+        if (arg === '--') {
+          idx += 1
+          break
+        }
+        if (arg === '-S' || arg.startsWith('-S') || arg === '--split-string' || arg.startsWith('--split-string=')) {
+          return { ok: false, reason: `env flag '${arg}' is blocked in read-only mode` }
+        }
+        if (arg === '-u' || arg === '--unset' || arg === '-C' || arg === '--chdir') {
           idx += 2
           continue
         }
@@ -706,8 +1095,12 @@ function validateWordSequence(words: string[]): ReadOnlyShellValidationResult {
   const cmd = commandBaseName(words[idx]!)
   const args = words.slice(idx + 1)
 
-  if (MUTATING_COMMANDS.has(cmd)) {
+  if (MUTATING_COMMANDS.has(cmd) || HELMX_BLOCKED_BINARIES.has(cmd)) {
     return { ok: false, reason: `command '${cmd}' is blocked in read-only plan mode` }
+  }
+
+  if (cmd === 'helmx') {
+    return validateHelmxArgs(args)
   }
 
   if (cmd === 'xargs') {
@@ -718,7 +1111,21 @@ function validateWordSequence(words: string[]): ReadOnlyShellValidationResult {
         i += 1
         break
       }
-      if (a === '-n' || a === '-I' || a === '-L' || a === '-P' || a === '-d' || a === '-E' || a === '-s') {
+      if (
+        a === '-n' ||
+        a === '-I' ||
+        a === '-L' ||
+        a === '-P' ||
+        a === '-d' ||
+        a === '-E' ||
+        a === '-s' ||
+        a === '-a' ||
+        a === '--arg-file' ||
+        a === '--max-args' ||
+        a === '--max-procs' ||
+        a === '--replace' ||
+        a === '--delimiter'
+      ) {
         i += 2
         continue
       }

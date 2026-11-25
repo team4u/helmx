@@ -1621,6 +1621,255 @@ test('validateReadOnlyShellCommand: quote-aware allowlist vs mutating / redirect
   }
 })
 
+test('validateReadOnlyShellCommand: strict helmx read-only allowlist & helmx-hub/helmx-node block', TIMEOUT, () => {
+  const allowed = [
+    // Help / version / bare invocation
+    'helmx',
+    'helmx --help',
+    'helmx -h',
+    'helmx --version',
+    'helmx -V',
+    'helmx --json --help',
+    'helmx conversations --help',
+    'helmx search --help',
+    'helmx swarm list-groups --help',
+    // Core read-only commands
+    'helmx status',
+    'helmx --json status',
+    'helmx --hub http://127.0.0.1:3202 status',
+    'helmx --hub=http://127.0.0.1:3202 doctor --json',
+    'helmx doctor',
+    'helmx search "plan_bash" --profile main --owned-by human --top-level --limit 10 --json',
+    'helmx search --profile=main --owned-by=helmx --limit=5 auth | head -n 20',
+    'helmx search foo --json | jq .',
+    'helmx conversations list --all --status working --tag review --json',
+    'helmx conversations --json list --profile main',
+    'helmx conversations get --current --limit 20 --cursor abc',
+    'helmx conversations entry 1 42 --json',
+    'helmx conversations file 1 README.md',
+    'helmx conversations file --current src/index.ts --json',
+    'helmx profiles list --json',
+    'helmx profiles get main',
+    'helmx skills list --current',
+    'helmx skills list --node local --cwd /repo',
+    'helmx skills read helmx-cli --path SKILL.md --node local',
+    'helmx models list --json',
+    'helmx models providers',
+    'helmx models default --json',
+    'helmx models filter --json',
+    'helmx providers list',
+    'helmx credentials list',
+    'helmx asks list --json',
+    'helmx artifacts list --current',
+    'helmx artifacts get art-1',
+    'helmx nodes list --json',
+    'helmx nodes forwards',
+    'helmx nodes forward-inspect fwd-1234',
+    'helmx nodes upgrade n1 --check',
+    'helmx nodes upgrade --current --check --json',
+    'helmx nodes upgrade n1 --check=true --registry https://registry.npmjs.org',
+    'helmx plugins list --json',
+    'helmx plugins manifest builtin:plan',
+    'helmx plugins client builtin:plan --module index.tsx --json',
+    'helmx plugins doctor builtin:plan',
+    'helmx plugins doctor --path /repo/plugin',
+    'helmx plugins config builtin:plan --json',
+    'helmx plugins doc builtin:plan plan-badges --json',
+    'helmx plugins doc builtin:plan plan --current',
+    'helmx plugins doc builtin:plan plan --conversation 1',
+    'helmx actions list --json',
+    'helmx api GET /api/nodes',
+    'helmx api get /api/conversations?all=1 --json',
+    'helmx --hub http://127.0.0.1:3202 api GET /api/nodes',
+    'helmx api -- GET /api/nodes',
+    // Built-in plugin read-only commands
+    'helmx plan get --current --json',
+    'helmx plan get --input \'{"conversationId":1}\'',
+    'helmx memory get --current',
+    'helmx memory dream_status --profile-id main',
+    'helmx tiers list --json',
+    'helmx magpie status',
+    'helmx magpie quota --model openai/gpt-5',
+    'helmx cron list --json',
+    'helmx webhook list --json',
+    'helmx workflows list',
+    'helmx workflows get deploy',
+    'helmx workflows runs --conversation-id 1',
+    'helmx workflows inspect run-123',
+    'helmx worktrees list --json',
+    'helmx worktrees inspect local:/repo --no-diff',
+    'helmx worktrees inspect local:/repo --diff',
+    'helmx swarm board-read --group-id g1 --limit 20',
+    'helmx swarm board-status --current',
+    'helmx swarm inspect-worker --group-id g1 --name verifier',
+    'helmx swarm list-groups --status active --json',
+    'helmx profile list_mentionable --current',
+    'helmx profile skill_catalog --node-id local',
+    'helmx profile skill_read --node-id local --skill-id helmx-cli',
+    // Quoted references to blocked helmx commands inside read-only tools stay allowed
+    'rg "helmx plan set_mode" packages/',
+    'git log --grep="helmx-hub"',
+    'helmx status 2>&1',
+    'helmx status >/dev/null',
+  ]
+  for (const cmd of allowed) {
+    assert.equal(validateReadOnlyShellCommand(cmd).ok, true, `expected allowed: ${cmd}`)
+  }
+
+  const blocked = [
+    // Plan mode escape & mutations
+    'helmx plan set_mode --current --input \'{"mode":"normal"}\'',
+    'helmx plan toggle --current',
+    'helmx plan update_draft --current --input \'{"title":"x","markdown":"y"}\'',
+    // Remote/local exec & messaging escapes
+    'helmx env exec -- rm -rf /',
+    'helmx env exec --current -- ls',
+    'helmx send 1 hi',
+    'helmx ask 1 hi',
+    'helmx abort 1',
+    // Conversation / event mutations & indefinite watches
+    'helmx conversations delete 1',
+    'helmx conversations create --title x',
+    'helmx conversations update 1 --title x',
+    'helmx conversations reset 1',
+    'helmx conversations compact 1',
+    'helmx conversations fork 1',
+    'helmx conversations withdraw 1 --submission-id 1',
+    'helmx conversations watch 1',
+    'helmx events watch',
+    // File-writing flags on otherwise read-only commands
+    'helmx conversations file 1 a.txt --output /tmp/x',
+    'helmx conversations file 1 a.txt --output=/tmp/x',
+    'helmx conversations file 1 a.txt -o /tmp/x',
+    'helmx artifacts get art-1 --output /tmp/x',
+    'helmx artifacts get art-1 -o /tmp/x',
+    'helmx artifacts put ./a.txt 1',
+    'helmx plugins client builtin:plan --output /tmp/x.js',
+    'helmx plugins client builtin:plan -o /tmp/x.js',
+    // Dual read/write core commands with write flags
+    'helmx models default --set a/b',
+    'helmx models default --set=a/b',
+    'helmx models default --thinking high',
+    'helmx models default --model-thinking a/b=high',
+    'helmx models default --compaction a/b',
+    'helmx models default --compaction-thinking low',
+    'helmx models filter --disable gpt-4',
+    'helmx models filter --clear',
+    'helmx models filter --provider openai',
+    'helmx models filter --provider=openai',
+    'helmx plugins config foo --set a=b',
+    'helmx plugins config foo --unset a',
+    'helmx plugins config foo --input \'{"a":1}\'',
+    'helmx plugins doc builtin:plan plan --current --watch',
+    'helmx nodes upgrade n1',
+    'helmx nodes upgrade n1 --check=false',
+    'helmx nodes upgrade n1 --check --check=false',
+    'helmx nodes upgrade n1 -- --check',
+    'helmx nodes upgrade n1 --check --force',
+    'helmx nodes upgrade n1 --check --version 1.2.3',
+    // Raw HTTP API escape hatch (only GET without body allowed)
+    'helmx api POST /api/conversations',
+    'helmx api post /api/actions/builtin:plan/set_mode',
+    'helmx api PUT /api/models/default',
+    'helmx api PATCH /api/conversations/1',
+    'helmx api DELETE /api/conversations/1',
+    'helmx api',
+    'helmx api GET',
+    'helmx api GET /api/nodes --input \'{}\'',
+    'helmx api GET /api/nodes --input=\'{}\'',
+    'helmx api GET /api/nodes --field a=1',
+    'helmx api GET /api/nodes --field=a=1',
+    'helmx api --hub GET POST /api/conversations',
+    'helmx api --unknown GET /api/nodes',
+    // Mutating plugin, trigger, lifecycle & unknown/external commands (fail-closed)
+    'helmx plugins enable foo',
+    'helmx plugins disable builtin:plan',
+    'helmx plugins install ./evil',
+    'helmx plugins update foo',
+    'helmx plugins remove foo --yes',
+    'helmx plugins reload foo',
+    'helmx plugins rescan',
+    'helmx cron create --id j1',
+    'helmx cron update --id j1 --enabled false',
+    'helmx cron delete --id j1',
+    'helmx cron trigger --id j1',
+    'helmx webhook create --id w1',
+    'helmx webhook update --id w1 --description x',
+    'helmx webhook delete --id w1',
+    'helmx workflows run demo --current',
+    'helmx workflows save demo.js',
+    'helmx workflows delete demo',
+    'helmx workflows abort run-1',
+    'helmx worktrees cleanup --worktree-id local:/a',
+    'helmx swarm create-group --title x',
+    'helmx swarm dispatch-worker --name a --prompt hi',
+    'helmx swarm board-post --to all --kind comment --body hi',
+    'helmx swarm close-group',
+    'helmx memory set --current --text hi',
+    'helmx memory configure --current --enabled false',
+    'helmx memory dream --current',
+    'helmx tiers set --id fast --model a/b',
+    'helmx magpie refresh',
+    'helmx start',
+    'helmx stop',
+    'helmx restart',
+    'helmx update',
+    'helmx update --check',
+    'helmx service status',
+    'helmx setup',
+    'helmx login',
+    'helmx unknown-plugin mutate',
+    'helmx --json',
+    // Global option smuggling, interleaved flag & --help bypass attempts
+    'helmx --hub http://x send 1 hi',
+    'helmx --hub status send 1 hi',
+    'helmx --hub=status send 1 hi',
+    'helmx --token secret plan toggle --current',
+    'helmx --unknown status send 1 hi',
+    'helmx -- send 1 hi',
+    'helmx conversations --json delete 1',
+    'helmx send 1 -- --help',
+    'helmx --hub --help send 1 hi',
+    'helmx plan set_mode --input \'{"mode":"normal"}\' --help',
+    'helmx env exec --help -- rm -rf /',
+    // Path prefixes, extensions, casing, wrappers, subshells & pipelines
+    '/usr/local/bin/helmx send 1 hi',
+    './node_modules/.bin/helmx plan toggle --current',
+    '\'C:\\Users\\me\\npm\\helmx.cmd\' send 1 hi',
+    'helmx.exe plan set_mode --current --input \'{"mode":"normal"}\'',
+    'HELMX send 1 hi',
+    'HELMX_CONVERSATION_ID=1 helmx plan toggle --current',
+    'env FOO=1 helmx plan set_mode --current --input \'{"mode":"normal"}\'',
+    'env -C /tmp helmx send 1 hi',
+    'env -S "helmx send 1 hi"',
+    'command -p helmx send 1 hi',
+    'nice -n 5 helmx send 1 hi',
+    'exec helmx send 1 hi',
+    'xargs -I{} helmx conversations delete {}',
+    'echo $(helmx plan toggle --current)',
+    'echo `helmx send 1 hi`',
+    '(helmx conversations delete 1)',
+    'helmx status && helmx send 1 hi',
+    'helmx status > /tmp/out.txt',
+    // Daemon binaries unconditionally blocked
+    'helmx-hub',
+    'helmx-hub --help',
+    '/usr/local/bin/helmx-hub',
+    'HELMX-HUB',
+    'helmx-node',
+    'helmx-node status',
+    'helmx-node start -d',
+    'helmx-node --help',
+    '/usr/local/bin/helmx-node stop',
+    'helmx-node.exe status',
+  ]
+  for (const cmd of blocked) {
+    const res = validateReadOnlyShellCommand(cmd)
+    assert.equal(res.ok, false, `expected blocked: ${cmd}`)
+    assert.ok(res.reason.length > 0, `expected diagnostic reason for: ${cmd}`)
+  }
+})
+
 test('plan_bash: guards mode/scope, blocks mutating commands locally, executes allowed reads with redaction', TIMEOUT, async () => {
   const harness = await openPlanHarness({
     seedConversations: [
@@ -1646,14 +1895,22 @@ test('plan_bash: guards mode/scope, blocks mutating commands locally, executes a
 
     await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
 
-    // Mutating / redirect commands blocked before hitting execEnv
-    for (const badCmd of ['rm -rf /tmp/x', 'echo foo > bar.txt', 'git commit -m x']) {
+    // Mutating / redirect / helmx escape commands blocked before hitting execEnv
+    for (const badCmd of [
+      'rm -rf /tmp/x',
+      'echo foo > bar.txt',
+      'git commit -m x',
+      'helmx plan set_mode --current --input \'{"mode":"normal"}\'',
+      'helmx env exec -- rm -rf /',
+      'helmx api POST /api/conversations',
+      'helmx-hub',
+    ]) {
       const blockedRes = (await harness.host.executeTool(
         PLAN_TOOL_BASH,
         { command: badCmd },
         { conversationId: 1 },
       )) as PluginToolResultEnvelope
-      assert.equal(blockedRes.isError, true)
+      assert.equal(blockedRes.isError, true, `expected plan_bash to block: ${badCmd}`)
     }
     assert.equal(harness.execEnvCalls.length, 0)
 
@@ -1693,6 +1950,21 @@ test('plan_bash: guards mode/scope, blocks mutating commands locally, executes a
       { conversationId: 1 },
     )) as PluginToolResultEnvelope
     assert.equal(failRes.isError, true)
+
+    // Allowed read-only helmx pipeline passes validation and invokes execEnv
+    harness.setExecEnvHandler(async () => ({
+      ok: true,
+      exitCode: 0,
+      timedOut: false,
+      output: '[]',
+    }))
+    const helmxOkRes = (await harness.host.executeTool(
+      PLAN_TOOL_BASH,
+      { command: 'helmx search auth --profile main --top-level --limit 5 --json | head -n 5' },
+      { conversationId: 1 },
+    )) as PluginToolResultEnvelope
+    assert.equal(helmxOkRes.isError, false)
+    assert.equal(harness.execEnvCalls.at(-1)?.command, 'helmx search auth --profile main --top-level --limit 5 --json | head -n 5')
   } finally {
     await harness.close()
   }
