@@ -116,6 +116,22 @@
   flex-shrink: 0;
 }
 
+.plan-tray-preview {
+  margin-top: var(--space-2);
+  padding: 8px 10px;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.plan-tray-preview > :last-child {
+  margin-bottom: 0;
+}
+
 /* ---- Workbench panel ---- */
 .plan-workbench {
   display: flex;
@@ -175,6 +191,27 @@
 .plan-markdown.msg-ai-body code:not(pre code) {
   font-size: 12px;
   padding: 1px 4px;
+}
+
+.plan-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.plan-editor-textarea {
+  min-height: 240px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.plan-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
 /* ---- Timeline 26px tool trace row ---- */

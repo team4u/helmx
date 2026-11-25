@@ -254,6 +254,9 @@ export function parseStoredAskSpec(
   if (parsed.description !== undefined && parseLocalizedText(parsed.description) === undefined) {
     throw corrupted('invalid spec.description')
   }
+  if (parsed.hint !== undefined && parseLocalizedText(parsed.hint) === undefined) {
+    throw corrupted('invalid spec.hint')
+  }
   if (parsed.ownerPluginId !== undefined && typeof parsed.ownerPluginId !== 'string') {
     throw corrupted('invalid spec.ownerPluginId')
   }
@@ -264,14 +267,21 @@ export function parseStoredAskSpec(
       typeof field.name !== 'string' ||
       field.name.length === 0 ||
       parseLocalizedText(field.label) === undefined ||
-      (field.type !== 'text' && field.type !== 'select' && field.type !== 'confirm')
+      (field.type !== 'text' &&
+        field.type !== 'select' &&
+        field.type !== 'confirm' &&
+        field.type !== 'choice' &&
+        field.type !== 'model')
     ) {
       throw corrupted('spec.fields contains an invalid field entry')
     }
     if (field.required !== undefined && typeof field.required !== 'boolean') {
       throw corrupted(`field '${field.name}' has invalid required flag`)
     }
-    if (field.type === 'select') {
+    if (field.defaultValue !== undefined && typeof field.defaultValue !== 'string') {
+      throw corrupted(`field '${field.name}' has invalid defaultValue`)
+    }
+    if (field.type === 'select' || field.type === 'choice') {
       if (
         !Array.isArray(field.options) ||
         (field.options as unknown[]).some(
@@ -279,10 +289,11 @@ export function parseStoredAskSpec(
             !isPlainObject(o) ||
             typeof o.value !== 'string' ||
             o.value.length === 0 ||
-            (o.label !== undefined && parseLocalizedText(o.label) === undefined),
+            (o.label !== undefined && parseLocalizedText(o.label) === undefined) ||
+            (o.description !== undefined && parseLocalizedText(o.description) === undefined),
         )
       ) {
-        throw corrupted(`select field '${field.name}' has invalid options`)
+        throw corrupted(`${field.type} field '${field.name}' has invalid options`)
       }
     }
   }

@@ -587,16 +587,69 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
       id: 'ask-3-i18n',
       title: { en: 'Plan Approval v1', 'zh-CN': '计划审批 v1' },
       description: { en: 'Summary', 'zh-CN': '摘要' },
+      hint: { en: 'Reply in composer to send custom feedback', 'zh-CN': '可在输入框直接回复反馈' },
       fields: [
         {
           name: 'decision',
           label: { en: 'Decision', 'zh-CN': '审批决策' },
-          type: 'select',
-          options: [{ label: { en: 'Approve', 'zh-CN': '批准' }, value: 'approve' }],
+          type: 'choice',
+          defaultValue: 'approve_handoff',
+          options: [
+            {
+              label: { en: 'Approve & Hand Off', 'zh-CN': '批准并交接新上下文执行' },
+              description: { en: 'Starts execution in a fresh context window', 'zh-CN': '开启全新上下文窗口执行' },
+              value: 'approve_handoff',
+            },
+            {
+              label: { en: 'Approve', 'zh-CN': '批准' },
+              value: 'approve',
+            },
+          ],
+        },
+        {
+          name: 'executionModel',
+          label: { en: 'Execution Model', 'zh-CN': '执行模型' },
+          type: 'model',
+          defaultValue: '',
         },
       ],
     })
     assert.equal(hub.seq, 4)
+
+    assert.throws(
+      () =>
+        hub.publish('ask.upsert', {
+          ...baseAsk,
+          id: 'ask-bad-choice',
+          fields: [{ name: 'decision', label: 'Decision', type: 'choice' }],
+        }),
+      /requires non-empty options/i,
+    )
+    assert.throws(
+      () =>
+        hub.publish('ask.upsert', {
+          ...baseAsk,
+          id: 'ask-bad-opt-desc',
+          fields: [
+            {
+              name: 'decision',
+              label: 'Decision',
+              type: 'choice',
+              options: [{ label: 'Go', value: 'go', description: { fr: 'Aller' } as never }],
+            },
+          ],
+        }),
+      /AskSpec-shaped|valid LocalizedText/i,
+    )
+    assert.throws(
+      () =>
+        hub.publish('ask.upsert', {
+          ...baseAsk,
+          id: 'ask-bad-hint',
+          hint: {} as never,
+        }),
+      /AskSpec-shaped|valid LocalizedText/i,
+    )
   })
 
   it('notification rejects invalid payloads without advancing seq (never coerces level/title)', { timeout: 60_000 }, () => {

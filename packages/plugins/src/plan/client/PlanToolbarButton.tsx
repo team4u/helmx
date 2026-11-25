@@ -2,6 +2,7 @@
  * Composer toolbar Plan mode toggle (`COMPOSER_TOOLBAR_SLOT`).
  * Works on both top-level human conversations (toggles persisted mode via `toggle` action)
  * and standby drafts (arms/clears per-draft `inputMeta['builtin:plan']` before first send).
+ * Responds to host `Ctrl+.` panel shortcut (`toggle-plan-mode`).
  * Returns null on non-eligible conversations (subagents / `helmx`-owned) without subscribing.
  * Exports only React components and TS types (Fast Refresh compliant).
  */
@@ -12,6 +13,7 @@ import {
   HelmxIcon,
   StatusLight,
   resolveLocalizedText,
+  usePanelShortcut,
   usePluginAction,
   usePluginLocale,
   usePluginSessionDocState,
@@ -36,6 +38,7 @@ function PlanToolbarButtonConversation({ conversationId }: { conversationId: num
   const docState = usePluginSessionDocState<unknown>(PLAN_SESSION_DOC, { conversationId })
   const rawDocRef = useRef<unknown>(docState.data)
   rawDocRef.current = docState.data
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
 
   const [pendingView, setPendingView] = useState<{
     conversationId: number
@@ -62,15 +65,16 @@ function PlanToolbarButtonConversation({ conversationId }: { conversationId: num
   })
 
   const visual = resolvePlanVisualState(effectiveView)
+  const awaitingClarification = effectiveView.awaitingClarification === true && !effectiveView.awaitingApproval
   const label =
     visual === 'awaiting'
-      ? t(PLAN_COPY.toolbarAwaiting)
+      ? t(awaitingClarification ? PLAN_COPY.toolbarAwaitingClarification : PLAN_COPY.toolbarAwaiting)
       : visual === 'planning'
         ? t(PLAN_COPY.toolbarPlanning)
         : t(PLAN_COPY.toolbarNormal)
   const baseTitle =
     visual === 'awaiting'
-      ? t(PLAN_COPY.toolbarTitleAwaiting)
+      ? t(awaitingClarification ? PLAN_COPY.toolbarTitleAwaitingClarification : PLAN_COPY.toolbarTitleAwaiting)
       : visual === 'planning'
         ? t(PLAN_COPY.toolbarTitlePlanning)
         : t(PLAN_COPY.toolbarTitleNormal)
@@ -93,6 +97,12 @@ function PlanToolbarButtonConversation({ conversationId }: { conversationId: num
     )
   }
 
+  usePanelShortcut(buttonRef, 'toggle-plan-mode', () => {
+    if (!toggleAction.pending) {
+      handleToggle()
+    }
+  })
+
   const stateClass =
     visual === 'awaiting'
       ? 'plan-toolbar-btn--awaiting'
@@ -102,6 +112,7 @@ function PlanToolbarButtonConversation({ conversationId }: { conversationId: num
 
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={`plan-toolbar-btn ${stateClass}`}
       aria-pressed={effectiveView.mode === 'planning'}
@@ -116,7 +127,10 @@ function PlanToolbarButtonConversation({ conversationId }: { conversationId: num
       {toggleAction.pending ? (
         <HelmxIcon name="loader" size={13} className="spin-slow" />
       ) : visual === 'awaiting' ? (
-        <StatusLight tone="blocked" label={t(PLAN_COPY.modeAwaiting)} />
+        <StatusLight
+          tone="blocked"
+          label={t(awaitingClarification ? PLAN_COPY.modeClarifying : PLAN_COPY.modeAwaiting)}
+        />
       ) : (
         <HelmxIcon name="list-tree" size={13} />
       )}
@@ -136,12 +150,20 @@ function PlanToolbarButtonStandby({
 }): ReactNode {
   const locale = usePluginLocale()
   const t = (text: { en: string; 'zh-CN': string }) => resolveLocalizedText(text, locale)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
   const armed = isStandbyPlanArmed(draftMeta)
   const label = t(armed ? PLAN_COPY.toolbarPlanning : PLAN_COPY.toolbarNormal)
   const title = t(armed ? PLAN_COPY.toolbarTitleStandbyArmed : PLAN_COPY.toolbarTitleStandbyNormal)
 
+  usePanelShortcut(buttonRef, 'toggle-plan-mode', () => {
+    if (!disabled) {
+      setDraftMeta(PLAN_PLUGIN_ID, armed ? undefined : { mode: 'planning' })
+    }
+  })
+
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={`plan-toolbar-btn ${armed ? 'plan-toolbar-btn--planning' : 'plan-toolbar-btn--normal'}`}
       aria-pressed={armed}

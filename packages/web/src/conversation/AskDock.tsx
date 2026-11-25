@@ -9,6 +9,7 @@ import {
   HelmxIcon,
   IconButton,
   Input,
+  ModelPickerControl,
   PopoverContent,
   PopoverRoot,
   PopoverTrigger,
@@ -19,6 +20,7 @@ import {
 import { useConversations, usePendingAsks, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { collectSubtreeIds } from './ancestry-model.js'
+import { useModelPickerControlAdapter } from './model-picker-adapter.js'
 
 export interface AskDockProps {
   conversationId: number
@@ -70,19 +72,35 @@ function lastLines(text: string, max: number): string {
   return lines.length <= max ? lines.join('\n') : lines.slice(-max).join('\n')
 }
 
+function initialAskAnswers(fields: ReadonlyArray<AskFieldSpec>): Record<string, string> {
+  const initial: Record<string, string> = {}
+  for (const field of fields) {
+    if (typeof field.defaultValue === 'string' && field.defaultValue !== '') {
+      initial[field.name] = field.defaultValue
+    }
+  }
+  return initial
+}
+
 function AskFieldInput({
+  conversationId,
   field,
+  fieldId,
+  fieldLabel,
   value,
   onChange,
   disabled,
 }: {
+  conversationId: number
   field: AskFieldSpec
+  fieldId: string
+  fieldLabel: string
   value: string
   onChange: (v: string) => void
   disabled: boolean
 }) {
   const { locale, t } = useWebLocale()
-  const fieldLabel = resolveLocalizedText(field.label, locale)
+  const pickerAdapter = useModelPickerControlAdapter(conversationId)
   if (field.type === 'select') {
     const options = [
       { value: '', label: t('composer.ask.selectPlaceholder') },
@@ -97,6 +115,61 @@ function AskFieldInput({
         disabled={disabled}
         options={options}
         onChange={(e) => onChange(e.target.value)}
+      />
+    )
+  }
+  if (field.type === 'choice') {
+    return (
+      <div className="ask-dock-choice-group" role="radiogroup" aria-label={fieldLabel}>
+        {(field.options ?? []).map((opt) => {
+          const selected = value === opt.value
+          const optLabel = resolveLocalizedText(opt.label, locale)
+          const optDesc =
+            opt.description !== undefined ? resolveLocalizedText(opt.description, locale) : undefined
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              className={`ask-dock-choice-btn${selected ? ' ask-dock-choice-btn--selected' : ''}`}
+              disabled={disabled}
+              onClick={() => onChange(opt.value)}
+            >
+              <span className="ask-dock-choice-radio" aria-hidden="true" />
+              <span className="ask-dock-choice-body">
+                <span className="ask-dock-choice-label">{optLabel}</span>
+                {optDesc !== undefined && optDesc !== '' ? (
+                  <span className="ask-dock-choice-desc">{optDesc}</span>
+                ) : null}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    )
+  }
+  if (field.type === 'model') {
+    const placeholder = t('composer.ask.modelKeepCurrent')
+    return (
+      <ModelPickerControl
+        buttonId={fieldId}
+        buttonAriaLabel={`${fieldLabel}: ${value || placeholder}`}
+        buttonTitle={value || placeholder}
+        placeholderLabel={placeholder}
+        effectiveModel={value || undefined}
+        activeThinkingLevel=""
+        resetLabel={placeholder}
+        resetTitle={t('composer.ask.modelResetTitle')}
+        popoverSide="top"
+        enableShortcut={false}
+        showThinkingLevels={false}
+        disabled={disabled}
+        copy={pickerAdapter.copy}
+        onNotice={pickerAdapter.onNotice}
+        onOpenModelsCenter={pickerAdapter.onOpenModelsCenter}
+        onApply={(id) => onChange(id)}
+        onResetDefault={() => onChange('')}
       />
     )
   }
@@ -142,12 +215,13 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
   // The same approval can appear in both an ancestor panel and a child
   // conversation drawer; form labels associate with this instance only.
   const formId = useId()
-  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [answers, setAnswers] = useState<Record<string, string>>(() => initialAskAnswers(ask.fields))
   const [submitting, setSubmitting] = useState<'answer' | 'cancel' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [snapshotOpen, setSnapshotOpen] = useState(false)
   const titleText = resolveLocalizedText(ask.title, locale)
   const descText = ask.description !== undefined ? resolveLocalizedText(ask.description, locale) : ''
+  const hintText = ask.hint !== undefined ? resolveLocalizedText(ask.hint, locale) : ''
   const snapshot = useMemo(() => extractTerminalSnapshot(ask, descText), [ask, descText])
 
   const isSingleConfirm = ask.fields.length === 1 && ask.fields[0]?.type === 'confirm'
@@ -274,29 +348,39 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
       ) : null}
       {ask.fields.length > 0 ? (
         <Stack gap="sm" className="ask-dock-fields">
-          {ask.fields.map((field) => (
-            <Field
-              key={field.name}
-              className="ask-dock-field"
-              label={resolveLocalizedText(field.label, locale)}
-              required={field.required === true}
-              htmlFor={field.type === 'confirm' ? false : `${formId}-${field.name}`}
-            >
-              <AskFieldInput
-                field={field}
-                value={answers[field.name] ?? ''}
-                disabled={submitting !== null}
-                onChange={(v) => {
-                  const next = { ...answers, [field.name]: v }
-                  setAnswers(next)
-                  if (isSingleConfirm) {
-                    void submitAnswers({ [field.name]: v })
-                  }
-                }}
-              />
-            </Field>
-          ))}
+          {ask.fields.map((field) => {
+            const fieldLabel = resolveLocalizedText(field.label, locale)
+            const fieldId = `${formId}-${field.name}`
+            return (
+              <Field
+                key={field.name}
+                className="ask-dock-field"
+                label={fieldLabel}
+                required={field.required === true}
+                htmlFor={field.type === 'confirm' || field.type === 'choice' ? false : fieldId}
+              >
+                <AskFieldInput
+                  conversationId={ask.conversationId}
+                  field={field}
+                  fieldId={fieldId}
+                  fieldLabel={fieldLabel}
+                  value={answers[field.name] ?? ''}
+                  disabled={submitting !== null}
+                  onChange={(v) => {
+                    const next = { ...answers, [field.name]: v }
+                    setAnswers(next)
+                    if (isSingleConfirm) {
+                      void submitAnswers({ [field.name]: v })
+                    }
+                  }}
+                />
+              </Field>
+            )
+          })}
         </Stack>
+      ) : null}
+      {hintText.trim() !== '' ? (
+        <HelperText className="ask-dock-hint">{hintText}</HelperText>
       ) : null}
       {error !== null ? (
         <Callout tone="err">

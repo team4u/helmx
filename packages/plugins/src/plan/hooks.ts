@@ -5,8 +5,11 @@ import { HelmxError, type ConversationSummary, type HelmxPluginContext } from '@
 import {
   PLAN_MODE_SECTION_ID,
   PLAN_MODE_TOOL_WHITELIST,
+  PLAN_TOOL_ASK,
+  PLAN_TOOL_BASH,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
+  asConversationEntryEvent,
   asPlanDeletedConversationId,
   hasPlanModeInputMeta,
   isPlanConversationEligible,
@@ -16,13 +19,20 @@ import type { PlanStateManager } from './state.js'
 
 export const PLAN_MODE_SYSTEM_SECTION = [
   '<plan_mode>',
-  'You are currently in READ-ONLY Planning Mode.',
-  '1. Research only: use `read`, `read_artifact`, `load_skill`, and `bash` strictly for read-only inspection (e.g., `rg`, `ls`, `git status`, `git diff`, reading files/logs). Never use `bash` to edit files, run side-effecting installs/builds, create commits, or mutate external state.',
-  '2. Clarify ambiguity first: if key requirements, constraints, or tradeoffs remain unclear, ask concise questions directly in your text reply before finalizing.',
-  '3. Draft via `plan_save({ title, markdown })`: write a concrete, actionable implementation plan (files, changes, edge cases, verification steps). You may refine and overwrite the draft across turns.',
-  '4. Propose via `plan_propose({ summary })`: when ready, call `plan_propose` with a concise plain-text summary (no fenced code blocks). Workspace mutation tools remain disabled until the user approves the proposal.',
+  'You are currently in READ-ONLY Plan Mode.',
+  '1. Research only: use `read`, `read_artifact`, `load_skill`, and `plan_bash` strictly for read-only inspection (`plan_bash` rejects mutating shell commands and file output redirections). Never edit files, run side-effecting installs/builds, create commits, or mutate external state.',
+  '2. Clarify ambiguity cleanly: when requirements, scope, or architecture tradeoffs have genuine ambiguity, call `plan_ask` with 1–4 concise multiple-choice questions instead of asking long walls of open-ended questions. For minor details, ask concisely in your text reply.',
+  '3. Draft a self-contained plan via `plan_save({ title, markdown })`: if the user approves with a fresh-context handoff, ALL prior exploration messages and file reads will be cleared and the executor will ONLY see this Markdown. Therefore include exact file paths, key symbol/API names, concrete step-by-step changes, discovered edge cases/constraints, and exact verification commands so an executor with zero prior context can implement immediately without re-researching the repository.',
+  '4. Propose via `plan_propose({ summary })`: when ready, call `plan_propose` with a concise plain-text summary (1–300 chars, no fenced code blocks). Workspace mutation tools remain disabled until the user approves the proposal.',
   '</plan_mode>',
 ].join('\n')
+
+const PLAN_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  PLAN_TOOL_SAVE,
+  PLAN_TOOL_PROPOSE,
+  PLAN_TOOL_ASK,
+  PLAN_TOOL_BASH,
+])
 
 function getConversationOrUndefined(
   read: (id: number) => ConversationSummary,
@@ -95,9 +105,7 @@ export function registerPlanHooks(ctx: HelmxPluginContext, state: PlanStateManag
       const inPlanningMode = eligible && record?.mode === 'planning'
 
       if (!inPlanningMode) {
-        const tools = turn.tools.filter(
-          (tool) => tool.name !== PLAN_TOOL_SAVE && tool.name !== PLAN_TOOL_PROPOSE,
-        )
+        const tools = turn.tools.filter((tool) => !PLAN_ONLY_TOOL_NAMES.has(tool.name))
         const sections = turn.sections.filter((section) => section.id !== PLAN_MODE_SECTION_ID)
         if (tools.length === turn.tools.length && sections.length === turn.sections.length) {
           return { action: 'continue' }
@@ -133,5 +141,27 @@ export function registerPlanHooks(ctx: HelmxPluginContext, state: PlanStateManag
     const conversationId = asPlanDeletedConversationId(payload)
     if (conversationId === undefined) return
     await state.cleanupDeletedConversation(conversationId)
+  })
+
+  ctx.host.onEvent('conversation.entry', async (payload) => {
+    if (state.isStopping()) return
+    const entry = asConversationEntryEvent(payload)
+    if (entry === undefined) return
+    if (entry.kind === 'pi.reset') {
+      if (state.consumeExpectedHandoffReset(entry.conversationId)) {
+        return
+      }
+      await state.resetConversationState(entry.conversationId)
+      return
+    }
+    if (entry.kind === 'helmx.rewind') {
+      // Preserve planning mode and draft on rewind so editing a prior prompt never boots the user out of plan mode,
+      // while superseding any pending ask from the rewound turn.
+      await state.supersedePendingAsk(entry.conversationId)
+    }
+  })
+
+  ctx.hook.onTurnSettled((payload) => {
+    state.clearExpectedHandoffReset(payload.conversation.id)
   })
 }

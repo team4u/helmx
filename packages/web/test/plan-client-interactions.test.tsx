@@ -35,11 +35,14 @@ import {
   PLAN_PANEL_ID,
   PLAN_PLUGIN_ID,
   PLAN_SESSION_DOC,
+  PLAN_TOOL_ASK,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
 } from '../../plugins/src/plan/client/types.ts'
 import {
   PLAN_COPY,
+  planAskOutcomeLabel,
+  planAskQuestionCountLabel,
   planOutcomeLabel,
   planSaveStatsLabel,
 } from '../../plugins/src/plan/client/copy.ts'
@@ -279,6 +282,7 @@ describe('plan-client-interactions', () => {
     assert.equal(PLAN_PANEL_ID, 'plan')
     assert.equal(PLAN_COMMAND_ID, 'toggle-plan')
     assert.equal(PLAN_COMMAND_SLASH, 'plan')
+    assert.equal(PLAN_TOOL_ASK, 'plan_ask')
     assert.equal(PLAN_TOOL_SAVE, 'plan_save')
     assert.equal(PLAN_TOOL_PROPOSE, 'plan_propose')
 
@@ -292,6 +296,8 @@ describe('plan-client-interactions', () => {
     assert.equal(typeof cssText, 'string')
     assert.match(cssText as string, /\.plan-toolbar-btn/)
     assert.match(cssText as string, /\.plan-workbench/)
+    assert.match(cssText as string, /\.plan-tray-preview/)
+    assert.match(cssText as string, /\.plan-editor/)
 
     assert.equal(isPlanEligibleConversation(undefined), false)
     assert.equal(isPlanEligibleConversation(makeConv(1)), true)
@@ -304,12 +310,14 @@ describe('plan-client-interactions', () => {
     assert.deepEqual(
       parsePlanSessionView({
         mode: 'planning',
-        awaitingApproval: true,
+        awaitingApproval: false,
+        awaitingClarification: true,
         draft: { title: 'Auth Plan', markdown: '# Steps', version: 2, updatedAt: 1000 },
       }),
       {
         mode: 'planning',
-        awaitingApproval: true,
+        awaitingApproval: false,
+        awaitingClarification: true,
         draft: { title: 'Auth Plan', markdown: '# Steps', version: 2, updatedAt: 1000 },
       },
     )
@@ -320,15 +328,24 @@ describe('plan-client-interactions', () => {
       parsePlanToolPresentationMeta({ kind: 'save', title: 'Auth Plan', version: 1, lineCount: 10, charCount: 250 }),
       { kind: 'save', title: 'Auth Plan', version: 1, lineCount: 10, charCount: 250 },
     )
+    assert.deepEqual(
+      parsePlanToolPresentationMeta({ kind: 'ask', title: 'Scope', questionCount: 2, outcome: 'answered' }),
+      { kind: 'ask', title: 'Scope', questionCount: 2, outcome: 'answered' },
+    )
 
-    // Zero Emoji & non-empty bilingual check across PLAN_COPY
+    // Zero Emoji, non-empty bilingual, and unified zh-CN terminology ("计划", never "规划") across PLAN_COPY
     for (const [key, entry] of Object.entries(PLAN_COPY)) {
       assert.ok(entry.en.trim().length > 0, `PLAN_COPY.${key}.en must be non-empty`)
       assert.ok(entry['zh-CN'].trim().length > 0, `PLAN_COPY.${key}['zh-CN'] must be non-empty`)
       assert.equal(EMOJI_RE.test(entry.en), false, `PLAN_COPY.${key}.en must contain no Emoji`)
       assert.equal(EMOJI_RE.test(entry['zh-CN']), false, `PLAN_COPY.${key}['zh-CN'] must contain no Emoji`)
+      assert.equal(entry['zh-CN'].includes('规划'), false, `PLAN_COPY.${key}['zh-CN'] must use 计划, never 规划`)
     }
     assert.equal(planOutcomeLabel('approved', 'zh-CN'), '已批准')
+    assert.equal(planOutcomeLabel('approved_handoff', 'zh-CN'), '已批准 · 新上下文')
+    assert.equal(planAskOutcomeLabel('answered', 'zh-CN'), '已回答')
+    assert.equal(planAskQuestionCountLabel(2, 'en'), '2 questions')
+    assert.equal(planAskQuestionCountLabel(2, 'zh-CN'), '2 个问题')
     assert.equal(planSaveStatsLabel(1, 42, 'en'), '1 line · 42 chars')
   })
 
@@ -370,6 +387,7 @@ describe('plan-client-interactions', () => {
       assert.equal(standbyBtn.getAttribute('data-plan-mode'), 'normal')
       assert.ok(standbyBtn.classList.contains('plan-toolbar-btn--normal'))
       assert.match(standbyBtn.textContent ?? '', /^Plan$/)
+      assert.match(standbyBtn.getAttribute('title') ?? '', /\(Ctrl\+\.\)/)
       assert.equal(EMOJI_RE.test(standbyBtn.textContent ?? ''), false)
       assert.equal(standbyHarness.subscribedKeys.length, 0, 'standby draft must not open sessionDoc subscription')
 
@@ -377,6 +395,20 @@ describe('plan-client-interactions', () => {
         standbyBtn.click()
       })
       assert.deepEqual(metaWrites[0], { key: 'builtin:plan', value: { mode: 'planning' } })
+
+      // Ctrl+. shortcut toggles standby draft; mismatched panel ('split') is ignored
+      await act(async () => {
+        window.dispatchEvent(
+          new window.CustomEvent('helmx:shortcut', { detail: { action: 'toggle-plan-mode', panel: 'split' } }),
+        )
+      })
+      assert.equal(metaWrites.length, 1)
+      await act(async () => {
+        window.dispatchEvent(
+          new window.CustomEvent('helmx:shortcut', { detail: { action: 'toggle-plan-mode', panel: 'primary' } }),
+        )
+      })
+      assert.deepEqual(metaWrites[1], { key: 'builtin:plan', value: { mode: 'planning' } })
 
       // Re-render armed state and click to disarm
       await standbyMount.rerender(
@@ -395,7 +427,7 @@ describe('plan-client-interactions', () => {
       await act(async () => {
         standbyBtn.click()
       })
-      assert.deepEqual(metaWrites[1], { key: 'builtin:plan', value: undefined })
+      assert.deepEqual(metaWrites[2], { key: 'builtin:plan', value: undefined })
 
       // Disabled prop propagates cleanly
       await standbyMount.rerender(
@@ -461,6 +493,7 @@ describe('plan-client-interactions', () => {
       assert.equal(btn.getAttribute('data-plan-mode'), 'normal')
       assert.ok(btn.classList.contains('plan-toolbar-btn--normal'))
       assert.match(btn.textContent ?? '', /^Plan$/)
+      assert.match(btn.getAttribute('title') ?? '', /\(Ctrl\+\.\)/)
       assert.equal(EMOJI_RE.test(btn.textContent ?? ''), false)
 
       await act(async () => {
@@ -468,6 +501,18 @@ describe('plan-client-interactions', () => {
       })
       assert.equal(spy.actionCalls.length, 1)
       assert.deepEqual(spy.actionCalls[0], {
+        actionId: 'toggle',
+        input: { conversationId: 10 },
+        options: { conversationId: 10 },
+      })
+
+      await act(async () => {
+        window.dispatchEvent(
+          new window.CustomEvent('helmx:shortcut', { detail: { action: 'toggle-plan-mode', panel: 'primary' } }),
+        )
+      })
+      assert.equal(spy.actionCalls.length, 2)
+      assert.deepEqual(spy.actionCalls[1], {
         actionId: 'toggle',
         input: { conversationId: 10 },
         options: { conversationId: 10 },
@@ -481,6 +526,15 @@ describe('plan-client-interactions', () => {
       assert.equal(btn.getAttribute('data-plan-mode'), 'planning')
       assert.ok(btn.classList.contains('plan-toolbar-btn--planning'))
       assert.match(btn.textContent ?? '', /Planning/)
+
+      // Push awaitingClarification sessionDoc update
+      await act(async () => {
+        liveHarness.setDocValue(10, { mode: 'planning', awaitingApproval: false, awaitingClarification: true })
+      })
+      assert.equal(btn.getAttribute('data-plan-awaiting'), 'false')
+      assert.ok(btn.classList.contains('plan-toolbar-btn--awaiting'))
+      assert.match(btn.textContent ?? '', /Awaiting answers/)
+      assert.equal(btn.querySelector('.helmx-status-light')?.getAttribute('data-tone'), 'blocked')
 
       // Push awaitingApproval sessionDoc update
       await act(async () => {
@@ -497,7 +551,7 @@ describe('plan-client-interactions', () => {
     }
   })
 
-  test('PlanActiveTray: null in normal mode and pre-draft planning mode; renders compact DockTray/DockTrayRow once draft or awaitingApproval exists, opens workbench & exits via set_mode', { timeout: 60_000 }, async () => {
+  test('PlanActiveTray: renders on draft/awaiting states, includes inline markdown preview, auto-opens workbench on desktop transition only', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx({ conversationId: 20 })
     const harness = createSessionDocHarness({
       [`${PLAN_PLUGIN_ID}/${PLAN_SESSION_DOC}/20`]: {
@@ -507,6 +561,11 @@ describe('plan-client-interactions', () => {
         value: { mode: 'normal', awaitingApproval: false },
       },
     })
+    const origInnerWidthDesc = Object.getOwnPropertyDescriptor(window, 'innerWidth')
+    const setViewportWidth = (width: number): void => {
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true, writable: true })
+    }
+    setViewportWidth(1280)
 
     const mounted = await mountWithSessionHost(
       spy,
@@ -518,7 +577,7 @@ describe('plan-client-interactions', () => {
       assert.equal(mounted.host.textContent ?? '', '')
       assert.ok(mounted.host.querySelector('.dock-tray') === null)
 
-      // 1b. Planning mode BEFORE any draft is saved and not awaitingApproval -> zero-height null (toolbar button is the state indicator)
+      // 1b. Planning mode BEFORE any draft or pending ask -> zero-height null (toolbar button is the state indicator)
       await act(async () => {
         harness.setDocValue(20, {
           mode: 'planning',
@@ -527,6 +586,17 @@ describe('plan-client-interactions', () => {
       })
       assert.equal(mounted.host.textContent ?? '', '')
       assert.ok(mounted.host.querySelector('.dock-tray') === null, 'pre-draft planning mode must suppress redundant DockTray')
+
+      // 1c. awaitingClarification without draft still renders tray
+      await act(async () => {
+        harness.setDocValue(20, {
+          mode: 'planning',
+          awaitingApproval: false,
+          awaitingClarification: true,
+        })
+      })
+      assert.ok(mounted.host.querySelector('.dock-tray') !== null)
+      assert.match(mounted.host.textContent ?? '', /Awaiting answers/)
 
       // 2. Planning mode with saved draft
       await act(async () => {
@@ -559,7 +629,7 @@ describe('plan-client-interactions', () => {
       })
       assert.deepEqual(spy.workbenchCalls, [{ panelId: 'plan', params: undefined }])
 
-      // Expand DockTray to inspect DockTrayRow
+      // Expand DockTray to inspect DockTrayRow + scrollable inline Markdown preview
       const toggleBtn = mounted.host.querySelector<HTMLButtonElement>('.dock-tray-bar-toggle')
       assert.ok(toggleBtn !== null)
       assert.equal(toggleBtn.getAttribute('aria-expanded'), 'false')
@@ -567,6 +637,7 @@ describe('plan-client-interactions', () => {
         toggleBtn.click()
       })
       assert.equal(toggleBtn.getAttribute('aria-expanded'), 'true')
+      assert.equal(mounted.host.querySelector('.plan-tray-preview h1')?.textContent, 'Plan')
       const rowMain = mounted.host.querySelector<HTMLButtonElement>('.dock-tray-row-main')
       assert.ok(rowMain !== null, 'expected DockTrayRow when expanded')
       assert.match(rowMain.textContent ?? '', /Migrate Auth Pipeline/)
@@ -577,7 +648,7 @@ describe('plan-client-interactions', () => {
       assert.equal(spy.workbenchCalls.length, 2)
       assert.deepEqual(spy.workbenchCalls[1], { panelId: 'plan', params: undefined })
 
-      // 3. awaitingApproval -> warn DockTray
+      // 3. awaitingApproval false -> true transition on desktop auto-opens workbench
       await act(async () => {
         harness.setDocValue(20, {
           mode: 'planning',
@@ -593,6 +664,17 @@ describe('plan-client-interactions', () => {
       assert.equal(tray.classList.contains('dock-tray-warn'), true)
       assert.match(tray.textContent ?? '', /Awaiting approval/)
       assert.match(tray.textContent ?? '', /v3/)
+      assert.equal(spy.workbenchCalls.length, 3, 'desktop transition into awaitingApproval auto-opens workbench')
+
+      // Narrow viewport (<= 900px) transition must NOT auto-open workbench
+      setViewportWidth(600)
+      await act(async () => {
+        harness.setDocValue(20, { mode: 'planning', awaitingApproval: false })
+      })
+      await act(async () => {
+        harness.setDocValue(20, { mode: 'planning', awaitingApproval: true })
+      })
+      assert.equal(spy.workbenchCalls.length, 3)
 
       // 4. Click Exit button -> calls set_mode -> 'normal'
       const exitBtn = mounted.host.querySelector<HTMLButtonElement>('.plan-tray-exit-btn')
@@ -614,6 +696,34 @@ describe('plan-client-interactions', () => {
       assert.ok(mounted.host.querySelector('.dock-tray') === null)
     } finally {
       await mounted.unmount()
+      if (origInnerWidthDesc) {
+        Object.defineProperty(window, 'innerWidth', origInnerWidthDesc)
+      }
+    }
+
+    // Fresh mount already settled at awaitingApproval: true on desktop must NOT auto-open workbench
+    setViewportWidth(1280)
+    const spyInitial = makeSpyCtx({ conversationId: 21 })
+    const initialAwaitingHarness = createSessionDocHarness({
+      [`${PLAN_PLUGIN_ID}/${PLAN_SESSION_DOC}/21`]: {
+        hasValue: true,
+        deleted: false,
+        connected: true,
+        value: { mode: 'planning', awaitingApproval: true },
+      },
+    })
+    const initialMount = await mountWithSessionHost(
+      spyInitial,
+      e(components.PlanActiveTray, { conversation: makeConv(21) }),
+      initialAwaitingHarness,
+    )
+    try {
+      assert.equal(spyInitial.workbenchCalls.length, 0)
+    } finally {
+      await initialMount.unmount()
+      if (origInnerWidthDesc) {
+        Object.defineProperty(window, 'innerWidth', origInnerWidthDesc)
+      }
     }
   })
 
@@ -671,7 +781,7 @@ describe('plan-client-interactions', () => {
 
       // Toggle mode from workbench button
       const enterBtn = Array.from(mounted.host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
-        (b.textContent ?? '').includes('Enter planning'),
+        (b.textContent ?? '').includes('Enter plan mode'),
       )
       assert.ok(enterBtn !== undefined)
       await act(async () => {
@@ -700,10 +810,75 @@ describe('plan-client-interactions', () => {
       assert.match(mounted.host.textContent ?? '', /Refactor Session State/)
       assert.match(mounted.host.textContent ?? '', /v4/)
       assert.match(mounted.host.textContent ?? '', /Updated /)
-      assert.match(mounted.host.textContent ?? '', /Exit planning/)
+      assert.match(mounted.host.textContent ?? '', /Exit plan mode/)
       assert.ok(mounted.host.querySelector('.plan-markdown h1') !== null, 'markdown headings must render structurally')
       assert.ok(mounted.host.querySelector('.plan-markdown li') !== null, 'markdown lists must render structurally')
       assert.ok(mounted.host.querySelector('.plan-markdown script') === null, 'raw HTML script tags must never be injected')
+
+      // Inline draft editing: external drift warning + Load latest + Save calls update_draft with CAS expectedVersion
+      const editBtn = Array.from(mounted.host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        (b.textContent ?? '').trim() === 'Edit',
+      )
+      assert.ok(editBtn !== undefined, 'expected Edit draft button')
+      await act(async () => {
+        editBtn.click()
+      })
+      const editorForm = mounted.host.querySelector<HTMLFormElement>('form.plan-editor')
+      assert.ok(editorForm !== null, 'clicking Edit should open inline editor')
+
+      // External draft update v5 while human is editing v4 -> shows stale warning & Load latest action
+      await act(async () => {
+        harness.setDocValue(30, {
+          mode: 'planning',
+          awaitingApproval: false,
+          draft: {
+            title: 'Refactor Session State v5',
+            markdown: '# Latest v5 body',
+            version: 5,
+            updatedAt: 1_700_000_000_500,
+          },
+        })
+      })
+      assert.match(editorForm.textContent ?? '', /v5/)
+      const loadLatestBtn = Array.from(editorForm.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        (b.textContent ?? '').includes('Load latest'),
+      )
+      assert.ok(loadLatestBtn !== undefined, 'expected Load latest button on version drift')
+      await act(async () => {
+        loadLatestBtn.click()
+      })
+      const titleInput = editorForm.querySelector<HTMLInputElement>('input')
+      const mdTextarea = editorForm.querySelector<HTMLTextAreaElement>('textarea.plan-editor-textarea')
+      assert.equal(titleInput?.value, 'Refactor Session State v5')
+      assert.equal(mdTextarea?.value, '# Latest v5 body')
+
+      await act(async () => {
+        if (titleInput) {
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+          setter?.call(titleInput, 'Human Edited Title')
+          titleInput.dispatchEvent(new Event('input', { bubbles: true }))
+        }
+        if (mdTextarea) {
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+          setter?.call(mdTextarea, '# Edited by human')
+          mdTextarea.dispatchEvent(new Event('input', { bubbles: true }))
+        }
+      })
+      const saveBtn = editorForm.querySelector<HTMLButtonElement>('button[type="submit"]')
+      assert.ok(saveBtn !== null && !saveBtn.disabled)
+      await act(async () => {
+        editorForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      })
+      assert.deepEqual(spy.actionCalls[1], {
+        actionId: 'update_draft',
+        input: {
+          conversationId: 30,
+          title: 'Human Edited Title',
+          markdown: '# Edited by human',
+          expectedVersion: 5,
+        },
+        options: { conversationId: 30 },
+      })
 
       // Approved artifact info populated
       await act(async () => {
@@ -731,7 +906,7 @@ describe('plan-client-interactions', () => {
       assert.match(panelText, /Latest Approved Plan/)
       assert.match(panelText, /refactor-session-state-v4\.md/)
       assert.match(panelText, /art_plan_123/)
-      assert.match(panelText, /Yes \(switched on approval\)/)
+      assert.match(panelText, /Fresh context/)
       assert.match(panelText, /anthropic\/claude-sonnet-4-6/)
       assert.equal(EMOJI_RE.test(panelText), false)
 
@@ -762,7 +937,7 @@ describe('plan-client-interactions', () => {
       const sameSessionText = mounted.host.textContent ?? ''
       assert.match(sameSessionText, /Awaiting approval/)
       assert.match(sameSessionText, /No plan draft yet/)
-      assert.match(sameSessionText, /No \(same session\)/)
+      assert.match(sameSessionText, /Same context/)
       assert.match(sameSessionText, /earlier-v1\.md/)
     } finally {
       await mounted.unmount()
@@ -781,7 +956,7 @@ describe('plan-client-interactions', () => {
     }
   })
 
-  test('PlanToolRow: renders plan_save & plan_propose from presentationMeta only (never JSON.parse(result)), handles error & missing meta honestly', { timeout: 60_000 }, async () => {
+  test('PlanToolRow: renders plan_save, plan_propose & plan_ask from presentationMeta only (never JSON.parse(result)), handles error & missing meta honestly', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx({ conversationId: 40 })
 
     // 1. plan_save with valid presentationMeta
@@ -824,7 +999,7 @@ describe('plan-client-interactions', () => {
       await saveMount.unmount()
     }
 
-    // 2. plan_propose approved_handoff
+    // 2. plan_propose approved_handoff & approved with executionModel
     const proposeMount = await mountWithSessionHost(
       spy,
       e(components.PlanToolRow, {
@@ -850,12 +1025,92 @@ describe('plan-client-interactions', () => {
       assert.match(text, /Database Migration Plan/)
       assert.match(text, /openai\/gpt-5/)
       assert.match(text, /v3/)
-      assert.match(text, /Approved · Handoff/)
+      assert.match(text, /Approved · Fresh context/)
       const light = proposeMount.host.querySelector('.helmx-status-light')
       assert.ok(light !== null)
       assert.equal(light.getAttribute('data-tone'), 'done')
     } finally {
       await proposeMount.unmount()
+    }
+
+    const sameModelMount = await mountWithSessionHost(
+      spy,
+      e(components.PlanToolRow, {
+        callId: 'call-prop-same-model',
+        toolName: PLAN_TOOL_PROPOSE,
+        status: 'done',
+        conversationId: 40,
+        presentationMeta: {
+          kind: 'propose',
+          title: 'Same Context Model Override',
+          version: 4,
+          outcome: 'approved',
+          artifactId: 'art_2',
+          artifactName: 'plan-v4.md',
+          executionModel: 'tier/coder',
+        },
+      }),
+    )
+    try {
+      const text = sameModelMount.host.textContent ?? ''
+      assert.match(text, /Same Context Model Override/)
+      assert.match(text, /tier\/coder/)
+      assert.match(text, /Approved/)
+    } finally {
+      await sameModelMount.unmount()
+    }
+
+    // 2b. plan_ask answered (en) & cancelled (zh-CN)
+    const askAnsweredMount = await mountWithSessionHost(
+      spy,
+      e(components.PlanToolRow, {
+        callId: 'call-ask-1',
+        toolName: PLAN_TOOL_ASK,
+        status: 'done',
+        conversationId: 40,
+        presentationMeta: {
+          kind: 'ask',
+          title: 'Architecture Scope',
+          questionCount: 2,
+          outcome: 'answered',
+        },
+      }),
+    )
+    try {
+      const text = askAnsweredMount.host.textContent ?? ''
+      assert.match(text, /Clarifying questions/)
+      assert.match(text, /Architecture Scope/)
+      assert.match(text, /2 questions/)
+      assert.match(text, /Answered/)
+      const light = askAnsweredMount.host.querySelector('.helmx-status-light')
+      assert.equal(light?.getAttribute('data-tone'), 'done')
+    } finally {
+      await askAnsweredMount.unmount()
+    }
+
+    const askCancelledZhMount = await mountWithSessionHost(
+      makeSpyCtx({ conversationId: 40, locale: 'zh-CN' }),
+      e(components.PlanToolRow, {
+        callId: 'call-ask-2',
+        toolName: PLAN_TOOL_ASK,
+        status: 'done',
+        conversationId: 40,
+        presentationMeta: {
+          kind: 'ask',
+          title: '接口鉴权方案',
+          questionCount: 1,
+          outcome: 'cancelled',
+        },
+      }),
+    )
+    try {
+      const text = askCancelledZhMount.host.textContent ?? ''
+      assert.match(text, /需求澄清/)
+      assert.match(text, /1 个问题/)
+      assert.match(text, /已取消/)
+      assert.equal(askCancelledZhMount.host.querySelector('.helmx-status-light')?.getAttribute('data-tone'), 'aborted')
+    } finally {
+      await askCancelledZhMount.unmount()
     }
 
     // 3. plan_propose revised & cancelled outcomes

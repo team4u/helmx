@@ -15,10 +15,13 @@ import {
   PLAN_COMMAND_ID,
   PLAN_COMMAND_SLASH,
   PLAN_KV_NAMESPACE,
+  PLAN_MARKDOWN_MAX_BYTES,
   PLAN_PANEL_ID,
   PLAN_PLUGIN_ID,
   PLAN_SESSION_DOC,
   PLAN_SESSION_VIEW_SCHEMA,
+  PLAN_TITLE_MAX_CHARS,
+  PLAN_TOOL_ASK,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
   type PlanBadgesDoc,
@@ -41,6 +44,8 @@ export {
   PLAN_COMMAND_SLASH,
   PLAN_TOOL_SAVE,
   PLAN_TOOL_PROPOSE,
+  PLAN_TOOL_ASK,
+  PLAN_TOOL_BASH,
   PLAN_KV_NAMESPACE,
   PLAN_MODE_SECTION_ID,
   PLAN_INPUT_META_KEY,
@@ -51,13 +56,16 @@ export {
   PLAN_MODE_TOOL_WHITELIST,
   PLAN_SAVE_META_SCHEMA,
   PLAN_PROPOSE_META_SCHEMA,
+  PLAN_ASK_META_SCHEMA,
   PLAN_TOOL_META_SCHEMA,
   PLAN_SESSION_VIEW_SCHEMA,
   isPlanConversationEligible,
   asPlanDeletedConversationId,
+  asConversationEntryEvent,
   parsePlanSlashInput,
   hasPlanModeInputMeta,
   type PlanMode,
+  type PlanAskKind,
   type PlanDraftSummary,
   type PlanApprovedInfo,
   type PlanSessionView,
@@ -68,6 +76,7 @@ export {
   type PlanPluginOptions,
   type PlanConversationRecord,
 } from './plan/contracts.js'
+export { validateReadOnlyShellCommand, type ReadOnlyShellValidationResult } from './plan/read-only-shell.js'
 
 function resolveTargetConversationId(
   inputConversationId: number | undefined,
@@ -109,10 +118,10 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
 
   return {
     id: PLAN_PLUGIN_ID,
-    name: { en: 'Plan Mode', 'zh-CN': '规划模式' },
+    name: { en: 'Plan Mode', 'zh-CN': '计划模式' },
     description: {
-      en: 'Read-only exploration and structured plan drafting with AskDoc approval, artifact archival, and optional context/model handoff.',
-      'zh-CN': '只读探索与结构化规划草拟：支持 AskDoc 审批、产物归档以及可选的全新上下文/模型交接执行。',
+      en: 'Read-only exploration and structured plan drafting with clarifying questions, AskDoc approval, artifact archival, and optional context/model handoff.',
+      'zh-CN': '只读探索与结构化计划草拟：支持结构化澄清、只读 Shell 检查、AskDoc 审批、产物归档以及可选的全新上下文/模型交接执行。',
     },
     icon: 'list-tree',
     version: '0.1.0',
@@ -126,8 +135,8 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
           default: '',
           label: { en: 'Execution model', 'zh-CN': '执行模型' },
           description: {
-            en: 'Optional model or tier (e.g. tier/strong) offered for one-click model switch and handoff when approving a plan.',
-            'zh-CN': '审批通过规划后可选一键切换并交接执行的模型或档位（如 tier/strong）；留空则沿用会话当前模型。',
+            en: 'Optional default model or tier (e.g. tier/strong) preselected for execution when approving a plan.',
+            'zh-CN': '审批通过计划后默认预选的交接执行模型或档位（如 tier/strong）；审批时可按需调整，留空则默认沿用会话当前模型。',
           },
         },
       })
@@ -237,19 +246,63 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
         },
       })
 
+      ctx.action<
+        { conversationId?: number; title: string; markdown: string; expectedVersion?: number },
+        PlanSessionView
+      >({
+        id: 'update_draft',
+        description:
+          'Update the plan draft title and markdown for a top-level human conversation (--conversation-id or --current)',
+        visibility: 'public',
+        exposeToPrompt: false,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            conversationId: conversationIdProp,
+            title: {
+              type: 'string',
+              minLength: 1,
+              maxLength: PLAN_TITLE_MAX_CHARS,
+              description: `Plan draft title (1-${PLAN_TITLE_MAX_CHARS} characters)`,
+            },
+            markdown: {
+              type: 'string',
+              minLength: 1,
+              description: `Plan draft markdown body (1-${PLAN_MARKDOWN_MAX_BYTES} UTF-8 bytes)`,
+            },
+            expectedVersion: {
+              type: 'integer',
+              minimum: 0,
+              description: 'Optional optimistic concurrency draft version check',
+            },
+          },
+          required: ['title', 'markdown'],
+          additionalProperties: false,
+        },
+        outputSchema: PLAN_SESSION_VIEW_SCHEMA,
+        handler(input, context) {
+          const targetId = resolveTargetConversationId(input.conversationId, context)
+          return state.updateDraft(targetId, {
+            title: input.title,
+            markdown: input.markdown,
+            ...(input.expectedVersion !== undefined ? { expectedVersion: input.expectedVersion } : {}),
+          })
+        },
+      })
+
       ctx.ui.command({
         id: PLAN_COMMAND_ID,
-        title: { en: 'Toggle Plan mode', 'zh-CN': '切换规划模式' },
+        title: { en: 'Toggle Plan mode', 'zh-CN': '切换计划模式' },
         description: {
-          en: 'Toggle read-only planning mode for the current conversation',
-          'zh-CN': '为当前会话开启或退出只读规划模式',
+          en: 'Toggle read-only plan mode for the current conversation',
+          'zh-CN': '为当前会话开启或退出只读计划模式',
         },
         icon: 'list-tree',
         slash: PLAN_COMMAND_SLASH,
         actionId: 'toggle',
         input: {},
         scope: {},
-        keywords: ['plan', 'planning', 'spec', 'design', '规划', '计划', '方案'],
+        keywords: ['plan', 'planning', 'spec', 'design', '计划', '规划', '方案'],
       })
 
       if (hasClientAssets) {
@@ -267,7 +320,7 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
         })
         ctx.ui.workbenchPanel({
           id: PLAN_PANEL_ID,
-          label: { en: 'Plan', 'zh-CN': '规划' },
+          label: { en: 'Plan', 'zh-CN': '计划' },
           icon: 'list-tree',
           order: 15,
           badge: { doc: PLAN_BADGES_DOC, byConversationField: 'byConversation' },
@@ -275,7 +328,7 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
         })
         ctx.ui.toolView({
           id: 'plan-tool-row',
-          toolNames: [PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE],
+          toolNames: [PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE, PLAN_TOOL_ASK],
           replaceRow: true,
           client: { module: 'index.tsx', export: 'PlanToolRow' },
         })

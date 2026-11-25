@@ -89,6 +89,110 @@
   overflow: auto;
 }
 
+.ask-dock-choice-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ask-dock-choice-btn {
+  appearance: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+.ask-dock-choice-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.ask-dock-choice-btn:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ask-dock-choice-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ask-dock-choice-btn--selected {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+
+.ask-dock-choice-btn--selected:hover:not(:disabled) {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+}
+
+.ask-dock-choice-radio {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-elevated);
+  box-sizing: border-box;
+  position: relative;
+}
+
+.ask-dock-choice-btn--selected .ask-dock-choice-radio {
+  border-color: var(--accent);
+}
+
+.ask-dock-choice-btn--selected .ask-dock-choice-radio::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.ask-dock-choice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ask-dock-choice-label {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.ask-dock-choice-btn--selected .ask-dock-choice-label {
+  color: var(--accent);
+}
+
+.ask-dock-choice-desc {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.ask-dock-hint {
+  margin-top: 2px;
+}
+
 .composer-shell {
   padding: 0 var(--conversation-gutter) max(14px, env(safe-area-inset-bottom));
   background: var(--bg);

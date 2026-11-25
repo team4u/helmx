@@ -3,12 +3,14 @@
  */
 import type { LocalizedText } from './locale.js'
 
-export type AskFieldType = 'text' | 'select' | 'confirm'
+export type AskFieldType = 'text' | 'select' | 'confirm' | 'choice' | 'model'
 
-/** A single candidate option of a select field. */
+/** A single candidate option of a select or choice field. */
 export interface AskFieldOption {
   label: LocalizedText
   value: string
+  /** Optional secondary description shown below or beside the option label. */
+  description?: LocalizedText
 }
 
 /** Definition of a single question field. */
@@ -16,9 +18,11 @@ export interface AskFieldSpec {
   name: string
   label: LocalizedText
   type: AskFieldType
-  /** Candidate list when type is select. */
+  /** Candidate list when type is select or choice. */
   options?: Array<AskFieldOption>
   required?: boolean
+  /** Optional pre-selected initial value (must match an option value for select/choice, or 'true'|'false' for confirm when non-empty). */
+  defaultValue?: string
 }
 
 export type AskStatus = 'pending' | 'answered' | 'cancelled' | 'superseded'
@@ -30,6 +34,8 @@ export interface AskSpec {
   ownerPluginId?: string
   title: LocalizedText
   description?: LocalizedText
+  /** Optional subtle guidance text displayed below the form fields. */
+  hint?: LocalizedText
   fields: AskFieldSpec[]
   /** Optional CAS watermark: if the caller submits a conflicting expectedStateSeq, the host rejects with 409. */
   expectedStateSeq?: number

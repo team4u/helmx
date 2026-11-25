@@ -194,11 +194,18 @@ const NON_EMPTY_LOCALIZED_TEXT_SCHEMA = Type.Union([
 const ASK_FIELD_SCHEMA = Type.Object({
   name: Type.String(),
   label: NON_EMPTY_LOCALIZED_TEXT_SCHEMA,
-  type: Type.Enum(['text', 'select', 'confirm'] as const),
+  type: Type.Enum(['text', 'select', 'confirm', 'choice', 'model'] as const),
   options: Type.Optional(
-    Type.Array(Type.Object({ label: NON_EMPTY_LOCALIZED_TEXT_SCHEMA, value: NonEmptyString })),
+    Type.Array(
+      Type.Object({
+        label: NON_EMPTY_LOCALIZED_TEXT_SCHEMA,
+        value: NonEmptyString,
+        description: Type.Optional(LOCALIZED_TEXT_SCHEMA),
+      }),
+    ),
   ),
   required: Type.Optional(Type.Boolean()),
+  defaultValue: Type.Optional(Type.String()),
 })
 
 const ASK_SPEC_CHECKER = Compile(
@@ -211,6 +218,7 @@ const ASK_SPEC_CHECKER = Compile(
     createdAt: Type.Number(),
     ownerPluginId: Type.Optional(Type.String()),
     description: Type.Optional(LOCALIZED_TEXT_SCHEMA),
+    hint: Type.Optional(LOCALIZED_TEXT_SCHEMA),
     expectedStateSeq: Type.Optional(Type.Integer()),
   }),
 )
@@ -231,6 +239,9 @@ function assertAskSpecShape(value: unknown): AskSpec {
   if (ask.description !== undefined && parseLocalizedText(ask.description) === undefined) {
     throw new HelmxError('invalid_event', 'ask.upsert description must be a valid LocalizedText', 500)
   }
+  if (ask.hint !== undefined && parseLocalizedText(ask.hint) === undefined) {
+    throw new HelmxError('invalid_event', 'ask.upsert hint must be a valid LocalizedText', 500)
+  }
   for (const field of ask.fields) {
     if (parseNonEmptyLocalizedText(field.label) === undefined) {
       throw new HelmxError(
@@ -239,18 +250,24 @@ function assertAskSpecShape(value: unknown): AskSpec {
         500,
       )
     }
-    if (field.type === 'select') {
+    if (field.type === 'select' || field.type === 'choice') {
       if (!field.options || field.options.length === 0) {
         throw new HelmxError(
           'invalid_event',
-          'ask.upsert select field requires non-empty options (consistent with createAsk validation)',
+          `ask.upsert ${field.type} field requires non-empty options (consistent with createAsk validation)`,
           500,
         )
       }
-      if (field.options.some((opt) => parseNonEmptyLocalizedText(opt.label) === undefined)) {
+      if (
+        field.options.some(
+          (opt) =>
+            parseNonEmptyLocalizedText(opt.label) === undefined ||
+            (opt.description !== undefined && parseLocalizedText(opt.description) === undefined),
+        )
+      ) {
         throw new HelmxError(
           'invalid_event',
-          'ask.upsert select option label must be a non-empty LocalizedText',
+          `ask.upsert ${field.type} option label must be a non-empty LocalizedText (and description, when set, a valid LocalizedText)`,
           500,
         )
       }

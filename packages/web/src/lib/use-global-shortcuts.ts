@@ -1,6 +1,6 @@
 /**
  * The single global single-key shortcut dispatch hook:
- * strictly one key per function (Ctrl+L / Ctrl+O / Mod+K / Mod+B / Mod+J / Esc×2), no aliases.
+ * strictly one key per function (Ctrl+L / Ctrl+O / Ctrl+. / Mod+K / Mod+B / Mod+J / Esc×2), no aliases.
  * Display copy is not produced here, so no locale seam is needed.
  */
 import { useEffect } from 'react'
@@ -107,6 +107,13 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
       if (isCtrlOnly && keyLower === 'o') {
         event.preventDefault()
         const detail: HelmxShortcutDetail = { action: 'toggle-process-groups', panel }
+        window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
+        return
+      }
+
+      if (isCtrlOnly && event.key === '.') {
+        event.preventDefault()
+        const detail: HelmxShortcutDetail = { action: 'toggle-plan-mode', panel }
         window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
       }
     }

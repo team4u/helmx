@@ -33,6 +33,8 @@ import {
   PLAN_PANEL_ID,
   PLAN_PLUGIN_ID,
   PLAN_SESSION_DOC,
+  PLAN_TOOL_ASK,
+  PLAN_TOOL_BASH,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
   type PlanBadgesDoc,
@@ -288,8 +290,16 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
       'stripping dispatch tools before -100 must suppress <available_profiles>',
     )
     const planModeSection = planReq.sectionsById[PLAN_MODE_SECTION_ID]
-    assert.ok(typeof planModeSection === 'string' && /READ-ONLY Planning Mode/i.test(planModeSection))
-    assert.ok(planModeSection.includes('plan_save') && planModeSection.includes('plan_propose'))
+    assert.ok(typeof planModeSection === 'string' && /READ-ONLY Plan Mode/i.test(planModeSection))
+    assert.ok(
+      planModeSection.includes('plan_bash') &&
+        planModeSection.includes('plan_ask') &&
+        planModeSection.includes('plan_save') &&
+        planModeSection.includes('plan_propose'),
+    )
+    assert.equal(planReq.toolNames.includes('bash'), false)
+    assert.equal(planReq.toolNames.includes(PLAN_TOOL_BASH), true)
+    assert.equal(planReq.toolNames.includes(PLAN_TOOL_ASK), true)
 
     // Bare `/plan` enters planning mode without hitting model
     const bareConv = await kernel.conversations.createConversation({ title: 'Bare slash' })
@@ -389,7 +399,16 @@ test('T5: plan_propose outcome matrix (no-draft, revise, cancelled, Composer sup
 
     const askRevise = kernel.asks.listAsks('pending')[0]!
     const decisionField = askRevise.fields.find((f) => f.name === 'decision')
-    assert.ok(decisionField?.options?.some((o) => o.value === 'approve_handoff_model'))
+    assert.equal(decisionField?.type, 'choice')
+    assert.equal(decisionField?.defaultValue, 'approve_handoff')
+    assert.deepEqual(
+      decisionField?.options?.map((o) => o.value),
+      ['approve_handoff', 'approve', 'revise'],
+    )
+    const executionModelField = askRevise.fields.find((f) => f.name === 'executionModel')
+    assert.equal(executionModelField?.type, 'model')
+    assert.equal(executionModelField?.defaultValue, 'tier/coder')
+    assert.ok(askRevise.hint !== undefined)
     assert.equal(readPlanSession(kernel, cid).awaitingApproval, true)
     assert.equal(readPlanBadges(kernel).byConversation[String(cid)]?.tone, 'warn')
 
@@ -536,7 +555,7 @@ test('T5: plan_propose outcome matrix (no-draft, revise, cancelled, Composer sup
     assert.equal(readPlanSession(kernel, cid).approved?.handoffUsed, true)
     assert.equal(readPlanSession(kernel, cid).approved?.artifactName, 'plan-v2.md')
 
-    // 7) approve_handoff_model -> switches to tier/coder (faux/coder) & runs immediate handoff on coder
+    // 7) decision: 'approve_handoff' + executionModel: 'tier/coder' -> switches to tier/coder (faux/coder) & runs immediate handoff on coder
     await kernel.plugins.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: cid, mode: 'planning' })
     const modelHandoffReqs: CapturedTurnRequest[] = []
     env.faux.setResponses([
@@ -560,9 +579,10 @@ test('T5: plan_propose outcome matrix (no-draft, revise, cancelled, Composer sup
     await kernel.conversations.submitInput(cid, 'save v3 and handoff to coder')
     await waitFor(() => kernel.asks.listAsks('pending').length === 1)
     const askModelHandoff = kernel.asks.listAsks('pending')[0]!
+    assert.equal(askModelHandoff.fields.find((f) => f.name === 'executionModel')?.defaultValue, 'tier/coder')
     await kernel.asks.answerAsk(
       askModelHandoff.id,
-      { decision: 'approve_handoff_model', feedback: 'Proceed with coder tier' },
+      { decision: 'approve_handoff', executionModel: 'tier/coder', feedback: 'Proceed with coder tier' },
       askModelHandoff.expectedStateSeq,
     )
     await kernel.conversations.waitForIdle(cid)
@@ -588,7 +608,7 @@ test('T5: plan_propose outcome matrix (no-draft, revise, cancelled, Composer sup
 // T6: Disabled model (409 model_disabled) & missing tier (404 model_tier_not_found)
 // ---------------------------------------------------------------------------
 
-test('T6: approve_handoff_model with disabled model or missing tier fails honestly, stays planning, and creates no artifact', TIMEOUT, async () => {
+test('T6: approve_handoff with disabled model or missing tier fails honestly, stays planning, and creates no artifact', TIMEOUT, async () => {
   const env = await openPlanIntegrationEnv({
     models: [
       { id: 'faux-1', contextWindow: 100_000 },
@@ -624,7 +644,12 @@ test('T6: approve_handoff_model with disabled model or missing tier fails honest
     await kernel.conversations.submitInput(cid, 'propose disabled model')
     await waitFor(() => kernel.asks.listAsks('pending').length === 1)
     const ask1 = kernel.asks.listAsks('pending')[0]!
-    await kernel.asks.answerAsk(ask1.id, { decision: 'approve_handoff_model' }, ask1.expectedStateSeq)
+    assert.equal(ask1.fields.find((f) => f.name === 'executionModel')?.defaultValue, 'faux/disabled-target')
+    await kernel.asks.answerAsk(
+      ask1.id,
+      { decision: 'approve_handoff', executionModel: 'faux/disabled-target' },
+      ask1.expectedStateSeq,
+    )
     await kernel.conversations.waitForIdle(cid)
 
     assert.match(sawDisabledError, /disabled/i)
@@ -651,7 +676,11 @@ test('T6: approve_handoff_model with disabled model or missing tier fails honest
     await kernel.conversations.submitInput(cid, 'propose missing tier')
     await waitFor(() => kernel.asks.listAsks('pending').length === 1)
     const ask2 = kernel.asks.listAsks('pending')[0]!
-    await kernel.asks.answerAsk(ask2.id, { decision: 'approve_handoff_model' }, ask2.expectedStateSeq)
+    await kernel.asks.answerAsk(
+      ask2.id,
+      { decision: 'approve_handoff', executionModel: 'tier/missing' },
+      ask2.expectedStateSeq,
+    )
     await kernel.conversations.waitForIdle(cid)
 
     assert.match(sawMissingTierError, /tier|not found/i)
@@ -853,6 +882,9 @@ test('T7: pending ask abort, set_mode/toggle cancellation, disable 409 gates, re
     assert.equal(disabledReqs[0]!.toolNames.includes('edit'), true)
     assert.equal(disabledReqs[0]!.toolNames.includes('subagent'), true)
     assert.equal(disabledReqs[0]!.toolNames.includes(PLAN_TOOL_SAVE), false)
+    assert.equal(disabledReqs[0]!.toolNames.includes(PLAN_TOOL_PROPOSE), false)
+    assert.equal(disabledReqs[0]!.toolNames.includes(PLAN_TOOL_ASK), false)
+    assert.equal(disabledReqs[0]!.toolNames.includes(PLAN_TOOL_BASH), false)
     assert.equal(disabledReqs[0]!.sectionsById[PLAN_MODE_SECTION_ID], undefined)
 
     // Re-enabling restores planning mode & restricted whitelist
@@ -866,6 +898,9 @@ test('T7: pending ask abort, set_mode/toggle cancellation, disable 409 gates, re
     await k2.conversations.submitInput(cid, 'turn after re-enable')
     await k2.conversations.waitForIdle(cid)
     assert.equal(reenabledReqs[0]!.toolNames.includes(PLAN_TOOL_SAVE), true)
+    assert.equal(reenabledReqs[0]!.toolNames.includes(PLAN_TOOL_ASK), true)
+    assert.equal(reenabledReqs[0]!.toolNames.includes(PLAN_TOOL_BASH), true)
+    assert.equal(reenabledReqs[0]!.toolNames.includes('bash'), false)
     assert.equal(reenabledReqs[0]!.toolNames.includes('write'), false)
     assert.ok(typeof reenabledReqs[0]!.sectionsById[PLAN_MODE_SECTION_ID] === 'string')
   } finally {
@@ -956,6 +991,174 @@ test('T8: spawned subagent reads approved plan artifact via read_artifact and de
       () => kernel.plugins.getPublicSessionDoc(PLAN_PLUGIN_ID, PLAN_SESSION_DOC, pid),
       (err: unknown) => err instanceof HelmxError && err.status === 404,
     )
+  } finally {
+    await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// T9: plan_bash, plan_ask, update_draft before approval, and manual /clear resetConversation
+// ---------------------------------------------------------------------------
+
+test('T9: plan_bash blocks mutations & runs read-only pwd, plan_ask clarifies, update_draft edits before approval, and resetConversation clears plan state', TIMEOUT, async () => {
+  const env = await openPlanIntegrationEnv()
+  try {
+    const { kernel } = env.app
+    const conv = await kernel.conversations.createConversation({ title: 'T9 Plan Enhancements' })
+    const cid = conv.id
+    await kernel.plugins.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: cid, mode: 'planning' })
+
+    // 1) plan_bash: mutating command blocked locally; allowed pwd executes via EnvFabric local node
+    let sawBashResults = ''
+    env.faux.setResponses([
+      () =>
+        fauxAssistantMessage(
+          [
+            fauxToolCall(PLAN_TOOL_BASH, { command: 'rm -rf ./nonexistent-target' }),
+            fauxToolCall(PLAN_TOOL_BASH, { command: 'pwd' }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+      (context) => {
+        sawBashResults = JSON.stringify(context.messages)
+        return fauxAssistantMessage('Inspected workspace via plan_bash.')
+      },
+    ])
+    await kernel.conversations.submitInput(cid, 'run blocked and read-only plan_bash commands')
+    await kernel.conversations.waitForIdle(cid)
+
+    assert.match(sawBashResults, /Blocked by read-only plan mode/)
+    assert.equal(sawBashResults.includes(env.dataDir), true)
+    const detailBash = await kernel.conversations.getConversationDetail(cid, { limit: 30 })
+    const bashResults = detailBash.entries
+      .filter((e) => e.kind === 'pi.tool-result')
+      .map((e) => e.model?.[0] as { toolName?: string; isError?: boolean } | undefined)
+      .filter((m) => m?.toolName === PLAN_TOOL_BASH)
+    assert.equal(bashResults.length, 2)
+    assert.equal(bashResults[0]?.isError, true)
+    assert.equal(bashResults[1]?.isError, false)
+
+    // 2) plan_ask: creates real choice AskDoc, updates awaitingClarification & zh-CN badge, resumes cleanly
+    let sawClarificationAnswer = ''
+    env.faux.setResponses([
+      () =>
+        fauxAssistantMessage(
+          [
+            fauxToolCall(PLAN_TOOL_ASK, {
+              title: 'Storage Strategy',
+              questions: [
+                {
+                  id: 'store',
+                  question: 'Which persistence layer should the module use?',
+                  options: [
+                    { value: 'sqlite', label: 'SQLite', description: 'Zero-config embedded DB' },
+                    { value: 'kv', label: 'Plugin KV', description: 'JSON document namespace' },
+                  ],
+                },
+              ],
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+      (context) => {
+        sawClarificationAnswer = JSON.stringify(context.messages)
+        return fauxAssistantMessage('Understood, targeting SQLite.')
+      },
+    ])
+    await kernel.conversations.submitInput(cid, 'ask storage strategy')
+    await waitFor(() => kernel.asks.listAsks('pending').length === 1)
+
+    const clarifyAsk = kernel.asks.listAsks('pending')[0]!
+    assert.equal(clarifyAsk.fields[0]?.type, 'choice')
+    assert.equal(clarifyAsk.fields[1]?.name, 'notes')
+    assert.ok(clarifyAsk.hint !== undefined)
+    const clarifySession = readPlanSession(kernel, cid)
+    assert.equal(clarifySession.awaitingClarification, true)
+    assert.equal(clarifySession.awaitingApproval, false)
+    const clarifyBadge = readPlanBadges(kernel).byConversation[String(cid)]
+    assert.equal(clarifyBadge?.tone, 'warn')
+    assert.deepEqual(clarifyBadge?.footerText, { en: 'Awaiting clarification', 'zh-CN': '等待澄清回复' })
+
+    await kernel.asks.answerAsk(
+      clarifyAsk.id,
+      { store: 'sqlite', notes: 'Use WAL mode' },
+      clarifyAsk.expectedStateSeq,
+    )
+    await kernel.conversations.waitForIdle(cid)
+    assert.equal(readPlanSession(kernel, cid).awaitingClarification, undefined)
+    assert.match(sawClarificationAnswer, /sqlite \(SQLite\)/)
+    assert.match(sawClarificationAnswer, /Use WAL mode/)
+
+    // 3) plan_save v1 -> human update_draft -> v2 (with CAS 409 check) -> plan_propose archives edited v2
+    env.faux.setResponses([
+      () =>
+        fauxAssistantMessage(
+          [fauxToolCall(PLAN_TOOL_SAVE, { title: 'Initial Plan', markdown: '# v1\nInitial steps' })],
+          { stopReason: 'toolUse' },
+        ),
+      () => fauxAssistantMessage('Saved v1 draft.'),
+    ])
+    await kernel.conversations.submitInput(cid, 'save v1 draft')
+    await kernel.conversations.waitForIdle(cid)
+    assert.equal(readPlanSession(kernel, cid).draft?.version, 1)
+
+    await assertRejectsCode(
+      () =>
+        kernel.plugins.invokeAction(PLAN_PLUGIN_ID, 'update_draft', {
+          conversationId: cid,
+          title: 'Stale',
+          markdown: '# Stale',
+          expectedVersion: 0,
+        }),
+      'plan_draft_conflict',
+    )
+
+    const editedView = (await kernel.plugins.invokeAction(PLAN_PLUGIN_ID, 'update_draft', {
+      conversationId: cid,
+      title: 'Human Edited Plan',
+      markdown: '# Human Edited v2\nExecute carefully',
+      expectedVersion: 1,
+    })) as PlanSessionView
+    assert.equal(editedView.draft?.version, 2)
+
+    env.faux.setResponses([
+      () =>
+        fauxAssistantMessage(
+          [fauxToolCall(PLAN_TOOL_PROPOSE, { summary: 'Approve human-edited v2' })],
+          { stopReason: 'toolUse' },
+        ),
+      () => fauxAssistantMessage('Approved edited v2.'),
+    ])
+    await kernel.conversations.submitInput(cid, 'propose edited v2')
+    await waitFor(() => kernel.asks.listAsks('pending').length === 1)
+    const proposeEditedAsk = kernel.asks.listAsks('pending')[0]!
+    await kernel.asks.answerAsk(
+      proposeEditedAsk.id,
+      { decision: 'approve', feedback: '' },
+      proposeEditedAsk.expectedStateSeq,
+    )
+    await kernel.conversations.waitForIdle(cid)
+
+    const approvedV2 = readPlanSession(kernel, cid).approved
+    assert.equal(approvedV2?.version, 2)
+    assert.equal(approvedV2?.artifactName, 'plan-v2.md')
+    const artifactBytes = Buffer.from(await kernel.artifacts.readBuffer(approvedV2!.artifactId))
+    assert.equal(artifactBytes.toString('utf8'), '# Human Edited v2\nExecute carefully')
+
+    // 4) Manual /clear (resetConversation) emits pi.reset and resets plan state, KV, sessionDoc, and badge
+    await kernel.conversations.resetConversation(cid)
+    await waitFor(
+      () =>
+        kernel.kvStore.get(PLAN_PLUGIN_ID, PLAN_KV_NAMESPACE, String(cid)) === undefined &&
+        readPlanBadges(kernel).byConversation[String(cid)] === undefined,
+    )
+    assert.deepEqual(readPlanSession(kernel, cid), { mode: 'normal', awaitingApproval: false })
+    const resetView = (await kernel.plugins.invokeAction(PLAN_PLUGIN_ID, 'get', {
+      conversationId: cid,
+    })) as PlanSessionView
+    assert.equal(resetView.mode, 'normal')
+    assert.equal(resetView.draft, undefined)
+    assert.equal(resetView.approved, undefined)
   } finally {
     await env.close()
   }

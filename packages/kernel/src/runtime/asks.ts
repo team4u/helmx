@@ -356,6 +356,7 @@ function parseAskSpecRow(row: { id: string; specJson: string }): AskSpec {
     (parsed.conversationId as number) <= 0 ||
     parseLocalizedText(parsed.title) === undefined ||
     (parsed.description !== undefined && parseLocalizedText(parsed.description) === undefined) ||
+    (parsed.hint !== undefined && parseLocalizedText(parsed.hint) === undefined) ||
     (parsed.status !== 'pending' &&
       parsed.status !== 'answered' &&
       parsed.status !== 'cancelled' &&
@@ -369,15 +370,17 @@ function parseAskSpecRow(row: { id: string; specJson: string }): AskSpec {
         typeof f.name !== 'string' ||
         f.name.length === 0 ||
         parseLocalizedText(f.label) === undefined ||
-        (f.type !== 'text' && f.type !== 'select' && f.type !== 'confirm') ||
-        (f.type === 'select' &&
+        (f.defaultValue !== undefined && typeof f.defaultValue !== 'string') ||
+        (f.type !== 'text' && f.type !== 'select' && f.type !== 'confirm' && f.type !== 'choice' && f.type !== 'model') ||
+        ((f.type === 'select' || f.type === 'choice') &&
           (!Array.isArray(f.options) ||
             f.options.some(
               (o) =>
                 !isPlainObject(o) ||
                 typeof o.value !== 'string' ||
                 o.value.length === 0 ||
-                (o.label !== undefined && parseLocalizedText(o.label) === undefined),
+                (o.label !== undefined && parseLocalizedText(o.label) === undefined) ||
+                (o.description !== undefined && parseLocalizedText(o.description) === undefined),
             ))),
     )
   ) {
@@ -411,6 +414,9 @@ function validateAskSpec(spec: AskCreateSpec): void {
   if (spec.description !== undefined && parseLocalizedText(spec.description) === undefined) {
     throw new HelmxError('validation_error', 'AskDoc description must be a string or valid LocalizedText map')
   }
+  if (spec.hint !== undefined && parseLocalizedText(spec.hint) === undefined) {
+    throw new HelmxError('validation_error', 'AskDoc hint must be a string or valid LocalizedText map')
+  }
   if (spec.ownerPluginId !== undefined && typeof spec.ownerPluginId !== 'string') {
     throw new HelmxError('validation_error', 'AskDoc ownerPluginId must be a string')
   }
@@ -440,13 +446,22 @@ function validateAskSpec(spec: AskCreateSpec): void {
         `field '${field.name}' label must be a non-empty string or LocalizedText map`,
       )
     }
-    if (field.type !== 'text' && field.type !== 'select' && field.type !== 'confirm') {
+    if (field.defaultValue !== undefined && typeof field.defaultValue !== 'string') {
+      throw new HelmxError('validation_error', `field '${field.name}' defaultValue must be a string`)
+    }
+    if (
+      field.type !== 'text' &&
+      field.type !== 'select' &&
+      field.type !== 'confirm' &&
+      field.type !== 'choice' &&
+      field.type !== 'model'
+    ) {
       throw new HelmxError(
         'validation_error',
-        `invalid type for field '${field.name}': ${String(field.type)} (only text | select | confirm)`,
+        `invalid type for field '${field.name}': ${String(field.type)} (only text | select | confirm | choice | model)`,
       )
     }
-    if (field.type === 'select') {
+    if (field.type === 'select' || field.type === 'choice') {
       if (
         !Array.isArray(field.options) ||
         field.options.length === 0 ||
@@ -456,19 +471,42 @@ function validateAskSpec(spec: AskCreateSpec): void {
             typeof o !== 'object' ||
             typeof o.value !== 'string' ||
             o.value === '' ||
-            parseNonEmptyLocalizedText(o.label) === undefined,
+            parseNonEmptyLocalizedText(o.label) === undefined ||
+            (o.description !== undefined && parseLocalizedText(o.description) === undefined),
         )
       ) {
         throw new HelmxError(
           'validation_error',
-          `select field '${field.name}' requires non-empty options (each with a non-empty value and LocalizedText label)`,
+          `${field.type} field '${field.name}' requires non-empty options (each with a non-empty value, LocalizedText label, and optional LocalizedText description)`,
         )
       }
+      if (
+        field.defaultValue !== undefined &&
+        field.defaultValue !== '' &&
+        !field.options.some((o) => o.value === field.defaultValue)
+      ) {
+        throw new HelmxError(
+          'validation_error',
+          `defaultValue '${field.defaultValue}' for ${field.type} field '${field.name}' must match an option value`,
+        )
+      }
+    }
+    if (
+      field.type === 'confirm' &&
+      field.defaultValue !== undefined &&
+      field.defaultValue !== '' &&
+      field.defaultValue !== 'true' &&
+      field.defaultValue !== 'false'
+    ) {
+      throw new HelmxError(
+        'validation_error',
+        `defaultValue for confirm field '${field.name}' must be 'true' | 'false'`,
+      )
     }
   }
 }
 
-/** Answer boundary validation: unknown fields / non-strings / out-of-range select options / invalid confirm values. */
+/** Answer boundary validation: unknown fields / non-strings / out-of-range select or choice options / invalid confirm values. */
 function validateAnswersAgainstFields(spec: AskSpec, answers: Record<string, string>): void {
   if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) {
     throw new HelmxError('validation_error', 'answers must be an object')
@@ -489,12 +527,12 @@ function validateAnswersAgainstFields(spec: AskSpec, answers: Record<string, str
       throw new HelmxError('validation_error', `missing required field: ${field.name}`)
     }
     if (value === undefined || value === '') continue
-    if (field.type === 'select') {
+    if (field.type === 'select' || field.type === 'choice') {
       const valid = (field.options ?? []).some((o) => o.value === value)
       if (!valid) {
         throw new HelmxError(
           'validation_error',
-          `answer '${value}' for select field '${field.name}' is not among the allowed options`,
+          `answer '${value}' for ${field.type} field '${field.name}' is not among the allowed options`,
         )
       }
     }

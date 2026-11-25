@@ -648,4 +648,90 @@ describe('Ask CAS semantics preservation', { timeout: 60_000 }, () => {
       await ctx.close()
     }
   })
+
+  it('choice, model, defaultValue, and hint fields persist, validate strictly, and clean up', { timeout: 60_000 }, async () => {
+    const ctx = await openService()
+    try {
+      const pChoice = ctx.service.createAsk({
+        ...baseSpec,
+        id: 'ask-choice-valid',
+        title: { en: 'Clarify', 'zh-CN': '澄清' },
+        hint: { en: 'Hint text', 'zh-CN': '提示文案' },
+        fields: [
+          {
+            name: 'strategy',
+            label: { en: 'Strategy', 'zh-CN': '策略' },
+            type: 'choice',
+            required: true,
+            defaultValue: 'fast',
+            options: [
+              { label: { en: 'Fast', 'zh-CN': '快速' }, description: { en: 'Low latency', 'zh-CN': '低延迟' }, value: 'fast' },
+              { label: { en: 'Safe', 'zh-CN': '稳妥' }, value: 'safe' },
+            ],
+          },
+          {
+            name: 'executionModel',
+            label: { en: 'Model', 'zh-CN': '模型' },
+            type: 'model',
+            defaultValue: 'tier/strong',
+          },
+        ],
+      })
+      await new Promise((r) => setTimeout(r, 20))
+      const stored = ctx.service.getAsk('ask-choice-valid')
+      assert.ok(stored)
+      assert.deepEqual(stored.hint, { en: 'Hint text', 'zh-CN': '提示文案' })
+      assert.equal(stored.fields[0]?.type, 'choice')
+      assert.equal(stored.fields[0]?.defaultValue, 'fast')
+      assert.deepEqual(stored.fields[0]?.options?.[0]?.description, { en: 'Low latency', 'zh-CN': '低延迟' })
+      assert.equal(stored.fields[1]?.type, 'model')
+      assert.equal(stored.fields[1]?.defaultValue, 'tier/strong')
+
+      await assert.rejects(
+        () => ctx.service.answerAsk('ask-choice-valid', { strategy: 'nonexistent', executionModel: 'tier/strong' }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+      await ctx.service.answerAsk('ask-choice-valid', { strategy: 'safe', executionModel: '' })
+      const answered = await assertSettlesWithin(pChoice, 2_000, 'choice+model answer')
+      assert.equal(answered.status, 'answered')
+      assert.deepEqual(answered.answers, { strategy: 'safe', executionModel: '' })
+
+      await assert.rejects(
+        () =>
+          ctx.service.createAsk({
+            ...baseSpec,
+            id: 'ask-bad-choice-default',
+            fields: [
+              {
+                name: 'strategy',
+                label: 'Strategy',
+                type: 'choice',
+                defaultValue: 'unknown',
+                options: [{ label: 'Fast', value: 'fast' }],
+              },
+            ],
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+
+      await assert.rejects(
+        () =>
+          ctx.service.createAsk({
+            ...baseSpec,
+            id: 'ask-bad-confirm-default',
+            fields: [
+              {
+                name: 'ok',
+                label: 'Confirm',
+                type: 'confirm',
+                defaultValue: 'maybe',
+              },
+            ],
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+    } finally {
+      await ctx.close()
+    }
+  })
 })

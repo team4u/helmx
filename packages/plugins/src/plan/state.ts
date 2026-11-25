@@ -12,9 +12,11 @@ import {
 } from '@helmx/protocol'
 import {
   isPlanConversationEligible,
+  validateAndRedactPlanDraft,
   type PlanBadgeEntry,
   type PlanBadgesDoc,
   type PlanConversationRecord,
+  type PlanDraftSummary,
   type PlanMode,
   type PlanSessionView,
 } from './contracts.js'
@@ -48,6 +50,14 @@ export interface PlanStateManager {
   supersedePendingAsk(conversationId: number): Promise<void>
   setMode(conversationId: number, mode: PlanMode): Promise<PlanSessionView>
   toggleMode(conversationId: number): Promise<PlanSessionView>
+  updateDraft(
+    conversationId: number,
+    input: { title: string; markdown: string; expectedVersion?: number },
+  ): Promise<PlanSessionView>
+  markExpectedHandoffReset(conversationId: number): void
+  consumeExpectedHandoffReset(conversationId: number): boolean
+  clearExpectedHandoffReset(conversationId: number): void
+  resetConversationState(conversationId: number): Promise<void>
   cleanupDeletedConversation(conversationId: number): Promise<void>
   reconcileOrphanedAsks(): Promise<void>
   stopAll(): Promise<void>
@@ -59,10 +69,13 @@ export function createEmptyPlanSessionView(): PlanSessionView {
 
 export function toPlanSessionView(record: PlanConversationRecord | undefined): PlanSessionView {
   if (record === undefined) return createEmptyPlanSessionView()
-  const awaitingApproval = record.mode === 'planning' && record.pendingAskId !== undefined
+  const hasPending = record.mode === 'planning' && record.pendingAskId !== undefined
+  const awaitingClarification = hasPending && record.pendingAskKind === 'clarify'
+  const awaitingApproval = hasPending && !awaitingClarification
   return {
     mode: record.mode,
     awaitingApproval,
+    ...(awaitingClarification ? { awaitingClarification: true } : {}),
     ...(record.draft !== undefined ? { draft: record.draft } : {}),
     ...(record.approved !== undefined ? { approved: record.approved } : {}),
   }
@@ -72,10 +85,17 @@ export function toPlanBadgeEntry(record: PlanConversationRecord | undefined): Pl
   if (record === undefined) return undefined
   if (record.mode === 'planning') {
     if (record.pendingAskId !== undefined) {
+      if (record.pendingAskKind === 'clarify') {
+        return {
+          count: 1,
+          tone: 'warn',
+          footerText: { en: 'Awaiting clarification', 'zh-CN': '等待澄清回复' },
+        }
+      }
       return {
         count: 1,
         tone: 'warn',
-        footerText: { en: 'Awaiting plan approval', 'zh-CN': '等待规划审批' },
+        footerText: { en: 'Awaiting plan approval', 'zh-CN': '等待计划审批' },
       }
     }
     return {
@@ -83,8 +103,8 @@ export function toPlanBadgeEntry(record: PlanConversationRecord | undefined): Pl
       tone: 'accent',
       footerText:
         record.draft !== undefined
-          ? { en: `Plan draft v${record.draft.version}`, 'zh-CN': `规划草稿 v${record.draft.version}` }
-          : { en: 'Planning mode', 'zh-CN': '规划模式' },
+          ? { en: `Plan draft v${record.draft.version}`, 'zh-CN': `计划草稿 v${record.draft.version}` }
+          : { en: 'Planning mode', 'zh-CN': '计划模式' },
     }
   }
   if (record.approved !== undefined) {
@@ -145,6 +165,7 @@ export function createPlanStateManager(deps: {
   let stopping = false
   const convQueues = new Map<number, Promise<unknown>>()
   const inFlightAsks = new Map<string, PlanInFlightAsk>()
+  const expectedHandoffResets = new Map<number, number>()
   const writtenBadgeJsonByConv = new Map<string, string>()
   let badgesByConv: Record<string, PlanBadgeEntry> = {}
   let badgesHydrated = false
@@ -300,7 +321,12 @@ export function createPlanStateManager(deps: {
     const nextRecord: PlanConversationRecord = {
       conversationId,
       mode: nextMode,
-      ...(keepPendingAskId !== undefined ? { pendingAskId: keepPendingAskId } : {}),
+      ...(keepPendingAskId !== undefined
+        ? {
+            pendingAskId: keepPendingAskId,
+            ...(latest?.pendingAskKind !== undefined ? { pendingAskKind: latest.pendingAskKind } : {}),
+          }
+        : {}),
       ...(latest?.draft !== undefined ? { draft: latest.draft } : {}),
       ...(latest?.approved !== undefined ? { approved: latest.approved } : {}),
     }
@@ -330,7 +356,7 @@ export function createPlanStateManager(deps: {
       await cancelAskSafe(askId, 'superseded')
       const latest = getRecord(conversationId)
       if (latest === undefined || latest.pendingAskId !== askId) return
-      const { pendingAskId: _removed, ...rest } = latest
+      const { pendingAskId: _removed, pendingAskKind: _removedKind, ...rest } = latest
       writeRecord(conversationId, rest)
       try {
         await flushKv()
@@ -354,6 +380,96 @@ export function createPlanStateManager(deps: {
       return applyModeTransition(conversationId, currentMode === 'planning' ? 'normal' : 'planning')
     })
 
+  const updateDraft = (
+    conversationId: number,
+    input: { title: string; markdown: string; expectedVersion?: number },
+  ): Promise<PlanSessionView> =>
+    enqueueConversation(conversationId, async () => {
+      if (stopping) {
+        throw new HelmxError('plugin_stopping', 'builtin:plan is stopping', 409, { conversationId })
+      }
+      requireEligibleConversation(conversationId)
+      const current = getRecord(conversationId)
+      const mode = current?.mode ?? 'normal'
+      if (current?.draft === undefined && mode !== 'planning') {
+        throw new HelmxError(
+          'validation_error',
+          'Cannot update plan draft when no draft exists and conversation is not in planning mode',
+          400,
+          { conversationId },
+        )
+      }
+      const currentVersion = current?.draft?.version ?? 0
+      if (input.expectedVersion !== undefined) {
+        if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0) {
+          throw new HelmxError('validation_error', 'expectedVersion must be a non-negative integer', 400)
+        }
+        if (currentVersion !== input.expectedVersion) {
+          throw new HelmxError(
+            'plan_draft_conflict',
+            `Plan draft conflict: expected v${input.expectedVersion}, current is v${currentVersion}`,
+            409,
+            { expectedVersion: input.expectedVersion, currentVersion },
+          )
+        }
+      }
+      const validated = validateAndRedactPlanDraft(input.title, input.markdown, (text) => ctx.host.redact(text))
+      if (!validated.ok) {
+        throw new HelmxError('validation_error', validated.message, 400, { conversationId })
+      }
+      const draft: PlanDraftSummary = {
+        title: validated.title,
+        markdown: validated.markdown,
+        version: currentVersion + 1,
+        updatedAt: Date.now(),
+      }
+      const nextRecord: PlanConversationRecord = {
+        ...current,
+        conversationId,
+        mode,
+        draft,
+      }
+      writeRecord(conversationId, nextRecord)
+      try {
+        await flushKv()
+      } catch (err) {
+        if (current !== undefined) kv.set(kvKey(conversationId), current)
+        else kv.delete(kvKey(conversationId))
+        throw err
+      }
+      syncProjections(conversationId, nextRecord)
+      return toPlanSessionView(nextRecord)
+    })
+
+  const markExpectedHandoffReset = (conversationId: number): void => {
+    expectedHandoffResets.set(conversationId, (expectedHandoffResets.get(conversationId) ?? 0) + 1)
+  }
+
+  const consumeExpectedHandoffReset = (conversationId: number): boolean => {
+    const count = expectedHandoffResets.get(conversationId) ?? 0
+    if (count <= 0) return false
+    if (count === 1) expectedHandoffResets.delete(conversationId)
+    else expectedHandoffResets.set(conversationId, count - 1)
+    return true
+  }
+
+  const clearExpectedHandoffReset = (conversationId: number): void => {
+    expectedHandoffResets.delete(conversationId)
+  }
+
+  const resetConversationState = (conversationId: number): Promise<void> =>
+    enqueueConversation(conversationId, async () => {
+      if (stopping) return
+      const existing = getRecord(conversationId)
+      if (existing === undefined) return
+      if (existing.pendingAskId !== undefined) {
+        await cancelAskSafe(existing.pendingAskId, 'superseded')
+      }
+      deleteRecord(conversationId)
+      await flushKv()
+      syncProjections(conversationId, undefined)
+    })
+
   const getView = (conversationId: number): PlanSessionView => {
     const conv = ctx.host.getConversation(conversationId)
     if (!isPlanConversationEligible(conv)) {
@@ -364,6 +480,7 @@ export function createPlanStateManager(deps: {
 
   const cleanupDeletedConversation = (conversationId: number): Promise<void> =>
     enqueueConversation(conversationId, async () => {
+      expectedHandoffResets.delete(conversationId)
       const existing = getRecord(conversationId)
       if (existing?.pendingAskId !== undefined) {
         await cancelAskSafe(existing.pendingAskId, 'cancelled')
@@ -384,7 +501,7 @@ export function createPlanStateManager(deps: {
         const latest = getRecord(candidate.conversationId)
         if (latest === undefined || latest.pendingAskId !== candidate.pendingAskId) return
         await cancelAskSafe(latest.pendingAskId!, 'superseded')
-        const { pendingAskId: _removed, ...rest } = latest
+        const { pendingAskId: _removed, pendingAskKind: _removedKind, ...rest } = latest
         writeRecord(candidate.conversationId, rest)
         changed = true
       })
@@ -397,6 +514,7 @@ export function createPlanStateManager(deps: {
 
   const stopAll = async (): Promise<void> => {
     stopping = true
+    expectedHandoffResets.clear()
     const active = [...inFlightAsks.values()]
     for (const task of active) {
       void cancelAskSafe(task.askId, 'cancelled').catch(() => {})
@@ -449,6 +567,11 @@ export function createPlanStateManager(deps: {
     supersedePendingAsk,
     setMode,
     toggleMode,
+    updateDraft,
+    markExpectedHandoffReset,
+    consumeExpectedHandoffReset,
+    clearExpectedHandoffReset,
+    resetConversationState,
     cleanupDeletedConversation,
     reconcileOrphanedAsks,
     stopAll,

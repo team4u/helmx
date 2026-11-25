@@ -1,7 +1,8 @@
 /**
- * Read-only Plan workbench panel (`workbenchPanel` for builtin:plan).
+ * Plan workbench panel (`workbenchPanel` for builtin:plan).
  * Subscribes to `usePluginSessionDocState('plan')` and renders mode state,
- * current draft markdown, latest approved artifact metadata, and mode toggle.
+ * current draft markdown (with inline human editing & CAS conflict detection),
+ * latest approved artifact metadata, and mode toggle.
  * Exports only React components and TS types (Fast Refresh compliant).
  */
 import { useEffect, useRef, useState } from 'react'
@@ -14,12 +15,15 @@ import {
   Card,
   CopyButton,
   EmptyState,
+  Field,
   HelmxIcon,
+  Input,
   KvGrid,
   LoadingState,
   MarkdownText,
   MonoId,
   Stack,
+  Textarea,
   formatCompactTimestamp,
   resolveLocalizedText,
   usePluginAction,
@@ -31,6 +35,7 @@ import {
   PLAN_COPY,
   planActionFailedNotice,
   planModeLabel,
+  planStaleDraftWarning,
   planUpdatedLabel,
   planVersionLabel,
 } from './copy.ts'
@@ -40,6 +45,12 @@ import { PLAN_SESSION_DOC, type PlanSessionView } from './types.ts'
 const DEFAULT_NORMAL_VIEW: PlanSessionView = {
   mode: 'normal',
   awaitingApproval: false,
+}
+
+interface EditingDraftState {
+  baseVersion: number
+  title: string
+  markdown: string
 }
 
 function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number }): ReactNode {
@@ -56,6 +67,11 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
     baseDoc: unknown
     view: PlanSessionView
   } | null>(null)
+  const [editing, setEditing] = useState<EditingDraftState | null>(null)
+
+  useEffect(() => {
+    setEditing(null)
+  }, [conversationId])
 
   useEffect(() => {
     setPendingView((prev) =>
@@ -67,6 +83,12 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
     notifyError: true,
     formatError: (err) =>
       planActionFailedNotice(t(PLAN_COPY.actionToggle), err instanceof Error ? err.message : String(err), locale),
+  })
+
+  const saveDraftAction = usePluginAction({
+    notifyError: true,
+    formatError: (err) =>
+      planActionFailedNotice(t(PLAN_COPY.actionUpdateDraft), err instanceof Error ? err.message : String(err), locale),
   })
 
   const docView = parsePlanSessionView(docState.data)
@@ -93,9 +115,42 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
     )
   }
 
+  const handleSaveDraft = (): void => {
+    if (editing === null || saveDraftAction.pending) return
+    const trimmedTitle = editing.title.trim()
+    if (trimmedTitle === '' || editing.markdown.trim() === '') return
+    const baseDoc = rawDocRef.current
+    void saveDraftAction.run(
+      'update_draft',
+      {
+        conversationId,
+        title: trimmedTitle,
+        markdown: editing.markdown,
+        expectedVersion: editing.baseVersion,
+      },
+      {
+        conversationId,
+        onSuccess: (raw) => {
+          const parsed = parsePlanSessionView(raw)
+          if (parsed !== undefined && rawDocRef.current === baseDoc) {
+            setPendingView({ conversationId, baseDoc, view: parsed })
+          }
+          setEditing(null)
+        },
+      },
+    )
+  }
+
   const isPlanning = effectiveView.mode === 'planning'
-  const modeTone = effectiveView.awaitingApproval ? 'warn' : isPlanning ? 'accent' : 'neutral'
-  const modeText = planModeLabel(effectiveView.mode, effectiveView.awaitingApproval, locale)
+  const awaitingClarification = effectiveView.awaitingClarification === true && !effectiveView.awaitingApproval
+  const awaitingAny = effectiveView.awaitingApproval || awaitingClarification
+  const modeTone = awaitingAny ? 'warn' : isPlanning ? 'accent' : 'neutral'
+  const modeText = planModeLabel(
+    effectiveView.mode,
+    effectiveView.awaitingApproval,
+    locale,
+    awaitingClarification,
+  )
 
   const draft = effectiveView.draft
   const approved = effectiveView.approved
@@ -204,16 +259,111 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
               title={draft.title}
               subtitle={draftSubtitle}
               actions={
-                draft.markdown.trim() !== '' ? (
-                  <CopyButton
-                    text={draft.markdown}
-                    label={t(PLAN_COPY.copyDraft)}
-                    className="btn btn-ghost btn-xs"
-                  />
+                editing === null ? (
+                  <Stack direction="horizontal" gap="xs" align="center">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      icon="edit-3"
+                      onClick={() =>
+                        setEditing({
+                          baseVersion: draft.version,
+                          title: draft.title,
+                          markdown: draft.markdown,
+                        })
+                      }
+                    >
+                      {t(PLAN_COPY.editDraft)}
+                    </Button>
+                    {draft.markdown.trim() !== '' ? (
+                      <CopyButton
+                        text={draft.markdown}
+                        label={t(PLAN_COPY.copyDraft)}
+                        className="btn btn-ghost btn-xs"
+                      />
+                    ) : null}
+                  </Stack>
                 ) : undefined
               }
             >
-              {draft.markdown.trim() !== '' ? (
+              {editing !== null ? (
+                <form
+                  className="plan-editor"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    handleSaveDraft()
+                  }}
+                >
+                  {draft.version !== editing.baseVersion ? (
+                    <Callout tone="warn">
+                      <Stack gap="xs">
+                        <span>{planStaleDraftWarning(draft.version, locale)}</span>
+                        <div>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="secondary"
+                            icon="rotate-cw"
+                            onClick={() =>
+                              setEditing({
+                                baseVersion: draft.version,
+                                title: draft.title,
+                                markdown: draft.markdown,
+                              })
+                            }
+                          >
+                            {t(PLAN_COPY.loadLatestDraft)}
+                          </Button>
+                        </div>
+                      </Stack>
+                    </Callout>
+                  ) : null}
+                  <Field label={t(PLAN_COPY.editTitleLabel)} required>
+                    <Input
+                      value={editing.title}
+                      disabled={saveDraftAction.pending}
+                      onChange={(e) =>
+                        setEditing((prev) => (prev ? { ...prev, title: e.target.value } : null))
+                      }
+                    />
+                  </Field>
+                  <Field label={t(PLAN_COPY.editMarkdownLabel)} required>
+                    <Textarea
+                      className="plan-editor-textarea"
+                      value={editing.markdown}
+                      disabled={saveDraftAction.pending}
+                      onChange={(e) =>
+                        setEditing((prev) => (prev ? { ...prev, markdown: e.target.value } : null))
+                      }
+                    />
+                  </Field>
+                  <div className="plan-editor-actions">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      disabled={saveDraftAction.pending}
+                      onClick={() => setEditing(null)}
+                    >
+                      {t(PLAN_COPY.cancelEdit)}
+                    </Button>
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      size="xs"
+                      icon="save"
+                      pending={saveDraftAction.pending}
+                      disabled={
+                        saveDraftAction.pending ||
+                        editing.title.trim() === '' ||
+                        editing.markdown.trim() === ''
+                      }
+                    >
+                      {t(PLAN_COPY.saveDraft)}
+                    </Button>
+                  </div>
+                </form>
+              ) : draft.markdown.trim() !== '' ? (
                 <div className="plan-markdown msg-ai-body selectable">
                   <MarkdownText text={draft.markdown} />
                 </div>

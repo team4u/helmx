@@ -353,4 +353,6 @@ export const composerMessages = {
   'composer.ask.openChildDrawer': { en: 'Open child conversation #{id} drawer', 'zh-CN': '打开子会话 #{id}抽屉' },
   'composer.ask.fromSource': { en: 'From #{id}', 'zh-CN': '来自 #{id}' },
   'composer.ask.terminalSnapshot': { en: 'Terminal snapshot (last 40 lines)', 'zh-CN': '终端快照（最后 40 行）' },
+  'composer.ask.modelKeepCurrent': { en: 'Keep current model', 'zh-CN': '沿用当前模型' },
+  'composer.ask.modelResetTitle': { en: 'Clear override and keep the conversation model', 'zh-CN': '清除覆盖并沿用会话当前模型' },
 } satisfies MessageTable

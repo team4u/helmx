@@ -85,7 +85,7 @@ function makePort(handle: CatalogHandle, extra?: Partial<PluginClientHostPort>):
 // ---------------------------------------------------------------------------
 
 test('model picker symbols are in the protocol manifest and really exported (bidirectional lock)', { timeout: 60_000 }, () => {
-  for (const name of ['useHostModels', 'ModelPickerControl', 'formatModelShortName', 'resolveEffectiveThinkingLevel']) {
+  for (const name of ['useHostModels', 'ModelPickerControl', 'formatModelShortName', 'resolveEffectiveThinkingLevel', 'usePanelShortcut']) {
     assert.ok(
       (PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes(name),
       `PLUGIN_CLIENT_SHARED_EXPORTS must include ${name}`,

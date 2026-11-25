@@ -19,7 +19,7 @@ export type HelmxPanel = 'primary' | 'split'
 export const HELMX_SHORTCUT_EVENT = 'helmx:shortcut' as const
 
 export interface HelmxShortcutEventDetail {
-  action: 'toggle-model-picker' | 'toggle-process-groups' | string
+  action: 'toggle-model-picker' | 'toggle-process-groups' | 'toggle-plan-mode' | string
   panel: HelmxPanel
 }
 

@@ -356,6 +356,7 @@ describe("helmx-store-shortcuts", () => {
       dispatchWindowKey(modInit('j'))
       dispatchWindowKey({ key: 'l', ctrlKey: true })
       dispatchWindowKey({ key: 'o', ctrlKey: true })
+      dispatchWindowKey({ key: '.', ctrlKey: true })
       dispatchWindowKey({ key: 'Escape' })
       dispatchWindowKey({ key: 'Escape' })
       await settle(20)
@@ -403,9 +404,13 @@ describe("helmx-store-shortcuts", () => {
       const evO1 = dispatchWindowKey({ key: 'o', ctrlKey: true })
       assert.equal(evO1.defaultPrevented, true, 'Ctrl+O must call preventDefault')
 
+      const evDot1 = dispatchWindowKey({ key: '.', ctrlKey: true })
+      assert.equal(evDot1.defaultPrevented, true, 'Ctrl+. must call preventDefault')
+
       assert.deepEqual(fired, [
         { action: 'toggle-model-picker', panel: 'split' },
         { action: 'toggle-process-groups', panel: 'split' },
+        { action: 'toggle-plan-mode', panel: 'split' },
       ])
 
       // Switch back to primary, then to split, and verify closing the split auto-resets to primary
@@ -426,7 +431,7 @@ describe("helmx-store-shortcuts", () => {
 
       const evL2 = dispatchWindowKey({ key: 'l', ctrlKey: true })
       assert.equal(evL2.defaultPrevented, true)
-      assert.deepEqual(fired[2], { action: 'toggle-model-picker', panel: 'primary' })
+      assert.deepEqual(fired[3], { action: 'toggle-model-picker', panel: 'primary' })
 
       // With the ModelPicker popover open (carrying role="dialog" + .composer-model-popover):
       // a second Ctrl+L still dispatches toggle-model-picker to close the popover; Ctrl+O stays blocked
@@ -439,6 +444,8 @@ describe("helmx-store-shortcuts", () => {
       assert.equal(evLToggleClose.defaultPrevented, true, 'with ModelPicker open, a second Ctrl+L must still dispatch the close event')
       const evOBlockedByPopover = dispatchWindowKey({ key: 'o', ctrlKey: true })
       assert.equal(evOBlockedByPopover.defaultPrevented, false)
+      const evDotBlockedByPopover = dispatchWindowKey({ key: '.', ctrlKey: true })
+      assert.equal(evDotBlockedByPopover.defaultPrevented, false)
       assert.deepEqual(fired.slice(countBeforePopover), [{ action: 'toggle-model-picker', panel: 'primary' }])
       modelPopover.remove()
 

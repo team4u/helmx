@@ -11,6 +11,7 @@ export const PLAN_COMMAND_ID = 'toggle-plan' as const
 export const PLAN_COMMAND_SLASH = 'plan' as const
 export const PLAN_TOOL_SAVE = 'plan_save' as const
 export const PLAN_TOOL_PROPOSE = 'plan_propose' as const
+export const PLAN_TOOL_ASK = 'plan_ask' as const
 
 export type PlanMode = 'normal' | 'planning'
 
@@ -34,6 +35,7 @@ export interface PlanApprovedInfo {
 export interface PlanSessionView {
   mode: PlanMode
   awaitingApproval: boolean
+  awaitingClarification?: boolean
   draft?: PlanDraftSummary
   approved?: PlanApprovedInfo
 }
@@ -56,6 +58,8 @@ export type PlanProposeOutcome =
   | 'superseded'
   | 'error'
 
+export type PlanAskOutcome = 'answered' | 'cancelled' | 'superseded' | 'error'
+
 export type PlanToolPresentationMeta =
   | {
       kind: 'save'
@@ -72,4 +76,10 @@ export type PlanToolPresentationMeta =
       artifactId?: string
       artifactName?: string
       executionModel?: string
+    }
+  | {
+      kind: 'ask'
+      title: string
+      questionCount: number
+      outcome: PlanAskOutcome
     }

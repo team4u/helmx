@@ -881,6 +881,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'ModelPickerControl',
   'formatModelShortName',
   'resolveEffectiveThinkingLevel',
+  'usePanelShortcut',
   'PluginSlot',
   'PluginScope',
   'Switch',

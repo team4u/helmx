@@ -97,6 +97,7 @@ export {
   initialModelActiveIndex,
   resolveEffectiveThinkingLevel,
   stepActiveIndex,
+  usePanelShortcut,
 } from './ui/model-picker-model.js'
 export type { HelmxPanel, HelmxShortcutEventDetail, ModelPickerControlCopy } from './ui/model-picker-model.js'
 

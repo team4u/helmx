@@ -511,4 +511,85 @@ describe("ask-dock", () => {
       host2.remove()
     }
   })
+
+  test('choice radio group, model picker field, defaultValue prefill, and hint rendering work together cleanly', { timeout: 60_000 }, async () => {
+    installFetch()
+    const choiceAsk: AskSpec = {
+      id: 'ask-rich-fields',
+      conversationId: 1,
+      title: 'Clarify Execution',
+      hint: 'Reply directly in composer if you want to skip this form.',
+      fields: [
+        {
+          name: 'strategy',
+          label: 'Strategy',
+          type: 'choice',
+          required: true,
+          defaultValue: 'handoff',
+          options: [
+            {
+              label: 'Fresh context',
+              description: 'Clears planning noise before execution.',
+              value: 'handoff',
+            },
+            {
+              label: 'Same session',
+              description: 'Continues in the current thread.',
+              value: 'same',
+            },
+          ],
+        },
+        {
+          name: 'executionModel',
+          label: 'Execution Model',
+          type: 'model',
+          defaultValue: 'openai/gpt-5',
+        },
+        {
+          name: 'secondaryModel',
+          label: 'Fallback Model',
+          type: 'model',
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [choiceAsk] }), 1)
+
+    const radioGroup = document.querySelector('[role="radiogroup"]')
+    assert.ok(radioGroup !== null, 'choice field renders a radiogroup')
+    const radios = [...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    assert.equal(radios.length, 2)
+    assert.equal(radios[0]?.getAttribute('aria-checked'), 'true', 'defaultValue pre-selects the matching radio option')
+    assert.equal(radios[1]?.getAttribute('aria-checked'), 'false')
+    assert.match(radios[0]?.textContent ?? '', /Clears planning noise before execution\./)
+
+    const hintEl = document.querySelector('.ask-dock-hint')
+    assert.equal(hintEl?.textContent, 'Reply directly in composer if you want to skip this form.')
+
+    const modelButtons = [...document.querySelectorAll<HTMLButtonElement>('button.composer-model-button')]
+    assert.equal(modelButtons.length, 2, 'each model field renders a ModelPickerControl button')
+    assert.match(modelButtons[0]?.textContent ?? '', /gpt-5/, 'model field honors defaultValue')
+    assert.match(modelButtons[1]?.textContent ?? '', /Keep current/, 'blank model field renders Keep current placeholder')
+
+    await act(async () => {
+      radios[1]?.click()
+    })
+    assert.equal(radios[0]?.getAttribute('aria-checked'), 'false')
+    assert.equal(radios[1]?.getAttribute('aria-checked'), 'true')
+
+    const submitBtn = [...document.querySelectorAll<HTMLButtonElement>('button[type="submit"]')][0]
+    assert.ok(submitBtn && !submitBtn.disabled)
+    await act(async () => {
+      submitBtn.click()
+    })
+    assert.equal(posts.length, 1)
+    assert.equal(posts[0]?.url, '/api/asks/ask-rich-fields/answer')
+    assert.deepEqual(posts[0]?.body, {
+      answers: {
+        strategy: 'same',
+        executionModel: 'openai/gpt-5',
+      },
+    })
+  })
 })

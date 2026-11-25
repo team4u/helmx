@@ -1,6 +1,8 @@
 /**
- * Composer-dock planning tray (`COMPOSER_DOCK_SLOT`) for builtin:plan.
+ * Composer-dock plan tray (`COMPOSER_DOCK_SLOT`) for builtin:plan.
  * Returns null (0px height) in normal mode and on non-eligible conversations.
+ * Automatically opens the Plan workbench panel on desktop when awaiting approval begins,
+ * and includes an inline scrollable Markdown preview inside the expanded tray.
  * Exports only React components and TS types (Fast Refresh compliant).
  */
 import { useEffect, useRef, useState } from 'react'
@@ -11,6 +13,7 @@ import {
   Button,
   DockTray,
   DockTrayRow,
+  MarkdownText,
   formatCompactTimestamp,
   resolveLocalizedText,
   usePluginAction,
@@ -21,6 +24,8 @@ import {
 import { PLAN_COPY, planActionFailedNotice, planDraftTrayMeta, planVersionLabel } from './copy.ts'
 import { isPlanEligibleConversation, parsePlanSessionView } from './models.ts'
 import { PLAN_PANEL_ID, PLAN_SESSION_DOC, type PlanSessionView } from './types.ts'
+
+const DESKTOP_AUTO_OPEN_MIN_WIDTH = 900
 
 function PlanActiveTrayInner({ conversationId }: { conversationId: number }): ReactNode {
   const ctx = usePluginContext()
@@ -60,22 +65,58 @@ function PlanActiveTrayInner({ conversationId }: { conversationId: number }): Re
       ? pendingView.view
       : docView
 
+  const settledApprovalRef = useRef<{ conversationId: number; awaitingApproval: boolean } | null>(null)
+  useEffect(() => {
+    if (docState.status === 'loading' && docView === undefined) return
+    const currentAwaiting = effectiveView?.awaitingApproval === true
+    const prev = settledApprovalRef.current
+    if (prev === null || prev.conversationId !== conversationId) {
+      settledApprovalRef.current = { conversationId, awaitingApproval: currentAwaiting }
+      return
+    }
+    settledApprovalRef.current = { conversationId, awaitingApproval: currentAwaiting }
+    if (
+      !prev.awaitingApproval &&
+      currentAwaiting &&
+      typeof window !== 'undefined' &&
+      window.innerWidth > DESKTOP_AUTO_OPEN_MIN_WIDTH
+    ) {
+      ctx.openWorkbench(PLAN_PANEL_ID)
+    }
+  }, [conversationId, docState.status, docView, effectiveView?.awaitingApproval, ctx])
+
   if (
     effectiveView === undefined ||
     effectiveView.mode !== 'planning' ||
-    (effectiveView.draft === undefined && !effectiveView.awaitingApproval)
+    (effectiveView.draft === undefined &&
+      !effectiveView.awaitingApproval &&
+      !effectiveView.awaitingClarification)
   ) {
     return null
   }
 
-  const awaiting = effectiveView.awaitingApproval
+  const awaitingApproval = effectiveView.awaitingApproval
+  const awaitingClarification = effectiveView.awaitingClarification === true && !awaitingApproval
+  const awaitingAny = awaitingApproval || awaitingClarification
   const draft = effectiveView.draft
-  const statusTone = awaiting ? 'blocked' : 'working'
-  const statusText = t(awaiting ? PLAN_COPY.trayAwaitingStatus : PLAN_COPY.trayPlanningStatus)
+  const statusTone = awaitingAny ? 'blocked' : 'working'
+  const statusText = t(
+    awaitingApproval
+      ? PLAN_COPY.trayAwaitingStatus
+      : awaitingClarification
+        ? PLAN_COPY.trayClarifyingStatus
+        : PLAN_COPY.trayPlanningStatus,
+  )
   const draftTitle = draft?.title ?? t(PLAN_COPY.trayNoDraftHint)
   const updatedText =
     draft !== undefined && draft.updatedAt > 0 ? formatCompactTimestamp(draft.updatedAt) : undefined
-  const rowMeta = planDraftTrayMeta(draft !== undefined, awaiting, updatedText, locale)
+  const rowMeta = planDraftTrayMeta(
+    draft !== undefined,
+    awaitingApproval,
+    updatedText,
+    locale,
+    awaitingClarification,
+  )
   const toggleVerb = t(expanded ? PLAN_COPY.trayCollapse : PLAN_COPY.trayExpand)
 
   const handleExit = (): void => {
@@ -97,7 +138,7 @@ function PlanActiveTrayInner({ conversationId }: { conversationId: number }): Re
 
   const versionBadge =
     draft !== undefined ? (
-      <Badge tone={awaiting ? 'warn' : 'accent'} className="dock-tray-badge tabular-nums">
+      <Badge tone={awaitingAny ? 'warn' : 'accent'} className="dock-tray-badge tabular-nums">
         {planVersionLabel(draft.version)}
       </Badge>
     ) : undefined
@@ -135,7 +176,7 @@ function PlanActiveTrayInner({ conversationId }: { conversationId: number }): Re
   return (
     <DockTray
       classPrefix="plan-tray"
-      warn={awaiting}
+      warn={awaitingAny}
       regionLabel={t(PLAN_COPY.trayRegionAria)}
       expanded={expanded}
       onToggle={() => setExpanded((v) => !v)}
@@ -185,6 +226,11 @@ function PlanActiveTrayInner({ conversationId }: { conversationId: number }): Re
           </Button>
         }
       />
+      {draft !== undefined && draft.markdown.trim() !== '' ? (
+        <div className="plan-tray-preview msg-ai-body selectable">
+          <MarkdownText text={draft.markdown} />
+        </div>
+      ) : null}
     </DockTray>
   )
 }

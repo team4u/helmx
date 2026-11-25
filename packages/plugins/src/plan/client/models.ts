@@ -7,6 +7,7 @@ import type { ConversationSummary } from '@helmx/protocol/browser'
 import {
   PLAN_PLUGIN_ID,
   type PlanApprovedInfo,
+  type PlanAskOutcome,
   type PlanDraftSummary,
   type PlanProposeOutcome,
   type PlanSessionView,
@@ -39,6 +40,13 @@ const VALID_PROPOSE_OUTCOMES: ReadonlySet<string> = new Set<PlanProposeOutcome>(
   'approved',
   'approved_handoff',
   'revised',
+  'cancelled',
+  'superseded',
+  'error',
+])
+
+const VALID_ASK_OUTCOMES: ReadonlySet<string> = new Set<PlanAskOutcome>([
+  'answered',
   'cancelled',
   'superseded',
   'error',
@@ -109,11 +117,13 @@ export function parsePlanSessionView(raw: unknown): PlanSessionView | undefined 
   const mode = raw['mode']
   if (mode !== 'normal' && mode !== 'planning') return undefined
   const awaitingApproval = typeof raw['awaitingApproval'] === 'boolean' ? raw['awaitingApproval'] : false
+  const awaitingClarification = raw['awaitingClarification'] === true
   const draft = parsePlanDraftSummary(raw['draft'])
   const approved = parsePlanApprovedInfo(raw['approved'])
   return {
     mode,
     awaitingApproval,
+    ...(awaitingClarification ? { awaitingClarification: true } : {}),
     ...(draft !== undefined ? { draft } : {}),
     ...(approved !== undefined ? { approved } : {}),
   }
@@ -123,6 +133,26 @@ export function parsePlanToolPresentationMeta(raw: unknown): PlanToolPresentatio
   if (!isPlainObject(raw)) return undefined
   const kind = raw['kind']
   const title = nonEmptyString(raw['title'])
+
+  if (kind === 'ask') {
+    const questionCount = raw['questionCount']
+    const outcome = raw['outcome']
+    if (
+      title === undefined ||
+      !isPositiveSafeInt(questionCount) ||
+      typeof outcome !== 'string' ||
+      !VALID_ASK_OUTCOMES.has(outcome)
+    ) {
+      return undefined
+    }
+    return {
+      kind: 'ask',
+      title,
+      questionCount,
+      outcome: outcome as PlanAskOutcome,
+    }
+  }
+
   const version = raw['version']
   if (title === undefined || !isPositiveSafeInt(version)) return undefined
 
@@ -177,8 +207,10 @@ export function extractFirstErrorLine(result: unknown): string | undefined {
 
 export type PlanVisualState = 'normal' | 'planning' | 'awaiting'
 
-export function resolvePlanVisualState(view: Pick<PlanSessionView, 'mode' | 'awaitingApproval'>): PlanVisualState {
-  if (view.awaitingApproval) return 'awaiting'
+export function resolvePlanVisualState(
+  view: Pick<PlanSessionView, 'mode' | 'awaitingApproval' | 'awaitingClarification'>,
+): PlanVisualState {
+  if (view.awaitingApproval || view.awaitingClarification) return 'awaiting'
   return view.mode === 'planning' ? 'planning' : 'normal'
 }
 
@@ -205,6 +237,30 @@ export function resolveProposeOutcomeBadgeTone(outcome: PlanProposeOutcome): Bad
       return 'accent'
     case 'revised':
       return 'warn'
+    case 'cancelled':
+    case 'superseded':
+      return 'neutral'
+    case 'error':
+      return 'err'
+  }
+}
+
+export function resolveAskOutcomeLightTone(outcome: PlanAskOutcome): StatusLightTone {
+  switch (outcome) {
+    case 'answered':
+      return 'done'
+    case 'cancelled':
+    case 'superseded':
+      return 'aborted'
+    case 'error':
+      return 'failed'
+  }
+}
+
+export function resolveAskOutcomeBadgeTone(outcome: PlanAskOutcome): BadgeTone {
+  switch (outcome) {
+    case 'answered':
+      return 'ok'
     case 'cancelled':
     case 'superseded':
       return 'neutral'

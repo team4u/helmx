@@ -53,6 +53,7 @@ import { PluginHost, type PluginHostBackend } from '@helmx/kernel'
 import { pluginToolResult } from '@helmx/kernel/testing'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
+  PLAN_ASK_META_SCHEMA,
   PLAN_BADGES_DOC,
   PLAN_COMMAND_ID,
   PLAN_COMMAND_SLASH,
@@ -67,6 +68,8 @@ import {
   PLAN_SESSION_DOC,
   PLAN_SUMMARY_MAX_CHARS,
   PLAN_TITLE_MAX_CHARS,
+  PLAN_TOOL_ASK,
+  PLAN_TOOL_BASH,
   PLAN_TOOL_META_SCHEMA,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
@@ -75,6 +78,8 @@ import {
   hasPlanModeInputMeta,
   isPlanConversationEligible,
   parsePlanSlashInput,
+  validateReadOnlyShellCommand,
+  type PlanAskKind,
   type PlanBadgesDoc,
   type PlanConversationRecord,
   type PlanPluginOptions,
@@ -186,6 +191,12 @@ interface PlanHarness {
   updateCalls: Array<{ id: number; patch: ConversationPatch }>
   emittedEvents: Array<{ type: string; payload: unknown }>
   pendingAsks: Map<string, PendingAskEntry>
+  execEnvCalls: Array<Parameters<PluginHostBackend['execEnv']>[0]>
+  setExecEnvHandler(
+    fn:
+      | ((input: Parameters<PluginHostBackend['execEnv']>[0]) => ReturnType<PluginHostBackend['execEnv']>)
+      | undefined,
+  ): void
   setCreateAskHandler(fn: ((spec: AskCreateSpec) => Promise<AskResult>) | undefined): void
   setCancelAskError(err: Error | undefined): void
   setUpdateConversationHandler(
@@ -243,7 +254,11 @@ async function openPlanHarness(options: {
   const listeners = new Map<string, Set<(payload: unknown) => Promise<void> | void>>()
   const pendingAsks = new Map<string, PendingAskEntry>()
   const sessionDocMirror = new Map<number, PlanSessionView>()
+  const execEnvCalls: Array<Parameters<PluginHostBackend['execEnv']>[0]> = []
 
+  let customExecEnv:
+    | ((input: Parameters<PluginHostBackend['execEnv']>[0]) => ReturnType<PluginHostBackend['execEnv']>)
+    | undefined
   let customCreateAsk: ((spec: AskCreateSpec) => Promise<AskResult>) | undefined
   let cancelAskError: Error | undefined
   let customUpdateConversation:
@@ -256,6 +271,13 @@ async function openPlanHarness(options: {
 
   const backend: PluginHostBackend = {
     ...makeUnsupportedBackendBase(),
+    async execEnv(input) {
+      execEnvCalls.push(structuredClone(input))
+      if (customExecEnv !== undefined) {
+        return customExecEnv(input)
+      }
+      return { ok: true, exitCode: 0, timedOut: false, output: 'mocked execEnv output' }
+    },
     redact: (text) => text.replaceAll('SECRET_TOKEN', '[REDACTED]'),
     listConversations(filter) {
       let items = [...conversations.values()].map((c) => structuredClone(c))
@@ -399,6 +421,10 @@ async function openPlanHarness(options: {
     updateCalls,
     emittedEvents,
     pendingAsks,
+    execEnvCalls,
+    setExecEnvHandler: (fn) => {
+      customExecEnv = fn
+    },
     setCreateAskHandler: (fn) => {
       customCreateAsk = fn
     },
@@ -553,7 +579,7 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
 
     const toolView = ui.find((u) => u.surface === 'tool.view')?.spec as Record<string, unknown>
     assert.equal(toolView['id'], 'plan-tool-row')
-    assert.deepEqual(toolView['toolNames'], [PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE])
+    assert.deepEqual(toolView['toolNames'], [PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE, PLAN_TOOL_ASK])
     assert.equal(toolView['replaceRow'], true)
     assert.deepEqual(toolView['client'], { module: 'index.tsx', export: 'PlanToolRow' })
 
@@ -563,7 +589,7 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
 
     // Actions & tools: English-only execution copy and exposeToPrompt: false
     const actions = harness.host.listActions().filter((a) => a.pluginId === PLAN_PLUGIN_ID)
-    assert.deepEqual(actions.map((a) => a.id).sort(), ['get', 'set_mode', 'toggle'])
+    assert.deepEqual(actions.map((a) => a.id).sort(), ['get', 'set_mode', 'toggle', 'update_draft'])
     for (const action of actions) {
       assert.equal(action.visibility, 'public')
       assert.equal(action.exposeToPrompt, false)
@@ -575,7 +601,7 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
     assert.equal(getManifest?.idempotent, true)
 
     const tools = harness.host.listTools().filter((t) => t.sourcePluginId === PLAN_PLUGIN_ID)
-    assert.deepEqual(tools.map((t) => t.name).sort(), [PLAN_TOOL_PROPOSE, PLAN_TOOL_SAVE])
+    assert.deepEqual(tools.map((t) => t.name).sort(), [PLAN_TOOL_ASK, PLAN_TOOL_BASH, PLAN_TOOL_PROPOSE, PLAN_TOOL_SAVE])
     for (const tool of tools) {
       assert.equal(HAN_RE.test(tool.description), false)
       assert.equal(HAN_RE.test(JSON.stringify(tool.promptGuidelines ?? [])), false)
@@ -893,6 +919,8 @@ test('hooks: onBeforeTurn strips plan tools in normal/ineligible mode and enforc
       makeToolSpec('cleanup_worktree'),
       makeToolSpec('update_memory'),
       makeToolSpec('swarm_dispatch_worker'),
+      makeToolSpec(PLAN_TOOL_BASH),
+      makeToolSpec(PLAN_TOOL_ASK),
       makeToolSpec(PLAN_TOOL_SAVE),
       makeToolSpec(PLAN_TOOL_PROPOSE),
     ]
@@ -905,13 +933,16 @@ test('hooks: onBeforeTurn strips plan tools in normal/ineligible mode and enforc
       messages: [{ role: 'system', content: 'sys' }],
     })
 
-    // Normal mode: strips ONLY plan_save & plan_propose, injects NO sections
+    // Normal mode: strips plan-only tools (plan_bash, plan_ask, plan_save, plan_propose), injects NO sections
     const normalOutcome = await harness.host.runHook('before_turn', basePayload(harness.conversations.get(1)!))
     assert.equal(normalOutcome.action, 'transform')
     if (normalOutcome.action === 'transform') {
       const names = normalOutcome.value.tools.map((t) => t.name)
+      assert.equal(names.includes(PLAN_TOOL_BASH), false)
+      assert.equal(names.includes(PLAN_TOOL_ASK), false)
       assert.equal(names.includes(PLAN_TOOL_SAVE), false)
       assert.equal(names.includes(PLAN_TOOL_PROPOSE), false)
+      assert.equal(names.includes('bash'), true)
       assert.equal(names.includes('write'), true)
       assert.equal(names.includes('edit'), true)
       assert.equal(normalOutcome.value.sections.some((s) => s.id === PLAN_MODE_SECTION_ID), false)
@@ -936,24 +967,30 @@ test('hooks: onBeforeTurn strips plan tools in normal/ineligible mode and enforc
     const childOutcome = await harness.host.runHook('before_turn', basePayload(harness.conversations.get(2)!))
     assert.equal(childOutcome.action, 'transform')
     if (childOutcome.action === 'transform') {
+      assert.equal(childOutcome.value.tools.some((t) => t.name === PLAN_TOOL_BASH), false)
+      assert.equal(childOutcome.value.tools.some((t) => t.name === PLAN_TOOL_ASK), false)
       assert.equal(childOutcome.value.tools.some((t) => t.name === PLAN_TOOL_SAVE), false)
       assert.equal(childOutcome.value.tools.some((t) => t.name === PLAN_TOOL_PROPOSE), false)
       assert.equal(childOutcome.value.sections.some((s) => s.id === PLAN_MODE_SECTION_ID), false)
     }
 
-    // Planning mode -> strict whitelist only + plan.mode section
+    // Planning mode -> strict whitelist only + plan.mode section (note raw bash is stripped in favor of plan_bash)
     await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
     const planningOutcome = await harness.host.runHook('before_turn', basePayload(harness.conversations.get(1)!))
     assert.equal(planningOutcome.action, 'transform')
     if (planningOutcome.action === 'transform') {
       const names = planningOutcome.value.tools.map((t) => t.name)
-      assert.deepEqual(names, ['read', 'read_artifact', 'bash', 'load_skill', PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE])
+      assert.deepEqual(names, ['read', 'read_artifact', 'load_skill', PLAN_TOOL_BASH, PLAN_TOOL_ASK, PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE])
+      assert.equal(names.includes('bash'), false)
       assert.ok(names.every((n) => PLAN_MODE_TOOL_WHITELIST.has(n)))
       const section = planningOutcome.value.sections.find((s) => s.id === PLAN_MODE_SECTION_ID)
       assert.ok(section !== undefined)
       assert.match(section.text, /read-only/i)
+      assert.match(section.text, /plan_bash/)
+      assert.match(section.text, /plan_ask/)
       assert.match(section.text, /plan_save/)
       assert.match(section.text, /plan_propose/)
+      assert.match(section.text, /self-contained/i)
     }
   } finally {
     await harness.close()
@@ -1087,7 +1124,7 @@ test('plan_propose: validates summary, prevents code fences/duplicates, handles 
       'validation_error',
     )
 
-    // 1) Revise outcome -> stays planning, clears pendingAskId, omit approve_handoff_model when executionModel unset
+    // 1) Revise outcome -> stays planning, clears pendingAskId, choice + model + hint fields present
     const pRevise = harness.host.executeTool(
       PLAN_TOOL_PROPOSE,
       { summary: 'Auth plan with SECRET_TOKEN redacted' },
@@ -1110,16 +1147,28 @@ test('plan_propose: validates summary, prevents code fences/duplicates, handles 
       assert.equal(typeof map['zh-CN'], 'string', `${contextLabel}['zh-CN'] missing`)
     }
     assertBilingual(ask1.title, 'ask1.title')
+    assertBilingual(ask1.hint, 'ask1.hint')
     const decisionField1 = ask1.fields.find((f) => f.name === 'decision')
-    assert.ok(decisionField1 && decisionField1.type === 'select')
+    assert.ok(decisionField1 && decisionField1.type === 'choice')
+    assert.equal(decisionField1.defaultValue, 'approve_handoff')
+    assert.deepEqual(
+      decisionField1.options?.map((o) => o.value),
+      ['approve_handoff', 'approve', 'revise'],
+    )
     assertBilingual(decisionField1.label, 'decision.label')
     for (const opt of decisionField1.options ?? []) {
       assertBilingual(opt.label, `decision.option.${opt.value}`)
+      if (opt.description !== undefined) {
+        assertBilingual(opt.description, `decision.option.${opt.value}.description`)
+      }
     }
+    const modelField1 = ask1.fields.find((f) => f.name === 'executionModel')
+    assert.ok(modelField1 && modelField1.type === 'model')
+    assert.equal(modelField1.defaultValue, '')
+    assertBilingual(modelField1.label, 'executionModel.label')
     const feedbackField1 = ask1.fields.find((f) => f.name === 'feedback')
     assert.ok(feedbackField1)
     assertBilingual(feedbackField1.label, 'feedback.label')
-    assert.equal(decisionField1.options?.some((o) => o.value === 'approve_handoff_model'), false)
 
     // Duplicate propose while ask1 is pending must reject
     const duplicate = (await harness.host.executeTool(
@@ -1179,7 +1228,7 @@ test('plan_propose: validates summary, prevents code fences/duplicates, handles 
   }
 })
 
-test('plan_propose: approve, approve_handoff, and approve_handoff_model (success & error stay planning)', TIMEOUT, async () => {
+test('plan_propose: approve and approve_handoff with executionModel selection (success & error stay planning)', TIMEOUT, async () => {
   const harness = await openPlanHarness({
     initialConfig: { executionModel: 'tier/strong' },
     seedConversations: [makeConversationSummary({ id: 1, model: 'faux/fast', stateChangeSeq: 7 })],
@@ -1192,7 +1241,7 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
       { conversationId: 1 },
     )
 
-    // 1) approve_handoff_model failure (409 model_disabled) -> stays planning, creates NO artifact
+    // 1) approve_handoff + executionModel failure (409 model_disabled) -> stays planning, creates NO artifact
     harness.setUpdateConversationHandler(async () => {
       throw new HelmxError('model_disabled', 'Model tier/strong target is disabled', 409)
     })
@@ -1203,10 +1252,15 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
     ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 1)
     const askFail = harness.createdAsks[0]!
-    const decisionOpts = askFail.fields.find((f) => f.name === 'decision')?.options ?? []
-    assert.equal(decisionOpts.some((o) => o.value === 'approve_handoff_model'), true)
+    const modelField = askFail.fields.find((f) => f.name === 'executionModel')
+    assert.equal(modelField?.type, 'model')
+    assert.equal(modelField?.defaultValue, 'tier/strong')
 
-    harness.answerAsk(askFail.id!, { decision: 'approve_handoff_model', feedback: 'go fast' })
+    harness.answerAsk(askFail.id!, {
+      decision: 'approve_handoff',
+      executionModel: 'tier/strong',
+      feedback: 'go fast',
+    })
     const resModelFail = await pModelFail
     assert.equal(resModelFail.isError, true)
     assert.match(String(resModelFail.output), /model_disabled|disabled/i)
@@ -1222,7 +1276,7 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
       executionModel: 'tier/strong',
     })
 
-    // 2) approve_handoff_model success -> updateConversation FIRST, then artifact, then normal + flush + control.handoff
+    // 2) approve_handoff + executionModel success -> updateConversation FIRST, then artifact, then normal + flush + control.handoff
     harness.setUpdateConversationHandler(undefined)
     const callOrder: string[] = []
     const origUpdate = harness.conversations.get(1)!
@@ -1261,15 +1315,9 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
     ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 2)
     const askWithModel = harness.createdAsks[1]!
-    const handoffModelOpt = askWithModel.fields
-      .find((f) => f.name === 'decision')
-      ?.options?.find((o) => o.value === 'approve_handoff_model')
-    assert.deepEqual(handoffModelOpt?.label, {
-      en: 'Approve & handoff to tier/strong',
-      'zh-CN': '批准并切换至 tier/strong 新上下文执行',
-    })
     harness.answerAsk(askWithModel.id!, {
-      decision: 'approve_handoff_model',
+      decision: 'approve_handoff',
+      executionModel: 'tier/strong',
       feedback: 'Include tests for SECRET_TOKEN',
     })
     const resModelOk = await pModelOk
@@ -1290,7 +1338,7 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
     assert.equal(harness.readSessionDoc(1).approved?.executionModel, 'tier/strong')
     assert.equal(harness.readBadgesDoc().byConversation['1']?.tone, 'neutral')
 
-    // 3) Plain `approve` (no handoff) & `approve_handoff` (no model switch) with oversized feedback stays <= 128 KiB
+    // 3) Plain `approve` (without model switch and with model override) + `approve_handoff` (no model switch) <= 128 KiB
     harness.setUpdateConversationHandler(undefined)
     harness.setCreateArtifactHandler(undefined)
     await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
@@ -1305,12 +1353,29 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
       { conversationId: 1 },
     ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 3)
-    harness.answerAsk(harness.createdAsks[2]!.id!, { decision: 'approve' })
+    harness.answerAsk(harness.createdAsks[2]!.id!, { decision: 'approve', executionModel: '' })
     const resPlain = await pPlainApprove
     assert.equal(resPlain.control, undefined)
     assert.equal(resPlain.presentationMeta?.['outcome'], 'approved')
     assert.equal(resPlain.presentationMeta?.['artifactName'], 'plan-v2.md')
+    assert.equal(resPlain.presentationMeta?.['executionModel'], undefined)
     assert.equal(harness.readSessionDoc(1).approved?.handoffUsed, false)
+
+    // Plain `approve` WITH executionModel override switches conversation model in-place without handoff
+    await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
+    const pSameSessionWithModel = harness.host.executeTool(
+      PLAN_TOOL_PROPOSE,
+      { summary: 'Approve same session with model override' },
+      { conversationId: 1 },
+    ) as Promise<PluginToolResultEnvelope>
+    await waitFor(() => harness.createdAsks.length === 4)
+    harness.answerAsk(harness.createdAsks[3]!.id!, { decision: 'approve', executionModel: 'tier/balanced' })
+    const resSameModel = await pSameSessionWithModel
+    assert.equal(resSameModel.control, undefined)
+    assert.equal(resSameModel.presentationMeta?.['outcome'], 'approved')
+    assert.equal(resSameModel.presentationMeta?.['executionModel'], 'tier/balanced')
+    assert.equal(harness.conversations.get(1)?.model, 'tier/balanced')
+    assert.equal(harness.readSessionDoc(1).approved?.executionModel, 'tier/balanced')
 
     // approve_handoff with huge feedback still enforces <= 128 KiB handoff cap
     await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
@@ -1319,8 +1384,8 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
       { summary: 'Handoff with huge feedback' },
       { conversationId: 1 },
     ) as Promise<PluginToolResultEnvelope>
-    await waitFor(() => harness.createdAsks.length === 4)
-    harness.answerAsk(harness.createdAsks[3]!.id!, {
+    await waitFor(() => harness.createdAsks.length === 5)
+    harness.answerAsk(harness.createdAsks[4]!.id!, {
       decision: 'approve_handoff',
       feedback: 'f'.repeat(60_000),
     })
@@ -1472,6 +1537,409 @@ test('lifecycle: reconcile ignores 404/409 cancelAsk errors and force disable cl
     await harness.host.enable(PLAN_PLUGIN_ID)
     assert.equal(harness.host.list().find((p) => p.id === PLAN_PLUGIN_ID)?.enabled, true)
     assert.equal(harness.readSessionDoc(1).mode, 'planning')
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 8. read-only-shell validator & plan_bash
+// ---------------------------------------------------------------------------
+
+test('validateReadOnlyShellCommand: quote-aware allowlist vs mutating / redirect / subshell guards', TIMEOUT, () => {
+  const allowed = [
+    'pwd',
+    'ls -la',
+    'rg "rm -rf" src/',
+    "rg 'echo > file' packages/",
+    'git log --grep="commit" -n 5',
+    'git status && git diff --stat',
+    'git branch -a --list',
+    "sed -n '1,20p' packages/plugins/src/plan.ts",
+    "find . -name '*.ts'",
+    'cat README.md 2>&1',
+    'echo ok >/dev/null',
+  ]
+  for (const cmd of allowed) {
+    assert.equal(validateReadOnlyShellCommand(cmd).ok, true, `expected allowed: ${cmd}`)
+  }
+
+  const blocked = [
+    '',
+    '   ',
+    'rm -rf ./tmp',
+    'mv a b',
+    'cp a b',
+    'echo hacked > out.txt',
+    'ls >> out.txt',
+    "sed -i 's/a/b/g' file.ts",
+    'git commit -m "msg"',
+    'git checkout main',
+    'git branch feat/new',
+    'git tag v1.0.0',
+    'find . -delete',
+    'find . -exec rm {} +',
+    'pnpm install',
+    'curl -X POST https://example.com',
+    '$(rm -rf x)',
+    '`rm -rf x`',
+    '(rm -rf x)',
+  ]
+  for (const cmd of blocked) {
+    assert.equal(validateReadOnlyShellCommand(cmd).ok, false, `expected blocked: ${cmd}`)
+  }
+})
+
+test('plan_bash: guards mode/scope, blocks mutating commands locally, executes allowed reads with redaction', TIMEOUT, async () => {
+  const harness = await openPlanHarness({
+    seedConversations: [
+      makeConversationSummary({ id: 1, stateChangeSeq: 3 }),
+      makeConversationSummary({ id: 2, parentConversationId: 1 }),
+    ],
+  })
+  try {
+    // Reject in normal mode & child conversation
+    const inNormal = (await harness.host.executeTool(
+      PLAN_TOOL_BASH,
+      { command: 'pwd' },
+      { conversationId: 1 },
+    )) as PluginToolResultEnvelope
+    assert.equal(inNormal.isError, true)
+
+    const inChild = (await harness.host.executeTool(
+      PLAN_TOOL_BASH,
+      { command: 'pwd' },
+      { conversationId: 2 },
+    )) as PluginToolResultEnvelope
+    assert.equal(inChild.isError, true)
+
+    await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
+
+    // Mutating / redirect commands blocked before hitting execEnv
+    for (const badCmd of ['rm -rf /tmp/x', 'echo foo > bar.txt', 'git commit -m x']) {
+      const blockedRes = (await harness.host.executeTool(
+        PLAN_TOOL_BASH,
+        { command: badCmd },
+        { conversationId: 1 },
+      )) as PluginToolResultEnvelope
+      assert.equal(blockedRes.isError, true)
+    }
+    assert.equal(harness.execEnvCalls.length, 0)
+
+    // Allowed command invokes execEnv with capped timeout and redacts secrets in output & structuredOutput
+    harness.setExecEnvHandler(async () => ({
+      ok: true,
+      exitCode: 0,
+      timedOut: false,
+      output: 'found SECRET_TOKEN in config',
+    }))
+    const okRes = (await harness.host.executeTool(
+      PLAN_TOOL_BASH,
+      { command: 'rg "rm -rf" src/', timeoutMs: 5_000 },
+      { conversationId: 1 },
+    )) as PluginToolResultEnvelope
+    assert.equal(okRes.isError, false)
+    assert.equal(harness.execEnvCalls.length, 1)
+    assert.deepEqual(harness.execEnvCalls[0], { command: 'rg "rm -rf" src/', conversationId: 1, timeoutMs: 5_000 })
+    assert.equal(okRes.output, 'found [REDACTED] in config')
+    assert.deepEqual(okRes.structuredOutput, {
+      ok: true,
+      exitCode: 0,
+      timedOut: false,
+      output: 'found [REDACTED] in config',
+    })
+
+    // Command failure propagates isError: true
+    harness.setExecEnvHandler(async () => ({
+      ok: false,
+      exitCode: 2,
+      timedOut: false,
+      output: 'rg error',
+    }))
+    const failRes = (await harness.host.executeTool(
+      PLAN_TOOL_BASH,
+      { command: 'rg missing src/' },
+      { conversationId: 1 },
+    )) as PluginToolResultEnvelope
+    assert.equal(failRes.isError, true)
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 9. plan_ask: clarification questions, validation, awaitingClarification & badges
+// ---------------------------------------------------------------------------
+
+test('plan_ask: validates questions, projects awaitingClarification, and handles answered/superseded/cancelled', TIMEOUT, async () => {
+  const harness = await openPlanHarness({
+    seedConversations: [makeConversationSummary({ id: 1, stateChangeSeq: 9 })],
+  })
+  try {
+    const outOfMode = (await harness.host.executeTool(
+      PLAN_TOOL_ASK,
+      {
+        questions: [
+          {
+            id: 'auth',
+            question: 'Auth method?',
+            options: [
+              { value: 'jwt', label: 'JWT' },
+              { value: 'session', label: 'Session' },
+            ],
+          },
+        ],
+      },
+      { conversationId: 1 },
+    )) as PluginToolResultEnvelope
+    assert.equal(outOfMode.isError, true)
+
+    await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
+
+    const reservedId = (await harness.host.executeTool(
+      PLAN_TOOL_ASK,
+      {
+        questions: [
+          {
+            id: 'notes',
+            question: 'Reserved?',
+            options: [
+              { value: 'a', label: 'A' },
+              { value: 'b', label: 'B' },
+            ],
+          },
+        ],
+      },
+      { conversationId: 1 },
+    )) as PluginToolResultEnvelope
+    assert.equal(reservedId.isError, true)
+
+    const pAsk = harness.host.executeTool(
+      PLAN_TOOL_ASK,
+      {
+        questions: [
+          {
+            id: 'auth',
+            question: 'Auth SECRET_TOKEN storage?',
+            options: [
+              { value: 'cookie', label: 'HttpOnly cookie', description: 'Protected from XSS' },
+              { value: 'header', label: 'Bearer header' },
+            ],
+          },
+        ],
+      },
+      { conversationId: 1 },
+    ) as Promise<PluginToolResultEnvelope>
+    await waitFor(() => harness.createdAsks.length === 1)
+
+    const askSpec = harness.createdAsks[0]!
+    assert.equal(askSpec.expectedStateSeq, 9)
+    assert.deepEqual(askSpec.title, { en: 'Clarifying Questions', 'zh-CN': '需求澄清' })
+    assert.ok(askSpec.hint !== undefined && typeof askSpec.hint === 'object')
+    assert.equal(askSpec.fields[0]?.type, 'choice')
+    assert.equal(String(askSpec.fields[0]?.label).includes('SECRET_TOKEN'), false)
+    assert.equal(askSpec.fields[1]?.name, 'notes')
+
+    const sessionClarifying = harness.readSessionDoc(1)
+    assert.equal(sessionClarifying.awaitingClarification, true)
+    assert.equal(sessionClarifying.awaitingApproval, false)
+    const clarifyBadge = harness.readBadgesDoc().byConversation['1']
+    assert.equal(clarifyBadge?.tone, 'warn')
+    assert.deepEqual(clarifyBadge?.footerText, { en: 'Awaiting clarification', 'zh-CN': '等待澄清回复' })
+
+    harness.answerAsk(askSpec.id!, { auth: 'cookie', notes: 'Also rotate SECRET_TOKEN' })
+    const resAnswered = await pAsk
+    assert.equal(resAnswered.isError, undefined)
+    assert.match(String(resAnswered.output), /cookie \(HttpOnly cookie\)/)
+    assert.match(String(resAnswered.output), /\[REDACTED\]/)
+    assert.deepEqual(resAnswered.presentationMeta, {
+      kind: 'ask',
+      title: 'Clarifying Questions',
+      questionCount: 1,
+      outcome: 'answered',
+    })
+    const formattedMeta = pluginToolResult(resAnswered, (t) => t, { presentationMetaSchema: PLAN_ASK_META_SCHEMA })
+    assert.deepEqual(formattedMeta.details, resAnswered.presentationMeta)
+    assert.equal(harness.readSessionDoc(1).awaitingClarification, undefined)
+
+    // Superseded outcome
+    const pSup = harness.host.executeTool(
+      PLAN_TOOL_ASK,
+      {
+        title: 'API Version',
+        questions: [
+          {
+            id: 'ver',
+            question: 'Version?',
+            options: [
+              { value: 'v1', label: 'v1' },
+              { value: 'v2', label: 'v2' },
+            ],
+          },
+        ],
+      },
+      { conversationId: 1 },
+    ) as Promise<PluginToolResultEnvelope>
+    await waitFor(() => harness.createdAsks.length === 2)
+    harness.cancelAsk(harness.createdAsks[1]!.id!, 'superseded')
+    const resSup = await pSup
+    assert.equal((resSup.presentationMeta as { outcome?: string }).outcome, 'superseded')
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 10. update_draft action, CAS conflict, & pending approval draft refinement
+// ---------------------------------------------------------------------------
+
+test('update_draft: updates draft with redaction, enforces expectedVersion CAS 409, and reflects in pending plan_propose', TIMEOUT, async () => {
+  const harness = await openPlanHarness({
+    seedConversations: [
+      makeConversationSummary({ id: 1, stateChangeSeq: 4 }),
+      makeConversationSummary({ id: 2, ownedBy: 'helmx' }),
+    ],
+  })
+  try {
+    await assertRejectsCode(
+      () =>
+        harness.host.invokeAction(PLAN_PLUGIN_ID, 'update_draft', {
+          conversationId: 2,
+          title: 'X',
+          markdown: '# Y',
+        }),
+      'plan_unsupported_conversation',
+    )
+
+    await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
+    await harness.host.executeTool(
+      PLAN_TOOL_SAVE,
+      { title: 'Initial Title', markdown: '# v1 body' },
+      { conversationId: 1 },
+    )
+
+    // Stale expectedVersion -> 409 plan_draft_conflict
+    await assertRejectsCode(
+      () =>
+        harness.host.invokeAction(PLAN_PLUGIN_ID, 'update_draft', {
+          conversationId: 1,
+          title: 'Stale',
+          markdown: '# Stale',
+          expectedVersion: 0,
+        }),
+      'plan_draft_conflict',
+    )
+
+    // Start plan_propose pending on v1, then human edits draft -> v2 while ask is open
+    const pPropose = harness.host.executeTool(
+      PLAN_TOOL_PROPOSE,
+      { summary: 'Ready for approval' },
+      { conversationId: 1 },
+    ) as Promise<PluginToolResultEnvelope>
+    await waitFor(() => harness.createdAsks.length === 1)
+
+    const updatedView = (await harness.host.invokeAction(PLAN_PLUGIN_ID, 'update_draft', {
+      conversationId: 1,
+      title: 'Edited SECRET_TOKEN Title',
+      markdown: '# Human Edited v2\nCheck SECRET_TOKEN',
+      expectedVersion: 1,
+    })) as PlanSessionView
+    assert.equal(updatedView.draft?.version, 2)
+    assert.equal(updatedView.draft?.title, 'Edited [REDACTED] Title')
+    assert.equal(updatedView.awaitingApproval, true)
+
+    harness.answerAsk(harness.createdAsks[0]!.id!, { decision: 'approve' })
+    const res = await pPropose
+    assert.equal(res.isError, undefined)
+    assert.equal(harness.createdArtifacts[0]?.name, 'plan-v2.md')
+    assert.equal(harness.createdArtifacts[0]?.text, '# Human Edited v2\nCheck [REDACTED]')
+    assert.equal(res.presentationMeta?.['version'], 2)
+    assert.equal(res.presentationMeta?.['title'], 'Edited [REDACTED] Title')
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 11. conversation.entry (pi.reset / helmx.rewind) & turn_settled cleanup
+// ---------------------------------------------------------------------------
+
+test('conversation.entry handles manual pi.reset, handoff pi.reset exemption, turn_settled cleanup, and helmx.rewind', TIMEOUT, async () => {
+  const harness = await openPlanHarness({
+    seedConversations: [makeConversationSummary({ id: 1, stateChangeSeq: 6 })],
+  })
+  try {
+    await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
+    await harness.host.executeTool(
+      PLAN_TOOL_SAVE,
+      { title: 'Reset Test Plan', markdown: '# Step 1' },
+      { conversationId: 1 },
+    )
+
+    // Approve with handoff -> sets expectedHandoffReset, so immediate pi.reset keeps approved info
+    const pHandoff = harness.host.executeTool(
+      PLAN_TOOL_PROPOSE,
+      { summary: 'Handoff plan' },
+      { conversationId: 1 },
+    ) as Promise<PluginToolResultEnvelope>
+    await waitFor(() => harness.createdAsks.length === 1)
+    harness.answerAsk(harness.createdAsks[0]!.id!, { decision: 'approve_handoff' })
+    await pHandoff
+
+    await harness.dispatchEvent('conversation.entry', {
+      type: 'conversation.entry',
+      conversationId: 1,
+      entry: { kind: 'pi.reset' },
+    })
+    assert.equal(harness.readSessionDoc(1).approved?.title, 'Reset Test Plan')
+
+    // Next manual /clear (pi.reset) clears all plan state, sessionDoc, KV, & badges
+    await harness.dispatchEvent('conversation.entry', {
+      type: 'conversation.entry',
+      conversationId: 1,
+      entry: { kind: 'pi.reset' },
+    })
+    assert.equal(harness.kvStore.get(PLAN_PLUGIN_ID, PLAN_KV_NAMESPACE, '1'), undefined)
+    assert.deepEqual(harness.readSessionDoc(1), { mode: 'normal', awaitingApproval: false })
+    const afterClearView = (await harness.host.invokeAction(PLAN_PLUGIN_ID, 'get', {
+      conversationId: 1,
+    })) as PlanSessionView
+    assert.equal(afterClearView.mode, 'normal')
+    assert.equal(afterClearView.draft, undefined)
+    assert.equal(afterClearView.approved, undefined)
+    assert.equal(harness.readBadgesDoc().byConversation['1'], undefined)
+
+    // Re-enter planning, start pending ask, then helmx.rewind supersedes ask while preserving mode + draft
+    await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
+    await harness.host.executeTool(
+      PLAN_TOOL_SAVE,
+      { title: 'Rewind Preserved Plan', markdown: '# Keep Me' },
+      { conversationId: 1 },
+    )
+    const pRewindAsk = harness.host.executeTool(
+      PLAN_TOOL_PROPOSE,
+      { summary: 'Will rewind' },
+      { conversationId: 1 },
+    ) as Promise<PluginToolResultEnvelope>
+    await waitFor(() => harness.createdAsks.length === 2)
+
+    await harness.dispatchEvent('conversation.entry', {
+      type: 'conversation.entry',
+      conversationId: 1,
+      entry: { kind: 'helmx.rewind' },
+    })
+    const rewindRes = await pRewindAsk
+    assert.equal((rewindRes.presentationMeta as { outcome?: string }).outcome, 'superseded')
+    assert.equal(harness.readSessionDoc(1).mode, 'planning')
+    assert.equal(harness.readSessionDoc(1).draft?.title, 'Rewind Preserved Plan')
+
+    // turn_settled clears any leftover expected handoff counter
+    await harness.host.runHook('turn_settled', {
+      conversation: harness.conversations.get(1)!,
+      inputs: [],
+      outcome: 'completed',
+      settledAt: Date.now(),
+    })
   } finally {
     await harness.close()
   }

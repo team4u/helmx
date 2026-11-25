@@ -11,7 +11,7 @@ import type { ActiveModal, FocusedPanel, ResolvedTarget } from '../lib/types.js'
 export const SIDEBAR_COLLAPSED_STORAGE_KEY = 'helmx:sidebar-collapsed'
 export const ESC_ABORT_WINDOW_MS = 1500
 
-export type HelmxShortcutAction = 'toggle-model-picker' | 'toggle-process-groups'
+export type HelmxShortcutAction = 'toggle-model-picker' | 'toggle-process-groups' | 'toggle-plan-mode'
 
 export interface HelmxShortcutDetail {
   action: HelmxShortcutAction

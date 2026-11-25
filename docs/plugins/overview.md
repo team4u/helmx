@@ -20,7 +20,7 @@
 | `builtin:token-speed` | Token 速率 | 输入区状态行实时解码速率（只读展示，内核零速率计算） | 启用 | 否 |
 | `builtin:tiers` | 模型档位 | 语义模型档位（`tier/<id>`）、自定义多套模板与 `model-tiers` 受管技能 | 启用 | 否 |
 | `builtin:title` | 会话标题 | 首轮完成后后台静默整理清晰标题，提供 `/title` 命令按当前内容随时重整 | 启用 | 否 |
-| `builtin:plan` | 规划模式 | 只读调研与结构化方案草拟：严格工具白名单、`AskDoc` 审批、产物归档与可选新上下文/模型交接执行 | 启用 | 否 |
+| `builtin:plan` | 计划模式 | 只读调研、澄清问答、只读 Shell 与结构化计划草拟：严格工具白名单、`AskDoc` 审批、人工编辑、产物归档与可选新上下文/模型交接执行 | 启用 | 否 |
 
 内核包自身不注册任何插件；同一注册点还会调用 `loadExternalPlugins` 从 `<dataDir>/installed-plugins/` 目录加载外部插件（默认停用；与运行期数据目录 `<dataDir>/plugins/<id>/` 物理分离）。各插件的深度文档见文末「相关文档」。
 
