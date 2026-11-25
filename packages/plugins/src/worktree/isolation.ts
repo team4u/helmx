@@ -218,7 +218,10 @@ export class WorktreeIsolation {
       ...(input.path !== undefined ? { path: input.path } : {}),
       ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}),
     })
-    if (record !== undefined && record.hold === undefined) {
+    if (
+      record !== undefined &&
+      (record.hold === undefined || (input.callerPluginId !== undefined && record.hold.pluginId === input.callerPluginId))
+    ) {
       this.store.assertNoUnknownExecution(record.nodeId, record.path)
     }
     return this.allocator.cleanup({ ...input, signal })

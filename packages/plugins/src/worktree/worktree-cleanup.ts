@@ -27,14 +27,17 @@ function assertWorktreeNotHeld(
   store: WorktreeStore,
   redact: (text: string) => string,
   record: ManagedWorktreeRecord,
+  callerPluginId?: string,
 ): void {
+  const selfHeld = callerPluginId !== undefined && record.hold?.pluginId === callerPluginId
   const held =
-    record.status === 'active' && record.hold !== undefined
+    record.status === 'active' && record.hold !== undefined && !selfHeld
       ? record
       : store
           .records()
           .find(
             (other) =>
+              other.id !== record.id &&
               other.status === 'active' &&
               other.hold !== undefined &&
               other.nodeId === record.nodeId &&
@@ -65,10 +68,10 @@ function assertWorktreeUnoccupied(
   store: WorktreeStore,
   redact: (text: string) => string,
   record: ManagedWorktreeRecord,
+  callerPluginId?: string,
 ): void {
-  assertWorktreeNotHeld(store, redact, record)
+  assertWorktreeNotHeld(store, redact, record, callerPluginId)
   const checkWorking = deps.isConversationWorking ?? ((id) => store.isConversationWorking(id))
-  const checkPathInUse = deps.isPathInUse ?? ((n, p) => store.isPathInUse(n, p))
   if (record.conversationId !== undefined) {
     let working = false
     try {
@@ -85,7 +88,15 @@ function assertWorktreeUnoccupied(
       )
     }
   }
-  if (checkPathInUse(record.nodeId, record.path)) {
+  const inUse =
+    deps.isPathInUse !== undefined
+      ? deps.isPathInUse(record.nodeId, record.path)
+      : store.isPathInUse(
+          record.nodeId,
+          record.path,
+          callerPluginId !== undefined ? { ignoreRecordHold: { recordId: record.id, pluginId: callerPluginId } } : undefined,
+        )
+  if (inUse) {
     throw new HelmxError(
       'worktree_in_use',
       `worktree '${record.path}'（节点 ${record.nodeId}）仍被引用，拒绝清理`,
@@ -95,12 +106,16 @@ function assertWorktreeUnoccupied(
   }
 }
 
+type ProcessUsageCheckResult =
+  | { processUsage: 'verified' }
+  | { processUsage: 'unverified'; note: string }
+
 async function assertPathUnusedByProcesses(
   deps: Pick<WorktreeAllocatorDeps, 'inspectPathUsage'>,
   redact: (text: string) => string,
   record: ManagedWorktreeRecord,
-  signal?: AbortSignal,
-): Promise<void> {
+  opts: { allowUnverifiedUsage?: boolean; signal?: AbortSignal } = {},
+): Promise<ProcessUsageCheckResult> {
   const probe = deps.inspectPathUsage
   if (probe === undefined) {
     throw new HelmxError(
@@ -112,16 +127,42 @@ async function assertPathUnusedByProcesses(
   }
   let usage: NodePathUsage
   try {
-    usage = await probe(record.nodeId, record.path, signal)
+    usage = await probe(record.nodeId, record.path, opts.signal)
     for (
       let attempt = 0;
       attempt < 2 && usage.complete !== true && usage.matchedTotal === 0 && usage.processes.length === 0;
       attempt += 1
     ) {
-      await delay(25 * (attempt + 1), undefined, { signal })
-      usage = await probe(record.nodeId, record.path, signal)
+      await delay(25 * (attempt + 1), undefined, { signal: opts.signal })
+      usage = await probe(record.nodeId, record.path, opts.signal)
     }
   } catch (error) {
+    if (error instanceof HelmxError && (error.code === 'aborted' || error.code === 'validation_error')) {
+      throw error
+    }
+    if (error instanceof HelmxError && error.code === 'path_usage_not_supported') {
+      const rawPlatform = (error.details as { platform?: unknown } | undefined)?.platform
+      const platform = typeof rawPlatform === 'string' && rawPlatform.trim() !== '' ? rawPlatform : undefined
+      const nodeLabel = platform !== undefined ? `节点 ${record.nodeId}（平台 ${platform}）` : `节点 ${record.nodeId}`
+      if (opts.allowUnverifiedUsage === true) {
+        return {
+          processUsage: 'unverified',
+          note: redact(`${nodeLabel}不支持进程占用扫描，已按 allowUnverifiedUsage 显式承担风险放行`),
+        }
+      }
+      throw new HelmxError(
+        'worktree_usage_unverifiable',
+        `${nodeLabel}不支持进程占用扫描（当前仅支持 Linux /proc），无法证明 worktree '${record.path}' 为 0 占用，清理已中止。请确认无进程或终端占用该目录后，显式传 allowUnverifiedUsage: true（CLI：--allow-unverified-usage）承担风险继续清理，或在 Linux 节点执行（force 不会绕过占用检查）。`,
+        501,
+        {
+          worktreeId: record.id,
+          nodeId: record.nodeId,
+          path: redact(record.path),
+          ...(platform !== undefined ? { platform } : {}),
+          cause: redact(`${error.code}: ${error.message}`),
+        },
+      )
+    }
     const cause =
       error instanceof HelmxError
         ? `${error.code}: ${error.message}`
@@ -171,6 +212,7 @@ async function assertPathUnusedByProcesses(
       },
     )
   }
+  return { processUsage: 'verified' }
 }
 
 async function deleteBranchAgainstAuthority(
@@ -239,11 +281,12 @@ async function forceClearMissingRegistration(
       }
     }
     store.updateRecord(fresh.id, (r) => {
+      const { hold: _clearedHold, ...withoutHold } = r
       const removedAt = Date.now()
-      const base = { ...r, status: 'removed' as const, removedAt, removedReason: 'directory_missing_forced' as const }
+      const base = { ...withoutHold, status: 'removed' as const, removedAt, removedReason: 'directory_missing_forced' as const }
       if (input.deleteBranch !== true) return base
       if (!branchDeleted) return { ...base, branchDeleted: false }
-      const { branchDeleteError: _ignored, ...clean } = r
+      const { branchDeleteError: _ignored, ...clean } = withoutHold
       return { ...clean, status: 'removed' as const, removedAt, removedReason: 'directory_missing_forced' as const, branchDeleted: true }
     })
   })
@@ -326,7 +369,7 @@ export async function cleanupWorktree(
     return { removed: false, worktreeId: record.id, path: record.path, branch: record.branch, nodeId: record.nodeId, branchDeleted }
   }
 
-  assertWorktreeUnoccupied(deps, store, redact, record)
+  assertWorktreeUnoccupied(deps, store, redact, record, input.callerPluginId)
 
   if (!(await dirExistsOnNode(deps, record.nodeId, record.path))) {
     if (input.force !== true) {
@@ -341,7 +384,9 @@ export async function cleanupWorktree(
   }
 
   const authority = await resolveRepoAuthority(deps, record.nodeId, record.repoRoot, input.signal)
-  let outcome: { removed: boolean; branchDeleted: boolean } | undefined
+  let outcome:
+    | { removed: boolean; branchDeleted: boolean; processUsage?: 'verified' | 'unverified'; processUsageNote?: string }
+    | undefined
 
   await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
     const fresh = store.findById(record.id)
@@ -352,7 +397,7 @@ export async function cleanupWorktree(
       outcome = { removed: false, branchDeleted: fresh.branchDeleted === true }
       return
     }
-    assertWorktreeUnoccupied(deps, store, redact, fresh)
+    assertWorktreeUnoccupied(deps, store, redact, fresh, input.callerPluginId)
 
     const locked = await resolveRepoAuthority(deps, fresh.nodeId, fresh.repoRoot, input.signal)
     const entries = locked.entries
@@ -448,7 +493,10 @@ export async function cleanupWorktree(
       }
     }
 
-    await assertPathUnusedByProcesses(deps, redact, fresh, input.signal)
+    const usageCheck = await assertPathUnusedByProcesses(deps, redact, fresh, {
+      allowUnverifiedUsage: input.allowUnverifiedUsage,
+      signal: input.signal,
+    })
 
     const remove = await gitExec(
       deps,
@@ -478,13 +526,17 @@ export async function cleanupWorktree(
       )
       branchDeleted = del.deleted
       if (!del.deleted) {
-        store.updateRecord(fresh.id, (r) => ({
-          ...r,
-          status: 'removed' as const,
-          removedAt: Date.now(),
-          branchDeleted: false,
-          branchDeleteError: (del.failureOutput ?? '').slice(0, 2000),
-        }))
+        store.updateRecord(fresh.id, (r) => {
+          const { hold: _clearedHold, ...withoutHold } = r
+          return {
+            ...withoutHold,
+            status: 'removed' as const,
+            removedAt: Date.now(),
+            ...(usageCheck.processUsage === 'unverified' ? { unverifiedUsage: true as const } : {}),
+            branchDeleted: false,
+            branchDeleteError: (del.failureOutput ?? '').slice(0, 2000),
+          }
+        })
         throw new HelmxError(
           'branch_delete_failed',
           `worktree '${fresh.path}' 已移除，但删除分支 ${fresh.branch} 失败（登记已置 removed，可重试 cleanup 传 deleteBranch:true）：\n${(del.failureOutput ?? '').trim()}`,
@@ -494,11 +546,20 @@ export async function cleanupWorktree(
       }
     }
     store.updateRecord(fresh.id, (r) => {
-      if (input.deleteBranch !== true) return { ...r, status: 'removed' as const, removedAt: Date.now() }
-      const { branchDeleteError: _ignored, ...clean } = r
-      return { ...clean, status: 'removed' as const, removedAt: Date.now(), branchDeleted: true }
+      const { hold: _clearedHold, ...withoutHold } = r
+      const unverifiedPatch = usageCheck.processUsage === 'unverified' ? { unverifiedUsage: true as const } : {}
+      if (input.deleteBranch !== true) {
+        return { ...withoutHold, ...unverifiedPatch, status: 'removed' as const, removedAt: Date.now() }
+      }
+      const { branchDeleteError: _ignored, ...clean } = withoutHold
+      return { ...clean, ...unverifiedPatch, status: 'removed' as const, removedAt: Date.now(), branchDeleted: true }
     })
-    outcome = { removed: true, branchDeleted }
+    outcome = {
+      removed: true,
+      branchDeleted,
+      processUsage: usageCheck.processUsage,
+      ...(usageCheck.processUsage === 'unverified' ? { processUsageNote: usageCheck.note } : {}),
+    }
   })
 
   if (outcome === undefined) {
@@ -511,5 +572,7 @@ export async function cleanupWorktree(
     branch: record.branch,
     nodeId: record.nodeId,
     branchDeleted: outcome.branchDeleted,
+    ...(outcome.processUsage !== undefined ? { processUsage: outcome.processUsage } : {}),
+    ...(outcome.processUsageNote !== undefined ? { processUsageNote: outcome.processUsageNote } : {}),
   }
 }

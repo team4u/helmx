@@ -88,7 +88,11 @@ export interface SwarmTestEnv {
   close(): Promise<void>
 }
 
-export async function openSwarmEnv(root: string, gitTemplate: GitTemplate): Promise<SwarmTestEnv> {
+export async function openSwarmEnv(
+  root: string,
+  gitTemplate: GitTemplate,
+  options?: { hubPlatform?: () => string | undefined },
+): Promise<SwarmTestEnv> {
   const dataDir = join(root, 'data')
   const repoDir = join(root, 'repo')
   gitTemplate.cloneTo(repoDir)
@@ -101,6 +105,7 @@ export async function openSwarmEnv(root: string, gitTemplate: GitTemplate): Prom
     cwd: repoDir,
     model: 'faux/faux-1',
     providers: [faux.provider],
+    ...(options?.hubPlatform !== undefined ? { hubPlatform: options.hubPlatform } : {}),
   })
   if (app.kernel.plugins.get('builtin:title')?.enabled) {
     await app.kernel.plugins.setConfig('builtin:title', { autoTitle: false })

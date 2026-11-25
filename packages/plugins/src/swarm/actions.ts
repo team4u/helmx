@@ -221,23 +221,41 @@ export function registerSwarmActions(ctx: HelmxPluginContext, coordinator: Swarm
 
   registerTool({
     id: 'archive_worker', cli: ['archive-worker', 'Archive an idle swarm worker'],
-    description: 'Archive an idle swarm worker (verifying worktree merge safety and releasing worktree holds when applicable).',
+    description:
+      'Archive an idle swarm worker (verifying worktree merge safety and releasing worktree holds when applicable; pass allowUnverifiedUsage: true on nodes without process-usage scanning if you have verified no process holds the directory).',
     scope: COORDINATOR_SCOPE, inputSchema: Schemas.archiveWorkerInputSchema, outputSchema: Schemas.archiveWorkerOutputSchema,
     handler: (input: Parameters<typeof archiveWorker>[0], c) => archiveWorker(input, c.conversationId, c.signal),
-    formatOutput: (_i, r) => `Archived worker #${r.workerConversationId}.`,
+    formatOutput: (_i, r) =>
+      r.uncleanedWorktree === undefined
+        ? `Archived worker #${r.workerConversationId}.`
+        : `Archived worker #${r.workerConversationId} (hold released); directory for @${r.uncleanedWorktree.memberName} (${r.uncleanedWorktree.worktreeId}, branch=${r.uncleanedWorktree.branch}) was kept because the node does not support process occupancy scanning. After verifying no process uses it, run cleanup_worktree({ worktreeId: ${JSON.stringify(r.uncleanedWorktree.worktreeId)}, deleteBranch: true, allowUnverifiedUsage: true }) or "helmx worktrees cleanup --worktree-id ${r.uncleanedWorktree.worktreeId} --delete-branch --allow-unverified-usage".`,
     projectPresentationMeta: (_i, r) => ({ workerConversationId: r.workerConversationId, archived: r.archived }),
   })
 
   registerTool({
     id: 'close_group', cli: ['close-group', 'Close a swarm collaboration group'],
     description:
-      'Close the swarm collaboration group in full-cleanup mode or retain-branches mode (keepWorktree: true releases holds and preserves modified branches in retainedWorktrees; force: true closes past the uncommitted/unmerged guard, discarding unmerged member worktree content).',
+      'Close the swarm collaboration group in full-cleanup mode or retain-branches mode (keepWorktree: true releases holds and preserves modified branches in retainedWorktrees; force: true closes past the uncommitted/unmerged guard, discarding unmerged member worktree content; on nodes without process-usage scanning, clean worktrees release holds and remain listed in uncleanedWorktrees unless allowUnverifiedUsage: true is explicitly passed).',
     scope: COORDINATOR_SCOPE, inputSchema: Schemas.closeGroupInputSchema, outputSchema: Schemas.closeGroupOutputSchema,
     handler: (input: Parameters<typeof closeGroup>[0], c) => closeGroup(input, c.conversationId, c.signal),
-    formatOutput: (_i, r) =>
-      r.retainedWorktrees.length === 0
-        ? `Closed swarm group ${r.groupId} cleanly.`
-        : `Closed swarm group ${r.groupId}; retained ${r.retainedWorktrees.length} worktree(s) for merge: ${r.retainedWorktrees.map((w) => `@${w.memberName}:${w.branch} (+${w.commitsAhead}${w.nodeId !== 'local' ? `, node=${w.nodeId}` : ''})`).join(', ')}.`,
+    formatOutput: (_i, r) => {
+      const parts: string[] = []
+      if (r.retainedWorktrees.length === 0 && (!r.uncleanedWorktrees || r.uncleanedWorktrees.length === 0)) {
+        parts.push(`Closed swarm group ${r.groupId} cleanly.`)
+      } else if (r.retainedWorktrees.length > 0) {
+        parts.push(
+          `Closed swarm group ${r.groupId}; retained ${r.retainedWorktrees.length} worktree(s) for merge: ${r.retainedWorktrees.map((w) => `@${w.memberName}:${w.branch} (+${w.commitsAhead}${w.nodeId !== 'local' ? `, node=${w.nodeId}` : ''})`).join(', ')}.`,
+        )
+      } else {
+        parts.push(`Closed swarm group ${r.groupId} (holds released).`)
+      }
+      if (r.uncleanedWorktrees?.length) {
+        parts.push(
+          `Skipped automatic deletion of ${r.uncleanedWorktrees.length} clean worktree(s) because the target node does not support process occupancy scanning: ${r.uncleanedWorktrees.map((w) => `@${w.memberName}:${w.worktreeId} (${w.path})`).join(', ')}. After confirming no process uses them, clean up via cleanup_worktree(..., allowUnverifiedUsage: true) or "helmx worktrees cleanup --worktree-id <id> --delete-branch --allow-unverified-usage".`,
+        )
+      }
+      return parts.join(' ')
+    },
     projectPresentationMeta: (_i, r) => ({ groupId: r.groupId, retainedCount: r.retainedWorktrees.length }),
   })
 

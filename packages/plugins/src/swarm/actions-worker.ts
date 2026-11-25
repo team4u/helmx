@@ -4,7 +4,7 @@ import { assertWorkerConversationId, assertWorkerCwd, assertWorkerNodeId, recent
 import {
   ARCHIVED_WORKER_TAG, COORDINATOR_TAG, SWARM_PLUGIN_ID, WORKER_TAG,
   assertGroupId, assertMemberName, groupClosedError, setConversationTags, snapshotMemberTiming, swarmError,
-  type CollabGroupRecord, type GroupMemberState, type RetainedWorktreeInfo, type SwarmCoordinator, type WorkerAccess, type WorkerIsolation,
+  type CollabGroupRecord, type GroupMemberState, type RetainedWorktreeInfo, type SwarmCoordinator, type UncleanedWorktreeInfo, type WorkerAccess, type WorkerIsolation,
 } from './contracts.js'
 import {
   assertCoordinatorAuthority, createSwarmDispatchGuard, isWorkerBusy, resolveCoordinatorGroup,
@@ -286,7 +286,7 @@ export function createWorkerHandlers(
           reportError(`协作组 ${admission.groupId} 成员 @${memberName} (#${createdId}) 派工失败，执行回滚`, err)
           if (acquiredWorktreeId) {
             await releaseWorktreeHold(ctx, admission.groupId, memberName, acquiredWorktreeId).catch(() => {})
-            await cleanupManagedWorktree(ctx, acquiredWorktreeId, true).catch(() => {})
+            await cleanupManagedWorktree(ctx, acquiredWorktreeId, { force: true }).catch(() => {})
           }
           const freshConv = readConversationOrUndefined(createdId)
           if (freshConv) await setConversationTags(ctx, freshConv, ARCHIVED_WORKER_TAG, [WORKER_TAG, COORDINATOR_TAG]).catch(() => {})
@@ -384,10 +384,17 @@ export function createWorkerHandlers(
   }
 
   const archiveWorker = async (
-    input: { workerConversationId?: number; groupId?: string; name?: string; keepWorktree?: boolean; force?: boolean },
+    input: {
+      workerConversationId?: number
+      groupId?: string
+      name?: string
+      keepWorktree?: boolean
+      force?: boolean
+      allowUnverifiedUsage?: boolean
+    },
     conversationId: number | undefined,
     signal?: AbortSignal,
-  ): Promise<{ archived: true; workerConversationId: number }> => {
+  ): Promise<{ archived: true; workerConversationId: number; uncleanedWorktree?: UncleanedWorktreeInfo }> => {
     const { group, member, workerConversationId } = resolveTargetWorker(input, conversationId)
     assertCoordinatorAuthority(conversationId, group)
     if (member.lifecycle === 'archived') {
@@ -406,6 +413,7 @@ export function createWorkerHandlers(
       assertNotBusy(group.id, freshMember, freshSummary, `成员 @${freshMember.name} (#${workerConversationId}) 已进入运行，拒绝归档`)
 
       let retainedEntry: RetainedWorktreeInfo | undefined
+      let uncleanedWorktree: UncleanedWorktreeInfo | undefined
       const wt = await checkMemberWorktree(ctx, freshMember, signal)
       if (wt) {
         if (input.keepWorktree !== true && input.force !== true && wt.inspected.exists && (wt.isDirty || wt.unmergedCommits > 0)) {
@@ -417,7 +425,14 @@ export function createWorkerHandlers(
             { groupId: group.id, memberName: freshMember.name, worktreeId: wt.worktreeId, branch, path: wt.inspected.record.path, dirtyCount: wt.inspected.dirtyFileCount, commitsAhead: wt.unmergedCommits },
           )
         }
-        retainedEntry = await settleMemberWorktree(ctx, group.id, wt, { keepWorktree: input.keepWorktree === true, force: input.force === true, signal })
+        const settled = await settleMemberWorktree(ctx, group.id, wt, {
+          keepWorktree: input.keepWorktree === true,
+          force: input.force === true,
+          allowUnverifiedUsage: input.allowUnverifiedUsage === true,
+          signal,
+        })
+        retainedEntry = settled.retained
+        uncleanedWorktree = settled.uncleaned
       }
 
       await groups.mutateGroup(group.id, (draft) => {
@@ -447,7 +462,11 @@ export function createWorkerHandlers(
 
       if (freshSummary) await setConversationTags(ctx, freshSummary, ARCHIVED_WORKER_TAG, [WORKER_TAG])
       await groups.afterMemberArchived(group.id)
-      return { archived: true, workerConversationId }
+      return {
+        archived: true,
+        workerConversationId,
+        ...(uncleanedWorktree !== undefined ? { uncleanedWorktree } : {}),
+      }
     })
   }
 

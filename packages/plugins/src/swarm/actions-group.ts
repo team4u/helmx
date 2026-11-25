@@ -2,7 +2,7 @@ import { HelmxError, type ConversationSummary, type HelmxPluginContext } from '@
 import {
   ARCHIVED_COORDINATOR_TAG, ARCHIVED_WORKER_TAG, COORDINATOR_TAG, WORKER_TAG,
   assertGroupId, groupClosedError, groupNotFoundError, isPosIntId, setConversationTags, snapshotMemberTiming, swarmError,
-  type BoardViewDoc, type CollabGroupRecord, type RetainedWorktreeInfo, type SwarmCoordinator,
+  type BoardViewDoc, type CollabGroupRecord, type RetainedWorktreeInfo, type SwarmCoordinator, type UncleanedWorktreeInfo,
 } from './contracts.js'
 import {
   checkMemberWorktree, inspectManagedWorktree, isIgnorableWorktreeError, settleMemberWorktree, toRetainedWorktreeInfo,
@@ -223,10 +223,10 @@ export function createGroupHandlers(
   }
 
   const closeGroup = async (
-    input: { groupId?: string; keepWorktree?: boolean; abortRunning?: boolean; force?: boolean; summary?: string },
+    input: { groupId?: string; keepWorktree?: boolean; abortRunning?: boolean; force?: boolean; allowUnverifiedUsage?: boolean; summary?: string },
     conversationId: number | undefined,
     signal?: AbortSignal,
-  ): Promise<{ closed: true; groupId: string; retainedWorktrees: RetainedWorktreeInfo[] }> => {
+  ): Promise<{ closed: true; groupId: string; retainedWorktrees: RetainedWorktreeInfo[]; uncleanedWorktrees?: UncleanedWorktreeInfo[] }> => {
     const group = resolveCoordinatorGroup(groups, input.groupId, conversationId, false)
     if (group.status === 'closed') return { closed: true, groupId: group.id, retainedWorktrees: group.retainedWorktrees ?? [] }
 
@@ -286,9 +286,17 @@ export function createGroupHandlers(
             if (!isIgnorableWorktreeError(err)) throw err
           }
         }
+        const uncleanedWorktrees: UncleanedWorktreeInfo[] = []
         for (const item of worktreeChecks) {
-          const retained = await settleMemberWorktree(ctx, freshGroup.id, item, { keepWorktree, force: input.force === true, cleanupCleanWhenKeeping: true, signal })
-          if (retained) retainedById.set(retained.worktreeId, retained)
+          const settled = await settleMemberWorktree(ctx, freshGroup.id, item, {
+            keepWorktree,
+            force: input.force === true,
+            allowUnverifiedUsage: input.allowUnverifiedUsage === true,
+            cleanupCleanWhenKeeping: true,
+            signal,
+          })
+          if (settled.retained) retainedById.set(settled.retained.worktreeId, settled.retained)
+          if (settled.uncleaned) uncleanedWorktrees.push(settled.uncleaned)
         }
         const retainedWorktrees = [...retainedById.values()]
 
@@ -324,7 +332,12 @@ export function createGroupHandlers(
         if (coordConv?.tags.includes(COORDINATOR_TAG)) await setConversationTags(ctx, coordConv, ARCHIVED_COORDINATOR_TAG, [COORDINATOR_TAG])
 
         groups.syncCoordinatorProjection(freshGroup.coordinatorConversationId)
-        return { closed: true, groupId: freshGroup.id, retainedWorktrees }
+        return {
+          closed: true,
+          groupId: freshGroup.id,
+          retainedWorktrees,
+          ...(uncleanedWorktrees.length > 0 ? { uncleanedWorktrees } : {}),
+        }
       } finally {
         dispatchGuard.endClosing(group.id)
       }

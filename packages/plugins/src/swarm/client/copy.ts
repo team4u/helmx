@@ -150,6 +150,12 @@ export const JUMP_BACK_DISMISS = L('Clear jump history', '清除回跳记录')
 
 export const panelCloseFailed = (err: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   T(locale, `Close group failed: ${err}`, `结单失败：${err}`)
+export const panelCloseUncleanedNotice = (count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
+  T(
+    locale,
+    `Swarm group closed (holds released). ${count} clean worktree${count === 1 ? '' : 's'} could not be removed automatically because the node does not support process occupancy scanning; run helmx worktrees cleanup --allow-unverified-usage when confirmed idle.`,
+    `编组已结单并释放持有锁。有 ${count} 个干净工作树因目标节点不支持进程占用扫描而未自动删除；确认无占用后可通过 helmx worktrees cleanup --allow-unverified-usage 清理。`,
+  )
 export const panelRefJumpLabel = (seq: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   T(locale, `Preview referenced post #${seq}`, `预览引用记录 #${seq}`)
 export const peekRegionAria = (seq: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>

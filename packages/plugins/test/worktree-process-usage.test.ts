@@ -141,12 +141,13 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
   it('子进程 cwd 占用：cleanup 显式 worktree_process_in_use（details 含 pid/进程名/引用路径；force 不可绕过）', { timeout: 60_000 }, async () => {
     const { record, allocator } = await allocateCleanWorktree('t1')
     if (!PROCESS_SCAN_ON) {
-      // 非 Linux：扫描显式不支持 → cleanup fail-closed（不伪造占用事实）。
+      // 非 Linux：扫描显式不支持 → cleanup 拒绝（501 worktree_usage_unverifiable）。
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id, force: true }),
         (err: unknown) => {
           assert.ok(err instanceof HelmxError)
-          assert.equal(err.code, 'worktree_process_check_failed')
+          assert.equal(err.code, 'worktree_usage_unverifiable')
+          assert.equal(err.status, 501)
           return true
         },
       )
@@ -154,12 +155,12 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     }
     const holder = holdProcess(record.path)
     try {
-      for (const force of [false, true]) {
+      for (const extra of [{}, { force: true }, { force: true, allowUnverifiedUsage: true }] as const) {
         await assert.rejects(
-          () => allocator.cleanup({ worktreeId: record.id, ...(force ? { force: true } : {}) }),
+          () => allocator.cleanup({ worktreeId: record.id, ...extra }),
           (err: unknown) => {
-            assert.ok(err instanceof HelmxError, `force=${force} 应抛 HelmxError`)
-            assert.equal(err.code, 'worktree_process_in_use', `force=${force} 均不可绕过（实得 ${err.code}）`)
+            assert.ok(err instanceof HelmxError, `options=${JSON.stringify(extra)} 应抛 HelmxError`)
+            assert.equal(err.code, 'worktree_process_in_use', `options=${JSON.stringify(extra)} 均不可绕过（实得 ${err.code}）`)
             const details = err.details as { pids?: number[]; processes?: Array<{ pid: number; name?: string; source: string; path: string }>; nodeId?: string; path?: string }
             assert.ok(details!.pids!.includes(holder.pid), `details.pids 应含占用进程 ${holder.pid}（实得 ${JSON.stringify(details!.pids)}）`)
             const hit = details!.processes!.find((p) => p.pid === holder.pid)
@@ -189,7 +190,8 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
         () => allocator.cleanup({ worktreeId: record.id, force: true }),
         (err: unknown) => {
           assert.ok(err instanceof HelmxError)
-          assert.equal(err.code, 'worktree_process_check_failed')
+          assert.equal(err.code, 'worktree_usage_unverifiable')
+          assert.equal(err.status, 501)
           return true
         },
       )
@@ -255,16 +257,18 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       kv: createMemoryWorktreeKv(brokenKv),
     })
     void brokenFabric
-    await assert.rejects(
-      () => broken.cleanup({ worktreeId: record.id, force: true }),
-      (err: unknown) => {
-        assert.ok(err instanceof HelmxError)
-        assert.equal(err.code, 'worktree_process_check_failed', '无法证明 0 占用时必须显式失败（不假称干净）')
-        const details = err.details as { cause?: string }
-        assert.ok(details!.cause!.includes('node_offline'), `诊断应含真实原因（实得 ${details!.cause}）`)
-        return true
-      },
-    )
+    for (const extra of [{ force: true }, { force: true, allowUnverifiedUsage: true }] as const) {
+      await assert.rejects(
+        () => broken.cleanup({ worktreeId: record.id, ...extra }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmxError)
+          assert.equal(err.code, 'worktree_process_check_failed', '无法证明 0 占用时必须显式失败（allowUnverifiedUsage 也不绕过）')
+          const details = err.details as { cause?: string }
+          assert.ok(details!.cause!.includes('node_offline'), `诊断应含真实原因（实得 ${details!.cause}）`)
+          return true
+        },
+      )
+    }
     assert.ok(existsSync(record.path), 'fail-closed 时目录不得被移除')
     // 原 allocator（健康探测）仍可清理（全可见）或 fail-closed（可见性不完整）。
     await expectCleanupOkOrFailClosed(() => allocator.cleanup({ worktreeId: record.id }))
@@ -291,16 +295,18 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       }),
       kv: createMemoryWorktreeKv(kvStore),
     })
-    await assert.rejects(
-      () => incomplete.cleanup({ worktreeId: record.id, force: true }),
-      (err: unknown) => {
-        assert.ok(err instanceof HelmxError)
-        assert.equal(err.code, 'worktree_process_check_failed', '不完整快照绝不能当 0 占用')
-        const details = err.details as { diagnostics?: string[] }
-        assert.ok(details!.diagnostics!.some((d) => d.includes('pid 999')), 'diagnostics 应如实携带')
-        return true
-      },
-    )
+    for (const extra of [{ force: true }, { force: true, allowUnverifiedUsage: true }] as const) {
+      await assert.rejects(
+        () => incomplete.cleanup({ worktreeId: record.id, ...extra }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmxError)
+          assert.equal(err.code, 'worktree_process_check_failed', '不完整快照绝不能当 0 占用（allowUnverifiedUsage 也不绕过）')
+          const details = err.details as { diagnostics?: string[] }
+          assert.ok(details!.diagnostics!.some((d) => d.includes('pid 999')), 'diagnostics 应如实携带')
+          return true
+        },
+      )
+    }
     assert.ok(existsSync(record.path))
     // 用真实完整探测的 allocator 清理（全可见正常 / 可见性不完整 fail-closed）。
     const fabric = createEnvFabric({})
@@ -308,7 +314,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await expectCleanupOkOrFailClosed(() => healthy.cleanup({ worktreeId: record.id }))
   })
 
-  it('非 Linux Hub 平台（注入 hubPlatform=win32）：fabric 显式 not_supported → cleanup fail-closed', { timeout: 60_000 }, async () => {
+  it('非 Linux Hub 平台（注入 hubPlatform=win32）：默认 501 worktree_usage_unverifiable；allowUnverifiedUsage: true 放行并留痕', { timeout: 60_000 }, async () => {
     const repo = makeGitRepo(join(rootDir, 't6', 'repo'))
     const fabric = createEnvFabric({ hubPlatform: () => 'win32' })
     const kvStore = new MemoryKvStore()
@@ -327,7 +333,11 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       () => allocator.cleanup({ worktreeId: record.id, force: true }),
       (err: unknown) => {
         assert.ok(err instanceof HelmxError)
-        assert.equal(err.code, 'worktree_process_check_failed', '非 Linux 平台：不伪造 0 占用，显式拒绝清理')
+        assert.equal(err.code, 'worktree_usage_unverifiable', '非 Linux 平台：默认显式拒绝（501）')
+        assert.equal(err.status, 501)
+        assert.equal((err.details as { platform?: string } | undefined)?.platform, 'win32')
+        assert.ok(err.message.includes('--allow-unverified-usage'), '应给出 CLI 修复出路')
+        assert.ok(err.message.includes('allowUnverifiedUsage'), '应给出工具参数修复出路')
         return true
       },
     )
@@ -340,6 +350,47 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
         return true
       },
     )
+
+    // 显式承担风险放行：成功移除目录与分支、回写 processUsage: 'unverified' 与持久化审计标记。
+    const cleaned = await allocator.cleanup({
+      worktreeId: record.id,
+      deleteBranch: true,
+      allowUnverifiedUsage: true,
+    })
+    assert.equal(cleaned.removed, true)
+    assert.equal(cleaned.branchDeleted, true)
+    assert.equal(cleaned.processUsage, 'unverified')
+    assert.ok(typeof cleaned.processUsageNote === 'string' && cleaned.processUsageNote.includes('win32'))
+    assert.equal(existsSync(record.path), false)
+    const persisted = allocator.list().find((r) => r.id === record.id)
+    assert.equal(persisted?.status, 'removed')
+    assert.equal(persisted?.unverifiedUsage, true)
+
+    // 幂等重复清理不再设置 processUsage。
+    const again = await allocator.cleanup({ worktreeId: record.id })
+    assert.equal(again.removed, false)
+    assert.equal(again.processUsage, undefined)
+  })
+
+  it('aborted (499) 与 validation_error (400) 探测异常原样透传（不被包成 502）', { timeout: 60_000 }, async () => {
+    const repo = makeGitRepo(join(rootDir, 't6b', 'repo'))
+    for (const [code, status] of [['aborted', 499], ['validation_error', 400]] as const) {
+      const kvStore = new MemoryKvStore()
+      const seedAllocator = makeAllocator(createEnvFabric({}), kvStore)
+      const record = await seedAllocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      const allocator = new WorktreeAllocator({
+        ...localPorts(),
+        inspectPathUsage: async () => {
+          throw new HelmxError(code, `simulated ${code}`, status)
+        },
+        kv: createMemoryWorktreeKv(kvStore),
+      })
+      await assert.rejects(
+        () => allocator.cleanup({ worktreeId: record.id, force: true, allowUnverifiedUsage: true }),
+        (err: unknown) => err instanceof HelmxError && err.code === code && err.status === status,
+      )
+      assert.equal(existsSync(record.path), true)
+    }
   })
 
   it('注入瞬时拒读：最多复查两次，取得完整零占用快照后才清理', { timeout: 60_000 }, async () => {
@@ -472,7 +523,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     if (!PROCESS_SCAN_ON) {
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id, force: true }),
-        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_process_check_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_usage_unverifiable',
       )
       return
     }

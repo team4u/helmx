@@ -858,7 +858,10 @@ process.kill(process.pid, 'SIGKILL')
       assert.equal(cleaned.removed, true)
     } catch (error) {
       assert.ok(
-        error instanceof Error && 'code' in error && (error as { code?: string }).code === 'worktree_process_check_failed',
+        error instanceof Error &&
+          'code' in error &&
+          ((error as { code?: string }).code === 'worktree_process_check_failed' ||
+            (error as { code?: string }).code === 'worktree_usage_unverifiable'),
         `原生租约回收后 cleanup_worktree 只允许环境 /proc 限制，实得：${String(error)}`,
       )
     }

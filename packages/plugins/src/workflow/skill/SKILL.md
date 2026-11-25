@@ -32,7 +32,7 @@ Use `builtin:workflow` for focused task delegation and deterministic multi-agent
 
 - Give concurrent code-writing agents `isolation: "worktree"` and non-overlapping ownership. Keep the worktree until its diff has been inspected and merged or deliberately retained.
 - Use `gate` for a real verification command in the agent's effective workspace. A non-zero exit is a failed node, not a reason to fabricate a pass.
-- After merging, call `cleanup_worktree` with the actual `worktreeId` or the exact registered selector. `force` does not bypass occupancy, ownership, process-use, or uncertain execution checks.
+- After merging, call `cleanup_worktree` with the actual `worktreeId` or the exact registered selector. `force` does not bypass occupancy, ownership, process-use, or uncertain execution checks. Omit `allowUnverifiedUsage` by default; only pass `allowUnverifiedUsage: true` after receiving `worktree_usage_unverifiable` on non-Linux nodes once you confirm no sub-session or background process occupies the directory.
 
 ## Saved definitions and recovery
 

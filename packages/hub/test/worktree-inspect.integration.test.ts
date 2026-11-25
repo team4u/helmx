@@ -44,7 +44,7 @@ function worktreeOf(info: AgentExecutionInfo | undefined) {
 
 /**
  * Platform fact: process occupancy scanning currently relies on Linux `/proc`. On non-Linux hosts,
- * cleanup rejects explicitly during process checks (`worktree_process_check_failed`) — tests branch
+ * cleanup rejects explicitly during process checks (`worktree_usage_unverifiable`) — tests branch
  * by platform rather than fabricating `complete = true` or skipping silently.
  */
 const PROCESS_SCAN_ON = process.platform === 'linux'
@@ -252,7 +252,8 @@ describe('builtin:worktree managed worktree read-only inspection actions', { tim
           () => env.invoke.cleanupWorktree({ worktreeId, force: true }),
           (err: unknown) => {
             assert.ok(err instanceof HelmxError)
-            assert.equal(err.code, 'worktree_process_check_failed', 'non-Linux platforms do not support process scanning so cleanup must reject explicitly')
+            assert.equal(err.code, 'worktree_usage_unverifiable', 'non-Linux platforms do not support process scanning so cleanup must reject explicitly')
+            assert.equal(err.status, 501)
             return true
           },
         )

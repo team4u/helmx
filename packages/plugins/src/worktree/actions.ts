@@ -27,6 +27,7 @@ export const cleanupPresentationMetaSchema: JsonSchema = {
     branch: { type: 'string', maxLength: 512 },
     nodeId: { type: 'string', maxLength: 256 },
     branchDeleted: { type: 'boolean' },
+    processUsage: { type: 'string', enum: ['verified', 'unverified'] },
     removedReason: { type: 'string', enum: ['directory_missing_forced'] },
     pruneRan: { type: 'boolean' },
     pruneOk: { type: 'boolean' },
@@ -49,10 +50,14 @@ function formatCleanupSummary(result: CleanupResult): string {
           ? '；已在主仓执行 git worktree prune 收敛 git 侧残留登记'
           : `；git worktree prune 失败（git 侧残留登记可能仍在，请人工核对）：${result.prune.output ?? ''}`
         : `；${result.prune.output ?? '未执行 git worktree prune'}`
+  const unverifiedNote =
+    result.processUsage === 'unverified'
+      ? `（未校验进程占用：${result.processUsageNote ?? '目标节点不支持进程占用扫描，已显式承担风险清理'}）`
+      : ''
   if (result.removed) {
     return result.removedReason === 'directory_missing_forced'
       ? `已按目录缺失恢复路径清除受管 worktree 登记 ${result.path}（branch: ${result.branch}，节点 ${result.nodeId}${result.branchDeleted ? '，分支已删除' : '，分支保留'}${pruneNote}）`
-      : `已移除受管 worktree ${result.path}（branch: ${result.branch}，节点 ${result.nodeId}${result.branchDeleted ? '，分支已删除' : '，分支保留'}）`
+      : `已移除受管 worktree ${result.path}（branch: ${result.branch}，节点 ${result.nodeId}${result.branchDeleted ? '，分支已删除' : '，分支保留'}）${unverifiedNote}`
   }
   return `受管 worktree ${result.path} 此前已清理（幂等跳过；branch: ${result.branch}${result.branchDeleted ? '，分支已删除' : ''}）`
 }
@@ -86,6 +91,11 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
         deleteBranch: { type: 'boolean', description: 'Also delete the helmx/spawn-* branch (kept by default)' },
         mergedInto: { type: 'string', description: 'Target branch or commit already merged into; defaults to the recorded baseBranch, falling back to the main worktree HEAD' },
         force: { type: 'boolean', description: 'Force cleanup (only bypasses the uncommitted-changes/unmerged-commits protection; never bypasses occupancy/ownership/locked checks)' },
+        allowUnverifiedUsage: {
+          type: 'boolean',
+          description:
+            'Explicitly accept the risk of removing the worktree without a process-occupancy check when the target node does not support process usage scanning (e.g. win32/darwin). Only bypasses path_usage_not_supported; never skips scanning on supported nodes and never bypasses process-in-use, scan failures, holds, dirty/unmerged, or ownership checks.',
+        },
       },
       additionalProperties: false,
     },
@@ -98,6 +108,8 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
         branch: { type: 'string' },
         nodeId: { type: 'string' },
         branchDeleted: { type: 'boolean' },
+        processUsage: { type: 'string', enum: ['verified', 'unverified'] },
+        processUsageNote: { type: 'string' },
         removedReason: {
           type: 'string',
           enum: ['directory_missing_forced'],
@@ -122,7 +134,7 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
     exposeAsTool: {
       name: 'cleanup_worktree',
       description:
-        "Clean up one managed isolated Git worktree (the workspace of a sub-conversation spawned with isolation: 'worktree'). Locate it by worktreeId (node:path), conversationId, or worktree path (may attach nodeId to disambiguate); refused by default when the workspace has uncommitted changes or unmerged commits (inspect/merge first, or pass force: true; force cannot bypass occupancy/ownership/locked checks); optionally pass deleteBranch: true to also delete the helmx/spawn-* branch (branch deletion failures can be retried). Only worktrees registered by helmx are cleaned; unregistered directories are never touched.",
+        "Clean up one managed isolated Git worktree (the workspace of a sub-conversation spawned with isolation: 'worktree'). Locate it by worktreeId (node:path), conversationId, or worktree path (may attach nodeId to disambiguate); refused by default when the workspace has uncommitted changes or unmerged commits (inspect/merge first, or pass force: true; force cannot bypass occupancy/ownership/locked checks); optionally pass deleteBranch: true to also delete the helmx/spawn-* branch (branch deletion failures can be retried). Omit allowUnverifiedUsage by default; only pass allowUnverifiedUsage: true after receiving worktree_usage_unverifiable when you have confirmed no sub-session or background process occupies the directory (ask the user or leave it intact if external terminals/IDEs may still be using it). Only worktrees registered by helmx are cleaned; unregistered directories are never touched.",
       formatOutput: (_input, result) => formatCleanupSummary(result),
     },
     presentationMetaSchema: cleanupPresentationMetaSchema,
@@ -133,6 +145,7 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
       branch: boundIndexText(result.branch, 512),
       nodeId: boundIndexText(result.nodeId, 256),
       branchDeleted: result.branchDeleted,
+      ...(result.processUsage !== undefined ? { processUsage: result.processUsage } : {}),
       ...(result.removedReason !== undefined ? { removedReason: result.removedReason } : {}),
       ...(result.prune !== undefined ? { pruneRan: result.prune.ran, pruneOk: result.prune.ok } : {}),
     }),
@@ -156,6 +169,10 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
           ...(input['deleteBranch'] !== undefined ? { deleteBranch: input['deleteBranch'] === true } : {}),
           ...(input['mergedInto'] !== undefined ? { mergedInto: String(input['mergedInto']) } : {}),
           ...(input['force'] !== undefined ? { force: input['force'] === true } : {}),
+          ...(input['allowUnverifiedUsage'] !== undefined
+            ? { allowUnverifiedUsage: input['allowUnverifiedUsage'] === true }
+            : {}),
+          ...(context.callerPluginId !== undefined ? { callerPluginId: context.callerPluginId } : {}),
         },
         context.signal,
       )

@@ -60,7 +60,7 @@ function worktreeOf(info: AgentExecutionInfo | undefined) {
 
 /**
  * platform fact: process occupy scan when before only Linux /proc. non- Linux on cleanup in process check where
- * explicit reject (worktree_process_check_failed) - - test contract by platform such as fork,
+ * explicit reject (501 worktree_usage_unverifiable) - - test contract by platform such as fork,
  * do not fabricate complete=true, not silently skip (across platform explicit reject is when before behavior restrict).
  */
 const PROCESS_SCAN_ON = process.platform === 'linux'
@@ -69,7 +69,8 @@ const PROCESS_SCAN_ON = process.platform === 'linux'
 async function assertCleanupPlatformRejected(fn: () => Promise<unknown>): Promise<void> {
   await assert.rejects(fn, (err: unknown) => {
     assert.ok(err instanceof HelmxError)
-    assert.equal(err.code, 'worktree_process_check_failed', 'non- Linux platform: process occupy scan unsupported,cleanup must explicit reject')
+    assert.equal(err.code, 'worktree_usage_unverifiable', 'non- Linux platform: process occupy scan unsupported,cleanup must explicit reject')
+    assert.equal(err.status, 501)
     return true
   })
 }

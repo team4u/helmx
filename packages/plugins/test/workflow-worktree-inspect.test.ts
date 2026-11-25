@@ -302,3 +302,65 @@ test('独立子代理卡 WorktreeSlots：无登记 ID 用 path+nodeId 消歧；�
     ui.unmount()
   }
 })
+
+test('WorktreeCleanupSlot：遇 worktree_usage_unverifiable 时弹出 ConfirmDialog；取消不重试，确认带 allowUnverifiedUsage 重试并通知', { timeout: 60_000 }, async () => {
+  const parent = makeConvSummary(1)
+  const WorktreeCleanupSlot = worktreeSlots.WorktreeCleanupSlot!
+  let allowNextCleanup = false
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [parent],
+    runsByConversation: { 1: [] },
+    worktreeSlots,
+    locale: 'en',
+    onAction: (pluginId, actionId, input) => {
+      if (pluginId === 'builtin:worktree' && actionId === 'cleanup_worktree') {
+        const rec = input as { allowUnverifiedUsage?: boolean }
+        if (!allowNextCleanup && rec.allowUnverifiedUsage !== true) {
+          allowNextCleanup = true
+          const err = new Error('Node local (win32) does not support process usage scanning') as Error & { code?: string }
+          err.code = 'worktree_usage_unverifiable'
+          throw err
+        }
+        return { removed: true, worktreeId: 'local:/repo/.helmx-worktrees/wt-1', path: '/repo/.helmx-worktrees/wt-1', branch: 'helmx/spawn-1', nodeId: 'local', branchDeleted: false, processUsage: 'unverified' }
+      }
+      return undefined
+    },
+  })
+  const ui = h.mountNode(
+    e(WorktreeCleanupSlot, {
+      worktree: { id: 'local:/repo/.helmx-worktrees/wt-1', path: '/repo/.helmx-worktrees/wt-1', branch: 'helmx/spawn-1' },
+      nodeId: 'local',
+    }),
+  )
+  try {
+    await act(async () => { buttonByText(ui.container, 'Clean up worktree').click() })
+    assert.equal(h.log.actions.filter((a) => a.actionId === 'cleanup_worktree').length, 1)
+    assert.equal(h.log.notices.length, 0, 'worktree_usage_unverifiable should open confirm dialog instead of error toast')
+
+    const dialog = document.body.querySelector('[role="alertdialog"]')
+    assert.ok(dialog !== null, 'ConfirmDialog must open on worktree_usage_unverifiable')
+    assert.match(dialog.textContent ?? '', /Clean up without process occupancy check\?/)
+
+    // Cancel does not retry
+    await act(async () => { buttonByText(dialog, 'Cancel').click() })
+    assert.equal(h.log.actions.filter((a) => a.actionId === 'cleanup_worktree').length, 1)
+    assert.ok(document.body.querySelector('[role="alertdialog"]') === null)
+
+    // Trigger again and confirm retry
+    allowNextCleanup = false
+    await act(async () => { buttonByText(ui.container, 'Clean up worktree').click() })
+    const dialog2 = document.body.querySelector('[role="alertdialog"]')
+    assert.ok(dialog2 !== null)
+    await act(async () => { buttonByText(dialog2, 'Clean up anyway').click() })
+    const cleanupCalls = h.log.actions.filter((a) => a.actionId === 'cleanup_worktree')
+    assert.equal(cleanupCalls.length, 3)
+    assert.deepEqual(cleanupCalls[2]!.input, {
+      worktreeId: 'local:/repo/.helmx-worktrees/wt-1',
+      allowUnverifiedUsage: true,
+    })
+    assert.ok(h.log.notices.some((n) => n.message.includes('process occupancy unverified')))
+  } finally {
+    ui.unmount()
+  }
+})

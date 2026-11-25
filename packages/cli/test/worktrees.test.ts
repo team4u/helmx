@@ -43,6 +43,7 @@ const WT_MANIFESTS = [
         deleteBranch: { type: 'boolean', description: 'Also delete helmx/spawn-* branch (kept by default)' },
         mergedInto: { type: 'string', description: 'Target ref for merge check (defaults to registered baseBranch, falling back to main worktree HEAD)' },
         force: { type: 'boolean', description: 'Force cleanup even with uncommitted changes (rejected by default)' },
+        allowUnverifiedUsage: { type: 'boolean', description: 'Explicitly clean up without process-usage scan on unsupported platforms' },
       },
       additionalProperties: false,
     },
@@ -228,4 +229,33 @@ test('passes through server error messages (dirty worktree 409) and lists dynami
   assert.match(cmdHelp.out, /--delete-branch/)
   assert.match(cmdHelp.out, /--merged-into/)
   assert.match(cmdHelp.out, /--node-id/)
+  assert.match(cmdHelp.out, /--allow-unverified-usage/)
+})
+
+test('--allow-unverified-usage passes allowUnverifiedUsage and surfaces 501 worktree_usage_unverifiable', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-worktrees-cli-')
+  const okHub = await startWorktreesHub(t, () => ({
+    body: { ...CLEANUP_OK, branchDeleted: true, processUsage: 'unverified' },
+  }))
+  const okEnv = makeCliEnv(okHub.url, dir)
+  const r = await runCliCaptured(
+    ['worktrees', 'cleanup', '--worktree-id', 'local:/wt/a', '--delete-branch', '--allow-unverified-usage', '--json'],
+    okEnv,
+  )
+  assert.equal(r.code, 0, r.err)
+  assert.deepEqual(inputOf(okHub.hits.at(-1)), { worktreeId: 'local:/wt/a', deleteBranch: true, allowUnverifiedUsage: true })
+  assert.equal((JSON.parse(r.out) as { processUsage?: string }).processUsage, 'unverified')
+
+  const errHub = await startWorktreesHub(t, () => ({
+    status: 501,
+    body: {
+      error: {
+        code: 'worktree_usage_unverifiable',
+        message: '节点 local（平台 win32）不支持进程占用扫描',
+      },
+    },
+  }))
+  const failed = await runCliCaptured(['worktrees', 'cleanup', '--worktree-id', 'local:/wt/a', '--json'], makeCliEnv(errHub.url, dir))
+  assert.equal(failed.code, 1)
+  assert.equal(parseCliError(failed).code, 'worktree_usage_unverifiable')
 })

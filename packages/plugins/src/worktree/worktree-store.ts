@@ -466,7 +466,11 @@ export class WorktreeStore {
     return undefined
   }
 
-  isPathInUse(nodeId: string, path: string): boolean {
+  isPathInUse(
+    nodeId: string,
+    path: string,
+    options?: { ignoreRecordHold?: { recordId: string; pluginId: string } },
+  ): boolean {
     for (const info of this.host?.listActiveSpawnExecutions() ?? []) {
       if (info.nodeId !== nodeId) continue
       if (info.effectiveCwd !== undefined && this.containsPath(path, info.effectiveCwd)) return true
@@ -477,8 +481,14 @@ export class WorktreeStore {
       const leasePath = this.leasePathOf(lease, nodeId)
       if (leasePath !== undefined && this.containsPath(path, leasePath)) return true
     }
+    const ignore = options?.ignoreRecordHold
     return this.records().some(
-      (r) => r.status === 'active' && r.hold !== undefined && r.nodeId === nodeId && (this.containsPath(path, r.path) || this.containsPath(r.path, path)),
+      (r) =>
+        r.status === 'active' &&
+        r.hold !== undefined &&
+        !(ignore !== undefined && r.id === ignore.recordId && r.hold.pluginId === ignore.pluginId) &&
+        r.nodeId === nodeId &&
+        (this.containsPath(path, r.path) || this.containsPath(r.path, path)),
     )
   }
 

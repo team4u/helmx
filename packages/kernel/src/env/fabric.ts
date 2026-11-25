@@ -29,6 +29,7 @@ import { createLocalExecutionEnv } from './local-host-env.js'
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import {
   HelmxError,
+  targetPathShape,
   type NodeEnvRpcFunctions,
   type NodePathUsage,
   type NodePathUsageProcess,
@@ -422,13 +423,27 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       // Check actual node platform first so valid Windows drive paths are not misreported as invalid POSIX paths;
       // unsupported platforms reject explicitly, while offline remote nodes still report unreachable first.
       const rpc = nodeId === 'local' ? undefined : await requireRpc(nodeId, signal)
-      const platform = nodeId === 'local' ? hubPlatform() : registry.get(nodeId)?.platform
+      const rawPlatform = nodeId === 'local' ? hubPlatform() : registry.get(nodeId)?.platform
+      const platform = rawPlatform === undefined || rawPlatform === '' ? undefined : rawPlatform
       if (platform && platform !== 'linux') {
         throw new HelmxError(
           'path_usage_not_supported',
           `node ${nodeId} platform '${platform}' does not support process usage scanning (currently Linux /proc only); cannot verify zero usage for target path`,
           501,
           { nodeId, platform },
+        )
+      }
+      if (
+        typeof targetPath === 'string' &&
+        targetPath.length > 0 &&
+        !targetPath.includes('\u0000') &&
+        targetPathShape(targetPath) === 'win32'
+      ) {
+        throw new HelmxError(
+          'path_usage_not_supported',
+          `node ${nodeId} target path uses Windows shape ('win32'), which does not support process usage scanning (currently Linux /proc only); cannot verify zero usage for target path`,
+          501,
+          { nodeId, platform: platform ?? 'win32' },
         )
       }
       // Normalize target path uniformly across supported platforms for matching against the RPC response.
@@ -537,6 +552,20 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
             502,
             { nodeId },
           )
+        }
+        if (e.code === 'invalid') {
+          throw new HelmxError('validation_error', `invalid path usage scan argument: ${e.message}`, 400, { nodeId })
+        }
+        if (e.code === 'not_supported') {
+          throw new HelmxError(
+            'path_usage_not_supported',
+            `node ${nodeId} does not support process usage scanning (${e.message}); cannot verify zero usage for target path`,
+            501,
+            { nodeId, ...(platform !== undefined ? { platform } : {}), cause: e.message },
+          )
+        }
+        if (e.code === 'aborted') {
+          throw new HelmxError('aborted', e.message, 499, { nodeId })
         }
         throw new HelmxError(
           'node_path_usage_failed',

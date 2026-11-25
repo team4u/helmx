@@ -356,6 +356,8 @@ export interface ManagedWorktreeRecord {
   branchDeleted?: boolean
   /** 分支删除失败的最后诊断（已脱敏；重试成功后清除）。 */
   branchDeleteError?: string
+  /** 清理时目标节点不支持进程占用扫描，调用方通过 allowUnverifiedUsage 显式承担风险放行时置为 true。 */
+  unverifiedUsage?: true
   /** 可选持久持有锁（活跃期间即便是 force: true 清理也显式拒绝）。 */
   hold?: ManagedWorktreeHold
 }

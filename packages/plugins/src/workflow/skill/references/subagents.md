@@ -25,4 +25,4 @@ List or inspect registered managed worktrees read-only via `run_action({ actionI
 
 After inspecting or merging a child worktree, call the model tool `cleanup_worktree({ worktreeId: execution.worktree.id })` with the real execution metadata. This is a conversation tool (registered by `builtin:worktree`, active whenever managed worktrees exist), not a DSL function.
 
-The equivalent CLI is `helmx worktrees cleanup --worktree-id <id> --json`. Cleanup refuses dirty, unmerged, occupied, locked, or uncertain worktrees by default. `force` only addresses the dirty/unmerged protection and never bypasses the other safety checks.
+The equivalent CLI is `helmx worktrees cleanup --worktree-id <id> --json`. Cleanup refuses dirty, unmerged, occupied, locked, or uncertain worktrees by default. `force` only addresses the dirty/unmerged protection and never bypasses the other safety checks. On nodes without process-occupancy scanning (such as Windows or macOS), cleanup returns `worktree_usage_unverifiable` unless `allowUnverifiedUsage: true` (`--allow-unverified-usage`) is explicitly passed after confirming no process occupies the directory.

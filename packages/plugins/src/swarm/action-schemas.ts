@@ -14,6 +14,7 @@ import {
   memberStateBaseProps,
   memberStateRequired,
   retainedWorktreeSchema,
+  uncleanedWorktreeSchema,
 } from './contracts.js'
 
 const groupIdSchema = S.str({ minLength: 1, maxLength: 64, pattern: GROUP_ID_PATTERN })
@@ -102,13 +103,23 @@ export const switchModelInputSchema = S.obj(
   ['model'],
 )
 
-export const archiveWorkerInputSchema = S.obj({ ...workerRefProps, keepWorktree: S.bool(), force: S.bool() })
+export const archiveWorkerInputSchema = S.obj({
+  ...workerRefProps,
+  keepWorktree: S.bool(),
+  force: S.bool(),
+  allowUnverifiedUsage: S.bool(
+    'Explicitly clean up the member worktree without a process-occupancy check when the target node does not support process usage scanning',
+  ),
+})
 
 export const closeGroupInputSchema = S.obj({
   groupId: groupIdSchema,
   keepWorktree: S.bool('Release holds and archive members while preserving modified worktree branches in retainedWorktrees for merging'),
   abortRunning: S.bool('Abort any running group members before closing'),
   force: S.bool('Force member worktree cleanup past the uncommitted/unmerged guard (occupancy by holds/running conversations/process scans, ownership and locked checks still refuse; never bypasses swarm_worker_busy)'),
+  allowUnverifiedUsage: S.bool(
+    'Explicitly clean up eligible member worktrees without a process-occupancy check when the target node does not support process usage scanning',
+  ),
   summary: S.str({ maxLength: 2000 }),
 })
 
@@ -164,9 +175,12 @@ export const inspectWorkerOutputSchema = S.obj(
   },
   ['conversationId', 'groupId', 'name', 'title', 'profileId', 'status', 'doing', 'completionSeq', 'artifacts', 'recentEntries'],
 )
-export const archiveWorkerOutputSchema = S.obj({ archived: S.bool(), workerConversationId: S.num() }, ['archived', 'workerConversationId'])
+export const archiveWorkerOutputSchema = S.obj(
+  { archived: S.bool(), workerConversationId: S.num(), uncleanedWorktree: uncleanedWorktreeSchema },
+  ['archived', 'workerConversationId'],
+)
 export const closeGroupOutputSchema = S.obj(
-  { closed: S.bool(), groupId: S.str(), retainedWorktrees: S.arr(retainedWorktreeSchema) },
+  { closed: S.bool(), groupId: S.str(), retainedWorktrees: S.arr(retainedWorktreeSchema), uncleanedWorktrees: S.arr(uncleanedWorktreeSchema) },
   ['closed', 'groupId', 'retainedWorktrees'],
 )
 export const completerOutputSchema = S.obj(

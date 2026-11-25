@@ -937,4 +937,271 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       await env.close()
     }
   })
+
+  test('swarm-int19: simulated non-Linux hubPlatform=darwin close_group & archive_worker settle holds and report uncleanedWorktrees without false unmerged entries, while allowUnverifiedUsage cleans immediately', { timeout: 60_000 }, async (t) => {
+    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-nonlinux-'), gitTemplate, {
+      hubPlatform: () => 'darwin',
+    })
+    try {
+      const { kernel } = env.app
+      const coord = await kernel.createConversation({ title: 'Win32 Close Coord', profileId: 'assistant', cwd: env.repoDir })
+
+      // 1) Clean member + default close_group(): closes cleanly, releases hold, leaves retainedWorktrees empty, populates uncleanedWorktrees
+      const g1 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Win32 Clean Close',
+        conversationId: coord.id,
+      })) as { groupId: string }
+      setSwarmRoleResponses(env.faux, {
+        worker_a: [fauxAssistantMessage('Done without local edits.')],
+        coordinator: [fauxAssistantMessage('Noted.')],
+      })
+      const w1 = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: g1.groupId, name: 'worker_a', prompt: 'Inspect code.', access: 'readwrite', isolation: 'worktree' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; worktreeId: string }
+      await kernel.waitForIdle(w1.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const closed1 = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'close_group',
+        { groupId: g1.groupId },
+        { conversationId: coord.id },
+      )) as {
+        closed: boolean
+        retainedWorktrees: unknown[]
+        uncleanedWorktrees?: Array<{ memberName: string; worktreeId: string; reason: string; path: string }>
+      }
+      assert.equal(closed1.closed, true)
+      assert.deepEqual(closed1.retainedWorktrees, [], 'clean uncleaned worktree must NOT pollute retainedWorktrees')
+      assert.equal(closed1.uncleanedWorktrees?.length, 1)
+      assert.equal(closed1.uncleanedWorktrees?.[0]?.worktreeId, w1.worktreeId)
+      assert.equal(closed1.uncleanedWorktrees?.[0]?.reason, 'usage_unverifiable')
+      assert.equal(existsSync(closed1.uncleanedWorktrees![0]!.path), true)
+
+      const listAfterClose1 = (await kernel.plugins.invokeAction(WORKTREE_ID, 'list_worktrees', {})) as {
+        worktrees: Array<{ id: string; status: string; hold?: unknown }>
+      }
+      assert.equal(listAfterClose1.worktrees.find((w) => w.id === w1.worktreeId)?.hold, undefined, 'hold must be released')
+
+      await assert.rejects(
+        () => kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', { worktreeId: w1.worktreeId, deleteBranch: true }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_usage_unverifiable' && err.status === 501,
+      )
+      const manualCleaned = (await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', {
+        worktreeId: w1.worktreeId,
+        deleteBranch: true,
+        allowUnverifiedUsage: true,
+      })) as { removed: boolean; branchDeleted: boolean; processUsage?: string }
+      assert.equal(manualCleaned.removed, true)
+      assert.equal(manualCleaned.branchDeleted, true)
+      assert.equal(manualCleaned.processUsage, 'unverified')
+
+      // 2) Mixed group (1 unmerged + 1 clean) + close_group({ keepWorktree: true })
+      const g2 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Win32 Mixed Keep',
+        conversationId: coord.id,
+      })) as { groupId: string }
+      setSwarmRoleResponses(env.faux, {
+        dirty_w: [fauxAssistantMessage('Made unmerged commit.')],
+        clean_w: [fauxAssistantMessage('Read-only check.')],
+        coordinator: [fauxAssistantMessage('Noted.')],
+      })
+      const dirtyW = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: g2.groupId, name: 'dirty_w', prompt: 'Commit work.', access: 'readwrite', isolation: 'worktree' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; worktreeId: string }
+      const cleanW = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: g2.groupId, name: 'clean_w', prompt: 'Check only.', access: 'readwrite', isolation: 'worktree' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; worktreeId: string }
+      await kernel.waitForIdle(dirtyW.workerConversationId)
+      await kernel.waitForIdle(cleanW.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const dirtyPath = dirtyW.worktreeId.slice('local:'.length)
+      writeFileSync(join(dirtyPath, 'feature-win32.txt'), 'change\n')
+      execFileSync('git', ['add', 'feature-win32.txt'], { cwd: dirtyPath })
+      execFileSync('git', ['commit', '-qm', 'feat: win32 unmerged'], { cwd: dirtyPath })
+
+      const closed2 = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'close_group',
+        { groupId: g2.groupId, keepWorktree: true },
+        { conversationId: coord.id },
+      )) as {
+        closed: boolean
+        retainedWorktrees: Array<{ memberName: string; worktreeId: string; commitsAhead: number }>
+        uncleanedWorktrees?: Array<{ memberName: string; worktreeId: string; reason: string }>
+      }
+      assert.equal(closed2.closed, true)
+      assert.equal(closed2.retainedWorktrees.length, 1)
+      assert.equal(closed2.retainedWorktrees[0]?.memberName, 'dirty_w')
+      assert.equal(closed2.uncleanedWorktrees?.length, 1)
+      assert.equal(closed2.uncleanedWorktrees?.[0]?.memberName, 'clean_w')
+
+      // 3) close_group({ allowUnverifiedUsage: true }) cleans immediately
+      const g3 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Win32 Explicit Clean Close',
+        conversationId: coord.id,
+      })) as { groupId: string }
+      setSwarmRoleResponses(env.faux, {
+        explicit_w: [fauxAssistantMessage('Done.')],
+        coordinator: [fauxAssistantMessage('Noted.')],
+      })
+      const explicitW = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: g3.groupId, name: 'explicit_w', prompt: 'Check.', access: 'readwrite', isolation: 'worktree' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; worktreeId: string }
+      await kernel.waitForIdle(explicitW.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const closed3 = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'close_group',
+        { groupId: g3.groupId, allowUnverifiedUsage: true },
+        { conversationId: coord.id },
+      )) as { closed: boolean; retainedWorktrees: unknown[]; uncleanedWorktrees?: unknown[] }
+      assert.equal(closed3.closed, true)
+      assert.deepEqual(closed3.retainedWorktrees, [])
+      assert.equal(closed3.uncleanedWorktrees, undefined)
+      assert.equal(existsSync(explicitW.worktreeId.slice('local:'.length)), false)
+
+      // 4) archive_worker without keepWorktree returns uncleanedWorktree & releases hold; allowUnverifiedUsage cleans immediately
+      const g4 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Win32 Archive Worker',
+        conversationId: coord.id,
+      })) as { groupId: string }
+      setSwarmRoleResponses(env.faux, {
+        arch_a: [fauxAssistantMessage('Done A.')],
+        arch_b: [fauxAssistantMessage('Done B.')],
+        coordinator: [fauxAssistantMessage('Noted.')],
+      })
+      const archA = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: g4.groupId, name: 'arch_a', prompt: 'Check A.', access: 'readwrite', isolation: 'worktree' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; worktreeId: string }
+      const archB = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: g4.groupId, name: 'arch_b', prompt: 'Check B.', access: 'readwrite', isolation: 'worktree' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; worktreeId: string }
+      await kernel.waitForIdle(archA.workerConversationId)
+      await kernel.waitForIdle(archB.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const resArchA = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'archive_worker',
+        { groupId: g4.groupId, name: 'arch_a' },
+        { conversationId: coord.id },
+      )) as { archived: boolean; uncleanedWorktree?: { worktreeId: string; reason: string } }
+      assert.equal(resArchA.archived, true)
+      assert.equal(resArchA.uncleanedWorktree?.worktreeId, archA.worktreeId)
+      assert.equal(resArchA.uncleanedWorktree?.reason, 'usage_unverifiable')
+      assert.equal(existsSync(archA.worktreeId.slice('local:'.length)), true)
+
+      const resArchB = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'archive_worker',
+        { groupId: g4.groupId, name: 'arch_b', allowUnverifiedUsage: true },
+        { conversationId: coord.id },
+      )) as { archived: boolean; uncleanedWorktree?: unknown }
+      assert.equal(resArchB.archived, true)
+      assert.equal(resArchB.uncleanedWorktree, undefined)
+      assert.equal(existsSync(archB.worktreeId.slice('local:'.length)), false)
+
+      // Clean up leftover win32 test worktrees
+      for (const wtId of [dirtyW.worktreeId, cleanW.worktreeId, archA.worktreeId]) {
+        await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', {
+          worktreeId: wtId,
+          force: true,
+          deleteBranch: true,
+          allowUnverifiedUsage: true,
+        })
+      }
+    } finally {
+      await env.close()
+    }
+  })
+
+  test('swarm-int20: archive_worker & close_group never leak ManagedWorktreeHold when cleanup_worktree fails (e.g. worktree_locked)', { timeout: 60_000 }, async (t) => {
+    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-hold-atomicity-'), gitTemplate)
+    try {
+      const { kernel } = env.app
+      const coord = await kernel.createConversation({ title: 'Hold Atomicity Coord', profileId: 'assistant', cwd: env.repoDir })
+      const g = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Hold Atomicity Squad',
+        conversationId: coord.id,
+      })) as { groupId: string }
+
+      setSwarmRoleResponses(env.faux, {
+        locked_w: [fauxAssistantMessage('Done.')],
+        coordinator: [fauxAssistantMessage('Noted.')],
+      })
+      const worker = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: g.groupId, name: 'locked_w', prompt: 'Finish.', access: 'readwrite', isolation: 'worktree' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; worktreeId: string }
+      await kernel.waitForIdle(worker.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const wtPath = worker.worktreeId.slice('local:'.length)
+      execFileSync('git', ['worktree', 'lock', '--reason', 'manual hold test', wtPath], { cwd: env.repoDir })
+
+      await assert.rejects(
+        () => kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'archive_worker', { groupId: g.groupId, name: 'locked_w' }, { conversationId: coord.id }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_locked',
+      )
+      await assert.rejects(
+        () => kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g.groupId }, { conversationId: coord.id }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_locked',
+      )
+
+      const listed = (await kernel.plugins.invokeAction(WORKTREE_ID, 'list_worktrees', {})) as {
+        worktrees: Array<{ id: string; status: string; hold?: { pluginId: string } }>
+      }
+      assert.equal(listed.worktrees.find((w) => w.id === worker.worktreeId)?.hold?.pluginId, SWARM_PLUGIN_ID, 'hold must stay intact after failed cleanup')
+
+      await assert.rejects(
+        () => kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', { worktreeId: worker.worktreeId, force: true }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_in_use',
+        'external cleanup must still see the intact hold',
+      )
+
+      execFileSync('git', ['worktree', 'unlock', wtPath], { cwd: env.repoDir })
+      const closed = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g.groupId }, { conversationId: coord.id })) as {
+        closed: boolean
+        uncleanedWorktrees?: Array<{ worktreeId: string }>
+      }
+      assert.equal(closed.closed, true)
+      if (closed.uncleanedWorktrees?.length) {
+        await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', {
+          worktreeId: worker.worktreeId,
+          deleteBranch: true,
+          allowUnverifiedUsage: true,
+        })
+      }
+    } finally {
+      await env.close()
+    }
+  })
 })

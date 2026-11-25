@@ -173,6 +173,11 @@ export const retainedWorktreeSchema = S.obj(
   ['memberName', 'nodeId', 'worktreeId', 'branch', 'path', 'commitsAhead'],
 )
 
+export const uncleanedWorktreeSchema = S.obj(
+  { memberName: S.str(), nodeId: S.nonEmptyStr(), worktreeId: S.str(), branch: S.str(), path: S.str(), reason: S.enm(['usage_unverifiable']) },
+  ['memberName', 'nodeId', 'worktreeId', 'branch', 'path', 'reason'],
+)
+
 export const worktreeSnapshotSchema = S.obj(
   { worktreeId: S.str({ minLength: 1 }), branch: S.str(), commitsAhead: S.int(0), dirtyCount: S.int(0), changedFilesPreview: S.arr(S.str()) },
   ['worktreeId', 'dirtyCount', 'changedFilesPreview'],

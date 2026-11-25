@@ -78,6 +78,10 @@ export interface CleanupInput {
   mergedInto?: string
   deleteBranch?: boolean
   force?: boolean
+  /** 仅在目标节点不支持进程占用扫描（path_usage_not_supported）时显式承担风险放行；不会跳过 Linux 扫描或任何其他检查。 */
+  allowUnverifiedUsage?: boolean
+  /** 仅内部动作上下文注入的调用方插件 ID（由宿主盖章提供，不暴露在公开 Schema）。 */
+  callerPluginId?: string
   signal?: AbortSignal
 }
 
@@ -88,6 +92,10 @@ export interface CleanupResult {
   branch: string
   nodeId: string
   branchDeleted: boolean
+  /** 常规移除路径上的进程占用校验结果（幂等跳过与目录缺失恢复路径缺省）。 */
+  processUsage?: 'verified' | 'unverified'
+  /** 仅当 processUsage === 'unverified' 时的简短脱敏审计说明。 */
+  processUsageNote?: string
   /** 登记清除原因（仅目录缺失下 force 恢复路径设置）。 */
   removedReason?: 'directory_missing_forced'
   /** `git worktree prune` 执行结果（仅目录缺失 force 恢复路径；ran=false 表示记录无 repoRoot 锚点未执行）。 */

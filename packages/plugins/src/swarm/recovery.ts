@@ -15,7 +15,7 @@ import {
   assertBoardPost, setConversationTags, swarmError,
   type BoardPost, type CollabGroupRecord, type GroupMemberState,
 } from './contracts.js'
-import { WORKTREE_PLUGIN_ID, cleanupManagedWorktree, releaseWorktreeHoldById } from './worktree-bridge.js'
+import { WORKTREE_PLUGIN_ID, cleanupManagedWorktree, isUsageUnverifiableWorktreeError, releaseWorktreeHoldById } from './worktree-bridge.js'
 
 export interface WalInspectionResult { posts: BoardPost[]; trimmed: boolean; trimReason?: string }
 
@@ -245,10 +245,16 @@ export async function reconcileOrphanWorktreeHolds(
       continue
     }
     try {
-      await releaseWorktreeHoldById(ctx, holdId, wt.id)
-      await cleanupManagedWorktree(ctx, wt.id, true)
+      await cleanupManagedWorktree(ctx, wt.id, { force: true })
       logDiagnostic(`已回收孤儿 worktree '${wt.id}' (holdId=${holdId})`)
     } catch (err) {
+      if (isUsageUnverifiableWorktreeError(err)) {
+        await releaseWorktreeHoldById(ctx, holdId, wt.id).catch(() => {})
+        logDiagnostic(
+          `已释放孤儿 worktree '${wt.id}' (holdId=${holdId}) 持有锁，但当前节点不支持进程占用扫描，目录已保留；确认无占用后可手工运行 helmx worktrees cleanup --worktree-id ${JSON.stringify(wt.id)} --delete-branch --allow-unverified-usage 回收`,
+        )
+        continue
+      }
       logDiagnostic(
         `回收孤儿 worktree '${wt.id}' 失败（已跳过不阻断启动）：${err instanceof Error ? err.message : String(err)}`,
       )

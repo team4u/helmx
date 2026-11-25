@@ -192,7 +192,16 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
         { groupId: effectiveBoard.group.id, ...(closeKeepWorktree ? { keepWorktree: true } : {}), ...(closeAbortRunning ? { abortRunning: true } : {}) },
         { conversationId },
       )
-      .then(() => setCloseDialogOpen(false))
+      .then((res) => {
+        setCloseDialogOpen(false)
+        const uncleaned =
+          res !== null && typeof res === 'object' && Array.isArray((res as { uncleanedWorktrees?: unknown }).uncleanedWorktrees)
+            ? (res as { uncleanedWorktrees: unknown[] }).uncleanedWorktrees
+            : []
+        if (uncleaned.length > 0) {
+          ctx.notify(C.panelCloseUncleanedNotice(uncleaned.length, locale), 'warning')
+        }
+      })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err)
         setCloseError(msg)

@@ -99,7 +99,7 @@ sequenceDiagram
 | 1. 占用检查：关联子会话运行中（`working` / `blocked`），或路径仍被在途 spawn 执行 / 本插件租约引用 | `worktree_in_use` | 否 |
 | 2. 主根保护：登记路径即主工作树，或经 realpath 解析指向主工作树 | `worktree_owner_mismatch` | 否 |
 | 3. realpath 校验：登记路径经软链跳到其他工作树（登记可能已被替换）；附加权威登记的 path / branch / HEAD 归属匹配、prunable / locked 状态检查 | `worktree_owner_mismatch` / `worktree_locked` | 否（locked 需先解锁） |
-| 4. 进程占用保护：目标节点上的进程仍以工作树或其子目录为 cwd，或持有其中的文件句柄；探测不完整或不支持时同样拒绝 | `worktree_process_in_use` / `worktree_process_check_failed` | 否 |
+| 4. 进程占用保护：目标节点上的进程仍以工作树或其子目录为 cwd，或持有其中的文件句柄；探测不完整或不支持时同样拒绝 | `worktree_process_in_use` / `worktree_usage_unverifiable` / `worktree_process_check_failed` | 否（`allowUnverifiedUsage` 仅对 `worktree_usage_unverifiable` 显式放行） |
 | 5. 脏工作区保护：含未提交修改或未跟踪文件（与 `git worktree remove` 同口径；gitignored 产物按定义可弃，不计入阻断） | `worktree_dirty` | 是（`force`） |
 | 6. 未合入保护：分支存在相对基准提交未合入的提交（`git rev-list --count`） | `worktree_dirty` | 是（`force`） |
 
@@ -119,7 +119,7 @@ sequenceDiagram
 
 进程 exec 或退出期间可能短暂拒绝读取 `/proc`。当快照没有发现占用但不完整时，清理链最多额外复查两次；只有重新取得完整且零占用的快照才放行。发现实际占用时立即拒绝，快照持续不完整也继续拒绝，不凭等待时间推断进程已经退出。
 
-当前探测只支持 Linux 的可见 `/proc` 视图。macOS、Windows 返回不支持，受管 worktree 自动清理因此拒绝。Linux 上扫描把「结构性盲区」与「扫描异常」分开：持久的权限拒绝（跨 uid 或 non-dumpable 进程，如 `systemd --user`——属主自己也读不了；这是操作系统能力模型的结构性事实）计入快照的 `unobservable` 计数并在诊断中如实呈现，不影响完整性判定，不再阻塞清理；与 Hub 同 uid 的普通可转储进程（helmx 自己派生的子代理、git、shell）永远可观测，保护面不受影响。非权限类读取异常（如 EIO）或扫描上限触发仍使快照不完整（`complete=false`），清理以 `worktree_process_check_failed` 拒绝。`force` 不跳过平台、权限或完整性检查。
+当前探测只支持 Linux 的可见 `/proc` 视图。macOS、Windows 返回不支持（`501 path_usage_not_supported`），默认情况下清理以 `501 worktree_usage_unverifiable` 显式拒绝；调用方在确认没有残留子会话或后台进程占用该目录后，可显式传 `allowUnverifiedUsage: true`（CLI：`--allow-unverified-usage`）承担风险放行，清理结果会在 `processUsage: 'unverified'`（附 `processUsageNote`）与记录的 `unverifiedUsage: true` 中如实留痕。Windows NTFS 虽会拒绝删除被 cwd 或无共享删除句柄锁住的文件，但目录移除并非原子预检，在脏树配合 `force: true` 清理时仍可能删掉部分未提交文件后再失败——因此 `allowUnverifiedUsage` 默认必须关闭。Linux 上扫描把「结构性盲区」与「扫描异常」分开：持久的权限拒绝（跨 uid 或 non-dumpable 进程，如 `systemd --user`——属主自己也读不了；这是操作系统能力模型的结构性事实）计入快照的 `unobservable` 计数并在诊断中如实呈现，不影响完整性判定，不再阻塞清理；与 Hub 同 uid 的普通可转储进程（helmx 自己派生的子代理、git、shell）永远可观测，保护面不受影响。非权限类读取异常（如 EIO）或扫描上限触发仍使快照不完整（`complete=false`），清理以 `502 worktree_process_check_failed` 拒绝。`force` 不跳过平台、权限或完整性检查；`allowUnverifiedUsage` 仅针对 `path_usage_not_supported`，在支持扫描的 Linux 节点上**绝不跳过扫描**，也不绕过 `worktree_process_in_use` 或 `worktree_process_check_failed`。
 
 这次探测是删除前的进程快照，不是跨进程的原子锁：扫描之后新进程仍可能进入该目录。需要交付的文件应先用 `register_artifact` 或 `pnpm helmx artifacts put` 登记为产物——登记成功后副本保存在 Helmx 数据目录，源 worktree 清理不会删除副本（所属会话删除仍会级联删除产物）。
 
@@ -135,14 +135,15 @@ pnpm helmx worktrees cleanup --path /repo/.helmx-worktrees/repo-ab12cd34 --node-
 
 # 选项：--delete-branch 一并删除受管分支；--merged-into <ref> 指定已合入的
 # 目标分支或提交（缺省用登记的 baseBranch，再回退主工作树 HEAD）；
-# --force 越过脏工作区/未合入保护（不可越过占用、归属与 locked 校验）
+# --force 越过脏工作区/未合入保护（不可越过占用、归属与 locked 校验）；
+# --allow-unverified-usage 仅在非 Linux 节点不支持进程占用扫描时显式承担风险清理
 pnpm helmx worktrees cleanup --conversation-id 42 --merged-into helmx/spawn-ab12cd34 --delete-branch
 
 pnpm helmx worktrees list                # 全部登记（含已清理记录的元数据）
 pnpm helmx worktrees inspect --conversation-id 42 --diff   # 只读检视 + 有上限 diff 预览
 ```
 
-同一能力暴露为模型工具 `cleanup_worktree`（参数同构：`worktreeId` / `conversationId` / `path` + `nodeId` / `deleteBranch` / `mergedInto` / `force`），子智能体可在任务收尾时自行清理。CLI 旗标由动作 Schema 动态派生（camelCase 入参映射为 kebab-case 旗标），与工具参数一一对应；动作 Schema 新增入参即自动出现对应旗标，无需改 CLI 实现。工具侧的 `--current` 语义：无任何显式选择器时以当前会话为选择器（即子会话自己的 worktree），显式选择器永不被上下文覆盖。清理前还有一道租约终检：存在重启中断或未确认停止的执行租约时以 `worktree_execution_unknown` 拒绝（见上文 fail-closed 红线）。
+同一能力暴露为模型工具 `cleanup_worktree`（参数同构：`worktreeId` / `conversationId` / `path` + `nodeId` / `deleteBranch` / `mergedInto` / `force` / `allowUnverifiedUsage`），子智能体可在任务收尾时自行清理。CLI 旗标由动作 Schema 动态派生（camelCase 入参映射为 kebab-case 旗标），与工具参数一一对应；动作 Schema 新增入参即自动出现对应旗标，无需改 CLI 实现。工具侧的 `--current` 语义：无任何显式选择器时以当前会话为选择器（即子会话自己的 worktree），显式选择器永不被上下文覆盖。清理前还有一道租约终检：存在重启中断或未确认停止的执行租约时以 `worktree_execution_unknown` 拒绝（见上文 fail-closed 红线）。
 
 ## 边界与约束
 

@@ -3,7 +3,7 @@
  */
 import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import { WORKTREE_PLUGIN_ID, type WorktreeInspectResult } from '../contracts.js'
-import type { GroupMemberState, RetainedWorktreeInfo, WorktreeHandoffSnapshot } from './contracts.js'
+import type { GroupMemberState, RetainedWorktreeInfo, UncleanedWorktreeInfo, WorktreeHandoffSnapshot } from './contracts.js'
 
 export { WORKTREE_PLUGIN_ID }
 
@@ -17,6 +17,9 @@ export interface CheckedMemberWorktree {
 
 export const isIgnorableWorktreeError = (err: unknown): boolean =>
   err instanceof HelmxError && (err.code === 'not_found' || err.code === 'plugin_disabled' || err.code === 'unknown_action')
+
+export const isUsageUnverifiableWorktreeError = (err: unknown): boolean =>
+  err instanceof HelmxError && err.code === 'worktree_usage_unverifiable'
 
 export function extractChangedFilesPreview(inspected: WorktreeInspectResult, maxItems = 20): string[] {
   const seen = new Set<string>()
@@ -105,31 +108,69 @@ export const releaseWorktreeHold = (
 export async function cleanupManagedWorktree(
   ctx: HelmxPluginContext,
   worktreeId: string,
-  force: boolean,
-  signal?: AbortSignal,
+  opts: { force?: boolean; allowUnverifiedUsage?: boolean; signal?: AbortSignal } = {},
 ): Promise<void> {
   await ctx.host.invokeAction(
     WORKTREE_PLUGIN_ID,
     'cleanup_worktree',
-    { worktreeId, deleteBranch: true, ...(force ? { force: true } : {}) },
-    signal ? { signal } : undefined,
+    {
+      worktreeId,
+      deleteBranch: true,
+      ...(opts.force === true ? { force: true } : {}),
+      ...(opts.allowUnverifiedUsage === true ? { allowUnverifiedUsage: true } : {}),
+    },
+    opts.signal ? { signal: opts.signal } : undefined,
   )
 }
 
-/** Release member hold and either return RetainedWorktreeInfo (when keepWorktree && modified) or clean up the worktree. */
+/** Settle member worktree: cleanup first (without pre-releasing hold so failures never leak holds), or release hold when retaining/falling back on usage_unverifiable. */
 export async function settleMemberWorktree(
   ctx: HelmxPluginContext,
   groupId: string,
   item: CheckedMemberWorktree,
-  opts: { keepWorktree: boolean; force: boolean; cleanupCleanWhenKeeping?: boolean; signal?: AbortSignal },
-): Promise<RetainedWorktreeInfo | undefined> {
-  await releaseWorktreeHold(ctx, groupId, item.member.name, item.worktreeId, opts.signal)
-  if (!item.inspected.exists) return undefined
+  opts: {
+    keepWorktree: boolean
+    force: boolean
+    allowUnverifiedUsage?: boolean
+    cleanupCleanWhenKeeping?: boolean
+    signal?: AbortSignal
+  },
+): Promise<{ retained?: RetainedWorktreeInfo; uncleaned?: UncleanedWorktreeInfo }> {
+  if (!item.inspected.exists) {
+    await releaseWorktreeHold(ctx, groupId, item.member.name, item.worktreeId, opts.signal)
+    return {}
+  }
   if (opts.keepWorktree && (item.isDirty || item.unmergedCommits > 0)) {
-    return toRetainedWorktreeInfo(item.member.name, item.member.nodeId, item.worktreeId, item.inspected, item.unmergedCommits)
+    await releaseWorktreeHold(ctx, groupId, item.member.name, item.worktreeId, opts.signal)
+    return {
+      retained: toRetainedWorktreeInfo(item.member.name, item.member.nodeId, item.worktreeId, item.inspected, item.unmergedCommits),
+    }
   }
   if (!opts.keepWorktree || opts.cleanupCleanWhenKeeping === true) {
-    await cleanupManagedWorktree(ctx, item.worktreeId, opts.force, opts.signal)
+    try {
+      await cleanupManagedWorktree(ctx, item.worktreeId, {
+        force: opts.force,
+        allowUnverifiedUsage: opts.allowUnverifiedUsage,
+        signal: opts.signal,
+      })
+      return {}
+    } catch (err) {
+      if (isUsageUnverifiableWorktreeError(err)) {
+        await releaseWorktreeHold(ctx, groupId, item.member.name, item.worktreeId, opts.signal)
+        return {
+          uncleaned: {
+            memberName: item.member.name,
+            nodeId: item.member.nodeId,
+            worktreeId: item.worktreeId,
+            branch: item.inspected.currentBranch ?? item.inspected.record.branch,
+            path: item.inspected.record.path,
+            reason: 'usage_unverifiable',
+          },
+        }
+      }
+      throw err
+    }
   }
-  return undefined
+  await releaseWorktreeHold(ctx, groupId, item.member.name, item.worktreeId, opts.signal)
+  return {}
 }

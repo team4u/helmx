@@ -16,7 +16,7 @@
 
 | 动作 | CLI | 说明 |
 | :--- | :--- | :--- |
-| `cleanup_worktree` | `helmx worktrees cleanup` | 清理（选择器 `--worktree-id` / `--conversation-id` / `--path [--node-id]` 三选一互斥，`--delete-branch` / `--merged-into` / `--force`） |
+| `cleanup_worktree` | `helmx worktrees cleanup` | 清理（选择器 `--worktree-id` / `--conversation-id` / `--path [--node-id]` 三选一互斥，`--delete-branch` / `--merged-into` / `--force` / `--allow-unverified-usage`） |
 | `list_worktrees` | `helmx worktrees list` | 全部登记（含已清理记录的元数据） |
 | `inspect_worktree` | `helmx worktrees inspect <worktreeId>` | 只读检视：登记元数据 + 目标节点真实 git 只读探测（状态/统计/有上限 diff 预览） |
 

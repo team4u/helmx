@@ -2287,4 +2287,88 @@ describe("swarm-client-interactions", () => {
     }
     resetDefaultStubs()
   })
+
+  test('SwarmWorkbenchPanel：close_group 返回 uncleanedWorktrees 时关闭弹窗并触发 warning 通知', { timeout: 60_000 }, async () => {
+    const board = boardViewFixture({
+      group: {
+        id: 'grp-live',
+        title: '协同审改组',
+        objective: '验证非 Linux 结单提示',
+        coordinatorConversationId: 50,
+        status: 'active',
+        activeWorkerCount: 1,
+        headSeq: 1,
+        createdAt: 1000,
+        updatedAt: 2000,
+      },
+      activeWorkingMembers: [],
+      posts: [
+        {
+          seq: 1,
+          groupId: 'grp-live',
+          from: 'coordinator',
+          to: ['author'],
+          resolvedTargets: ['author'],
+          wake: true,
+          kind: 'brief',
+          refs: [],
+          body: 'Work in worktree.',
+          createdAt: 1000,
+        },
+      ],
+    })
+    setStubState({
+      docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+      sessionDocs: { 'builtin:swarm/board-view/50': board },
+    })
+
+    const spy = makeSpyCtx({
+      conversationId: 50,
+      locale: 'zh-CN',
+      callAction: async (actionId, input, options) => {
+        spy.actionCalls.push({ actionId, input, ...(options !== undefined ? { options } : {}) })
+        if (actionId === 'close_group') {
+          return {
+            closed: true,
+            groupId: 'grp-live',
+            retainedWorktrees: [],
+            uncleanedWorktrees: [
+              {
+                memberName: 'author',
+                nodeId: 'local',
+                worktreeId: 'local:D:\\wt\\a',
+                branch: 'helmx/spawn-1',
+                path: 'D:\\wt\\a',
+                reason: 'usage_unverifiable',
+              },
+            ],
+          }
+        }
+        return {}
+      },
+    })
+    const panel = await mount(
+      spy,
+      e(components.SwarmWorkbenchPanel, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+    )
+    try {
+      const closeBtn = panel.host.querySelector<HTMLButtonElement>('.sw-panel-close-btn')
+      assert.ok(closeBtn !== null)
+      await act(async () => {
+        closeBtn.click()
+      })
+      const confirmBtn = document.body.querySelector<HTMLButtonElement>('.sw-close-dialog-confirm')
+      assert.ok(confirmBtn !== null)
+      await act(async () => {
+        confirmBtn.click()
+      })
+      assert.ok(document.body.querySelector('.sw-close-dialog-confirm') === null, '结单成功后弹窗关闭')
+      assert.equal(spy.notifyCalls.length, 1)
+      assert.equal(spy.notifyCalls[0]!.tone, 'warning')
+      assert.match(spy.notifyCalls[0]!.message, /--allow-unverified-usage/)
+    } finally {
+      panel.unmount()
+    }
+    resetDefaultStubs()
+  })
 })

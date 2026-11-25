@@ -83,7 +83,7 @@ import {
 
 /**
  * 平台事实：进程占用扫描当前仅实现 Linux /proc。测试契约按平台如实分叉：
- * 非 Linux 上 cleanup 在进程检查处显式拒绝（worktree_process_check_failed）
+ * 非 Linux 上 cleanup 在进程检查处默认显式拒绝（501 worktree_usage_unverifiable）
  * ——不伪造 complete=true、不静默跳过；这是当前跨平台行为限制的如实断言。
  */
 const PROCESS_SCAN_ON = process.platform === 'linux'
@@ -92,7 +92,8 @@ const PROCESS_SCAN_ON = process.platform === 'linux'
 async function assertCleanupPlatformRejected(fn: () => Promise<unknown>): Promise<void> {
   await assert.rejects(fn, (err: unknown) => {
     assert.ok(err instanceof HelmxError)
-    assert.equal(err.code, 'worktree_process_check_failed', '非 Linux 平台：进程占用扫描不支持，cleanup 必须显式拒绝')
+    assert.equal(err.code, 'worktree_usage_unverifiable', '非 Linux 平台：进程占用扫描不支持，cleanup 必须显式拒绝')
+    assert.equal(err.status, 501)
     return true
   })
 }
@@ -1030,6 +1031,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
         branch: record!.branch,
         nodeId: record!.nodeId,
         branchDeleted: true,
+        processUsage: 'verified',
       })
     } finally {
       await th.close()
@@ -2160,13 +2162,14 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       )
       // 释放后 cleanup 不再报 worktree_execution_unknown（租约门已过；Linux 上
       // 通常全量成功，但沙箱 /proc 可能含不可读 fd 的外部进程——快照不完整
-      // 时 fail-closed 的 worktree_process_check_failed 是环境事实，也证明已越过租约检查）。
+      // 时 fail-closed 的 worktree_process_check_failed 或非 Linux 的 worktree_usage_unverifiable 是环境事实，也证明已越过租约检查）。
       try {
         const done = await th.isolation.cleanup({ conversationId: 5, deleteBranch: true })
         assert.equal(done.removed, true)
       } catch (error) {
         assert.ok(
-          error instanceof HelmxError && error.code === 'worktree_process_check_failed',
+          error instanceof HelmxError &&
+            (error.code === 'worktree_process_check_failed' || error.code === 'worktree_usage_unverifiable'),
           `租约释放后 cleanup 只允许进程扫描环境限制，实得：${error instanceof HelmxError ? error.code : String(error)}`,
         )
       }
@@ -2358,7 +2361,8 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
         assert.equal(done.removed, true)
       } catch (error) {
         assert.ok(
-          error instanceof HelmxError && error.code === 'worktree_process_check_failed',
+          error instanceof HelmxError &&
+            (error.code === 'worktree_process_check_failed' || error.code === 'worktree_usage_unverifiable'),
           `租约释放后只允许环境 /proc 限制，实得：${error instanceof HelmxError ? error.code : String(error)}`,
         )
       }
@@ -2794,7 +2798,8 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
           assert.equal(existsSync(acquired.path), false)
         } catch (error) {
           assert.ok(
-            error instanceof HelmxError && error.code === 'worktree_process_check_failed',
+            error instanceof HelmxError &&
+              (error.code === 'worktree_process_check_failed' || error.code === 'worktree_usage_unverifiable'),
             `释放锁后只允许环境 /proc 限制，实得：${error instanceof HelmxError ? error.code : String(error)}`,
           )
         }
@@ -2864,7 +2869,8 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         assert.equal(cleaned.branchDeleted, true)
       } catch (error) {
         assert.ok(
-          error instanceof HelmxError && error.code === 'worktree_process_check_failed',
+          error instanceof HelmxError &&
+            (error.code === 'worktree_process_check_failed' || error.code === 'worktree_usage_unverifiable'),
           `独立注册清理只允许环境 /proc 限制，实得：${error instanceof HelmxError ? error.code : String(error)}`,
         )
       }

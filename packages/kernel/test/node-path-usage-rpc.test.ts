@@ -159,6 +159,7 @@ async function startFakeNode(
   fabric: ReturnType<typeof createEnvFabric>,
   server: http.Server,
   envPathUsage: ((input: { path: string }) => Promise<unknown>) | undefined,
+  options?: { platform?: string },
 ) {
   const address = server.address() as { port: number }
   const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws/node?nodeId=node-old`)
@@ -193,6 +194,7 @@ async function startFakeNode(
     deserialize: (d) => d as never,
     timeout: 10_000,
   })
+  const platform = options !== undefined && 'platform' in options ? options.platform : process.platform
   return {
     rpc,
     register: () =>
@@ -200,7 +202,7 @@ async function startFakeNode(
         nodeId: 'node-old',
         token: 'node-old:secret',
         hostname: 'fake-node',
-        platform: process.platform,
+        platform: platform ?? '',
       }),
     close: () => {
       rpc.$close()
@@ -210,7 +212,10 @@ async function startFakeNode(
 }
 
 /** Isolated Hub + node with injected envPathUsage (fresh per case to avoid cross-test interference). */
-async function startHubWithFakeNode(envPathUsage: ((input: { path: string }) => Promise<unknown>) | undefined) {
+async function startHubWithFakeNode(
+  envPathUsage: ((input: { path: string }) => Promise<unknown>) | undefined,
+  options?: { platform?: string },
+) {
   const fabric = createEnvFabric({
     authenticate: (nodeId, token) => nodeId === 'node-old' && token === 'node-old:secret',
     heartbeatIntervalMs: 60_000,
@@ -222,7 +227,7 @@ async function startHubWithFakeNode(envPathUsage: ((input: { path: string }) => 
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const gateway = attachNodeWsGateway(server, { registry: fabric.registry })
-  const node = await startFakeNode(fabric, server, envPathUsage)
+  const node = await startFakeNode(fabric, server, envPathUsage, options)
   const outcome = await node.register()
   assert.equal(outcome.ok, true, `fake node registration should succeed: ${JSON.stringify(outcome)}`)
   return {
@@ -454,6 +459,63 @@ describe('strict validation of node snapshots/envelopes (malformed payloads over
           return true
         },
       )
+    } finally {
+      await hub.close()
+    }
+  })
+
+  it('remote ok:false not_supported maps to 501 path_usage_not_supported (not 502 node_path_usage_failed)', { timeout: 60_000 }, async () => {
+    const hub = await startHubWithFakeNode(
+      async () => ({
+        ok: false,
+        error: { code: 'not_supported', message: 'platform unsupported' },
+      }),
+      { platform: 'linux' },
+    )
+    try {
+      await assert.rejects(
+        () => hub.fabric.inspectPathUsage('node-old', '/wt'),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmxError)
+          assert.equal(err.code, 'path_usage_not_supported')
+          assert.equal(err.status, 501)
+          return true
+        },
+      )
+    } finally {
+      await hub.close()
+    }
+  })
+
+  it('remote node with platform=undefined rejects Windows paths pre-RPC as 501 path_usage_not_supported while still validating relative paths as 400', { timeout: 60_000 }, async () => {
+    let rpcCalls = 0
+    const hub = await startHubWithFakeNode(
+      async () => {
+        rpcCalls += 1
+        return { ok: true, value: { path: '/wt', processes: [], matchedTotal: 0, processesTruncated: false, complete: true, diagnostics: [] } }
+      },
+      { platform: undefined },
+    )
+    try {
+      await assert.rejects(
+        () => hub.fabric.inspectPathUsage('node-old', 'D:\\Users\\demo\\wt'),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmxError)
+          assert.equal(err.code, 'path_usage_not_supported')
+          assert.equal(err.status, 501)
+          return true
+        },
+      )
+      await assert.rejects(
+        () => hub.fabric.inspectPathUsage('node-old', 'relative/x'),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmxError)
+          assert.equal(err.code, 'validation_error')
+          assert.equal(err.status, 400)
+          return true
+        },
+      )
+      assert.equal(rpcCalls, 0, 'both rejections must occur pre-RPC')
     } finally {
       await hub.close()
     }

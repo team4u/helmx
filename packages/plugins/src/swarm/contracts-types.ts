@@ -30,6 +30,7 @@ export interface GroupMemberState {
   runDurationMs?: number; turnCount?: number; createdAt: number; archivedAt?: number
 }
 export interface RetainedWorktreeInfo { memberName: string; nodeId: string; worktreeId: string; branch: string; path: string; commitsAhead: number }
+export interface UncleanedWorktreeInfo { memberName: string; nodeId: string; worktreeId: string; branch: string; path: string; reason: 'usage_unverifiable' }
 export interface WorktreeHandoffSnapshot { worktreeId: string; branch?: string; commitsAhead?: number; dirtyCount: number; changedFilesPreview: string[] }
 export interface BoardPost {
   seq: number; groupId: string; from: string; to: string[]; resolvedTargets: string[]; wake: boolean
