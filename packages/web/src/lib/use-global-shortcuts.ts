@@ -24,6 +24,7 @@ import {
   type HelmxShortcutDetail,
 } from '../shell/shortcuts-model.js'
 import { topConversationDrawerId, topDrawerFrame } from './drawer-stack-model.js'
+import { openStandbyWithFocus } from '../conversation/standby-focus.js'
 import type { HelmxExternalStore } from './helmx-store.js'
 import { isSameResolvedTarget } from './types.js'
 
@@ -174,6 +175,13 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
             : 'focus-composer'
           const detail: HelmxShortcutDetail = { action, panel }
           window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
+          return
+        }
+        if (target.kind === 'agent') {
+          openStandbyWithFocus(
+            { panel, profileId: target.profileId },
+            () => store.openTarget(target, panel === 'split' ? { split: true } : undefined),
+          )
           return
         }
         store.openTarget(target, panel === 'split' ? { split: true } : undefined)

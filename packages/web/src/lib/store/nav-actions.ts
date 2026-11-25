@@ -11,6 +11,7 @@ import {
   resolveFocusedPanel,
 } from '../../shell/shortcuts-model.js'
 import { conversationsApi } from '../api.js'
+import { clearStandbyFocusRequest } from '../../conversation/standby-model.js'
 import {
   normalizeWorkbenchTab,
   popDrawerFrame,
@@ -289,6 +290,7 @@ export function createStoreNavActions(
       return
     }
     if (opts?.history !== undefined) host.setPendingHistoryMode(opts.history)
+    if (resolved.kind !== 'agent') clearStandbyFocusRequest()
     const patch: Partial<NavSlice> = {}
     if (opts?.split) {
       patch.splitTarget = resolved
@@ -360,6 +362,7 @@ export function createStoreNavActions(
   }
 
   const applyExternalLocation = (parsed: WorkspaceLocationState): void => {
+    clearStandbyFocusRequest()
     host.setPendingHistoryMode(null)
     host.setLastSyncedLocation(parsed)
     rememberSpaceTarget(parsed.primaryTarget)

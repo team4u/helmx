@@ -16,6 +16,7 @@ import {
   type ReactNode,
 } from 'react'
 import { Button, HelmxIcon, Stack, TooltipProvider } from '@helmx/plugin-client'
+import { AgentStandbyPane } from './conversation/AgentStandbyPane.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
 import { ConversationWindowStage } from './conversation/ConversationWindowStage.js'
 import { standbyDraftKey } from './conversation/standby-model.js'
@@ -178,9 +179,6 @@ function lazyWithRetry<P extends object>(
   }
 }
 
-const AgentStandbyPane = lazyWithRetry(() =>
-  lazy(() => import('./conversation/AgentStandbyPane.js').then((m) => ({ default: m.AgentStandbyPane }))),
-)
 const ConversationOverview = lazyWithRetry(() =>
   lazy(() => import('./overview/ConversationOverview.js').then((m) => ({ default: m.ConversationOverview }))),
 )

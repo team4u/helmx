@@ -27,6 +27,8 @@ import {
 import { makeTestStore, type TestStoreOverrides } from './helpers/store.js'
 import {
   getStandbyDraft,
+  getStandbyFocusRequest,
+  requestStandbyFocus,
   resetStandbyDrafts,
   setStandbyDraftInputMeta,
   standbyDraftKey,
@@ -164,7 +166,7 @@ describe('standby-pane UX', () => {
     )
     cleanup()
 
-    // 5. Mobile / coarse-pointer viewport
+    // 5. Mobile / coarse-pointer viewport: passive mount blocks focus, while explicit focus ticket focuses synchronously
     stubMatchMedia((q) => q === '(hover: none) and (pointer: coarse)')
     mounted = await mountDomRoot(
       e(HostStoreProviders, { value: makeStandbyStore() }, e(AgentStandbyPane, { profileId: 'assistant' })),
@@ -172,8 +174,20 @@ describe('standby-pane UX', () => {
     await flushMacrotask(30)
     assert.ok(
       document.activeElement !== mounted.host.querySelector('textarea.composer-textarea'),
-      'coarse touch pointer blocks auto-focus',
+      'passive coarse touch mount blocks auto-focus',
     )
+    cleanup()
+
+    requestStandbyFocus({ panel: 'primary', profileId: 'assistant', explicit: true })
+    mounted = await mountDomRoot(
+      e(HostStoreProviders, { value: makeStandbyStore() }, e(AgentStandbyPane, { profileId: 'assistant' })),
+    )
+    const explicitMobileTa = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    assert.ok(
+      document.activeElement === explicitMobileTa,
+      'explicit focus ticket synchronously focuses standby textarea on coarse-touch mount',
+    )
+    assert.equal(getStandbyFocusRequest(), null, 'consumed explicit focus ticket is cleared')
     cleanup()
 
     // 6. External input / hidden <Activity> textarea do NOT block standby focus,
@@ -448,11 +462,14 @@ describe('standby-pane UX', () => {
     assert.equal(store.pendingHistoryMode, 'replace')
     cleanup()
 
-    // Coarse touch viewport -> opening 6-profile popover does NOT focus search input (avoids soft keyboard)
+    // Coarse touch viewport -> opening 6-profile popover does NOT focus search input (avoids soft keyboard),
+    // Escape cancel does NOT force-focus textarea, while explicitly picking a profile focuses the new textarea
     stubMatchMedia((q) => q === '(hover: none) and (pointer: coarse)')
+    const touchStore = makeStandbyStore({ profiles: sixProfiles })
     mounted = await mountDomRoot(
-      e(HostStoreProviders, { value: makeStandbyStore({ profiles: sixProfiles }) }, e(AgentStandbyPane, { profileId: 'assistant' })),
+      e(HostStoreProviders, { value: touchStore }, e(AgentStandbyPane, { profileId: 'assistant' })),
     )
+    const touchTa = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
     const touchTrigger = mounted.host.querySelector<HTMLButtonElement>('button.agent-standby-profile-trigger')!
     await act(async () => {
       touchTrigger.click()
@@ -461,6 +478,24 @@ describe('standby-pane UX', () => {
     const touchSearch = document.querySelector<HTMLInputElement>('.agent-standby-profile-popover input')!
     assert.ok(touchSearch !== null)
     assert.ok(document.activeElement !== touchSearch, 'coarse touch skips focusing search input on open')
+
+    await act(async () => {
+      touchSearch.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    await flushMacrotask(30)
+    assert.ok(document.activeElement !== touchTa, 'canceling picker on coarse touch does not force-focus textarea')
+
+    await act(async () => {
+      touchTrigger.click()
+    })
+    await flushMacrotask(30)
+    const touchCoderItem = document.querySelector<HTMLElement>('.agent-standby-profile-item[data-profile-id="coder"]')!
+    await act(async () => {
+      touchCoderItem.click()
+    })
+    await flushMacrotask(30)
+    assert.deepEqual(touchStore.getPrimaryTarget(), { kind: 'agent', profileId: 'coder' })
+    assert.ok(document.activeElement === mounted.host.querySelector('textarea.composer-textarea'), 'explicitly picking profile on coarse touch focuses standby textarea')
   })
 
   test('toggle-profile-picker shortcut opens/toggles popover in matching panel, ignores other panel, and falls back to composer when locked', { timeout: 60_000 }, async () => {

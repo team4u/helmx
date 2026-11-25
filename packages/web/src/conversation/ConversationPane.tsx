@@ -47,6 +47,7 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { Composer } from './Composer.js'
+import { openStandbyWithFocus } from './standby-focus.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationOutlinePopover, type OutlineJumpTarget } from './ConversationOutlinePopover.js'
 import { ConversationTimeline, type OutlineScrollRequest } from './ConversationTimeline.js'
@@ -288,17 +289,22 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
 
   // 新话题：进入该智能体待命页并继承当前会话环境（远端节点/目录不回落本机）；
   // 首次发送才创建会话，不再预建空会话。
-  const startNewThread = useStableCallback((): void => {
+  const startNewThread = useStableCallback((opts?: { flush?: boolean }): void => {
     if (conversation === undefined) return
     const targetNodeId = conversation.nodeId || 'local'
-    openTarget(
-      {
-        kind: 'agent',
-        profileId: conversation.profileId,
-        ...(targetNodeId !== 'local' ? { nodeId: targetNodeId } : {}),
-        ...(conversation.cwd !== '' ? { cwd: conversation.cwd } : {}),
-      },
-      isSplit ? { split: true } : undefined,
+    openStandbyWithFocus(
+      { panel: isSplit ? 'split' : 'primary', profileId: conversation.profileId },
+      () =>
+        openTarget(
+          {
+            kind: 'agent',
+            profileId: conversation.profileId,
+            ...(targetNodeId !== 'local' ? { nodeId: targetNodeId } : {}),
+            ...(conversation.cwd !== '' ? { cwd: conversation.cwd } : {}),
+          },
+          isSplit ? { split: true } : undefined,
+        ),
+      opts,
     )
   })
 
@@ -547,7 +553,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               aria-label={t('conv.pane.newTopic')}
               title={t('conv.pane.newTopicTitle', { shortcut: formatModShiftShortcut('O') })}
               disabled={actionPending !== null && actionPending !== 'new-thread'}
-              onClick={startNewThread}
+              onClick={() => startNewThread()}
             >
               <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
             </Button>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   COMPOSER_MENU_SLOT,
   COMPOSER_STATUS_SLOT,
@@ -59,12 +59,15 @@ import { StandbyProfilePicker } from './StandbyProfilePicker.js'
 import { focusWithCaret, useFocusComposerShortcut } from './composer-controller.js'
 import { useIsMobile } from './composer-model.js'
 import { COMPOSER_SHORTCUTS, isComposerSubmitEnterEvent } from './keybindings-model.js'
+import { openStandbyWithFocus } from './standby-focus.js'
 import {
   admitStandbyFiles,
   buildStandbyProfileOptions,
+  clearStandbyFocusRequest,
   currentStandbyDraftEpoch,
   executeStandbySend,
   getStandbyDraft,
+  getStandbyFocusRequest,
   inheritedEnvOf,
   isCoarseTouchViewport,
   resetEnvStandbyDraft,
@@ -77,13 +80,16 @@ import {
   transferStandbyDraftOnProfileSwitch,
   updateStandbyDraft,
   useStandbyDraft,
+  useStandbyFocusRequest,
   type StandbyDraftState,
+  type StandbyFocusRequest,
   type StandbySendResult,
 } from './standby-model.js'
 import { useComposerAttachments } from './use-composer-attachments.js'
 import { useComposerCompletions } from './use-composer-completions.js'
 
 const HELMX_SHORTCUT_EVENT = 'helmx:shortcut' as const
+const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect
 
 export interface AgentStandbyPaneProps {
   profileId: string
@@ -153,6 +159,13 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   const canSwitchProfile = standbyReady && profileCandidates.length > 1 && !configLocked
   const standbyIdentity = `${panel}:${draftKey}`
   const autoFocusedKeyRef = useRef<string | null>(null)
+  const focusRequest = useStandbyFocusRequest()
+  const matchingFocusRequest =
+    focusRequest !== null && focusRequest.panel === panel && focusRequest.profileId === profileId
+      ? focusRequest
+      : null
+  const matchingFocusSeq = matchingFocusRequest?.seq ?? null
+  const consumedFocusSeqRef = useRef<number | null>(null)
 
   useFocusComposerShortcut({ textareaRef, panel })
 
@@ -175,14 +188,13 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     sending: draft.sending,
   }
 
-  useEffect(() => {
-    if (!standbyReady) return
-    if (autoFocusedKeyRef.current === standbyIdentity) return
-    const focusTextarea = (): void => {
+  const tryFocusTextarea = useCallback(
+    (explicitReq: StandbyFocusRequest | null): boolean => {
       const el = textareaRef.current
-      if (el === null || !el.isConnected) return
+      if (el === null || !el.isConnected) return false
       const ctx = autoFocusContextRef.current
-      if (ctx.sending) return
+      if (ctx.sending) return false
+      const isExplicit = explicitReq !== null && explicitReq.explicit
       if (
         !shouldAutoFocusStandbyTextarea({
           panel: ctx.panel,
@@ -191,22 +203,82 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           activeModal: ctx.activeModal,
           drawerStackLength: ctx.drawerStackLength,
           isMobile: ctx.isMobile,
+          explicitFocus: isExplicit,
           textarea: el,
           paneEl: paneRef.current,
         })
       ) {
-        return
+        return false
       }
       el.focus({ preventScroll: true })
+      const focused = typeof document === 'undefined' || document.activeElement === el
+      if (!focused) return false
       autoFocusedKeyRef.current = standbyIdentity
-    }
-    if (typeof requestAnimationFrame !== 'function') {
-      focusTextarea()
+      if (explicitReq !== null) {
+        consumedFocusSeqRef.current = explicitReq.seq
+        clearStandbyFocusRequest(explicitReq.seq)
+      }
+      return true
+    },
+    [standbyIdentity],
+  )
+
+  // Synchronously commit explicit New Topic focus inside the tap/keydown gesture so mobile browsers open the soft keyboard.
+  useIsomorphicLayoutEffect(() => {
+    if (matchingFocusRequest === null || matchingFocusRequest.seq === consumedFocusSeqRef.current) return
+    if (!standbyReady) {
+      if (assetsLoaded && !humanSelectable) {
+        clearStandbyFocusRequest(matchingFocusRequest.seq)
+      }
       return
     }
-    const rafId = requestAnimationFrame(focusTextarea)
+    tryFocusTextarea(matchingFocusRequest)
+  }, [
+    standbyIdentity,
+    standbyReady,
+    assetsLoaded,
+    humanSelectable,
+    activeModal,
+    drawerStack.length,
+    matchingFocusSeq,
+    tryFocusTextarea,
+  ])
+
+  useEffect(() => {
+    if (!standbyReady) return
+    const pendingReq =
+      matchingFocusRequest !== null && matchingFocusRequest.seq !== consumedFocusSeqRef.current
+        ? matchingFocusRequest
+        : null
+    if (pendingReq === null && autoFocusedKeyRef.current === standbyIdentity) return
+    const focusFromEffect = (): void => {
+      const rawLive = getStandbyFocusRequest()
+      const liveReq =
+        rawLive !== null &&
+        rawLive.panel === panel &&
+        rawLive.profileId === profileId &&
+        rawLive.seq !== consumedFocusSeqRef.current
+          ? rawLive
+          : null
+      if (liveReq === null && autoFocusedKeyRef.current === standbyIdentity) return
+      tryFocusTextarea(liveReq)
+    }
+    if (typeof requestAnimationFrame !== 'function') {
+      focusFromEffect()
+      return
+    }
+    const rafId = requestAnimationFrame(focusFromEffect)
     return () => cancelAnimationFrame(rafId)
-  }, [standbyIdentity, standbyReady, activeModal, drawerStack.length])
+  }, [
+    standbyIdentity,
+    standbyReady,
+    activeModal,
+    drawerStack.length,
+    matchingFocusSeq,
+    panel,
+    profileId,
+    tryFocusTextarea,
+  ])
   const [commandRegistry] = useState(() => createComposerCommandRegistry())
   const commandRegistryVersion = useSyncExternalStore(
     commandRegistry.subscribe,
@@ -463,32 +535,44 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined)
   }, [draft.sending, draft.conversationId, draftKey, isSplit, openTarget, panel, profileId, pushNotice, t])
 
-  const handleSwitchProfile = useCallback((nextProfileId: string): void => {
-    if (nextProfileId === profileId) return
-    if (draft.sending || draft.conversationId !== undefined) return
-    const toKey = standbyDraftKey({ panel, profileId: nextProfileId })
-    const result = transferStandbyDraftOnProfileSwitch(draftKey, toKey)
-    if (result === 'target-occupied') {
-      pushNotice({
-        type: 'notification',
-        level: 'warning',
-        title: t('composer.standby.switchProfileTargetOccupiedTitle'),
-        body: t('composer.standby.switchProfileTargetOccupiedBody'),
+  const handleSwitchProfile = useCallback(
+    (nextProfileId: string, closePicker?: () => void): void => {
+      if (nextProfileId === profileId) {
+        closePicker?.()
+        return
+      }
+      if (draft.sending || draft.conversationId !== undefined) return
+      const toKey = standbyDraftKey({ panel, profileId: nextProfileId })
+      const result = transferStandbyDraftOnProfileSwitch(draftKey, toKey)
+      if (result === 'target-occupied') {
+        pushNotice({
+          type: 'notification',
+          level: 'warning',
+          title: t('composer.standby.switchProfileTargetOccupiedTitle'),
+          body: t('composer.standby.switchProfileTargetOccupiedBody'),
+        })
+      }
+      openStandbyWithFocus({ panel, profileId: nextProfileId }, () => {
+        closePicker?.()
+        openTarget(
+          { kind: 'agent', profileId: nextProfileId },
+          { history: 'replace', ...(isSplit ? { split: true } : {}) },
+        )
       })
-    }
-    openTarget(
-      { kind: 'agent', profileId: nextProfileId },
-      { history: 'replace', ...(isSplit ? { split: true } : {}) },
-    )
-  }, [draft.sending, draft.conversationId, draftKey, isSplit, openTarget, panel, profileId, pushNotice, t])
+    },
+    [draft.sending, draft.conversationId, draftKey, isSplit, openTarget, panel, profileId, pushNotice, t],
+  )
 
-  const returnFocusToStandbyTextarea = useCallback((): boolean => {
-    if (isMobile || isCoarseTouchViewport()) return false
-    const el = textareaRef.current
-    if (el === null || !el.isConnected) return false
-    el.focus({ preventScroll: true })
-    return true
-  }, [isMobile])
+  const returnFocusToStandbyTextarea = useCallback(
+    (explicit = false): boolean => {
+      if (!explicit && (isMobile || isCoarseTouchViewport())) return false
+      const el = textareaRef.current
+      if (el === null || !el.isConnected) return false
+      el.focus({ preventScroll: true })
+      return true
+    },
+    [isMobile],
+  )
 
   const focusStandbyTextareaFallback = useCallback((): void => {
     textareaRef.current?.focus({ preventScroll: true })

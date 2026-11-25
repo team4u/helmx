@@ -14,6 +14,7 @@ import {
   Stack,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { openStandbyWithFocus } from '../conversation/standby-focus.js'
 import { searchApi } from '../lib/api.js'
 import {
   commandActionPluginId,
@@ -458,7 +459,6 @@ export function CommandPaletteModal({
       const nav = resolveRowNavigation(row, activePanel, forceSplit)
       if (nav !== null) {
         skipCloseAutoFocusRef.current = true
-        close()
         const opts =
           nav.split || nav.highlightEntryId !== undefined
             ? {
@@ -466,6 +466,18 @@ export function CommandPaletteModal({
                 ...(nav.highlightEntryId !== undefined ? { highlightEntryId: nav.highlightEntryId } : {}),
               }
             : undefined
+        if (nav.target.kind === 'agent') {
+          const agentProfileId = nav.target.profileId
+          openStandbyWithFocus(
+            { panel: nav.split ? 'split' : 'primary', profileId: agentProfileId },
+            () => {
+              close()
+              actions.openTarget(nav.target, opts)
+            },
+          )
+          return
+        }
+        close()
         actions.openTarget(nav.target, opts)
         return
       }

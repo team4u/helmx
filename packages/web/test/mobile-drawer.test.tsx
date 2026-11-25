@@ -22,6 +22,7 @@ import {
   moveDrawerSwipe,
   SWIPE_EDGE_GUARD_PX,
 } from '../src/shell/mobile-drawer-gesture.js'
+import { resetStandbyDrafts } from '../src/conversation/standby-model.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -596,6 +597,276 @@ test('mobile sidebar drawer: closed inert/visibility reachability, modal focus e
     })
     container.remove()
     styleEl.remove()
+    globalThis.fetch = originalFetch
+    window.matchMedia = originalMatchMedia
+    Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true })
+    happyDomWindow.happyDOM?.setViewport?.({ width: originalWidth, height: originalHeight })
+    window.history.replaceState(null, '', originalHash || '#')
+  }
+})
+
+test('mobile coarse viewport (390x800): passive standby skips focus while all New Topic entries focus standby textarea cleanly', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  const originalMatchMedia = window.matchMedia
+  const originalWidth = window.innerWidth
+  const originalHeight = window.innerHeight
+  const originalHash = window.location.hash
+  const happyDomWindow = window as unknown as { happyDOM?: { setViewport?: (v: { width: number; height: number }) => void } }
+  const encoder = new TextEncoder()
+  const jsonResponse = (body: unknown): Response =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const settle = async (ms = 40): Promise<void> => {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, ms))
+    })
+  }
+
+  happyDomWindow.happyDOM?.setViewport?.({ width: 390, height: 800 })
+  Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true })
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') || query === '(hover: none) and (pointer: coarse)',
+    media: query,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent() { return false },
+  })) as typeof window.matchMedia
+  window.history.replaceState(null, '', '#/a/assistant')
+  resetStandbyDrafts()
+
+  const conv1 = {
+    id: 1,
+    title: 'Mobile Conv',
+    profileId: 'assistant',
+    tags: [],
+    ownedBy: 'human',
+    cwd: '/tmp',
+    model: 'faux/model',
+    thinkingLevel: '',
+    status: 'idle',
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: 1,
+    updatedAt: 500,
+  }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/auth/status') return jsonResponse({ configured: true, authenticated: true })
+    if (path === '/api/events') {
+      return new Response(
+        hangingEventStream((send) => {
+          send(
+            encoder.encode(
+              `event: snapshot\ndata: ${JSON.stringify({
+                bootId: 'test-mobile-focus',
+                seq: 1,
+                conversations: [conv1],
+                pendingAsks: [],
+                plugins: [],
+                ui: [],
+              })}\n\n`,
+            ),
+          )
+        }, { signal: init?.signal }),
+        { status: 200 },
+      )
+    }
+    if (path === '/api/profiles') {
+      return jsonResponse([
+        { id: 'assistant', name: 'Assistant' },
+        { id: 'coder', name: 'Coder' },
+      ])
+    }
+    if (path === '/api/models') {
+      return jsonResponse({
+        models: [{ id: 'faux/model', provider: 'faux', modelId: 'model', available: true, thinkingLevels: ['off', 'high'] }],
+        thinkingLevels: ['off', 'high'],
+        defaultModel: 'faux/model',
+      })
+    }
+    if (path === '/api/nodes') return jsonResponse([{ id: 'local', kind: 'local', online: true }])
+    if (/^\/api\/conversations\/1(?:\?|$)/.test(path)) return jsonResponse({ ...conv1, entries: [], nextCursor: null })
+    if (/^\/api\/conversations\/1\/artifacts(?:\?|$)/.test(path)) return jsonResponse([])
+    return jsonResponse([])
+  }) as typeof fetch
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(App))
+    })
+    const deadline = Date.now() + 3000
+    while (container.querySelector('.agent-standby-pane textarea.composer-textarea') === null && Date.now() < deadline) {
+      await settle(15)
+    }
+    await settle(60)
+
+    const shell = container.querySelector<HTMLElement>('.helmx-shell')!
+    const toggleBtn = container.querySelector<HTMLButtonElement>('.mobile-nav-toggle')!
+    const main = container.querySelector<HTMLElement>('main.helmx-main-stage')!
+    const initialTa = container.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea')!
+    assert.ok(initialTa !== null)
+    assert.ok(document.activeElement !== initialTa, 'passive cold load on mobile does not auto-focus standby textarea')
+
+    // 1. Mobile sidebar drawer -> multi-profile New Topic (Coder) closes drawer and focuses standby textarea (not toggleBtn)
+    await act(async () => {
+      toggleBtn.click()
+    })
+    assert.ok(shell.classList.contains('sidebar-open'))
+    const sidebarNewBtn = container.querySelector<HTMLButtonElement>('button.sidebar-new-topic-btn')!
+    await act(async () => {
+      sidebarNewBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    await settle(30)
+    const sidebarCoderItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('Coder'))!
+    assert.ok(sidebarCoderItem !== undefined)
+    await act(async () => {
+      sidebarCoderItem.click()
+    })
+    await settle(60)
+    assert.ok(!shell.classList.contains('sidebar-open'), 'selecting New Topic closes mobile sidebar drawer')
+    assert.equal(main.hasAttribute('inert'), false, 'main stage drops inert synchronously when drawer closes')
+    const coderTa = container.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')!
+    assert.ok(coderTa !== null)
+    assert.ok(document.activeElement === coderTa, 'Sidebar drawer multi-profile New Topic focuses standby textarea on mobile')
+    assert.ok(document.activeElement !== toggleBtn, 'drawer close must not steal focus back to hamburger button')
+
+    // 2. Re-open mobile drawer while already on #/a/coder -> re-select Coder -> still closes drawer and re-focuses textarea
+    coderTa.blur()
+    await act(async () => {
+      toggleBtn.click()
+    })
+    assert.ok(shell.classList.contains('sidebar-open'))
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button.sidebar-new-topic-btn')!.dispatchEvent(
+        new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }),
+      )
+    })
+    await settle(30)
+    const reselectCoderItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('Coder'))!
+    await act(async () => {
+      reselectCoderItem.click()
+    })
+    await settle(60)
+    assert.ok(!shell.classList.contains('sidebar-open'))
+    assert.ok(
+      document.activeElement === container.querySelector('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea'),
+      're-selecting same agent from mobile drawer still focuses standby textarea',
+    )
+
+    // 3. Overview New Topic dropdown on mobile -> Assistant standby focuses
+    window.history.replaceState(null, '', '#/overview')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(80)
+    const overviewNewBtn = container.querySelector<HTMLButtonElement>('button.overview-newtopic-btn')!
+    assert.ok(overviewNewBtn !== null)
+    await act(async () => {
+      overviewNewBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    await settle(30)
+    const overviewAssistantItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('Assistant'))!
+    await act(async () => {
+      overviewAssistantItem.click()
+    })
+    await settle(60)
+    assert.ok(
+      document.activeElement === container.querySelector('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea'),
+      'Overview New Topic dropdown focuses standby textarea on mobile',
+    )
+
+    // 4. Conversation topbar New Topic button -> standby focuses on mobile
+    window.history.replaceState(null, '', '#/c/1')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(80)
+    const convNewBtn = container.querySelector<HTMLButtonElement>('.conversation-topbar button[aria-label="New topic"], .conversation-topbar button[aria-label="新话题"]')!
+    assert.ok(convNewBtn !== null)
+    await act(async () => {
+      convNewBtn.click()
+    })
+    await settle(60)
+    assert.ok(
+      document.activeElement === container.querySelector('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea'),
+      'Conversation topbar New Topic focuses standby textarea on mobile',
+    )
+
+    // 5. Composer + menu "New topic" -> standby focuses on mobile
+    window.history.replaceState(null, '', '#/c/1')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(80)
+    const plusBtn = container.querySelector<HTMLButtonElement>('button.composer-plus-trigger')!
+    assert.ok(plusBtn !== null)
+    await act(async () => {
+      plusBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    await settle(30)
+    const plusNewTopicItem = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu-item[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('/new'))!
+    assert.ok(plusNewTopicItem !== undefined)
+    await act(async () => {
+      plusNewTopicItem.click()
+    })
+    await settle(60)
+    assert.ok(
+      document.activeElement === container.querySelector('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea'),
+      'Composer plus-menu New Topic focuses standby textarea on mobile',
+    )
+
+    // 6. Command Palette on mobile -> selecting Open agent: Coder with Enter focuses standby textarea
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true, cancelable: true }))
+    })
+    await settle(60)
+    const modal = document.querySelector<HTMLElement>('.palette-modal')!
+    assert.ok(modal !== null, 'Command Palette opens on mobile')
+    const allOpts = [...document.querySelectorAll<HTMLButtonElement>('.palette-listbox [data-idx].nav-item')]
+    const coderOptIdx = allOpts.findIndex((o) => o.textContent?.includes('Open agent: Coder'))
+    assert.ok(coderOptIdx >= 0)
+    for (let i = 0; i < coderOptIdx; i++) {
+      await act(async () => {
+        modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+      })
+    }
+    await act(async () => {
+      modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    await settle(60)
+    assert.ok(
+      document.activeElement === container.querySelector('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea'),
+      'Command Palette Open agent focuses standby textarea on mobile',
+    )
+
+    // 7. Escape dismissal of mobile drawer still restores focus to hamburger button
+    await act(async () => {
+      toggleBtn.click()
+    })
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    assert.ok(!shell.classList.contains('sidebar-open'))
+    assert.ok(document.activeElement === toggleBtn, 'Escape still restores focus to hamburger toggle')
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+    resetStandbyDrafts()
     globalThis.fetch = originalFetch
     window.matchMedia = originalMatchMedia
     Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true })

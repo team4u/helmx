@@ -35,8 +35,8 @@ export interface StandbyProfilePickerProps {
   options: ReadonlyArray<StandbyProfileOption>
   canSwitch: boolean
   panel: 'primary' | 'split'
-  onSelectProfile: (nextProfileId: string) => void
-  onReturnFocus: () => boolean
+  onSelectProfile: (nextProfileId: string, closePicker: () => void) => void
+  onReturnFocus: (explicit?: boolean) => boolean
   onFallbackFocusComposer: () => void
 }
 
@@ -61,6 +61,7 @@ export function StandbyProfilePicker({
   const listRef = useRef<HTMLDivElement | null>(null)
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
   const interactedOutsideRef = useRef(false)
+  const pickedRef = useRef(false)
 
   const showSearch = options.length > STANDBY_PROFILE_SEARCH_THRESHOLD
   const filtered = useMemo(
@@ -80,7 +81,10 @@ export function StandbyProfilePicker({
 
   useEffect(() => {
     setQuery('')
-    interactedOutsideRef.current = false
+    if (open) {
+      interactedOutsideRef.current = false
+      pickedRef.current = false
+    }
   }, [open])
 
   useEffect(() => {
@@ -111,10 +115,12 @@ export function StandbyProfilePicker({
   )
 
   const handlePick = (nextProfileId: string): void => {
-    setOpen(false)
+    pickedRef.current = true
     if (nextProfileId !== profileId) {
-      onSelectProfile(nextProfileId)
+      onSelectProfile(nextProfileId, () => setOpen(false))
+      return
     }
+    setOpen(false)
   }
 
   const handlePopoverKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -191,9 +197,12 @@ export function StandbyProfilePicker({
             onCloseAutoFocus={(event) => {
               if (interactedOutsideRef.current) {
                 interactedOutsideRef.current = false
+                pickedRef.current = false
                 return
               }
-              if (onReturnFocus()) {
+              const picked = pickedRef.current
+              pickedRef.current = false
+              if (onReturnFocus(picked)) {
                 event.preventDefault()
               }
             }}
