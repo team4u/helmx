@@ -10,7 +10,8 @@
  * 5. 通用工具：键值展示 + 原始数据展开保留完整 JSON 入参与原始输出；
  * 6. TraceRow：无插件接管可点击展开内置体；tool.view inline 保留原始数据
  *    入口，插件视图不被内置体替换；单行统计 +N −N / N 行；运行中行
- *    右侧仅实时耗时秒表（startedAt 锚点，无锚点留空不编造）。
+ *    右侧仅实时耗时秒表（startedAt 锚点，无锚点留空不编造）；摘要完整渲染
+ *    命令首行、不按字符数截断（宽度裁剪交给 CSS 省略）。
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
@@ -663,6 +664,21 @@ test('原型属性同名工具走通用展示，不误当作内置 React 组件'
       assert.match(m.host.textContent ?? '', /真实参数/)
       assert.match(m.host.textContent ?? '', /真实输出/)
     }
+  } finally {
+    m.unmount()
+  }
+})
+
+test('TraceRow：摘要完整渲染命令首行且不按字符数截断，宽度裁剪交给 CSS 省略', { timeout: 60_000 }, async () => {
+  const m = createMount()
+  try {
+    const longCommand = 'cd /root/code/helm && (ls -l /proc/[0-9]*/cwd 2>/dev/null | rg -c helm) && echo done'
+    assert.ok(longCommand.length > 60, 'fixture must exceed the retired 60-char cap')
+    await m.render(rowUi(trace({ toolName: 'bash', input: { command: `${longCommand}\n# 说明行不进摘要` } })))
+    const summary = m.host.querySelector('.trace-tool-summary')
+    assert.ok(summary !== null)
+    assert.equal(summary.textContent, longCommand, '摘要 = 命令首行全文，不手动拼 …')
+    assert.ok(m.host.querySelector('.trace-tool-name')?.textContent === 'bash')
   } finally {
     m.unmount()
   }

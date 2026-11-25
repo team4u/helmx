@@ -25,7 +25,6 @@ import type {
   ToolTrace,
 } from './timeline-types.js'
 
-const SUMMARY_MAX_CHARS = 60
 const SPILL_ID_RE = /\[Artifact\]\s+id=([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/
 const ART_REF_RE = /\bart_[A-Za-z0-9_-]{1,127}\b/
 const QUEUED_AGENT_COLLAPSE_CHARS = 600
@@ -236,6 +235,13 @@ function summarizeValue(value: unknown): string {
   return raw.length > 24 ? `${raw.slice(0, 24)}…` : raw
 }
 
+/**
+ * One-line summary for a collapsed tool row. A preferred string field is shown verbatim (first
+ * line only); the row's CSS `text-overflow: ellipsis` trims it to the actual available width, so
+ * wide screens reveal more and narrow ones less — a fixed character cap here would cut short
+ * commands on wide screens while leaving the right half of the row empty. Tools without a
+ * preferred field get a compact `k=v` digest instead (values capped per entry by design).
+ */
 export function toolSummaryText(toolName: string, input: unknown): string {
   void toolName
   let raw = ''
@@ -257,8 +263,7 @@ export function toolSummaryText(toolName: string, input: unknown): string {
         .join(' ')
     }
   }
-  const firstLine = raw.split('\n')[0]?.trim() ?? ''
-  return firstLine.length > SUMMARY_MAX_CHARS ? `${firstLine.slice(0, SUMMARY_MAX_CHARS)}…` : firstLine
+  return raw.split('\n')[0]?.trim() ?? ''
 }
 
 export function detectArtifactRef(text: string | undefined): string | undefined {

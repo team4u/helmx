@@ -346,8 +346,9 @@ test('live 合并：running 工具追加、流式文本并入进行中回合', {
 
 test('工具摘要与产物引用检测', { timeout: 60_000 }, () => {
   assert.equal(toolSummaryText('bash', { command: 'pnpm test --filter @helmx/web' }), 'pnpm test --filter @helmx/web')
+  // 首行原样返回：不按字符数截断，宽度裁剪交给 .trace-tool-summary 的 CSS 省略（宽屏多显、窄屏少显）
   const long = 'x'.repeat(80)
-  assert.ok(toolSummaryText('bash', { command: long }).endsWith('…'))
+  assert.equal(toolSummaryText('bash', { command: long }), long)
   assert.equal(toolSummaryText('bash', { command: 'a\nb' }), 'a')
   assert.equal(toolSummaryText('read', { file_path: '/root/code/helm/x.ts' }), '/root/code/helm/x.ts')
 
