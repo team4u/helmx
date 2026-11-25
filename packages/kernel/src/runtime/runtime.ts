@@ -114,6 +114,8 @@ export class KernelRuntime {
   readonly sessionDocEvents: SessionDocEventHub
   private readonly stashService = new SecretStash()
   private readonly hostEventListeners = new Map<string, Set<(payload: unknown) => MaybePromise<void>>>()
+  private readonly startedListeners = new Set<() => void>()
+  private readonly closeListeners = new Set<() => void>()
   readonly envFabric: EnvFabric
   /** Hub-side foreground port forwarding (listeners live only during commands; cleaned up on close). */
   readonly nodeForward: NodeForwardService
@@ -170,8 +172,6 @@ export class KernelRuntime {
       externalSkillRoots: options.externalSkillRoots,
       buildProvider: options.buildProvider,
       nodeUpgradeTimeoutMs: options.nodeUpgradeTimeoutMs ?? 120_000,
-      autoUpgradeNodes: options.autoUpgradeNodes,
-      nodeAutoUpgradePolicy: options.nodeAutoUpgradePolicy,
     })
     try {
       await runtime.initialize()
@@ -433,7 +433,24 @@ export class KernelRuntime {
     return this.#fatalError
   }
 
-  private emitDiagnostic(input: KernelDiagnosticInput): void {
+  /** Register a callback invoked when `start()` transitions `started` to `true`. */
+  onStarted(listener: () => void): () => void {
+    this.startedListeners.add(listener)
+    return () => {
+      this.startedListeners.delete(listener)
+    }
+  }
+
+  /** Register a callback invoked at the beginning of `close()` teardown. */
+  onClose(listener: () => void): () => void {
+    this.closeListeners.add(listener)
+    return () => {
+      this.closeListeners.delete(listener)
+    }
+  }
+
+  /** Emit a structured diagnostic event through the kernel's redacted diagnostic sink. */
+  emitDiagnostic(input: KernelDiagnosticInput): void {
     this.init.emitDiagnostic(input)
   }
 
@@ -541,7 +558,18 @@ export class KernelRuntime {
       // gate continues holding external traffic until startup converges.
       if (!this.closed) {
         this.#started = true
-        this.nodes.notifyHubReady()
+        for (const listener of [...this.startedListeners]) {
+          try {
+            listener()
+          } catch (error) {
+            this.emitDiagnostic({
+              level: 'error',
+              source: 'runtime.start',
+              message: 'Kernel startup listener failed',
+              error,
+            })
+          }
+        }
       }
     })()
     this.startPromise = attempt
@@ -1155,6 +1183,20 @@ export class KernelRuntime {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    for (const listener of [...this.closeListeners]) {
+      try {
+        listener()
+      } catch (error) {
+        this.emitDiagnostic({
+          level: 'error',
+          source: 'runtime.close',
+          message: 'Kernel close listener failed',
+          error,
+        })
+      }
+    }
+    this.closeListeners.clear()
+    this.startedListeners.clear()
     // With autoResume=false, `start()` may still be in flight: wait for it to settle first (ignore failures
     // so shutdown proceeds) to avoid racing teardown against plugin service startup (e.g., disposing mid-start).
     if (this.startPromise !== undefined) await this.startPromise.catch(() => {})

@@ -40,14 +40,6 @@ export { createFileModelsStore } from './models-store.js'
 export type { HelmxToolDeps } from './tool-deps.js'
 export { NodeManager } from './node-manager.js'
 export {
-  NodeAutoUpgradeCoordinator,
-  resolveAutoUpgradeNodesEnabled,
-  DEFAULT_AUTO_UPGRADE_BUSY_POLL_MS,
-  DEFAULT_AUTO_UPGRADE_RETRY_BASE_MS,
-  DEFAULT_AUTO_UPGRADE_RETRY_MAX_MS,
-  type NodeAutoUpgradeRetryPolicy,
-} from './node-auto-upgrade.js'
-export {
   shQuote,
   buildPosixHostShim,
   buildWindowsPosixShim,

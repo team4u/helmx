@@ -41,14 +41,15 @@
  *   notifications for terminal skips (`info`) and failures (`warning`).
  */
 import {
+  compareStrictSemver,
   HelmxError,
+  isStrictSemver,
   type NodeAutoUpgradePhase,
   type NodeAutoUpgradeStatus,
   type NodeInstallMode,
   type NodeUpgradeResult,
 } from '@helmx/protocol'
-import { HelmxUpgradeBusyError } from '../env/index.js'
-import { compareStrictSemVer, isStrictSemVer } from './semver.js'
+import { HelmxUpgradeBusyError } from '@helmx/kernel'
 
 export const DEFAULT_AUTO_UPGRADE_BUSY_POLL_MS = 5_000
 export const DEFAULT_AUTO_UPGRADE_RETRY_BASE_MS = 30_000
@@ -318,7 +319,7 @@ export class NodeAutoUpgradeCoordinator {
     const current = this.#entries.get(nodeId)
 
     // Strict SemVer version gate: only upgrade when node version < Hub version (never downgrade, never guess).
-    if (conn.version === undefined || !isStrictSemVer(conn.version)) {
+    if (conn.version === undefined || !isStrictSemver(conn.version)) {
       if (current !== undefined) {
         this.#clearTimer(current)
         this.#entries.delete(nodeId)
@@ -326,7 +327,7 @@ export class NodeAutoUpgradeCoordinator {
       }
       return
     }
-    if (compareStrictSemVer(conn.version, targetVersion) >= 0) {
+    if (compareStrictSemver(conn.version, targetVersion) >= 0) {
       if (current !== undefined) {
         this.#clearTimer(current)
         this.#entries.delete(nodeId)
@@ -550,8 +551,8 @@ export class NodeAutoUpgradeCoordinator {
       const latestConn = this.#deps.getOnlineNode(nodeId)
       if (
         latestConn?.version !== undefined &&
-        isStrictSemVer(latestConn.version) &&
-        compareStrictSemVer(latestConn.version, targetVersion) >= 0
+        isStrictSemver(latestConn.version) &&
+        compareStrictSemver(latestConn.version, targetVersion) >= 0
       ) {
         this.#clearTimer(entry)
         this.#entries.delete(nodeId)

@@ -7,3 +7,12 @@
  * built-in plugins); this package implements no core mechanisms itself.
  */
 export { createHelmx, type HelmxOptions } from './app.js';
+export {
+  NodeAutoUpgradeCoordinator,
+  resolveAutoUpgradeNodesEnabled,
+  DEFAULT_AUTO_UPGRADE_BUSY_POLL_MS,
+  DEFAULT_AUTO_UPGRADE_RETRY_BASE_MS,
+  DEFAULT_AUTO_UPGRADE_RETRY_MAX_MS,
+  type NodeAutoUpgradeDeps,
+  type NodeAutoUpgradeRetryPolicy,
+} from './node-auto-upgrade.js';

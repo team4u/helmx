@@ -17,12 +17,9 @@
  *    unconfirmed timeout 502;
  * 5. HTTP body boundary validation: rejects unknown fields / non-http(s) registryUrl / non-boolean force /
  *    user-supplied attemptId;
- * 6. Auto-upgrade follows Hub version by default for confirmed `installMode === 'release'` nodes
- *    (never npm latest, never auto-downgrade), honors disable switch (`HELMX_AUTO_UPGRADE_NODES=0`
- *    / `autoUpgradeNodes: false`), skips source/link nodes (`source_skipped`), fails closed for
- *    legacy nodes missing `installMode` (`unknown_mode`, never calling `upgradeNode`), gates on Hub
- *    startup/recovery completion and node busyness without interrupting active turns, retries
- *    recoverable failures with backoff/reconnect recovery, and deduplicates concurrent triggers.
+ * 6. Manual source-mode rejection (`501 node_upgrade_source_mode`), bare `KernelRuntime` mechanism
+ *    boundary (no auto-upgrade policy, `NodeInfo.autoUpgrade` stays `undefined`), and pure
+ *    `NodeManager`/`KernelRuntime` lifecycle ports.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -38,7 +35,6 @@ import type {
   HelmxEvent,
   NodeEnvRpcFunctions,
   NodeHeartbeatInput,
-  NodeInfo,
   NodeInstallMode,
   NodeRegisterInput,
   NodeRegisterResult,
@@ -50,15 +46,10 @@ import type {
 import type { HubConnectionLocal } from '../src/env/registry.js'
 import { NodeRegistry, HelmxUpgradeBusyError, HelmxUpgradeTimeoutError } from '../src/env/index.js'
 import { KernelRuntime } from '../src/runtime/runtime.js'
-import {
-  NodeAutoUpgradeCoordinator,
-  resolveAutoUpgradeNodesEnabled,
-  type NodeAutoUpgradeRetryPolicy,
-} from '../src/runtime/node-auto-upgrade.js'
 import { hubVersion, normalizeExplicitVersion, compareStrictSemVer } from '../src/runtime/semver.js'
 import { startHub } from '../src/http/index.js'
 import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 
 const waitFor = (cond: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
   kitWaitFor(cond, { timeoutMs, intervalMs: 25, message: `wait timed out: ${what}` })
@@ -701,13 +692,11 @@ function previousVersionFor(nodeId: string, attemptId: string): string {
   return previousVersionByAttempt.get(`${nodeId}:${attemptId}`) ?? '1.0.0'
 }
 
-/** Starts a full Hub instance (with /ws/node gateway and authentication). */
+/** Starts a bare KernelRuntime + startHub HTTP gateway (without Hub auto-upgrade coordinator). */
 async function openHubApp(
   dir: string,
   options: {
     autoResume?: boolean
-    autoUpgradeNodes?: boolean
-    nodeAutoUpgradePolicy?: NodeAutoUpgradeRetryPolicy
     nodeUpgradeTimeoutMs?: number
     faux?: ReturnType<typeof fauxProvider>
   } = {},
@@ -728,19 +717,21 @@ async function openHubApp(
     models: models as never,
     nodeUpgradeTimeoutMs: options.nodeUpgradeTimeoutMs ?? 600,
     ...(options.autoResume !== undefined ? { autoResume: options.autoResume } : {}),
-    ...(options.autoUpgradeNodes !== undefined ? { autoUpgradeNodes: options.autoUpgradeNodes } : {}),
-    ...(options.nodeAutoUpgradePolicy !== undefined ? { nodeAutoUpgradePolicy: options.nodeAutoUpgradePolicy } : {}),
   })
   const hub = await startHub({
     kernel: kernel as never,
     port: 0,
   })
-  const setup = await fetch(`${hub.url}/api/auth/setup`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ password: 'node-upgrade-test-pass' }),
-  })
-  const { token } = (await setup.json()) as { token: string }
+  let token = kernel.processToken ?? ''
+  if (kernel.started) {
+    const setup = await fetch(`${hub.url}/api/auth/setup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'node-upgrade-test-pass' }),
+    })
+    assert.equal(setup.status, 200)
+    ;({ token } = (await setup.json()) as { token: string })
+  }
   return {
     kernel,
     hub,
@@ -1012,23 +1003,12 @@ test('upgrade: node disconnects mid-RPC -- never falsely succeeds (unconfirmed 5
 })
 
 // ---------------------------------------------------------------------------
-// Auto-upgrade (Hub-pinned version follow, source exemption, startup/busy gates, retry, dedupe)
+// Manual source-mode guard + bare KernelRuntime mechanism boundary & lifecycle ports
 // ---------------------------------------------------------------------------
-
-test('resolveAutoUpgradeNodesEnabled: enabled by default; 0/false/off/no disable explicitly', { timeout: 60_000 }, () => {
-  assert.equal(resolveAutoUpgradeNodesEnabled({}), true)
-  assert.equal(resolveAutoUpgradeNodesEnabled({ HELMX_AUTO_UPGRADE_NODES: '' }), true)
-  assert.equal(resolveAutoUpgradeNodesEnabled({ HELMX_AUTO_UPGRADE_NODES: '1' }), true)
-  assert.equal(resolveAutoUpgradeNodesEnabled({ HELMX_AUTO_UPGRADE_NODES: 'true' }), true)
-  assert.equal(resolveAutoUpgradeNodesEnabled({ HELMX_AUTO_UPGRADE_NODES: '0' }), false)
-  assert.equal(resolveAutoUpgradeNodesEnabled({ HELMX_AUTO_UPGRADE_NODES: 'false' }), false)
-  assert.equal(resolveAutoUpgradeNodesEnabled({ HELMX_AUTO_UPGRADE_NODES: 'OFF' }), false)
-  assert.equal(resolveAutoUpgradeNodesEnabled({ HELMX_AUTO_UPGRADE_NODES: 'no' }), false)
-})
 
 test('manual POST /api/nodes/:id/upgrade rejects source-mode nodes with 501 node_upgrade_source_mode (both preflight and RPC)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'manual-src-'))
-  const app = await openHubApp(dir, { autoUpgradeNodes: false })
+  const app = await openHubApp(dir)
   try {
     // 1. Registered with installMode=source -> Hub rejects immediately without invoking nodeUpgrade RPC.
     const srcNode = await provisionNode(app.hub.url, app.token, 'src-manual', '0.0.1', { installMode: 'source' })
@@ -1068,601 +1048,95 @@ test('manual POST /api/nodes/:id/upgrade rejects source-mode nodes with 501 node
   }
 })
 
-test('auto-upgrade enabled by default: pins Hub version (never npm latest) and converges NodeInfo; disable switch stops it', { timeout: 60_000 }, async () => {
-  const dirOn = await mkdtemp(join(rootDir, 'auto-default-on-'))
-  const appOn = await openHubApp(dirOn)
-  try {
-    const events: HelmxEvent[] = []
-    const off = appOn.kernel.events.subscribe((frame) => events.push(frame.event))
-    try {
-      // Node fixture reports registry latest=9.9.9 in nodeCheckUpgrade, but Hub auto-follow must pin hubVersion().
-      const node = await provisionNode(appOn.hub.url, appOn.token, 'auto-default-node', '0.0.1', {
-        installMode: 'release',
-        initialPlan: {
-          rpcResult: { ok: true, value: { ok: true, previousVersion: '0.0.1', targetVersion: hubVersion(), upgraded: true } },
-          reconnect: { candidateVersion: hubVersion(), previousVersion: '0.0.1', installMode: 'release' },
-        },
-      })
-      await waitFor(() => node.upgradeCalls.length === 1, 10_000, 'default auto-upgrade call')
-      assert.equal(node.upgradeCalls[0]!.targetVersion, hubVersion(), 'auto-upgrade target must be pinned to Hub version, never npm latest')
-      assert.equal(node.checkCalls, 0, 'auto-upgrade must not query registry latest')
-
-      // Wait until candidate commit completes and autoUpgrade clears on NodeInfo.
-      await waitFor(
-        () => {
-          const info = appOn.kernel.nodes.listNodesSync().find((n) => n.id === 'auto-default-node')
-          return info?.online === true && info.version === hubVersion() && info.autoUpgrade === undefined
-        },
-        10_000,
-        'node converges to Hub version and clears autoUpgrade state',
-      )
-      assert.ok(
-        events.some(
-          (e) =>
-            e.type === 'node.changed' &&
-            'node' in e &&
-            e.node.id === 'auto-default-node' &&
-            e.node.autoUpgrade?.status === 'upgrading',
-        ),
-        'node.changed should expose upgrading phase',
-      )
-
-      // Equal or newer node must never trigger upgrade or auto-downgrade.
-      const equalNode = await provisionNode(appOn.hub.url, appOn.token, 'auto-eq-node', hubVersion(), { installMode: 'release' })
-      const newerNode = await provisionNode(appOn.hub.url, appOn.token, 'auto-newer-node', '9.9.9', { installMode: 'release' })
-      await delay(250)
-      assert.equal(equalNode.upgradeCalls.length, 0, 'equal version must not auto-upgrade')
-      assert.equal(newerNode.upgradeCalls.length, 0, 'newer node must not auto-downgrade')
-      node.close()
-      equalNode.close()
-      newerNode.close()
-    } finally {
-      off()
-    }
-  } finally {
-    await appOn.close().catch(() => undefined)
-  }
-
-  // Explicit env disable switch (`HELMX_AUTO_UPGRADE_NODES=0`) suppresses auto-upgrade.
-  const dirOff = await mkdtemp(join(rootDir, 'auto-env-off-'))
-  process.env['HELMX_AUTO_UPGRADE_NODES'] = '0'
-  let appOff: Awaited<ReturnType<typeof openHubApp>> | undefined
-  try {
-    appOff = await openHubApp(dirOff)
-    const node = await provisionNode(appOff.hub.url, appOff.token, 'auto-off-node', '0.0.1', { installMode: 'release' })
-    await delay(300)
-    assert.equal(node.upgradeCalls.length, 0, 'HELMX_AUTO_UPGRADE_NODES=0 must disable auto-upgrade')
-    node.close()
-  } finally {
-    delete process.env['HELMX_AUTO_UPGRADE_NODES']
-    await appOff?.close().catch(() => undefined)
-  }
-})
-
-test('auto-upgrade skips source/link nodes unconditionally and exposes source_skipped on NodeInfo, node.changed, and notification', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(rootDir, 'auto-src-skip-'))
-  const app = await openHubApp(dir)
-  try {
-    const events: HelmxEvent[] = []
-    const off = app.kernel.events.subscribe((frame) => events.push(frame.event))
-    try {
-      const node = await provisionNode(app.hub.url, app.token, 'src-dev-node', '0.0.1', { installMode: 'source' })
-      await delay(250)
-      assert.equal(node.upgradeCalls.length, 0, 'source/link node must never receive auto nodeUpgrade RPC')
-
-      const listRes = await fetch(`${app.hub.url}/api/nodes`, { headers: authHeaders(app.token) })
-      assert.equal(listRes.status, 200)
-      const nodes = (await listRes.json()) as NodeInfo[]
-      const entry = nodes.find((n) => n.id === 'src-dev-node')
-      assert.equal(entry?.installMode, 'source')
-      assert.equal(entry?.autoUpgrade?.status, 'source_skipped')
-      assert.equal(entry?.autoUpgrade?.targetVersion, hubVersion())
-      assert.match(entry?.autoUpgrade?.reason ?? '', /source_mode/)
-
-      assert.ok(
-        events.some(
-          (e) =>
-            e.type === 'node.changed' &&
-            'node' in e &&
-            e.node.id === 'src-dev-node' &&
-            e.node.autoUpgrade?.status === 'source_skipped',
-        ),
-        'node.changed must expose source_skipped',
-      )
-      assert.ok(
-        events.some((e) => e.type === 'notification' && 'level' in e && e.level === 'info' && /src-dev-node/.test(e.title)),
-        'notification must surface source-mode skip',
-      )
-      node.close()
-    } finally {
-      off()
-    }
-  } finally {
-    await app.close().catch(() => undefined)
-  }
-})
-
-test('auto-upgrade startup gate: defers older node during two-phase boot until kernel.start() finishes recovery', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(rootDir, 'auto-startup-gate-'))
-  // Two-phase boot matching hub/main.ts: open listener before kernel.start().
+test('bare KernelRuntime exposes pure node lifecycle ports without auto-upgrading or projecting autoUpgrade by default', { timeout: 60_000 }, async () => {
+  const dir = await mkdtemp(join(rootDir, 'bare-ports-'))
   const app = await openHubApp(dir, { autoResume: false })
   try {
-    assert.equal(app.kernel.started, false)
-    const issued = await app.kernel.issueNodeToken('boot-node')
-    const node = await connectFixtureNode(app.hub.url.replace(/^http/, 'ws'), 'boot-node', issued.token, '0.0.1', {
-      installMode: 'release',
-      initialPlan: {
-        rpcResult: { ok: true, value: { ok: true, previousVersion: '0.0.1', targetVersion: hubVersion(), upgraded: true } },
-        reconnect: { candidateVersion: hubVersion(), previousVersion: '0.0.1', installMode: 'release' },
-      },
-    })
-    await delay(250)
-    assert.equal(node.upgradeCalls.length, 0, 'must not trigger auto-upgrade before Hub startup/recovery completes')
-    const pendingInfo = app.kernel.nodes.listNodesSync().find((n) => n.id === 'boot-node')
-    assert.equal(pendingInfo?.autoUpgrade?.status, 'pending')
-    assert.match(pendingInfo?.autoUpgrade?.reason ?? '', /startup|recovery/i)
-
-    // Complete Hub startup + recovery -> pending node wakes up and upgrades to Hub version.
-    await app.kernel.start()
-    await waitFor(() => node.upgradeCalls.length === 1, 10_000, 'auto-upgrade wakes after kernel.start()')
-    assert.equal(node.upgradeCalls[0]!.targetVersion, hubVersion())
-    await waitFor(
-      () => app.kernel.nodes.listNodesSync().find((n) => n.id === 'boot-node')?.version === hubVersion(),
-      10_000,
-      'boot-node converges to Hub version',
-    )
-    node.close()
-  } finally {
-    await app.close().catch(() => undefined)
-  }
-})
-
-test('auto-upgrade busy gate: defers while bound conversation has an active turn and upgrades after turn settles via bounded retry', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(rootDir, 'auto-busy-gate-'))
-  let enteredTurn!: () => void
-  const turnStarted = new Promise<void>((resolve) => {
-    enteredTurn = resolve
-  })
-  let releaseTurn!: (msg: ReturnType<typeof fauxAssistantMessage>) => void
-  const heldResponse = new Promise<ReturnType<typeof fauxAssistantMessage>>((resolve) => {
-    releaseTurn = resolve
-  })
-  const faux = fauxProvider()
-  faux.setResponses([
-    async () => {
-      enteredTurn()
-      return heldResponse
-    },
-  ])
-  const app = await openHubApp(dir, {
-    faux,
-    nodeAutoUpgradePolicy: { busyPollMs: 60, retryBaseMs: 80, retryMaxMs: 200 },
-  })
-  try {
-    // Issue token and bind a conversation to busy-node, then start an active turn before connecting the older node.
-    const issued = await app.kernel.issueNodeToken('busy-node')
-    const conv = await app.kernel.createConversation({
-      title: 'Remote work',
-      nodeId: 'busy-node',
-      cwd: dir,
-    })
-    await app.kernel.submitInput(conv.id, 'hold active turn on busy-node')
-    await turnStarted
-    assert.ok(app.kernel.describeNodeBusy('busy-node'), 'bound active turn must mark node busy')
-
-    const node = await connectFixtureNode(app.hub.url.replace(/^http/, 'ws'), 'busy-node', issued.token, '0.0.1', {
-      installMode: 'release',
-      initialPlan: {
-        rpcResult: { ok: true, value: { ok: true, previousVersion: '0.0.1', targetVersion: hubVersion(), upgraded: true } },
-        reconnect: { candidateVersion: hubVersion(), previousVersion: '0.0.1', installMode: 'release' },
-      },
-    })
-
-    // Across several busyPollMs intervals while the turn is active, node stays pending and never upgrades.
-    await delay(260)
-    assert.equal(node.upgradeCalls.length, 0, 'busy node with active conversation turn must not be interrupted')
-    const duringBusy = app.kernel.nodes.listNodesSync().find((n) => n.id === 'busy-node')
-    assert.equal(duringBusy?.autoUpgrade?.status, 'pending')
-    assert.match(duringBusy?.autoUpgrade?.reason ?? '', /active conversation/)
-    assert.equal(typeof duringBusy?.autoUpgrade?.nextRetryAt, 'number')
-
-    // Finish the turn cleanly -> bounded poll detects idle and completes the upgrade.
-    releaseTurn(fauxAssistantMessage('completed cleanly'))
-    await waitFor(() => app.kernel.describeNodeBusy('busy-node') === undefined, 10_000, 'busy-node becomes idle')
-    await waitFor(() => node.upgradeCalls.length === 1, 10_000, 'deferred auto-upgrade runs once idle')
-    assert.equal(node.upgradeCalls[0]!.targetVersion, hubVersion())
-    await waitFor(
-      () => app.kernel.nodes.listNodesSync().find((n) => n.id === 'busy-node')?.version === hubVersion(),
-      10_000,
-      'busy-node converges after idle upgrade',
-    )
-    node.close()
-  } finally {
-    releaseTurn(fauxAssistantMessage('cleanup'))
-    await app.close().catch(() => undefined)
-  }
-})
-
-test('auto-upgrade retry and terminal skips: recovers after backoff and reconnect, skips terminal not_supported, and deduplicates concurrent triggers', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(rootDir, 'auto-retry-'))
-  const app = await openHubApp(dir, {
-    nodeUpgradeTimeoutMs: 1_500,
-    nodeAutoUpgradePolicy: { busyPollMs: 50, retryBaseMs: 250, retryMaxMs: 600 },
-  })
-  try {
-    // 1. Recoverable failure -> failed state with backoff -> retries after retryBaseMs and succeeds.
-    const wsUrl = app.hub.url.replace(/^http/, 'ws')
-    let attemptSeen = 0
-    const retryNode = await provisionNode(app.hub.url, app.token, 'retry-backoff-node', '0.0.1', {
-      installMode: 'release',
-      initialPlan: {
-        rpcResult: { ok: false, error: { code: 'unknown', message: 'npm 404 not propagated yet' } },
-        onUpgrade: async (input) => {
-          attemptSeen += 1
-          if (attemptSeen === 1) {
-            return { ok: false, error: { code: 'unknown', message: 'npm 404 not propagated yet' } }
-          }
-          // Second attempt succeeds with real candidate takeover.
-          const candidatePlan: FixturePlan = {
-            rpcResult: { ok: true, value: { ok: true, previousVersion: '0.0.1', targetVersion: hubVersion(), upgraded: true } },
-            reconnect: { candidateVersion: hubVersion(), previousVersion: '0.0.1', installMode: 'release' },
-          }
-          setTimeout(() => {
-            void connectCandidate(
-              wsUrl,
-              'retry-backoff-node',
-              retryNode.nodeToken,
-              hubVersion(),
-              input.attemptId ?? '',
-              { registeredVersion: '0.0.1', lastAttemptId: input.attemptId },
-              candidatePlan,
-            )
-          }, 25).unref()
-          return candidatePlan.rpcResult
-        },
-      },
-    })
-    await waitFor(() => retryNode.upgradeCalls.length === 1, 10_000, 'first attempt fires')
-    await waitFor(
-      () => app.kernel.nodes.listNodesSync().find((n) => n.id === 'retry-backoff-node')?.autoUpgrade?.status === 'failed',
-      10_000,
-      'failed status exposed after transient error',
-    )
-    const failedInfo = app.kernel.nodes.listNodesSync().find((n) => n.id === 'retry-backoff-node')
-    assert.equal(failedInfo?.autoUpgrade?.attempts, 1)
-    assert.equal(typeof failedInfo?.autoUpgrade?.nextRetryAt, 'number')
-    // Must not hammer immediately during backoff window.
-    await delay(100)
-    assert.equal(retryNode.upgradeCalls.length, 1, 'must respect backoff window before retrying')
-    // Backoff expires -> attempt 2 runs and converges.
-    await waitFor(() => retryNode.upgradeCalls.length === 2, 10_000, 'backoff timer triggers retry attempt 2')
-    await waitFor(
-      () => app.kernel.nodes.listNodesSync().find((n) => n.id === 'retry-backoff-node')?.version === hubVersion(),
-      10_000,
-      'node converges on retry attempt 2',
-    )
-    retryNode.close()
-
-    // 2. Recoverable failure followed by disconnect + reconnect recovers immediately on reconnect (even with long timer backoff).
-    const dirReconn = await mkdtemp(join(rootDir, 'auto-reconn-'))
-    const appReconn = await openHubApp(dirReconn, {
-      nodeAutoUpgradePolicy: { busyPollMs: 50, retryBaseMs: 60_000, retryMaxMs: 120_000 },
-    })
-    try {
-      const reconnWs = appReconn.hub.url.replace(/^http/, 'ws')
-      const firstConn = await provisionNode(appReconn.hub.url, appReconn.token, 'reconn-node', '0.0.1', {
-        installMode: 'release',
-        initialPlan: { rpcResult: { ok: false, error: { code: 'unknown', message: 'transient network error' } } },
-      })
-      await waitFor(
-        () => appReconn.kernel.nodes.listNodesSync().find((n) => n.id === 'reconn-node')?.autoUpgrade?.status === 'failed',
-        10_000,
-        'reconn-node records failed status',
-      )
-      firstConn.close()
-      await waitFor(
-        () => appReconn.kernel.nodes.listNodesSync().find((n) => n.id === 'reconn-node')?.online === false,
-        10_000,
-        'reconn-node goes offline',
-      )
-      const secondConn = await connectFixtureNode(reconnWs, 'reconn-node', firstConn.nodeToken, '0.0.1', {
-        installMode: 'release',
-        initialPlan: {
-          rpcResult: { ok: true, value: { ok: true, previousVersion: '0.0.1', targetVersion: hubVersion(), upgraded: true } },
-          reconnect: { candidateVersion: hubVersion(), previousVersion: '0.0.1', installMode: 'release' },
-        },
-      })
-      await waitFor(() => secondConn.upgradeCalls.length === 1, 10_000, 'reconnect triggers recovery retry')
-      await waitFor(
-        () => appReconn.kernel.nodes.listNodesSync().find((n) => n.id === 'reconn-node')?.version === hubVersion(),
-        10_000,
-        'reconn-node converges after reconnect retry',
-      )
-      secondConn.close()
-    } finally {
-      await appReconn.close().catch(() => undefined)
-    }
-
-    // 3. Terminal not_supported: skipped terminally (no timer retry, no retry on reconnect for same targetVersion).
-    const unsup1 = await provisionNode(app.hub.url, app.token, 'unsup-node', '0.0.1', {
-      installMode: 'release',
-      initialPlan: { rpcResult: { ok: false, error: { code: 'not_supported', message: 'unmanaged foreground daemon' } } },
-    })
-    await waitFor(
-      () => app.kernel.nodes.listNodesSync().find((n) => n.id === 'unsup-node')?.autoUpgrade?.status === 'not_supported',
-      10_000,
-      'unsup-node reaches terminal not_supported',
-    )
-    await delay(350)
-    assert.equal(unsup1.upgradeCalls.length, 1, 'not_supported must not retry on timer')
-    unsup1.close()
-    await waitFor(() => app.kernel.nodes.listNodesSync().find((n) => n.id === 'unsup-node')?.online === false, 10_000, 'unsup offline')
-    const unsup2 = await connectFixtureNode(wsUrl, 'unsup-node', unsup1.nodeToken, '0.0.1', {
-      installMode: 'release',
-      initialPlan: { rpcResult: { ok: false, error: { code: 'not_supported', message: 'unmanaged foreground daemon' } } },
-    })
-    await delay(350)
-    assert.equal(unsup2.upgradeCalls.length, 0, 'not_supported must remain terminally skipped across reconnects for same targetVersion')
-    unsup2.close()
-
-    // 4. Concurrency deduplication: while an upgrade is in flight, repeated notifyHubReady() never triggers a second call.
-    let releaseInflight!: (res: RpcResult<NodeUpgradeResult>) => void
-    const inflightReply = new Promise<RpcResult<NodeUpgradeResult>>((resolve) => {
-      releaseInflight = resolve
-    })
-    const dedupeNode = await provisionNode(app.hub.url, app.token, 'dedupe-inflight-node', '0.0.1', {
-      installMode: 'release',
-      initialPlan: {
-        rpcResult: { ok: false, error: { code: 'unknown', message: 'unused' } },
-        onUpgrade: () => inflightReply,
-      },
-    })
-    await waitFor(() => dedupeNode.upgradeCalls.length === 1, 10_000, 'in-flight upgrade starts')
-    app.kernel.nodes.notifyHubReady()
-    app.kernel.nodes.notifyHubReady()
-    await delay(120)
-    assert.equal(dedupeNode.upgradeCalls.length, 1, 'concurrent triggers while upgrading must be deduplicated')
-    releaseInflight({ ok: false, error: { code: 'not_supported', message: 'stop test' } })
-    await waitFor(
-      () => app.kernel.nodes.listNodesSync().find((n) => n.id === 'dedupe-inflight-node')?.autoUpgrade?.status === 'not_supported',
-      10_000,
-      'in-flight dedupe attempt settles cleanly',
-    )
-    dedupeNode.close()
-
-    // 5. Defense-in-depth: node announcing installMode=release that rejects RPC with source_mode -> terminal source_skipped, never retried.
-    const rpcSrcAuto = await provisionNode(app.hub.url, app.token, 'rpc-src-auto', '0.0.1', {
-      installMode: 'release',
-      initialPlan: {
-        rpcResult: {
-          ok: false,
-          error: { code: 'source_mode', message: 'not_supported (source_mode): update source and restart manually' },
-        },
-      },
-    })
-    await waitFor(
-      () => app.kernel.nodes.listNodesSync().find((n) => n.id === 'rpc-src-auto')?.autoUpgrade?.status === 'source_skipped',
-      10_000,
-      'rpc source_mode rejection transitions to terminal source_skipped',
-    )
-    await delay(350)
-    assert.equal(rpcSrcAuto.upgradeCalls.length, 1, 'terminal source_skipped must not retry on backoff timer')
-    rpcSrcAuto.close()
-  } finally {
-    await app.close().catch(() => undefined)
-  }
-})
-
-test('auto-upgrade fails closed for legacy nodes missing installMode (unknown_mode): never auto-upgrades, sets no retry timer, emits no failure alert, allows manual upgrade and release recovery', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(rootDir, 'auto-unknown-mode-'))
-  const app = await openHubApp(dir, {
-    nodeUpgradeTimeoutMs: 1_500,
-    nodeAutoUpgradePolicy: { busyPollMs: 40, retryBaseMs: 60, retryMaxMs: 120 },
-  })
-  try {
-    const wsUrl = app.hub.url.replace(/^http/, 'ws')
     const events: HelmxEvent[] = []
-    const off = app.kernel.events.subscribe((frame) => events.push(frame.event))
+    const transitions: Array<{ nodeId: string; online: boolean }> = []
+    const removals: string[] = []
+    let startedCount = 0
+    let closedCount = 0
+
+    const offEvents = app.kernel.events.subscribe((frame) => events.push(frame.event))
+    const offConn = app.kernel.nodes.onNodeConnectionChanged((nodeId, online) => {
+      transitions.push({ nodeId, online })
+    })
+    const offRemoved = app.kernel.nodes.onNodeRemoved((nodeId) => {
+      removals.push(nodeId)
+    })
+    const offStarted = app.kernel.onStarted(() => {
+      startedCount += 1
+    })
+    const offClose = app.kernel.onClose(() => {
+      closedCount += 1
+    })
+
     try {
-      // 1. Legacy daemon (like an older source checkout) registers with older version and omits installMode.
-      const legacy1 = await provisionNode(app.hub.url, app.token, 'legacy-code2', '0.0.1', {
-        initialPlan: {
-          rpcResult: { ok: true, value: { ok: true, previousVersion: '0.0.1', targetVersion: hubVersion(), upgraded: true } },
-          reconnect: { candidateVersion: hubVersion(), previousVersion: '0.0.1', installMode: 'release' },
-        },
-      })
-      await waitFor(
-        () => app.kernel.nodes.listNodesSync().find((n) => n.id === 'legacy-code2')?.autoUpgrade?.status === 'unknown_mode',
-        10_000,
-        'legacy node enters unknown_mode',
+      await app.kernel.start()
+      assert.equal(startedCount, 1, 'onStarted fires once when kernel.start() completes')
+
+      // Outdated release node connected to bare KernelRuntime must NOT auto-upgrade and keeps autoUpgrade undefined.
+      const issued = await app.kernel.issueNodeToken('bare-old-node')
+      const node = await connectFixtureNode(
+        app.hub.url.replace(/^http/, 'ws'),
+        'bare-old-node',
+        issued.token,
+        '0.0.1',
+        { installMode: 'release' },
       )
+      await delay(200)
+      assert.equal(node.upgradeCalls.length, 0, 'bare KernelRuntime must never auto-upgrade nodes')
+      assert.equal(app.kernel.nodes.hasNode('bare-old-node'), true)
+      assert.equal(app.kernel.nodes.getOnlineNode('bare-old-node')?.version, '0.0.1')
+      assert.deepEqual(app.kernel.nodes.listOnlineNodeIds(), ['bare-old-node'])
+      assert.equal(app.kernel.nodes.hasUpgradeInFlight('bare-old-node'), false)
+      const bareInfo = app.kernel.nodes.listNodesSync().find((n) => n.id === 'bare-old-node')
+      assert.equal(bareInfo?.autoUpgrade, undefined, 'bare KernelRuntime leaves NodeInfo.autoUpgrade undefined')
+      assert.deepEqual(transitions, [{ nodeId: 'bare-old-node', online: true }])
 
-      // Trigger Hub ready re-evaluation and wait across multiple busy/retry intervals -> still zero auto-upgrade calls.
-      app.kernel.nodes.notifyHubReady()
-      await delay(250)
-      assert.equal(legacy1.upgradeCalls.length, 0, 'legacy node without installMode must never trigger auto-upgrade')
-
-      const listRes = await fetch(`${app.hub.url}/api/nodes`, { headers: authHeaders(app.token) })
-      assert.equal(listRes.status, 200)
-      const nodes = (await listRes.json()) as NodeInfo[]
-      const entry = nodes.find((n) => n.id === 'legacy-code2')
-      assert.equal(entry?.installMode, undefined)
-      assert.equal(entry?.autoUpgrade?.status, 'unknown_mode')
-      assert.equal(entry?.autoUpgrade?.targetVersion, hubVersion())
-      assert.equal(entry?.autoUpgrade?.attempts, 0)
-      assert.equal(entry?.autoUpgrade?.nextRetryAt, undefined, 'unknown_mode must not arm any retry timer')
-      assert.match(entry?.autoUpgrade?.reason ?? '', /unknown_mode/)
-      assert.match(entry?.autoUpgrade?.reason ?? '', /installMode/)
-      assert.match(entry?.autoUpgrade?.reason ?? '', /manually/)
-
+      // Optional autoUpgradeStatusProvider projects onto NodeInfo and publishNodeChanged/publishNotification emit cleanly.
+      app.kernel.nodes.setAutoUpgradeStatusProvider((nodeId) =>
+        nodeId === 'bare-old-node'
+          ? { status: 'pending', targetVersion: hubVersion(), attempts: 0, updatedAt: 123, reason: 'injected' }
+          : undefined,
+      )
+      app.kernel.nodes.publishNodeChanged('bare-old-node')
+      app.kernel.nodes.publishNotification({ level: 'info', title: 'port probe', body: 'ok' })
+      const projectedInfo = app.kernel.nodes.listNodesSync().find((n) => n.id === 'bare-old-node')
+      assert.equal(projectedInfo?.autoUpgrade?.status, 'pending')
       assert.ok(
         events.some(
           (e) =>
             e.type === 'node.changed' &&
             'node' in e &&
-            e.node.id === 'legacy-code2' &&
-            e.node.installMode === undefined &&
-            e.node.autoUpgrade?.status === 'unknown_mode',
+            e.node.id === 'bare-old-node' &&
+            e.node.autoUpgrade?.status === 'pending',
         ),
-        'SSE node.changed must expose unknown_mode cleanly for legacy nodes',
+      )
+      assert.ok(events.some((e) => e.type === 'notification' && 'title' in e && e.title === 'port probe'))
+
+      app.kernel.nodes.setAutoUpgradeStatusProvider(undefined)
+      node.close()
+      await waitFor(
+        () => transitions.some((t) => t.nodeId === 'bare-old-node' && t.online === false),
+        5_000,
+        'offline connection transition callback',
       )
 
-      // Disconnect and reconnect still omitting installMode -> still never calls upgradeNode and never re-notifies.
-      legacy1.close()
-      await waitFor(
-        () => app.kernel.nodes.listNodesSync().find((n) => n.id === 'legacy-code2')?.online === false,
-        10_000,
-        'legacy-code2 goes offline',
-      )
-      const legacy2 = await connectFixtureNode(wsUrl, 'legacy-code2', legacy1.nodeToken, '0.0.1', {
-        initialPlan: {
-          rpcResult: { ok: true, value: { ok: true, previousVersion: '0.0.1', targetVersion: hubVersion(), upgraded: true } },
-          reconnect: { candidateVersion: hubVersion(), previousVersion: '0.0.1', installMode: 'release' },
-        },
-      })
-      await delay(200)
-      assert.equal(legacy2.upgradeCalls.length, 0, 'reconnecting legacy node without installMode must remain fail-closed')
-
-      // Never emit misleading warning/error failure notifications; at most one info notice across reconnects.
-      const legacyNotifications = events.filter(
-        (e): e is Extract<HelmxEvent, { type: 'notification' }> =>
-          e.type === 'notification' && 'title' in e && /legacy-code2/.test(e.title),
-      )
-      assert.equal(
-        legacyNotifications.filter((n) => n.level !== 'info' || /failed/i.test(n.title)).length,
-        0,
-        'unknown_mode must never emit misleading warning/error failure alerts',
-      )
-      assert.equal(legacyNotifications.length, 1, 'unknown_mode info notice must be deduplicated across reconnects')
-
-      // 2. Manual POST /api/nodes/:id/upgrade still allows operators to explicitly upgrade a legacy node;
-      //    once the upgraded candidate commits at Hub version with installMode=release, unknown_mode clears.
-      const manualRes = await fetch(`${app.hub.url}/api/nodes/legacy-code2/upgrade`, {
-        method: 'POST',
-        headers: authHeaders(app.token),
-        body: JSON.stringify({ targetVersion: hubVersion() }),
-      })
-      assert.equal(manualRes.status, 200, 'manual POST upgrade on legacy node must keep existing semantics')
-      const manualBody = (await manualRes.json()) as NodeUpgradeResult
-      assert.equal(manualBody.ok, true)
-      assert.equal(manualBody.upgraded, true)
-      assert.equal(manualBody.targetVersion, hubVersion())
-      assert.equal(legacy2.upgradeCalls.length, 1)
-      await waitFor(
-        () => {
-          const info = app.kernel.nodes.listNodesSync().find((n) => n.id === 'legacy-code2')
-          return info?.online === true && info.version === hubVersion() && info.installMode === 'release' && info.autoUpgrade === undefined
-        },
-        10_000,
-        'manual upgrade of legacy node converges and clears unknown_mode',
-      )
-      legacy2.close()
-
-      // 3. Recovery without manual upgrade: a legacy node (unknown_mode) that restarts into an older release daemon
-      //    reporting installMode=release clears unknown_mode and auto-upgrades cleanly.
-      const recoveryLegacy = await provisionNode(app.hub.url, app.token, 'legacy-to-release', '0.0.1')
-      await waitFor(
-        () => app.kernel.nodes.listNodesSync().find((n) => n.id === 'legacy-to-release')?.autoUpgrade?.status === 'unknown_mode',
-        10_000,
-        'legacy-to-release initially enters unknown_mode',
-      )
-      assert.equal(recoveryLegacy.upgradeCalls.length, 0)
-      recoveryLegacy.close()
-      await waitFor(
-        () => app.kernel.nodes.listNodesSync().find((n) => n.id === 'legacy-to-release')?.online === false,
-        10_000,
-        'legacy-to-release offline before release reconnect',
-      )
-      const releaseConn = await connectFixtureNode(wsUrl, 'legacy-to-release', recoveryLegacy.nodeToken, '0.0.1', {
-        installMode: 'release',
-        initialPlan: {
-          rpcResult: { ok: true, value: { ok: true, previousVersion: '0.0.1', targetVersion: hubVersion(), upgraded: true } },
-          reconnect: { candidateVersion: hubVersion(), previousVersion: '0.0.1', installMode: 'release' },
-        },
-      })
-      await waitFor(() => releaseConn.upgradeCalls.length === 1, 10_000, 'explicit release reconnect clears unknown_mode and auto-upgrades')
-      await waitFor(
-        () => {
-          const info = app.kernel.nodes.listNodesSync().find((n) => n.id === 'legacy-to-release')
-          return info?.online === true && info.version === hubVersion() && info.autoUpgrade === undefined
-        },
-        10_000,
-        'legacy-to-release converges after release reconnect',
-      )
-      releaseConn.close()
+      await app.kernel.removeNode('bare-old-node')
+      assert.deepEqual(removals, ['bare-old-node'])
+      await app.close()
+      assert.equal(closedCount, 1, 'onClose fires at kernel close')
     } finally {
-      off()
+      offClose()
+      offStarted()
+      offRemoved()
+      offConn()
+      offEvents()
     }
   } finally {
     await app.close().catch(() => undefined)
-  }
-})
-
-test('NodeAutoUpgradeCoordinator: fails closed for undefined or unknown runtime installMode and transitions cleanly to source or release', { timeout: 60_000 }, async () => {
-  let onlineNode: { version?: string; installMode?: NodeInstallMode } | undefined = { version: '0.1.0' }
-  let upgradeCalls = 0
-  const notifications: Array<{ level: 'info' | 'warning' | 'error'; title: string; body?: string }> = []
-  const changedCount = { count: 0 }
-
-  const coord = new NodeAutoUpgradeCoordinator({
-    isEnabled: () => true,
-    isHubReady: () => true,
-    getTargetVersion: () => '0.2.0',
-    getOnlineNode: (id) => (id === 'n1' ? onlineNode : undefined),
-    listOnlineNodeIds: () => (onlineNode !== undefined ? ['n1'] : []),
-    hasNode: (id) => id === 'n1',
-    hasUpgradeInFlight: () => false,
-    describeNodeBusy: () => undefined,
-    runUpgrade: async () => {
-      upgradeCalls += 1
-      return { ok: true, previousVersion: '0.1.0', targetVersion: '0.2.0', upgraded: true }
-    },
-    publishNodeChanged: () => {
-      changedCount.count += 1
-    },
-    publishNotification: (payload) => {
-      notifications.push(payload)
-    },
-    log: () => {},
-    policy: { busyPollMs: 20, retryBaseMs: 20, retryMaxMs: 40, now: () => 1_700_000_000_000 },
-  })
-  try {
-    // 1. Missing installMode -> unknown_mode, no upgrade, no timer, no warning/error.
-    coord.onNodeOnline('n1')
-    assert.equal(upgradeCalls, 0)
-    assert.equal(coord.statusOf('n1')?.status, 'unknown_mode')
-    assert.equal(coord.statusOf('n1')?.nextRetryAt, undefined)
-    assert.equal(coord.statusOf('n1')?.attempts, 0)
-    assert.match(coord.statusOf('n1')?.reason ?? '', /did not report installMode/)
-
-    // 2. Defensive unknown runtime value -> stays fail-closed in unknown_mode, never upgrades.
-    onlineNode = { version: '0.1.0', installMode: 'custom_unknown' as unknown as NodeInstallMode }
-    coord.onNodeOnline('n1')
-    await delay(80)
-    assert.equal(upgradeCalls, 0, 'unknown runtime installMode must never trigger runUpgrade or arm timers')
-    assert.equal(coord.statusOf('n1')?.status, 'unknown_mode')
-    assert.equal(coord.statusOf('n1')?.nextRetryAt, undefined)
-    assert.match(coord.statusOf('n1')?.reason ?? '', /custom_unknown/)
-
-    // 3. Reconnecting as source -> transitions cleanly to source_skipped without calling runUpgrade.
-    onlineNode = { version: '0.1.0', installMode: 'source' }
-    coord.onNodeOnline('n1')
-    assert.equal(upgradeCalls, 0)
-    assert.equal(coord.statusOf('n1')?.status, 'source_skipped')
-    assert.equal(coord.statusOf('n1')?.nextRetryAt, undefined)
-    assert.equal(
-      notifications.filter((n) => n.level !== 'info').length,
-      0,
-      'neither unknown_mode nor source_skipped may emit warning/error notifications',
-    )
-
-    // 4. Reconnecting as explicit release -> clears skip and executes upgrade.
-    onlineNode = { version: '0.1.0', installMode: 'release' }
-    coord.onNodeOnline('n1')
-    await waitFor(() => upgradeCalls === 1, 5_000, 'explicit release triggers runUpgrade')
-    await waitFor(() => coord.statusOf('n1') === undefined, 5_000, 'status clears on upgrade completion')
-  } finally {
-    coord.dispose()
   }
 })
 

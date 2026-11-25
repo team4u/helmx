@@ -1,4 +1,8 @@
-export { KernelRuntime } from './runtime/index.js';
+export {
+  KernelRuntime,
+  hubVersion,
+  type KernelDiagnosticInput,
+} from './runtime/index.js';
 export {
   startActivityHeartbeat,
   hubActivityFilePath,
@@ -16,6 +20,7 @@ export {
   attachNodeTunnelGateway,
   tokenAuthenticator,
   sha256hex,
+  HelmxUpgradeBusyError,
 } from './env/index.js';
 export type {
   EnvFabric,
