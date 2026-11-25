@@ -4,6 +4,6 @@
 import './styles.css'
 
 export { PlanActiveTray } from './PlanActiveTray.tsx'
-export { PlanStatusBadge } from './PlanStatusBadge.tsx'
+export { PlanToolbarButton } from './PlanToolbarButton.tsx'
 export { PlanToolRow } from './PlanToolRow.tsx'
 export { PlanWorkbenchPanel } from './PlanWorkbenchPanel.tsx'

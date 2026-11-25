@@ -35,7 +35,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   COMPOSER_DOCK_SLOT,
-  COMPOSER_STATUS_SLOT,
+  COMPOSER_TOOLBAR_SLOT,
   HelmxError,
   assertBoundedPresentationMeta,
   parseNonEmptyLocalizedText,
@@ -57,6 +57,7 @@ import {
   PLAN_COMMAND_ID,
   PLAN_COMMAND_SLASH,
   PLAN_HANDOFF_MAX_BYTES,
+  PLAN_INPUT_META_KEY,
   PLAN_KV_NAMESPACE,
   PLAN_MARKDOWN_MAX_BYTES,
   PLAN_MODE_SECTION_ID,
@@ -71,6 +72,7 @@ import {
   PLAN_TOOL_SAVE,
   asPlanDeletedConversationId,
   createPlanPlugin,
+  hasPlanModeInputMeta,
   isPlanConversationEligible,
   parsePlanSlashInput,
   type PlanBadgesDoc,
@@ -216,7 +218,7 @@ async function openPlanHarness(options: {
     writeFileSync(
       join(clientDir, 'index.tsx'),
       [
-        'export function PlanStatusBadge() { return null }',
+        'export function PlanToolbarButton() { return null }',
         'export function PlanActiveTray() { return null }',
         'export function PlanWorkbenchPanel() { return null }',
         'export function PlanToolRow() { return null }',
@@ -533,10 +535,10 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
     assert.equal(cmd['icon'], 'list-tree')
     assert.deepEqual(cmd['scope'], {})
 
-    const statusSlot = ui.find((u) => u.surface === 'plugin.slot' && (u.spec as { id?: string }).id === 'plan-status')?.spec as Record<string, unknown>
-    assert.equal(statusSlot['target'], COMPOSER_STATUS_SLOT)
-    assert.equal(statusSlot['order'], 20)
-    assert.deepEqual(statusSlot['client'], { module: 'index.tsx', export: 'PlanStatusBadge' })
+    const toolbarSlot = ui.find((u) => u.surface === 'plugin.slot' && (u.spec as { id?: string }).id === 'plan-toolbar')?.spec as Record<string, unknown>
+    assert.equal(toolbarSlot['target'], COMPOSER_TOOLBAR_SLOT)
+    assert.equal(toolbarSlot['order'], 20)
+    assert.deepEqual(toolbarSlot['client'], { module: 'index.tsx', export: 'PlanToolbarButton' })
 
     const dockSlot = ui.find((u) => u.surface === 'plugin.slot' && (u.spec as { id?: string }).id === 'plan-active-tray')?.spec as Record<string, unknown>
     assert.equal(dockSlot['target'], COMPOSER_DOCK_SLOT)
@@ -557,7 +559,7 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
 
     // Verify client module compiles cleanly via plugin-build
     const compiled = await harness.host.getClientModule(PLAN_PLUGIN_ID, 'index.tsx')
-    assert.ok(compiled.code.includes('PlanStatusBadge'))
+    assert.ok(compiled.code.includes('PlanToolbarButton'))
 
     // Actions & tools: English-only execution copy and exposeToPrompt: false
     const actions = harness.host.listActions().filter((a) => a.pluginId === PLAN_PLUGIN_ID)
@@ -798,6 +800,70 @@ test('hooks: onInput handles bare /plan and transforms /plan <task>, while ignor
     assert.ok(harness.cancelledAsks.some((c) => c.askId === pendingId && c.reason === 'superseded'))
     const pendingRes = await pPending
     assert.equal((pendingRes.presentationMeta as { outcome?: string }).outcome, 'superseded')
+    assert.equal(harness.readSessionDoc(1).mode, 'planning')
+    assert.equal(harness.readSessionDoc(1).awaitingApproval, false)
+  } finally {
+    await harness.close()
+  }
+})
+
+test('hooks: onInput recognizes input.meta["builtin:plan"] planning intent on eligible human conversations and ignores ineligible targets', TIMEOUT, async () => {
+  assert.equal(hasPlanModeInputMeta({ [PLAN_INPUT_META_KEY]: { mode: 'planning' } }), true)
+  assert.equal(hasPlanModeInputMeta({ [PLAN_INPUT_META_KEY]: { mode: 'normal' } }), false)
+  assert.equal(hasPlanModeInputMeta(undefined), false)
+  assert.equal(hasPlanModeInputMeta({ [PLAN_INPUT_META_KEY]: null }), false)
+  assert.equal(hasPlanModeInputMeta(JSON.parse('{"__proto__":{"mode":"planning"}}') as Record<string, unknown>), false)
+
+  const harness = await openPlanHarness({
+    seedConversations: [
+      makeConversationSummary({ id: 1 }),
+      makeConversationSummary({ id: 2, parentConversationId: 1 }),
+      makeConversationSummary({ id: 3, ownedBy: 'helmx' }),
+    ],
+  })
+  try {
+    // Subagent and helmx-owned conversations ignore input.meta planning activation
+    const subOutcome = await harness.host.runHook('input', {
+      conversationId: 2,
+      input: {
+        id: 'meta-sub',
+        text: 'subagent task',
+        origin: 'human',
+        createdAt: 1,
+        meta: { [PLAN_INPUT_META_KEY]: { mode: 'planning' } },
+      },
+    })
+    assert.equal(subOutcome.action, 'transform')
+    assert.deepEqual(harness.readSessionDoc(2), { mode: 'normal', awaitingApproval: false })
+
+    const helmxOutcome = await harness.host.runHook('input', {
+      conversationId: 3,
+      input: {
+        id: 'meta-helmx',
+        text: 'auto task',
+        origin: 'human',
+        createdAt: 2,
+        meta: { [PLAN_INPUT_META_KEY]: { mode: 'planning' } },
+      },
+    })
+    assert.equal(helmxOutcome.action, 'transform')
+    assert.deepEqual(harness.readSessionDoc(3), { mode: 'normal', awaitingApproval: false })
+
+    // Eligible top-level human conversation enters planning while keeping original text untouched
+    const humanOutcome = await harness.host.runHook('input', {
+      conversationId: 1,
+      input: {
+        id: 'meta-human',
+        text: 'Audit auth\nand draft plan',
+        origin: 'human',
+        createdAt: 3,
+        meta: { [PLAN_INPUT_META_KEY]: { mode: 'planning' } },
+      },
+    })
+    assert.equal(humanOutcome.action, 'transform')
+    if (humanOutcome.action === 'transform') {
+      assert.equal(humanOutcome.value.input.text, 'Audit auth\nand draft plan')
+    }
     assert.equal(harness.readSessionDoc(1).mode, 'planning')
     assert.equal(harness.readSessionDoc(1).awaitingApproval, false)
   } finally {

@@ -96,7 +96,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
     min-height: 28px;
     min-width: 0;
     line-height: normal;
-    flex-shrink: 0;
+    flex-shrink: 1;
   }
   .composer-model-label {
     line-height: normal;

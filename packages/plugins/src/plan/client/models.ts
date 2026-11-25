@@ -4,12 +4,13 @@
  */
 import type { BadgeTone, StatusLightTone } from '@helmx/plugin-client'
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import type {
-  PlanApprovedInfo,
-  PlanDraftSummary,
-  PlanProposeOutcome,
-  PlanSessionView,
-  PlanToolPresentationMeta,
+import {
+  PLAN_PLUGIN_ID,
+  type PlanApprovedInfo,
+  type PlanDraftSummary,
+  type PlanProposeOutcome,
+  type PlanSessionView,
+  type PlanToolPresentationMeta,
 } from './types.ts'
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -54,6 +55,13 @@ export function isPlanEligibleConversation(
   if (conversation.parentConversationId !== undefined) return false
   if ((conversation.ownedBy ?? 'human') !== 'human') return false
   return true
+}
+
+/** Whether a standby draft's `inputMeta` has armed `builtin:plan` for the first send. */
+export function isStandbyPlanArmed(draftMeta: Readonly<Record<string, unknown>> | undefined): boolean {
+  if (!isPlainObject(draftMeta) || !Object.hasOwn(draftMeta, PLAN_PLUGIN_ID)) return false
+  const entry = draftMeta[PLAN_PLUGIN_ID]
+  return isPlainObject(entry) && Object.hasOwn(entry, 'mode') && entry['mode'] === 'planning'
 }
 
 function parsePlanDraftSummary(raw: unknown): PlanDraftSummary | undefined {

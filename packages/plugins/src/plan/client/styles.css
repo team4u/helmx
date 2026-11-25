@@ -1,70 +1,111 @@
 /* builtin:plan plugin-specific styles (.plan-* prefix; primitives & tokens inherited from host). */
 
-/* ---- Composer status-row Plan badge ---- */
-.plan-status-btn {
+/* ---- Composer toolbar Plan toggle button ---- */
+.plan-toolbar-btn {
   appearance: none;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 20px;
-  padding: 0 7px;
+  height: 32px;
+  padding: 0 8px;
   margin: 0;
   border: 1px solid transparent;
-  border-radius: var(--radius-xs);
+  border-radius: 8px;
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--fg-secondary);
   font-family: inherit;
-  font-size: 11.5px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: normal;
   white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
   transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 
-.plan-status-btn:hover:not(:disabled) {
+.plan-toolbar-btn > svg {
+  flex-shrink: 0;
+}
+
+.plan-toolbar-btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--fg);
 }
 
-.plan-status-btn:focus-visible {
+.plan-toolbar-btn:focus-visible {
   outline: 1.5px solid var(--accent);
   outline-offset: 1px;
 }
 
-.plan-status-btn:disabled {
-  opacity: 0.6;
+.plan-toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.plan-toolbar-btn[aria-busy='true']:disabled {
   cursor: wait;
 }
 
-.plan-status-btn--planning {
+.plan-toolbar-btn--planning {
   background: var(--accent-bg);
   border-color: var(--accent-border);
   color: var(--accent);
   font-weight: 500;
 }
 
-.plan-status-btn--planning:hover:not(:disabled) {
+.plan-toolbar-btn--planning:hover:not(:disabled) {
   background: var(--accent-bg);
   border-color: var(--accent);
   color: var(--accent);
 }
 
-.plan-status-btn--awaiting {
+.plan-toolbar-btn--awaiting {
   background: var(--warn-bg);
   border-color: var(--warn-border);
   color: var(--warn);
   font-weight: 500;
 }
 
-.plan-status-btn--awaiting:hover:not(:disabled) {
+.plan-toolbar-btn--awaiting:hover:not(:disabled) {
   background: var(--warn-bg);
   border-color: var(--warn);
   color: var(--warn);
 }
 
-.plan-status-btn-label {
+.plan-toolbar-btn-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+@media (max-width: 680px) {
+  .plan-toolbar-btn {
+    height: 28px;
+    min-width: 28px;
+    padding: 0 6px;
+    justify-content: center;
+  }
+
+  .plan-toolbar-btn-label {
+    display: none;
+  }
+}
+
+@container (max-width: 450px) {
+  .plan-toolbar-btn {
+    height: 28px;
+    min-width: 28px;
+    padding: 0 6px;
+    justify-content: center;
+  }
+
+  .plan-toolbar-btn-label {
+    display: none;
+  }
+}
+
+@media (max-height: 450px) {
+  .plan-toolbar-btn {
+    height: 28px;
+  }
 }
 
 /* ---- Composer dock active tray ---- */

@@ -8,6 +8,7 @@ import {
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
   asPlanDeletedConversationId,
+  hasPlanModeInputMeta,
   isPlanConversationEligible,
   parsePlanSlashInput,
 } from './contracts.js'
@@ -44,10 +45,11 @@ export function registerPlanHooks(ctx: HelmxPluginContext, state: PlanStateManag
       if (payload.input.origin !== 'human') return { action: 'continue' }
 
       const parsed = parsePlanSlashInput(payload.input.text)
+      const metaRequested = hasPlanModeInputMeta(payload.input.meta)
       const existing = state.getRecord(payload.conversationId)
       const hasPending =
         existing?.pendingAskId !== undefined || state.hasInFlightAsk(payload.conversationId)
-      if (!parsed.matched && !hasPending) return { action: 'continue' }
+      if (!parsed.matched && !metaRequested && !hasPending) return { action: 'continue' }
 
       const conv = getConversationOrUndefined(
         (id) => ctx.host.getConversation(id),
@@ -58,6 +60,10 @@ export function registerPlanHooks(ctx: HelmxPluginContext, state: PlanStateManag
       }
 
       if (!parsed.matched) {
+        if (metaRequested) {
+          await state.enterPlanningMode(conv.id)
+          return { action: 'continue' }
+        }
         await state.supersedePendingAsk(conv.id)
         return { action: 'continue' }
       }

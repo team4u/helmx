@@ -1,12 +1,13 @@
 /**
- * Composer status-row Plan mode indicator & toggle (`COMPOSER_STATUS_SLOT`).
- * Returns null on standby drafts (`conversation === undefined`) and non-top-level or
- * non-human conversations without subscribing to session docs.
+ * Composer toolbar Plan mode toggle (`COMPOSER_TOOLBAR_SLOT`).
+ * Works on both top-level human conversations (toggles persisted mode via `toggle` action)
+ * and standby drafts (arms/clears per-draft `inputMeta['builtin:plan']` before first send).
+ * Returns null on non-eligible conversations (subagents / `helmx`-owned) without subscribing.
  * Exports only React components and TS types (Fast Refresh compliant).
  */
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ComposerStatusSlotProps } from '@helmx/protocol/browser'
+import type { ComposerToolbarSlotProps } from '@helmx/protocol/browser'
 import {
   HelmxIcon,
   StatusLight,
@@ -18,17 +19,18 @@ import {
 import { PLAN_COPY, planActionFailedNotice } from './copy.ts'
 import {
   isPlanEligibleConversation,
+  isStandbyPlanArmed,
   parsePlanSessionView,
   resolvePlanVisualState,
 } from './models.ts'
-import { PLAN_SESSION_DOC, type PlanSessionView } from './types.ts'
+import { PLAN_PLUGIN_ID, PLAN_SESSION_DOC, type PlanSessionView } from './types.ts'
 
 const DEFAULT_NORMAL_VIEW: PlanSessionView = {
   mode: 'normal',
   awaitingApproval: false,
 }
 
-function PlanStatusBadgeInner({ conversationId }: { conversationId: number }): ReactNode {
+function PlanToolbarButtonConversation({ conversationId }: { conversationId: number }): ReactNode {
   const locale = usePluginLocale()
   const t = (text: { en: string; 'zh-CN': string }) => resolveLocalizedText(text, locale)
   const docState = usePluginSessionDocState<unknown>(PLAN_SESSION_DOC, { conversationId })
@@ -62,16 +64,16 @@ function PlanStatusBadgeInner({ conversationId }: { conversationId: number }): R
   const visual = resolvePlanVisualState(effectiveView)
   const label =
     visual === 'awaiting'
-      ? t(PLAN_COPY.badgeAwaiting)
+      ? t(PLAN_COPY.toolbarAwaiting)
       : visual === 'planning'
-        ? t(PLAN_COPY.badgePlanning)
-        : t(PLAN_COPY.badgeNormal)
+        ? t(PLAN_COPY.toolbarPlanning)
+        : t(PLAN_COPY.toolbarNormal)
   const baseTitle =
     visual === 'awaiting'
-      ? t(PLAN_COPY.badgeTitleAwaiting)
+      ? t(PLAN_COPY.toolbarTitleAwaiting)
       : visual === 'planning'
-        ? t(PLAN_COPY.badgeTitlePlanning)
-        : t(PLAN_COPY.badgeTitleNormal)
+        ? t(PLAN_COPY.toolbarTitlePlanning)
+        : t(PLAN_COPY.toolbarTitleNormal)
   const title = docState.status === 'error' && docState.error ? `${baseTitle} (${docState.error})` : baseTitle
 
   const handleToggle = (): void => {
@@ -93,15 +95,15 @@ function PlanStatusBadgeInner({ conversationId }: { conversationId: number }): R
 
   const stateClass =
     visual === 'awaiting'
-      ? 'plan-status-btn--awaiting'
+      ? 'plan-toolbar-btn--awaiting'
       : visual === 'planning'
-        ? 'plan-status-btn--planning'
-        : 'plan-status-btn--normal'
+        ? 'plan-toolbar-btn--planning'
+        : 'plan-toolbar-btn--normal'
 
   return (
     <button
       type="button"
-      className={`plan-status-btn ${stateClass}`}
+      className={`plan-toolbar-btn ${stateClass}`}
       aria-pressed={effectiveView.mode === 'planning'}
       aria-busy={toggleAction.pending || undefined}
       aria-label={title}
@@ -112,20 +114,65 @@ function PlanStatusBadgeInner({ conversationId }: { conversationId: number }): R
       onClick={handleToggle}
     >
       {toggleAction.pending ? (
-        <HelmxIcon name="loader" size={11} className="spin-slow" />
+        <HelmxIcon name="loader" size={13} className="spin-slow" />
       ) : visual === 'awaiting' ? (
         <StatusLight tone="blocked" label={t(PLAN_COPY.modeAwaiting)} />
       ) : (
-        <HelmxIcon name="list-tree" size={11} />
+        <HelmxIcon name="list-tree" size={13} />
       )}
-      <span className="plan-status-btn-label">{label}</span>
+      <span className="plan-toolbar-btn-label">{label}</span>
     </button>
   )
 }
 
-export function PlanStatusBadge(props: ComposerStatusSlotProps): ReactNode {
-  if (!isPlanEligibleConversation(props.conversation)) {
+function PlanToolbarButtonStandby({
+  draftMeta,
+  setDraftMeta,
+  disabled,
+}: {
+  draftMeta?: Readonly<Record<string, unknown>>
+  setDraftMeta: (key: string, value: unknown) => void
+  disabled: boolean
+}): ReactNode {
+  const locale = usePluginLocale()
+  const t = (text: { en: string; 'zh-CN': string }) => resolveLocalizedText(text, locale)
+  const armed = isStandbyPlanArmed(draftMeta)
+  const label = t(armed ? PLAN_COPY.toolbarPlanning : PLAN_COPY.toolbarNormal)
+  const title = t(armed ? PLAN_COPY.toolbarTitleStandbyArmed : PLAN_COPY.toolbarTitleStandbyNormal)
+
+  return (
+    <button
+      type="button"
+      className={`plan-toolbar-btn ${armed ? 'plan-toolbar-btn--planning' : 'plan-toolbar-btn--normal'}`}
+      aria-pressed={armed}
+      aria-label={title}
+      title={title}
+      disabled={disabled}
+      data-plan-mode={armed ? 'planning' : 'normal'}
+      data-plan-awaiting="false"
+      onClick={() => setDraftMeta(PLAN_PLUGIN_ID, armed ? undefined : { mode: 'planning' })}
+    >
+      <HelmxIcon name="list-tree" size={13} />
+      <span className="plan-toolbar-btn-label">{label}</span>
+    </button>
+  )
+}
+
+export function PlanToolbarButton(props: ComposerToolbarSlotProps): ReactNode {
+  if (props.conversation !== undefined) {
+    if (!isPlanEligibleConversation(props.conversation)) {
+      return null
+    }
+    return <PlanToolbarButtonConversation conversationId={props.conversation.id} />
+  }
+  if (props.profileId === undefined || props.setDraftMeta === undefined) {
     return null
   }
-  return <PlanStatusBadgeInner conversationId={props.conversation.id} />
+  return (
+    <PlanToolbarButtonStandby
+      draftMeta={props.draftMeta}
+      setDraftMeta={props.setDraftMeta}
+      disabled={props.disabled === true}
+    />
+  )
 }

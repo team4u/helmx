@@ -18,8 +18,19 @@ import { test } from 'node:test'
 import { readFileSync } from 'node:fs'
 import * as React from 'react'
 import { act } from 'react'
-import type { ComposerScopeProps, ComposerStatusSlotProps, ConversationSummary } from '@helmx/protocol'
-import { COMPOSER_STATUS_SLOT } from '@helmx/protocol'
+import type {
+  ComposerScopeProps,
+  ComposerStatusSlotProps,
+  ComposerToolbarSlotProps,
+  ConversationSummary,
+} from '@helmx/protocol'
+import { COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol'
+import {
+  getStandbyDraft,
+  resetStandbyDrafts,
+  standbyDraftKey,
+  standbyDraftsDirty,
+} from '../src/conversation/standby-model.js'
 import { applySnapshot, emptyLiveState, mergeConversationDetail } from '../src/lib/live-state.js'
 import { makeTestStore } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
@@ -447,6 +458,126 @@ test('AgentStandbyPane mounts COMPOSER_STATUS_SLOT below .composer-box with effe
     assert.equal(received?.profileId, 'assistant')
     assert.equal(received?.conversation, undefined)
   } finally {
+    localStorage.removeItem('helmx:locale')
+    act(() => root.unmount())
+    host.remove()
+  }
+})
+
+test('COMPOSER_TOOLBAR_SLOT mounts inside .composer-toolbar-left on both Composer and AgentStandbyPane with non-dirty setDraftMeta', { timeout: 60_000 }, async () => {
+  let receivedPersisted: ComposerToolbarSlotProps | undefined
+  let receivedStandby: ComposerToolbarSlotProps | undefined
+  function PersistedToolbarProbe(props: ComposerToolbarSlotProps) {
+    receivedPersisted = props
+    return e('button', { type: 'button', className: 'persisted-toolbar-probe' }, 'Tool')
+  }
+  function StandbyToolbarProbe(props: ComposerToolbarSlotProps) {
+    receivedStandby = props
+    return e(
+      'button',
+      {
+        type: 'button',
+        className: 'standby-toolbar-probe',
+        onClick: () => props.setDraftMeta?.('builtin:plan', { mode: 'planning' }),
+      },
+      props.draftMeta ? 'Armed' : 'Arm',
+    )
+  }
+  seedPluginClientModule('builtin:toolbar-probe-persisted', 'index.tsx', { PersistedToolbarProbe })
+  seedPluginClientModule('builtin:toolbar-probe-standby', 'index.tsx', { StandbyToolbarProbe })
+
+  // 1. Persisted conversation mounts COMPOSER_TOOLBAR_SLOT inside .composer-toolbar-left (not inside .composer-status-row)
+  const conversation = conv(undefined)
+  const persistedStore = makeTestStore({
+    conversations: [conversation],
+    uiContributions: [
+      {
+        pluginId: 'builtin:toolbar-probe-persisted',
+        surface: 'plugin.slot',
+        spec: {
+          id: 'persisted-toolbar-probe',
+          target: COMPOSER_TOOLBAR_SLOT,
+          client: { module: 'index.tsx', export: 'PersistedToolbarProbe' },
+        },
+      },
+    ],
+  })
+  const html = renderToStaticMarkup(
+    e(HostStoreProviders, { value: persistedStore }, e(Composer, { conversation, prefill: null })),
+  )
+  const leftAt = html.indexOf('composer-toolbar-left')
+  const modelAt = html.indexOf('composer-model-button')
+  const probeAt = html.indexOf('persisted-toolbar-probe')
+  const rightAt = html.indexOf('composer-toolbar-right')
+  assert.ok(leftAt >= 0 && modelAt > leftAt && probeAt > modelAt && rightAt > probeAt, 'COMPOSER_TOOLBAR_SLOT mounts in .composer-toolbar-left right after .composer-model-button')
+  assert.equal(receivedPersisted?.conversation?.id, 1)
+  assert.equal(receivedPersisted?.conversation?.profileId, 'assistant')
+  assert.ok(receivedPersisted?.composer !== undefined)
+  assert.equal(receivedPersisted?.setDraftMeta, undefined)
+
+  // 2. Standby pane passes draftMeta + setDraftMeta without marking drafts dirty
+  resetStandbyDrafts()
+  const standbyStore = makeTestStore({
+    profiles: [
+      {
+        id: 'assistant',
+        name: 'Assistant',
+        model: 'magpie/auto/gemini-4-carbon',
+        thinkingLevel: 'high',
+        cwd: '/tmp',
+        nodeId: 'local',
+      },
+    ],
+    plugins: [
+      {
+        id: 'builtin:toolbar-probe-standby',
+        name: 'toolbar-probe-standby',
+        version: '1.0.0',
+        locked: false,
+        enabled: true,
+        status: 'active',
+        hooks: [],
+        actions: [],
+        tools: [],
+        clientHashes: { 'index.tsx': 'seeded' },
+      },
+    ],
+    uiContributions: [
+      {
+        pluginId: 'builtin:toolbar-probe-standby',
+        surface: 'plugin.slot',
+        spec: {
+          id: 'standby-toolbar-probe',
+          target: COMPOSER_TOOLBAR_SLOT,
+          client: { module: 'index.tsx', export: 'StandbyToolbarProbe' },
+        },
+      },
+    ],
+  })
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: standbyStore }, e(AgentStandbyPane, { profileId: 'assistant' })))
+    })
+    const btn = host.querySelector<HTMLButtonElement>('.composer-toolbar-left .standby-toolbar-probe')
+    assert.ok(btn !== null, '待命页应在 .composer-toolbar-left 挂载 COMPOSER_TOOLBAR_SLOT 贡献')
+    assert.ok(host.querySelector('.composer-status-row .standby-toolbar-probe') === null)
+    assert.equal(receivedStandby?.conversation, undefined)
+    assert.equal(receivedStandby?.profileId, 'assistant')
+    assert.equal(typeof receivedStandby?.setDraftMeta, 'function')
+
+    await act(async () => {
+      btn.click()
+    })
+    assert.deepEqual(getStandbyDraft(standbyDraftKey({ panel: 'primary', profileId: 'assistant' })).inputMeta, {
+      'builtin:plan': { mode: 'planning' },
+    })
+    assert.equal(standbyDraftsDirty(), false, 'setDraftMeta must not mark empty standby draft dirty')
+    assert.equal(btn.textContent, 'Armed')
+  } finally {
+    resetStandbyDrafts()
     localStorage.removeItem('helmx:locale')
     act(() => root.unmount())
     host.remove()

@@ -21,6 +21,7 @@
 
 | 入口 | 用法 | 说明 |
 | :--- | :--- | :--- |
+| 工具栏按钮 | 输入框左下角模型选择器旁的规划按钮（`COMPOSER_TOOLBAR_SLOT`） | 真实会话点击直接调用 `toggle`；待命页（`#/a/<profileId>`）按独立分屏草稿切换本地 `inputMeta['builtin:plan'] = { mode: 'planning' }` 预武装态（不落库、不标脏），首条消息发出时在 `onInput` 原子进入规划模式并保留原文本与自动标题 |
 | 输入框斜杠 / `⌘K` | `/plan`（无参数）或 `/plan <任务>` | 真实会话中选命令执行 `toggle`；直接发送裸 `/plan` 由 `onInput` 接管（`handled`）切换至规划模式不进聊天历史；发送 `/plan <任务>` 切换至规划模式并剥离前缀（`transform`），内核据此生成无 `/plan ` 前缀的标题后直接开始调研 |
 | CLI | `helmx plan toggle --current` / `set_mode --current --input '{"mode":"planning"}'` / `get --current` | 支持 `--conversation-id <id>` 与 `--json`，返回 `PlanSessionView` |
 | HTTP | `POST /api/actions/builtin:plan/<toggle\|set_mode\|get>` | 入参 `conversationId` 与上下文冲突时拒绝 `400 validation_error` |
@@ -62,7 +63,7 @@
 - **公共文档**：
   - `plan`（`ctx.sessionDoc`，`public: true, durable: false`）：按会话分片的 `PlanSessionView`，经专用 SSE 按需推送，不进入全局首帧；
   - `plan-badges`（`ctx.doc`，`public: true, durable: false`）：全局紧凑角标摘要（`accent` 规划中 / `warn` 等待审批 / `neutral` 已批准或已有草稿）。
-- **前端界面（`packages/plugins/src/plan/client/`）**：遵循 `clientRoot` 隔离与 Fast Refresh 规范（零 Emoji），提供四个按需组件：`PlanStatusBadge`（`COMPOSER_STATUS_SLOT`，待命页与非顶层/非人类会话零订阅返回 `null`）、`PlanActiveTray`（`COMPOSER_DOCK_SLOT`，普通模式零高度）、`PlanWorkbenchPanel`（右侧 `plan` 面板，只读渲染计划 Markdown 与已批准产物链接）及 `PlanToolRow`（`toolView`，只消费 `props.presentationMeta` 渲染 26px `.trace-row`）。
+- **前端界面（`packages/plugins/src/plan/client/`）**：遵循 `clientRoot` 隔离与 Fast Refresh 规范（零 Emoji），提供四个按需组件：`PlanToolbarButton`（`COMPOSER_TOOLBAR_SLOT`，主输入框左下角模型选择器右侧；待命页使用轻量 `draftMeta`/`setDraftMeta` 零订阅本地切换，窄屏/窄分屏自动折叠为图标按钮；非顶层/非人类会话零订阅返回 `null`）、`PlanActiveTray`（`COMPOSER_DOCK_SLOT`，仅当存在方案草稿或审批等待中 `draft !== undefined || awaitingApproval` 时展示，普通模式与仅预武装待草拟时零高度 `null`）、`PlanWorkbenchPanel`（右侧 `plan` 面板，只读渲染计划 Markdown 与已批准产物链接）及 `PlanToolRow`（`toolView`，只消费 `props.presentationMeta` 渲染 26px `.trace-row`）。
 - **服务治理与崩溃恢复**：
   - `start()` 从 KV 水合 `plan` 与 `plan-badges` 投影；`reconcile()` 在重启后扫描孤儿 `pendingAskId`，以 `'superseded'` 清理对应 `AskDoc`（忽略 `404`/`409`）并解除会话 `blocked`；
   - 审批等待期间停用插件触发 `liveTasks()` 硬阻断（`409 plugin_has_live_tasks`，不可 `--force`）；存在空闲 `planning` 会话时停用返回 `409 plugin_in_use`，`--force` 可强制停用并立即恢复全量工具（保留草稿待重新启用恢复）；

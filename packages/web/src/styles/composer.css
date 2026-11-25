@@ -393,6 +393,7 @@ button.attachment-chip:disabled {
 .composer-toolbar .composer-model-button {
   min-width: 0;
   max-width: 100%;
+  flex-shrink: 1;
   height: 32px;
   padding: 0 6px;
   border: 0;
@@ -406,6 +407,13 @@ button.attachment-chip:disabled {
 .composer-model-button > svg { flex-shrink: 0; }
 .composer-model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: normal; }
 .composer-model-level { flex-shrink: 0; color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+.composer-toolbar-slot {
+  display: contents;
+}
+.composer-toolbar-slot:empty,
+.composer-toolbar-slot:has([data-plugin-id]):not(:has([data-plugin-id]:not(:empty))) {
+  display: none;
+}
 
 /* 输入框下方只读遥测状态行（ContextUsageStatus + COMPOSER_STATUS_SLOT 插件贡献） */
 .composer-status-row {

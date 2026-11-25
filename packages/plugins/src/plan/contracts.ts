@@ -19,6 +19,7 @@ export const PLAN_TOOL_PROPOSE = 'plan_propose' as const
 
 export const PLAN_KV_NAMESPACE = 'plans' as const
 export const PLAN_MODE_SECTION_ID = 'plan.mode' as const
+export const PLAN_INPUT_META_KEY = PLAN_PLUGIN_ID
 
 export const PLAN_TITLE_MAX_CHARS = 120
 export const PLAN_MARKDOWN_MAX_BYTES = 98_304
@@ -195,4 +196,13 @@ export function parsePlanSlashInput(
   const match = PLAN_SLASH_RE.exec(text.trim())
   if (match === null) return { matched: false }
   return { matched: true, remainder: (match[1] ?? '').trim() }
+}
+
+/** Check whether `input.meta['builtin:plan']` explicitly requests entering planning mode. */
+export function hasPlanModeInputMeta(meta: unknown): boolean {
+  if (!isJsonObject(meta)) return false
+  if (!Object.hasOwn(meta, PLAN_INPUT_META_KEY)) return false
+  const entry = meta[PLAN_INPUT_META_KEY]
+  if (!isJsonObject(entry)) return false
+  return Object.hasOwn(entry, 'mode') && entry['mode'] === 'planning'
 }

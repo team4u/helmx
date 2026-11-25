@@ -49,6 +49,8 @@ export {
   PLAN_COMMAND_SLASH,
   PLAN_TOOL_SAVE,
   PLAN_TOOL_PROPOSE,
+  PLAN_INPUT_META_KEY,
+  hasPlanModeInputMeta,
   type PlanMode,
   type PlanDraftSummary,
   type PlanApprovedInfo,

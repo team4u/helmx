@@ -57,6 +57,8 @@ export interface StandbyDraftState {
   /** Resume anchor after a partial first-send failure: the real created
    * conversation id (retry skips create). */
   conversationId: number | undefined
+  /** Per-draft input metadata carried into the first `submitInput` payload (does not mark draft dirty). */
+  inputMeta: Readonly<Record<string, unknown>> | undefined
   /** Synchronous debounce flag: set to true synchronously when the first-send
    * task starts; double-click / repeated Enter are ignored outright. */
   sending: boolean
@@ -74,6 +76,7 @@ export const EMPTY_STANDBY_DRAFT: StandbyDraftState = {
   envNodeId: undefined,
   envCwd: undefined,
   conversationId: undefined,
+  inputMeta: undefined,
   sending: false,
   error: null,
 }
@@ -196,6 +199,24 @@ export function updateStandbyDraft(key: string, patch: Partial<StandbyDraftState
   drafts.set(key, next)
   notifyListeners()
   return next
+}
+
+const FORBIDDEN_META_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/** Update or delete one entry in a standby draft's `inputMeta` map (isolated per draftKey; does not mark draft dirty). */
+export function setStandbyDraftInputMeta(key: string, metaKey: string, value: unknown): void {
+  if (metaKey === '' || FORBIDDEN_META_KEYS.has(metaKey)) return
+  const current = getStandbyDraft(key)
+  const next: Record<string, unknown> = current.inputMeta !== undefined ? { ...current.inputMeta } : {}
+  if (value === undefined) {
+    if (!Object.hasOwn(next, metaKey)) return
+    delete next[metaKey]
+  } else {
+    next[metaKey] = value
+  }
+  updateStandbyDraft(key, {
+    inputMeta: Object.keys(next).length > 0 ? next : undefined,
+  })
 }
 
 /** Update only while the record still exists (after a fully successful send
@@ -383,7 +404,15 @@ export interface StandbySendDeps {
   create: (init: ConversationInit) => Promise<ConversationSummary>
   patchThinkingLevel: (conversationId: number, thinkingLevel: string) => Promise<unknown>
   upload: (conversationId: number, file: File) => Promise<ArtifactMetadata>
-  submit: (conversationId: number, payload: { text: string; origin: 'human'; attachments?: string[] }) => Promise<unknown>
+  submit: (
+    conversationId: number,
+    payload: {
+      text: string
+      origin: 'human'
+      meta?: Record<string, unknown>
+      attachments?: string[]
+    },
+  ) => Promise<unknown>
   notifyError: (title: string, err: unknown, conversationId?: number) => void
   /** When the whole chain succeeded but the standby target is no longer in
    * view, guide the user back to the new conversation with a clickable
@@ -449,9 +478,11 @@ export async function executeStandbySend(
       })
     }
     const attachments = getStandbyDraft(key).uploaded.map((item) => item.artifactId)
+    const liveMeta = getStandbyDraft(key).inputMeta
     await deps.submit(conversationId, {
       text: payload,
       origin: 'human',
+      ...(liveMeta !== undefined && Object.keys(liveMeta).length > 0 ? { meta: { ...liveMeta } } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
     })
     if (stale()) return 'stale'

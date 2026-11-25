@@ -65,6 +65,8 @@ export interface ComposerInputShellProps {
   onPickCompletion: (entry: MergedCompletionItem) => void
   onCloseCompletion: () => void
   modelPicker: React.ReactNode
+  /** Compact interactive controls mounted inside `.composer-toolbar-left` after `modelPicker`. */
+  toolbarSlot?: React.ReactNode
   sendControls: React.ReactNode
   statusRow?: React.ReactNode
 }
@@ -104,6 +106,7 @@ export function ComposerInputShell({
   onPickCompletion,
   onCloseCompletion,
   modelPicker,
+  toolbarSlot,
   sendControls,
   statusRow,
 }: ComposerInputShellProps): React.JSX.Element {
@@ -199,6 +202,7 @@ export function ComposerInputShell({
                 />
               </Tooltip>
               {modelPicker}
+              {toolbarSlot}
               <input
                 ref={fileInputRef}
                 type="file"

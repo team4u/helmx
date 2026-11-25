@@ -26,6 +26,7 @@ import { TITLE_PLUGIN_ID } from '../src/title/contracts.js'
 import {
   PLAN_BADGES_DOC,
   PLAN_COMMAND_SLASH,
+  PLAN_INPUT_META_KEY,
   PLAN_KV_NAMESPACE,
   PLAN_MODE_SECTION_ID,
   PLAN_MODE_TOOL_WHITELIST,
@@ -152,7 +153,7 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
     assert.ok(panel)
     assert.equal((panel.spec as { id?: unknown }).id, PLAN_PANEL_ID)
     const clientMod = await kernel.plugins.getClientModule(PLAN_PLUGIN_ID, 'index.tsx')
-    assert.match(clientMod.code, /PlanStatusBadge/)
+    assert.match(clientMod.code, /PlanToolbarButton/)
     assert.match(clientMod.code, /PlanActiveTray/)
     assert.match(clientMod.code, /PlanWorkbenchPanel/)
     assert.match(clientMod.code, /PlanToolRow/)
@@ -297,6 +298,33 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
     assert.ok(bareSub.submissionId.startsWith('handled:'))
     assert.equal(env.faux.state.callCount, callsBeforeBare)
     assert.equal(readPlanSession(kernel, bareConv.id).mode, 'planning')
+
+    // Standby pre-armed first turn (`meta['builtin:plan'] = { mode: 'planning' }`) enters planning preserving text & title
+    const standbyMetaConv = await kernel.conversations.createConversation({ profileId: 'assistant' })
+    const metaRequests: CapturedTurnRequest[] = []
+    env.faux.setResponses([captureRequest(metaRequests, 'standby meta planning response')])
+    await kernel.conversations.submitInput(
+      standbyMetaConv.id,
+      'Review cache invalidation plan',
+      { meta: { [PLAN_INPUT_META_KEY]: { mode: 'planning' } } },
+    )
+    await kernel.conversations.waitForIdle(standbyMetaConv.id)
+
+    assert.equal(
+      kernel.conversations.getConversation(standbyMetaConv.id).title,
+      'Review cache invalidation plan',
+    )
+    assert.deepEqual(readPlanSession(kernel, standbyMetaConv.id), {
+      mode: 'planning',
+      awaitingApproval: false,
+    })
+    assert.equal(metaRequests.length, 1)
+    assert.equal(
+      metaRequests[0]!.toolNames.every((name) => PLAN_MODE_TOOL_WHITELIST.has(name)),
+      true,
+      'standby inputMeta must apply strict planning whitelist on Turn 1',
+    )
+    assert.ok(typeof metaRequests[0]!.sectionsById[PLAN_MODE_SECTION_ID] === 'string')
   } finally {
     await env.close()
   }

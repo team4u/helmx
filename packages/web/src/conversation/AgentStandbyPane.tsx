@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { COMPOSER_STATUS_SLOT, type ComposerStatusSlotProps, type ConversationSummary, type Profile } from '@helmx/protocol/browser'
+import {
+  COMPOSER_STATUS_SLOT,
+  COMPOSER_TOOLBAR_SLOT,
+  type ComposerStatusSlotProps,
+  type ComposerToolbarSlotProps,
+  type ConversationSummary,
+  type Profile,
+} from '@helmx/protocol/browser'
 import { Button, HelmxIcon, IconButton, PluginSlot, Stack, Tooltip, useHostModels } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi, type ModelCatalogDefaults } from '../lib/api.js'
@@ -41,6 +48,7 @@ import {
   inheritedEnvOf,
   resetEnvStandbyDraft,
   resolveStandbyEffectiveModel,
+  setStandbyDraftInputMeta,
   standbyDraftKey,
   standbyEnvError,
   standbyManageAction,
@@ -250,7 +258,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     const action = standbyManageAction(record.text)
     if (action !== null) {
       if (action.kind === 'clear-draft') {
-        updateStandbyDraft(draftKey, { text: '', localFiles: [], uploaded: [], error: null })
+        updateStandbyDraft(draftKey, { text: '', localFiles: [], uploaded: [], inputMeta: undefined, error: null })
         pushNotice({ type: 'notification', level: 'info', title: t('composer.standby.newDraftStartedTitle'), body: t('composer.standby.newDraftStartedBody') })
       } else {
         pushNotice({
@@ -466,6 +474,9 @@ function StandbyComposer({
   const setDraftState = useCallback((next: string): void => {
     updateStandbyDraft(draftKey, { text: next })
   }, [draftKey])
+  const setDraftMeta = useCallback((metaKey: string, value: unknown): void => {
+    setStandbyDraftInputMeta(draftKey, metaKey, value)
+  }, [draftKey])
 
   const standbyScope = useMemo(
     () => standbySkillScope(draft, profile),
@@ -625,6 +636,20 @@ function StandbyComposer({
           disabled={configLocked}
           isSplit={isSplit}
           onReturnFocus={returnFocusToTextarea}
+        />
+      }
+      toolbarSlot={
+        <PluginSlot
+          ownerPluginId="builtin:composer"
+          name={COMPOSER_TOOLBAR_SLOT}
+          className="composer-toolbar-slot"
+          slotProps={{
+            effectiveModel,
+            profileId: profile.id,
+            draftMeta: draft.inputMeta,
+            setDraftMeta,
+            disabled: configLocked,
+          } satisfies ComposerToolbarSlotProps}
         />
       }
       sendControls={

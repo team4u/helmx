@@ -13,21 +13,29 @@ import type { PlanMode, PlanProposeOutcome } from './types.ts'
 const isZh = (locale: HelmxLocale): boolean => locale === 'zh-CN'
 
 export const PLAN_COPY = {
-  // Status badge
-  badgeNormal: { en: 'Plan', 'zh-CN': '规划' },
-  badgePlanning: { en: 'Planning', 'zh-CN': '规划中' },
-  badgeAwaiting: { en: 'Plan · Awaiting approval', 'zh-CN': '规划 · 待审批' },
-  badgeTitleNormal: {
+  // Toolbar button
+  toolbarNormal: { en: 'Plan', 'zh-CN': '规划' },
+  toolbarPlanning: { en: 'Planning', 'zh-CN': '规划中' },
+  toolbarAwaiting: { en: 'Awaiting approval', 'zh-CN': '待审批' },
+  toolbarTitleNormal: {
     en: 'Plan mode is off — click to enter planning mode',
     'zh-CN': '规划模式已关闭 — 点击进入规划模式',
   },
-  badgeTitlePlanning: {
+  toolbarTitlePlanning: {
     en: 'Planning mode active — click to exit planning mode',
     'zh-CN': '规划模式已开启 — 点击退出规划模式',
   },
-  badgeTitleAwaiting: {
+  toolbarTitleAwaiting: {
     en: 'Plan awaiting approval — click to toggle planning mode',
     'zh-CN': '计划等待审批 — 点击切换规划模式',
+  },
+  toolbarTitleStandbyNormal: {
+    en: 'Start first message in planning mode',
+    'zh-CN': '首条消息将以规划模式开始',
+  },
+  toolbarTitleStandbyArmed: {
+    en: 'Planning mode armed for first message — click to cancel',
+    'zh-CN': '已预设首条消息进入规划模式 — 点击取消',
   },
 
   // Active tray

@@ -4,7 +4,7 @@
  */
 import {
   COMPOSER_DOCK_SLOT,
-  COMPOSER_STATUS_SLOT,
+  COMPOSER_TOOLBAR_SLOT,
   HelmxError,
   type PluginActionContext,
   type PluginDefinition,
@@ -43,6 +43,7 @@ export {
   PLAN_TOOL_PROPOSE,
   PLAN_KV_NAMESPACE,
   PLAN_MODE_SECTION_ID,
+  PLAN_INPUT_META_KEY,
   PLAN_TITLE_MAX_CHARS,
   PLAN_MARKDOWN_MAX_BYTES,
   PLAN_SUMMARY_MAX_CHARS,
@@ -55,6 +56,7 @@ export {
   isPlanConversationEligible,
   asPlanDeletedConversationId,
   parsePlanSlashInput,
+  hasPlanModeInputMeta,
   type PlanMode,
   type PlanDraftSummary,
   type PlanApprovedInfo,
@@ -252,10 +254,10 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
 
       if (hasClientAssets) {
         ctx.ui.slot({
-          id: 'plan-status',
-          target: COMPOSER_STATUS_SLOT,
+          id: 'plan-toolbar',
+          target: COMPOSER_TOOLBAR_SLOT,
           order: 20,
-          client: { module: 'index.tsx', export: 'PlanStatusBadge' },
+          client: { module: 'index.tsx', export: 'PlanToolbarButton' },
         })
         ctx.ui.slot({
           id: 'plan-active-tray',

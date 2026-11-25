@@ -60,7 +60,11 @@ function PlanActiveTrayInner({ conversationId }: { conversationId: number }): Re
       ? pendingView.view
       : docView
 
-  if (effectiveView === undefined || effectiveView.mode !== 'planning') {
+  if (
+    effectiveView === undefined ||
+    effectiveView.mode !== 'planning' ||
+    (effectiveView.draft === undefined && !effectiveView.awaitingApproval)
+  ) {
     return null
   }
 

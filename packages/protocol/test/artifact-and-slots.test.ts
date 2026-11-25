@@ -7,6 +7,7 @@ import {
   ARTIFACT_KINDS,
   COMPOSER_DOCK_SLOT,
   COMPOSER_STATUS_SLOT,
+  COMPOSER_TOOLBAR_SLOT,
   HOST_SLOT_CATALOG,
   HOST_SLOT_TARGETS,
   NODE_DETAIL_SECTION_SLOT,
@@ -18,8 +19,9 @@ import {
   type PluginSlotContributionSpec,
 } from '../src/index.js'
 
-test('COMPOSER_DOCK_SLOT and COMPOSER_STATUS_SLOT are exported and follow the builtin:composer/* namespace', { timeout: 60_000 }, () => {
+test('COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, and COMPOSER_TOOLBAR_SLOT are exported and follow the builtin:composer/* namespace', { timeout: 60_000 }, () => {
   assert.equal(COMPOSER_STATUS_SLOT, 'builtin:composer/status')
+  assert.equal(COMPOSER_TOOLBAR_SLOT, 'builtin:composer/toolbar')
   assert.equal(COMPOSER_DOCK_SLOT, 'builtin:composer/dock')
 })
 
@@ -27,15 +29,16 @@ test('OVERVIEW_CARD_META_SLOT is exported and follows the builtin:overview/* nam
   assert.equal(OVERVIEW_CARD_META_SLOT, 'builtin:overview/card-meta')
 })
 
-test('HOST_SLOT_CATALOG: single read-only catalog covers exactly the 5 real host slots', { timeout: 60_000 }, () => {
+test('HOST_SLOT_CATALOG: single read-only catalog covers exactly the 6 real host slots', { timeout: 60_000 }, () => {
   assert.deepEqual(HOST_SLOT_TARGETS, [
     PROFILE_DETAIL_SECTION_SLOT,
     NODE_DETAIL_SECTION_SLOT,
     COMPOSER_STATUS_SLOT,
+    COMPOSER_TOOLBAR_SLOT,
     COMPOSER_DOCK_SLOT,
     OVERVIEW_CARD_META_SLOT,
   ])
-  assert.equal(HOST_SLOT_CATALOG.length, 5)
+  assert.equal(HOST_SLOT_CATALOG.length, 6)
   assert.equal(Object.isFrozen(HOST_SLOT_CATALOG), true)
   const seen = new Set<string>()
   for (const entry of HOST_SLOT_CATALOG) {

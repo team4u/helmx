@@ -285,11 +285,18 @@ export const NODE_DETAIL_SECTION_SLOT = 'builtin:node/detail-section' as const
 /** Namespace reserved by the host composer status row; does not imply a builtin:composer plugin exists.
  * Contribution components receive ComposerStatusSlotProps (real conversations
  * pass ComposerScopeProps with conversation + composer; standby drafts pass
- * effectiveModel + profileId without a persisted conversation) and render next
- * to the read-only context usage state; metrics such as builtin:token-speed and
- * builtin:magpie quota indicators are contributed through this slot; on mobile
- * they also stay in the toolbar status area (not folded into the more menu). */
+ * effectiveModel + profileId) and render next to the read-only context usage
+ * state; metrics such as builtin:token-speed and builtin:magpie quota
+ * indicators are contributed through this slot; on mobile they also stay in
+ * the toolbar status area (not folded into the more menu). */
 export const COMPOSER_STATUS_SLOT = 'builtin:composer/status' as const
+
+/** Namespace reserved by the host composer interactive toolbar; does not imply a builtin:composer plugin exists.
+ * Intended strictly for compact icon/short-pill interactive input controls inside
+ * `.composer-toolbar-left` next to `ModelPicker` (real conversations pass
+ * `conversation` + `composer`; standby drafts pass `effectiveModel`, `profileId`,
+ * per-draft `draftMeta`, `setDraftMeta`, and `disabled`). */
+export const COMPOSER_TOOLBAR_SLOT = 'builtin:composer/toolbar' as const
 
 /** Namespace reserved by the host composer top tray; does not imply a builtin:composer plugin exists.
  * Contribution components receive ComposerScopeProps (conversation + composer)
@@ -302,11 +309,12 @@ export const COMPOSER_DOCK_SLOT = 'builtin:composer/dock' as const
  * Read-only badge/link pills (e.g. task number + column link) are contributed via ctx.ui.slot; heavy actions belong in the plugin's own screen/drawer. */
 export const OVERVIEW_CARD_META_SLOT = 'builtin:overview/card-meta' as const
 
-/** Single source of truth of the 5 host-reserved sub-slot target identifiers. */
+/** Single source of truth of the 6 host-reserved sub-slot target identifiers. */
 export const HOST_SLOT_TARGETS = [
   PROFILE_DETAIL_SECTION_SLOT,
   NODE_DETAIL_SECTION_SLOT,
   COMPOSER_STATUS_SLOT,
+  COMPOSER_TOOLBAR_SLOT,
   COMPOSER_DOCK_SLOT,
   OVERVIEW_CARD_META_SLOT,
 ] as const
@@ -323,7 +331,7 @@ export interface HostSlotCatalogEntry {
   readonly description: string
 }
 
-/** Single read-only protocol catalog of the 5 real host-mounted sub-slots. */
+/** Single read-only protocol catalog of the 6 real host-mounted sub-slots. */
 export const HOST_SLOT_CATALOG = Object.freeze([
   Object.freeze({
     target: PROFILE_DETAIL_SECTION_SLOT,
@@ -351,6 +359,15 @@ export const HOST_SLOT_CATALOG = Object.freeze([
     propsType: 'ComposerStatusSlotProps',
     conversationContext: 'optional',
     description: 'Read-only telemetry row below composer (persisted conversation or standby draft)',
+  }),
+  Object.freeze({
+    target: COMPOSER_TOOLBAR_SLOT,
+    ownerPluginId: 'builtin:composer',
+    slotName: 'toolbar',
+    mode: 'list',
+    propsType: 'ComposerToolbarSlotProps',
+    conversationContext: 'optional',
+    description: 'Compact interactive input controls inside composer toolbar (persisted conversation or standby draft)',
   }),
   Object.freeze({
     target: COMPOSER_DOCK_SLOT,
@@ -501,6 +518,22 @@ export interface ComposerStatusSlotProps {
   effectiveModel?: string
   /** Profile ID on standby drafts before persistence. */
   profileId?: string
+}
+
+/** COMPOSER_TOOLBAR_SLOT: compact interactive input controls inside `.composer-toolbar-left`. */
+export interface ComposerToolbarSlotProps {
+  conversation?: ConversationSummary
+  composer?: ComposerController
+  /** Effective model reference ('provider/model' or 'tier/<id>') on standby drafts before persistence. */
+  effectiveModel?: string
+  /** Profile ID on standby drafts before persistence. */
+  profileId?: string
+  /** Per-draft input metadata map carried onto the first `submitInput` on standby drafts. */
+  draftMeta?: Readonly<Record<string, unknown>>
+  /** Update or clear a single entry in the standby draft's `inputMeta` map (`undefined` deletes). */
+  setDraftMeta?: (key: string, value: unknown) => void
+  /** True when the standby draft is locked/busy or ineligible for input controls. */
+  disabled?: boolean
 }
 
 /** workbench.panel: conversation-aware right-drawer panel. */

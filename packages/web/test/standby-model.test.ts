@@ -17,7 +17,9 @@ import {
   inheritedEnvOf,
   resetEnvStandbyDraft,
   resetStandbyDrafts,
+  setStandbyDraftInputMeta,
   standbyDraftKey,
+  standbyDraftsDirty,
   standbyEnvError,
   updateStandbyDraft,
   type StandbySendDeps,
@@ -36,7 +38,7 @@ describe("standby-model", () => {
     creates: Array<ConversationInit>
     patches: Array<{ id: number; thinkingLevel: string }>
     uploads: Array<{ id: number; name: string }>
-    submits: Array<{ id: number; payload: { text: string; attachments?: string[] } }>
+    submits: Array<{ id: number; payload: { text: string; attachments?: string[]; meta?: Record<string, unknown> } }>
     errors: Array<{ title: string; conversationId?: number }>
     backgroundNotices: number[]
     navigations: number[]
@@ -83,7 +85,7 @@ describe("standby-model", () => {
         return meta
       },
       submit: async (id, payload) => {
-        log.submits.push({ id, payload: payload as { text: string; attachments?: string[] } })
+        log.submits.push({ id, payload: payload as { text: string; attachments?: string[]; meta?: Record<string, unknown> } })
         if (log.failures.submit !== undefined) {
           const err = log.failures.submit
           log.failures.submit = undefined
@@ -230,7 +232,7 @@ describe("standby-model", () => {
     updateStandbyDraft(key, { text: '清理校验' })
     await run(key, 'assistant', makeDeps(log))
     assert.deepEqual(getStandbyDraft(key), {
-      text: '', localFiles: [], uploaded: [], model: undefined, thinkingLevel: undefined,
+      text: '', localFiles: [], uploaded: [], model: undefined, thinkingLevel: undefined, inputMeta: undefined,
       envCustomized: false, envNodeId: undefined, envCwd: undefined,
       conversationId: undefined, sending: false, error: null,
     })
@@ -390,5 +392,38 @@ describe("standby-model", () => {
     assert.equal(rejected[1]!.file, readableButNotBlob, 'faking only the arrayBuffer method is still not a Blob')
     assert.ok(rejected[0]!.reason.includes('Unsupported attachment source'), 'a user-readable reason is given explicitly')
     assert.equal(draft.localFiles.length, 2, 'fake objects never enter localFiles')
+  })
+
+  test('setStandbyDraftInputMeta: isolates keys, rejects empty/prototype keys, stays non-dirty, and forwards meta on first send', { timeout: 60_000 }, async () => {
+    const primaryKey = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
+    const splitKey = standbyDraftKey({ panel: 'split', profileId: 'assistant' })
+
+    // Setting meta does NOT mark empty standby drafts dirty (safe for beforeunload/unconditional reset)
+    setStandbyDraftInputMeta(primaryKey, 'builtin:plan', { mode: 'planning' })
+    assert.deepEqual(getStandbyDraft(primaryKey).inputMeta, { 'builtin:plan': { mode: 'planning' } })
+    assert.equal(getStandbyDraft(splitKey).inputMeta, undefined, 'split pane must have isolated inputMeta')
+    assert.equal(standbyDraftsDirty(), false, 'inputMeta alone must not mark standby drafts dirty')
+
+    // Prototype / empty keys are ignored cleanly
+    setStandbyDraftInputMeta(primaryKey, '', { mode: 'planning' })
+    setStandbyDraftInputMeta(primaryKey, '__proto__', { polluted: true })
+    setStandbyDraftInputMeta(primaryKey, 'constructor', { polluted: true })
+    setStandbyDraftInputMeta(primaryKey, 'prototype', { polluted: true })
+    assert.deepEqual(Object.keys(getStandbyDraft(primaryKey).inputMeta ?? {}), ['builtin:plan'])
+
+    // Clearing removes key cleanly
+    setStandbyDraftInputMeta(primaryKey, 'builtin:plan', undefined)
+    assert.equal(getStandbyDraft(primaryKey).inputMeta, undefined)
+
+    // Re-arm and send text -> forwards shallow-copied meta in first submit, then clears on success
+    setStandbyDraftInputMeta(primaryKey, 'builtin:plan', { mode: 'planning' })
+    updateStandbyDraft(primaryKey, { text: 'plan first turn' })
+    assert.equal(standbyDraftsDirty(), true)
+
+    const log = makeLog()
+    assert.equal(await run(primaryKey, 'assistant', makeDeps(log)), 'sent')
+    assert.equal(log.submits.length, 1)
+    assert.deepEqual(log.submits[0]?.payload.meta, { 'builtin:plan': { mode: 'planning' } })
+    assert.equal(getStandbyDraft(primaryKey).inputMeta, undefined, 'cleared draft resets inputMeta after successful send')
   })
 })

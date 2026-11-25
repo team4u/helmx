@@ -1,6 +1,6 @@
 import { memo, useCallback, useId, useMemo, useRef } from 'react'
 import type { ComposerScopeProps, ConversationSummary, WhenBusy } from '@helmx/protocol/browser'
-import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT } from '@helmx/protocol/browser'
+import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol/browser'
 import { Button, HelmxIcon, PluginSlot, useSharedNowMs } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
@@ -345,6 +345,16 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
       onPickCompletion={completions.applyCompletionPick}
       onCloseCompletion={completions.closeCompletionPopover}
       modelPicker={<ModelPicker conversation={conversation} onReturnFocus={returnFocusToTextarea} />}
+      toolbarSlot={
+        <PluginSlot
+          ownerPluginId="builtin:composer"
+          name={COMPOSER_TOOLBAR_SLOT}
+          conversationId={conversation.id}
+          composer={composer}
+          className="composer-toolbar-slot"
+          slotProps={composerSlotProps}
+        />
+      }
       sendControls={
         <ComposerSendControls
           working={working}
