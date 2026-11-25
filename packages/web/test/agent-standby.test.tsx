@@ -546,7 +546,7 @@ describe("agent-standby", () => {
 
   test('new-topic button: enters standby inheriting the remote environment, pre-creating nothing', { timeout: 60_000 }, async () => {
     await mount('#/c/3')
-    clickButton('button[title="Start a new topic under the current agent"]')
+    clickButton('button[title^="Start a new topic under the current agent"]')
     await settle()
     assert.equal(window.location.hash, `#/a/assistant?node=remote-1&cwd=${encodeURIComponent('/remote/work')}`)
     assert.equal(state.createCalls.length, 0, 'new topic pre-creates no empty conversation')

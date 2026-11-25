@@ -254,6 +254,8 @@ export interface CommandSpec extends UiSpecBase {
   slash?: string
   /** Display copy describing the command (resolved by the active UI locale). */
   description?: LocalizedText
+  /** Short display shortcut label shown in the command palette and shortcuts modal (e.g. 'Ctrl+.'; max 32 chars). */
+  shortcut?: string
   /** Quick commands reuse the ctx.action endpoint. */
   actionId?: string
   actionPluginId?: string
@@ -594,6 +596,8 @@ void _assertAllKnownUiSurfacesListed
 
 const KNOWN_PLUGIN_UI_SURFACE_SET: ReadonlySet<string> = new Set(KNOWN_PLUGIN_UI_SURFACES)
 
+const COMMAND_SHORTCUT_MAX_LENGTH = 32
+
 /**
  * Validate and narrow a PluginUiContribution: checks the known surface and a
  * non-null plain-object spec, then returns the discriminated-union member;
@@ -606,6 +610,29 @@ export function parsePluginUiContribution(
   if (typeof item.pluginId !== 'string' || typeof item.surface !== 'string') return undefined
   if (!KNOWN_PLUGIN_UI_SURFACE_SET.has(item.surface)) return undefined
   if (item.spec === null || typeof item.spec !== 'object' || Array.isArray(item.spec)) return undefined
+  if (item.surface === 'commandPalette' || item.surface === 'command') {
+    const rawSpec = item.spec as Record<string, unknown>
+    if (Object.hasOwn(rawSpec, 'shortcut')) {
+      const rawShortcut = rawSpec['shortcut']
+      const trimmed = typeof rawShortcut === 'string' ? rawShortcut.trim() : ''
+      if (trimmed.length >= 1 && trimmed.length <= COMMAND_SHORTCUT_MAX_LENGTH) {
+        if (trimmed !== rawShortcut) {
+          return {
+            pluginId: item.pluginId,
+            surface: item.surface,
+            spec: { ...rawSpec, shortcut: trimmed } as unknown as CommandSpec,
+          }
+        }
+      } else {
+        const { shortcut: _ignored, ...rest } = rawSpec
+        return {
+          pluginId: item.pluginId,
+          surface: item.surface,
+          spec: rest as unknown as CommandSpec,
+        }
+      }
+    }
+  }
   return item as KnownPluginUiContribution
 }
 

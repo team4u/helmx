@@ -462,6 +462,7 @@ export function Sidebar({
       ? t('shell.quietNotify.denied')
       : t('shell.quietNotify.on')
   const collapseWithShortcut = t('shell.sidebar.collapseNavWithShortcut', { shortcut: formatModShortcut('B') })
+  const commandPaletteLabel = t('shell.sidebar.openCommandPalette', { shortcut: formatModShortcut('K') })
   const spaceHeaderLabel =
     space === 'conversations'
       ? t('shell.sidebar.spaceHeaderConversations')
@@ -522,12 +523,12 @@ export function Sidebar({
                 }}
               />
             </Tooltip>
-            <Tooltip content={t('shell.sidebar.openCommandPalette')} side="bottom">
+            <Tooltip content={commandPaletteLabel} side="bottom">
               <IconButton
                 variant="default"
                 size="sm"
                 icon="search"
-                aria-label={t('shell.sidebar.openCommandPalette')}
+                aria-label={commandPaletteLabel}
                 onClick={() => setActiveModal({ kind: 'command-palette' })}
               />
             </Tooltip>

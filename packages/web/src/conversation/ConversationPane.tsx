@@ -29,6 +29,7 @@ import {
   isHumanSelectableProfile,
 } from '../shell/sidebar-model.js'
 import { patchConversationArchived } from '../shell/archive-ops.js'
+import { formatModShiftShortcut, formatModShortcut } from '../shell/shortcuts-model.js'
 import {
   useConversationArtifacts,
   useConversationDetail,
@@ -544,7 +545,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               icon={<HelmxIcon name="plus" size={12} />}
               pending={actionPending === 'new-thread'}
               aria-label={t('conv.pane.newTopic')}
-              title={t('conv.pane.newTopicTitle')}
+              title={t('conv.pane.newTopicTitle', { shortcut: formatModShiftShortcut('O') })}
               disabled={actionPending !== null && actionPending !== 'new-thread'}
               onClick={startNewThread}
             >
@@ -557,7 +558,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               variant={workbenchOpen && !isDrawer ? 'primary' : 'default'}
               icon={<HelmxIcon name="panel-right" size={12} />}
               aria-label={workbenchCount > 0 ? t('conv.pane.workbenchWithCount', { count: workbenchCount }) : t('conv.pane.workbench')}
-              title={t('conv.pane.workbenchTitle')}
+              title={t('conv.pane.workbenchTitle', { shortcut: formatModShortcut('J') })}
               onClick={() => {
                 // 打开首个可用页签；已打开时保持当前有效页签，并显式绑定当前会话。
                 const target = resolveActiveWorkbenchTab(

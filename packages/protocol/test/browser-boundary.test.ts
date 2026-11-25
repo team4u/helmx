@@ -152,6 +152,45 @@ test('parsePluginUiContribution: covers every known surface and rejects invalid 
   for (const c of invalidCases) {
     assert.equal(parsePluginUiContribution(c.value), undefined, `${c.label} must return undefined`)
   }
+
+  // Command shortcut parsing: trims non-empty strings <= 32 chars, strips invalid/blank/overlong values
+  for (const surface of ['commandPalette', 'command'] as const) {
+    const clean = parsePluginUiContribution({
+      pluginId: 'demo:plugin',
+      surface,
+      spec: { id: 'c1', title: 'Toggle', shortcut: 'Ctrl+.' },
+    })
+    assert.ok(clean !== undefined && (clean.surface === 'commandPalette' || clean.surface === 'command'))
+    assert.equal(clean.spec.shortcut, 'Ctrl+.')
+
+    const trimmed = parsePluginUiContribution({
+      pluginId: 'demo:plugin',
+      surface,
+      spec: { id: 'c2', title: 'Toggle', shortcut: '  Ctrl+.  ' },
+    })
+    assert.ok(trimmed !== undefined && (trimmed.surface === 'commandPalette' || trimmed.surface === 'command'))
+    assert.equal(trimmed.spec.shortcut, 'Ctrl+.')
+
+    const maxBoundary = 'A'.repeat(32)
+    const boundaryParsed = parsePluginUiContribution({
+      pluginId: 'demo:plugin',
+      surface,
+      spec: { id: 'c3', title: 'Toggle', shortcut: maxBoundary },
+    })
+    assert.ok(boundaryParsed !== undefined && (boundaryParsed.surface === 'commandPalette' || boundaryParsed.surface === 'command'))
+    assert.equal(boundaryParsed.spec.shortcut, maxBoundary)
+
+    for (const badShortcut of ['', '   ', 'A'.repeat(33), 42, null, undefined]) {
+      const stripped = parsePluginUiContribution({
+        pluginId: 'demo:plugin',
+        surface,
+        spec: { id: 'c4', title: 'Toggle', shortcut: badShortcut },
+      })
+      assert.ok(stripped !== undefined && (stripped.surface === 'commandPalette' || stripped.surface === 'command'))
+      assert.equal(stripped.spec.shortcut, undefined)
+      assert.equal(Object.hasOwn(stripped.spec, 'shortcut'), false)
+    }
+  }
 })
 
 test('isPluginSummaryActive: unified truth table across enabled/status/error combinations', { timeout: 60_000 }, () => {

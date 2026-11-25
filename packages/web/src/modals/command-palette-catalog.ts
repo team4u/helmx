@@ -22,7 +22,9 @@ import type {
 } from '../lib/types.js'
 import type { ConversationBackgroundIndex } from '../shell/background-activity-model.js'
 import {
+  formatModShiftShortcut,
   formatModShortcut,
+  resolveNewTopicTarget,
   selectRecentConversationsForPalette,
   type HelmxShortcutDetail,
 } from '../shell/shortcuts-model.js'
@@ -33,7 +35,11 @@ export function buildPaletteContextCommands(input: {
   activeTarget: ResolvedTarget
   activePanel: FocusedPanel
   workbenchOpen: boolean
-  paletteProfileId: string | undefined
+  conversations: ReadonlyArray<ConversationSummary>
+  profiles: ReadonlyArray<Profile>
+  plugins?: ReadonlyArray<PluginSummary>
+  sidebarItems?: GroupedUiSpecs['sidebarItems']
+  locale: HelmxLocale
   splitTarget: ResolvedTarget | null
   setWorkbenchOpen: (open: boolean) => void
   closeSplit: () => void
@@ -43,7 +49,11 @@ export function buildPaletteContextCommands(input: {
     activeTarget,
     activePanel,
     workbenchOpen,
-    paletteProfileId,
+    conversations,
+    profiles,
+    plugins,
+    sidebarItems,
+    locale,
     splitTarget,
     setWorkbenchOpen,
     closeSplit,
@@ -92,15 +102,27 @@ export function buildPaletteContextCommands(input: {
       run: () => setWorkbenchOpen(!workbenchOpen),
     })
   }
+  const newTopicTarget = resolveNewTopicTarget({
+    activeTarget,
+    conversations,
+    profiles,
+    ...(plugins !== undefined ? { plugins } : {}),
+    ...(sidebarItems !== undefined ? { sidebarItems } : {}),
+    locale,
+  })
   list.push({
     kind: 'command',
     id: 'builtin:new-conversation',
     group: 'context',
     title: t('modals.palette.cmd.newConversation'),
-    hint: paletteProfileId !== undefined ? paletteProfileId : t('modals.palette.cmd.selectProfileFirst'),
+    hint:
+      newTopicTarget.kind === 'agent'
+        ? newTopicTarget.profileId
+        : t('modals.palette.cmd.selectProfileFirst'),
+    shortcut: formatModShiftShortcut('O'),
     icon: 'plus',
     keywords: ['new', 'conversation', 'topic', '新建', '会话', '话题'],
-    target: paletteProfileId !== undefined ? { kind: 'agent', profileId: paletteProfileId } : { kind: 'profiles' },
+    target: newTopicTarget,
   })
   if (splitTarget) {
     list.push({
@@ -259,6 +281,7 @@ export function buildPaletteUtilityCommands(input: {
   quietNotifyEnabled: boolean
   onPreviewCommand: (preview: { pluginId: string; spec: CommandSpec }) => void
   onInvokePluginCommand: (cmd: QualifiedCommand) => void
+  openShortcuts: () => void
   toggleSidebarCollapsed?: () => void
   toggleTheme: () => void
   setLocalePreference?: (pref: LocalePreference) => void
@@ -275,6 +298,7 @@ export function buildPaletteUtilityCommands(input: {
     quietNotifyEnabled,
     onPreviewCommand,
     onInvokePluginCommand,
+    openShortcuts,
     toggleSidebarCollapsed,
     toggleTheme,
     setLocalePreference,
@@ -283,28 +307,42 @@ export function buildPaletteUtilityCommands(input: {
     t,
   } = input
 
-  const pluginCommands: PaletteCommandRow[] = scopedPluginCommands.map((cmd) => ({
-    kind: 'command',
-    id: `plugin:${cmd.pluginId}/${cmd.spec.id}`,
-    group: 'commands',
-    title: resolveLocalizedText(cmd.spec.title, locale),
-    hint: commandHint(cmd.spec, cmd.pluginId, locale),
-    icon: cmd.spec.icon ?? 'zap',
-    keywords: [
-      ...(cmd.spec.keywords ?? []),
-      ...(cmd.spec.slash !== undefined ? [cmd.spec.slash, `/${cmd.spec.slash}`] : []),
-    ],
-    run: () => {
-      if (cmd.spec.client !== undefined) {
-        onPreviewCommand({ pluginId: cmd.pluginId, spec: cmd.spec })
-        return
-      }
-      onInvokePluginCommand(cmd)
-    },
-  }))
+  const pluginCommands: PaletteCommandRow[] = scopedPluginCommands.map((cmd) => {
+    const shortcut = typeof cmd.spec.shortcut === 'string' ? cmd.spec.shortcut.trim() : ''
+    return {
+      kind: 'command',
+      id: `plugin:${cmd.pluginId}/${cmd.spec.id}`,
+      group: 'commands',
+      title: resolveLocalizedText(cmd.spec.title, locale),
+      hint: commandHint(cmd.spec, cmd.pluginId, locale),
+      ...(shortcut !== '' ? { shortcut } : {}),
+      icon: cmd.spec.icon ?? 'zap',
+      keywords: [
+        ...(cmd.spec.keywords ?? []),
+        ...(cmd.spec.slash !== undefined ? [cmd.spec.slash, `/${cmd.spec.slash}`] : []),
+      ],
+      run: () => {
+        if (cmd.spec.client !== undefined) {
+          onPreviewCommand({ pluginId: cmd.pluginId, spec: cmd.spec })
+          return
+        }
+        onInvokePluginCommand(cmd)
+      },
+    }
+  })
 
   return [
     ...pluginCommands,
+    {
+      kind: 'command',
+      id: 'builtin:open-shortcuts',
+      group: 'commands',
+      title: t('modals.palette.cmd.openShortcuts'),
+      shortcut: formatModShortcut('/'),
+      icon: 'terminal',
+      keywords: ['shortcuts', 'keyboard', 'help', 'hotkey', 'hotkeys', '快捷键', '键盘', '帮助'],
+      run: () => openShortcuts(),
+    },
     {
       kind: 'command',
       id: 'builtin:toggle-sidebar',

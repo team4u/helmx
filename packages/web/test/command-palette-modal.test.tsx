@@ -625,4 +625,96 @@ describe("command-palette-modal", () => {
       }
     }
   })
+
+  test('CommandPaletteModal wires New conversation via resolveNewTopicTarget, displays plugin shortcut badge, exposes open-shortcuts command and desktop footer', { timeout: 60_000 }, async () => {
+    const opened: Array<{ target: unknown; opts: unknown }> = []
+    const uiContributions: PluginUiContribution[] = [
+      {
+        pluginId: 'ext:sample',
+        surface: 'commandPalette',
+        spec: {
+          id: 'toggle-sample',
+          title: { en: 'Toggle Sample mode', 'zh-CN': '切换示例模式' },
+          shortcut: 'Ctrl+.',
+          actionId: 'toggle',
+        },
+      },
+    ]
+    const store = makeTestStore({
+      profiles: [
+        { id: 'assistant', name: 'Assistant' },
+        { id: 'coder', name: 'Coder' },
+      ],
+      conversations: [
+        makeConv(5, { profileId: 'coder', updatedAt: 9000 }),
+        makeConv(6, { profileId: 'assistant', updatedAt: 1000 }),
+      ],
+      uiContributions,
+      primaryTarget: { kind: 'overview' },
+    })
+    ;(store.actions as unknown as { openTarget: (t: unknown, o?: unknown) => void }).openTarget = (t, o) => {
+      opened.push({ target: t, opts: o })
+    }
+    const modals: unknown[] = []
+    const origSetActiveModal = store.actions.setActiveModal
+    ;(store.actions as unknown as { setActiveModal: (m: unknown) => void }).setActiveModal = (m) => {
+      modals.push(m)
+      origSetActiveModal(m as never)
+    }
+
+    let closedCount = 0
+    mount(
+      <HostStoreProviders value={store}>
+        <CommandPaletteModal onClose={() => { closedCount += 1 }} />
+      </HostStoreProviders>,
+    )
+    await flushMacrotask(0)
+
+    const options = getOptions()
+    // 1) New conversation on Overview targets first human-selectable candidate (coder), NOT Profile Center, and shows Mod+Shift+O badge
+    const newConvRow = options.find((o) => o.textContent?.includes('New conversation'))
+    assert.ok(newConvRow !== undefined)
+    assert.ok(newConvRow.textContent?.includes('coder'))
+    const newConvKbd = newConvRow.querySelector('kbd.kbd-hint')?.textContent ?? ''
+    assert.ok(newConvKbd === '⌘⇧O' || newConvKbd === 'Ctrl+Shift+O')
+
+    await act(async () => {
+      newConvRow.click()
+    })
+    assert.equal(closedCount, 1)
+    assert.deepEqual(opened[0], { target: { kind: 'agent', profileId: 'coder' }, opts: undefined })
+
+    // Re-mount to check plugin shortcut badge, open-shortcuts row, and footer button
+    mount(
+      <HostStoreProviders value={store}>
+        <CommandPaletteModal onClose={() => { closedCount += 1 }} />
+      </HostStoreProviders>,
+    )
+    await flushMacrotask(0)
+
+    const options2 = getOptions()
+    const pluginRow = options2.find((o) => o.textContent?.includes('Toggle Sample mode'))
+    assert.ok(pluginRow !== undefined)
+    assert.equal(pluginRow.querySelector('kbd.kbd-hint')?.textContent, 'Ctrl+.')
+
+    const shortcutsRow = options2.find((o) => o.textContent?.includes('Keyboard shortcuts'))
+    assert.ok(shortcutsRow !== undefined)
+    const shortcutsKbd = shortcutsRow.querySelector('kbd.kbd-hint')?.textContent ?? ''
+    assert.ok(shortcutsKbd === '⌘/' || shortcutsKbd === 'Ctrl+/')
+
+    // Footer renders desktop hints + Shortcuts trigger button
+    const footer = document.querySelector<HTMLElement>('.palette-footer')
+    assert.ok(footer !== null, '.palette-footer must render')
+    const footerText = footer.textContent ?? ''
+    assert.ok(footerText.includes('↑↓'))
+    assert.ok(footerText.includes('Enter'))
+    assert.ok(footerText.includes('Esc'))
+
+    const footerBtn = footer.querySelector<HTMLButtonElement>('.palette-footer-shortcuts-btn')
+    assert.ok(footerBtn !== null)
+    await act(async () => {
+      footerBtn.click()
+    })
+    assert.deepEqual(modals[modals.length - 1], { kind: 'shortcuts' })
+  })
 })

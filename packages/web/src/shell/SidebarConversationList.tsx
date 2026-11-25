@@ -58,6 +58,7 @@ import {
   type SidebarOverviewDescendantsSlice,
 } from '../overview/overview-model.js'
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
+import { formatModShiftShortcut } from './shortcuts-model.js'
 import {
   activeConversationIdsOf,
   buildAgentStandings,
@@ -127,9 +128,10 @@ function SidebarNewTopicButton({
       : ''
   const buttonClassName = `sidebar-header-icon-btn sidebar-new-topic-btn${stateClass}${standbyPresence.focused ? ' nav-item-focused' : ''}`
 
+  const newTopicShortcut = formatModShiftShortcut('O')
   const singleCandidate = candidates.length === 1 ? (candidates[0] ?? null) : null
   if (singleCandidate !== null) {
-    const label = t('shell.agents.newTopicUnder', { label: singleCandidate.label })
+    const label = t('shell.agents.newTopicUnderWithShortcut', { label: singleCandidate.label, shortcut: newTopicShortcut })
     return (
       <Tooltip content={label} side="top">
         <IconButton
@@ -147,7 +149,7 @@ function SidebarNewTopicButton({
 
   return (
     <DropdownMenu>
-      <Tooltip content={t('conv.pane.newTopic')} side="top">
+      <Tooltip content={t('conv.pane.newTopicWithShortcut', { shortcut: newTopicShortcut })} side="top">
         <DropdownMenuTrigger asChild>
           <IconButton
             variant="ghost"
@@ -184,6 +186,7 @@ function SidebarEmptyNewTopicButton({
   const { t } = useWebLocale()
   if (candidates.length === 0) return null
 
+  const newTopicShortcut = formatModShiftShortcut('O')
   const singleCandidate = candidates.length === 1 ? (candidates[0] ?? null) : null
   if (singleCandidate !== null) {
     return (
@@ -191,7 +194,7 @@ function SidebarEmptyNewTopicButton({
         size="sm"
         className="sidebar-empty-new-topic-btn"
         icon={<HelmxIcon name="plus" size={12} />}
-        title={t('shell.agents.newTopicUnder', { label: singleCandidate.label })}
+        title={t('shell.agents.newTopicUnderWithShortcut', { label: singleCandidate.label, shortcut: newTopicShortcut })}
         aria-label={t('conv.pane.newTopic')}
         onClick={() => onSelectProfile(singleCandidate.profileId)}
       >
@@ -207,7 +210,7 @@ function SidebarEmptyNewTopicButton({
           size="sm"
           className="sidebar-empty-new-topic-btn"
           icon={<HelmxIcon name="plus" size={12} />}
-          title={t('conv.pane.newTopic')}
+          title={t('conv.pane.newTopicWithShortcut', { shortcut: newTopicShortcut })}
           aria-label={t('conv.pane.newTopic')}
           aria-haspopup="menu"
         >
