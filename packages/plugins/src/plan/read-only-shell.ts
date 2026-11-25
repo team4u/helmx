@@ -1011,6 +1011,45 @@ function validateHelmxArgs(args: readonly string[]): ReadOnlyShellValidationResu
   return { ok: true }
 }
 
+type ShortFlagClusterResult = 'none' | 'consume-next' | 'consume-inline' | { blocked: string }
+
+/**
+ * Inspect a POSIX short-flag cluster (e.g. `-iS`, `-iC`, `-ca`, `-rI`, `-0n`) char-by-char:
+ * - Returns `{ blocked }` if a blocked option char appears before any value-taking option.
+ * - Returns `'consume-next'` if a value-taking option char is at the end of the cluster (consumes next token),
+ *   or `'consume-inline'` if remaining chars in the same token form its value.
+ * - Returns `'none'` for non-short tokens or purely boolean clusters.
+ */
+function classifyShortFlagCluster(
+  token: string,
+  valueChars: string,
+  blockedChars = '',
+): ShortFlagClusterResult {
+  if (!token.startsWith('-') || token.startsWith('--') || token.length < 2) {
+    return 'none'
+  }
+  for (let i = 1; i < token.length; i += 1) {
+    const ch = token[i]!
+    if (blockedChars.includes(ch)) {
+      return { blocked: `-${ch}` }
+    }
+    if (valueChars.includes(ch)) {
+      return i === token.length - 1 ? 'consume-next' : 'consume-inline'
+    }
+  }
+  return 'none'
+}
+
+const XARGS_LONG_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '--arg-file',
+  '--delimiter',
+  '--max-lines',
+  '--max-args',
+  '--max-procs',
+  '--max-chars',
+  '--process-slot-var',
+])
+
 function validateWordSequence(words: string[]): ReadOnlyShellValidationResult {
   let idx = 0
   while (idx < words.length) {
@@ -1033,7 +1072,11 @@ function validateWordSequence(words: string[]): ReadOnlyShellValidationResult {
           idx += 1
           break
         }
-        if (arg === '-n' || arg === '--adjustment') {
+        if (arg === '--adjustment') {
+          idx += 2
+          continue
+        }
+        if (classifyShortFlagCluster(arg, 'n') === 'consume-next') {
           idx += 2
           continue
         }
@@ -1053,7 +1096,7 @@ function validateWordSequence(words: string[]): ReadOnlyShellValidationResult {
           idx += 1
           break
         }
-        if (arg === '-a') {
+        if (classifyShortFlagCluster(arg, 'a') === 'consume-next') {
           idx += 2
           continue
         }
@@ -1073,10 +1116,18 @@ function validateWordSequence(words: string[]): ReadOnlyShellValidationResult {
           idx += 1
           break
         }
-        if (arg === '-S' || arg.startsWith('-S') || arg === '--split-string' || arg.startsWith('--split-string=')) {
+        if (arg === '--split-string' || arg.startsWith('--split-string=')) {
           return { ok: false, reason: `env flag '${arg}' is blocked in read-only mode` }
         }
-        if (arg === '-u' || arg === '--unset' || arg === '-C' || arg === '--chdir') {
+        if (arg === '--unset' || arg === '--chdir' || arg === '--argv0') {
+          idx += 2
+          continue
+        }
+        const cluster = classifyShortFlagCluster(arg, 'uCa', 'S')
+        if (typeof cluster === 'object') {
+          return { ok: false, reason: `env flag '${arg}' (${cluster.blocked}) is blocked in read-only mode` }
+        }
+        if (cluster === 'consume-next') {
           idx += 2
           continue
         }
@@ -1111,21 +1162,11 @@ function validateWordSequence(words: string[]): ReadOnlyShellValidationResult {
         i += 1
         break
       }
-      if (
-        a === '-n' ||
-        a === '-I' ||
-        a === '-L' ||
-        a === '-P' ||
-        a === '-d' ||
-        a === '-E' ||
-        a === '-s' ||
-        a === '-a' ||
-        a === '--arg-file' ||
-        a === '--max-args' ||
-        a === '--max-procs' ||
-        a === '--replace' ||
-        a === '--delimiter'
-      ) {
+      if (XARGS_LONG_VALUE_FLAGS.has(a)) {
+        i += 2
+        continue
+      }
+      if (classifyShortFlagCluster(a, 'adEILnPs') === 'consume-next') {
         i += 2
         continue
       }

@@ -1711,6 +1711,8 @@ test('validateReadOnlyShellCommand: strict helmx read-only allowlist & helmx-hub
     'git log --grep="helmx-hub"',
     'helmx status 2>&1',
     'helmx status >/dev/null',
+    // Unsetting an env var named `S` via `-uS` is not `env -S`
+    'env -uS helmx status',
   ]
   for (const cmd of allowed) {
     assert.equal(validateReadOnlyShellCommand(cmd).ok, true, `expected allowed: ${cmd}`)
@@ -1842,10 +1844,19 @@ test('validateReadOnlyShellCommand: strict helmx read-only allowlist & helmx-hub
     'env FOO=1 helmx plan set_mode --current --input \'{"mode":"normal"}\'',
     'env -C /tmp helmx send 1 hi',
     'env -S "helmx send 1 hi"',
+    'env -iS "helmx send 1 hi"',
+    'env -vS "helmx send 1 hi"',
+    'env -iC /tmp helmx send 1 hi',
+    'env -iu FOO helmx send 1 hi',
+    'env -ia fake helmx send 1 hi',
     'command -p helmx send 1 hi',
     'nice -n 5 helmx send 1 hi',
     'exec helmx send 1 hi',
+    'exec -ca fake helmx send 1 hi',
     'xargs -I{} helmx conversations delete {}',
+    'echo 1 | xargs -rI {} helmx conversations delete {}',
+    'xargs -0n 1 helmx send 1 hi',
+    'echo 1 | xargs --replace helmx send 1 hi',
     'echo $(helmx plan toggle --current)',
     'echo `helmx send 1 hi`',
     '(helmx conversations delete 1)',
