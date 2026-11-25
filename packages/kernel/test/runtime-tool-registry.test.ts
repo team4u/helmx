@@ -179,6 +179,246 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.ok(disabledRes.output[0]!.text.includes('does not declare action'))
   })
 
+  it('run_action list: true discovers public in-scope actions (including exposeToPrompt: false) and validates mutually exclusive flags', { timeout: 60_000 }, async () => {
+    const installed: Extension[] = []
+    const fakeToolDeps: HelmxToolDeps = {
+      dataDir: '/tmp/test',
+      defaultCwd: '/tmp/test',
+      hubUrl: 'http://127.0.0.1:3202',
+      redact: (t) => t.replace(/SECRET_TOKEN/g, '[REDACTED]'),
+      artifacts: {
+        spill: async () => ({ text: 'spill' }),
+        get: async () => ({} as never),
+        readContent: async () => '',
+        readBuffer: async () => new Uint8Array(),
+      },
+    }
+
+    let invokeCount = 0
+    const allActions: ActionManifest[] = [
+      {
+        pluginId: 'builtin:zeta',
+        id: 'inspect',
+        description: 'Inspect zeta with SECRET_TOKEN',
+        inputSchema: {
+          type: 'object',
+          properties: { id: { type: 'string' }, verbose: { type: 'boolean' } },
+          required: ['id'],
+        },
+        outputSchema: { type: 'object' },
+        exposeToPrompt: false,
+        idempotent: true,
+        cli: { command: ['zeta', 'inspect-item'] },
+      },
+      {
+        pluginId: 'builtin:alpha',
+        id: 'tool_action',
+        description: 'Direct tool action',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        outputSchema: { type: 'object' },
+        exposeAsTool: true,
+        exposeToPrompt: false,
+        cli: { hidden: true },
+      },
+      {
+        pluginId: 'builtin:alpha',
+        id: 'normal',
+        description: 'Normal public action',
+        inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'builtin:alpha',
+        id: 'ui_only',
+        description: 'UI only action',
+        visibility: 'ui',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'builtin:alpha',
+        id: 'internal_only',
+        description: 'Internal only action',
+        visibility: 'internal',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'builtin:triggers',
+        id: 'webhook_create',
+        description: 'Blocked in all conversations',
+        scope: { conversationIds: [] },
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'builtin:triggers',
+        id: 'webhook_update',
+        description: 'Update webhook metadata',
+        exposeToPrompt: false,
+        cli: { command: ['webhook', 'update'] },
+        inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'builtin:scoped',
+        id: 'alpha_only',
+        description: 'Requires alpha tag',
+        scope: { tags: ['alpha'] },
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+      },
+    ]
+
+    let activeActions = [...allActions]
+    let convTags: string[] = ['beta']
+    const fakeHost: PluginHostToolTarget = {
+      invokeAction: async () => {
+        invokeCount += 1
+        return { ok: true }
+      },
+      executeTool: async () => {
+        throw new Error('not implemented')
+      },
+      listTools: () => [],
+      listActions: () => activeActions,
+    }
+
+    const registryModule = new RuntimeToolRegistry({
+      registry: { install(ext: Extension) { installed.push(ext) } },
+      toolDeps: fakeToolDeps,
+      getPluginHost: () => fakeHost,
+      isArtifactAuthorized: () => true,
+      redact: (t) => t.replace(/SECRET_TOKEN/g, '[REDACTED]'),
+      getConversation: (id) => ({
+        id,
+        title: 'test',
+        profileId: 'assistant',
+        tags: convTags,
+        cwd: '/tmp/test',
+        model: 'faux/faux-1',
+        thinkingLevel: '',
+        status: 'idle',
+        stateChangeSeq: 1,
+        completionSeq: 0,
+        unread: false,
+        pinned: false,
+        pendingAskCount: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      }),
+    })
+    registryModule.installKernelTools()
+
+    const runActionTool = installed[0]!.tools!.find((t) => t.name === 'run_action') as unknown as {
+      execute: (args: Record<string, unknown>, api: { conversationId: number }, ctx: { abortSignal?: AbortSignal }) => Promise<{
+        output: Array<{ type: 'text'; text: string }>
+        isError?: boolean
+      }>
+    }
+
+    // 1. list: true returns deterministically sorted public in-scope actions (including exposeToPrompt: false) and redacts text.
+    const listedRes = await runActionTool.execute({ list: true }, { conversationId: 1 }, {})
+    assert.equal(listedRes.isError, undefined)
+    assert.equal(invokeCount, 0, 'list mode must never invoke action handlers')
+    const items = JSON.parse(listedRes.output[0]!.text) as Array<Record<string, unknown>>
+    assert.deepEqual(
+      items.map((item) => item['actionId']),
+      [
+        'builtin:alpha.normal',
+        'builtin:alpha.tool_action',
+        'builtin:triggers.webhook_update',
+        'builtin:zeta.inspect',
+      ],
+    )
+    assert.deepEqual(items[0], {
+      actionId: 'builtin:alpha.normal',
+      pluginId: 'builtin:alpha',
+      id: 'normal',
+      description: 'Normal public action',
+      parameterSummary: 'q: string(optional)',
+      cli: 'helmx alpha normal',
+      exposeAsTool: false,
+    })
+    assert.deepEqual(items[1], {
+      actionId: 'builtin:alpha.tool_action',
+      pluginId: 'builtin:alpha',
+      id: 'tool_action',
+      description: 'Direct tool action',
+      parameterSummary: '(no parameters)',
+      exposeAsTool: true,
+    })
+    assert.equal(Object.hasOwn(items[1]!, 'cli'), false, 'cli.hidden actions must omit cli field')
+    assert.equal(Object.hasOwn(items[1]!, 'idempotent'), false, 'non-idempotent actions must omit idempotent field')
+    assert.deepEqual(items[2], {
+      actionId: 'builtin:triggers.webhook_update',
+      pluginId: 'builtin:triggers',
+      id: 'webhook_update',
+      description: 'Update webhook metadata',
+      parameterSummary: 'id: string(required)',
+      cli: 'helmx webhook update',
+      exposeAsTool: false,
+    })
+    assert.deepEqual(items[3], {
+      actionId: 'builtin:zeta.inspect',
+      pluginId: 'builtin:zeta',
+      id: 'inspect',
+      description: 'Inspect zeta with [REDACTED]',
+      parameterSummary: 'id: string(required), verbose: boolean(optional)',
+      cli: 'helmx zeta inspect-item',
+      idempotent: true,
+      exposeAsTool: false,
+    })
+
+    // 2. Scope updates are respected (alpha tag unlocks builtin:scoped.alpha_only; conversationIds: [] stays blocked).
+    convTags = ['alpha']
+    const withAlpha = JSON.parse((await runActionTool.execute({ list: true }, { conversationId: 1 }, {})).output[0]!.text) as Array<Record<string, unknown>>
+    assert.ok(withAlpha.some((item) => item['actionId'] === 'builtin:scoped.alpha_only'))
+    assert.ok(!withAlpha.some((item) => item['actionId'] === 'builtin:triggers.webhook_create'))
+
+    // 3. Exact pluginId filter.
+    const triggersOnly = await runActionTool.execute({ list: true, pluginId: 'builtin:triggers' }, { conversationId: 1 }, {})
+    assert.equal(triggersOnly.isError, undefined)
+    assert.deepEqual(
+      (JSON.parse(triggersOnly.output[0]!.text) as Array<Record<string, unknown>>).map((i) => i['actionId']),
+      ['builtin:triggers.webhook_update'],
+    )
+    const missingPlugin = await runActionTool.execute({ list: true, pluginId: 'builtin:disabled' }, { conversationId: 1 }, {})
+    assert.equal(missingPlugin.isError, undefined)
+    assert.deepEqual(JSON.parse(missingPlugin.output[0]!.text), [])
+
+    // 4. Disabled plugin (absent from listActions) disappears immediately.
+    activeActions = activeActions.filter((m) => m.pluginId !== 'builtin:zeta')
+    const afterDisable = JSON.parse((await runActionTool.execute({ list: true }, { conversationId: 1 }, {})).output[0]!.text) as Array<Record<string, unknown>>
+    assert.ok(!afterDisable.some((item) => item['pluginId'] === 'builtin:zeta'))
+
+    // 5. Mutual exclusion and malformed argument rejections (all isError: true).
+    const invalidCalls: Array<{ args: Record<string, unknown>; expectSubstr: string }> = [
+      { args: { list: true, describe: true }, expectSubstr: 'describe' },
+      { args: { list: true, actionId: 'builtin:alpha.normal' }, expectSubstr: 'actionId' },
+      { args: { list: true, input: {} }, expectSubstr: 'input' },
+      { args: { list: true, pluginId: '' }, expectSubstr: 'pluginId' },
+      { args: { list: true, pluginId: '   ' }, expectSubstr: 'pluginId' },
+      { args: { pluginId: 'builtin:alpha' }, expectSubstr: 'pluginId' },
+      { args: { actionId: 'builtin:alpha.normal', pluginId: 'builtin:alpha' }, expectSubstr: 'pluginId' },
+      { args: {}, expectSubstr: 'missing actionId' },
+      { args: { list: false }, expectSubstr: 'missing actionId' },
+      { args: { actionId: '' }, expectSubstr: 'missing actionId' },
+      { args: { actionId: 'no-dot' }, expectSubstr: 'invalid action ID' },
+      { args: { actionId: '.trailing' }, expectSubstr: 'invalid action ID' },
+      { args: { actionId: 'trailing.' }, expectSubstr: 'invalid action ID' },
+    ]
+    for (const tc of invalidCalls) {
+      const res = await runActionTool.execute(tc.args, { conversationId: 1 }, {})
+      assert.equal(res.isError, true, `expected isError: true for args ${JSON.stringify(tc.args)}`)
+      assert.ok(
+        res.output[0]!.text.includes(tc.expectSubstr),
+        `expected error "${res.output[0]!.text}" to include "${tc.expectSubstr}" for args ${JSON.stringify(tc.args)}`,
+      )
+    }
+    assert.equal(invokeCount, 0)
+  })
+
   it('installPluginTools and refreshPluginTools: hot-install and refresh plugin DerivedToolSpec definitions', { timeout: 60_000 }, async () => {
     const installed: Extension[] = []
     const fakeRegistry = {

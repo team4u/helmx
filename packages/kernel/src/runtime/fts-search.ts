@@ -16,9 +16,15 @@
  *   sentinels), guaranteeing sorted, non-overlapping UTF-16 `[start, end)` spans in `0 <= start < end <= snippet.length`.
  */
 
-import { HelmxError, type SearchHighlightRange } from '@helmx/protocol'
+import {
+  HelmxError,
+  type ConversationOwnership,
+  type ConversationSearchOptions,
+  type SearchHighlightRange,
+} from '@helmx/protocol'
 
 export const DEFAULT_SEARCH_LIMIT = 20
+export const MAX_SEARCH_LIMIT = 100
 export const DEFAULT_MAX_PER_CONVERSATION = 2
 export const MAX_SEARCH_TERMS = 32
 export const MAX_SEARCH_QUERY_CHARS = 1000
@@ -27,11 +33,69 @@ const SNIPPET_LEAD_CHARS = 36
 const WORD_SNAP_MAX = 16
 const MAX_ANCHOR_HITS_PER_TERM = 16
 
-export interface SearchOptions {
-  /** Maximum total hits returned (positive integer; defaults to 20). */
+export interface SearchOptions extends ConversationSearchOptions {
+  /** Maximum total hits returned (positive integer `1..100`; defaults to 20). */
   limit?: number
-  /** Maximum hits returned from any single conversation (positive integer; defaults to 2). */
+  /** Maximum hits returned from any single conversation (positive integer `1..100`; defaults to 2). */
   maxPerConversation?: number
+  /** Restrict hits to conversations bound to this Profile ID. */
+  profileId?: string
+  /** Restrict hits by conversation ownership (`'human' | 'helmx'`). */
+  ownedBy?: ConversationOwnership
+  /** When true, restrict hits to top-level conversations (`parent_conversation_id IS NULL`). */
+  topLevelOnly?: boolean
+}
+
+/** Strict boundary validation for conversation search options (shared across HTTP, host API, and store). */
+export function validateSearchOptions(options?: SearchOptions): SearchOptions | undefined {
+  if (options === undefined) return undefined
+  if (typeof options !== 'object' || options === null || Array.isArray(options)) {
+    throw new HelmxError('validation_error', 'search options must be an object', 400)
+  }
+  if (options.profileId !== undefined && (typeof options.profileId !== 'string' || options.profileId.trim() === '')) {
+    throw new HelmxError('validation_error', 'profileId must be a non-empty string', 400, {
+      profileId: options.profileId,
+    })
+  }
+  if (options.ownedBy !== undefined && options.ownedBy !== 'human' && options.ownedBy !== 'helmx') {
+    throw new HelmxError('validation_error', "ownedBy must be 'human' or 'helmx'", 400, {
+      ownedBy: options.ownedBy,
+    })
+  }
+  if (options.topLevelOnly !== undefined && typeof options.topLevelOnly !== 'boolean') {
+    throw new HelmxError('validation_error', 'topLevelOnly must be a boolean', 400, {
+      topLevelOnly: options.topLevelOnly,
+    })
+  }
+  if (
+    options.limit !== undefined &&
+    (typeof options.limit !== 'number' ||
+      !Number.isSafeInteger(options.limit) ||
+      options.limit < 1 ||
+      options.limit > MAX_SEARCH_LIMIT)
+  ) {
+    throw new HelmxError(
+      'validation_error',
+      `limit must be an integer between 1 and ${MAX_SEARCH_LIMIT}`,
+      400,
+      { limit: options.limit, min: 1, max: MAX_SEARCH_LIMIT },
+    )
+  }
+  if (
+    options.maxPerConversation !== undefined &&
+    (typeof options.maxPerConversation !== 'number' ||
+      !Number.isSafeInteger(options.maxPerConversation) ||
+      options.maxPerConversation < 1 ||
+      options.maxPerConversation > MAX_SEARCH_LIMIT)
+  ) {
+    throw new HelmxError(
+      'validation_error',
+      `maxPerConversation must be an integer between 1 and ${MAX_SEARCH_LIMIT}`,
+      400,
+      { maxPerConversation: options.maxPerConversation, min: 1, max: MAX_SEARCH_LIMIT },
+    )
+  }
+  return options
 }
 
 export interface ParsedSearchQuery {
@@ -117,38 +181,67 @@ export function buildFtsSearchSql(
   parsed: ParsedSearchQuery,
   options?: SearchOptions,
 ): FtsSqlQuery | undefined {
+  const validated = validateSearchOptions(options)
   if (parsed.terms.length === 0) return undefined
-  const limit = normalizePositiveInt(options?.limit, DEFAULT_SEARCH_LIMIT)
-  const maxPerConv = normalizePositiveInt(options?.maxPerConversation, DEFAULT_MAX_PER_CONVERSATION)
+  const limit = validated?.limit ?? DEFAULT_SEARCH_LIMIT
+  const maxPerConv = validated?.maxPerConversation ?? DEFAULT_MAX_PER_CONVERSATION
   // Over-fetch slightly so collapsing duplicate title-only hits per conversation never under-fills `limit`.
   const fetchLimit = limit + Math.min(limit, DEFAULT_SEARCH_LIMIT)
+
+  // Only join `helmx_conversations` when metadata filters are requested; standalone FTS queries without
+  // metadata filters stay unjoined so derived-index rows without conversation mirror rows remain searchable.
+  const needsConvJoin =
+    validated?.profileId !== undefined ||
+    validated?.ownedBy !== undefined ||
+    validated?.topLevelOnly === true
+  const joinClause = needsConvJoin
+    ? 'JOIN helmx_conversations c ON c.id = helmx_conversation_fts.conversation_id'
+    : ''
+  const convClauses: string[] = []
+  const convParams: Array<string | number> = []
+  if (validated?.profileId !== undefined) {
+    convClauses.push('AND c.profile_id = ?')
+    convParams.push(validated.profileId)
+  }
+  if (validated?.ownedBy !== undefined) {
+    convClauses.push("AND COALESCE(c.owned_by, 'human') = ?")
+    convParams.push(validated.ownedBy)
+  }
+  if (validated?.topLevelOnly === true) {
+    convClauses.push('AND c.parent_conversation_id IS NULL')
+  }
 
   if (parsed.trigramTerms.length > 0) {
     // Prioritize entries whose `body` actually contains at least one query term ahead of short title-only
     // entries inside the same conversation (BM25 length normalization can otherwise rank a short "ok"
     // message above a longer message in the same conversation that genuinely discusses the query).
-    const bodyMatchExpr = parsed.terms.map(() => 'instr(lower(body), ?) > 0').join(' OR ')
+    const bodyMatchExpr = parsed.terms.map(() => 'instr(lower(helmx_conversation_fts.body), ?) > 0').join(' OR ')
     const params: Array<string | number> = [
       ...parsed.terms.map(asciiLower),
       buildFtsMatchExpr(parsed.trigramTerms),
     ]
-    const shortClauses: string[] = []
+    const extraClauses: string[] = []
     for (const term of parsed.shortTerms) {
       const needle = asciiLower(term)
-      shortClauses.push('AND (instr(lower(title), ?) > 0 OR instr(lower(body), ?) > 0)')
+      extraClauses.push(
+        'AND (instr(lower(helmx_conversation_fts.title), ?) > 0 OR instr(lower(helmx_conversation_fts.body), ?) > 0)',
+      )
       params.push(needle, needle)
     }
+    extraClauses.push(...convClauses)
+    params.push(...convParams)
     params.push(maxPerConv, fetchLimit)
     const sql = `
       WITH matched AS (
         SELECT
-          rowid AS rid,
-          conversation_id,
+          helmx_conversation_fts.rowid AS rid,
+          helmx_conversation_fts.conversation_id AS conversation_id,
           (CASE WHEN (${bodyMatchExpr}) THEN 1 ELSE 0 END) AS has_body_match,
           bm25(helmx_conversation_fts, 0.0, 0.0, 2.0, 1.0) AS score
         FROM helmx_conversation_fts
+        ${joinClause}
         WHERE helmx_conversation_fts MATCH ?
-        ${shortClauses.join('\n        ')}
+        ${extraClauses.join('\n        ')}
       ),
       ranked AS (
         SELECT
@@ -176,23 +269,32 @@ export function buildFtsSearchSql(
   // `instr(lower(...))` AND predicates, ranking title hits above body-only hits and newer entries first,
   // while still preferring body-matching entries over title-only entries within the same conversation.
   const needles = parsed.shortTerms.map(asciiLower)
-  const titleScoreExpr = needles.map(() => '(CASE WHEN instr(lower(title), ?) > 0 THEN 1 ELSE 0 END)').join(' + ')
-  const bodyScoreExpr = needles.map(() => '(CASE WHEN instr(lower(body), ?) > 0 THEN 1 ELSE 0 END)').join(' + ')
-  const whereClauses = needles.map(() => '(instr(lower(title), ?) > 0 OR instr(lower(body), ?) > 0)').join(' AND ')
+  const titleScoreExpr = needles
+    .map(() => '(CASE WHEN instr(lower(helmx_conversation_fts.title), ?) > 0 THEN 1 ELSE 0 END)')
+    .join(' + ')
+  const bodyScoreExpr = needles
+    .map(() => '(CASE WHEN instr(lower(helmx_conversation_fts.body), ?) > 0 THEN 1 ELSE 0 END)')
+    .join(' + ')
+  const whereClauses = needles
+    .map(() => '(instr(lower(helmx_conversation_fts.title), ?) > 0 OR instr(lower(helmx_conversation_fts.body), ?) > 0)')
+    .join(' AND ')
   const params: Array<string | number> = []
   for (const needle of needles) params.push(needle)
   for (const needle of needles) params.push(needle)
   for (const needle of needles) params.push(needle, needle)
+  params.push(...convParams)
   params.push(maxPerConv, fetchLimit)
   const sql = `
     WITH matched AS (
       SELECT
-        rowid AS rid,
-        conversation_id,
+        helmx_conversation_fts.rowid AS rid,
+        helmx_conversation_fts.conversation_id AS conversation_id,
         (${titleScoreExpr}) AS title_hits,
         (${bodyScoreExpr}) AS body_hits
       FROM helmx_conversation_fts
+      ${joinClause}
       WHERE ${whereClauses}
+      ${convClauses.join('\n      ')}
     ),
     ranked AS (
       SELECT
@@ -408,9 +510,4 @@ function avoidSurrogateSplitEnd(text: string, start: number, end: number): numbe
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function normalizePositiveInt(value: number | undefined, fallback: number): number {
-  if (value === undefined || !Number.isFinite(value)) return fallback
-  return Math.max(1, Math.floor(value))
 }

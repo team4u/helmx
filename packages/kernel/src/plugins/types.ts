@@ -60,7 +60,7 @@ export interface PluginProviderPort {
  * 3. Optional connections (when unwired, `ctx.host` rejects explicitly with 501, never silently falling back):
  *    `nodeIpc` / `openTunnel` / `getConversationSubmission` / `abortConversationGuarded` / `submitInputGuarded` /
  *    `resetConversation` / `resetConversationGuarded` / `compactConversation` / `compactConversationGuarded` /
- *    `createArtifact` / `readArtifact` / `listModels`;
+ *    `createArtifact` / `readArtifact` / `listModels` / `searchConversations`;
  * 4. Served directly by `PluginHost` (not forwarded to backend): `listPlugins` / `listUi` /
  *    `listActions` / `invokeAction` / `prepareAction`.
  */
@@ -146,6 +146,8 @@ export interface PluginHostBackend
   manageConversation(id: number, pluginId: string): () => void
   /** Optional: read current model catalog snapshot (501 when unwired). */
   listModels?(): Promise<ModelCatalog>
+  /** Optional: full-text search across conversations (501 when unwired). */
+  searchConversations?: HelmxHostApi['searchConversations']
 }
 
 export interface PluginHostOptions {

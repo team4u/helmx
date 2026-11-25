@@ -21,6 +21,7 @@ import type {
   ConversationPatch,
   ConversationBulkDeleteFailure,
   ConversationBulkDeleteResponse,
+  ConversationSearchOptions,
   ConversationSubmissionInfo,
   ConversationSummary,
   ConversationWithdrawResponse,
@@ -1364,8 +1365,11 @@ export class ConversationService {
     return this.tracker.getLastAssistantText(id) ?? ''
   }
 
-  async search(query: string): Promise<SearchHit[]> {
-    return this.store.search(query)
+  async search(query: string, options?: ConversationSearchOptions): Promise<SearchHit[]> {
+    if (typeof query !== 'string') {
+      throw new HelmxError('validation_error', 'search query must be a string', 400)
+    }
+    return this.store.search(query, options)
   }
 
   /** Read a file strictly inside a conversation's bound workspace (text files are redacted via SecretStash). */

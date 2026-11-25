@@ -29,7 +29,7 @@ import {
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import { HelmxError, type ConversationDetail, type ConversationEntry, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginManifestProjection, type PluginSummary, type HelmxPluginContext } from '@helmx/protocol'
+import { HelmxError, type ConversationDetail, type ConversationEntry, type ConversationInputResult, type ConversationPatch, type ConversationSearchOptions, type ConversationSummary, type AskSpec, type PluginManifestProjection, type PluginSummary, type HelmxPluginContext } from '@helmx/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import type { HttpEventHub, KernelHttpTarget } from '../src/http/index.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
@@ -127,6 +127,7 @@ const entryCalls: Array<{ id: number; entryId: number }> = []
 let waitForInputResult: ConversationInputResult | undefined
 let waitForInputError: HelmxError | undefined
 const waitForInputCalls: Array<{ id: number; submissionId: string }> = []
+const searchCalls: Array<{ q: string; options?: ConversationSearchOptions }> = []
 const setHubUrlCalls: string[] = []
 
 function detailOf(overrides: Partial<ConversationDetail> = {}): ConversationDetail {
@@ -263,7 +264,8 @@ function makeKernel(): KernelHttpTarget {
         if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
         return summary(id + 100, `conversation ${id} (fork)`)
       },
-      async search(q: string) {
+      async search(q: string, options?: ConversationSearchOptions) {
+        searchCalls.push({ q, options })
         return [{ conversationId: 1, entryId: 'entry:1', title: 'Sample', snippet: `hit:${q}`, highlights: [{ start: 4, end: 4 + q.length }] }]
       },
     },
@@ -1796,7 +1798,8 @@ test('artifacts permission error is not disguised as missing file (non-ENOENT st
 // Search / Workflows
 // ---------------------------------------------------------------------------
 
-test('search?q= passes through; empty or oversized q returns 400', { timeout: 60_000 }, async () => {
+test('search?q= passes through; filter query params validate strictly and forward to kernel', { timeout: 60_000 }, async () => {
+  searchCalls.length = 0
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', '/api/search?q=hello')
   assert.equal(res.status, 200)
@@ -1804,15 +1807,48 @@ test('search?q= passes through; empty or oversized q returns 400', { timeout: 60
   assert.deepEqual(res.body, [
     { conversationId: 1, entryId: 'entry:1', title: 'Sample', snippet: 'hit:hello', highlights: [{ start: 4, end: 9 }] },
   ])
-  const empty = await call(handler, 'GET', '/api/search?q=')
-  assert.equal(empty.status, 400)
-  const tooManyTerms = Array.from({ length: 33 }, (_, i) => `t${i}`).join(' ')
-  const overTerms = await call(handler, 'GET', `/api/search?q=${encodeURIComponent(tooManyTerms)}`)
-  assert.equal(overTerms.status, 400)
-  assert.equal(overTerms.body.error.code, 'validation_error')
-  const overLength = await call(handler, 'GET', `/api/search?q=${'a'.repeat(1001)}`)
-  assert.equal(overLength.status, 400)
-  assert.equal(overLength.body.error.code, 'validation_error')
+  assert.deepEqual(searchCalls.at(-1), { q: 'hello', options: undefined })
+
+  const filtered = await call(
+    handler,
+    'GET',
+    '/api/search?q=hello&profileId=worker&ownedBy=helmx&topLevelOnly=1&limit=25',
+  )
+  assert.equal(filtered.status, 200)
+  assert.deepEqual(searchCalls.at(-1), {
+    q: 'hello',
+    options: { profileId: 'worker', ownedBy: 'helmx', topLevelOnly: true, limit: 25 },
+  })
+
+  const topFalse = await call(handler, 'GET', '/api/search?q=hello&topLevelOnly=false&limit=100')
+  assert.equal(topFalse.status, 200)
+  assert.deepEqual(searchCalls.at(-1), {
+    q: 'hello',
+    options: { topLevelOnly: false, limit: 100 },
+  })
+
+  const callCountBeforeBad = searchCalls.length
+  const badUrls = [
+    '/api/search?q=',
+    `/api/search?q=${encodeURIComponent(Array.from({ length: 33 }, (_, i) => `t${i}`).join(' '))}`,
+    `/api/search?q=${'a'.repeat(1001)}`,
+    '/api/search?q=hello&profileId=',
+    '/api/search?q=hello&profileId=%20%20',
+    '/api/search?q=hello&ownedBy=bot',
+    '/api/search?q=hello&topLevelOnly=maybe',
+    '/api/search?q=hello&limit=0',
+    '/api/search?q=hello&limit=-5',
+    '/api/search?q=hello&limit=101',
+    '/api/search?q=hello&limit=1.5',
+    '/api/search?q=hello&limit=abc',
+    '/api/search?q=hello&limit=',
+  ]
+  for (const url of badUrls) {
+    const bad = await call(handler, 'GET', url)
+    assert.equal(bad.status, 400, `expected 400 for ${url}, got ${bad.status}`)
+    assert.equal(bad.body.error.code, 'validation_error', `expected validation_error for ${url}`)
+  }
+  assert.equal(searchCalls.length, callCountBeforeBad, 'invalid search params must never invoke kernel.conversations.search')
 })
 
 test('hardcoded workflow/worktree routes removed: all return 404 (orchestration moved to /api/actions)', { timeout: 60_000 }, async () => {

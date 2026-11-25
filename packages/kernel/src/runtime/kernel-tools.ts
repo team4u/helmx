@@ -9,6 +9,18 @@ import { defineTool, type ToolExecutionApi, type ToolRegistration } from '@earen
 import { bool, obj, opt, str, unsafe } from '@earendil-works/pi-schema'
 import { safeResultText, type ActionManifest } from '@helmx/protocol'
 
+/** Compact public action summary returned by `run_action({ list: true })`. */
+export interface ListedPluginAction {
+  actionId: string
+  pluginId: string
+  id: string
+  description: string
+  parameterSummary: string
+  cli?: string
+  idempotent?: true
+  exposeAsTool: boolean
+}
+
 /** Host capability port for kernel tools. */
 export interface KernelToolHost {
   /** Invoke a plugin action (`run_action` meta-tool). */
@@ -28,32 +40,104 @@ export interface KernelToolHost {
     actionId: string,
     context: { conversationId: number },
   ): Promise<ActionManifest>
+  /**
+   * Read-only discovery of reachable public plugin actions (`run_action` `list: true` mode):
+   * filters enabled plugins by `public` visibility, conversation scope, and optional exact `pluginId`,
+   * including actions with `exposeToPrompt: false`.
+   */
+  listPluginActions(context: { conversationId: number; pluginId?: string }): Promise<ListedPluginAction[]>
   /** Outbound text redaction (managed tokens / stash plaintexts). */
   redact(text: string): string
 }
 
 const runActionParameters = obj({
-  actionId: str({ description: 'Fully-qualified action ID in pluginId.actionId format' }),
+  actionId: opt(str({ description: 'Fully-qualified action ID in pluginId.actionId format (required unless list: true)' })),
   input: opt(unsafe<Record<string, unknown>>({ type: 'object', description: "Action input matching the action's inputSchema" })),
   describe: opt(
     bool({
       description: 'When true, return only the full action manifest (inputSchema/outputSchema) without executing; defaults to false (execute)',
     }),
   ),
+  list: opt(
+    bool({
+      description: 'When true, list reachable public plugin actions in this conversation (including actions omitted from <available_actions>) without executing',
+    }),
+  ),
+  pluginId: opt(
+    str({
+      description: 'Optional exact plugin ID filter used only with list: true (e.g. "builtin:triggers")',
+    }),
+  ),
 })
 
-/** `run_action` meta-tool: invoke plugin actions on demand (qualified ID + boundary schema checks); `describe` inspects manifest read-only. */
+/** `run_action` meta-tool: discover (`list`), inspect (`describe`), or invoke plugin actions on demand. */
 export function createRunActionTool(host: KernelToolHost): ToolRegistration<typeof runActionParameters> {
   return defineTool({
     name: 'run_action',
     description:
-      'Invoke a plugin-declared action (by qualified ID: pluginId.actionId). Reachable actions are listed in the system <available_actions> catalog. ' +
-      'Set describe: true to read the full action manifest (inputSchema/outputSchema without executing), useful for inspecting nested or complex parameters. Invalid inputs fail explicitly.',
+      'Invoke, inspect, or discover plugin-declared actions. ' +
+      'Set list: true (with optional pluginId) to list reachable public actions in this conversation (including actions omitted from <available_actions>) without executing. ' +
+      'Set describe: true with actionId ("pluginId.actionId") to read the full action manifest (inputSchema/outputSchema) without executing. ' +
+      'Otherwise pass actionId ("pluginId.actionId") and optional input to invoke the action; invalid inputs fail explicitly.',
     parameters: runActionParameters,
     async execute(args, api: ToolExecutionApi, context: Context) {
+      if (args.list === true) {
+        if (args.describe === true) {
+          return {
+            output: [{ type: 'text', text: 'run_action_failed: list: true cannot be combined with describe: true' }],
+            isError: true,
+          }
+        }
+        if (args.actionId !== undefined) {
+          return {
+            output: [{ type: 'text', text: 'run_action_failed: list: true cannot be combined with actionId' }],
+            isError: true,
+          }
+        }
+        if (args.input !== undefined) {
+          return {
+            output: [{ type: 'text', text: 'run_action_failed: list: true cannot be combined with input' }],
+            isError: true,
+          }
+        }
+        if (args.pluginId !== undefined && args.pluginId.trim() === '') {
+          return {
+            output: [{ type: 'text', text: 'run_action_failed: pluginId must be a non-empty string when provided' }],
+            isError: true,
+          }
+        }
+        try {
+          const actions = await host.listPluginActions({
+            conversationId: api.conversationId,
+            ...(args.pluginId !== undefined ? { pluginId: args.pluginId } : {}),
+          })
+          return {
+            output: [{ type: 'text', text: host.redact(JSON.stringify(actions, null, 2)) }],
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return {
+            output: [{ type: 'text', text: `run_action_failed: ${message}` }],
+            isError: true,
+          }
+        }
+      }
+
+      if (args.pluginId !== undefined) {
+        return {
+          output: [{ type: 'text', text: 'run_action_failed: pluginId is only valid when list: true' }],
+          isError: true,
+        }
+      }
       const qualified = args.actionId
+      if (typeof qualified !== 'string' || qualified.trim().length === 0) {
+        return {
+          output: [{ type: 'text', text: 'run_action_failed: missing actionId (expected pluginId.actionId, or pass list: true to discover actions)' }],
+          isError: true,
+        }
+      }
       const dot = qualified.indexOf('.')
-      if (dot <= 0) {
+      if (dot <= 0 || dot === qualified.length - 1) {
         return {
           output: [{ type: 'text', text: `run_action_failed: invalid action ID (expected pluginId.actionId): ${qualified}` }],
           isError: true,

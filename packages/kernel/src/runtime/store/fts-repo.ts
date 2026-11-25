@@ -11,6 +11,7 @@ import {
   buildFtsSearchSql,
   buildSearchSnippet,
   parseSearchTerms,
+  validateSearchOptions,
   type SearchOptions,
 } from '../fts-search.js'
 import type { SqliteMirrorQueue } from './write-queue.js'
@@ -125,10 +126,11 @@ export class FtsRepo {
 
   /** Full-text search index (rebuildable derived index; never touches `pi_` table semantics). */
   async search(query: string, options?: SearchOptions): Promise<SearchHit[]> {
+    const validated = validateSearchOptions(options)
     // Wait for queued writes to drain completely (throws on errors) so queries observe persisted latest state.
     await this.queue.flushPublic()
     const parsed = parseSearchTerms(query)
-    const sqlQuery = buildFtsSearchSql(parsed, options)
+    const sqlQuery = buildFtsSearchSql(parsed, validated)
     if (sqlQuery === undefined) return []
     const rows = await this.queue.db.all<{
       conversation_id: number

@@ -330,6 +330,20 @@ export function wrapHostApi(
       guard('host.listConversations');
       return backend.listConversations(filter);
     },
+    searchConversations: (query, options) => {
+      guard('host.searchConversations');
+      const port = backend.searchConversations;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired conversation search (host.searchConversations)',
+          501,
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.searchConversations', () =>
+        Promise.resolve(port.call(backend, query, options)),
+      );
+    },
     getConversation: (id) => {
       guard('host.getConversation');
       return backend.getConversation(id);

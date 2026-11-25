@@ -570,6 +570,20 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
           },
         ],
       }),
+      'GET /api/search?q=hello%20world&profileId=worker&ownedBy=helmx&topLevelOnly=1&limit=10': () => ({
+        body: [
+          {
+            conversationId: 2,
+            entryId: 'entry:5',
+            title: 'Worker',
+            snippet: 'hello world worker',
+            highlights: [{ start: 0, end: 11 }],
+          },
+        ],
+      }),
+      'GET /api/search?q=hello&ownedBy=human&limit=5': () => ({
+        body: [],
+      }),
       'GET /api/models': () => ({ body: { models: [{ provider: 'openai', modelId: 'gpt', available: true }, { provider: 'anthropic', modelId: 'sonnet', available: true }], thinkingLevels: {} } }),
       'GET /api/models/providers': () => ({ body: [{ id: 'deepseek', name: 'DeepSeek', modelCount: 2, authMethods: [{ type: 'api_key', label: 'API Key' }] }] }),
       'POST /api/models/refresh': (body) => ({
@@ -609,6 +623,40 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
   assert.equal(sHuman.code, 0, sHuman.err)
   assert.ok(sHuman.out.includes('Greeting') && sHuman.out.includes('hello world snippet'))
   assert.ok(!sHuman.out.includes('highlights'), 'human search table should omit raw UTF-16 offset arrays')
+
+  const sFiltered = await runCliCaptured(
+    ['search', 'hello', 'world', '--profile', 'worker', '--owned-by', 'helmx', '--top-level', '--limit', '10', '--json'],
+    env,
+  )
+  assert.equal(sFiltered.code, 0, sFiltered.err)
+  assert.equal(
+    hub.recorded.hits.at(-1)?.path,
+    '/api/search?q=hello%20world&profileId=worker&ownedBy=helmx&topLevelOnly=1&limit=10',
+  )
+  assert.equal(JSON.parse(sFiltered.out)[0]?.conversationId, 2)
+
+  const sHumanOwned = await runCliCaptured(['search', 'hello', '--owned-by', 'human', '--limit', '5', '--json'], env)
+  assert.equal(sHumanOwned.code, 0, sHumanOwned.err)
+  assert.equal(hub.recorded.hits.at(-1)?.path, '/api/search?q=hello&ownedBy=human&limit=5')
+
+  const searchHitsBeforeBad = hub.recorded.hits.length
+  const badSearchCases: string[][] = [
+    ['search', '--json'],
+    ['search', '   ', '--json'],
+    ['search', 'hello', '--profile', '', '--json'],
+    ['search', 'hello', '--profile', '   ', '--json'],
+    ['search', 'hello', '--owned-by', 'bot', '--json'],
+    ['search', 'hello', '--limit', '0', '--json'],
+    ['search', 'hello', '--limit', '-1', '--json'],
+    ['search', 'hello', '--limit', '101', '--json'],
+    ['search', 'hello', '--limit', '1.5', '--json'],
+    ['search', 'hello', '--limit', 'abc', '--json'],
+  ]
+  for (const argv of badSearchCases) {
+    const bad = await runCliCaptured(argv, env)
+    assert.equal(bad.code, 1, `expected failure for argv: ${argv.join(' ')}`)
+  }
+  assert.equal(hub.recorded.hits.length, searchHitsBeforeBad, 'invalid search flags must reject client-side without hitting Hub')
 
   const m = await runCliCaptured(['models', 'list', '--json'], env)
   assert.equal(m.code, 0, m.err)

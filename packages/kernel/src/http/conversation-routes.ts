@@ -3,7 +3,12 @@
  * withdraw/abort/reset/compact/fork/entries/:entryId/artifacts/bulk-delete), /api/asks
  * (approval queue), and /api/search (full-text index search).
  */
-import type { ConversationListFilter, ConversationOwnership, ConversationStatus } from '@helmx/protocol'
+import type {
+  ConversationListFilter,
+  ConversationOwnership,
+  ConversationSearchOptions,
+  ConversationStatus,
+} from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
 import type { ArtifactService } from '../services/index.js'
 import type { AskService } from '../runtime/asks.js'
@@ -26,7 +31,7 @@ import {
 } from './validate.js'
 import { methodNotAllowed, parseOptionalBooleanFlag, parseOptionalJsonObjectBody, type RouteContext } from './route-context.js'
 import { postConversationArtifact } from './asset-routes.js'
-import { parseSearchTerms } from '../runtime/fts-search.js'
+import { MAX_SEARCH_LIMIT, parseSearchTerms } from '../runtime/fts-search.js'
 
 export interface ConversationRoutesTarget {
   readonly conversations: Pick<
@@ -215,7 +220,59 @@ export async function handleSearchDomain(
   if (q.trim().length === 0 || parseSearchTerms(q).terms.length === 0) {
     throw new ValidationError('q cannot be empty')
   }
-  return jsonOk(redactor, await kernel.conversations.search(q))
+  const options = parseSearchOptions(ctx.url)
+  return jsonOk(
+    redactor,
+    options !== undefined
+      ? await kernel.conversations.search(q, options)
+      : await kernel.conversations.search(q),
+  )
+}
+
+function parseSearchOptions(url: URL): ConversationSearchOptions | undefined {
+  const profileIdRaw = url.searchParams.get('profileId')
+  let profileId: string | undefined
+  if (profileIdRaw !== null) {
+    if (profileIdRaw.trim() === '') {
+      throw new ValidationError('profileId must be a non-empty string')
+    }
+    profileId = profileIdRaw
+  }
+  const ownedByRaw = url.searchParams.get('ownedBy')
+  let ownedBy: ConversationOwnership | undefined
+  if (ownedByRaw !== null) {
+    if (ownedByRaw !== 'human' && ownedByRaw !== 'helmx') {
+      throw new ValidationError('ownedBy must be human|helmx')
+    }
+    ownedBy = ownedByRaw
+  }
+  const topLevelOnly = parseOptionalBooleanFlag(url, 'topLevelOnly')
+  const limitRaw = url.searchParams.get('limit')
+  let limit: number | undefined
+  if (limitRaw !== null) {
+    if (!/^\d+$/.test(limitRaw)) {
+      throw new ValidationError(`limit must be an integer between 1 and ${MAX_SEARCH_LIMIT}`)
+    }
+    const parsed = Number(limitRaw)
+    if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > MAX_SEARCH_LIMIT) {
+      throw new ValidationError(`limit must be an integer between 1 and ${MAX_SEARCH_LIMIT}`)
+    }
+    limit = parsed
+  }
+  if (
+    profileId === undefined &&
+    ownedBy === undefined &&
+    topLevelOnly === undefined &&
+    limit === undefined
+  ) {
+    return undefined
+  }
+  return {
+    ...(profileId !== undefined ? { profileId } : {}),
+    ...(ownedBy !== undefined ? { ownedBy } : {}),
+    ...(topLevelOnly !== undefined ? { topLevelOnly } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  }
 }
 
 // ---------------------------------------------------------------------------

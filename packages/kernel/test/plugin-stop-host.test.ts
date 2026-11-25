@@ -449,6 +449,7 @@ test('stop window blocks new work (spawn/submitInput/createConversation/dispatch
             { label: 'createArtifact', run: () => ctx.host.createArtifact(1, { name: 'late.txt', bytes: new Uint8Array([1]) }) },
             { label: 'readArtifact', run: () => ctx.host.readArtifact(1, 'art-late') },
             { label: 'getConversationSubmission', run: () => ctx.host.getConversationSubmission(1, 'req-late') },
+            { label: 'searchConversations', run: () => ctx.host.searchConversations('late') },
             { label: 'completeText', run: () => ctx.host.completeText({ conversationId: 1, systemPrompt: '', text: '' } as never) },
             { label: 'withFileLock', run: () => ctx.host.withFileLock('/tmp/late', async () => 1) },
           ]
@@ -485,6 +486,7 @@ test('stop window blocks new work (spawn/submitInput/createConversation/dispatch
     'createArtifact',
     'readArtifact',
     'getConversationSubmission',
+    'searchConversations',
     'completeText',
     'withFileLock',
   ])

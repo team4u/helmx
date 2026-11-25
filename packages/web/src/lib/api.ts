@@ -12,6 +12,7 @@ import type {
   ConversationInit,
   ConversationInputResult,
   ConversationPatch,
+  ConversationSearchOptions,
   ConversationStatus,
   ConversationSummary,
   CredentialSummary,
@@ -696,7 +697,28 @@ export const pluginsApi = {
 // Search
 // ---------------------------------------------------------------------------
 
+export type SearchQueryOptions = Pick<
+  ConversationSearchOptions,
+  'profileId' | 'ownedBy' | 'topLevelOnly' | 'limit'
+> & {
+  signal?: AbortSignal
+}
+
 export const searchApi = {
-  query: (q: string, opts?: { signal?: AbortSignal }) =>
-    apiRequest<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`, undefined, opts?.signal),
+  query: (q: string, opts?: SearchQueryOptions) => {
+    const params: string[] = [`q=${encodeURIComponent(q)}`]
+    if (opts?.profileId !== undefined && opts.profileId !== '') {
+      params.push(`profileId=${encodeURIComponent(opts.profileId)}`)
+    }
+    if (opts?.ownedBy !== undefined) {
+      params.push(`ownedBy=${encodeURIComponent(opts.ownedBy)}`)
+    }
+    if (opts?.topLevelOnly !== undefined) {
+      params.push(`topLevelOnly=${opts.topLevelOnly ? '1' : '0'}`)
+    }
+    if (opts?.limit !== undefined) {
+      params.push(`limit=${encodeURIComponent(String(opts.limit))}`)
+    }
+    return apiRequest<SearchHit[]>('GET', `/api/search?${params.join('&')}`, undefined, opts?.signal)
+  },
 }

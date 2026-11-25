@@ -957,6 +957,128 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
     }
   })
 
+  it('FTS metadata filtering (profileId, ownedBy, topLevelOnly, limit) works for trigram/short/mixed queries without breaking standalone FTS rows', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'fts-filter-'))
+    const { store, database } = await openStoreAt(base)
+    try {
+      // Seed conversations with diverse profileId, ownedBy, and parentConversationId.
+      store.upsertConv(conv(1, { title: '部署规划', profileId: 'assistant', ownedBy: 'human' }))
+      store.upsertConv(conv(2, { title: '部署子任务', profileId: 'assistant', ownedBy: 'helmx', parentConversationId: 1 }))
+      store.upsertConv(conv(3, { title: '运维部署', profileId: 'ops', ownedBy: 'helmx' }))
+      store.upsertConv(conv(4, { title: '人工运维', profileId: 'ops', ownedBy: 'human', parentConversationId: 3 }))
+
+      // Index rows for conversations 1..4 plus an orphan standalone FTS row (conv 99 has no helmx_conversations row).
+      store.indexFts(1, 'entry:1', '部署规划', '部署 pipeline 优化与灰度上线。')
+      store.indexFts(2, 'entry:1', '部署子任务', '部署 pipeline 子代理执行日志。')
+      store.indexFts(3, 'entry:1', '运维部署', '部署 pipeline 自动巡检报告。')
+      store.indexFts(4, 'entry:1', '人工运维', '部署 pipeline 人工排查记录。')
+      store.indexFts(99, 'entry:1', '独立索引', '部署 pipeline 孤立测试记录。')
+
+      // Unfiltered (and topLevelOnly: false) queries must stay unjoined so standalone FTS rows remain visible.
+      const unfilteredTrigram = await store.search('pipeline')
+      assert.deepEqual(
+        unfilteredTrigram.map((h) => h.conversationId).sort((a, b) => a - b),
+        [1, 2, 3, 4, 99],
+      )
+      const unfilteredShort = await store.search('部署')
+      assert.deepEqual(
+        unfilteredShort.map((h) => h.conversationId).sort((a, b) => a - b),
+        [1, 2, 3, 4, 99],
+      )
+      const explicitFalseTopLevel = await store.search('pipeline', { topLevelOnly: false })
+      assert.deepEqual(
+        explicitFalseTopLevel.map((h) => h.conversationId).sort((a, b) => a - b),
+        [1, 2, 3, 4, 99],
+      )
+
+      // profileId filter across trigram (>=3), short (<3), and mixed (>=3 + <3) queries.
+      for (const q of ['pipeline', '部署', 'pipeline 部署']) {
+        const opsHits = await store.search(q, { profileId: 'ops' })
+        assert.deepEqual(
+          opsHits.map((h) => h.conversationId).sort((a, b) => a - b),
+          [3, 4],
+          `profileId filter failed for query "${q}"`,
+        )
+      }
+
+      // ownedBy filter across trigram and short queries.
+      for (const q of ['pipeline', '部署']) {
+        const humanHits = await store.search(q, { ownedBy: 'human' })
+        assert.deepEqual(
+          humanHits.map((h) => h.conversationId).sort((a, b) => a - b),
+          [1, 4],
+          `ownedBy=human failed for query "${q}"`,
+        )
+        const autoHits = await store.search(q, { ownedBy: 'helmx' })
+        assert.deepEqual(
+          autoHits.map((h) => h.conversationId).sort((a, b) => a - b),
+          [2, 3],
+          `ownedBy=helmx failed for query "${q}"`,
+        )
+      }
+
+      // topLevelOnly: true excludes child conversations (2 and 4) and orphan row (99).
+      for (const q of ['pipeline', '部署', 'pipeline 部署']) {
+        const topHits = await store.search(q, { topLevelOnly: true })
+        assert.deepEqual(
+          topHits.map((h) => h.conversationId).sort((a, b) => a - b),
+          [1, 3],
+          `topLevelOnly failed for query "${q}"`,
+        )
+      }
+
+      // Combined filters + limit.
+      const combined = await store.search('pipeline 部署', {
+        profileId: 'assistant',
+        ownedBy: 'human',
+        topLevelOnly: true,
+        limit: 1,
+      })
+      assert.deepEqual(combined.map((h) => h.conversationId), [1])
+
+      const limited = await store.search('pipeline', { limit: 2 })
+      assert.equal(limited.length, 2)
+
+      // Ownership update via setConvOwnership is immediately visible after search pre-flush.
+      store.setConvOwnership(1, 'helmx')
+      const afterOwnershipFlip = await store.search('pipeline', { ownedBy: 'helmx', topLevelOnly: true })
+      assert.deepEqual(
+        afterOwnershipFlip.map((h) => h.conversationId).sort((a, b) => a - b),
+        [1, 3],
+      )
+
+      // Invalid SearchOptions fail explicitly with 400 validation_error (even on whitespace query).
+      const badOptionCases: Array<Record<string, unknown>> = [
+        { profileId: '' },
+        { profileId: '   ' },
+        { ownedBy: 'bot' },
+        { topLevelOnly: 'yes' },
+        { limit: 0 },
+        { limit: -1 },
+        { limit: 1.5 },
+        { limit: 101 },
+        { maxPerConversation: 0 },
+        { maxPerConversation: 101 },
+      ]
+      for (const bad of badOptionCases) {
+        await assert.rejects(
+          () => store.search('pipeline', bad as never),
+          (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+          `expected 400 validation_error for options ${JSON.stringify(bad)}`,
+        )
+        await assert.rejects(
+          () => store.search('   ', bad as never),
+          (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+          `expected 400 validation_error on blank query for options ${JSON.stringify(bad)}`,
+        )
+      }
+    } finally {
+      await store.close()
+      await database.close()
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
   it('FTS missing derived table recreate, crash-safe pending rebuild flag, and steady-state zero-rebuild', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'fts-ddl-'))
     try {

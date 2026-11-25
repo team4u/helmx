@@ -169,6 +169,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       () => captured!.secrets.get('k'),
       () => captured!.nodeIpc.isOnline('local'),
       () => captured!.completeText({ conversationId: 1, systemPrompt: '', text: '' }),
+      () => captured!.searchConversations('x'),
       () => captured!.forkConversation(1, { entryId: 1 }),
       () => captured!.resetConversation(1),
       () => captured!.resetConversationGuarded(1),
@@ -200,6 +201,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
   await t.test('unwired optional context/artifact host ports explicitly reject 501 not_supported without fallback', { timeout: 60_000 }, async () => {
     const bareBackend: PluginHostBackend = {
       ...makeBackend({}),
+      searchConversations: undefined,
       resetConversation: undefined,
       resetConversationGuarded: undefined,
       compactConversation: undefined,
@@ -217,6 +219,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     }, { enabled: true })
     assert.ok(api)
     const calls: Array<() => unknown> = [
+      () => api!.searchConversations('hello'),
       () => api!.resetConversation(1),
       () => api!.resetConversationGuarded(1),
       () => api!.compactConversation(1),
@@ -773,9 +776,47 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
       )
 
+      // ctx.host.searchConversations: end-to-end FTS search with profileId/ownedBy/topLevelOnly/limit filters.
+      const assistantConv = await runtime.conversations.createConversation({
+        profileId: 'assistant',
+        cwd: rtDir,
+        title: 'assistant search target',
+      })
+      faux.setResponses([
+        () => fauxAssistantMessage('ack courier human'),
+        () => fauxAssistantMessage('ack courier helmx'),
+        () => fauxAssistantMessage('ack assistant human'),
+      ])
+      await runtime.conversations.submitInput(conv.id, 'shared_search_needle courier human top-level')
+      await runtime.conversations.waitForIdle(conv.id)
+      await runtime.conversations.submitInput(childConv.id, 'shared_search_needle courier helmx child')
+      await runtime.conversations.waitForIdle(childConv.id)
+      await runtime.conversations.submitInput(assistantConv.id, 'shared_search_needle assistant human top-level')
+      await runtime.conversations.waitForIdle(assistantConv.id)
+
+      const allSearchHits = await realHost!.searchConversations('shared_search_needle')
+      assert.deepEqual(
+        allSearchHits.map((h) => h.conversationId).sort((a, b) => a - b),
+        [conv.id, childConv.id, assistantConv.id].sort((a, b) => a - b),
+      )
+      const courierTopHuman = await realHost!.searchConversations('shared_search_needle', {
+        profileId: 'courier',
+        ownedBy: 'human',
+        topLevelOnly: true,
+        limit: 5,
+      })
+      assert.deepEqual(courierTopHuman.map((h) => h.conversationId), [conv.id])
+      const helmxOnlyHits = await realHost!.searchConversations('shared_search_needle', { ownedBy: 'helmx' })
+      assert.deepEqual(helmxOnlyHits.map((h) => h.conversationId), [childConv.id])
+      await assert.rejects(
+        () => realHost!.searchConversations('shared_search_needle', { limit: 101 }),
+        (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
+      )
+
       await runtime.plugins.disable('p:attach-real')
       // Wrap async: the epoch guard throws synchronously before entering the async backend call.
       for (const staleCall of [
+        () => realHost!.searchConversations('shared_search_needle'),
         () => realHost!.listArtifacts(conv.id),
         () => realHost!.createArtifact(conv.id, { name: 'late.txt', bytes: new TextEncoder().encode('x') }),
         () => realHost!.readArtifact(conv.id, textMeta.id),

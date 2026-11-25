@@ -27,6 +27,7 @@ import {
 } from '@helmx/protocol'
 import type { ConversationSummary, JsonSchema } from '@helmx/protocol'
 import type { DerivedToolSpec, PluginHost } from '../plugins/index.js'
+import { actionCliCommand, compactActionSignature } from './action-prompts.js'
 import { createRunActionTool, type KernelToolHost } from './kernel-tools.js'
 import { actionToolResult, pluginToolResult } from './tools/tool-result-contract.js'
 import { throwIfToolAborted, type HelmxToolDeps } from './tool-deps.js'
@@ -179,6 +180,35 @@ export class RuntimeToolRegistry {
           )
         }
         return manifest
+      },
+      listPluginActions: async (context: { conversationId: number; pluginId?: string }) => {
+        const host = getPluginHost()
+        if (!host) throw new HelmxError('runtime_not_initialized', 'plugin host not initialized', 503)
+        const conversation = getConversation(context.conversationId)
+        const filterPluginId = context.pluginId
+        return host
+          .listActions()
+          .filter((manifest) => {
+            if (manifest.visibility === 'ui' || manifest.visibility === 'internal') return false
+            if (filterPluginId !== undefined && manifest.pluginId !== filterPluginId) return false
+            return matchesConversationScope(manifest.scope, conversation)
+          })
+          .sort((a, b) =>
+            a.pluginId < b.pluginId ? -1 : a.pluginId > b.pluginId ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+          )
+          .map((m) => {
+            const cli = actionCliCommand(m)
+            return {
+              actionId: `${m.pluginId}.${m.id}`,
+              pluginId: m.pluginId,
+              id: m.id,
+              description: m.description,
+              parameterSummary: compactActionSignature(m.inputSchema),
+              ...(cli ? { cli } : {}),
+              ...(m.idempotent ? { idempotent: true as const } : {}),
+              exposeAsTool: m.exposeAsTool === true,
+            }
+          })
       },
       redact: (text: string) => redact(text),
     }

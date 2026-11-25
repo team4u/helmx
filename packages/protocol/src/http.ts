@@ -5,7 +5,7 @@
  * Request/Response use the base lib's DOM types, with no dependency on node builtins.
  */
 
-import type { ConversationSummary } from './conversation.js'
+import type { ConversationOwnership, ConversationSummary } from './conversation.js'
 import type { HelmxErrorDetail } from './error.js'
 
 export interface ApiErrorBody {
@@ -88,6 +88,20 @@ export interface SearchHighlightRange {
   start: number
   /** Exclusive UTF-16 end offset (`end > start`). */
   end: number
+}
+
+/** Filter and pagination options for `GET /api/search` and `ctx.host.searchConversations`. */
+export interface ConversationSearchOptions {
+  /** Restrict hits to conversations bound to this Profile ID. */
+  profileId?: string
+  /** Restrict hits by conversation ownership (`'human' | 'helmx'`). */
+  ownedBy?: ConversationOwnership
+  /** When true, restrict hits to top-level conversations (`parentConversationId` is unset). */
+  topLevelOnly?: boolean
+  /** Maximum total hits returned (positive integer; HTTP boundary enforces `1..100`, default 20). */
+  limit?: number
+  /** Maximum hits returned from any single conversation (positive integer; default 2). */
+  maxPerConversation?: number
 }
 
 /** Hit entry of `GET /api/search?q=...`. */

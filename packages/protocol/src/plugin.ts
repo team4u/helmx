@@ -34,6 +34,7 @@ import type {
   NodeTunnelTarget,
 } from './env-rpc.js'
 import type { HostEventEmitPayload, HostEventMap } from './events.js'
+import type { ConversationSearchOptions, SearchHit } from './http.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
 import type { AgentNamespacedMeta } from './meta.js'
 import type { ExecutionText, LocalizedText } from './locale.js'
@@ -642,6 +643,12 @@ export interface HelmxHostApi {
     opts?: { entryId?: number; title?: string; parentConversationId?: number },
   ): Promise<ConversationSummary>
   listConversations(filter?: ConversationListFilter): ConversationSummary[]
+  /**
+   * Full-text search across conversation titles and message bodies (same FTS5 engine as `GET /api/search`).
+   * Supports optional metadata filtering (`profileId`, `ownedBy`, `topLevelOnly`) and result caps (`limit`, `maxPerConversation`).
+   * Throws 501 `not_supported` when the host has not wired search.
+   */
+  searchConversations(query: string, options?: ConversationSearchOptions): Promise<SearchHit[]>
   /** 读取单个会话摘要；不存在时抛 HelmxError。 */
   getConversation(id: number): ConversationSummary
   /** 会话详情（时间线条目 + 元数据；limit 1..500，cursor 分页）。 */

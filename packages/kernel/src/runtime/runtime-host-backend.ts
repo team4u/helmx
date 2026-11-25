@@ -71,6 +71,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     createConversation: (init) => runtime.conversations.createConversation(init),
     forkConversation: (id, opts) => runtime.conversations.forkConversation(id, opts),
     listConversations: (filter) => runtime.conversations.listConversations(filter),
+    searchConversations: (query, options) => runtime.conversations.search(query, options),
     getConversation: (id) => runtime.conversations.getConversation(id),
     getConversationDetail: (id, options) => runtime.conversations.getConversationDetail(id, options),
     getConversationSubmission: (id, requestId) => runtime.conversations.getConversationSubmission(id, requestId),
