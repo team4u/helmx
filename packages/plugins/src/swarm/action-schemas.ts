@@ -30,8 +30,14 @@ export const dispatchInputSchema = S.obj(
     groupId: groupIdSchema,
     name: { ...memberNameSchema, description: 'Unique lowercase role name (e.g. author, verifier)' },
     profileId: S.str({ minLength: 1, maxLength: 64, pattern: PROFILE_ID_PATTERN }),
-    access: S.enm(['readwrite', 'readonly']),
-    isolation: S.enm(['inherit', 'worktree']),
+    access: S.enm(
+      ['readwrite', 'readonly'],
+      "Task convention (default 'readwrite'): 'readwrite' for code-editing or integration slices (pair with isolation: 'worktree'), 'readonly' for research or verification",
+    ),
+    isolation: S.enm(
+      ['inherit', 'worktree'],
+      "Workspace isolation (default 'inherit'). Use 'worktree' for code-editing or integration workers so builtin:worktree allocates a managed worktree, injects <worktree_context>, attaches a hold, and populates worktreeSnapshot—never pre-create a manual git worktree via cwd",
+    ),
     forkFrom: S.str({ minLength: 1, maxLength: 32, description: "Optional fork source: 'coordinator' or an existing member name" }),
     forkEntryId: S.int(1),
     model: S.str({ minLength: 1, maxLength: 200 }),
@@ -44,7 +50,11 @@ export const dispatchInputSchema = S.obj(
       description:
         'Optional target compute node ID (overrides Profile/coordinator node; explicit "local" switches back to the Hub host; requires cwd or a compatible Profile cwd on remote nodes)',
     }),
-    cwd: S.str({ minLength: 1 }),
+    cwd: S.str({
+      minLength: 1,
+      description:
+        'Optional source repository or working directory override (e.g. target repo path on a remote node); do not pass a manually created git worktree path to bypass isolation: "worktree"',
+    }),
   },
   ['prompt', 'name'],
 )
