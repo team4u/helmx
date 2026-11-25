@@ -18,9 +18,12 @@ import {
   resetEnvStandbyDraft,
   resetStandbyDrafts,
   setStandbyDraftInputMeta,
+  shouldAutoFocusStandbyTextarea,
   standbyDraftKey,
   standbyDraftsDirty,
   standbyEnvError,
+  subscribeStandbyDrafts,
+  transferStandbyDraftOnProfileSwitch,
   updateStandbyDraft,
   type StandbySendDeps,
   type StandbySendResult,
@@ -425,5 +428,230 @@ describe("standby-model", () => {
     assert.equal(log.submits.length, 1)
     assert.deepEqual(log.submits[0]?.payload.meta, { 'builtin:plan': { mode: 'planning' } })
     assert.equal(getStandbyDraft(primaryKey).inputMeta, undefined, 'cleared draft resets inputMeta after successful send')
+  })
+
+  test('transferStandbyDraftOnProfileSwitch: none cases (same key, missing, empty, sending, anchored)', { timeout: 60_000 }, () => {
+    const a = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
+    const b = standbyDraftKey({ panel: 'primary', profileId: 'coder' })
+
+    // Missing source or same key
+    assert.equal(transferStandbyDraftOnProfileSwitch(a, a), 'none')
+    assert.equal(transferStandbyDraftOnProfileSwitch(a, b), 'none')
+
+    // Whitespace-only text with no files/meta is non-transferable
+    updateStandbyDraft(a, { text: '   \n\t  ', model: 'faux/m' })
+    assert.equal(transferStandbyDraftOnProfileSwitch(a, b), 'none')
+    assert.equal(getStandbyDraft(b).text, '')
+
+    // Locked: sending in flight
+    updateStandbyDraft(a, { text: 'in flight', sending: true })
+    assert.equal(transferStandbyDraftOnProfileSwitch(a, b), 'none')
+    assert.equal(getStandbyDraft(a).text, 'in flight')
+    assert.equal(getStandbyDraft(b).text, '')
+
+    // Locked: conversation-anchored after create succeeded
+    updateStandbyDraft(a, { text: 'anchored retry', sending: false, conversationId: 42 })
+    assert.equal(transferStandbyDraftOnProfileSwitch(a, b), 'none')
+    assert.equal(getStandbyDraft(a).text, 'anchored retry')
+    assert.equal(getStandbyDraft(b).text, '')
+  })
+
+  test('transferStandbyDraftOnProfileSwitch: migrates text, localFiles, inputMeta only and notifies listeners', { timeout: 60_000 }, () => {
+    const from = standbyDraftKey({ panel: 'primary', profileId: 'assistant', nodeId: 'remote-1', cwd: '/work' })
+    const to = standbyDraftKey({ panel: 'primary', profileId: 'coder' })
+    const { draft } = admitStandbyFiles(getStandbyDraft(from), [makeFile('spec.md', 'hello')])
+    updateStandbyDraft(from, {
+      ...draft,
+      text: 'draft prompt',
+      inputMeta: { 'builtin:plan': { mode: 'planning' } },
+      model: 'openai/gpt-5',
+      thinkingLevel: 'high',
+      envCustomized: true,
+      envNodeId: 'remote-1',
+      envCwd: '/work',
+      error: 'previous error',
+    })
+
+    let notified = 0
+    const off = subscribeStandbyDrafts(() => { notified += 1 })
+    try {
+      assert.equal(transferStandbyDraftOnProfileSwitch(from, to), 'moved')
+    } finally {
+      off()
+    }
+    assert.equal(notified, 1, 'notifies draft subscribers once on move')
+    assert.equal(getStandbyDraft(from).text, '', 'source draft is removed after move')
+    assert.equal(getStandbyDraft(from).localFiles.length, 0)
+
+    const moved = getStandbyDraft(to)
+    assert.equal(moved.text, 'draft prompt')
+    assert.deepEqual(moved.localFiles.map((f) => f.name), ['spec.md'])
+    assert.deepEqual(moved.inputMeta, { 'builtin:plan': { mode: 'planning' } })
+    assert.equal(moved.model, undefined, 'model does not leak across profiles')
+    assert.equal(moved.thinkingLevel, undefined, 'thinkingLevel does not leak across profiles')
+    assert.equal(moved.envCustomized, false, 'custom env does not leak across profiles')
+    assert.equal(moved.envNodeId, undefined)
+    assert.equal(moved.envCwd, undefined)
+    assert.equal(moved.conversationId, undefined)
+    assert.deepEqual(moved.uploaded, [])
+    assert.equal(moved.error, null, 'error does not leak across profiles')
+
+    // Meta-only draft also transfers cleanly
+    const c = standbyDraftKey({ panel: 'primary', profileId: 'reviewer' })
+    resetStandbyDrafts()
+    setStandbyDraftInputMeta(to, 'builtin:plan', { mode: 'planning' })
+    assert.equal(transferStandbyDraftOnProfileSwitch(to, c), 'moved')
+    assert.deepEqual(getStandbyDraft(c).inputMeta, { 'builtin:plan': { mode: 'planning' } })
+    assert.equal(getStandbyDraft(to).inputMeta, undefined)
+  })
+
+  test('transferStandbyDraftOnProfileSwitch: never overwrites an occupied target (text, files, uploaded, sending, anchored)', { timeout: 60_000 }, () => {
+    const from = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
+    const to = standbyDraftKey({ panel: 'primary', profileId: 'coder' })
+
+    const occupiedTargets: Array<Partial<ReturnType<typeof getStandbyDraft>>> = [
+      { text: 'existing target text' },
+      { localFiles: admitStandbyFiles(getStandbyDraft('tmp'), [makeFile('t.txt')]).draft.localFiles },
+      { uploaded: [{ artifactId: 'a1', name: 'up.txt', size: 3, mimeType: 'text/plain' }] },
+      { sending: true },
+      { conversationId: 77 },
+    ]
+
+    for (const targetPatch of occupiedTargets) {
+      resetStandbyDrafts()
+      updateStandbyDraft(from, { text: 'source draft' })
+      updateStandbyDraft(to, targetPatch)
+      assert.equal(transferStandbyDraftOnProfileSwitch(from, to), 'target-occupied')
+      assert.equal(getStandbyDraft(from).text, 'source draft', 'source draft stays preserved')
+      assert.equal(getStandbyDraft(to).text, targetPatch.text ?? '', 'occupied target is untouched')
+    }
+
+    // Target holding only an idle model preference (no unsent content/lock) is NOT considered occupied
+    resetStandbyDrafts()
+    updateStandbyDraft(from, { text: 'move over idle target' })
+    updateStandbyDraft(to, { model: 'faux/m' })
+    assert.equal(transferStandbyDraftOnProfileSwitch(from, to), 'moved')
+    assert.equal(getStandbyDraft(to).text, 'move over idle target')
+    assert.equal(getStandbyDraft(to).model, undefined)
+  })
+
+  test('shouldAutoFocusStandbyTextarea: enforces all 4 guards', { timeout: 60_000 }, () => {
+    const desktopMatchMedia = () => ({ matches: false })
+    const coarseMatchMedia = (q: string) => ({ matches: q === '(hover: none) and (pointer: coarse)' })
+    const ownTextarea = {
+      tagName: 'TEXTAREA',
+      disabled: false,
+      readOnly: false,
+      getAttribute: () => null,
+      closest: () => null,
+    } as unknown as Element
+    const otherInput = {
+      tagName: 'INPUT',
+      type: 'text',
+      disabled: false,
+      readOnly: false,
+      getAttribute: (name: string) => (name === 'type' ? 'text' : null),
+      closest: () => null,
+    } as unknown as Element
+    const contentEditableEl = {
+      tagName: 'DIV',
+      isContentEditable: true,
+      getAttribute: (name: string) => (name === 'contenteditable' ? 'true' : null),
+      closest: () => null,
+    } as unknown as Element
+    const buttonEl = {
+      tagName: 'BUTTON',
+      getAttribute: () => null,
+      closest: () => null,
+    } as unknown as Element
+
+    const base = {
+      panel: 'primary' as const,
+      focusedPanel: 'primary' as const,
+      splitTarget: null,
+      activeModal: null,
+      drawerStackLength: 0,
+      isMobile: false,
+      textarea: ownTextarea,
+      hasOpenDialog: false,
+      activeElement: null,
+      matchMedia: desktopMatchMedia,
+    }
+
+    assert.equal(shouldAutoFocusStandbyTextarea(base), true, 'passes when all 4 guards hold')
+
+    // Guard 1: focused panel in split mode
+    const splitTarget = { kind: 'agent' as const, profileId: 'coder' }
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, panel: 'split', focusedPanel: 'primary', splitTarget }),
+      false,
+      'blocks unfocused split pane',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, panel: 'split', focusedPanel: 'split', splitTarget }),
+      true,
+      'allows focused split pane',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, panel: 'primary', focusedPanel: 'split', splitTarget }),
+      false,
+      'blocks unfocused primary pane when split is focused',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, panel: 'split', focusedPanel: 'split', splitTarget: null }),
+      false,
+      'resolveFocusedPanel falls back to primary when splitTarget is null',
+    )
+
+    // Guard 2: modals, drawers, DOM dialogs
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, activeModal: { kind: 'command-palette' } }),
+      false,
+      'blocks when activeModal is open',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, drawerStackLength: 1 }),
+      false,
+      'blocks when drawer stack is non-empty',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, hasOpenDialog: true }),
+      false,
+      'blocks when a DOM dialog/alertdialog is open',
+    )
+
+    // Guard 3: mobile / coarse touch pointer
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, isMobile: true }),
+      false,
+      'blocks on mobile viewport',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, matchMedia: coarseMatchMedia }),
+      false,
+      'blocks on coarse-only touch device',
+    )
+
+    // Guard 4: another editable element already focused
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, activeElement: otherInput }),
+      false,
+      'blocks when another text input holds focus',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, activeElement: contentEditableEl }),
+      false,
+      'blocks when a contenteditable element holds focus',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, activeElement: ownTextarea }),
+      true,
+      'allows when activeElement is already this textarea',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, activeElement: buttonEl }),
+      true,
+      'allows when activeElement is a non-editable button',
+    )
   })
 })

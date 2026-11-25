@@ -16,9 +16,12 @@
  */
 import { useSyncExternalStore } from 'react'
 import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
-import { envDraftError, parseCompactSlashCommand, type EnvDraft } from './composer-model.js'
 import { resolveEffectiveThinkingLevel } from '@helmx/plugin-client/pure'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { ActiveModal, FocusedPanel, ResolvedTarget } from '../lib/types.js'
+import { hasDialogOpen, resolveFocusedPanel } from '../shell/shortcuts-model.js'
+import { isTextInputElement } from '../shell/version-watch-model.js'
+import { envDraftError, parseCompactSlashCommand, type EnvDraft } from './composer-model.js'
 
 /** Attachments staged locally before sending (no conversation created, nothing uploaded). */
 export interface StandbyLocalFile {
@@ -259,6 +262,134 @@ export function resetEnvStandbyDraft(from: string, to: string): boolean {
   drafts.set(to, { ...record, envCustomized: false, envNodeId: undefined, envCwd: undefined })
   if (from !== to) drafts.delete(from)
   notifyListeners()
+  return true
+}
+
+export type StandbyDraftTransferResult = 'none' | 'moved' | 'target-occupied'
+
+/**
+ * Non-destructively migrate unsent standby draft content (`text`, `localFiles`,
+ * `inputMeta`) when switching profiles in the same panel. Locked (`sending` or
+ * conversation-anchored) sources are never moved; occupied targets are never
+ * overwritten; profile-bound settings (`model`, `thinkingLevel`, environment,
+ * `uploaded`, `conversationId`, `error`) never leak across profiles.
+ */
+export function transferStandbyDraftOnProfileSwitch(
+  fromKey: string,
+  toKey: string,
+): StandbyDraftTransferResult {
+  if (fromKey === toKey) return 'none'
+  const from = drafts.get(fromKey)
+  if (from === undefined) return 'none'
+  if (from.sending || from.conversationId !== undefined) return 'none'
+  const hasTransferableMeta = from.inputMeta !== undefined && Object.keys(from.inputMeta).length > 0
+  if (from.text.trim() === '' && from.localFiles.length === 0 && !hasTransferableMeta) {
+    return 'none'
+  }
+  const target = drafts.get(toKey)
+  if (
+    target !== undefined &&
+    (target.text.trim() !== '' ||
+      target.localFiles.length > 0 ||
+      target.uploaded.length > 0 ||
+      target.sending ||
+      target.conversationId !== undefined)
+  ) {
+    return 'target-occupied'
+  }
+  drafts.set(toKey, {
+    ...EMPTY_STANDBY_DRAFT,
+    text: from.text,
+    localFiles: from.localFiles,
+    inputMeta: hasTransferableMeta ? from.inputMeta : undefined,
+  })
+  drafts.delete(fromKey)
+  notifyListeners()
+  return 'moved'
+}
+
+const COARSE_TOUCH_MEDIA_QUERY = '(hover: none) and (pointer: coarse)'
+
+/** Whether the viewport is a coarse-pointer, no-hover touch device. */
+export function isCoarseTouchViewport(
+  matchMediaFn?: (query: string) => { matches: boolean },
+): boolean {
+  const mm =
+    matchMediaFn ??
+    (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? (query: string) => window.matchMedia(query)
+      : undefined)
+  if (mm === undefined) return false
+  try {
+    return mm(COARSE_TOUCH_MEDIA_QUERY).matches === true
+  } catch {
+    return false
+  }
+}
+
+export interface StandbyAutoFocusInput {
+  panel: 'primary' | 'split'
+  focusedPanel: FocusedPanel
+  splitTarget: ResolvedTarget | null
+  activeModal: ActiveModal
+  drawerStackLength: number
+  isMobile: boolean
+  textarea?: Element | null
+  /** Optional overrides for pure unit tests (default to live browser globals). */
+  hasOpenDialog?: boolean
+  activeElement?: Element | null
+  matchMedia?: (query: string) => { matches: boolean }
+}
+
+function isEditableFocusTarget(el: Element | null): boolean {
+  if (el === null) return false
+  if (isTextInputElement(el)) return true
+  const attr = typeof el.getAttribute === 'function' ? el.getAttribute('contenteditable') : null
+  if (attr !== null) {
+    return attr.trim().toLowerCase() !== 'false'
+  }
+  if ((el as Partial<HTMLElement>).isContentEditable === true) return true
+  if (typeof el.closest === 'function') {
+    const host = el.closest('[contenteditable]')
+    if (host !== null) {
+      const hostAttr = host.getAttribute('contenteditable')
+      if (hostAttr !== null && hostAttr.trim().toLowerCase() !== 'false') return true
+    }
+  }
+  return false
+}
+
+/**
+ * Four-guard auto-focus gate for the standby composer textarea:
+ * 1. Panel matches the resolved focused panel (never steal focus across split panes,
+ *    where App.tsx's onFocusCapture would flip focusedPanel);
+ * 2. No modal, drawer stack frame, or DOM dialog/alertdialog is open;
+ * 3. Desktop fine-pointer viewport (> 680px and not coarse-only touch);
+ * 4. Current activeElement is not another editable text/contenteditable control.
+ */
+export function shouldAutoFocusStandbyTextarea(input: StandbyAutoFocusInput): boolean {
+  if (input.panel !== resolveFocusedPanel(input.focusedPanel, input.splitTarget)) {
+    return false
+  }
+  if (input.activeModal !== null || input.drawerStackLength > 0) {
+    return false
+  }
+  const dialogOpen = input.hasOpenDialog !== undefined ? input.hasOpenDialog : hasDialogOpen()
+  if (dialogOpen) {
+    return false
+  }
+  if (input.isMobile || isCoarseTouchViewport(input.matchMedia)) {
+    return false
+  }
+  const activeEl =
+    input.activeElement !== undefined
+      ? input.activeElement
+      : typeof document !== 'undefined'
+        ? document.activeElement
+        : null
+  if (activeEl !== null && activeEl !== input.textarea && isEditableFocusTarget(activeEl)) {
+    return false
+  }
   return true
 }
 
