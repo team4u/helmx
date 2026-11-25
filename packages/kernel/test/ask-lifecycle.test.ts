@@ -628,7 +628,7 @@ describe('Ask CAS semantics preservation', { timeout: 60_000 }, () => {
   it('corrupted AskRow specJson in mirror fails explicitly with store_data_corrupted instead of raw SyntaxError/TypeError', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
-      const asksMap = (ctx.store as unknown as { asks: Map<string, { id: string; conversationId: number; specJson: string; status: string; createdAt: number }> }).asks
+      const asksMap = (ctx.store as unknown as { askRepo: { asks: Map<string, { id: string; conversationId: number; specJson: string; status: string; createdAt: number }> } }).askRepo.asks
       asksMap.set('corrupt-1', {
         id: 'corrupt-1',
         conversationId: 1,

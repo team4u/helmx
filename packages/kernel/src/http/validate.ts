@@ -24,7 +24,7 @@ import {
   isCrossPlatformAbsolutePath,
   PROFILE_THINKING_LEVELS,
   validateProfileStarters,
-} from '../services/profiles-skills.js'
+} from '../services/profile-service.js'
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 /** Node ID rule (starts with an ASCII letter or digit; may contain . _ -, length 1..128). */

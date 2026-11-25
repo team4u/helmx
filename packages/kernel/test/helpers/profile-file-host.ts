@@ -2,7 +2,8 @@ import { join } from 'node:path'
 import { HelmxError, assertProfileId, type HelmxHostApi } from '@helmx/protocol'
 import { atomicWriteFile, FileNotFoundError } from '../../src/services/atomic-file.js'
 import { withFileLock } from '../../src/services/file-lock.js'
-import { ProfileService, SkillService } from '../../src/services/profiles-skills.js'
+import { ProfileService } from '../../src/services/profile-service.js'
+import { SkillService } from '../../src/services/skill-service.js'
 
 function validateId(id: string): void {
   try {
