@@ -122,7 +122,7 @@
 }
 
 .wf-workbench-focused {
-  outline: 1.5px solid var(--accent);
+  box-shadow: 0 0 0 1px var(--border-focus);
   border-radius: 8px;
 }
 

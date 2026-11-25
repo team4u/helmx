@@ -117,7 +117,7 @@
   overflow: hidden;
 }
 .sw-panel-member-row:hover { background: var(--bg-hover); }
-.sw-panel-member-row:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
+.sw-panel-member-row:focus-visible { outline: none; background: var(--bg-hover); box-shadow: none; }
 .sw-panel-member-abort { flex-shrink: 0; margin-right: 6px; }
 .sw-panel-member-model { max-width: 140px; }
 .sw-panel-member-main { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }

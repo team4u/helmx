@@ -32,8 +32,9 @@
 }
 
 .plan-toolbar-btn:focus-visible {
-  outline: 1.5px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .plan-toolbar-btn:disabled {
@@ -252,8 +253,9 @@
 }
 
 .plan-trace-row:focus-visible {
-  outline: 1.5px solid var(--accent);
-  outline-offset: -1.5px;
+  outline: none;
+  background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .plan-trace-name {

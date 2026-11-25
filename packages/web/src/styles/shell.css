@@ -295,8 +295,8 @@
 }
 
 .helmx-split-resizer:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: none;
 }
 
 .helmx-primary-pane[data-helmx-panel-focused='true']::after,
@@ -504,8 +504,10 @@
 }
 
 .drawer-stack-crumb-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
+  outline: none;
+  color: var(--fg);
+  background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .drawer-stack-crumb-current {

@@ -104,8 +104,10 @@
 }
 
 .sidebar-group-by-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: none;
 }
 
 .sidebar-group-by-label {
@@ -162,8 +164,10 @@
 }
 
 .btn.sidebar-header-icon-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: none;
 }
 
 .nav-item {
@@ -503,7 +507,7 @@
 .sidebar-search:focus-within {
   background: var(--bg-elevated);
   border-color: var(--border-focus);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
 }
 
 .sidebar-search-input {
@@ -662,8 +666,10 @@
 }
 
 .sidebar-overview-section-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: none;
 }
 
 .sidebar-overview-section-chevron,
@@ -714,8 +720,10 @@
 }
 
 .btn.sidebar-section-new-topic-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: none;
 }
 
 @media (max-width: 860px) {
@@ -985,8 +993,10 @@
 }
 
 .sidebar-overview-desc-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: none;
 }
 
 .sidebar-overview-descendants {
@@ -1048,6 +1058,8 @@
 }
 
 .sidebar-view-all-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: none;
 }

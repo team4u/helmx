@@ -36,6 +36,10 @@
   opacity: 0.48;
   cursor: not-allowed;
 }
+.btn:focus-visible:not(:disabled) {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+}
 
 /* 次级/轮廓操作按钮 */
 .btn-secondary {
@@ -71,6 +75,10 @@
 .btn-primary:active:not(:disabled) {
   filter: brightness(0.96);
 }
+.btn-primary:focus-visible:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
 
 /* 危险操作按钮（软底色 + 警示红） */
 .btn-danger {
@@ -83,6 +91,9 @@
   border-color: var(--err);
   color: var(--fg-on-solid);
   filter: brightness(0.98);
+}
+.btn-danger:focus-visible:not(:disabled) {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--err) 22%, transparent);
 }
 
 /* 幽灵/文本操作按钮 */
@@ -100,6 +111,11 @@
 }
 .btn-ghost:active:not(:disabled) {
   background: var(--bg-hover);
+}
+.btn-ghost:focus-visible:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: none;
 }
 
 /* 尺寸阶梯修饰类 */
@@ -154,6 +170,11 @@
 .btn-inline:active:not(:disabled) {
   background: var(--bg-hover);
   transform: none;
+}
+.btn-inline:focus-visible:not(:disabled) {
+  color: var(--fg);
+  background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .btn-pill {
@@ -504,7 +525,8 @@
   transition: border-color 0.15s ease;
 }
 .search-box:focus-within {
-  border-color: var(--accent);
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
   color: var(--fg);
 }
 .search-box > svg {
@@ -1077,8 +1099,8 @@ textarea.textarea,
 .input:focus,
 .select:focus,
 .textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
 }
 
 .input[aria-invalid='true'],
@@ -1408,8 +1430,8 @@ input::placeholder {
 }
 
 .helmx-select-card-trigger:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: 0 0 0 1.5px var(--border-focus);
 }
 
 /* CardGrid：响应式卡片网格，min(100%, ...) 保证窄分屏/移动端不横向溢出 */
@@ -1527,8 +1549,9 @@ input::placeholder {
 }
 
 .dock-tray-bar-toggle:focus-visible {
-  outline: 1.5px solid var(--accent);
-  outline-offset: -1.5px;
+  outline: none;
+  background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .dock-tray-badge {
@@ -1632,8 +1655,9 @@ button.dock-tray-row-clickable:hover {
 }
 
 button.dock-tray-row-clickable:focus-visible {
-  outline: 1.5px solid var(--accent);
-  outline-offset: -1.5px;
+  outline: none;
+  background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .dock-tray-row-title {

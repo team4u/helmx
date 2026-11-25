@@ -4,7 +4,7 @@
  * - 总览升级提示条带 `from` 打开「本次更新」切片（跨过的版本，新版本在上）；
  * - 未随附 changelog（老 payload / 特殊部署）如实显示空态，不装假数据。
  */
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Badge, Callout, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, HelmxIcon, IconButton, LoadingState } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { apiRequest, ApiClientError } from '../lib/api.js'
@@ -33,6 +33,7 @@ type LoadState =
 export function HubChangelogModal({ from, onClose, inline = false }: { from?: string; onClose: () => void; inline?: boolean }): ReactNode {
   const { t } = useWebLocale()
   const isMobile = useIsMobile(680)
+  const contentRef = useRef<HTMLDivElement | null>(null)
   const [state, setState] = useState<LoadState>({ phase: 'loading' })
 
   useEffect(() => {
@@ -54,9 +55,15 @@ export function HubChangelogModal({ from, onClose, inline = false }: { from?: st
       <DialogPortal inline={inline}>
         <DialogOverlay className={`modal-backdrop${isMobile ? ' modal-fullscreen-backdrop' : ''}`}>
           <DialogContent
+            ref={contentRef}
+            tabIndex={-1}
             className={`modal hub-changelog-modal${isMobile ? ' modal-fullscreen' : ''}`}
             aria-label={t('shell.hubChangelog.title')}
             style={isMobile ? undefined : { maxWidth: 'min(860px, 94vw)', maxHeight: '88vh' }}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault()
+              contentRef.current?.focus({ preventScroll: true })
+            }}
           >
             <div className="modal-header hub-changelog-header">
               <span className="preview-modal-title-group">

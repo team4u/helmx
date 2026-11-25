@@ -140,8 +140,12 @@ test('DetailDrawer DOM interaction: header close button funnels into onClose exa
     root.render(e(TestApp))
   })
 
+  const content = container.querySelector<HTMLElement>('.primary-drawer-content')
   const closeButton = container.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]')
+  assert.ok(content !== null, 'dialog content renders')
   assert.ok(closeButton !== null, 'the header close button renders with the accessible name')
+  assert.ok(document.activeElement === content, 'opening DetailDrawer focuses dialog container, not close button')
+  assert.ok(document.activeElement !== closeButton, 'close button is not auto-focused on open')
   await act(async () => {
     closeButton.click()
   })

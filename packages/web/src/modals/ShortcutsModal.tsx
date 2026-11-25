@@ -3,7 +3,7 @@
  * Consumes the single-source catalog from `buildShortcutCatalog` so built-in
  * and plugin-declared shortcuts stay synchronized without plugin-ID hardcoding.
  */
-import { useMemo, type ReactNode } from 'react'
+import { useMemo, useRef, type ReactNode } from 'react'
 import {
   Dialog,
   DialogClose,
@@ -26,6 +26,7 @@ export interface ShortcutsModalProps {
 export function ShortcutsModal({ onClose, inline = false }: ShortcutsModalProps): ReactNode {
   const { locale, t } = useWebLocale()
   const groupedUi = useGroupedUi()
+  const contentRef = useRef<HTMLDivElement | null>(null)
 
   const sections = useMemo(
     () => buildShortcutCatalog({ pluginCommands: groupedUi.commands, locale, t }),
@@ -37,8 +38,14 @@ export function ShortcutsModal({ onClose, inline = false }: ShortcutsModalProps)
       <DialogPortal inline={inline}>
         <DialogOverlay className="modal-backdrop">
           <DialogContent
+            ref={contentRef}
+            tabIndex={-1}
             className="modal shortcuts-modal"
             aria-label={t('modals.shortcuts.title')}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault()
+              contentRef.current?.focus({ preventScroll: true })
+            }}
           >
             <div className="modal-header shortcuts-modal-header">
               <span className="shortcuts-modal-title-group">

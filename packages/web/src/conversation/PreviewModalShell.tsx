@@ -1,4 +1,4 @@
-import { useState, type ReactNode, type RefObject } from 'react'
+import { useRef, useState, type ReactNode, type RefObject } from 'react'
 import {
   Badge,
   Button,
@@ -59,6 +59,7 @@ export function PreviewModalShell({
 }: PreviewModalShellProps): ReactNode {
   const { t } = useWebLocale()
   const [desktopFullscreen, setDesktopFullscreen] = useState(false)
+  const contentRef = useRef<HTMLDivElement | null>(null)
   const isMobile = useIsMobile(680)
   const isFullscreen = isMobile || desktopFullscreen
 
@@ -71,9 +72,15 @@ export function PreviewModalShell({
       <DialogPortal inline={inline}>
         <DialogOverlay className={`modal-backdrop${isFullscreen ? ' modal-fullscreen-backdrop' : ''}`}>
           <DialogContent
+            ref={contentRef}
+            tabIndex={-1}
             className={`modal${isFullscreen ? ' modal-fullscreen' : ''}`}
             aria-label={ariaLabel}
             style={isFullscreen ? undefined : { maxWidth: 'min(1280px, 94vw)', maxHeight: '90vh' }}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault()
+              contentRef.current?.focus({ preventScroll: true })
+            }}
           >
             <div className="modal-header artifact-preview-header">
               <span className="preview-modal-title-group">

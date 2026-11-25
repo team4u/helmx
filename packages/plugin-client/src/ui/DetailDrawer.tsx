@@ -16,7 +16,7 @@
  *
  * This file only exports components and TS types (Fast Refresh friendly).
  */
-import type { ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 import { HelmxIcon } from '../icons.js'
 import { usePluginTranslator } from '../i18n.js'
 import { uiCopy } from '../ui-copy.js'
@@ -81,6 +81,7 @@ export interface DetailDrawerProps {
  */
 export function DetailDrawer(props: DetailDrawerProps): ReactNode {
   const t = usePluginTranslator()
+  const contentRef = useRef<HTMLDivElement | null>(null)
   const {
     open,
     onClose,
@@ -114,9 +115,15 @@ export function DetailDrawer(props: DetailDrawerProps): ReactNode {
       <DialogPortal inline={inline}>
         <DialogOverlay className={joinClass('modal-backdrop', 'primary-drawer-backdrop', overlayClassName)} />
         <DialogContent
+          ref={contentRef}
+          tabIndex={-1}
           className={joinClass('primary-drawer-content', className)}
           aria-label={ariaLabel}
           aria-describedby={undefined}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault()
+            contentRef.current?.focus({ preventScroll: true })
+          }}
         >
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">

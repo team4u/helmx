@@ -1091,6 +1091,9 @@ describe("helmx-store-shortcuts", () => {
 
     const modal = document.querySelector<HTMLElement>('.shortcuts-modal')
     assert.ok(modal !== null, 'Mod+/ must render ShortcutsModal')
+    const closeBtn = modal.querySelector<HTMLButtonElement>('button')
+    assert.ok(document.activeElement === modal, 'opening ShortcutsModal focuses dialog container, not close button')
+    assert.ok(closeBtn !== null && document.activeElement !== closeBtn, 'ShortcutsModal close button must not be auto-focused')
     const text = modal.textContent ?? ''
     assert.ok(text.includes('Keyboard shortcuts'))
     assert.ok(text.includes('Navigation'))

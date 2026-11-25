@@ -80,7 +80,9 @@
 
   --border: #e3e3e8;
   --border-strong: #d0d0d6;
-  --border-focus: #4f46e5;
+  --border-focus: #8e8e98;
+  --focus-ring: rgba(28, 28, 33, 0.14);
+  --focus-ring-soft: rgba(28, 28, 33, 0.08);
   --line-2: #ececf0;
 
   /* 分段控制器与导航滑轨阴影 */
@@ -189,7 +191,9 @@
 
   --border: #333339;
   --border-strong: #404048;
-  --border-focus: #a5b4fc;
+  --border-focus: #6e6e7a;
+  --focus-ring: rgba(255, 255, 255, 0.22);
+  --focus-ring-soft: rgba(255, 255, 255, 0.12);
   --line-2: #2c2c32;
 
   --seg-track: rgba(255, 255, 255, 0.035);

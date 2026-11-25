@@ -118,6 +118,7 @@
 .pane-more-popover .popover-item:hover:not(:disabled),
 .pane-more-popover .popover-item:focus-visible:not(:disabled) {
   background: var(--bg-hover);
+  box-shadow: none;
 }
 .pane-more-popover .popover-item:disabled {
   opacity: 0.48;
@@ -135,6 +136,7 @@
 .pane-more-popover .popover-item-danger:hover:not(:disabled),
 .pane-more-popover .popover-item-danger:focus-visible:not(:disabled) {
   background: var(--err-bg);
+  box-shadow: none;
 }
 .pane-more-item-label {
   display: inline-flex;
@@ -1233,8 +1235,8 @@ pre {
 }
 
 .trace-io-toggle:focus-visible {
-  outline: 1.5px solid var(--accent);
-  outline-offset: -1.5px;
+  outline: none;
+  box-shadow: none;
 }
 
 .trace-io-toggle-open {

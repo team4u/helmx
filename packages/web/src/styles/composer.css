@@ -119,8 +119,10 @@
 }
 
 .ask-dock-choice-btn:focus-visible {
-  outline: 1.5px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  border-color: var(--border-focus);
+  background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .ask-dock-choice-btn:disabled {

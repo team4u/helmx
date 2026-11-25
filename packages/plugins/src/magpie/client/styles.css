@@ -38,8 +38,8 @@
 .magpie-quota-trigger:focus-visible {
   background: var(--bg-hover);
   color: var(--fg);
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  box-shadow: none;
 }
 
 .magpie-quota-trigger--warn {

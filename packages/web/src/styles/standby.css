@@ -128,8 +128,10 @@
 }
 
 .agent-standby-profile-trigger:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: none;
 }
 
 .agent-standby-profile-trigger-label {
@@ -285,8 +287,10 @@
 }
 
 .agent-standby-shortcuts-all:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: none;
 }
 
 @media (max-width: 680px), (hover: none) and (pointer: coarse) {
