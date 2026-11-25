@@ -4139,3 +4139,84 @@ test('input/before_turn/turn_settled hooks validate ConversationInput attachment
     await assertRejectsCode(() => pipeline.prepareInput(1, 'hi', undefined, undefined), 'invalid_hook_result');
   }
 });
+
+test('PluginHost.registerCoreAction: reserves core:* namespace, stays invisible in plugin listings, and rejects core:* plugin registrations', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  try {
+    // Standalone PluginHost starts with zero core actions.
+    assert.deepEqual(host.listActions(), []);
+    assert.deepEqual(host.list(), []);
+
+    // Plugin registration and external loader must reject reserved `core:*` IDs.
+    await assertRejectsCode(
+      () => host.register({ id: 'core:spoof', definePlugin: () => {} }),
+      'invalid_plugin_definition',
+    );
+    throwsCode(
+      () =>
+        host.registerFailed({
+          id: 'core:spoof',
+          error: { code: 'boom', message: 'boom', stage: 'load' },
+        }),
+      'invalid_plugin_definition',
+    );
+    const { assertExternalDefinition } = await import('../src/plugins/external-loader.js');
+    throwsCode(
+      () => assertExternalDefinition({ id: 'core:evil', definePlugin: () => {} }, '/tmp/fake-ext'),
+      'invalid_plugin_definition',
+    );
+
+    // registerCoreAction rejects non-`core:` or malformed owner IDs.
+    const emptySchema = { type: 'object', properties: {}, additionalProperties: false };
+    for (const badOwner of ['', 'builtin:foo', 'custom', 'core:', 'core:bad.name', 'core:a:b']) {
+      throwsCode(
+        () =>
+          host.registerCoreAction(badOwner, {
+            id: 'ping',
+            description: 'ping',
+            inputSchema: emptySchema,
+            outputSchema: emptySchema,
+            handler: () => ({}),
+          }),
+        'invalid_core_action_owner',
+      );
+    }
+
+    // Valid core action is callable via prepareAction/invokeAction and visible in listActions,
+    // while invisible in list()/get()/listManifests()/listTools().
+    host.registerCoreAction('core:demo', {
+      id: 'echo',
+      description: 'Echo value',
+      idempotent: true,
+      exposeToPrompt: false,
+      cli: { hidden: true, command: ['demo', 'echo'] },
+      inputSchema: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text'],
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: 'object',
+        properties: { echoed: { type: 'string' } },
+        required: ['echoed'],
+      },
+      handler: (input: { text: string }) => ({ echoed: input.text }),
+    });
+
+    assert.equal(host.list().length, 0);
+    assert.equal(host.get('core:demo'), undefined);
+    assert.equal(host.listManifests().length, 0);
+    assert.equal(host.listTools().length, 0);
+    assert.deepEqual(
+      host.listActions().map((m) => `${m.pluginId}.${m.id}`),
+      ['core:demo.echo'],
+    );
+    assert.deepEqual(host.prepareAction('core:demo', 'echo', { text: 'hi' }), { idempotent: true });
+    assert.deepEqual(await host.invokeAction('core:demo', 'echo', { text: 'hi' }), { echoed: 'hi' });
+  } finally {
+    await host.dispose();
+  }
+  throwsCode(() => host.listActions(), 'plugin_host_disposed');
+  await assertRejectsCode(() => host.invokeAction('core:demo', 'echo', { text: 'hi' }), 'plugin_host_disposed');
+});

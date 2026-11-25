@@ -66,6 +66,7 @@ import {
   type AssembledRuntimeServices,
   type RuntimeServicesInit,
 } from './runtime-services.js'
+import { registerCoreActions } from './core-actions.js'
 
 export type KernelRuntimeOptions = KernelBootOptions
 
@@ -269,6 +270,7 @@ export class KernelRuntime {
       buildProvider: this.init.buildProvider,
       packageManagerProvider: this.init.packageManagerProvider,
     })
+    registerCoreActions(this, this.pluginHost)
     this.models.bindPluginHost(this.pluginHost)
     // Warm managed package install records (`config.json` `pluginPackages`; throws on corruption) when wired.
     await this.pluginHost.loadPackageManager()

@@ -26,6 +26,7 @@ import {
 export const DEFAULT_SEARCH_LIMIT = 20
 export const MAX_SEARCH_LIMIT = 100
 export const DEFAULT_MAX_PER_CONVERSATION = 2
+export const MAX_SEARCH_PER_CONVERSATION = 20
 export const MAX_SEARCH_TERMS = 32
 export const MAX_SEARCH_QUERY_CHARS = 1000
 const SNIPPET_MAX_CHARS = 140
@@ -36,7 +37,7 @@ const MAX_ANCHOR_HITS_PER_TERM = 16
 export interface SearchOptions extends ConversationSearchOptions {
   /** Maximum total hits returned (positive integer `1..100`; defaults to 20). */
   limit?: number
-  /** Maximum hits returned from any single conversation (positive integer `1..100`; defaults to 2). */
+  /** Maximum hits returned from any single conversation (positive integer `1..20`; defaults to 2). */
   maxPerConversation?: number
   /** Restrict hits to conversations bound to this Profile ID. */
   profileId?: string
@@ -86,13 +87,13 @@ export function validateSearchOptions(options?: SearchOptions): SearchOptions | 
     (typeof options.maxPerConversation !== 'number' ||
       !Number.isSafeInteger(options.maxPerConversation) ||
       options.maxPerConversation < 1 ||
-      options.maxPerConversation > MAX_SEARCH_LIMIT)
+      options.maxPerConversation > MAX_SEARCH_PER_CONVERSATION)
   ) {
     throw new HelmxError(
       'validation_error',
-      `maxPerConversation must be an integer between 1 and ${MAX_SEARCH_LIMIT}`,
+      `maxPerConversation must be an integer between 1 and ${MAX_SEARCH_PER_CONVERSATION}`,
       400,
-      { maxPerConversation: options.maxPerConversation, min: 1, max: MAX_SEARCH_LIMIT },
+      { maxPerConversation: options.maxPerConversation, min: 1, max: MAX_SEARCH_PER_CONVERSATION },
     )
   }
   return options

@@ -1047,6 +1047,9 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
         [1, 3],
       )
 
+      const maxPerConvBoundary = await store.search('pipeline', { maxPerConversation: 20 })
+      assert.ok(maxPerConvBoundary.length >= 1)
+
       // Invalid SearchOptions fail explicitly with 400 validation_error (even on whitespace query).
       const badOptionCases: Array<Record<string, unknown>> = [
         { profileId: '' },
@@ -1058,7 +1061,9 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
         { limit: 1.5 },
         { limit: 101 },
         { maxPerConversation: 0 },
-        { maxPerConversation: 101 },
+        { maxPerConversation: -1 },
+        { maxPerConversation: 1.5 },
+        { maxPerConversation: 21 },
       ]
       for (const bad of badOptionCases) {
         await assert.rejects(

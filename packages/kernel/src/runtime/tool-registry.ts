@@ -186,18 +186,28 @@ export class RuntimeToolRegistry {
         if (!host) throw new HelmxError('runtime_not_initialized', 'plugin host not initialized', 503)
         const conversation = getConversation(context.conversationId)
         const filterPluginId = context.pluginId
+        const isPrefixFilter = filterPluginId !== undefined && filterPluginId.endsWith(':')
         return host
           .listActions()
           .filter((manifest) => {
             if (manifest.visibility === 'ui' || manifest.visibility === 'internal') return false
-            if (filterPluginId !== undefined && manifest.pluginId !== filterPluginId) return false
+            if (filterPluginId !== undefined) {
+              const matched = isPrefixFilter
+                ? manifest.pluginId.startsWith(filterPluginId)
+                : manifest.pluginId === filterPluginId
+              if (!matched) return false
+            }
             return matchesConversationScope(manifest.scope, conversation)
           })
           .sort((a, b) =>
             a.pluginId < b.pluginId ? -1 : a.pluginId > b.pluginId ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
           )
           .map((m) => {
-            const cli = actionCliCommand(m)
+            const cli =
+              actionCliCommand(m) ??
+              (m.pluginId.startsWith('core:') && m.cli?.command !== undefined
+                ? `helmx ${m.cli.command.join(' ')}`
+                : undefined)
             return {
               actionId: `${m.pluginId}.${m.id}`,
               pluginId: m.pluginId,

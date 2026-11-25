@@ -1812,19 +1812,26 @@ test('search?q= passes through; filter query params validate strictly and forwar
   const filtered = await call(
     handler,
     'GET',
-    '/api/search?q=hello&profileId=worker&ownedBy=helmx&topLevelOnly=1&limit=25',
+    '/api/search?q=hello&profileId=worker&ownedBy=helmx&topLevelOnly=1&limit=25&maxPerConversation=5',
   )
   assert.equal(filtered.status, 200)
   assert.deepEqual(searchCalls.at(-1), {
     q: 'hello',
-    options: { profileId: 'worker', ownedBy: 'helmx', topLevelOnly: true, limit: 25 },
+    options: { profileId: 'worker', ownedBy: 'helmx', topLevelOnly: true, limit: 25, maxPerConversation: 5 },
   })
 
-  const topFalse = await call(handler, 'GET', '/api/search?q=hello&topLevelOnly=false&limit=100')
+  const topFalse = await call(handler, 'GET', '/api/search?q=hello&topLevelOnly=false&limit=100&maxPerConversation=20')
   assert.equal(topFalse.status, 200)
   assert.deepEqual(searchCalls.at(-1), {
     q: 'hello',
-    options: { topLevelOnly: false, limit: 100 },
+    options: { topLevelOnly: false, limit: 100, maxPerConversation: 20 },
+  })
+
+  const minPerConv = await call(handler, 'GET', '/api/search?q=hello&maxPerConversation=1')
+  assert.equal(minPerConv.status, 200)
+  assert.deepEqual(searchCalls.at(-1), {
+    q: 'hello',
+    options: { maxPerConversation: 1 },
   })
 
   const callCountBeforeBad = searchCalls.length
@@ -1842,6 +1849,12 @@ test('search?q= passes through; filter query params validate strictly and forwar
     '/api/search?q=hello&limit=1.5',
     '/api/search?q=hello&limit=abc',
     '/api/search?q=hello&limit=',
+    '/api/search?q=hello&maxPerConversation=0',
+    '/api/search?q=hello&maxPerConversation=-2',
+    '/api/search?q=hello&maxPerConversation=21',
+    '/api/search?q=hello&maxPerConversation=1.5',
+    '/api/search?q=hello&maxPerConversation=abc',
+    '/api/search?q=hello&maxPerConversation=',
   ]
   for (const url of badUrls) {
     const bad = await call(handler, 'GET', url)

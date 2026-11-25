@@ -31,7 +31,7 @@ import {
 } from './validate.js'
 import { methodNotAllowed, parseOptionalBooleanFlag, parseOptionalJsonObjectBody, type RouteContext } from './route-context.js'
 import { postConversationArtifact } from './asset-routes.js'
-import { MAX_SEARCH_LIMIT, parseSearchTerms } from '../runtime/fts-search.js'
+import { MAX_SEARCH_LIMIT, MAX_SEARCH_PER_CONVERSATION, parseSearchTerms } from '../runtime/fts-search.js'
 
 export interface ConversationRoutesTarget {
   readonly conversations: Pick<
@@ -259,11 +259,24 @@ function parseSearchOptions(url: URL): ConversationSearchOptions | undefined {
     }
     limit = parsed
   }
+  const maxPerConvRaw = url.searchParams.get('maxPerConversation')
+  let maxPerConversation: number | undefined
+  if (maxPerConvRaw !== null) {
+    if (!/^\d+$/.test(maxPerConvRaw)) {
+      throw new ValidationError(`maxPerConversation must be an integer between 1 and ${MAX_SEARCH_PER_CONVERSATION}`)
+    }
+    const parsed = Number(maxPerConvRaw)
+    if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > MAX_SEARCH_PER_CONVERSATION) {
+      throw new ValidationError(`maxPerConversation must be an integer between 1 and ${MAX_SEARCH_PER_CONVERSATION}`)
+    }
+    maxPerConversation = parsed
+  }
   if (
     profileId === undefined &&
     ownedBy === undefined &&
     topLevelOnly === undefined &&
-    limit === undefined
+    limit === undefined &&
+    maxPerConversation === undefined
   ) {
     return undefined
   }
@@ -272,6 +285,7 @@ function parseSearchOptions(url: URL): ConversationSearchOptions | undefined {
     ...(ownedBy !== undefined ? { ownedBy } : {}),
     ...(topLevelOnly !== undefined ? { topLevelOnly } : {}),
     ...(limit !== undefined ? { limit } : {}),
+    ...(maxPerConversation !== undefined ? { maxPerConversation } : {}),
   }
 }
 

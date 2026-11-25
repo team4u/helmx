@@ -268,6 +268,26 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
       },
+      {
+        pluginId: 'core:conversations',
+        id: 'search',
+        description: 'Search conversations',
+        exposeToPrompt: false,
+        idempotent: true,
+        cli: { hidden: true, command: ['search'] },
+        inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },
+        outputSchema: { type: 'array', items: { type: 'object' } },
+      },
+      {
+        pluginId: 'core:profiles',
+        id: 'list',
+        description: 'List profiles',
+        exposeToPrompt: false,
+        idempotent: true,
+        cli: { hidden: true, command: ['profiles', 'list'] },
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        outputSchema: { type: 'array', items: { type: 'object' } },
+      },
     ]
 
     let activeActions = [...allActions]
@@ -329,8 +349,30 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
         'builtin:alpha.tool_action',
         'builtin:triggers.webhook_update',
         'builtin:zeta.inspect',
+        'core:conversations.search',
+        'core:profiles.list',
       ],
     )
+    assert.deepEqual(items[4], {
+      actionId: 'core:conversations.search',
+      pluginId: 'core:conversations',
+      id: 'search',
+      description: 'Search conversations',
+      parameterSummary: 'q: string(required)',
+      cli: 'helmx search',
+      idempotent: true,
+      exposeAsTool: false,
+    })
+    assert.deepEqual(items[5], {
+      actionId: 'core:profiles.list',
+      pluginId: 'core:profiles',
+      id: 'list',
+      description: 'List profiles',
+      parameterSummary: '(no parameters)',
+      cli: 'helmx profiles list',
+      idempotent: true,
+      exposeAsTool: false,
+    })
     assert.deepEqual(items[0], {
       actionId: 'builtin:alpha.normal',
       pluginId: 'builtin:alpha',
@@ -376,12 +418,30 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.ok(withAlpha.some((item) => item['actionId'] === 'builtin:scoped.alpha_only'))
     assert.ok(!withAlpha.some((item) => item['actionId'] === 'builtin:triggers.webhook_create'))
 
-    // 3. Exact pluginId filter.
+    // 3. Exact pluginId filter & namespace prefix filter (`core:` / `builtin:`).
     const triggersOnly = await runActionTool.execute({ list: true, pluginId: 'builtin:triggers' }, { conversationId: 1 }, {})
     assert.equal(triggersOnly.isError, undefined)
     assert.deepEqual(
       (JSON.parse(triggersOnly.output[0]!.text) as Array<Record<string, unknown>>).map((i) => i['actionId']),
       ['builtin:triggers.webhook_update'],
+    )
+    const corePrefix = await runActionTool.execute({ list: true, pluginId: 'core:' }, { conversationId: 1 }, {})
+    assert.equal(corePrefix.isError, undefined)
+    assert.deepEqual(
+      (JSON.parse(corePrefix.output[0]!.text) as Array<Record<string, unknown>>).map((i) => i['actionId']),
+      ['core:conversations.search', 'core:profiles.list'],
+    )
+    const builtinPrefix = await runActionTool.execute({ list: true, pluginId: 'builtin:' }, { conversationId: 1 }, {})
+    assert.equal(builtinPrefix.isError, undefined)
+    assert.deepEqual(
+      (JSON.parse(builtinPrefix.output[0]!.text) as Array<Record<string, unknown>>).map((i) => i['actionId']),
+      [
+        'builtin:alpha.normal',
+        'builtin:alpha.tool_action',
+        'builtin:scoped.alpha_only',
+        'builtin:triggers.webhook_update',
+        'builtin:zeta.inspect',
+      ],
     )
     const missingPlugin = await runActionTool.execute({ list: true, pluginId: 'builtin:disabled' }, { conversationId: 1 }, {})
     assert.equal(missingPlugin.isError, undefined)

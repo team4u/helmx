@@ -8,8 +8,9 @@
 import { Type, type Static } from 'typebox'
 import { NODE_ID_PATTERN, NODE_ID_REGEX } from './agent-exec.js'
 import type { ProfileStarterPrompt, ProviderConfig } from './assets.js'
-import { MODEL_THINKING_LEVELS } from './conversation.js'
+import { MODEL_THINKING_LEVELS, type ConversationListFilter } from './conversation.js'
 import type { EnvExecRequest, NodeUpgradeInput } from './env-rpc.js'
+import type { ConversationSearchOptions } from './http.js'
 import { SKILL_ID_PATTERN } from './skill-contract.js'
 
 /** Maximum safe JS integer (`Number.MAX_SAFE_INTEGER`) shared with kernel boundary checks. */
@@ -112,6 +113,31 @@ const ConversationWithdrawSchema = Type.Object(
 
 const ConversationBulkDeleteSchema = Type.Object(
   { ids: Type.Array(SafePositiveInt, { minItems: 1, maxItems: 1000 }) },
+  { additionalProperties: false },
+)
+
+const ConversationSearchQuerySchema = Type.Object(
+  {
+    q: NonWhitespaceString,
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    maxPerConversation: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+    profileId: Type.Optional(NonWhitespaceString),
+    ownedBy: Type.Optional(Type.Enum(['human', 'helmx'] as const)),
+    topLevelOnly: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+)
+
+const ConversationListQuerySchema = Type.Object(
+  {
+    profileId: Type.Optional(NonWhitespaceString),
+    status: Type.Optional(Type.Enum(['working', 'blocked', 'done', 'idle', 'error'] as const)),
+    tag: Type.Optional(NonEmptyString),
+    ownedBy: Type.Optional(Type.Enum(['human', 'helmx'] as const)),
+    parentConversationId: Type.Optional(SafePositiveInt),
+    topLevelOnly: Type.Optional(Type.Boolean()),
+    all: Type.Optional(Type.Boolean()),
+  },
   { additionalProperties: false },
 )
 
@@ -325,6 +351,8 @@ export const REQUEST_SCHEMAS = Object.freeze({
   conversationFork: ConversationForkSchema,
   conversationWithdraw: ConversationWithdrawSchema,
   conversationBulkDelete: ConversationBulkDeleteSchema,
+  conversationSearchQuery: ConversationSearchQuerySchema,
+  conversationListQuery: ConversationListQuerySchema,
   profileStarter: ProfileStarterSchema,
   profileCreate: ProfileCreateSchema,
   profileUpdate: ProfileUpdateSchema,
@@ -360,6 +388,8 @@ const _requestSchemaParityLocks: [
   AssertExact<Static<typeof ConversationForkSchema>, { entryId?: number; title?: string }>,
   AssertExact<Static<typeof ConversationWithdrawSchema>, { submissionId: number }>,
   AssertExact<Static<typeof ConversationBulkDeleteSchema>, { ids: number[] }>,
+  AssertExact<Static<typeof ConversationSearchQuerySchema>, { q: string } & ConversationSearchOptions>,
+  AssertExact<Static<typeof ConversationListQuerySchema>, ConversationListFilter & { all?: boolean }>,
   AssertExact<Static<typeof NodeUpgradeSchema>, NodeUpgradeInput>,
   AssertExact<Static<typeof EnvExecSchema>['command'], EnvExecRequest['command']>,
   AssertExact<Static<typeof EnvExecSchema>['nodeId'], EnvExecRequest['nodeId']>,
@@ -368,6 +398,6 @@ const _requestSchemaParityLocks: [
   AssertExact<Static<typeof EnvExecSchema>['timeoutMs'], EnvExecRequest['timeoutMs']>,
   AssertExact<Static<typeof EnvExecSchema>['stream'], EnvExecRequest['stream']>,
 ] = [
-  true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+  true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
 ]
 void _requestSchemaParityLocks

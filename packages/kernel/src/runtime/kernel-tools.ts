@@ -41,8 +41,9 @@ export interface KernelToolHost {
     context: { conversationId: number },
   ): Promise<ActionManifest>
   /**
-   * Read-only discovery of reachable public plugin actions (`run_action` `list: true` mode):
-   * filters enabled plugins by `public` visibility, conversation scope, and optional exact `pluginId`,
+   * Read-only discovery of reachable public plugin and core actions (`run_action` `list: true` mode):
+   * filters active plugins and `core:*` owners by `public` visibility, conversation scope, and optional
+   * `pluginId` (exact match, or namespace prefix when ending with `:`, e.g. `"core:"` / `"builtin:"`),
    * including actions with `exposeToPrompt: false`.
    */
   listPluginActions(context: { conversationId: number; pluginId?: string }): Promise<ListedPluginAction[]>
@@ -60,23 +61,24 @@ const runActionParameters = obj({
   ),
   list: opt(
     bool({
-      description: 'When true, list reachable public plugin actions in this conversation (including actions omitted from <available_actions>) without executing',
+      description: 'When true, list reachable public plugin and core actions in this conversation (including actions omitted from <available_actions>) without executing',
     }),
   ),
   pluginId: opt(
     str({
-      description: 'Optional exact plugin ID filter used only with list: true (e.g. "builtin:triggers")',
+      description:
+        'Optional plugin ID filter used only with list: true: exact ID (e.g. "builtin:triggers", "core:conversations") or namespace prefix ending with ":" (e.g. "core:", "builtin:")',
     }),
   ),
 })
 
-/** `run_action` meta-tool: discover (`list`), inspect (`describe`), or invoke plugin actions on demand. */
+/** `run_action` meta-tool: discover (`list`), inspect (`describe`), or invoke plugin/core actions on demand. */
 export function createRunActionTool(host: KernelToolHost): ToolRegistration<typeof runActionParameters> {
   return defineTool({
     name: 'run_action',
     description:
-      'Invoke, inspect, or discover plugin-declared actions. ' +
-      'Set list: true (with optional pluginId) to list reachable public actions in this conversation (including actions omitted from <available_actions>) without executing. ' +
+      'Invoke, inspect, or discover plugin-declared and core actions. ' +
+      'Set list: true (with optional pluginId — exact ID like "builtin:triggers" or namespace prefix ending with ":" like "core:" / "builtin:") to list reachable public actions in this conversation (including actions omitted from <available_actions>) without executing. ' +
       'Set describe: true with actionId ("pluginId.actionId") to read the full action manifest (inputSchema/outputSchema) without executing. ' +
       'Otherwise pass actionId ("pluginId.actionId") and optional input to invoke the action; invalid inputs fail explicitly.',
     parameters: runActionParameters,

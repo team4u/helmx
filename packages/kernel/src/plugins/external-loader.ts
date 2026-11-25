@@ -286,10 +286,11 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
   if (def.icon !== undefined && (typeof def.icon !== 'string' || def.icon.trim().length === 0)) {
     throw fail('icon must be a non-empty string when provided');
   }
-  if (def.id.startsWith('builtin:')) {
+  if (def.id.startsWith('builtin:') || def.id.startsWith('core:')) {
+    const reservedPrefix = def.id.startsWith('core:') ? 'core:' : 'builtin:';
     throw new HelmxError(
       'invalid_plugin_definition',
-      `External plugin ${dirPath} id cannot start with 'builtin:': ${def.id}`,
+      `External plugin ${dirPath} id cannot start with '${reservedPrefix}': ${def.id}`,
       400,
       { dirPath, id: def.id },
     );
@@ -297,7 +298,7 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
   if (def.id.includes(':')) {
     throw new HelmxError(
       'invalid_plugin_definition',
-      `External plugin ${dirPath} id cannot contain ':' (smoke number; colons are reserved for builtin: namespaces): ${def.id}`,
+      `External plugin ${dirPath} id cannot contain ':' (smoke number; colons are reserved for builtin: and core: namespaces): ${def.id}`,
       400,
       { dirPath, id: def.id },
     );
