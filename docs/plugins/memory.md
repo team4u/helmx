@@ -76,7 +76,7 @@ Profile 关闭记忆时，或会话为派生子会话（子代理 / Workflow / S
 | 动作 | CLI | 说明 |
 | :--- | :--- | :--- |
 | `dream` | `helmx memory dream` | 立即整理（`--profile-id` 或 `--current` 选目标，纪律同 get/set）；无候选/无模型会话返回 `ran:false` + reason，坏输出显式抛错；目标 Profile 记忆关闭 403；在途关闭则如实返回 `memory_disabled` 不写回；CLI 不设 30s 超时（`cli.timeoutMs:0`，模型自身有 deadline），候选超发送预算时 `sentCount`/`consumed` 如实报告部分消费 |
-| `dream_status` | `helmx memory dream_status` | 调度配置、nextRunAt、在途 Profile、各 Profile 候选数 / MEMORY.md 长度 / 上次整理结果（可选 `--profile-id`/`--current` 聚焦——只读目标 Profile 的文件，候选文件磁盘异常显式报错，绝不显示为 0；无目标返回全局视图） |
+| `dream_status` | `helmx memory dream_status` | 调度配置、nextRunAt、在途 Profile、各 Profile 记忆开关（`enabled`）/ 候选数 / MEMORY.md 长度 / 上次整理结果（可选 `--profile-id`/`--current` 聚焦——只读目标 Profile 的文件，候选文件磁盘异常显式报错，绝不显示为 0；无目标返回全局视图） |
 | `dream_configure` | `helmx memory dream_configure` | 全局调度配置（真实写入全局调度、可调整运行时点，非幂等动作）：`--enabled <bool>` 暂停/恢复自动整理、`--hour <0-23>`、`--timezone <IANA>`；至少一项，非法组合显式 400；暂停清除 nextRunAt |
 
 默认自动应用（梦境结果直接写回 MEMORY.md，无人工确认环节；不信任时可 `dream_configure --enabled false` 暂停后手动 `dream`）。

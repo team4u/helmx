@@ -31,7 +31,7 @@ import {
 import { PluginHost, ProfileService, type PluginHostBackend } from '@helmx/kernel'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { createProfilePlugin } from '../src/profile.js'
+import { createProfilePlugin, HELMX_CLI_SKILL_ASSET } from '../src/profile.js'
 import {
   PROFILE_SUMMARY_MAX_CODEPOINTS,
   describeHint,
@@ -943,4 +943,21 @@ test('before_turn 与 list_mentionable：任意第三方插件通过 helmx.dispa
   } finally {
     await env.close()
   }
+})
+
+test('helmx-cli SKILL.md 文档化 search 过滤参数、run_action list 发现与动态插件 CLI 命名空间且不硬编码可停用插件命令', { timeout: 60_000 }, () => {
+  const md = HELMX_CLI_SKILL_ASSET.skillMd
+  assert.ok(
+    md.includes('helmx search <query> [--profile <id>] [--owned-by human|helmx] [--top-level] [--limit <n>]'),
+    'SKILL.md 应文档化 helmx search 的过滤参数',
+  )
+  assert.ok(
+    md.includes('run_action({ list: true, pluginId?: "<pluginId>" })'),
+    'SKILL.md 应文档化 run_action list 发现能力',
+  )
+  assert.ok(
+    md.includes('helmx actions list --json') && md.includes('run_action({ actionId, describe: true })'),
+    'SKILL.md 应指引通过动态发现与 describe 查插件 CLI 与 schema',
+  )
+  assert.equal(md.includes('helmx workflows'), false, 'SKILL.md 不得硬编码可停用内置插件 CLI 命名空间')
 })

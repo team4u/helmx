@@ -50,6 +50,8 @@ import {
   boardStatusOutputSchema,
   closeGroupOutputSchema,
   dispatchInputSchema,
+  listGroupsInputSchema,
+  listGroupsOutputSchema,
   swarmToolPresentationMetaSchema,
 } from '../src/swarm/action-schemas.js'
 import { snapshotMemberTiming } from '../src/swarm/contracts.js'
@@ -2410,4 +2412,130 @@ test('swarm-unit16: unanswered recovery preserves cursors, retries with distinct
   // Because pre-crash inflightReport 1-1 was already 'done', the new coordinator report must only cover seq 2-2 (the deleted-worker blocker), NOT re-send 1-2!
   assert.equal(events[idxSubmitCoord], 'submitInput:40:swarm-report:grp_order:2-2')
   await rtD.stopAndClear()
+})
+
+test('swarm-unit17: listGroups returns bounded newest-first summaries, filters by status/coordinatorConversationId, and reuses live worker busy checks', { timeout: 60_000 }, () => {
+  const activeGroup = makeGroup({
+    id: 'grp_active_newest',
+    title: 'Active Squad',
+    objective: 'Deliver polished plugins',
+    coordinatorConversationId: 10,
+    status: 'active',
+    headSeq: 7,
+    createdAt: 2_000,
+    updatedAt: 2_500,
+    members: [
+      makeMember({ name: 'author', conversationId: 11, lifecycle: 'active' }),
+      makeMember({ name: 'blocked_peer', conversationId: 12, lifecycle: 'active' }),
+      makeMember({ name: 'settling_peer', conversationId: 13, lifecycle: 'active' }),
+      makeMember({ name: 'waking_peer', conversationId: 14, lifecycle: 'active' }),
+      makeMember({ name: 'idle_peer', conversationId: 15, lifecycle: 'active' }),
+      makeMember({ name: 'retired', conversationId: 16, lifecycle: 'archived', archivedAt: 2_100 }),
+    ],
+  })
+  const closedGroup = makeGroup({
+    id: 'grp_closed_older',
+    title: 'Closed Squad',
+    objective: undefined,
+    coordinatorConversationId: 20,
+    status: 'closed',
+    headSeq: 4,
+    createdAt: 1_000,
+    updatedAt: 1_500,
+    closedAt: 1_500,
+    retainedWorktrees: [
+      {
+        memberName: 'author',
+        nodeId: 'local',
+        worktreeId: 'local:/wt/retained',
+        branch: 'helmx/spawn-abc',
+        path: '/wt/retained',
+        commitsAhead: 2,
+      },
+    ],
+    members: [makeMember({ name: 'author', conversationId: 21, lifecycle: 'archived', archivedAt: 1_500 })],
+  })
+
+  const statusByConv = new Map<number, 'idle' | 'working' | 'blocked'>([
+    [11, 'working'],
+    [12, 'blocked'],
+    [13, 'idle'],
+    [14, 'idle'],
+    [15, 'idle'],
+    [16, 'working'],
+  ])
+  const fakeCoordinator = {
+    settlingWorkers: new Map<number, number>([[13, 1]]),
+    readConversationOrUndefined: (id: number | undefined) =>
+      id !== undefined && statusByConv.has(id) ? { id, status: statusByConv.get(id)! } : undefined,
+    groups: {
+      listGroups: () => [activeGroup, closedGroup],
+      hasInflightWakeup: (groupId: string, memberName: string) => groupId === 'grp_active_newest' && memberName === 'waking_peer',
+    },
+  } as never
+
+  const { listGroups } = createGroupHandlers({} as never, fakeCoordinator)
+
+  const all = listGroups({})
+  validateOrThrow(listGroupsInputSchema, {}, 'listGroups input valid')
+  validateOrThrow(listGroupsOutputSchema, all, 'listGroups output valid')
+  assert.deepEqual(
+    all.groups.map((g) => g.groupId),
+    ['grp_active_newest', 'grp_closed_older'],
+  )
+
+  const activeSummary = all.groups[0]!
+  assert.deepEqual(activeSummary, {
+    groupId: 'grp_active_newest',
+    title: 'Active Squad',
+    objective: 'Deliver polished plugins',
+    status: 'active',
+    coordinatorConversationId: 10,
+    headSeq: 7,
+    memberCount: 6,
+    activeMemberCount: 5,
+    activeWorkingMembers: ['author', 'blocked_peer', 'settling_peer', 'waking_peer'],
+    retainedWorktreeCount: 0,
+    createdAt: 2_000,
+  })
+  assert.equal('posts' in (activeSummary as unknown as Record<string, unknown>), false, 'must not leak board posts')
+
+  const closedSummary = all.groups[1]!
+  assert.deepEqual(closedSummary, {
+    groupId: 'grp_closed_older',
+    title: 'Closed Squad',
+    status: 'closed',
+    coordinatorConversationId: 20,
+    headSeq: 4,
+    memberCount: 1,
+    activeMemberCount: 0,
+    activeWorkingMembers: [],
+    retainedWorktreeCount: 1,
+    createdAt: 1_000,
+    closedAt: 1_500,
+  })
+  assert.equal('objective' in closedSummary, false)
+
+  assert.deepEqual(
+    listGroups({ status: 'active' }).groups.map((g) => g.groupId),
+    ['grp_active_newest'],
+  )
+  assert.deepEqual(
+    listGroups({ status: 'closed' }).groups.map((g) => g.groupId),
+    ['grp_closed_older'],
+  )
+  assert.deepEqual(
+    listGroups({ coordinatorConversationId: 20 }).groups.map((g) => g.groupId),
+    ['grp_closed_older'],
+  )
+  assert.deepEqual(listGroups({ status: 'active', coordinatorConversationId: 20 }).groups, [])
+
+  assert.throws(
+    () => listGroups({ status: 'paused' as never }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+  )
+  assert.throws(
+    () => listGroups({ coordinatorConversationId: 0 }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+  )
 })

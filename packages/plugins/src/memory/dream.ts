@@ -40,7 +40,7 @@ export interface DreamRunSummary {
 }
 export interface DreamStatusView {
   config: DreamConfig; nextRunAt?: number; running: string[]
-  profiles: Array<{ profileId: string; candidateCount: number; memoryChars: number | null; lastRun?: DreamProfileRunRecord }>
+  profiles: Array<{ profileId: string; enabled: boolean; candidateCount: number; memoryChars: number | null; lastRun?: DreamProfileRunRecord }>
 }
 export interface DreamEngineOptions { clock?: DreamClock; modelTimeoutMs?: number }
 export interface DreamHostPorts {
@@ -473,7 +473,13 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
         try { memoryChars = (await ports.store.readMemoryWithHash(profileId)).content.length } catch (err) {
           if (!(err instanceof HelmxError && err.code === 'not_found')) throw err
         }
-        profiles.push({ profileId, candidateCount, memoryChars, ...(cur.runs[profileId] ? { lastRun: cur.runs[profileId] } : {}) })
+        profiles.push({
+          profileId,
+          enabled: ports.isMemoryEnabled(profileId),
+          candidateCount,
+          memoryChars,
+          ...(cur.runs[profileId] ? { lastRun: cur.runs[profileId] } : {}),
+        })
       }
       return { config: cur.config, ...(cur.nextRunAt !== undefined ? { nextRunAt: cur.nextRunAt } : {}), running: [...inflight.keys()].sort(), profiles }
     },

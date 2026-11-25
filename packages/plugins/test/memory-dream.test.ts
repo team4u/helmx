@@ -507,14 +507,20 @@ test('dream 执行：模型成功经 CAS 应用并消费候选', { timeout: 60_0
   assert.equal(h.backend.completeTextCalls[0]!.maxTokens, DREAM_MAX_TOKENS, '模型调用显式输出预算')
   assert.equal(await h.store.getMemory('assistant'), '# Memory\n- 以后都用中文回复\n- 旧偏好')
   assert.equal(readCandidates(h, 'assistant').length, 0, '成功后候选被消费')
-  // 状态视图如实反映
+  // 状态视图如实反映（含各 Profile 记忆开关 enabled）
+  await seedCandidate(h, 'coder', '偏好短变量名', 6)
+  await h.host.invokeAction('builtin:memory', 'configure', { profileId: 'coder', enabled: false })
   const status = (await h.host.invokeAction('builtin:memory', 'dream_status', {})) as {
-    profiles: Array<{ profileId: string; candidateCount: number; memoryChars: number | null; lastRun?: { applied?: boolean } }>
+    profiles: Array<{ profileId: string; enabled: boolean; candidateCount: number; memoryChars: number | null; lastRun?: { applied?: boolean } }>
   }
   const row = status.profiles.find((p) => p.profileId === 'assistant')!
+  assert.equal(row.enabled, true)
   assert.equal(row.candidateCount, 0)
   assert.equal(row.memoryChars, (await h.store.getMemory('assistant')).length)
   assert.equal(row.lastRun?.applied, true)
+  const coderRow = status.profiles.find((p) => p.profileId === 'coder')!
+  assert.equal(coderRow.enabled, false, '全局 dream_status 视图对已关闭 Profile 返回 enabled: false')
+  assert.equal(coderRow.candidateCount, 1)
   await h.host.dispose().catch(() => {})
 })
 
@@ -898,11 +904,17 @@ test('dream 腐败文件：读取不清空、显式报错；focused status 只�
     'utf8',
   )
   const focused = (await h.host.invokeAction('builtin:memory', 'dream_status', { profileId: 'coder' })) as {
-    profileId: string; profiles: Array<{ profileId: string; candidateCount: number }>
+    profileId: string; profiles: Array<{ profileId: string; enabled: boolean; candidateCount: number }>
   }
   assert.equal(focused.profileId, 'coder')
   assert.equal(focused.profiles.length, 1, '聚焦只读目标')
+  assert.equal(focused.profiles[0]!.enabled, true)
   assert.equal(focused.profiles[0]!.candidateCount, 1)
+  await h.host.invokeAction('builtin:memory', 'configure', { profileId: 'coder', enabled: false })
+  const focusedDisabled = (await h.host.invokeAction('builtin:memory', 'dream_status', { profileId: 'coder' })) as {
+    profileId: string; profiles: Array<{ profileId: string; enabled: boolean; candidateCount: number }>
+  }
+  assert.equal(focusedDisabled.profiles[0]!.enabled, false, '关闭记忆后 dream_status 如实返回 enabled: false')
   await assert.rejects(
     () => h.host.invokeAction('builtin:memory', 'dream_status', { profileId: 'assistant' }),
     (err: unknown) => err instanceof HelmxError && err.code === 'dream_candidates_corrupt',

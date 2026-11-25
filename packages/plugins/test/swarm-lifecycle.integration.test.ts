@@ -1480,4 +1480,169 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       await env.close()
     }
   })
+
+  test('swarm-int10: list_groups manifest (idempotent, hidden from tools/prompt, unscoped) and cross-conversation run_action listing & filtering', { timeout: 60_000 }, async (t) => {
+    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-list-groups-'), gitTemplate)
+    try {
+      const { kernel } = env.app
+
+      const listManifest = kernel.plugins
+        .listActions()
+        .find((a) => a.pluginId === SWARM_PLUGIN_ID && a.id === 'list_groups')
+      assert.ok(listManifest, 'builtin:swarm must register list_groups action')
+      assert.equal(listManifest!.idempotent, true, 'list_groups must declare idempotent: true')
+      assert.equal(listManifest!.exposeToPrompt, false, 'list_groups must declare exposeToPrompt: false')
+      assert.equal(listManifest!.exposeAsTool, false, 'list_groups must NOT be exposed as a standalone model tool')
+      assert.equal(listManifest!.visibility, 'public')
+      assert.equal(listManifest!.scope, undefined, 'list_groups must not restrict conversation scope')
+      assert.deepEqual(listManifest!.cli?.command, ['swarm', 'list-groups'])
+      assert.equal(
+        kernel.plugins.listTools().some((tool) => tool.name === 'swarm_list_groups' || tool.name === 'list_groups'),
+        false,
+        'list_groups must not bloat model tool list',
+      )
+
+      const coord1 = await kernel.conversations.createConversation({ title: 'Coord 1', profileId: 'assistant', cwd: env.repoDir })
+      const coord2 = await kernel.conversations.createConversation({ title: 'Coord 2', profileId: 'assistant', cwd: env.repoDir })
+      const observer = await kernel.conversations.createConversation({ title: 'Observer Chat', profileId: 'assistant', cwd: env.repoDir })
+
+      const g1 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Closed Alpha Squad',
+        objective: 'Finish alpha milestone',
+        conversationId: coord1.id,
+      })) as { groupId: string }
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g1.groupId }, { conversationId: coord1.id })
+
+      // Ensure distinct createdAt ordering between g1 and g2
+      await new Promise((r) => setTimeout(r, 10))
+      const g2 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Active Beta Squad',
+        objective: 'Build beta feature',
+        conversationId: coord2.id,
+      })) as { groupId: string }
+
+      setSwarmRoleResponses(env.faux, {
+        worker1: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'ready' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('Standing by.'),
+        ],
+        coordinator: [fauxAssistantMessage('Noted.')],
+      })
+      const worker = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { name: 'worker1', prompt: 'Stand by.' },
+        { conversationId: coord2.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(worker.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord2.id)
+
+      type ListGroupsResp = {
+        groups: Array<{
+          groupId: string
+          title: string
+          objective?: string
+          status: 'active' | 'closed'
+          coordinatorConversationId: number
+          headSeq: number
+          memberCount: number
+          activeMemberCount: number
+          activeWorkingMembers: string[]
+          retainedWorktreeCount: number
+          createdAt: number
+          closedAt?: number
+        }>
+      }
+
+      // Accessible via run_action surface from an unrelated non-swarm conversation
+      const all = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'list_groups',
+        {},
+        { conversationId: observer.id },
+        { surface: 'run_action' },
+      )) as ListGroupsResp
+      assert.deepEqual(
+        all.groups.map((g) => g.groupId),
+        [g2.groupId, g1.groupId],
+        'newest-first ordering across conversations',
+      )
+      assert.equal(all.groups[0]!.status, 'active')
+      assert.equal(all.groups[0]!.coordinatorConversationId, coord2.id)
+      assert.equal(all.groups[0]!.memberCount, 1)
+      assert.equal(all.groups[0]!.activeMemberCount, 1)
+      assert.deepEqual(all.groups[0]!.activeWorkingMembers, [])
+      assert.equal(all.groups[0]!.retainedWorktreeCount, 0)
+      assert.ok(all.groups[0]!.headSeq >= 2)
+      assert.equal(all.groups[1]!.status, 'closed')
+      assert.equal(all.groups[1]!.coordinatorConversationId, coord1.id)
+      assert.equal(typeof all.groups[1]!.closedAt, 'number')
+
+      const activeOnly = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'list_groups',
+        { status: 'active' },
+        { conversationId: observer.id },
+        { surface: 'run_action' },
+      )) as ListGroupsResp
+      assert.deepEqual(activeOnly.groups.map((g) => g.groupId), [g2.groupId])
+
+      const closedOnly = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'list_groups',
+        { status: 'closed' },
+        { conversationId: observer.id },
+        { surface: 'run_action' },
+      )) as ListGroupsResp
+      assert.deepEqual(closedOnly.groups.map((g) => g.groupId), [g1.groupId])
+
+      const byCoord = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'list_groups',
+        { coordinatorConversationId: coord1.id },
+        { conversationId: observer.id },
+        { surface: 'run_action' },
+      )) as ListGroupsResp
+      assert.deepEqual(byCoord.groups.map((g) => g.groupId), [g1.groupId])
+
+      // Real LLM turn in unrelated conversation invokes run_action({ actionId: 'builtin:swarm.list_groups', ... })
+      // and sees neither swarm_list_groups tool nor builtin:swarm.list_groups in <available_actions>
+      let observerMeta: { toolNames: string[]; sectionsById: Record<string, string> } | undefined
+      env.faux.setResponses([
+        (ctx) => {
+          observerMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+          return fauxAssistantMessage(
+            [fauxToolCall('run_action', { actionId: 'builtin:swarm.list_groups', input: { status: 'active' } })],
+            { stopReason: 'toolUse' },
+          )
+        },
+        fauxAssistantMessage('Listed active swarm groups via run_action.'),
+      ])
+      await kernel.conversations.submitInput(observer.id, 'List active swarm groups')
+      await kernel.conversations.waitForIdle(observer.id)
+      assert.ok(observerMeta !== undefined)
+      assert.equal(observerMeta!.toolNames.includes('swarm_list_groups'), false)
+      assert.equal((observerMeta!.sectionsById['prompt.actions'] ?? '').includes('builtin:swarm.list_groups'), false)
+      const observerDetail = await kernel.conversations.getConversationDetail(observer.id, { limit: 20 })
+      const runActionResultText = JSON.stringify(observerDetail.entries)
+      assert.ok(runActionResultText.includes(g2.groupId), 'run_action tool must return active group summary')
+      assert.equal(runActionResultText.includes(g1.groupId), false, 'status=active filter must exclude closed group')
+
+      // Swarm skill documents list-groups
+      const loadedSkill = (await kernel.plugins.executeTool(
+        'load_skill',
+        { skillId: SWARM_SKILL_ID },
+        { conversationId: observer.id },
+      )) as { text: string }
+      assert.ok(loadedSkill.text.includes('helmx swarm list-groups'))
+      assert.ok(loadedSkill.text.includes('builtin:swarm.list_groups'))
+
+      // Clean up active group before shutdown
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g2.groupId }, { conversationId: coord2.id })
+    } finally {
+      await env.close()
+    }
+  })
 })

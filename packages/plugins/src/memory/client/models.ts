@@ -22,6 +22,7 @@ export interface DreamStatusResult {
   running: string[]
   profiles: Array<{
     profileId: string
+    enabled?: boolean
     candidateCount: number
     memoryChars: number | null
     lastRun?: {

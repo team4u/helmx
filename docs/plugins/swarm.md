@@ -48,6 +48,7 @@ helmx swarm close-group --group-id "$group_id" --abort-running --keep-worktree
 | 动作 ID | 模型工具 | CLI | 用途 |
 | --- | --- | --- | --- |
 | `create_group` | `swarm_create_group` | `helmx swarm create-group` | 在顶层会话建立协作组 |
+| `list_groups` | —（经 `run_action` 调用） | `helmx swarm list-groups` | 列出协作组有界摘要（可按 `status` / `coordinatorConversationId` 过滤） |
 | `update_group` | `swarm_update_group` | `helmx swarm update-group` | 改标题或目标 |
 | `dispatch_worker` | `swarm_dispatch_worker` | `helmx swarm dispatch-worker` | 派工并唤醒成员。可选目标节点（`nodeId`）、工作目录（`cwd`）、worktree、会话分叉和模型 |
 | `board_post` | `swarm_board_post` | `helmx swarm board-post` | 发消息，指定收件人和是否唤醒 |
