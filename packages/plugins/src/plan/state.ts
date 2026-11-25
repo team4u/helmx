@@ -1,0 +1,423 @@
+/**
+ * builtin:plan state persistence, projection sync, per-conversation serialization, and lifecycle tracking.
+ */
+import {
+  HelmxError,
+  type ConversationSummary,
+  type HelmxPluginContext,
+  type PluginDocHandle,
+  type PluginInUseItem,
+  type PluginKvHandle,
+  type PluginSessionDocHandle,
+} from '@helmx/protocol'
+import {
+  isPlanConversationEligible,
+  type PlanBadgeEntry,
+  type PlanBadgesDoc,
+  type PlanConversationRecord,
+  type PlanMode,
+  type PlanSessionView,
+} from './contracts.js'
+
+export interface PlanInFlightAsk {
+  askId: string
+  conversationId: number
+  promise: Promise<unknown>
+}
+
+export interface PlanStateManager {
+  isStopping(): boolean
+  setStopping(stopping: boolean): void
+  enqueueConversation<T>(conversationId: number, op: () => Promise<T>): Promise<T>
+  getRecord(conversationId: number): PlanConversationRecord | undefined
+  writeRecord(conversationId: number, record: PlanConversationRecord): void
+  deleteRecord(conversationId: number): void
+  listAllRecords(): PlanConversationRecord[]
+  flushKv(): Promise<void>
+  syncProjections(conversationId: number, record: PlanConversationRecord | undefined): void
+  hydrateProjections(): void
+  cancelAskSafe(askId: string, reason: 'cancelled' | 'superseded'): Promise<void>
+  trackInFlightAsk(askId: string, conversationId: number, promise: Promise<unknown>): void
+  deleteInFlightAsk(askId: string): void
+  hasInFlightAsk(conversationId: number): boolean
+  liveTaskLabels(): string[]
+  inUseItems(): PluginInUseItem[]
+  requireEligibleConversation(conversationId: number): ConversationSummary
+  getView(conversationId: number): PlanSessionView
+  enterPlanningMode(conversationId: number): Promise<PlanSessionView>
+  setMode(conversationId: number, mode: PlanMode): Promise<PlanSessionView>
+  toggleMode(conversationId: number): Promise<PlanSessionView>
+  cleanupDeletedConversation(conversationId: number): Promise<void>
+  reconcileOrphanedAsks(): Promise<void>
+  stopAll(): Promise<void>
+}
+
+export function createEmptyPlanSessionView(): PlanSessionView {
+  return { mode: 'normal', awaitingApproval: false }
+}
+
+export function toPlanSessionView(record: PlanConversationRecord | undefined): PlanSessionView {
+  if (record === undefined) return createEmptyPlanSessionView()
+  const awaitingApproval = record.mode === 'planning' && record.pendingAskId !== undefined
+  return {
+    mode: record.mode,
+    awaitingApproval,
+    ...(record.draft !== undefined ? { draft: record.draft } : {}),
+    ...(record.approved !== undefined ? { approved: record.approved } : {}),
+  }
+}
+
+export function toPlanBadgeEntry(record: PlanConversationRecord | undefined): PlanBadgeEntry | undefined {
+  if (record === undefined) return undefined
+  if (record.mode === 'planning') {
+    if (record.pendingAskId !== undefined) {
+      return {
+        count: 1,
+        tone: 'warn',
+        footerText: { en: 'Awaiting plan approval', 'zh-CN': '等待规划审批' },
+      }
+    }
+    return {
+      count: 1,
+      tone: 'accent',
+      footerText:
+        record.draft !== undefined
+          ? { en: `Plan draft v${record.draft.version}`, 'zh-CN': `规划草稿 v${record.draft.version}` }
+          : { en: 'Planning mode', 'zh-CN': '规划模式' },
+    }
+  }
+  if (record.approved !== undefined) {
+    return {
+      count: 1,
+      tone: 'neutral',
+      footerText: { en: `Approved v${record.approved.version}`, 'zh-CN': `已批准 v${record.approved.version}` },
+    }
+  }
+  if (record.draft !== undefined) {
+    return {
+      count: 1,
+      tone: 'neutral',
+      footerText: { en: `Draft v${record.draft.version}`, 'zh-CN': `草稿 v${record.draft.version}` },
+    }
+  }
+  return undefined
+}
+
+export function shouldPersistPlanRecord(record: PlanConversationRecord): boolean {
+  return (
+    record.mode === 'planning' ||
+    record.pendingAskId !== undefined ||
+    record.draft !== undefined ||
+    record.approved !== undefined
+  )
+}
+
+function isNotFoundOrSettledError(err: unknown): boolean {
+  if (!(err instanceof HelmxError)) return false
+  return (
+    err.status === 404 ||
+    err.status === 409 ||
+    err.code === 'not_found' ||
+    err.code === 'ask_already_settled'
+  )
+}
+
+function ignoreConversationNotFound(fn: () => void): void {
+  try {
+    fn()
+  } catch (err) {
+    if (err instanceof HelmxError && (err.status === 404 || err.code === 'not_found')) {
+      return
+    }
+    throw err
+  }
+}
+
+export function createPlanStateManager(deps: {
+  ctx: HelmxPluginContext
+  kv: PluginKvHandle<PlanConversationRecord>
+  planDoc: PluginSessionDocHandle<PlanSessionView>
+  badgesDoc: PluginDocHandle<PlanBadgesDoc>
+}): PlanStateManager {
+  const { ctx, kv, planDoc, badgesDoc } = deps
+
+  let stopping = false
+  const convQueues = new Map<number, Promise<unknown>>()
+  const inFlightAsks = new Map<string, PlanInFlightAsk>()
+  const writtenBadgeJsonByConv = new Map<string, string>()
+  let badgesByConv: Record<string, PlanBadgeEntry> = {}
+  let badgesHydrated = false
+
+  const enqueueConversation = <T>(conversationId: number, op: () => Promise<T>): Promise<T> => {
+    const prev = convQueues.get(conversationId) ?? Promise.resolve()
+    const run = prev.then(op, op)
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    convQueues.set(conversationId, settled)
+    void settled.then(() => {
+      if (convQueues.get(conversationId) === settled) {
+        convQueues.delete(conversationId)
+      }
+    })
+    return run
+  }
+
+  const kvKey = (conversationId: number): string => String(conversationId)
+
+  const getRecord = (conversationId: number): PlanConversationRecord | undefined =>
+    kv.get(kvKey(conversationId))
+
+  const writeRecord = (conversationId: number, record: PlanConversationRecord): void => {
+    if (shouldPersistPlanRecord(record)) {
+      kv.set(kvKey(conversationId), record)
+    } else {
+      kv.delete(kvKey(conversationId))
+    }
+  }
+
+  const deleteRecord = (conversationId: number): void => {
+    kv.delete(kvKey(conversationId))
+  }
+
+  const listAllRecords = (): PlanConversationRecord[] => {
+    const records: PlanConversationRecord[] = []
+    let cursor: string | undefined
+    for (;;) {
+      const page = kv.list(cursor !== undefined ? { cursor } : undefined)
+      for (const item of page.items) {
+        records.push(item.value)
+      }
+      if (page.nextCursor === undefined) break
+      cursor = page.nextCursor
+    }
+    return records
+  }
+
+  const flushKv = (): Promise<void> => kv.flush()
+
+  const applyBadgeEntry = (conversationId: number, entry: PlanBadgeEntry | undefined): boolean => {
+    const key = kvKey(conversationId)
+    const nextJson = entry === undefined ? '' : JSON.stringify(entry)
+    if (writtenBadgeJsonByConv.get(key) === nextJson) return false
+    if (entry === undefined) {
+      delete badgesByConv[key]
+      writtenBadgeJsonByConv.delete(key)
+    } else {
+      badgesByConv[key] = entry
+      writtenBadgeJsonByConv.set(key, nextJson)
+    }
+    return true
+  }
+
+  const hydrateProjections = (): void => {
+    const records = listAllRecords()
+    badgesByConv = {}
+    writtenBadgeJsonByConv.clear()
+    for (const record of records) {
+      applyBadgeEntry(record.conversationId, toPlanBadgeEntry(record))
+      ignoreConversationNotFound(() => {
+        planDoc.set(record.conversationId, toPlanSessionView(record))
+      })
+    }
+    badgesHydrated = true
+    badgesDoc.set({ byConversation: { ...badgesByConv } })
+  }
+
+  const syncProjections = (
+    conversationId: number,
+    record: PlanConversationRecord | undefined,
+  ): void => {
+    if (!badgesHydrated) {
+      badgesByConv = { ...badgesDoc.get().byConversation }
+      for (const [k, v] of Object.entries(badgesByConv)) {
+        writtenBadgeJsonByConv.set(k, JSON.stringify(v))
+      }
+      badgesHydrated = true
+    }
+    if (record === undefined) {
+      ignoreConversationNotFound(() => {
+        planDoc.delete(conversationId)
+      })
+    } else {
+      ignoreConversationNotFound(() => {
+        planDoc.set(conversationId, toPlanSessionView(record))
+      })
+    }
+    if (applyBadgeEntry(conversationId, toPlanBadgeEntry(record))) {
+      badgesDoc.set({ byConversation: { ...badgesByConv } })
+    }
+  }
+
+  const cancelAskSafe = async (
+    askId: string,
+    reason: 'cancelled' | 'superseded',
+  ): Promise<void> => {
+    try {
+      await ctx.host.cancelAsk(askId, reason)
+    } catch (err) {
+      if (isNotFoundOrSettledError(err)) return
+      throw err
+    }
+  }
+
+  const requireEligibleConversation = (conversationId: number): ConversationSummary => {
+    const conv = ctx.host.getConversation(conversationId)
+    if (!isPlanConversationEligible(conv)) {
+      throw new HelmxError(
+        'plan_unsupported_conversation',
+        `Plan mode is only supported on top-level human conversations (conversation ${conv.id} is not eligible)`,
+        400,
+        { conversationId: conv.id },
+      )
+    }
+    return conv
+  }
+
+  const applyModeTransition = async (
+    conversationId: number,
+    nextMode: PlanMode,
+  ): Promise<PlanSessionView> => {
+    const current = getRecord(conversationId)
+    if (nextMode === 'normal' && current?.pendingAskId !== undefined) {
+      await cancelAskSafe(current.pendingAskId, 'cancelled')
+    }
+    const latest = getRecord(conversationId)
+    const nextRecord: PlanConversationRecord = {
+      conversationId,
+      mode: nextMode,
+      ...(nextMode === 'planning' && latest?.pendingAskId !== undefined
+        ? { pendingAskId: latest.pendingAskId }
+        : {}),
+      ...(latest?.draft !== undefined ? { draft: latest.draft } : {}),
+      ...(latest?.approved !== undefined ? { approved: latest.approved } : {}),
+    }
+    writeRecord(conversationId, nextRecord)
+    try {
+      await flushKv()
+    } catch (err) {
+      // Revert synchronous KV mirror on flush failure so memory never diverges from SQLite.
+      if (latest !== undefined) kv.set(kvKey(conversationId), latest)
+      else kv.delete(kvKey(conversationId))
+      throw err
+    }
+    syncProjections(conversationId, shouldPersistPlanRecord(nextRecord) ? nextRecord : undefined)
+    return toPlanSessionView(nextRecord)
+  }
+
+  const enterPlanningMode = (conversationId: number): Promise<PlanSessionView> =>
+    enqueueConversation(conversationId, () => applyModeTransition(conversationId, 'planning'))
+
+  const setMode = (conversationId: number, mode: PlanMode): Promise<PlanSessionView> =>
+    enqueueConversation(conversationId, async () => {
+      requireEligibleConversation(conversationId)
+      return applyModeTransition(conversationId, mode)
+    })
+
+  const toggleMode = (conversationId: number): Promise<PlanSessionView> =>
+    enqueueConversation(conversationId, async () => {
+      requireEligibleConversation(conversationId)
+      const currentMode = getRecord(conversationId)?.mode ?? 'normal'
+      return applyModeTransition(conversationId, currentMode === 'planning' ? 'normal' : 'planning')
+    })
+
+  const getView = (conversationId: number): PlanSessionView => {
+    const conv = ctx.host.getConversation(conversationId)
+    if (!isPlanConversationEligible(conv)) {
+      return createEmptyPlanSessionView()
+    }
+    return toPlanSessionView(getRecord(conversationId))
+  }
+
+  const cleanupDeletedConversation = (conversationId: number): Promise<void> =>
+    enqueueConversation(conversationId, async () => {
+      const existing = getRecord(conversationId)
+      if (existing?.pendingAskId !== undefined) {
+        await cancelAskSafe(existing.pendingAskId, 'cancelled')
+      }
+      deleteRecord(conversationId)
+      await flushKv()
+      syncProjections(conversationId, undefined)
+    })
+
+  const reconcileOrphanedAsks = async (): Promise<void> => {
+    const candidates = listAllRecords().filter(
+      (r) => r.pendingAskId !== undefined && !inFlightAsks.has(r.pendingAskId),
+    )
+    if (candidates.length === 0) return
+    let changed = false
+    for (const candidate of candidates) {
+      await enqueueConversation(candidate.conversationId, async () => {
+        const latest = getRecord(candidate.conversationId)
+        if (latest === undefined || latest.pendingAskId !== candidate.pendingAskId) return
+        await cancelAskSafe(latest.pendingAskId!, 'superseded')
+        const { pendingAskId: _removed, ...rest } = latest
+        writeRecord(candidate.conversationId, rest)
+        changed = true
+      })
+    }
+    if (changed) {
+      await flushKv()
+      hydrateProjections()
+    }
+  }
+
+  const stopAll = async (): Promise<void> => {
+    stopping = true
+    const active = [...inFlightAsks.values()]
+    for (const task of active) {
+      void cancelAskSafe(task.askId, 'cancelled').catch(() => {})
+    }
+    if (active.length > 0) {
+      await Promise.allSettled(active.map((task) => task.promise))
+    }
+    await flushKv()
+  }
+
+  return {
+    isStopping: () => stopping,
+    setStopping: (value) => {
+      stopping = value
+    },
+    enqueueConversation,
+    getRecord,
+    writeRecord,
+    deleteRecord,
+    listAllRecords,
+    flushKv,
+    syncProjections,
+    hydrateProjections,
+    cancelAskSafe,
+    trackInFlightAsk: (askId, conversationId, promise) => {
+      inFlightAsks.set(askId, { askId, conversationId, promise })
+    },
+    deleteInFlightAsk: (askId) => {
+      inFlightAsks.delete(askId)
+    },
+    hasInFlightAsk: (conversationId) => {
+      for (const task of inFlightAsks.values()) {
+        if (task.conversationId === conversationId) return true
+      }
+      return false
+    },
+    liveTaskLabels: () =>
+      Array.from(inFlightAsks.values(), (task) => `plan:ask:${task.conversationId}:${task.askId}`),
+    inUseItems: () =>
+      listAllRecords()
+        .filter((record) => record.mode === 'planning')
+        .map((record) => ({
+          kind: 'plan_session',
+          id: String(record.conversationId),
+          label: `Conversation #${record.conversationId} is currently in planning mode`,
+        })),
+    requireEligibleConversation,
+    getView,
+    enterPlanningMode,
+    setMode,
+    toggleMode,
+    cleanupDeletedConversation,
+    reconcileOrphanedAsks,
+    stopAll,
+  }
+}
