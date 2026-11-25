@@ -526,8 +526,9 @@ button.attachment-chip:disabled {
 
 .helmx-model-picker-anchor {
   display: inline-block;
-  width: 0;
-  height: 0;
+  width: 1px;
+  height: 24px;
+  opacity: 0;
   pointer-events: none;
 }
 

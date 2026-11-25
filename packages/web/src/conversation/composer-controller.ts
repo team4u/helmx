@@ -108,6 +108,16 @@ export function focusWithCaret(el: HTMLTextAreaElement, caret: number): void {
     /* ignore focus failures when offline or unmounted */
   }
   requestAnimationFrame(() => {
+    if (!el.isConnected) return
+    const active = el.ownerDocument.activeElement
+    if (
+      active !== null &&
+      active !== el &&
+      active !== el.ownerDocument.body &&
+      active !== el.ownerDocument.documentElement
+    ) {
+      return
+    }
     el.focus()
     el.setSelectionRange(caret, caret)
   })

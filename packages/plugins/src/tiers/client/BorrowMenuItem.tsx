@@ -31,15 +31,10 @@ function scheduleBorrowPickerOpen(scopeKey: string): void {
   const fire = (): void => {
     emitBorrowPickerOpen(scopeKey)
   }
-  const deferFrame = (): void => {
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(fire)
-    } else {
-      fire()
-    }
-  }
   if (typeof queueMicrotask === 'function') {
-    queueMicrotask(deferFrame)
+    queueMicrotask(() => {
+      setTimeout(fire, 0)
+    })
   } else {
     setTimeout(fire, 0)
   }
