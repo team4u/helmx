@@ -13,8 +13,8 @@
 .sw-trace-row-btn:hover { background: var(--bg-hover); }
 .sw-trace-row-btn:focus-visible { outline: none; background: var(--bg-hover); box-shadow: none; }
 .sw-trace-row-btn .trace-row-left { flex: 1; min-width: 0; overflow: hidden; }
-.sw-trace-row-btn .trace-tool-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sw-trace-row-btn .trace-tool-summary { flex: 0 100 auto; min-width: 0; }
+.sw-trace-row-btn .trace-tool-name { flex: 0 0 auto; white-space: nowrap; }
+.sw-trace-row-btn .trace-tool-summary { flex: 0 1 auto; min-width: 0; }
 .sw-trace-name { color: var(--fg-secondary); }
 .sw-trace-badge { height: 18px; line-height: 16px; padding: 0 5px; font-size: 10.5px; flex-shrink: 0; }
 .sw-trace-right { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; }

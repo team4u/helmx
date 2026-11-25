@@ -211,7 +211,11 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
           description:
             'Optional target compute node ID (overrides Profile/parent node; explicit "local" switches back to the Hub host; requires cwd or a compatible Profile cwd on remote nodes; mutually exclusive with resume)',
         },
-        cwd: { type: 'string', description: 'Absolute working directory (optional)' },
+        cwd: {
+          type: 'string',
+          description:
+            'Absolute source repository or working directory (optional); do not pass a manually created git worktree path here to bypass isolation:"worktree"',
+        },
         fork: {
           type: 'boolean',
           description:
@@ -224,7 +228,8 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         isolation: {
           type: 'string',
           enum: ['worktree'],
-          description: 'Allocate an isolated Git worktree on the target node',
+          description:
+            'Allocate a managed Git worktree on the target node (injects <worktree_context> and tracks durable lease/cleanup); always use this for isolated code edits instead of manually running git worktree add + cwd',
         },
         schema: { type: 'object', description: 'Structured-output JSON Schema (optional)' },
         gate: { type: 'string', description: 'Acceptance shell command (optional; exit != 0 fails)' },

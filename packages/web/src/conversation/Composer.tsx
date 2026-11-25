@@ -158,7 +158,6 @@ export const Composer = memo(function Composer({
     sendExplicit,
     runPluginCommand,
     runPluginCommandDirect,
-    runManageCommand,
     handleEnvBlocker,
     notifyError,
   } = useComposerSend(
@@ -380,10 +379,6 @@ export const Composer = memo(function Composer({
       menuCommands={plusMenuCommands}
       menuCommandsDisabled={runningCommand !== null}
       onRunMenuCommand={runPluginCommandDirect}
-      onCompactContext={() => runManageCommand('/compact')}
-      compactDisabled={compacting}
-      onClearContext={() => runManageCommand('/clear')}
-      onNewTopic={onNewThread !== undefined ? () => onNewThread({ flush: false }) : undefined}
       slashOpen={completions.slashOpen}
       popoverQuery={completions.popoverQuery}
       slashMenuItems={completions.slashMenuItems}
