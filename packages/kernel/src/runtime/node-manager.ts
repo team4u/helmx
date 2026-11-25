@@ -32,6 +32,8 @@ interface NodeManagerOptions {
   readonly events: { publish(type: 'notification', payload: unknown): void; publish(type: 'node.changed', payload: unknown): void }
   /** Node upgrade confirmation timeout in milliseconds (default 120000). */
   readonly nodeUpgradeTimeoutMs: number
+  /** Writability guard (optional in standalone tests). */
+  readonly assertWritable?: () => void
 }
 
 /**
@@ -71,6 +73,7 @@ export class NodeManager {
 
   /** Conversation metadata resolver (host injects store.getConv + 404 semantics). */
   private readonly convOf: (conversationId: number) => { nodeId?: string; cwd: string }
+  private readonly assertWritable: () => void
 
   constructor(options: NodeManagerOptions & { convOf: (conversationId: number) => { nodeId?: string; cwd: string } }) {
     this.dataDir = options.dataDir
@@ -81,6 +84,7 @@ export class NodeManager {
     this.events = options.events
     this.NODE_UPGRADE_TIMEOUT_MS = options.nodeUpgradeTimeoutMs
     this.convOf = options.convOf
+    this.assertWritable = options.assertWritable ?? (() => {})
   }
 
   /** Number of in-flight `execEnv` calls targeting `nodeId` (read-only busy signal). */
@@ -191,6 +195,7 @@ export class NodeManager {
 
   /** Issue a node access token: plaintext token is returned only this once; the server retains only sha256. */
   async issueNodeToken(nodeId: string): Promise<NodeIssuedToken> {
+    this.assertWritable()
     if (nodeId === 'local') {
       throw new HelmxError('cannot_issue_local', 'local is a built-in node and does not need an access token', 400, { nodeId })
     }
@@ -222,6 +227,7 @@ export class NodeManager {
 
   /** Remove a node: deletes from token table and immediately severs any in-flight WS connection. */
   async removeNode(nodeId: string): Promise<void> {
+    this.assertWritable()
     if (nodeId === 'local') {
       throw new HelmxError('cannot_remove_local_node', 'local is a built-in node and cannot be removed', 400, { nodeId })
     }
@@ -497,6 +503,7 @@ export class NodeManager {
     nodeId: string,
     input: { targetVersion?: string; registryUrl?: string; force?: boolean } = {},
   ): Promise<NodeUpgradeResult> {
+    this.assertWritable()
     const conn = this.requireUpgradableConnection(nodeId)
     if (conn.installMode === 'source') {
       throw new HelmxError(

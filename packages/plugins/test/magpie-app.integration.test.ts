@@ -98,7 +98,7 @@ test('Magpie 默认启用：启动即注册 provider、actions 与 settings.pane
     assert.ok(plugin)
     assert.equal(plugin.enabled, true)
 
-    const providers = app.kernel.listModelProviders()
+    const providers = app.kernel.models.listModelProviders()
     const magpie = providers.find((provider) => provider.id === 'magpie')
     assert.ok(magpie)
     assert.equal(magpie.pluginId, 'builtin:magpie')
@@ -134,15 +134,15 @@ test('Magpie 经真实组合层默认启用→配置切换→刷新/HTTP/CLI→�
     assert.equal(app.kernel.plugins.list().find((plugin) => plugin.id === 'builtin:magpie')?.enabled, true)
     await app.kernel.plugins.setConfig('builtin:magpie', { gatewayUrl: gateway.root, apiKey: gateway.token })
     await app.kernel.plugins.invokeAction('builtin:magpie', 'refresh', {})
-    const summary = app.kernel.listModelProviders().find((provider) => provider.id === 'magpie')
+    const summary = app.kernel.models.listModelProviders().find((provider) => provider.id === 'magpie')
     assert.ok(summary)
     assert.equal(summary.pluginId, 'builtin:magpie')
     assert.equal(summary.dynamic, true)
     assert.equal(summary.modelCount, 3)
-    assert.deepEqual((await app.kernel.listModels()).models.filter((model) => model.provider === 'magpie').map((model) => model.modelId).sort(), [
+    assert.deepEqual((await app.kernel.models.listModels()).models.filter((model) => model.provider === 'magpie').map((model) => model.modelId).sort(), [
       'anthropic/claude-sonnet-4-6', 'fixture/responses', 'group/fixture-smart',
     ])
-    assert.ok((await app.kernel.listModels()).models.filter((model) => model.provider === 'magpie').every((model) => model.available))
+    assert.ok((await app.kernel.models.listModels()).models.filter((model) => model.provider === 'magpie').every((model) => model.available))
     assert.ok(app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie' && item.surface === 'settings.panel'))
     assert.ok(!app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie' && item.surface === 'composer.pill'), 'magpie 不再向 composer 注册占位胶囊')
 
@@ -152,10 +152,10 @@ test('Magpie 经真实组合层默认启用→配置切换→刷新/HTTP/CLI→�
       ['fixture/responses', 'fixture responses reply', '/v1/responses'],
       ['anthropic/claude-sonnet-4-6', 'fixture anthropic reply', '/v1/messages'],
     ] as const) {
-      await app.kernel.updateConversation(1, { model: `magpie/${model}` })
-      await app.kernel.submitInput(1, '受控协议验收')
-      await app.kernel.waitForIdle(1)
-      const detail = await app.kernel.getConversationDetail(1, { limit: 100 })
+      await app.kernel.conversations.updateConversation(1, { model: `magpie/${model}` })
+      await app.kernel.conversations.submitInput(1, '受控协议验收')
+      await app.kernel.conversations.waitForIdle(1)
+      const detail = await app.kernel.conversations.getConversationDetail(1, { limit: 100 })
       const answer = [...detail.entries].reverse().find((entry) => entry.kind === 'pi.assistant')
       assert.ok(JSON.stringify(answer).includes(text), `原生请求 ${path} 应完成回答：${JSON.stringify(answer)}`)
       assert.ok(gateway.requests.includes(path), `应请求精确协议路径 ${path}`)
@@ -189,12 +189,12 @@ test('Magpie 经真实组合层默认启用→配置切换→刷新/HTTP/CLI→�
 
     // 凭据/静态供应商热重建不能遗失插件注册的动态供应商。
     await app.kernel.credentials.set('fixture-unused', 'fixture-other-key')
-    await app.kernel.reloadModels()
-    assert.equal(app.kernel.listModelProviders().find((provider) => provider.id === 'magpie')?.modelCount, 3)
+    await app.kernel.models.reloadModels()
+    assert.equal(app.kernel.models.listModelProviders().find((provider) => provider.id === 'magpie')?.modelCount, 3)
     const events: string[] = []
     const off = app.kernel.events.subscribe((frame) => { events.push(frame.event.type) })
     gateway.fail()
-    const failed = await app.kernel.refreshModels({ providers: ['magpie'] })
+    const failed = await app.kernel.models.refreshModels({ providers: ['magpie'] })
     off()
     assert.match(failed.errors.magpie ?? '', /fixture gateway unavailable|503/)
     assert.ok(events.includes('models.changed'), 'CLI/后台刷新必须通知 Web 更新目录')
@@ -205,13 +205,13 @@ test('Magpie 经真实组合层默认启用→配置切换→刷新/HTTP/CLI→�
     await app.close(); app = undefined
     app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
     assert.equal(app.kernel.plugins.list().find((plugin) => plugin.id === 'builtin:magpie')?.enabled, true)
-    assert.equal(app.kernel.listModelProviders().find((provider) => provider.id === 'magpie')?.modelCount, 3, '重启离线恢复目录')
+    assert.equal(app.kernel.models.listModelProviders().find((provider) => provider.id === 'magpie')?.modelCount, 3, '重启离线恢复目录')
     // 等待本周期目录刷新终态，再检查停用、停用期配置切换不连网关、以及重启用恢复路径。
-    await app.kernel.refreshModels({ providers: ['magpie'] })
+    await app.kernel.models.refreshModels({ providers: ['magpie'] })
     // 会话 #1 曾使用 magpie/* 模型（conversation_model 占用）：知情后 force 停用。
     await app.kernel.plugins.disable('builtin:magpie', { force: true })
-    assert.ok(!app.kernel.listModelProviders().some((provider) => provider.id === 'magpie'))
-    assert.ok(!(await app.kernel.listModels()).models.some((model) => model.provider === 'magpie'))
+    assert.ok(!app.kernel.models.listModelProviders().some((provider) => provider.id === 'magpie'))
+    assert.ok(!(await app.kernel.models.listModels()).models.some((model) => model.provider === 'magpie'))
     assert.ok(!app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie'))
     assert.ok(!app.kernel.plugins.listActions().some((action) => action.pluginId === 'builtin:magpie'))
 
@@ -222,7 +222,7 @@ test('Magpie 经真实组合层默认启用→配置切换→刷新/HTTP/CLI→�
     // 重启用：恢复 provider、动作与 UI，并从新网关刷新目录
     await app.kernel.plugins.enable('builtin:magpie')
     await app.kernel.plugins.invokeAction('builtin:magpie', 'refresh', {})
-    const reenabled = app.kernel.listModelProviders().find((provider) => provider.id === 'magpie')
+    const reenabled = app.kernel.models.listModelProviders().find((provider) => provider.id === 'magpie')
     assert.ok(reenabled)
     assert.equal(reenabled.modelCount, 3)
     assert.ok(gateway2.requests.includes('/v1/models'))

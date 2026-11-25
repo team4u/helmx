@@ -78,7 +78,7 @@ function sqliteTablesContaining(dbPath: string, needle: string): string[] {
 test('direct input with managed token and stash secret is redacted end-to-end across text/meta/title/entry/FTS/SQLite', { timeout: 60_000 }, async () => {
   const env = await makeEnv('helmx-input-redact-direct-')
   try {
-    const conversation = await env.kernel.createConversation()
+    const conversation = await env.kernel.conversations.createConversation()
     env.kernel.stash.addRedaction('sk-secret-plain-value-9f3k')
     const placeholder = '[REDACTED]'
 
@@ -90,12 +90,12 @@ test('direct input with managed token and stash secret is redacted end-to-end ac
       },
     ])
 
-    await env.kernel.submitInput(
+    await env.kernel.conversations.submitInput(
       conversation.id,
       `credential is ${env.managedToken} and sk-secret-plain-value-9f3k, plus meta`,
       { meta: { token: env.managedToken, key: 'sk-secret-plain-value-9f3k' } },
     )
-    await env.kernel.waitForIdle(conversation.id)
+    await env.kernel.conversations.waitForIdle(conversation.id)
 
     // 1) Model request (SDK context) must contain zero plaintext secrets.
     assert.equal(requests.length, 1, 'should capture one model request')
@@ -111,10 +111,10 @@ test('direct input with managed token and stash secret is redacted end-to-end ac
     assert.deepEqual(sqliteTablesContaining(dbPath, 'sk-secret-plain-value-9f3k'), [], 'state.sqlite must not store plaintext stash secret')
 
     // 3) Title redaction (auto-title from first input derives from effectiveText).
-    const conv = env.kernel.getConversation(conversation.id)
+    const conv = env.kernel.conversations.getConversation(conversation.id)
     assert.ok(conv.title.includes('[REDACTED]'), 'first input auto-title should contain redacted marker')
     assert.ok(!conv.title.includes(env.managedToken), 'auto-title must not contain plaintext managed token')
-    const detail = await env.kernel.getConversationDetail(conversation.id)
+    const detail = await env.kernel.conversations.getConversationDetail(conversation.id)
     const input = detail.entries.find((entry) => entry.kind === 'helmx.input')?.data as
       { text: string; meta: Record<string, unknown> } | undefined
     assert.ok(input, 'conversation detail should persist redacted input entry')
@@ -122,7 +122,7 @@ test('direct input with managed token and stash secret is redacted end-to-end ac
     assert.deepEqual(input.meta, { token: '[REDACTED]', key: placeholder })
 
     // 4) FTS searches redacted text rather than plaintext.
-    const hits = await env.kernel.search('[REDACTED]')
+    const hits = await env.kernel.conversations.search('[REDACTED]')
     assert.ok(hits.length >= 1, 'redacted text should be searchable via FTS')
     for (const hit of hits) {
       assert.ok(!JSON.stringify(hit).includes(env.managedToken), 'FTS hits must never expose plaintext')
@@ -163,8 +163,8 @@ test('input hook transform output containing secrets is redacted end-to-end whil
       },
     ])
 
-    await env.kernel.submitInput(ROOT_CONVERSATION_ID, 'original input')
-    await env.kernel.waitForIdle(ROOT_CONVERSATION_ID)
+    await env.kernel.conversations.submitInput(ROOT_CONVERSATION_ID, 'original input')
+    await env.kernel.conversations.waitForIdle(ROOT_CONVERSATION_ID)
 
     assert.equal(requests.length, 1, 'should capture one model request')
     assert.ok(!requests[0]!.includes(env.managedToken), 'transformed output must not send plaintext managed token to model')
@@ -186,8 +186,8 @@ test('input hook transform output containing secrets is redacted end-to-end whil
       },
     })
     env.faux.setResponses([fauxAssistantMessage('second turn')])
-    await env.kernel.submitInput(ROOT_CONVERSATION_ID, `once again ${env.managedToken}`)
-    await env.kernel.waitForIdle(ROOT_CONVERSATION_ID)
+    await env.kernel.conversations.submitInput(ROOT_CONVERSATION_ID, `once again ${env.managedToken}`)
+    await env.kernel.conversations.waitForIdle(ROOT_CONVERSATION_ID)
     assert.ok(settledTexts.length >= 1, 'should capture turn_settled')
     for (const text of settledTexts) {
       assert.ok(!text.includes(env.managedToken), 'turn_settled inputs.text must not contain plaintext')

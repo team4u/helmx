@@ -254,11 +254,11 @@ test('核心协同 1：profile/memory 默认装配与锁定保护、SYSTEM/MEMOR
   assert.ok(memorySummary.tools.includes('update_memory'))
   assert.ok(['get', 'set', 'configure'].every((a) => memorySummary.actions.includes(a)))
 
-  const conv = await kernel.createConversation({ title: 'profile-memory-e2e', profileId: 'assistant' })
+  const conv = await kernel.conversations.createConversation({ title: 'profile-memory-e2e', profileId: 'assistant' })
   capturedRequests.length = 0
   faux.setResponses([captureStep()])
-  await kernel.submitInput(conv.id, '你好')
-  await kernel.waitForIdle(conv.id)
+  await kernel.conversations.submitInput(conv.id, '你好')
+  await kernel.conversations.waitForIdle(conv.id)
   const first = capturedRequests[0]!
   assert.ok(first.roles.includes('system'))
   assert.ok(first.systemSections.some((s) => s.includes('# System Prompt')))
@@ -270,15 +270,15 @@ test('核心协同 1：profile/memory 默认装配与锁定保护、SYSTEM/MEMOR
     fauxAssistantMessage([fauxToolCall('update_memory', { text: MEMORY_FACT, mode: 'append' })], { stopReason: 'toolUse' }),
     captureStep(),
   ])
-  await kernel.submitInput(conv.id, 'record color')
-  await kernel.waitForIdle(conv.id)
+  await kernel.conversations.submitInput(conv.id, 'record color')
+  await kernel.conversations.waitForIdle(conv.id)
   assert.ok((await new MemoryStore(createProfileFileHost(kernel.dataDir)).getMemory('assistant')).includes(MEMORY_FACT))
   assert.ok(capturedRequests[0]!.systemSections.join('\n').includes(MEMORY_FACT))
 
   capturedRequests.length = 0
   faux.setResponses([captureStep()])
-  await kernel.submitInput(conv.id, 'next turn')
-  await kernel.waitForIdle(conv.id)
+  await kernel.conversations.submitInput(conv.id, 'next turn')
+  await kernel.conversations.waitForIdle(conv.id)
   assert.ok(capturedRequests[0]!.systemSections.join('\n').includes(MEMORY_FACT))
   assert.ok(sqliteTablesContaining(dbPath, MEMORY_FACT).length > 0)
 
@@ -291,15 +291,15 @@ test('核心协同 1：profile/memory 默认装配与锁定保护、SYSTEM/MEMOR
     }
   })
   try {
-    const subParent = await kernel.createConversation({ title: 'subagent-parent' })
+    const subParent = await kernel.conversations.createConversation({ title: 'subagent-parent' })
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'sub-task', background: false })], { stopReason: 'toolUse' }),
       fauxAssistantMessage('subagent done'),
       fauxAssistantMessage('parent done'),
     ])
-    await kernel.submitInput(subParent.id, 'dispatch subagent')
-    await kernel.waitForIdle(subParent.id)
-    const child = kernel.listConversations().find((c) => c.parentConversationId === subParent.id && c.parentToolCallId !== undefined)
+    await kernel.conversations.submitInput(subParent.id, 'dispatch subagent')
+    await kernel.conversations.waitForIdle(subParent.id)
+    const child = kernel.conversations.listConversations().find((c) => c.parentConversationId === subParent.id && c.parentToolCallId !== undefined)
     assert.ok(child?.parentToolCallId)
     assert.ok(upserts.some((u) => u.id === child.id && u.parentToolCallId === child.parentToolCallId))
   } finally {
@@ -354,7 +354,7 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
   await host.register({ id: 'test:managed-skill', name: 'Managed Skill Test', definePlugin() {} }, { enabled: false })
   writeSkill(dataDir, 'managed-guide', '---\nname: hosting manual\ndescription: hosting\nmanagedByPlugin: test:managed-skill\n---\n# hosting', {})
 
-  const defaultConv = await kernel.createConversation({ title: 'skill-default' })
+  const defaultConv = await kernel.conversations.createConversation({ title: 'skill-default' })
   assert.ok(((await host.executeTool('load_skill', { skillId: 'deploy-playbook' }, { conversationId: defaultConv.id })) as { text: string }).text.includes('deploy'))
   assert.ok(((await host.executeTool('load_skill', { skillId: 'deploy-playbook', path: 'references/rollback.md' }, { conversationId: defaultConv.id })) as { text: string }).text.includes('helmx rollback'))
 
@@ -373,8 +373,8 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
 
   capturedRequests.length = 0
   faux.setResponses([captureStep()])
-  await kernel.submitInput(defaultConv.id, 'check default catalog')
-  await kernel.waitForIdle(defaultConv.id)
+  await kernel.conversations.submitInput(defaultConv.id, 'check default catalog')
+  await kernel.conversations.waitForIdle(defaultConv.id)
   const defaultCatalog = capturedRequests[0]!.systemSections.find((s) => s.includes('<available_skills>'))!
   for (const item of ['deploy-playbook', 'references/db-migrate.md', 'helmx-cli', 'alpha-guide', 'beta-guide', 'generative-ui']) {
     assert.ok(defaultCatalog.includes(item))
@@ -384,8 +384,8 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
   // 白名单与空数组禁用
   await kernel.profiles.save({ id: 'white-profile', name: 'whitelist', tags: [], skills: ['alpha-guide', 'managed-guide'] })
   await kernel.profiles.save({ id: 'none-profile', name: 'none', tags: [], skills: [] })
-  const convWhite = await kernel.createConversation({ title: 'white', profileId: 'white-profile' })
-  const convNone = await kernel.createConversation({ title: 'none', profileId: 'none-profile' })
+  const convWhite = await kernel.conversations.createConversation({ title: 'white', profileId: 'white-profile' })
+  const convNone = await kernel.conversations.createConversation({ title: 'none', profileId: 'none-profile' })
 
   assert.ok(((await host.executeTool('load_skill', { skillId: 'alpha-guide', path: 'references/intro.md' }, { conversationId: convWhite.id })) as { text: string }).text.includes('blank name single'))
   await rejectsExplicitly(() => host.executeTool('load_skill', { skillId: 'beta-guide' }, { conversationId: convWhite.id }), { code: 'skill_not_available', message: /is unavailable for profile/ })
@@ -393,15 +393,15 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
 
   capturedRequests.length = 0
   faux.setResponses([captureStep()])
-  await kernel.submitInput(convNone.id, 'none turn')
-  await kernel.waitForIdle(convNone.id)
+  await kernel.conversations.submitInput(convNone.id, 'none turn')
+  await kernel.conversations.waitForIdle(convNone.id)
   assert.equal(capturedRequests[0]!.systemSections.find((s) => s.includes('<available_skills>')), undefined)
   await rejectsExplicitly(() => host.executeTool('load_skill', { skillId: 'helmx-cli' }, { conversationId: convNone.id }), { code: 'skill_not_available', message: /is unavailable for profile/ })
 
   capturedRequests.length = 0
   faux.setResponses([captureStep()])
-  await kernel.submitInput(convWhite.id, 'white turn')
-  await kernel.waitForIdle(convWhite.id)
+  await kernel.conversations.submitInput(convWhite.id, 'white turn')
+  await kernel.conversations.waitForIdle(convWhite.id)
   const catW = capturedRequests[0]!.systemSections.find((s) => s.includes('<available_skills>'))!
   assert.ok(catW.includes('id="alpha-guide"'))
   for (const absent of ['beta-guide', 'helmx-cli', 'managed-guide']) assert.ok(!catW.includes(`id="${absent}"`))
@@ -411,8 +411,8 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
     assert.ok(((await host.executeTool('load_skill', { skillId: 'managed-guide' }, { conversationId: convWhite.id })) as { text: string }).text.includes('hosting'))
     capturedRequests.length = 0
     faux.setResponses([captureStep()])
-    await kernel.submitInput(convWhite.id, 'white after enable')
-    await kernel.waitForIdle(convWhite.id)
+    await kernel.conversations.submitInput(convWhite.id, 'white after enable')
+    await kernel.conversations.waitForIdle(convWhite.id)
     assert.ok(capturedRequests[0]!.systemSections.find((s) => s.includes('<available_skills>'))?.includes('id="managed-guide"'))
   } finally {
     await host.disable('test:managed-skill')
@@ -421,8 +421,8 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
   await kernel.profiles.save({ id: 'white-profile', name: 'whitelist', tags: [], skills: [] })
   capturedRequests.length = 0
   faux.setResponses([captureStep()])
-  await kernel.submitInput(convWhite.id, 'white cleared')
-  await kernel.waitForIdle(convWhite.id)
+  await kernel.conversations.submitInput(convWhite.id, 'white cleared')
+  await kernel.conversations.waitForIdle(convWhite.id)
   assert.equal(capturedRequests[0]!.systemSections.find((s) => s.includes('<available_skills>')), undefined)
 })
 
@@ -431,15 +431,15 @@ test('核心协同 3：SecretStash 跨层零泄漏（SQLite/模型请求/SSE/JSO
   const host = kernel.plugins
 
   // 1. 双引号 + 换行机密值零入库、零进模型、零进 SSE 帧
-  const secConv = await kernel.createConversation({ title: 'secret-e2e' })
+  const secConv = await kernel.conversations.createConversation({ title: 'secret-e2e' })
   const SECRET_TRICKY = ['quote"', 'line'].join('\n')
   const placeholder = '[REDACTED]'
   kernel.services.stash.addRedaction(SECRET_TRICKY)
 
   capturedRequests.length = 0
   faux.setResponses([captureStep()])
-  await kernel.submitInput(secConv.id, `deploy with ${placeholder}`)
-  await kernel.waitForIdle(secConv.id)
+  await kernel.conversations.submitInput(secConv.id, `deploy with ${placeholder}`)
+  await kernel.conversations.waitForIdle(secConv.id)
   const req = capturedRequests[0]!
   assert.ok(req.userTexts.join('\n').includes(placeholder))
   assert.ok(!(req.systemSections.join('\n') + req.userTexts.join('\n')).includes(SECRET_TRICKY))
@@ -538,8 +538,8 @@ test('核心闭环 1 & 2：受管 bash HELMX_TOKEN 免磁盘登录直连 CLI 且
   await sub.ready
   const seenModel: string[] = []
   faux.setResponses([(ctx) => { seenModel.push(JSON.stringify(ctx.messages)); return fauxAssistantMessage('ok') }])
-  await kernel.submitInput(ROOT_CONVERSATION_ID, `credentials is ${managedToken} keep`)
-  await kernel.waitForIdle(ROOT_CONVERSATION_ID)
+  await kernel.conversations.submitInput(ROOT_CONVERSATION_ID, `credentials is ${managedToken} keep`)
+  await kernel.conversations.waitForIdle(ROOT_CONVERSATION_ID)
   assert.ok(!seenModel[0]!.includes(managedToken))
   assert.ok(!(await sub.frames).join('\n').includes(managedToken))
   assert.deepEqual(sqliteTablesContaining(dbPath, managedToken), [])
@@ -557,8 +557,8 @@ test('核心闭环 1 & 2：受管 bash HELMX_TOKEN 免磁盘登录直连 CLI 且
     fauxAssistantMessage([fauxToolCall('bash', { command: cmd })], { stopReason: 'toolUse' }),
     (ctx) => { toolResults.push(JSON.stringify(ctx.messages)); return fauxAssistantMessage('done') },
   ])
-  await kernel.submitInput(ROOT_CONVERSATION_ID, 'run cli in managed bash')
-  await kernel.waitForIdle(ROOT_CONVERSATION_ID)
+  await kernel.conversations.submitInput(ROOT_CONVERSATION_ID, 'run cli in managed bash')
+  await kernel.conversations.waitForIdle(ROOT_CONVERSATION_ID)
   const toolCtx = toolResults[0]!
   assert.ok(!toolCtx.includes(managedToken))
   assert.ok(toolCtx.includes('CLI_OK') && toolCtx.includes('helmx.input') && toolCtx.includes('person assist') && toolCtx.includes('entries'))
@@ -580,7 +580,7 @@ test('核心闭环 3 & 4：CLI --meta -> turn_settled、游标分页、SSE 增�
     },
   } satisfies PluginDefinition)
 
-  const metaConv = await kernel.createConversation({ title: 'meta-pagination' })
+  const metaConv = await kernel.conversations.createConversation({ title: 'meta-pagination' })
   const subA = openSseSubscription(
     hubUrl,
     token,
@@ -648,7 +648,7 @@ test('核心闭环 3 & 4：CLI --meta -> turn_settled、游标分页、SSE 增�
   const DOC_SECRET = 'align-doc-secret-blue'
   const docPlaceholder = '[REDACTED]'
   kernel.services.stash.addRedaction(DOC_SECRET)
-  const managedConv = await kernel.createConversation({ title: 'managed-conv' })
+  const managedConv = await kernel.conversations.createConversation({ title: 'managed-conv' })
   let updatePubDoc!: (fn: (v: { note: string; secret: string }) => { note: string; secret: string }) => void
 
   await host.register({
@@ -693,7 +693,7 @@ test('核心闭环 3 & 4：CLI --meta -> turn_settled、游标分页、SSE 增�
     assert.equal(delManaged.status, 409)
     assert.equal(delManaged.body.error.code, 'conversation_managed_by_plugin')
 
-    const rootSummary = kernel.getConversation(ROOT_CONVERSATION_ID)
+    const rootSummary = kernel.conversations.getConversation(ROOT_CONVERSATION_ID)
     const assistantTools = host.listTools(rootSummary).map((tl) => tl.name)
     const otherTools = host.listTools({ ...rootSummary, id: 999, profileId: 'other', tags: [] }).map((tl) => tl.name)
     assert.ok(assistantTools.includes('guard_scoped') && !otherTools.includes('guard_scoped'))
@@ -710,8 +710,8 @@ test('核心闭环 3 & 4：CLI --meta -> turn_settled、游标分页、SSE 增�
       fauxAssistantMessage([fauxToolCall('run_action', { actionId: 'test:guard.blocked_out', input: {} })], { stopReason: 'toolUse' }),
       (ctx) => { runActionOutputs.push(JSON.stringify(ctx.messages)); return fauxAssistantMessage('end') },
     ])
-    await kernel.submitInput(metaConv.id, 'try scoped action')
-    await kernel.waitForIdle(metaConv.id)
+    await kernel.conversations.submitInput(metaConv.id, 'try scoped action')
+    await kernel.conversations.waitForIdle(metaConv.id)
     assert.ok(runActionOutputs.some((o) => /scope|effect domain|reject/.test(o)))
   } finally {
     await host.disable('test:guard')
@@ -748,7 +748,7 @@ test('核心闭环 5：agent_spawn 外部后端 handled 接管（onResolved / on
           meta: { 'builtin:worktree': { worktree: { path: execDir, branch: 'align-wt' } } },
         })
         if (request.gate !== undefined) {
-          const result = await kernel.runGate(request.gate, { cwd: execDir, conversationId: request.parentConversationId })
+          const result = await kernel.agentSpawn.runGate(request.gate, { cwd: execDir, conversationId: request.parentConversationId })
           gates.push(request.gate)
           request.onGateResult(result)
         }
@@ -901,7 +901,7 @@ test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1�
     const convId = (JSON.parse((await call('POST', '/api/conversations', { title: 'http-conv', profileId: 'assistant' })).raw) as { id: number }).id
     faux.setResponses([fauxAssistantMessage('HTTP async ok')])
     assert.equal((await call('POST', `/api/conversations/${convId}/input`, { text: 'hi' })).status, 202)
-    await kernel.waitForIdle(convId)
+    await kernel.conversations.waitForIdle(convId)
 
     faux.setResponses([fauxAssistantMessage('HTTP wait answer')])
     const waited = await call('POST', `/api/conversations/${convId}/input?wait=1`, { text: 'wait check' })
@@ -930,7 +930,7 @@ test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1�
 
     // 4. CLI memory --current、动态命令、真实 OS 子进程 CLI 与删除初始会话后 workflow 目标约束
     await kernel.services.profiles.save({ id: 'coder', name: 'Coder', tags: [] })
-    const coderConv = await kernel.createConversation({ profileId: 'coder' })
+    const coderConv = await kernel.conversations.createConversation({ profileId: 'coder' })
     const curEnv = { HELMX_CONVERSATION_ID: String(coderConv.id) }
     assert.equal((await run(['memory', 'set', '--current', '--text', '# Coder memory', '--json'], curEnv)).code, 0)
     assert.equal(JSON.parse((await run(['memory', 'get', '--current', '--json'], curEnv)).out).content, '# Coder memory')
@@ -1012,22 +1012,22 @@ test('跨重启持久闭环：helmx-cli 受管技能篡改恢复与只读门禁�
     writeSkill(dataDir, 'user-skill', '---\nname: user-skill\ndescription: user self create\n---\nbody\n', { 'notes.md': '# user\n' })
 
     // 初始会话历史落库 + 双 Profile 独立 SYSTEM/MEMORY 校验
-    initialId = first.kernel.listConversations().find((c) => c.profileId === 'assistant')!.id
+    initialId = first.kernel.conversations.listConversations().find((c) => c.profileId === 'assistant')!.id
     first.faux.setResponses([fauxAssistantMessage(`recorded:${MARK}`)])
-    await first.kernel.submitInput(initialId, `record:${MARK}`)
-    await first.kernel.waitForIdle(initialId)
+    await first.kernel.conversations.submitInput(initialId, `record:${MARK}`)
+    await first.kernel.conversations.waitForIdle(initialId)
 
-    const r1 = await first.kernel.createConversation({ title: 'research member', profileId: 'researcher' })
-    const c1 = await first.kernel.createConversation({ title: 'program member', profileId: 'coder' })
+    const r1 = await first.kernel.conversations.createConversation({ title: 'research member', profileId: 'researcher' })
+    const c1 = await first.kernel.conversations.createConversation({ title: 'program member', profileId: 'coder' })
     const seen1: string[] = []
     first.faux.setResponses([
       (ctx) => { seen1.push(JSON.stringify(ctx.messages)); return fauxAssistantMessage('r') },
       (ctx) => { seen1.push(JSON.stringify(ctx.messages)); return fauxAssistantMessage('c') },
     ])
-    await first.kernel.submitInput(r1.id, 'who are you')
-    await first.kernel.waitForIdle(r1.id)
-    await first.kernel.submitInput(c1.id, 'who are you')
-    await first.kernel.waitForIdle(c1.id)
+    await first.kernel.conversations.submitInput(r1.id, 'who are you')
+    await first.kernel.conversations.waitForIdle(r1.id)
+    await first.kernel.conversations.submitInput(c1.id, 'who are you')
+    await first.kernel.conversations.waitForIdle(c1.id)
     assert.ok(seen1[0]!.includes('ALIGN-SYS-RESEARCHER') && seen1[0]!.includes('RESEARCHER-MEM') && !seen1[0]!.includes('# Coder System'))
     assert.ok(seen1[1]!.includes('ALIGN-SYS-CODER') && seen1[1]!.includes('CODER-MEM') && !seen1[1]!.includes('# Researcher System'))
     seqAfterFirst = first.kernel.events.seq
@@ -1056,20 +1056,20 @@ test('跨重启持久闭环：helmx-cli 受管技能篡改恢复与只读门禁�
 
     // 2. 会话历史、SSE seq 与 completionSeq 保持
     assert.ok(second.kernel.events.seq >= seqAfterFirst)
-    assert.ok(second.kernel.getConversation(initialId).completionSeq >= 1)
+    assert.ok(second.kernel.conversations.getConversation(initialId).completionSeq >= 1)
     const seenHistory: string[] = []
     second.faux.setResponses([(ctx) => { seenHistory.push(JSON.stringify(ctx.messages)); return fauxAssistantMessage('resumed') }])
-    await second.kernel.submitInput(initialId, 'recall')
-    await second.kernel.waitForIdle(initialId)
+    await second.kernel.conversations.submitInput(initialId, 'recall')
+    await second.kernel.conversations.waitForIdle(initialId)
     assert.ok(seenHistory[0]!.includes(MARK))
 
     // 3. 双 Profile 重启保持、HTTP PATCH 切换 Profile 与模型覆盖清空
-    const r1 = second.kernel.listConversations().find((c) => c.title === 'research member')!
+    const r1 = second.kernel.conversations.listConversations().find((c) => c.title === 'research member')!
     assert.equal((await second.call('PATCH', `/api/conversations/${r1.id}`, { profileId: 'coder' })).status, 200)
     const seenSwitched: string[] = []
     second.faux.setResponses([(ctx) => { seenSwitched.push(JSON.stringify(ctx.messages)); return fauxAssistantMessage('c2') }])
-    await second.kernel.submitInput(r1.id, 'after patch')
-    await second.kernel.waitForIdle(r1.id)
+    await second.kernel.conversations.submitInput(r1.id, 'after patch')
+    await second.kernel.conversations.waitForIdle(r1.id)
     assert.ok(seenSwitched[0]!.includes('ALIGN-SYS-CODER') && !seenSwitched[0]!.includes('# Researcher System'))
 
     assert.equal((await second.call('PATCH', `/api/conversations/${r1.id}`, { model: 'faux/faux-1' })).status, 200)

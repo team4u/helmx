@@ -1278,9 +1278,9 @@ test('dream 真实组合层：faux 模型输出经 completeText 写回 MEMORY.md
     await plugins.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: '# Memory\n旧偏好。' })
     // 真实输入一个回合产生候选（faux 模型正常回合；确定性等待回合结算）
     faux.setResponses([fauxAssistantMessage('好的。')])
-    const conversation = await app.kernel.createConversation({ profileId: 'assistant', title: '偏好' })
-    await app.kernel.submitInput(conversation.id, '以后都用中文回复我，回答保持简洁。', { origin: 'human' })
-    await app.kernel.waitForIdle(conversation.id)
+    const conversation = await app.kernel.conversations.createConversation({ profileId: 'assistant', title: '偏好' })
+    await app.kernel.conversations.submitInput(conversation.id, '以后都用中文回复我，回答保持简洁。', { origin: 'human' })
+    await app.kernel.conversations.waitForIdle(conversation.id)
     await waitFor(
       async () => {
         const status = (await plugins.invokeAction('builtin:memory', 'dream_status', {})) as {

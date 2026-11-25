@@ -58,8 +58,8 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
       ),
       fauxAssistantMessage('快完成'),
     ])
-    await app.kernel.submitInput(1, '跑快工作流')
-    await app.kernel.waitForIdle(1)
+    await app.kernel.conversations.submitInput(1, '跑快工作流')
+    await app.kernel.conversations.waitForIdle(1)
     const listRuns = () =>
       (app.kernel.plugins.invokeAction('builtin:workflow', 'runs', {}) as Promise<{ runs: Array<{ id: string; name: string; parentToolCallId?: string; status: string }> }>).then((r) => r.runs)
     const runsAfterFast = await listRuns()
@@ -76,7 +76,7 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
       ),
       fauxAssistantMessage('慢完成'),
     ])
-    const slowTurn = app.kernel.submitInput(1, '跑慢工作流')
+    const slowTurn = app.kernel.conversations.submitInput(1, '跑慢工作流')
     // 轮询等待 run 出现（真实引擎异步启动），此时工具必然尚未返回。
     let slowRun: { id: string; parentToolCallId?: string; status: string } | undefined
     for (let i = 0; i < 200; i++) {
@@ -104,7 +104,7 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
     // 中止慢 run 收尾（子会话无响应会阻塞），并等待工具回合结束。
     await app.kernel.plugins.invokeAction('builtin:workflow', 'abort', { runId: slowRun.id })
     await slowTurn.catch(() => {})
-    await app.kernel.waitForIdle(1).catch(() => {})
+    await app.kernel.conversations.waitForIdle(1).catch(() => {})
   } finally {
     await app.close().catch(() => {})
   }

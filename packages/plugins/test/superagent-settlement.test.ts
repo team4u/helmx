@@ -33,13 +33,13 @@ test('waitForIdle 等待真实回合的异步 turn_settled，回调携带已推�
       },
     })
     env.faux.setResponses([fauxAssistantMessage('完成')])
-    await env.kernel.submitInput(1, '执行任务')
+    await env.kernel.conversations.submitInput(1, '执行任务')
     await started.promise
-    assert.equal(settlement!.conversation.completionSeq, env.kernel.getConversation(1).completionSeq)
-    assert.equal(settlement!.conversation.stateChangeSeq, env.kernel.getConversation(1).stateChangeSeq)
+    assert.equal(settlement!.conversation.completionSeq, env.kernel.conversations.getConversation(1).completionSeq)
+    assert.equal(settlement!.conversation.stateChangeSeq, env.kernel.conversations.getConversation(1).stateChangeSeq)
     assert.equal(settlement!.conversation.status, 'done')
     let idleReturned = false
-    const waiting = env.kernel.waitForIdle(1).then(() => { idleReturned = true })
+    const waiting = env.kernel.conversations.waitForIdle(1).then(() => { idleReturned = true })
     await nextLoop()
     assert.equal(idleReturned, false, '异步结算尚未完成，不应返回空闲')
     release.resolve()
@@ -67,7 +67,7 @@ test('输入 Hook 等待期间关停，释放后拒绝写入和启动新回合',
       },
     })
     env.faux.setResponses([fauxAssistantMessage('不应启动')])
-    submission = env.kernel.submitInput(1, '待入队的后台汇报').catch((error: unknown) => error)
+    submission = env.kernel.conversations.submitInput(1, '待入队的后台汇报').catch((error: unknown) => error)
     await entered.promise
     await env.kernel.close()
     release.resolve()
@@ -87,7 +87,7 @@ test('close 等待所有并发会话的结算，不仅等待最后发起的一�
   const releases = new Map<number, Deferred<void>>()
   let closing: Promise<void> | undefined
   try {
-    const second = await env.kernel.createConversation({})
+    const second = await env.kernel.conversations.createConversation({})
     releases.set(1, deferred())
     releases.set(second.id, deferred())
     await env.kernel.plugins.register({
@@ -102,8 +102,8 @@ test('close 等待所有并发会话的结算，不仅等待最后发起的一�
     })
     env.faux.setResponses([fauxAssistantMessage('甲完成'), fauxAssistantMessage('乙完成')])
     await Promise.all([
-      env.kernel.submitInput(1, '任务甲'),
-      env.kernel.submitInput(second.id, '任务乙'),
+      env.kernel.conversations.submitInput(1, '任务甲'),
+      env.kernel.conversations.submitInput(second.id, '任务乙'),
     ])
     await bothStarted.promise
     let closed = false

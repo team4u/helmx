@@ -1077,7 +1077,7 @@ test('bare KernelRuntime exposes pure node lifecycle ports without auto-upgradin
       assert.equal(startedCount, 1, 'onStarted fires once when kernel.start() completes')
 
       // Outdated release node connected to bare KernelRuntime must NOT auto-upgrade and keeps autoUpgrade undefined.
-      const issued = await app.kernel.issueNodeToken('bare-old-node')
+      const issued = await app.kernel.nodes.issueNodeToken('bare-old-node')
       const node = await connectFixtureNode(
         app.hub.url.replace(/^http/, 'ws'),
         'bare-old-node',
@@ -1124,7 +1124,7 @@ test('bare KernelRuntime exposes pure node lifecycle ports without auto-upgradin
         'offline connection transition callback',
       )
 
-      await app.kernel.removeNode('bare-old-node')
+      await app.kernel.nodes.removeNode('bare-old-node')
       assert.deepEqual(removals, ['bare-old-node'])
       await app.close()
       assert.equal(closedCount, 1, 'onClose fires at kernel close')

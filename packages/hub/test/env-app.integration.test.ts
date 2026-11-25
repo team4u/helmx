@@ -130,7 +130,7 @@ test('跨节点后台原生 subagent：真实 WS 节点分配 worktree、执行�
   assert.equal(setup.code, 0, setup.err)
   assert.equal(JSON.parse(setup.out).ok, true, setup.out)
 
-  const parent = await env.hubEnv.kernel.createConversation({ nodeId: 'integration-node', cwd: repoDir })
+  const parent = await env.hubEnv.kernel.conversations.createConversation({ nodeId: 'integration-node', cwd: repoDir })
   env.hubEnv.faux.setResponses([
     fauxToolCallMessage('subagent', {
       prompt: 'execute remote verify',
@@ -140,15 +140,15 @@ test('跨节点后台原生 subagent：真实 WS 节点分配 worktree、执行�
     }),
     ...Array.from({ length: 4 }, () => fauxAssistantMessage('remote task result')),
   ])
-  await env.hubEnv.kernel.submitInput(parent.id, 'dispatch background isolated subagent')
-  await env.hubEnv.kernel.waitForIdle(parent.id)
+  await env.hubEnv.kernel.conversations.submitInput(parent.id, 'dispatch background isolated subagent')
+  await env.hubEnv.kernel.conversations.waitForIdle(parent.id)
 
-  const detail = await env.hubEnv.kernel.getConversationDetail(parent.id, { limit: 50 })
+  const detail = await env.hubEnv.kernel.conversations.getConversationDetail(parent.id, { limit: 50 })
   const runIdMatch = /runId\\?":\\?"(wf_[0-9a-f]+)/.exec(JSON.stringify(detail))
   assert.ok(runIdMatch)
   const runId = runIdMatch[1]!
 
-  const child = env.hubEnv.kernel.listConversations().find((c) => c.parentConversationId === parent.id)
+  const child = env.hubEnv.kernel.conversations.listConversations().find((c) => c.parentConversationId === parent.id)
   assert.ok(child)
   assert.equal(child.nodeId, 'integration-node')
 
@@ -161,7 +161,7 @@ test('跨节点后台原生 subagent：真实 WS 节点分配 worktree、执行�
   }
   assert.equal(inspect.run.status, 'completed')
 
-  const toolMessages = (await env.hubEnv.kernel.getConversationDetail(parent.id, { limit: 50 })).entries
+  const toolMessages = (await env.hubEnv.kernel.conversations.getConversationDetail(parent.id, { limit: 50 })).entries
     .filter((e) => e.kind === 'pi.tool-result')
     .flatMap((e) => (Array.isArray(e.model) ? e.model : []) as Array<{
       toolName?: string
@@ -241,7 +241,7 @@ test('节点全链路贯通：CLI、真实模型工具、Gate 与 Profile 子代
   releaseEvents()
   assert.equal(JSON.stringify(nodeFrames).includes(env.nodeToken), false)
 
-  const conversation = await kernel.createConversation({ nodeId: 'integration-node', cwd: wsDir })
+  const conversation = await kernel.conversations.createConversation({ nodeId: 'integration-node', cwd: wsDir })
   env.hubEnv.faux.setResponses([
     fauxAssistantMessage([fauxToolCall('write', { path: 'proof.txt', content: 'first' })], { stopReason: 'toolUse' }),
     fauxAssistantMessage([fauxToolCall('edit', { path: 'proof.txt', oldText: 'first', newText: 'second' })], { stopReason: 'toolUse' }),
@@ -249,17 +249,17 @@ test('节点全链路贯通：CLI、真实模型工具、Gate 与 Profile 子代
     fauxAssistantMessage([fauxToolCall('bash', { command: 'helmx status --json' })], { stopReason: 'toolUse' }),
     fauxAssistantMessage('node tool turn complete'),
   ])
-  await kernel.submitInput(conversation.id, 'execute file edit and query Hub state')
-  await kernel.waitForIdle(conversation.id)
+  await kernel.conversations.submitInput(conversation.id, 'execute file edit and query Hub state')
+  await kernel.conversations.waitForIdle(conversation.id)
   assert.equal(await readFile(join(wsDir, 'proof.txt'), 'utf8'), 'second')
 
-  const detail = await kernel.getConversationDetail(conversation.id)
+  const detail = await kernel.conversations.getConversationDetail(conversation.id)
   assert.equal(JSON.stringify(detail).includes(env.nodeToken), false)
   const toolResults = JSON.stringify(detail.entries.filter((entry) => entry.kind === 'pi.tool-result'))
   assert.doesNotMatch(toolResults, /"isError":true/)
   assert.match(toolResults, /authenticated/)
 
-  const gate = await kernel.runGate('test "$HELMX_NODE_TEST_ORIGIN" = remote-executor', {
+  const gate = await kernel.agentSpawn.runGate('test "$HELMX_NODE_TEST_ORIGIN" = remote-executor', {
     conversationId: conversation.id,
     cwd: wsDir,
   })
@@ -276,13 +276,13 @@ test('节点全链路贯通：CLI、真实模型工具、Gate 与 Profile 子代
   assert.equal(remoteEnvironment.hubUrl, env.hubEnv.hubUrl)
 
   await kernel.profiles.save({ id: 'node-expert', nodeId: 'integration-node', cwd: wsDir })
-  const profileConversation = await kernel.createConversation({ profileId: 'node-expert' })
+  const profileConversation = await kernel.conversations.createConversation({ profileId: 'node-expert' })
   assert.equal(profileConversation.nodeId, 'integration-node')
   assert.equal(profileConversation.cwd, wsDir)
 
   env.hubEnv.faux.setResponses([fauxAssistantMessage('node dedicated household complete')])
   let childId: number | undefined
-  await kernel.spawnAgent({
+  await kernel.agentSpawn.spawnAgent({
     parentConversationId: 1,
     agentType: 'node-expert',
     prompt: 'execute node dedicated household task',
@@ -290,7 +290,7 @@ test('节点全链路贯通：CLI、真实模型工具、Gate 与 Profile 子代
     onResolved: (info) => { childId = info.conversationId },
   })
   assert.ok(childId)
-  assert.equal(kernel.getConversation(childId).nodeId, 'integration-node')
+  assert.equal(kernel.conversations.getConversation(childId).nodeId, 'integration-node')
   assert.equal(await readFile(join(wsDir, 'native-gate'), 'utf8'), 'gate')
 })
 
@@ -313,7 +313,7 @@ test('流式执行与跨节点取消：实时输出、跨 chunk 机密脱敏、�
   await reader.cancel()
 
   // 2. 跨 chunk 机密脱敏与 NDJSON 终态
-  const conv = await kernel.createConversation({ nodeId: 'integration-node', cwd: streamDir })
+  const conv = await kernel.conversations.createConversation({ nodeId: 'integration-node', cwd: streamDir })
   const secret = 'node-secret-across-chunks-7b0139'
   kernel.stash.addRedaction(secret)
   const redactedRes = await env.request('/api/env/exec', {
@@ -370,7 +370,7 @@ test('Workflow + Worktree 动态远端 nodeId：本地父会话通过 subagent �
   assert.equal(JSON.parse(initRepo.out).ok, true, initRepo.out)
 
   const kernel = env.hubEnv.kernel
-  const localParent = await kernel.createConversation({
+  const localParent = await kernel.conversations.createConversation({
     title: 'Local Dynamic Node Parent',
     nodeId: 'local',
     cwd: env.hubDir,
@@ -406,7 +406,7 @@ test('Workflow + Worktree 动态远端 nodeId：本地父会话通过 subagent �
   assert.ok(subWtId && subWtId.startsWith('integration-node:'), `subagent worktreeId must target integration-node: ${String(subWtId)}`)
   assert.ok(subWtPath && subWtId === `integration-node:${subWtPath}`)
   assert.ok(subChildId)
-  const subChild = kernel.getConversation(subChildId)
+  const subChild = kernel.conversations.getConversation(subChildId)
   assert.equal(subChild.nodeId, 'integration-node')
   assert.equal(subChild.cwd, subWtPath)
   assert.equal(await readFile(join(subWtPath, 'subagent-gate.txt'), 'utf8'), 'subagent:remote-executor')
@@ -444,7 +444,7 @@ test('Workflow + Worktree 动态远端 nodeId：本地父会话通过 subagent �
   assert.ok(dslWtPath && dslWtId === `integration-node:${dslWtPath}`)
   assert.notEqual(dslWtPath, subWtPath, 'subagent and DSL runs allocate distinct remote worktrees')
   assert.ok(dslChildId)
-  const dslChild = kernel.getConversation(dslChildId)
+  const dslChild = kernel.conversations.getConversation(dslChildId)
   assert.equal(dslChild.nodeId, 'integration-node')
   assert.equal(dslChild.cwd, dslWtPath)
   assert.equal(await readFile(join(dslWtPath, 'dsl-gate.txt'), 'utf8'), 'dsl:remote-executor')

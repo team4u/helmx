@@ -296,7 +296,7 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
     assert.equal(finalHeader.phase, 'settled', '恢复完成后 phase 必须收敛为 settled')
     assert.equal(finalHeader.crashRecoveries, undefined, '优雅恢复不计异常崩溃')
 
-    const childDetail = await k2.getConversationDetail(childId, { limit: 100 })
+    const childDetail = await k2.conversations.getConversationDetail(childId, { limit: 100 })
     const childInputs = childDetail.entries.filter((e) => e.kind === 'helmx.input')
     assert.equal(childInputs.length, 1, 'requestId 幂等保证子会话绝无重复用户消息或重复 worktreeContextPrompt')
 
@@ -352,7 +352,7 @@ const runId = res.structuredOutput.runId
 const childId = res.structuredOutput.execution.conversationId
 for (let i = 0; i < 400; i++) {
   await delay(10)
-  if (faux.state.callCount >= 1 && kernel.getConversation(childId).status === 'working') break
+  if (faux.state.callCount >= 1 && kernel.conversations.getConversation(childId).status === 'working') break
 }
 await kernel.documentStore.flush()
 await kernel.kvStore.flush()
@@ -396,12 +396,12 @@ process.kill(process.pid, 'SIGKILL')
     assert.equal(finalRun.result, 'SIGKILL恢复后完成的最终子代理输出')
     const header = readPersistedHeader(k2, runId!)
     assert.equal(header.crashRecoveries, 1, 'SIGKILL 非优雅恢复必须记录 crashRecoveries=1')
-    const childDetail = await k2.getConversationDetail(childId, { limit: 100 })
+    const childDetail = await k2.conversations.getConversationDetail(childId, { limit: 100 })
     assert.equal(childDetail.entries.filter((e) => e.kind === 'helmx.input').length, 1, 'SIGKILL 重挂不重复追加用户消息')
     // 等待主会话处理完后台汇报（回合完成后 unread=true 置为 done），避免 close 时报 PluginHost 已 dispose
     await waitFor(
       () => {
-        const rootConv = k2.getConversation(1)
+        const rootConv = k2.conversations.getConversation(1)
         return rootConv.completionSeq >= 1 && rootConv.status !== 'working'
       },
       { timeoutMs: 10_000 },
@@ -777,9 +777,9 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
       await k1.start()
 
       // 创建 helmx-owned 自动化父会话（同步执行 subagent / SubagentWorkflow）
-      const parentConv = await k1.createConversation({ title: `t3-${mode}` })
-      k1.markConversationOwnership(parentConv.id, 'helmx')
-      await k1.submitInput(parentConv.id, `请执行 ${mode}`, { origin: 'agent' })
+      const parentConv = await k1.conversations.createConversation({ title: `t3-${mode}` })
+      k1.ownership.markOwnership(parentConv.id, 'helmx')
+      await k1.conversations.submitInput(parentConv.id, `请执行 ${mode}`, { origin: 'agent' })
 
       await enteredChildHold.promise
       const runsBeforeClose = ((await k1.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: WorkflowRunSummary[] }).runs
@@ -789,7 +789,7 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
         assert.equal(runsBeforeClose.length, 1)
       }
       const originalRunId = runsBeforeClose[0]?.id
-      const convCountBeforeClose = k1.listConversations().length
+      const convCountBeforeClose = k1.conversations.listConversations().length
 
       await k1.close()
       k1 = undefined
@@ -827,12 +827,12 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
 
       await waitFor(
         () => {
-          const conv = k2!.getConversation(parentConv.id)
+          const conv = k2!.conversations.getConversation(parentConv.id)
           return conv.completionSeq >= 1 && conv.status !== 'working'
         },
         { timeoutMs: 20_000 },
       )
-      assert.equal(k2.getConversation(parentConv.id).status, 'done')
+      assert.equal(k2.conversations.getConversation(parentConv.id).status, 'done')
 
       const runsAfter = ((await k2.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: WorkflowRunSummary[] }).runs
       if (mode === 'subagent') {
@@ -842,10 +842,10 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
         assert.equal(runsAfter[0]!.id, originalRunId)
         assert.equal(runsAfter[0]!.status, 'completed')
       }
-      assert.equal(k2.listConversations().length, convCountBeforeClose, `${mode} 同步重放绝不得派生第二个子会话`)
+      assert.equal(k2.conversations.listConversations().length, convCountBeforeClose, `${mode} 同步重放绝不得派生第二个子会话`)
 
       assert.equal(
-        await k2.getLastAssistantText(parentConv.id),
+        await k2.conversations.getLastAssistantText(parentConv.id),
         `PARENT_FINAL_${mode}`,
         '父回合应在原 Run 收敛后拿到结果并完成总结',
       )
@@ -898,7 +898,7 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
     await registerExtRuntime(app.kernel)
 
   const conv1 = 1
-  const conv2 = (await app.kernel.createConversation({ title: 'second-conv' })).id
+  const conv2 = (await app.kernel.conversations.createConversation({ title: 'second-conv' })).id
   const wfDir = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', String(conv1))
   mkdirSync(wfDir, { recursive: true })
 
@@ -908,11 +908,11 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
   // 3) 可恢复失败原生后台 subagent #3（先创建真实空闲子会话）
   // 4) 可恢复失败外部后台 subagent #4（executionId='pane-ext-4'）
   // 5) 不可恢复失败 DSL workflow #5（workflow_action_uncertain）
-  const realChild = await app.kernel.createConversation({
+  const realChild = await app.kernel.conversations.createConversation({
     title: 'subagent-child',
     parentConversationId: conv1,
   })
-  app.kernel.markConversationOwnership(realChild.id, 'helmx')
+  app.kernel.ownership.markOwnership(realChild.id, 'helmx')
 
   const seedFailedRecord = (convId: number, header: RunHeader, detail: RunDetail) => {
     const dir = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', String(convId))

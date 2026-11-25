@@ -799,10 +799,10 @@ it('真实内核：在工具挂起期间纠偏，子代理读到新指令并将�
     ) as { structuredOutput: { runId: string; execution: { conversationId: number } } }
     const { runId, execution } = started.structuredOutput
     const childId = execution.conversationId
-    await waitFor(() => app.kernel.getConversation(childId).doing?.startsWith('hold_for_steer:') === true)
+    await waitFor(() => app.kernel.conversations.getConversation(childId).doing?.startsWith('hold_for_steer:') === true)
     await app.kernel.plugins.invokeAction(WORKFLOW_PLUGIN_ID, 'steer', { runId, text: '改用方案B' }, { conversationId: 1 })
     releaseTool()
-    await app.kernel.waitForIdle(childId)
+    await app.kernel.conversations.waitForIdle(childId)
     await waitFor(async () => {
       const { run } = await app.kernel.plugins.invokeAction(WORKFLOW_PLUGIN_ID, 'inspect', { runId }) as { run: WorkflowRunSummary }
       return run.status === 'completed'
@@ -810,7 +810,7 @@ it('真实内核：在工具挂起期间纠偏，子代理读到新指令并将�
     const { run } = await app.kernel.plugins.invokeAction(WORKFLOW_PLUGIN_ID, 'inspect', { runId }) as { run: WorkflowRunSummary }
     assert.equal(sawSteer, true, '子代理下一次模型调用应包含纠偏指令')
     assert.equal(run.result, '已按方案B完成')
-    const detail = await app.kernel.getConversationDetail(childId)
+    const detail = await app.kernel.conversations.getConversationDetail(childId)
     assert.ok(detail.entries.some((entry) => entry.kind === 'helmx.input' && (entry.data as { meta?: { runId?: string } })?.meta?.runId === runId))
   } finally {
     releaseTool()

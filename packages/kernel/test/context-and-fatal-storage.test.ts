@@ -169,11 +169,11 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal passthrough', { timeout: 60_
         },
       ])
 
-      const { submissionId } = await kernel.submitInput(1, 'slow turn')
+      const { submissionId } = await kernel.conversations.submitInput(1, 'slow turn')
       await startedGate
 
       const controller = new AbortController()
-      const waitPromise = kernel.waitForInput(1, submissionId, controller.signal)
+      const waitPromise = kernel.conversations.waitForInput(1, submissionId, controller.signal)
       const t0 = Date.now()
       controller.abort()
       await assert.rejects(
@@ -184,13 +184,13 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal passthrough', { timeout: 60_
 
       // Pre-aborted signal fails fast immediately
       await assert.rejects(
-        () => kernel.waitForInput(1, submissionId, controller.signal),
+        () => kernel.conversations.waitForInput(1, submissionId, controller.signal),
         (err: unknown) => err instanceof HelmxError && err.code === 'aborted' && err.status === 499,
       )
 
       // Release latch: background durable turn was not cancelled, finishes cleanly, and re-awaiting receives full result
       releaseTurn()
-      const finalResult = await kernel.waitForInput(1, submissionId)
+      const finalResult = await kernel.conversations.waitForInput(1, submissionId)
       assert.equal(finalResult.text, 'background turn completed')
     } finally {
       await kernel.close()
@@ -219,8 +219,8 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal passthrough', { timeout: 60_
       })
       let waitSettledAt: number | undefined
       let waitError: unknown
-      const origWaitForInput = kernel.waitForInput.bind(kernel)
-      kernel.waitForInput = async (id, submissionId, signal) => {
+      const origWaitForInput = kernel.conversations.waitForInput.bind(kernel.conversations)
+      kernel.conversations.waitForInput = async (id, submissionId, signal) => {
         waitEntered()
         try {
           return await origWaitForInput(id, submissionId, signal)
@@ -280,11 +280,11 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal passthrough', { timeout: 60_
 
       // Release background turn; verify durable turn continued and persisted cleanly
       releaseTurn()
-      await kernel.waitForIdle(1)
-      const detail = await kernel.getConversationDetail(1)
+      await kernel.conversations.waitForIdle(1)
+      const detail = await kernel.conversations.getConversationDetail(1)
       const lastEntry = detail.entries.find((e) => e.kind === 'pi.assistant')
       assert.ok(lastEntry, 'client disconnect must not cancel background durable turn')
-      assert.equal(await kernel.getLastAssistantText(1), 'background turn completed after HTTP disconnect')
+      assert.equal(await kernel.conversations.getLastAssistantText(1), 'background turn completed after HTTP disconnect')
     } finally {
       await hub.close()
       await kernel.close()
@@ -306,6 +306,26 @@ describe('harness.closed, HelmxStore fatal storage circuit breaker, and Diagnost
     assert.equal(kernel.fatalError, undefined)
     assert.equal(diagnostics.length, 0)
     assert.equal(notifications.length, 0)
+
+    const isClosedErr = (err: unknown) => err instanceof HelmxError && err.code === 'runtime_closed'
+    assert.throws(() => kernel.ownership.markOwnership(1, 'helmx'), isClosedErr)
+    assert.throws(() => kernel.asks.cancelAsk('missing'), isClosedErr)
+    await assert.rejects(() => kernel.conversations.createConversation({}), isClosedErr)
+    await assert.rejects(() => kernel.asks.createAsk({ conversationId: 1, title: 't', fields: [{ name: 'f', label: 'f', type: 'text' }] }), isClosedErr)
+    await assert.rejects(() => kernel.asks.answerAsk('missing', {}), isClosedErr)
+    await assert.rejects(() => kernel.triggers.dispatchTrigger({ id: 'e1', source: 's', text: 'hi', createdAt: Date.now() }), isClosedErr)
+    await assert.rejects(() => kernel.agentSpawn.spawnAgent({ parentConversationId: 1, prompt: 'hi' }), isClosedErr)
+    await assert.rejects(() => kernel.nodes.issueNodeToken('node-a'), isClosedErr)
+    await assert.rejects(() => kernel.nodes.removeNode('node-a'), isClosedErr)
+    await assert.rejects(() => kernel.models.setDefaultModel('faux/m'), isClosedErr)
+    await assert.rejects(() => kernel.models.setModelThinkingDefault('faux/m', 'low'), isClosedErr)
+    await assert.rejects(() => kernel.models.setDisabledModels('faux', ['m']), isClosedErr)
+    await assert.rejects(() => kernel.models.reloadModels(), isClosedErr)
+    await assert.rejects(() => kernel.profiles.save({ id: 'closed-role', name: 'closed' }), isClosedErr)
+    await assert.rejects(() => kernel.profiles.delete('closed-role'), isClosedErr)
+    await assert.rejects(() => kernel.profiles.updateSystem('assistant', 'sys'), isClosedErr)
+    await assert.rejects(() => kernel.artifacts.ensureConversationDir(1), isClosedErr)
+    await assert.rejects(() => kernel.artifacts.deleteConversation(1), isClosedErr)
   })
 
   it('harness.closed ending in failure records fatalError, reports redacted diagnostics, publishes error notification, and rejects subsequent writes', { timeout: 60_000 }, async () => {
@@ -329,7 +349,7 @@ describe('harness.closed, HelmxStore fatal storage circuit breaker, and Diagnost
     }
 
     try {
-      await assert.rejects(() => kernel.createConversation({}))
+      await assert.rejects(() => kernel.conversations.createConversation({}))
       // Wait for harness.closed microtask/shutdown pipeline to settle
       for (let i = 0; i < 40 && kernel.fatalError === undefined; i += 1) {
         await new Promise((r) => setTimeout(r, 15))
@@ -352,21 +372,33 @@ describe('harness.closed, HelmxStore fatal storage circuit breaker, and Diagnost
 
       // Subsequent write/mutation requests must reject explicitly rather than pretending health
       await assert.rejects(
-        () => kernel.submitInput(1, 'write request should reject'),
+        () => kernel.conversations.submitInput(1, 'write request should reject'),
         (err: unknown) => err === kernel.fatalError,
       )
       await assert.rejects(
-        () => kernel.createConversation({}),
+        () => kernel.conversations.createConversation({}),
         (err: unknown) => err === kernel.fatalError,
       )
       await assert.rejects(
-        () => kernel.updateConversation(1, { title: 'must fail' }),
+        () => kernel.conversations.updateConversation(1, { title: 'must fail' }),
         (err: unknown) => err === kernel.fatalError,
       )
       await assert.rejects(
-        () => kernel.resetConversation(1),
+        () => kernel.conversations.resetConversation(1),
         (err: unknown) => err === kernel.fatalError,
       )
+      const isFatalErr = (err: unknown) => err === kernel.fatalError
+      assert.throws(() => kernel.ownership.markOwnership(1, 'helmx'), isFatalErr)
+      assert.throws(() => kernel.asks.cancelAsk('missing'), isFatalErr)
+      await assert.rejects(() => kernel.asks.createAsk({ conversationId: 1, title: 't', fields: [{ name: 'f', label: 'f', type: 'text' }] }), isFatalErr)
+      await assert.rejects(() => kernel.asks.answerAsk('missing', {}), isFatalErr)
+      await assert.rejects(() => kernel.triggers.dispatchTrigger({ id: 'e1', source: 's', text: 'hi', createdAt: Date.now() }), isFatalErr)
+      await assert.rejects(() => kernel.agentSpawn.spawnAgent({ parentConversationId: 1, prompt: 'hi' }), isFatalErr)
+      await assert.rejects(() => kernel.nodes.issueNodeToken('node-a'), isFatalErr)
+      await assert.rejects(() => kernel.models.setDefaultModel('faux/m'), isFatalErr)
+      await assert.rejects(() => kernel.models.setDisabledModels('faux', ['m']), isFatalErr)
+      await assert.rejects(() => kernel.profiles.save({ id: 'fatal-role', name: 'fatal' }), isFatalErr)
+      await assert.rejects(() => kernel.artifacts.ensureConversationDir(1), isFatalErr)
     } finally {
       await kernel.close()
     }
@@ -427,10 +459,10 @@ describe('harness.closed, HelmxStore fatal storage circuit breaker, and Diagnost
 
       // kernelA rejects subsequent writes while kernelB keeps working cleanly
       await assert.rejects(
-        () => kernelA.submitInput(1, 'should fail after breaker trip'),
+        () => kernelA.conversations.submitInput(1, 'should fail after breaker trip'),
         (err: unknown) => err === kernelA.fatalError,
       )
-      const convB = await kernelB.createConversation({ title: 'B healthy' })
+      const convB = await kernelB.conversations.createConversation({ title: 'B healthy' })
       assert.equal(convB.title, 'B healthy')
     } finally {
       await assert.rejects(

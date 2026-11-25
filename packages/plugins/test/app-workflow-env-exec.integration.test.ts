@@ -61,7 +61,7 @@ async function makeEnv(): Promise<Env> {
   // 会话绑定 (nodeId='local', cwd=convCwd)：env.exec 缺省靶点必须继承它。
   const { mkdirSync } = await import('node:fs')
   mkdirSync(convCwd, { recursive: true })
-  const conv = await app.kernel.createConversation({ title: 'env.exec 靶点会话', cwd: convCwd })
+  const conv = await app.kernel.conversations.createConversation({ title: 'env.exec 靶点会话', cwd: convCwd })
 
   const echoCalls: string[] = []
   await app.kernel.plugins!.register({

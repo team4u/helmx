@@ -15,8 +15,10 @@ export {
   startHub,
   errorResponse,
   jsonOk,
-  type EventHub,
-  type KernelRuntimeLike,
+  type HttpEventHub,
+  type KernelHttpTarget,
+  type StartHubOptions,
+  type HubHandle,
   type ProductRouteHandler,
 } from './http/index.js';
 export {

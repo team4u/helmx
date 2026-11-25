@@ -9,10 +9,12 @@
 import { HelmxError, isPluginSummaryActive, REQUEST_SCHEMAS } from '@helmx/protocol'
 import type { PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
+import type { PluginHost } from '../plugins/index.js'
+import type { SecretStash } from '../services/index.js'
+import type { SessionDocEventHub } from '../runtime/events.js'
 import { compressGzip, markStreamingJsonBody } from './gzip.js'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
-import type { KernelRuntimeLike } from './contracts.js'
 import {
   assertBodySchema,
   parseActionInvokeBody,
@@ -25,9 +27,51 @@ import { parseOptionalBooleanFlag, parseOptionalJsonObjectBody, type RouteContex
 import { methodNotAllowed } from './route-context.js'
 import { assertDoctorTargetDir } from '../plugins/doctor-target.js'
 
+export type PluginRoutesHost = Pick<
+  PluginHost,
+  | 'list'
+  | 'enable'
+  | 'disable'
+  | 'listActions'
+  | 'invokeAction'
+  | 'getConfig'
+  | 'getConfigSchema'
+  | 'setConfig'
+  | 'listRoutes'
+  | 'getPublicDoc'
+  | 'getPublicSessionDoc'
+  | 'getClientModule'
+> &
+  Partial<
+    Pick<
+      PluginHost,
+      | 'getConfigSources'
+      | 'get'
+      | 'getManifest'
+      | 'withTask'
+      | 'beginTask'
+      | 'endTask'
+      | 'doctorExternalPlugin'
+      | 'reloadExternalPlugin'
+      | 'rescanExternalPlugins'
+      | 'installPluginPackage'
+      | 'updatePluginPackage'
+      | 'removePluginPackage'
+    >
+  >
+
+export type PluginRoutesStash = Pick<SecretStash, 'redact'> &
+  Partial<Pick<SecretStash, 'createStreamingRedactor'>>
+
+export interface PluginRoutesTarget {
+  readonly plugins: PluginRoutesHost
+  readonly sessionDocEvents?: Pick<SessionDocEventHub, 'seq' | 'response'>
+  readonly stash?: PluginRoutesStash
+}
+
 export async function handlePluginsDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: PluginRoutesTarget,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -175,7 +219,7 @@ export async function handlePluginsDomain(
 
 export async function handleActionsDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<PluginRoutesTarget, 'plugins'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -259,7 +303,7 @@ function parseConversationIdQuery(url: URL): number | undefined {
  */
 async function sessionDocEventsResponse(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<PluginRoutesTarget, 'plugins' | 'sessionDocEvents'>,
   redactor: JsonRedactor | undefined,
   pluginId: string,
   rawName: string,
@@ -288,13 +332,13 @@ async function sessionDocEventsResponse(
 
 /** Ensures `getPublicSessionDoc` returns synchronously for atomic snapshot-after-subscribe semantics. */
 function snapshotDocOf(
-  kernel: KernelRuntimeLike,
+  kernel: Pick<PluginRoutesTarget, 'plugins'>,
   pluginId: string,
   name: string,
   conversationId: number,
 ): PublicPluginSessionDoc {
   const result = kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId)
-  if (result instanceof Promise) {
+  if ((result as unknown) instanceof Promise) {
     throw new HelmxError(
       'not_implemented',
       'Current runtime getPublicSessionDoc is async and cannot provide synchronous sessionDoc snapshots',
@@ -307,7 +351,7 @@ function snapshotDocOf(
 /** GET/HEAD `/api/plugins/:id/client.mjs`: validates module/chunk/hash params and handles ETag/304 + gzip. */
 async function serveClientModule(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<PluginRoutesTarget, 'plugins'>,
   pluginId: string,
 ): Promise<Response> {
   const { request, method, url } = ctx
@@ -416,7 +460,7 @@ interface RouteTaskHandle {
 }
 
 function acquireRouteTask(
-  plugins: KernelRuntimeLike['plugins'],
+  plugins: PluginRoutesHost,
   pluginId: string,
   label: string,
 ): RouteTaskHandle {
@@ -575,7 +619,7 @@ async function trackReadableStream(
  * and open outbound response streams in `liveTasks` until completion, error, cancellation, or abort.
  */
 async function dispatchPluginRoute(
-  kernel: KernelRuntimeLike,
+  kernel: Pick<PluginRoutesTarget, 'plugins' | 'stash'>,
   redactor: JsonRedactor | undefined,
   request: Request,
   method: string,
@@ -633,7 +677,7 @@ function classifyPluginRouteMediaType(contentType: string | null): 'json' | 'str
 
 function createRedactingTextStream(
   source: ReadableStream<Uint8Array>,
-  stash: NonNullable<KernelRuntimeLike['stash']>,
+  stash: PluginRoutesStash,
 ): ReadableStream<Uint8Array> {
   const reader = source.getReader()
   const decoder = new TextDecoder()
@@ -699,7 +743,7 @@ function concatUint8Arrays(chunks: readonly Uint8Array[], totalBytes: number): U
  */
 async function redactPluginRouteResponse(
   response: Response,
-  stash: KernelRuntimeLike['stash'],
+  stash: PluginRoutesStash | undefined,
   maxJsonBytes = PLUGIN_ROUTE_JSON_REDACT_MAX_BYTES,
 ): Promise<Response> {
   if (stash === undefined || response.body === null) return response

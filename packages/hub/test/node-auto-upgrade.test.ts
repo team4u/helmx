@@ -517,7 +517,7 @@ test('auto-upgrade startup gate: defers older node during two-phase boot (autoSt
   const app = await openHubApp(dir, { autoStart: false })
   try {
     assert.equal(app.kernel.started, false)
-    const issued = await app.kernel.issueNodeToken('boot-node')
+    const issued = await app.kernel.nodes.issueNodeToken('boot-node')
     const node = await connectFixtureNode(app.hub.url.replace(/^http/, 'ws'), 'boot-node', issued.token, '0.0.1', {
       installMode: 'release',
       initialPlan: {
@@ -569,13 +569,13 @@ test('auto-upgrade busy gate: defers while bound conversation has an active turn
   })
   try {
     // Issue token and bind a conversation to busy-node, then start an active turn before connecting the older node.
-    const issued = await app.kernel.issueNodeToken('busy-node')
-    const conv = await app.kernel.createConversation({
+    const issued = await app.kernel.nodes.issueNodeToken('busy-node')
+    const conv = await app.kernel.conversations.createConversation({
       title: 'Remote work',
       nodeId: 'busy-node',
       cwd: dir,
     })
-    await app.kernel.submitInput(conv.id, 'hold active turn on busy-node')
+    await app.kernel.conversations.submitInput(conv.id, 'hold active turn on busy-node')
     await turnStarted
     assert.ok(app.kernel.describeNodeBusy('busy-node'), 'bound active turn must mark node busy')
 
@@ -999,7 +999,7 @@ test('NodeAutoUpgradeCoordinator: fails closed for undefined or unknown runtime 
 test('createHelmx app.close() disposes coordinator and clears kernel autoUpgradeStatusProvider', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'auto-dispose-'))
   const app = await openHubApp(dir, { autoStart: false })
-  const issued = await app.kernel.issueNodeToken('dispose-node')
+  const issued = await app.kernel.nodes.issueNodeToken('dispose-node')
   const node = await connectFixtureNode(app.hub.url.replace(/^http/, 'ws'), 'dispose-node', issued.token, '0.0.1', {
     installMode: 'release',
   })

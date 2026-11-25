@@ -92,10 +92,10 @@ test('builtin:title integration: default enabled, silent first-turn titling, /cl
       },
     ])
 
-    const conv = await kernel.createConversation({ profileId: 'assistant' })
+    const conv = await kernel.conversations.createConversation({ profileId: 'assistant' })
     assert.equal(conv.title, '')
-    await kernel.submitInput(conv.id, '帮我分析为什么写入 state.sqlite 时偶发锁等待超时')
-    await kernel.waitForIdle(conv.id)
+    await kernel.conversations.submitInput(conv.id, '帮我分析为什么写入 state.sqlite 时偶发锁等待超时')
+    await kernel.conversations.waitForIdle(conv.id)
 
     assert.equal(
       capturedPromptActions.includes('builtin:title.generate'),
@@ -103,11 +103,11 @@ test('builtin:title integration: default enabled, silent first-turn titling, /cl
       'generate action with exposeToPrompt: false must not enter <available_actions>',
     )
 
-    await waitFor(() => kernel.getConversation(conv.id).title === '优化 SQLite 索引与锁性能')
+    await waitFor(() => kernel.conversations.getConversation(conv.id).title === '优化 SQLite 索引与锁性能')
     assert.ok(autoTitleTranscript.includes('为什么写入 state.sqlite'))
 
     // 3. After /clear (resetConversation), manual /title only summarizes entries after pi.reset.
-    await kernel.resetConversation(conv.id)
+    await kernel.conversations.resetConversation(conv.id)
     let resetTranscript = ''
     env.faux.setResponses([
       () => fauxAssistantMessage('已确认问题出在 WebSocket 重连退避没有加入随机抖动。'),
@@ -118,10 +118,10 @@ test('builtin:title integration: default enabled, silent first-turn titling, /cl
         return fauxAssistantMessage('添加 WebSocket 重连随机抖动')
       },
     ])
-    await kernel.submitInput(conv.id, '排查远端节点重连风暴问题')
-    await kernel.waitForIdle(conv.id)
+    await kernel.conversations.submitInput(conv.id, '排查远端节点重连风暴问题')
+    await kernel.conversations.waitForIdle(conv.id)
     // Title must stay unchanged on post-reset turn (not auto-overwritten).
-    assert.equal(kernel.getConversation(conv.id).title, '优化 SQLite 索引与锁性能')
+    assert.equal(kernel.conversations.getConversation(conv.id).title, '优化 SQLite 索引与锁性能')
 
     const refreshed = (await kernel.plugins.invokeAction(
       TITLE_PLUGIN_ID,
@@ -135,7 +135,7 @@ test('builtin:title integration: default enabled, silent first-turn titling, /cl
       title: '添加 WebSocket 重连随机抖动',
       changed: true,
     })
-    assert.equal(kernel.getConversation(conv.id).title, '添加 WebSocket 重连随机抖动')
+    assert.equal(kernel.conversations.getConversation(conv.id).title, '添加 WebSocket 重连随机抖动')
     assert.ok(resetTranscript.includes('排查远端节点重连风暴问题'))
     assert.equal(resetTranscript.includes('state.sqlite'), false, 'entries before pi.reset must be excluded')
 
@@ -164,11 +164,11 @@ test('builtin:title integration: default enabled, silent first-turn titling, /cl
       false,
       '/title command must disappear immediately when disabled',
     )
-    const conv2 = await kernel.createConversation({ profileId: 'assistant' })
+    const conv2 = await kernel.conversations.createConversation({ profileId: 'assistant' })
     env.faux.setResponses([fauxAssistantMessage('这是普通回答，不该消耗第二条标题响应')])
-    await kernel.submitInput(conv2.id, '停用插件后的第一句话测试标题保持截取')
-    await kernel.waitForIdle(conv2.id)
-    assert.equal(kernel.getConversation(conv2.id).title, '停用插件后的第一句话测试标题保持截取')
+    await kernel.conversations.submitInput(conv2.id, '停用插件后的第一句话测试标题保持截取')
+    await kernel.conversations.waitForIdle(conv2.id)
+    assert.equal(kernel.conversations.getConversation(conv2.id).title, '停用插件后的第一句话测试标题保持截取')
 
     await kernel.plugins.enable(TITLE_PLUGIN_ID)
     assert.equal(

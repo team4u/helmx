@@ -38,8 +38,8 @@ function harnessOf(): Harness {
 }
 
 async function askTurn(convId: number, text: string): Promise<void> {
-  await env.kernel.submitInput(convId, text)
-  await env.kernel.waitForIdle(convId)
+  await env.kernel.conversations.submitInput(convId, text)
+  await env.kernel.conversations.waitForIdle(convId)
 }
 
 test('原子事务：rewind 与新输入同批提交、SDK 原始历史保留、详情投影与真实 provider 上下文排除旧问答', { timeout: 60_000 }, async () => {
@@ -52,18 +52,18 @@ test('原子事务：rewind 与新输入同批提交、SDK 原始历史保留、
       return fauxAssistantMessage('heavy after new answer')
     }) as never,
   ])
-  const conv = await env.kernel.createConversation({ title: 'atomic heavy' })
+  const conv = await env.kernel.conversations.createConversation({ title: 'atomic heavy' })
   await askTurn(conv.id, 'one round issue')
   await askTurn(conv.id, 'second round old issue')
 
   const secondInput = (await sdkEntrySummaries(env.kernel, conv.id)).find(
     (e) => e.kind === 'helmx.input' && e.text === 'second round old issue',
   )!
-  const { submissionId } = await env.kernel.submitInput(conv.id, 'change write after new issue', {
+  const { submissionId } = await env.kernel.conversations.submitInput(conv.id, 'change write after new issue', {
     replaceFromEntryId: secondInput.id,
   })
   assert.ok(Number.isInteger(Number(submissionId)))
-  await env.kernel.waitForIdle(conv.id)
+  await env.kernel.conversations.waitForIdle(conv.id)
 
   const afterEntries = await sdkEntrySummaries(env.kernel, conv.id)
   const rewind = afterEntries.find((e) => e.kind === 'helmx.rewind')!
@@ -81,7 +81,7 @@ test('原子事务：rewind 与新输入同批提交、SDK 原始历史保留、
   assert.ok(afterEntries.some((e) => e.kind === 'helmx.input' && e.text === 'second round old issue'))
   assert.ok(afterEntries.some((e) => e.kind === 'pi.assistant' && e.text === 'second round old answer'))
 
-  const detail = await env.kernel.getConversationDetail(conv.id, { limit: 200 })
+  const detail = await env.kernel.conversations.getConversationDetail(conv.id, { limit: 200 })
   const detailBlob = JSON.stringify(detail.entries)
   assert.ok(!detailBlob.includes('second round old issue') && !detailBlob.includes('second round old answer'))
   assert.ok(
@@ -102,23 +102,23 @@ test('首轮覆盖与错误边界：全量截断保留 system；404 / 非法 ent
     fauxAssistantMessage('old one round answer'),
     fauxAssistantMessage('all new one round answer'),
   ])
-  const conv = await env.kernel.createConversation({ title: 'override one round and boundaries' })
+  const conv = await env.kernel.conversations.createConversation({ title: 'override one round and boundaries' })
   await askTurn(conv.id, 'old one round issue')
 
   await assert.rejects(
-    env.kernel.submitInput(conv.id, 'heavy', { replaceFromEntryId: 999999 }),
+    env.kernel.conversations.submitInput(conv.id, 'heavy', { replaceFromEntryId: 999999 }),
     (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
   )
   await assert.rejects(
-    env.kernel.submitInput(conv.id, 'heavy', { replaceFromEntryId: -1 }),
+    env.kernel.conversations.submitInput(conv.id, 'heavy', { replaceFromEntryId: -1 }),
     (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
   )
 
   const firstInput = (await sdkEntrySummaries(env.kernel, conv.id)).find(
     (e) => e.kind === 'helmx.input' && e.text === 'old one round issue',
   )!
-  await env.kernel.submitInput(conv.id, 'all new one round issue', { replaceFromEntryId: firstInput.id })
-  await env.kernel.waitForIdle(conv.id)
+  await env.kernel.conversations.submitInput(conv.id, 'all new one round issue', { replaceFromEntryId: firstInput.id })
+  await env.kernel.conversations.waitForIdle(conv.id)
 
   const sdkConv = await harnessOf().conversation(conv.id as never, BACKGROUND_CONTEXT)
   const ctx = await sdkConv!.context(BACKGROUND_CONTEXT)
@@ -128,7 +128,7 @@ test('首轮覆盖与错误边界：全量截断保留 system；404 / 非法 ent
   assert.equal((ctx.messages[0] as { role: string }).role, 'system')
 
   await assert.rejects(
-    env.kernel.submitInput(conv.id, 'again heavy', { replaceFromEntryId: firstInput.id }),
+    env.kernel.conversations.submitInput(conv.id, 'again heavy', { replaceFromEntryId: firstInput.id }),
     (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'entry_already_rewound',
   )
 
@@ -136,10 +136,10 @@ test('首轮覆盖与错误边界：全量截断保留 system；404 / 非法 ent
     (e) => e.kind === 'helmx.input' && e.text === 'all new one round issue',
   )!
   env.faux.setResponses([fauxAssistantMessage('reset after answer')])
-  await env.kernel.resetConversation(conv.id, { handoff: 'reset handover' })
-  await env.kernel.waitForIdle(conv.id)
+  await env.kernel.conversations.resetConversation(conv.id, { handoff: 'reset handover' })
+  await env.kernel.conversations.waitForIdle(conv.id)
   await assert.rejects(
-    env.kernel.submitInput(conv.id, 'out of bounds heavy', { replaceFromEntryId: activeInput.id }),
+    env.kernel.conversations.submitInput(conv.id, 'out of bounds heavy', { replaceFromEntryId: activeInput.id }),
     (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'entry_before_context_head',
   )
 })
@@ -150,15 +150,15 @@ test('并发双改同一条目：至多一次成功，另一次 409/404，无半
     fauxAssistantMessage('concurrency new answer A'),
     fauxAssistantMessage('concurrency new answer B'),
   ])
-  const conv = await env.kernel.createConversation({ title: 'concurrency heavy' })
+  const conv = await env.kernel.conversations.createConversation({ title: 'concurrency heavy' })
   await askTurn(conv.id, 'concurrency old issue')
   const target = (await sdkEntrySummaries(env.kernel, conv.id)).find(
     (e) => e.kind === 'helmx.input' && e.text === 'concurrency old issue',
   )!
 
   const settled = await Promise.allSettled([
-    env.kernel.submitInput(conv.id, 'concurrency new issue A', { replaceFromEntryId: target.id }),
-    env.kernel.submitInput(conv.id, 'concurrency new issue B', { replaceFromEntryId: target.id }),
+    env.kernel.conversations.submitInput(conv.id, 'concurrency new issue A', { replaceFromEntryId: target.id }),
+    env.kernel.conversations.submitInput(conv.id, 'concurrency new issue B', { replaceFromEntryId: target.id }),
   ])
   assert.ok(settled.filter((r) => r.status === 'fulfilled').length >= 1)
   const rejected = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
@@ -166,7 +166,7 @@ test('并发双改同一条目：至多一次成功，另一次 409/404，无半
   for (const r of rejected) {
     assert.ok(r.reason instanceof HelmxError && (r.reason.status === 409 || r.reason.status === 404))
   }
-  await env.kernel.waitForIdle(conv.id).catch(() => {})
+  await env.kernel.conversations.waitForIdle(conv.id).catch(() => {})
 
   const rewinds = (await sdkEntrySummaries(env.kernel, conv.id)).filter((e) => e.kind === 'helmx.rewind')
   assert.ok(rewinds.length <= 2)
@@ -205,21 +205,21 @@ test('迟到编辑在 input hook 挂起恢复后拒绝（409），且绝不中�
         return fauxAssistantMessage('succeeded edit answer')
       },
     ])
-    const conv = await env.kernel.createConversation({ title: 'latency edit race' })
+    const conv = await env.kernel.conversations.createConversation({ title: 'latency edit race' })
     await askTurn(conv.id, 'old issue')
     const target = (await sdkEntrySummaries(env.kernel, conv.id)).find((entry) => entry.kind === 'helmx.input')!
-    const stale = env.kernel.submitInput(conv.id, 'stale edit', { replaceFromEntryId: target.id })
+    const stale = env.kernel.conversations.submitInput(conv.id, 'stale edit', { replaceFromEntryId: target.id })
       .then(() => undefined, (error: unknown) => error)
     await hookEntered
-    const accepted = await env.kernel.submitInput(conv.id, 'succeeded edit', { replaceFromEntryId: target.id })
+    const accepted = await env.kernel.conversations.submitInput(conv.id, 'succeeded edit', { replaceFromEntryId: target.id })
     await modelStarted
     releaseHook()
     const error = await stale
     assert.ok(error instanceof HelmxError && error.status === 409)
-    assert.equal(env.kernel.getConversation(conv.id).status, 'working')
+    assert.equal(env.kernel.conversations.getConversation(conv.id).status, 'working')
     releaseModel()
-    await env.kernel.waitForIdle(conv.id)
-    assert.equal((await env.kernel.waitForInput(conv.id, accepted.submissionId)).text, 'succeeded edit answer')
+    await env.kernel.conversations.waitForIdle(conv.id)
+    assert.equal((await env.kernel.conversations.waitForInput(conv.id, accepted.submissionId)).text, 'succeeded edit answer')
   } finally {
     releaseHook()
     releaseModel()
@@ -241,20 +241,20 @@ test('input hook 接管拦截不产生 rewind 副作用；非 human / 非 helmx.
   })
   try {
     env.faux.setResponses([fauxAssistantMessage('block intercept before answer')])
-    const conv = await env.kernel.createConversation({ title: 'hook block intercept' })
+    const conv = await env.kernel.conversations.createConversation({ title: 'hook block intercept' })
     await askTurn(conv.id, 'block intercept before issue')
     const target = (await sdkEntrySummaries(env.kernel, conv.id)).find(
       (e) => e.kind === 'helmx.input' && e.text === 'block intercept before issue',
     )!
 
-    const handled = await env.kernel.submitInput(conv.id, 'by block intercept edit', { replaceFromEntryId: target.id })
+    const handled = await env.kernel.conversations.submitInput(conv.id, 'by block intercept edit', { replaceFromEntryId: target.id })
     assert.ok(handled.submissionId.startsWith('handled:'))
     assert.ok(!(await sdkEntrySummaries(env.kernel, conv.id)).some((e) => e.kind === 'helmx.rewind'))
 
     armed = false
     env.faux.setResponses([fauxAssistantMessage('solve except after new answer')])
-    await env.kernel.submitInput(conv.id, 'solve except after edit', { replaceFromEntryId: target.id })
-    await env.kernel.waitForIdle(conv.id)
+    await env.kernel.conversations.submitInput(conv.id, 'solve except after edit', { replaceFromEntryId: target.id })
+    await env.kernel.conversations.waitForIdle(conv.id)
     const textsOk = messageTextsOf(
       (await (await harnessOf().conversation(conv.id as never, BACKGROUND_CONTEXT))!.context(BACKGROUND_CONTEXT)).messages as never,
     )
@@ -270,11 +270,11 @@ test('input hook 接管拦截不产生 rewind 副作用；非 human / 非 helmx.
     fauxAssistantMessage('a2'),
     fauxAssistantMessage('a3'),
   ])
-  const guardConv = await env.kernel.createConversation({ title: 'target decide' })
-  await env.kernel.submitInput(guardConv.id, 'agent source issue', { origin: 'agent' })
-  await env.kernel.waitForIdle(guardConv.id)
-  await env.kernel.submitInput(guardConv.id, 'trigger source issue', { origin: 'trigger' })
-  await env.kernel.waitForIdle(guardConv.id)
+  const guardConv = await env.kernel.conversations.createConversation({ title: 'target decide' })
+  await env.kernel.conversations.submitInput(guardConv.id, 'agent source issue', { origin: 'agent' })
+  await env.kernel.conversations.waitForIdle(guardConv.id)
+  await env.kernel.conversations.submitInput(guardConv.id, 'trigger source issue', { origin: 'trigger' })
+  await env.kernel.conversations.waitForIdle(guardConv.id)
   await askTurn(guardConv.id, 'human source issue')
 
   const entries = await sdkEntrySummaries(env.kernel, guardConv.id)
@@ -283,15 +283,15 @@ test('input hook 接管拦截不产生 rewind 副作用；非 human / 非 helmx.
   const assistant = entries.find((e) => e.kind === 'pi.assistant')!
 
   await assert.rejects(
-    env.kernel.submitInput(guardConv.id, 'x', { replaceFromEntryId: assistant.id }),
+    env.kernel.conversations.submitInput(guardConv.id, 'x', { replaceFromEntryId: assistant.id }),
     (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'entry_not_editable',
   )
   await assert.rejects(
-    env.kernel.submitInput(guardConv.id, 'x', { replaceFromEntryId: agentInput.id }),
+    env.kernel.conversations.submitInput(guardConv.id, 'x', { replaceFromEntryId: agentInput.id }),
     (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'entry_not_editable',
   )
   await assert.rejects(
-    env.kernel.submitInput(guardConv.id, 'x', { replaceFromEntryId: triggerInput.id }),
+    env.kernel.conversations.submitInput(guardConv.id, 'x', { replaceFromEntryId: triggerInput.id }),
     (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'entry_not_editable',
   )
 })
@@ -304,22 +304,22 @@ test('小分页投影、FTS 索引重建与新回合失败缓存失效', { timeo
     fauxAssistantMessage('ftsc page new answer'),
     fauxAssistantMessage('ftsd page after continue answer'),
   ])
-  const conv = await env.kernel.createConversation({ title: 'page and FTS' })
+  const conv = await env.kernel.conversations.createConversation({ title: 'page and FTS' })
   await askTurn(conv.id, 'ftsq1 page one round issue')
   await askTurn(conv.id, 'ftsq2 page second round old issue')
 
   const secondInput = (await sdkEntrySummaries(env.kernel, conv.id)).find(
     (e) => e.kind === 'helmx.input' && e.text === 'ftsq2 page second round old issue',
   )!
-  await env.kernel.submitInput(conv.id, 'ftsq3 page new issue', { replaceFromEntryId: secondInput.id })
-  await env.kernel.waitForIdle(conv.id)
+  await env.kernel.conversations.submitInput(conv.id, 'ftsq3 page new issue', { replaceFromEntryId: secondInput.id })
+  await env.kernel.conversations.waitForIdle(conv.id)
   await askTurn(conv.id, 'ftsq4 page after continue issue')
 
   const seenBlobs: string[] = []
   let cursor: string | undefined
   let pages = 0
   for (;;) {
-    const page = await env.kernel.getConversationDetail(conv.id, {
+    const page = await env.kernel.conversations.getConversationDetail(conv.id, {
       limit: 2,
       ...(cursor !== undefined ? { cursor } : {}),
     })
@@ -334,24 +334,24 @@ test('小分页投影、FTS 索引重建与新回合失败缓存失效', { timeo
   assert.ok(!allPaged.includes('ftsq2 page second round old issue') && !allPaged.includes('ftsb page second round old answer'))
   assert.ok(allPaged.includes('ftsq1') && allPaged.includes('ftsq3') && allPaged.includes('ftsq4'))
 
-  assert.ok((await env.kernel.search('ftsq3')).some((h) => h.conversationId === conv.id))
-  assert.equal((await env.kernel.search('ftsq2')).filter((h) => h.conversationId === conv.id).length, 0)
-  assert.equal((await env.kernel.search('ftsb')).filter((h) => h.conversationId === conv.id).length, 0)
+  assert.ok((await env.kernel.conversations.search('ftsq3')).some((h) => h.conversationId === conv.id))
+  assert.equal((await env.kernel.conversations.search('ftsq2')).filter((h) => h.conversationId === conv.id).length, 0)
+  assert.equal((await env.kernel.conversations.search('ftsb')).filter((h) => h.conversationId === conv.id).length, 0)
 
-  await env.kernel.rebuildFts()
-  assert.equal((await env.kernel.search('ftsb')).filter((h) => h.conversationId === conv.id).length, 0)
-  assert.ok((await env.kernel.search('ftsq3')).some((h) => h.conversationId === conv.id))
-  assert.ok((await env.kernel.search('ftsc')).some((h) => h.conversationId === conv.id))
+  await env.kernel.conversations.rebuildFts()
+  assert.equal((await env.kernel.conversations.search('ftsb')).filter((h) => h.conversationId === conv.id).length, 0)
+  assert.ok((await env.kernel.conversations.search('ftsq3')).some((h) => h.conversationId === conv.id))
+  assert.ok((await env.kernel.conversations.search('ftsc')).some((h) => h.conversationId === conv.id))
 
   // 2. 新回答失败时 getLastAssistantText 不返回被覆盖的旧答案
   env.faux.setResponses([
     fauxAssistantMessage('failed before one round answer'),
     fauxAssistantMessage('by override old answer'),
   ])
-  const failConv = await env.kernel.createConversation({ title: 'failed cache' })
+  const failConv = await env.kernel.conversations.createConversation({ title: 'failed cache' })
   await askTurn(failConv.id, 'failed before one round issue')
   await askTurn(failConv.id, 'by override issue')
-  assert.equal(await env.kernel.getLastAssistantText(failConv.id), 'by override old answer')
+  assert.equal(await env.kernel.conversations.getLastAssistantText(failConv.id), 'by override old answer')
 
   const failTarget = (await sdkEntrySummaries(env.kernel, failConv.id)).find(
     (e) => e.kind === 'helmx.input' && e.text === 'by override issue',
@@ -361,7 +361,7 @@ test('小分页投影、FTS 索引重建与新回合失败缓存失效', { timeo
       throw new Error('faux model inject failed')
     }) as never,
   ])
-  await env.kernel.submitInput(failConv.id, 'note set failed edit', { replaceFromEntryId: failTarget.id })
-  await env.kernel.waitForIdle(failConv.id).catch(() => {})
-  assert.notEqual(await env.kernel.getLastAssistantText(failConv.id), 'by override old answer')
+  await env.kernel.conversations.submitInput(failConv.id, 'note set failed edit', { replaceFromEntryId: failTarget.id })
+  await env.kernel.conversations.waitForIdle(failConv.id).catch(() => {})
+  assert.notEqual(await env.kernel.conversations.getLastAssistantText(failConv.id), 'by override old answer')
 })

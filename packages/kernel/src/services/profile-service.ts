@@ -253,6 +253,7 @@ export class ProfileService {
   constructor(
     private readonly dataDir: string,
     private readonly events?: ProfileServiceEvents,
+    private readonly options?: { assertWritable?: () => void },
   ) {}
 
   get mutationEpoch(): number {
@@ -330,6 +331,7 @@ export class ProfileService {
 
   /** Create or replace a profile (if system is provided, atomically syncs to SYSTEM.md without writing it into profile.json). */
   async save(input: unknown): Promise<Profile> {
+    this.options?.assertWritable?.()
     if (!isJsonObject(input)) throw new Error('profile must be an object')
     const rawSystem = input['system']
     if (rawSystem !== undefined && typeof rawSystem !== 'string') {
@@ -357,6 +359,7 @@ export class ProfileService {
    * when omitted, only the default profile protection applies (caller is responsible for checking bindings).
    */
   async delete(id: string, deps?: ProfileDeleteDeps): Promise<void> {
+    this.options?.assertWritable?.()
     assertProfileId(id)
     if (id === DEFAULT_PROFILE_ID) {
       throw new Error(`default profile '${DEFAULT_PROFILE_ID}' cannot be deleted`)
@@ -385,6 +388,7 @@ export class ProfileService {
   }
 
   async updateSystem(id: string, text: string): Promise<string> {
+    this.options?.assertWritable?.()
     assertProfileId(id)
     if (typeof text !== 'string') throw new Error('system text must be a string')
     const path = join(profileDir(this.dataDir, id), 'SYSTEM.md')

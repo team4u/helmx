@@ -136,7 +136,7 @@ function readBadges(env: Env): Record<string, { count: number }> {
 }
 
 async function inputEntries(env: Env, conversationId: number): Promise<Array<{ kind: string; text?: string }>> {
-  const detail = await env.app.kernel.getConversationDetail(conversationId, { limit: 200 })
+  const detail = await env.app.kernel.conversations.getConversationDetail(conversationId, { limit: 200 })
   return detail.entries.map((e) => ({ kind: e.kind, ...(e.data !== undefined ? { text: String((e.data as { text?: string }).text ?? '') } : {}) }))
 }
 
@@ -153,20 +153,20 @@ test('父会话 abort 级联：子树后台 run 取消、受管子会话被中�
         { stopReason: 'toolUse' },
       ),
     )
-    await env.app.kernel.submitInput(ROOT, '派一个后台子代理')
+    await env.app.kernel.conversations.submitInput(ROOT, '派一个后台子代理')
 
     let bgRun: WorkflowRunSummary | undefined
     let child: ConversationSummary | undefined
     await until(async () => {
       bgRun = (await listRuns(env)).find((r) => r.kind === 'subagent')
-      child = childConversations(env.app.kernel.listConversations(), ROOT)[0]
+      child = childConversations(env.app.kernel.conversations.listConversations(), ROOT)[0]
       return bgRun !== undefined && child !== undefined
     }, '后台 run 与子会话出现')
     const childId = child!.id
     const runId = bgRun!.id
 
     // 父回合仍在途（下一轮模型调用挂起）：中止父会话 → turn aborted → 级联。
-    await env.app.kernel.abortConversation(ROOT)
+    await env.app.kernel.conversations.abortConversation(ROOT)
     await until(async () => {
       const run = (await listRuns(env)).find((r) => r.id === runId)
       return run !== undefined && run.status === 'aborted'
@@ -175,16 +175,16 @@ test('父会话 abort 级联：子树后台 run 取消、受管子会话被中�
       () => env.settled.some((s) => s.conversationId === childId && s.outcome === 'aborted'),
       '受管（helmx-owned）子会话经守卫中止后回合 aborted',
     )
-    await env.app.kernel.waitForIdle(ROOT).catch(() => {})
+    await env.app.kernel.conversations.waitForIdle(ROOT).catch(() => {})
 
     // 不复活：无 agent report 重新唤醒父会话（无新 helmx.input、水位稳定）。
     const inputsBefore = (await inputEntries(env, ROOT)).filter((e) => e.kind === 'helmx.input').length
-    const seqBefore = env.app.kernel.getConversation(ROOT).completionSeq
+    const seqBefore = env.app.kernel.conversations.getConversation(ROOT).completionSeq
     await new Promise((r) => setTimeout(r, 400))
     const inputsAfter = (await inputEntries(env, ROOT)).filter((e) => e.kind === 'helmx.input').length
     assert.equal(inputsAfter, inputsBefore, '取消边界内的结算汇报不得重新投递输入（防复活）')
     assert.equal(inputsBefore, 1, '父会话只有最初一条输入（后台 run 的 aborted 汇报被跳过）')
-    assert.equal(env.app.kernel.getConversation(ROOT).completionSeq, seqBefore, '取消后无新回合')
+    assert.equal(env.app.kernel.conversations.getConversation(ROOT).completionSeq, seqBefore, '取消后无新回合')
     assert.equal(
       env.settled.some((s) => s.conversationId === ROOT && s.outcome === 'aborted'),
       true,
@@ -208,26 +208,26 @@ test('human 红线（后台路径）：归属翻转 human 的子会话在 run �
         { stopReason: 'toolUse' },
       ),
     )
-    await env.app.kernel.submitInput(ROOT, '派一个后台子代理')
-    await env.app.kernel.waitForIdle(ROOT)
+    await env.app.kernel.conversations.submitInput(ROOT, '派一个后台子代理')
+    await env.app.kernel.conversations.waitForIdle(ROOT)
 
     let runId: string | undefined
     let childId: number | undefined
     await until(async () => {
       const run = (await listRuns(env)).find((r) => r.kind === 'subagent')
-      const child = childConversations(env.app.kernel.listConversations(), ROOT)[0]
+      const child = childConversations(env.app.kernel.conversations.listConversations(), ROOT)[0]
       runId = run?.id
       childId = child?.id
       return runId !== undefined && childId !== undefined
     }, '后台 run 与子会话出现')
 
     // 人类接管子会话：后续一切自动化取消不得触碰（内核红线）。
-    env.app.kernel.markConversationOwnership(childId!, 'human')
+    env.app.kernel.ownership.markOwnership(childId!, 'human')
     const result = (await env.app.kernel.plugins.invokeAction('builtin:workflow', 'abort', { runId: runId! })) as { run: WorkflowRunSummary }
     assert.equal(result.run.status, 'aborted', 'run 确定结算 aborted（不等待被保护子会话）')
 
     await new Promise((r) => setTimeout(r, 400))
-    const childNow = env.app.kernel.getConversation(childId!)
+    const childNow = env.app.kernel.conversations.getConversation(childId!)
     assert.equal(childNow.status, 'working', `human 子会话仍在运行（实际 ${childNow.status}；守卫端口与信号桥两条路径都必须拒绝）`)
     assert.equal(
       env.settled.some((s) => s.conversationId === childId!),
@@ -235,8 +235,8 @@ test('human 红线（后台路径）：归属翻转 human 的子会话在 run �
       'human 子会话没有任何回合被自动化中止',
     )
     // 收尾：人类路径显式中止挂起的子会话，避免 close 等待。
-    await env.app.kernel.abortConversation(childId!)
-    await env.app.kernel.waitForIdle(childId!).catch(() => {})
+    await env.app.kernel.conversations.abortConversation(childId!)
+    await env.app.kernel.conversations.waitForIdle(childId!).catch(() => {})
   } finally {
     await env.close()
   }
@@ -252,21 +252,21 @@ test('human 红线（同步信号桥）：父会话 abort 不杀 human 子会话
         { stopReason: 'toolUse' },
       ),
     )
-    await env.app.kernel.submitInput(ROOT, '第一轮同步任务')
+    await env.app.kernel.conversations.submitInput(ROOT, '第一轮同步任务')
     let childA: number | undefined
     await until(() => {
-      childA = childConversations(env.app.kernel.listConversations(), ROOT)[0]?.id
+      childA = childConversations(env.app.kernel.conversations.listConversations(), ROOT)[0]?.id
       return childA !== undefined
     }, '同步子会话 A 出现')
-    env.app.kernel.markConversationOwnership(childA!, 'human')
-    await env.app.kernel.abortConversation(ROOT)
-    await env.app.kernel.waitForIdle(ROOT).catch(() => {})
+    env.app.kernel.ownership.markOwnership(childA!, 'human')
+    await env.app.kernel.conversations.abortConversation(ROOT)
+    await env.app.kernel.conversations.waitForIdle(ROOT).catch(() => {})
     await until(
       () => env.settled.some((s) => s.conversationId === ROOT && s.outcome === 'aborted'),
       '父会话回合 aborted',
     )
     await new Promise((r) => setTimeout(r, 300))
-    assert.equal(env.app.kernel.getConversation(childA!).status, 'working', 'human 子会话不被信号桥中止（真实内核守卫）')
+    assert.equal(env.app.kernel.conversations.getConversation(childA!).status, 'working', 'human 子会话不被信号桥中止（真实内核守卫）')
 
     // 第二轮（对照）：helmx-owned 同步子会话 → 父 abort 后子会话被守卫中止。
     env.parentQueue.push(
@@ -275,22 +275,22 @@ test('human 红线（同步信号桥）：父会话 abort 不杀 human 子会话
         { stopReason: 'toolUse' },
       ),
     )
-    await env.app.kernel.submitInput(ROOT, '第二轮同步任务')
+    await env.app.kernel.conversations.submitInput(ROOT, '第二轮同步任务')
     let childB: number | undefined
     await until(() => {
-      childB = childConversations(env.app.kernel.listConversations(), ROOT).map((c) => c.id).find((id) => id !== childA)
+      childB = childConversations(env.app.kernel.conversations.listConversations(), ROOT).map((c) => c.id).find((id) => id !== childA)
       return childB !== undefined
     }, '同步子会话 B 出现')
-    await env.app.kernel.abortConversation(ROOT)
+    await env.app.kernel.conversations.abortConversation(ROOT)
     await until(
       () => env.settled.some((s) => s.conversationId === childB! && s.outcome === 'aborted'),
       'helmx-owned 子会话经守卫中止',
     )
-    assert.equal(env.app.kernel.getConversation(childB!).status !== 'working', true, 'helmx 子会话已停止')
+    assert.equal(env.app.kernel.conversations.getConversation(childB!).status !== 'working', true, 'helmx 子会话已停止')
 
     // 收尾挂起的 human 子会话。
-    await env.app.kernel.abortConversation(childA!)
-    await env.app.kernel.waitForIdle(childA!).catch(() => {})
+    await env.app.kernel.conversations.abortConversation(childA!)
+    await env.app.kernel.conversations.waitForIdle(childA!).catch(() => {})
   } finally {
     await env.close()
   }
@@ -306,22 +306,22 @@ test('多级后台：中段会话 abort 级联取消其子树 run，深层 runs/
         { stopReason: 'toolUse' },
       ),
     )
-    await env.app.kernel.submitInput(ROOT, '派一级后台')
+    await env.app.kernel.conversations.submitInput(ROOT, '派一级后台')
     let level1Run: WorkflowRunSummary | undefined
     let childD: number | undefined
     await until(async () => {
       level1Run = (await listRuns(env)).find((r) => r.kind === 'subagent')
-      childD = childConversations(env.app.kernel.listConversations(), ROOT)[0]?.id
+      childD = childConversations(env.app.kernel.conversations.listConversations(), ROOT)[0]?.id
       return level1Run !== undefined && childD !== undefined
     }, '一级后台 run 与子会话 D 出现')
-    await env.app.kernel.waitForIdle(ROOT)
+    await env.app.kernel.conversations.waitForIdle(ROOT)
 
     // 二级：在 D 下启动真实工作流 run（其 agent 子会话挂起，保持 running）。
     const script = 'export const meta = { name: "level2", description: "t" }\nconst a = await agent("HANG-CHILD 二级代理", { label: "a" }); return a'
     const level2 = (await env.app.kernel.plugins.invokeAction('builtin:workflow', 'run', { conversationId: childD!, script })) as { run: WorkflowRunSummary }
     let childD2: number | undefined
     await until(async () => {
-      childD2 = childConversations(env.app.kernel.listConversations(), childD!).map((c) => c.id)[0]
+      childD2 = childConversations(env.app.kernel.conversations.listConversations(), childD!).map((c) => c.id)[0]
       return childD2 !== undefined && (await listRuns(env)).some((r) => r.id === level2.run.id && r.status === 'running')
     }, '二级 run 与孙会话 D2 出现')
 
@@ -339,7 +339,7 @@ test('多级后台：中段会话 abort 级联取消其子树 run，深层 runs/
     // 中止 D（其回合在途挂起）→ turn aborted → 级联取消 D 子树内的二级 run；
     // 一级 run（发起者是 ROOT，不在 D 子树内）不被该边界取消。
     const inputsDBefore = (await inputEntries(env, childD!)).filter((e) => e.kind === 'helmx.input').length
-    await env.app.kernel.abortConversation(childD!)
+    await env.app.kernel.conversations.abortConversation(childD!)
     await until(async () => {
       const run = (await listRuns(env)).find((r) => r.id === level2.run.id)
       return run !== undefined && run.status === 'aborted'

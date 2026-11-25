@@ -49,12 +49,12 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
     const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'), gitTemplate)
     try {
       const { kernel } = env.app
-      const coord = await kernel.createConversation({ title: 'Context Coordinator', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Context Coordinator', profileId: 'assistant', cwd: env.repoDir })
 
       // Seed real history on coordinator before forking
       env.faux.setResponses([fauxAssistantMessage('Architecture context: token format is v3-hmac.')])
-      await kernel.submitInput(coord.id, 'Remember architecture token format v3-hmac')
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.submitInput(coord.id, 'Remember architecture token format v3-hmac')
+      await kernel.conversations.waitForIdle(coord.id)
 
       const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Fork & Routing Squad',
@@ -81,11 +81,11 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         { prompt: 'Stand by with forked context.', name: 'coder', forkFrom: 'coordinator' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(coder.workerConversationId)
+      await kernel.conversations.waitForIdle(coder.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
       assert.equal(forkedSawHistory, true, 'forkFrom="coordinator" must inherit clean parent conversation history')
-      assert.deepEqual(kernel.getConversation(coder.workerConversationId).tags, [WORKER_TAG], 'forked worker must have swarm-worker tag only')
+      assert.deepEqual(kernel.conversations.getConversation(coder.workerConversationId).tags, [WORKER_TAG], 'forked worker must have swarm-worker tag only')
 
       // Verify inspect_worker & @ completion action
       const inspected = (await kernel.plugins.invokeAction(
@@ -107,7 +107,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       assert.deepEqual(atItems.items.map((i) => i.id), ['coder'])
 
       // Passive comment (wake: false default) MUST NOT wake idle coder
-      const beforeCompletionSeq = kernel.getConversation(coder.workerConversationId).completionSeq
+      const beforeCompletionSeq = kernel.conversations.getConversation(coder.workerConversationId).completionSeq
       const statusBeforePassive = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId })) as BoardViewDoc
       const coderBefore = statusBeforePassive.members.find((m) => m.name === 'coder')!
       const commentRes = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_post', {
@@ -123,9 +123,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       const coderAfter = statusAfterPassive.members.find((m) => m.name === 'coder')!
       assert.equal(coderAfter.pendingWakeupSeq, coderBefore.pendingWakeupSeq, 'passive comment must not advance pendingWakeupSeq')
       assert.equal(coderAfter.liveState, 'idle')
-      await kernel.waitForIdle(coder.workerConversationId)
+      await kernel.conversations.waitForIdle(coder.workerConversationId)
       assert.equal(
-        kernel.getConversation(coder.workerConversationId).completionSeq,
+        kernel.conversations.getConversation(coder.workerConversationId).completionSeq,
         beforeCompletionSeq,
         'comment(wake=false) must not wake an idle member',
       )
@@ -173,7 +173,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       slowGate.resolve()
       const abortRes = await abortPromise
       assert.equal(abortRes.aborted, true)
-      await kernel.waitForIdle(coder.workerConversationId)
+      await kernel.conversations.waitForIdle(coder.workerConversationId)
 
       // Once idle: switch_worker_model switches model to faux/faux-2 in place!
       const switched = (await kernel.plugins.invokeAction(
@@ -183,7 +183,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         { conversationId: coord.id },
       )) as { model: string }
       assert.equal(switched.model, 'faux/faux-2')
-      assert.equal(kernel.getConversation(coder.workerConversationId).model, 'faux/faux-2')
+      assert.equal(kernel.conversations.getConversation(coder.workerConversationId).model, 'faux/faux-2')
 
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
@@ -217,7 +217,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
 
     let inst = await makeInstance()
     try {
-      const coord = await inst.app.kernel.createConversation({ title: 'Resilience Coord', profileId: 'assistant', cwd: repoDir })
+      const coord = await inst.app.kernel.conversations.createConversation({ title: 'Resilience Coord', profileId: 'assistant', cwd: repoDir })
       const { groupId } = (await inst.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Self-Heal Squad',
         conversationId: coord.id,
@@ -252,9 +252,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         }
         return read.posts.some((p) => p.from === 'system' && p.kind === 'blocker' && p.body.includes('@mute'))
       })
-      await inst.app.kernel.waitForIdle(muteWorker.workerConversationId)
+      await inst.app.kernel.conversations.waitForIdle(muteWorker.workerConversationId)
       await waitFor(() => inst.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await inst.app.kernel.waitForIdle(coord.id)
+      await inst.app.kernel.conversations.waitForIdle(coord.id)
       assert.equal(silentTurns, 2, 'must nudge at most once (initial turn + 1 nudge turn = 2 turns total)')
 
       // 2) Turn outcome === 'failed' -> auto-posts system [blocker] with model name & redacted error
@@ -281,9 +281,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
           (p) => p.from === 'system' && p.kind === 'blocker' && p.body.includes('@flaky') && p.body.includes('faux/faux-1'),
         )
       })
-      await inst.app.kernel.waitForIdle(flakyWorker.workerConversationId)
+      await inst.app.kernel.conversations.waitForIdle(flakyWorker.workerConversationId)
       await waitFor(() => inst.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await inst.app.kernel.waitForIdle(coord.id)
+      await inst.app.kernel.conversations.waitForIdle(coord.id)
 
       // 3) 6-condition 0-Token Quiescence Guard: mute posts comment(wake=false) to flaky -> all idle -> auto [stall] citing #seq!
       setSwarmRoleResponses(inst.faux, {
@@ -309,9 +309,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         }
         return read.posts.some((p) => p.from === 'system' && p.kind === 'stall' && p.body.includes('wake=false'))
       })
-      await inst.app.kernel.waitForIdle(muteWorker.workerConversationId)
+      await inst.app.kernel.conversations.waitForIdle(muteWorker.workerConversationId)
       await waitFor(() => inst.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await inst.app.kernel.waitForIdle(coord.id)
+      await inst.app.kernel.conversations.waitForIdle(coord.id)
 
       // 4) Restart recovery of unsent wakeup envelope: persist pendingWakeupSeq > readCursorSeq on disk, restart Hub, verify wakeup delivered!
       await inst.app.close()
@@ -342,9 +342,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         })
       })
       await waitFor(() => recoveredWakeupDelivered, { timeoutMs: 10_000 })
-      await inst.app.kernel.waitForIdle(muteWorker.workerConversationId)
+      await inst.app.kernel.conversations.waitForIdle(muteWorker.workerConversationId)
       await waitFor(() => inst.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await inst.app.kernel.waitForIdle(coord.id)
+      await inst.app.kernel.conversations.waitForIdle(coord.id)
     } finally {
       await inst.app.close()
     }
@@ -369,7 +369,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       providers: [faux.provider],
     })
     try {
-      const coord = await app.kernel.createConversation({ title: 'Handover Coord', profileId: 'assistant', cwd: repoDir })
+      const coord = await app.kernel.conversations.createConversation({ title: 'Handover Coord', profileId: 'assistant', cwd: repoDir })
       const { groupId } = (await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Handover Squad',
         conversationId: coord.id,
@@ -398,9 +398,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         { conversationId: coord.id },
       )) as { workerConversationId: number }
 
-      await app.kernel.waitForIdle(worker.workerConversationId)
+      await app.kernel.conversations.waitForIdle(worker.workerConversationId)
       await waitFor(() => app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await app.kernel.waitForIdle(coord.id)
+      await app.kernel.conversations.waitForIdle(coord.id)
 
       // 1) Board carries only the coordinator brief and the worker done — no system blocker, no stall, no echo posts.
       const read = (await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
@@ -412,7 +412,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       assert.equal(read.posts.filter((p) => p.kind === 'done' && p.from === 'coder').length, 1)
 
       // 2) The worker conversation never received a silent-exit nudge (mid-turn settlement misfire).
-      const workerDetail = await app.kernel.getConversationDetail(worker.workerConversationId, { limit: 50 })
+      const workerDetail = await app.kernel.conversations.getConversationDetail(worker.workerConversationId, { limit: 50 })
       assert.equal(
         workerDetail.entries.some((e) => JSON.stringify(e.data ?? '').includes('swarm_silent_exit_nudge')),
         false,
@@ -420,7 +420,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       )
 
       // 3) The coordinator received exactly one board report, covering the done post.
-      const coordDetail = await app.kernel.getConversationDetail(coord.id, { limit: 50 })
+      const coordDetail = await app.kernel.conversations.getConversationDetail(coord.id, { limit: 50 })
       const reportInputs = coordDetail.entries.filter(
         (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
       )
@@ -435,7 +435,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
     const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int7-'), gitTemplate)
     try {
       const { kernel } = env.app
-      const coord = await kernel.createConversation({ title: 'Catchup Coord', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Catchup Coord', profileId: 'assistant', cwd: env.repoDir })
       const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Catchup Squad',
         conversationId: coord.id,
@@ -488,18 +488,18 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       await betaSecondRoundEntered.promise
       // Hold longer than COORDINATOR_BATCH_WINDOW_MS (50ms) while beta is still mid-turn!
       await new Promise((r) => setTimeout(r, 90))
-      const midTurnReports = (await kernel.getConversationDetail(coord.id, { limit: 20 })).entries.filter(
+      const midTurnReports = (await kernel.conversations.getConversationDetail(coord.id, { limit: 20 })).entries.filter(
         (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
       )
       assert.equal(midTurnReports.length, 0, 'done post must NOT trigger 50ms race report while worker is still settling trailing text')
 
       betaRelease.resolve()
-      await kernel.waitForIdle(beta.workerConversationId)
+      await kernel.conversations.waitForIdle(beta.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       // Coordinator must have received final report after beta settled with empty activeWorkingMembers!
-      const coordDetail = await kernel.getConversationDetail(coord.id, { limit: 50 })
+      const coordDetail = await kernel.conversations.getConversationDetail(coord.id, { limit: 50 })
       const reports = coordDetail.entries
         .filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'))
         .map((e) => JSON.stringify(e.data ?? ''))
@@ -509,11 +509,11 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
 
       // 2) Active worker conversation lock blocks deletion while active, releases after close or archive
       await assert.rejects(
-        () => kernel.deleteConversation(beta.workerConversationId),
+        () => kernel.conversations.deleteConversation(beta.workerConversationId),
         (err: unknown) => err instanceof HelmxError && err.code === 'conversation_managed_by_plugin' && err.status === 409,
       )
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'archive_worker', { groupId, name: 'beta' }, { conversationId: coord.id })
-      await kernel.deleteConversation(beta.workerConversationId)
+      await kernel.conversations.deleteConversation(beta.workerConversationId)
 
       // 3) failed-turn catchup: if worker settles with outcome=failed after a new wakeup was queued mid-turn, queued wakeup delivers
       let gammaFailDone = false
@@ -525,9 +525,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         { prompt: 'Fail initial turn cleanly.', name: 'gamma' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(failingWorker.workerConversationId)
+      await kernel.conversations.waitForIdle(failingWorker.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       // Fail gamma's next turn AFTER deterministically awaiting an inbound brief queued mid-turn
       env.faux.setResponses([
@@ -566,9 +566,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         { conversationId: coord.id },
       )
       await waitFor(() => gammaRecoveredDelivered === true)
-      await kernel.waitForIdle(failingWorker.workerConversationId)
+      await kernel.conversations.waitForIdle(failingWorker.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
       assert.equal(gammaRecoveredDelivered, true)
 
       // 4) Worker with worktree deleted while plugin disabled: startup reconciles hold, archives member, and posts [blocker]
@@ -594,19 +594,19 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         { prompt: 'Hold worktree then get deleted while disabled.', name: 'delta', isolation: 'worktree' },
         { conversationId: coord.id },
       )) as { workerConversationId: number; worktreeId: string }
-      await kernel.waitForIdle(wtWorker.workerConversationId)
+      await kernel.conversations.waitForIdle(wtWorker.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
       await waitFor(() => {
-        const s = kernel.getConversation(wtWorker.workerConversationId).status
+        const s = kernel.conversations.getConversation(wtWorker.workerConversationId).status
         return s !== 'working' && s !== 'blocked' && kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0
       })
 
       await kernel.plugins.disable(SWARM_PLUGIN_ID, { force: true })
-      await kernel.deleteConversation(wtWorker.workerConversationId)
+      await kernel.conversations.deleteConversation(wtWorker.workerConversationId)
       await kernel.plugins.enable(SWARM_PLUGIN_ID)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const statusAfterReconcile = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId })) as BoardViewDoc
       const deltaMember = statusAfterReconcile.members.find((m) => m.name === 'delta')!
@@ -633,7 +633,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
     let fastId = 0
     try {
       const { kernel } = env1.app
-      const coord = await kernel.createConversation({ title: 'Tiered Wake Coord', profileId: 'assistant', cwd: env1.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Tiered Wake Coord', profileId: 'assistant', cwd: env1.repoDir })
       coordId = coord.id
       const created = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Tiered Wake Squad',
@@ -720,9 +720,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
           { conversationId: coord.id },
         )) as { workerConversationId: number }
         fastId = fast.workerConversationId
-        await kernel.waitForIdle(fast.workerConversationId)
+        await kernel.conversations.waitForIdle(fast.workerConversationId)
         await new Promise((r) => setTimeout(r, 90))
-        const reportsAfterFastDone = (await kernel.getConversationDetail(coord.id, { limit: 30 })).entries.filter(
+        const reportsAfterFastDone = (await kernel.conversations.getConversationDetail(coord.id, { limit: 30 })).entries.filter(
           (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
         )
         assert.equal(reportsAfterFastDone.length, 0, 'done post must remain batched while another worker is still working')
@@ -734,10 +734,10 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
           { prompt: 'Review and ask coordinator.', name: 'reviewer' },
           { conversationId: coord.id },
         )) as { workerConversationId: number }
-        await kernel.waitForIdle(reviewer.workerConversationId)
+        await kernel.conversations.waitForIdle(reviewer.workerConversationId)
 
         const coordReportText = await reviewCoordSeen.promise
-        await kernel.waitForIdle(coord.id)
+        await kernel.conversations.waitForIdle(coord.id)
         assert.match(coordReportText, /Fast slice done\./)
         assert.match(coordReportText, /Need coordinator decision now\./)
         assert.match(coordReportText, /activeWorkingMembers: @slow\n/)
@@ -749,15 +749,15 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
 
         // Release slow -> finishes with passive comment -> all workers idle -> stall emits since latest non-comment is review (not done)
         slowRelease.resolve()
-        await kernel.waitForIdle(slow.workerConversationId)
+        await kernel.conversations.waitForIdle(slow.workerConversationId)
         await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-        await kernel.waitForIdle(coord.id)
+        await kernel.conversations.waitForIdle(coord.id)
       } finally {
         slowRelease.resolve()
       }
 
       // Un-woken done (wake: false) in a second group must trigger 0-Token [stall] instead of silent deadlock
-      const coord2 = await kernel.createConversation({ title: 'Unwoken Done Coord', profileId: 'assistant', cwd: env1.repoDir })
+      const coord2 = await kernel.conversations.createConversation({ title: 'Unwoken Done Coord', profileId: 'assistant', cwd: env1.repoDir })
       const g2 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Unwoken Done Squad',
         conversationId: coord2.id,
@@ -784,14 +784,14 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         }
         return read.posts.some((p) => p.from === 'system' && p.kind === 'stall' && p.body.includes('wake=false'))
       })
-      await kernel.waitForIdle(solo.workerConversationId)
+      await kernel.conversations.waitForIdle(solo.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord2.id)
+      await kernel.conversations.waitForIdle(coord2.id)
 
       // Seed an unrelated turn on coord1 so its completionSeq advances past the pre-crash inflightReport baseCompletionSeq
       env1.faux.setResponses([fauxAssistantMessage('Unrelated human reply.')])
-      await kernel.submitInput(coordId, 'Unrelated user question before restart', { origin: 'human' })
-      await kernel.waitForIdle(coordId)
+      await kernel.conversations.submitInput(coordId, 'Unrelated user question before restart', { origin: 'human' })
+      await kernel.conversations.waitForIdle(coordId)
     } finally {
       await env1.close()
     }
@@ -852,7 +852,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       const recoveredText = await recoveredReportSeen.promise
       assert.match(recoveredText, /Uncommitted report must survive unrelated completionSeq bump\./)
       await waitFor(() => app2.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await app2.kernel.waitForIdle(coordId)
+      await app2.kernel.conversations.waitForIdle(coordId)
     } finally {
       await app2.close()
     }
@@ -911,7 +911,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       assert.match(catchupText, /Trailing passive comment after done\./)
       assert.match(catchupText, /activeWorkingMembers: \(none\)/)
       await waitFor(() => app3.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await app3.kernel.waitForIdle(coordId)
+      await app3.kernel.conversations.waitForIdle(coordId)
 
       const finalMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
       assert.equal(finalMeta.lastReportHadActiveWorkers, undefined, 'lastReportHadActiveWorkers must clear after idle catch-up')
@@ -925,7 +925,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
     try {
       const { kernel } = env.app
       await kernel.plugins.setConfig(SWARM_PLUGIN_ID, { maxPeerHopsWithoutCoordinator: 2 })
-      const coord = await kernel.createConversation({ title: 'Swarm Polish Coord', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Swarm Polish Coord', profileId: 'assistant', cwd: env.repoDir })
       const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Polish Squad',
         conversationId: coord.id,
@@ -979,9 +979,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         { groupId, name: 'alpha', prompt: 'Initial turn on faux-1' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(alpha.workerConversationId)
+      await kernel.conversations.waitForIdle(alpha.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const switchToolRes = await execSwarmDerived<{ model: string; effort?: string; postSeq?: number }>(
         'swarm_switch_worker_model',
@@ -993,7 +993,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       assert.ok(typeof switchToolRes.structuredOutput.postSeq === 'number')
       assert.match(switchToolRes.output, /effort=high/)
       assert.match(switchToolRes.output, /brief #/)
-      assert.equal(kernel.getConversation(alpha.workerConversationId).thinkingLevel, 'high')
+      assert.equal(kernel.conversations.getConversation(alpha.workerConversationId).thinkingLevel, 'high')
 
       // Replay with same callId must deduplicate and return the same postSeq without waking twice
       const replayRes = await execSwarmDerived<{ postSeq?: number }>(
@@ -1004,9 +1004,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       assert.equal(replayRes.structuredOutput.postSeq, switchToolRes.structuredOutput.postSeq)
 
       await waitFor(() => resumedOnNewModel)
-      await kernel.waitForIdle(alpha.workerConversationId)
+      await kernel.conversations.waitForIdle(alpha.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       // board_status text summary surfaces member model=
       const statusTool = await execSwarmDerived<{ members: Array<{ name: string }> }>(
@@ -1067,9 +1067,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         { groupId, name: 'p2', prompt: 'Stand by as reviewer' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(p2.workerConversationId)
+      await kernel.conversations.waitForIdle(p2.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const p1 = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
@@ -1082,10 +1082,10 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         const read = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
         return read.posts.some((p) => p.from === 'system' && p.kind === 'blocker' && p.body.includes('circuit breaker tripped'))
       })
-      await kernel.waitForIdle(p1.workerConversationId)
-      await kernel.waitForIdle(p2.workerConversationId)
+      await kernel.conversations.waitForIdle(p1.workerConversationId)
+      await kernel.conversations.waitForIdle(p2.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       assert.equal(p1Turns, 2, 'p1 ran initial brief + 1 review pong')
       assert.equal(p2Turns, 1, 'p2 must NOT be woken on the 3rd consecutive peer hop after breaker tripped')

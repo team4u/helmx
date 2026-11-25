@@ -23,7 +23,7 @@ import { HelmxError, MODEL_TIER_PREFIX, isValidModelTierId } from '@helmx/protoc
 
 const MODEL_TIERS_CAPABILITY_ID = 'helmx.model-tiers'
 import type { ConfigService, CredentialService, ProviderService, SecretStash } from '../services/index.js'
-import { listModelCatalog, listModelProviders, buildModels, type ResolvedModelRef } from './models.js'
+import { THINKING_LEVELS, listModelCatalog, listModelProviders, buildModels, type ResolvedModelRef } from './models.js'
 
 export type { ResolvedModelRef }
 
@@ -110,6 +110,10 @@ interface ModelRegistryOptions {
   readonly pluginHost: () => { assertProviderAvailable(pluginId: string): void } | undefined
   /** Align effective models across all conversations after default model changes (host implementation). */
   readonly alignAllConversations: () => Promise<void>
+  /** Shutdown check (optional in standalone tests; defaults to open). */
+  readonly isClosed?: () => boolean
+  /** Writability guard (optional in standalone tests; throws on fatal storage error or closed runtime). */
+  readonly assertWritable?: () => void
 }
 
 export class ModelRegistry {
@@ -123,6 +127,8 @@ export class ModelRegistry {
   private readonly events: ModelRegistryOptions['events']
   private readonly pluginHost: ModelRegistryOptions['pluginHost']
   private readonly alignAllConversations: ModelRegistryOptions['alignAllConversations']
+  private readonly isClosed: () => boolean
+  private readonly assertWritable: () => void
   /** Runtime dynamically registered providers (injected by plugins via `HostOptions.providers.register`). */
   private readonly runtimeProviders = new Map<string, Provider>()
   /** Runtime provider ownership (`providerId` -> owning `pluginId`; cleared on unregister). */
@@ -180,6 +186,8 @@ export class ModelRegistry {
     this.events = options.events
     this.pluginHost = options.pluginHost
     this.alignAllConversations = options.alignAllConversations
+    this.isClosed = options.isClosed ?? (() => false)
+    this.assertWritable = options.assertWritable ?? (() => {})
     this.modelsCurrent = initialModels
     this.defaultModel = defaults.model
     this.defaultCompactionModel = defaults.compactionModel
@@ -455,8 +463,7 @@ export class ModelRegistry {
     if (this.defaultThinkingLevel === undefined) {
       const configuredLevel = raw['thinkingLevel'] as string | undefined | null
       if (configuredLevel !== undefined && configuredLevel !== '') {
-        // Enum validation is injected by host (THINKING_LEVELS belongs to spawn contract).
-        await this.configuredThinkingLevelValidated(configuredLevel as string)
+        this.assertConfigThinkingLevel(configuredLevel as string)
         this.defaultThinkingLevel = configuredLevel as string
       }
     }
@@ -472,39 +479,45 @@ export class ModelRegistry {
     if (this.defaultCompactionThinkingLevel === undefined) {
       const configuredCompactionLevel = raw['compactionThinkingLevel'] as string | undefined | null
       if (configuredCompactionLevel !== undefined && configuredCompactionLevel !== '') {
-        await this.configuredThinkingLevelValidated(configuredCompactionLevel as string)
+        this.assertConfigThinkingLevel(configuredCompactionLevel as string)
         this.defaultCompactionThinkingLevel = configuredCompactionLevel as string
       }
     }
     this.modelThinkingLevels = parseModelThinkingLevelsConfig(raw['modelThinkingLevels'])
     for (const level of new Set(Object.values(this.modelThinkingLevels))) {
-      await this.configuredThinkingLevelValidated(level)
+      this.assertConfigThinkingLevel(level)
     }
     this.disabledModels = parseDisabledModelsConfig(raw['disabledModels'])
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
     this.alignmentEpochValue += 1
   }
 
-  /** Reasoning effort enum validation callback (host-injected so this module avoids depending on spawn's THINKING_LEVELS). */
-  private configuredThinkingLevelValidated = async (_level: string): Promise<void> => {
-    throw new HelmxError('config_corrupt', 'Internal error: thinkingLevel validator was not injected', 500)
+  private assertConfigThinkingLevel(level: string): void {
+    if (!THINKING_LEVELS.has(level)) {
+      throw new HelmxError('config_corrupt', `Invalid config.json.thinkingLevel (valid values: ${[...THINKING_LEVELS].join(' | ')})`, 500)
+    }
   }
 
-  /** Inject reasoning effort enum validator (call right after construction, before `loadDefaultsFromConfig`). */
-  setThinkingLevelValidator(validate: (level: string) => Promise<void>): void {
-    this.configuredThinkingLevelValidated = validate
+  private assertInputThinkingLevel(level: string, label: string): void {
+    if (!THINKING_LEVELS.has(level)) {
+      throw new HelmxError(
+        'validation_error',
+        `Invalid ${label} '${level}'; valid values: ${[...THINKING_LEVELS].join(' | ')}`,
+        400,
+      )
+    }
   }
 
   /** Set global default model, reasoning effort, compaction model, and compaction reasoning effort (`config.json`). */
   async setDefaultModel(
-    model: string | undefined,
-    thinkingLevel: string | undefined,
-    validateThinkingLevel: (level: string) => void,
-    compactionModel?: string | undefined,
-    compactionThinkingLevel?: string | undefined,
+    model?: string,
+    thinkingLevel?: string,
+    compactionModel?: string,
+    compactionThinkingLevel?: string,
     modelThinkingLevels?: Record<string, string>,
     modelThinkingUpdate?: { model: string; level: string },
   ): Promise<void> {
+    this.assertWritable()
     const trimmed = model?.trim()
     if (trimmed !== undefined && trimmed !== '') {
       const ref = this.resolveModelRef(trimmed)
@@ -518,17 +531,17 @@ export class ModelRegistry {
     const normalizeLevel = (rawLevel: string | undefined): string | undefined => {
       if (rawLevel === undefined) return undefined
       const level = rawLevel.trim()
-      if (level !== '') validateThinkingLevel(level)
+      if (level !== '') this.assertInputThinkingLevel(level, 'thinkingLevel')
       return level === '' ? undefined : level
     }
     const nextLevel = normalizeLevel(thinkingLevel)
     const nextCompactionLevel = normalizeLevel(compactionThinkingLevel)
     const nextModelThinkingLevels = modelThinkingLevels === undefined
       ? undefined
-      : this.validateModelThinkingLevels(modelThinkingLevels, validateThinkingLevel)
+      : this.validateModelThinkingLevels(modelThinkingLevels)
     const nextModelThinkingUpdate = modelThinkingUpdate === undefined
       ? undefined
-      : this.validateModelThinkingUpdate(modelThinkingUpdate, validateThinkingLevel)
+      : this.validateModelThinkingUpdate(modelThinkingUpdate)
     const updatedModelThinkingLevels = nextModelThinkingLevels !== undefined || nextModelThinkingUpdate !== undefined
     let nextResolvedModelThinkingLevels: Record<string, string> | undefined
     await this.configSvc.updateBy((current) => {
@@ -582,10 +595,7 @@ export class ModelRegistry {
     }
   }
 
-  private validateModelThinkingLevels(
-    levels: Record<string, string>,
-    validateThinkingLevel: (level: string) => void,
-  ): Record<string, string> {
+  private validateModelThinkingLevels(levels: Record<string, string>): Record<string, string> {
     if (levels === null || typeof levels !== 'object' || Array.isArray(levels)) {
       throw new HelmxError('validation_error', 'modelThinkingLevels must be an object mapping model references to thinking levels', 400)
     }
@@ -602,16 +612,13 @@ export class ModelRegistry {
         throw new HelmxError('validation_error', `modelThinkingLevels['${model}'] must be a non-empty thinking level`, 400)
       }
       const level = rawLevel.trim()
-      validateThinkingLevel(level)
+      this.assertInputThinkingLevel(level, 'thinkingLevel')
       validated[model] = level
     }
     return validated
   }
 
-  private validateModelThinkingUpdate(
-    update: { model: string; level: string },
-    validateThinkingLevel: (level: string) => void,
-  ): { model: string; level: string } {
+  private validateModelThinkingUpdate(update: { model: string; level: string }): { model: string; level: string } {
     if (!/^[^/\s]+\/[^\s]+$/.test(update.model)) {
       throw new HelmxError('validation_error', `modelThinking key must be a 'provider/model' reference: ${update.model}`, 400)
     }
@@ -620,7 +627,7 @@ export class ModelRegistry {
       throw new HelmxError('validation_error', `modelThinking applies to concrete models only (configure thinkingLevel directly on tier '${update.model}')`, 400)
     }
     const level = update.level.trim()
-    if (level !== '') validateThinkingLevel(level)
+    if (level !== '') this.assertInputThinkingLevel(level, 'thinkingLevel')
     return { model: update.model, level }
   }
 
@@ -647,8 +654,8 @@ export class ModelRegistry {
   async setModelThinkingDefault(
     model: string,
     level: string,
-    validateThinkingLevel: (level: string) => void,
   ): Promise<void> {
+    this.assertWritable()
     const trimmedModel = model.trim()
     if (trimmedModel === '') {
       throw new HelmxError('validation_error', 'Per-model thinking default requires a model reference', 400)
@@ -663,7 +670,7 @@ export class ModelRegistry {
     }
     this.assertModelEnabled(ref.provider, ref.modelId)
     const trimmedLevel = level.trim()
-    if (trimmedLevel !== '') validateThinkingLevel(trimmedLevel)
+    if (trimmedLevel !== '') this.assertInputThinkingLevel(trimmedLevel, 'thinking level')
     const next = await this.configSvc.updateBy((current) => {
       const merged: Record<string, unknown> = { ...current }
       const existing = parseModelThinkingLevelsConfig(merged['modelThinkingLevels'])
@@ -710,6 +717,7 @@ export class ModelRegistry {
    * Backend stores strings verbatim without verifying model existence (catalog flags match catalog entries only).
    */
   async setDisabledModels(provider: string | undefined, modelIds: string[]): Promise<ModelCatalog> {
+    this.assertWritable()
     if (provider === MODEL_TIER_PREFIX) {
       throw new HelmxError(
         'validation_error',
@@ -756,6 +764,7 @@ export class ModelRegistry {
    * no-ops when `Models` is externally injected (caller owns the set).
    */
   async reloadModels(): Promise<void> {
+    this.assertWritable()
     await this.enqueueModelsChange(async () => {
       await this.rebuildModelsLocked()
     })
@@ -798,6 +807,7 @@ export class ModelRegistry {
    * Returns an idempotent unregister callback that deletes and rebuilds only if the map still points to this instance.
    */
   async registerRuntimeProvider(provider: Provider, pluginId?: string): Promise<() => Promise<void>> {
+    this.assertWritable()
     if (this.externalModels) {
       throw new HelmxError(
         'runtime_provider_unsupported',
@@ -893,20 +903,23 @@ export class ModelRegistry {
    * captures instance and generation at start to avoid publishing stale snapshot events if replaced mid-flight;
    * redacts errors via stash before returning.
    */
-  async refreshModels(isClosed: () => boolean, options?: {
+  async refreshModels(options?: {
     providers?: string[]
     allowNetwork?: boolean
     force?: boolean
   }): Promise<ModelProvidersRefreshResult> {
-    return this.enqueueModelsChange(() => this.refreshModelsLocked(isClosed, options))
+    if (this.isClosed()) throw new HelmxError('runtime_closing', 'Kernel is closing; cannot refresh model catalog', 409)
+    this.assertWritable()
+    return this.enqueueModelsChange(() => this.refreshModelsLocked(options))
   }
 
-  private async refreshModelsLocked(isClosed: () => boolean, options?: {
+  private async refreshModelsLocked(options?: {
     providers?: string[]
     allowNetwork?: boolean
     force?: boolean
   }): Promise<ModelProvidersRefreshResult> {
-    if (isClosed()) throw new HelmxError('runtime_closing', 'Kernel is closing; cannot refresh model catalog', 409)
+    if (this.isClosed()) throw new HelmxError('runtime_closing', 'Kernel is closing; cannot refresh model catalog', 409)
+    this.assertWritable()
     if (this.externalModels) {
       throw new HelmxError(
         'runtime_provider_unsupported',

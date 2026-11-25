@@ -19,7 +19,7 @@ import { join } from 'node:path'
 
 import { createHubHandler, startHub, type HubHandlerOptions } from '../src/http/index.js'
 import { createHubHandler as createHandlerLegacy } from '../src/http/index.js'
-import type { KernelRuntimeLike, EventHub } from '../src/http/index.js'
+import type { HttpEventHub, KernelHttpTarget } from '../src/http/index.js'
 import { AuthService } from '../src/services/index.js'
 import { HelmxError } from '@helmx/protocol'
 
@@ -27,13 +27,13 @@ import { HelmxError } from '@helmx/protocol'
 // Test fixture (minimal kernel shape + real AuthService)
 // ---------------------------------------------------------------------------
 
-class TestEventHub implements EventHub {
+class TestEventHub implements HttpEventHub {
   response(): Response {
     return new Response(null, { status: 204 })
   }
 }
 
-function makeKernel(dataDir: string): KernelRuntimeLike {
+function makeKernel(dataDir: string): KernelHttpTarget {
   return {
     dataDir,
     auth: new AuthService(dataDir),
@@ -44,48 +44,60 @@ function makeKernel(dataDir: string): KernelRuntimeLike {
     providers: undefined as never,
     artifacts: undefined as never,
     plugins: undefined as never,
-    listConversations: async () => [],
-    getConversationDetail: async () => {
-      throw new Error('unused')
+    conversations: {
+      listConversations: () => [],
+      getConversationDetail: async () => {
+        throw new Error('unused')
+      },
+      getConversationEntry: async () => {
+        throw new Error('unused')
+      },
+      createConversation: async () => {
+        throw new Error('unused')
+      },
+      updateConversation: async () => {
+        throw new Error('unused')
+      },
+      deleteConversation: async () => {},
+      deleteConversations: async (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
+      submitInput: async () => {
+        throw new Error('unused')
+      },
+      waitForInput: async () => {
+        throw new Error('unused')
+      },
+      abortConversation: async () => {},
+      resetConversation: async () => {
+        throw new Error('unused')
+      },
+      compactConversation: async () => {
+        throw new Error('unused')
+      },
+      forkConversation: async () => {
+        throw new Error('unused')
+      },
+      search: async () => [],
     },
-    getConversationEntry: async () => {
-      throw new Error('unused')
+    asks: {
+      listAsks: () => [],
+      answerAsk: async () => {
+        throw new Error('unused')
+      },
+      cancelAsk: async () => {
+        throw new Error('unused')
+      },
     },
-    createConversation: async () => {
-      throw new Error('unused')
+    models: {
+      listModels: async () => ({ models: [], thinkingLevels: {} }),
+      listModelProviders: () => [],
     },
-    updateConversation: async () => {
-      throw new Error('unused')
+    nodes: {
+      listNodes: async () => [],
+      issueNodeToken: async () => ({ nodeId: 'local', token: 'local:t', createdAt: 1 }),
+      removeNode: async () => {},
+      execEnv: async () => ({ ok: true, exitCode: 0, output: '', timedOut: false }),
     },
-    deleteConversation: async () => {},
-    deleteConversations: async (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
-    submitInput: async () => {
-      throw new Error('unused')
-    },
-    waitForInput: async () => {
-      throw new Error('unused')
-    },
-    abortConversation: async () => {},
-    resetConversation: async () => {
-      throw new Error('unused')
-    },
-    compactConversation: async () => {
-      throw new Error('unused')
-    },
-    forkConversation: async () => {
-      throw new Error('unused')
-    },
-    listAsks: async () => [],
-    answerAsk: async () => {},
-    cancelAsk: async () => {},
-    search: async () => [],
-    listModels: () => ({ models: [], thinkingLevels: {} }),
-    listModelProviders: () => [],
-    listNodes: () => [],
-    issueNodeToken: () => ({ nodeId: 'local', token: 'local:t', createdAt: 1 }),
-    removeNode: async () => {},
-    execEnv: async () => ({ ok: true, exitCode: 0, output: '', timedOut: false }),
-  }
+  } as unknown as KernelHttpTarget
 }
 
 const BASE = 'http://127.0.0.1:3202'

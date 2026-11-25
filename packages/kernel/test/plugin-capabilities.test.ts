@@ -258,7 +258,7 @@ test('KernelRuntime ModelRegistry consumes helmx.model-tiers via capability regi
     })
 
     // 1. ModelCatalog reflects provided tier and Profile inheritance resolves it
-    const catalog = await kernel.listModels()
+    const catalog = await kernel.models.listModels()
     assert.deepEqual(
       catalog.modelTiers?.map((t) => ({ id: t.id, model: t.model, thinkingLevel: t.thinkingLevel })),
       [{ id: 'worker', model: 'faux-cap/fast', thinkingLevel: 'low' }],
@@ -266,7 +266,7 @@ test('KernelRuntime ModelRegistry consumes helmx.model-tiers via capability regi
     const profile = await kernel.profiles.get('assistant')
     assert.ok(profile)
     await kernel.profiles.save({ ...profile, model: 'tier/worker' })
-    const inherited = await kernel.createConversation({ title: 'inherits-tier' })
+    const inherited = await kernel.conversations.createConversation({ title: 'inherits-tier' })
     assert.equal(inherited.model, 'faux-cap/fast')
     assert.equal(inherited.thinkingLevel, 'low')
 
@@ -275,8 +275,8 @@ test('KernelRuntime ModelRegistry consumes helmx.model-tiers via capability regi
       worker: { model: 'faux-cap/smart', thinkingLevel: 'high', description: 'Upgraded worker' },
     }
     await notify()
-    assert.equal(kernel.getConversation(inherited.id).model, 'faux-cap/smart')
-    assert.equal(kernel.getConversation(inherited.id).thinkingLevel, 'high')
+    assert.equal(kernel.conversations.getConversation(inherited.id).model, 'faux-cap/smart')
+    assert.equal(kernel.conversations.getConversation(inherited.id).thinkingLevel, 'high')
 
     // 3. Conflicting tier ID from a second active plugin raises 409 model_tier_conflict
     await kernel.plugins.register({
@@ -290,7 +290,7 @@ test('KernelRuntime ModelRegistry consumes helmx.model-tiers via capability regi
       },
     })
     await assert.rejects(
-      () => kernel.listModels(),
+      () => kernel.models.listModels(),
       (err: unknown) => err instanceof HelmxError && err.code === 'model_tier_conflict' && err.status === 409,
     )
     await kernel.plugins.disable('test:tiers-conflict')
@@ -298,7 +298,7 @@ test('KernelRuntime ModelRegistry consumes helmx.model-tiers via capability regi
     // 4. Disabling provider unmounts tiers cleanly and detaches onChanged subscription
     await kernel.plugins.disable('test:tiers-provider')
     assert.equal(listeners.size, 0, 'ModelRegistry must unsubscribe onChanged when provider disables')
-    const afterDisable = await kernel.listModels()
+    const afterDisable = await kernel.models.listModels()
     assert.equal(afterDisable.modelTiers, undefined)
   } finally {
     await kernel.close().catch(() => {})

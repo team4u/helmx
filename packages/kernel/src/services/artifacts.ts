@@ -164,6 +164,7 @@ export class ArtifactService {
     private readonly repository: ArtifactRepository,
     /** Filters registered secrets before touching disk or returning output to model context. */
     private readonly stash?: { redact(text: string): string },
+    private readonly options?: { assertWritable?: () => void },
   ) {}
 
   /**
@@ -215,6 +216,7 @@ export class ArtifactService {
     sourcePath: string,
     opts: RegisterOptions = {},
   ): Promise<ArtifactMetadata> {
+    this.options?.assertWritable?.()
     this.assertConversationId(conversationId)
     if (typeof sourcePath !== 'string' || sourcePath === '') {
       throw new Error('sourcePath cannot be empty')
@@ -266,6 +268,7 @@ export class ArtifactService {
     input: { name: string; bytes: Uint8Array; mimeType?: string },
     deps?: WriteUploadedDeps,
   ): Promise<ArtifactMetadata> {
+    this.options?.assertWritable?.()
     this.assertConversationId(conversationId)
     if (typeof input !== 'object' || input === null || Array.isArray(input)) {
       throw new HelmxError('validation_error', 'artifact upload input must be an object', 400)
@@ -530,6 +533,7 @@ export class ArtifactService {
    * crashing between `rm` and deleting metadata can simply be retried idempotently on the next delete with zero data loss.
    */
   async deleteConversation(conversationId: number): Promise<void> {
+    this.options?.assertWritable?.()
     this.assertConversationId(conversationId)
     // Runs on the same per-conversation chain as uploads/registrations: an in-flight write that
     // queued earlier finishes first and is then purged wholesale; anything queued after observes
@@ -552,6 +556,7 @@ export class ArtifactService {
 
   /** Ensure conversation artifact directory exists (for callers placing files directly). */
   async ensureConversationDir(conversationId: number): Promise<string> {
+    this.options?.assertWritable?.()
     this.assertConversationId(conversationId)
     const dir = this.convDir(conversationId)
     await mkdir(dir, { recursive: true })

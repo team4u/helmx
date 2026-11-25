@@ -11,7 +11,7 @@ export async function completeConversationTextHelper(
   deps: {
     store: HelmxStore
     conversations: { resolveEffectiveModel(modelOverride?: string, profileId?: string): Promise<string | undefined> }
-    modelsRegistry: {
+    models: {
       models: Models
       isModelDisabled(providerId: string, modelId: string): boolean
       resolveModelRef?(ref: string): { provider: string; modelId: string; canonicalRef: string; tierThinkingLevel?: string }
@@ -40,18 +40,18 @@ export async function completeConversationTextHelper(
   if (effective === undefined || effective === '') {
     throw new HelmxError('model_not_configured', `Conversation ${input.conversationId} has no effective model resolved; cannot run text completion`, 409, { conversationId: input.conversationId })
   }
-  const ref = deps.modelsRegistry.resolveModelRef !== undefined
-    ? deps.modelsRegistry.resolveModelRef(effective)
+  const ref = deps.models.resolveModelRef !== undefined
+    ? deps.models.resolveModelRef(effective)
     : requireModelRef(effective)
-  const model = deps.modelsRegistry.models.getModel(ref.provider, ref.modelId)
+  const model = deps.models.models.getModel(ref.provider, ref.modelId)
   if (model === undefined) {
     throw new HelmxError('model_not_found', `Effective model '${effective}' is not in the current model set (may have been removed on hot reload)`, 409, { model: effective })
   }
-  if (deps.modelsRegistry.isModelDisabled(ref.provider, ref.modelId)) {
+  if (deps.models.isModelDisabled(ref.provider, ref.modelId)) {
     throw new HelmxError('model_disabled', `Model ${ref.provider}/${ref.modelId} is disabled; cannot run text completion`, 409, { model: effective })
   }
   input.signal?.throwIfAborted()
-  const message = await deps.modelsRegistry.models.completeSimple(
+  const message = await deps.models.models.completeSimple(
     model,
     {
       systemPrompt: deps.stash.redact(input.systemPrompt),

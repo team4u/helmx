@@ -3,10 +3,14 @@
  * POST /api/auth/login (all three endpoints are public and pre-allowed in hub.ts; all other auth subpaths return 404).
  */
 import { REQUEST_SCHEMAS } from '@helmx/protocol'
+import type { AuthService } from '../services/index.js'
 import { jsonOk, errorResponse, readJsonBody, type JsonRedactor } from './http-utils.js'
-import type { KernelRuntimeLike } from './contracts.js'
 import { assertBodySchema } from './validate.js'
 import type { RouteContext } from './route-context.js'
+
+export interface AuthRoutesTarget {
+  readonly auth: Pick<AuthService, 'status' | 'verifyToken' | 'setup' | 'login'>
+}
 
 function bearerToken(request: Request): string | undefined {
   const header = request.headers.get('authorization')
@@ -17,7 +21,7 @@ function bearerToken(request: Request): string | undefined {
 
 export async function handleAuthDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: AuthRoutesTarget,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx

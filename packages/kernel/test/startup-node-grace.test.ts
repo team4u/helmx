@@ -228,14 +228,14 @@ const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段极慢速流式回复用于在流式中途触发真实SIGKILL强杀现场验证启动节点回连等待屏障')])
 const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 const issued = await kernel.nodes.issueNodeToken('grace-node')
-const conv = await kernel.createConversation({ nodeId: 'grace-node', cwd: process.env.HELMX_WORK_DIR!, title: 'remote-bound' })
+const conv = await kernel.conversations.createConversation({ nodeId: 'grace-node', cwd: process.env.HELMX_WORK_DIR!, title: 'remote-bound' })
 await kernel.start()
-await kernel.submitInput(conv.id, '开始慢速任务')
+await kernel.conversations.submitInput(conv.id, '开始慢速任务')
 for (let i = 0; i < 400; i++) {
   await delay(10)
-  if (kernel.getConversation(conv.id).status === 'working') break
+  if (kernel.conversations.getConversation(conv.id).status === 'working') break
 }
-assert.ok(kernel.getConversation(conv.id).status === 'working', '回合应在强杀前处于 working')
+assert.ok(kernel.conversations.getConversation(conv.id).status === 'working', '回合应在强杀前处于 working')
 await kernel.documentStore.flush()
 await new Promise((resolve) => process.stdout.write('NODE_TOKEN=' + issued.token + ',CONV=' + conv.id + '\\n', resolve))
 process.kill(process.pid, 'SIGKILL')
@@ -293,12 +293,12 @@ process.kill(process.pid, 'SIGKILL')
       // The interrupted turn re-drove against the reconnected world and completed.
       for (let i = 0; i < 300; i++) {
         await delay(20)
-        const status = kernel.getConversation(convId).status
+        const status = kernel.conversations.getConversation(convId).status
         if (status !== 'working' && status !== 'blocked') break
       }
-      const finalStatus = kernel.getConversation(convId).status
+      const finalStatus = kernel.conversations.getConversation(convId).status
       assert.ok(finalStatus !== 'working' && finalStatus !== 'blocked', `re-driven turn should settle (status=${finalStatus})`)
-      const lastText = await kernel.getLastAssistantText(convId)
+      const lastText = await kernel.conversations.getLastAssistantText(convId)
       assert.ok(lastText.includes('GRACE_RECOVERED_OK'), `re-drive should complete with the fast response: ${lastText.slice(0, 120)}`)
     } finally {
       await daemon?.close()

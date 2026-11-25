@@ -58,9 +58,9 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
     const kernel = await openRuntime(join(root, 't1'))
     try {
       kernel.__faux.setResponses([fauxAssistantMessage('top-level answer')])
-      await kernel.submitInput(1, 'top-level question')
-      await kernel.waitForIdle(1)
-      const conv = kernel.getConversation(1)
+      await kernel.conversations.submitInput(1, 'top-level question')
+      await kernel.conversations.waitForIdle(1)
+      const conv = kernel.conversations.getConversation(1)
       assert.equal(conv.unread, true)
       assert.equal(conv.status, 'done')
       assert.equal(conv.completionSeq, 1)
@@ -74,15 +74,15 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
     try {
       const settled = await collectSettled(kernel)
       kernel.__faux.setResponses([fauxAssistantMessage('subagent answer')])
-      const result = await kernel.spawnAgent({ parentConversationId: 1, prompt: 'subtask' })
+      const result = await kernel.agentSpawn.spawnAgent({ parentConversationId: 1, prompt: 'subtask' })
       assert.ok(result !== undefined)
       const child = kernel
-        .listConversations()
+        .conversations.listConversations()
         .find((c) => c.parentConversationId === 1)
       assert.ok(child, 'native spawn should create child conversation')
-      await kernel.waitForIdle(child.id)
+      await kernel.conversations.waitForIdle(child.id)
 
-      const fresh = kernel.getConversation(child.id) as ConversationSummary & { ownedBy?: string }
+      const fresh = kernel.conversations.getConversation(child.id) as ConversationSummary & { ownedBy?: string }
       assert.equal(fresh.ownedBy, 'helmx', 'native subagent is owned by helmx')
       assert.equal(fresh.parentConversationId, 1)
       assert.equal(fresh.unread, false, 'background subagent completion must not fabricate human unread state')
@@ -97,17 +97,17 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
       assert.equal(childSettled.conversation.status, 'idle')
 
       // Parent conversation is unaffected (no turn executed): remains unread=false.
-      const parent = kernel.getConversation(1)
+      const parent = kernel.conversations.getConversation(1)
       assert.equal(parent.unread, false)
 
       // In-process list filtering dimensions (backend implementation for HTTP noise reduction):
-      assert.ok(kernel.listConversations().some((c) => c.id === child.id), 'in-process list without filter returns all conversations')
+      assert.ok(kernel.conversations.listConversations().some((c) => c.id === child.id), 'in-process list without filter returns all conversations')
       assert.ok(
-        kernel.listConversations({ topLevelOnly: true }).every((c) => c.parentConversationId === undefined),
+        kernel.conversations.listConversations({ topLevelOnly: true }).every((c) => c.parentConversationId === undefined),
         'topLevelOnly should exclude child conversations',
       )
       assert.deepEqual(
-        kernel.listConversations({ parentConversationId: 1 }).map((c) => c.id),
+        kernel.conversations.listConversations({ parentConversationId: 1 }).map((c) => c.id),
         [child.id],
         'parentConversationId should match direct child conversations exactly',
       )
@@ -123,16 +123,16 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
         fauxAssistantMessage('original conversation answer'),
         fauxAssistantMessage('post-fork answer'),
       ])
-      await kernel.submitInput(1, 'original conversation question')
-      await kernel.waitForIdle(1)
-      const detail = await kernel.getConversationDetail(1)
+      await kernel.conversations.submitInput(1, 'original conversation question')
+      await kernel.conversations.waitForIdle(1)
+      const detail = await kernel.conversations.getConversationDetail(1)
       const entryId = Number(detail.entries[0]!.id)
-      const forked = await kernel.forkConversation(1, { entryId })
+      const forked = await kernel.conversations.forkConversation(1, { entryId })
       assert.equal(forked.parentConversationId, 1, 'fork has parent chain')
 
-      await kernel.submitInput(forked.id, 'post-fork question')
-      await kernel.waitForIdle(forked.id)
-      const fresh = kernel.getConversation(forked.id) as ConversationSummary & { ownedBy?: string }
+      await kernel.conversations.submitInput(forked.id, 'post-fork question')
+      await kernel.conversations.waitForIdle(forked.id)
+      const fresh = kernel.conversations.getConversation(forked.id) as ConversationSummary & { ownedBy?: string }
       assert.notEqual(fresh.ownedBy, 'helmx')
       assert.notEqual(fresh.ownedBy, 'bot')
       assert.equal(fresh.unread, true, 'human fork completion still marks conversation unread')
@@ -148,9 +148,9 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
       kernel.__faux.setResponses([
         fauxAssistantMessage('x', { errorMessage: 'boom', stopReason: 'error' }),
       ])
-      await kernel.submitInput(1, 'trigger failure')
-      await kernel.waitForIdle(1).catch(() => {})
-      const conv = kernel.getConversation(1)
+      await kernel.conversations.submitInput(1, 'trigger failure')
+      await kernel.conversations.waitForIdle(1).catch(() => {})
+      const conv = kernel.conversations.getConversation(1)
       assert.equal(conv.status, 'error')
       assert.equal(conv.unread, false, 'failed turn does not mark unread')
     } finally {
@@ -167,12 +167,12 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
         }),
         fauxAssistantMessage('unneeded second answer'),
       ])
-      void kernel.submitInput(1, 'question to be aborted').catch(() => {})
+      void kernel.conversations.submitInput(1, 'question to be aborted').catch(() => {})
       await new Promise((r) => setTimeout(r, 150))
-      assert.equal(kernel.getConversation(1).status, 'working')
-      await kernel.abortConversation(1)
-      await kernel.waitForIdle(1).catch(() => {})
-      const conv = kernel.getConversation(1)
+      assert.equal(kernel.conversations.getConversation(1).status, 'working')
+      await kernel.conversations.abortConversation(1)
+      await kernel.conversations.waitForIdle(1).catch(() => {})
+      const conv = kernel.conversations.getConversation(1)
       assert.equal(conv.status, 'idle')
       assert.equal(conv.unread, false, 'aborted turn does not mark unread')
     } finally {
@@ -222,7 +222,7 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
       ])
 
       let childId = 0
-      const structuredResult = await kernel.spawnAgent({
+      const structuredResult = await kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: `inspect image with ${secretVal}`,
         attachments: [pngMeta.id],
@@ -237,7 +237,7 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
       })
 
       assert.ok(childId > 0)
-      await kernel.waitForIdle(childId)
+      await kernel.conversations.waitForIdle(childId)
 
       // 1. Top-level input hook was NEVER invoked for subagent prompt or schema-heal prompt.
       assert.deepEqual(inputHookCalls, [], 'native spawn must never route through top-level input hooks')
@@ -263,7 +263,7 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
       assert.ok(!parsed.note.includes(secretVal), 'extracted answer text must redact secrets')
 
       // 4. Child timeline persisted helmx.input entries (zero bare pi.user), carrying origin='agent', redacted text, and lightweight attachment refs.
-      const detail = await kernel.getConversationDetail(childId, { limit: 100 })
+      const detail = await kernel.conversations.getConversationDetail(childId, { limit: 100 })
       const piUsers = detail.entries.filter((e) => e.kind === 'pi.user')
       const helmxInputs = detail.entries.filter((e) => e.kind === 'helmx.input')
       assert.equal(piUsers.length, 0, 'spawn must persist helmx.input rather than bare pi.user')

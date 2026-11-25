@@ -25,7 +25,7 @@ function collectStrings(value: unknown): string[] {
 
 test('真实组合：插件对象工具输出、全局机密脱敏与超长输出 Spill 共用最终边界', { timeout: 60_000 }, async () => {
   const { kernel } = fixture
-  const conv = await kernel.createConversation({ title: 'boundary-results' })
+  const conv = await kernel.conversations.createConversation({ title: 'boundary-results' })
   const secret = ['example"quoted', 'next line'].join('\n')
   kernel.stash.addRedaction(secret)
   let executions = 0
@@ -42,8 +42,8 @@ test('真实组合：插件对象工具输出、全局机密脱敏与超长输�
       fauxAssistantMessage([fauxToolCall('object_probe', {}), fauxToolCall('large_probe', {})], { stopReason: 'toolUse' }),
       (context) => { observed = collectStrings(context.messages); return fauxAssistantMessage('finished') },
     ])
-    await kernel.submitInput(conv.id, 'check plugin output')
-    await kernel.waitForIdle(conv.id)
+    await kernel.conversations.submitInput(conv.id, 'check plugin output')
+    await kernel.conversations.waitForIdle(conv.id)
     assert.equal(executions, 2)
     assert.ok(observed.some((text) => text.includes('[REDACTED]')))
     assert.ok(observed.some((text) => text.includes('spilled-payload')))
@@ -64,7 +64,7 @@ test('真实组合：插件对象工具输出、全局机密脱敏与超长输�
 
 test('真实组合：before_turn 可筛选内核工具，并应用消息与系统段落改写', { timeout: 60_000 }, async () => {
   const { kernel } = fixture
-  const conv = await kernel.createConversation({ title: 'boundary-turn' })
+  const conv = await kernel.conversations.createConversation({ title: 'boundary-turn' })
   let sawKernelTool = false
   await kernel.plugins.register({
     id: 'boundary:turn',
@@ -92,10 +92,10 @@ test('真实组合：before_turn 可筛选内核工具，并应用消息与系�
       assert.ok(collectStrings(context.messages).includes('MESSAGE_EDIT'))
       return fauxAssistantMessage('checked')
     }])
-    await kernel.submitInput(conv.id, 'check turn hook')
-    await kernel.waitForIdle(conv.id)
+    await kernel.conversations.submitInput(conv.id, 'check turn hook')
+    await kernel.conversations.waitForIdle(conv.id)
     assert.equal(sawKernelTool, true)
-    assert.equal(await kernel.getLastAssistantText(conv.id), 'checked')
+    assert.equal(await kernel.conversations.getLastAssistantText(conv.id), 'checked')
   } finally {
     await kernel.plugins.disable('boundary:turn')
   }

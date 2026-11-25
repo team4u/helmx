@@ -11,7 +11,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
-import { AuthService, createHubHandler, PluginHost, ProfileService, type KernelRuntimeLike } from '@helmx/kernel'
+import { AuthService, createHubHandler, PluginHost, ProfileService, type KernelHttpTarget } from '@helmx/kernel'
 import { PROFILE_STARTERS_MAX_ITEMS } from '@helmx/protocol'
 import { createProfilePlugin } from '../src/profile.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
@@ -104,8 +104,9 @@ async function makeApiEnv(): Promise<{ handler: (req: Request) => Promise<Respon
     auth,
     events,
     profiles,
+    conversations: { listConversations: () => [] },
     plugins: { listRoutes: () => [] },
-  } as unknown as KernelRuntimeLike
+  } as unknown as KernelHttpTarget
   return { handler: createHubHandler(kernel), token }
 }
 

@@ -324,7 +324,7 @@ function spawnTargetResolver(options: {
     conversations: conversations as never,
     events: {} as never,
     envFabric: platformHostOf(options.platforms, options.hubPlatform) as unknown as EnvFabric,
-    modelsRegistry: {} as never,
+    models: {} as never,
     hookBridge: {} as never,
     stashService: {} as never,
     updateConversation: (() => {
@@ -390,7 +390,7 @@ function spawnEntryGuard(options: { restricted: boolean; parentCwd: string; pare
     conversations: {} as never,
     events: {} as never,
     envFabric: { hubPlatform: () => hubPlatform } as never,
-    modelsRegistry: {} as never,
+    models: {} as never,
     hookBridge: {
       runHookAround: async () => {
         throw new Error('past-guard')

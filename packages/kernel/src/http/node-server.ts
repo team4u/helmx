@@ -13,11 +13,32 @@
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { Readable } from 'node:stream'
-import { createHubHandler } from './hub.js'
+import { createHubHandler, type KernelHttpTarget, type ProductRouteHandler } from './hub.js'
 import { createStaticServe } from './static.js'
 import { HelmxError } from '@helmx/protocol'
 import { attachNodeWsGateway, attachNodeTunnelGateway, type EnvFabric, type NodeWsGateway } from '../env/index.js'
-import type { HubHandle, StartHubOptions } from './contracts.js'
+
+export type NodeServerKernelTarget = KernelHttpTarget & {
+  readonly envFabric?: Pick<EnvFabric, 'registry'>
+  setHubUrl?(url: string): void
+}
+
+export interface StartHubOptions {
+  kernel: NodeServerKernelTarget
+  /** Defaults to 3202 (`HELMX_PORT` convention; tests should use 0). */
+  port?: number
+  /** Defaults to `127.0.0.1`. */
+  hostname?: string
+  /** Production static hosting directory (`packages/web/dist`); see `HubHandlerOptions.webDistDir`. */
+  webDistDir?: string | false
+  /** Composition-root product routes; see `HubHandlerOptions.productRoutes`. */
+  productRoutes?: ProductRouteHandler
+}
+
+export interface HubHandle {
+  url: string
+  close(): Promise<void>
+}
 
 const DEFAULT_PORT = 3202
 const DEFAULT_HOSTNAME = '127.0.0.1'
@@ -138,7 +159,7 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
   })
 
   // Attach `/ws/node` gateway when cross-platform node fabric is available (node WS + birpc registration/heartbeat/events).
-  const envFabric = (kernel as { envFabric?: EnvFabric }).envFabric
+  const envFabric = kernel.envFabric
   const nodeGateway: NodeWsGateway | undefined = envFabric
     ? attachNodeWsGateway(server, { registry: envFabric.registry })
     : undefined

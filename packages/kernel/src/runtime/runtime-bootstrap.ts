@@ -369,7 +369,7 @@ export async function recoverExistingConversations(deps: {
  * Shutdown resource cleanup and persistence flush pipeline.
  */
 export async function teardownKernelRuntime(deps: {
-  modelsRegistry: {
+  models: {
     abortRefresh(err: Error): void
     dispose(): Promise<void>
   }
@@ -428,11 +428,11 @@ export async function teardownKernelRuntime(deps: {
     }
   }
 
-  deps.modelsRegistry.abortRefresh(new Error('kernel closing'))
+  deps.models.abortRefresh(new Error('kernel closing'))
   deps.assetReloader.stop()
   await step('nodes.dispose', () => deps.nodes.dispose())
   await step('assetReloader.waitForInflight', () => deps.assetReloader.waitForInflight())
-  await step('modelsRegistry.dispose', () => deps.modelsRegistry.dispose())
+  await step('models.dispose', () => deps.models.dispose())
   // Close Harness first while pluginHost, envFabric, HelmxStore, and managed tokens are still online:
   // in-flight GenerationTask/ToolTask revert cleanly to pending via writeAtClose() (not marked aborted,
   // and not counted toward restarts) so they resume cleanly on next startup.

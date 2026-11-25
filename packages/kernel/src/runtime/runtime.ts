@@ -4,7 +4,8 @@
  * Responsibilities:
  * - Assemble and wire all kernel mechanisms (`pi-durable` / SQLite / FTS5 / `EnvFabric` / `PluginHost` / `Models`);
  * - Manage unified lifecycle (`open` / `initialize` / `start` / `close`);
- * - Expose a strongly-typed facade API for HTTP routes and CLI consumers;
+ * - Expose cohesive readonly domain sub-facades (`conversations`, `nodes`, `nodeForward`, `models`,
+ *   `asks`, `triggers`, `agentSpawn`, `ownership`, etc.) alongside lifecycle coordination;
  * - Delegate complex orchestration and operations to cohesive submodules:
  *   `RuntimeTriggerDispatcher`, `RuntimeAgentSpawn`,
  *   `RuntimeOwnershipManager`, `createPluginHostBackend`, and `RuntimeToolRegistry`.
@@ -12,40 +13,13 @@
 
 import {
   HelmxError,
-  type AgentSpawnRequest,
-  type ArtifactMetadata,
-  type AskCreateSpec,
-  type AskResult,
-  type AskSpec,
-  type ConversationDetail,
-  type ConversationEntry,
-  type ConversationBulkDeleteResponse,
-  type ConversationInit,
-  type ConversationInputResult,
-  type ConversationListFilter,
-  type ConversationPatch,
-  type ConversationSubmissionInfo,
-  type ConversationSummary,
-  type ConversationWithdrawResponse,
   type ConversationInput,
-  type GuardedMutationExpectation,
   type TurnSettledPayload,
-  type EnvExecRequest,
-  type EnvExecResponse,
-  type ExternalTriggerEnvelope,
   type MaybePromise,
-  type ModelCatalog,
-  type ModelProvidersRefreshResult,
-  type NodeInfo,
-  type NodeIssuedToken,
-  type NodeUpgradeCheckInput,
-  type NodeUpgradeCheckResult,
-  type NodeUpgradeResult,
   type PluginSkillAsset,
   type HubActivityCounts,
-  type SearchHit,
+  type ConversationSummary,
 } from '@helmx/protocol'
-import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry, ToolRegistration } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord/json'
 import {
@@ -59,18 +33,18 @@ import {
 } from '../services/index.js'
 import { PluginHost } from '../plugins/index.js'
 import type { EnvFabric } from '../env/index.js'
-import { NodeForwardService, type NodeForwardEvent, type NodeForwardInput, type NodeForwardSession } from '../env/forward.js'
+import { NodeForwardService } from '../env/forward.js'
+import type { AskService } from './asks.js'
 import type { EventHub, SessionDocEventHub } from './events.js'
 import type { HelmxDatabase } from './sqlite.js'
 import { summaryOf, type HelmxStore } from './store.js'
-import { THINKING_LEVELS } from './models.js'
 import type { HelmxPluginConfigStore } from './plugin-config-store.js'
 import type { ConversationService } from './conversation-service.js'
 import type { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
+import type { RuntimeOwnershipManager } from './runtime-ownership.js'
+import type { RuntimeTriggerDispatcher } from './runtime-triggers.js'
 import type { NodeManager } from './node-manager.js'
 import type { ModelRegistry } from './model-registry.js'
-import { completeConversationTextHelper } from './conversation-text.js'
-import { profileDirectoryHelper } from './target-cwd.js'
 import {
   createGlobalDocumentStore,
   createPluginHostBackend,
@@ -78,10 +52,6 @@ import {
   createPluginSessionDocStore,
 } from './runtime-host-backend.js'
 import { formatDiagnosticError, type KernelDiagnosticInput } from './diagnostics.js'
-import {
-  readWorkspaceFile,
-  type ConversationFileContent,
-} from './workspace-files.js'
 import {
   bootstrapKernelRuntime,
   ensureInitialConversation,
@@ -131,9 +101,12 @@ export class KernelRuntime {
   private settledInflight: Promise<void> = Promise.resolve()
   readonly nodes: NodeManager
   readonly conversations: ConversationService
-  /** Subagent spawning, target resolution, and occupancy snapshot service (connected directly to host backend without double forwarding). */
-  readonly agentSpawn!: RuntimeAgentSpawn
-  readonly modelsRegistry: ModelRegistry
+  /** Subagent spawning, target resolution, and occupancy snapshot service. */
+  readonly agentSpawn: RuntimeAgentSpawn
+  readonly models: ModelRegistry
+  readonly asks: AskService
+  readonly triggers: RuntimeTriggerDispatcher
+  readonly ownership: RuntimeOwnershipManager
   private readonly svc: AssembledRuntimeServices
 
   readonly documentStore: {
@@ -193,6 +166,7 @@ export class KernelRuntime {
     this.svc = assembleRuntimeServices(this, init, {
       store: this.store,
       stashService: this.stashService,
+      assertWritable: this.assertWritable,
       dispatchTurnSettled: (payload, consumed) => this.dispatchTurnSettled(payload, consumed),
       onSettleInflight: (run) => {
         // Absorb errors per run: teardown awaits `settledInflight()` three times; any unhandled rejection
@@ -213,19 +187,21 @@ export class KernelRuntime {
         this.settledInflight = this.settledInflight.then(() => absorbed)
       },
       safeSummary: (id) => this.safeSummary(id),
-      submitInput: (id, text, opts) => this.submitInput(id, text, opts),
-      createConversation: (cInit) => this.createConversation(cInit),
-      updateConversation: (id, patch) => this.updateConversation(id, patch),
     })
 
-    this.modelsRegistry = this.svc.modelsRegistry
+    this.models = this.svc.models
     this.envFabric = this.svc.envFabric
-    this.nodeForward = new NodeForwardService(this.svc.envFabric)
+    this.nodeForward = new NodeForwardService(this.svc.envFabric, undefined, {
+      assertWritable: this.assertWritable,
+    })
     this.nodes = this.svc.nodes
     this.events = this.svc.events
     this.sessionDocEvents = this.svc.sessionDocStreams
     this.conversations = this.svc.conversations
     this.agentSpawn = this.svc.agentSpawn
+    this.asks = this.svc.asks
+    this.triggers = this.svc.triggers
+    this.ownership = this.svc.ownership
 
     // Single delivery boundary for internal host events: after each SSE broadcast, `EventHub.publish` delivers
     // once to `ctx.host.onEvent` listeners (validated + redacted HelmxEvent envelope). Kernel automatic events
@@ -247,14 +223,13 @@ export class KernelRuntime {
     }
     this.init.redactReport((t) => this.stashService.redact(t))
     this.svc.tracker.setDiagnosticSink(this.init.onDiagnostic)
-    this.svc.conversations.setFatalErrorProvider(() => this.#fatalError)
     this.init.setCompactionModelResolver(() => ({
-      model: this.modelsRegistry.defaultCompactionModel,
-      thinkingLevel: this.modelsRegistry.defaultCompactionThinkingLevel,
-      resolveModelRef: (ref) => this.modelsRegistry.resolveModelRef(ref),
+      model: this.models.defaultCompactionModel,
+      thinkingLevel: this.models.defaultCompactionThinkingLevel,
+      resolveModelRef: (ref) => this.models.resolveModelRef(ref),
       modelThinkingLevel: (providerId, modelId) =>
-        this.modelsRegistry.modelThinkingLevelOf({ provider: providerId, modelId }),
-      isDisabled: (providerId, modelId) => this.modelsRegistry.isModelDisabled(providerId, modelId),
+        this.models.modelThinkingLevelOf({ provider: providerId, modelId }),
+      isDisabled: (providerId, modelId) => this.models.isModelDisabled(providerId, modelId),
     }))
     this.init.setFatalStorageHandler(
       (source, error) => this.handleFatalStorageError(source, error),
@@ -265,15 +240,10 @@ export class KernelRuntime {
   private async initialize(): Promise<void> {
     await this.nodes.initialize()
     await this.svc.profilesSvc.ensureDefault()
-    this.modelsRegistry.setThinkingLevelValidator(async (level) => {
-      if (!THINKING_LEVELS.has(level)) {
-        throw new HelmxError('config_corrupt', `Invalid config.json.thinkingLevel (valid values: ${[...THINKING_LEVELS].join(' | ')})`, 500)
-      }
-    })
-    await this.modelsRegistry.loadDefaultsFromConfig()
+    await this.models.loadDefaultsFromConfig()
     if (this.init.providers !== undefined && this.init.externalModels === undefined) {
       for (const provider of this.init.providers) {
-        await this.modelsRegistry.registerRuntimeProvider(provider)
+        await this.models.registerRuntimeProvider(provider)
       }
     }
 
@@ -287,8 +257,8 @@ export class KernelRuntime {
       deferServices: true,
       redactText: (text) => this.stashService.redact(text),
       providers: {
-        register: (provider, pluginId) => this.modelsRegistry.registerRuntimeProvider(provider, pluginId),
-        assertIdle: (pluginId) => this.modelsRegistry.assertRuntimeProvidersIdle(pluginId),
+        register: (provider, pluginId) => this.models.registerRuntimeProvider(provider, pluginId),
+        assertIdle: (pluginId) => this.models.assertRuntimeProvidersIdle(pluginId),
       },
       host: createPluginHostBackend(this),
       docs: this.documentStore,
@@ -299,11 +269,11 @@ export class KernelRuntime {
       buildProvider: this.init.buildProvider,
       packageManagerProvider: this.init.packageManagerProvider,
     })
-    this.modelsRegistry.bindPluginHost(this.pluginHost)
+    this.models.bindPluginHost(this.pluginHost)
     // Warm managed package install records (`config.json` `pluginPackages`; throws on corruption) when wired.
     await this.pluginHost.loadPackageManager()
 
-    const modelEpochBeforeRecover = this.modelsRegistry.alignmentEpoch
+    const modelEpochBeforeRecover = this.models.alignmentEpoch
     const profileEpochBeforeRecover = this.svc.profilesSvc.mutationEpoch
     const initialDeferred = await ensureInitialConversation({
       harness: this.harness,
@@ -319,7 +289,7 @@ export class KernelRuntime {
       store: this.store,
       defaultCwd: this.svc.toolDeps.defaultCwd,
     })
-    this.bootAlignModelEpoch = this.modelsRegistry.alignmentEpoch
+    this.bootAlignModelEpoch = this.models.alignmentEpoch
     this.bootAlignProfileEpoch = this.svc.profilesSvc.mutationEpoch
     this.needsStartupAlignment =
       initialDeferred ||
@@ -327,7 +297,7 @@ export class KernelRuntime {
       this.bootAlignModelEpoch !== modelEpochBeforeRecover ||
       this.bootAlignProfileEpoch !== profileEpochBeforeRecover
     if (this.store.needsFtsRebuild || recovered.recoveredCount > 0) {
-      await this.rebuildFts()
+      await this.conversations.rebuildFts()
     }
     this.svc.assetReloader.start()
     if (this.init.autoResume) await this.start()
@@ -443,9 +413,12 @@ export class KernelRuntime {
     this.init.emitDiagnostic(input)
   }
 
-  private assertWritable(): void {
+  private readonly assertWritable = (): void => {
     if (this.#fatalError !== undefined) {
       throw this.#fatalError
+    }
+    if (this.closed) {
+      throw new HelmxError('runtime_closed', 'kernel is closing; rejecting write operation', 503)
     }
   }
 
@@ -532,12 +505,12 @@ export class KernelRuntime {
       // nor profiles changed since recovery already aligned every conversation.
       if (
         this.needsStartupAlignment ||
-        this.modelsRegistry.alignmentEpoch !== this.bootAlignModelEpoch ||
+        this.models.alignmentEpoch !== this.bootAlignModelEpoch ||
         this.svc.profilesSvc.mutationEpoch !== this.bootAlignProfileEpoch
       ) {
-        await this.modelsRegistry.alignConversations()
+        await this.models.alignConversations()
         this.needsStartupAlignment = false
-        this.bootAlignModelEpoch = this.modelsRegistry.alignmentEpoch
+        this.bootAlignModelEpoch = this.models.alignmentEpoch
         this.bootAlignProfileEpoch = this.svc.profilesSvc.mutationEpoch
       }
       this.harness.resume()
@@ -612,96 +585,6 @@ export class KernelRuntime {
     return undefined
   }
 
-  async listNodes(): Promise<NodeInfo[]> {
-    return this.nodes.listNodes()
-  }
-
-  async issueNodeToken(nodeId: string): Promise<NodeIssuedToken> {
-    return this.nodes.issueNodeToken(nodeId)
-  }
-
-  async removeNode(nodeId: string): Promise<void> {
-    return this.nodes.removeNode(nodeId)
-  }
-
-  async checkNodeUpgrade(nodeId: string, input?: NodeUpgradeCheckInput): Promise<NodeUpgradeCheckResult> {
-    return this.nodes.checkNodeUpgrade(nodeId, input)
-  }
-
-  async upgradeNode(
-    nodeId: string,
-    input?: { targetVersion?: string; registryUrl?: string; force?: boolean },
-  ): Promise<NodeUpgradeResult> {
-    return this.nodes.upgradeNode(nodeId, input)
-  }
-
-  async execEnv(
-    req: EnvExecRequest,
-    onChunk?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void,
-    signal?: AbortSignal,
-  ): Promise<EnvExecResponse> {
-    return this.nodes.execEnv(req, onChunk, signal)
-  }
-
-  // ------------------------------------------------------------------
-  // Hub-side foreground port forwarding (NodeForwardService)
-  // ------------------------------------------------------------------
-
-  async startNodeForward(nodeId: string, input: NodeForwardInput): Promise<NodeForwardSession> {
-    return await this.nodeForward.start(nodeId, input)
-  }
-
-  async stopNodeForward(forwardId: string): Promise<void> {
-    await this.nodeForward.stop(forwardId)
-  }
-
-  getNodeForward(forwardId: string): NodeForwardSession | undefined {
-    return this.nodeForward.get(forwardId)
-  }
-
-  listNodeForwards(): NodeForwardSession[] {
-    return this.nodeForward.list()
-  }
-
-  onNodeForwardEvent(forwardId: string, listener: (event: NodeForwardEvent) => void): () => void {
-    return this.nodeForward.onEvent(forwardId, listener)
-  }
-
-  onNodeForwardStopped(forwardId: string, listener: () => void): () => void {
-    return this.nodeForward.onStopped(forwardId, listener)
-  }
-
-  acquireNodeForwardLease(forwardId: string): () => void {
-    return this.nodeForward.acquireLease(forwardId)
-  }
-
-  // ------------------------------------------------------------------
-  // Artifact authorization / attachments delegation (ConversationService)
-  // ------------------------------------------------------------------
-
-  isArtifactAuthorized(conversationId: number, artifactConversationId: number): boolean {
-    return this.conversations.isArtifactAuthorized(conversationId, artifactConversationId)
-  }
-
-  async resolveAuthorizedAttachments(conversationId: number, attachmentIds: readonly string[]) {
-    return this.conversations.resolveAuthorizedAttachments(conversationId, attachmentIds)
-  }
-
-  async createArtifact(
-    conversationId: number,
-    input: { name: string; bytes: Uint8Array; mimeType?: string },
-  ): Promise<ArtifactMetadata> {
-    this.assertWritable()
-    return this.conversations.createArtifact(conversationId, input)
-  }
-
-  async readAuthorizedArtifact(
-    conversationId: number,
-    artifactId: string,
-  ): Promise<{ metadata: ArtifactMetadata; bytes: Uint8Array }> {
-    return this.conversations.readAuthorizedArtifact(conversationId, artifactId)
-  }
-
   refreshPluginTools(): void {
     if (this.pluginHost === undefined) return
     this.svc.toolRegistry.installPluginTools(this.pluginHost.listTools())
@@ -734,14 +617,6 @@ export class KernelRuntime {
     }
   }
 
-  // ------------------------------------------------------------------
-  // Conversation operations delegation (ConversationService)
-  // ------------------------------------------------------------------
-
-  listConversations(filter?: ConversationListFilter): ConversationSummary[] {
-    return this.conversations.listConversations(filter)
-  }
-
   /** Read-only activity snapshot for the Hub's process-private heartbeat file (launcher update
    * busy-gate): derived synchronously from the live conversation mirrors — active runs (including
    * approval-blocked runs whose tool call is still in flight), in-flight context compactions,
@@ -754,366 +629,6 @@ export class KernelRuntime {
   /** Register a synchronous idle→busy activity transition listener (activity heartbeat wiring). */
   onActivityBusyEntered(listener: () => void): () => void {
     return this.conversations.onActivityBusyEntered(listener)
-  }
-
-  getConversation(id: number): ConversationSummary {
-    return this.conversations.getConversation(id)
-  }
-
-  getConversationDetail(id: number, options?: Parameters<ConversationService['getConversationDetail']>[1]): Promise<ConversationDetail> {
-    return this.conversations.getConversationDetail(id, options)
-  }
-
-  /** Fetch a single redacted timeline entry untruncated (`GET /api/conversations/:id/entries/:entryId`). */
-  getConversationEntry(id: number, entryId: number): Promise<ConversationEntry> {
-    return this.conversations.getConversationEntry(id, entryId)
-  }
-
-  /** Read-only authoritative lookup of a durable submission by `(conversationId, requestId)`. */
-  getConversationSubmission(id: number, requestId: string): Promise<ConversationSubmissionInfo | undefined> {
-    return this.conversations.getConversationSubmission(id, requestId)
-  }
-
-  /** read a file strictly inside conversation's bound workspace (text files are redacted via SecretStash). */
-  async readConversationFile(
-    id: number,
-    path: string,
-    signal?: AbortSignal,
-  ): Promise<ConversationFileContent> {
-    const summary = this.getConversation(id)
-    return readWorkspaceFile({
-      nodeId: summary.nodeId ?? 'local',
-      cwd: summary.cwd,
-      rawPath: path,
-      envFabric: this.envFabric,
-      redact: (text) => this.stashService.redact(text),
-      signal,
-    })
-  }
-
-  async createConversation(init: ConversationInit = {}): Promise<ConversationSummary> {
-    this.assertWritable()
-    return this.conversations.createConversation(init)
-  }
-
-  async updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary> {
-    this.assertWritable()
-    return this.conversations.updateConversation(id, patch)
-  }
-
-  async deleteConversation(id: number): Promise<void> {
-    this.assertWritable()
-    return this.conversations.deleteConversation(id)
-  }
-
-  /** Guarded automated deletion (Watchdog kernel enforcement): enforces helmx ownership across the whole subtree. */
-  async deleteConversationGuarded(
-    id: number,
-    guard: Parameters<ConversationService['deleteConversationGuarded']>[1] = {},
-    opts?: Parameters<ConversationService['deleteConversationGuarded']>[2],
-  ): Promise<void> {
-    this.assertWritable()
-    return this.conversations.deleteConversationGuarded(id, guard, opts)
-  }
-
-  async deleteConversations(ids: readonly number[]): Promise<ConversationBulkDeleteResponse> {
-    this.assertWritable()
-    return this.conversations.deleteConversations(ids)
-  }
-
-  async submitInput(
-    id: number,
-    text: string,
-    opts?: Parameters<ConversationService['submitInput']>[2],
-  ): Promise<{ submissionId: string }> {
-    this.assertWritable()
-    return this.conversations.submitInput(id, text, opts)
-  }
-
-  async waitForInput(
-    id: number,
-    submissionId: string,
-    signal?: AbortSignal,
-  ): Promise<ConversationInputResult> {
-    return this.conversations.waitForInput(id, submissionId, signal)
-  }
-
-  async abortConversation(id: number): Promise<void> {
-    this.assertWritable()
-    return this.conversations.abortConversation(id)
-  }
-
-  /** Guarded automatic abort (Watchdog kernel enforcement): re-check and SDK abort run atomically back-to-back. */
-  async abortConversationGuarded(
-    id: number,
-    guard: Parameters<ConversationService['abortConversationGuarded']>[1],
-  ): Promise<void> {
-    this.assertWritable()
-    return this.conversations.abortConversationGuarded(id, guard)
-  }
-
-  /** Guarded automatic submit: re-checks ownership/watermark atomically at commit; 409/404 produces zero side effects. */
-  async submitInputGuarded(
-    id: number,
-    text: string,
-    opts?: Parameters<ConversationService['submitInput']>[2],
-    guard: Parameters<ConversationService['submitInputGuarded']>[3] = {},
-  ): Promise<{ submissionId: string }> {
-    this.assertWritable()
-    return this.conversations.submitInputGuarded(id, text, opts, guard)
-  }
-
-  async withdrawQueuedInput(id: number, opts: { submissionId: number }): Promise<ConversationWithdrawResponse> {
-    this.assertWritable()
-    return this.conversations.withdrawQueuedInput(id, opts)
-  }
-
-  async resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> {
-    this.assertWritable()
-    return this.conversations.resetConversation(id, opts)
-  }
-
-  async resetConversationGuarded(
-    id: number,
-    opts?: { handoff?: string },
-    guard?: GuardedMutationExpectation,
-  ): Promise<ConversationSummary> {
-    this.assertWritable()
-    return this.conversations.resetConversationGuarded(id, opts, guard)
-  }
-
-  async compactConversation(
-    id: number,
-    opts?: { instructions?: string },
-  ): Promise<{ taskId: number; conversation: ConversationSummary }> {
-    this.assertWritable()
-    return this.conversations.compactConversation(id, opts)
-  }
-
-  async compactConversationGuarded(
-    id: number,
-    opts?: { instructions?: string },
-    guard?: GuardedMutationExpectation,
-  ): Promise<{ taskId: number; conversation: ConversationSummary }> {
-    this.assertWritable()
-    return this.conversations.compactConversationGuarded(id, opts, guard)
-  }
-
-  async forkConversation(
-    id: number,
-    opts?: { entryId?: number; title?: string; parentConversationId?: number },
-  ): Promise<ConversationSummary> {
-    this.assertWritable()
-    return this.conversations.forkConversation(id, opts)
-  }
-
-  async waitForIdle(id: number): Promise<void> {
-    return this.conversations.waitForIdle(id)
-  }
-
-  async getLastAssistantText(id: number): Promise<string> {
-    return this.conversations.getLastAssistantText(id)
-  }
-
-  async search(query: string): Promise<SearchHit[]> {
-    return this.conversations.search(query)
-  }
-
-  async rebuildFts(): Promise<void> {
-    this.assertWritable()
-    await this.conversations.rebuildFts(() => this.listConversations().map((c) => ({ id: c.id, title: c.title })))
-  }
-
-  async alignProfileConversations(profileId: string): Promise<void> {
-    this.assertWritable()
-    return this.conversations.alignProfileConversations(profileId)
-  }
-
-  async completeConversationText(input: {
-    conversationId: number
-    model?: string
-    systemPrompt: string
-    text: string
-    maxTokens?: number
-    signal?: AbortSignal
-  }): Promise<string> {
-    return completeConversationTextHelper(
-      {
-        store: this.store,
-        conversations: this.conversations,
-        modelsRegistry: this.modelsRegistry,
-        stash: this.stashService,
-      },
-      input,
-    )
-  }
-
-  // ------------------------------------------------------------------
-  // Trigger dispatch delegation (RuntimeTriggerDispatcher)
-  // ------------------------------------------------------------------
-
-  async dispatchTrigger(envelope: ExternalTriggerEnvelope): Promise<void> {
-    this.assertWritable()
-    return this.svc.triggers.dispatchTrigger(envelope)
-  }
-
-  // ------------------------------------------------------------------
-  // Subagent spawning delegation (`RuntimeAgentSpawn`: `spawnAgent`/`runGate` public entries;
-  // target resolution, occupancy snapshots, and execution facts bind `this.agentSpawn` directly on host backend)
-  // ------------------------------------------------------------------
-
-  async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
-    this.assertWritable()
-    return this.agentSpawn.spawnAgent(request)
-  }
-
-  runGate(
-    command: string,
-    options: {
-      cwd?: string
-      conversationId?: number
-      nodeId?: string
-      signal?: AbortSignal
-      env?: Record<string, string>
-      gateTimeoutMs?: number
-    } = {},
-  ): Promise<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }> {
-    return this.agentSpawn.runGate(command, options)
-  }
-
-  // ------------------------------------------------------------------
-  // Directory coordinate lookups
-  // ------------------------------------------------------------------
-
-  async profileDirectory(id: string): Promise<string> {
-    return profileDirectoryHelper(this.dataDir, id)
-  }
-
-  // ------------------------------------------------------------------
-  // Conversation ownership & live fact delegation (RuntimeOwnershipManager)
-  // ------------------------------------------------------------------
-
-  getConversationOwnership(conversationId: number): ConversationOwnership {
-    return this.svc.ownership.getOwnership(conversationId)
-  }
-
-  // ------------------------------------------------------------------
-  // Async approval delegation (AskService)
-  // ------------------------------------------------------------------
-
-  listAsks(status?: string): AskSpec[] {
-    return this.svc.asks.listAsks(status)
-  }
-
-  async createAsk(spec: AskCreateSpec): Promise<AskResult> {
-    this.assertWritable()
-    return this.svc.asks.createAsk(spec)
-  }
-
-  async answerAsk(id: string, answers: Record<string, string>, expectedStateSeq?: number): Promise<AskSpec> {
-    this.assertWritable()
-    return this.svc.asks.answerAsk(id, answers, expectedStateSeq)
-  }
-
-  async cancelAsk(id: string, reason?: 'cancelled' | 'superseded'): Promise<void> {
-    this.assertWritable()
-    await this.svc.asks.cancelAsk(id, reason ?? 'cancelled')
-  }
-
-  // ------------------------------------------------------------------
-  // Model catalog & provider management delegation (ModelRegistry)
-  // ------------------------------------------------------------------
-
-  async listModels(): Promise<ModelCatalog> {
-    return this.modelsRegistry.listModels()
-  }
-
-  /** Set disabled models (`PUT /api/models/filter`): clears all when `provider` is undefined. */
-  async setDisabledModels(provider: string | undefined, disabledModels: string[]): Promise<ModelCatalog> {
-    return this.modelsRegistry.setDisabledModels(provider, disabledModels)
-  }
-
-  /** Disabled-model preflight (used by HTTP profile saves, etc.; returns `409 model_disabled`). */
-  assertModelEnabled(provider: string, modelId: string): void {
-    this.modelsRegistry.assertModelEnabled(provider, modelId)
-  }
-
-  async setDefaultModel(
-    model?: string,
-    thinkingLevel?: string,
-    compactionModel?: string,
-    compactionThinkingLevel?: string,
-    modelThinkingLevels?: Record<string, string>,
-    modelThinkingUpdate?: { model: string; level: string },
-  ): Promise<void> {
-    const validateLevel = (level: string) => {
-      if (!THINKING_LEVELS.has(level)) {
-        throw new HelmxError(
-          'validation_error',
-          `Invalid thinkingLevel '${level}'; valid values: ${[...THINKING_LEVELS].join(' | ')}`,
-          400,
-        )
-      }
-    }
-    await this.modelsRegistry.setDefaultModel(
-      model,
-      thinkingLevel,
-      validateLevel,
-      compactionModel,
-      compactionThinkingLevel,
-      modelThinkingLevels,
-      modelThinkingUpdate,
-    )
-  }
-
-  /** Set or clear one per-model thinking default (`config.json.modelThinkingLevels`); empty level clears the entry. */
-  async setModelThinkingDefault(model: string, level: string): Promise<void> {
-    const validateLevel = (value: string) => {
-      if (!THINKING_LEVELS.has(value)) {
-        throw new HelmxError(
-          'validation_error',
-          `Invalid thinking level '${value}'; valid values: ${[...THINKING_LEVELS].join(' | ')}`,
-          400,
-        )
-      }
-    }
-    await this.modelsRegistry.setModelThinkingDefault(model, level, validateLevel)
-  }
-
-  listModelProviders() {
-    return this.modelsRegistry.listModelProviders()
-  }
-
-  async reloadModels(): Promise<void> {
-    return this.modelsRegistry.reloadModels()
-  }
-
-  async registerRuntimeProvider(
-    provider: Parameters<ModelRegistry['registerRuntimeProvider']>[0],
-    pluginId?: string,
-  ): Promise<() => Promise<void>> {
-    return this.modelsRegistry.registerRuntimeProvider(provider, pluginId)
-  }
-
-  assertRuntimeProvidersIdle(pluginId: string): void {
-    this.modelsRegistry.assertRuntimeProvidersIdle(pluginId)
-  }
-
-  async refreshModels(options?: {
-    providers?: string[]
-    allowNetwork?: boolean
-    force?: boolean
-  }): Promise<ModelProvidersRefreshResult> {
-    return this.modelsRegistry.refreshModels(() => this.closed, options)
-  }
-
-  markConversationOwnership(conversationId: number, owner: ConversationOwnership): void {
-    this.assertWritable()
-    this.svc.ownership.markOwnership(conversationId, owner)
-  }
-
-  manageConversation(conversationId: number, pluginId: string): () => void {
-    return this.svc.ownership.manage(conversationId, pluginId)
   }
 
   // ------------------------------------------------------------------
@@ -1190,7 +705,7 @@ export class KernelRuntime {
     // so shutdown proceeds) to avoid racing teardown against plugin service startup (e.g., disposing mid-start).
     if (this.startPromise !== undefined) await this.startPromise.catch(() => {})
     await teardownKernelRuntime({
-      modelsRegistry: this.modelsRegistry,
+      models: this.models,
       assetReloader: this.svc.assetReloader,
       nodes: this.nodes,
       settledInflight: () => this.settledInflight,

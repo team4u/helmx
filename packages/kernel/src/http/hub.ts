@@ -28,15 +28,26 @@ import {
   withCors,
   type JsonRedactor,
 } from './http-utils.js'
-import { handleApi } from './routes.js'
+import { handleApi, type CoreRoutesTarget } from './routes.js'
 import { decodeSegments, findPluginRoute, PathDecodeError } from './route-match.js'
 import { createStaticServe, type StaticServe } from './static.js'
 import { acceptsGzip, gzipJsonResponse } from './gzip.js'
 import { HelmxError } from '@helmx/protocol'
-import type { KernelRuntimeLike, ProductRouteHandler } from './contracts.js'
+
+/**
+ * Product route handler: receives the authenticated request and returns a complete Response, or
+ * `undefined` to fall through to the core API router. Runs behind the same bearer-token gate as
+ * core routes (public paths never reach it).
+ */
+export type ProductRouteHandler = (request: Request) => Promise<Response | undefined>
+
+export type KernelHttpTarget = CoreRoutesTarget & {
+  readonly dataDir?: string
+  readonly started?: boolean
+}
 
 export interface HubHandlerOptions {
-  kernel: KernelRuntimeLike
+  kernel: KernelHttpTarget
   /**
    * Production static hosting directory (built by the product/composer layer):
    * - string: explicit directory; fails with `web_dist_invalid` if invalid rather than silently disabling;
@@ -59,12 +70,12 @@ interface StaticCacheEntry {
 }
 
 export function createHubHandler(
-  kernelOrOptions: KernelRuntimeLike | HubHandlerOptions,
+  kernelOrOptions: KernelHttpTarget | HubHandlerOptions,
 ): (request: Request) => Promise<Response> {
   const options: HubHandlerOptions =
     kernelOrOptions instanceof Object && 'kernel' in (kernelOrOptions as HubHandlerOptions)
       ? (kernelOrOptions as HubHandlerOptions)
-      : { kernel: kernelOrOptions as KernelRuntimeLike }
+      : { kernel: kernelOrOptions as KernelHttpTarget }
   const { kernel } = options
   const redactor: JsonRedactor | undefined = makeRedactor(kernel)
   const webDistDir = options.webDistDir
@@ -187,13 +198,13 @@ export function createHubHandler(
   }
 }
 
-function makeRedactor(kernel: KernelRuntimeLike): JsonRedactor | undefined {
+function makeRedactor(kernel: Pick<KernelHttpTarget, 'stash'>): JsonRedactor | undefined {
   const stash = kernel.stash
   if (stash === undefined) return undefined
   return makeJsonRedactor((text: string) => stash.redact(text))
 }
 
-function redactText(kernel: KernelRuntimeLike): (text: string) => string {
+function redactText(kernel: Pick<KernelHttpTarget, 'stash'>): (text: string) => string {
   const stash = kernel.stash
   if (stash === undefined) return (text: string) => text
   return (text: string) => stash.redact(text)
@@ -238,7 +249,7 @@ function bearerToken(request: Request): string | undefined {
 }
 
 /** Check whether the decoded segments match a plugin route declared as public. */
-function isPublicPluginRoute(kernel: KernelRuntimeLike, method: string, segments: string[]): boolean {
+function isPublicPluginRoute(kernel: Pick<KernelHttpTarget, 'plugins'>, method: string, segments: string[]): boolean {
   if (segments.length < 4 || segments[0] !== 'api' || segments[1] !== 'plugins' || segments[3] !== 'routes') {
     return false
   }

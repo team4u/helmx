@@ -16,8 +16,12 @@ export {
   compareStrictSemVer,
   hubVersion,
 } from './semver.js'
-export { EventHub, type SnapshotProvider } from './events.js'
+export { EventHub, SessionDocEventHub, type SnapshotProvider } from './events.js'
 export { AskService } from './asks.js'
+export { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
+export { RuntimeOwnershipManager } from './runtime-ownership.js'
+export { RuntimeTriggerDispatcher } from './runtime-triggers.js'
+export { NodeForwardService, type NodeForwardEvent, type NodeForwardInput, type NodeForwardSession } from '../env/forward.js'
 export { ConversationTracker, deriveTitle, type TrackerEvents } from './conversations.js'
 export { toConversationEntry, deriveConversationLive, type EntryRecordLike } from './entries.js'
 export { openHelmxDatabase, type HelmxDatabase } from './sqlite.js'

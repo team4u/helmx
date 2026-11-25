@@ -107,11 +107,11 @@ async function makeCollabEnv(): Promise<CollabEnv> {
     system: `# 孤儿托管角色\n\n由未启用插件托管，不应被推荐委派。${ORPHAN_SIGN}\n`,
   })
 
-  const initial = kernel
+  const initial = kernel.conversations
     .listConversations()
     .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
   if (initial === undefined) throw new Error('首次启动应播种 assistant 入口会话')
-  const second = await kernel.createConversation({ title: '冲突校验会话', profileId: 'assistant' })
+  const second = await kernel.conversations.createConversation({ title: '冲突校验会话', profileId: 'assistant' })
 
   const requests: CapturedRequest[] = []
   const record = (context: { messages: Array<{ role: string; content: unknown; sections?: Record<string, string> }> }) => {
@@ -139,8 +139,8 @@ async function makeCollabEnv(): Promise<CollabEnv> {
     secondConvId: second.id,
     scriptedStep,
     async submitAndWait(text) {
-      await kernel.submitInput(initial.id, text)
-      await kernel.waitForIdle(initial.id)
+      await kernel.conversations.submitInput(initial.id, text)
+      await kernel.conversations.waitForIdle(initial.id)
     },
     async close() {
       await app.close().catch(() => {})
@@ -253,7 +253,7 @@ test('协作2: HTTP list_mentionable——query 过滤/insertText 尾随空格/�
   const env = await makeCollabHttpEnv()
   try {
     const kernel = env.app.kernel
-    const convCountBefore = kernel.listConversations().length
+    const convCountBefore = kernel.conversations.listConversations().length
     const modelCallsBefore = env.faux.state.callCount
 
     // --- query 'review'：只匹配 reviewer；insertText '@reviewer '（尾随空格）
@@ -274,7 +274,7 @@ test('协作2: HTTP list_mentionable——query 过滤/insertText 尾随空格/�
     assert.equal(testItems[0]!.insertText, '@tester ')
 
     // --- 只读性：不派生会话、零模型调用
-    assert.equal(kernel.listConversations().length, convCountBefore, 'list_mentionable 不得派生新会话')
+    assert.equal(kernel.conversations.listConversations().length, convCountBefore, 'list_mentionable 不得派生新会话')
     assert.equal(env.faux.state.callCount, modelCallsBefore, 'list_mentionable 不得发起模型调用')
 
     // --- 会话校验：不存在的会话显式 404（动作必须校验真实会话）
@@ -309,7 +309,7 @@ test('协作2: HTTP list_mentionable——query 过滤/insertText 尾随空格/�
     assert.equal(standbyItems[0]!.insertText, '@reviewer ')
     const missingProfile = await env.call({ input: { query: '', profileId: 'no-such-profile' } })
     assert.equal(missingProfile.status, 404, missingProfile.body)
-    assert.equal(kernel.listConversations().length, convCountBefore, '待命态 list_mentionable 不得派生新会话')
+    assert.equal(kernel.conversations.listConversations().length, convCountBefore, '待命态 list_mentionable 不得派生新会话')
     assert.equal(env.faux.state.callCount, modelCallsBefore, '待命态 list_mentionable 不得发起模型调用')
   } finally {
     await env.close()
@@ -414,14 +414,14 @@ test('协作4: 点名委派真链路——subagent(agentType reviewer) 派生真
     await env.submitAndWait('让 @reviewer 审查')
 
     // --- 真派生关系：恰一个 reviewer 子会话挂在 root 下（非人类直连会话）
-    const children = kernel.listConversations().filter((c) => c.parentConversationId === env.rootId)
+    const children = kernel.conversations.listConversations().filter((c) => c.parentConversationId === env.rootId)
     assert.equal(children.length, 1, `应派生恰一个真子会话，实得 ${JSON.stringify(children.map((c) => ({ id: c.id, profileId: c.profileId })))}`)
     assert.equal(children[0]!.profileId, 'reviewer', '子会话应按 agentType 绑定 reviewer Profile')
     assert.ok(
       children[0]!.parentToolCallId !== undefined && children[0]!.parentToolCallId !== '',
       '子会话应携带 parentToolCallId（真实工具调用运行期关联）',
     )
-    const reviewerConvs = kernel.listConversations().filter((c) => c.profileId === 'reviewer')
+    const reviewerConvs = kernel.conversations.listConversations().filter((c) => c.profileId === 'reviewer')
     assert.equal(reviewerConvs.length, 1)
     assert.equal(reviewerConvs[0]!.parentConversationId, env.rootId, '不得以人类直连 reviewer 会话冒充委派')
 

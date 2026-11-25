@@ -13,6 +13,7 @@ import type { HelmxStore } from './store.js'
 
 interface RuntimeTriggerDispatcherDeps {
   readonly store: HelmxStore
+  readonly assertWritable?: () => void
   getConversation(id: number): ConversationSummary
   getConversationOwnership(id: number): ConversationOwnership
   createConversation(init: ConversationInit): Promise<ConversationSummary>
@@ -72,6 +73,7 @@ export class RuntimeTriggerDispatcher {
 
   /** External trigger delivery: validate any explicit target, defang once, and deliver. */
   async dispatchTrigger(envelope: ExternalTriggerEnvelope): Promise<void> {
+    this.deps.assertWritable?.()
     const whenBusy = envelope.whenBusy ?? 'steer'
     if (whenBusy !== 'steer' && whenBusy !== 'followUp' && whenBusy !== 'reject') {
       throw new HelmxError(

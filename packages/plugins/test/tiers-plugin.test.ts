@@ -127,7 +127,7 @@ test('integration: default enabled, managed skill, reserved namespace, CRUD acti
     )
 
     // 2. Empty roster -> catalog omits modelTiers and before_turn injects nothing
-    const emptyCatalog = await kernel.listModels()
+    const emptyCatalog = await kernel.models.listModels()
     assert.equal(emptyCatalog.modelTiers, undefined)
 
     // 2b. Internal UI bulk-replace action carries visibility: 'ui' (allowed via HTTP, blocked via run_action)
@@ -141,8 +141,8 @@ test('integration: default enabled, managed skill, reserved namespace, CRUD acti
     )
 
     // 3. Reserved namespace 'tier' cannot be disabled, given per-model thinking, or registered as a provider
-    await assertRejectsCode(() => kernel.setDisabledModels('tier', ['scout']), 'validation_error')
-    await assertRejectsCode(() => kernel.setModelThinkingDefault('tier/scout', 'high'), 'validation_error')
+    await assertRejectsCode(() => kernel.models.setDisabledModels('tier', ['scout']), 'validation_error')
+    await assertRejectsCode(() => kernel.models.setModelThinkingDefault('tier/scout', 'high'), 'validation_error')
     await assert.rejects(
       () =>
         kernel.providers.save([
@@ -171,7 +171,7 @@ test('integration: default enabled, managed skill, reserved namespace, CRUD acti
       description: 'Architecture decisions only',
     })
 
-    const cat = await kernel.listModels()
+    const cat = await kernel.models.listModels()
     assert.equal(cat.modelTiers?.length, 3)
     assert.deepEqual(
       cat.modelTiers?.map((t) => ({ id: t.id, model: t.model, thinkingLevel: t.thinkingLevel, available: t.available })),
@@ -218,14 +218,14 @@ test('integration: default enabled, managed skill, reserved namespace, CRUD acti
 
     // 6. Switch back to flagship-3 and verify before_turn injects <available_model_tiers>
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'apply_template', { id: 'flagship-3' })
-    const conv = await kernel.createConversation({ title: 'prompt-check' })
-    const seqBefore = kernel.getConversation(conv.id).completionSeq
+    const conv = await kernel.conversations.createConversation({ title: 'prompt-check' })
+    const seqBefore = kernel.conversations.getConversation(conv.id).completionSeq
     env.faux.setResponses([fauxAssistantMessage('ok')])
-    await kernel.submitInput(conv.id, 'hello')
+    await kernel.conversations.submitInput(conv.id, 'hello')
     const waitTurnDone = async () => {
       const deadline = Date.now() + 10_000
       while (Date.now() < deadline) {
-        const snap = kernel.getConversation(conv.id)
+        const snap = kernel.conversations.getConversation(conv.id)
         if (snap.completionSeq > seqBefore && snap.status !== 'working') return
         await new Promise((r) => setTimeout(r, 20))
       }
@@ -234,7 +234,7 @@ test('integration: default enabled, managed skill, reserved namespace, CRUD acti
     await waitTurnDone()
     // Verify before_turn hook directly produces tiers.catalog when enabled, and skips when autoInjectCatalog: false
     const hookRes = await kernel.plugins.runHook('before_turn', {
-      conversation: kernel.getConversation(conv.id),
+      conversation: kernel.conversations.getConversation(conv.id),
       inputs: [],
       sections: [],
       tools: [],
@@ -248,7 +248,7 @@ test('integration: default enabled, managed skill, reserved namespace, CRUD acti
 
     await kernel.plugins.setConfig(TIERS_PLUGIN_ID, { autoInjectCatalog: false })
     const hookOff = await kernel.plugins.runHook('before_turn', {
-      conversation: kernel.getConversation(conv.id),
+      conversation: kernel.conversations.getConversation(conv.id),
       inputs: [],
       sections: [],
       tools: [],
@@ -278,7 +278,7 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
     const { kernel } = env.app
     // Set per-model thinking default on faux/workhorse to 'low' so we prove tier.thinkingLevel ('medium') outranks it,
     // and tier/clamped ('xhigh') clamps cleanly to faux/flagship's max supported level ('high').
-    await kernel.setModelThinkingDefault('faux/workhorse', 'low')
+    await kernel.models.setModelThinkingDefault('faux/workhorse', 'low')
 
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'replace', {
       tiers: {
@@ -290,25 +290,25 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
     })
 
     // 1. createConversation with explicit tier -> resolves and freezes concrete model + tier thinkingLevel (beating per-model 'low')
-    const worker = await kernel.createConversation({ title: 'worker-1', model: 'tier/coder' })
+    const worker = await kernel.conversations.createConversation({ title: 'worker-1', model: 'tier/coder' })
     assert.equal(worker.model, 'faux/workhorse')
     assert.equal(worker.thinkingLevel, 'medium', 'tier.thinkingLevel must outrank per-model default (low)')
     assert.equal(worker.thinkingLevelOverride, 'medium')
 
     // Unsupported tier thinkingLevel ('xhigh' on faux ['off'..'high']) clamps cleanly to 'high'
-    const clampedConv = await kernel.createConversation({ title: 'clamped-1', model: 'tier/clamped' })
+    const clampedConv = await kernel.conversations.createConversation({ title: 'clamped-1', model: 'tier/clamped' })
     assert.equal(clampedConv.model, 'faux/flagship')
     assert.equal(clampedConv.thinkingLevel, 'high')
     assert.equal(clampedConv.thinkingLevelOverride, 'high')
 
     // 2. updateConversation switches worker to tier/architect (freezes concrete model + tier effort)
-    const upgraded = await kernel.updateConversation(worker.id, { model: 'tier/architect' })
+    const upgraded = await kernel.conversations.updateConversation(worker.id, { model: 'tier/architect' })
     assert.equal(upgraded.model, 'faux/flagship')
     assert.equal(upgraded.thinkingLevel, 'high')
     assert.equal(upgraded.thinkingLevelOverride, 'high')
 
     // Explicit thinkingLevel in same patch overrides tier preset
-    const explicitEffort = await kernel.updateConversation(worker.id, {
+    const explicitEffort = await kernel.conversations.updateConversation(worker.id, {
       model: 'tier/architect',
       thinkingLevel: 'minimal',
     })
@@ -318,7 +318,7 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
     const existingProfile = await kernel.profiles.get('assistant')
     assert.ok(existingProfile)
     await kernel.profiles.save({ ...existingProfile, model: 'tier/coder' })
-    const inheritedConv = await kernel.createConversation({ title: 'inherited' })
+    const inheritedConv = await kernel.conversations.createConversation({ title: 'inherited' })
     assert.equal(inheritedConv.model, 'faux/workhorse')
     assert.equal(inheritedConv.thinkingLevel, 'medium')
 
@@ -328,23 +328,23 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
       model: 'faux/fast',
       thinkingLevel: 'low',
     })
-    assert.equal(kernel.getConversation(inheritedConv.id).model, 'faux/fast')
-    assert.equal(kernel.getConversation(inheritedConv.id).thinkingLevel, 'low')
-    assert.equal(kernel.getConversation(worker.id).model, 'faux/flagship', 'frozen conversation must not mutate on tier rebind')
+    assert.equal(kernel.conversations.getConversation(inheritedConv.id).model, 'faux/fast')
+    assert.equal(kernel.conversations.getConversation(inheritedConv.id).thinkingLevel, 'low')
+    assert.equal(kernel.conversations.getConversation(worker.id).model, 'faux/flagship', 'frozen conversation must not mutate on tier rebind')
 
     // 4. Native spawnAgent with tier/architect + fork consultation + missing tier 404 + disabled target 409
     const waitTurnSettle = async (cid: number, prevSeq: number) => {
       const deadline = Date.now() + 10_000
       while (Date.now() < deadline) {
-        const snap = kernel.getConversation(cid)
+        const snap = kernel.conversations.getConversation(cid)
         if (snap.completionSeq > prevSeq && snap.status !== 'working') return
         await new Promise((r) => setTimeout(r, 20))
       }
       throw new Error(`timed out waiting for conv ${cid}`)
     }
-    const seedSeq = kernel.getConversation(worker.id).completionSeq
+    const seedSeq = kernel.conversations.getConversation(worker.id).completionSeq
     env.faux.setResponses([fauxAssistantMessage('parent-ready'), fauxAssistantMessage('spawn-done'), fauxAssistantMessage('fork-done')])
-    await kernel.submitInput(worker.id, 'seed parent history')
+    await kernel.conversations.submitInput(worker.id, 'seed parent history')
     await waitTurnSettle(worker.id, seedSeq)
 
     let spawnedChildId: number | undefined
@@ -357,7 +357,7 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
       },
     })
     assert.ok(spawnedChildId !== undefined)
-    const childSnap = kernel.getConversation(spawnedChildId!)
+    const childSnap = kernel.conversations.getConversation(spawnedChildId!)
     assert.equal(childSnap.model, 'faux/flagship')
     assert.equal(childSnap.thinkingLevel, 'high')
     assert.equal(childSnap.thinkingLevelOverride, 'high')
@@ -367,7 +367,7 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
       model: 'faux/workhorse',
       thinkingLevel: 'low',
     })
-    assert.equal(kernel.getConversation(spawnedChildId!).model, 'faux/flagship', 'spawned child stays frozen on tier rebind')
+    assert.equal(kernel.conversations.getConversation(spawnedChildId!).model, 'faux/flagship', 'spawned child stays frozen on tier rebind')
     // Restore tier/architect -> faux/flagship for subsequent assertions
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
       id: 'architect',
@@ -387,7 +387,7 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
       },
     })
     assert.ok(forkedChildId !== undefined)
-    const forkSnap = kernel.getConversation(forkedChildId!)
+    const forkSnap = kernel.conversations.getConversation(forkedChildId!)
     assert.equal(forkSnap.model, 'faux/fast')
     assert.equal(forkSnap.thinkingLevel, 'high', 'explicit request.effort must override tier.thinkingLevel')
 
@@ -403,8 +403,8 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
     )
 
     // Disabling target model causes tier usage to fail loudly with 409 model_disabled
-    await kernel.setDisabledModels('faux', ['flagship'])
-    const catWithDisabled = await kernel.listModels()
+    await kernel.models.setDisabledModels('faux', ['flagship'])
+    const catWithDisabled = await kernel.models.listModels()
     const archEntry = catWithDisabled.modelTiers?.find((t) => t.id === 'architect')
     assert.equal(archEntry?.disabled, true)
     assert.equal(archEntry?.available, false)
@@ -417,11 +417,11 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
         }),
       'model_disabled',
     )
-    await kernel.setDisabledModels('faux', [])
+    await kernel.models.setDisabledModels('faux', [])
 
     // 5. completeConversationText with explicit `tier/scout`
     env.faux.setResponses([fauxAssistantMessage('completed-via-tier')])
-    const completion = await kernel.completeConversationText({
+    const completion = await kernel.conversations.completeConversationText({
       conversationId: worker.id,
       model: 'tier/scout',
       systemPrompt: 'test',
@@ -431,7 +431,7 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
 
     // 6. Compaction wrapper dereferences `tier/scout` and applies tier thinkingLevel
     const seenModels: Array<{ id: string; reasoning: unknown }> = []
-    const baseModels = kernel.modelsRegistry.models
+    const baseModels = kernel.models.models
     const spyModels = new Proxy(baseModels, {
       get(target, prop) {
         if (prop === 'completeSimple') {
@@ -449,8 +449,8 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
     })
     const wrapped = wrapModelsForCompaction(spyModels, () => ({
       model: 'tier/scout',
-      resolveModelRef: (ref) => kernel.modelsRegistry.resolveModelRef(ref),
-      isDisabled: (p, m) => kernel.modelsRegistry.isModelDisabled(p, m),
+      resolveModelRef: (ref) => kernel.models.resolveModelRef(ref),
+      isDisabled: (p, m) => kernel.models.isModelDisabled(p, m),
     }))
     const flagshipModel = baseModels.getModel('faux', 'flagship')!
     await wrapped.completeSimple(
@@ -475,7 +475,7 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
     // Clear Profile reference -> disable succeeds cleanly; tiers unmount from catalog; frozen `worker` keeps working!
     await kernel.profiles.save({ ...existingProfile, model: undefined })
     await kernel.plugins.disable(TIERS_PLUGIN_ID)
-    const afterDisableCatalog = await kernel.listModels()
+    const afterDisableCatalog = await kernel.models.listModels()
     assert.equal(afterDisableCatalog.modelTiers, undefined, 'disabled plugin must unmount tiers from ModelCatalog')
     assert.throws(
       () => kernel.plugins.getPublicDoc(TIERS_PLUGIN_ID, TIERS_STATE_DOC),
@@ -484,11 +484,11 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
     )
 
     // Frozen worker conversation still runs without error after plugin disable!
-    const afterSeq = kernel.getConversation(worker.id).completionSeq
+    const afterSeq = kernel.conversations.getConversation(worker.id).completionSeq
     env.faux.setResponses([fauxAssistantMessage('still-alive')])
-    await kernel.submitInput(worker.id, 'after disable')
+    await kernel.conversations.submitInput(worker.id, 'after disable')
     await waitTurnSettle(worker.id, afterSeq)
-    assert.equal(kernel.getConversation(worker.id).model, 'faux/flagship')
+    assert.equal(kernel.conversations.getConversation(worker.id).model, 'faux/flagship')
   } finally {
     await env.close()
   }
@@ -503,7 +503,7 @@ test('integration: two-phase cold restart with defaultModel/compactionModel/Prof
   ) => {
     const deadline = Date.now() + 10_000
     while (Date.now() < deadline) {
-      const snap = kernel.getConversation(cid)
+      const snap = kernel.conversations.getConversation(cid)
       if (snap.completionSeq > prevSeq && snap.status !== 'working') return
       await new Promise((r) => setTimeout(r, 20))
     }
@@ -531,26 +531,26 @@ test('integration: two-phase cold restart with defaultModel/compactionModel/Prof
         architect: { model: 'faux/flagship', thinkingLevel: 'high', description: 'Architecture' },
       },
     })
-    await app.kernel.setDefaultModel('tier/scout', undefined, 'tier/scout')
+    await app.kernel.models.setDefaultModel('tier/scout', undefined, 'tier/scout')
     await app.kernel.profiles.save({
       id: 'specialist',
       name: 'Specialist',
       model: 'tier/coder',
     })
-    const inheritedGlobal = await app.kernel.createConversation({ title: 'inherits-global-tier' })
-    const inheritedProfile = await app.kernel.createConversation({
+    const inheritedGlobal = await app.kernel.conversations.createConversation({ title: 'inherits-global-tier' })
+    const inheritedProfile = await app.kernel.conversations.createConversation({
       title: 'inherits-profile-tier',
       profileId: 'specialist',
     })
-    const frozenExplicit = await app.kernel.createConversation({
+    const frozenExplicit = await app.kernel.conversations.createConversation({
       title: 'frozen-explicit-tier',
       model: 'tier/architect',
     })
     inheritedGlobalId = inheritedGlobal.id
     inheritedProfileId = inheritedProfile.id
     frozenExplicitId = frozenExplicit.id
-    assert.equal(app.kernel.getConversation(1).model, 'faux/fast')
-    assert.equal(app.kernel.getConversation(1).thinkingLevel, 'low')
+    assert.equal(app.kernel.conversations.getConversation(1).model, 'faux/fast')
+    assert.equal(app.kernel.conversations.getConversation(1).thinkingLevel, 'low')
     assert.equal(inheritedGlobal.model, 'faux/fast')
     assert.equal(inheritedProfile.model, 'faux/workhorse')
     assert.equal(frozenExplicit.model, 'faux/flagship')
@@ -568,22 +568,22 @@ test('integration: two-phase cold restart with defaultModel/compactionModel/Prof
       autoStart: false,
     })
     await app.kernel.start()
-    assert.equal(app.kernel.getConversation(1).model, 'faux/fast')
-    assert.equal(app.kernel.getConversation(1).thinkingLevel, 'low')
-    assert.equal(app.kernel.getConversation(inheritedGlobalId).model, 'faux/fast')
-    assert.equal(app.kernel.getConversation(inheritedGlobalId).thinkingLevel, 'low')
-    assert.equal(app.kernel.getConversation(inheritedProfileId).model, 'faux/workhorse')
-    assert.equal(app.kernel.getConversation(inheritedProfileId).thinkingLevel, 'medium')
-    assert.equal(app.kernel.getConversation(frozenExplicitId).model, 'faux/flagship')
-    assert.equal(app.kernel.getConversation(frozenExplicitId).thinkingLevel, 'high')
+    assert.equal(app.kernel.conversations.getConversation(1).model, 'faux/fast')
+    assert.equal(app.kernel.conversations.getConversation(1).thinkingLevel, 'low')
+    assert.equal(app.kernel.conversations.getConversation(inheritedGlobalId).model, 'faux/fast')
+    assert.equal(app.kernel.conversations.getConversation(inheritedGlobalId).thinkingLevel, 'low')
+    assert.equal(app.kernel.conversations.getConversation(inheritedProfileId).model, 'faux/workhorse')
+    assert.equal(app.kernel.conversations.getConversation(inheritedProfileId).thinkingLevel, 'medium')
+    assert.equal(app.kernel.conversations.getConversation(frozenExplicitId).model, 'faux/flagship')
+    assert.equal(app.kernel.conversations.getConversation(frozenExplicitId).thinkingLevel, 'high')
 
-    const seq2 = app.kernel.getConversation(inheritedGlobalId).completionSeq
+    const seq2 = app.kernel.conversations.getConversation(inheritedGlobalId).completionSeq
     faux2.setResponses([fauxAssistantMessage('recovered-via-tier')])
-    await app.kernel.submitInput(inheritedGlobalId, 'ping after cold restart')
+    await app.kernel.conversations.submitInput(inheritedGlobalId, 'ping after cold restart')
     await waitTurnSettle(app.kernel, inheritedGlobalId, seq2)
 
     // Delete #1 (tombstone) before next cold restart, matching production Docker state.
-    await app.kernel.deleteConversation(1)
+    await app.kernel.conversations.deleteConversation(1)
     await app.close()
     app = undefined
 
@@ -598,12 +598,12 @@ test('integration: two-phase cold restart with defaultModel/compactionModel/Prof
     })
     await app.kernel.start()
     assert.equal(
-      app.kernel.listConversations().some((c) => c.id === 1),
+      app.kernel.conversations.listConversations().some((c) => c.id === 1),
       false,
       'tombstoned #1 must not resurrect after cold restart',
     )
-    assert.equal(app.kernel.getConversation(inheritedGlobalId).model, 'faux/fast')
-    assert.equal(app.kernel.getConversation(inheritedProfileId).model, 'faux/workhorse')
+    assert.equal(app.kernel.conversations.getConversation(inheritedGlobalId).model, 'faux/fast')
+    assert.equal(app.kernel.conversations.getConversation(inheritedProfileId).model, 'faux/workhorse')
 
     // Force-disable builtin:tiers while global defaultModel and Profile.model still reference `tier/*`.
     await app.kernel.plugins.disable(TIERS_PLUGIN_ID, { force: true })
@@ -625,17 +625,17 @@ test('integration: two-phase cold restart with defaultModel/compactionModel/Prof
     const assistantProfile = await app.kernel.profiles.get('assistant')
     assert.ok(assistantProfile)
     await app.kernel.profiles.save({ ...assistantProfile, name: 'updated while tiers disabled' })
-    await app.kernel.alignProfileConversations('assistant')
+    await app.kernel.conversations.alignProfileConversations('assistant')
 
     // Frozen conversation still executes cleanly without builtin:tiers.
-    const frozenSeq = app.kernel.getConversation(frozenExplicitId).completionSeq
+    const frozenSeq = app.kernel.conversations.getConversation(frozenExplicitId).completionSeq
     faux4.setResponses([fauxAssistantMessage('frozen-still-works')])
-    await app.kernel.submitInput(frozenExplicitId, 'still works')
+    await app.kernel.conversations.submitInput(frozenExplicitId, 'still works')
     await waitTurnSettle(app.kernel, frozenExplicitId, frozenSeq)
 
     // Active submission on a conversation inheriting unmounted `tier/scout` still fails honestly with 404.
     await assertRejectsCode(
-      () => app!.kernel.submitInput(inheritedGlobalId, 'should fail honestly'),
+      () => app!.kernel.conversations.submitInput(inheritedGlobalId, 'should fail honestly'),
       'model_tier_not_found',
     )
   } finally {
@@ -676,7 +676,7 @@ test('integration: KernelRuntime.start() aligns initial & recovered tier convers
       },
     })
     await kernel.start()
-    const root = kernel.getConversation(1)
+    const root = kernel.conversations.getConversation(1)
     assert.equal(root.model, 'faux/fast')
     assert.equal(root.thinkingLevel, 'low')
   } finally {
@@ -699,8 +699,8 @@ test('performance: tiers write actions reuse a single ModelCatalog fetch per set
   try {
     const { kernel } = env.app
     let listModelsCalls = 0
-    const origListModels = kernel.listModels.bind(kernel)
-    kernel.listModels = async () => {
+    const origListModels = kernel.models.listModels.bind(kernel.models)
+    kernel.models.listModels = async () => {
       listModelsCalls += 1
       return origListModels()
     }

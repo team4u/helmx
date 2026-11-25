@@ -220,12 +220,12 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
 
   // Slow streaming generation: verify conversation enters working and emits partial tokens before graceful close.
   faux1.setResponses([fauxAssistantMessage('long slow streaming output text used to ensure turn stays mid-generation on graceful shutdown')])
-  void runtime1.submitInput(1, 'please generate a long reply').catch(() => {})
+  void runtime1.conversations.submitInput(1, 'please generate a long reply').catch(() => {})
   const deadline = Date.now() + 15_000
-  while (runtime1.getConversation(1).status !== 'working' && Date.now() < deadline) {
+  while (runtime1.conversations.getConversation(1).status !== 'working' && Date.now() < deadline) {
     await delay(30)
   }
-  assert.equal(runtime1.getConversation(1).status, 'working', 'conversation must enter working within 15s')
+  assert.equal(runtime1.conversations.getConversation(1).status, 'working', 'conversation must enter working within 15s')
   await delay(600)
 
   await runtime1.close()
@@ -249,11 +249,11 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
   })
   t.after(() => runtime2.close().catch(() => {}), { timeout: 60_000 })
   await runtime2.start()
-  await runtime2.waitForIdle(1)
+  await runtime2.conversations.waitForIdle(1)
 
   assert.equal(faux2.state.callCount, 1)
-  assert.equal(runtime2.getConversation(1).status, 'done')
-  assert.equal(await runtime2.getLastAssistantText(1), 'graceful restart continuation complete')
+  assert.equal(runtime2.conversations.getConversation(1).status, 'done')
+  assert.equal(await runtime2.conversations.getLastAssistantText(1), 'graceful restart continuation complete')
 })
 
 test('replay: safe read-only tools read and read_artifact automatically replay to finish turn after runtime.close()', { timeout: 60_000 }, async (t) => {
@@ -293,7 +293,7 @@ test('replay: safe read-only tools read and read_artifact automatically replay t
   }) as typeof r1.artifacts.spill
 
   f1.setResponses([fauxAssistantMessage([fauxToolCall('read', { path: 'note.txt' }, { id: 'read-gate-1' })], { stopReason: 'toolUse' })])
-  void r1.submitInput(1, 'read note.txt').catch(() => {})
+  void r1.conversations.submitInput(1, 'read note.txt').catch(() => {})
   await waitReadEntered
   // Start close() so Harness aborts ToolTask's abortSignal first, then release spill to make wrapToolExecute throw AbortError.
   const closePromise1 = r1.close()
@@ -317,8 +317,8 @@ test('replay: safe read-only tools read and read_artifact automatically replay t
     autoResume: false,
   })
   await r2.start()
-  await r2.waitForIdle(1)
-  assert.equal(await r2.getLastAssistantText(1), 'read replay succeeded')
+  await r2.conversations.waitForIdle(1)
+  assert.equal(await r2.conversations.getLastAssistantText(1), 'read replay succeeded')
   const readToolResults = collectToolResultTexts(capturedReadContext)
   assert.ok(
     readToolResults.some((tr) => !tr.isError && tr.text.includes('READ_REPLAY_OK_CONTENT')),
@@ -342,7 +342,7 @@ test('replay: safe read-only tools read and read_artifact automatically replay t
   }) as typeof r2.artifacts.readSlice
 
   f2.setResponses([fauxAssistantMessage([fauxToolCall('read_artifact', { id: art.id })], { stopReason: 'toolUse' })])
-  void r2.submitInput(1, 'read artifact').catch(() => {})
+  void r2.conversations.submitInput(1, 'read artifact').catch(() => {})
   await waitArtEntered
   const closePromise2 = r2.close()
   await delay(80)
@@ -366,8 +366,8 @@ test('replay: safe read-only tools read and read_artifact automatically replay t
   })
   t.after(() => r3.close().catch(() => {}), { timeout: 60_000 })
   await r3.start()
-  await r3.waitForIdle(1)
-  assert.equal(await r3.getLastAssistantText(1), 'read_artifact replay succeeded')
+  await r3.conversations.waitForIdle(1)
+  assert.equal(await r3.conversations.getLastAssistantText(1), 'read_artifact replay succeeded')
   const artToolResults = collectToolResultTexts(capturedArtContext)
   assert.ok(
     artToolResults.some((tr) => !tr.isError && tr.text.includes('ARTIFACT_REPLAY_OK_CONTENT')),
@@ -405,7 +405,7 @@ runtime.artifacts.spill = async (...args) => {
   }
   return origSpill(...args)
 }
-void runtime.submitInput(1, 'read file').catch(() => {})
+void runtime.conversations.submitInput(1, 'read file').catch(() => {})
 await new Promise(() => {})
 `,
     (stdout) => stdout.includes('READY_READ'),
@@ -426,8 +426,8 @@ await new Promise(() => {})
     autoResume: true,
   })
   try {
-    await readRecover.waitForIdle(1)
-    assert.equal(await readRecover.getLastAssistantText(1), 'read-only replay succeeded after crash')
+    await readRecover.conversations.waitForIdle(1)
+    assert.equal(await readRecover.conversations.getLastAssistantText(1), 'read-only replay succeeded after crash')
     const results = collectToolResultTexts(readCtxAfterKill)
     assert.ok(
       results.some((tr) => !tr.isError && tr.text.includes('SIGKILL_READ_REPLAY_OK')),
@@ -458,7 +458,7 @@ const models = createModels()
 models.setProvider(faux.provider)
 faux.setResponses([fauxAssistantMessage([fauxToolCall('bash', { command: 'printf x >> run_count.txt; echo BASH_RUNNING; sleep 60' })], { stopReason: 'toolUse' })])
 const runtime = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: true })
-void runtime.submitInput(1, 'execute external command').catch(() => {})
+void runtime.conversations.submitInput(1, 'execute external command').catch(() => {})
 const deadline = Date.now() + 15000
 const { existsSync } = await import('node:fs')
 const { join } = await import('node:path')
@@ -489,9 +489,9 @@ await new Promise(() => {})
     autoResume: true,
   })
   try {
-    await bashRecover.waitForIdle(1)
+    await bashRecover.conversations.waitForIdle(1)
     assert.equal(readFileSync(markerPath, 'utf8'), 'x', 'unsafe tool bash must never replay after restart')
-    assert.equal(await bashRecover.getLastAssistantText(1), 'confirmed command interrupted without replay')
+    assert.equal(await bashRecover.conversations.getLastAssistantText(1), 'confirmed command interrupted without replay')
     const results = collectToolResultTexts(bashCtxAfterKill)
     assert.ok(
       results.some((tr) => tr.isError && /interrupted/i.test(tr.text)),

@@ -57,7 +57,7 @@ function collectToolResultTexts(context: TranscriptContext | undefined): Array<{
 }
 
 async function countUserEntries(runtime: KernelRuntime, conversationId: number): Promise<number> {
-  const detail = await runtime.getConversationDetail(conversationId, { limit: 200 })
+  const detail = await runtime.conversations.getConversationDetail(conversationId, { limit: 200 })
   assert.equal(
     detail.entries.filter((e) => e.kind === 'pi.user').length,
     0,
@@ -149,7 +149,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
   // First spawn a real child conversation
   faux.setResponses([fauxAssistantMessage('initial child done')])
   let childId = 0
-  await runtime.spawnAgent({
+  await runtime.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'initial spawn',
     requestId: 'req-init',
@@ -158,13 +158,13 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
     },
   })
   assert.ok(childId > 1)
-  const convCountBefore = runtime.listConversations().length
+  const convCountBefore = runtime.conversations.listConversations().length
   const callsBefore = faux.state.callCount
 
   // 1) reattach mutually exclusive with resume / fork (400 validation_error)
   await assert.rejects(
     () =>
-      runtime.spawnAgent({
+      runtime.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'conflict',
         requestId: 'req-conflict-1',
@@ -175,7 +175,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
   )
   await assert.rejects(
     () =>
-      runtime.spawnAgent({
+      runtime.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'conflict',
         requestId: 'req-conflict-2',
@@ -189,7 +189,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
   for (const badConvId of [0, -5, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     await assert.rejects(
       () =>
-        runtime.spawnAgent({
+        runtime.agentSpawn.spawnAgent({
           parentConversationId: 1,
           prompt: 'invalid',
           requestId: 'req-bad-id',
@@ -200,7 +200,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
   }
   await assert.rejects(
     () =>
-      runtime.spawnAgent({
+      runtime.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'empty object',
         requestId: 'req-empty',
@@ -210,7 +210,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
   )
   await assert.rejects(
     () =>
-      runtime.spawnAgent({
+      runtime.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'relative path',
         requestId: 'req-rel-cwd',
@@ -220,7 +220,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
   )
   await assert.rejects(
     () =>
-      runtime.spawnAgent({
+      runtime.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'missing requestId',
         reattach: { conversationId: childId },
@@ -236,7 +236,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
   ] as const) {
     await assert.rejects(
       () =>
-        runtime.spawnAgent({
+        runtime.agentSpawn.spawnAgent({
           parentConversationId: parentId,
           prompt: 'unauthorized reattach',
           requestId: 'req-wrong-owner',
@@ -249,7 +249,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
   // 4) unknown reattach key (executionId removed) rejects with validation_error
   await assert.rejects(
     () =>
-      runtime.spawnAgent({
+      runtime.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'external reattach',
         requestId: 'req-exec-only',
@@ -258,7 +258,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
     (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
 
-  assert.equal(runtime.listConversations().length, convCountBefore, 'rejected paths must never create conversations')
+  assert.equal(runtime.conversations.listConversations().length, convCountBefore, 'rejected paths must never create conversations')
   assert.equal(faux.state.callCount, callsBefore, 'rejected paths must never trigger model calls')
 
   // 5) Concurrent reattach lock (activeSpawnExecutions + claimSpawnConversation): 409 subagent_in_use
@@ -296,7 +296,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
     fauxAssistantMessage('slow child done'),
   ])
   let slowChildId = 0
-  const firstRun = runtime.spawnAgent({
+  const firstRun = runtime.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'run blocking tool',
     requestId: 'req-concurrent',
@@ -312,7 +312,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
   )
   await assert.rejects(
     () =>
-      runtime.spawnAgent({
+      runtime.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'concurrent reattach',
         requestId: 'req-concurrent',
@@ -377,7 +377,7 @@ test('PluginToolSpec.replay: safe replays across runtime.close() and SIGKILL; un
       stopReason: 'toolUse',
     }),
   ])
-  void r1.submitInput(1, 'invoke safe plugin tool').catch(() => {})
+  void r1.conversations.submitInput(1, 'invoke safe plugin tool').catch(() => {})
   await waitEnteredSafe
   const closing = r1.close()
   await delay(60)
@@ -419,9 +419,9 @@ test('PluginToolSpec.replay: safe replays across runtime.close() and SIGKILL; un
     },
   })
   await r2.start()
-  await r2.waitForIdle(1)
+  await r2.conversations.waitForIdle(1)
   assert.equal(replayCalls, 1)
-  assert.equal(await r2.getLastAssistantText(1), 'safe plugin tool replayed cleanly')
+  assert.equal(await r2.conversations.getLastAssistantText(1), 'safe plugin tool replayed cleanly')
   const closeResults = collectToolResultTexts(capturedCtx)
   assert.ok(
     closeResults.some((tr) => !tr.isError && tr.text.includes('SAFE_REPLAYED:alpha')),
@@ -490,7 +490,7 @@ await runtime.plugins.register({
   },
 })
 await runtime.start()
-void runtime.submitInput(1, 'run safe and unsafe plugin tools in parallel').catch(() => {})
+void runtime.conversations.submitInput(1, 'run safe and unsafe plugin tools in parallel').catch(() => {})
 const { existsSync } = await import('node:fs')
 const deadline = Date.now() + 15000
 while (
@@ -552,10 +552,10 @@ await new Promise(() => {})
       },
     })
     await recovered.start()
-    await recovered.waitForIdle(1)
+    await recovered.conversations.waitForIdle(1)
     assert.equal(readFileSync(safeMarker, 'utf8'), 'ss', 'replay: safe must replay once after SIGKILL')
     assert.equal(readFileSync(unsafeMarker, 'utf8'), 'u', 'replay: unsafe must never replay after SIGKILL')
-    assert.equal(await recovered.getLastAssistantText(1), 'SIGKILL plugin tool replay boundary verified')
+    assert.equal(await recovered.conversations.getLastAssistantText(1), 'SIGKILL plugin tool replay boundary verified')
     const results = collectToolResultTexts(sigkillCtx)
     assert.ok(results.some((tr) => !tr.isError && tr.text.includes('SIGKILL_SAFE_OK:k1')))
     assert.ok(results.some((tr) => tr.isError && /interrupted/i.test(tr.text)))
@@ -622,7 +622,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     fauxAssistantMessage([fauxToolCall('safe_pause', {}, { id: 'p1' })], { stopReason: 'toolUse' }),
   ])
   const spawn1a = r1a
-    .spawnAgent({
+    .agentSpawn.spawnAgent({
       parentConversationId: 1,
       prompt: 'produce structured status',
       requestId: 'req-close-schema-1',
@@ -673,7 +673,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
   })
   let resolved1b: AgentExecutionInfo | undefined
   let gate1b: AgentGateResult | undefined
-  const reattachPromise1b = r1b.spawnAgent({
+  const reattachPromise1b = r1b.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'produce structured status',
     requestId: 'req-close-schema-1',
@@ -694,7 +694,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
   assert.equal(resolved1b?.effectiveCwd, childDir1)
   assert.equal(gate1b?.ok, true)
   assert.equal(await countUserEntries(r1b, childId1), 1, 'reattach must not write duplicate user message')
-  assert.equal(r1b.listConversations().length, 2, 'reattach must not create an extra child conversation')
+  assert.equal(r1b.conversations.listConversations().length, 2, 'reattach must not create an extra child conversation')
 
   // ---- Scenario 2: register_structured_output already committed before crash; post-restart emits plain text only, accepted backfill skips follow-up prompt ----
   const dir2 = mkdtempSync(join(tmpdir(), 'helmx-reattach-close-prefilled-'))
@@ -744,7 +744,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     fauxAssistantMessage([fauxToolCall('after_structured_pause', {}, { id: 'p2' })], { stopReason: 'toolUse' }),
   ])
   const spawn2a = r2a
-    .spawnAgent({
+    .agentSpawn.spawnAgent({
       parentConversationId: 1,
       prompt: 'submit structured output first then continue',
       requestId: 'req-prefilled-1',
@@ -785,7 +785,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     },
   })
   await r2b.start()
-  const result2b = await r2b.spawnAgent({
+  const result2b = await r2b.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'submit structured output first then continue',
     requestId: 'req-prefilled-1',
@@ -841,7 +841,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     fauxAssistantMessage([fauxToolCall('heal_pause', {}, { id: 'hp1' })], { stopReason: 'toolUse' }),
   ])
   const spawn3a = r3a
-    .spawnAgent({
+    .agentSpawn.spawnAgent({
       parentConversationId: 1,
       prompt: 'output structured JSON',
       requestId: 'req-heal-close',
@@ -887,7 +887,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     },
   })
   await r3b.start()
-  const result3b = await r3b.spawnAgent({
+  const result3b = await r3b.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'output structured JSON',
     requestId: 'req-heal-close',
@@ -911,7 +911,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
   })
   f4a.setResponses([fauxAssistantMessage('PRE_RESTART_PLAIN_TEXT')])
   let childId4 = 0
-  const plainFirst = await r4a.spawnAgent({
+  const plainFirst = await r4a.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'plain text task',
     title: 'Original plain task',
@@ -922,7 +922,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     },
   })
   assert.equal(plainFirst, 'PRE_RESTART_PLAIN_TEXT')
-  assert.equal(r4a.getConversation(childId4).title, 'Original plain task')
+  assert.equal(r4a.conversations.getConversation(childId4).title, 'Original plain task')
   await r4a.close()
 
   const { models: m4b, faux: f4b } = createFaux()
@@ -935,7 +935,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
   })
   t.after(() => r4b.close().catch(() => {}), { timeout: 60_000 })
   let plainGate: AgentGateResult | undefined
-  const reattachedPlain = await r4b.spawnAgent({
+  const reattachedPlain = await r4b.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'plain text task',
     title: 'Overwrite attempt on reattach',
@@ -947,7 +947,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     },
   })
   assert.equal(reattachedPlain, 'PRE_RESTART_PLAIN_TEXT')
-  assert.equal(r4b.getConversation(childId4).title, 'Original plain task', 'reattach must preserve original child title')
+  assert.equal(r4b.conversations.getConversation(childId4).title, 'Original plain task', 'reattach must preserve original child title')
   assert.equal(plainGate?.ok, true)
   assert.equal(f4b.state.callCount, 0, 'reattach after pre-crash settled submission must not re-send model request')
   assert.equal(await countUserEntries(r4b, childId4), 1)
@@ -997,7 +997,7 @@ faux.setResponses([
   ),
 ])
 const runtime = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: true })
-void runtime.spawnAgent({
+void runtime.agentSpawn.spawnAgent({
   parentConversationId: 1,
   prompt: 'submit structured result then run command',
   requestId: 'req-sigkill-reattach',
@@ -1045,7 +1045,7 @@ await new Promise(() => {})
   try {
     let reattachedInfo: AgentExecutionInfo | undefined
     let gateInfo: AgentGateResult | undefined
-    const reattachPromise = recovered.spawnAgent({
+    const reattachPromise = recovered.agentSpawn.spawnAgent({
       parentConversationId: 1,
       prompt: 'submit structured result then run command',
       requestId: 'req-sigkill-reattach',
@@ -1069,7 +1069,7 @@ await new Promise(() => {})
     assert.equal(gateInfo?.ok, true)
     assert.equal(f2.state.callCount, 1, 'pre-crash register_structured_output backfilled; must not re-prompt')
     assert.equal(await countUserEntries(recovered, childId), 1, 'SIGKILL reattach must preserve zero duplicate user messages')
-    assert.equal(recovered.listConversations().length, 2)
+    assert.equal(recovered.conversations.listConversations().length, 2)
   } finally {
     await recovered.close()
   }
@@ -1106,7 +1106,7 @@ faux.setResponses([
   ),
 ])
 const runtime = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: true })
-void runtime.spawnAgent({
+void runtime.agentSpawn.spawnAgent({
   parentConversationId: 1,
   prompt: 'inspect environment then submit structured output',
   requestId: 'req-sigkill-post-tool',
@@ -1151,7 +1151,7 @@ await new Promise(() => {})
   })
   try {
     let postGate: AgentGateResult | undefined
-    const postPromise = recoveredPost.spawnAgent({
+    const postPromise = recoveredPost.agentSpawn.spawnAgent({
       parentConversationId: 1,
       prompt: 'inspect environment then submit structured output',
       requestId: 'req-sigkill-post-tool',
@@ -1167,7 +1167,7 @@ await new Promise(() => {})
     assert.deepEqual(postOutcome, { ok: true, stage: 'after-sigkill' })
     assert.equal(postGate?.ok, true)
     assert.equal(await countUserEntries(recoveredPost, postChildId), 1)
-    assert.equal(recoveredPost.listConversations().length, 2)
+    assert.equal(recoveredPost.conversations.listConversations().length, 2)
   } finally {
     await recoveredPost.close()
   }

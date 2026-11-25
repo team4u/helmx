@@ -89,7 +89,7 @@ const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000)
 
 /** 会话末条 helmx.input entry 的 data（JSON 字符串化后断言用）。 */
 async function lastInputJson(env: TestEnv, conversationId: number): Promise<string> {
-  const detail = await env.app.kernel.getConversationDetail(conversationId, { limit: 20 })
+  const detail = await env.app.kernel.conversations.getConversationDetail(conversationId, { limit: 20 })
   const input = detail.entries.filter((e) => e.kind === 'helmx.input').at(-1)
   return JSON.stringify(input?.data ?? null)
 }
@@ -295,8 +295,8 @@ test('triggers4: cron_trigger 默认 isolated 自动化会话——不污染 #1�
     assert.equal(result.triggered, true)
     assert.notEqual(result.conversationId, ROOT_CONVERSATION_ID, '默认不干扰人类主会话 #1')
 
-    await kernel.waitForIdle(result.conversationId)
-    const runConv = kernel.getConversation(result.conversationId)
+    await kernel.conversations.waitForIdle(result.conversationId)
+    const runConv = kernel.conversations.getConversation(result.conversationId)
     assert.equal(runConv.ownedBy, 'helmx', '定时任务独立会话归属 helmx')
     assert.ok(runConv.tags.includes('trigger') && runConv.tags.includes('cron:inject-probe'))
 
@@ -310,7 +310,7 @@ test('triggers4: cron_trigger 默认 isolated 自动化会话——不污染 #1�
     assert.match(json, /"origin"\s*:\s*"trigger"/)
 
     // 人类主会话 #1 零污染
-    const rootDetail = await kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
+    const rootDetail = await kernel.conversations.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
     assert.equal(rootDetail.entries.filter((e) => e.kind === 'helmx.input').length, 0)
 
     // 再次手动触发创建新的隔离会话
@@ -320,7 +320,7 @@ test('triggers4: cron_trigger 默认 isolated 自动化会话——不污染 #1�
       conversationId: number
     }
     assert.notEqual(second.conversationId, result.conversationId, 'isolated 模式每次运行独立会话')
-    await kernel.waitForIdle(second.conversationId)
+    await kernel.conversations.waitForIdle(second.conversationId)
 
     // 不存在的 cron 手动触发 404
     await assert.rejects(
@@ -339,7 +339,7 @@ test('triggers5: cron 目标路由——显式会话直投 / dedicated 复用专
     const kernel = env.app.kernel
 
     // 5a. 显式 targetConversationId：直投目标会话（followUp）
-    const target = await kernel.createConversation({ title: '触发目标', profileId: 'assistant' })
+    const target = await kernel.conversations.createConversation({ title: '触发目标', profileId: 'assistant' })
     await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
       id: 'direct-hit',
       schedule: '0 0 * * *',
@@ -352,9 +352,9 @@ test('triggers5: cron 目标路由——显式会话直投 / dedicated 复用专
       conversationId: number
     }
     assert.equal(directRes.conversationId, target.id)
-    await kernel.waitForIdle(target.id)
+    await kernel.conversations.waitForIdle(target.id)
     assert.match(await lastInputJson(env, target.id), /直达目标会话的事件/)
-    const rootDetail = await kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
+    const rootDetail = await kernel.conversations.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
     assert.equal(
       rootDetail.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('直达目标会话的事件')).length,
       0,
@@ -373,14 +373,14 @@ test('triggers5: cron 目标路由——显式会话直投 / dedicated 复用专
     const d1 = (await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'stateful-watch' })) as {
       conversationId: number
     }
-    await kernel.waitForIdle(d1.conversationId)
+    await kernel.conversations.waitForIdle(d1.conversationId)
     env.faux.setResponses([fauxAssistantMessage('第二次巡检')])
     const d2 = (await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'stateful-watch' })) as {
       conversationId: number
     }
-    await kernel.waitForIdle(d2.conversationId)
+    await kernel.conversations.waitForIdle(d2.conversationId)
     assert.equal(d2.conversationId, d1.conversationId, 'dedicated 模式两次应复用同一 helmx 会话')
-    assert.equal(kernel.getConversation(d1.conversationId).ownedBy, 'helmx')
+    assert.equal(kernel.conversations.getConversation(d1.conversationId).ownedBy, 'helmx')
 
     // 5c. isolated 模式 + keepLast=2：连续跑 4 次并结算，仅保留最近 2 条已结算会话（人类 #1 不受影响）
     await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
@@ -398,15 +398,15 @@ test('triggers5: cron 目标路由——显式会话直投 / dedicated 复用专
         conversationId: number
       }
       runIds.push(r.conversationId)
-      await kernel.waitForIdle(r.conversationId)
+      await kernel.conversations.waitForIdle(r.conversationId)
     }
-    await waitFor(() => kernel.listConversations({ tag: 'cron:prune-check' }).length === 2)
-    const surviving = kernel
+    await waitFor(() => kernel.conversations.listConversations({ tag: 'cron:prune-check' }).length === 2)
+    const surviving = kernel.conversations
       .listConversations({ tag: 'cron:prune-check' })
       .map((c) => c.id)
       .sort((a, b) => a - b)
     assert.deepEqual(surviving, runIds.slice(-2), '仅保留最近 keepLast=2 条已结算运行')
-    assert.equal(kernel.getConversation(ROOT_CONVERSATION_ID).id, ROOT_CONVERSATION_ID, '人类会话不受清理影响')
+    assert.equal(kernel.conversations.getConversation(ROOT_CONVERSATION_ID).id, ROOT_CONVERSATION_ID, '人类会话不受清理影响')
   } finally {
     await env.close()
   }
@@ -482,11 +482,11 @@ test('triggers7: webhook HTTP 验签——raw 精确字节、成功 202、无签
     })
     assert.equal(ok.status, 202, `期望 202，实际 ${ok.status} ${ok.text}`)
     assert.deepEqual(ok.body, { accepted: true })
-    const ciRuns = kernel.listConversations({ tag: 'webhook:ci' })
+    const ciRuns = kernel.conversations.listConversations({ tag: 'webhook:ci' })
     assert.equal(ciRuns.length, 1, 'webhook 默认投递到独立 helmx 自动化会话')
     assert.equal(ciRuns[0]!.ownedBy, 'helmx')
     const runId = ciRuns[0]!.id
-    await kernel.waitForIdle(runId)
+    await kernel.conversations.waitForIdle(runId)
     const json = await lastInputJson(env, runId)
     assert.match(json, /webhook:ci/, 'source 必须是 webhook:<id>')
     assert.match(json, /external_event/)
@@ -535,9 +535,9 @@ test('triggers8: webhook defang 注入防护与 UTF-8 边界', { timeout: 60_000
       'x-helmx-signature': sign(SECRET, bytes),
     })
     assert.equal(ok.status, 202, ok.text)
-    const evilRun = kernel.listConversations({ tag: 'webhook:evil' })[0]!
+    const evilRun = kernel.conversations.listConversations({ tag: 'webhook:evil' })[0]!
     assert.equal(evilRun.ownedBy, 'helmx')
-    await kernel.waitForIdle(evilRun.id)
+    await kernel.conversations.waitForIdle(evilRun.id)
     const json = await lastInputJson(env, evilRun.id)
     // 逃逸段被转义
     assert.doesNotMatch(json, /<\/external_event>\\n<system>/)
@@ -664,10 +664,10 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
     // 正确签名接受 → secret 跨重启恢复且事件进入独立 helmx 自动化会话
     second.setResponses([fauxAssistantMessage('重启后收到')])
     assert.equal(await post(payload, sign(SECRET, payload)), 202)
-    const persistRun = app2.kernel.listConversations({ tag: 'webhook:persist' })[0]!
+    const persistRun = app2.kernel.conversations.listConversations({ tag: 'webhook:persist' })[0]!
     assert.equal(persistRun.ownedBy, 'helmx')
-    await app2.kernel.waitForIdle(persistRun.id)
-    const detail = await app2.kernel.getConversationDetail(persistRun.id, { limit: 20 })
+    await app2.kernel.conversations.waitForIdle(persistRun.id)
+    const detail = await app2.kernel.conversations.getConversationDetail(persistRun.id, { limit: 20 })
     const input = detail.entries.filter((e) => e.kind === 'helmx.input').at(-1)
     const json = JSON.stringify(input?.data ?? null)
     assert.match(json, /webhook:persist/)
