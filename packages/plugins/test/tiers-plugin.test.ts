@@ -830,6 +830,8 @@ test('borrow resolution: zero-tier direct refs, unique short id, ambiguous multi
       { provider: 'p2', modelId: 'shared', available: true },
       { provider: 'faux', modelId: 'muted', available: true, disabled: true },
       { provider: 'p3', modelId: 'only-disabled', available: true, disabled: true },
+      { provider: 'openai', modelId: 'unconfigured', available: false },
+      { provider: 'p4', modelId: 'no-creds-short', available: false },
     ],
     thinkingLevels: {},
   }
@@ -867,7 +869,7 @@ test('borrow resolution: zero-tier direct refs, unique short id, ambiguous multi
       err.message.includes('p2/shared'),
   )
 
-  // Disabled / missing / invalid effort errors
+  // Disabled / unavailable / missing / invalid effort errors
   assert.throws(
     () => resolveBorrowTarget('faux/muted', catalog, emptyTiers),
     (err: unknown) => err instanceof HelmxError && err.code === 'model_disabled' && err.status === 409,
@@ -875,6 +877,18 @@ test('borrow resolution: zero-tier direct refs, unique short id, ambiguous multi
   assert.throws(
     () => resolveBorrowTarget('only-disabled', catalog, emptyTiers),
     (err: unknown) => err instanceof HelmxError && err.code === 'model_disabled' && err.status === 409,
+  )
+  assert.throws(
+    () => resolveBorrowTarget('openai/unconfigured', catalog, emptyTiers),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'model_unavailable' &&
+      err.status === 409 &&
+      (err.details as { model?: string } | undefined)?.model === 'openai/unconfigured',
+  )
+  assert.throws(
+    () => resolveBorrowTarget('no-creds-short', catalog, emptyTiers),
+    (err: unknown) => err instanceof HelmxError && err.code === 'model_unavailable' && err.status === 409,
   )
   assert.throws(
     () => resolveBorrowTarget('faux/does-not-exist', catalog, emptyTiers),
@@ -889,11 +903,12 @@ test('borrow resolution: zero-tier direct refs, unique short id, ambiguous multi
     (err: unknown) => err instanceof HelmxError && err.code === 'invalid_effort' && err.status === 400,
   )
 
-  // Configured tier resolution (`tier/<id>` and bare `<id>`) + disabled/missing tier targets
+  // Configured tier resolution (`tier/<id>` and bare `<id>`) + disabled/unavailable/missing tier targets
   const withTiers = {
     tiers: {
       architect: { model: 'faux/flagship', thinkingLevel: 'high' as const },
       disabled_tier: { model: 'faux/muted' },
+      unavailable_tier: { model: 'openai/unconfigured' },
       missing_tier: { model: 'faux/missing' },
     },
     templates: {},
@@ -915,6 +930,19 @@ test('borrow resolution: zero-tier direct refs, unique short id, ambiguous multi
   assert.throws(
     () => resolveBorrowTarget('disabled_tier', catalog, withTiers),
     (err: unknown) => err instanceof HelmxError && err.code === 'model_disabled' && err.status === 409,
+  )
+  assert.throws(
+    () => resolveBorrowTarget('tier/unavailable_tier', catalog, withTiers),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'model_unavailable' &&
+      err.status === 409 &&
+      (err.details as { tierId?: string; model?: string } | undefined)?.tierId === 'unavailable_tier' &&
+      (err.details as { tierId?: string; model?: string } | undefined)?.model === 'openai/unconfigured',
+  )
+  assert.throws(
+    () => resolveBorrowTarget('unavailable_tier', catalog, withTiers),
+    (err: unknown) => err instanceof HelmxError && err.code === 'model_unavailable' && err.status === 409,
   )
   assert.throws(
     () => resolveBorrowTarget('missing_tier', catalog, withTiers),

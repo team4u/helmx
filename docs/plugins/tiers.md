@@ -27,9 +27,9 @@
    - **作用域**：严格限定于顶层人类直连会话（`parentConversationId === undefined && (ownedBy ?? 'human') === 'human'`），子代理与 `helmx` 后台会话不可见 `switch_model` 工具、不受 `/model` 影响。
    - **确定性目标解析（`resolveBorrowTarget`，0 档位与已配档位通用）**：
      1. 校验非空与可选 `effort`（非法报 `400 invalid_effort`）；
-     2. `tier/<id>` 或命中已配置档位名的 `<tierId>` -> 校验档位存在（`404 tier_not_found`）及目标模型存在（`404 model_not_found`）且未禁用（`409 model_disabled`）；
-     3. 精确匹配目录中的 `provider/modelId`（支持多斜杠 modelId）-> 禁用报 `409 model_disabled`；
-     4. 无斜杠简写 `<modelId>` -> 启用且可用恰为 1 项则解析，>1 项报 `409 ambiguous_model_ref` 并列出候选，仅禁用匹配报 `409 model_disabled`，无匹配报 `404 model_not_found`；
+     2. `tier/<id>` 或命中已配置档位名的 `<tierId>` -> 校验档位存在（`404 tier_not_found`）及目标模型存在（`404 model_not_found`）、未禁用（`409 model_disabled`）且供应商凭据可用（`available === true`，不可用报 `409 model_unavailable`）；
+     3. 精确匹配目录中的 `provider/modelId`（支持多斜杠 modelId）-> 禁用报 `409 model_disabled`，不可用报 `409 model_unavailable`；
+     4. 无斜杠简写 `<modelId>` -> 启用且可用恰为 1 项则解析，>1 项报 `409 ambiguous_model_ref` 并列出候选，存在禁用匹配报 `409 model_disabled`，存在目录项但不可用报 `409 model_unavailable`，完全无匹配报 `404 model_not_found`；
      5. 其余未命中含斜杠引用 -> 报 `404 model_not_found`。
    - **多端触发方式**：
      - **斜杠直发**：`/model <target> <message>`（支持换行正文或带附件）在 `input` Hook（`priority: -200`）校验空闲后切换模型并剥离 `/model <target>` 前缀（标题与时间线保持干净），回合结算后自动恢复；

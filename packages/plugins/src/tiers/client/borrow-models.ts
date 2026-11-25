@@ -271,3 +271,13 @@ export function subscribeBorrowPickerOpen(
   window.addEventListener(TIERS_BORROW_OPEN_EVENT, listener)
   return () => window.removeEventListener(TIERS_BORROW_OPEN_EVENT, listener)
 }
+
+/** Return focus to the owning composer textarea after closing the borrow picker via keyboard or selection. */
+export function focusOwningComposerTextarea(anchor: Element | null | undefined): boolean {
+  const textarea = anchor?.closest('.composer-box')?.querySelector<HTMLTextAreaElement>('textarea')
+  if (textarea === null || textarea === undefined || textarea.disabled || textarea.readOnly) {
+    return false
+  }
+  textarea.focus()
+  return true
+}

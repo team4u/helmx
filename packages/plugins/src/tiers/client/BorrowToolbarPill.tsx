@@ -25,6 +25,7 @@ import {
   TIERS_BORROW_COMMAND_ID,
   TIERS_BORROW_SESSION_DOC,
   TIERS_INPUT_META_KEY,
+  focusOwningComposerTextarea,
   formatBorrowTargetLabel,
   isConversationBusyForBorrow,
   isTiersBorrowEligibleConversation,
@@ -178,6 +179,11 @@ function BorrowToolbarPillConversation({
       : ''
   const clearAria = isActive ? t(C.borrowClearActiveAria) : t(C.borrowClearArmedAria)
 
+  const handleReturnFocus = useCallback(
+    (): boolean => focusOwningComposerTextarea(rootRef.current),
+    [],
+  )
+
   return (
     <span
       ref={rootRef}
@@ -197,6 +203,7 @@ function BorrowToolbarPillConversation({
         pending={borrowAction.pending}
         onNotice={(msg, tone) => ctx.notify(msg, tone)}
         onApply={handleApply}
+        onReturnFocus={handleReturnFocus}
         renderTrigger={({ open }) =>
           hasBorrow ? (
             <button
@@ -296,6 +303,11 @@ function BorrowToolbarPillStandby({
     standbyBorrow !== null ? borrowArmedPillTitle(standbyBorrow.borrowModel, locale) : ''
   const clearAria = t(C.borrowClearArmedAria)
 
+  const handleReturnFocus = useCallback(
+    (): boolean => focusOwningComposerTextarea(rootRef.current),
+    [],
+  )
+
   return (
     <span
       ref={rootRef}
@@ -314,6 +326,7 @@ function BorrowToolbarPillStandby({
         disabled={disabled}
         onNotice={(msg, tone) => ctx.notify(msg, tone)}
         onApply={handleApply}
+        onReturnFocus={handleReturnFocus}
         renderTrigger={({ open }) =>
           hasBorrow ? (
             <button

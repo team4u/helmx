@@ -149,6 +149,14 @@ function resolveTierById(
       { tierId, model: spec.model },
     )
   }
+  if (concrete.available !== true) {
+    throw new HelmxError(
+      'model_unavailable',
+      `Target model '${spec.model}' for tier '${tierId}' is unavailable (provider credentials not configured)`,
+      409,
+      { tierId, model: spec.model },
+    )
+  }
   const targetModel = `${MODEL_TIER_PREFIX}/${tierId}`
   return {
     requestedRef,
@@ -162,11 +170,11 @@ function resolveTierById(
 
 /**
  * Deterministic target resolver for both zero-tier and tier-configured environments:
- * 1. Explicit `tier/<id>` -> lookup tier, verify underlying concrete model exists & is not disabled;
+ * 1. Explicit `tier/<id>` -> lookup tier, verify underlying concrete model exists, is not disabled, and is available;
  * 2. Bare `<tierId>` matching a configured tier -> same tier verification;
- * 3. Exact `provider/modelId` match in catalog (supports slashed model IDs) -> reject if disabled;
+ * 3. Exact `provider/modelId` match in catalog (supports slashed model IDs) -> reject if disabled or unavailable;
  * 4. Bare `<modelId>` (no `/`) -> single usable match wins, >1 -> 409 ambiguous_model_ref,
- *    disabled-only -> 409 model_disabled, else 404 model_not_found;
+ *    disabled match -> 409 model_disabled, unavailable match -> 409 model_unavailable, else 404 model_not_found;
  * 5. Any unmatched ref containing `/` -> 404 model_not_found.
  */
 export function resolveBorrowTarget(
@@ -194,6 +202,14 @@ export function resolveBorrowTarget(
   if (exact !== undefined) {
     if (exact.disabled === true) {
       throw new HelmxError('model_disabled', `Model '${ref}' is disabled`, 409, { model: ref })
+    }
+    if (exact.available !== true) {
+      throw new HelmxError(
+        'model_unavailable',
+        `Model '${ref}' is unavailable (provider credentials not configured)`,
+        409,
+        { model: ref },
+      )
     }
     return {
       requestedRef: ref,
@@ -229,6 +245,15 @@ export function resolveBorrowTarget(
     }
     if (matches.some((m) => m.disabled === true)) {
       throw new HelmxError('model_disabled', `Model '${ref}' is disabled`, 409, { ref })
+    }
+    if (matches.length > 0) {
+      const candidates = matches.map((m) => `${m.provider}/${m.modelId}`)
+      throw new HelmxError(
+        'model_unavailable',
+        `Model '${ref}' is unavailable (provider credentials not configured)`,
+        409,
+        { ref, candidates },
+      )
     }
     throw new HelmxError('model_not_found', `Model '${ref}' was not found in the model catalog`, 404, { ref })
   }

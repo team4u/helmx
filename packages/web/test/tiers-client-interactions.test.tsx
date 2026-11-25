@@ -766,7 +766,8 @@ describe("tiers-client-interactions", () => {
           { value: registry },
           e(
             'div',
-            { 'data-helmx-panel': 'primary' },
+            { 'data-helmx-panel': 'primary', className: 'composer-box' },
+            e('textarea', { 'aria-label': 'standby-composer-input' }),
             e(BorrowToolbarPill, { profileId: 'assistant', draftMeta, setDraftMeta }),
           ),
         )
@@ -783,6 +784,8 @@ describe("tiers-client-interactions", () => {
         // Idle standby: zero visible buttons & zero sessionDoc subscriptions
         assert.equal(standbyMount.host.querySelectorAll('button').length, 0)
         assert.equal(standbyHarness.subscribedKeys.length, 0)
+        const standbyTextarea = standbyMount.host.querySelector<HTMLTextAreaElement>('textarea')
+        assert.ok(standbyTextarea !== null)
 
         // Trigger `/model` via ComposerCommandContext -> opens ModelPickerControl popover
         await act(async () => {
@@ -792,7 +795,7 @@ describe("tiers-client-interactions", () => {
         assert.ok(popover !== null, '/model command must open borrow picker on standby')
         assert.equal(popover.querySelector('.composer-model-reset') === null, true)
 
-        // Select tier/architect -> writes draftMeta locally with ZERO callAction RPCs
+        // Select tier/architect -> writes draftMeta locally with ZERO callAction RPCs and returns focus to textarea
         const archBtn = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
           (b) => (b.textContent ?? '').includes('tier/architect'),
         )
@@ -805,6 +808,10 @@ describe("tiers-client-interactions", () => {
           key: TIERS_INPUT_META_KEY,
           value: { borrowModel: 'tier/architect' },
         })
+        assert.ok(
+          document.activeElement === standbyTextarea,
+          'selecting a borrow model must return keyboard focus to the owning .composer-box textarea',
+        )
         assert.match(standbyMount.host.textContent ?? '', /Next turn:/)
         assert.match(standbyMount.host.textContent ?? '', /tier\/architect/)
 
@@ -842,7 +849,8 @@ describe("tiers-client-interactions", () => {
           ),
           e(
             'div',
-            { 'data-helmx-panel': 'split' },
+            { 'data-helmx-panel': 'split', className: 'composer-box' },
+            e('textarea', { 'aria-label': 'split-composer-input' }),
             e(BorrowToolbarPill, { conversation: convSplit }),
             e(
               DropdownMenuRoot,
@@ -870,6 +878,9 @@ describe("tiers-client-interactions", () => {
         ),
       )
       try {
+        const splitTextarea = persistedMount.host.querySelector<HTMLTextAreaElement>('textarea[aria-label="split-composer-input"]')
+        assert.ok(splitTextarea !== null)
+
         // Click BorrowMenuItem inside split panel -> closes menu & opens ONLY split panel's popover
         const menuItem = persistedMount.host.querySelector<HTMLElement>('.tiers-borrow-menu-item')
         assert.ok(menuItem !== null)
@@ -882,7 +893,7 @@ describe("tiers-client-interactions", () => {
         const popovers = document.body.querySelectorAll('.composer-model-popover')
         assert.equal(popovers.length, 1, 'split BorrowMenuItem must open exactly one panel popover (not primary)')
 
-        // Select faux/flagship with inline xhigh chip -> invokes set_borrow action
+        // Select faux/flagship with inline xhigh chip -> invokes set_borrow action & returns focus to split textarea
         const flagshipRow = Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row')).find(
           (row) =>
             !(row.textContent ?? '').includes('tier/') &&
@@ -900,6 +911,10 @@ describe("tiers-client-interactions", () => {
           actionId: 'set_borrow',
           input: { conversationId: 30, model: 'faux/flagship', effort: 'xhigh' },
         })
+        assert.ok(
+          document.activeElement === splitTextarea,
+          'persisted conversation borrow selection must return focus to owning .composer-box textarea',
+        )
       } finally {
         await persistedMount.unmount()
       }
