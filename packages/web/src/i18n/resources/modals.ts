@@ -143,6 +143,7 @@ export const modalsMessages = {
   'modals.shortcuts.section.conversation': { en: 'Conversation', 'zh-CN': '会话操作' },
   'modals.shortcuts.section.composer': { en: 'Composer', 'zh-CN': '输入框' },
   'modals.shortcuts.item.commandPalette': { en: 'Command palette & search', 'zh-CN': '命令面板与全局搜索' },
+  'modals.shortcuts.item.focusSearch': { en: 'Focus page search', 'zh-CN': '聚焦页面搜索' },
   'modals.shortcuts.item.newTopic': { en: 'New topic', 'zh-CN': '新建话题' },
   'modals.shortcuts.item.toggleSidebar': { en: 'Toggle sidebar', 'zh-CN': '展开 / 收起侧栏' },
   'modals.shortcuts.item.openShortcuts': { en: 'Keyboard shortcuts', 'zh-CN': '快捷键总览' },

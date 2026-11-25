@@ -20,6 +20,7 @@ import {
   hasNonModelPickerDialogOpen,
   isApplePlatform,
   isConversationAbortable,
+  isEditableShortcutTarget,
   isInlineInputEscapeTarget,
   isPeriodShortcutKey,
   isSlashShortcutKey,
@@ -28,6 +29,7 @@ import {
   resolveNewTopicTarget,
   type HelmxShortcutDetail,
 } from '../src/shell/shortcuts-model.js'
+import { resetStandbyDrafts } from '../src/conversation/standby-model.js'
 import type { ActiveModal, HelmxStoreValue, ResolvedTarget } from '../src/lib/types.js'
 
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -103,6 +105,36 @@ function installFetch(options: FetchHarnessOptions = {}): void {
         status: 200,
         headers: { 'content-type': 'application/json' },
       })
+    }
+    if (url === '/api/models' && method === 'GET') {
+      return new Response(
+        JSON.stringify({
+          models: [
+            {
+              id: 'faux/model',
+              provider: 'faux',
+              modelId: 'model',
+              available: true,
+              thinkingLevels: ['off', 'high'],
+            },
+          ],
+          thinkingLevels: ['off', 'high'],
+          defaultModel: 'faux/model',
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      )
+    }
+    if (url === '/api/nodes' && method === 'GET') {
+      return new Response(
+        JSON.stringify([{ id: 'local', kind: 'local', online: true }]),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      )
     }
     if (url === '/api/events') {
       return new Response(
@@ -280,6 +312,7 @@ describe("helmx-store-shortcuts", () => {
     capturedStore = undefined
     abortCalls = []
     artifactRequests = []
+    resetStandbyDrafts()
     window.localStorage.removeItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
   })
 
@@ -445,6 +478,11 @@ describe("helmx-store-shortcuts", () => {
       locale: 'en',
     })
     assert.deepEqual(catalogWithPlugin.map((s) => s.key), ['navigation', 'conversation', 'composer'])
+    const navItemsEn = catalogWithPlugin.find((s) => s.key === 'navigation')?.items ?? []
+    assert.equal(navItemsEn.some((item) => item.keys === '/' && item.label === 'Focus page search'), true)
+    const catalogZh = buildShortcutCatalog({ pluginCommands: [], locale: 'zh-CN' })
+    const navItemsZh = catalogZh.find((s) => s.key === 'navigation')?.items ?? []
+    assert.equal(navItemsZh.some((item) => item.keys === '/' && item.label === '聚焦页面搜索'), true)
     const convItems = catalogWithPlugin.find((s) => s.key === 'conversation')?.items ?? []
     assert.equal(convItems.some((item) => item.keys === 'Ctrl+.' && item.label === 'Toggle Alpha mode'), true)
     assert.equal(convItems.some((item) => item.label === 'No Shortcut Command'), false)
@@ -452,6 +490,26 @@ describe("helmx-store-shortcuts", () => {
     const catalogWithoutPlugin = buildShortcutCatalog({ pluginCommands: [], locale: 'en' })
     const convItemsEmpty = catalogWithoutPlugin.find((s) => s.key === 'conversation')?.items ?? []
     assert.equal(convItemsEmpty.some((item) => item.keys === 'Ctrl+.'), false)
+
+    // Editable target detection for single-key shortcuts
+    const editableInput = document.createElement('input')
+    const editableTextarea = document.createElement('textarea')
+    const editableSelect = document.createElement('select')
+    const editableDiv = document.createElement('div')
+    editableDiv.setAttribute('contenteditable', 'true')
+    const editableChild = document.createElement('span')
+    editableDiv.appendChild(editableChild)
+    const nonEditableDiv = document.createElement('div')
+    nonEditableDiv.setAttribute('contenteditable', 'false')
+    const plainButton = document.createElement('button')
+    assert.equal(isEditableShortcutTarget(editableInput), true)
+    assert.equal(isEditableShortcutTarget(editableTextarea), true)
+    assert.equal(isEditableShortcutTarget(editableSelect), true)
+    assert.equal(isEditableShortcutTarget(editableDiv), true)
+    assert.equal(isEditableShortcutTarget(editableChild), true)
+    assert.equal(isEditableShortcutTarget(nonEditableDiv), false)
+    assert.equal(isEditableShortcutTarget(plainButton), false)
+    assert.equal(isEditableShortcutTarget(null), false)
 
     // Overlay and inline-input detection
     assert.equal(hasAnyOpenOverlay({ kind: 'command-palette' }, false), true)
@@ -953,5 +1011,239 @@ describe("helmx-store-shortcuts", () => {
     assert.ok(text.includes('Toggle Plan mode'))
     assert.ok(text.includes('Ctrl+.'))
     assert.equal(window.location.hash.includes('modal='), false, 'ShortcutsModal must remain transient and never enter URL hash')
+  })
+
+  test('plain / dispatches cancelable focus-search only outside inputs and overlays, preventing default only when claimed', { timeout: 60_000 }, async () => {
+    await mountProvider('#/overview')
+
+    const seen: Array<{ detail: HelmxShortcutDetail; cancelable: boolean }> = []
+    let claimFocusSearch = false
+    const onShortcut = (ev: Event) => {
+      const ce = ev as CustomEvent<HelmxShortcutDetail>
+      if (ce.detail?.action !== 'focus-search') return
+      seen.push({ detail: ce.detail, cancelable: ce.cancelable })
+      if (claimFocusSearch) ce.preventDefault()
+    }
+    window.addEventListener('helmx:shortcut', onShortcut)
+
+    try {
+      // 1) Without a claiming SearchBox listener, keydown is NOT defaultPrevented
+      const evUnclaimed = dispatchWindowKey({ key: '/', code: 'Slash' })
+      assert.equal(seen.length, 1)
+      assert.deepEqual(seen[0], { detail: { action: 'focus-search', panel: 'primary' }, cancelable: true })
+      assert.equal(evUnclaimed.defaultPrevented, false, 'unclaimed / must not silently swallow the key')
+
+      // 2) With a claiming SearchBox listener, keydown IS defaultPrevented (including IME Slash fallback)
+      claimFocusSearch = true
+      const evClaimed = dispatchWindowKey({ key: '/', code: 'Slash' })
+      assert.equal(evClaimed.defaultPrevented, true)
+      const evImeClaimed = dispatchWindowKey({ key: '、', code: 'Slash' })
+      assert.equal(evImeClaimed.defaultPrevented, true)
+      assert.equal(seen.length, 3)
+
+      // 3) Modifiers (Shift+/, Alt+/) do not trigger focus-search
+      const beforeMod: number = seen.length
+      dispatchWindowKey({ key: '?', code: 'Slash', shiftKey: true })
+      dispatchWindowKey({ key: '/', code: 'Slash', altKey: true })
+      assert.equal(seen.length, beforeMod)
+
+      // 4) Editable targets (input, textarea, select, contenteditable) ignore /
+      const inputEl = document.querySelector<HTMLInputElement>('[data-testid="primary-input"]')!
+      const textareaEl = document.createElement('textarea')
+      const selectEl = document.createElement('select')
+      const ceEl = document.createElement('div')
+      ceEl.setAttribute('contenteditable', 'true')
+      document.body.append(textareaEl, selectEl, ceEl)
+      for (const editable of [inputEl, textareaEl, selectEl, ceEl]) {
+        const beforeEditable: number = seen.length
+        const ev = dispatchWindowKey({ key: '/', code: 'Slash' }, editable)
+        assert.equal(ev.defaultPrevented, false)
+        assert.equal(seen.length, beforeEditable)
+      }
+      textareaEl.remove()
+      selectEl.remove()
+      ceEl.remove()
+
+      // 5) Open modal, drawer, DOM dialog, or menu overlay blocks /
+      await act(async () => {
+        capturedStore?.setActiveModal({ kind: 'command-palette' })
+      })
+      const beforeBlocked: number = seen.length
+      dispatchWindowKey({ key: '/', code: 'Slash' })
+      await act(async () => {
+        capturedStore?.setActiveModal(null)
+        capturedStore?.openConversationDrawer(1)
+      })
+      dispatchWindowKey({ key: '/', code: 'Slash' })
+      await act(async () => {
+        capturedStore?.closeAllDrawers()
+      })
+      const dialog = document.createElement('div')
+      dialog.setAttribute('role', 'dialog')
+      document.body.appendChild(dialog)
+      dispatchWindowKey({ key: '/', code: 'Slash' })
+      dialog.remove()
+      const menu = document.createElement('div')
+      menu.setAttribute('role', 'menu')
+      document.body.appendChild(menu)
+      dispatchWindowKey({ key: '/', code: 'Slash' })
+      menu.remove()
+      assert.equal(seen.length, beforeBlocked)
+    } finally {
+      window.removeEventListener('helmx:shortcut', onShortcut)
+    }
+  })
+
+  test('App end-to-end: AgentStandbyPane All shortcuts opens ShortcutsModal (with/without builtin:plan Ctrl+.) and Mod+Shift+O refocuses without wiping draft', { timeout: 60_000 }, async () => {
+    const planCommandUi: PluginUiContribution[] = [
+      {
+        pluginId: 'builtin:plan',
+        surface: 'commandPalette',
+        spec: {
+          id: 'toggle-plan-mode',
+          title: { en: 'Toggle Plan mode', 'zh-CN': '切换计划模式' },
+          shortcut: 'Ctrl+.',
+          actionId: 'toggle',
+          scope: {},
+        },
+      },
+    ]
+
+    window.history.replaceState(null, '', '#/a/assistant')
+    installFetch({ ui: planCommandUi })
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(<App />)
+    })
+    await settle(100)
+
+    const allShortcutsBtn = host.querySelector<HTMLButtonElement>('button.agent-standby-shortcuts-all')
+    assert.ok(allShortcutsBtn !== null, 'AgentStandbyPane must render the All shortcuts button')
+
+    // Click All shortcuts -> opens ShortcutsModal displaying builtin:plan Ctrl+. and / Focus page search
+    await act(async () => {
+      allShortcutsBtn.click()
+    })
+    await settle(80)
+
+    const modalWithPlan = document.querySelector<HTMLElement>('.shortcuts-modal')
+    assert.ok(modalWithPlan !== null, 'clicking All shortcuts inside AgentStandbyPane must open ShortcutsModal')
+    const modalTextWithPlan = modalWithPlan.textContent ?? ''
+    assert.ok(modalTextWithPlan.includes('Focus page search'))
+    assert.ok(modalTextWithPlan.includes('Toggle Plan mode'))
+    assert.ok(modalTextWithPlan.includes('Ctrl+.'))
+
+    // Close ShortcutsModal via Mod+/
+    dispatchWindowKey(modInit('/'))
+    await settle(40)
+    assert.ok(document.querySelector('.shortcuts-modal') === null, 'Mod+/ closes ShortcutsModal')
+
+    // Type an unsent draft in the standby textarea, blur it, then press Mod+Shift+O -> focuses textarea without wiping draft
+    const textarea = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')
+    assert.ok(textarea !== null, 'standby composer textarea must exist')
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+      const tracker = (textarea as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
+      const prev = tracker?.getValue() ?? ''
+      setter.call(textarea, 'keep unsent standby draft')
+      tracker?.setValue(prev)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    assert.equal(textarea.value, 'keep unsent standby draft')
+
+    textarea.blur()
+    assert.ok(document.activeElement !== textarea, 'textarea is blurred before Mod+Shift+O')
+
+    const evRefocus = dispatchWindowKey({ ...modInit('O'), shiftKey: true })
+    assert.equal(evRefocus.defaultPrevented, true)
+    assert.ok(document.activeElement === textarea, 'Mod+Shift+O on same standby page must focus composer textarea')
+    assert.equal(textarea.value, 'keep unsent standby draft', 'Mod+Shift+O must preserve unsent standby draft')
+
+    // Remount without builtin:plan command -> ShortcutsModal omits Ctrl+.
+    act(() => root?.unmount())
+    root = undefined
+    host.remove()
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    window.history.replaceState(null, '', '#/a/assistant')
+    installFetch({ ui: [] })
+
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(<App />)
+    })
+    await settle(100)
+
+    const allShortcutsBtnNoPlan = host.querySelector<HTMLButtonElement>('button.agent-standby-shortcuts-all')
+    assert.ok(allShortcutsBtnNoPlan !== null)
+    await act(async () => {
+      allShortcutsBtnNoPlan.click()
+    })
+    await settle(80)
+
+    const modalWithoutPlan = document.querySelector<HTMLElement>('.shortcuts-modal')
+    assert.ok(modalWithoutPlan !== null, 'clicking All shortcuts opens ShortcutsModal when builtin:plan is disabled')
+    const modalTextNoPlan = modalWithoutPlan.textContent ?? ''
+    assert.ok(modalTextNoPlan.includes('Keyboard shortcuts'))
+    assert.equal(modalTextNoPlan.includes('Ctrl+.'), false, 'ShortcutsModal must omit Ctrl+. when builtin:plan is disabled')
+    assert.equal(modalTextNoPlan.includes('Toggle Plan mode'), false)
+  })
+
+  test('App end-to-end: / focuses page search only in focused split pane (Overview + SystemCenter) and Esc clears then blurs', { timeout: 60_000 }, async () => {
+    window.history.replaceState(null, '', '#/overview?split=settings/skills')
+    installFetch()
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(<App />)
+    })
+    await settle(120)
+
+    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')
+    const splitPane = host.querySelector<HTMLElement>('[data-helmx-panel="split"]')
+    assert.ok(primaryPane !== null && splitPane !== null)
+
+    const overviewSearch = primaryPane.querySelector<HTMLInputElement>('.overview-search-box input')
+    const skillSearch = splitPane.querySelector<HTMLInputElement>('.search-box-toolbar input')
+    assert.ok(overviewSearch !== null, 'Overview search input must mount')
+    assert.ok(skillSearch !== null, 'SkillCenter toolbar search input must mount')
+
+    // Primary focused: / focuses Overview search only
+    const evPrimarySlash = dispatchWindowKey({ key: '/', code: 'Slash' })
+    assert.equal(evPrimarySlash.defaultPrevented, true)
+    assert.ok(document.activeElement === overviewSearch, '/ must focus Overview search in primary panel')
+    assert.ok(document.activeElement !== skillSearch, 'split SkillCenter search must not steal focus')
+
+    // Type a query into Overview search -> first Esc clears it while keeping focus, second Esc blurs it
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      const tracker = (overviewSearch as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
+      const prev = tracker?.getValue() ?? ''
+      setter.call(overviewSearch, 'alpha')
+      tracker?.setValue(prev)
+      overviewSearch.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    assert.equal(overviewSearch.value, 'alpha')
+
+    dispatchWindowKey({ key: 'Escape' }, overviewSearch)
+    assert.equal(overviewSearch.value, '', 'first Escape clears Overview search draft')
+    assert.ok(document.activeElement === overviewSearch, 'first Escape keeps focus in Overview search')
+
+    dispatchWindowKey({ key: 'Escape' }, overviewSearch)
+    assert.ok(document.activeElement !== overviewSearch, 'second Escape on empty Overview search blurs it')
+
+    // Focus split pane (SkillCenter) -> / focuses SkillCenter toolbar search only
+    await act(async () => {
+      splitPane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    })
+    const evSplitSlash = dispatchWindowKey({ key: '/', code: 'Slash' })
+    assert.equal(evSplitSlash.defaultPrevented, true)
+    assert.ok(document.activeElement === skillSearch, '/ must focus SkillCenter toolbar search when split is focused')
+    assert.ok(document.activeElement !== overviewSearch, 'primary Overview search must not steal split focus')
   })
 })

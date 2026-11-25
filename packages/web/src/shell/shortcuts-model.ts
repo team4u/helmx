@@ -28,6 +28,7 @@ export type HelmxShortcutAction =
   | 'toggle-process-groups'
   | 'toggle-plan-mode'
   | 'focus-composer'
+  | 'focus-search'
   | 'open-shortcuts'
 
 export interface HelmxShortcutDetail {
@@ -170,6 +171,26 @@ export function isInlineInputEscapeTarget(target: EventTarget | null): boolean {
   return target.closest('.pane-topbar input') !== null
 }
 
+/**
+ * Whether a keyboard event target is an editable control (input, textarea,
+ * select, or contenteditable region) where plain single-key shortcuts like `/`
+ * must not hijack typing.
+ */
+export function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  if (target.isContentEditable === true) return true
+  const attr = target.getAttribute('contenteditable')
+  if (attr !== null && attr.trim().toLowerCase() !== 'false') return true
+  const editableHost = target.closest('[contenteditable]')
+  if (editableHost !== null) {
+    const hostAttr = editableHost.getAttribute('contenteditable')
+    if (hostAttr !== null && hostAttr.trim().toLowerCase() !== 'false') return true
+  }
+  return false
+}
+
 export function isApplePlatform(): boolean {
   if (typeof navigator === 'undefined') return false
   const nav = navigator as Navigator & { userAgentData?: { platform?: string } }
@@ -269,6 +290,11 @@ export function buildShortcutCatalog(input: BuildShortcutCatalogInput): Shortcut
       id: 'nav:command-palette',
       keys: formatModShortcut('K'),
       label: t('modals.shortcuts.item.commandPalette'),
+    },
+    {
+      id: 'nav:focus-search',
+      keys: '/',
+      label: t('modals.shortcuts.item.focusSearch'),
     },
     {
       id: 'nav:new-topic',
