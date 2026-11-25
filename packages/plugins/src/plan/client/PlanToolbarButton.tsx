@@ -14,6 +14,7 @@ import {
   HelmxIcon,
   StatusLight,
   resolveLocalizedText,
+  useComposerCommand,
   usePanelShortcut,
   usePluginLocale,
 } from '@helmx/plugin-client'
@@ -23,7 +24,7 @@ import {
   isStandbyPlanArmed,
   resolvePlanVisualState,
 } from './models.ts'
-import { PLAN_PLUGIN_ID } from './types.ts'
+import { PLAN_COMMAND_ID, PLAN_PLUGIN_ID } from './types.ts'
 import { usePlanConversationToggle } from './use-plan-toggle.ts'
 
 function PlanToolbarButtonConversation({ conversationId }: { conversationId: number }): ReactNode {
@@ -35,11 +36,14 @@ function PlanToolbarButtonConversation({ conversationId }: { conversationId: num
     anchorRef.current = el
   }, [])
 
-  usePanelShortcut(anchorRef, 'toggle-plan-mode', () => {
+  const handleToggle = (): void => {
     if (!pending) {
       toggle()
     }
-  })
+  }
+
+  usePanelShortcut(anchorRef, 'toggle-plan-mode', handleToggle)
+  useComposerCommand(PLAN_COMMAND_ID, handleToggle)
 
   const visual = resolvePlanVisualState(effectiveView)
   if (visual === 'normal') {
@@ -113,11 +117,14 @@ function PlanToolbarButtonStandby({
   }, [])
   const armed = isStandbyPlanArmed(draftMeta)
 
-  usePanelShortcut(anchorRef, 'toggle-plan-mode', () => {
+  const handleToggle = (): void => {
     if (!disabled) {
       setDraftMeta(PLAN_PLUGIN_ID, armed ? undefined : { mode: 'planning' })
     }
-  })
+  }
+
+  usePanelShortcut(anchorRef, 'toggle-plan-mode', handleToggle)
+  useComposerCommand(PLAN_COMMAND_ID, handleToggle)
 
   if (!armed) {
     return (

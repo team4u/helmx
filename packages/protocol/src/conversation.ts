@@ -189,14 +189,20 @@ export interface ConversationScope {
   profileIds?: string[]
   /** Filter by the conversation's current model provider; AND with the other dimensions. */
   modelProviders?: string[]
+  /** Filter by conversation ownership ('human' | 'helmx'); omitted conversation.ownedBy defaults to 'human'. */
+  ownedBy?: ConversationOwnership
+  /** When true, matches only top-level conversations (parentConversationId === undefined); false/omitted is unrestricted. */
+  topLevelOnly?: boolean
 }
 
 /** Minimal conversation shape needed for scope evaluation (any structural subset of ConversationSummary works). */
 export interface ConversationScopeTarget {
-  id: number
+  id?: number
   profileId: string
   tags: string[]
   model?: string
+  ownedBy?: ConversationOwnership
+  parentConversationId?: number
 }
 
 /**
@@ -210,10 +216,12 @@ export function matchesConversationScope(
   conversation: ConversationScopeTarget,
 ): boolean {
   if (!scope) return true
-  const { conversationIds, tags, profileIds, modelProviders } = scope
+  const { conversationIds, tags, profileIds, modelProviders, ownedBy, topLevelOnly } = scope
   if (modelProviders !== undefined && !modelProviders.includes(conversation.model?.split('/')[0] ?? '')) return false
-  if (conversationIds !== undefined && !conversationIds.includes(conversation.id)) return false
+  if (conversationIds !== undefined && (conversation.id === undefined || !conversationIds.includes(conversation.id))) return false
   if (profileIds !== undefined && !profileIds.includes(conversation.profileId)) return false
+  if (ownedBy !== undefined && (conversation.ownedBy ?? 'human') !== ownedBy) return false
+  if (topLevelOnly === true && conversation.parentConversationId !== undefined) return false
   if (tags !== undefined) {
     let hit = false
     for (const t of tags) {

@@ -250,6 +250,8 @@ function cloneScope(scope: ConversationScope): ConversationScope {
     ...(scope.tags !== undefined ? { tags: [...scope.tags] } : {}),
     ...(scope.profileIds !== undefined ? { profileIds: [...scope.profileIds] } : {}),
     ...(scope.modelProviders !== undefined ? { modelProviders: [...scope.modelProviders] } : {}),
+    ...(scope.ownedBy !== undefined ? { ownedBy: scope.ownedBy } : {}),
+    ...(scope.topLevelOnly !== undefined ? { topLevelOnly: scope.topLevelOnly } : {}),
   };
 }
 

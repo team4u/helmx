@@ -3,6 +3,7 @@
  */
 import {
   isJsonObject,
+  type ConversationScope,
   type ConversationSummary,
   type JsonSchema,
 } from '@helmx/protocol'
@@ -14,6 +15,10 @@ export const PLAN_BADGES_DOC = 'plan-badges' as const
 export const PLAN_PANEL_ID = 'plan' as const
 export const PLAN_COMMAND_ID = 'toggle-plan' as const
 export const PLAN_COMMAND_SLASH = 'plan' as const
+export const PLAN_ELIGIBLE_SCOPE: ConversationScope = {
+  topLevelOnly: true,
+  ownedBy: 'human',
+}
 export const PLAN_TOOL_SAVE = 'plan_save' as const
 export const PLAN_TOOL_PROPOSE = 'plan_propose' as const
 export const PLAN_TOOL_ASK = 'plan_ask' as const

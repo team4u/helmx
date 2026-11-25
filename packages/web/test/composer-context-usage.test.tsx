@@ -35,14 +35,14 @@ import {
 import { applySnapshot, emptyLiveState, mergeConversationDetail } from '../src/lib/live-state.js'
 import { makeTestStore } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
-import { seedPluginClientModule } from '../src/lib/plugin-client.js'
+import { resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
 
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { renderToStaticMarkup } = await import('react-dom/server')
-const { DropdownMenuItem } = await import('@helmx/plugin-client')
+const { DropdownMenuItem, useComposerCommand } = await import('@helmx/plugin-client')
 const { Composer } = await import('../src/conversation/Composer.js')
 const { AgentStandbyPane } = await import('../src/conversation/AgentStandbyPane.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
@@ -935,6 +935,176 @@ test('Unified composer + menu opens Upload / COMPOSER_MENU_SLOT (with plugin ded
     assert.equal(standbyDraftsDirty(), false, 'standby menu slot setDraftMeta must not mark empty draft dirty')
   } finally {
     resetStandbyDrafts()
+    resetPluginClientCache()
+    globalThis.fetch = originalFetch
+    localStorage.removeItem('helmx:locale')
+    act(() => root.unmount())
+    host.remove()
+  }
+})
+
+test('Composer /plan executes registered useComposerCommand handler without banner or RPC and respects topLevelOnly/ownedBy scopes', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  const fetchCalls: Array<{ url: string; method: string }> = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    fetchCalls.push({ url: String(input), method: init?.method ?? 'GET' })
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as typeof fetch
+
+  let toggleCount = 0
+  function ConvPlanToolbarProbe(props: ComposerToolbarSlotProps) {
+    const eligible =
+      props.conversation !== undefined &&
+      props.conversation.parentConversationId === undefined &&
+      (props.conversation.ownedBy ?? 'human') === 'human'
+    useComposerCommand('toggle-plan', eligible ? () => { toggleCount += 1 } : undefined)
+    return null
+  }
+  seedPluginClientModule('builtin:plan', 'index.tsx', { PlanToolbarProbe: ConvPlanToolbarProbe })
+
+  const typeInto = (ta: HTMLTextAreaElement, text: string): void => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!
+    const tracker = (ta as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
+    const prev = tracker?.getValue() ?? ''
+    setter.call(ta, text)
+    tracker?.setValue(prev)
+    ta.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+
+  const planPlugin = {
+    id: 'builtin:plan',
+    name: 'Plan Mode',
+    version: '1.0.0',
+    locked: false,
+    enabled: true,
+    status: 'active' as const,
+    hooks: [],
+    actions: ['toggle'],
+    tools: [],
+    clientHashes: { 'index.tsx': 'seeded' },
+  }
+  const planUi = [
+    {
+      pluginId: 'builtin:plan',
+      surface: 'plugin.slot' as const,
+      spec: {
+        id: 'plan-toolbar',
+        target: COMPOSER_TOOLBAR_SLOT,
+        order: 20,
+        client: { module: 'index.tsx', export: 'PlanToolbarProbe' },
+      },
+    },
+    {
+      pluginId: 'builtin:plan',
+      surface: 'commandPalette' as const,
+      spec: {
+        id: 'toggle-plan',
+        title: 'Toggle Plan mode',
+        slash: 'plan',
+        actionId: 'toggle',
+        input: {},
+        scope: { topLevelOnly: true, ownedBy: 'human' as const },
+      },
+    },
+  ]
+
+  const rootConv = conv(undefined)
+  const subagentConv: ConversationSummary = { ...conv(undefined), id: 2, parentConversationId: 1 }
+  const helmxConv: ConversationSummary = { ...conv(undefined), id: 3, ownedBy: 'helmx' }
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    // 1. Eligible top-level human conversation: /plan appears and invokes local handler with 0 HTTP RPCs
+    const rootStore = makeTestStore({
+      locale: 'en',
+      conversations: [rootConv],
+      plugins: [planPlugin],
+      uiContributions: planUi,
+    })
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: rootStore },
+          e(Composer, { key: rootConv.id, conversation: rootConv, prefill: null }),
+        ),
+      )
+    })
+    const input = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    await act(async () => { typeInto(input, 'prefix /pl') })
+    const popover = document.querySelector<HTMLElement>('.composer-popover')
+    assert.ok(popover !== null && (popover.textContent ?? '').includes('/plan'), 'root human conversation shows /plan')
+
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.equal(toggleCount, 1)
+    assert.equal(input.value, 'prefix ')
+    assert.equal(fetchCalls.some((c) => c.url.includes('/api/actions/builtin%3Aplan')), false)
+    assert.ok(host.querySelector('.composer-command-banner') === null)
+
+    // Submitting bare /plan directly also invokes local handler with 0 RPC calls
+    await act(async () => { typeInto(input, '/plan') })
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.equal(toggleCount, 2)
+    assert.equal(input.value, '')
+    assert.equal(fetchCalls.some((c) => c.url.includes('/api/actions/builtin%3Aplan')), false)
+
+    // 2. Subagent conversation excludes /plan
+    const subStore = makeTestStore({
+      locale: 'en',
+      conversations: [subagentConv],
+      plugins: [planPlugin],
+      uiContributions: planUi,
+    })
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: subStore },
+          e(Composer, { key: subagentConv.id, conversation: subagentConv, prefill: null }),
+        ),
+      )
+    })
+    const subInput = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    await act(async () => { typeInto(subInput, '/') })
+    const subPopover = document.querySelector<HTMLElement>('.composer-popover')
+    assert.ok(subPopover !== null)
+    assert.equal((subPopover.textContent ?? '').includes('/plan'), false, 'subagent excludes /plan')
+
+    // 3. helmx-owned conversation excludes /plan
+    const helmxStore = makeTestStore({
+      locale: 'en',
+      conversations: [helmxConv],
+      plugins: [planPlugin],
+      uiContributions: planUi,
+    })
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: helmxStore },
+          e(Composer, { key: helmxConv.id, conversation: helmxConv, prefill: null }),
+        ),
+      )
+    })
+    const helmxInput = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    await act(async () => { typeInto(helmxInput, '/') })
+    const helmxPopover = document.querySelector<HTMLElement>('.composer-popover')
+    assert.ok(helmxPopover !== null)
+    assert.equal((helmxPopover.textContent ?? '').includes('/plan'), false, 'helmx-owned excludes /plan')
+  } finally {
+    resetPluginClientCache()
     globalThis.fetch = originalFetch
     localStorage.removeItem('helmx:locale')
     act(() => root.unmount())

@@ -198,6 +198,10 @@ test('scope registration boundary: non-plain objects, unknown fields, and invali
     { conversationIds: [-1] },
     { unknownField: ['x'] },
     { tags: 'worker' },
+    { ownedBy: 'bot' },
+    { ownedBy: 1 },
+    { topLevelOnly: 'true' },
+    { topLevelOnly: 1 },
   ];
   for (const [i, scope] of badScopes.entries()) {
     await assertRejectsCode(
@@ -214,10 +218,59 @@ test('scope registration boundary: non-plain objects, unknown fields, and invali
     'invalid_plugin_scope',
   );
 
-  // Valid scopes (positive integer IDs / non-empty strings / empty arrays tested separately) register cleanly
+  // Valid scopes (positive integer IDs / non-empty strings / empty arrays / ownedBy / topLevelOnly tested separately) register cleanly
   const ok = makeHost();
-  await ok.register(scopedPlugin('p:ok', { tool: { conversationIds: [1, 2], tags: ['worker'] } }));
+  await ok.register(scopedPlugin('p:ok', { tool: { conversationIds: [1, 2], tags: ['worker'], ownedBy: 'human', topLevelOnly: true } }));
   assert.equal(ok.list().length, 1);
+});
+
+test('ownedBy and topLevelOnly scopes clone cleanly and enforce visibility and execution across root, subagent, and helmx conversations', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  const scope = { topLevelOnly: true, ownedBy: 'human' as const };
+  await host.register({
+    id: 'p:human-root',
+    definePlugin: (ctx) => {
+      ctx.tool({
+        name: 'scoped_tool_human_root',
+        description: 'x',
+        inputSchema: { type: 'object' },
+        scope,
+        execute: () => ({ ok: true }),
+      });
+      ctx.action({
+        id: 'scoped_action',
+        description: 'x',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        scope,
+        handler: () => ({ ok: true }),
+      });
+      ctx.ui.workbenchPanel({ id: 'panel', label: 'Panel', scope });
+    },
+  });
+
+  // Top-level human conversation matches
+  const rootHuman = backend.getConversation(1);
+  assert.ok(host.listTools(rootHuman).some((t) => t.name === 'scoped_tool_human_root'));
+  await host.executeTool('scoped_tool_human_root', {}, { conversationId: 1 });
+  await host.invokeAction('p:human-root', 'scoped_action', {}, { conversationId: 1 });
+
+  // Subagent conversation is excluded
+  backend.conversations.set(11, makeConversation(11, { profileId: 'worker', parentConversationId: 1, ownedBy: 'human' }));
+  assert.equal(host.listTools(backend.getConversation(11)).some((t) => t.name === 'scoped_tool_human_root'), false);
+  await assertRejectsCode(() => host.executeTool('scoped_tool_human_root', {}, { conversationId: 11 }), 'conversation_scope_violation', 403);
+  await assertRejectsCode(() => host.invokeAction('p:human-root', 'scoped_action', {}, { conversationId: 11 }), 'conversation_scope_violation', 403);
+
+  // helmx-owned background root conversation is excluded
+  backend.conversations.set(12, makeConversation(12, { profileId: 'assistant', ownedBy: 'helmx' }));
+  assert.equal(host.listTools(backend.getConversation(12)).some((t) => t.name === 'scoped_tool_human_root'), false);
+  await assertRejectsCode(() => host.executeTool('scoped_tool_human_root', {}, { conversationId: 12 }), 'conversation_scope_violation', 403);
+  await assertRejectsCode(() => host.invokeAction('p:human-root', 'scoped_action', {}, { conversationId: 12 }), 'conversation_scope_violation', 403);
+
+  const actionManifest = host.listActions().find((a) => a.pluginId === 'p:human-root' && a.id === 'scoped_action');
+  assert.deepEqual(actionManifest?.scope, scope);
+  const panelUi = host.listUi().find((u) => u.pluginId === 'p:human-root' && u.surface === 'workbench.panel');
+  assert.deepEqual((panelUi?.spec as { scope?: unknown })?.scope, scope);
 });
 
 test('modelProvider scope tracks live model switches and re-checks both tools and actions at execution', { timeout: 60_000 }, async () => {

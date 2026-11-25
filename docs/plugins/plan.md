@@ -17,12 +17,12 @@
 
 ### 2. 多端入口与 Action
 
-插件通过 `ctx.action` 注册四个会话控制动作（均声明 `exposeToPrompt: false`，不进入系统提示词 `<available_actions>`），并注册 `/plan` 全局命令（`id: 'toggle-plan'`, `slash: 'plan'`, `scope: {}`, `icon: 'list-tree'`）：
+插件通过 `ctx.action` 注册四个会话控制动作（均声明 `exposeToPrompt: false`，不进入系统提示词 `<available_actions>`），并注册 `/plan` 全局命令（`id: 'toggle-plan'`, `slash: 'plan'`, `scope: { topLevelOnly: true, ownedBy: 'human' }`, `icon: 'list-tree'`）：
 
 | 入口 | 用法 | 说明 |
 | :--- | :--- | :--- |
 | `+` 菜单 / `Ctrl+.` / 激活态胶囊 | 输入框左下角统一 `+` 菜单内「计划模式」（`COMPOSER_MENU_SLOT`）、主屏/分屏 `Ctrl+.`，或开启后模型选择器旁激活态紧凑胶囊（`COMPOSER_TOOLBAR_SLOT`） | 未开启时不占工具栏宽度，菜单与 `Ctrl+.` 均可用；激活态在工具栏呈现轻量紧凑胶囊并带一键退出 `×`；真实会话点击或快捷键直接调用 `toggle`；待命页（`#/a/<profileId>`）按独立分屏草稿切换本地 `inputMeta['builtin:plan'] = { mode: 'planning' }` 预武装态（不落库、不标脏），首条消息发出时在 `onInput` 原子进入计划模式并保留原文本与自动标题 |
-| 输入框斜杠 / `⌘K` | `/plan`（无参数）或 `/plan <任务>` | 真实会话中选命令执行 `toggle`；直接发送裸 `/plan` 由 `onInput` 接管（`handled`）切换至计划模式不进聊天历史；发送 `/plan <任务>` 切换至计划模式并剥离前缀（`transform`），内核据此生成无 `/plan ` 前缀的标题后直接开始调研 |
+| 输入框斜杠 / `⌘K` | `/plan`（无参数）或 `/plan <任务>` | `PlanToolbarButton` 通过 `useComposerCommand('toggle-plan', ...)` 统一接管输入框内 `/plan` 的交互式执行：待命页切换本地 `inputMeta['builtin:plan']` 预武装态（零后端请求、零空会话创建），顶层人类真实会话乐观切换模式且不锁发送栏、不弹多余通知；`⌘K` 与其他入口仍按作用域 `{ topLevelOnly: true, ownedBy: 'human' }` 调用 `toggle` 动作（自动排除子代理与 `helmx` 后台会话）；直接发送 `/plan <任务>` 则在 `onInput` 进入计划模式并剥离前缀（`transform`），内核据此生成无 `/plan ` 前缀的标题后直接开始调研 |
 | 工作台人工编辑 | 在右侧「执行计划」面板点击草稿卡片「编辑」 | 触发 `update_draft` Action（携带 `expectedVersion` CAS 版本校验，冲突报 `409 plan_draft_conflict`）；若审批挂起期间编辑保存了新版草稿，批准归档与交接将采用最新编辑版本 |
 | CLI | `helmx plan toggle --current` / `set_mode --current --input '{"mode":"planning"}'` / `get --current` / `update_draft --current --input '{"title":"...","markdown":"..."}'` | 支持 `--conversation-id <id>` 与 `--json`，返回 `PlanSessionView` |
 | HTTP | `POST /api/actions/builtin:plan/<toggle\|set_mode\|get\|update_draft>` | 入参 `conversationId` 与上下文冲突时拒绝 `400 validation_error` |
