@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.3.0 (2026-11-25)
+
+### 节点与升级
+
+- **节点自动跟随 Hub 版本升级（默认开启）**：npm 全局安装的 `@helmx/node` 节点在版本落后于 Hub 时自动升级到与 Hub 一致，等待 Hub 就绪且节点空闲（无进行中的会话、隧道与远程执行）后执行，失败按指数退避重试；状态见节点信息 `autoUpgrade` 字段与通知，`HELMX_AUTO_UPGRADE_NODES=0` 可关闭。**旧版节点（≤ v0.2.0）不上报安装模式，Hub 不做猜测，需在本版发布后对每台节点手动执行一次 `helmx nodes upgrade <node>`，之后即自动跟随**；源码 / link 方式运行的节点始终不自动升级。
+- **工作流运行账本分片性能**：`runs` 分片改为按单条 run 的字节账本增量裁剪，超界时不再反复整体序列化（原 1.5 MiB 预算用例 28s → 0.5s）。
+
+### 界面
+
+- **全屏舞台统一为单层滚动**：模型、节点、插件、角色、技能五大系统中心与全屏视图共用 `ScreenHost` 单一滚动容器，页头去重；标签页新增 `pills` 胶囊样式，空状态 `EmptyState` 与搜索框 `SearchBox` 统一为全站原语（搜索框带清除按钮，空状态支持紧凑 / 突出两种密度）。
+- **Web 与内置插件前端迁移至 plugin-client 原语**：会话、工作台、大纲、预览、Shell、总览页与弹窗改用 SDK 的 `Button` / `IconButton` / `Badge` / `Stack` / `Card` 等原语；修复徽章、连接状态灯与触发器按钮忙态的评审遗留问题，以及 Tabs 点击裁决与工具栏 `aria-controls` 绑定。
+
+### 插件开发
+
+- **plugin-client 新增表单与展示原语**：`Button` / `IconButton` / `Input` / `Textarea` / `Field` / `HelperText` / `ErrorText`，以及映射到 `--space-*` 令牌的间距分级（`none | xs | sm | md | lg | xl`）。
+
+### 工程质量
+
+- **测试钩子超时门禁**：`check:hygiene` 新增 `hook-timeout-missing` 规则，`before / after` 等钩子中的清理调用必须显式声明 `{ timeout: 60_000 }`（本次为 140 处钩子补齐）；挂起的清理转为可见失败，不再静默拖死测试分片。
+- **测试分片可观测性**：`shard-worker` 逐文件输出进度，仅在静默满窗口时发出停滞告警；工作流注册时序测试以门闩信号替代固定 `sleep`。
+
 ## v0.2.0 (2026-11-24)
 
 ### 工作台与对话体验
