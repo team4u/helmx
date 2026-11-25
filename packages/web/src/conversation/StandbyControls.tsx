@@ -3,6 +3,7 @@
  * AgentStandbyPane to keep standby orchestration concise and reuse shared
  * ComposerEnvFields + ModelPickerControl primitives.
  */
+import { useEffect, useRef } from 'react'
 import type * as React from 'react'
 import type { Profile } from '@helmx/protocol/browser'
 import { Button, HelmxIcon, ModelPickerControl, useHostModels } from '@helmx/plugin-client'
@@ -10,10 +11,11 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ModelCatalogDefaults } from '../lib/api.js'
 import { useModels, useNodes } from '../lib/store-context.js'
 import { ComposerEnvFields } from './ComposerEnvFields.js'
-import { envDraftOnNodeChange } from './composer-model.js'
+import { envDraftOnNodeChange, useIsMobile } from './composer-model.js'
 import { COMPOSER_SHORTCUTS } from './keybindings-model.js'
 import { useModelPickerControlAdapter } from './model-picker-adapter.js'
 import {
+  isCoarseTouchViewport,
   resolveStandbyEffectiveModel,
   resolveStandbyThinkingLevel,
   updateStandbyDraft,
@@ -119,6 +121,31 @@ export function StandbyEnvBar({
 }: StandbyEnvBarProps): React.JSX.Element {
   const nodes = useNodes()
   const { t } = useWebLocale()
+  const isMobile = useIsMobile(680)
+  const envBarRef = useRef<HTMLDivElement | null>(null)
+  const pendingFocusKeyRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!draft.envCustomized || pendingFocusKeyRef.current !== draftKey) return
+    pendingFocusKeyRef.current = null
+    if (disabled || isMobile || isCoarseTouchViewport()) return
+    const focusEnvField = (): void => {
+      const container = envBarRef.current
+      if (container === null) return
+      const target =
+        container.querySelector<HTMLInputElement>('input.composer-env-cwd-input:not(:disabled)') ??
+        container.querySelector<HTMLElement>(
+          '.composer-env-select [role="combobox"]:not(:disabled), .composer-env-select button:not(:disabled)',
+        )
+      target?.focus({ preventScroll: true })
+    }
+    if (typeof requestAnimationFrame !== 'function') {
+      focusEnvField()
+      return
+    }
+    const rafId = requestAnimationFrame(focusEnvField)
+    return () => cancelAnimationFrame(rafId)
+  }, [draft.envCustomized, draftKey, disabled, isMobile])
 
   if (!draft.envCustomized) {
     return (
@@ -135,6 +162,7 @@ export function StandbyEnvBar({
           disabled={disabled}
           onClick={() => {
             if (disabled) return
+            pendingFocusKeyRef.current = draftKey
             updateStandbyDraft(draftKey, {
               envCustomized: true,
               envNodeId: profile.nodeId || 'local',
@@ -151,7 +179,7 @@ export function StandbyEnvBar({
   const nodeId = draft.envNodeId || 'local'
   const draftNode = nodes.find((n) => n.id === nodeId)
   return (
-    <div className="composer-env-bar agent-standby-env-bar" data-dirty="true">
+    <div ref={envBarRef} className="composer-env-bar agent-standby-env-bar" data-dirty="true">
       <ComposerEnvFields
         nodeId={nodeId}
         cwd={draft.envCwd ?? ''}
