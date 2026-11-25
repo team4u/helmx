@@ -17,7 +17,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { HelmxError } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
-import { startHub } from '../../kernel/src/http/index.js'
+import { startHub } from '@helmx/kernel'
 import { createNodeDaemon, type NodeDaemon } from '../../node/src/index.js'
 import {
   createGitTemplate,

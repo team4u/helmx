@@ -18,7 +18,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { HelmxError } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
-import { actionToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
+import { actionToolResult } from '@helmx/kernel/testing'
 import {
   createGitTemplate,
   deferred,

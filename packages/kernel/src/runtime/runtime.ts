@@ -69,10 +69,8 @@ import type { ConversationService } from './conversation-service.js'
 import type { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
 import type { NodeManager } from './node-manager.js'
 import type { ModelRegistry } from './model-registry.js'
-import {
-  completeConversationTextHelper,
-  profileDirectoryHelper,
-} from './runtime-helpers.js'
+import { completeConversationTextHelper } from './conversation-text.js'
+import { profileDirectoryHelper } from './target-cwd.js'
 import {
   createGlobalDocumentStore,
   createPluginHostBackend,

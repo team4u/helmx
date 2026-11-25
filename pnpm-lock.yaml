@@ -194,6 +194,9 @@ importers:
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
+      '@helmx/kernel':
+        specifier: workspace:*
+        version: link:../kernel
       '@helmx/plugin-build':
         specifier: workspace:*
         version: link:../plugin-build
@@ -563,6 +566,9 @@ importers:
       '@happy-dom/global-registrator':
         specifier: ^21.0.4
         version: 21.0.4
+      '@helmx/kernel':
+        specifier: workspace:*
+        version: link:../kernel
       '@helmx/plugin-build':
         specifier: workspace:*
         version: link:../plugin-build

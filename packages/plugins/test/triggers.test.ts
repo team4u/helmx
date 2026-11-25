@@ -24,7 +24,7 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 
 import { HelmxError, type ConversationSummary, type ExternalTriggerEnvelope } from '@helmx/protocol'
 import { createHelmx } from '../../hub/src/app.js'
-import { createHubHandler } from '../../kernel/src/http/index.js'
+import { AuthService, createHubHandler } from '@helmx/kernel'
 import { createDeliveryDispatch } from '../src/triggers/delivery.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
@@ -613,7 +613,6 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
   const first = makeFauxProvider()
   const app1 = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [first.provider] })
   try {
-    const { AuthService } = await import('../../kernel/src/services/index.js')
     const auth = new AuthService(dataDir)
     await auth.setup('setup-pw-triggers-1234')
     await app1.kernel.plugins.enable(TRIGGERS)
@@ -634,7 +633,6 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
 
     // 配置命名空间泄漏回归：动态写入的 pluginSecrets['builtin:triggers'][...]
     // 不得混入 GET /api/plugins/:id/config 的 values 输出（secret 也不得出现）。
-    const { AuthService } = await import('../../kernel/src/services/index.js')
     const auth2 = new AuthService(dataDir)
     const { token } = await auth2.login('setup-pw-triggers-1234')
     const handler2 = createHubHandler(app2.kernel)

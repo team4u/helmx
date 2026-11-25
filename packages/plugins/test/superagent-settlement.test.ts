@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { KernelRuntime } from '../../kernel/src/runtime/index.js'
+import { KernelRuntime } from '@helmx/kernel'
 import type { TurnSettledPayload } from '@helmx/protocol'
 import { cleanupDir, deferred, makeFauxProvider, makeTempDir, type Deferred } from './helpers/plugin-test-env.js'
 

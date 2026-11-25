@@ -27,7 +27,7 @@ import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { createHelmx } from '../../hub/src/app.js'
 import { readJournal, type WorkflowJournalEntry } from '../src/workflow/dsl/index.js'
-import { pluginDataDirName } from '../../kernel/src/plugins/plugin-dir-name.js'
+import { pluginDataDirName } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 

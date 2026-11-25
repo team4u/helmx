@@ -12,7 +12,8 @@ import {
   fauxToolCall,
   type FauxResponseStep,
 } from '@earendil-works/pi-ai/providers/faux'
-import { HelmxError, type PluginDefinition } from '@helmx/protocol'
+import { startHub } from '@helmx/kernel'
+import { HelmxError, redactJsonValue, type PluginDefinition } from '@helmx/protocol'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -22,8 +23,6 @@ import { DatabaseSync } from 'node:sqlite'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { runCli } from '../../cli/src/index.js'
-import { startHub } from '../../kernel/src/http/index.js'
-import { redactJsonValue } from '../../kernel/src/redact.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { MemoryStore } from '../../plugins/src/memory/store.js'
 import { HELMX_CLI_SKILL_ASSET } from '../../plugins/src/profile.js'

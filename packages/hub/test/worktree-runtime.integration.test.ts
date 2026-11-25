@@ -42,8 +42,8 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHubHandler } from '../../kernel/src/http/index.js'
-import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
+import { createHubHandler } from '@helmx/kernel'
+import { openHelmxDatabase } from '@helmx/kernel/testing'
 import { extractWorktreeExecutionMeta } from '@helmx/plugins/contracts'
 import {
   createGitTemplate,

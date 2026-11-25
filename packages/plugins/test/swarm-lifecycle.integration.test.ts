@@ -30,7 +30,7 @@ import {
 import { waitFor } from '@helmx/test-kit'
 import { useTempDir } from '@helmx/test-kit/node'
 import { createGitTemplate } from '@helmx/test-kit/git'
-import { actionToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
+import { actionToolResult } from '@helmx/kernel/testing'
 import {
   WORKFLOW_ID,
   WORKTREE_ID,

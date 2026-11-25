@@ -23,6 +23,7 @@
     "@helmx/protocol": "workspace:*"
   },
   "devDependencies": {
+    "@helmx/kernel": "workspace:*",
     "@helmx/plugin-build": "workspace:*",
     "@helmx/test-kit": "workspace:*",
     "tar": "7.5.23"

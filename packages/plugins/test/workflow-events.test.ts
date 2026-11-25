@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import type { WorkflowRunSummary } from '../src/contracts.js'
-import { EventHub } from '../../kernel/src/runtime/events.js'
+import { EventHub } from '@helmx/kernel/testing'
 import {
   createMemoryKvStore,
   WorkflowService,

@@ -85,12 +85,16 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'ARTIFACT_READ_META_SCHEMA',
     'KERNEL_TOOL_NAMES',
     'KERNEL_TOOL_PRESENTATION_META_SCHEMAS',
+    'MODEL_THINKING_LEVELS',
+    'assertJsonSafe',
   ] as const
 
-  /** Server-only contract validators and TypeBox UI schemas that must NOT bloat `@helmx/protocol/browser`. */
+  /** Server-only contract validators and TypeBox UI/request schemas that must NOT bloat `@helmx/protocol/browser`. */
   const serverOnlyRuntimeExports = [
     'UI_SPEC_PATTERNS',
     'UI_SPEC_SCHEMAS',
+    'REQUEST_SCHEMA_PATTERNS',
+    'REQUEST_SCHEMAS',
     'assertBoundedPresentationMeta',
     'assertSchemaCompilable',
     'compareCodeUnit',

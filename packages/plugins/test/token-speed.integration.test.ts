@@ -22,7 +22,7 @@ import { createHubHandler } from '@helmx/kernel'
 import { COMPOSER_STATUS_SLOT, HelmxError, type PluginSummary } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
-import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
+import { openHelmxDatabase } from '@helmx/kernel/testing'
 import { TOKEN_SPEED_DOC, TOKEN_SPEED_PLUGIN_ID, type TokenSpeedStatus } from '../src/token-speed/contracts.js'
 import { cleanupDir, makeFauxProvider, makeTempDir, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 

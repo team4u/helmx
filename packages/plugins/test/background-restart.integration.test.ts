@@ -39,17 +39,18 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { type HelmxEventFrame, type PluginDefinition } from '@helmx/protocol'
 
-import { KernelRuntime, openHelmxDatabase } from '../../kernel/src/runtime/index.js'
+import { KernelRuntime } from '@helmx/kernel'
+import { openHelmxDatabase } from '@helmx/kernel/testing'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
 import { createMemoryKvStore, WorkflowService, type RunHeader, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
 import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const require = createRequire(import.meta.url)
-/** 主仓 packages/kernel（测试跨目录显式导入 kernel 源码；tsx loader 直跑源码）。 */
-const KERNEL_DIR = new URL('../../kernel/', import.meta.url).pathname
-const PI_AI_DIR = join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai')
-const KERNEL_SRC = pathToFileURL(join(KERNEL_DIR, 'src/runtime/index.ts')).href
+const PLUGINS_PKG_DIR = new URL('../', import.meta.url).pathname
+const PI_AI_MODELS_URL = import.meta.resolve('@earendil-works/pi-ai/models')
+const PI_AI_FAUX_URL = import.meta.resolve('@earendil-works/pi-ai/providers/faux')
+const KERNEL_URL = import.meta.resolve('@helmx/kernel')
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -180,7 +181,6 @@ process.kill(process.pid, 'SIGKILL')
 
 /** 只读探针 Harness：验证 paused + abort 标记（不解锁调度器）。 */
 async function readOnlyInspect(dataDir: string): Promise<{ scheduling: string; tasks: Array<{ kind: string; conversationId: number; abortRequested: boolean; status: string }> }> {
-  const { openHelmxDatabase } = await import('../../kernel/src/runtime/sqlite.js')
   const db = await openHelmxDatabase(dataDir)
   try {
     const probe = await Harness.open(db.storage, { models: createModels(), registry: createRegistry(), readOnly: true }, BACKGROUND_CONTEXT)
@@ -212,7 +212,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-restart-'))
   const seedDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed-'))
   const seederPath = join(seedDir, 'seed.mts')
-  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helmx/plugin-build')), 'utf8')
+  writeFileSync(seederPath, seederSource(KERNEL_URL, PI_AI_MODELS_URL, PI_AI_FAUX_URL, import.meta.resolve('@helmx/plugin-build')), 'utf8')
   const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
   // t.after 按注册顺序执行：先杀子进程/清理 seeder 目录；dataDir 必须等内核
@@ -224,7 +224,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
   try {
     // ---- 1) 子进程制造真实遗留（慢速流式中途 SIGKILL；cwd/env 全临时，无端口）----
     child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: KERNEL_DIR,
+      cwd: PLUGINS_PKG_DIR,
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
@@ -377,7 +377,7 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-restart3-'))
   const seedDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed3-'))
   const seederPath = join(seedDir, 'seed.mts')
-  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helmx/plugin-build')), 'utf8')
+  writeFileSync(seederPath, seederSource(KERNEL_URL, PI_AI_MODELS_URL, PI_AI_FAUX_URL, import.meta.resolve('@helmx/plugin-build')), 'utf8')
   const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
   // 同用例 2：先杀子进程/清理 seeder 目录，dataDir 在内核 close 后再删。
@@ -387,7 +387,7 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
   }, { timeout: 60_000 })
   try {
     child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: KERNEL_DIR,
+      cwd: PLUGINS_PKG_DIR,
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
@@ -468,8 +468,8 @@ test('同步工作流全覆盖收敛：SIGKILL 与 graceful close() 均回收遗
   writeFileSync(
     seederPath,
     `import { setTimeout as delay } from 'node:timers/promises'
-import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href)}
-import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
+import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
+import { KernelRuntime } from ${JSON.stringify(KERNEL_URL)}
 import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))}
 import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
 import { createWorktreePlugin } from ${JSON.stringify(worktreeSrc)}
@@ -514,7 +514,7 @@ process.kill(process.pid, 'SIGKILL')
 
   try {
     child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: KERNEL_DIR,
+      cwd: PLUGINS_PKG_DIR,
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
@@ -686,8 +686,8 @@ test('原生 isolation:worktree SIGKILL 崩溃租约在重启 runtime.started �
     `import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
-import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href)}
-import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
+import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
+import { KernelRuntime } from ${JSON.stringify(KERNEL_URL)}
 import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))}
 import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
 import { createWorktreePlugin } from ${JSON.stringify(worktreeSrc)}
@@ -746,7 +746,7 @@ process.kill(process.pid, 'SIGKILL')
 
   try {
     child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: KERNEL_DIR,
+      cwd: PLUGINS_PKG_DIR,
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,

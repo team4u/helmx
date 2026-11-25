@@ -5,8 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createHubHandler } from '../../kernel/src/http/hub.js'
-import { CredentialService, SecretStash } from '../../kernel/src/services/index.js'
+import { createHubHandler, CredentialService, SecretStash } from '@helmx/kernel'
 import { createHubTestApp, useTempDir } from './helpers/hub-test-env.js'
 
 test('SecretStash 全局脱敏：支持直接脱敏、跨 chunk 流式脱敏与 clear 释放', { timeout: 60_000 }, () => {

@@ -6,8 +6,8 @@
  * Disable double-gate: re-checks plugin enabled status via summary before dispatch (409 if disabled)
  * and tracks handler execution in `liveTasks` (shared with actions/tools for disable blocking).
  */
-import { HelmxError, isPluginSummaryActive } from '@helmx/protocol'
-import type { JsonSchema, PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helmx/protocol'
+import { HelmxError, isPluginSummaryActive, REQUEST_SCHEMAS } from '@helmx/protocol'
+import type { PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
 import { compressGzip, markStreamingJsonBody } from './gzip.js'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
@@ -59,7 +59,7 @@ export async function handlePluginsDomain(
       return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin package installation')
     }
     const body = await readJsonBody(ctx.request)
-    assertBodySchema(PLUGIN_INSTALL_BODY_SCHEMA, body, 'plugins install body')
+    assertBodySchema(REQUEST_SCHEMAS.pluginInstall, body, 'plugins install body')
     const source = body.source as string
     return jsonOk(
       redactor,
@@ -205,37 +205,15 @@ export async function handleActionsDomain(
 // Internal helpers: body validation / doc SSE / client.mjs / dynamic route dispatch
 // ---------------------------------------------------------------------------
 
-const PLUGIN_INSTALL_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    source: { type: 'string', pattern: '\\S' },
-    enable: { type: 'boolean' },
-  },
-  required: ['source'],
-  additionalProperties: false,
-}
-
 /** POST /api/plugins/:id/disable body: only force(query ?force=1 same meaning). */
 function parsePluginDisableBody(body: Record<string, unknown>): { force?: boolean } {
-  assertBodySchema(
-    { type: 'object', properties: { force: { type: 'boolean' } }, additionalProperties: false },
-    body,
-    'plugins disable body',
-  )
+  assertBodySchema(REQUEST_SCHEMAS.pluginDisable, body, 'plugins disable body')
   return body.force !== undefined ? { force: body.force as boolean } : {}
 }
 
 /** POST /api/plugins/:id/update body: optional non-empty `source` string for switching/upgrading pinned sources. */
 function parsePluginUpdateBody(body: Record<string, unknown>): { source?: string } {
-  assertBodySchema(
-    {
-      type: 'object',
-      properties: { source: { type: 'string', pattern: '\\S' } },
-      additionalProperties: false,
-    },
-    body,
-    'plugins update body',
-  )
+  assertBodySchema(REQUEST_SCHEMAS.pluginUpdate, body, 'plugins update body')
   return body.source !== undefined ? { source: body.source as string } : {}
 }
 
@@ -244,18 +222,7 @@ function parsePluginUpdateBody(body: Record<string, unknown>): { source?: string
  * or `id` (a registered plugin whose source directory is resolved server-side).
  */
 function parseDoctorTarget(body: Record<string, unknown>): { dir?: string; id?: string } {
-  assertBodySchema(
-    {
-      type: 'object',
-      properties: {
-        path: { type: 'string', pattern: '\\S' },
-        id: { type: 'string', pattern: '\\S' },
-      },
-      additionalProperties: false,
-    },
-    body,
-    'plugins doctor body',
-  )
+  assertBodySchema(REQUEST_SCHEMAS.pluginDoctor, body, 'plugins doctor body')
   const pathDir = typeof body.path === 'string' ? (assertDoctorTargetDir(body.path, 'path'), body.path) : undefined
   if (body.id !== undefined) {
     if (pathDir !== undefined) {

@@ -2,6 +2,7 @@ export {
   KernelRuntime,
   hubVersion,
   type KernelDiagnosticInput,
+  type KernelRuntimeOptions,
 } from './runtime/index.js';
 export {
   startActivityHeartbeat,
@@ -9,7 +10,15 @@ export {
   type ActivityHeartbeat,
   type ActivityHeartbeatOptions,
 } from './runtime/activity-heartbeat.js';
-export { createHubHandler, startHub, errorResponse, jsonOk, type ProductRouteHandler } from './http/index.js';
+export {
+  createHubHandler,
+  startHub,
+  errorResponse,
+  jsonOk,
+  type EventHub,
+  type KernelRuntimeLike,
+  type ProductRouteHandler,
+} from './http/index.js';
 export {
   createEnvFabric,
   createScopedExecutionEnv,
@@ -21,6 +30,7 @@ export {
   tokenAuthenticator,
   sha256hex,
   HelmxUpgradeBusyError,
+  sanitizeNodeHealth,
 } from './env/index.js';
 export type {
   EnvFabric,
@@ -30,13 +40,13 @@ export type {
   NodeRegistryOptions,
   NodeConnection,
   RegisterOutcome,
+  HubConnectionLocal,
   NodeRpcResolver,
   RemoteExecutionEnvOptions,
   NodeWsGateway,
   NodeWsGatewayOptions,
   NodeTunnelGateway,
   NodeTunnelGatewayOptions,
-  sanitizeNodeHealth,
-} from './env/index.js'
+} from './env/index.js';
 export * from './plugins/index.js';
 export * from './services/index.js';

@@ -20,8 +20,7 @@ import {
   type KernelDiagnosticSink,
 } from './diagnostics.js'
 import { buildModels, wrapModelsForCompaction, type CompactionModelResolution } from './models.js'
-import { createFileModelsStore } from './models-store.js'
-import { assertModelsStoreHealthyAtBoot } from './runtime-helpers.js'
+import { assertModelsStoreHealthyAtBoot, createFileModelsStore } from './models-store.js'
 import { openHelmxDatabase, type HelmxDatabase } from './sqlite.js'
 import type { ResolvedModelRef } from './model-registry.js'
 import { HelmxStore } from './store.js'

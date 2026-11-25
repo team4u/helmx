@@ -2,14 +2,14 @@
  * Node domain routes: /api/nodes (list/issue/remove/upgrade/port-forwarding) and
  * POST /api/env/exec (cross-node command execution, NDJSON streaming or single JSON response).
  */
-import { HelmxError, isStrictSemver, isValidNodeId, stripSemverVPrefix } from '@helmx/protocol'
-import type { EnvExecStreamFrame, JsonSchema } from '@helmx/protocol'
+import { HelmxError, isStrictSemver, isValidNodeId, REQUEST_SCHEMAS, stripSemverVPrefix } from '@helmx/protocol'
+import type { EnvExecStreamFrame } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
 import { isAbsoluteTargetPath } from '@helmx/protocol'
 import { jsonOk, errorResponse, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
 import type { KernelRuntimeLike } from './contracts.js'
-import { assertBodySchema, NODE_ID_PATTERN_SOURCE, requireUtf16LengthAtMost, ValidationError } from './validate.js'
+import { assertBodySchema, requireUtf16LengthAtMost, ValidationError } from './validate.js'
 import type { RouteContext } from './route-context.js'
 import { parseOptionalJsonObjectBody } from './route-context.js'
 
@@ -29,7 +29,7 @@ export async function handleNodeDomain(
   }
   if (second === 'issue' && method === 'POST' && third === undefined) {
     const body = await readJsonBody(ctx.request)
-    assertBodySchema(NODE_ISSUE_BODY_SCHEMA, body, 'nodes issue body')
+    assertBodySchema(REQUEST_SCHEMAS.nodeIssue, body, 'nodes issue body')
     const issued = await kernel.issueNodeToken(body.nodeId as string)
     // Plaintext token is returned once in this response (afterward no JSON output ever exposes
     // it again because the token is registered for outbound redaction). Bypass the standard redactor here
@@ -132,66 +132,6 @@ async function handleForwardSubtree(
 // /api/env/exec
 // ---------------------------------------------------------------------------
 
-const NODE_ISSUE_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: { nodeId: { type: 'string', minLength: 1 } },
-  required: ['nodeId'],
-  additionalProperties: false,
-}
-
-// targetVersion also requires strict SemVer validation (pure ASCII, consistent length bounds);
-// registryUrl must be parseable and include a hostname.
-const NODE_UPGRADE_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    targetVersion: { type: 'string', maxLength: 64 },
-    registryUrl: { type: 'string' },
-    force: { type: 'boolean' },
-  },
-  additionalProperties: false,
-}
-
-// Hostnames forbid whitespace and control chars; UTF-16 length cap is verified during parsing.
-const HOST_FIELD = { type: 'string', minLength: 1, pattern: '^[^\\s\\x00-\\x1f\\x7f]+$' } as const
-
-const NODE_FORWARD_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    listenHost: HOST_FIELD,
-    listenPort: { type: 'integer', minimum: 1, maximum: 65535 },
-    targetHost: HOST_FIELD,
-    targetPort: { type: 'integer', minimum: 1, maximum: 65535 },
-  },
-  required: ['listenHost', 'listenPort', 'targetPort'],
-  additionalProperties: false,
-}
-
-const ENV_EXEC_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    command: {
-      anyOf: [
-        // String command must contain at least one non-whitespace char; array must be non-empty string[].
-        { type: 'string', pattern: '\\S' },
-        { type: 'array', items: { type: 'string' }, minItems: 1 },
-      ],
-    },
-    nodeId: { type: 'string', pattern: NODE_ID_PATTERN_SOURCE },
-    // Cross-platform cwd absoluteness (POSIX/drive/UNC) is a semantic rule validated explicitly in the handler.
-    cwd: { type: 'string' },
-    conversationId: { type: 'integer', minimum: 1 },
-    env: {
-      type: 'object',
-      propertyNames: { pattern: '^[A-Za-z_][A-Za-z0-9_]*$' },
-      additionalProperties: { type: 'string', pattern: '^[^\\u0000]*$' },
-    },
-    timeoutMs: { type: 'integer', minimum: 1, maximum: 600000 },
-    stream: { type: 'boolean' },
-  },
-  required: ['command'],
-  additionalProperties: false,
-}
-
 /** Node ID path segment: starts with ASCII alphanumeric, may contain . _ - (matches issue validation). */
 function requireNodeSegment(raw: string): string {
   const decoded = decodeSegment(raw)
@@ -240,7 +180,7 @@ function parseNodeUpgradeCheckQuery(url: URL): { registryUrl?: string } {
  * explicit `null` differs from omitted—validated and rejected with 400 rather than silently ignored.
  */
 function parseNodeUpgradeBody(body: Record<string, unknown>): { targetVersion?: string; registryUrl?: string; force?: boolean } {
-  assertBodySchema(NODE_UPGRADE_BODY_SCHEMA, body, 'node upgrade body')
+  assertBodySchema(REQUEST_SCHEMAS.nodeUpgrade, body, 'node upgrade body')
   const out: { targetVersion?: string; registryUrl?: string; force?: boolean } = {}
   if (body.targetVersion !== undefined) {
     const target = body.targetVersion as string
@@ -264,7 +204,7 @@ function parseNodeUpgradeBody(body: Record<string, unknown>): { targetVersion?: 
 function parseNodeForwardBody(
   body: Record<string, unknown>,
 ): { listenHost: string; listenPort: number; targetHost?: string; targetPort: number } {
-  assertBodySchema(NODE_FORWARD_BODY_SCHEMA, body, 'node forward body')
+  assertBodySchema(REQUEST_SCHEMAS.nodeForward, body, 'node forward body')
   requireUtf16LengthAtMost('listenHost', body.listenHost as string, 255)
   if (body.targetHost !== undefined) requireUtf16LengthAtMost('targetHost', body.targetHost as string, 255)
   return {
@@ -290,7 +230,7 @@ export async function handleEnvExecDomain(
     return errorResponse(redactor, 404, 'not_found', 'route not found')
   }
   const body = await readJsonBody(ctx.request)
-  assertBodySchema(ENV_EXEC_BODY_SCHEMA, body, 'env exec body')
+  assertBodySchema(REQUEST_SCHEMAS.envExec, body, 'env exec body')
   // Cross-platform cwd absoluteness: POSIX / and Windows drive-absolute/UNC are valid;
   // drive-relative (e.g. C:relative) and relative paths are rejected (matches CLI string cwd rules).
   if (body.cwd !== undefined && !isAbsoluteTargetPath(body.cwd as string)) {

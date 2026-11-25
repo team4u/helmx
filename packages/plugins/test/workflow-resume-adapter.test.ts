@@ -32,7 +32,7 @@ import { after, before, describe, it } from 'node:test'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AgentSpawnRequest } from '@helmx/protocol'
 import { parseWorkflowSpawnMeta } from '../src/contracts.js'
-import { KernelRuntime } from '../../kernel/src/runtime/index.js'
+import { KernelRuntime } from '@helmx/kernel'
 import { createMemoryKvStore, WorkflowService, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
 import { makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 

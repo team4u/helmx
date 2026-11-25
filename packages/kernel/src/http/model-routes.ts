@@ -4,8 +4,7 @@
  * (only id/configured key, never plaintext). Hot-reloads the model catalog after
  * providers/credentials changes (persisting without reloading leaves hot config stale).
  */
-import type { JsonSchema } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, REQUEST_SCHEMAS } from '@helmx/protocol'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import type { KernelRuntimeLike } from './contracts.js'
 import { assertBodySchema, parseCredentialBody, parseProvidersBody, requireIdParam, ValidationError } from './validate.js'
@@ -14,52 +13,6 @@ import { methodNotAllowed, readOptionalJsonBody, type RouteContext } from './rou
 // ---------------------------------------------------------------------------
 // /api/models
 // ---------------------------------------------------------------------------
-
-// At least one of model, thinkingLevel, compactionModel, compactionThinkingLevel, or the per-model pair
-// (modelThinking + modelThinkingLevel together) is required (anyOf); empty string clears the matching override.
-const MODELS_DEFAULT_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    model: { type: 'string' },
-    thinkingLevel: { type: 'string' },
-    compactionModel: { type: 'string' },
-    compactionThinkingLevel: { type: 'string' },
-    modelThinking: { type: 'string' },
-    modelThinkingLevel: { type: 'string' },
-    modelThinkingLevels: { type: 'object', additionalProperties: { type: 'string' } },
-  },
-  additionalProperties: false,
-  anyOf: [
-    { required: ['model'] },
-    { required: ['thinkingLevel'] },
-    { required: ['compactionModel'] },
-    { required: ['compactionThinkingLevel'] },
-    { required: ['modelThinking', 'modelThinkingLevel'] },
-    { required: ['modelThinkingLevels'] },
-  ],
-}
-
-const MODELS_FILTER_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    provider: { type: 'string' },
-    disabledModels: { type: 'array', items: { type: 'string' } },
-  },
-  required: ['disabledModels'],
-  additionalProperties: false,
-}
-
-// Note: provider/providers non-emptiness uses `=== ''` semantics (historically allows whitespace strings);
-// do not add a `\S` pattern to avoid tightening behavior.
-const MODELS_REFRESH_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    provider: { type: 'string', minLength: 1 },
-    providers: { type: 'array', items: { type: 'string', minLength: 1 } },
-    force: { type: 'boolean' },
-  },
-  additionalProperties: false,
-}
 
 export async function handleModelsDomain(
   ctx: RouteContext,
@@ -81,7 +34,7 @@ export async function handleModelsDomain(
   }
   if (second === 'default' && third === undefined && method === 'PUT') {
     const raw = await readOptionalJsonBody(ctx.request)
-    assertBodySchema(MODELS_DEFAULT_BODY_SCHEMA, raw ?? {}, 'models default body')
+    assertBodySchema(REQUEST_SCHEMAS.modelsDefaultPut, raw ?? {}, 'models default body')
     const body = (raw ?? {}) as Record<string, unknown>
     // Per-model pair must arrive complete (schema anyOf passes via another field otherwise).
     const hasModelThinking = 'modelThinking' in body || 'modelThinkingLevel' in body
@@ -137,7 +90,7 @@ export async function handleModelsDomain(
     }
     // Both empty body and {} validate against `{ provider?: string; disabledModels: string[] }`.
     const raw = await readOptionalJsonBody(ctx.request)
-    assertBodySchema(MODELS_FILTER_BODY_SCHEMA, raw ?? {}, 'models filter body')
+    assertBodySchema(REQUEST_SCHEMAS.modelsFilterPut, raw ?? {}, 'models filter body')
     const body = (raw ?? {}) as Record<string, unknown>
     const catalog = await kernel.setDisabledModels(
       body.provider as string | undefined,
@@ -166,7 +119,7 @@ export async function handleModelsDomain(
 
 /** Body shape for POST /api/models/refresh is enforced by schema; merge single `provider` and list `providers` into one target list here. */
 function parseModelsRefreshBody(raw: unknown): { providers?: string[]; force?: boolean } {
-  assertBodySchema(MODELS_REFRESH_BODY_SCHEMA, raw ?? {}, 'models refresh body')
+  assertBodySchema(REQUEST_SCHEMAS.modelsRefresh, raw ?? {}, 'models refresh body')
   const body = (raw ?? {}) as Record<string, unknown>
   let providers: string[] | undefined
   if (body.provider !== undefined) providers = [body.provider as string]

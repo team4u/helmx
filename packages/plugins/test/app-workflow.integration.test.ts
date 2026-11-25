@@ -32,7 +32,7 @@ import {
 
 import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import { createHelmx } from '../../hub/src/app.js'
-import { startHub } from '../../kernel/src/http/index.js'
+import { startHub } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { deferred, makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 

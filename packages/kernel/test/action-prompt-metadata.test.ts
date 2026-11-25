@@ -17,7 +17,7 @@ import {
   actionToolAlias,
 } from '../src/plugins/capability-registry.js';
 import { actionCliCommand } from '../src/runtime/action-prompts.js';
-import { actionToolResult } from '../src/runtime/runtime-helpers.js';
+import { actionToolResult } from '../src/runtime/tools/tool-result-contract.js';
 
 function fakeConversation(tags: string[]): ConversationSummary {
   return {

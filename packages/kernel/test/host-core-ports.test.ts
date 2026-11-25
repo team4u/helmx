@@ -30,7 +30,7 @@ import {
   type PluginHostBackend,
 } from '../src/plugins/index.js'
 import { MAX_ARTIFACT_BYTES } from '../src/services/index.js'
-import { projectToolPromptSections } from '../src/runtime/runtime-helpers.js'
+import { projectToolPromptSections } from '../src/runtime/hook-projection.js'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { createPluginBuildProvider } from '@helmx/plugin-build'

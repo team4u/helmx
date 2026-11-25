@@ -19,7 +19,7 @@ import { HelmxError, type ModelCatalog, type Profile } from '@helmx/protocol'
 import { KernelRuntime } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
-import { wrapModelsForCompaction } from '../../kernel/src/runtime/models.js'
+import { wrapModelsForCompaction } from '@helmx/kernel/testing'
 import {
   MODEL_TIERS_SKILL_ID,
   TIERS_PLUGIN_ID,
@@ -731,7 +731,7 @@ test('performance: tiers write actions reuse a single ModelCatalog fetch per set
 })
 
 test('performance: tiers readState caches sanitized TiersStateDoc across getTiers/before_turn and invalidates on mutation', { timeout: 60_000 }, async () => {
-  const { PluginHost } = await import('../../kernel/src/plugins/index.js')
+  const { PluginHost } = await import('@helmx/kernel')
   const { createPluginHostBackendFixture } = await import('../../kernel/test/helpers/plugin-host-backend.js')
   const { MemoryDocStore, makeConversationSummary } = await import('./helpers/plugin-test-env.js')
   const docs = new MemoryDocStore()

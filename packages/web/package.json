@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^21.0.4",
+    "@helmx/kernel": "workspace:*",
     "@helmx/plugin-build": "workspace:*",
     "@helmx/plugins": "workspace:*",
     "@helmx/test-kit": "workspace:*",

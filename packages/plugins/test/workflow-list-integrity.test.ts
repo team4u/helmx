@@ -28,12 +28,18 @@ import {
   type WorkflowKvStore,
   type WorkflowServiceHost,
 } from '../src/workflow/runs/index.js'
-import { createHubHandler, startHub } from '../../kernel/src/http/index.js'
-import { AuthService } from '../../kernel/src/services/index.js'
-import type { EventHub, KernelRuntimeLike } from '../../kernel/src/http/index.js'
+import {
+  AuthService,
+  createHubHandler,
+  PluginHost,
+  startHub,
+  type EventHub,
+  type KernelRuntimeLike,
+  type PluginHostBackend,
+  type PluginSessionDocStore,
+} from '@helmx/kernel'
 import { createHelmx } from '../../hub/src/app.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
-import { PluginHost, type PluginHostBackend, type PluginSessionDocStore } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { deferred, makeFauxProvider, MemoryKvStore } from './helpers/plugin-test-env.js'

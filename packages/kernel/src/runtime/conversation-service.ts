@@ -34,13 +34,12 @@ import { HelmxError, isValidNodeId, NODE_ID_PATTERN } from '@helmx/protocol'
 import type { ArtifactService as SvcArtifactService, ProfileService, SecretStash, Profile } from '../services/index.js'
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
+import { requireConv } from './conversation-require.js'
 import {
   assistantTextOfModel,
   readEntryById,
-  requireConv,
-  type RewindInterval,
-} from './runtime-helpers.js'
-import { toConversationEntry } from './entries.js'
+  toConversationEntry,
+} from './entries.js'
 import {
   THINKING_LEVELS,
   clampThinkingLevelForModel,
@@ -56,7 +55,7 @@ import { ConversationContextOps } from './conversation-context-ops.js'
 import { ConversationDetailService } from './conversation-detail.js'
 import { ConversationInputPipeline } from './conversation-input.js'
 import { ConversationProfileService } from './conversation-profile.js'
-import { ConversationRewind } from './conversation-rewind.js'
+import { ConversationRewind, type RewindInterval } from './conversation-rewind.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric, type TrustedNodePlatformSource } from './target-cwd.js'
 
 interface ConversationServiceOptions {

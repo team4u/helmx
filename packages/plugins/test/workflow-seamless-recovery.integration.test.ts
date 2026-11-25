@@ -26,8 +26,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { HelmxError, type AgentSpawnRequest, type HelmxEventFrame } from '@helmx/protocol'
 import { createHelmx } from '../../hub/src/app.js'
-import { startHub } from '../../kernel/src/http/index.js'
-import { KernelRuntime } from '../../kernel/src/runtime/index.js'
+import { KernelRuntime, startHub } from '@helmx/kernel'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
@@ -50,10 +49,9 @@ import {
 } from './helpers/plugin-test-env.js'
 
 const require = createRequire(import.meta.url)
-const KERNEL_DIR = new URL('../../kernel/', import.meta.url).pathname
-const PI_AI_DIR = join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai')
-const KERNEL_SRC = pathToFileURL(join(KERNEL_DIR, 'src/runtime/index.ts')).href
-const PI_AI_FAUX_URL = pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href
+const PLUGINS_PKG_DIR = new URL('../', import.meta.url).pathname
+const KERNEL_URL = import.meta.resolve('@helmx/kernel')
+const PI_AI_FAUX_URL = import.meta.resolve('@earendil-works/pi-ai/providers/faux')
 const WORKFLOW_SRC = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
 const WORKTREE_SRC = pathToFileURL(new URL('../src/worktree.ts', import.meta.url).pathname).href
 const PLUGIN_BUILD_URL = import.meta.resolve('@helmx/plugin-build')
@@ -110,7 +108,7 @@ async function spawnSigkillSeeder(
   const scriptPath = join(seedDir, 'seeder.mts')
   writeFileSync(scriptPath, scriptBody, 'utf8')
   const child = spawn(process.execPath, [TSX_CLI, scriptPath], {
-    cwd: KERNEL_DIR,
+    cwd: PLUGINS_PKG_DIR,
     env: sanitizedHostEnv({
       HOME: seedDir,
       HELMX_WATCHDOG_INTERVAL_MS: '0',
@@ -336,7 +334,7 @@ test('T1-B: 原生后台单子代理经真实子进程 SIGKILL 强杀后重启�
     seedDir,
     `import { setTimeout as delay } from 'node:timers/promises'
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
-import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
+import { KernelRuntime } from ${JSON.stringify(KERNEL_URL)}
 import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
 import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_SRC)}
 import { createWorktreePlugin } from ${JSON.stringify(WORKTREE_SRC)}
@@ -582,7 +580,7 @@ test('T2-B: DSL 工作流经真实 SIGKILL 强杀恢复 + 截断 agent_started �
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
-import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
+import { KernelRuntime } from ${JSON.stringify(KERNEL_URL)}
 import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
 import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_SRC)}
 

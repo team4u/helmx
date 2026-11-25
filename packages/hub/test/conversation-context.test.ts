@@ -18,7 +18,7 @@ import { createBirpc } from 'birpc'
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
 import WebSocket from 'ws'
-import type { HubConnectionLocal, NodeConnection } from '../../kernel/src/env/index.js'
+import type { HubConnectionLocal, NodeConnection } from '@helmx/kernel'
 import {
   messageTextsOf,
   openHubHttpEnv,

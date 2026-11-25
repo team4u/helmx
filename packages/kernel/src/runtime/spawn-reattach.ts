@@ -14,7 +14,7 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Conversation, EntryId, EntryRecord, SettledSubmissionRecord } from '@earendil-works/pi-durable'
 import { HelmxError, isAbsoluteAgentPath, isValidNodeId, NODE_ID_PATTERN, type AgentSpawnRequest } from '@helmx/protocol'
-import { assistantTextOfEntry, readEntryById } from './runtime-helpers.js'
+import { assistantTextOfEntry, readEntryById } from './entries.js'
 import { assertSpawnForkFields } from './spawn-fork.js'
 import { extractAcceptedStructuredOutputFromEntries } from './structured-output.js'
 
