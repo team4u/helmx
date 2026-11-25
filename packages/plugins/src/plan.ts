@@ -15,6 +15,7 @@ import {
   PLAN_BADGES_DOC,
   PLAN_COMMAND_ID,
   PLAN_COMMAND_SLASH,
+  PLAN_ELIGIBLE_SCOPE,
   PLAN_KV_NAMESPACE,
   PLAN_MARKDOWN_MAX_BYTES,
   PLAN_PANEL_ID,
@@ -43,6 +44,7 @@ export {
   PLAN_PANEL_ID,
   PLAN_COMMAND_ID,
   PLAN_COMMAND_SLASH,
+  PLAN_ELIGIBLE_SCOPE,
   PLAN_TOOL_SAVE,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_ASK,
@@ -303,7 +305,7 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
         shortcut: 'Ctrl+.',
         actionId: 'toggle',
         input: {},
-        scope: {},
+        scope: PLAN_ELIGIBLE_SCOPE,
         keywords: ['plan', 'planning', 'spec', 'design', '计划', '规划', '方案'],
       })
 
@@ -331,6 +333,7 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
           label: { en: 'Plan', 'zh-CN': '计划' },
           icon: 'list-tree',
           order: 15,
+          scope: PLAN_ELIGIBLE_SCOPE,
           badge: { doc: PLAN_BADGES_DOC, byConversationField: 'byConversation' },
           client: { module: 'index.tsx', export: 'PlanWorkbenchPanel' },
         })

@@ -1,7 +1,7 @@
-import { memo, useCallback, useId, useMemo, useRef } from 'react'
+import { memo, useCallback, useId, useMemo, useRef, useState } from 'react'
 import type { ComposerMenuSlotProps, ComposerScopeProps, ConversationSummary, WhenBusy } from '@helmx/protocol/browser'
 import { COMPOSER_DOCK_SLOT, COMPOSER_MENU_SLOT, COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol/browser'
-import { Button, HelmxIcon, PluginSlot, useSharedNowMs } from '@helmx/plugin-client'
+import { Button, ComposerCommandContext, HelmxIcon, PluginSlot, createComposerCommandRegistry, useSharedNowMs } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
 import { pluginSlashCommandsFor } from '../lib/commands-model.js'
@@ -117,6 +117,7 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
 
   const composerDirtyKey = useId()
   const dirtySink = useConversationDirtySink()
+  const [commandRegistry] = useState(() => createComposerCommandRegistry())
   const {
     text,
     attachments,
@@ -153,6 +154,7 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
       working,
       dirtyKey: composerDirtyKey,
       dirtySink,
+      commandRegistry,
     },
     t,
   )
@@ -276,8 +278,9 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
   )
 
   return (
-    <ComposerInputShell
-      aboveBox={
+    <ComposerCommandContext.Provider value={commandRegistry}>
+      <ComposerInputShell
+        aboveBox={
         <>
           <PluginSlot
             ownerPluginId="builtin:composer"
@@ -411,6 +414,7 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
           />
         </>
       }
-    />
+      />
+    </ComposerCommandContext.Provider>
   )
 })

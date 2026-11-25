@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   COMPOSER_MENU_SLOT,
   COMPOSER_STATUS_SLOT,
@@ -6,11 +6,13 @@ import {
   type ComposerMenuSlotProps,
   type ComposerStatusSlotProps,
   type ComposerToolbarSlotProps,
+  type ConversationScopeTarget,
   type ConversationSummary,
   type Profile,
 } from '@helmx/protocol/browser'
 import {
   Button,
+  ComposerCommandContext,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -21,6 +23,7 @@ import {
   PluginSlot,
   Stack,
   Tooltip,
+  createComposerCommandRegistry,
   useHostModels,
   usePanelShortcut,
   type HelmxShortcutEventDetail,
@@ -203,13 +206,38 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     const rafId = requestAnimationFrame(focusTextarea)
     return () => cancelAnimationFrame(rafId)
   }, [draftKey, standbyReady, panel])
+  const [commandRegistry] = useState(() => createComposerCommandRegistry())
+  const commandRegistryVersion = useSyncExternalStore(
+    commandRegistry.subscribe,
+    commandRegistry.getVersion,
+    commandRegistry.getVersion,
+  )
   const anchoredConversation = useMemo(
     () => (draft.conversationId !== undefined ? conversations.find((c) => c.id === draft.conversationId) : undefined),
     [draft.conversationId, conversations],
   )
+  const effectiveModel =
+    anchoredConversation?.model ||
+    resolveStandbyEffectiveModel(draft.model, profile?.model, modelDefaults.defaultModel)
+  const standbyScopeTarget = useMemo<ConversationScopeTarget | undefined>(
+    () =>
+      profile !== undefined && humanSelectable
+        ? {
+            profileId: profile.id,
+            tags: [],
+            ownedBy: 'human',
+            ...(effectiveModel !== '' ? { model: effectiveModel } : {}),
+          }
+        : undefined,
+    [profile, humanSelectable, effectiveModel],
+  )
   const slashPluginCommands = useMemo(
-    () => pluginSlashCommandsFor(groupedUi.commands, anchoredConversation),
-    [groupedUi.commands, anchoredConversation],
+    () =>
+      pluginSlashCommandsFor(groupedUi.commands, anchoredConversation, {
+        standbyTarget: anchoredConversation === undefined ? standbyScopeTarget : undefined,
+        hasLocalHandler: (pluginId, commandId) => commandRegistry.has(pluginId, commandId),
+      }),
+    [groupedUi.commands, anchoredConversation, standbyScopeTarget, commandRegistry, commandRegistryVersion],
   )
   const commandPendingRef = useRef(false)
   const [runningCommand, setRunningCommand] = useState<QualifiedCommand | null>(null)
@@ -316,22 +344,12 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     const record = getStandbyDraft(draftKey)
     if (commandPendingRef.current || record.sending) return
     const gen = ++commandGenRef.current
-    commandPendingRef.current = true
-    setRunningCommand(cmd)
     const el = textareaRef.current
     const epoch = currentStandbyDraftEpoch()
     const beforeText = record.text
     const caret = el?.selectionStart ?? beforeText.length
     const resolved = mode === 'token' ? removeTokenBeforeCaret(beforeText, caret) : { next: '', nextCaret: 0 }
-    updateStandbyDraft(draftKey, { text: resolved.next })
-    if (mode === 'token' && el !== null && el.isConnected) focusWithCaret(el, resolved.nextCaret)
-    void executePluginSlashAction(cmd, {
-      invokePluginAction,
-      pushNotice,
-      locale,
-      t,
-      ...(record.conversationId !== undefined ? { conversationId: record.conversationId } : {}),
-    }).catch(() => {
+    const restoreDraftIfUntouched = (): void => {
       if (
         mountedRef.current &&
         epoch === currentStandbyDraftEpoch() &&
@@ -340,13 +358,60 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       ) {
         updateStandbyDraft(draftKey, { text: beforeText })
       }
+    }
+    const applyTokenOrClear = (): void => {
+      updateStandbyDraft(draftKey, { text: resolved.next })
+      if (mode === 'token' && el !== null && el.isConnected) focusWithCaret(el, resolved.nextCaret)
+    }
+
+    if (commandRegistry.has(cmd.pluginId, cmd.spec.id)) {
+      applyTokenOrClear()
+      const handleLocalError = (err: unknown): void => {
+        restoreDraftIfUntouched()
+        pushNotice({
+          type: 'notification',
+          level: 'error',
+          title: t('composer.command.failed', { command: `/${cmd.spec.slash ?? cmd.spec.id}` }),
+          body: errorText(err),
+          ...(record.conversationId !== undefined ? { conversationId: record.conversationId } : {}),
+        })
+      }
+      try {
+        const invoked = commandRegistry.invoke(cmd.pluginId, cmd.spec.id)
+        if (invoked.handled) {
+          if (
+            invoked.result !== undefined &&
+            invoked.result !== null &&
+            typeof (invoked.result as PromiseLike<void>).then === 'function'
+          ) {
+            void Promise.resolve(invoked.result).catch(handleLocalError)
+          }
+          return
+        }
+      } catch (err) {
+        handleLocalError(err)
+        return
+      }
+    }
+
+    commandPendingRef.current = true
+    setRunningCommand(cmd)
+    applyTokenOrClear()
+    void executePluginSlashAction(cmd, {
+      invokePluginAction,
+      pushNotice,
+      locale,
+      t,
+      ...(record.conversationId !== undefined ? { conversationId: record.conversationId } : {}),
+    }).catch(() => {
+      restoreDraftIfUntouched()
     }).finally(() => {
       if (gen === commandGenRef.current) {
         commandPendingRef.current = false
         if (mountedRef.current) setRunningCommand(null)
       }
     })
-  }, [draftKey, invokePluginAction, locale, pushNotice, t])
+  }, [commandRegistry, draftKey, invokePluginAction, locale, pushNotice, t])
 
   const runPluginCommand = useStableCallback((cmd: QualifiedCommand): void => {
     executeStandbyPluginCommand(cmd, 'token')
@@ -619,23 +684,25 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       </div>
 
       {standbyReady ? (
-        <StandbyComposer
-          draftKey={draftKey}
-          draft={draft}
-          profile={profile}
-          modelDefaults={modelDefaults}
-          envError={envError}
-          anchored={draft.conversationId !== undefined}
-          anchoredConversation={anchoredConversation}
-          runningCommand={runningCommand}
-          slashPluginCommands={slashPluginCommands}
-          onRunPluginCommand={runPluginCommand}
-          isSplit={isSplit}
-          textareaRef={textareaRef}
-          onSend={submitDraft}
-          onAddFiles={addFiles}
-          onResetEnvToDefault={resetEnvToDefault}
-        />
+        <ComposerCommandContext.Provider value={commandRegistry}>
+          <StandbyComposer
+            draftKey={draftKey}
+            draft={draft}
+            profile={profile}
+            modelDefaults={modelDefaults}
+            envError={envError}
+            anchored={draft.conversationId !== undefined}
+            anchoredConversation={anchoredConversation}
+            runningCommand={runningCommand}
+            slashPluginCommands={slashPluginCommands}
+            onRunPluginCommand={runPluginCommand}
+            isSplit={isSplit}
+            textareaRef={textareaRef}
+            onSend={submitDraft}
+            onAddFiles={addFiles}
+            onResetEnvToDefault={resetEnvToDefault}
+          />
+        </ComposerCommandContext.Provider>
       ) : null}
     </div>
   )

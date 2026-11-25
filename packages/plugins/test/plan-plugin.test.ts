@@ -562,7 +562,7 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
     assert.equal(cmd['shortcut'], 'Ctrl+.')
     assert.equal(cmd['actionId'], 'toggle')
     assert.equal(cmd['icon'], 'list-tree')
-    assert.deepEqual(cmd['scope'], {})
+    assert.deepEqual(cmd['scope'], { topLevelOnly: true, ownedBy: 'human' })
 
     const menuSlot = ui.find((u) => u.surface === 'plugin.slot' && (u.spec as { id?: string }).id === 'plan-menu-item')?.spec as Record<string, unknown>
     assert.equal(menuSlot['target'], COMPOSER_MENU_SLOT)
@@ -582,6 +582,7 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
     const panel = ui.find((u) => u.surface === 'workbench.panel')?.spec as Record<string, unknown>
     assert.equal(panel['id'], PLAN_PANEL_ID)
     assert.equal(panel['icon'], 'list-tree')
+    assert.deepEqual(panel['scope'], { topLevelOnly: true, ownedBy: 'human' })
     assert.deepEqual(panel['badge'], { doc: PLAN_BADGES_DOC, byConversationField: 'byConversation' })
     assert.deepEqual(panel['client'], { module: 'index.tsx', export: 'PlanWorkbenchPanel' })
 

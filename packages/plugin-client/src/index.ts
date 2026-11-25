@@ -88,6 +88,16 @@ export type {
   TimelineToolCallsInput,
 } from './timeline-tool-calls.js'
 export type { TimelineToolCallStatus, TimelineToolCallSummary } from '@helmx/protocol/browser'
+export {
+  ComposerCommandContext,
+  createComposerCommandRegistry,
+  useComposerCommand,
+} from './composer-commands.js'
+export type {
+  ComposerCommandHandler,
+  ComposerCommandInvokeResult,
+  ComposerCommandRegistry,
+} from './composer-commands.js'
 
 // ---- Model picker (shared host/plugin model + thinking-level control) ----
 export { ModelPickerControl } from './ui/ModelPicker.js'

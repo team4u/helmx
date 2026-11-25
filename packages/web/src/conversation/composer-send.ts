@@ -19,6 +19,7 @@
  * .ts Fast Refresh rule.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ComposerCommandRegistry } from '@helmx/plugin-client'
 import type { ConversationAttachmentRef, ConversationSummary, QueuedConversationInput, WhenBusy } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
@@ -88,6 +89,8 @@ export interface ComposerSendInput {
    * re-publish it while hidden — Activity hide destroys this effect (clearing the report)
    * while the draft itself survives in component state. */
   dirtySink?: ConversationDirtySink | null
+  /** Panel-local command handler registry: claims interactive slash commands before falling back to action RPC. */
+  commandRegistry?: ComposerCommandRegistry
 }
 
 export interface ComposerSendApi {
@@ -144,7 +147,7 @@ export interface ComposerSendApi {
 }
 
 export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslator = englishWebTranslator): ComposerSendApi {
-  const { conversation, prefill, onSendingChange, onNewThread, textareaRef, slashPluginCommands, envConfigurable, working, dirtyKey, dirtySink } = input
+  const { conversation, prefill, onSendingChange, onNewThread, textareaRef, slashPluginCommands, envConfigurable, working, dirtyKey, dirtySink, commandRegistry } = input
   const { invokePluginAction, pushNotice } = useStoreActions()
   const locale = useOptionalLocale() ?? DEFAULT_HELMX_LOCALE
   const [text, setText] = useState('')
@@ -339,25 +342,22 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
         return
       }
       const gen = ++commandGenRef.current
-      commandPendingRef.current = true
-      setRunningCommand(cmd)
       const el = textareaRef.current
       const before = liveDraftRef.current
       const currentTarget = before.targetEntryId
       const caret = el?.selectionStart ?? before.text.length
       const resolved = mode === 'token' ? removeTokenBeforeCaret(before.text, caret) : { next: '', nextCaret: 0 }
       const expectedAfterClear = draftVersionOf(resolved.next, currentTarget, attachments)
-      if (mode !== 'none') {
-        setText(resolved.next)
-        syncLiveDraft(resolved.next, currentTarget, attachments)
-        if (mode === 'token' && el !== null && el.isConnected) {
-          focusWithCaret(el, resolved.nextCaret)
+      const applyTokenOrClear = (): void => {
+        if (mode !== 'none') {
+          setText(resolved.next)
+          syncLiveDraft(resolved.next, currentTarget, attachments)
+          if (mode === 'token' && el !== null && el.isConnected) {
+            focusWithCaret(el, resolved.nextCaret)
+          }
         }
       }
-      publishHiddenDirty()
-      try {
-        await runPluginCommandFrom(cmd)
-      } catch (error) {
+      const restoreDraftIfUntouched = (): void => {
         if (
           mode !== 'none' &&
           mountedRef.current &&
@@ -367,6 +367,45 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
           setText(before.text)
           syncLiveDraft(before.text, currentTarget, attachments)
         }
+      }
+
+      if (commandRegistry?.has(cmd.pluginId, cmd.spec.id)) {
+        applyTokenOrClear()
+        publishHiddenDirty()
+        try {
+          const invoked = commandRegistry.invoke(cmd.pluginId, cmd.spec.id)
+          if (invoked.handled) {
+            if (
+              invoked.result !== undefined &&
+              invoked.result !== null &&
+              typeof (invoked.result as PromiseLike<void>).then === 'function'
+            ) {
+              await invoked.result
+            }
+            return
+          }
+        } catch (error) {
+          restoreDraftIfUntouched()
+          pushNotice({
+            type: 'notification',
+            level: 'error',
+            title: t('composer.command.failed', { command: `/${cmd.spec.slash ?? cmd.spec.id}` }),
+            body: error instanceof Error ? error.message : String(error),
+            conversationId: conversation.id,
+          })
+          if (strict) throw error
+          return
+        }
+      }
+
+      commandPendingRef.current = true
+      setRunningCommand(cmd)
+      applyTokenOrClear()
+      publishHiddenDirty()
+      try {
+        await runPluginCommandFrom(cmd)
+      } catch (error) {
+        restoreDraftIfUntouched()
         if (strict) throw error
       } finally {
         if (gen === commandGenRef.current) {
@@ -376,7 +415,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
         }
       }
     },
-    [attachments, publishHiddenDirty, runPluginCommandFrom, syncLiveDraft, textareaRef],
+    [attachments, commandRegistry, conversation.id, publishHiddenDirty, pushNotice, runPluginCommandFrom, syncLiveDraft, t, textareaRef],
   )
 
   const runPluginCommandImpl = useCallback((cmd: QualifiedCommand): void => {

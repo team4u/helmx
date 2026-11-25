@@ -57,4 +57,43 @@ describe('matchesConversationScope', () => {
     assert.equal(matchesConversationScope({ tags: [] }, target), false)
     assert.equal(matchesConversationScope({ profileIds: [] }, target), false)
   })
+
+  it('ownedBy filters by ownership with default human semantics', { timeout: 60_000 }, () => {
+    const omittedOwner = conv({})
+    const humanOwner = conv({ ownedBy: 'human' })
+    const helmxOwner = conv({ ownedBy: 'helmx' })
+    assert.equal(matchesConversationScope({ ownedBy: 'human' }, omittedOwner), true)
+    assert.equal(matchesConversationScope({ ownedBy: 'human' }, humanOwner), true)
+    assert.equal(matchesConversationScope({ ownedBy: 'human' }, helmxOwner), false)
+    assert.equal(matchesConversationScope({ ownedBy: 'helmx' }, omittedOwner), false)
+    assert.equal(matchesConversationScope({ ownedBy: 'helmx' }, humanOwner), false)
+    assert.equal(matchesConversationScope({ ownedBy: 'helmx' }, helmxOwner), true)
+  })
+
+  it('topLevelOnly filters child conversations when true and is unrestricted when false', { timeout: 60_000 }, () => {
+    const root = conv({})
+    const child = conv({ parentConversationId: 1 })
+    assert.equal(matchesConversationScope({ topLevelOnly: true }, root), true)
+    assert.equal(matchesConversationScope({ topLevelOnly: true }, child), false)
+    assert.equal(matchesConversationScope({ topLevelOnly: false }, root), true)
+    assert.equal(matchesConversationScope({ topLevelOnly: false }, child), true)
+  })
+
+  it('supports unpersisted standby targets with optional id', { timeout: 60_000 }, () => {
+    const standby: ConversationScopeTarget = {
+      profileId: 'assistant',
+      tags: [],
+      ownedBy: 'human',
+      model: 'openai/gpt-5',
+    }
+    assert.equal(
+      matchesConversationScope(
+        { topLevelOnly: true, ownedBy: 'human', profileIds: ['assistant'], modelProviders: ['openai'] },
+        standby,
+      ),
+      true,
+    )
+    assert.equal(matchesConversationScope({ conversationIds: [1] }, standby), false)
+    assert.equal(matchesConversationScope({ tags: ['worker'] }, standby), false)
+  })
 })

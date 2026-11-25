@@ -21,8 +21,8 @@ export function assertValidId(kind: string, id: string): void {
 
 /**
  * Validates `ConversationScope` at registration time: only plain objects with allowed keys
- * (`conversationIds` / `tags` / `profileIds` / `modelProviders`) containing positive integer IDs
- * or non-empty strings. Invalid scopes fail explicitly instead of silently acting as wildcards.
+ * (`conversationIds` / `tags` / `profileIds` / `modelProviders` / `ownedBy` / `topLevelOnly`).
+ * Invalid scopes fail explicitly instead of silently acting as wildcards.
  */
 export function assertConversationScope(pluginId: string, what: string, scope: unknown): void {
   if (scope === undefined) return;
@@ -32,11 +32,23 @@ export function assertConversationScope(pluginId: string, what: string, scope: u
     });
   }
   for (const key of Object.keys(scope)) {
-    if (key !== 'conversationIds' && key !== 'tags' && key !== 'profileIds' && key !== 'modelProviders') {
-      throw new HelmxError('invalid_plugin_scope', `${what} scope only allows conversationIds/tags/profileIds/modelProviders; got unknown field '${key}'`, 400, {
-        pluginId,
-        field: key,
-      });
+    if (
+      key !== 'conversationIds' &&
+      key !== 'tags' &&
+      key !== 'profileIds' &&
+      key !== 'modelProviders' &&
+      key !== 'ownedBy' &&
+      key !== 'topLevelOnly'
+    ) {
+      throw new HelmxError(
+        'invalid_plugin_scope',
+        `${what} scope only allows conversationIds/tags/profileIds/modelProviders/ownedBy/topLevelOnly; got unknown field '${key}'`,
+        400,
+        {
+          pluginId,
+          field: key,
+        },
+      );
     }
   }
   const checkList = (key: string, kind: 'id' | 'text'): void => {
@@ -70,6 +82,20 @@ export function assertConversationScope(pluginId: string, what: string, scope: u
   checkList('tags', 'text');
   checkList('profileIds', 'text');
   checkList('modelProviders', 'text');
+  if (scope['ownedBy'] !== undefined && scope['ownedBy'] !== 'human' && scope['ownedBy'] !== 'helmx') {
+    throw new HelmxError('invalid_plugin_scope', `${what} scope.ownedBy must be 'human' or 'helmx'`, 400, {
+      pluginId,
+      field: 'ownedBy',
+      value: scope['ownedBy'],
+    });
+  }
+  if (scope['topLevelOnly'] !== undefined && typeof scope['topLevelOnly'] !== 'boolean') {
+    throw new HelmxError('invalid_plugin_scope', `${what} scope.topLevelOnly must be a boolean`, 400, {
+      pluginId,
+      field: 'topLevelOnly',
+      value: scope['topLevelOnly'],
+    });
+  }
 }
 
 /** Makes a cleanup handle idempotent so early plugin release and disable-time teardown run it at most once. */

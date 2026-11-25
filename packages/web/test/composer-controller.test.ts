@@ -94,13 +94,36 @@ test('pluginSlashCommandsFor: only commands declaring slash+actionId and matchin
     cmd('p2', { slash: 'archive', actionId: 'archive2' }), // duplicate slash: first wins
     cmd('p3', { slash: 'worker-only', actionId: 'w', scope: { tags: ['worker'] } }),
     cmd('p4', { slash: 'new', actionId: 'x' }), // reserved word: defensively skipped
+    cmd('builtin:plan', { id: 'toggle-plan', slash: 'plan', actionId: 'toggle', scope: { topLevelOnly: true, ownedBy: 'human' } }),
+    cmd('builtin:title', { id: 'generate-title', slash: 'title', actionId: 'generate', scope: {} }),
   ]
   const hit = pluginSlashCommandsFor(commands, conv(1))
-  assert.deepEqual(hit.map((c) => c.spec.slash), ['archive'])
+  assert.deepEqual(hit.map((c) => c.spec.slash), ['archive', 'plan', 'title'])
   const workerHit = pluginSlashCommandsFor(commands, conv(2, ['worker']))
-  assert.deepEqual(workerHit.map((c) => c.spec.slash), ['archive', 'worker-only'])
-  // No conversation context: only scope-free commands
+  assert.deepEqual(workerHit.map((c) => c.spec.slash), ['archive', 'worker-only', 'plan', 'title'])
+
+  // Subagent and helmx-owned conversations exclude { topLevelOnly: true, ownedBy: 'human' }
+  const subagentConv: ConversationSummary = { ...conv(3), parentConversationId: 1 }
+  assert.deepEqual(pluginSlashCommandsFor(commands, subagentConv).map((c) => c.spec.slash), ['archive', 'title'])
+  const helmxConv: ConversationSummary = { ...conv(4), ownedBy: 'helmx' }
+  assert.deepEqual(pluginSlashCommandsFor(commands, helmxConv).map((c) => c.spec.slash), ['archive', 'title'])
+
+  // No conversation context & no standby options: only scope-free commands
   assert.deepEqual(pluginSlashCommandsFor(commands, undefined).map((c) => c.spec.slash), ['archive'])
+
+  // Standby draft: includes scoped commands ONLY when standbyTarget matches AND a local composer handler is registered
+  const standbyHit = pluginSlashCommandsFor(commands, undefined, {
+    standbyTarget: { profileId: 'assistant', tags: [], ownedBy: 'human', model: 'openai/gpt-5' },
+    hasLocalHandler: (pluginId, commandId) => pluginId === 'builtin:plan' && commandId === 'toggle-plan',
+  })
+  assert.deepEqual(standbyHit.map((c) => c.spec.slash), ['archive', 'plan'])
+
+  // Standby draft without matching local handler excludes /plan and server-only /title, while excluding non-matching tags too
+  const mismatchedStandby = pluginSlashCommandsFor(commands, undefined, {
+    standbyTarget: { profileId: 'assistant', tags: [], ownedBy: 'human' },
+    hasLocalHandler: (pluginId) => pluginId === 'p3',
+  })
+  assert.deepEqual(mismatchedStandby.map((c) => c.spec.slash), ['archive'])
 })
 
 test('buildSlashMenuItems: three-source merge; plugin commands run without write-back', { timeout: 60_000 }, () => {

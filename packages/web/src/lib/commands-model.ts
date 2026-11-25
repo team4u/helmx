@@ -7,8 +7,10 @@
  */
 import {
   RESERVED_SLASH_COMMANDS,
+  matchesConversationScope,
   resolveLocalizedText,
   type CommandSpec,
+  type ConversationScopeTarget,
   type ConversationSummary,
   type HelmxLocale,
   type NotificationEvent,
@@ -50,14 +52,23 @@ export function matchExactPluginSlash(
   return commands.find((cmd) => cmd.spec.slash === word && rest === '')
 }
 
+export interface PluginSlashCommandOptions {
+  /** Prospective conversation target for a standby draft (when `conversation === undefined`). */
+  standbyTarget?: ConversationScopeTarget
+  /** Whether a mounted composer plugin component handles `(pluginId, commandId)` locally. */
+  hasLocalHandler?: (pluginId: string, commandId: string) => boolean
+}
+
 /**
  * 可出现在当前会话输入框 '/' 补全中的插件命令：
  * 声明 slash + actionId（无 actionId 无从执行）、命中会话作用域；
+ * 处于待命草稿态时，仅放行命中待命作用域且已在当前输入框注册本地 handler 的命令；
  * 相同 slash 多插件声明时取注册顺序首个（重复声明由后端注册边界拒绝）。
  */
 export function pluginSlashCommandsFor(
   commands: ReadonlyArray<QualifiedCommand>,
   conversation: ConversationSummary | undefined,
+  options?: PluginSlashCommandOptions,
 ): QualifiedCommand[] {
   const seen = new Set<string>()
   const out: QualifiedCommand[] = []
@@ -66,7 +77,15 @@ export function pluginSlashCommandsFor(
     if (slash === undefined || cmd.spec.actionId === undefined) continue
     if (!isValidPluginSlash(slash)) continue
     if (seen.has(slash)) continue
-    if (!matchesUiScope(conversation, cmd.spec.scope)) continue
+    const scopeMatched =
+      cmd.spec.scope === undefined
+        ? true
+        : conversation !== undefined
+          ? matchesConversationScope(cmd.spec.scope, conversation)
+          : options?.standbyTarget !== undefined &&
+            options.hasLocalHandler?.(cmd.pluginId, cmd.spec.id) === true &&
+            matchesConversationScope(cmd.spec.scope, options.standbyTarget)
+    if (!scopeMatched) continue
     seen.add(slash)
     out.push(cmd)
   }

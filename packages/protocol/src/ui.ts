@@ -931,6 +931,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'formatModelShortName',
   'resolveEffectiveThinkingLevel',
   'usePanelShortcut',
+  'useComposerCommand',
   'PluginSlot',
   'PluginScope',
   'Switch',

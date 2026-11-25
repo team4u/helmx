@@ -14,7 +14,11 @@ import { describe, afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import type { ConversationSummary } from '@helmx/protocol'
+import {
+  COMPOSER_TOOLBAR_SLOT,
+  type ComposerToolbarSlotProps,
+  type ConversationSummary,
+} from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import { jsonResponse } from '@helmx/test-kit'
 import {
@@ -26,8 +30,10 @@ import {
 
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
+const { useComposerCommand } = await import('@helmx/plugin-client')
 const { App } = await import('../src/App.js')
 const { getStandbyDraft, resetStandbyDrafts, standbyDraftKey } = await import('../src/conversation/standby-model.js')
+const { resetPluginClientCache, seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 
 const e = React.createElement
 const originalFetch = globalThis.fetch
@@ -313,6 +319,7 @@ function reset(): void {
   eventSeq = 1
   resetState()
   resetStandbyDrafts()
+  resetPluginClientCache()
 }
 describe("agent-standby", () => {
 
@@ -1278,5 +1285,135 @@ describe("agent-standby", () => {
     })
     await waitForCondition(() => window.location.hash === '#/settings/models')
     assert.equal(window.location.hash, '#/settings/models')
+  })
+
+  test('draft-state /plan with useComposerCommand: visible in / menu (while server-only /title stays hidden), toggles local draftMeta cleanly, and preserves /plan <task> first send', { timeout: 60_000 }, async () => {
+    function StandbyPlanToolbarProbe(props: ComposerToolbarSlotProps) {
+      const armed =
+        typeof props.draftMeta?.['builtin:plan'] === 'object' &&
+        props.draftMeta['builtin:plan'] !== null &&
+        (props.draftMeta['builtin:plan'] as { mode?: unknown }).mode === 'planning'
+      useComposerCommand('toggle-plan', () => {
+        if (!props.disabled) {
+          props.setDraftMeta?.('builtin:plan', armed ? undefined : { mode: 'planning' })
+        }
+      })
+      return armed ? e('span', { className: 'plan-standby-armed-probe', 'data-armed': 'true' }, 'Plan') : null
+    }
+
+    seedPluginClientModule('builtin:plan', 'index.tsx', { PlanToolbarProbe: StandbyPlanToolbarProbe })
+    state.plugins = [
+      {
+        id: 'builtin:plan',
+        name: 'Plan Mode',
+        locked: false,
+        enabled: true,
+        hooks: [],
+        actions: ['toggle'],
+        tools: [],
+        clientHashes: { 'index.tsx': 'seeded' },
+      },
+      {
+        id: 'builtin:title',
+        name: 'Title',
+        locked: false,
+        enabled: true,
+        hooks: [],
+        actions: ['generate'],
+        tools: [],
+      },
+    ]
+    state.ui = [
+      {
+        pluginId: 'builtin:plan',
+        surface: 'plugin.slot',
+        spec: {
+          id: 'plan-toolbar',
+          target: COMPOSER_TOOLBAR_SLOT,
+          order: 20,
+          client: { module: 'index.tsx', export: 'PlanToolbarProbe' },
+        },
+      },
+      {
+        pluginId: 'builtin:plan',
+        surface: 'commandPalette',
+        spec: {
+          id: 'toggle-plan',
+          title: { en: 'Toggle Plan mode', 'zh-CN': '切换计划模式' },
+          description: { en: 'Toggle read-only plan mode', 'zh-CN': '切换只读计划模式' },
+          icon: 'list-tree',
+          slash: 'plan',
+          actionId: 'toggle',
+          input: {},
+          scope: { topLevelOnly: true, ownedBy: 'human' },
+        },
+      },
+      {
+        pluginId: 'builtin:title',
+        surface: 'commandPalette',
+        spec: {
+          id: 'generate-title',
+          title: 'Generate conversation title',
+          slash: 'title',
+          actionId: 'generate',
+          input: {},
+          scope: {},
+        },
+      },
+    ]
+
+    await mount('#/a/assistant')
+    const input = textarea(MAIN_LABEL)
+
+    // Typing / opens popover showing /plan right after /new, /clear, /compact while server-only /title stays hidden
+    act(() => { typeInto(input, '/') })
+    await settle()
+    const popover = document.querySelector<HTMLElement>('.agent-standby-pane .composer-popover')
+    assert.ok(popover, 'draft-state / pops the slash popover')
+    const optionLabels = [...popover.querySelectorAll('[role="option"]')].map((el) => el.textContent ?? '')
+    assert.ok(optionLabels.some((label) => label.includes('/plan')), 'standby / menu shows /plan via registered useComposerCommand')
+    assert.equal(optionLabels.some((label) => label.includes('/title')), false, 'server-only /title stays hidden in standby')
+
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    assert.ok(document.querySelector('.agent-standby-pane .composer-popover') === null)
+
+    // Pick /plan after prefix text: removes only /pl token, toggles draft inputMeta with zero HTTP calls & zero toasts
+    act(() => { typeInto(input, '草稿前缀 /pl') })
+    await settle()
+    await act(async () => { pressEnter(input) })
+    await settle()
+
+    const draftKey = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
+    assert.equal(input.value, '草稿前缀 ', 'keeps prefix text and strips only /pl')
+    assert.deepEqual(getStandbyDraft(draftKey).inputMeta, { 'builtin:plan': { mode: 'planning' } })
+    assert.ok(document.querySelector('.plan-standby-armed-probe') !== null, 'Plan pill renders immediately after /plan toggle')
+    assert.equal(state.actionCalls.length, 0, 'zero HTTP action calls in standby')
+    assert.equal(state.createCalls.length, 0, 'zero conversation creation')
+    assert.ok(document.querySelector('.agent-standby-pane .composer-command-banner') === null)
+    assert.equal(document.body.textContent?.includes('Command executed') ?? false, false)
+
+    // Submit bare /plan directly (Esc popover -> Enter): toggles standby plan mode back off locally
+    act(() => { typeInto(input, '/plan') })
+    await settle()
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    await act(async () => { pressEnter(input) })
+    await settle()
+
+    assert.equal(input.value, '')
+    assert.equal(getStandbyDraft(draftKey).inputMeta, undefined)
+    assert.ok(document.querySelector('.plan-standby-armed-probe') === null)
+    assert.equal(state.actionCalls.length, 0)
+    assert.equal(state.createCalls.length, 0)
+
+    // Submitting /plan <task> still enters the first-send conversation create -> submit path
+    act(() => { typeInto(input, '/plan 帮我设计方案') })
+    await act(async () => { pressEnter(input) })
+    await waitForCondition(() => state.submitCalls.length === 1)
+    assert.equal(state.createCalls.length, 1)
+    assert.equal(state.submitCalls[0]!.body.text, '/plan 帮我设计方案')
   })
 })

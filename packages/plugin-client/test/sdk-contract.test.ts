@@ -77,6 +77,9 @@ test('host-facing symbols (port / context / factory / explicit-addressing hooks)
     'TimelineToolCallsContext',
     'createTimelineToolCallsStore',
     'useTimelineToolCalls',
+    'ComposerCommandContext',
+    'createComposerCommandRegistry',
+    'useComposerCommand',
     'ScreenParamsContext',
     'ScreenHostContext',
     'useScreenHost',
@@ -2337,5 +2340,155 @@ test('createTimelineToolCallsStore: enforces lightweight summary boundary, proto
     }
   } finally {
     unsub()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 7. ComposerCommandContext / createComposerCommandRegistry / useComposerCommand
+// ---------------------------------------------------------------------------
+
+test('createComposerCommandRegistry: version transitions, LIFO stacking, token-safe unregister, and unregistered invoke', { timeout: 60_000 }, () => {
+  const registry = SDK.createComposerCommandRegistry()
+  let listenerCalls = 0
+  const unsub = registry.subscribe(() => {
+    listenerCalls += 1
+  })
+  const unsubNoop = registry.subscribe(() => {})
+  unsubNoop()
+  unsubNoop()
+
+  try {
+    assert.equal(registry.getVersion(), 0)
+    assert.equal(registry.has('builtin:plan', 'toggle-plan'), false)
+    assert.deepEqual(registry.invoke('builtin:plan', 'toggle-plan'), { handled: false })
+
+    // Invalid empty pluginId / commandId returns safe no-op
+    const invalidRelease = registry.register('', 'toggle-plan', () => {})
+    invalidRelease()
+    assert.equal(registry.getVersion(), 0)
+
+    const calls: string[] = []
+    // First mount: 0 -> 1 bumps version & notifies once
+    const rel1 = registry.register('builtin:plan', 'toggle-plan', () => {
+      calls.push('first')
+    })
+    assert.equal(registry.getVersion(), 1)
+    assert.equal(listenerCalls, 1)
+    assert.equal(registry.has('builtin:plan', 'toggle-plan'), true)
+
+    // Second stacked mount on same key: version stays stable, LIFO invokes newest
+    const rel2 = registry.register('builtin:plan', 'toggle-plan', () => {
+      calls.push('second')
+    })
+    assert.equal(registry.getVersion(), 1)
+    assert.equal(listenerCalls, 1)
+    const firstInvoke = registry.invoke('builtin:plan', 'toggle-plan')
+    assert.equal(firstInvoke.handled, true)
+    assert.deepEqual(calls, ['second'])
+
+    // Token-scoped unregister: releasing rel2 keeps rel1 active without bumping version; double release is idempotent
+    rel2()
+    rel2()
+    assert.equal(registry.getVersion(), 1)
+    assert.equal(registry.has('builtin:plan', 'toggle-plan'), true)
+    const secondInvoke = registry.invoke('builtin:plan', 'toggle-plan')
+    assert.equal(secondInvoke.handled, true)
+    assert.deepEqual(calls, ['second', 'first'])
+
+    // Last release (1 -> 0): deletes key, bumps version & notifies once
+    rel1()
+    assert.equal(registry.getVersion(), 2)
+    assert.equal(listenerCalls, 2)
+    assert.equal(registry.has('builtin:plan', 'toggle-plan'), false)
+    assert.deepEqual(registry.invoke('builtin:plan', 'toggle-plan'), { handled: false })
+  } finally {
+    unsub()
+  }
+})
+
+test('useComposerCommand: registers under PluginClientContext, keeps fresh closure without version churn, unregisters on unmount or undefined handler', { timeout: 60_000 }, () => {
+  const { port } = createReactivePort({
+    actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [],
+  })
+  const ctx = SDK.createPluginClientContext(port, 'builtin:plan', 7)
+  const registry = SDK.createComposerCommandRegistry()
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const observed: string[] = []
+
+  function Probe({ label, enabled = true }: { label: string; enabled?: boolean }) {
+    SDK.useComposerCommand('toggle-plan', enabled ? () => { observed.push(label) } : undefined)
+    return null
+  }
+
+  try {
+    // No-op safely outside ComposerCommandContext & PluginClientContext
+    act(() => {
+      root.render(e(Probe, { label: 'bare' }))
+    })
+    assert.equal(registry.getVersion(), 0)
+
+    act(() => {
+      root.render(
+        e(
+          SDK.ComposerCommandContext.Provider,
+          { value: registry },
+          e(SDK.PluginClientContext.Provider, { value: ctx }, e(Probe, { label: 'v1' })),
+        ),
+      )
+    })
+    assert.equal(registry.getVersion(), 1)
+    assert.equal(registry.has('builtin:plan', 'toggle-plan'), true)
+    registry.invoke('builtin:plan', 'toggle-plan')
+    assert.deepEqual(observed, ['v1'])
+
+    // Re-rendering with a new handler closure updates latest handler WITHOUT bumping version
+    act(() => {
+      root.render(
+        e(
+          SDK.ComposerCommandContext.Provider,
+          { value: registry },
+          e(SDK.PluginClientContext.Provider, { value: ctx }, e(Probe, { label: 'v2' })),
+        ),
+      )
+    })
+    assert.equal(registry.getVersion(), 1)
+    registry.invoke('builtin:plan', 'toggle-plan')
+    assert.deepEqual(observed, ['v1', 'v2'])
+
+    // Passing handler = undefined unregisters cleanly
+    act(() => {
+      root.render(
+        e(
+          SDK.ComposerCommandContext.Provider,
+          { value: registry },
+          e(SDK.PluginClientContext.Provider, { value: ctx }, e(Probe, { label: 'v3', enabled: false })),
+        ),
+      )
+    })
+    assert.equal(registry.getVersion(), 2)
+    assert.equal(registry.has('builtin:plan', 'toggle-plan'), false)
+
+    // Re-enabling registers again and unmounting releases cleanly
+    act(() => {
+      root.render(
+        e(
+          SDK.ComposerCommandContext.Provider,
+          { value: registry },
+          e(SDK.PluginClientContext.Provider, { value: ctx }, e(Probe, { label: 'v4', enabled: true })),
+        ),
+      )
+    })
+    assert.equal(registry.getVersion(), 3)
+    assert.equal(registry.has('builtin:plan', 'toggle-plan'), true)
+    act(() => {
+      root.unmount()
+    })
+    assert.equal(registry.getVersion(), 4)
+    assert.equal(registry.has('builtin:plan', 'toggle-plan'), false)
+  } finally {
+    host.remove()
   }
 })

@@ -59,10 +59,12 @@ ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
 const HelmxPluginClient = await import('@helmx/plugin-client')
 const {
+  ComposerCommandContext,
   DropdownMenuContent,
   DropdownMenuRoot,
   PluginClientContext,
   PluginClientHostContext,
+  createComposerCommandRegistry,
   resolveLocalizedText,
 } = HelmxPluginClient
 const { importCompiledPluginClient, mountPluginNamespaceGlobals } = await import('./helpers/plugin-namespace.js')
@@ -567,6 +569,125 @@ describe('plan-client-interactions', () => {
       assert.equal(light.getAttribute('data-tone'), 'blocked')
     } finally {
       await liveMount.unmount()
+    }
+  })
+
+  test('PlanToolbarButton: useComposerCommand registers local toggle handler across standby and eligible conversations only', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx({ conversationId: 10 })
+    const registry = createComposerCommandRegistry()
+    const metaWrites: Array<{ key: string; value: unknown }> = []
+
+    const mountWithRegistry = async (element: React.ReactElement, harness = createSessionDocHarness()) => {
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      const root = createRoot(host)
+      const renderElement = async (nextEl: React.ReactElement): Promise<void> => {
+        await act(async () => {
+          root.render(
+            e(
+              ComposerCommandContext.Provider,
+              { value: registry },
+              e(
+                PluginClientHostContext.Provider,
+                { value: harness.hostPort },
+                e(PluginClientContext.Provider, { value: spy }, nextEl),
+              ),
+            ),
+          )
+        })
+      }
+      await renderElement(element)
+      return {
+        host,
+        rerender: renderElement,
+        unmount: async () => {
+          await act(async () => {
+            root.unmount()
+          })
+          host.remove()
+        },
+      }
+    }
+
+    // 1. Standby draft: unarmed & armed register under builtin:plan/toggle-plan, disabled guards invocation
+    const standbyMount = await mountWithRegistry(
+      e(components.PlanToolbarButton, {
+        effectiveModel: 'openai/gpt-5',
+        profileId: 'assistant',
+        draftMeta: undefined,
+        setDraftMeta: (key, value) => metaWrites.push({ key, value }),
+      }),
+    )
+    try {
+      assert.equal(registry.has(PLAN_PLUGIN_ID, PLAN_COMMAND_ID), true)
+      const armRes = registry.invoke(PLAN_PLUGIN_ID, PLAN_COMMAND_ID)
+      assert.equal(armRes.handled, true)
+      assert.deepEqual(metaWrites[0], { key: 'builtin:plan', value: { mode: 'planning' } })
+
+      await standbyMount.rerender(
+        e(components.PlanToolbarButton, {
+          effectiveModel: 'openai/gpt-5',
+          profileId: 'assistant',
+          draftMeta: { [PLAN_PLUGIN_ID]: { mode: 'planning' } },
+          setDraftMeta: (key, value) => metaWrites.push({ key, value }),
+        }),
+      )
+      assert.equal(registry.has(PLAN_PLUGIN_ID, PLAN_COMMAND_ID), true)
+      registry.invoke(PLAN_PLUGIN_ID, PLAN_COMMAND_ID)
+      assert.deepEqual(metaWrites[1], { key: 'builtin:plan', value: undefined })
+
+      await standbyMount.rerender(
+        e(components.PlanToolbarButton, {
+          effectiveModel: 'openai/gpt-5',
+          profileId: 'assistant',
+          draftMeta: { [PLAN_PLUGIN_ID]: { mode: 'planning' } },
+          setDraftMeta: (key, value) => metaWrites.push({ key, value }),
+          disabled: true,
+        }),
+      )
+      registry.invoke(PLAN_PLUGIN_ID, PLAN_COMMAND_ID)
+      assert.equal(metaWrites.length, 2, 'disabled standby button must ignore command invoke')
+    } finally {
+      await standbyMount.unmount()
+    }
+    assert.equal(registry.has(PLAN_PLUGIN_ID, PLAN_COMMAND_ID), false)
+
+    // 2. Eligible top-level human conversation invokes toggle action cleanly
+    const convMount = await mountWithRegistry(
+      e(components.PlanToolbarButton, { conversation: makeConv(10) }),
+    )
+    try {
+      assert.equal(registry.has(PLAN_PLUGIN_ID, PLAN_COMMAND_ID), true)
+      const convRes = registry.invoke(PLAN_PLUGIN_ID, PLAN_COMMAND_ID)
+      assert.equal(convRes.handled, true)
+      assert.equal(spy.actionCalls.length, 1)
+      assert.deepEqual(spy.actionCalls[0], {
+        actionId: 'toggle',
+        input: { conversationId: 10 },
+        options: { conversationId: 10 },
+      })
+    } finally {
+      await convMount.unmount()
+    }
+    assert.equal(registry.has(PLAN_PLUGIN_ID, PLAN_COMMAND_ID), false)
+
+    // 3. Subagent & helmx-owned conversations never register a command handler
+    const subMount = await mountWithRegistry(
+      e(components.PlanToolbarButton, { conversation: makeConv(11, { parentConversationId: 10 }) }),
+    )
+    try {
+      assert.equal(registry.has(PLAN_PLUGIN_ID, PLAN_COMMAND_ID), false)
+    } finally {
+      await subMount.unmount()
+    }
+
+    const helmxMount = await mountWithRegistry(
+      e(components.PlanToolbarButton, { conversation: makeConv(12, { ownedBy: 'helmx' }) }),
+    )
+    try {
+      assert.equal(registry.has(PLAN_PLUGIN_ID, PLAN_COMMAND_ID), false)
+    } finally {
+      await helmxMount.unmount()
     }
   })
 
