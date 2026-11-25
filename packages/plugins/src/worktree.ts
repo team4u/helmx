@@ -11,7 +11,7 @@
  * - reconcileAfter: [WORKFLOW_PLUGIN_ID] soft ordering for post-restart native lease cleanup.
  */
 import type { PluginDefinition } from '@helmx/protocol'
-import { resolvePluginClientAssets } from './asset-paths.js'
+import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
 import { WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID } from './contracts.js'
 import { WorktreeIsolation } from './worktree/isolation.js'
 import { registerWorktreeActions } from './worktree/actions.js'
@@ -25,7 +25,17 @@ import {
   type WorktreeLeaseRecord,
 } from './worktree/worktree-store.js'
 
+export const WORKTREE_SKILL_ID = 'worktree' as const
 export { WORKTREE_PLUGIN_ID }
+
+function readWorktreeSkillAsset() {
+  return loadManagedSkillAsset({
+    pluginId: WORKTREE_PLUGIN_ID,
+    skillId: WORKTREE_SKILL_ID,
+    relativeDir: 'worktree/skill',
+    missingErrorCode: 'worktree_skill_missing',
+  })
+}
 
 export function createWorktreePlugin(): PluginDefinition {
   return {
@@ -99,7 +109,9 @@ export function createWorktreePlugin(): PluginDefinition {
       ctx.service({
         id: 'worktree',
         reconcileAfter: [WORKFLOW_PLUGIN_ID],
-        start() {},
+        async start() {
+          await ctx.host.skills.ensureSkill(readWorktreeSkillAsset())
+        },
         async reconcile() {
           await isolation.reconcileStoppedNativeLeases()
         },

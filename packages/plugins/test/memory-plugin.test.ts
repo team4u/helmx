@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import { HelmxError, type ConversationSummary, type PluginDefinition } from '@helmx/protocol'
 import { PluginHost, ProfileService, type PluginDocStore, type PluginHostBackend } from '@helmx/kernel'
-import { MAX_MEMORY_CHARS, createMemoryPlugin, isMemorySessionEligible, isProfileMemoryEnabled, type MemoryPluginDoc } from '../src/memory.js'
+import { MAX_MEMORY_CHARS, MEMORY_SKILL_ID, createMemoryPlugin, isMemorySessionEligible, isProfileMemoryEnabled, type MemoryPluginDoc } from '../src/memory.js'
 import { MAX_MEMORY_CHARS as CLIENT_MAX_MEMORY_CHARS } from '../src/memory/client/models.js'
 import { MemoryStore } from '../src/memory/store.js'
 import { createProfilePlugin } from '../src/profile.js'
@@ -615,5 +615,63 @@ test('memory 动作清单：get/set/configure/dream/dream_status/dream_configure
     await host.dispose().catch(() => {})
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('memory 受管技能：启动自举、停用即时消失（零幻影提示词）与重新启用恢复', { timeout: 60_000 }, async (t) => {
+  const { createHelmx } = await import('../../hub/src/app.js')
+  const dir = useTempDir(t, 'helmx-memory-skill-')
+  const faux = makeFauxProvider()
+  const app = await createHelmx({
+    buildProvider: createPluginBuildProvider(),
+    dataDir: dir,
+    cwd: dir,
+    model: 'faux/faux-1',
+    providers: [faux.provider],
+  })
+  try {
+    const { kernel } = app
+    const skills = await kernel.skills.list()
+    const memSkill = skills.find((s) => s.id === MEMORY_SKILL_ID)
+    assert.ok(memSkill, 'builtin:memory 启动应自举受管技能 memory')
+    assert.equal(memSkill.managedByPlugin, 'builtin:memory')
+
+    const skillMd = await kernel.skills.readFile(MEMORY_SKILL_ID)
+    assert.ok(skillMd.includes('managedByPlugin: builtin:memory'))
+    for (const actionId of ['get', 'set', 'configure', 'dream', 'dream_status', 'dream_configure']) {
+      assert.ok(skillMd.includes(`builtin:memory.${actionId}`), `memory SKILL.md 应涵盖 builtin:memory.${actionId}`)
+    }
+
+    const readSkillsSection = async () => {
+      const res = await kernel.plugins.runHook('before_turn', {
+        conversation: kernel.conversations.getConversation(1),
+        inputs: [],
+        sections: [],
+        tools: [],
+        messages: [],
+      })
+      assert.equal(res.action, 'transform')
+      return res.value.sections.find((s) => s.id === 'profile.skills')?.text ?? ''
+    }
+
+    assert.ok((await readSkillsSection()).includes('id="memory"'), '启用时 <available_skills> 应包含 memory')
+    const loaded = (await kernel.plugins.executeTool(
+      'load_skill',
+      { skillId: MEMORY_SKILL_ID },
+      { conversationId: 1 },
+    )) as { text: string }
+    assert.ok(loaded.text.includes('# Long-Term Memory'))
+
+    await kernel.plugins.disable('builtin:memory')
+    assert.equal((await readSkillsSection()).includes('id="memory"'), false, '停用后 <available_skills> 不得残留 memory 技能')
+    await assert.rejects(
+      () => kernel.plugins.executeTool('load_skill', { skillId: MEMORY_SKILL_ID }, { conversationId: 1 }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available' && err.status === 403,
+    )
+
+    await kernel.plugins.enable('builtin:memory')
+    assert.ok((await readSkillsSection()).includes('id="memory"'), '重新启用后 memory 技能应恢复')
+  } finally {
+    await app.close().catch(() => {})
   }
 })

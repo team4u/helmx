@@ -24,7 +24,7 @@
  *   and network reads use global fetch (no injection backdoors; tests use global fetch mocks).
  */
 import { COMPOSER_STATUS_SLOT, HelmxError, type PluginDefinition, type TurnSettledPayload } from '@helmx/protocol'
-import { resolvePluginClientAssets } from './asset-paths.js'
+import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
 import { servedByRoot, toPiModels, type PiMagpieModel } from './magpie/catalog.js'
 import {
   DEFAULT_MAGPIE_REFRESH_INTERVAL_SEC,
@@ -43,7 +43,17 @@ import { fetchCatalog, fetchQuotas, resolveGateway } from './magpie/gateway.js'
 import { quotaRows } from './magpie/quota.js'
 import { createMagpieProvider } from './magpie/provider.js'
 
+export const MAGPIE_SKILL_ID = 'magpie' as const
 export { MAGPIE_PLUGIN_ID }
+
+function readMagpieSkillAsset() {
+  return loadManagedSkillAsset({
+    pluginId: MAGPIE_PLUGIN_ID,
+    skillId: MAGPIE_SKILL_ID,
+    relativeDir: 'magpie/skill',
+    missingErrorCode: 'magpie_skill_missing',
+  })
+}
 
 const STATUS_OUTPUT_SCHEMA = {
   type: 'object',
@@ -460,6 +470,8 @@ export function createMagpiePlugin(): PluginDefinition {
         id: 'magpie-gateway',
         async start() {
           stopping = false
+          await ctx.host.skills.ensureSkill(readMagpieSkillAsset())
+          if (stopping) return
           const { controller, done } = beginRequest()
           const snapshot = gateway()
           // Initialization: first honestly show the recovered cache (the catalog count restored by

@@ -10,7 +10,7 @@ import {
   type PluginActionContext,
   type PluginDefinition,
 } from '@helmx/protocol'
-import { resolvePluginClientAssets } from './asset-paths.js'
+import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
 import {
   PLAN_BADGES_DOC,
   PLAN_COMMAND_ID,
@@ -79,7 +79,17 @@ export {
   type PlanPluginOptions,
   type PlanConversationRecord,
 } from './plan/contracts.js'
+export const PLAN_SKILL_ID = 'plan' as const
 export { validateReadOnlyShellCommand, type ReadOnlyShellValidationResult } from './plan/read-only-shell.js'
+
+function readPlanSkillAsset() {
+  return loadManagedSkillAsset({
+    pluginId: PLAN_PLUGIN_ID,
+    skillId: PLAN_SKILL_ID,
+    relativeDir: 'plan/skill',
+    missingErrorCode: 'plan_skill_missing',
+  })
+}
 
 function resolveTargetConversationId(
   inputConversationId: number | undefined,
@@ -168,8 +178,9 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
         prepare() {
           state.setStopping(false)
         },
-        start() {
+        async start() {
           state.setStopping(false)
+          await ctx.host.skills.ensureSkill(readPlanSkillAsset())
           state.hydrateProjections()
         },
         async reconcile() {

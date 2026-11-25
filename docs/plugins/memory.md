@@ -35,6 +35,10 @@ Profile 关闭记忆时，或会话为派生子会话（子代理 / Workflow / S
 
 `ctx.ui.slot` 向 Profile 详情抽屉注入单 Profile 记忆开关与编辑器（`PROFILE_DETAIL_SECTION_SLOT`）。
 
+### 受管技能 `memory`
+
+`memory-dream` 服务启动时经 `ctx.host.skills.ensureSkill` 自举受管技能 `memory`（`managedByPlugin: builtin:memory`），涵盖 `MEMORY.md` 4k 上限与顶层会话边界、`update_memory` 写入/跳过纪律、`get` / `set` / `configure` / `dream` / `dream_status` / `dream_configure` 全部 6 个动作及每日 Dream 整理契约。
+
 ## 每日 Dream（记忆自动整理）
 
 `builtin:memory` 自带一个每日低峰时段的记忆整理服务（`memory-dream`），把近期候选合并进 MEMORY.md。全程零会话回合：整理调用 `ctx.host.completeText` 单次无工具补全，不创建/提交任何会话输入，因此梦境自身永远不会再次进入候选采集（不会自我喂食）。
@@ -89,7 +93,7 @@ Profile 关闭记忆时，或会话为派生子会话（子代理 / Workflow / S
 
 ## 停用与失败语义
 
-停用本插件后：`update_memory` 工具、`helmx memory` 动态命令、Profile 详情抽屉的记忆编辑器与注入段落即时消失；磁盘 MEMORY.md 文件保留，重新启用即恢复。开关影响后续调用与回合，不取消在途写入。在途梦境整理/采集期间停用被 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`，不可 force）；停用后梦境调度即暂停（不声明 `inUse`），候选与 MEMORY.md 保留，重新启用按持久化 `nextRunAt` 恢复。Profile 删除后以相同 ID 重建时，开关状态仍按 ID 生效；本设计不提供 Profile 删除时的记忆状态清理。
+停用本插件后：`update_memory` 工具、`helmx memory` 动态命令、受管技能 `memory`、Profile 详情抽屉的记忆编辑器与注入段落即时消失；磁盘 MEMORY.md 文件保留，重新启用即恢复。开关影响后续调用与回合，不取消在途写入。在途梦境整理/采集期间停用被 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`，不可 force）；停用后梦境调度即暂停（不声明 `inUse`），候选与 MEMORY.md 保留，重新启用按持久化 `nextRunAt` 恢复。Profile 删除后以相同 ID 重建时，开关状态仍按 ID 生效；本设计不提供 Profile 删除时的记忆状态清理。
 
 初始化语义的诚实边界：从未初始化的合法 Profile 首次需要记忆时惰性创建默认骨架（不误报缺失）；已初始化后被外部删除时显式 warning 通知（按 profileId 独立去重）+ 注入 `memory.assets-missing`，绝不启动时无条件重建掩盖丢失；文件恢复或工具写入后自愈。
 
@@ -98,6 +102,7 @@ Profile 关闭记忆时，或会话为派生子会话（子代理 / Workflow / S
 | 内容 | 位置 |
 | :--- | :--- |
 | 插件入口（动作/工具/钩子/插槽/梦境接线） | `packages/plugins/src/memory.ts` |
+| 受管技能资产 | `packages/plugins/src/memory/skill/SKILL.md` |
 | MemoryStore（文件锁 + 4k 上限 + 梦境锁内 CAS 唯一权威点） | `packages/plugins/src/memory/store.ts` |
 | Dream 引擎（候选采集/每日调度/严格 JSON/CAS 写回） | `packages/plugins/src/memory/dream.ts` |
 | 前端插槽组件 | `packages/plugins/src/memory/client/` |

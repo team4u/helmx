@@ -2,7 +2,7 @@
  * builtin:memory: autonomous per-Profile long-term memory plugin (`MEMORY.md`, `update_memory`, daily Dream).
  */
 import { HelmxError, PROFILE_DETAIL_SECTION_SLOT, type HelmxHostProfilesPort, type PluginActionContext, type PluginDefinition } from '@helmx/protocol'
-import { resolvePluginClientAssets } from './asset-paths.js'
+import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
 import { isMemorySessionEligible, MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MemoryStore } from './memory/store.js'
 import {
   createDreamEngine,
@@ -13,6 +13,7 @@ import {
   type DreamStatusView,
 } from './memory/dream.js'
 
+export const MEMORY_SKILL_ID = 'memory' as const
 export { isMemorySessionEligible, MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MEMORY_DEFAULT, MemoryStore } from './memory/store.js'
 export {
   createDreamEngine,
@@ -79,6 +80,15 @@ function resolveActionProfileId(
 
 function disabledError(profileId: string, action: string): HelmxError {
   return new HelmxError('memory_disabled_for_profile', `Profile '${profileId}' has long-term memory disabled; ${action} is forbidden`, 403, { profileId })
+}
+
+function readMemorySkillAsset() {
+  return loadManagedSkillAsset({
+    pluginId: MEMORY_PLUGIN_ID,
+    skillId: MEMORY_SKILL_ID,
+    relativeDir: 'memory/skill',
+    missingErrorCode: 'memory_skill_missing',
+  })
 }
 
 export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {}): PluginDefinition {
@@ -313,7 +323,15 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
       )
 
       ctx.hook.onTurnSettled((payload) => dream.collectFromSettledTurn(payload))
-      ctx.service({ id: 'memory-dream', liveTasks: () => dream.liveTasks(), start: () => dream.start(), stop: () => dream.stop() })
+      ctx.service({
+        id: 'memory-dream',
+        liveTasks: () => dream.liveTasks(),
+        async start() {
+          await ctx.host.skills.ensureSkill(readMemorySkillAsset())
+          await dream.start()
+        },
+        stop: () => dream.stop(),
+      })
 
       ctx.action<{ profileId?: string }, DreamRunSummary>({
         id: 'dream',

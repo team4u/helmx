@@ -20,6 +20,10 @@
 | `refresh` | `helmx magpie refresh` | 强制刷新目录与配额；失败显式抛 `502 magpie_gateway_unreachable` |
 | `quota` | `helmx magpie quota [--model <id>]` | 实时查询配额（`GET /v1/magpie/quotas`），可按模型归属 provider 过滤 |
 
+### 受管技能 `magpie`
+
+`magpie-gateway` 服务启动时经 `ctx.host.skills.ensureSkill` 自举受管技能 `magpie`（`managedByPlugin: builtin:magpie`），覆盖网关连通性诊断、`status` / `quota` / `refresh` 动作与 CLI 用法、缓存与实况计数边界及密钥脱敏约束。
+
 ### 状态文档、状态栏配额与自动刷新
 
 公开文档 `status` 实时汇总：`gatewayUrl` / `configuredRoot` / `local` / `reachable` / `modelCount` / `modelOwners`（当前网关目录 `modelId -> provider` 映射）/ `lastRefreshedAt` / `quotasRefreshedAt` / `quotasUpdatedAt` / `lastError` / `quotasError`（成功后清除不残留）/ `quotas`（保留原始单位、`pool`、`last`、`resetsAt` 与错误原因）/ `diagnostics`。驱动设置面板（`magpie-panel`）、命令面板（`magpie-refresh`）与输入框底部状态栏插槽（`COMPOSER_STATUS_SLOT`，同时覆盖已建会话与新建对话待命页）。
@@ -43,13 +47,14 @@
 
 ## 停用与失败语义
 
-停用后 Provider 注销（`magpie/` 模型从目录消失）、动作与动态命令、设置面板与命令面板即时消失；持久缓存保留，重新启用后按当前网关 root 恢复。`service.stop` 置停用信号并中止在途网关读取，停用后不再写 doc。
+停用后 Provider 注销（`magpie/` 模型从目录消失）、动作与动态命令、受管技能 `magpie`、设置面板与命令面板即时消失；持久缓存保留，重新启用后按当前网关 root 恢复。`service.stop` 置停用信号并中止在途网关读取，停用后不再写 doc。
 
 ## 源码与测试入口
 
 | 内容 | 位置 |
 | :--- | :--- |
 | 插件入口 | `packages/plugins/src/magpie.ts` |
+| 受管技能资产 | `packages/plugins/src/magpie/skill/SKILL.md` |
 | 网关 / 目录 / 配额解析 | `packages/plugins/src/magpie/gateway.ts`、`catalog.ts`、`quota.ts` |
 | Provider 注册 | `packages/plugins/src/magpie/provider.ts` |
 | 前端设置面板与状态栏 | `packages/plugins/src/magpie/client/` |

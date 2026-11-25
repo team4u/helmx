@@ -85,7 +85,7 @@
   - `PlanWorkbenchPanel`（右侧 `plan` 面板）：展示计划正文（支持人工「编辑 / 保存」与外部版本冲突提醒）及准确区分「上下文交接」与「执行模型」的已批准记录；
   - `PlanToolRow`（`toolView`）：消费 `props.presentationMeta` 渲染 `plan_save`、`plan_propose` 与 `plan_ask` 的 26px `.trace-row`（`plan_bash` 复用宿主可展开通用命令工具行）。
 - **服务治理与事件清理**：
-  - `start()` 从 KV 水合 `plan` 与 `plan-badges` 投影；`reconcile()` 在重启后扫描孤儿 `pendingAskId`，以 `'superseded'` 清理对应 `AskDoc` 并解除会话 `blocked`；
+  - `start()` 经 `ctx.host.skills.ensureSkill` 自举受管技能 `plan`（`managedByPlugin: builtin:plan`，覆盖准入条件、只读工具、自包含计划撰写、AskDoc 审批/交接与 `get`/`toggle`/`set_mode`/`update_draft` 动作；停用插件后即时从可用技能目录消失）并从 KV 水合 `plan` 与 `plan-badges` 投影；`reconcile()` 在重启后扫描孤儿 `pendingAskId`，以 `'superseded'` 清理对应 `AskDoc` 并解除会话 `blocked`；
   - 监听 `conversation.entry`：人工 `/clear`（非本插件 `handoff` 豁免的 `pi.reset`）自动清空旧话题的计划模式、草稿与角标；时间线编辑重发（`helmx.rewind`）仅以 `'superseded'` 结算挂起 Ask 并保留计划模式与草稿；`turn_settled` 兜底清理未消费的交接豁免计数；
   - 审批或澄清等待期间停用插件触发 `liveTasks()` 硬阻断（`409 plugin_has_live_tasks`，不可 `--force`）；存在空闲 `planning` 会话时停用返回 `409 plugin_in_use`，`--force` 可强制停用并立即恢复全量工具；
   - `conversation.deleted` 事件自动取消残留审批单并清理对应 KV、`sessionDoc` 与角标条目。
@@ -95,6 +95,7 @@
 | 内容 | 位置 |
 | :--- | :--- |
 | 插件入口（配置 / 动作 / 命令 / UI / 服务） | `packages/plugins/src/plan.ts` |
+| 受管技能资产 | `packages/plugins/src/plan/skill/SKILL.md` |
 | 契约、白名单、Schema 与边界守卫 | `packages/plugins/src/plan/contracts.ts` |
 | 只读 Shell 命令校验器 | `packages/plugins/src/plan/read-only-shell.ts` |
 | 状态管理、KV 序列化与生命周期对账 | `packages/plugins/src/plan/state.ts` |
