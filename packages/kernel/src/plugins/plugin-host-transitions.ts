@@ -10,6 +10,7 @@ import {
   type PluginConfigFieldSchema,
   type PluginDefinition,
   type PluginDiagnosticError,
+  type PluginPackageManagerPort,
   type PluginSummary,
 } from '@helmx/protocol';
 import type { CapabilityRegistry } from './capability-registry.js';
@@ -24,7 +25,6 @@ import {
   wrapEnableError,
   wrapRegistrationError,
 } from './lifecycle-helpers.js';
-import type { PluginPackageManagerStore } from './package-store.js';
 import { pluginDataDirName } from './plugin-dir-name.js';
 import { toJsonSafeError, type JsonSafeErrorInfo } from './shared.js';
 import type { PluginTaskTracker } from './tracking.js';
@@ -263,11 +263,11 @@ export function summaryWithManagedPackage(
   state: PluginState,
   capabilityRegistry: CapabilityRegistry,
   uiRegistry: UiRegistry,
-  packageStore?: PluginPackageManagerStore,
+  packageManager?: Pick<PluginPackageManagerPort, 'getRecord'>,
   publicConfig?: Record<string, unknown>,
 ): PluginSummary {
   const base = pluginSummaryOf(state, capabilityRegistry, uiRegistry, publicConfig);
-  const record = packageStore?.getRecord(base.id);
+  const record = packageManager?.getRecord(base.id);
   if (record === undefined || base.id.startsWith('builtin:')) return base;
   return {
     ...base,

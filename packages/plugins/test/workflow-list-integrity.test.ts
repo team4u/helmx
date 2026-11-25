@@ -28,12 +28,18 @@ import {
   type WorkflowKvStore,
   type WorkflowServiceHost,
 } from '../src/workflow/runs/index.js'
-import { createHubHandler, startHub } from '../../kernel/src/http/index.js'
-import { AuthService } from '../../kernel/src/services/index.js'
-import type { EventHub, KernelRuntimeLike } from '../../kernel/src/http/index.js'
+import {
+  AuthService,
+  createHubHandler,
+  PluginHost,
+  startHub,
+  type HttpEventHub,
+  type KernelHttpTarget,
+  type PluginHostBackend,
+  type PluginSessionDocStore,
+} from '@helmx/kernel'
 import { createHelmx } from '../../hub/src/app.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
-import { PluginHost, type PluginHostBackend, type PluginSessionDocStore } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { deferred, makeFauxProvider, MemoryKvStore } from './helpers/plugin-test-env.js'
@@ -349,7 +355,7 @@ describe('WorkflowService listRuns integrity', () => {
 // HTTP 层：编排经 builtin:workflow 插件动作（/api/actions）
 // ---------------------------------------------------------------------------
 
-class NoopEventHub implements EventHub {
+class NoopEventHub implements HttpEventHub {
   response(): Response {
     return new Response(null, { status: 204 })
   }
@@ -397,7 +403,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
           kv: new MemoryKvStore(),
           docs: { get: <T>(_k: string, initial: T): T => initial, set: () => {}, deletePlugin: () => {}, flush: async () => {} },
         }),
-      } as unknown as KernelRuntimeLike,
+      } as unknown as KernelHttpTarget,
     )
     const res = await handler(
       new Request('http://127.0.0.1/api/auth/setup', {
@@ -428,7 +434,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
     })
     await host.register(createWorkflowPlugin())
     const handler = createHubHandler(
-      { dataDir, auth, events: new NoopEventHub(), plugins: host } as unknown as KernelRuntimeLike,
+      { dataDir, auth, events: new NoopEventHub(), plugins: host } as unknown as KernelHttpTarget,
     )
     const res = await handler(
       new Request('http://127.0.0.1/api/actions/builtin%3Aworkflow/runs', {
@@ -462,7 +468,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
     })
     await host.register(createWorkflowPlugin())
     const handler = createHubHandler(
-      { dataDir, auth, events: new NoopEventHub(), plugins: host } as unknown as KernelRuntimeLike,
+      { dataDir, auth, events: new NoopEventHub(), plugins: host } as unknown as KernelHttpTarget,
     )
     const corrupt = await handler(
       new Request('http://127.0.0.1/api/actions/builtin%3Aworkflow/inspect', {
@@ -523,7 +529,7 @@ test('CLI: helmx workflows inspect 在 detail 损坏时非零退出并显示错�
   let app2: Awaited<ReturnType<typeof createHelmx>> | undefined
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
-    const conversationId = app.kernel.listConversations()[0]!.id
+    const conversationId = app.kernel.conversations.listConversations()[0]!.id
     await app.kernel.plugins.invokeAction('builtin:workflow', 'run', { script: META('cli-int-1') + 'return 1', wait: true }, { conversationId })
     await app.kernel.plugins.invokeAction('builtin:workflow', 'run', { script: META('cli-int-2') + 'return 2', wait: true }, { conversationId })
     const runsList = (await app.kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: Array<{ id: string }> }

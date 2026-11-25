@@ -38,13 +38,11 @@ import { join } from 'node:path'
 import { after, before, describe, it, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHelmx } from '../../hub/src/app.js'
-import { KernelRuntime } from '../../kernel/src/runtime/index.js'
+import { KernelRuntime, SecretStash } from '@helmx/kernel'
+import { buildManagedEnv, runShell, type HelmxToolDeps } from '@helmx/kernel/testing'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { registerWorkflowTools } from '../src/workflow/tools.js'
 import { createWorktreePlugin } from '../src/worktree.js'
-import { buildManagedEnv, runShell } from '../../kernel/src/runtime/tools.js'
-import type { HelmxToolDeps } from '../../kernel/src/runtime/tool-deps.js'
-import { SecretStash } from '../../kernel/src/services/index.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 
@@ -157,8 +155,8 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         fauxAssistantMessage('主回合完成'),
       ])
 
-      await kernel.submitInput(1, '派生子代理')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, '派生子代理')
+      await kernel.conversations.waitForIdle(1)
 
       // 声明：全部新字段进入 inputSchema（模型可见）。
       assert.ok(declared, 'before_turn 应捕获 subagent 声明')
@@ -184,11 +182,11 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       assert.equal(payload.isolation, undefined, '未传 isolation 时不得凭空出现')
 
       // 原生执行：真子会话派生；文本 JSON 信封回报业务 result 与 execution，details 保留 execution 索引（无 [subagent ...] 尾行）。
-      const detail = await kernel.getConversationDetail(1, { limit: 50 })
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
       const details = toolResultDetails(detail, 'subagent')
       const envelope = JSON.parse(text) as Record<string, unknown>
-      const child = kernel
+      const child = kernel.conversations
         .listConversations()
         .find((c) => c.parentConversationId === 1)
       assert.ok(child, '应派生真子会话')
@@ -202,7 +200,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       assert.equal(detailExec['conversationId'], child.id, 'details.execution 应含 conversationId')
       assert.equal(detailExec['effectiveCwd'], childCwd, `details.execution 应含 effectiveCwd=${childCwd}`)
       assert.equal('result' in details, false, 'pi.tool-result.details 严禁镜像 final.result')
-      assert.equal(await kernel.getLastAssistantText(1), '主回合完成')
+      assert.equal(await kernel.conversations.getLastAssistantText(1), '主回合完成')
     } finally {
       await kernel.close()
     }
@@ -228,9 +226,9 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         fauxAssistantMessage('第一轮回答'),
         fauxAssistantMessage('首回合完成'),
       ])
-      await kernel.submitInput(1, '首调')
-      await kernel.waitForIdle(1)
-      const child = kernel.listConversations().find((c) => c.parentConversationId === 1)
+      await kernel.conversations.submitInput(1, '首调')
+      await kernel.conversations.waitForIdle(1)
+      const child = kernel.conversations.listConversations().find((c) => c.parentConversationId === 1)
       assert.ok(child, '首调应派生子会话')
       assert.equal(spawns.length, 1)
 
@@ -243,17 +241,17 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         fauxAssistantMessage('续接回答'),
         fauxAssistantMessage('续接回合完成'),
       ])
-      await kernel.submitInput(1, '续接')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, '续接')
+      await kernel.conversations.waitForIdle(1)
 
       assert.equal(spawns.length, 2, '续接也应经 agent_spawn 钩子')
       assert.equal(spawns[1]!.resume, String(child.id), 'resume 原样进入钩子载荷')
       assert.equal(spawns[1]!.title, undefined, 'resume 不得覆写 title')
-      const children = kernel.listConversations().filter((c) => c.parentConversationId === 1)
+      const children = kernel.conversations.listConversations().filter((c) => c.parentConversationId === 1)
       assert.equal(children.length, 1, '续接不得新建子会话')
       assert.equal(children[0]!.title, '第一轮', 'resume 应保留原派生子会话标题')
 
-      const detail = await kernel.getConversationDetail(1, { limit: 50 })
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
       const details = toolResultDetails(detail, 'subagent')
       const envelope = JSON.parse(text) as Record<string, unknown>
@@ -288,16 +286,16 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         ),
         fauxAssistantMessage('主回合仍完成'),
       ])
-      await kernel.submitInput(1, '坏 isolation')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, '坏 isolation')
+      await kernel.conversations.waitForIdle(1)
 
       assert.equal(spawns.length, 0, '非法 isolation 绝不进入 agent_spawn 钩子')
       assert.equal(
-        kernel.listConversations().filter((c) => c.parentConversationId === 1).length,
+        kernel.conversations.listConversations().filter((c) => c.parentConversationId === 1).length,
         0,
         '不得派生任何子会话',
       )
-      const detail = await kernel.getConversationDetail(1, { limit: 50 })
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
       assert.ok(
         text.includes('isolation') && text.includes('worktree'),
@@ -313,10 +311,10 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         ),
         fauxAssistantMessage('主回合仍完成2'),
       ])
-      await kernel.submitInput(1, '坏 label')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, '坏 label')
+      await kernel.conversations.waitForIdle(1)
       assert.equal(spawns.length, 0, '非法 label 绝不进入 agent_spawn 钩子')
-      const labelDetail = await kernel.getConversationDetail(1, { limit: 50 })
+      const labelDetail = await kernel.conversations.getConversationDetail(1, { limit: 50 })
       const labelText = toolResultText(labelDetail, 'subagent')
       assert.ok(labelText.includes('label'), `拒绝信息应显式指出 label 非法：${labelText.slice(0, 300)}`)
     } finally {
@@ -361,10 +359,10 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         ),
         fauxAssistantMessage('外部回合完成'),
       ])
-      await kernel.submitInput(1, '外部后端')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, '外部后端')
+      await kernel.conversations.waitForIdle(1)
 
-      const detail = await kernel.getConversationDetail(1, { limit: 50 })
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
       const details = toolResultDetails(detail, 'subagent')
       const envelope = JSON.parse(text) as Record<string, unknown>
@@ -380,7 +378,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       assert.deepEqual(details['execution'], expectedExec)
       assert.equal('result' in details, false, '外部后端落盘 details 不得镜像 result')
       assert.equal(
-        kernel.listConversations().filter((c) => c.parentConversationId === 1).length,
+        kernel.conversations.listConversations().filter((c) => c.parentConversationId === 1).length,
         0,
         'handled 后端接管时不得派生原生子会话',
       )
@@ -413,8 +411,8 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         fauxAssistantMessage('本机完成'),
         fauxAssistantMessage('主回合1完成'),
       ])
-      await kernel.submitInput(1, '指定 nodeId=local')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, '指定 nodeId=local')
+      await kernel.conversations.waitForIdle(1)
       assert.equal(spawns.length, 1)
       assert.equal(spawns[0]!.nodeId, 'local', 'nodeId 应原样进入 AgentSpawnRequest')
 
@@ -426,10 +424,10 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         ),
         fauxAssistantMessage('主回合2完成'),
       ])
-      await kernel.submitInput(1, '非法 nodeId')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, '非法 nodeId')
+      await kernel.conversations.waitForIdle(1)
       assert.equal(spawns.length, 1, '非法 nodeId 绝不进入 agent_spawn')
-      const badDetail = await kernel.getConversationDetail(1, { limit: 50 })
+      const badDetail = await kernel.conversations.getConversationDetail(1, { limit: 50 })
       const badText = toolResultText(badDetail, 'subagent')
       assert.match(badText, /nodeId/)
 
@@ -441,10 +439,10 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         ),
         fauxAssistantMessage('主回合3完成'),
       ])
-      await kernel.submitInput(1, 'resume + nodeId 互斥')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'resume + nodeId 互斥')
+      await kernel.conversations.waitForIdle(1)
       assert.equal(spawns.length, 1, 'resume + nodeId 绝不进入 agent_spawn')
-      const conflictDetail = await kernel.getConversationDetail(1, { limit: 50 })
+      const conflictDetail = await kernel.conversations.getConversationDetail(1, { limit: 50 })
       const conflictText = toolResultText(conflictDetail, 'subagent')
       assert.match(conflictText, /nodeId 与 resume 互斥/)
     } finally {
@@ -489,10 +487,10 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
         ),
         fauxAssistantMessage('编排回合完成'),
       ])
-      await app.kernel.submitInput(1, '跑编排')
-      await app.kernel.waitForIdle(1)
+      await app.kernel.conversations.submitInput(1, '跑编排')
+      await app.kernel.conversations.waitForIdle(1)
 
-      const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const detail = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'SubagentWorkflow')
       const wfDetails = toolResultDetails(detail, 'SubagentWorkflow')
       const runId = extractRunId(text)
@@ -524,9 +522,9 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
         ),
         fauxAssistantMessage('scriptPath 回合完成'),
       ])
-      await app.kernel.submitInput(1, '跑 scriptPath')
-      await app.kernel.waitForIdle(1)
-      const detail2 = await app.kernel.getConversationDetail(1, { limit: 50 })
+      await app.kernel.conversations.submitInput(1, '跑 scriptPath')
+      await app.kernel.conversations.waitForIdle(1)
+      const detail2 = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const runId2 = extractRunId(toolResultText(detail2, 'SubagentWorkflow'))
       assert.ok(runId2, 'scriptPath 调用应返回新 runId')
       assert.equal((await wfInspect(app, runId2)).run.result, 42, 'scriptPath 脚本真实执行')
@@ -539,9 +537,9 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
         ),
         fauxAssistantMessage('恢复回合完成'),
       ])
-      await app.kernel.submitInput(1, '断点恢复')
-      await app.kernel.waitForIdle(1)
-      const detail3 = await app.kernel.getConversationDetail(1, { limit: 50 })
+      await app.kernel.conversations.submitInput(1, '断点恢复')
+      await app.kernel.conversations.waitForIdle(1)
+      const detail3 = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const runId3 = extractRunId(toolResultText(detail3, 'SubagentWorkflow'))
       assert.ok(runId3, 'resume 调用应返回新 runId')
       assert.deepEqual((await wfInspect(app, runId3)).run.result, [2, 4, 6], '重放结果与原 run 一致')
@@ -573,9 +571,9 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
         ),
         fauxAssistantMessage('回合完成'),
       ])
-      await app.kernel.submitInput(1, '非法组合')
-      await app.kernel.waitForIdle(1)
-      const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      await app.kernel.conversations.submitInput(1, '非法组合')
+      await app.kernel.conversations.waitForIdle(1)
+      const detail = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'SubagentWorkflow')
       assert.ok(
         text.includes('workflow_failed') && text.includes('exactly one of'),
@@ -595,9 +593,9 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
         ),
         fauxAssistantMessage('空白 label 回合完成'),
       ])
-      await app.kernel.submitInput(1, '空白 label')
-      await app.kernel.waitForIdle(1)
-      const detailBlank = await app.kernel.getConversationDetail(1, { limit: 50 })
+      await app.kernel.conversations.submitInput(1, '空白 label')
+      await app.kernel.conversations.waitForIdle(1)
+      const detailBlank = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const blankText = toolResultText(detailBlank, 'SubagentWorkflow')
       assert.ok(
         blankText.includes('workflow_failed') && blankText.includes('label'),
@@ -636,10 +634,10 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
         ),
         fauxAssistantMessage('探针完成'),
       ])
-      await app.kernel.submitInput(1, '跑字符串 args 探针')
-      await app.kernel.waitForIdle(1)
+      await app.kernel.conversations.submitInput(1, '跑字符串 args 探针')
+      await app.kernel.conversations.waitForIdle(1)
 
-      const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const detail = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'SubagentWorkflow')
       const runId = extractRunId(text)
       assert.ok(runId, `应返回 runId：${text.slice(0, 300)}`)
@@ -683,10 +681,10 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
         ),
         fauxAssistantMessage('双重序列化完成'),
       ])
-      await app.kernel.submitInput(1, '跑双重序列化 args')
-      await app.kernel.waitForIdle(1)
+      await app.kernel.conversations.submitInput(1, '跑双重序列化 args')
+      await app.kernel.conversations.waitForIdle(1)
 
-      const detail2 = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const detail2 = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const text2 = toolResultText(detail2, 'SubagentWorkflow')
       const runId2 = extractRunId(text2)
       assert.ok(runId2, '双重序列化调用应返回 runId')
@@ -733,16 +731,16 @@ test('subagent 失败于子会话创建后：错误结果不附文本 footer，�
       fauxAssistantMessage([fauxThinking('只有思考没有正文')]),
       fauxAssistantMessage('主回合继续'),
     ])
-    await app.kernel.submitInput(1, '派生会失败的子代理')
-    await app.kernel.waitForIdle(1)
+    await app.kernel.conversations.submitInput(1, '派生会失败的子代理')
+    await app.kernel.conversations.waitForIdle(1)
 
-    const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+    const detail = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
     const text = toolResultText(detail, 'subagent')
     const structured = toolResultDetails(detail, 'subagent')
     assert.ok(text.includes('subagent_failed'), `应显式失败：${text.slice(0, 200)}`)
     assert.equal(text.includes('[subagent '), false, '失败文本不附 [subagent ...] 尾行')
     // 失败仍附 structuredOutput.execution：前端直接读取结构化关联子会话。
-    const child = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
+    const child = app.kernel.conversations.listConversations().find((c) => c.parentConversationId === 1)
     assert.ok(child, '子会话应已创建')
     assert.equal(
       (structured['execution'] as Record<string, unknown>)?.['conversationId'],
@@ -801,7 +799,7 @@ describe('runGate/runShell options.env 注入', { timeout: 60_000 }, () => {
         HELMX_HUB_URL: 'http://evil.example',
         HELMX_TOKEN: 'injected-stale-token',
       }
-      const gate = await kernel.runGate(
+      const gate = await kernel.agentSpawn.runGate(
         'printf "%s|%s|%s|%s" "$CI_TOOL_HOME" "$HELMX_CWD" "$HELMX_HUB_URL" "${HELMX_TOKEN:+set}"',
         { cwd: dir, conversationId: 1, env: spawnEnv },
       )
@@ -846,7 +844,7 @@ describe('runGate/runShell options.env 注入', { timeout: 60_000 }, () => {
     })
     try {
       process.env['HELMX_GATE_TEST_BASE'] = 'from-host'
-      const gate = await kernel.runGate('printf "%s" "$HELMX_GATE_TEST_BASE"', {
+      const gate = await kernel.agentSpawn.runGate('printf "%s" "$HELMX_GATE_TEST_BASE"', {
         cwd: dir,
         env: { HELMX_GATE_TEST_BASE: 'from-inject' },
       })
@@ -887,9 +885,9 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
       fauxAssistantMessage([fauxToolCall('subagent', { prompt: '检查元数据', agentType: 'herdr:pi', background: false })], { stopReason: 'toolUse' }),
       fauxAssistantMessage('完成'),
     ])
-    await kernel.submitInput(1, '执行任务')
-    await kernel.waitForIdle(1)
-    const detail = await kernel.getConversationDetail(1, { limit: 30 })
+    await kernel.conversations.submitInput(1, '执行任务')
+    await kernel.conversations.waitForIdle(1)
+    const detail = await kernel.conversations.getConversationDetail(1, { limit: 30 })
     const output = JSON.stringify(detail)
     assert.ok(detail.entries.some((entry) => entry.kind === 'pi.tool-result'))
     assert.ok(output.includes('pane-9'), '非机密续接标识仍可读取')

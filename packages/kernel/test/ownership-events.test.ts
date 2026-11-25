@@ -18,14 +18,14 @@ test('late tracker summary after deletion never publishes upsert or resurrects c
   const dataDir = await mkdtemp(join(tmpdir(), 'helmx-ownership-events-'))
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   try {
-    const conversation = await kernel.createConversation({ title: 'background conversation to delete' })
-    kernel.markConversationOwnership(conversation.id, 'helmx')
-    const staleSummary = kernel.getConversation(conversation.id)
+    const conversation = await kernel.conversations.createConversation({ title: 'background conversation to delete' })
+    kernel.ownership.markOwnership(conversation.id, 'helmx')
+    const staleSummary = kernel.conversations.getConversation(conversation.id)
     const callback = summaryCallback(kernel)
     const frames: HelmxEventFrame[] = []
     const unsubscribe = kernel.events.subscribe((frame) => frames.push(frame))
     try {
-      await kernel.deleteConversation(conversation.id)
+      await kernel.conversations.deleteConversation(conversation.id)
       assert.ok(frames.some((frame) => frame.event.type === 'conversation.deleted'))
       assert.equal(
         frames.some((frame) => frame.event.type === 'notification'),
@@ -35,7 +35,7 @@ test('late tracker summary after deletion never publishes upsert or resurrects c
       frames.length = 0
       callback(staleSummary)
       assert.equal(frames.length, 0, 'late summary for deleted conversation must produce zero new events')
-      assert.ok(!kernel.listConversations().some((entry) => entry.id === conversation.id))
+      assert.ok(!kernel.conversations.listConversations().some((entry) => entry.id === conversation.id))
     } finally {
       unsubscribe()
     }

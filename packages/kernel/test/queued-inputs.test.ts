@@ -284,13 +284,13 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       models,
     })
     try {
-      const conv = await kernel.createConversation({ title: 'snapshot restore' })
-      const submit1 = kernel.submitInput(conv.id, 'first turn question')
+      const conv = await kernel.conversations.createConversation({ title: 'snapshot restore' })
+      const submit1 = kernel.conversations.submitInput(conv.id, 'first turn question')
       await started
       // Run is in-flight (model request paused on gate): enqueue both steer and followUp.
       await Promise.all([
-        kernel.submitInput(conv.id, 'queued follow-up input', { whenBusy: 'followUp' }),
-        kernel.submitInput(conv.id, 'steer supplement input', { whenBusy: 'steer' }),
+        kernel.conversations.submitInput(conv.id, 'queued follow-up input', { whenBusy: 'followUp' }),
+        kernel.conversations.submitInput(conv.id, 'steer supplement input', { whenBusy: 'steer' }),
       ])
       // Once persisted, snapshot immediately exposes queued facts so reconnecting clients restore pills without waiting for new tokens.
       await waitFor(() => {
@@ -316,7 +316,7 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       answer(fauxAssistantMessage('first turn answer'))
       await submit1
       faux.appendResponses([fauxAssistantMessage('second turn answer')])
-      await kernel.waitForIdle(conv.id)
+      await kernel.conversations.waitForIdle(conv.id)
       await waitFor(() => {
         const tail = (kernel.events.currentSnapshot().conversationLives ?? []).find((l) => l.conversationId === conv.id)
         return tail === undefined || (tail.queuedInputs?.length ?? 0) === 0
@@ -341,11 +341,11 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       models,
     })
     try {
-      const conv = await kernel.createConversation({ title: 'default steer' })
-      const submit1 = kernel.submitInput(conv.id, 'first turn question')
+      const conv = await kernel.conversations.createConversation({ title: 'default steer' })
+      const submit1 = kernel.conversations.submitInput(conv.id, 'first turn question')
       await started
       // Run in-flight (model paused on gate): submit without whenBusy — assert directly via pi.inbox live state (not final answer guess).
-      await kernel.submitInput(conv.id, 'omitted whenBusy supplement')
+      await kernel.conversations.submitInput(conv.id, 'omitted whenBusy supplement')
       await waitFor(() => {
         const live = findLive(kernel, conv.id)
         return live !== undefined && (live.queuedInputs?.length ?? 0) >= 1
@@ -355,7 +355,7 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       assert.equal(omitQueued[0]!.mode, 'steer', 'omitted whenBusy must queue as default steer')
       assert.equal(omitQueued[0]!.text, 'omitted whenBusy supplement')
       // Explicit followUp still queues (default policy change must not disable explicit modes).
-      await kernel.submitInput(conv.id, 'explicit queued follow-up', { whenBusy: 'followUp' })
+      await kernel.conversations.submitInput(conv.id, 'explicit queued follow-up', { whenBusy: 'followUp' })
       await waitFor(() => {
         const live = findLive(kernel, conv.id)
         return live !== undefined && (live.queuedInputs?.length ?? 0) >= 2
@@ -366,7 +366,7 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       assert.equal(byText.get('explicit queued follow-up')?.mode, 'followUp')
       // Explicit reject fails 409 instead of silently queuing.
       await assert.rejects(
-        () => kernel.submitInput(conv.id, 'input to be rejected', { whenBusy: 'reject' }),
+        () => kernel.conversations.submitInput(conv.id, 'input to be rejected', { whenBusy: 'reject' }),
         (err: unknown) => {
           const helmxErr = err as { name?: string; code?: string; status?: number }
           return helmxErr?.name === 'HelmxError' && helmxErr?.code === 'conversation_busy' && helmxErr?.status === 409
@@ -376,13 +376,13 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       answer(fauxAssistantMessage('first turn answer'))
       faux.appendResponses([fauxAssistantMessage('follow-up answer')])
       await submit1
-      await kernel.waitForIdle(conv.id)
+      await kernel.conversations.waitForIdle(conv.id)
       await waitFor(() => {
         const live = findLive(kernel, conv.id)
         return live === undefined || (live.queuedInputs?.length ?? 0) === 0
       }, 5_000)
       // Persisted helmx.input entry carries effective whenBusy ('steer' when omitted).
-      const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
+      const detail = await kernel.conversations.getConversationDetail(conv.id, { limit: 50 })
       const stored = detail.entries
         .filter((e) => e.kind === 'helmx.input')
         .map((e) => (e.data ?? {}) as { text?: string; whenBusy?: string })
@@ -404,9 +404,9 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       models,
     })
     try {
-      const conv = await kernel.createConversation({ title: 'idle' })
-      await kernel.submitInput(conv.id, 'question')
-      await kernel.waitForIdle(conv.id)
+      const conv = await kernel.conversations.createConversation({ title: 'idle' })
+      await kernel.conversations.submitInput(conv.id, 'question')
+      await kernel.conversations.waitForIdle(conv.id)
       const snap = kernel.events.currentSnapshot()
       assert.equal(
         (snap.conversationLives ?? []).some((l) => l.conversationId === conv.id),

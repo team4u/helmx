@@ -11,6 +11,9 @@
       "@helmx/kernel": [
         "packages/kernel/src/index.ts"
       ],
+      "@helmx/kernel/testing": [
+        "packages/kernel/src/testing.ts"
+      ],
       "@helmx/plugins": [
         "packages/plugins/src/index.ts"
       ],

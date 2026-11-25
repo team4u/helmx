@@ -136,7 +136,7 @@ async function openRuntime(dataDir: string, repoDir: string): Promise<RuntimeEnv
     dataDir,
     cwd: repoDir,
   })
-  const conversationId = kernel.listConversations()[0]!.id
+  const conversationId = kernel.conversations.listConversations()[0]!.id
   return {
     app,
     kernel,
@@ -262,7 +262,7 @@ describe('T2 goal gate automatic retry (real kernel / faux / WorkflowService / w
       assert.equal(run.result.gate.ok, true, '3rd-attempt gate should pass')
 
       // ---- Exactly one child conversation spawned overall; all 3 attempts resume it. ----
-      const children = env.kernel
+      const children = env.kernel.conversations
         .listConversations()
         .filter((c) => c.parentConversationId === env.conversationId)
       assert.equal(children.length, 1, `should have exactly one child conversation, got ${children.length}`)

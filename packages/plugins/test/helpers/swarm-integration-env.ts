@@ -27,8 +27,7 @@ export const WORKFLOW_ID = 'builtin:workflow'
 export const WORKTREE_ID = 'builtin:worktree'
 
 const TSX_CLI = createRequire(import.meta.url).resolve('tsx/cli')
-const KERNEL_DIR = new URL('../../../kernel/', import.meta.url).pathname
-export const PI_AI_FAUX_URL = pathToFileURL(join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai/dist/providers/faux.js')).href
+export const PI_AI_FAUX_URL = import.meta.resolve('@earendil-works/pi-ai/providers/faux')
 export const HUB_APP_URL = pathToFileURL(new URL('../../../hub/src/app.ts', import.meta.url).pathname).href
 export const PLUGIN_BUILD_URL = import.meta.resolve('@helmx/plugin-build')
 

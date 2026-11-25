@@ -28,7 +28,7 @@ import {
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHubHandler } from '../src/http/index.js'
-import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
+import type { HttpEventHub, KernelHttpTarget } from '../src/http/index.js'
 import { HelmxError, type ConversationSummary } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, cleanupDir, deferred, makeConversationSummary, makeTempDir } from './helpers.js'
@@ -44,7 +44,7 @@ let token: string | undefined
 let handler: ReturnType<typeof createHubHandler>
 const conversations = new Map<number, ConversationSummary>()
 
-class NoopEventHub implements EventHub {
+class NoopEventHub implements HttpEventHub {
   response(): Response {
     return new Response(null, { status: 204 })
   }
@@ -55,12 +55,8 @@ function summary(id: number, title: string): ConversationSummary {
   return makeConversationSummary({ id, title, model: 'faux/model', createdAt: now, updatedAt: now })
 }
 
-function makeKernel(): KernelRuntimeLike {
+function makeKernel(): KernelHttpTarget {
   return {
-    listNodes() { throw new Error('this artifact fixture does not provide node management') },
-    async issueNodeToken() { throw new Error('this artifact fixture does not sign node identities') },
-    async removeNode() { throw new Error('this artifact fixture does not remove nodes') },
-    async execEnv() { throw new Error('this artifact fixture does not execute node commands') },
     dataDir,
     auth: new AuthService(dataDir),
     events: new NoopEventHub(),
@@ -76,70 +72,86 @@ function makeKernel(): KernelRuntimeLike {
       docs: new MemoryDocStore(),
     }),
     stash,
-    async listConversations() {
-      return [...conversations.values()]
+    nodes: {
+      listNodes() { throw new Error('this artifact fixture does not provide node management') },
+      async issueNodeToken() { throw new Error('this artifact fixture does not sign node identities') },
+      async removeNode() { throw new Error('this artifact fixture does not remove nodes') },
+      async execEnv() { throw new Error('this artifact fixture does not execute node commands') },
     },
-    async getConversationDetail(id: number) {
-      const found = conversations.get(id)
-      if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-      return { ...found, entries: [] }
-    },
-    async getConversationEntry(id: number, entryId: number) {
-      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-      throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404)
-    },
-    async createConversation(init) {
-      const id = Math.max(0, ...conversations.keys()) + 1
-      const created = summary(id, init?.title ?? `conversation ${id}`)
-      conversations.set(id, created)
-      return created
-    },
-    async updateConversation(id) {
-      return conversations.get(id) ?? summary(id, 'x')
-    },
-    async deleteConversation(id) {
-      conversations.delete(id)
-    },
-    async deleteConversations(ids) {
-      const deleted: number[] = []
-      const failures: Array<{ id: number; code: string; message: string }> = []
-      for (const id of ids) {
-        if (!conversations.has(id)) {
-          failures.push({ id, code: 'not_found', message: `conversation not found: ${id}` })
-          continue
-        }
+    conversations: {
+      listConversations() {
+        return [...conversations.values()]
+      },
+      async getConversationDetail(id: number) {
+        const found = conversations.get(id)
+        if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        return { ...found, entries: [] }
+      },
+      async getConversationEntry(id: number, entryId: number) {
+        if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404)
+      },
+      async createConversation(init?: { title?: string }) {
+        const id = Math.max(0, ...conversations.keys()) + 1
+        const created = summary(id, init?.title ?? `conversation ${id}`)
+        conversations.set(id, created)
+        return created
+      },
+      async updateConversation(id: number) {
+        return conversations.get(id) ?? summary(id, 'x')
+      },
+      async deleteConversation(id: number) {
         conversations.delete(id)
-        deleted.push(id)
-      }
-      return { deleted, failures }
+      },
+      async deleteConversations(ids: readonly number[]) {
+        const deleted: number[] = []
+        const failures: Array<{ id: number; code: string; message: string }> = []
+        for (const id of ids) {
+          if (!conversations.has(id)) {
+            failures.push({ id, code: 'not_found', message: `conversation not found: ${id}` })
+            continue
+          }
+          conversations.delete(id)
+          deleted.push(id)
+        }
+        return { deleted, failures }
+      },
+      async submitInput() {
+        return { submissionId: 'sub-mock' }
+      },
+      async waitForInput(id: number, submissionId: string) {
+        return { conversationId: id, submissionId, text: '', entry: { id: 'e', kind: 'pi.assistant' } }
+      },
+      async abortConversation() {},
+      async resetConversation(id: number) {
+        return conversations.get(id) ?? summary(id, 'x')
+      },
+      async compactConversation(id: number) {
+        return { taskId: 1, conversation: conversations.get(id) ?? summary(id, 'x') }
+      },
+      async forkConversation(id: number) {
+        return summary(id + 100, `conversation ${id} (fork)`)
+      },
+      async search() {
+        return []
+      },
     },
-    async submitInput() {
-      return { submissionId: 'sub-mock' }
+    asks: {
+      listAsks() {
+        return []
+      },
+      async answerAsk() {
+        throw new Error('unused')
+      },
+      async cancelAsk() {
+        throw new Error('unused')
+      },
     },
-    async waitForInput(id: number, submissionId: string) {
-      return { conversationId: id, submissionId, text: '', entry: { id: 'e', kind: 'pi.assistant' } }
+    models: {
+      listModels: async () => ({ models: [], thinkingLevels: {} }),
+      listModelProviders: () => [],
     },
-    async abortConversation() {},
-    async resetConversation(id) {
-      return conversations.get(id) ?? summary(id, 'x')
-    },
-    async compactConversation(id) {
-      return { taskId: 1, conversation: conversations.get(id) ?? summary(id, 'x') }
-    },
-    async forkConversation(id) {
-      return summary(id + 100, `conversation ${id} (fork)`)
-    },
-    async listAsks() {
-      return []
-    },
-    async answerAsk() {},
-    async cancelAsk() {},
-    async search() {
-      return []
-    },
-    listModels: () => ({ models: [], thinkingLevels: {} }),
-    listModelProviders: () => [],
-  }
+  } as unknown as KernelHttpTarget
 }
 
 async function call(

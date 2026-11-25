@@ -73,7 +73,7 @@ test('catalog contextWindow projection and models.changed backfill: unknown -> k
       getModels: () => current,
       getAllModels: () => current,
     } as unknown as Provider
-    const unregister = await kernel.registerRuntimeProvider(provider, 'builtin:demo')
+    const unregister = await kernel.models.registerRuntimeProvider(provider, 'builtin:demo')
 
     // HTTP catalog check (sharing source with kernel.listModels). Initialize auth first to obtain token.
     // (Kernel started before startHub: the listen-before-start HTTP layer gates non-probe API routes
@@ -109,20 +109,20 @@ test('catalog contextWindow projection and models.changed backfill: unknown -> k
     assert.equal('contextWindow' in ((await httpEntry('m-bad')) ?? {}), false, 'non-finite window must not appear in HTTP catalog')
 
     // Bind conversation to m-ctx; detail read is non-blocking and triggers async usage refresh (tokens known, window unknown).
-    const created = await kernel.createConversation({ model: 'win/m-ctx' })
+    const created = await kernel.conversations.createConversation({ model: 'win/m-ctx' })
     const id = created.id
-    const initialDetail = await kernel.getConversationDetail(id)
-    await waitFor(() => kernel!.getConversation(id).contextUsage !== undefined, 10_000)
-    const settledInitialDetail = await kernel.getConversationDetail(id)
+    const initialDetail = await kernel.conversations.getConversationDetail(id)
+    await waitFor(() => kernel!.conversations.getConversation(id).contextUsage !== undefined, 10_000)
+    const settledInitialDetail = await kernel.conversations.getConversationDetail(id)
     assert.ok(settledInitialDetail.contextUsage, 'detail read should include estimated token usage')
     assert.equal(settledInitialDetail.contextUsage?.contextWindow, undefined, 'initial catalog window is unknown')
     const seqBefore = initialDetail.stateChangeSeq
 
     // Catalog refresh: same model transitions unknown -> known; idle conversation usage is backfilled via models.changed.
     current = [knownModel, badModel]
-    await kernel.reloadModels()
+    await kernel.models.reloadModels()
     await waitForUpsertWindow(upserts, id, 0, 400_000)
-    const knownDetail = await kernel.getConversationDetail(id)
+    const knownDetail = await kernel.conversations.getConversationDetail(id)
     assert.equal(knownDetail.contextUsage?.contextWindow, 400_000, 'window is backfilled after refresh')
     assert.equal(knownDetail.stateChangeSeq, seqBefore, 'usage-only update must not advance stateChangeSeq')
     assert.equal((await httpEntry('m-ctx'))!['contextWindow'], 400_000, 'HTTP catalog exposes known window')
@@ -130,9 +130,9 @@ test('catalog contextWindow projection and models.changed backfill: unknown -> k
     // Provider stops offering model: window reverts to undefined and broadcasts to SSE.
     const afterKnown = upserts.length
     current = [badModel]
-    await kernel.reloadModels()
+    await kernel.models.reloadModels()
     await waitForUpsertWindow(upserts, id, afterKnown, undefined)
-    assert.equal((await kernel.getConversationDetail(id)).contextUsage?.contextWindow, undefined, 'window reverts to unknown after model disappears')
+    assert.equal((await kernel.conversations.getConversationDetail(id)).contextUsage?.contextWindow, undefined, 'window reverts to unknown after model disappears')
 
     await unregister()
   } finally {

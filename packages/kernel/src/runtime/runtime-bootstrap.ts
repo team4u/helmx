@@ -12,18 +12,15 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Models, ModelsStore, Provider } from '@earendil-works/pi-ai'
 import { Harness, createRegistry, type Registry, type SessionEnd } from '@earendil-works/pi-durable'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, type PluginBuildProvider, type PluginPackageManagerProvider } from '@helmx/protocol'
 import { CredentialService, ProviderService, ensureDataDir, resolveDataDir } from '../services/index.js'
-import type { PluginBuildProvider } from '@helmx/protocol'
-import type { NodeAutoUpgradeRetryPolicy } from './node-auto-upgrade.js'
 import {
   createDiagnosticEmitter,
   type KernelDiagnosticEmitter,
   type KernelDiagnosticSink,
 } from './diagnostics.js'
 import { buildModels, wrapModelsForCompaction, type CompactionModelResolution } from './models.js'
-import { createFileModelsStore } from './models-store.js'
-import { assertModelsStoreHealthyAtBoot } from './runtime-helpers.js'
+import { assertModelsStoreHealthyAtBoot, createFileModelsStore } from './models-store.js'
 import { openHelmxDatabase, type HelmxDatabase } from './sqlite.js'
 import type { ResolvedModelRef } from './model-registry.js'
 import { HelmxStore } from './store.js'
@@ -51,10 +48,6 @@ export interface KernelBootOptions {
    */
   providers?: ReadonlyArray<Provider>
   nodeUpgradeTimeoutMs?: number
-  /** Override automatic node version-follow (defaults to enabled unless `HELMX_AUTO_UPGRADE_NODES=0|false|off|no`). */
-  autoUpgradeNodes?: boolean
-  /** Retry/busy-poll timing overrides for automatic node upgrades (for tests). */
-  nodeAutoUpgradePolicy?: NodeAutoUpgradeRetryPolicy
   /** Machine-level shared skill roots scanned together (defaults to `defaultExternalSkillRoots()`, i.e.
    * `~/.agents/skills`; pass `[]` for full test isolation). */
   externalSkillRoots?: readonly string[]
@@ -64,6 +57,12 @@ export interface KernelBootOptions {
    * Rejects explicitly when missing (`unsupported_client_build` / `unsupported_backend_ts_build`).
    */
   buildProvider?: PluginBuildProvider
+  /**
+   * Managed plugin package manager provider (`npm`/`git`/local install, update, remove): injected with
+   * default implementation (`@helmx/plugin-build` `createPluginPackageManager`) by the composition root (`hub`);
+   * kernel carries no package installer. Rejects explicitly when missing (`501 unsupported_package_manager`).
+   */
+  packageManagerProvider?: PluginPackageManagerProvider
   /** Optional diagnostic sink (receives redacted internal errors/warnings; defaults to `console.error`). */
   onDiagnostic?: KernelDiagnosticSink
 }
@@ -370,7 +369,7 @@ export async function recoverExistingConversations(deps: {
  * Shutdown resource cleanup and persistence flush pipeline.
  */
 export async function teardownKernelRuntime(deps: {
-  modelsRegistry: {
+  models: {
     abortRefresh(err: Error): void
     dispose(): Promise<void>
   }
@@ -429,11 +428,11 @@ export async function teardownKernelRuntime(deps: {
     }
   }
 
-  deps.modelsRegistry.abortRefresh(new Error('kernel closing'))
+  deps.models.abortRefresh(new Error('kernel closing'))
   deps.assetReloader.stop()
   await step('nodes.dispose', () => deps.nodes.dispose())
   await step('assetReloader.waitForInflight', () => deps.assetReloader.waitForInflight())
-  await step('modelsRegistry.dispose', () => deps.modelsRegistry.dispose())
+  await step('models.dispose', () => deps.models.dispose())
   // Close Harness first while pluginHost, envFabric, HelmxStore, and managed tokens are still online:
   // in-flight GenerationTask/ToolTask revert cleanly to pending via writeAtClose() (not marked aborted,
   // and not counted toward restarts) so they resume cleanly on next startup.

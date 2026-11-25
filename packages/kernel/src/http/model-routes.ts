@@ -4,73 +4,34 @@
  * (only id/configured key, never plaintext). Hot-reloads the model catalog after
  * providers/credentials changes (persisting without reloading leaves hot config stale).
  */
-import type { JsonSchema } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, REQUEST_SCHEMAS } from '@helmx/protocol'
+import type { CredentialService, ProviderService } from '../services/index.js'
+import type { ModelRegistry } from '../runtime/model-registry.js'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
-import type { KernelRuntimeLike } from './contracts.js'
 import { assertBodySchema, parseCredentialBody, parseProvidersBody, requireIdParam, ValidationError } from './validate.js'
 import { methodNotAllowed, readOptionalJsonBody, type RouteContext } from './route-context.js'
+
+export interface ModelRoutesTarget {
+  readonly models: Pick<ModelRegistry, 'listModels' | 'listModelProviders'> &
+    Partial<Pick<ModelRegistry, 'setDefaultModel' | 'setModelThinkingDefault' | 'setDisabledModels' | 'refreshModels' | 'reloadModels'>>
+  readonly providers: Pick<ProviderService, 'list' | 'save'>
+  readonly credentials: Pick<CredentialService, 'list' | 'set' | 'delete'>
+}
 
 // ---------------------------------------------------------------------------
 // /api/models
 // ---------------------------------------------------------------------------
 
-// At least one of model, thinkingLevel, compactionModel, compactionThinkingLevel, or the per-model pair
-// (modelThinking + modelThinkingLevel together) is required (anyOf); empty string clears the matching override.
-const MODELS_DEFAULT_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    model: { type: 'string' },
-    thinkingLevel: { type: 'string' },
-    compactionModel: { type: 'string' },
-    compactionThinkingLevel: { type: 'string' },
-    modelThinking: { type: 'string' },
-    modelThinkingLevel: { type: 'string' },
-    modelThinkingLevels: { type: 'object', additionalProperties: { type: 'string' } },
-  },
-  additionalProperties: false,
-  anyOf: [
-    { required: ['model'] },
-    { required: ['thinkingLevel'] },
-    { required: ['compactionModel'] },
-    { required: ['compactionThinkingLevel'] },
-    { required: ['modelThinking', 'modelThinkingLevel'] },
-    { required: ['modelThinkingLevels'] },
-  ],
-}
-
-const MODELS_FILTER_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    provider: { type: 'string' },
-    disabledModels: { type: 'array', items: { type: 'string' } },
-  },
-  required: ['disabledModels'],
-  additionalProperties: false,
-}
-
-// Note: provider/providers non-emptiness uses `=== ''` semantics (historically allows whitespace strings);
-// do not add a `\S` pattern to avoid tightening behavior.
-const MODELS_REFRESH_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    provider: { type: 'string', minLength: 1 },
-    providers: { type: 'array', items: { type: 'string', minLength: 1 } },
-    force: { type: 'boolean' },
-  },
-  additionalProperties: false,
-}
-
 export async function handleModelsDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<ModelRoutesTarget, 'models'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
   const second = segments[1]
   const third = segments[2]
   if (second === 'default' && third === undefined && method === 'GET') {
-    const catalog = await kernel.listModels()
+    const catalog = await kernel.models.listModels()
     return jsonOk(redactor, {
       defaultModel: catalog.defaultModel ?? '',
       defaultThinkingLevel: catalog.defaultThinkingLevel ?? '',
@@ -81,7 +42,7 @@ export async function handleModelsDomain(
   }
   if (second === 'default' && third === undefined && method === 'PUT') {
     const raw = await readOptionalJsonBody(ctx.request)
-    assertBodySchema(MODELS_DEFAULT_BODY_SCHEMA, raw ?? {}, 'models default body')
+    assertBodySchema(REQUEST_SCHEMAS.modelsDefaultPut, raw ?? {}, 'models default body')
     const body = (raw ?? {}) as Record<string, unknown>
     // Per-model pair must arrive complete (schema anyOf passes via another field otherwise).
     const hasModelThinking = 'modelThinking' in body || 'modelThinkingLevel' in body
@@ -95,7 +56,7 @@ export async function handleModelsDomain(
       throw new ValidationError('models default body: modelThinkingLevels cannot be combined with a modelThinking pair')
     }
     if (hasRegularFields || hasModelThinkingLevels || hasModelThinking) {
-      if (kernel.setDefaultModel === undefined && (hasRegularFields || hasModelThinkingLevels)) {
+      if (kernel.models.setDefaultModel === undefined && (hasRegularFields || hasModelThinkingLevels)) {
         throw new HelmxError('not_implemented', 'current runtime does not support setting the default model', 501)
       }
       const modelArg = 'model' in body ? (body.model as string) : undefined
@@ -107,21 +68,21 @@ export async function handleModelsDomain(
       const modelThinkingUpdate = hasModelThinking
         ? { model: body.modelThinking as string, level: body.modelThinkingLevel as string }
         : undefined
-      if (kernel.setDefaultModel !== undefined) {
+      if (kernel.models.setDefaultModel !== undefined) {
         if ('compactionThinkingLevel' in body) {
-          await kernel.setDefaultModel(modelArg, levelArg, compactionArg, body.compactionThinkingLevel as string, modelThinkingLevels, modelThinkingUpdate)
+          await kernel.models.setDefaultModel(modelArg, levelArg, compactionArg, body.compactionThinkingLevel as string, modelThinkingLevels, modelThinkingUpdate)
         } else if ('compactionModel' in body) {
-          await kernel.setDefaultModel(modelArg, levelArg, compactionArg, undefined, modelThinkingLevels, modelThinkingUpdate)
+          await kernel.models.setDefaultModel(modelArg, levelArg, compactionArg, undefined, modelThinkingLevels, modelThinkingUpdate)
         } else {
-          await kernel.setDefaultModel(modelArg, levelArg, undefined, undefined, modelThinkingLevels, modelThinkingUpdate)
+          await kernel.models.setDefaultModel(modelArg, levelArg, undefined, undefined, modelThinkingLevels, modelThinkingUpdate)
         }
-      } else if (modelThinkingUpdate !== undefined && kernel.setModelThinkingDefault !== undefined) {
-        await kernel.setModelThinkingDefault(modelThinkingUpdate.model, modelThinkingUpdate.level)
+      } else if (modelThinkingUpdate !== undefined && kernel.models.setModelThinkingDefault !== undefined) {
+        await kernel.models.setModelThinkingDefault(modelThinkingUpdate.model, modelThinkingUpdate.level)
       } else {
         throw new HelmxError('not_implemented', 'current runtime does not support setting model defaults', 501)
       }
     }
-    const catalog = await kernel.listModels()
+    const catalog = await kernel.models.listModels()
     return jsonOk(redactor, {
       ok: true,
       defaultModel: catalog.defaultModel ?? '',
@@ -132,14 +93,14 @@ export async function handleModelsDomain(
     })
   }
   if (second === 'filter' && third === undefined && method === 'PUT') {
-    if (kernel.setDisabledModels === undefined) {
+    if (kernel.models.setDisabledModels === undefined) {
       throw new HelmxError('not_implemented', 'current runtime does not support configuring disabled models', 501)
     }
     // Both empty body and {} validate against `{ provider?: string; disabledModels: string[] }`.
     const raw = await readOptionalJsonBody(ctx.request)
-    assertBodySchema(MODELS_FILTER_BODY_SCHEMA, raw ?? {}, 'models filter body')
+    assertBodySchema(REQUEST_SCHEMAS.modelsFilterPut, raw ?? {}, 'models filter body')
     const body = (raw ?? {}) as Record<string, unknown>
-    const catalog = await kernel.setDisabledModels(
+    const catalog = await kernel.models.setDisabledModels(
       body.provider as string | undefined,
       body.disabledModels as string[],
     )
@@ -149,24 +110,24 @@ export async function handleModelsDomain(
     // Empty body and {} are valid (refresh all); provider (single), providers (list), and force are optional.
     const raw = await readOptionalJsonBody(ctx.request)
     const options = parseModelsRefreshBody(raw)
-    if (kernel.refreshModels === undefined) {
+    if (kernel.models.refreshModels === undefined) {
       throw new HelmxError('not_implemented', 'current runtime does not support refreshing dynamic model catalogs', 501)
     }
-    const result = await kernel.refreshModels(options)
+    const result = await kernel.models.refreshModels(options)
     return jsonOk(redactor, result)
   }
   if (second === 'providers' && third === undefined && method === 'GET') {
-    return jsonOk(redactor, await kernel.listModelProviders())
+    return jsonOk(redactor, kernel.models.listModelProviders())
   }
   if (second === undefined && method === 'GET') {
-    return jsonOk(redactor, await kernel.listModels())
+    return jsonOk(redactor, await kernel.models.listModels())
   }
   return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
 /** Body shape for POST /api/models/refresh is enforced by schema; merge single `provider` and list `providers` into one target list here. */
 function parseModelsRefreshBody(raw: unknown): { providers?: string[]; force?: boolean } {
-  assertBodySchema(MODELS_REFRESH_BODY_SCHEMA, raw ?? {}, 'models refresh body')
+  assertBodySchema(REQUEST_SCHEMAS.modelsRefresh, raw ?? {}, 'models refresh body')
   const body = (raw ?? {}) as Record<string, unknown>
   let providers: string[] | undefined
   if (body.provider !== undefined) providers = [body.provider as string]
@@ -184,7 +145,7 @@ function parseModelsRefreshBody(raw: unknown): { providers?: string[]; force?: b
 
 export async function handleProvidersDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<ModelRoutesTarget, 'models' | 'providers'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -208,7 +169,7 @@ export async function handleProvidersDomain(
 
 export async function handleCredentialsDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<ModelRoutesTarget, 'models' | 'credentials'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -238,6 +199,6 @@ export async function handleCredentialsDomain(
 // ---------------------------------------------------------------------------
 
 /** Hot-reload model catalog after providers/credentials change; skipped if runtime omits the port. */
-async function reloadModels(kernel: KernelRuntimeLike): Promise<void> {
-  await kernel.reloadModels?.()
+async function reloadModels(kernel: Pick<ModelRoutesTarget, 'models'>): Promise<void> {
+  await kernel.models.reloadModels?.()
 }

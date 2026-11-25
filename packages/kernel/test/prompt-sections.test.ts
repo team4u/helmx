@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { systemSectionsOf, withSections } from '../src/runtime/runtime-helpers.js'
+import { systemSectionsOf, withSections } from '../src/runtime/hook-projection.js'
 
 test('final sections replacement clears trailing system patches so deactivated action references cannot leak back via fallback', { timeout: 60_000 }, () => {
   const history = { role: 'user', content: 'continue' }

@@ -17,7 +17,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import ts from 'typescript'
 import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helmx/protocol'
-import { doctorPluginDir } from '../../kernel/src/plugins/plugin-doctor.js'
+import { doctorPluginDir } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { SCAFFOLD_CLIENT_APP_TSX, SCAFFOLD_CLIENT_INDEX_TSX } from '../src/commands/scaffold-templates.js'
 import {

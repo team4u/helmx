@@ -5,8 +5,10 @@
  */
 import type { ConversationListFilter, ConversationOwnership, ConversationStatus } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
+import type { ArtifactService } from '../services/index.js'
+import type { AskService } from '../runtime/asks.js'
+import type { ConversationService } from '../runtime/conversation-service.js'
 import { buildContentDisposition, errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
-import type { KernelRuntimeLike } from './contracts.js'
 import {
   parseAskAnswerBody,
   parseConversationBulkDeleteBody,
@@ -26,9 +28,31 @@ import { methodNotAllowed, parseOptionalBooleanFlag, parseOptionalJsonObjectBody
 import { postConversationArtifact } from './asset-routes.js'
 import { parseSearchTerms } from '../runtime/fts-search.js'
 
+export interface ConversationRoutesTarget {
+  readonly conversations: Pick<
+    ConversationService,
+    | 'listConversations'
+    | 'createConversation'
+    | 'deleteConversations'
+    | 'getConversationDetail'
+    | 'updateConversation'
+    | 'deleteConversation'
+    | 'submitInput'
+    | 'waitForInput'
+    | 'abortConversation'
+    | 'resetConversation'
+    | 'compactConversation'
+    | 'forkConversation'
+    | 'search'
+  > &
+    Partial<Pick<ConversationService, 'getConversationEntry' | 'withdrawQueuedInput' | 'readConversationFile'>>
+  readonly artifacts: Pick<ArtifactService, 'list' | 'writeUploaded'>
+  readonly asks: Pick<AskService, 'listAsks' | 'answerAsk' | 'cancelAsk'>
+}
+
 export async function handleConversationsDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<ConversationRoutesTarget, 'conversations' | 'artifacts'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -38,11 +62,11 @@ export async function handleConversationsDomain(
 
   if (second === undefined) {
     if (method === 'GET') {
-      return jsonOk(redactor, await kernel.listConversations(parseConversationFilter(ctx.url)))
+      return jsonOk(redactor, kernel.conversations.listConversations(parseConversationFilter(ctx.url)))
     }
     if (method === 'POST') {
       const body = await readJsonBody(ctx.request)
-      return jsonOk(redactor, await kernel.createConversation(parseConversationInit(body)), { status: 201 })
+      return jsonOk(redactor, await kernel.conversations.createConversation(parseConversationInit(body)), { status: 201 })
     }
     return methodNotAllowed(redactor, method)
   }
@@ -52,33 +76,34 @@ export async function handleConversationsDomain(
     if (method !== 'POST') return methodNotAllowed(redactor, method)
     const body = await readJsonBody(ctx.request)
     const { ids } = parseConversationBulkDeleteBody(body)
-    return jsonOk(redactor, await kernel.deleteConversations(ids))
+    return jsonOk(redactor, await kernel.conversations.deleteConversations(ids))
   }
   const id = parseIdParam(second)
-  if (third === undefined) {    if (method === 'GET') {
-      return jsonOk(redactor, await kernel.getConversationDetail(id, parseDetailPagination(ctx.url)))
+  if (third === undefined) {
+    if (method === 'GET') {
+      return jsonOk(redactor, await kernel.conversations.getConversationDetail(id, parseDetailPagination(ctx.url)))
     }
     if (method === 'PATCH') {
       const body = await readJsonBody(ctx.request)
-      return jsonOk(redactor, await kernel.updateConversation(id, parseConversationPatch(body)))
+      return jsonOk(redactor, await kernel.conversations.updateConversation(id, parseConversationPatch(body)))
     }
     if (method === 'DELETE') {
-      await kernel.deleteConversation(id)
+      await kernel.conversations.deleteConversation(id)
       return jsonOk(redactor, { ok: true })
     }
     return methodNotAllowed(redactor, method)
   }
   if (third === 'entries' && method === 'GET' && fourth !== undefined && ctx.segments[4] === undefined) {
-    if (kernel.getConversationEntry === undefined) {
+    if (kernel.conversations.getConversationEntry === undefined) {
       throw new HelmxError('not_implemented', 'current runtime does not support reading a single entry', 501)
     }
-    return jsonOk(redactor, await kernel.getConversationEntry(id, parseIdParam(fourth, 'entryId')))
+    return jsonOk(redactor, await kernel.conversations.getConversationEntry(id, parseIdParam(fourth, 'entryId')))
   }
   if (third === 'input' && method === 'POST' && fourth === undefined) {
     const body = await readJsonBody(ctx.request)
     const { text, whenBusy, origin, meta, attachments, replaceFromEntryId } = parseInputBody(body)
     const wait = parseWaitFlag(ctx.url)
-    const { submissionId } = await kernel.submitInput(id, text, {
+    const { submissionId } = await kernel.conversations.submitInput(id, text, {
       ...(origin !== undefined ? { origin } : {}),
       ...(whenBusy !== undefined ? { whenBusy } : {}),
       ...(meta !== undefined ? { meta } : {}),
@@ -86,31 +111,31 @@ export async function handleConversationsDomain(
       ...(replaceFromEntryId !== undefined ? { replaceFromEntryId } : {}),
     })
     if (!wait) return jsonOk(redactor, { submissionId }, { status: 202 })
-    return jsonOk(redactor, await kernel.waitForInput(id, submissionId, ctx.request.signal))
+    return jsonOk(redactor, await kernel.conversations.waitForInput(id, submissionId, ctx.request.signal))
   }
   if (third === 'withdraw' && method === 'POST' && fourth === undefined) {
-    if (kernel.withdrawQueuedInput === undefined) {
+    if (kernel.conversations.withdrawQueuedInput === undefined) {
       throw new HelmxError('not_implemented', 'current runtime does not support withdrawing queued input', 501)
     }
     const body = await readJsonBody(ctx.request)
     const parsed = parseConversationWithdrawBody(body)
-    return jsonOk(redactor, await kernel.withdrawQueuedInput(id, parsed))
+    return jsonOk(redactor, await kernel.conversations.withdrawQueuedInput(id, parsed))
   }
   if (third === 'abort' && method === 'POST' && fourth === undefined) {
-    await kernel.abortConversation(id)
+    await kernel.conversations.abortConversation(id)
     return jsonOk(redactor, { ok: true })
   }
   if (third === 'reset' && method === 'POST' && fourth === undefined) {
     const opts = await parseOptionalJsonObjectBody(ctx.request, parseConversationResetBody)
-    return jsonOk(redactor, await kernel.resetConversation(id, opts))
+    return jsonOk(redactor, await kernel.conversations.resetConversation(id, opts))
   }
   if (third === 'compact' && method === 'POST' && fourth === undefined) {
     const opts = await parseOptionalJsonObjectBody(ctx.request, parseConversationCompactBody)
-    return jsonOk(redactor, await kernel.compactConversation(id, opts), { status: 202 })
+    return jsonOk(redactor, await kernel.conversations.compactConversation(id, opts), { status: 202 })
   }
   if (third === 'fork' && method === 'POST' && fourth === undefined) {
     const opts = await parseOptionalJsonObjectBody(ctx.request, parseConversationForkBody)
-    return jsonOk(redactor, await kernel.forkConversation(id, opts), { status: 201 })
+    return jsonOk(redactor, await kernel.conversations.forkConversation(id, opts), { status: 201 })
   }
   if (third === 'artifacts' && method === 'GET' && fourth === undefined) {
     return jsonOk(redactor, await kernel.artifacts.list(id))
@@ -125,10 +150,10 @@ export async function handleConversationsDomain(
       throw new ValidationError('path query parameter cannot be empty')
     }
     const inline = parseOptionalBooleanFlag(ctx.url, 'inline') === true
-    if (kernel.readConversationFile === undefined) {
+    if (kernel.conversations.readConversationFile === undefined) {
       throw new HelmxError('not_implemented', 'current runtime does not support reading conversation workspace files', 501)
     }
-    const result = await kernel.readConversationFile(id, rawPath, ctx.request.signal)
+    const result = await kernel.conversations.readConversationFile(id, rawPath, ctx.request.signal)
     const headers: Record<string, string> = {
       'content-type': result.mimeType,
       'content-length': String(result.bytes.byteLength),
@@ -150,7 +175,7 @@ export async function handleConversationsDomain(
 
 export async function handleAsksDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<ConversationRoutesTarget, 'asks'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -158,17 +183,17 @@ export async function handleAsksDomain(
   const third = segments[2]
   const fourth = segments[3]
   if (second === undefined && method === 'GET') {
-    return jsonOk(redactor, await kernel.listAsks())
+    return jsonOk(redactor, kernel.asks.listAsks())
   }
   const askId = requireIdParam(second ?? '', 'askId')
   if (third === 'answer' && method === 'POST' && fourth === undefined) {
     const body = await readJsonBody(ctx.request)
     const { answers, expectedStateSeq } = parseAskAnswerBody(body)
-    await kernel.answerAsk(askId, answers, expectedStateSeq)
+    await kernel.asks.answerAsk(askId, answers, expectedStateSeq)
     return jsonOk(redactor, { ok: true })
   }
   if (third === 'cancel' && method === 'POST' && fourth === undefined) {
-    await kernel.cancelAsk(askId)
+    await kernel.asks.cancelAsk(askId)
     return jsonOk(redactor, { ok: true })
   }
   return errorResponse(redactor, 404, 'not_found', 'route not found')
@@ -180,7 +205,7 @@ export async function handleAsksDomain(
 
 export async function handleSearchDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: { readonly conversations: Pick<ConversationService, 'search'> },
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   if (ctx.method !== 'GET' || ctx.segments[1] !== undefined) {
@@ -190,7 +215,7 @@ export async function handleSearchDomain(
   if (q.trim().length === 0 || parseSearchTerms(q).terms.length === 0) {
     throw new ValidationError('q cannot be empty')
   }
-  return jsonOk(redactor, await kernel.search(q))
+  return jsonOk(redactor, await kernel.conversations.search(q))
 }
 
 // ---------------------------------------------------------------------------

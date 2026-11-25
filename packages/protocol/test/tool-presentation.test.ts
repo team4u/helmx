@@ -9,6 +9,8 @@ import {
   KERNEL_TOOL_NAMES,
   KERNEL_TOOL_PRESENTATION_META_SCHEMAS,
   READ_TOOL_META_SCHEMA,
+  REQUEST_SCHEMAS,
+  REQUEST_SCHEMA_PATTERNS,
   TOOL_DIFF_MAX_ROWS,
   TOOL_DIFF_MAX_ROW_CHARS,
   TOOL_PRESENTATION_META_MAX_BYTES,
@@ -16,6 +18,7 @@ import {
   TOOL_PRESENTATION_META_MAX_NODES,
   WRITE_TOOL_META_SCHEMA,
   assertBoundedPresentationMeta,
+  assertJsonSafe,
   assertSchemaCompilable,
   validateEditToolResult,
   validateOrThrow,
@@ -560,4 +563,45 @@ test('KERNEL_TOOL_NAMES is the single source of truth for the 7 foundational ker
   for (const name of Object.keys(KERNEL_TOOL_PRESENTATION_META_SCHEMAS)) {
     assert.ok((KERNEL_TOOL_NAMES as readonly string[]).includes(name), `schema tool "${name}" must belong to KERNEL_TOOL_NAMES`)
   }
+})
+
+test('assertJsonSafe and REQUEST_SCHEMAS: shared strict JSON validation and compilable HTTP request schemas', { timeout: 60_000 }, () => {
+  const redact = (text: string): string => text.replaceAll('SECRET', '[REDACTED]')
+  const safe = assertJsonSafe(
+    { token: 'SECRET', nested: [1, { SECRET_KEY: 'ok' }] },
+    { path: 'payload', requirePlainObject: true, redact },
+  )
+  assert.deepEqual(safe, { token: '[REDACTED]', nested: [1, { '[REDACTED]_KEY': 'ok' }] })
+
+  let getterCalled = false
+  const withGetter = Object.defineProperty({ ok: true }, 'bad', {
+    get() {
+      getterCalled = true
+      return 1
+    },
+    enumerable: true,
+  })
+  assert.throws(
+    () => assertJsonSafe(withGetter, { path: 'meta', requirePlainObject: true }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400 && err.message.includes('accessor'),
+  )
+  assert.equal(getterCalled, false)
+  assert.throws(
+    () => assertJsonSafe([1, 2], { path: 'meta', requirePlainObject: true }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.message.includes('plain JSON object'),
+  )
+  assert.throws(
+    () => assertJsonSafe({ n: Number.NaN }, { path: 'output', code: 'invalid_tool_result', status: 500 }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.status === 500,
+  )
+
+  for (const schema of Object.values(REQUEST_SCHEMAS)) {
+    assertSchemaCompilable(schema)
+  }
+  assert.ok(REQUEST_SCHEMA_PATTERNS.id.test('plugin:demo_1'))
+  assert.doesNotThrow(() => validateOrThrow(REQUEST_SCHEMAS.conversationInput, { text: 'hello', whenBusy: 'steer' }, 'input body'))
+  assert.throws(
+    () => validateOrThrow(REQUEST_SCHEMAS.conversationInput, { text: 'hello', unknown: 1 }, 'input body'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+  )
 })

@@ -25,10 +25,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import type { EnvFabric } from '../../kernel/src/env/index.js'
-import { composeExecutionEnv } from '../../kernel/src/env/scoped-env.js'
+import {
+  ArtifactService,
+  ensureDataDir,
+  InMemoryArtifactRepository,
+  SecretStash,
+  type EnvFabric,
+} from '@helmx/kernel'
 import {
   buildManagedEnv,
+  composeExecutionEnv,
   createBashTool,
   createEditTool,
   createReadTool,
@@ -38,14 +44,8 @@ import {
   readArtifactBytesFromHandle,
   runShell,
   type ArtifactReadHandle,
-} from '../../kernel/src/runtime/tools.js'
-import type { HelmxToolDeps } from '../../kernel/src/runtime/tool-deps.js'
-import {
-  ArtifactService,
-  InMemoryArtifactRepository,
-  SecretStash,
-  ensureDataDir,
-} from '../../kernel/src/services/index.js'
+  type HelmxToolDeps,
+} from '@helmx/kernel/testing'
 
 let rootDir: string
 

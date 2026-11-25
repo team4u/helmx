@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SecretStash, AuthService } from '../src/services/index.js';
-import { createHubHandler, type KernelRuntimeLike } from '../src/http/index.js';
+import { createHubHandler, type KernelHttpTarget } from '../src/http/index.js';
 import {
   HelmxError,
   type InputHookPayload,
@@ -1671,7 +1671,7 @@ test('real HTTP bridge:stop failed disable error message seal can serialization 
     events: { response: () => new Response(null, { status: 500 }) },
     plugins: httpHost,
     stash,
-  } as unknown as KernelRuntimeLike;
+  } as unknown as KernelHttpTarget;
   const handler = createHubHandler(kernel);
 
   const setup = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
@@ -1728,7 +1728,7 @@ test('real HTTP bridge: double failed (stop + event publish) message seal same c
     auth,
     events: { response: () => new Response(null, { status: 500 }) },
     plugins: httpHost,
-  } as unknown as KernelRuntimeLike;
+  } as unknown as KernelHttpTarget;
   const handler = createHubHandler(kernel);
   const setup = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
     method: 'POST',
@@ -2690,7 +2690,7 @@ test('HTTP client.mjs main module ?hash=: immutable cache on match, 304 on ETag,
     auth,
     events: { response: () => new Response(null, { status: 204 }) },
     plugins: httpHost,
-  } as unknown as KernelRuntimeLike;
+  } as unknown as KernelHttpTarget;
   const handler = createHubHandler(kernel);
   const setup = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
     method: 'POST',

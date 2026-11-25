@@ -39,8 +39,7 @@ import {
   type Result,
 } from '@earendil-works/pi-durable/env'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
-import { ProfileService } from '../../kernel/src/services/index.js'
+import { PluginHost, ProfileService, type PluginHostBackend } from '@helmx/kernel'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createProfilePlugin } from '../src/profile.js'

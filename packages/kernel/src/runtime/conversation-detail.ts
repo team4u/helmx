@@ -11,15 +11,9 @@ import type { Harness } from '@earendil-works/pi-durable'
 import type { ConversationDetail, ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
 import type { SecretStash } from '../services/index.js'
-import { toConversationEntry } from './entries.js'
+import { assistantTextOfModel, entryModelText, toConversationEntry } from './entries.js'
 import { projectDetailEntry, stripEntrySignatures } from './entry-projection.js'
-import {
-  assistantTextOfModel,
-  coveredByRewind,
-  entryModelText,
-  rewindIntervalOf,
-  type RewindInterval,
-} from './runtime-helpers.js'
+import { coveredByRewind, rewindIntervalOf, type RewindInterval } from './conversation-rewind.js'
 import type { HelmxStore } from './store.js'
 
 /** Maximum encoded pagination cursor length (base64url; rejects oversized cursors to prevent abuse). */

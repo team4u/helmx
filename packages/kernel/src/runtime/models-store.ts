@@ -13,7 +13,7 @@
  * This file contains no secrets (model catalog metadata is non-secret; `0600` is purely a consistency guard).
  */
 
-import type { ModelsStore, ModelsStoreEntry } from '@earendil-works/pi-ai'
+import type { Models, ModelsStore, ModelsStoreEntry } from '@earendil-works/pi-ai'
 import { HelmxError } from '@helmx/protocol'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -106,4 +106,18 @@ class FileModelsStore implements ModelsStore {
 /** Factory helper aligned with other service-layer store constructors (`dataDir` -> `FileModelsStore`). */
 export function createFileModelsStore(dataDir: string): FileModelsStore {
   return new FileModelsStore(dataDir)
+}
+
+/** Startup corruption check for `models-store.json` (open phase; matches `ModelRegistry` logic). */
+export async function assertModelsStoreHealthyAtBoot(models: Models): Promise<void> {
+  const result = await models.refresh({ allowNetwork: false })
+  for (const [, err] of result.errors) {
+    if (err instanceof HelmxError && err.code === 'models_store_corrupted') {
+      throw new HelmxError(
+        'models_store_corrupted',
+        `models-store.json is corrupted (discovered while reading): ${err.message}`,
+        500,
+      )
+    }
+  }
 }

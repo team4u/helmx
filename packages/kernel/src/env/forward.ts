@@ -53,6 +53,7 @@ export class NodeForwardService {
   constructor(
     fabric: EnvFabric,
     private readonly leaseTimeoutMs: number = NODE_FORWARD_LEASE_TIMEOUT_MS,
+    private readonly options?: { assertWritable?: () => void },
   ) {
     this.#fabric = fabric
   }
@@ -60,6 +61,7 @@ export class NodeForwardService {
   /** Start forwarding (foreground command lifecycle): fails explicitly if listen fails; returns session on success. */
   async start(nodeId: string, input: NodeForwardInput): Promise<NodeForwardSession> {
     if (this.#closed) throw new HelmxError('node_offline', 'forwarding service is closed', 409)
+    this.options?.assertWritable?.()
     const forwardId = `fwd-${cryptoRandomUUID()}`
     const targetHost = input.targetHost ?? '127.0.0.1'
     const session: NodeForwardSession = {

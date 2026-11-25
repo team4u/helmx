@@ -17,9 +17,8 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { HelmxError, type ConversationSummary } from '@helmx/protocol'
+import { PluginPackageManager, PluginPackageManagerStore, createPluginBuildProvider } from '@helmx/plugin-build'
 import { PluginHost } from '../src/plugins/plugin-host.js'
-import { PluginPackageManager } from '../src/plugins/package-manager.js'
-import { PluginPackageManagerStore } from '../src/plugins/package-store.js'
 import { ConfigService } from '../src/services/config.js'
 import { openHelmxDatabase } from '../src/runtime/sqlite.js'
 import { HelmxStore } from '../src/runtime/store.js'
@@ -29,7 +28,6 @@ import {
   createPluginSessionDocStore,
 } from '../src/runtime/runtime-host-backend.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 
 interface StoreHandle {

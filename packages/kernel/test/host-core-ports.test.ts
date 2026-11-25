@@ -30,7 +30,7 @@ import {
   type PluginHostBackend,
 } from '../src/plugins/index.js'
 import { MAX_ARTIFACT_BYTES } from '../src/services/index.js'
-import { projectToolPromptSections } from '../src/runtime/runtime-helpers.js'
+import { projectToolPromptSections } from '../src/runtime/hook-projection.js'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
@@ -460,14 +460,14 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         model: 'faux/faux-1',
         cwd: rtDir,
       })
-      const parent = await runtime.createConversation({
+      const parent = await runtime.conversations.createConversation({
         profileId: 'reviewer',
         cwd: rtDir,
         title: 'parent conversation',
       })
-      await runtime.submitInput(parent.id, 'please remember passcode ALPHA-99')
-      await runtime.waitForIdle(parent.id)
-      const detail = await runtime.getConversationDetail(parent.id)
+      await runtime.conversations.submitInput(parent.id, 'please remember passcode ALPHA-99')
+      await runtime.conversations.waitForIdle(parent.id)
+      const detail = await runtime.conversations.getConversationDetail(parent.id)
       const lastEntry = detail.entries.at(-1)
       assert.ok(lastEntry)
       const lastEntryId = Number(lastEntry.id)
@@ -498,16 +498,16 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       assert.equal(forked.cwd, rtDir)
       assert.equal(forked.model, 'faux/faux-1')
 
-      const forkedDetail = await runtime.getConversationDetail(forked.id)
+      const forkedDetail = await runtime.conversations.getConversationDetail(forked.id)
       assert.ok(JSON.stringify(forkedDetail.entries).includes('ALPHA-99'))
 
       const cleanForked = await realHost!.forkConversation(parent.id)
       assert.equal(cleanForked.parentConversationId, parent.id)
       assert.equal(cleanForked.title, 'parent conversation (fork)')
-      const cleanForkedDetail = await runtime.getConversationDetail(cleanForked.id)
+      const cleanForkedDetail = await runtime.conversations.getConversationDetail(cleanForked.id)
       assert.ok(JSON.stringify(cleanForkedDetail.entries).includes('ALPHA-99'))
 
-      const emptyParent = await runtime.createConversation({
+      const emptyParent = await runtime.conversations.createConversation({
         profileId: 'reviewer',
         cwd: rtDir,
         title: 'empty parent',
@@ -561,12 +561,12 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         model: 'faux/faux-1',
         cwd: rtDir,
       })
-      const conv = await runtime.createConversation({
+      const conv = await runtime.conversations.createConversation({
         profileId: 'courier',
         cwd: rtDir,
         title: 'attachment relay',
       })
-      const other = await runtime.createConversation({
+      const other = await runtime.conversations.createConversation({
         profileId: 'courier',
         cwd: rtDir,
         title: 'sibling conversation',
@@ -667,8 +667,8 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         origin: 'trigger',
         attachments: [textMeta.id, imageMeta.id],
       })
-      await runtime.waitForIdle(conv.id)
-      const detail = await runtime.getConversationDetail(conv.id)
+      await runtime.conversations.waitForIdle(conv.id)
+      const detail = await runtime.conversations.getConversationDetail(conv.id)
       const inputEntry = detail.entries.find(
         (e) => e.kind === 'user' || JSON.stringify(e).includes('please review the attached files'),
       )
@@ -749,7 +749,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       assert.equal(guardedCompact.conversation.stateChangeSeq, childSeq + 2)
 
       // Deletion mid-flight safety: creating into a just-deleted conversation rejects 404, never orphans.
-      await runtime.deleteConversation(other.id)
+      await runtime.conversations.deleteConversation(other.id)
       await assert.rejects(
         () => realHost!.createArtifact(other.id, { name: 'late.txt', bytes: new TextEncoder().encode('x') }),
         (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
@@ -759,7 +759,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       const reqId = 'host-core-ports:req-1'
       assert.equal(await realHost!.getConversationSubmission(conv.id, reqId), undefined)
       await realHost!.submitInput(conv.id, 'submission probe', { origin: 'agent', requestId: reqId })
-      await runtime.waitForIdle(conv.id)
+      await runtime.conversations.waitForIdle(conv.id)
       const subInfo = await realHost!.getConversationSubmission(conv.id, reqId)
       assert.ok(subInfo !== undefined, 'committed requestId must be found in pi_submissions')
       assert.equal(subInfo.requestId, reqId)
@@ -853,7 +853,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     })
     try {
       // Issue a BYOM node token so listNodes returns both local and a registered remote node (without leaking token!)
-      const issued = await runtime.issueNodeToken('node-gpu')
+      const issued = await runtime.nodes.issueNodeToken('node-gpu')
       assert.ok(issued.token.length > 0)
 
       let realHost: HelmxHostApi | undefined
@@ -898,8 +898,8 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       // Typed emitEvent delivers notification and conversation.deleted triggers typed listener
       await realHost!.emitEvent('notification', { level: 'info', title: 'hello', body: 'world' })
       assert.deepEqual(notifications, ['info:hello'])
-      const conv = await runtime.createConversation({ cwd: rtDir, title: 'temp' })
-      await runtime.deleteConversation(conv.id)
+      const conv = await runtime.conversations.createConversation({ cwd: rtDir, title: 'temp' })
+      await runtime.conversations.deleteConversation(conv.id)
       assert.deepEqual(deletedIds, [conv.id])
 
       await runtime.plugins.disable('p:nodes-events')

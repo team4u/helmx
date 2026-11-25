@@ -527,22 +527,22 @@ describe('integration: summary carries contextUsage and publishes events', { tim
   it('idle historical conversation after restart: first detail read does not block and background populates contextUsage', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime('idle-detail')
     kernel.__faux.setResponses([fauxAssistantMessage('history answer')])
-    await kernel.submitInput(1, 'history issue')
-    await kernel.waitForIdle(1)
-    await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) > 0)
+    await kernel.conversations.submitInput(1, 'history issue')
+    await kernel.conversations.waitForIdle(1)
+    await waitFor(() => (kernel.conversations.getConversation(1).contextUsage?.tokens ?? 0) > 0)
     await kernel.close()
 
     // Restart: rebuilds chain observing idle conversation; first detail read returns immediately without blocking on
     // background contextUsage computation, and once ready pushes/caches usage so subsequent reads include it.
     const reopened = await openRuntime('idle-detail')
     try {
-      const detail = await reopened.getConversationDetail(1, { limit: 5 })
+      const detail = await reopened.conversations.getConversationDetail(1, { limit: 5 })
       assert.ok(detail.entries.length >= 1, 'detail returns entries immediately without waiting on contextUsage')
-      await waitFor(() => (reopened.getConversation(1).contextUsage?.tokens ?? 0) > 0, 10_000)
-      const tokens = reopened.getConversation(1).contextUsage!.tokens
+      await waitFor(() => (reopened.conversations.getConversation(1).contextUsage?.tokens ?? 0) > 0, 10_000)
+      const tokens = reopened.conversations.getConversation(1).contextUsage!.tokens
       assert.equal(typeof tokens, 'number', 'tokens should be numeric once historical measured anchor is restored')
       // Subsequent page reads hit cache without recomputing and remain stable.
-      const page2 = await reopened.getConversationDetail(1, { limit: 5 })
+      const page2 = await reopened.conversations.getConversationDetail(1, { limit: 5 })
       assert.ok(page2.contextUsage)
       assert.equal(page2.contextUsage.tokens, tokens)
     } finally {
@@ -567,10 +567,10 @@ describe('integration: summary carries contextUsage and publishes events', { tim
     })
     try {
       const recorded = recordUpserts(kernel, 1)
-      const firstDetail = await kernel.getConversationDetail(1, { limit: 5 })
+      const firstDetail = await kernel.conversations.getConversationDetail(1, { limit: 5 })
       assert.equal(firstDetail.model, 'gw-static/static-model')
-      await waitFor(() => kernel.getConversation(1).contextUsage !== undefined, 10_000)
-      const detail = await kernel.getConversationDetail(1, { limit: 5 })
+      await waitFor(() => kernel.conversations.getConversation(1).contextUsage !== undefined, 10_000)
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 5 })
       assert.ok(detail.contextUsage, 'estimated token usage is still provided')
       assert.equal(detail.contextUsage.contextWindow, undefined, 'default placeholder window must not masquerade as known window')
       if (firstDetail.contextUsage === undefined) {
@@ -586,14 +586,14 @@ describe('integration: summary carries contextUsage and publishes events', { tim
     try {
       kernel.__faux.setResponses([fauxAssistantMessage('answer one')])
       const recorded = recordUpserts(kernel, 1)
-      await kernel.submitInput(1, 'a question')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'a question')
+      await kernel.conversations.waitForIdle(1)
       // Refresh runs asynchronously after settlement: wait for measured value (initial cache may hold empty estimate).
       await waitFor(() => {
-        const tokens = kernel.getConversation(1).contextUsage?.tokens
+        const tokens = kernel.conversations.getConversation(1).contextUsage?.tokens
         return typeof tokens === 'number' && tokens > 0
       })
-      const usage = kernel.getConversation(1).contextUsage
+      const usage = kernel.conversations.getConversation(1).contextUsage
       assert.ok(usage, 'summary must carry contextUsage after turn settles')
       assert.ok(typeof usage.tokens === 'number' && usage.tokens > 0, 'faux provides real usage, so measured anchor must be populated')
       // Rate metrics do not ride along on contextUsage (delegated to optional plugin builtin:token-speed).
@@ -617,15 +617,15 @@ describe('integration: summary carries contextUsage and publishes events', { tim
     const kernel = await openRuntime('reset-usage')
     try {
       kernel.__faux.setResponses([fauxAssistantMessage('answer')])
-      await kernel.submitInput(1, 'issue')
-      await kernel.waitForIdle(1)
-      await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) > 0)
-      await kernel.resetConversation(1)
+      await kernel.conversations.submitInput(1, 'issue')
+      await kernel.conversations.waitForIdle(1)
+      await waitFor(() => (kernel.conversations.getConversation(1).contextUsage?.tokens ?? 0) > 0)
+      await kernel.conversations.resetConversation(1)
       await waitFor(() => {
-        const usage = kernel.getConversation(1).contextUsage
+        const usage = kernel.conversations.getConversation(1).contextUsage
         return usage !== undefined && usage.tokens === 0
       })
-      const usage = kernel.getConversation(1).contextUsage
+      const usage = kernel.conversations.getConversation(1).contextUsage
       assert.ok(usage, 'contextUsage must be readable after reset')
       assert.equal(usage.tokens, 0, 'empty context without measured anchor must not retain stale value')
     } finally {
@@ -643,11 +643,11 @@ describe('integration: summary carries contextUsage and publishes events', { tim
       fauxAssistantMessage('answer three'),
     ])
     for (const text of [`${bigInput}one`, `${bigInput}two`, `${bigInput}three`]) {
-      await kernel.submitInput(1, text)
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, text)
+      await kernel.conversations.waitForIdle(1)
     }
-    await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) > 30_000, 20_000)
-    const beforeCompact = kernel.getConversation(1).contextUsage!.tokens as number
+    await waitFor(() => (kernel.conversations.getConversation(1).contextUsage?.tokens ?? 0) > 30_000, 20_000)
+    const beforeCompact = kernel.conversations.getConversation(1).contextUsage!.tokens as number
     assert.ok(beforeCompact > 30_000, 'pre-compaction context must exceed threshold')
 
     // Latch compaction summary request to reliably observe compacting=true passthrough.
@@ -659,29 +659,29 @@ describe('integration: summary carries contextUsage and publishes events', { tim
     }])
     const recorded = recordUpserts(kernel, 1)
     try {
-      await kernel.compactConversation(1)
-      await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === true, 20_000)
+      await kernel.conversations.compactConversation(1)
+      await waitFor(() => kernel.conversations.getConversation(1).contextUsage?.compacting === true, 20_000)
       await waitFor(() => recorded.frames.some((f) => f.contextUsage?.compacting === true))
       releaseSummary()
       // Post-compaction before new usage: tokens=null (never fakes known context from summary chars).
       await waitFor(() => {
-        const usage = kernel.getConversation(1).contextUsage
+        const usage = kernel.conversations.getConversation(1).contextUsage
         return usage !== undefined && usage.compacting === undefined && usage.tokens === null
       }, 20_000)
-      const after = kernel.getConversation(1).contextUsage!
+      const after = kernel.conversations.getConversation(1).contextUsage!
       assert.equal(after.tokens, null, 'context size remains unknown immediately after compaction without a reply')
-      const detail = await kernel.getConversationDetail(1, { limit: 50 })
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 50 })
       assert.ok(detail.entries.some((entry) => entry.kind === 'pi.compaction'), 'must persist pi.compaction entry')
 
       // Next assistant reply restores measured tokens.
       kernel.__faux.setResponses([fauxAssistantMessage('new reply after compaction')])
-      await kernel.submitInput(1, 'new issue after compaction')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'new issue after compaction')
+      await kernel.conversations.waitForIdle(1)
       await waitFor(() => {
-        const tokens = kernel.getConversation(1).contextUsage?.tokens
+        const tokens = kernel.conversations.getConversation(1).contextUsage?.tokens
         return typeof tokens === 'number' && tokens > 0
       }, 20_000)
-      assert.equal(kernel.getConversation(1).contextUsage!.tokens === null, false)
+      assert.equal(kernel.conversations.getConversation(1).contextUsage!.tokens === null, false)
       recorded.stop()
     } finally {
       releaseSummary()
@@ -699,10 +699,10 @@ describe('integration: summary carries contextUsage and publishes events', { tim
       fauxAssistantMessage('answer three'),
     ])
     for (const text of [`${bigInput}one`, `${bigInput}two`, `${bigInput}three`]) {
-      await kernel.submitInput(1, text)
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, text)
+      await kernel.conversations.waitForIdle(1)
     }
-    await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) > 30_000, 20_000)
+    await waitFor(() => (kernel.conversations.getConversation(1).contextUsage?.tokens ?? 0) > 30_000, 20_000)
 
     // Summary call returns non-retryable error -> compactionFailure appears in pi.live.
     kernel.__faux.setResponses([
@@ -710,17 +710,17 @@ describe('integration: summary carries contextUsage and publishes events', { tim
     ])
     const recorded = recordCompactionFailureNotices(kernel, 1)
     try {
-      await kernel.compactConversation(1)
+      await kernel.conversations.compactConversation(1)
       await waitFor(() => recorded.notices.length === 1, 20_000)
       assert.match(recorded.notices[0]!.body ?? '', /faux summarization rejected/, 'failure notice includes error summary')
       assert.match(recorded.notices[0]!.body ?? '', /manual/, 'failure notice indicates trigger mode')
 
       // Next turn keeps same compactionFailure in pi.live across snapshots -> must not re-notify.
       kernel.__faux.setResponses([fauxAssistantMessage('normal answer after failure')])
-      await kernel.submitInput(1, 'follow-up question')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'follow-up question')
+      await kernel.conversations.waitForIdle(1)
       await waitFor(() => {
-        const tokens = kernel.getConversation(1).contextUsage?.tokens
+        const tokens = kernel.conversations.getConversation(1).contextUsage?.tokens
         return typeof tokens === 'number' && tokens > 0
       }, 20_000)
       assert.equal(recorded.notices.length, 1, 'same compaction failure must not notify twice')
@@ -733,8 +733,8 @@ describe('integration: summary carries contextUsage and publishes events', { tim
   it('first-turn multi-step run publishes measured tokens mid-run before settlement (never frozen at 0)', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime('mid-run-live-usage')
     // Populate initial empty cache (tokens=0) before the first turn starts, reproducing a newly opened conversation.
-    await kernel.getConversationDetail(1, { limit: 10 })
-    await waitFor(() => kernel.getConversation(1).contextUsage?.tokens === 0, 10_000)
+    await kernel.conversations.getConversationDetail(1, { limit: 10 })
+    await waitFor(() => kernel.conversations.getConversation(1).contextUsage?.tokens === 0, 10_000)
 
     let releaseSecondStep = () => {}
     const secondStepGate = new Promise<void>((resolve) => { releaseSecondStep = resolve })
@@ -750,16 +750,16 @@ describe('integration: summary carries contextUsage and publishes events', { tim
 
     const recorded = recordUpserts(kernel, 1)
     try {
-      await kernel.submitInput(1, 'run a tool and answer')
+      await kernel.conversations.submitInput(1, 'run a tool and answer')
       await waitFor(() => secondStepStarted, 15_000)
 
       // Still inside the very first run (completionSeq=0, status='working'): step 1 pi.assistant already committed,
       // so contextUsage must leave 0 and push a working conversation.upsert with real tokens.
       await waitFor(() => {
-        const usage = kernel.getConversation(1).contextUsage
+        const usage = kernel.conversations.getConversation(1).contextUsage
         return typeof usage?.tokens === 'number' && usage.tokens > 0
       }, 15_000)
-      const midSummary = kernel.getConversation(1)
+      const midSummary = kernel.conversations.getConversation(1)
       assert.equal(midSummary.status, 'working', 'run must still be active when mid-run usage arrives')
       assert.equal(midSummary.completionSeq, 0, 'turn has not settled yet')
       const midTokens = midSummary.contextUsage!.tokens as number
@@ -770,9 +770,9 @@ describe('integration: summary carries contextUsage and publishes events', { tim
       )
 
       releaseSecondStep()
-      await kernel.waitForIdle(1)
-      await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) >= midTokens, 15_000)
-      assert.ok((kernel.getConversation(1).contextUsage?.tokens ?? 0) >= midTokens)
+      await kernel.conversations.waitForIdle(1)
+      await waitFor(() => (kernel.conversations.getConversation(1).contextUsage?.tokens ?? 0) >= midTokens, 15_000)
+      assert.ok((kernel.conversations.getConversation(1).contextUsage?.tokens ?? 0) >= midTokens)
     } finally {
       releaseSecondStep()
       recorded.stop()

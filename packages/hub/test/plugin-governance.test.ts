@@ -15,10 +15,8 @@ import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
-import { type PluginHostBackend } from '../../kernel/src/plugins/index.js'
-import { PluginHost } from '../../kernel/src/plugins/plugin-host.js'
-import { HelmxPluginConfigStore } from '../../kernel/src/runtime/plugin-config-store.js'
-import { ConfigService, CredentialService } from '../../kernel/src/services/index.js'
+import { ConfigService, CredentialService, PluginHost, type PluginHostBackend } from '@helmx/kernel'
+import { HelmxPluginConfigStore } from '@helmx/kernel/testing'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import {
   createHubTestApp,

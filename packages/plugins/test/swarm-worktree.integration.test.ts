@@ -17,7 +17,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { HelmxError } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
-import { startHub } from '../../kernel/src/http/index.js'
+import { startHub } from '@helmx/kernel'
 import { createNodeDaemon, type NodeDaemon } from '../../node/src/index.js'
 import {
   createGitTemplate,
@@ -57,7 +57,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
     const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'), gitTemplate)
     try {
       const { kernel } = env.app
-      const coord = await kernel.createConversation({ title: 'Release Coordinator', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Release Coordinator', profileId: 'assistant', cwd: env.repoDir })
 
       const { groupId } = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
@@ -81,9 +81,9 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { prompt: 'Wait for author handoff and verify.', name: 'verifier', access: 'readonly', isolation: 'inherit' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(verifier.workerConversationId)
+      await kernel.conversations.waitForIdle(verifier.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       let verifierSectionSeen = ''
       let verifierToolsSeen: string[] = []
@@ -158,10 +158,10 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         const status = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId })) as BoardViewDoc
         return status.posts.some((p) => p.kind === 'done' && p.from === 'verifier')
       })
-      await kernel.waitForIdle(author.workerConversationId)
-      await kernel.waitForIdle(verifier.workerConversationId)
+      await kernel.conversations.waitForIdle(author.workerConversationId)
+      await kernel.conversations.waitForIdle(verifier.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       // Verify readonly worker receives prompt guidance without stripping tools
       assert.match(verifierSectionSeen, /access="readonly"/)
@@ -194,9 +194,9 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       assert.ok(sessionView.posts.some((p) => p.from === 'author' && p.resolvedTargets.includes('verifier')))
 
       // Verify coordinator timeline report and worker wakeup carry swarm:board-report & swarm:board-wakeup renderers
-      const coordDetail = await kernel.getConversationDetail(coord.id, { limit: 20 })
+      const coordDetail = await kernel.conversations.getConversationDetail(coord.id, { limit: 20 })
       assert.match(JSON.stringify(coordDetail.entries), /swarm:board-report/)
-      const verifierDetail = await kernel.getConversationDetail(verifier.workerConversationId, { limit: 20 })
+      const verifierDetail = await kernel.conversations.getConversationDetail(verifier.workerConversationId, { limit: 20 })
       assert.match(JSON.stringify(verifierDetail.entries), /swarm:board-wakeup/)
 
       // Held worktree enforces 409 plugin_in_use on disable('builtin:worktree') AND 409 worktree_in_use on cleanup_worktree(force: true)!
@@ -243,9 +243,9 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       assert.equal(retained.nodeId, 'local')
       assert.equal(retained.commitsAhead, 1)
       assert.ok(existsSync(join(retained.path, 'feature.txt')))
-      assert.equal(kernel.getConversation(coord.id).tags.includes(COORDINATOR_TAG), false, 'coordinator must drop swarm-coordinator tag')
+      assert.equal(kernel.conversations.getConversation(coord.id).tags.includes(COORDINATOR_TAG), false, 'coordinator must drop swarm-coordinator tag')
       assert.equal(
-        kernel.getConversation(coord.id).tags.includes(ARCHIVED_COORDINATOR_TAG),
+        kernel.conversations.getConversation(coord.id).tags.includes(ARCHIVED_COORDINATOR_TAG),
         true,
         'closed coordinator keeps the history tag so the workbench orchestration panel stays reachable',
       )
@@ -267,12 +267,12 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
           return fauxAssistantMessage('Post-close probe done.')
         },
       ])
-      await kernel.submitInput(coord.id, 'Merge retained branch and clean up')
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.submitInput(coord.id, 'Merge retained branch and clean up')
+      await kernel.conversations.waitForIdle(coord.id)
 
       // Trigger the post-close probe turn to capture the coordinator tool list after group close.
-      await kernel.submitInput(coord.id, 'Post-close tool probe')
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.submitInput(coord.id, 'Post-close tool probe')
+      await kernel.conversations.waitForIdle(coord.id)
 
       assert.equal(readFileSync(join(env.repoDir, 'feature.txt'), 'utf8').trim(), 'verified-payload')
       assert.equal(existsSync(retained.path), false, 'worktree directory must be removed after merge + cleanup_worktree')
@@ -290,7 +290,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         conversationId: coord.id,
       })) as { groupId: string }
       assert.notEqual(recreated.groupId, groupId)
-      const coordTagsAfterRecreate = kernel.getConversation(coord.id).tags
+      const coordTagsAfterRecreate = kernel.conversations.getConversation(coord.id).tags
       assert.equal(coordTagsAfterRecreate.includes(COORDINATOR_TAG), true, 're-created group restores the active coordinator tag')
       assert.equal(coordTagsAfterRecreate.includes(ARCHIVED_COORDINATOR_TAG), false, 'history tag is stripped on re-activation')
 
@@ -318,9 +318,9 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { groupId: recreated.groupId, name: 'kept', prompt: 'Commit kept.txt', isolation: 'worktree' },
         { conversationId: coord.id },
       )) as { workerConversationId: number; worktreeId: string }
-      await kernel.waitForIdle(keptWorker.workerConversationId)
+      await kernel.conversations.waitForIdle(keptWorker.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
       await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
         'archive_worker',
@@ -348,10 +348,10 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       assert.equal(secondClose.retainedWorktrees[0]?.worktreeId, keptWorker.worktreeId)
       assert.equal(secondClose.retainedWorktrees[0]?.nodeId, 'local')
       await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', { worktreeId: keptWorker.worktreeId, force: true })
-      assert.equal(kernel.getConversation(coord.id).tags.includes(ARCHIVED_COORDINATOR_TAG), true, 'closing again re-swaps to the history tag')
+      assert.equal(kernel.conversations.getConversation(coord.id).tags.includes(ARCHIVED_COORDINATOR_TAG), true, 'closing again re-swaps to the history tag')
 
       // Closed group and coordinatorDetached fallback: delete coordinator #C, board_status & board_read still work!
-      await kernel.deleteConversation(coord.id)
+      await kernel.conversations.deleteConversation(coord.id)
       await waitFor(async () => {
         const view = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId })) as BoardViewDoc
         return view.group.coordinatorDetached === true && view.group.status === 'closed'
@@ -371,7 +371,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       await kernel.plugins.disable(WORKFLOW_ID)
       assert.equal(kernel.plugins.list().find((p) => p.id === WORKFLOW_ID)?.enabled, false)
 
-      const coord = await kernel.createConversation({ title: 'No-Workflow Coord', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'No-Workflow Coord', profileId: 'assistant', cwd: env.repoDir })
       const { groupId } = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
         'create_group',
@@ -409,9 +409,9 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         const status = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId })) as BoardViewDoc
         return status.posts.some((p) => p.kind === 'done' && p.from === 'coder')
       })
-      await kernel.waitForIdle(coder.workerConversationId)
+      await kernel.conversations.waitForIdle(coder.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       // 交接快照事实来自 builtin:worktree 的权威 inspect（commitsAhead 为真实值）。
       const read = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
@@ -461,7 +461,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       execFileSync('git', ['add', '.gitignore'], { cwd: repoDir })
       execFileSync('git', ['commit', '-qm', 'chore: ignore dist'], { cwd: repoDir })
 
-      const coord = await kernel.createConversation({ title: 'Close Force Coordinator', profileId: 'assistant', cwd: repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Close Force Coordinator', profileId: 'assistant', cwd: repoDir })
 
       // ---- 动作/工具 schema 面：close_group 输入必须暴露 force（五端 CLI 映射随 manifest 派生） ----
       const closeManifest = kernel.plugins
@@ -494,9 +494,9 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { prompt: 'Run build then finish.', name: 'builder', access: 'readwrite', isolation: 'worktree' },
         { conversationId: coord.id },
       )) as { workerConversationId: number; worktreeId: string }
-      await kernel.waitForIdle(builder.workerConversationId)
+      await kernel.conversations.waitForIdle(builder.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const builderRecord = (await listWorktrees()).worktrees.find((w) => w.id === builder.worktreeId)
       assert.ok(builderRecord, 'builder worktree record must exist')
@@ -534,9 +534,9 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { prompt: 'Draft then finish.', name: 'author', access: 'readwrite', isolation: 'worktree' },
         { conversationId: coord.id },
       )) as { workerConversationId: number; worktreeId: string }
-      await kernel.waitForIdle(author.workerConversationId)
+      await kernel.conversations.waitForIdle(author.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const authorRecord = (await listWorktrees()).worktrees.find((w) => w.id === author.worktreeId)
       assert.ok(authorRecord, 'author worktree record must exist')
@@ -599,7 +599,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         model: 'faux/faux-1',
         providers: [faux.provider],
       })
-      const coord = await app.kernel.createConversation({
+      const coord = await app.kernel.conversations.createConversation({
         title: 'Kill Worker Coord',
         profileId: 'assistant',
         cwd: ${JSON.stringify(repoDir)},
@@ -620,7 +620,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         await new Promise((r) => setTimeout(r, 10))
         if (
           faux.state.callCount >= 1 &&
-          app.kernel.getConversation(worker.workerConversationId).status === 'working'
+          app.kernel.conversations.getConversation(worker.workerConversationId).status === 'working'
         ) {
           break
         }
@@ -671,24 +671,24 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       try {
         await waitFor(
           () =>
-            isSettledStatus(app.kernel.getConversation(seeded.workerId).status) &&
-            isSettledStatus(app.kernel.getConversation(seeded.coordId).status) &&
-            app.kernel.getConversation(seeded.workerId).completionSeq >= 1 &&
-            app.kernel.getConversation(seeded.coordId).completionSeq >= 1 &&
+            isSettledStatus(app.kernel.conversations.getConversation(seeded.workerId).status) &&
+            isSettledStatus(app.kernel.conversations.getConversation(seeded.coordId).status) &&
+            app.kernel.conversations.getConversation(seeded.workerId).completionSeq >= 1 &&
+            app.kernel.conversations.getConversation(seeded.coordId).completionSeq >= 1 &&
             app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0,
           { timeoutMs: 8_000 },
         )
       } catch (err) {
-        const wSummary = app.kernel.getConversation(seeded.workerId)
-        const cSummary = app.kernel.getConversation(seeded.coordId)
-        const wDetail = await app.kernel.getConversationDetail(seeded.workerId, { limit: 20 })
-        const cDetail = await app.kernel.getConversationDetail(seeded.coordId, { limit: 20 })
+        const wSummary = app.kernel.conversations.getConversation(seeded.workerId)
+        const cSummary = app.kernel.conversations.getConversation(seeded.coordId)
+        const wDetail = await app.kernel.conversations.getConversationDetail(seeded.workerId, { limit: 20 })
+        const cDetail = await app.kernel.conversations.getConversationDetail(seeded.coordId, { limit: 20 })
         throw new Error(
           `${(err as Error).message}\nworker=${JSON.stringify(wSummary)}\ncoord=${JSON.stringify(cSummary)}\nwEntries=${JSON.stringify(wDetail.entries)}\ncEntries=${JSON.stringify(cDetail.entries)}`,
         )
       }
-      await app.kernel.waitForIdle(seeded.workerId)
-      await app.kernel.waitForIdle(seeded.coordId)
+      await app.kernel.conversations.waitForIdle(seeded.workerId)
+      await app.kernel.conversations.waitForIdle(seeded.coordId)
 
       // Worktree stayed alive during recovery and cleanup runs cleanly on close_group.
       const inspectedBeforeClose = (await app.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
@@ -697,7 +697,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       })) as { exists: boolean }
       assert.equal(inspectedBeforeClose.exists, true)
 
-      const workerDetail = await app.kernel.getConversationDetail(seeded.workerId, { limit: 50 })
+      const workerDetail = await app.kernel.conversations.getConversationDetail(seeded.workerId, { limit: 50 })
       const workerInputs = workerDetail.entries.filter((e) => e.kind === 'helmx.input')
       assert.equal(workerInputs.length, 1, `expected 1 deduplicated wakeup input, got ${workerInputs.length}`)
 
@@ -707,7 +707,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       assert.equal(read.posts.filter((p) => p.from === 'system').length, 0)
       assert.equal(read.posts.filter((p) => p.kind === 'done' && p.from === 'coder').length, 1)
 
-      const coordDetail = await app.kernel.getConversationDetail(seeded.coordId, { limit: 50 })
+      const coordDetail = await app.kernel.conversations.getConversationDetail(seeded.coordId, { limit: 50 })
       const reports = coordDetail.entries.filter(
         (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
       )
@@ -720,10 +720,10 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         diff: false,
       })) as { exists: boolean }
       assert.equal(inspectedAfterClose.exists, false)
-      assert.equal(app.kernel.getConversation(seeded.coordId).tags.includes(ARCHIVED_COORDINATOR_TAG), true)
-      assert.equal(app.kernel.getConversation(seeded.coordId).tags.includes(COORDINATOR_TAG), false)
-      assert.equal(app.kernel.getConversation(seeded.workerId).tags.includes(ARCHIVED_WORKER_TAG), true)
-      assert.equal(app.kernel.getConversation(seeded.workerId).tags.includes(WORKER_TAG), false)
+      assert.equal(app.kernel.conversations.getConversation(seeded.coordId).tags.includes(ARCHIVED_COORDINATOR_TAG), true)
+      assert.equal(app.kernel.conversations.getConversation(seeded.coordId).tags.includes(COORDINATOR_TAG), false)
+      assert.equal(app.kernel.conversations.getConversation(seeded.workerId).tags.includes(ARCHIVED_WORKER_TAG), true)
+      assert.equal(app.kernel.conversations.getConversation(seeded.workerId).tags.includes(WORKER_TAG), false)
     } finally {
       await app.close()
     }
@@ -742,7 +742,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
     try {
       const { kernel } = env.app
       hub = await startHub({ kernel: kernel as never, port: 0 })
-      const issued = await kernel.issueNodeToken('remote-wt-node')
+      const issued = await kernel.nodes.issueNodeToken('remote-wt-node')
       daemon = await createNodeDaemon({
         hubUrl: hub.url,
         identity: { nodeId: 'remote-wt-node', token: issued.token },
@@ -754,7 +754,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       assert.equal(await daemon.waitUntilRegistered(5_000), true)
       assert.equal(kernel.envFabric.isOnline('remote-wt-node'), true)
 
-      const coord = await kernel.createConversation({
+      const coord = await kernel.conversations.createConversation({
         title: 'Local Coord Dispatching Remote Worktrees',
         profileId: 'assistant',
         cwd: env.repoDir,
@@ -820,9 +820,9 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { conversationId: coord.id },
       )) as { workerConversationId: number; worktreeId: string }
 
-      await kernel.waitForIdle(workerA.workerConversationId)
+      await kernel.conversations.waitForIdle(workerA.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const workerB = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
@@ -838,17 +838,17 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { conversationId: coord.id },
       )) as { workerConversationId: number; worktreeId: string }
 
-      await kernel.waitForIdle(workerB.workerConversationId)
+      await kernel.conversations.waitForIdle(workerB.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       assert.ok(workerA.worktreeId.startsWith('remote-wt-node:'), `workerA worktreeId should target remote-wt-node: ${workerA.worktreeId}`)
       assert.ok(workerB.worktreeId.startsWith('remote-wt-node:'), `workerB worktreeId should target remote-wt-node: ${workerB.worktreeId}`)
       const wtPathA = workerA.worktreeId.slice('remote-wt-node:'.length)
       const wtPathB = workerB.worktreeId.slice('remote-wt-node:'.length)
 
-      const convA = kernel.getConversation(workerA.workerConversationId)
-      const convB = kernel.getConversation(workerB.workerConversationId)
+      const convA = kernel.conversations.getConversation(workerA.workerConversationId)
+      const convB = kernel.conversations.getConversation(workerB.workerConversationId)
       assert.equal(convA.nodeId, 'remote-wt-node')
       assert.equal(convA.cwd, wtPathA)
       assert.equal(convB.nodeId, 'remote-wt-node')

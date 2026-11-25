@@ -30,6 +30,7 @@ export const ULTRA_SLOW_TEST_PREFIXES = [
   'background-restart',
   'native-worktree',
   'node-upgrade',
+  'node-auto-upgrade',
   'agent-standby',
   'check-changed',
   'quiet-notifier',

@@ -54,8 +54,8 @@ function toolCallStep(name: string, input: Record<string, unknown>): FauxRespons
 }
 
 async function submitAndWait(convId: number, text: string): Promise<void> {
-  await env.kernel.submitInput(convId, text)
-  await env.kernel.waitForIdle(convId)
+  await env.kernel.conversations.submitInput(convId, text)
+  await env.kernel.conversations.waitForIdle(convId)
 }
 
 function actionsSection(request: CapturedRequest): string | null | undefined {
@@ -71,7 +71,7 @@ function toolResultTexts(entries: ConversationEntry[]): string {
 }
 
 test('动作目录生命周期：普通插件启用即进目录、XML 转义与紧凑签名正确、停用后下一回合清空无残留', { timeout: 60_000 }, async () => {
-  const conv = await env.kernel.createConversation({ title: 'plain-action' })
+  const conv = await env.kernel.conversations.createConversation({ title: 'plain-action' })
   const host = env.kernel.plugins
   await host.register({
     id: 'demo:plain',
@@ -128,7 +128,7 @@ test('动作目录生命周期：普通插件启用即进目录、XML 转义与�
 })
 
 test('磁盘外部插件：rescan 后默认隐藏，启用即自动进入目录，停用即清理', { timeout: 60_000 }, async () => {
-  const conv = await env.kernel.createConversation({ title: 'ext-notice' })
+  const conv = await env.kernel.conversations.createConversation({ title: 'ext-notice' })
   const host = env.kernel.plugins
   const pluginDir = join(env.dataDir, 'installed-plugins', 'external-notice')
   mkdirSync(pluginDir, { recursive: true })
@@ -175,8 +175,8 @@ test('磁盘外部插件：rescan 后默认隐藏，启用即自动进入目录�
 
 test('作用域裁剪与 before_turn 剥离：不匹配会话不进目录不泄漏工具；剥离 run_action 时目录清空且直投不借道复现', { timeout: 60_000 }, async () => {
   const host = env.kernel.plugins
-  const plainConv = await env.kernel.createConversation({ title: 'plain-scope' })
-  const alphaConv = await env.kernel.createConversation({ title: 'alpha-scope', tags: ['alpha'] })
+  const plainConv = await env.kernel.conversations.createConversation({ title: 'plain-scope' })
+  const alphaConv = await env.kernel.conversations.createConversation({ title: 'alpha-scope', tags: ['alpha'] })
 
   await host.register({
     id: 'demo:scoped',
@@ -240,7 +240,7 @@ test('作用域裁剪与 before_turn 剥离：不匹配会话不进目录不泄�
   }, { enabled: true })
 
   try {
-    const stripConv = await env.kernel.createConversation({ title: 'strip-scope' })
+    const stripConv = await env.kernel.conversations.createConversation({ title: 'strip-scope' })
     requests.length = 0
     env.faux.setResponses([capture()])
     await submitAndWait(stripConv.id, 'strip turn')
@@ -264,7 +264,7 @@ test('作用域裁剪与 before_turn 剥离：不匹配会话不进目录不泄�
 
 test('指引单次注入、CLI 覆写/隐藏与插件重载元数据更新', { timeout: 60_000 }, async () => {
   const host = env.kernel.plugins
-  const conv = await env.kernel.createConversation({ title: 'guide-cli-refresh' })
+  const conv = await env.kernel.conversations.createConversation({ title: 'guide-cli-refresh' })
 
   await host.register({
     id: 'demo:guide-cli',
@@ -363,7 +363,7 @@ test('指引单次注入、CLI 覆写/隐藏与插件重载元数据更新', { t
 
 test('describe 模式：真实 run_action 返回完整嵌套 Schema 且不执行 handler；停用与作用域外显式拒绝', { timeout: 60_000 }, async () => {
   const host = env.kernel.plugins
-  const conv = await env.kernel.createConversation({ title: 'describe-mode' })
+  const conv = await env.kernel.conversations.createConversation({ title: 'describe-mode' })
   let handlerRuns = 0
   await host.register({
     id: 'demo:describe',
@@ -399,7 +399,7 @@ test('describe 模式：真实 run_action 返回完整嵌套 Schema 且不执行
     env.faux.setResponses([toolCallStep('run_action', { actionId: 'demo:describe.nested', describe: true }), capture()])
     await submitAndWait(conv.id, 'query schema')
     assert.equal(handlerRuns, 0)
-    const describeTexts = toolResultTexts((await env.kernel.getConversationDetail(conv.id)).entries)
+    const describeTexts = toolResultTexts((await env.kernel.conversations.getConversationDetail(conv.id)).entries)
     assert.ok(describeTexts.includes('demo:describe') && describeTexts.includes('nested'))
     assert.ok(describeTexts.includes('payload') && describeTexts.includes('deep') && describeTexts.includes('outputSchema'))
 
@@ -410,23 +410,23 @@ test('describe 模式：真实 run_action 返回完整嵌套 Schema 且不执行
     await submitAndWait(conv.id, 'real execute')
     assert.equal(handlerRuns, 1)
 
-    const scopedConv = await env.kernel.createConversation({ title: 'describe-scoped' })
+    const scopedConv = await env.kernel.conversations.createConversation({ title: 'describe-scoped' })
     env.faux.setResponses([toolCallStep('run_action', { actionId: 'demo:describe.alpha_only', describe: true }), capture()])
     await submitAndWait(scopedConv.id, 'outside scope query')
-    assert.ok(toolResultTexts((await env.kernel.getConversationDetail(scopedConv.id)).entries).includes('scope'))
+    assert.ok(toolResultTexts((await env.kernel.conversations.getConversationDetail(scopedConv.id)).entries).includes('scope'))
 
     await host.disable('demo:describe')
-    const disabledConv = await env.kernel.createConversation({ title: 'describe-disabled' })
+    const disabledConv = await env.kernel.conversations.createConversation({ title: 'describe-disabled' })
     env.faux.setResponses([toolCallStep('run_action', { actionId: 'demo:describe.nested', describe: true }), capture()])
     await submitAndWait(disabledConv.id, 'disabled query')
-    assert.ok(toolResultTexts((await env.kernel.getConversationDetail(disabledConv.id)).entries).includes('does not declare action'))
+    assert.ok(toolResultTexts((await env.kernel.conversations.getConversationDetail(disabledConv.id)).entries).includes('does not declare action'))
   } finally {
     await host.disable('demo:describe').catch(() => {})
   }
 })
 
 test('Skill-First 内置插件零默认 <available_actions>；internal/ui 403 硬拦截；cleanup_worktree 按活跃 worktree 条件暴露', { timeout: 60_000 }, async (t) => {
-  const conv = await env.kernel.createConversation({ title: 'worktree-actions-directory' })
+  const conv = await env.kernel.conversations.createConversation({ title: 'worktree-actions-directory' })
   requests.length = 0
   env.faux.setResponses([capture()])
   await submitAndWait(conv.id, 'show actions')
@@ -447,7 +447,7 @@ test('Skill-First 内置插件零默认 <available_actions>；internal/ui 403 �
   }
 
   // 2) Skill-First 隐藏的公开内置动作仍可经 run_action describe 与执行；internal/ui 动作仍硬拒 403 action_visibility_forbidden。
-  const guardConv = await env.kernel.createConversation({ title: 'visibility-guard-run-action' })
+  const guardConv = await env.kernel.conversations.createConversation({ title: 'visibility-guard-run-action' })
   env.faux.setResponses([
     toolCallStep('run_action', { actionId: 'builtin:worktree.list_worktrees', input: {} }),
     toolCallStep('run_action', { actionId: 'builtin:tiers.list', describe: true }),
@@ -462,7 +462,7 @@ test('Skill-First 内置插件零默认 <available_actions>；internal/ui 403 �
     capture(),
   ])
   await submitAndWait(guardConv.id, 'probe public and forbidden actions')
-  const resultTexts = toolResultTexts((await env.kernel.getConversationDetail(guardConv.id)).entries)
+  const resultTexts = toolResultTexts((await env.kernel.conversations.getConversationDetail(guardConv.id)).entries)
   assert.ok(resultTexts.includes('\\"worktrees\\":[]'), `Skill-First 公开动作 list_worktrees 应仍可经 run_action 执行：${resultTexts}`)
   assert.ok(resultTexts.includes('\\"pluginId\\": \\"builtin:tiers\\"') && resultTexts.includes('\\"id\\": \\"list\\"'), `Skill-First 公开动作 tiers.list 应仍可经 run_action describe：${resultTexts}`)
   assert.ok(resultTexts.includes("visibility 'internal'"), `run_action 应拒绝 internal 动作：${resultTexts}`)
@@ -472,8 +472,8 @@ test('Skill-First 内置插件零默认 <available_actions>；internal/ui 403 �
   // 3) 一旦存在活跃受管 worktree，cleanup_worktree 立即进入回合工具面；清理后再次省略。
   const repoDir = useTempDir(t, 'helmx-action-discovery-wt-')
   initGitRepo(repoDir)
-  const wtParent = await env.kernel.createConversation({ title: 'wt-gate-parent', cwd: repoDir })
-  const wtChild = await env.kernel.createConversation({ title: 'wt-gate-child', cwd: repoDir })
+  const wtParent = await env.kernel.conversations.createConversation({ title: 'wt-gate-parent', cwd: repoDir })
+  const wtChild = await env.kernel.conversations.createConversation({ title: 'wt-gate-child', cwd: repoDir })
   const pluginCaller = { surface: 'plugin' as const, callerPluginId: 'test:wt-gate' }
   const acquired = (await env.kernel.plugins.invokeAction(
     'builtin:worktree',

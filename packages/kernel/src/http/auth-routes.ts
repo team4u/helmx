@@ -2,17 +2,14 @@
  * Auth domain routes: GET /api/auth/status, POST /api/auth/setup,
  * POST /api/auth/login (all three endpoints are public and pre-allowed in hub.ts; all other auth subpaths return 404).
  */
-import type { JsonSchema } from '@helmx/protocol'
+import { REQUEST_SCHEMAS } from '@helmx/protocol'
+import type { AuthService } from '../services/index.js'
 import { jsonOk, errorResponse, readJsonBody, type JsonRedactor } from './http-utils.js'
-import type { KernelRuntimeLike } from './contracts.js'
 import { assertBodySchema } from './validate.js'
 import type { RouteContext } from './route-context.js'
 
-// setup/login historically tolerate extra fields (no unknown-key rejection); keep schema permissive and only constrain password shape.
-const AUTH_PASSWORD_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: { password: { type: 'string', minLength: 1 } },
-  required: ['password'],
+export interface AuthRoutesTarget {
+  readonly auth: Pick<AuthService, 'status' | 'verifyToken' | 'setup' | 'login'>
 }
 
 function bearerToken(request: Request): string | undefined {
@@ -24,7 +21,7 @@ function bearerToken(request: Request): string | undefined {
 
 export async function handleAuthDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: AuthRoutesTarget,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -40,13 +37,13 @@ export async function handleAuthDomain(
   }
   if (second === 'setup' && method === 'POST' && third === undefined) {
     const body = await readJsonBody(ctx.request)
-    assertBodySchema(AUTH_PASSWORD_BODY_SCHEMA, body, 'auth setup body')
+    assertBodySchema(REQUEST_SCHEMAS.authPassword, body, 'auth setup body')
     const issued = await kernel.auth.setup(body.password as string)
     return jsonOk(redactor, { token: issued.token })
   }
   if (second === 'login' && method === 'POST' && third === undefined) {
     const body = await readJsonBody(ctx.request)
-    assertBodySchema(AUTH_PASSWORD_BODY_SCHEMA, body, 'auth login body')
+    assertBodySchema(REQUEST_SCHEMAS.authPassword, body, 'auth login body')
     const issued = await kernel.auth.login(body.password as string)
     return jsonOk(redactor, { token: issued.token })
   }

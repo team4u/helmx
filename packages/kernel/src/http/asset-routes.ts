@@ -7,12 +7,22 @@
  * three-layer realpath symlink-escape guard + truthful 404 on ENOENT + isolated Uint8Array copy).
  */
 import { HelmxError } from '@helmx/protocol'
-import { MAX_ARTIFACT_BYTES } from '../services/artifacts.js'
+import { MAX_ARTIFACT_BYTES, type ArtifactService, type SkillService } from '../services/index.js'
+import type { ConversationService } from '../runtime/conversation-service.js'
 import { buildContentDisposition, errorResponse, jsonOk, readBinaryBodyWithLimit, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
-import type { KernelRuntimeLike } from './contracts.js'
 import { requireIdParam, ValidationError } from './validate.js'
 import type { RouteContext } from './route-context.js'
+
+export interface AssetRoutesTarget {
+  readonly artifacts: Pick<ArtifactService, 'get' | 'readBufferForMetadata' | 'writeUploaded'>
+  readonly skills: Pick<SkillService, 'list' | 'readFile'>
+  readonly conversations: Pick<ConversationService, 'getConversationDetail'>
+}
+
+export type ConversationArtifactUploadTarget = Pick<AssetRoutesTarget, 'conversations'> & {
+  readonly artifacts: Pick<ArtifactService, 'writeUploaded'>
+}
 
 // ---------------------------------------------------------------------------
 // /api/artifacts
@@ -20,7 +30,7 @@ import type { RouteContext } from './route-context.js'
 
 export async function handleArtifactsDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<AssetRoutesTarget, 'artifacts'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -73,12 +83,12 @@ function decodeBase64Strict(value: string): Uint8Array {
  */
 export async function postConversationArtifact(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: ConversationArtifactUploadTarget,
   id: number,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   // Verify conversation exists upfront (missing -> 404 immediately to avoid orphaned artifacts).
-  await kernel.getConversationDetail(id, { limit: 1 })
+  await kernel.conversations.getConversationDetail(id, { limit: 1 })
   const contentType = (ctx.request.headers.get('content-type') ?? '').toLowerCase()
   let name: string
   let bytes: Uint8Array
@@ -146,7 +156,7 @@ export async function postConversationArtifact(
   }, {
     conversationExists: async (cid) => {
       try {
-        await kernel.getConversationDetail(cid, { limit: 1 })
+        await kernel.conversations.getConversationDetail(cid, { limit: 1 })
         return true
       } catch (error) {
         if (error instanceof HelmxError && error.code === 'not_found') return false
@@ -163,7 +173,7 @@ export async function postConversationArtifact(
 
 export async function handleSkillsDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<AssetRoutesTarget, 'skills'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx

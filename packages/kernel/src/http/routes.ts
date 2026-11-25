@@ -14,7 +14,7 @@
  * verbatim (`null` stays `null`, while `undefined` violates the output contract and returns 500).
  */
 import { HelmxError } from '@helmx/protocol'
-import type { KernelRuntimeLike } from './contracts.js'
+import type { EventHub } from '../runtime/events.js'
 import { errorResponse, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
 import type { RouteContext } from './route-context.js'
@@ -25,26 +25,41 @@ import {
   FileNotFoundError,
 } from '../services/index.js'
 
-import { handleAuthDomain } from './auth-routes.js'
+import { handleAuthDomain, type AuthRoutesTarget } from './auth-routes.js'
 import {
   handleAsksDomain,
   handleConversationsDomain,
   handleSearchDomain,
+  type ConversationRoutesTarget,
 } from './conversation-routes.js'
-import { handleProfilesDomain } from './profile-routes.js'
+import { handleProfilesDomain, type ProfileRoutesTarget } from './profile-routes.js'
 import {
   handleCredentialsDomain,
   handleModelsDomain,
   handleProvidersDomain,
+  type ModelRoutesTarget,
 } from './model-routes.js'
-import { handleNodeDomain, handleEnvExecDomain } from './node-routes.js'
-import { handlePluginsDomain, handleActionsDomain } from './plugin-routes.js'
-import { handleArtifactsDomain, handleSkillsDomain } from './asset-routes.js'
-import { handleSessionDocsDomain } from './session-doc-routes.js'
+import { handleNodeDomain, handleEnvExecDomain, type NodeRoutesTarget } from './node-routes.js'
+import { handlePluginsDomain, handleActionsDomain, type PluginRoutesTarget } from './plugin-routes.js'
+import { handleArtifactsDomain, handleSkillsDomain, type AssetRoutesTarget } from './asset-routes.js'
+import { handleSessionDocsDomain, type SessionDocRoutesTarget } from './session-doc-routes.js'
+
+export type HttpEventHub = Pick<EventHub, 'response'>
+
+export type CoreRoutesTarget = AuthRoutesTarget &
+  ConversationRoutesTarget &
+  AssetRoutesTarget &
+  ProfileRoutesTarget &
+  ModelRoutesTarget &
+  NodeRoutesTarget &
+  PluginRoutesTarget &
+  SessionDocRoutesTarget & {
+    readonly events: HttpEventHub
+  }
 
 export async function handleApi(
   request: Request,
-  kernel: KernelRuntimeLike,
+  kernel: CoreRoutesTarget,
   redactor?: JsonRedactor,
 ): Promise<Response> {
   const url = new URL(request.url)
@@ -70,7 +85,7 @@ export async function handleApi(
 
 /** Static dispatch table mapping first segment -> domain handler (no fallthrough, no priority rules). */
 const DOMAIN_HANDLERS: Readonly<
-  Record<string, (ctx: RouteContext, kernel: KernelRuntimeLike, redactor: JsonRedactor | undefined) => Promise<Response>>
+  Record<string, (ctx: RouteContext, kernel: CoreRoutesTarget, redactor: JsonRedactor | undefined) => Promise<Response>>
 > = {
   auth: handleAuthDomain,
   conversations: handleConversationsDomain,
@@ -91,7 +106,7 @@ const DOMAIN_HANDLERS: Readonly<
 
 async function dispatch(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: CoreRoutesTarget,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const head = ctx.segments[0]

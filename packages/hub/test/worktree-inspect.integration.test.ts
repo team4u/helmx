@@ -105,7 +105,7 @@ async function openRuntime(dataDir: string, cwd: string): Promise<RuntimeEnv> {
 async function spawnCleanWorktree(env: RuntimeEnv): Promise<{ worktreeId: string; path: string; branch: string }> {
   let resolved: AgentExecutionInfo | undefined
   env.faux.setResponses([fauxAssistantMessage('directly complete, without tool invoke')])
-  await env.kernel.spawnAgent({
+  await env.kernel.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'in isolated worktree execute task',
     isolation: 'worktree',
@@ -133,7 +133,7 @@ describe('builtin:worktree managed worktree read-only inspection actions', { tim
         fauxAssistantMessage([fauxToolCall('bash', { command: 'pwd > .helmx-child-pwd.txt' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('task complete'),
       ])
-      await env.kernel.spawnAgent({
+      await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'in isolated worktree execute task',
         isolation: 'worktree',
@@ -211,7 +211,7 @@ describe('builtin:worktree managed worktree read-only inspection actions', { tim
     try {
       let resolved: AgentExecutionInfo | undefined
       env.faux.setResponses([fauxAssistantMessage('directly complete, without tool invoke')])
-      await env.kernel.spawnAgent({
+      await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'in isolated worktree execute task',
         isolation: 'worktree',

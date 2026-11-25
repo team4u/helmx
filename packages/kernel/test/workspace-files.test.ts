@@ -23,7 +23,7 @@ import {
   createHubHandler,
   detectWorkspaceFileMime,
 } from '../src/index.js'
-import type { KernelRuntimeLike } from '../src/http/index.js'
+import type { KernelHttpTarget } from '../src/http/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 describe('detectWorkspaceFileMime', { timeout: 60_000 }, () => {
@@ -171,7 +171,7 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
     assert.equal(setupRes.status, 200)
     token = ((await setupRes.json()) as { token: string }).token
 
-    const conv = await kernel.createConversation({ title: 'ws-files', cwd: workspaceDir })
+    const conv = await kernel.conversations.createConversation({ title: 'ws-files', cwd: workspaceDir })
     convId = conv.id
   })
 
@@ -328,8 +328,8 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
     assert.equal(htmlAttach.headers.get('content-security-policy'), null)
   })
 
-  it('returns 501 not_implemented when KernelRuntimeLike.readConversationFile is absent', { timeout: 60_000 }, async () => {
-    const stubKernel: KernelRuntimeLike = {
+  it('returns 501 not_implemented when conversations.readConversationFile is absent', { timeout: 60_000 }, async () => {
+    const stubKernel = {
       dataDir,
       auth: kernel.auth,
       events: kernel.events,
@@ -339,29 +339,37 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
       providers: kernel.providers,
       artifacts: kernel.artifacts,
       plugins: kernel.plugins,
-      listConversations: () => [],
-      getConversationDetail: () => { throw new HelmxError('not_found', 'missing', 404) },
-      createConversation: () => { throw new Error('unused') },
-      updateConversation: () => { throw new Error('unused') },
-      deleteConversation: () => {},
-      deleteConversations: (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
-      submitInput: () => ({ submissionId: 'x' }),
-      waitForInput: () => { throw new Error('unused') },
-      abortConversation: () => {},
-      resetConversation: () => { throw new Error('unused') },
-      compactConversation: () => { throw new Error('unused') },
-      forkConversation: () => { throw new Error('unused') },
-      listAsks: () => [],
-      answerAsk: () => {},
-      cancelAsk: () => {},
-      search: () => [],
-      listModels: () => ({ models: [], thinkingLevels: {} }),
-      listModelProviders: () => [],
-      listNodes: () => [],
-      issueNodeToken: () => { throw new Error('unused') },
-      removeNode: () => {},
-      execEnv: () => { throw new Error('unused') },
-    }
+      conversations: {
+        listConversations: () => [],
+        getConversationDetail: () => { throw new HelmxError('not_found', 'missing', 404) },
+        createConversation: () => { throw new Error('unused') },
+        updateConversation: () => { throw new Error('unused') },
+        deleteConversation: () => {},
+        deleteConversations: (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
+        submitInput: () => ({ submissionId: 'x' }),
+        waitForInput: () => { throw new Error('unused') },
+        abortConversation: () => {},
+        resetConversation: () => { throw new Error('unused') },
+        compactConversation: () => { throw new Error('unused') },
+        forkConversation: () => { throw new Error('unused') },
+        search: () => [],
+      },
+      asks: {
+        listAsks: () => [],
+        answerAsk: () => { throw new Error('unused') },
+        cancelAsk: () => { throw new Error('unused') },
+      },
+      models: {
+        listModels: () => ({ models: [], thinkingLevels: {} }),
+        listModelProviders: () => [],
+      },
+      nodes: {
+        listNodes: () => [],
+        issueNodeToken: () => { throw new Error('unused') },
+        removeNode: () => {},
+        execEnv: () => { throw new Error('unused') },
+      },
+    } as unknown as KernelHttpTarget
     const stubHandler = createHubHandler(stubKernel)
     const res = await stubHandler(
       new Request('http://127.0.0.1:3202/api/conversations/1/files/content?path=a.txt', {
@@ -391,7 +399,7 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
     assert.ok(addr !== null && typeof addr === 'object')
     const gateway = attachNodeWsGateway(server, { registry: kernel.envFabric.registry })
 
-    const issued = await kernel.issueNodeToken('remote-ws-node')
+    const issued = await kernel.nodes.issueNodeToken('remote-ws-node')
     const daemon = await createNodeDaemon({
       hubUrl: `http://127.0.0.1:${addr.port}`,
       identity: { nodeId: issued.nodeId, token: issued.token },
@@ -404,7 +412,7 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
     try {
       assert.ok(await daemon.waitUntilRegistered())
 
-      const remoteConv = await kernel.createConversation({
+      const remoteConv = await kernel.conversations.createConversation({
         title: 'remote-ws-conv',
         nodeId: 'remote-ws-node',
         cwd: remoteWs,

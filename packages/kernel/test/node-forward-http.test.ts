@@ -7,8 +7,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { withTimeout } from '@helmx/test-kit'
-import { handleApi } from '../src/http/routes.js'
-import type { KernelRuntimeLike } from '../src/http/contracts.js'
+import { handleApi, type CoreRoutesTarget } from '../src/http/routes.js'
 import type { NodeForwardEvent, NodeForwardSession } from '../src/env/forward.js'
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -18,52 +17,54 @@ function makeKernel(over: {
   events: ((event: NodeForwardEvent) => void)[]
   /** Lease telemetry (optional injection: acquire/release counters and last-release callback). */
   lease?: { acquisitions: number; releases: number; onLastRelease?: () => void }
-}): KernelRuntimeLike {
+}): CoreRoutesTarget {
   return {
-    listNodes() { return [] },
-    async issueNodeToken() { throw new Error('unused') },
-    async removeNode() { throw new Error('unused') },
-    async execEnv() { throw new Error('unused') },
-    dataDir: '/tmp/helmx-forward-http-test',
-    auth: { status: async () => ({ configured: false }), verifyToken: async () => false, setup: async () => ({ token: 'x' }), login: async () => ({ token: 'x' }) } as never,
-    async startNodeForward(nodeId: string, input: { listenHost: string; listenPort: number; targetHost?: string; targetPort: number }) {
-      const forwardId = 'fwd-11111111-2222-3333-4444-555555555555'
-      const session: NodeForwardSession = {
-        forwardId,
-        nodeId,
-        listenHost: input.listenHost,
-        listenPort: input.listenPort,
-        targetHost: input.targetHost ?? '127.0.0.1',
-        targetPort: input.targetPort,
-        activeConnections: 0,
-        totalConnections: 0,
-      }
-      over.sessions.set(forwardId, session)
-      return session
+    nodes: {
+      listNodes: async () => [],
+      async issueNodeToken() { throw new Error('unused') },
+      async removeNode() { throw new Error('unused') },
+      async execEnv() { throw new Error('unused') },
     },
-    async stopNodeForward(forwardId: string) { over.sessions.delete(forwardId) },
-    getNodeForward: (forwardId: string) => over.sessions.get(forwardId),
-    listNodeForwards: () => [...over.sessions.values()],
-    onNodeForwardEvent: (forwardId: string, listener: (event: NodeForwardEvent) => void) => {
-      over.events.push(listener)
-      return () => undefined
-    },
-    ...(over.lease !== undefined
-      ? {
-          acquireNodeForwardLease: (forwardId: string) => {
-            over.lease!.acquisitions += 1
-            return () => {
-              over.lease!.releases += 1
-              // Simplified stub: first holder releasing is treated as the last holder (single-holder test).
-              over.lease!.onLastRelease?.()
-            }
-          },
+    nodeForward: {
+      async start(nodeId: string, input: { listenHost: string; listenPort: number; targetHost?: string; targetPort: number }) {
+        const forwardId = 'fwd-11111111-2222-3333-4444-555555555555'
+        const session: NodeForwardSession = {
+          forwardId,
+          nodeId,
+          listenHost: input.listenHost,
+          listenPort: input.listenPort,
+          targetHost: input.targetHost ?? '127.0.0.1',
+          targetPort: input.targetPort,
+          activeConnections: 0,
+          totalConnections: 0,
         }
-      : {}),
-  } as unknown as KernelRuntimeLike
+        over.sessions.set(forwardId, session)
+        return session
+      },
+      async stop(forwardId: string) { over.sessions.delete(forwardId) },
+      get: (forwardId: string) => over.sessions.get(forwardId),
+      list: () => [...over.sessions.values()],
+      onEvent: (forwardId: string, listener: (event: NodeForwardEvent) => void) => {
+        over.events.push(listener)
+        return () => undefined
+      },
+      ...(over.lease !== undefined
+        ? {
+            acquireLease: (forwardId: string) => {
+              over.lease!.acquisitions += 1
+              return () => {
+                over.lease!.releases += 1
+                // Simplified stub: first holder releasing is treated as the last holder (single-holder test).
+                over.lease!.onLastRelease?.()
+              }
+            },
+          }
+        : {}),
+    },
+  } as unknown as CoreRoutesTarget
 }
 
-const post = async (kernel: KernelRuntimeLike, path: string, body?: unknown): Promise<{ status: number; json: unknown }> => {
+const post = async (kernel: CoreRoutesTarget, path: string, body?: unknown): Promise<{ status: number; json: unknown }> => {
   try {
     const response = await handleApi(new Request(`http://hub${path}`, {
       method: 'POST',
@@ -156,7 +157,7 @@ test('GET events ends stream cleanly after terminal stopped frame without hangin
   assert.equal(created.status, 201)
   // Subscribe to termination notifications (simulates runtime onNodeForwardStopped wiring).
   const stopWaiters = new Set<() => void>()
-  ;(kernel as { onNodeForwardStopped?: unknown }).onNodeForwardStopped = (_id: string, listener: () => void) => {
+  ;(kernel.nodeForward as { onStopped?: unknown }).onStopped = (_id: string, listener: () => void) => {
     stopWaiters.add(listener)
     return () => stopWaiters.delete(listener)
   }

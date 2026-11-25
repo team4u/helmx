@@ -15,7 +15,8 @@
  * on `NodeRegistry` registration, never probing or inferring platform from path syntax.
  */
 
-import { HelmxError, isAbsoluteTargetPath, normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helmx/protocol'
+import { join } from 'node:path'
+import { HelmxError, assertProfileId, isAbsoluteTargetPath, normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helmx/protocol'
 import type { EnvFabric } from '../env/index.js'
 
 /**
@@ -115,4 +116,10 @@ export function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | 
 export function normalizeSessionCwd(cwd: string, options: NormalizeSessionCwdOptions): string {
   const platform = resolveTargetPlatform(options.nodeId, options.trustedPlatform)
   return normalizeCwdForPlatform(cwd, platform, options.entry)
+}
+
+/** Resolve the physical directory of a Profile under `dataDir/profiles/<id>`. */
+export function profileDirectoryHelper(dataDir: string, id: string): string {
+  assertProfileId(id)
+  return join(dataDir, 'profiles', id)
 }

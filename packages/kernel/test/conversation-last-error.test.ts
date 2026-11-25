@@ -74,12 +74,12 @@ test('failed terminal state: lastError passes through to getConversation and con
     env.faux.setResponses([
       fauxAssistantMessage('x', { errorMessage: 'provider 503 quota exceeded', stopReason: 'error' }),
     ])
-    await env.kernel.submitInput(1, 'failing question').catch(() => {})
-    await env.kernel.waitForIdle(1).catch(() => {})
-    await waitFor(() => env.kernel.getConversation(1).status === 'error')
+    await env.kernel.conversations.submitInput(1, 'failing question').catch(() => {})
+    await env.kernel.conversations.waitForIdle(1).catch(() => {})
+    await waitFor(() => env.kernel.conversations.getConversation(1).status === 'error')
 
     // getConversation (API query path) carries the concrete error.
-    const summary = env.kernel.getConversation(1)
+    const summary = env.kernel.conversations.getConversation(1)
     assert.equal(summary.status, 'error')
     assert.ok(summary.lastError, 'failed terminal state summary should carry lastError')
     assert.ok(
@@ -101,10 +101,10 @@ test('failed terminal state: lastError passes through to getConversation and con
 
     // Second turn succeeds: error status and lastError clear together (run restart clears runFailure).
     env.faux.setResponses([fauxAssistantMessage('recovered answer')])
-    await env.kernel.submitInput(1, 'ask again')
-    await env.kernel.waitForIdle(1)
-    await waitFor(() => env.kernel.getConversation(1).status === 'done')
-    const after = env.kernel.getConversation(1)
+    await env.kernel.conversations.submitInput(1, 'ask again')
+    await env.kernel.conversations.waitForIdle(1)
+    await waitFor(() => env.kernel.conversations.getConversation(1).status === 'done')
+    const after = env.kernel.conversations.getConversation(1)
     assert.equal(after.status, 'done')
     assert.equal(after.lastError, undefined, 'lastError should clear after succeeded turn')
     const lastErrorFrames = env.upserts.filter((c) => c.lastError !== undefined)
@@ -127,10 +127,10 @@ test('failure durability: lastError stays visible across process restart (author
     faux.setResponses([
       fauxAssistantMessage('x', { errorMessage: 'upstream authentication failed', stopReason: 'error' }),
     ])
-    await kernel.submitInput(1, 'failure before restart').catch(() => {})
-    await kernel.waitForIdle(1).catch(() => {})
-    await waitFor(() => kernel.getConversation(1).status === 'error')
-    assert.ok(kernel.getConversation(1).lastError?.includes('upstream authentication failed'))
+    await kernel.conversations.submitInput(1, 'failure before restart').catch(() => {})
+    await kernel.conversations.waitForIdle(1).catch(() => {})
+    await waitFor(() => kernel.conversations.getConversation(1).status === 'error')
+    assert.ok(kernel.conversations.getConversation(1).lastError?.includes('upstream authentication failed'))
   } finally {
     await kernel.close()
   }
@@ -139,7 +139,7 @@ test('failure durability: lastError stays visible across process restart (author
   const { models: models2 } = makeFauxModels()
   const kernel2 = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: models2 })
   try {
-    const summary = kernel2.getConversation(1)
+    const summary = kernel2.conversations.getConversation(1)
     assert.equal(summary.status, 'error', 'error status should remain after restart')
     assert.ok(
       summary.lastError?.includes('upstream authentication failed'),
@@ -155,7 +155,7 @@ test('redaction: when error detail echoes a registered stash secret, lastError s
   const env = await makeEnv('helmx-last-error-redact-')
   try {
     const secretValue = 'sk-helmx-test-9f3ab2c7deadbeef'
-    const conversation = await env.kernel.createConversation()
+    const conversation = await env.kernel.conversations.createConversation()
     env.kernel.stash.addRedaction(secretValue)
     const placeholder = '[REDACTED]'
 
@@ -163,11 +163,11 @@ test('redaction: when error detail echoes a registered stash secret, lastError s
     env.faux.setResponses([
       fauxAssistantMessage('x', { errorMessage: `upstream 401 key=${secretValue}`, stopReason: 'error' }),
     ])
-    await env.kernel.submitInput(conversation.id, 'failure carrying secret').catch(() => {})
-    await env.kernel.waitForIdle(conversation.id).catch(() => {})
-    await waitFor(() => env.kernel.getConversation(conversation.id).status === 'error')
+    await env.kernel.conversations.submitInput(conversation.id, 'failure carrying secret').catch(() => {})
+    await env.kernel.conversations.waitForIdle(conversation.id).catch(() => {})
+    await waitFor(() => env.kernel.conversations.getConversation(conversation.id).status === 'error')
 
-    const summary = env.kernel.getConversation(conversation.id)
+    const summary = env.kernel.conversations.getConversation(conversation.id)
     assert.ok(summary.lastError, 'failed summary should carry lastError')
     assert.ok(
       !summary.lastError!.includes(secretValue),
@@ -189,19 +189,19 @@ test('semantic equality granularity: same error status with changed error conten
     env.faux.setResponses([
       fauxAssistantMessage('x', { errorMessage: 'first failure', stopReason: 'error' }),
     ])
-    await env.kernel.submitInput(1, 'first run').catch(() => {})
-    await env.kernel.waitForIdle(1).catch(() => {})
-    await waitFor(() => env.kernel.getConversation(1).status === 'error')
-    assert.ok(env.kernel.getConversation(1).lastError?.includes('first failure'))
+    await env.kernel.conversations.submitInput(1, 'first run').catch(() => {})
+    await env.kernel.conversations.waitForIdle(1).catch(() => {})
+    await waitFor(() => env.kernel.conversations.getConversation(1).status === 'error')
+    assert.ok(env.kernel.conversations.getConversation(1).lastError?.includes('first failure'))
 
     // Second failure (different error text): status stays error, but changed lastError must push an update.
     env.faux.setResponses([
       fauxAssistantMessage('x', { errorMessage: 'second different failure', stopReason: 'error' }),
     ])
-    await env.kernel.submitInput(1, 'second run').catch(() => {})
-    await env.kernel.waitForIdle(1).catch(() => {})
-    await waitFor(() => env.kernel.getConversation(1).lastError?.includes('second different failure') === true)
-    const latest = env.kernel.getConversation(1).lastError
+    await env.kernel.conversations.submitInput(1, 'second run').catch(() => {})
+    await env.kernel.conversations.waitForIdle(1).catch(() => {})
+    await waitFor(() => env.kernel.conversations.getConversation(1).lastError?.includes('second different failure') === true)
+    const latest = env.kernel.conversations.getConversation(1).lastError
     assert.ok(latest !== undefined)
     assert.ok(
       !latest.includes('first failure'),

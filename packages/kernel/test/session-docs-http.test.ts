@@ -17,7 +17,7 @@ import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { SessionDocEventHub } from '../src/runtime/events.js'
 import { AuthService } from '../src/services/index.js'
-import { createHubHandler, startHub, type KernelRuntimeLike, type SessionDocEventPort } from '../src/http/index.js'
+import { createHubHandler, startHub, type KernelHttpTarget } from '../src/http/index.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir, waitFor } from './helpers.js'
 
@@ -28,7 +28,7 @@ function makeConversation(id: number) {
 let dataDir: string
 let pluginHost: PluginHost
 let sessionDocHub: SessionDocEventHub
-let testKernel: KernelRuntimeLike
+let testKernel: KernelHttpTarget
 let hubUrl: string
 let closeHub: (() => Promise<void>) | undefined
 let token: string
@@ -107,50 +107,57 @@ beforeEach(async () => {
       ctx.doc('global', { g: 1 }, { public: true })
     },
   })
-  const sessionDocEvents: SessionDocEventPort = sessionDocHub
-  const kernel: KernelRuntimeLike = {
+  const kernel = {
     dataDir,
     auth,
     events: { response: () => new Response('') },
-    sessionDocEvents,
+    sessionDocEvents: sessionDocHub,
     profiles: new Proxy({}, { get: () => async () => [] }) as never,
     skills: new Proxy({}, { get: () => async () => [] }) as never,
     credentials: new Proxy({}, { get: () => async () => [] }) as never,
     providers: new Proxy({}, { get: () => async () => [] }) as never,
     artifacts: new Proxy({}, { get: () => { throw new HelmxError('not_found', 'x', 404) } }) as never,
     plugins: pluginHost,
-    listConversations: async () => [...existing].map(makeConversation),
-    getConversationDetail: async (id) => {
-      if (!existing.has(id)) throw new HelmxError('not_found', `conversation missing: ${id}`, 404)
-      return { ...makeConversation(id), entries: [] } as never
+    conversations: {
+      listConversations: () => [...existing].map(makeConversation),
+      getConversationDetail: async (id: number) => {
+        if (!existing.has(id)) throw new HelmxError('not_found', `conversation missing: ${id}`, 404)
+        return { ...makeConversation(id), entries: [] } as never
+      },
+      getConversationEntry: async (id: number, entryId: number) => {
+        if (!existing.has(id)) throw new HelmxError('not_found', `conversation missing: ${id}`, 404)
+        throw new HelmxError('not_found', `entry ${entryId} missing in conversation ${id}`, 404)
+      },
+      createConversation: async () => makeConversation(3),
+      updateConversation: async (id: number) => makeConversation(id),
+      deleteConversation: async () => {},
+      deleteConversations: async (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
+      submitInput: async () => ({ submissionId: 's' }),
+      waitForInput: async (id: number) => ({ conversationId: id, submissionId: 's', text: '', entry: { id: 'e', kind: 'user' } }) as never,
+      abortConversation: async () => {},
+      resetConversation: async (id: number) => makeConversation(id),
+      compactConversation: async (id: number) => ({ taskId: 1, conversation: makeConversation(id) }) as never,
+      forkConversation: async (id: number) => makeConversation(id + 100),
+      search: async () => [],
     },
-    getConversationEntry: async (id, entryId) => {
-      if (!existing.has(id)) throw new HelmxError('not_found', `conversation missing: ${id}`, 404)
-      throw new HelmxError('not_found', `entry ${entryId} missing in conversation ${id}`, 404)
+    asks: {
+      listAsks: () => [],
+      answerAsk: async () => ({ id: 'x' } as never),
+      cancelAsk: async () => ({ id: 'x' } as never),
     },
-    createConversation: async () => makeConversation(3),
-    updateConversation: async (id) => makeConversation(id),
-    deleteConversation: async () => {},
-    deleteConversations: async (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
-    submitInput: async () => ({ submissionId: 's' }),
-    waitForInput: async (id) => ({ conversationId: id, submissionId: 's', text: '', entry: { id: 'e', kind: 'user' } }) as never,
-    abortConversation: async () => {},
-    resetConversation: async (id) => makeConversation(id),
-    compactConversation: async (id) => ({ taskId: 1, conversation: makeConversation(id) }) as never,
-    forkConversation: async (id) => makeConversation(id + 100),
-    listAsks: async () => [],
-    answerAsk: async () => {},
-    cancelAsk: async () => {},
-    search: async () => [],
-    listModels: async () => ({ models: [], thinkingLevels: {} }),
-    listModelProviders: async () => [],
-    listNodes: async () => [],
-    issueNodeToken: async () => ({ nodeId: 'local', token: 't', createdAt: 0 }),
-    removeNode: async () => {},
-    execEnv: async () => {
-      throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501)
+    models: {
+      listModels: async () => ({ models: [], thinkingLevels: {} }),
+      listModelProviders: () => [],
     },
-  }
+    nodes: {
+      listNodes: async () => [],
+      issueNodeToken: async () => ({ nodeId: 'local', token: 't', createdAt: 0 }),
+      removeNode: async () => {},
+      execEnv: async () => {
+        throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501)
+      },
+    },
+  } as unknown as KernelHttpTarget
   testKernel = kernel
   const handle = await startHub({ kernel, port: 0 })
   hubUrl = handle.url

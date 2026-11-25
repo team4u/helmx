@@ -114,10 +114,10 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       fauxAssistantMessage('large history answer three'),
     ])
     for (const marker of ['round-1-unique-marker', 'round-2-unique-marker', 'round-3-unique-marker']) {
-      await kernel.submitInput(1, `${marker}: ${bigInput}`)
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, `${marker}: ${bigInput}`)
+      await kernel.conversations.waitForIdle(1)
     }
-    await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) > 30_000, 20_000)
+    await waitFor(() => (kernel.conversations.getConversation(1).contextUsage?.tokens ?? 0) > 30_000, 20_000)
   }
 
   it('queues steer/followUp during compaction, rejects 409 when reject, and commits pi.compaction before helmx.input', { timeout: 60_000 }, async () => {
@@ -143,19 +143,19 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         },
       ])
 
-      await kernel.compactConversation(1)
+      await kernel.conversations.compactConversation(1)
       await enteredPromise
-      await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === true, 15_000)
+      await waitFor(() => kernel.conversations.getConversation(1).contextUsage?.compacting === true, 15_000)
 
       // whenBusy='reject' must explicitly fail with 409 during compaction rather than silently queueing or starting a run.
       await assert.rejects(
-        () => kernel.submitInput(1, 'rejected input during compaction', { whenBusy: 'reject' }),
+        () => kernel.conversations.submitInput(1, 'rejected input during compaction', { whenBusy: 'reject' }),
         (err: unknown) => err instanceof HelmxError && err.code === 'conversation_busy' && err.status === 409,
       )
 
       // followUp and steer submitted during compaction enter pi.inbox and appear in live.queuedInputs.
-      const subFu = await kernel.submitInput(1, 'follow-up question after compaction', { whenBusy: 'followUp' })
-      const subSt = await kernel.submitInput(1, 'steer instruction after compaction', { whenBusy: 'steer' })
+      const subFu = await kernel.conversations.submitInput(1, 'follow-up question after compaction', { whenBusy: 'followUp' })
+      const subSt = await kernel.conversations.submitInput(1, 'steer instruction after compaction', { whenBusy: 'steer' })
       assert.ok(Number(subFu.submissionId) > 0)
       assert.ok(Number(subSt.submissionId) > 0)
 
@@ -170,7 +170,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       )
 
       // Before compaction completes, queued inputs must neither persist nor trigger model calls.
-      const midDetail = await kernel.getConversationDetail(1, { limit: 100 })
+      const midDetail = await kernel.conversations.getConversationDetail(1, { limit: 100 })
       assert.equal(midDetail.entries.some((e) => e.kind === 'pi.compaction'), false)
       assert.equal(
         midDetail.entries.some(
@@ -181,13 +181,13 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
 
       // Release summary gate: summary persists and assistant runs the queued turn automatically.
       releaseSummary()
-      await kernel.waitForIdle(1)
+      await kernel.conversations.waitForIdle(1)
       await waitFor(() => {
         const live = findLive(kernel, 1)
         return live === undefined || (live.queuedInputs?.length ?? 0) === 0
       }, 15_000)
 
-      const finalDetail = await kernel.getConversationDetail(1, { limit: 100 })
+      const finalDetail = await kernel.conversations.getConversationDetail(1, { limit: 100 })
       const compactionIdx = finalDetail.entries.findIndex((e) => e.kind === 'pi.compaction')
       const steerIdx = finalDetail.entries.findIndex(
         (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === 'steer instruction after compaction',
@@ -231,13 +231,13 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         },
       ])
 
-      await kernel.compactConversation(1)
+      await kernel.conversations.compactConversation(1)
       await enteredPromise
 
-      const { submissionId } = await kernel.submitInput(1, 'input to withdraw during compaction', { whenBusy: 'followUp' })
+      const { submissionId } = await kernel.conversations.submitInput(1, 'input to withdraw during compaction', { whenBusy: 'followUp' })
       await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
-      const withdrawn = await kernel.withdrawQueuedInput(1, { submissionId: Number(submissionId) })
+      const withdrawn = await kernel.conversations.withdrawQueuedInput(1, { submissionId: Number(submissionId) })
       assert.equal(withdrawn.status, 'withdrawn')
 
       await waitFor(() => {
@@ -246,10 +246,10 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       }, 10_000)
 
       releaseSummary()
-      await kernel.waitForIdle(1)
-      await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === undefined, 15_000)
+      await kernel.conversations.waitForIdle(1)
+      await waitFor(() => kernel.conversations.getConversation(1).contextUsage?.compacting === undefined, 15_000)
 
-      const detail = await kernel.getConversationDetail(1, { limit: 100 })
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 100 })
       assert.ok(detail.entries.some((e) => e.kind === 'pi.compaction'), 'compaction should still finish normally')
       assert.equal(
         detail.entries.some(
@@ -283,13 +283,13 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         },
       ])
 
-      await kernel.compactConversation(1)
+      await kernel.conversations.compactConversation(1)
       await enteredPromise
-      await kernel.submitInput(1, 'input dropped upon abort', { whenBusy: 'steer' })
+      await kernel.conversations.submitInput(1, 'input dropped upon abort', { whenBusy: 'steer' })
       await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
-      await kernel.abortConversation(1)
-      await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === undefined, 15_000)
+      await kernel.conversations.abortConversation(1)
+      await waitFor(() => kernel.conversations.getConversation(1).contextUsage?.compacting === undefined, 15_000)
       await waitFor(() => {
         const live = findLive(kernel, 1)
         return live === undefined || (live.queuedInputs?.length ?? 0) === 0
@@ -306,7 +306,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         false,
         'explicit abort must not emit failure notice',
       )
-      const detail = await kernel.getConversationDetail(1, { limit: 100 })
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 100 })
       assert.equal(detail.entries.some((e) => e.kind === 'pi.compaction'), false)
       assert.equal(
         detail.entries.some(
@@ -336,10 +336,10 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       const recorder = recordNotifications(kernel, 1)
       try {
         faux.setResponses([fauxAssistantMessage('short dialog answer')])
-        await kernel.submitInput(1, 'short issue')
-        await kernel.waitForIdle(1)
+        await kernel.conversations.submitInput(1, 'short issue')
+        await kernel.conversations.waitForIdle(1)
 
-        await kernel.compactConversation(1)
+        await kernel.conversations.compactConversation(1)
         await waitFor(() => recorder.notices.some((n) => n.title === 'Current context does not need compaction'), 10_000)
         const notice = recorder.notices.find((n) => n.title === 'Current context does not need compaction')!
         assert.equal(notice.level, 'info')
@@ -379,23 +379,23 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         await seedLargeContext(kernel, faux)
 
         faux.setResponses([fauxAssistantMessage('auto-resumed reply after empty skip')])
-        await kernel.compactConversation(1)
+        await kernel.conversations.compactConversation(1)
         await enteredPromise
-        await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === true, 10_000)
+        await waitFor(() => kernel.conversations.getConversation(1).contextUsage?.compacting === true, 10_000)
 
-        await kernel.submitInput(1, 'queued question during empty-skip compaction', { whenBusy: 'followUp' })
+        await kernel.conversations.submitInput(1, 'queued question during empty-skip compaction', { whenBusy: 'followUp' })
         await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
         releaseHook()
 
         await waitFor(() => recorder.notices.some((n) => n.title === 'Current context does not need compaction'), 15_000)
-        await kernel.waitForIdle(1)
+        await kernel.conversations.waitForIdle(1)
         await waitFor(() => {
           const live = findLive(kernel, 1)
           return live === undefined || (live.queuedInputs?.length ?? 0) === 0
         }, 15_000)
 
-        const detail = await kernel.getConversationDetail(1, { limit: 100 })
+        const detail = await kernel.conversations.getConversationDetail(1, { limit: 100 })
         assert.equal(detail.entries.some((e) => e.kind === 'pi.compaction'), false, 'empty skip must not write pi.compaction')
         assert.ok(
           detail.entries.some(
@@ -436,15 +436,15 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         fauxAssistantMessage('reply that must never execute'),
       ])
 
-      await kernel.compactConversation(1)
+      await kernel.conversations.compactConversation(1)
       await enteredPromise
 
-      await kernel.submitInput(1, 'input kept in queue after failure', { whenBusy: 'followUp' })
+      await kernel.conversations.submitInput(1, 'input kept in queue after failure', { whenBusy: 'followUp' })
       await waitFor(() => (findLive(kernel, 1)?.queuedInputs?.length ?? 0) === 1, 10_000)
 
       releaseSummary()
       await waitFor(() => recorder.notices.some((n) => n.title === 'Context compaction failed'), 15_000)
-      await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === undefined, 15_000)
+      await waitFor(() => kernel.conversations.getConversation(1).contextUsage?.compacting === undefined, 15_000)
       await new Promise((r) => setTimeout(r, 80))
 
       const failNotice = recorder.notices.find((n) => n.title === 'Context compaction failed')!
@@ -460,7 +460,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       assert.equal(live?.queuedInputs?.length, 1, 'queued input must remain intact in queuedInputs')
       assert.equal(live?.queuedInputs?.[0]?.text, 'input kept in queue after failure')
 
-      const detail = await kernel.getConversationDetail(1, { limit: 100 })
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 100 })
       assert.equal(
         detail.entries.some(
           (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === 'input kept in queue after failure',
@@ -483,7 +483,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     try {
       await seedLargeContext(kernel, faux)
 
-      const preDetail = await kernel.getConversationDetail(1, { limit: 50 })
+      const preDetail = await kernel.conversations.getConversationDetail(1, { limit: 50 })
       const lastHumanEntry = [...preDetail.entries].reverse().find((e) => e.kind === 'helmx.input')
       assert.ok(lastHumanEntry, 'must contain editable helmx.input entry')
       const targetEntryId = Number(lastHumanEntry!.id)
@@ -500,15 +500,15 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         fauxAssistantMessage('new reply after in-place overwrite'),
       ])
 
-      await kernel.compactConversation(1)
+      await kernel.conversations.compactConversation(1)
       await enteredPromise
-      await waitFor(() => kernel.getConversation(1).contextUsage?.compacting === true, 15_000)
+      await waitFor(() => kernel.conversations.getConversation(1).contextUsage?.compacting === true, 15_000)
 
-      await kernel.submitInput(1, 'new issue replacing history during compaction', { replaceFromEntryId: targetEntryId })
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'new issue replacing history during compaction', { replaceFromEntryId: targetEntryId })
+      await kernel.conversations.waitForIdle(1)
       await new Promise((r) => setTimeout(r, 80))
 
-      const finalDetail = await kernel.getConversationDetail(1, { limit: 50 })
+      const finalDetail = await kernel.conversations.getConversationDetail(1, { limit: 50 })
       assert.ok(finalDetail.entries.some((e) => e.kind === 'helmx.rewind'), 'must persist helmx.rewind marker')
       assert.ok(
         finalDetail.entries.some(
@@ -552,8 +552,8 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     })
     const seenSummaryCalls: Array<{ modelId: string; maxTokens?: number; reasoning?: unknown }> = []
     try {
-      await kernel.setDefaultModel(undefined, 'high', 'faux/faux-2', 'low')
-      const catalog = await kernel.listModels()
+      await kernel.models.setDefaultModel(undefined, 'high', 'faux/faux-2', 'low')
+      const catalog = await kernel.models.listModels()
       assert.equal(catalog.defaultCompactionModel, 'faux/faux-2')
       assert.equal(catalog.defaultCompactionThinkingLevel, 'low')
 
@@ -566,9 +566,9 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         },
       ])
 
-      await kernel.compactConversation(1)
+      await kernel.conversations.compactConversation(1)
       await waitFor(
-        () => seenSummaryCalls.length === 1 && kernel.getConversation(1).contextUsage?.compacting === undefined,
+        () => seenSummaryCalls.length === 1 && kernel.conversations.getConversation(1).contextUsage?.compacting === undefined,
         20_000,
       )
       assert.equal(seenSummaryCalls[0]?.modelId, 'faux-2', 'compaction must use configured compactionModel')
@@ -590,17 +590,17 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         models: reloaded.models,
         externalSkillRoots: [],
       })
-      const reloadedCatalog = await kernel.listModels()
+      const reloadedCatalog = await kernel.models.listModels()
       assert.equal(reloadedCatalog.defaultCompactionModel, 'faux/faux-2')
       assert.equal(reloadedCatalog.defaultCompactionThinkingLevel, 'low')
 
       // Disabling the configured compactionModel must fail compaction explicitly instead of silently falling back.
-      await kernel.setDisabledModels('faux', ['faux-2'])
+      await kernel.models.setDisabledModels('faux', ['faux-2'])
       await seedLargeContext(kernel, reloaded.faux)
       const recorder = recordNotifications(kernel, 1)
       try {
         reloaded.faux.setResponses([fauxAssistantMessage('must not fall back to faux-1')])
-        await kernel.compactConversation(1)
+        await kernel.conversations.compactConversation(1)
         await waitFor(
           () => recorder.notices.some((n) => n.level === 'error' && n.title === 'Context compaction failed'),
           15_000,
@@ -611,9 +611,9 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       }
 
       // Clearing compactionModel & compactionThinkingLevel restores using the conversation's current model & level.
-      await kernel.setDisabledModels('faux', [])
-      await kernel.setDefaultModel(undefined, undefined, '', '')
-      const clearedCatalog = await kernel.listModels()
+      await kernel.models.setDisabledModels('faux', [])
+      await kernel.models.setDefaultModel(undefined, undefined, '', '')
+      const clearedCatalog = await kernel.models.listModels()
       assert.equal(clearedCatalog.defaultCompactionModel, undefined)
       assert.equal(clearedCatalog.defaultCompactionThinkingLevel, undefined)
       const clearedCalls: Array<{ modelId: string; reasoning?: unknown }> = []
@@ -623,9 +623,9 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
           return fauxAssistantMessage('summary from current model faux-1')
         },
       ])
-      await kernel.compactConversation(1)
+      await kernel.conversations.compactConversation(1)
       await waitFor(
-        () => clearedCalls.length === 1 && kernel.getConversation(1).contextUsage?.compacting === undefined,
+        () => clearedCalls.length === 1 && kernel.conversations.getConversation(1).contextUsage?.compacting === undefined,
         20_000,
       )
       assert.equal(clearedCalls[0]?.modelId, 'faux-1', 'clearing compactionModel must revert to current conversation model')
@@ -646,20 +646,20 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         fauxAssistantMessage('child round 3'),
       ])
       let childId = 0
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: `child-round-1-marker: ${bigInput}`,
         onResolved: (info) => { childId = info.conversationId ?? 0 },
       })
       assert.ok(childId > 0)
       for (const marker of ['child-round-2-marker', 'child-round-3-marker']) {
-        await kernel.spawnAgent({
+        await kernel.agentSpawn.spawnAgent({
           parentConversationId: 1,
           resume: String(childId),
           prompt: `${marker}: ${bigInput}`,
         })
       }
-      await waitFor(() => (kernel.getConversation(childId).contextUsage?.tokens ?? 0) > 30_000, 20_000)
+      await waitFor(() => (kernel.conversations.getConversation(childId).contextUsage?.tokens ?? 0) > 30_000, 20_000)
 
       let summaryEntered!: () => void
       const enteredPromise = new Promise<void>((resolve) => { summaryEntered = resolve })
@@ -678,13 +678,13 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         },
       ])
 
-      await kernel.compactConversation(childId)
+      await kernel.conversations.compactConversation(childId)
       await enteredPromise
-      await waitFor(() => kernel.getConversation(childId).contextUsage?.compacting === true, 15_000)
+      await waitFor(() => kernel.conversations.getConversation(childId).contextUsage?.compacting === true, 15_000)
 
       // Resume native subagent while compaction is active: must queue in pi.inbox (helmx.input)
       // and wait for compaction rather than racing ahead on uncompacted context.
-      const resumedTurn = kernel.spawnAgent({
+      const resumedTurn = kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         resume: String(childId),
         prompt: 'post-compaction child task',
@@ -700,9 +700,9 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       releaseSummary()
       const answer = await resumedTurn
       assert.equal(answer, 'child answer after compaction')
-      await kernel.waitForIdle(childId)
+      await kernel.conversations.waitForIdle(childId)
 
-      const finalDetail = await kernel.getConversationDetail(childId, { limit: 100 })
+      const finalDetail = await kernel.conversations.getConversationDetail(childId, { limit: 100 })
       const compactionIdx = finalDetail.entries.findIndex((e) => e.kind === 'pi.compaction')
       const resumeInputIdx = finalDetail.entries.findIndex(
         (e) =>

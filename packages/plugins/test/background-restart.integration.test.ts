@@ -39,17 +39,18 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { type HelmxEventFrame, type PluginDefinition } from '@helmx/protocol'
 
-import { KernelRuntime, openHelmxDatabase } from '../../kernel/src/runtime/index.js'
+import { KernelRuntime } from '@helmx/kernel'
+import { openHelmxDatabase } from '@helmx/kernel/testing'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
 import { createMemoryKvStore, WorkflowService, type RunHeader, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
 import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const require = createRequire(import.meta.url)
-/** 主仓 packages/kernel（测试跨目录显式导入 kernel 源码；tsx loader 直跑源码）。 */
-const KERNEL_DIR = new URL('../../kernel/', import.meta.url).pathname
-const PI_AI_DIR = join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai')
-const KERNEL_SRC = pathToFileURL(join(KERNEL_DIR, 'src/runtime/index.ts')).href
+const PLUGINS_PKG_DIR = new URL('../', import.meta.url).pathname
+const PI_AI_MODELS_URL = import.meta.resolve('@earendil-works/pi-ai/models')
+const PI_AI_FAUX_URL = import.meta.resolve('@earendil-works/pi-ai/providers/faux')
+const KERNEL_URL = import.meta.resolve('@helmx/kernel')
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -139,7 +140,7 @@ faux.setResponses([fauxAssistantMessage('这是一段被慢速流式输出的长
 const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 // 真实原生 spawn：创建子会话并提交输入（submission 内部 resume 调度器，回合真实运行）
 let childId = 0
-void kernel.spawnAgent({
+void kernel.agentSpawn.spawnAgent({
   parentConversationId: 1,
   prompt: '执行一个会被进程重启打断的长任务',
   onResolved: (info) => { if (info.conversationId) childId = info.conversationId },
@@ -148,7 +149,7 @@ void kernel.spawnAgent({
 // 等子会话真正进入 working 且模型流式调用已发起（prepare/request 检查点已落盘）
 for (let i = 0; i < 400; i++) {
   await delay(10)
-  if (childId && faux.state.callCount >= 1 && kernel.listConversations().some((c) => c.id === childId && c.status === 'working')) break
+  if (childId && faux.state.callCount >= 1 && kernel.conversations.listConversations().some((c) => c.id === childId && c.status === 'working')) break
 }
 if (!childId || faux.state.callCount < 1) { process.stderr.write('seed: no child\\n'); process.exit(3) }
 // 植入 startBackgroundAgent 的持久 RunHeader（新契约：写入 pluginKv 命名空间 runs）
@@ -180,7 +181,6 @@ process.kill(process.pid, 'SIGKILL')
 
 /** 只读探针 Harness：验证 paused + abort 标记（不解锁调度器）。 */
 async function readOnlyInspect(dataDir: string): Promise<{ scheduling: string; tasks: Array<{ kind: string; conversationId: number; abortRequested: boolean; status: string }> }> {
-  const { openHelmxDatabase } = await import('../../kernel/src/runtime/sqlite.js')
   const db = await openHelmxDatabase(dataDir)
   try {
     const probe = await Harness.open(db.storage, { models: createModels(), registry: createRegistry(), readOnly: true }, BACKGROUND_CONTEXT)
@@ -212,7 +212,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-restart-'))
   const seedDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed-'))
   const seederPath = join(seedDir, 'seed.mts')
-  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helmx/plugin-build')), 'utf8')
+  writeFileSync(seederPath, seederSource(KERNEL_URL, PI_AI_MODELS_URL, PI_AI_FAUX_URL, import.meta.resolve('@helmx/plugin-build')), 'utf8')
   const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
   // t.after 按注册顺序执行：先杀子进程/清理 seeder 目录；dataDir 必须等内核
@@ -224,7 +224,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
   try {
     // ---- 1) 子进程制造真实遗留（慢速流式中途 SIGKILL；cwd/env 全临时，无端口）----
     child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: KERNEL_DIR,
+      cwd: PLUGINS_PKG_DIR,
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
@@ -273,7 +273,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
         rootInputs.push({ conversationId: e.conversationId, origin: e.entry.data?.origin, kind: e.entry.data?.meta?.kind })
       }
     })
-    assert.equal(kernel.getConversation(childId).parentConversationId, ROOT, '遗留子会话镜像与父关联必须在重启后恢复')
+    assert.equal(kernel.conversations.getConversation(childId).parentConversationId, ROOT, '遗留子会话镜像与父关联必须在重启后恢复')
 
     // ---- 3+4) 注册 builtin:workflow 插件与探针插件（deferServices 启动屏障：
     // 注册期不启动任何服务；kernel.start() 先全局 prepare 再逐插件 start）。
@@ -326,14 +326,14 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     assert.equal(faux.state.callCount, 0, 'prepare 屏障期间零模型调用')
     releasePrepare()
     await startPromise
-    await kernel.waitForIdle(ROOT).catch(() => {})
+    await kernel.conversations.waitForIdle(ROOT).catch(() => {})
     assert.equal(faux.state.callCount, 1, `恢复期恰好一次模型调用（父会话报告回合；实际 ${faux.state.callCount}；旧子会话绝不能凭旧 checkpoint 复燃）`)
     const runs = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: Array<{ id: string; status: string; error?: string }> }
     const run = runs.runs.find((r) => r.id === 'wf_seed_real')
     assert.ok(run, `遗留 run 应存在（实际 ${JSON.stringify(runs.runs.map((r) => r.id))}）`)
     assert.equal(run.status, 'failed', `遗留 run 必须标 failed（实际 ${run.status}）`)
     assert.match(run.error ?? '', /interrupted/, 'failed 原因必须是进程重启中断')
-    assert.equal(kernel.getConversation(childId).status, 'idle', '旧子会话终态 idle（不再 working）')
+    assert.equal(kernel.conversations.getConversation(childId).status, 'idle', '旧子会话终态 idle（不再 working）')
     const reportInputs = rootInputs.filter((i) => i.origin === 'agent' && i.kind === 'subagent_report')
     assert.equal(reportInputs.length, 1, `父会话恰好收到一次 agent 来源中断报告（实际 ${JSON.stringify(rootInputs)}）`)
     assert.deepEqual(probeOrder, ['prepare', 'start'], `屏障顺序必须 prepare 全部完成后才 start（实际 ${JSON.stringify(probeOrder)}）`)
@@ -346,12 +346,12 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     // 相位自适应（专用恢复方法已删除）：调度器已 resume 后，同一
     // abortConversationGuarded 走普通中止语义（SDK abort + 等待空闲），
     // 对 idle 子会话是安全 no-op，绝不复燃旧回合，也不再需要专用 409。
-    await kernel.abortConversationGuarded(childId, {})
+    await kernel.conversations.abortConversationGuarded(childId, {})
 
     // ---- 6) 显式 resume 原子会话：执行新输入（新回合真实模型调用）----
     faux.setResponses([fauxAssistantMessage('续接后的新回答')])
     let resumedConv = 0
-    const answer = await kernel.spawnAgent({
+    const answer = await kernel.agentSpawn.spawnAgent({
       parentConversationId: ROOT,
       resume: String(childId),
       prompt: '重启后的新输入',
@@ -377,7 +377,7 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-restart3-'))
   const seedDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed3-'))
   const seederPath = join(seedDir, 'seed.mts')
-  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helmx/plugin-build')), 'utf8')
+  writeFileSync(seederPath, seederSource(KERNEL_URL, PI_AI_MODELS_URL, PI_AI_FAUX_URL, import.meta.resolve('@helmx/plugin-build')), 'utf8')
   const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
   // 同用例 2：先杀子进程/清理 seeder 目录，dataDir 在内核 close 后再删。
@@ -387,7 +387,7 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
   }, { timeout: 60_000 })
   try {
     child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: KERNEL_DIR,
+      cwd: PLUGINS_PKG_DIR,
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
@@ -423,9 +423,9 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
     }, { timeout: 60_000 })
 
     // human 红线覆盖恢复窗口：paused 相位对 human 归属会话拒绝持久标记。
-    kernel.markConversationOwnership(childId, 'human')
+    kernel.ownership.markOwnership(childId, 'human')
     await assert.rejects(
-      () => kernel.abortConversationGuarded(childId, {}),
+      () => kernel.conversations.abortConversationGuarded(childId, {}),
       (err: { code?: string }) => err.code === 'ownership_conflict',
     )
     let snap = await readOnlyInspect(dataDir)
@@ -434,8 +434,8 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
     assert.equal(snap.scheduling, 'paused', 'human 拒绝路径不得唤醒调度器')
 
     // helmx 归属：paused 相位只落持久 abort 标记（不 resume、不等结算、零模型调用）。
-    kernel.markConversationOwnership(childId, 'helmx')
-    await kernel.abortConversationGuarded(childId, {})
+    kernel.ownership.markOwnership(childId, 'helmx')
+    await kernel.conversations.abortConversationGuarded(childId, {})
     snap = await readOnlyInspect(dataDir)
     task = snap.tasks.find((tk) => tk.conversationId === childId)
     assert.ok(task !== undefined && task.abortRequested === true, 'paused 相位必须落持久 abortRequested 标记')
@@ -445,10 +445,10 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
     // start 后（调度器 running）：同一方法回落普通中止语义（idle 子会话为
     // 安全 no-op，绝不复燃旧回合）。
     await kernel.start()
-    await kernel.abortConversationGuarded(childId, {})
-    await kernel.waitForIdle(childId).catch(() => {})
+    await kernel.conversations.abortConversationGuarded(childId, {})
+    await kernel.conversations.waitForIdle(childId).catch(() => {})
     assert.equal(faux.state.callCount, 0, 'running 相位中止已标记的遗留任务仍零新增模型调用')
-    assert.equal(kernel.getConversation(childId).status, 'idle', '遗留子会话终态 idle')
+    assert.equal(kernel.conversations.getConversation(childId).status, 'idle', '遗留子会话终态 idle')
   } finally {
     if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
   }
@@ -468,8 +468,8 @@ test('同步工作流全覆盖收敛：SIGKILL 与 graceful close() 均回收遗
   writeFileSync(
     seederPath,
     `import { setTimeout as delay } from 'node:timers/promises'
-import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href)}
-import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
+import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
+import { KernelRuntime } from ${JSON.stringify(KERNEL_URL)}
 import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))}
 import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
 import { createWorktreePlugin } from ${JSON.stringify(worktreeSrc)}
@@ -488,7 +488,7 @@ const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
 let childId = 0
 for (let i = 0; i < 400; i++) {
   await delay(10)
-  const working = kernel.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
+  const working = kernel.conversations.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
   if (working && faux.state.callCount >= 1) {
     childId = working.id
     break
@@ -514,7 +514,7 @@ process.kill(process.pid, 'SIGKILL')
 
   try {
     child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: KERNEL_DIR,
+      cwd: PLUGINS_PKG_DIR,
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
@@ -574,7 +574,7 @@ process.kill(process.pid, 'SIGKILL')
     await kernel.start()
 
     assert.equal(faux.state.callCount, 0, '同步工作流重启恢复不得新增模型调用（子会话与父会话均零调用）')
-    assert.equal(kernel.getConversation(childId).status, 'idle', '同步工作流遗留子会话必须收敛为 idle')
+    assert.equal(kernel.conversations.getConversation(childId).status, 'idle', '同步工作流遗留子会话必须收敛为 idle')
     assert.equal(rootInputs.length, 0, '同步工作流恢复不得向父会话投递通知')
     const runs = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as {
       runs: Array<{ id: string; status: string; error?: string }>
@@ -615,7 +615,7 @@ process.kill(process.pid, 'SIGKILL')
   let closeChildId = 0
   for (let i = 0; i < 400; i++) {
     await delay(10)
-    const working = k1.listConversations().find((c) => c.parentConversationId === ROOT && c.status === 'working')
+    const working = k1.conversations.listConversations().find((c) => c.parentConversationId === ROOT && c.status === 'working')
     if (working) {
       closeChildId = working.id
       break
@@ -650,7 +650,7 @@ process.kill(process.pid, 'SIGKILL')
   await k2.start()
 
   assert.equal(fauxC2.state.callCount, 0, '关停残留子会话重启不得继续执行或发父通知')
-  assert.equal(k2.getConversation(closeChildId).status, 'idle')
+  assert.equal(k2.conversations.getConversation(closeChildId).status, 'idle')
   assert.equal(rootInputs2.length, 0)
   const kvEntryAfterRestart = k2.kvStore.get('builtin:workflow', 'runs', closeRun.id)
   assert.ok(kvEntryAfterRestart !== undefined)
@@ -686,8 +686,8 @@ test('原生 isolation:worktree SIGKILL 崩溃租约在重启 runtime.started �
     `import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
-import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href)}
-import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
+import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
+import { KernelRuntime } from ${JSON.stringify(KERNEL_URL)}
 import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))}
 import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
 import { createWorktreePlugin } from ${JSON.stringify(worktreeSrc)}
@@ -707,7 +707,7 @@ const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
 let childId = 0
 for (let i = 0; i < 400; i++) {
   await delay(10)
-  const working = kernel.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
+  const working = kernel.conversations.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
   if (!working || faux.state.callCount < 1) continue
   await kernel.documentStore.flush()
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
@@ -746,7 +746,7 @@ process.kill(process.pid, 'SIGKILL')
 
   try {
     child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: KERNEL_DIR,
+      cwd: PLUGINS_PKG_DIR,
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
@@ -832,7 +832,7 @@ process.kill(process.pid, 'SIGKILL')
     await kernel.start()
 
     assert.equal(faux.state.callCount, 0, '工作树遗留子会话重启期零新增模型调用')
-    assert.equal(kernel.getConversation(childId).status, 'idle', '子会话先于租约回收收敛 idle')
+    assert.equal(kernel.conversations.getConversation(childId).status, 'idle', '子会话先于租约回收收敛 idle')
 
     await kernel.documentStore.flush()
     await kernel.kvStore.flush()

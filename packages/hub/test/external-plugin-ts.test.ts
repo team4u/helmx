@@ -8,9 +8,9 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { after, before, test } from 'node:test'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { debugBackendTsLoaderState, registerPluginTsRoot } from '../../kernel/src/plugins/backend-ts-loader.js'
-import { loadExternalPlugins } from '../../kernel/src/plugins/external-loader.js'
+import { fileURLToPath } from 'node:url'
+import { loadExternalPlugins, registerPluginTsRoot } from '@helmx/kernel'
+import { debugBackendTsLoaderState } from '@helmx/kernel/testing'
 import {
   cleanupDir,
   createHubTestApp,
@@ -24,8 +24,6 @@ void HostHelmxError
 function globalFlag(name: string): unknown {
   return (globalThis as Record<string, unknown>)[name]
 }
-
-const loaderSrc = fileURLToPath(new URL('../../kernel/src/plugins/backend-ts-loader.ts', import.meta.url))
 
 function writeTsPlugin(pluginsDir: string, dir = 'ts-demo'): { dirPath: string; counterName: string } {
   const counterName = `__init_${dir.replace(/[^A-Za-z0-9_]/g, '_')}`
@@ -377,9 +375,13 @@ test('TS 根释放、引用计数与 fallback 映射（纯 node 子进程生产�
   const escapeSpec = relative(dirPath, join(out, 'evil.ts')).split(sep).join('/').replace(/evil\.ts$/, 'evil.js')
   writeFileSync(join(dirPath, 'escape.ts'), `import { e } from '${escapeSpec}'\nexport const t = e\n`)
 
+  const hubPkgUrl = new URL('../package.json', import.meta.url).href
   const providerUrl = import.meta.resolve('@helmx/plugin-build')
   const childSrc = `
-const { registerPluginTsRoot } = await import(${JSON.stringify(pathToFileURL(loaderSrc).href)});
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+const kernelDistUrl = pathToFileURL(createRequire(${JSON.stringify(hubPkgUrl)}).resolve('@helmx/kernel')).href;
+const { registerPluginTsRoot } = await import(kernelDistUrl);
 const { createPluginBuildProvider } = await import(${JSON.stringify(providerUrl)});
 const root = ${JSON.stringify(dirPath)};
 const release = registerPluginTsRoot(root, { transform: createPluginBuildProvider().transformBackendTs });

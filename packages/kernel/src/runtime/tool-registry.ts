@@ -28,7 +28,7 @@ import {
 import type { ConversationSummary, JsonSchema } from '@helmx/protocol'
 import type { DerivedToolSpec, PluginHost } from '../plugins/index.js'
 import { createRunActionTool, type KernelToolHost } from './kernel-tools.js'
-import { actionToolResult, pluginToolResult } from './runtime-helpers.js'
+import { actionToolResult, pluginToolResult } from './tools/tool-result-contract.js'
 import { throwIfToolAborted, type HelmxToolDeps } from './tool-deps.js'
 import {
   createBashTool,

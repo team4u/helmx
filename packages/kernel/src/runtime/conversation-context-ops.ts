@@ -14,7 +14,7 @@ import { HelmxError, isPlainObject } from '@helmx/protocol'
 import type { SecretStash } from '../services/index.js'
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
-import { requireConv } from './runtime-helpers.js'
+import { requireConv } from './conversation-require.js'
 import { resolveCleanForkAnchor } from './spawn-fork.js'
 import type { HelmxStore } from './store.js'
 

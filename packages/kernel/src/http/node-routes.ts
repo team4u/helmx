@@ -2,20 +2,31 @@
  * Node domain routes: /api/nodes (list/issue/remove/upgrade/port-forwarding) and
  * POST /api/env/exec (cross-node command execution, NDJSON streaming or single JSON response).
  */
-import { HelmxError, isStrictSemver, isValidNodeId, stripSemverVPrefix } from '@helmx/protocol'
-import type { EnvExecStreamFrame, JsonSchema } from '@helmx/protocol'
+import { HelmxError, isStrictSemver, isValidNodeId, REQUEST_SCHEMAS, stripSemverVPrefix } from '@helmx/protocol'
+import type { EnvExecStreamFrame } from '@helmx/protocol'
+import type { SecretStash } from '../services/index.js'
+import type { NodeManager } from '../runtime/node-manager.js'
+import type { NodeForwardService } from '../env/forward.js'
 import { redactJsonValue } from '../redact.js'
 import { isAbsoluteTargetPath } from '@helmx/protocol'
 import { jsonOk, errorResponse, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
-import type { KernelRuntimeLike } from './contracts.js'
-import { assertBodySchema, NODE_ID_PATTERN_SOURCE, requireUtf16LengthAtMost, ValidationError } from './validate.js'
+import { assertBodySchema, requireUtf16LengthAtMost, ValidationError } from './validate.js'
 import type { RouteContext } from './route-context.js'
 import { parseOptionalJsonObjectBody } from './route-context.js'
 
+export interface NodeRoutesTarget {
+  readonly nodes: Pick<NodeManager, 'listNodes' | 'issueNodeToken' | 'removeNode' | 'execEnv'> &
+    Partial<Pick<NodeManager, 'checkNodeUpgrade' | 'upgradeNode'>>
+  readonly nodeForward?: Partial<
+    Pick<NodeForwardService, 'start' | 'stop' | 'get' | 'list' | 'onEvent' | 'onStopped' | 'acquireLease'>
+  >
+  readonly stash?: Pick<SecretStash, 'redact'> & Partial<Pick<SecretStash, 'createStreamingRedactor'>>
+}
+
 export async function handleNodeDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<NodeRoutesTarget, 'nodes' | 'nodeForward'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -25,12 +36,12 @@ export async function handleNodeDomain(
   const fifth = segments[4]
 
   if (second === undefined && method === 'GET') {
-    return jsonOk(redactor, await kernel.listNodes())
+    return jsonOk(redactor, await kernel.nodes.listNodes())
   }
   if (second === 'issue' && method === 'POST' && third === undefined) {
     const body = await readJsonBody(ctx.request)
-    assertBodySchema(NODE_ISSUE_BODY_SCHEMA, body, 'nodes issue body')
-    const issued = await kernel.issueNodeToken(body.nodeId as string)
+    assertBodySchema(REQUEST_SCHEMAS.nodeIssue, body, 'nodes issue body')
+    const issued = await kernel.nodes.issueNodeToken(body.nodeId as string)
     // Plaintext token is returned once in this response (afterward no JSON output ever exposes
     // it again because the token is registered for outbound redaction). Bypass the standard redactor here
     // and serialize only the contract fields manually so it isn't masked as [REDACTED].
@@ -44,7 +55,7 @@ export async function handleNodeDomain(
   }
   if (second !== undefined && third === undefined && method === 'DELETE') {
     const nodeId = requireNodeSegment(second)
-    await kernel.removeNode(nodeId)
+    await kernel.nodes.removeNode(nodeId)
     return jsonOk(redactor, { ok: true })
   }
   // ---- Node upgrade: GET /:id/upgrade/check, POST /:id/upgrade -----------------
@@ -52,28 +63,28 @@ export async function handleNodeDomain(
     const nodeId = requireNodeSegment(second)
     if (fourth === 'check' && method === 'GET') {
       if (fifth !== undefined) return errorResponse(redactor, 404, 'not_found', 'route not found')
-      if (kernel.checkNodeUpgrade === undefined) {
+      if (kernel.nodes.checkNodeUpgrade === undefined) {
         throw new HelmxError('not_implemented', 'current runtime does not support node upgrade check', 501)
       }
-      return jsonOk(redactor, await kernel.checkNodeUpgrade(nodeId, parseNodeUpgradeCheckQuery(ctx.url)))
+      return jsonOk(redactor, await kernel.nodes.checkNodeUpgrade(nodeId, parseNodeUpgradeCheckQuery(ctx.url)))
     }
     if (fourth === undefined && method === 'POST') {
-      if (kernel.upgradeNode === undefined) {
+      if (kernel.nodes.upgradeNode === undefined) {
         throw new HelmxError('not_implemented', 'current runtime does not support node upgrade', 501)
       }
       const body = await parseOptionalJsonObjectBody(ctx.request, parseNodeUpgradeBody)
-      return jsonOk(redactor, await kernel.upgradeNode(nodeId, body))
+      return jsonOk(redactor, await kernel.nodes.upgradeNode(nodeId, body))
     }
     return errorResponse(redactor, 404, 'not_found', 'route not found')
   }
   // ---- Foreground port forwarding: POST /:id/forward, forward list/detail/events/stop ----------
   if (second !== undefined && third === 'forward' && fourth === undefined && method === 'POST') {
-    if (kernel.startNodeForward === undefined) {
+    if (kernel.nodeForward?.start === undefined) {
       throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
     const nodeId = requireNodeSegment(second)
     const body = await parseOptionalJsonObjectBody(ctx.request, parseNodeForwardBody)
-    return jsonOk(redactor, await kernel.startNodeForward(nodeId, body), { status: 201 })
+    return jsonOk(redactor, await kernel.nodeForward.start(nodeId, body), { status: 201 })
   }
   if (second === 'forward') {
     return handleForwardSubtree(ctx, kernel, redactor)
@@ -84,7 +95,7 @@ export async function handleNodeDomain(
 /** GET /api/nodes/forward list / :id detail / :id/events stream / DELETE :id stop. */
 async function handleForwardSubtree(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<NodeRoutesTarget, 'nodeForward'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -93,17 +104,17 @@ async function handleForwardSubtree(
   const fifth = segments[4]
   // GET /api/nodes/forward: active forwarding sessions.
   if (third === undefined && method === 'GET') {
-    if (kernel.listNodeForwards === undefined) {
+    if (kernel.nodeForward?.list === undefined) {
       throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
-    return jsonOk(redactor, kernel.listNodeForwards())
+    return jsonOk(redactor, kernel.nodeForward.list())
   }
   const forwardId = third
   if (forwardId !== undefined && fourth === undefined && method === 'GET') {
-    if (kernel.getNodeForward === undefined) {
+    if (kernel.nodeForward?.get === undefined) {
       throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
-    const session = kernel.getNodeForward(requireForwardSegment(forwardId))
+    const session = kernel.nodeForward.get(requireForwardSegment(forwardId))
     if (session === undefined) {
       return errorResponse(redactor, 404, 'not_found', 'forwarding session not found or already stopped')
     }
@@ -115,14 +126,14 @@ async function handleForwardSubtree(
   }
   // DELETE /api/nodes/forward/:id: stop forwarding (closes Hub listener and all tunnels).
   if (forwardId !== undefined && fourth === undefined && method === 'DELETE') {
-    if (kernel.stopNodeForward === undefined) {
+    if (kernel.nodeForward?.stop === undefined) {
       throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
     // Idempotency expressed via 404: stopping an absent forward returns 404 (prevents duplicate exit errors).
-    if (kernel.getNodeForward !== undefined && kernel.getNodeForward(requireForwardSegment(forwardId)) === undefined) {
+    if (kernel.nodeForward.get !== undefined && kernel.nodeForward.get(requireForwardSegment(forwardId)) === undefined) {
       return errorResponse(redactor, 404, 'not_found', 'forwarding session not found or already stopped')
     }
-    await kernel.stopNodeForward(requireForwardSegment(forwardId))
+    await kernel.nodeForward.stop(requireForwardSegment(forwardId))
     return jsonOk(redactor, { ok: true })
   }
   return errorResponse(redactor, 404, 'not_found', 'route not found')
@@ -131,66 +142,6 @@ async function handleForwardSubtree(
 // ---------------------------------------------------------------------------
 // /api/env/exec
 // ---------------------------------------------------------------------------
-
-const NODE_ISSUE_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: { nodeId: { type: 'string', minLength: 1 } },
-  required: ['nodeId'],
-  additionalProperties: false,
-}
-
-// targetVersion also requires strict SemVer validation (pure ASCII, consistent length bounds);
-// registryUrl must be parseable and include a hostname.
-const NODE_UPGRADE_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    targetVersion: { type: 'string', maxLength: 64 },
-    registryUrl: { type: 'string' },
-    force: { type: 'boolean' },
-  },
-  additionalProperties: false,
-}
-
-// Hostnames forbid whitespace and control chars; UTF-16 length cap is verified during parsing.
-const HOST_FIELD = { type: 'string', minLength: 1, pattern: '^[^\\s\\x00-\\x1f\\x7f]+$' } as const
-
-const NODE_FORWARD_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    listenHost: HOST_FIELD,
-    listenPort: { type: 'integer', minimum: 1, maximum: 65535 },
-    targetHost: HOST_FIELD,
-    targetPort: { type: 'integer', minimum: 1, maximum: 65535 },
-  },
-  required: ['listenHost', 'listenPort', 'targetPort'],
-  additionalProperties: false,
-}
-
-const ENV_EXEC_BODY_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    command: {
-      anyOf: [
-        // String command must contain at least one non-whitespace char; array must be non-empty string[].
-        { type: 'string', pattern: '\\S' },
-        { type: 'array', items: { type: 'string' }, minItems: 1 },
-      ],
-    },
-    nodeId: { type: 'string', pattern: NODE_ID_PATTERN_SOURCE },
-    // Cross-platform cwd absoluteness (POSIX/drive/UNC) is a semantic rule validated explicitly in the handler.
-    cwd: { type: 'string' },
-    conversationId: { type: 'integer', minimum: 1 },
-    env: {
-      type: 'object',
-      propertyNames: { pattern: '^[A-Za-z_][A-Za-z0-9_]*$' },
-      additionalProperties: { type: 'string', pattern: '^[^\\u0000]*$' },
-    },
-    timeoutMs: { type: 'integer', minimum: 1, maximum: 600000 },
-    stream: { type: 'boolean' },
-  },
-  required: ['command'],
-  additionalProperties: false,
-}
 
 /** Node ID path segment: starts with ASCII alphanumeric, may contain . _ - (matches issue validation). */
 function requireNodeSegment(raw: string): string {
@@ -240,7 +191,7 @@ function parseNodeUpgradeCheckQuery(url: URL): { registryUrl?: string } {
  * explicit `null` differs from omitted—validated and rejected with 400 rather than silently ignored.
  */
 function parseNodeUpgradeBody(body: Record<string, unknown>): { targetVersion?: string; registryUrl?: string; force?: boolean } {
-  assertBodySchema(NODE_UPGRADE_BODY_SCHEMA, body, 'node upgrade body')
+  assertBodySchema(REQUEST_SCHEMAS.nodeUpgrade, body, 'node upgrade body')
   const out: { targetVersion?: string; registryUrl?: string; force?: boolean } = {}
   if (body.targetVersion !== undefined) {
     const target = body.targetVersion as string
@@ -264,7 +215,7 @@ function parseNodeUpgradeBody(body: Record<string, unknown>): { targetVersion?: 
 function parseNodeForwardBody(
   body: Record<string, unknown>,
 ): { listenHost: string; listenPort: number; targetHost?: string; targetPort: number } {
-  assertBodySchema(NODE_FORWARD_BODY_SCHEMA, body, 'node forward body')
+  assertBodySchema(REQUEST_SCHEMAS.nodeForward, body, 'node forward body')
   requireUtf16LengthAtMost('listenHost', body.listenHost as string, 255)
   if (body.targetHost !== undefined) requireUtf16LengthAtMost('targetHost', body.targetHost as string, 255)
   return {
@@ -283,14 +234,14 @@ function parseNodeForwardBody(
  */
 export async function handleEnvExecDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<NodeRoutesTarget, 'nodes' | 'stash'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   if (ctx.segments[1] !== 'exec' || ctx.method !== 'POST' || ctx.segments[2] !== undefined) {
     return errorResponse(redactor, 404, 'not_found', 'route not found')
   }
   const body = await readJsonBody(ctx.request)
-  assertBodySchema(ENV_EXEC_BODY_SCHEMA, body, 'env exec body')
+  assertBodySchema(REQUEST_SCHEMAS.envExec, body, 'env exec body')
   // Cross-platform cwd absoluteness: POSIX / and Windows drive-absolute/UNC are valid;
   // drive-relative (e.g. C:relative) and relative paths are rejected (matches CLI string cwd rules).
   if (body.cwd !== undefined && !isAbsoluteTargetPath(body.cwd as string)) {
@@ -340,7 +291,7 @@ export async function handleEnvExecDomain(
           }
         }
         try {
-          const result = await kernel.execEnv(request, (chunk) => {
+          const result = await kernel.nodes.execEnv(request, (chunk) => {
             const activeRedactor = chunk.stream === 'stderr' ? stderrRedactor : stdoutRedactor
             const safe = activeRedactor.push(chunk.text)
             if (safe !== '') write({ type: 'output', stream: chunk.stream, text: safe })
@@ -393,7 +344,7 @@ export async function handleEnvExecDomain(
       },
     })
   }
-  return jsonOk(redactor, await kernel.execEnv(request, undefined, ctx.request.signal))
+  return jsonOk(redactor, await kernel.nodes.execEnv(request, undefined, ctx.request.signal))
 }
 
 // ---------------------------------------------------------------------------
@@ -417,7 +368,7 @@ function requireForwardSegment(raw: string): string {
  */
 async function getNodeForwardEvents(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: Pick<NodeRoutesTarget, 'nodeForward'>,
   forwardId: string,
 ): Promise<Response> {
   // Abort preflight (mirrors SSE streams in events.ts): the client may have disconnected while awaiting
@@ -428,10 +379,13 @@ async function getNodeForwardEvents(
   if (ctx.request.signal.aborted) {
     return errorResponse(undefined, 409, 'client_disconnected', 'client disconnected; refusing to open forwarding monitor stream')
   }
-  if (kernel.getNodeForward === undefined || kernel.onNodeForwardEvent === undefined) {
+  const nodeForward = kernel.nodeForward
+  if (nodeForward?.get === undefined || nodeForward.onEvent === undefined) {
     throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
   }
-  const session = kernel.getNodeForward(forwardId)
+  const getForward = nodeForward.get
+  const onEvent = nodeForward.onEvent
+  const session = getForward(forwardId)
   if (session === undefined) {
     return errorResponse(undefined, 404, 'not_found', 'forwarding session not found or already stopped')
   }
@@ -471,13 +425,13 @@ async function getNodeForwardEvents(
       // Register stop listener first (handles already-stopped race via immediate microtask callback), then
       // bind lease / emit initial frame / subscribe—guarantees either the `stopped` frame or stop callback
       // closes the stream on race, and both paths release the lease.
-      if (kernel.onNodeForwardStopped !== undefined) {
-        offStops.push(kernel.onNodeForwardStopped(forwardId, () => finish()))
+      if (nodeForward.onStopped !== undefined) {
+        offStops.push(nodeForward.onStopped(forwardId, () => finish()))
       }
-      if (kernel.acquireNodeForwardLease !== undefined) {
-        releaseLease = kernel.acquireNodeForwardLease(forwardId)
+      if (nodeForward.acquireLease !== undefined) {
+        releaseLease = nodeForward.acquireLease(forwardId)
       }
-      offEvents = kernel.onNodeForwardEvent!(forwardId, send)
+      offEvents = onEvent(forwardId, send)
       send({ type: 'started', listenHost: session.listenHost, listenPort: session.listenPort })
       ctx.request.signal.addEventListener('abort', finish, { once: true })
     },

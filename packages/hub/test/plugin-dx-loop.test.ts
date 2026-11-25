@@ -13,8 +13,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
-import { fileURLToPath } from 'node:url'
-import { doctorPluginDir } from '../../kernel/src/plugins/plugin-doctor.js'
+import { doctorPluginDir } from '@helmx/kernel'
 import {
   createHubTestApp,
   openHubHandlerEnv,
@@ -167,10 +166,13 @@ function writeLocalPackage(parent: string, id: string, version = '1.0.0'): strin
 
 test('代际边界加载：?helmxgen 入口重初始化模块图并向相对依赖闭包传播（纯 node 子进程）', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helmx-dx-gen-')
-  const loaderSrc = fileURLToPath(new URL('../../kernel/src/plugins/backend-ts-loader.ts', import.meta.url))
   const { dirPath, counterName } = writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-gen')
+  const hubPkgUrl = new URL('../package.json', import.meta.url).href
   const childSrc = `
-const { registerPluginTsRoot, nextPluginGeneration } = await import(${JSON.stringify(loaderSrc)})
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
+const kernelDistUrl = pathToFileURL(createRequire(${JSON.stringify(hubPkgUrl)}).resolve('@helmx/kernel')).href
+const { registerPluginTsRoot, nextPluginGeneration } = await import(kernelDistUrl)
 const { createPluginBuildProvider } = await import(${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))})
 const entry = ${JSON.stringify(join(dirPath, 'index.ts'))}
 const release = registerPluginTsRoot(${JSON.stringify(dirPath)}, { transform: createPluginBuildProvider().transformBackendTs })

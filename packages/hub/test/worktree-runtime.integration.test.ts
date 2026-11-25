@@ -42,8 +42,8 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHubHandler } from '../../kernel/src/http/index.js'
-import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
+import { createHubHandler } from '@helmx/kernel'
+import { openHelmxDatabase } from '@helmx/kernel/testing'
 import { extractWorktreeExecutionMeta } from '@helmx/plugins/contracts'
 import {
   createGitTemplate,
@@ -196,7 +196,7 @@ async function agentReports(
   kernel: RuntimeEnv['kernel'],
   conversationId: number,
 ): Promise<Array<{ origin: string; backgroundRunId?: string }>> {
-  const detail = await kernel.getConversationDetail(conversationId, { limit: 500 })
+  const detail = await kernel.conversations.getConversationDetail(conversationId, { limit: 500 })
   const out: Array<{ origin: string; backgroundRunId?: string }> = []
   for (const entry of detail.entries) {
     if (entry.kind !== 'helmx.input') continue
@@ -227,7 +227,7 @@ describe('builtin:worktree disable matrix', { timeout: 60_000 }, () => {
       )
       // 2) 非隔离 subagent 正常（builtin:workflow 不静态依赖 builtin:worktree）。
       env.faux.setResponses([fauxAssistantMessage('plain subagent done')])
-      const plain = await env.kernel.spawnAgent({
+      const plain = await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'plain task without isolation',
       } as AgentSpawnRequest)
@@ -237,7 +237,7 @@ describe('builtin:worktree disable matrix', { timeout: 60_000 }, () => {
       //    绝不静默降级为非隔离执行）。
       await assert.rejects(
         () =>
-          env.kernel.spawnAgent({
+          env.kernel.agentSpawn.spawnAgent({
             parentConversationId: 1,
             prompt: 'task requiring isolation',
             isolation: 'worktree',
@@ -273,7 +273,7 @@ describe('builtin:worktree isolated derive (agent_spawn continuation)', { timeou
         fauxAssistantMessage([fauxToolCall('bash', { command: 'pwd > .helmx-child-pwd.txt && git branch --show-current > .helmx-child-branch.txt' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('task complete:worktree inside execute done'),
       ])
-      const result = await env.kernel.spawnAgent({
+      const result = await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'in isolated worktree execute task',
         isolation: 'worktree',
@@ -303,7 +303,7 @@ describe('builtin:worktree isolated derive (agent_spawn continuation)', { timeou
       assert.ok(existsSync(join(worktree!.path, '.helmx-gate-pwd.txt')), 'gate artifact should in worktree inside')
       assert.equal(readFileSync(join(worktree!.path, '.helmx-gate-pwd.txt'), 'utf8').trim(), worktree!.path, 'gate pwd should be worktree directory (gate in tree inside execute)')
       assert.ok(!existsSync(join(repo, '.helmx-gate-pwd.txt')), 'source repository must not by gate/sub-conversation pollute')
-      const child = env.kernel.getConversation(resolved!.conversationId!)
+      const child = env.kernel.conversations.getConversation(resolved!.conversationId!)
       assert.equal(child.cwd, worktree!.path, 'sub-conversation mirror cwd should be worktree directory')
 
       // ---- clean up (builtin:worktree public action; by default keep branch).----
@@ -338,10 +338,10 @@ describe('builtin:worktree isolated derive (agent_spawn continuation)', { timeou
         fauxAssistantMessage('subagent complete'),
         fauxAssistantMessage('main turn complete'),
       ])
-      await env.kernel.submitInput(1, 'derive isolated subagent')
-      await env.kernel.waitForIdle(1)
+      await env.kernel.conversations.submitInput(1, 'derive isolated subagent')
+      await env.kernel.conversations.waitForIdle(1)
 
-      const detail = await env.kernel.getConversationDetail(1, { limit: 100 })
+      const detail = await env.kernel.conversations.getConversationDetail(1, { limit: 100 })
       const toolEntry = [...detail.entries]
         .reverse()
         .find((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('"subagent"'))
@@ -363,11 +363,11 @@ describe('builtin:worktree isolated derive (agent_spawn continuation)', { timeou
       )
 
       // real sub-conversation create in real isolated tree inside (mirror cwd i.e. isolated tree path).
-      const child = env.kernel.listConversations().find((c) => c.parentConversationId === 1)
+      const child = env.kernel.conversations.listConversations().find((c) => c.parentConversationId === 1)
       assert.ok(child, 'should derive true sub-conversation')
       assert.ok(child.cwd.includes(join(dir, '.helmx-worktrees')), 'sub-conversation should in same level .helmx-worktrees under isolated tree inside execute')
       assert.ok(existsSync(child.cwd), 'managed worktree should real store in')
-      assert.ok((await env.kernel.getLastAssistantText(1)).includes('main turn complete'))
+      assert.ok((await env.kernel.conversations.getLastAssistantText(1)).includes('main turn complete'))
     } finally {
       await env.close()
     }
@@ -391,7 +391,7 @@ describe('failed path asset keep (guard against continuation converge mistakenly
       ])
       await assert.rejects(
         () =>
-          env.kernel.spawnAgent({
+          env.kernel.agentSpawn.spawnAgent({
             parentConversationId: 1,
             prompt: 'produce out after gate failed task',
             isolation: 'worktree',
@@ -450,7 +450,7 @@ describe('failed path asset keep (guard against continuation converge mistakenly
       ])
       await assert.rejects(
         () =>
-          env.kernel.spawnAgent({
+          env.kernel.agentSpawn.spawnAgent({
             parentConversationId: 1,
             prompt: 'want seek structure output but model failed',
             isolation: 'worktree',
@@ -490,7 +490,7 @@ describe('failed path asset keep (guard against continuation converge mistakenly
       ])
       const controller = new AbortController()
       let resolved: AgentExecutionInfo | undefined
-      const pending = env.kernel.spawnAgent({
+      const pending = env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'will by cancel isolated task',
         isolation: 'worktree',
@@ -517,7 +517,7 @@ describe('failed path asset keep (guard against continuation converge mistakenly
       await assert.rejects(() => pending, (err: unknown) => err instanceof HelmxError && err.code === 'aborted')
 
       const childId = resolved!.conversationId!
-      await env.kernel.waitForIdle(childId)
+      await env.kernel.conversations.waitForIdle(childId)
       assert.ok(existsSync(worktreeOf(resolved)!.path), 'cancel after worktree must keep (sub-conversation already create bind set, must not mistakenly delete)')
       assert.ok(existsSync(join(worktreeOf(resolved)!.path, 'cancel-marker.txt')), 'cancel after uncommitted artifact must keep')
       assert.ok(entered)
@@ -545,7 +545,7 @@ describe('occupy in worktree clean up protect', { timeout: 60_000 }, () => {
       ])
       let resolved: AgentExecutionInfo | undefined
       const controller = new AbortController()
-      const pending = env.kernel.spawnAgent({
+      const pending = env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'long task (occupy check)',
         isolation: 'worktree',
@@ -561,7 +561,7 @@ describe('occupy in worktree clean up protect', { timeout: 60_000 }, () => {
       }
       assert.ok(worktreeOf(resolved) && resolved?.conversationId, 'sub-conversation should already create')
       const childId = resolved!.conversationId!
-      assert.equal(env.kernel.getConversation(childId).status, 'working', 'model suspended during sub-conversation should be working')
+      assert.equal(env.kernel.conversations.getConversation(childId).status, 'working', 'model suspended during sub-conversation should be working')
 
       // spawn not settle:conversation occupy + in-flight spawn execute coordinates reference double keep risk,
       // force:true also must not clean up run in subagent worktree.
@@ -580,7 +580,7 @@ describe('occupy in worktree clean up protect', { timeout: 60_000 }, () => {
       controller.abort()
       held.release(fauxAssistantMessage('(cancel)'))
       await assert.rejects(() => pending, (e: unknown) => e instanceof HelmxError && e.code === 'aborted')
-      await env.kernel.waitForIdle(childId)
+      await env.kernel.conversations.waitForIdle(childId)
 
       // settle after (abort path: original generate sub-conversation turn with failed field and already confirm stop):
       // §1.2 run lease release, explicit force clean up no longer by worktree_execution_unknown
@@ -657,7 +657,7 @@ describe('cleanup_worktree action boundary (HTTP Schema/authentication/pass-thro
       // real derive a managed worktree(clean: without take verify artifact, verify non- force succeeded link).
       let resolved: AgentExecutionInfo | undefined
       env.faux.setResponses([fauxAssistantMessage('complete')])
-      await env.kernel.spawnAgent({
+      await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'HTTP clean up link task',
         isolation: 'worktree',
@@ -718,7 +718,7 @@ describe('external runtime agentType without plugin take over', { timeout: 60_00
     try {
       await assert.rejects(
         () =>
-          env.kernel.spawnAgent({
+          env.kernel.agentSpawn.spawnAgent({
             parentConversationId: 1,
             prompt: 'external runtime but without person take over',
             agentType: 'test:unclaimed',
@@ -750,7 +750,7 @@ describe('same sub-conversation concurrency resume mutual exclusion', { timeout:
       let childId = 0
       let firstWtPath = ''
       env.faux.setResponses([fauxAssistantMessage('one round complete')])
-      await env.kernel.spawnAgent({
+      await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'one round',
         isolation: 'worktree',
@@ -771,7 +771,7 @@ describe('same sub-conversation concurrency resume mutual exclusion', { timeout:
         fauxAssistantMessage([fauxToolCall('register_structured_output', { output: { answer: 'a resume answer proposal' } })], { stopReason: 'toolUse' }),
         held.step as never,
       ])
-      const first = env.kernel.spawnAgent({
+      const first = env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'a resume',
         resume: String(childId),
@@ -791,7 +791,7 @@ describe('same sub-conversation concurrency resume mutual exclusion', { timeout:
       env.faux.setResponses([fauxAssistantMessage('second resume must not execute')])
       await assert.rejects(
         () =>
-          env.kernel.spawnAgent({
+          env.kernel.agentSpawn.spawnAgent({
             parentConversationId: 1,
             prompt: 'second resume (concurrency)',
             resume: String(childId),
@@ -810,7 +810,7 @@ describe('same sub-conversation concurrency resume mutual exclusion', { timeout:
       assert.deepEqual(result, { answer: 'a resume answer proposal' }, 'a resume structure output should complete return')
       assert.ok(existsSync(join(firstWtPath, 'first-resume.txt')))
       // all process only this a sub-conversation (second not derive new conversation).
-      const children = env.kernel.listConversations().filter((c) => c.parentConversationId === 1)
+      const children = env.kernel.conversations.listConversations().filter((c) => c.parentConversationId === 1)
       assert.equal(children.length, 1, 'concurrency reject must not derive new sub-conversation')
     } finally {
       await env.close()
@@ -830,7 +830,7 @@ describe('background back report requestId idempotent (builtin:workflow delivery
     const runId = 'wf_testreport0001'
     const requestId = `helmx:subagent-report:${runId}`
     const deliver = () =>
-      env.kernel.submitInput(1, `background subagent task already compute. or fewer is run ${runId} result data:\n"background task complete content"`, {
+      env.kernel.conversations.submitInput(1, `background subagent task already compute. or fewer is run ${runId} result data:\n"background task complete content"`, {
         origin: 'agent',
         whenBusy: 'followUp',
         requestId,
@@ -840,7 +840,7 @@ describe('background back report requestId idempotent (builtin:workflow delivery
       // faux only to once response: second time model request (if duplicate delivery) without script response while expose.
       env.faux.setResponses([fauxAssistantMessage('parent conversation receives back report after answer')])
       await Promise.all([deliver(), deliver(), deliver()])
-      await env.kernel.waitForIdle(1)
+      await env.kernel.conversations.waitForIdle(1)
       // terminal state after duplicate invoke: durable submissionByRequest intercept.
       await deliver()
 
@@ -858,13 +858,13 @@ describe('background back report requestId idempotent (builtin:workflow delivery
     const reopened = await openRuntime(join(dir, 'data'), repo)
     try {
       reopened.faux.setResponses([fauxAssistantMessage('must not appear second time answer')])
-      await reopened.kernel.submitInput(1, `background subagent task already compute. or fewer is run ${runId} result data:\n"duplicate"`, {
+      await reopened.kernel.conversations.submitInput(1, `background subagent task already compute. or fewer is run ${runId} result data:\n"duplicate"`, {
         origin: 'agent',
         whenBusy: 'followUp',
         requestId,
         meta: { backgroundRunId: runId, kind: 'subagent_report' },
       })
-      await reopened.kernel.waitForIdle(1)
+      await reopened.kernel.conversations.waitForIdle(1)
       const reports = (await agentReports(reopened.kernel, 1)).filter((r) => r.backgroundRunId === runId)
       assert.equal(reports.length, 1, `after restart duplicate back report must not produce second helmx.input, got ${JSON.stringify(reports)}`)
     } finally {
@@ -949,7 +949,7 @@ describe('durable lease unknown occupy protect (fail-closed)', { timeout: 60_000
       // normal original generate spawn(succeeded path): lease register and in settle after release, then can clean up.
       let resolved: AgentExecutionInfo | undefined
       env.faux.setResponses([fauxAssistantMessage('lease release verify complete')])
-      await env.kernel.spawnAgent({
+      await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'succeeded task (lease release)',
         isolation: 'worktree',
@@ -1007,11 +1007,11 @@ describe('createHelmx background subagent all chain (background + worktree + gat
         fauxAssistantMessage('gather report round fall back'),
       ])
 
-      await kernel.submitInput(1, 'dispatch a background isolated subagent')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'dispatch a background isolated subagent')
+      await kernel.conversations.waitForIdle(1)
 
       // tool output should contains runId and worktree metadata (background handle).
-      const detail = await kernel.getConversationDetail(1, { limit: 100 })
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 100 })
       const toolEntry = [...detail.entries]
         .reverse()
         .find((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('"subagent"'))
@@ -1025,7 +1025,7 @@ describe('createHelmx background subagent all chain (background + worktree + gat
       // parent turn already end (parent idle does not mean sub- end - - first end semantics).
       let run = (await env.invoke.inspect(runId)).run
       assert.equal(run.status, 'running', `background run should be running, got ${run.status}`)
-      const child = kernel.listConversations().find((c) => c.parentConversationId === 1)
+      const child = kernel.conversations.listConversations().find((c) => c.parentConversationId === 1)
       assert.ok(child, 'background sub-conversation should already derive')
       const childCwd = child.cwd
       assert.ok(existsSync(childCwd), 'background sub-conversation should bind set real isolated tree')
@@ -1060,7 +1060,7 @@ describe('createHelmx background subagent all chain (background + worktree + gat
       }
       assert.ok(reported, `background gather report entry should in row boundary inside reach (runId=${runId},status=${run.status})`)
       // gather report entry reach after etc. parent turn consume completely (gather report round model back should), again verify idempotent exactly a.
-      await kernel.waitForIdle(1)
+      await kernel.conversations.waitForIdle(1)
 
       run = (await env.invoke.inspect(runId)).run
       assert.equal(run.status, 'completed', `release gate after run should completed, got ${run.status}${run.error ? `(error: ${run.error})` : ''}`)
@@ -1070,7 +1070,7 @@ describe('createHelmx background subagent all chain (background + worktree + gat
       assert.equal(reports.length, 1, `should exactly a background gather report, got ${JSON.stringify(reports)}`)
       assert.equal(reports[0]!.origin, 'agent')
       // gather report content contains runId and worktree managed id(person class can based on this resume/clean up).
-      const reportTexts = (await kernel.getConversationDetail(1, { limit: 200 })).entries
+      const reportTexts = (await kernel.conversations.getConversationDetail(1, { limit: 200 })).entries
         .filter((e) => e.kind === 'helmx.input')
         .map((e) => String((e.data as { text?: unknown } | undefined)?.text ?? ''))
         .filter((t) => t.includes(runId))
@@ -1088,7 +1088,7 @@ describe('createHelmx background subagent all chain (background + worktree + gat
       // guard against clean up deadlock: regardless of assertion into failed all release gate and wait for terminal state after again closure stop.
       try {
         writeFileSync(releaseFile, 'release\n')
-        await kernel.waitForIdle(1).catch(() => {})
+        await kernel.conversations.waitForIdle(1).catch(() => {})
       } catch {
         /* finally exhaust force */
       }

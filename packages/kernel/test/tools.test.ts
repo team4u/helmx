@@ -719,14 +719,14 @@ describe('bash tool (SDK execute direct tune, real service dependency)', { timeo
 describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, () => {
   it('bash tool via harness real execute + spill artifact register + read_artifact page read back', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sdk1')
-    const kernel = (await openRuntime(dir)) as never as ReturnType<typeof openRuntime> & {
+    const kernel = (await openRuntime(dir)) as never as {
       __faux: FauxHandle
       close(): Promise<void>
-      submitInput(id: number, text: string): Promise<unknown>
-      waitForIdle(id: number): Promise<void>
-      getLastAssistantText(id: number): Promise<string>
-      abortConversation(id: number): Promise<void>
-      getConversation(id: number): { status: string }
+      conversations: {
+        submitInput(id: number, text: string): Promise<unknown>
+        waitForIdle(id: number): Promise<void>
+        getLastAssistantText(id: number): Promise<string>
+      }
       services: { artifacts: ArtifactService }
     }
     try {
@@ -737,9 +737,9 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
         }),
         fauxAssistantMessage('complete'),
       ])
-      await kernel.submitInput(1, 'generate large output')
-      await kernel.waitForIdle(1)
-      assert.equal(await kernel.getLastAssistantText(1), 'complete')
+      await kernel.conversations.submitInput(1, 'generate large output')
+      await kernel.conversations.waitForIdle(1)
+      assert.equal(await kernel.conversations.getLastAssistantText(1), 'complete')
       const artifacts = await kernel.services.artifacts.list(1)
       const spill = artifacts.find((a) => a.name.startsWith('tool-spill-'))
       assert.ok(spill, 'should has spill artifact')
@@ -755,12 +755,14 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
     const dir = join(rootDir, 'sdk3')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'code.ts'), 'alpha\nbeta\n')
-    const kernel = (await openRuntime(dir)) as never as ReturnType<typeof openRuntime> & {
+    const kernel = (await openRuntime(dir)) as never as {
       __faux: FauxHandle
       close(): Promise<void>
-      submitInput(id: number, text: string): Promise<unknown>
-      waitForIdle(id: number): Promise<void>
-      getConversationDetail(id: number): Promise<{ entries: Array<{ kind: string; model?: unknown[] }> }>
+      conversations: {
+        submitInput(id: number, text: string): Promise<unknown>
+        waitForIdle(id: number): Promise<void>
+        getConversationDetail(id: number): Promise<{ entries: Array<{ kind: string; model?: unknown[] }> }>
+      }
     }
     try {
       kernel.__faux.setResponses([
@@ -770,10 +772,10 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
         ),
         fauxAssistantMessage('complete'),
       ])
-      await kernel.submitInput(1, 'change file')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'change file')
+      await kernel.conversations.waitForIdle(1)
       assert.equal(readFileSync(join(dir, 'code.ts'), 'utf8'), 'alpha\nBETA\n')
-      const detail = await kernel.getConversationDetail(1)
+      const detail = await kernel.conversations.getConversationDetail(1)
       const messages = detail.entries
         .filter((e: { kind: string; model?: unknown[] }) => e.kind === 'pi.tool-result')
         .flatMap((e: { kind: string; model?: unknown[] }) => ((e.model ?? []) as Array<Record<string, unknown>>))
@@ -810,8 +812,8 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
         ),
         fauxAssistantMessage('registered'),
       ])
-      await kernel.submitInput(1, 'register report artifact')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'register report artifact')
+      await kernel.conversations.waitForIdle(1)
 
       const artifacts = await kernel.services.artifacts.list(1)
       assert.equal(artifacts.length, 1)
@@ -832,11 +834,11 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
         ),
         fauxAssistantMessage('read complete'),
       ])
-      await kernel.submitInput(1, 'read report artifact pages')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'read report artifact pages')
+      await kernel.conversations.waitForIdle(1)
 
       const assertPersisted = async (rt: Awaited<ReturnType<typeof openRuntime>>) => {
-        const detail = await rt.getConversationDetail(1, { limit: 100 })
+        const detail = await rt.conversations.getConversationDetail(1, { limit: 100 })
         const byCallId = new Map<
           string,
           { isError?: boolean; details?: unknown; content?: Array<{ type?: string; text?: string }> }
@@ -906,7 +908,7 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
     // Reopen fresh KernelRuntime on the same dataDir to verify persisted details survive SQLite restart.
     const reopened = await openRuntime(dir)
     try {
-      const detail = await reopened.getConversationDetail(1, { limit: 100 })
+      const detail = await reopened.conversations.getConversationDetail(1, { limit: 100 })
       const byCallId = new Map<string, { isError?: boolean; details?: unknown }>()
       for (const entry of detail.entries) {
         if (entry.kind !== 'pi.tool-result') continue
@@ -928,13 +930,15 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
 
   it('run in abortConversation kill bash tool shell(do not etc. 120s)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sdk2')
-    const kernel = (await openRuntime(dir)) as never as ReturnType<typeof openRuntime> & {
+    const kernel = (await openRuntime(dir)) as never as {
       __faux: FauxHandle
       close(): Promise<void>
-      submitInput(id: number, text: string): Promise<unknown>
-      waitForIdle(id: number): Promise<void>
-      abortConversation(id: number): Promise<void>
-      getConversation(id: number): { status: string }
+      conversations: {
+        submitInput(id: number, text: string): Promise<unknown>
+        waitForIdle(id: number): Promise<void>
+        abortConversation(id: number): Promise<void>
+        getConversation(id: number): { status: string }
+      }
     }
     try {
       kernel.__faux.setResponses([
@@ -944,13 +948,13 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
         ),
       ])
       const started = Date.now()
-      void kernel.submitInput(1, 'run long command').catch(() => {})
+      void kernel.conversations.submitInput(1, 'run long command').catch(() => {})
       await new Promise((r) => setTimeout(r, 400))
-      await kernel.abortConversation(1)
-      await kernel.waitForIdle(1).catch(() => {})
+      await kernel.conversations.abortConversation(1)
+      await kernel.conversations.waitForIdle(1).catch(() => {})
       const elapsed = Date.now() - started
       assert.ok(elapsed < 30_000, `abort should interrupt tool while non- etc. full timeout (${elapsed}ms)`)
-      const conv = kernel.getConversation(1)
+      const conv = kernel.conversations.getConversation(1)
       assert.ok(['idle', 'error'].includes(conv.status))
     } finally {
       await kernel.close()

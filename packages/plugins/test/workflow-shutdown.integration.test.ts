@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import test from 'node:test'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { createHelmx } from '../../hub/src/app.js'
-import { KernelRuntime } from '../../kernel/src/runtime/runtime.js'
-import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
+import { KernelRuntime } from '@helmx/kernel'
+import { openHelmxDatabase } from '@helmx/kernel/testing'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 
 async function verifyShutdownPersistence(options: { autoRecover: boolean }): Promise<void> {

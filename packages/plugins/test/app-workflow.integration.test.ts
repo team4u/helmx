@@ -32,7 +32,7 @@ import {
 
 import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import { createHelmx } from '../../hub/src/app.js'
-import { startHub } from '../../kernel/src/http/index.js'
+import { startHub } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { deferred, makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
@@ -152,7 +152,7 @@ test('工作流1: agent schema/gate 真链路——原生 spawn + StructuredOutp
     assert.equal(readFileSync(join(env.dataDir, 'gate-runs'), 'utf8'), 'x', 'gate 恰好执行一次')
 
     // 子会话按派生关系识别；业务 Worker 标签由插件决定。
-    const workers = env.app.kernel.listConversations().filter((c) => c.parentConversationId === ROOT_CONVERSATION_ID)
+    const workers = env.app.kernel.conversations.listConversations().filter((c) => c.parentConversationId === ROOT_CONVERSATION_ID)
     assert.equal(workers.length, 1, '应派生恰好 1 个原生子会话')
     assert.equal(workers[0]!.tags.includes('worker'), false)
 
@@ -168,7 +168,7 @@ test('工作流1: agent schema/gate 真链路——原生 spawn + StructuredOutp
     assert.equal((await env.inspectRun(resumed.id)).run.replayedFrom, started.id, '公开摘要应保留重放来源')
 
     // 不新增子会话（重放不 live spawn）。
-    assert.equal(env.app.kernel.listConversations().filter((c) => c.parentConversationId === ROOT_CONVERSATION_ID).length, 1)
+    assert.equal(env.app.kernel.conversations.listConversations().filter((c) => c.parentConversationId === ROOT_CONVERSATION_ID).length, 1)
   } finally {
     await env.close()
   }
@@ -257,8 +257,8 @@ test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各�
 
     // --- completed：正常回合（faux 纯文本响应）
     faux.setResponses([fauxAssistantMessage('好的')])
-    await kernel.submitInput(ROOT_CONVERSATION_ID, '第一问')
-    await kernel.waitForIdle(ROOT_CONVERSATION_ID)
+    await kernel.conversations.submitInput(ROOT_CONVERSATION_ID, '第一问')
+    await kernel.conversations.waitForIdle(ROOT_CONVERSATION_ID)
     assert.deepEqual(
       settled.filter((s) => s.conversationId === ROOT_CONVERSATION_ID).map((s) => s.outcome),
       ['completed'],
@@ -271,10 +271,10 @@ test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各�
     )
 
     // --- failed：模型流错误（faux stopReason=error 注入 provider 错误）
-    const child = await kernel.createConversation({ title: '失败会话' })
+    const child = await kernel.conversations.createConversation({ title: '失败会话' })
     faux.setResponses([fauxAssistantMessage('boom', { stopReason: 'error' })])
-    await kernel.submitInput(child.id, '会失败的问题')
-    await kernel.waitForIdle(child.id)
+    await kernel.conversations.submitInput(child.id, '会失败的问题')
+    await kernel.conversations.waitForIdle(child.id)
     const childSettled = settled.filter((s) => s.conversationId === child.id)
     assert.equal(childSettled.length, 1, '失败回合恰好结算一次')
     assert.equal(childSettled[0]!.outcome, 'failed', '模型错误应结算 failed（不伪装 completed）')
@@ -282,7 +282,7 @@ test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各�
     assert.deepEqual(childSettled[0]!.origins, ['human'])
 
     // --- aborted：确定性挂起在途生成后立即 abort，回合在途被取消
-    const child2 = await kernel.createConversation({ title: '中止会话' })
+    const child2 = await kernel.conversations.createConversation({ title: '中止会话' })
     const abortEntered = deferred<void>()
     faux.setResponses([
       async (_ctx, opts) => {
@@ -297,24 +297,24 @@ test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各�
         return fauxAssistantMessage('这是一段在途被取消的输出内容')
       },
     ])
-    await kernel.submitInput(child2.id, '会被中止的问题')
+    await kernel.conversations.submitInput(child2.id, '会被中止的问题')
     await abortEntered.promise
-    await kernel.abortConversation(child2.id)
-    await kernel.waitForIdle(child2.id)
+    await kernel.conversations.abortConversation(child2.id)
+    await kernel.conversations.waitForIdle(child2.id)
     const child2Settled = settled.filter((s) => s.conversationId === child2.id)
     assert.equal(child2Settled.length, 1, '中止回合恰好结算一次（不双报）')
     assert.equal(child2Settled[0]!.outcome, 'aborted', '在途 abort 应结算 aborted')
 
     // --- busy followUp：会话正忙时第二条输入 followUp 排队，两输入都被消费
-    const busy = await kernel.createConversation({ title: '忙碌会话' })
+    const busy = await kernel.conversations.createConversation({ title: '忙碌会话' })
     faux.setResponses([
       fauxAssistantMessage('第一答'),
       fauxAssistantMessage('第二答'),
     ])
-    await kernel.submitInput(busy.id, '忙碌问题一')
-    const second = kernel.submitInput(busy.id, '忙碌问题二', { whenBusy: 'followUp' })
+    await kernel.conversations.submitInput(busy.id, '忙碌问题一')
+    const second = kernel.conversations.submitInput(busy.id, '忙碌问题二', { whenBusy: 'followUp' })
     await second
-    await kernel.waitForIdle(busy.id)
+    await kernel.conversations.waitForIdle(busy.id)
     const busySettled = settled.filter((s) => s.conversationId === busy.id)
     // followUpMode 'all'：两条输入合并进后续 run；结算次数 >= 1 且 origins 全记录
     assert.ok(busySettled.length >= 1, '忙碌会话至少结算一次')
@@ -323,10 +323,10 @@ test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各�
     assert.equal(allOrigins.filter((o) => o === 'human').length, 2, '两条 human 输入都被消费')
 
     // --- agent origin：runtime.submitInput(origin:'agent')（子代理回报路径）
-    const agentConv = await kernel.createConversation({ title: 'agent 汇报' })
+    const agentConv = await kernel.conversations.createConversation({ title: 'agent 汇报' })
     faux.setResponses([fauxAssistantMessage('代理收到')])
-    await kernel.submitInput(agentConv.id, '后台代理汇报', { origin: 'agent' })
-    await kernel.waitForIdle(agentConv.id)
+    await kernel.conversations.submitInput(agentConv.id, '后台代理汇报', { origin: 'agent' })
+    await kernel.conversations.waitForIdle(agentConv.id)
     const agentSettled = settled.filter((s) => s.conversationId === agentConv.id)
     assert.equal(agentSettled.length, 1)
     assert.equal(agentSettled[0]!.outcome, 'completed')
@@ -365,7 +365,7 @@ test('工作流4: HTTP workflows run/inspect/abort 与 SubagentWorkflow 工具�
       headers: { ...auth, 'content-type': 'application/json' },
       body: JSON.stringify({
         input: {
-          conversationId: env.app.kernel.listConversations()[0]!.id,
+          conversationId: env.app.kernel.conversations.listConversations()[0]!.id,
           script: 'export const meta = { name: "http-pure", description: "t" }\nreturn args.x + 1',
           label: '  HTTP自定义标签  ',
           args: { x: 41 },
@@ -385,7 +385,7 @@ test('工作流4: HTTP workflows run/inspect/abort 与 SubagentWorkflow 工具�
       headers: { ...auth, 'content-type': 'application/json' },
       body: JSON.stringify({
         input: {
-          conversationId: env.app.kernel.listConversations()[0]!.id,
+          conversationId: env.app.kernel.conversations.listConversations()[0]!.id,
           script: 'export const meta = { name: "http-pure", description: "t" }\nreturn 1',
           label: '   ',
         },
@@ -414,7 +414,7 @@ test('工作流4: HTTP workflows run/inspect/abort 与 SubagentWorkflow 工具�
     const bad = await fetch(`${base}/api/actions/builtin:workflow/run`, {
       method: 'POST',
       headers: { ...auth, 'content-type': 'application/json' },
-      body: JSON.stringify({ input: { args: { x: 1 }, conversationId: env.app.kernel.listConversations()[0]!.id } }),
+      body: JSON.stringify({ input: { args: { x: 1 }, conversationId: env.app.kernel.conversations.listConversations()[0]!.id } }),
     })
     assert.equal(bad.status, 400)
     assert.equal((JSON.parse(await bad.text()) as { error: { code: string } }).error.code, 'validation_error')

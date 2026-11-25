@@ -24,7 +24,6 @@ import { randomUUID } from 'node:crypto'
 import { redactJsonValue } from '../redact.js'
 import type { SecretStash } from '../services/index.js'
 import { deriveTitle, type ConversationTracker } from './conversations.js'
-import { normalizeBusyError } from './runtime-helpers.js'
 import { asConversationId } from './sdk-ids.js'
 import type { PromptContent } from './conversation-attachments.js'
 import type { SubmitInputOptions } from './conversation-service.js'
@@ -396,4 +395,15 @@ function assertValidInputAttachments(attachments: unknown): asserts attachments 
       )
     }
   }
+}
+
+export function normalizeBusyError(error: unknown): unknown {
+  const name = (error as { name?: string })?.name
+  if (name === 'ConversationBusy') {
+    return new HelmxError('conversation_busy', 'Conversation is busy and whenBusy=reject was specified', 409)
+  }
+  if (name === 'ConversationIdle') {
+    return new HelmxError('conversation_idle', 'Conversation is idle and conflicts with whenIdle=reject', 409)
+  }
+  return error
 }

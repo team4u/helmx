@@ -18,16 +18,20 @@ import { pathToFileURL } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import {
   AuthService,
+  createHubHandler,
   CredentialService,
+  doctorPluginDir,
+  loadExternalPlugins,
+  PluginHost,
   ProfileService,
   ProviderService,
   SkillService,
-} from '../../kernel/src/services/index.js'
-import { PluginHost, doctorPluginDir, loadExternalPlugins, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+  type HttpEventHub,
+  type KernelHttpTarget,
+  type PluginHostBackend,
+} from '@helmx/kernel'
 import { createMermaidPlugin } from '../src/mermaid.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { createHubHandler } from '../../kernel/src/http/index.js'
-import type { EventHub, KernelRuntimeLike} from '../../kernel/src/http/index.js'
 import {
   buildPluginClientBundleDir,
   clearClientCompilerMemoryCache,
@@ -56,7 +60,7 @@ let dataDir: string
 let pluginHost: PluginHost
 let token: string | undefined
 
-class TestEventHub implements EventHub {
+class TestEventHub implements HttpEventHub {
   response(): Response {
     return new Response(null, { status: 204 })
   }
@@ -89,9 +93,9 @@ function makeBackend(): PluginHostBackend {
   }
 }
 
-function makeKernel(): KernelRuntimeLike {
+function makeKernel(): KernelHttpTarget {
   const auth = new AuthService(dataDir)
-  const kernel: KernelRuntimeLike = {
+  const kernel: KernelHttpTarget = {
     dataDir,
     auth,
     events: new TestEventHub(),
@@ -101,30 +105,38 @@ function makeKernel(): KernelRuntimeLike {
     providers: new ProviderService(dataDir),
     artifacts: undefined as never,
     plugins: pluginHost,
-    listConversations: async () => [],
-    getConversationDetail: async (id: number) => {
-      throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
+    conversations: {
+      listConversations: () => [],
+      getConversationDetail: async (id: number) => {
+        throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
+      },
+      createConversation: async () => makeConversation(1),
+      updateConversation: async (id: number) => makeConversation(id),
+      deleteConversation: async () => {},
+      deleteConversations: async (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
+      submitInput: async () => ({ submissionId: 'sub' }),
+      waitForInput: async (id: number) => ({ conversationId: id, submissionId: 'sub', text: '', entry: { id: 'e', kind: 'pi.assistant' } }),
+      abortConversation: async () => {},
+      resetConversation: async (id: number) => makeConversation(id),
+      compactConversation: async (id: number) => ({ taskId: 1, conversation: makeConversation(id) }),
+      forkConversation: async (id: number) => makeConversation(id + 100),
+      search: async () => [],
     },
-    createConversation: async () => makeConversation(1),
-    updateConversation: async (id: number) => makeConversation(id),
-    deleteConversation: async () => {},
-    deleteConversations: async (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
-    submitInput: async () => ({ submissionId: 'sub' }),
-    waitForInput: async (id: number) => ({ conversationId: id, submissionId: 'sub', text: '', entry: { id: 'e', kind: 'pi.assistant' } }),
-    abortConversation: async () => {},
-    resetConversation: async (id: number) => makeConversation(id),
-    compactConversation: async (id: number) => ({ taskId: 1, conversation: makeConversation(id) }),
-    forkConversation: async (id: number) => makeConversation(id + 100),
-    listAsks: async () => [],
-    answerAsk: async () => {},
-    cancelAsk: async () => {},
-    search: async () => [],
-    listModels: () => ({ models: [], thinkingLevels: {} }),
-    listModelProviders: () => [],
-    listNodes: () => [],
-    issueNodeToken: () => ({ nodeId: 'local', token: 'local:t', createdAt: 1 }),
-    removeNode: async () => {},
-    execEnv: async () => ({ ok: true, exitCode: 0, output: '', timedOut: false }),
+    asks: {
+      listAsks: () => [],
+      answerAsk: async () => ({}) as never,
+      cancelAsk: async () => ({}) as never,
+    },
+    models: {
+      listModels: async () => ({ models: [], thinkingLevels: {} }),
+      listModelProviders: () => [],
+    },
+    nodes: {
+      listNodes: async () => [],
+      issueNodeToken: async () => ({ nodeId: 'local', token: 'local:t', createdAt: 1 }),
+      removeNode: async () => {},
+      execEnv: async () => ({ ok: true, exitCode: 0, output: '', timedOut: false }),
+    },
   }
   return kernel
 }

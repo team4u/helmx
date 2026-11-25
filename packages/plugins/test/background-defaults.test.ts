@@ -52,7 +52,7 @@ async function backgroundReports(
   app: App,
   conversationId: number,
 ): Promise<Array<{ id: unknown; origin: unknown; kind: unknown; backgroundRunId?: string; renderer?: unknown; text?: string }>> {
-  const detail = await app.kernel.getConversationDetail(conversationId, { limit: 500 })
+  const detail = await app.kernel.conversations.getConversationDetail(conversationId, { limit: 500 })
   const out: Array<{ id: unknown; origin: unknown; kind: unknown; backgroundRunId?: string; renderer?: unknown; text?: string }> = []
   for (const entry of detail.entries) {
     if (entry.kind !== 'helmx.input') continue
@@ -110,11 +110,11 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
         fauxAssistantMessage([fauxToolCall('subagent', { prompt: '人类后台任务' })], { stopReason: 'toolUse' }),
         ...Array.from({ length: 5 }, () => fauxAssistantMessage('良性回答')),
       ])
-      await app.kernel.submitInput(1, '派一个后台子代理')
-      await app.kernel.waitForIdle(1)
+      await app.kernel.conversations.submitInput(1, '派一个后台子代理')
+      await app.kernel.conversations.waitForIdle(1)
 
       // 工具输出：后台句柄（background:true + runId + running 快照），不含业务结果。
-      const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const detail = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
       const runId = /"runId":"(wf_[0-9a-zA-Z_-]+)"/.exec(text)?.[1]
       assert.ok(runId, `工具输出应含 runId：${text.slice(0, 300)}`)
@@ -149,7 +149,7 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
       assert.deepEqual(rendererSpec!.kinds, ['helmx.input'])
       assert.equal(rendererSpec!.matchMeta?.renderer, 'workflow:background-report')
       assert.equal(rendererSpec!.client?.export, 'BackgroundReportCard')
-      await app.kernel.waitForIdle(1).catch(() => {})
+      await app.kernel.conversations.waitForIdle(1).catch(() => {})
     } finally {
       await app.close()
     }
@@ -168,10 +168,10 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
         fauxAssistantMessage('同步子代理回答'),
         fauxAssistantMessage('主回合完成'),
       ])
-      await app.kernel.submitInput(1, '派一个同步子代理')
-      await app.kernel.waitForIdle(1)
+      await app.kernel.conversations.submitInput(1, '派一个同步子代理')
+      await app.kernel.conversations.waitForIdle(1)
 
-      const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const detail = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
       assert.ok(text.includes('同步子代理回答'), `同步路径应直接携带业务结果：${text.slice(0, 300)}`)
       assert.ok(!text.includes('"background":true'), '同步路径不得回报后台句柄')
@@ -179,7 +179,7 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
       const runs = await runsOf(app, 1)
       assert.equal(runs.length, 0, '同步 subagent 不得创建 WorkflowRun 记录')
       assert.equal((await backgroundReports(app, 1)).length, 0, '同步 subagent 不得投递结算汇报')
-      assert.ok(app.kernel.listConversations().some((c) => c.parentConversationId === 1), '同步派生应创建子会话')
+      assert.ok(app.kernel.conversations.listConversations().some((c) => c.parentConversationId === 1), '同步派生应创建子会话')
     } finally {
       await app.close()
     }
@@ -190,7 +190,7 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
     const faux = makeFauxProvider()
     const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
-      app.kernel.markConversationOwnership(1, 'helmx')
+      app.kernel.ownership.markOwnership(1, 'helmx')
 
       // 缺省（省略 background）：同步等待业务结果，直走 spawnAgent，不创建 WorkflowRun。
       faux.setResponses([
@@ -198,14 +198,14 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
         fauxAssistantMessage('自动化子代理回答'),
         fauxAssistantMessage('自动化回合完成'),
       ])
-      await app.kernel.submitInput(1, '派一个同步子代理')
-      await app.kernel.waitForIdle(1)
-      let detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      await app.kernel.conversations.submitInput(1, '派一个同步子代理')
+      await app.kernel.conversations.waitForIdle(1)
+      let detail = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       let text = toolResultText(detail, 'subagent')
       assert.ok(text.includes('自动化子代理回答'), `自动化会话缺省应同步等待：${text.slice(0, 300)}`)
       assert.ok(!text.includes('"background":true'))
       assert.equal((await runsOf(app, 1)).length, 0, '同步 subagent 不创建 WorkflowRun')
-      const syncChild = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
+      const syncChild = app.kernel.conversations.listConversations().find((c) => c.parentConversationId === 1)
       assert.ok(syncChild, '同步派生应创建子会话')
 
       // 显式 background:true：显式拒绝（防自动化调用方早结算），绝不静默改写。
@@ -216,9 +216,9 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
         ),
         fauxAssistantMessage('被拒后续答'),
       ])
-      await app.kernel.submitInput(1, '再派一个后台子代理')
-      await app.kernel.waitForIdle(1)
-      detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      await app.kernel.conversations.submitInput(1, '再派一个后台子代理')
+      await app.kernel.conversations.waitForIdle(1)
+      detail = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       text = toolResultText(detail, 'subagent')
       assert.ok(
         text.includes('subagent_failed') && text.includes('background') && text.includes('helmx'),
@@ -226,7 +226,7 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
       )
       assert.equal((await runsOf(app, 1)).length, 0, '被拒调用不得新增 run 记录')
       assert.equal(
-        app.kernel.listConversations().filter((c) => c.parentConversationId === 1).length,
+        app.kernel.conversations.listConversations().filter((c) => c.parentConversationId === 1).length,
         1,
         '被拒调用不得再派生子会话（仅剩同步路径那一个）',
       )
@@ -253,11 +253,11 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
         ),
         ...Array.from({ length: 5 }, () => fauxAssistantMessage('良性回答')),
       ])
-      await app.kernel.submitInput(1, '跑一个后台工作流')
-      await app.kernel.waitForIdle(1)
+      await app.kernel.conversations.submitInput(1, '跑一个后台工作流')
+      await app.kernel.conversations.waitForIdle(1)
 
       // 工具输出：后台句柄（background:true + running 快照 summary）。
-      const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const detail = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'SubagentWorkflow')
       const runId = /"id":"(wf_[0-9a-zA-Z_-]+)"/.exec(text)?.[1]
       assert.ok(runId, `工具输出应含运行 id：${text.slice(0, 300)}`)
@@ -280,7 +280,7 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
       assert.equal(reports[0]!.renderer, 'workflow:background-report')
       const wfReportJson = JSON.parse(reports[0]!.text!.slice(reports[0]!.text!.indexOf('\n') + 1)) as { name?: string }
       assert.equal(wfReportJson.name, 'bg-default-wf')
-      await app.kernel.waitForIdle(1).catch(() => {})
+      await app.kernel.conversations.waitForIdle(1).catch(() => {})
     } finally {
       await app.close()
     }
@@ -291,7 +291,7 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
     const faux = makeFauxProvider()
     const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
-      app.kernel.markConversationOwnership(1, 'helmx')
+      app.kernel.ownership.markOwnership(1, 'helmx')
       const fastScript = 'export const meta = { name: "sync-default-wf", description: "t" }\nreturn 7'
 
       // 缺省：同步等待终态。
@@ -299,9 +299,9 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
         fauxAssistantMessage([fauxToolCall('SubagentWorkflow', { script: fastScript })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('自动化工作流回合完成'),
       ])
-      await app.kernel.submitInput(1, '跑一个同步工作流')
-      await app.kernel.waitForIdle(1)
-      let detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      await app.kernel.conversations.submitInput(1, '跑一个同步工作流')
+      await app.kernel.conversations.waitForIdle(1)
+      let detail = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       let text = toolResultText(detail, 'SubagentWorkflow')
       assert.ok(text.includes('"status":"completed"'), `自动化会话缺省应同步等待终态：${text.slice(0, 300)}`)
       assert.ok(text.includes('"result":7'), '同步路径应携带终态 result')
@@ -316,9 +316,9 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
         ),
         fauxAssistantMessage('被拒续答'),
       ])
-      await app.kernel.submitInput(1, '再跑一个后台工作流')
-      await app.kernel.waitForIdle(1)
-      detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      await app.kernel.conversations.submitInput(1, '再跑一个后台工作流')
+      await app.kernel.conversations.waitForIdle(1)
+      detail = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       text = toolResultText(detail, 'SubagentWorkflow')
       assert.ok(
         text.includes('workflow_failed') && text.includes('background') && text.includes('helmx'),

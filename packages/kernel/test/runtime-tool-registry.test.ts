@@ -24,7 +24,7 @@ import {
   actionToolResult,
   guardToolExecutionResult,
   pluginToolResult,
-} from '../src/runtime/runtime-helpers.js'
+} from '../src/runtime/tools/tool-result-contract.js'
 import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
 import type { DerivedToolSpec, PluginHost } from '../src/plugins/index.js'
 import { CapabilityRegistry } from '../src/plugins/capability-registry.js'

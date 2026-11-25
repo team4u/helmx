@@ -6,14 +6,23 @@
  * forbids deleting plugin-managed Profiles. Disabled-model binding is preflighted before saving (`409 model_disabled`).
  */
 import { HelmxError, type Profile } from '@helmx/protocol'
+import type { ProfileService } from '../services/index.js'
+import type { ConversationService } from '../runtime/conversation-service.js'
+import type { ModelRegistry } from '../runtime/model-registry.js'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
-import type { KernelRuntimeLike } from './contracts.js'
 import { parseProfileBody, requireIdParam, ValidationError } from './validate.js'
 import { methodNotAllowed, type RouteContext } from './route-context.js'
 
+export interface ProfileRoutesTarget {
+  readonly profiles: Pick<ProfileService, 'list' | 'get' | 'getSystem' | 'save' | 'delete'>
+  readonly conversations: Pick<ConversationService, 'listConversations'> &
+    Partial<Pick<ConversationService, 'alignProfileConversations'>>
+  readonly models?: Partial<Pick<ModelRegistry, 'assertModelEnabled'>>
+}
+
 export async function handleProfilesDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: ProfileRoutesTarget,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -46,7 +55,7 @@ export async function handleProfilesDomain(
       // HTTP boundary only—trusted plugin bootstraps writing ProfileService directly bypass this check.
       assertProfileModelEnabled(kernel, profile)
       const saved = await kernel.profiles.save(profile)
-      await kernel.alignProfileConversations?.(saved.id)
+      await kernel.conversations.alignProfileConversations?.(saved.id)
       return jsonOk(redactor, await enrichProfile(saved), { status: 201 })
     }
     return methodNotAllowed(redactor, method)
@@ -82,7 +91,7 @@ export async function handleProfilesDomain(
       // Same rule as POST: reject disabled model before saving (PUT full replacement; omitted model clears override without preflight).
       assertProfileModelEnabled(kernel, profile)
       const saved = await kernel.profiles.save({ ...profile, id: profileId })
-      await kernel.alignProfileConversations?.(saved.id)
+      await kernel.conversations.alignProfileConversations?.(saved.id)
       return jsonOk(redactor, await enrichProfile(saved))
     }
     if (method === 'DELETE') {
@@ -91,7 +100,7 @@ export async function handleProfilesDomain(
       // This is a fast path; ProfileService.delete repeats the same check right before writing, and creation/PATCH
       // verify profile existence (`resolveProfileForCreate`/`updateConfiguration`), leaving only a benign microtask
       // window between re-check and `rm`.
-      const inUse = (await kernel.listConversations()).some((c) => c.profileId === profileId)
+      const inUse = kernel.conversations.listConversations().some((c) => c.profileId === profileId)
       if (inUse) {
         throw new HelmxError('profile_in_use', `profile ${profileId} is still bound by conversations; unbind before deleting`, 409)
       }
@@ -108,7 +117,7 @@ export async function handleProfilesDomain(
       }
       await kernel.profiles.delete(profileId, {
         isProfileInUse: async (pid) =>
-          (await kernel.listConversations()).some((c) => c.profileId === pid),
+          kernel.conversations.listConversations().some((c) => c.profileId === pid),
       })
       return jsonOk(redactor, { ok: true })
     }
@@ -118,8 +127,8 @@ export async function handleProfilesDomain(
 }
 
 /** Disabled-model preflight for `profile.model`: extracts provider/model and invokes optional port (409 model_disabled). */
-function assertProfileModelEnabled(kernel: KernelRuntimeLike, profile: Profile): void {
-  if (profile.model === undefined || kernel.assertModelEnabled === undefined) return
+function assertProfileModelEnabled(kernel: ProfileRoutesTarget, profile: Profile): void {
+  if (profile.model === undefined || kernel.models?.assertModelEnabled === undefined) return
   const slash = profile.model.indexOf('/')
-  kernel.assertModelEnabled(profile.model.slice(0, slash), profile.model.slice(slash + 1))
+  kernel.models.assertModelEnabled(profile.model.slice(0, slash), profile.model.slice(slash + 1))
 }

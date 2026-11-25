@@ -785,8 +785,8 @@ test('scripts/build.mjs: parseBuildArgs & planBuildStages cover full, --skip-pay
   assert.equal(typecheckPlan.payloadCommand, null)
 
   const unitPlan = planBuildStages({ repoRoot, execPath: '/node', tscBin: '/tsc.js', mode: 'unit-deps' })
-  assert.deepEqual(unitPlan.cleanPackages, ['protocol', 'env-io', 'plugin-build'])
-  assert.deepEqual(unitPlan.tscCommand.args, ['/tsc.js', '-b', 'packages/plugin-build'])
+  assert.deepEqual(unitPlan.cleanPackages, ['protocol', 'env-io', 'plugin-build', 'kernel'])
+  assert.deepEqual(unitPlan.tscCommand.args, ['/tsc.js', '-b', 'packages/plugin-build', 'packages/kernel'])
   assert.equal(unitPlan.webCommand, null)
   assert.equal(unitPlan.postTscCommands.length, 0)
   assert.equal(unitPlan.payloadCommand, null)

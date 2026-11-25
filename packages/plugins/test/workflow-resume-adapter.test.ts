@@ -32,7 +32,7 @@ import { after, before, describe, it } from 'node:test'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AgentSpawnRequest } from '@helmx/protocol'
 import { parseWorkflowSpawnMeta } from '../src/contracts.js'
-import { KernelRuntime } from '../../kernel/src/runtime/index.js'
+import { KernelRuntime } from '@helmx/kernel'
 import { createMemoryKvStore, WorkflowService, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
 import { makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
@@ -248,9 +248,9 @@ async function openRealEnv(dataDir: string): Promise<RealEnv> {
     providers: [faux.provider],
     autoResume: false,
   })
-  const originalRunGate = kernel.runGate.bind(kernel)
+  const originalRunGate = kernel.agentSpawn.runGate.bind(kernel.agentSpawn)
   let gateFallbackRuns = 0
-  ;(kernel as unknown as { runGate: typeof kernel.runGate }).runGate = (command, options) => {
+  ;(kernel.agentSpawn as unknown as { runGate: typeof kernel.agentSpawn.runGate }).runGate = (command, options) => {
     gateFallbackRuns++
     return originalRunGate(command, options)
   }
@@ -287,18 +287,18 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
     try {
       // 父会话 cwd 显式非 Hub（dataDir）；首调不带 cwd 的 workflow agent
       // 必须经 parent 回退继承 parentDir（而不是 Hub dataDir）。
-      const parent = await env.kernel.createConversation({ title: '工作会话', cwd: parentDir })
+      const parent = await env.kernel.conversations.createConversation({ title: '工作会话', cwd: parentDir })
       const service = new WorkflowService({
         dataDir: dir,
         kv: makeStateStore(),
         host: {
-          spawnAgent: (request) => env.kernel.spawnAgent(request),
+          spawnAgent: (request) => env.kernel.agentSpawn.spawnAgent(request),
           invokeAction: async (_p, actionId) => {
             throw new Error(`no actions: ${actionId}`)
           },
           listActions: () => [],
-          getConversation: (id) => env.kernel.getConversation(id),
-          abortConversationGuarded: (id) => env.kernel.abortConversationGuarded(id, {}),
+          getConversation: (id) => env.kernel.conversations.getConversation(id),
+          abortConversationGuarded: (id) => env.kernel.conversations.abortConversationGuarded(id, {}),
           emitEvent: () => {},
         },
       })
@@ -319,7 +319,7 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
 
       // SDK 实际 cwd 取证：子会话内 bash pwd 输出 parentDir。
       const childId = node!.conversationId!
-      const detail = await env.kernel.getConversationDetail(childId, { limit: 50 })
+      const detail = await env.kernel.conversations.getConversationDetail(childId, { limit: 50 })
       const bashEntry = [...detail.entries]
         .reverse()
         .find((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('bash'))
@@ -340,7 +340,7 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
     mkdirSync(childDir, { recursive: true })
     const env = await openRealEnv(dir)
     try {
-      const parent = await env.kernel.createConversation({ title: '续接会话', cwd: parentDir })
+      const parent = await env.kernel.conversations.createConversation({ title: '续接会话', cwd: parentDir })
 
       // 真实 ctx.action：两节点之间把空闲子会话 SDK 目录真实 configure 到
       // childDir（复用宿主 updateConversation：真实 SDK configure + 镜像持久化）。
@@ -361,7 +361,7 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
             },
             handler: async () => {
               if (capturedChildId === 0) throw new Error('子会话尚未捕获（onResolved 未回报）')
-              await env.kernel.updateConversation(capturedChildId, { cwd: childDir })
+              await env.kernel.conversations.updateConversation(capturedChildId, { cwd: childDir })
               return { movedTo: childDir }
             },
           })
@@ -374,7 +374,7 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
         host: {
           // 包装端口：捕获 onResolved 回报的 conversationId 供 action 迁移。
           spawnAgent: (request) =>
-            env.kernel.spawnAgent({
+            env.kernel.agentSpawn.spawnAgent({
               ...request,
               onResolved: (info) => {
                 if (info.conversationId !== undefined) capturedChildId = info.conversationId
@@ -386,12 +386,12 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
             return result
           },
           listActions: () => env.kernel.plugins.listActions(),
-          getConversation: (id) => env.kernel.getConversation(id),
-          abortConversationGuarded: (id) => env.kernel.abortConversationGuarded(id, {}),
+          getConversation: (id) => env.kernel.conversations.getConversation(id),
+          abortConversationGuarded: (id) => env.kernel.conversations.abortConversationGuarded(id, {}),
           emitEvent: (type, payload) => env.kernel.events.publish(type, payload),
           // 与生产 app.ts 同接线：gate 本机 fallback（native 路径已在子会话内
           // 执行，sentinel 断言此口零调用）。
-          runGate: (command, context) => env.kernel.runGate(command, context),
+          runGate: (command, context) => env.kernel.agentSpawn.runGate(command, context),
         },
       })
       await service.init()
@@ -433,10 +433,10 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
 
       // 子会话镜像 cwd 仍是 childDir（不被父 parentDir 覆盖）。
       assert.ok(capturedChildId > 0, '应捕获子会话 id')
-      assert.equal(env.kernel.getConversation(capturedChildId).cwd, childDir, '子会话镜像 cwd 保持 childDir')
+      assert.equal(env.kernel.conversations.getConversation(capturedChildId).cwd, childDir, '子会话镜像 cwd 保持 childDir')
 
       // SDK 实际 cwd 取证：resume 回合 bash pwd 输出 childDir。
-      const detail = await env.kernel.getConversationDetail(capturedChildId, { limit: 80 })
+      const detail = await env.kernel.conversations.getConversationDetail(capturedChildId, { limit: 80 })
       const bashEntries = [...detail.entries]
         .filter((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('bash'))
       assert.ok(bashEntries.length >= 1, '子会话应有 bash 工具结果（pwd 取证）')

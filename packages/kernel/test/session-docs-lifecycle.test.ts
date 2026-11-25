@@ -194,7 +194,7 @@ test('dedicated SSE: deletes conversation and closes active sessionDoc stream (c
   const app = await openApp()
   try {
     // Create an isolated conversation to verify cascade without relying on seeded IDs.
-    const conv = await app.kernel.createConversation({})
+    const conv = await app.kernel.conversations.createConversation({})
     const conversationId = conv.id
     app.metrics.set(conversationId, { n: 1 })
     const res = await fetch(sseUrl(app.url, conversationId), {
@@ -202,7 +202,7 @@ test('dedicated SSE: deletes conversation and closes active sessionDoc stream (c
     })
     assert.equal(res.status, 200)
     const readAll = readUntilDone(res.body as ReadableStream<Uint8Array>)
-    await app.kernel.deleteConversation(conversationId)
+    await app.kernel.conversations.deleteConversation(conversationId)
     const text = await readAll
     assert.match(text, /event: snapshot/, 'initial snapshot frame arrived before stream closed')
   } finally {
@@ -235,7 +235,7 @@ test('transient sessionDoc (durable: false): HTTP GET + dedicated SSE + conversa
         transient = ctx.sessionDoc<{ step: number } | null>('live', null, { public: true, durable: false })
       },
     })
-    const conv = await app.kernel.createConversation({})
+    const conv = await app.kernel.conversations.createConversation({})
     transient.set(conv.id, { step: 1 })
 
     const getRes = await fetch(
@@ -253,7 +253,7 @@ test('transient sessionDoc (durable: false): HTTP GET + dedicated SSE + conversa
     const readAll = readUntilDone(sseRes.body as ReadableStream<Uint8Array>)
     transient.set(conv.id, { step: 2 })
     // Delete conversation: closes stream cleanly and clears in-memory transient entry.
-    await app.kernel.deleteConversation(conv.id)
+    await app.kernel.conversations.deleteConversation(conv.id)
     const text = await readAll
     assert.match(text, /event: snapshot/)
     assert.match(text, /"step":2/)

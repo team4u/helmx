@@ -30,7 +30,7 @@ import {
 import { waitFor } from '@helmx/test-kit'
 import { useTempDir } from '@helmx/test-kit/node'
 import { createGitTemplate } from '@helmx/test-kit/git'
-import { actionToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
+import { actionToolResult } from '@helmx/kernel/testing'
 import {
   WORKFLOW_ID,
   WORKTREE_ID,
@@ -62,7 +62,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       const swarmSummary = kernel.plugins.list().find((p) => p.id === SWARM_PLUGIN_ID)
       assert.ok(swarmSummary, 'createHelmx must register builtin:swarm')
       assert.equal(swarmSummary!.enabled, true, 'builtin:swarm must be default-enabled')
-      const bootConvs = kernel.listConversations()
+      const bootConvs = kernel.conversations.listConversations()
       assert.equal(
         bootConvs.some((c) => c.ownedBy === 'helmx' || c.tags.includes(COORDINATOR_TAG) || c.tags.includes(WORKER_TAG)),
         false,
@@ -80,7 +80,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       await kernel.plugins.enable(WORKTREE_ID)
       assert.equal(kernel.plugins.list().find((p) => p.id === WORKTREE_ID)?.enabled, true)
 
-      const coord = await kernel.createConversation({ title: 'Feature Chat', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Feature Chat', profileId: 'assistant', cwd: env.repoDir })
 
       // 3) swarm managed skill is available while builtin:swarm is enabled, with no duplicate ui.command
       assert.equal(SWARM_SKILL_ID, 'swarm')
@@ -128,8 +128,8 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         },
       ])
 
-      await kernel.submitInput(coord.id, 'Start a squad')
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.submitInput(coord.id, 'Start a squad')
+      await kernel.conversations.waitForIdle(coord.id)
       assert.equal(preCapture.length, 2)
 
       const beforeTools = preCapture[0]!.toolNames
@@ -202,10 +202,10 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         { prompt: 'Role 2', name: 'beta' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(w1.workerConversationId)
-      await kernel.waitForIdle(w2.workerConversationId)
+      await kernel.conversations.waitForIdle(w1.workerConversationId)
+      await kernel.conversations.waitForIdle(w2.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const indexDoc = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
       assert.equal(indexDoc.workers.length, 2)
@@ -234,11 +234,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
           fauxAssistantMessage('Quick lookup finished.'),
         ],
       })
-      await kernel.submitInput(coord.id, 'Check prompt cache stability')
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.submitInput(coord.id, 'Check prompt cache stability')
+      await kernel.conversations.waitForIdle(coord.id)
 
       assert.equal(sectionAfterScaling, sectionInitial, 'active_swarm_group section must stay 100% byte-constant across member scaling and metadata edits')
-      const detail = await kernel.getConversationDetail(coord.id, { limit: 10 })
+      const detail = await kernel.conversations.getConversationDetail(coord.id, { limit: 10 })
       assert.match(JSON.stringify(detail.entries), /quick-lookup-ok/, 'coordinator retains bash for lightweight lookups')
 
       // Close group -> skill disappears once plugin is disabled
@@ -261,7 +261,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       const { kernel } = env.app
 
       // 1) Non-/skill:swarm inputs (including plain /swarm) pass through untouched without creating any group
-      const plainConv = await kernel.createConversation({ title: 'Normal Chat', profileId: 'assistant', cwd: env.repoDir })
+      const plainConv = await kernel.conversations.createConversation({ title: 'Normal Chat', profileId: 'assistant', cwd: env.repoDir })
       let plainSawText = ''
       env.faux.setResponses([
         (ctx) => {
@@ -277,23 +277,23 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
           return fauxAssistantMessage('Third normal reply.')
         },
       ])
-      await kernel.submitInput(plainConv.id, '/skill:swarming check')
-      await kernel.waitForIdle(plainConv.id)
+      await kernel.conversations.submitInput(plainConv.id, '/skill:swarming check')
+      await kernel.conversations.waitForIdle(plainConv.id)
       assert.match(plainSawText, /\/skill:swarming check/)
-      assert.equal(kernel.getConversation(plainConv.id).tags.includes(COORDINATOR_TAG), false)
+      assert.equal(kernel.conversations.getConversation(plainConv.id).tags.includes(COORDINATOR_TAG), false)
 
-      await kernel.submitInput(plainConv.id, 'please explain /skill:swarm syntax')
-      await kernel.waitForIdle(plainConv.id)
+      await kernel.conversations.submitInput(plainConv.id, 'please explain /skill:swarm syntax')
+      await kernel.conversations.waitForIdle(plainConv.id)
       assert.match(plainSawText, /please explain \/skill:swarm syntax/)
-      assert.equal(kernel.getConversation(plainConv.id).tags.includes(COORDINATOR_TAG), false)
+      assert.equal(kernel.conversations.getConversation(plainConv.id).tags.includes(COORDINATOR_TAG), false)
 
-      await kernel.submitInput(plainConv.id, '/swarm legacy prefix should not trigger')
-      await kernel.waitForIdle(plainConv.id)
+      await kernel.conversations.submitInput(plainConv.id, '/swarm legacy prefix should not trigger')
+      await kernel.conversations.waitForIdle(plainConv.id)
       assert.match(plainSawText, /\/swarm legacy prefix should not trigger/)
-      assert.equal(kernel.getConversation(plainConv.id).tags.includes(COORDINATOR_TAG), false)
+      assert.equal(kernel.conversations.getConversation(plainConv.id).tags.includes(COORDINATOR_TAG), false)
 
       // 2) Sending `/skill:swarm <task>` on a blank top-level human conversation auto-creates group, tags coordinator, keeps clean user bubble/title, and injects system guide
-      const coord = await kernel.createConversation({ title: '', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: '', profileId: 'assistant', cwd: env.repoDir })
       let turnMeta: { toolNames: string[]; sectionsById: Record<string, string>; userText: string } | undefined
       let workerDispatched = false
       setSwarmRoleResponses(env.faux, {
@@ -331,17 +331,17 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         ],
       })
 
-      await kernel.submitInput(coord.id, '/skill:swarm 重构鉴权模块并交叉验收')
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.submitInput(coord.id, '/skill:swarm 重构鉴权模块并交叉验收')
+      await kernel.conversations.waitForIdle(coord.id)
       await waitFor(() => workerDispatched)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       assert.ok(turnMeta !== undefined)
-      const coordSummary = kernel.getConversation(coord.id)
+      const coordSummary = kernel.conversations.getConversation(coord.id)
       assert.equal(coordSummary.tags.includes(COORDINATOR_TAG), true)
       assert.equal(coordSummary.title, '/skill:swarm 重构鉴权模块并交叉验收', 'auto-title must derive from clean user input')
-      const coordDetail = await kernel.getConversationDetail(coord.id, { limit: 20 })
+      const coordDetail = await kernel.conversations.getConversationDetail(coord.id, { limit: 20 })
       const firstHumanInput = coordDetail.entries.find((e) => e.kind === 'helmx.input')
       assert.equal(
         (firstHumanInput?.data as { text?: string } | undefined)?.text,
@@ -374,8 +374,8 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
           },
         ],
       })
-      await kernel.submitInput(coord.id, '/skill:swarm 补充单测覆盖')
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.submitInput(coord.id, '/skill:swarm 补充单测覆盖')
+      await kernel.conversations.waitForIdle(coord.id)
       assert.match(secondPromptText, /\/skill:swarm 补充单测覆盖/)
       const indexAfterSecond = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
       assert.equal(
@@ -387,20 +387,20 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       // 4) Sending `/skill:swarm` on a worker or child sub-conversation is explicitly blocked by onInput
       const workerId = indexAfterSecond.workers.find((w) => w.groupId === coordGroup.id)!.conversationId
       await assert.rejects(
-        () => kernel.submitInput(workerId, '/skill:swarm nested attempt'),
+        () => kernel.conversations.submitInput(workerId, '/skill:swarm nested attempt'),
         (err: unknown) =>
           err instanceof HelmxError &&
           err.code === 'input_blocked' &&
           err.message.includes('不能在子成员或后台会话中使用 /skill:swarm 发起协同'),
       )
-      const childConv = await kernel.createConversation({
+      const childConv = await kernel.conversations.createConversation({
         title: 'Child Chat',
         profileId: 'assistant',
         cwd: env.repoDir,
         parentConversationId: plainConv.id,
       })
       await assert.rejects(
-        () => kernel.submitInput(childConv.id, '/skill:swarm child attempt'),
+        () => kernel.conversations.submitInput(childConv.id, '/skill:swarm child attempt'),
         (err: unknown) =>
           err instanceof HelmxError &&
           err.code === 'input_blocked' &&
@@ -408,7 +408,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       )
 
       // 5) Plain `/skill:swarm` (no arguments) on a top-level human conversation activates group, keeps '/skill:swarm' verbatim, and injects ask-for-task system guidance
-      const emptyArgCoord = await kernel.createConversation({ title: 'Standby Swarm Topic', profileId: 'assistant', cwd: env.repoDir })
+      const emptyArgCoord = await kernel.conversations.createConversation({ title: 'Standby Swarm Topic', profileId: 'assistant', cwd: env.repoDir })
       let emptyArgSection = ''
       let emptyArgMessages = ''
       env.faux.setResponses([
@@ -419,13 +419,13 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
           return fauxAssistantMessage('请告诉我本次协同目标任务。')
         },
       ])
-      await kernel.submitInput(emptyArgCoord.id, '/skill:swarm')
-      await kernel.waitForIdle(emptyArgCoord.id)
-      assert.equal(kernel.getConversation(emptyArgCoord.id).tags.includes(COORDINATOR_TAG), true)
+      await kernel.conversations.submitInput(emptyArgCoord.id, '/skill:swarm')
+      await kernel.conversations.waitForIdle(emptyArgCoord.id)
+      assert.equal(kernel.conversations.getConversation(emptyArgCoord.id).tags.includes(COORDINATOR_TAG), true)
       assert.match(emptyArgSection, /load_skill\(\{ skillId: "swarm" \}\)/)
       assert.match(emptyArgSection, /briefly ask what task to coordinate/)
       assert.match(emptyArgMessages, /"\/skill:swarm"/)
-      const emptyArgDetail = await kernel.getConversationDetail(emptyArgCoord.id, { limit: 10 })
+      const emptyArgDetail = await kernel.conversations.getConversationDetail(emptyArgCoord.id, { limit: 10 })
       const emptyArgInput = emptyArgDetail.entries.find((e) => e.kind === 'helmx.input')
       assert.equal((emptyArgInput?.data as { text?: string } | undefined)?.text, '/skill:swarm')
       const emptyArgIndex = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
@@ -448,13 +448,13 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         skills: [],
       })
 
-      const noSkillCoord = await kernel.createConversation({
+      const noSkillCoord = await kernel.conversations.createConversation({
         title: 'Restricted Coord',
         profileId: 'no-swarm-skill',
         cwd: env.repoDir,
       })
       await assert.rejects(
-        () => kernel.submitInput(noSkillCoord.id, '/skill:swarm try orchestrating'),
+        () => kernel.conversations.submitInput(noSkillCoord.id, '/skill:swarm try orchestrating'),
         (err: unknown) => err instanceof HelmxError && err.code === 'input_blocked',
         'Profile with skills=[] must block /skill:swarm trigger',
       )
@@ -476,8 +476,8 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
           return fauxAssistantMessage('Noted without skill.')
         },
       ])
-      await kernel.submitInput(noSkillCoord.id, 'Check sections')
-      await kernel.waitForIdle(noSkillCoord.id)
+      await kernel.conversations.submitInput(noSkillCoord.id, 'Check sections')
+      await kernel.conversations.waitForIdle(noSkillCoord.id)
       assert.equal(noSkillCoordSection.includes('load_skill('), false)
       assert.equal(availableActionsInCoordTurn.includes('complete_board_members'), false, 'visibility:ui hides UI completer from <available_actions>')
       assert.equal(availableActionsInCoordTurn.includes('list_mentionable'), false, 'exposeToPrompt:false hides profile @ completer')
@@ -486,7 +486,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: noSkillGroupId }, { conversationId: noSkillCoord.id })
 
       // 2) Dispatch validation & flat forkFrom & structuredOutput tool envelope
-      const coord = await kernel.createConversation({ title: 'Flat Coord', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Flat Coord', profileId: 'assistant', cwd: env.repoDir })
       const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Flat Squad',
         conversationId: coord.id,
@@ -536,7 +536,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         { groupId, name: 'alpha', prompt: 'Seed alpha conversation' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(alpha.workerConversationId)
+      await kernel.conversations.waitForIdle(alpha.workerConversationId)
 
       const beta = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
@@ -544,9 +544,9 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         { groupId, name: 'beta', prompt: 'Fork from peer alpha', forkFrom: 'alpha' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(beta.workerConversationId)
+      await kernel.conversations.waitForIdle(beta.workerConversationId)
       assert.equal(
-        kernel.getConversation(beta.workerConversationId).parentConversationId,
+        kernel.conversations.getConversation(beta.workerConversationId).parentConversationId,
         coord.id,
         'forkFrom peer must keep flat parentConversationId pointing to coordinator',
       )
@@ -573,7 +573,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
 
       // 3) Bounded index (MAX_INDEX_CLOSED_GROUPS = 50) + lazy closed group loading for evicted archived coordinator/worker
-      const evictedCoord = await kernel.createConversation({ title: 'Evicted Hist Coord', profileId: 'assistant', cwd: env.repoDir })
+      const evictedCoord = await kernel.conversations.createConversation({ title: 'Evicted Hist Coord', profileId: 'assistant', cwd: env.repoDir })
       const evictedGroup = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Evicted Historic Group',
         conversationId: evictedCoord.id,
@@ -599,9 +599,9 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         { groupId: evictedGroup.groupId, name: 'evictedw', prompt: 'Worker in evicted group' },
         { conversationId: evictedCoord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(evictedWorker.workerConversationId)
+      await kernel.conversations.waitForIdle(evictedWorker.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(evictedCoord.id)
+      await kernel.conversations.waitForIdle(evictedCoord.id)
       await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
         'close_group',
@@ -611,7 +611,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
 
       // Create and close 51 more groups so total closed groups = 53 > 50 (with updatedAt strictly newer)
       for (let i = 0; i < 51; i += 1) {
-        const c = await kernel.createConversation({ title: `Hist ${i}`, profileId: 'assistant', cwd: env.repoDir })
+        const c = await kernel.conversations.createConversation({ title: `Hist ${i}`, profileId: 'assistant', cwd: env.repoDir })
         const g = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
           title: `Hist Group ${i}`,
           conversationId: c.id,
@@ -653,7 +653,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
     try {
       const { kernel } = env.app
       await kernel.plugins.setConfig(SWARM_PLUGIN_ID, { maxWorkersPerGroup: 2 })
-      const coord = await kernel.createConversation({ title: 'Parallel Dispatch Coord', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Parallel Dispatch Coord', profileId: 'assistant', cwd: env.repoDir })
       const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Concurrent Squad',
         conversationId: coord.id,
@@ -687,9 +687,9 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       assert.deepEqual(errCodes, ['swarm_group_member_limit', 'swarm_member_conflict'])
 
       const workers = fulfilled.map((r) => (r as PromiseFulfilledResult<{ workerConversationId: number }>).value)
-      for (const w of workers) await kernel.waitForIdle(w.workerConversationId)
+      for (const w of workers) await kernel.conversations.waitForIdle(w.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
     } finally {
       await env.close()
@@ -701,7 +701,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
     const env = await openSwarmEnv(root, gitTemplate)
     try {
       const kernel = env.app.kernel
-      const coord = await kernel.createConversation({ title: 'Meta Coord', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Meta Coord', profileId: 'assistant', cwd: env.repoDir })
 
       const execSwarmDerived = async <TOut>(
         toolName: string,
@@ -772,9 +772,9 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         seq: dispatched.structuredOutput.postSeq,
       })
 
-      await kernel.waitForIdle(workerId)
+      await kernel.conversations.waitForIdle(workerId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const longBody = `Detailed handoff payload ${'x'.repeat(2048)}`
       const posted = await execSwarmDerived<{ post: BoardPost }>(
@@ -818,7 +818,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         postCount: statusRes.structuredOutput.posts.length,
       })
 
-      await kernel.waitForIdle(workerId)
+      await kernel.conversations.waitForIdle(workerId)
 
       const aborted = await execSwarmDerived<{ aborted: boolean; workerConversationId: number; name: string }>(
         'swarm_abort_worker',
@@ -1136,7 +1136,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
 
     try {
       const { kernel } = env.app
-      const issued = await kernel.issueNodeToken('remote-box')
+      const issued = await kernel.nodes.issueNodeToken('remote-box')
       const notFoundRpc = async () => ({ ok: false as const, error: { code: 'not_found' as const, message: 'ENOENT' } })
       const reg = await kernel.envFabric.registry.register(
         fakeSocket as never,
@@ -1170,14 +1170,14 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       assert.equal(reg.accepted, true)
       assert.equal(kernel.envFabric.isOnline('remote-box'), true)
 
-      const coord = await kernel.createConversation({ title: 'Multi-Node Coord', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Multi-Node Coord', profileId: 'assistant', cwd: env.repoDir })
       const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Multi-Node Squad',
         conversationId: coord.id,
       })) as { groupId: string }
 
       // 1) Remote nodeId without cwd rejects 400 validation_error with zero conversations created
-      const convCountBeforeErrors = kernel.listConversations().length
+      const convCountBeforeErrors = kernel.conversations.listConversations().length
       await assert.rejects(
         () =>
           kernel.plugins.invokeAction(
@@ -1188,7 +1188,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
           ),
         (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
       )
-      assert.equal(kernel.listConversations().length, convCountBeforeErrors)
+      assert.equal(kernel.conversations.listConversations().length, convCountBeforeErrors)
 
       // 2) Offline remote nodeId rejects 409 node_offline BEFORE creating any conversation
       await assert.rejects(
@@ -1201,7 +1201,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
           ),
         (err: unknown) => err instanceof HelmxError && err.code === 'node_offline' && err.status === 409,
       )
-      assert.equal(kernel.listConversations().length, convCountBeforeErrors, 'offline preflight must leave zero orphan conversations')
+      assert.equal(kernel.conversations.listConversations().length, convCountBeforeErrors, 'offline preflight must leave zero orphan conversations')
 
       // 3) Online remote node dispatch succeeds with isolation: 'inherit'
       setSwarmRoleResponses(env.faux, {
@@ -1230,11 +1230,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         { groupId, name: 'remoter', prompt: 'Run on remote-box', nodeId: 'remote-box', cwd: remoteWorkDir, isolation: 'inherit' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(remoter.workerConversationId)
+      await kernel.conversations.waitForIdle(remoter.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
-      const remoterConv = kernel.getConversation(remoter.workerConversationId)
+      const remoterConv = kernel.conversations.getConversation(remoter.workerConversationId)
       assert.equal(remoterConv.nodeId, 'remote-box')
       assert.equal(remoterConv.cwd, remoteWorkDir)
 
@@ -1245,11 +1245,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         { groupId, name: 'remote_fork', prompt: 'Continue on same remote node', forkFrom: 'remoter', isolation: 'inherit' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(remoteFork.workerConversationId)
+      await kernel.conversations.waitForIdle(remoteFork.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
-      const remoteForkConv = kernel.getConversation(remoteFork.workerConversationId)
+      const remoteForkConv = kernel.conversations.getConversation(remoteFork.workerConversationId)
       assert.equal(remoteForkConv.parentConversationId, coord.id, 'forkFrom peer keeps flat coordinator parent')
       assert.equal(remoteForkConv.nodeId, 'remote-box', 'forkFrom peer inherits peer nodeId')
       assert.equal(remoteForkConv.cwd, remoteWorkDir, 'forkFrom peer inherits peer cwd')
@@ -1261,11 +1261,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         { groupId, name: 'local_switch', prompt: 'Switch back to Hub local', forkFrom: 'remoter', nodeId: 'local', isolation: 'inherit' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(localSwitch.workerConversationId)
+      await kernel.conversations.waitForIdle(localSwitch.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
-      const localSwitchConv = kernel.getConversation(localSwitch.workerConversationId)
+      const localSwitchConv = kernel.conversations.getConversation(localSwitch.workerConversationId)
       assert.equal(localSwitchConv.nodeId, 'local')
       assert.equal(localSwitchConv.cwd, env.repoDir, 'explicit local nodeId must not leak remote peer cwd')
 
@@ -1283,7 +1283,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         name: 'Restricted Coordinator',
         restrictToCwd: true,
       })
-      const restrictedCoord = await kernel.createConversation({
+      const restrictedCoord = await kernel.conversations.createConversation({
         title: 'Restricted Coord',
         profileId: 'restricted-coord',
         cwd: env.repoDir,
@@ -1293,7 +1293,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         conversationId: restrictedCoord.id,
       })) as { groupId: string }
 
-      const convCountBeforeRestricted = kernel.listConversations().length
+      const convCountBeforeRestricted = kernel.conversations.listConversations().length
       await assert.rejects(
         () =>
           kernel.plugins.invokeAction(
@@ -1304,7 +1304,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
           ),
         (err: unknown) => err instanceof HelmxError && err.code === 'path_outside_workspace' && err.status === 403,
       )
-      assert.equal(kernel.listConversations().length, convCountBeforeRestricted)
+      assert.equal(kernel.conversations.listConversations().length, convCountBeforeRestricted)
 
       // Seed a local unrestricted peer inside the restricted coordinator's workspace, then try escaping via forkFrom
       setSwarmRoleResponses(env.faux, {
@@ -1320,11 +1320,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         { groupId: restrictedGroupId, name: 'local_peer', prompt: 'Work locally', profileId: 'assistant', isolation: 'inherit' },
         { conversationId: restrictedCoord.id },
       )) as { workerConversationId: number }
-      await kernel.waitForIdle(localPeer.workerConversationId)
+      await kernel.conversations.waitForIdle(localPeer.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(restrictedCoord.id)
+      await kernel.conversations.waitForIdle(restrictedCoord.id)
 
-      const countBeforePeerEscape = kernel.listConversations().length
+      const countBeforePeerEscape = kernel.conversations.listConversations().length
       await assert.rejects(
         () =>
           kernel.plugins.invokeAction(
@@ -1345,7 +1345,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
           ),
         (err: unknown) => err instanceof HelmxError && err.code === 'path_outside_workspace' && err.status === 403,
       )
-      assert.equal(kernel.listConversations().length, countBeforePeerEscape)
+      assert.equal(kernel.conversations.listConversations().length, countBeforePeerEscape)
 
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: restrictedGroupId }, { conversationId: restrictedCoord.id })
     } finally {
@@ -1359,7 +1359,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
     const env = await openSwarmEnv(dir, gitTemplate)
     try {
       const { kernel } = env.app
-      const coord = await kernel.createConversation({ title: 'Timing Coord', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Timing Coord', profileId: 'assistant', cwd: env.repoDir })
 
       const created = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
@@ -1397,9 +1397,9 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         { conversationId: coord.id },
       )) as { workerConversationId: number }
 
-      await kernel.waitForIdle(dispAlpha.workerConversationId)
-      await kernel.waitForIdle(dispBeta.workerConversationId)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(dispAlpha.workerConversationId)
+      await kernel.conversations.waitForIdle(dispBeta.workerConversationId)
+      await kernel.conversations.waitForIdle(coord.id)
 
       // Live board-view / board_status exposes timing fields and passes strict output schema
       const liveStatus = (await kernel.plugins.invokeAction(
@@ -1458,8 +1458,8 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       assert.equal(metaBeta.turnCount, betaTurnsBeforeClose)
 
       // Delete both worker conversations -> historical board_status still serves solidified timing!
-      await kernel.deleteConversation(dispAlpha.workerConversationId)
-      await kernel.deleteConversation(dispBeta.workerConversationId)
+      await kernel.conversations.deleteConversation(dispAlpha.workerConversationId)
+      await kernel.conversations.deleteConversation(dispBeta.workerConversationId)
       const historicalStatus = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
         'board_status',

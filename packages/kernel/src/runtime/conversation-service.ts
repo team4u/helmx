@@ -31,16 +31,18 @@ import type {
   WhenBusy,
 } from '@helmx/protocol'
 import { HelmxError, isValidNodeId, NODE_ID_PATTERN } from '@helmx/protocol'
+import type { EnvFabric } from '../env/index.js'
 import type { ArtifactService as SvcArtifactService, ProfileService, SecretStash, Profile } from '../services/index.js'
+import { completeConversationTextHelper } from './conversation-text.js'
+import { readWorkspaceFile, type ConversationFileContent } from './workspace-files.js'
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
+import { requireConv } from './conversation-require.js'
 import {
   assistantTextOfModel,
   readEntryById,
-  requireConv,
-  type RewindInterval,
-} from './runtime-helpers.js'
-import { toConversationEntry } from './entries.js'
+  toConversationEntry,
+} from './entries.js'
 import {
   THINKING_LEVELS,
   clampThinkingLevelForModel,
@@ -56,7 +58,7 @@ import { ConversationContextOps } from './conversation-context-ops.js'
 import { ConversationDetailService } from './conversation-detail.js'
 import { ConversationInputPipeline } from './conversation-input.js'
 import { ConversationProfileService } from './conversation-profile.js'
-import { ConversationRewind } from './conversation-rewind.js'
+import { ConversationRewind, type RewindInterval } from './conversation-rewind.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric, type TrustedNodePlatformSource } from './target-cwd.js'
 
 interface ConversationServiceOptions {
@@ -113,7 +115,15 @@ interface ConversationServiceOptions {
    * Used to normalize create/update cwd against the target node platform (see runtime/target-cwd.ts).
    */
   readonly trustedPlatformOf?: TrustedNodePlatformSource
+  /** Writability guard (throws fatal storage error or runtime_closed when kernel cannot accept mutations). */
+  readonly assertWritable?: () => void
+  /** Cross-node execution/file fabric (required for remote readConversationFile). */
+  readonly envFabric?: EnvFabric
+  /** Disabled-model check (optional for standalone tests; defaults to false). */
+  readonly isModelDisabled?: (providerId: string, modelId: string) => boolean
 }
+
+export type { ConversationFileContent }
 
 /** Optional parameters for input submission (shared shape across HTTP/CLI/internal). */
 export interface SubmitInputOptions {
@@ -152,16 +162,9 @@ export class ConversationService {
   private readonly detailOps: ConversationDetailService
   private readonly profileAlignment: ConversationProfileService
   private readonly inputPipeline: ConversationInputPipeline
-  private fatalErrorProvider: (() => Error | undefined) | undefined
-
-  /** Attach host fatal store error reader (used to reject mutating requests without altering normal shutdown). */
-  setFatalErrorProvider(provider: () => Error | undefined): void {
-    this.fatalErrorProvider = provider
-  }
 
   private assertWritable(): void {
-    const fatal = this.fatalErrorProvider?.()
-    if (fatal !== undefined) throw fatal
+    this.o.assertWritable?.()
   }
 
   constructor(options: ConversationServiceOptions) {
@@ -493,7 +496,11 @@ export class ConversationService {
     return this.rewind.collectRewindIntervals(conversation)
   }
 
-  async rebuildFts(listConversationIds: () => Array<{ id: number; title: string }>): Promise<void> {
+  async rebuildFts(
+    listConversationIds: () => Array<{ id: number; title: string }> = () =>
+      this.listConversations().map((c) => ({ id: c.id, title: c.title })),
+  ): Promise<void> {
+    this.assertWritable()
     return this.detailOps.rebuildFts(listConversationIds)
   }
 
@@ -538,6 +545,7 @@ export class ConversationService {
   }
 
   async alignProfileConversations(profileId: string): Promise<void> {
+    this.assertWritable()
     return this.profileAlignment.alignProfileConversations(profileId)
   }
 
@@ -1358,6 +1366,50 @@ export class ConversationService {
 
   async search(query: string): Promise<SearchHit[]> {
     return this.store.search(query)
+  }
+
+  /** Read a file strictly inside a conversation's bound workspace (text files are redacted via SecretStash). */
+  async readConversationFile(
+    id: number,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationFileContent> {
+    if (!this.o.envFabric) {
+      throw new HelmxError('internal_error', 'EnvFabric is not configured on ConversationService', 500)
+    }
+    const summary = this.getConversation(id)
+    return readWorkspaceFile({
+      nodeId: summary.nodeId ?? 'local',
+      cwd: summary.cwd,
+      rawPath: path,
+      envFabric: this.o.envFabric,
+      redact: (text) => this.stash.redact(text),
+      signal,
+    })
+  }
+
+  /** Out-of-band single-shot text completion against a conversation's effective model (or explicit model). */
+  async completeConversationText(input: {
+    conversationId: number
+    model?: string
+    systemPrompt: string
+    text: string
+    maxTokens?: number
+    signal?: AbortSignal
+  }): Promise<string> {
+    return completeConversationTextHelper(
+      {
+        store: this.store,
+        conversations: this,
+        models: {
+          models: this.o.models(),
+          isModelDisabled: this.o.isModelDisabled ?? (() => false),
+          resolveModelRef: this.o.resolveModelRef,
+        },
+        stash: this.stash,
+      },
+      input,
+    )
   }
 
   async recover(

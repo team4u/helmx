@@ -5,8 +5,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
-import { loadExternalPlugins } from '../../kernel/src/plugins/external-loader.js'
-import { pluginDataDirName } from '../../kernel/src/plugins/plugin-dir-name.js'
+import { loadExternalPlugins, pluginDataDirName } from '@helmx/kernel'
 import {
   cleanupDir,
   createHubTestApp,

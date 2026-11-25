@@ -17,8 +17,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHubHandler, startHub } from '../../../kernel/src/http/index.js'
-import type { PluginConfigStore, PluginDocStore } from '../../../kernel/src/plugins/index.js'
+import { createHubHandler, startHub, type PluginConfigStore, type PluginDocStore } from '@helmx/kernel'
 import { createHelmx, type HelmxOptions } from '../../src/app.js'
 
 export {

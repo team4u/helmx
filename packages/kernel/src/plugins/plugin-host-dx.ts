@@ -3,6 +3,7 @@
  */
 import {
   HelmxError,
+  type PackageManagerHost,
   type PluginBuildProvider,
   type PluginDoctorReport,
   type PluginReloadResult,
@@ -19,11 +20,12 @@ import {
   normalizeDefinition,
   reloadExternalPlugin,
   resolvePluginEntry,
+  verifyDeclaredPrebuiltDir,
   type ReloadablePluginHost,
 } from './external-loader.js';
-import type { PackageManagerHost } from './package-manager.js';
 import { externalPluginsDir } from './plugin-dir-name.js';
 import { doctorPluginDir } from './plugin-doctor.js';
+import { readHelmxClientDependencies } from './plugin-manifest.js';
 import { requirePlugin } from './plugin-host-transitions.js';
 import { assertProvidersIdle } from './provider-coordinator.js';
 import { rescanExternalPlugins } from './scan-visitor.js';
@@ -215,5 +217,10 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
       ]);
     },
     listSummaries: () => deps.host.list(),
+    doctorDir: (dir, options) =>
+      doctorPluginDir(dir, { buildProvider: options?.buildProvider ?? deps.buildProvider }),
+    verifyPrebuiltDir: (dir) => verifyDeclaredPrebuiltDir(dir),
+    readClientDependencies: (dir) => readHelmxClientDependencies(dir),
+    externalPluginsDir: (dataDir) => externalPluginsDir(dataDir),
   };
 }

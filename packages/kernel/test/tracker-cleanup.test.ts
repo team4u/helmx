@@ -115,10 +115,10 @@ describe('input uniqueness and no resurrection of history', { timeout: 60_000 },
         fauxAssistantMessage('round 1 answer'),
         fauxAssistantMessage('round 2 answer'),
       ])
-      await kernel.submitInput(1, 'round 1 task', { origin: 'trigger' })
-      await kernel.waitForIdle(1)
-      await kernel.submitInput(1, 'round 2 task', { origin: 'human' })
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'round 1 task', { origin: 'trigger' })
+      await kernel.conversations.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'round 2 task', { origin: 'human' })
+      await kernel.conversations.waitForIdle(1)
       assert.equal(settled.length, 2)
       assert.equal(settled[0]!.outcome, 'completed')
       assert.equal(settled[0]!.inputs.length, 1)
@@ -141,12 +141,12 @@ describe('input uniqueness and no resurrection of history', { timeout: 60_000 },
         },
       ])
       try {
-        void kernel.submitInput(1, 'current question to abort', { origin: 'human' }).catch(() => {})
+        void kernel.conversations.submitInput(1, 'current question to abort', { origin: 'human' }).catch(() => {})
         await started.promise
-        await waitFor(() => kernel.getConversation(1).status === 'working')
-        assert.equal(kernel.getConversation(1).status, 'working')
-        await kernel.abortConversation(1)
-        await kernel.waitForIdle(1).catch(() => {})
+        await waitFor(() => kernel.conversations.getConversation(1).status === 'working')
+        assert.equal(kernel.conversations.getConversation(1).status, 'working')
+        await kernel.conversations.abortConversation(1)
+        await kernel.conversations.waitForIdle(1).catch(() => {})
         assert.equal(settled.length, 3)
         const aborted = settled[2]!
         assert.equal(aborted.outcome, 'aborted')
@@ -174,8 +174,8 @@ describe('input uniqueness and no resurrection of history', { timeout: 60_000 },
         fauxAssistantMessage('answer three'),
       ])
       for (const text of ['question one', 'question two', 'question three']) {
-        await kernel.submitInput(1, text)
-        await kernel.waitForIdle(1)
+        await kernel.conversations.submitInput(1, text)
+        await kernel.conversations.waitForIdle(1)
       }
       const tracker = trackerOf(kernel)
       const map = tracker.mirrors.get(1)?.trackedInputs
@@ -203,12 +203,12 @@ describe('input uniqueness and no resurrection of history', { timeout: 60_000 },
         fauxAssistantMessage('tool round answer'),
         fauxAssistantMessage('queued input answer'),
       ])
-      await kernel.submitInput(1, 'first input', { origin: 'human' })
+      await kernel.conversations.submitInput(1, 'first input', { origin: 'human' })
       await firstInFlight.promise
       // Queued via followUp while busy: consumed by SDK in subsequent run (no inputs added mid-turn).
-      await kernel.submitInput(1, 'queued second', { origin: 'agent', whenBusy: 'followUp' })
+      await kernel.conversations.submitInput(1, 'queued second', { origin: 'agent', whenBusy: 'followUp' })
       releaseFirst.resolve()
-      await kernel.waitForIdle(1)
+      await kernel.conversations.waitForIdle(1)
       assert.ok(settled.length >= 1)
       // Across all settlement payloads: both inputs appear exactly once without duplicates.
       const allInputs = settled.flatMap((s) => s.inputs)
@@ -232,11 +232,11 @@ describe('duplicate requestId submission and restart recovery', { timeout: 60_00
     try {
       // Two requestIds differing only in case (guards against legacy 32-bit hash collisions like 'Aa'/'BB').
       kernel.__faux.setResponses([fauxAssistantMessage('answer')])
-      await kernel.submitInput(1, 'a')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'a')
+      await kernel.conversations.waitForIdle(1)
       kernel.__faux.setResponses([fauxAssistantMessage('answer two')])
-      await kernel.submitInput(1, 'second')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'second')
+      await kernel.conversations.waitForIdle(1)
       const tracker = trackerOf(kernel)
       // History leaves zero residue after settlement (verified above); verify key domain during runs:
       // entries in trackedInputs must remain unique and keyed by requestId strings.
@@ -509,21 +509,21 @@ describe('duplicate requestId submission and restart recovery', { timeout: 60_00
           return fauxAssistantMessage('unused')
         },
       ])
-      void kernel.submitInput(1, 'in-flight question before stopObserving').catch(() => {})
+      void kernel.conversations.submitInput(1, 'in-flight question before stopObserving').catch(() => {})
       await started.promise
-      await waitFor(() => kernel.getConversation(1).status === 'working')
-      assert.equal(kernel.getConversation(1).status, 'working')
+      await waitFor(() => kernel.conversations.getConversation(1).status === 'working')
+      assert.equal(kernel.conversations.getConversation(1).status, 'working')
       // Delete conversation (calls stopObserving internally): rotates token so in-flight reads discard results.
-      const conv = await kernel.createConversation({})
-      await kernel.deleteConversation(conv.id)
+      const conv = await kernel.conversations.createConversation({})
+      await kernel.conversations.deleteConversation(conv.id)
       const tracker = trackerOf(kernel)
       assert.equal(tracker.mirrors.has(conv.id), false)
       assert.equal(tracker.mirrors.get(conv.id)?.runFirstEntry === undefined, true)
       assert.equal(tracker.mirrors.has(conv.id), false)
       // Abort must not replace observe token of conversation 1 while still observed.
       const genBefore = tracker.mirrors.get(1)?.observeGeneration
-      await kernel.abortConversation(1)
-      await kernel.waitForIdle(1).catch(() => {})
+      await kernel.conversations.abortConversation(1)
+      await kernel.conversations.waitForIdle(1).catch(() => {})
       assert.equal(tracker.mirrors.get(1)?.observeGeneration, genBefore)
     } finally {
       gate.resolve()
@@ -536,7 +536,7 @@ describe('settledRuns capacity eviction and stopObserving cleanup', { timeout: 6
   it('late settlement failure after stopObserving does not resurrect counters, errors, or observe tokens', timeout, async () => {
     const kernel = await openRuntime(join(root, 'late-settlement'))
     try {
-      const conv = await kernel.createConversation({})
+      const conv = await kernel.conversations.createConversation({})
       const tracker = trackerOf(kernel) as TrackerInternals & {
         events: { onTurnSettled: (...args: unknown[]) => Promise<void> | void }
         emitSettled(id: number, outcome: string, inputs: ConversationInput[], error: undefined): void
@@ -559,7 +559,7 @@ describe('settledRuns capacity eviction and stopObserving cleanup', { timeout: 6
       } finally {
         tracker.events.onTurnSettled = original
       }
-      await kernel.deleteConversation(conv.id)
+      await kernel.conversations.deleteConversation(conv.id)
     } finally {
       await kernel.close()
     }
@@ -569,7 +569,7 @@ describe('settledRuns capacity eviction and stopObserving cleanup', { timeout: 6
     const kernel = await openRuntime(join(root, 'cap-1'))
     try {
       const tracker = trackerOf(kernel)
-      const conv = await kernel.createConversation({})
+      const conv = await kernel.conversations.createConversation({})
       const note = (tracker as unknown as {
         noteSettledRun: (conversationId: number, runKey: string) => void
       }).noteSettledRun.bind(tracker)
@@ -589,7 +589,7 @@ describe('settledRuns capacity eviction and stopObserving cleanup', { timeout: 6
         )
       }
       assert.equal(tracker.settledRuns.has(`${conv.id}:7`), true)
-      await kernel.deleteConversation(conv.id)
+      await kernel.conversations.deleteConversation(conv.id)
     } finally {
       await kernel.close()
     }
@@ -599,13 +599,13 @@ describe('settledRuns capacity eviction and stopObserving cleanup', { timeout: 6
     const kernel = await openRuntime(join(root, 'stop-1'))
     try {
       const tracker = trackerOf(kernel)
-      const conv = await kernel.createConversation({})
+      const conv = await kernel.conversations.createConversation({})
       kernel.__faux.setResponses([fauxAssistantMessage('answer text')])
-      await kernel.submitInput(conv.id, 'question')
-      await kernel.waitForIdle(conv.id)
+      await kernel.conversations.submitInput(conv.id, 'question')
+      await kernel.conversations.waitForIdle(conv.id)
       assert.ok(tracker.settledRuns.size >= 1, 'settledRuns should contain entry after turn completes')
       assert.ok(tracker.mirrors.get(conv.id)?.lastSettledRun !== undefined)
-      await kernel.deleteConversation(conv.id)
+      await kernel.conversations.deleteConversation(conv.id)
       assert.equal(tracker.settledRuns.size, 0, 'all settledRuns keys for conversation prefix cleaned up')
       assert.equal(tracker.mirrors.has(conv.id), false)
       assert.equal(tracker.mirrors.has(conv.id), false)
@@ -625,12 +625,12 @@ describe('settledRuns capacity eviction and stopObserving cleanup', { timeout: 6
     try {
       const tracker = trackerOf(kernel)
       for (let i = 0; i < 50; i += 1) {
-        const conv = await kernel.createConversation({})
+        const conv = await kernel.conversations.createConversation({})
         const note = (tracker as unknown as {
           noteSettledRun: (conversationId: number, runKey: string) => void
         }).noteSettledRun.bind(tracker)
         note(conv.id, `${conv.id}:1`)
-        await kernel.deleteConversation(conv.id)
+        await kernel.conversations.deleteConversation(conv.id)
       }
       assert.equal(tracker.settledRuns.size, 0)
       // All per-conversation Maps are consolidated in mirrors: only observed conversation 1 remains with zero leakage.

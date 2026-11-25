@@ -17,7 +17,7 @@ import {
   defaultExternalSkillRoots,
   parseSkillFrontmatter,
   SkillService,
-} from '../src/services/profiles-skills.js'
+} from '../src/services/skill-service.js'
 
 const scratchRoot = await mkdtemp(join(tmpdir(), 'helmx-skills-ext-'))
 

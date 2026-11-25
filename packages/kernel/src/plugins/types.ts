@@ -13,6 +13,8 @@ import type {
   PluginConfigFieldSchema,
   PluginDefinition,
   PluginDiagnosticError,
+  PluginPackageManagerProvider,
+  PluginPackagesConfigPort,
   PluginServiceSpec,
   PluginSkillAsset,
 } from '@helmx/protocol';
@@ -163,6 +165,12 @@ export interface PluginHostOptions {
   redactText?: (text: string) => string;
   /** Plugin build port (`client.tsx` compilation + backend TS transpilation) injected by composition root (`@helmx/plugin-build`). */
   buildProvider?: PluginBuildProvider;
+  /** Working directory used as base for resolving relative local plugin package paths (defaults to `dataDir`). */
+  cwd?: string;
+  /** Persistent config port (`config.json`) backing plugin package install records (defaults to `ConfigService(dataDir)` when omitted). */
+  packagesConfig?: PluginPackagesConfigPort;
+  /** Managed plugin package manager provider (`@helmx/plugin-build` `createPluginPackageManager` injected by composition root; 501 `unsupported_package_manager` when unwired). */
+  packageManagerProvider?: PluginPackageManagerProvider;
   /**
    * Defer service `start()` until `PluginHost.start()` runs the global `prepare -> start` barrier.
    * Defaults to false (starts immediately on register/enable).

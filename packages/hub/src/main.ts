@@ -64,9 +64,9 @@ try {
     }),
   });
   // Recovery + scheduler resume happen only after the socket is listening (`503 hub_starting` gate
-  // covers API requests arriving in between; the readiness banner below still prints only when the
-  // Hub is fully started and its control channel is listening, preserving the launcher's listen-line
-  // readiness contract with zero post-start stop/apply race).
+  // covers API requests arriving in between; once `kernel.start()` finishes, `onStarted` wakes the
+  // Hub's `NodeAutoUpgradeCoordinator.onHubReady()`, and the readiness banner below still prints only
+  // when the Hub is fully started and its control channel is listening).
   await app.kernel.start();
   // Activity heartbeat (process-private update busy-gate signal; see activity-heartbeat.ts). Started
   // only after the server is listening so the recorded port is the real bound one; stopped first on

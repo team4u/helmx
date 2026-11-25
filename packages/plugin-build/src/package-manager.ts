@@ -27,13 +27,22 @@ import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rename, rm, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { resolveNpmCommand, runControlledProcess, type ResolveNpmCommandIo } from '@helmx/env-io';
-import { compareCodeUnit, HelmxError, type PluginBuildProvider, type PluginInstallResult, type PluginPackageRecord, type PluginRemoveResult, type PluginPackageSource, type PluginSummary, type PluginUpdateResult } from '@helmx/protocol';
-import { verifyDeclaredPrebuiltDir } from './external-loader.js';
+import {
+  compareCodeUnit,
+  HelmxError,
+  type PackageManagerHost,
+  type PluginBuildProvider,
+  type PluginInstallResult,
+  type PluginPackageManagerPort,
+  type PluginPackageManagerProviderContext,
+  type PluginPackageRecord,
+  type PluginPackageSource,
+  type PluginRemoveResult,
+  type PluginSummary,
+  type PluginUpdateResult,
+} from '@helmx/protocol';
 import { parsePluginSource } from './package-source.js';
-import { externalPluginsDir } from './plugin-dir-name.js';
-import { doctorPluginDir } from './plugin-doctor.js';
-import { readHelmxClientDependencies } from './plugin-manifest.js';
-import type { PluginPackageManagerStore } from './package-store.js';
+import { PluginPackageManagerStore } from './package-store.js';
 
 // ---------------------------------------------------------------------------
 // Process runner (injectable for tests without real network access)
@@ -127,26 +136,7 @@ function commandError(kind: string, cmd: string, args: string[], result: RunResu
 // Manager
 // ---------------------------------------------------------------------------
 
-/** Host integration port required by PluginPackageManager (structurally compatible with PluginHost). */
-export interface PackageManagerHost {
-  registerManagedPlugin(dir: string, options: { enabled: boolean }): Promise<{ summary: PluginSummary; pluginId: string }>;
-  /** Enable after install (enable: true path; failure surfaces on diagnostic field without rolling back install). */
-  enableManagedPlugin(pluginId: string): Promise<PluginSummary>;
-  /** Safety preflight before update swap: reject 409 on live tasks / busy providers without touching old instance or dir. */
-  assertManagedPluginUpdateSafe(pluginId: string): Promise<void> | void;
-  updateManagedPlugin(pluginId: string, dir: string, options: { keepEnabled: boolean }): Promise<{ summary: PluginSummary }>;
-  /** Broadcast updated `plugin.changed` after package record persistence so SSE listeners receive `managed` metadata. */
-  notifyManagedPluginChanged(pluginId: string): void;
-  removeManagedPlugin(pluginId: string): Promise<{ wasEnabled: boolean }>;
-  /**
-   * Purge persisted plugin data (global docs + session docs) on remove and await durable DELETE flush;
-   * rejects explicitly on failure so the directory and record remain intact for retry.
-   */
-  purgePluginPersistentData(pluginId: string): Promise<void>;
-  listSummaries(): PluginSummary[];
-}
-
-interface PluginPackageManagerOptions {
+export interface PluginPackageManagerOptions {
   dataDir: string
   /** Hub working directory (base directory for resolving relative local paths). */
   cwd: string
@@ -161,6 +151,26 @@ interface PluginPackageManagerOptions {
    * Rejects explicitly when missing for packages requiring compilation/transpilation.
    */
   buildProvider?: PluginBuildProvider
+}
+
+export interface CreatePluginPackageManagerOptions extends PluginPackageManagerProviderContext {
+  runner?: PackageRunner
+  commandTimeoutMs?: number
+}
+
+/** Creates a `PluginPackageManager` backed by a `PluginPackageManagerStore` over `options.config`. */
+export function createPluginPackageManager(
+  options: CreatePluginPackageManagerOptions,
+): PluginPackageManager {
+  return new PluginPackageManager({
+    dataDir: options.dataDir,
+    cwd: options.cwd,
+    store: new PluginPackageManagerStore(options.config),
+    host: options.host,
+    ...(options.runner !== undefined ? { runner: options.runner } : {}),
+    ...(options.commandTimeoutMs !== undefined ? { commandTimeoutMs: options.commandTimeoutMs } : {}),
+    ...(options.buildProvider !== undefined ? { buildProvider: options.buildProvider } : {}),
+  });
 }
 
 const COPY_IGNORE = new Set(['node_modules', '.git', '.staging']);
@@ -201,7 +211,7 @@ async function copyTreeFiltered(src: string, dest: string): Promise<void> {
  * Plugin package manager: all install/update/remove operations are serialized through a manager-level queue,
  * while PluginHost maintains its own per-plugin lifecycle queue.
  */
-export class PluginPackageManager {
+export class PluginPackageManager implements PluginPackageManagerPort {
   private readonly dataDir: string;
   private readonly cwd: string;
   private readonly store: PluginPackageManagerStore;
@@ -221,6 +231,18 @@ export class PluginPackageManager {
     this.buildProvider = options.buildProvider;
   }
 
+  async load(): Promise<void> {
+    await this.store.load();
+  }
+
+  getRecord(pluginId: string): PluginPackageRecord | undefined {
+    return this.store.getRecord(pluginId);
+  }
+
+  listRecords(): PluginPackageRecord[] {
+    return this.store.listRecords();
+  }
+
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
     const task = this.chain.then(fn, fn);
     this.chain = task.catch(() => undefined);
@@ -228,7 +250,7 @@ export class PluginPackageManager {
   }
 
   private pluginsDir(): string {
-    return externalPluginsDir(this.dataDir);
+    return this.host.externalPluginsDir(this.dataDir);
   }
 
   private stagingRoot(): string {
@@ -270,7 +292,10 @@ export class PluginPackageManager {
         await this.installRuntimeDeps(payloadDir);
         const { pluginId, dirName } = await this.identifyPlugin(payloadDir, parsed);
         // Full doctor preflight (manifest/backend/register/client) once dependencies are present.
-        const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
+        const report = await this.host.doctorDir(
+          payloadDir,
+          this.buildProvider !== undefined ? { buildProvider: this.buildProvider } : undefined,
+        );
         if (!report.ok) {
           const first = report.checks.find((c) => c.error !== undefined);
           throw new HelmxError(
@@ -581,7 +606,10 @@ export class PluginPackageManager {
             { pluginId, actualId: identified.pluginId },
           );
         }
-        const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
+        const report = await this.host.doctorDir(
+          payloadDir,
+          this.buildProvider !== undefined ? { buildProvider: this.buildProvider } : undefined,
+        );
         if (!report.ok) {
           const first = report.checks.find((c) => c.error !== undefined);
           throw new HelmxError(
@@ -822,8 +850,8 @@ export class PluginPackageManager {
   private async installRuntimeDeps(dir: string): Promise<void> {
     const pkgJson = join(dir, 'package.json');
     const hasPkg = await stat(pkgJson).then(() => true).catch(() => false);
-    const declaredClientSpecs = readHelmxClientDependencies(dir);
-    const prebuiltDir = verifyDeclaredPrebuiltDir(dir);
+    const declaredClientSpecs = this.host.readClientDependencies(dir);
+    const prebuiltDir = this.host.verifyPrebuiltDir(dir);
     const clientSpecs = prebuiltDir !== undefined ? [] : declaredClientSpecs;
     const ranges = new Map<string, string>();
     let hasBackendRuntimeDeps = false;
@@ -870,7 +898,10 @@ export class PluginPackageManager {
    * Identify plugin id from payload directory (prefers doctor's imported pluginId; falls back to manifest declaration).
    */
   private async identifyPlugin(payloadDir: string, source: PluginPackageSource): Promise<{ pluginId: string; dirName: string }> {
-    const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
+    const report = await this.host.doctorDir(
+      payloadDir,
+      this.buildProvider !== undefined ? { buildProvider: this.buildProvider } : undefined,
+    );
     if (report.ok && report.pluginId !== undefined) {
       return { pluginId: report.pluginId, dirName: report.pluginId };
     }
@@ -973,7 +1004,6 @@ function samePackageSource(a: PluginPackageSource, b: PluginPackageSource): bool
 
 /** Read plugin.json id or package.json name/helmx.id (used only as directory-name hint). */
 async function readDeclaredPluginId(dir: string): Promise<string | undefined> {
-  const { readFile } = await import('node:fs/promises');
   const pluginJson = join(dir, 'plugin.json');
   try {
     const manifest = JSON.parse(await readFile(pluginJson, 'utf8')) as Record<string, unknown>;

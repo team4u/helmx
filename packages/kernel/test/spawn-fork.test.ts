@@ -325,14 +325,14 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         },
       }, { enabled: true })
 
-      await kernel.submitInput(1, 'turn 1: ALPHA_SEED')
-      await kernel.waitForIdle(1)
-      await kernel.submitInput(1, 'turn 2: BETA_SEED')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'turn 1: ALPHA_SEED')
+      await kernel.conversations.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'turn 2: BETA_SEED')
+      await kernel.conversations.waitForIdle(1)
 
       assert.equal(childSnapshots.length, 2)
       assert.deepEqual(childSnapshots.map((s) => s.tag).sort(), ['subagent A verify', 'subagent B verify'])
-      assert.equal(await kernel.getLastAssistantText(1), 'parent conversation synthesis complete')
+      assert.equal(await kernel.conversations.getLastAssistantText(1), 'parent conversation synthesis complete')
     } finally {
       await kernel.close()
     }
@@ -381,25 +381,25 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         name: 'no-override target',
       })
 
-      const parent = await kernel.createConversation({
+      const parent = await kernel.conversations.createConversation({
         profileId: 'custom-same',
         cwd: parentDir,
         model: 'faux/faux-parent',
       })
-      await kernel.updateConversation(parent.id, { thinkingLevel: 'high' })
-      await kernel.submitInput(parent.id, 'establish parent conversation history')
-      await kernel.waitForIdle(parent.id)
+      await kernel.conversations.updateConversation(parent.id, { thinkingLevel: 'high' })
+      await kernel.conversations.submitInput(parent.id, 'establish parent conversation history')
+      await kernel.conversations.waitForIdle(parent.id)
 
-      const beforeIds = new Set(kernel.listConversations({ parentConversationId: parent.id }).map((c) => c.id))
+      const beforeIds = new Set(kernel.conversations.listConversations({ parentConversationId: parent.id }).map((c) => c.id))
       const pickNewChild = () => {
-        const added = kernel.listConversations({ parentConversationId: parent.id }).filter((c) => !beforeIds.has(c.id))
+        const added = kernel.conversations.listConversations({ parentConversationId: parent.id }).filter((c) => !beforeIds.has(c.id))
         assert.equal(added.length, 1)
         beforeIds.add(added[0]!.id)
         return added[0]!
       }
 
       // 1. Same-profile default inheritance: omit agentType/cwd/model/effort -> inherits parent overrides (above Profile).
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
         prompt: 'same-profile inherit',
@@ -412,7 +412,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.equal(sameDefaultChild.thinkingLevelOverride, 'high')
 
       // 2. Same-profile explicit override.
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
         prompt: 'same-profile explicit override',
@@ -428,7 +428,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.equal(sameExplicitChild.thinkingLevelOverride, 'medium')
 
       // 3. Cross-profile: target Profile fields take precedence over parent conversation.
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         agentType: 'cross-target',
         fork: true,
@@ -441,7 +441,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.equal(crossTargetChild.thinkingLevel, 'low')
 
       // 4. Cross-profile when target Profile leaves fields unset -> falls back to parent overrides.
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         agentType: 'bare-target',
         fork: true,
@@ -485,29 +485,29 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       })
       // Per-model defaults: the parent model keeps 'medium', the other model prefers 'high'
       // (faux models without a thinkingLevelMap support up to high).
-      await kernel.setModelThinkingDefault('faux/faux-parent', 'medium')
-      await kernel.setModelThinkingDefault('faux/faux-other', 'high')
+      await kernel.models.setModelThinkingDefault('faux/faux-parent', 'medium')
+      await kernel.models.setModelThinkingDefault('faux/faux-other', 'high')
 
-      const parent = await kernel.createConversation({
+      const parent = await kernel.conversations.createConversation({
         profileId: 'custom-same',
         cwd: parentDir,
         model: 'faux/faux-parent',
       })
-      await kernel.submitInput(parent.id, 'establish parent conversation history')
-      await kernel.waitForIdle(parent.id)
-      assert.equal(kernel.getConversation(parent.id).thinkingLevel, 'medium')
-      assert.equal(kernel.getConversation(parent.id).thinkingLevelOverride, undefined)
+      await kernel.conversations.submitInput(parent.id, 'establish parent conversation history')
+      await kernel.conversations.waitForIdle(parent.id)
+      assert.equal(kernel.conversations.getConversation(parent.id).thinkingLevel, 'medium')
+      assert.equal(kernel.conversations.getConversation(parent.id).thinkingLevelOverride, undefined)
 
-      const beforeIds = new Set(kernel.listConversations({ parentConversationId: parent.id }).map((c) => c.id))
+      const beforeIds = new Set(kernel.conversations.listConversations({ parentConversationId: parent.id }).map((c) => c.id))
       const pickNewChild = () => {
-        const added = kernel.listConversations({ parentConversationId: parent.id }).filter((c) => !beforeIds.has(c.id))
+        const added = kernel.conversations.listConversations({ parentConversationId: parent.id }).filter((c) => !beforeIds.has(c.id))
         assert.equal(added.length, 1)
         beforeIds.add(added[0]!.id)
         return added[0]!
       }
 
       // 1. Non-fork spawn with an explicit model resolves the per-model default above the Profile level.
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         agentType: 'custom-same',
         prompt: 'fresh child on parent model',
@@ -519,7 +519,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.equal(freshChild.thinkingLevelOverride, undefined)
 
       // 2. Non-fork spawn with explicit effort outranks the per-model default and persists as override.
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         agentType: 'custom-same',
         prompt: 'fresh child with effort',
@@ -531,7 +531,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.equal(effortChild.thinkingLevelOverride, 'minimal')
 
       // 3. A same-profile fork without a parent override uses the target model's default, not the parent's mirror.
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
         prompt: 'fork follows model default',
@@ -542,8 +542,8 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.equal(defaultModelFork.thinkingLevelOverride, undefined)
 
       // 4. Once the parent has an explicit override, a same-model fork still inherits it.
-      await kernel.updateConversation(parent.id, { thinkingLevel: 'high' })
-      await kernel.spawnAgent({
+      await kernel.conversations.updateConversation(parent.id, { thinkingLevel: 'high' })
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
         prompt: 'fork keeps parent override',
@@ -555,7 +555,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
 
       // 5. Same-profile fork explicitly switching models drops the parent override (chosen for the old model)
       //    and resolves the new model's own per-model default instead.
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
         prompt: 'fork switches model',
@@ -714,7 +714,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       }, { enabled: true })
 
       // 1. Structured output isolation: schema-less child forked from schema-bearing parent must not inherit register_structured_output.
-      const parentRes = await kernel.spawnAgent({
+      const parentRes = await kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'parent agent with schema test',
         schema: {
@@ -731,12 +731,12 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.ok(plainForkMessages && userMessageTexts(plainForkMessages).some((t) => t.includes('parent agent with schema test')))
 
       // 2. SecretStash secrets never leak into forked subagent.
-      const secretParent = await kernel.createConversation({ cwd: dir })
+      const secretParent = await kernel.conversations.createConversation({ cwd: dir })
       kernel.stash.addRedaction('sk-fork-secret-998877')
-      await kernel.submitInput(secretParent.id, 'record secret sk-fork-secret-998877')
-      await kernel.waitForIdle(secretParent.id)
+      await kernel.conversations.submitInput(secretParent.id, 'record secret sk-fork-secret-998877')
+      await kernel.conversations.waitForIdle(secretParent.id)
 
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: secretParent.id,
         fork: true,
         prompt: 'check whether secret leaks',
@@ -745,29 +745,29 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       const serialized = JSON.stringify(secretForkMessages)
       assert.ok(!serialized.includes('sk-fork-secret-998877'), 'forked subagent history must not contain plaintext secrets')
       assert.ok(serialized.includes('[REDACTED]'), 'forked subagent history should retain redaction placeholder')
-      const secretChildren = kernel.listConversations({ parentConversationId: secretParent.id })
+      const secretChildren = kernel.conversations.listConversations({ parentConversationId: secretParent.id })
       assert.equal(secretChildren.length, 1)
 
       // 3. Pre-hook rejections must fire before the agent_spawn hook chain.
       const hitsBeforeRejects = agentSpawnHookHits
-      const emptyParent = await kernel.createConversation({ cwd: dir })
+      const emptyParent = await kernel.conversations.createConversation({ cwd: dir })
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: emptyParent.id, fork: true, prompt: 'empty history' }),
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: emptyParent.id, fork: true, prompt: 'empty history' }),
         'fork_empty_history',
         409,
       )
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, fork: 'yes' as never, prompt: 'invalid fork' }),
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: secretParent.id, fork: 'yes' as never, prompt: 'invalid fork' }),
         'validation_error',
         400,
       )
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, fork: true, resume: 'child-1', prompt: 'mutually exclusive' }),
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: secretParent.id, fork: true, resume: 'child-1', prompt: 'mutually exclusive' }),
         'validation_error',
         400,
       )
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'external:agy', fork: true, prompt: 'external runtime' }),
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: secretParent.id, agentType: 'external:agy', fork: true, prompt: 'external runtime' }),
         'unsupported_runtime',
         400,
       )
@@ -779,9 +779,9 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         name: 'disabled model role',
         model: 'faux/faux-disabled',
       })
-      await kernel.setDisabledModels('faux', ['faux-disabled'])
+      await kernel.models.setDisabledModels('faux', ['faux-disabled'])
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'disabled-target', fork: true, prompt: 'disabled model' }),
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: secretParent.id, agentType: 'disabled-target', fork: true, prompt: 'disabled model' }),
         'model_disabled',
         409,
       )
@@ -816,8 +816,8 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
 
     try {
       hub = await startHub({ kernel: kernel as never, port: 0 })
-      const issuedParent = await kernel.issueNodeToken('node-parent')
-      const issuedProfile = await kernel.issueNodeToken('node-profile')
+      const issuedParent = await kernel.nodes.issueNodeToken('node-parent')
+      const issuedProfile = await kernel.nodes.issueNodeToken('node-profile')
       daemonParent = await createNodeDaemon({
         hubUrl: hub.url,
         identity: { nodeId: 'node-parent', token: issuedParent.token },
@@ -858,13 +858,13 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         cwd: crossCwd,
       })
 
-      const parent = await kernel.createConversation({
+      const parent = await kernel.conversations.createConversation({
         profileId: 'same-remote',
         nodeId: 'node-parent',
         cwd: parentCwd,
       })
-      await kernel.submitInput(parent.id, 'establish remote parent conversation context')
-      await kernel.waitForIdle(parent.id)
+      await kernel.conversations.submitInput(parent.id, 'establish remote parent conversation context')
+      await kernel.conversations.waitForIdle(parent.id)
 
       // 1. Same-role fork: parentNodeId > profileNodeId, parentCwd > profileCwd.
       const sameTarget = await hostApi.resolveSpawnTarget({
@@ -893,24 +893,24 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.equal(nonForkTarget.sourceCwd, profileCwd)
 
       // 4. Real spawnAgent({ fork: true }) nodeId and cwd match target resolution above.
-      const beforeIds = new Set(kernel.listConversations({ parentConversationId: parent.id }).map((c) => c.id))
-      await kernel.spawnAgent({
+      const beforeIds = new Set(kernel.conversations.listConversations({ parentConversationId: parent.id }).map((c) => c.id))
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
         prompt: 'same role remote fork',
       })
-      const sameChild = kernel.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
+      const sameChild = kernel.conversations.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
       assert.equal(sameChild.nodeId, 'node-parent')
       assert.equal(sameChild.cwd, parentCwd)
       beforeIds.add(sameChild.id)
 
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         agentType: 'cross-remote',
         fork: true,
         prompt: 'cross role remote fork',
       })
-      const crossChild = kernel.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
+      const crossChild = kernel.conversations.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
       assert.equal(crossChild.nodeId, 'node-profile')
       assert.equal(crossChild.cwd, crossCwd)
       beforeIds.add(crossChild.id)
@@ -923,25 +923,25 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       })
       assert.equal(localOverrideTarget.nodeId, 'local')
       assert.equal(localOverrideTarget.sourceCwd, dir)
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         nodeId: 'local',
         fork: true,
         prompt: 'explicit local override on remote fork',
       })
-      const localChild = kernel.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
+      const localChild = kernel.conversations.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
       assert.equal(localChild.nodeId, 'local')
       assert.equal(localChild.cwd, dir)
       beforeIds.add(localChild.id)
 
       // 6. Explicit requestNodeId='node-profile' overrides remote parent ('node-parent') under fork:true; uses matching Profile cwd.
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: parent.id,
         nodeId: 'node-profile',
         fork: true,
         prompt: 'explicit node-profile override on remote fork',
       })
-      const explicitRemoteChild = kernel.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
+      const explicitRemoteChild = kernel.conversations.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
       assert.equal(explicitRemoteChild.nodeId, 'node-profile')
       assert.equal(explicitRemoteChild.cwd, profileCwd)
     } finally {
@@ -978,29 +978,29 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       model: 'faux/faux-1',
     })
     try {
-      await kernel.submitInput(1, 'turn 1 retained message KEEP_ME_111')
-      await kernel.waitForIdle(1)
-      await kernel.submitInput(1, 'turn 2 message pending rollback ERASE_ME_222')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'turn 1 retained message KEEP_ME_111')
+      await kernel.conversations.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'turn 2 message pending rollback ERASE_ME_222')
+      await kernel.conversations.waitForIdle(1)
 
-      const detail = await kernel.getConversationDetail(1, { limit: 50 })
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 50 })
       const eraseEntry = detail.entries.find(
         (e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('ERASE_ME_222'),
       )
       assert.ok(eraseEntry, 'must find target helmx.input entry to rewind')
 
-      await kernel.submitInput(1, 'turn 2 rewritten message REWRITTEN_333', {
+      await kernel.conversations.submitInput(1, 'turn 2 rewritten message REWRITTEN_333', {
         replaceFromEntryId: Number(eraseEntry!.id),
       })
-      await kernel.waitForIdle(1)
+      await kernel.conversations.waitForIdle(1)
 
-      await kernel.spawnAgent({
+      await kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         fork: true,
         prompt: 'verify post-rewind fork history',
         title: '  Post-rewind fork check  ',
       })
-      const forkedChild = kernel.listConversations({ parentConversationId: 1 }).at(-1)
+      const forkedChild = kernel.conversations.listConversations({ parentConversationId: 1 }).at(-1)
       assert.equal(forkedChild?.title, 'Post-rewind fork check')
       assert.ok(forkedMessages)
       const serialized = JSON.stringify(forkedMessages)
@@ -1024,9 +1024,9 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       model: 'faux/faux-1',
     })
     try {
-      await kernel.submitInput(1, 'establish valid parent conversation history')
-      await kernel.waitForIdle(1)
-      const emptyConv = await kernel.createConversation({ cwd: dir })
+      await kernel.conversations.submitInput(1, 'establish valid parent conversation history')
+      await kernel.conversations.waitForIdle(1)
+      const emptyConv = await kernel.conversations.createConversation({ cwd: dir })
 
       let mode:
         | 'bad-type'
@@ -1074,40 +1074,40 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
 
       mode = 'bad-type'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non-boolean injection' }),
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: 1, prompt: 'non-boolean injection' }),
         'invalid_hook_result',
       )
       mode = 'bad-node-type'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non-string nodeId injection' }),
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: 1, prompt: 'non-string nodeId injection' }),
         'invalid_hook_result',
       )
       assert.equal(downstreamHits, 0, 'payload validation failure must abort inside the hook pipeline before reaching downstream hooks')
 
       mode = 'bad-node-syntax'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'invalid nodeId syntax transform' }),
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: 1, prompt: 'invalid nodeId syntax transform' }),
         'validation_error',
         400,
       )
 
       mode = 'flip-to-empty'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: emptyConv.id, prompt: 'non-fork flipped to fork' }),
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: emptyConv.id, prompt: 'non-fork flipped to fork' }),
         'fork_empty_history',
         409,
       )
 
       mode = 'flip-to-external-agent'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non-fork rewritten to external agent' }),
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: 1, prompt: 'non-fork rewritten to external agent' }),
         'unsupported_runtime',
         400,
       )
 
       mode = 'retarget-empty-parent'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, fork: true, prompt: 'retargeted to empty parent conversation' }),
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: 1, fork: true, prompt: 'retargeted to empty parent conversation' }),
         'fork_empty_history',
         409,
       )
@@ -1185,15 +1185,15 @@ describe('KernelRuntime.forkConversation optional entryId clean anchor', { timeo
             execute: async (args, context) => {
               const a = args as { title?: string }
               const parentId = context.conversationId!
-              const defaultFork = await kernel.forkConversation(parentId)
+              const defaultFork = await kernel.conversations.forkConversation(parentId)
               const workerFork = await ctx.host.forkConversation(
                 parentId,
                 a.title !== undefined ? { title: a.title } : undefined,
               )
-              await kernel.submitInput(defaultFork.id, 'continue on default fork')
-              await kernel.waitForIdle(defaultFork.id)
-              await kernel.submitInput(workerFork.id, 'continue on worker fork')
-              await kernel.waitForIdle(workerFork.id)
+              await kernel.conversations.submitInput(defaultFork.id, 'continue on default fork')
+              await kernel.conversations.waitForIdle(defaultFork.id)
+              await kernel.conversations.submitInput(workerFork.id, 'continue on worker fork')
+              await kernel.conversations.waitForIdle(workerFork.id)
               capturedForkIds = { defaultId: defaultFork.id, workerId: workerFork.id }
               return { defaultId: defaultFork.id, workerId: workerFork.id }
             },
@@ -1209,34 +1209,34 @@ describe('KernelRuntime.forkConversation optional entryId clean anchor', { timeo
       assert.ok(pluginHost)
 
       // Missing source conversation checks requireConv first -> 404 not_found (even when entryId is omitted).
-      await assertRejectsCode(() => kernel.forkConversation(999999), 'not_found', 404)
+      await assertRejectsCode(() => kernel.conversations.forkConversation(999999), 'not_found', 404)
       await assertRejectsCode(() => pluginHost!.forkConversation(999999), 'not_found', 404)
 
       // Brand-new empty conversation (system-only / zero user-assistant history) -> 409 fork_empty_history.
-      const emptyConv = await kernel.createConversation({ title: 'empty conversation' })
-      await assertRejectsCode(() => kernel.forkConversation(emptyConv.id), 'fork_empty_history', 409)
+      const emptyConv = await kernel.conversations.createConversation({ title: 'empty conversation' })
+      await assertRejectsCode(() => kernel.conversations.forkConversation(emptyConv.id), 'fork_empty_history', 409)
       await assertRejectsCode(() => pluginHost!.forkConversation(emptyConv.id), 'fork_empty_history', 409)
 
       // Execute Turn 1 (settled) + Turn 2 (mid-turn unclosed toolCall fork).
-      await kernel.submitInput(1, 'turn 1: SEED_ONE')
-      await kernel.waitForIdle(1)
-      await kernel.submitInput(1, 'turn 2: SEED_TWO')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'turn 1: SEED_ONE')
+      await kernel.conversations.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'turn 2: SEED_TWO')
+      await kernel.conversations.waitForIdle(1)
 
       assert.ok(capturedForkIds)
       assert.equal(forkedContexts.length, 2)
-      assert.equal(await kernel.getLastAssistantText(capturedForkIds!.defaultId), 'forked ok: continue on default fork')
-      assert.equal(await kernel.getLastAssistantText(capturedForkIds!.workerId), 'forked ok: continue on worker fork')
-      assert.equal(kernel.getConversation(capturedForkIds!.workerId).title, 'worker fork')
-      assert.equal(kernel.getConversation(capturedForkIds!.workerId).parentConversationId, 1)
-      assert.equal(await kernel.getLastAssistantText(1), 'parent turn 2 done')
+      assert.equal(await kernel.conversations.getLastAssistantText(capturedForkIds!.defaultId), 'forked ok: continue on default fork')
+      assert.equal(await kernel.conversations.getLastAssistantText(capturedForkIds!.workerId), 'forked ok: continue on worker fork')
+      assert.equal(kernel.conversations.getConversation(capturedForkIds!.workerId).title, 'worker fork')
+      assert.equal(kernel.conversations.getConversation(capturedForkIds!.workerId).parentConversationId, 1)
+      assert.equal(await kernel.conversations.getLastAssistantText(1), 'parent turn 2 done')
 
       // Post-reset without handoff has no completed non-system entries -> 409 fork_empty_history.
-      await kernel.resetConversation(emptyConv.id)
-      await assertRejectsCode(() => kernel.forkConversation(emptyConv.id), 'fork_empty_history', 409)
+      await kernel.conversations.resetConversation(emptyConv.id)
+      await assertRejectsCode(() => kernel.conversations.forkConversation(emptyConv.id), 'fork_empty_history', 409)
 
       // Explicit parentConversationId flattens peer fork hierarchy; non-positive or missing parent rejects cleanly.
-      const topTarget = await kernel.createConversation({ title: 'top coord target' })
+      const topTarget = await kernel.conversations.createConversation({ title: 'top coord target' })
       const flattened = await pluginHost!.forkConversation(capturedForkIds!.workerId, {
         title: 'flat sibling fork',
         parentConversationId: topTarget.id,

@@ -226,18 +226,18 @@ describe('subagent fork 与 Git Worktree 集成（createHelmx 端到端）', { t
         thinkingLevel: 'low',
         cwd: coderStaticCwd,
       })
-      const parent = await app.kernel.createConversation({
+      const parent = await app.kernel.conversations.createConversation({
         profileId: 'coder',
         cwd: repo,
       })
 
-      await app.kernel.submitInput(parent.id, '记住线索 TOKEN_WT_77')
-      await app.kernel.waitForIdle(parent.id)
+      await app.kernel.conversations.submitInput(parent.id, '记住线索 TOKEN_WT_77')
+      await app.kernel.conversations.waitForIdle(parent.id)
 
-      await app.kernel.submitInput(parent.id, '分叉写入工作树标记')
-      await app.kernel.waitForIdle(parent.id)
+      await app.kernel.conversations.submitInput(parent.id, '分叉写入工作树标记')
+      await app.kernel.conversations.waitForIdle(parent.id)
 
-      const children = app.kernel.listConversations({ parentConversationId: parent.id })
+      const children = app.kernel.conversations.listConversations({ parentConversationId: parent.id })
       assert.equal(children.length, 1)
       const child = children[0]!
       assert.equal(child.profileId, 'coder', '省略 agentType 的同 Profile fork 应继承非默认 Profile')
@@ -256,7 +256,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelmx 端到端）', { t
       assert.ok(existsSync(join(child.cwd, '.forked-marker')), '标记文件应落在隔离工作树中')
       assert.ok(!existsSync(join(repo, '.forked-marker')), '源 Git 仓库绝不被污染')
 
-      const detailTurn2 = await app.kernel.getConversationDetail(parent.id, { limit: 50 })
+      const detailTurn2 = await app.kernel.conversations.getConversationDetail(parent.id, { limit: 50 })
       const forkResult = findToolResultByCallId(detailTurn2, 'call-wt-fork-1')
       assert.equal(forkResult.isError, false)
       assert.equal(forkResult.text.includes('[subagent '), false, `不应含旧 footer：${forkResult.text}`)
@@ -272,10 +272,10 @@ describe('subagent fork 与 Git Worktree 集成（createHelmx 端到端）', { t
 
       // 续接同一个 forked 子会话（沿用同一 worktree）
       childIdForResume = child.id
-      await app.kernel.submitInput(parent.id, '续接同一个分叉子代理')
-      await app.kernel.waitForIdle(parent.id)
+      await app.kernel.conversations.submitInput(parent.id, '续接同一个分叉子代理')
+      await app.kernel.conversations.waitForIdle(parent.id)
 
-      const detailTurn3 = await app.kernel.getConversationDetail(parent.id, { limit: 50 })
+      const detailTurn3 = await app.kernel.conversations.getConversationDetail(parent.id, { limit: 50 })
       const resumeResult = findToolResultByCallId(detailTurn3, 'call-wt-resume-1')
       assert.equal(resumeResult.isError, false)
       assert.ok(resumeResult.text.includes('续接追加完成'))
@@ -286,17 +286,17 @@ describe('subagent fork 与 Git Worktree 集成（createHelmx 端到端）', { t
       )
 
       // fork + resume 互斥返回错误信封且不新建子会话
-      await app.kernel.submitInput(parent.id, '触发 fork 与 resume 互斥报错')
-      await app.kernel.waitForIdle(parent.id)
+      await app.kernel.conversations.submitInput(parent.id, '触发 fork 与 resume 互斥报错')
+      await app.kernel.conversations.waitForIdle(parent.id)
 
-      const detailTurn4 = await app.kernel.getConversationDetail(parent.id, { limit: 50 })
+      const detailTurn4 = await app.kernel.conversations.getConversationDetail(parent.id, { limit: 50 })
       const conflictResult = findToolResultByCallId(detailTurn4, 'call-wt-conflict-1')
       assert.equal(conflictResult.isError, true)
       assert.ok(
         conflictResult.text.includes('subagent_failed') && conflictResult.text.includes('fork') && conflictResult.text.includes('resume'),
         `fork+resume 应返回显式错误文本：${conflictResult.text}`,
       )
-      assert.equal(app.kernel.listConversations({ parentConversationId: parent.id }).length, 1)
+      assert.equal(app.kernel.conversations.listConversations({ parentConversationId: parent.id }).length, 1)
     } finally {
       await app.close()
     }
@@ -367,13 +367,13 @@ describe('subagent fork 与 Git Worktree 集成（createHelmx 端到端）', { t
       providers: [faux.provider],
     })
     try {
-      await app.kernel.submitInput(1, '记住后台线索 BG_CLUE_99')
-      await app.kernel.waitForIdle(1)
+      await app.kernel.conversations.submitInput(1, '记住后台线索 BG_CLUE_99')
+      await app.kernel.conversations.waitForIdle(1)
 
-      await app.kernel.submitInput(1, '默认后台派发分叉子代理')
-      await app.kernel.waitForIdle(1)
+      await app.kernel.conversations.submitInput(1, '默认后台派发分叉子代理')
+      await app.kernel.conversations.waitForIdle(1)
 
-      const detailTurn2 = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const detailTurn2 = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const bgToolRes = findToolResultByCallId(detailTurn2, 'call-bg-fork-1')
       assert.equal(bgToolRes.isError, false)
       const bgPayload = JSON.parse(bgToolRes.text.split('\n')[0]!) as {
@@ -403,7 +403,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelmx 端到端）', { t
       let reportInput: { id?: unknown; origin?: unknown; meta?: { kind?: unknown; backgroundRunId?: unknown } } | undefined
       await waitFor(
         async () => {
-          const d = await app.kernel.getConversationDetail(1, { limit: 200 })
+          const d = await app.kernel.conversations.getConversationDetail(1, { limit: 200 })
           for (const e of d.entries) {
             if (e.kind !== 'helmx.input') continue
             const data = e.data as { id?: unknown; origin?: unknown; meta?: { kind?: unknown; backgroundRunId?: unknown } } | undefined
@@ -420,13 +420,13 @@ describe('subagent fork 与 Git Worktree 集成（createHelmx 端到端）', { t
       assert.equal(reportInput?.origin, 'agent')
       assert.equal(reportInput?.meta?.kind, 'subagent_report')
 
-      await app.kernel.waitForIdle(1)
+      await app.kernel.conversations.waitForIdle(1)
 
       bgChildIdForResume = bgChildId
-      await app.kernel.submitInput(1, '续接后台分叉')
-      await app.kernel.waitForIdle(1)
+      await app.kernel.conversations.submitInput(1, '续接后台分叉')
+      await app.kernel.conversations.waitForIdle(1)
 
-      const detailResume = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const detailResume = await app.kernel.conversations.getConversationDetail(1, { limit: 50 })
       const resumeRes = findToolResultByCallId(detailResume, 'call-bg-resume-1')
       assert.equal(resumeRes.isError, false)
       assert.ok(resumeRes.text.includes('后台续接成功'))

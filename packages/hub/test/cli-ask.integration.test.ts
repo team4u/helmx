@@ -34,21 +34,21 @@ test('helmx ask 真实回合：回答与持久条目同源，管道内容写入�
   const value = JSON.parse(result.out)
   assert.equal(value.answer, 'real question answer result')
   assert.equal(value.deleted, false)
-  const detail = await env.kernel.getConversationDetail(value.conversationId)
+  const detail = await env.kernel.conversations.getConversationDetail(value.conversationId)
   assert.ok(detail.entries.some((entry) => entry.id === value.entryId))
   assert.match(JSON.stringify(detail.entries), /analyze or fewer content\\n\\nlog fragment/)
 })
 
 test('helmx ask --delete-on-success 真实删除本次会话并保留其他会话', { timeout: 60_000 }, async () => {
-  const beforeIds = env.kernel.listConversations().map((conversation) => conversation.id)
+  const beforeIds = env.kernel.conversations.listConversations().map((conversation) => conversation.id)
   env.faux.setResponses([fauxAssistantMessage('can clean up result')])
   const result = await ask(['mention question', '--delete-on-success'])
   assert.equal(result.code, 0, result.err)
   const value = JSON.parse(result.out)
   assert.equal(value.answer, 'can clean up result')
   assert.equal(value.deleted, true)
-  assert.ok(!env.kernel.listConversations().some((conversation) => conversation.id === value.conversationId))
-  assert.deepEqual(env.kernel.listConversations().map((conversation) => conversation.id), beforeIds)
+  assert.ok(!env.kernel.conversations.listConversations().some((conversation) => conversation.id === value.conversationId))
+  assert.deepEqual(env.kernel.conversations.listConversations().map((conversation) => conversation.id), beforeIds)
 })
 
 test('helmx ask 真实模型失败：非零退出并保留可排查会话', { timeout: 60_000 }, async () => {
@@ -60,5 +60,5 @@ test('helmx ask 真实模型失败：非零退出并保留可排查会话', { ti
   assert.equal(error.code, 'turn_failed')
   const conversationId = error.details.conversationId
   assert.ok(Number.isSafeInteger(conversationId))
-  assert.equal(env.kernel.getConversation(conversationId).status, 'error')
+  assert.equal(env.kernel.conversations.getConversation(conversationId).status, 'error')
 })

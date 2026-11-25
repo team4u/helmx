@@ -22,7 +22,7 @@ import {
   type ConversationSummary,
   type PluginSessionDocHandle,
 } from '@helmx/protocol'
-import { PluginHost } from '../../kernel/src/plugins/index.js'
+import { PluginHost } from '@helmx/kernel'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import type { WorkflowRunBadgesDocState, WorkflowRunSessionDocState, WorkflowRunSummary } from '../src/contracts.js'
 import { createWorkflowPlugin } from '../src/workflow.js'

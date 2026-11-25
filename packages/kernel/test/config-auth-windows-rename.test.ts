@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import { join } from 'node:path'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { createHubHandler, type EventHub, type KernelRuntimeLike } from '../src/http/index.js'
+import { createHubHandler, type HttpEventHub, type KernelHttpTarget } from '../src/http/index.js'
 import { PluginHost } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import {
@@ -420,13 +420,13 @@ test('HTTP E2E reproduction: under Windows handle contention, concurrent GET /ap
         }, { enabled: false })
         await host.start()
 
-        const events: EventHub = { response: () => new Response(null, { status: 204 }) }
+        const events: HttpEventHub = { response: () => new Response(null, { status: 204 }) }
         const kernel = {
           dataDir: dir,
           auth,
           events,
           plugins: host,
-        } as unknown as KernelRuntimeLike
+        } as unknown as KernelHttpTarget
         const handler = createHubHandler(kernel)
 
         const authHeaders = { authorization: `Bearer ${token}` }

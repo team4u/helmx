@@ -202,10 +202,10 @@ describe('host event single-delivery contract', { timeout: 60_000 }, () => {
       })
 
       kernel.__faux.setResponses([fauxAssistantMessage('answer one'), fauxAssistantMessage('answer two')])
-      await kernel.submitInput(1, 'first question')
-      await kernel.waitForIdle(1)
-      await kernel.submitInput(1, 'second question')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'first question')
+      await kernel.conversations.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'second question')
+      await kernel.conversations.waitForIdle(1)
       // Observer path is fire-and-forget: wait for internal delivery to catch up.
       await new Promise((resolve) => setTimeout(resolve, 200))
 
@@ -295,13 +295,13 @@ describe('host event single-delivery contract', { timeout: 60_000 }, () => {
       kernel.__faux.setResponses([fauxAssistantMessage('answer')])
       // submitInput pipeline (including tracker observer publishing conversation.entry) completes normally while slow
       // listener stays suspended -- auto-event publish sites never await internal delivery.
-      const submitted = kernel.submitInput(1, 'prompt under slow listener')
+      const submitted = kernel.conversations.submitInput(1, 'prompt under slow listener')
       const deadline = Date.now() + 5_000
       while (slowEntered < 1 && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10))
       }
       assert.ok(slowEntered >= 1, 'slow listener was invoked and suspended')
-      await withTimeout(kernel.waitForIdle(1), 5_000, 'slow listener must not block turn progression')
+      await withTimeout(kernel.conversations.waitForIdle(1), 5_000, 'slow listener must not block turn progression')
       await submitted
 
       gate.resolve()
