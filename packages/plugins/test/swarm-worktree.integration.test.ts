@@ -944,7 +944,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
     })
     try {
       const { kernel } = env.app
-      const coord = await kernel.createConversation({ title: 'Win32 Close Coord', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Win32 Close Coord', profileId: 'assistant', cwd: env.repoDir })
 
       // 1) Clean member + default close_group(): closes cleanly, releases hold, leaves retainedWorktrees empty, populates uncleanedWorktrees
       const g1 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
@@ -961,9 +961,9 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { groupId: g1.groupId, name: 'worker_a', prompt: 'Inspect code.', access: 'readwrite', isolation: 'worktree' },
         { conversationId: coord.id },
       )) as { workerConversationId: number; worktreeId: string }
-      await kernel.waitForIdle(w1.workerConversationId)
+      await kernel.conversations.waitForIdle(w1.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const closed1 = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
@@ -1022,10 +1022,10 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { groupId: g2.groupId, name: 'clean_w', prompt: 'Check only.', access: 'readwrite', isolation: 'worktree' },
         { conversationId: coord.id },
       )) as { workerConversationId: number; worktreeId: string }
-      await kernel.waitForIdle(dirtyW.workerConversationId)
-      await kernel.waitForIdle(cleanW.workerConversationId)
+      await kernel.conversations.waitForIdle(dirtyW.workerConversationId)
+      await kernel.conversations.waitForIdle(cleanW.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const dirtyPath = dirtyW.worktreeId.slice('local:'.length)
       writeFileSync(join(dirtyPath, 'feature-win32.txt'), 'change\n')
@@ -1063,9 +1063,9 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { groupId: g3.groupId, name: 'explicit_w', prompt: 'Check.', access: 'readwrite', isolation: 'worktree' },
         { conversationId: coord.id },
       )) as { workerConversationId: number; worktreeId: string }
-      await kernel.waitForIdle(explicitW.workerConversationId)
+      await kernel.conversations.waitForIdle(explicitW.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const closed3 = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
@@ -1100,10 +1100,10 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { groupId: g4.groupId, name: 'arch_b', prompt: 'Check B.', access: 'readwrite', isolation: 'worktree' },
         { conversationId: coord.id },
       )) as { workerConversationId: number; worktreeId: string }
-      await kernel.waitForIdle(archA.workerConversationId)
-      await kernel.waitForIdle(archB.workerConversationId)
+      await kernel.conversations.waitForIdle(archA.workerConversationId)
+      await kernel.conversations.waitForIdle(archB.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const resArchA = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
@@ -1144,7 +1144,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
     const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-hold-atomicity-'), gitTemplate)
     try {
       const { kernel } = env.app
-      const coord = await kernel.createConversation({ title: 'Hold Atomicity Coord', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Hold Atomicity Coord', profileId: 'assistant', cwd: env.repoDir })
       const g = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Hold Atomicity Squad',
         conversationId: coord.id,
@@ -1160,9 +1160,9 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { groupId: g.groupId, name: 'locked_w', prompt: 'Finish.', access: 'readwrite', isolation: 'worktree' },
         { conversationId: coord.id },
       )) as { workerConversationId: number; worktreeId: string }
-      await kernel.waitForIdle(worker.workerConversationId)
+      await kernel.conversations.waitForIdle(worker.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
+      await kernel.conversations.waitForIdle(coord.id)
 
       const wtPath = worker.worktreeId.slice('local:'.length)
       execFileSync('git', ['worktree', 'lock', '--reason', 'manual hold test', wtPath], { cwd: env.repoDir })
