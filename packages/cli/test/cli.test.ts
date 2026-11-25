@@ -2695,6 +2695,18 @@ const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
     command: ['conversations', 'delete'],
     positionals: { ids: '[id...]' },
   },
+  conversationSearchQuery: {
+    command: ['search'],
+    aliases: { profileId: 'profile', topLevelOnly: 'top-level' },
+    positionals: { q: '<query>' },
+  },
+  conversationListQuery: {
+    command: ['conversations', 'list'],
+    aliases: { profileId: 'profile', parentConversationId: 'parent' },
+    exempt: {
+      topLevelOnly: 'Derived server-side when --all and --parent are omitted.',
+    },
+  },
   profileCreate: {
     command: ['profiles', 'create'],
     aliases: { nodeId: 'node', thinkingLevel: 'thinking' },
