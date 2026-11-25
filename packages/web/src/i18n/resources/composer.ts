@@ -104,11 +104,8 @@ export const composerMessages = {
 
   // ---- Composer unified + menu ----
   'composer.plusMenu.aria': { en: 'More actions and attachments', 'zh-CN': '更多操作与附件' },
-  'composer.plusMenu.title': { en: 'Attachments, modes, and session actions', 'zh-CN': '附件、模式与会话操作' },
+  'composer.plusMenu.title': { en: 'Attachments and modes', 'zh-CN': '附件与模式' },
   'composer.plusMenu.upload': { en: 'Upload attachment', 'zh-CN': '上传附件' },
-  'composer.plusMenu.compact': { en: 'Compact context', 'zh-CN': '精简上下文' },
-  'composer.plusMenu.clear': { en: 'Clear context', 'zh-CN': '清空上下文' },
-  'composer.plusMenu.newTopic': { en: 'New topic', 'zh-CN': '新建话题' },
 
   // ---- Composer placeholder (pure model) ----
   'composer.placeholder.idleMobile': { en: 'Type a message…', 'zh-CN': '输入消息…' },

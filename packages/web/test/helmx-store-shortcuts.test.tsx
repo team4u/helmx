@@ -1602,29 +1602,6 @@ describe("helmx-store-shortcuts", () => {
     const standbyFromPalette = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')!
     assert.ok(standbyFromPalette !== null)
     assert.ok(document.activeElement === standbyFromPalette, 'Cmd+K Enter to standby must land focus in standby textarea')
-
-    // 5) From conversation #1, Composer + menu -> New topic lands focus in standby textarea
-    window.history.replaceState(null, '', '#/c/1')
-    await act(async () => {
-      window.dispatchEvent(new HashChangeEvent('hashchange'))
-    })
-    await settle(100)
-    const plusTrigger = primaryPane.querySelector<HTMLButtonElement>('button.composer-plus-trigger')!
-    assert.ok(plusTrigger !== null)
-    await act(async () => {
-      plusTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
-    })
-    await settle(40)
-    const plusNewTopicItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-      .find((el) => el.textContent?.includes('/new'))!
-    assert.ok(plusNewTopicItem !== undefined)
-    await act(async () => {
-      plusNewTopicItem.click()
-    })
-    await settle(100)
-    const standbyFromPlus = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane textarea.composer-textarea')!
-    assert.ok(standbyFromPlus !== null)
-    assert.ok(document.activeElement === standbyFromPlus, 'Composer + menu New topic must land focus in standby textarea')
   })
 
   test('App end-to-end: Chinese IME keyCode 229 allows non-input / and modified shortcuts while remaining blocked during composition or plain typing inside visible inputs', { timeout: 60_000 }, async () => {

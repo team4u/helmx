@@ -137,9 +137,6 @@ export interface ComposerSendApi {
   /** Execute a plugin command triggered outside the text draft (e.g. unified + menu)
    * without stripping any draft token; stable identity. */
   runPluginCommandDirect: (cmd: QualifiedCommand) => void
-  /** Execute a built-in session management command (/new, /clear, /compact) directly;
-   * stable identity. */
-  runManageCommand: (cmd: '/new' | '/clear' | '/compact') => void
   /** SessionEnvBar block report (stable identity, for its blocker effect deps). */
   handleEnvBlocker: (blocker: SessionEnvBlocker) => void
   /** Unified error-notice outlet (shared by component-side actions like aborting a turn). */
@@ -481,10 +478,6 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     return false
   }
 
-  const runManageCommand = useStableCallback((cmd: '/new' | '/clear' | '/compact'): void => {
-    runSlashCommand(cmd)
-  })
-
   const setDraftState = useCallback((next: string): void => {
     setText(next)
     syncLiveDraft(next, editingEntryId, attachments)
@@ -757,7 +750,6 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     sendExplicit,
     runPluginCommand,
     runPluginCommandDirect,
-    runManageCommand,
     handleEnvBlocker: handleEnvBlockerStable,
     notifyError,
   }

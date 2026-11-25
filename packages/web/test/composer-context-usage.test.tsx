@@ -717,7 +717,7 @@ test('Composer ConversationDurationStatus：blocked 渲染「等待审批」warn
   }
 })
 
-test('Unified composer + menu opens Upload / COMPOSER_MENU_SLOT (with plugin dedupe) / non-slot plugin commands / session actions', { timeout: 60_000 }, async () => {
+test('Unified composer + menu opens Upload / COMPOSER_MENU_SLOT (with plugin dedupe) / non-slot plugin commands', { timeout: 60_000 }, async () => {
   const originalFetch = globalThis.fetch
   const fetchCalls: Array<{ url: string; method: string; body?: string }> = []
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -757,7 +757,6 @@ test('Unified composer + menu opens Upload / COMPOSER_MENU_SLOT (with plugin ded
     })
   }
 
-  let newThreadCount = 0
   const conversation = conv(undefined)
   const menuProbePlugin = {
     id: 'builtin:menu-probe',
@@ -820,7 +819,7 @@ test('Unified composer + menu opens Upload / COMPOSER_MENU_SLOT (with plugin ded
         e(
           HostStoreProviders,
           { value: store },
-          e(Composer, { conversation, prefill: null, onNewThread: () => { newThreadCount += 1 } }),
+          e(Composer, { conversation, prefill: null }),
         ),
       )
     })
@@ -845,9 +844,6 @@ test('Unified composer + menu opens Upload / COMPOSER_MENU_SLOT (with plugin ded
       'plugin contributing COMPOSER_MENU_SLOT must be deduped from menuCommands without hardcoding pluginId',
     )
     assert.ok(itemsText.some((t) => t.includes('Refresh Summary') && t.includes('/summary')), 'non-slot plugin command present')
-    assert.ok(itemsText.some((t) => t.includes('Compact context') && t.includes('/compact')))
-    assert.ok(itemsText.some((t) => t.includes('Clear context') && t.includes('/clear')))
-    assert.ok(itemsText.some((t) => t.includes('New topic') && t.includes('/new')))
 
     // Execute non-slot plugin command -> invokes action AND preserves draft text including @helper
     const refreshItem = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu [role="menuitem"]')].find((el) =>
@@ -877,26 +873,7 @@ test('Unified composer + menu opens Upload / COMPOSER_MENU_SLOT (with plugin ded
     })
     assert.equal(fileInputClicks, 1)
 
-    // Reopen and trigger Compact / New topic session actions
-    await openPlusMenu(host)
-    const compactItem = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu [role="menuitem"]')].find((el) =>
-      (el.textContent ?? '').includes('Compact context'),
-    )!
-    await act(async () => {
-      compactItem.click()
-    })
-    assert.ok(fetchCalls.some((c) => c.url === '/api/conversations/1/compact' && c.method === 'POST'))
-
-    await openPlusMenu(host)
-    const newTopicItem = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu [role="menuitem"]')].find((el) =>
-      (el.textContent ?? '').includes('New topic'),
-    )!
-    await act(async () => {
-      newTopicItem.click()
-    })
-    assert.equal(newThreadCount, 1)
-
-    // 2. Standby pane menu: shows Upload + COMPOSER_MENU_SLOT, omits persisted-only session actions
+    // 2. Standby pane menu: shows Upload + COMPOSER_MENU_SLOT
     resetStandbyDrafts()
     const standbyStore = makeTestStore({
       locale: 'en',
@@ -921,8 +898,6 @@ test('Unified composer + menu opens Upload / COMPOSER_MENU_SLOT (with plugin ded
     const standbyItems = menuText()
     assert.ok(standbyItems.some((t) => t.includes('Choose attachments')))
     assert.ok(standbyItems.some((t) => t.includes('Slot Standby Action')))
-    assert.equal(standbyItems.some((t) => t.includes('Compact context')), false)
-    assert.equal(standbyItems.some((t) => t.includes('Clear context')), false)
 
     const standbySlotItem = document.querySelector<HTMLElement>('.menu-slot-probe-item')!
     await act(async () => {

@@ -804,31 +804,7 @@ test('mobile coarse viewport (390x800): passive standby skips focus while all Ne
       'Conversation topbar New Topic focuses standby textarea on mobile',
     )
 
-    // 5. Composer + menu "New topic" -> standby focuses on mobile
-    window.history.replaceState(null, '', '#/c/1')
-    await act(async () => {
-      window.dispatchEvent(new HashChangeEvent('hashchange'))
-    })
-    await settle(80)
-    const plusBtn = container.querySelector<HTMLButtonElement>('button.composer-plus-trigger')!
-    assert.ok(plusBtn !== null)
-    await act(async () => {
-      plusBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
-    })
-    await settle(30)
-    const plusNewTopicItem = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu-item[role="menuitem"]')]
-      .find((el) => el.textContent?.includes('/new'))!
-    assert.ok(plusNewTopicItem !== undefined)
-    await act(async () => {
-      plusNewTopicItem.click()
-    })
-    await settle(60)
-    assert.ok(
-      document.activeElement === container.querySelector('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea'),
-      'Composer plus-menu New Topic focuses standby textarea on mobile',
-    )
-
-    // 6. Command Palette on mobile -> selecting Open agent: Coder with Enter focuses standby textarea
+    // 5. Command Palette on mobile -> selecting Open agent: Coder with Enter focuses standby textarea
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true, cancelable: true }))
     })
@@ -852,7 +828,7 @@ test('mobile coarse viewport (390x800): passive standby skips focus while all Ne
       'Command Palette Open agent focuses standby textarea on mobile',
     )
 
-    // 7. Escape dismissal of mobile drawer still restores focus to hamburger button
+    // 6. Escape dismissal of mobile drawer still restores focus to hamburger button
     await act(async () => {
       toggleBtn.click()
     })
