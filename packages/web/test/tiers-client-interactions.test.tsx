@@ -41,12 +41,14 @@ const {
   ComposerCommandContext,
   DropdownMenuContent,
   DropdownMenuRoot,
+  DropdownMenuTrigger,
   ModelPickerControl,
   PluginClientContext,
   PluginClientHostContext,
   createComposerCommandRegistry,
   resolveLocalizedText,
 } = await import('@helmx/plugin-client')
+const { focusWithCaret } = await import('../src/conversation/composer-controller.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const {
   importBuiltinClientModule,
@@ -1103,6 +1105,307 @@ describe("tiers-client-interactions", () => {
       assert.equal(errorMount.host.querySelector('.trace-row-error') !== null, true)
     } finally {
       await errorMount.unmount()
+    }
+  })
+
+  test('BorrowMenuItem under controlled DropdownMenu + 120Hz rAF + touch PointerEvent keeps .composer-model-popover open', { timeout: 60_000 }, async () => {
+    mountSharedPluginNamespaces({ realHooks: true })
+    const originalRaf = window.requestAnimationFrame
+    const originalCancelRaf = window.cancelAnimationFrame
+    const cancelledRafIds = new Set<number>()
+    let nextRafId = 1
+    const fastFrameRaf = ((cb: FrameRequestCallback): number => {
+      const id = nextRafId++
+      queueMicrotask(() => {
+        if (!cancelledRafIds.has(id)) {
+          cb(performance.now())
+        }
+      })
+      return id
+    }) as typeof window.requestAnimationFrame
+    const fastCancelRaf = ((id: number): void => {
+      cancelledRafIds.add(id)
+    }) as typeof window.cancelAnimationFrame
+    window.requestAnimationFrame = fastFrameRaf
+    window.cancelAnimationFrame = fastCancelRaf
+
+    const harness = createSessionDocHarness()
+    const ctx = makeSpyCtx()
+    const conv = makeConv(51)
+
+    function ControlledMenuBorrowHarness() {
+      const [plusMenuOpen, setPlusMenuOpen] = React.useState(false)
+      const plusMenuClosedByActionRef = React.useRef(false)
+      const closePlusMenu = React.useCallback(() => {
+        plusMenuClosedByActionRef.current = true
+        setPlusMenuOpen(false)
+      }, [])
+
+      return e(
+        'div',
+        { 'data-helmx-panel': 'primary', className: 'composer-box' },
+        e('textarea', { 'aria-label': 'touch-borrow-input' }),
+        e(
+          DropdownMenuRoot,
+          {
+            open: plusMenuOpen,
+            onOpenChange: (next: boolean) => {
+              if (next) plusMenuClosedByActionRef.current = false
+              setPlusMenuOpen(next)
+            },
+          },
+          e(
+            DropdownMenuTrigger,
+            { asChild: true },
+            e('button', { type: 'button', className: 'composer-plus-trigger' }, '+'),
+          ),
+          e(
+            DropdownMenuContent,
+            {
+              portalled: true,
+              align: 'start',
+              side: 'top',
+              sideOffset: 8,
+              className: 'composer-plus-menu',
+              onEscapeKeyDown: () => {
+                plusMenuClosedByActionRef.current = false
+              },
+              onCloseAutoFocus: (event: Event) => {
+                const closedByAction = plusMenuClosedByActionRef.current
+                plusMenuClosedByActionRef.current = false
+                const active = document.activeElement
+                const anotherTargetFocused =
+                  active !== null && active !== document.body && active !== document.documentElement
+                if (closedByAction || anotherTargetFocused) {
+                  event.preventDefault()
+                }
+              },
+            },
+            e(BorrowMenuItem, {
+              conversation: conv,
+              onCloseMenu: closePlusMenu,
+            }),
+          ),
+        ),
+        e(BorrowToolbarPill, { conversation: conv }),
+      )
+    }
+
+    const mounted = await mountWithHost(
+      e(
+        WithSessionDocOverride,
+        { harness },
+        e(PluginClientContext.Provider, { value: ctx }, e(ControlledMenuBorrowHarness)),
+      ),
+    )
+    try {
+      const trigger = mounted.host.querySelector<HTMLButtonElement>('button.composer-plus-trigger')
+      assert.ok(trigger !== null)
+
+      // Open the controlled `+` menu using a touch PointerEvent sequence
+      await act(async () => {
+        trigger.dispatchEvent(
+          new PointerEvent('pointerdown', { pointerType: 'touch', button: 0, bubbles: true, cancelable: true }),
+        )
+        trigger.dispatchEvent(
+          new PointerEvent('pointerup', { pointerType: 'touch', button: 0, bubbles: true, cancelable: true }),
+        )
+        trigger.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      })
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      })
+
+      const menuItem = document.body.querySelector<HTMLElement>('.tiers-borrow-menu-item')
+      assert.ok(menuItem !== null, 'BorrowMenuItem must render inside the open controlled DropdownMenu')
+
+      // Tap BorrowMenuItem via touch PointerEvent sequence while rAF fires at microtask (120Hz fast-frame) speed
+      await act(async () => {
+        menuItem.dispatchEvent(
+          new PointerEvent('pointerdown', { pointerType: 'touch', button: 0, bubbles: true, cancelable: true }),
+        )
+        menuItem.dispatchEvent(
+          new PointerEvent('pointerup', { pointerType: 'touch', button: 0, bubbles: true, cancelable: true }),
+        )
+        menuItem.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      })
+      // Flush microtask + macrotask turn (FocusScope setTimeout(0) + queueMicrotask->setTimeout(0))
+      await act(async () => {
+        await Promise.resolve()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      const popoverAfterTurn = document.body.querySelector<HTMLElement>('.composer-model-popover')
+      assert.ok(popoverAfterTurn !== null, '.composer-model-popover must be open right after microtask/macrotask turn')
+      assert.ok(document.activeElement !== trigger, 'closing + menu via BorrowMenuItem must not steal focus to trigger')
+
+      // Still stably open after 40ms
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40))
+      })
+      const popoversAfter40ms = document.body.querySelectorAll('.composer-model-popover')
+      assert.equal(popoversAfter40ms.length, 1, '.composer-model-popover must stay open after 40ms')
+      assert.ok(document.activeElement !== trigger, 'focus must stay away from + trigger after 40ms')
+    } finally {
+      window.requestAnimationFrame = originalRaf
+      window.cancelAnimationFrame = originalCancelRaf
+      mountSharedPluginNamespaces({ realHooks: false })
+      await mounted.unmount()
+    }
+  })
+
+  test('ModelPickerControl auto-focus: focuses .composer-model-popover on coarse touch (avoiding soft keyboard) and search input on desktop', { timeout: 60_000 }, async () => {
+    const originalMatchMedia = window.matchMedia
+    const stubCoarse = (coarse: boolean): void => {
+      window.matchMedia = ((query: string) => ({
+        matches: coarse && query === '(hover: none) and (pointer: coarse)',
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      })) as typeof window.matchMedia
+    }
+
+    try {
+      // 1. Coarse touch viewport -> focuses popover container, NOT search <input>
+      stubCoarse(true)
+      const touchMount = await mountWithHost(
+        e(ModelPickerControl, {
+          effectiveModel: 'faux/workhorse',
+          activeThinkingLevel: 'high',
+          resetLabel: 'Reset',
+          resetTitle: 'Reset',
+          buttonTitle: 'Model',
+          onApply: () => {},
+          onResetDefault: () => {},
+        }),
+      )
+      try {
+        const trigger = touchMount.host.querySelector<HTMLButtonElement>('button.composer-model-button')
+        assert.ok(trigger !== null)
+        await act(async () => {
+          trigger.click()
+        })
+        const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(popover !== null, 'ModelPickerControl opens on coarse touch')
+        const searchInput = popover.querySelector<HTMLInputElement>('input')
+        assert.ok(searchInput !== null)
+        assert.ok(document.activeElement === popover, 'coarse touch must focus .composer-model-popover container')
+        assert.ok(document.activeElement !== searchInput, 'coarse touch must not auto-focus search <input>')
+      } finally {
+        await touchMount.unmount()
+      }
+
+      // 2. Desktop viewport -> focuses search <input>
+      stubCoarse(false)
+      const desktopMount = await mountWithHost(
+        e(ModelPickerControl, {
+          effectiveModel: 'faux/workhorse',
+          activeThinkingLevel: 'high',
+          resetLabel: 'Reset',
+          resetTitle: 'Reset',
+          buttonTitle: 'Model',
+          onApply: () => {},
+          onResetDefault: () => {},
+        }),
+      )
+      try {
+        const trigger = desktopMount.host.querySelector<HTMLButtonElement>('button.composer-model-button')
+        assert.ok(trigger !== null)
+        await act(async () => {
+          trigger.click()
+        })
+        const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(popover !== null, 'ModelPickerControl opens on desktop')
+        const searchInput = popover.querySelector<HTMLInputElement>('input')
+        assert.ok(searchInput !== null)
+        assert.ok(document.activeElement === searchInput, 'desktop must focus search <input>')
+      } finally {
+        await desktopMount.unmount()
+      }
+    } finally {
+      window.matchMedia = originalMatchMedia
+    }
+  })
+
+  test('focusWithCaret(textarea, 0) followed immediately by opening BorrowToolbarPill does not steal focus back from Popover on next rAF', { timeout: 60_000 }, async () => {
+    mountSharedPluginNamespaces({ realHooks: true })
+    const originalMatchMedia = window.matchMedia
+    const stubCoarse = (coarse: boolean): void => {
+      window.matchMedia = ((query: string) => ({
+        matches: coarse && query === '(hover: none) and (pointer: coarse)',
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      })) as typeof window.matchMedia
+    }
+
+    const runScenario = async (coarse: boolean): Promise<void> => {
+      stubCoarse(coarse)
+      const harness = createSessionDocHarness()
+      const ctx = makeSpyCtx()
+      const registry = createComposerCommandRegistry()
+      const conv = makeConv(60 + (coarse ? 1 : 0))
+
+      const mounted = await mountWithHost(
+        e(
+          WithSessionDocOverride,
+          { harness },
+          e(
+            PluginClientContext.Provider,
+            { value: ctx },
+            e(
+              ComposerCommandContext.Provider,
+              { value: registry },
+              e(
+                'div',
+                { 'data-helmx-panel': 'primary', className: 'composer-box' },
+                e('textarea', { 'aria-label': `slash-model-input-${coarse ? 'touch' : 'desktop'}` }),
+                e(BorrowToolbarPill, { conversation: conv }),
+              ),
+            ),
+          ),
+        ),
+      )
+      try {
+        const textarea = mounted.host.querySelector<HTMLTextAreaElement>('textarea')
+        assert.ok(textarea !== null)
+        await act(async () => {
+          focusWithCaret(textarea, 0)
+          assert.equal(registry.invoke('builtin:tiers', TIERS_BORROW_COMMAND_ID).handled, true)
+        })
+        await act(async () => {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve())
+          })
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        })
+        const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(popover !== null, `Popover must remain open after rAF (coarse=${coarse})`)
+        assert.ok(document.activeElement !== textarea, `next rAF must not steal focus back to textarea (coarse=${coarse})`)
+        if (coarse) {
+          assert.ok(document.activeElement === popover, 'coarse touch keeps focus on .composer-model-popover')
+        } else {
+          const searchInput = popover.querySelector<HTMLInputElement>('input')
+          assert.ok(searchInput !== null && document.activeElement === searchInput, 'desktop keeps focus on search input')
+        }
+      } finally {
+        await mounted.unmount()
+      }
+    }
+
+    try {
+      await runScenario(false)
+      await runScenario(true)
+    } finally {
+      window.matchMedia = originalMatchMedia
+      mountSharedPluginNamespaces({ realHooks: false })
     }
   })
 })

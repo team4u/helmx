@@ -137,7 +137,11 @@ export function ComposerInputShell({
   const { locale, t } = useWebLocale()
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
   const [plusMenuOpen, setPlusMenuOpen] = useState(false)
-  const closePlusMenu = useCallback(() => setPlusMenuOpen(false), [])
+  const plusMenuClosedByActionRef = useRef(false)
+  const closePlusMenu = useCallback(() => {
+    plusMenuClosedByActionRef.current = true
+    setPlusMenuOpen(false)
+  }, [])
   const hasToolsSection =
     renderMenuSlot !== undefined || (menuCommands !== undefined && menuCommands.length > 0)
 
@@ -218,7 +222,13 @@ export function ComposerInputShell({
           />
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
-              <DropdownMenuRoot open={plusMenuOpen} onOpenChange={setPlusMenuOpen}>
+              <DropdownMenuRoot
+                open={plusMenuOpen}
+                onOpenChange={(next) => {
+                  if (next) plusMenuClosedByActionRef.current = false
+                  setPlusMenuOpen(next)
+                }}
+              >
                 <DropdownMenuTrigger asChild>
                   <IconButton
                     icon={<HelmxIcon name="plus" size={18} />}
@@ -236,11 +246,27 @@ export function ComposerInputShell({
                   side="top"
                   sideOffset={8}
                   className="composer-plus-menu"
+                  onEscapeKeyDown={() => {
+                    plusMenuClosedByActionRef.current = false
+                  }}
+                  onCloseAutoFocus={(event) => {
+                    const closedByAction = plusMenuClosedByActionRef.current
+                    plusMenuClosedByActionRef.current = false
+                    const active = document.activeElement
+                    const anotherTargetFocused =
+                      active !== null && active !== document.body && active !== document.documentElement
+                    if (closedByAction || anotherTargetFocused) {
+                      event.preventDefault()
+                    }
+                  }}
                 >
                   <DropdownMenuItem
                     className="composer-plus-menu-item"
                     disabled={uploadDisabled}
-                    onSelect={onOpenFilePicker}
+                    onSelect={() => {
+                      plusMenuClosedByActionRef.current = true
+                      onOpenFilePicker()
+                    }}
                   >
                     <HelmxIcon name="paperclip" size={14} className="composer-plus-menu-icon" />
                     <span className="composer-plus-menu-label">{uploadButtonLabel}</span>
@@ -254,7 +280,10 @@ export function ComposerInputShell({
                           key={`cmd:${cmd.pluginId}/${cmd.spec.id}`}
                           className="composer-plus-menu-item"
                           disabled={menuCommandsDisabled}
-                          onSelect={() => onRunMenuCommand?.(cmd)}
+                          onSelect={() => {
+                            plusMenuClosedByActionRef.current = true
+                            onRunMenuCommand?.(cmd)
+                          }}
                         >
                           <HelmxIcon
                             name={cmd.spec.icon ?? 'terminal'}

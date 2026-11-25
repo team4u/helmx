@@ -149,6 +149,7 @@ export function ModelPickerControl({
   const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLSpanElement | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const itemRefs = useRef<Array<HTMLElement | null>>([])
   const interactedOutsideRef = useRef(false)
@@ -320,13 +321,24 @@ export function ModelPickerControl({
         )}
         <PopoverPortal>
           <PopoverContent
+            ref={contentRef}
+            tabIndex={-1}
             side={popoverSide}
             align="start"
             sideOffset={8}
+            collisionPadding={12}
             className="composer-popover composer-model-popover"
             onOpenAutoFocus={(event) => {
               event.preventDefault()
-              searchInputRef.current?.focus()
+              const isCoarseTouch =
+                typeof window !== 'undefined' &&
+                typeof window.matchMedia === 'function' &&
+                window.matchMedia('(hover: none) and (pointer: coarse)').matches
+              if (isCoarseTouch) {
+                contentRef.current?.focus({ preventScroll: true })
+              } else {
+                searchInputRef.current?.focus({ preventScroll: true })
+              }
             }}
             onCloseAutoFocus={(event) => {
               if (interactedOutsideRef.current) {

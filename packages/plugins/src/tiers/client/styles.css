@@ -30,7 +30,7 @@
   display: inline-flex;
   align-items: center;
   width: 0;
-  height: 24px;
+  height: 32px;
   overflow: visible;
   flex-shrink: 0;
 }

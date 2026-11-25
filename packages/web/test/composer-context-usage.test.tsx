@@ -1086,3 +1086,158 @@ test('Composer /plan executes registered useComposerCommand handler without bann
     host.remove()
   }
 })
+
+test('ComposerInputShell + menu: Escape returns focus to .composer-plus-trigger; action selection (onCloseMenu / menuCommands) does not steal focus from opened overlay', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })) as typeof fetch
+
+  let focusTargetAfterMenuClose: (() => void) | undefined
+  function MenuSlotFocusProbe(props: ComposerMenuSlotProps) {
+    return e(
+      DropdownMenuItem,
+      {
+        className: 'menu-slot-focus-probe-item',
+        onSelect: () => {
+          props.onCloseMenu?.()
+          queueMicrotask(() => {
+            setTimeout(() => {
+              focusTargetAfterMenuClose?.()
+            }, 0)
+          })
+        },
+      },
+      'Open Deferred Overlay',
+    )
+  }
+  seedPluginClientModule('builtin:menu-focus-probe', 'index.tsx', { MenuSlotFocusProbe })
+
+  const conversation = conv(undefined)
+  const store = makeTestStore({
+    locale: 'en',
+    conversations: [conversation],
+    plugins: [
+      {
+        id: 'builtin:menu-focus-probe',
+        name: 'menu-focus-probe',
+        version: '1.0.0',
+        locked: false,
+        enabled: true,
+        status: 'active',
+        hooks: [],
+        actions: [],
+        tools: [],
+        clientHashes: { 'index.tsx': 'seeded' },
+      },
+    ],
+    uiContributions: [
+      {
+        pluginId: 'builtin:menu-focus-probe',
+        surface: 'plugin.slot',
+        spec: {
+          id: 'menu-focus-probe-slot',
+          target: COMPOSER_MENU_SLOT,
+          client: { module: 'index.tsx', export: 'MenuSlotFocusProbe' },
+        },
+      },
+      {
+        pluginId: 'builtin:cmd-focus-probe',
+        surface: 'commandPalette',
+        spec: {
+          id: 'cmd-focus-probe',
+          title: 'Focus Textarea Cmd',
+          slash: 'focus-cmd',
+          actionId: 'run',
+        },
+      },
+    ],
+  })
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  let deferredOverlay: HTMLDivElement | undefined
+
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(Composer, { conversation, prefill: null })))
+    })
+    const trigger = host.querySelector<HTMLButtonElement>('button.composer-plus-trigger')
+    assert.ok(trigger !== null, 'expected .composer-plus-trigger')
+    const textarea = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')
+    assert.ok(textarea !== null)
+
+    const openMenu = async (): Promise<HTMLElement> => {
+      await act(async () => {
+        trigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+      })
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      })
+      const menu = document.body.querySelector<HTMLElement>('.composer-plus-menu')
+      assert.ok(menu !== null, 'expected open .composer-plus-menu')
+      return menu
+    }
+
+    // 1. Escape closes + menu and returns focus to .composer-plus-trigger
+    const menuForEsc = await openMenu()
+    await act(async () => {
+      menuForEsc.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    assert.ok(document.body.querySelector('.composer-plus-menu') === null, 'Escape must close .composer-plus-menu')
+    assert.ok(document.activeElement === trigger, 'Escape must return focus to .composer-plus-trigger')
+
+    // 2. Clicking COMPOSER_MENU_SLOT item (which calls onCloseMenu + opens an overlay via microtask->setTimeout(0))
+    //    must NOT let DropdownMenu onCloseAutoFocus steal focus back to .composer-plus-trigger
+    focusTargetAfterMenuClose = () => {
+      deferredOverlay = document.createElement('div')
+      deferredOverlay.className = 'probe-opened-overlay'
+      deferredOverlay.tabIndex = -1
+      document.body.appendChild(deferredOverlay)
+      deferredOverlay.focus()
+    }
+    await openMenu()
+    const slotItem = document.body.querySelector<HTMLElement>('.menu-slot-focus-probe-item')
+    assert.ok(slotItem !== null)
+    await act(async () => {
+      slotItem.click()
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    assert.ok(document.body.querySelector('.composer-plus-menu') === null, 'menu item closed .composer-plus-menu')
+    assert.ok(deferredOverlay !== undefined && document.activeElement === deferredOverlay, 'new overlay must keep focus after menu closes')
+    assert.ok(document.activeElement !== trigger, '.composer-plus-trigger must not steal focus back')
+
+    // 3. Clicking a menuCommands item when focus moves to another control must also not steal focus back
+    ;(store.actions as unknown as { invokePluginAction: () => Promise<unknown> }).invokePluginAction = async () => {
+      textarea.focus()
+      return { ok: true }
+    }
+    await openMenu()
+    const cmdItem = [...document.body.querySelectorAll<HTMLElement>('.composer-plus-menu [role="menuitem"]')].find(
+      (el) => (el.textContent ?? '').includes('Focus Textarea Cmd'),
+    )
+    assert.ok(cmdItem !== undefined)
+    await act(async () => {
+      cmdItem.click()
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    assert.ok(document.activeElement === textarea, 'menuCommands action target focus must not be stolen by .composer-plus-trigger')
+  } finally {
+    deferredOverlay?.remove()
+    resetPluginClientCache()
+    globalThis.fetch = originalFetch
+    localStorage.removeItem('helmx:locale')
+    act(() => root.unmount())
+    host.remove()
+  }
+})
