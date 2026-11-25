@@ -366,10 +366,10 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
               items: {
                 type: 'object',
                 properties: {
-                  profileId: { type: 'string' }, candidateCount: { type: 'number' },
+                  profileId: { type: 'string' }, enabled: { type: 'boolean' }, candidateCount: { type: 'number' },
                   memoryChars: { type: ['number', 'null'] }, lastRun: { type: 'object' },
                 },
-                required: ['profileId', 'candidateCount', 'memoryChars'],
+                required: ['profileId', 'enabled', 'candidateCount', 'memoryChars'],
                 additionalProperties: false,
               },
             },

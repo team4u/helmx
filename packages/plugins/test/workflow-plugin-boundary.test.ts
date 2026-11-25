@@ -745,6 +745,17 @@ test('工作流库动作注册：get/save/delete 三动作登记且 CLI 映射�
   assert.deepEqual(byId.get('save')!.cli?.positional, [{ field: 'name', readFileInto: 'script' }])
   assert.deepEqual(byId.get('delete')!.cli?.command, ['workflows', 'delete'])
   assert.equal(byId.has('detach'), false, 'detach 动作已移除')
+  for (const id of ['list', 'get', 'runs', 'inspect']) {
+    assert.equal(byId.get(id)?.idempotent, true, `只读动作 workflow.${id} 必须声明 idempotent: true`)
+  }
+  for (const id of ['save', 'delete', 'abort', 'run', 'steer', 'resume_failed']) {
+    assert.notEqual(byId.get(id)?.idempotent, true, `写/控制动作 workflow.${id} 不得声明 idempotent: true`)
+  }
+  const resumeDesc = (
+    byId.get('run')?.inputSchema.properties as Record<string, { description?: string }> | undefined
+  )?.['resumeFromRunId']?.description ?? ''
+  assert.match(resumeDesc, /DSL workflow/i)
+  assert.match(resumeDesc, /background subagent/i)
   await host.dispose()
 })
 
@@ -753,6 +764,12 @@ test('builtin:worktree 注册工作树检视与清理 UI 插槽（指向 builtin
   const { createWorktreePlugin } = await import('../src/worktree.js')
   await host.register(createWorktreePlugin())
   try {
+    const wtActions = new Map(
+      host.listActions().filter((m) => m.pluginId === 'builtin:worktree').map((m) => [m.id, m]),
+    )
+    assert.equal(wtActions.get('list_worktrees')?.idempotent, true, 'list_worktrees 必须声明 idempotent: true')
+    assert.equal(wtActions.get('inspect_worktree')?.idempotent, true, 'inspect_worktree 必须声明 idempotent: true')
+    assert.notEqual(wtActions.get('cleanup_worktree')?.idempotent, true, 'cleanup_worktree 不得声明 idempotent: true')
     const slots = host
       .listUi()
       .filter((u) => u.pluginId === 'builtin:worktree' && u.surface === 'plugin.slot')

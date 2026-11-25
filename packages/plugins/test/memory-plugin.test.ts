@@ -602,6 +602,16 @@ test('memory 动作清单：get/set/configure/dream/dream_status/dream_configure
     const setManifest = manifests.find((m) => m.id === 'set')!
     const modeEnum = (setManifest.inputSchema as { properties: { mode?: { enum?: string[] } } }).properties.mode?.enum
     assert.deepEqual(modeEnum, ['replace', 'append'])
+    // dream_status outputSchema 的 profiles[] 包含必填 enabled: boolean
+    const dreamStatusManifest = manifests.find((m) => m.id === 'dream_status')!
+    assert.equal(dreamStatusManifest.idempotent, true)
+    const profileItemsSchema = (
+      dreamStatusManifest.outputSchema as {
+        properties: { profiles: { items: { properties: Record<string, { type?: unknown }>; required: string[] } } }
+      }
+    ).properties.profiles.items
+    assert.equal(profileItemsSchema.properties['enabled']?.type, 'boolean')
+    assert.ok(profileItemsSchema.required.includes('enabled'))
     await host.dispose().catch(() => {})
   } finally {
     rmSync(dir, { recursive: true, force: true })

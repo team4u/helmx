@@ -1,5 +1,5 @@
 /**
- * builtin:swarm single-point action & model-tool declarations (11 business tools + 1 UI completer).
+ * builtin:swarm single-point action & model-tool declarations (11 business tools + 1 query action + 1 UI completer).
  */
 import type { ConversationScope, HelmxPluginContext, JsonSchema, MaybePromise, PluginActionContext } from '@helmx/protocol'
 import {
@@ -17,6 +17,7 @@ import {
   createSwarmDispatchGuard,
   ensureCoordinatorGroup,
   type EnsureCoordinatorGroupInput,
+  type ListGroupSummary,
 } from './actions-group.js'
 import { createWorkerHandlers, type DispatchInput, type InspectWorkerResult } from './actions-worker.js'
 import { createBoardHandlers } from './actions-board.js'
@@ -29,6 +30,7 @@ export {
   ensureCoordinatorGroup,
   type DispatchInput,
   type EnsureCoordinatorGroupInput,
+  type ListGroupSummary,
 }
 
 const boundedText = (v: string, max: number): string | undefined => {
@@ -89,7 +91,7 @@ const groupMeta = (groupId: string, title: string): Record<string, unknown> => {
 
 export function registerSwarmActions(ctx: HelmxPluginContext, coordinator: SwarmCoordinator): void {
   const guard = createSwarmDispatchGuard()
-  const { createGroup, updateGroup, closeGroup } = createGroupHandlers(ctx, coordinator, guard)
+  const { createGroup, updateGroup, closeGroup, listGroups } = createGroupHandlers(ctx, coordinator, guard)
   const { dispatchWorker, abortWorker, switchWorkerModel, inspectWorker, archiveWorker } = createWorkerHandlers(ctx, coordinator, guard)
   const { boardPost, boardRead, boardStatus, completeBoardMembers } = createBoardHandlers(ctx, coordinator)
 
@@ -257,6 +259,17 @@ export function registerSwarmActions(ctx: HelmxPluginContext, coordinator: Swarm
       return parts.join(' ')
     },
     projectPresentationMeta: (_i, r) => ({ groupId: r.groupId, retainedCount: r.retainedWorktrees.length }),
+  })
+
+  ctx.action({
+    id: 'list_groups',
+    description: 'List swarm collaboration groups with bounded metadata summaries (optionally filtered by status or coordinatorConversationId).',
+    exposeToPrompt: false,
+    idempotent: true,
+    cli: { command: ['swarm', 'list-groups'], description: 'List swarm collaboration groups' },
+    inputSchema: Schemas.listGroupsInputSchema,
+    outputSchema: Schemas.listGroupsOutputSchema,
+    handler: (input: Parameters<typeof listGroups>[0]) => listGroups(input),
   })
 
   ctx.action({

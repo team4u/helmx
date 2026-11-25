@@ -36,6 +36,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
     id: 'list',
     description: 'List saved workflow definitions',
     exposeToPrompt: false,
+    idempotent: true,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
       type: 'object',
@@ -53,6 +54,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
     id: 'get',
     description: 'Read the full definition of a saved workflow (read-only source and metadata; Web/AI are read-only, no editing)',
     exposeToPrompt: false,
+    idempotent: true,
     inputSchema: {
       type: 'object',
       properties: { name: { type: 'string', description: 'Saved workflow name' } },
@@ -156,6 +158,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
     id: 'runs',
     description: 'List workflow run records',
     exposeToPrompt: false,
+    idempotent: true,
     inputSchema: {
       type: 'object',
       properties: {
@@ -183,6 +186,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
     id: 'inspect',
     description: 'Inspect a single workflow run',
     exposeToPrompt: false,
+    idempotent: true,
     inputSchema: {
       type: 'object',
       properties: { runId: { type: 'string', description: 'Run ID' } },
@@ -254,7 +258,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
         scriptPath: { type: 'string', description: 'Absolute path of the orchestration script file' },
         label: { type: 'string', minLength: 1, description: 'Optional display label for this run (overrides meta.name / scriptPath basename)' },
         args: { description: 'Arbitrary JSON args passed to the script as-is' },
-        resumeFromRunId: { type: 'string', description: 'Existing runId to resume from the last checkpoint' },
+        resumeFromRunId: { type: 'string', description: 'Existing runId to resume either a DSL workflow run from its last checkpoint or a failed/aborted background subagent run' },
         conversationId: { type: 'integer', minimum: 1, description: 'Target conversation; a new run must specify one, the CLI can use --current' },
         wait: { type: 'boolean', description: 'Wait for the terminal state and return the latest run (failed/aborted throw)' },
       },

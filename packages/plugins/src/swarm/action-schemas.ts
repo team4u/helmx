@@ -93,6 +93,11 @@ export const boardReadInputSchema = S.obj({
 
 export const boardStatusInputSchema = S.obj({ groupId: groupIdSchema })
 
+export const listGroupsInputSchema = S.obj({
+  status: S.enm(['active', 'closed'], 'Optional status filter: active or closed'),
+  coordinatorConversationId: { ...S.int(1), description: 'Optional coordinator conversation ID filter' },
+})
+
 export const switchModelInputSchema = S.obj(
   {
     ...workerRefProps,
@@ -183,6 +188,35 @@ export const closeGroupOutputSchema = S.obj(
   { closed: S.bool(), groupId: S.str(), retainedWorktrees: S.arr(retainedWorktreeSchema), uncleanedWorktrees: S.arr(uncleanedWorktreeSchema) },
   ['closed', 'groupId', 'retainedWorktrees'],
 )
+const listGroupSummarySchema = S.obj(
+  {
+    groupId: S.str(),
+    title: S.str(),
+    objective: S.str(),
+    status: S.enm(['active', 'closed']),
+    coordinatorConversationId: S.int(1),
+    headSeq: S.int(0),
+    memberCount: S.int(0),
+    activeMemberCount: S.int(0),
+    activeWorkingMembers: S.arr(S.str()),
+    retainedWorktreeCount: S.int(0),
+    createdAt: S.num(0),
+    closedAt: S.num(0),
+  },
+  [
+    'groupId',
+    'title',
+    'status',
+    'coordinatorConversationId',
+    'headSeq',
+    'memberCount',
+    'activeMemberCount',
+    'activeWorkingMembers',
+    'retainedWorktreeCount',
+    'createdAt',
+  ],
+)
+export const listGroupsOutputSchema = S.obj({ groups: S.arr(listGroupSummarySchema) }, ['groups'])
 export const completerOutputSchema = S.obj(
   { items: S.arr(S.obj({ id: S.str(), label: S.str(), insertText: S.str(), hint: S.str(), icon: S.str() }, ['id', 'label', 'insertText'])) },
   ['items'],

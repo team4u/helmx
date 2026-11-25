@@ -2,7 +2,7 @@ import { HelmxError, type ConversationSummary, type HelmxPluginContext } from '@
 import {
   ARCHIVED_COORDINATOR_TAG, ARCHIVED_WORKER_TAG, COORDINATOR_TAG, WORKER_TAG,
   assertGroupId, groupClosedError, groupNotFoundError, isPosIntId, setConversationTags, snapshotMemberTiming, swarmError,
-  type BoardViewDoc, type CollabGroupRecord, type RetainedWorktreeInfo, type SwarmCoordinator, type UncleanedWorktreeInfo,
+  type BoardViewDoc, type CollabGroupRecord, type CollabGroupStatus, type RetainedWorktreeInfo, type SwarmCoordinator, type UncleanedWorktreeInfo,
 } from './contracts.js'
 import {
   checkMemberWorktree, inspectManagedWorktree, isIgnorableWorktreeError, settleMemberWorktree, toRetainedWorktreeInfo,
@@ -11,6 +11,21 @@ import {
 
 export interface DispatchWorkerResult {
   workerConversationId: number; groupId: string; name: string; worktreeId?: string; postSeq: number
+}
+
+export interface ListGroupSummary {
+  groupId: string
+  title: string
+  objective?: string
+  status: CollabGroupStatus
+  coordinatorConversationId: number
+  headSeq: number
+  memberCount: number
+  activeMemberCount: number
+  activeWorkingMembers: string[]
+  retainedWorktreeCount: number
+  createdAt: number
+  closedAt?: number
 }
 
 export interface SwarmDispatchGuard {
@@ -344,5 +359,47 @@ export function createGroupHandlers(
     })
   }
 
-  return { createGroup, updateGroup, closeGroup }
+  const listGroups = (
+    input: { status?: CollabGroupStatus; coordinatorConversationId?: number } = {},
+  ): { groups: ListGroupSummary[] } => {
+    if (input.status !== undefined && input.status !== 'active' && input.status !== 'closed') {
+      throw new HelmxError('validation_error', `status 必须是 'active' 或 'closed'（收到：${String(input.status)}）`, 400, {
+        status: input.status,
+      })
+    }
+    if (input.coordinatorConversationId !== undefined && !isPosIntId(input.coordinatorConversationId)) {
+      throw new HelmxError(
+        'validation_error',
+        `coordinatorConversationId 必须是正整数（收到：${String(input.coordinatorConversationId)}）`,
+        400,
+        { coordinatorConversationId: input.coordinatorConversationId },
+      )
+    }
+    const summaries: ListGroupSummary[] = []
+    for (const g of groups.listGroups()) {
+      if (input.status !== undefined && g.status !== input.status) continue
+      if (input.coordinatorConversationId !== undefined && g.coordinatorConversationId !== input.coordinatorConversationId) continue
+      const activeMembers = g.status === 'active' ? g.members.filter((m) => m.lifecycle === 'active') : []
+      const activeWorkingMembers = activeMembers
+        .filter((m) => isWorkerBusy(coordinator, m.conversationId, undefined, g.id, m.name))
+        .map((m) => m.name)
+      summaries.push({
+        groupId: g.id,
+        title: g.title,
+        ...(g.objective !== undefined ? { objective: g.objective } : {}),
+        status: g.status,
+        coordinatorConversationId: g.coordinatorConversationId,
+        headSeq: g.headSeq,
+        memberCount: g.members.length,
+        activeMemberCount: activeMembers.length,
+        activeWorkingMembers,
+        retainedWorktreeCount: g.retainedWorktrees?.length ?? 0,
+        createdAt: g.createdAt,
+        ...(g.closedAt !== undefined ? { closedAt: g.closedAt } : {}),
+      })
+    }
+    return { groups: summaries }
+  }
+
+  return { createGroup, updateGroup, closeGroup, listGroups }
 }
