@@ -243,7 +243,8 @@
   border-radius: var(--radius-sm, 7px);
 }
 
-[data-radix-popper-content-wrapper] .composer-model-popover {
+[data-radix-popper-content-wrapper] .composer-model-popover,
+[data-radix-popper-content-wrapper] .agent-standby-profile-popover {
   position: static;
   bottom: auto;
   left: auto;

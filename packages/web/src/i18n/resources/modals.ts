@@ -146,6 +146,10 @@ export const modalsMessages = {
   'modals.shortcuts.item.commandPalette': { en: 'Command palette & search', 'zh-CN': '命令面板与全局搜索' },
   'modals.shortcuts.item.focusSearch': { en: 'Focus page search', 'zh-CN': '聚焦页面搜索' },
   'modals.shortcuts.item.newTopic': { en: 'New topic', 'zh-CN': '新建话题' },
+  'modals.shortcuts.item.newTopicDesc': {
+    en: 'Start a new topic; press again on the new topic page to switch profile',
+    'zh-CN': '新建话题；在待命页再按一次可切换角色',
+  },
   'modals.shortcuts.item.toggleSidebar': { en: 'Toggle sidebar', 'zh-CN': '展开 / 收起侧栏' },
   'modals.shortcuts.item.openShortcuts': { en: 'Keyboard shortcuts', 'zh-CN': '快捷键总览' },
   'modals.shortcuts.item.focusComposer': { en: 'Focus message input', 'zh-CN': '聚焦对话框' },

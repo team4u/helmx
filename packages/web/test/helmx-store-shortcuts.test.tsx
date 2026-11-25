@@ -17,7 +17,9 @@ import {
   hasAnyOpenOverlay,
   hasBlockingAlertDialog,
   hasDialogOpen,
+  hasMultipleNewTopicProfiles,
   hasNonModelPickerDialogOpen,
+  hasNonProfilePickerDialogOpen,
   isApplePlatform,
   isConversationAbortable,
   isEditableShortcutTarget,
@@ -562,7 +564,36 @@ describe("helmx-store-shortcuts", () => {
     document.body.appendChild(modelPopover)
     assert.equal(hasDialogOpen(), true)
     assert.equal(hasNonModelPickerDialogOpen(), false)
+    assert.equal(hasNonProfilePickerDialogOpen(), true)
     modelPopover.remove()
+
+    const profilePopover = document.createElement('div')
+    profilePopover.setAttribute('role', 'dialog')
+    profilePopover.className = 'helmx-popover-content composer-popover agent-standby-profile-popover'
+    document.body.appendChild(profilePopover)
+    assert.equal(hasDialogOpen(), true)
+    assert.equal(hasNonProfilePickerDialogOpen(), false)
+    assert.equal(hasNonModelPickerDialogOpen(), true)
+    profilePopover.remove()
+
+    assert.equal(hasMultipleNewTopicProfiles([{ id: 'assistant', name: 'Assistant' }]), false)
+    assert.equal(
+      hasMultipleNewTopicProfiles([
+        { id: 'assistant', name: 'Assistant' },
+        { id: 'coder', name: 'Coder' },
+      ]),
+      true,
+    )
+    assert.equal(
+      hasMultipleNewTopicProfiles(
+        [
+          { id: 'assistant', name: 'Assistant' },
+          { id: 'managed', name: 'Managed', managedByPlugin: 'plugin:disabled' },
+        ],
+        [],
+      ),
+      false,
+    )
 
     const alertDialog = document.createElement('div')
     alertDialog.setAttribute('role', 'alertdialog')
@@ -969,7 +1000,7 @@ describe("helmx-store-shortcuts", () => {
     assert.equal(evOverviewNew.defaultPrevented, true)
     assert.deepEqual(capturedStore?.primaryTarget, { kind: 'agent', profileId: 'coder' })
 
-    // 6) Mod+Shift+O while already on that exact standby dispatches focus-composer without wiping target
+    // 6) Mod+Shift+O while already on multi-profile standby dispatches toggle-profile-picker without wiping target
     const fired: HelmxShortcutDetail[] = []
     const onShortcut = (ev: Event) => {
       fired.push((ev as CustomEvent<HelmxShortcutDetail>).detail)
@@ -978,7 +1009,33 @@ describe("helmx-store-shortcuts", () => {
     try {
       const evAlreadyStandby = dispatchWindowKey({ ...modInit('O'), shiftKey: true })
       assert.equal(evAlreadyStandby.defaultPrevented, true)
-      assert.deepEqual(fired, [{ action: 'focus-composer', panel: 'primary' }])
+      assert.deepEqual(fired, [{ action: 'toggle-profile-picker', panel: 'primary' }])
+
+      // Open .agent-standby-profile-popover: second Mod+Shift+O still dispatches toggle-profile-picker,
+      // while Ctrl+L, Ctrl+O, Ctrl+. remain blocked
+      const profilePopover = document.createElement('div')
+      profilePopover.setAttribute('role', 'dialog')
+      profilePopover.className = 'helmx-popover-content composer-popover agent-standby-profile-popover'
+      document.body.appendChild(profilePopover)
+      const beforePopover = fired.length
+      const evToggleClose = dispatchWindowKey({ ...modInit('O'), shiftKey: true })
+      assert.equal(evToggleClose.defaultPrevented, true)
+      assert.equal(dispatchWindowKey({ key: 'l', ctrlKey: true }).defaultPrevented, false)
+      assert.equal(dispatchWindowKey({ key: 'o', ctrlKey: true }).defaultPrevented, false)
+      assert.equal(dispatchWindowKey({ key: '.', ctrlKey: true }).defaultPrevented, false)
+      assert.deepEqual(fired.slice(beforePopover), [{ action: 'toggle-profile-picker', panel: 'primary' }])
+      profilePopover.remove()
+
+      // Non-profile-picker dialog blocks Mod+Shift+O on standby
+      const modelPopoverOnStandby = document.createElement('div')
+      modelPopoverOnStandby.setAttribute('role', 'dialog')
+      modelPopoverOnStandby.className = 'helmx-popover-content composer-model-popover'
+      document.body.appendChild(modelPopoverOnStandby)
+      const beforeBlocked = fired.length
+      const evBlockedByModel = dispatchWindowKey({ ...modInit('O'), shiftKey: true })
+      assert.equal(evBlockedByModel.defaultPrevented, false)
+      assert.equal(fired.length, beforeBlocked)
+      modelPopoverOnStandby.remove()
 
       // 7) Mod+Shift+O from human conversation inherits (nodeId, cwd)
       await act(async () => {
@@ -1222,6 +1279,74 @@ describe("helmx-store-shortcuts", () => {
     assert.ok(modalTextNoPlan.includes('Keyboard shortcuts'))
     assert.equal(modalTextNoPlan.includes('Ctrl+.'), false, 'ShortcutsModal must omit Ctrl+. when builtin:plan is disabled')
     assert.equal(modalTextNoPlan.includes('Toggle Plan mode'), false)
+  })
+
+  test('App end-to-end: Mod+Shift+O on multi-profile standby toggles profile picker, navigates with arrows/Enter, migrates draft, and replaces history', { timeout: 60_000 }, async () => {
+    window.history.replaceState(null, '', '#/a/assistant')
+    installFetch({
+      profiles: [
+        { id: 'assistant', name: 'Assistant' },
+        { id: 'coder', name: 'Coder', nodeId: 'remote-1', cwd: '/remote/repo' },
+      ],
+      conversations: [],
+    })
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(<App />)
+    })
+    await settle(100)
+
+    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
+    const textarea = primaryPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    assert.ok(textarea !== null)
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+      const tracker = (textarea as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
+      const prev = tracker?.getValue() ?? ''
+      setter.call(textarea, 'keep draft across picker')
+      tracker?.setValue(prev)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    assert.equal(textarea.value, 'keep draft across picker')
+
+    const historyLenBefore = window.history.length
+
+    // 1) First Mod+Shift+O on standby opens central profile picker
+    const evOpen = dispatchWindowKey({ ...modInit('O'), shiftKey: true }, textarea)
+    assert.equal(evOpen.defaultPrevented, true)
+    await settle(40)
+    assert.ok(document.querySelector('.agent-standby-profile-popover') !== null, 'Mod+Shift+O opens profile picker')
+
+    // 2) Second Mod+Shift+O closes picker and restores textarea focus
+    const evClose = dispatchWindowKey({ ...modInit('O'), shiftKey: true }, document.activeElement ?? undefined)
+    assert.equal(evClose.defaultPrevented, true)
+    await settle(40)
+    assert.ok(document.querySelector('.agent-standby-profile-popover') === null, 'second Mod+Shift+O closes profile picker')
+    assert.ok(document.activeElement === textarea, 'closing profile picker returns focus to textarea')
+
+    // 3) Reopen with Mod+Shift+O, ArrowDown -> coder, Enter -> switches profile, migrates draft, replaces history
+    dispatchWindowKey({ ...modInit('O'), shiftKey: true }, textarea)
+    await settle(40)
+    const popover = document.querySelector<HTMLElement>('.agent-standby-profile-popover')!
+    assert.ok(popover !== null)
+    await act(async () => {
+      (document.activeElement ?? popover).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    })
+    await act(async () => {
+      (document.activeElement ?? popover).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    await settle(100)
+
+    assert.ok(document.querySelector('.agent-standby-profile-popover') === null)
+    assert.equal(window.location.hash, '#/a/coder')
+    assert.equal(window.history.length, historyLenBefore, 'switching standby profile replaces history instead of pushing')
+    const coderTa = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')!
+    assert.ok(coderTa !== null)
+    assert.equal(coderTa.value, 'keep draft across picker', 'draft migrates to coder standby')
+    assert.ok(document.activeElement === coderTa, 'focus lands in coder standby textarea')
   })
 
   test('App end-to-end: / focuses page search only in focused split pane (Overview + SystemCenter) and Esc clears then blurs', { timeout: 60_000 }, async () => {

@@ -1,11 +1,12 @@
 /**
  * DOM interaction tests for standby UX enhancements:
- * - inline topbar multi-profile switcher (Radix DropdownMenu, hidden for 1 profile or configLocked,
- *   migrates unsent text/inputMeta cleanly, warns without overwriting occupied target draft);
+ * - central StandbyProfilePicker (Radix Popover, static intro for 1 profile or configLocked,
+ *   search threshold >= 6, coarse touch auto-focus guard, keyboard nav, panel-scoped
+ *   `toggle-profile-picker`, history:'replace', migrating/preserving draft);
  * - 4-guard auto-focus (focused panel, modals/drawers/DOM dialogs, mobile/coarse pointer, other inputs);
  * - helmx:shortcut `focus-composer` panel-scoped listener;
- * - compact desktop shortcut hints strip (3 hints + All shortcuts button dispatching `open-shortcuts`,
- *   hidden on zero-model CTA);
+ * - compact desktop shortcut hints strip (Switch profile hint when switchable + 3 hints +
+ *   All shortcuts button dispatching `open-shortcuts`, hidden on zero-model CTA);
  * - StandbyEnvBar custom-env click auto-focusing the cwd input on desktop non-touch.
  */
 import './helpers/register-happy-dom.js'
@@ -263,65 +264,84 @@ describe('standby-pane UX', () => {
     assert.equal(ta.value, 'keep my draft', 'focus-composer preserves existing draft text')
   })
 
-  test('topbar multi-profile switcher: plain title for single profile or configLocked; switches and migrates/preserves draft for multiple profiles', { timeout: 60_000 }, async () => {
+  test('central StandbyProfilePicker: static label for single profile or configLocked; switches with history replace and migrates/preserves draft', { timeout: 60_000 }, async () => {
     stubMatchMedia(() => false)
 
-    // Single profile -> plain span, no dropdown trigger
+    // Single profile -> static central label, plain topbar title, no picker trigger
     const singleStore = makeStandbyStore({ profiles: [{ id: 'assistant', name: 'Assistant' }] })
     mounted = await mountDomRoot(
       e(HostStoreProviders, { value: singleStore }, e(AgentStandbyPane, { profileId: 'assistant' })),
     )
-    assert.ok(mounted.host.querySelector('button.agent-standby-profile-trigger') === null, 'single profile hides switcher dropdown')
+    assert.ok(mounted.host.querySelector('.pane-topbar button.agent-standby-profile-trigger') === null)
+    assert.ok(mounted.host.querySelector('button.agent-standby-profile-trigger') === null, 'single profile hides picker trigger')
+    assert.ok(mounted.host.querySelector('.agent-standby-intro .agent-standby-profile-static') !== null)
     assert.equal(mounted.host.querySelector('span.pane-title')?.textContent, 'Assistant')
     cleanup()
 
-    // configLocked (conversation anchored) -> plain span even with 2 profiles
+    // configLocked (conversation anchored) -> static label even with 2 profiles
     stubMatchMedia(() => false)
     const lockedKey = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
     updateStandbyDraft(lockedKey, { text: 'retry text', conversationId: 99 })
     mounted = await mountDomRoot(
       e(HostStoreProviders, { value: makeStandbyStore() }, e(AgentStandbyPane, { profileId: 'assistant' })),
     )
-    assert.ok(mounted.host.querySelector('button.agent-standby-profile-trigger') === null, 'anchored standby locks profile switcher')
+    assert.ok(mounted.host.querySelector('button.agent-standby-profile-trigger') === null, 'anchored standby locks profile picker')
+    assert.ok(mounted.host.querySelector('.agent-standby-intro .agent-standby-profile-static') !== null)
     assert.equal(mounted.host.querySelector('span.pane-title')?.textContent, 'Assistant')
     cleanup()
 
-    // 2 profiles -> dropdown trigger renders, lists remote node tag + check icon, migrates draft on switch
+    // 2 profiles -> central trigger renders with aria-haspopup="dialog", topbar stays static,
+    // popover shows remote node + metadata + check icon, switches with history:'replace', migrates draft, restores textarea focus
     stubMatchMedia(() => false)
+    const richProfiles: Profile[] = [
+      { id: 'assistant', name: 'Assistant' },
+      { id: 'coder', name: 'Coder', nodeId: 'remote-1', cwd: '/remote/repo', model: 'openai/gpt-5' },
+    ]
     const assistantKey = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
     const coderKey = standbyDraftKey({ panel: 'primary', profileId: 'coder' })
     updateStandbyDraft(assistantKey, { text: 'migrate me', model: 'openai/gpt-5' })
     setStandbyDraftInputMeta(assistantKey, 'builtin:plan', { mode: 'planning' })
-    const multiStore = makeStandbyStore()
+    const multiStore = makeStandbyStore({ profiles: richProfiles })
     mounted = await mountDomRoot(
       e(HostStoreProviders, { value: multiStore }, e(AgentStandbyPane, { profileId: 'assistant' })),
     )
-    const trigger = mounted.host.querySelector<HTMLButtonElement>('button.agent-standby-profile-trigger')!
-    assert.ok(trigger !== null, 'multi-profile standby renders dropdown trigger')
-    assert.equal(trigger.getAttribute('aria-haspopup'), 'menu')
+    assert.ok(mounted.host.querySelector('.pane-topbar button.agent-standby-profile-trigger') === null, 'topbar stays plain title')
+    const trigger = mounted.host.querySelector<HTMLButtonElement>('.agent-standby-intro button.agent-standby-profile-trigger')!
+    assert.ok(trigger !== null, 'multi-profile standby renders central picker trigger')
+    assert.equal(trigger.getAttribute('aria-haspopup'), 'dialog')
+    assert.equal(trigger.getAttribute('aria-expanded'), 'false')
 
     await act(async () => {
-      trigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+      trigger.click()
     })
     await flushMacrotask(0)
-    const items = [...document.querySelectorAll<HTMLElement>('.agent-standby-profile-item')]
-    assert.equal(items.length, 2, 'dropdown lists both human-selectable profiles')
+    const popover = document.querySelector<HTMLElement>('.agent-standby-profile-popover')
+    assert.ok(popover !== null, 'clicking trigger opens central profile popover')
+    assert.ok(popover.querySelector('input') === null, '2 profiles (<= 5) hides search box')
+    const items = [...popover.querySelectorAll<HTMLElement>('.agent-standby-profile-item')]
+    assert.equal(items.length, 2, 'popover lists both human-selectable profiles')
     const assistantItem = items.find((item) => item.getAttribute('data-profile-id') === 'assistant')!
     const coderItem = items.find((item) => item.getAttribute('data-profile-id') === 'coder')!
     assert.ok(assistantItem.querySelector('.agent-standby-profile-item-check') !== null, 'current profile shows check icon')
     assert.ok(coderItem.querySelector('.agent-standby-profile-item-check') === null)
     assert.match(coderItem.textContent ?? '', /remote-1/, 'remote-node profile shows remote node tag')
+    assert.match(coderItem.querySelector('.agent-standby-profile-item-meta')?.textContent ?? '', /\/remote\/repo · gpt-5/)
 
     await act(async () => {
       coderItem.click()
     })
     await flushMacrotask(0)
+    assert.ok(document.querySelector('.agent-standby-profile-popover') === null, 'picking profile closes popover')
     assert.deepEqual(multiStore.getPrimaryTarget(), { kind: 'agent', profileId: 'coder' })
+    assert.equal(multiStore.pendingHistoryMode, 'replace', 'switching standby profile replaces history')
     assert.equal(getStandbyDraft(assistantKey).text, '', 'original draft moved away')
     assert.equal(getStandbyDraft(coderKey).text, 'migrate me', 'draft text migrated to target profile')
     assert.deepEqual(getStandbyDraft(coderKey).inputMeta, { 'builtin:plan': { mode: 'planning' } })
     assert.equal(getStandbyDraft(coderKey).model, undefined, 'model does not carry across profiles')
     assert.equal(multiStore.getNotices().length, 0, 'no warning toast when target was empty')
+    const ta = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    await waitForCondition(() => document.activeElement === ta)
+    assert.ok(document.activeElement === ta, 'selecting profile returns focus to textarea on desktop')
     cleanup()
 
     // Target occupied -> preserves both drafts and pushes warning toast
@@ -334,7 +354,7 @@ describe('standby-pane UX', () => {
     )
     const trigger2 = mounted.host.querySelector<HTMLButtonElement>('button.agent-standby-profile-trigger')!
     await act(async () => {
-      trigger2.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+      trigger2.click()
     })
     await flushMacrotask(0)
     const coderItem2 = document.querySelector<HTMLElement>('.agent-standby-profile-item[data-profile-id="coder"]')!
@@ -351,7 +371,154 @@ describe('standby-pane UX', () => {
     assert.match(notices[0]?.title ?? '', /Target profile already has an unsent draft/)
   })
 
-  test('shortcut hints strip: shows 3 hints + All shortcuts button dispatching open-shortcuts, localizes in zh-CN, and hides on zero-model CTA', { timeout: 60_000 }, async () => {
+  test('StandbyProfilePicker search threshold (>= 6), keyboard nav, Escape return-focus, and coarse touch guard', { timeout: 60_000 }, async () => {
+    const sixProfiles: Profile[] = [
+      { id: 'assistant', name: 'Assistant' },
+      { id: 'coder', name: 'Coder', tags: ['engineering'], cwd: '/repo/code' },
+      { id: 'reviewer', name: 'Reviewer', model: 'anthropic/claude-opus-4' },
+      { id: 'planner', name: 'Planner', tags: ['design'] },
+      { id: 'ops', name: 'Ops', nodeId: 'prod-1' },
+      { id: 'writer', name: 'Writer', tags: ['docs'] },
+    ]
+    stubMatchMedia(() => false)
+    const store = makeStandbyStore({ profiles: sixProfiles })
+    mounted = await mountDomRoot(
+      e(HostStoreProviders, { value: store }, e(AgentStandbyPane, { profileId: 'assistant' })),
+    )
+    const ta = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    const trigger = mounted.host.querySelector<HTMLButtonElement>('button.agent-standby-profile-trigger')!
+
+    await act(async () => {
+      trigger.click()
+    })
+    await flushMacrotask(0)
+    const popover = document.querySelector<HTMLElement>('.agent-standby-profile-popover')!
+    assert.ok(popover !== null)
+    const searchInput = popover.querySelector<HTMLInputElement>('input')!
+    assert.ok(searchInput !== null, '6+ profiles show search box')
+    await waitForCondition(() => document.activeElement === searchInput)
+    assert.ok(document.activeElement === searchInput, 'desktop non-touch focuses search box on open')
+
+    // Non-matching query shows empty state and Enter does nothing
+    await act(async () => {
+      typeIntoControl(searchInput, 'non-existent-role')
+    })
+    assert.match(popover.textContent ?? '', /No matching profiles/)
+    await act(async () => {
+      searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.ok(document.querySelector('.agent-standby-profile-popover') !== null, 'Enter on empty filter keeps popover open')
+
+    // Escape closes popover and restores focus to textarea
+    await act(async () => {
+      searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    await waitForCondition(() => document.querySelector('.agent-standby-profile-popover') === null)
+    await waitForCondition(() => document.activeElement === ta)
+    assert.ok(document.activeElement === ta, 'Escape closes popover and restores focus to textarea')
+
+    // Reopen, filter by tag/model/node, and pick with ArrowDown + Enter
+    await act(async () => {
+      trigger.click()
+    })
+    await flushMacrotask(0)
+    const searchInput2 = document.querySelector<HTMLInputElement>('.agent-standby-profile-popover input')!
+    await act(async () => {
+      typeIntoControl(searchInput2, 'engineering')
+    })
+    let visibleOptions = [...document.querySelectorAll<HTMLElement>('.agent-standby-profile-item')]
+    assert.deepEqual(visibleOptions.map((el) => el.getAttribute('data-profile-id')), ['coder'])
+
+    await act(async () => {
+      typeIntoControl(searchInput2, '')
+    })
+    visibleOptions = [...document.querySelectorAll<HTMLElement>('.agent-standby-profile-item')]
+    assert.equal(visibleOptions.length, 6)
+
+    // Starts on assistant (index 0); ArrowDown moves to index 1; Enter switches
+    const secondProfileId = visibleOptions[1]!.getAttribute('data-profile-id')!
+    await act(async () => {
+      searchInput2.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    })
+    await act(async () => {
+      searchInput2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    await flushMacrotask(0)
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'agent', profileId: secondProfileId })
+    assert.equal(store.pendingHistoryMode, 'replace')
+    cleanup()
+
+    // Coarse touch viewport -> opening 6-profile popover does NOT focus search input (avoids soft keyboard)
+    stubMatchMedia((q) => q === '(hover: none) and (pointer: coarse)')
+    mounted = await mountDomRoot(
+      e(HostStoreProviders, { value: makeStandbyStore({ profiles: sixProfiles }) }, e(AgentStandbyPane, { profileId: 'assistant' })),
+    )
+    const touchTrigger = mounted.host.querySelector<HTMLButtonElement>('button.agent-standby-profile-trigger')!
+    await act(async () => {
+      touchTrigger.click()
+    })
+    await flushMacrotask(30)
+    const touchSearch = document.querySelector<HTMLInputElement>('.agent-standby-profile-popover input')!
+    assert.ok(touchSearch !== null)
+    assert.ok(document.activeElement !== touchSearch, 'coarse touch skips focusing search input on open')
+  })
+
+  test('toggle-profile-picker shortcut opens/toggles popover in matching panel, ignores other panel, and falls back to composer when locked', { timeout: 60_000 }, async () => {
+    stubMatchMedia(() => false)
+    const splitStore = makeStandbyStore({
+      primaryTarget: { kind: 'conversation', conversationId: 1 },
+      splitTarget: { kind: 'agent', profileId: 'assistant' },
+      focusedPanel: 'split',
+    })
+    mounted = await mountDomRoot(
+      e(
+        'div',
+        { 'data-helmx-panel': 'split' },
+        e(HostStoreProviders, { value: splitStore }, e(AgentStandbyPane, { profileId: 'assistant', isSplit: true })),
+      ),
+    )
+    await flushMacrotask(30)
+    const splitTa = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+
+    // Primary shortcut ignored by split standby pane
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-profile-picker', panel: 'primary' } }))
+    })
+    assert.ok(document.querySelector('.agent-standby-profile-popover') === null)
+
+    // Split shortcut opens split popover
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-profile-picker', panel: 'split' } }))
+    })
+    await flushMacrotask(0)
+    assert.ok(document.querySelector('.agent-standby-profile-popover') !== null, 'matching panel opens profile picker')
+
+    // Second split shortcut closes popover and returns focus to split textarea
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-profile-picker', panel: 'split' } }))
+    })
+    await waitForCondition(() => document.querySelector('.agent-standby-profile-popover') === null)
+    await waitForCondition(() => document.activeElement === splitTa)
+    assert.ok(document.activeElement === splitTa, 'toggling closed returns focus to textarea')
+    cleanup()
+
+    // configLocked -> toggle-profile-picker falls back to focusing textarea without opening popover
+    stubMatchMedia(() => false)
+    const lockedKey = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
+    updateStandbyDraft(lockedKey, { text: 'locked draft', conversationId: 99 })
+    mounted = await mountDomRoot(
+      e(HostStoreProviders, { value: makeStandbyStore() }, e(AgentStandbyPane, { profileId: 'assistant' })),
+    )
+    const lockedTa = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    lockedTa.blur()
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-profile-picker', panel: 'primary' } }))
+    })
+    assert.ok(document.querySelector('.agent-standby-profile-popover') === null)
+    assert.ok(document.activeElement === lockedTa, 'locked standby falls back to focusing textarea')
+  })
+
+  test('shortcut hints strip: shows Switch profile hint when switchable, 3 hints for single profile, localizes in zh-CN, and hides on zero-model CTA', { timeout: 60_000 }, async () => {
     stubMatchMedia(() => false)
     const store = makeStandbyStore()
     mounted = await mountDomRoot(
@@ -361,8 +528,9 @@ describe('standby-pane UX', () => {
     const strip = mounted.host.querySelector('.agent-standby-shortcuts')
     assert.ok(strip !== null, 'renders shortcut hints strip when usable models exist')
     const items = [...strip.querySelectorAll('.agent-standby-shortcut-item')]
-    assert.equal(items.length, 3, 'renders exactly 3 shortcut hints')
+    assert.equal(items.length, 4, 'renders Switch profile + 3 hints when switchable')
     const stripText = strip.textContent ?? ''
+    assert.match(stripText, /Switch profile/)
     assert.match(stripText, /Search & commands/)
     assert.match(stripText, /Ctrl\+L/)
     assert.match(stripText, /Switch model/)
@@ -387,12 +555,23 @@ describe('standby-pane UX', () => {
     }
     cleanup()
 
+    // Single profile -> omits Switch profile hint (3 hints)
+    stubMatchMedia(() => false)
+    mounted = await mountDomRoot(
+      e(HostStoreProviders, { value: makeStandbyStore({ profiles: [{ id: 'assistant', name: 'Assistant' }] }) }, e(AgentStandbyPane, { profileId: 'assistant' })),
+    )
+    const singleStrip = mounted.host.querySelector('.agent-standby-shortcuts')!
+    assert.equal(singleStrip.querySelectorAll('.agent-standby-shortcut-item').length, 3, 'single profile omits Switch profile hint')
+    assert.doesNotMatch(singleStrip.textContent ?? '', /Switch profile/)
+    cleanup()
+
     // zh-CN copy
     stubMatchMedia(() => false)
     mounted = await mountDomRoot(
       e(HostStoreProviders, { value: makeStandbyStore({ locale: 'zh-CN' }) }, e(AgentStandbyPane, { profileId: 'assistant' })),
     )
     const zhText = mounted.host.querySelector('.agent-standby-shortcuts')?.textContent ?? ''
+    assert.match(zhText, /切换角色/)
     assert.match(zhText, /搜索与命令/)
     assert.match(zhText, /切换模型/)
     assert.match(zhText, /命令与技能/)
@@ -442,7 +621,7 @@ describe('standby-pane UX', () => {
     }
     const splitTrigger = mounted.host.querySelector<HTMLButtonElement>('button.agent-standby-profile-trigger')!
     await act(async () => {
-      splitTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+      splitTrigger.click()
     })
     await flushMacrotask(0)
     const splitCoderItem = document.querySelector<HTMLElement>('.agent-standby-profile-item[data-profile-id="coder"]')!
@@ -451,6 +630,7 @@ describe('standby-pane UX', () => {
     })
     await flushMacrotask(0)
     assert.deepEqual(splitStore.getSplitTarget(), { kind: 'agent', profileId: 'coder' })
+    assert.equal(splitStore.pendingHistoryMode, 'replace')
     assert.equal(getStandbyDraft(splitCoderKey).text, 'split draft')
     assert.equal(getStandbyDraft(splitAssistantKey).text, '')
   })

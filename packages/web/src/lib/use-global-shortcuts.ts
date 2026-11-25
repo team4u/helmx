@@ -9,7 +9,9 @@ import {
   hasAnyOpenOverlay,
   hasBlockingAlertDialog,
   hasDialogOpen,
+  hasMultipleNewTopicProfiles,
   hasNonModelPickerDialogOpen,
+  hasNonProfilePickerDialogOpen,
   hasNonWorkbenchDialogOpen,
   isConversationAbortable,
   isEditableShortcutTarget,
@@ -148,6 +150,36 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         return
       }
 
+      if (isModShift && keyLower === 'o') {
+        if (activeTarget.kind === 'agent') {
+          if (hasNonProfilePickerDialogOpen()) return
+        } else if (hasDialogOpen()) {
+          return
+        }
+        event.preventDefault()
+        store.clearEscAbortPrompt()
+        const profiles = store.getProfilesSlice().profiles
+        const plugins = store.getPlugins()
+        const target = resolveNewTopicTarget({
+          activeTarget,
+          conversations: store.getConversations(),
+          profiles,
+          plugins,
+          sidebarItems: store.getGroupedUi().sidebarItems,
+          locale: store.getLocale(),
+        })
+        if (target.kind === 'agent' && isSameResolvedTarget(activeTarget, target)) {
+          const action = hasMultipleNewTopicProfiles(profiles, plugins)
+            ? 'toggle-profile-picker'
+            : 'focus-composer'
+          const detail: HelmxShortcutDetail = { action, panel }
+          window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
+          return
+        }
+        store.openTarget(target, panel === 'split' ? { split: true } : undefined)
+        return
+      }
+
       if (hasDialogOpen()) return
 
       if (
@@ -168,26 +200,6 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         if (shortcutEvent.defaultPrevented) {
           event.preventDefault()
         }
-        return
-      }
-
-      if (isModShift && keyLower === 'o') {
-        event.preventDefault()
-        store.clearEscAbortPrompt()
-        const target = resolveNewTopicTarget({
-          activeTarget,
-          conversations: store.getConversations(),
-          profiles: store.getProfilesSlice().profiles,
-          plugins: store.getPlugins(),
-          sidebarItems: store.getGroupedUi().sidebarItems,
-          locale: store.getLocale(),
-        })
-        if (target.kind === 'agent' && isSameResolvedTarget(activeTarget, target)) {
-          const detail: HelmxShortcutDetail = { action: 'focus-composer', panel }
-          window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
-          return
-        }
-        store.openTarget(target, panel === 'split' ? { split: true } : undefined)
         return
       }
 

@@ -6,15 +6,21 @@
  */
 import assert from 'node:assert/strict'
 import { describe, afterEach, test } from 'node:test'
-import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helmx/protocol'
+import type { ArtifactMetadata, ConversationInit, ConversationSummary, Profile } from '@helmx/protocol'
 import {
+  STANDBY_PROFILE_SEARCH_THRESHOLD,
   standbyManageAction,
   admitStandbyFiles,
   buildStandbyCreateInit,
+  buildStandbyProfileOptions,
   clearStandbyDraft,
   executeStandbySend,
+  filterStandbyProfileOptions,
+  formatStandbyBoundModelShort,
+  formatStandbyProfileMeta,
   getStandbyDraft,
   inheritedEnvOf,
+  initialStandbyProfileActiveIndex,
   resetEnvStandbyDraft,
   resetStandbyDrafts,
   setStandbyDraftInputMeta,
@@ -22,6 +28,7 @@ import {
   standbyDraftKey,
   standbyDraftsDirty,
   standbyEnvError,
+  stepStandbyProfileIndex,
   subscribeStandbyDrafts,
   transferStandbyDraftOnProfileSwitch,
   updateStandbyDraft,
@@ -715,5 +722,79 @@ describe("standby-model", () => {
       true,
       'allows when activeElement is a non-editable button',
     )
+  })
+
+  test('standby profile picker helpers: options, meta formatting, query filter, and active-index stepping', { timeout: 60_000 }, () => {
+    assert.equal(STANDBY_PROFILE_SEARCH_THRESHOLD, 5)
+    assert.equal(formatStandbyBoundModelShort(undefined), undefined)
+    assert.equal(formatStandbyBoundModelShort('   '), undefined)
+    assert.equal(formatStandbyBoundModelShort('tier/fast'), 'tier/fast')
+    assert.equal(formatStandbyBoundModelShort('openai/gpt-5'), 'gpt-5')
+    assert.equal(formatStandbyBoundModelShort('magpie/auto/deepseek'), 'deepseek')
+    assert.equal(formatStandbyBoundModelShort('bare-model'), 'bare-model')
+
+    const profiles: Profile[] = [
+      { id: 'assistant', name: 'Assistant' },
+      {
+        id: 'coder',
+        name: '代码助手',
+        nodeId: 'remote-1',
+        cwd: ' /repo/app ',
+        model: 'openai/gpt-5',
+        tags: ['code', 'rust'],
+      },
+      { id: 'writer', name: 'Writer', nodeId: 'local', model: 'tier/quality' },
+    ]
+    const options = buildStandbyProfileOptions(
+      [
+        { profileId: 'assistant', label: 'Assistant', primaryConversation: null },
+        { profileId: 'coder', label: '代码助手', primaryConversation: null },
+        {
+          profileId: 'writer',
+          label: 'Writer',
+          primaryConversation: { nodeId: 'remote-fallback' },
+        },
+      ],
+      profiles,
+    )
+
+    assert.deepEqual(options[0], {
+      profileId: 'assistant',
+      label: 'Assistant',
+      remoteNodeId: null,
+      tags: [],
+    })
+    assert.deepEqual(options[1], {
+      profileId: 'coder',
+      label: '代码助手',
+      remoteNodeId: 'remote-1',
+      cwd: '/repo/app',
+      boundModel: 'openai/gpt-5',
+      boundModelShort: 'gpt-5',
+      tags: ['code', 'rust'],
+    })
+    assert.equal(options[2]?.remoteNodeId, 'remote-fallback', 'falls back to primaryConversation remote node when profile is local')
+    assert.equal(options[2]?.boundModelShort, 'tier/quality')
+
+    assert.equal(formatStandbyProfileMeta(options[0]!), '', 'omits redundant profileId when case-insensitively equal to label')
+    assert.equal(formatStandbyProfileMeta(options[1]!), 'coder · /repo/app · gpt-5')
+    assert.equal(formatStandbyProfileMeta(options[2]!), 'tier/quality')
+
+    assert.equal(filterStandbyProfileOptions(options, '   ').length, 3)
+    assert.deepEqual(filterStandbyProfileOptions(options, 'RUST').map((o) => o.profileId), ['coder'])
+    assert.deepEqual(filterStandbyProfileOptions(options, 'remote-fallback').map((o) => o.profileId), ['writer'])
+    assert.deepEqual(filterStandbyProfileOptions(options, '/REPO/APP').map((o) => o.profileId), ['coder'])
+    assert.deepEqual(filterStandbyProfileOptions(options, 'tier/quality').map((o) => o.profileId), ['writer'])
+
+    assert.equal(stepStandbyProfileIndex(0, 0, 1), -1)
+    assert.equal(stepStandbyProfileIndex(-1, 3, 1), 0)
+    assert.equal(stepStandbyProfileIndex(-1, 3, -1), 2)
+    assert.equal(stepStandbyProfileIndex(2, 3, 1), 0)
+    assert.equal(stepStandbyProfileIndex(0, 3, -1), 2)
+
+    assert.equal(initialStandbyProfileActiveIndex([], 'coder', ''), -1)
+    assert.equal(initialStandbyProfileActiveIndex(options, 'coder', ''), 1)
+    assert.equal(initialStandbyProfileActiveIndex(options, 'missing', ''), 0)
+    assert.equal(initialStandbyProfileActiveIndex(options, 'coder', 'wri'), 0)
   })
 })

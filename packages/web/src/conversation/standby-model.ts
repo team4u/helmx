@@ -15,7 +15,7 @@
  * useSyncExternalStore hook.
  */
 import { useSyncExternalStore } from 'react'
-import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helmx/protocol/browser'
+import type { ArtifactMetadata, ConversationInit, ConversationSummary, Profile } from '@helmx/protocol/browser'
 import { resolveEffectiveThinkingLevel } from '@helmx/plugin-client/pure'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { ActiveModal, FocusedPanel, ResolvedTarget } from '../lib/types.js'
@@ -653,4 +653,118 @@ export async function executeStandbySend(
     // sending state.
     if (!stale()) patchStandbyDraftIfPresent(key, { sending: false })
   }
+}
+
+// ---------------------------------------------------------------------------
+// Standby profile picker pure helpers (search threshold, options, meta, keys)
+// ---------------------------------------------------------------------------
+
+/** Show search bar in StandbyProfilePicker once selectable candidates exceed this count (6+). */
+export const STANDBY_PROFILE_SEARCH_THRESHOLD = 5
+
+export interface StandbyProfileOption {
+  profileId: string
+  label: string
+  remoteNodeId: string | null
+  cwd?: string
+  boundModel?: string
+  boundModelShort?: string
+  tags: ReadonlyArray<string>
+}
+
+export function formatStandbyBoundModelShort(model: string | undefined): string | undefined {
+  if (model === undefined) return undefined
+  const trimmed = model.trim()
+  if (trimmed === '') return undefined
+  if (trimmed.startsWith('tier/') && trimmed.length > 5) {
+    return trimmed
+  }
+  const slashIdx = trimmed.lastIndexOf('/')
+  if (slashIdx >= 0 && slashIdx < trimmed.length - 1) {
+    return trimmed.slice(slashIdx + 1)
+  }
+  return trimmed
+}
+
+export function buildStandbyProfileOptions(
+  candidates: ReadonlyArray<{
+    profileId: string
+    label: string
+    primaryConversation: { nodeId?: string } | null
+  }>,
+  profiles: ReadonlyArray<Profile>,
+): StandbyProfileOption[] {
+  const profileById = new Map(profiles.map((p) => [p.id, p] as const))
+  return candidates.map((candidate) => {
+    const profile = profileById.get(candidate.profileId)
+    const rawNodeId =
+      profile?.nodeId !== undefined && profile.nodeId !== '' && profile.nodeId !== 'local'
+        ? profile.nodeId
+        : candidate.primaryConversation?.nodeId
+    const remoteNodeId =
+      rawNodeId !== undefined && rawNodeId !== '' && rawNodeId !== 'local' ? rawNodeId : null
+    const cwd = profile?.cwd?.trim() || undefined
+    const boundModel = profile?.model?.trim() || undefined
+    const boundModelShort = formatStandbyBoundModelShort(boundModel)
+    return {
+      profileId: candidate.profileId,
+      label: candidate.label,
+      remoteNodeId,
+      ...(cwd !== undefined ? { cwd } : {}),
+      ...(boundModel !== undefined ? { boundModel } : {}),
+      ...(boundModelShort !== undefined ? { boundModelShort } : {}),
+      tags: profile?.tags ?? [],
+    }
+  })
+}
+
+export function filterStandbyProfileOptions(
+  options: ReadonlyArray<StandbyProfileOption>,
+  query: string,
+): StandbyProfileOption[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return [...options]
+  return options.filter(
+    (opt) =>
+      opt.label.toLowerCase().includes(q) ||
+      opt.profileId.toLowerCase().includes(q) ||
+      (opt.remoteNodeId !== null && opt.remoteNodeId.toLowerCase().includes(q)) ||
+      (opt.cwd !== undefined && opt.cwd.toLowerCase().includes(q)) ||
+      (opt.boundModel !== undefined && opt.boundModel.toLowerCase().includes(q)) ||
+      (opt.boundModelShort !== undefined && opt.boundModelShort.toLowerCase().includes(q)) ||
+      opt.tags.some((tag) => tag.toLowerCase().includes(q)),
+  )
+}
+
+export function formatStandbyProfileMeta(
+  option: Pick<StandbyProfileOption, 'profileId' | 'label' | 'cwd' | 'boundModelShort'>,
+): string {
+  const parts: string[] = []
+  if (option.label.trim().toLowerCase() !== option.profileId.trim().toLowerCase()) {
+    parts.push(option.profileId)
+  }
+  if (option.cwd !== undefined && option.cwd !== '') {
+    parts.push(option.cwd)
+  }
+  if (option.boundModelShort !== undefined && option.boundModelShort !== '') {
+    parts.push(option.boundModelShort)
+  }
+  return parts.join(' · ')
+}
+
+export function stepStandbyProfileIndex(current: number, length: number, delta: 1 | -1): number {
+  if (length <= 0) return -1
+  if (current < 0 || current >= length) return delta > 0 ? 0 : length - 1
+  return (current + delta + length) % length
+}
+
+export function initialStandbyProfileActiveIndex(
+  options: ReadonlyArray<Pick<StandbyProfileOption, 'profileId'>>,
+  currentProfileId: string,
+  query: string,
+): number {
+  if (options.length === 0) return -1
+  if (query.trim() !== '') return 0
+  const idx = options.findIndex((opt) => opt.profileId === currentProfileId)
+  return idx >= 0 ? idx : 0
 }

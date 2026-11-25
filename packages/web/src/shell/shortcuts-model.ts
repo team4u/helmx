@@ -26,6 +26,7 @@ export const ESC_ABORT_WINDOW_MS = 1500
 
 export type HelmxShortcutAction =
   | 'toggle-model-picker'
+  | 'toggle-profile-picker'
   | 'toggle-process-groups'
   | 'toggle-plan-mode'
   | 'focus-composer'
@@ -95,6 +96,7 @@ const DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"]'
 const NON_WORKBENCH_DIALOG_SELECTOR =
   '[role="alertdialog"], [role="dialog"]:not(.drawer-stack-dialog):not(.helmx-workbench):not(.conversation-drawer)'
 const NON_MODEL_PICKER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.composer-model-popover)'
+const NON_PROFILE_PICKER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.agent-standby-profile-popover)'
 
 export function getStoredSidebarCollapsed(): boolean {
   try {
@@ -160,6 +162,28 @@ export function hasNonWorkbenchDialogOpen(): boolean {
 export function hasNonModelPickerDialogOpen(): boolean {
   if (typeof document === 'undefined') return false
   return document.querySelector(NON_MODEL_PICKER_DIALOG_SELECTOR) !== null
+}
+
+/** Detect blocking dialogs other than the StandbyProfilePicker popover (so a second Mod+Shift+O can toggle the open picker closed). */
+export function hasNonProfilePickerDialogOpen(): boolean {
+  if (typeof document === 'undefined') return false
+  return document.querySelector(NON_PROFILE_PICKER_DIALOG_SELECTOR) !== null
+}
+
+/** Whether at least two human-selectable profiles are available for switching on the standby page. */
+export function hasMultipleNewTopicProfiles(
+  profiles: ReadonlyArray<Profile>,
+  plugins: ReadonlyArray<PluginSummary> = [],
+): boolean {
+  const enabledPluginIds = collectEnabledPluginIds(plugins)
+  let count = 0
+  for (const profile of profiles) {
+    if (isHumanSelectableProfile(profile, enabledPluginIds)) {
+      count += 1
+      if (count >= 2) return true
+    }
+  }
+  return false
 }
 
 export function hasAnyOpenOverlay(activeModal: ActiveModal, drawerOpen: boolean): boolean {
@@ -331,6 +355,7 @@ export function buildShortcutCatalog(input: BuildShortcutCatalogInput): Shortcut
       id: 'nav:new-topic',
       keys: formatModShiftShortcut('O'),
       label: t('modals.shortcuts.item.newTopic'),
+      description: t('modals.shortcuts.item.newTopicDesc'),
     },
     {
       id: 'nav:toggle-sidebar',

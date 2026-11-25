@@ -13,11 +13,6 @@ import {
 import {
   Button,
   ComposerCommandContext,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuPortal,
-  DropdownMenuTrigger,
   HelmxIcon,
   IconButton,
   PluginSlot,
@@ -52,8 +47,7 @@ import {
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { buildNewTopicCandidates } from '../overview/overview-model.js'
-import { formatModShortcut } from '../shell/shortcuts-model.js'
-import { RemoteNodeTag } from '../shell/SidebarPrimitives.js'
+import { formatModShiftShortcut, formatModShortcut } from '../shell/shortcuts-model.js'
 import { collectEnabledPluginIds, isHumanSelectableProfile } from '../shell/sidebar-model.js'
 import { standbySkillScope } from '../skills/skill-scope-model.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
@@ -61,15 +55,18 @@ import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { ComposerCommandBanner } from './ComposerCommandBanner.js'
 import { ComposerInputShell, type ComposerAttachmentItem } from './ComposerInputShell.js'
 import { StandbyEnvBar, StandbyModelPicker } from './StandbyControls.js'
+import { StandbyProfilePicker } from './StandbyProfilePicker.js'
 import { focusWithCaret, useFocusComposerShortcut } from './composer-controller.js'
 import { useIsMobile } from './composer-model.js'
 import { COMPOSER_SHORTCUTS, isComposerSubmitEnterEvent } from './keybindings-model.js'
 import {
   admitStandbyFiles,
+  buildStandbyProfileOptions,
   currentStandbyDraftEpoch,
   executeStandbySend,
   getStandbyDraft,
   inheritedEnvOf,
+  isCoarseTouchViewport,
   resetEnvStandbyDraft,
   resolveStandbyEffectiveModel,
   setStandbyDraftInputMeta,
@@ -126,11 +123,8 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   const draft = useStandbyDraft(draftKey)
   const paneRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
-  const switchingProfileRef = useRef(false)
 
   const profile = useMemo(() => profiles.find((p) => p.id === profileId), [profiles, profileId])
-  const profileById = useMemo(() => new Map(profiles.map((p) => [p.id, p] as const)), [profiles])
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(plugins), [plugins])
   const humanSelectable = profile !== undefined && isHumanSelectableProfile(profile, enabledPluginIds)
   const profileCandidates = useMemo(
@@ -144,6 +138,16 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       }),
     [profiles, conversations, plugins, groupedUi.sidebarItems, locale],
   )
+  const standbyProfileOptions = useMemo(
+    () => buildStandbyProfileOptions(profileCandidates, profiles),
+    [profileCandidates, profiles],
+  )
+  const currentRemoteNodeId = useMemo(() => {
+    const matched = standbyProfileOptions.find((opt) => opt.profileId === profileId)
+    if (matched !== undefined) return matched.remoteNodeId
+    const rawNodeId = profile?.nodeId
+    return rawNodeId !== undefined && rawNodeId !== '' && rawNodeId !== 'local' ? rawNodeId : null
+  }, [standbyProfileOptions, profileId, profile?.nodeId])
   const standbyReady = assetsLoaded && profile !== undefined && humanSelectable
   const configLocked = draft.sending || draft.conversationId !== undefined
   const canSwitchProfile = standbyReady && profileCandidates.length > 1 && !configLocked
@@ -472,9 +476,23 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         body: t('composer.standby.switchProfileTargetOccupiedBody'),
       })
     }
-    switchingProfileRef.current = true
-    openTarget({ kind: 'agent', profileId: nextProfileId }, isSplit ? { split: true } : undefined)
+    openTarget(
+      { kind: 'agent', profileId: nextProfileId },
+      { history: 'replace', ...(isSplit ? { split: true } : {}) },
+    )
   }, [draft.sending, draft.conversationId, draftKey, isSplit, openTarget, panel, profileId, pushNotice, t])
+
+  const returnFocusToStandbyTextarea = useCallback((): boolean => {
+    if (isMobile || isCoarseTouchViewport()) return false
+    const el = textareaRef.current
+    if (el === null || !el.isConnected) return false
+    el.focus({ preventScroll: true })
+    return true
+  }, [isMobile])
+
+  const focusStandbyTextareaFallback = useCallback((): void => {
+    textareaRef.current?.focus({ preventScroll: true })
+  }, [])
 
   const openAllShortcuts = useCallback((): void => {
     if (typeof window === 'undefined') return
@@ -505,71 +523,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     <div ref={paneRef} className="helmx-pane agent-standby-pane" data-agent={profileId}>
       <header className="pane-topbar conversation-topbar">
         <div className="pane-title-group">
-          {canSwitchProfile ? (
-            <DropdownMenu open={profileMenuOpen} onOpenChange={setProfileMenuOpen}>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="pane-title pane-title-btn agent-standby-profile-trigger"
-                  aria-label={t('composer.standby.switchProfileAria', { name: label })}
-                  title={t('composer.standby.switchProfileTitle')}
-                  aria-haspopup="menu"
-                >
-                  <span className="agent-standby-profile-trigger-label">{label}</span>
-                  <HelmxIcon name="chevron-down" size={12} className="agent-standby-profile-trigger-chevron" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuPortal>
-                <DropdownMenuContent
-                  className="pane-more-popover agent-standby-profile-menu"
-                  align="start"
-                  sideOffset={4}
-                  onCloseAutoFocus={(e) => {
-                    if (switchingProfileRef.current) {
-                      switchingProfileRef.current = false
-                      e.preventDefault()
-                    }
-                  }}
-                >
-                  {profileCandidates.map((standing) => {
-                    const selected = standing.profileId === profileId
-                    const candidateProfile = profileById.get(standing.profileId)
-                    const rawNodeId =
-                      candidateProfile?.nodeId !== undefined &&
-                      candidateProfile.nodeId !== '' &&
-                      candidateProfile.nodeId !== 'local'
-                        ? candidateProfile.nodeId
-                        : standing.primaryConversation?.nodeId
-                    const remoteNodeId =
-                      rawNodeId !== undefined && rawNodeId !== '' && rawNodeId !== 'local'
-                        ? rawNodeId
-                        : null
-                    return (
-                      <DropdownMenuItem
-                        key={standing.profileId}
-                        className="agent-standby-profile-item"
-                        data-profile-id={standing.profileId}
-                        data-active={selected ? 'true' : undefined}
-                        aria-checked={selected}
-                        onSelect={() => handleSwitchProfile(standing.profileId)}
-                      >
-                        <span className="pane-more-item-label">
-                          <HelmxIcon name="bot" size={13} />
-                          <span className="agent-standby-profile-item-label">{standing.label}</span>
-                          {remoteNodeId !== null ? <RemoteNodeTag nodeId={remoteNodeId} /> : null}
-                        </span>
-                        {selected ? (
-                          <HelmxIcon name="check" size={12} className="agent-standby-profile-item-check" />
-                        ) : null}
-                      </DropdownMenuItem>
-                    )
-                  })}
-                </DropdownMenuContent>
-              </DropdownMenuPortal>
-            </DropdownMenu>
-          ) : (
-            <span className="pane-title">{label}</span>
-          )}
+          <span className="pane-title">{label}</span>
           <span className="pane-cwd-subtitle">
             <span className="env-subtitle-full">{t('composer.standby.newTopic')}</span>
           </span>
@@ -613,7 +567,17 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         ) : (
           <>
             <div className="agent-standby-intro">
-              <span className="agent-standby-intro-name">{label}</span>
+              <StandbyProfilePicker
+                profileId={profileId}
+                label={label}
+                remoteNodeId={currentRemoteNodeId}
+                options={standbyProfileOptions}
+                canSwitch={canSwitchProfile}
+                panel={panel}
+                onSelectProfile={handleSwitchProfile}
+                onReturnFocus={returnFocusToStandbyTextarea}
+                onFallbackFocusComposer={focusStandbyTextareaFallback}
+              />
               <span className="agent-standby-intro-hint">{t('composer.standby.introHint')}</span>
             </div>
             {showZeroModelCta ? (
@@ -654,6 +618,12 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
             ) : null}
             {!showZeroModelCta ? (
               <div className="agent-standby-shortcuts" aria-label={t('composer.standby.shortcutsAria')}>
+                {canSwitchProfile ? (
+                  <span className="agent-standby-shortcut-item">
+                    <kbd className="kbd-hint">{formatModShiftShortcut('O')}</kbd>
+                    <span>{t('composer.standby.shortcutProfile')}</span>
+                  </span>
+                ) : null}
                 <span className="agent-standby-shortcut-item">
                   <kbd className="kbd-hint">{formatModShortcut('K')}</kbd>
                   <span>{t('composer.standby.shortcutSearch')}</span>
