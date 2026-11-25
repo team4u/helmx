@@ -21,12 +21,15 @@ import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { HelmxError, clientNpmRootsOf } from '@helmx/protocol'
+import { HelmxError, clientNpmRootsOf, type PackageManagerHost } from '@helmx/protocol'
 import {
   buildPluginClientBundleDir,
   clearClientCompilerMemoryCache,
   compilePluginClientModule,
   createPluginBuildProvider,
+  PluginPackageManager,
+  PluginPackageManagerStore,
+  type PackageRunner,
 } from '@helmx/plugin-build'
 import {
   assertExternalDefinition,
@@ -35,10 +38,9 @@ import {
   resolvePluginEntry,
   verifyDeclaredPrebuiltDir,
 } from '../src/plugins/external-loader.js'
+import { externalPluginsDir } from '../src/plugins/plugin-dir-name.js'
 import { readHelmxClientDependencies } from '../src/plugins/plugin-manifest.js'
 import { doctorPluginDir } from '../src/plugins/plugin-doctor.js'
-import { PluginPackageManager, type PackageRunner } from '../src/plugins/package-manager.js'
-import { PluginPackageManagerStore } from '../src/plugins/package-store.js'
 import { ConfigService } from '../src/services/config.js'
 import { cleanupDir, makePluginSummary, makeTempDir, useTempDir } from './helpers.js'
 
@@ -356,28 +358,33 @@ interface NpmCall {
 }
 
 function makeTestPackageManager(dataDir: string, pluginId: string, runner: PackageRunner): PluginPackageManager {
+  const host: PackageManagerHost = {
+    async registerManagedPlugin() {
+      return { summary: makePluginSummary({ id: pluginId, name: 'x', enabled: false }), pluginId }
+    },
+    async enableManagedPlugin() {
+      throw new HelmxError('unused', 'this test does not enable', 500)
+    },
+    assertManagedPluginUpdateSafe() {},
+    async updateManagedPlugin() {
+      return { summary: makePluginSummary({ id: pluginId, name: 'x', enabled: false }) }
+    },
+    notifyManagedPluginChanged() {},
+    async removeManagedPlugin() {
+      return { wasEnabled: false }
+    },
+    async purgePluginPersistentData() {},
+    listSummaries: () => [],
+    doctorDir: doctorPluginDir,
+    verifyPrebuiltDir: verifyDeclaredPrebuiltDir,
+    readClientDependencies: readHelmxClientDependencies,
+    externalPluginsDir,
+  }
   return new PluginPackageManager({
     dataDir,
     cwd: workDir,
     store: new PluginPackageManagerStore(new ConfigService(dataDir)),
-    host: {
-      async registerManagedPlugin() {
-        return { summary: makePluginSummary({ id: pluginId, name: 'x', enabled: false }), pluginId }
-      },
-      async enableManagedPlugin() {
-        throw new HelmxError('unused', 'this test does not enable', 500)
-      },
-      assertManagedPluginUpdateSafe() {},
-      async updateManagedPlugin() {
-        return { summary: makePluginSummary({ id: pluginId, name: 'x', enabled: false }) }
-      },
-      notifyManagedPluginChanged() {},
-      async removeManagedPlugin() {
-        return { wasEnabled: false }
-      },
-      async purgePluginPersistentData() {},
-      listSummaries: () => [],
-    },
+    host,
     runner,
   })
 }

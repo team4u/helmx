@@ -15,6 +15,7 @@ import type {
   ConversationSummary,
   ModelsChangedEvent,
   PluginBuildProvider,
+  PluginPackageManagerProvider,
   TurnSettledPayload,
 } from '@helmx/protocol'
 import { HelmxError, isPluginSummaryActive } from '@helmx/protocol'
@@ -69,6 +70,8 @@ export interface RuntimeServicesInit extends BootstrappedKernelContext {
   externalSkillRoots?: readonly string[]
   /** Plugin build port (`KernelBootOptions.buildProvider` passthrough; Hub injects default implementation). */
   buildProvider?: PluginBuildProvider
+  /** Managed plugin package manager provider (`KernelBootOptions.packageManagerProvider` passthrough; Hub injects default). */
+  packageManagerProvider?: PluginPackageManagerProvider
   nodeUpgradeTimeoutMs: number
 }
 

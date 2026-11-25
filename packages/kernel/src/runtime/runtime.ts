@@ -58,8 +58,6 @@ import {
   SkillService,
 } from '../services/index.js'
 import { PluginHost } from '../plugins/index.js'
-import { PluginPackageManager } from '../plugins/package-manager.js'
-import { PluginPackageManagerStore } from '../plugins/package-store.js'
 import type { EnvFabric } from '../env/index.js'
 import { NodeForwardService, type NodeForwardEvent, type NodeForwardInput, type NodeForwardSession } from '../env/forward.js'
 import type { EventHub, SessionDocEventHub } from './events.js'
@@ -171,6 +169,7 @@ export class KernelRuntime {
       providers: options.providers,
       externalSkillRoots: options.externalSkillRoots,
       buildProvider: options.buildProvider,
+      packageManagerProvider: options.packageManagerProvider,
       nodeUpgradeTimeoutMs: options.nodeUpgradeTimeoutMs ?? 120_000,
     })
     try {
@@ -286,6 +285,7 @@ export class KernelRuntime {
     await this.svc.pluginConfig.load()
     this.pluginHost = new PluginHost({
       dataDir: this.dataDir,
+      cwd: this.init.cwd,
       deferServices: true,
       redactText: (text) => this.stashService.redact(text),
       providers: {
@@ -297,22 +297,13 @@ export class KernelRuntime {
       sessionDocs: createPluginSessionDocStore(this.store),
       kv: this.kvStore,
       config: this.svc.pluginConfig,
+      packagesConfig: this.svc.configSvc,
       buildProvider: this.init.buildProvider,
+      packageManagerProvider: this.init.packageManagerProvider,
     })
     this.modelsRegistry.bindPluginHost(this.pluginHost)
-    // Warm managed package install records (`config.json` `pluginPackages`; throws on corruption) before attaching manager.
-    const packageStore = new PluginPackageManagerStore(this.svc.configSvc)
-    await packageStore.load()
-    this.pluginHost.attachPackageManager(
-      new PluginPackageManager({
-        dataDir: this.dataDir,
-        cwd: this.init.cwd,
-        store: packageStore,
-        host: this.pluginHost.asPackageManagerHost(),
-        buildProvider: this.init.buildProvider,
-      }),
-      packageStore,
-    )
+    // Warm managed package install records (`config.json` `pluginPackages`; throws on corruption) when wired.
+    await this.pluginHost.loadPackageManager()
 
     const modelEpochBeforeRecover = this.modelsRegistry.alignmentEpoch
     const profileEpochBeforeRecover = this.svc.profilesSvc.mutationEpoch

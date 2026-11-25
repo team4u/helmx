@@ -1,5 +1,5 @@
 import { hubVersion, KernelRuntime, loadExternalPlugins } from '@helmx/kernel';
-import { createPluginBuildProvider } from '@helmx/plugin-build';
+import { createPluginBuildProvider, createPluginPackageManager } from '@helmx/plugin-build';
 import { createProfilePlugin } from '@helmx/plugins/profile';
 import { createWorkflowPlugin } from '@helmx/plugins/workflow';
 import { createWorktreePlugin } from '@helmx/plugins/worktree';
@@ -36,9 +36,11 @@ export type HelmxOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open
 
 /** Composition root selects plugins, default enabled states, and Hub-level product policies (like automatic node version-follow). */
 export async function createHelmx(options: HelmxOptions = {}) {
-  // Default product composition injects the plugin build provider (`client.tsx` compilation + external TS transpilation);
-  // callers may override via `options.buildProvider`. The kernel itself does not bundle esbuild (separating mechanism from
-  // tooling) and explicitly rejects client UI / TS plugins when unwired (`unsupported_client_build`, etc.).
+  // Default product composition injects the plugin build provider (`client.tsx` compilation + external TS transpilation)
+  // and the plugin package manager (`npm`/`git`/local install, update, remove); callers may override via
+  // `options.buildProvider` / `options.packageManagerProvider`. The kernel itself does not bundle esbuild or a package
+  // installer (separating mechanism from tooling) and explicitly rejects unwired capabilities (`unsupported_client_build`,
+  // `unsupported_package_manager`, etc.).
   const {
     autoStart = true,
     autoUpgradeNodes,
@@ -48,6 +50,7 @@ export async function createHelmx(options: HelmxOptions = {}) {
   const kernel = await KernelRuntime.open({
     ...kernelOptions,
     buildProvider: options.buildProvider ?? createPluginBuildProvider(),
+    packageManagerProvider: options.packageManagerProvider ?? createPluginPackageManager,
     autoResume: false,
   });
   const autoUpgrade = new NodeAutoUpgradeCoordinator({

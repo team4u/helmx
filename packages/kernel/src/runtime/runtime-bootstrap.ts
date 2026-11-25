@@ -12,9 +12,8 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Models, ModelsStore, Provider } from '@earendil-works/pi-ai'
 import { Harness, createRegistry, type Registry, type SessionEnd } from '@earendil-works/pi-durable'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, type PluginBuildProvider, type PluginPackageManagerProvider } from '@helmx/protocol'
 import { CredentialService, ProviderService, ensureDataDir, resolveDataDir } from '../services/index.js'
-import type { PluginBuildProvider } from '@helmx/protocol'
 import {
   createDiagnosticEmitter,
   type KernelDiagnosticEmitter,
@@ -59,6 +58,12 @@ export interface KernelBootOptions {
    * Rejects explicitly when missing (`unsupported_client_build` / `unsupported_backend_ts_build`).
    */
   buildProvider?: PluginBuildProvider
+  /**
+   * Managed plugin package manager provider (`npm`/`git`/local install, update, remove): injected with
+   * default implementation (`@helmx/plugin-build` `createPluginPackageManager`) by the composition root (`hub`);
+   * kernel carries no package installer. Rejects explicitly when missing (`501 unsupported_package_manager`).
+   */
+  packageManagerProvider?: PluginPackageManagerProvider
   /** Optional diagnostic sink (receives redacted internal errors/warnings; defaults to `console.error`). */
   onDiagnostic?: KernelDiagnosticSink
 }
