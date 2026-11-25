@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.1 (2026-11-25)
+
+### 修复
+
+- **节点 npm 自升级路径拼接错误**：修复 `@helmx/env-io` 中 `stageViaNpm` 将 `resolveLayoutEntries` 返回的绝对路径直接当相对路径返回给 `stageRelease` 的问题——此前所有平台首次经 npm 暂存节点版本时都会二次拼接路径并失败（Windows 上尤为明显）。现统一转换为相对于暂存根目录的相对路径，并在边界处以 `resolveInside` 校验；补充覆盖真实 `tar` 打包与离线 `npm install` 全链路的回归测试。
+
 ## v0.3.0 (2026-11-25)
 
 ### 节点与升级
