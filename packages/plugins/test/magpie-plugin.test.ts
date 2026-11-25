@@ -36,13 +36,14 @@ import {
   type PluginProviderPort,
 } from '@helmx/kernel'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
-import { createMagpiePlugin } from '../src/magpie.js'
+import { createMagpiePlugin, MAGPIE_SKILL_ID } from '../src/magpie.js'
 import { compilePluginClientModule, createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   MemoryConfigStore,
   MemoryDocStore,
   deferred,
   makeConversationSummary,
+  makeFauxProvider,
   waitFor as baseWaitFor,
 } from './helpers/plugin-test-env.js'
 import {
@@ -1334,6 +1335,71 @@ test('magpie27: refresh(onlyIfChanged / full) 在途切网关拒 409 且不向�
     )
   } finally {
     await env.close()
+  }
+})
+
+test('magpie28: 受管技能 magpie 启动自举、停用即时消失（零幻影提示词）与重新启用恢复', { timeout: 60_000 }, async () => {
+  const { createHelmx } = await import('../../hub/src/app.js')
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-magpie-skill-'))
+  const backends = new Map<string, FakeBackend>([
+    [new URL(DEFAULT_MAGPIE_ROOT).origin, { models: CATALOG, quotas: QUOTAS }],
+  ])
+  const fetchMock = installFetchMock(backends)
+  const faux = makeFauxProvider()
+  let app: Awaited<ReturnType<typeof createHelmx>> | undefined
+  try {
+    app = await createHelmx({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      cwd: dataDir,
+      model: 'faux/faux-1',
+      providers: [faux.provider],
+    })
+    const { kernel } = app
+    const skills = await kernel.skills.list()
+    const magpieSkill = skills.find((s) => s.id === MAGPIE_SKILL_ID)
+    assert.ok(magpieSkill, 'builtin:magpie 启动应自举受管技能 magpie')
+    assert.equal(magpieSkill.managedByPlugin, MAGPIE)
+
+    const skillMd = await kernel.skills.readFile(MAGPIE_SKILL_ID)
+    assert.ok(skillMd.includes('managedByPlugin: builtin:magpie'))
+    for (const actionId of ['status', 'quota', 'refresh']) {
+      assert.ok(skillMd.includes(`builtin:magpie.${actionId}`), `magpie SKILL.md 应涵盖 builtin:magpie.${actionId}`)
+    }
+
+    const readSkillsSection = async () => {
+      const res = await kernel.plugins.runHook('before_turn', {
+        conversation: kernel.conversations.getConversation(1),
+        inputs: [],
+        sections: [],
+        tools: [],
+        messages: [],
+      })
+      assert.equal(res.action, 'transform')
+      return res.value.sections.find((s) => s.id === 'profile.skills')?.text ?? ''
+    }
+
+    assert.ok((await readSkillsSection()).includes('id="magpie"'), '启用时 <available_skills> 应包含 magpie')
+    const loaded = (await kernel.plugins.executeTool(
+      'load_skill',
+      { skillId: MAGPIE_SKILL_ID },
+      { conversationId: 1 },
+    )) as { text: string }
+    assert.ok(loaded.text.includes('# Magpie Dynamic Model Gateway'))
+
+    await kernel.plugins.disable(MAGPIE)
+    assert.equal((await readSkillsSection()).includes('id="magpie"'), false, '停用后 <available_skills> 不得残留 magpie 技能')
+    await assert.rejects(
+      () => kernel.plugins.executeTool('load_skill', { skillId: MAGPIE_SKILL_ID }, { conversationId: 1 }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available' && err.status === 403,
+    )
+
+    await kernel.plugins.enable(MAGPIE)
+    assert.ok((await readSkillsSection()).includes('id="magpie"'), '重新启用后 magpie 技能应恢复')
+  } finally {
+    await app?.close().catch(() => {})
+    fetchMock.restore()
+    rmSync(dataDir, { recursive: true, force: true })
   }
 })
 

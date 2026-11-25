@@ -6,7 +6,7 @@ managedByPlugin: builtin:workflow
 
 # Workflow Orchestration
 
-Use `builtin:workflow` for focused task delegation and deterministic multi-agent pipelines where the execution graph is known up front and branches pass structured results rather than negotiating peer-to-peer. The plugin owns the tools, actions, run ledger, background reports, and recovery semantics described here; managed Git worktrees (`isolation: "worktree"`, `cleanup_worktree`, the `helmx worktrees` CLI) are owned by the sibling `builtin:worktree` plugin and stay available while it is enabled.
+Use `builtin:workflow` for focused task delegation and deterministic multi-agent pipelines where the execution graph is known up front and branches pass structured results rather than negotiating peer-to-peer. The plugin owns the tools, actions, run ledger, background reports, and recovery semantics described here; when `isolation: "worktree"` is used and the sibling `builtin:worktree` plugin is enabled, load the `worktree` skill via `load_skill` for worktree inspection and cleanup.
 
 ## Choose the execution surface
 
@@ -14,8 +14,8 @@ Use `builtin:workflow` for focused task delegation and deterministic multi-agent
 - **Use `subagent`** for **one** self-contained delegated task (focused research, blind review, or an isolated slice with a `gate`). It returns one business result plus independent execution metadata without script or board overhead.
 - **Use `SubagentWorkflow`** when the topology can be written as a deterministic JavaScript graph up front: fan-out `parallel` checks where branches do not talk to each other, staged `pipeline` passes, strict output `schema` / `gate` verification, reusable saved definitions, or `resumeFromRunId` ledger replay. Prefer the native tool in a conversation (and use this, not peer boards, when orchestrating inside a child or automation-owned session); use the CLI for terminal or scheduled operation.
 - **Prefer peer blackboard collaboration (`swarm`, if available in `<available_skills>`)** instead of `SubagentWorkflow` in a top-level human conversation when peers must hand off work back and forth across multiple review/fix rounds, negotiate cross-slice boundaries live, or reshape the squad mid-flight.
-- **Use `cleanup_worktree`** only for a registered managed worktree (available as a direct tool whenever managed worktrees are active). Inspect or merge first via `run_action({ actionId: "builtin:worktree.list_worktrees", input: {} })` / `run_action({ actionId: "builtin:worktree.inspect_worktree", input: { worktreeId } })`; never invent a path, branch, or completion result.
-- **Use `run_action`** for workflow or worktree actions (`builtin:workflow.{list,get,save,delete,runs,inspect,abort,run,steer,resume_failed}`, `builtin:worktree.{list_worktrees,inspect_worktree}`). Call `run_action({ actionId, describe: true })` before using an unfamiliar action so nested schemas are read without side effects.
+- **Managed worktrees (`worktree`, if available in `<available_skills>`)**: when using `isolation: "worktree"`, load the `worktree` skill via `load_skill` for managed worktree inspection, merge checks, and safe cleanup rules; never invent a path, branch, or completion result.
+- **Use `run_action`** for workflow actions (`builtin:workflow.{list,get,save,delete,runs,inspect,abort,run,steer,resume_failed}`). Call `run_action({ actionId, describe: true })` before using an unfamiliar action so nested schemas are read without side effects.
 
 ## Operating rules
 
@@ -32,7 +32,7 @@ Use `builtin:workflow` for focused task delegation and deterministic multi-agent
 
 - Give concurrent code-writing agents `isolation: "worktree"` and non-overlapping ownership. Keep the worktree until its diff has been inspected and merged or deliberately retained.
 - Use `gate` for a real verification command in the agent's effective workspace. A non-zero exit is a failed node, not a reason to fabricate a pass.
-- After merging, call `cleanup_worktree` with the actual `worktreeId` or the exact registered selector. `force` does not bypass occupancy, ownership, process-use, or uncertain execution checks. Omit `allowUnverifiedUsage` by default; only pass `allowUnverifiedUsage: true` after receiving `worktree_usage_unverifiable` on non-Linux nodes once you confirm no sub-session or background process occupies the directory.
+- When `isolation: "worktree"` is used and the `worktree` skill is available in `<available_skills>`, load `worktree` via `load_skill` for inspection, merge checks, and safe cleanup rules; never invent a path, branch, or completion result.
 
 ## Saved definitions and recovery
 

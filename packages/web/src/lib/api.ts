@@ -11,6 +11,7 @@ import type {
   ConversationForkRequest,
   ConversationInit,
   ConversationInputResult,
+  ConversationOwnership,
   ConversationPatch,
   ConversationSearchOptions,
   ConversationStatus,
@@ -180,6 +181,9 @@ export interface ConversationListFilter {
   profileId?: string
   tag?: string
   status?: ConversationStatus
+  ownedBy?: ConversationOwnership
+  all?: boolean
+  parent?: number
 }
 
 export const conversationsApi = {
@@ -188,6 +192,9 @@ export const conversationsApi = {
     if (filter?.profileId) params.set('profileId', filter.profileId)
     if (filter?.tag) params.set('tag', filter.tag)
     if (filter?.status) params.set('status', filter.status)
+    if (filter?.ownedBy !== undefined) params.set('ownedBy', filter.ownedBy)
+    if (filter?.all !== undefined) params.set('all', filter.all ? '1' : '0')
+    if (filter?.parent !== undefined) params.set('parent', String(filter.parent))
     const qs = params.toString()
     return apiRequest<ConversationSummary[]>('GET', `/api/conversations${qs ? `?${qs}` : ''}`, undefined, opts?.signal)
   },
@@ -598,8 +605,11 @@ export const assetsApi = {
     }),
   listModelProviders: (opts?: { signal?: AbortSignal }) =>
     apiRequest<ModelProviderSummary[]>('GET', '/api/models/providers', undefined, opts?.signal),
-  refreshModels: (providers?: string[]) =>
-    apiRequest<ModelProvidersRefreshResult>('POST', '/api/models/refresh', providers && providers.length > 0 ? { providers } : {}),
+  refreshModels: (providers?: string[], opts?: { force?: boolean }) =>
+    apiRequest<ModelProvidersRefreshResult>('POST', '/api/models/refresh', {
+      ...(providers && providers.length > 0 ? { providers } : {}),
+      ...(opts?.force !== undefined ? { force: opts.force } : {}),
+    }),
   setModelFilter: (body: SetModelFilterBody) =>
     apiRequest<{ ok: boolean; catalog: ModelCatalogInfo }>('PUT', '/api/models/filter', body),
 
@@ -699,7 +709,7 @@ export const pluginsApi = {
 
 export type SearchQueryOptions = Pick<
   ConversationSearchOptions,
-  'profileId' | 'ownedBy' | 'topLevelOnly' | 'limit'
+  'profileId' | 'ownedBy' | 'topLevelOnly' | 'limit' | 'maxPerConversation'
 > & {
   signal?: AbortSignal
 }
@@ -718,6 +728,9 @@ export const searchApi = {
     }
     if (opts?.limit !== undefined) {
       params.push(`limit=${encodeURIComponent(String(opts.limit))}`)
+    }
+    if (opts?.maxPerConversation !== undefined) {
+      params.push(`maxPerConversation=${encodeURIComponent(String(opts.maxPerConversation))}`)
     }
     return apiRequest<SearchHit[]>('GET', `/api/search?${params.join('&')}`, undefined, opts?.signal)
   },

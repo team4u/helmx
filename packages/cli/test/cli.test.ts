@@ -11,6 +11,8 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
+import { REQUEST_SCHEMAS } from '@helmx/protocol'
+import { coreCommands, type CommandSpec } from '../src/commands/index.js'
 import { updateCliCredentials } from '../src/credentials.js'
 import { CliError } from '../src/errors.js'
 import { DEFAULT_HUB_URL, resolveEndpoint } from '../src/hub-client.js'
@@ -224,6 +226,21 @@ test('conversations create/send/abort/update/delete paths, bodies, and --current
   const createHit = hub.recorded.hits.find((h) => h.path === '/api/conversations')!
   assert.deepEqual(createHit.body, { title: 'task', tags: ['a', 'b'], model: 'openai/gpt' })
 
+  // --parent-conversation-id forwards parentConversationId and rejects invalid values client-side
+  const createdChild = await runCliCaptured(
+    ['conversations', 'create', '--title', 'child', '--parent-conversation-id', '7', '--json'],
+    env,
+  )
+  assert.equal(createdChild.code, 0, createdChild.err)
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, { title: 'child', parentConversationId: 7 })
+  const createHitsBeforeBadParent = hub.recorded.hits.length
+  for (const badParent of ['0', '-1', '1.5', 'abc', '9007199254740992']) {
+    const bad = await runCliCaptured(['conversations', 'create', '--parent-conversation-id', badParent, '--json'], env)
+    assert.equal(bad.code, 1, `expected rejection for --parent-conversation-id ${badParent}`)
+    assert.equal(parseCliError(bad).code, 'invalid_flag_value')
+  }
+  assert.equal(hub.recorded.hits.length, createHitsBeforeBadParent, 'invalid --parent-conversation-id must not hit Hub')
+
   const sent = await runCliCaptured(['send', '7', '你好 世界', '--when-busy', 'followUp', '--origin', 'agent', '--json'], env)
   assert.equal(sent.code, 0, sent.err)
   const sendHit = hub.recorded.hits.find((h) => h.path === '/api/conversations/7/input')!
@@ -241,6 +258,14 @@ test('conversations create/send/abort/update/delete paths, bodies, and --current
   assert.equal(updated.code, 0, updated.err)
   const patchHit = hub.recorded.hits.find((h) => h.method === 'PATCH')!
   assert.deepEqual(patchHit.body, { pinned: true, unread: false })
+
+  // --tags on conversations update supports comma-separated, JSON array, and empty-array clearing
+  const tagged = await runCliCaptured(['conversations', 'update', '7', '--tags', 'archived, review', '--json'], env)
+  assert.equal(tagged.code, 0, tagged.err)
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, { tags: ['archived', 'review'] })
+  const clearedTags = await runCliCaptured(['conversations', 'update', '7', '--tags', '[]', '--json'], env)
+  assert.equal(clearedTags.code, 0, clearedTags.err)
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, { tags: [] })
 
   // Empty --model clears model override (PATCH { model: '' }); CLI must support both forms
   const cleared = await runCliCaptured(['conversations', 'update', '7', '--model', '', '--json'], env)
@@ -581,20 +606,43 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
           },
         ],
       }),
+      'GET /api/search?q=hello%20world&profileId=worker&ownedBy=helmx&topLevelOnly=1&limit=10&maxPerConversation=3': () => ({
+        body: [
+          {
+            conversationId: 2,
+            entryId: 'entry:5',
+            title: 'Worker',
+            snippet: 'hello world worker',
+            highlights: [{ start: 0, end: 11 }],
+          },
+        ],
+      }),
       'GET /api/search?q=hello&ownedBy=human&limit=5': () => ({
+        body: [],
+      }),
+      'GET /api/search?q=hello&maxPerConversation=20': () => ({
         body: [],
       }),
       'GET /api/models': () => ({ body: { models: [{ provider: 'openai', modelId: 'gpt', available: true }, { provider: 'anthropic', modelId: 'sonnet', available: true }], thinkingLevels: {} } }),
       'GET /api/models/providers': () => ({ body: [{ id: 'deepseek', name: 'DeepSeek', modelCount: 2, authMethods: [{ type: 'api_key', label: 'API Key' }] }] }),
-      'POST /api/models/refresh': (body) => ({
-        body: {
-          providers: (body as { provider?: string }).provider !== undefined ? [(body as { provider: string }).provider] : [],
-          aborted: false,
-          errors: {},
-          models: [{ provider: 'magpie', modelId: 'magpie-1', available: true }],
-          providerCatalog: [],
-        },
-      }),
+      'POST /api/models/refresh': (body) => {
+        const payload = body as { provider?: string; providers?: string[]; force?: boolean }
+        const providers =
+          payload.providers !== undefined
+            ? payload.providers
+            : payload.provider !== undefined
+              ? [payload.provider]
+              : []
+        return {
+          body: {
+            providers,
+            aborted: false,
+            errors: {},
+            models: [{ provider: 'magpie', modelId: 'magpie-1', available: true }],
+            providerCatalog: [],
+          },
+        }
+      },
       'GET /api/plugins': () => ({ body: [makePluginSummary({ id: 'builtin:profile', name: 'assistant', locked: true })] }),
       'POST /api/plugins/builtin%3Aherdr/disable': () => ({ body: { ok: 1 } }),
       'GET /api/plugins/builtin%3Aherdr/config': () => ({ body: { values: { a: 1 }, schema: {} } }),
@@ -639,6 +687,34 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
   assert.equal(sHumanOwned.code, 0, sHumanOwned.err)
   assert.equal(hub.recorded.hits.at(-1)?.path, '/api/search?q=hello&ownedBy=human&limit=5')
 
+  const sMaxPerConvCombo = await runCliCaptured(
+    [
+      'search',
+      'hello',
+      'world',
+      '--profile',
+      'worker',
+      '--owned-by',
+      'helmx',
+      '--top-level',
+      '--limit',
+      '10',
+      '--max-per-conversation',
+      '3',
+      '--json',
+    ],
+    env,
+  )
+  assert.equal(sMaxPerConvCombo.code, 0, sMaxPerConvCombo.err)
+  assert.equal(
+    hub.recorded.hits.at(-1)?.path,
+    '/api/search?q=hello%20world&profileId=worker&ownedBy=helmx&topLevelOnly=1&limit=10&maxPerConversation=3',
+  )
+
+  const sMaxPerConvInline = await runCliCaptured(['search', 'hello', '--max-per-conversation=20', '--json'], env)
+  assert.equal(sMaxPerConvInline.code, 0, sMaxPerConvInline.err)
+  assert.equal(hub.recorded.hits.at(-1)?.path, '/api/search?q=hello&maxPerConversation=20')
+
   const searchHitsBeforeBad = hub.recorded.hits.length
   const badSearchCases: string[][] = [
     ['search', '--json'],
@@ -651,6 +727,12 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
     ['search', 'hello', '--limit', '101', '--json'],
     ['search', 'hello', '--limit', '1.5', '--json'],
     ['search', 'hello', '--limit', 'abc', '--json'],
+    ['search', 'hello', '--max-per-conversation', '0', '--json'],
+    ['search', 'hello', '--max-per-conversation', '-1', '--json'],
+    ['search', 'hello', '--max-per-conversation', '21', '--json'],
+    ['search', 'hello', '--max-per-conversation', '1.5', '--json'],
+    ['search', 'hello', '--max-per-conversation', 'abc', '--json'],
+    ['search', 'hello', '--max-per-conversation=', '--json'],
   ]
   for (const argv of badSearchCases) {
     const bad = await runCliCaptured(argv, env)
@@ -670,14 +752,50 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
   const refreshAll = await runCliCaptured(['models', 'refresh', '--json'], env)
   assert.equal(refreshAll.code, 0, refreshAll.err)
   assert.equal(hub.recorded.hits.at(-1)?.path, '/api/models/refresh')
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, {})
   assert.deepEqual(JSON.parse(refreshAll.out).providers, [])
 
   const refreshOne = await runCliCaptured(['models', 'refresh', '--provider', 'magpie', '--json'], env)
   assert.equal(refreshOne.code, 0, refreshOne.err)
   assert.equal(hub.recorded.hits.at(-1)?.path, '/api/models/refresh')
-  assert.deepEqual((hub.recorded.hits.at(-1)?.body as { provider?: string }).provider, 'magpie')
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, { provider: 'magpie' })
   assert.deepEqual(JSON.parse(refreshOne.out).providers, ['magpie'])
   assert.deepEqual(JSON.parse(refreshOne.out).models, [{ provider: 'magpie', modelId: 'magpie-1', available: true }])
+
+  const refreshManyCsv = await runCliCaptured(['models', 'refresh', '--providers', 'magpie, openrouter', '--force', '--json'], env)
+  assert.equal(refreshManyCsv.code, 0, refreshManyCsv.err)
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, { providers: ['magpie', 'openrouter'], force: true })
+  assert.deepEqual(JSON.parse(refreshManyCsv.out).providers, ['magpie', 'openrouter'])
+
+  const refreshManyJson = await runCliCaptured(['models', 'refresh', '--providers', '["magpie", "deepseek"]', '--force=false', '--json'], env)
+  assert.equal(refreshManyJson.code, 0, refreshManyJson.err)
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, { providers: ['magpie', 'deepseek'], force: false })
+
+  const refreshForceOnly = await runCliCaptured(['models', 'refresh', '--force', '--json'], env)
+  assert.equal(refreshForceOnly.code, 0, refreshForceOnly.err)
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, { force: true })
+
+  const refreshHitsBeforeBad = hub.recorded.hits.length
+  const badRefreshCases: Array<[string[], string]> = [
+    [['models', 'refresh', '--provider', 'magpie', '--providers', 'magpie,openai', '--json'], 'conflicting_flags'],
+    [['models', 'refresh', '--provider', '', '--json'], 'invalid_flag_value'],
+    [['models', 'refresh', '--provider', '   ', '--json'], 'invalid_flag_value'],
+    [['models', 'refresh', '--providers', '', '--json'], 'invalid_flag_value'],
+    [['models', 'refresh', '--providers', '   ', '--json'], 'invalid_flag_value'],
+    [['models', 'refresh', '--providers', 'magpie,,openai', '--json'], 'invalid_flag_value'],
+    [['models', 'refresh', '--providers', 'magpie,', '--json'], 'invalid_flag_value'],
+    [['models', 'refresh', '--providers', '[]', '--json'], 'invalid_flag_value'],
+    [['models', 'refresh', '--providers', '[""]', '--json'], 'invalid_flag_value'],
+    [['models', 'refresh', '--providers', '["magpie", "  "]', '--json'], 'invalid_flag_value'],
+    [['models', 'refresh', '--providers', '[123]', '--json'], 'invalid_flag_value'],
+    [['models', 'refresh', '--providers', '[invalid', '--json'], 'invalid_flag_value'],
+  ]
+  for (const [argv, expectedCode] of badRefreshCases) {
+    const bad = await runCliCaptured(argv, env)
+    assert.equal(bad.code, 1, `expected failure for argv: ${argv.join(' ')}`)
+    assert.equal(parseCliError(bad).code, expectedCode, `unexpected error code for argv: ${argv.join(' ')}`)
+  }
+  assert.equal(hub.recorded.hits.length, refreshHitsBeforeBad, 'invalid models refresh flags must reject client-side without hitting Hub')
 
   const p = await runCliCaptured(['plugins', 'list', '--json'], env)
   assert.equal(p.code, 0, p.err)
@@ -2400,4 +2518,391 @@ test('conversations watch and asks list: surface timing honestly in human mode a
   assert.equal(parsedAsks.length, 2)
   assert.deepEqual(parsedAsks[0]?.['title'], { en: 'Confirm prod deploy', 'zh-CN': '确认生产发布' })
   assert.equal(parsedAsks[0]?.['createdAt'], baseNow - 75_000)
+})
+
+// ---------------------------------------------------------------------------
+// Automated Schema <-> CLI Contract Parity Guard
+// ---------------------------------------------------------------------------
+
+interface SchemaCliMapping {
+  /** Target static CLI command path in `coreCommands()`. */
+  command: readonly string[]
+  /** Explicit `schemaProperty -> cliFlagName` aliases when CLI flag differs from `camelToKebab(prop)`. */
+  aliases?: Readonly<Record<string, string>>
+  /** Schema properties supplied via the command's positional argument syntax (`prop -> token in cmd.positional`). */
+  positionals?: Readonly<Record<string, string>>
+  /** Justified schema-only / non-flag fields (`prop -> reason`); fails if field is removed or gains a CLI flag. */
+  exempt?: Readonly<Record<string, string>>
+}
+
+function camelToKebab(name: string): string {
+  return name.replace(/[A-Z]/g, (ch) => `-${ch.toLowerCase()}`)
+}
+
+function extractSchemaPropertyNames(schema: unknown): string[] {
+  if (schema === null || typeof schema !== 'object') return []
+  const props = (schema as { properties?: unknown }).properties
+  if (props === null || typeof props !== 'object' || Array.isArray(props)) return []
+  return Object.keys(props as Record<string, unknown>)
+}
+
+/**
+ * Bidirectional parity validator between `@helmx/protocol` `REQUEST_SCHEMAS` and `@helmx/cli` `coreCommands()`:
+ * - Forward: every schema and every property in each mapped schema must have a verified CLI flag/positional or explicit exemption.
+ * - Reverse: rejects stale schema entries, stale aliases/positionals, and stale exemptions (removed field or now has a CLI flag).
+ */
+function collectSchemaCliParityErrors(
+  schemas: Readonly<Record<string, unknown>>,
+  commands: readonly CommandSpec[],
+  mappings: Readonly<Record<string, SchemaCliMapping>>,
+  nonCoreSchemas: Readonly<Record<string, string>>,
+): string[] {
+  const errors: string[] = []
+  const commandByPath = new Map(commands.map((cmd) => [cmd.path.join(' '), cmd] as const))
+  const schemaNames = new Set(Object.keys(schemas))
+
+  for (const schemaName of schemaNames) {
+    const inMappings = Object.prototype.hasOwnProperty.call(mappings, schemaName)
+    const inNonCore = Object.prototype.hasOwnProperty.call(nonCoreSchemas, schemaName)
+    if (!inMappings && !inNonCore) {
+      errors.push(`schema "${schemaName}" is missing from SCHEMA_CLI_MAPPINGS and NON_CORE_CLI_SCHEMAS`)
+    } else if (inMappings && inNonCore) {
+      errors.push(`schema "${schemaName}" cannot appear in both SCHEMA_CLI_MAPPINGS and NON_CORE_CLI_SCHEMAS`)
+    }
+  }
+
+  for (const [schemaName, reason] of Object.entries(nonCoreSchemas)) {
+    if (!schemaNames.has(schemaName)) {
+      errors.push(`stale NON_CORE_CLI_SCHEMAS entry "${schemaName}" no longer exists in REQUEST_SCHEMAS`)
+    }
+    if (reason.trim() === '') {
+      errors.push(`NON_CORE_CLI_SCHEMAS["${schemaName}"] must provide a non-empty justification`)
+    }
+  }
+
+  for (const [schemaName, mapping] of Object.entries(mappings)) {
+    if (!schemaNames.has(schemaName)) {
+      errors.push(`stale SCHEMA_CLI_MAPPINGS entry "${schemaName}" no longer exists in REQUEST_SCHEMAS`)
+      continue
+    }
+    const cmdPath = mapping.command.join(' ')
+    const cmd = commandByPath.get(cmdPath)
+    if (cmd === undefined) {
+      errors.push(`schema "${schemaName}" maps to unknown CLI command "helmx ${cmdPath}"`)
+      continue
+    }
+    const flagNames = new Set((cmd.flags ?? []).map((f) => f.name))
+    const props = extractSchemaPropertyNames(schemas[schemaName])
+    const propSet = new Set(props)
+    if (props.length === 0) {
+      errors.push(`schema "${schemaName}" has no inspectable object properties`)
+      continue
+    }
+
+    const aliases = mapping.aliases ?? {}
+    const positionals = mapping.positionals ?? {}
+    const exempt = mapping.exempt ?? {}
+
+    for (const [prop, flag] of Object.entries(aliases)) {
+      if (!propSet.has(prop)) {
+        errors.push(`stale alias "${schemaName}.${prop} -> --${flag}": property does not exist in schema`)
+      }
+      if (!flagNames.has(flag)) {
+        errors.push(`invalid alias "${schemaName}.${prop} -> --${flag}": flag does not exist on "helmx ${cmdPath}"`)
+      }
+      if (flag === camelToKebab(prop)) {
+        errors.push(`redundant alias "${schemaName}.${prop} -> --${flag}": matches automatic camelCase->kebab-case`)
+      }
+      if (Object.prototype.hasOwnProperty.call(positionals, prop) || Object.prototype.hasOwnProperty.call(exempt, prop)) {
+        errors.push(`duplicate mapping for "${schemaName}.${prop}": listed in aliases as well as positionals/exempt`)
+      }
+    }
+
+    for (const [prop, token] of Object.entries(positionals)) {
+      if (!propSet.has(prop)) {
+        errors.push(`stale positional "${schemaName}.${prop}": property does not exist in schema`)
+      }
+      if (token.trim() === '' || cmd.positional === undefined || !cmd.positional.includes(token)) {
+        errors.push(`invalid positional "${schemaName}.${prop}": token "${token}" not found in "helmx ${cmdPath}" positional "${cmd.positional ?? '(none)'}"`)
+      }
+      if (Object.prototype.hasOwnProperty.call(exempt, prop)) {
+        errors.push(`duplicate mapping for "${schemaName}.${prop}": listed in both positionals and exempt`)
+      }
+    }
+
+    for (const [prop, reason] of Object.entries(exempt)) {
+      if (reason.trim() === '') {
+        errors.push(`empty exemption reason for "${schemaName}.${prop}"`)
+      }
+      if (!propSet.has(prop)) {
+        errors.push(`stale exemption "${schemaName}.${prop}": property no longer exists in schema`)
+        continue
+      }
+      const kebab = camelToKebab(prop)
+      if (flagNames.has(kebab)) {
+        errors.push(`stale exemption "${schemaName}.${prop}": matching CLI flag "--${kebab}" now exists on "helmx ${cmdPath}"`)
+      }
+    }
+
+    for (const prop of props) {
+      const kebab = camelToKebab(prop)
+      const covered =
+        flagNames.has(kebab) ||
+        Object.prototype.hasOwnProperty.call(aliases, prop) ||
+        Object.prototype.hasOwnProperty.call(positionals, prop) ||
+        Object.prototype.hasOwnProperty.call(exempt, prop)
+      if (!covered) {
+        errors.push(
+          `undocumented schema field "${schemaName}.${prop}": no "--${kebab}" flag, alias, positional, or exemption on "helmx ${cmdPath}"`,
+        )
+      }
+    }
+  }
+
+  return errors
+}
+
+const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
+  conversationInit: {
+    command: ['conversations', 'create'],
+    aliases: { nodeId: 'node' },
+  },
+  conversationPatch: {
+    command: ['conversations', 'update'],
+    aliases: { nodeId: 'node', thinkingLevel: 'thinking' },
+  },
+  conversationInput: {
+    command: ['send'],
+    aliases: { attachments: 'attach', replaceFromEntryId: 'replace-from' },
+    positionals: { text: '<text>' },
+  },
+  askAnswer: {
+    command: ['asks', 'answer'],
+  },
+  conversationReset: {
+    command: ['conversations', 'reset'],
+  },
+  conversationCompact: {
+    command: ['conversations', 'compact'],
+  },
+  conversationFork: {
+    command: ['conversations', 'fork'],
+  },
+  conversationWithdraw: {
+    command: ['conversations', 'withdraw'],
+  },
+  conversationBulkDelete: {
+    command: ['conversations', 'delete'],
+    positionals: { ids: '[id...]' },
+  },
+  conversationSearchQuery: {
+    command: ['search'],
+    aliases: { profileId: 'profile', topLevelOnly: 'top-level' },
+    positionals: { q: '<query>' },
+  },
+  conversationListQuery: {
+    command: ['conversations', 'list'],
+    aliases: { profileId: 'profile', parentConversationId: 'parent' },
+    exempt: {
+      topLevelOnly: 'Derived server-side when --all and --parent are omitted.',
+    },
+  },
+  profileCreate: {
+    command: ['profiles', 'create'],
+    aliases: { nodeId: 'node', thinkingLevel: 'thinking' },
+    positionals: { id: '[id]' },
+    exempt: {
+      managedByPlugin: 'Plugin-managed ownership marker set by plugin registration (also accepted via --input JSON).',
+      tags: 'Supplied via --input <json> on profiles create; no dedicated semantic flag in profiles.ts.',
+    },
+  },
+  profileUpdate: {
+    command: ['profiles', 'update'],
+    aliases: { nodeId: 'node', thinkingLevel: 'thinking' },
+    positionals: { id: '<id>' },
+    exempt: {
+      managedByPlugin: 'Plugin-managed ownership marker set by plugin registration (also accepted via --input JSON).',
+      tags: 'Supplied via --input <json> on profiles update; no dedicated semantic flag in profiles.ts.',
+    },
+  },
+  providersPut: {
+    command: ['providers', 'set'],
+    aliases: { providers: 'input' },
+  },
+  credentialPut: {
+    command: ['credentials', 'set'],
+  },
+  pluginConfigPut: {
+    command: ['plugins', 'config'],
+    aliases: { values: 'input' },
+  },
+  pluginInstall: {
+    command: ['plugins', 'install'],
+    positionals: { source: '<source>' },
+  },
+  pluginDisable: {
+    command: ['plugins', 'disable'],
+  },
+  pluginUpdate: {
+    command: ['plugins', 'update'],
+  },
+  pluginDoctor: {
+    command: ['plugins', 'doctor'],
+  },
+  modelsDefaultPut: {
+    command: ['models', 'default'],
+    aliases: {
+      model: 'set',
+      thinkingLevel: 'thinking',
+      compactionModel: 'compaction',
+      compactionThinkingLevel: 'compaction-thinking',
+      modelThinkingLevel: 'model-thinking',
+    },
+    exempt: {
+      modelThinkingLevels:
+        'Bulk full-map replacement used by Web settings form; CLI updates individual entries via --model-thinking provider/model=level.',
+    },
+  },
+  modelsFilterPut: {
+    command: ['models', 'filter'],
+    aliases: { disabledModels: 'disable' },
+  },
+  modelsRefresh: {
+    command: ['models', 'refresh'],
+  },
+  authPassword: {
+    command: ['login'],
+  },
+  nodeIssue: {
+    command: ['nodes', 'issue'],
+    positionals: { nodeId: '<nodeId>' },
+  },
+  nodeUpgrade: {
+    command: ['nodes', 'upgrade'],
+    aliases: { targetVersion: 'version', registryUrl: 'registry' },
+  },
+  nodeForward: {
+    command: ['nodes', 'forward'],
+    positionals: {
+      listenHost: '<[listenHost:]listenPort>',
+      listenPort: '<[listenHost:]listenPort>',
+      targetHost: '<[targetHost:]targetPort>',
+      targetPort: '<[targetHost:]targetPort>',
+    },
+  },
+  envExec: {
+    command: ['env', 'exec'],
+    aliases: { nodeId: 'node', conversationId: 'current', timeoutMs: 'timeout' },
+    positionals: { command: '<command...>' },
+    exempt: {
+      env: 'Environment overrides are passed inline in the remote shell command or via helmx api POST /api/env/exec.',
+    },
+  },
+}
+
+const NON_CORE_CLI_SCHEMAS: Readonly<Record<string, string>> = {
+  profileStarter: 'Nested item sub-schema inside profileCreate/profileUpdate.starters (not a standalone HTTP body).',
+  actionInvoke: 'Dispatched via dynamic plugin action CLI commands (POST /api/actions/:pluginId/:actionId), not static coreCommands().',
+}
+
+test('REQUEST_SCHEMAS <-> coreCommands() parity guard: bidirectional coverage with zero stale mappings or exemptions', { timeout: 60_000 }, () => {
+  const errors = collectSchemaCliParityErrors(
+    REQUEST_SCHEMAS,
+    coreCommands(),
+    SCHEMA_CLI_MAPPINGS,
+    NON_CORE_CLI_SCHEMAS,
+  )
+  assert.deepEqual(errors, [], `Schema <-> CLI contract parity drift detected:\n${errors.join('\n')}`)
+})
+
+test('REQUEST_SCHEMAS <-> coreCommands() parity guard self-test: catches both undocumented fields and stale exemptions/schemas', { timeout: 60_000 }, () => {
+  const sampleCmds: CommandSpec[] = [
+    {
+      path: ['demo', 'run'],
+      description: 'demo',
+      positional: '<target>',
+      flags: [
+        { name: 'alpha-flag', type: 'string' },
+        { name: 'short', type: 'string' },
+      ],
+      async run() {},
+    },
+  ]
+
+  // 1. Undocumented new property on a mapped schema fails
+  const missingFieldErrors = collectSchemaCliParityErrors(
+    { demoBody: { properties: { alphaFlag: {}, undocumentedField: {} } } },
+    sampleCmds,
+    { demoBody: { command: ['demo', 'run'] } },
+    {},
+  )
+  assert.ok(
+    missingFieldErrors.some((e) => e.includes('undocumented schema field "demoBody.undocumentedField"')),
+    `expected undocumented field error, got: ${missingFieldErrors.join('; ')}`,
+  )
+
+  // 2. Stale exemption for a removed schema property fails
+  const removedExemptErrors = collectSchemaCliParityErrors(
+    { demoBody: { properties: { alphaFlag: {} } } },
+    sampleCmds,
+    { demoBody: { command: ['demo', 'run'], exempt: { ghostField: 'removed from schema' } } },
+    {},
+  )
+  assert.ok(
+    removedExemptErrors.some((e) => e.includes('stale exemption "demoBody.ghostField"')),
+    `expected stale removed exemption error, got: ${removedExemptErrors.join('; ')}`,
+  )
+
+  // 3. Stale exemption for a property that now has a matching CLI flag fails
+  const coveredExemptErrors = collectSchemaCliParityErrors(
+    { demoBody: { properties: { alphaFlag: {} } } },
+    sampleCmds,
+    { demoBody: { command: ['demo', 'run'], exempt: { alphaFlag: 'now has --alpha-flag' } } },
+    {},
+  )
+  assert.ok(
+    coveredExemptErrors.some((e) => e.includes('stale exemption "demoBody.alphaFlag"') && e.includes('--alpha-flag')),
+    `expected stale covered exemption error, got: ${coveredExemptErrors.join('; ')}`,
+  )
+
+  // 4. Unmapped brand-new schema and stale schema mapping both fail
+  const schemaDriftErrors = collectSchemaCliParityErrors(
+    { demoBody: { properties: { alphaFlag: {} } }, brandNewSchema: { properties: { x: {} } } },
+    sampleCmds,
+    {
+      demoBody: { command: ['demo', 'run'] },
+      removedSchema: { command: ['demo', 'run'] },
+    },
+    {},
+  )
+  assert.ok(
+    schemaDriftErrors.some((e) => e.includes('schema "brandNewSchema" is missing')),
+    `expected unmapped schema error, got: ${schemaDriftErrors.join('; ')}`,
+  )
+  assert.ok(
+    schemaDriftErrors.some((e) => e.includes('stale SCHEMA_CLI_MAPPINGS entry "removedSchema"')),
+    `expected stale schema mapping error, got: ${schemaDriftErrors.join('; ')}`,
+  )
+
+  // 5. Invalid alias (non-existent CLI flag) and invalid positional token fail
+  const invalidAliasPosErrors = collectSchemaCliParityErrors(
+    { demoBody: { properties: { beta: {}, target: {} } } },
+    sampleCmds,
+    {
+      demoBody: {
+        command: ['demo', 'run'],
+        aliases: { beta: 'missing-flag' },
+        positionals: { target: '<wrong-token>' },
+      },
+    },
+    {},
+  )
+  assert.ok(
+    invalidAliasPosErrors.some((e) => e.includes('invalid alias "demoBody.beta -> --missing-flag"')),
+    `expected invalid alias error, got: ${invalidAliasPosErrors.join('; ')}`,
+  )
+  assert.ok(
+    invalidAliasPosErrors.some((e) => e.includes('invalid positional "demoBody.target"')),
+    `expected invalid positional error, got: ${invalidAliasPosErrors.join('; ')}`,
+  )
 })

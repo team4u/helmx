@@ -100,7 +100,7 @@ export interface ConversationSearchOptions {
   topLevelOnly?: boolean
   /** Maximum total hits returned (positive integer; HTTP boundary enforces `1..100`, default 20). */
   limit?: number
-  /** Maximum hits returned from any single conversation (positive integer; default 2). */
+  /** Maximum hits returned from any single conversation (positive integer `1..20`; default 2). */
   maxPerConversation?: number
 }
 

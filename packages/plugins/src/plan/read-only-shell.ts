@@ -317,6 +317,7 @@ const HELMX_VALUE_FLAGS: ReadonlySet<string> = new Set([
   'node-id',
   'cwd',
   'limit',
+  'max-per-conversation',
   'cursor',
   'parent',
   'path',

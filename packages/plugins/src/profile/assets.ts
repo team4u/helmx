@@ -25,6 +25,9 @@ export const HELMX_CLI_SKILL_ID = 'helmx-cli'
 /** 全栈微应用开发受管技能 ID（由常驻 builtin:profile 自举，面向标准 Screen 外部插件）。 */
 export const APP_BUILDER_SKILL_ID = 'app-builder'
 
+/** 跨角色会话检索与角色（Profile）管理受管技能 ID（由常驻 builtin:profile 自举）。 */
+export const PROFILE_SKILL_ID = 'profile'
+
 export { renderSkillTemplate }
 
 const skillVars: Record<string, string> = {
@@ -61,8 +64,24 @@ export const APP_BUILDER_SKILL_ASSET: PluginSkillAsset = loadManagedSkillAsset({
   transform: (raw) => renderSkillTemplate(raw, appBuilderSkillVars),
 })
 
+const profileSkillVars: Record<string, string> = {
+  SKILL_ID: PROFILE_SKILL_ID,
+  MANAGED_BY: PROFILE_MANAGED_BY,
+}
+
+/** 跨角色会话检索与角色管理技能资产：id + SKILL.md，由 builtin:profile 自举。 */
+export const PROFILE_SKILL_ASSET: PluginSkillAsset = loadManagedSkillAsset({
+  pluginId: PROFILE_MANAGED_BY,
+  skillId: PROFILE_SKILL_ID,
+  relativeDir: 'profile/assets/profile',
+  missingErrorCode: 'profile_managed_skill_missing',
+  transform: (raw) => renderSkillTemplate(raw, profileSkillVars),
+})
+
 export const HELMX_CLI_SKILL_MD = HELMX_CLI_SKILL_ASSET.skillMd
 
 export const HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD = HELMX_CLI_SKILL_ASSET.references!['skill-and-plugin-dev.md']!
 
 export const APP_BUILDER_SKILL_MD = APP_BUILDER_SKILL_ASSET.skillMd
+
+export const PROFILE_SKILL_MD = PROFILE_SKILL_ASSET.skillMd

@@ -64,7 +64,7 @@ import {
 import { extractWorktreeExecutionMeta } from '../src/contracts.js'
 import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/worktree/isolation.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
-import { createWorktreePlugin } from '../src/worktree.js'
+import { createWorktreePlugin, WORKTREE_SKILL_ID } from '../src/worktree.js'
 import { cleanupPresentationMetaSchema } from '../src/worktree/actions.js'
 import {
   resolveWorktreeContextSection,
@@ -79,6 +79,7 @@ import {
   createMemoryWorktreeKv,
   makeConversationSummary,
   makeFauxModels,
+  makeFauxProvider,
   MemoryDocStore,
   MemoryKvStore,
   type FauxProviderHandle,
@@ -3989,5 +3990,76 @@ describe('WorktreeStore KV 持久化契约（单条隔离 / >1000 分页遍历 /
     trackedStore.updateRecord('local:/wt/cached-1', (r) => ({ ...r, status: 'removed', removedAt: 20 }))
     assert.equal(trackedStore.hasActiveRecords(), false, '置为 removed 后 activeCount 即时归零')
     assert.equal(trackedStore.findById('local:/wt/cached-1')?.status, 'removed', 'removed 记录保留审计历史不按 TTL 静默删除')
+  })
+
+  it('受管技能 worktree：启动自举、停用即时消失无幻影提示，且 workflow 技能不硬编码 builtin:worktree 动作', { timeout: 60_000 }, async () => {
+    const { createHelmx } = await import('../../hub/src/app.js')
+    const dataDir = mkdtempSync(join(tmpdir(), 'helmx-worktree-skill-'))
+    const faux = makeFauxProvider()
+    const app = await createHelmx({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      cwd: dataDir,
+      model: 'faux/faux-1',
+      providers: [faux.provider],
+    })
+    try {
+      const { kernel } = app
+      const skills = await kernel.skills.list()
+      const wtSkill = skills.find((s) => s.id === WORKTREE_SKILL_ID)
+      assert.ok(wtSkill, 'builtin:worktree 启动应自举受管技能 worktree')
+      assert.equal(wtSkill.managedByPlugin, 'builtin:worktree')
+
+      const wtSkillMd = await kernel.skills.readFile(WORKTREE_SKILL_ID)
+      assert.ok(wtSkillMd.includes('managedByPlugin: builtin:worktree'))
+      assert.ok(wtSkillMd.includes('builtin:worktree.list_worktrees'))
+      assert.ok(wtSkillMd.includes('builtin:worktree.inspect_worktree'))
+      assert.ok(wtSkillMd.includes('cleanup_worktree'))
+      assert.ok(wtSkillMd.includes('rm -rf'))
+
+      // workflow 主技能不再硬编码 builtin:worktree.* 动作，改为条件引用 worktree 技能
+      const wfSkillMd = await kernel.skills.readFile('workflow')
+      assert.equal(wfSkillMd.includes('builtin:worktree.list_worktrees'), false, 'workflow/SKILL.md 不得硬编码 builtin:worktree.list_worktrees')
+      assert.equal(wfSkillMd.includes('builtin:worktree.inspect_worktree'), false, 'workflow/SKILL.md 不得硬编码 builtin:worktree.inspect_worktree')
+      assert.equal(wfSkillMd.includes('builtin:worktree.cleanup_worktree'), false, 'workflow/SKILL.md 不得硬编码 builtin:worktree.cleanup_worktree')
+      assert.ok(wfSkillMd.includes('load_skill'), 'workflow/SKILL.md 应引导按需加载 worktree 技能')
+
+      const readSkillsSection = async () => {
+        const res = await kernel.plugins.runHook('before_turn', {
+          conversation: kernel.conversations.getConversation(1),
+          inputs: [],
+          sections: [],
+          tools: [],
+          messages: [],
+        })
+        assert.equal(res.action, 'transform')
+        return res.value.sections.find((s) => s.id === 'profile.skills')?.text ?? ''
+      }
+
+      assert.ok((await readSkillsSection()).includes('id="worktree"'), '启用时 <available_skills> 应包含 worktree')
+      const loaded = (await kernel.plugins.executeTool(
+        'load_skill',
+        { skillId: WORKTREE_SKILL_ID },
+        { conversationId: 1 },
+      )) as { text: string }
+      assert.ok(loaded.text.includes('# Managed Git Worktrees'))
+
+      // 停用 builtin:worktree 后 worktree 技能即时消失且 load_skill 显式拒绝
+      await kernel.plugins.disable('builtin:worktree')
+      const sectionAfterDisable = await readSkillsSection()
+      assert.equal(sectionAfterDisable.includes('id="worktree"'), false, '停用后 <available_skills> 不得残留 worktree 技能')
+      assert.ok(sectionAfterDisable.includes('id="workflow"'), '停用 worktree 不影响 workflow 技能')
+      await assert.rejects(
+        () => kernel.plugins.executeTool('load_skill', { skillId: WORKTREE_SKILL_ID }, { conversationId: 1 }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available' && err.status === 403,
+      )
+
+      // 重新启用后恢复
+      await kernel.plugins.enable('builtin:worktree')
+      assert.ok((await readSkillsSection()).includes('id="worktree"'), '重新启用后 worktree 技能应恢复')
+    } finally {
+      await app.close().catch(() => {})
+      rmSync(dataDir, { recursive: true, force: true })
+    }
   })
 })

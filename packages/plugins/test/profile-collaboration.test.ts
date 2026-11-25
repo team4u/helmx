@@ -31,7 +31,13 @@ import {
 import { PluginHost, ProfileService, type PluginHostBackend } from '@helmx/kernel'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { createProfilePlugin, HELMX_CLI_SKILL_ASSET } from '../src/profile.js'
+import {
+  createProfilePlugin,
+  HELMX_CLI_SKILL_ASSET,
+  PROFILE_SKILL_ASSET,
+  PROFILE_SKILL_ID,
+  PROFILE_SKILL_MD,
+} from '../src/profile.js'
 import {
   PROFILE_SUMMARY_MAX_CODEPOINTS,
   describeHint,
@@ -948,16 +954,55 @@ test('before_turn 与 list_mentionable：任意第三方插件通过 helmx.dispa
 test('helmx-cli SKILL.md 文档化 search 过滤参数、run_action list 发现与动态插件 CLI 命名空间且不硬编码可停用插件命令', { timeout: 60_000 }, () => {
   const md = HELMX_CLI_SKILL_ASSET.skillMd
   assert.ok(
-    md.includes('helmx search <query> [--profile <id>] [--owned-by human|helmx] [--top-level] [--limit <n>]'),
-    'SKILL.md 应文档化 helmx search 的过滤参数',
+    md.includes('helmx search <query> [--profile <id>] [--owned-by human|helmx] [--top-level] [--limit <n>] [--max-per-conversation <1..20>]'),
+    'SKILL.md 应文档化 helmx search 的过滤参数与 max-per-conversation',
   )
   assert.ok(
-    md.includes('run_action({ list: true, pluginId?: "<pluginId>" })'),
-    'SKILL.md 应文档化 run_action list 发现能力',
+    md.includes('helmx models refresh [--provider <id>] [--providers <list>] [--force]'),
+    'SKILL.md 应文档化 helmx models refresh 的 --providers 与 --force 参数',
+  )
+  assert.ok(
+    md.includes('--parent-conversation-id <id>') && md.includes('--instructions <text>') && md.includes('--restrict-to-cwd'),
+    'SKILL.md 应同步 conversations create/compact 与 profiles 的新参数',
+  )
+  assert.ok(
+    md.includes('run_action({ list: true, pluginId?: "<pluginId>" })') &&
+      md.includes('pluginId: "core:"') &&
+      md.includes('pluginId: "builtin:"'),
+    'SKILL.md 应文档化 run_action list 发现与 core:/builtin: 前缀过滤能力',
   )
   assert.ok(
     md.includes('helmx actions list --json') && md.includes('run_action({ actionId, describe: true })'),
     'SKILL.md 应指引通过动态发现与 describe 查插件 CLI 与 schema',
   )
   assert.equal(md.includes('helmx workflows'), false, 'SKILL.md 不得硬编码可停用内置插件 CLI 命名空间')
+})
+
+test('profile 受管技能资产加载与 builtin:profile 启动自举校验', { timeout: 60_000 }, async () => {
+  assert.equal(PROFILE_SKILL_ID, 'profile')
+  assert.equal(PROFILE_SKILL_ASSET.id, 'profile')
+  assert.equal(PROFILE_SKILL_ASSET.skillMd, PROFILE_SKILL_MD)
+  assert.ok(!PROFILE_SKILL_MD.includes('{{') && !PROFILE_SKILL_MD.includes('}}'), '模板占位符必须全部替换')
+  assert.ok(PROFILE_SKILL_MD.includes('managedByPlugin: builtin:profile'), 'frontmatter 声明归属 builtin:profile')
+  assert.ok(PROFILE_SKILL_MD.includes('core:conversations.search'), '覆盖跨角色历史会话检索 action')
+  assert.ok(PROFILE_SKILL_MD.includes('core:profiles.list'), '覆盖 Profile 管理 action')
+  assert.ok(PROFILE_SKILL_MD.includes('403 ownership_violation') && PROFILE_SKILL_MD.includes('409 self_mutation_forbidden'), '覆盖归属权红线与自变更保护')
+
+  const env = await makeEnv()
+  try {
+    const listed = await env.backend.skills.list()
+    const profileSkill = listed.find((s) => s.id === 'profile')
+    assert.ok(profileSkill !== undefined, 'builtin:profile 启动应自举受管 profile 技能')
+    assert.equal(profileSkill.managedByPlugin, 'builtin:profile')
+    assert.ok(
+      typeof profileSkill.description === 'string' && profileSkill.description.includes('跨角色历史会话检索'),
+      'description 应前置突出跨角色历史会话检索',
+    )
+    assert.ok(profileSkill.description.includes('Profile'), 'description 应包含 Profile 管理触发词')
+
+    const loaded = (await env.host.executeTool('load_skill', { skillId: 'profile' }, { conversationId: 1 })) as { text: string }
+    assert.equal(loaded.text, PROFILE_SKILL_MD, 'load_skill 读取到完整自举内容')
+  } finally {
+    await env.close()
+  }
 })

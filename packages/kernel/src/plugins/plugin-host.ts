@@ -18,6 +18,7 @@ import {
   type HookResult,
   type PackageManagerHost,
   type PluginActionContext,
+  type PluginActionSpec,
   type PluginBuildProvider,
   type PluginClientBundle,
   type PluginConfigFieldSchema,
@@ -129,6 +130,8 @@ export type {
 
 export class PluginHost {
   private plugins = new Map<string, PluginState>();
+  /** Reserved `core:*` action owners (kernel-owned; invisible in `list()` / Plugin Center). */
+  private coreOwnerIds = new Set<string>();
   private pipelines = new Map<HookName, HookPipeline<HookName>>();
   private tracker = new PluginTaskTracker();
   private docRegistry: PluginDocRegistry;
@@ -194,6 +197,14 @@ export class PluginHost {
   ): Promise<void> {
     this.assertNotDisposed();
     assertDefinition(definition);
+    if (definition.id.startsWith('core:')) {
+      throw new HelmxError(
+        'invalid_plugin_definition',
+        `Plugin id '${definition.id}' cannot use reserved 'core:' namespace`,
+        400,
+        { pluginId: definition.id },
+      );
+    }
     const seq = ++this.registerSeq;
     const pluginId = definition.id;
     // Built-in plugin failures always abort startup; only external plugins with explicit isolation fall back to registerFailed.
@@ -205,6 +216,25 @@ export class PluginHost {
     });
   }
 
+  /**
+   * Register a kernel-owned action under the reserved `core:*` namespace.
+   * Core actions participate in `listActions()` / `invokeAction()` / `prepareAction()` but never
+   * appear in `list()` / `GET /api/plugins` / Plugin Center UI.
+   */
+  registerCoreAction<TIn, TOut>(ownerId: string, spec: PluginActionSpec<TIn, TOut>): void {
+    this.assertNotDisposed();
+    if (typeof ownerId !== 'string' || !/^core:[A-Za-z0-9_-]+$/.test(ownerId)) {
+      throw new HelmxError(
+        'invalid_core_action_owner',
+        `Core action ownerId must start with 'core:' and match /^core:[A-Za-z0-9_-]+$/: ${String(ownerId)}`,
+        400,
+        { ownerId },
+      );
+    }
+    this.capabilityRegistry.registerAction(ownerId, spec);
+    this.coreOwnerIds.add(ownerId);
+  }
+
   registerFailed(spec: {
     id: string;
     name?: LocalizedText;
@@ -213,6 +243,14 @@ export class PluginHost {
     error: PluginDiagnosticError;
   }): void {
     this.assertNotDisposed();
+    if (typeof spec.id === 'string' && spec.id.startsWith('core:')) {
+      throw new HelmxError(
+        'invalid_plugin_definition',
+        `Plugin id '${spec.id}' cannot use reserved 'core:' namespace`,
+        400,
+        { pluginId: spec.id },
+      );
+    }
     registerFailedPlaceholder(spec, this.lifecycleContext());
   }
 
@@ -342,7 +380,11 @@ export class PluginHost {
 
   listActions(): ActionManifest[] {
     this.assertNotDisposed();
-    return this.capabilityRegistry.listActions(getActiveEnabledPluginIds(this.plugins));
+    const activeIds = getActiveEnabledPluginIds(this.plugins);
+    if (this.coreOwnerIds.size === 0) {
+      return this.capabilityRegistry.listActions(activeIds);
+    }
+    return this.capabilityRegistry.listActions([...activeIds, ...this.coreOwnerIds]);
   }
 
   listUi(): PluginUiContribution[] {
@@ -520,11 +562,12 @@ export class PluginHost {
     return {
       assertActive: (pluginId: string) => {
         this.assertNotDisposed();
+        if (this.coreOwnerIds.has(pluginId)) return;
         assertActive(requirePlugin(this.plugins, pluginId));
       },
       getConversation: (id: number) => this.options.host.getConversation(id),
       tracker: this.tracker,
-      isPluginRegistered: (pluginId: string) => this.plugins.has(pluginId),
+      isPluginRegistered: (pluginId: string) => this.plugins.has(pluginId) || this.coreOwnerIds.has(pluginId),
     };
   }
 
@@ -664,6 +707,11 @@ export class PluginHost {
         (id) => removePluginRegistries(id, this.registries()),
       );
     } finally {
+      for (const coreOwnerId of this.coreOwnerIds) {
+        this.tracker.removePlugin(coreOwnerId);
+        this.capabilityRegistry.removePlugin(coreOwnerId);
+      }
+      this.coreOwnerIds.clear();
       for (const state of statesSnapshot) {
         const release = state.releaseTsRoot;
         state.releaseTsRoot = undefined;

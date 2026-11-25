@@ -28,6 +28,10 @@
 
 `run` 与 `resume_failed` 对会话目标有显式冲突校验：输入 `conversationId` 与调用上下文同时存在且不一致时显式 `400 validation_error`；`resume_failed` 同时要求 `conversationId` 与 `all: true` 互斥。`worktrees` 命令族（清理 / 登记 / 检视）由 [`builtin:worktree`](worktree.md) 提供。
 
+### 受管技能 `workflow`
+
+服务启动时经 `ctx.host.skills.ensureSkill` 自举受管技能 `workflow`（`managedByPlugin: builtin:workflow`，含 `references/dsl.md` 与 `references/subagents.md`）。主手册 `SKILL.md` 不硬编码 `builtin:worktree.*` 动作指令，而是在使用 `isolation: 'worktree'` 且 `worktree` 技能可用时指引按需加载 `worktree` 技能，确保停用 `builtin:worktree` 时不留幻影提示词。
+
 ### 前端贡献
 
 - `toolView`：`subagent-card`（`replaceRow: true`）与 `workflow-card`（`replaceRow: true`）；时间线单行收口为 26px `.trace-row`，`SubagentToolView` 通过 `{ includeDetail: false, includeLive: false }` 同时跳过子会话全量详情拉取与 60Hz 流式正文订阅；视图直接消费宿主持久化到 `details` 的有界 `presentationMeta`（配合 `useTimelineToolCalls('subagent')` 按工具名分片订阅续接关系，零 `JSON.parse` / 尾注文本刮取），并通过叶子组件 `ElapsedClock` / `WorkflowTimingClock` 隔离宿主共享 1Hz 时钟 `useSharedNowMs`；
@@ -69,6 +73,7 @@
 | 内容 | 位置 |
 | :--- | :--- |
 | 插件入口（组装与生命周期编排） | `packages/plugins/src/workflow.ts` |
+| 受管技能资产 | `packages/plugins/src/workflow/skill/`（`SKILL.md`、`references/dsl.md`、`references/subagents.md`） |
 | 纯 JS DSL 运行时与账本 | `packages/plugins/src/workflow/dsl/`（`types.ts`、`meta.ts`、`boundary.ts`、`journal.ts`、`worker-source.ts`、`runtime.ts`） |
 | Run 协调、仓储、恢复与库管理 | `packages/plugins/src/workflow/runs/`（`run-repository.ts`、`run-coordinator.ts`、`cancellation.ts`、`action-bridge.ts`、`resumability.ts`、`spawn-bridge.ts`、`library-store.ts`） |
 | 适配器与投影 | `packages/plugins/src/workflow/`（`depth.ts`、`projection.ts`、`hooks.ts`、`tools.ts`、`actions.ts`、`steer.ts`、`config.ts`） |

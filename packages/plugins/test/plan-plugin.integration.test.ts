@@ -33,6 +33,7 @@ import {
   PLAN_PANEL_ID,
   PLAN_PLUGIN_ID,
   PLAN_SESSION_DOC,
+  PLAN_SKILL_ID,
   PLAN_TOOL_ASK,
   PLAN_TOOL_BASH,
   PLAN_TOOL_PROPOSE,
@@ -1162,6 +1163,68 @@ test('T9: plan_bash blocks mutations & runs read-only pwd, plan_ask clarifies, u
     assert.equal(resetView.mode, 'normal')
     assert.equal(resetView.draft, undefined)
     assert.equal(resetView.approved, undefined)
+  } finally {
+    await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// T9: Managed skill `plan` bootstrap, disable cleanup (zero phantom prompts), and re-enable
+// ---------------------------------------------------------------------------
+
+test('T9: builtin:plan bootstraps managed skill plan and removes it cleanly from <available_skills> and load_skill on disable', TIMEOUT, async () => {
+  const env = await openPlanIntegrationEnv()
+  try {
+    const { kernel } = env.app
+    const skills = await kernel.skills.list()
+    const planSkill = skills.find((s) => s.id === PLAN_SKILL_ID)
+    assert.ok(planSkill, 'builtin:plan must bootstrap managed skill plan on startup')
+    assert.equal(planSkill.managedByPlugin, PLAN_PLUGIN_ID)
+
+    const skillMd = await kernel.skills.readFile(PLAN_SKILL_ID)
+    assert.ok(skillMd.includes('managedByPlugin: builtin:plan'))
+    for (const token of [
+      PLAN_TOOL_BASH,
+      PLAN_TOOL_ASK,
+      PLAN_TOOL_SAVE,
+      PLAN_TOOL_PROPOSE,
+      'builtin:plan.get',
+      'builtin:plan.toggle',
+      'builtin:plan.set_mode',
+      'builtin:plan.update_draft',
+    ]) {
+      assert.ok(skillMd.includes(token), `plan SKILL.md must document ${token}`)
+    }
+
+    const readSkillsSection = async () => {
+      const res = await kernel.plugins.runHook('before_turn', {
+        conversation: kernel.conversations.getConversation(1),
+        inputs: [],
+        sections: [],
+        tools: [],
+        messages: [],
+      })
+      assert.equal(res.action, 'transform')
+      return res.value.sections.find((s) => s.id === 'profile.skills')?.text ?? ''
+    }
+
+    assert.ok((await readSkillsSection()).includes('id="plan"'), 'enabled builtin:plan must expose plan in <available_skills>')
+    const loaded = (await kernel.plugins.executeTool(
+      'load_skill',
+      { skillId: PLAN_SKILL_ID },
+      { conversationId: 1 },
+    )) as { text: string }
+    assert.ok(loaded.text.includes('# Plan Mode'))
+
+    await kernel.plugins.disable(PLAN_PLUGIN_ID)
+    assert.equal((await readSkillsSection()).includes('id="plan"'), false, 'disabled builtin:plan must leave zero phantom plan skill in <available_skills>')
+    await assert.rejects(
+      () => kernel.plugins.executeTool('load_skill', { skillId: PLAN_SKILL_ID }, { conversationId: 1 }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available' && err.status === 403,
+    )
+
+    await kernel.plugins.enable(PLAN_PLUGIN_ID)
+    assert.ok((await readSkillsSection()).includes('id="plan"'), 're-enabled builtin:plan must restore plan in <available_skills>')
   } finally {
     await env.close()
   }

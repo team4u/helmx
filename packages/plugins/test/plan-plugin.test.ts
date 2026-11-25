@@ -1640,7 +1640,9 @@ test('validateReadOnlyShellCommand: strict helmx read-only allowlist & helmx-hub
     'helmx --hub=http://127.0.0.1:3202 doctor --json',
     'helmx doctor',
     'helmx search "plan_bash" --profile main --owned-by human --top-level --limit 10 --json',
-    'helmx search --profile=main --owned-by=helmx --limit=5 auth | head -n 20',
+    'helmx search "plan_bash" --profile main --owned-by human --top-level --limit 10 --max-per-conversation 3 --json',
+    'helmx search --profile=main --owned-by=helmx --limit=5 --max-per-conversation=2 auth | head -n 20',
+    'helmx search --max-per-conversation 4 auth',
     'helmx search foo --json | jq .',
     'helmx conversations list --all --status working --tag review --json',
     'helmx conversations --json list --profile main',
@@ -1740,6 +1742,11 @@ test('validateReadOnlyShellCommand: strict helmx read-only allowlist & helmx-hub
     'helmx conversations watch 1',
     'helmx events watch',
     // File-writing flags on otherwise read-only commands
+    'helmx search auth --max-per-conversation',
+    'helmx search auth --max-per-conversation --json',
+    'helmx search auth --max-per-conversation 3 --output /tmp/x',
+    'helmx api GET /api/search --max-per-conversation 3',
+    'helmx models default --max-per-conversation 3',
     'helmx conversations file 1 a.txt --output /tmp/x',
     'helmx conversations file 1 a.txt --output=/tmp/x',
     'helmx conversations file 1 a.txt -o /tmp/x',
@@ -1971,11 +1978,14 @@ test('plan_bash: guards mode/scope, blocks mutating commands locally, executes a
     }))
     const helmxOkRes = (await harness.host.executeTool(
       PLAN_TOOL_BASH,
-      { command: 'helmx search auth --profile main --top-level --limit 5 --json | head -n 5' },
+      { command: 'helmx search auth --profile main --top-level --limit 5 --max-per-conversation 3 --json | head -n 5' },
       { conversationId: 1 },
     )) as PluginToolResultEnvelope
     assert.equal(helmxOkRes.isError, false)
-    assert.equal(harness.execEnvCalls.at(-1)?.command, 'helmx search auth --profile main --top-level --limit 5 --json | head -n 5')
+    assert.equal(
+      harness.execEnvCalls.at(-1)?.command,
+      'helmx search auth --profile main --top-level --limit 5 --max-per-conversation 3 --json | head -n 5',
+    )
   } finally {
     await harness.close()
   }
