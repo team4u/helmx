@@ -35,7 +35,7 @@ description: Use when running long test suites, merging worktrees, debugging UI/
 - `GET /api/auth/status` is exempt from the `503 hub_starting` gate (two-phase boot): it only proves the HTTP listener is up, not that `kernel.start()` finished. Smoke tests and scripts must wait out `503 hub_starting` on gated routes — retry only that code, fail on any other non-200.
 - Deterministic timing-window tests: widen the window with injectable seams (e.g. deferred `fetchFn`) rather than betting on fixed `sleep`.
 - Package-local scripts: run `pnpm exec tsx` from inside the owning package directory (workspace deps do not resolve from repo root); run lint via repo root `pnpm lint` (or inside package dir) rather than `pnpm --filter <pkg> exec oxlint`.
-- Known non-regression `main` flakes (re-run standalone before chasing): `url-hash-screen-params` bare run ("React is not defined", passes under `test:unit`/`test:all`), `herdr.test.ts` abort timeout under 16-way concurrency (passes standalone), `packages/cli/test/check-changed.test.ts` SIGKILL PID marker race under heavy load (passes standalone).
+- Known non-regression `main` flakes (re-run standalone before chasing): `url-hash-screen-params` bare run ("React is not defined", passes under `test:unit`/`test:all`), `packages/cli/test/check-changed.test.ts` SIGKILL PID marker race under heavy load (passes standalone).
 
 ## 5. Web Extensions & Forked Worktrees
 

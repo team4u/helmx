@@ -1,103 +1,109 @@
 # helmx 开发约定
 
-**helmx** 是极简持久微内核个人助理与多智能体确定性编排系统。本文件约束所有参与开发的智能体与人类；按需深入的文档路标见文末第 7 节。
+**helmx** 是极简持久微内核个人助理与多智能体确定性编排系统。本文件适用于所有参与开发的智能体（不限具体宿主）与人类；按需深入文档见第 7 节。
 
 ## 1. 环境、隔离与破坏性变更授权（最高优先级）
 
-- **工作目录（所有 Agent 通用，含非 Helmx 的外部 Agent）**：Helmx 主仓位于 `/root/code/helm`。改代码前先核实 `pwd`、当前目录所属 Git 仓库的 `git rev-parse --path-format=absolute --git-common-dir` 与 `/root/code/helm` 的同一结果，并用 `git worktree list --porcelain` 确认当前路径是该仓库登记的工作树。**只有当前目录属于 Helmx 主仓，且宿主、人类或协调者已明确将该工作树分配给当前任务时，才可直接就地开发**；仓库不匹配或任务归属不明时，停止写入并询问，不得因为当前目录恰好是 worktree 就默认获得使用权。若仍在共享主工作树 `/root/code/helm`，除纯文档等轻量例外（见第 6 节）外严禁直接改代码。此时优先用当前宿主的原生 worktree 隔离（Helmx 内传 `isolation: 'worktree'`；Claude Code、Codex 等外部 Agent 用其内置 worktree 机制），**禁用 `/tmp`**；仅在宿主不会自动分配（手工开发、或新建集成树）时统一落到 `/root/code/helm-worktrees/<name>`。三类 worktree 的目录边界与回收方式见第 6 节。开发智能体的继承 `cwd` 可能位于旧仓库，每次开工先显式 `cd`。
-- **历史仓库严格只读**：`/root/code/botx`、`/root/code/botd`、`/root/code/herdr` 仅可参考代码与 `node_modules` 验证 SDK / 协议行为，**绝不修改**。
-- **运行数据隔离**：数据目录仅限 `~/.helmx`（或 `HELMX_DATA_DIR` 覆盖值），与 `~/.botx`、`~/.botd` 完全隔离，不得读写旧系统运行数据。
-- **端口铁律**：Web dev 固定 `3201`（`strictPort: true`，代理 `/api`、`/ws`），内核 Hub 固定 `3202`（`HELMX_PORT=3202`）。**永不占用 `3000`（外部）、`3001/3002`（botd）、`3101/3102`（botx）**。
-- **开发阶段：不兼容、不迁移**：
-  - 允许对 helmx 代码、公共接口、配置、数据库结构和开发数据**直接进行破坏性修改、删除或重建**，以最新设计为准。
-  - **严禁编写向后兼容层、旧格式读取、迁移脚本、双写或兼容适配**；旧开发数据直接清理按新结构重建，测试同步采用新契约。此授权限于 helmx 项目与开发数据；历史仓库只读、数据隔离与端口约束继续有效。
+- **工作目录与 Worktree**：主仓位于 `/root/code/helm`。开工先显式 `cd` 至当前工作树；除纯文档例外（见第 6 节）外，**严禁在 `/root/code/helm` 直接改代码，禁用 `/tmp`**。分配、合入与回收见第 6 节。
+- **历史仓只读**：`/root/code/botx`、`/root/code/botd`、`/root/code/herdr` 仅可参考，**绝不修改**。
+- **数据隔离**：仅限 `~/.helmx`（或 `HELMX_DATA_DIR`），严禁读写 `~/.botx`、`~/.botd`。
+- **端口铁律**：Web dev `3201`（`strictPort: true`，代理 `/api`、`/ws`），Hub `3202`（`HELMX_PORT=3202`）；**永不占用 `3000`、`3001/3002`、`3101/3102`**。
+- **开发阶段：不兼容、不迁移**：允许对代码、公共接口、配置、数据库与开发数据**直接破坏性修改/删除/重建**；**严禁向后兼容层、旧格式读取、迁移脚本、双写或兼容适配**，测试同步采用新契约。
 
 ```bash
 HELMX_PORT=3202 pnpm dev        # 前后端一起（Web 3201 -> Hub 3202）
 HELMX_PORT=3202 pnpm dev:kernel # 只起内核
 pnpm dev:web                   # 只起前端（需内核已在 3202）
-pnpm link:bins                 # 可选：在 /usr/local/bin 挂载 helmx / helmx-node / helmx-hub 源码命令
-pnpm install --prefer-offline && pnpm build   # 新建独立 worktree 后首次必跑：补齐依赖与跨包构建产物（node_modules/ 与 dist/ 均被 gitignore）
-pnpm verify                    # 一键全量验收（单次构建 + typecheck:only + lint + check:hygiene + test:all:run；增量异常可加 HELMX_CLEAN_DIST=1）
-pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all # 独立分步验收等价命令
+pnpm link:bins                 # 可选：在 /usr/local/bin 挂载 helmx / helmx-node / helmx-hub
+pnpm install --prefer-offline && pnpm build   # 新建 worktree 后首次必跑（node_modules/ 与 dist/ 均被 gitignore）
+pnpm verify                    # 一键全量验收（build + typecheck:only + lint + check:hygiene + test:all:run；异常加 HELMX_CLEAN_DIST=1）
+pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all # 独立分步验收
 ```
 
 ## 2. 架构边界与设计原则
 
-**设计原则**：第一性原理推导最简正确实现（感觉笨重先怀疑设计，不打补丁）；KISS / YAGNI；命名自解释、注释只写 Why；一个模块只做好一件事；**机制与策略分离**（内核给机制，策略由插件/配置/用户层给）。
+**设计原则**：第一性原理最简正确实现（笨重先怀疑设计，不打补丁）；KISS / YAGNI；命名自解释、注释只写 Why；单一职责；**机制与策略分离**。
 
-1. **单向包依赖**：`@helmx/kernel` 提供机制，`@helmx/plugins` 承载内置插件，`@helmx/hub` 是连接两者的产品组合根并提供 `helmx-hub` 命令；内核不得依赖插件或组合根。`@helmx/plugin-client` 是独立浏览器 SDK，`@helmx/web` 通过宿主端口向它注入应用能力；SDK 不得反向依赖 Web 应用。`@helmx/plugin-build` 提供构建实现，由产品层通过端口注入宿主。`@helmx/protocol` 只放通用跨包契约，零运行时重依赖；插件业务契约归属插件包，跨包变更必须普查全部消费方。
-2. **内核只保留四块通用机制**（`@helmx/kernel`，零业务角色硬编码）：
-   - `pi-durable` 持久会话：通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5（**纯可重建派生索引，禁写 `pi_*` 表语义**）、`AskDoc`、`SecretStash`、`Artifacts`、纯文件资产热重载、原生 `spawnAgent` 子会话派生（`agent_spawn` Hook 管道 + 默认执行行）；
-   - `EnvFabric` + `NodeRegistry`：`/ws/node` 反向控制网关、`/ws/node-tunnel` 任意 TCP 透传隧道（TCP-only `openTunnel` 原语 + `helmx nodes forward` 端口转发），内建 `local` 节点 + 远端 `@helmx/node` 守护进程，驱动 `bash / read / write / edit / gate / env exec` 与按 `nodeId + canonicalPath` 的文件互斥（与任何插件是否启用正交）；
-   - `Model 与 Auth`：模型供应商接入、模型禁用过滤、凭据与令牌管理；
-   - `PluginHost`：`definePlugin(ctx)` 唯一强类型宿主（含 `ctx.provide/consume` 类型化能力注册表、`ctx.kv` 按键存储与增强 `ctx.route` 路由）、受管包生命周期（`doctor / install / update / remove / reload`）、插件间 `dependencies` 拓扑启停与 `ctx.host` 运行时端口。
-3. **零角色枚举**：严禁在内核硬编码 `'router' | 'worker' | 'watchdog'`；会话身份由 `profileId` 表达，运行态标记由 `tags` 表达。
-4. **不在内核的能力**：`subagent / SubagentWorkflow` 工具与 DSL 编排引擎归属 `builtin:workflow`，`cleanup_worktree` 工具与 `WorktreeAllocator`（Worktree 分配/租约/持有锁/清理）归属 `builtin:worktree`；内核无巡检定时器、无 `watchdog_tick` Hook、无内置声明式 JSON 渲染轨道（声明式 JSON 渲染由 `builtin:json-render` 提供，周期任务一律由插件自管服务调度）。
-5. **扩展面契约（零 `if/else` 插件 ID 业务特判）**：
-   - **后端 4 个生命周期 Hook**（`continue | transform | handled | block`，`block` 仅限 `input`）：`input`、`before_turn`、`agent_spawn`（额外支持 `next` around 包装）、`turn_settled`（统一覆盖 `completed | failed | aborted`）；
-   - **前端 10 个 `ctx.ui` 扩展点**（`client.tsx` React 单轨）：`sidebarItem`、`screen`、`timelineRenderer`、`markdownCodeBlock`、`toolView`、`composerCompleter`、`workbenchPanel`、`command`、`settingsPanel`、`slot`。
-6. **13 个内置插件**（实现位于 `@helmx/plugins`，由 `@helmx/hub` 注册，全部默认启用；深度文档见 `docs/plugins/<name>.md`）：
-   - `builtin:profile`（`locked` 常驻；SYSTEM.md / 技能目录（含 `~/.agents/skills` 机器级共享与节点 `<cwd>/.helmx/skills` 只读来源合入，同名 Hub 优先）/ `load_skill` / `@` 补全 / `helmx-cli` 与 `app-builder` 受管技能）、`builtin:workflow`（`subagent` / `SubagentWorkflow` 两工具 + DSL 引擎；通过 `service.reconcile()` 在 `builtin:worktree` 之前收敛遗留子会话）、`builtin:worktree`（`WorktreeAllocator` / 持久租约与 `ManagedWorktreeHold` / `agent_spawn` around priority 200 / `cleanup_worktree` 工具与 `worktrees` CLI；与 workflow 零静态依赖）、`builtin:swarm`（扁平对等序号黑板、正交唤醒、`turn_settled` 纯事件自愈与自适应协同看板；零常驻会话，通过 `service.reconcile()` 启动对账并按需复用 `builtin:worktree` Worktree）、`builtin:memory`（单 Profile `MEMORY.md` 4k 文件锁、仅顶层会话注入与开关；每日 Dream 低峰记忆整理——turn_settled 有界脱敏候选采集、`completeText` 严格裸 JSON、软上限 1.5k / 去棘轮预算、锁内 CAS + 开关 guard 写回、claim→flush→执行调度、stop 收敛已触发扫掠）、`builtin:json-render`（`ui` 围栏卡片与 `generative-ui` 技能）、`builtin:mermaid`（`mermaid` 围栏图表）、`builtin:triggers`（Cron 与 Webhook `defang` 入站）、`builtin:magpie`（动态模型网关）、`builtin:token-speed`（输入区实时解码速率；滑动窗口 / TTFT / 终态对账全在插件，内核只透传 `ConversationLive.generation` 通用流式事实）、`builtin:tiers`（语义模型档位 `tier/<id>` 与自定义模板切换、受管 `model-tiers` 技能与 `before_turn` 动态目录；经 `ctx.provide('helmx.model-tiers', ...)` 对接内核 `ModelRegistry` 一次性解引用原语）、`builtin:title`（首轮人类顶层会话完成后旁路 `completeText` 静默整理标题，零 KV 状态 + 写回快照守卫；并提供 `generate` 动作与 `/title` 会话内命令按最近 `pi.reset` 后上下文按需重整）、`builtin:plan`（顶层人类会话只读计划模式与 `/plan` / `Ctrl+.` 入口、`before_turn` priority -50 严格工具白名单、`plan_bash` 只读 Shell 守卫 / `plan_ask` 澄清 / `plan_save` / `plan_propose`、`update_draft` 人工编辑、`AskDoc` CAS 审批归档 `plan-v<N>.md` 与可选 `PluginToolResultEnvelope.control.handoff` 新上下文/模型切换交接执行）；
-   - **插件通用铁律**：① 停用后其工具、动作、CLI 命令、受管技能与 UI 贡献**即时消失，不留幻影提示词**；② 高频会话级状态（如 workflow `runs`）必须用 `ctx.sessionDoc` 专用 SSE 按需订阅，严禁进全局 `ctx.doc` 造成首帧/广播写放大（单文档上限 2 MiB，超限 `413`）；③ 全局启动先按依赖拓扑对全体服务执行 `prepare()` 再依次 `start()`，启动后统一按依赖/软序执行 `reconcile()`（如 `builtin:workflow` 先于 SDK 调度器标记中断任务取消，随后 `builtin:worktree` 与 `builtin:swarm` 完成对账）；④ 停用/重载遇在途任务经 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`，不可 force），遇持久占用或被依赖返回 `409 plugin_in_use`（可 `--force`）。
-7. **明确不做**：不做服务端 TUI 兼容层；不建独立 `Space` CRUD 中间表（会话与 Profile 直接用 `(nodeId, cwd)` 物理坐标）；不写内嵌 Python 的 SSH 桥接脚本（跨节点统一走 `EnvFabric`）；不把 `helmx`（控制 CLI）与 `helmx-node`（节点守护进程）混装在同一包/命令；不造第二套微应用子宿主（全栈微应用即携带 `ctx.ui.screen` 的标准受管外部插件）；不在 Web 端重复造 Worktree Diff 合入状态机；不在 `Conversation` / `ModelProvider` 底层伪装终端 CLI Agent。
+1. **单向包依赖**：`@helmx/kernel`（机制）、`@helmx/plugins`（内置插件与插件业务契约）、`@helmx/hub`（产品组合根与 `helmx-hub`）；内核不得依赖插件或组合根。`@helmx/plugin-client` 为独立浏览器 SDK，不得反向依赖 `@helmx/web`。`@helmx/plugin-build` 经端口注入宿主。`@helmx/protocol` 只放通用跨包契约，零重依赖。
+2. **内核四块通用机制**（`@helmx/kernel`，详见 `docs/architecture/overview.md`）：
+   - `pi-durable`：通用 `Conversation(nodeId, cwd)` 五态、`state.sqlite` + FTS5（**纯可重建派生索引，禁写 `pi_*` 表语义**）、`AskDoc`、`SecretStash`、`Artifacts`、资产热重载与原生 `spawnAgent`；
+   - `EnvFabric` + `NodeRegistry`：`/ws/node`、`/ws/node-tunnel`（TCP-only `openTunnel`）、`local` + `@helmx/node`、`bash/read/write/edit/gate/env exec` 与 `nodeId + canonicalPath` 文件互斥；
+   - `Model 与 Auth`：模型接入、禁用过滤、凭据与令牌；
+   - `PluginHost`：`definePlugin(ctx)`（`provide/consume`、`kv`、`route`、`host`）、受管包生命周期与 `dependencies` 拓扑启停。
+3. **零角色枚举**：内核禁硬编码 `'router' | 'worker' | 'watchdog'`；身份用 `profileId`，运行态用 `tags`。
+4. **不在内核的能力**：`subagent / SubagentWorkflow` 与 DSL 归 `builtin:workflow`；`cleanup_worktree` 与 `WorktreeAllocator` 归 `builtin:worktree`；无巡检定时器、无 `watchdog_tick`、无内置 JSON 渲染轨道（归 `builtin:json-render`）。
+5. **扩展面契约（零 `if/else` 插件 ID 特判）**：
+   - **后端 4 Hook**（`continue | transform | handled | block`，`block` 仅 `input`）：`input`、`before_turn`、`agent_spawn`（支持 `next` around）、`turn_settled`（`completed | failed | aborted`）；
+   - **前端 10 `ctx.ui`**（`client.tsx` React 单轨）：`sidebarItem`、`screen`、`timelineRenderer`、`markdownCodeBlock`、`toolView`、`composerCompleter`、`workbenchPanel`、`command`、`settingsPanel`、`slot`。
+6. **13 个内置插件**（`@helmx/plugins`，`@helmx/hub` 注册，全默认启用；详情见 `docs/plugins/overview.md`）：`profile`（`locked`）、`workflow`、`worktree`（与 workflow 零静态依赖）、`swarm`、`memory`、`json-render`、`mermaid`、`triggers`、`magpie`、`token-speed`、`tiers`、`title`、`plan`。
+   - **插件铁律**：① 停用后工具、动作、CLI、受管技能与 UI 贡献**即时消失，不留幻影提示词**；② 高频会话态用 `ctx.sessionDoc` 按需订阅，禁塞全局 `ctx.doc`（单文档上限 2 MiB，超限 `413`）；③ 启动先按依赖拓扑全体 `prepare()` 再 `start()`，随后按依赖与 `reconcileAfter` 软序 `reconcile()`；④ 停用/重载在途任务经 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`，不可 force），持久占用或被依赖报 `409 plugin_in_use`（可 `--force`）。
+7. **明确不做**：服务端 TUI 兼容层；独立 `Space` CRUD 表（直用 `(nodeId, cwd)`）；内嵌 Python SSH 桥接（走 `EnvFabric`）；混装 `helmx` 与 `helmx-node`；第二套微应用子宿主（全栈微应用即带 `ctx.ui.screen` 的受管插件）；Web 端 Worktree Diff 合入状态机；在 `Conversation`/`ModelProvider` 底层伪装终端 CLI Agent。
 
 ## 3. 诚实性红线与安全不变量（禁止造假）
 
-- **边界处强校验**：所有外部输入（HTTP body、插件产物、工作流 DSL、事件载荷、RPC 响应）在入口边界做类型/Schema 校验，非法输入显式拒绝。
-- **禁止静默降级**：任何能力不支持、节点离线（`409 node_offline`）、升级排空拒新（`node_draining`）或 Schema 校验失败必须显式报错并附诊断，**绝不静默回退本机、绝不编造 fallback/mock 数据**。
-- **看门狗归属权红线（内核执行层强制）**：`ownedBy: 'human' | 'helmx'` 持久化在 `helmx_conversations.owned_by` 列（缺省 `'human'`）；对 `ownedBy: 'human'` 的人类直连会话**严禁自动化发送输入或中止指令**，仅允许只读诊断与通知；对 `helmx` 归属的后台会话允许自动恢复或中止。一切自动化中止/提交统一走内核 `abortConversationGuarded` / `submitInputGuarded`，在会话串行域内原子复核 `expectedOwnership` 与 `expectedStateSeq`。
-- **CAS 乐观锁纪律**：`AskDoc` 携带 `expectedStateSeq`——会话 `stateChangeSeq` 已推进时，迟到审批自动流转 `superseded` 销单或返回 `409 ask_state_conflict`，绝不重复提交。
-- **机密边界如实**：`SecretStash` 作为全局纯内存明文脱敏器（`addRedaction` / `redact` / `createStreamingRedactor`）保证已登记凭据与受管令牌不落库、不进模型上下文与 SSE；但任意 shell 命令与进程内插件（含全栈微应用，属可信代码、拥有宿主权限）天然可读环境变量与内存——**不承诺对可信代码的零泄漏**，文档不得夸大。
-- **会话与路由不变量**：初始会话 `#1` 无 ID 级删除豁免（删除后重启凭 tombstone 不复活、不补种）；受管会话由 `ctx.host.manageConversation` 保护（`409 conversation_managed_by_plugin`），产品逻辑不依赖固定会话 ID。无显式目标的 `dispatchTrigger` 选最新无父链 human-owned assistant 会话；工作流新 run 必须显式指定会话或 `--current`，resume 沿用原 run 目标。忙时策略仅 `steer | followUp | reject`（内核默认 `steer`，批处理用 `followUp`）；输入来源 `origin: human | agent | trigger` 附着于 `helmx.input` 并透传至 `turn_settled` 钩子，供插件按来源区分人类直连与自动化输入（如 `builtin:memory` 仅采集 `human` 输入）。
+- **边界强校验**：外部输入（HTTP body、插件产物、DSL、事件载荷、RPC 响应）在入口做类型/Schema 校验，非法即拒。
+- **禁静默降级**：能力不支持、节点离线（`409 node_offline`）、排空拒新（`node_draining`）或校验失败必须显式报错附诊断，**绝不回退本机或编造 fallback/mock**。
+- **归属权红线（内核强制）**：`ownedBy: 'human' | 'helmx'` 存 `helmx_conversations.owned_by`（缺省 `'human'`）；对 `'human'` 会话**严禁自动化发送输入或中止**，仅可只读诊断与通知。一切自动化提交/中止走 `submitInputGuarded` / `abortConversationGuarded`，原子复核 `expectedOwnership` 与 `expectedStateSeq`。
+- **CAS 乐观锁**：`AskDoc` 带 `expectedStateSeq`；会话 `stateChangeSeq` 已推进时迟到审批转 `superseded` 或报 `409 ask_state_conflict`，绝不重复提交。
+- **机密边界如实**：`SecretStash` 保证已登记凭据与受管令牌不落库、不进模型上下文与 SSE；但不承诺对 shell 与进程内可信插件零泄漏，文档不得夸大。
+- **会话与路由不变量**：`#1` 无删除豁免（凭 tombstone 不复活）；受管会话经 `ctx.host.manageConversation` 保护（`409 conversation_managed_by_plugin`）。无显式目标的 `dispatchTrigger` 选最新无父链 human-owned assistant；工作流新 run 须指定会话或 `--current`，resume 沿用原目标。忙时策略仅 `steer | followUp | reject`（默认 `steer`，批处理 `followUp`）；`origin: human | agent | trigger` 透传至 `turn_settled`。
 
-## 4. 高频改动联动检查单（改 X 必须同步 Y）
+## 4. 高频改动联动检查单（改 X 同步 Y）
 
-- **改动跨包类型 / 接口 / 导出符号** → 先改契约所属包（通用契约为 `@helmx/protocol`，插件业务契约为 `@helmx/plugins`），再全仓搜索（`rg`）普查全部包与测试的消费方并同步，漏改即事故。生产源码不得通过相对路径跨包或导入其他包的私有 `src`；新增依赖必须声明，包依赖图必须无环。
-- **新增 / 变更面向用户的 HTTP 接口** → 同一次改动必须补齐 `helmx` CLI 映射（`packages/cli/src/commands/`，含 `--json` 与 `--current` 会话/节点自动感知），并同步 `@helmx/protocol` 的 `CORE_CLI_COMMAND_PATHS` 与 `builtin:profile` 的 `helmx-cli` 技能文档（`services.test.ts` 双向锁定校验）。
-- **插件暴露业务能力** → 用 `ctx.action({ id, inputSchema, outputSchema })` 单点声明，自动获得五端映射：HTTP（`POST /api/actions/<pluginId>/<actionId>`）、CLI（`helmx <plugin> <action>`，剥离 `builtin:` 前缀，`cli.command` 可覆写）、Agent Tool（`exposeAsTool` 或 `run_action`）、Workflow `action()` 与 Web UI。
-- **编写 / 重构 Web 界面或插件 `client.tsx`** → 先读 [`docs/conventions/web-frontend.md`](docs/conventions/web-frontend.md)（布局/组件/样式/移动端）与 [`docs/conventions/web-navigation.md`](docs/conventions/web-navigation.md)（路由/深链/分屏/待命页/弹窗），并遵守五条硬铁律：
-  1. **零 Emoji**：界面文案、导航、标题、按钮、徽章、卡片严禁 Emoji；图标统一 `lucide-react`（`HelmxIcon`）或纯文本；
-  2. **视图形态三级**：海量项 / 多维检索 / 管理与市场类必须用「全屏一级主舞台卡片网格 + 右侧 520px~560px 详情抽屉」，严禁塞居中弹窗；
-  3. **Radix UI 唯一交互原语**：共享组件使用 `@helmx/plugin-client` 的 Radix 封装；Web 专有组件位于 `packages/web/src/ui/`（全仓禁原生 `<select>` 与手写无障碍浮层）；插件优先复用 `@helmx/plugin-client` 的 `Screen / ScreenSection / DataTable / KvGrid` 与宿主原语类，禁大面积内联样式或复制通用 CSS；工作台正文 13/14px，会话正文、提问胶囊与 Composer 输入 15px（详见 `docs/conventions/web-frontend.md`），移动端（≤680px）与分屏下禁输入框字号突兀放大；
-  4. **唯一 Hash 导航**：全站位置由 `url-hash-model.ts` + `HelmxStoreProvider` 唯一管理（`#/a/<profileId>` 待命真草稿、`#/c/<id>` 会话、`#/s/<pluginId>/<screenId>` 视图、`sp.*`/`ssp.*` 参数、`split` 分屏、`sidebar` 空间）；组件统一调 `store.openTarget / setScreenParams / setSidebarSpace` 等，**新建对话进待命页、首次发送才落库**，严禁自建平行路由或直接操作 `history.*`；
-  5. **Fast Refresh**：`.tsx` 组件文件只导出组件与 TS 类型，纯函数/常量剥离至独立模块。
+- **跨包类型 / 接口 / 导出** → 先改所属包（通用 `@helmx/protocol`，插件业务 `@helmx/plugins`），再 `rg` 普查同步全仓。生产源码禁相对路径跨包或导他包私有 `src`；新增依赖须声明且无环。
+- **面向用户的 HTTP 接口** → 同步 `helmx` CLI（`packages/cli/src/commands/`，含 `--json`/`--current`）、`@helmx/protocol` 的 `CORE_CLI_COMMAND_PATHS` 与 `builtin:profile` 的 `helmx-cli` 技能（`services.test.ts` 双向锁定）。
+- **插件业务能力** → 用 `ctx.action({ id, inputSchema, outputSchema })` 单点声明获五端映射：HTTP（`POST /api/actions/<pluginId>/<actionId>`）、CLI（`helmx <plugin> <action>`，剥 `builtin:`，`cli.command` 可覆写）、Tool（`exposeAsTool` 或 `run_action`）、Workflow `action()` 与 Web UI。
+- **Web 界面与插件 `client.tsx`** → 先读 `docs/conventions/web-frontend.md` 与 `web-navigation.md`，严守五条铁律：
+  1. **零 Emoji**：全界面文案与控件严禁 Emoji，图标统一 `lucide-react`（`HelmxIcon`）或纯文本；
+  2. **视图形态三级**：海量项 / 多维检索 / 管理与市场类用「全屏主舞台卡片网格 + 右侧 520~560px 详情抽屉」，严禁塞居中弹窗；
+  3. **Radix UI 唯一原语**：共享原语用 `@helmx/plugin-client` Radix 封装，Web 专有在 `packages/web/src/ui/`（禁原生 `<select>` 与手写浮层）；插件优先复用 SDK 原语与宿主类，禁大面积内联样式或复制通用 CSS；字号与移动端（≤680px）禁放大见 `web-frontend.md`；
+  4. **唯一 Hash 导航**：由 `url-hash-model.ts` + `HelmxStoreProvider` 唯一管理（`#/c/<id>`、`#/a/<profileId>`、`#/overview`、`#/views/<pluginId>/<screenId>`、`#/settings/*`、`sp.*`/`ssp.*`、`split`；侧栏空间由主屏推导非独立 URL 状态）；统一调 `store.openTarget / setScreenParams / openSpace`，**新建对话进待命页、首次发送才落库**，禁平行路由或直调 `history.*`；
+  5. **Fast Refresh**：`.tsx` 只导出组件与 TS 类型，纯函数/常量剥至独立 `.ts`。
 
 ## 5. 测试分层与执行规范
 
-- **入口与卫生门禁**：分档跑 `pnpm test:unit` / `test:integration` / `test:all`（`scripts/test-suites.mjs`，按 AST 缓存分类拆为 `pure` / `dom-shared` / `node-shared` / `isolated` 四池并结合自动记录的毫秒耗时 LPT 并发调度，前三池走常驻 `shard-worker.mjs` 每文件独立 root suite 复用模块图，`dom-shared` 附带幂等 happy-dom preload 与文件间 DOM 复位，确需独立进程的文件标注 `// @test-isolation: process`，透传额外 CLI 参数时自动回退单入口原生 `tsx --test`；默认最多 16 个测试 worker（不超过可用 CPU 数），`TEST_CONCURRENCY` 可覆写）；日常快速反馈优先跑 `pnpm test:unit` 或 `pnpm check:changed`，均不替代合并前 `pnpm test:all` / `pnpm verify`；单跑指定文件用 `node scripts/run-tests.mjs <file...>`（禁裸跑 `node/tsx --test` 绕过超时看门狗与 `safe-test-assert`），不用过滤管道隐藏失败日志，不依赖 Unix `timeout`。`pnpm check:hygiene` AST 门禁强制五条红线：① 每个 `test/it` 显式 `{ timeout: 60_000 }`；② `skip` 必附理由字符串；③ **禁设 `HELMX_TEST_SUITE_TIMEOUT_MS`**（触发 `env-registry-races` 误报）；④ **禁对 DOM 节点 / `Window` 调 `assert.equal` / `deepEqual`**（防 Fiber 树 `util.inspect` OOM，改用 `assert.ok(a === b)` 或断言标量属性）；⑤ **钩子不受测试超时覆盖**：`before/beforeEach/after/afterEach`（含 `t.after`）凡函数体调用 `close/dispose/stop/kill` 等 teardown 方法的，必须显式传 `{ timeout: 60_000 }`——否则挂起的清理不会发出 `test:fail`，会静默拖死整个分片直到套件总超时。
-- **分档与执行规则**：
-  - `unit` = `protocol + env-io + test-kit + cli + web + plugin-client`（纯内存 / happy-dom，不起真实服务）——改协议、测试基座、CLI、Web 或浏览器 SDK 必跑；
-  - `integration` = `kernel + plugins + hub + plugin-build + node + payload`（真实进程、SQLite、Git、WS、构建、`createHelmx`、daemon、launcher 进程生命周期、共享更新引擎与 payload）——改执行、插件、产品或构建包必跑。**路径级例外**：`packages/cli/test/launcher/`（Hub 生命周期面）与 `packages/env-io/test/update/`（共享更新引擎）两组真实进程测试位于 unit 档包内，但以路径级条目固定归属 `integration` 档（`SUITES` 枚举支持子目录）；
-  - 跨档变更两档都跑，合并前跑 `test:all`（不变量 `all = unit ∪ integration` 不重不漏）；新测试文件须落在已登记包的 `test/`，新包同步更新 `scripts/test-suites.mjs`（`SUITES`）与 `scripts/lib/workspace-meta.mjs`（`PACKAGE_TIERS`）。
-  - **文档例外**：仅修改独立文档（如 `AGENTS.md`、`docs/`、`README.md` 等，不涉及 `packages/` 代码、脚本、构建配置或受测试校验的内置资产）时，跳过构建与测试跑批，避免无效耗时。
-- **共享基座、防抖与防散沙**：复用 `@helmx/test-kit`（仅限 `devDependencies` 与 `test/`，`package-boundaries` 锁死零生产泄漏）及包级 harness（`cli-harness`、`dom-harness`、`plugin-test-env`、`hub-test-env`、`host-backend-stub`）：临时目录用 `useTempDir`，Git 仓库用 `createGitTemplate().cloneTo()`，子进程环境用 `sanitizedHostEnv` / `makeCliEnv`，Web/plugin-client DOM 测试首行 `import './helpers/register-happy-dom.js'` 并用 `ensureHappyDom()` / `resetHappyDom()`（禁裸调 `GlobalRegistrator.register()` 或泄漏 `document`/存储/模块单例）。同步等待用 `deferred` / `waitFor` / 可注入计时参数，禁长固定 `sleep` 与无余量的硬编码墙钟上界断言（超时逃逸须拉大阻塞时长与阈值之比以抗高并发抖动）；共享池单测保持零跨文件全局副作用（真实变更进程环境/信号的用例用 `// @test-isolation: process` 显式入 `isolated` 池）。**三禁**：禁已删功能的历史墓碑测试、禁正则扫描 CSS/TSX 源码的脆弱断言（测 DOM 行为、导出模型或结构不变量）、禁按零散问题新建一两行碎片测试文件（并入对应领域测试）。
-- **快速反馈门（补充而非替代）**：`pnpm check:changed` 按变更集（已提交 ∪ 暂存/未暂存 ∪ 未跟踪；`--base <ref>` 优先，默认取 upstream 或 `origin/HEAD` 的 merge-base，均无则报错要求 `--base`，绝不退化 `HEAD~1`；传参如 `pnpm check:changed -- --base main --list`）选反向闭包受影响包（锁文件/根配置/`scripts/**/*.mjs` 触发全档），顺序执行 `pnpm typecheck` → 受影响包测试；配合 `pnpm check:hygiene` 提供增量快速反馈，不替代分档必跑与合并前 `test:all`。
-- **进程 kill 纪律**：只允许终止**自己 spawn 并持有 PID/句柄**的进程（POSIX：独立进程组 `kill(-pid)`，宽限后 SIGKILL；Windows：`taskkill /PID <pid> /T /F` 杀 owned `ChildProcess` 整棵树，参考 `scripts/run-tests.mjs`）；确需按端口清理时，必须先核验监听进程的 cwd 与实际归属再终止。**严禁按模糊名称/路径发信号（如 `pkill -f`、`pgrep | xargs kill`、`taskkill /IM`）**（会误杀他人会话、其他 worktree 的 dev 服务与无关系统进程），严禁猜测 PID。
+- **命令与单跑**：
+  - 分档：`pnpm test:unit` / `test:integration` / `test:all`（`TEST_CONCURRENCY` 覆写并发，默认上限 16）；
+  - 快速反馈：`pnpm test:unit` 或 `pnpm check:changed`（支持 `-- --base main --list`，仅补充，不替代分档必跑与合并前 `test:all`/`verify`）；
+  - 单跑指定文件：`node scripts/run-tests.mjs <file...>`（禁裸跑 `node/tsx --test`、禁管道吞失败日志、不依赖 Unix `timeout`）；
+  - 变更进程环境/信号的隔离测试文件头标 `// @test-isolation: process`。
+- **`pnpm check:hygiene` AST 五条红线**：
+  1. `test`/`it` 显式 `{ timeout: 60_000 }`；
+  2. `skip` 必附理由字符串；
+  3. **禁设 `HELMX_TEST_SUITE_TIMEOUT_MS`**（触发 `env-registry-races` 误报）；
+  4. **禁对 DOM / `Window` 调 `assert.equal`/`deepEqual`**（防 Fiber 树 `util.inspect` OOM，用 `assert.ok(a === b)` 或标量断言）；
+  5. **钩子不受测试超时覆盖**：`before/beforeEach/after/afterEach`（含 `t.after`）调 `close/dispose/stop/kill` 等 teardown 必传 `{ timeout: 60_000 }`。
+- **分档归属**（`all = unit ∪ integration`；新包同步 `scripts/test-suites.mjs` `SUITES` 与 `scripts/lib/workspace-meta.mjs` `PACKAGE_TIERS`）：
+  - `unit`：`protocol + env-io + test-kit + cli + web + plugin-client`；
+  - `integration`：`kernel + plugins + hub + plugin-build + node + payload`，含两条路径例外：`packages/cli/test/launcher/`、`packages/env-io/test/update/`；
+  - 跨档两档都跑，合并前跑 `test:all`/`verify`。
+- **共享基座与三禁**：复用 `@helmx/test-kit`（仅 `devDependencies`/`test/`，`package-boundaries` 锁定零生产泄漏）与 harness（`cli-harness` / `dom-harness` / `plugin-test-env` / `hub-test-env` / `host-backend-stub`）：`useTempDir`、`createGitTemplate().cloneTo()`、`sanitizedHostEnv`/`makeCliEnv`、DOM 首行 `import './helpers/register-happy-dom.js'` + `ensureHappyDom()/resetHappyDom()`（禁裸 `GlobalRegistrator.register()`）。等待用 `deferred`/`waitFor`/可注入计时，禁长固定 `sleep`。**三禁**：禁已删功能墓碑测试、禁正则扫 CSS/TSX 脆弱断言、禁碎片一两行测试文件。
+- **进程 `kill` 纪律**：只杀**自己 spawn 且持有 PID/句柄**的进程（POSIX `kill(-pid)`；Windows `taskkill /PID <pid> /T /F`）；按端口清理前核验 cwd 与归属。**严禁 `pkill -f`、`pgrep | xargs kill`、`taskkill /IM` 与猜 PID**。
 
-## 6. 开发流程与多智能体协作
+## 6. Worktree 隔离、多智能体合入与 Git 纪律
 
-- **Worktree 隔离开发（所有 Agent 通用）**：不强制使用子代理；无论单代理开发还是拆分子代理、无论是否经 Helmx 派生，所有代码开发必须在独立 worktree 中完成，禁止直接在共享主工作树 `/root/code/helm` 改代码或使用 `/tmp`。开工前核实实际 worktree 绝对路径、它属于 Helmx 主仓、该树由当前任务持有，以及基线提交；任何一项无法确认时先询问，不得直接写入。合回主干（`main`）前须先合入最新主干并在该 worktree 内跑通验证。本仓存在三类互不混用的 worktree，**目录边界与回收方式严禁混用**：
+- **隔离与合入原则（宿主原生隔离优先，不绑定特定 Agent）**：
+  1. **原生隔离优先、禁手工绕过**：写代码或集成合入必须在独立 Git worktree 完成（禁直改 `/root/code/helm`，禁 `/tmp`）。若当前宿主/编排工具提供原生 worktree 或工作区隔离机制，**必须直接使用，严禁先手工 `git worktree add` 再通过目录参数绕过托管分配**；派工提示词只写任务目标与允许修改的文件范围，**不要猜测或写死尚未分配的 worktree 绝对路径**。只读调研/审查可继承共享目录。
+  2. **进入前归属确认**：若宿主或协调者已明确将该隔离工作树分配给本任务（如注入的工作树上下文说明或显式授权），直接开发并在交接前 `git add` + `git commit`，无需重复建树。否则写前核实 `pwd`、`git rev-parse --path-format=absolute --git-common-dir`（匹配 `/root/code/helm`）与 `git worktree list --porcelain`；归属不明则停写询问，不得因目录恰好是 worktree 就默认占用。
+  3. **合入主干**：单分支在 worktree 内合入最新 `main` 并过验证后合回 `main`。多并行分支**严禁逐个盲合进 `main`**，须先在独立集成 worktree 合并全部待合分支与最新 `main`、解冲突并过全量验证后再一步合回 `main`（宿主支持原生隔离时优先派发独立集成任务使用原生受管树，避免阻塞协调者；无原生机制时用手工集成树 `/root/code/helm-worktrees/<integration>`）。跨节点分支在各自节点合入。
 
-  | 类型 | 路径与分支特征 | 由谁分配 | 回收方式（严禁跨类操作） |
+  | 类型 | 路径与分支 | 适用来源 | 回收（严禁跨类操作） |
   | :--- | :--- | :--- | :--- |
-  | **Helmx 受管树** | 目标节点主工作树同级 `.helmx-worktrees/<repo>-<shortId>`，分支 `helmx/spawn-<shortId>`；本机示例 `/root/code/.helmx-worktrees/helm-<shortId>`，远端路径与分隔符依节点平台而定，实际坐标以 execution metadata / `worktreeId` 为准 | `builtin:worktree`（`subagent` / DSL `agent()` / Swarm 派工传 `isolation: 'worktree'`） | 仅限 `cleanup_worktree` 工具、`helmx worktrees cleanup` 或 `swarm_close_group`；**禁止裸 `rm -rf` 或 `git worktree remove`**（会绕过租约账本留下孤儿登记） |
-  | **外部宿主受管树** | 宿主自定（如 `.claude/worktrees/*`），非 `/tmp` | Claude Code / Codex / Paseo 等宿主的内置 worktree 机制 | 按对应宿主机制回收 |
-  | **手工开发 / 集成树** | `/root/code/helm-worktrees/<name>`，分支 `feat/*` 或 `fix/*`（**禁用 `helmx/spawn-*`、`helmx/wf-*` 受管前缀**） | 人类或任意 Agent 手工 `git -C /root/code/helm worktree add -b <branch> /root/code/helm-worktrees/<name> main` | 确认合入后 `git worktree remove` + `git branch -d` |
+  | **宿主受管树** | 宿主托管目录（如 `.helmx-worktrees/<repo>-<shortId>` + `helmx/spawn-*`，或其他宿主自定目录，非 `/tmp`） | 宿主原生 worktree / 工作区隔离 | **按宿主机制回收**（`.helmx-worktrees/*` 仅限受管清理接口/命令或协作组结单，**禁裸 `rm -rf` 或 `git worktree remove`**） |
+  | **手工 / 兜底树** | `/root/code/helm-worktrees/<name>`，`feat/*` 或 `fix/*`（**禁 `helmx/spawn-*`、`helmx/wf-*`**） | 仅限人工开发或宿主无原生隔离机制时 | 合入后 `git worktree remove` + `git branch -d` |
 
-  受管树基于分配时刻的主仓 HEAD 创建（不含源工作区未提交改动）；其分支**不会自动合入** `main`，须由主控或人类按下一款「集成合入」流程合入后再回收。
-- **多子代理并行与集成合入**：多个 Agent 并行开发时（含多个 `helmx/spawn-*` 受管分支、Swarm 多写手分支、或多个外部 Agent 分支），每个写代码的 Agent 必须独占各自的工作树（提示词写明绝对路径与允许修改范围），**严禁将各分支逐个直接合入主干**。必须按序执行：① 新建独立的集成 worktree（`/root/code/helm-worktrees/<integration>`），将各分支先合并进该集成 worktree；② 再把最新主干（`main`）合入该集成 worktree 并解决冲突；③ 在集成 worktree 内跑通构建、门禁与测试且确认无误后，才允许合回主干。主控本机的 `git merge` 仅适用于同节点工作树，跨节点分支需在各自节点处理合入。
-- **合并后清理收尾**：改动合回主干（`main`）后必须完成清理：① 按第 5 节「进程 kill 纪律」停止本轮自己启动的所有服务与后台进程（如 `dev`、Hub `3202`、Web `3201`、临时 `helmx-node` 或测试验收服务，严禁误杀他人或其它 worktree 的进程）；② 确认各工作与集成 worktree 已合入且无保留未提交改动后按类型回收——手工树 `git worktree remove` 并删除已合并临时分支（`git branch -d`）；受管树经 `cleanup_worktree`（传 `mergedInto` 与 `deleteBranch: true`）或 `swarm_close_group` 回收；③ 清理自建临时 `HELMX_DATA_DIR` 等测试目录，确认主仓 `git status` 干净。
-- **轻量改动例外**：仅修改独立文档（如 `AGENTS.md`、`docs/`、`README.md` 等，不涉及源码、脚本、构建配置或受测试校验的包内资产）时，可直接在主仓修改并跳过独立 worktree 与构建/测试跑批。
-- **改动所有权**：已有的修改、暂存和未跟踪文件默认属于用户或其他代理；先记录状态，所有权不明时保留并询问。禁止为清理或同步而重置、清除或覆盖这些改动。
-- **恢复纪律**：禁止从移动中的 `HEAD` 盲目恢复文件，包括 `git show HEAD:<file> > <file>`；恢复前固定基线并核实文件来源，只按确认的文件操作。发现误覆盖时立即停止写入，保留现场并查找快照、reflog 或其他恢复来源。
+  受管树通常基于分配时刻主仓 `HEAD` 创建（不含未提交改动），不会自动合入 `main`。
+- **合后收尾**：① 按第 5 节 `kill` 纪律停本轮自启服务；② 确认已合入且无保留未提交改动后按表分类回收 worktree；③ 清临时 `HELMX_DATA_DIR`，确认主仓 `git status` 干净。
+- **轻量文档例外**：仅改独立文档（`AGENTS.md`、`docs/`、`README.md`、`.helmx/skills/` 等，不涉 `packages/`、脚本、构建配置或受测资产）可直接在主仓修改并跳过独立 worktree 与构建/测试跑批。
+- **改动所有权**：已有修改/暂存/未跟踪文件默认归属他人，记录保留并询问，禁重置覆盖。
+- **恢复纪律**：禁从移动中 `HEAD` 盲目恢复（含 `git show HEAD:<file> > <file>`），误覆盖立即停写保留现场查快照或 reflog。
 - **Git 提交**：中文 Conventional Commits（如 `feat(kernel): ...`），不加 `Co-Authored-By`。
 
-## 7. 文档中心速查（按需深入阅读）
+## 7. 文档中心速查（按需阅读）
 
-- **总览与入门**：`docs/README.md` · `docs/getting-started/`（installation / first-workflow）· `docs/cli/reference.md`（全量命令字典）· `docs/releasing.md`（发版流程：`pnpm release` 本地编排、三制品契约与 GitHub Release notes）
-- **架构机制**：`docs/architecture/overview.md`（微内核职责与单向包拓扑）· `extension-points.md`（Hook 与 10 个 UI 扩展点完整契约）· `envfabric.md`（反向 WS、隧道、文件互斥、自升级）· `pi-durable.md`（五态状态机、存储、机密、CAS 审批）
-- **编排引擎**：`docs/workflows/dsl-guide.md`（JS DSL 权威参考）· `worktree-and-gate.md`（Worktree 生命周期与 Gate 门禁）· `journaling-recovery.md`（账本重放与断点恢复）
-- **插件生态**：`docs/plugins/overview.md`（契约总纲）· `plugin-development.md`（外部插件开发实战）及各内置插件同名文档：`profile / workflow / worktree / swarm / memory / triggers / magpie / json-render / mermaid / token-speed / tiers / title / plan`
-- **Web 约定**：`docs/conventions/web-frontend.md`（设计系统）· `docs/conventions/web-navigation.md`（URL Hash 与导航）
-- **工程排障速查**：`.helmx/skills/helmx-troubleshooting/SKILL.md`（长测试后台跑法与断连防护、合并后 `HEAD^{tree}` 一致免重跑、happy-dom / Radix / TypeScript 踩坑、fork worktree 导致 bash `spawn_error` 的恢复）——Helmx 自动扫描 `.helmx/skills/`，**非 Helmx 的外部 Agent 需主动读取该文件**
+- **总览与入门**：`docs/README.md` · `docs/getting-started/`（index / installation / first-workflow / orchestration-guide）· `docs/cli/reference.md` · `docs/releasing.md`
+- **架构机制**：`docs/architecture/overview.md` · `extension-points.md` · `envfabric.md` · `pi-durable.md`
+- **编排引擎**：`docs/workflows/dsl-guide.md` · `worktree-and-gate.md` · `journaling-recovery.md`
+- **插件生态**：`docs/plugins/overview.md` · `plugin-development.md` 及 13 插件同名文档：`profile / workflow / worktree / swarm / memory / triggers / magpie / json-render / mermaid / token-speed / tiers / title / plan`
+- **Web 约定**：`docs/conventions/web-frontend.md` · `docs/conventions/web-navigation.md`
+- **工程排障**：`.helmx/skills/helmx-troubleshooting/SKILL.md`（长测试后台跑法、合并后 `HEAD^{tree}` 免重跑、happy-dom / Radix / TS 踩坑、fork `spawn_error` 恢复）——若当前环境未自动加载 `.helmx/skills/`，请按需主动读取
