@@ -6,10 +6,47 @@ import { printTableColumns } from '../output.js'
 import { assertNoExtraPositionals, printResult } from './shared.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 
-/** Flag specs for models refresh (--provider is optional; --json is handled globally). */
+/** Flag specs for models refresh (--provider/--providers/--force are optional; --json is handled globally). */
 const REFRESH_FLAGS: readonly FlagSpec[] = [
-  { name: 'provider', type: 'string', help: 'refresh only the specified provider (defaults to all dynamic providers)' },
+  { name: 'provider', type: 'string', help: 'refresh only the specified provider (mutually exclusive with --providers; defaults to all dynamic providers)' },
+  { name: 'providers', type: 'string', help: 'comma-separated list or JSON array of provider IDs to refresh (mutually exclusive with --provider)' },
+  { name: 'force', type: 'boolean', help: 'force refresh bypassing dynamic catalog cache TTL' },
 ]
+
+/** Parse --providers from a JSON string array or comma-separated list, rejecting empty items explicitly. */
+function parseProvidersFlag(raw: string): string[] {
+  const trimmed = raw.trim()
+  if (trimmed === '') {
+    throw new CliError('--providers must be a non-empty comma-separated list or JSON string array', 'invalid_flag_value')
+  }
+  if (trimmed.startsWith('[')) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(trimmed)
+    } catch (err) {
+      throw new CliError(
+        `--providers JSON must be a valid string array: ${err instanceof Error ? err.message : String(err)}`,
+        'invalid_flag_value',
+      )
+    }
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      throw new CliError('--providers JSON must be a non-empty string array', 'invalid_flag_value')
+    }
+    const items: string[] = []
+    for (const item of parsed) {
+      if (typeof item !== 'string' || item.trim() === '') {
+        throw new CliError('--providers JSON array must contain only non-empty strings', 'invalid_flag_value')
+      }
+      items.push(item.trim())
+    }
+    return items
+  }
+  const items = raw.split(',').map((s) => s.trim())
+  if (items.some((s) => s.length === 0)) {
+    throw new CliError('--providers must not contain empty provider IDs', 'invalid_flag_value')
+  }
+  return items
+}
 
 /** Flag specs for models default. */
 const DEFAULT_FLAGS: readonly FlagSpec[] = [
@@ -128,14 +165,25 @@ export function modelsCommands(): CommandSpec[] {
     },
     {
       path: ['models', 'refresh'],
-      description: 'Refresh dynamic model catalog (POST /api/models/refresh)',
+      description: 'Refresh dynamic model catalog (POST /api/models/refresh; supports --provider, --providers, --force)',
       flags: REFRESH_FLAGS,
       async run(ctx: CommandContext) {
         assertNoExtraPositionals(ctx.positionals, 0)
         const provider = flagValue<string>(ctx.flags, 'provider')
+        const providersRaw = flagValue<string>(ctx.flags, 'providers')
+        const force = flagValue<boolean>(ctx.flags, 'force')
+        if (provider !== undefined && providersRaw !== undefined) {
+          throw new CliError('--provider and --providers are mutually exclusive', 'conflicting_flags')
+        }
+        if (provider !== undefined && provider.trim() === '') {
+          throw new CliError('--provider must be a non-empty string', 'invalid_flag_value')
+        }
+        const providers = providersRaw !== undefined ? parseProvidersFlag(providersRaw) : undefined
         const hub = await ctx.hub()
         const result = await hub.post<ModelProvidersRefreshResult>('/api/models/refresh', {
-          ...(provider !== undefined ? { provider } : {}),
+          ...(provider !== undefined ? { provider: provider.trim() } : {}),
+          ...(providers !== undefined ? { providers } : {}),
+          ...(force !== undefined ? { force } : {}),
         })
         printResult(ctx, result)
       },

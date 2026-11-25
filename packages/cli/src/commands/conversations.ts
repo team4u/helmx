@@ -240,6 +240,7 @@ export function conversationsCommands(): CommandSpec[] {
       { name: 'cwd', type: 'string' },
       { name: 'model', type: 'string' },
       { name: 'tags', type: 'string', help: 'JSON array or comma-separated' },
+      { name: 'parent-conversation-id', type: 'number', help: 'parent conversation ID for creating a derived child conversation' },
     ],
     async run(ctx: CommandContext) {
       assertNoExtraPositionals(ctx.positionals, 0)
@@ -256,6 +257,16 @@ export function conversationsCommands(): CommandSpec[] {
       }
       const tags = flagValue<string>(ctx.flags, 'tags')
       if (tags !== undefined) body.tags = coerceTags(tags)
+      const parentConversationId = flagValue<number>(ctx.flags, 'parent-conversation-id')
+      if (parentConversationId !== undefined) {
+        if (!Number.isSafeInteger(parentConversationId) || parentConversationId <= 0) {
+          throw new CliError(
+            `--parent-conversation-id must be a positive integer, got "${parentConversationId}"`,
+            'invalid_flag_value',
+          )
+        }
+        body.parentConversationId = parentConversationId
+      }
       const hub = await ctx.hub()
       printConversationRecord(ctx, await hub.post<ConversationSummary>('/api/conversations', body))
     },
@@ -273,6 +284,7 @@ export function conversationsCommands(): CommandSpec[] {
       { name: 'profile-id', type: 'string' },
       { name: 'node', type: 'string', help: 'switch bound compute node ID' },
       { name: 'cwd', type: 'string', help: 'switch working directory on the target node' },
+      { name: 'tags', type: 'string', help: 'replace conversation tags (JSON array or comma-separated; empty string or [] clears)' },
       { name: 'pinned', type: 'boolean' },
       { name: 'unread', type: 'boolean' },
     ],
@@ -292,12 +304,14 @@ export function conversationsCommands(): CommandSpec[] {
         const v = flagValue<string>(ctx.flags, flag)
         if (v !== undefined) body[key] = v
       }
+      const tags = flagValue<string>(ctx.flags, 'tags')
+      if (tags !== undefined) body.tags = coerceTags(tags)
       for (const key of ['pinned', 'unread'] as const) {
         const v = ctx.flags.get(key)
         if (v !== undefined) body[key] = v
       }
       if (Object.keys(body).length === 0) {
-        throw new CliError('no update fields provided (--title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread)', 'missing_update_fields')
+        throw new CliError('no update fields provided (--title/--model/--thinking/--profile-id/--node/--cwd/--tags/--pinned/--unread)', 'missing_update_fields')
       }
       const hub = await ctx.hub()
       printConversationRecord(ctx, await hub.patch<ConversationSummary>(`/api/conversations/${id}`, body))
