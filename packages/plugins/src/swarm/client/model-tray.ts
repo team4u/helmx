@@ -140,9 +140,17 @@ export function resolveSwarmTrayLiveSnippet(
     (input.summary?.pendingAskCount ?? 0) > 0 ||
     input.summary?.status === 'blocked'
   ) {
+    const askTitle =
+      input.pendingAsk?.title !== undefined
+        ? resolveLocalizedText(input.pendingAsk.title, locale).trim()
+        : ''
+    const askDesc =
+      input.pendingAsk?.description !== undefined
+        ? resolveLocalizedText(input.pendingAsk.description, locale).trim()
+        : ''
     const raw =
-      input.pendingAsk?.title ||
-      input.pendingAsk?.description ||
+      askTitle ||
+      askDesc ||
       input.summary?.doing ||
       input.fallbackDoing ||
       resolveLocalizedText(TRAY_AWAITING_HUMAN, locale)

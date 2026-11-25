@@ -18,7 +18,7 @@
  */
 
 import type { AskCreateSpec, AskResult, AskSpec } from '@helmx/protocol'
-import { HelmxError, isPlainObject } from '@helmx/protocol'
+import { HelmxError, isPlainObject, parseLocalizedText, parseNonEmptyLocalizedText } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 
 import type { HelmxStore } from './store.js'
@@ -354,7 +354,8 @@ function parseAskSpecRow(row: { id: string; specJson: string }): AskSpec {
     parsed.id.length === 0 ||
     !Number.isInteger(parsed.conversationId) ||
     (parsed.conversationId as number) <= 0 ||
-    typeof parsed.title !== 'string' ||
+    parseLocalizedText(parsed.title) === undefined ||
+    (parsed.description !== undefined && parseLocalizedText(parsed.description) === undefined) ||
     (parsed.status !== 'pending' &&
       parsed.status !== 'answered' &&
       parsed.status !== 'cancelled' &&
@@ -367,8 +368,17 @@ function parseAskSpecRow(row: { id: string; specJson: string }): AskSpec {
         !isPlainObject(f) ||
         typeof f.name !== 'string' ||
         f.name.length === 0 ||
-        typeof f.label !== 'string' ||
-        (f.type !== 'text' && f.type !== 'select' && f.type !== 'confirm'),
+        parseLocalizedText(f.label) === undefined ||
+        (f.type !== 'text' && f.type !== 'select' && f.type !== 'confirm') ||
+        (f.type === 'select' &&
+          (!Array.isArray(f.options) ||
+            f.options.some(
+              (o) =>
+                !isPlainObject(o) ||
+                typeof o.value !== 'string' ||
+                o.value.length === 0 ||
+                (o.label !== undefined && parseLocalizedText(o.label) === undefined),
+            ))),
     )
   ) {
     throw new HelmxError(
@@ -395,11 +405,11 @@ function validateAskSpec(spec: AskCreateSpec): void {
   if (!Number.isInteger(spec.conversationId) || (spec.conversationId ?? 0) <= 0) {
     throw new HelmxError('validation_error', 'AskDoc requires conversationId (positive integer)')
   }
-  if (typeof spec.title !== 'string' || spec.title.trim() === '') {
-    throw new HelmxError('validation_error', 'AskDoc requires title (non-empty string)')
+  if (parseNonEmptyLocalizedText(spec.title) === undefined) {
+    throw new HelmxError('validation_error', 'AskDoc requires title (non-empty string or LocalizedText map)')
   }
-  if (spec.description !== undefined && typeof spec.description !== 'string') {
-    throw new HelmxError('validation_error', 'AskDoc description must be a string')
+  if (spec.description !== undefined && parseLocalizedText(spec.description) === undefined) {
+    throw new HelmxError('validation_error', 'AskDoc description must be a string or valid LocalizedText map')
   }
   if (spec.ownerPluginId !== undefined && typeof spec.ownerPluginId !== 'string') {
     throw new HelmxError('validation_error', 'AskDoc ownerPluginId must be a string')
@@ -424,8 +434,11 @@ function validateAskSpec(spec: AskCreateSpec): void {
       throw new HelmxError('validation_error', `duplicate field.name: ${field.name}`)
     }
     names.add(field.name)
-    if (typeof field.label !== 'string' || field.label === '') {
-      throw new HelmxError('validation_error', `field '${field.name}' label must be a non-empty string`)
+    if (parseNonEmptyLocalizedText(field.label) === undefined) {
+      throw new HelmxError(
+        'validation_error',
+        `field '${field.name}' label must be a non-empty string or LocalizedText map`,
+      )
     }
     if (field.type !== 'text' && field.type !== 'select' && field.type !== 'confirm') {
       throw new HelmxError(
@@ -437,9 +450,19 @@ function validateAskSpec(spec: AskCreateSpec): void {
       if (
         !Array.isArray(field.options) ||
         field.options.length === 0 ||
-        field.options.some((o) => o === null || typeof o !== 'object' || typeof o.value !== 'string' || o.value === '')
+        field.options.some(
+          (o) =>
+            o === null ||
+            typeof o !== 'object' ||
+            typeof o.value !== 'string' ||
+            o.value === '' ||
+            parseNonEmptyLocalizedText(o.label) === undefined,
+        )
       ) {
-        throw new HelmxError('validation_error', `select field '${field.name}' requires non-empty options (each with a non-empty string value)`)
+        throw new HelmxError(
+          'validation_error',
+          `select field '${field.name}' requires non-empty options (each with a non-empty value and LocalizedText label)`,
+        )
       }
     }
   }

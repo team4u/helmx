@@ -852,6 +852,27 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
       }),
     )
     await expectValidation(service.createAsk({ conversationId: 1, title: '', fields: [{ name: 'x', label: 'X', type: 'text' }] }))
+    await expectValidation(service.createAsk({ conversationId: 1, title: {}, fields: [{ name: 'x', label: 'X', type: 'text' }] }))
+    await expectValidation(
+      service.createAsk({ conversationId: 1, title: { fr: 'Oui' } as never, fields: [{ name: 'x', label: 'X', type: 'text' }] }),
+    )
+    await expectValidation(
+      service.createAsk({ conversationId: 1, title: { en: '   ' }, fields: [{ name: 'x', label: 'X', type: 'text' }] }),
+    )
+    await expectValidation(
+      service.createAsk({
+        conversationId: 1,
+        title: 'bad select option label',
+        fields: [{ name: 'x', label: 'X', type: 'select', options: [{ label: '', value: 'v' }] }],
+      }),
+    )
+    await expectValidation(
+      service.createAsk({
+        conversationId: 1,
+        title: 'missing select option label',
+        fields: [{ name: 'x', label: 'X', type: 'select', options: [{ value: 'v' } as never] }],
+      }),
+    )
     await assert.rejects(
       () =>
         service.createAsk({
@@ -883,6 +904,45 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
       'must note that ask remains pending after restart',
     )
     await service.cancelAsk(service.listAsks('pending')[0]!.id)
+    await store.close()
+  })
+
+  it('LocalizedText fields: bilingual title/description/labels/options persist cleanly through store', { timeout: 60_000 }, async () => {
+    await openAskService()
+    const localizedPromise = service.createAsk({
+      id: 'ask-i18n-1',
+      conversationId: 1,
+      title: { en: 'Plan Approval v1', 'zh-CN': '计划审批 v1' },
+      description: { en: 'Review plan', 'zh-CN': '审阅方案' },
+      fields: [
+        {
+          name: 'decision',
+          label: { en: 'Decision', 'zh-CN': '审批决策' },
+          type: 'select',
+          required: true,
+          options: [
+            { value: 'approve', label: { en: 'Approve', 'zh-CN': '批准' } },
+            { value: 'revise', label: { en: 'Revise', 'zh-CN': '修订' } },
+          ],
+        },
+        {
+          name: 'feedback',
+          label: { en: 'Feedback', 'zh-CN': '意见' },
+          type: 'text',
+        },
+      ],
+    })
+    void localizedPromise.catch(() => {})
+    const persisted = service.listAsks('pending')[0]!
+    assert.deepEqual(persisted.title, { en: 'Plan Approval v1', 'zh-CN': '计划审批 v1' })
+    assert.deepEqual(persisted.description, { en: 'Review plan', 'zh-CN': '审阅方案' })
+    assert.deepEqual(persisted.fields[0]?.label, { en: 'Decision', 'zh-CN': '审批决策' })
+    assert.deepEqual(persisted.fields[0]?.options?.[0]?.label, { en: 'Approve', 'zh-CN': '批准' })
+    assert.deepEqual(persisted.fields[1]?.label, { en: 'Feedback', 'zh-CN': '意见' })
+
+    const settled = await service.answerAsk('ask-i18n-1', { decision: 'approve', feedback: 'ok' })
+    assert.equal(settled.status, 'answered')
+    assert.deepEqual(settled.title, { en: 'Plan Approval v1', 'zh-CN': '计划审批 v1' })
     await store.close()
   })
 })

@@ -6,6 +6,7 @@ import { printTableColumns } from '../output.js'
 import { formatAskWaiting } from '../timing.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { assertNoExtraPositionals, printResult, requirePositional } from './shared.js'
+import { resolveDisplayString } from '../output.js'
 
 export function asksCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
@@ -26,7 +27,7 @@ export function asksCommands(): CommandSpec[] {
         { label: 'conversation', value: (a) => (typeof a.conversationId === 'number' ? `#${a.conversationId}` : '') },
         { label: 'status', value: (a) => a.status ?? '' },
         { label: 'waiting', value: (a) => formatAskWaiting(a, nowMs) },
-        { label: 'title', value: (a) => a.title ?? '' },
+        { label: 'title', value: (a) => resolveDisplayString(a.title ?? '') },
       ])
     },
   })

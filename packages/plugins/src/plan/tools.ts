@@ -352,32 +352,47 @@ export function registerPlanTools(
             id: askId,
             conversationId,
             ownerPluginId: PLAN_PLUGIN_ID,
-            title: `Plan Approval v${draft.version}: ${draft.title}`,
+            title: {
+              en: `Plan Approval v${draft.version}: ${draft.title}`,
+              'zh-CN': `计划审批 v${draft.version}：${draft.title}`,
+            },
             description: safeSummary,
             expectedStateSeq,
             fields: [
               {
                 name: 'decision',
-                label: 'Decision',
+                label: { en: 'Decision', 'zh-CN': '审批决策' },
                 type: 'select',
                 required: true,
                 options: [
-                  { label: 'Approve & keep current context', value: 'approve' },
-                  { label: 'Approve & start fresh handoff', value: 'approve_handoff' },
+                  {
+                    label: { en: 'Approve & keep current context', 'zh-CN': '批准并保留当前上下文' },
+                    value: 'approve',
+                  },
+                  {
+                    label: { en: 'Approve & start fresh handoff', 'zh-CN': '批准并开启新上下文执行' },
+                    value: 'approve_handoff',
+                  },
                   ...(executionModel !== undefined
                     ? [
                         {
-                          label: `Approve & handoff to ${executionModel}`,
+                          label: {
+                            en: `Approve & handoff to ${executionModel}`,
+                            'zh-CN': `批准并切换至 ${executionModel} 新上下文执行`,
+                          },
                           value: 'approve_handoff_model',
                         },
                       ]
                     : []),
-                  { label: 'Request revisions', value: 'revise' },
+                  {
+                    label: { en: 'Request revisions', 'zh-CN': '要求修订方案' },
+                    value: 'revise',
+                  },
                 ],
               },
               {
                 name: 'feedback',
-                label: 'Feedback (optional)',
+                label: { en: 'Feedback (optional)', 'zh-CN': '补充意见（可选）' },
                 type: 'text',
                 required: false,
               },

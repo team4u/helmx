@@ -11,7 +11,7 @@ import type {
 } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, type FlagSpec } from '../args.js'
-import { printTableColumns } from '../output.js'
+import { printTableColumns, resolveDisplayString } from '../output.js'
 import { watchJsonSse } from '../stream.js'
 import { formatConversationTiming, formatDurationMs, projectConversationForHuman } from '../timing.js'
 import type { CommandContext, CommandSpec } from './shared.js'
@@ -694,8 +694,8 @@ function summarizeEvent(payload: unknown): string {
       extra = `#${String(event.conversationId ?? '?')}`
       break
     case 'ask.upsert': {
-      const a = event.ask as { id?: string; title?: string } | undefined
-      extra = `${a?.id ?? '?'} ${a?.title ?? ''}`
+      const a = event.ask as { id?: string; title?: unknown } | undefined
+      extra = `${a?.id ?? '?'} ${resolveDisplayString(a?.title ?? '')}`
       break
     }
     case 'ask.resolved':

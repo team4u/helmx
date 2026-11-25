@@ -2298,7 +2298,14 @@ test('conversations watch and asks list: surface timing honestly in human mode a
       },
       'GET /api/asks': () => ({
         body: [
-          { id: 'ask-1', conversationId: 21, title: 'Confirm prod deploy', fields: [], status: 'pending', createdAt: baseNow - 75_000 },
+          {
+            id: 'ask-1',
+            conversationId: 21,
+            title: { en: 'Confirm prod deploy', 'zh-CN': '确认生产发布' },
+            fields: [],
+            status: 'pending',
+            createdAt: baseNow - 75_000,
+          },
           { id: 'ask-2', conversationId: 22, title: 'Legacy ask without time', fields: [], status: 'pending', createdAt: 0 },
         ],
       }),
@@ -2343,5 +2350,6 @@ test('conversations watch and asks list: surface timing honestly in human mode a
   assert.equal(asksJson.code, 0, asksJson.err)
   const parsedAsks = JSON.parse(asksJson.out) as Array<Record<string, unknown>>
   assert.equal(parsedAsks.length, 2)
+  assert.deepEqual(parsedAsks[0]?.['title'], { en: 'Confirm prod deploy', 'zh-CN': '确认生产发布' })
   assert.equal(parsedAsks[0]?.['createdAt'], baseNow - 75_000)
 })

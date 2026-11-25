@@ -12,7 +12,7 @@
 import { Type, type Static, type TSchema } from 'typebox'
 import { Compile, type Validator } from 'typebox/compile'
 import type { TLocalizedValidationError } from 'typebox/error'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, parseLocalizedText, parseNonEmptyLocalizedText } from '@helmx/protocol'
 import type {
   AskSpec,
   ConversationEntry,
@@ -170,11 +170,34 @@ const CONVERSATION_LIVE_CHECKER = Compile(
   }),
 )
 
+const LOCALIZED_TEXT_SCHEMA = Type.Union([
+  Type.String(),
+  Type.Object(
+    {
+      en: Type.Optional(Type.String()),
+      'zh-CN': Type.Optional(Type.String()),
+    },
+    { additionalProperties: false, minProperties: 1 },
+  ),
+])
+const NON_EMPTY_LOCALIZED_TEXT_SCHEMA = Type.Union([
+  NonEmptyString,
+  Type.Object(
+    {
+      en: Type.Optional(NonEmptyString),
+      'zh-CN': Type.Optional(NonEmptyString),
+    },
+    { additionalProperties: false, minProperties: 1 },
+  ),
+])
+
 const ASK_FIELD_SCHEMA = Type.Object({
   name: Type.String(),
-  label: Type.String(),
+  label: NON_EMPTY_LOCALIZED_TEXT_SCHEMA,
   type: Type.Enum(['text', 'select', 'confirm'] as const),
-  options: Type.Optional(Type.Array(Type.Object({ label: Type.String(), value: Type.String() }))),
+  options: Type.Optional(
+    Type.Array(Type.Object({ label: NON_EMPTY_LOCALIZED_TEXT_SCHEMA, value: NonEmptyString })),
+  ),
   required: Type.Optional(Type.Boolean()),
 })
 
@@ -182,12 +205,12 @@ const ASK_SPEC_CHECKER = Compile(
   Type.Object({
     id: NonEmptyString,
     conversationId: Type.Integer(),
-    title: NonEmptyString,
+    title: NON_EMPTY_LOCALIZED_TEXT_SCHEMA,
     fields: Type.Array(ASK_FIELD_SCHEMA, { minItems: 1 }),
     status: Type.Enum(['pending', 'answered', 'cancelled', 'superseded'] as const),
     createdAt: Type.Number(),
     ownerPluginId: Type.Optional(Type.String()),
-    description: Type.Optional(Type.String()),
+    description: Type.Optional(LOCALIZED_TEXT_SCHEMA),
     expectedStateSeq: Type.Optional(Type.Integer()),
   }),
 )
@@ -198,13 +221,39 @@ function assertAskSpecShape(value: unknown): AskSpec {
     value,
     'ask.upsert requires an AskSpec-shaped ask (id/conversationId/title/fields/status/createdAt)',
   )
+  if (parseNonEmptyLocalizedText(ask.title) === undefined) {
+    throw new HelmxError(
+      'invalid_event',
+      'ask.upsert requires a non-empty LocalizedText title (no blank strings or blank locale entries)',
+      500,
+    )
+  }
+  if (ask.description !== undefined && parseLocalizedText(ask.description) === undefined) {
+    throw new HelmxError('invalid_event', 'ask.upsert description must be a valid LocalizedText', 500)
+  }
   for (const field of ask.fields) {
-    if (field.type === 'select' && (!field.options || field.options.length === 0)) {
+    if (parseNonEmptyLocalizedText(field.label) === undefined) {
       throw new HelmxError(
         'invalid_event',
-        'ask.upsert select field requires non-empty options (consistent with createAsk validation)',
+        'ask.upsert field.label must be a non-empty LocalizedText (no blank strings or blank locale entries)',
         500,
       )
+    }
+    if (field.type === 'select') {
+      if (!field.options || field.options.length === 0) {
+        throw new HelmxError(
+          'invalid_event',
+          'ask.upsert select field requires non-empty options (consistent with createAsk validation)',
+          500,
+        )
+      }
+      if (field.options.some((opt) => parseNonEmptyLocalizedText(opt.label) === undefined)) {
+        throw new HelmxError(
+          'invalid_event',
+          'ask.upsert select option label must be a non-empty LocalizedText',
+          500,
+        )
+      }
     }
   }
   return ask as unknown as AskSpec

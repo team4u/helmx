@@ -1301,6 +1301,33 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
         parseStoredAskSpec('spec', validSpec, { id: 'a1', conversationId: 1, status: 'pending' }).id,
         'a1',
       )
+      const localizedSpec = JSON.stringify({
+        id: 'a2',
+        title: { en: 'Approve', 'zh-CN': '审批' },
+        description: { en: 'Desc', 'zh-CN': '描述' },
+        status: 'pending',
+        fields: [
+          {
+            name: 'decision',
+            label: { en: 'Decision', 'zh-CN': '决策' },
+            type: 'select',
+            options: [{ value: 'approve', label: { en: 'Approve', 'zh-CN': '批准' } }],
+          },
+        ],
+      })
+      assert.equal(
+        parseStoredAskSpec('spec', localizedSpec, { id: 'a2', conversationId: 1, status: 'pending' }).id,
+        'a2',
+      )
+      assert.throws(
+        () =>
+          parseStoredAskSpec(
+            'spec',
+            JSON.stringify({ id: 'a3', title: { fr: 'Oui' }, status: 'pending', fields: [] }),
+            { id: 'a3', conversationId: 1, status: 'pending' },
+          ),
+        (e: unknown) => e instanceof HelmxError && e.code === 'store_data_corrupted',
+      )
       assert.deepEqual(parseStoredAskResult('result', '{"ok":"yes"}'), { ok: 'yes' })
       assert.throws(
         () => parseStoredAskSpec('spec', '{"id":"wrong"}', { id: 'a1', conversationId: 1, status: 'pending' }),

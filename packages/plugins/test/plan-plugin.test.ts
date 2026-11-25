@@ -1096,10 +1096,29 @@ test('plan_propose: validates summary, prevents code fences/duplicates, handles 
     await waitFor(() => harness.createdAsks.length === 1)
     const ask1 = harness.createdAsks[0]!
     assert.equal(ask1.expectedStateSeq, 11)
+    assert.deepEqual(ask1.title, {
+      en: 'Plan Approval v1: Refactor Auth',
+      'zh-CN': '计划审批 v1：Refactor Auth',
+    })
     assert.equal(ask1.description, 'Auth plan with [REDACTED] redacted')
-    assert.equal(ask1.description?.includes('```'), false)
+    assert.equal(typeof ask1.description === 'string' && ask1.description.includes('```'), false)
+    const assertBilingual = (value: unknown, contextLabel: string): void => {
+      assert.ok(parseNonEmptyLocalizedText(value) !== undefined, `${contextLabel} must be valid LocalizedText`)
+      assert.equal(typeof value, 'object', `${contextLabel} must be localized map`)
+      const map = value as Record<string, unknown>
+      assert.equal(typeof map['en'], 'string', `${contextLabel}.en missing`)
+      assert.equal(typeof map['zh-CN'], 'string', `${contextLabel}['zh-CN'] missing`)
+    }
+    assertBilingual(ask1.title, 'ask1.title')
     const decisionField1 = ask1.fields.find((f) => f.name === 'decision')
     assert.ok(decisionField1 && decisionField1.type === 'select')
+    assertBilingual(decisionField1.label, 'decision.label')
+    for (const opt of decisionField1.options ?? []) {
+      assertBilingual(opt.label, `decision.option.${opt.value}`)
+    }
+    const feedbackField1 = ask1.fields.find((f) => f.name === 'feedback')
+    assert.ok(feedbackField1)
+    assertBilingual(feedbackField1.label, 'feedback.label')
     assert.equal(decisionField1.options?.some((o) => o.value === 'approve_handoff_model'), false)
 
     // Duplicate propose while ask1 is pending must reject
@@ -1241,7 +1260,15 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
       { conversationId: 1 },
     ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 2)
-    harness.answerAsk(harness.createdAsks[1]!.id!, {
+    const askWithModel = harness.createdAsks[1]!
+    const handoffModelOpt = askWithModel.fields
+      .find((f) => f.name === 'decision')
+      ?.options?.find((o) => o.value === 'approve_handoff_model')
+    assert.deepEqual(handoffModelOpt?.label, {
+      en: 'Approve & handoff to tier/strong',
+      'zh-CN': '批准并切换至 tier/strong 新上下文执行',
+    })
+    harness.answerAsk(askWithModel.id!, {
       decision: 'approve_handoff_model',
       feedback: 'Include tests for SECRET_TOKEN',
     })

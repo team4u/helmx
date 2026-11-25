@@ -3,7 +3,7 @@
  * ContextDivider, PluginCard, ResolvedAskRow, TurnErrorNotice, and TimelineLiveWaitingRow.
  */
 import { useState } from 'react'
-import type { AskSpec, ConversationSummary } from '@helmx/protocol/browser'
+import { resolveLocalizedText, type AskSpec, type ConversationSummary } from '@helmx/protocol/browser'
 import { Button, HelmxIcon, useSharedNowMs } from '@helmx/plugin-client'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -78,7 +78,7 @@ function resolvedAskLabel(status: string, t: WebMessageTranslator): string {
 }
 
 export function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answered' | 'cancelled' | 'superseded' }) {
-  const { t } = useWebLocale()
+  const { locale, t } = useWebLocale()
   const [open, setOpen] = useState(false)
   return (
     <div className="trace-entry">
@@ -86,13 +86,13 @@ export function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answere
         <span className="trace-row-left">
           <HelmxIcon name="check-circle" size={12} />
           <span className="trace-tool-name">{t('conv.ask.rowTitle')}</span>
-          <span className="trace-tool-summary">{ask.title}</span>
+          <span className="trace-tool-summary">{resolveLocalizedText(ask.title, locale)}</span>
         </span>
         <span className="trace-row-right">{resolvedAskLabel(status, t)}</span>
       </button>
       {open ? (
         <div className="trace-expanded-body selectable">
-          {ask.description !== undefined ? <span>{ask.description}</span> : null}
+          {ask.description !== undefined ? <span>{resolveLocalizedText(ask.description, locale)}</span> : null}
         </div>
       ) : null}
     </div>

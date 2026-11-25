@@ -3,7 +3,7 @@
  * (`parseStoredAskSpec`, `parseStoredAskResult`) for `helmx_asks`.
  */
 
-import { HelmxError, isPlainObject } from '@helmx/protocol'
+import { HelmxError, isPlainObject, parseLocalizedText } from '@helmx/protocol'
 import type { SqliteExecutor } from '@earendil-works/chord/sqlite'
 import { addConvIndex, parseStoredJson, removeConvIndex } from './shared.js'
 import type { SqliteMirrorQueue } from './write-queue.js'
@@ -209,7 +209,7 @@ export function parseStoredAskSpec(
   if (!isPlainObject(parsed)) throw corrupted('expected JSON object for AskSpec')
   if (typeof parsed.id !== 'string' || parsed.id.length === 0) throw corrupted('missing or invalid spec.id')
   if (parsed.id !== expected.id) throw corrupted(`spec.id '${parsed.id}' does not match row id '${expected.id}'`)
-  if (typeof parsed.title !== 'string') throw corrupted('missing or invalid spec.title')
+  if (parseLocalizedText(parsed.title) === undefined) throw corrupted('missing or invalid spec.title')
   if (!isValidAskStatus(parsed.status)) throw corrupted(`invalid spec.status '${String(parsed.status)}'`)
   if (parsed.status !== expected.status) {
     throw corrupted(`spec.status '${parsed.status}' does not match row status '${expected.status}'`)
@@ -251,7 +251,7 @@ export function parseStoredAskSpec(
       throw corrupted(`row expectedStateSeq ${expected.expectedStateSeq} is below spec.expectedStateSeq ${parsed.expectedStateSeq}`)
     }
   }
-  if (parsed.description !== undefined && typeof parsed.description !== 'string') {
+  if (parsed.description !== undefined && parseLocalizedText(parsed.description) === undefined) {
     throw corrupted('invalid spec.description')
   }
   if (parsed.ownerPluginId !== undefined && typeof parsed.ownerPluginId !== 'string') {
@@ -263,7 +263,7 @@ export function parseStoredAskSpec(
       !isPlainObject(field) ||
       typeof field.name !== 'string' ||
       field.name.length === 0 ||
-      typeof field.label !== 'string' ||
+      parseLocalizedText(field.label) === undefined ||
       (field.type !== 'text' && field.type !== 'select' && field.type !== 'confirm')
     ) {
       throw corrupted('spec.fields contains an invalid field entry')
@@ -279,7 +279,7 @@ export function parseStoredAskSpec(
             !isPlainObject(o) ||
             typeof o.value !== 'string' ||
             o.value.length === 0 ||
-            (o.label !== undefined && typeof o.label !== 'string'),
+            (o.label !== undefined && parseLocalizedText(o.label) === undefined),
         )
       ) {
         throw corrupted(`select field '${field.name}' has invalid options`)

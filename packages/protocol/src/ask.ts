@@ -1,19 +1,20 @@
 /**
  * AskDoc approval contract: structured human-in-the-loop prompts with optional expectedStateSeq guard.
  */
+import type { LocalizedText } from './locale.js'
 
 export type AskFieldType = 'text' | 'select' | 'confirm'
 
 /** A single candidate option of a select field. */
 export interface AskFieldOption {
-  label: string
+  label: LocalizedText
   value: string
 }
 
 /** Definition of a single question field. */
 export interface AskFieldSpec {
   name: string
-  label: string
+  label: LocalizedText
   type: AskFieldType
   /** Candidate list when type is select. */
   options?: Array<AskFieldOption>
@@ -27,8 +28,8 @@ export interface AskSpec {
   id: string
   conversationId: number
   ownerPluginId?: string
-  title: string
-  description?: string
+  title: LocalizedText
+  description?: LocalizedText
   fields: AskFieldSpec[]
   /** Optional CAS watermark: if the caller submits a conflicting expectedStateSeq, the host rejects with 409. */
   expectedStateSeq?: number

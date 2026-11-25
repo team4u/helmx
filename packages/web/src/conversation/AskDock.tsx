@@ -1,5 +1,5 @@
 import { useId, useMemo, useState } from 'react'
-import type { AskFieldSpec, AskSpec } from '@helmx/protocol/browser'
+import { resolveLocalizedText, type AskFieldSpec, type AskSpec } from '@helmx/protocol/browser'
 import { asksApi } from '../lib/api.js'
 import {
   Button,
@@ -38,14 +38,14 @@ interface TerminalSnapshot {
 }
 
 /** Extract the terminal snapshot (last 40 lines) from the ask extension field
- * terminalSnapshot or from a fenced block in description (stripping fence lines). */
-function extractTerminalSnapshot(ask: AskSpec): TerminalSnapshot | undefined {
+ * terminalSnapshot or from a fenced block in resolved descriptionText (stripping fence lines). */
+function extractTerminalSnapshot(ask: AskSpec, descriptionText: string): TerminalSnapshot | undefined {
   const extra = ask as AskSpec & { context?: { terminalSnapshot?: unknown } }
   const fromContext = extra.context?.terminalSnapshot
   if (typeof fromContext === 'string' && fromContext.trim() !== '') {
     return { source: 'context', text: lastLines(fromContext, 40) }
   }
-  const desc = ask.description ?? ''
+  const desc = descriptionText
   const marker = desc.indexOf('```')
   if (marker !== -1) {
     const prefix = desc.slice(0, marker).trim()
@@ -81,13 +81,14 @@ function AskFieldInput({
   onChange: (v: string) => void
   disabled: boolean
 }) {
-  const { t } = useWebLocale()
+  const { locale, t } = useWebLocale()
+  const fieldLabel = resolveLocalizedText(field.label, locale)
   if (field.type === 'select') {
     const options = [
       { value: '', label: t('composer.ask.selectPlaceholder') },
       ...(field.options ?? []).map((opt) => ({
         value: opt.value,
-        label: opt.label,
+        label: resolveLocalizedText(opt.label, locale),
       })),
     ]
     return (
@@ -128,7 +129,7 @@ function AskFieldInput({
       type="text"
       value={value}
       disabled={disabled}
-      placeholder={field.label}
+      placeholder={fieldLabel}
       onChange={(e) => onChange(e.target.value)}
       autoComplete="off"
     />
@@ -137,7 +138,7 @@ function AskFieldInput({
 
 function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
   const { openConversationDrawer } = useStoreActions()
-  const { t } = useWebLocale()
+  const { locale, t } = useWebLocale()
   // The same approval can appear in both an ancestor panel and a child
   // conversation drawer; form labels associate with this instance only.
   const formId = useId()
@@ -145,7 +146,9 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
   const [submitting, setSubmitting] = useState<'answer' | 'cancel' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [snapshotOpen, setSnapshotOpen] = useState(false)
-  const snapshot = useMemo(() => extractTerminalSnapshot(ask), [ask])
+  const titleText = resolveLocalizedText(ask.title, locale)
+  const descText = ask.description !== undefined ? resolveLocalizedText(ask.description, locale) : ''
+  const snapshot = useMemo(() => extractTerminalSnapshot(ask, descText), [ask, descText])
 
   const isSingleConfirm = ask.fields.length === 1 && ask.fields[0]?.type === 'confirm'
   const missingRequired = ask.fields
@@ -183,7 +186,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
   const visibleDescription =
     snapshot?.source === 'description'
       ? snapshot.prefix
-      : ask.description?.trim() ? ask.description : undefined
+      : descText.trim() ? descText : undefined
 
   return (
     <form
@@ -196,7 +199,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
     >
       <div className="ask-dock-header">
         <StatusLight tone="blocked" label={t('composer.ask.awaitingApproval')} />
-        <span className="ask-dock-title">{ask.title}</span>
+        <span className="ask-dock-title">{titleText}</span>
         {(ask.ownerPluginId !== undefined || ask.expectedStateSeq !== undefined) && (
           /* 机器元数据（owner 插件 / CAS seq）不再是常驻徽章：小号 info 入口 + 可访问 Popover。 */
           <PopoverRoot>
@@ -275,7 +278,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
             <Field
               key={field.name}
               className="ask-dock-field"
-              label={field.label}
+              label={resolveLocalizedText(field.label, locale)}
               required={field.required === true}
               htmlFor={field.type === 'confirm' ? false : `${formId}-${field.name}`}
             >

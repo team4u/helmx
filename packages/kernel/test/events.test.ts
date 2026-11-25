@@ -551,11 +551,52 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
       () => hub.publish('ask.upsert', { ...baseAsk, expectedStateSeq: '3' as never }),
       /ask\.upsert/,
     )
+    assert.throws(
+      () => hub.publish('ask.upsert', { ...baseAsk, title: {} as never }),
+      /ask\.upsert/,
+    )
+    assert.throws(
+      () => hub.publish('ask.upsert', { ...baseAsk, title: { fr: 'Oui' } as never }),
+      /ask\.upsert/,
+    )
+    assert.throws(
+      () => hub.publish('ask.upsert', { ...baseAsk, title: { en: '   ' } }),
+      /ask\.upsert/,
+    )
+    assert.throws(
+      () =>
+        hub.publish('ask.upsert', {
+          ...baseAsk,
+          fields: [
+            {
+              name: 'decision',
+              label: { en: 'Decision', 'zh-CN': '审批决策' },
+              type: 'select',
+              options: [{ label: { en: '  ' }, value: 'approve' }],
+            },
+          ],
+        }),
+      /ask\.upsert/,
+    )
     assert.equal(hub.seq, 1, 'invalid input must not advance seq')
     assert.deepEqual(persistedSeqs, [1])
     hub.publish('ask.upsert', { ...baseAsk, expectedStateSeq: 7, ownerPluginId: 'builtin:workflow' })
     hub.publish('ask.upsert', { ...baseAsk, id: 'ask-2', status: 'answered' as never })
-    assert.equal(hub.seq, 3)
+    hub.publish('ask.upsert', {
+      ...baseAsk,
+      id: 'ask-3-i18n',
+      title: { en: 'Plan Approval v1', 'zh-CN': '计划审批 v1' },
+      description: { en: 'Summary', 'zh-CN': '摘要' },
+      fields: [
+        {
+          name: 'decision',
+          label: { en: 'Decision', 'zh-CN': '审批决策' },
+          type: 'select',
+          options: [{ label: { en: 'Approve', 'zh-CN': '批准' }, value: 'approve' }],
+        },
+      ],
+    })
+    assert.equal(hub.seq, 4)
   })
 
   it('notification rejects invalid payloads without advancing seq (never coerces level/title)', { timeout: 60_000 }, () => {

@@ -19,6 +19,7 @@ import type { ActiveModal, HelmxStoreValue } from '../src/lib/types.js'
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { AskDock } = await import('../src/conversation/AskDock.js')
+const { ResolvedAskRow } = await import('../src/conversation/TimelineAuxRows.js')
 const { makeTestStore } = await import('./helpers/store.js')
 type HelmxExternalStore = import('../src/lib/helmx-store.js').HelmxExternalStore
 const { TestStoreProvider } = await import('./helpers/host-store.js')
@@ -406,5 +407,108 @@ describe("ask-dock", () => {
     assert.equal(posts.length, 2)
     assert.equal(posts[1]!.url, '/api/asks/ask-fence/answer')
     assert.deepEqual(posts[1]!.body, { answers: { note: 'looks good' } })
+  })
+
+  test('LocalizedText AskSpec renders zh-CN title/description/labels/select options/input placeholder and switches live to en across AskDock and ResolvedAskRow', { timeout: 60_000 }, async () => {
+    installFetch()
+    const bilingualAsk: AskSpec = {
+      id: 'ask-plan-i18n',
+      conversationId: 1,
+      ownerPluginId: 'builtin:plan',
+      title: { en: 'Plan Approval v1: Refactor Auth', 'zh-CN': '计划审批 v1：Refactor Auth' },
+      description: { en: 'English summary', 'zh-CN': '中文方案摘要' },
+      fields: [
+        {
+          name: 'decision',
+          label: { en: 'Decision', 'zh-CN': '审批决策' },
+          type: 'select',
+          required: true,
+          options: [
+            { value: 'approve', label: { en: 'Approve & keep current context', 'zh-CN': '批准并保留当前上下文' } },
+            { value: 'revise', label: { en: 'Request revisions', 'zh-CN': '要求修订方案' } },
+          ],
+        },
+        {
+          name: 'feedback',
+          label: { en: 'Feedback (optional)', 'zh-CN': '补充意见（可选）' },
+          type: 'text',
+          required: false,
+        },
+      ],
+      status: 'pending',
+      createdAt: 300,
+    }
+    const host2 = document.createElement('div')
+    document.body.appendChild(host2)
+    function Harness(): React.JSX.Element {
+      const [locale, setLocale] = React.useState<HelmxLocale>('zh-CN')
+      const store = React.useMemo(
+        () => makeStore({ locale, setLocale, pendingAsks: [bilingualAsk] }),
+        [locale],
+      )
+      return e(
+        TestStoreProvider,
+        { value: store },
+        e(AskDock, { conversationId: 1 }),
+        e(ResolvedAskRow, { ask: bilingualAsk, status: 'answered' }),
+        e('button', { type: 'button', onClick: () => setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN') }, 'toggle-locale'),
+      )
+    }
+    const harnessRoot = createRoot(host2)
+    try {
+      await act(async () => {
+        harnessRoot.render(e(Harness))
+      })
+
+      assert.equal(host2.querySelector('.ask-dock-title')?.textContent, '计划审批 v1：Refactor Auth')
+      assert.equal(host2.querySelector('.ask-dock-desc')?.textContent, '中文方案摘要')
+      const fieldLabelsZh = [...host2.querySelectorAll('.ask-dock-field label')].map((el) => el.textContent ?? '')
+      assert.ok(fieldLabelsZh.some((text) => text.includes('审批决策')))
+      assert.ok(fieldLabelsZh.some((text) => text.includes('补充意见（可选）')))
+      assert.equal(host2.querySelector<HTMLInputElement>('input.input')?.placeholder, '补充意见（可选）')
+
+      // Open select trigger in happy-dom and choose the localized 'approve' option
+      const selectTrigger = host2.querySelector<HTMLButtonElement>('.helmx-select-trigger')!
+      assert.ok(selectTrigger !== null)
+      await act(async () => {
+        selectTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      })
+      const zhOptions = [...document.querySelectorAll<HTMLElement>('[role="option"]')].map((el) => el.textContent ?? '')
+      assert.ok(zhOptions.some((text) => text.includes('批准并保留当前上下文')), `expected zh-CN select option, got ${zhOptions.join(', ')}`)
+      assert.ok(zhOptions.some((text) => text.includes('要求修订方案')))
+
+      const approveOpt = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((el) =>
+        (el.textContent ?? '').includes('批准并保留当前上下文'),
+      )!
+      await act(async () => {
+        approveOpt.click()
+      })
+      assert.equal(selectTrigger.querySelector('.helmx-select-label')?.textContent, '批准并保留当前上下文')
+
+      // ResolvedAskRow renders bilingual title and expanded description
+      const traceBtn = host2.querySelector<HTMLButtonElement>('.trace-row')!
+      assert.equal(traceBtn.querySelector('.trace-tool-summary')?.textContent, '计划审批 v1：Refactor Auth')
+      await act(async () => {
+        traceBtn.click()
+      })
+      assert.equal(host2.querySelector('.trace-expanded-body')?.textContent, '中文方案摘要')
+
+      // Live locale toggle zh-CN -> en updates AskDock + selected trigger label + ResolvedAskRow in place
+      const toggleBtn = [...host2.querySelectorAll('button')].find((b) => b.textContent === 'toggle-locale')!
+      await act(async () => {
+        toggleBtn.click()
+      })
+      assert.equal(host2.querySelector('.ask-dock-title')?.textContent, 'Plan Approval v1: Refactor Auth')
+      assert.equal(host2.querySelector('.ask-dock-desc')?.textContent, 'English summary')
+      assert.equal(host2.querySelector<HTMLInputElement>('input.input')?.placeholder, 'Feedback (optional)')
+      assert.equal(selectTrigger.querySelector('.helmx-select-label')?.textContent, 'Approve & keep current context')
+      assert.equal(traceBtn.querySelector('.trace-tool-summary')?.textContent, 'Plan Approval v1: Refactor Auth')
+      assert.equal(host2.querySelector('.trace-expanded-body')?.textContent, 'English summary')
+    } finally {
+      await act(async () => {
+        harnessRoot.unmount()
+      })
+      host2.remove()
+    }
   })
 })

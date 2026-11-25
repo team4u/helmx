@@ -986,7 +986,8 @@ export function resolveLiveSnippet(
     return { tag: resolveLocalizedText(COPY.tagError, locale), text: firstLineOf(input.loadError, 100), isError: true }
   }
   if (input.pendingAsk !== undefined) {
-    const title = firstLineOf(input.pendingAsk.title || resolveLocalizedText(STATUS_COPY.blocked, locale), 100)
+    const askTitle = resolveLocalizedText(input.pendingAsk.title, locale)
+    const title = firstLineOf(askTitle || resolveLocalizedText(STATUS_COPY.blocked, locale), 100)
     return { tag: resolveLocalizedText(COPY.tagApproval, locale), text: title }
   }
   if (input.status === 'working' && input.live !== undefined) {
