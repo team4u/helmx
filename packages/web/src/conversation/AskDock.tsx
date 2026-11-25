@@ -88,7 +88,8 @@ function AskFieldInput({
   fieldId,
   fieldLabel,
   value,
-  onChange,
+  thinkingLevelValue,
+  onPatchAnswers,
   disabled,
 }: {
   conversationId: number
@@ -96,11 +97,13 @@ function AskFieldInput({
   fieldId: string
   fieldLabel: string
   value: string
-  onChange: (v: string) => void
+  thinkingLevelValue?: string
+  onPatchAnswers: (patch: Record<string, string>) => void
   disabled: boolean
 }) {
   const { locale, t } = useWebLocale()
   const pickerAdapter = useModelPickerControlAdapter(conversationId)
+  const onChange = (v: string): void => onPatchAnswers({ [field.name]: v })
   if (field.type === 'select') {
     const options = [
       { value: '', label: t('composer.ask.selectPlaceholder') },
@@ -151,25 +154,47 @@ function AskFieldInput({
   }
   if (field.type === 'model') {
     const placeholder = t('composer.ask.modelKeepCurrent')
+    const thinkingField =
+      typeof field.thinkingLevelField === 'string' && field.thinkingLevelField !== ''
+        ? field.thinkingLevelField
+        : undefined
+    const activeThinking = thinkingField !== undefined ? (thinkingLevelValue ?? '') : ''
+    const displayTitle = value
+      ? activeThinking !== ''
+        ? `${value} · ${activeThinking}`
+        : value
+      : placeholder
     return (
       <ModelPickerControl
         buttonId={fieldId}
-        buttonAriaLabel={`${fieldLabel}: ${value || placeholder}`}
-        buttonTitle={value || placeholder}
+        buttonAriaLabel={`${fieldLabel}: ${displayTitle}`}
+        buttonTitle={displayTitle}
         placeholderLabel={placeholder}
         effectiveModel={value || undefined}
-        activeThinkingLevel=""
+        activeThinkingLevel={activeThinking}
         resetLabel={placeholder}
         resetTitle={t('composer.ask.modelResetTitle')}
         popoverSide="top"
         enableShortcut={false}
-        showThinkingLevels={false}
+        showThinkingLevels={thinkingField !== undefined}
         disabled={disabled}
         copy={pickerAdapter.copy}
         onNotice={pickerAdapter.onNotice}
         onOpenModelsCenter={pickerAdapter.onOpenModelsCenter}
-        onApply={(id) => onChange(id)}
-        onResetDefault={() => onChange('')}
+        onApply={(id, level) =>
+          onPatchAnswers(
+            thinkingField !== undefined
+              ? { [field.name]: id, [thinkingField]: level ?? '' }
+              : { [field.name]: id },
+          )
+        }
+        onResetDefault={() =>
+          onPatchAnswers(
+            thinkingField !== undefined
+              ? { [field.name]: '', [thinkingField]: '' }
+              : { [field.name]: '' },
+          )
+        }
       />
     )
   }
@@ -365,12 +390,15 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
                   fieldId={fieldId}
                   fieldLabel={fieldLabel}
                   value={answers[field.name] ?? ''}
+                  thinkingLevelValue={
+                    field.thinkingLevelField ? (answers[field.thinkingLevelField] ?? '') : undefined
+                  }
                   disabled={submitting !== null}
-                  onChange={(v) => {
-                    const next = { ...answers, [field.name]: v }
+                  onPatchAnswers={(patch) => {
+                    const next = { ...answers, ...patch }
                     setAnswers(next)
                     if (isSingleConfirm) {
-                      void submitAnswers({ [field.name]: v })
+                      void submitAnswers(patch)
                     }
                   }}
                 />

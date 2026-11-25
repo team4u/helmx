@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  COMPOSER_MENU_SLOT,
   COMPOSER_STATUS_SLOT,
   COMPOSER_TOOLBAR_SLOT,
+  type ComposerMenuSlotProps,
   type ComposerStatusSlotProps,
   type ComposerToolbarSlotProps,
   type ConversationSummary,
@@ -615,8 +617,23 @@ function StandbyComposer({
       fileInputRef={fileHandlers.fileInputRef}
       uploadButtonLabel={t('composer.standby.chooseAttachments')}
       uploadDisabled={busy}
+      plusMenuDisabled={busy}
       onOpenFilePicker={fileHandlers.openFilePicker}
       onFileInputChange={fileHandlers.onFileInputChange}
+      renderMenuSlot={(closeMenu) => (
+        <PluginSlot
+          ownerPluginId="builtin:composer"
+          name={COMPOSER_MENU_SLOT}
+          slotProps={{
+            effectiveModel,
+            profileId: profile.id,
+            draftMeta: draft.inputMeta,
+            setDraftMeta,
+            disabled: configLocked,
+            onCloseMenu: closeMenu,
+          } satisfies ComposerMenuSlotProps}
+        />
+      )}
       slashOpen={completions.slashOpen}
       popoverQuery={completions.popoverQuery}
       slashMenuItems={completions.slashMenuItems}

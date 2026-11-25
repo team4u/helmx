@@ -611,10 +611,30 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
           label: { en: 'Execution Model', 'zh-CN': '执行模型' },
           type: 'model',
           defaultValue: '',
+          thinkingLevelField: 'executionThinkingLevel',
         },
       ],
     })
     assert.equal(hub.seq, 4)
+
+    assert.throws(
+      () =>
+        hub.publish('ask.upsert', {
+          ...baseAsk,
+          id: 'ask-bad-thinking-type',
+          fields: [{ name: 'note', label: 'Note', type: 'text', thinkingLevelField: 'lvl' }],
+        }),
+      /thinkingLevelField/i,
+    )
+    assert.throws(
+      () =>
+        hub.publish('ask.upsert', {
+          ...baseAsk,
+          id: 'ask-bad-thinking-blank',
+          fields: [{ name: 'm', label: 'M', type: 'model', thinkingLevelField: '  ' }],
+        }),
+      /thinkingLevelField/i,
+    )
 
     assert.throws(
       () =>

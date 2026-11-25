@@ -257,6 +257,11 @@ export class AskService {
     const stored: Record<string, string> = {}
     for (const field of spec.fields) {
       stored[field.name] = answers[field.name] ?? ''
+      if (field.type === 'model' && typeof field.thinkingLevelField === 'string' && field.thinkingLevelField !== '') {
+        if (answers[field.thinkingLevelField] !== undefined) {
+          stored[field.thinkingLevelField] = answers[field.thinkingLevelField]!
+        }
+      }
     }
     return this.settle(id, 'answered', { answers: stored })
   }
@@ -371,6 +376,10 @@ function parseAskSpecRow(row: { id: string; specJson: string }): AskSpec {
         f.name.length === 0 ||
         parseLocalizedText(f.label) === undefined ||
         (f.defaultValue !== undefined && typeof f.defaultValue !== 'string') ||
+        (f.thinkingLevelField !== undefined &&
+          (f.type !== 'model' ||
+            typeof f.thinkingLevelField !== 'string' ||
+            f.thinkingLevelField.trim() === '')) ||
         (f.type !== 'text' && f.type !== 'select' && f.type !== 'confirm' && f.type !== 'choice' && f.type !== 'model') ||
         ((f.type === 'select' || f.type === 'choice') &&
           (!Array.isArray(f.options) ||
@@ -429,6 +438,7 @@ function validateAskSpec(spec: AskCreateSpec): void {
     throw new HelmxError('validation_error', 'AskDoc requires at least one field')
   }
   const names = new Set<string>()
+  const thinkingLevelFields = new Set<string>()
   for (const field of spec.fields) {
     if (field === null || typeof field !== 'object') {
       throw new HelmxError('validation_error', 'field must be an object')
@@ -460,6 +470,27 @@ function validateAskSpec(spec: AskCreateSpec): void {
         'validation_error',
         `invalid type for field '${field.name}': ${String(field.type)} (only text | select | confirm | choice | model)`,
       )
+    }
+    if (field.thinkingLevelField !== undefined) {
+      if (field.type !== 'model') {
+        throw new HelmxError(
+          'validation_error',
+          `field '${field.name}' thinkingLevelField is only allowed on model fields`,
+        )
+      }
+      if (typeof field.thinkingLevelField !== 'string' || field.thinkingLevelField.trim() === '') {
+        throw new HelmxError(
+          'validation_error',
+          `field '${field.name}' thinkingLevelField must be a non-empty string`,
+        )
+      }
+      if (thinkingLevelFields.has(field.thinkingLevelField)) {
+        throw new HelmxError(
+          'validation_error',
+          `duplicate thinkingLevelField: ${field.thinkingLevelField}`,
+        )
+      }
+      thinkingLevelFields.add(field.thinkingLevelField)
     }
     if (field.type === 'select' || field.type === 'choice') {
       if (
@@ -504,6 +535,14 @@ function validateAskSpec(spec: AskCreateSpec): void {
       )
     }
   }
+  for (const key of thinkingLevelFields) {
+    if (names.has(key)) {
+      throw new HelmxError(
+        'validation_error',
+        `thinkingLevelField '${key}' collides with field.name`,
+      )
+    }
+  }
 }
 
 /** Answer boundary validation: unknown fields / non-strings / out-of-range select or choice options / invalid confirm values. */
@@ -512,9 +551,15 @@ function validateAnswersAgainstFields(spec: AskSpec, answers: Record<string, str
     throw new HelmxError('validation_error', 'answers must be an object')
   }
   const byName = new Map(spec.fields.map((f) => [f.name, f]))
+  const thinkingLevelKeys = new Set<string>()
+  for (const f of spec.fields) {
+    if (f.type === 'model' && typeof f.thinkingLevelField === 'string' && f.thinkingLevelField !== '') {
+      thinkingLevelKeys.add(f.thinkingLevelField)
+    }
+  }
   for (const key of Object.keys(answers)) {
     const value = answers[key]
-    if (!byName.has(key)) {
+    if (!byName.has(key) && !thinkingLevelKeys.has(key)) {
       throw new HelmxError('validation_error', `unknown answer field: ${key} (not declared on AskDoc)`)
     }
     if (typeof value !== 'string') {

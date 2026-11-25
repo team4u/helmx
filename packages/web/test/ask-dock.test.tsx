@@ -592,4 +592,106 @@ describe("ask-dock", () => {
       },
     })
   })
+
+  test('model field with thinkingLevelField shows thinking chips, updates both answers atomically, and resets both', { timeout: 60_000 }, async () => {
+    installFetch()
+    const thinkingAsk: AskSpec = {
+      id: 'ask-model-thinking',
+      conversationId: 1,
+      title: 'Approve With Thinking Level',
+      fields: [
+        {
+          name: 'decision',
+          label: 'Decision',
+          type: 'choice',
+          required: true,
+          defaultValue: 'approve_handoff',
+          options: [{ label: 'Approve', value: 'approve_handoff' }],
+        },
+        {
+          name: 'executionModel',
+          label: 'Execution Model',
+          type: 'model',
+          defaultValue: 'openai/gpt-5',
+          thinkingLevelField: 'executionThinkingLevel',
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    }
+    const store = makeStore({
+      pendingAsks: [thinkingAsk],
+      models: [
+        {
+          id: 'openai/gpt-5',
+          provider: 'openai',
+          modelId: 'gpt-5',
+          label: 'GPT-5',
+          available: true,
+          contextWindow: 200_000,
+          thinkingLevels: ['off', 'low', 'medium', 'high'],
+        },
+      ],
+    })
+    await renderAskDock(store, 1)
+
+    const modelBtn = document.querySelector<HTMLButtonElement>('button.composer-model-button')
+    assert.ok(modelBtn !== null)
+    assert.match(modelBtn.textContent ?? '', /gpt-5/)
+
+    // Open ModelPickerControl popover
+    await act(async () => {
+      modelBtn.click()
+    })
+    const levelChips = [...document.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip')]
+    assert.deepEqual(
+      levelChips.map((c) => c.textContent?.trim()),
+      ['off', 'low', 'medium', 'high'],
+      'thinkingLevelField enables inline thinking level chips in AskDock model picker',
+    )
+
+    const highChip = levelChips.find((c) => c.textContent?.trim() === 'high')!
+    await act(async () => {
+      highChip.click()
+    })
+    assert.match(modelBtn.textContent ?? '', /gpt-5/)
+    assert.match(modelBtn.textContent ?? '', /high/)
+
+    // Submit includes both executionModel and executionThinkingLevel
+    const submitBtn = [...document.querySelectorAll<HTMLButtonElement>('button[type="submit"]')][0]!
+    await act(async () => {
+      submitBtn.click()
+    })
+    assert.equal(posts.length, 1)
+    assert.deepEqual(posts[0]?.body, {
+      answers: {
+        decision: 'approve_handoff',
+        executionModel: 'openai/gpt-5',
+        executionThinkingLevel: 'high',
+      },
+    })
+
+    // Reopen and click resetDefault -> clears BOTH executionModel and executionThinkingLevel
+    await act(async () => {
+      modelBtn.click()
+    })
+    const resetItem = [...document.querySelectorAll<HTMLButtonElement>('.composer-model-popover > button.popover-item')][0]!
+    assert.ok(resetItem !== undefined)
+    await act(async () => {
+      resetItem.click()
+    })
+    assert.match(modelBtn.textContent ?? '', /Keep current/)
+    assert.equal((modelBtn.textContent ?? '').includes('high'), false)
+    await act(async () => {
+      submitBtn.click()
+    })
+    assert.equal(posts.length, 2)
+    assert.deepEqual(posts[1]?.body, {
+      answers: {
+        decision: 'approve_handoff',
+        executionModel: '',
+        executionThinkingLevel: '',
+      },
+    })
+  })
 })

@@ -155,6 +155,7 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
     assert.ok(panel)
     assert.equal((panel.spec as { id?: unknown }).id, PLAN_PANEL_ID)
     const clientMod = await kernel.plugins.getClientModule(PLAN_PLUGIN_ID, 'index.tsx')
+    assert.match(clientMod.code, /PlanMenuItem/)
     assert.match(clientMod.code, /PlanToolbarButton/)
     assert.match(clientMod.code, /PlanActiveTray/)
     assert.match(clientMod.code, /PlanWorkbenchPanel/)

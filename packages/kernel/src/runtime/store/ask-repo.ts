@@ -281,6 +281,15 @@ export function parseStoredAskSpec(
     if (field.defaultValue !== undefined && typeof field.defaultValue !== 'string') {
       throw corrupted(`field '${field.name}' has invalid defaultValue`)
     }
+    if (field.thinkingLevelField !== undefined) {
+      if (
+        field.type !== 'model' ||
+        typeof field.thinkingLevelField !== 'string' ||
+        field.thinkingLevelField.trim() === ''
+      ) {
+        throw corrupted(`field '${field.name}' has invalid thinkingLevelField`)
+      }
+    }
     if (field.type === 'select' || field.type === 'choice') {
       if (
         !Array.isArray(field.options) ||

@@ -206,6 +206,7 @@ const ASK_FIELD_SCHEMA = Type.Object({
   ),
   required: Type.Optional(Type.Boolean()),
   defaultValue: Type.Optional(Type.String()),
+  thinkingLevelField: Type.Optional(NonEmptyString),
 })
 
 const ASK_SPEC_CHECKER = Compile(
@@ -247,6 +248,13 @@ function assertAskSpecShape(value: unknown): AskSpec {
       throw new HelmxError(
         'invalid_event',
         'ask.upsert field.label must be a non-empty LocalizedText (no blank strings or blank locale entries)',
+        500,
+      )
+    }
+    if (field.thinkingLevelField !== undefined && (field.type !== 'model' || field.thinkingLevelField.trim() === '')) {
+      throw new HelmxError(
+        'invalid_event',
+        'ask.upsert field.thinkingLevelField must be a non-empty string on a model field',
         500,
       )
     }

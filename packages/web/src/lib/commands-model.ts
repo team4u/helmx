@@ -111,7 +111,7 @@ export interface SlashMenuItem {
 }
 
 /**
- * 合并斜杠菜单条目：宿主内置管理命令 → 可见技能 → 满足作用域的插件命令。
+ * 合并斜杠菜单条目：宿主内置管理命令 → 满足作用域的插件命令 → 可见技能。
  * 插件命令选中即执行（run），不把触发词回填草稿；hint 消费按 locale
  * 解析后的 description/title 显示文案。
  */
@@ -148,7 +148,7 @@ export function buildSlashMenuItems(
       run: () => runPluginCommand(cmd),
     }
   })
-  return [...builtin, ...skills, ...plugins]
+  return [...builtin, ...plugins, ...skills]
 }
 
 /** 在光标处插入文本片段；caret 越界时收敛到 [0, text.length]。 */

@@ -674,6 +674,7 @@ describe('Ask CAS semantics preservation', { timeout: 60_000 }, () => {
             label: { en: 'Model', 'zh-CN': '模型' },
             type: 'model',
             defaultValue: 'tier/strong',
+            thinkingLevelField: 'executionThinkingLevel',
           },
         ],
       })
@@ -686,15 +687,76 @@ describe('Ask CAS semantics preservation', { timeout: 60_000 }, () => {
       assert.deepEqual(stored.fields[0]?.options?.[0]?.description, { en: 'Low latency', 'zh-CN': '低延迟' })
       assert.equal(stored.fields[1]?.type, 'model')
       assert.equal(stored.fields[1]?.defaultValue, 'tier/strong')
+      assert.equal(stored.fields[1]?.thinkingLevelField, 'executionThinkingLevel')
 
       await assert.rejects(
         () => ctx.service.answerAsk('ask-choice-valid', { strategy: 'nonexistent', executionModel: 'tier/strong' }),
         (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
       )
-      await ctx.service.answerAsk('ask-choice-valid', { strategy: 'safe', executionModel: '' })
+      await assert.rejects(
+        () =>
+          ctx.service.answerAsk('ask-choice-valid', {
+            strategy: 'safe',
+            executionModel: 'openai/gpt-5',
+            executionThinkingLevel: 123 as unknown as string,
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+      await ctx.service.answerAsk('ask-choice-valid', {
+        strategy: 'safe',
+        executionModel: 'openai/gpt-5',
+        executionThinkingLevel: 'high',
+      })
       const answered = await assertSettlesWithin(pChoice, 2_000, 'choice+model answer')
       assert.equal(answered.status, 'answered')
-      assert.deepEqual(answered.answers, { strategy: 'safe', executionModel: '' })
+      assert.deepEqual(answered.answers, {
+        strategy: 'safe',
+        executionModel: 'openai/gpt-5',
+        executionThinkingLevel: 'high',
+      })
+
+      await assert.rejects(
+        () =>
+          ctx.service.createAsk({
+            ...baseSpec,
+            id: 'ask-thinking-non-model',
+            fields: [{ name: 'note', label: 'Note', type: 'text', thinkingLevelField: 'noteThinking' }],
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+      await assert.rejects(
+        () =>
+          ctx.service.createAsk({
+            ...baseSpec,
+            id: 'ask-thinking-blank',
+            fields: [{ name: 'model', label: 'Model', type: 'model', thinkingLevelField: '   ' }],
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+      await assert.rejects(
+        () =>
+          ctx.service.createAsk({
+            ...baseSpec,
+            id: 'ask-thinking-collide',
+            fields: [
+              { name: 'model', label: 'Model', type: 'model', thinkingLevelField: 'notes' },
+              { name: 'notes', label: 'Notes', type: 'text' },
+            ],
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+      await assert.rejects(
+        () =>
+          ctx.service.createAsk({
+            ...baseSpec,
+            id: 'ask-thinking-dup',
+            fields: [
+              { name: 'm1', label: 'M1', type: 'model', thinkingLevelField: 'lvl' },
+              { name: 'm2', label: 'M2', type: 'model', thinkingLevelField: 'lvl' },
+            ],
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
 
       await assert.rejects(
         () =>

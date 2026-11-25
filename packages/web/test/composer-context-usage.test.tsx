@@ -19,12 +19,13 @@ import { readFileSync } from 'node:fs'
 import * as React from 'react'
 import { act } from 'react'
 import type {
+  ComposerMenuSlotProps,
   ComposerScopeProps,
   ComposerStatusSlotProps,
   ComposerToolbarSlotProps,
   ConversationSummary,
 } from '@helmx/protocol'
-import { COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol'
+import { COMPOSER_MENU_SLOT, COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol'
 import {
   getStandbyDraft,
   resetStandbyDrafts,
@@ -41,6 +42,7 @@ import type { HelmxStoreValue } from '../src/lib/types.js'
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { renderToStaticMarkup } = await import('react-dom/server')
+const { DropdownMenuItem } = await import('@helmx/plugin-client')
 const { Composer } = await import('../src/conversation/Composer.js')
 const { AgentStandbyPane } = await import('../src/conversation/AgentStandbyPane.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
@@ -383,7 +385,7 @@ test('Composer localizes input aria, upload button, placeholder and compacting s
       root.render(e(HostStoreProviders, { value: storeZh }, e(Composer, { conversation, prefill: null })))
     })
     assert.ok(host.querySelector('textarea[aria-label="输入消息"]') !== null)
-    assert.ok(host.querySelector('button[aria-label="上传附件"]') !== null)
+    assert.ok(host.querySelector('button[aria-label="更多操作与附件"]') !== null)
     assert.equal(statusSpan(host)?.textContent, '精简中…')
 
     await act(async () => {
@@ -391,7 +393,7 @@ test('Composer localizes input aria, upload button, placeholder and compacting s
       root.render(e(HostStoreProviders, { value: storeZh }, e(Composer, { conversation, prefill: null })))
     })
     assert.ok(host.querySelector('textarea[aria-label="Type a message"]') !== null)
-    assert.ok(host.querySelector('button[aria-label="Uploaded attachment"]') !== null)
+    assert.ok(host.querySelector('button[aria-label="More actions and attachments"]') !== null)
     assert.equal(statusSpan(host)?.textContent, 'Compacting…')
   } finally {
     localStorage.removeItem('helmx:locale')
@@ -712,5 +714,230 @@ test('Composer ConversationDurationStatus：blocked 渲染「等待审批」warn
     act(() => root.unmount())
     host.remove()
     style.remove()
+  }
+})
+
+test('Unified composer + menu opens Upload / COMPOSER_MENU_SLOT (with plugin dedupe) / non-slot plugin commands / session actions', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  const fetchCalls: Array<{ url: string; method: string; body?: string }> = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method ?? 'GET'
+    const body = typeof init?.body === 'string' ? init.body : undefined
+    fetchCalls.push({ url, method, ...(body !== undefined ? { body } : {}) })
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as typeof fetch
+
+  function MenuSlotProbe(props: ComposerMenuSlotProps) {
+    return e(
+      DropdownMenuItem,
+      {
+        className: 'menu-slot-probe-item',
+        onSelect: () => {
+          props.setDraftMeta?.('builtin:menu-probe', { armed: true })
+          props.onCloseMenu?.()
+        },
+      },
+      props.conversation !== undefined ? 'Slot Conv Action' : 'Slot Standby Action',
+    )
+  }
+  seedPluginClientModule('builtin:menu-probe', 'index.tsx', { MenuSlotProbe })
+
+  const openPlusMenu = async (container: HTMLElement): Promise<void> => {
+    const trigger = container.querySelector<HTMLButtonElement>('button.composer-plus-trigger')
+    assert.ok(trigger !== null, 'expected unified + menu trigger')
+    await act(async () => {
+      trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+  }
+
+  let newThreadCount = 0
+  const conversation = conv(undefined)
+  const menuProbePlugin = {
+    id: 'builtin:menu-probe',
+    name: 'menu-probe',
+    version: '1.0.0',
+    locked: false,
+    enabled: true,
+    status: 'active' as const,
+    hooks: [],
+    actions: [],
+    tools: [],
+    clientHashes: { 'index.tsx': 'seeded' },
+  }
+  const store = makeTestStore({
+    locale: 'en',
+    conversations: [conversation],
+    plugins: [menuProbePlugin],
+    uiContributions: [
+      {
+        pluginId: 'builtin:menu-probe',
+        surface: 'plugin.slot',
+        spec: {
+          id: 'menu-probe-slot',
+          target: COMPOSER_MENU_SLOT,
+          client: { module: 'index.tsx', export: 'MenuSlotProbe' },
+        },
+      },
+      {
+        // Plugin already contributing to COMPOSER_MENU_SLOT must be deduped from menuCommands.
+        pluginId: 'builtin:menu-probe',
+        surface: 'commandPalette',
+        spec: {
+          id: 'dup-cmd',
+          title: 'Duplicate Menu Cmd',
+          slash: 'dup',
+          actionId: 'dup',
+        },
+      },
+      {
+        pluginId: 'builtin:other-plugin',
+        surface: 'commandPalette',
+        spec: {
+          id: 'other-cmd',
+          title: 'Refresh Summary',
+          slash: 'summary',
+          actionId: 'refresh',
+          icon: 'sparkles',
+        },
+      },
+    ],
+  })
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    // 1. Persisted conversation menu
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(Composer, { conversation, prefill: null, onNewThread: () => { newThreadCount += 1 } }),
+        ),
+      )
+    })
+
+    // Seed draft text ending with @agent to verify non-slot plugin command preserves draft text.
+    const textarea = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+      setter?.call(textarea, 'hello @helper')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    await openPlusMenu(host)
+    const menuText = () =>
+      [...document.querySelectorAll('.composer-plus-menu [role="menuitem"]')].map((el) => el.textContent ?? '')
+    const itemsText = menuText()
+    assert.ok(itemsText.some((t) => t.includes('Upload attachment')), 'Upload item present')
+    assert.ok(itemsText.some((t) => t.includes('Slot Conv Action')), 'COMPOSER_MENU_SLOT item present')
+    assert.equal(
+      itemsText.some((t) => t.includes('Duplicate Menu Cmd')),
+      false,
+      'plugin contributing COMPOSER_MENU_SLOT must be deduped from menuCommands without hardcoding pluginId',
+    )
+    assert.ok(itemsText.some((t) => t.includes('Refresh Summary') && t.includes('/summary')), 'non-slot plugin command present')
+    assert.ok(itemsText.some((t) => t.includes('Compact context') && t.includes('/compact')))
+    assert.ok(itemsText.some((t) => t.includes('Clear context') && t.includes('/clear')))
+    assert.ok(itemsText.some((t) => t.includes('New topic') && t.includes('/new')))
+
+    // Execute non-slot plugin command -> invokes action AND preserves draft text including @helper
+    const refreshItem = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu [role="menuitem"]')].find((el) =>
+      (el.textContent ?? '').includes('Refresh Summary'),
+    )!
+    await act(async () => {
+      refreshItem.click()
+    })
+    assert.equal(textarea.value, 'hello @helper', 'menu plugin command must never strip trailing @mention text')
+    assert.ok(
+      fetchCalls.some((c) => c.url === '/api/actions/builtin%3Aother-plugin/refresh' && c.method === 'POST'),
+      'non-slot plugin command dispatches action POST',
+    )
+
+    // Reopen and trigger Upload attachment -> clicks hidden file input
+    await openPlusMenu(host)
+    const fileInput = host.querySelector<HTMLInputElement>('input[type="file"]')!
+    let fileInputClicks = 0
+    fileInput.click = () => {
+      fileInputClicks += 1
+    }
+    const uploadItem = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu [role="menuitem"]')].find((el) =>
+      (el.textContent ?? '').includes('Upload attachment'),
+    )!
+    await act(async () => {
+      uploadItem.click()
+    })
+    assert.equal(fileInputClicks, 1)
+
+    // Reopen and trigger Compact / New topic session actions
+    await openPlusMenu(host)
+    const compactItem = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu [role="menuitem"]')].find((el) =>
+      (el.textContent ?? '').includes('Compact context'),
+    )!
+    await act(async () => {
+      compactItem.click()
+    })
+    assert.ok(fetchCalls.some((c) => c.url === '/api/conversations/1/compact' && c.method === 'POST'))
+
+    await openPlusMenu(host)
+    const newTopicItem = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu [role="menuitem"]')].find((el) =>
+      (el.textContent ?? '').includes('New topic'),
+    )!
+    await act(async () => {
+      newTopicItem.click()
+    })
+    assert.equal(newThreadCount, 1)
+
+    // 2. Standby pane menu: shows Upload + COMPOSER_MENU_SLOT, omits persisted-only session actions
+    resetStandbyDrafts()
+    const standbyStore = makeTestStore({
+      locale: 'en',
+      profiles: [{ id: 'assistant', name: 'Assistant', model: 'faux/faux-1', thinkingLevel: '', cwd: '/tmp', nodeId: 'local' }],
+      plugins: [menuProbePlugin],
+      uiContributions: [
+        {
+          pluginId: 'builtin:menu-probe',
+          surface: 'plugin.slot',
+          spec: {
+            id: 'menu-probe-standby',
+            target: COMPOSER_MENU_SLOT,
+            client: { module: 'index.tsx', export: 'MenuSlotProbe' },
+          },
+        },
+      ],
+    })
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: standbyStore }, e(AgentStandbyPane, { profileId: 'assistant' })))
+    })
+    await openPlusMenu(host)
+    const standbyItems = menuText()
+    assert.ok(standbyItems.some((t) => t.includes('Choose attachments')))
+    assert.ok(standbyItems.some((t) => t.includes('Slot Standby Action')))
+    assert.equal(standbyItems.some((t) => t.includes('Compact context')), false)
+    assert.equal(standbyItems.some((t) => t.includes('Clear context')), false)
+
+    const standbySlotItem = document.querySelector<HTMLElement>('.menu-slot-probe-item')!
+    await act(async () => {
+      standbySlotItem.click()
+    })
+    assert.deepEqual(
+      getStandbyDraft(standbyDraftKey({ panel: 'primary', profileId: 'assistant' })).inputMeta,
+      { 'builtin:menu-probe': { armed: true } },
+    )
+    assert.equal(standbyDraftsDirty(), false, 'standby menu slot setDraftMeta must not mark empty draft dirty')
+  } finally {
+    resetStandbyDrafts()
+    globalThis.fetch = originalFetch
+    localStorage.removeItem('helmx:locale')
+    act(() => root.unmount())
+    host.remove()
   }
 })

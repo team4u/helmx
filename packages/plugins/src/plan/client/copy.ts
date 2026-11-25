@@ -13,9 +13,10 @@ import type { PlanAskOutcome, PlanMode, PlanProposeOutcome } from './types.ts'
 const isZh = (locale: HelmxLocale): boolean => locale === 'zh-CN'
 
 export const PLAN_COPY = {
-  // Toolbar button
+  // Unified + menu item & active-only toolbar pill
+  menuLabel: { en: 'Plan mode', 'zh-CN': '计划模式' },
   toolbarNormal: { en: 'Plan', 'zh-CN': '计划' },
-  toolbarPlanning: { en: 'Planning', 'zh-CN': '计划中' },
+  toolbarPlanning: { en: 'Plan', 'zh-CN': '计划' },
   toolbarAwaiting: { en: 'Awaiting approval', 'zh-CN': '待审批' },
   toolbarAwaitingClarification: { en: 'Awaiting answers', 'zh-CN': '待澄清' },
   toolbarTitleNormal: {

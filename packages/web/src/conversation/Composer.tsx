@@ -1,6 +1,6 @@
 import { memo, useCallback, useId, useMemo, useRef } from 'react'
-import type { ComposerScopeProps, ConversationSummary, WhenBusy } from '@helmx/protocol/browser'
-import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol/browser'
+import type { ComposerMenuSlotProps, ComposerScopeProps, ConversationSummary, WhenBusy } from '@helmx/protocol/browser'
+import { COMPOSER_DOCK_SLOT, COMPOSER_MENU_SLOT, COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol/browser'
 import { Button, HelmxIcon, PluginSlot, useSharedNowMs } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
@@ -101,6 +101,19 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
     () => pluginSlashCommandsFor(groupedUi.commands, conversation),
     [groupedUi.commands, conversation],
   )
+  const menuSlotPluginIds = useMemo(
+    () =>
+      new Set(
+        groupedUi.pluginSlots
+          .filter((entry) => entry.spec.target === COMPOSER_MENU_SLOT)
+          .map((entry) => entry.pluginId),
+      ),
+    [groupedUi.pluginSlots],
+  )
+  const plusMenuCommands = useMemo(
+    () => slashPluginCommands.filter((cmd) => !menuSlotPluginIds.has(cmd.pluginId)),
+    [slashPluginCommands, menuSlotPluginIds],
+  )
 
   const composerDirtyKey = useId()
   const dirtySink = useConversationDirtySink()
@@ -124,6 +137,8 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
     send,
     sendExplicit,
     runPluginCommand,
+    runPluginCommandDirect,
+    runManageCommand,
     handleEnvBlocker,
     notifyError,
   } = useComposerSend(
@@ -328,9 +343,25 @@ export const Composer = memo(function Composer({ conversation, prefill, onSendin
       onDragLeave={fileHandlers.onDragLeave}
       onDrop={fileHandlers.onDrop}
       fileInputRef={fileHandlers.fileInputRef}
-      uploadButtonLabel={t('conv.composer.uploadAttachment')}
+      uploadButtonLabel={t('composer.plusMenu.upload')}
       onOpenFilePicker={fileHandlers.openFilePicker}
       onFileInputChange={fileHandlers.onFileInputChange}
+      renderMenuSlot={(closeMenu) => (
+        <PluginSlot
+          ownerPluginId="builtin:composer"
+          name={COMPOSER_MENU_SLOT}
+          conversationId={conversation.id}
+          composer={composer}
+          slotProps={{ ...composerSlotProps, onCloseMenu: closeMenu } satisfies ComposerMenuSlotProps & Record<string, unknown>}
+        />
+      )}
+      menuCommands={plusMenuCommands}
+      menuCommandsDisabled={runningCommand !== null}
+      onRunMenuCommand={runPluginCommandDirect}
+      onCompactContext={() => runManageCommand('/compact')}
+      compactDisabled={compacting}
+      onClearContext={() => runManageCommand('/clear')}
+      onNewTopic={onNewThread}
       slashOpen={completions.slashOpen}
       popoverQuery={completions.popoverQuery}
       slashMenuItems={completions.slashMenuItems}

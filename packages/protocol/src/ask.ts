@@ -23,6 +23,8 @@ export interface AskFieldSpec {
   required?: boolean
   /** Optional pre-selected initial value (must match an option value for select/choice, or 'true'|'false' for confirm when non-empty). */
   defaultValue?: string
+  /** Optional companion answer key for thinking level (valid only when type is 'model'). */
+  thinkingLevelField?: string
 }
 
 export type AskStatus = 'pending' | 'answered' | 'cancelled' | 'superseded'

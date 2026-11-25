@@ -4,6 +4,7 @@
  */
 import {
   COMPOSER_DOCK_SLOT,
+  COMPOSER_MENU_SLOT,
   COMPOSER_TOOLBAR_SLOT,
   HelmxError,
   type PluginActionContext,
@@ -306,6 +307,12 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
       })
 
       if (hasClientAssets) {
+        ctx.ui.slot({
+          id: 'plan-menu-item',
+          target: COMPOSER_MENU_SLOT,
+          order: 20,
+          client: { module: 'index.tsx', export: 'PlanMenuItem' },
+        })
         ctx.ui.slot({
           id: 'plan-toolbar',
           target: COMPOSER_TOOLBAR_SLOT,

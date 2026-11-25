@@ -1313,11 +1313,31 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
             type: 'select',
             options: [{ value: 'approve', label: { en: 'Approve', 'zh-CN': '批准' } }],
           },
+          {
+            name: 'executionModel',
+            label: { en: 'Model', 'zh-CN': '模型' },
+            type: 'model',
+            thinkingLevelField: 'executionThinkingLevel',
+          },
         ],
       })
       assert.equal(
         parseStoredAskSpec('spec', localizedSpec, { id: 'a2', conversationId: 1, status: 'pending' }).id,
         'a2',
+      )
+      assert.throws(
+        () =>
+          parseStoredAskSpec(
+            'spec',
+            JSON.stringify({
+              id: 'a-bad-thinking',
+              title: 'Bad',
+              status: 'pending',
+              fields: [{ name: 'x', label: 'X', type: 'text', thinkingLevelField: 'lvl' }],
+            }),
+            { id: 'a-bad-thinking', conversationId: 1, status: 'pending' },
+          ),
+        (e: unknown) => e instanceof HelmxError && e.code === 'store_data_corrupted',
       )
       assert.throws(
         () =>

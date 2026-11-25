@@ -20,6 +20,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type {
   CallActionOptions,
+  ComposerMenuSlotProps,
   ComposerScopeProps,
   ComposerToolbarSlotProps,
   ConversationSummary,
@@ -57,7 +58,13 @@ ensureHappyDom()
 
 const { createRoot } = await import('react-dom/client')
 const HelmxPluginClient = await import('@helmx/plugin-client')
-const { PluginClientContext, PluginClientHostContext, resolveLocalizedText } = HelmxPluginClient
+const {
+  DropdownMenuContent,
+  DropdownMenuRoot,
+  PluginClientContext,
+  PluginClientHostContext,
+  resolveLocalizedText,
+} = HelmxPluginClient
 const { importCompiledPluginClient, mountPluginNamespaceGlobals } = await import('./helpers/plugin-namespace.js')
 
 const e = React.createElement
@@ -65,6 +72,7 @@ const PLAN_CLIENT_ROOT = fileURLToPath(new URL('../../plugins/src/plan/client', 
 const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}]/u
 
 interface PlanClientComponents {
+  PlanMenuItem: (p: ComposerMenuSlotProps) => React.ReactElement | null
   PlanToolbarButton: (p: ComposerToolbarSlotProps) => React.ReactElement | null
   PlanActiveTray: (p: Partial<ComposerScopeProps>) => React.ReactElement | null
   PlanWorkbenchPanel: (p: Partial<WorkbenchPanelProps>) => React.ReactElement
@@ -80,6 +88,7 @@ describe('plan-client-interactions', () => {
     const mod = await importCompiledPluginClient(PLAN_PLUGIN_ID, PLAN_CLIENT_ROOT, 'index.tsx')
     rawModule = mod
     components = {
+      PlanMenuItem: mod['PlanMenuItem'] as PlanClientComponents['PlanMenuItem'],
       PlanToolbarButton: mod['PlanToolbarButton'] as PlanClientComponents['PlanToolbarButton'],
       PlanActiveTray: mod['PlanActiveTray'] as PlanClientComponents['PlanActiveTray'],
       PlanWorkbenchPanel: mod['PlanWorkbenchPanel'] as PlanClientComponents['PlanWorkbenchPanel'],
@@ -287,7 +296,13 @@ describe('plan-client-interactions', () => {
     assert.equal(PLAN_TOOL_PROPOSE, 'plan_propose')
 
     const exportNames = Object.keys(rawModule).filter((k) => k !== '__helmxClientCss').sort()
-    assert.deepEqual(exportNames, ['PlanActiveTray', 'PlanToolRow', 'PlanToolbarButton', 'PlanWorkbenchPanel'])
+    assert.deepEqual(exportNames, [
+      'PlanActiveTray',
+      'PlanMenuItem',
+      'PlanToolRow',
+      'PlanToolbarButton',
+      'PlanWorkbenchPanel',
+    ])
     for (const name of exportNames) {
       assert.match(name, /^[A-Z]/)
       assert.equal(typeof rawModule[name], 'function')
@@ -295,6 +310,7 @@ describe('plan-client-interactions', () => {
     const cssText = rawModule['__helmxClientCss']
     assert.equal(typeof cssText, 'string')
     assert.match(cssText as string, /\.plan-toolbar-btn/)
+    assert.match(cssText as string, /\.plan-menu-item/)
     assert.match(cssText as string, /\.plan-workbench/)
     assert.match(cssText as string, /\.plan-tray-preview/)
     assert.match(cssText as string, /\.plan-editor/)
@@ -349,7 +365,7 @@ describe('plan-client-interactions', () => {
     assert.equal(planSaveStatsLabel(1, 42, 'en'), '1 line · 42 chars')
   })
 
-  test('PlanToolbarButton: toggles standby inputMeta without subscribing; returns null on subagent/non-human/read-only standby; toggles persisted planning & awaitingApproval', { timeout: 60_000 }, async () => {
+  test('PlanToolbarButton: active-only compact pill (hidden shortcut anchor in normal/unarmed state, Ctrl+. still active, sleek pill + exit when active)', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx({ conversationId: 10 })
 
     // 1. Standby draft without setDraftMeta -> null, zero subscriptions
@@ -367,7 +383,7 @@ describe('plan-client-interactions', () => {
       await standbyReadOnlyMount.unmount()
     }
 
-    // 1b. Standby draft WITH setDraftMeta -> arms & clears inputMeta['builtin:plan'] cleanly without subscribing
+    // 1b. Standby draft WITH setDraftMeta -> unarmed renders hidden shortcut anchor (no visible button), Ctrl+. still arms, armed renders sleek pill + close icon
     const standbyHarness = createSessionDocHarness()
     const metaWrites: Array<{ key: string; value: unknown }> = []
     const standbyMount = await mountWithSessionHost(
@@ -381,36 +397,31 @@ describe('plan-client-interactions', () => {
       standbyHarness,
     )
     try {
-      const standbyBtn = standbyMount.host.querySelector<HTMLButtonElement>('button.plan-toolbar-btn')
-      assert.ok(standbyBtn !== null, 'expected PlanToolbarButton on standby pane with setDraftMeta')
-      assert.equal(standbyBtn.getAttribute('aria-pressed'), 'false')
-      assert.equal(standbyBtn.getAttribute('data-plan-mode'), 'normal')
-      assert.ok(standbyBtn.classList.contains('plan-toolbar-btn--normal'))
-      assert.match(standbyBtn.textContent ?? '', /^Plan$/)
-      assert.match(standbyBtn.getAttribute('title') ?? '', /\(Ctrl\+\.\)/)
-      assert.equal(EMOJI_RE.test(standbyBtn.textContent ?? ''), false)
+      assert.ok(
+        standbyMount.host.querySelector('button.plan-toolbar-btn') === null,
+        'unarmed standby draft must not render a toolbar button',
+      )
+      const anchor = standbyMount.host.querySelector<HTMLElement>('.plan-shortcut-anchor')
+      assert.ok(anchor !== null, 'expected hidden shortcut anchor while unarmed')
+      assert.equal(anchor.hidden, true)
+      assert.equal(anchor.getAttribute('data-plan-mode'), 'normal')
       assert.equal(standbyHarness.subscribedKeys.length, 0, 'standby draft must not open sessionDoc subscription')
 
-      await act(async () => {
-        standbyBtn.click()
-      })
-      assert.deepEqual(metaWrites[0], { key: 'builtin:plan', value: { mode: 'planning' } })
-
-      // Ctrl+. shortcut toggles standby draft; mismatched panel ('split') is ignored
+      // Ctrl+. shortcut toggles standby draft even when unarmed/hidden; mismatched panel ('split') is ignored
       await act(async () => {
         window.dispatchEvent(
           new window.CustomEvent('helmx:shortcut', { detail: { action: 'toggle-plan-mode', panel: 'split' } }),
         )
       })
-      assert.equal(metaWrites.length, 1)
+      assert.equal(metaWrites.length, 0)
       await act(async () => {
         window.dispatchEvent(
           new window.CustomEvent('helmx:shortcut', { detail: { action: 'toggle-plan-mode', panel: 'primary' } }),
         )
       })
-      assert.deepEqual(metaWrites[1], { key: 'builtin:plan', value: { mode: 'planning' } })
+      assert.deepEqual(metaWrites[0], { key: 'builtin:plan', value: { mode: 'planning' } })
 
-      // Re-render armed state and click to disarm
+      // Re-render armed state -> compact active pill renders with exit icon
       await standbyMount.rerender(
         e(components.PlanToolbarButton, {
           effectiveModel: 'openai/gpt-5',
@@ -419,27 +430,32 @@ describe('plan-client-interactions', () => {
           setDraftMeta: (key, value) => metaWrites.push({ key, value }),
         }),
       )
-      assert.equal(standbyBtn.getAttribute('aria-pressed'), 'true')
-      assert.equal(standbyBtn.getAttribute('data-plan-mode'), 'planning')
-      assert.ok(standbyBtn.classList.contains('plan-toolbar-btn--planning'))
-      assert.match(standbyBtn.textContent ?? '', /Planning/)
+      const armedBtn = standbyMount.host.querySelector<HTMLButtonElement>('button.plan-toolbar-btn')
+      assert.ok(armedBtn !== null, 'expected compact active pill when standby is armed')
+      assert.equal(armedBtn.getAttribute('aria-pressed'), 'true')
+      assert.equal(armedBtn.getAttribute('data-plan-mode'), 'planning')
+      assert.ok(armedBtn.classList.contains('plan-toolbar-btn--planning'))
+      assert.ok(armedBtn.querySelector('.plan-toolbar-btn-close') !== null)
+      assert.match(armedBtn.textContent ?? '', /Plan/)
+      assert.match(armedBtn.getAttribute('title') ?? '', /\(Ctrl\+\.\)/)
+      assert.equal(EMOJI_RE.test(armedBtn.textContent ?? ''), false)
 
       await act(async () => {
-        standbyBtn.click()
+        armedBtn.click()
       })
-      assert.deepEqual(metaWrites[2], { key: 'builtin:plan', value: undefined })
+      assert.deepEqual(metaWrites[1], { key: 'builtin:plan', value: undefined })
 
-      // Disabled prop propagates cleanly
+      // Disabled prop propagates cleanly when active
       await standbyMount.rerender(
         e(components.PlanToolbarButton, {
           effectiveModel: 'openai/gpt-5',
           profileId: 'assistant',
-          draftMeta: undefined,
+          draftMeta: { [PLAN_PLUGIN_ID]: { mode: 'planning' } },
           setDraftMeta: (key, value) => metaWrites.push({ key, value }),
           disabled: true,
         }),
       )
-      assert.equal(standbyBtn.disabled, true)
+      assert.equal(standbyMount.host.querySelector<HTMLButtonElement>('button.plan-toolbar-btn')?.disabled, true)
     } finally {
       await standbyMount.unmount()
     }
@@ -472,7 +488,7 @@ describe('plan-client-interactions', () => {
       await helmxMount.unmount()
     }
 
-    // 4. Eligible top-level human conversation: normal -> click toggle -> planning -> awaitingApproval
+    // 4. Eligible top-level human conversation: normal hidden anchor + Ctrl+. -> planning pill -> awaitingClarification -> awaitingApproval
     const liveHarness = createSessionDocHarness({
       [`${PLAN_PLUGIN_ID}/${PLAN_SESSION_DOC}/10`]: {
         hasValue: true,
@@ -487,17 +503,17 @@ describe('plan-client-interactions', () => {
       liveHarness,
     )
     try {
-      const btn = liveMount.host.querySelector<HTMLButtonElement>('button.plan-toolbar-btn')
-      assert.ok(btn !== null, 'expected PlanToolbarButton button on top-level human conversation')
-      assert.equal(btn.getAttribute('aria-pressed'), 'false')
-      assert.equal(btn.getAttribute('data-plan-mode'), 'normal')
-      assert.ok(btn.classList.contains('plan-toolbar-btn--normal'))
-      assert.match(btn.textContent ?? '', /^Plan$/)
-      assert.match(btn.getAttribute('title') ?? '', /\(Ctrl\+\.\)/)
-      assert.equal(EMOJI_RE.test(btn.textContent ?? ''), false)
+      assert.ok(
+        liveMount.host.querySelector('button.plan-toolbar-btn') === null,
+        'normal persisted conversation must render zero visible toolbar button',
+      )
+      const anchor = liveMount.host.querySelector<HTMLElement>('.plan-shortcut-anchor')
+      assert.ok(anchor !== null && anchor.hidden)
 
       await act(async () => {
-        btn.click()
+        window.dispatchEvent(
+          new window.CustomEvent('helmx:shortcut', { detail: { action: 'toggle-plan-mode', panel: 'primary' } }),
+        )
       })
       assert.equal(spy.actionCalls.length, 1)
       assert.deepEqual(spy.actionCalls[0], {
@@ -506,10 +522,22 @@ describe('plan-client-interactions', () => {
         options: { conversationId: 10 },
       })
 
+      // Push planning sessionDoc update -> active compact pill appears and clicking exits
       await act(async () => {
-        window.dispatchEvent(
-          new window.CustomEvent('helmx:shortcut', { detail: { action: 'toggle-plan-mode', panel: 'primary' } }),
-        )
+        liveHarness.setDocValue(10, { mode: 'planning', awaitingApproval: false })
+      })
+      const btn = liveMount.host.querySelector<HTMLButtonElement>('button.plan-toolbar-btn')
+      assert.ok(btn !== null, 'expected PlanToolbarButton pill when planning is active')
+      assert.equal(btn.getAttribute('aria-pressed'), 'true')
+      assert.equal(btn.getAttribute('data-plan-mode'), 'planning')
+      assert.ok(btn.classList.contains('plan-toolbar-btn--planning'))
+      assert.ok(btn.querySelector('.plan-toolbar-btn-close') !== null)
+      assert.match(btn.textContent ?? '', /Plan/)
+      assert.match(btn.getAttribute('title') ?? '', /\(Ctrl\+\.\)/)
+      assert.equal(EMOJI_RE.test(btn.textContent ?? ''), false)
+
+      await act(async () => {
+        btn.click()
       })
       assert.equal(spy.actionCalls.length, 2)
       assert.deepEqual(spy.actionCalls[1], {
@@ -517,15 +545,6 @@ describe('plan-client-interactions', () => {
         input: { conversationId: 10 },
         options: { conversationId: 10 },
       })
-
-      // Push planning sessionDoc update
-      await act(async () => {
-        liveHarness.setDocValue(10, { mode: 'planning', awaitingApproval: false })
-      })
-      assert.equal(btn.getAttribute('aria-pressed'), 'true')
-      assert.equal(btn.getAttribute('data-plan-mode'), 'planning')
-      assert.ok(btn.classList.contains('plan-toolbar-btn--planning'))
-      assert.match(btn.textContent ?? '', /Planning/)
 
       // Push awaitingClarification sessionDoc update
       await act(async () => {
@@ -546,6 +565,133 @@ describe('plan-client-interactions', () => {
       const light = btn.querySelector('.helmx-status-light')
       assert.ok(light !== null)
       assert.equal(light.getAttribute('data-tone'), 'blocked')
+    } finally {
+      await liveMount.unmount()
+    }
+  })
+
+  test('PlanMenuItem: toggles standby inputMeta & persisted conversation cleanly inside Radix DropdownMenu and returns null on ineligible targets', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx({ conversationId: 10 })
+
+    // 1. Read-only standby / subagent / helmx-owned return null with zero subscriptions
+    for (const [label, menuProps] of [
+      ['read-only standby', { effectiveModel: 'openai/gpt-5', profileId: 'assistant' }],
+      ['subagent', { conversation: makeConv(11, { parentConversationId: 10 }) }],
+      ['helmx-owned', { conversation: makeConv(12, { ownedBy: 'helmx' }) }],
+    ] as Array<[string, ComposerMenuSlotProps]>) {
+      const h = createSessionDocHarness()
+      const m = await mountWithSessionHost(
+        spy,
+        e(
+          DropdownMenuRoot,
+          { open: true },
+          e(DropdownMenuContent, { inline: true }, e(components.PlanMenuItem, menuProps)),
+        ),
+        h,
+      )
+      try {
+        assert.ok(m.host.querySelector('[role="menuitem"]') === null, `${label} must render no menu item`)
+        assert.equal(h.subscribedKeys.length, 0, `${label} must not subscribe`)
+      } finally {
+        await m.unmount()
+      }
+    }
+
+    // 2. Standby draft with setDraftMeta: shows Plan mode, checkmark when armed, and invokes onCloseMenu
+    const metaWrites: Array<{ key: string; value: unknown }> = []
+    let closeCount = 0
+    const standbyHarness = createSessionDocHarness()
+    const standbyMount = await mountWithSessionHost(
+      spy,
+      e(
+        DropdownMenuRoot,
+        { open: true },
+        e(
+          DropdownMenuContent,
+          { inline: true },
+          e(components.PlanMenuItem, {
+            effectiveModel: 'openai/gpt-5',
+            profileId: 'assistant',
+            draftMeta: undefined,
+            setDraftMeta: (k, v) => metaWrites.push({ key: k, value: v }),
+            onCloseMenu: () => { closeCount += 1 },
+          }),
+        ),
+      ),
+      standbyHarness,
+    )
+    try {
+      const item = standbyMount.host.querySelector<HTMLElement>('.plan-menu-item')
+      assert.ok(item !== null)
+      assert.match(item.textContent ?? '', /Plan mode/)
+      assert.match(item.textContent ?? '', /Ctrl\+\./)
+      assert.ok(item.querySelector('.plan-menu-item-check') === null)
+
+      await act(async () => {
+        item.click()
+      })
+      assert.deepEqual(metaWrites[0], { key: 'builtin:plan', value: { mode: 'planning' } })
+      assert.equal(closeCount, 1)
+
+      await standbyMount.rerender(
+        e(
+          DropdownMenuRoot,
+          { open: true },
+          e(
+            DropdownMenuContent,
+            { inline: true },
+            e(components.PlanMenuItem, {
+              effectiveModel: 'openai/gpt-5',
+              profileId: 'assistant',
+              draftMeta: { [PLAN_PLUGIN_ID]: { mode: 'planning' } },
+              setDraftMeta: (k, v) => metaWrites.push({ key: k, value: v }),
+              onCloseMenu: () => { closeCount += 1 },
+            }),
+          ),
+        ),
+      )
+      const armedItem = standbyMount.host.querySelector<HTMLElement>('.plan-menu-item')
+      assert.ok(armedItem?.classList.contains('plan-menu-item--active'))
+      assert.ok(armedItem?.querySelector('.plan-menu-item-check') !== null)
+    } finally {
+      await standbyMount.unmount()
+    }
+
+    // 3. Persisted top-level human conversation: calls toggle and shows checkmark in planning mode
+    const liveHarness = createSessionDocHarness({
+      [`${PLAN_PLUGIN_ID}/${PLAN_SESSION_DOC}/10`]: {
+        hasValue: true,
+        deleted: false,
+        connected: true,
+        value: { mode: 'planning', awaitingApproval: false },
+      },
+    })
+    const liveMount = await mountWithSessionHost(
+      spy,
+      e(
+        DropdownMenuRoot,
+        { open: true },
+        e(
+          DropdownMenuContent,
+          { inline: true },
+          e(components.PlanMenuItem, { conversation: makeConv(10) }),
+        ),
+      ),
+      liveHarness,
+    )
+    try {
+      const item = liveMount.host.querySelector<HTMLElement>('.plan-menu-item')
+      assert.ok(item !== null && item.classList.contains('plan-menu-item--active'))
+      assert.ok(item.querySelector('.plan-menu-item-check') !== null)
+      await act(async () => {
+        item.click()
+      })
+      assert.equal(spy.actionCalls.length, 1)
+      assert.deepEqual(spy.actionCalls[0], {
+        actionId: 'toggle',
+        input: { conversationId: 10 },
+        options: { conversationId: 10 },
+      })
     } finally {
       await liveMount.unmount()
     }
