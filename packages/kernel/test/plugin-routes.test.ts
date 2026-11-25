@@ -11,8 +11,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { gunzipSync } from 'node:zlib'
 import { HelmxError, type PluginDefinition } from '@helmx/protocol'
-import { createHubHandler } from '../src/http/hub.js'
-import type { KernelRuntimeLike } from '../src/http/contracts.js'
+import { createHubHandler, type KernelHttpTarget } from '../src/http/hub.js'
 import { PLUGIN_ROUTE_JSON_REDACT_MAX_BYTES } from '../src/http/plugin-routes.js'
 import { PluginHost } from '../src/plugins/index.js'
 import { SecretStash } from '../src/services/index.js'
@@ -40,7 +39,7 @@ async function makeRouteHarness(plugins: PluginDefinition[], stash: SecretStash 
     },
     plugins: host,
     ...(stash !== undefined ? { stash } : {}),
-  } as unknown as KernelRuntimeLike
+  } as unknown as KernelHttpTarget
   const handle = createHubHandler(kernelStub)
   const req = (path: string, init: RequestInit = {}) => {
     const headers = new Headers(init.headers)

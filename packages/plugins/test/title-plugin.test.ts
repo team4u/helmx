@@ -26,7 +26,7 @@ import {
   type TurnSettledPayload,
 } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '@helmx/kernel'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import {
   TITLE_ACTION_GENERATE,

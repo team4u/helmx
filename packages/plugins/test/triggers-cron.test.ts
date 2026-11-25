@@ -15,7 +15,7 @@ import {
   type ExternalTriggerEnvelope,
   type PluginDefinition,
 } from '@helmx/protocol'
-import { PluginHost } from '../../kernel/src/plugins/index.js'
+import { PluginHost } from '@helmx/kernel'
 import {
   advanceAfterFire,
   assertValidSchedule,

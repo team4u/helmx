@@ -13,7 +13,7 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { HelmxError } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { waitFor } from '@helmx/test-kit'
-import { KernelRuntime } from '../../kernel/src/runtime/index.js'
+import { KernelRuntime } from '@helmx/kernel'
 import { createHelmx } from '../../hub/src/app.js'
 import { createMemoryKvStore, WorkflowService } from '../src/workflow/runs/index.js'
 import { makeFauxProvider } from './helpers/plugin-test-env.js'
@@ -48,13 +48,13 @@ describe('workflow real-SDK integration (faux provider)', () => {
         dataDir,
         kv: createMemoryKvStore(),
         host: {
-          spawnAgent: (request) => runtime.spawnAgent(request),
+          spawnAgent: (request) => runtime.agentSpawn.spawnAgent(request),
           invokeAction: async (pluginId, actionId) => {
             throw new HelmxError('unknown_action', `测试宿主无动作：${pluginId}.${actionId}`, 404)
           },
           listActions: () => [],
-          getConversation: (id) => runtime.getConversation(id),
-          abortConversationGuarded: (id) => runtime.abortConversationGuarded(id, {}),
+          getConversation: (id) => runtime.conversations.getConversation(id),
+          abortConversationGuarded: (id) => runtime.conversations.abortConversationGuarded(id, {}),
           emitEvent: () => {},
         },
       })
@@ -65,7 +65,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
 
       // 不显式指定 agentType：默认必须经 assistant profile（ensureDefault 保证存在）。
       const summary = await service.run({
-        conversationId: runtime.listConversations()[0]!.id,
+        conversationId: runtime.conversations.listConversations()[0]!.id,
         script: META('sdk-default') + 'const a = await agent("ping")\nreturn a',
       })
       const result = await service.wait(summary.id)
@@ -92,7 +92,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
     const workflows = app.kernel.plugins!
     const runWorkflow = (request: Record<string, unknown>) =>
       workflows.invokeAction('builtin:workflow', 'run', request, {
-        conversationId: app.kernel.listConversations()[0]!.id,
+        conversationId: app.kernel.conversations.listConversations()[0]!.id,
       }) as Promise<import('../src/contracts.js').WorkflowRunSummary>
     try {
       const sentinels: Array<{ sentinel: string; pid: number }> = []
@@ -169,7 +169,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
         dataDir,
         kv: createMemoryKvStore(),
         host: {
-          spawnAgent: (request) => runtime.spawnAgent(request),
+          spawnAgent: (request) => runtime.agentSpawn.spawnAgent(request),
           invokeAction: async (pluginId, actionId, input, context) => {
             return runtime.plugins.invokeAction(pluginId, actionId, input, context)
           },
@@ -177,22 +177,22 @@ describe('workflow real-SDK integration (faux provider)', () => {
             return runtime.plugins.prepareAction(pluginId, actionId, input, context)
           },
           execEnv: async (req, signal) => {
-            const res = await runtime.execEnv(req, undefined, signal)
+            const res = await runtime.nodes.execEnv(req, undefined, signal)
             return {
               ...res,
               output: runtime.stash.redact(res.output),
             }
           },
           listActions: () => runtime.plugins.listActions(),
-          getConversation: (id) => runtime.getConversation(id),
-          abortConversationGuarded: (id) => runtime.abortConversationGuarded(id, {}),
+          getConversation: (id) => runtime.conversations.getConversation(id),
+          abortConversationGuarded: (id) => runtime.conversations.abortConversationGuarded(id, {}),
           emitEvent: () => {},
         },
       })
       await service.init()
 
       const summary = await service.run({
-        conversationId: runtime.listConversations()[0]!.id,
+        conversationId: runtime.conversations.listConversations()[0]!.id,
         script:
           META('real-exec') +
           `

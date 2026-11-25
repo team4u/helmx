@@ -10,7 +10,7 @@
  *   node scripts/build.mjs                  # Full workspace build (backend + web + plugin clients + sdk-types + payload)
  *   node scripts/build.mjs --skip-payload   # Everything except packages/payload (for CI/test/Docker)
  *   node scripts/build.mjs --for-typecheck  # 7 backend runtime packages (excluding cli) + plugin clients
- *   node scripts/build.mjs --unit-deps      # Minimal unit-tier build (protocol + env-io + plugin-build)
+ *   node scripts/build.mjs --unit-deps      # Minimal unit-tier build (protocol + env-io + plugin-build + kernel)
  *   node scripts/build.mjs --force | -f     # Clean wipe & rebuild (or HELMX_CLEAN_DIST=1)
  *
  * Exit codes: 0 success; non-zero child exit code on failure; 2 on CLI usage errors.
@@ -28,14 +28,14 @@ const defaultTscBin = require.resolve('typescript/bin/tsc');
 
 const ALL_BACKEND_PACKAGES = ['protocol', 'env-io', 'node', 'plugin-build', 'kernel', 'plugins', 'hub', 'cli'];
 const TYPECHECK_BACKEND_PACKAGES = ['protocol', 'env-io', 'node', 'plugin-build', 'kernel', 'plugins', 'hub'];
-const UNIT_DEPS_PACKAGES = ['protocol', 'env-io', 'plugin-build'];
+const UNIT_DEPS_PACKAGES = ['protocol', 'env-io', 'plugin-build', 'kernel'];
 const BUILD_MODES = new Set(['full', 'skip-payload', 'for-typecheck', 'unit-deps']);
 
 export function buildUsageText() {
   return `Usage: node scripts/build.mjs [--skip-payload | --for-typecheck | --unit-deps] [--force|-f] [--quiet|-q]
   --skip-payload   Build all runtime packages, web, plugin clients, and CLI SDK types (skip payload packaging)
   --for-typecheck  Build 7 backend runtime packages (hub + node closures, excluding cli) and plugin clients
-  --unit-deps      Build unit-tier dependency closure (protocol, env-io, plugin-build)
+  --unit-deps      Build unit-tier dependency closure (protocol, env-io, plugin-build, kernel)
   --force, -f      Force full wipe and rebuild (equivalent to HELMX_CLEAN_DIST=1)
   --quiet, -q      Suppress non-error build summary output`;
 }
@@ -105,8 +105,8 @@ export function planBuildStages(options = {}) {
       cleanPackages: [...UNIT_DEPS_PACKAGES],
       tscCommand: {
         cmd: execPath,
-        args: [tscBin, '-b', 'packages/plugin-build', ...forceArgs],
-        label: 'tsc -b packages/plugin-build',
+        args: [tscBin, '-b', 'packages/plugin-build', 'packages/kernel', ...forceArgs],
+        label: 'tsc -b packages/plugin-build packages/kernel',
       },
       webCommand: null,
       postTscCommands: [],

@@ -111,27 +111,27 @@ after(async () => {
 test('ownedBy 实时投射与事件广播及插件受管 Profile/Skill 自举标记', { timeout: 60_000 }, async () => {
   const { kernel } = env
 
-  // 1. 普通会话与初始 #1 恒为 human；markConversationOwnership 幂等与变更广播
-  assert.equal(kernel.getConversation(ROOT_CONVERSATION_ID).ownedBy, 'human')
-  const human = await kernel.createConversation({ title: 'human conversation', profileId: 'assistant' })
+  // 1. 普通会话与初始 #1 恒为 human；markOwnership 幂等与变更广播
+  assert.equal(kernel.conversations.getConversation(ROOT_CONVERSATION_ID).ownedBy, 'human')
+  const human = await kernel.conversations.createConversation({ title: 'human conversation', profileId: 'assistant' })
   assert.equal(human.ownedBy, 'human')
 
   const frames: HelmxEventFrame[] = []
   const off = kernel.events.subscribe((frame) => frames.push(frame))
   try {
     frames.length = 0
-    kernel.markConversationOwnership(human.id, 'human')
+    kernel.ownership.markOwnership(human.id, 'human')
     assert.equal(frames.filter((f) => f.event.type === 'conversation.upsert').length, 0)
 
-    kernel.markConversationOwnership(human.id, 'helmx')
+    kernel.ownership.markOwnership(human.id, 'helmx')
     const upsert = frames.find(
       (f) => f.event.type === 'conversation.upsert' && (f.event as { conversation?: { id?: number } }).conversation?.id === human.id,
     )
     assert.equal((upsert?.event as { conversation?: { ownedBy?: string } })?.conversation?.ownedBy, 'helmx')
-    assert.equal(kernel.getConversation(human.id).ownedBy, 'helmx')
+    assert.equal(kernel.conversations.getConversation(human.id).ownedBy, 'helmx')
 
     frames.length = 0
-    kernel.markConversationOwnership(human.id, 'human')
+    kernel.ownership.markOwnership(human.id, 'human')
     const revert = frames.find(
       (f) => f.event.type === 'conversation.upsert' && (f.event as { conversation?: { id?: number } }).conversation?.id === human.id,
     )
@@ -146,9 +146,9 @@ test('ownedBy 实时投射与事件广播及插件受管 Profile/Skill 自举标
   await kernel.plugins.enable(TEST_MANAGED_PLUGIN_ID)
   try {
     assert.ok(createdIds)
-    assert.equal(kernel.getConversation(createdIds.routerId).ownedBy, 'helmx')
-    assert.equal(kernel.getConversation(createdIds.helperId).ownedBy, 'helmx')
-    const listed = new Map(kernel.listConversations().map((s) => [s.id, s.ownedBy]))
+    assert.equal(kernel.conversations.getConversation(createdIds.routerId).ownedBy, 'helmx')
+    assert.equal(kernel.conversations.getConversation(createdIds.helperId).ownedBy, 'helmx')
+    const listed = new Map(kernel.conversations.listConversations().map((s) => [s.id, s.ownedBy]))
     assert.equal(listed.get(createdIds.routerId), 'helmx')
     assert.equal(listed.get(createdIds.helperId), 'helmx')
     assert.equal(listed.get(ROOT_CONVERSATION_ID), 'human')

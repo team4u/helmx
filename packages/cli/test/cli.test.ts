@@ -1363,7 +1363,7 @@ test('cross-process concurrency: child CLI cli-token writes and Hub credentials.
       child.on('error', reject)
       child.on('close', (code) => resolve({ code, err }))
     })
-  const { CredentialService } = await import('../../kernel/src/services/index.js')
+  const { CredentialService } = await import('@helmx/kernel')
   const svc = new CredentialService(dataDir)
   await svc.set('base', 'sk-base-0123456789')
 

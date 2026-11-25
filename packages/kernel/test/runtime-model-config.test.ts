@@ -47,7 +47,7 @@ function writeProfile(dataDir: string, id: string, fields: Record<string, unknow
 
 /** Returns the latest pi.assistant entry (carrying model messages to assert which model handled the real request). */
 async function lastAssistantEntry(kernel: KernelRuntime, convId: number): Promise<ConversationEntry> {
-  const detail = await kernel.getConversationDetail(convId, { limit: 50 })
+  const detail = await kernel.conversations.getConversationDetail(convId, { limit: 50 })
   const entry = [...detail.entries].reverse().find((e) => e.kind === 'pi.assistant')
   assert.ok(entry, 'should have a pi.assistant entry')
   return entry
@@ -91,12 +91,12 @@ describe('config.json.model global model', { timeout: 60_000 }, () => {
     writeFileSync(join(dir, 'config.json'), JSON.stringify({ model: 'faux/faux-1' }))
     const kernel = await openRuntime(dir)
     try {
-      assert.equal(kernel.getConversation(1).model, 'faux/faux-1')
-      const conv = await kernel.createConversation({})
+      assert.equal(kernel.conversations.getConversation(1).model, 'faux/faux-1')
+      const conv = await kernel.conversations.createConversation({})
       assert.equal(conv.model, 'faux/faux-1')
       kernel.__faux.setResponses([fauxAssistantMessage('config model answer')])
-      await kernel.submitInput(1, 'question')
-      await kernel.waitForIdle(1)
+      await kernel.conversations.submitInput(1, 'question')
+      await kernel.conversations.waitForIdle(1)
       assertRequestModel(await lastAssistantEntry(kernel, 1), 'faux', 'faux-1')
       assert.ok(kernel.__faux.state.callCount >= 1, 'should make a real faux request')
     } finally {
@@ -130,11 +130,11 @@ describe('global model source priority', { timeout: 60_000 }, () => {
     let k1: RuntimeWithFaux | undefined
     try {
       k1 = await openRuntime(dir, { ids: ['faux-1', 'faux-2'] })
-      const conv = await k1.createConversation({})
+      const conv = await k1.conversations.createConversation({})
       assert.equal(conv.model, 'faux/faux-1', 'HELMX_MODEL should take precedence over config.json.model')
       k1.__faux.setResponses([fauxAssistantMessage('env answer')])
-      await k1.submitInput(conv.id, 'question')
-      await k1.waitForIdle(conv.id)
+      await k1.conversations.submitInput(conv.id, 'question')
+      await k1.conversations.waitForIdle(conv.id)
       assertRequestModel(await lastAssistantEntry(k1, conv.id), 'faux', 'faux-1')
       await k1.close()
       k1 = undefined
@@ -142,10 +142,10 @@ describe('global model source priority', { timeout: 60_000 }, () => {
       // options.model has highest priority: env still points to faux-1, yet post-restart uses explicit faux-2.
       const k2 = await openRuntime(dir, { model: 'faux/faux-2', ids: ['faux-1', 'faux-2'] })
       try {
-        assert.equal(k2.getConversation(conv.id).model, 'faux/faux-2')
+        assert.equal(k2.conversations.getConversation(conv.id).model, 'faux/faux-2')
         k2.__faux.setResponses([fauxAssistantMessage('options answer')])
-        await k2.submitInput(conv.id, 'question')
-        await k2.waitForIdle(conv.id)
+        await k2.conversations.submitInput(conv.id, 'question')
+        await k2.conversations.waitForIdle(conv.id)
         assertRequestModel(await lastAssistantEntry(k2, conv.id), 'faux', 'faux-2')
       } finally {
         await k2.close()
@@ -168,19 +168,19 @@ describe('Profile.model and conversation override', { timeout: 60_000 }, () => {
     writeProfile(dir, 'empty', { name: 'E', model: '' })
     const kernel = await openRuntime(dir, { model: 'faux/faux-1', ids: ['faux-1', 'faux-2'] })
     try {
-      const conv = await kernel.createConversation({ profileId: 'worker' })
+      const conv = await kernel.conversations.createConversation({ profileId: 'worker' })
       assert.equal(conv.model, 'faux/faux-2', 'Profile.model should take precedence over global')
       kernel.__faux.setResponses([fauxAssistantMessage('profile model answer')])
-      await kernel.submitInput(conv.id, 'question')
-      await kernel.waitForIdle(conv.id)
+      await kernel.conversations.submitInput(conv.id, 'question')
+      await kernel.conversations.waitForIdle(conv.id)
       assertRequestModel(await lastAssistantEntry(kernel, conv.id), 'faux', 'faux-2')
 
-      const overridden = await kernel.updateConversation(conv.id, { model: 'faux/faux-1' })
+      const overridden = await kernel.conversations.updateConversation(conv.id, { model: 'faux/faux-1' })
       assert.equal(overridden.model, 'faux/faux-1', 'conversation override should take precedence over Profile')
-      const cleared = await kernel.updateConversation(conv.id, { model: '' })
+      const cleared = await kernel.conversations.updateConversation(conv.id, { model: '' })
       assert.equal(cleared.model, 'faux/faux-2', 'clearing override should fall back to Profile.model')
 
-      const inherited = await kernel.createConversation({ profileId: 'empty' })
+      const inherited = await kernel.conversations.createConversation({ profileId: 'empty' })
       assert.equal(inherited.model, 'faux/faux-1', 'empty Profile.model string is treated as unset and inherits global')
     } finally {
       await kernel.close()
@@ -198,20 +198,20 @@ describe('assistant Profile model', { timeout: 60_000 }, () => {
     writeProfile(dir, 'assistant', { name: 'assist', model: 'faux/faux-2' })
     const k1 = await openRuntime(dir, { model: 'faux/faux-1', ids: ['faux-1', 'faux-2'] })
     try {
-      assert.equal(k1.getConversation(1).model, 'faux/faux-2', 'conversation should use assistant Profile model')
+      assert.equal(k1.conversations.getConversation(1).model, 'faux/faux-2', 'conversation should use assistant Profile model')
       k1.__faux.setResponses([fauxAssistantMessage('conversation answer')])
-      await k1.submitInput(1, 'question')
-      await k1.waitForIdle(1)
+      await k1.conversations.submitInput(1, 'question')
+      await k1.conversations.waitForIdle(1)
       assertRequestModel(await lastAssistantEntry(k1, 1), 'faux', 'faux-2')
       await k1.close()
 
       // Restart without any global model source: root still keeps assistant Profile model (SDK config durable).
       const k2 = await openRuntime(dir, { ids: ['faux-1', 'faux-2'] })
       try {
-        assert.equal(k2.getConversation(1).model, 'faux/faux-2')
+        assert.equal(k2.conversations.getConversation(1).model, 'faux/faux-2')
         k2.__faux.setResponses([fauxAssistantMessage('after restart answer')])
-        await k2.submitInput(1, 'next question')
-        await k2.waitForIdle(1)
+        await k2.conversations.submitInput(1, 'next question')
+        await k2.conversations.waitForIdle(1)
         assertRequestModel(await lastAssistantEntry(k2, 1), 'faux', 'faux-2')
       } finally {
         await k2.close()
@@ -232,18 +232,18 @@ describe('createConversation explicit profileId validation', { timeout: 60_000 }
     const dir = join(root, 'p5')
     const kernel = await openRuntime(dir)
     try {
-      assert.equal((await kernel.createConversation()).profileId, 'assistant', 'omitted profileId defaults to assistant')
+      assert.equal((await kernel.conversations.createConversation()).profileId, 'assistant', 'omitted profileId defaults to assistant')
       await assert.rejects(
-        () => kernel.createConversation({ profileId: 'default' }),
+        () => kernel.conversations.createConversation({ profileId: 'default' }),
         isHelmx('validation_error'),
       )
       writeProfile(dir, 'default', { name: 'D', model: 'faux/faux-1' })
-      const conv = await kernel.createConversation({ profileId: 'default' })
+      const conv = await kernel.conversations.createConversation({ profileId: 'default' })
       assert.equal(conv.profileId, 'default')
       assert.equal(conv.model, 'faux/faux-1')
       // Invalid model reference format also rejects explicitly.
       await assert.rejects(
-        () => kernel.createConversation({ model: 'no-slash' }),
+        () => kernel.conversations.createConversation({ model: 'no-slash' }),
         isHelmx('validation_error'),
       )
     } finally {
@@ -262,36 +262,36 @@ describe('corrupt and missing Profile explicit errors', { timeout: 60_000 }, () 
     writeProfile(dir, 'worker', { name: 'W', model: 'faux/faux-1' })
     const kernel = await openRuntime(dir)
     try {
-      const conv = await kernel.createConversation({ profileId: 'worker' })
+      const conv = await kernel.conversations.createConversation({ profileId: 'worker' })
       assert.equal(conv.model, 'faux/faux-1')
 
       // Corrupt JSON: read paths consistently throw explicitly (never swallowed or treated as unset).
       writeFileSync(join(dir, 'profiles', 'worker', 'profile.json'), '{ broken json')
       await assert.rejects(
-        () => kernel.createConversation({ profileId: 'worker' }),
+        () => kernel.conversations.createConversation({ profileId: 'worker' }),
         (err: unknown) =>
           err instanceof HelmxError &&
           err.code === 'profile_read_failed' &&
           (err.details as { profileId?: string })?.profileId === 'worker',
       )
       await assert.rejects(
-        () => kernel.updateConversation(conv.id, { title: 'x' }),
+        () => kernel.conversations.updateConversation(conv.id, { title: 'x' }),
         isHelmx('profile_read_failed'),
       )
-      await assert.rejects(() => kernel.submitInput(conv.id, 'question'), isHelmx('profile_read_failed'))
+      await assert.rejects(() => kernel.conversations.submitInput(conv.id, 'question'), isHelmx('profile_read_failed'))
       assert.equal(kernel.__faux.state.callCount, 0, 'must not start model request when Profile is corrupt')
 
       // Existing conversation whose Profile is deleted: must still require the real Profile to exist.
       await cleanupDir(join(dir, 'profiles', 'worker'))
       await assert.rejects(
-        () => kernel.submitInput(conv.id, 'question'),
+        () => kernel.conversations.submitInput(conv.id, 'question'),
         (err: unknown) =>
           err instanceof HelmxError &&
           err.code === 'profile_not_found' &&
           (err.details as { profileId?: string })?.profileId === 'worker',
       )
-      await assert.rejects(() => kernel.updateConversation(conv.id, { title: 'y' }), isHelmx('profile_not_found'))
-      await assert.rejects(() => kernel.createConversation({ profileId: 'worker' }), isHelmx('validation_error'))
+      await assert.rejects(() => kernel.conversations.updateConversation(conv.id, { title: 'y' }), isHelmx('profile_not_found'))
+      await assert.rejects(() => kernel.conversations.createConversation({ profileId: 'worker' }), isHelmx('validation_error'))
       assert.equal(kernel.__faux.state.callCount, 0, 'must not start model request when Profile is missing')
     } finally {
       await kernel.close()

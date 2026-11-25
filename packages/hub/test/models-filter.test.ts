@@ -112,7 +112,7 @@ test('禁用模型执行门禁：会话创建/更新/提交、默认模型、Pro
   assert.equal(created.status, 409)
   assert.equal(created.body.error.code, 'model_disabled')
 
-  const conv = await env.kernel.createConversation({ title: 'filter-guard' })
+  const conv = await env.kernel.conversations.createConversation({ title: 'filter-guard' })
   assert.equal((await env.call('PATCH', `/api/conversations/${conv.id}`, { model: 'faux/faux-2' })).status, 409)
 
   await env.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-1'] })
@@ -123,7 +123,7 @@ test('禁用模型执行门禁：会话创建/更新/提交、默认模型、Pro
   await env.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
   env.faux.setResponses([fauxAssistantMessage('ok')])
   assert.equal((await env.call('POST', `/api/conversations/${conv.id}/input`, { text: 'hello again' })).status, 202)
-  await env.kernel.waitForIdle(conv.id)
+  await env.kernel.conversations.waitForIdle(conv.id)
 
   // 2. Profile POST / PUT 门禁
   const profCreated = await env.call('POST', '/api/profiles', { id: 'disabled-bind', name: 'disabled', model: 'faux/faux-2' })
@@ -136,48 +136,48 @@ test('禁用模型执行门禁：会话创建/更新/提交、默认模型、Pro
   assert.equal((await env.call('PUT', '/api/profiles/put-target', { name: 'ok', model: 'faux/faux-1' })).status, 200)
 
   // 3. 原生 spawn 三条模型解析路径（显式 / profile / 全局默认）创建前拒绝且零孤儿子会话
-  const spawnParent = await env.kernel.createConversation({ title: 'spawn-parent' })
+  const spawnParent = await env.kernel.conversations.createConversation({ title: 'spawn-parent' })
   await assert.rejects(
-    () => env.kernel.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x', model: 'faux/faux-2' }),
+    () => env.kernel.agentSpawn.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x', model: 'faux/faux-2' }),
     { code: 'model_disabled' },
   )
   await env.kernel.profiles.save({ id: 'spawnable', name: 'S', model: 'faux/faux-2' })
   await assert.rejects(
-    () => env.kernel.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x', agentType: 'spawnable' }),
+    () => env.kernel.agentSpawn.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x', agentType: 'spawnable' }),
     { code: 'model_disabled' },
   )
-  await env.kernel.setDisabledModels('faux', ['faux-1', 'faux-2'])
+  await env.kernel.models.setDisabledModels('faux', ['faux-1', 'faux-2'])
   await assert.rejects(
-    () => env.kernel.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x' }),
+    () => env.kernel.agentSpawn.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x' }),
     { code: 'model_disabled' },
   )
-  assert.equal(env.kernel.listConversations().filter((c) => c.parentConversationId === spawnParent.id).length, 0)
+  assert.equal(env.kernel.conversations.listConversations().filter((c) => c.parentConversationId === spawnParent.id).length, 0)
 
   // 4. 重启用后 spawn 与子会话 resume 事后禁用/恢复契约
-  await env.kernel.setDisabledModels('faux', [])
+  await env.kernel.models.setDisabledModels('faux', [])
   env.faux.setResponses([fauxAssistantMessage('child-first')])
   assert.equal(
-    await env.kernel.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x', model: 'faux/faux-2' }),
+    await env.kernel.agentSpawn.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x', model: 'faux/faux-2' }),
     'child-first',
   )
-  const child = env.kernel.listConversations().find((c) => c.parentConversationId === spawnParent.id)!
+  const child = env.kernel.conversations.listConversations().find((c) => c.parentConversationId === spawnParent.id)!
   assert.equal(child.model, 'faux/faux-2')
 
-  await env.kernel.setDisabledModels('faux', ['faux-2'])
+  await env.kernel.models.setDisabledModels('faux', ['faux-2'])
   const callsBefore = env.faux.state.callCount
   await assert.rejects(
-    () => env.kernel.spawnAgent({ parentConversationId: spawnParent.id, resume: String(child.id), prompt: 'continue' }),
+    () => env.kernel.agentSpawn.spawnAgent({ parentConversationId: spawnParent.id, resume: String(child.id), prompt: 'continue' }),
     (err: unknown) => err instanceof Error && (err as { code?: string; status?: number }).code === 'model_disabled' && (err as { status?: number }).status === 409,
   )
   assert.equal(env.faux.state.callCount, callsBefore)
 
-  await env.kernel.setDisabledModels('faux', [])
+  await env.kernel.models.setDisabledModels('faux', [])
   env.faux.setResponses([fauxAssistantMessage('resumed ok')])
   assert.equal(
-    await env.kernel.spawnAgent({ parentConversationId: spawnParent.id, resume: String(child.id), prompt: 'continue' }),
+    await env.kernel.agentSpawn.spawnAgent({ parentConversationId: spawnParent.id, resume: String(child.id), prompt: 'continue' }),
     'resumed ok',
   )
-  assert.equal(env.kernel.listConversations().filter((c) => c.parentConversationId === spawnParent.id).length, 1)
+  assert.equal(env.kernel.conversations.listConversations().filter((c) => c.parentConversationId === spawnParent.id).length, 1)
 })
 
 test('多 provider 隔离与清空全部、重启恢复生效及 config.json 坏形状显式 config_corrupt', { timeout: 60_000 }, async (t) => {
@@ -209,10 +209,10 @@ test('多 provider 隔离与清空全部、重启恢复生效及 config.json 坏
     fauxOptions: { models: [{ id: 'faux-1' }, { id: 'faux-2' }] },
   })
   try {
-    const catalog = await restarted.kernel.listModels()
+    const catalog = await restarted.kernel.models.listModels()
     assert.equal(catalog.models.find((m) => m.provider === 'faux' && m.modelId === 'faux-2')?.disabled, true)
     await assert.rejects(
-      () => restarted.kernel.createConversation({ model: 'faux/faux-2' }),
+      () => restarted.kernel.conversations.createConversation({ model: 'faux/faux-2' }),
       { code: 'model_disabled' },
     )
   } finally {
@@ -242,7 +242,7 @@ test('KernelRuntimeOptions.providers coexists with builtin:magpie and rejects si
 
   const { app } = await createHubTestApp({ dataDir: dir, cwd: dir })
   try {
-    const ids = app.kernel.listModelProviders().map((p) => p.id)
+    const ids = app.kernel.models.listModelProviders().map((p) => p.id)
     assert.ok(ids.includes('faux'), 'providers option registers faux runtime provider')
     assert.ok(ids.includes('magpie'), 'default-enabled builtin:magpie coexists with providers option')
   } finally {

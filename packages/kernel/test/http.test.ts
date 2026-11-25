@@ -31,7 +31,7 @@ import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { HelmxError, type ConversationDetail, type ConversationEntry, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginManifestProjection, type PluginSummary, type HelmxPluginContext } from '@helmx/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
-import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
+import type { HttpEventHub, KernelHttpTarget } from '../src/http/index.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 
@@ -55,7 +55,7 @@ let handler0: ReturnType<typeof createHubHandler>
 let token: string | undefined
 
 /** Simulated EventHub: real subscription semantics + SSE response (initial snapshot frame + deltas). */
-class TestEventHub implements EventHub {
+class TestEventHub implements HttpEventHub {
   seq = 0
   private listeners = new Set<(event: { type: string; payload: unknown }) => void>()
   listenerCount(): number {
@@ -142,12 +142,8 @@ function detailOf(overrides: Partial<ConversationDetail> = {}): ConversationDeta
   }
 }
 
-function makeKernel(): KernelRuntimeLike {
+function makeKernel(): KernelHttpTarget {
   return {
-    listNodes() { throw new Error('this HTTP fixture does not support node management') },
-    async issueNodeToken() { throw new Error('this HTTP fixture does not issue node tokens') },
-    async removeNode() { throw new Error('this HTTP fixture does not remove nodes') },
-    async execEnv() { throw new Error('this HTTP fixture does not execute node commands') },
     dataDir,
     auth,
     events: hub0,
@@ -161,127 +157,151 @@ function makeKernel(): KernelRuntimeLike {
     setHubUrl(url: string) {
       setHubUrlCalls.push(url)
     },
-    async listConversations(filter) {
-      let out = [...conversations.values()]
-      if (filter?.profileId) out = out.filter((c) => c.profileId === filter.profileId)
-      if (filter?.tag) out = out.filter((c) => c.tags.includes(filter.tag!))
-      if (filter?.status) out = out.filter((c) => c.status === filter.status)
-      if (filter?.ownedBy) out = out.filter((c) => (c.ownedBy ?? 'human') === filter.ownedBy)
-      if (filter?.parentConversationId !== undefined) {
-        out = out.filter((c) => c.parentConversationId === filter.parentConversationId)
-      }
-      if (filter?.topLevelOnly) out = out.filter((c) => c.parentConversationId === undefined)
-      return out
+    nodes: {
+      listNodes() { throw new Error('this HTTP fixture does not support node management') },
+      async issueNodeToken() { throw new Error('this HTTP fixture does not issue node tokens') },
+      async removeNode() { throw new Error('this HTTP fixture does not remove nodes') },
+      async execEnv() { throw new Error('this HTTP fixture does not execute node commands') },
     },
-    async getConversationDetail(id: number, opts?: { limit?: number; cursor?: string }) {
-      detailCalls.push({ id, opts })
-      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-      if (detailFixture !== undefined) {
-        return { ...detailFixture, id }
-      }
-      return { ...conversations.get(id)!, entries: [] }
-    },
-    async getConversationEntry(id: number, entryId: number) {
-      entryCalls.push({ id, entryId })
-      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-      if (entryFixture !== undefined) return { ...entryFixture, id: String(entryId) }
-      throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404, { conversationId: id, entryId })
-    },
-    async createConversation(init) {
-      const id = Math.max(0, ...conversations.keys()) + 1
-      const created = summary(id, init?.title ?? `conversation ${id}`)
-      if (init?.profileId !== undefined) created.profileId = init.profileId
-      if (init?.model !== undefined) created.model = init.model
-      conversations.set(id, created)
-      return created
-    },
-    async updateConversation(id, patch) {
-      updateCalls.push({ id, patch: { ...patch } })
-      const found = conversations.get(id)
-      if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-      const next = { ...found, ...patch }
-      conversations.set(id, next)
-      return next
-    },
-    async deleteConversation(id) {
-      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-      conversations.delete(id)
-    },
-    async deleteConversations(ids) {
-      const deleted: number[] = []
-      const failures: Array<{ id: number; code: string; message: string }> = []
-      for (const id of ids) {
-        if (!conversations.has(id)) {
-          failures.push({ id, code: 'not_found', message: `conversation not found: ${id}` })
-          continue
+    conversations: {
+      listConversations(filter?: {
+        profileId?: string
+        tag?: string
+        status?: string
+        ownedBy?: string
+        parentConversationId?: number
+        topLevelOnly?: boolean
+      }) {
+        let out = [...conversations.values()]
+        if (filter?.profileId) out = out.filter((c) => c.profileId === filter.profileId)
+        if (filter?.tag) out = out.filter((c) => c.tags.includes(filter.tag!))
+        if (filter?.status) out = out.filter((c) => c.status === filter.status)
+        if (filter?.ownedBy) out = out.filter((c) => (c.ownedBy ?? 'human') === filter.ownedBy)
+        if (filter?.parentConversationId !== undefined) {
+          out = out.filter((c) => c.parentConversationId === filter.parentConversationId)
         }
+        if (filter?.topLevelOnly) out = out.filter((c) => c.parentConversationId === undefined)
+        return out
+      },
+      async getConversationDetail(id: number, opts?: { limit?: number; cursor?: string }) {
+        detailCalls.push({ id, opts })
+        if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        if (detailFixture !== undefined) {
+          return { ...detailFixture, id }
+        }
+        return { ...conversations.get(id)!, entries: [] }
+      },
+      async getConversationEntry(id: number, entryId: number) {
+        entryCalls.push({ id, entryId })
+        if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        if (entryFixture !== undefined) return { ...entryFixture, id: String(entryId) }
+        throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404, { conversationId: id, entryId })
+      },
+      async createConversation(init?: { title?: string; profileId?: string; model?: string }) {
+        const id = Math.max(0, ...conversations.keys()) + 1
+        const created = summary(id, init?.title ?? `conversation ${id}`)
+        if (init?.profileId !== undefined) created.profileId = init.profileId
+        if (init?.model !== undefined) created.model = init.model
+        conversations.set(id, created)
+        return created
+      },
+      async updateConversation(id: number, patch: ConversationPatch) {
+        updateCalls.push({ id, patch: { ...patch } })
+        const found = conversations.get(id)
+        if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        const next = { ...found, ...patch }
+        conversations.set(id, next)
+        return next
+      },
+      async deleteConversation(id: number) {
+        if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
         conversations.delete(id)
-        deleted.push(id)
-      }
-      return { deleted, failures }
+      },
+      async deleteConversations(ids: readonly number[]) {
+        const deleted: number[] = []
+        const failures: Array<{ id: number; code: string; message: string }> = []
+        for (const id of ids) {
+          if (!conversations.has(id)) {
+            failures.push({ id, code: 'not_found', message: `conversation not found: ${id}` })
+            continue
+          }
+          conversations.delete(id)
+          deleted.push(id)
+        }
+        return { deleted, failures }
+      },
+      async submitInput(id: number, text: string, opts?: Record<string, unknown>) {
+        if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        submitted.push({ id, text, opts })
+        return { submissionId: 'sub-mock' }
+      },
+      async withdrawQueuedInput(id: number, opts: { submissionId: number }) {
+        if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        withdrawn.push({ id, submissionId: opts.submissionId })
+        return { status: 'withdrawn' }
+      },
+      async waitForInput(id: number, submissionId: string) {
+        waitForInputCalls.push({ id, submissionId })
+        if (waitForInputError) throw waitForInputError
+        if (waitForInputResult !== undefined) return waitForInputResult
+        return { conversationId: id, submissionId, text: '', entry: { id: 'e', kind: 'pi.assistant' } }
+      },
+      async abortConversation(id: number) {
+        aborted.push(id)
+      },
+      async resetConversation(id: number) {
+        const found = conversations.get(id)
+        if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        return found
+      },
+      async compactConversation(id: number) {
+        const found = conversations.get(id)
+        if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        return { taskId: 1, conversation: found }
+      },
+      async forkConversation(id: number) {
+        if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        return summary(id + 100, `conversation ${id} (fork)`)
+      },
+      async search(q: string) {
+        return [{ conversationId: 1, entryId: 'entry:1', title: 'Sample', snippet: `hit:${q}`, highlights: [{ start: 4, end: 4 + q.length }] }]
+      },
     },
-    async submitInput(id, text, opts) {
-      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-      submitted.push({ id, text, opts })
-      return { submissionId: 'sub-mock' }
+    asks: {
+      listAsks() {
+        return [...asks.values()]
+      },
+      async answerAsk(id: string, answers: Record<string, string>, expectedStateSeq?: number) {
+        const ask = asks.get(id)
+        if (ask === undefined) throw new HelmxError('not_found', `ask not found: ${id}`, 404)
+        if (expectedStateSeq !== undefined && ask.expectedStateSeq !== undefined && expectedStateSeq < ask.expectedStateSeq) {
+          throw new HelmxError('superseded', 'already handled on terminal', 409)
+        }
+        void answers
+        asks.delete(id)
+        return ask
+      },
+      async cancelAsk(id: string) {
+        const ask = asks.get(id)
+        if (ask === undefined) throw new HelmxError('not_found', `ask not found: ${id}`, 404)
+        asks.delete(id)
+        return ask
+      },
     },
-    async withdrawQueuedInput(id, opts) {
-      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-      withdrawn.push({ id, submissionId: opts.submissionId })
-      return { status: 'withdrawn' }
+    models: {
+      listModels: async () => ({ models: [{ provider: 'faux', modelId: 'model', available: true }], thinkingLevels: {} }),
+      listModelProviders: () => [{ id: 'faux', name: 'Faux', modelCount: 1, authMethods: [{ type: 'api_key', label: 'API Key' }] }],
+      refreshModels: undefined,
     },
-    async waitForInput(id: number, submissionId: string) {
-      waitForInputCalls.push({ id, submissionId })
-      if (waitForInputError) throw waitForInputError
-      if (waitForInputResult !== undefined) return waitForInputResult
-      return { conversationId: id, submissionId, text: '', entry: { id: 'e', kind: 'pi.assistant' } }
-    },
-    async abortConversation(id) {
-      aborted.push(id)
-    },
-    async resetConversation(id) {
-      const found = conversations.get(id)
-      if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-      return found
-    },
-    async compactConversation(id) {
-      const found = conversations.get(id)
-      if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-      return { taskId: 1, conversation: found }
-    },
-    async forkConversation(id) {
-      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-      return summary(id + 100, `conversation ${id} (fork)`)
-    },
-    async listAsks() {
-      return [...asks.values()]
-    },
-    async answerAsk(id, answers, expectedStateSeq) {
-      const ask = asks.get(id)
-      if (ask === undefined) throw new HelmxError('not_found', `ask not found: ${id}`, 404)
-      if (expectedStateSeq !== undefined && ask.expectedStateSeq !== undefined && expectedStateSeq < ask.expectedStateSeq) {
-        throw new HelmxError('superseded', 'already handled on terminal', 409)
-      }
-      void answers
-      asks.delete(id)
-    },
-    async cancelAsk(id) {
-      if (!asks.has(id)) throw new HelmxError('not_found', `ask not found: ${id}`, 404)
-      asks.delete(id)
-    },
-    async search(q) {
-      return [{ conversationId: 1, entryId: 'entry:1', title: 'Sample', snippet: `hit:${q}`, highlights: [{ start: 4, end: 4 + q.length }] }]
-    },
-    listModels: () => ({ models: [{ provider: 'faux', modelId: 'model', available: true }], thinkingLevels: {} }),
-    listModelProviders: () => [{ id: 'faux', name: 'Faux', modelCount: 1, authMethods: [{ type: 'api_key', label: 'API Key' }] }],
-    refreshModels: undefined,
-  }
+  } as unknown as KernelHttpTarget
 }
 
 /** Builds a mock kernel with injectable refreshModels (to test 501 when unset). */
-function makeKernelWithRefresh(refreshImpl?: KernelRuntimeLike['refreshModels']): KernelRuntimeLike {
+function makeKernelWithRefresh(refreshImpl?: KernelHttpTarget['models']['refreshModels']): KernelHttpTarget {
   const kernel = makeKernel()
-  if (refreshImpl !== undefined) kernel.refreshModels = refreshImpl
+  if (refreshImpl !== undefined) {
+    ;(kernel.models as { refreshModels?: unknown }).refreshModels = refreshImpl
+  }
   return kernel
 }
 
@@ -484,7 +504,7 @@ test('prevents cross-site pre-setup hijack: non-JSON text/plain gets 415 without
   try {
     const evilAuth = new AuthService(evilDir)
     const evilKernel = makeKernel()
-    ;(evilKernel as { auth: AuthService }).auth = evilAuth
+    ;(evilKernel as unknown as { auth: AuthService }).auth = evilAuth
     const handler = createHubHandler(evilKernel)
     // Non-JSON simple POST (allowed by cross-site form) -> 415, never reaches setup
     const malicious = await call(handler, 'POST', '/api/auth/setup', {
@@ -545,7 +565,7 @@ test('POST /api/auth/login before setup returns 409 not_setup', { timeout: 60_00
   const freshDir = await makeTempDir('helmx-http-nosetup-')
   try {
     const freshKernel = makeKernel()
-    ;(freshKernel as { auth: AuthService }).auth = new AuthService(freshDir)
+    ;(freshKernel as unknown as { auth: AuthService }).auth = new AuthService(freshDir)
     const handler = createHubHandler(freshKernel)
     const res = await call(handler, 'POST', '/api/auth/login', { auth: false, body: { password: '{{SECRET_nsetup9q}}' } })
     assert.equal(res.status, 409)
@@ -1223,7 +1243,7 @@ test('profiles POST/PUT rejects disabled model binding pre-flight (409 model_dis
   }
   // When port is provided: both POST and PUT reject disabled models with 409 without persisting.
   const kernel = makeKernel()
-  kernel.assertModelEnabled = (provider, modelId) => {
+  ;(kernel.models as { assertModelEnabled?: (provider: string, modelId: string) => void }).assertModelEnabled = (provider, modelId) => {
     if (provider === 'faux' && modelId === 'disabled-model') {
       throw new HelmxError('model_disabled', `model ${provider}/${modelId} is disabled`, 409)
     }
@@ -1476,7 +1496,7 @@ test('default config partial update supports omitting model field and rejects em
     | [string | undefined, string | undefined, string | undefined, string | undefined]
   > = []
   const kernel = makeKernel()
-  kernel.setDefaultModel = async (model, level, compaction, compactionLevel) => {
+  ;(kernel.models as { setDefaultModel?: (model?: string, level?: string, compaction?: string, compactionLevel?: string) => Promise<void> }).setDefaultModel = async (model, level, compaction, compactionLevel) => {
     if (compactionLevel !== undefined) calls.push([model, level, compaction, compactionLevel])
     else if (compaction !== undefined) calls.push([model, level, compaction])
     else calls.push([model, level])
@@ -1626,7 +1646,7 @@ test('artifacts reject forged metadata (path=credentials.json) without leaking',
   }
   evilRepo.put(fakeMeta)
   const kernel = makeKernel()
-  ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
+  ;(kernel as unknown as { artifacts: ArtifactService }).artifacts = evilArtifacts
   const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', `/api/artifacts/evil-1/content`)
   assert.equal(res.status, 500)
@@ -1651,7 +1671,7 @@ test('artifacts reject forged metadata (artifacts/<convId>/../../escape)', { tim
   }
   evilRepo.put(fakeMeta)
   const kernel = makeKernel()
-  ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
+  ;(kernel as unknown as { artifacts: ArtifactService }).artifacts = evilArtifacts
   const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', `/api/artifacts/evil-2/content`)
   assert.equal(res.status, 500)
@@ -1679,7 +1699,7 @@ test('artifacts reject symlink escape (file segment symlink outside artifacts di
   }
   evilRepo.put(fakeMeta)
   const kernel = makeKernel()
-  ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
+  ;(kernel as unknown as { artifacts: ArtifactService }).artifacts = evilArtifacts
   const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', `/api/artifacts/evil-3/content`)
   assert.equal(res.status, 500)
@@ -1711,7 +1731,7 @@ test('artifacts reject conversation directory symlink escape', { timeout: 60_000
   }
   evilRepo.put(fakeMeta)
   const kernel = makeKernel()
-  ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
+  ;(kernel as unknown as { artifacts: ArtifactService }).artifacts = evilArtifacts
   const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', `/api/artifacts/evil-4/content`)
   assert.equal(res.status, 500)
@@ -1740,7 +1760,7 @@ test('artifacts reject invalid or missing kind in metadata (500 artifact_metadat
     kind: undefined as never,
   })
   const kernel = makeKernel()
-  ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
+  ;(kernel as unknown as { artifacts: ArtifactService }).artifacts = evilArtifacts
   const handler = createHubHandler(kernel)
   for (const id of ['evil-bad-kind', 'evil-missing-kind']) {
     const res = await call(handler, 'GET', `/api/artifacts/${id}/content`)
@@ -1758,7 +1778,7 @@ test('artifacts permission error is not disguised as missing file (non-ENOENT st
   const target = join(dataDir, 'artifacts', String(ROOT_CONVERSATION_ID), meta.path.split('/')[2]!)
   await chmod(target, 0o000)
   const kernel = makeKernel()
-  ;(kernel as { artifacts: ArtifactService }).artifacts = artifactsNoPerm
+  ;(kernel as unknown as { artifacts: ArtifactService }).artifacts = artifactsNoPerm
   const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', `/api/artifacts/${meta.id}/content`)
   // When running as root, chmod 000 files remain readable: succeed and reflect actual readability
@@ -2030,7 +2050,7 @@ test('outbound JSON recursive redaction: catches quoted/multiline secrets withou
   stash.addRedaction(trickySecret)
   const placeholder = '[REDACTED]'
   // search result contains both raw secret and nested marker structures
-  ;(kernel as { search: (q: string) => Promise<unknown[]> }).search = async () => [
+  ;(kernel.conversations as { search: (q: string) => Promise<unknown[]> }).search = async () => [
     { conversationId: 1, snippet: `prefix ${trickySecret} middle [marker]${placeholder} end` },
     { nested: { list: [trickySecret, { deep: trickySecret }] } },
   ]
@@ -2047,7 +2067,7 @@ test('error.details also redacted', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   const secret = 'err-detail-secret-123'
   stash.addRedaction(secret)
-  ;(kernel as { search: (q: string) => Promise<unknown[]> }).search = async () => {
+  ;(kernel.conversations as { search: (q: string) => Promise<unknown[]> }).search = async () => {
     throw new HelmxError('search_failed', 'search failed', 500, { trace: secret })
   }
   const handler = createHubHandler(kernel)
@@ -2259,14 +2279,18 @@ test('POST /api/env/exec stream=true: isolates stdout/stderr streaming redactors
   localStash.addRedaction('sk-CROSS-BOUNDARY')
 
   const makeExecHandler = (chunks: Array<{ stream: 'stdout' | 'stderr'; text: string }>) => {
-    const kernel: KernelRuntimeLike = {
-      ...makeKernel(),
+    const base = makeKernel()
+    const kernel = {
+      ...base,
       stash: localStash,
-      execEnv: async (_req, onChunk) => {
-        for (const chunk of chunks) onChunk?.(chunk)
-        return { ok: true, exitCode: 0, output: '', timedOut: false }
+      nodes: {
+        ...base.nodes,
+        execEnv: async (_req: unknown, onChunk?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void) => {
+          for (const chunk of chunks) onChunk?.(chunk)
+          return { ok: true, exitCode: 0, output: '', timedOut: false }
+        },
       },
-    }
+    } as unknown as KernelHttpTarget
     return createHubHandler({ kernel })
   }
 

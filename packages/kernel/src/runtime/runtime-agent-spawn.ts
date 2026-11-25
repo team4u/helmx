@@ -78,9 +78,10 @@ interface RuntimeAgentSpawnDeps {
   readonly conversations: ConversationService
   readonly events: EventHub
   readonly envFabric: EnvFabric
-  readonly modelsRegistry: ModelRegistry
+  readonly models: ModelRegistry
   readonly hookBridge: HookBridge
   readonly stashService: SecretStash
+  readonly assertWritable?: () => void
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
   markConversationOwnership(id: number, owner: ConversationOwnership): void
 }
@@ -106,6 +107,7 @@ export class RuntimeAgentSpawn {
    * result verification; namespaced business fields inside `meta` are validated by each plugin).
    */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
+    this.deps.assertWritable?.()
     if (request.schema !== undefined) assertSchemaCompilable(request.schema)
     // Envelope boundary (synchronous, before hook chains and awaits): `meta` must be a JSON-safe
     // namespaced object; kernel does not validate business contents (each plugin boundary handles its own).
@@ -337,14 +339,14 @@ export class RuntimeAgentSpawn {
       tracker: this.deps.tracker,
       resolveModel: () =>
         resolveDefaultModelRef(
-          this.deps.modelsRegistry.defaultModel,
-          (ref) => this.deps.modelsRegistry.resolveModelRef(ref),
+          this.deps.models.defaultModel,
+          (ref) => this.deps.models.resolveModelRef(ref),
         ),
-      resolveModelRef: (ref) => this.deps.modelsRegistry.resolveModelRef(ref),
-      assertModelEnabled: (provider, modelId) => this.deps.modelsRegistry.assertModelEnabled(provider, modelId),
-      resolveThinkingLevel: () => this.deps.modelsRegistry.defaultThinkingLevel,
-      modelThinkingLevelOf: (ref) => this.deps.modelsRegistry.modelThinkingLevelOf(ref),
-      modelsForClamp: () => this.deps.modelsRegistry.models,
+      resolveModelRef: (ref) => this.deps.models.resolveModelRef(ref),
+      assertModelEnabled: (provider, modelId) => this.deps.models.assertModelEnabled(provider, modelId),
+      resolveThinkingLevel: () => this.deps.models.defaultThinkingLevel,
+      modelThinkingLevelOf: (ref) => this.deps.models.modelThinkingLevelOf(ref),
+      modelsForClamp: () => this.deps.models.models,
       agentSessions: this.agentSessions,
       structuredOutputSessions: this.structuredOutputSessions,
       assertNodeAvailable: (nodeId) => {

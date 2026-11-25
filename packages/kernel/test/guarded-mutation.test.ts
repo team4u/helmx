@@ -100,30 +100,30 @@ test('guarded abort: flipping ownership to human inside await window -> 409 owne
   const kernel = await openRuntime(dir)
   let barrier: { release: () => void } | undefined
   try {
-    kernel.markConversationOwnership(1, 'helmx')
+    kernel.ownership.markOwnership(1, 'helmx')
     kernel.__faux.setResponses([
       fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 5 && echo done' })], { stopReason: 'toolUse' }),
       fauxAssistantMessage('unneeded second answer'),
     ])
-    void kernel.submitInput(1, 'question whose abort will be rejected by guard').catch(() => {})
-    await waitFor(() => kernel.getConversation(1).status === 'working')
+    void kernel.conversations.submitInput(1, 'question whose abort will be rejected by guard').catch(() => {})
+    await waitFor(() => kernel.conversations.getConversation(1).status === 'working')
 
     barrier = barrierConversationHandle(kernel)
-    const attempt = kernel.abortConversationGuarded(1, { expectedOwnership: 'helmx' })
+    const attempt = kernel.conversations.abortConversationGuarded(1, { expectedOwnership: 'helmx' })
     await flushToBarrier()
     // Simulated takeover inside the legacy await window: human takes over.
-    kernel.markConversationOwnership(1, 'human')
+    kernel.ownership.markOwnership(1, 'human')
     barrier.release()
     await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
 
     // SDK abort did not fire: in-flight turn keeps running (abort would have settled to idle immediately).
-    assert.equal(kernel.getConversation(1).status, 'working', 'turn must not abort after guarded rejection')
+    assert.equal(kernel.conversations.getConversation(1).status, 'working', 'turn must not abort after guarded rejection')
 
     // Normal human API still works: human abort under human ownership settles cleanly.
-    await kernel.abortConversation(1)
-    await kernel.waitForIdle(1).catch(() => {})
-    assert.equal(kernel.getConversation(1).status, 'idle')
-    assert.equal(kernel.getConversation(1).completionSeq, 1)
+    await kernel.conversations.abortConversation(1)
+    await kernel.conversations.waitForIdle(1).catch(() => {})
+    assert.equal(kernel.conversations.getConversation(1).status, 'idle')
+    assert.equal(kernel.conversations.getConversation(1).completionSeq, 1)
   } finally {
     barrier?.release()
     await kernel.close().catch(() => {})
@@ -135,23 +135,23 @@ test('control group: same barrier hits legacy window; plain abortConversation st
   const kernel = await openRuntime(dir)
   let barrier: { release: () => void } | undefined
   try {
-    kernel.markConversationOwnership(1, 'helmx')
+    kernel.ownership.markOwnership(1, 'helmx')
     kernel.__faux.setResponses([
       fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 5 && echo done' })], { stopReason: 'toolUse' }),
       fauxAssistantMessage('unneeded second answer'),
     ])
-    void kernel.submitInput(1, 'verify barrier lands inside legacy window').catch(() => {})
-    await waitFor(() => kernel.getConversation(1).status === 'working')
+    void kernel.conversations.submitInput(1, 'verify barrier lands inside legacy window').catch(() => {})
+    await waitFor(() => kernel.conversations.getConversation(1).status === 'working')
 
     barrier = barrierConversationHandle(kernel)
-    const attempt = kernel.abortConversation(1)
+    const attempt = kernel.conversations.abortConversation(1)
     await flushToBarrier()
-    kernel.markConversationOwnership(1, 'human')
+    kernel.ownership.markOwnership(1, 'human')
     barrier.release()
     // Plain API has no guard: aborts as normal after ownership flip (the exact race guarded API closes).
     await attempt
-    await kernel.waitForIdle(1).catch(() => {})
-    assert.equal(kernel.getConversation(1).status, 'idle')
+    await kernel.conversations.waitForIdle(1).catch(() => {})
+    assert.equal(kernel.conversations.getConversation(1).status, 'idle')
   } finally {
     barrier?.release()
     await kernel.close().catch(() => {})
@@ -163,22 +163,22 @@ test('guarded submit: flipping to human inside preparation window -> 409, zero c
   const kernel = await openRuntime(dir)
   let barrier: { release: () => void } | undefined
   try {
-    const conv = await kernel.createConversation({})
-    kernel.markConversationOwnership(conv.id, 'helmx')
+    const conv = await kernel.conversations.createConversation({})
+    kernel.ownership.markOwnership(conv.id, 'helmx')
     kernel.__faux.setResponses([fauxAssistantMessage('must never appear')])
 
     barrier = barrierConversationHandle(kernel)
-    const attempt = kernel.submitInputGuarded(conv.id, 'automated input', { origin: 'agent' }, { expectedOwnership: 'helmx' })
+    const attempt = kernel.conversations.submitInputGuarded(conv.id, 'automated input', { origin: 'agent' }, { expectedOwnership: 'helmx' })
     await flushToBarrier()
-    kernel.markConversationOwnership(conv.id, 'human')
+    kernel.ownership.markOwnership(conv.id, 'human')
     barrier.release()
     await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
 
     // Zero commit side effects: title un-derived, no helmx.input entry, conversation stays idle.
-    const after = kernel.getConversation(conv.id)
+    const after = kernel.conversations.getConversation(conv.id)
     assert.equal(after.status, 'idle')
     assert.equal(after.title, '')
-    const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
+    const detail = await kernel.conversations.getConversationDetail(conv.id, { limit: 50 })
     assert.equal(detail.entries.filter((e) => e.kind === 'helmx.input').length, 0, 'must not insert input entry')
     // Faux response untouched (model never invoked).
     assert.equal(kernel.__faux.getPendingResponseCount(), 1)
@@ -195,19 +195,19 @@ test('guarded submit: flipping to human inside preparation window -> 409, zero c
 test('guarded steer whenIdle=reject: idle conversation atomically rejects without starting turn or inserting input entry', { timeout: 60_000 }, async () => {
   const kernel = await openRuntime(join(root, 't-guarded-steer-idle'))
   try {
-    const conversation = await kernel.createConversation({ title: 'idle automated conversation' })
-    kernel.markConversationOwnership(conversation.id, 'helmx')
+    const conversation = await kernel.conversations.createConversation({ title: 'idle automated conversation' })
+    kernel.ownership.markOwnership(conversation.id, 'helmx')
     kernel.__faux.setResponses([fauxAssistantMessage('must not execute')])
     await assert.rejects(
-      kernel.submitInputGuarded(conversation.id, 'steer only in-flight task', {
+      kernel.conversations.submitInputGuarded(conversation.id, 'steer only in-flight task', {
         origin: 'agent', whenBusy: 'steer', whenIdle: 'reject',
-      }, { expectedOwnership: 'helmx', expectedStateSeq: kernel.getConversation(conversation.id).stateChangeSeq }),
+      }, { expectedOwnership: 'helmx', expectedStateSeq: kernel.conversations.getConversation(conversation.id).stateChangeSeq }),
       isHelmxError('conversation_idle', 409),
     )
-    const detail = await kernel.getConversationDetail(conversation.id)
+    const detail = await kernel.conversations.getConversationDetail(conversation.id)
     assert.equal(detail.entries.filter((entry) => entry.kind === 'helmx.input').length, 0)
     assert.equal(kernel.__faux.getPendingResponseCount(), 1)
-    assert.equal(kernel.getConversation(conversation.id).status, 'idle')
+    assert.equal(kernel.conversations.getConversation(conversation.id).status, 'idle')
   } finally {
     await kernel.close()
   }
@@ -217,16 +217,16 @@ test('guarded abort success path: helmx conversation in-flight turn aborts when 
   const dir = join(root, 't-guarded-abort-ok')
   const kernel = await openRuntime(dir)
   try {
-    kernel.markConversationOwnership(1, 'helmx')
+    kernel.ownership.markOwnership(1, 'helmx')
     kernel.__faux.setResponses([
       fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 5 && echo done' })], { stopReason: 'toolUse' }),
     ])
-    void kernel.submitInput(1, 'question to authorize-abort').catch(() => {})
-    await waitFor(() => kernel.getConversation(1).status === 'working')
+    void kernel.conversations.submitInput(1, 'question to authorize-abort').catch(() => {})
+    await waitFor(() => kernel.conversations.getConversation(1).status === 'working')
 
-    await kernel.abortConversationGuarded(1, { expectedOwnership: 'helmx' })
-    await kernel.waitForIdle(1).catch(() => {})
-    const conv = kernel.getConversation(1)
+    await kernel.conversations.abortConversationGuarded(1, { expectedOwnership: 'helmx' })
+    await kernel.conversations.waitForIdle(1).catch(() => {})
+    const conv = kernel.conversations.getConversation(1)
     assert.equal(conv.status, 'idle')
     assert.equal(conv.completionSeq, 1, 'aborted turn settles once')
   } finally {
@@ -238,14 +238,14 @@ test('guarded submit success path: helmx conversation submits agent input and co
   const dir = join(root, 't-guarded-submit-ok')
   const kernel = await openRuntime(dir)
   try {
-    const conv = await kernel.createConversation({})
-    kernel.markConversationOwnership(conv.id, 'helmx')
+    const conv = await kernel.conversations.createConversation({})
+    kernel.ownership.markOwnership(conv.id, 'helmx')
     kernel.__faux.setResponses([fauxAssistantMessage('recovery done')])
-    const { submissionId } = await kernel.submitInputGuarded(conv.id, 'recovery prompt', { origin: 'agent', whenBusy: 'steer' }, { expectedOwnership: 'helmx' })
+    const { submissionId } = await kernel.conversations.submitInputGuarded(conv.id, 'recovery prompt', { origin: 'agent', whenBusy: 'steer' }, { expectedOwnership: 'helmx' })
     assert.ok(submissionId)
-    await kernel.waitForIdle(conv.id)
-    assert.equal(kernel.getConversation(conv.id).status, 'done')
-    const detail = await kernel.getConversationDetail(conv.id, { limit: 10 })
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.equal(kernel.conversations.getConversation(conv.id).status, 'done')
+    const detail = await kernel.conversations.getConversationDetail(conv.id, { limit: 10 })
     const input = detail.entries.find((e) => e.kind === 'helmx.input')
     assert.ok(input, 'helmx.input entry should exist')
     assert.equal(kernel.__faux.getPendingResponseCount(), 0)
@@ -258,44 +258,44 @@ test('guarded rejection matrix: human ownership / stale seq / missing target / i
   const dir = join(root, 't-guarded-reject-matrix')
   const kernel = await openRuntime(dir)
   try {
-    const conv = await kernel.createConversation({})
-    kernel.markConversationOwnership(conv.id, 'human')
+    const conv = await kernel.conversations.createConversation({})
+    kernel.ownership.markOwnership(conv.id, 'human')
     await assert.rejects(
-      kernel.abortConversationGuarded(conv.id, {}),
+      kernel.conversations.abortConversationGuarded(conv.id, {}),
       isHelmxError('ownership_conflict', 409),
       'human ownership hard rule',
     )
     await assert.rejects(
-      kernel.submitInputGuarded(conv.id, 'x', { origin: 'agent' }, {}),
+      kernel.conversations.submitInputGuarded(conv.id, 'x', { origin: 'agent' }, {}),
       isHelmxError('ownership_conflict', 409),
       'human ownership hard rule (submit)',
     )
 
-    kernel.markConversationOwnership(conv.id, 'helmx')
-    const seq = kernel.getConversation(conv.id).stateChangeSeq
+    kernel.ownership.markOwnership(conv.id, 'helmx')
+    const seq = kernel.conversations.getConversation(conv.id).stateChangeSeq
     await assert.rejects(
-      kernel.abortConversationGuarded(conv.id, { expectedStateSeq: seq + 100 }),
+      kernel.conversations.abortConversationGuarded(conv.id, { expectedStateSeq: seq + 100 }),
       isHelmxError('state_seq_conflict', 409),
       'stale watermark CAS',
     )
 
     await assert.rejects(
-      kernel.abortConversationGuarded(999_999, {}),
+      kernel.conversations.abortConversationGuarded(999_999, {}),
       isHelmxError('not_found', 404),
       'missing explicit target must not fall back to default route',
     )
     await assert.rejects(
-      kernel.submitInputGuarded(999_999, 'x', { origin: 'agent' }, {}),
+      kernel.conversations.submitInputGuarded(999_999, 'x', { origin: 'agent' }, {}),
       isHelmxError('not_found', 404),
     )
 
     await assert.rejects(
-      kernel.abortConversationGuarded(conv.id, { expectedOwnership: 'human' as never }),
+      kernel.conversations.abortConversationGuarded(conv.id, { expectedOwnership: 'human' as never }),
       isHelmxError('validation_error', 400),
       'expectedOwnership forbids human',
     )
     await assert.rejects(
-      kernel.abortConversationGuarded(conv.id, { expectedStateSeq: -1 }),
+      kernel.conversations.abortConversationGuarded(conv.id, { expectedStateSeq: -1 }),
       isHelmxError('validation_error', 400),
     )
   } finally {
@@ -307,10 +307,10 @@ test('guarded submit rejects replaceFromEntryId (automation cannot rewrite histo
   const dir = join(root, 't-guarded-no-rewrite')
   const kernel = await openRuntime(dir)
   try {
-    const conv = await kernel.createConversation({})
-    kernel.markConversationOwnership(conv.id, 'helmx')
+    const conv = await kernel.conversations.createConversation({})
+    kernel.ownership.markOwnership(conv.id, 'helmx')
     await assert.rejects(
-      kernel.submitInputGuarded(conv.id, 'x', { origin: 'agent', replaceFromEntryId: 1 }, {}),
+      kernel.conversations.submitInputGuarded(conv.id, 'x', { origin: 'agent', replaceFromEntryId: 1 }, {}),
       isHelmxError('validation_error', 400),
     )
   } finally {
@@ -326,16 +326,16 @@ test('normal API semantics unchanged: submitInput / abortConversation operate no
   const dir = join(root, 't-plain-api-regression')
   const kernel = await openRuntime(dir)
   try {
-    const conv = await kernel.createConversation({})
+    const conv = await kernel.conversations.createConversation({})
     // Unmarked ownership defaults to human.
     kernel.__faux.setResponses([fauxAssistantMessage('human answer')])
-    const { submissionId } = await kernel.submitInput(conv.id, 'human question', { origin: 'human' })
+    const { submissionId } = await kernel.conversations.submitInput(conv.id, 'human question', { origin: 'human' })
     assert.ok(submissionId)
-    await kernel.waitForIdle(conv.id)
-    assert.equal(await kernel.getLastAssistantText(conv.id), 'human answer')
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.equal(await kernel.conversations.getLastAssistantText(conv.id), 'human answer')
     // Human abort on idle conversation: no-op without fabricating settlement or throwing guard error.
-    await kernel.abortConversation(conv.id)
-    assert.equal(kernel.getConversation(conv.id).completionSeq, 1)
+    await kernel.conversations.abortConversation(conv.id)
+    assert.equal(kernel.conversations.getConversation(conv.id).completionSeq, 1)
   } finally {
     await kernel.close().catch(() => {})
   }
@@ -349,21 +349,21 @@ test('guarded mutation serial gate: serialized within conversation; early failur
   const dir = join(root, 't-guarded-gate')
   const kernel = await openRuntime(dir)
   try {
-    const conv = await kernel.createConversation({})
-    kernel.markConversationOwnership(conv.id, 'helmx')
+    const conv = await kernel.conversations.createConversation({})
+    kernel.ownership.markOwnership(conv.id, 'helmx')
     kernel.__faux.setResponses([fauxAssistantMessage('answer 1'), fauxAssistantMessage('answer 2')])
 
     // Early guarded submit failure (stale watermark 400/409) must never poison the serial gate.
     await assert.rejects(
-      kernel.submitInputGuarded(conv.id, 'x', { origin: 'agent' }, { expectedStateSeq: 1_000_000 }),
+      kernel.conversations.submitInputGuarded(conv.id, 'x', { origin: 'agent' }, { expectedStateSeq: 1_000_000 }),
       isHelmxError('state_seq_conflict', 409),
     )
-    const first = await kernel.submitInputGuarded(conv.id, 'a', { origin: 'agent', whenBusy: 'followUp' }, { expectedOwnership: 'helmx' })
-    const second = await kernel.submitInputGuarded(conv.id, 'second', { origin: 'agent', whenBusy: 'followUp' }, { expectedOwnership: 'helmx' })
+    const first = await kernel.conversations.submitInputGuarded(conv.id, 'a', { origin: 'agent', whenBusy: 'followUp' }, { expectedOwnership: 'helmx' })
+    const second = await kernel.conversations.submitInputGuarded(conv.id, 'second', { origin: 'agent', whenBusy: 'followUp' }, { expectedOwnership: 'helmx' })
     assert.ok(first.submissionId)
     assert.ok(second.submissionId)
-    await kernel.waitForIdle(conv.id)
-    const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
+    await kernel.conversations.waitForIdle(conv.id)
+    const detail = await kernel.conversations.getConversationDetail(conv.id, { limit: 50 })
     const inputs = detail.entries.filter((e) => e.kind === 'helmx.input')
     assert.equal(inputs.length, 2, 'both guarded inputs should be queued')
   } finally {
@@ -380,15 +380,15 @@ test('conversation ownership persists on helmx_conversations.owned_by column acr
   let convId = 0
   const kernel = await openRuntime(dir)
   try {
-    const conv = await kernel.createConversation({ title: 'owned-by-col' })
+    const conv = await kernel.conversations.createConversation({ title: 'owned-by-col' })
     convId = conv.id
-    assert.equal(kernel.getConversationOwnership(convId), 'human')
-    assert.equal(kernel.listConversations().find((c) => c.id === convId)?.ownedBy, 'human')
+    assert.equal(kernel.ownership.getOwnership(convId), 'human')
+    assert.equal(kernel.conversations.listConversations().find((c) => c.id === convId)?.ownedBy, 'human')
 
-    kernel.markConversationOwnership(convId, 'helmx')
-    assert.equal(kernel.getConversationOwnership(convId), 'helmx')
-    assert.equal(kernel.getConversation(convId).ownedBy, 'helmx')
-    assert.equal(kernel.listConversations().find((c) => c.id === convId)?.ownedBy, 'helmx')
+    kernel.ownership.markOwnership(convId, 'helmx')
+    assert.equal(kernel.ownership.getOwnership(convId), 'helmx')
+    assert.equal(kernel.conversations.getConversation(convId).ownedBy, 'helmx')
+    assert.equal(kernel.conversations.listConversations().find((c) => c.id === convId)?.ownedBy, 'helmx')
   } finally {
     await kernel.close().catch(() => {})
   }
@@ -409,11 +409,11 @@ test('conversation ownership persists on helmx_conversations.owned_by column acr
   // Reopen runtime and verify ownedBy survives restart and can be flipped back to human.
   const reopened = await openRuntime(dir)
   try {
-    assert.equal(reopened.getConversationOwnership(convId), 'helmx')
-    assert.equal(reopened.listConversations().find((c) => c.id === convId)?.ownedBy, 'helmx')
-    reopened.markConversationOwnership(convId, 'human')
-    assert.equal(reopened.getConversationOwnership(convId), 'human')
-    assert.equal(reopened.listConversations().find((c) => c.id === convId)?.ownedBy, 'human')
+    assert.equal(reopened.ownership.getOwnership(convId), 'helmx')
+    assert.equal(reopened.conversations.listConversations().find((c) => c.id === convId)?.ownedBy, 'helmx')
+    reopened.ownership.markOwnership(convId, 'human')
+    assert.equal(reopened.ownership.getOwnership(convId), 'human')
+    assert.equal(reopened.conversations.listConversations().find((c) => c.id === convId)?.ownedBy, 'human')
   } finally {
     await reopened.close().catch(() => {})
   }
@@ -429,26 +429,26 @@ test('guarded reset: flipping ownership to human inside await window -> 409 owne
   const kernel = await openRuntime(dir)
   let barrier: { release: () => void } | undefined
   try {
-    const conv = await kernel.createConversation({ title: 'reset race' })
-    kernel.markConversationOwnership(conv.id, 'helmx')
+    const conv = await kernel.conversations.createConversation({ title: 'reset race' })
+    kernel.ownership.markOwnership(conv.id, 'helmx')
     kernel.__faux.setResponses([fauxAssistantMessage('before reset')])
-    await kernel.submitInput(conv.id, 'seed turn', { origin: 'agent' })
-    await kernel.waitForIdle(conv.id)
-    const seqBefore = kernel.getConversation(conv.id).stateChangeSeq
+    await kernel.conversations.submitInput(conv.id, 'seed turn', { origin: 'agent' })
+    await kernel.conversations.waitForIdle(conv.id)
+    const seqBefore = kernel.conversations.getConversation(conv.id).stateChangeSeq
 
     barrier = barrierConversationHandle(kernel)
-    const attempt = kernel.resetConversationGuarded(
+    const attempt = kernel.conversations.resetConversationGuarded(
       conv.id,
       { handoff: 'must not land' },
       { expectedOwnership: 'helmx', expectedStateSeq: seqBefore },
     )
     await flushToBarrier()
-    kernel.markConversationOwnership(conv.id, 'human')
+    kernel.ownership.markOwnership(conv.id, 'human')
     barrier.release()
 
     await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
-    assert.equal(kernel.getConversation(conv.id).stateChangeSeq, seqBefore, 'rejected reset must not advance stateChangeSeq')
-    const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
+    assert.equal(kernel.conversations.getConversation(conv.id).stateChangeSeq, seqBefore, 'rejected reset must not advance stateChangeSeq')
+    const detail = await kernel.conversations.getConversationDetail(conv.id, { limit: 50 })
     assert.ok(!JSON.stringify(detail.entries).includes('must not land'), 'handoff must never reach SDK reset')
   } finally {
     barrier?.release()
@@ -461,22 +461,22 @@ test('guarded compact: flipping ownership to human inside await window -> 409 ow
   const kernel = await openRuntime(dir)
   let barrier: { release: () => void } | undefined
   try {
-    const conv = await kernel.createConversation({ title: 'compact race' })
-    kernel.markConversationOwnership(conv.id, 'helmx')
-    const seqBefore = kernel.getConversation(conv.id).stateChangeSeq
+    const conv = await kernel.conversations.createConversation({ title: 'compact race' })
+    kernel.ownership.markOwnership(conv.id, 'helmx')
+    const seqBefore = kernel.conversations.getConversation(conv.id).stateChangeSeq
 
     barrier = barrierConversationHandle(kernel)
-    const attempt = kernel.compactConversationGuarded(
+    const attempt = kernel.conversations.compactConversationGuarded(
       conv.id,
       { instructions: 'keep concise' },
       { expectedOwnership: 'helmx', expectedStateSeq: seqBefore },
     )
     await flushToBarrier()
-    kernel.markConversationOwnership(conv.id, 'human')
+    kernel.ownership.markOwnership(conv.id, 'human')
     barrier.release()
 
     await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
-    assert.equal(kernel.getConversation(conv.id).stateChangeSeq, seqBefore, 'rejected compact must not advance stateChangeSeq')
+    assert.equal(kernel.conversations.getConversation(conv.id).stateChangeSeq, seqBefore, 'rejected compact must not advance stateChangeSeq')
   } finally {
     barrier?.release()
     await kernel.close().catch(() => {})
@@ -487,69 +487,69 @@ test('guarded reset/compact: rejection matrix, redaction, and success path (+1 s
   const dir = join(root, 't-guarded-context-matrix')
   const kernel = await openRuntime(dir)
   try {
-    const conv = await kernel.createConversation({ title: 'ctx matrix' })
-    const seq0 = kernel.getConversation(conv.id).stateChangeSeq
+    const conv = await kernel.conversations.createConversation({ title: 'ctx matrix' })
+    const seq0 = kernel.conversations.getConversation(conv.id).stateChangeSeq
 
     // Default human ownership: omitted guard and explicit guard both reject with 409 ownership_conflict.
     await assert.rejects(
-      kernel.resetConversationGuarded(conv.id, { handoff: 'blocked' }),
+      kernel.conversations.resetConversationGuarded(conv.id, { handoff: 'blocked' }),
       isHelmxError('ownership_conflict', 409),
     )
     await assert.rejects(
-      kernel.compactConversationGuarded(conv.id, { instructions: 'blocked' }),
+      kernel.conversations.compactConversationGuarded(conv.id, { instructions: 'blocked' }),
       isHelmxError('ownership_conflict', 409),
     )
-    assert.equal(kernel.getConversation(conv.id).stateChangeSeq, seq0)
+    assert.equal(kernel.conversations.getConversation(conv.id).stateChangeSeq, seq0)
 
     // Switch to helmx: test stale seq, missing target, invalid guard, invalid opts.
-    kernel.markConversationOwnership(conv.id, 'helmx')
+    kernel.ownership.markOwnership(conv.id, 'helmx')
     await assert.rejects(
-      kernel.resetConversationGuarded(conv.id, undefined, { expectedStateSeq: seq0 + 99 }),
+      kernel.conversations.resetConversationGuarded(conv.id, undefined, { expectedStateSeq: seq0 + 99 }),
       isHelmxError('state_seq_conflict', 409),
     )
     await assert.rejects(
-      kernel.compactConversationGuarded(conv.id, undefined, { expectedStateSeq: seq0 + 99 }),
+      kernel.conversations.compactConversationGuarded(conv.id, undefined, { expectedStateSeq: seq0 + 99 }),
       isHelmxError('state_seq_conflict', 409),
     )
     await assert.rejects(
-      kernel.resetConversationGuarded(999_999, undefined, {}),
+      kernel.conversations.resetConversationGuarded(999_999, undefined, {}),
       isHelmxError('not_found', 404),
     )
     await assert.rejects(
-      kernel.compactConversationGuarded(999_999, undefined, {}),
+      kernel.conversations.compactConversationGuarded(999_999, undefined, {}),
       isHelmxError('not_found', 404),
     )
     await assert.rejects(
-      kernel.resetConversationGuarded(conv.id, undefined, { expectedOwnership: 'bot' as never }),
+      kernel.conversations.resetConversationGuarded(conv.id, undefined, { expectedOwnership: 'bot' as never }),
       isHelmxError('validation_error', 400),
     )
     await assert.rejects(
-      kernel.compactConversationGuarded(conv.id, undefined, { expectedStateSeq: -1 }),
+      kernel.conversations.compactConversationGuarded(conv.id, undefined, { expectedStateSeq: -1 }),
       isHelmxError('validation_error', 400),
     )
     await assert.rejects(
-      kernel.resetConversationGuarded(conv.id, { handoff: 123 as never }, {}),
+      kernel.conversations.resetConversationGuarded(conv.id, { handoff: 123 as never }, {}),
       isHelmxError('validation_error', 400),
     )
     await assert.rejects(
-      kernel.compactConversationGuarded(conv.id, { instructions: 456 as never }, {}),
+      kernel.conversations.compactConversationGuarded(conv.id, { instructions: 456 as never }, {}),
       isHelmxError('validation_error', 400),
     )
 
     // Secret redaction + success path: stateChangeSeq advances by exactly +1.
     kernel.stash.addRedaction('sk-reset-secret-999')
-    const resetSummary = await kernel.resetConversationGuarded(
+    const resetSummary = await kernel.conversations.resetConversationGuarded(
       conv.id,
       { handoff: 'resume with sk-reset-secret-999' },
       { expectedOwnership: 'helmx', expectedStateSeq: seq0 },
     )
     assert.equal(resetSummary.stateChangeSeq, seq0 + 1)
     assert.equal(resetSummary.ownedBy, 'helmx')
-    const afterResetDetail = await kernel.getConversationDetail(conv.id, { limit: 50 })
+    const afterResetDetail = await kernel.conversations.getConversationDetail(conv.id, { limit: 50 })
     const serializedReset = JSON.stringify(afterResetDetail.entries)
     assert.ok(!serializedReset.includes('sk-reset-secret-999'), 'reset handoff secret must be redacted')
 
-    const compactRes = await kernel.compactConversationGuarded(
+    const compactRes = await kernel.conversations.compactConversationGuarded(
       conv.id,
       { instructions: 'preserve key decisions' },
       { expectedOwnership: 'helmx', expectedStateSeq: seq0 + 1 },
@@ -566,7 +566,7 @@ test('context ops preserve concurrent metadata updates during async SDK reset (n
   const dir = join(root, 't-reset-stale-meta')
   const kernel = await openRuntime(dir)
   try {
-    const conv = await kernel.createConversation({ title: 'original title', tags: ['initial'] })
+    const conv = await kernel.conversations.createConversation({ title: 'original title', tags: ['initial'] })
     const harness = (kernel as unknown as { harness: { conversation: ConversationFn } }).harness
     const realConvFn = harness.conversation.bind(harness) as ConversationFn
     let intercepted = false
@@ -577,16 +577,16 @@ test('context ops preserve concurrent metadata updates during async SDK reset (n
       const realReset = handle.reset.bind(handle)
       handle.reset = async (...args: unknown[]) => {
         // Simulate a concurrent metadata edit arriving while SDK reset is awaiting completion.
-        await kernel.updateConversation(conv.id, { title: 'concurrent title', tags: ['updated'] })
+        await kernel.conversations.updateConversation(conv.id, { title: 'concurrent title', tags: ['updated'] })
         return realReset(...args)
       }
       return handle
     }) as ConversationFn
 
-    const summary = await kernel.resetConversation(conv.id, { handoff: 'fresh start' })
+    const summary = await kernel.conversations.resetConversation(conv.id, { handoff: 'fresh start' })
     assert.equal(summary.title, 'concurrent title', 'concurrent title update must survive reset')
     assert.deepEqual(summary.tags, ['updated'], 'concurrent tags update must survive reset')
-    assert.equal(kernel.getConversation(conv.id).title, 'concurrent title')
+    assert.equal(kernel.conversations.getConversation(conv.id).title, 'concurrent title')
   } finally {
     await kernel.close().catch(() => {})
   }
@@ -596,24 +596,24 @@ test('markConversationOwnership rejects legacy/invalid owner values with 400 val
   const dir = join(root, 't-ownership-strict-boundary')
   const kernel = await openRuntime(dir)
   try {
-    const conv = await kernel.createConversation({ title: 'strict owner' })
-    kernel.markConversationOwnership(conv.id, 'helmx')
-    assert.equal(kernel.getConversationOwnership(conv.id), 'helmx')
+    const conv = await kernel.conversations.createConversation({ title: 'strict owner' })
+    kernel.ownership.markOwnership(conv.id, 'helmx')
+    assert.equal(kernel.ownership.getOwnership(conv.id), 'helmx')
 
     assert.throws(
-      () => kernel.markConversationOwnership(conv.id, 'bot' as never),
+      () => kernel.ownership.markOwnership(conv.id, 'bot' as never),
       isHelmxError('validation_error', 400),
       'removed legacy owner "bot" must throw 400 instead of silently coercing to human',
     )
     assert.throws(
-      () => kernel.markConversationOwnership(conv.id, '' as never),
+      () => kernel.ownership.markOwnership(conv.id, '' as never),
       isHelmxError('validation_error', 400),
     )
     assert.throws(
-      () => kernel.markConversationOwnership(0, 'helmx'),
+      () => kernel.ownership.markOwnership(0, 'helmx'),
       isHelmxError('validation_error', 400),
     )
-    assert.equal(kernel.getConversationOwnership(conv.id), 'helmx', 'failed validation must preserve existing ownership')
+    assert.equal(kernel.ownership.getOwnership(conv.id), 'helmx', 'failed validation must preserve existing ownership')
   } finally {
     await kernel.close().catch(() => {})
   }

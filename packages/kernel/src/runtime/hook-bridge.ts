@@ -37,14 +37,13 @@ import {
 } from './action-prompts.js'
 import {
   assertSafeMessageSurgery,
-  guardToolExecutionResult,
   projectToolPromptSections,
   sectionsEqual,
   systemSectionsOf,
   withSections,
   withToolDeclarations,
-  type GuardToolResultOptions,
-} from './runtime-helpers.js'
+} from './hook-projection.js'
+import { guardToolExecutionResult, type GuardToolResultOptions } from './tools/tool-result-contract.js'
 import { lookupRegistryToolSchemas, type ToolSchemaEntry } from './tool-registry.js'
 
 const REGISTER_STRUCTURED_OUTPUT_SCHEMA: JsonSchema = {

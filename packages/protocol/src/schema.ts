@@ -2,6 +2,7 @@
  * JSON Schema boundary validator (TypeBox JIT `Compile` with pure-JS `Value.Check` fallback,
  * shared across protocol, kernel, and plugins).
  */
+import type { TSchema } from 'typebox'
 import { Compile } from 'typebox/compile'
 import { Check, Errors } from 'typebox/value'
 import { HelmxError } from './error.js'
@@ -30,7 +31,7 @@ const NON_NEGATIVE_KEYS = [
 ] as const
 const BOUND_KEYS = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum'] as const
 
-const compiledCache = new WeakMap<JsonSchema, CompiledValidator>()
+const compiledCache = new WeakMap<object, CompiledValidator>()
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -137,12 +138,12 @@ function assertValidSubschema(
   }
 }
 
-function compile(schema: JsonSchema): CompiledValidator {
+function compile(schema: JsonSchema | TSchema): CompiledValidator {
   if (!isPlainRecord(schema)) throw invalidSchemaError(schema, 'root schema must be a plain object')
   const cached = compiledCache.get(schema)
   if (cached) return cached
 
-  assertValidSubschema(schema, schema, '#', new Set<object>(), false)
+  assertValidSubschema(schema as JsonSchema, schema, '#', new Set<object>(), false)
   let validator: CompiledValidator
   try {
     const compiled = Compile(schema as never)
@@ -168,12 +169,12 @@ function compile(schema: JsonSchema): CompiledValidator {
 }
 
 /** Pre-validate at registration boundary so invalid or $async schemas fail immediately with invalid_plugin_schema. */
-export function assertSchemaCompilable(schema: JsonSchema): void {
+export function assertSchemaCompilable(schema: JsonSchema | TSchema): void {
   compile(schema)
 }
 
 export function validateOrThrow(
-  schema: JsonSchema,
+  schema: JsonSchema | TSchema,
   value: unknown,
   message: string,
   code = 'validation_error',

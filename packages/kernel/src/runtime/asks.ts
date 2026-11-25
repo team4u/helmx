@@ -45,17 +45,20 @@ export class AskService {
   private readonly onConvPendingChanged: (conversationId: number) => void
   /** Conversation existence validation port (injected by host; omitted in standalone AskService unit tests). */
   private readonly validateConversation?: (conversationId: number) => boolean | Promise<boolean>
+  private readonly assertWritable: () => void
 
   constructor(options: {
     store: HelmxStore
     onEvent: (type: string, payload: unknown) => void
     onConvPendingChanged: (conversationId: number) => void
     validateConversation?: (conversationId: number) => boolean | Promise<boolean>
+    assertWritable?: () => void
   }) {
     this.store = options.store
     this.onEvent = options.onEvent
     this.onConvPendingChanged = options.onConvPendingChanged
     this.validateConversation = options.validateConversation
+    this.assertWritable = options.assertWritable ?? (() => {})
   }
 
   listAsks(status?: string): AskSpec[] {
@@ -85,6 +88,7 @@ export class AskService {
    * spec.id may be pre-allocated (for correlation and deduplication) and never overwrites an existing ID (including settled approvals).
    */
   async createAsk(spec: AskCreateSpec): Promise<AskResult> {
+    this.assertWritable()
     validateAskSpec(spec)
     if (this.validateConversation) {
       const ok = await this.validateConversation(spec.conversationId)
@@ -204,6 +208,7 @@ export class AskService {
     answers: Record<string, string>,
     expectedStateSeq?: number,
   ): Promise<AskSpec> {
+    this.assertWritable()
     if (expectedStateSeq !== undefined && (!Number.isSafeInteger(expectedStateSeq) || expectedStateSeq < 0)) {
       throw new HelmxError('validation_error', 'expectedStateSeq must be a non-negative safe integer', 400)
     }
@@ -257,6 +262,7 @@ export class AskService {
   }
 
   cancelAsk(id: string, reason: 'cancelled' | 'superseded' = 'cancelled'): Promise<AskSpec> {
+    this.assertWritable()
     const row = this.store.getAsk(id)
     if (!row) throw new HelmxError('not_found', `AskDoc not found: ${id}`, 404)
     if (row.status !== 'pending') {
@@ -283,6 +289,7 @@ export class AskService {
    * rejecting honestly if any fails (never swallows IO errors); failed asks have already settled their waiters with failure.
    */
   async cancelByConversation(conversationId: number, reason: 'cancelled' | 'superseded' = 'cancelled'): Promise<void> {
+    this.assertWritable()
     const pending = this.listPendingByConversation(conversationId)
     await Promise.all(pending.map((ask) => this.settle(ask.id, reason)))
   }

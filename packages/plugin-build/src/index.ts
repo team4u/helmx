@@ -35,6 +35,20 @@ export {
 export { buildPluginClientBundleDir } from './prebuilt-client.js';
 // Test-only utility: installs the Node chunk bridge on `globalThis` when executing split bundles in Node.
 export { installNodeChunkBridge } from './node-chunk-bridge.js';
+export {
+  createPluginPackageManager,
+  PluginPackageManager,
+  createPackageRunner,
+  defaultPackageRunner,
+  tailLines,
+  type CreatePluginPackageManagerOptions,
+  type PackageRunner,
+  type PackageRunnerOptions,
+  type PluginPackageManagerOptions,
+  type RunResult,
+} from './package-manager.js';
+export { PluginPackageManagerStore } from './package-store.js';
+export { parsePluginSource } from './package-source.js';
 
 export interface CreatePluginBuildProviderOptions {
   /**

@@ -41,8 +41,15 @@ import { basename, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { createEnvFabric } from '../../kernel/src/env/fabric.js'
-import { runNativeSpawn, type NativeSpawnDeps } from '../../kernel/src/runtime/spawn.js'
+import {
+  ArtifactService,
+  createEnvFabric,
+  PluginHost,
+  SecretStash,
+  type PluginHostBackend,
+  type PluginKvStore,
+} from '@helmx/kernel'
+import { actionToolResult, runNativeSpawn, type NativeSpawnDeps } from '@helmx/kernel/testing'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/worktree/worktree.js'
 import {
   AGENT_BINDINGS_KV_NAMESPACE,
@@ -64,10 +71,7 @@ import {
   WORKTREE_CONTEXT_SECTION_ID,
   worktreeContextPrompt,
 } from '../src/worktree/worktree-context.js'
-import { actionToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
-import { PluginHost, type PluginHostBackend, type PluginKvStore } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { ArtifactService, SecretStash } from '../../kernel/src/services/index.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   assertNoUnhandledRejection,

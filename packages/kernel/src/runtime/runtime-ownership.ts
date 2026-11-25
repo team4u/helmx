@@ -18,6 +18,7 @@ export type { ConversationOwnership }
 interface RuntimeOwnershipDeps {
   readonly store: HelmxStore
   readonly events: EventHub
+  readonly assertWritable?: () => void
   readonly conversations: { summaryWithOwnership(id: number): ConversationSummary }
 }
 
@@ -47,6 +48,7 @@ export class RuntimeOwnershipManager {
    * - Strictly validates boundary inputs (never silently coerces legacy/invalid values like `'bot'` to `'human'`).
    */
   markOwnership(conversationId: number, owner: ConversationOwnership): void {
+    this.deps.assertWritable?.()
     if (!Number.isSafeInteger(conversationId) || conversationId <= 0) {
       throw new HelmxError(
         'validation_error',

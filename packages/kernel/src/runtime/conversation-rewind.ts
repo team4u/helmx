@@ -22,11 +22,6 @@ import {
 import type { ConversationAttachmentRef, ConversationInput } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
 import type { ConversationTracker } from './conversations.js'
-import {
-  assertEditableHumanInput,
-  rewindIntervalOf,
-  type RewindInterval,
-} from './runtime-helpers.js'
 import { asConversationId, asEntryId } from './sdk-ids.js'
 import type { HelmxStore } from './store.js'
 
@@ -458,5 +453,60 @@ export class ConversationRewind {
     if (meta) {
       this.host.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
     }
+  }
+}
+
+/** Overwrite range declared by a `helmx.rewind` truncation marker (closed interval `[from, through]`).
+ *
+ * `throughEntryId` is a strict boundary: max old entry ID within the overwritten span, so newer
+ * input entries always have strictly larger IDs and are never mistakenly removed across intervals. */
+export interface RewindInterval {
+  from: number
+  through: number
+  marker: number
+}
+
+/** Parse a single rewind interval; returns `undefined` if not a rewind marker or missing `fromEntryId`. */
+export function rewindIntervalOf(entry: { id: number | string; kind: string; data?: unknown }): RewindInterval | undefined {
+  if (entry.kind !== 'helmx.rewind') return undefined
+  const data = entry.data as { fromEntryId?: unknown; throughEntryId?: unknown } | undefined
+  const from = Number(data?.fromEntryId)
+  if (!Number.isSafeInteger(from) || from <= 0) return undefined
+  const marker = Number(entry.id)
+  const through = Number(data?.throughEntryId)
+  if (!Number.isSafeInteger(marker) || !Number.isSafeInteger(through) || through < from || through >= marker) {
+    throw new HelmxError('invalid_rewind_entry', `History overwrite marker ${entry.id} has an invalid interval`, 500)
+  }
+  return { from, through, marker }
+}
+
+/** Check whether an entry is covered by any rewind interval (shared by detail display / FTS rebuild / lastAssistant cleanup). */
+export function coveredByRewind(entryId: number, intervals: ReadonlyArray<RewindInterval>): boolean {
+  return intervals.some((cut) => entryId >= cut.from && entryId <= cut.through)
+}
+
+/** Edit target restriction: only human input entries may be overwritten (agent/trigger injections and control entries are rejected). */
+export function assertEditableHumanInput(
+  entry: { kind: string; data?: unknown },
+  conversationId: number,
+  entryId: number,
+): void {
+  if (entry.kind === 'pi.user') return
+  if (entry.kind !== 'helmx.input') {
+    throw new HelmxError(
+      'entry_not_editable',
+      `Only human input entries can be edited (entry ${entryId} has kind=${entry.kind})`,
+      400,
+      { conversationId, entryId, kind: entry.kind },
+    )
+  }
+  const origin = (entry.data as { origin?: unknown } | undefined)?.origin
+  if (origin !== 'human') {
+    throw new HelmxError(
+      'entry_not_editable',
+      `Entry ${entryId} has origin '${String(origin)}'; only human inputs can be edited in place`,
+      409,
+      { conversationId, entryId, origin: String(origin) },
+    )
   }
 }

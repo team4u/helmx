@@ -21,6 +21,12 @@ export type InputOrigin = 'human' | 'agent' | 'trigger'
 /** Policy for new input while the conversation is busy; the kernel defaults to steer (steering interjection) when omitted. */
 export type WhenBusy = 'steer' | 'followUp' | 'reject'
 
+/** Valid thinking level enum values (aligned with pi-ai ModelThinkingLevel). */
+export const MODEL_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/** Valid thinking level union derived from {@link MODEL_THINKING_LEVELS}. */
+export type ModelThinkingLevel = (typeof MODEL_THINKING_LEVELS)[number]
+
 /** Conversation context usage (derived display data; refreshed asynchronously by the kernel, may briefly lag real context).
  *
  * Estimation semantics align with pi agent 1.5.2's `getContextUsage`: prefer the

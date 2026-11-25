@@ -26,7 +26,7 @@ import {
   parseProfileBody,
   ValidationError,
 } from '../src/http/validate.js'
-import type { KernelRuntimeLike } from '../src/http/contracts.js'
+import type { CoreRoutesTarget } from '../src/http/routes.js'
 
 type CallLog = Record<string, unknown[]>
 
@@ -40,7 +40,7 @@ function newCallLog(): CallLog {
   }
 }
 
-function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
+function makeKernel(calls: CallLog = newCallLog()): CoreRoutesTarget {
   /** Mutable per-model defaults mirror so GET/PUT echoes reflect the setModelThinkingDefault calls. */
   const modelThinkingLevels: Record<string, string> = {}
   const kernel = {
@@ -110,113 +110,124 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
         throw new HelmxError('not_implemented', 'not wired', 501)
       },
     },
-    async listConversations() { return [] },
-    async getConversationDetail(id: number) { throw new HelmxError('not_found', `conversation not found: ${id}`, 404) },
-    async getConversationEntry(id: number, entryId: number) { throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404) },
-    async createConversation() { throw new HelmxError('not_found', 'x', 404) },
-    async updateConversation() { throw new HelmxError('not_found', 'x', 404) },
-    async deleteConversation() { throw new HelmxError('not_found', 'x', 404) },
-    async submitInput(id: number, text: string, opts?: unknown) {
-      calls.submitInput!.push([id, text, opts])
-      return { submissionId: 'sub-1' }
+    conversations: {
+      listConversations: () => [],
+      getConversationDetail: async (id: number) => { throw new HelmxError('not_found', `conversation not found: ${id}`, 404) },
+      getConversationEntry: async (id: number, entryId: number) => { throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404) },
+      createConversation: async () => { throw new HelmxError('not_found', 'x', 404) },
+      updateConversation: async () => { throw new HelmxError('not_found', 'x', 404) },
+      deleteConversation: async () => { throw new HelmxError('not_found', 'x', 404) },
+      submitInput: async (id: number, text: string, opts?: unknown) => {
+        calls.submitInput!.push([id, text, opts])
+        return { submissionId: 'sub-1' }
+      },
+      withdrawQueuedInput: async (id: number, opts: { submissionId: number }) => {
+        calls.withdrawQueuedInput!.push([id, opts])
+        return { status: 'withdrawn' } as never
+      },
+      waitForInput: async () => { throw new HelmxError('not_found', 'x', 404) },
+      abortConversation: async () => {},
+      resetConversation: async (id: number, opts?: unknown) => {
+        calls.resetConversation!.push([id, opts])
+        return { id }
+      },
+      compactConversation: async () => { throw new HelmxError('not_found', 'x', 404) },
+      forkConversation: async (id: number, opts: unknown) => {
+        calls.forkConversation!.push([id, opts])
+        return { id: id + 100 }
+      },
+      search: async () => [],
     },
-    async withdrawQueuedInput(id: number, opts: { submissionId: number }) {
-      calls.withdrawQueuedInput!.push([id, opts])
-      return { status: 'withdrawn' } as never
+    asks: {
+      listAsks: () => [],
+      answerAsk: async (id: string, answers: unknown, expectedStateSeq?: number) => {
+        calls.answerAsk!.push([id, answers, expectedStateSeq])
+        return { id } as never
+      },
+      cancelAsk: async () => ({ id: 'x' } as never),
     },
-    async waitForInput() { throw new HelmxError('not_found', 'x', 404) },
-    async abortConversation() {},
-    async resetConversation(id: number, opts?: unknown) {
-      calls.resetConversation!.push([id, opts])
-      return { id }
+    models: {
+      listModels: async () => ({
+        models: [],
+        thinkingLevels: {},
+        ...(Object.keys(modelThinkingLevels).length > 0 ? { modelThinkingLevels: { ...modelThinkingLevels } } : {}),
+      }),
+      setDisabledModels: async (provider: string | undefined, disabledModels: string[]) => {
+        calls.setDisabledModels!.push([provider, disabledModels])
+        return { models: [], thinkingLevels: {} }
+      },
+      setDefaultModel: async (
+        model?: string,
+        thinkingLevel?: string,
+        compactionModel?: string,
+        compactionThinkingLevel?: string,
+        levels?: Record<string, string>,
+        update?: { model: string; level: string },
+      ) => {
+        const args: unknown[] = compactionThinkingLevel !== undefined
+          ? [model, thinkingLevel, compactionModel, compactionThinkingLevel]
+          : compactionModel !== undefined
+            ? [model, thinkingLevel, compactionModel]
+            : [model, thinkingLevel]
+        if (levels !== undefined) args.push(levels)
+        if (update !== undefined) args.push(update)
+        calls.setDefaultModel!.push(args)
+        if (levels !== undefined) {
+          for (const key of Object.keys(modelThinkingLevels)) delete modelThinkingLevels[key]
+          Object.assign(modelThinkingLevels, levels)
+        }
+        if (update !== undefined) {
+          if (update.level === '') delete modelThinkingLevels[update.model]
+          else modelThinkingLevels[update.model] = update.level
+        }
+      },
+      setModelThinkingDefault: async (model: string, level: string) => {
+        calls.setModelThinkingDefault!.push([model, level])
+        if (level === '') delete modelThinkingLevels[model]
+        else modelThinkingLevels[model] = level
+      },
+      listModelProviders: () => [],
     },
-    async compactConversation() { throw new HelmxError('not_found', 'x', 404) },
-    async forkConversation(id: number, opts: unknown) {
-      calls.forkConversation!.push([id, opts])
-      return { id: id + 100 }
+    nodes: {
+      listNodes: async () => [],
+      issueNodeToken: async (nodeId: string) => {
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
+          throw new HelmxError('validation_error', 'nodeId must match node ID format', 400, { nodeId })
+        }
+        calls.issueNodeToken!.push(nodeId)
+        return { nodeId, token: 'node-token', createdAt: 0 } as never
+      },
+      removeNode: async () => {},
+      checkNodeUpgrade: async () => ({ currentVersion: '1.0.0', latestVersion: '1.0.0', updateAvailable: false }),
+      upgradeNode: async (nodeId: string, input?: unknown) => {
+        calls.upgradeNode!.push([nodeId, input])
+        return { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } as never
+      },
+      execEnv: async (req: unknown) => {
+        calls.execEnv!.push(req)
+        return { ok: true, exitCode: 0, stdout: '', stderr: '', timedOut: false } as never
+      },
     },
-    async listAsks() { return [] },
-    async answerAsk(id: string, answers: unknown, expectedStateSeq?: number) {
-      calls.answerAsk!.push([id, answers, expectedStateSeq])
-    },
-    async cancelAsk() {},
-    async search() { return [] },
-    listModels: async () => ({
-      models: [],
-      thinkingLevels: {},
-      ...(Object.keys(modelThinkingLevels).length > 0 ? { modelThinkingLevels: { ...modelThinkingLevels } } : {}),
-    }),
-    setDisabledModels: async (provider: string | undefined, disabledModels: string[]) => {
-      calls.setDisabledModels!.push([provider, disabledModels])
-      return { models: [], thinkingLevels: {} }
-    },
-    setDefaultModel: async (
-      model?: string,
-      thinkingLevel?: string,
-      compactionModel?: string,
-      compactionThinkingLevel?: string,
-      levels?: Record<string, string>,
-      update?: { model: string; level: string },
-    ) => {
-      const args: unknown[] = compactionThinkingLevel !== undefined
-        ? [model, thinkingLevel, compactionModel, compactionThinkingLevel]
-        : compactionModel !== undefined
-          ? [model, thinkingLevel, compactionModel]
-          : [model, thinkingLevel]
-      if (levels !== undefined) args.push(levels)
-      if (update !== undefined) args.push(update)
-      calls.setDefaultModel!.push(args)
-      if (levels !== undefined) {
-        for (const key of Object.keys(modelThinkingLevels)) delete modelThinkingLevels[key]
-        Object.assign(modelThinkingLevels, levels)
-      }
-      if (update !== undefined) {
-        if (update.level === '') delete modelThinkingLevels[update.model]
-        else modelThinkingLevels[update.model] = update.level
-      }
-    },
-    setModelThinkingDefault: async (model: string, level: string) => {
-      calls.setModelThinkingDefault!.push([model, level])
-      if (level === '') delete modelThinkingLevels[model]
-      else modelThinkingLevels[model] = level
-    },
-    listModelProviders: async () => [],
-    async listNodes() { return [] },
-    async issueNodeToken(nodeId: string) {
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
-        throw new HelmxError('validation_error', 'nodeId must match node ID format', 400, { nodeId })
-      }
-      calls.issueNodeToken!.push(nodeId)
-      return { nodeId, token: 'node-token', createdAt: 0 } as never
-    },
-    async removeNode() {},
-    checkNodeUpgrade: async () => ({ currentVersion: '1.0.0', latestVersion: '1.0.0', updateAvailable: false }),
-    upgradeNode: async (nodeId: string, input?: unknown) => {
-      calls.upgradeNode!.push([nodeId, input])
-      return { ok: true, previousVersion: '1.0.0', targetVersion: '1.1.0', upgraded: true } as never
-    },
-    startNodeForward: async (nodeId: string, input: unknown) => {
-      calls.startNodeForward!.push([nodeId, input])
-      return {
-        forwardId: 'fwd-11111111-2222-3333-4444-555555555555',
-        nodeId, listenHost: '127.0.0.1', listenPort: 1, targetPort: 2,
-        activeConnections: 0, totalConnections: 0,
-      } as never
-    },
-    stopNodeForward: async () => {},
-    getNodeForward: () => undefined,
-    listNodeForwards: () => [],
-    onNodeForwardEvent: () => () => {},
-    execEnv: async (req: unknown) => {
-      calls.execEnv!.push(req)
-      return { ok: true, exitCode: 0, stdout: '', stderr: '', timedOut: false } as never
+    nodeForward: {
+      start: async (nodeId: string, input: unknown) => {
+        calls.startNodeForward!.push([nodeId, input])
+        return {
+          forwardId: 'fwd-11111111-2222-3333-4444-555555555555',
+          nodeId, listenHost: '127.0.0.1', listenPort: 1, targetPort: 2,
+          activeConnections: 0, totalConnections: 0,
+        } as never
+      },
+      stop: async () => {},
+      get: () => undefined,
+      list: () => [],
+      onEvent: () => () => {},
     },
   }
-  return kernel as unknown as KernelRuntimeLike
+  return kernel as unknown as CoreRoutesTarget
 }
 
 async function call(
-  kernel: KernelRuntimeLike,
+  kernel: CoreRoutesTarget,
   method: string,
   path: string,
   body?: unknown,
@@ -240,7 +251,7 @@ async function call(
   }
 }
 
-async function expect400(kernel: KernelRuntimeLike, method: string, path: string, body?: unknown, why?: string) {
+async function expect400(kernel: CoreRoutesTarget, method: string, path: string, body?: unknown, why?: string) {
   const res = await call(kernel, method, path, body)
   assert.equal(res.status, 400, `should reject with 400: ${why ?? JSON.stringify(body)}`)
   assert.equal(res.code, 'validation_error')
@@ -454,7 +465,7 @@ test('models/refresh: rejects === "" only (preserves whitespace string); merges 
   const calls = newCallLog()
   const refreshCalls: unknown[] = []
   const kernel = makeKernel(calls)
-  ;(kernel as { refreshModels?: unknown }).refreshModels = async (options?: unknown) => {
+  ;(kernel.models as { refreshModels?: unknown }).refreshModels = async (options?: unknown) => {
     refreshCalls.push(options)
     return { refreshed: [] } as never
   }

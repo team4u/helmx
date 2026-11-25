@@ -8,17 +8,24 @@
  */
 import { HelmxError, parseSessionDocSubParam } from '@helmx/protocol'
 import type { PublicPluginSessionDoc, SessionDocSubscription } from '@helmx/protocol'
-import type { KernelRuntimeLike } from './contracts.js'
+import type { PluginHost } from '../plugins/index.js'
+import type { SessionDocEventHub } from '../runtime/events.js'
 import { errorResponse, type JsonRedactor } from './http-utils.js'
 import type { RouteContext } from './route-context.js'
 import { ValidationError } from './validate.js'
+
+export interface SessionDocRoutesTarget {
+  readonly plugins?: Pick<PluginHost, 'getPublicSessionDoc'>
+  readonly sessionDocEvents?: Pick<SessionDocEventHub, 'seq'> &
+    Partial<Pick<SessionDocEventHub, 'multiplexResponse'>>
+}
 
 /** Upper bound on `?sub=` tuples per multiplexed SSE connection. */
 const MAX_SESSION_DOC_MULTIPLEX_SUBS = 64
 
 export async function handleSessionDocsDomain(
   ctx: RouteContext,
-  kernel: KernelRuntimeLike,
+  kernel: SessionDocRoutesTarget,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   if (ctx.method !== 'GET' || ctx.segments[1] !== 'events' || ctx.segments[2] !== undefined) {
@@ -49,7 +56,8 @@ export async function handleSessionDocsDomain(
     subs.push(parsed)
   }
 
-  if (kernel.plugins === undefined || typeof kernel.plugins.getPublicSessionDoc !== 'function') {
+  const plugins = kernel.plugins
+  if (plugins === undefined || typeof plugins.getPublicSessionDoc !== 'function') {
     throw new HelmxError(
       'not_implemented',
       'current runtime does not provide plugin session document service',
@@ -67,18 +75,18 @@ export async function handleSessionDocsDomain(
 
   return port.multiplexResponse(subs, ctx.request, {
     snapshot: (sub) => {
-      const doc = snapshotDocOf(kernel, sub)
+      const doc = snapshotDocOf(plugins, sub)
       return { seq: port.seq, doc }
     },
   })
 }
 
 function snapshotDocOf(
-  kernel: KernelRuntimeLike,
+  plugins: Pick<PluginHost, 'getPublicSessionDoc'>,
   sub: SessionDocSubscription,
 ): PublicPluginSessionDoc {
-  const result = kernel.plugins.getPublicSessionDoc(sub.pluginId, sub.name, sub.conversationId)
-  if (result instanceof Promise) {
+  const result = plugins.getPublicSessionDoc(sub.pluginId, sub.name, sub.conversationId)
+  if ((result as unknown) instanceof Promise) {
     throw new HelmxError(
       'not_implemented',
       'current runtime getPublicSessionDoc is async; cannot provide sync conversation document snapshot',

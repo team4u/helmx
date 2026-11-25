@@ -34,7 +34,7 @@ import {
   PluginHost,
   type PluginHostBackend,
   type PluginProviderPort,
-} from '../../kernel/src/plugins/index.js'
+} from '@helmx/kernel'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { createMagpiePlugin } from '../src/magpie.js'
 import { compilePluginClientModule, createPluginBuildProvider } from '@helmx/plugin-build'

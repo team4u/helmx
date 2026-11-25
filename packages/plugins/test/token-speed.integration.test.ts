@@ -22,7 +22,7 @@ import { createHubHandler } from '@helmx/kernel'
 import { COMPOSER_STATUS_SLOT, HelmxError, type PluginSummary } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
-import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
+import { openHelmxDatabase } from '@helmx/kernel/testing'
 import { TOKEN_SPEED_DOC, TOKEN_SPEED_PLUGIN_ID, type TokenSpeedStatus } from '../src/token-speed/contracts.js'
 import { cleanupDir, makeFauxProvider, makeTempDir, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
@@ -105,8 +105,8 @@ test('token-speed 集成：默认启用 UI 就绪 → 全链路流式测量与�
 
     // ---- 2/3. 真实流式回合：生成中非零实时 TPS，终态 provider 对账 ----------
     env.faux.setResponses([fauxAssistantMessage(STREAM_TEXT)])
-    const conv = await env.app.kernel.createConversation({ title: 'token-speed 集成测速' })
-    await env.app.kernel.submitInput(conv.id, '请流式生成测速文本')
+    const conv = await env.app.kernel.conversations.createConversation({ title: 'token-speed 集成测速' })
+    await env.app.kernel.conversations.submitInput(conv.id, '请流式生成测速文本')
     // 生成结束前必须观测到非零实时 TPS（waitForIdle 之前的 decoding 态）。
     const live = await pollSpeedDoc(
       env,
@@ -116,7 +116,7 @@ test('token-speed 集成：默认启用 UI 就绪 → 全链路流式测量与�
     )
     assert.ok(live!.outputTokens > 0, '实时累计输出 tokens > 0')
     assert.ok(live!.decodeMs >= 0)
-    await env.app.kernel.waitForIdle(conv.id)
+    await env.app.kernel.conversations.waitForIdle(conv.id)
     // 终态：最终 usage.output 对账覆盖流式估算，source 翻转为 provider。
     const settled = await pollSpeedDoc(
       env,
@@ -176,12 +176,12 @@ test('token-speed 集成：默认启用 UI 就绪 → 全链路流式测量与�
     }
 
     // ---- 5. reset：pi.reset marker 清空上一回合 settled 文档 ----------------
-    await env.app.kernel.resetConversation(conv.id, { handoff: 'token-speed 集成交接' })
+    await env.app.kernel.conversations.resetConversation(conv.id, { handoff: 'token-speed 集成交接' })
     assert.equal(speedDocOf(env, conv.id), null, 'reset 后不回退显示旧 TPS')
     // reset 后新回合从零重建（证明清空是「宁空不假」而非永久损坏）。
     env.faux.setResponses([fauxAssistantMessage('y'.repeat(160))])
-    await env.app.kernel.submitInput(conv.id, 'reset 后再测一轮')
-    await env.app.kernel.waitForIdle(conv.id)
+    await env.app.kernel.conversations.submitInput(conv.id, 'reset 后再测一轮')
+    await env.app.kernel.conversations.waitForIdle(conv.id)
     const rebuilt = await pollSpeedDoc(
       env,
       conv.id,
@@ -273,8 +273,8 @@ test('token-speed 集成：多工具轮——工具执行期保持有效 TPS 且
       fauxAssistantMessage('z'.repeat(320)),
     ])
 
-    const conv = await env.app.kernel.createConversation({ title: 'token-speed 多工具轮集成测速' })
-    await env.app.kernel.submitInput(conv.id, '请执行工具后再回答')
+    const conv = await env.app.kernel.conversations.createConversation({ title: 'token-speed 多工具轮集成测速' })
+    await env.app.kernel.conversations.submitInput(conv.id, '请执行工具后再回答')
 
     await toolEntered
     // 真实阻塞约 150ms，并在 tools 阶段轮询 speed sessionDoc：必须始终保有非零 TPS
@@ -289,7 +289,7 @@ test('token-speed 集成：多工具轮——工具执行期保持有效 TPS 且
     assert.ok(duringTools!.outputTokens > 0, '工具调用参数计数保留')
 
     releaseTool()
-    await env.app.kernel.waitForIdle(conv.id)
+    await env.app.kernel.conversations.waitForIdle(conv.id)
 
     const settled = await pollSpeedDoc(
       env,

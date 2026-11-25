@@ -9,16 +9,15 @@
 
 import type { Provider } from '@earendil-works/pi-ai'
 import type {
-  ConversationInit,
   ConversationInput,
-  ConversationPatch,
+  ConversationOwnership,
   ConversationSummary,
   ModelsChangedEvent,
   PluginBuildProvider,
+  PluginPackageManagerProvider,
   TurnSettledPayload,
 } from '@helmx/protocol'
 import { HelmxError, isPluginSummaryActive } from '@helmx/protocol'
-import type { ConversationOwnership } from './runtime-ownership.js'
 import {
   ArtifactService as SvcArtifactService,
   AuthService as SvcAuthService,
@@ -40,12 +39,11 @@ import { buildManagedEnv } from './tools.js'
 import { HelmxPluginConfigStore } from './plugin-config-store.js'
 import { ConversationService } from './conversation-service.js'
 import { NodeManager } from './node-manager.js'
-import type { NodeAutoUpgradeRetryPolicy } from './node-auto-upgrade.js'
 import { ModelRegistry } from './model-registry.js'
 import { HookBridge, prepareToolResultWith } from './hook-bridge.js'
 import { RuntimeToolRegistry } from './tool-registry.js'
 import { AssetReloader } from './asset-reloader.js'
-import { requireConv } from './runtime-helpers.js'
+import { requireConv } from './conversation-require.js'
 import { RuntimeTriggerDispatcher } from './runtime-triggers.js'
 import { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
 import { trustedPlatformFromEnvFabric } from './target-cwd.js'
@@ -70,9 +68,9 @@ export interface RuntimeServicesInit extends BootstrappedKernelContext {
   externalSkillRoots?: readonly string[]
   /** Plugin build port (`KernelBootOptions.buildProvider` passthrough; Hub injects default implementation). */
   buildProvider?: PluginBuildProvider
+  /** Managed plugin package manager provider (`KernelBootOptions.packageManagerProvider` passthrough; Hub injects default). */
+  packageManagerProvider?: PluginPackageManagerProvider
   nodeUpgradeTimeoutMs: number
-  autoUpgradeNodes?: boolean
-  nodeAutoUpgradePolicy?: NodeAutoUpgradeRetryPolicy
 }
 
 export interface AssembledRuntimeServices {
@@ -84,7 +82,7 @@ export interface AssembledRuntimeServices {
   pluginConfig: HelmxPluginConfigStore
   artifactsSvc: SvcArtifactService
   authSvc: SvcAuthService
-  modelsRegistry: ModelRegistry
+  models: ModelRegistry
   envFabric: EnvFabric
   toolDeps: HelmxToolDeps
   nodes: NodeManager
@@ -108,12 +106,10 @@ export function assembleRuntimeServices(
   options: {
     store: HelmxStore
     stashService: SecretStash
+    assertWritable: () => void
     dispatchTurnSettled(payload: TurnSettledPayload, consumed: ConversationInput[]): Promise<void>
     onSettleInflight(run: Promise<void>): void
     safeSummary(id: number): ConversationSummary | undefined
-    submitInput(id: number, text: string, opts?: Parameters<ConversationService['submitInput']>[2]): Promise<unknown>
-    createConversation(init: ConversationInit): Promise<ConversationSummary>
-    updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
   },
 ): AssembledRuntimeServices {
   // Scan machine-level shared skill roots alongside workspace skills; pass an empty array to isolate fully in tests.
@@ -131,7 +127,9 @@ export function assembleRuntimeServices(
     put: (meta: never) => { options.store.putArtifact(meta) },
     deleteByConversation: (cId: number) => { options.store.deleteArtifactsByConversation(cId) },
   }
-  const artifactsSvc = new SvcArtifactService(init.dataDir, artifactRepo, options.stashService)
+  const artifactsSvc = new SvcArtifactService(init.dataDir, artifactRepo, options.stashService, {
+    assertWritable: options.assertWritable,
+  })
   const authSvc = new SvcAuthService(init.dataDir)
 
   options.store.ftsRedact = (t) => options.stashService.redact(t)
@@ -149,7 +147,7 @@ export function assembleRuntimeServices(
     initialSeq: options.store.eventSeqNow,
     snapshot: () => ({
       seq: options.store.eventSeqNow,
-      conversations: runtime.listConversations(),
+      conversations: conversations ? conversations.listConversations() : [],
       pendingAsks: asks ? asks.listAsks('pending') : [],
       plugins: runtime.plugins ? runtime.plugins.list() : [],
       ui: runtime.plugins ? runtime.plugins.listUi() : [],
@@ -163,7 +161,11 @@ export function assembleRuntimeServices(
 
   // ProfileService publishes `profile.changed` through the global EventHub after successful save/delete
   // (HTTP/CLI writes and plugin bootstraps), so connected Web clients refresh the profile catalog.
-  const profilesSvc = new ProfileService(init.dataDir, { publish: (type, payload) => events.publish(type, payload) })
+  const profilesSvc = new ProfileService(
+    init.dataDir,
+    { publish: (type, payload) => events.publish(type, payload) },
+    { assertWritable: options.assertWritable },
+  )
 
   const sessionDocLifecycleRelease = events.subscribe((frame) => {
     const event = frame.event
@@ -181,7 +183,7 @@ export function assembleRuntimeServices(
   })
 
   // ---- Model Registry ----
-  const modelsRegistry = new ModelRegistry(
+  const models = new ModelRegistry(
     {
       dataDir: init.dataDir,
       providersSvc,
@@ -194,11 +196,13 @@ export function assembleRuntimeServices(
       events,
       pluginHost: () => runtime.plugins,
       alignAllConversations: () => conversations.alignAllConversations(),
+      isClosed: () => runtime.isClosing,
+      assertWritable: options.assertWritable,
     },
     init.modelsInstance,
     { model: init.defaultModel },
   )
-  Object.assign(modelsRegistry.apiKeyCache, init.seedKeyCache)
+  Object.assign(models.apiKeyCache, init.seedKeyCache)
 
   // ---- Cross-platform node substrate (EnvFabric) ----
   const envFabric = createEnvFabric({
@@ -244,23 +248,15 @@ export function assembleRuntimeServices(
     toolDeps,
     events,
     nodeUpgradeTimeoutMs: init.nodeUpgradeTimeoutMs,
-    autoUpgradeNodes: init.autoUpgradeNodes,
-    autoUpgradePolicy: init.nodeAutoUpgradePolicy,
-    isHubReady: () => runtime.started,
-    describeNodeBusy: (nodeId) => runtime.describeNodeBusy(nodeId),
-    log: (message) =>
-      init.emitDiagnostic({
-        level: 'info',
-        source: 'nodes.auto-upgrade',
-        message,
-      }),
     convOf: (id) => requireConv(options.store, id),
+    assertWritable: options.assertWritable,
   })
 
   // ---- Conversation ownership management ----
   const ownership = new RuntimeOwnershipManager({
     store: options.store,
     events,
+    assertWritable: options.assertWritable,
     conversations: {
       summaryWithOwnership: (id) => conversations.summaryWithOwnership(id),
     },
@@ -274,7 +270,7 @@ export function assembleRuntimeServices(
     // Turn unread-count policy: background spawned sub-conversations (helmx/bot-owned with a parent chain) are not marked unread.
     ownershipOf: (id) => ownership.getOwnership(id),
     // Context usage: window resolved from live `Models` registry (never fabricated when unknown).
-    models: () => modelsRegistry.models,
+    models: () => models.models,
     isClosed: () => runtime.isClosing,
     events: {
       onSummaryChanged: (summary) => {
@@ -309,6 +305,7 @@ export function assembleRuntimeServices(
   asks = new AskService({
     store: options.store,
     validateConversation: (id) => options.store.getConv(id) !== undefined,
+    assertWritable: options.assertWritable,
     onEvent: (type, payload) => events.publish(type, payload),
     onConvPendingChanged: (id) => {
       tracker.setPendingAskCount(id, asks.pendingCount(id))
@@ -354,13 +351,16 @@ export function assembleRuntimeServices(
     runInputHook: (payload) => hookBridge.runHookChain('input', payload),
     isClosed: () => runtime.isClosing,
     isStarted: () => runtime.started,
-    defaultModel: () => modelsRegistry.defaultModel,
-    defaultThinkingLevel: () => modelsRegistry.defaultThinkingLevel,
-    modelThinkingLevelOf: (ref) => modelsRegistry.modelThinkingLevelOf(ref),
-    models: () => modelsRegistry.models,
-    parseModelRefOrThrow: (ref) => modelsRegistry.parseModelRefOrThrow(ref),
-    resolveModelRef: (ref) => modelsRegistry.resolveModelRef(ref),
-    assertModelEnabled: (provider, modelId) => modelsRegistry.assertModelEnabled(provider, modelId),
+    assertWritable: options.assertWritable,
+    envFabric,
+    isModelDisabled: (provider, modelId) => models.isModelDisabled(provider, modelId),
+    defaultModel: () => models.defaultModel,
+    defaultThinkingLevel: () => models.defaultThinkingLevel,
+    modelThinkingLevelOf: (ref) => models.modelThinkingLevelOf(ref),
+    models: () => models.models,
+    parseModelRefOrThrow: (ref) => models.parseModelRefOrThrow(ref),
+    resolveModelRef: (ref) => models.resolveModelRef(ref),
+    assertModelEnabled: (provider, modelId) => models.assertModelEnabled(provider, modelId),
     trustedPlatformOf: trustedPlatformFromEnvFabric(envFabric),
   })
 
@@ -374,20 +374,22 @@ export function assembleRuntimeServices(
     conversations,
     events,
     envFabric,
-    modelsRegistry,
+    models,
     hookBridge,
     stashService: options.stashService,
-    updateConversation: (id, patch) => options.updateConversation(id, patch),
+    assertWritable: options.assertWritable,
+    updateConversation: (id, patch) => conversations.updateConversation(id, patch),
     markConversationOwnership: (id, owner: ConversationOwnership) => ownership.markOwnership(id, owner),
   })
 
   // ---- Trigger dispatch ----
   const triggers = new RuntimeTriggerDispatcher({
     store: options.store,
-    getConversation: (id) => runtime.getConversation(id),
+    assertWritable: options.assertWritable,
+    getConversation: (id) => conversations.getConversation(id),
     getConversationOwnership: (id) => ownership.getOwnership(id),
-    createConversation: (cInit) => options.createConversation(cInit),
-    submitInput: (id, text, opts) => options.submitInput(id, text, opts),
+    createConversation: (cInit) => conversations.createConversation(cInit),
+    submitInput: (id, text, opts) => conversations.submitInput(id, text, opts),
   })
 
   // ---- Tool installation ----
@@ -398,14 +400,14 @@ export function assembleRuntimeServices(
     isArtifactAuthorized: (convId, artifactConvId) =>
       conversations.isArtifactAuthorized(convId, artifactConvId),
     redact: (t) => options.stashService.redact(t),
-    getConversation: (id) => runtime.getConversation(id),
+    getConversation: (id) => conversations.getConversation(id),
   })
 
   // ---- Asset hot-reload coordinator ----
   const assetReloader = new AssetReloader({
     dataDir: init.dataDir,
     externalModels: init.externalModels !== undefined,
-    reloadModels: () => runtime.reloadModels(),
+    reloadModels: () => models.reloadModels(),
     invalidateProfiles: () => profilesSvc.invalidateCache(),
     reloadPluginConfig: async () => {
       // Invalidate in-memory snapshots (e.g. AuthService) when `config.json` is edited/cleared externally, then reload plugin config mirror.
@@ -430,7 +432,7 @@ export function assembleRuntimeServices(
     pluginConfig,
     artifactsSvc,
     authSvc,
-    modelsRegistry,
+    models,
     envFabric,
     toolDeps,
     nodes,

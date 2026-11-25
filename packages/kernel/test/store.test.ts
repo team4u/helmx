@@ -15,6 +15,8 @@ import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { FTS_SCHEMA_VERSION, FTS_SCHEMA_VERSION_KEY, openHelmxDatabase, type HelmxDatabase } from '../src/runtime/sqlite.js'
 import { HelmxStore, convStatusOf, summaryOf, type ConvMeta } from '../src/runtime/store.js'
+import { parseStoredAskResult, parseStoredAskSpec } from '../src/runtime/store/ask-repo.js'
+import { SqliteMirrorQueue } from '../src/runtime/store/write-queue.js'
 import {
   MAX_SEARCH_QUERY_CHARS,
   MAX_SEARCH_TERMS,
@@ -1249,6 +1251,68 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
       await store.close()
       await database.close()
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('SqliteMirrorQueue preserves FIFO, fail-closed latch, throwing onError isolation, and close() drain; ask-repo validators reject bad shapes', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'queue-'))
+    const database = await openHelmxDatabase(base)
+    try {
+      const order: string[] = []
+      let reportedCount = 0
+      const queue = new SqliteMirrorQueue(database.db, {
+        onError: () => {
+          reportedCount += 1
+          throw new Error('sink threw')
+        },
+      })
+      const firstGate = deferred()
+      queue.enqueue(async () => {
+        await firstGate.promise
+        order.push('first')
+      })
+      queue.enqueue(async () => {
+        order.push('second')
+      })
+      const boom = new Error('write boom')
+      queue.enqueue(async () => {
+        throw boom
+      })
+      firstGate.resolve()
+      await assert.rejects(
+        () => queue.flushPublic(),
+        (e: unknown) => e instanceof HelmxError && e.code === 'store_flush_failed',
+      )
+      assert.deepEqual(order, ['first', 'second'])
+      assert.equal(reportedCount, 1)
+      assert.equal(queue.error, boom)
+      assert.throws(
+        () => queue.enqueue(async () => {}),
+        (e: unknown) => e instanceof HelmxError && e.code === 'store_flush_failed',
+      )
+      assert.equal(await queue.close(), boom)
+      assert.throws(
+        () => queue.assertWritable(),
+        (e: unknown) => e instanceof HelmxError && e.code === 'store_closed',
+      )
+
+      const validSpec = JSON.stringify({ id: 'a1', title: 'Approve', status: 'pending', fields: [] })
+      assert.equal(
+        parseStoredAskSpec('spec', validSpec, { id: 'a1', conversationId: 1, status: 'pending' }).id,
+        'a1',
+      )
+      assert.deepEqual(parseStoredAskResult('result', '{"ok":"yes"}'), { ok: 'yes' })
+      assert.throws(
+        () => parseStoredAskSpec('spec', '{"id":"wrong"}', { id: 'a1', conversationId: 1, status: 'pending' }),
+        (e: unknown) => e instanceof HelmxError && e.code === 'store_data_corrupted',
+      )
+      assert.throws(
+        () => parseStoredAskResult('result', '{"ok":1}'),
+        (e: unknown) => e instanceof HelmxError && e.code === 'store_data_corrupted',
+      )
+    } finally {
+      await database.close()
+      await rm(base, { recursive: true, force: true })
     }
   })
 })

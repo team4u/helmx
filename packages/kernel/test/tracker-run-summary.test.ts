@@ -97,10 +97,10 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
       ])
       const recorded = recordUpserts(kernel, 1)
       try {
-        const before = kernel.getConversation(1).stateChangeSeq
-        const submitP = kernel.submitInput(1, 'prompt before first token')
+        const before = kernel.conversations.getConversation(1).stateChangeSeq
+        const submitP = kernel.conversations.submitInput(1, 'prompt before first token')
         await waitFor(() => recorded.frames.some((f) => f.status === 'working'))
-        assert.equal(kernel.getConversation(1).status, 'working', 'state machine should already be working after run starts')
+        assert.equal(kernel.conversations.getConversation(1).status, 'working', 'state machine should already be working after run starts')
         const workingBeforeFirstToken = recorded.frames.filter((f) => f.status === 'working')
         assert.ok(
           workingBeforeFirstToken.length >= 1,
@@ -109,7 +109,7 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
         assert.equal(workingBeforeFirstToken[0]!.doing, 'thinking...')
         releaseResponse()
         await submitP
-        await kernel.waitForIdle(1)
+        await kernel.conversations.waitForIdle(1)
         await waitFor(() => recorded.frames.some((f) => f.status === 'done'))
         // completed terminal state emitted exactly once: trailing idle snapshots must not duplicate done
         // frames (context-usage refresh frames share the same seq and are deduplicated, not counted as a new terminal state).
@@ -144,8 +144,8 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
       ])
       const recorded = recordUpserts(kernel, 1)
       try {
-        await kernel.submitInput(1, 'trigger tool round')
-        await kernel.waitForIdle(1)
+        await kernel.conversations.submitInput(1, 'trigger tool round')
+        await kernel.conversations.waitForIdle(1)
         await waitFor(() => recorded.frames.some((f) => f.status === 'done'))
         const workings = recorded.frames.filter((f) => f.status === 'working')
         // Separate state/doing transitions (which advance stateChangeSeq) from mid-run contextUsage-only refreshes
@@ -208,20 +208,20 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
       ])
       const recorded = recordUpserts(kernel, 1)
       try {
-        await kernel.submitInput(1, 'run1 prompt')
+        await kernel.conversations.submitInput(1, 'run1 prompt')
         await new Promise((r) => setTimeout(r, 200))
-        assert.equal(kernel.getConversation(1).status, 'working')
-        void kernel.submitInput(1, 'run2 follow-up prompt', { whenBusy: 'followUp' }).catch(() => {})
-        await kernel.waitForIdle(1)
+        assert.equal(kernel.conversations.getConversation(1).status, 'working')
+        void kernel.conversations.submitInput(1, 'run2 follow-up prompt', { whenBusy: 'followUp' }).catch(() => {})
+        await kernel.conversations.waitForIdle(1)
         await waitFor(() => recorded.frames.filter((f) => f.status === 'done').length >= 1)
         // Valid event ordering: done may follow working; another round of working may follow done
         // (for run2 consumed via followUp) -- but final status must converge to done (run2 completes).
         await new Promise((r) => setTimeout(r, 400))
         const last = recorded.frames[recorded.frames.length - 1]!
         assert.equal(
-          kernel.getConversation(1).status,
+          kernel.conversations.getConversation(1).status,
           'done',
-          `both runs should settle at terminal status done, actual ${kernel.getConversation(1).status}`,
+          `both runs should settle at terminal status done, actual ${kernel.conversations.getConversation(1).status}`,
         )
         assert.ok(
           ['done', 'idle'].includes(last.status),
@@ -251,8 +251,8 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
       ])
       const recorded = recordUpserts(kernel, 1)
       try {
-        await kernel.submitInput(1, 'failing prompt').catch(() => {})
-        await kernel.waitForIdle(1).catch(() => {})
+        await kernel.conversations.submitInput(1, 'failing prompt').catch(() => {})
+        await kernel.conversations.waitForIdle(1).catch(() => {})
         await waitFor(() => recorded.frames.some((f) => f.status === 'error'))
         const errorFrames = recorded.frames.filter((f) => f.status === 'error')
         assert.equal(errorFrames.length, 1, `failed terminal state must be emitted once: ${JSON.stringify(recorded.frames)}`)
@@ -277,10 +277,10 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
             stopReason: 'toolUse',
           }),
         ])
-        void kernel.submitInput(1, 'prompt to be aborted').catch(() => {})
-        await waitFor(() => kernel.getConversation(1).status === 'working')
-        await kernel.abortConversation(1)
-        await kernel.waitForIdle(1).catch(() => {})
+        void kernel.conversations.submitInput(1, 'prompt to be aborted').catch(() => {})
+        await waitFor(() => kernel.conversations.getConversation(1).status === 'working')
+        await kernel.conversations.abortConversation(1)
+        await kernel.conversations.waitForIdle(1).catch(() => {})
         await waitFor(() => recorded2.frames.some((f) => f.status === 'idle'))
         // Aborted terminal status is idle; a working frame existed (emitted on run start) and settled once to idle.
         assert.ok(
@@ -289,7 +289,7 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
         )
         const idleAfterAbort = recorded2.frames.filter((f) => f.status === 'idle')
         assert.equal(idleAfterAbort.length, 1, `aborted terminal state must be emitted once: ${JSON.stringify(recorded2.frames)}`)
-        const afterAbortSummary = kernel.getConversation(1)
+        const afterAbortSummary = kernel.conversations.getConversation(1)
         assert.equal(afterAbortSummary.runStartedAt, undefined, 'aborted conversation must clear runStartedAt')
         assert.ok(
           typeof afterAbortSummary.runDurationMs === 'number' && afterAbortSummary.runDurationMs >= 0,
@@ -311,20 +311,20 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
       ])
       const recorded = recordUpserts(kernel, 1)
       try {
-        void kernel.submitInput(1, 'prompt triggering approval').catch(() => {})
-        await waitFor(() => kernel.getConversation(1).status === 'working')
+        void kernel.conversations.submitInput(1, 'prompt triggering approval').catch(() => {})
+        await waitFor(() => kernel.conversations.getConversation(1).status === 'working')
         // Create pending Ask while tool is in flight: setPendingAskCount emits blocked.
-        const askPromise = kernel.createAsk({
+        const askPromise = kernel.asks.createAsk({
           conversationId: 1,
           title: 'test approval',
           fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
         })
         void askPromise.catch(() => {})
-        await waitFor(() => kernel.getConversation(1).status === 'blocked')
+        await waitFor(() => kernel.conversations.getConversation(1).status === 'blocked')
         // Tool keeps running (sleep 3s): snapshots keep arriving; blocked must not regress back to working.
         await new Promise((r) => setTimeout(r, 800))
         assert.equal(
-          kernel.getConversation(1).status,
+          kernel.conversations.getConversation(1).status,
           'blocked',
           'subsequent snapshots while pendingAsk is open must not regress status back to working',
         )
@@ -337,10 +337,10 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
           `must not regress back to working after blocked: ${JSON.stringify(recorded.frames)}`,
         )
         // Clean up: answer Ask and abort in-flight run.
-        const pending = kernel.listAsks('pending')
-        if (pending.length > 0) await kernel.answerAsk(pending[0]!.id, { confirm: 'true' }).catch(() => {})
-        await kernel.abortConversation(1).catch(() => {})
-        await kernel.waitForIdle(1).catch(() => {})
+        const pending = kernel.asks.listAsks('pending')
+        if (pending.length > 0) await kernel.asks.answerAsk(pending[0]!.id, { confirm: 'true' }).catch(() => {})
+        await kernel.conversations.abortConversation(1).catch(() => {})
+        await kernel.conversations.waitForIdle(1).catch(() => {})
       } finally {
         recorded.stop()
       }
@@ -359,92 +359,92 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
         if (conv?.id === 1) upserts.push(conv)
       })
       try {
-        assert.equal(kernel.getConversation(1).pendingAskSince, undefined)
+        assert.equal(kernel.conversations.getConversation(1).pendingAskSince, undefined)
 
-        const ask1P = kernel.createAsk({
+        const ask1P = kernel.asks.createAsk({
           id: 'ask-first',
           conversationId: 1,
           title: 'first approval',
           fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
         })
         void ask1P.catch(() => {})
-        await waitFor(() => kernel.getConversation(1).pendingAskCount === 1)
-        const ask1 = kernel.listAsks('pending').find((a) => a.id === 'ask-first')!
-        assert.equal(kernel.getConversation(1).status, 'blocked')
-        assert.equal(kernel.getConversation(1).pendingAskSince, ask1.createdAt)
+        await waitFor(() => kernel.conversations.getConversation(1).pendingAskCount === 1)
+        const ask1 = kernel.asks.listAsks('pending').find((a) => a.id === 'ask-first')!
+        assert.equal(kernel.conversations.getConversation(1).status, 'blocked')
+        assert.equal(kernel.conversations.getConversation(1).pendingAskSince, ask1.createdAt)
 
         // Ensure second ask has a strictly later createdAt timestamp.
         await new Promise((r) => setTimeout(r, 15))
-        const ask2P = kernel.createAsk({
+        const ask2P = kernel.asks.createAsk({
           id: 'ask-second',
           conversationId: 1,
           title: 'second approval',
           fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
         })
         void ask2P.catch(() => {})
-        await waitFor(() => kernel.getConversation(1).pendingAskCount === 2)
-        const ask2 = kernel.listAsks('pending').find((a) => a.id === 'ask-second')!
+        await waitFor(() => kernel.conversations.getConversation(1).pendingAskCount === 2)
+        const ask2 = kernel.asks.listAsks('pending').find((a) => a.id === 'ask-second')!
         assert.ok(ask2.createdAt > ask1.createdAt)
         assert.equal(
-          kernel.getConversation(1).pendingAskSince,
+          kernel.conversations.getConversation(1).pendingAskSince,
           ask1.createdAt,
           'pendingAskSince must keep earliest pending ask timestamp when newer asks arrive',
         )
 
         // Settling the earliest ask must advance pendingAskSince to ask2.createdAt and push an upsert.
-        await kernel.answerAsk('ask-first', { confirm: 'true' })
-        await waitFor(() => kernel.getConversation(1).pendingAskCount === 1)
-        assert.equal(kernel.getConversation(1).pendingAskSince, ask2.createdAt)
+        await kernel.asks.answerAsk('ask-first', { confirm: 'true' })
+        await waitFor(() => kernel.conversations.getConversation(1).pendingAskCount === 1)
+        assert.equal(kernel.conversations.getConversation(1).pendingAskSince, ask2.createdAt)
         assert.ok(
           upserts.some((u) => u.pendingAskCount === 1 && u.pendingAskSince === ask2.createdAt),
           'conversation.upsert must carry updated pendingAskSince when earliest ask settles',
         )
 
         // Settling the last pending ask clears pendingAskSince.
-        await kernel.answerAsk('ask-second', { confirm: 'true' })
-        await waitFor(() => kernel.getConversation(1).pendingAskCount === 0)
-        assert.equal(kernel.getConversation(1).pendingAskSince, undefined)
+        await kernel.asks.answerAsk('ask-second', { confirm: 'true' })
+        await waitFor(() => kernel.conversations.getConversation(1).pendingAskCount === 0)
+        assert.equal(kernel.conversations.getConversation(1).pendingAskSince, undefined)
         const finalUpsert = upserts[upserts.length - 1]!
         assert.equal(finalUpsert.pendingAskCount, 0)
         assert.equal(finalUpsert.pendingAskSince, undefined)
 
         // Concurrent settle + create: even when pendingAskCount stays 1 across an interleaved flush window,
         // pendingAskSince must advance to the newly created ask and emit a conversation.upsert.
-        const ask3P = kernel.createAsk({
+        const ask3P = kernel.asks.createAsk({
           id: 'ask-swap-old',
           conversationId: 1,
           title: 'old approval',
           fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
         })
         void ask3P.catch(() => {})
-        await waitFor(() => kernel.getConversation(1).pendingAskCount === 1)
-        const askOld = kernel.listAsks('pending').find((a) => a.id === 'ask-swap-old')!
-        assert.equal(kernel.getConversation(1).pendingAskSince, askOld.createdAt)
+        await waitFor(() => kernel.conversations.getConversation(1).pendingAskCount === 1)
+        const askOld = kernel.asks.listAsks('pending').find((a) => a.id === 'ask-swap-old')!
+        assert.equal(kernel.conversations.getConversation(1).pendingAskSince, askOld.createdAt)
         const upsertsBeforeSwap = upserts.length
-        const seqBeforeSwap = kernel.getConversation(1).stateChangeSeq
+        const seqBeforeSwap = kernel.conversations.getConversation(1).stateChangeSeq
 
         await new Promise((r) => setTimeout(r, 15))
         // Fire answerAsk(old) and createAsk(new) concurrently in the same tick.
-        const askNewP = kernel.createAsk({
+        const askNewP = kernel.asks.createAsk({
           id: 'ask-swap-new',
           conversationId: 1,
           title: 'new approval',
           fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
         })
         void askNewP.catch(() => {})
-        await kernel.answerAsk('ask-swap-old', { confirm: 'true' })
-        await waitFor(() => kernel.listAsks('pending').some((a) => a.id === 'ask-swap-new'))
-        const askNew = kernel.listAsks('pending').find((a) => a.id === 'ask-swap-new')!
+        await kernel.asks.answerAsk('ask-swap-old', { confirm: 'true' })
+        await waitFor(() => kernel.asks.listAsks('pending').some((a) => a.id === 'ask-swap-new'))
+        const askNew = kernel.asks.listAsks('pending').find((a) => a.id === 'ask-swap-new')!
         assert.ok(askNew.createdAt > askOld.createdAt)
         await waitFor(() =>
           upserts.slice(upsertsBeforeSwap).some((u) => u.pendingAskCount === 1 && u.pendingAskSince === askNew.createdAt),
         )
-        assert.equal(kernel.getConversation(1).pendingAskCount, 1)
-        assert.equal(kernel.getConversation(1).pendingAskSince, askNew.createdAt)
-        assert.ok(kernel.getConversation(1).stateChangeSeq > seqBeforeSwap)
+        assert.equal(kernel.conversations.getConversation(1).pendingAskCount, 1)
+        assert.equal(kernel.conversations.getConversation(1).pendingAskSince, askNew.createdAt)
+        assert.ok(kernel.conversations.getConversation(1).stateChangeSeq > seqBeforeSwap)
 
-        await kernel.answerAsk('ask-swap-new', { confirm: 'true' })
-        await waitFor(() => kernel.getConversation(1).pendingAskCount === 0)
+        await kernel.asks.answerAsk('ask-swap-new', { confirm: 'true' })
+        await waitFor(() => kernel.conversations.getConversation(1).pendingAskCount === 0)
       } finally {
         stop()
       }

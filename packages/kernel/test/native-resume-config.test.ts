@@ -119,7 +119,7 @@ describe('resume config baseline: original conversation cwd', { timeout: 60_000 
       // Initial call: explicit non-Hub cwd; sub-conversation replies with plain text.
       env.faux.setResponses([record(env, fauxAssistantMessage('phase one complete'))])
       let childId = 0
-      const first = await env.kernel.spawnAgent({
+      const first = await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'phase one',
         cwd: childDir,
@@ -129,12 +129,12 @@ describe('resume config baseline: original conversation cwd', { timeout: 60_000 
       })
       assert.equal(first, 'phase one complete')
       assert.ok(childId > 0, 'should spawn sub-conversation')
-      assert.equal(env.kernel.getConversation(childId).cwd, childDir, 'initial spawn mirror cwd')
+      assert.equal(env.kernel.conversations.getConversation(childId).cwd, childDir, 'initial spawn mirror cwd')
 
       // Resume omitting cwd -- onResolved and Gate must remain at the original conversation cwd.
       const resolved: string[] = []
       env.faux.setResponses([record(env, pwdToolCall()), record(env, fauxAssistantMessage('resume complete'))])
-      const second = await env.kernel.spawnAgent({
+      const second = await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'resume (verify via bash pwd)',
         resume: String(childId),
@@ -148,7 +148,7 @@ describe('resume config baseline: original conversation cwd', { timeout: 60_000 
       assert.equal(resolved[0], childDir, `onResolved effectiveCwd should be ${childDir}, got ${resolved[0]}`)
       // Gate executes inside the original conversation cwd (buggy pwd != childDir would throw gate_failed).
       // Actual SDK cwd: inspect bash pwd output inside sub-conversation (bash tool uses agent.cwd).
-      const detail = await env.kernel.getConversationDetail(childId, { limit: 50 })
+      const detail = await env.kernel.conversations.getConversationDetail(childId, { limit: 50 })
       const bashEntry = [...detail.entries]
         .reverse()
         .find((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('bash'))
@@ -159,7 +159,7 @@ describe('resume config baseline: original conversation cwd', { timeout: 60_000 
         `bash pwd must output original conversation cwd: ${bashText.slice(0, 300)}`,
       )
       // Mirror cwd remains unchanged.
-      assert.equal(env.kernel.getConversation(childId).cwd, childDir)
+      assert.equal(env.kernel.conversations.getConversation(childId).cwd, childDir)
     } finally {
       await env.close()
     }
@@ -175,7 +175,7 @@ describe('resume config baseline: original conversation cwd', { timeout: 60_000 
       // Initial call: research Profile (model faux-2), explicit cwd.
       env.faux.setResponses([record(env, fauxAssistantMessage('research initial spawn'))])
       let childId = 0
-      await env.kernel.spawnAgent({
+      await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'research initial spawn',
         agentType: 'research',
@@ -184,7 +184,7 @@ describe('resume config baseline: original conversation cwd', { timeout: 60_000 
           childId = info.conversationId ?? 0
         },
       })
-      const firstSummary = env.kernel.getConversation(childId)
+      const firstSummary = env.kernel.conversations.getConversation(childId)
       assert.equal(firstSummary.profileId, 'research')
       assert.equal(firstSummary.model, 'faux/faux-2', 'inherits Profile model')
       assert.equal(env.requests[0]!.modelId, 'faux-2', 'initial request uses faux-2')
@@ -193,7 +193,7 @@ describe('resume config baseline: original conversation cwd', { timeout: 60_000 
       // (buggy version resolved via default assistant) without resetting cwd to Hub dir.
       const resolved: string[] = []
       env.faux.setResponses([record(env, fauxAssistantMessage('research resume'))])
-      await env.kernel.spawnAgent({
+      await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'research resume',
         resume: String(childId),
@@ -201,7 +201,7 @@ describe('resume config baseline: original conversation cwd', { timeout: 60_000 
           resolved.push(info.effectiveCwd ?? '')
         },
       })
-      const after = env.kernel.getConversation(childId)
+      const after = env.kernel.conversations.getConversation(childId)
       assert.equal(after.profileId, 'research', 'resume default must not silently revert to assistant')
       assert.equal(after.model, 'faux/faux-2', 'resume default retains effective model of original conversation')
       assert.equal(env.requests[1]!.modelId, 'faux-2', 'resumed SDK request still uses faux-2')
@@ -230,7 +230,7 @@ describe('resume explicit configuration changes', { timeout: 60_000 }, () => {
     try {
       // Initial call: default assistant (faux-1), explicit firstDir. Factory records initial request.
       env.faux.setResponses([record(env, fauxAssistantMessage('initial spawn'))])
-      await env.kernel.spawnAgent({
+      await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'initial spawn',
         cwd: firstDir,
@@ -240,7 +240,7 @@ describe('resume explicit configuration changes', { timeout: 60_000 }, () => {
       })
       assert.equal(env.requests[0]!.modelId, 'faux-1')
       identityBefore = (({ title, tags, createdAt, parentConversationId }) => ({ title, tags, createdAt, parentConversationId }))(
-        env.kernel.getConversation(childId),
+        env.kernel.conversations.getConversation(childId),
       )
 
       // Resume with explicit cwd/model/effort -- all three must genuinely take effect.
@@ -248,7 +248,7 @@ describe('resume explicit configuration changes', { timeout: 60_000 }, () => {
         record(env, pwdToolCall()),
         record(env, fauxAssistantMessage('resume complete')),
       ])
-      const second = await env.kernel.spawnAgent({
+      const second = await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'resume (explicit config)',
         resume: String(childId),
@@ -262,7 +262,7 @@ describe('resume explicit configuration changes', { timeout: 60_000 }, () => {
       assert.equal(env.requests[1]!.reasoning, 'high', 'explicit resume effort must reach SDK request')
       assert.equal(env.requests[2]!.modelId, 'faux-2')
       // Real SDK cwd switched to movedDir (verified via bash pwd).
-      const detail = await env.kernel.getConversationDetail(childId, { limit: 50 })
+      const detail = await env.kernel.conversations.getConversationDetail(childId, { limit: 50 })
       const bashEntry = [...detail.entries]
         .reverse()
         .find((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('bash'))
@@ -272,7 +272,7 @@ describe('resume explicit configuration changes', { timeout: 60_000 }, () => {
         `bash pwd must output new cwd: ${JSON.stringify(bashEntry.model ?? '').slice(0, 300)}`,
       )
       // Mirror: cwd/model updated while identity fields preserved.
-      const after = env.kernel.getConversation(childId)
+      const after = env.kernel.conversations.getConversation(childId)
       assert.equal(after.cwd, movedDir)
       assert.equal(after.model, 'faux/faux-2')
       assert.equal(after.title, identityBefore!.title, 'title preserved')
@@ -286,18 +286,18 @@ describe('resume explicit configuration changes', { timeout: 60_000 }, () => {
     // Restart consistency: reopening same dataDir keeps mirror and SDK cwd aligned (SDK config persisted).
     const env2 = await openEnv(dir)
     try {
-      const after = env2.kernel.getConversation(childId)
+      const after = env2.kernel.conversations.getConversation(childId)
       assert.equal(after.cwd, movedDir, 'mirror cwd persists across restart')
       assert.equal(after.model, 'faux/faux-2', 'mirror model persists across restart')
       assert.equal(after.profileId, 'assistant')
       // SDK persistence check: resuming after restart still outputs movedDir from bash pwd.
       env2.faux.setResponses([record(env2, pwdToolCall()), record(env2, fauxAssistantMessage('post-restart resume'))])
-      await env2.kernel.spawnAgent({
+      await env2.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'post-restart resume',
         resume: String(childId),
       })
-      const detail = await env2.kernel.getConversationDetail(childId, { limit: 50 })
+      const detail = await env2.kernel.conversations.getConversationDetail(childId, { limit: 50 })
       const bashEntry = [...detail.entries]
         .reverse()
         .find((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('bash'))
@@ -325,7 +325,7 @@ describe('cross-parent guard', { timeout: 60_000 }, () => {
     try {
       env.faux.setResponses([fauxAssistantMessage('initial spawn')])
       let childId = 0
-      await env.kernel.spawnAgent({
+      await env.kernel.agentSpawn.spawnAgent({
         parentConversationId: 1,
         prompt: 'initial spawn',
         cwd: childDir,
@@ -333,12 +333,12 @@ describe('cross-parent guard', { timeout: 60_000 }, () => {
           childId = info.conversationId ?? 0
         },
       })
-      const before = env.kernel.getConversation(childId)
+      const before = env.kernel.conversations.getConversation(childId)
       const callsBefore = env.faux.state.callCount
 
       await assert.rejects(
         () =>
-          env.kernel.spawnAgent({
+          env.kernel.agentSpawn.spawnAgent({
             parentConversationId: 999,
             prompt: 'hijack',
             resume: String(childId),
@@ -347,7 +347,7 @@ describe('cross-parent guard', { timeout: 60_000 }, () => {
           }),
         (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
       )
-      const after = env.kernel.getConversation(childId)
+      const after = env.kernel.conversations.getConversation(childId)
       assert.equal(after.cwd, childDir, 'rejected path must not overwrite cwd')
       assert.equal(after.model, before.model, 'rejected path must not overwrite model')
       assert.equal(after.profileId, before.profileId)

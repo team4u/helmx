@@ -109,7 +109,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
           }
           return result
         }
-        const coord = await app.kernel.createConversation({
+        const coord = await app.kernel.conversations.createConversation({
           title: 'Replay Dispatch Coord',
           profileId: 'assistant',
           cwd: ${JSON.stringify(repoDirA)},
@@ -120,7 +120,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
           conversationId: coord.id,
         })) as { groupId: string }
         writeSync(1, 'GROUP_INFO=' + JSON.stringify({ coordId: coord.id, groupId }) + '\\n')
-        await app.kernel.submitInput(coord.id, 'Dispatch coder worker.')
+        await app.kernel.conversations.submitInput(coord.id, 'Dispatch coder worker.')
         await new Promise(() => {})
       `.replace('SWARM_PLUGIN_ID_LITERAL', JSON.stringify(SWARM_PLUGIN_ID))
 
@@ -155,15 +155,15 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         try {
           await waitFor(
             () =>
-              isSettledStatus(appA.kernel.getConversation(infoA.coordId).status) &&
-              appA.kernel.getConversation(infoA.coordId).completionSeq >= 2 &&
+              isSettledStatus(appA.kernel.conversations.getConversation(infoA.coordId).status) &&
+              appA.kernel.conversations.getConversation(infoA.coordId).completionSeq >= 2 &&
               appA.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0,
             { timeoutMs: 8_000 },
           )
         } catch (err) {
-          const cSummary = appA.kernel.getConversation(infoA.coordId)
-          const cDetail = await appA.kernel.getConversationDetail(infoA.coordId, { limit: 20 })
-          const convs = appA.kernel.listConversations()
+          const cSummary = appA.kernel.conversations.getConversation(infoA.coordId)
+          const cDetail = await appA.kernel.conversations.getConversationDetail(infoA.coordId, { limit: 20 })
+          const convs = appA.kernel.conversations.listConversations()
           throw new Error(
             `${(err as Error).message}\ncoord=${JSON.stringify(cSummary)}\nconvs=${JSON.stringify(convs)}\ncEntries=${JSON.stringify(cDetail.entries)}`,
           )
@@ -173,9 +173,9 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         ) as CollabGroupRecord
         assert.equal(metaA.members.length, 1, 'replaying swarm_dispatch_worker must not duplicate members')
         const coderA = metaA.members[0]!
-        await appA.kernel.waitForIdle(coderA.conversationId)
+        await appA.kernel.conversations.waitForIdle(coderA.conversationId)
         await waitFor(() => appA.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-        await appA.kernel.waitForIdle(infoA.coordId)
+        await appA.kernel.conversations.waitForIdle(infoA.coordId)
 
         const wtList = (await appA.kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as {
           worktrees: Array<{ status: string }>
@@ -185,7 +185,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
           1,
           'replaying swarm_dispatch_worker must reuse the single acquired worktree',
         )
-        const coordDetailA = await appA.kernel.getConversationDetail(infoA.coordId, { limit: 50 })
+        const coordDetailA = await appA.kernel.conversations.getConversationDetail(infoA.coordId, { limit: 50 })
         const dispatchErrors = coordDetailA.entries.filter(
           (e) =>
             e.kind === 'pi.toolResult' &&
@@ -193,7 +193,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
             (e.data as { isError?: boolean } | undefined)?.isError === true,
         )
         assert.equal(dispatchErrors.length, 0, 'replay of swarm_dispatch_worker must not raise 409 conflict')
-        const workerDetailA = await appA.kernel.getConversationDetail(coderA.conversationId, { limit: 50 })
+        const workerDetailA = await appA.kernel.conversations.getConversationDetail(coderA.conversationId, { limit: 50 })
         assert.equal(workerDetailA.entries.filter((e) => e.kind === 'helmx.input').length, 1)
       } finally {
         await appA.close()
@@ -235,7 +235,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
           }
           return result
         }
-        const coord = await app.kernel.createConversation({
+        const coord = await app.kernel.conversations.createConversation({
           title: 'Post Replay Coord',
           profileId: 'assistant',
           cwd: ${JSON.stringify(repoDirB)},
@@ -277,10 +277,10 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       try {
         await waitFor(
           () =>
-            isSettledStatus(appB.kernel.getConversation(infoB.workerId).status) &&
-            isSettledStatus(appB.kernel.getConversation(infoB.coordId).status) &&
-            appB.kernel.getConversation(infoB.workerId).completionSeq >= 1 &&
-            appB.kernel.getConversation(infoB.coordId).completionSeq >= 1 &&
+            isSettledStatus(appB.kernel.conversations.getConversation(infoB.workerId).status) &&
+            isSettledStatus(appB.kernel.conversations.getConversation(infoB.coordId).status) &&
+            appB.kernel.conversations.getConversation(infoB.workerId).completionSeq >= 1 &&
+            appB.kernel.conversations.getConversation(infoB.coordId).completionSeq >= 1 &&
             appB.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0,
           { timeoutMs: 8_000 },
         )
@@ -289,7 +289,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         }
         const donePosts = readB.posts.filter((p) => p.kind === 'done' && p.from === 'coder')
         assert.equal(donePosts.length, 1, `replaying swarm_board_post must keep exactly 1 done post, got ${donePosts.length}`)
-        const coordDetailB = await appB.kernel.getConversationDetail(infoB.coordId, { limit: 50 })
+        const coordDetailB = await appB.kernel.conversations.getConversationDetail(infoB.coordId, { limit: 50 })
         const reportsB = coordDetailB.entries.filter(
           (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
         )
@@ -320,7 +320,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
     let committedHeadSeq = 0
 
     try {
-      const coord = await env1.app.kernel.createConversation({ title: 'Clean Coord', profileId: 'assistant', cwd: env1.repoDir })
+      const coord = await env1.app.kernel.conversations.createConversation({ title: 'Clean Coord', profileId: 'assistant', cwd: env1.repoDir })
       coordId = coord.id
       const created = (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'WAL & Orphan Squad',
@@ -346,19 +346,19 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       )) as { workerConversationId: number }
       coderId = dispatched.workerConversationId
 
-      await env1.app.kernel.waitForIdle(coderId)
+      await env1.app.kernel.conversations.waitForIdle(coderId)
       await waitFor(() => env1.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await env1.app.kernel.waitForIdle(coordId)
+      await env1.app.kernel.conversations.waitForIdle(coordId)
 
       // Archive coder, then re-apply stale WORKER_TAG to simulate crash between meta.json commit and tag swap.
       await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'archive_worker', {
         groupId,
         name: 'coder',
       })
-      await env1.app.kernel.updateConversation(coderId, { tags: [WORKER_TAG] })
+      await env1.app.kernel.conversations.updateConversation(coderId, { tags: [WORKER_TAG] })
 
       // Orphan coordinator clone & orphan worker carrying stale live tags outside meta.json.
-      const orphanCoord = await env1.app.kernel.createConversation({
+      const orphanCoord = await env1.app.kernel.conversations.createConversation({
         title: 'Forked Orphan Coord',
         profileId: 'assistant',
         cwd: env1.repoDir,
@@ -366,7 +366,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       })
       orphanCoordId = orphanCoord.id
 
-      const orphanWorker = await env1.app.kernel.createConversation({
+      const orphanWorker = await env1.app.kernel.conversations.createConversation({
         title: 'Orphan Worker',
         profileId: 'assistant',
         cwd: env1.repoDir,
@@ -375,7 +375,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       orphanWorkerId = orphanWorker.id
 
       // Orphan builtin:swarm worktree hold + foreign builtin:workflow worktree hold.
-      const wtSwarmConv = await env1.app.kernel.createConversation({
+      const wtSwarmConv = await env1.app.kernel.conversations.createConversation({
         title: 'Swarm Orphan WT Holder',
         profileId: 'assistant',
         cwd: env1.repoDir,
@@ -394,7 +394,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       )) as { worktreeId: string }
       swarmOrphanWtId = swarmWt.worktreeId
 
-      const wtWorkflowConv = await env1.app.kernel.createConversation({
+      const wtWorkflowConv = await env1.app.kernel.conversations.createConversation({
         title: 'Foreign Workflow WT Holder',
         profileId: 'assistant',
         cwd: env1.repoDir,
@@ -415,7 +415,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       const created2 = (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Partial Tail Squad',
         conversationId: (
-          await env1.app.kernel.createConversation({ title: 'Partial Tail Coord', profileId: 'assistant', cwd: env1.repoDir })
+          await env1.app.kernel.conversations.createConversation({ title: 'Partial Tail Coord', profileId: 'assistant', cwd: env1.repoDir })
         ).id,
       })) as { groupId: string }
       group2Id = created2.groupId
@@ -473,11 +473,11 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       assert.equal(readFileSync(boardPath2, 'utf8'), '')
 
       // 2) Tags converged strictly against meta.json.
-      assert.equal(app2.kernel.getConversation(coordId).tags.includes(COORDINATOR_TAG), true)
-      assert.equal(app2.kernel.getConversation(orphanCoordId).tags.includes(COORDINATOR_TAG), false)
-      assert.equal(app2.kernel.getConversation(coderId).tags.includes(WORKER_TAG), false)
-      assert.equal(app2.kernel.getConversation(coderId).tags.includes(ARCHIVED_WORKER_TAG), true)
-      assert.equal(app2.kernel.getConversation(orphanWorkerId).tags.includes(WORKER_TAG), false)
+      assert.equal(app2.kernel.conversations.getConversation(coordId).tags.includes(COORDINATOR_TAG), true)
+      assert.equal(app2.kernel.conversations.getConversation(orphanCoordId).tags.includes(COORDINATOR_TAG), false)
+      assert.equal(app2.kernel.conversations.getConversation(coderId).tags.includes(WORKER_TAG), false)
+      assert.equal(app2.kernel.conversations.getConversation(coderId).tags.includes(ARCHIVED_WORKER_TAG), true)
+      assert.equal(app2.kernel.conversations.getConversation(orphanWorkerId).tags.includes(WORKER_TAG), false)
 
       // 3) Orphaned builtin:swarm worktree hold was released and removed; builtin:workflow hold remained intact.
       const swarmWtInspect = (await app2.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
@@ -509,7 +509,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
     let workerCId = 0
 
     try {
-      const coord = await env1.app.kernel.createConversation({ title: 'Reconcile Coord', profileId: 'assistant', cwd: env1.repoDir })
+      const coord = await env1.app.kernel.conversations.createConversation({ title: 'Reconcile Coord', profileId: 'assistant', cwd: env1.repoDir })
       coordId = coord.id
       const created = (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Missed Settlement Squad',
@@ -517,7 +517,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       })) as { groupId: string }
       groupId = created.groupId
 
-      const convA = await env1.app.kernel.createConversation({
+      const convA = await env1.app.kernel.conversations.createConversation({
         title: 'Worker A',
         profileId: 'assistant',
         cwd: env1.repoDir,
@@ -525,7 +525,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       })
       workerAId = convA.id
 
-      const convB = await env1.app.kernel.createConversation({
+      const convB = await env1.app.kernel.conversations.createConversation({
         title: 'Worker B',
         profileId: 'assistant',
         cwd: env1.repoDir,
@@ -533,7 +533,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       })
       workerBId = convB.id
 
-      const convC = await env1.app.kernel.createConversation({
+      const convC = await env1.app.kernel.conversations.createConversation({
         title: 'Worker C',
         profileId: 'assistant',
         cwd: env1.repoDir,
@@ -547,17 +547,17 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         fauxAssistantMessage('Silent exit response without calling swarm_board_post.'),
         fauxAssistantMessage('Partial failure output.', { stopReason: 'error', errorMessage: 'simulated model crash' }),
       ])
-      await env1.app.kernel.submitInput(workerBId, '[swarm_worker_brief] Finish task B.', {
+      await env1.app.kernel.conversations.submitInput(workerBId, '[swarm_worker_brief] Finish task B.', {
         origin: 'agent',
         requestId: `swarm-wakeup:${groupId}:workerB:1-2`,
       })
-      await env1.app.kernel.waitForIdle(workerBId)
+      await env1.app.kernel.conversations.waitForIdle(workerBId)
 
-      await env1.app.kernel.submitInput(workerCId, '[swarm_worker_brief] Finish task C.', {
+      await env1.app.kernel.conversations.submitInput(workerCId, '[swarm_worker_brief] Finish task C.', {
         origin: 'agent',
         requestId: `swarm-wakeup:${groupId}:workerC:1-3`,
       })
-      await waitFor(() => env1.app.kernel.getConversation(workerCId).status !== 'working')
+      await waitFor(() => env1.app.kernel.conversations.getConversation(workerCId).status !== 'working')
     } finally {
       await env1.close()
     }
@@ -697,29 +697,29 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       try {
         await waitFor(
           () =>
-            isSettledStatus(app2.kernel.getConversation(workerAId).status) &&
-            app2.kernel.getConversation(workerAId).completionSeq >= 1 &&
-            isSettledStatus(app2.kernel.getConversation(workerBId).status) &&
-            app2.kernel.getConversation(workerBId).completionSeq >= 2 &&
-            isSettledStatus(app2.kernel.getConversation(coordId).status) &&
-            app2.kernel.getConversation(coordId).completionSeq >= 1 &&
+            isSettledStatus(app2.kernel.conversations.getConversation(workerAId).status) &&
+            app2.kernel.conversations.getConversation(workerAId).completionSeq >= 1 &&
+            isSettledStatus(app2.kernel.conversations.getConversation(workerBId).status) &&
+            app2.kernel.conversations.getConversation(workerBId).completionSeq >= 2 &&
+            isSettledStatus(app2.kernel.conversations.getConversation(coordId).status) &&
+            app2.kernel.conversations.getConversation(coordId).completionSeq >= 1 &&
             app2.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0,
           { timeoutMs: 8_000 },
         )
       } catch (err) {
-        const a = app2.kernel.getConversation(workerAId)
-        const b = app2.kernel.getConversation(workerBId)
-        const c = app2.kernel.getConversation(workerCId)
-        const cr = app2.kernel.getConversation(coordId)
-        const dB = await app2.kernel.getConversationDetail(workerBId, { limit: 20 })
-        const dCoord = await app2.kernel.getConversationDetail(coordId, { limit: 20 })
+        const a = app2.kernel.conversations.getConversation(workerAId)
+        const b = app2.kernel.conversations.getConversation(workerBId)
+        const c = app2.kernel.conversations.getConversation(workerCId)
+        const cr = app2.kernel.conversations.getConversation(coordId)
+        const dB = await app2.kernel.conversations.getConversationDetail(workerBId, { limit: 20 })
+        const dCoord = await app2.kernel.conversations.getConversationDetail(coordId, { limit: 20 })
         throw new Error(
           `${(err as Error).message}\nworkerA=${JSON.stringify(a)}\nworkerB=${JSON.stringify(b)}\nworkerC=${JSON.stringify(c)}\ncoord=${JSON.stringify(cr)}\nbEntries=${JSON.stringify(dB.entries)}\ncoordEntries=${JSON.stringify(dCoord.entries)}`,
         )
       }
-      await app2.kernel.waitForIdle(workerAId)
-      await app2.kernel.waitForIdle(workerBId)
-      await app2.kernel.waitForIdle(coordId)
+      await app2.kernel.conversations.waitForIdle(workerAId)
+      await app2.kernel.conversations.waitForIdle(workerBId)
+      await app2.kernel.conversations.waitForIdle(coordId)
 
       const read = (await app2.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as {
         posts: BoardPost[]
@@ -730,20 +730,20 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       assert.ok(blockerC !== undefined, `expected auto system blocker for errored workerC, got ${JSON.stringify(read.posts)}`)
       assert.match(blockerC.body, /workerC/)
 
-      const detailB = await app2.kernel.getConversationDetail(workerBId, { limit: 50 })
+      const detailB = await app2.kernel.conversations.getConversationDetail(workerBId, { limit: 50 })
       const nudgesB = detailB.entries.filter(
         (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_silent_exit_nudge'),
       )
       assert.equal(nudgesB.length, 1, `expected 1 silent-exit nudge for workerB, got ${nudgesB.length}`)
 
-      const detailC = await app2.kernel.getConversationDetail(workerCId, { limit: 50 })
+      const detailC = await app2.kernel.conversations.getConversationDetail(workerCId, { limit: 50 })
       assert.equal(
         detailC.entries.some((e) => JSON.stringify(e.data ?? '').includes('swarm_silent_exit_nudge')),
         false,
         'errored workerC must receive auto blocker rather than silent-exit nudge',
       )
 
-      const coordDetail = await app2.kernel.getConversationDetail(coordId, { limit: 50 })
+      const coordDetail = await app2.kernel.conversations.getConversationDetail(coordId, { limit: 50 })
       const coordReportText = JSON.stringify(
         coordDetail.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report')),
       )
@@ -792,16 +792,16 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
           })
         },
       ] as never)
-      await env1.app.kernel.submitInput(convId, promptText, { origin: 'agent', requestId })
+      await env1.app.kernel.conversations.submitInput(convId, promptText, { origin: 'agent', requestId })
       await started.promise
-      await env1.app.kernel.abortConversation(convId)
-      await env1.app.kernel.waitForIdle(convId)
-      const sub = await env1.app.kernel.getConversationSubmission(convId, requestId)
+      await env1.app.kernel.conversations.abortConversation(convId)
+      await env1.app.kernel.conversations.waitForIdle(convId)
+      const sub = await env1.app.kernel.conversations.getConversationSubmission(convId, requestId)
       assert.equal(sub?.status, 'unanswered', `expected real SQLite pi_submissions status='unanswered' for ${requestId}`)
     }
 
     try {
-      const coord = await env1.app.kernel.createConversation({ title: 'Unanswered Coord', profileId: 'assistant', cwd: env1.repoDir })
+      const coord = await env1.app.kernel.conversations.createConversation({ title: 'Unanswered Coord', profileId: 'assistant', cwd: env1.repoDir })
       coordId = coord.id
       const created = (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Unanswered Recovery Squad',
@@ -809,14 +809,14 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       })) as { groupId: string }
       groupId = created.groupId
 
-      const convA = await env1.app.kernel.createConversation({
+      const convA = await env1.app.kernel.conversations.createConversation({
         title: 'Worker A',
         profileId: 'assistant',
         cwd: env1.repoDir,
         tags: [WORKER_TAG],
       })
       workerAId = convA.id
-      const convB = await env1.app.kernel.createConversation({
+      const convB = await env1.app.kernel.conversations.createConversation({
         title: 'Worker B',
         profileId: 'assistant',
         cwd: env1.repoDir,
@@ -824,7 +824,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       })
       workerBId = convB.id
 
-      const soloRetryCoord = await env1.app.kernel.createConversation({ title: 'Solo Retry Coord', profileId: 'assistant', cwd: env1.repoDir })
+      const soloRetryCoord = await env1.app.kernel.conversations.createConversation({ title: 'Solo Retry Coord', profileId: 'assistant', cwd: env1.repoDir })
       soloRetryCoordId = soloRetryCoord.id
       soloRetryGroupId = (
         (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
@@ -833,7 +833,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         })) as { groupId: string }
       ).groupId
 
-      const soloExhaustCoord = await env1.app.kernel.createConversation({ title: 'Solo Exhaust Coord', profileId: 'assistant', cwd: env1.repoDir })
+      const soloExhaustCoord = await env1.app.kernel.conversations.createConversation({ title: 'Solo Exhaust Coord', profileId: 'assistant', cwd: env1.repoDir })
       soloExhaustCoordId = soloExhaustCoord.id
       soloExhaustGroupId = (
         (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
@@ -853,11 +853,11 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       await seedUnansweredSubmission(workerBId, `swarm-wakeup:${groupId}:workerB:3-3:r1`, 'Aborted workerB retry wakeup #3')
       await seedUnansweredSubmission(soloRetryCoordId, `swarm-report:${soloRetryGroupId}:1-1`, 'Aborted solo report #1')
       await seedUnansweredSubmission(soloExhaustCoordId, `swarm-report:${soloExhaustGroupId}:1-1:r1`, 'Aborted solo retry report #1')
-      coordCompletionBefore = env1.app.kernel.getConversation(coordId).completionSeq
-      workerACompletionBefore = env1.app.kernel.getConversation(workerAId).completionSeq
-      workerBCompletionBefore = env1.app.kernel.getConversation(workerBId).completionSeq
-      soloRetryCompletionBefore = env1.app.kernel.getConversation(soloRetryCoordId).completionSeq
-      soloExhaustCompletionBefore = env1.app.kernel.getConversation(soloExhaustCoordId).completionSeq
+      coordCompletionBefore = env1.app.kernel.conversations.getConversation(coordId).completionSeq
+      workerACompletionBefore = env1.app.kernel.conversations.getConversation(workerAId).completionSeq
+      workerBCompletionBefore = env1.app.kernel.conversations.getConversation(workerBId).completionSeq
+      soloRetryCompletionBefore = env1.app.kernel.conversations.getConversation(soloRetryCoordId).completionSeq
+      soloExhaustCompletionBefore = env1.app.kernel.conversations.getConversation(soloExhaustCoordId).completionSeq
     } finally {
       await env1.close()
     }
@@ -1037,26 +1037,26 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       await app2.kernel.start()
       await waitFor(
         () =>
-          isSettledStatus(app2.kernel.getConversation(workerAId).status) &&
-          app2.kernel.getConversation(workerAId).completionSeq > workerACompletionBefore &&
-          isSettledStatus(app2.kernel.getConversation(coordId).status) &&
-          app2.kernel.getConversation(coordId).completionSeq > coordCompletionBefore &&
-          isSettledStatus(app2.kernel.getConversation(soloRetryCoordId).status) &&
-          app2.kernel.getConversation(soloRetryCoordId).completionSeq > soloRetryCompletionBefore &&
+          isSettledStatus(app2.kernel.conversations.getConversation(workerAId).status) &&
+          app2.kernel.conversations.getConversation(workerAId).completionSeq > workerACompletionBefore &&
+          isSettledStatus(app2.kernel.conversations.getConversation(coordId).status) &&
+          app2.kernel.conversations.getConversation(coordId).completionSeq > coordCompletionBefore &&
+          isSettledStatus(app2.kernel.conversations.getConversation(soloRetryCoordId).status) &&
+          app2.kernel.conversations.getConversation(soloRetryCoordId).completionSeq > soloRetryCompletionBefore &&
           app2.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0,
         { timeoutMs: 10_000 },
       )
-      await app2.kernel.waitForIdle(workerAId)
-      await app2.kernel.waitForIdle(coordId)
-      await app2.kernel.waitForIdle(soloRetryCoordId)
+      await app2.kernel.conversations.waitForIdle(workerAId)
+      await app2.kernel.conversations.waitForIdle(coordId)
+      await app2.kernel.conversations.waitForIdle(soloRetryCoordId)
 
-      const workerADetail = await app2.kernel.getConversationDetail(workerAId, { limit: 30 })
+      const workerADetail = await app2.kernel.conversations.getConversationDetail(workerAId, { limit: 30 })
       const retryWakeEntry = workerADetail.entries.find(
         (e) => e.kind === 'helmx.input' && (e.data as { id?: string } | undefined)?.id === `swarm-wakeup:${groupId}:workerA:2-2:r1`,
       )
       assert.ok(retryWakeEntry !== undefined, 'workerA must receive distinct :r1 wakeup bypassing unanswered requestId dedup')
 
-      const soloRetryDetail = await app2.kernel.getConversationDetail(soloRetryCoordId, { limit: 30 })
+      const soloRetryDetail = await app2.kernel.conversations.getConversationDetail(soloRetryCoordId, { limit: 30 })
       const soloRetryEntry = soloRetryDetail.entries.find(
         (e) => e.kind === 'helmx.input' && (e.data as { id?: string } | undefined)?.id === `swarm-report:${soloRetryGroupId}:1-1:r1`,
       )
@@ -1068,13 +1068,13 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       const soloExhaustMetaAfter = JSON.parse(readFileSync(soloExhaustMetaPath, 'utf8')) as CollabGroupRecord
       assert.equal(soloExhaustMetaAfter.coordinatorNotifiedSeq, 0, 'exhausted unanswered coordinator report must NOT mark seq notified')
       assert.equal(soloExhaustMetaAfter.reportRecovery?.exhausted, true)
-      assert.equal(app2.kernel.getConversation(soloExhaustCoordId).completionSeq, soloExhaustCompletionBefore)
+      assert.equal(app2.kernel.conversations.getConversation(soloExhaustCoordId).completionSeq, soloExhaustCompletionBefore)
       assert.ok(
         errorNotifications.some((n) => (n.title ?? '').includes(soloExhaustGroupId) || (n.body ?? '').includes('unanswered')),
         `exhausted coordinator report must emit visible error notification, got ${JSON.stringify(errorNotifications)}`,
       )
 
-      const coordDetail = await app2.kernel.getConversationDetail(coordId, { limit: 30 })
+      const coordDetail = await app2.kernel.conversations.getConversationDetail(coordId, { limit: 30 })
       const coordReportEntries = coordDetail.entries.filter(
         (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
       )
@@ -1091,8 +1091,8 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       const memberB = metaAfterBoot1.members.find((m) => m.name === 'workerB')!
       assert.equal(memberB.readCursorSeq, 0, 'exhausted unanswered workerB must NOT falsely mark readCursorSeq as read')
       assert.equal(memberB.wakeupRecovery?.exhausted, true)
-      assert.equal(app2.kernel.getConversation(workerBId).completionSeq, workerBCompletionBefore, 'exhausted workerB must not be woken again')
-      const workerBDetail = await app2.kernel.getConversationDetail(workerBId, { limit: 30 })
+      assert.equal(app2.kernel.conversations.getConversation(workerBId).completionSeq, workerBCompletionBefore, 'exhausted workerB must not be woken again')
+      const workerBDetail = await app2.kernel.conversations.getConversationDetail(workerBId, { limit: 30 })
       assert.equal(
         workerBDetail.entries.filter((e) => e.kind === 'helmx.input').length,
         1,
@@ -1121,8 +1121,8 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         blockerCountAfterBoot1,
         'second restart must not emit duplicate blockers or hot-loop',
       )
-      assert.equal(app3.kernel.getConversation(workerBId).completionSeq, workerBCompletionBefore)
-      assert.equal(app3.kernel.getConversation(soloExhaustCoordId).completionSeq, soloExhaustCompletionBefore)
+      assert.equal(app3.kernel.conversations.getConversation(workerBId).completionSeq, workerBCompletionBefore)
+      assert.equal(app3.kernel.conversations.getConversation(soloExhaustCoordId).completionSeq, soloExhaustCompletionBefore)
     } finally {
       await app3.close()
     }
@@ -1137,8 +1137,8 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
     const env1 = await openSwarmEnv(root, gitTemplate)
     let orphanWtId = ''
     try {
-      const coord = await env1.app.kernel.createConversation({ title: 'Order Coord', profileId: 'assistant', cwd: env1.repoDir })
-      const orphanConv = await env1.app.kernel.createConversation({ title: 'Orphan WT Conv', profileId: 'assistant', cwd: env1.repoDir })
+      const coord = await env1.app.kernel.conversations.createConversation({ title: 'Order Coord', profileId: 'assistant', cwd: env1.repoDir })
+      const orphanConv = await env1.app.kernel.conversations.createConversation({ title: 'Orphan WT Conv', profileId: 'assistant', cwd: env1.repoDir })
       const acquired = (await env1.app.kernel.plugins.invokeAction(
         'builtin:worktree',
         'acquire_worktree',

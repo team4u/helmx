@@ -30,8 +30,8 @@ test('concurrent native-spawn structured output subagents isolate validation and
   try {
     const schema = (tag: string) => ({ type: 'object', properties: { tag: { const: tag } }, required: ['tag'], additionalProperties: false })
     const results = await Promise.all([
-      kernel.spawnAgent({ parentConversationId: 1, prompt: 'taskAunique', schema: schema('A') }),
-      kernel.spawnAgent({ parentConversationId: 1, prompt: 'taskBunique', schema: schema('B') }),
+      kernel.agentSpawn.spawnAgent({ parentConversationId: 1, prompt: 'taskAunique', schema: schema('A') }),
+      kernel.agentSpawn.spawnAgent({ parentConversationId: 1, prompt: 'taskBunique', schema: schema('B') }),
     ])
     assert.deepEqual(results, [{ tag: 'A' }, { tag: 'B' }])
     assert.equal(arrived, 2)

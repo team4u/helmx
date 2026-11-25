@@ -81,14 +81,14 @@ describe('activity snapshot', { timeout: 60_000 }, () => {
       transitions += 1
     })
     try {
-      const submitted = kernel.submitInput(1, 'single turn')
+      const submitted = kernel.conversations.submitInput(1, 'single turn')
       await waitFor(() => kernel.activitySnapshot().activeConversations === 1, 5_000)
       assert.equal(transitions, 1, 'busy entered fires exactly once for the run start')
       // Still exactly one conversation while the turn is in flight (no double counting).
       assert.equal(kernel.activitySnapshot().activeConversations, 1)
       releaseResponse()
       await submitted.catch(() => {})
-      await kernel.waitForIdle(1).catch(() => {})
+      await kernel.conversations.waitForIdle(1).catch(() => {})
       await waitFor(() => kernel.activitySnapshot().activeConversations === 0, 5_000)
       assert.equal(transitions, 1, 'no further busy entries during the same turn')
     } finally {
@@ -108,8 +108,8 @@ describe('activity snapshot', { timeout: 60_000 }, () => {
     })
     try {
       kernel.__faux.setResponses([fauxAssistantMessage([{ type: 'text', text: 'done' }], { stopReason: 'stop' })])
-      await kernel.submitInput(1, 'complete me')
-      await kernel.waitForIdle(1).catch(() => {})
+      await kernel.conversations.submitInput(1, 'complete me')
+      await kernel.conversations.waitForIdle(1).catch(() => {})
       await waitFor(() => settlingObserved !== undefined, 5_000)
       assert.ok(settlingObserved! >= 1, 'turn.settled dispatch must overlap the settling window')
       assert.equal(kernel.activitySnapshot().settlingConversations, 0, 'settling drains after dispatch')
@@ -125,28 +125,28 @@ describe('activity snapshot', { timeout: 60_000 }, () => {
       kernel.__faux.setResponses([
         fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 2' })], { stopReason: 'toolUse' }),
       ])
-      void kernel.submitInput(1, 'prompt triggering approval').catch(() => {})
-      await waitFor(() => kernel.getConversation(1).status === 'working', 5_000)
+      void kernel.conversations.submitInput(1, 'prompt triggering approval').catch(() => {})
+      await waitFor(() => kernel.conversations.getConversation(1).status === 'working', 5_000)
       assert.equal(kernel.activitySnapshot().activeConversations, 1)
 
       // Pending ask while the tool is in flight: blocked-with-live-run keeps the conversation busy.
-      const askPromise = kernel.createAsk({
+      const askPromise = kernel.asks.createAsk({
         conversationId: 1,
         title: 'test approval',
         fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
       })
       void askPromise.catch(() => {})
-      await waitFor(() => kernel.getConversation(1).status === 'blocked', 5_000)
+      await waitFor(() => kernel.conversations.getConversation(1).status === 'blocked', 5_000)
       assert.equal(kernel.activitySnapshot().activeConversations, 1, 'blocked-with-live-run is protected work')
 
       // Abort the run but leave the ask pending: the run is gone, only durable AskDoc state
       // remains — excluded from the busy predicate (survives restart by design).
-      await kernel.abortConversation(1).catch(() => {})
-      await kernel.waitForIdle(1).catch(() => {})
+      await kernel.conversations.abortConversation(1).catch(() => {})
+      await kernel.conversations.waitForIdle(1).catch(() => {})
       await waitFor(() => kernel.activitySnapshot().activeConversations === 0, 5_000)
-      assert.ok(kernel.getConversation(1).pendingAskCount > 0, 'the ask itself must still be pending')
-      const pending = kernel.listAsks('pending')
-      if (pending.length > 0) await kernel.answerAsk(pending[0]!.id, { confirm: 'true' }).catch(() => {})
+      assert.ok(kernel.conversations.getConversation(1).pendingAskCount > 0, 'the ask itself must still be pending')
+      const pending = kernel.asks.listAsks('pending')
+      if (pending.length > 0) await kernel.asks.answerAsk(pending[0]!.id, { confirm: 'true' }).catch(() => {})
     } finally {
       await kernel.close()
     }
@@ -165,9 +165,9 @@ describe('activity snapshot', { timeout: 60_000 }, () => {
       },
     ])
     try {
-      void kernel.submitInput(1, 'first turn').catch(() => {})
+      void kernel.conversations.submitInput(1, 'first turn').catch(() => {})
       await waitFor(() => kernel.activitySnapshot().activeConversations === 1, 5_000)
-      void kernel.submitInput(1, 'queued follow up', { whenBusy: 'followUp' }).catch(() => {})
+      void kernel.conversations.submitInput(1, 'queued follow up', { whenBusy: 'followUp' }).catch(() => {})
       await waitFor(() => kernel.activitySnapshot().queuedConversations === 1, 5_000)
       // Releasing the gate lets the first turn complete; the queued follow-up is admitted into the
       // next run and drains — the aggregate returns to all zeros on its own (no abort needed).

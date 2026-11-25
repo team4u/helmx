@@ -30,17 +30,20 @@ export {
 
 export {
   ProfileService,
-  SkillService,
   DEFAULT_PROFILE_ID,
   SYSTEM_DEFAULT,
   validateProfileInput,
+  type Profile,
+} from './profile-service.js'
+
+export {
+  SkillService,
   parseSkillFrontmatter,
   assertSkillId,
   defaultExternalSkillRoots,
-  type Profile,
   type SkillSummary,
   type BuiltinSkillAsset,
-} from './profiles-skills.js'
+} from './skill-service.js'
 
 export {
   AssetWatcher,

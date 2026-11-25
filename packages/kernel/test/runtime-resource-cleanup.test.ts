@@ -163,14 +163,14 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
   it('deleteConversation triggers evictConversation cleanly via runtime wiring', timeout, async () => {
     const kernel = await openRuntime(join(root, 'evict-1'))
     try {
-      const conv = await kernel.createConversation({})
+      const conv = await kernel.conversations.createConversation({})
       // Execute once to populate conversation target cache (local echo).
-      const result = await kernel.execEnv({ command: 'echo evicted', conversationId: conv.id })
+      const result = await kernel.nodes.execEnv({ command: 'echo evicted', conversationId: conv.id })
       assert.equal(result.ok, true)
-      await kernel.deleteConversation(conv.id)
+      await kernel.conversations.deleteConversation(conv.id)
       // Running again on the deleted conversation id returns 404 not_found rather than an internal error.
       const again = await kernel
-        .execEnv({ command: 'echo again', conversationId: conv.id })
+        .nodes.execEnv({ command: 'echo again', conversationId: conv.id })
         .then(
           () => 'unexpected-ok',
           (err: { code?: string }) => err.code,
@@ -183,17 +183,17 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
   it('updateConversation changing cwd/nodeId releases stale target cache without affecting other conversations', timeout, async () => {
     const kernel = await openRuntime(join(root, 'evict-2'))
     try {
-      const conv = await kernel.createConversation({})
-      const other = await kernel.createConversation({})
+      const conv = await kernel.conversations.createConversation({})
+      const other = await kernel.conversations.createConversation({})
       const fabric = kernel.envFabric as EnvFabric
       const before = fabric.debugBaseCount()
       // Two executions create cached targets for both conversations.
-      await kernel.execEnv({ command: 'echo one', conversationId: conv.id })
-      await kernel.execEnv({ command: 'echo two', conversationId: other.id })
+      await kernel.nodes.execEnv({ command: 'echo one', conversationId: conv.id })
+      await kernel.nodes.execEnv({ command: 'echo two', conversationId: other.id })
       assert.equal(fabric.debugBaseCount(), before + 2)
       // Updating conv cwd releases its old target while leaving other untouched.
       const newDir = join(root, 'evict-2-new-cwd')
-      await kernel.updateConversation(conv.id, { cwd: newDir })
+      await kernel.conversations.updateConversation(conv.id, { cwd: newDir })
       assert.equal(fabric.debugBaseCount(), before + 1, 'old target for updated conversation is released')
       const bases = fabric.debugBases()
       assert.ok(
@@ -204,7 +204,7 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
       assert.ok(bases.some((b) => b.conversationId === other.id))
       // Updating title alone does not evict cache.
       const count = fabric.debugBaseCount()
-      await kernel.updateConversation(other.id, { title: 'only title' })
+      await kernel.conversations.updateConversation(other.id, { title: 'only title' })
       assert.equal(fabric.debugBaseCount(), count, 'non-target updates do not evict cached env targets')
     } finally {
       await kernel.close()

@@ -16,6 +16,7 @@ import {
   type HookName,
   type HookPayloadMap,
   type HookResult,
+  type PackageManagerHost,
   type PluginActionContext,
   type PluginBuildProvider,
   type PluginClientBundle,
@@ -27,6 +28,7 @@ import {
   type PluginInstallResult,
   type LocalizedText,
   type PluginManifestProjection,
+  type PluginPackageManagerPort,
   type PluginReloadResult,
   type PluginRemoveResult,
   type PluginRescanResult,
@@ -38,11 +40,10 @@ import {
   type PublicPluginDoc,
   type PublicPluginSessionDoc,
 } from '@helmx/protocol';
+import { ConfigService } from '../services/config.js';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
 import { buildPluginManifestProjection } from './manifest-projection.js';
 import { PluginTaskTracker } from './tracking.js';
-import type { PluginPackageManager, PackageManagerHost } from './package-manager.js';
-import type { PluginPackageManagerStore } from './package-store.js';
 import { PluginDocRegistry } from './doc-registry.js';
 import { PluginKvRegistry } from './kv-registry.js';
 import { CapabilityServiceRegistry } from './capability-service-registry.js';
@@ -145,8 +146,7 @@ export class PluginHost {
   private startPromise?: Promise<void>;
   private reconcilePromise?: Promise<void>;
   private gate = new PluginHostGate();
-  private packageManager?: PluginPackageManager;
-  private packageStore?: PluginPackageManagerStore;
+  private packageManager?: PluginPackageManagerPort;
   private releaseConversationDeletedListener?: () => void;
 
   constructor(private readonly options: PluginHostOptions) {
@@ -175,6 +175,15 @@ export class PluginHost {
       (text) => this.redactProjectionText(text),
       { maxValueBytes: options.maxKvValueBytes },
     );
+    if (options.packageManagerProvider !== undefined) {
+      this.packageManager = options.packageManagerProvider({
+        dataDir: options.dataDir,
+        cwd: options.cwd ?? options.dataDir,
+        config: options.packagesConfig ?? new ConfigService(options.dataDir),
+        host: this.asPackageManagerHost(),
+        buildProvider: options.buildProvider,
+      });
+    }
   }
 
   // --- register and lifecycle -------------------------------------------------------
@@ -383,19 +392,21 @@ export class PluginHost {
     return rescanExternalPluginDirs(this.options.dataDir, this);
   }
 
-  attachPackageManager(manager: PluginPackageManager, store: PluginPackageManagerStore): void {
-    this.packageManager = manager;
-    this.packageStore = store;
+  async loadPackageManager(): Promise<void> {
+    this.assertNotDisposed();
+    if (this.packageManager !== undefined) {
+      await this.packageManager.load();
+    }
   }
 
   asPackageManagerHost(): PackageManagerHost {
     return createPackageManagerHost(this.dxDeps());
   }
 
-  private requirePackageManager(): PluginPackageManager {
+  private requirePackageManager(): PluginPackageManagerPort {
     if (this.packageManager === undefined) {
       throw new HelmxError(
-        'not_supported',
+        'unsupported_package_manager',
         'Current kernel has not wired the plugin package manager (managed install/update/remove unavailable)',
         501,
       );
@@ -403,12 +414,12 @@ export class PluginHost {
     return this.packageManager;
   }
 
-  installPluginPackage(source: string, options: { enable?: boolean } = {}): Promise<PluginInstallResult> {
+  async installPluginPackage(source: string, options: { enable?: boolean } = {}): Promise<PluginInstallResult> {
     this.assertNotDisposed();
     return this.requirePackageManager().install(source, options);
   }
 
-  updatePluginPackage(pluginId: string, options: { source?: string } = {}): Promise<PluginUpdateResult> {
+  async updatePluginPackage(pluginId: string, options: { source?: string } = {}): Promise<PluginUpdateResult> {
     this.assertNotDisposed();
     return this.requirePackageManager().update(pluginId, options);
   }
@@ -419,7 +430,7 @@ export class PluginHost {
     if (state !== undefined) this.emitPluginChanged(state);
   }
 
-  removePluginPackage(pluginId: string): Promise<PluginRemoveResult> {
+  async removePluginPackage(pluginId: string): Promise<PluginRemoveResult> {
     this.assertNotDisposed();
     return this.requirePackageManager().remove(pluginId);
   }
@@ -788,7 +799,7 @@ export class PluginHost {
       state,
       this.capabilityRegistry,
       this.uiRegistry,
-      this.packageStore,
+      this.packageManager,
       publicConfig,
     );
   }

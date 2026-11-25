@@ -129,6 +129,9 @@ test('production packages maintain one-way dependencies and cross boundaries onl
         } else if (target !== manifest.name && !(target in dependencies)) {
           violations.push(`${label} undeclared production dependency`)
         }
+        if (target === '@helmx/kernel' && specifier === '@helmx/kernel/testing') {
+          violations.push(`${label} production source must not import test-only subpath @helmx/kernel/testing`)
+        }
         if (/\/src(?:\/|$)/.test(specifier)) violations.push(`${label} imports private source code`)
         const targetManifest = packages.find(({ manifest: candidate }) => candidate.name === target)?.manifest
         if (targetManifest && !hasPublicExport(targetManifest, specifier)) violations.push(`${label} not imported via public exports`)
@@ -251,12 +254,16 @@ test('browser sources and @helmx/protocol/browser transitive closure never impor
 
   const protocolPluginFile = resolve(packagesDir, 'protocol/src/plugin.ts')
   const protocolUiSchemasFile = resolve(packagesDir, 'protocol/src/ui-schemas.ts')
+  const protocolRequestSchemasFile = resolve(packagesDir, 'protocol/src/request-schemas.ts')
   const browserClosure = collectTransitiveLocalSources(browserEntry)
   if (browserClosure.has(protocolPluginFile)) {
     violations.push('protocol/src/browser.ts transitive closure must not reach protocol/src/plugin.ts')
   }
   if (browserClosure.has(protocolUiSchemasFile)) {
     violations.push('protocol/src/browser.ts transitive closure must not reach protocol/src/ui-schemas.ts')
+  }
+  if (browserClosure.has(protocolRequestSchemasFile)) {
+    violations.push('protocol/src/browser.ts transitive closure must not reach protocol/src/request-schemas.ts')
   }
   for (const file of browserClosure) {
     for (const { specifier } of imports(file)) {
@@ -332,5 +339,32 @@ test('all workspace packages/*/src contain zero any types and zero TS suppressio
     }
   }
 
+  assert.deepEqual(violations, [], violations.join('\n'))
+})
+
+test('sibling package tests never import ../../kernel/src/ across package boundaries', { timeout: 60_000 }, () => {
+  const violations: string[] = []
+  const kernelSrcRoot = resolve(packagesDir, 'kernel/src')
+  for (const pkgName of ['plugins', 'hub', 'cli', 'web']) {
+    const pkgTestDir = join(packagesDir, pkgName, 'test')
+    for (const file of sourceFiles(pkgTestDir)) {
+      for (const { specifier } of imports(file)) {
+        if (!specifier.startsWith('.')) continue
+        const targetPath = resolve(dirname(file), specifier)
+        const relToKernelSrc = relative(kernelSrcRoot, targetPath)
+        if (!isAbsolute(relToKernelSrc) && relToKernelSrc !== '..' && !relToKernelSrc.startsWith(`..${sep}`)) {
+          violations.push(
+            `${relative(packagesDir, file)}: forbidden cross-package import into kernel/src (${specifier}); use @helmx/kernel or @helmx/kernel/testing`,
+          )
+        }
+      }
+      const rawText = readFileSync(file, 'utf8')
+      if (/(?:\.\.[/\\])+kernel[/\\]src\b/.test(rawText)) {
+        violations.push(
+          `${relative(packagesDir, file)}: forbidden relative reference to kernel/src; use @helmx/kernel or @helmx/kernel/testing`,
+        )
+      }
+    }
+  }
   assert.deepEqual(violations, [], violations.join('\n'))
 })

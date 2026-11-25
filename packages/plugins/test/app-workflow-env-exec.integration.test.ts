@@ -27,7 +27,7 @@ import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { createHelmx } from '../../hub/src/app.js'
 import { readJournal, type WorkflowJournalEntry } from '../src/workflow/dsl/index.js'
-import { pluginDataDirName } from '../../kernel/src/plugins/plugin-dir-name.js'
+import { pluginDataDirName } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 
@@ -61,7 +61,7 @@ async function makeEnv(): Promise<Env> {
   // 会话绑定 (nodeId='local', cwd=convCwd)：env.exec 缺省靶点必须继承它。
   const { mkdirSync } = await import('node:fs')
   mkdirSync(convCwd, { recursive: true })
-  const conv = await app.kernel.createConversation({ title: 'env.exec 靶点会话', cwd: convCwd })
+  const conv = await app.kernel.conversations.createConversation({ title: 'env.exec 靶点会话', cwd: convCwd })
 
   const echoCalls: string[] = []
   await app.kernel.plugins!.register({

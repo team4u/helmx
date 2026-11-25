@@ -12,6 +12,8 @@
  * otherwise pi.assistant text is lost in both HTTP details and live events.
  */
 
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
+import type { Conversation, EntryId, EntryRecord } from '@earendil-works/pi-durable'
 import {
   HelmxError,
   type ConversationEntry,
@@ -296,4 +298,61 @@ export function deriveConversationLive(
     ...(queuedInputs.length > 0 ? { queuedInputs } : {}),
     updatedAt,
   }
+}
+
+export function entryModelText(entry: { model?: ReadonlyArray<{ content?: unknown }> }): string {
+  const content = entry.model?.[0]?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return (content as Array<{ type?: string; text?: string }>)
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
+    .join('\n')
+}
+
+/** Concatenate assistant text blocks from an `entry.model` array (shared by `waitForInput`, tracker, detail FTS, and native spawn). */
+export function assistantTextOfModel(model: ReadonlyArray<unknown> | undefined): string {
+  if (!Array.isArray(model)) return ''
+  const out: string[] = []
+  for (const message of model) {
+    if (message === null || typeof message !== 'object') continue
+    const blocks = (message as { content?: unknown }).content
+    if (!Array.isArray(blocks)) continue
+    for (const block of blocks) {
+      if (
+        block !== null &&
+        typeof block === 'object' &&
+        (block as { type?: unknown }).type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string'
+      ) {
+        out.push((block as { text: string }).text)
+      }
+    }
+  }
+  return out.join('\n')
+}
+
+/** Extract assistant text from a single entry (returns `''` for non-`pi.assistant` entries). */
+export function assistantTextOfEntry(
+  entry: { kind: string; model?: ReadonlyArray<unknown> } | undefined,
+): string {
+  if (entry === undefined || entry.kind !== 'pi.assistant') return ''
+  return assistantTextOfModel(entry.model)
+}
+
+/** Read a single persisted entry by exact ID (shared by `ConversationService.waitForInput` and `readSubmissionAssistantText`). */
+export async function readEntryById(
+  conversation: Pick<Conversation, 'entries'>,
+  entryId: EntryId,
+  context: Context = BACKGROUND_CONTEXT,
+): Promise<EntryRecord | undefined> {
+  if (typeof conversation.entries !== 'function') return undefined
+  const page = await conversation.entries(
+    { minEntryId: entryId, maxEntryId: entryId, order: 'ascending' },
+    1,
+    undefined,
+    context,
+  )
+  const item = page.items[0]
+  return item !== undefined && item.id === entryId ? item : undefined
 }

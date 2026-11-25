@@ -697,13 +697,13 @@ describe('node management and env/exec HTTP routes', { timeout: 60_000 }, () => 
         fauxAssistantMessage([fauxToolCall('read', { path: 'written.txt' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('all done'),
       ])
-      await kernel.submitInput(conv.id, 'run remote tools suite')
-      await kernel.waitForIdle(conv.id)
+      await kernel.conversations.submitInput(conv.id, 'run remote tools suite')
+      await kernel.conversations.waitForIdle(conv.id)
 
       // Disk state assertion: both write and edit ran against the remote target.
       const written = await readFile(join(workDir, 'written.txt'), 'utf8')
       assert.equal(written, 'written-by-edit-tool-ok', 'write + edit took effect on remote node')
-      assert.equal(await kernel.getLastAssistantText(conv.id), 'all done')
+      assert.equal(await kernel.conversations.getLastAssistantText(conv.id), 'all done')
       await daemon.close()
     } finally {
       await hub.close()

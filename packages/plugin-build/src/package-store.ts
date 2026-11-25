@@ -3,12 +3,17 @@
  *
  * - Keyed by `pluginId` (`Record<pluginId, PluginPackageRecord>`); re-installing updates and preserves
  *   the existing record ID (`id`);
- * - All reads/writes run under `ConfigService` read-modify-write locking so concurrent updates never clash;
+ * - All reads/writes run under `PluginPackagesConfigPort` read-modify-write locking so concurrent updates never clash;
  * - Structural corruption rejects explicitly with `config_corrupt` (never silently discarded or rebuilt as `{}`);
  * - `getRecord` reads the in-memory mirror synchronized on write/load for `PluginSummary.managed` decoration.
  */
-import { HelmxError, isJsonObject, type PluginPackageRecord, type PluginPackageSource } from '@helmx/protocol';
-import type { ConfigService } from '../services/config.js';
+import {
+  HelmxError,
+  isJsonObject,
+  type PluginPackageRecord,
+  type PluginPackageSource,
+  type PluginPackagesConfigPort,
+} from '@helmx/protocol';
 
 /** Validates `source` shape in a stored record (non-empty strings matching discriminated union fields). */
 function assertSourceShape(pluginId: string, v: unknown): PluginPackageSource {
@@ -76,11 +81,11 @@ function parseRecord(pluginId: string, v: unknown): PluginPackageRecord {
 }
 
 export class PluginPackageManagerStore {
-  private readonly config: ConfigService;
+  private readonly config: PluginPackagesConfigPort;
   /** Synchronized in-memory mirror updated on write/load. */
   private mirror = new Map<string, PluginPackageRecord>();
 
-  constructor(config: ConfigService) {
+  constructor(config: PluginPackagesConfigPort) {
     this.config = config;
   }
 

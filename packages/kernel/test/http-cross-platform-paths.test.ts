@@ -19,7 +19,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { validateProfileInput } from '../src/services/profiles-skills.js'
+import { validateProfileInput } from '../src/services/profile-service.js'
 import {
   parseConversationInit,
   parseConversationPatch,

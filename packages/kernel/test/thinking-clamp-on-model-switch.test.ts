@@ -138,7 +138,7 @@ async function sdkAgent(kernel: KernelRuntime, id: number) {
 }
 
 async function assertThinking(kernel: KernelRuntime, id: number, effective: string, override?: string) {
-  const summary = kernel.getConversation(id) as ThinkingSummary
+  const summary = kernel.conversations.getConversation(id) as ThinkingSummary
   assert.equal(summary.thinkingLevel, effective)
   assert.equal(summary.thinkingLevelOverride, override)
   assert.equal((await sdkAgent(kernel, id)).thinkingLevel, effective || 'off', 'real SDK state must match mirror')
@@ -146,117 +146,117 @@ async function assertThinking(kernel: KernelRuntime, id: number, effective: stri
 
 it('explicit override clamps while the model stays; a model switch without thinking change clears the stale override', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
-  await kernel.setDefaultModel('faux-cap-a/model-a')
-  const conv = await kernel.createConversation()
-  await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
+  await kernel.models.setDefaultModel('faux-cap-a/model-a')
+  const conv = await kernel.conversations.createConversation()
+  await kernel.conversations.updateConversation(conv.id, { thinkingLevel: 'max' })
   await assertThinking(kernel, conv.id, 'max', 'max')
 
   // Title-only updates never recompute or drift the explicit override.
-  await kernel.updateConversation(conv.id, { title: 'Updated title' })
+  await kernel.conversations.updateConversation(conv.id, { title: 'Updated title' })
   await assertThinking(kernel, conv.id, 'max', 'max')
 
   // Switching to model B without a thinking change drops the override chosen for A; nothing else
   // is configured, so the effective level resolves to unconfigured ('' mirror, SDK off).
-  await kernel.updateConversation(conv.id, { model: 'faux-cap-b/model-b' })
+  await kernel.conversations.updateConversation(conv.id, { model: 'faux-cap-b/model-b' })
   await assertThinking(kernel, conv.id, '', undefined)
   // Switching back to A does not resurrect the old override.
-  await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
+  await kernel.conversations.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
   await assertThinking(kernel, conv.id, '', undefined)
 
   // A simultaneous explicit thinking level survives a model switch (clamped to the target model).
-  await kernel.updateConversation(conv.id, { model: 'faux-cap-b/model-b', thinkingLevel: 'max' })
+  await kernel.conversations.updateConversation(conv.id, { model: 'faux-cap-b/model-b', thinkingLevel: 'max' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 })
 
 it('model switch clears the old override so the new model per-model default takes effect', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
-  await kernel.setDefaultModel('faux-cap-a/model-a')
-  await kernel.setModelThinkingDefault('faux-cap-b/model-b', 'minimal')
-  const conv = await kernel.createConversation()
+  await kernel.models.setDefaultModel('faux-cap-a/model-a')
+  await kernel.models.setModelThinkingDefault('faux-cap-b/model-b', 'minimal')
+  const conv = await kernel.conversations.createConversation()
   // Explicit override on A: max.
-  await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
+  await kernel.conversations.updateConversation(conv.id, { thinkingLevel: 'max' })
   await assertThinking(kernel, conv.id, 'max', 'max')
 
   // Switch to B: the A-chosen override no longer shadows B's own per-model default.
-  await kernel.updateConversation(conv.id, { model: 'faux-cap-b/model-b' })
+  await kernel.conversations.updateConversation(conv.id, { model: 'faux-cap-b/model-b' })
   await assertThinking(kernel, conv.id, 'minimal', undefined)
 
   // Switching back to A (no per-model default for A) falls through to unconfigured.
-  await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
+  await kernel.conversations.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
   await assertThinking(kernel, conv.id, '', undefined)
 })
 
 it('inheritance chain (no override) clamps too: global max becomes high on B and restores max on A', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
-  await kernel.setDefaultModel('faux-cap-b/model-b', 'max')
-  const conv = await kernel.createConversation()
+  await kernel.models.setDefaultModel('faux-cap-b/model-b', 'max')
+  const conv = await kernel.conversations.createConversation()
   await assertThinking(kernel, conv.id, 'high', undefined)
 
   // Conversation switches to A: inherited global max becomes available again.
-  await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
+  await kernel.conversations.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
   await assertThinking(kernel, conv.id, 'max', undefined)
 })
 
 it('Profile level aligns with Profile model; changing conversation Profile recomputes and clamps', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
-  await kernel.setDefaultModel('faux-cap-a/model-a')
+  await kernel.models.setDefaultModel('faux-cap-a/model-a')
   await kernel.services.profiles.save({
     id: 'expert', name: 'Expert', model: 'faux-cap-a/model-a', thinkingLevel: 'max',
   })
-  const conv = await kernel.createConversation({ profileId: 'expert' })
+  const conv = await kernel.conversations.createConversation({ profileId: 'expert' })
   await assertThinking(kernel, conv.id, 'max', undefined)
 
   // Profile model changes to B: Profile max clamps along inheritance chain to high.
   await kernel.services.profiles.save({ id: 'expert', name: 'Expert', model: 'faux-cap-b/model-b', thinkingLevel: 'max' })
-  await kernel.alignProfileConversations('expert')
+  await kernel.conversations.alignProfileConversations('expert')
   await assertThinking(kernel, conv.id, 'high', undefined)
 
   // Conversation switches to another Profile (model is A, level high): effective level recomputes along new inheritance chain.
   await kernel.services.profiles.save({ id: 'reviewer', name: 'Reviewer', model: 'faux-cap-a/model-a', thinkingLevel: 'high' })
-  await kernel.updateConversation(conv.id, { profileId: 'reviewer' })
+  await kernel.conversations.updateConversation(conv.id, { profileId: 'reviewer' })
   await assertThinking(kernel, conv.id, 'high', undefined)
 })
 
 it('explicit max override + Profile model A->B alignment: override/effective/SDK all clamp to high and persist', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
-  await kernel.setDefaultModel('faux-cap-a/model-a')
+  await kernel.models.setDefaultModel('faux-cap-a/model-a')
   await kernel.services.profiles.save({
     id: 'expert', name: 'Expert', model: 'faux-cap-a/model-a', thinkingLevel: 'medium',
   })
-  const conv = await kernel.createConversation({ profileId: 'expert' })
+  const conv = await kernel.conversations.createConversation({ profileId: 'expert' })
   // Explicit max override: all three layers are max while on A.
-  await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
+  await kernel.conversations.updateConversation(conv.id, { thinkingLevel: 'max' })
   await assertThinking(kernel, conv.id, 'max', 'max')
 
   // Profile model switches to B (supports up to high) and aligns: explicit override also clamps and persists as high.
   await kernel.services.profiles.save({ id: 'expert', name: 'Expert', model: 'faux-cap-b/model-b', thinkingLevel: 'medium' })
-  await kernel.alignProfileConversations('expert')
+  await kernel.conversations.alignProfileConversations('expert')
   await assertThinking(kernel, conv.id, 'high', 'high')
 
   // Subsequent title-only update (without touching model/level): level is not recomputed or drifted by any step.
-  await kernel.updateConversation(conv.id, { title: 'Updated title' })
+  await kernel.conversations.updateConversation(conv.id, { title: 'Updated title' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 
   // An explicit conversation model switch back to A clears the override (no simultaneous thinking change):
   // the chain re-resolves through Profile.thinkingLevel (medium), which A supports as-is.
-  await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
+  await kernel.conversations.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
   await assertThinking(kernel, conv.id, 'medium', undefined)
 })
 
 it('empty string (unconfigured) is not mistakenly clamped to off; off semantics remain intact', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
-  await kernel.setDefaultModel('faux-cap-b/model-b')
+  await kernel.models.setDefaultModel('faux-cap-b/model-b')
   // Global thinking level unconfigured: newly created conversation starts at '', SDK at 'off'.
-  const conv = await kernel.createConversation()
+  const conv = await kernel.conversations.createConversation()
   await assertThinking(kernel, conv.id, '', undefined)
 
   // Explicit off override: B's map.off is null (off is not in supported list), but SDK off semantics
   // must never be clamped up to the lowest supported level (minimal).
-  await kernel.updateConversation(conv.id, { thinkingLevel: 'off' })
+  await kernel.conversations.updateConversation(conv.id, { thinkingLevel: 'off' })
   await assertThinking(kernel, conv.id, 'off', 'off')
 
   // Clearing override returns to empty string inheritance.
-  await kernel.updateConversation(conv.id, { thinkingLevel: '' })
+  await kernel.conversations.updateConversation(conv.id, { thinkingLevel: '' })
   await assertThinking(kernel, conv.id, '', undefined)
 })
 
@@ -264,21 +264,21 @@ it('unknown capability (default faux shape) passes through without breaking exis
   const { kernel } = await fixture(t)
   // legacy-1 declares no capabilities (reasoning: false, no map): max passes through verbatim,
   // matching the runtime-thinking-config.test.ts faux baseline.
-  await kernel.setDefaultModel('faux-legacy/legacy-1', 'max')
-  const conv = await kernel.createConversation()
+  await kernel.models.setDefaultModel('faux-legacy/legacy-1', 'max')
+  const conv = await kernel.conversations.createConversation()
   await assertThinking(kernel, conv.id, 'max', undefined)
-  await kernel.updateConversation(conv.id, { thinkingLevel: 'xhigh' })
+  await kernel.conversations.updateConversation(conv.id, { thinkingLevel: 'xhigh' })
   await assertThinking(kernel, conv.id, 'xhigh', 'xhigh')
 })
 
 it('spawn creates child clamped by target model capability; resume also clamps explicit effort', { timeout: 60_000 }, async (t) => {
   const { kernel, capA, capB } = await fixture(t)
-  await kernel.setDefaultModel('faux-cap-a/model-a', 'low')
+  await kernel.models.setDefaultModel('faux-cap-a/model-a', 'low')
   capA.core.setResponses([fauxAssistantMessage('A done')])
   capB.core.setResponses([fauxAssistantMessage('B done')])
   let childA = 0
   let childB = 0
-  await kernel.spawnAgent({
+  await kernel.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'task A',
     model: 'faux-cap-a/model-a',
@@ -288,7 +288,7 @@ it('spawn creates child clamped by target model capability; resume also clamps e
   await assertThinking(kernel, childA, 'max', 'max')
 
   // Target model B supports up to high: explicit effort max clamps to high.
-  await kernel.spawnAgent({
+  await kernel.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'task B',
     model: 'faux-cap-b/model-b',
@@ -300,7 +300,7 @@ it('spawn creates child clamped by target model capability; resume also clamps e
   // Resume: switching model to A without specifying effort re-resolves through the default chain —
   // the clamped-high override chosen for B is dropped and the global fallback (low, supported by A) applies.
   capA.core.setResponses([fauxAssistantMessage('A resume')])
-  await kernel.spawnAgent({
+  await kernel.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'resume A',
     resume: String(childB),
@@ -311,7 +311,7 @@ it('spawn creates child clamped by target model capability; resume also clamps e
 
 it('tier preset thinking clamping and empty-string fallback stay aligned between ConversationService and spawnAgent', { timeout: 60_000 }, async (t) => {
   const { kernel, models, capB } = await fixture(t)
-  await kernel.setDefaultModel('faux-cap-a/model-a', 'medium')
+  await kernel.models.setDefaultModel('faux-cap-a/model-a', 'medium')
   // Provide a tier targeting model-b (supports up to high) with preset thinkingLevel 'max' via capability registry:
   // both ConversationService.createConversation and spawnAgent must clamp to 'high' and persist 'high' override.
   await kernel.plugins.register({
@@ -324,12 +324,12 @@ it('tier preset thinking clamping and empty-string fallback stay aligned between
       })
     },
   })
-  const conv = await kernel.createConversation({ model: 'tier/heavy' })
+  const conv = await kernel.conversations.createConversation({ model: 'tier/heavy' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 
   capB.core.setResponses([fauxAssistantMessage('tier B done')])
   let childId = 0
-  await kernel.spawnAgent({
+  await kernel.agentSpawn.spawnAgent({
     parentConversationId: 1,
     prompt: 'tier spawn',
     model: 'tier/heavy',

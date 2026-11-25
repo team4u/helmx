@@ -12,6 +12,7 @@ import { HelmxError, isValidProfileId, type MaybePromise } from '@helmx/protocol
 import { FileNotFoundError, atomicWriteFile, withFileLock } from '../services/index.js'
 import type { PluginHostBackend, PluginKvStore, PluginSessionDocStore } from '../plugins/index.js'
 import type { HelmxStore } from './store.js'
+import { profileDirectoryHelper } from './target-cwd.js'
 import type { KernelRuntime } from './runtime.js'
 
 /** Boundary normalization for `profiles.get/directory`: invalid id -> `400 validation_error`; rethrows all other errors as-is. */
@@ -43,7 +44,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
         }
       },
       save: (profile) => runtime.profiles.save(profile),
-      directory: (id) => runtime.profileDirectory(id),
+      directory: async (id) => profileDirectoryHelper(runtime.dataDir, id),
     },
     skills: {
       list: () => runtime.skills.list(),
@@ -63,53 +64,55 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
       listNodes: () => structuredClone(runtime.nodes.listNodesSync()),
     },
     openTunnel: (nodeId, target, signal) => runtime.envFabric.openTunnel(nodeId, target, signal),
-    dispatchTrigger: (event) => runtime.dispatchTrigger(event),
+    dispatchTrigger: (event) => runtime.triggers.dispatchTrigger(event),
     submitInput: async (id, text, opts) => {
-      await runtime.submitInput(id, text, opts)
+      await runtime.conversations.submitInput(id, text, opts)
     },
-    createConversation: (init) => runtime.createConversation(init),
-    forkConversation: (id, opts) => runtime.forkConversation(id, opts),
-    listConversations: (filter) => runtime.listConversations(filter),
-    getConversation: (id) => runtime.getConversation(id),
-    getConversationDetail: (id, options) => runtime.getConversationDetail(id, options),
-    getConversationSubmission: (id, requestId) => runtime.getConversationSubmission(id, requestId),
-    updateConversation: (id, patch) => runtime.updateConversation(id, patch),
-    abortConversation: (id) => runtime.abortConversation(id),
-    abortConversationGuarded: (id, guard) => runtime.abortConversationGuarded(id, guard),
-    deleteConversationGuarded: (id, guard, opts) => runtime.deleteConversationGuarded(id, guard, opts),
-    resetConversation: (id, opts) => runtime.resetConversation(id, opts),
-    resetConversationGuarded: (id, opts, guard) => runtime.resetConversationGuarded(id, opts, guard),
-    compactConversation: (id, opts) => runtime.compactConversation(id, opts),
-    compactConversationGuarded: (id, opts, guard) => runtime.compactConversationGuarded(id, opts, guard),
+    createConversation: (init) => runtime.conversations.createConversation(init),
+    forkConversation: (id, opts) => runtime.conversations.forkConversation(id, opts),
+    listConversations: (filter) => runtime.conversations.listConversations(filter),
+    getConversation: (id) => runtime.conversations.getConversation(id),
+    getConversationDetail: (id, options) => runtime.conversations.getConversationDetail(id, options),
+    getConversationSubmission: (id, requestId) => runtime.conversations.getConversationSubmission(id, requestId),
+    updateConversation: (id, patch) => runtime.conversations.updateConversation(id, patch),
+    abortConversation: (id) => runtime.conversations.abortConversation(id),
+    abortConversationGuarded: (id, guard) => runtime.conversations.abortConversationGuarded(id, guard),
+    deleteConversationGuarded: (id, guard, opts) => runtime.conversations.deleteConversationGuarded(id, guard, opts),
+    resetConversation: (id, opts) => runtime.conversations.resetConversation(id, opts),
+    resetConversationGuarded: (id, opts, guard) => runtime.conversations.resetConversationGuarded(id, opts, guard),
+    compactConversation: (id, opts) => runtime.conversations.compactConversation(id, opts),
+    compactConversationGuarded: (id, opts, guard) => runtime.conversations.compactConversationGuarded(id, opts, guard),
     submitInputGuarded: async (id, text, opts, guard) => {
-      await runtime.submitInputGuarded(id, text, opts, guard)
+      await runtime.conversations.submitInputGuarded(id, text, opts, guard)
     },
-    getConversationOwnership: (id) => runtime.getConversationOwnership(id),
+    getConversationOwnership: (id) => runtime.ownership.getOwnership(id),
     listArtifacts: (conversationId) => Promise.resolve(runtime.artifacts.list(conversationId)),
-    createArtifact: (conversationId, input) => runtime.createArtifact(conversationId, input),
-    readArtifact: (conversationId, artifactId) => runtime.readAuthorizedArtifact(conversationId, artifactId),
+    createArtifact: (conversationId, input) => runtime.conversations.createArtifact(conversationId, input),
+    readArtifact: (conversationId, artifactId) => runtime.conversations.readAuthorizedArtifact(conversationId, artifactId),
     redact: (text) => runtime.stash.redact(text),
-    refreshModels: (options) => runtime.refreshModels(options),
-    listModels: () => runtime.listModels(),
+    refreshModels: (options) => runtime.models.refreshModels(options),
+    listModels: () => runtime.models.listModels(),
     withFileLock: <T>(path: string, fn: () => Promise<T>, opts?: { signal?: AbortSignal }) =>
       withFileLock(path, async () => {
         opts?.signal?.throwIfAborted()
         return fn()
       }),
     atomicWriteFile: (path, content) => atomicWriteFile(path, content),
-    completeText: (input) => runtime.completeConversationText(input),
+    completeText: (input) => runtime.conversations.completeConversationText(input),
     executionEnv: (nodeId, cwd) => runtime.envFabric.envFor(nodeId, cwd),
     spawnAgent: (request) => runtime.agentSpawn.spawnAgent(request),
     runGate: (command, options) => runtime.agentSpawn.runGate(command, options),
     resolveSpawnTarget: (input) => runtime.agentSpawn.resolveSpawnTarget(input),
     listActiveSpawnExecutions: () => runtime.agentSpawn.listActiveSpawnExecutions(),
     inspectNodePathUsage: (input) => runtime.agentSpawn.inspectNodePathUsage(input),
-    manageConversation: (id, pluginId) => runtime.manageConversation(id, pluginId),
-    markConversationOwnership: (id, owner) => runtime.markConversationOwnership(id, owner),
-    createAsk: (spec) => runtime.createAsk(spec),
-    cancelAsk: (askId, reason) => runtime.cancelAsk(askId, reason),
+    manageConversation: (id, pluginId) => runtime.ownership.manage(id, pluginId),
+    markConversationOwnership: (id, owner) => runtime.ownership.markOwnership(id, owner),
+    createAsk: (spec) => runtime.asks.createAsk(spec),
+    cancelAsk: async (askId, reason) => {
+      await runtime.asks.cancelAsk(askId, reason)
+    },
     execEnv: async (req, opts) => {
-      const res = await runtime.execEnv(req, undefined, opts?.signal)
+      const res = await runtime.nodes.execEnv(req, undefined, opts?.signal)
       return {
         ...res,
         output: runtime.stash.redact(res.output),

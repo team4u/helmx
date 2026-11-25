@@ -16,8 +16,12 @@ export {
   compareStrictSemVer,
   hubVersion,
 } from './semver.js'
-export { EventHub, type SnapshotProvider } from './events.js'
+export { EventHub, SessionDocEventHub, type SnapshotProvider } from './events.js'
 export { AskService } from './asks.js'
+export { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
+export { RuntimeOwnershipManager } from './runtime-ownership.js'
+export { RuntimeTriggerDispatcher } from './runtime-triggers.js'
+export { NodeForwardService, type NodeForwardEvent, type NodeForwardInput, type NodeForwardSession } from '../env/forward.js'
 export { ConversationTracker, deriveTitle, type TrackerEvents } from './conversations.js'
 export { toConversationEntry, deriveConversationLive, type EntryRecordLike } from './entries.js'
 export { openHelmxDatabase, type HelmxDatabase } from './sqlite.js'
@@ -39,14 +43,6 @@ export { buildModels, parseModelRef, requireModelRef, listModelCatalog, listMode
 export { createFileModelsStore } from './models-store.js'
 export type { HelmxToolDeps } from './tool-deps.js'
 export { NodeManager } from './node-manager.js'
-export {
-  NodeAutoUpgradeCoordinator,
-  resolveAutoUpgradeNodesEnabled,
-  DEFAULT_AUTO_UPGRADE_BUSY_POLL_MS,
-  DEFAULT_AUTO_UPGRADE_RETRY_BASE_MS,
-  DEFAULT_AUTO_UPGRADE_RETRY_MAX_MS,
-  type NodeAutoUpgradeRetryPolicy,
-} from './node-auto-upgrade.js'
 export {
   shQuote,
   buildPosixHostShim,

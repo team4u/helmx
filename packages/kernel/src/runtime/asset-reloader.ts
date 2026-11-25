@@ -18,7 +18,7 @@ interface AssetReloaderOptions {
   readonly dataDir: string
   /** True when `Models` is externally supplied (tests or external owners); `scheduleReloadModels` becomes a no-op so models are never replaced. */
   readonly externalModels?: boolean
-  /** Trigger model reload (e.g., `modelsRegistry.reloadModels()`). */
+  /** Trigger model reload (e.g., `models.reloadModels()`). */
   readonly reloadModels: () => Promise<void>
   /** Trigger plugin config mirror refresh (e.g., `pluginConfig.load()`). */
   readonly reloadPluginConfig: () => Promise<void>

@@ -14,7 +14,7 @@ import {
   type RegisterFauxProviderOptions,
 } from '@earendil-works/pi-ai/providers/faux'
 import type { PluginKvHandle, PluginKvListOptions, PluginKvListResult } from '@helmx/protocol'
-import type { PluginConfigStore, PluginDocStore, PluginKvRawEntry, PluginKvStore } from '../../../kernel/src/plugins/index.js'
+import type { PluginConfigStore, PluginDocStore, PluginKvRawEntry, PluginKvStore } from '@helmx/kernel'
 import {
   AGENT_BINDINGS_KV_NAMESPACE,
   LEASES_KV_NAMESPACE,

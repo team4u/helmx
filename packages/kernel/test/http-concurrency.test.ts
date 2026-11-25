@@ -20,8 +20,7 @@ import type { ConversationSummary, NodeForwardEvent, NodeForwardSession } from '
 import { ArtifactService, InMemoryArtifactRepository, ProfileService } from '../src/services/index.js'
 import { PluginHost } from '../src/plugins/index.js'
 import { hostBackendStub } from './helpers/host-backend-stub.js'
-import { handleApi } from '../src/http/routes.js'
-import type { KernelRuntimeLike } from '../src/http/contracts.js'
+import { handleApi, type CoreRoutesTarget } from '../src/http/routes.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir, sleep as delay } from './helpers.js'
 
@@ -61,7 +60,7 @@ test('plugin route handler execution counts as liveTasks: disabling mid-flight r
     },
     { enabled: true },
   )
-  const kernel = { plugins: host } as unknown as KernelRuntimeLike
+  const kernel = { plugins: host } as unknown as CoreRoutesTarget
   const pending = handleApi(
     new Request('http://hub/api/plugins/builtin:probe-route/routes/slow'),
     kernel,
@@ -119,7 +118,7 @@ test('pre-dispatch summary re-check: rejects 409 when listRoutes snapshot includ
       ],
       get: (id: string) => (id === 'stale-plugin' ? summary : undefined),
     },
-  } as unknown as KernelRuntimeLike
+  } as unknown as CoreRoutesTarget
   await assert.rejects(
     handleApi(new Request('http://hub/api/plugins/stale-plugin/routes/thing'), kernel),
     (err: unknown) => err instanceof HelmxError && err.code === 'plugin_disabled' && err.status === 409,
@@ -140,7 +139,7 @@ test('lightweight test host omitting get/withTask preserves dispatch behavior (o
         },
       ],
     },
-  } as unknown as KernelRuntimeLike
+  } as unknown as CoreRoutesTarget
   const response = await handleApi(new Request('http://hub/api/plugins/lite-plugin/routes/ping'), kernel)
   assert.equal(response.status, 200)
   assert.deepEqual(await response.json(), { pong: true })
@@ -156,7 +155,7 @@ interface ForwardFixture {
   lease: { acquisitions: number; releases: number }
 }
 
-function forwardKernel(over: ForwardFixture): KernelRuntimeLike {
+function forwardKernel(over: ForwardFixture): CoreRoutesTarget {
   const session: NodeForwardSession = {
     forwardId: 'fwd-11111111-2222-3333-4444-555555555555',
     nodeId: 'node-a',
@@ -169,25 +168,27 @@ function forwardKernel(over: ForwardFixture): KernelRuntimeLike {
   }
   over.sessions.set(session.forwardId, session)
   return {
-    listNodes: () => [],
-    async issueNodeToken() { throw new Error('unused') },
-    async removeNode() { throw new Error('unused') },
-    async execEnv() { throw new Error('unused') },
-    dataDir: '/tmp/helmx-forward-conc-test',
-    auth: { status: async () => ({ configured: false }), verifyToken: async () => false, setup: async () => ({ token: 'x' }), login: async () => ({ token: 'x' }) } as never,
-    getNodeForward: (id: string) => over.sessions.get(id),
-    listNodeForwards: () => [...over.sessions.values()],
-    onNodeForwardEvent: (_id: string, listener: (event: NodeForwardEvent) => void) => {
-      over.events.push(listener)
-      return () => undefined
+    nodes: {
+      listNodes: async () => [],
+      async issueNodeToken() { throw new Error('unused') },
+      async removeNode() { throw new Error('unused') },
+      async execEnv() { throw new Error('unused') },
     },
-    acquireNodeForwardLease: (_id: string) => {
-      over.lease.acquisitions += 1
-      return () => {
-        over.lease.releases += 1
-      }
+    nodeForward: {
+      get: (id: string) => over.sessions.get(id),
+      list: () => [...over.sessions.values()],
+      onEvent: (_id: string, listener: (event: NodeForwardEvent) => void) => {
+        over.events.push(listener)
+        return () => undefined
+      },
+      acquireLease: (_id: string) => {
+        over.lease.acquisitions += 1
+        return () => {
+          over.lease.releases += 1
+        }
+      },
     },
-  } as unknown as KernelRuntimeLike
+  } as unknown as CoreRoutesTarget
 }
 
 const FORWARD_EVENTS_PATH = '/api/nodes/forward/fwd-11111111-2222-3333-4444-555555555555/events'
@@ -283,14 +284,15 @@ test('DELETE /api/profiles/:id TOCTOU: concurrent binding after fast path is cau
     // conversation -- simulates check-passed -> concurrent POST binding -> delete race.
     let listCalls = 0
     const kernel = {
-      dataDir: dir,
       profiles,
       plugins: host,
-      listConversations: () => {
-        listCalls += 1
-        return listCalls === 1 ? [] : [bound]
+      conversations: {
+        listConversations: () => {
+          listCalls += 1
+          return listCalls === 1 ? [] : [bound]
+        },
       },
-    } as unknown as KernelRuntimeLike
+    } as unknown as CoreRoutesTarget
     await assert.rejects(
       handleApi(new Request('http://hub/api/profiles/race-profile', { method: 'DELETE' }), kernel),
       (err: unknown) => err instanceof HelmxError && err.code === 'profile_in_use' && err.status === 409,
@@ -345,18 +347,19 @@ test('POST /api/conversations/:id/artifacts TOCTOU: conversation deleted after e
     // simulates entry-validated -> DELETE completes -> upload write race.
     let detailCalls = 0
     const kernel = {
-      dataDir: dir,
       plugins: host,
       artifacts,
-      getConversationDetail: async (id: number) => {
-        detailCalls += 1
-        if (detailCalls === 1) return { ...summaryOf(id), entries: [] }
-        throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+      conversations: {
+        getConversationDetail: async (id: number) => {
+          detailCalls += 1
+          if (detailCalls === 1) return { ...summaryOf(id), entries: [] }
+          throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        },
+        getConversationEntry: async (id: number, entryId: number) => {
+          throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404)
+        },
       },
-      getConversationEntry: async (id: number, entryId: number) => {
-        throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404)
-      },
-    } as unknown as KernelRuntimeLike
+    } as unknown as CoreRoutesTarget
     await assert.rejects(
       handleApi(
         new Request('http://hub/api/conversations/5/artifacts', {

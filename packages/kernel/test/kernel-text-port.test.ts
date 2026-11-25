@@ -117,7 +117,7 @@ describe('completeConversationText (generic kernel model port)', () => {
     const env = await openEnv()
     try {
       env.fauxA.setResponses([fauxAssistantMessage('plain output')])
-      const text = await env.kernel.completeConversationText({
+      const text = await env.kernel.conversations.completeConversationText({
         conversationId: 1,
         systemPrompt: 'SYS-PROMPT-MARKER',
         text: 'USER-TEXT-MARKER',
@@ -147,7 +147,7 @@ describe('completeConversationText (generic kernel model port)', () => {
       env.kernel.stash.addRedaction('SECRET-INPUT-42')
       env.kernel.stash.addRedaction('SECRET-OUTPUT-99')
       env.fauxA.setResponses([fauxAssistantMessage('result contains SECRET-OUTPUT-99')])
-      const text = await env.kernel.completeConversationText({
+      const text = await env.kernel.conversations.completeConversationText({
         conversationId: 1,
         systemPrompt: 'system hint contains SECRET-INPUT-42',
         text: 'snapshot contains SECRET-INPUT-42',
@@ -165,10 +165,10 @@ describe('completeConversationText (generic kernel model port)', () => {
   it('conversation model override takes precedence over global model and routes to override provider', { timeout: 60_000 }, async () => {
     const env = await openEnv()
     try {
-      const conv = await env.kernel.createConversation({ title: 'override' })
-      await env.kernel.updateConversation(conv.id, { model: 'faux-b/override-model' })
+      const conv = await env.kernel.conversations.createConversation({ title: 'override' })
+      await env.kernel.conversations.updateConversation(conv.id, { model: 'faux-b/override-model' })
       env.fauxB.setResponses([fauxAssistantMessage('from override model')])
-      const text = await env.kernel.completeConversationText({
+      const text = await env.kernel.conversations.completeConversationText({
         conversationId: conv.id,
         systemPrompt: 's',
         text: 't',
@@ -188,7 +188,7 @@ describe('completeConversationText (generic kernel model port)', () => {
     try {
       env.fauxA.setResponses([fauxAssistantMessage('partial text', { stopReason: 'error' })])
       await assert.rejects(
-        env.kernel.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't' }),
+        env.kernel.conversations.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't' }),
         (e: unknown) => {
           assert.ok(e instanceof HelmxError)
           assert.equal(e.code, 'model_completion_unavailable')
@@ -206,7 +206,7 @@ describe('completeConversationText (generic kernel model port)', () => {
     try {
       env.fauxA.setResponses([fauxAssistantMessage('truncated text', { stopReason: 'length' })])
       await assert.rejects(
-        env.kernel.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't' }),
+        env.kernel.conversations.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't' }),
         (e: unknown) => {
           assert.ok(e instanceof HelmxError)
           assert.equal(e.code, 'model_completion_unavailable')
@@ -222,7 +222,7 @@ describe('completeConversationText (generic kernel model port)', () => {
     const env = await openEnv()
     try {
       await assert.rejects(
-        env.kernel.completeConversationText({ conversationId: 999_999, systemPrompt: 's', text: 't' }),
+        env.kernel.conversations.completeConversationText({ conversationId: 999_999, systemPrompt: 's', text: 't' }),
         (e: unknown) => {
           assert.ok(e instanceof HelmxError)
           assert.equal(e.code, 'not_found')
@@ -232,7 +232,7 @@ describe('completeConversationText (generic kernel model port)', () => {
       const controller = new AbortController()
       controller.abort()
       await assert.rejects(
-        env.kernel.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't', signal: controller.signal }),
+        env.kernel.conversations.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't', signal: controller.signal }),
         () => true,
       )
       assert.equal(env.capturedA.length, 0, 'pre-aborted signal must not start any request')
@@ -245,7 +245,7 @@ describe('completeConversationText (generic kernel model port)', () => {
     const env = await openEnv()
     try {
       env.fauxB.setResponses([fauxAssistantMessage('from explicit model')])
-      const text = await env.kernel.completeConversationText({
+      const text = await env.kernel.conversations.completeConversationText({
         conversationId: 1,
         model: 'faux-b/override-model',
         systemPrompt: 's',
@@ -254,9 +254,9 @@ describe('completeConversationText (generic kernel model port)', () => {
       assert.equal(text, 'from explicit model')
       assert.equal(env.capturedA.length, 0, 'global/conversation model must not be called when explicit model is given')
       assert.equal(env.capturedB.length, 1, 'explicit model provider receives the call')
-      await env.kernel.setDisabledModels('faux-b', ['override-model'])
+      await env.kernel.models.setDisabledModels('faux-b', ['override-model'])
       await assert.rejects(
-        env.kernel.completeConversationText({
+        env.kernel.conversations.completeConversationText({
           conversationId: 1,
           model: 'faux-b/override-model',
           systemPrompt: 's',
@@ -285,7 +285,7 @@ describe('completeConversationText (generic kernel model port)', () => {
     })
     try {
       await assert.rejects(
-        kernel.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't' }),
+        kernel.conversations.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't' }),
         (e: unknown) => {
           assert.ok(e instanceof HelmxError)
           assert.equal(e.code, 'model_not_configured')
