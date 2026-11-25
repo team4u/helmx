@@ -14,6 +14,8 @@ helmx swarm create-group --conversation-id 42 --title '检查导出模块' --jso
 
 带 worktree 的成员每回合都会收到 `builtin:worktree` 注入的 `<worktree_context>` 系统段落（含 `branch`、`path`、`baseCommit`、源工作区是否脏，以及结束回合前 `git commit` 的提醒），与 `subagent` 隔离派生的提示词尾注同源；成员据此知道自己在哪条受管分支上工作。
 
+使用 `forkFrom`（`'coordinator'` 或既有成员名）热分叉的成员会持久化 `forked: true`：每回合在 `<active_swarm_group>` 注入上下文边界规则（将分叉点之前的历史视作只读背景，不重复派发继承来的委托指令），并在 `before_turn` 动态剥离所有活跃 `helmx.dispatch-tools` 派工工具（同步抑制 `<available_profiles>` 协作目录）；未设 `forkFrom` 的常规成员与人工 `conversations fork` 会话不受影响。
+
 ## 看板消息
 
 每个协作组维护一条单线递增序号的共享黑板。`board_post` 的 `to` 决定谁收到消息，可填 `coordinator` 或活跃成员名（可选前导 `@`）；只有主控和人工调用可以用 `all`。找不到或已归档的收件人会使操作失败；剔除发帖者自身后没有任何活跃可唤醒目标（如自寻址或空组 `all`）会返回 `409 swarm_no_active_targets`，防止静默掉棒。

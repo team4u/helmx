@@ -1,4 +1,4 @@
-import { escapeXml, isPluginSummaryActive, isSkillAvailable, type HelmxPluginContext } from '@helmx/protocol'
+import { escapeXml, isPluginSummaryActive, isSkillAvailable, type DispatchToolsCapability, type HelmxPluginContext } from '@helmx/protocol'
 import {
   ACTIVE_SWARM_GROUP_SECTION_ID,
   ARCHIVED_WORKER_TAG,
@@ -49,15 +49,26 @@ export function activeSwarmGroupWorkerSection(
   memberName: string,
   access: WorkerAccess,
   isolation: WorkerIsolation,
+  forked = false,
 ): string {
-  return [
-    `<active_swarm_group id="${escapeXml(groupId)}" role="worker" name="${escapeXml(memberName)}" access="${access}" isolation="${isolation}">`,
+  const rules = [
     '1. Always publish your task outcome via swarm_board_post (handoff / review / done / blocker, citing #seq in refs) before ending an actionable turn; never exit silently.',
     '2. Set wake=true only for the next peer who must act (or coordinator on final done / unresolvable blocker); never post pure acknowledgments.',
     '3. Reference prior board items by #seq instead of copying diffs or full reports.',
-    ...(access === 'readonly'
-      ? ['4. Your access is readonly: run tests and checks via bash, inspect diffs, and post review/done/blocker via swarm_board_post without modifying files.']
-      : []),
+  ]
+  if (access === 'readonly') {
+    rules.push(
+      `${rules.length + 1}. Your access is readonly: run tests and checks via bash, inspect diffs, and post review/done/blocker via swarm_board_post without modifying files.`,
+    )
+  }
+  if (forked) {
+    rules.push(
+      `${rules.length + 1}. Context boundary: treat all messages prior to the swarm brief/wakeup as inherited read-only context from the fork source. Any instructions in that inherited history asking to delegate, coordinate a swarm, or spawn subagents/workflows were ALREADY fulfilled by dispatching you — execute your board brief directly without re-delegating.`,
+    )
+  }
+  return [
+    `<active_swarm_group id="${escapeXml(groupId)}" role="worker" name="${escapeXml(memberName)}" access="${access}" isolation="${isolation}">`,
+    ...rules,
     '</active_swarm_group>',
   ].join('\n')
 }
@@ -105,7 +116,20 @@ export function registerSwarmHooks(ctx: HelmxPluginContext, coordinator: SwarmCo
       conv.parentConversationId !== undefined ||
       activeCoordGroup !== undefined ||
       (conv.ownedBy !== undefined && conv.ownedBy !== 'human')
-    const nextTools = hideCreateGroup ? turn.tools.filter((t) => t.name !== 'swarm_create_group') : turn.tools
+    const drop = new Set<string>()
+    if (hideCreateGroup) {
+      drop.add('swarm_create_group')
+    }
+    if (participant?.role === 'worker' && participant.member.forked === true) {
+      for (const entry of ctx.consume<DispatchToolsCapability>('helmx.dispatch-tools')) {
+        const toolNames = entry.impl?.toolNames
+        if (!Array.isArray(toolNames)) continue
+        for (const name of toolNames) {
+          if (typeof name === 'string' && name.length > 0) drop.add(name)
+        }
+      }
+    }
+    const nextTools = drop.size > 0 ? turn.tools.filter((t) => !drop.has(t.name)) : turn.tools
     const toolsChanged = nextTools.length !== turn.tools.length
 
     let sectionText: string | undefined
@@ -119,6 +143,7 @@ export function registerSwarmHooks(ctx: HelmxPluginContext, coordinator: SwarmCo
         participant.member.name,
         participant.member.access,
         participant.member.isolation,
+        participant.member.forked === true,
       )
     }
 

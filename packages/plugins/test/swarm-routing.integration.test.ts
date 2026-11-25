@@ -1095,4 +1095,146 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       await env.close()
     }
   })
+
+  test('swarm-int18: forkFrom worker persists forked=true, injects context boundary & strips dispatch tools/catalog while non-forked worker retains them', { timeout: 60_000 }, async (t) => {
+    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-fork-guard-'), gitTemplate)
+    try {
+      const { kernel } = env.app
+      await kernel.services.profiles.save({ id: 'reviewer', name: 'Reviewer', skills: [] })
+
+      const coord = await kernel.conversations.createConversation({ title: 'Fork Guard Coord', profileId: 'assistant', cwd: env.repoDir })
+      env.faux.setResponses([fauxAssistantMessage('Stored parent context FK-88.')])
+      await kernel.conversations.submitInput(coord.id, 'Remember context FK-88 and do not re-delegate it.')
+      await kernel.conversations.waitForIdle(coord.id)
+
+      const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Fork Guard Squad',
+        conversationId: coord.id,
+      })) as { groupId: string }
+
+      let forkedRwMeta: ReturnType<typeof captureRequestMeta> | undefined
+      let forkedRwSawHistory = false
+      let forkedRoMeta: ReturnType<typeof captureRequestMeta> | undefined
+      let plainRwMeta: ReturnType<typeof captureRequestMeta> | undefined
+
+      setSwarmRoleResponses(env.faux, {
+        forked_rw: [
+          (ctx) => {
+            forkedRwMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+            forkedRwSawHistory = JSON.stringify(ctx.messages).includes('FK-88')
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'forked_rw done' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('forked_rw settled'),
+        ],
+        forked_ro: [
+          (ctx) => {
+            forkedRoMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'forked_ro done' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('forked_ro settled'),
+        ],
+        plain_rw: [
+          (ctx) => {
+            plainRwMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'plain_rw done' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('plain_rw settled'),
+        ],
+        coordinator: [
+          fauxAssistantMessage('Coordinator noted forked_rw done.'),
+          fauxAssistantMessage('Coordinator noted forked_ro done.'),
+          fauxAssistantMessage('Coordinator noted plain_rw done.'),
+        ],
+      })
+
+      const forkedRw = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'forked_rw', prompt: 'Execute forked readwrite task directly.', forkFrom: 'coordinator' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(forkedRw.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      const forkedRo = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'forked_ro', prompt: 'Verify readonly forked slice.', forkFrom: 'coordinator', access: 'readonly' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(forkedRo.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      const plainRw = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'plain_rw', prompt: 'Run standard non-forked worker.' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(plainRw.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      // 1) Forked readwrite worker: inherits context, gets rule 4 boundary, strips dispatch tools & profile.catalog, keeps work tools
+      assert.equal(forkedRwSawHistory, true, 'forked_rw must inherit fork source history')
+      assert.ok(forkedRwMeta, 'must capture forked_rw request metadata')
+      const rwSec = forkedRwMeta.sectionsById['swarm.active_group'] ?? ''
+      assert.match(rwSec, /^<active_swarm_group[\s\S]*4\. Context boundary:/, 'forked readwrite worker must receive rule 4 context boundary')
+      assert.ok(rwSec.includes('ALREADY fulfilled by dispatching you'))
+      for (const stripped of ['subagent', 'SubagentWorkflow', 'swarm_create_group', 'swarm_dispatch_worker']) {
+        assert.equal(forkedRwMeta.toolNames.includes(stripped), false, `forked_rw must strip ${stripped}`)
+      }
+      for (const kept of ['swarm_board_post', 'bash', 'read', 'write']) {
+        assert.equal(forkedRwMeta.toolNames.includes(kept), true, `forked_rw must retain ${kept}`)
+      }
+      assert.equal(forkedRwMeta.sectionsById['profile.catalog'], undefined, 'forked_rw must suppress profile.catalog')
+
+      // 2) Forked readonly worker: keeps rule 4 readonly + rule 5 boundary, strips dispatch tools & profile.catalog
+      assert.ok(forkedRoMeta, 'must capture forked_ro request metadata')
+      const roSec = forkedRoMeta.sectionsById['swarm.active_group'] ?? ''
+      assert.ok(roSec.includes('4. Your access is readonly:'), 'forked readonly worker must keep rule 4 readonly')
+      assert.ok(roSec.includes('5. Context boundary:'), 'forked readonly worker must append rule 5 context boundary')
+      assert.equal(forkedRoMeta.toolNames.includes('subagent'), false)
+      assert.equal(forkedRoMeta.toolNames.includes('SubagentWorkflow'), false)
+      assert.equal(forkedRoMeta.sectionsById['profile.catalog'], undefined)
+
+      // 3) Control non-forked worker: NO context boundary clause, retains subagent/SubagentWorkflow & profile.catalog
+      assert.ok(plainRwMeta, 'must capture plain_rw request metadata')
+      const plainSec = plainRwMeta.sectionsById['swarm.active_group'] ?? ''
+      assert.equal(plainSec.includes('Context boundary:'), false, 'non-forked worker must not get forked context boundary')
+      assert.equal(plainSec.includes('ALREADY fulfilled'), false)
+      assert.equal(plainRwMeta.toolNames.includes('subagent'), true, 'non-forked worker retains subagent')
+      assert.equal(plainRwMeta.toolNames.includes('SubagentWorkflow'), true, 'non-forked worker retains SubagentWorkflow')
+      assert.equal(plainRwMeta.toolNames.includes('swarm_board_post'), true)
+      assert.ok(typeof plainRwMeta.sectionsById['profile.catalog'] === 'string', 'non-forked worker retains profile.catalog')
+      assert.ok(plainRwMeta.sectionsById['profile.catalog'].includes('id="reviewer"'))
+
+      // 4) Persisted forked=true in board_status and meta.json
+      const status = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId }, { conversationId: coord.id })) as BoardViewDoc
+      assert.equal(status.members.find((m) => m.name === 'forked_rw')?.forked, true)
+      assert.equal(status.members.find((m) => m.name === 'forked_ro')?.forked, true)
+      assert.equal(status.members.find((m) => m.name === 'plain_rw')?.forked, undefined)
+
+      const metaPath = join(env.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId, 'meta.json')
+      const persistedMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
+      assert.equal(persistedMeta.members.find((m) => m.name === 'forked_rw')?.forked, true)
+      assert.equal(persistedMeta.members.find((m) => m.name === 'forked_ro')?.forked, true)
+      assert.equal(persistedMeta.members.find((m) => m.name === 'plain_rw')?.forked, undefined)
+
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
+    } finally {
+      await env.close()
+    }
+  })
 })

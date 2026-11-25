@@ -19,6 +19,8 @@ export interface ManagedSubagentEntry {
   parentConversationId: number
   /** 该子代理子树的派生深度上限（派生时快照；配置后续变更不追溯）。 */
   maxSubagentDepth: number
+  /** 是否经 fork: true 从父会话上下文分叉创建（持久事实；resume 续接保持）。 */
+  forked?: boolean
 }
 
 /** 深度超限统一错误（含事实细节，工具/动作入口与 agent_spawn 兜底共用）。 */
@@ -33,7 +35,7 @@ export function depthExceededError(depth: number, maxSubagentDepth: number, conv
 
 /** 受管子代理登记与深度守卫（深度事实的单一读写入口）。 */
 export interface ManagedSubagentRegistry {
-  depthFactsOf(conversationId: number): { managed: boolean; depth: number; maxSubagentDepth: number }
+  depthFactsOf(conversationId: number): { managed: boolean; depth: number; maxSubagentDepth: number; forked: boolean }
   registerManagedSubagent(
     conversationId: number,
     meta: {
@@ -43,6 +45,7 @@ export interface ManagedSubagentRegistry {
       parentConversationId: number
       maxSubagentDepth: number
       ceilingExplicit: boolean
+      forked?: boolean
     },
   ): void
   assertCanSpawn(conversationId: number): void
@@ -63,7 +66,8 @@ function validateEntry(conversationId: number, entry: ManagedSubagentEntry): Man
     entry.maxSubagentDepth > HARD_MAX_SUBAGENT_DEPTH ||
     !Number.isSafeInteger(entry.parentConversationId) ||
     entry.parentConversationId < 1 ||
-    entry.parentConversationId === conversationId
+    entry.parentConversationId === conversationId ||
+    (entry.forked !== undefined && typeof entry.forked !== 'boolean')
   ) {
     throw new HelmxError('subagent_record_invalid', `受管子代理 ${conversationId} 的深度登记无效`, 500, { conversationId })
   }
@@ -97,12 +101,12 @@ export function createManagedSubagentRegistry(deps: {
     cursor = page.nextCursor
   }
 
-  function depthFactsOf(conversationId: number): { managed: boolean; depth: number; maxSubagentDepth: number } {
+  function depthFactsOf(conversationId: number): { managed: boolean; depth: number; maxSubagentDepth: number; forked: boolean } {
     const entry = entries.get(conversationId)
     if (entry === undefined) {
-      return { managed: false, depth: 0, maxSubagentDepth: deps.configuredMaxSubagentDepth() }
+      return { managed: false, depth: 0, maxSubagentDepth: deps.configuredMaxSubagentDepth(), forked: false }
     }
-    return { managed: true, depth: entry.depth, maxSubagentDepth: entry.maxSubagentDepth }
+    return { managed: true, depth: entry.depth, maxSubagentDepth: entry.maxSubagentDepth, forked: entry.forked === true }
   }
 
   function registerManagedSubagent(
@@ -114,6 +118,7 @@ export function createManagedSubagentRegistry(deps: {
       parentConversationId: number
       maxSubagentDepth: number
       ceilingExplicit: boolean
+      forked?: boolean
     },
   ): void {
     const existing = entries.get(conversationId)
@@ -127,6 +132,7 @@ export function createManagedSubagentRegistry(deps: {
         ? meta.maxSubagentDepth
         : (existing?.maxSubagentDepth ?? meta.maxSubagentDepth),
       createdAt: existing?.createdAt ?? Date.now(),
+      ...(existing?.forked === true || meta.forked === true ? { forked: true } : {}),
     }
     validateEntry(conversationId, next)
     entries.set(conversationId, next)

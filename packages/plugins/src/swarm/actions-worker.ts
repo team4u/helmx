@@ -270,6 +270,7 @@ export function createWorkerHandlers(
           {
             name: memberName, conversationId: created.id, profileId: targetProfile, access, isolation,
             nodeId: finalNodeId, cwd: finalCwd, ...(acquiredWorktreeId ? { worktreeId: acquiredWorktreeId } : {}),
+            ...(sourceConvId !== undefined ? { forked: true } : {}),
             lifecycle: 'active', ...(idempotencyKey ? { dispatchKey: idempotencyKey } : {}), createdAt: now,
           },
           input.prompt,
