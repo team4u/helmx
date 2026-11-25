@@ -75,11 +75,8 @@ function ConversationDurationStatus({ conversation }: { conversation: Conversati
   const label = conversationDurationLabel(conversation, nowMs, t)
   if (label === null) return null
   return (
-    <span
-      className={`composer-duration-status${label.tone === 'warn' ? ' composer-duration-status-warn' : ''}`}
-      title={label.tooltip || undefined}
-    >
-      <span className="mono tabular-nums">{label.text}</span>
+    <span className="composer-duration-status">
+      <span className="mono tabular-nums">{label}</span>
     </span>
   )
 }

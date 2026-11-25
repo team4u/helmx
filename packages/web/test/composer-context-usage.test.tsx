@@ -584,7 +584,7 @@ test('COMPOSER_TOOLBAR_SLOT mounts inside .composer-toolbar-left on both Compose
   }
 })
 
-test('conversationDurationLabel：生成中不重复展示本轮、第 2 轮起仅实时累计、blocked 等待审批、空闲态与 Tooltip 拆解', { timeout: 60_000 }, async () => {
+test('conversationDurationLabel：仅 blocked 渲染「等待审批」秒表且不附累计，working / 空闲 / 完成一律 null；活跃态仍需共享时钟', { timeout: 60_000 }, async () => {
   const { conversationDurationLabel, conversationDurationNeedsLiveClock } = await import(
     '../src/conversation/conversation-duration-model.js'
   )
@@ -599,20 +599,29 @@ test('conversationDurationLabel：生成中不重复展示本轮、第 2 轮起�
   assert.equal(conversationDurationNeedsLiveClock({ status: 'idle', runDurationMs: 0 }), false)
   assert.equal(conversationDurationLabel({ status: 'idle', runDurationMs: 0 }, now, tZh), null)
 
-  // 2. working 第 1 轮（settledRunMs === 0）：本轮秒表归时间线独占，状态行不重复展示 -> null
-  //    （共享时钟需求仍为 true：标题浮层等活跃消费者继续订阅）
-  assert.equal(conversationDurationNeedsLiveClock({
-    status: 'working',
-    runDurationMs: 0,
-    runStartedAt: now - 12_300,
-  }), true)
+  // 2. 空闲/完成/错误：已有累计运行时长也不在状态行重复（累计归标题浮层与大纲头部）
+  assert.equal(
+    conversationDurationLabel(
+      { status: 'done', runDurationMs: 125_000, completionSeq: 3, createdAt, updatedAt: createdAt + 300_000 },
+      now,
+      tEn,
+    ),
+    null,
+  )
+
+  // 3. working：本轮秒表归时间线独占，第 2 轮起也不再显示累计 -> null；
+  //    共享时钟需求仍为 true：标题浮层等活跃消费者继续订阅
+  assert.equal(
+    conversationDurationNeedsLiveClock({ status: 'working', runDurationMs: 0, runStartedAt: now - 12_300 }),
+    true,
+  )
   assert.equal(
     conversationDurationLabel(
       {
         status: 'working',
-        runDurationMs: 0,
+        runDurationMs: 60_000,
         runStartedAt: now - 12_300,
-        completionSeq: 0,
+        completionSeq: 1,
         createdAt,
         updatedAt: now,
       },
@@ -622,77 +631,25 @@ test('conversationDurationLabel：生成中不重复展示本轮、第 2 轮起�
     null,
   )
 
-  // 3. working 第 2 轮起（settledRunMs > 0）：紧凑文本仅显示实时「累计」（已结算 + 在途），
-  //    本轮运行降级到 Tooltip 拆解
-  const round2 = conversationDurationLabel(
-    {
-      status: 'working',
-      runDurationMs: 60_000,
-      runStartedAt: now - 12_300,
-      completionSeq: 1,
-      createdAt,
-      updatedAt: now,
-    },
-    now,
-    tZh,
+  // 4. blocked 等待审批：仅「等待审批 <秒表>」，有累计历史也不附带「· 累计」
+  const blockedBase = { status: 'blocked', pendingAskCount: 1, pendingAskSince: now - 15_400 } as const
+  assert.equal(conversationDurationLabel({ ...blockedBase, runDurationMs: 0 }, now, tZh), '等待审批 15s')
+  assert.equal(
+    conversationDurationLabel(
+      { ...blockedBase, runDurationMs: 65_000, runStartedAt: now - 15_400, completionSeq: 2, createdAt, updatedAt: now },
+      now,
+      tZh,
+    ),
+    '等待审批 15s',
   )
-  assert.ok(round2 !== null)
-  assert.equal(round2.text, '累计 1m12s')
-  assert.equal(round2.tone, 'default')
-  assert.match(round2.tooltip, /累计运行：1m12s/)
-  assert.match(round2.tooltip, /本轮运行：12s/)
-  assert.match(round2.tooltip, /已结算轮次：1/)
-  assert.match(round2.tooltip, /创建于：2026-11-10 14:00:00/)
-  assert.match(round2.tooltip, /会话跨度：2m00s/)
+  assert.equal(conversationDurationLabel({ ...blockedBase }, now, tEn), 'Waiting 15s')
+  assert.equal(conversationDurationNeedsLiveClock({ ...blockedBase }), true)
 
-  // 4. blocked 等待审批（warn 语义；无累计仅「等待审批 15s」，有累计附「· 累计 1m20s」）
-  const blockedOnly = conversationDurationLabel(
-    {
-      status: 'blocked',
-      pendingAskCount: 1,
-      pendingAskSince: now - 15_400,
-      runDurationMs: 0,
-    },
-    now,
-    tZh,
-  )
-  assert.ok(blockedOnly !== null)
-  assert.equal(blockedOnly.text, '等待审批 15s')
-  assert.equal(blockedOnly.tone, 'warn')
-
-  const blockedWithTotal = conversationDurationLabel(
-    {
-      status: 'blocked',
-      pendingAskCount: 1,
-      pendingAskSince: now - 15_400,
-      runDurationMs: 65_000,
-      runStartedAt: now - 15_400,
-      completionSeq: 2,
-      createdAt,
-      updatedAt: now,
-    },
-    now,
-    tZh,
-  )
-  assert.ok(blockedWithTotal !== null)
-  assert.equal(blockedWithTotal.text, '等待审批 15s · 累计 1m20s')
-  assert.equal(blockedWithTotal.tone, 'warn')
-  assert.match(blockedWithTotal.tooltip, /等待审批：15s/)
-
-  // 5. 空闲/完成/错误：settledRunMs > 0 显示「累计 2m5s」（英文 Total 2m5s）
-  const settledEn = conversationDurationLabel(
-    { status: 'done', runDurationMs: 125_000, completionSeq: 3, createdAt, updatedAt: createdAt + 300_000 },
-    now,
-    tEn,
-  )
-  assert.ok(settledEn !== null)
-  assert.equal(settledEn.text, 'Total 2m5s')
-  assert.match(settledEn.tooltip, /Total run: 2m5s/)
-  assert.match(settledEn.tooltip, /Settled turns: 3/)
-  assert.match(settledEn.tooltip, /Session span: 5m0s/)
+  // 5. blocked 但无 pendingAskSince 锚点：不伪造秒表
+  assert.equal(conversationDurationLabel({ status: 'blocked', pendingAskCount: 1 }, now, tZh), null)
 })
 
-test('Composer ConversationDurationStatus：与 ContextUsageStatus 同行、无 contextUsage 时撑开状态行且 warn 色调生效', { timeout: 60_000 }, async () => {
+test('Composer ConversationDurationStatus：blocked 渲染「等待审批」warn 只读文本并撑开状态行，无等待审批时不渲染', { timeout: 60_000 }, async () => {
   const { resetServerClock } = await import('../src/lib/server-clock.js')
   resetServerClock()
   const css = readFileSync(new URL('../src/styles/composer.css', import.meta.url), 'utf8')
@@ -704,8 +661,8 @@ test('Composer ConversationDurationStatus：与 ContextUsageStatus 同行、无 
   document.body.appendChild(host)
   const root = createRoot(host)
   try {
-    // 1. 无 contextUsage 但有 runDurationMs：.composer-status-row 不得被 :not(:has(...)) 隐藏
-    const idleWithDuration: ConversationSummary = {
+    // 1. 无等待审批（done 且无 contextUsage）：状态行不渲染时长读数
+    const doneSettled: ConversationSummary = {
       ...conv(undefined),
       status: 'done',
       runDurationMs: 65_000,
@@ -717,28 +674,17 @@ test('Composer ConversationDurationStatus：与 ContextUsageStatus 同行、无 
       root.render(
         e(
           HostStoreProviders,
-          { value: makeTestStore({ locale: 'zh-CN', conversations: [idleWithDuration] }) },
-          e(Composer, { conversation: idleWithDuration, prefill: null }),
+          { value: makeTestStore({ locale: 'zh-CN', conversations: [doneSettled] }) },
+          e(Composer, { conversation: doneSettled, prefill: null }),
         ),
       )
     })
-    const row = host.querySelector<HTMLElement>('.composer-status-row')
-    const durationEl = host.querySelector<HTMLElement>('.composer-duration-status')
-    assert.ok(row !== null && durationEl !== null)
-    assert.equal(getComputedStyle(row).display, 'flex', 'duration status keeps .composer-status-row visible')
-    assert.equal(durationEl.textContent, '累计 1m5s')
-    assert.match(durationEl.getAttribute('title') ?? '', /累计运行：1m5s/)
-    assert.equal(
-      durationEl.getAttribute('data-state'),
-      null,
-      'duration status uses native title only without Radix Tooltip trigger',
-    )
-    assert.equal(getComputedStyle(durationEl).color, 'rgb(11, 12, 13)')
+    assert.ok(host.querySelector('.composer-duration-status') === null, 'no duration readout without pending ask')
 
-    // 2. blocked 状态：warn 色调覆写默认灰，只读无按钮
+    // 2. blocked（无 contextUsage）：时长读数撑开 .composer-status-row，warn 色调，只读无按钮
     const now = Date.now()
     const blockedConv: ConversationSummary = {
-      ...conv({ tokens: 50_000, contextWindow: 200_000 }),
+      ...conv(undefined),
       status: 'blocked',
       pendingAskCount: 1,
       pendingAskSince: now - 10_400,
@@ -753,11 +699,13 @@ test('Composer ConversationDurationStatus：与 ContextUsageStatus 同行、无 
         ),
       )
     })
-    const warnEl = host.querySelector<HTMLElement>('.composer-duration-status-warn')
-    assert.ok(warnEl !== null)
-    assert.ok(warnEl.querySelector('button') === null, 'duration status must stay read-only')
-    assert.match(warnEl.textContent ?? '', /等待审批 10s · 累计 30s/)
-    assert.equal(getComputedStyle(warnEl).color, 'rgb(21, 22, 23)', 'warn tone must override default gray')
+    const row = host.querySelector<HTMLElement>('.composer-status-row')
+    const durationEl = host.querySelector<HTMLElement>('.composer-duration-status')
+    assert.ok(row !== null && durationEl !== null)
+    assert.equal(getComputedStyle(row).display, 'flex', 'duration status keeps .composer-status-row visible')
+    assert.equal(durationEl.textContent, '等待审批 10s')
+    assert.ok(durationEl.querySelector('button') === null, 'duration status must stay read-only')
+    assert.equal(getComputedStyle(durationEl).color, 'rgb(21, 22, 23)', 'warn tone must override default gray')
   } finally {
     resetServerClock()
     localStorage.removeItem('helmx:locale')
@@ -766,4 +714,3 @@ test('Composer ConversationDurationStatus：与 ContextUsageStatus 同行、无 
     style.remove()
   }
 })
-

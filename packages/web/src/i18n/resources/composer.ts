@@ -320,19 +320,8 @@ export const composerMessages = {
     'zh-CN': '上下文占用 {percent}%（约 {used} / {window} tokens）',
   },
 
-  // ---- Conversation duration readout ----
+  // ---- Conversation duration readout（状态行仅保留等待审批秒表；累计时长归标题浮层与大纲）----
   'composer.duration.waiting': { en: 'Waiting {duration}', 'zh-CN': '等待审批 {duration}' },
-  'composer.duration.waitingWithTotal': {
-    en: 'Waiting {waiting} · Total {total}',
-    'zh-CN': '等待审批 {waiting} · 累计 {total}',
-  },
-  'composer.duration.total': { en: 'Total {duration}', 'zh-CN': '累计 {duration}' },
-  'composer.duration.tooltipTotalRun': { en: 'Total run: {duration}', 'zh-CN': '累计运行：{duration}' },
-  'composer.duration.tooltipCurrentRun': { en: 'Current turn: {duration}', 'zh-CN': '本轮运行：{duration}' },
-  'composer.duration.tooltipWaiting': { en: 'Waiting for approval: {duration}', 'zh-CN': '等待审批：{duration}' },
-  'composer.duration.tooltipSettledTurns': { en: 'Settled turns: {count}', 'zh-CN': '已结算轮次：{count}' },
-  'composer.duration.tooltipCreatedAt': { en: 'Created at: {time}', 'zh-CN': '创建于：{time}' },
-  'composer.duration.tooltipSessionSpan': { en: 'Session span: {duration}', 'zh-CN': '会话跨度：{duration}' },
 
   // ---- Ask dock ----
   'composer.ask.selectPlaceholder': { en: 'Select…', 'zh-CN': '请选择…' },

@@ -554,7 +554,8 @@ button.attachment-chip:disabled {
 }
 .composer-status-row .composer-context-status-warn { color: var(--warn); }
 .composer-status-row .composer-context-status-high { color: var(--err); }
-.composer-status-row .composer-duration-status-warn { color: var(--warn); }
+/* 状态行时长读数只剩「等待审批」秒表，恒为 warn 色调 */
+.composer-status-row .composer-duration-status { color: var(--warn); }
 .composer-status-row .composer-status-slot {
   display: contents;
 }
