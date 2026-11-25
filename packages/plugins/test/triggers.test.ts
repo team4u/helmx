@@ -146,7 +146,7 @@ test('triggers1: createHelmx 默认启用注册；动作、路由、UI 与公开
   }
 })
 
-test('triggers2: 七个动作注册、schema 边界与 cli.command 声明', { timeout: 60_000 }, async () => {
+test('triggers2: 九个动作注册、schema 边界与 cli.command 声明', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
@@ -154,14 +154,16 @@ test('triggers2: 七个动作注册、schema 边界与 cli.command 声明', { ti
     const summary = host.list().find((p) => p.id === TRIGGERS)!
     assert.equal(summary.enabled, true)
 
-    // 契约动作全集（cron_list/create/delete/trigger + webhook_list/create/delete）
+    // 契约动作全集（cron_list/create/update/delete/trigger + webhook_list/create/update/delete）
     const expected: Array<{ id: string; command: string[] }> = [
       { id: 'cron_list', command: ['cron', 'list'] },
       { id: 'cron_create', command: ['cron', 'create'] },
+      { id: 'cron_update', command: ['cron', 'update'] },
       { id: 'cron_delete', command: ['cron', 'delete'] },
       { id: 'cron_trigger', command: ['cron', 'trigger'] },
       { id: 'webhook_list', command: ['webhook', 'list'] },
       { id: 'webhook_create', command: ['webhook', 'create'] },
+      { id: 'webhook_update', command: ['webhook', 'update'] },
       { id: 'webhook_delete', command: ['webhook', 'delete'] },
     ]
     const actions = host.listActions().filter((a) => a.pluginId === TRIGGERS)
@@ -256,6 +258,20 @@ test('triggers3: cron CRUD 契约——默认值、重复创建拒绝、list/del
     const cronsDoc = host.getPublicDoc(TRIGGERS, 'crons')
     const docJobs = (cronsDoc.value as { jobs: unknown[] }).jobs
     assert.equal(docJobs.length, 1)
+
+    // cron_update：修改周期/文本与清空 description，换代 rev
+    const updated = (await host.invokeAction(TRIGGERS, 'cron_update', {
+      id: 'nightly-report',
+      schedule: '30 4 * * *',
+      text: '更新后的汇总指令',
+      description: '',
+      enabled: false,
+    })) as { job: Record<string, unknown> }
+    assert.equal(updated.job.schedule, '30 4 * * *')
+    assert.equal(updated.job.text, '更新后的汇总指令')
+    assert.equal(updated.job.description, undefined)
+    assert.equal(updated.job.enabled, false)
+    assert.notEqual(updated.job.rev, job.rev)
 
     // 删除不存在的 id 显式拒绝
     await assert.rejects(
@@ -448,6 +464,23 @@ test('triggers6: webhook CRUD——元数据不含 secret、重复拒绝、公�
     await assert.rejects(
       () => host.invokeAction(TRIGGERS, 'webhook_create', { id: 'ci-hook', secret: 'another' }),
       (err: unknown) => err instanceof HelmxError && err.status === 409,
+    )
+
+    // webhook_update：在会话上下文（run_action 等价路径）可更新元数据，不泄密且拒绝 secret 字段
+    const updatedWh = (await host.invokeAction(
+      TRIGGERS,
+      'webhook_update',
+      { id: 'ci-hook', description: 'CI 回调 v2', mode: 'dedicated' },
+      { conversationId: ROOT_CONVERSATION_ID },
+    )) as { webhook: Record<string, unknown> }
+    assert.equal(updatedWh.webhook.description, 'CI 回调 v2')
+    assert.equal(updatedWh.webhook.mode, 'dedicated')
+    assert.equal(updatedWh.webhook.keepLast, undefined)
+    assert.notEqual(updatedWh.webhook.rev, wh.rev)
+    assert.equal(JSON.stringify(updatedWh).includes(SECRET), false)
+    await assert.rejects(
+      () => host.invokeAction(TRIGGERS, 'webhook_update', { id: 'ci-hook', secret: 'forbidden' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     )
 
     // 删除

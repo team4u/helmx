@@ -106,13 +106,18 @@ interface Harness {
   dataDir: string
 }
 
-function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
+function makeHarness(
+  startMs: number,
+  docSeed?: CronDoc,
+  options?: { profileIds?: Iterable<string> },
+): Harness {
   const docs = new MemoryDocStore()
   if (docSeed !== undefined) docs.set('builtin:triggers:crons', docSeed)
   const clock = new FakeClock(startMs)
   const dispatched: Array<{ envelope: ExternalTriggerEnvelope; target: TriggerDeliveryTarget }> = []
   const events: Array<{ type: string; payload: unknown }> = []
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-cron-test-'))
+  const profileSet = options?.profileIds === undefined ? undefined : new Set(options.profileIds)
   const h: Harness = {
     host: undefined as never,
     docs,
@@ -175,6 +180,13 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
           {
             dispatchTrigger: async (envelope, target) => h.dispatchImpl(envelope, target),
             findActiveRun: (jobId) => h.findActiveRunImpl(jobId),
+            ...(profileSet !== undefined
+              ? {
+                  profiles: {
+                    get: async (id: string) => (profileSet.has(id) ? { id } : undefined),
+                  },
+                }
+              : {}),
           },
           clock.api,
         )
@@ -1028,4 +1040,403 @@ test('findActiveRun 抛错防 0ms 热循环：按 60s 退避重排并通知，�
   assert.equal(checkCalls, 2)
   assert.equal(h.dispatched.length, 1)
   assert.equal(h.dispatched[0]!.envelope.id, `cron:active-check-err:${T0_5}`)
+})
+
+// ---------------------------------------------------------------------------
+// cron_update：字段更新、启停重排、并发 (id, rev) 隔离、模式切换与边界校验
+// ---------------------------------------------------------------------------
+
+test('cron_update：基础字段更新、description 空串清空、运行历史保留与 flush 落盘', { timeout: 60_000 }, async () => {
+  const h = track(
+    makeHarness(T0, {
+      version: 1,
+      jobs: [
+        seedJob({
+          id: 'upd',
+          rev: 'rev-init',
+          description: '旧说明',
+          schedule: '*/5 * * * *',
+          timezone: 'UTC',
+          text: 'old prompt',
+          nextRunAt: T0_5,
+          lastRunAt: T0 - 5 * MIN,
+          lastError: 'prior error',
+          lastSkippedAt: T0 - MIN,
+          lastSkipReason: 'previous run #9 is still working',
+        }),
+      ],
+    }),
+  )
+  await ready(h)
+  const flushBefore = h.flushCalls
+  const res = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'upd',
+    description: '新说明',
+    schedule: '0 8 * * *',
+    timezone: 'Asia/Shanghai',
+    text: 'new prompt',
+    catchUp: true,
+  })) as { job: CronJob }
+
+  assert.equal(res.job.id, 'upd')
+  assert.notEqual(res.job.rev, 'rev-init', 'update 必须换代 rev')
+  assert.equal(res.job.description, '新说明')
+  assert.equal(res.job.schedule, '0 8 * * *')
+  assert.equal(res.job.timezone, 'Asia/Shanghai')
+  assert.equal(res.job.text, 'new prompt')
+  assert.equal(res.job.catchUp, true)
+  assert.equal(res.job.enabled, true)
+  // T0 = 2026-01-01T00:00:00Z = 上海 08:00:00，严格晚于 T0 的下次 08:00 是 2026-01-02T00:00:00Z
+  assert.equal(res.job.nextRunAt, Date.parse('2026-01-02T00:00:00Z'))
+  // 保留运行历史字段
+  assert.equal(res.job.lastRunAt, T0 - 5 * MIN)
+  assert.equal(res.job.lastError, 'prior error')
+  assert.equal(res.job.lastSkippedAt, T0 - MIN)
+  assert.equal(res.job.lastSkipReason, 'previous run #9 is still working')
+  assert.ok(h.flushCalls >= flushBefore + 1, 'cron_update 必须 flush 落盘')
+
+  // description 传空串清空字段
+  const cleared = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'upd',
+    description: '',
+  })) as { job: CronJob }
+  assert.equal(cleared.job.description, undefined)
+  assert.equal('description' in cleared.job, false, '清空 description 后不得保留空串键')
+  assert.notEqual(cleared.job.rev, res.job.rev)
+})
+
+test('cron_update：enabled 启停切换、timer 重排与 flush 失败完整回滚重排', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0))
+  await ready(h)
+  const created = (await h.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'sched',
+    schedule: '*/5 * * * *',
+    text: 'ping',
+  })) as { job: CronJob }
+  assert.equal(h.clock.activeTimers(), 1)
+
+  // 1) flush 失败：原 job（含 rev）回滚且原 timer 重排，正常触发
+  h.flushImpl = async () => {
+    throw new HelmxError('store_flush_failed', 'flush failed', 500)
+  }
+  await assert.rejects(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'sched', enabled: false }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'store_flush_failed',
+  )
+  h.flushImpl = async () => {}
+  const afterRollback = await soleJob(h)
+  assert.equal(afterRollback.enabled, true)
+  assert.equal(afterRollback.rev, created.job.rev, 'flush 失败应回滚至原 rev')
+  assert.equal(h.clock.activeTimers(), 1, 'flush 失败后应重排原 timer')
+
+  // 2) 停用（enabled: false）：取消 timer，推进期间不投递（nextRunAt 保持与 cron_create 一致的非空计算值）
+  const disabled = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'sched',
+    enabled: false,
+  })) as { job: CronJob }
+  assert.equal(disabled.job.enabled, false)
+  assert.equal(disabled.job.nextRunAt, T0_5, '停用更新与 cron_create 一致计算 nextRunAt')
+  assert.equal(h.clock.activeTimers(), 0, '停用后不得残留 timer')
+  await h.clock.advance(12 * MIN) // 到 T0+12m
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 0)
+
+  // 3) 重新启用：按当前时钟 T0+12m 重算 nextRunAt=T15，不补跑停用期错过时点
+  const reenabled = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'sched',
+    enabled: true,
+  })) as { job: CronJob }
+  assert.equal(reenabled.job.enabled, true)
+  assert.equal(reenabled.job.nextRunAt, T15)
+  assert.equal(h.clock.activeTimers(), 1)
+  await h.clock.advance(3 * MIN) // 到 T15
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 1)
+  assert.equal(h.dispatched[0]!.envelope.id, `cron:sched:${T15}`)
+
+  // 4) 修改 schedule 重排 timer：T15+1m 改每小时整点，T20 不触发，T0+60m 触发
+  await h.clock.advance(MIN) // T16
+  const rescheduled = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'sched',
+    schedule: '0 * * * *',
+    text: 'hourly',
+  })) as { job: CronJob }
+  assert.equal(rescheduled.job.nextRunAt, T0 + 60 * MIN)
+  assert.equal(h.clock.activeTimers(), 1)
+  await h.clock.advance(4 * MIN) // T20（旧 5 分钟点）
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 1, '旧 timer 必须已被清除')
+  await h.clock.advance(40 * MIN) // T60（新整点）
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 2)
+  assert.equal(h.dispatched[1]!.envelope.id, `cron:sched:${T0 + 60 * MIN}`)
+  assert.equal(h.dispatched[1]!.envelope.text, 'hourly')
+})
+
+test('cron_update：并发 (id, rev) 换代防在途旧 tick 写回污染且与 activeTickWrite 串行', { timeout: 60_000 }, async () => {
+  // 场景 A：dispatch 挂起失败期间 cron_update 换代 rev，旧 tick 的 lastError 不得污染更新后的 job
+  const h1 = track(makeHarness(T0))
+  await ready(h1)
+  let rejectOld!: (err: Error) => void
+  h1.dispatchImpl = (envelope, target) =>
+    new Promise<TriggerDispatchResult>((_, reject) => {
+      h1.dispatched.push({ envelope, target })
+      rejectOld = reject
+    })
+  await h1.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'race-err',
+    schedule: '*/5 * * * *',
+    text: 'old',
+  })
+  await h1.clock.advance(5 * MIN)
+  await waitFor(() => h1.dispatched.length === 1)
+
+  const updated = (await h1.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'race-err',
+    schedule: '0 * * * *',
+    text: 'new',
+  })) as { job: CronJob }
+  rejectOld(new Error('old dispatch boom'))
+  await h1.runtime.settle()
+  const finalJob = await soleJob(h1)
+  assert.equal(finalJob.rev, updated.job.rev)
+  assert.equal(finalJob.text, 'new')
+  assert.equal(finalJob.lastError, undefined, '旧 tick 失败写回必须被 (id, rev) 守卫拦截')
+
+  // 场景 B：claim flush 持锁期间并发 cron_update 必须排队等待，随后换代 rev 阻止旧 tick 继续投递
+  const h2 = track(makeHarness(T0))
+  await ready(h2)
+  await h2.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'race-lock',
+    schedule: '*/5 * * * *',
+    text: 'before',
+  })
+  let claimEntered!: () => void
+  let releaseClaim!: () => void
+  const claimStarted = new Promise<void>((r) => { claimEntered = r })
+  const claimGate = new Promise<void>((r) => { releaseClaim = r })
+  h2.flushImpl = () => {
+    claimEntered()
+    return claimGate
+  }
+  await h2.clock.advance(5 * MIN)
+  await claimStarted
+
+  let updateFinished = false
+  h2.flushImpl = async () => {}
+  const updatePromise = h2.host
+    .invokeAction('builtin:triggers', 'cron_update', { id: 'race-lock', text: 'after' })
+    .then((res) => {
+      updateFinished = true
+      return res as { job: CronJob }
+    })
+  await new Promise((r) => setImmediate(r))
+  assert.equal(updateFinished, false, 'cron_update 必须等待 activeTickWrite 释放')
+
+  releaseClaim()
+  const res = await updatePromise
+  await h2.runtime.settle()
+  assert.equal(res.job.text, 'after')
+  assert.equal(res.job.lastRunAt, T0_5, '串行化后应保留先落盘的 lastRunAt')
+  assert.equal(h2.dispatched.length, 0, 'claim 后 rev 已被 cron_update 换代，旧 tick 不得继续投递旧文本')
+})
+
+test('cron_update：目标模式切换与合并（isolated <-> dedicated <-> targetConversationId）', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0, undefined, { profileIds: ['assistant', 'p1', 'p2'] }))
+  await ready(h)
+  await h.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'mode-job',
+    schedule: '*/5 * * * *',
+    text: 'run',
+    mode: 'isolated',
+    profileId: 'p1',
+    keepLast: 5,
+  })
+
+  // isolated 内更新 keepLast
+  const iso1 = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'mode-job',
+    keepLast: 20,
+  })) as { job: CronJob }
+  assert.equal(iso1.job.mode, 'isolated')
+  assert.equal(iso1.job.profileId, 'p1')
+  assert.equal(iso1.job.keepLast, 20)
+
+  // isolated -> dedicated：丢弃 keepLast，保留 profileId
+  const ded1 = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'mode-job',
+    mode: 'dedicated',
+  })) as { job: CronJob }
+  assert.equal(ded1.job.mode, 'dedicated')
+  assert.equal(ded1.job.profileId, 'p1')
+  assert.equal(ded1.job.keepLast, undefined)
+
+  // 模拟已有 dedicatedConversationId：只改 description 保留；改同 profileId 保留；改不同 profileId 清空
+  const rawDoc = h.docs.store.get('builtin:triggers:crons') as CronDoc
+  rawDoc.jobs[0] = { ...rawDoc.jobs[0]!, dedicatedConversationId: 77 }
+  const dedDesc = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'mode-job',
+    description: 'keep dedicated binding',
+  })) as { job: CronJob }
+  assert.equal(dedDesc.job.dedicatedConversationId, 77)
+
+  const dedSameProfile = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'mode-job',
+    profileId: 'p1',
+  })) as { job: CronJob }
+  assert.equal(dedSameProfile.job.dedicatedConversationId, 77)
+
+  const dedNewProfile = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'mode-job',
+    profileId: 'p2',
+  })) as { job: CronJob }
+  assert.equal(dedNewProfile.job.profileId, 'p2')
+  assert.equal(dedNewProfile.job.dedicatedConversationId, undefined, 'dedicated 切换 profileId 必须清空旧会话绑定')
+
+  // dedicated -> isolated：清空 dedicatedConversationId 并补默认 keepLast=10
+  const rawDoc2 = h.docs.store.get('builtin:triggers:crons') as CronDoc
+  rawDoc2.jobs[0] = { ...rawDoc2.jobs[0]!, dedicatedConversationId: 88 }
+  const backToIso = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'mode-job',
+    mode: 'isolated',
+  })) as { job: CronJob }
+  assert.equal(backToIso.job.mode, 'isolated')
+  assert.equal(backToIso.job.profileId, 'p2')
+  assert.equal(backToIso.job.keepLast, 10)
+  assert.equal(backToIso.job.dedicatedConversationId, undefined)
+
+  // automated -> targetConversationId：清空全部自动化字段
+  const convTarget = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'mode-job',
+    targetConversationId: 9,
+  })) as { job: CronJob }
+  assert.equal(convTarget.job.targetConversationId, 9)
+  assert.equal(convTarget.job.mode, undefined)
+  assert.equal(convTarget.job.profileId, undefined)
+  assert.equal(convTarget.job.keepLast, undefined)
+  assert.equal(convTarget.job.dedicatedConversationId, undefined)
+
+  // targetConversationId -> automated（省略 mode 默认 isolated + keepLast=10）
+  const convToIso = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'mode-job',
+    profileId: 'p1',
+  })) as { job: CronJob }
+  assert.equal(convToIso.job.targetConversationId, undefined)
+  assert.equal(convToIso.job.mode, 'isolated')
+  assert.equal(convToIso.job.profileId, 'p1')
+  assert.equal(convToIso.job.keepLast, 10)
+
+  // targetConversationId -> dedicated
+  await h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'mode-job', targetConversationId: 9 })
+  const convToDed = (await h.host.invokeAction('builtin:triggers', 'cron_update', {
+    id: 'mode-job',
+    mode: 'dedicated',
+    profileId: 'p2',
+  })) as { job: CronJob }
+  assert.equal(convToDed.job.targetConversationId, undefined)
+  assert.equal(convToDed.job.mode, 'dedicated')
+  assert.equal(convToDed.job.profileId, 'p2')
+  assert.equal(convToDed.job.keepLast, undefined)
+
+  // 验证触发时实际路由到更新后的目标
+  await h.host.invokeAction('builtin:triggers', 'cron_trigger', { id: 'mode-job' })
+  assert.equal(h.dispatched.length, 1)
+  assert.equal(h.dispatched[0]!.target.kind, 'dedicated')
+  if (h.dispatched[0]!.target.kind === 'dedicated') {
+    assert.equal(h.dispatched[0]!.target.profileId, 'p2')
+  }
+})
+
+test('cron_update：校验边界（空 patch、404、互斥字段、dedicated+keepLast、非法 schedule/timezone、不存在 profileId）', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0, undefined, { profileIds: ['assistant', 'worker'] }))
+  await ready(h)
+  await h.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'v1',
+    schedule: '*/5 * * * *',
+    text: 'ok',
+    mode: 'dedicated',
+  })
+  await h.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'v2',
+    schedule: '*/5 * * * *',
+    text: 'ok',
+    targetConversationId: 3,
+  })
+
+  const expectCode = async (p: Promise<unknown>, code: string, status: number): Promise<void> => {
+    await assert.rejects(p, (err: unknown) => {
+      assert.ok(err instanceof HelmxError, `期望 HelmxError，实际：${String(err)}`)
+      assert.equal(err.code, code)
+      assert.equal(err.status, status)
+      return true
+    })
+  }
+
+  // 空 patch（无除 id 外可更新字段）
+  await expectCode(h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v1' }), 'validation_error', 400)
+  // 不存在的 job
+  await expectCode(h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'ghost', text: 'x' }), 'not_found', 404)
+  // 额外字段被 additionalProperties: false 拒绝
+  await expectCode(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v1', text: 'x', extra: 1 }),
+    'validation_error',
+    400,
+  )
+  // targetConversationId 与自动化字段互斥
+  await expectCode(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v1', targetConversationId: 1, mode: 'isolated' }),
+    'validation_error',
+    400,
+  )
+  await expectCode(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v1', targetConversationId: 1, profileId: 'worker' }),
+    'validation_error',
+    400,
+  )
+  await expectCode(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v1', targetConversationId: 1, keepLast: 3 }),
+    'validation_error',
+    400,
+  )
+  // dedicated 模式下传 keepLast 拒绝（保持 dedicated 或从 targetConversationId 切 dedicated）
+  await expectCode(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v1', keepLast: 5 }),
+    'validation_error',
+    400,
+  )
+  await expectCode(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v2', mode: 'dedicated', keepLast: 5 }),
+    'validation_error',
+    400,
+  )
+  // 非法 schedule / timezone / 空白 text / 不存在 profileId
+  await expectCode(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v1', schedule: 'bad' }),
+    'validation_error',
+    400,
+  )
+  await expectCode(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v1', schedule: '0 0 30 2 *' }),
+    'validation_error',
+    400,
+  )
+  await expectCode(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v1', timezone: 'Not/AZone' }),
+    'validation_error',
+    400,
+  )
+  await expectCode(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v1', text: '   ' }),
+    'validation_error',
+    400,
+  )
+  await expectCode(
+    h.host.invokeAction('builtin:triggers', 'cron_update', { id: 'v1', profileId: 'nonexistent' }),
+    'validation_error',
+    400,
+  )
+
+  // 全部失败后原有 timer 与配置未受破坏
+  assert.equal(h.clock.activeTimers(), 2)
+  assert.equal(h.runtime.getJob('v1')?.schedule, '*/5 * * * *')
 })

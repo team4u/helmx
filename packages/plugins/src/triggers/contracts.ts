@@ -93,8 +93,10 @@ export function assertTriggerId(kind: TriggerKind, id: string): string {
 export const MAX_DESCRIPTION = 500
 
 export function assertDescription(description: string): string {
-  if (description.length > MAX_DESCRIPTION) {
-    throw new HelmxError('validation_error', `description too long (<=${MAX_DESCRIPTION} chars)`, 400, {})
+  if (typeof description !== 'string' || description.length > MAX_DESCRIPTION) {
+    throw new HelmxError('validation_error', `description must be a string of at most ${MAX_DESCRIPTION} chars`, 400, {
+      field: 'description',
+    })
   }
   return description
 }
@@ -133,6 +135,17 @@ export function assertTriggerKeepLast(keepLast: unknown): number {
 }
 
 export interface NormalizedTriggerTarget {
+  targetConversationId?: number
+  mode?: TriggerSessionMode
+  profileId?: string
+  keepLast?: number
+}
+
+export interface TriggerTargetState extends NormalizedTriggerTarget {
+  dedicatedConversationId?: number
+}
+
+export interface TriggerTargetPatch {
   targetConversationId?: number
   mode?: TriggerSessionMode
   profileId?: string
@@ -197,6 +210,111 @@ export function normalizeTriggerTargetInput(input: {
   }
 }
 
+/** Validate standalone target patch fields and mutual exclusivity before reading persisted state. */
+export function assertTriggerTargetPatchSyntax(patch: TriggerTargetPatch): void {
+  const hasConv = patch.targetConversationId !== undefined
+  const hasAutomated =
+    patch.mode !== undefined || patch.profileId !== undefined || patch.keepLast !== undefined
+  if (hasConv && hasAutomated) {
+    throw new HelmxError(
+      'validation_error',
+      'targetConversationId is mutually exclusive with mode, profileId, and keepLast',
+      400,
+      { field: 'targetConversationId' },
+    )
+  }
+  if (hasConv) {
+    if (!Number.isInteger(patch.targetConversationId) || (patch.targetConversationId as number) <= 0) {
+      throw new HelmxError(
+        'validation_error',
+        `targetConversationId must be a positive integer conversation ID (got: ${String(patch.targetConversationId)})`,
+        400,
+        { field: 'targetConversationId' },
+      )
+    }
+    return
+  }
+  if (patch.mode !== undefined) assertTriggerMode(patch.mode)
+  if (patch.profileId !== undefined) assertTriggerProfileId(patch.profileId)
+  if (patch.keepLast !== undefined) assertTriggerKeepLast(patch.keepLast)
+}
+
+/**
+ * Merge a partial target/mode update patch onto an existing trigger's target state:
+ * - Rejects supplying `targetConversationId` together with `mode` / `profileId` / `keepLast`;
+ * - Switching automated -> `targetConversationId` clears `mode`, `profileId`, `keepLast`, `dedicatedConversationId`;
+ * - Switching `targetConversationId` -> automated clears `targetConversationId` and normalizes defaults;
+ * - Staying automated merges fields cleanly, drops `keepLast` on `'isolated' -> 'dedicated'`, clears
+ *   `dedicatedConversationId` on `'dedicated' -> 'isolated'` or `profileId` change, and rejects `keepLast`
+ *   when effective mode is `'dedicated'`.
+ */
+export function mergeTriggerTargetPatch(
+  existing: TriggerTargetState,
+  patch: TriggerTargetPatch,
+): TriggerTargetState {
+  assertTriggerTargetPatchSyntax(patch)
+  const hasConv = patch.targetConversationId !== undefined
+  const hasAutomated =
+    patch.mode !== undefined || patch.profileId !== undefined || patch.keepLast !== undefined
+
+  if (!hasConv && !hasAutomated) {
+    return {
+      ...(existing.targetConversationId !== undefined ? { targetConversationId: existing.targetConversationId } : {}),
+      ...(existing.mode !== undefined ? { mode: existing.mode } : {}),
+      ...(existing.profileId !== undefined ? { profileId: existing.profileId } : {}),
+      ...(existing.keepLast !== undefined ? { keepLast: existing.keepLast } : {}),
+      ...(existing.dedicatedConversationId !== undefined
+        ? { dedicatedConversationId: existing.dedicatedConversationId }
+        : {}),
+    }
+  }
+
+  if (hasConv) {
+    return { targetConversationId: patch.targetConversationId }
+  }
+
+  if (existing.targetConversationId !== undefined) {
+    return normalizeTriggerTargetInput({
+      mode: patch.mode,
+      profileId: patch.profileId,
+      keepLast: patch.keepLast,
+    })
+  }
+
+  const existingMode: TriggerSessionMode = existing.mode ?? 'isolated'
+  const nextMode: TriggerSessionMode = patch.mode ?? existingMode
+  const nextProfileId = patch.profileId ?? existing.profileId
+
+  if (nextMode === 'dedicated') {
+    if (patch.keepLast !== undefined) {
+      throw new HelmxError(
+        'validation_error',
+        'keepLast is only valid when mode is "isolated"',
+        400,
+        { field: 'keepLast' },
+      )
+    }
+    const preserveDedicatedId =
+      existingMode === 'dedicated' &&
+      nextProfileId === existing.profileId &&
+      existing.dedicatedConversationId !== undefined
+    return {
+      mode: 'dedicated',
+      ...(nextProfileId !== undefined ? { profileId: nextProfileId } : {}),
+      ...(preserveDedicatedId ? { dedicatedConversationId: existing.dedicatedConversationId } : {}),
+    }
+  }
+
+  const nextKeepLast =
+    patch.keepLast ??
+    (existingMode === 'isolated' && existing.keepLast !== undefined ? existing.keepLast : DEFAULT_TRIGGER_KEEP_LAST)
+  return {
+    mode: 'isolated',
+    ...(nextProfileId !== undefined ? { profileId: nextProfileId } : {}),
+    keepLast: nextKeepLast,
+  }
+}
+
 /** Target-Profile existence port (the minimal face of ctx.host.profiles). */
 export interface ProfileLookup {
   get(id: string): Promise<{ id: string } | undefined>
@@ -208,6 +326,8 @@ export interface ProfileLookup {
 
 export interface WebhookMeta {
   id: string
+  /** Revision generation (randomUUID) bumped on create/update; checked on in-flight HTTP deliveries and dedicatedConversationId write-backs. */
+  rev: string
   /** Collaboration contract: a boolean expressing that the secret is configured (true); never the secret itself. */
   hasSecret: boolean
   description?: string
@@ -243,6 +363,9 @@ function assertWebhookMeta(raw: unknown): void {
   if (!isJsonObject(raw)) throw docCorrupt('contains a non-object entry')
   if (typeof raw.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(raw.id)) {
     throw docCorrupt(`invalid entry id: ${JSON.stringify(raw.id)}`)
+  }
+  if (typeof raw.rev !== 'string' || raw.rev.length === 0) {
+    throw docCorrupt(`entry ${raw.id} is missing rev (old dev docs are incompatible, no migration)`)
   }
   if (raw.hasSecret !== true) {
     throw docCorrupt(`entry ${raw.id} is missing hasSecret: true (the doc expresses secret-configured as a boolean; old dev docs are incompatible, no migration)`)
@@ -314,6 +437,7 @@ export function assertWebhooksDoc(value: unknown): WebhooksDoc {
 export function webhookPublicMeta(meta: WebhookMeta): WebhookMeta {
   const {
     id,
+    rev,
     hasSecret,
     description,
     targetConversationId,
@@ -325,6 +449,7 @@ export function webhookPublicMeta(meta: WebhookMeta): WebhookMeta {
   } = meta
   return {
     id,
+    rev,
     hasSecret,
     ...(description !== undefined ? { description } : {}),
     ...(targetConversationId !== undefined ? { targetConversationId } : {}),

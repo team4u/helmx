@@ -26,7 +26,10 @@ import {
 } from '../durable-scheduler.js'
 import {
   DEFAULT_TRIGGER_KEEP_LAST,
+  MAX_DESCRIPTION,
   MAX_TRIGGER_KEEP_LAST,
+  assertTriggerTargetPatchSyntax,
+  mergeTriggerTargetPatch,
   normalizeTriggerTargetInput,
   type ProfileLookup,
   type TriggerSessionMode,
@@ -477,8 +480,20 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
   const runJobTick = async (id: string): Promise<void> => {
     if (stopping) return
     let rescheduledByBackoff = false
+    let tickRev: string | undefined
     const backoffOnFailure = (title: string, err: unknown): void => {
       emitError(title, err)
+      if (tickRev !== undefined) {
+        try {
+          const latest = readDoc().jobs.find((j) => j.id === id)
+          if (latest !== undefined && latest.rev !== tickRev) {
+            rescheduledByBackoff = true
+            return
+          }
+        } catch {
+          // Corrupt doc falls through to scheduleJob error reporting.
+        }
+      }
       rescheduledByBackoff = true
       scheduleJob(id, clock.now() + DECISION_RETRY_FLOOR_MS)
     }
@@ -488,6 +503,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       try {
         job = readDoc().jobs.find((j) => j.id === id)
         if (!job) return
+        tickRev = job.rev
         decision = decideTick(job, clock.now())
       } catch (err) {
         backoffOnFailure(`cron job ${id} scheduling decision failed`, err)
@@ -727,6 +743,229 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       }
       if (created.enabled) scheduleJob(created.id)
       return { job: structuredClone(created) }
+    },
+  })
+
+  ctx.action({
+    id: 'cron_update',
+    description:
+      'Update an existing cron job (description, schedule, timezone, text, enabled, catchUp, or delivery target); recomputes nextRunAt and reschedules timer while preserving runtime history',
+    exposeToPrompt: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' },
+        description: {
+          type: 'string',
+          maxLength: MAX_DESCRIPTION,
+          description: 'Job description (empty string clears description)',
+        },
+        schedule: {
+          type: 'string',
+          description: 'Standard 5-field cron expression (min hour day month weekday, e.g. "*/30 * * * *")',
+        },
+        timezone: { type: 'string', description: 'IANA timezone name (e.g. Asia/Shanghai)' },
+        text: { type: 'string', minLength: 1, description: 'Self-contained task text delivered when triggered' },
+        enabled: { type: 'boolean' },
+        catchUp: { type: 'boolean' },
+        mode: {
+          type: 'string',
+          enum: ['isolated', 'dedicated'],
+          description: 'Automated session mode when targetConversationId is omitted (isolated | dedicated)',
+        },
+        profileId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 64,
+          description: 'Target Profile ID for automated sessions (mutually exclusive with targetConversationId)',
+        },
+        keepLast: {
+          type: 'integer',
+          minimum: 1,
+          maximum: MAX_TRIGGER_KEEP_LAST,
+          description: `Number of settled isolated runs to retain automatically (1..${MAX_TRIGGER_KEEP_LAST}; only valid in isolated mode)`,
+        },
+        targetConversationId: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Explicit existing conversation ID to deliver into with followUp (mutually exclusive with mode/profileId/keepLast)',
+        },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    outputSchema: {
+      type: 'object',
+      properties: { job: { type: 'object' } },
+      required: ['job'],
+      additionalProperties: false,
+    },
+    cli: { command: ['cron', 'update'] },
+    handler: async (rawInput: Record<string, unknown>) => {
+      const input = rawInput as {
+        id: string
+        description?: string
+        schedule?: string
+        timezone?: string
+        text?: string
+        enabled?: boolean
+        catchUp?: boolean
+        mode?: TriggerSessionMode
+        profileId?: string
+        keepLast?: number
+        targetConversationId?: number
+      }
+      if (typeof input.id !== 'string' || !ID_PATTERN.test(input.id)) {
+        failValidation(`invalid cron id (1..64 chars, alphanumeric _ - allowed, dots forbidden): ${String(input.id)}`, 'id')
+      }
+      const hasPatchField =
+        input.description !== undefined ||
+        input.schedule !== undefined ||
+        input.timezone !== undefined ||
+        input.text !== undefined ||
+        input.enabled !== undefined ||
+        input.catchUp !== undefined ||
+        input.mode !== undefined ||
+        input.profileId !== undefined ||
+        input.keepLast !== undefined ||
+        input.targetConversationId !== undefined
+      if (!hasPatchField) {
+        failValidation('cron_update requires at least one updatable field besides id', 'id')
+      }
+      if (input.description !== undefined && (typeof input.description !== 'string' || input.description.length > MAX_DESCRIPTION)) {
+        failValidation(`cron description must be a string of at most ${MAX_DESCRIPTION} chars`, 'description')
+      }
+      if (input.schedule !== undefined && typeof input.schedule !== 'string') {
+        failValidation('cron schedule must be a string (standard five fields: min hour day month weekday)', 'schedule')
+      }
+      if (input.timezone !== undefined && (typeof input.timezone !== 'string' || input.timezone.length === 0)) {
+        failValidation('cron timezone must not be empty (an IANA zone name; defaults to UTC)', 'timezone')
+      }
+      if (input.text !== undefined && (typeof input.text !== 'string' || input.text.trim().length === 0)) {
+        failValidation('cron text must not be empty (the payload text delivered at trigger time)', 'text')
+      }
+      if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
+        failValidation('enabled must be a boolean', 'enabled')
+      }
+      if (input.catchUp !== undefined && typeof input.catchUp !== 'boolean') {
+        failValidation('catchUp must be a boolean', 'catchUp')
+      }
+      assertTriggerTargetPatchSyntax({
+        targetConversationId: input.targetConversationId,
+        mode: input.mode,
+        profileId: input.profileId,
+        keepLast: input.keepLast,
+      })
+
+      if (!readDoc().jobs.some((j) => j.id === input.id)) {
+        throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
+      }
+      if (input.profileId !== undefined && deps.profiles !== undefined) {
+        if ((await deps.profiles.get(input.profileId)) === undefined) {
+          throw new HelmxError(
+            'validation_error',
+            `profileId does not exist: ${input.profileId} (refusing to schedule against the wrong role)`,
+            400,
+            { profileId: input.profileId },
+          )
+        }
+      }
+
+      while (activeTickWrite !== undefined) {
+        await activeTickWrite
+      }
+      let releaseUpdate!: () => void
+      activeTickWrite = new Promise<void>((r) => {
+        releaseUpdate = r
+      })
+      let updated: CronJob
+      try {
+        const current = readDoc()
+        const index = current.jobs.findIndex((j) => j.id === input.id)
+        if (index < 0) {
+          throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
+        }
+        const prevJob = current.jobs[index]!
+        const nextScheduleRaw = input.schedule ?? prevJob.schedule
+        const nextTimezone = input.timezone ?? prevJob.timezone
+        assertValidSchedule(nextScheduleRaw, nextTimezone)
+        const nextSchedule = nextScheduleRaw.trim()
+        const nextTarget = mergeTriggerTargetPatch(prevJob, {
+          targetConversationId: input.targetConversationId,
+          mode: input.mode,
+          profileId: input.profileId,
+          keepLast: input.keepLast,
+        })
+        const nextDescription =
+          input.description === undefined
+            ? prevJob.description
+            : input.description === ''
+              ? undefined
+              : input.description
+        const nextEnabled = input.enabled ?? prevJob.enabled
+        const nextCatchUp = input.catchUp ?? prevJob.catchUp
+        const nextText = input.text ?? prevJob.text
+        const nextRunAt = nextFireTime(nextSchedule, nextTimezone, clock.now())
+        if (nextRunAt === undefined && nextEnabled) {
+          throw new HelmxError(
+            'cron_no_next_time',
+            `cron schedule has no future matching point in ${nextTimezone}; update refused: ${nextSchedule}`,
+            400,
+            { id: prevJob.id, schedule: nextSchedule, timezone: nextTimezone },
+          )
+        }
+
+        updated = {
+          id: prevJob.id,
+          rev: randomUUID(),
+          ...(nextDescription !== undefined ? { description: nextDescription } : {}),
+          schedule: nextSchedule,
+          timezone: nextTimezone,
+          text: nextText,
+          enabled: nextEnabled,
+          catchUp: nextCatchUp,
+          ...(nextTarget.targetConversationId !== undefined ? { targetConversationId: nextTarget.targetConversationId } : {}),
+          ...(nextTarget.mode !== undefined ? { mode: nextTarget.mode } : {}),
+          ...(nextTarget.profileId !== undefined ? { profileId: nextTarget.profileId } : {}),
+          ...(nextTarget.keepLast !== undefined ? { keepLast: nextTarget.keepLast } : {}),
+          ...(nextTarget.dedicatedConversationId !== undefined
+            ? { dedicatedConversationId: nextTarget.dedicatedConversationId }
+            : {}),
+          ...(prevJob.lastRunAt !== undefined ? { lastRunAt: prevJob.lastRunAt } : {}),
+          ...(nextRunAt !== undefined ? { nextRunAt } : {}),
+          ...(prevJob.lastError !== undefined ? { lastError: prevJob.lastError } : {}),
+          ...(prevJob.lastSkippedAt !== undefined ? { lastSkippedAt: prevJob.lastSkippedAt } : {}),
+          ...(prevJob.lastSkipReason !== undefined ? { lastSkipReason: prevJob.lastSkipReason } : {}),
+        }
+
+        timers.get(input.id)?.clear()
+        timers.delete(input.id)
+        const jobs = [...current.jobs]
+        jobs[index] = updated
+        doc.set({ version: 1, jobs })
+        try {
+          await doc.flush()
+        } catch (err) {
+          try {
+            const latest = readDoc()
+            const curIdx = latest.jobs.findIndex((j) => j.id === input.id && j.rev === updated.rev)
+            if (curIdx >= 0) {
+              const rolledBack = [...latest.jobs]
+              rolledBack[curIdx] = prevJob
+              doc.set({ version: 1, jobs: rolledBack })
+            }
+          } catch {
+            doc.set(current)
+          }
+          if (prevJob.enabled) scheduleJob(input.id)
+          throw err
+        }
+      } finally {
+        activeTickWrite = undefined
+        releaseUpdate()
+      }
+      if (updated.enabled) scheduleJob(updated.id)
+      return { job: structuredClone(updated) }
     },
   })
 

@@ -23,8 +23,10 @@ import {
   TRIGGERS_PLUGIN_ID,
   assertDescription,
   assertTriggerId,
+  assertTriggerTargetPatchSyntax,
   assertWebhookSecret,
   assertWebhooksDoc,
+  mergeTriggerTargetPatch,
   normalizeTriggerTargetInput,
   webhookPublicMeta,
   webhookSecretKey,
@@ -68,6 +70,7 @@ function verifySignature(secret: string, body: Uint8Array, header: string): bool
 
 export interface RegisterWebhookResult {
   createWebhook(input: CreateWebhookInput, context: PluginActionContext): Promise<{ webhook: WebhookMeta }>
+  updateWebhook(input: UpdateWebhookInput): Promise<{ webhook: WebhookMeta }>
   listWebhooks(): { webhooks: WebhookMeta[] }
   deleteWebhook(input: { id: string }): Promise<{ deleted: true }>
   getWebhook(id: string): WebhookMeta | undefined
@@ -77,6 +80,15 @@ interface CreateWebhookInput {
   id: string
   description?: string
   secret: string
+  targetConversationId?: number
+  mode?: TriggerSessionMode
+  profileId?: string
+  keepLast?: number
+}
+
+interface UpdateWebhookInput {
+  id: string
+  description?: string
   targetConversationId?: number
   mode?: TriggerSessionMode
   profileId?: string
@@ -191,12 +203,12 @@ export function registerWebhook(
 
   const persistDedicatedConversationId = async (
     id: string,
-    createdAt: number,
+    rev: string,
     conversationId: number,
   ): Promise<void> => {
     await enqueueMutation(async () => {
       const current = readDoc()
-      const idx = current.webhooks.findIndex((w) => w.id === id && w.createdAt === createdAt && w.mode === 'dedicated')
+      const idx = current.webhooks.findIndex((w) => w.id === id && w.rev === rev && w.mode === 'dedicated')
       if (idx < 0 || current.webhooks[idx]!.dedicatedConversationId === conversationId) return
       const webhooks = [...current.webhooks]
       webhooks[idx] = { ...webhooks[idx]!, dedicatedConversationId: conversationId }
@@ -238,6 +250,7 @@ export function registerWebhook(
     }
     const meta: WebhookMeta = {
       id,
+      rev: randomUUID(),
       hasSecret: true,
       ...(description !== undefined ? { description } : {}),
       ...(target.targetConversationId !== undefined ? { targetConversationId: target.targetConversationId } : {}),
@@ -273,6 +286,86 @@ export function registerWebhook(
       }
       setSecretRedaction(id, secret)
       return { webhook: webhookPublicMeta(meta) }
+    })
+  }
+
+  async function updateWebhook(input: UpdateWebhookInput): Promise<{ webhook: WebhookMeta }> {
+    assertActive()
+    const id = assertTriggerId('webhook', input.id)
+    const hasPatchField =
+      input.description !== undefined ||
+      input.mode !== undefined ||
+      input.profileId !== undefined ||
+      input.keepLast !== undefined ||
+      input.targetConversationId !== undefined
+    if (!hasPatchField) {
+      throw new HelmxError(
+        'validation_error',
+        'webhook_update requires at least one updatable field besides id',
+        400,
+        { field: 'id' },
+      )
+    }
+    const description = input.description === undefined ? undefined : assertDescription(input.description)
+    assertTriggerTargetPatchSyntax({
+      targetConversationId: input.targetConversationId,
+      mode: input.mode,
+      profileId: input.profileId,
+      keepLast: input.keepLast,
+    })
+    if (!readDoc().webhooks.some((w) => w.id === id)) {
+      throw new HelmxError('not_found', `webhook '${id}' does not exist`, 404, { id })
+    }
+    if (input.profileId !== undefined) {
+      if ((await host.profiles.get(input.profileId)) === undefined) {
+        throw new HelmxError(
+          'validation_error',
+          `profileId does not exist: ${input.profileId} (refusing to point at the wrong role)`,
+          400,
+          { profileId: input.profileId },
+        )
+      }
+    }
+    return enqueueMutation(async () => {
+      assertActive()
+      const current = readDoc()
+      const index = current.webhooks.findIndex((w) => w.id === id)
+      if (index < 0) {
+        throw new HelmxError('not_found', `webhook '${id}' does not exist`, 404, { id })
+      }
+      const prev = current.webhooks[index]!
+      const nextTarget = mergeTriggerTargetPatch(prev, {
+        targetConversationId: input.targetConversationId,
+        mode: input.mode,
+        profileId: input.profileId,
+        keepLast: input.keepLast,
+      })
+      const nextDescription =
+        description === undefined ? prev.description : description === '' ? undefined : description
+      const updated: WebhookMeta = {
+        id: prev.id,
+        rev: randomUUID(),
+        hasSecret: prev.hasSecret,
+        ...(nextDescription !== undefined ? { description: nextDescription } : {}),
+        ...(nextTarget.targetConversationId !== undefined ? { targetConversationId: nextTarget.targetConversationId } : {}),
+        ...(nextTarget.mode !== undefined ? { mode: nextTarget.mode } : {}),
+        ...(nextTarget.profileId !== undefined ? { profileId: nextTarget.profileId } : {}),
+        ...(nextTarget.keepLast !== undefined ? { keepLast: nextTarget.keepLast } : {}),
+        ...(nextTarget.dedicatedConversationId !== undefined
+          ? { dedicatedConversationId: nextTarget.dedicatedConversationId }
+          : {}),
+        createdAt: prev.createdAt,
+      }
+      const webhooks = [...current.webhooks]
+      webhooks[index] = updated
+      writeDoc({ webhooks })
+      try {
+        await doc.flush()
+      } catch (err) {
+        writeDoc(current)
+        throw err
+      }
+      return { webhook: webhookPublicMeta(updated) }
     })
   }
 
@@ -318,7 +411,7 @@ export function registerWebhook(
         profileId: meta.profileId,
         dedicatedConversationId: meta.dedicatedConversationId,
         onDedicatedConversationId: (conversationId) =>
-          persistDedicatedConversationId(meta.id, meta.createdAt, conversationId),
+          persistDedicatedConversationId(meta.id, meta.rev, conversationId),
       }
     }
     return {
@@ -404,7 +497,7 @@ export function registerWebhook(
     if (metaAtDispatch === undefined) {
       return webhookError(404, 'not_found', `webhook does not exist: ${id}`)
     }
-    if (secretAtDispatch !== secret || metaAtDispatch.createdAt !== meta.createdAt) {
+    if (secretAtDispatch !== secret || metaAtDispatch.rev !== meta.rev || metaAtDispatch.createdAt !== meta.createdAt) {
       return webhookError(409, 'webhook_changed', 'the webhook configuration changed; please resend with the current secret')
     }
     try {
@@ -457,16 +550,56 @@ export function registerWebhook(
           type: 'object',
           properties: {
             id: { type: 'string' },
+            rev: { type: 'string' },
             hasSecret: { type: 'boolean' },
             createdAt: { type: 'number' },
           },
-          required: ['id', 'hasSecret', 'createdAt'],
+          required: ['id', 'rev', 'hasSecret', 'createdAt'],
         },
       },
       required: ['webhook'],
       additionalProperties: false,
     } as never,
     handler: (input, context) => createWebhook(input as CreateWebhookInput, context),
+  })
+
+  ctx.action({
+    id: 'webhook_update',
+    description:
+      'Update webhook endpoint metadata or delivery target (description, mode, profileId, keepLast, targetConversationId); secret is untouched and cannot be passed here',
+    exposeToPrompt: false,
+    cli: { command: ['webhook', 'update'] },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' },
+        description: { type: 'string', maxLength: MAX_DESCRIPTION },
+        mode: { type: 'string', enum: ['isolated', 'dedicated'] },
+        profileId: { type: 'string', minLength: 1, maxLength: 64 },
+        keepLast: { type: 'integer', minimum: 1, maximum: MAX_TRIGGER_KEEP_LAST },
+        targetConversationId: { type: 'integer', minimum: 1 },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    } as never,
+    outputSchema: {
+      type: 'object',
+      properties: {
+        webhook: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            rev: { type: 'string' },
+            hasSecret: { type: 'boolean' },
+            createdAt: { type: 'number' },
+          },
+          required: ['id', 'rev', 'hasSecret', 'createdAt'],
+        },
+      },
+      required: ['webhook'],
+      additionalProperties: false,
+    } as never,
+    handler: (input) => updateWebhook(input as UpdateWebhookInput),
   })
 
   ctx.action({
@@ -521,6 +654,7 @@ export function registerWebhook(
 
   return {
     createWebhook,
+    updateWebhook,
     listWebhooks,
     deleteWebhook,
     getWebhook(id: string) {
