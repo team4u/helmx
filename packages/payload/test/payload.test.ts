@@ -922,15 +922,29 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
       // with a correct npm resolution root, and the host shared shim works (the token never lands in
       // logs).
       const setupPassword = `helmx-smoke-${process.pid}-${Date.now()}`;
-      const setupRes = await fetch(`http://127.0.0.1:${port}/api/auth/setup`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ password: setupPassword }),
-        signal: AbortSignal.timeout(5_000),
-      });
-      assert.equal(setupRes.status, 200, `auth/setup expected 200, got ${setupRes.status}`);
-      const { token } = (await setupRes.json()) as { token: string };
-      assert.ok(typeof token === 'string' && token.length > 0, 'auth/setup must issue a token');
+      // Two-phase boot: the HTTP listener opens before `kernel.start()` converges, so the probe above
+      // (`/api/auth/status` is exempt from the gate) and static hosting answer while every other API
+      // route still honestly returns `503 hub_starting` ("retry shortly"). Only that code is waited out;
+      // any other non-200 is a real failure and surfaces with its body.
+      type SetupBody = { token?: string; error?: { code?: string } };
+      const postSetup = async (): Promise<{ status: number; body: SetupBody | undefined }> => {
+        const res = await fetch(`http://127.0.0.1:${port}/api/auth/setup`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ password: setupPassword }),
+          signal: AbortSignal.timeout(5_000),
+        });
+        return { status: res.status, body: (await res.json().catch(() => undefined)) as SetupBody | undefined };
+      };
+      let setup = await postSetup();
+      const setupDeadline = Date.now() + 30_000;
+      while (setup.status === 503 && setup.body?.error?.code === 'hub_starting' && Date.now() < setupDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        setup = await postSetup();
+      }
+      assert.equal(setup.status, 200, `auth/setup expected 200, got ${setup.status}: ${JSON.stringify(setup.body)}`);
+      const token = setup.body?.token ?? '';
+      assert.ok(token.length > 0, 'auth/setup must issue a token');
       try {
         for (const pluginId of ['builtin%3Amermaid', 'builtin%3Aworkflow']) {
           const moduleRes = await fetch(`http://127.0.0.1:${port}/api/plugins/${pluginId}/client.mjs?module=index.tsx`, {
