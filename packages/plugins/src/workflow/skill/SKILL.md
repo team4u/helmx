@@ -30,7 +30,7 @@ Use `builtin:workflow` for focused task delegation and deterministic multi-agent
 
 ## Worktrees and gates
 
-- Give concurrent code-writing agents `isolation: "worktree"` and non-overlapping ownership. Keep the worktree until its diff has been inspected and merged or deliberately retained.
+- Give code-writing agents `isolation: "worktree"` and non-overlapping ownership—never pre-create a manual `git worktree add` and pass `cwd` to bypass managed allocation, and do not guess or hardcode worktree paths in prompts (`<worktree_context>` injects the allocated path and branch automatically). Keep the worktree until its diff has been inspected and merged or deliberately retained.
 - Use `gate` for a real verification command in the agent's effective workspace. A non-zero exit is a failed node, not a reason to fabricate a pass.
 - When `isolation: "worktree"` is used and the `worktree` skill is available in `<available_skills>`, load `worktree` via `load_skill` for inspection, merge checks, and safe cleanup rules; never invent a path, branch, or completion result.
 

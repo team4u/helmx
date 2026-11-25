@@ -1,6 +1,6 @@
 /**
  * Conversation timeline / tool bodies / markdown / outline display copy.
- * Owner: the timeline partition (see AGENTS.md i18n split).
+ * Owner: the timeline partition.
  *
  * zh-CN copy is backfilled verbatim from the pre-English-migration baseline
  * (b4a611a65^) wherever the same string existed; new strings follow the
