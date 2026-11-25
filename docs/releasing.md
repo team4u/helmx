@@ -58,8 +58,10 @@ CLI 与 node 的附加门：
 # 1. 预览（不修改任何文件）
 pnpm release --dry-run
 # 2. 正式发版：本地门禁 → 锁步 bump → chore(release) 提交 → 推送 main 与 tag
-pnpm release --patch --push        # 或 --minor / --major / --prerelease / 显式版本号
+pnpm release --minor --push        # 档位见下文；或 --patch / --major / --prerelease / 显式版本号
 # 3. 在 Actions 观察 verify → build → npm-publish → notes
+# 4. 等 npm 校验队列放行、三制品在 registry 可见（见下节「发布后的 npm 可见性」）
+for p in hub cli node; do until npm view @helmx/$p@<版本> version --prefer-online >/dev/null 2>&1; do sleep 30; done; done
 ```
 
 等价的手动路径（脚本即上述步骤的自动化）：
@@ -76,6 +78,14 @@ git push origin v0.1.0
 
 脚本细节（`pnpm release --help` 全量）：`--notes-file <路径>` 传入人工精选变更说明；`--skip-verify` 跳过本地门禁（流水线仍会全量重验）；`--allow-dirty` / `--allow-non-main` 为边缘场景豁免，默认要求干净工作区与 main 分支；版本单一来源是 `packages/payload/package.json`，脚本锁步更新全部 `packages/*/package.json`。
 
+**bump 档位按 conventional commits 判定**：上一 tag 以来含 `feat` 提交或默认行为变更走 `--minor`，仅修复与重构走 `--patch`。脚本缺省 `--patch`，不带参数时不会提醒。
+
+## 发布后的 npm 可见性（npm 校验排队）
+
+`npm-publish` 作业成功只代表 registry **已接受**三制品（作业日志出现 `+ @helmx/<pkg>@<版本>` 与 provenance 透明日志行），不代表 registry **已可见**：npmjs.com 对新版本有发布后校验队列，`npm view` 要等校验放行才返回新版本，`dist-tags.latest` 同时翻转。v0.3.0（2026-11-25）的一次观测：`@helmx/cli` 约 2 分钟、`@helmx/hub` 约 9 分钟、`@helmx/node` 约 19 分钟——仅是一次观测，不是预期值。因此 `notes` 作业创建的 GitHub Release 可能早于 registry 可见；此时 `npm view` 仍是旧版本属正常，不是发布失败。
+
+npm 没有内建的 publish watch，只能轮询。精确版本查询 `npm view <pkg>@<版本>` 在版本不存在时非零退出，可直接做条件；`--prefer-online` 让本机查询每次向 registry 重新确认，避免本地 npm 缓存在排队之上再叠加几分钟延迟。下游的 `npm install -g` 与 `helmx nodes upgrade` 默认解析 `latest`，须等三制品 `latest` 翻转后再执行。
+
 ## 发版记录（GitHub Release notes）
 
 `notes` 作业在 `npm-publish` 成功结束后创建 GitHub Release，正文两部分（`scripts/lib/release-notes.mjs` 装配，与 `scripts/release.mjs` 共享提炼与解析逻辑）：
@@ -85,7 +95,7 @@ git push origin v0.1.0
 
 诚实约束与幂等行为：
 
-- `npm-publish` 未成功（失败或被前置作业截断）时，`notes` 作业**显式失败**、不创建任何可能被误读为发布成功的 Release；修复问题或删除 tag 后重试；
+- `npm-publish` 未成功（失败或被前置作业截断）时，`notes` 作业**显式失败**、不创建任何可能被误读为发布成功的 Release。重试前先用 `npm view` 核实三制品在 registry 的实际状态：三制品按序发布（payload → CLI → node），中途失败会留下**部分发布**，而本流水线对「版本已存在」没有幂等保护，同 tag 重跑会在已发布制品上被 registry 以 E403 拒绝。零发布时：修复合入 `main` 后把未发布的 tag 挪到修复提交（`git tag -f v<版本> <修复提交>`，再 `git push --force-with-lease=refs/tags/v<版本>:<旧 sha> origin refs/tags/v<版本>`）重触发；已部分发布时：改发新的 patch 版本，不复用该 tag；
 - 同一 tag 重跑流水线时（workflow 级 concurrency 已按 tag 串行），已有 Release 会被就地刷新 notes，不会重复创建；
 - 预发布版本（版本核心含连字符）创建的 Release 自动带 prerelease 标记，与 verify 作业的 dist-tag 判定同源；
 - 个性化说明（产品解读等）可在发布后直接编辑 GitHub Release 正文，流水线只重跑时才会覆盖回自动装配内容。
@@ -110,6 +120,8 @@ node scripts/run-tests.mjs packages/payload/test/payload.test.ts
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
 ```
 
+`pnpm release` 的本地门禁（build / typecheck / lint / check:hygiene / test:all）**不执行** `PAYLOAD_NPM_SMOKE=1` 的网络验收（payload e2e 与黄金序列），而 `release.yml` 的 `build` 作业会执行——这是流水线里最晚暴露、且失败后只能重发 tag 修复的一关。上一 tag 以来若改动了 `packages/payload/`、`start.mjs` 或 Hub 启动时序，push tag 前先在本地带 `PAYLOAD_NPM_SMOKE=1` 跑一次上面的 `node scripts/run-tests.mjs packages/payload/test/payload.test.ts`。
+
 本地**不**覆盖：npm 真实 publish。
 
 ## 排错速查
@@ -130,6 +142,8 @@ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
 | `npm-publish`：版本门槛失败（npm < 11.5.0） | Trusted Publishing 免令牌发布依赖 npm ≥ 11.5.0：提升工作流 `node-version` 使捆绑 npm 达标后重打 tag |
 | `npm publish` 被 registry 拒绝（trusted publisher 不匹配） | 到 npmjs.com 对应包 Settings → Trusted Publishing 核对：repository `team4u/helmx`、workflow `release.yml`、environment 留空，三者与运行参数完全一致 |
 | `npm publish` 被 registry 拒绝（provenance） | 确认制品 `repository` 与实际仓库一致、令牌有目标包权限 |
+| Release 已创建，但 `npm view @helmx/<pkg> version` 仍是旧版本 | npm 发布后校验排队，不是失败：作业日志有 `+ @helmx/<pkg>@<版本>` 即已接受；用 `npm view @helmx/<pkg>@<版本> version --prefer-online` 轮询等待（见「发布后的 npm 可见性」） |
+| 重跑同 tag 时 `npm publish` 报 E403（cannot publish over previously published） | 上一轮已部分发布（三制品按序）：先 `npm view` 核实三制品各自状态，改发新的 patch 版本，不复用该 tag |
 
 ## 源码与测试入口
 
