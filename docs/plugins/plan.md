@@ -29,6 +29,19 @@
 
 在计划审批或澄清问答挂起期间（存在 `pendingAskId`），若用户直接在 Composer 发送新的人类消息（`origin === 'human'`），`onInput` 会先以 `'superseded'` 结算挂起审批单并保留在 `planning` 模式，避免新消息在队列中因审批卡死。
 
+## 典型流程
+
+以一次顶层人类直连会话为例，计划模式按以下顺序闭环（各步的入口、工具边界与状态字段见上下两节）：
+
+1. **进入计划模式**：点击输入框工具栏计划按钮、按 `Ctrl+.`、发送 `/plan` 或 `/plan <任务>`，或在 CLI 执行 `helmx plan toggle --current`；待命页（`#/a/<profileId>`）点击按钮只写入本地预武装态，首条消息发出时才真正进入计划模式。
+2. **只读调研**：`before_turn`（`priority: -50`）将本回合工具收紧为 `PLAN_MODE_TOOL_WHITELIST` 中的七个工具；模型使用 `read` / `read_artifact` / `load_skill` / `plan_bash` 收集事实，`plan_bash` 先经 `validateReadOnlyShellCommand` 校验通过后才在节点执行。
+3. **澄清需求**：存在真实歧义时调用 `plan_ask` 发起 1..4 题的结构化单选卡（`awaitingClarification: true`，不触发审批面板）；等待期间人类直接在 Composer 发送消息会以 `'superseded'` 结算该澄清单，并保持在 `planning` 模式。
+4. **起草计划**：调用 `plan_save` 写入自包含草稿（完整文件路径、关键符号、分步改动、约束与验收命令），可多轮覆盖，`version` 递增并经 `ctx.kv('plans')` 持久化后投影到 `plan` sessionDoc；人类可在右侧「执行计划」面板直接编辑（`update_draft` 携带 `expectedVersion` 做 CAS 校验，冲突报 `409 plan_draft_conflict`）。
+5. **提交审批**：调用 `plan_propose` 生成 AskDoc 审批卡，单选 `approve_handoff`「批准并在新上下文执行」/ `approve`「批准并在当前上下文继续」/ `revise`「退回修改」，可选 `executionModel`；`revise`、取消或超时销单都会清除 `pendingAskId` 并停留在 `planning` 模式，不生成 Artifact。
+6. **归档与交接执行**：任一 `approve*` 决定都把最新草稿（含审批期间的人工编辑版本）归档为会话 Artifact `plan-v<N>.md` 并切回 `normal`，下一回合恢复全部工具；选择 `approve_handoff` 时额外登记 `markExpectedHandoffReset` 并返回 `control.handoff`，内核在同回合追加可见 `pi.reset` 后在干净上下文中继续生成执行。若指定了 `executionModel`，会先切换会话模型，切换失败则停留在 `planning` 并显式报错，不静默回退。
+
+辅助事件：人工 `/clear` 自动清空计划模式、草稿与角标；时间线编辑重发（`helmx.rewind`）仅以 `'superseded'` 结算挂起 Ask 并保留计划模式与草稿；Hub 重启后 `reconcile()` 将孤儿 `pendingAskId` 以 `'superseded'` 清理并解除会话 `blocked`。
+
 ## 能力与执行机制
 
 ### 1. `before_turn` 严格工具白名单（`priority: -50`）
