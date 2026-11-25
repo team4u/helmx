@@ -214,7 +214,8 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         cwd: { type: 'string', description: 'Absolute working directory (optional)' },
         fork: {
           type: 'boolean',
-          description: 'Fork a native child from parent completed context (default false; mutually exclusive with resume; native only)',
+          description:
+            'Fork a native child from parent completed context (default false; mutually exclusive with resume; native only; defaults to a leaf subagent with maxSubagentDepth equal to the current child depth unless maxSubagentDepth is explicitly specified)',
         },
         background: {
           type: 'boolean',
@@ -238,7 +239,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
           type: 'number',
           minimum: 1,
           maximum: HARD_MAX_SUBAGENT_DEPTH,
-          description: `Subtree spawn-depth ceiling (1..${HARD_MAX_SUBAGENT_DEPTH}; inherits current ceiling, default ${DEFAULT_MAX_SUBAGENT_DEPTH})`,
+          description: `Subtree spawn-depth ceiling (1..${HARD_MAX_SUBAGENT_DEPTH}; inherits current ceiling with default ${DEFAULT_MAX_SUBAGENT_DEPTH} for non-fork spawns; fork: true defaults to a leaf at the current child depth unless maxSubagentDepth is explicitly specified)`,
         },
         attachments: { type: 'array', items: { type: 'string' }, description: 'Artifact IDs passed to the subagent (optional)' },
       },

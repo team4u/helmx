@@ -21,7 +21,7 @@ export interface InflightReportIntent { requestId: string; fromSeq: number; toSe
 export interface UnansweredRecoveryState { toSeq: number; nextAttempt: number; exhausted?: boolean }
 export interface GroupMemberState {
   name: string; conversationId: number; profileId: string; access: WorkerAccess; isolation: WorkerIsolation
-  nodeId: string; cwd: string; worktreeId?: string; lifecycle: 'active' | 'archived'
+  nodeId: string; cwd: string; worktreeId?: string; forked?: boolean; lifecycle: 'active' | 'archived'
   readCursorSeq: number; pendingWakeupSeq: number; lastPostSeq?: number; lastWakeTaskSeq?: number
   silentExitNudgeSeq?: number; lastWakeCompletionSeq?: number
   lastOutboundEdge?: { seq: number; to: string[]; kind: BoardPostKind }

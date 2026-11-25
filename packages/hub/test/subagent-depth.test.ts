@@ -25,7 +25,9 @@
 import {
   fauxAssistantMessage,
   fauxToolCall,
+  type FauxResponseFactory,
 } from '@earendil-works/pi-ai/providers/faux'
+import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import { HelmxError } from '@helmx/protocol'
 import { withWorkflowSpawnMeta } from '@helmx/plugins/contracts'
 import { DatabaseSync } from 'node:sqlite'
@@ -83,6 +85,52 @@ function registryEntry(dataDir: string, conversationId: number): Record<string, 
   const raw = readRegistryRaw(dataDir)[String(conversationId)]
   assert.ok(raw !== undefined && typeof raw === 'object', `conversation ${conversationId} should be registered in depth KV`)
   return raw as Record<string, unknown>
+}
+
+function captureModelRequest(messages: readonly unknown[]): {
+  toolNames: string[]
+  sectionsById: Record<string, string>
+  userTexts: string[]
+  lastNonSystemRole?: string
+  lastToolName?: string
+} {
+  const tools = getCurrentTools(messages as never)
+  const sectionsById: Record<string, string> = {}
+  const userTexts: string[] = []
+  let lastNonSystemRole: string | undefined
+  let lastToolName: string | undefined
+  for (const raw of messages) {
+    if (raw === null || typeof raw !== 'object') continue
+    const m = raw as Record<string, unknown>
+    if (m['role'] === 'system' && m['sections'] !== null && typeof m['sections'] === 'object') {
+      for (const [k, v] of Object.entries(m['sections'] as Record<string, unknown>)) {
+        if (typeof v === 'string') sectionsById[k] = v
+      }
+      continue
+    }
+    if (typeof m['role'] === 'string') {
+      lastNonSystemRole = m['role']
+      lastToolName = typeof m['toolName'] === 'string' ? m['toolName'] : undefined
+    }
+    if (m['role'] === 'user') {
+      if (typeof m['content'] === 'string') {
+        userTexts.push(m['content'])
+      } else if (Array.isArray(m['content'])) {
+        for (const block of m['content']) {
+          if (block !== null && typeof block === 'object' && typeof (block as { text?: unknown }).text === 'string') {
+            userTexts.push((block as { text: string }).text)
+          }
+        }
+      }
+    }
+  }
+  return {
+    toolNames: tools.map((t) => t.name),
+    sectionsById,
+    userTexts,
+    ...(lastNonSystemRole !== undefined ? { lastNonSystemRole } : {}),
+    ...(lastToolName !== undefined ? { lastToolName } : {}),
+  }
 }
 
 /**
@@ -666,5 +714,285 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     } finally {
       await app.close()
     }
+  })
+
+  // -------------------------------------------------------------------------
+  // 12. Fork default leaf ceiling + boundary section + resume & restart persistence
+  // -------------------------------------------------------------------------
+
+  test('fork: true defaults to leaf (depth=1, ceiling=1, forked=true), strips dispatch tools & catalog, injects forked_context, and persists across resume & restart', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'fork-leaf-default')
+    let childIdForResume: number | undefined
+    let topLevelMeta: ReturnType<typeof captureModelRequest> | undefined
+    let childMeta: ReturnType<typeof captureModelRequest> | undefined
+    let resumedChildMeta: ReturnType<typeof captureModelRequest> | undefined
+    let afterRestartMeta: ReturnType<typeof captureModelRequest> | undefined
+
+    const step: FauxResponseFactory = (context) => {
+      const req = captureModelRequest(context.messages)
+      const lastUser = req.userTexts.at(-1) ?? ''
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('FORK_FACT_42')) {
+        topLevelMeta = req
+        return fauxAssistantMessage('recorded FORK_FACT_42')
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('delegate forked leaf')) {
+        return fauxAssistantMessage(
+          [fauxToolCall('subagent', { prompt: 'execute forked leaf work', fork: true, background: false }, { id: 'call-fork-leaf' })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('execute forked leaf work')) {
+        childMeta = req
+        return fauxAssistantMessage('forked leaf finished')
+      }
+      if (req.lastNonSystemRole === 'toolResult' && req.lastToolName === 'subagent' && lastUser.includes('delegate forked leaf')) {
+        return fauxAssistantMessage('parent received forked leaf')
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('resume forked leaf caller')) {
+        assert.ok(childIdForResume !== undefined)
+        return fauxAssistantMessage(
+          [fauxToolCall('subagent', { resume: String(childIdForResume), prompt: 'resume forked leaf work', background: false }, { id: 'call-fork-resume' })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('resume forked leaf work')) {
+        resumedChildMeta = req
+        return fauxAssistantMessage('resumed forked leaf finished')
+      }
+      if (req.lastNonSystemRole === 'toolResult' && req.lastToolName === 'subagent' && lastUser.includes('resume forked leaf caller')) {
+        return fauxAssistantMessage('parent received resumed forked leaf')
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('post-restart forked check')) {
+        afterRestartMeta = req
+        return fauxAssistantMessage('post-restart forked ok')
+      }
+      throw new Error(`unexpected faux request: role=${req.lastNonSystemRole}, lastUser=${lastUser}`)
+    }
+
+    let persistedChildId = 0
+    {
+      const faux = makeFauxProvider()
+      faux.setResponses(Array.from({ length: 16 }, () => step))
+      const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+      try {
+        if (app.kernel.plugins.get('builtin:title')?.enabled) {
+          await app.kernel.plugins.setConfig('builtin:title', { autoTitle: false })
+        }
+        await app.kernel.services.profiles.save({ id: 'coder', name: '编码专家' })
+
+        await app.kernel.conversations.submitInput(1, 'remember FORK_FACT_42')
+        await app.kernel.conversations.waitForIdle(1)
+        assert.ok(typeof topLevelMeta?.sectionsById['profile.catalog'] === 'string', 'top-level should inject profile.catalog when another Profile exists')
+
+        await app.kernel.conversations.submitInput(1, 'delegate forked leaf')
+        await app.kernel.conversations.waitForIdle(1)
+
+        const child = app.kernel.conversations.listConversations().find((c) => c.parentConversationId === 1)
+        assert.ok(child, 'fork: true should spawn a child conversation')
+        persistedChildId = child.id
+        childIdForResume = child.id
+
+        await app.kernel.kvStore.flush()
+        const entry = registryEntry(dir, child.id)
+        assert.equal(entry['depth'], 1)
+        assert.equal(entry['maxSubagentDepth'], 1, 'fork: true without explicit maxSubagentDepth defaults to leaf at child depth')
+        assert.equal(entry['forked'], true, 'depth KV must persist forked: true fact')
+        assert.equal(entry['parentConversationId'], 1)
+
+        assert.ok(childMeta, 'should capture forked child model request')
+        assert.equal(childMeta.toolNames.includes('subagent'), false, 'forked leaf must strip subagent')
+        assert.equal(childMeta.toolNames.includes('SubagentWorkflow'), false, 'forked leaf must strip SubagentWorkflow')
+        assert.equal(childMeta.toolNames.includes('bash'), true, 'non-dispatch tools stay intact')
+        assert.equal(childMeta.sectionsById['profile.catalog'], undefined, 'profile.catalog must be suppressed when dispatch tools are stripped')
+        const forkSection = childMeta.sectionsById['workflow.forked_context'] ?? ''
+        assert.ok(forkSection.includes('<forked_subagent_context>'), 'forked child must receive workflow.forked_context section')
+        assert.ok(forkSection.includes('ALREADY been fulfilled'), 'boundary section must forbid re-delegation of inherited instructions')
+
+        // Forked leaf child rejects direct spawnAgent and workflow run action with 403 subagent_depth_exceeded
+        await assert.rejects(
+          () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: child.id, prompt: 'forbidden nested spawn' }),
+          (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+        )
+        await assert.rejects(
+          () =>
+            app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
+              script: 'export const meta = { name: "blocked", description: "d" }\nreturn 1',
+              conversationId: child.id,
+            }),
+          (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+        )
+
+        // Resuming the forked child preserves maxSubagentDepth=1, forked=true, tool stripping, and boundary section
+        await app.kernel.conversations.submitInput(1, 'resume forked leaf caller')
+        await app.kernel.conversations.waitForIdle(1)
+
+        assert.ok(resumedChildMeta, 'should capture resumed forked child request')
+        assert.equal(resumedChildMeta.toolNames.includes('subagent'), false)
+        assert.equal(resumedChildMeta.toolNames.includes('SubagentWorkflow'), false)
+        assert.equal(resumedChildMeta.sectionsById['profile.catalog'], undefined)
+        assert.ok((resumedChildMeta.sectionsById['workflow.forked_context'] ?? '').includes('<forked_subagent_context>'))
+
+        await app.kernel.kvStore.flush()
+        const afterResumeEntry = registryEntry(dir, child.id)
+        assert.equal(afterResumeEntry['maxSubagentDepth'], 1, 'resuming forked child must preserve ceiling=1')
+        assert.equal(afterResumeEntry['forked'], true, 'resuming forked child must preserve forked=true')
+      } finally {
+        await app.close()
+      }
+    }
+
+    // Real Hub restart on same dataDir: leaf ceiling, forked fact, stripping, and boundary persist
+    {
+      const faux = makeFauxProvider()
+      faux.setResponses(Array.from({ length: 8 }, () => step))
+      const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+      try {
+        const entry = registryEntry(dir, persistedChildId)
+        assert.equal(entry['depth'], 1)
+        assert.equal(entry['maxSubagentDepth'], 1)
+        assert.equal(entry['forked'], true)
+
+        await assert.rejects(
+          () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: persistedChildId, prompt: 'post-restart nested spawn' }),
+          (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+        )
+        await assert.rejects(
+          () =>
+            app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
+              script: 'export const meta = { name: "blocked-restart", description: "d" }\nreturn 1',
+              conversationId: persistedChildId,
+            }),
+          (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+        )
+
+        await app.kernel.conversations.submitInput(persistedChildId, 'post-restart forked check')
+        await app.kernel.conversations.waitForIdle(persistedChildId)
+        assert.ok(afterRestartMeta, 'should capture post-restart forked child request')
+        assert.equal(afterRestartMeta.toolNames.includes('subagent'), false)
+        assert.equal(afterRestartMeta.toolNames.includes('SubagentWorkflow'), false)
+        assert.equal(afterRestartMeta.sectionsById['profile.catalog'], undefined)
+        assert.ok((afterRestartMeta.sectionsById['workflow.forked_context'] ?? '').includes('<forked_subagent_context>'))
+      } finally {
+        await app.close()
+      }
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // 13. Explicit maxSubagentDepth=2 opt-in on fork: true
+  // -------------------------------------------------------------------------
+
+  test('fork: true with explicit maxSubagentDepth=2 opts in to depth-2 nesting while keeping workflow.forked_context on depth-1 child', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'fork-explicit-depth2')
+    let depth1Meta: ReturnType<typeof captureModelRequest> | undefined
+    let depth2Meta: ReturnType<typeof captureModelRequest> | undefined
+
+    const step: FauxResponseFactory = (context) => {
+      const req = captureModelRequest(context.messages)
+      const lastUser = req.userTexts.at(-1) ?? ''
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('OPT_IN_DEPTH2')) {
+        return fauxAssistantMessage('recorded OPT_IN_DEPTH2')
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('delegate opt-in fork')) {
+        return fauxAssistantMessage(
+          [fauxToolCall('subagent', { prompt: 'depth1 forked task', fork: true, maxSubagentDepth: 2, background: false }, { id: 'call-optin-d1' })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('depth1 forked task')) {
+        depth1Meta = req
+        return fauxAssistantMessage(
+          [fauxToolCall('subagent', { prompt: 'depth2 leaf task', background: false }, { id: 'call-optin-d2' })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('depth2 leaf task')) {
+        depth2Meta = req
+        return fauxAssistantMessage('depth2 leaf finished')
+      }
+      if (req.lastNonSystemRole === 'toolResult' && req.lastToolName === 'subagent' && lastUser.includes('depth1 forked task')) {
+        return fauxAssistantMessage('depth1 forked finished')
+      }
+      if (req.lastNonSystemRole === 'toolResult' && req.lastToolName === 'subagent' && lastUser.includes('delegate opt-in fork')) {
+        return fauxAssistantMessage('parent opt-in finished')
+      }
+      throw new Error(`unexpected faux request: role=${req.lastNonSystemRole}, lastUser=${lastUser}`)
+    }
+
+    const faux = makeFauxProvider()
+    faux.setResponses(Array.from({ length: 16 }, () => step))
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    try {
+      if (app.kernel.plugins.get('builtin:title')?.enabled) {
+        await app.kernel.plugins.setConfig('builtin:title', { autoTitle: false })
+      }
+      await app.kernel.services.profiles.save({ id: 'coder', name: '编码专家' })
+
+      await app.kernel.conversations.submitInput(1, 'seed OPT_IN_DEPTH2')
+      await app.kernel.conversations.waitForIdle(1)
+      await app.kernel.conversations.submitInput(1, 'delegate opt-in fork')
+      await app.kernel.conversations.waitForIdle(1)
+
+      const child1 = app.kernel.conversations.listConversations().find((c) => c.parentConversationId === 1)
+      assert.ok(child1, 'depth-1 forked child should exist')
+      await app.kernel.conversations.waitForIdle(child1.id)
+      const child2 = app.kernel.conversations.listConversations().find((c) => c.parentConversationId === child1.id)
+      assert.ok(child2, 'depth-1 forked child with explicit maxSubagentDepth=2 should spawn depth-2 child')
+
+      assert.ok(depth1Meta, 'should capture depth-1 forked request')
+      assert.ok(depth1Meta.toolNames.includes('subagent') && depth1Meta.toolNames.includes('SubagentWorkflow'), 'depth-1 with ceiling=2 retains dispatch tools')
+      assert.ok(typeof depth1Meta.sectionsById['profile.catalog'] === 'string', 'depth-1 with dispatch tools retains profile.catalog')
+      assert.ok((depth1Meta.sectionsById['workflow.forked_context'] ?? '').includes('<forked_subagent_context>'), 'depth-1 forked child still receives workflow.forked_context')
+
+      assert.ok(depth2Meta, 'should capture depth-2 child request')
+      assert.equal(depth2Meta.toolNames.includes('subagent'), false, 'depth-2 child is a leaf and strips subagent')
+      assert.equal(depth2Meta.toolNames.includes('SubagentWorkflow'), false, 'depth-2 child is a leaf and strips SubagentWorkflow')
+      assert.equal(depth2Meta.sectionsById['profile.catalog'], undefined, 'depth-2 leaf suppresses profile.catalog')
+      assert.equal(depth2Meta.sectionsById['workflow.forked_context'], undefined, 'non-forked depth-2 child does not get workflow.forked_context')
+
+      await app.kernel.kvStore.flush()
+      const e1 = registryEntry(dir, child1.id)
+      assert.equal(e1['depth'], 1)
+      assert.equal(e1['maxSubagentDepth'], 2)
+      assert.equal(e1['forked'], true)
+      const e2 = registryEntry(dir, child2.id)
+      assert.equal(e2['depth'], 2)
+      assert.equal(e2['maxSubagentDepth'], 2)
+      assert.equal(e2['forked'], undefined)
+
+      await assert.rejects(
+        () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: child2.id, prompt: 'depth3 forbidden' }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+      )
+    } finally {
+      await app.close()
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // 14. Corrupt non-boolean forked in depth KV fails startup explicitly
+  // -------------------------------------------------------------------------
+
+  test('corrupt non-boolean forked field in depth KV fails startup explicitly (subagent_record_invalid)', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'fork-corrupt-kv')
+    let childId = 0
+    {
+      const faux = makeFauxProvider()
+      const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+      try {
+        childId = (await spawnChain(app, faux, [1]))[0]!
+        await app.kernel.kvStore.flush()
+      } finally {
+        await app.close()
+      }
+    }
+    const existing = registryEntry(dir, childId)
+    writeDepthKvRaw(dir, String(childId), { ...existing, forked: 'yes' })
+
+    const faux = makeFauxProvider()
+    await assert.rejects(
+      () => createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'subagent_record_invalid',
+    )
   })
 })

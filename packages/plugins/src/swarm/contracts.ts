@@ -213,7 +213,7 @@ const unansweredRecoverySchema = S.obj(
 export const memberStateBaseProps: Record<string, unknown> = {
   name: S.nonEmptyStr(), conversationId: S.int(1), profileId: S.nonEmptyStr(),
   access: S.enm(['readwrite', 'readonly']), isolation: S.enm(['inherit', 'worktree']),
-  nodeId: S.nonEmptyStr(), cwd: S.nonEmptyStr(), worktreeId: S.str({ minLength: 1 }),
+  nodeId: S.nonEmptyStr(), cwd: S.nonEmptyStr(), worktreeId: S.str({ minLength: 1 }), forked: S.bool(),
   lifecycle: S.enm(['active', 'archived']), readCursorSeq: S.int(0), pendingWakeupSeq: S.int(0),
   lastPostSeq: S.int(1), lastWakeTaskSeq: S.int(1), silentExitNudgeSeq: S.int(1), lastWakeCompletionSeq: S.int(0),
   lastOutboundEdge: S.obj({ seq: S.int(1), to: S.arr(S.str()), kind: S.enm(BOARD_POST_KINDS) }, ['seq', 'to', 'kind']),

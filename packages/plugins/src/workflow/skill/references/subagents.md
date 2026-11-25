@@ -8,7 +8,7 @@ Use the `subagent` tool for one delegated task. Required input is `prompt`; usef
 - Human-owned conversations default to background. Keep working and wait for the automatic steer report; do not poll or sleep.
 - Automation-owned conversations default to synchronous. Explicit `background: true` is rejected for those callers.
 - Use `background: false` only when the next step depends on the actual result.
-- `fork: true` creates a native child from the parent's completed context. It cannot be combined with `resume` and is unsupported for external runtimes.
+- `fork: true` creates a native child from the parent's completed context. It cannot be combined with `resume` and is unsupported for external runtimes. By default, a forked child runs as a leaf (`maxSubagentDepth` equals its own child depth, stripping dispatch tools and injecting a `<forked_subagent_context>` boundary so inherited parent delegation instructions are not repeated); pass an explicit `maxSubagentDepth` within the inherited ceiling only when further nesting is intentionally needed.
 - `nodeId` targets a specific compute node (overrides Profile/parent node; explicit `"local"` switches back to the Hub host; remote nodes require `cwd` or a compatible Profile `cwd`; mutually exclusive with `resume`).
 - `isolation: "worktree"` keeps the child branch and worktree after the run. Inspect and merge before cleanup.
 - `resume` continues an existing execution context. It is not the same as workflow ledger replay.

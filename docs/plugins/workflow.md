@@ -6,7 +6,7 @@
 
 ### 模型工具（2 个，外加动态 `workflow_steer`）
 
-- **`subagent`**：派生子代理。支持 `fork: true` 从父会话上下文分叉、`nodeId` 动态目标计算节点覆写（显式 `'local'` 可切回本机，远端节点需兼容 `cwd`，与 `resume` 互斥）、`isolation: 'worktree'` 隔离工作树、`resume` 续接（凭 `execution.conversationId` / `executionId`）、`schema` 结构化输出、`gate` 验收命令、`model` / `effort` 覆盖、`maxSubagentDepth` 显式授予派生深度；
+- **`subagent`**：派生子代理。支持 `fork: true` 从父会话上下文分叉（默认收口为叶子，除非显式传入 `maxSubagentDepth`）、`nodeId` 动态目标计算节点覆写（显式 `'local'` 可切回本机，远端节点需兼容 `cwd`，与 `resume` 互斥）、`isolation: 'worktree'` 隔离工作树、`resume` 续接（凭 `execution.conversationId` / `executionId`）、`schema` 结构化输出、`gate` 验收命令、`model` / `effort` 覆盖、`maxSubagentDepth` 显式授予派生深度；
 - **`SubagentWorkflow`**：确定性 DSL 编排（内联 `script` / `scriptPath` / 已保存 `name`），journal 账本支持 `resumeFromRunId` 断点恢复。
 
 后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询）、显式 `background: false` 同步等待；`helmx` 自动化会话缺省同步、显式 `background: true` 拒绝。同步 `subagent` 直接经内核 `ctx.host.spawnAgent` 执行并按 `(parentConversationId, parentToolCallId)` 幂等续接，不创建 `WorkflowRun` 磁盘账本记录；后台 `subagent` 与 `SubagentWorkflow` 由引擎账本持久化跟踪。`helmx workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。
@@ -52,13 +52,13 @@
 | 存储 / 文档 | 类型 | 内容 |
 | :--- | :--- | :--- |
 | `ctx.kv('runs')` | 私有按键 KV（SQLite） | 每 run 紧凑 `RunHeader`（`id` / `name` / `conversationId` / `status` / `phase` / `kind` / `createdAt` / `updatedAt` / `settledAt` / `errorCode` / `journalPath` / `replayedFrom` / `notifyParentOnSettle` / `notifiedAt` / `crashRecoveries`）；`resumedByRunId`（接管索引）由单键 `replayedFrom` 在内存派生，零双写；完整节点/参数/结果按需原子落盘至 `<ctx.dataDir>/artifacts/<conversationId>/wf-<runId>.detail.json`（128 项 LRU 缓存） |
-| `ctx.kv('depth')` | 私有按键 KV（SQLite） | 按会话 ID 存储的受管子代理深度记录（`depth` / `parentConversationId` / 子树上限），深度契约唯一事实来源 |
+| `ctx.kv('depth')` | 私有按键 KV（SQLite） | 按会话 ID 存储的受管子代理深度记录（`depth` / `parentConversationId` / 子树上限 / 可选 `forked` 事实），深度契约唯一事实来源 |
 | `runs` | 公开 `ctx.sessionDoc`（`durable: false`） | 纯内存瞬态投影（真增量 `O(depth)` 更新）：当前会话及后代发起的 run 分片（专有 SSE 订阅，单分片 `MAX_PROJECTED_RUNS_PER_CONVERSATION = 100` 保留全部 `running` + 最新终态，剥离完整 `result` 仅保留 `hasResult`/`resultPreview` 并附带 `errorCode`/`resumable`）；启动时自 `ctx.kv('runs')` 重建，停用不落盘 |
 | `run-badges` | 公开 `ctx.doc`（`durable: false`） | 纯内存瞬态投影：基于全量运行态聚合的每会话紧凑角标（`count / tone / footerText`，不受 100 条分片滑窗影响；**一级口径**——只计本会话直接发起的 run，后代 run 归其发起会话自己的角标）；启动时自 `ctx.kv('runs')` 重建，停用不落盘 |
 
 工作流定义文件唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js`。引擎经 `emitEvent` 发布 `workflow.updated`（全局仅状态失效提示）与 `workflow.settled`（完整 summary，`broadcast: false` 进程内分发）。
 
-**嵌套深度契约**：受管子代理（经 `subagent` / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认可嵌套 2 层，达到子树上限即编排叶子。三道防线：`before_turn` 剥离叶子回合的派工工具、工具/动作入口前置拒绝（`403 subagent_depth_exceeded`）、`agent_spawn` 钩子（priority 300）兜底。会话级 `conversations fork` 与 Swarm 成员不进登记表、不受限。DSL `workflow()` 脚本组合深度上限为 2 层（`MAX_WORKFLOW_NESTING_DEPTH = 2`），与子代理层级分别计数。
+**嵌套深度契约**：受管子代理（经 `subagent` / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）非分叉默认可嵌套 2 层，达到子树上限即编排叶子；`fork: true` 默认收口为当前子层级的叶子（`maxSubagentDepth = childDepth`）并持久记录 `forked: true`，在 `before_turn` 注入 `<forked_subagent_context>` 边界段落防止重复派发继承来的父级委托指令，仅当显式传入 `maxSubagentDepth`（且不超出继承上限）时才允许继续嵌套。三道防线：`before_turn` 剥离叶子回合的派工工具（含所有活跃 `helmx.dispatch-tools` 提供方声明的工具，自然抑制 `<available_profiles>`）、工具/动作入口前置拒绝（`403 subagent_depth_exceeded`）、`agent_spawn` 钩子（priority 300）兜底。会话级 `conversations fork` 与非分叉 Swarm 成员不进登记表、不受限。DSL `workflow()` 脚本组合深度上限为 2 层（`MAX_WORKFLOW_NESTING_DEPTH = 2`），与子代理层级分别计数。
 
 ## 停用与失败语义
 
