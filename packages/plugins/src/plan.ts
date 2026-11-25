@@ -300,6 +300,7 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
         },
         icon: 'list-tree',
         slash: PLAN_COMMAND_SLASH,
+        shortcut: 'Ctrl+.',
         actionId: 'toggle',
         input: {},
         scope: {},

@@ -180,9 +180,16 @@ test('format: 会话目标输出规范 #/c/<id>', { timeout: 60_000 }, () => {
   assert.equal(formatLocationHash(conversation(1)), '#/c/1')
 })
 
-test('format: command-palette 是瞬态弹窗，不序列化进 URL', { timeout: 60_000 }, () => {
-  const state: WorkspaceLocationState = { ...conversation(1), activeModal: { kind: 'command-palette' } }
-  assert.equal(formatLocationHash(state), '#/c/1')
+test('format: command-palette 与 shortcuts 是瞬态弹窗，不序列化进 URL', { timeout: 60_000 }, () => {
+  const paletteState: WorkspaceLocationState = { ...conversation(1), activeModal: { kind: 'command-palette' } }
+  assert.equal(formatLocationHash(paletteState), '#/c/1')
+
+  const shortcutsState: WorkspaceLocationState = { ...conversation(1), activeModal: { kind: 'shortcuts' } }
+  assert.equal(formatLocationHash(shortcutsState), '#/c/1')
+  assert.equal(parseLocationHash('#/c/1?modal=shortcuts').activeModal, null)
+  assert.equal(isSameLocationState(conversation(1), shortcutsState), true)
+  assert.equal(shouldPushLocationHistory(conversation(1), shortcutsState), false)
+  assert.equal(shouldPushLocationHistory(shortcutsState, conversation(1)), false)
 })
 
 test('format: 组合状态（视图主屏 + 会话分屏 + 多层抽屉栈 + 弹窗子项，URLSearchParams 规范编码）', { timeout: 60_000 }, () => {

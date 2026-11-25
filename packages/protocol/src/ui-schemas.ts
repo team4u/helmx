@@ -30,6 +30,7 @@ export const UI_SPEC_PATTERNS = Object.freeze({
   actionIdNoDot: /^[^.]+$/,
   commandActionId: /^[A-Za-z0-9_-]+$/,
   commandSlash: /^[a-z0-9][a-z0-9:_-]{0,63}$/,
+  commandShortcut: /^\S(?:[^\r\n\t]{0,30}\S)?$/,
   markdownLanguage: /^[a-z0-9][a-z0-9-]{0,31}$/,
   completerDocName: /^[A-Za-z0-9._-]+$/,
   completerItemsField: /^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,127}$/,
@@ -41,6 +42,11 @@ const NonEmptyString = Type.String({ minLength: 1 })
 const ActionIdNoDotSchema = Type.String({ minLength: 1, pattern: UI_SPEC_PATTERNS.actionIdNoDot.source })
 const CommandActionIdSchema = Type.String({ pattern: UI_SPEC_PATTERNS.commandActionId.source })
 const CommandSlashSchema = Type.String({ pattern: UI_SPEC_PATTERNS.commandSlash.source })
+const CommandShortcutSchema = Type.String({
+  minLength: 1,
+  maxLength: 32,
+  pattern: UI_SPEC_PATTERNS.commandShortcut.source,
+})
 const MarkdownLanguageSchema = Type.String({ pattern: UI_SPEC_PATTERNS.markdownLanguage.source })
 const CompleterDocNameSchema = Type.String({ pattern: UI_SPEC_PATTERNS.completerDocName.source })
 const CompleterItemsFieldSchema = Type.String({ pattern: UI_SPEC_PATTERNS.completerItemsField.source })
@@ -49,6 +55,7 @@ const CommandPaletteSpecSchema = Type.Object({
   slash: Type.Optional(CommandSlashSchema),
   actionId: Type.Optional(CommandActionIdSchema),
   actionPluginId: Type.Optional(NonEmptyString),
+  shortcut: Type.Optional(CommandShortcutSchema),
 })
 
 const PluginSlotTargetSchema = Type.Object({
@@ -148,7 +155,7 @@ export const UI_SPEC_SCHEMAS = Object.freeze({
 type AssertExact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never
 
 const _uiSchemaParityLocks: [
-  AssertExact<Static<typeof CommandPaletteSpecSchema>, Pick<CommandSpec, 'slash' | 'actionId' | 'actionPluginId'>>,
+  AssertExact<Static<typeof CommandPaletteSpecSchema>, Pick<CommandSpec, 'slash' | 'actionId' | 'actionPluginId' | 'shortcut'>>,
   AssertExact<Static<typeof PluginSlotTargetSchema>, Pick<PluginSlotContributionSpec, 'target'>>,
   AssertExact<Static<typeof TimelineRendererMatchMetaSchema>, NonNullable<TimelineRendererSpec['matchMeta']>>,
   AssertExact<Static<typeof TimelineRendererSpecSchema>, Pick<TimelineRendererSpec, 'matchMeta'>>,

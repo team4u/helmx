@@ -130,6 +130,10 @@ export const shellMessages = {
 
   // New topic & bulk management copy (shared by sidebar working set and overview)
   'shell.agents.newTopicUnder': { en: 'Start a new topic under {label}', 'zh-CN': '在 {label} 下开始新话题' },
+  'shell.agents.newTopicUnderWithShortcut': {
+    en: 'Start a new topic under {label} ({shortcut})',
+    'zh-CN': '在 {label} 下开始新话题 ({shortcut})',
+  },
   'shell.agents.collapseFilters': { en: 'Collapse filters', 'zh-CN': '收起筛选' },
   'shell.agents.exitBulk': { en: 'Exit bulk management', 'zh-CN': '退出批量管理' },
   'shell.agents.manageBulk': { en: 'Manage conversations in bulk', 'zh-CN': '批量管理会话' },
@@ -421,8 +425,8 @@ export const shellMessages = {
   'shell.sidebar.spaceHeaderConversations': { en: 'Conversation', 'zh-CN': '会话' },
   'shell.sidebar.spaceHeaderSettings': { en: 'Settings', 'zh-CN': '设置' },
   'shell.sidebar.openCommandPalette': {
-    en: 'Open Cmd K global search and command palette',
-    'zh-CN': '打开 Cmd K 全局搜索与命令面板',
+    en: 'Open global search and command palette ({shortcut})',
+    'zh-CN': '打开全局搜索与命令面板 ({shortcut})',
   },
   'shell.space.conversations': { en: 'Conversations space', 'zh-CN': '对话空间' },
   'shell.space.views': { en: 'Views space', 'zh-CN': '视图空间' },

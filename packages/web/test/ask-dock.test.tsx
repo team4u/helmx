@@ -593,6 +593,164 @@ describe("ask-dock", () => {
     })
   })
 
+  test('choice radiogroup implements WAI-ARIA roving tabIndex and Arrow/Home/End keyboard navigation', { timeout: 60_000 }, async () => {
+    installFetch()
+    const multiChoiceAsk: AskSpec = {
+      id: 'ask-choice-kbd',
+      conversationId: 1,
+      title: 'Pick Execution Mode',
+      fields: [
+        {
+          name: 'mode',
+          label: 'Mode',
+          type: 'choice',
+          required: true,
+          options: [
+            { value: 'alpha', label: 'Alpha' },
+            { value: 'beta', label: 'Beta' },
+            { value: 'gamma', label: 'Gamma' },
+          ],
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [multiChoiceAsk] }), 1)
+
+    const radios = [...document.querySelectorAll<HTMLButtonElement>('[role="radiogroup"] [role="radio"]')]
+    assert.equal(radios.length, 3)
+
+    // With no initial selection, index 0 receives tabIndex=0 and all others receive -1
+    assert.deepEqual(radios.map((r) => r.tabIndex), [0, -1, -1], 'first option is the sole tab stop when unselected')
+    assert.deepEqual(radios.map((r) => r.getAttribute('aria-checked')), ['false', 'false', 'false'])
+
+    const press = async (target: HTMLButtonElement, key: string, extra: KeyboardEventInit = {}): Promise<KeyboardEvent> => {
+      const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...extra })
+      await act(async () => {
+        target.dispatchEvent(ev)
+      })
+      return ev
+    }
+
+    radios[0]!.focus()
+    assert.ok(document.activeElement === radios[0])
+
+    // ArrowDown: 0 -> 1
+    const downEv = await press(radios[0]!, 'ArrowDown')
+    assert.equal(downEv.defaultPrevented, true)
+    assert.ok(document.activeElement === radios[1], 'ArrowDown moves DOM focus to next option')
+    assert.deepEqual(radios.map((r) => r.tabIndex), [-1, 0, -1], 'roving tabIndex tracks selected option')
+    assert.deepEqual(radios.map((r) => r.getAttribute('aria-checked')), ['false', 'true', 'false'])
+
+    // ArrowRight: 1 -> 2
+    const rightEv = await press(radios[1]!, 'ArrowRight')
+    assert.equal(rightEv.defaultPrevented, true)
+    assert.ok(document.activeElement === radios[2], 'ArrowRight moves DOM focus to next option')
+    assert.deepEqual(radios.map((r) => r.tabIndex), [-1, -1, 0])
+
+    // ArrowDown wraps: 2 -> 0
+    const wrapDownEv = await press(radios[2]!, 'ArrowDown')
+    assert.equal(wrapDownEv.defaultPrevented, true)
+    assert.ok(document.activeElement === radios[0], 'ArrowDown wraps from last to first option')
+    assert.deepEqual(radios.map((r) => r.tabIndex), [0, -1, -1])
+
+    // ArrowUp wraps: 0 -> 2
+    const wrapUpEv = await press(radios[0]!, 'ArrowUp')
+    assert.equal(wrapUpEv.defaultPrevented, true)
+    assert.ok(document.activeElement === radios[2], 'ArrowUp wraps from first to last option')
+    assert.deepEqual(radios.map((r) => r.tabIndex), [-1, -1, 0])
+
+    // ArrowLeft: 2 -> 1
+    const leftEv = await press(radios[2]!, 'ArrowLeft')
+    assert.equal(leftEv.defaultPrevented, true)
+    assert.ok(document.activeElement === radios[1], 'ArrowLeft moves DOM focus to previous option')
+    assert.deepEqual(radios.map((r) => r.tabIndex), [-1, 0, -1])
+
+    // Home -> 0, End -> 2
+    const homeEv = await press(radios[1]!, 'Home')
+    assert.equal(homeEv.defaultPrevented, true)
+    assert.ok(document.activeElement === radios[0], 'Home moves DOM focus to first option')
+    assert.deepEqual(radios.map((r) => r.tabIndex), [0, -1, -1])
+
+    const endEv = await press(radios[0]!, 'End')
+    assert.equal(endEv.defaultPrevented, true)
+    assert.ok(document.activeElement === radios[2], 'End moves DOM focus to last option')
+    assert.deepEqual(radios.map((r) => r.tabIndex), [-1, -1, 0])
+
+    // Modifier-held arrow key is ignored (does not hijack browser shortcuts)
+    const altLeftEv = await press(radios[2]!, 'ArrowLeft', { altKey: true })
+    assert.equal(altLeftEv.defaultPrevented, false)
+    assert.ok(document.activeElement === radios[2])
+    assert.deepEqual(radios.map((r) => r.getAttribute('aria-checked')), ['false', 'false', 'true'])
+
+    // Submitting sends the keyboard-selected value ('gamma')
+    const submitBtn = document.querySelector<HTMLButtonElement>('button[type="submit"]')!
+    await act(async () => {
+      submitBtn.click()
+    })
+    assert.equal(posts.length, 1)
+    assert.deepEqual(posts[0]?.body, { answers: { mode: 'gamma' } })
+  })
+
+  test('choice radiogroup pre-selected defaultValue gets initial tabIndex=0 and ignores arrow keys while submitting (disabled)', { timeout: 60_000 }, async () => {
+    let releaseAnswer!: () => void
+    const gate = new Promise<void>((resolve) => { releaseAnswer = resolve })
+    posts = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if ((init?.method ?? 'GET') === 'POST') {
+        const raw = typeof init?.body === 'string' ? init.body : '{}'
+        posts.push({ url, body: JSON.parse(raw) as Record<string, unknown> })
+        await gate
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    const preselectedAsk: AskSpec = {
+      id: 'ask-choice-default',
+      conversationId: 1,
+      title: 'Confirm Target',
+      fields: [
+        {
+          name: 'target',
+          label: 'Target',
+          type: 'choice',
+          required: true,
+          defaultValue: 'second',
+          options: [
+            { value: 'first', label: 'First' },
+            { value: 'second', label: 'Second' },
+          ],
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [preselectedAsk] }), 1)
+
+    const radios = [...document.querySelectorAll<HTMLButtonElement>('[role="radiogroup"] [role="radio"]')]
+    assert.deepEqual(radios.map((r) => r.tabIndex), [-1, 0], 'selected defaultValue option receives tabIndex=0')
+    assert.deepEqual(radios.map((r) => r.getAttribute('aria-checked')), ['false', 'true'])
+
+    // Trigger submit so radios become disabled while in flight
+    const submitBtn = document.querySelector<HTMLButtonElement>('button[type="submit"]')!
+    await act(async () => {
+      submitBtn.click()
+    })
+    assert.equal(radios[1]?.disabled, true)
+
+    const ev = new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })
+    await act(async () => {
+      radios[1]!.dispatchEvent(ev)
+    })
+    assert.equal(ev.defaultPrevented, false, 'disabled radiogroup ignores arrow navigation')
+    assert.deepEqual(radios.map((r) => r.getAttribute('aria-checked')), ['false', 'true'])
+
+    releaseAnswer()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+  })
+
   test('model field with thinkingLevelField shows thinking chips, updates both answers atomically, and resets both', { timeout: 60_000 }, async () => {
     installFetch()
     const thinkingAsk: AskSpec = {

@@ -1,21 +1,76 @@
 /**
  * Pure functions for global single-key shortcuts, split-focus routing, desktop
- * sidebar-collapse persistence and command-palette ordering. Zero React / DOM
- * mount side effects; shared by HelmxStoreProvider / CommandPaletteModal / Sidebar.
+ * sidebar-collapse persistence, new-topic resolution, shortcuts catalog, and
+ * command-palette ordering. Zero React / DOM mount side effects; shared by
+ * HelmxStoreProvider / CommandPaletteModal / ShortcutsModal / Sidebar.
  */
-import type { ConversationSummary } from '@helmx/protocol/browser'
+import {
+  resolveLocalizedText,
+  type CommandSpec,
+  type ConversationSummary,
+  type HelmxLocale,
+  type PluginSummary,
+  type Profile,
+  type SidebarItemSpec,
+} from '@helmx/protocol/browser'
+import { createWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
+import { buildNewTopicCandidates } from '../overview/overview-model.js'
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
-import type { ActiveModal, FocusedPanel, ResolvedTarget } from '../lib/types.js'
+import { collectEnabledPluginIds, isHumanSelectableProfile } from './sidebar-model.js'
+import type { ActiveModal, FocusedPanel, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 
 export const SIDEBAR_COLLAPSED_STORAGE_KEY = 'helmx:sidebar-collapsed'
 export const ESC_ABORT_WINDOW_MS = 1500
 
-export type HelmxShortcutAction = 'toggle-model-picker' | 'toggle-process-groups' | 'toggle-plan-mode'
+export type HelmxShortcutAction =
+  | 'toggle-model-picker'
+  | 'toggle-process-groups'
+  | 'toggle-plan-mode'
+  | 'focus-composer'
+  | 'focus-search'
+  | 'open-shortcuts'
 
 export interface HelmxShortcutDetail {
   action: HelmxShortcutAction
   panel: FocusedPanel
+}
+
+export interface ShortcutKeyEventShape {
+  key: string
+  code?: string
+  isComposing?: boolean
+  keyCode?: number
+}
+
+export interface ResolveNewTopicTargetInput {
+  activeTarget: ResolvedTarget
+  conversations: ReadonlyArray<ConversationSummary>
+  profiles: ReadonlyArray<Profile>
+  plugins?: ReadonlyArray<PluginSummary>
+  sidebarItems?: ReadonlyArray<QualifiedUiSpec<SidebarItemSpec>>
+  locale?: HelmxLocale
+}
+
+export type ShortcutCatalogSectionKey = 'navigation' | 'conversation' | 'composer'
+
+export interface ShortcutCatalogItem {
+  id: string
+  keys: string
+  label: string
+  description?: string
+}
+
+export interface ShortcutCatalogSection {
+  key: ShortcutCatalogSectionKey
+  title: string
+  items: ShortcutCatalogItem[]
+}
+
+export interface BuildShortcutCatalogInput {
+  pluginCommands: ReadonlyArray<QualifiedUiSpec<CommandSpec>>
+  locale: HelmxLocale
+  t?: WebMessageTranslator
 }
 
 const OVERLAY_SELECTOR = [
@@ -116,6 +171,26 @@ export function isInlineInputEscapeTarget(target: EventTarget | null): boolean {
   return target.closest('.pane-topbar input') !== null
 }
 
+/**
+ * Whether a keyboard event target is an editable control (input, textarea,
+ * select, or contenteditable region) where plain single-key shortcuts like `/`
+ * must not hijack typing.
+ */
+export function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  if (target.isContentEditable === true) return true
+  const attr = target.getAttribute('contenteditable')
+  if (attr !== null && attr.trim().toLowerCase() !== 'false') return true
+  const editableHost = target.closest('[contenteditable]')
+  if (editableHost !== null) {
+    const hostAttr = editableHost.getAttribute('contenteditable')
+    if (hostAttr !== null && hostAttr.trim().toLowerCase() !== 'false') return true
+  }
+  return false
+}
+
 export function isApplePlatform(): boolean {
   if (typeof navigator === 'undefined') return false
   const nav = navigator as Navigator & { userAgentData?: { platform?: string } }
@@ -125,8 +200,214 @@ export function isApplePlatform(): boolean {
 
 /** The single Mod-shortcut display label (strictly one key; no multi-key aliases). */
 export function formatModShortcut(key: string): string {
-  const upper = key.toUpperCase()
-  return isApplePlatform() ? `⌘${upper}` : `Ctrl+${upper}`
+  const label = key.length === 1 ? key.toUpperCase() : key
+  return isApplePlatform() ? `⌘${label}` : `Ctrl+${label}`
+}
+
+/** The single Mod+Shift-shortcut display label (strictly one key; no multi-key aliases). */
+export function formatModShiftShortcut(key: string): string {
+  const label = key.length === 1 ? key.toUpperCase() : key
+  return isApplePlatform() ? `⌘⇧${label}` : `Ctrl+Shift+${label}`
+}
+
+function isImeComposingEvent(event: ShortcutKeyEventShape): boolean {
+  return event.isComposing === true || event.keyCode === 229
+}
+
+/** IME-safe matcher for '/' (supports Chinese IME producing '、' with physical code 'Slash'). */
+export function isSlashShortcutKey(event: ShortcutKeyEventShape): boolean {
+  if (isImeComposingEvent(event)) return false
+  return event.key === '/' || event.code === 'Slash'
+}
+
+/** IME-safe matcher for '.' (supports Chinese IME producing '。' with physical code 'Period'). */
+export function isPeriodShortcutKey(event: ShortcutKeyEventShape): boolean {
+  if (isImeComposingEvent(event)) return false
+  return event.key === '.' || event.code === 'Period'
+}
+
+/**
+ * Resolve the standby target for "New topic" (shared by Mod+Shift+O and CommandPalette):
+ * - Human-owned conversation with a human-selectable profile -> inherits (nodeId, cwd);
+ * - Standby page of a human-selectable profile -> stays on activeTarget (preserving draft env);
+ * - Overview / Settings / Screen / automated or non-selectable conversation -> first candidate
+ *   from buildNewTopicCandidates, falling back to Profile Center when no selectable profile exists.
+ */
+export function resolveNewTopicTarget(input: ResolveNewTopicTargetInput): ResolvedTarget {
+  const {
+    activeTarget,
+    conversations,
+    profiles,
+    plugins = [],
+    sidebarItems = [],
+    locale = 'en',
+  } = input
+  const enabledPluginIds = collectEnabledPluginIds(plugins)
+
+  if (activeTarget.kind === 'conversation') {
+    const conv = conversations.find((c) => c.id === activeTarget.conversationId)
+    if (conv !== undefined && (conv.ownedBy ?? 'human') === 'human') {
+      const profile = profiles.find((p) => p.id === conv.profileId)
+      if (profile !== undefined && isHumanSelectableProfile(profile, enabledPluginIds)) {
+        const nodeId = conv.nodeId || 'local'
+        return {
+          kind: 'agent',
+          profileId: conv.profileId,
+          ...(nodeId !== 'local' ? { nodeId } : {}),
+          ...(conv.cwd !== '' ? { cwd: conv.cwd } : {}),
+        }
+      }
+    }
+  } else if (activeTarget.kind === 'agent') {
+    const profile = profiles.find((p) => p.id === activeTarget.profileId)
+    if (profile !== undefined && isHumanSelectableProfile(profile, enabledPluginIds)) {
+      return activeTarget
+    }
+  }
+
+  const candidates = buildNewTopicCandidates({
+    profiles: [...profiles],
+    conversations: [...conversations],
+    plugins,
+    sidebarItems: [...sidebarItems],
+    locale,
+  })
+  const first = candidates[0]
+  return first !== undefined ? { kind: 'agent', profileId: first.profileId } : { kind: 'profiles' }
+}
+
+/**
+ * Single-source grouped shortcut catalog for ShortcutsModal.
+ * Plugin-declared shortcuts are pulled generically from enabled `groupedUi.commands`
+ * without conversation-scope filtering or plugin-ID hardcoding.
+ */
+export function buildShortcutCatalog(input: BuildShortcutCatalogInput): ShortcutCatalogSection[] {
+  const { pluginCommands, locale } = input
+  const t = input.t ?? createWebTranslator(locale)
+
+  const navigationItems: ShortcutCatalogItem[] = [
+    {
+      id: 'nav:command-palette',
+      keys: formatModShortcut('K'),
+      label: t('modals.shortcuts.item.commandPalette'),
+    },
+    {
+      id: 'nav:focus-search',
+      keys: '/',
+      label: t('modals.shortcuts.item.focusSearch'),
+    },
+    {
+      id: 'nav:new-topic',
+      keys: formatModShiftShortcut('O'),
+      label: t('modals.shortcuts.item.newTopic'),
+    },
+    {
+      id: 'nav:toggle-sidebar',
+      keys: formatModShortcut('B'),
+      label: t('modals.shortcuts.item.toggleSidebar'),
+    },
+    {
+      id: 'nav:open-shortcuts',
+      keys: formatModShortcut('/'),
+      label: t('modals.shortcuts.item.openShortcuts'),
+    },
+  ]
+
+  const conversationItems: ShortcutCatalogItem[] = [
+    {
+      id: 'conv:toggle-workbench',
+      keys: formatModShortcut('J'),
+      label: t('modals.shortcuts.item.toggleWorkbench'),
+    },
+    {
+      id: 'conv:switch-model',
+      keys: 'Ctrl+L',
+      label: t('modals.shortcuts.item.switchModel'),
+    },
+    {
+      id: 'conv:toggle-process-steps',
+      keys: 'Ctrl+O',
+      label: t('modals.shortcuts.item.toggleProcessSteps'),
+    },
+    {
+      id: 'conv:abort-turn',
+      keys: 'Esc × 2',
+      label: t('modals.shortcuts.item.abortTurn'),
+    },
+  ]
+
+  for (const cmd of pluginCommands) {
+    const shortcut = typeof cmd.spec.shortcut === 'string' ? cmd.spec.shortcut.trim() : ''
+    if (shortcut === '') continue
+    const label = resolveLocalizedText(cmd.spec.title, locale).trim()
+    if (label === '') continue
+    const description =
+      cmd.spec.description !== undefined
+        ? resolveLocalizedText(cmd.spec.description, locale).trim() || undefined
+        : undefined
+    conversationItems.push({
+      id: `plugin:${cmd.pluginId}/${cmd.spec.id}`,
+      keys: shortcut,
+      label,
+      ...(description !== undefined ? { description } : {}),
+    })
+  }
+
+  const composerItems: ShortcutCatalogItem[] = [
+    {
+      id: 'composer:send-or-steer',
+      keys: 'Enter',
+      label: t('modals.shortcuts.item.sendOrSteer'),
+    },
+    {
+      id: 'composer:queue-send',
+      keys: formatModShortcut('Enter'),
+      label: t('modals.shortcuts.item.queueSend'),
+    },
+    {
+      id: 'composer:newline',
+      keys: 'Shift+Enter',
+      label: t('modals.shortcuts.item.newline'),
+    },
+    {
+      id: 'composer:recall-or-edit',
+      keys: '↑',
+      label: t('modals.shortcuts.item.recallOrEdit'),
+    },
+    {
+      id: 'composer:slash-commands',
+      keys: '/',
+      label: t('modals.shortcuts.item.slashCommands'),
+    },
+    {
+      id: 'composer:mentions',
+      keys: '@',
+      label: t('modals.shortcuts.item.mentions'),
+    },
+    {
+      id: 'composer:dismiss-or-cancel',
+      keys: 'Esc',
+      label: t('modals.shortcuts.item.dismissOrCancel'),
+    },
+  ]
+
+  return [
+    {
+      key: 'navigation',
+      title: t('modals.shortcuts.section.navigation'),
+      items: navigationItems,
+    },
+    {
+      key: 'conversation',
+      title: t('modals.shortcuts.section.conversation'),
+      items: conversationItems,
+    },
+    {
+      key: 'composer',
+      title: t('modals.shortcuts.section.composer'),
+      items: composerItems,
+    },
+  ]
 }
 
 /**

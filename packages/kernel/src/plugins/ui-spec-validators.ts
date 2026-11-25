@@ -99,7 +99,7 @@ const COMMAND_PALETTE_CHECKER = Compile(UI_SPEC_SCHEMAS.commandPalette);
 function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   runCompiledUiSchema(COMMAND_PALETTE_CHECKER, spec, id, ctx, (errors) => {
-    const err = findErrorByPathPrefix(errors, ['/slash', '/actionId', '/actionPluginId']);
+    const err = findErrorByPathPrefix(errors, ['/slash', '/actionId', '/actionPluginId', '/shortcut']);
     if (err?.instancePath.startsWith('/slash')) {
       return {
         message: `plugin ${pluginId} ui.command slash must match /^[a-z0-9][a-z0-9:_-]{0,63}$/ (without leading /)`,
@@ -108,6 +108,12 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
     }
     if (err?.instancePath.startsWith('/actionId')) {
       return { message: `plugin ${pluginId} ui.command actionId must be a valid action identifier` };
+    }
+    if (err?.instancePath.startsWith('/shortcut')) {
+      return {
+        message: `plugin ${pluginId} ui.command shortcut must be a trimmed non-empty string (max 32 chars)`,
+        details: { pluginId, id, shortcut: String(spec['shortcut']) },
+      };
     }
     return { message: `plugin ${pluginId} ui.command actionPluginId must be a non-empty plugin ID`, details: { pluginId, id } };
   });

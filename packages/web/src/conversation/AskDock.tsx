@@ -1,4 +1,5 @@
-import { useId, useMemo, useState } from 'react'
+import { useId, useMemo, useRef, useState } from 'react'
+import type * as React from 'react'
 import { resolveLocalizedText, type AskFieldSpec, type AskSpec } from '@helmx/protocol/browser'
 import { asksApi } from '../lib/api.js'
 import {
@@ -82,6 +83,81 @@ function initialAskAnswers(fields: ReadonlyArray<AskFieldSpec>): Record<string, 
   return initial
 }
 
+function AskChoiceGroup({
+  fieldLabel,
+  options,
+  value,
+  disabled,
+  onChange,
+}: {
+  fieldLabel: string
+  options: ReadonlyArray<NonNullable<AskFieldSpec['options']>[number]>
+  value: string
+  disabled: boolean
+  onChange: (v: string) => void
+}) {
+  const { locale } = useWebLocale()
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const selectedIndex = options.findIndex((opt) => opt.value === value)
+  const tabStopIndex = selectedIndex >= 0 ? selectedIndex : 0
+
+  const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLButtonElement>): void => {
+    if (disabled || options.length === 0) return
+    if (e.altKey || e.ctrlKey || e.metaKey) return
+    let nextIndex: number | null = null
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+      nextIndex = (index + 1) % options.length
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+      nextIndex = (index - 1 + options.length) % options.length
+    } else if (e.key === 'Home') {
+      nextIndex = 0
+    } else if (e.key === 'End') {
+      nextIndex = options.length - 1
+    }
+    if (nextIndex === null) return
+    const nextOpt = options[nextIndex]
+    if (nextOpt === undefined) return
+    e.preventDefault()
+    optionRefs.current[nextIndex]?.focus()
+    onChange(nextOpt.value)
+  }
+
+  return (
+    <div className="ask-dock-choice-group" role="radiogroup" aria-label={fieldLabel}>
+      {options.map((opt, index) => {
+        const selected = value === opt.value
+        const optLabel = resolveLocalizedText(opt.label, locale)
+        const optDesc =
+          opt.description !== undefined ? resolveLocalizedText(opt.description, locale) : undefined
+        return (
+          <button
+            key={opt.value}
+            ref={(el) => {
+              optionRefs.current[index] = el
+            }}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            tabIndex={index === tabStopIndex ? 0 : -1}
+            className={`ask-dock-choice-btn${selected ? ' ask-dock-choice-btn--selected' : ''}`}
+            disabled={disabled}
+            onClick={() => onChange(opt.value)}
+            onKeyDown={(e) => handleKeyDown(index, e)}
+          >
+            <span className="ask-dock-choice-radio" aria-hidden="true" />
+            <span className="ask-dock-choice-body">
+              <span className="ask-dock-choice-label">{optLabel}</span>
+              {optDesc !== undefined && optDesc !== '' ? (
+                <span className="ask-dock-choice-desc">{optDesc}</span>
+              ) : null}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function AskFieldInput({
   conversationId,
   field,
@@ -123,33 +199,13 @@ function AskFieldInput({
   }
   if (field.type === 'choice') {
     return (
-      <div className="ask-dock-choice-group" role="radiogroup" aria-label={fieldLabel}>
-        {(field.options ?? []).map((opt) => {
-          const selected = value === opt.value
-          const optLabel = resolveLocalizedText(opt.label, locale)
-          const optDesc =
-            opt.description !== undefined ? resolveLocalizedText(opt.description, locale) : undefined
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              className={`ask-dock-choice-btn${selected ? ' ask-dock-choice-btn--selected' : ''}`}
-              disabled={disabled}
-              onClick={() => onChange(opt.value)}
-            >
-              <span className="ask-dock-choice-radio" aria-hidden="true" />
-              <span className="ask-dock-choice-body">
-                <span className="ask-dock-choice-label">{optLabel}</span>
-                {optDesc !== undefined && optDesc !== '' ? (
-                  <span className="ask-dock-choice-desc">{optDesc}</span>
-                ) : null}
-              </span>
-            </button>
-          )
-        })}
-      </div>
+      <AskChoiceGroup
+        fieldLabel={fieldLabel}
+        options={field.options ?? []}
+        value={value}
+        disabled={disabled}
+        onChange={onChange}
+      />
     )
   }
   if (field.type === 'model') {
