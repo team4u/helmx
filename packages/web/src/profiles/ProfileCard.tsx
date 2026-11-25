@@ -22,6 +22,7 @@ import {
   useOptionalStoreActions,
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { openStandbyWithFocus } from '../conversation/standby-focus.js'
 
 export interface ProfileCardProps {
   profile: Profile
@@ -89,7 +90,10 @@ export function ProfileCard({
       onStartChat()
       return
     }
-    actions?.openTarget({ kind: 'agent', profileId: profile.id })
+    openStandbyWithFocus(
+      { panel: 'primary', profileId: profile.id },
+      () => actions?.openTarget({ kind: 'agent', profileId: profile.id }),
+    )
   }
 
   const shortModelName = formatShortModelName(effectiveModel.model)

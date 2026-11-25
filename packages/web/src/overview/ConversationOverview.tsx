@@ -66,6 +66,7 @@ import {
   useStoreActions,
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { openStandbyWithFocus } from '../conversation/standby-focus.js'
 import { BatchActionBar } from '../ui/BatchActionBar.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
@@ -785,8 +786,12 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     [profiles, conversations, plugins, groupedUi.sidebarItems, locale],
   )
 
-  const openNewTopic = (profileId: string): void => {
-    openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined)
+  const openNewTopic = (profileId: string, opts?: { flush?: boolean }): void => {
+    openStandbyWithFocus(
+      { panel: isSplit ? 'split' : 'primary', profileId },
+      () => openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined),
+      opts,
+    )
   }
 
   // 单候选直进按钮的稳定绑定（闭包内索引访问会丢失窄化，这里一次性收敛）。
@@ -873,7 +878,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                         title={t('shell.agents.newTopicUnder', { label: standing.label })}
                         onSelect={() => {
                           newTopicPickedRef.current = true
-                          openNewTopic(standing.profileId)
+                          openNewTopic(standing.profileId, { flush: false })
                         }}
                       >
                         <span className="pane-more-item-label">

@@ -49,7 +49,7 @@ export interface ComposerProps {
   /** 真实发送请求开始/结束时通知父层（在途反馈；斜杠命令不触发）。 */
   onSendingChange?: (sending: boolean) => void
   /** /new 新话题入口：进入本智能体待命页（首次发送才落库）；宿主传入面板位置明确的导航回调。 */
-  onNewThread?: () => void
+  onNewThread?: (opts?: { flush?: boolean }) => void
   isSplit?: boolean
   staged?: boolean
   isDrawer?: boolean
@@ -383,7 +383,7 @@ export const Composer = memo(function Composer({
       onCompactContext={() => runManageCommand('/compact')}
       compactDisabled={compacting}
       onClearContext={() => runManageCommand('/clear')}
-      onNewTopic={onNewThread}
+      onNewTopic={onNewThread !== undefined ? () => onNewThread({ flush: false }) : undefined}
       slashOpen={completions.slashOpen}
       popoverQuery={completions.popoverQuery}
       slashMenuItems={completions.slashMenuItems}

@@ -26,6 +26,8 @@ import {
 import { makeTestStore, type TestStoreOverrides } from './helpers/store.js'
 import {
   getStandbyDraft,
+  getStandbyFocusRequest,
+  requestStandbyFocus,
   resetStandbyDrafts,
   setStandbyDraftInputMeta,
   standbyDraftKey,
@@ -163,7 +165,7 @@ describe('standby-pane UX', () => {
     )
     cleanup()
 
-    // 5. Mobile / coarse-pointer viewport
+    // 5. Mobile / coarse-pointer viewport: passive mount blocks focus, while explicit focus ticket focuses synchronously
     stubMatchMedia((q) => q === '(hover: none) and (pointer: coarse)')
     mounted = await mountDomRoot(
       e(HostStoreProviders, { value: makeStandbyStore() }, e(AgentStandbyPane, { profileId: 'assistant' })),
@@ -171,8 +173,20 @@ describe('standby-pane UX', () => {
     await flushMacrotask(30)
     assert.ok(
       document.activeElement !== mounted.host.querySelector('textarea.composer-textarea'),
-      'coarse touch pointer blocks auto-focus',
+      'passive coarse touch mount blocks auto-focus',
     )
+    cleanup()
+
+    requestStandbyFocus({ panel: 'primary', profileId: 'assistant', explicit: true })
+    mounted = await mountDomRoot(
+      e(HostStoreProviders, { value: makeStandbyStore() }, e(AgentStandbyPane, { profileId: 'assistant' })),
+    )
+    const explicitMobileTa = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    assert.ok(
+      document.activeElement === explicitMobileTa,
+      'explicit focus ticket synchronously focuses standby textarea on coarse-touch mount',
+    )
+    assert.equal(getStandbyFocusRequest(), null, 'consumed explicit focus ticket is cleared')
     cleanup()
 
     // 6. External input / hidden <Activity> textarea do NOT block standby focus,

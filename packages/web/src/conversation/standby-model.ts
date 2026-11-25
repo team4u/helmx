@@ -104,10 +104,20 @@ function isReadableFileLike(file: unknown): file is File {
   return typeof candidate.arrayBuffer === 'function' && typeof candidate.size === 'number' && typeof candidate.name === 'string'
 }
 
+export interface StandbyFocusRequest {
+  readonly seq: number
+  readonly panel: 'primary' | 'split'
+  readonly profileId: string
+  readonly explicit: boolean
+}
+
 type DraftListener = () => void
 
 const drafts = new Map<string, StandbyDraftState>()
 const listeners = new Set<DraftListener>()
+const focusListeners = new Set<DraftListener>()
+let pendingStandbyFocus: StandbyFocusRequest | null = null
+let standbyFocusSeq = 0
 let localFileSeq = 0
 export const EMPTY_STANDBY_DIRTY_KEYS: ReadonlyArray<string> = []
 let dirtyKeysCache: ReadonlyArray<string> = EMPTY_STANDBY_DIRTY_KEYS
@@ -116,6 +126,52 @@ let dirtyKeysCache: ReadonlyArray<string> = EMPTY_STANDBY_DIRTY_KEYS
  * responses when it changed (no reviving text/attachments, no further
  * upload/send, no notices, no navigation). */
 let draftEpoch = 0
+
+function notifyFocusListeners(): void {
+  for (const listener of focusListeners) listener()
+}
+
+function subscribeStandbyFocus(listener: DraftListener): () => void {
+  focusListeners.add(listener)
+  return () => {
+    focusListeners.delete(listener)
+  }
+}
+
+/** Issue an explicit request to focus the target standby textarea on next commit/effect. */
+export function requestStandbyFocus(input: {
+  panel: 'primary' | 'split'
+  profileId: string
+  explicit?: boolean
+}): number {
+  standbyFocusSeq += 1
+  pendingStandbyFocus = {
+    seq: standbyFocusSeq,
+    panel: input.panel,
+    profileId: input.profileId,
+    explicit: input.explicit !== false,
+  }
+  notifyFocusListeners()
+  return standbyFocusSeq
+}
+
+/** Current pending standby focus request, or null when idle/consumed. */
+export function getStandbyFocusRequest(): StandbyFocusRequest | null {
+  return pendingStandbyFocus
+}
+
+/** Clear the pending standby focus request (optionally matching a specific ticket seq). */
+export function clearStandbyFocusRequest(seq?: number): void {
+  if (pendingStandbyFocus === null) return
+  if (seq !== undefined && pendingStandbyFocus.seq !== seq) return
+  pendingStandbyFocus = null
+  notifyFocusListeners()
+}
+
+/** React subscription for pending explicit standby focus requests. */
+export function useStandbyFocusRequest(): StandbyFocusRequest | null {
+  return useSyncExternalStore(subscribeStandbyFocus, getStandbyFocusRequest, () => null)
+}
 
 function isStandbyDraftDirtyRecord(draft: StandbyDraftState): boolean {
   return (
@@ -244,6 +300,7 @@ export function clearStandbyDraft(key: string): void {
 export function resetStandbyDrafts(): void {
   draftEpoch++
   drafts.clear()
+  clearStandbyFocusRequest()
   notifyListeners()
 }
 
@@ -334,6 +391,8 @@ export interface StandbyAutoFocusInput {
   activeModal: ActiveModal
   drawerStackLength: number
   isMobile: boolean
+  /** True only when triggered by an explicit user action (e.g. clicking New Topic); allows mobile focus inside user gesture. */
+  explicitFocus?: boolean
   textarea?: Element | null
   paneEl?: Element | null
   /** Optional overrides for pure unit tests (default to live browser globals). */
@@ -365,7 +424,9 @@ function isEditableFocusTarget(el: Element | null): boolean {
  * 1. Panel matches the resolved focused panel (never steal focus across split panes,
  *    where App.tsx's onFocusCapture would flip focusedPanel);
  * 2. No modal, drawer stack frame, or DOM dialog/alertdialog is open;
- * 3. Desktop fine-pointer viewport (> 680px and not coarse-only touch);
+ * 3. On mobile / coarse-only touch viewports, skip passive mount auto-focus
+ *    (so cold loads / Back-Forward never pop the keyboard), while allowing
+ *    explicit user-initiated New Topic gestures (`explicitFocus: true`);
  * 4. Only block for another visible editable control when it belongs to THIS
  *    standby pane (e.g. its cwd input) or to the OPPOSITE visible split panel.
  *    Hidden `<Activity mode="hidden">` textareas or external search inputs must
@@ -382,7 +443,7 @@ export function shouldAutoFocusStandbyTextarea(input: StandbyAutoFocusInput): bo
   if (dialogOpen) {
     return false
   }
-  if (input.isMobile || isCoarseTouchViewport(input.matchMedia)) {
+  if (!input.explicitFocus && (input.isMobile || isCoarseTouchViewport(input.matchMedia))) {
     return false
   }
   const activeEl =

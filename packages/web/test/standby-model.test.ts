@@ -12,9 +12,12 @@ import {
   admitStandbyFiles,
   buildStandbyCreateInit,
   clearStandbyDraft,
+  clearStandbyFocusRequest,
   executeStandbySend,
   getStandbyDraft,
+  getStandbyFocusRequest,
   inheritedEnvOf,
+  requestStandbyFocus,
   resetEnvStandbyDraft,
   resetStandbyDrafts,
   setStandbyDraftInputMeta,
@@ -667,16 +670,36 @@ describe("standby-model", () => {
       'blocks when a DOM dialog/alertdialog is open',
     )
 
-    // Guard 3: mobile / coarse touch pointer
+    // Guard 3: mobile / coarse touch pointer (passive blocked; explicit user tap allowed while keeping Guards 1/2/4)
     assert.equal(
       shouldAutoFocusStandbyTextarea({ ...base, isMobile: true }),
       false,
-      'blocks on mobile viewport',
+      'blocks passive focus on mobile viewport',
     )
     assert.equal(
       shouldAutoFocusStandbyTextarea({ ...base, matchMedia: coarseMatchMedia }),
       false,
-      'blocks on coarse-only touch device',
+      'blocks passive focus on coarse-only touch device',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, isMobile: true, explicitFocus: true }),
+      true,
+      'explicit New Topic gesture overrides mobile viewport guard',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, matchMedia: coarseMatchMedia, explicitFocus: true }),
+      true,
+      'explicit New Topic gesture overrides coarse-touch guard',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, isMobile: true, explicitFocus: true, activeModal: { kind: 'command-palette' } }),
+      false,
+      'explicit focus still respects open modal Guard #2',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, isMobile: true, explicitFocus: true, activeElement: inPaneInput }),
+      false,
+      'explicit focus still respects in-pane input Guard #4',
     )
 
     // Guard 4: scoped visible editable checks (own pane & opposite split block; hidden Activity & external search allow)
@@ -715,5 +738,31 @@ describe("standby-model", () => {
       true,
       'allows when activeElement is a non-editable button',
     )
+  })
+
+  test('requestStandbyFocus: monotonic tickets, targeted clear, and resetStandbyDrafts cleanup', { timeout: 60_000 }, () => {
+    assert.equal(getStandbyFocusRequest(), null)
+    const seq1 = requestStandbyFocus({ panel: 'primary', profileId: 'assistant' })
+    const seq2 = requestStandbyFocus({ panel: 'split', profileId: 'coder', explicit: true })
+    assert.ok(seq2 > seq1)
+    assert.deepEqual(getStandbyFocusRequest(), {
+      seq: seq2,
+      panel: 'split',
+      profileId: 'coder',
+      explicit: true,
+    })
+
+    // Mismatched seq clear is a no-op
+    clearStandbyFocusRequest(seq1)
+    assert.equal(getStandbyFocusRequest()?.seq, seq2)
+
+    // Matching seq clears
+    clearStandbyFocusRequest(seq2)
+    assert.equal(getStandbyFocusRequest(), null)
+
+    // Full reset clears pending ticket
+    requestStandbyFocus({ panel: 'primary', profileId: 'coder' })
+    resetStandbyDrafts()
+    assert.equal(getStandbyFocusRequest(), null)
   })
 })

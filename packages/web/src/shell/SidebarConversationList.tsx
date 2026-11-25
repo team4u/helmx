@@ -35,6 +35,7 @@ import {
   useSharedNowMs,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { openStandbyWithFocus } from '../conversation/standby-focus.js'
 import { formatStopwatchMs } from '../lib/format.js'
 import { useAuthConnection, useProfilesSlice, useStoreActions } from '../lib/store-context.js'
 import { BatchActionBar } from '../ui/BatchActionBar.js'
@@ -115,7 +116,7 @@ function SidebarNewTopicButton({
 }: {
   candidates: ReadonlyArray<AgentStanding>
   store: SidebarStoreView
-  onSelectProfile: (profileId: string) => void
+  onSelectProfile: (profileId: string, opts?: { flush?: boolean }) => void
 }): ReactNode {
   const { t } = useWebLocale()
   const pickedRef = useRef(false)
@@ -184,7 +185,7 @@ function SidebarNewTopicButton({
             (label) => t('shell.agents.newTopicUnder', { label }),
             (profileId) => {
               pickedRef.current = true
-              onSelectProfile(profileId)
+              onSelectProfile(profileId, { flush: false })
             },
           )}
         </DropdownMenuContent>
@@ -199,7 +200,7 @@ function SidebarEmptyNewTopicButton({
   onSelectProfile,
 }: {
   candidates: ReadonlyArray<AgentStanding>
-  onSelectProfile: (profileId: string) => void
+  onSelectProfile: (profileId: string, opts?: { flush?: boolean }) => void
 }): ReactNode {
   const { t } = useWebLocale()
   const pickedRef = useRef(false)
@@ -260,7 +261,7 @@ function SidebarEmptyNewTopicButton({
             (label) => t('shell.agents.newTopicUnder', { label }),
             (profileId) => {
               pickedRef.current = true
-              onSelectProfile(profileId)
+              onSelectProfile(profileId, { flush: false })
             },
           )}
         </DropdownMenuContent>
@@ -940,7 +941,12 @@ export function SidebarConversationList({
   )
 
   const openStandby = useCallback(
-    (profileId: string) => openAgentStandby(store, profileId, onNavigate),
+    (profileId: string, opts?: { flush?: boolean }) =>
+      openStandbyWithFocus(
+        { panel: 'primary', profileId },
+        () => openAgentStandby(store, profileId, onNavigate),
+        opts,
+      ),
     [store, onNavigate],
   )
 
