@@ -55,7 +55,7 @@
 
 | 工具 | 参数与边界 | 行为 |
 | :--- | :--- | :--- |
-| `plan_bash` | `command`、`timeoutMs?`（默认 `60_000`，上限 `120_000`） | 仅允许在顶层人类会话 `planning` 模式下调用；先经引号感知分词器校验只读安全性（允许引号内包含关键词、仅放行 `2>&1`/`>/dev/null` 等无害重定向；拦截写文件重定向、`rm`/`mv`/`cp`/`mkdir`/`touch`/`sed -i`/`git commit`/`git checkout`/`pnpm install` 等变更命令与命令替换），通过后经 `ctx.host.execEnv` 在节点执行并脱敏 |
+| `plan_bash` | `command`、`timeoutMs?`（默认 `60_000`，上限 `120_000`） | 仅允许在顶层人类会话 `planning` 模式下调用；先经引号感知分词器校验只读安全性（允许引号内包含关键词、仅放行 `2>&1`/`>/dev/null` 等无害重定向；拦截写文件重定向、`rm`/`mv`/`cp`/`mkdir`/`touch`/`sed -i`/`git commit`/`git checkout`/`pnpm install` 等变更命令与命令替换；对 `helmx` CLI 实施严格只读白名单——仅放行有界只读核心/内置插件查询、`helmx api GET` 与 `--help`/`--version`，拒绝写参数如 `--output`/`-o`/`--set`/`--unset`/`--input`（写命令）/`--watch` 以及未知/外部插件命令，并无条件拦截 `helmx-hub` 与 `helmx-node`），通过后经 `ctx.host.execEnv` 在节点执行并脱敏 |
 | `plan_ask` | `title?`、`questions`（1..4 题，`id` 非 `'notes'`，每题 2..6 个选项，可选 `description`） | 仅允许在顶层人类会话 `planning` 模式下调用且无并发挂起 Ask；经 `AskDoc` 发起结构化单选澄清卡（置 `awaitingClarification: true`，不误触发审批面板），附可选 `notes` 与自由回复提示 |
 | `plan_save` | `title`（1..120 字符）、`markdown`（1..98,304 UTF-8 字节） | 仅允许在顶层人类会话 `planning` 模式下调用；经 `ctx.host.redact` 脱敏、递增 `version`、持久化 `ctx.kv('plans')` 并 `await flushKv()`，更新 `plan` `sessionDoc` 与 `plan-badges`，返回结构化 `presentationMeta` |
 | `plan_propose` | `summary`（1..300 字符纯文本，拒绝 ```` ``` ```` 代码围栏） | 要求已存在草稿且无并发挂起审批；生成全双语 `AskCreateSpec`：单选 `decision`（默认 `approve_handoff`「批准并在新上下文执行」、`approve`「批准并在当前上下文继续」、`revise`「退回修改」）、可选 `executionModel` 模型选择器（默认预填配置项 `executionModel`，无论是否切换新上下文均生效）、可选 `feedback` 与底部直接打字修订提示 |
