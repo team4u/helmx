@@ -27,6 +27,7 @@ import {
   APP_BUILDER_SKILL_ASSET,
   HELMX_CLI_SKILL_ASSET,
   PROFILE_MANAGED_BY,
+  PROFILE_SKILL_ASSET,
 } from './profile/assets.js';
 import {
   describeHint,
@@ -52,6 +53,9 @@ export {
   APP_BUILDER_SKILL_ID,
   APP_BUILDER_SKILL_ASSET,
   APP_BUILDER_SKILL_MD,
+  PROFILE_SKILL_ID,
+  PROFILE_SKILL_ASSET,
+  PROFILE_SKILL_MD,
   PROFILE_MANAGED_BY,
   renderSkillTemplate,
 } from './profile/assets.js'
@@ -132,7 +136,7 @@ export function createProfilePlugin(): PluginDefinition {
     locked: true,
     definePlugin(ctx) {
       const { profiles, skills } = ctx.host;
-      // Sync the system-level built-in skill skills/helmx-cli/ (Layer 1 + Layer 2) at startup:
+      // Sync the system-level built-in skills (helmx-cli, app-builder, profile) at startup:
       // managed system assets are overwritten file-by-file per the source version, and missing files are
       // backfilled; writes through the regular interface are rejected.
       // managedByPlugin (ensureDefault does not normalize; this plugin bootstraps the declaration).
@@ -142,6 +146,7 @@ export function createProfilePlugin(): PluginDefinition {
           invalidateNodeSkillsCache(ctx.host);
           await skills.ensureSkill(HELMX_CLI_SKILL_ASSET);
           await skills.ensureSkill(APP_BUILDER_SKILL_ASSET);
+          await skills.ensureSkill(PROFILE_SKILL_ASSET);
           await ensureDefaultProfileManaged(profiles);
         },
         async stop() {
