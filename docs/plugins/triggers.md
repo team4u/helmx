@@ -28,22 +28,24 @@ Cron 与 Webhook 共享同一套互斥投递契约（`delivery.ts`）：
 4. **重启补跑（`catchUp`）**：`true` 重启后对错过时段合并补跑最近一次；`false` 跳至未来首个时点；
 5. **分段防溢出**：定时器间隔超 32 位上限（约 24.8 天）时先以安全窗口触发再续排，timer unref 不阻退出。
 
-写回按 `(id, rev)` 双键校验：delete 后重建同 ID 即换代（`rev` 新 UUID），在途 tick 不污染新任务。投递失败如实写 `lastError` 并发 notification；本计划点不重试，下个时点照常。
+写回按 `(id, rev)` 双键校验：delete 后重建同 ID 或经 `cron_update` 修改配置均会换代（`rev` 新 UUID），在途旧 tick 不污染更新后的任务。投递失败如实写 `lastError` 并发 notification；本计划点不重试，下个时点照常。
 
 | 动作 | CLI | 说明 |
 | :--- | :--- | :--- |
 | `cron_create` | `helmx cron create` | `--id`（1..64 位 `[A-Za-z0-9_-]`，禁点号）/ `--schedule` / `--text` 必填；可选 `--timezone` / `--description` / `--enabled` / `--catch-up` / `--mode isolated\|dedicated` / `--profile-id` / `--keep-last 1..100` / `--target-conversation-id`（与自动化参数互斥） |
+| `cron_update` | `helmx cron update` | `--id` 必填，至少提供一个可更新字段（`--description` 传空串清空 / `--schedule` / `--timezone` / `--text` / `--enabled` / `--catch-up` / `--mode` / `--profile-id` / `--keep-last` / `--target-conversation-id`）；换代 `rev`、重算 `nextRunAt` 并重排定时器，保留 `lastRunAt` / `lastError` / `lastSkippedAt` / `lastSkipReason` 运行历史 |
 | `cron_delete` | `helmx cron delete <id>` | 删除任务；在途投递自然终止，不复活 |
 | `cron_trigger` | `helmx cron trigger <id>` | 手动立即真实投递一次并返回 `{ triggered, conversationId }`（失败抛错，不影响后续计划调度） |
 | `cron_list` | `helmx cron list` | 全部任务含 `mode` / `lastRunAt` / `nextRunAt` / `lastError` / `lastSkippedAt` |
 
 ### Webhook 签名入站
 
-宿主挂载公开路由 `POST /api/plugins/builtin:triggers/routes/webhook/:id`（`public: true` 跳过 Token 鉴权，插件自行验签）。握手链：请求体流式限制 256 KiB（超限 `413 payload_too_large`）→ HMAC-SHA256 验签（`x-helmx-signature: sha256=<hex>` 覆盖原始 body 字节，`timingSafeEqual` 常时比较；无签名/错签名 401，ID 不存在 404，坏 UTF-8 显式 400）→ 配置一致性复核（读 body 期间端点被删/重建返回 `409 webhook_changed`）→ 投递（`202 {accepted: true}`；失败显式 `500 webhook_dispatch_failed`）。
+宿主挂载公开路由 `POST /api/plugins/builtin:triggers/routes/webhook/:id`（`public: true` 跳过 Token 鉴权，插件自行验签）。握手链：请求体流式限制 256 KiB（超限 `413 payload_too_large`）→ HMAC-SHA256 验签（`x-helmx-signature: sha256=<hex>` 覆盖原始 body 字节，`timingSafeEqual` 常时比较；无签名/错签名 401，ID 不存在 404，坏 UTF-8 显式 400）→ 配置一致性复核（读 body 期间端点被删、重建或经 `webhook_update` 换代 `rev` 返回 `409 webhook_changed`）→ 投递（`202 {accepted: true}`；失败显式 `500 webhook_dispatch_failed`）。
 
 | 动作 | CLI | 说明 |
 | :--- | :--- | :--- |
 | `webhook_create` | `helmx webhook create` | `--id` / `--secret` 必填；可选 `--description` 与 `--mode` / `--profile-id` / `--keep-last` / `--target-conversation-id`。**secret 仅允许人工 HTTP/CLI 配置**：检测到会话调用上下文（`run_action` / workflow）显式 `403 webhook_secret_context_forbidden` |
+| `webhook_update` | `helmx webhook update` | `--id` 必填，至少提供一个可更新字段（`--description` 传空串清空 / `--mode` / `--profile-id` / `--keep-last` / `--target-conversation-id`）；换代 `rev` 且不触碰已存 secret（传入 `secret` 显式 `400` 拒绝），可在会话上下文（`run_action`）中安全调用 |
 | `webhook_list` | `helmx webhook list` | 端点元数据（不含 secret） |
 | `webhook_delete` | `helmx webhook delete <id>` | 先删 doc（下线入口）再删 secret；secret 删除失败显式报错 |
 

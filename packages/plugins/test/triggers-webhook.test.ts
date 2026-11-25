@@ -322,7 +322,7 @@ test('工厂注册：cron/webhook 动作、路由与声明式贡献完整注册'
   assert.equal(routes[0]!.path, `/api/plugins/builtin%3Atriggers/routes/webhook/:id`)
   const actions = h.host.listActions().filter((a) => a.pluginId === TRIGGERS_PLUGIN_ID).map((a) => a.id).sort()
   // cron 与 webhook 共用工厂，确认 webhook 侧动作完整注册。
-  for (const id of ['webhook_create', 'webhook_delete', 'webhook_list']) {
+  for (const id of ['webhook_create', 'webhook_delete', 'webhook_list', 'webhook_update']) {
     assert.ok(actions.includes(id), `缺少动作 ${id}`)
   }
   const ui = h.host.listUi().filter((u) => u.pluginId === TRIGGERS_PLUGIN_ID)
@@ -662,7 +662,9 @@ test('doc 损坏：条目含 secret 字段 / 重复 id / 缺 hasSecret / 结构�
   const h = await makeHarness()
   await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', { id: 'hook', secret: 'topsecret' })
   // 直接篡改底层 doc store（模拟持久层污染）
-  h.docs.store.set('builtin:triggers:webhooks', { webhooks: [{ id: 'hook', secret: 'leak', hasSecret: true, createdAt: 1 }] })
+  h.docs.store.set('builtin:triggers:webhooks', {
+    webhooks: [{ id: 'hook', rev: 'rev-1', secret: 'leak', hasSecret: true, mode: 'isolated', createdAt: 1 }],
+  })
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
   const res = await callWebhookRoute(h.host, 'hook', 'p', 'topsecret')
   assert.equal(res.status, 500)
@@ -670,36 +672,42 @@ test('doc 损坏：条目含 secret 字段 / 重复 id / 缺 hasSecret / 结构�
   rmSync(h.dataDir, { recursive: true, force: true })
 })
 
-test('doc 边界：旧开发 doc 缺 hasSecret / 双目标 / 越界字段 → 读入即拒，不静默修复', { timeout: 60_000 }, async () => {
+test('doc 边界：旧开发 doc 缺 rev/hasSecret / 双目标 / 越界字段 → 读入即拒，不静默修复', { timeout: 60_000 }, async () => {
   const h = await makeHarness()
   const key = 'builtin:triggers:webhooks'
   const seed = (webhooks: unknown[]): void => {
     h.docs.store.set(key, { webhooks })
   }
+  // 旧开发 doc（无 rev）：不兼容、不迁移，显式报错
+  seed([{ id: 'old-rev', hasSecret: true, mode: 'isolated', createdAt: 1 }])
+  await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
   // 旧开发 doc（无 hasSecret）：不兼容、不迁移，显式报错
-  seed([{ id: 'old', createdAt: 1 }])
+  seed([{ id: 'old', rev: 'rev-1', createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
   // hasSecret 非严格 true 同样拒绝（布尔字段不可为 false/其他值）
-  seed([{ id: 'x', hasSecret: false, createdAt: 1 }])
+  seed([{ id: 'x', rev: 'rev-1', hasSecret: false, mode: 'isolated', createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
   // 旧字段 targetProfileId（不兼容、不迁移）与双目标互斥
-  seed([{ id: 'x', hasSecret: true, targetConversationId: 1, targetProfileId: 'worker', createdAt: 1 }])
+  seed([{ id: 'x', rev: 'rev-1', hasSecret: true, targetConversationId: 1, targetProfileId: 'worker', createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
-  seed([{ id: 'x', hasSecret: true, targetConversationId: 1, mode: 'isolated', createdAt: 1 }])
+  seed([{ id: 'x', rev: 'rev-1', hasSecret: true, targetConversationId: 1, mode: 'isolated', createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
   // 缺 mode（无 targetConversationId）
-  seed([{ id: 'x', hasSecret: true, createdAt: 1 }])
+  seed([{ id: 'x', rev: 'rev-1', hasSecret: true, createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
   // description 超长（> 500）
-  seed([{ id: 'x', hasSecret: true, mode: 'isolated', description: 'd'.repeat(501), createdAt: 1 }])
+  seed([{ id: 'x', rev: 'rev-1', hasSecret: true, mode: 'isolated', description: 'd'.repeat(501), createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
   // profileId 空串
-  seed([{ id: 'x', hasSecret: true, mode: 'isolated', profileId: '', createdAt: 1 }])
+  seed([{ id: 'x', rev: 'rev-1', hasSecret: true, mode: 'isolated', profileId: '', createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
   // 修复后正常通过（合法形状）
-  seed([{ id: 'ok', hasSecret: true, mode: 'isolated', createdAt: 1 }])
-  const list = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {})) as { webhooks: Array<{ id: string; hasSecret: boolean }> }
+  seed([{ id: 'ok', rev: 'rev-1', hasSecret: true, mode: 'isolated', createdAt: 1 }])
+  const list = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {})) as {
+    webhooks: Array<{ id: string; rev: string; hasSecret: boolean }>
+  }
   assert.equal(list.webhooks[0]!.id, 'ok')
+  assert.equal(list.webhooks[0]!.rev, 'rev-1')
   assert.equal(list.webhooks[0]!.hasSecret, true)
   await h.host.dispose()
   rmSync(h.dataDir, { recursive: true, force: true })
@@ -1031,4 +1039,270 @@ test('webhook_delete 立即释放对应 SecretStash 脱敏 disposer，同时保�
 
   await h.host.dispose()
   rmSync(h.dataDir, { recursive: true, force: true })
+})
+
+// ---------------------------------------------------------------------------
+// webhook_update：无 secret 元数据/目标更新、rev 换代、会话上下文可用与边界校验
+// ---------------------------------------------------------------------------
+
+test('webhook_update：描述更新/清空、secret 与 createdAt 不变、rev 换代与 flush 失败回滚', { timeout: 60_000 }, async () => {
+  const h = await makeHarness()
+  const secret = 'whsec-immutable-across-update'
+  const created = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', {
+    id: 'deploy',
+    secret,
+    description: '初始描述',
+  })) as { webhook: { id: string; rev: string; hasSecret: boolean; description?: string; createdAt: number } }
+  assert.ok(typeof created.webhook.rev === 'string' && created.webhook.rev.length > 0)
+
+  const updated = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', {
+    id: 'deploy',
+    description: '更新后的描述',
+  })) as { webhook: { id: string; rev: string; hasSecret: boolean; description?: string; createdAt: number } }
+  assert.equal(updated.webhook.id, 'deploy')
+  assert.notEqual(updated.webhook.rev, created.webhook.rev, 'webhook_update 必须换代 rev')
+  assert.equal(updated.webhook.createdAt, created.webhook.createdAt, 'createdAt 必须保留')
+  assert.equal(updated.webhook.hasSecret, true)
+  assert.equal(updated.webhook.description, '更新后的描述')
+  // secret 持久化与脱敏保持原样
+  assert.equal(await h.credentials.getPluginSecret(TRIGGERS_PLUGIN_ID, webhookSecretKey('deploy')), secret)
+  assert.ok(h.stash.redact(`tok=${secret}`).includes('[REDACTED]'))
+
+  // 原 secret 验签入站照常工作
+  const ok = await callWebhookRoute(h.host, 'deploy', 'after-update', secret)
+  assert.equal(ok.status, 202)
+
+  // description 传空串清空字段
+  const cleared = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', {
+    id: 'deploy',
+    description: '',
+  })) as { webhook: Record<string, unknown> }
+  assert.equal(cleared.webhook.description, undefined)
+  assert.equal('description' in cleared.webhook, false)
+
+  // flush 失败回滚内存 doc
+  const prevFlush = h.docs.flush.bind(h.docs)
+  h.docs.flush = async () => {
+    throw new HelmxError('store_flush_failed', 'flush boom', 500)
+  }
+  await rejectsCode(
+    h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', { id: 'deploy', description: 'should rollback' }),
+    'store_flush_failed',
+    500,
+  )
+  h.docs.flush = prevFlush
+  const listed = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {})) as {
+    webhooks: Array<{ id: string; rev: string; description?: string }>
+  }
+  assert.equal(listed.webhooks[0]!.rev, cleared.webhook.rev)
+  assert.equal(listed.webhooks[0]!.description, undefined)
+
+  await h.host.dispose()
+  rmSync(h.dataDir, { recursive: true, force: true })
+})
+
+test('webhook_update：目标模式切换（isolated <-> dedicated <-> targetConversationId）与 dedicatedConversationId 失效', { timeout: 60_000 }, async () => {
+  const h = await makeHarness()
+  const secret = 'whsec-mode-switch'
+  await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', {
+    id: 'route-hook',
+    secret,
+    mode: 'isolated',
+    profileId: 'worker',
+    keepLast: 4,
+  })
+
+  // isolated -> dedicated：丢弃 keepLast，保留 profileId
+  const ded1 = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', {
+    id: 'route-hook',
+    mode: 'dedicated',
+  })) as { webhook: Record<string, unknown> }
+  assert.equal(ded1.webhook.mode, 'dedicated')
+  assert.equal(ded1.webhook.profileId, 'worker')
+  assert.equal(ded1.webhook.keepLast, undefined)
+
+  // 首次投递绑定 dedicated 会话
+  assert.equal((await callWebhookRoute(h.host, 'route-hook', 'm1', secret)).status, 202)
+  const firstDedId = h.backend.dispatched.at(-1)!.targetConversationId!
+  assert.equal(h.backend.conversations.get(firstDedId)!.profileId, 'worker')
+
+  // 仅更新 description：保留 dedicatedConversationId
+  const keepDed = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', {
+    id: 'route-hook',
+    description: 'watch worker',
+  })) as { webhook: Record<string, unknown> }
+  assert.equal(keepDed.webhook.dedicatedConversationId, firstDedId)
+
+  // 切换 profileId：清空 dedicatedConversationId，下次投递新建绑定到新 profile 的会话
+  const changedProfile = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', {
+    id: 'route-hook',
+    profileId: 'watchdog',
+  })) as { webhook: Record<string, unknown> }
+  assert.equal(changedProfile.webhook.profileId, 'watchdog')
+  assert.equal(changedProfile.webhook.dedicatedConversationId, undefined)
+  assert.equal((await callWebhookRoute(h.host, 'route-hook', 'm2', secret)).status, 202)
+  const secondDedId = h.backend.dispatched.at(-1)!.targetConversationId!
+  assert.notEqual(secondDedId, firstDedId)
+  assert.equal(h.backend.conversations.get(secondDedId)!.profileId, 'watchdog')
+
+  // dedicated -> isolated：清空 dedicatedConversationId，默认 keepLast=10
+  const toIso = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', {
+    id: 'route-hook',
+    mode: 'isolated',
+  })) as { webhook: Record<string, unknown> }
+  assert.equal(toIso.webhook.mode, 'isolated')
+  assert.equal(toIso.webhook.profileId, 'watchdog')
+  assert.equal(toIso.webhook.keepLast, 10)
+  assert.equal(toIso.webhook.dedicatedConversationId, undefined)
+
+  // automated -> targetConversationId：清空全部自动化字段并直投指定会话
+  const toConv = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', {
+    id: 'route-hook',
+    targetConversationId: 7,
+  })) as { webhook: Record<string, unknown> }
+  assert.equal(toConv.webhook.targetConversationId, 7)
+  assert.equal(toConv.webhook.mode, undefined)
+  assert.equal(toConv.webhook.profileId, undefined)
+  assert.equal(toConv.webhook.keepLast, undefined)
+  assert.equal(toConv.webhook.dedicatedConversationId, undefined)
+  assert.equal((await callWebhookRoute(h.host, 'route-hook', 'm3', secret)).status, 202)
+  assert.equal(h.backend.dispatched.at(-1)!.targetConversationId, 7)
+
+  // targetConversationId -> automated（默认 isolated + keepLast=10）
+  const backAuto = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', {
+    id: 'route-hook',
+    profileId: 'worker',
+  })) as { webhook: Record<string, unknown> }
+  assert.equal(backAuto.webhook.targetConversationId, undefined)
+  assert.equal(backAuto.webhook.mode, 'isolated')
+  assert.equal(backAuto.webhook.profileId, 'worker')
+  assert.equal(backAuto.webhook.keepLast, 10)
+
+  await h.host.dispose()
+  rmSync(h.dataDir, { recursive: true, force: true })
+})
+
+test('webhook_update：边界校验、显式拒绝 secret、会话上下文（run_action）可调而 webhook_create 保持 403', { timeout: 60_000 }, async () => {
+  const h = await makeHarness()
+  const secret = 'whsec-scope-check'
+  await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', {
+    id: 's1',
+    secret,
+    mode: 'dedicated',
+  })
+
+  // 清单校验：webhook_update 不设 scope 限制（允许 run_action），webhook_create 维持禁止全部会话上下文
+  const updateManifest = h.host.listActions().find((a) => a.pluginId === TRIGGERS_PLUGIN_ID && a.id === 'webhook_update')!
+  const createManifest = h.host.listActions().find((a) => a.pluginId === TRIGGERS_PLUGIN_ID && a.id === 'webhook_create')!
+  assert.equal(updateManifest.exposeToPrompt, false)
+  assert.equal(updateManifest.scope, undefined, 'webhook_update 不含 secret，不设置 conversationIds:[] 阻断')
+  assert.deepEqual(createManifest.scope, { conversationIds: [] }, 'webhook_create 保持会话上下文阻断')
+
+  // 会话上下文调用 webhook_update 成功，webhook_create 仍 403
+  const fromConv = (await h.host.invokeAction(
+    TRIGGERS_PLUGIN_ID,
+    'webhook_update',
+    { id: 's1', description: 'agent updated' },
+    { conversationId: 1 },
+  )) as { webhook: { description?: string } }
+  assert.equal(fromConv.webhook.description, 'agent updated')
+  await rejectsCode(
+    h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', { id: 's2', secret: 'x'.repeat(32) }, { conversationId: 1 }),
+    'conversation_scope_violation',
+    403,
+  )
+
+  // 传入 secret 被 additionalProperties: false 拒绝，且原 secret 不受影响
+  await rejectsCode(
+    h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', { id: 's1', description: 'x', secret: 'hijack' }),
+    'validation_error',
+    400,
+  )
+  assert.equal(await h.credentials.getPluginSecret(TRIGGERS_PLUGIN_ID, webhookSecretKey('s1')), secret)
+
+  // 空 patch / 404 / 互斥字段 / dedicated+keepLast / 不存在 profileId
+  await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', { id: 's1' }), 'validation_error', 400)
+  await rejectsCode(
+    h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', { id: 'missing', description: 'x' }),
+    'not_found',
+    404,
+  )
+  await rejectsCode(
+    h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', { id: 's1', targetConversationId: 1, mode: 'isolated' }),
+    'validation_error',
+    400,
+  )
+  await rejectsCode(
+    h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', { id: 's1', keepLast: 3 }),
+    'validation_error',
+    400,
+  )
+  await rejectsCode(
+    h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', { id: 's1', profileId: 'ghost' }),
+    'validation_error',
+    400,
+  )
+
+  await h.host.dispose()
+  rmSync(h.dataDir, { recursive: true, force: true })
+})
+
+test('webhook_update：读取请求体期间更新端点换代 rev → 在途旧请求返回 409 webhook_changed 不投递', { timeout: 60_000 }, async () => {
+  const h = await makeHarness()
+  const secret = 'whsec-inflight-rev'
+  await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', { id: 'hook', secret })
+  const bytes = new TextEncoder().encode('inflight payload')
+  let entered!: () => void
+  let release!: () => void
+  const reading = new Promise<void>((resolve) => { entered = resolve })
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  let sent = false
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        if (!sent) {
+          sent = true
+          controller.enqueue(bytes.slice(0, 4))
+          entered()
+        } else {
+          await gate
+          controller.enqueue(bytes.slice(4))
+          controller.close()
+        }
+      },
+    },
+    { highWaterMark: 0 },
+  )
+  const handler = h.host.listRoutes().find((route) => route.path.endsWith('/webhook/:id'))!.handler
+  const pending = Promise.resolve(
+    handler(
+      new Request(`http://hub${WEBHOOK_URL('hook')}`, {
+        method: 'POST',
+        headers: { 'x-helmx-signature': `sha256=${createHmac('sha256', secret).update(bytes).digest('hex')}` },
+        body,
+        duplex: 'half',
+      } as RequestInit),
+    ),
+  )
+  try {
+    await reading
+    await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_update', { id: 'hook', targetConversationId: 7 })
+    release()
+    const res = await pending
+    assert.equal(res.status, 409)
+    const errBody = (await res.json()) as { error: { code: string } }
+    assert.equal(errBody.error.code, 'webhook_changed')
+    assert.equal(h.backend.dispatched.length, 0, '在途期间配置换代不得投递')
+
+    // 后续新请求按更新后的目标（会话 #7）正常投递
+    const fresh = await callWebhookRoute(h.host, 'hook', 'fresh payload', secret)
+    assert.equal(fresh.status, 202)
+    assert.equal(h.backend.dispatched.length, 1)
+    assert.equal(h.backend.dispatched[0]!.targetConversationId, 7)
+  } finally {
+    release()
+    await pending
+    await h.host.dispose()
+    rmSync(h.dataDir, { recursive: true, force: true })
+  }
 })
