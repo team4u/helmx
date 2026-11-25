@@ -1,14 +1,60 @@
-/** builtin:tiers: semantic model tiers (`tier/<id>`) and reusable preset templates. */
+/** builtin:tiers: semantic model tiers (`tier/<id>`), preset templates, one-turn model borrow (`/model`), and `switch_model` relay. */
 import {
-  HelmxError, MODEL_TIER_DESCRIPTION_MAX_LENGTH,
-  type ModelCatalog, type ModelTiersCapability, type ModelTierSpec, type PluginDefinition,
+  COMPOSER_MENU_SLOT,
+  COMPOSER_TOOLBAR_SLOT,
+  HelmxError,
+  MODEL_TIER_DESCRIPTION_MAX_LENGTH,
+  type ModelCatalog,
+  type ModelTiersCapability,
+  type ModelTierSpec,
+  type PluginActionContext,
+  type PluginDefinition,
 } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { readTiersSkillAsset } from './tiers/assets.js'
 import {
-  MAX_TIERS_COUNT, MODEL_TIERS_SKILL_ID, TIERS_PLUGIN_ID, TIERS_SCREEN_ID, TIERS_STATE_DOC,
-  TIER_TEMPLATE_DESCRIPTION_MAX_LENGTH, TIER_TEMPLATE_NAME_MAX_LENGTH, TIER_THINKING_LEVELS,
-  createEmptyTiersState, type TierTemplate, type TiersPluginConfig, type TiersStateDoc,
+  createTierBorrowManager,
+  resolveBorrowTarget,
+  toTierBorrowSessionView,
+  type ClearBorrowResult,
+  type ResolvedBorrowTarget,
+  type SwitchModelToolInput,
+} from './tiers/borrow.js'
+import {
+  MAX_TIERS_COUNT,
+  MODEL_TIERS_SKILL_ID,
+  SWITCH_MODEL_META_SCHEMA,
+  TIERS_BORROW_COMMAND_ID,
+  TIERS_BORROW_COMMAND_SLASH,
+  TIERS_BORROW_ELIGIBLE_SCOPE,
+  TIERS_BORROW_KV,
+  TIERS_BORROW_SESSION_DOC,
+  TIERS_INPUT_META_KEY,
+  TIERS_PLUGIN_ID,
+  TIERS_SCREEN_ID,
+  TIERS_STATE_DOC,
+  TIERS_SWITCH_MODEL_TOOL,
+  TIER_BORROW_SESSION_VIEW_SCHEMA,
+  TIER_TEMPLATE_DESCRIPTION_MAX_LENGTH,
+  TIER_TEMPLATE_NAME_MAX_LENGTH,
+  TIER_THINKING_LEVELS,
+  asTiersConversationEntryEvent,
+  asTiersDeletedConversationId,
+  createEmptyTiersState,
+  isTiersBorrowEligible,
+  parseModelSlashInput,
+  parseTiersBorrowInputMeta,
+  type ParsedModelSlashInput,
+  type ParsedTiersBorrowInputMeta,
+  type SwitchModelPresentationMeta,
+  type TierBorrowPhase,
+  type TierBorrowRecord,
+  type TierBorrowSessionView,
+  type TierBorrowSource,
+  type TierTemplate,
+  type TierThinkingLevel,
+  type TiersPluginConfig,
+  type TiersStateDoc,
 } from './tiers/contracts.js'
 import {
   assertConcreteModelRef, assertRemovedTiersNotInUse, assertTargetModelNotDisabled, assertTemplateCapacity,
@@ -17,8 +63,38 @@ import {
 } from './tiers/validation.js'
 
 export {
-  TIERS_PLUGIN_ID, TIERS_STATE_DOC, TIERS_SCREEN_ID, MODEL_TIERS_SKILL_ID, TIER_THINKING_LEVELS,
-  type TierTemplate, type TiersStateDoc, type TiersPluginConfig,
+  TIERS_PLUGIN_ID,
+  TIERS_STATE_DOC,
+  TIERS_SCREEN_ID,
+  MODEL_TIERS_SKILL_ID,
+  TIER_THINKING_LEVELS,
+  TIERS_BORROW_KV,
+  TIERS_BORROW_SESSION_DOC,
+  TIERS_BORROW_COMMAND_ID,
+  TIERS_BORROW_COMMAND_SLASH,
+  TIERS_SWITCH_MODEL_TOOL,
+  TIERS_INPUT_META_KEY,
+  TIERS_BORROW_ELIGIBLE_SCOPE,
+  TIER_BORROW_SESSION_VIEW_SCHEMA,
+  SWITCH_MODEL_META_SCHEMA,
+  isTiersBorrowEligible,
+  parseModelSlashInput,
+  parseTiersBorrowInputMeta,
+  resolveBorrowTarget,
+  toTierBorrowSessionView,
+  type TierTemplate,
+  type TiersStateDoc,
+  type TiersPluginConfig,
+  type TierThinkingLevel,
+  type TierBorrowPhase,
+  type TierBorrowSource,
+  type TierBorrowRecord,
+  type TierBorrowSessionView,
+  type SwitchModelPresentationMeta,
+  type ParsedModelSlashInput,
+  type ParsedTiersBorrowInputMeta,
+  type ResolvedBorrowTarget,
+  type ClearBorrowResult,
 }
 
 const ID_PROP = { type: 'string', minLength: 1, maxLength: 63 } as const
@@ -46,6 +122,36 @@ const LIST_OUTPUT_SCHEMA = {
 const sortTemplates = (templates: Readonly<Record<string, TierTemplate>>): TierTemplate[] =>
   Object.values(templates).sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
 
+function resolveTargetConversationId(
+  inputConversationId: number | undefined,
+  context: PluginActionContext,
+): number {
+  if (
+    inputConversationId !== undefined &&
+    context.conversationId !== undefined &&
+    inputConversationId !== context.conversationId
+  ) {
+    throw new HelmxError(
+      'validation_error',
+      `Conflicting conversationId: input ${inputConversationId} does not match context ${context.conversationId}`,
+      400,
+      {
+        inputConversationId,
+        contextConversationId: context.conversationId,
+      },
+    )
+  }
+  const targetId = inputConversationId ?? context.conversationId
+  if (targetId === undefined) {
+    throw new HelmxError(
+      'validation_error',
+      'Missing conversation target: provide conversationId or run inside a conversation (--current)',
+      400,
+    )
+  }
+  return targetId
+}
+
 export function createTiersPlugin(): PluginDefinition {
   return {
     id: TIERS_PLUGIN_ID,
@@ -71,6 +177,11 @@ export function createTiersPlugin(): PluginDefinition {
       })
 
       const stateDoc = ctx.doc<TiersStateDoc>(TIERS_STATE_DOC, createEmptyTiersState(), { public: true })
+      const borrowKv = ctx.kv<TierBorrowRecord>(TIERS_BORROW_KV)
+      const borrowDoc = ctx.sessionDoc<TierBorrowSessionView | null>(TIERS_BORROW_SESSION_DOC, null, {
+        public: true,
+        durable: false,
+      })
       const tierChangeListeners = new Set<() => Promise<void> | void>()
       let writeChain: Promise<unknown> = Promise.resolve()
       let cachedState: TiersStateDoc | undefined
@@ -86,6 +197,12 @@ export function createTiersPlugin(): PluginDefinition {
         }
         return cachedState
       }
+      const borrowManager = createTierBorrowManager({
+        ctx,
+        kv: borrowKv,
+        borrowDoc,
+        readTiersState: readState,
+      })
       const autoInjectEnabled = (): boolean => (ctx.getConfig() as TiersPluginConfig).autoInjectCatalog !== false
       const notifyTiersChanged = async (): Promise<void> => {
         for (const listener of [...tierChangeListeners]) {
@@ -137,21 +254,33 @@ export function createTiersPlugin(): PluginDefinition {
 
       ctx.service({
         id: 'tiers-runtime',
+        prepare() {
+          borrowManager.setStopping(false)
+        },
         async start() {
+          borrowManager.setStopping(false)
           cachedState = sanitizeStateDoc(stateDoc.get())
           await ctx.host.skills.ensureSkill(readTiersSkillAsset())
+          borrowManager.hydrate()
           if (Object.keys(readState().tiers).length > 0) await notifyTiersChanged()
         },
+        async reconcile() {
+          await borrowManager.reconcile()
+        },
         async stop() {
+          await borrowManager.stop()
           await writeChain
           cachedState = undefined
         },
         async inUse() {
-          if (Object.keys(readState().tiers).length === 0) return []
+          const borrowItems = borrowManager.inUseItems()
+          if (Object.keys(readState().tiers).length === 0) return borrowItems
           const [catalog, profiles] = await Promise.all([ctx.host.listModels(), ctx.host.profiles.list()])
-          return findTierReferences(catalog, profiles)
+          return [...findTierReferences(catalog, profiles), ...borrowItems]
         },
       })
+
+      ctx.hook.onInput((payload) => borrowManager.handleInput(payload), { priority: -200 })
 
       ctx.hook.onBeforeTurn(async (turn) => {
         if (!autoInjectEnabled()) return { action: 'continue' }
@@ -159,6 +288,59 @@ export function createTiersPlugin(): PluginDefinition {
         if (Object.keys(state.tiers).length === 0) return { action: 'continue' }
         const text = renderModelTiersCatalogSection(projectTierEntries(state.tiers, await ctx.host.listModels()))
         return text ? { action: 'transform', value: { ...turn, sections: [...turn.sections, { id: 'tiers.catalog', text }] } } : { action: 'continue' }
+      })
+
+      ctx.hook.onTurnSettled(async (payload) => {
+        await borrowManager.handleTurnSettled(payload.conversation.id)
+      })
+
+      ctx.host.onEvent('conversation.deleted', async (payload) => {
+        const conversationId = asTiersDeletedConversationId(payload)
+        if (conversationId !== undefined) {
+          await borrowManager.handleConversationDeleted(conversationId)
+        }
+      })
+
+      ctx.host.onEvent('conversation.entry', async (payload) => {
+        const entry = asTiersConversationEntryEvent(payload)
+        if (entry !== undefined && entry.kind === 'pi.reset') {
+          await borrowManager.handleConversationReset(entry.conversationId)
+        }
+      })
+
+      ctx.tool<SwitchModelToolInput>({
+        name: TIERS_SWITCH_MODEL_TOOL,
+        description:
+          'Switch the current top-level conversation to another model tier (tier/<id> or <tierId>) or concrete model (provider/modelId or unique modelId) for the next reasoning step. By default (restoreAfterTurn: true), the original model restores automatically after this turn settles.',
+        promptGuidelines: [
+          'Use switch_model in a top-level conversation when you want to hand off the next reasoning step in the SAME thread to a stronger or specialized model while keeping full context; default restoreAfterTurn=true restores the original model automatically after the turn, so do not call switch_model a second time to restore.',
+        ],
+        scope: TIERS_BORROW_ELIGIBLE_SCOPE,
+        inputSchema: {
+          type: 'object',
+          required: ['model'],
+          additionalProperties: false,
+          properties: {
+            model: {
+              type: 'string',
+              minLength: 1,
+              description:
+                'Target model tier (tier/<id> or <tierId>) or concrete model (provider/modelId or unique modelId).',
+            },
+            effort: {
+              type: 'string',
+              enum: [...TIER_THINKING_LEVELS],
+              description: 'Optional thinking/reasoning level override for the switched model.',
+            },
+            restoreAfterTurn: {
+              type: 'boolean',
+              description:
+                'Automatically restore the original model after this turn finishes (default true). Pass false to switch permanently.',
+            },
+          },
+        },
+        presentationMetaSchema: SWITCH_MODEL_META_SCHEMA,
+        execute: (input, context) => borrowManager.executeSwitchModelTool(input, context),
       })
 
       ctx.action({
@@ -290,10 +472,125 @@ export function createTiersPlugin(): PluginDefinition {
           }),
       })
 
+      const conversationIdProp = {
+        type: 'integer',
+        minimum: 1,
+        description: 'Target conversation ID (defaults to current conversation context)',
+      } as const
+
+      ctx.action<{ conversationId?: number }, TierBorrowSessionView | null>({
+        id: 'get_borrow',
+        description: 'Read current armed or active one-turn model borrow state for a conversation (--conversation-id or --current)',
+        exposeToPrompt: false,
+        idempotent: true,
+        cli: { command: ['tiers', 'get-borrow'] },
+        inputSchema: {
+          type: 'object',
+          properties: { conversationId: conversationIdProp },
+          additionalProperties: false,
+        },
+        outputSchema: { anyOf: [TIER_BORROW_SESSION_VIEW_SCHEMA, { type: 'null' }] },
+        handler(input, context) {
+          const targetId = resolveTargetConversationId(input.conversationId, context)
+          return borrowManager.getBorrow(targetId)
+        },
+      })
+
+      ctx.action<{ conversationId?: number; model: string; effort?: string }, TierBorrowSessionView>({
+        id: 'set_borrow',
+        description: 'Arm a one-turn model borrow for the next message in a top-level human conversation (--conversation-id or --current)',
+        exposeToPrompt: false,
+        cli: { command: ['tiers', 'set-borrow'] },
+        inputSchema: {
+          type: 'object',
+          required: ['model'],
+          additionalProperties: false,
+          properties: {
+            conversationId: conversationIdProp,
+            model: {
+              type: 'string',
+              minLength: 1,
+              description: 'Target tier (tier/<id> or <tierId>) or concrete model (provider/modelId or unique modelId)',
+            },
+            effort: {
+              type: 'string',
+              description: 'Optional thinking/reasoning level override',
+            },
+          },
+        },
+        outputSchema: TIER_BORROW_SESSION_VIEW_SCHEMA,
+        handler(input, context) {
+          const targetId = resolveTargetConversationId(input.conversationId, context)
+          return borrowManager.setBorrow(targetId, {
+            model: input.model,
+            ...(input.effort !== undefined ? { effort: input.effort } : {}),
+            source: 'ui',
+          })
+        },
+      })
+
+      ctx.action<{ conversationId?: number }, ClearBorrowResult>({
+        id: 'clear_borrow',
+        description: 'Cancel an armed one-turn model borrow or disable auto-restore on an active borrow (--conversation-id or --current)',
+        exposeToPrompt: false,
+        cli: { command: ['tiers', 'clear-borrow'] },
+        inputSchema: {
+          type: 'object',
+          properties: { conversationId: conversationIdProp },
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          required: ['cleared'],
+          additionalProperties: false,
+          properties: {
+            cleared: { type: 'boolean' },
+            previousPhase: { type: 'string', enum: ['armed', 'active'] },
+          },
+        },
+        handler(input, context) {
+          const targetId = resolveTargetConversationId(input.conversationId, context)
+          return borrowManager.clearBorrow(targetId)
+        },
+      })
+
+      ctx.ui.command({
+        id: TIERS_BORROW_COMMAND_ID,
+        title: { en: 'Borrow model for one turn', 'zh-CN': '单轮借用模型' },
+        description: {
+          en: 'Pick a tier or model for the next turn only (auto-restores after the turn)',
+          'zh-CN': '仅为下一轮临时选用档位或模型（回合结束后自动恢复）',
+        },
+        icon: 'sparkles',
+        slash: TIERS_BORROW_COMMAND_SLASH,
+        actionId: 'get_borrow',
+        input: {},
+        scope: TIERS_BORROW_ELIGIBLE_SCOPE,
+        keywords: ['model', 'borrow', 'tier', 'switch', '模型', '借用', '档位', '临时切换'],
+      })
+
       const label = { en: 'Model Tiers', 'zh-CN': '模型档位' }
       ctx.ui.sidebarItem({ id: 'tiers-manager', label, icon: 'layers', target: `screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}`, order: 16 })
       ctx.ui.screen({ id: TIERS_SCREEN_ID, label, icon: 'layers', client: { module: 'manager.tsx', export: 'TiersManagerScreen' } })
       ctx.ui.settingsPanel({ id: 'tiers-settings', label, order: 26, client: { module: 'settings.tsx', export: 'TiersSettingsPanel' } })
+      ctx.ui.slot({
+        id: 'tiers-borrow-menu-item',
+        target: COMPOSER_MENU_SLOT,
+        order: 15,
+        client: { module: 'BorrowMenuItem.tsx', export: 'BorrowMenuItem' },
+      })
+      ctx.ui.slot({
+        id: 'tiers-borrow-toolbar-pill',
+        target: COMPOSER_TOOLBAR_SLOT,
+        order: 15,
+        client: { module: 'BorrowToolbarPill.tsx', export: 'BorrowToolbarPill' },
+      })
+      ctx.ui.toolView({
+        id: 'tiers-switch-model-row',
+        toolNames: [TIERS_SWITCH_MODEL_TOOL],
+        replaceRow: true,
+        client: { module: 'SwitchModelToolRow.tsx', export: 'SwitchModelToolRow' },
+      })
     },
   }
 }

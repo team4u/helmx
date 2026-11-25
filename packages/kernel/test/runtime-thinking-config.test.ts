@@ -363,3 +363,52 @@ it('startup loads config.json.modelThinkingLevels including slashed model IDs; c
     await assertRejectsCode(() => open(dir), 'config_corrupt')
   }
 })
+
+it('ConversationSummary.modelOverride reflects explicit override, omits inherited default, and survives restart', { timeout: 60_000 }, async (t) => {
+  const { dir, kernel } = await fixture(t)
+  await kernel.models.setDefaultModel('faux/faux-1')
+  await kernel.services.profiles.save({ id: 'expert', name: 'expert', model: 'faux/faux-2' })
+
+  const frames: HelmxEventFrame[] = []
+  const unsub = kernel.events.subscribe((frame) => frames.push(frame))
+  t.after(unsub)
+
+  const inherited = await kernel.conversations.createConversation()
+  const profileInherited = await kernel.conversations.createConversation({ profileId: 'expert' })
+  const explicit = await kernel.conversations.createConversation({ model: 'faux/faux-2' })
+
+  assert.equal(inherited.model, 'faux/faux-1')
+  assert.equal(inherited.modelOverride, undefined)
+  assert.equal(profileInherited.model, 'faux/faux-2')
+  assert.equal(profileInherited.modelOverride, undefined)
+  assert.equal(explicit.model, 'faux/faux-2')
+  assert.equal(explicit.modelOverride, 'faux/faux-2')
+
+  const updated = await kernel.conversations.updateConversation(inherited.id, { model: 'faux/faux-2' })
+  assert.equal(updated.model, 'faux/faux-2')
+  assert.equal(updated.modelOverride, 'faux/faux-2')
+  assert.ok(
+    frames.some(
+      ({ event }) =>
+        event.type === 'conversation.upsert' &&
+        'conversation' in event &&
+        event.conversation.id === inherited.id &&
+        event.conversation.modelOverride === 'faux/faux-2',
+    ),
+  )
+
+  const cleared = await kernel.conversations.updateConversation(inherited.id, { model: '' })
+  assert.equal(cleared.model, 'faux/faux-1')
+  assert.equal(cleared.modelOverride, undefined)
+  assert.equal(kernel.conversations.getConversation(inherited.id).modelOverride, undefined)
+
+  await kernel.close()
+  const restarted = await open(dir)
+  try {
+    assert.equal(restarted.conversations.getConversation(inherited.id).modelOverride, undefined)
+    assert.equal(restarted.conversations.getConversation(profileInherited.id).modelOverride, undefined)
+    assert.equal(restarted.conversations.getConversation(explicit.id).modelOverride, 'faux/faux-2')
+  } finally {
+    await restarted.close()
+  }
+})

@@ -72,6 +72,8 @@ export interface ConversationSummary {
   cwd: string
   /** Currently effective model 'provider/model'. */
   model: string
+  /** Explicit model override ('provider/model'); inherits Profile / global default when omitted. */
+  modelOverride?: string
   /** Current thinking level (off/minimal/low/medium/high/xhigh/max); empty string means unset. */
   thinkingLevel: string
   /** Explicit thinking-level override; inherits Profile / global default when omitted. */

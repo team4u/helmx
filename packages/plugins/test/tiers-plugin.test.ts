@@ -14,7 +14,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { HelmxError, type ModelCatalog, type Profile } from '@helmx/protocol'
 import { KernelRuntime } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
@@ -22,10 +22,21 @@ import { createHelmx } from '../../hub/src/app.js'
 import { wrapModelsForCompaction } from '@helmx/kernel/testing'
 import {
   MODEL_TIERS_SKILL_ID,
+  TIERS_BORROW_KV,
+  TIERS_BORROW_SESSION_DOC,
+  TIERS_INPUT_META_KEY,
   TIERS_PLUGIN_ID,
   TIERS_STATE_DOC,
+  TIERS_SWITCH_MODEL_TOOL,
   createTiersPlugin,
 } from '../src/tiers.js'
+import {
+  parseModelSlashInput,
+  parseTiersBorrowInputMeta,
+  type TierBorrowRecord,
+  type TierBorrowSessionView,
+} from '../src/tiers/contracts.js'
+import { resolveBorrowTarget } from '../src/tiers/borrow.js'
 import {
   assertConcreteModelRef,
   assertTierId,
@@ -33,10 +44,15 @@ import {
   renderModelTiersCatalogSection,
 } from '../src/tiers/validation.js'
 import {
+  MemoryDocStore,
+  MemoryKvStore,
   assertRejectsCode,
   cleanupDir,
+  deferred,
+  makeConversationSummary,
   makeFauxProvider,
   makeTempDir,
+  waitFor,
   type FauxProviderHandle,
 } from './helpers/plugin-test-env.js'
 
@@ -733,7 +749,6 @@ test('performance: tiers write actions reuse a single ModelCatalog fetch per set
 test('performance: tiers readState caches sanitized TiersStateDoc across getTiers/before_turn and invalidates on mutation', { timeout: 60_000 }, async () => {
   const { PluginHost } = await import('@helmx/kernel')
   const { createPluginHostBackendFixture } = await import('../../kernel/test/helpers/plugin-host-backend.js')
-  const { MemoryDocStore, makeConversationSummary } = await import('./helpers/plugin-test-env.js')
   const docs = new MemoryDocStore()
   let docGetCalls = 0
   const origGet = docs.get.bind(docs)
@@ -747,6 +762,7 @@ test('performance: tiers readState caches sanitized TiersStateDoc across getTier
     buildProvider: createPluginBuildProvider(),
     dataDir,
     docs,
+    kv: new MemoryKvStore(),
     host: {
       ...baseFixture,
       emitEvent: () => {},
@@ -794,6 +810,774 @@ test('performance: tiers readState caches sanitized TiersStateDoc across getTier
     })
     const state = (await host.invokeAction(TIERS_PLUGIN_ID, 'list', {})) as { tiers: Array<{ id: string }> }
     assert.equal(state.tiers.some((t) => t.id === 'scout'), true, 'mutation updates cached state immediately')
+  } finally {
+    await host.dispose().catch(() => {})
+    await cleanupDir(dataDir)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// One-turn model borrow (`/model`) & in-session model relay (`switch_model`)
+// ---------------------------------------------------------------------------
+
+test('borrow resolution: zero-tier direct refs, unique short id, ambiguous multi-provider id, tier resolution, and explicit errors', { timeout: 60_000 }, () => {
+  const catalog: ModelCatalog = {
+    models: [
+      { provider: 'faux', modelId: 'fast', available: true },
+      { provider: 'faux', modelId: 'flagship', available: true },
+      { provider: 'openrouter', modelId: 'anthropic/claude-opus-4.6', available: true },
+      { provider: 'p1', modelId: 'shared', available: true },
+      { provider: 'p2', modelId: 'shared', available: true },
+      { provider: 'faux', modelId: 'muted', available: true, disabled: true },
+      { provider: 'p3', modelId: 'only-disabled', available: true, disabled: true },
+      { provider: 'openai', modelId: 'unconfigured', available: false },
+      { provider: 'p4', modelId: 'no-creds-short', available: false },
+    ],
+    thinkingLevels: {},
+  }
+  const emptyTiers = { tiers: {}, templates: {} }
+
+  // Zero-tier exact provider/modelId (including slashed modelId) & unique short modelId
+  assert.deepEqual(resolveBorrowTarget('faux/flagship', catalog, emptyTiers), {
+    requestedRef: 'faux/flagship',
+    targetModel: 'faux/flagship',
+    targetConcreteModel: 'faux/flagship',
+    targetLabel: 'flagship',
+  })
+  assert.deepEqual(resolveBorrowTarget('openrouter/anthropic/claude-opus-4.6', catalog, emptyTiers, 'high'), {
+    requestedRef: 'openrouter/anthropic/claude-opus-4.6',
+    targetModel: 'openrouter/anthropic/claude-opus-4.6',
+    targetConcreteModel: 'openrouter/anthropic/claude-opus-4.6',
+    targetLabel: 'claude-opus-4.6',
+    effort: 'high',
+  })
+  assert.deepEqual(resolveBorrowTarget('flagship', catalog, emptyTiers), {
+    requestedRef: 'flagship',
+    targetModel: 'faux/flagship',
+    targetConcreteModel: 'faux/flagship',
+    targetLabel: 'flagship',
+  })
+
+  // Ambiguous short modelId fails honestly with 409 ambiguous_model_ref listing candidates
+  assert.throws(
+    () => resolveBorrowTarget('shared', catalog, emptyTiers),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'ambiguous_model_ref' &&
+      err.status === 409 &&
+      err.message.includes('p1/shared') &&
+      err.message.includes('p2/shared'),
+  )
+
+  // Disabled / unavailable / missing / invalid effort errors
+  assert.throws(
+    () => resolveBorrowTarget('faux/muted', catalog, emptyTiers),
+    (err: unknown) => err instanceof HelmxError && err.code === 'model_disabled' && err.status === 409,
+  )
+  assert.throws(
+    () => resolveBorrowTarget('only-disabled', catalog, emptyTiers),
+    (err: unknown) => err instanceof HelmxError && err.code === 'model_disabled' && err.status === 409,
+  )
+  assert.throws(
+    () => resolveBorrowTarget('openai/unconfigured', catalog, emptyTiers),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'model_unavailable' &&
+      err.status === 409 &&
+      (err.details as { model?: string } | undefined)?.model === 'openai/unconfigured',
+  )
+  assert.throws(
+    () => resolveBorrowTarget('no-creds-short', catalog, emptyTiers),
+    (err: unknown) => err instanceof HelmxError && err.code === 'model_unavailable' && err.status === 409,
+  )
+  assert.throws(
+    () => resolveBorrowTarget('faux/does-not-exist', catalog, emptyTiers),
+    (err: unknown) => err instanceof HelmxError && err.code === 'model_not_found' && err.status === 404,
+  )
+  assert.throws(
+    () => resolveBorrowTarget('tier/ghost', catalog, emptyTiers),
+    (err: unknown) => err instanceof HelmxError && err.code === 'tier_not_found' && err.status === 404,
+  )
+  assert.throws(
+    () => resolveBorrowTarget('faux/flagship', catalog, emptyTiers, 'turbo'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_effort' && err.status === 400,
+  )
+
+  // Configured tier resolution (`tier/<id>` and bare `<id>`) + disabled/unavailable/missing tier targets
+  const withTiers = {
+    tiers: {
+      architect: { model: 'faux/flagship', thinkingLevel: 'high' as const },
+      disabled_tier: { model: 'faux/muted' },
+      unavailable_tier: { model: 'openai/unconfigured' },
+      missing_tier: { model: 'faux/missing' },
+    },
+    templates: {},
+  }
+  assert.deepEqual(resolveBorrowTarget('tier/architect', catalog, withTiers), {
+    requestedRef: 'tier/architect',
+    targetModel: 'tier/architect',
+    targetConcreteModel: 'faux/flagship',
+    targetLabel: 'tier/architect',
+    targetTierId: 'architect',
+  })
+  assert.deepEqual(resolveBorrowTarget('architect', catalog, withTiers), {
+    requestedRef: 'architect',
+    targetModel: 'tier/architect',
+    targetConcreteModel: 'faux/flagship',
+    targetLabel: 'tier/architect',
+    targetTierId: 'architect',
+  })
+  assert.throws(
+    () => resolveBorrowTarget('disabled_tier', catalog, withTiers),
+    (err: unknown) => err instanceof HelmxError && err.code === 'model_disabled' && err.status === 409,
+  )
+  assert.throws(
+    () => resolveBorrowTarget('tier/unavailable_tier', catalog, withTiers),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'model_unavailable' &&
+      err.status === 409 &&
+      (err.details as { tierId?: string; model?: string } | undefined)?.tierId === 'unavailable_tier' &&
+      (err.details as { tierId?: string; model?: string } | undefined)?.model === 'openai/unconfigured',
+  )
+  assert.throws(
+    () => resolveBorrowTarget('unavailable_tier', catalog, withTiers),
+    (err: unknown) => err instanceof HelmxError && err.code === 'model_unavailable' && err.status === 409,
+  )
+  assert.throws(
+    () => resolveBorrowTarget('missing_tier', catalog, withTiers),
+    (err: unknown) => err instanceof HelmxError && err.code === 'model_not_found' && err.status === 404,
+  )
+
+  // Pure slash & input.meta parsers
+  assert.deepEqual(parseModelSlashInput('/model'), { matched: true, kind: 'bare' })
+  assert.deepEqual(parseModelSlashInput('  /model   '), { matched: true, kind: 'bare' })
+  assert.deepEqual(parseModelSlashInput('/model flagship analyze\nthis diff'), {
+    matched: true,
+    kind: 'target',
+    targetRef: 'flagship',
+    remainder: 'analyze\nthis diff',
+  })
+  assert.deepEqual(parseModelSlashInput('/models list'), { matched: false })
+  assert.deepEqual(parseTiersBorrowInputMeta(undefined), { present: false })
+  assert.deepEqual(
+    parseTiersBorrowInputMeta({ [TIERS_INPUT_META_KEY]: { borrowModel: ' faux/flagship ', effort: 'high' } }),
+    { present: true, valid: true, borrowModel: 'faux/flagship', effort: 'high' },
+  )
+  const badMeta = parseTiersBorrowInputMeta({ [TIERS_INPUT_META_KEY]: { borrowModel: '' } })
+  assert.equal(badMeta.present && !badMeta.valid, true)
+})
+
+test('integration: zero-tier /model <target> <msg> borrows & restores inherited and explicit overrides, strips prefix, and blocks invalid /model inputs', { timeout: 60_000 }, async () => {
+  const env = await openHelmxEnv({ defaultModel: 'faux/workhorse' })
+  try {
+    const { kernel } = env.app
+    // Confirm zero tiers are configured
+    assert.equal((await kernel.models.listModels()).modelTiers, undefined)
+
+    // 1. Conversation inheriting global default (`modelOverride === undefined`)
+    const inherited = await kernel.conversations.createConversation()
+    assert.equal(inherited.model, 'faux/workhorse')
+    assert.equal(inherited.modelOverride, undefined)
+
+    const observedModels: string[] = []
+    env.faux.setResponses([
+      () => {
+        observedModels.push(kernel.conversations.getConversation(inherited.id).model)
+        return fauxAssistantMessage('flagship-answer')
+      },
+    ])
+    const seqBeforeA = kernel.conversations.getConversation(inherited.id).completionSeq
+    await kernel.conversations.submitInput(inherited.id, '/model faux/flagship analyze this diff')
+    await kernel.conversations.waitForIdle(inherited.id)
+    assert.ok(kernel.conversations.getConversation(inherited.id).completionSeq > seqBeforeA)
+
+    assert.deepEqual(observedModels, ['faux/flagship'], 'turn must execute on borrowed model')
+    const afterA = kernel.conversations.getConversation(inherited.id)
+    assert.equal(afterA.model, 'faux/workhorse', 'must restore inherited default model')
+    assert.equal(afterA.modelOverride, undefined, 'must clear modelOverride back to inherited default')
+    assert.equal(afterA.title.startsWith('/model'), false, 'auto-title must not retain /model prefix')
+
+    const detailA = await kernel.conversations.getConversationDetail(inherited.id)
+    const userEntryA = detailA.entries.find((e) => e.kind === 'helmx.input')
+    assert.equal(
+      (userEntryA?.data as { text?: string } | undefined)?.text,
+      'analyze this diff',
+      '/model <target> prefix must be stripped from persisted input',
+    )
+
+    const borrowA = (await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'get_borrow', {
+      conversationId: inherited.id,
+    })) as TierBorrowSessionView | null
+    assert.equal(borrowA, null)
+
+    // 2. Conversation with explicit modelOverride AND thinkingLevelOverride + unique short modelId
+    const explicitCreated = await kernel.conversations.createConversation({
+      title: 'explicit-conv',
+      model: 'faux/fast',
+    })
+    const explicit = await kernel.conversations.updateConversation(explicitCreated.id, { thinkingLevel: 'low' })
+    assert.equal(explicit.modelOverride, 'faux/fast')
+    assert.equal(explicit.thinkingLevelOverride, 'low')
+
+    const observedB: string[] = []
+    env.faux.setResponses([
+      () => {
+        observedB.push(kernel.conversations.getConversation(explicit.id).model)
+        return fauxAssistantMessage('short-id-answer')
+      },
+    ])
+    const seqBeforeB = kernel.conversations.getConversation(explicit.id).completionSeq
+    await kernel.conversations.submitInput(explicit.id, '/model flagship check edge cases')
+    await kernel.conversations.waitForIdle(explicit.id)
+    assert.ok(kernel.conversations.getConversation(explicit.id).completionSeq > seqBeforeB)
+    assert.deepEqual(observedB, ['faux/flagship'])
+    const afterB = kernel.conversations.getConversation(explicit.id)
+    assert.equal(afterB.model, 'faux/fast')
+    assert.equal(afterB.modelOverride, 'faux/fast', 'must restore original explicit modelOverride')
+    assert.equal(afterB.thinkingLevelOverride, 'low', 'must restore original thinkingLevelOverride')
+
+    // 3. Bare `/model` and unknown target block explicitly; `/models status` passes through untouched
+    await assertRejectsCode(() => kernel.conversations.submitInput(explicit.id, '/model'), 'input_blocked')
+    await assertRejectsCode(() => kernel.conversations.submitInput(explicit.id, '/model faux/missing hello'), 'input_blocked')
+
+    env.faux.setResponses([fauxAssistantMessage('models-not-intercepted')])
+    const seqBeforeModels = kernel.conversations.getConversation(explicit.id).completionSeq
+    await kernel.conversations.submitInput(explicit.id, '/models status')
+    await kernel.conversations.waitForIdle(explicit.id)
+    assert.ok(kernel.conversations.getConversation(explicit.id).completionSeq > seqBeforeModels)
+    const detailB = await kernel.conversations.getConversationDetail(explicit.id)
+    assert.equal(
+      detailB.entries.some(
+        (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === '/models status',
+      ),
+      true,
+      '/models must not be intercepted by /model hook',
+    )
+  } finally {
+    await env.close()
+  }
+})
+
+test('integration: /model <target> arms borrow (handled + sessionDoc), stale disabled armed target blocks honestly, actions & standby input.meta work', { timeout: 60_000 }, async () => {
+  const env = await openHelmxEnv({ defaultModel: 'faux/workhorse' })
+  try {
+    const { kernel } = env.app
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'architect',
+      model: 'faux/flagship',
+      thinkingLevel: 'high',
+      description: 'Architecture',
+    })
+
+    const conv = await kernel.conversations.createConversation({ title: 'arm-test' })
+    const callsBeforeArm = env.faux.state.callCount
+
+    // 1. `/model architect` with no body arms borrow without invoking the model
+    await kernel.conversations.submitInput(conv.id, '/model architect')
+    assert.equal(env.faux.state.callCount, callsBeforeArm, 'arming via /model <target> must not trigger a model turn')
+    const armedRes = (await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'get_borrow', {
+      conversationId: conv.id,
+    })) as TierBorrowSessionView | null
+    assert.equal(armedRes?.phase, 'armed')
+    assert.equal(armedRes?.targetModel, 'tier/architect')
+    assert.equal(armedRes?.targetConcreteModel, 'faux/flagship')
+    const armedDoc = kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_BORROW_SESSION_DOC, conv.id)
+    assert.equal((armedDoc.value as TierBorrowSessionView | null)?.phase, 'armed')
+
+    // 2. Next plain message activates the armed borrow and restores after settle
+    let seenDuringTurn: { model: string; thinking: string; phase?: string } | undefined
+    env.faux.setResponses([
+      () => {
+        const snap = kernel.conversations.getConversation(conv.id)
+        const doc = kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_BORROW_SESSION_DOC, conv.id)
+        seenDuringTurn = {
+          model: snap.model,
+          thinking: snap.thinkingLevel,
+          phase: (doc.value as TierBorrowSessionView | null)?.phase,
+        }
+        return fauxAssistantMessage('armed-turn-done')
+      },
+    ])
+    const seq1 = kernel.conversations.getConversation(conv.id).completionSeq
+    await kernel.conversations.submitInput(conv.id, 'review auth architecture')
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.ok(kernel.conversations.getConversation(conv.id).completionSeq > seq1)
+    assert.deepEqual(seenDuringTurn, { model: 'faux/flagship', thinking: 'high', phase: 'active' })
+    assert.equal(kernel.conversations.getConversation(conv.id).model, 'faux/workhorse')
+    assert.equal(kernel.conversations.getConversation(conv.id).modelOverride, undefined)
+    assert.equal(kernel.conversations.getConversation(conv.id).thinkingLevelOverride, undefined)
+    assert.equal(kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_BORROW_SESSION_DOC, conv.id).value, null)
+
+    // 3. Stale armed target whose concrete model gets disabled blocks honestly with guidance
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+      conversationId: conv.id,
+      model: 'tier/architect',
+    })
+    await kernel.models.setDisabledModels('faux', ['flagship'])
+    await assertRejectsCode(() => kernel.conversations.submitInput(conv.id, 'should fail'), 'input_blocked')
+    const cleared = (await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'clear_borrow', {
+      conversationId: conv.id,
+    })) as { cleared: boolean; previousPhase?: string }
+    assert.deepEqual(cleared, { cleared: true, previousPhase: 'armed' })
+    await kernel.models.setDisabledModels('faux', [])
+
+    // 4. Standby first-send via `input.meta['builtin:tiers']`
+    const standbyConv = await kernel.conversations.createConversation({ title: 'standby-first-send' })
+    let seenStandby: { model: string; thinking: string } | undefined
+    env.faux.setResponses([
+      () => {
+        const snap = kernel.conversations.getConversation(standbyConv.id)
+        seenStandby = { model: snap.model, thinking: snap.thinkingLevel }
+        return fauxAssistantMessage('standby-done')
+      },
+    ])
+    const seqStandby = kernel.conversations.getConversation(standbyConv.id).completionSeq
+    await kernel.conversations.submitInput(standbyConv.id, 'first message from standby', {
+      meta: { [TIERS_INPUT_META_KEY]: { borrowModel: 'tier/architect', effort: 'medium' } },
+    })
+    await kernel.conversations.waitForIdle(standbyConv.id)
+    assert.ok(kernel.conversations.getConversation(standbyConv.id).completionSeq > seqStandby)
+    assert.deepEqual(seenStandby, { model: 'faux/flagship', thinking: 'medium' })
+    assert.equal(kernel.conversations.getConversation(standbyConv.id).model, 'faux/workhorse')
+    assert.equal(kernel.conversations.getConversation(standbyConv.id).modelOverride, undefined)
+
+    // Invalid input.meta fails explicitly
+    await assertRejectsCode(
+      () =>
+        kernel.conversations.submitInput(standbyConv.id, 'bad meta', {
+          meta: { [TIERS_INPUT_META_KEY]: { borrowModel: '' } },
+        }),
+      'input_blocked',
+    )
+  } finally {
+    await env.close()
+  }
+})
+
+test('integration: followUp preserves borrow until idle, CAS guard respects manual changes/clears, busy clear_borrow keeps model, and inUse blocks disable', { timeout: 60_000 }, async () => {
+  const env = await openHelmxEnv({ defaultModel: 'faux/workhorse' })
+  try {
+    const { kernel } = env.app
+    let holdEntered = deferred<void>()
+    let holdRelease = deferred<void>()
+    await kernel.plugins.register({
+      id: 'test:borrow-hold',
+      definePlugin(ctx) {
+        ctx.tool({
+          name: 'hold_borrow_turn',
+          description: 'Hold turn open for deterministic concurrency testing',
+          inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+          async execute() {
+            holdEntered.resolve()
+            await holdRelease.promise
+            return 'released'
+          },
+        })
+      },
+    })
+
+    // --- Scenario A: queued followUp does NOT restore prematurely; inUse reports active borrow ---
+    const convA = await kernel.conversations.createConversation({ title: 'followup-conv' })
+    holdEntered = deferred<void>()
+    holdRelease = deferred<void>()
+    const seenModelsA: string[] = []
+    env.faux.setResponses([
+      () => {
+        seenModelsA.push(kernel.conversations.getConversation(convA.id).model)
+        return fauxAssistantMessage([fauxToolCall('hold_borrow_turn', {})], { stopReason: 'toolUse' })
+      },
+      () => {
+        seenModelsA.push(kernel.conversations.getConversation(convA.id).model)
+        return fauxAssistantMessage('run-1-done')
+      },
+      () => {
+        seenModelsA.push(kernel.conversations.getConversation(convA.id).model)
+        return fauxAssistantMessage('run-2-followup-done')
+      },
+    ])
+    const seqA0 = kernel.conversations.getConversation(convA.id).completionSeq
+    await kernel.conversations.submitInput(convA.id, '/model faux/flagship first run')
+    await holdEntered.promise
+
+    // While active & busy:
+    // - inUse() blocks disabling builtin:tiers
+    // - set_borrow fails with 409 conversation_busy
+    // - /model <target> <msg> is blocked while busy
+    await assertRejectsCode(() => kernel.plugins.disable(TIERS_PLUGIN_ID), 'plugin_in_use')
+    await assertRejectsCode(
+      () => kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', { conversationId: convA.id, model: 'faux/fast' }),
+      'conversation_busy',
+    )
+    await assertRejectsCode(
+      () => kernel.conversations.submitInput(convA.id, '/model faux/fast busy-attempt'),
+      'input_blocked',
+    )
+
+    // Queue followUp while Run 1 is held -> release Run 1 -> Run 2 must still run on faux/flagship
+    await kernel.conversations.submitInput(convA.id, 'follow up message', { whenBusy: 'followUp' })
+    holdRelease.resolve()
+    await kernel.conversations.waitForIdle(convA.id)
+    assert.ok(kernel.conversations.getConversation(convA.id).completionSeq > seqA0)
+    assert.deepEqual(seenModelsA, ['faux/flagship', 'faux/flagship', 'faux/flagship'])
+    assert.equal(kernel.conversations.getConversation(convA.id).model, 'faux/workhorse')
+    assert.equal(kernel.conversations.getConversation(convA.id).modelOverride, undefined)
+
+    // --- Scenario B: CAS guard when user manually switches model mid-borrow ---
+    const convB = await kernel.conversations.createConversation({ title: 'cas-switch-conv' })
+    holdEntered = deferred<void>()
+    holdRelease = deferred<void>()
+    env.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('hold_borrow_turn', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('done-after-manual-switch'),
+    ])
+    const seqB0 = kernel.conversations.getConversation(convB.id).completionSeq
+    await kernel.conversations.submitInput(convB.id, '/model faux/flagship start')
+    await holdEntered.promise
+    await kernel.conversations.updateConversation(convB.id, { model: 'faux/fast' })
+    holdRelease.resolve()
+    await kernel.conversations.waitForIdle(convB.id)
+    assert.ok(kernel.conversations.getConversation(convB.id).completionSeq > seqB0)
+    assert.equal(kernel.conversations.getConversation(convB.id).model, 'faux/fast', 'CAS must not overwrite manual switch')
+    assert.equal(kernel.conversations.getConversation(convB.id).modelOverride, 'faux/fast')
+    assert.equal(kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_BORROW_SESSION_DOC, convB.id).value, null)
+
+    // --- Scenario C: CAS guard when user manually clears model override mid-borrow ---
+    const convC = await kernel.conversations.createConversation({ title: 'cas-clear-conv', model: 'faux/fast' })
+    holdEntered = deferred<void>()
+    holdRelease = deferred<void>()
+    env.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('hold_borrow_turn', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('done-after-manual-clear'),
+    ])
+    const seqC0 = kernel.conversations.getConversation(convC.id).completionSeq
+    await kernel.conversations.submitInput(convC.id, '/model faux/flagship start')
+    await holdEntered.promise
+    await kernel.conversations.updateConversation(convC.id, { model: '' })
+    holdRelease.resolve()
+    await kernel.conversations.waitForIdle(convC.id)
+    assert.ok(kernel.conversations.getConversation(convC.id).completionSeq > seqC0)
+    assert.equal(kernel.conversations.getConversation(convC.id).model, 'faux/workhorse')
+    assert.equal(kernel.conversations.getConversation(convC.id).modelOverride, undefined, 'CAS must not overwrite manual reset')
+
+    // --- Scenario D: busy clear_borrow on active borrow disables auto-restore & stays on borrowed model ---
+    const convD = await kernel.conversations.createConversation({ title: 'busy-clear-conv' })
+    holdEntered = deferred<void>()
+    holdRelease = deferred<void>()
+    env.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('hold_borrow_turn', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('stay-on-flagship'),
+    ])
+    const seqD0 = kernel.conversations.getConversation(convD.id).completionSeq
+    await kernel.conversations.submitInput(convD.id, '/model faux/flagship start')
+    await holdEntered.promise
+    const clearActiveRes = (await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'clear_borrow', {
+      conversationId: convD.id,
+    })) as { cleared: boolean; previousPhase?: string }
+    assert.deepEqual(clearActiveRes, { cleared: true, previousPhase: 'active' })
+    holdRelease.resolve()
+    await kernel.conversations.waitForIdle(convD.id)
+    assert.ok(kernel.conversations.getConversation(convD.id).completionSeq > seqD0)
+    assert.equal(kernel.conversations.getConversation(convD.id).model, 'faux/flagship', 'clear_borrow on active turn keeps borrowed model')
+    assert.equal(kernel.conversations.getConversation(convD.id).modelOverride, 'faux/flagship')
+  } finally {
+    await env.close()
+  }
+})
+
+test('integration: switch_model chained relay (A->B->C restores A), permanent switch, presentationMeta, scope guard, reset/delete cleanup', { timeout: 60_000 }, async () => {
+  const env = await openHelmxEnv({ defaultModel: 'faux/workhorse' })
+  try {
+    const { kernel } = env.app
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'replace', {
+      tiers: {
+        coder: { model: 'faux/workhorse', thinkingLevel: 'medium', description: 'Coder' },
+        architect: { model: 'faux/flagship', thinkingLevel: 'high', description: 'Architect' },
+      },
+    })
+
+    // Start on baseline A: faux/fast · low
+    const convCreated = await kernel.conversations.createConversation({
+      title: 'relay-conv',
+      model: 'faux/fast',
+    })
+    const conv = await kernel.conversations.updateConversation(convCreated.id, { thinkingLevel: 'low' })
+
+    // 1. Chained switch_model in a single turn: A (fast) -> B (tier/coder) -> C (tier/architect) -> restores A (fast · low)
+    const stepModels: string[] = []
+    env.faux.setResponses([
+      () => {
+        stepModels.push(kernel.conversations.getConversation(conv.id).model)
+        return fauxAssistantMessage(
+          [fauxToolCall(TIERS_SWITCH_MODEL_TOOL, { model: 'tier/coder' }, { id: 'sw-1' })],
+          { stopReason: 'toolUse' },
+        )
+      },
+      () => {
+        stepModels.push(kernel.conversations.getConversation(conv.id).model)
+        return fauxAssistantMessage(
+          [fauxToolCall(TIERS_SWITCH_MODEL_TOOL, { model: 'tier/architect', effort: 'high' }, { id: 'sw-2' })],
+          { stopReason: 'toolUse' },
+        )
+      },
+      () => {
+        stepModels.push(kernel.conversations.getConversation(conv.id).model)
+        return fauxAssistantMessage('chained-relay-complete')
+      },
+    ])
+    const seq1 = kernel.conversations.getConversation(conv.id).completionSeq
+    await kernel.conversations.submitInput(conv.id, 'escalate twice in one turn')
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.ok(kernel.conversations.getConversation(conv.id).completionSeq > seq1)
+
+    assert.deepEqual(stepModels, ['faux/fast', 'faux/workhorse', 'faux/flagship'])
+    const afterRelay = kernel.conversations.getConversation(conv.id)
+    assert.equal(afterRelay.model, 'faux/fast', 'chained switch_model must restore original baseline A, not intermediate B')
+    assert.equal(afterRelay.modelOverride, 'faux/fast')
+    assert.equal(afterRelay.thinkingLevelOverride, 'low')
+
+    // Verify tool results carry structured presentationMeta (persisted in toolResult.details)
+    const detail = await kernel.conversations.getConversationDetail(conv.id)
+    const switchToolMsgs = detail.entries
+      .filter((entry) => entry.kind === 'pi.tool-result')
+      .flatMap((entry) => (Array.isArray(entry.model) ? entry.model : []))
+      .filter(
+        (msg): msg is { role: string; toolName: string; details?: Record<string, unknown> } =>
+          typeof msg === 'object' &&
+          msg !== null &&
+          (msg as { role?: unknown }).role === 'toolResult' &&
+          (msg as { toolName?: unknown }).toolName === TIERS_SWITCH_MODEL_TOOL,
+      )
+    assert.equal(switchToolMsgs.length, 2)
+    const firstMeta = switchToolMsgs[0]?.details
+    const secondMeta = switchToolMsgs[1]?.details
+    assert.equal(firstMeta?.['fromModel'], 'faux/fast')
+    assert.equal(firstMeta?.['toModel'], 'faux/workhorse')
+    assert.equal(firstMeta?.['toLabel'], 'tier/coder')
+    assert.equal(firstMeta?.['restoreAfterTurn'], true)
+    assert.equal(secondMeta?.['fromModel'], 'faux/workhorse')
+    assert.equal(secondMeta?.['toModel'], 'faux/flagship')
+    assert.equal(secondMeta?.['tierId'], 'architect')
+    assert.equal(secondMeta?.['effort'], 'high')
+    assert.equal(secondMeta?.['restoreAfterTurn'], true)
+
+    // 2. Permanent switch_model (`restoreAfterTurn: false`) stays on target and clears borrow
+    env.faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall(TIERS_SWITCH_MODEL_TOOL, { model: 'faux/workhorse', restoreAfterTurn: false }, { id: 'sw-perm' })],
+        { stopReason: 'toolUse' },
+      ),
+      fauxAssistantMessage('permanently-switched'),
+    ])
+    const seq2 = kernel.conversations.getConversation(conv.id).completionSeq
+    await kernel.conversations.submitInput(conv.id, 'switch permanently')
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.ok(kernel.conversations.getConversation(conv.id).completionSeq > seq2)
+    assert.equal(kernel.conversations.getConversation(conv.id).model, 'faux/workhorse')
+    assert.equal(kernel.conversations.getConversation(conv.id).modelOverride, 'faux/workhorse')
+    assert.equal(kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_BORROW_SESSION_DOC, conv.id).value, null)
+
+    // 3. Scope guard: child & helmx-owned conversations reject actions, ignore /model, and omit switch_model tool
+    const helmxConv = await kernel.conversations.createConversation({ title: 'helmx-owned', ownedBy: 'helmx' })
+    const childConv = await kernel.conversations.createConversation({
+      title: 'child-conv',
+      parentConversationId: conv.id,
+      ownedBy: 'helmx',
+    })
+    for (const ineligible of [helmxConv, childConv]) {
+      await assertRejectsCode(
+        () =>
+          kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+            conversationId: ineligible.id,
+            model: 'faux/flagship',
+          }),
+        'tiers_borrow_unsupported_conversation',
+      )
+      const hookInput = await kernel.plugins.runHook('input', {
+        conversationId: ineligible.id,
+        input: { id: 'req-ineligible', text: '/model faux/flagship ignored', origin: 'human', createdAt: Date.now() },
+      })
+      assert.ok(
+        hookInput.action === 'continue' ||
+          (hookInput.action === 'transform' && hookInput.value.input.text === '/model faux/flagship ignored'),
+        '/model must not intercept or rewrite ineligible conversations',
+      )
+      assert.equal(
+        kernel.conversations.getConversation(ineligible.id).model,
+        'faux/workhorse',
+        '/model must not switch model on ineligible conversations',
+      )
+      const toolsForConv = kernel.plugins.listTools(ineligible)
+      assert.equal(
+        toolsForConv.some((t) => t.name === TIERS_SWITCH_MODEL_TOOL),
+        false,
+        'switch_model must not be exposed to child or helmx-owned conversations',
+      )
+    }
+
+    // 4. pi.reset (/clear) and conversation.deleted clean up borrow state
+    const resetTarget = await kernel.conversations.createConversation({ title: 'reset-clean' })
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+      conversationId: resetTarget.id,
+      model: 'faux/flagship',
+    })
+    await kernel.conversations.resetConversation(resetTarget.id)
+    await waitFor(async () => {
+      const res = (await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'get_borrow', {
+        conversationId: resetTarget.id,
+      })) as TierBorrowSessionView | null
+      return res === null
+    })
+
+    const deleteTarget = await kernel.conversations.createConversation({ title: 'delete-clean' })
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+      conversationId: deleteTarget.id,
+      model: 'faux/flagship',
+    })
+    await kernel.conversations.deleteConversation(deleteTarget.id)
+    assert.throws(
+      () => kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_BORROW_SESSION_DOC, deleteTarget.id),
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
+    )
+    await assertRejectsCode(
+      () => kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'get_borrow', { conversationId: deleteTarget.id }),
+      'not_found',
+    )
+  } finally {
+    await env.close()
+  }
+})
+
+test('reconcile & events: cold restart restores idle active borrow, respects CAS mismatch, drops deleted conversations, and conversation.deleted cleans KV', { timeout: 60_000 }, async () => {
+  const { PluginHost } = await import('@helmx/kernel')
+  const { createPluginHostBackendFixture } = await import('../../kernel/test/helpers/plugin-host-backend.js')
+  const dataDir = await makeTempDir('helmx-tiers-reconcile-')
+  const docs = new MemoryDocStore()
+  const kv = new MemoryKvStore()
+  const kvHandle = kv.handle<TierBorrowRecord>(TIERS_PLUGIN_ID, TIERS_BORROW_KV)
+  const now = Date.now()
+  // 10: idle with matching appliedModelOverride -> MUST restore to previousModelOverride '' (inherited)
+  kvHandle.set('10', {
+    conversationId: 10,
+    phase: 'active',
+    requestedRef: 'faux/flagship',
+    targetModel: 'faux/flagship',
+    appliedModelOverride: 'faux/flagship',
+    targetConcreteModel: 'faux/flagship',
+    targetLabel: 'flagship',
+    effortChanged: false,
+    restoreAfterTurn: true,
+    source: 'slash',
+    createdAt: now,
+    updatedAt: now,
+  })
+  // 11: idle but user already manually switched to faux/fast -> CAS must skip overwrite and clear record
+  kvHandle.set('11', {
+    conversationId: 11,
+    phase: 'active',
+    requestedRef: 'faux/flagship',
+    targetModel: 'faux/flagship',
+    appliedModelOverride: 'faux/flagship',
+    targetConcreteModel: 'faux/flagship',
+    targetLabel: 'flagship',
+    previousModelOverride: 'faux/workhorse',
+    effortChanged: false,
+    restoreAfterTurn: true,
+    source: 'slash',
+    createdAt: now,
+    updatedAt: now,
+  })
+  // 12: armed conversation that will later emit conversation.deleted
+  kvHandle.set('12', {
+    conversationId: 12,
+    phase: 'armed',
+    requestedRef: 'faux/flagship',
+    targetModel: 'faux/flagship',
+    targetConcreteModel: 'faux/flagship',
+    targetLabel: 'flagship',
+    effortChanged: false,
+    restoreAfterTurn: true,
+    source: 'ui',
+    createdAt: now,
+    updatedAt: now,
+  })
+  // 99: deleted conversation -> drop stale KV record
+  kvHandle.set('99', {
+    conversationId: 99,
+    phase: 'armed',
+    requestedRef: 'faux/flagship',
+    targetModel: 'faux/flagship',
+    targetConcreteModel: 'faux/flagship',
+    targetLabel: 'flagship',
+    effortChanged: false,
+    restoreAfterTurn: true,
+    source: 'ui',
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  const convs = new Map([
+    [10, makeConversationSummary({ id: 10, status: 'idle', model: 'faux/flagship', modelOverride: 'faux/flagship' })],
+    [11, makeConversationSummary({ id: 11, status: 'idle', model: 'faux/fast', modelOverride: 'faux/fast' })],
+    [12, makeConversationSummary({ id: 12, status: 'idle', model: 'faux/workhorse' })],
+  ])
+  const listeners = new Map<string, Array<(payload: unknown) => void | Promise<void>>>()
+  const updates: Array<{ id: number; patch: Record<string, unknown> }> = []
+  const baseFixture = createPluginHostBackendFixture()
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    docs,
+    kv,
+    host: {
+      ...baseFixture,
+      emitEvent: () => {},
+      onEvent: (type: string, handler: (payload: unknown) => void | Promise<void>) => {
+        const list = listeners.get(type) ?? []
+        list.push(handler)
+        listeners.set(type, list)
+        return () => {
+          const cur = listeners.get(type)
+          if (cur) listeners.set(type, cur.filter((h) => h !== handler))
+        }
+      },
+      skills: { ...baseFixture.skills, ensureSkill: async () => {} },
+      getConversation: (id) => {
+        const found = convs.get(id)
+        if (!found) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+        return found
+      },
+      listConversations: () => [...convs.values()],
+      updateConversation: async (id, patch) => {
+        updates.push({ id, patch: patch as Record<string, unknown> })
+        const cur = convs.get(id)!
+        const next = {
+          ...cur,
+          model: patch.model === '' ? 'faux/workhorse' : (patch.model ?? cur.model),
+          modelOverride: patch.model === '' ? undefined : (patch.model ?? cur.modelOverride),
+        }
+        convs.set(id, next)
+        return next
+      },
+    },
+  })
+  try {
+    await host.register(createTiersPlugin())
+    await host.start()
+    await host.reconcile()
+    assert.deepEqual(updates, [{ id: 10, patch: { model: '' } }], 'only matching idle active borrow should be restored')
+    assert.equal(kvHandle.get('10'), undefined)
+    assert.equal(kvHandle.get('11'), undefined)
+    assert.equal(kvHandle.get('99'), undefined)
+    assert.equal(kvHandle.get('12')?.phase, 'armed')
+    assert.equal(convs.get(11)?.modelOverride, 'faux/fast', 'CAS-mismatched conversation must keep its model')
+
+    // Emit conversation.deleted for #12 -> must purge KV entry cleanly
+    convs.delete(12)
+    for (const handler of listeners.get('conversation.deleted') ?? []) {
+      await handler({ type: 'conversation.deleted', conversationId: 12 })
+    }
+    assert.equal(kvHandle.get('12'), undefined, 'conversation.deleted must remove borrow KV entry')
   } finally {
     await host.dispose().catch(() => {})
     await cleanupDir(dataDir)

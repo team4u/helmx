@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { MODEL_TIER_PREFIX, type HostModelEntry, type ModelTierCatalogEntry } from '@helmx/protocol/browser'
 import { HelmxIcon } from '../icons.js'
-import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from './Popover.js'
+import { Popover, PopoverAnchor, PopoverContent, PopoverPortal, PopoverTrigger } from './Popover.js'
 import { usePluginClientHost } from '../host-port.js'
 import { useHostModels } from '../conversation-hooks.js'
 import {
@@ -44,10 +44,10 @@ export interface ModelPickerControlProps {
   /** Panel fallback when no `[data-helmx-panel]` ancestor exists. */
   fallbackPanel?: HelmxPanel
   /** Copy for the clear-override button (label and title). */
-  resetLabel: string
-  resetTitle: string
+  resetLabel?: string
+  resetTitle?: string
   /** Trigger button title and disabled state. */
-  buttonTitle: string
+  buttonTitle?: string
   /** Optional trigger button id / aria-label / unset placeholder (defaults to composer label). */
   buttonId?: string
   buttonAriaLabel?: string
@@ -56,6 +56,17 @@ export interface ModelPickerControlProps {
   copy?: Partial<ModelPickerControlCopy>
   /** Popover placement side. */
   popoverSide?: 'top' | 'bottom'
+  /** Optional controlled open state; omit for uncontrolled behavior. */
+  open?: boolean
+  /** Optional open-state change callback (works in both controlled and uncontrolled modes). */
+  onOpenChange?: (open: boolean) => void
+  /** Show the top "reset to default" item inside the popover (default `true`). */
+  showResetDefault?: boolean
+  /**
+   * Optional custom trigger renderer. Return `null` to mount a non-focusable
+   * zero-width PopoverAnchor instead of a trigger button.
+   */
+  renderTrigger?: (state: { open: boolean; disabled: boolean; pending: boolean }) => ReactNode
   /** Enable the host Ctrl+L panel shortcut toggle. */
   enableShortcut?: boolean
   /** Hide inline thinking-level chips (plain model-id config fields, e.g. plugin config format:'model'). */
@@ -72,7 +83,7 @@ export interface ModelPickerControlProps {
   onNotice?: (message: string, tone: 'info' | 'warning' | 'error') => void
   /** Apply the candidate model; thinkingLevel null = follow the default chain. */
   onApply: (model: string, thinkingLevel: string | null) => void | Promise<void>
-  onResetDefault: () => void | Promise<void>
+  onResetDefault?: () => void | Promise<void>
   onCatalogRefreshed?: () => void | Promise<void>
   /** Optional callback to open Models & credentials when the catalog has zero usable models. */
   onOpenModelsCenter?: () => void
@@ -96,6 +107,10 @@ export function ModelPickerControl({
   placeholderLabel,
   copy: copyOverride,
   popoverSide = 'top',
+  open: openProp,
+  onOpenChange,
+  showResetDefault = true,
+  renderTrigger,
   enableShortcut = true,
   showThinkingLevels = true,
   allowTiers = true,
@@ -116,7 +131,21 @@ export function ModelPickerControl({
   const copy: ModelPickerControlCopy = { ...DEFAULT_MODEL_PICKER_COPY, ...copyOverride }
   const models = catalog?.models ?? []
   const catalogUnknown = catalog === undefined
-  const [open, setOpen] = useState(false)
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
+  const isControlled = openProp !== undefined
+  const open = isControlled ? openProp : uncontrolledOpen
+  const openRef = useRef(open)
+  openRef.current = open
+  const setOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)): void => {
+      const resolved = typeof next === 'function' ? next(openRef.current) : next
+      if (!isControlled) {
+        setUncontrolledOpen(resolved)
+      }
+      onOpenChange?.(resolved)
+    },
+    [isControlled, onOpenChange],
+  )
   const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLSpanElement | null>(null)
@@ -232,7 +261,7 @@ export function ModelPickerControl({
 
   const resetDefault = (): void => {
     setOpen(false)
-    void onResetDefault()
+    void onResetDefault?.()
   }
 
   const rawShortName = formatModelShortName(effectiveModel)
@@ -249,32 +278,46 @@ export function ModelPickerControl({
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, activeThinkingLevel)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
   const canRefresh = host.refreshModels !== undefined
+  const customTrigger = renderTrigger !== undefined ? renderTrigger({ open, disabled, pending }) : undefined
+  const hasCustomTrigger =
+    customTrigger !== null && customTrigger !== undefined && customTrigger !== false
+  const shouldShowReset = showResetDefault && onResetDefault !== undefined
 
   return (
     <span className="composer-picker-root" ref={rootRef}>
       <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button
-            id={buttonId}
-            type="button"
-            className="btn btn-ghost btn-sm composer-model-button"
-            disabled={disabled || pending}
-            aria-expanded={open}
-            aria-label={
-              buttonAriaLabel ??
-              formatModelPickerCopy(copy.buttonAria, {
-                model: shortName,
-                level: showLevel ? formatModelPickerCopy(copy.levelSuffix, { level: effectiveLevel }) : '',
-              })
-            }
-            title={buttonTitle}
-          >
-            {pending ? <HelmxIcon name="loader" size={12} className="spin-slow" /> : null}
-            <span className="composer-model-label">{shortName}</span>
-            {showLevel ? <span className="composer-model-level">· {effectiveLevel}</span> : null}
-            <HelmxIcon name="chevron-down" size={12} />
-          </button>
-        </PopoverTrigger>
+        {renderTrigger !== undefined ? (
+          hasCustomTrigger ? (
+            <PopoverTrigger asChild>{customTrigger}</PopoverTrigger>
+          ) : (
+            <PopoverAnchor asChild>
+              <span className="helmx-model-picker-anchor" aria-hidden="true" />
+            </PopoverAnchor>
+          )
+        ) : (
+          <PopoverTrigger asChild>
+            <button
+              id={buttonId}
+              type="button"
+              className="btn btn-ghost btn-sm composer-model-button"
+              disabled={disabled || pending}
+              aria-expanded={open}
+              aria-label={
+                buttonAriaLabel ??
+                formatModelPickerCopy(copy.buttonAria, {
+                  model: shortName,
+                  level: showLevel ? formatModelPickerCopy(copy.levelSuffix, { level: effectiveLevel }) : '',
+                })
+              }
+              title={buttonTitle}
+            >
+              {pending ? <HelmxIcon name="loader" size={12} className="spin-slow" /> : null}
+              <span className="composer-model-label">{shortName}</span>
+              {showLevel ? <span className="composer-model-level">· {effectiveLevel}</span> : null}
+              <HelmxIcon name="chevron-down" size={12} />
+            </button>
+          </PopoverTrigger>
+        )}
         <PopoverPortal>
           <PopoverContent
             side={popoverSide}
@@ -302,9 +345,11 @@ export function ModelPickerControl({
               event.stopPropagation()
             }}
           >
-            <button type="button" className="popover-item" disabled={disabled} onClick={resetDefault} title={resetTitle}>
-              {resetLabel}
-            </button>
+            {shouldShowReset ? (
+              <button type="button" className="popover-item" disabled={disabled} onClick={resetDefault} title={resetTitle}>
+                {resetLabel}
+              </button>
+            ) : null}
             <div className="composer-model-search-bar">
               <div className="search-box composer-model-search-input">
                 <HelmxIcon name="search" size={13} />

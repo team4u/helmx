@@ -60,6 +60,32 @@ export const TIERS_COPY = {
   errDuplicateId: { en: 'Duplicate tier ID found; each tier ID must be unique.', 'zh-CN': '存在重复的档位 ID，请保持每个档位 ID 唯一。' },
   errModelRequired: { en: 'Every tier must bind a concrete target model before saving.', 'zh-CN': '保存前请为每个档位绑定一个具体目标模型。' },
   errTemplateFields: { en: 'Template ID and name are both required.', 'zh-CN': '请填写模板 ID 与模板名称。' },
+  borrowMenuLabel: { en: 'One-turn model', 'zh-CN': '单轮借用模型' },
+  borrowMenuBusyTitle: {
+    en: 'Wait for the current turn to finish before selecting a one-turn model.',
+    'zh-CN': '请等待当前回合结束后再选择单轮借用模型。',
+  },
+  borrowMenuActiveBusyHint: {
+    en: 'A one-turn model is active for this turn; click × on the toolbar pill to keep it after the turn.',
+    'zh-CN': '当前回合正在借用模型；可在工具栏胶囊点击 × 取消自动恢复。',
+  },
+  borrowPillArmedPrefix: { en: 'Next turn:', 'zh-CN': '下一轮:' },
+  borrowPillActivePrefix: { en: 'This turn:', 'zh-CN': '本轮借用:' },
+  borrowClearArmedAria: { en: 'Cancel armed one-turn model', 'zh-CN': '取消下一轮借用模型' },
+  borrowClearActiveAria: {
+    en: 'Cancel auto-restore and stay on the borrowed model',
+    'zh-CN': '取消自动恢复并留在当前模型',
+  },
+  borrowBusyNotice: {
+    en: 'Cannot pick a one-turn model while the conversation is busy.',
+    'zh-CN': '会话正忙时无法选择单轮借用模型。',
+  },
+  toolSwitchModelTitle: { en: 'Switch model', 'zh-CN': '切换模型' },
+  toolSwitchModelBadgeOneTurn: { en: 'One-turn', 'zh-CN': '单轮' },
+  toolSwitchModelBadgePermanent: { en: 'Persistent', 'zh-CN': '持久' },
+  toolStatusRunning: { en: 'Switching', 'zh-CN': '切换中' },
+  toolStatusDone: { en: 'Switched', 'zh-CN': '已切换' },
+  toolStatusError: { en: 'Failed', 'zh-CN': '失败' },
 } as const satisfies Record<string, LocalizedText>
 
 export const tiersTemplateDeleteConfirmBody = (name: string, id: string, locale: HelmxLocale): string =>
@@ -77,6 +103,29 @@ export const tiersTemplateSavedNotice = (name: string, locale: HelmxLocale): str
 export const tiersActionFailed = (err: unknown, locale: HelmxLocale): string => {
   const detail = err instanceof Error ? err.message : String(err)
   return locale === 'zh-CN' ? `操作失败：${detail}` : `Operation failed: ${detail}`
+}
+
+export const borrowArmedPillTitle = (concreteModel: string, locale: HelmxLocale): string =>
+  locale === 'zh-CN'
+    ? `下一条消息将临时使用 ${concreteModel}（回合结束后自动恢复原模型）；点击可重选`
+    : `Next message will temporarily use ${concreteModel} (auto-restores after the turn); click to change`
+
+export const borrowActivePillTitle = (concreteModel: string, locale: HelmxLocale): string =>
+  locale === 'zh-CN'
+    ? `本轮正在借用 ${concreteModel}，本轮结束后自动恢复原模型；点击 × 取消自动恢复并留在当前模型`
+    : `Borrowing ${concreteModel} for this turn (auto-restores when done); click × to cancel auto-restore and stay on this model`
+
+export const switchModelSummaryLabel = (
+  target: string,
+  restoreAfterTurn: boolean,
+  locale: HelmxLocale,
+): string => {
+  if (restoreAfterTurn) {
+    return locale === 'zh-CN'
+      ? `切换到 ${target}（本轮结束自动恢复）`
+      : `Switched to ${target} (auto-restores after turn)`
+  }
+  return locale === 'zh-CN' ? `永久切换到 ${target}` : `Permanently switched to ${target}`
 }
 
 const ZH_PICKER_COPY: Partial<ModelPickerControlCopy> = {

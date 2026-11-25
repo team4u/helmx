@@ -273,6 +273,7 @@ export function summaryOf(
     nodeId: meta.nodeId || 'local',
     cwd: meta.cwd,
     model: meta.model,
+    ...(meta.modelOverride !== undefined && meta.modelOverride !== '' ? { modelOverride: meta.modelOverride } : {}),
     thinkingLevel: meta.thinkingLevel,
     ...(meta.thinkingLevelOverride !== undefined ? { thinkingLevelOverride: meta.thinkingLevelOverride } : {}),
     status,
