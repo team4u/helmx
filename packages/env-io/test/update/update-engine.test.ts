@@ -17,6 +17,7 @@ import rawFs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { createHash } from 'node:crypto';
+import * as tar from 'tar';
 import { sleep as delay } from '@helmx/test-kit';
 import { makeTempDir as tempDir } from '@helmx/test-kit/node';
 import {
@@ -646,6 +647,90 @@ test('stageRelease: npm cache reuse rejects marker entries that disagree with la
   await fs.writeFile(decoyEntry, '#!/usr/bin/env node\n', 'utf8');
   await assert.rejects(() => stageRelease(dir, '4.2.0', NODE_LAYOUT, { fetchFn: offlineFetch }), /disagrees with layout resolution/);
   await fs.rm(dir, { recursive: true, force: true });
+});
+
+test('stageRelease (npm path): downloads verified tarballs, runs npm install, resolves relative entries, and reuses .complete cache', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helmx-update-');
+  const pkgSrcRoot = await tempDir('helmx-pkg-src-');
+  try {
+    const targetVersion = '3.4.5';
+    const tarballs = new Map<string, { bytes: Buffer; integrity: string }>();
+
+    const packTarball = async (pkgName: string, files: Record<string, string>) => {
+      const safeDir = path.join(pkgSrcRoot, pkgName.replace('/', '+'));
+      const pkgDir = path.join(safeDir, 'package');
+      for (const [rel, content] of Object.entries(files)) {
+        const dest = path.join(pkgDir, rel);
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await fs.writeFile(dest, content, 'utf8');
+      }
+      const tgzPath = path.join(safeDir, 'pkg.tgz');
+      await tar.create({ gzip: true, file: tgzPath, cwd: safeDir }, ['package']);
+      const bytes = await fs.readFile(tgzPath);
+      const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
+      tarballs.set(pkgName, { bytes, integrity });
+    };
+
+    await packTarball(NODE_PACKAGE, {
+      'package.json': JSON.stringify({ name: NODE_PACKAGE, version: targetVersion }, null, 2),
+      'dist/cli.js': '#!/usr/bin/env node\nconsole.log("node");\n',
+    });
+    await packTarball(CLI_PACKAGE, {
+      'package.json': JSON.stringify({ name: CLI_PACKAGE, version: targetVersion, bin: { helmx: './dist/index.js' } }, null, 2),
+      'dist/index.js': '#!/usr/bin/env node\nconsole.log("cli");\n',
+    });
+
+    const registryUrl = 'https://registry.example.test';
+    const fetchFn: typeof fetch = async (input) => {
+      const url = typeof input === 'string' ? input : String(input);
+      for (const pkgName of [NODE_PACKAGE, CLI_PACKAGE]) {
+        if (url === `${registryUrl}/${pkgName}/${targetVersion}`) {
+          const entry = tarballs.get(pkgName)!;
+          return new Response(
+            JSON.stringify({
+              name: pkgName,
+              version: targetVersion,
+              dist: {
+                integrity: entry.integrity,
+                tarball: `${registryUrl}/${pkgName}/-/${pkgName.split('/').pop()}-${targetVersion}.tgz`,
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url === `${registryUrl}/${pkgName}/-/${pkgName.split('/').pop()}-${targetVersion}.tgz`) {
+          return new Response(new Uint8Array(tarballs.get(pkgName)!.bytes), { status: 200 });
+        }
+      }
+      return new Response('not found', { status: 404, statusText: 'Not Found' });
+    };
+
+    const staged = await stageRelease(dir, targetVersion, NODE_LAYOUT, {
+      registryUrl,
+      fetchFn,
+      npmInstallArgs: ['--offline'],
+    });
+
+    assert.equal(staged.version, targetVersion);
+    assert.ok(staged.releaseDir.startsWith(path.join(dir, 'releases', targetVersion) + path.sep));
+    const expectedEntry = path.join(staged.releaseDir, 'node_modules', '@helmx', 'node', 'dist', 'cli.js');
+    const expectedBinDir = path.join(staged.releaseDir, 'node_modules', '.bin');
+    assert.equal(staged.entries['entryPath'], expectedEntry);
+    assert.equal(staged.entries['cliBinDir'], expectedBinDir);
+    assert.ok(await fs.access(expectedEntry).then(() => true, () => false), 'staged entryPath must exist on disk');
+
+    const marker = JSON.parse(await fs.readFile(path.join(dir, 'releases', targetVersion, '.complete'), 'utf8'));
+    assert.equal(marker.origin, 'npm');
+    assert.equal(marker.entries.entryPath, expectedEntry);
+
+    // Subsequent call reuses the verified .complete cache without touching network or npm.
+    const cached = await stageRelease(dir, targetVersion, NODE_LAYOUT, { fetchFn: offlineFetch });
+    assert.equal(cached.releaseDir, staged.releaseDir);
+    assert.deepEqual(cached.entries, staged.entries);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(pkgSrcRoot, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------

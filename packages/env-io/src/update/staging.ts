@@ -304,7 +304,12 @@ async function stageViaNpm(
   for (const spec of layout.packages) {
     await validateInstalledPackage(spec, stagingDir, targetVersion);
   }
-  return await resolveLayoutEntries(stagingDir, layout);
+  const absoluteEntries = await resolveLayoutEntries(stagingDir, layout);
+  const relativeEntries: Record<string, string> = {};
+  for (const [key, absolute] of Object.entries(absoluteEntries)) {
+    relativeEntries[key] = path.relative(stagingDir, absolute);
+  }
+  return relativeEntries;
 }
 
 /**
@@ -364,8 +369,9 @@ export async function stageRelease(
     } else {
       relativeEntries = await stageViaNpm(stagingDir, targetVersion, layout!, options ?? {});
       for (const [key, relative] of Object.entries(relativeEntries)) {
-        if (!(await fileExists(path.join(stagingDir, relative)))) {
-          throw new Error(`staged entries.${key} target missing after npm staging: ${path.join(stagingDir, relative)}`);
+        const absolute = resolveInside(stagingDir, relative, `stageViaNpm entries.${key}`);
+        if (!(await fileExists(absolute))) {
+          throw new Error(`staged entries.${key} target missing after npm staging: ${absolute}`);
         }
       }
     }
