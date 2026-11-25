@@ -1,0 +1,171 @@
+/* builtin:plan plugin-specific styles (.plan-* prefix; primitives & tokens inherited from host). */
+
+/* ---- Composer status-row Plan badge ---- */
+.plan-status-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.plan-status-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.plan-status-btn:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.plan-status-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.plan-status-btn--planning {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.plan-status-btn--planning:hover:not(:disabled) {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.plan-status-btn--awaiting {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn);
+  font-weight: 500;
+}
+
+.plan-status-btn--awaiting:hover:not(:disabled) {
+  background: var(--warn-bg);
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.plan-status-btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Composer dock active tray ---- */
+.plan-tray-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* ---- Workbench panel ---- */
+.plan-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.plan-workbench-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.plan-workbench-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.plan-error-text {
+  margin: 0 0 var(--space-2);
+  font-size: 12px;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* Workbench markdown typography (compound selector overrides host .msg-ai-body cleanly) */
+.plan-markdown.msg-ai-body {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--prose-fg);
+  overflow-wrap: anywhere;
+}
+
+.plan-markdown.msg-ai-body > :last-child {
+  margin-bottom: 0;
+}
+
+.plan-markdown.msg-ai-body :is(h1, h2, h3, h4) {
+  margin: 12px 0 6px;
+}
+
+.plan-markdown.msg-ai-body h1 { font-size: 1.25em; }
+.plan-markdown.msg-ai-body h2 { font-size: 1.15em; }
+.plan-markdown.msg-ai-body h3 { font-size: 1.05em; }
+.plan-markdown.msg-ai-body h4 { font-size: 1em; }
+
+.plan-markdown.msg-ai-body code:not(pre code) {
+  font-size: 12px;
+  padding: 1px 4px;
+}
+
+/* ---- Timeline 26px tool trace row ---- */
+.plan-trace-row {
+  width: 100%;
+  min-width: 0;
+}
+
+.plan-trace-row:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
+}
+
+.plan-trace-name {
+  color: var(--fg-secondary);
+}
+
+.plan-trace-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.plan-trace-badge {
+  height: 18px;
+  line-height: 16px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+
+.plan-trace-error {
+  color: var(--err);
+}
