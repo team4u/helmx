@@ -3,7 +3,7 @@
  * (zero React/DOM dependencies; strict validation at every external boundary).
  */
 import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
-import type { ConversationEntry, ConversationSummary, ToolViewProps } from '@helmx/protocol'
+import type { ConversationEntry, ConversationSummary, ToolViewProps } from '@helmx/protocol/browser'
 import {
   buildWorkflowEditRequestLines,
   libArgsInvalidJson,

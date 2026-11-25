@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/protocol" },
+    { "path": "./packages/env-io" },
+    { "path": "./packages/node" },
+    { "path": "./packages/plugin-build" },
+    { "path": "./packages/kernel" },
+    { "path": "./packages/plugins" },
+    { "path": "./packages/hub" },
+    { "path": "./packages/cli" }
+  ]
+}

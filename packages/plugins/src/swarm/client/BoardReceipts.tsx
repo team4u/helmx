@@ -2,7 +2,7 @@
  * Compact 1-line timeline receipt pills for swarm:board-report & swarm:board-wakeup (Fast Refresh compliant).
  */
 import type { ReactNode } from 'react'
-import type { TimelineRendererProps } from '@helmx/protocol'
+import type { TimelineRendererProps } from '@helmx/protocol/browser'
 import { Badge, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import { parseBoardReportMeta, parseBoardWakeupMeta } from './board-model.ts'
 import { SWARM_WORKBENCH_PANEL_ID } from './models.ts'

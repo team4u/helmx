@@ -8,7 +8,7 @@
  */
 import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { TimelineRendererProps, ToolViewProps } from '@helmx/protocol'
+import type { TimelineRendererProps, ToolViewProps } from '@helmx/protocol/browser'
 import {
   Badge,
   Button,

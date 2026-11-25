@@ -1,7 +1,7 @@
 /**
  * Pure derivation for the builtin:swarm right workbench panel (single board, Fast Refresh compliant).
  */
-import type { ConversationSummary } from '@helmx/protocol'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import {
   boardProgressOf,
   resolveMemberActivity,

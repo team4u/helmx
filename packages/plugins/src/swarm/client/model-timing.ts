@@ -1,7 +1,7 @@
 /**
  * Pure timing derivations for builtin:swarm client surfaces (delegates elapsed math to @helmx/plugin-client).
  */
-import type { ConversationStatus, ConversationSummary } from '@helmx/protocol'
+import type { ConversationStatus, ConversationSummary } from '@helmx/protocol/browser'
 import {
   DEFAULT_HELMX_LOCALE, formatCompactTimestamp, formatDurationMs, formatOffsetMs, formatStopwatchMs,
   resolveConversationTiming, type ConversationTimingSnapshot, type HelmxLocale,

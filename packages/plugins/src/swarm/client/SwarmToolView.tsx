@@ -2,7 +2,7 @@
  * builtin:swarm tool-call timeline one-line renderer (26px `.trace-row`, Fast Refresh compliant).
  */
 import { useId, useMemo, useState, type ReactNode } from 'react'
-import type { ToolViewProps } from '@helmx/protocol'
+import type { ToolViewProps } from '@helmx/protocol/browser'
 import {
   Badge, HelmxIcon, StatusLight, ToolCallDetails, formatDurationMs, resolveLocalizedText,
   usePluginContext, usePluginDoc, usePluginLocale, useToolActivity, type HelmxLocale, type StatusLightTone,

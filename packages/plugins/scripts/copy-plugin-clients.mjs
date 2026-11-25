@@ -6,16 +6,20 @@
  *    (manifest.json + hashed entry/chunks + pre-gzipped .gz files) via @helmx/plugin-build so
  *    runtime hosts and @helmx/payload require zero esbuild or mermaid runtime dependencies.
  *
- * Incremental fingerprint cache:
- * - Computes a deterministic SHA-256 fingerprint per built-in plugin covering src/<name>/client/**,
- *   dist/<name>.js (+ dist/<name>/**.js excluding client/dist-client), packages/plugins/package.json,
- *   packages/plugin-build/dist/**, packages/protocol/dist/**, pnpm-lock.yaml, declared refs, and
- *   this script.
- * - Verifies dist/<name>/dist-client/manifest.json (via assertPrebuiltClientManifest) and every
- *   entry/chunk/.gz file listed in it exists on disk with matching byte size.
- * - Unchanged plugins skip wiping & esbuild compilation completely; editing one plugin rebuilds
- *   ONLY that plugin. On cache miss, dist/<name>/dist-client is wiped BEFORE re-invoking the
- *   plugin factory so plugins like builtin:mermaid attach build-time npmDependencies.
+ * Two-layer incremental fingerprint cache (SCHEMA_VERSION = 3):
+ * - Layer 1 (Fast Path): verifies `backendDiscoveryHash` (dist/index.js, dist/asset-paths.js,
+ *   dist/contracts.js, and dist/<name>.js / dist/<name>/**.js), `clientPluginDirs`, per-plugin
+ *   build fingerprints, and on-disk dist-client manifests/sizes — skipping `import('dist/index.js')`
+ *   and `@helmx/plugin-build` (esbuild) completely when unchanged.
+ * - Layer 2 (Slow Path): when backend JS changed, imports `dist/index.js` and re-extracts live
+ *   `refs` per plugin, then evaluates each plugin's build fingerprint:
+ *   - Shared build inputs: dependency fields of `packages/plugins/package.json` (ignoring version/meta),
+ *     `copy-plugin-clients.mjs`, `packages/plugin-build/dist/**.{js,mjs,cjs}`,
+ *     `packages/protocol/dist/{plugin-build,ui}.js`, and `pnpm-lock.yaml`.
+ *   - Per-plugin build inputs: `src/<name>/client/**`, live `refs`, and `dist/<name>.js` ONLY for
+ *     plugins using source-mode `npmDependencies` (e.g. `builtin:mermaid`).
+ *   - Unchanged plugins stay cached even if unrelated backend files or protocol DTOs changed; changed
+ *     plugins wipe dist-client BEFORE re-calling factory() and compile in parallel via esbuild.
  * - Passing --force or setting HELMX_CLEAN_DIST=1 bypasses the cache and rebuilds all plugins.
  */
 import { createHash } from 'node:crypto';
@@ -41,8 +45,9 @@ import {
   prebuiltChunkFileName,
 } from '@helmx/protocol';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const IGNORED_FILE_NAMES = new Set(['.DS_Store']);
+const PACKAGE_DEP_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies', 'overrides'];
 
 const defaultPkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -110,6 +115,34 @@ function hashDirectoryInto(hash, label, rootDir, options = {}) {
   hash.update(`dir:${label}:${files.length}\0`);
   for (const rel of files) {
     hashFileInto(hash, `${label}/${rel}`, join(rootDir, rel));
+  }
+}
+
+function hashDependencyPackageJsonInto(hash, label, absPath) {
+  if (!isRegularFile(absPath)) {
+    hash.update(`missing:${label}\0`);
+    return;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(absPath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      hashFileInto(hash, label, absPath);
+      return;
+    }
+    const depsOnly = {};
+    for (const field of PACKAGE_DEP_FIELDS) {
+      const value = parsed[field];
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      const sorted = {};
+      for (const k of Object.keys(value).sort(compareAscii)) {
+        sorted[k] = value[k];
+      }
+      depsOnly[field] = sorted;
+    }
+    const serialized = JSON.stringify(depsOnly);
+    hash.update(`pkg-deps:${label}:${Buffer.byteLength(serialized, 'utf8')}\0${serialized}\0`);
+  } catch {
+    hashFileInto(hash, label, absPath);
   }
 }
 
@@ -217,30 +250,50 @@ function captureClientRefs(def, pkgRoot) {
 }
 
 /**
- * Computes a shared SHA-256 digest of workspace-wide inputs that affect every built-in plugin
- * client bundle (hashed once per run and mixed into each plugin's fingerprint).
+ * Computes a shared SHA-256 digest of workspace-wide build inputs that affect compiled client
+ * bundles (hashed once per run and mixed into each plugin's build fingerprint).
  */
 export function computeSharedInputsHash(options = {}) {
   const pkgRoot = resolve(options.pkgRoot ?? defaultPkgRoot);
   const repoRoot = resolve(options.repoRoot ?? resolve(pkgRoot, '../..'));
-  const distPlugins = join(pkgRoot, 'dist');
   const scriptPath = options.scriptPath ?? fileURLToPath(import.meta.url);
 
   const hash = createHash('sha256');
   hash.update(`plugin-clients-shared-schema:${SCHEMA_VERSION}\0`);
-  hashFileInto(hash, 'plugins/package.json', join(pkgRoot, 'package.json'));
-  hashFileInto(hash, 'plugins/dist/index.js', join(distPlugins, 'index.js'));
-  hashFileInto(hash, 'plugins/dist/asset-paths.js', join(distPlugins, 'asset-paths.js'));
-  hashFileInto(hash, 'plugins/dist/contracts.js', join(distPlugins, 'contracts.js'));
+  hashDependencyPackageJsonInto(hash, 'plugins/package.json:deps', join(pkgRoot, 'package.json'));
   hashFileInto(hash, 'plugins/scripts/copy-plugin-clients.mjs', scriptPath);
-  hashDirectoryInto(hash, 'plugin-build/dist', join(repoRoot, 'packages/plugin-build/dist'));
-  hashDirectoryInto(hash, 'protocol/dist', join(repoRoot, 'packages/protocol/dist'));
+  hashDirectoryInto(hash, 'plugin-build/dist', join(repoRoot, 'packages/plugin-build/dist'), {
+    extensions: ['.js', '.mjs', '.cjs'],
+  });
+  hashFileInto(hash, 'protocol/dist/plugin-build.js', join(repoRoot, 'packages/protocol/dist/plugin-build.js'));
+  hashFileInto(hash, 'protocol/dist/ui.js', join(repoRoot, 'packages/protocol/dist/ui.js'));
   hashFileInto(hash, 'pnpm-lock.yaml', join(repoRoot, 'pnpm-lock.yaml'));
   return hash.digest('hex');
 }
 
 /**
- * Computes a deterministic SHA-256 fingerprint for a single built-in plugin's prebuilt client.
+ * Computes a SHA-256 digest of compiled backend plugin discovery inputs (used solely to decide
+ * whether Layer 1 Fast Path may skip importing `dist/index.js`).
+ */
+export function computeBackendDiscoveryHash({ pkgRoot = defaultPkgRoot, clientPluginDirs = [] } = {}) {
+  const distPlugins = join(resolve(pkgRoot), 'dist');
+  const hash = createHash('sha256');
+  hash.update(`plugin-clients-discovery-schema:${SCHEMA_VERSION}\0`);
+  hashFileInto(hash, 'plugins/dist/index.js', join(distPlugins, 'index.js'));
+  hashFileInto(hash, 'plugins/dist/asset-paths.js', join(distPlugins, 'asset-paths.js'));
+  hashFileInto(hash, 'plugins/dist/contracts.js', join(distPlugins, 'contracts.js'));
+  for (const dirName of [...clientPluginDirs].sort(compareAscii)) {
+    hashFileInto(hash, `dist/${dirName}.js`, join(distPlugins, `${dirName}.js`));
+    hashDirectoryInto(hash, `dist/${dirName}`, join(distPlugins, dirName), {
+      skipTopLevelDirs: new Set(['client', PREBUILT_CLIENT_DIR_NAME]),
+      extensions: ['.js', '.mjs', '.cjs'],
+    });
+  }
+  return hash.digest('hex');
+}
+
+/**
+ * Computes a deterministic SHA-256 build fingerprint for a single built-in plugin's prebuilt client.
  */
 export function computePluginClientFingerprint({
   pkgRoot = defaultPkgRoot,
@@ -248,6 +301,7 @@ export function computePluginClientFingerprint({
   pluginId,
   refs,
   sharedInputsHash,
+  includeEntryServerJs = false,
 }) {
   const resolvedPkgRoot = resolve(pkgRoot);
   const srcPlugins = join(resolvedPkgRoot, 'src');
@@ -264,11 +318,9 @@ export function computePluginClientFingerprint({
   hash.update(`refs:${sortedRefs.length}\0${sortedRefs.join('\0')}\0`);
 
   hashDirectoryInto(hash, `src/${pluginDirName}/client`, join(srcPlugins, pluginDirName, 'client'));
-  hashFileInto(hash, `dist/${pluginDirName}.js`, join(distPlugins, `${pluginDirName}.js`));
-  hashDirectoryInto(hash, `dist/${pluginDirName}`, join(distPlugins, pluginDirName), {
-    skipTopLevelDirs: new Set(['client', PREBUILT_CLIENT_DIR_NAME]),
-    extensions: ['.js', '.mjs', '.cjs'],
-  });
+  if (includeEntryServerJs) {
+    hashFileInto(hash, `dist/${pluginDirName}.js`, join(distPlugins, `${pluginDirName}.js`));
+  }
 
   return hash.digest('hex');
 }
@@ -438,13 +490,14 @@ export async function copyAndPrebuildPluginClients(options = {}) {
 
   const priorCache = force ? { schemaVersion: SCHEMA_VERSION, plugins: {} } : readCacheFile(cacheFile);
   const sharedInputsHash = computeSharedInputsHash({ pkgRoot, repoRoot });
+  const backendDiscoveryHash = computeBackendDiscoveryHash({ pkgRoot, clientPluginDirs });
 
-  // Fast path: when all plugins in src/*/client have valid matching fingerprints and verified
-  // dist-client outputs (including dist/index.js and every dist/<name>.js unchanged), skip
-  // loading dist/index.js and @helmx/plugin-build (esbuild) altogether.
+  // Layer 1 (Fast Path): when backend discovery outputs and all client build fingerprints match,
+  // skip loading dist/index.js and @helmx/plugin-build (esbuild) altogether.
   if (
     !force &&
     options.pluginsModule === undefined &&
+    priorCache.backendDiscoveryHash === backendDiscoveryHash &&
     Array.isArray(priorCache.clientPluginDirs) &&
     priorCache.clientPluginDirs.length === clientPluginDirs.length &&
     priorCache.clientPluginDirs.every((dirName, idx) => dirName === clientPluginDirs[idx]) &&
@@ -465,6 +518,7 @@ export async function copyAndPrebuildPluginClients(options = {}) {
         pluginId: entry.pluginId,
         refs: entry.refs,
         sharedInputsHash,
+        includeEntryServerJs: entry.hasNpmDeps === true,
       });
       if (fp !== entry.fingerprint) {
         allFastHit = false;
@@ -498,7 +552,8 @@ export async function copyAndPrebuildPluginClients(options = {}) {
 
   const nextPluginsCache = {};
 
-  // Step 2: Load compiled plugin factories from dist/index.js and precompile only changed/invalid plugins.
+  // Layer 2 (Slow Path): load compiled plugin factories from dist/index.js, extract live refs,
+  // keep cache-hit plugins intact, and compile only changed/invalid plugins in parallel.
   const entryUrl = pathToFileURL(join(distPlugins, 'index.js')).href;
   const importUrl = options.importCacheBust ? `${entryUrl}?t=${encodeURIComponent(String(options.importCacheBust))}` : entryUrl;
   const pluginsMod = options.pluginsModule ?? (await import(importUrl));
@@ -506,6 +561,7 @@ export async function copyAndPrebuildPluginClients(options = {}) {
   const prebuiltDirs = new Set();
   const rebuilt = [];
   const cached = [];
+  const rebuildQueue = [];
   let totalModules = 0;
   let totalBytes = 0;
 
@@ -521,15 +577,19 @@ export async function copyAndPrebuildPluginClients(options = {}) {
 
     const pluginDirName = basename(dirname(initialDef.clientRoot));
     const outDir = join(distPlugins, pluginDirName, PREBUILT_CLIENT_DIR_NAME);
+    const cachedEntry = priorCache.plugins?.[pluginDirName];
+    const hasNpmDeps =
+      cachedEntry?.hasNpmDeps === true ||
+      Object.keys(initialDef.npmDependencies ?? {}).length > 0;
     const fingerprint = computePluginClientFingerprint({
       pkgRoot,
       pluginDirName,
       pluginId: initialDef.id,
       refs: initialRefs,
       sharedInputsHash,
+      includeEntryServerJs: hasNpmDeps,
     });
 
-    const cachedEntry = priorCache.plugins?.[pluginDirName];
     if (!force && cachedEntry && cachedEntry.fingerprint === fingerprint) {
       const check = verifyPrebuiltClientDir(
         outDir,
@@ -548,6 +608,7 @@ export async function copyAndPrebuildPluginClients(options = {}) {
           refs: initialRefs,
           fingerprint,
           fileSizes: check.fileSizes,
+          hasNpmDeps: cachedEntry.hasNpmDeps === true,
         };
         continue;
       }
@@ -561,54 +622,73 @@ export async function copyAndPrebuildPluginClients(options = {}) {
     if (!buildDef.clientRoot) {
       throw new Error(`[plugins] built-in plugin ${buildDef.id} (${exportName}) declared client refs without clientRoot`);
     }
-    const modules = [...new Set(buildRefs.map((r) => r.module))];
+    rebuildQueue.push({ pluginDirName, outDir, buildDef, buildRefs });
+  }
+
+  if (rebuildQueue.length > 0) {
     if (!buildBundle) {
       ({ buildPluginClientBundleDir: buildBundle } = await import('@helmx/plugin-build'));
     }
-    const built = await buildBundle({
-      pluginId: buildDef.id,
-      clientRoot: buildDef.clientRoot,
-      outDir,
-      modules,
-      npmRoots: clientNpmRootsOf(buildDef.npmDependencies),
-    });
+    const builtItems = await Promise.all(
+      rebuildQueue.map(async (item) => {
+        const { pluginDirName, outDir, buildDef, buildRefs } = item;
+        const modules = [...new Set(buildRefs.map((r) => r.module))];
+        const built = await buildBundle({
+          pluginId: buildDef.id,
+          clientRoot: buildDef.clientRoot,
+          outDir,
+          modules,
+          npmRoots: clientNpmRootsOf(buildDef.npmDependencies),
+        });
 
-    for (const ref of buildRefs) {
-      const entry = built.manifest.modules[ref.module];
-      if (!entry) {
-        throw new Error(`[plugins] prebuilt manifest missing ${ref.module} for ${buildDef.id}`);
-      }
-      if (!entry.exports.includes(ref.export)) {
-        throw new Error(
-          `[plugins] prebuilt module ${ref.module} for ${buildDef.id} is missing export "${ref.export}" (exports: ${entry.exports.join(', ')})`,
-        );
-      }
+        for (const ref of buildRefs) {
+          const entry = built.manifest.modules[ref.module];
+          if (!entry) {
+            throw new Error(`[plugins] prebuilt manifest missing ${ref.module} for ${buildDef.id}`);
+          }
+          if (!entry.exports.includes(ref.export)) {
+            throw new Error(
+              `[plugins] prebuilt module ${ref.module} for ${buildDef.id} is missing export "${ref.export}" (exports: ${entry.exports.join(', ')})`,
+            );
+          }
+        }
+
+        const postCheck = verifyPrebuiltClientDir(outDir, buildDef.id, buildRefs);
+        if (!postCheck.ok) {
+          throw new Error(`[plugins] prebuilt dist-client verification failed for ${buildDef.id}: ${postCheck.reason}`);
+        }
+
+        const finalHasNpmDeps = Object.keys(buildDef.npmDependencies ?? {}).length > 0;
+        const finalFingerprint = computePluginClientFingerprint({
+          pkgRoot,
+          pluginDirName,
+          pluginId: buildDef.id,
+          refs: buildRefs,
+          sharedInputsHash,
+          includeEntryServerJs: finalHasNpmDeps,
+        });
+        return { item, built, postCheck, finalFingerprint, finalHasNpmDeps, modules };
+      }),
+    );
+
+    for (const { item, built, postCheck, finalFingerprint, finalHasNpmDeps, modules } of builtItems) {
+      const { pluginDirName, buildDef, buildRefs } = item;
+      nextPluginsCache[pluginDirName] = {
+        pluginId: buildDef.id,
+        refs: buildRefs,
+        fingerprint: finalFingerprint,
+        fileSizes: postCheck.fileSizes,
+        hasNpmDeps: finalHasNpmDeps,
+      };
+      prebuiltDirs.add(pluginDirName);
+      rebuilt.push(pluginDirName);
+      totalModules += modules.length;
+      totalBytes += built.totalBytes;
     }
-
-    const postCheck = verifyPrebuiltClientDir(outDir, buildDef.id, buildRefs);
-    if (!postCheck.ok) {
-      throw new Error(`[plugins] prebuilt dist-client verification failed for ${buildDef.id}: ${postCheck.reason}`);
-    }
-
-    const finalFingerprint = computePluginClientFingerprint({
-      pkgRoot,
-      pluginDirName,
-      pluginId: buildDef.id,
-      refs: buildRefs,
-      sharedInputsHash,
-    });
-    nextPluginsCache[pluginDirName] = {
-      pluginId: buildDef.id,
-      refs: buildRefs,
-      fingerprint: finalFingerprint,
-      fileSizes: postCheck.fileSizes,
-    };
-
-    prebuiltDirs.add(pluginDirName);
-    rebuilt.push(pluginDirName);
-    totalModules += modules.length;
-    totalBytes += built.totalBytes;
   }
+
+  rebuilt.sort(compareAscii);
+  cached.sort(compareAscii);
 
   const missingPrebuilt = clientPluginDirs.filter(
     (dirName) => !prebuiltDirs.has(dirName) || !existsSync(join(distPlugins, dirName, PREBUILT_CLIENT_DIR_NAME, PREBUILT_CLIENT_MANIFEST_FILE)),
@@ -619,6 +699,7 @@ export async function copyAndPrebuildPluginClients(options = {}) {
 
   writeCacheFileAtomic(cacheFile, {
     schemaVersion: SCHEMA_VERSION,
+    backendDiscoveryHash,
     clientPluginDirs,
     plugins: nextPluginsCache,
   });

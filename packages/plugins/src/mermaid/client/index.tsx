@@ -1,7 +1,7 @@
 /** builtin:mermaid client component: on-demand ```mermaid code-block rendering with lazy fullscreen modal. */
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { Button, Callout, CopyButton, HelmxIcon, LoadingState, usePluginContext, usePluginTranslator } from '@helmx/plugin-client'
-import type { MarkdownCodeBlockProps } from '@helmx/protocol'
+import type { MarkdownCodeBlockProps } from '@helmx/protocol/browser'
 import { renderMermaidSvg } from './mermaid-loader.ts'
 import { MERMAID_COPY as C } from './copy.ts'
 import './styles.css'

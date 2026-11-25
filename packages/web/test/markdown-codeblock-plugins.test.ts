@@ -124,14 +124,14 @@ test('mermaid client 真实编译（受控 npm bundle）：模块可导入且不
   // 不挂载 __helmx_shared_mermaid：mermaid 经插件受控 npm 依赖自带，宿主零绑定
   ;(globalThis as Record<string, unknown>).__helmx_shared_mermaid = undefined
   const mod = await importCompiled(MERMAID_ROOT, 'builtin:mermaid', [
-    { specifiers: ['mermaid'], packageRoot: PLUGINS_ROOT },
+    { specifiers: ['mermaid/dist/mermaid.esm.min.mjs'], packageRoot: PLUGINS_ROOT },
   ])
   assert.equal(typeof mod['MermaidCodeBlock'], 'function', 'MermaidCodeBlock 导出为组件函数')
 })
 
 test('mermaid 编译器边界：未声明 npm 说明符显式拒绝（不留旁门）', { timeout: 120_000 }, async () => {
   const { HelmxError } = await import('@helmx/protocol')
-  // 直接以空 npmRoots 编译 mermaid client：import 'mermaid' 必须被拒绝
+  // 直接以空 npmRoots 编译 mermaid client：import 'mermaid/dist/mermaid.esm.min.mjs' 必须被拒绝
   await assert.rejects(
     compilePluginClientModule('builtin:mermaid', MERMAID_ROOT, 'index.tsx', CACHE),
     (err: unknown) => {

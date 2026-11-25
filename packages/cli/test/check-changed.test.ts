@@ -224,6 +224,7 @@ test('classifyChange: file classification and boundaries (scripts source trigger
   assert.deepEqual(classifyChange('scripts/check-changed.mjs'), { pkg: null, kind: 'root-trigger' })
   assert.deepEqual(classifyChange('scripts/lib/git-changes.mjs'), { pkg: null, kind: 'root-trigger' })
   assert.deepEqual(classifyChange('scripts/README-herdr-smoke.md'), { pkg: null, kind: 'outside' })
+  assert.deepEqual(classifyChange('tsconfig.build.json'), { pkg: null, kind: 'root-trigger' })
   assert.deepEqual(classifyChange('tsconfig.check.json'), { pkg: null, kind: 'root-trigger' })
   assert.deepEqual(classifyChange('tsconfig.dev.json'), { pkg: null, kind: 'root-trigger' })
   assert.deepEqual(classifyChange('.oxlintrc.json'), { pkg: null, kind: 'root-trigger' })

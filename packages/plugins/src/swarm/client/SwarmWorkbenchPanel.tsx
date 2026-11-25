@@ -2,7 +2,7 @@
  * builtin:swarm right workbench panel (single sequential board orchestration card, Fast Refresh compliant).
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { WorkbenchPanelProps } from '@helmx/protocol'
+import type { WorkbenchPanelProps } from '@helmx/protocol/browser'
 import {
   Badge, Button, Callout, Checkbox, Dialog, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle,
   EmptyState, HelmxIcon, IconButton, LoadingState, Stack, StatusLight, Tooltip, formatModelShortName, resolveLocalizedText,

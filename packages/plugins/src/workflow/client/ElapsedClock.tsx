@@ -12,7 +12,7 @@ import {
   usePluginLocale,
   useSharedNowMs,
 } from '@helmx/plugin-client'
-import type { WorkflowRunSummary } from '../../contracts.js'
+import type { WorkflowRunSummary } from '../../contracts-types.js'
 import {
   timingNodeTotalLine,
   timingSettledLine,

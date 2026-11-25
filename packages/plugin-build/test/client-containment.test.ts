@@ -579,6 +579,32 @@ test('transitive dependencies: allows declared package transitive chains (multi-
   )
 })
 
+test('symlink-free fast-path safety: authorized package containing a relative symlink escape still rejects out of bounds', { timeout: 60_000 }, async () => {
+  const outsideDir = join(workDir, 'pkg-rel-sym-outside')
+  mkdirSync(outsideDir, { recursive: true })
+  const outsideSecret = join(outsideDir, 'secret.js')
+  writeFileSync(outsideSecret, 'export const secret = "pkg-rel-sym-leaked"\n', 'utf8')
+
+  const pluginDir = join(workDir, 'pkg-rel-sym-plugin')
+  const clientRoot = join(pluginDir, 'client')
+  const nmDir = join(pluginDir, 'node_modules')
+  mkdirSync(clientRoot, { recursive: true })
+  mkdirSync(nmDir, { recursive: true })
+
+  const pkgDir = writeFakePkg(nmDir, 'sym-rel-pkg', {
+    'index.js': 'import { secret } from "./escaped.js"\nexport const out = secret\n',
+  })
+  symlinkSync(outsideSecret, join(pkgDir, 'escaped.js'))
+  writeFileSync(join(clientRoot, 'index.tsx'), `import { out } from 'sym-rel-pkg'\nexport const v = out\n`, 'utf8')
+
+  await assert.rejects(
+    compilePluginClientModule('test:pkg-rel-symlink-escape', clientRoot, 'index.tsx', join(workDir, 'cache'), {
+      npmRoots: [{ packageRoot: pluginDir, specifiers: ['sym-rel-pkg'] }],
+    }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_compile_failed' && /out of bounds/.test(err.message),
+  )
+})
+
 test('findPackageDirOf: resolves package root across normal/scoped/pnpm/sub-package.json layouts and returns null instead of fileReal or climbing past node_modules', { timeout: 60_000 }, () => {
   const repoDir = join(workDir, 'repo')
   const nmDir = join(repoDir, 'node_modules')

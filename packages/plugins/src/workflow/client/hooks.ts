@@ -12,7 +12,7 @@ import {
   usePluginSessionDocState,
   type PluginDocLoadStatus,
 } from '@helmx/plugin-client'
-import type { WorkflowRunSummary } from '../../contracts.js'
+import type { WorkflowRunSummary } from '../../contracts-types.js'
 import { libListInvalid } from './copy.js'
 import { asPlainRecord, parseSavedWorkflowList, type SavedWorkflowView } from './parsers.js'
 

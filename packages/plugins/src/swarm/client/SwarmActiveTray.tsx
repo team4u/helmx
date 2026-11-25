@@ -2,7 +2,7 @@
  * builtin:swarm composer activity tray (COMPOSER_DOCK_SLOT, coordinator-only, Fast Refresh compliant).
  */
 import { useMemo, useState, type ReactNode } from 'react'
-import type { ComposerScopeProps } from '@helmx/protocol'
+import type { ComposerScopeProps } from '@helmx/protocol/browser'
 import {
   Badge, Button, DockTray, DockTrayRow, Tooltip, resolveLocalizedText,
   useConversation, useConversations, usePluginContext, usePluginDoc, usePluginLocale, usePluginSessionDoc,

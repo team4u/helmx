@@ -27,7 +27,7 @@ function getRenderQueueState(): MermaidRenderQueueState {
   return state
 }
 
-const importDefaultMermaid: MermaidImporter = () => import('mermaid')
+const importDefaultMermaid: MermaidImporter = () => import('mermaid/dist/mermaid.esm.min.mjs')
 
 export function createMermaidLoader(importer: MermaidImporter = importDefaultMermaid): MermaidLoader {
   let currentAttempt: Promise<Mermaid> | null = null

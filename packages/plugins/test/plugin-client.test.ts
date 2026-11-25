@@ -846,11 +846,11 @@ test('代码分割与共享 Chunk：builtin:mermaid 主包不内联核心库且�
   const chunkEntries = Object.entries(chunks)
   assert.ok(chunkEntries.length > 0, 'mermaid 必须产出异步 chunks')
 
-  // 2. mermaid.core 与 flowDiagram / pieDiagram 异步 chunk 存在且体积受控
-  const coreEntry = chunkEntries.find(([name]) => name.includes('mermaid.core'))
+  // 2. mermaid.esm.min 与 flowDiagram / pieDiagram 异步 chunk 存在且体积受控
+  const coreEntry = chunkEntries.find(([name]) => name.includes('mermaid.esm.min'))
   const flowEntry = chunkEntries.find(([name]) => name.includes('flowDiagram'))
   const pieEntry = chunkEntries.find(([name]) => name.includes('pieDiagram'))
-  assert.ok(coreEntry, '产物中必须包含 mermaid.core 异步 chunk')
+  assert.ok(coreEntry, '产物中必须包含 mermaid.esm.min 异步 chunk')
   assert.ok(flowEntry, '产物中必须包含 flowDiagram 异步 chunk')
   assert.ok(pieEntry, '产物中必须包含 pieDiagram 异步 chunk')
 
@@ -911,9 +911,9 @@ test('端到端执行：编译产物在 Node 环境通过 __helmx_import_chunk �
     assert.equal(typeof loaderMod.loadMermaid, 'function', 'mermaid-loader.ts 必须导出 loadMermaid')
     assert.equal(loadedChunks.length, 0, '导入 mermaid-loader 不得提前触发 chunk 加载')
 
-    // 首次调用 loadMermaid() 才通过 __helmx_import_chunk 加载 mermaid.core 与共享 chunk
+    // 首次调用 loadMermaid() 才通过 __helmx_import_chunk 加载 mermaid.esm.min 与共享 chunk
     const mermaid = await loaderMod.loadMermaid()
-    assert.ok(loadedChunks.some((name) => name.includes('mermaid.core')), 'loadMermaid 必须按需触发 mermaid.core chunk 加载')
+    assert.ok(loadedChunks.some((name) => name.includes('mermaid.esm.min')), 'loadMermaid 必须按需触发 mermaid.esm.min chunk 加载')
 
     // 初始化并渲染 flowchart 与 pie 图表，触发按需加载图元 chunk
     mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' })
@@ -1884,7 +1884,7 @@ test('builtin:mermaid 构建产物在无 node_modules/mermaid、无 client/、�
   // Dev source factory uses clientRoot + npmDependencies (source live-compile track).
   const devDef = createMermaidPlugin()
   assert.equal(devDef.prebuiltClientDir, undefined)
-  assert.ok(devDef.clientRoot && devDef.npmDependencies?.mermaid)
+  assert.ok(devDef.clientRoot && devDef.npmDependencies?.['mermaid/dist/mermaid.esm.min.mjs'])
 
   const scratch = await mkdtemp(join(tmpdir(), 'helmx-mermaid-dist-iso-'))
   try {

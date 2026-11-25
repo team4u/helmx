@@ -72,21 +72,50 @@ export function resolvePackageManagerInvoke(env = process.env) {
 }
 
 /**
- * Run a single command and return its real exit code (0 means success).
+ * Run a single command and return detailed exit + optional captured output.
  * @param {ManagedCommand} command
- * @param {{ cwd: string, env?: NodeJS.ProcessEnv, timings?: KillTimings }} opts
- * @returns {Promise<number>}
+ * @param {{ cwd?: string, env?: NodeJS.ProcessEnv, timings?: KillTimings, capture?: boolean, signal?: AbortSignal, handleSignals?: boolean }} [opts]
+ * @returns {Promise<{ code: number, stdout: string, stderr: string, output: string }>}
  */
-export function runManagedCommand(command, { cwd, env, timings }) {
+export function runManagedCommandDetailed(command, opts = {}) {
+  const {
+    cwd = process.cwd(),
+    env,
+    timings,
+    capture = false,
+    signal,
+    handleSignals = true,
+  } = opts;
   const t = { ...DEFAULT_KILL_TIMINGS, ...timings };
+  if (signal?.aborted) {
+    return Promise.resolve({ code: 143, stdout: '', stderr: '', output: '' });
+  }
   return new Promise((resolve) => {
     const child = spawn(command.cmd, command.args, {
       cwd,
       env: env ?? process.env,
-      stdio: 'inherit',
+      stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
       detached: process.platform !== 'win32', // POSIX standalone process group so kill(-pid) takes down the whole group
     });
     const label = command.label;
+    /** @type {Buffer[]} */
+    const stdoutChunks = [];
+    /** @type {Buffer[]} */
+    const stderrChunks = [];
+    /** @type {Buffer[]} */
+    const combinedChunks = [];
+    if (capture) {
+      child.stdout?.on('data', (chunk) => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        stdoutChunks.push(buf);
+        combinedChunks.push(buf);
+      });
+      child.stderr?.on('data', (chunk) => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        stderrChunks.push(buf);
+        combinedChunks.push(buf);
+      });
+    }
 
     let terminating = false; // an external signal arrived; termination in progress
     let forcedExitCode = null;
@@ -123,10 +152,10 @@ export function runManagedCommand(command, { cwd, env, timings }) {
       }
     };
 
-    const killGroup = (signal) => {
+    const killGroup = (sig) => {
       if (process.platform === 'win32' || child.pid == null) return;
       try {
-        process.kill(-child.pid, signal);
+        process.kill(-child.pid, sig);
       } catch {
         // The group is already gone; nothing to do.
       }
@@ -161,25 +190,45 @@ export function runManagedCommand(command, { cwd, env, timings }) {
         });
       });
 
+    /** Poll the owned group until drained; settle only when the group fully disappears (POSIX); Windows settles on child exit. */
+    const startGroupWatch = () => {
+      if (pollTimer || finished) return;
+      pollTimer = setInterval(() => {
+        if (!groupAlive()) finish(forcedExitCode);
+      }, t.pollMs);
+    };
+
     const finish = (code) => {
       if (finished) return;
       finished = true;
       clearAllTimers();
-      process.removeListener('SIGINT', onSigint);
-      process.removeListener('SIGTERM', onSigterm);
+      if (handleSignals) {
+        process.removeListener('SIGINT', onSigint);
+        process.removeListener('SIGTERM', onSigterm);
+      }
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
       // In the last-resort fallback the child may still be alive: unref so a live handle
       // cannot pin the host process (the owned group already took SIGKILL; leftovers are
       // reaped by the OS).
       if (child.exitCode === null && child.signalCode === null) child.unref();
-      resolve(code);
+      resolve({
+        code,
+        stdout: capture ? Buffer.concat(stdoutChunks).toString('utf8') : '',
+        stderr: capture ? Buffer.concat(stderrChunks).toString('utf8') : '',
+        output: capture ? Buffer.concat(combinedChunks).toString('utf8') : '',
+      });
     };
 
-    /** External signal (Ctrl+C / SIGTERM): forward to the owned group, wait for the child's self-cleanup and group drain; repeated signals are idempotent. */
-    const onSignal = (signal) => {
+    /** External signal (Ctrl+C / SIGTERM / AbortSignal): forward to the owned group, wait for self-cleanup and drain; idempotent. */
+    const terminateTree = (sig, { log = true } = {}) => {
       if (finished || terminating) return;
       terminating = true;
-      forcedExitCode = signal === 'SIGINT' ? 130 : 143;
-      console.error(`[${label}] received ${signal}, terminating the child process tree (pid ${child.pid}) and waiting for its own cleanup to finish`);
+      forcedExitCode = sig === 'SIGINT' ? 130 : 143;
+      if (log) {
+        console.error(`[${label}] received ${sig}, terminating the child process tree (pid ${child.pid}) and waiting for its own cleanup to finish`);
+      }
       if (child.pid == null) {
         finish(forcedExitCode);
         return;
@@ -189,7 +238,7 @@ export function runManagedCommand(command, { cwd, env, timings }) {
           if (!finished) startGroupWatch();
         });
       } else {
-        killGroup(signal);
+        killGroup(sig);
         // Grant the supervisor child a generous self-cleanup window first (it may still need
         // to kill its own detached child group); escalate to SIGKILL only if it is still
         // alive past the window — never treat leader exit as the whole group stopping.
@@ -202,18 +251,17 @@ export function runManagedCommand(command, { cwd, env, timings }) {
         finish(forcedExitCode);
       }, t.lastResortMs);
     };
-    /** Poll the owned group until drained; settle only when the group fully disappears (POSIX); Windows settles on child exit. */
-    const startGroupWatch = () => {
-      if (pollTimer || finished) return;
-      pollTimer = setInterval(() => {
-        if (!groupAlive()) finish(forcedExitCode);
-      }, t.pollMs);
-    };
 
-    const onSigint = () => onSignal('SIGINT');
-    const onSigterm = () => onSignal('SIGTERM');
-    process.on('SIGINT', onSigint);
-    process.on('SIGTERM', onSigterm);
+    const onSigint = () => terminateTree('SIGINT');
+    const onSigterm = () => terminateTree('SIGTERM');
+    const onAbort = () => terminateTree('SIGTERM', { log: false });
+    if (handleSignals) {
+      process.on('SIGINT', onSigint);
+      process.on('SIGTERM', onSigterm);
+    }
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
 
     child.on('error', (err) => {
       if (finished) return;
@@ -221,17 +269,28 @@ export function runManagedCommand(command, { cwd, env, timings }) {
       finish(127);
     });
 
-    child.on('exit', (code, signal) => {
+    child.on('exit', (code, sig) => {
       if (finished) return;
       if (terminating) return; // the termination path is settled by the group-liveness poll; leader exit settles nothing and clears no timers
       if (code !== null) {
         finish(code);
         return;
       }
-      const signalExit = { SIGHUP: 129, SIGINT: 130, SIGQUIT: 131, SIGTERM: 143 }[signal] ?? 1;
+      const signalExit = { SIGHUP: 129, SIGINT: 130, SIGQUIT: 131, SIGTERM: 143 }[sig] ?? 1;
       finish(signalExit);
     });
   });
+}
+
+/**
+ * Run a single command and return its real exit code (0 means success).
+ * @param {ManagedCommand} command
+ * @param {{ cwd?: string, env?: NodeJS.ProcessEnv, timings?: KillTimings, signal?: AbortSignal, handleSignals?: boolean }} [opts]
+ * @returns {Promise<number>}
+ */
+export async function runManagedCommand(command, opts = {}) {
+  const res = await runManagedCommandDetailed(command, opts);
+  return res.code;
 }
 
 /**

@@ -51,6 +51,7 @@ interface CopyPluginClientsModule {
     argv?: string[]
     force?: boolean
     quiet?: boolean
+    importCacheBust?: number | string
     pluginsModule?: Record<string, unknown>
     buildBundle?: (options: BuildPluginClientBundleDirOptions) => Promise<BuildPluginClientBundleDirResult>
   }) => Promise<CopyPluginClientsResult>
@@ -101,7 +102,7 @@ interface PluginsFixture {
   pluginsRoot: string
   distDir: string
   cacheFile: string
-  pluginsModule: Record<string, unknown>
+  pluginsModule: Record<string, unknown> & { setBetaExport?: (next: string) => void }
 }
 
 /** Creates an isolated workspace fixture with two real TSX UI plugins (`alpha`, `beta`) + optional dynamic chunk. */
@@ -113,7 +114,10 @@ function createPluginsFixture(root: string, options: { withChunkInAlpha?: boolea
   writeFixtureFile(root, 'pnpm-lock.yaml', 'lockfileVersion: 9.0\n')
   writeFixtureFile(root, 'packages/plugin-build/dist/index.js', 'export const version = 1;\n')
   writeFixtureFile(root, 'packages/protocol/dist/index.js', 'export const protocolVersion = 1;\n')
-  writeFixtureFile(pluginsRoot, 'package.json', JSON.stringify({ name: '@helmx/plugins', version: '0.1.0' }))
+  writeFixtureFile(root, 'packages/protocol/dist/plugin-build.js', 'export const PLUGIN_CLIENT_CSS_EXPORT = "__helmxClientCss";\n')
+  writeFixtureFile(root, 'packages/protocol/dist/ui.js', 'export const UI = 1;\n')
+  writeFixtureFile(root, 'packages/protocol/dist/conversation.js', 'export const CONV = 1;\n')
+  writeFixtureFile(pluginsRoot, 'package.json', JSON.stringify({ name: '@helmx/plugins', version: '0.1.0', devDependencies: { esbuild: '0.28.2' } }))
   writeFixtureFile(pluginsRoot, 'dist/asset-paths.js', 'export const resolvePluginClientAssets = () => ({});\n')
   writeFixtureFile(pluginsRoot, 'dist/contracts.js', 'export const CONTRACTS = 1;\n')
   writeFixtureFile(pluginsRoot, 'dist/index.js', 'export const INDEX = 1;\n')
@@ -141,11 +145,15 @@ function createPluginsFixture(root: string, options: { withChunkInAlpha?: boolea
   writeFixtureFile(
     pluginsRoot,
     'src/beta/client/index.tsx',
-    'export function BetaView() { return "beta-v1"; }\n',
+    'export function BetaView() { return "beta-v1"; }\nexport function BetaViewAlt() { return "beta-alt"; }\n',
   )
 
   const alphaExport = options.withChunkInAlpha ? 'loadAlpha' : 'AlphaView'
-  const pluginsModule: Record<string, unknown> = {
+  let betaExport = 'BetaView'
+  const pluginsModule: Record<string, unknown> & { setBetaExport: (next: string) => void } = {
+    setBetaExport(next: string) {
+      betaExport = next
+    },
     createAlphaPlugin: () => ({
       id: 'builtin:alpha',
       clientRoot: path.join(distDir, 'alpha', 'client'),
@@ -162,7 +170,7 @@ function createPluginsFixture(root: string, options: { withChunkInAlpha?: boolea
       definePlugin(ctx: { ui: { screen: (spec: unknown) => void } }) {
         ctx.ui.screen({
           id: 'beta-screen',
-          client: { module: 'index.tsx', export: 'BetaView' },
+          client: { module: 'index.tsx', export: betaExport },
         })
       },
     }),
@@ -239,7 +247,7 @@ describe('copy-plugin-clients incremental fingerprint caching', () => {
       'updated source client file must be mirrored to dist/<name>/client',
     )
 
-    // 4. Edit ONLY beta compiled server file -> ONLY beta rebuilds; alpha stays cached
+    // 4. Edit ONLY beta compiled server file without changing refs -> non-npmDependencies plugin stays cached
     builtCalls.length = 0
     writeFixtureFile(fixture.pluginsRoot, 'dist/beta.js', 'export const betaServer = 2;\n')
     const afterBetaDistEdit = await copyAndPrebuildPluginClients({
@@ -251,14 +259,14 @@ describe('copy-plugin-clients incremental fingerprint caching', () => {
       env: {},
       quiet: true,
     })
-    assert.deepEqual(afterBetaDistEdit.rebuilt, ['beta'])
-    assert.deepEqual(afterBetaDistEdit.cached, ['alpha'])
-    assert.deepEqual(builtCalls, ['builtin:beta'])
+    assert.deepEqual(afterBetaDistEdit.rebuilt, [])
+    assert.deepEqual(afterBetaDistEdit.cached, ['alpha', 'beta'])
+    assert.deepEqual(builtCalls, [])
 
-    // 5. Edit shared workspace input (pnpm-lock.yaml) -> both plugins invalidate and rebuild
+    // 4b. Change ONLY beta's registered client ref in pluginsModule -> ONLY beta rebuilds; alpha stays cached
     builtCalls.length = 0
-    writeFixtureFile(fixture.root, 'pnpm-lock.yaml', 'lockfileVersion: 9.0\n# updated\n')
-    const afterLockEdit = await copyAndPrebuildPluginClients({
+    fixture.pluginsModule.setBetaExport?.('BetaViewAlt')
+    const afterBetaRefEdit = await copyAndPrebuildPluginClients({
       pkgRoot: fixture.pluginsRoot,
       repoRoot: fixture.root,
       cacheFile: fixture.cacheFile,
@@ -267,9 +275,53 @@ describe('copy-plugin-clients incremental fingerprint caching', () => {
       env: {},
       quiet: true,
     })
-    assert.deepEqual(afterLockEdit.rebuilt, ['alpha', 'beta'])
-    assert.deepEqual(afterLockEdit.cached, [])
-    assert.deepEqual(builtCalls, ['builtin:alpha', 'builtin:beta'])
+    assert.deepEqual(afterBetaRefEdit.rebuilt, ['beta'])
+    assert.deepEqual(afterBetaRefEdit.cached, ['alpha'])
+    assert.deepEqual(builtCalls, ['builtin:beta'])
+
+    // 5. Unrelated protocol DTOs and plugins/package.json version bumps do NOT invalidate plugins
+    builtCalls.length = 0
+    writeFixtureFile(fixture.root, 'packages/protocol/dist/conversation.js', 'export const CONV = 2;\n')
+    writeFixtureFile(fixture.root, 'packages/protocol/dist/plugin-build.d.ts', 'export const DTS = 2;\n')
+    writeFixtureFile(
+      fixture.pluginsRoot,
+      'package.json',
+      JSON.stringify({ name: '@helmx/plugins', version: '0.2.0', devDependencies: { esbuild: '0.28.2' } }),
+    )
+    const afterNoopSharedEdits = await copyAndPrebuildPluginClients({
+      pkgRoot: fixture.pluginsRoot,
+      repoRoot: fixture.root,
+      cacheFile: fixture.cacheFile,
+      pluginsModule: fixture.pluginsModule,
+      buildBundle: trackingBuild,
+      env: {},
+      quiet: true,
+    })
+    assert.deepEqual(afterNoopSharedEdits.rebuilt, [])
+    assert.deepEqual(afterNoopSharedEdits.cached, ['alpha', 'beta'])
+    assert.deepEqual(builtCalls, [])
+
+    // 6. Real shared build inputs (protocol/dist/plugin-build.js, package.json devDependencies, pnpm-lock.yaml) invalidate all
+    for (const mutate of [
+      () => writeFixtureFile(fixture.root, 'packages/protocol/dist/plugin-build.js', 'export const PLUGIN_CLIENT_CSS_EXPORT = "__helmxClientCssV2";\n'),
+      () => writeFixtureFile(fixture.pluginsRoot, 'package.json', JSON.stringify({ name: '@helmx/plugins', version: '0.2.0', devDependencies: { esbuild: '0.29.0' } })),
+      () => writeFixtureFile(fixture.root, 'pnpm-lock.yaml', 'lockfileVersion: 9.0\n# updated\n'),
+    ]) {
+      builtCalls.length = 0
+      mutate()
+      const afterSharedEdit = await copyAndPrebuildPluginClients({
+        pkgRoot: fixture.pluginsRoot,
+        repoRoot: fixture.root,
+        cacheFile: fixture.cacheFile,
+        pluginsModule: fixture.pluginsModule,
+        buildBundle: trackingBuild,
+        env: {},
+        quiet: true,
+      })
+      assert.deepEqual(afterSharedEdit.rebuilt, ['alpha', 'beta'])
+      assert.deepEqual(afterSharedEdit.cached, [])
+      assert.deepEqual(builtCalls, ['builtin:alpha', 'builtin:beta'])
+    }
   })
 
   test('missing, corrupted, or stray dist-client output files invalidate ONLY the affected plugin', { timeout: 60_000 }, async (t) => {
@@ -405,6 +457,21 @@ describe('copy-plugin-clients incremental fingerprint caching', () => {
     assert.deepEqual(afterEdit.cached, ['beta'])
     assert.deepEqual(observedNpmRootsOnBuild, [1, 1], 'cache miss must wipe dist-client before re-calling factory so npmDependencies attaches')
 
+    // 2b. Editing dist/alpha.js for an npmDependencies plugin (hasNpmDeps: true) STILL invalidates alpha
+    writeFixtureFile(fixture.pluginsRoot, 'dist/alpha.js', 'export const alphaServer = 2;\n')
+    const afterAlphaServerEdit = await copyAndPrebuildPluginClients({
+      pkgRoot: fixture.pluginsRoot,
+      repoRoot: fixture.root,
+      cacheFile: fixture.cacheFile,
+      pluginsModule: mermaidStyleModule,
+      buildBundle: trackingBuild,
+      env: {},
+      quiet: true,
+    })
+    assert.deepEqual(afterAlphaServerEdit.rebuilt, ['alpha'])
+    assert.deepEqual(afterAlphaServerEdit.cached, ['beta'])
+    assert.deepEqual(observedNpmRootsOnBuild, [1, 1, 1])
+
     // 3. HELMX_CLEAN_DIST=1 bypasses cache and rebuilds all plugins
     const afterEnvForce = await copyAndPrebuildPluginClients({
       pkgRoot: fixture.pluginsRoot,
@@ -417,7 +484,7 @@ describe('copy-plugin-clients incremental fingerprint caching', () => {
     })
     assert.deepEqual(afterEnvForce.rebuilt, ['alpha', 'beta'])
     assert.deepEqual(afterEnvForce.cached, [])
-    assert.deepEqual(observedNpmRootsOnBuild, [1, 1, 1])
+    assert.deepEqual(observedNpmRootsOnBuild, [1, 1, 1, 1])
 
     // 4. --force CLI flag bypasses cache and rebuilds all plugins
     const afterCliForce = await copyAndPrebuildPluginClients({
@@ -432,10 +499,10 @@ describe('copy-plugin-clients incremental fingerprint caching', () => {
     })
     assert.deepEqual(afterCliForce.rebuilt, ['alpha', 'beta'])
     assert.deepEqual(afterCliForce.cached, [])
-    assert.deepEqual(observedNpmRootsOnBuild, [1, 1, 1, 1])
+    assert.deepEqual(observedNpmRootsOnBuild, [1, 1, 1, 1, 1])
   })
 
-  test('real dist/index.js fast path skips module import on warm hit and invalidates when dist/index.js changes', { timeout: 60_000 }, async (t) => {
+  test('real dist/index.js two-layer path skips module import on warm hit, skips esbuild on comment-only dist/index.js edit, and rebuilds when ref changes', { timeout: 60_000 }, async (t) => {
     const { copyAndPrebuildPluginClients } = await copyClientsModPromise
     const root = useTempDir(t, 'helmx-copy-clients-fastpath-')
     const pluginsRoot = path.join(root, 'packages/plugins')
@@ -443,8 +510,14 @@ describe('copy-plugin-clients incremental fingerprint caching', () => {
     const cacheFile = path.join(root, 'node_modules/.cache/helmx-build/plugin-clients-fingerprint.json')
 
     writeFixtureFile(root, 'pnpm-lock.yaml', 'lockfileVersion: 9.0\n')
+    writeFixtureFile(root, 'packages/protocol/dist/plugin-build.js', 'export const CSS = 1;\n')
+    writeFixtureFile(root, 'packages/protocol/dist/ui.js', 'export const UI = 1;\n')
     writeFixtureFile(pluginsRoot, 'package.json', JSON.stringify({ name: '@helmx/plugins', version: '0.1.0', type: 'module' }))
-    writeFixtureFile(pluginsRoot, 'src/solo/client/index.tsx', 'export function SoloView() { return "solo-v1"; }\n')
+    writeFixtureFile(
+      pluginsRoot,
+      'src/solo/client/index.tsx',
+      'export function SoloView() { return "solo-v1"; }\nexport function SoloView2() { return "solo-v2"; }\n',
+    )
     writeFixtureFile(pluginsRoot, 'dist/solo.js', 'export const soloServer = 1;\n')
     writeFixtureFile(
       pluginsRoot,
@@ -464,43 +537,78 @@ export function createSoloPlugin() {
 `,
     )
 
+    const builtCalls: string[] = []
+    const trackingBuild = async (opts: BuildPluginClientBundleDirOptions) => {
+      builtCalls.push(opts.pluginId)
+      return buildPluginClientBundleDir(opts)
+    }
+
     // 1. Cold run loads real dist/index.js and builds solo
     const cold = await copyAndPrebuildPluginClients({
       pkgRoot: pluginsRoot,
       repoRoot: root,
       cacheFile,
+      buildBundle: trackingBuild,
       env: {},
       quiet: true,
     })
     assert.deepEqual(cold.rebuilt, ['solo'])
     assert.deepEqual(cold.cached, [])
+    assert.deepEqual(builtCalls, ['builtin:solo'])
 
-    // 2. Warm run hits fast path without even loading dist/index.js
+    // 2. Warm run hits Layer 1 fast path without loading dist/index.js
+    builtCalls.length = 0
     const warm = await copyAndPrebuildPluginClients({
       pkgRoot: pluginsRoot,
       repoRoot: root,
       cacheFile,
+      buildBundle: trackingBuild,
       env: {},
       quiet: true,
     })
     assert.deepEqual(warm.rebuilt, [])
     assert.deepEqual(warm.cached, ['solo'])
+    assert.deepEqual(builtCalls, [])
 
-    // 3. Edit dist/index.js -> invalidates fast path and rebuilds solo
+    // 3. Comment-only edit to dist/index.js exits Layer 1 fast path, extracts identical refs, and skips esbuild
+    builtCalls.length = 0
     writeFixtureFile(
       pluginsRoot,
       'dist/index.js',
       `${readFileSync(path.join(distDir, 'index.js'), 'utf8')}\n// entry touched\n`,
     )
-    const afterIndexEdit = await copyAndPrebuildPluginClients({
+    const afterCommentEdit = await copyAndPrebuildPluginClients({
       pkgRoot: pluginsRoot,
       repoRoot: root,
       cacheFile,
+      buildBundle: trackingBuild,
+      importCacheBust: 1,
       env: {},
       quiet: true,
     })
-    assert.deepEqual(afterIndexEdit.rebuilt, ['solo'])
-    assert.deepEqual(afterIndexEdit.cached, [])
+    assert.deepEqual(afterCommentEdit.rebuilt, [])
+    assert.deepEqual(afterCommentEdit.cached, ['solo'])
+    assert.deepEqual(builtCalls, [])
+
+    // 4. Changing client ref inside dist/index.js triggers real rebuild
+    builtCalls.length = 0
+    writeFixtureFile(
+      pluginsRoot,
+      'dist/index.js',
+      readFileSync(path.join(distDir, 'index.js'), 'utf8').replace("'SoloView'", "'SoloView2'"),
+    )
+    const afterRefChange = await copyAndPrebuildPluginClients({
+      pkgRoot: pluginsRoot,
+      repoRoot: root,
+      cacheFile,
+      buildBundle: trackingBuild,
+      importCacheBust: 2,
+      env: {},
+      quiet: true,
+    })
+    assert.deepEqual(afterRefChange.rebuilt, ['solo'])
+    assert.deepEqual(afterRefChange.cached, [])
+    assert.deepEqual(builtCalls, ['builtin:solo'])
   })
 
   test('deleting a plugin client directory prunes stale dist/<deleted>/client, dist-client, and orphan plugin dirs in both clean-dist and copy-plugin-clients', { timeout: 60_000 }, async (t) => {

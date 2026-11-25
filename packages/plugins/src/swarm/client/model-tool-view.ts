@@ -1,7 +1,7 @@
 /**
  * Pure derivation for builtin:swarm tool-call timeline rows (Fast Refresh compliant).
  */
-import type { ToolViewProps } from '@helmx/protocol'
+import type { ToolViewProps } from '@helmx/protocol/browser'
 import { isPlainObject, type BoardPostKind } from './board-model.ts'
 
 const isPosInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0

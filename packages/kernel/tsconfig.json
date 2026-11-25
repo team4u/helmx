@@ -1,6 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "composite": true,
     "rootDir": "src",
     "outDir": "dist",
     "incremental": true,
@@ -8,5 +9,9 @@
   },
   "include": [
     "src/**/*.ts"
+  ],
+  "references": [
+    { "path": "../protocol" },
+    { "path": "../env-io" }
   ]
 }

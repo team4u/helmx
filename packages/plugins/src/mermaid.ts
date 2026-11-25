@@ -31,7 +31,7 @@ export function createMermaidPlugin(): PluginDefinition {
     version: '0.1.0',
     ...assets,
     // Prebuilt dist-client bundles mermaid into static chunks; runtime npmDependencies is only needed in source-compile mode.
-    ...(assets.prebuiltClientDir === undefined ? { npmDependencies: { mermaid: resolvePluginsPackageRoot() } } : {}),
+    ...(assets.prebuiltClientDir === undefined ? { npmDependencies: { 'mermaid/dist/mermaid.esm.min.mjs': resolvePluginsPackageRoot() } } : {}),
     definePlugin(ctx) {
       ctx.ui.markdownCodeBlock({
         id: 'mermaid-diagram',

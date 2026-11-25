@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ComposerScopeProps } from '@helmx/protocol'
+import type { ComposerScopeProps } from '@helmx/protocol/browser'
 import {
   Badge,
   Button,
@@ -21,7 +21,7 @@ import {
   usePluginLocale,
   useSharedNowMs,
 } from '@helmx/plugin-client'
-import type { WorkflowRunSummary } from '../../contracts.js'
+import type { WorkflowRunSummary } from '../../contracts-types.js'
 import {
   COPY,
   actionFailedNotice,

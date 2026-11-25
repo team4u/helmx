@@ -1,5 +1,5 @@
 /** builtin:token-speed public contracts, constants, and boundary event guards. */
-import { isJsonObject, type ConversationLiveMessage } from '@helmx/protocol'
+import { isJsonObject, type ConversationLiveMessage } from '@helmx/protocol/browser'
 
 export const TOKEN_SPEED_PLUGIN_ID = 'builtin:token-speed'
 export const TOKEN_SPEED_DOC = 'speed'

@@ -1,8 +1,8 @@
 /**
  * Shared public-doc constants & types for builtin:swarm client components (Fast Refresh compliant).
  */
-import type { ConversationSummary } from '@helmx/protocol'
-import type { CollabGroupSummary, SwarmWorkerPointer } from '../contracts.js'
+import type { ConversationSummary } from '@helmx/protocol/browser'
+import type { CollabGroupSummary, SwarmWorkerPointer } from '../contracts-types.js'
 
 export const SWARM_WORKBENCH_PANEL_ID = 'groups' as const
 

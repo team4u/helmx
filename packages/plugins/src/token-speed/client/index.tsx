@@ -1,6 +1,6 @@
 /** builtin:token-speed composer status badge (Fast Refresh compliant). */
 import type { ReactNode } from 'react'
-import type { ComposerScopeProps } from '@helmx/protocol'
+import type { ComposerScopeProps } from '@helmx/protocol/browser'
 import { usePluginLocale, usePluginSessionDoc } from '@helmx/plugin-client'
 import type { TokenSpeedStatus } from '../contracts.js'
 import { tokenSpeedLabelOf } from './label.ts'

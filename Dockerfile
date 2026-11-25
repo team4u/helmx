@@ -35,17 +35,7 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
 #    (@helmx/env-io carries the shared update engine consumed by @helmx/node; the CLI's local Hub
 #    lifecycle surface lives in packages/cli/src/launcher).
 COPY . .
-RUN pnpm --filter @helmx/protocol \
-         --filter @helmx/env-io \
-         --filter @helmx/node \
-         --filter @helmx/plugin-build \
-         --filter @helmx/plugin-client \
-         --filter @helmx/kernel \
-         --filter @helmx/plugins \
-         --filter @helmx/hub \
-         --filter @helmx/web \
-         --filter @helmx/cli \
-         run build
+RUN node scripts/build.mjs --skip-payload
 
 # 3. Runtime environment configuration
 ENV NODE_ENV=production \

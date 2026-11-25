@@ -9,8 +9,8 @@ import {
   resolveLocalizedText,
   type HelmxLocale,
 } from '@helmx/plugin-client'
-import type { AskSpec, ConversationLive, ConversationSummary, ToolViewProps } from '@helmx/protocol'
-import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
+import type { AskSpec, ConversationLive, ConversationSummary, ToolViewProps } from '@helmx/protocol/browser'
+import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts-types.js'
 import {
   COPY,
   STATUS_COPY,

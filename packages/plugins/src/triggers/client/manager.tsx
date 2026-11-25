@@ -11,7 +11,7 @@
 import { useMemo, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
-import type { ConversationSummary, ScreenProps } from '@helmx/protocol'
+import type { ConversationSummary, ScreenProps } from '@helmx/protocol/browser'
 import {
   Badge,
   Button,

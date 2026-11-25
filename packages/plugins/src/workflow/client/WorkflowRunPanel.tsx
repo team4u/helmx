@@ -5,7 +5,7 @@
  */
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { WorkbenchPanelProps } from '@helmx/protocol'
+import type { WorkbenchPanelProps } from '@helmx/protocol/browser'
 import {
   Badge,
   Button,
@@ -29,7 +29,7 @@ import {
   usePluginContext,
   usePluginLocale,
 } from '@helmx/plugin-client'
-import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
+import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts-types.js'
 import {
   COPY,
   actionFailedNotice,

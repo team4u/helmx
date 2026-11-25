@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ProfileDetailSlotProps } from '@helmx/protocol'
+import type { ProfileDetailSlotProps } from '@helmx/protocol/browser'
 import {
   Button,
   ErrorText,

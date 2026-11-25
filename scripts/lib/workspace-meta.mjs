@@ -22,6 +22,7 @@ export const FULL_TIER_TRIGGERS = new Set([
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
   'tsconfig.base.json',
+  'tsconfig.build.json',
   'tsconfig.check.json',
   'tsconfig.dev.json',
   '.oxlintrc.json',

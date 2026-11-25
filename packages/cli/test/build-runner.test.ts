@@ -44,6 +44,12 @@ import {
   resolveTestConcurrency,
   withDefaultTestConcurrency,
 } from '../../../scripts/lib/test-concurrency.mjs'
+import {
+  BuildArgError,
+  buildUsageText,
+  parseBuildArgs,
+  planBuildStages,
+} from '../../../scripts/build.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
@@ -745,4 +751,52 @@ test('test-suites: any pass-through extraArgs falls back to native tsx --test in
     !res.stderr.includes('concurrent shards'),
     `expected native single-runner fallback when extraArgs is non-empty; stderr=${res.stderr}`,
   )
+})
+
+test('scripts/build.mjs: parseBuildArgs & planBuildStages cover full, --skip-payload, --for-typecheck, --unit-deps, --force, and CLI exit 2', { timeout: 60_000 }, () => {
+  assert.deepEqual(parseBuildArgs([], {}), { mode: 'full', force: false, quiet: false })
+  assert.deepEqual(parseBuildArgs(['--', '--skip-payload', '-f', '-q'], {}), {
+    mode: 'skip-payload',
+    force: true,
+    quiet: true,
+  })
+  assert.deepEqual(parseBuildArgs([], { HELMX_CLEAN_DIST: '1' }), { mode: 'full', force: true, quiet: false })
+  assert.throws(() => parseBuildArgs(['--skip-payload', '--unit-deps'], {}), BuildArgError)
+  assert.throws(() => parseBuildArgs(['--bogus'], {}), BuildArgError)
+
+  const fullPlan = planBuildStages({ repoRoot, execPath: '/node', tscBin: '/tsc.js', mode: 'full', force: true })
+  assert.deepEqual(fullPlan.cleanPackages, ['protocol', 'env-io', 'node', 'plugin-build', 'kernel', 'plugins', 'hub', 'cli'])
+  assert.deepEqual(fullPlan.tscCommand.args, ['/tsc.js', '-b', 'tsconfig.build.json', '--force'])
+  assert.ok(fullPlan.webCommand && fullPlan.webCommand.args.includes('--force'))
+  assert.equal(fullPlan.postTscCommands.length, 3)
+  assert.ok(fullPlan.payloadCommand && fullPlan.payloadCommand.args.includes('--force'))
+
+  const skipPayloadPlan = planBuildStages({ repoRoot, execPath: '/node', tscBin: '/tsc.js', mode: 'skip-payload' })
+  assert.equal(skipPayloadPlan.payloadCommand, null)
+  assert.ok(skipPayloadPlan.webCommand)
+  assert.equal(skipPayloadPlan.postTscCommands.length, 3)
+
+  const typecheckPlan = planBuildStages({ repoRoot, execPath: '/node', tscBin: '/tsc.js', mode: 'for-typecheck' })
+  assert.deepEqual(typecheckPlan.cleanPackages, ['protocol', 'env-io', 'node', 'plugin-build', 'kernel', 'plugins', 'hub'])
+  assert.equal(typecheckPlan.cleanPackages.includes('cli'), false, 'for-typecheck must not touch cli/dist/sdk-types-snapshot.js')
+  assert.deepEqual(typecheckPlan.tscCommand.args, ['/tsc.js', '-b', 'packages/hub', 'packages/node'])
+  assert.equal(typecheckPlan.webCommand, null)
+  assert.equal(typecheckPlan.postTscCommands.length, 1)
+  assert.equal(typecheckPlan.payloadCommand, null)
+
+  const unitPlan = planBuildStages({ repoRoot, execPath: '/node', tscBin: '/tsc.js', mode: 'unit-deps' })
+  assert.deepEqual(unitPlan.cleanPackages, ['protocol', 'env-io', 'plugin-build'])
+  assert.deepEqual(unitPlan.tscCommand.args, ['/tsc.js', '-b', 'packages/plugin-build'])
+  assert.equal(unitPlan.webCommand, null)
+  assert.equal(unitPlan.postTscCommands.length, 0)
+  assert.equal(unitPlan.payloadCommand, null)
+
+  const cliErr = spawnSync(process.execPath, [path.join(repoRoot, 'scripts', 'build.mjs'), '--unknown-flag'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    timeout: 60_000,
+  })
+  assert.equal(cliErr.status, 2)
+  assert.ok(cliErr.stderr.includes('Unknown argument'))
+  assert.ok(buildUsageText().includes('--for-typecheck'))
 })

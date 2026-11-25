@@ -22,7 +22,7 @@ import {
   usePluginContext,
   usePluginLocale,
 } from '@helmx/plugin-client'
-import type { WorkflowNodeState, WorkflowRunSummary, WorktreeExecutionDescriptor } from '../../contracts.js'
+import type { WorkflowNodeState, WorkflowRunSummary, WorktreeExecutionDescriptor } from '../../contracts-types.js'
 import {
   COPY,
   actionFailedNotice,

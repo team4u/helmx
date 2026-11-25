@@ -1,12 +1,12 @@
 /**
  * Pure domain models and strict boundary parsers for builtin:swarm client surfaces (Fast Refresh compliant).
  */
-import type { LocalizedText, TimelineRendererProps } from '@helmx/protocol'
+import type { LocalizedText, TimelineRendererProps } from '@helmx/protocol/browser'
 import type {
   BoardPost, BoardPostKind, BoardViewDoc, BoardViewHeadline, BoardViewMember,
   CollabGroupStatus, CollabGroupSummary, GroupMemberState, MemberLiveState, RetainedWorktreeInfo,
   WorkerAccess, WorkerIsolation, WorktreeHandoffSnapshot,
-} from '../contracts.js'
+} from '../contracts-types.js'
 import type { SwarmIndexDoc } from './models.ts'
 
 export type {

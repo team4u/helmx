@@ -4,7 +4,7 @@
  * - `containmentPlugin`: enforces `clientRoot` and controlled-npm realpath containment at resolve & load time;
  * - `cssPolicyPlugin` & `appendCssExport`: enforces safe CSS asset/import rules and exports merged CSS via `__helmxClientCss`.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import {
   PLUGIN_CLIENT_CSS_EXPORT,
@@ -92,6 +92,7 @@ interface ContainmentBuildCache {
   readonly packageDirOf: Map<string, string | null>;
   readonly packageJson: Map<string, Record<string, unknown> | null>;
   readonly regularFile: Map<string, boolean>;
+  readonly cleanSymlinkFreePkg: Map<string, boolean>;
 }
 
 function createContainmentBuildCache(): ContainmentBuildCache {
@@ -100,6 +101,7 @@ function createContainmentBuildCache(): ContainmentBuildCache {
     packageDirOf: new Map(),
     packageJson: new Map(),
     regularFile: new Map(),
+    cleanSymlinkFreePkg: new Map(),
   };
 }
 
@@ -137,6 +139,41 @@ function cachedIsRegularFile(cache: ContainmentBuildCache, filePath: string): bo
   const ok = isRegularFile(filePath);
   cache.regularFile.set(filePath, ok);
   return ok;
+}
+
+function isSymlinkFreePackageDir(pkgReal: string): boolean {
+  const stack: string[] = [pkgReal];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const ent of entries) {
+      if (ent.isSymbolicLink()) return false;
+      if (ent.isDirectory()) {
+        if (ent.name === 'node_modules') continue;
+        stack.push(join(dir, ent.name));
+      }
+    }
+  }
+  return true;
+}
+
+function cachedIsSymlinkFreePkg(cache: ContainmentBuildCache, pkgReal: string): boolean {
+  const cached = cache.cleanSymlinkFreePkg.get(pkgReal);
+  if (cached !== undefined) return cached;
+  const clean = isSymlinkFreePackageDir(pkgReal);
+  cache.cleanSymlinkFreePkg.set(pkgReal, clean);
+  return clean;
+}
+
+function isSimplePackageInternalRelative(spec: string): boolean {
+  if (!spec.startsWith('./') && !spec.startsWith('.\\')) return false;
+  const parts = spec.split(/[\\/]/);
+  return !parts.includes('..') && !parts.includes('node_modules');
 }
 
 function splitNpmSpecifier(spec: string): { pkg: string; sub: string } {
@@ -362,6 +399,20 @@ export function containmentPlugin(
         const importerNpmDir = importerReal !== null ? authorizedNpmDirOf(importerReal) : null;
 
         if (isRelativeSpecifier(args.path)) {
+          // Equivalent pruning: when an authorized package directory contains zero symlinks
+          // (outside nested node_modules) and the import is a simple `./...` path without
+          // `..` or `node_modules` segments, esbuild's native resolver cannot escape `importerNpmDir`.
+          if (
+            importerNpmDir !== null &&
+            args.resolveDir !== '' &&
+            isSimplePackageInternalRelative(args.path) &&
+            cachedIsSymlinkFreePkg(cache, importerNpmDir)
+          ) {
+            const resolveDirReal = cachedRealpath(cache, args.resolveDir);
+            if (resolveDirReal !== null && isInsideClientSource(importerNpmDir, resolveDirReal)) {
+              return null;
+            }
+          }
           const resolved = await resolveInternal(b, args);
           if (resolved.errors.length > 0 || !resolved.path) return null;
           if (resolved.external || (resolved.namespace !== '' && resolved.namespace !== 'file') || !isAbsolute(resolved.path)) {

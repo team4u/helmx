@@ -1,6 +1,6 @@
 /** Dedicated full-screen management entrypoint for builtin:tiers (`TiersManagerScreen`). */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { ScreenProps } from '@helmx/protocol'
+import type { ScreenProps } from '@helmx/protocol/browser'
 import {
   Badge,
   Button,
