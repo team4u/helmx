@@ -73,11 +73,6 @@ export interface ComposerInputShellProps {
   menuCommands?: ReadonlyArray<QualifiedCommand>
   menuCommandsDisabled?: boolean
   onRunMenuCommand?: (cmd: QualifiedCommand) => void
-  /** Persisted-conversation session management actions rendered in the `+` menu. */
-  onCompactContext?: () => void
-  compactDisabled?: boolean
-  onClearContext?: () => void
-  onNewTopic?: () => void
   slashOpen: boolean
   popoverQuery: string
   slashMenuItems: SlashMenuItem[]
@@ -124,10 +119,6 @@ export function ComposerInputShell({
   menuCommands,
   menuCommandsDisabled = false,
   onRunMenuCommand,
-  onCompactContext,
-  compactDisabled = false,
-  onClearContext,
-  onNewTopic,
   slashOpen,
   popoverQuery,
   slashMenuItems,
@@ -145,13 +136,10 @@ export function ComposerInputShell({
 }: ComposerInputShellProps): React.JSX.Element {
   const { locale, t } = useWebLocale()
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
-  const navPickedRef = useRef(false)
   const [plusMenuOpen, setPlusMenuOpen] = useState(false)
   const closePlusMenu = useCallback(() => setPlusMenuOpen(false), [])
   const hasToolsSection =
     renderMenuSlot !== undefined || (menuCommands !== undefined && menuCommands.length > 0)
-  const hasSessionSection =
-    onCompactContext !== undefined || onClearContext !== undefined || onNewTopic !== undefined
 
   return (
     <div className="composer-shell">
@@ -230,13 +218,7 @@ export function ComposerInputShell({
           />
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
-              <DropdownMenuRoot
-                open={plusMenuOpen}
-                onOpenChange={(open) => {
-                  if (open) navPickedRef.current = false
-                  setPlusMenuOpen(open)
-                }}
-              >
+              <DropdownMenuRoot open={plusMenuOpen} onOpenChange={setPlusMenuOpen}>
                 <DropdownMenuTrigger asChild>
                   <IconButton
                     icon={<HelmxIcon name="plus" size={18} />}
@@ -254,12 +236,6 @@ export function ComposerInputShell({
                   side="top"
                   sideOffset={8}
                   className="composer-plus-menu"
-                  onCloseAutoFocus={(e) => {
-                    if (navPickedRef.current) {
-                      navPickedRef.current = false
-                      e.preventDefault()
-                    }
-                  }}
                 >
                   <DropdownMenuItem
                     className="composer-plus-menu-item"
@@ -293,45 +269,6 @@ export function ComposerInputShell({
                           ) : null}
                         </DropdownMenuItem>
                       ))}
-                    </div>
-                  ) : null}
-                  {hasSessionSection ? (
-                    <div className="composer-plus-menu-group">
-                      <DropdownMenuSeparator />
-                      {onCompactContext !== undefined ? (
-                        <DropdownMenuItem
-                          className="composer-plus-menu-item"
-                          disabled={compactDisabled}
-                          onSelect={onCompactContext}
-                        >
-                          <HelmxIcon name="minimize-2" size={14} className="composer-plus-menu-icon" />
-                          <span className="composer-plus-menu-label">{t('composer.plusMenu.compact')}</span>
-                          <span className="composer-plus-menu-hint mono">/compact</span>
-                        </DropdownMenuItem>
-                      ) : null}
-                      {onClearContext !== undefined ? (
-                        <DropdownMenuItem
-                          className="composer-plus-menu-item"
-                          onSelect={onClearContext}
-                        >
-                          <HelmxIcon name="rotate-ccw" size={14} className="composer-plus-menu-icon" />
-                          <span className="composer-plus-menu-label">{t('composer.plusMenu.clear')}</span>
-                          <span className="composer-plus-menu-hint mono">/clear</span>
-                        </DropdownMenuItem>
-                      ) : null}
-                      {onNewTopic !== undefined ? (
-                        <DropdownMenuItem
-                          className="composer-plus-menu-item"
-                          onSelect={() => {
-                            navPickedRef.current = true
-                            onNewTopic()
-                          }}
-                        >
-                          <HelmxIcon name="message-square" size={14} className="composer-plus-menu-icon" />
-                          <span className="composer-plus-menu-label">{t('composer.plusMenu.newTopic')}</span>
-                          <span className="composer-plus-menu-hint mono">/new</span>
-                        </DropdownMenuItem>
-                      ) : null}
                     </div>
                   ) : null}
                 </DropdownMenuContent>
