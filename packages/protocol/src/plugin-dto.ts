@@ -365,20 +365,31 @@ export interface PluginToolTextBlock {
 }
 
 /**
- * Explicit tool result envelope separating the three outbound tool channels:
+ * Post-tool round control directives passed through `PluginToolResultEnvelope.control`
+ * (excludes SDK-internal `addTools`).
+ */
+export interface PluginToolControl {
+  handoff?: string
+  terminate?: boolean
+}
+
+/**
+ * Explicit tool result envelope separating the outbound tool channels:
  * - `output`: text delivered to the model (32 KiB spill boundary);
  * - `structuredOutput`: machine-readable value for programmatic/nested callers (validated against
  *   `structuredOutputSchema`; never auto-mirrored into persisted `details`);
  * - `presentationMeta`: bounded, redacted plain JSON object persisted to `pi.tool-result.model[0].details`
  *   for UI/timeline replay (validated against `presentationMetaSchema` + 64 KiB / depth 12 / 2000 nodes;
  *   never enters model prompt or context usage);
- * - `isError`: explicit error flag.
+ * - `isError`: explicit error flag;
+ * - `control`: optional post-tool round control directives (`handoff`, `terminate`; disallowed with `isError: true`).
  */
 export interface PluginToolResultEnvelope {
   output?: string | PluginToolTextBlock[]
   structuredOutput?: unknown
   presentationMeta?: Record<string, unknown>
   isError?: boolean
+  control?: PluginToolControl
 }
 
 /**

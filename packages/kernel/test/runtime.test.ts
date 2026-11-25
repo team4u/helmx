@@ -1461,6 +1461,198 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
     }
   })
 
+  it('plugin tool updateConversation + control.handoff: appends visible pi.reset, continues immediately on secondModel without extra submitInput, and updates contextUsage & lastEntryId', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'p2-control-handoff')
+    const { models, faux } = makeFauxModels({
+      models: [
+        { id: 'faux-1', contextWindow: 100_000 },
+        { id: 'faux-2', contextWindow: 200_000 },
+      ],
+    })
+    const kernel = await KernelRuntime.open({
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/faux-1',
+      models,
+    })
+    const disposeSecret = kernel.stash.addRedaction('HANDOFF_SECRET_TOKEN')
+    try {
+      const settled: TurnSettledPayload[] = []
+      await kernel.plugins.register({
+        id: 'test:handoff',
+        definePlugin(ctx) {
+          ctx.hook.onTurnSettled((payload) => {
+            settled.push(payload)
+          })
+          ctx.tool<{ targetModel: string; handoff: string; appendSecret?: boolean; terminate?: boolean }>({
+            name: 'switch_and_handoff',
+            description: 'switch conversation model and handoff context',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                targetModel: { type: 'string' },
+                handoff: { type: 'string' },
+                appendSecret: { type: 'boolean' },
+                terminate: { type: 'boolean' },
+              },
+              required: ['targetModel', 'handoff'],
+            },
+            async execute(input, toolCtx) {
+              await ctx.host.updateConversation(toolCtx.conversationId, { model: input.targetModel })
+              const handoff = input.appendSecret ? `${input.handoff} HANDOFF_SECRET_TOKEN` : input.handoff
+              return {
+                output: 'model switched; handing off',
+                control: {
+                  handoff,
+                  ...(input.terminate !== undefined ? { terminate: input.terminate } : {}),
+                },
+              }
+            },
+          })
+        },
+      })
+      kernel.refreshPluginTools()
+
+      const conv = await kernel.conversations.createConversation({ title: 'handoff e2e' })
+      const cid = conv.id
+      assert.equal(conv.model, 'faux/faux-1')
+
+      // Turn 1: build substantial prior history so post-reset contextUsage token drop is unambiguous.
+      faux.setResponses([fauxAssistantMessage('prior history acknowledged')])
+      await kernel.conversations.submitInput(cid, 'prior context '.repeat(400))
+      await kernel.conversations.waitForIdle(cid)
+      await waitFor(
+        () => {
+          const u = kernel.conversations.getConversation(cid).contextUsage
+          return u?.contextWindow === 100_000 && (u.tokens ?? 0) > 1_000
+        },
+        5_000,
+      )
+      const tokensBeforeHandoff = kernel.conversations.getConversation(cid).contextUsage?.tokens ?? 0
+      assert.ok(tokensBeforeHandoff > 1_000, `expected substantial pre-reset tokens, got ${tokensBeforeHandoff}`)
+      const detailAfterTurn1 = await kernel.conversations.getConversationDetail(cid, { limit: 50 })
+      const lastEntryIdTurn1 = Number(detailAfterTurn1.entries.at(-1)!.id)
+
+      // Turn 2: tool updates model to faux/faux-2 and returns control.handoff (single submitInput only!).
+      const requestedModels: string[] = []
+      let secondGenMessages: Array<{ role?: string; content?: unknown }> = []
+      faux.setResponses([
+        (_context, _opts, _state, model) => {
+          requestedModels.push(`${model.provider}/${model.id}`)
+          return fauxAssistantMessage(
+            [
+              fauxToolCall('switch_and_handoff', {
+                targetModel: 'faux/faux-2',
+                handoff: 'clean handoff with',
+                appendSecret: true,
+              }),
+            ],
+            { stopReason: 'toolUse' },
+          )
+        },
+        (context, _opts, _state, model) => {
+          requestedModels.push(`${model.provider}/${model.id}`)
+          secondGenMessages = context.messages.map((m) => ({
+            role: m.role,
+            content: 'content' in m ? m.content : undefined,
+          }))
+          return fauxAssistantMessage('executed on secondModel')
+        },
+      ])
+
+      await kernel.conversations.submitInput(cid, 'plan and switch to second model')
+      await kernel.conversations.waitForIdle(cid)
+
+      assert.deepEqual(requestedModels, ['faux/faux-1', 'faux/faux-2'])
+      assert.equal(settled.length, 2, 'handoff continuation stays within the same turn (1 settlement for turn 2)')
+      assert.equal(settled[1]?.outcome, 'completed')
+
+      // Verify the immediate next GenerationTask saw the reset context (only system + redacted handoff user message).
+      const nonSystemSecondGen = secondGenMessages.filter((m) => m.role !== 'system')
+      assert.equal(nonSystemSecondGen.length, 1)
+      assert.equal(nonSystemSecondGen[0]?.role, 'user')
+      assert.equal(nonSystemSecondGen[0]?.content, 'clean handoff with [REDACTED]')
+
+      const detailAfterHandoff = await kernel.conversations.getConversationDetail(cid, { limit: 50 })
+      const toolResultIndex = detailAfterHandoff.entries.findIndex((e) => e.kind === 'pi.tool-result')
+      const resetIndex = detailAfterHandoff.entries.findIndex((e, idx) => idx > toolResultIndex && e.kind === 'pi.reset')
+      const secondReplyIndex = detailAfterHandoff.entries.findIndex((e, idx) => idx > resetIndex && e.kind === 'pi.assistant')
+      assert.ok(toolResultIndex >= 0, 'should record pi.tool-result')
+      assert.ok(resetIndex > toolResultIndex, 'same turn must append visible pi.reset after tool result')
+      assert.ok(secondReplyIndex > resetIndex, 'next GenerationTask must append pi.assistant after pi.reset')
+
+      const resetEntry = detailAfterHandoff.entries[resetIndex]!
+      assert.deepEqual(
+        (resetEntry.model?.[0] as { role?: string; content?: unknown } | undefined)?.role,
+        'user',
+      )
+      assert.equal(
+        (resetEntry.model?.[0] as { content?: unknown } | undefined)?.content,
+        'clean handoff with [REDACTED]',
+      )
+      assert.equal(JSON.stringify(detailAfterHandoff.entries).includes('HANDOFF_SECRET_TOKEN'), false)
+
+      const secondAssistantMsg = detailAfterHandoff.entries[secondReplyIndex]!.model?.[0] as
+        | { provider?: string; model?: string }
+        | undefined
+      assert.equal(secondAssistantMsg?.provider, 'faux')
+      assert.equal(secondAssistantMsg?.model, 'faux-2')
+      assert.equal(await kernel.conversations.getLastAssistantText(cid), 'executed on secondModel')
+
+      const updatedSummary = kernel.conversations.getConversation(cid)
+      assert.equal(updatedSummary.model, 'faux/faux-2')
+      assert.equal(updatedSummary.completionSeq, 2)
+
+      const expectedLastEntryIdTurn2 = Number(detailAfterHandoff.entries.at(-1)!.id)
+      assert.ok(expectedLastEntryIdTurn2 > Number(resetEntry.id) && Number(resetEntry.id) > lastEntryIdTurn1)
+      await waitFor(() => kernel.conversations.getConversation(cid).lastEntryId === expectedLastEntryIdTurn2, 5_000)
+
+      await waitFor(
+        () => {
+          const usage = kernel.conversations.getConversation(cid).contextUsage
+          return (
+            usage?.contextWindow === 200_000 &&
+            typeof usage.tokens === 'number' &&
+            usage.tokens > 0 &&
+            usage.tokens < tokensBeforeHandoff
+          )
+        },
+        5_000,
+      )
+
+      // Turn 3: control: { handoff, terminate: true } appends visible pi.reset and ends round without extra model call.
+      const callsBeforeTerminate = faux.state.callCount
+      faux.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall('switch_and_handoff', {
+              targetModel: 'faux/faux-1',
+              handoff: 'terminal handoff note',
+              terminate: true,
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('must never be called'),
+      ])
+      await kernel.conversations.submitInput(cid, 'terminate after handoff')
+      await kernel.conversations.waitForIdle(cid)
+
+      assert.equal(faux.state.callCount, callsBeforeTerminate + 1, 'terminate: true must end run without another model request')
+      assert.equal(settled.length, 3)
+      assert.equal(settled[2]?.outcome, 'completed')
+      const detailAfterTerminate = await kernel.conversations.getConversationDetail(cid, { limit: 50 })
+      const tailEntry = detailAfterTerminate.entries.at(-1)!
+      assert.equal(tailEntry.kind, 'pi.reset')
+      assert.equal((tailEntry.model?.[0] as { content?: unknown } | undefined)?.content, 'terminal handoff note')
+      await waitFor(() => kernel.conversations.getConversation(cid).lastEntryId === Number(tailEntry.id), 5_000)
+      await waitFor(() => kernel.conversations.getConversation(cid).contextUsage?.contextWindow === 100_000, 5_000)
+    } finally {
+      disposeSecret()
+      await kernel.close()
+    }
+  })
+
   it('turn_settled hook receives exact inputs (asserting id/origin/text item-by-item)', { timeout: 60_000 }, async () => {
     const dir = join(root, 'p3')
     const kernel = await openRuntime(dir)

@@ -12,6 +12,7 @@ import {
   safeResultText,
   validateOrThrow,
   type JsonSchema,
+  type PluginToolControl,
   type PluginToolTextBlock,
 } from '@helmx/protocol'
 
@@ -55,6 +56,9 @@ const USAGE_KEYS = new Set<string>([...USAGE_REQUIRED_NUMBER_KEYS, ...USAGE_OPTI
 const USAGE_COST_REQUIRED_NUMBER_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const
 const USAGE_COST_KEYS = new Set<string>([...USAGE_COST_REQUIRED_NUMBER_KEYS, 'totalFromProvider'])
 const CONTROL_KEYS = new Set(['addTools', 'terminate', 'handoff'])
+const PLUGIN_TOOL_CONTROL_KEYS = new Set(['handoff', 'terminate'])
+const PLUGIN_TOOL_CONTROL_HANDOFF_MAX_BYTES = 128 * 1024
+const utf8Encoder = new TextEncoder()
 
 function formatToolWhere(options?: { toolName?: string; callId?: string }): string {
   return options?.toolName !== undefined
@@ -218,6 +222,44 @@ function validateControlField(
   return safe as NonNullable<ToolExecutionResult['control']>
 }
 
+function validatePluginToolControl(
+  raw: unknown,
+  redact: (text: string) => string,
+  where: string,
+): PluginToolControl {
+  const safe = assertJsonSafe(raw, {
+    label: where,
+    path: 'control',
+    requirePlainObject: true,
+    redact,
+    code: 'invalid_tool_result',
+    status: 500,
+  })
+  assertOnlyAllowedKeys(safe, PLUGIN_TOOL_CONTROL_KEYS, where, 'control')
+  if ('handoff' in safe) {
+    const handoff = safe['handoff']
+    if (typeof handoff !== 'string') {
+      throw new HelmxError('invalid_tool_result', `${where} control.handoff must be a string`, 500)
+    }
+    if (handoff.trim() === '') {
+      throw new HelmxError('invalid_tool_result', `${where} control.handoff must be a non-empty string`, 500)
+    }
+    const bytes = utf8Encoder.encode(handoff).byteLength
+    if (bytes > PLUGIN_TOOL_CONTROL_HANDOFF_MAX_BYTES) {
+      throw new HelmxError(
+        'invalid_tool_result',
+        `${where} control.handoff exceeds max byte size (${bytes} > ${PLUGIN_TOOL_CONTROL_HANDOFF_MAX_BYTES} bytes)`,
+        500,
+        { maxBytes: PLUGIN_TOOL_CONTROL_HANDOFF_MAX_BYTES, actualBytes: bytes },
+      )
+    }
+  }
+  if ('terminate' in safe && typeof safe['terminate'] !== 'boolean') {
+    throw new HelmxError('invalid_tool_result', `${where} control.terminate must be a boolean`, 500)
+  }
+  return safe as PluginToolControl
+}
+
 function validateAndRedactStructuredOutput(
   raw: unknown,
   redact: (text: string) => string,
@@ -309,15 +351,21 @@ function normalizeTextBlocks(
 
 /**
  * Envelope predicate for structured plugin tool results: must contain at least one of `output`,
- * `structuredOutput`, `presentationMeta`, or `isError`, and every present envelope field must have a valid type;
- * malformed envelope fields (or legacy `details` inside an envelope) fail explicitly rather than falling back silently.
+ * `structuredOutput`, `presentationMeta`, `isError`, or `control`, and every present envelope field must have a
+ * valid type; malformed envelope fields (or legacy `details` inside an envelope) fail explicitly rather than
+ * falling back silently.
  */
 function envelopeProblem(raw: Record<string, unknown>): { isEnvelope: boolean; problem?: string } {
   const hasOutput = raw['output'] !== undefined
   const hasStructured = raw['structuredOutput'] !== undefined
   const hasPresentationMeta = raw['presentationMeta'] !== undefined
   const hasError = raw['isError'] !== undefined
-  if (!hasOutput && !hasStructured && !hasPresentationMeta && !hasError) return { isEnvelope: false }
+  const controlDesc = Object.getOwnPropertyDescriptor(raw, 'control')
+  const controlAccessorOrHidden =
+    controlDesc !== undefined &&
+    (!controlDesc.enumerable || controlDesc.get !== undefined || controlDesc.set !== undefined)
+  const hasControl = controlAccessorOrHidden || (controlDesc !== undefined && controlDesc.value !== undefined)
+  if (!hasOutput && !hasStructured && !hasPresentationMeta && !hasError && !hasControl) return { isEnvelope: false }
   if (hasOutput && typeof raw['output'] !== 'string' && !Array.isArray(raw['output'])) {
     return { isEnvelope: true, problem: "output must be a string or an array of { type: 'text', text }" }
   }
@@ -326,6 +374,12 @@ function envelopeProblem(raw: Record<string, unknown>): { isEnvelope: boolean; p
   }
   if (hasPresentationMeta && !isPlainObject(raw['presentationMeta'])) {
     return { isEnvelope: true, problem: 'presentationMeta must be a plain JSON object' }
+  }
+  if (controlAccessorOrHidden) {
+    return { isEnvelope: true, problem: 'control must be an enumerable plain data property' }
+  }
+  if (hasControl && !isPlainObject(controlDesc?.value)) {
+    return { isEnvelope: true, problem: 'control must be a plain JSON object' }
   }
   if (raw['details'] !== undefined) {
     return {
@@ -338,9 +392,10 @@ function envelopeProblem(raw: Record<string, unknown>): { isEnvelope: boolean; p
 
 /**
  * Normalize raw plugin `ctx.tool` return value -> SDK `ToolExecutionResult`:
- * - Explicitly separates the three outbound channels: `output` (model text), `structuredOutput` (programmatic
- *   result validated synchronously against `structuredOutputSchema`; never auto-mirrored into `details`), and
- *   `presentationMeta` (redacted, bounded, schema-validated plain object written to `details` for UI replay);
+ * - Explicitly separates the outbound channels: `output` (model text), `structuredOutput` (programmatic
+ *   result validated synchronously against `structuredOutputSchema`; never auto-mirrored into `details`),
+ *   `presentationMeta` (redacted, bounded, schema-validated plain object written to `details` for UI replay),
+ *   and `control` (bounded, redacted round control directives `{ handoff, terminate }`, disallowed with `isError: true`);
  * - Returning `structuredOutput` without `structuredOutputSchema`, or `presentationMeta` without
  *   `presentationMetaSchema`, or violating schema/bounds fails explicitly (`invalid_tool_result`, never truncates);
  * - Non-envelope plain values serialize via `safeResultText` into a single text block.
@@ -354,6 +409,7 @@ export function pluginToolResult(
   structuredOutput?: unknown
   details?: Record<string, unknown>
   isError?: boolean
+  control?: PluginToolControl
 } {
   const where = formatToolWhere(options)
   if (isPlainObject(raw)) {
@@ -362,6 +418,7 @@ export function pluginToolResult(
       structuredOutput?: unknown
       presentationMeta?: unknown
       isError?: unknown
+      control?: unknown
     }
     const verdict = envelopeProblem(raw)
     if (verdict.isEnvelope) {
@@ -378,6 +435,7 @@ export function pluginToolResult(
         structuredOutput?: unknown
         details?: Record<string, unknown>
         isError?: boolean
+        control?: PluginToolControl
       } = { output }
 
       if (env.structuredOutput !== undefined) {
@@ -393,6 +451,16 @@ export function pluginToolResult(
           requireSchema: true,
           where,
         })
+      }
+      if (env.control !== undefined) {
+        if (env.isError === true) {
+          throw new HelmxError(
+            'invalid_tool_result',
+            `${where} control cannot be combined with isError: true`,
+            500,
+          )
+        }
+        result.control = validatePluginToolControl(env.control, redact, where)
       }
       if (env.isError === true) result.isError = true
       return result

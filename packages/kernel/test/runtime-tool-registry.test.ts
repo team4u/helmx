@@ -9,6 +9,7 @@ import {
   TOOL_PRESENTATION_META_MAX_DEPTH,
   TOOL_PRESENTATION_META_MAX_NODES,
   type ActionManifest,
+  type PluginToolControl,
   type PluginToolResultEnvelope,
 } from '@helmx/protocol'
 import {
@@ -1202,5 +1203,175 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       )
     }
     assert.equal(getterOrToJsonInvoked, false, 'getters and toJSON disguises must never be invoked during guard')
+  })
+
+  it('pluginToolResult & HookBridge.afterTool: validates, redacts, and passes through PluginToolResultEnvelope.control while rejecting invalid/forbidden payloads', { timeout: 60_000 }, async () => {
+    const redact = (s: string) => s.replaceAll('SECRET', '[REDACTED]')
+
+    // 1. Valid control shapes (including control-only envelope, terminate boolean, exact 128 KiB handoff, and redaction)
+    const validControl: PluginToolControl = { handoff: 'resume with SECRET', terminate: true }
+    const envelope: PluginToolResultEnvelope = {
+      output: 'switching model SECRET',
+      control: validControl,
+    }
+    const fullRes = pluginToolResult(envelope, redact, { toolName: 'plan_propose', callId: 'c1' })
+    assert.deepEqual(fullRes, {
+      output: [{ type: 'text', text: 'switching model [REDACTED]' }],
+      control: { handoff: 'resume with [REDACTED]', terminate: true },
+    })
+
+    const controlOnlyRes = pluginToolResult({ control: { handoff: 'only handoff SECRET' } }, redact, { toolName: 'plan_propose' })
+    assert.deepEqual(controlOnlyRes, {
+      output: [],
+      control: { handoff: 'only handoff [REDACTED]' },
+    })
+
+    const falseErrorAndTerminate = pluginToolResult(
+      { output: 'ok', isError: false, control: { terminate: false } },
+      redact,
+      { toolName: 'plan_propose' },
+    )
+    assert.deepEqual(falseErrorAndTerminate, {
+      output: [{ type: 'text', text: 'ok' }],
+      control: { terminate: false },
+    })
+
+    const maxBytes = 128 * 1024
+    const exactBoundary = pluginToolResult({ output: 'ok', control: { handoff: 'a'.repeat(maxBytes) } }, redact)
+    assert.equal(exactBoundary.control?.handoff?.length, maxBytes)
+
+    // 2. Invalid control shapes and disallowed combinations must all throw HelmxError('invalid_tool_result') without invoking getters.
+    let getterInvoked = false
+    const getterControl: Record<string, unknown> = {}
+    Object.defineProperty(getterControl, 'handoff', {
+      get() {
+        getterInvoked = true
+        return 'forged'
+      },
+      enumerable: true,
+    })
+    const setterControl: Record<string, unknown> = {}
+    Object.defineProperty(setterControl, 'terminate', {
+      set() {
+        getterInvoked = true
+      },
+      enumerable: true,
+    })
+    const nonEnumControl: Record<string, unknown> = { handoff: 'ok' }
+    Object.defineProperty(nonEnumControl, 'hidden', { value: 1, enumerable: false })
+    const symbolControl: Record<PropertyKey, unknown> = { handoff: 'ok', [Symbol('k')]: 1 }
+    const outerAccessorEnvelope: Record<string, unknown> = { output: 'ok' }
+    Object.defineProperty(outerAccessorEnvelope, 'control', {
+      get() {
+        getterInvoked = true
+        return { handoff: 'forged' }
+      },
+      enumerable: true,
+    })
+    const outerNonEnumEnvelope: Record<string, unknown> = { output: 'ok' }
+    Object.defineProperty(outerNonEnumEnvelope, 'control', { value: { handoff: 'ok' }, enumerable: false })
+
+    const invalidCases: Array<{ label: string; payload: unknown }> = [
+      { label: 'empty handoff string', payload: { output: 'ok', control: { handoff: '' } } },
+      { label: 'whitespace-only handoff string', payload: { output: 'ok', control: { handoff: '  \n\t ' } } },
+      { label: 'handoff reduced to empty after redact', payload: { output: 'ok', control: { handoff: 'EMPTY_AFTER_REDACT' } } },
+      { label: 'non-string handoff', payload: { output: 'ok', control: { handoff: 123 } } },
+      { label: 'ASCII handoff > 128 KiB', payload: { output: 'ok', control: { handoff: 'a'.repeat(maxBytes + 1) } } },
+      { label: 'UTF-8 multibyte handoff > 128 KiB', payload: { output: 'ok', control: { handoff: '中'.repeat(43_691) } } },
+      { label: 'non-boolean terminate', payload: { output: 'ok', control: { terminate: 'true' } } },
+      { label: 'rejected addTools', payload: { output: 'ok', control: { addTools: ['bash'] } } },
+      { label: 'rejected unknown key', payload: { output: 'ok', control: { handoff: 'ok', extra: 1 } } },
+      { label: 'rejected secret unknown key', payload: { output: 'ok', control: { SECRET_KEY: 1 } } },
+      { label: 'prototype key __proto__', payload: JSON.parse('{"output":"ok","control":{"handoff":"ok","__proto__":1}}') },
+      { label: 'prototype key constructor', payload: { output: 'ok', control: { constructor: {} } } },
+      { label: 'prototype key prototype', payload: { output: 'ok', control: { prototype: {} } } },
+      { label: 'non-enumerable property on control', payload: { output: 'ok', control: nonEnumControl } },
+      { label: 'accessor getter on control', payload: { output: 'ok', control: getterControl } },
+      { label: 'accessor setter on control', payload: { output: 'ok', control: setterControl } },
+      { label: 'symbol own key on control', payload: { output: 'ok', control: symbolControl } },
+      { label: 'undefined value inside control', payload: { output: 'ok', control: { handoff: 'ok', terminate: undefined } } },
+      { label: 'non-plain control null', payload: { output: 'ok', control: null } },
+      { label: 'non-plain control array', payload: { output: 'ok', control: ['handoff'] } },
+      { label: 'non-plain control Date', payload: { output: 'ok', control: new Date() } },
+      { label: 'outer envelope getter for control', payload: outerAccessorEnvelope },
+      { label: 'outer envelope non-enumerable control', payload: outerNonEnumEnvelope },
+      { label: 'isError: true + control.handoff', payload: { output: 'err', isError: true, control: { handoff: 'next' } } },
+      { label: 'isError: true + control.terminate', payload: { output: 'err', isError: true, control: { terminate: true } } },
+      { label: 'isError: true + empty control', payload: { isError: true, control: {} } },
+    ]
+
+    const testRedact = (s: string) => redact(s).replaceAll('EMPTY_AFTER_REDACT', '   ')
+    for (const c of invalidCases) {
+      assert.throws(
+        () => pluginToolResult(c.payload, testRedact, { toolName: 'plan_propose', callId: 'c-bad' }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmxError, `${c.label}: expected HelmxError, got ${String(err)}`)
+          assert.equal(err.code, 'invalid_tool_result', `${c.label}: expected invalid_tool_result, got ${err.code}`)
+          assert.equal(err.status, 500, `${c.label}: expected status 500`)
+          assert.equal(err.message.includes('SECRET'), false, `${c.label}: error message leaked secret: ${err.message}`)
+          return true
+        },
+        `${c.label}: must throw invalid_tool_result`,
+      )
+    }
+    assert.equal(getterInvoked, false, 'control getters/setters must never be invoked')
+
+    // 3. actionToolResult remains unchanged (no control passthrough on derived exposeAsTool actions).
+    const actionRes = actionToolResult(
+      { ok: true, control: { handoff: 'ignored-business-field', terminate: true } },
+      {},
+      redact,
+      { structuredOutputSchema: { type: 'object' }, toolName: 'biz_action' },
+    )
+    assert.equal('control' in actionRes, false)
+
+    // 4. HookBridge.afterTool & prepareToolResultWith seamlessly pass pluginToolResult's control through.
+    let installedExt: Extension | undefined
+    const artifacts = {
+      spill: async (_convId: number, _id: string, text: string) => ({ text }),
+    }
+    const bridge = new HookBridge({
+      registry: { install(ext: Extension) { installedExt = ext } },
+      pluginHost: () =>
+        ({
+          listTools: () => [
+            {
+              name: 'plan_propose',
+              description: 'plan',
+              inputSchema: { type: 'object' },
+              sourcePluginId: 'builtin:plan',
+              sourceKind: 'tool' as const,
+            },
+          ],
+          listActions: () => [],
+          runHook: async () => ({ action: 'continue' }),
+          runHookAround: async (_name: string, payload: unknown, next: (p: unknown) => Promise<unknown>) => next(payload),
+        }) as unknown as PluginHost,
+      prepareToolResult: (convId, res, opts) => prepareToolResultWith(artifacts, redact, convId, res, opts),
+      safeSummary: () => undefined,
+      currentRunInputs: () => [],
+      redact,
+      artifacts,
+    })
+    bridge.install()
+
+    const toolHook = (installedExt!.hooks![0] as unknown as {
+      handlers: {
+        afterTool: (
+          call: { id: string; name: string; arguments: Record<string, unknown> },
+          result: Record<string, unknown>,
+          api: { conversationId: number },
+        ) => Promise<Record<string, unknown>>
+      }
+    }).handlers
+
+    const bridged = await toolHook.afterTool(
+      { id: 'c-bridge', name: 'plan_propose', arguments: {} },
+      fullRes as unknown as Record<string, unknown>,
+      { conversationId: 1 },
+    )
+    assert.equal(bridged['isError'], undefined)
+    assert.deepEqual(bridged['output'], [{ type: 'text', text: 'switching model [REDACTED]' }])
+    assert.deepEqual(bridged['control'], { handoff: 'resume with [REDACTED]', terminate: true })
   })
 })
