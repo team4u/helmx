@@ -18,7 +18,7 @@ import { ComposerInputShell, type ComposerAttachmentItem } from './ComposerInput
 import { ComposerSendControls } from './ComposerSendControls.js'
 import { ModelPicker } from './ModelPicker.js'
 import { SessionEnvBar } from './SessionEnvBar.js'
-import { useComposerController } from './composer-controller.js'
+import { useComposerController, useFocusComposerShortcut } from './composer-controller.js'
 import {
   busyEnterMode,
   canConfigureSessionEnv,
@@ -50,6 +50,9 @@ export interface ComposerProps {
   onSendingChange?: (sending: boolean) => void
   /** /new 新话题入口：进入本智能体待命页（首次发送才落库）；宿主传入面板位置明确的导航回调。 */
   onNewThread?: () => void
+  isSplit?: boolean
+  staged?: boolean
+  isDrawer?: boolean
 }
 
 function ContextUsageStatus({ conversation }: { conversation: ConversationSummary }) {
@@ -81,13 +84,29 @@ function ConversationDurationStatus({ conversation }: { conversation: Conversati
   )
 }
 
-export const Composer = memo(function Composer({ conversation, prefill, onSendingChange, onNewThread }: ComposerProps) {
+export const Composer = memo(function Composer({
+  conversation,
+  prefill,
+  onSendingChange,
+  onNewThread,
+  isSplit = false,
+  staged = true,
+  isDrawer = false,
+}: ComposerProps) {
   const externalStore = useHelmxExternalStore()
   const detail = useConversationDetail(conversation.id)
   const groupedUi = useGroupedUi()
   const { profiles } = useProfilesSlice()
   const { locale, t } = useWebLocale()
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  useFocusComposerShortcut({
+    textareaRef,
+    panel: isSplit ? 'split' : 'primary',
+    staged,
+    isDrawer,
+    conversationId: conversation.id,
+  })
 
   const compacting = conversation.contextUsage?.compacting === true
   const working = conversation.status === 'working' || conversation.status === 'blocked' || compacting

@@ -772,7 +772,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         onRequestStarter={requestStarter}
       />
 
-      <Composer key={`composer-${conversation.id}`} conversation={conversation} prefill={prefill} onSendingChange={setSendingInFlight} onNewThread={startNewThread} />
+      <Composer key={`composer-${conversation.id}`} conversation={conversation} prefill={prefill} onSendingChange={setSendingInFlight} onNewThread={startNewThread} isSplit={isSplit} staged={staged} isDrawer={isDrawer} />
 
       <ConfirmDialog
         open={confirmAction === 'reset'}

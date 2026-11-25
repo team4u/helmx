@@ -63,6 +63,23 @@ export function buildPaletteContextCommands(input: {
   if (activeTarget.kind === 'conversation' || activeTarget.kind === 'agent') {
     list.push({
       kind: 'command',
+      id: 'builtin:focus-composer',
+      group: 'context',
+      title: t('modals.palette.cmd.focusComposer'),
+      shortcut: formatModShortcut('I'),
+      icon: 'message-square',
+      keywords: ['focus', 'composer', 'input', 'chat', 'message', '聚焦', '输入', '对话框'],
+      run: () => {
+        const detail: HelmxShortcutDetail = { action: 'focus-composer', panel: activePanel }
+        const dispatch = (): void => {
+          window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
+        }
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(dispatch)
+        else setTimeout(dispatch, 0)
+      },
+    })
+    list.push({
+      kind: 'command',
       id: 'builtin:toggle-model-picker',
       group: 'context',
       title: t('modals.palette.cmd.toggleModelPicker'),

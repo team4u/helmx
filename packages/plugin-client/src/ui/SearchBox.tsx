@@ -15,7 +15,7 @@
  *
  * This file only exports components and TS types (Fast Refresh friendly).
  */
-import { useCallback, useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from 'react'
+import { useCallback, useContext, useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import { HelmxIcon } from '../icons.js'
 import { usePluginTranslator } from '../i18n.js'
 import { uiCopy } from '../ui-copy.js'
@@ -24,6 +24,7 @@ import {
   isShortcutPanelMatch,
   type HelmxShortcutEventDetail,
 } from './model-picker-model.js'
+import { ScreenToolbarContext } from './screen-toolbar-context.js'
 
 export type SearchBoxVariant = 'default' | 'toolbar'
 
@@ -108,7 +109,8 @@ export interface SearchBoxProps {
   onCleared?: () => void
   /**
    * Opt in/out of host `/` focus (`helmx:shortcut` `focus-search`) and built-in
-   * `Escape` clear-then-blur keyboard behavior. Defaults to `variant === 'toolbar'`.
+   * `Escape` clear-then-blur keyboard behavior. Defaults to `variant === 'toolbar'`
+   * or when rendered inside a `ScreenToolbar`.
    */
   enableSlashFocus?: boolean
 }
@@ -116,6 +118,7 @@ export interface SearchBoxProps {
 /** Unified search input shell over the host container-class vocabulary; state stays with the caller. */
 export function SearchBox(props: SearchBoxProps): ReactNode {
   const t = usePluginTranslator()
+  const inScreenToolbar = useContext(ScreenToolbarContext)
   const {
     value,
     onChange,
@@ -136,7 +139,7 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
     onCleared,
     enableSlashFocus,
   } = props
-  const slashFocusEnabled = enableSlashFocus ?? variant === 'toolbar'
+  const slashFocusEnabled = enableSlashFocus ?? (variant === 'toolbar' || inScreenToolbar)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const internalInputRef = useRef<HTMLInputElement | null>(null)
   const mergedInputRef = useCallback(

@@ -118,6 +118,7 @@ function SidebarNewTopicButton({
   onSelectProfile: (profileId: string) => void
 }): ReactNode {
   const { t } = useWebLocale()
+  const pickedRef = useRef(false)
   if (candidates.length === 0) return null
 
   const standbyPresence = resolveSidebarTargetPresence(store, (target) => target.kind === 'agent')
@@ -148,7 +149,11 @@ function SidebarNewTopicButton({
   }
 
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (open) pickedRef.current = false
+      }}
+    >
       <Tooltip content={t('conv.pane.newTopicWithShortcut', { shortcut: newTopicShortcut })} side="top">
         <DropdownMenuTrigger asChild>
           <IconButton
@@ -163,11 +168,24 @@ function SidebarNewTopicButton({
         </DropdownMenuTrigger>
       </Tooltip>
       <DropdownMenuPortal>
-        <DropdownMenuContent className="pane-more-popover" align="end" sideOffset={4}>
+        <DropdownMenuContent
+          className="pane-more-popover"
+          align="end"
+          sideOffset={4}
+          onCloseAutoFocus={(e) => {
+            if (pickedRef.current) {
+              pickedRef.current = false
+              e.preventDefault()
+            }
+          }}
+        >
           {renderNewTopicMenuItems(
             candidates,
             (label) => t('shell.agents.newTopicUnder', { label }),
-            onSelectProfile,
+            (profileId) => {
+              pickedRef.current = true
+              onSelectProfile(profileId)
+            },
           )}
         </DropdownMenuContent>
       </DropdownMenuPortal>
@@ -184,6 +202,7 @@ function SidebarEmptyNewTopicButton({
   onSelectProfile: (profileId: string) => void
 }): ReactNode {
   const { t } = useWebLocale()
+  const pickedRef = useRef(false)
   if (candidates.length === 0) return null
 
   const newTopicShortcut = formatModShiftShortcut('O')
@@ -204,7 +223,11 @@ function SidebarEmptyNewTopicButton({
   }
 
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (open) pickedRef.current = false
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <Button
           size="sm"
@@ -221,11 +244,24 @@ function SidebarEmptyNewTopicButton({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuPortal>
-        <DropdownMenuContent className="pane-more-popover" align="start" sideOffset={4}>
+        <DropdownMenuContent
+          className="pane-more-popover"
+          align="start"
+          sideOffset={4}
+          onCloseAutoFocus={(e) => {
+            if (pickedRef.current) {
+              pickedRef.current = false
+              e.preventDefault()
+            }
+          }}
+        >
           {renderNewTopicMenuItems(
             candidates,
             (label) => t('shell.agents.newTopicUnder', { label }),
-            onSelectProfile,
+            (profileId) => {
+              pickedRef.current = true
+              onSelectProfile(profileId)
+            },
           )}
         </DropdownMenuContent>
       </DropdownMenuPortal>

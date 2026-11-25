@@ -90,6 +90,7 @@ export const modalsMessages = {
     'zh-CN': '最近会话 #{id} / {profileId}',
   },
   'modals.palette.cmd.toggleModelPicker': { en: 'Switch current model', 'zh-CN': '切换当前模型' },
+  'modals.palette.cmd.focusComposer': { en: 'Focus message input', 'zh-CN': '聚焦对话框' },
   'modals.palette.cmd.toggleProcessGroups': {
     en: 'Expand / collapse recent process steps',
     'zh-CN': '展开 / 收起最近过程步骤',
@@ -147,6 +148,7 @@ export const modalsMessages = {
   'modals.shortcuts.item.newTopic': { en: 'New topic', 'zh-CN': '新建话题' },
   'modals.shortcuts.item.toggleSidebar': { en: 'Toggle sidebar', 'zh-CN': '展开 / 收起侧栏' },
   'modals.shortcuts.item.openShortcuts': { en: 'Keyboard shortcuts', 'zh-CN': '快捷键总览' },
+  'modals.shortcuts.item.focusComposer': { en: 'Focus message input', 'zh-CN': '聚焦对话框' },
   'modals.shortcuts.item.toggleWorkbench': { en: 'Toggle workbench', 'zh-CN': '展开 / 收起工作台' },
   'modals.shortcuts.item.switchModel': { en: 'Switch model', 'zh-CN': '切换当前模型' },
   'modals.shortcuts.item.toggleProcessSteps': { en: 'Toggle process steps', 'zh-CN': '展开 / 收起过程步骤' },

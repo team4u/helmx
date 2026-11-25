@@ -20,7 +20,7 @@ import { resolveEffectiveThinkingLevel } from '@helmx/plugin-client/pure'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { ActiveModal, FocusedPanel, ResolvedTarget } from '../lib/types.js'
 import { hasDialogOpen, resolveFocusedPanel } from '../shell/shortcuts-model.js'
-import { isTextInputElement } from '../shell/version-watch-model.js'
+import { isElementVisibleInDocument, isTextInputElement } from '../shell/version-watch-model.js'
 import { envDraftError, parseCompactSlashCommand, type EnvDraft } from './composer-model.js'
 
 /** Attachments staged locally before sending (no conversation created, nothing uploaded). */
@@ -335,6 +335,7 @@ export interface StandbyAutoFocusInput {
   drawerStackLength: number
   isMobile: boolean
   textarea?: Element | null
+  paneEl?: Element | null
   /** Optional overrides for pure unit tests (default to live browser globals). */
   hasOpenDialog?: boolean
   activeElement?: Element | null
@@ -365,7 +366,10 @@ function isEditableFocusTarget(el: Element | null): boolean {
  *    where App.tsx's onFocusCapture would flip focusedPanel);
  * 2. No modal, drawer stack frame, or DOM dialog/alertdialog is open;
  * 3. Desktop fine-pointer viewport (> 680px and not coarse-only touch);
- * 4. Current activeElement is not another editable text/contenteditable control.
+ * 4. Only block for another visible editable control when it belongs to THIS
+ *    standby pane (e.g. its cwd input) or to the OPPOSITE visible split panel.
+ *    Hidden `<Activity mode="hidden">` textareas or external search inputs must
+ *    not block focusing a newly opened standby composer.
  */
 export function shouldAutoFocusStandbyTextarea(input: StandbyAutoFocusInput): boolean {
   if (input.panel !== resolveFocusedPanel(input.focusedPanel, input.splitTarget)) {
@@ -387,8 +391,21 @@ export function shouldAutoFocusStandbyTextarea(input: StandbyAutoFocusInput): bo
       : typeof document !== 'undefined'
         ? document.activeElement
         : null
-  if (activeEl !== null && activeEl !== input.textarea && isEditableFocusTarget(activeEl)) {
-    return false
+  if (
+    activeEl !== null &&
+    activeEl !== input.textarea &&
+    isElementVisibleInDocument(activeEl) &&
+    isEditableFocusTarget(activeEl)
+  ) {
+    if (input.paneEl !== undefined && input.paneEl !== null && input.paneEl.contains(activeEl)) {
+      return false
+    }
+    if (input.splitTarget !== null && typeof activeEl.closest === 'function') {
+      const activePanel = activeEl.closest('[data-helmx-panel]')?.getAttribute('data-helmx-panel')
+      if ((activePanel === 'primary' || activePanel === 'split') && activePanel !== input.panel) {
+        return false
+      }
+    }
   }
   return true
 }

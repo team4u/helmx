@@ -1,6 +1,6 @@
 /**
  * The single global single-key shortcut dispatch hook:
- * strictly one key per function (Ctrl+L / Ctrl+O / Ctrl+. / Mod+K / Mod+/ / Mod+Shift+O / Mod+B / Mod+J / / / Esc×2), no aliases.
+ * strictly one key per function (Ctrl+L / Ctrl+O / Ctrl+. / Mod+K / Mod+I / Mod+/ / Mod+Shift+O / Mod+B / Mod+J / / / Esc×2), no aliases.
  * Display copy is not produced here, so no locale seam is needed.
  */
 import { useEffect } from 'react'
@@ -18,6 +18,7 @@ import {
   isSlashShortcutKey,
   resolveFocusedPanel,
   resolveNewTopicTarget,
+  resolveShortcutKeyLower,
   type HelmxShortcutDetail,
 } from '../shell/shortcuts-model.js'
 import { topConversationDrawerId, topDrawerFrame } from './drawer-stack-model.js'
@@ -28,9 +29,17 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (!store.getAuthenticated()) return
-      if (event.isComposing || event.keyCode === 229) return
+      if (event.isComposing) return
 
-      const keyLower = event.key.toLowerCase()
+      const targetEl =
+        typeof HTMLElement !== 'undefined' && event.target instanceof HTMLElement
+          ? event.target
+          : (typeof document !== 'undefined' ? document.activeElement : null)
+      const inEditable = isEditableShortcutTarget(targetEl)
+      const hasModifier = event.ctrlKey || event.metaKey || event.altKey
+      if (event.keyCode === 229 && inEditable && !hasModifier) return
+
+      const keyLower = resolveShortcutKeyLower(event)
       const isMod = (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey
       const isModShift = (event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey
       const isCtrlOnly = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
@@ -95,6 +104,29 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         return
       }
 
+      if (isMod && keyLower === 'i') {
+        if (activeModal !== null || hasNonWorkbenchDialogOpen()) return
+        const top = topDrawerFrame(drawerStack)
+        if (top?.kind === 'conversation') {
+          event.preventDefault()
+          store.clearEscAbortPrompt()
+          const detail: HelmxShortcutDetail = {
+            action: 'focus-composer',
+            panel,
+            drawerConversationId: top.conversationId,
+          }
+          window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
+          return
+        }
+        if (drawerStack.length === 0 && (activeTarget.kind === 'conversation' || activeTarget.kind === 'agent')) {
+          event.preventDefault()
+          store.clearEscAbortPrompt()
+          const detail: HelmxShortcutDetail = { action: 'focus-composer', panel }
+          window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
+        }
+        return
+      }
+
       if (isMod && keyLower === 'b') {
         if (
           activeModal !== null ||
@@ -125,11 +157,7 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         !event.shiftKey &&
         isSlashShortcutKey(event) &&
         !hasAnyOpenOverlay(activeModal, drawerStack.length > 0) &&
-        !isEditableShortcutTarget(
-          typeof HTMLElement !== 'undefined' && event.target instanceof HTMLElement
-            ? event.target
-            : (typeof document !== 'undefined' ? document.activeElement : null),
-        )
+        !inEditable
       ) {
         const detail: HelmxShortcutDetail = { action: 'focus-search', panel }
         const shortcutEvent = new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', {

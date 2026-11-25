@@ -15,6 +15,7 @@ import { useScreenHost } from './screen-host.js'
 import { uiCopy } from './ui-copy.js'
 import { LoadingState } from './ui/LoadingState.js'
 import { usePluginScopeId } from './ui/plugin-scope.js'
+import { ScreenToolbarContext } from './ui/screen-toolbar-context.js'
 
 function joinClass(...parts: Array<string | undefined>): string {
   return parts.filter(Boolean).join(' ')
@@ -148,7 +149,7 @@ export function ScreenToolbar(props: ScreenToolbarProps): ReactNode {
   const { children, actions, label, className } = props
   return (
     <div className={joinClass('screen-toolbar', className)} aria-label={label}>
-      {children}
+      <ScreenToolbarContext.Provider value={true}>{children}</ScreenToolbarContext.Provider>
       {actions !== undefined && <div className="screen-toolbar-actions">{actions}</div>}
     </div>
   )

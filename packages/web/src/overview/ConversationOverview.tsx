@@ -497,6 +497,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     keys: new Set(),
   })
   const [archiving, setArchiving] = useState(false)
+  const newTopicPickedRef = useRef(false)
   const sectionIdPrefix = useId()
   const { isSplitActive, toggleSplit } = usePaneSplitToggle({
     isSplit,
@@ -831,7 +832,11 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
             </Button>
           )}
           {newTopicCandidates.length > 1 && (
-            <DropdownMenu>
+            <DropdownMenu
+              onOpenChange={(open) => {
+                if (open) newTopicPickedRef.current = false
+              }}
+            >
               <DropdownMenuTrigger asChild>
                 <Button
                   size="sm"
@@ -848,7 +853,17 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuPortal>
-                <DropdownMenuContent className="pane-more-popover" align="end" sideOffset={4}>
+                <DropdownMenuContent
+                  className="pane-more-popover"
+                  align="end"
+                  sideOffset={4}
+                  onCloseAutoFocus={(e) => {
+                    if (newTopicPickedRef.current) {
+                      newTopicPickedRef.current = false
+                      e.preventDefault()
+                    }
+                  }}
+                >
                   {newTopicCandidates.map((standing) => {
                     const nodeId = standing.primaryConversation?.nodeId
                     const remoteNodeId = nodeId !== undefined && nodeId !== '' && nodeId !== 'local' ? nodeId : null
@@ -857,6 +872,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                         key={standing.profileId}
                         title={t('shell.agents.newTopicUnder', { label: standing.label })}
                         onSelect={() => {
+                          newTopicPickedRef.current = true
                           openNewTopic(standing.profileId)
                         }}
                       >

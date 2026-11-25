@@ -19,8 +19,15 @@ export type HelmxPanel = 'primary' | 'split'
 export const HELMX_SHORTCUT_EVENT = 'helmx:shortcut' as const
 
 export interface HelmxShortcutEventDetail {
-  action: 'toggle-model-picker' | 'toggle-process-groups' | 'toggle-plan-mode' | 'focus-search' | string
+  action:
+    | 'toggle-model-picker'
+    | 'toggle-process-groups'
+    | 'toggle-plan-mode'
+    | 'focus-composer'
+    | 'focus-search'
+    | string
   panel: HelmxPanel
+  drawerConversationId?: number
 }
 
 /** Short model name for picker trigger buttons (keeps `tier/<id>` explicit; concrete models show the last path segment). */

@@ -175,7 +175,8 @@ describe('standby-pane UX', () => {
     )
     cleanup()
 
-    // 6. Another editable input already focused
+    // 6. External input / hidden <Activity> textarea do NOT block standby focus,
+    //    while an editable input in the opposite split pane or inside this standby pane DOES block.
     stubMatchMedia(() => false)
     const externalInput = document.createElement('input')
     externalInput.type = 'text'
@@ -184,8 +185,48 @@ describe('standby-pane UX', () => {
     mounted = await mountDomRoot(
       e(HostStoreProviders, { value: makeStandbyStore() }, e(AgentStandbyPane, { profileId: 'assistant' })),
     )
+    const primaryTa = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    await waitForCondition(() => document.activeElement === primaryTa)
+    assert.ok(document.activeElement === primaryTa, 'external search input outside standby does not block auto-focus')
+    cleanup()
+
+    stubMatchMedia(() => false)
+    const hiddenActivityWrap = document.createElement('div')
+    hiddenActivityWrap.style.display = 'none'
+    const hiddenTa = document.createElement('textarea')
+    hiddenActivityWrap.appendChild(hiddenTa)
+    document.body.appendChild(hiddenActivityWrap)
+    hiddenTa.focus()
+    mounted = await mountDomRoot(
+      e(HostStoreProviders, { value: makeStandbyStore() }, e(AgentStandbyPane, { profileId: 'assistant' })),
+    )
+    const taAfterHidden = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    await waitForCondition(() => document.activeElement === taAfterHidden)
+    assert.ok(document.activeElement === taAfterHidden, 'hidden <Activity> textarea does not block auto-focus')
+    cleanup()
+
+    stubMatchMedia(() => false)
+    const oppositePanel = document.createElement('div')
+    oppositePanel.setAttribute('data-helmx-panel', 'primary')
+    const oppositeInput = document.createElement('input')
+    oppositeInput.type = 'text'
+    oppositePanel.appendChild(oppositeInput)
+    document.body.appendChild(oppositePanel)
+    oppositeInput.focus()
+    const oppositeFocusStore = makeStandbyStore({
+      primaryTarget: { kind: 'conversation', conversationId: 1 },
+      splitTarget: { kind: 'agent', profileId: 'coder' },
+      focusedPanel: 'split',
+    })
+    mounted = await mountDomRoot(
+      e(
+        'div',
+        { 'data-helmx-panel': 'split' },
+        e(HostStoreProviders, { value: oppositeFocusStore }, e(AgentStandbyPane, { profileId: 'coder', isSplit: true })),
+      ),
+    )
     await flushMacrotask(30)
-    assert.ok(document.activeElement === externalInput, 'existing focused text input keeps focus')
+    assert.ok(document.activeElement === oppositeInput, 'editable input in opposite split panel keeps focus')
   })
 
   test('focus-composer panel shortcut focuses matching standby textarea without modifying draft and ignores other panel', { timeout: 60_000 }, async () => {

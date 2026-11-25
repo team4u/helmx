@@ -22,7 +22,6 @@ import {
   Stack,
   Tooltip,
   useHostModels,
-  usePanelShortcut,
   type HelmxShortcutEventDetail,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -59,7 +58,7 @@ import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { ComposerCommandBanner } from './ComposerCommandBanner.js'
 import { ComposerInputShell, type ComposerAttachmentItem } from './ComposerInputShell.js'
 import { StandbyEnvBar, StandbyModelPicker } from './StandbyControls.js'
-import { focusWithCaret } from './composer-controller.js'
+import { focusWithCaret, useFocusComposerShortcut } from './composer-controller.js'
 import { useIsMobile } from './composer-model.js'
 import { COMPOSER_SHORTCUTS, isComposerSubmitEnterEvent } from './keybindings-model.js'
 import {
@@ -145,15 +144,10 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   const standbyReady = assetsLoaded && profile !== undefined && humanSelectable
   const configLocked = draft.sending || draft.conversationId !== undefined
   const canSwitchProfile = standbyReady && profileCandidates.length > 1 && !configLocked
+  const standbyIdentity = `${panel}:${draftKey}`
+  const autoFocusedKeyRef = useRef<string | null>(null)
 
-  usePanelShortcut(
-    paneRef,
-    'focus-composer',
-    () => {
-      textareaRef.current?.focus({ preventScroll: true })
-    },
-    panel,
-  )
+  useFocusComposerShortcut({ textareaRef, panel })
 
   const autoFocusContextRef = useRef({
     panel,
@@ -176,25 +170,28 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
 
   useEffect(() => {
     if (!standbyReady) return
-    const checkAutoFocus = (): boolean => {
-      const ctx = autoFocusContextRef.current
-      if (ctx.sending) return false
-      return shouldAutoFocusStandbyTextarea({
-        panel: ctx.panel,
-        focusedPanel: ctx.focusedPanel,
-        splitTarget: ctx.splitTarget,
-        activeModal: ctx.activeModal,
-        drawerStackLength: ctx.drawerStackLength,
-        isMobile: ctx.isMobile,
-        textarea: textareaRef.current,
-      })
-    }
-    if (!checkAutoFocus()) return
+    if (autoFocusedKeyRef.current === standbyIdentity) return
     const focusTextarea = (): void => {
       const el = textareaRef.current
       if (el === null || !el.isConnected) return
-      if (!checkAutoFocus()) return
+      const ctx = autoFocusContextRef.current
+      if (ctx.sending) return
+      if (
+        !shouldAutoFocusStandbyTextarea({
+          panel: ctx.panel,
+          focusedPanel: ctx.focusedPanel,
+          splitTarget: ctx.splitTarget,
+          activeModal: ctx.activeModal,
+          drawerStackLength: ctx.drawerStackLength,
+          isMobile: ctx.isMobile,
+          textarea: el,
+          paneEl: paneRef.current,
+        })
+      ) {
+        return
+      }
       el.focus({ preventScroll: true })
+      autoFocusedKeyRef.current = standbyIdentity
     }
     if (typeof requestAnimationFrame !== 'function') {
       focusTextarea()
@@ -202,7 +199,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     }
     const rafId = requestAnimationFrame(focusTextarea)
     return () => cancelAnimationFrame(rafId)
-  }, [draftKey, standbyReady, panel])
+  }, [standbyIdentity, standbyReady, activeModal, drawerStack.length])
   const anchoredConversation = useMemo(
     () => (draft.conversationId !== undefined ? conversations.find((c) => c.id === draft.conversationId) : undefined),
     [draft.conversationId, conversations],

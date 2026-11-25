@@ -28,6 +28,7 @@ const { act } = await import('react')
 const { renderToString } = await import('react-dom/server')
 const { createRoot } = await import('react-dom/client')
 const { SearchBox } = await import('../src/ui/SearchBox.js')
+const { ScreenToolbar } = await import('../src/primitives.js')
 const { LoadingState } = await import('../src/ui/LoadingState.js')
 const { Tooltip, TooltipProvider, TooltipRoot, TooltipTrigger, TooltipContent } = await import('../src/ui/Tooltip.js')
 const { Popover, PopoverTrigger, PopoverContent } = await import('../src/ui/Popover.js')
@@ -193,6 +194,11 @@ test('SearchBox SSR: clearable=false hides the clear button; style lands on the 
     e(SearchBox, { value: 'hello', onChange: () => {}, enableSlashFocus: true, className: 'search-box overview-search-box' }),
   )
   assert.ok(optInSlash.includes('class="search-box overview-search-box"'), 'enableSlashFocus preserves SSR safety and caller className')
+
+  const screenToolbarSsr = renderToString(
+    e(ScreenToolbar, { label: 'Library toolbar' }, e(SearchBox, { value: 'hello', onChange: () => {} })),
+  )
+  assert.ok(screenToolbarSsr.includes('screen-toolbar') && screenToolbarSsr.includes('search-box'), 'ScreenToolbar + SearchBox renders cleanly under SSR')
 })
 
 test('SearchBox DOM: toolbar and opt-in SearchBox focus on panel-scoped focus-search shortcut without stealing unfocused split focus', { timeout: 60_000 }, async () => {
@@ -310,6 +316,43 @@ test('SearchBox DOM: toolbar and opt-in SearchBox focus on panel-scoped focus-se
     })
     assert.equal(optInEv.defaultPrevented, true)
     assert.ok(document.activeElement === optInInput)
+
+    // SearchBox inside ScreenToolbar (without explicit variant="toolbar") auto-enables / focus and Escape clear/blur
+    let screenValue = 'flow'
+    await act(async () => {
+      root.render(
+        e(
+          'div',
+          { 'data-helmx-panel': 'primary' },
+          e(
+            ScreenToolbar,
+            { label: 'Workflow search' },
+            e(SearchBox, {
+              value: screenValue,
+              onChange: (next) => {
+                screenValue = next
+              },
+              ariaLabel: 'Screen toolbar search',
+            }),
+          ),
+        ),
+      )
+    })
+    const screenInput = container.querySelector<HTMLInputElement>('input[aria-label="Screen toolbar search"]')!
+    assert.ok(screenInput !== null)
+    const screenFocusEv = new CustomEvent('helmx:shortcut', {
+      detail: { action: 'focus-search', panel: 'primary' },
+      cancelable: true,
+    })
+    act(() => {
+      window.dispatchEvent(screenFocusEv)
+    })
+    assert.equal(screenFocusEv.defaultPrevented, true, 'SearchBox inside ScreenToolbar responds to focus-search automatically')
+    assert.ok(document.activeElement === screenInput)
+    await act(async () => {
+      screenInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    assert.equal(screenValue, '', 'SearchBox inside ScreenToolbar clears non-empty query on first Escape')
   } finally {
     await act(async () => {
       root.unmount()

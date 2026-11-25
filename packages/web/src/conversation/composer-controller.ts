@@ -16,8 +16,57 @@
  * - this module exports only the hook and pure types (no components), keeping
  *   the .tsx Fast Refresh rule.
  */
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ComposerController, WhenBusy } from '@helmx/protocol/browser'
+import type { HelmxShortcutDetail } from '../shell/shortcuts-model.js'
+import { isElementVisibleInDocument } from '../shell/version-watch-model.js'
+
+const HELMX_SHORTCUT_EVENT = 'helmx:shortcut' as const
+
+export interface FocusComposerShortcutOptions {
+  textareaRef: { current: HTMLTextAreaElement | null }
+  panel?: 'primary' | 'split'
+  staged?: boolean
+  isDrawer?: boolean
+  conversationId?: number
+}
+
+/**
+ * Listen for host `helmx:shortcut` `{ action: 'focus-composer' }` events scoped
+ * to the active visible conversation/standby panel (or matching top drawer frame).
+ */
+export function useFocusComposerShortcut({
+  textareaRef,
+  panel = 'primary',
+  staged = true,
+  isDrawer = false,
+  conversationId,
+}: FocusComposerShortcutOptions): void {
+  useEffect(() => {
+    if (!staged || typeof window === 'undefined') return
+    const onShortcut = (event: Event): void => {
+      const detail = (event as CustomEvent<Partial<HelmxShortcutDetail> | undefined>).detail
+      if (detail === undefined || detail === null || detail.action !== 'focus-composer') return
+      if (isDrawer) {
+        if (conversationId === undefined || detail.drawerConversationId !== conversationId) return
+      } else {
+        if (detail.drawerConversationId !== undefined) return
+        const el = textareaRef.current
+        if (el === null) return
+        if (el.closest('.conversation-drawer') !== null && el.closest('[data-helmx-panel]') === null) return
+        const ownerPanel = el.closest('[data-helmx-panel]')?.getAttribute('data-helmx-panel')
+        const resolvedPanel = ownerPanel === 'primary' || ownerPanel === 'split' ? ownerPanel : panel
+        if (detail.panel !== resolvedPanel) return
+      }
+      const el = textareaRef.current
+      if (el === null || !el.isConnected || el.disabled) return
+      if (!isElementVisibleInDocument(el) || el.closest('[inert], [aria-hidden="true"]') !== null) return
+      el.focus({ preventScroll: true })
+    }
+    window.addEventListener(HELMX_SHORTCUT_EVENT, onShortcut)
+    return () => window.removeEventListener(HELMX_SHORTCUT_EVENT, onShortcut)
+  }, [textareaRef, panel, staged, isDrawer, conversationId])
+}
 
 export interface ComposerControllerBindings {
   /** Current draft text (React state, read during render). */

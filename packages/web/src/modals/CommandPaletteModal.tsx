@@ -136,6 +136,7 @@ export function CommandPaletteModal({
   const settledQueryRef = useRef('')
   const ignoreHoverRef = useRef(false)
   const lastPointerPosRef = useRef<{ x: number; y: number } | null>(null)
+  const skipCloseAutoFocusRef = useRef(false)
 
   useEffect(() => {
     inputEl?.focus()
@@ -266,6 +267,7 @@ export function CommandPaletteModal({
   }, [activeTarget, conversations])
 
   const openShortcutsModal = useCallback(() => {
+    skipCloseAutoFocusRef.current = true
     actions.setActiveModal({ kind: 'shortcuts' })
   }, [actions.setActiveModal])
 
@@ -455,6 +457,7 @@ export function CommandPaletteModal({
     (row: PaletteRow, forceSplit: boolean) => {
       const nav = resolveRowNavigation(row, activePanel, forceSplit)
       if (nav !== null) {
+        skipCloseAutoFocusRef.current = true
         close()
         const opts =
           nav.split || nav.highlightEntryId !== undefined
@@ -473,6 +476,13 @@ export function CommandPaletteModal({
         if (isClientPreview) {
           row.run?.()
           return
+        }
+        if (
+          row.id === 'builtin:focus-composer' ||
+          row.id === 'builtin:toggle-model-picker' ||
+          row.id === 'builtin:open-shortcuts'
+        ) {
+          skipCloseAutoFocusRef.current = true
         }
         close()
         row.run?.()
@@ -672,6 +682,12 @@ export function CommandPaletteModal({
             aria-label={t('modals.palette.dialogTitle')}
             onKeyDown={onKeyDown}
             onEscapeKeyDown={handleEscapeKeyDown}
+            onCloseAutoFocus={(e) => {
+              if (skipCloseAutoFocusRef.current) {
+                skipCloseAutoFocusRef.current = false
+                e.preventDefault()
+              }
+            }}
           >
             <DialogTitle className="helmx-sr-only">{t('modals.palette.dialogTitle')}</DialogTitle>
             <div className="modal-header palette-header">

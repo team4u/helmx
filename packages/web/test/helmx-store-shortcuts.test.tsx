@@ -27,6 +27,7 @@ import {
   persistSidebarCollapsed,
   resolveFocusedPanel,
   resolveNewTopicTarget,
+  resolveShortcutKeyLower,
   type HelmxShortcutDetail,
 } from '../src/shell/shortcuts-model.js'
 import { resetStandbyDrafts } from '../src/conversation/standby-model.js'
@@ -353,18 +354,23 @@ describe("helmx-store-shortcuts", () => {
     assert.equal(formatModShortcut('Enter').endsWith('Enter'), true)
     assert.equal(formatModShiftShortcut('O'), isApplePlatform() ? '⌘⇧O' : 'Ctrl+Shift+O')
 
-    // IME-safe symbol key matchers
+    // IME-safe symbol and letter key matchers
     assert.equal(isSlashShortcutKey({ key: '/' }), true)
     assert.equal(isSlashShortcutKey({ key: '、', code: 'Slash' }), true)
+    assert.equal(isSlashShortcutKey({ key: 'Process', code: 'Slash', keyCode: 229 }), true)
     assert.equal(isSlashShortcutKey({ key: '/', isComposing: true }), false)
-    assert.equal(isSlashShortcutKey({ key: '、', code: 'Slash', keyCode: 229 }), false)
+    assert.equal(isSlashShortcutKey({ key: '、', code: 'Slash', keyCode: 229 }, { blockProcessKeyCode: true }), false)
     assert.equal(isSlashShortcutKey({ key: 'k', code: 'KeyK' }), false)
 
     assert.equal(isPeriodShortcutKey({ key: '.' }), true)
     assert.equal(isPeriodShortcutKey({ key: '。', code: 'Period' }), true)
+    assert.equal(isPeriodShortcutKey({ key: 'Process', code: 'Period', keyCode: 229 }), true)
     assert.equal(isPeriodShortcutKey({ key: '.', isComposing: true }), false)
-    assert.equal(isPeriodShortcutKey({ key: '。', code: 'Period', keyCode: 229 }), false)
+    assert.equal(isPeriodShortcutKey({ key: '。', code: 'Period', keyCode: 229 }, { blockProcessKeyCode: true }), false)
     assert.equal(isPeriodShortcutKey({ key: 'o', code: 'KeyO' }), false)
+
+    assert.equal(resolveShortcutKeyLower({ key: 'Process', code: 'KeyI', keyCode: 229 }), 'i')
+    assert.equal(resolveShortcutKeyLower({ key: 'a', code: 'KeyQ' }), 'a')
 
     // resolveNewTopicTarget: inherits (nodeId, cwd) on human conversation, preserves standby,
     // picks first buildNewTopicCandidates entry on overview/settings/automated conv, falls back to profiles
@@ -491,7 +497,8 @@ describe("helmx-store-shortcuts", () => {
     const convItemsEmpty = catalogWithoutPlugin.find((s) => s.key === 'conversation')?.items ?? []
     assert.equal(convItemsEmpty.some((item) => item.keys === 'Ctrl+.'), false)
 
-    // Editable target detection for single-key shortcuts
+    // Editable target detection for single-key shortcuts (connected & visible only; ignores hidden/inert/detached)
+    const editableScope = document.createElement('div')
     const editableInput = document.createElement('input')
     const editableTextarea = document.createElement('textarea')
     const editableSelect = document.createElement('select')
@@ -502,6 +509,26 @@ describe("helmx-store-shortcuts", () => {
     const nonEditableDiv = document.createElement('div')
     nonEditableDiv.setAttribute('contenteditable', 'false')
     const plainButton = document.createElement('button')
+    const hiddenWrap = document.createElement('div')
+    hiddenWrap.style.display = 'none'
+    const hiddenTextarea = document.createElement('textarea')
+    hiddenWrap.appendChild(hiddenTextarea)
+    const inertWrap = document.createElement('div')
+    inertWrap.setAttribute('inert', '')
+    const inertInput = document.createElement('input')
+    inertWrap.appendChild(inertInput)
+    const detachedInput = document.createElement('input')
+    editableScope.append(
+      editableInput,
+      editableTextarea,
+      editableSelect,
+      editableDiv,
+      nonEditableDiv,
+      plainButton,
+      hiddenWrap,
+      inertWrap,
+    )
+    document.body.appendChild(editableScope)
     assert.equal(isEditableShortcutTarget(editableInput), true)
     assert.equal(isEditableShortcutTarget(editableTextarea), true)
     assert.equal(isEditableShortcutTarget(editableSelect), true)
@@ -509,7 +536,11 @@ describe("helmx-store-shortcuts", () => {
     assert.equal(isEditableShortcutTarget(editableChild), true)
     assert.equal(isEditableShortcutTarget(nonEditableDiv), false)
     assert.equal(isEditableShortcutTarget(plainButton), false)
+    assert.equal(isEditableShortcutTarget(hiddenTextarea), false)
+    assert.equal(isEditableShortcutTarget(inertInput), false)
+    assert.equal(isEditableShortcutTarget(detachedInput), false)
     assert.equal(isEditableShortcutTarget(null), false)
+    editableScope.remove()
 
     // Overlay and inline-input detection
     assert.equal(hasAnyOpenOverlay({ kind: 'command-palette' }, false), true)
@@ -1008,6 +1039,7 @@ describe("helmx-store-shortcuts", () => {
     assert.ok(text.includes('Navigation'))
     assert.ok(text.includes('Conversation'))
     assert.ok(text.includes('Composer'))
+    assert.equal(text.includes('Focus message input'), true)
     assert.ok(text.includes('Toggle Plan mode'))
     assert.ok(text.includes('Ctrl+.'))
     assert.equal(window.location.hash.includes('modal='), false, 'ShortcutsModal must remain transient and never enter URL hash')
@@ -1245,5 +1277,302 @@ describe("helmx-store-shortcuts", () => {
     assert.equal(evSplitSlash.defaultPrevented, true)
     assert.ok(document.activeElement === skillSearch, '/ must focus SkillCenter toolbar search when split is focused')
     assert.ok(document.activeElement !== overviewSearch, 'primary Overview search must not steal split focus')
+  })
+
+  test('App end-to-end: Mod+I focuses active conversation, split, standby, or top drawer without touching hidden Activity; Cmd+K Focus message input works', { timeout: 60_000 }, async () => {
+    window.history.replaceState(null, '', '#/c/1?split=c/2')
+    installFetch({
+      conversations: [
+        makeConversation(1, { status: 'idle', title: 'Primary conv', profileId: 'assistant', cwd: '/repo-one' }),
+        makeConversation(2, { status: 'idle', title: 'Split conv', profileId: 'assistant', cwd: '/repo-two' }),
+        makeConversation(3, { status: 'idle', title: 'Drawer conv', profileId: 'assistant', cwd: '/repo-three' }),
+      ],
+    })
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(<App />)
+    })
+    await settle(100)
+
+    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
+    const splitPane = host.querySelector<HTMLElement>('[data-helmx-panel="split"]')!
+    const primaryTa = primaryPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    const splitTa = splitPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    assert.ok(primaryTa !== null && splitTa !== null)
+
+    // 1) Primary focused, focus blurred to body -> Mod+I focuses primary composer
+    primaryTa.blur()
+    assert.ok(document.activeElement !== primaryTa)
+    const evPrimaryI = dispatchWindowKey(modInit('i'))
+    assert.equal(evPrimaryI.defaultPrevented, true)
+    assert.ok(document.activeElement === primaryTa, 'Mod+I focuses primary conversation textarea')
+
+    // 2) Focus split pane, blur to body -> Mod+I focuses split composer (not primary)
+    await act(async () => {
+      splitPane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    })
+    splitTa.blur()
+    const evSplitI = dispatchWindowKey(modInit('i'))
+    assert.equal(evSplitI.defaultPrevented, true)
+    assert.ok(document.activeElement === splitTa, 'Mod+I focuses split conversation textarea')
+    assert.ok(document.activeElement !== primaryTa)
+
+    // 3) Return to primary, close split, open conversation drawer #3 -> Mod+I focuses drawer composer ONLY
+    await act(async () => {
+      primaryPane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    })
+    window.history.replaceState(null, '', '#/c/1?drawer=c/3')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(100)
+
+    const drawerDialog = document.querySelector<HTMLElement>('.drawer-stack-dialog')!
+    assert.ok(drawerDialog !== null, 'conversation drawer #3 must open')
+    const drawerTa = drawerDialog.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    assert.ok(drawerTa !== null, 'drawer conversation #3 composer textarea must mount')
+    drawerDialog.focus()
+    assert.ok(document.activeElement !== drawerTa)
+
+    const evDrawerI = dispatchWindowKey(modInit('i'))
+    assert.equal(evDrawerI.defaultPrevented, true)
+    assert.ok(document.activeElement === drawerTa, 'Mod+I focuses top conversation drawer textarea')
+    assert.ok(document.activeElement !== primaryTa)
+
+    // 4) Close drawer, navigate primary from #/c/1 -> #/c/2 (leaving #/c/1 in hidden <Activity>), blur, press Mod+I -> focuses #/c/2, NOT hidden #/c/1
+    window.history.replaceState(null, '', '#/c/2')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(100)
+    const conv2Ta = [...primaryPane.querySelectorAll<HTMLTextAreaElement>('textarea.composer-textarea')]
+      .find((ta) => ta.closest('.helmx-pane')?.getAttribute('style')?.includes('none') !== true)!
+    assert.ok(conv2Ta !== undefined)
+    conv2Ta.blur()
+    dispatchWindowKey(modInit('i'))
+    assert.ok(document.activeElement === conv2Ta, 'Mod+I focuses visible conversation #2 and skips hidden Activity #1')
+
+    // 5) Command palette `Focus message input` focuses composer after closing palette
+    dispatchWindowKey(modInit('k'))
+    await settle(60)
+    const focusCmdRow = [...document.querySelectorAll<HTMLButtonElement>('.palette-listbox [data-idx].nav-item')]
+      .find((btn) => btn.textContent?.includes('Focus message input'))!
+    assert.ok(focusCmdRow !== undefined, 'CommandPalette exposes Focus message input row')
+    await act(async () => {
+      focusCmdRow.click()
+    })
+    await settle(60)
+    assert.ok(document.activeElement === conv2Ta, 'CommandPalette Focus message input focuses active composer')
+  })
+
+  test('App end-to-end: New Topic focuses standby textarea from conversation Mod+Shift+O, Sidebar/Overview dropdowns, and Cmd+K without onCloseAutoFocus steal', { timeout: 60_000 }, async () => {
+    window.history.replaceState(null, '', '#/c/1')
+    installFetch({
+      profiles: [
+        { id: 'assistant', name: 'Assistant' },
+        { id: 'coder', name: 'Coder' },
+      ],
+      conversations: [
+        makeConversation(1, { status: 'idle', title: 'Primary conv', profileId: 'assistant', cwd: '/repo-one', updatedAt: 500 }),
+      ],
+    })
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(<App />)
+    })
+    await settle(100)
+
+    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
+    const convTa = primaryPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    convTa.focus()
+    assert.ok(document.activeElement === convTa)
+
+    // 1) Mod+Shift+O directly from focused conversation textarea -> standby textarea auto-focuses
+    const evNewTopic = dispatchWindowKey({ ...modInit('O'), shiftKey: true }, convTa)
+    assert.equal(evNewTopic.defaultPrevented, true)
+    await settle(100)
+    const standbyTa1 = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane textarea.composer-textarea')!
+    assert.ok(standbyTa1 !== null, 'standby pane must mount')
+    assert.ok(document.activeElement === standbyTa1, 'Mod+Shift+O from conversation textarea must auto-focus standby textarea')
+
+    // 2) Navigate back to Overview, then click Sidebar multi-profile + New topic dropdown -> Coder standby auto-focuses (not stolen back to + button)
+    window.history.replaceState(null, '', '#/overview')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(100)
+
+    const sidebarNewBtn = host.querySelector<HTMLButtonElement>('button.sidebar-new-topic-btn')!
+    assert.ok(sidebarNewBtn !== null)
+    await act(async () => {
+      sidebarNewBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    await settle(40)
+    const sidebarCoderItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('Coder'))!
+    assert.ok(sidebarCoderItem !== undefined)
+    await act(async () => {
+      sidebarCoderItem.click()
+    })
+    await settle(100)
+    const standbyCoderTa = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')!
+    assert.ok(standbyCoderTa !== null)
+    assert.ok(document.activeElement === standbyCoderTa, 'Sidebar dropdown New topic must land focus in standby textarea')
+
+    // 3) Return to Overview, open Overview multi-profile New topic dropdown -> Assistant standby auto-focuses
+    window.history.replaceState(null, '', '#/overview')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(100)
+    const overviewNewBtn = primaryPane.querySelector<HTMLButtonElement>('button.overview-newtopic-btn')!
+    assert.ok(overviewNewBtn !== null)
+    await act(async () => {
+      overviewNewBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    await settle(40)
+    const overviewAssistantItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('Assistant'))!
+    assert.ok(overviewAssistantItem !== undefined)
+    await act(async () => {
+      overviewAssistantItem.click()
+    })
+    await settle(100)
+    const standbyAssistantTa = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea')!
+    assert.ok(standbyAssistantTa !== null)
+    assert.ok(document.activeElement === standbyAssistantTa, 'Overview dropdown New topic must land focus in standby textarea')
+
+    // 4) Open Cmd+K from Overview -> select Open agent: Coder with Enter -> Coder standby textarea auto-focuses (not stolen by Dialog onCloseAutoFocus)
+    window.history.replaceState(null, '', '#/overview')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(100)
+    const overviewSearch = primaryPane.querySelector<HTMLInputElement>('.overview-search-box input')!
+    overviewSearch.focus()
+    dispatchWindowKey(modInit('k'), overviewSearch)
+    await settle(60)
+    const modal = document.querySelector<HTMLElement>('.palette-modal')!
+    const allOpts = [...document.querySelectorAll<HTMLButtonElement>('.palette-listbox [data-idx].nav-item')]
+    const coderOptIdx = allOpts.findIndex((o) => o.textContent?.includes('Open agent: Coder'))
+    assert.ok(coderOptIdx >= 0)
+    for (let i = 0; i < coderOptIdx; i++) {
+      await act(async () => {
+        modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+      })
+    }
+    await act(async () => {
+      modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    await settle(100)
+    const standbyFromPalette = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')!
+    assert.ok(standbyFromPalette !== null)
+    assert.ok(document.activeElement === standbyFromPalette, 'Cmd+K Enter to standby must land focus in standby textarea')
+
+    // 5) From conversation #1, Composer + menu -> New topic lands focus in standby textarea
+    window.history.replaceState(null, '', '#/c/1')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(100)
+    const plusTrigger = primaryPane.querySelector<HTMLButtonElement>('button.composer-plus-trigger')!
+    assert.ok(plusTrigger !== null)
+    await act(async () => {
+      plusTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    await settle(40)
+    const plusNewTopicItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('/new'))!
+    assert.ok(plusNewTopicItem !== undefined)
+    await act(async () => {
+      plusNewTopicItem.click()
+    })
+    await settle(100)
+    const standbyFromPlus = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane textarea.composer-textarea')!
+    assert.ok(standbyFromPlus !== null)
+    assert.ok(document.activeElement === standbyFromPlus, 'Composer + menu New topic must land focus in standby textarea')
+  })
+
+  test('App end-to-end: Chinese IME keyCode 229 allows non-input / and modified shortcuts while remaining blocked during composition or plain typing inside visible inputs', { timeout: 60_000 }, async () => {
+    window.history.replaceState(null, '', '#/c/1')
+    installFetch({
+      ui: [
+        {
+          pluginId: 'ext:plan-like',
+          surface: 'commandPalette',
+          spec: {
+            id: 'toggle-mode',
+            title: { en: 'Toggle Plan mode', 'zh-CN': '切换计划模式' },
+            shortcut: 'Ctrl+.',
+            actionId: 'toggle',
+            scope: {},
+          },
+        },
+      ],
+    })
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(<App />)
+    })
+    await settle(100)
+
+    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
+    const convTa = primaryPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    convTa.focus()
+    assert.ok(document.activeElement === convTa)
+
+    // Switch to Overview via hash while #/c/1 stays in hidden <Activity>; simulate hidden <textarea> retaining activeElement
+    window.history.replaceState(null, '', '#/overview')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(100)
+    const overviewSearch = primaryPane.querySelector<HTMLInputElement>('.overview-search-box input')!
+    assert.ok(overviewSearch !== null)
+
+    // Press Chinese IME / (key: 'Process', code: 'Slash', keyCode: 229, isComposing: false) from non-editable target (and even if hidden Activity textarea is activeElement)
+    const evImeSlash = dispatchWindowKey({ key: 'Process', code: 'Slash', keyCode: 229, isComposing: false })
+    assert.equal(evImeSlash.defaultPrevented, true, 'IME keyCode 229 Slash outside visible inputs focuses SearchBox')
+    assert.ok(document.activeElement === overviewSearch)
+
+    // Inside visible overviewSearch: plain keyCode 229 without modifiers is NOT hijacked; Mod+/ and Ctrl+. with keyCode 229 work; isComposing: true stays blocked
+    const evPlain229InInput = dispatchWindowKey({ key: 'Process', code: 'Slash', keyCode: 229, isComposing: false }, overviewSearch)
+    assert.equal(evPlain229InInput.defaultPrevented, false, 'plain keyCode 229 inside visible input must not be swallowed')
+
+    const seenShortcuts: HelmxShortcutDetail[] = []
+    const onShortcut = (ev: Event) => {
+      seenShortcuts.push((ev as CustomEvent<HelmxShortcutDetail>).detail)
+    }
+    window.addEventListener('helmx:shortcut', onShortcut)
+    try {
+      const evComposingModSlash = dispatchWindowKey({ ...modInit('Process'), code: 'Slash', keyCode: 229, isComposing: true }, overviewSearch)
+      assert.equal(evComposingModSlash.defaultPrevented, false, 'isComposing: true blocks Mod+/')
+      assert.ok(document.querySelector('.shortcuts-modal') === null)
+
+      const evImeModSlash = dispatchWindowKey({ ...modInit('Process'), code: 'Slash', keyCode: 229, isComposing: false }, overviewSearch)
+      assert.equal(evImeModSlash.defaultPrevented, true, 'Mod+/ with IME keyCode 229 opens ShortcutsModal')
+      await settle(40)
+      assert.ok(document.querySelector('.shortcuts-modal') !== null)
+
+      dispatchWindowKey({ ...modInit('Process'), code: 'Slash', keyCode: 229, isComposing: false })
+      await settle(40)
+      assert.ok(document.querySelector('.shortcuts-modal') === null)
+
+      const beforeDot = seenShortcuts.length
+      const evImeCtrlDot = dispatchWindowKey({ key: 'Process', code: 'Period', keyCode: 229, ctrlKey: true, isComposing: false }, overviewSearch)
+      assert.equal(evImeCtrlDot.defaultPrevented, true, 'Ctrl+. with IME keyCode 229 dispatches toggle-plan-mode')
+      assert.deepEqual(seenShortcuts.slice(beforeDot), [{ action: 'toggle-plan-mode', panel: 'primary' }])
+    } finally {
+      window.removeEventListener('helmx:shortcut', onShortcut)
+    }
   })
 })

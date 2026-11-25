@@ -145,6 +145,7 @@ export function ComposerInputShell({
 }: ComposerInputShellProps): React.JSX.Element {
   const { locale, t } = useWebLocale()
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
+  const navPickedRef = useRef(false)
   const [plusMenuOpen, setPlusMenuOpen] = useState(false)
   const closePlusMenu = useCallback(() => setPlusMenuOpen(false), [])
   const hasToolsSection =
@@ -229,7 +230,13 @@ export function ComposerInputShell({
           />
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
-              <DropdownMenuRoot open={plusMenuOpen} onOpenChange={setPlusMenuOpen}>
+              <DropdownMenuRoot
+                open={plusMenuOpen}
+                onOpenChange={(open) => {
+                  if (open) navPickedRef.current = false
+                  setPlusMenuOpen(open)
+                }}
+              >
                 <DropdownMenuTrigger asChild>
                   <IconButton
                     icon={<HelmxIcon name="plus" size={18} />}
@@ -247,6 +254,12 @@ export function ComposerInputShell({
                   side="top"
                   sideOffset={8}
                   className="composer-plus-menu"
+                  onCloseAutoFocus={(e) => {
+                    if (navPickedRef.current) {
+                      navPickedRef.current = false
+                      e.preventDefault()
+                    }
+                  }}
                 >
                   <DropdownMenuItem
                     className="composer-plus-menu-item"
@@ -309,7 +322,10 @@ export function ComposerInputShell({
                       {onNewTopic !== undefined ? (
                         <DropdownMenuItem
                           className="composer-plus-menu-item"
-                          onSelect={onNewTopic}
+                          onSelect={() => {
+                            navPickedRef.current = true
+                            onNewTopic()
+                          }}
                         >
                           <HelmxIcon name="message-square" size={14} className="composer-plus-menu-icon" />
                           <span className="composer-plus-menu-label">{t('composer.plusMenu.newTopic')}</span>

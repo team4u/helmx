@@ -540,27 +540,73 @@ describe("standby-model", () => {
     const coarseMatchMedia = (q: string) => ({ matches: q === '(hover: none) and (pointer: coarse)' })
     const ownTextarea = {
       tagName: 'TEXTAREA',
+      isConnected: true,
+      parentElement: null,
       disabled: false,
       readOnly: false,
       getAttribute: () => null,
       closest: () => null,
     } as unknown as Element
-    const otherInput = {
+    const inPaneInput = {
       tagName: 'INPUT',
       type: 'text',
+      isConnected: true,
+      parentElement: null,
       disabled: false,
       readOnly: false,
       getAttribute: (name: string) => (name === 'type' ? 'text' : null),
       closest: () => null,
     } as unknown as Element
-    const contentEditableEl = {
+    const inPaneContentEditable = {
       tagName: 'DIV',
+      isConnected: true,
+      parentElement: null,
       isContentEditable: true,
       getAttribute: (name: string) => (name === 'contenteditable' ? 'true' : null),
       closest: () => null,
     } as unknown as Element
+    const externalSearchInput = {
+      tagName: 'INPUT',
+      type: 'text',
+      isConnected: true,
+      parentElement: null,
+      disabled: false,
+      readOnly: false,
+      getAttribute: (name: string) => (name === 'type' ? 'text' : null),
+      closest: () => null,
+    } as unknown as Element
+    const hiddenActivityParent = {
+      hidden: false,
+      style: { display: 'none' },
+      parentElement: null,
+    }
+    const hiddenActivityTextarea = {
+      tagName: 'TEXTAREA',
+      isConnected: true,
+      parentElement: hiddenActivityParent,
+      disabled: false,
+      readOnly: false,
+      getAttribute: () => null,
+      closest: () => null,
+    } as unknown as Element
+    const oppositeSplitInput = {
+      tagName: 'INPUT',
+      type: 'text',
+      isConnected: true,
+      parentElement: null,
+      disabled: false,
+      readOnly: false,
+      getAttribute: (name: string) => (name === 'type' ? 'text' : null),
+      closest: (selector: string) =>
+        selector === '[data-helmx-panel]' ? { getAttribute: () => 'split' } : null,
+    } as unknown as Element
+    const paneEl = {
+      contains: (target: Element) => target === inPaneInput || target === inPaneContentEditable || target === ownTextarea,
+    } as unknown as Element
     const buttonEl = {
       tagName: 'BUTTON',
+      isConnected: true,
+      parentElement: null,
       getAttribute: () => null,
       closest: () => null,
     } as unknown as Element
@@ -573,6 +619,7 @@ describe("standby-model", () => {
       drawerStackLength: 0,
       isMobile: false,
       textarea: ownTextarea,
+      paneEl,
       hasOpenDialog: false,
       activeElement: null,
       matchMedia: desktopMatchMedia,
@@ -632,16 +679,31 @@ describe("standby-model", () => {
       'blocks on coarse-only touch device',
     )
 
-    // Guard 4: another editable element already focused
+    // Guard 4: scoped visible editable checks (own pane & opposite split block; hidden Activity & external search allow)
     assert.equal(
-      shouldAutoFocusStandbyTextarea({ ...base, activeElement: otherInput }),
+      shouldAutoFocusStandbyTextarea({ ...base, activeElement: inPaneInput }),
       false,
-      'blocks when another text input holds focus',
+      'blocks when an editable input inside this standby pane (e.g. cwd) holds focus',
     )
     assert.equal(
-      shouldAutoFocusStandbyTextarea({ ...base, activeElement: contentEditableEl }),
+      shouldAutoFocusStandbyTextarea({ ...base, activeElement: inPaneContentEditable }),
       false,
-      'blocks when a contenteditable element holds focus',
+      'blocks when a contenteditable element inside this standby pane holds focus',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, splitTarget, activeElement: oppositeSplitInput }),
+      false,
+      'blocks when a visible editable input in the opposite split panel holds focus',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, activeElement: externalSearchInput }),
+      true,
+      'allows focusing standby textarea over external sidebar/overview search input',
+    )
+    assert.equal(
+      shouldAutoFocusStandbyTextarea({ ...base, activeElement: hiddenActivityTextarea }),
+      true,
+      'allows focusing standby textarea when old hidden <Activity> textarea still holds activeElement',
     )
     assert.equal(
       shouldAutoFocusStandbyTextarea({ ...base, activeElement: ownTextarea }),

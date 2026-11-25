@@ -18,6 +18,7 @@ import { isConversationArchived } from '../conversation/archive-model.js'
 import { buildNewTopicCandidates } from '../overview/overview-model.js'
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
 import { collectEnabledPluginIds, isHumanSelectableProfile } from './sidebar-model.js'
+import { isElementVisibleInDocument } from './version-watch-model.js'
 import type { ActiveModal, FocusedPanel, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 
 export const SIDEBAR_COLLAPSED_STORAGE_KEY = 'helmx:sidebar-collapsed'
@@ -34,6 +35,7 @@ export type HelmxShortcutAction =
 export interface HelmxShortcutDetail {
   action: HelmxShortcutAction
   panel: FocusedPanel
+  drawerConversationId?: number
 }
 
 export interface ShortcutKeyEventShape {
@@ -172,12 +174,15 @@ export function isInlineInputEscapeTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * Whether a keyboard event target is an editable control (input, textarea,
- * select, or contenteditable region) where plain single-key shortcuts like `/`
- * must not hijack typing.
+ * Whether a keyboard event target is a visible, active editable control
+ * (input, textarea, select, or contenteditable region) where plain single-key
+ * shortcuts like `/` must not hijack typing. Hidden `<Activity mode="hidden">`
+ * or `inert`/`aria-hidden` inputs are ignored.
  */
 export function isEditableShortcutTarget(target: EventTarget | null): boolean {
   if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false
+  if (!isElementVisibleInDocument(target)) return false
+  if (target.closest('[inert], [aria-hidden="true"]') !== null) return false
   const tag = target.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
   if (target.isContentEditable === true) return true
@@ -210,19 +215,45 @@ export function formatModShiftShortcut(key: string): string {
   return isApplePlatform() ? `⌘⇧${label}` : `Ctrl+Shift+${label}`
 }
 
-function isImeComposingEvent(event: ShortcutKeyEventShape): boolean {
-  return event.isComposing === true || event.keyCode === 229
+export interface SymbolShortcutMatchOptions {
+  blockProcessKeyCode?: boolean
 }
 
-/** IME-safe matcher for '/' (supports Chinese IME producing '、' with physical code 'Slash'). */
-export function isSlashShortcutKey(event: ShortcutKeyEventShape): boolean {
-  if (isImeComposingEvent(event)) return false
+function isImeComposingEvent(event: ShortcutKeyEventShape, blockProcessKeyCode = false): boolean {
+  return event.isComposing === true || (blockProcessKeyCode && event.keyCode === 229)
+}
+
+/**
+ * Resolve lowercase letter for letter-based global shortcuts, falling back to
+ * physical `Key[A-Z]` when an active IME reports `key === 'Process'` or a
+ * non-ASCII character while modifiers are held.
+ */
+export function resolveShortcutKeyLower(event: ShortcutKeyEventShape): string {
+  const code = event.code ?? ''
+  if (
+    /^Key[A-Z]$/.test(code) &&
+    (event.key === 'Process' || event.key.length !== 1 || event.key.charCodeAt(0) > 127)
+  ) {
+    return code.slice(3).toLowerCase()
+  }
+  return event.key.toLowerCase()
+}
+
+/** IME-safe matcher for '/' (supports Chinese IME producing '、' or 'Process' with physical code 'Slash'). */
+export function isSlashShortcutKey(
+  event: ShortcutKeyEventShape,
+  options?: SymbolShortcutMatchOptions,
+): boolean {
+  if (isImeComposingEvent(event, options?.blockProcessKeyCode)) return false
   return event.key === '/' || event.code === 'Slash'
 }
 
-/** IME-safe matcher for '.' (supports Chinese IME producing '。' with physical code 'Period'). */
-export function isPeriodShortcutKey(event: ShortcutKeyEventShape): boolean {
-  if (isImeComposingEvent(event)) return false
+/** IME-safe matcher for '.' (supports Chinese IME producing '。' or 'Process' with physical code 'Period'). */
+export function isPeriodShortcutKey(
+  event: ShortcutKeyEventShape,
+  options?: SymbolShortcutMatchOptions,
+): boolean {
+  if (isImeComposingEvent(event, options?.blockProcessKeyCode)) return false
   return event.key === '.' || event.code === 'Period'
 }
 
@@ -314,6 +345,11 @@ export function buildShortcutCatalog(input: BuildShortcutCatalogInput): Shortcut
   ]
 
   const conversationItems: ShortcutCatalogItem[] = [
+    {
+      id: 'conv:focus-composer',
+      keys: formatModShortcut('I'),
+      label: t('modals.shortcuts.item.focusComposer'),
+    },
     {
       id: 'conv:toggle-workbench',
       keys: formatModShortcut('J'),
