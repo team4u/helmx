@@ -22,6 +22,7 @@ import { resetServerClock } from '../src/lib/server-clock.js'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { makeTestStore } from './helpers/store.js'
+import { readHostStyles } from './helpers/host-styles.js'
 import type { ConversationEntry, ConversationLive } from '@helmx/protocol'
 import type { FoldableStep, ToolTrace } from '../src/conversation/timeline-model.js'
 
@@ -670,17 +671,36 @@ test('原型属性同名工具走通用展示，不误当作内置 React 组件'
 })
 
 test('TraceRow：摘要完整渲染命令首行且不按字符数截断，宽度裁剪交给 CSS 省略', { timeout: 60_000 }, async () => {
+  const style = document.createElement('style')
+  style.textContent = readHostStyles()
+  document.head.appendChild(style)
   const m = createMount()
   try {
     const longCommand = 'cd /root/code/helm && (ls -l /proc/[0-9]*/cwd 2>/dev/null | rg -c helm) && echo done'
     assert.ok(longCommand.length > 60, 'fixture must exceed the retired 60-char cap')
     await m.render(rowUi(trace({ toolName: 'bash', input: { command: `${longCommand}\n# 说明行不进摘要` } })))
-    const summary = m.host.querySelector('.trace-tool-summary')
-    assert.ok(summary !== null)
+    const left = m.host.querySelector<HTMLElement>('.trace-row-left')
+    const name = m.host.querySelector<HTMLElement>('.trace-tool-name')
+    const summary = m.host.querySelector<HTMLElement>('.trace-tool-summary')
+    assert.ok(left !== null && name !== null && summary !== null)
     assert.equal(summary.textContent, longCommand, '摘要 = 命令首行全文，不手动拼 …')
-    assert.ok(m.host.querySelector('.trace-tool-name')?.textContent === 'bash')
+    assert.equal(name.textContent, 'bash')
+
+    // action/工具名在窄屏长摘要下严禁参与 flex 收缩或触发省略号（避免 bash -> ba...）
+    const leftStyle = getComputedStyle(left)
+    const nameStyle = getComputedStyle(name)
+    const summaryStyle = getComputedStyle(summary)
+    assert.equal(nameStyle.flexShrink, '0', '.trace-tool-name 不可收缩')
+    assert.equal(nameStyle.whiteSpace, 'nowrap')
+    assert.notEqual(nameStyle.textOverflow, 'ellipsis', '.trace-tool-name 不得截断出省略号')
+    assert.equal(summaryStyle.flexShrink, '1')
+    assert.ok(summaryStyle.minWidth === '0' || summaryStyle.minWidth === '0px')
+    assert.equal(summaryStyle.textOverflow, 'ellipsis')
+    assert.ok(leftStyle.minWidth === '0' || leftStyle.minWidth === '0px')
+    assert.equal(leftStyle.overflow, 'hidden')
   } finally {
     m.unmount()
+    style.remove()
   }
 })
 
