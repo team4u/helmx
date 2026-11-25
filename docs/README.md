@@ -33,6 +33,7 @@
 | [Token 速率](plugins/token-speed.md) | 查看生成速度和首字延迟估算 |
 | [模型档位](plugins/tiers.md) | 维护 `tier/<id>` 语义档位映射与多套自定义模板 |
 | [会话标题](plugins/title.md) | 首轮静默自动命名与 `/title` 按需整理 |
+| [规划模式](plugins/plan.md) | 只读调研、方案草拟、`AskDoc` 审批归档与交接执行 |
 
 ## 开发 Helmx 和插件
 

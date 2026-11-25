@@ -2,7 +2,12 @@
  * builtin:plan model tools (`plan_save` and `plan_propose`).
  */
 import { randomUUID } from 'node:crypto'
-import { HelmxError, type AskResult, type HelmxPluginContext } from '@helmx/protocol'
+import {
+  HelmxError,
+  type AskResult,
+  type HelmxPluginContext,
+  type PluginToolResultEnvelope,
+} from '@helmx/protocol'
 import {
   PLAN_HANDOFF_MAX_BYTES,
   PLAN_MARKDOWN_MAX_BYTES,
@@ -17,7 +22,6 @@ import {
   type PlanConversationRecord,
   type PlanDraftSummary,
   type PlanToolPresentationMeta,
-  type PlanToolResultEnvelope,
 } from './contracts.js'
 import type { PlanStateManager } from './state.js'
 
@@ -30,7 +34,7 @@ function errorMessageOf(err: unknown): string {
 function toolError(
   message: string,
   presentationMeta?: PlanToolPresentationMeta,
-): PlanToolResultEnvelope {
+): PluginToolResultEnvelope {
   return {
     output: message,
     isError: true,
@@ -126,7 +130,7 @@ export function registerPlanTools(
       additionalProperties: false,
     },
     presentationMetaSchema: PLAN_TOOL_META_SCHEMA,
-    async execute(input, context): Promise<PlanToolResultEnvelope> {
+    async execute(input, context): Promise<PluginToolResultEnvelope> {
       const rawTitle = typeof input?.title === 'string' ? input.title.trim() : ''
       if (rawTitle.length === 0 || rawTitle.length > PLAN_TITLE_MAX_CHARS) {
         return toolError(
@@ -234,7 +238,7 @@ export function registerPlanTools(
       additionalProperties: false,
     },
     presentationMetaSchema: PLAN_TOOL_META_SCHEMA,
-    async execute(input, context): Promise<PlanToolResultEnvelope> {
+    async execute(input, context): Promise<PluginToolResultEnvelope> {
       const rawSummary = typeof input?.summary === 'string' ? input.summary.trim() : ''
       if (rawSummary.length === 0 || rawSummary.length > PLAN_SUMMARY_MAX_CHARS) {
         return toolError(
@@ -331,7 +335,7 @@ export function registerPlanTools(
 
       const { askId, draft, expectedStateSeq, executionModel } = prepared
 
-      const runPromise = (async (): Promise<PlanToolResultEnvelope> => {
+      const runPromise = (async (): Promise<PluginToolResultEnvelope> => {
         const onAbort = () => {
           void state.cancelAskSafe(askId, 'cancelled').catch(() => {})
         }
@@ -607,7 +611,7 @@ export function registerPlanTools(
       })()
 
       state.trackInFlightAsk(askId, conversationId, runPromise)
-      let result: PlanToolResultEnvelope | undefined
+      let result: PluginToolResultEnvelope | undefined
       let runErr: unknown
       let hasRunErr = false
       try {
@@ -640,7 +644,7 @@ export function registerPlanTools(
       if (hasRunErr) {
         throw runErr
       }
-      return result as PlanToolResultEnvelope
+      return result as PluginToolResultEnvelope
     },
   })
 }

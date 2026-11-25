@@ -81,6 +81,14 @@
     "./title/contracts": {
       "types": "./dist/title/contracts.d.ts",
       "import": "./dist/title/contracts.js"
+    },
+    "./plan": {
+      "types": "./dist/plan.d.ts",
+      "import": "./dist/plan.js"
+    },
+    "./plan/contracts": {
+      "types": "./dist/plan/contracts.d.ts",
+      "import": "./dist/plan/contracts.js"
     }
   },
   "scripts": {

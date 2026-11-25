@@ -1,5 +1,5 @@
 /**
- * @helmx/plugins 聚合出口：十二个内置插件的生产者侧工厂与公开契约。
+ * @helmx/plugins 聚合出口：十三个内置插件的生产者侧工厂与公开契约。
  *
  * 消费方向（包拓扑铁律）：本包只依赖 @helmx/protocol 与外部 SDK，绝不依赖
  * @helmx/kernel 实现；产品组合（注册顺序与缺省启停）由 @helmx/hub 负责。
@@ -39,3 +39,23 @@ export {
   type TitleGenerateResult,
   type TitlePluginOptions,
 } from './title.js';
+export {
+  createPlanPlugin,
+  PLAN_PLUGIN_ID,
+  PLAN_SESSION_DOC,
+  PLAN_BADGES_DOC,
+  PLAN_PANEL_ID,
+  PLAN_COMMAND_ID,
+  PLAN_COMMAND_SLASH,
+  PLAN_TOOL_SAVE,
+  PLAN_TOOL_PROPOSE,
+  type PlanMode,
+  type PlanDraftSummary,
+  type PlanApprovedInfo,
+  type PlanSessionView,
+  type PlanBadgeEntry,
+  type PlanBadgesDoc,
+  type PlanToolPresentationMeta,
+  type PlanPluginConfig,
+  type PlanPluginOptions,
+} from './plan.js';

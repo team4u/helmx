@@ -5,7 +5,6 @@ import {
   isJsonObject,
   type ConversationSummary,
   type JsonSchema,
-  type PluginToolResultEnvelope,
 } from '@helmx/protocol'
 import type { PluginClientAssets } from '../asset-paths.js'
 
@@ -98,15 +97,6 @@ export interface PlanConversationRecord {
   pendingAskId?: string
   draft?: PlanDraftSummary
   approved?: PlanApprovedInfo
-}
-
-export interface PlanToolControl {
-  handoff?: string
-  terminate?: boolean
-}
-
-export interface PlanToolResultEnvelope extends PluginToolResultEnvelope {
-  control?: PlanToolControl
 }
 
 export const PLAN_SAVE_META_SCHEMA: JsonSchema = {

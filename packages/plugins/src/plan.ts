@@ -65,8 +65,6 @@ export {
   type PlanPluginConfig,
   type PlanPluginOptions,
   type PlanConversationRecord,
-  type PlanToolControl,
-  type PlanToolResultEnvelope,
 } from './plan/contracts.js'
 
 function resolveTargetConversationId(

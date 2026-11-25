@@ -45,6 +45,7 @@ export interface PlanStateManager {
   requireEligibleConversation(conversationId: number): ConversationSummary
   getView(conversationId: number): PlanSessionView
   enterPlanningMode(conversationId: number): Promise<PlanSessionView>
+  supersedePendingAsk(conversationId: number): Promise<void>
   setMode(conversationId: number, mode: PlanMode): Promise<PlanSessionView>
   toggleMode(conversationId: number): Promise<PlanSessionView>
   cleanupDeletedConversation(conversationId: number): Promise<void>
@@ -278,18 +279,28 @@ export function createPlanStateManager(deps: {
   const applyModeTransition = async (
     conversationId: number,
     nextMode: PlanMode,
+    options?: { supersedePending?: boolean },
   ): Promise<PlanSessionView> => {
     const current = getRecord(conversationId)
+    let cancelledPendingAskId: string | undefined
     if (nextMode === 'normal' && current?.pendingAskId !== undefined) {
+      cancelledPendingAskId = current.pendingAskId
       await cancelAskSafe(current.pendingAskId, 'cancelled')
+    } else if (nextMode === 'planning' && options?.supersedePending === true && current?.pendingAskId !== undefined) {
+      cancelledPendingAskId = current.pendingAskId
+      await cancelAskSafe(current.pendingAskId, 'superseded')
     }
     const latest = getRecord(conversationId)
+    const keepPendingAskId =
+      nextMode === 'planning' &&
+      latest?.pendingAskId !== undefined &&
+      latest.pendingAskId !== cancelledPendingAskId
+        ? latest.pendingAskId
+        : undefined
     const nextRecord: PlanConversationRecord = {
       conversationId,
       mode: nextMode,
-      ...(nextMode === 'planning' && latest?.pendingAskId !== undefined
-        ? { pendingAskId: latest.pendingAskId }
-        : {}),
+      ...(keepPendingAskId !== undefined ? { pendingAskId: keepPendingAskId } : {}),
       ...(latest?.draft !== undefined ? { draft: latest.draft } : {}),
       ...(latest?.approved !== undefined ? { approved: latest.approved } : {}),
     }
@@ -307,7 +318,28 @@ export function createPlanStateManager(deps: {
   }
 
   const enterPlanningMode = (conversationId: number): Promise<PlanSessionView> =>
-    enqueueConversation(conversationId, () => applyModeTransition(conversationId, 'planning'))
+    enqueueConversation(conversationId, () =>
+      applyModeTransition(conversationId, 'planning', { supersedePending: true }),
+    )
+
+  const supersedePendingAsk = (conversationId: number): Promise<void> =>
+    enqueueConversation(conversationId, async () => {
+      const current = getRecord(conversationId)
+      if (current?.pendingAskId === undefined) return
+      const askId = current.pendingAskId
+      await cancelAskSafe(askId, 'superseded')
+      const latest = getRecord(conversationId)
+      if (latest === undefined || latest.pendingAskId !== askId) return
+      const { pendingAskId: _removed, ...rest } = latest
+      writeRecord(conversationId, rest)
+      try {
+        await flushKv()
+      } catch (err) {
+        kv.set(kvKey(conversationId), latest)
+        throw err
+      }
+      syncProjections(conversationId, shouldPersistPlanRecord(rest) ? rest : undefined)
+    })
 
   const setMode = (conversationId: number, mode: PlanMode): Promise<PlanSessionView> =>
     enqueueConversation(conversationId, async () => {
@@ -414,6 +446,7 @@ export function createPlanStateManager(deps: {
     requireEligibleConversation,
     getView,
     enterPlanningMode,
+    supersedePendingAsk,
     setMode,
     toggleMode,
     cleanupDeletedConversation,

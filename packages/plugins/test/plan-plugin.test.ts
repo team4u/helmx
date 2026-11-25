@@ -46,6 +46,7 @@ import {
   type ConversationPatch,
   type ConversationSummary,
   type LocalizedText,
+  type PluginToolResultEnvelope,
   type PluginToolSpec,
 } from '@helmx/protocol'
 import { PluginHost, type PluginHostBackend } from '@helmx/kernel'
@@ -76,7 +77,6 @@ import {
   type PlanConversationRecord,
   type PlanPluginOptions,
   type PlanSessionView,
-  type PlanToolResultEnvelope,
 } from '../src/plan.js'
 import {
   MemoryConfigStore,
@@ -643,7 +643,7 @@ test('actions: toggle, set_mode, get enforce scope guard, flush KV, update proje
       { conversationId: 1 },
     )
     // Wait until draft exists? No, save first!
-    const proposeNoDraft = (await proposePromise) as PlanToolResultEnvelope
+    const proposeNoDraft = (await proposePromise) as PluginToolResultEnvelope
     assert.equal(proposeNoDraft.isError, true)
 
     await harness.host.executeTool(
@@ -655,7 +655,7 @@ test('actions: toggle, set_mode, get enforce scope guard, flush KV, update proje
       PLAN_TOOL_PROPOSE,
       { summary: 'Ready for review' },
       { conversationId: 1 },
-    ) as Promise<PlanToolResultEnvelope>
+    ) as Promise<PluginToolResultEnvelope>
 
     await waitFor(() => harness.createdAsks.length === 1)
     const askId = harness.createdAsks[0]!.id!
@@ -766,6 +766,40 @@ test('hooks: onInput handles bare /plan and transforms /plan <task>, while ignor
       assert.equal(withTaskRes.value.input.whenBusy, 'steer')
     }
     assert.equal(harness.readSessionDoc(1).mode, 'planning')
+
+    // Non-slash human input while a plan approval ask is pending supersedes it without leaving planning mode
+    await harness.host.executeTool(
+      PLAN_TOOL_SAVE,
+      { title: 'Pending Supersede', markdown: '# Steps\n1. Check' },
+      { conversationId: 1 },
+    )
+    const pPending = harness.host.executeTool(
+      PLAN_TOOL_PROPOSE,
+      { summary: 'Pending before composer steer' },
+      { conversationId: 1 },
+    ) as Promise<PluginToolResultEnvelope>
+    await waitFor(() => harness.createdAsks.length === 1)
+    const pendingId = harness.createdAsks[0]!.id!
+
+    // Agent-origin input does NOT supersede the human approval ask
+    await harness.host.runHook('input', {
+      conversationId: 1,
+      input: { id: 'i7-agent', text: 'background note', origin: 'agent', createdAt: 7 },
+    })
+    assert.equal(harness.cancelledAsks.length, 0)
+    assert.equal(harness.readSessionDoc(1).awaitingApproval, true)
+
+    // Human-origin non-slash input supersedes the pending approval ask cleanly
+    const steerOutcome = await harness.host.runHook('input', {
+      conversationId: 1,
+      input: { id: 'i8-human', text: 'actually add rate limiting', origin: 'human', createdAt: 8 },
+    })
+    assert.equal(steerOutcome.action, 'transform')
+    assert.ok(harness.cancelledAsks.some((c) => c.askId === pendingId && c.reason === 'superseded'))
+    const pendingRes = await pPending
+    assert.equal((pendingRes.presentationMeta as { outcome?: string }).outcome, 'superseded')
+    assert.equal(harness.readSessionDoc(1).mode, 'planning')
+    assert.equal(harness.readSessionDoc(1).awaitingApproval, false)
   } finally {
     await harness.close()
   }
@@ -877,7 +911,7 @@ test('plan_save: enforces planning mode, bounds, redaction, version bump, flush,
       PLAN_TOOL_SAVE,
       { title: 'Plan', markdown: '# Body' },
       { conversationId: 1 },
-    )) as PlanToolResultEnvelope
+    )) as PluginToolResultEnvelope
     assert.equal(inNormal.isError, true)
 
     // Reject on child conversation
@@ -885,7 +919,7 @@ test('plan_save: enforces planning mode, bounds, redaction, version bump, flush,
       PLAN_TOOL_SAVE,
       { title: 'Plan', markdown: '# Body' },
       { conversationId: 2 },
-    )) as PlanToolResultEnvelope
+    )) as PluginToolResultEnvelope
     assert.equal(inChild.isError, true)
 
     await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
@@ -895,7 +929,7 @@ test('plan_save: enforces planning mode, bounds, redaction, version bump, flush,
       PLAN_TOOL_SAVE,
       { title: '   ', markdown: '# Body' },
       { conversationId: 1 },
-    )) as PlanToolResultEnvelope
+    )) as PluginToolResultEnvelope
     assert.equal(emptyTitle.isError, true)
 
     await assertRejectsCode(
@@ -912,7 +946,7 @@ test('plan_save: enforces planning mode, bounds, redaction, version bump, flush,
       PLAN_TOOL_SAVE,
       { title: 'Valid', markdown: 'a'.repeat(PLAN_MARKDOWN_MAX_BYTES + 1) },
       { conversationId: 1 },
-    )) as PlanToolResultEnvelope
+    )) as PluginToolResultEnvelope
     assert.equal(oversizedMd.isError, true)
 
     // Valid save v1 with secret redaction
@@ -920,7 +954,7 @@ test('plan_save: enforces planning mode, bounds, redaction, version bump, flush,
       PLAN_TOOL_SAVE,
       { title: 'Auth SECRET_TOKEN', markdown: '# Step 1\nUse SECRET_TOKEN safely\n# Step 2' },
       { conversationId: 1 },
-    )) as PlanToolResultEnvelope
+    )) as PluginToolResultEnvelope
     assert.equal(v1.isError, undefined)
     assert.deepEqual(v1.presentationMeta, {
       kind: 'save',
@@ -944,7 +978,7 @@ test('plan_save: enforces planning mode, bounds, redaction, version bump, flush,
       PLAN_TOOL_SAVE,
       { title: 'Auth Plan v2', markdown: 'Line 1\nLine 2' },
       { conversationId: 1 },
-    )) as PlanToolResultEnvelope
+    )) as PluginToolResultEnvelope
     assert.equal((v2.presentationMeta as { version?: number }).version, 2)
     assert.equal(harness.readSessionDoc(1).draft?.version, 2)
   } finally {
@@ -973,7 +1007,7 @@ test('plan_propose: validates summary, prevents code fences/duplicates, handles 
       PLAN_TOOL_PROPOSE,
       { summary: 'Summary ```ts\nconst x = 1\n```' },
       { conversationId: 1 },
-    )) as PlanToolResultEnvelope
+    )) as PluginToolResultEnvelope
     assert.equal(fenced.isError, true)
     assert.equal(harness.createdAsks.length, 0)
 
@@ -992,7 +1026,7 @@ test('plan_propose: validates summary, prevents code fences/duplicates, handles 
       PLAN_TOOL_PROPOSE,
       { summary: 'Auth plan with SECRET_TOKEN redacted' },
       { conversationId: 1 },
-    ) as Promise<PlanToolResultEnvelope>
+    ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 1)
     const ask1 = harness.createdAsks[0]!
     assert.equal(ask1.expectedStateSeq, 11)
@@ -1007,7 +1041,7 @@ test('plan_propose: validates summary, prevents code fences/duplicates, handles 
       PLAN_TOOL_PROPOSE,
       { summary: 'Second concurrent ask' },
       { conversationId: 1 },
-    )) as PlanToolResultEnvelope
+    )) as PluginToolResultEnvelope
     assert.equal(duplicate.isError, true)
     assert.equal((duplicate.presentationMeta as { outcome?: string }).outcome, 'error')
 
@@ -1033,7 +1067,7 @@ test('plan_propose: validates summary, prevents code fences/duplicates, handles 
       PLAN_TOOL_PROPOSE,
       { summary: 'Second proposal' },
       { conversationId: 1 },
-    ) as Promise<PlanToolResultEnvelope>
+    ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 2)
     harness.cancelAsk(harness.createdAsks[1]!.id!, 'superseded')
     const resSuper = await pSuper
@@ -1046,7 +1080,7 @@ test('plan_propose: validates summary, prevents code fences/duplicates, handles 
       PLAN_TOOL_PROPOSE,
       { summary: 'Abortable proposal' },
       { conversationId: 1, signal: ac.signal },
-    ) as Promise<PlanToolResultEnvelope>
+    ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 3)
     const ask3Id = harness.createdAsks[2]!.id!
     ac.abort()
@@ -1081,7 +1115,7 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
       PLAN_TOOL_PROPOSE,
       { summary: 'Try model handoff' },
       { conversationId: 1 },
-    ) as Promise<PlanToolResultEnvelope>
+    ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 1)
     const askFail = harness.createdAsks[0]!
     const decisionOpts = askFail.fields.find((f) => f.name === 'decision')?.options ?? []
@@ -1139,7 +1173,7 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
       PLAN_TOOL_PROPOSE,
       { summary: 'Handoff to tier/strong' },
       { conversationId: 1 },
-    ) as Promise<PlanToolResultEnvelope>
+    ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 2)
     harness.answerAsk(harness.createdAsks[1]!.id!, {
       decision: 'approve_handoff_model',
@@ -1176,7 +1210,7 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
       PLAN_TOOL_PROPOSE,
       { summary: 'Approve without handoff' },
       { conversationId: 1 },
-    ) as Promise<PlanToolResultEnvelope>
+    ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 3)
     harness.answerAsk(harness.createdAsks[2]!.id!, { decision: 'approve' })
     const resPlain = await pPlainApprove
@@ -1191,7 +1225,7 @@ test('plan_propose: approve, approve_handoff, and approve_handoff_model (success
       PLAN_TOOL_PROPOSE,
       { summary: 'Handoff with huge feedback' },
       { conversationId: 1 },
-    ) as Promise<PlanToolResultEnvelope>
+    ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 4)
     harness.answerAsk(harness.createdAsks[3]!.id!, {
       decision: 'approve_handoff',
@@ -1275,7 +1309,7 @@ test('lifecycle: start hydrates badges, reconcile supersedes orphaned asks, inUs
       PLAN_TOOL_PROPOSE,
       { summary: 'Delete while awaiting' },
       { conversationId: 1 },
-    ) as Promise<PlanToolResultEnvelope>
+    ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 1)
     const liveAskId = harness.createdAsks[0]!.id!
 
@@ -1298,7 +1332,7 @@ test('lifecycle: start hydrates badges, reconcile supersedes orphaned asks, inUs
       PLAN_TOOL_PROPOSE,
       { summary: 'Stop while awaiting' },
       { conversationId: 2 },
-    ) as Promise<PlanToolResultEnvelope>
+    ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 2)
     const stopAskId = harness.createdAsks[1]!.id!
 

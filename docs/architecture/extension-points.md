@@ -83,10 +83,11 @@ export type HookName =
 
 后端工具执行结果严格分离为三个正交通道，杜绝把大对象塞进模型文本或会话持久重放载荷：
 
-- **`ctx.tool`（`PluginToolResultEnvelope`）**：返回裸字符串默认落入 `output`；返回对象时必须是显式信封 `{ output?, structuredOutput?, presentationMeta?, isError? }`（信封携带裸 `details` 显式拒绝）：
+- **`ctx.tool`（`PluginToolResultEnvelope`）**：返回裸字符串默认落入 `output`；返回对象时必须是显式信封 `{ output?, structuredOutput?, presentationMeta?, isError?, control? }`（信封携带裸 `details` 显式拒绝）：
   - `output`：交付给模型的文本通道（`string | Array<{ type: 'text', text: string }>`，受 32 KiB 溢出落盘门禁约束）；
   - `structuredOutput`：程序化/嵌套调用方的完整结构化结果（声明 `structuredOutputSchema` 后同步做 SecretStash 脱敏与 Schema 校验；**绝不自动镜像至持久化 `details` 或模型上下文**）；
-  - `presentationMeta`：落盘到 `pi.tool-result.model[0].details` 供前端/时间线重放的有界普通 JSON 对象（不进入模型提示词与上下文用量），须声明 `presentationMetaSchema`，并在边界强制执行 SecretStash 脱敏、Schema 校验与硬上限（**64 KiB UTF-8、最大深度 12、最多 2000 节点**；拒绝原型键、不可枚举/Symbol 自有键、循环引用、稀疏数组、`undefined`、非有限数、函数/BigInt）。
+  - `presentationMeta`：落盘到 `pi.tool-result.model[0].details` 供前端/时间线重放的有界普通 JSON 对象（不进入模型提示词与上下文用量），须声明 `presentationMetaSchema`，并在边界强制执行 SecretStash 脱敏、Schema 校验与硬上限（**64 KiB UTF-8、最大深度 12、最多 2000 节点**；拒绝原型键、不可枚举/Symbol 自有键、循环引用、稀疏数组、`undefined`、非有限数、函数/BigInt）；
+  - `control`（`PluginToolControl`）：可选的回合后控制指令 `{ handoff?: string, terminate?: boolean }`（不得与 `isError: true` 同用，显式拒绝 `addTools` 与任何未知/原型键；`handoff` 须为非空非空白字符串，经 SecretStash 脱敏且 UTF-8 上限 **128 KiB / 131,072 字节**，超限直接拒绝 `invalid_tool_result`，绝不静默截断），由内核透传 `pi-durable` 原地写入 `pi.reset` 并在同回合干净上下文中继续或终止。
 - **`ctx.action({ exposeAsTool: true })`**：`handler` 仍返回裸业务值并按 `outputSchema` 校验（透传为派生工具的 `structuredOutputSchema`，保持五端映射完全一致）；如需前端展示索引，可选声明 `presentationMetaSchema` 与纯投影函数 `projectPresentationMeta(input, output)`（非 `exposeAsTool` 动作或缺少 Schema 时在注册边界显式拒绝）。
 - **前端 `ToolViewProps` 与 `useTimelineToolCalls(toolName)`**：
   - `tool.view` 组件收到 `ToolViewProps`（`callId / toolName / input / status / result / presentationMeta / resultTruncation / isError / startedAt / durationMs / artifactRef / conversationId`）；旧字段 `structuredOutput` 与 `siblingCalls`（及 `ToolViewSiblingCall`）已移除，组件直接消费 `props.presentationMeta` 并在缺失时回落 `ToolCallDetails` 或纯文本错误，**严禁 `JSON.parse(props.result)` 兜底**；

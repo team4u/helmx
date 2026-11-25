@@ -96,6 +96,7 @@ const CLIENT_ROOTS: Record<string, string> = {
   'builtin:triggers': fileURLToPath(new URL('../../../plugins/src/triggers/client', import.meta.url)),
   'builtin:magpie': fileURLToPath(new URL('../../../plugins/src/magpie/client', import.meta.url)),
   'builtin:tiers': fileURLToPath(new URL('../../../plugins/src/tiers/client', import.meta.url)),
+  'builtin:plan': fileURLToPath(new URL('../../../plugins/src/plan/client', import.meta.url)),
 }
 
 export async function importBuiltinClientModule(

@@ -119,6 +119,7 @@ const PLUGIN_PRIVATE_CLASS_PREFIXES = [
   'tg-', // builtin:triggers
   'magpie-', // builtin:magpie
   'tiers-', // builtin:tiers
+  'plan-', // builtin:plan
 ] as const
 
 test('样式边界：宿主分片零插件私有类名选择器（消除宿主点名插件类名的 CSS 补丁）', { timeout: 60_000 }, () => {

@@ -38,33 +38,47 @@ function getConversationOrUndefined(
 }
 
 export function registerPlanHooks(ctx: HelmxPluginContext, state: PlanStateManager): void {
-  ctx.hook.onInput(async (payload) => {
-    if (state.isStopping()) return { action: 'continue' }
-    if (payload.input.origin !== 'human') return { action: 'continue' }
+  ctx.hook.onInput(
+    async (payload) => {
+      if (state.isStopping()) return { action: 'continue' }
+      if (payload.input.origin !== 'human') return { action: 'continue' }
 
-    const parsed = parsePlanSlashInput(payload.input.text)
-    if (!parsed.matched) return { action: 'continue' }
+      const parsed = parsePlanSlashInput(payload.input.text)
+      const existing = state.getRecord(payload.conversationId)
+      const hasPending =
+        existing?.pendingAskId !== undefined || state.hasInFlightAsk(payload.conversationId)
+      if (!parsed.matched && !hasPending) return { action: 'continue' }
 
-    const conv = getConversationOrUndefined((id) => ctx.host.getConversation(id), payload.conversationId)
-    if (conv === undefined || !isPlanConversationEligible(conv)) {
-      return { action: 'continue' }
-    }
+      const conv = getConversationOrUndefined(
+        (id) => ctx.host.getConversation(id),
+        payload.conversationId,
+      )
+      if (conv === undefined || !isPlanConversationEligible(conv)) {
+        return { action: 'continue' }
+      }
 
-    await state.enterPlanningMode(conv.id)
-    if (parsed.remainder === '') {
-      return { action: 'handled' }
-    }
-    return {
-      action: 'transform',
-      value: {
-        ...payload,
-        input: {
-          ...payload.input,
-          text: parsed.remainder,
+      if (!parsed.matched) {
+        await state.supersedePendingAsk(conv.id)
+        return { action: 'continue' }
+      }
+
+      await state.enterPlanningMode(conv.id)
+      if (parsed.remainder === '') {
+        return { action: 'handled' }
+      }
+      return {
+        action: 'transform',
+        value: {
+          ...payload,
+          input: {
+            ...payload.input,
+            text: parsed.remainder,
+          },
         },
-      },
-    }
-  })
+      }
+    },
+    { priority: -50 },
+  )
 
   // Run after default-priority (0) hooks and before profile's catalog hook (-100) so stripped
   // dispatch tools suppress `<available_profiles>` cleanly without leaking collaboration prompts.
