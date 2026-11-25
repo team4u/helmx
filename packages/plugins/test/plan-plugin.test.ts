@@ -557,6 +557,7 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
     const cmd = ui.find((u) => u.surface === 'commandPalette')?.spec as Record<string, unknown>
     assert.equal(cmd['id'], PLAN_COMMAND_ID)
     assert.equal(cmd['slash'], PLAN_COMMAND_SLASH)
+    assert.equal(cmd['shortcut'], 'Ctrl+.')
     assert.equal(cmd['actionId'], 'toggle')
     assert.equal(cmd['icon'], 'list-tree')
     assert.deepEqual(cmd['scope'], {})
@@ -607,6 +608,11 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
       assert.equal(HAN_RE.test(JSON.stringify(tool.promptGuidelines ?? [])), false)
       assert.equal(HAN_RE.test(JSON.stringify(tool.inputSchema)), false)
     }
+
+    // Disabling builtin:plan removes its command (and shortcut) cleanly without ghost entries
+    await harness.host.disable(PLAN_PLUGIN_ID)
+    const uiAfterDisable = harness.host.listUi().filter((u) => u.pluginId === PLAN_PLUGIN_ID)
+    assert.equal(uiAfterDisable.length, 0)
   } finally {
     await harness.close()
   }

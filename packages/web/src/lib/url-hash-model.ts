@@ -38,8 +38,8 @@ export interface WorkspaceLocationState {
   activeModal: ActiveModal
 }
 
-/** Modals persisted into the URL (command-palette and hub-changelog are transient, excluded). */
-type PersistedModal = Exclude<ActiveModal, null | { kind: 'command-palette' } | { kind: 'hub-changelog' }>
+/** Modals persisted into the URL (command-palette, shortcuts and hub-changelog are transient, excluded). */
+type PersistedModal = Exclude<ActiveModal, null | { kind: 'command-palette' } | { kind: 'shortcuts' } | { kind: 'hub-changelog' }>
 
 /**
  * Default primary screen: the agent profile center (conversation-free, usable
@@ -463,8 +463,8 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
     query.push(['drawer', formatDrawerFrameToken(frame)])
   }
   const modal = state.activeModal
-  // command-palette and hub-changelog are ephemeral UI: never serialized into the URL hash.
-  if (modal !== null && modal.kind !== 'command-palette' && modal.kind !== 'hub-changelog') {
+  // command-palette, shortcuts and hub-changelog are ephemeral UI: never serialized into the URL hash.
+  if (modal !== null && modal.kind !== 'command-palette' && modal.kind !== 'shortcuts' && modal.kind !== 'hub-changelog') {
     query.push(['modal', MODAL_KIND_TO_KEY[modal.kind]])
     if (modal.kind === 'artifact-preview') {
       query.push(['id', modal.artifactId])
@@ -487,9 +487,9 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
   return `#/${formatTargetValue(state.primaryTarget)}${search === '' ? '' : `?${search}`}`
 }
 
-/** command-palette and hub-changelog are transient modals and never participate in location comparison (consistent with staying out of the URL). */
+/** command-palette, shortcuts and hub-changelog are transient modals and never participate in location comparison (consistent with staying out of the URL). */
 const normalizeModal = (modal: ActiveModal): PersistedModal | null =>
-  modal === null || modal.kind === 'command-palette' || modal.kind === 'hub-changelog' ? null : modal
+  modal === null || modal.kind === 'command-palette' || modal.kind === 'shortcuts' || modal.kind === 'hub-changelog' ? null : modal
 
 /** Compare location fields one by one (primary, split, drawerStack, persisted modal). */
 export function isSameLocationState(a: WorkspaceLocationState, b: WorkspaceLocationState): boolean {

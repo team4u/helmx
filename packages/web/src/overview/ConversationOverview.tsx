@@ -71,6 +71,7 @@ import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { ConversationStatusDot, RemoteNodeTag } from '../shell/SidebarPrimitives.js'
+import { formatModShiftShortcut } from '../shell/shortcuts-model.js'
 import { isConversationArchivable, isConversationBulkSelectable, type AgentStanding } from '../shell/sidebar-model.js'
 import { archiveBatchNotice, patchConversationsArchived } from '../shell/archive-ops.js'
 import { useBatchConversationDelete } from '../shell/use-batch-conversation-delete.js'
@@ -790,6 +791,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   // 单候选直进按钮的稳定绑定（闭包内索引访问会丢失窄化，这里一次性收敛）。
   const singleNewTopicCandidate: AgentStanding | null =
     newTopicCandidates.length === 1 ? (newTopicCandidates[0] ?? null) : null
+  const newTopicShortcut = formatModShiftShortcut('O')
 
   // 数据就绪门：会话快照未到（且资产未齐/SSE 未连）时如实展示加载态，
   // 绝不把「还没加载」伪报成「没有会话」；一旦有任何会话或资产+SSE 双就绪，
@@ -820,7 +822,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               className="overview-newtopic-btn"
               icon={<HelmxIcon name="plus" size={12} />}
               aria-label={t('conv.pane.newTopic')}
-              title={t('shell.agents.newTopicUnder', { label: singleNewTopicCandidate.label })}
+              title={t('shell.agents.newTopicUnderWithShortcut', { label: singleNewTopicCandidate.label, shortcut: newTopicShortcut })}
               onClick={() => {
                 openNewTopic(singleNewTopicCandidate.profileId)
               }}
@@ -836,7 +838,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                   className="overview-newtopic-btn"
                   icon={<HelmxIcon name="plus" size={12} />}
                   aria-label={t('conv.pane.newTopic')}
-                  title={t('conv.pane.newTopicTitle')}
+                  title={t('conv.pane.newTopicWithShortcut', { shortcut: newTopicShortcut })}
                   aria-haspopup="menu"
                 >
                   <Stack inline direction="horizontal" gap="xs" align="center">

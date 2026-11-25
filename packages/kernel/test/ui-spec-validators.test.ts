@@ -42,11 +42,12 @@ function expectThrow(
 // Early phase: commandPalette / plugin.slot
 // ---------------------------------------------------------------------------
 
-test('commandPalette: slash+actionId passes; reserved words and intra-plugin duplicate slash reject', { timeout: 60_000 }, () => {
+test('commandPalette: slash+actionId+shortcut pass; reserved words, duplicate slash, and invalid shortcut reject', { timeout: 60_000 }, () => {
   const ctx = makeCtx('commandPalette', [
     { pluginId: 'p1', surface: 'commandPalette', spec: { id: 'c0', slash: 'chart' } },
   ]);
-  validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'diagram', actionId: 'act' }, 'c1', ctx);
+  validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'diagram', shortcut: 'Ctrl+.', actionId: 'act' }, 'c1', ctx);
+  validateUiSpecEarly('commandPalette', { id: 'c2', shortcut: 'A'.repeat(32), actionId: 'act' }, 'c2', ctx);
   expectThrow(
     () => validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'new', actionId: 'act' }, 'c1', makeCtx('commandPalette')),
     'invalid_ui_spec',
@@ -58,6 +59,13 @@ test('commandPalette: slash+actionId passes; reserved words and intra-plugin dup
     'invalid_ui_spec',
     'must bind actionId when declaring slash',
   );
+  for (const badShortcut of ['', '   ', ' Ctrl+.', 'Ctrl+. ', 'Ctrl+\n.', 'A'.repeat(33), 123]) {
+    expectThrow(
+      () => validateUiSpecEarly('commandPalette', { id: 'c1', shortcut: badShortcut, actionId: 'act' }, 'c1', makeCtx('commandPalette')),
+      'invalid_ui_spec',
+      'shortcut must be a trimmed non-empty string',
+    );
+  }
 });
 
 test('plugin.slot: valid target+client passes; missing client, extra slashes, and invalid segment identifiers reject', { timeout: 60_000 }, () => {

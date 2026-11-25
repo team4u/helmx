@@ -570,3 +570,134 @@
   padding: 0 1.5px;
   font-weight: 600;
 }
+
+.palette-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 12px;
+  border-top: 1px solid var(--line-2);
+  background: var(--bg-subtle);
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.palette-footer-hints {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.palette-footer-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.palette-footer-shortcuts-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+}
+
+.palette-footer-shortcuts-btn:hover {
+  color: var(--fg);
+}
+
+@media (max-width: 680px), (hover: none) and (pointer: coarse) {
+  .palette-footer {
+    display: none;
+  }
+}
+
+/* ==========================================================================
+ * 键盘快捷键总览弹窗（ShortcutsModal）
+ * ========================================================================== */
+
+.shortcuts-modal {
+  max-width: 520px;
+}
+
+.shortcuts-modal-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.shortcuts-modal-body {
+  gap: 16px;
+}
+
+.shortcuts-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.shortcuts-section-title {
+  margin: 0;
+  padding: 0 8px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.shortcuts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.shortcuts-row:hover {
+  background: var(--bg-subtle);
+}
+
+.shortcuts-row-label {
+  color: var(--fg);
+  min-width: 0;
+}
+
+.shortcuts-row-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Always display keycaps inside the shortcuts reference modal, even on compact/touch viewports. */
+.shortcuts-modal .kbd-hint {
+  display: inline-flex !important;
+}
+
+@media (max-width: 680px) {
+  .shortcuts-modal {
+    width: 100vw;
+    max-width: 100vw;
+    max-height: 90dvh;
+  }
+}

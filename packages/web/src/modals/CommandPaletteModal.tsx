@@ -37,10 +37,10 @@ import {
 import type { LocalePreference } from '../lib/types.js'
 import {
   activeTargetForPanel,
-  isApplePlatform,
+  formatModShortcut,
   resolveFocusedPanel,
 } from '../shell/shortcuts-model.js'
-import { collectEnabledPluginIds, isHumanSelectableProfile } from '../shell/sidebar-model.js'
+import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
 import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import {
@@ -254,27 +254,20 @@ export function CommandPaletteModal({
 
   const activePanel = resolveFocusedPanel(focusedPanel ?? 'primary', splitTarget)
   const activeTarget = activeTargetForPanel(primaryTarget, splitTarget, activePanel)
-  const modEnterHint = isApplePlatform() ? '⌘Enter' : 'Ctrl+Enter'
+  const modEnterHint = formatModShortcut('Enter')
+  const shortcutsHint = formatModShortcut('/')
   const navRowTitle = t('modals.palette.navRowTitle', { modEnter: modEnterHint })
 
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(plugins), [plugins])
-
-  const paletteProfileId = useMemo(() => {
-    let candidate: string | undefined
-    if (activeTarget.kind === 'agent') candidate = activeTarget.profileId
-    else if (activeTarget.kind === 'conversation') {
-      candidate = conversations.find((c) => c.id === activeTarget.conversationId)?.profileId
-    }
-    if (candidate === undefined) return undefined
-    const matched = profiles.find((p) => p.id === candidate)
-    if (matched !== undefined && !isHumanSelectableProfile(matched, enabledPluginIds)) return undefined
-    return candidate
-  }, [activeTarget, conversations, profiles, enabledPluginIds])
 
   const paletteConversation = useMemo(() => {
     if (activeTarget.kind !== 'conversation') return undefined
     return conversations.find((c) => c.id === activeTarget.conversationId)
   }, [activeTarget, conversations])
+
+  const openShortcutsModal = useCallback(() => {
+    actions.setActiveModal({ kind: 'shortcuts' })
+  }, [actions.setActiveModal])
 
   const contextCommands = useMemo(
     () =>
@@ -282,13 +275,30 @@ export function CommandPaletteModal({
         activeTarget,
         activePanel,
         workbenchOpen,
-        paletteProfileId,
+        conversations,
+        profiles,
+        plugins,
+        sidebarItems: groupedUi.sidebarItems,
+        locale,
         splitTarget,
         setWorkbenchOpen: actions.setWorkbenchOpen,
         closeSplit: actions.closeSplit,
         t,
       }),
-    [activePanel, activeTarget, actions.closeSplit, actions.setWorkbenchOpen, paletteProfileId, splitTarget, t, workbenchOpen],
+    [
+      activePanel,
+      activeTarget,
+      actions.closeSplit,
+      actions.setWorkbenchOpen,
+      conversations,
+      groupedUi.sidebarItems,
+      locale,
+      plugins,
+      profiles,
+      splitTarget,
+      t,
+      workbenchOpen,
+    ],
   )
 
   const recentConversationRows = useMemo(
@@ -353,6 +363,7 @@ export function CommandPaletteModal({
         quietNotifyEnabled,
         onPreviewCommand: setPreviewCmd,
         onInvokePluginCommand: invokePluginCommand,
+        openShortcuts: openShortcutsModal,
         toggleSidebarCollapsed: actions.toggleSidebarCollapsed,
         toggleTheme: actions.toggleTheme,
         setLocalePreference: actions.setLocalePreference,
@@ -368,6 +379,7 @@ export function CommandPaletteModal({
       localePref,
       quietNotifyEnabled,
       invokePluginCommand,
+      openShortcutsModal,
       actions.toggleSidebarCollapsed,
       actions.toggleTheme,
       actions.setLocalePreference,
@@ -783,6 +795,36 @@ export function CommandPaletteModal({
                     ))
                   : rows.map((row, idx) => renderRow(row, idx))}
               </div>
+            </div>
+
+            <div className="palette-footer">
+              <div className="palette-footer-hints" aria-hidden="true">
+                <span className="palette-footer-hint">
+                  <kbd className="kbd-hint">↑↓</kbd>
+                  <span>{t('modals.palette.footerSelect')}</span>
+                </span>
+                <span className="palette-footer-hint">
+                  <kbd className="kbd-hint">Enter</kbd>
+                  <span>{t('modals.palette.footerOpen')}</span>
+                </span>
+                <span className="palette-footer-hint">
+                  <kbd className="kbd-hint">{modEnterHint}</kbd>
+                  <span>{t('modals.palette.footerSplit')}</span>
+                </span>
+                <span className="palette-footer-hint">
+                  <kbd className="kbd-hint">Esc</kbd>
+                  <span>{t('modals.palette.footerClose')}</span>
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="xs"
+                className="palette-footer-shortcuts-btn"
+                onClick={openShortcutsModal}
+              >
+                <span>{t('modals.palette.footerShortcuts')}</span>
+                <kbd className="kbd-hint">{shortcutsHint}</kbd>
+              </Button>
             </div>
           </DialogContent>
         </DialogOverlay>

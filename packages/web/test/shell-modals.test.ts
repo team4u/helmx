@@ -1027,10 +1027,14 @@ test('Sidebar 双层导航：Activity Rail 空间切换与系统中心直达（S
   assert.ok(!html.includes('>视图</div>'), '默认不渲染视图空间分组')
   assert.ok(!html.includes('settings-nav'), '默认不渲染设置空间分组')
 
-  // 默认收起筛选栏：渲染筛选切换按钮与 Cmd-K 按钮，无多余常驻搜索输入
+  // 默认收起筛选栏：渲染筛选切换按钮与全局搜索按钮，无多余常驻搜索输入
   assert.ok(html.includes('aria-label="Filter conversations"'), '渲染工作集筛选开关按钮')
   assert.ok(!html.includes('sidebar-search-input'), '默认收起筛选栏，不常驻渲染搜索输入框')
-  assert.ok(html.includes('aria-label="Open Cmd K global search and command palette"'), 'Cmd-K 按钮保留')
+  assert.ok(
+    html.includes('aria-label="Open global search and command palette (Ctrl+K)"') ||
+      html.includes('aria-label="Open global search and command palette (⌘K)"'),
+    '全局搜索与命令面板按钮保留并携带平台快捷键',
+  )
 
   // 底栏已移除：系统中心入口收敛到设置空间；changelog 入口住在 Activity Rail 底部（主题钮下方）
   assert.ok(!html.includes('sidebar-footer'), '底栏容器已移除')
