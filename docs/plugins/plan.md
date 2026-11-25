@@ -21,7 +21,7 @@
 
 | 入口 | 用法 | 说明 |
 | :--- | :--- | :--- |
-| 工具栏按钮 / `Ctrl+.` | 输入框左下角模型选择器旁的计划按钮（`COMPOSER_TOOLBAR_SLOT`），或在主屏/分屏按 `Ctrl+.` | 真实会话点击或快捷键直接调用 `toggle`；待命页（`#/a/<profileId>`）按独立分屏草稿切换本地 `inputMeta['builtin:plan'] = { mode: 'planning' }` 预武装态（不落库、不标脏），首条消息发出时在 `onInput` 原子进入计划模式并保留原文本与自动标题 |
+| `+` 菜单 / `Ctrl+.` / 激活态胶囊 | 输入框左下角统一 `+` 菜单内「计划模式」（`COMPOSER_MENU_SLOT`）、主屏/分屏 `Ctrl+.`，或开启后模型选择器旁激活态紧凑胶囊（`COMPOSER_TOOLBAR_SLOT`） | 未开启时不占工具栏宽度，菜单与 `Ctrl+.` 均可用；激活态在工具栏呈现轻量紧凑胶囊并带一键退出 `×`；真实会话点击或快捷键直接调用 `toggle`；待命页（`#/a/<profileId>`）按独立分屏草稿切换本地 `inputMeta['builtin:plan'] = { mode: 'planning' }` 预武装态（不落库、不标脏），首条消息发出时在 `onInput` 原子进入计划模式并保留原文本与自动标题 |
 | 输入框斜杠 / `⌘K` | `/plan`（无参数）或 `/plan <任务>` | 真实会话中选命令执行 `toggle`；直接发送裸 `/plan` 由 `onInput` 接管（`handled`）切换至计划模式不进聊天历史；发送 `/plan <任务>` 切换至计划模式并剥离前缀（`transform`），内核据此生成无 `/plan ` 前缀的标题后直接开始调研 |
 | 工作台人工编辑 | 在右侧「执行计划」面板点击草稿卡片「编辑」 | 触发 `update_draft` Action（携带 `expectedVersion` CAS 版本校验，冲突报 `409 plan_draft_conflict`）；若审批挂起期间编辑保存了新版草稿，批准归档与交接将采用最新编辑版本 |
 | CLI | `helmx plan toggle --current` / `set_mode --current --input '{"mode":"planning"}'` / `get --current` / `update_draft --current --input '{"title":"...","markdown":"..."}'` | 支持 `--conversation-id <id>` 与 `--json`，返回 `PlanSessionView` |
@@ -33,12 +33,12 @@
 
 以一次顶层人类直连会话为例，计划模式按以下顺序闭环（各步的入口、工具边界与状态字段见上下两节）：
 
-1. **进入计划模式**：点击输入框工具栏计划按钮、按 `Ctrl+.`、发送 `/plan` 或 `/plan <任务>`，或在 CLI 执行 `helmx plan toggle --current`；待命页（`#/a/<profileId>`）点击按钮只写入本地预武装态，首条消息发出时才真正进入计划模式。
+1. **进入计划模式**：点击输入框左下角 `+` 菜单内「计划模式」、按 `Ctrl+.`、在输入框选或发 `/plan` / `/plan <任务>`，或在 CLI 执行 `helmx plan toggle --current`；待命页（`#/a/<profileId>`）只在本地写入预武装态并显示紧凑胶囊，首条消息发出时才真正进入计划模式。
 2. **只读调研**：`before_turn`（`priority: -50`）将本回合工具收紧为 `PLAN_MODE_TOOL_WHITELIST` 中的七个工具；模型使用 `read` / `read_artifact` / `load_skill` / `plan_bash` 收集事实，`plan_bash` 先经 `validateReadOnlyShellCommand` 校验通过后才在节点执行。
 3. **澄清需求**：存在真实歧义时调用 `plan_ask` 发起 1..4 题的结构化单选卡（`awaitingClarification: true`，不触发审批面板）；等待期间人类直接在 Composer 发送消息会以 `'superseded'` 结算该澄清单，并保持在 `planning` 模式。
 4. **起草计划**：调用 `plan_save` 写入自包含草稿（完整文件路径、关键符号、分步改动、约束与验收命令），可多轮覆盖，`version` 递增并经 `ctx.kv('plans')` 持久化后投影到 `plan` sessionDoc；人类可在右侧「执行计划」面板直接编辑（`update_draft` 携带 `expectedVersion` 做 CAS 校验，冲突报 `409 plan_draft_conflict`）。
-5. **提交审批**：调用 `plan_propose` 生成 AskDoc 审批卡，单选 `approve_handoff`「批准并在新上下文执行」/ `approve`「批准并在当前上下文继续」/ `revise`「退回修改」，可选 `executionModel`；`revise`、取消或超时销单都会清除 `pendingAskId` 并停留在 `planning` 模式，不生成 Artifact。
-6. **归档与交接执行**：任一 `approve*` 决定都把最新草稿（含审批期间的人工编辑版本）归档为会话 Artifact `plan-v<N>.md` 并切回 `normal`，下一回合恢复全部工具；选择 `approve_handoff` 时额外登记 `markExpectedHandoffReset` 并返回 `control.handoff`，内核在同回合追加可见 `pi.reset` 后在干净上下文中继续生成执行。若指定了 `executionModel`，会先切换会话模型，切换失败则停留在 `planning` 并显式报错，不静默回退。
+5. **提交审批**：调用 `plan_propose` 生成 AskDoc 审批卡，单选 `approve_handoff`「批准并在新上下文执行」/ `approve`「批准并在当前上下文继续」/ `revise`「退回修改」，可选 `executionModel` 模型与思考等级选择器（`thinkingLevelField: 'executionThinkingLevel'`）；`revise`、取消或超时销单都会清除 `pendingAskId` 并停留在 `planning` 模式，不生成 Artifact。
+6. **归档与交接执行**：任一 `approve*` 决定都把最新草稿（含审批期间的人工编辑版本）归档为会话 Artifact `plan-v<N>.md` 并切回 `normal`，下一回合恢复全部工具；选择 `approve_handoff` 时额外登记 `markExpectedHandoffReset` 并返回 `control.handoff`，内核在同回合追加可见 `pi.reset` 后在干净上下文中继续生成执行。若指定了 `executionModel`（及可选思考等级），会先切换会话模型与 `thinkingLevel`，切换失败则停留在 `planning` 并显式报错，不静默回退。
 
 辅助事件：人工 `/clear` 自动清空计划模式、草稿与角标；时间线编辑重发（`helmx.rewind`）仅以 `'superseded'` 结算挂起 Ask 并保留计划模式与草稿；Hub 重启后 `reconcile()` 将孤儿 `pendingAskId` 以 `'superseded'` 清理并解除会话 `blocked`。
 
@@ -78,8 +78,9 @@
 - **公共文档**：
   - `plan`（`ctx.sessionDoc`，`public: true, durable: false`）：按会话分片的 `PlanSessionView`（含 `awaitingApproval` 与 `awaitingClarification`），经专用 SSE 按需推送，不进入全局首帧；
   - `plan-badges`（`ctx.doc`，`public: true, durable: false`）：全局紧凑角标摘要（`accent` 计划中 / `warn` 等待审批或澄清 / `neutral` 已批准或已有草稿）。
-- **前端界面（`packages/plugins/src/plan/client/`）**：遵循 `clientRoot` 隔离与 Fast Refresh 规范（零 Emoji），提供四个按需组件：
-  - `PlanToolbarButton`（`COMPOSER_TOOLBAR_SLOT`）：主输入框左下角模型选择器右侧；支持 `Ctrl+.` 面板焦点隔离切换；待命页使用轻量 `draftMeta`/`setDraftMeta` 零订阅本地切换；
+- **前端界面（`packages/plugins/src/plan/client/`）**：遵循 `clientRoot` 隔离与 Fast Refresh 规范（零 Emoji），提供五个按需组件：
+  - `PlanMenuItem`（`COMPOSER_MENU_SLOT`）：挂载于主输入框左下角统一 `+` 菜单内，提供带激活对勾与 `Ctrl+.` 提示的「计划模式」开关（待命页复用本地 `draftMeta`/`setDraftMeta` 零订阅切换）；
+  - `PlanToolbarButton`（`COMPOSER_TOOLBAR_SLOT`）：仅在计划/待批/待澄清或待命预武装激活态呈现 24px 紧凑可退出胶囊，普通态仅保留隐藏的 `Ctrl+.` 快捷键锚点以保持工具栏零冗余；
   - `PlanActiveTray`（`COMPOSER_DOCK_SLOT`）：存在草稿、等待审批或等待澄清时展示；桌面端（`innerWidth > 900`）在同一会话内 `awaitingApproval` 由 `false` 跃迁为 `true` 时自动展开右侧 `Plan` 面板；展开托盘内嵌可滚动 `<MarkdownText>` 计划预览；
   - `PlanWorkbenchPanel`（右侧 `plan` 面板）：展示计划正文（支持人工「编辑 / 保存」与外部版本冲突提醒）及准确区分「上下文交接」与「执行模型」的已批准记录；
   - `PlanToolRow`（`toolView`）：消费 `props.presentationMeta` 渲染 `plan_save`、`plan_propose` 与 `plan_ask` 的 26px `.trace-row`（`plan_bash` 复用宿主可展开通用命令工具行）。

@@ -1,12 +1,13 @@
 /**
- * Composer toolbar Plan mode toggle (`COMPOSER_TOOLBAR_SLOT`).
- * Works on both top-level human conversations (toggles persisted mode via `toggle` action)
- * and standby drafts (arms/clears per-draft `inputMeta['builtin:plan']` before first send).
- * Responds to host `Ctrl+.` panel shortcut (`toggle-plan-mode`).
+ * Composer toolbar active-only Plan mode pill (`COMPOSER_TOOLBAR_SLOT`).
+ * Renders zero visible chrome in normal/unarmed state while mounting a hidden
+ * DOM anchor so host `Ctrl+.` panel shortcut (`toggle-plan-mode`) works at all
+ * times. When active (planning / armed / awaiting), renders a compact pill with
+ * quick exit affordance.
  * Returns null on non-eligible conversations (subagents / `helmx`-owned) without subscribing.
  * Exports only React components and TS types (Fast Refresh compliant).
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useRef } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerToolbarSlotProps } from '@helmx/protocol/browser'
 import {
@@ -14,127 +15,83 @@ import {
   StatusLight,
   resolveLocalizedText,
   usePanelShortcut,
-  usePluginAction,
   usePluginLocale,
-  usePluginSessionDocState,
 } from '@helmx/plugin-client'
-import { PLAN_COPY, planActionFailedNotice } from './copy.ts'
+import { PLAN_COPY } from './copy.ts'
 import {
   isPlanEligibleConversation,
   isStandbyPlanArmed,
-  parsePlanSessionView,
   resolvePlanVisualState,
 } from './models.ts'
-import { PLAN_PLUGIN_ID, PLAN_SESSION_DOC, type PlanSessionView } from './types.ts'
-
-const DEFAULT_NORMAL_VIEW: PlanSessionView = {
-  mode: 'normal',
-  awaitingApproval: false,
-}
+import { PLAN_PLUGIN_ID } from './types.ts'
+import { usePlanConversationToggle } from './use-plan-toggle.ts'
 
 function PlanToolbarButtonConversation({ conversationId }: { conversationId: number }): ReactNode {
   const locale = usePluginLocale()
   const t = (text: { en: string; 'zh-CN': string }) => resolveLocalizedText(text, locale)
-  const docState = usePluginSessionDocState<unknown>(PLAN_SESSION_DOC, { conversationId })
-  const rawDocRef = useRef<unknown>(docState.data)
-  rawDocRef.current = docState.data
-  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const { effectiveView, docError, pending, toggle } = usePlanConversationToggle(conversationId)
+  const anchorRef = useRef<HTMLElement | null>(null)
+  const setAnchorRef = useCallback((el: HTMLElement | null): void => {
+    anchorRef.current = el
+  }, [])
 
-  const [pendingView, setPendingView] = useState<{
-    conversationId: number
-    baseDoc: unknown
-    view: PlanSessionView
-  } | null>(null)
-
-  useEffect(() => {
-    setPendingView((prev) =>
-      prev !== null && prev.conversationId === conversationId && prev.baseDoc === docState.data ? prev : null,
-    )
-  }, [conversationId, docState.data])
-
-  const docView = parsePlanSessionView(docState.data)
-  const effectiveView =
-    pendingView !== null && pendingView.conversationId === conversationId && pendingView.baseDoc === docState.data
-      ? pendingView.view
-      : (docView ?? DEFAULT_NORMAL_VIEW)
-
-  const toggleAction = usePluginAction({
-    notifyError: true,
-    formatError: (err) =>
-      planActionFailedNotice(t(PLAN_COPY.actionToggle), err instanceof Error ? err.message : String(err), locale),
+  usePanelShortcut(anchorRef, 'toggle-plan-mode', () => {
+    if (!pending) {
+      toggle()
+    }
   })
 
   const visual = resolvePlanVisualState(effectiveView)
+  if (visual === 'normal') {
+    return (
+      <span
+        ref={setAnchorRef}
+        className="plan-shortcut-anchor"
+        data-plan-mode="normal"
+        data-plan-awaiting="false"
+        hidden
+      />
+    )
+  }
+
   const awaitingClarification = effectiveView.awaitingClarification === true && !effectiveView.awaitingApproval
   const label =
     visual === 'awaiting'
       ? t(awaitingClarification ? PLAN_COPY.toolbarAwaitingClarification : PLAN_COPY.toolbarAwaiting)
-      : visual === 'planning'
-        ? t(PLAN_COPY.toolbarPlanning)
-        : t(PLAN_COPY.toolbarNormal)
+      : t(PLAN_COPY.toolbarPlanning)
   const baseTitle =
     visual === 'awaiting'
       ? t(awaitingClarification ? PLAN_COPY.toolbarTitleAwaitingClarification : PLAN_COPY.toolbarTitleAwaiting)
-      : visual === 'planning'
-        ? t(PLAN_COPY.toolbarTitlePlanning)
-        : t(PLAN_COPY.toolbarTitleNormal)
-  const title = docState.status === 'error' && docState.error ? `${baseTitle} (${docState.error})` : baseTitle
-
-  const handleToggle = (): void => {
-    const baseDoc = rawDocRef.current
-    void toggleAction.run(
-      'toggle',
-      { conversationId },
-      {
-        conversationId,
-        onSuccess: (raw) => {
-          const parsed = parsePlanSessionView(raw)
-          if (parsed !== undefined && rawDocRef.current === baseDoc) {
-            setPendingView({ conversationId, baseDoc, view: parsed })
-          }
-        },
-      },
-    )
-  }
-
-  usePanelShortcut(buttonRef, 'toggle-plan-mode', () => {
-    if (!toggleAction.pending) {
-      handleToggle()
-    }
-  })
-
-  const stateClass =
-    visual === 'awaiting'
-      ? 'plan-toolbar-btn--awaiting'
-      : visual === 'planning'
-        ? 'plan-toolbar-btn--planning'
-        : 'plan-toolbar-btn--normal'
+      : t(PLAN_COPY.toolbarTitlePlanning)
+  const title = docError ? `${baseTitle} (${docError})` : baseTitle
+  const stateClass = visual === 'awaiting' ? 'plan-toolbar-btn--awaiting' : 'plan-toolbar-btn--planning'
 
   return (
     <button
-      ref={buttonRef}
+      ref={setAnchorRef}
       type="button"
       className={`plan-toolbar-btn ${stateClass}`}
-      aria-pressed={effectiveView.mode === 'planning'}
-      aria-busy={toggleAction.pending || undefined}
+      aria-pressed="true"
+      aria-busy={pending || undefined}
       aria-label={title}
       title={title}
-      disabled={toggleAction.pending}
+      disabled={pending}
       data-plan-mode={effectiveView.mode}
       data-plan-awaiting={effectiveView.awaitingApproval ? 'true' : 'false'}
-      onClick={handleToggle}
+      onClick={toggle}
     >
-      {toggleAction.pending ? (
-        <HelmxIcon name="loader" size={13} className="spin-slow" />
+      {pending ? (
+        <HelmxIcon name="loader" size={11} className="spin-slow" />
       ) : visual === 'awaiting' ? (
         <StatusLight
           tone="blocked"
-          label={t(awaitingClarification ? PLAN_COPY.modeClarifying : PLAN_COPY.modeAwaiting)}
+          aria-label={t(awaitingClarification ? PLAN_COPY.modeClarifying : PLAN_COPY.modeAwaiting)}
         />
       ) : (
-        <HelmxIcon name="list-tree" size={13} />
+        <HelmxIcon name="list-tree" size={11.5} />
       )}
       <span className="plan-toolbar-btn-label">{label}</span>
+      <HelmxIcon name="x" size={11} className="plan-toolbar-btn-close" />
     </button>
   )
 }
@@ -150,32 +107,49 @@ function PlanToolbarButtonStandby({
 }): ReactNode {
   const locale = usePluginLocale()
   const t = (text: { en: string; 'zh-CN': string }) => resolveLocalizedText(text, locale)
-  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const anchorRef = useRef<HTMLElement | null>(null)
+  const setAnchorRef = useCallback((el: HTMLElement | null): void => {
+    anchorRef.current = el
+  }, [])
   const armed = isStandbyPlanArmed(draftMeta)
-  const label = t(armed ? PLAN_COPY.toolbarPlanning : PLAN_COPY.toolbarNormal)
-  const title = t(armed ? PLAN_COPY.toolbarTitleStandbyArmed : PLAN_COPY.toolbarTitleStandbyNormal)
 
-  usePanelShortcut(buttonRef, 'toggle-plan-mode', () => {
+  usePanelShortcut(anchorRef, 'toggle-plan-mode', () => {
     if (!disabled) {
       setDraftMeta(PLAN_PLUGIN_ID, armed ? undefined : { mode: 'planning' })
     }
   })
 
+  if (!armed) {
+    return (
+      <span
+        ref={setAnchorRef}
+        className="plan-shortcut-anchor"
+        data-plan-mode="normal"
+        data-plan-awaiting="false"
+        hidden
+      />
+    )
+  }
+
+  const label = t(PLAN_COPY.toolbarPlanning)
+  const title = t(PLAN_COPY.toolbarTitleStandbyArmed)
+
   return (
     <button
-      ref={buttonRef}
+      ref={setAnchorRef}
       type="button"
-      className={`plan-toolbar-btn ${armed ? 'plan-toolbar-btn--planning' : 'plan-toolbar-btn--normal'}`}
-      aria-pressed={armed}
+      className="plan-toolbar-btn plan-toolbar-btn--planning"
+      aria-pressed="true"
       aria-label={title}
       title={title}
       disabled={disabled}
-      data-plan-mode={armed ? 'planning' : 'normal'}
+      data-plan-mode="planning"
       data-plan-awaiting="false"
-      onClick={() => setDraftMeta(PLAN_PLUGIN_ID, armed ? undefined : { mode: 'planning' })}
+      onClick={() => setDraftMeta(PLAN_PLUGIN_ID, undefined)}
     >
-      <HelmxIcon name="list-tree" size={13} />
+      <HelmxIcon name="list-tree" size={11.5} />
       <span className="plan-toolbar-btn-label">{label}</span>
+      <HelmxIcon name="x" size={11} className="plan-toolbar-btn-close" />
     </button>
   )
 }

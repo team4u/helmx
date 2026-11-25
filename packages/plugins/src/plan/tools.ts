@@ -511,6 +511,7 @@ export function registerPlanTools(
             type: 'model',
             required: false,
             defaultValue: configuredExecutionModel ?? '',
+            thinkingLevelField: 'executionThinkingLevel',
           },
           {
             name: 'feedback',
@@ -584,6 +585,12 @@ export function registerPlanTools(
             typeof rawSelectedModel === 'string' && rawSelectedModel.trim() !== ''
               ? ctx.host.redact(rawSelectedModel.trim()).trim()
               : undefined
+          const rawSelectedThinking = askResult.answers['executionThinkingLevel']
+          const redactedThinking =
+            typeof rawSelectedThinking === 'string' && rawSelectedThinking.trim() !== ''
+              ? ctx.host.redact(rawSelectedThinking.trim()).trim()
+              : ''
+          const selectedThinkingLevel = redactedThinking !== '' ? redactedThinking : undefined
 
           if (decision === 'revise') {
             await clearPendingOnly()
@@ -614,7 +621,12 @@ export function registerPlanTools(
           let appliedExecutionModel: string | undefined
           if (selectedModel !== undefined) {
             try {
-              await ctx.host.updateConversation(conversationId, { model: selectedModel })
+              await ctx.host.updateConversation(conversationId, {
+                model: selectedModel,
+                ...(selectedThinkingLevel !== undefined
+                  ? { thinkingLevel: selectedThinkingLevel }
+                  : {}),
+              })
               appliedExecutionModel = selectedModel
             } catch (err) {
               await clearPendingOnly()

@@ -131,6 +131,12 @@ export interface ComposerSendApi {
   /** Execute a plugin command from the slash menu (optimistic trigger cleanup
    * with rollback on untouched failure; stable identity). */
   runPluginCommand: (cmd: QualifiedCommand) => void
+  /** Execute a plugin command triggered outside the text draft (e.g. unified + menu)
+   * without stripping any draft token; stable identity. */
+  runPluginCommandDirect: (cmd: QualifiedCommand) => void
+  /** Execute a built-in session management command (/new, /clear, /compact) directly;
+   * stable identity. */
+  runManageCommand: (cmd: '/new' | '/clear' | '/compact') => void
   /** SessionEnvBar block report (stable identity, for its blocker effect deps). */
   handleEnvBlocker: (blocker: SessionEnvBlocker) => void
   /** Unified error-notice outlet (shared by component-side actions like aborting a turn). */
@@ -327,7 +333,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
   // command state; restore the original draft on failure only if the user has
   // not modified it in the meantime.
   const executePluginCommand = useCallback(
-    async (cmd: QualifiedCommand, mode: 'token' | 'clear', strict: boolean): Promise<void> => {
+    async (cmd: QualifiedCommand, mode: 'token' | 'clear' | 'none', strict: boolean): Promise<void> => {
       if (commandPendingRef.current) {
         if (strict) throw new Error('Current draft empty or a composer operation is already in flight')
         return
@@ -341,16 +347,19 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       const caret = el?.selectionStart ?? before.text.length
       const resolved = mode === 'token' ? removeTokenBeforeCaret(before.text, caret) : { next: '', nextCaret: 0 }
       const expectedAfterClear = draftVersionOf(resolved.next, currentTarget, attachments)
-      setText(resolved.next)
-      syncLiveDraft(resolved.next, currentTarget, attachments)
-      if (mode === 'token' && el !== null && el.isConnected) {
-        focusWithCaret(el, resolved.nextCaret)
+      if (mode !== 'none') {
+        setText(resolved.next)
+        syncLiveDraft(resolved.next, currentTarget, attachments)
+        if (mode === 'token' && el !== null && el.isConnected) {
+          focusWithCaret(el, resolved.nextCaret)
+        }
       }
       publishHiddenDirty()
       try {
         await runPluginCommandFrom(cmd)
       } catch (error) {
         if (
+          mode !== 'none' &&
           mountedRef.current &&
           gen === commandGenRef.current &&
           shouldRestoreEditOnFailure(liveDraftRef.current, expectedAfterClear)
@@ -373,10 +382,14 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
   const runPluginCommandImpl = useCallback((cmd: QualifiedCommand): void => {
     void executePluginCommand(cmd, 'token', false)
   }, [executePluginCommand])
+  const runPluginCommandDirectImpl = useCallback((cmd: QualifiedCommand): void => {
+    void executePluginCommand(cmd, 'none', false)
+  }, [executePluginCommand])
   // Slash menu entries persist across renders: the entry point takes the
   // latest implementation through a stable wrapper (instead of writing a
   // latest ref during render).
   const runPluginCommand = useStableCallback(runPluginCommandImpl)
+  const runPluginCommandDirect = useStableCallback(runPluginCommandDirectImpl)
 
   const runSlashCommand = (raw: string): boolean => {
     const cmd = raw.trim()
@@ -428,6 +441,10 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     }
     return false
   }
+
+  const runManageCommand = useStableCallback((cmd: '/new' | '/clear' | '/compact'): void => {
+    runSlashCommand(cmd)
+  })
 
   const setDraftState = useCallback((next: string): void => {
     setText(next)
@@ -700,6 +717,8 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     send,
     sendExplicit,
     runPluginCommand,
+    runPluginCommandDirect,
+    runManageCommand,
     handleEnvBlocker: handleEnvBlockerStable,
     notifyError,
   }

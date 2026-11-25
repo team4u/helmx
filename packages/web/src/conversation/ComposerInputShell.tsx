@@ -3,11 +3,23 @@
  * auto-growing textarea / CommandPopover / CompletionPopover / toolbar / status row)
  * consumed by both active-conversation Composer and AgentStandbyPane.
  */
-import { useRef } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type * as React from 'react'
-import { Badge, HelmxIcon, IconButton, Tooltip, type BadgeTone } from '@helmx/plugin-client'
+import {
+  Badge,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRoot,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  HelmxIcon,
+  IconButton,
+  Tooltip,
+  resolveLocalizedText,
+  type BadgeTone,
+} from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import type { SlashMenuItem } from '../lib/commands-model.js'
+import type { QualifiedCommand, SlashMenuItem } from '../lib/commands-model.js'
 import { formatBytes } from '../lib/format.js'
 import { CommandPopover } from './CommandPopover.js'
 import { CompletionPopover } from './CompletionPopover.js'
@@ -52,8 +64,20 @@ export interface ComposerInputShellProps {
   fileInputRef: React.RefObject<HTMLInputElement | null>
   uploadButtonLabel: string
   uploadDisabled?: boolean
+  plusMenuDisabled?: boolean
   onOpenFilePicker: () => void
   onFileInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void
+  /** Plugin items mounted inside the unified `+` menu (`COMPOSER_MENU_SLOT`). */
+  renderMenuSlot?: (closeMenu: () => void) => React.ReactNode
+  /** Eligible plugin slash commands not already contributing to `COMPOSER_MENU_SLOT`. */
+  menuCommands?: ReadonlyArray<QualifiedCommand>
+  menuCommandsDisabled?: boolean
+  onRunMenuCommand?: (cmd: QualifiedCommand) => void
+  /** Persisted-conversation session management actions rendered in the `+` menu. */
+  onCompactContext?: () => void
+  compactDisabled?: boolean
+  onClearContext?: () => void
+  onNewTopic?: () => void
   slashOpen: boolean
   popoverQuery: string
   slashMenuItems: SlashMenuItem[]
@@ -93,8 +117,17 @@ export function ComposerInputShell({
   fileInputRef,
   uploadButtonLabel,
   uploadDisabled = false,
+  plusMenuDisabled = false,
   onOpenFilePicker,
   onFileInputChange,
+  renderMenuSlot,
+  menuCommands,
+  menuCommandsDisabled = false,
+  onRunMenuCommand,
+  onCompactContext,
+  compactDisabled = false,
+  onClearContext,
+  onNewTopic,
   slashOpen,
   popoverQuery,
   slashMenuItems,
@@ -110,8 +143,14 @@ export function ComposerInputShell({
   sendControls,
   statusRow,
 }: ComposerInputShellProps): React.JSX.Element {
-  const { t } = useWebLocale()
+  const { locale, t } = useWebLocale()
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false)
+  const closePlusMenu = useCallback(() => setPlusMenuOpen(false), [])
+  const hasToolsSection =
+    renderMenuSlot !== undefined || (menuCommands !== undefined && menuCommands.length > 0)
+  const hasSessionSection =
+    onCompactContext !== undefined || onClearContext !== undefined || onNewTopic !== undefined
 
   return (
     <div className="composer-shell">
@@ -190,17 +229,97 @@ export function ComposerInputShell({
           />
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
-              <Tooltip content={uploadButtonLabel} side="top">
-                <IconButton
-                  icon={<HelmxIcon name="plus" size={19} />}
-                  variant="ghost"
-                  size="sm"
-                  className="composer-icon-button"
-                  aria-label={uploadButtonLabel}
-                  disabled={uploadDisabled}
-                  onClick={onOpenFilePicker}
-                />
-              </Tooltip>
+              <DropdownMenuRoot open={plusMenuOpen} onOpenChange={setPlusMenuOpen}>
+                <DropdownMenuTrigger asChild>
+                  <IconButton
+                    icon={<HelmxIcon name="plus" size={18} />}
+                    variant="ghost"
+                    size="sm"
+                    className="composer-icon-button composer-plus-trigger"
+                    aria-label={t('composer.plusMenu.aria')}
+                    title={t('composer.plusMenu.title')}
+                    disabled={plusMenuDisabled}
+                  />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  portalled
+                  align="start"
+                  side="top"
+                  sideOffset={8}
+                  className="composer-plus-menu"
+                >
+                  <DropdownMenuItem
+                    className="composer-plus-menu-item"
+                    disabled={uploadDisabled}
+                    onSelect={onOpenFilePicker}
+                  >
+                    <HelmxIcon name="paperclip" size={14} className="composer-plus-menu-icon" />
+                    <span className="composer-plus-menu-label">{uploadButtonLabel}</span>
+                  </DropdownMenuItem>
+                  {hasToolsSection ? (
+                    <div className="composer-plus-menu-group">
+                      <DropdownMenuSeparator />
+                      {renderMenuSlot?.(closePlusMenu)}
+                      {menuCommands?.map((cmd) => (
+                        <DropdownMenuItem
+                          key={`cmd:${cmd.pluginId}/${cmd.spec.id}`}
+                          className="composer-plus-menu-item"
+                          disabled={menuCommandsDisabled}
+                          onSelect={() => onRunMenuCommand?.(cmd)}
+                        >
+                          <HelmxIcon
+                            name={cmd.spec.icon ?? 'terminal'}
+                            size={14}
+                            className="composer-plus-menu-icon"
+                          />
+                          <span className="composer-plus-menu-label">
+                            {resolveLocalizedText(cmd.spec.title, locale)}
+                          </span>
+                          {cmd.spec.slash !== undefined ? (
+                            <span className="composer-plus-menu-hint mono">{`/${cmd.spec.slash}`}</span>
+                          ) : null}
+                        </DropdownMenuItem>
+                      ))}
+                    </div>
+                  ) : null}
+                  {hasSessionSection ? (
+                    <div className="composer-plus-menu-group">
+                      <DropdownMenuSeparator />
+                      {onCompactContext !== undefined ? (
+                        <DropdownMenuItem
+                          className="composer-plus-menu-item"
+                          disabled={compactDisabled}
+                          onSelect={onCompactContext}
+                        >
+                          <HelmxIcon name="minimize-2" size={14} className="composer-plus-menu-icon" />
+                          <span className="composer-plus-menu-label">{t('composer.plusMenu.compact')}</span>
+                          <span className="composer-plus-menu-hint mono">/compact</span>
+                        </DropdownMenuItem>
+                      ) : null}
+                      {onClearContext !== undefined ? (
+                        <DropdownMenuItem
+                          className="composer-plus-menu-item"
+                          onSelect={onClearContext}
+                        >
+                          <HelmxIcon name="rotate-ccw" size={14} className="composer-plus-menu-icon" />
+                          <span className="composer-plus-menu-label">{t('composer.plusMenu.clear')}</span>
+                          <span className="composer-plus-menu-hint mono">/clear</span>
+                        </DropdownMenuItem>
+                      ) : null}
+                      {onNewTopic !== undefined ? (
+                        <DropdownMenuItem
+                          className="composer-plus-menu-item"
+                          onSelect={onNewTopic}
+                        >
+                          <HelmxIcon name="message-square" size={14} className="composer-plus-menu-icon" />
+                          <span className="composer-plus-menu-label">{t('composer.plusMenu.newTopic')}</span>
+                          <span className="composer-plus-menu-hint mono">/new</span>
+                        </DropdownMenuItem>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenuRoot>
               {modelPicker}
               {toolbarSlot}
               <input

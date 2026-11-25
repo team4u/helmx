@@ -35,6 +35,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   COMPOSER_DOCK_SLOT,
+  COMPOSER_MENU_SLOT,
   COMPOSER_TOOLBAR_SLOT,
   HelmxError,
   assertBoundedPresentationMeta,
@@ -229,6 +230,7 @@ async function openPlanHarness(options: {
     writeFileSync(
       join(clientDir, 'index.tsx'),
       [
+        'export function PlanMenuItem() { return null }',
         'export function PlanToolbarButton() { return null }',
         'export function PlanActiveTray() { return null }',
         'export function PlanWorkbenchPanel() { return null }',
@@ -551,7 +553,7 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
 
     // UI contributions check
     const ui = harness.host.listUi().filter((u) => u.pluginId === PLAN_PLUGIN_ID)
-    assert.equal(ui.length, 5)
+    assert.equal(ui.length, 6)
     assert.equal(EMOJI_RE.test(JSON.stringify(ui)), false)
 
     const cmd = ui.find((u) => u.surface === 'commandPalette')?.spec as Record<string, unknown>
@@ -561,6 +563,11 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
     assert.equal(cmd['actionId'], 'toggle')
     assert.equal(cmd['icon'], 'list-tree')
     assert.deepEqual(cmd['scope'], {})
+
+    const menuSlot = ui.find((u) => u.surface === 'plugin.slot' && (u.spec as { id?: string }).id === 'plan-menu-item')?.spec as Record<string, unknown>
+    assert.equal(menuSlot['target'], COMPOSER_MENU_SLOT)
+    assert.equal(menuSlot['order'], 20)
+    assert.deepEqual(menuSlot['client'], { module: 'index.tsx', export: 'PlanMenuItem' })
 
     const toolbarSlot = ui.find((u) => u.surface === 'plugin.slot' && (u.spec as { id?: string }).id === 'plan-toolbar')?.spec as Record<string, unknown>
     assert.equal(toolbarSlot['target'], COMPOSER_TOOLBAR_SLOT)
@@ -587,6 +594,7 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
     // Verify client module compiles cleanly via plugin-build
     const compiled = await harness.host.getClientModule(PLAN_PLUGIN_ID, 'index.tsx')
     assert.ok(compiled.code.includes('PlanToolbarButton'))
+    assert.ok(compiled.code.includes('PlanMenuItem'))
 
     // Actions & tools: English-only execution copy and exposeToPrompt: false
     const actions = harness.host.listActions().filter((a) => a.pluginId === PLAN_PLUGIN_ID)
@@ -1171,6 +1179,7 @@ test('plan_propose: validates summary, prevents code fences/duplicates, handles 
     const modelField1 = ask1.fields.find((f) => f.name === 'executionModel')
     assert.ok(modelField1 && modelField1.type === 'model')
     assert.equal(modelField1.defaultValue, '')
+    assert.equal(modelField1.thinkingLevelField, 'executionThinkingLevel')
     assertBilingual(modelField1.label, 'executionModel.label')
     const feedbackField1 = ask1.fields.find((f) => f.name === 'feedback')
     assert.ok(feedbackField1)
@@ -1282,14 +1291,18 @@ test('plan_propose: approve and approve_handoff with executionModel selection (s
       executionModel: 'tier/strong',
     })
 
-    // 2) approve_handoff + executionModel success -> updateConversation FIRST, then artifact, then normal + flush + control.handoff
+    // 2) approve_handoff + executionModel + executionThinkingLevel success -> updateConversation FIRST (with thinkingLevel), then artifact, then normal + flush + control.handoff
     harness.setUpdateConversationHandler(undefined)
     const callOrder: string[] = []
     const origUpdate = harness.conversations.get(1)!
     assert.ok(origUpdate)
     harness.setUpdateConversationHandler(async (id, patch) => {
       callOrder.push('updateConversation')
-      const updated = { ...harness.conversations.get(id)!, model: patch.model ?? 'faux/strong' }
+      const updated = {
+        ...harness.conversations.get(id)!,
+        model: patch.model ?? 'faux/strong',
+        ...(patch.thinkingLevel !== undefined ? { thinkingLevel: patch.thinkingLevel } : {}),
+      }
       harness.conversations.set(id, updated)
       return updated
     })
@@ -1324,12 +1337,18 @@ test('plan_propose: approve and approve_handoff with executionModel selection (s
     harness.answerAsk(askWithModel.id!, {
       decision: 'approve_handoff',
       executionModel: 'tier/strong',
+      executionThinkingLevel: 'high',
       feedback: 'Include tests for SECRET_TOKEN',
     })
     const resModelOk = await pModelOk
     assert.equal(resModelOk.isError, undefined)
     assert.deepEqual(callOrder, ['updateConversation', 'createArtifact'])
+    assert.deepEqual(harness.updateCalls.at(-1)?.patch, {
+      model: 'tier/strong',
+      thinkingLevel: 'high',
+    })
     assert.equal(harness.conversations.get(1)?.model, 'tier/strong')
+    assert.equal(harness.conversations.get(1)?.thinkingLevel, 'high')
     assert.equal(harness.createdArtifacts[0]?.name, 'plan-v1.md')
     assert.equal(resModelOk.presentationMeta?.['outcome'], 'approved_handoff')
     assert.equal(resModelOk.presentationMeta?.['artifactId'], 'art-handoff-1')
@@ -1344,7 +1363,7 @@ test('plan_propose: approve and approve_handoff with executionModel selection (s
     assert.equal(harness.readSessionDoc(1).approved?.executionModel, 'tier/strong')
     assert.equal(harness.readBadgesDoc().byConversation['1']?.tone, 'neutral')
 
-    // 3) Plain `approve` (without model switch and with model override) + `approve_handoff` (no model switch) <= 128 KiB
+    // 3) Plain `approve` (without model switch and with model override + blank thinkingLevel omitted) + `approve_handoff` (no model switch) <= 128 KiB
     harness.setUpdateConversationHandler(undefined)
     harness.setCreateArtifactHandler(undefined)
     await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
@@ -1367,7 +1386,7 @@ test('plan_propose: approve and approve_handoff with executionModel selection (s
     assert.equal(resPlain.presentationMeta?.['executionModel'], undefined)
     assert.equal(harness.readSessionDoc(1).approved?.handoffUsed, false)
 
-    // Plain `approve` WITH executionModel override switches conversation model in-place without handoff
+    // Plain `approve` WITH executionModel override and blank thinkingLevel omits thinkingLevel in updateConversation
     await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
     const pSameSessionWithModel = harness.host.executeTool(
       PLAN_TOOL_PROPOSE,
@@ -1375,11 +1394,16 @@ test('plan_propose: approve and approve_handoff with executionModel selection (s
       { conversationId: 1 },
     ) as Promise<PluginToolResultEnvelope>
     await waitFor(() => harness.createdAsks.length === 4)
-    harness.answerAsk(harness.createdAsks[3]!.id!, { decision: 'approve', executionModel: 'tier/balanced' })
+    harness.answerAsk(harness.createdAsks[3]!.id!, {
+      decision: 'approve',
+      executionModel: 'tier/balanced',
+      executionThinkingLevel: '',
+    })
     const resSameModel = await pSameSessionWithModel
     assert.equal(resSameModel.control, undefined)
     assert.equal(resSameModel.presentationMeta?.['outcome'], 'approved')
     assert.equal(resSameModel.presentationMeta?.['executionModel'], 'tier/balanced')
+    assert.deepEqual(harness.updateCalls.at(-1)?.patch, { model: 'tier/balanced' })
     assert.equal(harness.conversations.get(1)?.model, 'tier/balanced')
     assert.equal(harness.readSessionDoc(1).approved?.executionModel, 'tier/balanced')
 

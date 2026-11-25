@@ -294,11 +294,17 @@ export const NODE_DETAIL_SECTION_SLOT = 'builtin:node/detail-section' as const
 export const COMPOSER_STATUS_SLOT = 'builtin:composer/status' as const
 
 /** Namespace reserved by the host composer interactive toolbar; does not imply a builtin:composer plugin exists.
- * Intended strictly for compact icon/short-pill interactive input controls inside
+ * Intended strictly for compact active-state pills or minimal inline indicators inside
  * `.composer-toolbar-left` next to `ModelPicker` (real conversations pass
  * `conversation` + `composer`; standby drafts pass `effectiveModel`, `profileId`,
  * per-draft `draftMeta`, `setDraftMeta`, and `disabled`). */
 export const COMPOSER_TOOLBAR_SLOT = 'builtin:composer/toolbar' as const
+
+/** Namespace reserved by the host composer unified `+` menu; does not imply a builtin:composer plugin exists.
+ * Intended for mode toggles and action items (`DropdownMenuItem`) mounted inside the unified
+ * composer `+` DropdownMenu (real conversations pass `conversation` + `composer` + `onCloseMenu`;
+ * standby drafts pass `effectiveModel`, `profileId`, `draftMeta`, `setDraftMeta`, `disabled`, and `onCloseMenu`). */
+export const COMPOSER_MENU_SLOT = 'builtin:composer/menu' as const
 
 /** Namespace reserved by the host composer top tray; does not imply a builtin:composer plugin exists.
  * Contribution components receive ComposerScopeProps (conversation + composer)
@@ -311,12 +317,13 @@ export const COMPOSER_DOCK_SLOT = 'builtin:composer/dock' as const
  * Read-only badge/link pills (e.g. task number + column link) are contributed via ctx.ui.slot; heavy actions belong in the plugin's own screen/drawer. */
 export const OVERVIEW_CARD_META_SLOT = 'builtin:overview/card-meta' as const
 
-/** Single source of truth of the 6 host-reserved sub-slot target identifiers. */
+/** Single source of truth of the 7 host-reserved sub-slot target identifiers. */
 export const HOST_SLOT_TARGETS = [
   PROFILE_DETAIL_SECTION_SLOT,
   NODE_DETAIL_SECTION_SLOT,
   COMPOSER_STATUS_SLOT,
   COMPOSER_TOOLBAR_SLOT,
+  COMPOSER_MENU_SLOT,
   COMPOSER_DOCK_SLOT,
   OVERVIEW_CARD_META_SLOT,
 ] as const
@@ -333,7 +340,7 @@ export interface HostSlotCatalogEntry {
   readonly description: string
 }
 
-/** Single read-only protocol catalog of the 6 real host-mounted sub-slots. */
+/** Single read-only protocol catalog of the 7 real host-mounted sub-slots. */
 export const HOST_SLOT_CATALOG = Object.freeze([
   Object.freeze({
     target: PROFILE_DETAIL_SECTION_SLOT,
@@ -370,6 +377,15 @@ export const HOST_SLOT_CATALOG = Object.freeze([
     propsType: 'ComposerToolbarSlotProps',
     conversationContext: 'optional',
     description: 'Compact interactive input controls inside composer toolbar (persisted conversation or standby draft)',
+  }),
+  Object.freeze({
+    target: COMPOSER_MENU_SLOT,
+    ownerPluginId: 'builtin:composer',
+    slotName: 'menu',
+    mode: 'list',
+    propsType: 'ComposerMenuSlotProps',
+    conversationContext: 'optional',
+    description: 'Action and mode items inside the composer unified + dropdown menu (persisted conversation or standby draft)',
   }),
   Object.freeze({
     target: COMPOSER_DOCK_SLOT,
@@ -536,6 +552,12 @@ export interface ComposerToolbarSlotProps {
   setDraftMeta?: (key: string, value: unknown) => void
   /** True when the standby draft is locked/busy or ineligible for input controls. */
   disabled?: boolean
+}
+
+/** COMPOSER_MENU_SLOT: action and mode items rendered inside the composer unified `+` DropdownMenu. */
+export interface ComposerMenuSlotProps extends ComposerToolbarSlotProps {
+  /** Optional callback to close the host dropdown menu when a custom item needs explicit dismissal. */
+  onCloseMenu?: () => void
 }
 
 /** workbench.panel: conversation-aware right-drawer panel. */
