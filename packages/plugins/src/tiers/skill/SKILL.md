@@ -44,6 +44,24 @@ Keep long-running interactive sessions on a responsive workhorse tier; when hitt
 - **Deterministic workflows**: Start implementation on a fast/workhorse tier backed by a strict shell `gate` (build + typecheck + tests). In a `try/catch`, escalate only failures to a stronger tier with the failure diagnostics.
 - **Peer Swarm**: Dispatch workers on the workhorse tier; if a worker stalls on a complex bug, upgrade that worker in place via `switch_worker_model` using a stronger `tier/<id>` while keeping its accumulated context.
 
+### 4. In-Session Model Borrow & Relay (Same Thread)
+When a **top-level human conversation** only needs a stronger or specialized model for the current reply — and keeping the full linear thread context is cleaner than spawning a separate child conversation — relay in place with `switch_model` instead of `subagent`:
+
+- **When to use `switch_model` vs `subagent`**:
+  - Use `switch_model` for single-thread reasoning relays (e.g., you already gathered files/diagnostics in the main thread and want a stronger model to synthesize the final design, root cause, or code review directly in the user's thread).
+  - Use `subagent` / `SubagentWorkflow` for parallelizable tasks, isolated worktree edits, fresh-context blind review, or long background execution.
+- **Target syntax (works with or without configured tiers)**:
+  - Accepts `tier/<id>`, bare `<tierId>`, exact concrete `provider/modelId`, or a unique bare `<modelId>`.
+  - When no tiers are configured, inspect live available models via `core:models.list` (CLI: `helmx models list --json`) and pass a concrete `provider/modelId`.
+- **Auto-restore discipline (`restoreAfterTurn`, default `true`)**:
+  - After calling `switch_model({ model: "...", effort?: "..." })`, the next reasoning step in the **same turn** immediately runs on the new model.
+  - When `restoreAfterTurn` is `true` (default), Helmx automatically restores the conversation's original model and thinking level once the turn settles. **Simply continue and finish your answer — NEVER call `switch_model` a second time just to switch back.**
+  - Pass `restoreAfterTurn: false` only when the user explicitly asks to switch the conversation permanently.
+- **User-initiated one-turn borrow**:
+  - Users can also trigger a one-turn borrow directly via `/model <tier-or-provider/model> <message>` (immediate borrow + clean message without prefix), `/model <target>` (arm next turn), or the Composer `+` menu (`One-turn model` / bare `/model` picker).
+- **Plan mode boundary**:
+  - While a conversation is in read-only `/plan` mode, tool access is restricted to the plan-mode read-only whitelist (`switch_model` is unavailable during planning; pick an execution model in `plan_propose` approval or borrow before/after planning).
+
 ## Managing Tiers & Preset Templates
 
 All management operations are exposed as plugin actions (CLI via `helmx tiers <action>` or `run_action`):
@@ -54,3 +72,4 @@ All management operations are exposed as plugin actions (CLI via `helmx tiers <a
 - Save active tiers as a reusable template: `helmx tiers save-template --id <tpl-id> --name "<title>" [--description "..."]`
 - Switch entire tier roster in one step: `helmx tiers apply-template --id <tpl-id>`
 - Delete a saved template: `helmx tiers delete-template --id <tpl-id>`
+- Inspect / arm / clear one-turn borrow: `helmx tiers get-borrow --current`, `helmx tiers set-borrow --current --model <target> [--effort <level>]`, `helmx tiers clear-borrow --current`

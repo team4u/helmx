@@ -524,6 +524,13 @@ button.attachment-chip:disabled {
   flex: 0 1 auto;
 }
 
+.helmx-model-picker-anchor {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
 .composer-toolbar .composer-model-button {
   min-width: 0;
   max-width: 100%;

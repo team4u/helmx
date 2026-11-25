@@ -215,6 +215,7 @@ export function renderModelTiersCatalogSection(entries: ReadonlyArray<ModelTierC
     ...rows,
     'Guidelines:',
     '- Pick model="tier/<id>" according to task complexity, speed, and cost when delegating work or switching worker models; omit effort to inherit the tier\'s preset thinking level.',
+    '- In a top-level conversation, call `switch_model({ model: "tier/<id>" })` (or a concrete `provider/modelId`) to temporarily relay the current turn to another model; the original model restores automatically after the turn.',
     '- Load the "model-tiers" skill on demand for multi-tier collaboration patterns and template management.',
     '</available_model_tiers>',
   ].join('\n')

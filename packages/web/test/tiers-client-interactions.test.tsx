@@ -12,13 +12,41 @@ import assert from 'node:assert/strict'
 import { describe, before, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
-import type { PluginClientContext as PluginClientContextType } from '@helmx/protocol'
+import type {
+  ComposerMenuSlotProps,
+  ComposerToolbarSlotProps,
+  ConversationSummary,
+  PluginClientContext as PluginClientContextType,
+  ToolViewProps,
+} from '@helmx/protocol'
+import type { PluginSessionDocKey, PluginSessionDocState } from '@helmx/plugin-client'
+import {
+  TIERS_BORROW_COMMAND_ID,
+  TIERS_BORROW_COMMAND_SLASH,
+  TIERS_BORROW_SESSION_DOC,
+  TIERS_INPUT_META_KEY,
+  TIERS_SWITCH_MODEL_TOOL,
+  isTiersBorrowEligibleConversation,
+  parseSwitchModelPresentationMeta,
+  parseTierBorrowSessionView,
+  readStandbyBorrowDraft,
+} from '../../plugins/src/tiers/client/borrow-models.ts'
+import { TIERS_COPY } from '../../plugins/src/tiers/client/copy.ts'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
-const { ModelPickerControl, PluginClientContext, resolveLocalizedText } = await import('@helmx/plugin-client')
+const {
+  ComposerCommandContext,
+  DropdownMenuContent,
+  DropdownMenuRoot,
+  ModelPickerControl,
+  PluginClientContext,
+  PluginClientHostContext,
+  createComposerCommandRegistry,
+  resolveLocalizedText,
+} = await import('@helmx/plugin-client')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const {
   importBuiltinClientModule,
@@ -27,17 +55,26 @@ const {
 } = await import('./helpers/builtin-clients.js')
 
 const e = React.createElement
+const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}]/u
 
+let rawTiersModule: Record<string, unknown>
 let TiersManagerScreen: (props: Record<string, unknown>) => React.ReactElement
 let TiersSettingsPanel: () => React.ReactElement
+let BorrowMenuItem: (props: ComposerMenuSlotProps) => React.ReactElement | null
+let BorrowToolbarPill: (props: ComposerToolbarSlotProps) => React.ReactElement | null
+let SwitchModelToolRow: (props: ToolViewProps) => React.ReactElement
 describe("tiers-client-interactions", () => {
 
 
   before(async () => {
     mountSharedPluginNamespaces()
     const mod = await importBuiltinClientModule('builtin:tiers')
+    rawTiersModule = mod
     TiersManagerScreen = mod['TiersManagerScreen'] as (props: Record<string, unknown>) => React.ReactElement
     TiersSettingsPanel = mod['TiersSettingsPanel'] as () => React.ReactElement
+    BorrowMenuItem = mod['BorrowMenuItem'] as (props: ComposerMenuSlotProps) => React.ReactElement | null
+    BorrowToolbarPill = mod['BorrowToolbarPill'] as (props: ComposerToolbarSlotProps) => React.ReactElement | null
+    SwitchModelToolRow = mod['SwitchModelToolRow'] as (props: ToolViewProps) => React.ReactElement
   }, { timeout: 60_000 })
 
   const TEST_MODELS = [
@@ -463,6 +500,594 @@ describe("tiers-client-interactions", () => {
       assert.match(popoverText, /workhorse/)
     } finally {
       await noTiersMount.unmount()
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // One-turn model borrow UI & SwitchModelToolRow
+  // -------------------------------------------------------------------------
+
+  function makeConv(id: number, overrides: Partial<ConversationSummary> = {}): ConversationSummary {
+    return {
+      id,
+      title: `Conversation #${id}`,
+      profileId: 'assistant',
+      tags: [],
+      cwd: '/repo',
+      model: 'faux/workhorse',
+      thinkingLevel: '',
+      status: 'idle',
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 0,
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_000_000,
+      ...overrides,
+    }
+  }
+
+  function createSessionDocHarness(initial: Record<string, PluginSessionDocState> = {}) {
+    const states = new Map<string, PluginSessionDocState>(Object.entries(initial))
+    const listeners = new Map<string, Set<() => void>>()
+    const subscribedKeys: PluginSessionDocKey[] = []
+    const EMPTY: PluginSessionDocState = { hasValue: false, deleted: false, connected: false }
+    const keyStr = (key: PluginSessionDocKey): string => `${key.pluginId}/${key.docName}/${key.conversationId}`
+
+    const emit = (k: string): void => {
+      const set = listeners.get(k)
+      if (!set) return
+      for (const listener of [...set]) listener()
+    }
+
+    const setBorrowDoc = (conversationId: number, value: unknown): void => {
+      const k = `builtin:tiers/${TIERS_BORROW_SESSION_DOC}/${conversationId}`
+      states.set(k, { value, hasValue: true, deleted: false, connected: true })
+      emit(k)
+    }
+
+    const subscribeSessionDoc = (key: PluginSessionDocKey, listener: () => void): (() => void) => {
+      subscribedKeys.push(key)
+      const k = keyStr(key)
+      let set = listeners.get(k)
+      if (!set) {
+        set = new Set()
+        listeners.set(k, set)
+      }
+      set.add(listener)
+      return () => {
+        set?.delete(listener)
+      }
+    }
+
+    const getSessionDocState = (key: PluginSessionDocKey): PluginSessionDocState =>
+      states.get(keyStr(key)) ?? EMPTY
+
+    const retrySessionDoc = (): void => {}
+
+    return { subscribedKeys, setBorrowDoc, subscribeSessionDoc, getSessionDocState, retrySessionDoc }
+  }
+
+  function WithSessionDocOverride({
+    harness,
+    children,
+  }: {
+    harness: ReturnType<typeof createSessionDocHarness>
+    children?: React.ReactNode
+  }): React.ReactElement {
+    const basePort = React.useContext(PluginClientHostContext)
+    assert.ok(basePort !== null, 'expected PluginClientHostContext from HostStoreProviders')
+    const port = React.useMemo(
+      () => ({
+        ...basePort,
+        subscribeSessionDoc: harness.subscribeSessionDoc,
+        getSessionDocState: harness.getSessionDocState,
+        retrySessionDoc: harness.retrySessionDoc,
+      }),
+      [basePort, harness],
+    )
+    return e(PluginClientHostContext.Provider, { value: port }, children ?? null)
+  }
+
+  test('tiers client module: Fast Refresh exports, borrow CSS classes, pure parsers, and zero Emoji copy', { timeout: 60_000 }, () => {
+    assert.equal(TIERS_BORROW_SESSION_DOC, 'borrow')
+    assert.equal(TIERS_BORROW_COMMAND_ID, 'borrow-model')
+    assert.equal(TIERS_BORROW_COMMAND_SLASH, 'model')
+    assert.equal(TIERS_SWITCH_MODEL_TOOL, 'switch_model')
+    assert.equal(TIERS_INPUT_META_KEY, 'builtin:tiers')
+
+    const exportNames = Object.keys(rawTiersModule).filter((k) => k !== '__helmxClientCss').sort()
+    assert.deepEqual(exportNames, [
+      'BorrowMenuItem',
+      'BorrowToolbarPill',
+      'SwitchModelToolRow',
+      'TiersManagerScreen',
+      'TiersSettingsPanel',
+    ])
+    for (const name of exportNames) {
+      assert.match(name, /^[A-Z]/)
+      assert.equal(typeof rawTiersModule[name], 'function')
+    }
+    const cssText = rawTiersModule['__helmxClientCss']
+    assert.equal(typeof cssText, 'string')
+    assert.match(cssText as string, /\.tiers-borrow-pill/)
+    assert.match(cssText as string, /\.tiers-borrow-menu-item/)
+    assert.match(cssText as string, /\.tiers-trace-row/)
+
+    for (const [key, entry] of Object.entries(TIERS_COPY)) {
+      assert.equal(EMOJI_RE.test(entry.en), false, `TIERS_COPY.${key}.en must contain zero Emoji`)
+      assert.equal(EMOJI_RE.test(entry['zh-CN']), false, `TIERS_COPY.${key}['zh-CN'] must contain zero Emoji`)
+    }
+
+    assert.equal(isTiersBorrowEligibleConversation(undefined), false)
+    assert.equal(isTiersBorrowEligibleConversation(makeConv(1)), true)
+    assert.equal(isTiersBorrowEligibleConversation(makeConv(2, { ownedBy: 'helmx' })), false)
+    assert.equal(isTiersBorrowEligibleConversation(makeConv(3, { parentConversationId: 1 })), false)
+
+    assert.equal(parseTierBorrowSessionView(null), null)
+    assert.equal(parseTierBorrowSessionView({ phase: 'bogus' }), null)
+    assert.deepEqual(
+      readStandbyBorrowDraft({ [TIERS_INPUT_META_KEY]: { borrowModel: 'faux/flagship', effort: 'high' } }),
+      { borrowModel: 'faux/flagship', effort: 'high' },
+    )
+    assert.equal(parseSwitchModelPresentationMeta(undefined), undefined)
+    assert.deepEqual(
+      parseSwitchModelPresentationMeta({
+        fromModel: 'faux/fast',
+        toModel: 'faux/flagship',
+        toLabel: 'tier/architect',
+        tierId: 'architect',
+        effort: 'high',
+        restoreAfterTurn: true,
+        changed: true,
+      }),
+      {
+        fromModel: 'faux/fast',
+        toModel: 'faux/flagship',
+        toLabel: 'tier/architect',
+        tierId: 'architect',
+        effort: 'high',
+        restoreAfterTurn: true,
+        changed: true,
+      },
+    )
+  })
+
+  test('ModelPickerControl: controlled open/onOpenChange, showResetDefault=false, renderTrigger=null anchor, and enableShortcut=false', { timeout: 60_000 }, async () => {
+    const openChanges: boolean[] = []
+    const applied: Array<{ model: string; level: string | null }> = []
+
+    function ControlledHarness({ initialOpen }: { initialOpen: boolean }) {
+      const [open, setOpen] = React.useState(initialOpen)
+      return e(ModelPickerControl, {
+        effectiveModel: 'faux/workhorse',
+        activeThinkingLevel: 'high',
+        open,
+        onOpenChange: (next: boolean) => {
+          openChanges.push(next)
+          setOpen(next)
+        },
+        showResetDefault: false,
+        enableShortcut: false,
+        renderTrigger: () => null,
+        onApply: (model: string, level: string | null) => {
+          applied.push({ model, level })
+        },
+      })
+    }
+
+    // 1. Closed + renderTrigger() => null renders non-focusable anchor and ZERO <button>
+    const closedMount = await mountWithHost(e(ControlledHarness, { initialOpen: false }))
+    try {
+      assert.equal(closedMount.host.querySelectorAll('button').length, 0, 'null trigger must not render a focusable empty button')
+      const anchor = closedMount.host.querySelector('.helmx-model-picker-anchor')
+      assert.ok(anchor !== null, 'null trigger must render a Popover.Anchor span')
+      assert.equal(anchor.getAttribute('aria-hidden'), 'true')
+
+      // enableShortcut=false must NOT open on Ctrl+L
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', ctrlKey: true, bubbles: true }))
+      })
+      assert.equal(document.body.querySelector('.composer-model-popover') === null, true)
+    } finally {
+      await closedMount.unmount()
+    }
+
+    // 2. Open + showResetDefault=false omits reset button and still selects a model cleanly
+    const openMount = await mountWithHost(e(ControlledHarness, { initialOpen: true }))
+    try {
+      const popover = document.body.querySelector('.composer-model-popover')
+      assert.ok(popover !== null, 'controlled open=true must render Popover')
+      assert.equal(popover.querySelector('.composer-model-reset') === null, true, 'showResetDefault=false hides reset item')
+      const flagshipMain = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
+        (b) => !(b.textContent ?? '').includes('tier/') && b.title.includes('faux/flagship'),
+      )
+      assert.ok(flagshipMain !== undefined)
+      await act(async () => {
+        flagshipMain.click()
+      })
+      assert.deepEqual(applied, [{ model: 'faux/flagship', level: null }])
+      assert.equal(openChanges.includes(false), true)
+    } finally {
+      await openMount.unmount()
+    }
+  })
+
+  test('BorrowToolbarPill & BorrowMenuItem: standby draftMeta (zero RPC), /model command, panel-isolated menu open, persisted armed/active pills, busy clear, and zero nested buttons', { timeout: 60_000 }, async () => {
+    mountSharedPluginNamespaces({ realHooks: true })
+    try {
+      // --- 1. Ineligible conversations render null with ZERO sessionDoc subscriptions ---
+      const ineligibleHarness = createSessionDocHarness()
+      const ctxIneligible = makeSpyCtx()
+      const subMount = await mountWithHost(
+        e(
+          WithSessionDocOverride,
+          { harness: ineligibleHarness },
+          e(
+            PluginClientContext.Provider,
+            { value: ctxIneligible },
+            e(
+              React.Fragment,
+              null,
+              e(BorrowToolbarPill, { conversation: makeConv(20, { parentConversationId: 1 }) }),
+              e(BorrowToolbarPill, { conversation: makeConv(21, { ownedBy: 'helmx' }) }),
+              e(BorrowMenuItem, { conversation: makeConv(20, { parentConversationId: 1 }), onCloseMenu: () => {} }),
+            ),
+          ),
+        ),
+      )
+      try {
+        assert.equal(subMount.host.textContent, '')
+        assert.equal(ineligibleHarness.subscribedKeys.length, 0, 'ineligible conversations must open zero sessionDoc subscriptions')
+      } finally {
+        await subMount.unmount()
+      }
+
+      // --- 2. Standby (#/a/<profileId>): /model opens picker, picking writes draftMeta locally (zero RPC), pill × clears without opening popover ---
+      const standbyHarness = createSessionDocHarness()
+      const ctxStandby = makeSpyCtx()
+      const registry = createComposerCommandRegistry()
+      const draftUpdates: Array<{ key: string; value: unknown }> = []
+
+      function StandbyComposerHarness() {
+        const [draftMeta, setDraftMetaState] = React.useState<Record<string, unknown>>({})
+        const setDraftMeta = (key: string, value: unknown) => {
+          draftUpdates.push({ key, value })
+          setDraftMetaState((prev) => {
+            const next = { ...prev }
+            if (value === undefined) delete next[key]
+            else next[key] = value
+            return next
+          })
+        }
+        return e(
+          ComposerCommandContext.Provider,
+          { value: registry },
+          e(
+            'div',
+            { 'data-helmx-panel': 'primary' },
+            e(BorrowToolbarPill, { profileId: 'assistant', draftMeta, setDraftMeta }),
+          ),
+        )
+      }
+
+      const standbyMount = await mountWithHost(
+        e(
+          WithSessionDocOverride,
+          { harness: standbyHarness },
+          e(PluginClientContext.Provider, { value: ctxStandby }, e(StandbyComposerHarness)),
+        ),
+      )
+      try {
+        // Idle standby: zero visible buttons & zero sessionDoc subscriptions
+        assert.equal(standbyMount.host.querySelectorAll('button').length, 0)
+        assert.equal(standbyHarness.subscribedKeys.length, 0)
+
+        // Trigger `/model` via ComposerCommandContext -> opens ModelPickerControl popover
+        await act(async () => {
+          assert.equal(registry.invoke('builtin:tiers', TIERS_BORROW_COMMAND_ID).handled, true)
+        })
+        const popover = document.body.querySelector('.composer-model-popover')
+        assert.ok(popover !== null, '/model command must open borrow picker on standby')
+        assert.equal(popover.querySelector('.composer-model-reset') === null, true)
+
+        // Select tier/architect -> writes draftMeta locally with ZERO callAction RPCs
+        const archBtn = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
+          (b) => (b.textContent ?? '').includes('tier/architect'),
+        )
+        assert.ok(archBtn !== undefined)
+        await act(async () => {
+          archBtn.click()
+        })
+        assert.equal(ctxStandby.actionCalls.length, 0, 'standby borrow selection must NOT call backend RPC')
+        assert.deepEqual(draftUpdates[0], {
+          key: TIERS_INPUT_META_KEY,
+          value: { borrowModel: 'tier/architect' },
+        })
+        assert.match(standbyMount.host.textContent ?? '', /Next turn:/)
+        assert.match(standbyMount.host.textContent ?? '', /tier\/architect/)
+
+        // Assert zero nested <button>
+        assert.equal(standbyMount.host.querySelector('button button') === null, true, 'must never render nested <button>')
+
+        // Click × clear button -> clears draftMeta WITHOUT reopening Popover
+        const clearBtn = standbyMount.host.querySelector<HTMLButtonElement>('.tiers-borrow-pill-clear')
+        assert.ok(clearBtn !== null)
+        await act(async () => {
+          clearBtn.click()
+        })
+        assert.deepEqual(draftUpdates[1], { key: TIERS_INPUT_META_KEY, value: undefined })
+        assert.equal(document.body.querySelector('.composer-model-popover') === null, true, 'clicking × must not open popover')
+        assert.equal(standbyMount.host.querySelectorAll('button').length, 0)
+      } finally {
+        await standbyMount.unmount()
+      }
+
+      // --- 3. Panel-isolated BorrowMenuItem -> BorrowToolbarPill + persisted armed & busy active states ---
+      const persistedHarness = createSessionDocHarness()
+      const ctxPersisted = makeSpyCtx()
+      const convPrimary = makeConv(30)
+      const convSplit = makeConv(30)
+      let menuClosed = 0
+
+      function SplitAndPrimaryHarness({ conv }: { conv: ConversationSummary }) {
+        return e(
+          React.Fragment,
+          null,
+          e(
+            'div',
+            { 'data-helmx-panel': 'primary' },
+            e(BorrowToolbarPill, { conversation: conv }),
+          ),
+          e(
+            'div',
+            { 'data-helmx-panel': 'split' },
+            e(BorrowToolbarPill, { conversation: convSplit }),
+            e(
+              DropdownMenuRoot,
+              { open: true },
+              e(
+                DropdownMenuContent,
+                { inline: true },
+                e(BorrowMenuItem, {
+                  conversation: convSplit,
+                  onCloseMenu: () => {
+                    menuClosed += 1
+                  },
+                }),
+              ),
+            ),
+          ),
+        )
+      }
+
+      const persistedMount = await mountWithHost(
+        e(
+          WithSessionDocOverride,
+          { harness: persistedHarness },
+          e(PluginClientContext.Provider, { value: ctxPersisted }, e(SplitAndPrimaryHarness, { conv: convPrimary })),
+        ),
+      )
+      try {
+        // Click BorrowMenuItem inside split panel -> closes menu & opens ONLY split panel's popover
+        const menuItem = persistedMount.host.querySelector<HTMLElement>('.tiers-borrow-menu-item')
+        assert.ok(menuItem !== null)
+        await act(async () => {
+          menuItem.click()
+          await Promise.resolve()
+          await new Promise((resolve) => setTimeout(resolve, 30))
+        })
+        assert.equal(menuClosed, 1)
+        const popovers = document.body.querySelectorAll('.composer-model-popover')
+        assert.equal(popovers.length, 1, 'split BorrowMenuItem must open exactly one panel popover (not primary)')
+
+        // Select faux/flagship with inline xhigh chip -> invokes set_borrow action
+        const flagshipRow = Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row')).find(
+          (row) =>
+            !(row.textContent ?? '').includes('tier/') &&
+            (row.querySelector('.composer-model-row-main') as HTMLButtonElement | null)?.title.includes('faux/flagship'),
+        )
+        assert.ok(flagshipRow !== undefined)
+        const xhighChip = Array.from(flagshipRow.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip')).find(
+          (b) => b.textContent?.trim() === 'xhigh',
+        )
+        assert.ok(xhighChip !== undefined)
+        await act(async () => {
+          xhighChip.click()
+        })
+        assert.deepEqual(ctxPersisted.actionCalls[0], {
+          actionId: 'set_borrow',
+          input: { conversationId: 30, model: 'faux/flagship', effort: 'xhigh' },
+        })
+      } finally {
+        await persistedMount.unmount()
+      }
+
+      // --- 4. Busy persisted conversation: armed vs active pill & menu behavior ---
+      const activeHarness = createSessionDocHarness()
+      activeHarness.setBorrowDoc(40, {
+        phase: 'active',
+        requestedRef: 'tier/architect',
+        targetModel: 'tier/architect',
+        targetConcreteModel: 'faux/flagship',
+        targetLabel: 'tier/architect',
+        targetTierId: 'architect',
+        effort: 'high',
+        restoreAfterTurn: true,
+        updatedAt: 1_700_000_000_000,
+      })
+      const ctxActive = makeSpyCtx()
+      const busyConv = makeConv(40, { status: 'working' })
+      const idleBusyMenuConv = makeConv(41, { status: 'working' })
+
+      const activeMount = await mountWithHost(
+        e(
+          WithSessionDocOverride,
+          { harness: activeHarness },
+          e(
+            PluginClientContext.Provider,
+            { value: ctxActive },
+            e(
+              React.Fragment,
+              null,
+              e(BorrowToolbarPill, { conversation: busyConv }),
+              e(
+                DropdownMenuRoot,
+                { open: true },
+                e(
+                  DropdownMenuContent,
+                  { inline: true },
+                  e(BorrowMenuItem, { conversation: idleBusyMenuConv, onCloseMenu: () => {} }),
+                ),
+              ),
+            ),
+          ),
+        ),
+      )
+      try {
+        assert.match(activeMount.host.textContent ?? '', /This turn:/)
+        assert.match(activeMount.host.textContent ?? '', /tier\/architect/)
+        assert.equal(activeMount.host.querySelector('button button') === null, true)
+
+        const mainBtn = activeMount.host.querySelector<HTMLButtonElement>('.tiers-borrow-pill-main')
+        const clearBtn = activeMount.host.querySelector<HTMLButtonElement>('.tiers-borrow-pill-clear')
+        assert.ok(mainBtn !== null && clearBtn !== null)
+        assert.equal(mainBtn.disabled, true, 'main pill trigger is disabled while active turn is working')
+        assert.equal(clearBtn.disabled, false, 'sibling × button stays enabled while busy in active borrow')
+
+        // Busy menu item without active borrow is disabled
+        const busyMenuItem = activeMount.host.querySelector<HTMLElement>('.tiers-borrow-menu-item')
+        assert.ok(busyMenuItem !== null)
+        assert.equal(busyMenuItem.getAttribute('aria-disabled'), 'true')
+
+        // Click sibling × -> calls clear_borrow without opening Popover
+        await act(async () => {
+          clearBtn.click()
+        })
+        assert.deepEqual(ctxActive.actionCalls[0], {
+          actionId: 'clear_borrow',
+          input: { conversationId: 40 },
+        })
+        assert.equal(document.body.querySelector('.composer-model-popover') === null, true)
+      } finally {
+        await activeMount.unmount()
+      }
+    } finally {
+      mountSharedPluginNamespaces({ realHooks: false })
+    }
+  })
+
+  test('SwitchModelToolRow: renders one-turn and persistent presentationMeta, running fallback, and error state without parsing result JSON', { timeout: 60_000 }, async () => {
+    const ctx = makeSpyCtx()
+
+    // 1. One-turn switch (auto-restores) — ignores bogus non-JSON result string
+    const oneTurnMount = await mountWithHost(
+      e(
+        PluginClientContext.Provider,
+        { value: ctx },
+        e(SwitchModelToolRow, {
+          callId: 'call-1',
+          conversationId: 1,
+          toolName: TIERS_SWITCH_MODEL_TOOL,
+          input: { model: 'tier/architect' },
+          status: 'done',
+          result: 'not json at all',
+          durationMs: 42,
+          presentationMeta: {
+            fromModel: 'faux/workhorse',
+            toModel: 'faux/flagship',
+            toLabel: 'tier/architect',
+            tierId: 'architect',
+            effort: 'high',
+            restoreAfterTurn: true,
+            changed: true,
+          },
+        }),
+      ),
+    )
+    try {
+      const text = oneTurnMount.host.textContent ?? ''
+      assert.match(text, /Switch model/)
+      assert.match(text, /tier\/architect · high/)
+      assert.match(text, /auto-restores after turn/)
+      assert.match(text, /One-turn/)
+      assert.match(text, /42ms/)
+      assert.equal(
+        oneTurnMount.host.querySelector('.tiers-trace-row')?.getAttribute('data-tiers-switch-restore'),
+        'true',
+      )
+    } finally {
+      await oneTurnMount.unmount()
+    }
+
+    // 2. Persistent switch (`restoreAfterTurn: false`)
+    const permMount = await mountWithHost(
+      e(
+        PluginClientContext.Provider,
+        { value: ctx },
+        e(SwitchModelToolRow, {
+          callId: 'call-2',
+          conversationId: 1,
+          toolName: TIERS_SWITCH_MODEL_TOOL,
+          input: { model: 'faux/flagship', restoreAfterTurn: false },
+          status: 'done',
+          presentationMeta: {
+            fromModel: 'faux/workhorse',
+            toModel: 'faux/flagship',
+            toLabel: 'flagship',
+            restoreAfterTurn: false,
+            changed: true,
+          },
+        }),
+      ),
+    )
+    try {
+      const text = permMount.host.textContent ?? ''
+      assert.match(text, /Permanently switched to flagship/)
+      assert.match(text, /Persistent/)
+      assert.equal(
+        permMount.host.querySelector('.tiers-trace-row')?.getAttribute('data-tiers-switch-restore'),
+        'false',
+      )
+    } finally {
+      await permMount.unmount()
+    }
+
+    // 3. Running & error fallback
+    const errorMount = await mountWithHost(
+      e(
+        PluginClientContext.Provider,
+        { value: ctx },
+        e(
+          React.Fragment,
+          null,
+          e(SwitchModelToolRow, {
+            callId: 'call-3',
+            conversationId: 1,
+            toolName: TIERS_SWITCH_MODEL_TOOL,
+            input: { model: 'tier/architect' },
+            status: 'running',
+          }),
+          e(SwitchModelToolRow, {
+            callId: 'call-4',
+            conversationId: 1,
+            toolName: TIERS_SWITCH_MODEL_TOOL,
+            input: { model: 'faux/disabled' },
+            status: 'error',
+            isError: true,
+            result: 'Model faux/disabled is disabled\nsecond line ignored',
+          }),
+        ),
+      ),
+    )
+    try {
+      const text = errorMount.host.textContent ?? ''
+      assert.match(text, /tier\/architect/)
+      assert.match(text, /Model faux\/disabled is disabled/)
+      assert.equal(errorMount.host.querySelector('.trace-row-error') !== null, true)
+    } finally {
+      await errorMount.unmount()
     }
   })
 })
