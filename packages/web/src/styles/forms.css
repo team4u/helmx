@@ -230,10 +230,12 @@
 
 .helmx-select-option[data-highlighted],
 .helmx-select-option:hover:not(:disabled):not([data-disabled]),
+.helmx-select-option:focus-visible:not(:disabled):not([data-disabled]),
 .helmx-select-option.highlighted:not(:disabled) {
   background: var(--bg-hover);
   color: var(--fg);
   outline: none;
+  box-shadow: none;
 }
 
 .helmx-select-option[data-state="checked"],

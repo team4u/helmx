@@ -339,9 +339,10 @@ export function parsePluginConfigBody(body: Record<string, unknown>): Record<str
 // ---------------------------------------------------------------------------
 
 const MAX_PAGE_LIMIT = 500
+export const MAX_PAGE_TURNS = 50
 
-/** Conversation detail pagination params: limit must be a positive integer <= max; cursor must be a non-empty opaque string. */
-export function parseDetailPagination(url: URL): { limit?: number; cursor?: string } {
+/** Conversation detail pagination params: limit (1..500) and turns (1..50) are mutually exclusive; cursor must be a non-empty opaque string. */
+export function parseDetailPagination(url: URL): { limit?: number; turns?: number; cursor?: string } {
   const limitRaw = url.searchParams.get('limit')
   let limit: number | undefined
   if (limitRaw !== null) {
@@ -353,11 +354,29 @@ export function parseDetailPagination(url: URL): { limit?: number; cursor?: stri
       throw new ValidationError(`limit must be <= ${MAX_PAGE_LIMIT}`)
     }
   }
+  const turnsRaw = url.searchParams.get('turns')
+  let turns: number | undefined
+  if (turnsRaw !== null) {
+    if (!/^\d+$/.test(turnsRaw) || !Number.isSafeInteger(Number(turnsRaw)) || Number(turnsRaw) < 1) {
+      throw new ValidationError('turns must be a positive integer')
+    }
+    turns = Number(turnsRaw)
+    if (turns > MAX_PAGE_TURNS) {
+      throw new ValidationError(`turns must be <= ${MAX_PAGE_TURNS}`)
+    }
+  }
+  if (limit !== undefined && turns !== undefined) {
+    throw new ValidationError('limit and turns are mutually exclusive')
+  }
   const cursor = url.searchParams.get('cursor') ?? undefined
   if (cursor !== undefined && cursor.length === 0) {
     throw new ValidationError('cursor must be a non-empty string')
   }
-  return { ...(limit !== undefined ? { limit } : {}), ...(cursor !== undefined ? { cursor } : {}) }
+  return {
+    ...(limit !== undefined ? { limit } : {}),
+    ...(turns !== undefined ? { turns } : {}),
+    ...(cursor !== undefined ? { cursor } : {}),
+  }
 }
 
 /** Plugin public doc name (GET /api/plugins/:id/docs/:name): identifier constraint matches doc declaration. */

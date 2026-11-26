@@ -3174,4 +3174,106 @@ describe('KernelRuntime start and close concurrency', { timeout: 60_000 }, () =>
       await cleanupDir(dir)
     }
   })
+
+  it('real pi-durable SQLite turns pagination: aligns multi-step tool runs cleanly and works across forked conversations', { timeout: 60_000 }, async () => {
+    const dir = await makeTempDir('helmx-runtime-turns-')
+    const kernel = await openRuntime(dir)
+    try {
+      await kernel.plugins.register({
+        id: 'test:turns-tool',
+        name: 'Turns Tool Plugin',
+        definePlugin: (ctx) => {
+          ctx.tool({
+            name: 'step_tool',
+            description: 'records a tool step',
+            inputSchema: {
+              type: 'object',
+              properties: { step: { type: 'string' } },
+              required: ['step'],
+            },
+            execute: (input: { step: string }) => ({ output: `done:${input.step}` }),
+          })
+        },
+      })
+      kernel.refreshPluginTools()
+
+      // Turn 1 (2 tool steps + final answer)
+      kernel.__faux.setResponses([
+        fauxAssistantMessage([fauxToolCall('step_tool', { step: '1a' }, { id: 'tc-1a' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage([fauxToolCall('step_tool', { step: '1b' }, { id: 'tc-1b' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('turn 1 answer'),
+      ])
+      await kernel.conversations.submitInput(1, 'turn 1 prompt')
+      await kernel.conversations.waitForIdle(1)
+
+      // Turn 2 (1 tool step + final answer)
+      kernel.__faux.setResponses([
+        fauxAssistantMessage([fauxToolCall('step_tool', { step: '2a' }, { id: 'tc-2a' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('turn 2 answer'),
+      ])
+      await kernel.conversations.submitInput(1, 'turn 2 prompt')
+      await kernel.conversations.waitForIdle(1)
+
+      // Turn 3 (plain reply)
+      kernel.__faux.setResponses([fauxAssistantMessage('turn 3 answer')])
+      await kernel.conversations.submitInput(1, 'turn 3 prompt')
+      await kernel.conversations.waitForIdle(1)
+
+      // 1. Page through root conversation 1 turn at a time
+      const p1 = await kernel.conversations.getConversationDetail(1, { turns: 1 })
+      assert.ok(p1.nextCursor !== undefined)
+      assert.ok(p1.entries.some((e) => e.kind === 'helmx.input' && (JSON.stringify(e.data) ?? '').includes('turn 3 prompt')))
+      assert.equal(p1.entries.some((e) => (JSON.stringify(e.data) ?? '').includes('turn 2 prompt')), false)
+
+      const p2 = await kernel.conversations.getConversationDetail(1, { turns: 1, cursor: p1.nextCursor })
+      assert.ok(p2.nextCursor !== undefined)
+      assert.ok(p2.entries.some((e) => e.kind === 'helmx.input' && (JSON.stringify(e.data) ?? '').includes('turn 2 prompt')))
+      assert.ok(p2.entries.some((e) => e.kind === 'pi.tool-result' && (JSON.stringify(e.model) ?? '').includes('done:2a')))
+      assert.equal(p2.entries.some((e) => (JSON.stringify(e.data) ?? '').includes('turn 1 prompt')), false)
+
+      const p3 = await kernel.conversations.getConversationDetail(1, { turns: 1, cursor: p2.nextCursor })
+      assert.equal(p3.nextCursor, undefined)
+      assert.ok(p3.entries.some((e) => e.kind === 'helmx.input' && (JSON.stringify(e.data) ?? '').includes('turn 1 prompt')))
+      assert.ok(p3.entries.some((e) => e.kind === 'pi.tool-result' && (JSON.stringify(e.model) ?? '').includes('done:1a')))
+      assert.ok(p3.entries.some((e) => e.kind === 'pi.tool-result' && (JSON.stringify(e.model) ?? '').includes('done:1b')))
+
+      const full = await kernel.conversations.getConversationDetail(1, { limit: 100 })
+      assert.deepEqual(
+        [...p3.entries, ...p2.entries, ...p1.entries].map((e) => e.id),
+        full.entries.map((e) => e.id),
+        '1-turn pages concatenated old->new must equal full conversation entries without gaps or duplicates',
+      )
+
+      // 2. Fork from Turn 2's final entry, add Turn 4 on the fork, and verify turns pagination traverses parent chain cleanly
+      const turn2LastEntryId = Number(p2.entries.at(-1)!.id)
+      const forked = await kernel.conversations.forkConversation(1, {
+        entryId: turn2LastEntryId,
+        title: 'forked turns check',
+      })
+      kernel.__faux.setResponses([
+        fauxAssistantMessage([fauxToolCall('step_tool', { step: '4a' }, { id: 'tc-4a' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('fork turn 4 answer'),
+      ])
+      await kernel.conversations.submitInput(forked.id, 'fork turn 4 prompt')
+      await kernel.conversations.waitForIdle(forked.id)
+
+      const fp1 = await kernel.conversations.getConversationDetail(forked.id, { turns: 1 })
+      assert.ok(fp1.nextCursor !== undefined)
+      assert.ok(fp1.entries.some((e) => (JSON.stringify(e.data) ?? '').includes('fork turn 4 prompt')))
+      assert.equal(fp1.entries.some((e) => (JSON.stringify(e.data) ?? '').includes('turn 2 prompt')), false)
+
+      const fp2 = await kernel.conversations.getConversationDetail(forked.id, { turns: 1, cursor: fp1.nextCursor })
+      assert.ok(fp2.nextCursor !== undefined)
+      assert.ok(fp2.entries.some((e) => (JSON.stringify(e.data) ?? '').includes('turn 2 prompt')))
+      assert.equal(fp2.entries.some((e) => (JSON.stringify(e.data) ?? '').includes('turn 3 prompt')), false, 'fork must exclude unbranched parent turn 3')
+
+      const fp3 = await kernel.conversations.getConversationDetail(forked.id, { turns: 1, cursor: fp2.nextCursor })
+      assert.equal(fp3.nextCursor, undefined)
+      assert.ok(fp3.entries.some((e) => (JSON.stringify(e.data) ?? '').includes('turn 1 prompt')))
+      assert.ok(fp3.entries.some((e) => e.kind === 'pi.tool-result' && (JSON.stringify(e.model) ?? '').includes('done:1b')))
+    } finally {
+      await kernel.close()
+      await cleanupDir(dir)
+    }
+  })
 })

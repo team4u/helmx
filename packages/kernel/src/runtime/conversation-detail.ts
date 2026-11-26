@@ -14,12 +14,15 @@ import type { SecretStash } from '../services/index.js'
 import { assistantTextOfModel, entryModelText, toConversationEntry } from './entries.js'
 import { projectDetailEntry, stripEntrySignatures } from './entry-projection.js'
 import { coveredByRewind, rewindIntervalOf, type RewindInterval } from './conversation-rewind.js'
+import { pageVisibleEntries, pageVisibleTurns } from './conversation-pagination.js'
 import type { HelmxStore } from './store.js'
 
 /** Maximum encoded pagination cursor length (base64url; rejects oversized cursors to prevent abuse). */
 const DETAIL_CURSOR_MAX_LENGTH = 2048
 /** Max per-conversation rewind-interval cache entries (bounded eviction prevents leaks across delete cycles). */
 const REWIND_CACHE_MAX_ENTRIES = 256
+/** Max turns per turn-aligned detail page (`?turns=1..50`). */
+export const MAX_PAGE_TURNS = 50
 
 interface RewindCacheEntry {
   readonly stateChangeSeq: number
@@ -88,7 +91,7 @@ export class ConversationDetailService {
    */
   async getConversationDetail(
     id: number,
-    options?: { limit?: number; cursor?: string },
+    options?: { limit?: number; turns?: number; cursor?: string },
   ): Promise<ConversationDetail> {
     const detail = await this.assembleDetail(id, options)
     if (this.host.scheduleContextUsage !== undefined) {
@@ -106,11 +109,23 @@ export class ConversationDetailService {
   /** Assemble detail body (paginated+projected entries + initial summary; updated summary overrides afterwards). */
   private async assembleDetail(
     id: number,
-    options?: { limit?: number; cursor?: string },
+    options?: { limit?: number; turns?: number; cursor?: string },
   ): Promise<ConversationDetail> {
+    if (options?.limit !== undefined && options?.turns !== undefined) {
+      throw new HelmxError('validation_error', 'limit and turns are mutually exclusive', 400)
+    }
+    const turns = options?.turns
+    if (turns !== undefined && (!Number.isInteger(turns) || turns < 1 || turns > MAX_PAGE_TURNS)) {
+      throw new HelmxError(
+        'validation_error',
+        `turns must be an integer between 1 and ${MAX_PAGE_TURNS} (received ${turns})`,
+        400,
+        { turns },
+      )
+    }
     const summary = this.host.getConversation(id)
-    const limit = options?.limit ?? 100
-    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    const limit = turns === undefined ? (options?.limit ?? 100) : undefined
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 500)) {
       throw new HelmxError('validation_error', `limit must be an integer between 1 and 500 (received ${limit})`, 400, {
         limit,
       })
@@ -129,14 +144,10 @@ export class ConversationDetailService {
     const rewindCuts = collectInline
       ? []
       : await this.resolveRewindIntervals(id, summary, conversation)
-    const { collected, nextCursor } = await this.pageVisibleEntries(
-      conversation,
-      id,
-      limit,
-      sdkCursor,
-      rewindCuts,
-      collectInline,
-    )
+    const { collected, nextCursor } =
+      turns !== undefined
+        ? await pageVisibleTurns(conversation, turns, sdkCursor, rewindCuts, collectInline)
+        : await pageVisibleEntries(conversation, limit!, sdkCursor, rewindCuts, collectInline)
     if (collectInline && nextCursor === undefined && (summary.lastEntryId ?? 0) > 0) {
       this.putRewindCache(id, summary.stateChangeSeq, summary.lastEntryId!, [...rewindCuts])
     }
@@ -201,62 +212,6 @@ export class ConversationDetailService {
       })
     }
     return stripEntrySignatures(toConversationEntry(raw as never))
-  }
-
-  /** Descending SDK pagination + rewind/pi.system filtering (detail paging loop fetching remaining count per iteration).
-   * Both pi.system and rewound entries are skipped inside the loop before counting toward `limit`, guaranteeing
-   * `limit` measures visible entries (filtering afterwards would under-fill pages and advance past hidden entries). */
-  async pageVisibleEntries(
-    conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
-    id: number,
-    limit: number,
-    initialCursor: unknown,
-    rewindCuts: RewindInterval[],
-    collectRewindsInline = false,
-  ): Promise<{
-    collected: Array<{ id: number; kind: string; model?: readonly unknown[]; data?: unknown }>
-    nextCursor: unknown
-  }> {
-    const collected: Array<{ id: number; kind: string; model?: readonly unknown[]; data?: unknown }> = []
-    let sdkCursor = initialCursor
-    let nextCursor: unknown = undefined
-    for (;;) {
-      const remaining = limit - collected.length
-      const page = await conversation.entries(
-        { order: 'descending' },
-        remaining,
-        sdkCursor as never,
-        BACKGROUND_CONTEXT,
-      )
-      for (const raw of page.items as never as Array<{
-        id: number
-        kind: string
-        model?: readonly unknown[]
-        data?: unknown
-      }>) {
-        if (collectRewindsInline && raw.kind === 'helmx.rewind') {
-          const interval = rewindIntervalOf(raw)
-          if (interval !== undefined) rewindCuts.push(interval)
-        }
-        // Keep helmx.rewind markers (for SSE consistency and frontend interval deduplication), hide older entries
-        // inside closed rewind intervals, and hide internal pi.system records from detail timelines.
-        const numericId = Number(raw.id)
-        if (raw.kind === 'pi.system') continue
-        if (raw.kind !== 'helmx.rewind' && coveredByRewind(numericId, rewindCuts)) continue
-        collected.push(raw)
-      }
-      if (page.next === undefined) {
-        nextCursor = undefined
-        break
-      }
-      if (collected.length >= limit) {
-        nextCursor = page.next
-        break
-      }
-      sdkCursor = page.next
-    }
-    void id
-    return { collected, nextCursor }
   }
 
   /** Encode pagination cursor: base64url(JSON {conversationId, cursor}). */

@@ -719,7 +719,7 @@ describe("unread-visibility", () => {
     }
   })
 
-  test('窄屏默认拉取 limit=40 并支持向上分页，桌面保持 limit=150', { timeout: 60_000 }, async (t) => {
+  test('窄屏默认拉取 turns=5 并支持向上分页，桌面保持 turns=10', { timeout: 60_000 }, async (t) => {
     const page = setVisibilityAndFocus({ hidden: false, focused: true })
     const originalInnerWidth = window.innerWidth
     t.after(() => {
@@ -744,7 +744,7 @@ describe("unread-visibility", () => {
             return new Response(
               JSON.stringify({
                 ...makeConv({ id: 1, stateChangeSeq: 1, lastEntryId: 2 }),
-                entries: [{ id: 1, conversationId: 1, kind: 'message', role: 'user', content: 'earlier', createdAt: 1 }],
+                entries: [{ id: '1', kind: 'helmx.input', data: { id: 'in-1', text: 'earlier', origin: 'human' } }],
                 nextCursor: null,
               }),
               { status: 200, headers: { 'content-type': 'application/json' } },
@@ -753,7 +753,7 @@ describe("unread-visibility", () => {
           return new Response(
             JSON.stringify({
               ...makeConv({ id: 1, stateChangeSeq: 1, lastEntryId: 2 }),
-              entries: [{ id: 2, conversationId: 1, kind: 'message', role: 'assistant', content: 'latest', createdAt: 2 }],
+              entries: [{ id: '2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'latest' }] }] }],
               nextCursor: 'older-1',
             }),
             { status: 200, headers: { 'content-type': 'application/json' } },
@@ -789,7 +789,8 @@ describe("unread-visibility", () => {
       const mobileUrl = requestedUrls.find((u) => u.startsWith('/api/conversations/1?'))
       assert.ok(mobileUrl !== undefined, '应发起 c/1 详情请求')
       const mobileParams = new URLSearchParams(mobileUrl.slice(mobileUrl.indexOf('?') + 1))
-      assert.equal(mobileParams.get('limit'), '40', '窄屏（<=680px）默认 limit 必须为 40')
+      assert.equal(mobileParams.get('turns'), '5', '窄屏（<=680px）默认 turns 必须为 5')
+      assert.equal(mobileParams.get('limit'), null, '默认详情请求不应再附带 limit')
 
       // 向上分页加载更早条目
       await act(async () => {
@@ -797,14 +798,16 @@ describe("unread-visibility", () => {
       })
       const olderUrl = requestedUrls.find((u) => u.includes('cursor=older-1'))
       assert.ok(olderUrl !== undefined, 'loadEarlierEntries 应携带 cursor=older-1 请求')
+      const olderParams = new URLSearchParams(olderUrl.slice(olderUrl.indexOf('?') + 1))
+      assert.equal(olderParams.get('turns'), '5', '窄屏向上分页也应使用 turns=5')
       assert.deepEqual(
         h.store().conversationDetails[1]?.entries.map((e) => e.id),
-        [1, 2],
+        ['1', '2'],
         '向上分页应将更早条目合并在现有条目之前',
       )
       assert.equal(h.store().conversationDetails[1]?.nextCursor, null)
 
-      // 切回桌面宽度后打开会话 2，验证默认 limit 恢复为 150
+      // 切回桌面宽度后打开会话 2，验证默认 turns 恢复为 10
       Object.assign(window, { innerWidth: 1024 })
       await act(async () => {
         h.store().openTarget({ kind: 'conversation', conversationId: 2 })
@@ -813,7 +816,310 @@ describe("unread-visibility", () => {
       const desktopUrl = requestedUrls.find((u) => u.startsWith('/api/conversations/2?'))
       assert.ok(desktopUrl !== undefined, '应发起 c/2 详情请求')
       const desktopParams = new URLSearchParams(desktopUrl.slice(desktopUrl.indexOf('?') + 1))
-      assert.equal(desktopParams.get('limit'), '150', '桌面视口默认 limit 必须保持 150')
+      assert.equal(desktopParams.get('turns'), '10', '桌面视口默认 turns 必须为 10')
+      assert.equal(desktopParams.get('limit'), null)
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('loadEarlierEntries 巨型回合最多补拉 1 页且 page2 失败保留 page1；仅加载过程步骤时提示且搜索跳转静默', { timeout: 60_000 }, async (t) => {
+    const page = setVisibilityAndFocus({ hidden: false, focused: true })
+    const originalInnerWidth = window.innerWidth
+    t.after(() => {
+      Object.assign(window, { innerWidth: originalInnerWidth })
+      page.restore()
+    })
+    Object.assign(window, { innerWidth: 1024 })
+
+    const conv1Cursors: Array<string | null> = []
+    const conv2Cursors: Array<string | null> = []
+    const conv3Cursors: Array<string | null> = []
+    const conv4Cursors: Array<string | null> = []
+    const conv5Cursors: Array<string | null> = []
+
+    const toolCallOnly = (id: string) => ({
+      id,
+      kind: 'pi.assistant',
+      model: [{ role: 'assistant', content: [{ type: 'thinking', thinking: 'thinking...' }, { type: 'toolCall', id: `c-${id}`, name: 'bash', arguments: {} }] }],
+    })
+    const toolResultOnly = (id: string) => ({
+      id,
+      kind: 'pi.tool-result',
+      model: [{ role: 'toolResult', toolCallId: `c-${id}`, content: [{ type: 'text', text: 'ok' }] }],
+    })
+
+    const h = await mountProvider({
+      hash: '#/c/1',
+      onGet: (path) => {
+        if (path.endsWith('/artifacts')) {
+          return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        const query = path.includes('?') ? path.slice(path.indexOf('?') + 1) : ''
+        const cursor = new URLSearchParams(query).get('cursor')
+
+        if (path.startsWith('/api/conversations/1')) {
+          conv1Cursors.push(cursor)
+          if (cursor === null) {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 1, stateChangeSeq: 1, lastEntryId: 5 }),
+                entries: [{ id: '5', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'final' }] }] }],
+                nextCursor: 'c1',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'c1') {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 1, stateChangeSeq: 1, lastEntryId: 5 }),
+                entries: [toolCallOnly('3'), toolResultOnly('4')],
+                nextCursor: 'c2',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'c2') {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 1, stateChangeSeq: 1, lastEntryId: 5 }),
+                entries: [{ id: '1', kind: 'helmx.input', data: { id: 'in-1', text: 'origin', origin: 'human' } }, toolCallOnly('2')],
+                nextCursor: null,
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+        }
+
+        if (path.startsWith('/api/conversations/4')) {
+          conv4Cursors.push(cursor)
+          if (cursor === null) {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 4, stateChangeSeq: 1, lastEntryId: 5 }),
+                entries: [{ id: '5', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'final-4' }] }] }],
+                nextCursor: 'c1',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'c1') {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 4, stateChangeSeq: 1, lastEntryId: 5 }),
+                entries: [toolCallOnly('3'), toolResultOnly('4')],
+                nextCursor: 'c2',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'c2') {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 4, stateChangeSeq: 1, lastEntryId: 5 }),
+                entries: [toolCallOnly('1'), toolResultOnly('2')],
+                nextCursor: 'c3',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+        }
+
+        if (path.startsWith('/api/conversations/2')) {
+          conv2Cursors.push(cursor)
+          if (cursor === null) {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 2, stateChangeSeq: 1, lastEntryId: 10 }),
+                entries: [{ id: '10', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'tail' }] }] }],
+                nextCursor: 'c1',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'c1') {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 2, stateChangeSeq: 1, lastEntryId: 10 }),
+                entries: [toolCallOnly('8'), toolResultOnly('9')],
+                nextCursor: 'c2',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'c2') {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 2, stateChangeSeq: 1, lastEntryId: 10 }),
+                entries: [toolCallOnly('6'), toolResultOnly('7')],
+                nextCursor: 'c3',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'c3') {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 2, stateChangeSeq: 1, lastEntryId: 10 }),
+                entries: [{ id: '5', kind: 'helmx.input', data: { id: 'in-5', text: 'target', origin: 'human' } }],
+                nextCursor: null,
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+        }
+
+        if (path.startsWith('/api/conversations/3')) {
+          conv3Cursors.push(cursor)
+          if (cursor === null) {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 3, stateChangeSeq: 1, lastEntryId: 20 }),
+                entries: [{ id: '20', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'tail-3' }] }] }],
+                nextCursor: 'p1',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'p1') {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 3, stateChangeSeq: 1, lastEntryId: 20 }),
+                entries: [toolResultOnly('19')],
+                nextCursor: 'p2',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'p2') {
+            return new Response(JSON.stringify({ error: { message: 'page2 boom' } }), {
+              status: 500,
+              headers: { 'content-type': 'application/json' },
+            })
+          }
+        }
+
+        if (path.startsWith('/api/conversations/5')) {
+          conv5Cursors.push(cursor)
+          if (cursor === null) {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 5, stateChangeSeq: 1, lastEntryId: 20 }),
+                entries: [{ id: '20', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'tail-5' }] }] }],
+                nextCursor: 'p1',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'p1') {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 5, stateChangeSeq: 1, lastEntryId: 20 }),
+                entries: [toolResultOnly('19')],
+                nextCursor: 'p2',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'p2') {
+            return new Response(JSON.stringify({ error: { message: 'conv5 page2 boom' } }), {
+              status: 500,
+              headers: { 'content-type': 'application/json' },
+            })
+          }
+        }
+        return undefined
+      },
+    })
+
+    try {
+      h.nextEvents((_url, signal) => {
+        const c = controlledStream(signal)
+        c.send(
+          snapshotFrame({
+            bootId: 'boot-1',
+            seq: 1,
+            conversations: [
+              makeConv({ id: 1, stateChangeSeq: 1, lastEntryId: 5 }),
+              makeConv({ id: 2, stateChangeSeq: 1, lastEntryId: 10 }),
+              makeConv({ id: 3, stateChangeSeq: 1, lastEntryId: 20 }),
+              makeConv({ id: 4, stateChangeSeq: 1, lastEntryId: 5 }),
+              makeConv({ id: 5, stateChangeSeq: 1, lastEntryId: 20 }),
+            ],
+            pendingAsks: [],
+            plugins: [],
+            ui: [],
+          }),
+        )
+        return c
+      })
+
+      // 1. Bounded 1-extra-page fallback merges [page1, page2] cleanly when page2 reaches turn boundary (no info notice)
+      await h.waitFor((s) => s.sseConnected && s.conversationDetails[1] !== undefined)
+      await act(async () => {
+        await h.store().loadEarlierEntries(1)
+      })
+      assert.deepEqual(conv1Cursors, [null, 'c1', 'c2'], '无边界时最多补拉 1 页（c1 -> c2）')
+      assert.deepEqual(
+        h.store().conversationDetails[1]?.entries.map((e) => e.id),
+        ['1', '2', '3', '4', '5'],
+      )
+      assert.equal(h.store().notices.filter((n) => n.level === 'info').length, 0)
+
+      // 2. When page1+page2 contain only tool/process steps and nextCursor remains, emit an honest 'info' notice
+      await act(async () => {
+        h.store().openTarget({ kind: 'conversation', conversationId: 4 })
+      })
+      await h.waitFor((s) => s.conversationDetails[4] !== undefined)
+      await act(async () => {
+        await h.store().loadEarlierEntries(4)
+      })
+      assert.deepEqual(conv4Cursors, [null, 'c1', 'c2'], '最多补拉 1 页后停止在 c3')
+      assert.equal(h.store().conversationDetails[4]?.nextCursor, 'c3')
+      const infoNotices = h.store().notices.filter((n) => n.level === 'info' && n.conversationId === 4)
+      assert.equal(infoNotices.length, 1, '仅加载过程步骤且仍有更早页时应发出 1 条 info 提示')
+
+      // 3. Search jump (stepHighlightedEntry -> loadEarlierEntries({ quiet: true })) never emits info notice
+      await act(async () => {
+        h.store().openTarget({ kind: 'conversation', conversationId: 2 }, { highlightEntryId: '5' })
+      })
+      await h.waitFor((s) => s.conversationDetails[2]?.entries.some((e) => e.id === '5') === true)
+      assert.deepEqual(conv2Cursors, [null, 'c1', 'c2', 'c3'])
+      assert.equal(
+        h.store().notices.filter((n) => n.level === 'info' && n.conversationId === 2).length,
+        0,
+        '搜索跳转静默分页不得产生过程步骤 info 提示',
+      )
+
+      // 4. If page2 errors, page1 progress & nextCursor are preserved alongside history error
+      await act(async () => {
+        h.store().openTarget({ kind: 'conversation', conversationId: 3 })
+      })
+      await h.waitFor((s) => s.conversationDetails[3] !== undefined)
+      await act(async () => {
+        await h.store().loadEarlierEntries(3)
+      })
+      assert.deepEqual(conv3Cursors, [null, 'p1', 'p2'])
+      assert.deepEqual(
+        h.store().conversationDetails[3]?.entries.map((e) => e.id),
+        ['19', '20'],
+        'page2 失败时必须保留已拉取的 page1 条目',
+      )
+      assert.equal(h.store().conversationDetails[3]?.nextCursor, 'p2', 'nextCursor 应停留在 p2 以便重试')
+      assert.ok(h.store().loadErrors['history:3'] !== undefined, 'page2 失败应记录 history:3 加载错误')
+
+      // 5. With active HighlightedEntry watcher subscribing to detail commits, page2 error must not allow re-entrant fetch before loadErrors is set
+      await act(async () => {
+        h.store().openTarget({ kind: 'conversation', conversationId: 5 }, { highlightEntryId: '999' })
+      })
+      await h.waitFor((s) => s.loadErrors['history:5'] !== undefined)
+      assert.deepEqual(conv5Cursors, [null, 'p1', 'p2'], 'page1 提交期间 inFlight 必须阻止重入拉取，仅尝试 1 次 p2')
+      assert.deepEqual(
+        h.store().conversationDetails[5]?.entries.map((e) => e.id),
+        ['19', '20'],
+      )
+      assert.equal(h.store().conversationDetails[5]?.nextCursor, 'p2')
     } finally {
       await h.close()
     }

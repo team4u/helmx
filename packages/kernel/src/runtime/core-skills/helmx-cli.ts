@@ -53,7 +53,7 @@ managedByPlugin: {{MANAGED_BY}}
 
 ### Conversations
 - \`helmx conversations list [--profile <id>] [--status <s>] [--tag <t>] [--owned-by human|helmx]\`: top-level human conversations only by default (noise reduction); \`--owned-by helmx\` lists top-level automated sessions; \`--tag <t>\` matches tagged conversations regardless of ownership; \`--all\` includes all derived sub-conversations and automated sessions; \`--parent <id>\` lists exactly one conversation's direct children (mutually exclusive with --all).
-- \`helmx conversations get [id] [--current] [--limit N] [--cursor <c>]\` (with a paginated timeline)
+- \`helmx conversations get [id] [--current] [--limit N | --turns N] [--cursor <c>]\` (with a paginated timeline; \`--limit\` \`1..500\` or \`--turns\` \`1..50\`, mutually exclusive)
 - \`helmx conversations entry [id] <entryId> [--current]\` (full text of a single timeline entry; detail pagination truncates head/tail of very long plain-text tool-results, and this command returns the untruncated original)
 - \`helmx conversations file [id] <path> [--current] [--output <path>]\` (read a file strictly inside the conversation's bound workspace on the target node; text files are redacted via SecretStash, binary files require \`--output\`)
 - \`helmx conversations create [--title <t>] [--profile-id <id>] [--node <nodeId>] [--cwd <dir>] [--model <m>] [--tags <t>] [--parent-conversation-id <id>]\`

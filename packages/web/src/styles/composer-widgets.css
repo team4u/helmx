@@ -44,9 +44,12 @@
   cursor: pointer;
 }
 .composer-popover .popover-item:hover,
+.composer-popover .popover-item:focus-visible,
 .composer-popover .popover-item-active {
   background: var(--bg-hover);
   color: var(--fg);
+  outline: none;
+  box-shadow: none;
 }
 .composer-popover .popover-item-meta {
   font-size: 11px;
@@ -257,6 +260,7 @@
   background: var(--bg-subtle);
 }
 .composer-model-popover .popover-item.composer-model-row:hover,
+.composer-model-popover .popover-item.composer-model-row:has(.composer-model-row-main:focus-visible),
 .composer-model-popover .popover-item.composer-model-row.popover-item-active {
   background: var(--nav-list-hover-bg);
   color: var(--fg);
@@ -284,6 +288,10 @@
   font-size: 12.5px;
   text-align: left;
   cursor: pointer;
+}
+.composer-model-row-main:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 .composer-model-row-name-line {
   display: inline-flex;

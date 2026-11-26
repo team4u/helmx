@@ -171,10 +171,12 @@
 }
 
 .helmx-dropdown-item[data-highlighted],
-.helmx-dropdown-item:hover:not([data-disabled]) {
+.helmx-dropdown-item:hover:not([data-disabled]),
+.helmx-dropdown-item:focus-visible:not([data-disabled]) {
   background: var(--bg-hover);
   color: var(--fg);
   outline: none;
+  box-shadow: none;
 }
 
 .helmx-dropdown-item[data-disabled] {
@@ -187,9 +189,12 @@
 }
 
 .helmx-dropdown-item-danger[data-highlighted],
-.helmx-dropdown-item-danger:hover:not([data-disabled]) {
+.helmx-dropdown-item-danger:hover:not([data-disabled]),
+.helmx-dropdown-item-danger:focus-visible:not([data-disabled]) {
   background: var(--err-bg, rgba(224, 75, 59, 0.1));
   color: var(--err);
+  outline: none;
+  box-shadow: none;
 }
 
 .helmx-dropdown-separator {

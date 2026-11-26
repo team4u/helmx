@@ -69,8 +69,12 @@
   min-width: 0;
 }
 
-.tg-run-row:hover {
+.tg-run-row:hover,
+.tg-run-row:focus-visible,
+.tg-run-row:has(.tg-run-main:focus-visible) {
+  outline: none;
   background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .tg-run-main {
@@ -85,6 +89,11 @@
   color: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.tg-run-main:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .tg-run-body {

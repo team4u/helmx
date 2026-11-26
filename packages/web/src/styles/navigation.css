@@ -171,9 +171,18 @@
   width: 100%;
 }
 
-.nav-item:hover {
+.nav-item:hover,
+.nav-item:focus-visible,
+.nav-item:has(.nav-open:focus-visible) {
   background: var(--bg-hover);
   color: var(--fg);
+  outline: none;
+  box-shadow: none;
+}
+
+.nav-open:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 /* 侧栏行级底色由 --nav-row-bg 统一驱动，供绝对定位行尾动作渐变无缝融合 */
@@ -182,7 +191,9 @@
   background: var(--nav-row-bg);
 }
 
-.sidebar-context .nav-item:hover {
+.sidebar-context .nav-item:hover,
+.sidebar-context .nav-item:focus-visible,
+.sidebar-context .nav-item:has(.nav-open:focus-visible) {
   --nav-row-bg: var(--nav-hover-bg);
 }
 
@@ -193,7 +204,9 @@
 
 /* 工作集会话列表采用极简纸面分阶：Hover 轻垫层、Active 实底微垫层（无投影、无竖线），
  * 让对话行选中态克制且不与 Hover 撞色。 */
-.sidebar-context .sidebar-overview-group .nav-item:hover {
+.sidebar-context .sidebar-overview-group .nav-item:hover,
+.sidebar-context .sidebar-overview-group .nav-item:focus-visible,
+.sidebar-context .sidebar-overview-group .nav-item:has(.nav-open:focus-visible) {
   --nav-row-bg: var(--nav-list-hover-bg);
 }
 
@@ -398,11 +411,6 @@
     transition: opacity 100ms ease;
   }
 
-  .sidebar-context .nav-item:not(.nav-item-active):not(.nav-item-split):has(:focus-visible):not(:hover):not(:has([aria-expanded="true"])) .nav-item-row-actions,
-  .sidebar-context .nav-item:not(.nav-item-active):not(.nav-item-split):has(:focus-visible):not(:hover):not(:has([aria-expanded="true"])) .sidebar-split-action {
-    background: linear-gradient(90deg, transparent 0%, var(--bg-subtle) 38%);
-  }
-
   .nav-item:hover .nav-item-row-actions,
   .nav-item:has(:focus-visible) .nav-item-row-actions,
   .nav-item:has([aria-expanded="true"]) .nav-item-row-actions,
@@ -529,14 +537,20 @@
   flex-shrink: 0;
 }
 
-.sidebar-search-clear:hover {
+.sidebar-search-clear:hover,
+.sidebar-search-clear:focus-visible:not(:disabled) {
+  outline: none;
   color: var(--fg);
   background: var(--bg-hover);
+  box-shadow: none;
 }
 
-.sidebar-search .sidebar-search-clear:hover:not(:disabled) {
+.sidebar-search .sidebar-search-clear:hover:not(:disabled),
+.sidebar-search .sidebar-search-clear:focus-visible:not(:disabled) {
+  outline: none;
   color: var(--fg);
   background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .sidebar-search-empty {
