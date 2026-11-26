@@ -368,6 +368,51 @@ test('ProfileDetailDrawer: create-new mode with editable ID rendering', { timeou
   assert.doesNotMatch(html, EMOJI_REGEX, 'create-new drawer output must contain no emoji')
 })
 
+test('ProfileDetailDrawer: shared model picker resolves a bound model through its per-model thinking default', { timeout: 60_000 }, async () => {
+  const { act } = await import('react')
+  const ReactDOMClient = await import('react-dom/client')
+  const store = makeTestStore({
+    models: mockModels,
+    modelDefaults: { modelThinkingLevels: { 'claude-3-7-sonnet': 'high' } },
+    skills: mockSkills,
+  })
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(ProfileDetailDrawer, {
+            profile: {
+              ...mockProfiles[3]!,
+              model: 'claude-3-7-sonnet',
+              defaultModel: 'claude-3-7-sonnet',
+              thinkingLevel: 'low',
+            },
+            isNew: false,
+            open: true,
+            inline: true,
+            onClose: () => {},
+          }),
+        ),
+      )
+    })
+    const trigger = host.querySelector<HTMLButtonElement>('#profile-form-model')
+    assert.ok(trigger)
+    assert.match(trigger.textContent ?? '', /claude-3-7-sonnet/)
+    assert.match(trigger.textContent ?? '', /· high/)
+    assert.doesNotMatch(trigger.textContent ?? '', /· low/)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
 test('ProfileDetailDrawer: model binding renders the shared SDK ModelPickerControl (no private thinking row)', { timeout: 60_000 }, () => {
   // Explicitly bound to claude-3-7-sonnet (thinkingLevels: off/low/medium/high):
   // the unified shared picker trigger carries the model (and effective level);
@@ -707,11 +752,15 @@ test('profile-center-model: effective model / global inheritance, node cwd and a
   // Tier bindings mirror the kernel's default chain: the tier's own preset outranks the
   // Profile/global level saved beside it and converges (clamps) to the target's levels.
   const tierCatalog = {
-    models: [{ id: 'faux/omni', provider: 'faux', modelId: 'omni', available: true, thinkingLevels: ['high', 'xhigh', 'max'] }],
+    models: [
+      { id: 'faux/omni', provider: 'faux', modelId: 'omni', available: true, thinkingLevels: ['high', 'xhigh', 'max'] },
+      { id: 'faux/plain', provider: 'faux', modelId: 'plain', available: true, thinkingLevels: ['off', 'low', 'high'] },
+    ],
     modelTiers: [
       { id: 'scout', model: 'faux/omni', thinkingLevel: 'max', available: true, thinkingLevels: ['high', 'xhigh', 'max'] },
       { id: 'reviewer', model: 'faux/omni', available: true, thinkingLevels: ['high', 'xhigh'] },
     ],
+    modelThinkingLevels: { 'faux/plain': 'high' },
   }
   assert.deepEqual(
     resolveEffectiveProfileModel(
@@ -733,6 +782,14 @@ test('profile-center-model: effective model / global inheritance, node cwd and a
   assert.deepEqual(
     resolveEffectiveProfileModel({ id: 'worker', name: 'Worker' }, { defaultModel: 'tier/reviewer', defaultThinkingLevel: 'max' }, tierCatalog),
     { model: 'tier/reviewer', thinkingLevel: 'xhigh', source: 'global' },
+  )
+  assert.deepEqual(
+    resolveEffectiveProfileModel(
+      { id: 'worker', name: 'Worker', model: 'faux/plain', defaultModel: 'faux/plain', thinkingLevel: 'low' },
+      null,
+      tierCatalog,
+    ),
+    { model: 'faux/plain', thinkingLevel: 'high', source: 'bound' },
   )
   // Without the catalog a tier's preset is unknown and outranks the configured level, so the
   // level stays hidden rather than displaying a value the kernel may not run.

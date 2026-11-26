@@ -220,7 +220,7 @@ function displayableThinkingLevel(level: string): string | undefined {
 export function resolveEffectiveProfileModel(
   profile: Profile,
   defaultModelInfo?: { defaultModel?: string; defaultThinkingLevel?: string } | null,
-  catalog?: Pick<HostModelsSlice, 'models' | 'modelTiers'>,
+  catalog?: Pick<HostModelsSlice, 'models' | 'modelTiers' | 'modelThinkingLevels'>,
 ): EffectiveProfileModelInfo {
   const boundModel = resolveProfileModel(profile)?.trim() ?? ''
   if (boundModel !== '') {

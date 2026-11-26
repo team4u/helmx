@@ -120,12 +120,13 @@ test('resolveEffectiveThinkingLevel / index stepping / copy interpolation semant
   assert.equal(resolveEffectiveThinkingLevel(['off', 'low', 'high'], 'max'), 'high')
   assert.equal(resolveEffectiveThinkingLevel(['off', 'high', 'xhigh'], 'max'), 'xhigh')
   assert.equal(resolveEffectiveThinkingLevel(['off', 'low'], 'xhigh'), 'low')
-  assert.equal(resolveEffectiveThinkingLevel(['off', 'low'], 'ultra'), 'off', 'unknown level falls back to off/lowest')
   // An explicit 'off' always passes (the kernel omits the reasoning parameter); an unconfigured
-  // level displays as off or the lowest supported level; no declared levels yields ''.
+  // level stays empty (the SDK default runs and is never fabricated); a level outside the
+  // canonical order and a model without declared levels yield '' too.
   assert.equal(resolveEffectiveThinkingLevel(['low', 'high'], 'off'), 'off')
-  assert.equal(resolveEffectiveThinkingLevel(['high', 'xhigh'], ''), 'high')
-  assert.equal(resolveEffectiveThinkingLevel(['off', 'high'], ''), 'off')
+  assert.equal(resolveEffectiveThinkingLevel(['high', 'xhigh'], ''), '')
+  assert.equal(resolveEffectiveThinkingLevel(['off', 'high'], ''), '')
+  assert.equal(resolveEffectiveThinkingLevel(['off', 'low'], 'ultra'), '')
   assert.equal(resolveEffectiveThinkingLevel([], 'high'), '')
   assert.equal(initialModelActiveIndex(CATALOG_MODELS, ''), -1)
   assert.equal(initialModelActiveIndex(CATALOG_MODELS, 'gpt'), 0)
@@ -147,27 +148,32 @@ const TIER_CATALOG: HostModelsSlice = {
     // Preset unsupported by the target: the kernel clamps max -> xhigh (never high).
     { id: 'reviewer', model: 'faux/sol', thinkingLevel: 'max', available: true, thinkingLevels: ['high', 'xhigh'] },
     { id: 'scout', model: 'faux/omni', thinkingLevel: 'max', available: true, thinkingLevels: ['off', 'high', 'xhigh', 'max'] },
-    // No preset: the level configured beside the reference applies.
+    // No preset: the per-model default, then the level configured beside the reference, applies.
     { id: 'plain', model: 'faux/sol', available: true, thinkingLevels: ['high', 'xhigh'] },
   ],
+  modelThinkingLevels: { 'faux/sol': 'xhigh', 'faux/omni': 'high' },
 }
 
-test('resolveDefaultChainThinkingLevel: a tier preset outranks the level configured beside the reference and clamps like the kernel', { timeout: 60_000 }, () => {
-  // Tier with preset: the configured level (global / Profile) never masks the preset.
+test('resolveDefaultChainThinkingLevel: conversation chain = tier preset > per-model default > configured level, kernel-clamped', { timeout: 60_000 }, () => {
+  // Tier with preset: the per-model default and the configured level never mask the preset.
   assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/scout', 'high'), 'max')
   // Unsupported preset converges the way the kernel clamps it (upward first, then downward).
   assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/reviewer', 'high'), 'xhigh')
-  // Tier without preset falls back to the configured level, converged; empty stays empty.
-  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/plain', 'max'), 'xhigh')
-  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/plain', ''), 'high')
-  // Concrete references converge the configured level; one outside the catalog keeps it unconverged.
-  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/sol', 'max'), 'xhigh')
-  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/sol', ''), 'high')
-  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/missing', 'high'), 'high')
+  // Tier without preset: the target's per-model default wins over the configured level.
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/plain', 'high'), 'xhigh')
+  // Concrete model: the per-model default wins over the configured level; without one the
+  // configured level applies, converged; an empty chain shows nothing (the SDK default runs).
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/sol', 'high'), 'xhigh')
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/omni', ''), 'high')
+  assert.equal(resolveDefaultChainThinkingLevel({ ...TIER_CATALOG, modelThinkingLevels: {} }, 'faux/sol', 'max'), 'xhigh')
+  assert.equal(resolveDefaultChainThinkingLevel({ ...TIER_CATALOG, modelThinkingLevels: {} }, 'faux/sol', ''), '')
+  // Unknown references: nothing for no reference; a concrete reference outside the catalog keeps
+  // its chain result unconverged.
   assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, '', 'high'), '')
   assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, undefined, 'high'), '')
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/missing', 'high'), 'high')
   // Catalog unknown: a concrete reference's configured level is a plain (unconverged) fact; a
-  // tier's preset is unknown and outranks the configured level, so nothing honest can be shown.
+  // tier's preset is unknown and outranks everything else, so nothing honest can be shown.
   assert.equal(resolveDefaultChainThinkingLevel(undefined, 'faux/sol', 'max'), 'max')
   assert.equal(resolveDefaultChainThinkingLevel(undefined, 'tier/scout', 'high'), '')
   // An unregistered tier (or one whose target is absent from the catalog) has no known preset to show.
@@ -176,6 +182,17 @@ test('resolveDefaultChainThinkingLevel: a tier preset outranks the level configu
     resolveDefaultChainThinkingLevel({ models: [], modelTiers: [{ id: 'ghost', model: 'faux/gone', thinkingLevel: 'max', available: false }] }, 'tier/ghost', 'high'),
     '',
   )
+})
+
+test('resolveDefaultChainThinkingLevel: compaction chain = configured compaction level > tier preset > per-model default', { timeout: 60_000 }, () => {
+  // An explicit compaction level wins over both the tier preset and the per-model default.
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/scout', 'high', 'compaction'), 'high')
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/sol', 'high', 'compaction'), 'high')
+  // Without one: the tier preset, then the target's per-model default; an empty chain shows nothing.
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/scout', '', 'compaction'), 'max')
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/plain', '', 'compaction'), 'xhigh')
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/sol', '', 'compaction'), 'xhigh')
+  assert.equal(resolveDefaultChainThinkingLevel({ ...TIER_CATALOG, modelThinkingLevels: {} }, 'faux/sol', '', 'compaction'), '')
 })
 
 /** Mount the control over a catalog and return the trigger button text. */
@@ -213,16 +230,23 @@ async function renderTriggerText(
   }
 }
 
-test('tier-aware trigger: default precedence shows the tier preset (kernel-clamped) instead of the configured or lowest level', { timeout: 60_000 }, async () => {
-  // Global default / Profile binding context: the configured level ('high') is outranked by the preset.
-  const scout = await renderTriggerText({ effectiveModel: 'tier/scout', activeThinkingLevel: 'high' })
+test('tier-aware trigger: shows the caller-resolved level and falls back to the tier preset when empty, kernel-clamped', { timeout: 60_000 }, async () => {
+  // Hosts pass the chain result (here: a draft override outranking the preset).
+  const override = await renderTriggerText({ effectiveModel: 'tier/scout', activeThinkingLevel: 'xhigh' })
   try {
-    assert.match(scout.text, /tier\/scout/)
+    assert.match(override.text, /tier\/scout/)
+    assert.match(override.text, /· xhigh/)
+  } finally {
+    await override.done()
+  }
+  // Empty level: the tier's own preset shows, converged the way the kernel clamps it
+  // (max on a high/xhigh model displays as xhigh, never the lowest level high).
+  const scout = await renderTriggerText({ effectiveModel: 'tier/scout', activeThinkingLevel: '' })
+  try {
     assert.match(scout.text, /· max/)
   } finally {
     await scout.done()
   }
-  // The preset the kernel would actually run: max on a high/xhigh model displays as xhigh, never high.
   const reviewer = await renderTriggerText({ effectiveModel: 'tier/reviewer', activeThinkingLevel: '' })
   try {
     assert.match(reviewer.text, /· xhigh/)
@@ -230,42 +254,18 @@ test('tier-aware trigger: default precedence shows the tier preset (kernel-clamp
   } finally {
     await reviewer.done()
   }
-  // A tier without a preset keeps showing the configured level.
-  const plain = await renderTriggerText({ effectiveModel: 'tier/plain', activeThinkingLevel: 'xhigh' })
-  try {
-    assert.match(plain.text, /· xhigh/)
-  } finally {
-    await plain.done()
-  }
-  // Concrete models are unaffected: the context level displays as before.
+  // Concrete models display the given level as before (no chain knowledge in the control).
   const concrete = await renderTriggerText({ effectiveModel: 'faux/sol', activeThinkingLevel: 'high' })
   try {
     assert.match(concrete.text, /· high/)
   } finally {
     await concrete.done()
   }
-})
-
-test('tier-aware trigger: override precedence keeps the explicit conversation level above the tier preset and falls back to it when empty', { timeout: 60_000 }, async () => {
-  const override = await renderTriggerText({
-    effectiveModel: 'tier/scout',
-    activeThinkingLevel: 'xhigh',
-    thinkingLevelPrecedence: 'override',
-  })
+  const concreteEmpty = await renderTriggerText({ effectiveModel: 'faux/sol', activeThinkingLevel: '' })
   try {
-    assert.match(override.text, /· xhigh/)
+    assert.doesNotMatch(concreteEmpty.text, /·/, 'an empty level on a concrete model shows no level (the chain is the host\'s call)')
   } finally {
-    await override.done()
-  }
-  const empty = await renderTriggerText({
-    effectiveModel: 'tier/scout',
-    activeThinkingLevel: '',
-    thinkingLevelPrecedence: 'override',
-  })
-  try {
-    assert.match(empty.text, /· max/)
-  } finally {
-    await empty.done()
+    await concreteEmpty.done()
   }
 })
 

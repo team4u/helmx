@@ -125,7 +125,7 @@ describe("composer-keybindings", () => {
   test('keybindings-model: an unsupported thinking level clamps to the nearest supported level like the kernel', { timeout: 60_000 }, () => {
     assert.equal(resolveEffectiveThinkingLevel(['minimal', 'high'], 'max'), 'high')
     assert.equal(resolveEffectiveThinkingLevel(['off', 'low'], 'xhigh'), 'low')
-    assert.equal(resolveEffectiveThinkingLevel(['minimal', 'high'], ''), 'minimal')
+    assert.equal(resolveEffectiveThinkingLevel(['minimal', 'high'], ''), '')
   })
 
   test('keybindings-model: initialModelActiveIndex / stepActiveIndex', { timeout: 60_000 }, () => {
