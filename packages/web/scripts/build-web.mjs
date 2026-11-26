@@ -11,90 +11,24 @@
  * or `HELMX_CLEAN_DIST=1` runs a full `vite build`.
  */
 import { createHash } from 'node:crypto';
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  collectFilesSorted,
+  hashDirectoryInto,
+  hashFileInto,
+  isRealDirectory,
+  isRegularFile,
+} from '../../../scripts/lib/fs-hash.mjs';
 
 const SCHEMA_VERSION = 1;
+/** Dependency, VCS and nested dist directories are never web build inputs or outputs (pruned at every depth). */
 const IGNORED_DIR_NAMES = new Set(['node_modules', '.git', 'dist']);
-const IGNORED_FILE_NAMES = new Set(['.DS_Store']);
+const TREE_OPTIONS = { ignoredDirNames: IGNORED_DIR_NAMES };
 
 const defaultPkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const defaultRepoRoot = resolve(defaultPkgRoot, '../..');
-
-function isRegularFile(filePath) {
-  try {
-    return lstatSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function isRealDirectory(dirPath) {
-  try {
-    return lstatSync(dirPath).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function compareAscii(a, b) {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** Recursively collects regular files under `rootDir` as sorted POSIX relative paths. */
-function collectFilesSorted(rootDir) {
-  if (!isRealDirectory(rootDir)) return [];
-  const results = [];
-  const walk = (dir, prefix) => {
-    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => compareAscii(a.name, b.name));
-    for (const ent of entries) {
-      if (ent.isSymbolicLink()) continue;
-      if (ent.isDirectory()) {
-        if (IGNORED_DIR_NAMES.has(ent.name)) continue;
-        walk(join(dir, ent.name), prefix === '' ? ent.name : `${prefix}/${ent.name}`);
-      } else if (ent.isFile()) {
-        if (IGNORED_FILE_NAMES.has(ent.name)) continue;
-        results.push(prefix === '' ? ent.name : `${prefix}/${ent.name}`);
-      }
-    }
-  };
-  walk(rootDir, '');
-  return results.sort(compareAscii);
-}
-
-function hashFileInto(hash, label, absPath) {
-  if (!isRegularFile(absPath)) {
-    hash.update(`missing:${label}\0`);
-    return;
-  }
-  const bytes = readFileSync(absPath);
-  hash.update(`file:${label}:${bytes.byteLength}\0`);
-  hash.update(bytes);
-  hash.update('\0');
-}
-
-function hashDirectoryInto(hash, label, rootDir) {
-  if (!isRealDirectory(rootDir)) {
-    hash.update(`missing-dir:${label}\0`);
-    return;
-  }
-  const files = collectFilesSorted(rootDir);
-  hash.update(`dir:${label}:${files.length}\0`);
-  for (const rel of files) {
-    hashFileInto(hash, `${label}/${rel}`, join(rootDir, rel));
-  }
-}
 
 /**
  * Computes a deterministic SHA-256 fingerprint across every input that can affect `vite build`
@@ -109,17 +43,17 @@ export function computeWebBuildFingerprint(options = {}) {
   const hash = createHash('sha256');
   hash.update(`web-build-schema:${SCHEMA_VERSION}\0`);
 
-  hashDirectoryInto(hash, 'web/src', join(pkgRoot, 'src'));
-  hashDirectoryInto(hash, 'web/public', join(pkgRoot, 'public'));
+  hashDirectoryInto(hash, 'web/src', join(pkgRoot, 'src'), TREE_OPTIONS);
+  hashDirectoryInto(hash, 'web/public', join(pkgRoot, 'public'), TREE_OPTIONS);
   hashFileInto(hash, 'web/index.html', join(pkgRoot, 'index.html'));
   hashFileInto(hash, 'web/vite.config.ts', join(pkgRoot, 'vite.config.ts'));
   hashFileInto(hash, 'web/package.json', join(pkgRoot, 'package.json'));
   hashFileInto(hash, 'web/tsconfig.json', join(pkgRoot, 'tsconfig.json'));
   hashFileInto(hash, 'web/scripts/build-web.mjs', scriptPath);
 
-  hashDirectoryInto(hash, 'protocol/src', join(repoRoot, 'packages/protocol/src'));
+  hashDirectoryInto(hash, 'protocol/src', join(repoRoot, 'packages/protocol/src'), TREE_OPTIONS);
   hashFileInto(hash, 'protocol/package.json', join(repoRoot, 'packages/protocol/package.json'));
-  hashDirectoryInto(hash, 'plugin-client/src', join(repoRoot, 'packages/plugin-client/src'));
+  hashDirectoryInto(hash, 'plugin-client/src', join(repoRoot, 'packages/plugin-client/src'), TREE_OPTIONS);
   hashFileInto(hash, 'plugin-client/package.json', join(repoRoot, 'packages/plugin-client/package.json'));
   hashFileInto(hash, 'pnpm-lock.yaml', join(repoRoot, 'pnpm-lock.yaml'));
 
@@ -165,7 +99,7 @@ function isSafeRelativeAsset(relPath) {
 
 /** Collects every regular file inside `distDir` as sorted `{ path, size }` entries. */
 function snapshotDistOutputs(distDir) {
-  const files = collectFilesSorted(distDir);
+  const files = collectFilesSorted(distDir, TREE_OPTIONS);
   return files.map((rel) => ({
     path: rel,
     size: statSync(join(distDir, rel)).size,
@@ -194,7 +128,7 @@ export function verifyWebDistOutputs(distDir, options = {}) {
   }
 
   if (options.publicDir && isRealDirectory(options.publicDir)) {
-    for (const rel of collectFilesSorted(options.publicDir)) {
+    for (const rel of collectFilesSorted(options.publicDir, TREE_OPTIONS)) {
       if (!isRegularFile(join(distDir, rel))) {
         return { ok: false, reason: `missing public asset in dist: ${rel}` };
       }

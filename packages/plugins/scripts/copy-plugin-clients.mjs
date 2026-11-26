@@ -26,7 +26,6 @@ import { createHash } from 'node:crypto';
 import {
   copyFileSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -44,79 +43,20 @@ import {
   clientNpmRootsOf,
   prebuiltChunkFileName,
 } from '@helmx/protocol';
+import {
+  IGNORED_FILE_NAMES,
+  collectFilesSorted,
+  compareAscii,
+  hashDirectoryInto,
+  hashFileInto,
+  isRealDirectory,
+  isRegularFile,
+} from '../../../scripts/lib/fs-hash.mjs';
 
 const SCHEMA_VERSION = 3;
-const IGNORED_FILE_NAMES = new Set(['.DS_Store']);
 const PACKAGE_DEP_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies', 'overrides'];
 
 const defaultPkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-
-function isRegularFile(filePath) {
-  try {
-    return lstatSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function isRealDirectory(dirPath) {
-  try {
-    return lstatSync(dirPath).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function compareAscii(a, b) {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** Recursively collects regular files under `rootDir` as sorted POSIX relative paths. */
-function collectFilesSorted(rootDir, options = {}) {
-  if (!isRealDirectory(rootDir)) return [];
-  const skipTopLevelDirs = options.skipTopLevelDirs ?? null;
-  const extensionFilter = options.extensions ?? null;
-  const results = [];
-  const walk = (dir, prefix, depth) => {
-    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => compareAscii(a.name, b.name));
-    for (const ent of entries) {
-      if (ent.isSymbolicLink()) continue;
-      if (ent.isDirectory()) {
-        if (depth === 0 && skipTopLevelDirs && skipTopLevelDirs.has(ent.name)) continue;
-        walk(join(dir, ent.name), prefix === '' ? ent.name : `${prefix}/${ent.name}`, depth + 1);
-      } else if (ent.isFile()) {
-        if (IGNORED_FILE_NAMES.has(ent.name)) continue;
-        if (extensionFilter && !extensionFilter.some((ext) => ent.name.endsWith(ext))) continue;
-        results.push(prefix === '' ? ent.name : `${prefix}/${ent.name}`);
-      }
-    }
-  };
-  walk(rootDir, '', 0);
-  return results.sort(compareAscii);
-}
-
-function hashFileInto(hash, label, absPath) {
-  if (!isRegularFile(absPath)) {
-    hash.update(`missing:${label}\0`);
-    return;
-  }
-  const bytes = readFileSync(absPath);
-  hash.update(`file:${label}:${bytes.byteLength}\0`);
-  hash.update(bytes);
-  hash.update('\0');
-}
-
-function hashDirectoryInto(hash, label, rootDir, options = {}) {
-  if (!isRealDirectory(rootDir)) {
-    hash.update(`missing-dir:${label}\0`);
-    return;
-  }
-  const files = collectFilesSorted(rootDir, options);
-  hash.update(`dir:${label}:${files.length}\0`);
-  for (const rel of files) {
-    hashFileInto(hash, `${label}/${rel}`, join(rootDir, rel));
-  }
-}
 
 function hashDependencyPackageJsonInto(hash, label, absPath) {
   if (!isRegularFile(absPath)) {
