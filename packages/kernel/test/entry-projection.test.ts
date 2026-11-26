@@ -11,7 +11,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationEntry } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
 import {
   projectDetailEntry,
   stripEntrySignatures,
@@ -19,7 +18,7 @@ import {
   TOOL_RESULT_TAIL_CHARS,
   TOOL_RESULT_TRUNCATE_THRESHOLD_CHARS,
 } from '../src/runtime/entry-projection.js'
-import { ConversationDetailService } from '../src/runtime/conversation-detail.js'
+import { pageVisibleEntries } from '../src/runtime/conversation-pagination.js'
 
 function toolResultEntry(text: string, extra: Record<string, unknown> = {}): ConversationEntry {
   return {
@@ -190,19 +189,8 @@ test('pageVisibleEntries: hides pi.system inside paging loop so limit counts vis
       return { items: page.items.slice(0, limit) as never, ...(page.next !== undefined ? { next: page.next } : {}) }
     },
   }
-  const service = new ConversationDetailService({
-    harness: {} as never,
-    store: {} as never,
-    stash: {} as never,
-    getConversation: () => {
-      throw new HelmxError('not_found', 'unreachable', 404)
-    },
-    collectRewindIntervals: async () => [],
-    ensureContextUsage: async () => {},
-  })
-  const { collected, nextCursor } = await service.pageVisibleEntries(
+  const { collected, nextCursor } = await pageVisibleEntries(
     fauxConversation as never,
-    1,
     3,
     undefined,
     [],

@@ -10,12 +10,13 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationSummary } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
+import { ConversationDetailService, MAX_PAGE_TURNS } from '../src/runtime/conversation-detail.js'
 import {
-  ConversationDetailService,
-  MAX_PAGE_TURNS,
+  classifyDescendingEntry,
   TURN_HARD_ENTRY_CAP,
   TURN_SOFT_ENTRY_BUDGET,
-} from '../src/runtime/conversation-detail.js'
+  TurnBoundaryTracker,
+} from '../src/runtime/conversation-pagination.js'
 import { deferred } from './helpers.js'
 
 interface HostState {
@@ -473,4 +474,72 @@ test('pageVisibleTurns: TURN_HARD_ENTRY_CAP performs bounded 1-displayable-entry
     'next page must preserve helmx.rewind marker alongside older displayable entry while hiding rewound/system entries',
   )
   assert.equal(page2B.nextCursor, undefined)
+})
+
+test('classifyDescendingEntry: classifies rewind markers, pi.system, rewound spans, and inline collection', { timeout: 60_000 }, () => {
+  const inlineCuts: Array<{ from: number; through: number; marker: number }> = []
+  const marker = { id: 10, kind: 'helmx.rewind', data: { fromEntryId: 5, throughEntryId: 8 } }
+
+  // Non-inline mode never mutates cuts even on helmx.rewind, and still keeps markers visible.
+  assert.equal(classifyDescendingEntry(marker, inlineCuts, false), 'rewind_marker')
+  assert.equal(inlineCuts.length, 0)
+
+  // Inline mode records valid rewind interval and keeps marker visible even if covered by an existing interval.
+  assert.equal(classifyDescendingEntry(marker, inlineCuts, true), 'rewind_marker')
+  assert.deepEqual(inlineCuts, [{ from: 5, through: 8, marker: 10 }])
+
+  const preExistingCuts = [{ from: 5, through: 12, marker: 15 }]
+  assert.equal(classifyDescendingEntry(marker, preExistingCuts, false), 'rewind_marker')
+  assert.equal(classifyDescendingEntry({ id: 9, kind: 'pi.system' }, inlineCuts, true), 'hidden')
+  assert.equal(classifyDescendingEntry({ id: 7, kind: 'pi.assistant' }, inlineCuts, true), 'hidden')
+  assert.equal(classifyDescendingEntry({ id: 4, kind: 'helmx.input' }, inlineCuts, true), 'displayable')
+})
+
+test('TurnBoundaryTracker: enforces 3-state transitions, coalesced heads, trailing dividers, and soft entry budget', { timeout: 60_000 }, () => {
+  // 1. Trailing pi.compaction/pi.reset stay in 'trailing' with 0 completed turns; unanswered turn stops before older body.
+  const t1 = new TurnBoundaryTracker(1, 200)
+  assert.equal(t1.currentPhase, 'trailing')
+  assert.equal(t1.consume('pi.compaction', 0), 'collect')
+  assert.equal(t1.currentPhase, 'trailing')
+  assert.equal(t1.turnsCompleted, 0)
+  assert.equal(t1.consume('pi.reset', 1), 'collect')
+  assert.equal(t1.currentPhase, 'trailing')
+  assert.equal(t1.turnsCompleted, 0)
+  assert.equal(t1.consume('helmx.input', 2), 'collect')
+  assert.equal(t1.currentPhase, 'head')
+  assert.equal(t1.turnsCompleted, 1)
+  assert.equal(t1.consume('pi.assistant', 3), 'stop_before')
+
+  // 2. body -> pi.reset/pi.compaction opens 'head' and coalesces with pi.user + helmx.input without double-counting.
+  const t2 = new TurnBoundaryTracker(2, 200)
+  assert.equal(t2.consume('pi.assistant', 0), 'collect')
+  assert.equal(t2.currentPhase, 'body')
+  assert.equal(t2.consume('pi.reset', 1), 'collect')
+  assert.equal(t2.currentPhase, 'head')
+  assert.equal(t2.turnsCompleted, 1)
+  assert.equal(t2.consume('pi.user', 2), 'collect')
+  assert.equal(t2.consume('helmx.input', 3), 'collect')
+  assert.equal(t2.consume('pi.compaction', 4), 'collect')
+  assert.equal(t2.currentPhase, 'head')
+  assert.equal(t2.turnsCompleted, 1)
+
+  // Moving into turn 2 body transitions head -> body; next divider reaches targetTurns=2.
+  assert.equal(t2.consume('pi.tool-result', 5), 'collect')
+  assert.equal(t2.currentPhase, 'body')
+  assert.equal(t2.consume('pi.compaction', 6), 'collect')
+  assert.equal(t2.currentPhase, 'head')
+  assert.equal(t2.turnsCompleted, 2)
+  assert.equal(t2.consume('pi.assistant', 7), 'stop_before')
+
+  // 3. Soft entry budget never stops mid-body with 0 completed turns, and stops at next head->body boundary once >=1 turn.
+  const t3 = new TurnBoundaryTracker(10, 5)
+  assert.equal(t3.consume('pi.assistant', 10), 'collect')
+  assert.equal(t3.currentPhase, 'body')
+  assert.equal(t3.turnsCompleted, 0)
+  assert.equal(t3.consume('helmx.input', 11), 'collect')
+  assert.equal(t3.currentPhase, 'head')
+  assert.equal(t3.turnsCompleted, 1)
+  // Coalesced opener inside head is still collected even above soft budget.
+  assert.equal(t3.consume('pi.user', 12), 'collect')
+  assert.equal(t3.consume('pi.assistant', 13), 'stop_before')
 })

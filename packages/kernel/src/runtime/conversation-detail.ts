@@ -14,6 +14,7 @@ import type { SecretStash } from '../services/index.js'
 import { assistantTextOfModel, entryModelText, toConversationEntry } from './entries.js'
 import { projectDetailEntry, stripEntrySignatures } from './entry-projection.js'
 import { coveredByRewind, rewindIntervalOf, type RewindInterval } from './conversation-rewind.js'
+import { pageVisibleEntries, pageVisibleTurns } from './conversation-pagination.js'
 import type { HelmxStore } from './store.js'
 
 /** Maximum encoded pagination cursor length (base64url; rejects oversized cursors to prevent abuse). */
@@ -22,19 +23,6 @@ const DETAIL_CURSOR_MAX_LENGTH = 2048
 const REWIND_CACHE_MAX_ENTRIES = 256
 /** Max turns per turn-aligned detail page (`?turns=1..50`). */
 export const MAX_PAGE_TURNS = 50
-/** Soft entry budget for turn-aligned paging: stops at next turn boundary once exceeded after >=1 complete turn. */
-export const TURN_SOFT_ENTRY_BUDGET = 200
-/** Hard entry cap for turn-aligned paging: bounds pathological mega-turns with 1-displayable-entry lookahead. */
-export const TURN_HARD_ENTRY_CAP = 500
-/** Batch size per SDK scan iteration during turn-aligned paging. */
-export const TURN_SCAN_BATCH_SIZE = 100
-
-const TURN_BOUNDARY_KINDS: ReadonlySet<string> = new Set([
-  'helmx.input',
-  'pi.user',
-  'pi.reset',
-  'pi.compaction',
-])
 
 interface RewindCacheEntry {
   readonly stateChangeSeq: number
@@ -158,8 +146,8 @@ export class ConversationDetailService {
       : await this.resolveRewindIntervals(id, summary, conversation)
     const { collected, nextCursor } =
       turns !== undefined
-        ? await this.pageVisibleTurns(conversation, id, turns, sdkCursor, rewindCuts, collectInline)
-        : await this.pageVisibleEntries(conversation, id, limit!, sdkCursor, rewindCuts, collectInline)
+        ? await pageVisibleTurns(conversation, turns, sdkCursor, rewindCuts, collectInline)
+        : await pageVisibleEntries(conversation, limit!, sdkCursor, rewindCuts, collectInline)
     if (collectInline && nextCursor === undefined && (summary.lastEntryId ?? 0) > 0) {
       this.putRewindCache(id, summary.stateChangeSeq, summary.lastEntryId!, [...rewindCuts])
     }
@@ -224,216 +212,6 @@ export class ConversationDetailService {
       })
     }
     return stripEntrySignatures(toConversationEntry(raw as never))
-  }
-
-  /** Descending SDK pagination + rewind/pi.system filtering (detail paging loop fetching remaining count per iteration).
-   * Both pi.system and rewound entries are skipped inside the loop before counting toward `limit`, guaranteeing
-   * `limit` measures visible entries (filtering afterwards would under-fill pages and advance past hidden entries). */
-  async pageVisibleEntries(
-    conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
-    id: number,
-    limit: number,
-    initialCursor: unknown,
-    rewindCuts: RewindInterval[],
-    collectRewindsInline = false,
-  ): Promise<{
-    collected: Array<{ id: number; kind: string; model?: readonly unknown[]; data?: unknown }>
-    nextCursor: unknown
-  }> {
-    const collected: Array<{ id: number; kind: string; model?: readonly unknown[]; data?: unknown }> = []
-    let sdkCursor = initialCursor
-    let nextCursor: unknown = undefined
-    for (;;) {
-      const remaining = limit - collected.length
-      const page = await conversation.entries(
-        { order: 'descending' },
-        remaining,
-        sdkCursor as never,
-        BACKGROUND_CONTEXT,
-      )
-      for (const raw of page.items as never as Array<{
-        id: number
-        kind: string
-        model?: readonly unknown[]
-        data?: unknown
-      }>) {
-        if (collectRewindsInline && raw.kind === 'helmx.rewind') {
-          const interval = rewindIntervalOf(raw)
-          if (interval !== undefined) rewindCuts.push(interval)
-        }
-        // Keep helmx.rewind markers (for SSE consistency and frontend interval deduplication), hide older entries
-        // inside closed rewind intervals, and hide internal pi.system records from detail timelines.
-        const numericId = Number(raw.id)
-        if (raw.kind === 'pi.system') continue
-        if (raw.kind !== 'helmx.rewind' && coveredByRewind(numericId, rewindCuts)) continue
-        collected.push(raw)
-      }
-      if (page.next === undefined) {
-        nextCursor = undefined
-        break
-      }
-      if (collected.length >= limit) {
-        nextCursor = page.next
-        break
-      }
-      sdkCursor = page.next
-    }
-    void id
-    return { collected, nextCursor }
-  }
-
-  /**
-   * Turn-aligned descending pagination (`?turns=1..50`) with exact boundary cursors and 1-displayable-entry lookahead:
-   * - Scans descending in `TURN_SCAN_BATCH_SIZE` batches; collects `helmx.rewind` inline on page 1 without treating it
-   *   as breaking `inTurnHead`, setting `seenTurnBody`, or counting as displayable in lookahead;
-   * - Stops cleanly before the older turn's body once `targetTurns` or `TURN_SOFT_ENTRY_BUDGET` (after >= 1 complete turn)
-   *   is reached, emitting `{ after: resumeAfterId, order: 'descending' }`;
-   * - Caps single pages at `TURN_HARD_ENTRY_CAP` (500) with bounded lookahead so mega-turns never emit empty trailing pages.
-   */
-  async pageVisibleTurns(
-    conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
-    id: number,
-    targetTurns: number,
-    initialCursor: unknown,
-    rewindCuts: RewindInterval[],
-    collectRewindsInline = false,
-  ): Promise<{
-    collected: Array<{ id: number; kind: string; model?: readonly unknown[]; data?: unknown }>
-    nextCursor: unknown
-  }> {
-    type RawEntry = { id: number; kind: string; model?: readonly unknown[]; data?: unknown }
-    const collected: RawEntry[] = []
-    let sdkCursor = initialCursor
-    let completedTurns = 0
-    let inTurnHead = false
-    let seenTurnBody = false
-    let resumeAfterId: number | undefined = undefined
-
-    const recordRewind = (raw: RawEntry): void => {
-      if (collectRewindsInline && raw.kind === 'helmx.rewind') {
-        const interval = rewindIntervalOf(raw)
-        if (interval !== undefined) rewindCuts.push(interval)
-      }
-    }
-
-    const lookaheadNextCursor = async (
-      remainingInPage: ReadonlyArray<RawEntry>,
-      nextBatchCursor: unknown,
-    ): Promise<{ collected: RawEntry[]; nextCursor: unknown }> => {
-      let seenRewindMarker = false
-      const inspectItem = (item: RawEntry): boolean => {
-        const itemId = Number(item.id)
-        if (item.kind === 'helmx.rewind') {
-          recordRewind(item)
-          seenRewindMarker = true
-          return false
-        }
-        if (item.kind === 'pi.system' || coveredByRewind(itemId, rewindCuts)) {
-          if (!seenRewindMarker) resumeAfterId = itemId
-          return false
-        }
-        return true
-      }
-
-      for (const item of remainingInPage) {
-        if (inspectItem(item)) {
-          return {
-            collected,
-            nextCursor: { after: resumeAfterId!, order: 'descending' },
-          }
-        }
-      }
-      let lookCursor = nextBatchCursor
-      while (lookCursor !== undefined) {
-        const lookPage = await conversation.entries(
-          { order: 'descending' },
-          20,
-          lookCursor as never,
-          BACKGROUND_CONTEXT,
-        )
-        for (const item of lookPage.items as never as RawEntry[]) {
-          if (inspectItem(item)) {
-            return {
-              collected,
-              nextCursor: { after: resumeAfterId!, order: 'descending' },
-            }
-          }
-        }
-        lookCursor = lookPage.next
-      }
-      return { collected, nextCursor: undefined }
-    }
-
-    for (;;) {
-      const page = await conversation.entries(
-        { order: 'descending' },
-        TURN_SCAN_BATCH_SIZE,
-        sdkCursor as never,
-        BACKGROUND_CONTEXT,
-      )
-      const items = page.items as never as RawEntry[]
-      for (let i = 0; i < items.length; i += 1) {
-        const raw = items[i]!
-        const numericId = Number(raw.id)
-        recordRewind(raw)
-        if (raw.kind === 'pi.system') {
-          if (collected.length > 0) resumeAfterId = numericId
-          continue
-        }
-        if (raw.kind === 'helmx.rewind') {
-          collected.push(raw)
-          resumeAfterId = numericId
-          if (collected.length >= TURN_HARD_ENTRY_CAP) {
-            return await lookaheadNextCursor(items.slice(i + 1), page.next)
-          }
-          continue
-        }
-        if (coveredByRewind(numericId, rewindCuts)) {
-          if (collected.length > 0) resumeAfterId = numericId
-          continue
-        }
-
-        const isActiveBoundary =
-          raw.kind === 'helmx.input' ||
-          raw.kind === 'pi.user' ||
-          ((raw.kind === 'pi.reset' || raw.kind === 'pi.compaction') && (inTurnHead || seenTurnBody))
-
-        if (isActiveBoundary) {
-          if (!inTurnHead) {
-            completedTurns += 1
-            inTurnHead = true
-          }
-          collected.push(raw)
-          resumeAfterId = numericId
-        } else {
-          if (
-            inTurnHead &&
-            (completedTurns >= targetTurns || (collected.length >= TURN_SOFT_ENTRY_BUDGET && completedTurns >= 1))
-          ) {
-            return {
-              collected,
-              nextCursor: { after: resumeAfterId!, order: 'descending' },
-            }
-          }
-          inTurnHead = false
-          if (!TURN_BOUNDARY_KINDS.has(raw.kind)) {
-            seenTurnBody = true
-          }
-          collected.push(raw)
-          resumeAfterId = numericId
-        }
-
-        if (collected.length >= TURN_HARD_ENTRY_CAP) {
-          return await lookaheadNextCursor(items.slice(i + 1), page.next)
-        }
-      }
-      if (page.next === undefined) {
-        break
-      }
-      sdkCursor = page.next
-    }
-    void id
-    return { collected, nextCursor: undefined }
   }
 
   /** Encode pagination cursor: base64url(JSON {conversationId, cursor}). */
