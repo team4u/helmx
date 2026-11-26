@@ -86,17 +86,16 @@ const THINKING_LEVEL_ORDER: ReadonlyArray<string> = ['off', 'minimal', 'low', 'm
  * a supported level passes through; an unsupported one clamps to the nearest
  * supported level (searching upward first, then downward); an explicit `'off'`
  * always passes (the kernel omits the reasoning parameter for it). An empty
- * level (unconfigured) displays as `'off'` or the lowest supported level; a
- * model without declared levels yields `''`. The default chain itself stays
- * server-authoritative; this only converges display.
+ * level (unconfigured) stays empty — what runs is the SDK's own default, which
+ * is never fabricated into a display level; a level outside the canonical order
+ * and a model without declared levels yield `''` as well. The default chain
+ * itself stays server-authoritative; this only converges display.
  */
 export function resolveEffectiveThinkingLevel(levels: ReadonlyArray<string>, activeLevel: string): string {
-  if (levels.length === 0) return ''
-  const fallback = levels.includes('off') ? 'off' : (levels[0] ?? '')
-  if (activeLevel === '') return fallback
+  if (levels.length === 0 || activeLevel === '') return ''
   if (levels.includes(activeLevel) || activeLevel === 'off') return activeLevel
   const requested = THINKING_LEVEL_ORDER.indexOf(activeLevel)
-  if (requested < 0) return fallback
+  if (requested < 0) return ''
   for (let i = requested + 1; i < THINKING_LEVEL_ORDER.length; i++) {
     const candidate = THINKING_LEVEL_ORDER[i]
     if (candidate !== undefined && levels.includes(candidate)) return candidate
@@ -105,37 +104,50 @@ export function resolveEffectiveThinkingLevel(levels: ReadonlyArray<string>, act
     const candidate = THINKING_LEVEL_ORDER[i]
     if (candidate !== undefined && levels.includes(candidate)) return candidate
   }
-  return fallback
+  return ''
 }
 
 /**
- * Thinking level to display for a default-chain model reference (global default,
- * compaction default, Profile binding). A `tier/<id>` selection carries its own
- * preset, which the kernel ranks above the level configured beside the reference
- * (`tier preset > per-model default > Profile/global level`), so the preset wins the
- * display and the configured level only applies to concrete models or tiers without
- * one; the result converges against the target's supported levels. Per-model defaults
- * resolve server-side and are deliberately not folded in (same stance as the picker's
- * row chips). Returns `''` when nothing can be shown honestly: no reference, or a tier
- * whose preset or target capability is still unknown (a concrete reference outside the
- * catalog keeps its configured level as a plain config fact, merely unconverged).
+ * Kernel default chains below an explicit conversation override, each named after its
+ * resolution site, for displaying the level a `tier/<id>` or `'provider/modelId'`
+ * reference will actually run at:
+ * - `'conversation'` (`ConversationProfileService.resolveEffectiveThinkingLevel`):
+ *   tier preset > per-model default > the level configured beside the reference
+ *   (Profile / global level);
+ * - `'compaction'` (compaction routing in `Models.completeSimple`): the configured
+ *   compaction level > tier preset > per-model default.
+ *
+ * The first non-empty candidate of the chain converges against the target model's
+ * supported levels. Returns `''` when nothing can be shown honestly: no reference,
+ * an empty chain (the SDK default runs), or a tier whose preset or target capability
+ * is still unknown; a concrete reference outside the catalog keeps its chain result
+ * merely unconverged.
  */
+export type DefaultThinkingLevelChain = 'conversation' | 'compaction'
+
 export function resolveDefaultChainThinkingLevel(
-  catalog: Pick<HostModelsSlice, 'models' | 'modelTiers'> | undefined,
+  catalog: Pick<HostModelsSlice, 'models' | 'modelTiers' | 'modelThinkingLevels'> | undefined,
   modelRef: string | undefined,
   configuredLevel: string | undefined,
+  chain: DefaultThinkingLevelChain = 'conversation',
 ): string {
   const ref = modelRef?.trim() ?? ''
   if (ref === '') return ''
-  const level = configuredLevel?.trim() ?? ''
+  const configured = configuredLevel?.trim() ?? ''
   const tierId = parseModelTierRef(ref)
-  if (tierId !== undefined) {
-    const tier = catalog?.modelTiers?.find((entry) => entry.id === tierId)
-    if (tier === undefined || tier.thinkingLevels === undefined) return ''
-    return resolveEffectiveThinkingLevel(tier.thinkingLevels, tier.thinkingLevel ?? level)
+  const tier = tierId !== undefined ? catalog?.modelTiers?.find((entry) => entry.id === tierId) : undefined
+  if (tierId !== undefined && (tier === undefined || tier.thinkingLevels === undefined)) return ''
+  const perModel = (catalog?.modelThinkingLevels?.[tier?.model ?? ref] ?? '').trim()
+  const candidates =
+    chain === 'compaction'
+      ? [configured, tier?.thinkingLevel, perModel]
+      : [tier?.thinkingLevel, perModel, configured]
+  const raw = candidates.find((candidate) => candidate !== undefined && candidate !== '') ?? ''
+  if (tierId === undefined) {
+    const levels = catalog?.models.find((entry) => entry.id === ref)?.thinkingLevels
+    return levels === undefined ? raw : resolveEffectiveThinkingLevel(levels, raw)
   }
-  const model = catalog?.models.find((entry) => entry.id === ref)
-  return model === undefined ? level : resolveEffectiveThinkingLevel(model.thinkingLevels ?? [], level)
+  return resolveEffectiveThinkingLevel(tier?.thinkingLevels ?? [], raw)
 }
 
 /**

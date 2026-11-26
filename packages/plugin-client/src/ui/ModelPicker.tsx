@@ -32,11 +32,12 @@ import {
 // applies the model alone so the level follows the default chain
 // (server-authoritative). Only the effective model's row shows an active
 // level chip (the default chain for other models resolves server-side, so
-// pre-highlighting one would be dishonest). A selected `tier/<id>` carries its
-// own preset level: the trigger shows the preset (ranked against the context
-// level by `thinkingLevelPrecedence`, as the kernel ranks it) converged the way
-// the kernel clamps, so a tier never displays a level other than the one that
-// runs. The control reads no churning context: display copy arrives via the
+// pre-highlighting one would be dishonest). The caller owns the default-chain
+// policy and passes the level to display in `activeThinkingLevel` (hosts resolve
+// it with `resolveDefaultChainThinkingLevel`); the control only falls back to a
+// selected tier's own preset when that level is empty, and converges the result
+// the way the kernel clamps, so a tier never displays a level other than the one
+// that runs. The control reads no churning context: display copy arrives via the
 // `copy` prop (English SDK defaults) and refresh notices via the `onNotice`
 // callback.
 // ---------------------------------------------------------------------------
@@ -52,19 +53,14 @@ const DEFAULT_MODE_VALUE = '__default__'
 export interface ModelPickerControlProps {
   /** Currently effective model id (button label, capability lookup, initial highlight). */
   effectiveModel: string | undefined
-  /** Current thinking level (converged against the model's supported list). */
-  activeThinkingLevel: string
   /**
-   * How `activeThinkingLevel` ranks against a selected tier's preset level
-   * (`tier/<id>` rows carry their own `thinkingLevel`):
-   * - `'default'` (default): the context level is a default-chain value the preset
-   *   outranks (global default / Profile binding — kernel precedence
-   *   `tier preset > Profile/global level`), so the trigger shows the preset;
-   * - `'override'`: the context level is an explicit conversation override that
-   *   outranks the preset, so the trigger shows the context level.
-   * In both modes an empty context level falls back to the preset.
+   * The thinking level to display, converged against the model's supported list.
+   * Empty = no level to show for a concrete model; for a selected `tier/<id>` the
+   * tier's own preset is used. Default-chain consumers (global default / Profile
+   * binding) pass the chain result from `resolveDefaultChainThinkingLevel`; an
+   * explicit conversation override is passed as-is.
    */
-  thinkingLevelPrecedence?: 'override' | 'default'
+  activeThinkingLevel: string
   /** Panel fallback when no `[data-helmx-panel]` ancestor exists. */
   fallbackPanel?: HelmxPanel
   /** Copy for the clear-override button (label and title). */
@@ -124,7 +120,6 @@ export interface ModelPickerControlProps {
 export function ModelPickerControl({
   effectiveModel,
   activeThinkingLevel,
-  thinkingLevelPrecedence = 'default',
   fallbackPanel = 'primary',
   resetLabel,
   resetTitle,
@@ -356,15 +351,9 @@ export function ModelPickerControl({
       : undefined
   const currentLevels = currentModel?.thinkingLevels ?? currentTier?.thinkingLevels ?? ['off']
   const supportsThinking = showThinkingLevels && currentLevels.some((level) => level !== 'off')
-  // Effective level display: a selected tier carries its own preset, ranked against the
-  // context level by `thinkingLevelPrecedence` exactly as the kernel ranks it; an empty
-  // side always falls back to the other. The result converges the way the kernel clamps.
-  const tierPresetLevel = currentTier?.thinkingLevel ?? ''
-  const tierPresetWins = thinkingLevelPrecedence === 'default'
-  const displayLevelInput =
-    tierPresetWins
-      ? (tierPresetLevel !== '' ? tierPresetLevel : activeThinkingLevel)
-      : (activeThinkingLevel !== '' ? activeThinkingLevel : tierPresetLevel)
+  // Effective level display: the caller's level, or a selected tier's own preset when
+  // that level is empty, converged the way the kernel clamps.
+  const displayLevelInput = activeThinkingLevel !== '' ? activeThinkingLevel : (currentTier?.thinkingLevel ?? '')
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, displayLevelInput)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
   const canRefresh = host.refreshModels !== undefined

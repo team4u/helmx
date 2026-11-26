@@ -255,6 +255,53 @@ test('GlobalDefaultsPanel: partially filled per-model rows block saving with a l
   }
 })
 
+test('GlobalDefaultsPanel: configured per-model default outranks the global level on the default model trigger and status row', { timeout: 60_000 }, async () => {
+  const panel = await mountDefaultsPanel({}, {
+    models: CATALOG_MODELS,
+    modelDefaults: {
+      defaultModel: 'anthropic/claude-3-7-sonnet',
+      defaultThinkingLevel: 'low',
+      modelThinkingLevels: { 'anthropic/claude-3-7-sonnet': 'high', 'openai/gpt-4o-mini': 'medium' },
+    },
+  })
+  try {
+    const defaultBtn = panel.container.querySelector('#model-defaults-model') as HTMLButtonElement
+    assert.ok(defaultBtn)
+    assert.match(defaultBtn.textContent ?? '', /claude-3-7-sonnet/)
+    assert.match(defaultBtn.textContent ?? '', /· high/)
+    assert.doesNotMatch(defaultBtn.textContent ?? '', /· low/)
+    assert.match(panel.container.querySelector('.model-defaults-status')?.textContent ?? '', /thinking level: high/)
+    assert.doesNotMatch(panel.container.querySelector('.model-defaults-status')?.textContent ?? '', /thinking level: low\)/)
+
+    // Selecting a different level in the shared picker is explicit UI feedback, but the
+    // saved global level cannot outrank an existing per-model default.
+    await click(defaultBtn)
+    const popover = document.body.querySelector('.composer-model-popover')
+    assert.ok(popover)
+    const lowChip = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip')).find(
+      (button) => button.textContent === 'low',
+    )
+    assert.ok(lowChip)
+    await click(lowChip!)
+    assert.match(defaultBtn.textContent ?? '', /· high/)
+
+    // Switching to a different model immediately resolves that model's own default.
+    await click(defaultBtn)
+    const modelPopover = document.body.querySelector('.composer-model-popover')
+    assert.ok(modelPopover)
+    const modelRow = Array.from(modelPopover.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
+      (button) => button.textContent?.includes('gpt-4o-mini'),
+    )
+    assert.ok(modelRow)
+    await click(modelRow!)
+    assert.match(defaultBtn.textContent ?? '', /gpt-4o-mini/)
+    assert.match(defaultBtn.textContent ?? '', /· medium/)
+    assert.doesNotMatch(defaultBtn.textContent ?? '', /· low/)
+  } finally {
+    await panel.unmount()
+  }
+})
+
 test('GlobalDefaultsPanel: a selected model tier shows its own preset (kernel-clamped) on the trigger and in the status row', { timeout: 60_000 }, async () => {
   const TIER_MODELS = [
     { id: 'faux/sol', provider: 'faux', modelId: 'sol', available: true, thinkingLevels: ['high', 'xhigh'] },

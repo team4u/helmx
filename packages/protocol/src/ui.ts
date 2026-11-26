@@ -739,7 +739,7 @@ export interface PluginClientContext {
  *   host port revisions must not re-render consumers);
  * - ModelPickerControl: shared model + thinking-level picker (reads the catalog via the useHostModels
  *   host port slice; apply/reset callbacks keep the PI follow-default semantics);
- * - model formatting pure functions: formatModelShortName / resolveEffectiveThinkingLevel;
+ * - model formatting pure functions: formatModelShortName / resolveEffectiveThinkingLevel / resolveDefaultChainThinkingLevel (kernel-ordered `conversation` / `compaction` level resolution);
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
  *   SegmentedControl / HelmxIcon / ViewBoundary / Callout / Dialog family / AlertDialog family
  *   (confirm dialogs) / ConfirmDialog (minimal double-confirm composition);
@@ -930,6 +930,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'ModelPickerControl',
   'formatModelShortName',
   'resolveEffectiveThinkingLevel',
+  'resolveDefaultChainThinkingLevel',
   'usePanelShortcut',
   'useComposerCommand',
   'useComposerModelPickerMode',

@@ -35,7 +35,9 @@ import {
   Stack,
   Switch,
   Textarea,
+  useHostModels,
 } from '@helmx/plugin-client'
+import { resolveDefaultChainThinkingLevel } from '@helmx/plugin-client/pure'
 import { useNodes, useSkills } from '../lib/store-context.js'
 import { summarizeSingleLine } from '../lib/format.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -158,6 +160,7 @@ export function ProfileDetailDrawer({
 }: ProfileDetailDrawerProps): React.JSX.Element {
   const nodes = useNodes()
   const skills = useSkills()
+  const hostModels = useHostModels()
   const pickerAdapter = useModelPickerControlAdapter()
   const { t } = useWebLocale()
   const [form, setForm] = useState<FormState>(() => createInitialForm(profile, isNew))
@@ -511,14 +514,15 @@ export function ProfileDetailDrawer({
           >
             {/* 共享模型选择器（与 Composer/全局默认同一实现）：行内思考档位
                 chips 一并提交 model+level；点击行体仅应用模型，档位回落
-                跟随默认链（保存时省略 thinkingLevel 键）。 */}
+                跟随默认链（保存时省略 thinkingLevel 键）。触发按钮显示该绑定
+                实际运行的等级：档位预设 > 按模型默认 > Profile 等级（与内核同序）。 */}
             <ModelPickerControl
               buttonId="profile-form-model"
               buttonAriaLabel={t('profiles.drawer.field.defaultModel')}
               buttonTitle={form.model || t('profiles.modelOption.followSystemDefault')}
               placeholderLabel={t('profiles.modelOption.followSystemDefault')}
               effectiveModel={form.model}
-              activeThinkingLevel={form.thinkingLevel}
+              activeThinkingLevel={resolveDefaultChainThinkingLevel(hostModels, form.model, form.thinkingLevel)}
               resetLabel={t('profiles.modelOption.followSystemDefault')}
               resetTitle={t('profiles.modelOption.followSystemDefault')}
               popoverSide={inline ? 'bottom' : 'top'}
