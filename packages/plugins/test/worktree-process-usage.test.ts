@@ -35,16 +35,18 @@ import { createMemoryWorktreeKv, MemoryKvStore } from './helpers/plugin-test-env
 
 let rootDir: string
 let gitTemplate: GitTemplate
+let sharedRepo: string
 
 before(() => {
   rootDir = mkdtempSync(join(tmpdir(), 'helmx-wt-procusage-'))
   gitTemplate = createGitTemplate('helmx-wt-procusage-template-')
-})
+  sharedRepo = gitTemplate.cloneTo(join(rootDir, 'shared-repo'))
+}, { timeout: 60_000 })
 
 after(() => {
   gitTemplate.cleanup()
   rmSync(rootDir, { recursive: true, force: true })
-})
+}, { timeout: 60_000 })
 
 /** 真实临时 Git 仓库（由 suite 级 Git 模板克隆）。 */
 function makeGitRepo(dir: string): string {
@@ -128,13 +130,12 @@ async function expectCleanupOkOrFailClosed(fn: () => Promise<{ removed: boolean 
   }
 }
 
-async function allocateCleanWorktree(name: string): Promise<{ repo: string; record: ReturnType<WorktreeAllocator['list']>[number]; allocator: WorktreeAllocator; fabric: ReturnType<typeof createEnvFabric>; kvStore: MemoryKvStore }> {
-  const repo = makeGitRepo(join(rootDir, name, 'repo'))
+async function allocateCleanWorktree(_name: string): Promise<{ repo: string; record: ReturnType<WorktreeAllocator['list']>[number]; allocator: WorktreeAllocator; fabric: ReturnType<typeof createEnvFabric>; kvStore: MemoryKvStore }> {
   const fabric = createEnvFabric({})
   const kvStore = new MemoryKvStore()
   const allocator = makeAllocator(fabric, kvStore)
-  const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
-  return { repo, record, allocator, fabric, kvStore }
+  const record = await allocator.allocate({ nodeId: 'local', sourceCwd: sharedRepo, parentConversationId: 1 })
+  return { repo: sharedRepo, record, allocator, fabric, kvStore }
 }
 
 describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { timeout: 60_000 }, () => {
@@ -243,10 +244,9 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
   })
 
   it('探测端口失败（节点离线）：worktree_process_check_failed（fail-closed，force 也不绕过）', { timeout: 60_000 }, async () => {
-    const { record, allocator } = await allocateCleanWorktree('t4')
+    const { record, kvStore } = await allocateCleanWorktree('t4')
     // 直接对 allocator 注入离线探测（远程节点离线在 fabric 层即抛 node_offline，
     // allocator 将其映射为 worktree_process_check_failed；此处用假 fabric 同构验证）。
-    const brokenFabric = createEnvFabric({})
     const brokenKv = new MemoryKvStore()
     brokenKv.setParsed('builtin:worktree', 'worktrees', record.id, record)
     const broken = new WorktreeAllocator({
@@ -256,7 +256,6 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       },
       kv: createMemoryWorktreeKv(brokenKv),
     })
-    void brokenFabric
     for (const extra of [{ force: true }, { force: true, allowUnverifiedUsage: true }] as const) {
       await assert.rejects(
         () => broken.cleanup({ worktreeId: record.id, ...extra }),
@@ -270,18 +269,25 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       )
     }
     assert.ok(existsSync(record.path), 'fail-closed 时目录不得被移除')
-    // 原 allocator（健康探测）仍可清理（全可见）或 fail-closed（可见性不完整）。
-    await expectCleanupOkOrFailClosed(() => allocator.cleanup({ worktreeId: record.id }))
+    // 健康探测（注入完整零占用快照，避免重复全 /proc 扫描）可正常清理。
+    const healthy = new WorktreeAllocator({
+      ...localPorts(),
+      inspectPathUsage: async (_nodeId, targetPath) => ({
+        path: targetPath,
+        processes: [],
+        matchedTotal: 0,
+        processesTruncated: false,
+        complete: true,
+        unobservable: 0,
+        diagnostics: [],
+      }),
+      kv: createMemoryWorktreeKv(kvStore),
+    })
+    assert.equal((await healthy.cleanup({ worktreeId: record.id })).removed, true)
   })
 
   it('快照不完整（complete=false）：worktree_process_check_failed 并携带 diagnostics', { timeout: 60_000 }, async () => {
-    const repo = makeGitRepo(join(rootDir, 't5', 'repo'))
-    const kvStore = new MemoryKvStore()
-    const record = await (async () => {
-      const fabric = createEnvFabric({})
-      const allocator = makeAllocator(fabric, kvStore)
-      return allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
-    })()
+    const { record, kvStore } = await allocateCleanWorktree('t5')
     const incomplete = new WorktreeAllocator({
       ...localPorts(),
       inspectPathUsage: async (_nodeId, path) => ({
@@ -308,18 +314,28 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       )
     }
     assert.ok(existsSync(record.path))
-    // 用真实完整探测的 allocator 清理（全可见正常 / 可见性不完整 fail-closed）。
-    const fabric = createEnvFabric({})
-    const healthy = makeAllocator(fabric, kvStore)
-    await expectCleanupOkOrFailClosed(() => healthy.cleanup({ worktreeId: record.id }))
+    // 完整零占用探测可正常移除（避免重复全 /proc 扫描）。
+    const healthy = new WorktreeAllocator({
+      ...localPorts(),
+      inspectPathUsage: async (_nodeId, targetPath) => ({
+        path: targetPath,
+        processes: [],
+        matchedTotal: 0,
+        processesTruncated: false,
+        complete: true,
+        unobservable: 0,
+        diagnostics: [],
+      }),
+      kv: createMemoryWorktreeKv(kvStore),
+    })
+    assert.equal((await healthy.cleanup({ worktreeId: record.id })).removed, true)
   })
 
   it('非 Linux Hub 平台（注入 hubPlatform=win32）：默认 501 worktree_usage_unverifiable；allowUnverifiedUsage: true 放行并留痕', { timeout: 60_000 }, async () => {
-    const repo = makeGitRepo(join(rootDir, 't6', 'repo'))
     const fabric = createEnvFabric({ hubPlatform: () => 'win32' })
     const kvStore = new MemoryKvStore()
     const allocator = makeAllocator(fabric, kvStore)
-    const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+    const record = await allocator.allocate({ nodeId: 'local', sourceCwd: sharedRepo, parentConversationId: 1 })
     await assert.rejects(
       () => fabric.inspectPathUsage('local', record.path),
       (err: unknown) => {
@@ -373,11 +389,10 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
   })
 
   it('aborted (499) 与 validation_error (400) 探测异常原样透传（不被包成 502）', { timeout: 60_000 }, async () => {
-    const repo = makeGitRepo(join(rootDir, 't6b', 'repo'))
     for (const [code, status] of [['aborted', 499], ['validation_error', 400]] as const) {
       const kvStore = new MemoryKvStore()
       const seedAllocator = makeAllocator(createEnvFabric({}), kvStore)
-      const record = await seedAllocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      const record = await seedAllocator.allocate({ nodeId: 'local', sourceCwd: sharedRepo, parentConversationId: 1 })
       const allocator = new WorktreeAllocator({
         ...localPorts(),
         inspectPathUsage: async () => {

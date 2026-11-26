@@ -17,9 +17,10 @@ import { isInside, realpathOrNull, safeFileName, sha256 } from './client-paths.j
  * Dependency manifest (`deps.json`) schema version:
  * v3: native esbuild CSS bundling; v4: controlled npm dependencies; v5: minify + pre-gzip;
  * v6: code splitting + async chunk bridge; v7: isolated `__helmx_chunk_share` namespace bridge;
- * v8: controlled npm declaration set recorded in cache credentials.
+ * v8: controlled npm declaration set recorded in cache credentials;
+ * v9: mtime/size stat fast-path on `npmDependencies` outside the 2s filesystem race window.
  */
-export const DEPS_LIST_VERSION = 8;
+export const DEPS_LIST_VERSION = 9;
 
 /** Disk dependency manifest (`deps.json`) used to revalidate cache entries across restarts. */
 export interface DepsListFile {
@@ -30,8 +31,8 @@ export interface DepsListFile {
   contentHash: string;
   /** Local dependencies relative to `root` with content sha256 (includes entry). */
   dependencies: Array<{ path: string; sha256: string }>;
-  /** Controlled npm dependency files with absolute realpath and content sha256. */
-  npmDependencies?: Array<{ root: string; path: string; sha256: string }>;
+  /** Controlled npm dependency files with absolute realpath, content sha256, and stat fingerprint. */
+  npmDependencies?: Array<{ root: string; path: string; sha256: string; mtimeMs?: number; size?: number }>;
   /** Declared controlled npm specifiers (prevents reusing stale bundles after removing declarations). */
   npmSpecifiers?: string[];
   /** Entry named exports (including `__helmxClientCss` when CSS was bundled). */
@@ -197,7 +198,23 @@ export function readCachedResult(
     }
     if (sha256(source) !== dep.sha256) return undefined;
   }
+  const now = Date.now();
   for (const dep of list.npmDependencies ?? []) {
+    let st;
+    try {
+      st = statSync(dep.path);
+    } catch {
+      return undefined;
+    }
+    if (
+      typeof dep.mtimeMs === 'number' &&
+      typeof dep.size === 'number' &&
+      st.mtimeMs === dep.mtimeMs &&
+      st.size === dep.size &&
+      now - st.mtimeMs > 2_000
+    ) {
+      continue;
+    }
     let source: string;
     try {
       source = readFileSync(dep.path, 'utf8');
@@ -294,9 +311,10 @@ export function buildDepsList(
   });
   const npmEntries = npmDeps.flatMap(({ root, files }) =>
     files.map((abs) => {
+      const st = statSync(abs);
       const sha = sha256(readFileSync(abs, 'utf8'));
       hash.update(`--npm:${root}::${abs}\n${sha}\n`);
-      return { root, path: abs, sha256: sha };
+      return { root, path: abs, sha256: sha, mtimeMs: st.mtimeMs, size: st.size };
     }),
   );
   const sortedChunks = chunks && chunks.length > 0 ? [...chunks].sort() : undefined;

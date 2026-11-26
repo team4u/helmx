@@ -143,6 +143,9 @@ async function startHubFixture(options: { expectedToken: string; reject?: boolea
   };
 }
 
+const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
+const TSX_TSCONFIG_PATH = path.join(REPO_ROOT, 'tsconfig.dev.json');
+
 /** Probe child liveness via `process.kill(pid, 0)`. */
 const realIsAlive = (pid: number): boolean => {
   try {
@@ -155,26 +158,48 @@ const realIsAlive = (pid: number): boolean => {
 
 /** Poll until condition holds (supports async predicates), failing explicitly on timeout. */
 const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
-  kitWaitFor(condition, { timeoutMs, intervalMs: 100, message: `wait timed out: ${what}` });
+  kitWaitFor(condition, { timeoutMs, intervalMs: 25, message: `wait timed out: ${what}` });
 
 // ---------------------------------------------------------------------------
 // 1. End-to-end: start -d / status / stop / restart (real multi-process + Hub)
 // ---------------------------------------------------------------------------
 
-test('start -d / status / stop: registered comes from genuine ACK, stop exits cleanly and removes pid', { timeout: 60_000 }, async (t) => {
+test('three independent CLI child processes start -d / status / stop: registered comes from genuine ACK, 0600 pid & socket created, stop cleans up cleanly', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helmx-review-lifecycle-');
-  t.after(async () => {
-    await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  });
   const hub = await startHubFixture({ expectedToken: 'rev-lc:s3cret' });
   t.after(async () => {
+    await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await hub.close();
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }, { timeout: 60_000 });
   await bindIdentityFromJoinToken(dir, 'rev-lc:s3cret', hub.url);
 
-  // CLI process A: background start
-  const start = await runCli(['start', '-d', '--data-dir', dir, '--json']);
+  const cliEntry = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+  const tsxLoader = import.meta.resolve('tsx');
+  const childCli = (args: string[]): Promise<Captured> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        ['--import', tsxLoader, cliEntry, ...args, '--data-dir', dir, '--json'],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...sanitizedHostEnv(), TSX_TSCONFIG_PATH, HELMX_HUB_URL: hub.url },
+        },
+      );
+      let out = '';
+      let err = '';
+      child.stdout.on('data', (chunk) => { out += chunk.toString(); });
+      child.stderr.on('data', (chunk) => { err += chunk.toString(); });
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error('CLI child process did not exit within budget'));
+      }, 20_000);
+      child.once('error', (error) => { clearTimeout(timer); reject(error); });
+      child.once('close', (code) => { clearTimeout(timer); resolve({ code: code ?? 1, out, err }); });
+    });
+
+  // CLI process 1: background start
+  const start = await childCli(['start', '-d']);
   assert.equal(start.code, 0, start.err);
   const payload = JSON.parse(start.out) as { ok: boolean; pid: number; state: string; logPath: string };
   assert.equal(payload.ok, true);
@@ -201,20 +226,20 @@ test('start -d / status / stop: registered comes from genuine ACK, stop exits cl
   // Control endpoint socket file exists on disk
   await waitFor(() => fs.stat(record.endpoint).then(() => true, () => false), 5_000, 'control socket created');
 
-  // Calling status again reports actual live running state.
-  const status = await runCli(['status', '--data-dir', dir, '--json']);
+  // CLI process 2: status reports actual live running state
+  const status = await childCli(['status']);
   assert.equal(status.code, 0, status.err);
   const statusPayload = JSON.parse(status.out) as { pid: number; pidAlive: boolean; state: string };
   assert.equal(statusPayload.pid, record.pid);
   assert.equal(statusPayload.pidAlive, true);
   assert.equal(statusPayload.state, 'registered');
 
-  // stop requests graceful cleanup via IPC and verifies pid/socket removal.
-  const stop = await runCli(['stop', '--data-dir', dir, '--json']);
+  // CLI process 3: stop requests graceful cleanup via IPC and verifies pid/socket removal
+  const stop = await childCli(['stop']);
   assert.equal(stop.code, 0, stop.err);
   assert.equal(JSON.parse(stop.out).outcome, 'stopped');
   assert.equal(realIsAlive(record.pid), false, 'process should actually exit via control-channel stop');
-  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, 'pid file should be removed');
+  await assert.rejects(fs.stat(path.join(dir, 'node.pid')), { code: 'ENOENT' });
   await waitFor(
     () => fs.stat(record.endpoint).then(() => false, () => true),
     5_000,
@@ -226,32 +251,6 @@ test('start -d / status / stop: registered comes from genuine ACK, stop exits cl
   const afterPayload = JSON.parse(after.out) as { pid: number | null; pidAlive: boolean };
   assert.equal(afterPayload.pid, null);
   assert.equal(afterPayload.pidAlive, false);
-});
-
-test('three independent CLI child processes can start, query, and stop the same daemon instance', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helmx-cli-processes-');
-  const hub = await startHubFixture({ expectedToken: 'cli-process:s' });
-  t.after(async () => { await runCli(['stop', '--data-dir', dir, '--json']); await hub.close(); await fs.rm(dir, { recursive: true, force: true }); }, { timeout: 60_000 });
-  await bindIdentityFromJoinToken(dir, 'cli-process:s', hub.url);
-  const childCli = (args: string[]): Promise<Captured> => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), fileURLToPath(new URL('../src/cli.ts', import.meta.url)), ...args, '--data-dir', dir, '--json'], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...sanitizedHostEnv(), HELMX_HUB_URL: hub.url } });
-    let out = ''; let err = '';
-    child.stdout.on('data', (chunk) => { out += chunk.toString() });
-    child.stderr.on('data', (chunk) => { err += chunk.toString() });
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('CLI child process did not exit within budget')) }, 20_000);
-    child.once('error', (error) => { clearTimeout(timer); reject(error) });
-    child.once('close', (code) => { clearTimeout(timer); resolve({ code: code ?? 1, out, err }) });
-  });
-  const started = await childCli(['start', '-d']);
-  assert.equal(started.code, 0, started.err);
-  assert.equal(JSON.parse(started.out).state, 'registered');
-  const status = await childCli(['status']);
-  assert.equal(status.code, 0, status.err);
-  assert.equal(JSON.parse(status.out).state, 'registered');
-  const stopped = await childCli(['stop']);
-  assert.equal(stopped.code, 0, stopped.err);
-  assert.equal(JSON.parse(stopped.out).outcome, 'stopped');
-  await assert.rejects(fs.stat(path.join(dir, 'node.pid')), { code: 'ENOENT' });
 });
 
 test('restart: old instance exits cleanly over control channel and new instance registers', { timeout: 60_000 }, async (t) => {

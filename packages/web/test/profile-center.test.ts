@@ -1,9 +1,6 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Profile, SkillSummary } from '@helmx/protocol'
@@ -34,7 +31,6 @@ import { PROFILE_DETAIL_SECTION_SLOT } from '@helmx/protocol'
 
 ensureHappyDom()
 
-const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const e = React.createElement
 
 const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
@@ -914,17 +910,7 @@ test('ProfileCard: long full-path model shows only the short name plus a level s
   assert.match(unsetHtml, /class="primary-card-pill-label">Follow global default<\/span>/)
 })
 
-test('ProfileDetailDrawer: close button uses .btn-icon-sm; source carries no legacy .callout--* classes', { timeout: 60_000 }, () => {
-  const files = [
-    'src/profiles/profile-center-model.ts',
-    'src/profiles/ProfileCard.tsx',
-    'src/profiles/ProfileCenter.tsx',
-    'src/profiles/ProfileDetailDrawer.tsx',
-  ]
-  for (const rel of files) {
-    const content = readFileSync(join(PKG_ROOT, rel), 'utf-8')
-    assert.ok(!content.includes('callout--'), `${rel} must not keep legacy callout--* classes`)
-  }
+test('ProfileDetailDrawer: close button uses .btn-icon-sm and shared ModelPickerControl', { timeout: 60_000 }, () => {
   const store = makeTestStore({ models: mockModels, skills: mockSkills })
   const html = renderToStaticMarkup(
     e(

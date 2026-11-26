@@ -731,12 +731,14 @@ test('foreground start without control env acts as launcher: spawns and tracks m
     env: { ...sanitizedHostEnv(), HELMX_HUB_URL: hub.url, HELMX_NODE_LAUNCHER_POLL_MS: '100' },
   });
   let stdout = '';
+  let stderr = '';
   child.stdout?.on('data', (c: Buffer) => (stdout += c.toString('utf8')));
+  child.stderr?.on('data', (c: Buffer) => (stderr += c.toString('utf8')));
 
   // launcher spawns managed daemon and writes pid record
   await waitFor(async () => {
     const raw = await fs.readFile(path.join(dir, 'node.pid'), 'utf8').then(() => true, () => false);
-    return raw;
+    return raw && /launcher/.test(stdout);
   }, 30_000, 'launcher spawns daemon and writes pid record');
   const record = JSON.parse(await fs.readFile(path.join(dir, 'node.pid'), 'utf8')) as HandoffPidRecord;
   assert.ok(record.pid > 0);
@@ -746,8 +748,8 @@ test('foreground start without control env acts as launcher: spawns and tracks m
 
   // SIGTERM launcher: stops daemon via control channel before exiting
   child.kill('SIGTERM');
-  await waitFor(() => !realIsAlive(child!.pid ?? 0), 15_000, 'launcher exits');
-  await waitFor(() => !realIsAlive(record.pid), 15_000, 'daemon stops via control channel');
+  await waitFor(() => !realIsAlive(child!.pid ?? 0), 15_000, `launcher exits (stderr=${stderr.trim()})`);
+  await waitFor(() => !realIsAlive(record.pid), 15_000, `daemon stops via control channel (stderr=${stderr.trim()})`);
 });
 
 // ---------------------------------------------------------------------------

@@ -5,8 +5,10 @@
  * without contacting Hub and without destructively modifying existing `tsconfig.json`.
  */
 import { randomUUID } from 'node:crypto'
+import { readdirSync, statSync } from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { inflateRawSync } from 'node:zlib'
 import { CliError } from '../errors.js'
 import { HELMX_SDK_TSCONFIG_PATHS } from './scaffold-templates.js'
@@ -77,11 +79,79 @@ function validateSdkTypesBundle(raw: unknown): SdkTypesBundle {
   }
 }
 
+function maxTsMtimeMs(dirPath: string): number {
+  let max = 0
+  let entries
+  try {
+    entries = readdirSync(dirPath, { withFileTypes: true })
+  } catch {
+    return Number.POSITIVE_INFINITY
+  }
+  for (const ent of entries) {
+    if (ent.name === 'node_modules' || ent.name === 'dist') continue
+    const full = path.join(dirPath, ent.name)
+    if (ent.isDirectory()) {
+      const sub = maxTsMtimeMs(full)
+      if (sub > max) max = sub
+    } else if (ent.isFile() && /\.(?:ts|tsx)$/.test(ent.name)) {
+      try {
+        const m = statSync(full).mtimeMs
+        if (m > max) max = m
+      } catch {
+        return Number.POSITIVE_INFINITY
+      }
+    }
+  }
+  return max
+}
+
+async function tryLoadFreshDistSnapshot(): Promise<SdkTypesBundle | undefined> {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const distRel = ['..', '..', 'dist', 'sdk-types-snapshot.js'].join('/')
+  const distPath = path.resolve(here, distRel)
+  if (distPath === path.resolve(here, '../sdk-types-snapshot.js')) return undefined
+  let distMtimeMs: number
+  try {
+    distMtimeMs = statSync(distPath).mtimeMs
+  } catch {
+    return undefined
+  }
+  const pkgRoot = path.resolve(here, '../..')
+  const packagesRoot = path.resolve(pkgRoot, '..')
+  const sourcesFresh =
+    maxTsMtimeMs(path.join(packagesRoot, 'protocol', 'src')) <= distMtimeMs &&
+    maxTsMtimeMs(path.join(packagesRoot, 'plugin-client', 'src')) <= distMtimeMs
+  if (!sourcesFresh) return undefined
+  for (const rel of [
+    'scripts/generate-sdk-types.mjs',
+    'package.json',
+    '../protocol/package.json',
+    '../plugin-client/package.json',
+  ]) {
+    try {
+      if (statSync(path.resolve(pkgRoot, rel)).mtimeMs > distMtimeMs) return undefined
+    } catch {
+      return undefined
+    }
+  }
+  try {
+    const mod = (await import(pathToFileURL(distPath).href)) as { EMBEDDED_SDK_TYPES_PAYLOAD?: unknown }
+    if (typeof mod.EMBEDDED_SDK_TYPES_PAYLOAD === 'string' && mod.EMBEDDED_SDK_TYPES_PAYLOAD.length > 0) {
+      const jsonText = inflateRawSync(Buffer.from(mod.EMBEDDED_SDK_TYPES_PAYLOAD, 'base64')).toString('utf8')
+      return validateSdkTypesBundle(JSON.parse(jsonText))
+    }
+  } catch {
+    // Fall back to in-memory generator below
+  }
+  return undefined
+}
+
 /**
  * Load the SDK declaration bundle.
  * - Built/bundled CLI: decodes the statically inlined `EMBEDDED_SDK_TYPES_PAYLOAD` via `node:zlib`
  *   (zero filesystem or `node_modules` lookup).
  * - Source-execution mode (`tsx` during workspace dev/unit tests when `dist/` is not loaded):
+ *   reuses a fresh built `packages/cli/dist/sdk-types-snapshot.js` when up-to-date, otherwise
  *   invokes the monorepo generator script through a computed dynamic URL so esbuild never pulls
  *   `typescript` into the single-file CLI artifact.
  */
@@ -101,6 +171,12 @@ export async function loadSdkTypesBundle(): Promise<SdkTypesBundle> {
         'sdk_types_corrupt',
       )
     }
+  }
+
+  const freshDist = await tryLoadFreshDistSnapshot()
+  if (freshDist !== undefined) {
+    cachedBundle = freshDist
+    return cachedBundle
   }
 
   // Computed specifier keeps esbuild from statically bundling the build-time generator or `typescript`.

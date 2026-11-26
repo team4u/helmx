@@ -25,7 +25,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-export const TEST_POOL_CACHE_SCHEMA_VERSION = 1;
+export const TEST_POOL_CACHE_SCHEMA_VERSION = 2;
 export const DEFAULT_PURITY_CACHE_REL = path.join('node_modules', '.cache', 'helmx-test-purity-cache.json');
 
 const ISOLATION_PROCESS_PRAGMA_RE = /@test-isolation\s*:\s*process\b/;
@@ -623,6 +623,9 @@ export function analyzeTestSourcePurity(
             dom.add(`global:globalThis.${prop}`);
           } else if (ts.isElementAccessExpression(left) && isClientSharedGlobalIndexExpr(ts, left.argumentExpression)) {
             dom.add('global:globalThis[CLIENT_SHARED_GLOBALS]');
+          } else if (prop === 'setInterval' || prop === 'clearInterval') {
+            // Reset between `dom-shared` files by dom-shard-preload; non-DOM files still isolate via `nodeGlobal`.
+            nodeGlobal.add(`assign:globalThis.${prop}`);
           } else if (prop && (DESTRUCTIVE_DOM_GLOBAL_PROPS.has(prop) || MUTATED_GLOBAL_IDENTIFIERS.has(prop))) {
             strictIsolated.add(`assign:globalThis.${prop}`);
           } else {
@@ -1131,15 +1134,13 @@ export function planFourPoolSchedule({
   const totalWeight =
     poolWeights.pure + poolWeights['dom-shared'] + poolWeights['node-shared'] + poolWeights.isolated;
 
-  // Target ~1.75x oversubscription across pools so finished workers steal queued shards
-  // cleanly without tail bubbles, while keeping per-shard work large enough to amortize tsx boot.
-  const targetShardWeight = Math.max(1_500, totalWeight / Math.max(1, budget * 1.75));
+  const targetShardWeight = Math.max(1_500, totalWeight / Math.max(1, budget));
 
   const maxShardsByPool = {
     pure: pools.pure.length === 0 ? 0 : Math.min(budget, Math.max(1, Math.ceil(pools.pure.length / 8))),
-    'dom-shared': pools['dom-shared'].length === 0 ? 0 : Math.min(pools['dom-shared'].length, budget * 2),
-    'node-shared': pools['node-shared'].length === 0 ? 0 : Math.min(pools['node-shared'].length, budget * 2),
-    isolated: pools.isolated.length === 0 ? 0 : Math.min(pools.isolated.length, budget * 2),
+    'dom-shared': pools['dom-shared'].length === 0 ? 0 : Math.min(pools['dom-shared'].length, budget),
+    'node-shared': pools['node-shared'].length === 0 ? 0 : Math.min(pools['node-shared'].length, budget),
+    isolated: pools.isolated.length === 0 ? 0 : Math.min(pools.isolated.length, budget),
   };
 
   const minWeightByPool = {

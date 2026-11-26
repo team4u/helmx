@@ -10,7 +10,6 @@ import { after, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -19,12 +18,8 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import {
   HelmxError,
   validateOrThrow,
-  type ConversationSummary,
-  type PluginClientContext as PluginClientContextType,
-  type ToolViewProps,
 } from '@helmx/protocol'
 import {
-  CLIENT_SHARED_GLOBALS,
   compilePluginClientModule,
 } from '@helmx/plugin-build'
 import { waitFor } from '@helmx/test-kit'
@@ -896,210 +891,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       await env.close()
     }
 
-    // Compiled SwarmToolView DOM verification with presentationMeta (and without JSON.parse(props.result))
-    const { GlobalRegistrator } = await import('@happy-dom/global-registrator')
-    if (typeof globalThis.document === 'undefined') GlobalRegistrator.register()
-    const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
-    const React = req('react') as typeof import('react')
-    const ReactDOM = req('react-dom') as unknown
-    const ReactDOMClient = req('react-dom/client') as {
-      createRoot: (container: Element) => { render(node: React.ReactNode): void; unmount(): void }
-    }
-    const ReactJsxRuntime = req('react/jsx-runtime') as Record<string, unknown>
-    const LucideReact = req('lucide-react') as Record<string, unknown>
-    const SDK = await import('@helmx/plugin-client')
-
-    const g = globalThis as Record<string, unknown>
-    const sharedKeys = [
-      'React',
-      'IS_REACT_ACT_ENVIRONMENT',
-      CLIENT_SHARED_GLOBALS['react']!,
-      CLIENT_SHARED_GLOBALS['react-dom']!,
-      CLIENT_SHARED_GLOBALS['react-dom/client']!,
-      CLIENT_SHARED_GLOBALS['react/jsx-runtime']!,
-      CLIENT_SHARED_GLOBALS['lucide-react']!,
-      CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!,
-    ]
-    const prevGlobals = new Map(sharedKeys.map((k) => [k, g[k]]))
+    // Verify conversation entrypoint never bundles SwarmWorkbenchPanel (DOM assertions live in web/swarm-client-interactions.test.tsx)
     const buildDir = useTempDir(t, 'helmx-swarm-client-render-')
-    t.after(() => {
-      for (const key of sharedKeys) {
-        const prev = prevGlobals.get(key)
-        if (prev === undefined) delete g[key]
-        else g[key] = prev
-      }
-    })
-
-    g.React = React
-    g.IS_REACT_ACT_ENVIRONMENT = true
-    g[CLIENT_SHARED_GLOBALS['react']!] = React
-    g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
-    g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
-    g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
-    g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
-    g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
-
     const swarmClientDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/swarm/client')
     const bundle = await compilePluginClientModule(SWARM_PLUGIN_ID, swarmClientDir, 'conversation.tsx', buildDir)
     assert.doesNotMatch(bundle.code, /SwarmWorkbenchPanel/, 'conversation entrypoint must not bundle SwarmWorkbenchPanel')
-    const mod = (await import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}#swarm-lifecycle-int16`)) as {
-      SwarmToolView: React.ComponentType<ToolViewProps>
-    }
-
-    const drawerCalls: number[] = []
-    const workbenchCalls: Array<string | undefined> = []
-    const noopUnsub = () => {}
-    const emptyConversations: ConversationSummary[] = []
-    const emptyAsks: never[] = []
-    const pluginsSnapshot = { plugins: [], screens: [] }
-    const pluginDocs: Record<string, unknown> = { [`${SWARM_PLUGIN_ID}/index`]: { workers: [], groups: [] } }
-    const port: import('@helmx/plugin-client').PluginClientHostPort = {
-      getAuthenticated: () => true,
-      subscribeAuthenticated: () => noopUnsub,
-      getTheme: () => 'dark',
-      getLocale: () => 'en',
-      subscribePrefs: () => noopUnsub,
-      getConversations: () => emptyConversations,
-      subscribeConversations: () => noopUnsub,
-      getConversationSummary: () => undefined,
-      subscribeConversationSummary: () => noopUnsub,
-      getConversationDetail: () => undefined,
-      subscribeConversationDetail: () => noopUnsub,
-      getConversationLive: () => undefined,
-      subscribeConversationLive: () => noopUnsub,
-      getConversationPendingAsks: () => emptyAsks,
-      subscribeConversationPendingAsks: () => noopUnsub,
-      getLoadError: () => undefined,
-      subscribeLoadError: () => noopUnsub,
-      getPluginsSnapshot: () => pluginsSnapshot,
-      subscribePlugins: () => noopUnsub,
-      getPluginDocValue: (docKey) => (Object.hasOwn(pluginDocs, docKey) ? pluginDocs[docKey] : undefined),
-      subscribePluginDoc: () => noopUnsub,
-      ensurePluginDoc: async () => undefined,
-      getPluginSessionDoc: async () => undefined,
-      subscribeSessionDoc: () => () => {},
-      getSessionDocState: () => ({ hasValue: false, deleted: false, connected: false, value: undefined }),
-      invokePluginAction: async () => ({}),
-      submitConversationInput: async () => undefined,
-      openTarget: () => undefined,
-      openConversationDrawer: (id) => { drawerCalls.push(id) },
-      openArtifactPreview: () => undefined,
-      setWorkbenchOpen: () => undefined,
-      setWorkbenchTab: (tab) => { workbenchCalls.push(tab) },
-      notify: () => undefined,
-      loadConversationDetail: () => undefined,
-      slots: { collectItems: () => [], renderItem: () => null },
-      markdown: { view: ({ text }) => React.createElement('div', null, text), codeBlock: ({ code }) => React.createElement('pre', null, code) },
-    }
-    const ctx: PluginClientContextType = SDK.createPluginClientContext(port, SWARM_PLUGIN_ID, 50)
-    ctx.openWorkbench = (panelId?: string) => { workbenchCalls.push(panelId) }
-
-    const mountView = async (props: ToolViewProps) => {
-      const container = document.createElement('div')
-      document.body.appendChild(container)
-      const root = ReactDOMClient.createRoot(container)
-      await React.act(async () => {
-        root.render(
-          React.createElement(
-            SDK.PluginClientHostContext.Provider,
-            { value: port },
-            React.createElement(
-              SDK.PluginClientContext.Provider,
-              { value: ctx },
-              React.createElement(mod.SwarmToolView, props),
-            ),
-          ),
-        )
-      })
-      return {
-        container,
-        unmount: () => {
-          React.act(() => root.unmount())
-          container.remove()
-        },
-      }
-    }
-
-    // A) presentationMeta drives dispatch drawer jump & #seq badge
-    const dispatchView = await mountView({
-      callId: 'c-disp',
-      toolName: 'swarm_dispatch_worker',
-      status: 'done',
-      conversationId: 50,
-      input: { name: 'author', prompt: 'Implement auth' },
-      presentationMeta: { groupId: 'grp-meta', memberName: 'author', workerConversationId: 51, seq: 3 },
-    })
-    try {
-      assert.match(dispatchView.container.textContent ?? '', /@author/)
-      assert.match(dispatchView.container.textContent ?? '', /#3/)
-      await React.act(async () => {
-        dispatchView.container.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!.click()
-      })
-      assert.deepEqual(drawerCalls, [51])
-    } finally {
-      dispatchView.unmount()
-    }
-
-    // B) props.result JSON string is NEVER parsed when presentationMeta is absent
-    const resultOnlyView = await mountView({
-      callId: 'c-json-only',
-      toolName: 'swarm_dispatch_worker',
-      status: 'done',
-      conversationId: 50,
-      input: { name: 'author', prompt: 'Implement auth' },
-      result: JSON.stringify({ workerConversationId: 99, groupId: 'grp-json', name: 'author', postSeq: 8 }),
-    })
-    try {
-      assert.doesNotMatch(resultOnlyView.container.textContent ?? '', /#8/)
-      const btn = resultOnlyView.container.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!
-      assert.equal(btn.getAttribute('aria-expanded'), 'false', 'without presentationMeta, row expands raw details instead of fabricating drawer jump')
-      await React.act(async () => {
-        btn.click()
-      })
-      assert.deepEqual(drawerCalls, [51], 'must not jump to #99 parsed from props.result')
-    } finally {
-      resultOnlyView.unmount()
-    }
-
-    // C) 0-count / boolean / retainedCount from presentationMeta
-    const readZeroView = await mountView({
-      callId: 'c-read0',
-      toolName: 'swarm_board_read',
-      status: 'done',
-      conversationId: 50,
-      presentationMeta: { groupId: 'grp-meta', seq: 0, postCount: 0 },
-    })
-    try {
-      assert.match(readZeroView.container.textContent ?? '', /0 posts/)
-    } finally {
-      readZeroView.unmount()
-    }
-
-    const abortNoopView = await mountView({
-      callId: 'c-abort-noop',
-      toolName: 'swarm_abort_worker',
-      status: 'done',
-      conversationId: 50,
-      presentationMeta: { workerConversationId: 51, memberName: 'author', aborted: false },
-    })
-    try {
-      assert.match(abortNoopView.container.textContent ?? '', /not running/)
-    } finally {
-      abortNoopView.unmount()
-    }
-
-    const closeRetainedView = await mountView({
-      callId: 'c-close',
-      toolName: 'swarm_close_group',
-      status: 'done',
-      conversationId: 50,
-      presentationMeta: { groupId: 'grp-meta', retainedCount: 2 },
-    })
-    try {
-      assert.match(closeRetainedView.container.textContent ?? '', /2 branches kept for merge/)
-    } finally {
-      closeRetainedView.unmount()
-    }
   })
 
   test('swarm-int17: dynamic nodeId dispatch on online remote node (inherit), peer forkFrom, explicit local override, offline 409, missing cwd 400, and restrictToCwd 403', { timeout: 60_000 }, async (t) => {

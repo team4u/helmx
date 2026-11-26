@@ -6,8 +6,8 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { cpSync, existsSync, realpathSync } from 'node:fs'
 import fsp from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import path from 'node:path'
@@ -637,13 +637,32 @@ const cliRequire = createRequire(import.meta.url)
 const tscCliScript = cliRequire.resolve('typescript/bin/tsc')
 const cliTestRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
-function runTscNoEmit(tsconfigPath: string, cwd: string): { status: number | null; stdout: string; stderr: string } {
-  const res = spawnSync(process.execPath, [tscCliScript, '--noEmit', '-p', tsconfigPath], {
-    cwd,
-    encoding: 'utf8',
-    timeout: 50_000,
+function runTscNoEmitAsync(
+  tsconfigPath: string,
+  cwd: string,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [tscCliScript, '--noEmit', '-p', tsconfigPath], {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout?.on('data', (chunk) => { stdout += String(chunk) })
+    child.stderr?.on('data', (chunk) => { stderr += String(chunk) })
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      reject(new Error(`tsc --noEmit timed out after 50s in ${cwd}\n${stdout}\n${stderr}`))
+    }, 50_000)
+    child.once('error', (err) => {
+      clearTimeout(timer)
+      reject(err)
+    })
+    child.once('close', (status) => {
+      clearTimeout(timer)
+      resolve({ status, stdout, stderr })
+    })
   })
-  return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' }
 }
 
 function assertNoAncestorNodeModules(dir: string): void {
@@ -748,55 +767,59 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
   const env = makeCliEnv('http://127.0.0.1:1', path.join(workDir, 'data'))
   const pluginsParent = path.join(workDir, 'plugins')
 
-  const dirs = new Map<string, string>()
-  for (const template of ['minimal', 'full', 'app'] as const) {
-    const res = await runCliCaptured(
-      ['plugins', 'init', `tpl-${template}`, '--template', template, '--dir', pluginsParent, '--json'],
-      env,
-    )
-    assert.equal(res.code, 0, `${template}: ${res.err}`)
-    const body = JSON.parse(res.out) as { dir: string; files: string[] }
-    assert.ok(body.files.includes('.helmx/types/'), `${template}: init should report .helmx/types/`)
-    const tsconfig = JSON.parse(await fsp.readFile(path.join(body.dir, 'tsconfig.json'), 'utf8')) as {
-      compilerOptions: { baseUrl?: string; paths?: Record<string, string[]> }
-    }
-    assert.equal(tsconfig.compilerOptions.baseUrl, '.')
-    assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/protocol'], ['./.helmx/types/protocol/index.d.ts'])
-    assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/protocol/browser'], ['./.helmx/types/protocol/browser.d.ts'])
-    assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/plugin-client'], ['./.helmx/types/plugin-client/index.d.ts'])
+  // Wave 1: scaffold and typecheck minimal, full, app templates in parallel
+  const templates = ['minimal', 'full', 'app'] as const
+  const initResults = await Promise.all(
+    templates.map(async (template) => {
+      const res = await runCliCaptured(
+        ['plugins', 'init', `tpl-${template}`, '--template', template, '--dir', pluginsParent, '--json'],
+        env,
+      )
+      assert.equal(res.code, 0, `${template}: ${res.err}`)
+      const body = JSON.parse(res.out) as { dir: string; files: string[] }
+      assert.ok(body.files.includes('.helmx/types/'), `${template}: init should report .helmx/types/`)
+      const tsconfig = JSON.parse(await fsp.readFile(path.join(body.dir, 'tsconfig.json'), 'utf8')) as {
+        compilerOptions: { baseUrl?: string; paths?: Record<string, string[]> }
+      }
+      assert.equal(tsconfig.compilerOptions.baseUrl, '.')
+      assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/protocol'], ['./.helmx/types/protocol/index.d.ts'])
+      assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/protocol/browser'], ['./.helmx/types/protocol/browser.d.ts'])
+      assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/plugin-client'], ['./.helmx/types/plugin-client/index.d.ts'])
+      return { template, dir: body.dir }
+    }),
+  )
+  await Promise.all(
+    initResults.map(async ({ template, dir }) => {
+      const tscRes = await runTscNoEmitAsync(path.join(dir, 'tsconfig.json'), dir)
+      assert.equal(
+        tscRes.status,
+        0,
+        `standalone tsc --noEmit failed for template ${template}:\n${tscRes.stdout}\n${tscRes.stderr}`,
+      )
+    }),
+  )
 
-    const tscRes = runTscNoEmit(path.join(body.dir, 'tsconfig.json'), body.dir)
-    assert.equal(
-      tscRes.status,
-      0,
-      `standalone tsc --noEmit failed for template ${template}:\n${tscRes.stdout}\n${tscRes.stderr}`,
-    )
-    dirs.set(template, body.dir)
+  const appDir = initResults.find((r) => r.template === 'app')!.dir
+  const origIndex = await fsp.readFile(path.join(appDir, 'index.ts'), 'utf8')
+  const origClient = await fsp.readFile(path.join(appDir, 'client', 'index.tsx'), 'utf8')
+  const variantsRoot = path.join(workDir, 'variants')
+  await fsp.mkdir(variantsRoot, { recursive: true })
+  const cloneAppVariant = (name: string): string => {
+    const dir = path.join(variantsRoot, name)
+    cpSync(appDir, dir, { recursive: true })
+    return dir
   }
 
-  // Negative checks: prove real strict typing is active on both backend (@helmx/protocol) and frontend (@helmx/plugin-client)
-  const appDir = dirs.get('app')!
-  const indexPath = path.join(appDir, 'index.ts')
-  const clientPath = path.join(appDir, 'client', 'index.tsx')
-  const origIndex = await fsp.readFile(indexPath, 'utf8')
-  const origClient = await fsp.readFile(clientPath, 'utf8')
+  // Wave 2: negative checks + pure-shim ARIA/SDK probe + @types/react/@types/node coexistence in parallel
+  const badBackendDir = cloneAppVariant('bad-backend')
+  await fsp.writeFile(path.join(badBackendDir, 'index.ts'), origIndex.replace("id: 'add_item',", 'id: 42,'), 'utf8')
 
-  await fsp.writeFile(indexPath, origIndex.replace("id: 'add_item',", 'id: 42,'), 'utf8')
-  const badBackend = runTscNoEmit(path.join(appDir, 'tsconfig.json'), appDir)
-  assert.notEqual(badBackend.status, 0, 'invalid backend PluginActionSpec.id must fail tsc --noEmit')
-  await fsp.writeFile(indexPath, origIndex, 'utf8')
+  const badFrontendDir = cloneAppVariant('bad-frontend')
+  await fsp.writeFile(path.join(badFrontendDir, 'client', 'index.tsx'), origClient.replace('columns={2}', 'columns="not-a-number"'), 'utf8')
 
-  await fsp.writeFile(clientPath, origClient.replace('columns={2}', 'columns="not-a-number"'), 'utf8')
-  const badFrontend = runTscNoEmit(path.join(appDir, 'tsconfig.json'), appDir)
-  assert.notEqual(badFrontend.status, 0, 'invalid DataTable columns prop must fail tsc --noEmit')
-  await fsp.writeFile(clientPath, origClient, 'utf8')
-
-  // Pure-shim compatibility check (BEFORE symlinking @types/react):
-  // Standard React 19 ARIA attributes (e.g. aria-autocomplete/aria-modal/aria-valuemin/valuemax/valuenow)
-  // and the new SDK primitives must typecheck cleanly against the bundled fallback shim alone.
-  const shimProbePath = path.join(appDir, 'client', 'shim-aria-probe.tsx')
+  const shimProbeDir = cloneAppVariant('shim-probe')
   await fsp.writeFile(
-    shimProbePath,
+    path.join(shimProbeDir, 'client', 'shim-aria-probe.tsx'),
     [
       "import type { PointerEvent, ReactNode } from 'react'",
       "import { Badge, Button, Card, CardGrid, Field, IconButton, Input, MonoId, SelectCard, Stack, StatusLight, Textarea } from '@helmx/plugin-client'",
@@ -827,23 +850,15 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
     ].join('\n'),
     'utf8',
   )
-  const shimProbeRes = runTscNoEmit(path.join(appDir, 'tsconfig.json'), appDir)
-  assert.equal(
-    shimProbeRes.status,
-    0,
-    `standalone pure-shim tsc --noEmit failed on React 19 ARIA + SDK primitives:\n${shimProbeRes.stdout}\n${shimProbeRes.stderr}`,
-  )
-  await fsp.unlink(shimProbePath)
 
-  // Coexistence check: when real @types/react and @types/node exist in node_modules, they win cleanly without conflict
+  const coexistDir = cloneAppVariant('coexist-real-types')
   const reactTypesReal = realpathSync.native(path.join(cliTestRepoRoot, 'packages/plugin-client/node_modules/@types/react'))
   const nodeTypesReal = realpathSync.native(path.join(cliTestRepoRoot, 'node_modules/@types/node'))
-  await fsp.mkdir(path.join(appDir, 'node_modules', '@types'), { recursive: true })
-  await fsp.symlink(reactTypesReal, path.join(appDir, 'node_modules', '@types', 'react'), 'junction')
-  await fsp.symlink(nodeTypesReal, path.join(appDir, 'node_modules', '@types', 'node'), 'junction')
-
+  await fsp.mkdir(path.join(coexistDir, 'node_modules', '@types'), { recursive: true })
+  await fsp.symlink(reactTypesReal, path.join(coexistDir, 'node_modules', '@types', 'react'), 'junction')
+  await fsp.symlink(nodeTypesReal, path.join(coexistDir, 'node_modules', '@types', 'node'), 'junction')
   await fsp.writeFile(
-    path.join(appDir, 'client', 'extra.tsx'),
+    path.join(coexistDir, 'client', 'extra.tsx'),
     [
       "import { useEffect, useRef, type ChangeEvent, type ReactNode } from 'react'",
       "import { usePluginContext, Dialog, Tabs, Select, Tooltip } from '@helmx/plugin-client'",
@@ -859,11 +874,25 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
     'utf8',
   )
   await fsp.writeFile(
-    indexPath,
+    path.join(coexistDir, 'index.ts'),
     `import { createHash } from 'node:crypto'\n${origIndex}\nexport const digest = createHash('sha256').update('ok').digest('hex')\n`,
     'utf8',
   )
-  const withRealTypes = runTscNoEmit(path.join(appDir, 'tsconfig.json'), appDir)
+
+  const [badBackend, badFrontend, shimProbeRes, withRealTypes] = await Promise.all([
+    runTscNoEmitAsync(path.join(badBackendDir, 'tsconfig.json'), badBackendDir),
+    runTscNoEmitAsync(path.join(badFrontendDir, 'tsconfig.json'), badFrontendDir),
+    runTscNoEmitAsync(path.join(shimProbeDir, 'tsconfig.json'), shimProbeDir),
+    runTscNoEmitAsync(path.join(coexistDir, 'tsconfig.json'), coexistDir),
+  ])
+
+  assert.notEqual(badBackend.status, 0, 'invalid backend PluginActionSpec.id must fail tsc --noEmit')
+  assert.notEqual(badFrontend.status, 0, 'invalid DataTable columns prop must fail tsc --noEmit')
+  assert.equal(
+    shimProbeRes.status,
+    0,
+    `standalone pure-shim tsc --noEmit failed on React 19 ARIA + SDK primitives:\n${shimProbeRes.stdout}\n${shimProbeRes.stderr}`,
+  )
   assert.equal(
     withRealTypes.status,
     0,

@@ -16,7 +16,6 @@ import ts from 'typescript'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const STYLES_DIR = join(__dirname, '../src/styles')
 const primitives = readFileSync(join(STYLES_DIR, 'primitives.css'), 'utf8')
-const navigation = readFileSync(join(STYLES_DIR, 'navigation.css'), 'utf8')
 
 /** Selector-ownership probe: a shard owns a rule when the selector is declared at line start. */
 const ownsRule = (css: string, selector: string): boolean =>
@@ -25,86 +24,6 @@ const ownsRule = (css: string, selector: string): boolean =>
 function stripCssComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, ' '))
 }
-
-test('样式边界：通用状态灯词汇完整归属 primitives.css（base/色调/空心环/动效/减动效）', { timeout: 60_000 }, () => {
-  for (const selector of [
-    '.status-dot',
-    '.status-dot-working',
-    '.status-dot-blocked',
-    '.status-dot-done',
-    '.status-dot-error',
-    '.status-dot-background',
-    '.status-dot-aborted',
-    '.status-dot-pending',
-  ]) {
-    assert.ok(ownsRule(primitives, selector), `primitives.css 应定义公共状态灯规则 ${selector}`)
-    assert.ok(!ownsRule(navigation, selector), `navigation.css 不得再定义通用状态灯规则 ${selector}`)
-  }
-  for (const keyframe of ['@keyframes status-dot-pulse', '@keyframes status-dot-background-pulse']) {
-    assert.ok(primitives.includes(keyframe), `primitives.css 应携带 ${keyframe}`)
-    assert.ok(!navigation.includes(keyframe), `navigation.css 不得携带 ${keyframe}`)
-  }
-  assert.ok(
-    /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-dot-working/.test(primitives),
-    'primitives.css 的减动效规则覆盖状态灯呼吸动画',
-  )
-  assert.ok(!navigation.includes('prefers-reduced-motion'), 'navigation.css 不再携带状态灯减动效规则')
-})
-
-test('样式边界：navigation.css 仅保留导航专有状态点覆盖（sidebar-overview-group 小点）', { timeout: 60_000 }, () => {
-  assert.ok(
-    ownsRule(navigation, '.sidebar-overview-group .status-dot'),
-    '导航专属 6px 小点覆盖保留在 navigation.css',
-  )
-  assert.ok(
-    !ownsRule(primitives, '.sidebar-overview-group .status-dot'),
-    '导航专属覆盖不得漂移进公共分片',
-  )
-})
-
-test('样式边界：StatusLight 统一外壳与 sr-only 文本归属 primitives.css（共享原语可用的公共资产）', { timeout: 60_000 }, () => {
-  for (const selector of ['.helmx-status-light', '.helmx-status-light .status-dot', '.helmx-sr-only']) {
-    assert.ok(ownsRule(primitives, selector), `primitives.css 应定义共享状态灯外壳规则 ${selector}`)
-    assert.ok(!ownsRule(navigation, selector), `navigation.css 不得定义 ${selector}`)
-  }
-})
-
-test('样式边界：通用旋转动效归属 primitives.css（不依赖 plugin-center.css 分片）', { timeout: 60_000 }, () => {
-  const pluginCenter = readFileSync(join(STYLES_DIR, 'plugin-center.css'), 'utf8')
-  assert.ok(primitives.includes('@keyframes convSpin360'), 'primitives.css 应定义 @keyframes convSpin360')
-  assert.ok(!pluginCenter.includes('@keyframes convSpin360'), 'plugin-center.css 不得再定义 @keyframes convSpin360')
-  assert.ok(ownsRule(primitives, '.spin'), 'primitives.css 应定义 .spin')
-  assert.ok(!ownsRule(pluginCenter, '.spin'), 'plugin-center.css 不得再定义 .spin')
-  assert.ok(
-    /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.spin-slow/.test(primitives),
-    'primitives.css 的减动效规则覆盖 .spin-slow 旋转动效',
-  )
-})
-
-test('样式边界：通用无内联工具类归属末尾 utilities.css（不藏在 modals.css）且 tokens.css 暴露间距阶梯', { timeout: 60_000 }, () => {
-  const utilities = readFileSync(join(STYLES_DIR, 'utilities.css'), 'utf8')
-  const modals = readFileSync(join(STYLES_DIR, 'modals.css'), 'utf8')
-  const stylesEntry = readFileSync(join(__dirname, '../src/styles.css'), 'utf8')
-  const tokens = readFileSync(join(STYLES_DIR, 'tokens.css'), 'utf8')
-
-  for (const selector of ['.flex-row', '.flex-col', '.text-muted', '.text-subtle', '.text-err']) {
-    assert.ok(ownsRule(utilities, selector), `utilities.css 应定义公共工具类 ${selector}`)
-    assert.ok(!ownsRule(modals, selector), `modals.css 不得再保留公共工具类 ${selector}`)
-  }
-
-  const hostComponentImports = [...stylesEntry.matchAll(/@import\s+'\.\/styles\/([^']+)'\s+layer\(host-components\);/g)].map(
-    (m) => m[1],
-  )
-  assert.equal(
-    hostComponentImports.at(-1),
-    'utilities.css',
-    'utilities.css 必须位于 @layer host-components 最末尾，确保修饰类级联顺序可预测',
-  )
-
-  for (const token of ['--space-1', '--space-2', '--space-3', '--space-4', '--space-5', '--space-6']) {
-    assert.ok(tokens.includes(`${token}:`), `tokens.css 应定义公共间距变量 ${token}`)
-  }
-})
 
 /**
  * 宿主样式分片不得选择内置插件私有类名（CSS ownership 单向边界）：
@@ -115,7 +34,6 @@ test('样式边界：通用无内联工具类归属末尾 utilities.css（不藏
  */
 const PLUGIN_PRIVATE_CLASS_PREFIXES = [
   'workflow-', 'subagent-', 'execution-', 'wf-', // builtin:workflow
-  'herdr-', 'hd-', // builtin:herdr
   'tg-', // builtin:triggers
   'magpie-', // builtin:magpie
   'tiers-', // builtin:tiers

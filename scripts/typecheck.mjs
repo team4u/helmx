@@ -20,6 +20,7 @@ const TYPECHECK_TARGETS = [
   { label: 'tsconfig.check.json', project: 'tsconfig.check.json' },
   { label: 'packages/plugins/tsconfig.client.json', project: 'packages/plugins/tsconfig.client.json' },
   { label: 'packages/web/tsconfig.json', project: 'packages/web/tsconfig.json' },
+  { label: 'packages/web/tsconfig.test.json', project: 'packages/web/tsconfig.test.json' },
 ];
 
 export async function runParallelTypecheck(options = {}) {

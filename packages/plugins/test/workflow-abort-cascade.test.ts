@@ -309,8 +309,10 @@ describe('WorkflowService 级联取消', () => {
     host.plan = { executionConversationId: 11, resolveOnlyOnAbort: true, rejectOnAbort: true }
     const startedPromise = service.startBackgroundAgent({ parentConversationId: 1, prompt: '迟到' })
     await until(
-      () => service.listRuns().some((r) => r.kind === 'subagent' && r.conversationId === 1 && r.status === 'running'),
-      'durable run 记录落地（启动地平线之前）',
+      () =>
+        host.spawns.length > 0 &&
+        service.listRuns().some((r) => r.kind === 'subagent' && r.conversationId === 1 && r.status === 'running'),
+      'durable run 记录落地且 spawn 已挂起（启动地平线之前）',
     )
     const runId = service.listRuns().find((r) => r.kind === 'subagent' && r.conversationId === 1)!.id
 

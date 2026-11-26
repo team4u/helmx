@@ -328,17 +328,15 @@ export async function runForegroundLauncher(
   const isAlive = isAliveOf(io);
   const envPollMs = Number(io.env?.HELMX_NODE_LAUNCHER_POLL_MS ?? '');
   const pollMs = Number.isFinite(envPollMs) && envPollMs > 0 ? envPollMs : (io.launcherPollMs ?? LAUNCHER_POLL_MS);
-  const started = await startDaemon(io, dataDir, effectiveHub);
-  if (!json) {
-    io.out(`helmx-node launcher: daemon pid ${started.pid}; tracking instance (Ctrl+C to stop)\n`);
-  }
   let stopError: string | undefined;
   let shutdownPromise: Promise<void> | undefined;
   let wakePoll: (() => void) | undefined;
+  let startPromise: Promise<{ pid: number; logPath: string; readyState: DaemonReadyState }> | undefined;
   const shutdown = (reason: string): void => {
     if (shutdownPromise !== undefined) return;
     wakePoll?.();
     shutdownPromise = (async () => {
+      if (startPromise !== undefined) await startPromise.catch(() => undefined);
       try {
         const record = await readPidRecord(dataDir);
         if (record !== null && isAlive(record.pid)) {
@@ -359,6 +357,12 @@ export async function runForegroundLauncher(
   process.once('SIGTERM', onSigterm);
 
   try {
+    startPromise = startDaemon(io, dataDir, effectiveHub);
+    const started = await startPromise;
+    startPromise = undefined;
+    if (!json) {
+      io.out(`helmx-node launcher: daemon pid ${started.pid}; tracking instance (Ctrl+C to stop)\n`);
+    }
     for (;;) {
       if (shutdownPromise !== undefined) break;
       let record: PidRecord | null;

@@ -68,6 +68,7 @@ import {
   resolveTestConcurrency,
   withDefaultTestConcurrency,
 } from './lib/test-concurrency.mjs';
+import { pruneTsxCacheIfBloated } from './lib/tsx-cache-hygiene.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packagesDir = path.join(repoRoot, 'packages');
@@ -266,8 +267,47 @@ const runTempDir = path.join(
   `run-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
 );
 
-/** @type {Array<{ label: string, args: string[], permits: number, timingOutputPath: string | null }>} */
+const tsxPrune = pruneTsxCacheIfBloated();
+if (tsxPrune.pruned > 0) {
+  console.error(`[test-suites] pruned ${tsxPrune.pruned} stale tsx cache entries (${tsxPrune.cacheDir})`);
+}
+
+/** @type {Array<{ label: string, args: string[], permits: number, timingOutputPath: string | null, ipcPool?: 'pure' | 'dom-shared' | 'node-shared' }>} */
 const plans = [];
+/** @type {Record<string, { files: string[], cursor: number }>} */
+const ipcQueues = {};
+
+function makeIsolatedShardPlans(isoFiles, weightFn, runTempDir, timingReporterUrl, extraArgs, offsetIndex) {
+  const heavy = [];
+  const light = [];
+  for (const rel of isoFiles) {
+    if (weightFn(rel) > 1_000) heavy.push(rel);
+    else light.push(rel);
+  }
+  /** @type {string[][]} */
+  const groups = heavy.map((rel) => [rel]);
+  for (let i = 0; i < light.length; i += 4) {
+    groups.push(light.slice(i, i + 4));
+  }
+  return groups.map((group, idx) => {
+    const timingOutputPath = path.join(runTempDir, `timings-iso-${offsetIndex + idx}.json`);
+    return {
+      label: `isolated-${idx + 1}/${groups.length}`,
+      args: [
+        '--skip-cache-hygiene',
+        '--test-concurrency=1',
+        '--test-reporter=spec',
+        '--test-reporter-destination=stdout',
+        `--test-reporter=${timingReporterUrl}`,
+        `--test-reporter-destination=${timingOutputPath}`,
+        ...extraArgs,
+        ...group,
+      ],
+      permits: 1,
+      timingOutputPath,
+    };
+  });
+}
 
 if (!shardingDisabled) {
   const classifyStartMs = performance.now();
@@ -282,63 +322,179 @@ if (!shardingDisabled) {
   });
   const classifyMs = Math.round(performance.now() - classifyStartMs);
   const timingHits = recordedCount(files);
-  console.error(
-    `[test-suites] schedule (${classifyMs}ms, astCache=${schedule.cacheStats.hits}/${files.length}, timings=${timingHits}/${files.length}, budget=${workerBudget}): ` +
-      `pure=${schedule.pools.pure.length}(${schedule.shardCounts.pure}) ` +
-      `dom-shared=${schedule.pools['dom-shared'].length}(${schedule.shardCounts['dom-shared']}) ` +
-      `node-shared=${schedule.pools['node-shared'].length}(${schedule.shardCounts['node-shared']}) ` +
-      `isolated=${schedule.pools.isolated.length}(${schedule.shardCounts.isolated}) -> ${schedule.plans.length} concurrent shards`,
-  );
 
   mkdirSync(runTempDir, { recursive: true });
-  schedule.plans.forEach((plan, index) => {
-    const timingOutputPath = path.join(runTempDir, `timings-${index}.json`);
-    if (plan.mode === 'shard-worker') {
-      const manifestPath = path.join(runTempDir, `manifest-${index}.json`);
-      writeFileSync(
-        manifestPath,
-        JSON.stringify({
-          pool: plan.pool,
-          repoRoot,
-          files: plan.files,
-          timingOutputPath,
-          testTimeoutMs: 20_000,
-        }),
-        'utf8',
+  const sharedPools = /** @type {const} */ (['pure', 'dom-shared', 'node-shared']).filter(
+    (pool) => schedule.pools[pool].length > 0,
+  );
+  const minRequiredForIpc = sharedPools.length + (schedule.pools.isolated.length > 0 ? 1 : 0);
+
+  let scheduledPoolSummary =
+    `pure=${schedule.pools.pure.length}(${schedule.shardCounts.pure}) ` +
+    `dom-shared=${schedule.pools['dom-shared'].length}(${schedule.shardCounts['dom-shared']}) ` +
+    `node-shared=${schedule.pools['node-shared'].length}(${schedule.shardCounts['node-shared']}) ` +
+    `isolated=${schedule.pools.isolated.length}(${schedule.shardCounts.isolated})`;
+
+  if (workerBudget >= 3 && sharedPools.length > 0 && workerBudget >= minRequiredForIpc) {
+    const poolWeights = {
+      pure: schedule.pools.pure.reduce((s, f) => s + Math.max(1, weightFn(f)), 0),
+      'dom-shared': schedule.pools['dom-shared'].reduce((s, f) => s + Math.max(1, weightFn(f)), 0),
+      'node-shared': schedule.pools['node-shared'].reduce((s, f) => s + Math.max(1, weightFn(f)), 0),
+      isolated: schedule.pools.isolated.reduce((s, f) => s + Math.max(1, weightFn(f)), 0),
+    };
+    const totalWeight =
+      poolWeights.pure + poolWeights['dom-shared'] + poolWeights['node-shared'] + poolWeights.isolated;
+    const rawIsoReserve =
+      schedule.pools.isolated.length === 0
+        ? 0
+        : Math.min(schedule.pools.isolated.length, Math.max(1, Math.round(workerBudget * (poolWeights.isolated / Math.max(1, totalWeight)))));
+    const isolatedReserve = Math.min(rawIsoReserve, Math.max(0, workerBudget - sharedPools.length));
+    const sharedBudget = Math.max(sharedPools.length, workerBudget - isolatedReserve);
+
+    const caps = {
+      pure: Math.min(schedule.pools.pure.length, Math.min(2, Math.max(1, Math.ceil(schedule.pools.pure.length / 10)))),
+      'dom-shared': Math.min(schedule.pools['dom-shared'].length, Math.min(8, sharedBudget)),
+      'node-shared': Math.min(schedule.pools['node-shared'].length, sharedBudget),
+    };
+    const sharedTotalWeight = sharedPools.reduce((s, p) => s + poolWeights[p], 0);
+    /** @type {Record<'pure' | 'dom-shared' | 'node-shared', number>} */
+    const workerCounts = { pure: 0, 'dom-shared': 0, 'node-shared': 0 };
+    let usedShared = 0;
+    for (const pool of sharedPools) {
+      const n = Math.max(
+        1,
+        Math.min(caps[pool], Math.round(sharedBudget * (poolWeights[pool] / Math.max(1, sharedTotalWeight)))),
       );
-      const args = [];
-      if (plan.pool === 'dom-shared') args.push('--dom-preload');
-      args.push('--shard-worker', manifestPath);
-      plans.push({
-        label: plan.label,
-        args,
-        permits: plan.permits,
-        timingOutputPath,
-      });
-    } else {
-      // Isolated shards use native process isolation with dual reporters so spec stays
-      // on stdout while per-file durations land in timingOutputPath.
-      const args = [
-        '--test-concurrency=1',
-        '--test-reporter=spec',
-        '--test-reporter-destination=stdout',
-        `--test-reporter=${timingReporterUrl}`,
-        `--test-reporter-destination=${timingOutputPath}`,
-        ...extraArgs,
-        ...plan.files,
-      ];
-      plans.push({
-        label: plan.label,
-        args,
-        permits: plan.permits,
-        timingOutputPath,
-      });
+      workerCounts[pool] = n;
+      usedShared += n;
     }
-  });
+    while (usedShared > sharedBudget) {
+      const shrinkPool = sharedPools
+        .filter((p) => workerCounts[p] > 1)
+        .sort((a, b) => workerCounts[b] - workerCounts[a])[0];
+      if (!shrinkPool) break;
+      workerCounts[shrinkPool] -= 1;
+      usedShared -= 1;
+    }
+    for (const pool of /** @type {const} */ (['node-shared', 'dom-shared', 'pure'])) {
+      if (!sharedPools.includes(pool)) continue;
+      while (usedShared < sharedBudget && workerCounts[pool] < caps[pool]) {
+        workerCounts[pool] += 1;
+        usedShared += 1;
+      }
+    }
+
+    const isoPlans = makeIsolatedShardPlans(
+      schedule.pools.isolated,
+      weightFn,
+      runTempDir,
+      timingReporterUrl,
+      extraArgs,
+      0,
+    );
+    const frontIsoCount = Math.min(isolatedReserve, isoPlans.length);
+    for (let i = 0; i < frontIsoCount; i += 1) {
+      plans.push(isoPlans[i]);
+    }
+
+    let workerIdx = 0;
+    for (const pool of /** @type {const} */ (['node-shared', 'dom-shared', 'pure'])) {
+      const count = workerCounts[pool];
+      if (count <= 0) continue;
+      ipcQueues[pool] = { files: [...schedule.pools[pool]], cursor: 0 };
+      for (let i = 0; i < count; i += 1) {
+        const timingOutputPath = path.join(runTempDir, `timings-ipc-${workerIdx}.json`);
+        const manifestPath = path.join(runTempDir, `manifest-ipc-${workerIdx}.json`);
+        workerIdx += 1;
+        writeFileSync(
+          manifestPath,
+          JSON.stringify({
+            pool,
+            repoRoot,
+            ipcQueue: true,
+            timingOutputPath,
+            testTimeoutMs: 20_000,
+          }),
+          'utf8',
+        );
+        const args = ['--skip-cache-hygiene'];
+        if (pool === 'dom-shared') args.push('--dom-preload');
+        args.push('--shard-worker', manifestPath);
+        plans.push({
+          label: `${pool}-w${i + 1}/${count}`,
+          args,
+          permits: 1,
+          timingOutputPath,
+          ipcPool: pool,
+        });
+      }
+    }
+
+    for (let i = frontIsoCount; i < isoPlans.length; i += 1) {
+      plans.push(isoPlans[i]);
+    }
+
+    scheduledPoolSummary =
+      `pure=${schedule.pools.pure.length}(${workerCounts.pure}) ` +
+      `dom-shared=${schedule.pools['dom-shared'].length}(${workerCounts['dom-shared']}) ` +
+      `node-shared=${schedule.pools['node-shared'].length}(${workerCounts['node-shared']}) ` +
+      `isolated=${schedule.pools.isolated.length}(${isoPlans.length})`;
+  } else {
+    schedule.plans.forEach((plan, index) => {
+      const timingOutputPath = path.join(runTempDir, `timings-${index}.json`);
+      if (plan.mode === 'shard-worker') {
+        const manifestPath = path.join(runTempDir, `manifest-${index}.json`);
+        writeFileSync(
+          manifestPath,
+          JSON.stringify({
+            pool: plan.pool,
+            repoRoot,
+            files: plan.files,
+            timingOutputPath,
+            testTimeoutMs: 20_000,
+          }),
+          'utf8',
+        );
+        const args = ['--skip-cache-hygiene'];
+        if (plan.pool === 'dom-shared') args.push('--dom-preload');
+        args.push('--shard-worker', manifestPath);
+        plans.push({
+          label: plan.label,
+          args,
+          permits: plan.permits,
+          timingOutputPath,
+        });
+      } else {
+        // Isolated shards use native process isolation with dual reporters so spec stays
+        // on stdout while per-file durations land in timingOutputPath.
+        const args = [
+          '--skip-cache-hygiene',
+          '--test-concurrency=1',
+          '--test-reporter=spec',
+          '--test-reporter-destination=stdout',
+          `--test-reporter=${timingReporterUrl}`,
+          `--test-reporter-destination=${timingOutputPath}`,
+          ...extraArgs,
+          ...plan.files,
+        ];
+        plans.push({
+          label: plan.label,
+          args,
+          permits: plan.permits,
+          timingOutputPath,
+        });
+      }
+    });
+  }
+
+  console.error(
+    `[test-suites] schedule (${classifyMs}ms, astCache=${schedule.cacheStats.hits}/${files.length}, timings=${timingHits}/${files.length}, budget=${workerBudget}): ` +
+      `${scheduledPoolSummary} -> ${plans.length} concurrent shards`,
+  );
 } else {
   plans.push({
     label: 'single',
-    args: withDefaultTestConcurrency(extraArgs, workerBudget).concat(sortedAllFiles),
+    args: ['--skip-cache-hygiene', ...withDefaultTestConcurrency(extraArgs, workerBudget).concat(sortedAllFiles)],
     permits: workerBudget,
     timingOutputPath: null,
   });
@@ -385,11 +541,25 @@ function runPlanPool(queue, maxPermits) {
   return new Promise((resolve) => {
     const spawnOne = (item) =>
       new Promise((done) => {
+        const useIpc = Boolean(item.plan.ipcPool);
         const child = spawn(process.execPath, [runTestsPath, ...item.plan.args], {
-          stdio: 'inherit',
+          stdio: useIpc ? ['inherit', 'inherit', 'inherit', 'ipc'] : 'inherit',
           env: process.env,
           cwd: repoRoot,
         });
+        if (useIpc) {
+          child.on('message', (msg) => {
+            if (!msg || msg.type !== 'next' || !child.connected) return;
+            const queue = ipcQueues[item.plan.ipcPool];
+            if (queue && queue.cursor < queue.files.length) {
+              const file = queue.files[queue.cursor];
+              queue.cursor += 1;
+              child.send({ type: 'run', file, index: queue.cursor, total: queue.files.length });
+            } else {
+              child.send({ type: 'done' });
+            }
+          });
+        }
         activeChildren.add(child);
         child.on('error', (err) => {
           activeChildren.delete(child);

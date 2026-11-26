@@ -14,7 +14,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -50,6 +50,7 @@ import {
   parseBuildArgs,
   planBuildStages,
 } from '../../../scripts/build.mjs'
+import { pruneTsxCacheIfBloated } from '../../../scripts/lib/tsx-cache-hygiene.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
@@ -580,15 +581,51 @@ test('planFourPoolSchedule: creates concurrent permits=1 shards across all 4 poo
   }
 })
 
-test('shard-worker: isolates bare top-level before/after/afterEach per file and records per-file timings', { timeout: 60_000 }, () => {
+function runChildAsync(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout?.on('data', (d) => { stdout += String(d) })
+    child.stderr?.on('data', (d) => { stderr += String(d) })
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      reject(new Error(`child timed out: ${command} ${args.join(' ')}\n${stderr}\n${stdout}`))
+    }, 55_000)
+    child.once('error', (err) => {
+      clearTimeout(timer)
+      reject(err)
+    })
+    child.once('close', (status) => {
+      clearTimeout(timer)
+      resolve({ status, stdout, stderr })
+    })
+  })
+}
+
+test('shard-worker: isolates bare top-level before/after/afterEach per file and records per-file timings', { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'helmx-shard-worker-'))
   try {
     writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}')
     const orderFile = path.join(dir, 'order.log')
     const fileA = path.join(dir, 'a.test.ts')
     const fileB = path.join(dir, 'b.test.ts')
+    const filePass = path.join(dir, 'pass.test.ts')
+    const fileFail = path.join(dir, 'fail.test.ts')
+    const fileSlow = path.join(dir, 'slow.test.ts')
     const manifestPath = path.join(dir, 'manifest.json')
     const timingPath = path.join(dir, 'timings.json')
+    const failManifest = path.join(dir, 'manifest-fail.json')
+    const failTiming = path.join(dir, 'timings-fail.json')
+    const slowManifest = path.join(dir, 'manifest-slow.json')
 
     writeFileSync(
       fileA,
@@ -615,6 +652,27 @@ test('B1', { timeout: 60_000 }, () => { log('B:test1'); assert.ok(true) })
 `,
     )
     writeFileSync(
+      filePass,
+      `import test from 'node:test'
+import assert from 'node:assert/strict'
+test('P1', { timeout: 60_000 }, () => { assert.ok(true) })
+`,
+    )
+    writeFileSync(
+      fileFail,
+      `import test from 'node:test'
+import assert from 'node:assert/strict'
+test('F1', { timeout: 60_000 }, () => { assert.equal(1, 2) })
+`,
+    )
+    writeFileSync(
+      fileSlow,
+      `import test from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
+test('S1', { timeout: 60_000 }, async () => { await delay(450) })
+`,
+    )
+    writeFileSync(
       manifestPath,
       JSON.stringify({
         pool: 'node-shared',
@@ -624,14 +682,30 @@ test('B1', { timeout: 60_000 }, () => { log('B:test1'); assert.ok(true) })
         testTimeoutMs: 20_000,
       }),
     )
+    writeFileSync(
+      failManifest,
+      JSON.stringify({
+        pool: 'pure',
+        repoRoot: dir,
+        files: ['fail.test.ts', 'pass.test.ts'],
+        timingOutputPath: failTiming,
+        testTimeoutMs: 20_000,
+      }),
+    )
+    writeFileSync(
+      slowManifest,
+      JSON.stringify({ pool: 'pure', repoRoot: dir, files: ['slow.test.ts'], stallWarnMs: 150 }),
+    )
 
     const env = { ...process.env }
     delete env.NODE_TEST_CONTEXT
-    const res = spawnSync(
-      process.execPath,
-      [path.join(repoRoot, 'scripts', 'run-tests.mjs'), '--shard-worker', manifestPath],
-      { cwd: repoRoot, env, encoding: 'utf8', timeout: 60_000 },
-    )
+    const runTestsScript = path.join(repoRoot, 'scripts', 'run-tests.mjs')
+    const [res, failRes, slowRes] = await Promise.all([
+      runChildAsync(process.execPath, [runTestsScript, '--shard-worker', manifestPath], { cwd: repoRoot, env }),
+      runChildAsync(process.execPath, [runTestsScript, '--shard-worker', failManifest], { cwd: repoRoot, env }),
+      runChildAsync(process.execPath, [runTestsScript, '--shard-worker', slowManifest], { cwd: repoRoot, env }),
+    ])
+
     assert.equal(res.status, 0, `shard-worker failed: stderr=${res.stderr}\nstdout=${res.stdout}`)
 
     // Progress diagnostics land on stderr: a boot line, then one line per file in execution order,
@@ -668,31 +742,6 @@ test('B1', { timeout: 60_000 }, () => { log('B:test1'); assert.ok(true) })
     assert.ok((recorded.files['b.test.ts'] ?? 0) >= 1)
 
     // Verify failure propagation: a failing first file exits 1 while still executing the second file
-    const fileFail = path.join(dir, 'fail.test.ts')
-    const failManifest = path.join(dir, 'manifest-fail.json')
-    const failTiming = path.join(dir, 'timings-fail.json')
-    writeFileSync(
-      fileFail,
-      `import test from 'node:test'
-import assert from 'node:assert/strict'
-test('F1', { timeout: 60_000 }, () => { assert.equal(1, 2) })
-`,
-    )
-    writeFileSync(
-      failManifest,
-      JSON.stringify({
-        pool: 'pure',
-        repoRoot: dir,
-        files: ['fail.test.ts', 'b.test.ts'],
-        timingOutputPath: failTiming,
-        testTimeoutMs: 20_000,
-      }),
-    )
-    const failRes = spawnSync(
-      process.execPath,
-      [path.join(repoRoot, 'scripts', 'run-tests.mjs'), '--shard-worker', failManifest],
-      { cwd: repoRoot, env, encoding: 'utf8', timeout: 60_000 },
-    )
     assert.equal(failRes.status, 1, 'shard-worker must exit 1 when any file fails')
     const failRecorded = JSON.parse(readFileSync(failTiming, 'utf8')) as {
       counts: { tests: number; passed: number; failed: number }
@@ -704,35 +753,137 @@ test('F1', { timeout: 60_000 }, () => { assert.equal(1, 2) })
     assert.equal(failRecorded.counts.passed, 1)
     assert.equal(failRecorded.counts.failed, 1)
     assert.equal(failRecorded.files['fail.test.ts'], undefined, 'failed file durations must not pollute timing cache')
-    assert.ok((failRecorded.files['b.test.ts'] ?? 0) >= 1, 'subsequent passing files still execute and record timings')
+    assert.ok((failRecorded.files['pass.test.ts'] ?? 0) >= 1, 'subsequent passing files still execute and record timings')
 
     // Stall watchdog: manifest `stallWarnMs` overrides the 120s default; a test that stays silent
     // past the window is named in a warning (repeated while stuck), and the watchdog never keeps
     // the process alive after the file completes.
-    const slowFile = path.join(dir, 'slow.test.ts')
-    const slowManifest = path.join(dir, 'manifest-slow.json')
-    writeFileSync(
-      slowFile,
-      `import test from 'node:test'
-import { setTimeout as delay } from 'node:timers/promises'
-test('S1', { timeout: 60_000 }, async () => { await delay(450) })
-`,
-    )
-    writeFileSync(
-      slowManifest,
-      JSON.stringify({ pool: 'pure', repoRoot: dir, files: ['slow.test.ts'], stallWarnMs: 150 }),
-    )
-    const slowRes = spawnSync(
-      process.execPath,
-      [path.join(repoRoot, 'scripts', 'run-tests.mjs'), '--shard-worker', slowManifest],
-      { cwd: repoRoot, env, encoding: 'utf8', timeout: 60_000 },
-    )
     assert.equal(slowRes.status, 0, `slow shard-worker failed: stderr=${slowRes.stderr}\nstdout=${slowRes.stdout}`)
     assert.match(
       slowRes.stderr,
       /\[shard-worker\] stall: no test event for \d+ms while running file 1\/1 slow\.test\.ts \(last event: [a-z:]+\)/,
       `stall warning must name the silent file:\n${slowRes.stderr}`,
     )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('tsx-cache-hygiene: prunes bloated hash cache entries above threshold while preserving .pipe sockets', { timeout: 60_000 }, () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'helmx-tsx-hygiene-'))
+  try {
+    const hashNames = ['100-aaaa1111', '200-bbbb2222', '300-cccc3333', '400-dddd4444', '500-eeee5555']
+    for (const name of hashNames) {
+      writeFileSync(path.join(dir, name), name)
+    }
+    writeFileSync(path.join(dir, '99999.pipe'), 'sock')
+    writeFileSync(path.join(dir, 'keep-note.txt'), 'keep')
+
+    // Missing directory: returns zeroes without throwing
+    const missing = pruneTsxCacheIfBloated({ cacheDir: path.join(dir, 'nonexistent'), maxEntries: 5 })
+    assert.equal(missing.total, 0)
+    assert.equal(missing.pruned, 0)
+
+    // At or below threshold: no-op
+    const noop = pruneTsxCacheIfBloated({ cacheDir: dir, maxEntries: 5 })
+    assert.equal(noop.total, 5)
+    assert.equal(noop.pruned, 0)
+    for (const name of hashNames) {
+      assert.equal(existsSync(path.join(dir, name)), true)
+    }
+
+    // Above threshold: unlinks matching hash entries, preserves .pipe sockets and non-hash files
+    const pruned = pruneTsxCacheIfBloated({ cacheDir: dir, maxEntries: 3 })
+    assert.equal(pruned.total, 5)
+    assert.equal(pruned.pruned, 5)
+    for (const name of hashNames) {
+      assert.equal(existsSync(path.join(dir, name)), false)
+    }
+    assert.equal(existsSync(path.join(dir, '99999.pipe')), true)
+    assert.equal(existsSync(path.join(dir, 'keep-note.txt')), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('shard-worker: ipcQueue mode pulls files dynamically over IPC and records per-file timings', { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'helmx-shard-ipc-'))
+  try {
+    writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}')
+    const orderFile = path.join(dir, 'ipc-order.log')
+    const manifestPath = path.join(dir, 'manifest-ipc.json')
+    const timingPath = path.join(dir, 'timings-ipc.json')
+    writeFileSync(
+      path.join(dir, 'q1.test.ts'),
+      `import test from 'node:test'
+import { appendFileSync } from 'node:fs'
+test('Q1', { timeout: 60_000 }, () => { appendFileSync(${JSON.stringify(orderFile)}, 'q1\\n') })
+`,
+    )
+    writeFileSync(
+      path.join(dir, 'q2.test.ts'),
+      `import test from 'node:test'
+import { appendFileSync } from 'node:fs'
+test('Q2', { timeout: 60_000 }, () => { appendFileSync(${JSON.stringify(orderFile)}, 'q2\\n') })
+`,
+    )
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        pool: 'node-shared',
+        repoRoot: dir,
+        ipcQueue: true,
+        timingOutputPath: timingPath,
+        testTimeoutMs: 20_000,
+      }),
+    )
+
+    const env = { ...process.env }
+    delete env.NODE_TEST_CONTEXT
+    const runTestsScript = path.join(repoRoot, 'scripts', 'run-tests.mjs')
+    const queue = ['q1.test.ts', 'q2.test.ts']
+    let cursor = 0
+    const res = await new Promise<{ status: number | null; stderr: string; stdout: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, [runTestsScript, '--skip-cache-hygiene', '--shard-worker', manifestPath], {
+        cwd: repoRoot,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      })
+      let stdout = ''
+      let stderr = ''
+      child.stdout?.on('data', (d) => { stdout += String(d) })
+      child.stderr?.on('data', (d) => { stderr += String(d) })
+      child.on('message', (msg: unknown) => {
+        if (!msg || typeof msg !== 'object' || (msg as { type?: string }).type !== 'next' || !child.connected) return
+        if (cursor < queue.length) {
+          const file = queue[cursor++]!
+          child.send({ type: 'run', file, index: cursor, total: queue.length })
+        } else {
+          child.send({ type: 'done' })
+        }
+      })
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL')
+        reject(new Error(`ipcQueue shard-worker timed out\n${stderr}\n${stdout}`))
+      }, 55_000)
+      child.once('error', (err) => { clearTimeout(timer); reject(err) })
+      child.once('close', (status) => { clearTimeout(timer); resolve({ status, stderr, stdout }) })
+    })
+
+    assert.equal(res.status, 0, `ipcQueue shard-worker failed:\n${res.stderr}\n${res.stdout}`)
+    assert.match(res.stderr, /\[shard-worker\] boot pool=node-shared mode=ipc pid=\d+/)
+    assert.deepEqual(readFileSync(orderFile, 'utf8').trim().split('\n'), ['q1', 'q2'])
+    const recorded = JSON.parse(readFileSync(timingPath, 'utf8')) as {
+      counts: { tests: number; passed: number; failed: number }
+      files: Record<string, number>
+      success: boolean
+    }
+    assert.equal(recorded.success, true)
+    assert.equal(recorded.counts.tests, 2)
+    assert.equal(recorded.counts.passed, 2)
+    assert.equal(recorded.counts.failed, 0)
+    assert.ok((recorded.files['q1.test.ts'] ?? 0) >= 1)
+    assert.ok((recorded.files['q2.test.ts'] ?? 0) >= 1)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

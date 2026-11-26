@@ -20,6 +20,7 @@ import { join, dirname } from 'node:path'
 import { readFile, writeFile as writeFileCb } from 'node:fs'
 import { promisify } from 'node:util'
 import { compilePluginClientModule } from '../src/index.js'
+import { DEPS_LIST_VERSION } from '../src/client-cache.js'
 import { HelmxError, PLUGIN_CLIENT_CSS_EXPORT } from '@helmx/protocol'
 
 const writeFileP = promisify(writeFileCb)
@@ -296,7 +297,7 @@ test('cache version invalidation: an old v5 manifest is not reused, forcing reco
   assert.ok(depsFile, 'the dependency manifest must already be on disk')
   const realListPath = join(stagingDir, depsFile as string)
   const list = JSON.parse(await readFileP(realListPath, 'utf8')) as { version: number; contentHash: string }
-  assert.equal(list.version, 8, 'the new cache manifest version is v8 (controlled npm dependency declarations join the cache credentials)')
+  assert.equal(list.version, DEPS_LIST_VERSION, `the current cache manifest version is v${DEPS_LIST_VERSION}`)
   await writeFileP(realListPath, `${JSON.stringify({ ...list, version: 5 })}\n`)
 
   // then poison the artifact into an "old-format pill": reusing the v5 manifest would return the pill

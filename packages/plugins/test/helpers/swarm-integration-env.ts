@@ -9,8 +9,8 @@ import type { TestContext } from 'node:test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 
@@ -26,6 +26,7 @@ import {
 export const WORKFLOW_ID = 'builtin:workflow'
 export const WORKTREE_ID = 'builtin:worktree'
 
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const TSX_CLI = createRequire(import.meta.url).resolve('tsx/cli')
 export const PI_AI_FAUX_URL = import.meta.resolve('@earendil-works/pi-ai/providers/faux')
 export const HUB_APP_URL = pathToFileURL(new URL('../../../hub/src/app.ts', import.meta.url).pathname).href
@@ -45,11 +46,14 @@ export async function spawnSigkillSeeder(
     if (child && child.exitCode === null && !child.killed) {
       child.kill('SIGKILL')
     }
-  })
+  }, { timeout: 60_000 })
   return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     child = spawn(process.execPath, [TSX_CLI, scriptPath], {
       cwd: root,
-      env: sanitizedHostEnv({ ...extraEnv }),
+      env: sanitizedHostEnv({
+        TSX_TSCONFIG_PATH: join(REPO_ROOT, 'tsconfig.dev.json'),
+        ...extraEnv,
+      }),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let stdout = ''

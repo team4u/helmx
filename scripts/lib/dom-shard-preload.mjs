@@ -27,6 +27,10 @@ function getState() {
       registrator: null,
       baselineFetch: undefined,
       baselineFetchCaptured: false,
+      baselineBlob: undefined,
+      baselineSetInterval: undefined,
+      baselineClearInterval: undefined,
+      baselineGlobalsCaptured: false,
     };
   }
   return g[STATE_KEY];
@@ -75,6 +79,12 @@ export async function installDomShardPreload() {
       state.baselineFetch = globalThis.fetch;
       state.baselineFetchCaptured = true;
     }
+    if (!state.baselineGlobalsCaptured) {
+      state.baselineBlob = globalThis.Blob;
+      state.baselineSetInterval = globalThis.setInterval;
+      state.baselineClearInterval = globalThis.clearInterval;
+      state.baselineGlobalsCaptured = true;
+    }
 
     GlobalRegistrator.register = function idempotentRegister(options) {
       if (GlobalRegistrator.isRegistered) {
@@ -84,6 +94,12 @@ export async function installDomShardPreload() {
       if (!state.baselineFetchCaptured) {
         state.baselineFetch = globalThis.fetch;
         state.baselineFetchCaptured = true;
+      }
+      if (!state.baselineGlobalsCaptured) {
+        state.baselineBlob = globalThis.Blob;
+        state.baselineSetInterval = globalThis.setInterval;
+        state.baselineClearInterval = globalThis.clearInterval;
+        state.baselineGlobalsCaptured = true;
       }
       return res;
     };
@@ -150,6 +166,21 @@ export function resetSharedHappyDom() {
       globalThis.fetch = state.baselineFetch;
     } catch {
       // Ignore read-only fetch
+    }
+  }
+  if (state.baselineGlobalsCaptured) {
+    for (const [prop, baseline] of [
+      ['Blob', state.baselineBlob],
+      ['setInterval', state.baselineSetInterval],
+      ['clearInterval', state.baselineClearInterval],
+    ]) {
+      if (globalThis[prop] !== baseline) {
+        try {
+          globalThis[prop] = baseline;
+        } catch {
+          // Ignore read-only globals
+        }
+      }
     }
   }
 

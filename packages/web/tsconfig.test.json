@@ -10,6 +10,21 @@
       ],
       "@helmx/protocol/browser": [
         "../protocol/src/browser.ts"
+      ],
+      "@helmx/kernel": [
+        "../kernel/src/index.ts"
+      ],
+      "@helmx/kernel/testing": [
+        "../kernel/src/testing.ts"
+      ],
+      "@helmx/plugins": [
+        "../plugins/src/index.ts"
+      ],
+      "@helmx/plugins/*": [
+        "../plugins/src/*"
+      ],
+      "@helmx/plugin-build": [
+        "../plugin-build/src/index.ts"
       ]
     }
   },

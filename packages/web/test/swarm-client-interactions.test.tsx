@@ -564,6 +564,7 @@ describe("swarm-client-interactions", () => {
       const text = dispatchMount.host.textContent ?? ''
       assert.match(text, /Dispatch member/, '自然语言工具名')
       assert.match(text, /@author/, '成员名摘要')
+      assert.match(text, /#1/, 'presentationMeta.seq 徽标')
       assert.match(text, /Implement token refresh/, '派工任务摘要')
       assert.equal(dispatchMount.host.querySelector('.sw-trace-row-btn') !== null, true)
       await act(async () => {
@@ -573,6 +574,63 @@ describe("swarm-client-interactions", () => {
       assert.equal(spy.workbenchCalls.length, 0, '成员行不打开工作台')
     } finally {
       dispatchMount.unmount()
+    }
+
+    // props.result JSON string is NEVER parsed when presentationMeta is absent
+    const jsonOnlyMount = await mount(
+      spy,
+      e(components.SwarmToolView, toolViewProps({
+        callId: 'call-json-only',
+        toolName: 'swarm_dispatch_worker',
+        input: { name: 'author', prompt: 'Implement auth' },
+        result: JSON.stringify({ workerConversationId: 99, groupId: 'grp-json', name: 'author', postSeq: 8 }),
+      })),
+    )
+    try {
+      assert.doesNotMatch(jsonOnlyMount.host.textContent ?? '', /#8/, '无 presentationMeta 时不解析 result 中的 postSeq')
+      const rowBtn = jsonOnlyMount.host.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!
+      assert.equal(rowBtn.getAttribute('aria-expanded'), 'false', '无 presentationMeta 时退化为展开原始详情')
+      await act(async () => {
+        rowBtn.click()
+      })
+      assert.deepEqual(spy.drawerCalls, [51], '绝不解析 result.workerConversationId #99 并打开抽屉')
+    } finally {
+      jsonOnlyMount.unmount()
+    }
+
+    // 0-count / boolean / retainedCount presentationMeta 格式化边界
+    for (const [props, expected] of [
+      [
+        toolViewProps({
+          callId: 'call-read0',
+          toolName: 'swarm_board_read',
+          presentationMeta: { groupId: 'grp-live', seq: 0, postCount: 0 },
+        }),
+        /0 posts/,
+      ],
+      [
+        toolViewProps({
+          callId: 'call-abort-noop',
+          toolName: 'swarm_abort_worker',
+          presentationMeta: { workerConversationId: 51, memberName: 'author', aborted: false },
+        }),
+        /not running/,
+      ],
+      [
+        toolViewProps({
+          callId: 'call-close-retained',
+          toolName: 'swarm_close_group',
+          presentationMeta: { groupId: 'grp-live', retainedCount: 2 },
+        }),
+        /2 branches kept for merge/,
+      ],
+    ] as const) {
+      const m = await mount(spy, e(components.SwarmToolView, props))
+      try {
+        assert.match(m.host.textContent ?? '', expected)
+      } finally {
+        m.unmount()
+      }
     }
 
     // swarm_board_post done：编组级动作点击打开协同工作台面板

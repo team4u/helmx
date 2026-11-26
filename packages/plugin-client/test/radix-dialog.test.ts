@@ -98,71 +98,85 @@ test('Dialog DOM interaction contract: role="dialog", accessibility associations
     )
   }
 
-  // First render open
-  await act(async () => {
-    root.render(e(TestApp, { open: true }))
-  })
+  let unmounted = false
+  try {
+    // First render open
+    await act(async () => {
+      root.render(e(TestApp, { open: true }))
+    })
+    // Flush Radix DismissableLayer's window.setTimeout(..., 0) listener registration
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
 
-  const content = document.getElementById('test-content')
-  assert.ok(content, 'DialogContent must be mounted into the DOM')
-  assert.equal(content.getAttribute('role'), 'dialog', 'must carry role="dialog"')
-  assert.equal(content.getAttribute('data-state'), 'open', 'must show the open state')
+    const content = document.getElementById('test-content')
+    assert.ok(content, 'DialogContent must be mounted into the DOM')
+    assert.equal(content.getAttribute('role'), 'dialog', 'must carry role="dialog"')
+    assert.equal(content.getAttribute('data-state'), 'open', 'must show the open state')
 
-  const title = document.getElementById('test-title')
-  assert.ok(title, 'DialogTitle must exist')
+    const title = document.getElementById('test-title')
+    assert.ok(title, 'DialogTitle must exist')
 
-  const desc = document.getElementById('test-description')
-  assert.ok(desc, 'DialogDescription must exist')
+    const desc = document.getElementById('test-description')
+    assert.ok(desc, 'DialogDescription must exist')
 
-  // Clicking an inner button must not close
-  const innerBtn = document.getElementById('test-inner-btn')
-  assert.ok(innerBtn, 'the inner button must exist')
-  await act(async () => {
-    innerBtn.dispatchEvent(new Event('pointerdown', { bubbles: true }))
-  })
-  assert.equal(lastOpenState, true, 'interacting with the inner button must not trigger onOpenChange(false)')
+    // Clicking an inner button must not close
+    const innerBtn = document.getElementById('test-inner-btn')
+    assert.ok(innerBtn, 'the inner button must exist')
+    await act(async () => {
+      innerBtn.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    })
+    assert.equal(lastOpenState, true, 'interacting with the inner button must not trigger onOpenChange(false)')
 
-  // Clicking the close button must trigger onOpenChange(false)
-  const closeBtn = document.getElementById('test-close-btn')
-  assert.ok(closeBtn, 'the close button must exist')
-  await act(async () => {
-    closeBtn.click()
-  })
-  assert.equal(lastOpenState, false, 'clicking DialogClose must trigger onOpenChange(false)')
-  assert.ok(openChanges.includes(false), 'the event stream must include a false record')
+    // Clicking the close button must trigger onOpenChange(false)
+    const closeBtn = document.getElementById('test-close-btn')
+    assert.ok(closeBtn, 'the close button must exist')
+    await act(async () => {
+      closeBtn.click()
+    })
+    assert.equal(lastOpenState, false, 'clicking DialogClose must trigger onOpenChange(false)')
+    assert.ok(openChanges.includes(false), 'the event stream must include a false record')
 
-  // Re-render open to verify Escape listening
-  lastOpenState = true
-  await act(async () => {
-    root.render(e(TestApp, { open: true }))
-  })
+    // Re-render open to verify Escape listening
+    lastOpenState = true
+    await act(async () => {
+      root.render(e(TestApp, { open: true }))
+    })
 
-  const reopenedContent = document.getElementById('test-content')
-  assert.ok(reopenedContent, 'DialogContent exists after reopening')
-  await act(async () => {
-    reopenedContent.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-  })
-  assert.equal(lastOpenState, false, 'pressing Escape must trigger onOpenChange(false)')
+    const reopenedContent = document.getElementById('test-content')
+    assert.ok(reopenedContent, 'DialogContent exists after reopening')
+    await act(async () => {
+      reopenedContent.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    assert.equal(lastOpenState, false, 'pressing Escape must trigger onOpenChange(false)')
 
-  // Re-render open to verify closing via overlay click
-  lastOpenState = true
-  await act(async () => {
-    root.render(e(TestApp, { open: true }))
-  })
+    // Re-render open to verify closing via overlay click
+    lastOpenState = true
+    await act(async () => {
+      root.render(e(TestApp, { open: true }))
+    })
 
-  const overlay = document.getElementById('test-overlay')
-  assert.ok(overlay, 'the overlay must exist')
-  await act(async () => {
-    overlay.dispatchEvent(new Event('pointerdown', { bubbles: true }))
-  })
-  assert.equal(lastOpenState, false, 'clicking outside on the overlay must trigger onOpenChange(false)')
+    const overlay = document.getElementById('test-overlay')
+    assert.ok(overlay, 'the overlay must exist')
+    await act(async () => {
+      overlay.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    })
+    assert.equal(lastOpenState, false, 'clicking outside on the overlay must trigger onOpenChange(false)')
 
-  // Unmount and cleanup
-  await act(async () => {
-    root.unmount()
-  })
-  assert.ok(document.getElementById('test-content') === null, 'DialogContent is destroyed from the DOM after unmount')
-  container.remove()
+    // Unmount and cleanup
+    await act(async () => {
+      root.unmount()
+    })
+    unmounted = true
+    assert.ok(document.getElementById('test-content') === null, 'DialogContent is destroyed from the DOM after unmount')
+  } finally {
+    if (!unmounted) {
+      await act(async () => {
+        root.unmount()
+      }).catch(() => undefined)
+    }
+    container.remove()
+  }
 })
 
 test('Dialog maintains unbounded nesting levels automatically: a newly opened overlay and content always sit above the parent Dialog', { timeout: 60_000 }, async () => {

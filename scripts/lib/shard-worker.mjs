@@ -55,14 +55,19 @@ async function main() {
     pool = 'pure',
     repoRoot = process.cwd(),
     files = [],
+    ipcQueue = false,
     timingOutputPath = null,
     testTimeoutMs = 20_000,
     stallWarnMs = DEFAULT_STALL_WARN_MS,
   } = manifest;
 
+  const useIpcQueue = ipcQueue === true && typeof process.send === 'function';
+
   // First line the process ever prints: its absence in the log means the hang is before this
   // module even ran (tsx / esbuild boot), not inside a test file.
-  console.error(`[shard-worker] boot pool=${pool} files=${files.length} pid=${process.pid}`);
+  console.error(
+    `[shard-worker] boot pool=${pool} ${useIpcQueue ? 'mode=ipc' : `files=${files.length}`} pid=${process.pid}`,
+  );
 
   let resetDomFn = null;
   if (pool === 'dom-shared') {
@@ -118,99 +123,157 @@ async function main() {
   const perFileTimings = {};
   let anyFailed = false;
   let completedFiles = 0;
+  let dispatchedFiles = 0;
   const shardStartMs = performance.now();
 
   const reporter = new spec();
   reporter.pipe(process.stdout, { end: false });
 
-  for (let idx = 0; idx < files.length; idx += 1) {
-    const relPath = files[idx];
-    const absPath = path.isAbsolute(relPath) ? relPath : path.join(repoRoot, relPath);
-    const fileStartMs = performance.now();
-    let fileSuccess = true;
-    let sawSummary = false;
-    const fileLabel = `file ${idx + 1}/${files.length} ${relPath.split(path.sep).join('/')}`;
-    console.error(`[shard-worker] ${fileLabel}`);
-    armStallWatchdog(fileLabel);
+  const pendingIpcMsgs = [];
+  let waitingIpcResolve = null;
+  const deliverIpcMsg = (msg) => {
+    if (waitingIpcResolve) {
+      const resolve = waitingIpcResolve;
+      waitingIpcResolve = null;
+      resolve(msg);
+    } else {
+      pendingIpcMsgs.push(msg);
+    }
+  };
+  const onIpcMessage = (msg) => deliverIpcMsg(msg);
+  const onIpcDisconnect = () => deliverIpcMsg({ type: 'done' });
+  if (useIpcQueue) {
+    process.on('message', onIpcMessage);
+    process.on('disconnect', onIpcDisconnect);
+  }
+  const receiveIpc = () =>
+    pendingIpcMsgs.length > 0
+      ? Promise.resolve(pendingIpcMsgs.shift())
+      : new Promise((resolve) => {
+          waitingIpcResolve = resolve;
+        });
 
-    try {
-      const stream = run({
-        files: [absPath],
-        isolation: 'none',
-        concurrency: 1,
-        timeout: testTimeoutMs,
-      });
+  try {
+    let staticIdx = 0;
+    while (true) {
+      let relPath;
+      let fileIndex;
+      let fileTotal;
+      if (useIpcQueue) {
+        if (!process.connected) break;
+        process.channel?.ref?.();
+        process.send({ type: 'next' });
+        const job = await receiveIpc();
+        process.channel?.unref?.();
+        if (!job || job.type === 'done' || typeof job.file !== 'string') break;
+        // Leave the IPC I/O poll callback before starting node:test so macrotasks (e.g. setTimeout(0))
+        // align with static shard-worker execution order.
+        await new Promise((resolve) => setImmediate(resolve));
+        relPath = job.file;
+        fileIndex = typeof job.index === 'number' ? job.index : dispatchedFiles + 1;
+        fileTotal = typeof job.total === 'number' ? job.total : fileIndex;
+      } else {
+        if (staticIdx >= files.length) break;
+        relPath = files[staticIdx];
+        fileIndex = staticIdx + 1;
+        fileTotal = files.length;
+        staticIdx += 1;
+      }
+      dispatchedFiles += 1;
 
-      for await (const ev of stream) {
-        touchProgress(ev.type);
-        if (ev.type === 'test:summary') {
-          sawSummary = true;
-          if (!ev.data?.success) {
+      const absPath = path.isAbsolute(relPath) ? relPath : path.join(repoRoot, relPath);
+      const fileStartMs = performance.now();
+      let fileSuccess = true;
+      let sawSummary = false;
+      const fileLabel = `file ${fileIndex}/${fileTotal} ${relPath.split(path.sep).join('/')}`;
+      console.error(`[shard-worker] ${fileLabel}`);
+      armStallWatchdog(fileLabel);
+
+      try {
+        const stream = run({
+          files: [absPath],
+          isolation: 'none',
+          concurrency: 1,
+          timeout: testTimeoutMs,
+        });
+
+        for await (const ev of stream) {
+          touchProgress(ev.type);
+          if (ev.type === 'test:summary') {
+            sawSummary = true;
+            if (!ev.data?.success) {
+              fileSuccess = false;
+              anyFailed = true;
+            }
+            const c = ev.data?.counts;
+            if (c) {
+              totals.tests += c.tests ?? 0;
+              totals.suites += c.suites ?? 0;
+              totals.passed += c.passed ?? 0;
+              totals.failed += c.failed ?? 0;
+              totals.cancelled += c.cancelled ?? 0;
+              totals.skipped += c.skipped ?? 0;
+              totals.todo += c.todo ?? 0;
+              totals.topLevel += c.topLevel ?? 0;
+            }
+            continue;
+          }
+
+          if (
+            ev.type === 'test:diagnostic' &&
+            ev.data?.nesting === 0 &&
+            typeof ev.data?.message === 'string' &&
+            ROOT_SUMMARY_DIAGNOSTIC_RE.test(ev.data.message)
+          ) {
+            // Suppress per-file summary lines; emit one clean aggregated summary at shard end.
+            continue;
+          }
+
+          if (ev.type === 'test:fail') {
             fileSuccess = false;
             anyFailed = true;
           }
-          const c = ev.data?.counts;
-          if (c) {
-            totals.tests += c.tests ?? 0;
-            totals.suites += c.suites ?? 0;
-            totals.passed += c.passed ?? 0;
-            totals.failed += c.failed ?? 0;
-            totals.cancelled += c.cancelled ?? 0;
-            totals.skipped += c.skipped ?? 0;
-            totals.todo += c.todo ?? 0;
-            totals.topLevel += c.topLevel ?? 0;
-          }
-          continue;
+          await writeEvent(reporter, ev);
         }
-
-        if (
-          ev.type === 'test:diagnostic' &&
-          ev.data?.nesting === 0 &&
-          typeof ev.data?.message === 'string' &&
-          ROOT_SUMMARY_DIAGNOSTIC_RE.test(ev.data.message)
-        ) {
-          // Suppress per-file summary lines; emit one clean aggregated summary at shard end.
-          continue;
-        }
-
-        if (ev.type === 'test:fail') {
+        if (sawSummary) {
+          completedFiles += 1;
+        } else {
           fileSuccess = false;
           anyFailed = true;
+          console.error(`[shard-worker] missing test:summary for ${relPath}`);
         }
-        await writeEvent(reporter, ev);
-      }
-      if (sawSummary) {
-        completedFiles += 1;
-      } else {
+      } catch (err) {
         fileSuccess = false;
         anyFailed = true;
-        console.error(`[shard-worker] missing test:summary for ${relPath}`);
+        console.error(`[shard-worker] error running ${relPath}:`, err);
+      } finally {
+        disarmStallWatchdog();
+        const elapsedMs = Math.max(1, Math.round(performance.now() - fileStartMs));
+        if (fileSuccess) {
+          perFileTimings[relPath.split(path.sep).join('/')] = elapsedMs;
+        }
+        if (resetDomFn) {
+          resetDomFn();
+        }
       }
-    } catch (err) {
-      fileSuccess = false;
-      anyFailed = true;
-      console.error(`[shard-worker] error running ${relPath}:`, err);
-    } finally {
-      disarmStallWatchdog();
-      const elapsedMs = Math.max(1, Math.round(performance.now() - fileStartMs));
-      if (fileSuccess) {
-        perFileTimings[relPath.split(path.sep).join('/')] = elapsedMs;
-      }
-      if (resetDomFn) {
-        resetDomFn();
+
+      // Yield one check-phase turn so Node's internal node:test root finishes tearing down
+      // before the next sequential `run({ isolation: 'none' })` call starts.
+      if (useIpcQueue || staticIdx < files.length) {
+        await new Promise((resolve) => setImmediate(resolve));
       }
     }
-
-    // Yield one check-phase turn so Node's internal node:test root finishes tearing down
-    // before the next sequential `run({ isolation: 'none' })` call starts.
-    if (idx + 1 < files.length) {
-      await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    if (useIpcQueue) {
+      process.off('message', onIpcMessage);
+      process.off('disconnect', onIpcDisconnect);
     }
   }
 
-  if (completedFiles !== files.length) {
+  const expectedFiles = useIpcQueue ? dispatchedFiles : files.length;
+  if (completedFiles !== expectedFiles) {
     anyFailed = true;
-    console.error(`[shard-worker] invariant violation: completed ${completedFiles}/${files.length} files`);
+    console.error(`[shard-worker] invariant violation: completed ${completedFiles}/${expectedFiles} files`);
   }
 
   const totalDurationMs = performance.now() - shardStartMs;

@@ -22,10 +22,10 @@
  * 每用例 timeout: 60_000；运行命令带总超时（timeout 50s tsx --test 本文件）。
  */
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { test } from 'node:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { after, test } from 'node:test'
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
 import { execFileSync, spawn } from 'node:child_process'
@@ -48,7 +48,8 @@ import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const require = createRequire(import.meta.url)
 const PLUGINS_PKG_DIR = new URL('../', import.meta.url).pathname
-const PI_AI_MODELS_URL = import.meta.resolve('@earendil-works/pi-ai/models')
+const REPO_ROOT = resolve(PLUGINS_PKG_DIR, '../..')
+const TSX_TSCONFIG_PATH = join(REPO_ROOT, 'tsconfig.dev.json')
 const PI_AI_FAUX_URL = import.meta.resolve('@earendil-works/pi-ai/providers/faux')
 const KERNEL_URL = import.meta.resolve('@helmx/kernel')
 
@@ -125,19 +126,16 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
 // 真实遗留制造：子进程真 KernelRuntime + 慢速 faux 流式中途 SIGKILL
 // ---------------------------------------------------------------------------
 
-/** 子进程 seeder 源码（真实 SDK 持久任务；写临时 .mts 由 tsx 直跑）。 */
-function seederSource(kernelSrc: string, _piAiModelsSrc: string, piAiFauxSrc: string, pluginBuildSrc: string): string {
-  return `import { join } from 'node:path'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { setTimeout as delay } from 'node:timers/promises'
+/** 子进程 seeder 源码（真实 SDK 持久任务；写临时 .mts 由 tsx 直跑，不注册插件）。 */
+function seederSource(kernelSrc: string, piAiFauxSrc: string): string {
+  return `import { setTimeout as delay } from 'node:timers/promises'
 import { fauxAssistantMessage, fauxProvider } from '${piAiFauxSrc}'
 import { KernelRuntime } from '${kernelSrc}'
-import { createPluginBuildProvider } from '${pluginBuildSrc}'
 
 const dataDir = process.env.HELMX_SEED_DIR!
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段被慢速流式输出的长文本用于确保 SIGKILL 时模型回合仍在流式中')])
-const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
+const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 // 真实原生 spawn：创建子会话并提交输入（submission 内部 resume 调度器，回合真实运行）
 let childId = 0
 void kernel.agentSpawn.spawnAgent({
@@ -179,6 +177,66 @@ process.kill(process.pid, 'SIGKILL')
 `
 }
 
+let sharedSeedDir: string | undefined
+let sharedSeedPromise: Promise<{ dataDir: string; childId: number }> | undefined
+
+after(() => {
+  if (sharedSeedDir) rmSync(sharedSeedDir, { recursive: true, force: true })
+}, { timeout: 60_000 })
+
+async function getSharedSigkillSeed(): Promise<{ dataDir: string; childId: number }> {
+  if (sharedSeedPromise) return await sharedSeedPromise
+  sharedSeedPromise = (async () => {
+    const templateDataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed-tpl-'))
+    sharedSeedDir = templateDataDir
+    const scriptDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed-'))
+    const seederPath = join(scriptDir, 'seed.mts')
+    writeFileSync(seederPath, seederSource(KERNEL_URL, PI_AI_FAUX_URL), 'utf8')
+    const tsxCli = require.resolve('tsx/cli')
+    let child: ReturnType<typeof spawn> | undefined
+    try {
+      child = spawn(process.execPath, [tsxCli, seederPath], {
+        cwd: PLUGINS_PKG_DIR,
+        env: {
+          PATH: process.env.PATH ?? '',
+          HOME: scriptDir,
+          TSX_TSCONFIG_PATH,
+          HELMX_SEED_DIR: templateDataDir,
+          HELMX_DATA_DIR: templateDataDir,
+          HELMX_WATCHDOG_INTERVAL_MS: '0',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let childId = 0
+      await Promise.race([
+        new Promise<void>((resolve, reject) => {
+          let out = ''
+          let err = ''
+          child!.stdout!.on('data', (d: Buffer) => {
+            out += d.toString()
+            const m = /CHILD=(\d+)/.exec(out)
+            if (m) childId = Number(m[1])
+          })
+          child!.stderr!.on('data', (d: Buffer) => { err += d.toString() })
+          child!.on('exit', (code, signal) => {
+            // 自杀式 process.kill(SIGKILL)：Node 子进程回调里报 code=137/signal=null，内核语义等价 SIGKILL。
+            if (signal !== 'SIGKILL' && code !== 137) reject(new Error(`seeder 必须死于 SIGKILL（实际 code=${code} signal=${signal}）：${out}${err}`.slice(0, 2000)))
+            else resolve()
+          })
+          child!.on('error', reject)
+        }),
+        delay(30_000, undefined, { ref: false }).then(() => { throw new Error('seeder 30s 未退出') }),
+      ])
+      assert.ok(childId > 1, `必须拿到子会话 ID（收到 ${childId}）`)
+      return { dataDir: templateDataDir, childId }
+    } finally {
+      if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
+      rmSync(scriptDir, { recursive: true, force: true })
+    }
+  })()
+  return await sharedSeedPromise
+}
+
 /** 只读探针 Harness：验证 paused + abort 标记（不解锁调度器）。 */
 async function readOnlyInspect(dataDir: string): Promise<{ scheduling: string; tasks: Array<{ kind: string; conversationId: number; abortRequested: boolean; status: string }> }> {
   const db = await openHelmxDatabase(dataDir)
@@ -209,56 +267,11 @@ async function readOnlyInspect(dataDir: string): Promise<{ scheduling: string; t
 // ---------------------------------------------------------------------------
 
 test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落 abort 标记零模型调用；init 终止后父收 interrupted 报告；resume 原子会话执行新输入', { timeout: 60_000 }, async (t) => {
+  const seed = await getSharedSigkillSeed()
+  const childId = seed.childId
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-restart-'))
-  const seedDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed-'))
-  const seederPath = join(seedDir, 'seed.mts')
-  writeFileSync(seederPath, seederSource(KERNEL_URL, PI_AI_MODELS_URL, PI_AI_FAUX_URL, import.meta.resolve('@helmx/plugin-build')), 'utf8')
-  const tsxCli = require.resolve('tsx/cli')
-  let child: ReturnType<typeof spawn> | undefined
-  // t.after 按注册顺序执行：先杀子进程/清理 seeder 目录；dataDir 必须等内核
-  // close（stop 链最终投影要读record file）之后再删，注册在后半部分。
-  t.after(() => {
-    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
-    rmSync(seedDir, { recursive: true, force: true })
-  }, { timeout: 60_000 })
-  try {
-    // ---- 1) 子进程制造真实遗留（慢速流式中途 SIGKILL；cwd/env 全临时，无端口）----
-    child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: PLUGINS_PKG_DIR,
-      env: {
-        PATH: process.env.PATH ?? '',
-        HOME: seedDir,
-        HELMX_SEED_DIR: dataDir,
-        HELMX_DATA_DIR: dataDir,
-        HELMX_WATCHDOG_INTERVAL_MS: '0',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let childId = 0
-    const exits: Promise<void>[] = []
-    exits.push(
-      new Promise<void>((resolve, reject) => {
-        let out = ''
-        let err = ''
-        child!.stdout!.on('data', (d: Buffer) => {
-          out += d.toString()
-          const m = /CHILD=(\d+)/.exec(out)
-          if (m) childId = Number(m[1])
-        })
-        child!.stderr!.on('data', (d: Buffer) => {
-          err += d.toString()
-        })
-        child!.on('exit', (code, signal) => {
-          // 自杀式 process.kill(SIGKILL)：Node 子进程回调里报 code=137/signal=null，内核语义等价 SIGKILL。
-          if (signal !== 'SIGKILL' && code !== 137) reject(new Error(`seeder 必须死于 SIGKILL（实际 code=${code} signal=${signal}）：${out}${err}`.slice(0, 2000)))
-          else resolve()
-        })
-        child!.on('error', reject)
-      }),
-    )
-    await Promise.race([Promise.all(exits), delay(30_000, undefined, { ref: false }).then(() => { throw new Error('seeder 30s 未退出') })])
-    assert.ok(childId > 1, `必须拿到子会话 ID（收到 ${childId}）`)
-
+  cpSync(seed.dataDir, dataDir, { recursive: true })
+  {
     // ---- 2) 重启进程：KernelRuntime(autoResume:false) + builtin:workflow 插件（app 同款顺序）----
     const faux = makeFauxProvider()
     const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
@@ -362,8 +375,6 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     assert.equal(resumedConv, childId, 'resume 必须续接原子会话，绝不新建')
     assert.equal(answer, '续接后的新回答', 'resume 回合返回真实模型输出')
     assert.equal(faux.state.callCount, 2, `resume 恰好新增一次子会话模型调用（实际 ${faux.state.callCount}）`)
-  } finally {
-    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
   }
 })
 
@@ -374,46 +385,11 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
 // ---------------------------------------------------------------------------
 
 test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 resume；human 归属在恢复窗口同样拒绝；start 后同方法回落普通中止语义', { timeout: 60_000 }, async (t) => {
+  const seed = await getSharedSigkillSeed()
+  const childId = seed.childId
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-restart3-'))
-  const seedDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed3-'))
-  const seederPath = join(seedDir, 'seed.mts')
-  writeFileSync(seederPath, seederSource(KERNEL_URL, PI_AI_MODELS_URL, PI_AI_FAUX_URL, import.meta.resolve('@helmx/plugin-build')), 'utf8')
-  const tsxCli = require.resolve('tsx/cli')
-  let child: ReturnType<typeof spawn> | undefined
-  // 同用例 2：先杀子进程/清理 seeder 目录，dataDir 在内核 close 后再删。
-  t.after(() => {
-    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
-    rmSync(seedDir, { recursive: true, force: true })
-  }, { timeout: 60_000 })
-  try {
-    child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: PLUGINS_PKG_DIR,
-      env: {
-        PATH: process.env.PATH ?? '',
-        HOME: seedDir,
-        HELMX_SEED_DIR: dataDir,
-        HELMX_DATA_DIR: dataDir,
-        HELMX_WATCHDOG_INTERVAL_MS: '0',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let childId = 0
-    await new Promise<void>((resolve, reject) => {
-      let out = ''
-      child!.stdout!.on('data', (chunk: Buffer) => {
-        out += String(chunk)
-        const m = /CHILD=(\d+)/.exec(out)
-        if (m && childId === 0) childId = Number(m[1])
-      })
-      child!.stderr!.on('data', () => {})
-      child!.on('exit', (code, signal) => {
-        if (signal !== 'SIGKILL' && code !== 137) reject(new Error(`seeder 必须死于 SIGKILL（实际 code=${code} signal=${signal}）`))
-        else resolve()
-      })
-      child!.on('error', reject)
-    })
-    assert.ok(childId > 1, `必须拿到子会话 ID（收到 ${childId}）`)
-
+  cpSync(seed.dataDir, dataDir, { recursive: true })
+  {
     // 重启（不注册任何插件、autoResume:false：调度器保持 paused，恢复屏障窗口）。
     const faux = makeFauxProvider()
     const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
@@ -449,8 +425,6 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
     await kernel.conversations.waitForIdle(childId).catch(() => {})
     assert.equal(faux.state.callCount, 0, 'running 相位中止已标记的遗留任务仍零新增模型调用')
     assert.equal(kernel.conversations.getConversation(childId).status, 'idle', '遗留子会话终态 idle')
-  } finally {
-    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
   }
 })
 
@@ -518,6 +492,7 @@ process.kill(process.pid, 'SIGKILL')
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
+        TSX_TSCONFIG_PATH,
         HELMX_SEED_DIR: sigkillDir,
         HELMX_DATA_DIR: sigkillDir,
         HELMX_WATCHDOG_INTERVAL_MS: '0',
@@ -750,6 +725,7 @@ process.kill(process.pid, 'SIGKILL')
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
+        TSX_TSCONFIG_PATH,
         HELMX_SEED_DIR: dataDir,
         HELMX_REPO_DIR: repoDir,
         HELMX_DATA_DIR: dataDir,

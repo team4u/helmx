@@ -34,6 +34,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pruneTsxCacheIfBloated } from './lib/tsx-cache-hygiene.mjs';
 
 const DEFAULT_SUITE_TIMEOUT_MS = 10 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
@@ -87,9 +88,11 @@ const timeoutMs = suiteTimeoutMs();
 
 // Internal leading wrapper flags consumed by run-tests.mjs (never injected via HELMX_* env vars):
 // - `--dom-preload`: injects `scripts/lib/dom-shard-preload.mjs` via NODE_OPTIONS (only for `dom-shared` shards)
-// - `--shard-worker`: runs `scripts/lib/shard-worker.mjs` instead of `tsx --test`
+// - `--shard-worker`: runs `scripts/lib/shard-worker.mjs` directly via `tsx` loader without a nested CLI wrapper
+// - `--skip-cache-hygiene`: skips redundant `/tmp/tsx-*` scan when caller (`test-suites.mjs`) already pruned once
 let enableDomPreload = false;
 let shardWorkerMode = false;
+let skipCacheHygiene = false;
 const rawArgs = process.argv.slice(2);
 let argIdx = 0;
 while (argIdx < rawArgs.length) {
@@ -99,11 +102,18 @@ while (argIdx < rawArgs.length) {
   } else if (rawArgs[argIdx] === '--shard-worker') {
     shardWorkerMode = true;
     argIdx += 1;
+  } else if (rawArgs[argIdx] === '--skip-cache-hygiene') {
+    skipCacheHygiene = true;
+    argIdx += 1;
   } else {
     break;
   }
 }
 const forwardArgs = rawArgs.slice(argIdx);
+
+if (!skipCacheHygiene) {
+  pruneTsxCacheIfBloated();
+}
 
 const childEnv = { ...process.env };
 const fallback = pnpmFallbackNodePath();
@@ -142,18 +152,43 @@ if (childEnv.TSX_TSCONFIG_PATH === undefined) {
   childEnv.NODE_OPTIONS = parts.join(' ');
 }
 
+function resolveTsxDirectRunnerArgs() {
+  const req = createRequire(path.join(repoRoot, 'package.json'));
+  const preflight = req.resolve('tsx/preflight');
+  const loaderUrl = pathToFileURL(req.resolve('tsx')).href;
+  return ['--require', preflight, '--import', loaderUrl];
+}
+
 const runnerArgs = shardWorkerMode
-  ? [tsxCli, path.join(repoRoot, 'scripts', 'lib', 'shard-worker.mjs'), ...forwardArgs]
+  ? [...resolveTsxDirectRunnerArgs(), path.join(repoRoot, 'scripts', 'lib', 'shard-worker.mjs'), ...forwardArgs]
   : [tsxCli, '--test', '--test-timeout=20000', ...forwardArgs];
+
+const hasIpcChannel = typeof process.send === 'function';
 
 // No shell involved: arguments pass through one by one, immune to string-concatenation
 // injection; globs are expanded by tsx / the node test runner.
 const child = spawn(process.execPath, runnerArgs, {
-  stdio: 'inherit',
+  stdio: hasIpcChannel ? ['inherit', 'inherit', 'inherit', 'ipc'] : 'inherit',
   env: childEnv,
   cwd: repoRoot,
   detached: process.platform !== 'win32', // POSIX detached process group, so kill(-pid) can take down the whole tree
 });
+
+let detachIpc = () => {};
+if (hasIpcChannel) {
+  const onChildMsg = (msg) => {
+    if (process.connected) process.send(msg);
+  };
+  const onParentMsg = (msg) => {
+    if (child.connected) child.send(msg);
+  };
+  child.on('message', onChildMsg);
+  process.on('message', onParentMsg);
+  detachIpc = () => {
+    child.off('message', onChildMsg);
+    process.off('message', onParentMsg);
+  };
+}
 
 // POSIX parent-death watchdog: prevents orphaned test process groups (PPID=1) if
 // run-tests.mjs itself is SIGKILLed.
@@ -276,6 +311,7 @@ function terminate(reason, exitCode, signal = 'SIGTERM') {
 }
 
 child.on('error', (err) => {
+  detachIpc();
   clearTimers();
   console.error('[run-tests] failed to start the test process:', err);
   disarmWatchdog();
@@ -283,6 +319,7 @@ child.on('error', (err) => {
 });
 
 child.on('exit', (code, signal) => {
+  detachIpc();
   const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
   if (forcedExitCode !== null) {
     // Forced-termination path: the leader's (tsx) exit does not mean the owned group has

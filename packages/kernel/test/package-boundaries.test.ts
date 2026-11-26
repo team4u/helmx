@@ -35,8 +35,32 @@ function sourceFiles(root: string): string[] {
   })
 }
 
+const textCache = new Map<string, string>()
+const astCache = new Map<string, ts.SourceFile>()
+const importsCache = new Map<string, Array<{ specifier: string; typeOnly: boolean }>>()
+
+function readCachedText(file: string): string {
+  let text = textCache.get(file)
+  if (text === undefined) {
+    text = readFileSync(file, 'utf8')
+    textCache.set(file, text)
+  }
+  return text
+}
+
+function parseCachedAst(file: string): ts.SourceFile {
+  let ast = astCache.get(file)
+  if (ast === undefined) {
+    ast = ts.createSourceFile(file, readCachedText(file), ts.ScriptTarget.Latest, true)
+    astCache.set(file, ast)
+  }
+  return ast
+}
+
 function imports(file: string): Array<{ specifier: string; typeOnly: boolean }> {
-  const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
+  const cached = importsCache.get(file)
+  if (cached !== undefined) return cached
+  const source = parseCachedAst(file)
   const result: Array<{ specifier: string; typeOnly: boolean }> = []
   const add = (node: ts.Node | undefined, typeOnly = false) => {
     if (node && ts.isStringLiteralLike(node)) result.push({ specifier: node.text, typeOnly })
@@ -49,6 +73,7 @@ function imports(file: string): Array<{ specifier: string; typeOnly: boolean }> 
     ts.forEachChild(node, visit)
   }
   visit(source)
+  importsCache.set(file, result)
   return result
 }
 
@@ -305,12 +330,16 @@ test('all workspace packages/*/src contain zero any types and zero TS suppressio
 
   for (const { root } of workspacePackages()) {
     for (const file of sourceFiles(join(root, 'src'))) {
-      const text = readFileSync(file, 'utf8')
-      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
-      const seenComments = new Set<string>()
+      const text = readCachedText(file)
+      const mayHaveSuppression = suppressionPattern.test(text)
+      const mayHaveAny = /\bany\b/.test(text)
+      if (!mayHaveSuppression && !mayHaveAny) continue
+
+      const source = parseCachedAst(file)
+      const seenComments = mayHaveSuppression ? new Set<string>() : undefined
 
       const checkCommentRanges = (ranges: readonly ts.CommentRange[] | undefined) => {
-        if (!ranges) return
+        if (!ranges || !seenComments) return
         for (const range of ranges) {
           const key = `${range.pos}:${range.end}`
           if (seenComments.has(key)) continue
@@ -325,9 +354,11 @@ test('all workspace packages/*/src contain zero any types and zero TS suppressio
       }
 
       const visit = (node: ts.Node): void => {
-        checkCommentRanges(ts.getLeadingCommentRanges(text, node.getFullStart()))
-        checkCommentRanges(ts.getTrailingCommentRanges(text, node.getEnd()))
-        if (node.kind === ts.SyntaxKind.AnyKeyword) {
+        if (mayHaveSuppression) {
+          checkCommentRanges(ts.getLeadingCommentRanges(text, node.getFullStart()))
+          checkCommentRanges(ts.getTrailingCommentRanges(text, node.getEnd()))
+        }
+        if (mayHaveAny && node.kind === ts.SyntaxKind.AnyKeyword) {
           const { line } = source.getLineAndCharacterOfPosition(node.getStart(source))
           violations.push(`${relative(packagesDir, file)}:${line + 1}: forbidden use of explicit any type (as any / : any / <any>)`)
         }
@@ -335,7 +366,9 @@ test('all workspace packages/*/src contain zero any types and zero TS suppressio
       }
 
       visit(source)
-      checkCommentRanges(ts.getLeadingCommentRanges(text, source.endOfFileToken.getFullStart()))
+      if (mayHaveSuppression) {
+        checkCommentRanges(ts.getLeadingCommentRanges(text, source.endOfFileToken.getFullStart()))
+      }
     }
   }
 
@@ -348,6 +381,8 @@ test('sibling package tests never import ../../kernel/src/ across package bounda
   for (const pkgName of ['plugins', 'hub', 'cli', 'web']) {
     const pkgTestDir = join(packagesDir, pkgName, 'test')
     for (const file of sourceFiles(pkgTestDir)) {
+      const rawText = readCachedText(file)
+      if (!rawText.includes('kernel/src') && !rawText.includes('kernel\\src')) continue
       for (const { specifier } of imports(file)) {
         if (!specifier.startsWith('.')) continue
         const targetPath = resolve(dirname(file), specifier)
@@ -358,7 +393,6 @@ test('sibling package tests never import ../../kernel/src/ across package bounda
           )
         }
       }
-      const rawText = readFileSync(file, 'utf8')
       if (/(?:\.\.[/\\])+kernel[/\\]src\b/.test(rawText)) {
         violations.push(
           `${relative(packagesDir, file)}: forbidden relative reference to kernel/src; use @helmx/kernel or @helmx/kernel/testing`,

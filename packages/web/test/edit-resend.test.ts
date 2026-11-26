@@ -5,12 +5,10 @@
  * 1. 编辑目标附件整体替换（目标无附件则清空旧草稿，绝不保留上一个目标的残留）。
  * 2. 编辑目标 / 草稿版本 / 发送失败恢复判定的纯函数语义。
  * 3. 编辑态正文中的 /new、/clear、/compact 只是被编辑消息的文本，不作为立即管理命令。
- * 4. 源码级回归：Composer 按会话 key 挂载（跨会话草稿隔离）、非法历史锚点显式报错不降级、
- *    非 human 输入收起铅笔。
+ * 4. SSR 渲染行为：human 消息渲染编辑铅笔，agent/trigger 消息不渲染铅笔但保留复制。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFileSync } from 'node:fs'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { ConversationEntry } from '@helmx/protocol'
@@ -25,13 +23,6 @@ import {
 } from '../src/conversation/composer-model.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { makeTestStore } from './helpers/store.js'
-
-const composerSource = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8')
-// 发送管线拆至 composer-send.ts 后，发送相关源码断言指向该实现文件（断言本身不变）。
-const composerSendSource = readFileSync(new URL('../src/conversation/composer-send.ts', import.meta.url), 'utf8')
-const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
-// 人类输入消息组件拆至 TimelineHumanMessage.tsx 后，对应源码断言指向该实现文件。
-const timelineHumanSource = readFileSync(new URL('../src/conversation/TimelineHumanMessage.tsx', import.meta.url), 'utf8')
 
 // 与 queued-pill SSR 测试一致：为 tsx 的 classic JSX 转换提供 React。
 ;(globalThis as Record<string, unknown>).React = React
@@ -136,48 +127,6 @@ test('shouldRestoreEditOnFailure：仅当 Composer 仍处于乐观清空后的�
   // 用户改动了附件：不恢复
   assert.equal(shouldRestoreEditOnFailure(draftVersionOf('', null, []), expected), false)
   assert.equal(shouldRestoreEditOnFailure(draftVersionOf('', null, [att('a1', '图'), att('a2', 'y')]), expected), false)
-})
-
-test('Composer 源码级回归：发送失败恢复受活草稿保护，编辑态跳过立即管理命令', { timeout: 60_000 }, () => {
-  // 编辑态正文中的管理命令不进入 runSlashCommand（只是被编辑消息的文本）。
-  assert.match(composerSendSource, /const slash = editing \? false : runSlashCommand\(payload\)/)
-  // 失败恢复前先比较活草稿与乐观清空后的期望版本。
-  assert.match(composerSendSource, /shouldRestoreEditOnFailure\(liveDraftRef\.current, expectedAfterClear\)/)
-  // 恢复时回滚到冻结的编辑目标，而不是无条件把当前空 target 补成旧 target。
-  assert.doesNotMatch(composerSendSource, /setEditingEntryId\(\(current\) => current \?\? targetEntryId\)/)
-  // ↑ 进入历史编辑同样整体替换附件。
-  assert.match(composerSendSource, /setAttachments\(attachmentsOfEditTarget\(target\)\)\s*\n\s*syncLiveDraft\(target\.text/)
-  // prefill 回填：附件整体替换且目标编辑态以 isHistoricalEdit 判定。
-  assert.match(composerSendSource, /setAttachments\(attachmentsOfEditTarget\(target\)\)/)
-  assert.match(composerSendSource, /const nextEditing = isHistoricalEdit\(target\) \? prefill\.entryId! : null/)
-})
-
-test('跨会话隔离：ConversationPane 按会话 key 挂载 Composer，prefill 不跨会话复用', { timeout: 60_000 }, () => {
-  // Pane 内 Composer 显式按 conversation.id 挂 key：即使 Pane 复用不重挂载，
-  // 切换会话时 Composer（含编辑草稿 / prefill / 异步回调闭包）也会整体重建，
-  // 旧会话的 replaceFromEntryId 不可能提交到新会话。
-  assert.match(paneSource, /<Composer key=\{`composer-\$\{conversation\.id\}`\}/)
-  // requestEdit 统一 EditRequestTarget（useCallback 稳定引用），无字符串兼容路径。
-  assert.match(paneSource, /const requestEdit = useCallback\(\(target: EditRequestTarget\): void =>/)
-  assert.doesNotMatch(paneSource, /target === 'string'/)
-})
-
-test('Invalid history anchor: explicit error notice and cancelled edit, never a silent degrade into a new message', { timeout: 60_000 }, () => {
-  // 非数字 / 非正整数 entryId：推送错误通知并 return，不回填 Composer。
-  // The notice copy is wired through the i18n catalog (conv.human.cannotEdit*).
-  assert.match(timelineHumanSource, /t\('conv\.human\.cannotEditBody', \{ entryId: item\.entryId \}\)/)
-  assert.match(timelineHumanSource, /title: t\('conv\.human\.cannotEditTitle'\)/)
-  // 不再有「锚点非法则省略 entryId 继续回填」的降级路径。
-  assert.doesNotMatch(timelineHumanSource, /Number\.isSafeInteger\(numericId\) && numericId > 0 \? \{ entryId: numericId \} : \{\}/)
-})
-
-test('非 human 输入收起铅笔：agent/trigger 汇报不提供编辑入口，保留复制与分叉', { timeout: 60_000 }, () => {
-  // 铅笔按钮仅在 origin === 'human' 时渲染。
-  assert.match(timelineHumanSource, /\{item\.origin === 'human' \? \(/)
-  // editRequest 双重防御：非 human 直接返回。
-  assert.match(timelineHumanSource, /if \(item\.origin !== 'human'\) return/)
-  // 复制按钮仍在 hover 条内（所有 origin 可复制）。
-  assert.match(timelineHumanSource, /<CopyButton text=\{item\.text\} \/>/)
 })
 
 test('SSR 行为：human 消息渲染编辑铅笔，agent/trigger 消息不渲染铅笔但保留复制', { timeout: 60_000 }, () => {

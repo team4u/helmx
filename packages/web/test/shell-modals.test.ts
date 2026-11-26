@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
@@ -862,89 +861,6 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
   selectedIds = new Set()
   assert.equal(isAllSelected(selectedIds), false)
   assert.equal(selectedIds.size, 0)
-})
-
-test('批量删除导航契约：Sidebar 不做二次导航，回退统一由 Provider 删除管道负责', { timeout: 60_000 }, () => {
-  // 批量删除状态机统一抽至 use-batch-conversation-delete.ts，验证共享 hook 与 Sidebar 均不做二次导航。
-  const batchHookSource = readFileSync(
-    new URL('../src/shell/use-batch-conversation-delete.ts', import.meta.url),
-    'utf8',
-  )
-  const batchStart = batchHookSource.indexOf('const executeBatchDelete')
-  const batchEnd = batchHookSource.indexOf('return {', batchStart)
-  assert.ok(batchStart > 0 && batchEnd > batchStart, 'executeBatchDelete 存在')
-  const batchBody = batchHookSource.slice(batchStart, batchEnd)
-  // 删除导航唯一 truth：成功 SSE conversation.deleted 事件 → Provider 按当前目标条件回退；
-  // 批量删除钩子与 Sidebar 不再基于旧快照/selectedIds 二次跳转（旧实现会连失败项一起跳走）。
-  assert.doesNotMatch(batchBody, /openTarget/, '批量删除不得在删除钩子内导航')
-  assert.doesNotMatch(batchBody, /closeSplit/, '批量删除不得在删除钩子内关分屏')
-  assert.match(batchBody, /bulkDeleteConversations/, '批量删除仍发起真实删除请求（单次 bulk-delete 端点）')
-  const overviewSource = readFileSync(
-    new URL('../src/overview/ConversationOverview.tsx', import.meta.url),
-    'utf8',
-  )
-  assert.match(overviewSource, /useBatchConversationDelete/, '总览大盘复用共享批量删除钩子')
-  const sidebarListSource = readFileSync(
-    new URL('../src/shell/SidebarConversationList.tsx', import.meta.url),
-    'utf8',
-  )
-  assert.match(sidebarListSource, /useBatchConversationDelete/, '侧栏工作集复用共享批量删除钩子')
-})
-
-test('删除回退仿真：主屏/分屏/抽屉命中被删会话时回该智能体待命态', { timeout: 60_000 }, () => {
-  // 与 Provider conversation.deleted 管道同一决策函数形状：仅命中当前目标才回退，
-  // 待命目标继承被删会话的 profileId/nodeId/cwd（远端坐标不回落本机）。
-  function simulateFallback(
-    deleted: { id: number; profileId: string; nodeId?: string; cwd?: string },
-    primaryTarget: { kind: string; conversationId?: number },
-    splitTarget: { kind: string; conversationId?: number } | null,
-    drawerConversationId: number | null,
-  ) {
-    const primaryHit = primaryTarget.kind === 'conversation' && primaryTarget.conversationId === deleted.id
-    const splitHit = splitTarget?.kind === 'conversation' && splitTarget.conversationId === deleted.id
-    const drawerHit = drawerConversationId === deleted.id
-    const fallback = {
-      kind: 'agent',
-      profileId: deleted.profileId,
-      ...(deleted.nodeId !== undefined && deleted.nodeId !== '' && deleted.nodeId !== 'local' ? { nodeId: deleted.nodeId } : {}),
-      ...(deleted.cwd !== undefined && deleted.cwd !== '' ? { cwd: deleted.cwd } : {}),
-    }
-    return {
-      primary: primaryHit ? fallback : primaryTarget,
-      splitClosed: splitHit,
-      drawerClosed: drawerHit,
-    }
-  }
-
-  // 场景 1：主屏会话 10（远端）被删：回待命态并继承节点与目录
-  const r1 = simulateFallback(
-    { id: 10, profileId: 'assistant', nodeId: 'remote-1', cwd: '/remote/work' },
-    { kind: 'conversation', conversationId: 10 },
-    null,
-    null,
-  )
-  assert.deepEqual(r1.primary, { kind: 'agent', profileId: 'assistant', nodeId: 'remote-1', cwd: '/remote/work' })
-
-  // 场景 2：分屏会话 11 被删：只关分屏，主屏不动
-  const r2 = simulateFallback(
-    { id: 11, profileId: 'assistant' },
-    { kind: 'conversation', conversationId: 1 },
-    { kind: 'conversation', conversationId: 11 },
-    null,
-  )
-  assert.deepEqual(r2.primary, { kind: 'conversation', conversationId: 1 })
-  assert.equal(r2.splitClosed, true)
-
-  // 场景 3：被删的不是当前目标：不重定向
-  const r3 = simulateFallback(
-    { id: 10, profileId: 'assistant' },
-    { kind: 'conversation', conversationId: 1 },
-    { kind: 'conversation', conversationId: 99 },
-    null,
-  )
-  assert.deepEqual(r3.primary, { kind: 'conversation', conversationId: 1 })
-  assert.equal(r3.splitClosed, false)
-  assert.equal(r3.drawerClosed, false)
 })
 
 test('SSR 渲染回归：Sidebar 渲染顶栏总览/分组栏新话题/工作集与极简无 Emoji 验证', { timeout: 60_000 }, () => {

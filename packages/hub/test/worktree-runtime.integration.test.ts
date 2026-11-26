@@ -81,16 +81,41 @@ async function assertCleanupPlatformRejected(fn: () => Promise<unknown>): Promis
 
 let rootDir: string
 let gitTemplate: GitTemplate
+let sharedDir: string
+let sharedRepo: string
+let sharedEnv: RuntimeEnv | undefined
 
 before(() => {
   rootDir = mkdtempSync(join(tmpdir(), 'helmx-worktree-runtime-'))
   gitTemplate = createGitTemplate('helmx-worktree-runtime-tpl-')
-})
+}, { timeout: 60_000 })
 
-after(() => {
+after(async () => {
+  await sharedEnv?.close()
   gitTemplate?.cleanup()
   rmSync(rootDir, { recursive: true, force: true })
-})
+}, { timeout: 60_000 })
+
+async function getSharedRuntime(): Promise<{ env: RuntimeEnv; dir: string; repo: string }> {
+  if (!sharedEnv) {
+    sharedDir = join(rootDir, 'shared')
+    sharedRepo = gitTemplate.cloneTo(join(sharedDir, 'repo'))
+    sharedEnv = await openRuntime(join(sharedDir, 'data'), sharedRepo)
+    if (sharedEnv.kernel.plugins.get('builtin:title')?.enabled) {
+      await sharedEnv.kernel.plugins.setConfig('builtin:title', { autoTitle: false })
+    }
+  }
+  return { env: sharedEnv, dir: sharedDir, repo: sharedRepo }
+}
+
+async function createSharedParent(env: RuntimeEnv, repo: string, title: string): Promise<number> {
+  const conv = await env.kernel.conversations.createConversation({
+    title,
+    profileId: 'assistant',
+    cwd: repo,
+  })
+  return conv.id
+}
 
 interface RuntimeEnv {
   /** real createHelmx should use (builtin:workflow by default enable). */
@@ -264,113 +289,103 @@ describe('builtin:worktree disable matrix', { timeout: 60_000 }, () => {
 
 describe('builtin:worktree isolated derive (agent_spawn continuation)', { timeout: 60_000 }, () => {
   it('spawnAgent isolation:worktree: real isolated tree + managed id back pass + gate in tree inside via + action clean up by default keep branch', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't1')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
-    try {
-      let resolved: AgentExecutionInfo | undefined
-      env.faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'pwd > .helmx-child-pwd.txt && git branch --show-current > .helmx-child-branch.txt' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('task complete:worktree inside execute done'),
-      ])
-      const result = await env.kernel.agentSpawn.spawnAgent({
-        parentConversationId: 1,
-        prompt: 'in isolated worktree execute task',
-        isolation: 'worktree',
-        gate: 'pwd > .helmx-gate-pwd.txt && test -f README.md',
-        onResolved: (info) => {
-          resolved = info
-        },
-      } as AgentSpawnRequest)
-      assert.equal(result, 'task complete:worktree inside execute done')
+    const { env, dir, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't1')
+    let resolved: AgentExecutionInfo | undefined
+    env.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('bash', { command: 'pwd > .helmx-child-pwd.txt && git branch --show-current > .helmx-child-branch.txt' })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('task complete:worktree inside execute done'),
+    ])
+    const result = await env.kernel.agentSpawn.spawnAgent({
+      parentConversationId: parentId,
+      prompt: 'in isolated worktree execute task',
+      isolation: 'worktree',
+      gate: 'pwd > .helmx-gate-pwd.txt && test -f README.md',
+      onResolved: (info) => {
+        resolved = info
+      },
+    } as AgentSpawnRequest)
+    assert.equal(result, 'task complete:worktree inside execute done')
 
-      // ---- onResolved back pass managed worktree metadata (stable id).----
-      assert.ok(resolved, 'onResolved should back pass execute environment metadata')
-      assert.equal(resolved!.nodeId, 'local')
-      assert.ok(resolved!.conversationId !== undefined && resolved!.conversationId > 1, 'should derive true sub-conversation')
-      const worktree = worktreeOf(resolved)
-      assert.ok(worktree, 'isolation:worktree must back pass worktree metadata')
-      assert.ok(worktree!.path.includes(join(dir, '.helmx-worktrees')), `worktree should at same level .helmx-worktrees:${worktree!.path}`)
-      assert.ok(worktree!.branch.startsWith('helmx/spawn-'), `branch should be helmx/spawn-*:${worktree!.branch}`)
-      assert.ok(typeof worktree!.id === 'string' && worktree!.id.length > 0, 'must back pass managed register id(worktreeId)')
+    // ---- onResolved back pass managed worktree metadata (stable id).----
+    assert.ok(resolved, 'onResolved should back pass execute environment metadata')
+    assert.equal(resolved!.nodeId, 'local')
+    assert.ok(resolved!.conversationId !== undefined && resolved!.conversationId > parentId, 'should derive true sub-conversation')
+    const worktree = worktreeOf(resolved)
+    assert.ok(worktree, 'isolation:worktree must back pass worktree metadata')
+    assert.ok(worktree!.path.includes(join(dir, '.helmx-worktrees')), `worktree should at same level .helmx-worktrees:${worktree!.path}`)
+    assert.ok(worktree!.branch.startsWith('helmx/spawn-'), `branch should be helmx/spawn-*:${worktree!.branch}`)
+    assert.ok(typeof worktree!.id === 'string' && worktree!.id.length > 0, 'must back pass managed register id(worktreeId)')
 
-      // ---- real isolated tree: sub-conversation and gate artifact all in tree inside.----
-      assert.ok(existsSync(worktree!.path), 'worktree directory should real store in')
-      assert.ok(existsSync(join(worktree!.path, 'README.md')), 'worktree should checkout initial commit content')
-      assert.ok(existsSync(join(worktree!.path, '.helmx-child-pwd.txt')), 'sub-conversation bash artifact should in worktree inside')
-      assert.equal(readFileSync(join(worktree!.path, '.helmx-child-pwd.txt'), 'utf8').trim(), worktree!.path, 'sub-conversation pwd should be worktree directory')
-      assert.equal(readFileSync(join(worktree!.path, '.helmx-child-branch.txt'), 'utf8').trim(), worktree!.branch, 'sub-conversation should in helmx/spawn-* branch on')
-      assert.ok(existsSync(join(worktree!.path, '.helmx-gate-pwd.txt')), 'gate artifact should in worktree inside')
-      assert.equal(readFileSync(join(worktree!.path, '.helmx-gate-pwd.txt'), 'utf8').trim(), worktree!.path, 'gate pwd should be worktree directory (gate in tree inside execute)')
-      assert.ok(!existsSync(join(repo, '.helmx-gate-pwd.txt')), 'source repository must not by gate/sub-conversation pollute')
-      const child = env.kernel.conversations.getConversation(resolved!.conversationId!)
-      assert.equal(child.cwd, worktree!.path, 'sub-conversation mirror cwd should be worktree directory')
+    // ---- real isolated tree: sub-conversation and gate artifact all in tree inside.----
+    assert.ok(existsSync(worktree!.path), 'worktree directory should real store in')
+    assert.ok(existsSync(join(worktree!.path, 'README.md')), 'worktree should checkout initial commit content')
+    assert.ok(existsSync(join(worktree!.path, '.helmx-child-pwd.txt')), 'sub-conversation bash artifact should in worktree inside')
+    assert.equal(readFileSync(join(worktree!.path, '.helmx-child-pwd.txt'), 'utf8').trim(), worktree!.path, 'sub-conversation pwd should be worktree directory')
+    assert.equal(readFileSync(join(worktree!.path, '.helmx-child-branch.txt'), 'utf8').trim(), worktree!.branch, 'sub-conversation should in helmx/spawn-* branch on')
+    assert.ok(existsSync(join(worktree!.path, '.helmx-gate-pwd.txt')), 'gate artifact should in worktree inside')
+    assert.equal(readFileSync(join(worktree!.path, '.helmx-gate-pwd.txt'), 'utf8').trim(), worktree!.path, 'gate pwd should be worktree directory (gate in tree inside execute)')
+    assert.ok(!existsSync(join(repo, '.helmx-gate-pwd.txt')), 'source repository must not by gate/sub-conversation pollute')
+    const child = env.kernel.conversations.getConversation(resolved!.conversationId!)
+    assert.equal(child.cwd, worktree!.path, 'sub-conversation mirror cwd should be worktree directory')
 
-      // ---- clean up (builtin:worktree public action; by default keep branch).----
-      // uncommitted artifact in tree inside: explicit force discard (non- force dirty reject by native-worktree dedicated items override).
-      if (PROCESS_SCAN_ON) {
-        const cleaned = await env.invoke.cleanupWorktree({
-          conversationId: resolved!.conversationId,
-          force: true,
-        })
-        assert.equal(cleaned.removed, true)
-        assert.equal(cleaned.worktreeId, worktree!.id, 'clean up result should back pass managed worktreeId')
-        assert.equal(cleaned.branchDeleted, false, 'by default clean up must keep branch')
-        assert.ok(!existsSync(worktree!.path), 'clean up after worktree directory should by remove')
-        const branchList = execFileSync('git', ['branch', '--list', worktree!.branch], { cwd: repo, encoding: 'utf8' })
-        assert.ok(branchList.includes(worktree!.branch), `branch ${worktree!.branch} should by default keep (got ${branchList.trim()})`)
-      } else {
-        await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ conversationId: resolved!.conversationId, force: true }))
-        assert.ok(existsSync(worktree!.path), 'non- Linux reject clean up when directory must not by remove')
-      }
-    } finally {
-      await env.close()
+    // ---- clean up (builtin:worktree public action; by default keep branch).----
+    // uncommitted artifact in tree inside: explicit force discard (non- force dirty reject by native-worktree dedicated items override).
+    if (PROCESS_SCAN_ON) {
+      const cleaned = await env.invoke.cleanupWorktree({
+        conversationId: resolved!.conversationId,
+        force: true,
+      })
+      assert.equal(cleaned.removed, true)
+      assert.equal(cleaned.worktreeId, worktree!.id, 'clean up result should back pass managed worktreeId')
+      assert.equal(cleaned.branchDeleted, false, 'by default clean up must keep branch')
+      assert.ok(!existsSync(worktree!.path), 'clean up after worktree directory should by remove')
+      const branchList = execFileSync('git', ['branch', '--list', worktree!.branch], { cwd: repo, encoding: 'utf8' })
+      assert.ok(branchList.includes(worktree!.branch), `branch ${worktree!.branch} should by default keep (got ${branchList.trim()})`)
+    } else {
+      await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ conversationId: resolved!.conversationId, force: true }))
+      assert.ok(existsSync(worktree!.path), 'non- Linux reject clean up when directory must not by remove')
     }
   })
 
   it('original generate subagent tool chain: model invoke subagent(isolation:worktree) create real isolated tree; tool output contains cleanup hint/worktreeId', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't1b')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
-    try {
-      env.faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'isolated task', isolation: 'worktree', background: false })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('subagent complete'),
-        fauxAssistantMessage('main turn complete'),
-      ])
-      await env.kernel.conversations.submitInput(1, 'derive isolated subagent')
-      await env.kernel.conversations.waitForIdle(1)
+    const { env, dir, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't1b')
+    env.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'isolated task', isolation: 'worktree', background: false })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('subagent complete'),
+      fauxAssistantMessage('main turn complete'),
+    ])
+    await env.kernel.conversations.submitInput(parentId, 'derive isolated subagent')
+    await env.kernel.conversations.waitForIdle(parentId)
 
-      const detail = await env.kernel.conversations.getConversationDetail(1, { limit: 100 })
-      const toolEntry = [...detail.entries]
-        .reverse()
-        .find((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('"subagent"'))
-      assert.ok(toolEntry, 'should store in subagent tool result entry')
-      const toolResultMsg = (toolEntry.model as Array<{
-        content?: Array<{ text?: string }>
-        details?: { execution?: { worktree?: { id?: string; path?: string; branch?: string } } }
-      }> | undefined)?.[0]
-      const payload = JSON.parse(toolResultMsg?.content?.[0]?.text ?? '{}') as {
-        execution?: { worktree?: { id?: string; path?: string; branch?: string } }
-      }
-      assert.ok(payload.execution?.worktree?.path, `tool output should contain execution.worktree.path: ${JSON.stringify(payload)}`)
-      assert.ok(payload.execution?.worktree?.branch, 'tool output should contain execution.worktree.branch')
-      assert.ok(payload.execution?.worktree?.id, 'tool output should contain managed worktree.id')
-      assert.equal(
-        toolResultMsg?.details?.execution?.worktree?.id,
-        payload.execution.worktree.id,
-        'toolResult.details should mirror structuredOutput.execution.worktree.id',
-      )
-
-      // real sub-conversation create in real isolated tree inside (mirror cwd i.e. isolated tree path).
-      const child = env.kernel.conversations.listConversations().find((c) => c.parentConversationId === 1)
-      assert.ok(child, 'should derive true sub-conversation')
-      assert.ok(child.cwd.includes(join(dir, '.helmx-worktrees')), 'sub-conversation should in same level .helmx-worktrees under isolated tree inside execute')
-      assert.ok(existsSync(child.cwd), 'managed worktree should real store in')
-      assert.ok((await env.kernel.conversations.getLastAssistantText(1)).includes('main turn complete'))
-    } finally {
-      await env.close()
+    const detail = await env.kernel.conversations.getConversationDetail(parentId, { limit: 100 })
+    const toolEntry = [...detail.entries]
+      .reverse()
+      .find((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('"subagent"'))
+    assert.ok(toolEntry, 'should store in subagent tool result entry')
+    const toolResultMsg = (toolEntry.model as Array<{
+      content?: Array<{ text?: string }>
+      details?: { execution?: { worktree?: { id?: string; path?: string; branch?: string } } }
+    }> | undefined)?.[0]
+    const payload = JSON.parse(toolResultMsg?.content?.[0]?.text ?? '{}') as {
+      execution?: { worktree?: { id?: string; path?: string; branch?: string } }
     }
+    assert.ok(payload.execution?.worktree?.path, `tool output should contain execution.worktree.path: ${JSON.stringify(payload)}`)
+    assert.ok(payload.execution?.worktree?.branch, 'tool output should contain execution.worktree.branch')
+    assert.ok(payload.execution?.worktree?.id, 'tool output should contain managed worktree.id')
+    assert.equal(
+      toolResultMsg?.details?.execution?.worktree?.id,
+      payload.execution.worktree.id,
+      'toolResult.details should mirror structuredOutput.execution.worktree.id',
+    )
+
+    // real sub-conversation create in real isolated tree inside (mirror cwd i.e. isolated tree path).
+    const child = env.kernel.conversations.listConversations().find((c) => c.parentConversationId === parentId)
+    assert.ok(child, 'should derive true sub-conversation')
+    assert.ok(child.cwd.includes(join(dir, '.helmx-worktrees')), 'sub-conversation should in same level .helmx-worktrees under isolated tree inside execute')
+    assert.ok(existsSync(child.cwd), 'managed worktree should real store in')
+    assert.ok((await env.kernel.conversations.getLastAssistantText(parentId)).includes('main turn complete'))
   })
 })
 
@@ -380,150 +395,135 @@ describe('builtin:worktree isolated derive (agent_spawn continuation)', { timeou
 
 describe('failed path asset keep (guard against continuation converge mistakenly delete regression)', { timeout: 60_000 }, () => {
   it('gate failed: sub-conversation already produce out uncommitted file after worktree keep (supply person class inspect view),gate_failed explicit on throw', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't2a')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
-    try {
-      let resolved: AgentExecutionInfo | undefined
-      env.faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo wip > wip-artifact.txt' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('task complete (gate failed)'),
-      ])
-      await assert.rejects(
-        () =>
-          env.kernel.agentSpawn.spawnAgent({
-            parentConversationId: 1,
-            prompt: 'produce out after gate failed task',
-            isolation: 'worktree',
-            gate: 'test -f never-exists.txt',
-            onResolved: (info) => {
-              resolved = info
-            },
-          } as AgentSpawnRequest),
-        (err: unknown) => {
-          assert.ok(err instanceof HelmxError, `should throw HelmxError, got ${err}`)
-          assert.equal(err.code, 'gate_failed')
-          return true
-        },
+    const { env, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't2a')
+    let resolved: AgentExecutionInfo | undefined
+    env.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('bash', { command: 'echo wip > wip-artifact.txt' })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('task complete (gate failed)'),
+    ])
+    await assert.rejects(
+      () =>
+        env.kernel.agentSpawn.spawnAgent({
+          parentConversationId: parentId,
+          prompt: 'produce out after gate failed task',
+          isolation: 'worktree',
+          gate: 'test -f never-exists.txt',
+          onResolved: (info) => {
+            resolved = info
+          },
+        } as AgentSpawnRequest),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmxError, `should throw HelmxError, got ${err}`)
+        assert.equal(err.code, 'gate_failed')
+        return true
+      },
+    )
+    assert.ok(worktreeOf(resolved), 'gate failed before onResolved already back pass worktree')
+    const wtPath = worktreeOf(resolved)!.path
+    // key guard against regression:gate failed (sub-conversation already settle) never trigger reclaim mistakenly delete; directory and
+    // uncommitted artifact keep until explicit cleanup(protect point do not because lease release while disappear).
+    assert.ok(existsSync(wtPath), 'gate failed after worktree must keep (supply person class inspect view)')
+    assert.ok(existsSync(join(wtPath, 'wip-artifact.txt')), 'sub-conversation uncommitted artifact must keep')
+    // §1.2 lease release:gate failed = original generate sub-conversation turn with failed field and host confirm already
+    // stop, run lease should release (keep Worktree record and sub-conversation mapping); explicit force
+    // clean up no longer by worktree_execution_unknown block, can succeeded remove directory.
+    if (PROCESS_SCAN_ON) {
+      const cleaned = await env.invoke.cleanupWorktree({
+        conversationId: resolved!.conversationId,
+        force: true,
+      })
+      assert.equal(cleaned.removed, true, 'lease release after explicit force clean up should succeeded')
+      assert.equal(cleaned.branchDeleted, false, 'by default clean up must keep branch')
+      assert.ok(!existsSync(wtPath), 'explicit clean up after worktree directory should by remove (artifact follow directory discard, this before after placement is already inspect view)')
+    } else {
+      // non- Linux: lease gate already, reject only allows from process scan platform restrict.
+      await assertCleanupPlatformRejected(() =>
+        env.invoke.cleanupWorktree({ conversationId: resolved!.conversationId, force: true }),
       )
-      assert.ok(worktreeOf(resolved), 'gate failed before onResolved already back pass worktree')
-      const wtPath = worktreeOf(resolved)!.path
-      // key guard against regression:gate failed (sub-conversation already settle) never trigger reclaim mistakenly delete; directory and
-      // uncommitted artifact keep until explicit cleanup(protect point do not because lease release while disappear).
-      assert.ok(existsSync(wtPath), 'gate failed after worktree must keep (supply person class inspect view)')
-      assert.ok(existsSync(join(wtPath, 'wip-artifact.txt')), 'sub-conversation uncommitted artifact must keep')
-      // §1.2 lease release:gate failed = original generate sub-conversation turn with failed field and host confirm already
-      // stop, run lease should release (keep Worktree record and sub-conversation mapping); explicit force
-      // clean up no longer by worktree_execution_unknown block, can succeeded remove directory.
-      if (PROCESS_SCAN_ON) {
-        const cleaned = await env.invoke.cleanupWorktree({
-          conversationId: resolved!.conversationId,
-          force: true,
-        })
-        assert.equal(cleaned.removed, true, 'lease release after explicit force clean up should succeeded')
-        assert.equal(cleaned.branchDeleted, false, 'by default clean up must keep branch')
-        assert.ok(!existsSync(wtPath), 'explicit clean up after worktree directory should by remove (artifact follow directory discard, this before after placement is already inspect view)')
-      } else {
-        // non- Linux: lease gate already, reject only allows from process scan platform restrict.
-        await assertCleanupPlatformRejected(() =>
-          env.invoke.cleanupWorktree({ conversationId: resolved!.conversationId, force: true }),
-        )
-        assert.ok(existsSync(wtPath), 'non- Linux reject clean up when directory must not by remove')
-      }
-    } finally {
-      await env.close()
+      assert.ok(existsSync(wtPath), 'non- Linux reject clean up when directory must not by remove')
     }
   })
 
   it('model turn failed (schema two time do not together rule):worktree and since has uncommitted artifact keep', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't2b')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
-    try {
-      let resolved: AgentExecutionInfo | undefined
-      env.faux.setResponses([
-        // Schema output tool cannot replace original has kernel tool, must can first execute real task again commit result.
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'printf "child prior work\\n" > partial.txt' })], { stopReason: 'toolUse' }),
-        // two round pure text all do not satisfy schema: trigger schema_validation_failed.
-        fauxAssistantMessage('this is not JSON'),
-        fauxAssistantMessage('still is not JSON'),
-      ])
-      await assert.rejects(
-        () =>
-          env.kernel.agentSpawn.spawnAgent({
-            parentConversationId: 1,
-            prompt: 'want seek structure output but model failed',
-            isolation: 'worktree',
-            schema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false },
-            onResolved: (info) => {
-              resolved = info
-            },
-          } as AgentSpawnRequest),
-        (err: unknown) => {
-          assert.ok(err instanceof HelmxError, `should throw HelmxError, got ${err}`)
-          assert.equal(err.code, 'schema_validation_failed')
-          return true
-        },
-      )
-      assert.ok(worktreeOf(resolved))
-      const preExisting = join(worktreeOf(resolved)!.path, 'partial.txt')
-      // key assertion:continuation converge must not reclaim already bind set sub-conversation isolated tree (guard against mistakenly delete regression).
-      assert.ok(existsSync(worktreeOf(resolved)!.path), 'model failed after worktree must keep')
-      assert.ok(existsSync(preExisting), 'uncommitted artifact must keep')
-    } finally {
-      await env.close()
-    }
+    const { env, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't2b')
+    let resolved: AgentExecutionInfo | undefined
+    env.faux.setResponses([
+      // Schema output tool cannot replace original has kernel tool, must can first execute real task again commit result.
+      fauxAssistantMessage([fauxToolCall('bash', { command: 'printf "child prior work\\n" > partial.txt' })], { stopReason: 'toolUse' }),
+      // two round pure text all do not satisfy schema: trigger schema_validation_failed.
+      fauxAssistantMessage('this is not JSON'),
+      fauxAssistantMessage('still is not JSON'),
+    ])
+    await assert.rejects(
+      () =>
+        env.kernel.agentSpawn.spawnAgent({
+          parentConversationId: parentId,
+          prompt: 'want seek structure output but model failed',
+          isolation: 'worktree',
+          schema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false },
+          onResolved: (info) => {
+            resolved = info
+          },
+        } as AgentSpawnRequest),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmxError, `should throw HelmxError, got ${err}`)
+        assert.equal(err.code, 'schema_validation_failed')
+        return true
+      },
+    )
+    assert.ok(worktreeOf(resolved))
+    const preExisting = join(worktreeOf(resolved)!.path, 'partial.txt')
+    // key assertion:continuation converge must not reclaim already bind set sub-conversation isolated tree (guard against mistakenly delete regression).
+    assert.ok(existsSync(worktreeOf(resolved)!.path), 'model failed after worktree must keep')
+    assert.ok(existsSync(preExisting), 'uncommitted artifact must keep')
   })
 
   it('run in cancel (abort): real wrap-up after worktree and uncommitted artifact keep', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't2c')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
-    try {
-      let entered = false
-      const held = heldResponse(() => {
-        entered = true
-      })
-      env.faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo canceled-work > cancel-marker.txt' })], { stopReason: 'toolUse' }),
-        held.step as never,
-      ])
-      const controller = new AbortController()
-      let resolved: AgentExecutionInfo | undefined
-      const pending = env.kernel.agentSpawn.spawnAgent({
-        parentConversationId: 1,
-        prompt: 'will by cancel isolated task',
-        isolation: 'worktree',
-        signal: controller.signal,
-        onResolved: (info) => {
-          resolved = info
-        },
-      } as AgentSpawnRequest)
-      const deadline = Date.now() + 10_000
-      while (Date.now() < deadline) {
-        if (worktreeOf(resolved) && existsSync(join(worktreeOf(resolved)!.path, 'cancel-marker.txt'))) break
-        await new Promise((r) => setTimeout(r, 50))
-      }
-      assert.ok(worktreeOf(resolved), 'cancel before onResolved should back pass worktree')
-      assert.ok(existsSync(join(worktreeOf(resolved)!.path, 'cancel-marker.txt')), 'cancel before sub-conversation should already write artifact')
-      // artifact write occur in first round tool invoke; wait for second round model request truly enter held,
-      // again start cancel, avoid all amount test concurrency when early abort only cancel first round converge.
-      const heldDeadline = Date.now() + 10_000
-      while (!entered && Date.now() < heldDeadline) await new Promise((r) => setTimeout(r, 25))
-      assert.ok(entered, 'cancel before should already enter suspended real model turn')
-
-      controller.abort()
-      held.release(fauxAssistantMessage('must not as result'))
-      await assert.rejects(() => pending, (err: unknown) => err instanceof HelmxError && err.code === 'aborted')
-
-      const childId = resolved!.conversationId!
-      await env.kernel.conversations.waitForIdle(childId)
-      assert.ok(existsSync(worktreeOf(resolved)!.path), 'cancel after worktree must keep (sub-conversation already create bind set, must not mistakenly delete)')
-      assert.ok(existsSync(join(worktreeOf(resolved)!.path, 'cancel-marker.txt')), 'cancel after uncommitted artifact must keep')
-      assert.ok(entered)
-    } finally {
-      await env.close()
+    const { env, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't2c')
+    let entered = false
+    const held = heldResponse(() => {
+      entered = true
+    })
+    env.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('bash', { command: 'echo canceled-work > cancel-marker.txt' })], { stopReason: 'toolUse' }),
+      held.step as never,
+    ])
+    const controller = new AbortController()
+    let resolved: AgentExecutionInfo | undefined
+    const pending = env.kernel.agentSpawn.spawnAgent({
+      parentConversationId: parentId,
+      prompt: 'will by cancel isolated task',
+      isolation: 'worktree',
+      signal: controller.signal,
+      onResolved: (info) => {
+        resolved = info
+      },
+    } as AgentSpawnRequest)
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline) {
+      if (worktreeOf(resolved) && existsSync(join(worktreeOf(resolved)!.path, 'cancel-marker.txt'))) break
+      await new Promise((r) => setTimeout(r, 50))
     }
+    assert.ok(worktreeOf(resolved), 'cancel before onResolved should back pass worktree')
+    assert.ok(existsSync(join(worktreeOf(resolved)!.path, 'cancel-marker.txt')), 'cancel before sub-conversation should already write artifact')
+    // artifact write occur in first round tool invoke; wait for second round model request truly enter held,
+    // again start cancel, avoid all amount test concurrency when early abort only cancel first round converge.
+    const heldDeadline = Date.now() + 10_000
+    while (!entered && Date.now() < heldDeadline) await new Promise((r) => setTimeout(r, 25))
+    assert.ok(entered, 'cancel before should already enter suspended real model turn')
+
+    controller.abort()
+    held.release(fauxAssistantMessage('must not as result'))
+    await assert.rejects(() => pending, (err: unknown) => err instanceof HelmxError && err.code === 'aborted')
+
+    const childId = resolved!.conversationId!
+    await env.kernel.conversations.waitForIdle(childId)
+    assert.ok(existsSync(worktreeOf(resolved)!.path), 'cancel after worktree must keep (sub-conversation already create bind set, must not mistakenly delete)')
+    assert.ok(existsSync(join(worktreeOf(resolved)!.path, 'cancel-marker.txt')), 'cancel after uncommitted artifact must keep')
+    assert.ok(entered)
   })
 })
 
@@ -533,69 +533,64 @@ describe('failed path asset keep (guard against continuation converge mistakenly
 
 describe('occupy in worktree clean up protect', { timeout: 60_000 }, () => {
   it('model turn still in execute:force:true still worktree_in_use;settle after via action clean up succeeded', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't3')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
-    try {
-      const held = heldResponse(() => {})
-      env.faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo ok > in-use-marker.txt' })], { stopReason: 'toolUse' }),
-        // second turn hang in model request in:SDK turn in-flight.
-        held.step as never,
-      ])
-      let resolved: AgentExecutionInfo | undefined
-      const controller = new AbortController()
-      const pending = env.kernel.agentSpawn.spawnAgent({
-        parentConversationId: 1,
-        prompt: 'long task (occupy check)',
-        isolation: 'worktree',
-        signal: controller.signal,
-        onResolved: (info) => {
-          resolved = info
-        },
-      } as AgentSpawnRequest)
-      const deadline = Date.now() + 10_000
-      while (Date.now() < deadline) {
-        if (worktreeOf(resolved) && existsSync(join(worktreeOf(resolved)!.path, 'in-use-marker.txt'))) break
-        await new Promise((r) => setTimeout(r, 50))
-      }
-      assert.ok(worktreeOf(resolved) && resolved?.conversationId, 'sub-conversation should already create')
-      const childId = resolved!.conversationId!
-      assert.equal(env.kernel.conversations.getConversation(childId).status, 'working', 'model suspended during sub-conversation should be working')
+    const { env, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't3')
+    const held = heldResponse(() => {})
+    env.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('bash', { command: 'echo ok > in-use-marker.txt' })], { stopReason: 'toolUse' }),
+      // second turn hang in model request in:SDK turn in-flight.
+      held.step as never,
+    ])
+    let resolved: AgentExecutionInfo | undefined
+    const controller = new AbortController()
+    const pending = env.kernel.agentSpawn.spawnAgent({
+      parentConversationId: parentId,
+      prompt: 'long task (occupy check)',
+      isolation: 'worktree',
+      signal: controller.signal,
+      onResolved: (info) => {
+        resolved = info
+      },
+    } as AgentSpawnRequest)
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline) {
+      if (worktreeOf(resolved) && existsSync(join(worktreeOf(resolved)!.path, 'in-use-marker.txt'))) break
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    assert.ok(worktreeOf(resolved) && resolved?.conversationId, 'sub-conversation should already create')
+    const childId = resolved!.conversationId!
+    assert.equal(env.kernel.conversations.getConversation(childId).status, 'working', 'model suspended during sub-conversation should be working')
 
-      // spawn not settle:conversation occupy + in-flight spawn execute coordinates reference double keep risk,
-      // force:true also must not clean up run in subagent worktree.
-      await assert.rejects(
-        () => env.invoke.cleanupWorktree({ conversationId: childId, force: true }),
-        (err: unknown) => {
-          assert.ok(err instanceof HelmxError)
-          assert.equal(err.code, 'worktree_in_use', `force clean up run in worktree should reject, got ${(err as HelmxError).code}`)
-          return true
-        },
-      )
-      assert.ok(existsSync(worktreeOf(resolved)!.path), 'occupy reject when directory must not passively')
-      assert.ok(existsSync(join(worktreeOf(resolved)!.path, 'in-use-marker.txt')), 'occupy during artifact must not by delete')
+    // spawn not settle:conversation occupy + in-flight spawn execute coordinates reference double keep risk,
+    // force:true also must not clean up run in subagent worktree.
+    await assert.rejects(
+      () => env.invoke.cleanupWorktree({ conversationId: childId, force: true }),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmxError)
+        assert.equal(err.code, 'worktree_in_use', `force clean up run in worktree should reject, got ${(err as HelmxError).code}`)
+        return true
+      },
+    )
+    assert.ok(existsSync(worktreeOf(resolved)!.path), 'occupy reject when directory must not passively')
+    assert.ok(existsSync(join(worktreeOf(resolved)!.path, 'in-use-marker.txt')), 'occupy during artifact must not by delete')
 
-      // real wrap-up: release model + abort, etc. spawn settle and sub-conversation idle.
-      controller.abort()
-      held.release(fauxAssistantMessage('(cancel)'))
-      await assert.rejects(() => pending, (e: unknown) => e instanceof HelmxError && e.code === 'aborted')
-      await env.kernel.conversations.waitForIdle(childId)
+    // real wrap-up: release model + abort, etc. spawn settle and sub-conversation idle.
+    controller.abort()
+    held.release(fauxAssistantMessage('(cancel)'))
+    await assert.rejects(() => pending, (e: unknown) => e instanceof HelmxError && e.code === 'aborted')
+    await env.kernel.conversations.waitForIdle(childId)
 
-      // settle after (abort path: original generate sub-conversation turn with failed field and already confirm stop):
-      // §1.2 run lease release, explicit force clean up no longer by worktree_execution_unknown
-      // block, can succeeded remove directory (branch by default keep).
-      if (PROCESS_SCAN_ON) {
-        const cleaned = await env.invoke.cleanupWorktree({ conversationId: childId, force: true })
-        assert.equal(cleaned.removed, true, 'abort confirm stop after lease should release,force clean up can succeeded')
-        assert.equal(cleaned.branchDeleted, false, 'by default clean up must keep branch')
-        assert.ok(!existsSync(worktreeOf(resolved)!.path), 'explicit clean up after worktree directory should by remove')
-      } else {
-        await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ conversationId: childId, force: true }))
-        assert.ok(existsSync(worktreeOf(resolved)!.path), 'non- Linux reject clean up when directory must not by remove')
-      }
-    } finally {
-      await env.close()
+    // settle after (abort path: original generate sub-conversation turn with failed field and already confirm stop):
+    // §1.2 run lease release, explicit force clean up no longer by worktree_execution_unknown
+    // block, can succeeded remove directory (branch by default keep).
+    if (PROCESS_SCAN_ON) {
+      const cleaned = await env.invoke.cleanupWorktree({ conversationId: childId, force: true })
+      assert.equal(cleaned.removed, true, 'abort confirm stop after lease should release,force clean up can succeeded')
+      assert.equal(cleaned.branchDeleted, false, 'by default clean up must keep branch')
+      assert.ok(!existsSync(worktreeOf(resolved)!.path), 'explicit clean up after worktree directory should by remove')
+    } else {
+      await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ conversationId: childId, force: true }))
+      assert.ok(existsSync(worktreeOf(resolved)!.path), 'non- Linux reject clean up when directory must not by remove')
     }
   })
 })
@@ -606,103 +601,86 @@ describe('occupy in worktree clean up protect', { timeout: 60_000 }, () => {
 
 describe('cleanup_worktree action boundary (HTTP Schema/authentication/pass-through)', { timeout: 60_000 }, () => {
   it('action boundary validate: unknown key/many choose/zero choose/illegal type explicit 400; not register choose 404 do not trigger touch actual clean up', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't4a')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
-    try {
-      // unknown key reject (action inputSchema additionalProperties:false).
-      const unknownKey = await postCleanup(env, { conversationId: 5, oops: true })
-      assert.equal(unknownKey.status, 400)
-      assert.equal(unknownKey.json.error.code, 'validation_error')
+    const { env } = await getSharedRuntime()
+    // unknown key reject (action inputSchema additionalProperties:false).
+    const unknownKey = await postCleanup(env, { conversationId: 5, oops: true })
+    assert.equal(unknownKey.status, 400)
+    assert.equal(unknownKey.json.error.code, 'validation_error')
 
-      // many choose reject (conversationId + path).
-      const multiA = await postCleanup(env, { conversationId: 5, path: '/tmp/x' })
-      assert.equal(multiA.status, 400)
-      assert.equal(multiA.json.error.code, 'validation_error')
-      // zero choose same reject.
-      const none = await postCleanup(env, {})
-      assert.equal(none.status, 400)
-      assert.equal(none.json.error.code, 'validation_error')
+    // many choose reject (conversationId + path).
+    const multiA = await postCleanup(env, { conversationId: 5, path: '/tmp/x' })
+    assert.equal(multiA.status, 400)
+    assert.equal(multiA.json.error.code, 'validation_error')
+    // zero choose same reject.
+    const none = await postCleanup(env, {})
+    assert.equal(none.status, 400)
+    assert.equal(none.json.error.code, 'validation_error')
 
-      // illegal type:conversationId non- positive integer / force non- boolean / deleteBranch non- boolean
-      //(action JSON Schema boundary reject).
-      const badConv = await postCleanup(env, { conversationId: 0 })
-      assert.equal(badConv.status, 400)
-      assert.equal(badConv.json.error.code, 'validation_error')
-      const badConv2 = await postCleanup(env, { conversationId: 'five' as unknown as number })
-      assert.equal(badConv2.status, 400)
-      assert.equal(badConv2.json.error.code, 'validation_error')
-      const badForce = await postCleanup(env, { conversationId: 5, force: 'yes' as unknown as boolean })
-      assert.equal(badForce.status, 400)
-      assert.equal(badForce.json.error.code, 'validation_error')
-      const badDelete = await postCleanup(env, { conversationId: 5, deleteBranch: 1 as unknown as boolean })
-      assert.equal(badDelete.status, 400)
-      assert.equal(badDelete.json.error.code, 'validation_error')
+    // illegal type:conversationId non- positive integer / force non- boolean / deleteBranch non- boolean
+    //(action JSON Schema boundary reject).
+    const badConv = await postCleanup(env, { conversationId: 0 })
+    assert.equal(badConv.status, 400)
+    assert.equal(badConv.json.error.code, 'validation_error')
+    const badConv2 = await postCleanup(env, { conversationId: 'five' as unknown as number })
+    assert.equal(badConv2.status, 400)
+    assert.equal(badConv2.json.error.code, 'validation_error')
+    const badForce = await postCleanup(env, { conversationId: 5, force: 'yes' as unknown as boolean })
+    assert.equal(badForce.status, 400)
+    assert.equal(badForce.json.error.code, 'validation_error')
+    const badDelete = await postCleanup(env, { conversationId: 5, deleteBranch: 1 as unknown as boolean })
+    assert.equal(badDelete.status, 400)
+    assert.equal(badDelete.json.error.code, 'validation_error')
 
-      // not register choose: choose shape legal but without record -> 404 not_found(user error,
-      // does not pretend to be into validation failed; never mistakenly delete not register directory).
-      const unregistered = await postCleanup(env, { worktreeId: 'local:/tmp/no-such-wt' })
-      assert.equal(unregistered.status, 404)
-      assert.equal(unregistered.json.error.code, 'not_found')
-    } finally {
-      await env.close()
-    }
+    // not register choose: choose shape legal but without record -> 404 not_found(user error,
+    // does not pretend to be into validation failed; never mistakenly delete not register directory).
+    const unregistered = await postCleanup(env, { worktreeId: 'local:/tmp/no-such-wt' })
+    assert.equal(unregistered.status, 404)
+    assert.equal(unregistered.json.error.code, 'not_found')
   })
 
   it('succeeded invoke actual clean up (real worktree by remove,worktreeId throughout through); not register choose user error code not_found pass-through', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't4b')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
-    try {
-      // real derive a managed worktree(clean: without take verify artifact, verify non- force succeeded link).
-      let resolved: AgentExecutionInfo | undefined
-      env.faux.setResponses([fauxAssistantMessage('complete')])
-      await env.kernel.agentSpawn.spawnAgent({
-        parentConversationId: 1,
-        prompt: 'HTTP clean up link task',
-        isolation: 'worktree',
-        onResolved: (info) => {
-          resolved = info
-        },
-      } as AgentSpawnRequest)
-      assert.ok(worktreeOf(resolved) && worktreeOf(resolved)?.id, 'should back pass managed worktree id')
-      const wt = worktreeOf(resolved)!
+    const { env, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't4b')
+    // real derive a managed worktree(clean: without take verify artifact, verify non- force succeeded link).
+    let resolved: AgentExecutionInfo | undefined
+    env.faux.setResponses([fauxAssistantMessage('complete')])
+    await env.kernel.agentSpawn.spawnAgent({
+      parentConversationId: parentId,
+      prompt: 'HTTP clean up link task',
+      isolation: 'worktree',
+      onResolved: (info) => {
+        resolved = info
+      },
+    } as AgentSpawnRequest)
+    assert.ok(worktreeOf(resolved) && worktreeOf(resolved)?.id, 'should back pass managed worktree id')
+    const wt = worktreeOf(resolved)!
 
-      // by managed id succeeded clean up (worktreeId precise choose;deleteBranch by default keep branch).
-      const ok = await postCleanup(env, { worktreeId: wt.id })
-      assert.equal(ok.status, 200)
-      assert.equal(ok.json.removed, true)
-      assert.equal(ok.json.branchDeleted, false)
-      assert.equal(ok.json.path, wt.path)
-      assert.ok(!existsSync(wt.path), 'HTTP clean up should actual remove worktree directory')
+    // by managed id succeeded clean up (worktreeId precise choose;deleteBranch by default keep branch).
+    const ok = await postCleanup(env, { worktreeId: wt.id })
+    assert.equal(ok.status, 200)
+    assert.equal(ok.json.removed, true)
+    assert.equal(ok.json.branchDeleted, false)
+    assert.equal(ok.json.path, wt.path)
+    assert.ok(!existsSync(wt.path), 'HTTP clean up should actual remove worktree directory')
 
-      // not register choose:allocator  not_found(404) original pass-through (does not pretend to be 500/200).
-      const missing = await postCleanup(env, { conversationId: 999_999 })
-      assert.equal(missing.status, 404)
-      assert.equal(missing.json.error.code, 'not_found')
-      assert.ok(String(missing.json.error.message).includes('未找到'), `error message should note only clean up register record:${missing.json.error.message}`)
-    } finally {
-      await env.close()
-    }
+    // not register choose:allocator  not_found(404) original pass-through (does not pretend to be 500/200).
+    const missing = await postCleanup(env, { conversationId: 999_999 })
+    assert.equal(missing.status, 404)
+    assert.equal(missing.json.error.code, 'not_found')
+    assert.ok(String(missing.json.error.message).includes('未找到'), `error message should note only clean up register record:${missing.json.error.message}`)
   })
 
   it('not carries token 401(action end point same force authentication)', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't4c')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
-    try {
-      const noAuth = await env.handler(
-        new Request('http://127.0.0.1:3202/api/actions/builtin%3Aworktree/cleanup_worktree', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ input: { conversationId: 5 } }),
-        }),
-      )
-      assert.equal(noAuth.status, 401)
-      assert.equal((JSON.parse(await noAuth.text()) as { error: { code: string } }).error.code, 'unauthorized')
-    } finally {
-      await env.close()
-    }
+    const { env } = await getSharedRuntime()
+    const noAuth = await env.handler(
+      new Request('http://127.0.0.1:3202/api/actions/builtin%3Aworktree/cleanup_worktree', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input: { conversationId: 5 } }),
+      }),
+    )
+    assert.equal(noAuth.status, 401)
+    assert.equal((JSON.parse(await noAuth.text()) as { error: { code: string } }).error.code, 'unauthorized')
   })
 })
 
@@ -712,27 +690,22 @@ describe('cleanup_worktree action boundary (HTTP Schema/authentication/pass-thro
 
 describe('external runtime agentType without plugin take over', { timeout: 60_000 }, () => {
   it('external runtime agentType without plugin take over: original generate execute row explicit unsupported_runtime(kernel zero plugin point name, never false succeeded)', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't5d')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
-    try {
-      await assert.rejects(
-        () =>
-          env.kernel.agentSpawn.spawnAgent({
-            parentConversationId: 1,
-            prompt: 'external runtime but without person take over',
-            agentType: 'test:unclaimed',
-          } as AgentSpawnRequest),
-        (err: unknown) => {
-          assert.ok(err instanceof HelmxError, `should throw HelmxError, got ${err}`)
-          assert.equal(err.code, 'unsupported_runtime')
-          assert.ok(err.message.includes('test:unclaimed'), `error should refer external runtime identifier:${err.message}`)
-          return true
-        },
-      )
-    } finally {
-      await env.close()
-    }
+    const { env, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't5d')
+    await assert.rejects(
+      () =>
+        env.kernel.agentSpawn.spawnAgent({
+          parentConversationId: parentId,
+          prompt: 'external runtime but without person take over',
+          agentType: 'test:unclaimed',
+        } as AgentSpawnRequest),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmxError, `should throw HelmxError, got ${err}`)
+        assert.equal(err.code, 'unsupported_runtime')
+        assert.ok(err.message.includes('test:unclaimed'), `error should refer external runtime identifier:${err.message}`)
+        return true
+      },
+    )
   })
 })
 
@@ -742,79 +715,74 @@ describe('external runtime agentType without plugin take over', { timeout: 60_00
 
 describe('same sub-conversation concurrency resume mutual exclusion', { timeout: 60_000 }, () => {
   it('first resume in-flight when second concurrency resume explicit subagent_in_use; first gate and structure output normal complete', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't6')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
-    try {
-      // first tune: create bind set worktree sub-conversation.
-      let childId = 0
-      let firstWtPath = ''
-      env.faux.setResponses([fauxAssistantMessage('one round complete')])
-      await env.kernel.agentSpawn.spawnAgent({
-        parentConversationId: 1,
-        prompt: 'one round',
-        isolation: 'worktree',
-        onResolved: (info) => {
-          childId = info.conversationId ?? 0
-          firstWtPath = worktreeOf(info)?.path ?? ''
-        },
-      } as AgentSpawnRequest)
-      assert.ok(childId > 0)
-      assert.ok(firstWtPath !== '', 'should back pass isolated tree path')
+    const { env, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't6')
+    // first tune: create bind set worktree sub-conversation.
+    let childId = 0
+    let firstWtPath = ''
+    env.faux.setResponses([fauxAssistantMessage('one round complete')])
+    await env.kernel.agentSpawn.spawnAgent({
+      parentConversationId: parentId,
+      prompt: 'one round',
+      isolation: 'worktree',
+      onResolved: (info) => {
+        childId = info.conversationId ?? 0
+        firstWtPath = worktreeOf(info)?.path ?? ''
+      },
+    } as AgentSpawnRequest)
+    assert.ok(childId > 0)
+    assert.ok(firstWtPath !== '', 'should back pass isolated tree path')
 
-      // a resume: write marker + structure output + gate(model suspended fabricate in-flight window).
-      let markEntered!: () => void
-      const entered = new Promise<void>((resolve) => { markEntered = resolve })
-      const held = heldResponse(markEntered)
-      env.faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo first > first-resume.txt' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage([fauxToolCall('register_structured_output', { output: { answer: 'a resume answer proposal' } })], { stopReason: 'toolUse' }),
-        held.step as never,
-      ])
-      const first = env.kernel.agentSpawn.spawnAgent({
-        parentConversationId: 1,
-        prompt: 'a resume',
-        resume: String(childId),
-        schema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false },
-        gate: 'test -f first-resume.txt',
-        onResolved: () => {},
-      } as AgentSpawnRequest)
+    // a resume: write marker + structure output + gate(model suspended fabricate in-flight window).
+    let markEntered!: () => void
+    const entered = new Promise<void>((resolve) => { markEntered = resolve })
+    const held = heldResponse(markEntered)
+    env.faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('bash', { command: 'echo first > first-resume.txt' })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage([fauxToolCall('register_structured_output', { output: { answer: 'a resume answer proposal' } })], { stopReason: 'toolUse' }),
+      held.step as never,
+    ])
+    const first = env.kernel.agentSpawn.spawnAgent({
+      parentConversationId: parentId,
+      prompt: 'a resume',
+      resume: String(childId),
+      schema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false },
+      gate: 'test -f first-resume.txt',
+      onResolved: () => {},
+    } as AgentSpawnRequest)
 
-      // must etc. model consume before two response and enter suspended point; only etc. marker will mention before reset faux response queue.
-      await Promise.race([
-        entered,
-        first.then(() => { throw new Error('first resume in enter suspended response before end') }),
-      ])
-      assert.ok(existsSync(join(firstWtPath, 'first-resume.txt')), 'a resume should in original worktree inside execute')
+    // must etc. model consume before two response and enter suspended point; only etc. marker will mention before reset faux response queue.
+    await Promise.race([
+      entered,
+      first.then(() => { throw new Error('first resume in enter suspended response before end') }),
+    ])
+    assert.ok(existsSync(join(firstWtPath, 'first-resume.txt')), 'a resume should in original worktree inside execute')
 
-      // concurrency second resume: same sub-conversation in-flight, explicit reject (do not mutual grab gate/structure output).
-      env.faux.setResponses([fauxAssistantMessage('second resume must not execute')])
-      await assert.rejects(
-        () =>
-          env.kernel.agentSpawn.spawnAgent({
-            parentConversationId: 1,
-            prompt: 'second resume (concurrency)',
-            resume: String(childId),
-            gate: 'true',
-          } as AgentSpawnRequest),
-        (err: unknown) => {
-          assert.ok(err instanceof HelmxError)
-          assert.equal(err.code, 'subagent_in_use')
-          return true
-        },
-      )
+    // concurrency second resume: same sub-conversation in-flight, explicit reject (do not mutual grab gate/structure output).
+    env.faux.setResponses([fauxAssistantMessage('second resume must not execute')])
+    await assert.rejects(
+      () =>
+        env.kernel.agentSpawn.spawnAgent({
+          parentConversationId: parentId,
+          prompt: 'second resume (concurrency)',
+          resume: String(childId),
+          gate: 'true',
+        } as AgentSpawnRequest),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmxError)
+        assert.equal(err.code, 'subagent_in_use')
+        return true
+      },
+    )
 
-      // release a: structure output and gate normal complete (not by second interference).
-      held.release(fauxAssistantMessage('tail follow text'))
-      const result = await first
-      assert.deepEqual(result, { answer: 'a resume answer proposal' }, 'a resume structure output should complete return')
-      assert.ok(existsSync(join(firstWtPath, 'first-resume.txt')))
-      // all process only this a sub-conversation (second not derive new conversation).
-      const children = env.kernel.conversations.listConversations().filter((c) => c.parentConversationId === 1)
-      assert.equal(children.length, 1, 'concurrency reject must not derive new sub-conversation')
-    } finally {
-      await env.close()
-    }
+    // release a: structure output and gate normal complete (not by second interference).
+    held.release(fauxAssistantMessage('tail follow text'))
+    const result = await first
+    assert.deepEqual(result, { answer: 'a resume answer proposal' }, 'a resume structure output should complete return')
+    assert.ok(existsSync(join(firstWtPath, 'first-resume.txt')))
+    // all process only this a sub-conversation (second not derive new conversation).
+    const children = env.kernel.conversations.listConversations().filter((c) => c.parentConversationId === parentId)
+    assert.equal(children.length, 1, 'concurrency reject must not derive new sub-conversation')
   })
 })
 
@@ -982,12 +950,12 @@ describe('durable lease unknown occupy protect (fail-closed)', { timeout: 60_000
 
 describe('createHelmx background subagent all chain (background + worktree + gate + parent turn first end)', { timeout: 60_000 }, () => {
   it('background run phase:run running, sub-conversation in gate, clean up reject; release gate after settle and to parent conversation idempotent gather report runId/worktree', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't9')
-    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
+    const { env, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't9')
     const kernel = env.kernel
     // release file at isolated tree outside (parent repo inside):gate in worktree inside wait for external signal.
     const releaseFile = join(repo, '.helmx-test-release.txt')
+    rmSync(releaseFile, { force: true })
     try {
       // first response: parent conversation invoke subagent(background:true); its after to enough ordinary answer
       //(parent runId after end turn; subagent complete text and gather report round parent back should, who first consume all can).
@@ -1007,11 +975,11 @@ describe('createHelmx background subagent all chain (background + worktree + gat
         fauxAssistantMessage('gather report round fall back'),
       ])
 
-      await kernel.conversations.submitInput(1, 'dispatch a background isolated subagent')
-      await kernel.conversations.waitForIdle(1)
+      await kernel.conversations.submitInput(parentId, 'dispatch a background isolated subagent')
+      await kernel.conversations.waitForIdle(parentId)
 
       // tool output should contains runId and worktree metadata (background handle).
-      const detail = await kernel.conversations.getConversationDetail(1, { limit: 100 })
+      const detail = await kernel.conversations.getConversationDetail(parentId, { limit: 100 })
       const toolEntry = [...detail.entries]
         .reverse()
         .find((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('"subagent"'))
@@ -1025,7 +993,7 @@ describe('createHelmx background subagent all chain (background + worktree + gat
       // parent turn already end (parent idle does not mean sub- end - - first end semantics).
       let run = (await env.invoke.inspect(runId)).run
       assert.equal(run.status, 'running', `background run should be running, got ${run.status}`)
-      const child = kernel.conversations.listConversations().find((c) => c.parentConversationId === 1)
+      const child = kernel.conversations.listConversations().find((c) => c.parentConversationId === parentId)
       assert.ok(child, 'background sub-conversation should already derive')
       const childCwd = child.cwd
       assert.ok(existsSync(childCwd), 'background sub-conversation should bind set real isolated tree')
@@ -1051,7 +1019,7 @@ describe('createHelmx background subagent all chain (background + worktree + gat
       // when the step may still in-flight. must etc. to real gather report entry after again continue.
       let reported = false
       for (let i = 0; i < 600; i++) {
-        const hits = (await agentReports(kernel, 1)).filter((r) => r.backgroundRunId === runId)
+        const hits = (await agentReports(kernel, parentId)).filter((r) => r.backgroundRunId === runId)
         if (hits.length > 0) {
           reported = true
           break
@@ -1060,17 +1028,17 @@ describe('createHelmx background subagent all chain (background + worktree + gat
       }
       assert.ok(reported, `background gather report entry should in row boundary inside reach (runId=${runId},status=${run.status})`)
       // gather report entry reach after etc. parent turn consume completely (gather report round model back should), again verify idempotent exactly a.
-      await kernel.conversations.waitForIdle(1)
+      await kernel.conversations.waitForIdle(parentId)
 
       run = (await env.invoke.inspect(runId)).run
       assert.equal(run.status, 'completed', `release gate after run should completed, got ${run.status}${run.error ? `(error: ${run.error})` : ''}`)
 
       // gather report input: exactly a origin=agent,meta.backgroundRunId=runId  helmx.input.
-      const reports = (await agentReports(kernel, 1)).filter((r) => r.backgroundRunId === runId)
+      const reports = (await agentReports(kernel, parentId)).filter((r) => r.backgroundRunId === runId)
       assert.equal(reports.length, 1, `should exactly a background gather report, got ${JSON.stringify(reports)}`)
       assert.equal(reports[0]!.origin, 'agent')
       // gather report content contains runId and worktree managed id(person class can based on this resume/clean up).
-      const reportTexts = (await kernel.conversations.getConversationDetail(1, { limit: 200 })).entries
+      const reportTexts = (await kernel.conversations.getConversationDetail(parentId, { limit: 200 })).entries
         .filter((e) => e.kind === 'helmx.input')
         .map((e) => String((e.data as { text?: unknown } | undefined)?.text ?? ''))
         .filter((t) => t.includes(runId))
@@ -1088,11 +1056,14 @@ describe('createHelmx background subagent all chain (background + worktree + gat
       // guard against clean up deadlock: regardless of assertion into failed all release gate and wait for terminal state after again closure stop.
       try {
         writeFileSync(releaseFile, 'release\n')
-        await kernel.conversations.waitForIdle(1).catch(() => {})
+        await kernel.conversations.waitForIdle(parentId).catch(() => {})
+        await env.kernel.conversations.listConversations()
+          .filter((c) => c.parentConversationId === parentId)
+          .reduce(async (p, c) => { await p; await kernel.conversations.waitForIdle(c.id).catch(() => {}) }, Promise.resolve())
+        rmSync(releaseFile, { force: true })
       } catch {
         /* finally exhaust force */
       }
-      await env.close()
     }
   })
 })

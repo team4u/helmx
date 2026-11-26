@@ -10,6 +10,7 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { describe, before, test } from 'node:test'
+import { waitFor } from '@helmx/test-kit'
 import * as React from 'react'
 import { act } from 'react'
 import type {
@@ -810,6 +811,7 @@ describe("tiers-client-interactions", () => {
           key: TIERS_INPUT_META_KEY,
           value: { borrowModel: 'tier/architect' },
         })
+        await waitFor(() => document.activeElement === standbyTextarea, { timeoutMs: 2_000, intervalMs: 10 })
         assert.ok(
           document.activeElement === standbyTextarea,
           'selecting a borrow model must return keyboard focus to the owning .composer-box textarea',
@@ -913,6 +915,7 @@ describe("tiers-client-interactions", () => {
           actionId: 'set_borrow',
           input: { conversationId: 30, model: 'faux/flagship', effort: 'xhigh' },
         })
+        await waitFor(() => document.activeElement === splitTextarea, { timeoutMs: 2_000, intervalMs: 10 })
         assert.ok(
           document.activeElement === splitTextarea,
           'persisted conversation borrow selection must return focus to owning .composer-box textarea',
