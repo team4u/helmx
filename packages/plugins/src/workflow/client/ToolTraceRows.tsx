@@ -73,6 +73,43 @@ import {
   type BackgroundReportView,
 } from './parsers.js'
 
+// 有导航目标时行主体是跳转按钮；无目标时渲染为非交互元素——折叠/展开入口统一由宿主
+// 行首 chevron（IO 面板）提供，行内不再伪造第二个展开入口。两种工具视图共用这一行壳。
+function ToolTraceRow(props: {
+  title: string
+  navigation: { go: () => void; aria: string } | undefined
+  isError: boolean
+  status: ExecutionStatus
+  statusLabel: string
+  rowBody: ReactNode
+  right: ReactNode
+}): ReactNode {
+  const { title, navigation, isError, status, statusLabel, rowBody, right } = props
+  return (
+    <div className="trace-entry">
+      <div className={`trace-row${navigation === undefined ? ' wf-trace-row-static' : ''}${isError ? ' trace-row-error' : ''}`}>
+        {navigation !== undefined ? (
+          <button
+            type="button"
+            className="trace-row-left wf-trace-toggle"
+            aria-label={`${title} — ${navigation.aria}`}
+            onClick={navigation.go}
+          >
+            {rowBody}
+          </button>
+        ) : (
+          <div className="trace-row-left wf-trace-toggle">{rowBody}</div>
+        )}
+
+        <span className="trace-row-right wf-trace-right">
+          <StatusLight status={executionLightStatus(status)} label={statusLabel} />
+          {right}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // 1. SubagentToolView (`subagent` tool call)
 // ---------------------------------------------------------------------------
@@ -196,8 +233,6 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const canOpenDrawer = childId !== undefined
   const canOpenWorkbench = !canOpenDrawer && targetWorkbenchRunId !== undefined
 
-  // 有导航目标时行主体是跳转按钮；无目标时渲染为非交互元素——折叠/展开入口统一由宿主
-  // 行首 chevron（IO 面板）提供，行内不再伪造第二个展开入口。
   const navigation =
     canOpenDrawer && childId !== undefined
       ? { go: () => ctx.openConversationDrawer(childId), aria: traceOpenChildLabel(childId, locale) }
@@ -283,29 +318,16 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   )
 
   return (
-    <div className="trace-entry">
-      <div className={`trace-row${navigation === undefined ? ' wf-trace-row-static' : ''}${isError ? ' trace-row-error' : ''}`}>
-        {navigation !== undefined ? (
-          <button
-            type="button"
-            className="trace-row-left wf-trace-toggle"
-            aria-label={`${resolvedTitle.text} — ${navigation.aria}`}
-            onClick={navigation.go}
-          >
-            {rowBody}
-          </button>
-        ) : (
-          <div className="trace-row-left wf-trace-toggle">{rowBody}</div>
-        )}
-
-        <span className="trace-row-right wf-trace-right">
-          <StatusLight status={executionLightStatus(status)} label={displayStatusLabel} />
-          <ElapsedClock
-            active={isActive}
-            startedAt={liveStartAt}
-            settledMs={settledMs}
-            className="trace-duration"
-          />
+    <ToolTraceRow
+      title={resolvedTitle.text}
+      navigation={navigation}
+      isError={isError}
+      status={status}
+      statusLabel={displayStatusLabel}
+      rowBody={rowBody}
+      right={
+        <>
+          <ElapsedClock active={isActive} startedAt={liveStartAt} settledMs={settledMs} className="trace-duration" />
           {showSyncWorktreeCleanup && execMeta?.worktree !== undefined ? (
             <PluginSlot
               name="worktree-cleanup"
@@ -321,9 +343,9 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
               }}
             />
           ) : null}
-        </span>
-      </div>
-    </div>
+        </>
+      }
+    />
   )
 }
 
@@ -386,8 +408,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const totalNodes = run?.nodes?.length ?? 0
   const doneNodes = run?.nodes?.filter((n) => n.status === 'done').length ?? 0
 
-  // 有 run 时行主体是跳转按钮；无 run（引擎尚未建出关联记录）时渲染为非交互元素，
-  // 原始入参/返回经宿主行首 chevron 的 IO 面板查看。
+  // 无 run（引擎尚未建出关联记录）时行壳为非交互元素，原始入参/返回经宿主行首 chevron 的 IO 面板查看。
   const navigation = run !== undefined
     ? { go: () => ctx.openWorkbench('tasks', { runId: run.id }), aria: traceOpenWorkbenchRunLabel(run.id, locale) }
     : undefined
@@ -410,36 +431,26 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   )
 
   return (
-    <div className="trace-entry">
-      <div className={`trace-row${navigation === undefined ? ' wf-trace-row-static' : ''}${isError ? ' trace-row-error' : ''}`}>
-        {navigation !== undefined ? (
-          <button
-            type="button"
-            className="trace-row-left wf-trace-toggle"
-            aria-label={`${title} — ${navigation.aria}`}
-            onClick={navigation.go}
-          >
-            {rowBody}
-          </button>
+    <ToolTraceRow
+      title={title}
+      navigation={navigation}
+      isError={isError}
+      status={status}
+      statusLabel={statusLabel(status, locale)}
+      rowBody={rowBody}
+      right={
+        run !== undefined ? (
+          <WorkflowTimingClock run={run} className="trace-duration" />
         ) : (
-          <div className="trace-row-left wf-trace-toggle">{rowBody}</div>
-        )}
-
-        <span className="trace-row-right wf-trace-right">
-          <StatusLight status={executionLightStatus(status)} label={statusLabel(status, locale)} />
-          {run !== undefined ? (
-            <WorkflowTimingClock run={run} className="trace-duration" />
-          ) : (
-            <ElapsedClock
-              active={props.status === 'running' && !isBgHandle}
-              startedAt={props.startedAt}
-              settledMs={!isBgHandle ? props.durationMs : undefined}
-              className="trace-duration"
-            />
-          )}
-        </span>
-      </div>
-    </div>
+          <ElapsedClock
+            active={props.status === 'running' && !isBgHandle}
+            startedAt={props.startedAt}
+            settledMs={!isBgHandle ? props.durationMs : undefined}
+            className="trace-duration"
+          />
+        )
+      }
+    />
   )
 }
 

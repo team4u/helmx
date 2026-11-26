@@ -3,11 +3,41 @@
  * - 工作流库：list / get / save / delete
  * - 运行观测与控制：runs / inspect / abort / run / steer / resume_failed
  */
-import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
+import { HelmxError, type HelmxPluginContext, type JsonSchema, type PluginActionCliPositionalSpec } from '@helmx/protocol'
+import type { WorkflowRunSummary } from '../contracts.js'
 import type { WorkflowService } from './runs/index.js'
 import { steerBackgroundSubagent } from './steer.js'
 
 export const WORKFLOW_STEER_TOOL_NAME = 'workflow_steer' as const
+
+/** Shared by the run-scoped actions (`inspect` / `abort` / `steer`): one required `runId` positional. */
+const RUN_ID_INPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { runId: { type: 'string', description: 'Run ID' } },
+  required: ['runId'],
+  additionalProperties: false,
+}
+
+const RUN_OUTPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { run: { type: 'object' } },
+  required: ['run'],
+  additionalProperties: false,
+}
+
+const RUN_ID_POSITIONAL: PluginActionCliPositionalSpec[] = [{ field: 'runId', required: true }]
+
+/** `{ run }` view; the repository's `not_found` is re-raised with the user-facing message. */
+function runViewById(workflows: WorkflowService, runId: string): { run: WorkflowRunSummary } {
+  try {
+    return { run: workflows.getRun(runId) }
+  } catch (error) {
+    if (error instanceof HelmxError && error.code === 'not_found') {
+      throw new HelmxError('not_found', `工作流运行不存在: ${runId}`, 404, { runId })
+    }
+    throw error
+  }
+}
 
 export interface WorkflowActionDeps {
   workflows: WorkflowService
@@ -187,33 +217,16 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
     description: 'Inspect a single workflow run',
     exposeToPrompt: false,
     idempotent: true,
-    inputSchema: {
-      type: 'object',
-      properties: { runId: { type: 'string', description: 'Run ID' } },
-      required: ['runId'],
-      additionalProperties: false,
-    },
-    outputSchema: {
-      type: 'object',
-      properties: { run: { type: 'object' } },
-      required: ['run'],
-      additionalProperties: false,
-    },
+    inputSchema: RUN_ID_INPUT_SCHEMA,
+    outputSchema: RUN_OUTPUT_SCHEMA,
     cli: {
       command: ['workflows', 'inspect'],
       description: 'Inspect a single workflow run',
-      positional: [{ field: 'runId', required: true }],
+      positional: RUN_ID_POSITIONAL,
     },
     async handler(input) {
       const { runId } = input as { runId: string }
-      try {
-        return { run: workflows.getRun(runId) }
-      } catch (error) {
-        if (error instanceof HelmxError && error.code === 'not_found') {
-          throw new HelmxError('not_found', `工作流运行不存在: ${runId}`, 404, { runId })
-        }
-        throw error
-      }
+      return runViewById(workflows, runId)
     },
   })
 
@@ -221,28 +234,18 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
     id: 'abort',
     description: 'Abort a workflow run',
     exposeToPrompt: false,
-    inputSchema: {
-      type: 'object',
-      properties: { runId: { type: 'string', description: 'Run ID' } },
-      required: ['runId'],
-      additionalProperties: false,
-    },
-    outputSchema: {
-      type: 'object',
-      properties: { run: { type: 'object' } },
-      required: ['run'],
-      additionalProperties: false,
-    },
+    inputSchema: RUN_ID_INPUT_SCHEMA,
+    outputSchema: RUN_OUTPUT_SCHEMA,
     cli: {
       command: ['workflows', 'abort'],
       description: 'Abort a workflow run',
-      positional: [{ field: 'runId', required: true }],
+      positional: RUN_ID_POSITIONAL,
     },
     async handler(input) {
       const { runId } = input as { runId: string }
       await workflows.abort(runId)
       syncRunsDoc?.()
-      return { run: workflows.getRun(runId) }
+      return runViewById(workflows, runId)
     },
   })
 
@@ -336,7 +339,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
     cli: {
       command: ['workflows', 'steer'],
       description: 'Steer a running background subagent back on course',
-      positional: [{ field: 'runId', required: true }],
+      positional: RUN_ID_POSITIONAL,
     },
     exposeAsTool: { name: WORKFLOW_STEER_TOOL_NAME },
     async handler(input, context) {
