@@ -173,29 +173,42 @@ describe('tool-activity', () => {
     ]
   }
 
-  test('非 workflow 插件真实编译产物报告活动：done 工具仍隐藏本回合复制/分叉，重复 SSE 不循环，终态/停用释放', { timeout: 60_000 }, async () => {
+  // 重新生成只挂在最新回合（ConversationTimeline 仅给 lastAssistantKey 传 onRegenerate），
+  // 用固定 zh-CN 的本地化无障碍文案定位，避免依赖图标或 DOM 结构。
+  const REGENERATE_LABEL = '重新生成回复'
+  function buttons(root: ParentNode): { copy: boolean; regenerate: boolean; fork: boolean } {
+    const labels = [...root.querySelectorAll('.msg-hover-bar button')].map((el) => el.getAttribute('aria-label') ?? '')
+    return { copy: labels.includes('复制'), regenerate: labels.includes(REGENERATE_LABEL), fork: labels.includes('从此处分叉新会话') }
+  }
+
+  test('非 workflow 插件真实编译产物报告活动：后台活动期间保留复制/分叉、仅收起重新生成，重复 SSE 不循环，终态/停用释放', { timeout: 60_000 }, async () => {
     seed()
     const ui = mount()
     const timeline = e(ConversationTimeline, { conversation, detailEntries: [...entries('call-a', 1), ...entries('call-b', 5)], onRequestEdit: () => {} })
     const store = (activity: Record<string, boolean>, enabled = true) => makeTestStore({
-      conversations: [conversation], uiContributions: enabled ? [toolViewContribution] : [],
+      conversations: [conversation], uiContributions: enabled ? [toolViewContribution] : [], locale: 'zh-CN',
       pluginDocs: { 'sample:background/activity': activity },
     })
-    const bars = () => [...ui.host.querySelectorAll('.msg-ai-block')].map((turn) => turn.querySelector('.msg-hover-bar') !== null)
+    const turns = () => [...ui.host.querySelectorAll('.msg-ai-block')]
     try {
       await ui.render(timeline, store({ 'call-a': true, 'call-b': false }))
       assert.equal(ui.host.querySelectorAll('div.trace-row').length, 0, 'replaceRow: true 接管后不得同时渲染宿主默认 div.trace-row')
-      assert.deepEqual(bars(), [false, true], '后台工具 done 后，只有报告活动的回合仍隐藏操作条')
-      for (let n = 0; n < 5; n++) await ui.render(timeline, store({ 'call-a': true, 'call-b': false }))
-      assert.deepEqual(bars(), [false, true], '相同 SSE 业务值不应清掉或重复累积登记')
+      assert.deepEqual(buttons(turns()[0]!), { copy: true, regenerate: false, fork: true }, '非最新回合有后台活动：复制/分叉保留，且本来就没有重新生成')
+      assert.deepEqual(buttons(turns()[1]!), { copy: true, regenerate: true, fork: true }, '最新回合无后台活动：三个操作齐全')
+      await ui.render(timeline, store({ 'call-a': false, 'call-b': true }))
+      assert.deepEqual(buttons(turns()[0]!), { copy: true, regenerate: false, fork: true }, '非最新回合活动释放后仍只有复制/分叉')
+      assert.deepEqual(buttons(turns()[1]!), { copy: true, regenerate: false, fork: true }, '最新回合有后台活动：只收起重新生成，复制与分叉不受影响')
+      for (let n = 0; n < 5; n++) await ui.render(timeline, store({ 'call-a': false, 'call-b': true }))
+      assert.deepEqual(buttons(turns()[1]!), { copy: true, regenerate: false, fork: true }, '相同 SSE 业务值不应清掉或重复累积登记')
       await ui.render(timeline, store({ 'call-a': false, 'call-b': false }))
-      assert.deepEqual(bars(), [true, true], '真实终态后恢复复制与分叉')
+      assert.deepEqual(buttons(turns()[1]!), { copy: true, regenerate: true, fork: true }, '真实终态后重新生成恢复')
       await ui.render(timeline, store({ 'call-a': true, 'call-b': true }))
-      assert.deepEqual(bars(), [false, false])
+      assert.deepEqual(buttons(turns()[0]!), { copy: true, regenerate: false, fork: true }, '两回合均有活动：非最新回合仍只有复制/分叉')
+      assert.deepEqual(buttons(turns()[1]!), { copy: true, regenerate: false, fork: true }, '两回合均有活动：最新回合仍只收起重新生成')
       await ui.render(timeline, store({ 'call-a': true, 'call-b': true }, false))
-      assert.deepEqual(bars(), [true, true], '插件停用卸载 renderer 后必须释放活动')
+      assert.deepEqual(buttons(turns()[1]!), { copy: true, regenerate: true, fork: true }, '插件停用卸载 renderer 后必须释放活动')
       await ui.render(timeline, store({ 'call-a': false, 'call-b': false }))
-      assert.deepEqual(bars(), [true, true], '恢复插件不能留下旧活动来源')
+      assert.deepEqual(buttons(turns()[1]!), { copy: true, regenerate: true, fork: true }, '恢复插件不能留下旧活动来源')
     } finally { await ui.close() }
   })
 
@@ -210,7 +223,7 @@ describe('tool-activity', () => {
     ]
   }
 
-  test('已结算回合的后台活动只收起操作条：页脚保留模型、时间、耗时与 tooltip；生成中仍不显示时间信息', { timeout: 60_000 }, async () => {
+  test('已结算回合的后台活动只收起重新生成：页脚保留模型、时间、耗时、tooltip 与复制/分叉；生成中与阻塞时不渲染页脚', { timeout: 60_000 }, async () => {
     seed()
     const ui = mount()
     const startedAt = Date.UTC(2025, 0, 15, 10, 0, 0)
@@ -228,6 +241,7 @@ describe('tool-activity', () => {
     )
     const footer = () => ui.host.querySelector('.msg-ai-block .msg-ai-footer')
     const hoverBar = () => ui.host.querySelector('.msg-ai-block .msg-hover-bar')
+    const labels = () => [...(hoverBar()?.querySelectorAll('button') ?? [])].map((el) => el.getAttribute('aria-label') ?? '')
     const titles = () => [...(footer()?.querySelectorAll('.msg-time-meta[title]') ?? [])].map((el) => el.getAttribute('title') ?? '')
     try {
       await render(conversation, { 'call-bg': true })
@@ -236,21 +250,21 @@ describe('tool-activity', () => {
       assert.match(footer()!.textContent ?? '', /demo-model/, '模型标签照常显示')
       assert.ok(titles().some((title) => /^完成于 .+ · 耗时 1\.9s/.test(title)), '时间与耗时的完整 tooltip 照常显示')
       assert.ok(titles().some((title) => title === '实际生成模型：sample/demo-model'), '模型标签的 tooltip 照常显示')
-      assert.ok(hoverBar() === null, '后台活动只收起复制/重新生成/分叉操作条，维持 useToolActivity 的既有契约')
+      assert.deepEqual(labels(), ['复制', '从此处分叉新会话'], '后台活动期间保留只读的复制与分叉，只收起会回退历史的重新生成')
 
       await render(conversation, { 'call-bg': false })
       assert.ok(footer() !== null, '活动释放后页脚保持显示')
-      assert.ok(hoverBar() !== null, '活动释放后操作条恢复')
+      assert.deepEqual(labels(), ['复制', REGENERATE_LABEL, '从此处分叉新会话'], '活动释放后重新生成恢复')
 
       const live: ConversationLive = { conversationId: 1, text: '正在输出', tools: [], updatedAt: startedAt + 2_000 }
       await render({ ...conversation, status: 'working' }, { 'call-bg': true }, live)
       assert.ok(ui.host.querySelector('.msg-live-indicator') !== null, '生成中回合由实时秒表指示')
       assert.ok(footer() === null, '回合 live 且会话 working 时不显示时间与模型，即使插件同时报告后台活动')
-      assert.ok(hoverBar() === null)
+      assert.ok(hoverBar() === null, '生成中不渲染操作条')
 
       await render({ ...conversation, status: 'blocked', pendingAskCount: 1 }, { 'call-bg': true })
       assert.ok(footer() === null, '最新回合在会话 blocked 时同样不显示时间信息')
-      assert.ok(hoverBar() === null)
+      assert.ok(hoverBar() === null, '会话 blocked 时同样不渲染操作条')
     } finally { await ui.close() }
   })
 })
