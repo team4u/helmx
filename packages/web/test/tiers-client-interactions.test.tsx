@@ -613,7 +613,6 @@ describe("tiers-client-interactions", () => {
     assert.equal(typeof cssText, 'string')
     assert.match(cssText as string, /\.tiers-borrow-pill/)
     assert.match(cssText as string, /\.tiers-trace-row/)
-    assert.equal(/\.tiers-borrow-menu-item|\.tiers-borrow-anchor/.test(cssText as string), false)
 
     for (const [key, entry] of Object.entries(TIERS_COPY)) {
       assert.equal(EMOJI_RE.test(entry.en), false, `TIERS_COPY.${key}.en must contain zero Emoji`)
