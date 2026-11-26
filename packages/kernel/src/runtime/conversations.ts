@@ -1143,14 +1143,13 @@ export class ConversationTracker {
         // Failed terminal diagnostic summary shares single source with summaryOf: emitSettled bypasses tracker derivation,
         // so it must include lastError here (otherwise the first conversation.upsert drops the error reason);
         // likewise attach cached contextUsage synchronously (post-settlement async refresh updates later if changed).
-        const settledRaw = summaryOf(
-          updated,
-          settledStatus,
-          0,
-          undefined,
-          settledStatus === 'error' ? lastErrorOf(this.mirrors.get(conversationId)?.live, this.redactError) : undefined,
-          this.lastEntryIds.get(conversationId) ?? updated.lastEntryId ?? 0,
-        )
+        const settledRaw = summaryOf({
+          meta: updated,
+          status: settledStatus,
+          pendingAskCount: 0,
+          lastError: settledStatus === 'error' ? lastErrorOf(this.mirrors.get(conversationId)?.live, this.redactError) : undefined,
+          lastEntryId: this.lastEntryIds.get(conversationId) ?? updated.lastEntryId ?? 0,
+        })
         const cachedUsage = this.usage.peek(conversationId)
         const settledSummary = cachedUsage === undefined ? settledRaw : { ...settledRaw, contextUsage: cachedUsage }
         // Record terminal summary fingerprint so subsequent idle snapshots do not re-emit identical terminal frames.
@@ -1233,7 +1232,7 @@ export class ConversationTracker {
     const lastEntryId = this.lastEntryIds.get(conversationId) ?? meta.lastEntryId ?? 0
     const pendingAskSince =
       pendingAsks > 0 ? this.store.earliestPendingAskCreatedAt?.(conversationId) : undefined
-    const summary = summaryOf(meta, status, pendingAsks, doing, lastError, lastEntryId, pendingAskSince)
+    const summary = summaryOf({ meta, status, pendingAskCount: pendingAsks, doing, lastError, lastEntryId, pendingAskSince })
     const usage = this.usage.cachedOrSchedule(conversationId)
     return usage === undefined ? summary : { ...summary, contextUsage: usage }
   }
