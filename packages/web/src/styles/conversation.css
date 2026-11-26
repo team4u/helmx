@@ -44,8 +44,11 @@
   cursor: pointer;
 }
 
-.pane-parent-link:hover {
+.pane-parent-link:hover,
+.pane-parent-link:focus-visible {
+  outline: none;
   color: var(--fg);
+  box-shadow: none;
 }
 
 .pane-title {
@@ -470,9 +473,12 @@
   border-radius: var(--radius-xs);
 }
 
-.msg-human-collapse-btn:hover {
+.msg-human-collapse-btn:hover,
+.msg-human-collapse-btn:focus-visible {
+  outline: none;
   color: var(--fg);
   background: var(--bg-hover);
+  box-shadow: none;
 }
 
 /* AI 正文（去外框气泡，干净铺在画布底色上） */
@@ -1327,9 +1333,12 @@ pre {
   white-space: nowrap;
 }
 
-.trace-group-summary:hover {
+.trace-group-summary:hover,
+.trace-group-summary:focus-visible {
+  outline: none;
   background: var(--bg-hover);
   color: var(--fg-secondary);
+  box-shadow: none;
 }
 
 /* 有异常的折叠标题保留语义类，但维持静音中性色，仅通过右侧轻量徽标提醒 */
@@ -1337,7 +1346,8 @@ pre {
   color: var(--fg-muted);
 }
 
-.trace-group-summary-error:hover {
+.trace-group-summary-error:hover,
+.trace-group-summary-error:focus-visible {
   color: var(--fg-secondary);
 }
 
@@ -1353,7 +1363,8 @@ pre {
   color: color-mix(in srgb, var(--err) 72%, var(--fg-muted));
 }
 
-.trace-group-summary-error:hover .trace-group-badge-error {
+.trace-group-summary-error:hover .trace-group-badge-error,
+.trace-group-summary-error:focus-visible .trace-group-badge-error {
   background: color-mix(in srgb, var(--err) 11%, transparent);
   color: color-mix(in srgb, var(--err) 84%, var(--fg-secondary));
 }
@@ -1392,8 +1403,11 @@ pre {
   transition: background 100ms ease;
 }
 
-.trace-row:hover {
+.trace-row:hover,
+.trace-row:focus-visible {
+  outline: none;
   background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .trace-row-chevron {
@@ -1881,8 +1895,11 @@ pre {
   border-radius: var(--radius-xs);
   cursor: pointer;
 }
-.pane-title-btn:hover {
+.pane-title-btn:hover,
+.pane-title-btn:focus-visible {
+  outline: none;
   background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .pane-title-popover {
@@ -2150,9 +2167,12 @@ pre {
   text-align: left;
   cursor: pointer;
 }
-.artifact-spill-toggle:hover {
+.artifact-spill-toggle:hover,
+.artifact-spill-toggle:focus-visible {
+  outline: none;
   background: var(--bg-hover);
   color: var(--fg);
+  box-shadow: none;
 }
 .artifact-spill-title {
   font-weight: 500;
@@ -2246,9 +2266,12 @@ pre {
   cursor: pointer;
   text-align: left;
 }
-.timeline-starter-btn:hover {
+.timeline-starter-btn:hover,
+.timeline-starter-btn:focus-visible {
+  outline: none;
   background: var(--nav-active-bg);
   border-color: var(--fg-muted);
+  box-shadow: none;
 }
 .timeline-starter-btn .timeline-starter-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

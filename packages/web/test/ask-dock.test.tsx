@@ -99,7 +99,11 @@ function installFetch(status = 200): void {
   }) as typeof fetch
 }
 
-async function renderAskDock(store: HelmxExternalStore, conversationId: number): Promise<void> {
+async function renderAskDock(
+  store: HelmxExternalStore,
+  conversationId: number,
+  onFocusReturn?: () => void,
+): Promise<void> {
   // When rendering multiple times in one test (switching viewpoints), tear down the
   // previous tree first so no stale card DOM lingers.
   if (root !== undefined) act(() => root?.unmount())
@@ -109,7 +113,13 @@ async function renderAskDock(store: HelmxExternalStore, conversationId: number):
   document.body.appendChild(host)
   await act(async () => {
     root = createRoot(host!)
-    root.render(e(TestStoreProvider, { value: store }, e(AskDock, { conversationId })))
+    root.render(
+      e(
+        TestStoreProvider,
+        { value: store },
+        e(AskDock, { conversationId, ...(onFocusReturn !== undefined ? { onFocusReturn } : {}) }),
+      ),
+    )
   })
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
 }
@@ -1654,5 +1664,305 @@ describe("ask-dock", () => {
     })
     assert.equal(escEv.defaultPrevented, true)
     assert.ok(document.activeElement === radios[2], 'Escape returns focus from custom input to Other option button')
+  })
+
+  test('Escape moves focus to Skip/Cancel button safely, and second Escape on Skip yields to global abort', { timeout: 60_000 }, async () => {
+    installFetch()
+    const skipAsk: AskSpec = {
+      id: 'ask-esc-skip',
+      conversationId: 1,
+      kind: 'question',
+      title: 'Esc Skip Check',
+      fields: [
+        {
+          name: 'pick',
+          label: 'Pick',
+          type: 'choice',
+          required: true,
+          options: [
+            { value: 'a', label: 'Alpha' },
+            { value: 'b', label: 'Beta' },
+          ],
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [skipAsk] }), 1)
+    const card = document.querySelector<HTMLFormElement>('form.ask-dock')!
+    const radios = [...card.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    const skipBtn = card.querySelector<HTMLButtonElement>('.ask-dock-actions-left button')!
+    assert.ok(document.activeElement === radios[0])
+
+    // First Escape on option focuses Skip button instead of immediately cancelling
+    const firstEsc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    await act(async () => {
+      radios[0]!.dispatchEvent(firstEsc)
+    })
+    assert.equal(firstEsc.defaultPrevented, true)
+    assert.equal(posts.length, 0)
+    assert.ok(document.activeElement === skipBtn, 'Escape focuses Skip button without immediate cancel')
+
+    // Second Escape while already on Skip yields (defaultPrevented=false) for global Escx2 abort
+    const secondEsc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    await act(async () => {
+      skipBtn.dispatchEvent(secondEsc)
+    })
+    assert.equal(secondEsc.defaultPrevented, false)
+    assert.equal(posts.length, 0)
+
+    // Activating Skip (native Enter -> click) cancels the ask
+    await act(async () => {
+      skipBtn.click()
+    })
+    assert.equal(posts.length, 1)
+    assert.equal(posts[0]?.url, '/api/asks/ask-esc-skip/cancel')
+  })
+
+  test('ArrowUp/ArrowDown navigate smoothly out of Other custom input without trapping focus', { timeout: 60_000 }, async () => {
+    installFetch()
+    const customAsk: AskSpec = {
+      id: 'ask-other-arrows',
+      conversationId: 1,
+      kind: 'question',
+      title: 'Other Arrow Navigation',
+      fields: [
+        {
+          name: 'tool',
+          label: 'Tool',
+          type: 'choice',
+          required: true,
+          options: [
+            { value: 'vite', label: 'Vite' },
+            { value: 'esbuild', label: 'esbuild' },
+          ],
+          allowCustom: true,
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [customAsk] }), 1)
+    const card = document.querySelector<HTMLFormElement>('form.ask-dock')!
+    const radios = [...card.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+
+    // Open Other via '3'
+    await act(async () => {
+      radios[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true, cancelable: true }))
+    })
+    const input1 = card.querySelector<HTMLInputElement>('.ask-dock-choice-custom input.input')!
+    assert.ok(document.activeElement === input1)
+
+    // ArrowUp on empty custom input moves back to last preset and selects it
+    const upEmpty = new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })
+    await act(async () => {
+      input1.dispatchEvent(upEmpty)
+    })
+    assert.equal(upEmpty.defaultPrevented, true)
+    assert.ok(document.activeElement === radios[1], 'ArrowUp on empty Other moves focus to last preset')
+    assert.equal(radios[1]?.getAttribute('aria-checked'), 'true')
+    assert.ok(card.querySelector('.ask-dock-choice-custom') === null)
+
+    // Re-open Other via '3', type text, ArrowUp returns focus to Other button keeping draft intact
+    await act(async () => {
+      radios[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true, cancelable: true }))
+    })
+    const input2 = card.querySelector<HTMLInputElement>('.ask-dock-choice-custom input.input')!
+    await act(async () => {
+      setInputValue(input2, 'rolldown')
+    })
+    const upFilled = new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })
+    await act(async () => {
+      input2.dispatchEvent(upFilled)
+    })
+    assert.equal(upFilled.defaultPrevented, true)
+    assert.ok(document.activeElement === radios[2], 'ArrowUp with non-empty text focuses Other button')
+    const retainedInput = card.querySelector<HTMLInputElement>('.ask-dock-choice-custom input.input')!
+    assert.equal(retainedInput.value, 'rolldown')
+
+    // ArrowDown from custom input wraps cleanly to first preset ('vite')
+    retainedInput.focus()
+    const downEv = new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })
+    await act(async () => {
+      retainedInput.dispatchEvent(downEv)
+    })
+    assert.equal(downEv.defaultPrevented, true)
+    assert.ok(document.activeElement === radios[0], 'ArrowDown from Other input wraps to first preset')
+    assert.equal(radios[0]?.getAttribute('aria-checked'), 'true')
+  })
+
+  test('multi-question stepper switches questions via ArrowLeft/ArrowRight', { timeout: 60_000 }, async () => {
+    installFetch()
+    const stepAsk: AskSpec = {
+      id: 'ask-stepper-lr',
+      conversationId: 1,
+      kind: 'question',
+      title: 'Stepper L/R',
+      fields: [
+        {
+          name: 'one',
+          label: 'Question 1',
+          type: 'choice',
+          required: true,
+          options: [
+            { value: 'a', label: 'Alpha' },
+            { value: 'b', label: 'Beta' },
+          ],
+        },
+        {
+          name: 'two',
+          label: 'Question 2',
+          type: 'text',
+          required: false,
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [stepAsk] }), 1)
+    const card = document.querySelector<HTMLFormElement>('form.ask-dock')!
+    const counter = () => card.querySelector('.ask-dock-step-counter')?.textContent?.trim()
+    const panels = [...card.querySelectorAll<HTMLElement>('.ask-dock-step-panel')]
+    const step1Radios = [...panels[0]!.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    assert.equal(counter(), '1 / 2')
+    assert.ok(document.activeElement === step1Radios[0])
+
+    // ArrowRight on stepper option switches to question 2 and focuses input
+    const rightEv = new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })
+    await act(async () => {
+      step1Radios[0]!.dispatchEvent(rightEv)
+    })
+    assert.equal(rightEv.defaultPrevented, true)
+    assert.equal(counter(), '2 / 2')
+    const step2Input = panels[1]!.querySelector<HTMLInputElement>('input.input')!
+    assert.ok(document.activeElement === step2Input, 'ArrowRight moves to step 2 and focuses control')
+
+    // Escape exits input to card, ArrowLeft returns to step 1
+    await act(async () => {
+      step2Input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    assert.ok(document.activeElement === card)
+    const leftEv = new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true })
+    await act(async () => {
+      card.dispatchEvent(leftEv)
+    })
+    assert.equal(leftEv.defaultPrevented, true)
+    assert.equal(counter(), '1 / 2')
+    assert.ok(document.activeElement === step1Radios[0])
+  })
+
+  test('non-choice confirm Ask supports window ArrowDown entry, ArrowLeft/Right wrap, and 1/2 focus before activation', { timeout: 60_000 }, async () => {
+    installFetch()
+    const confirmAsk: AskSpec = {
+      id: 'ask-confirm-kbd',
+      conversationId: 1,
+      kind: 'approval',
+      title: 'Confirm Action',
+      fields: [{ name: 'approved', label: 'Allow', type: 'confirm', required: true }],
+      status: 'pending',
+      createdAt: 100,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [confirmAsk] }), 1)
+    const confirmBtns = [...document.querySelectorAll<HTMLButtonElement>('.ask-dock-confirm-actions button')]
+    assert.equal(confirmBtns.length, 2)
+    assert.ok(document.activeElement === confirmBtns[0])
+
+    // Move focus outside
+    const outside = document.createElement('div')
+    outside.tabIndex = 0
+    document.body.appendChild(outside)
+    outside.focus()
+    assert.ok(document.activeElement === outside)
+
+    // Window ArrowDown enters primary Approve button without submitting
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    })
+    assert.ok(document.activeElement === confirmBtns[0])
+    assert.equal(posts.length, 0)
+
+    // ArrowLeft wraps Approve -> Reject; ArrowRight wraps Reject -> Approve
+    await act(async () => {
+      confirmBtns[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }))
+    })
+    assert.ok(document.activeElement === confirmBtns[1], 'ArrowLeft wraps Approve to Reject')
+
+    await act(async () => {
+      confirmBtns[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }))
+    })
+    assert.ok(document.activeElement === confirmBtns[0], 'ArrowRight wraps Reject to Approve')
+
+    // Window '2' focuses Reject safely without auto-submitting; click confirms rejection
+    outside.focus()
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true, cancelable: true }))
+    })
+    assert.ok(document.activeElement === confirmBtns[1])
+    assert.equal(posts.length, 0)
+
+    await act(async () => {
+      confirmBtns[1]!.click()
+    })
+    assert.equal(posts.length, 1)
+    assert.deepEqual(posts[0]?.body, { answers: { approved: 'false' } })
+    outside.remove()
+  })
+
+  test('resolving last Ask invokes onFocusReturn; when stacked, resolving first auto-focuses second Ask instead', { timeout: 60_000 }, async () => {
+    installFetch()
+    const makeChoiceAsk = (id: string): AskSpec => ({
+      id,
+      conversationId: 1,
+      kind: 'question',
+      title: `Ask ${id}`,
+      fields: [
+        {
+          name: 'pick',
+          label: 'Pick',
+          type: 'choice',
+          required: true,
+          options: [
+            { value: 'a', label: 'A' },
+            { value: 'b', label: 'B' },
+          ],
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    })
+
+    let focusReturnCount = 0
+    const ask1 = makeChoiceAsk('ask-q1')
+    const ask2 = makeChoiceAsk('ask-q2')
+    const store = makeStore({ pendingAsks: [ask1, ask2] })
+    await renderAskDock(store, 1, () => { focusReturnCount += 1 })
+
+    const cardsBefore = [...document.querySelectorAll<HTMLFormElement>('form.ask-dock')]
+    assert.equal(cardsBefore.length, 2)
+    const ask1Radios = [...cardsBefore[0]!.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    assert.ok(document.activeElement === ask1Radios[0])
+
+    // Submit ask1 while ask2 is still queued -> does not call onFocusReturn yet
+    await act(async () => {
+      ask1Radios[0]!.click()
+    })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+    assert.equal(focusReturnCount, 0, 'stacked queue holds focus return until final ask closes')
+
+    // Store drops ask1 -> ask2 promotes to primary card and receives focus automatically
+    await act(async () => {
+      store.updateLive((prev) => ({ ...prev, pendingAsks: [ask2] }))
+    })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+    const ask2Radios = [...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    assert.ok(document.activeElement === ask2Radios[0], 'next queued Ask auto-focuses when promoted')
+    assert.equal(focusReturnCount, 0)
+
+    // Submit final ask2 -> calls onFocusReturn once
+    await act(async () => {
+      ask2Radios[1]!.click()
+    })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+    assert.equal(focusReturnCount, 1, 'onFocusReturn called once final ask resolves')
   })
 })

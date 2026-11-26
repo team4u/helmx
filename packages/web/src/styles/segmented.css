@@ -48,14 +48,21 @@
   user-select: none;
 }
 
-.segmented-control-btn:hover:not(:disabled) {
+.segmented-control-btn:hover:not(:disabled),
+.segmented-control-btn:focus-visible:not(:disabled) {
+  outline: none;
   color: var(--fg);
   background: var(--bg-hover);
+  box-shadow: none;
 }
 
 .segmented-control-btn.is-active,
+.segmented-control-btn.is-active:focus-visible,
 .segmented-control-btn[aria-pressed='true'],
-.segmented-control-btn[data-state='active'] {
+.segmented-control-btn[aria-pressed='true']:focus-visible,
+.segmented-control-btn[data-state='active'],
+.segmented-control-btn[data-state='active']:focus-visible {
+  outline: none;
   background: var(--seg-thumb);
   color: var(--fg);
   box-shadow: var(--seg-edge);
