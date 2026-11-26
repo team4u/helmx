@@ -155,6 +155,7 @@ export const modalsMessages = {
   'modals.shortcuts.item.focusComposer': { en: 'Focus message input', 'zh-CN': '聚焦对话框' },
   'modals.shortcuts.item.toggleWorkbench': { en: 'Toggle workbench', 'zh-CN': '展开 / 收起工作台' },
   'modals.shortcuts.item.switchModel': { en: 'Switch model', 'zh-CN': '切换当前模型' },
+  'modals.shortcuts.item.togglePlusMenu': { en: 'Toggle attachments & actions menu', 'zh-CN': '展开 / 收起附件与操作菜单' },
   'modals.shortcuts.item.toggleProcessSteps': { en: 'Toggle process steps', 'zh-CN': '展开 / 收起过程步骤' },
   'modals.shortcuts.item.abortTurn': { en: 'Abort running turn', 'zh-CN': '中止当前执行' },
   'modals.shortcuts.item.sendOrSteer': { en: 'Send / steer', 'zh-CN': '发送 / 运行中插话引导' },

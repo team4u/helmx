@@ -1,5 +1,5 @@
 /**
- * One-turn model borrow (`/model`), in-session model relay (`switch_model`),
+ * One-turn model borrow, in-session model relay (`switch_model`),
  * deterministic target resolution, and per-conversation borrow lifecycle state machine.
  */
 import {
@@ -21,7 +21,6 @@ import {
 } from '@helmx/protocol'
 import {
   isTiersBorrowEligible,
-  parseModelSlashInput,
   parseTiersBorrowInputMeta,
   type SwitchModelPresentationMeta,
   type TierBorrowRecord,
@@ -690,10 +689,9 @@ export function createTierBorrowManager(deps: {
       if (stopping) return { action: 'continue' }
       if (payload.input.origin !== 'human') return { action: 'continue' }
 
-      const parsedSlash = parseModelSlashInput(payload.input.text)
       const parsedMeta = parseTiersBorrowInputMeta(payload.input.meta)
       const existingFast = kv.get(kvKey(payload.conversationId))
-      if (!parsedSlash.matched && !parsedMeta.present && existingFast === undefined) {
+      if (!parsedMeta.present && existingFast === undefined) {
         return { action: 'continue' }
       }
 
@@ -718,50 +716,6 @@ export function createTierBorrowManager(deps: {
           await restoreIfIdleUnlocked(conv.id)
           conv = getConversationOrUndefined((id) => ctx.host.getConversation(id), conv.id)
           if (conv === undefined) return { action: 'continue' }
-        }
-
-        if (parsedSlash.matched) {
-          if (parsedSlash.kind === 'bare') {
-            return {
-              action: 'block',
-              reason:
-                'Usage: /model <tier-or-provider/model> [message]. Specify a tier (e.g. tier/architect) or model (e.g. provider/modelId).',
-            }
-          }
-          if (isConversationBusy(conv)) {
-            return {
-              action: 'block',
-              reason:
-                'Cannot borrow a model via /model while the conversation is busy. Wait for the current turn to settle first.',
-            }
-          }
-          const hasAttachments = (payload.input.attachments?.length ?? 0) > 0
-          if (parsedSlash.remainder === '' && !hasAttachments) {
-            try {
-              await armBorrowUnlocked(conv.id, parsedSlash.targetRef, { source: 'slash' })
-              return { action: 'handled' }
-            } catch (err) {
-              return { action: 'block', reason: ctx.host.redact(errorMessageOf(err)) }
-            }
-          }
-          try {
-            await activateBorrowUnlocked(conv.id, parsedSlash.targetRef, {
-              source: 'slash',
-              restoreAfterTurn: true,
-            })
-            return {
-              action: 'transform',
-              value: {
-                ...payload,
-                input: {
-                  ...payload.input,
-                  text: parsedSlash.remainder,
-                },
-              },
-            }
-          } catch (err) {
-            return { action: 'block', reason: ctx.host.redact(errorMessageOf(err)) }
-          }
         }
 
         if (parsedMeta.present) {

@@ -16,6 +16,8 @@ export function buildModelPickerControlCopy(t: WebMessageTranslator): ModelPicke
     buttonAria: t('composer.model.buttonAria'),
     levelSuffix: t('composer.model.levelSuffix'),
     defaultLabel: t('composer.model.defaultLabel'),
+    defaultModeLabel: t('composer.model.defaultModeLabel'),
+    modeBarAria: t('composer.model.modeBarAria'),
     catalogUnavailable: t('composer.model.catalogUnavailable'),
     searchAria: t('composer.model.searchAria'),
     searchPlaceholder: t('composer.model.searchPlaceholder'),

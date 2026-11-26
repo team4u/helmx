@@ -29,13 +29,14 @@ export type HelmxShortcutAction =
   | 'toggle-profile-picker'
   | 'toggle-process-groups'
   | 'toggle-plan-mode'
+  | 'toggle-plus-menu'
   | 'focus-composer'
   | 'focus-search'
   | 'open-shortcuts'
 
 export interface HelmxShortcutDetail {
   action: HelmxShortcutAction
-  panel: FocusedPanel
+  panel: FocusedPanel | 'drawer'
   drawerConversationId?: number
 }
 
@@ -97,6 +98,7 @@ const NON_WORKBENCH_DIALOG_SELECTOR =
   '[role="alertdialog"], [role="dialog"]:not(.drawer-stack-dialog):not(.helmx-workbench):not(.conversation-drawer)'
 const NON_MODEL_PICKER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.composer-model-popover)'
 const NON_PROFILE_PICKER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.agent-standby-profile-popover)'
+const NON_PLUS_MENU_OVERLAY_SELECTOR = '[role="menu"]:not(.composer-plus-menu), [role="listbox"]'
 
 export function getStoredSidebarCollapsed(): boolean {
   try {
@@ -168,6 +170,12 @@ export function hasNonModelPickerDialogOpen(): boolean {
 export function hasNonProfilePickerDialogOpen(): boolean {
   if (typeof document === 'undefined') return false
   return document.querySelector(NON_PROFILE_PICKER_DIALOG_SELECTOR) !== null
+}
+
+/** Detect non-plus-menu menu/listbox overlays (keeps `.composer-plus-menu` toggleable by Ctrl+;). */
+export function hasNonPlusMenuOverlayOpen(): boolean {
+  if (typeof document === 'undefined') return false
+  return document.querySelector(NON_PLUS_MENU_OVERLAY_SELECTOR) !== null
 }
 
 /** Whether at least two human-selectable profiles are available for switching on the standby page. */
@@ -281,6 +289,15 @@ export function isPeriodShortcutKey(
   return event.key === '.' || event.code === 'Period'
 }
 
+/** IME-safe matcher for ';' (supports Chinese IME producing '；' or 'Process' with physical code 'Semicolon'). */
+export function isSemicolonShortcutKey(
+  event: ShortcutKeyEventShape,
+  options?: SymbolShortcutMatchOptions,
+): boolean {
+  if (isImeComposingEvent(event, options?.blockProcessKeyCode)) return false
+  return event.key === ';' || event.key === '；' || event.code === 'Semicolon'
+}
+
 /**
  * Resolve the standby target for "New topic" (shared by Mod+Shift+O and CommandPalette):
  * - Human-owned conversation with a human-selectable profile -> inherits (nodeId, cwd);
@@ -384,6 +401,11 @@ export function buildShortcutCatalog(input: BuildShortcutCatalogInput): Shortcut
       id: 'conv:switch-model',
       keys: 'Ctrl+L',
       label: t('modals.shortcuts.item.switchModel'),
+    },
+    {
+      id: 'conv:toggle-plus-menu',
+      keys: 'Ctrl+;',
+      label: t('modals.shortcuts.item.togglePlusMenu'),
     },
     {
       id: 'conv:toggle-process-steps',

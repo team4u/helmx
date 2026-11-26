@@ -104,7 +104,7 @@ export const composerMessages = {
 
   // ---- Composer unified + menu ----
   'composer.plusMenu.aria': { en: 'More actions and attachments', 'zh-CN': '更多操作与附件' },
-  'composer.plusMenu.title': { en: 'Attachments and modes', 'zh-CN': '附件与模式' },
+  'composer.plusMenu.title': { en: 'Attachments and modes ({shortcut})', 'zh-CN': '附件与模式 ({shortcut})' },
   'composer.plusMenu.upload': { en: 'Upload attachment', 'zh-CN': '上传附件' },
 
   // ---- Composer placeholder (pure model) ----
@@ -152,6 +152,8 @@ export const composerMessages = {
   'composer.model.buttonAria': { en: 'Model and thinking level: {model}{level}', 'zh-CN': '模型与思考档位：{model}{level}' },
   'composer.model.levelSuffix': { en: ' · {level}', 'zh-CN': ' · {level}' },
   'composer.model.defaultLabel': { en: 'Default model', 'zh-CN': '默认模型' },
+  'composer.model.defaultModeLabel': { en: 'Switch model', 'zh-CN': '切换模型' },
+  'composer.model.modeBarAria': { en: 'Model selection mode', 'zh-CN': '模型选择模式' },
   'composer.model.catalogUnavailable': { en: 'Model catalog unavailable', 'zh-CN': '模型目录不可用' },
   'composer.model.searchAria': { en: 'Search models', 'zh-CN': '搜索模型' },
   'composer.model.searchPlaceholder': { en: 'Search models…', 'zh-CN': '搜索模型…' },

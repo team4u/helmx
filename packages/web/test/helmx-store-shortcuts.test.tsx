@@ -19,12 +19,14 @@ import {
   hasDialogOpen,
   hasMultipleNewTopicProfiles,
   hasNonModelPickerDialogOpen,
+  hasNonPlusMenuOverlayOpen,
   hasNonProfilePickerDialogOpen,
   isApplePlatform,
   isConversationAbortable,
   isEditableShortcutTarget,
   isInlineInputEscapeTarget,
   isPeriodShortcutKey,
+  isSemicolonShortcutKey,
   isSlashShortcutKey,
   persistSidebarCollapsed,
   resolveFocusedPanel,
@@ -371,6 +373,39 @@ describe("helmx-store-shortcuts", () => {
     assert.equal(isPeriodShortcutKey({ key: '。', code: 'Period', keyCode: 229 }, { blockProcessKeyCode: true }), false)
     assert.equal(isPeriodShortcutKey({ key: 'o', code: 'KeyO' }), false)
 
+    assert.equal(isSemicolonShortcutKey({ key: ';' }), true)
+    assert.equal(isSemicolonShortcutKey({ key: '；', code: 'Semicolon' }), true)
+    assert.equal(isSemicolonShortcutKey({ key: '；' }), true)
+    assert.equal(isSemicolonShortcutKey({ key: 'Process', code: 'Semicolon', keyCode: 229 }), true)
+    assert.equal(isSemicolonShortcutKey({ key: ';', isComposing: true }), false)
+    assert.equal(isSemicolonShortcutKey({ key: '；', code: 'Semicolon', keyCode: 229 }, { blockProcessKeyCode: true }), false)
+    assert.equal(isSemicolonShortcutKey({ key: '.', code: 'Period' }), false)
+
+    // hasNonPlusMenuOverlayOpen: ignores standalone .composer-plus-menu, blocks other menus/listboxes/dialogs
+    assert.equal(hasNonPlusMenuOverlayOpen(), false)
+    const plusWrapper = document.createElement('div')
+    plusWrapper.setAttribute('data-radix-popper-content-wrapper', '')
+    const plusMenu = document.createElement('div')
+    plusMenu.setAttribute('role', 'menu')
+    plusMenu.className = 'composer-plus-menu'
+    plusWrapper.appendChild(plusMenu)
+    document.body.appendChild(plusWrapper)
+    assert.equal(hasNonPlusMenuOverlayOpen(), false, 'open .composer-plus-menu must allow re-pressing Ctrl+; to close it')
+
+    const otherMenu = document.createElement('div')
+    otherMenu.setAttribute('role', 'menu')
+    otherMenu.className = 'other-menu'
+    document.body.appendChild(otherMenu)
+    assert.equal(hasNonPlusMenuOverlayOpen(), true, 'other open [role="menu"] must block Ctrl+;')
+    otherMenu.remove()
+
+    const otherListbox = document.createElement('div')
+    otherListbox.setAttribute('role', 'listbox')
+    document.body.appendChild(otherListbox)
+    assert.equal(hasNonPlusMenuOverlayOpen(), true, 'open [role="listbox"] must block Ctrl+;')
+    otherListbox.remove()
+    plusWrapper.remove()
+
     assert.equal(resolveShortcutKeyLower({ key: 'Process', code: 'KeyI', keyCode: 229 }), 'i')
     assert.equal(resolveShortcutKeyLower({ key: 'a', code: 'KeyQ' }), 'a')
 
@@ -492,8 +527,19 @@ describe("helmx-store-shortcuts", () => {
     const navItemsZh = catalogZh.find((s) => s.key === 'navigation')?.items ?? []
     assert.equal(navItemsZh.some((item) => item.keys === '/' && item.label === '聚焦页面搜索'), true)
     const convItems = catalogWithPlugin.find((s) => s.key === 'conversation')?.items ?? []
+    const switchModelIdx = convItems.findIndex((item) => item.id === 'conv:switch-model')
+    const togglePlusIdx = convItems.findIndex((item) => item.id === 'conv:toggle-plus-menu')
+    assert.ok(switchModelIdx >= 0)
+    assert.equal(togglePlusIdx, switchModelIdx + 1, 'Ctrl+; must appear immediately after Ctrl+L in conversation shortcuts')
+    assert.equal(convItems[togglePlusIdx]?.keys, 'Ctrl+;')
+    assert.equal(convItems[togglePlusIdx]?.label, 'Toggle attachments & actions menu')
     assert.equal(convItems.some((item) => item.keys === 'Ctrl+.' && item.label === 'Toggle Alpha mode'), true)
     assert.equal(convItems.some((item) => item.label === 'No Shortcut Command'), false)
+
+    const convItemsZh = catalogZh.find((s) => s.key === 'conversation')?.items ?? []
+    const togglePlusZh = convItemsZh.find((item) => item.id === 'conv:toggle-plus-menu')
+    assert.equal(togglePlusZh?.keys, 'Ctrl+;')
+    assert.equal(togglePlusZh?.label, '展开 / 收起附件与操作菜单')
 
     const catalogWithoutPlugin = buildShortcutCatalog({ pluginCommands: [], locale: 'en' })
     const convItemsEmpty = catalogWithoutPlugin.find((s) => s.key === 'conversation')?.items ?? []
@@ -632,6 +678,7 @@ describe("helmx-store-shortcuts", () => {
       dispatchWindowKey({ key: 'l', ctrlKey: true })
       dispatchWindowKey({ key: 'o', ctrlKey: true })
       dispatchWindowKey({ key: '.', ctrlKey: true })
+      dispatchWindowKey({ key: ';', ctrlKey: true })
       dispatchWindowKey({ key: 'Escape' })
       dispatchWindowKey({ key: 'Escape' })
       await settle(20)
@@ -685,11 +732,36 @@ describe("helmx-store-shortcuts", () => {
       const evDot1 = dispatchWindowKey({ key: '.', ctrlKey: true })
       assert.equal(evDot1.defaultPrevented, true, 'Ctrl+. must call preventDefault')
 
+      const evSemi1 = dispatchWindowKey({ key: ';', ctrlKey: true })
+      assert.equal(evSemi1.defaultPrevented, true, 'Ctrl+; must call preventDefault')
+
       assert.deepEqual(fired, [
         { action: 'toggle-model-picker', panel: 'split' },
         { action: 'toggle-process-groups', panel: 'split' },
         { action: 'toggle-plan-mode', panel: 'split' },
+        { action: 'toggle-plus-menu', panel: 'split' },
       ])
+
+      // Open .composer-plus-menu -> re-pressing Ctrl+; still dispatches toggle-plus-menu (not blocked by its own menu)
+      const selfPlusMenu = document.createElement('div')
+      selfPlusMenu.setAttribute('role', 'menu')
+      selfPlusMenu.className = 'composer-plus-menu'
+      document.body.appendChild(selfPlusMenu)
+      const countBeforePlusToggle = fired.length
+      const evSemiClose = dispatchWindowKey({ key: ';', ctrlKey: true })
+      assert.equal(evSemiClose.defaultPrevented, true, 'Ctrl+; must still dispatch when .composer-plus-menu is open')
+      assert.deepEqual(fired.slice(countBeforePlusToggle), [{ action: 'toggle-plus-menu', panel: 'split' }])
+      selfPlusMenu.remove()
+
+      // Other open [role="listbox"] blocks Ctrl+;
+      const otherList = document.createElement('div')
+      otherList.setAttribute('role', 'listbox')
+      document.body.appendChild(otherList)
+      const countBeforeListBlock = fired.length
+      const evSemiBlockedByList = dispatchWindowKey({ key: ';', ctrlKey: true })
+      assert.equal(evSemiBlockedByList.defaultPrevented, false)
+      assert.equal(fired.length, countBeforeListBlock)
+      otherList.remove()
 
       // Switch back to primary, then to split, and verify closing the split auto-resets to primary
       await act(async () => {
@@ -709,7 +781,7 @@ describe("helmx-store-shortcuts", () => {
 
       const evL2 = dispatchWindowKey({ key: 'l', ctrlKey: true })
       assert.equal(evL2.defaultPrevented, true)
-      assert.deepEqual(fired[3], { action: 'toggle-model-picker', panel: 'primary' })
+      assert.deepEqual(fired[fired.length - 1], { action: 'toggle-model-picker', panel: 'primary' })
 
       // With the ModelPicker popover open (carrying role="dialog" + .composer-model-popover):
       // a second Ctrl+L still dispatches toggle-model-picker to close the popover; Ctrl+O stays blocked
@@ -734,6 +806,8 @@ describe("helmx-store-shortcuts", () => {
       const countBeforeNormalDialog = fired.length
       const evLBlocked = dispatchWindowKey({ key: 'l', ctrlKey: true })
       assert.equal(evLBlocked.defaultPrevented, false)
+      const evSemiBlockedByDialog = dispatchWindowKey({ key: ';', ctrlKey: true })
+      assert.equal(evSemiBlockedByDialog.defaultPrevented, false)
       assert.equal(fired.length, countBeforeNormalDialog)
       normalDialog.remove()
     } finally {
@@ -1099,6 +1173,8 @@ describe("helmx-store-shortcuts", () => {
     assert.ok(text.includes('Navigation'))
     assert.ok(text.includes('Conversation'))
     assert.ok(text.includes('Composer'))
+    assert.ok(text.includes('Ctrl+;'))
+    assert.ok(text.includes('Toggle attachments & actions menu'))
     assert.equal(text.includes('Focus message input'), true)
     assert.ok(text.includes('Toggle Plan mode'))
     assert.ok(text.includes('Ctrl+.'))
@@ -1679,5 +1755,165 @@ describe("helmx-store-shortcuts", () => {
     } finally {
       window.removeEventListener('helmx:shortcut', onShortcut)
     }
+  })
+
+  test('App end-to-end: Ctrl+; toggles + menu open (focuses first enabled menuitem) and closed (restores textarea focus) across primary, split, standby, and top conversation drawer', { timeout: 60_000 }, async () => {
+    window.history.replaceState(null, '', '#/c/1?split=c/2')
+    installFetch({
+      profiles: [{ id: 'assistant', name: 'Assistant' }],
+      conversations: [
+        makeConversation(1, { status: 'idle', title: 'Primary conv', profileId: 'assistant', cwd: '/repo-one' }),
+        makeConversation(2, { status: 'idle', title: 'Split conv', profileId: 'assistant', cwd: '/repo-two' }),
+        makeConversation(3, { status: 'idle', title: 'Drawer conv', profileId: 'assistant', cwd: '/repo-three' }),
+      ],
+    })
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(<App />)
+    })
+    await settle(100)
+
+    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
+    const splitPane = host.querySelector<HTMLElement>('[data-helmx-panel="split"]')!
+    const primaryTa = primaryPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    const splitTa = splitPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    const primaryPlusTrigger = primaryPane.querySelector<HTMLButtonElement>('button.composer-plus-trigger')!
+    assert.ok(primaryTa !== null && splitTa !== null && primaryPlusTrigger !== null)
+    assert.ok(primaryPlusTrigger.title.includes('Ctrl+;'), 'plus trigger title advertises Ctrl+;')
+
+    // Helper: first enabled [role="menuitem"] inside currently open .composer-plus-menu
+    const firstEnabledPlusMenuItem = (menu: HTMLElement): HTMLElement | null =>
+      menu.querySelector<HTMLElement>('[role="menuitem"]:not([data-disabled]):not([aria-disabled="true"])')
+
+    // 1) Primary panel: Ctrl+; opens menu & focuses first enabled item; second Ctrl+; closes & restores focus to primaryTa
+    primaryTa.focus()
+    assert.ok(document.activeElement === primaryTa)
+    const evPrimaryOpen = dispatchWindowKey({ key: ';', ctrlKey: true }, primaryTa)
+    assert.equal(evPrimaryOpen.defaultPrevented, true)
+    await settle(60)
+
+    let menus = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu')]
+    assert.equal(menus.length, 1, 'primary Ctrl+; opens exactly one .composer-plus-menu')
+    const primaryFirstItem = firstEnabledPlusMenuItem(menus[0]!)
+    assert.ok(primaryFirstItem !== null)
+    assert.ok(document.activeElement === primaryFirstItem, 'opening + menu via Ctrl+; focuses first enabled menuitem')
+    assert.ok(document.activeElement !== primaryPlusTrigger)
+
+    const evPrimaryClose = dispatchWindowKey({ key: ';', ctrlKey: true }, document.activeElement ?? window)
+    assert.equal(evPrimaryClose.defaultPrevented, true)
+    await settle(60)
+    assert.equal(document.querySelectorAll('.composer-plus-menu').length, 0, 'second Ctrl+; closes primary + menu')
+    assert.ok(document.activeElement === primaryTa, 'closing + menu via Ctrl+; restores focus to primary textarea (not trigger)')
+
+    // 2) Focus split panel -> Ctrl+; (using IME keyCode 229 Semicolon) toggles split panel + menu & restores splitTa focus
+    await act(async () => {
+      splitPane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    })
+    splitTa.focus()
+    const splitTrigger = splitPane.querySelector<HTMLButtonElement>('button.composer-plus-trigger')!
+    const evSplitOpen = dispatchWindowKey({ key: 'Process', code: 'Semicolon', keyCode: 229, ctrlKey: true, isComposing: false }, splitTa)
+    assert.equal(evSplitOpen.defaultPrevented, true)
+    await settle(60)
+
+    menus = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu')]
+    assert.equal(menus.length, 1, 'split Ctrl+; opens split + menu')
+    const splitFirstItem = firstEnabledPlusMenuItem(menus[0]!)
+    assert.ok(splitFirstItem !== null)
+    assert.ok(document.activeElement === splitFirstItem)
+    assert.ok(document.activeElement !== splitTrigger)
+
+    dispatchWindowKey({ key: ';', ctrlKey: true }, document.activeElement ?? window)
+    await settle(60)
+    assert.equal(document.querySelectorAll('.composer-plus-menu').length, 0)
+    assert.ok(document.activeElement === splitTa, 'closing split + menu returns focus to split textarea')
+
+    // 3) Open conversation drawer #3 over primary -> Ctrl+; dispatches panel: 'drawer', drawerConversationId: 3 & opens ONLY drawer menu
+    await act(async () => {
+      primaryPane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    })
+    window.history.replaceState(null, '', '#/c/1?drawer=c/3')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(100)
+
+    const drawerDialog = document.querySelector<HTMLElement>('.drawer-stack-dialog')!
+    assert.ok(drawerDialog !== null)
+    const drawerTa = drawerDialog.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    const drawerTrigger = drawerDialog.querySelector<HTMLButtonElement>('button.composer-plus-trigger')!
+    assert.ok(drawerTa !== null && drawerTrigger !== null)
+
+    const seenDrawerEvents: HelmxShortcutDetail[] = []
+    const onShortcut = (ev: Event) => {
+      const detail = (ev as CustomEvent<HelmxShortcutDetail>).detail
+      if (detail?.action === 'toggle-plus-menu') seenDrawerEvents.push(detail)
+    }
+    window.addEventListener('helmx:shortcut', onShortcut)
+    try {
+      drawerTa.focus()
+      const evDrawerOpen = dispatchWindowKey({ key: ';', ctrlKey: true }, drawerTa)
+      assert.equal(evDrawerOpen.defaultPrevented, true)
+      await settle(60)
+      assert.deepEqual(seenDrawerEvents[0], {
+        action: 'toggle-plus-menu',
+        panel: 'drawer',
+        drawerConversationId: 3,
+      })
+      menus = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu')]
+      assert.equal(menus.length, 1, 'drawer Ctrl+; opens exactly one + menu')
+      const drawerFirstItem = firstEnabledPlusMenuItem(menus[0]!)
+      assert.ok(drawerFirstItem !== null)
+      assert.ok(document.activeElement === drawerFirstItem)
+      assert.ok(document.activeElement !== drawerTrigger)
+
+      dispatchWindowKey({ key: ';', ctrlKey: true }, document.activeElement ?? window)
+      await settle(60)
+      assert.equal(document.querySelectorAll('.composer-plus-menu').length, 0)
+      assert.ok(document.activeElement === drawerTa, 'closing drawer + menu returns focus to drawer textarea')
+
+      // Opening Workbench drawer over conversation drawer blocks Ctrl+; from reaching drawer composer beneath
+      dispatchWindowKey(modInit('j'))
+      await settle(60)
+      const countBeforeWb = seenDrawerEvents.length
+      const evBlockedByWb = dispatchWindowKey({ key: ';', ctrlKey: true })
+      assert.equal(evBlockedByWb.defaultPrevented, false)
+      assert.equal(seenDrawerEvents.length, countBeforeWb)
+      dispatchWindowKey(modInit('j'))
+      await settle(40)
+    } finally {
+      window.removeEventListener('helmx:shortcut', onShortcut)
+    }
+
+    // 4) Close drawer and navigate to standby #/a/assistant (leaving #/c/1 in hidden Activity) -> Ctrl+; controls standby menu ONLY
+    window.history.replaceState(null, '', '#/a/assistant')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await settle(100)
+
+    const standbyPane = primaryPane.querySelector<HTMLElement>('.agent-standby-pane[data-agent="assistant"]')!
+    const standbyTa = standbyPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    const standbyTrigger = standbyPane.querySelector<HTMLButtonElement>('button.composer-plus-trigger')!
+    assert.ok(standbyTa !== null && standbyTrigger !== null)
+
+    standbyTa.focus()
+    const evStandbyOpen = dispatchWindowKey({ key: ';', ctrlKey: true }, standbyTa)
+    assert.equal(evStandbyOpen.defaultPrevented, true)
+    await settle(60)
+
+    menus = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu')]
+    assert.equal(menus.length, 1, 'standby Ctrl+; ignores hidden Activity #1 and opens standby + menu')
+    const standbyFirstItem = firstEnabledPlusMenuItem(menus[0]!)
+    assert.ok(standbyFirstItem !== null)
+    assert.ok(document.activeElement === standbyFirstItem)
+    assert.ok(document.activeElement !== standbyTrigger)
+
+    dispatchWindowKey({ key: ';', ctrlKey: true }, document.activeElement ?? window)
+    await settle(60)
+    assert.equal(document.querySelectorAll('.composer-plus-menu').length, 0)
+    assert.ok(document.activeElement === standbyTa, 'closing standby + menu restores focus to standby textarea')
   })
 })

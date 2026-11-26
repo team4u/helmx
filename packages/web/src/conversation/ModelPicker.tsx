@@ -80,6 +80,7 @@ export function ModelPicker({ conversation, onReturnFocus }: ModelPickerProps) {
     <ModelPickerControl
       effectiveModel={conversation.model}
       activeThinkingLevel={conversation.thinkingLevel}
+      enableRegisteredModes={true}
       resetLabel={t('composer.model.clearOverride')}
       resetTitle={t('composer.model.clearOverride')}
       buttonTitle={t('composer.model.currentTitle', {

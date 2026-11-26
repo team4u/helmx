@@ -1,20 +1,15 @@
 /**
- * Pure data models, boundary parsers, draftMeta helpers, and panel-isolated
- * picker-open event bus for builtin:tiers model borrow UI.
+ * Pure data models, boundary parsers, and draftMeta helpers for builtin:tiers model borrow UI.
  * Browser-safe, zero React component exports (Fast Refresh compliant).
  */
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { formatModelShortName } from '@helmx/plugin-client'
 
 export const TIERS_BORROW_SESSION_DOC = 'borrow' as const
-export const TIERS_BORROW_COMMAND_ID = 'borrow-model' as const
-export const TIERS_BORROW_COMMAND_SLASH = 'model' as const
 export const TIERS_SWITCH_MODEL_TOOL = 'switch_model' as const
 export const TIERS_INPUT_META_KEY = 'builtin:tiers' as const
-export const TIERS_BORROW_OPEN_EVENT = 'helmx:tiers-borrow-open' as const
 
 export type TierBorrowPhase = 'armed' | 'active'
-export type HelmxBorrowPanel = 'primary' | 'split'
 
 export interface TierBorrowSessionView {
   phase: TierBorrowPhase
@@ -223,61 +218,4 @@ export function extractFirstErrorLine(raw: unknown): string | undefined {
     .map((part) => part.trim())
     .find((part) => part.length > 0)
   return line !== undefined ? line.slice(0, 140) : undefined
-}
-
-/** Resolve the owning host panel (`primary` | `split`) for panel-isolated menu -> toolbar events. */
-export function resolveBorrowPanel(
-  el: Element | null | undefined,
-  options?: { checkOpenPlusTrigger?: boolean },
-): HelmxBorrowPanel {
-  const ownAttr = el?.closest?.('[data-helmx-panel]')?.getAttribute('data-helmx-panel')
-  if (ownAttr === 'primary' || ownAttr === 'split') return ownAttr
-  if (options?.checkOpenPlusTrigger === true && typeof document !== 'undefined') {
-    const triggerAttr = document
-      .querySelector('.composer-plus-trigger[data-state="open"]')
-      ?.closest?.('[data-helmx-panel]')
-      ?.getAttribute('data-helmx-panel')
-    if (triggerAttr === 'primary' || triggerAttr === 'split') return triggerAttr
-  }
-  return 'primary'
-}
-
-export function makeBorrowScopeKey(
-  panel: HelmxBorrowPanel,
-  target: { conversationId: number } | { profileId: string },
-): string {
-  return 'conversationId' in target
-    ? `${panel}:conv:${target.conversationId}`
-    : `${panel}:standby:${target.profileId}`
-}
-
-export function emitBorrowPickerOpen(scopeKey: string): void {
-  if (typeof window === 'undefined') return
-  const EventCtor = typeof window.CustomEvent === 'function' ? window.CustomEvent : CustomEvent
-  window.dispatchEvent(new EventCtor(TIERS_BORROW_OPEN_EVENT, { detail: { scopeKey } }))
-}
-
-export function subscribeBorrowPickerOpen(
-  getScopeKey: () => string,
-  onOpen: () => void,
-): () => void {
-  if (typeof window === 'undefined') return () => {}
-  const listener = (event: Event): void => {
-    const detail = (event as CustomEvent<{ scopeKey?: unknown } | undefined>).detail
-    if (detail !== undefined && detail !== null && detail.scopeKey === getScopeKey()) {
-      onOpen()
-    }
-  }
-  window.addEventListener(TIERS_BORROW_OPEN_EVENT, listener)
-  return () => window.removeEventListener(TIERS_BORROW_OPEN_EVENT, listener)
-}
-
-/** Return focus to the owning composer textarea after closing the borrow picker via keyboard or selection. */
-export function focusOwningComposerTextarea(anchor: Element | null | undefined): boolean {
-  const textarea = anchor?.closest('.composer-box')?.querySelector<HTMLTextAreaElement>('textarea')
-  if (textarea === null || textarea === undefined || textarea.disabled || textarea.readOnly) {
-    return false
-  }
-  textarea.focus()
-  return true
 }

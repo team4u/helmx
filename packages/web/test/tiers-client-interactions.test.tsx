@@ -14,16 +14,14 @@ import { waitFor } from '@helmx/test-kit'
 import * as React from 'react'
 import { act } from 'react'
 import type {
-  ComposerMenuSlotProps,
   ComposerToolbarSlotProps,
   ConversationSummary,
   PluginClientContext as PluginClientContextType,
   ToolViewProps,
 } from '@helmx/protocol'
+import { COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol'
 import type { PluginSessionDocKey, PluginSessionDocState } from '@helmx/plugin-client'
 import {
-  TIERS_BORROW_COMMAND_ID,
-  TIERS_BORROW_COMMAND_SLASH,
   TIERS_BORROW_SESSION_DOC,
   TIERS_INPUT_META_KEY,
   TIERS_SWITCH_MODEL_TOOL,
@@ -33,23 +31,24 @@ import {
   readStandbyBorrowDraft,
 } from '../../plugins/src/tiers/client/borrow-models.ts'
 import { TIERS_COPY } from '../../plugins/src/tiers/client/copy.ts'
+import { resetStandbyDrafts, standbyDraftsDirty } from '../src/conversation/standby-model.js'
+import { resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
 const {
-  ComposerCommandContext,
-  DropdownMenuContent,
-  DropdownMenuRoot,
-  DropdownMenuTrigger,
+  ComposerModelPickerModeContext,
   ModelPickerControl,
   PluginClientContext,
   PluginClientHostContext,
-  createComposerCommandRegistry,
+  createComposerModelPickerModeRegistry,
   resolveLocalizedText,
+  useComposerModelPickerMode,
 } = await import('@helmx/plugin-client')
-const { focusWithCaret } = await import('../src/conversation/composer-controller.js')
+const { Composer } = await import('../src/conversation/Composer.js')
+const { AgentStandbyPane } = await import('../src/conversation/AgentStandbyPane.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const {
   importBuiltinClientModule,
@@ -63,7 +62,6 @@ const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6
 let rawTiersModule: Record<string, unknown>
 let TiersManagerScreen: (props: Record<string, unknown>) => React.ReactElement
 let TiersSettingsPanel: () => React.ReactElement
-let BorrowMenuItem: (props: ComposerMenuSlotProps) => React.ReactElement | null
 let BorrowToolbarPill: (props: ComposerToolbarSlotProps) => React.ReactElement | null
 let SwitchModelToolRow: (props: ToolViewProps) => React.ReactElement
 describe("tiers-client-interactions", () => {
@@ -75,7 +73,6 @@ describe("tiers-client-interactions", () => {
     rawTiersModule = mod
     TiersManagerScreen = mod['TiersManagerScreen'] as (props: Record<string, unknown>) => React.ReactElement
     TiersSettingsPanel = mod['TiersSettingsPanel'] as () => React.ReactElement
-    BorrowMenuItem = mod['BorrowMenuItem'] as (props: ComposerMenuSlotProps) => React.ReactElement | null
     BorrowToolbarPill = mod['BorrowToolbarPill'] as (props: ComposerToolbarSlotProps) => React.ReactElement | null
     SwitchModelToolRow = mod['SwitchModelToolRow'] as (props: ToolViewProps) => React.ReactElement
   }, { timeout: 60_000 })
@@ -574,9 +571,11 @@ describe("tiers-client-interactions", () => {
 
   function WithSessionDocOverride({
     harness,
+    onInvokeAction,
     children,
   }: {
     harness: ReturnType<typeof createSessionDocHarness>
+    onInvokeAction?: (pluginId: string, actionId: string, input: unknown) => Promise<unknown>
     children?: React.ReactNode
   }): React.ReactElement {
     const basePort = React.useContext(PluginClientHostContext)
@@ -587,22 +586,20 @@ describe("tiers-client-interactions", () => {
         subscribeSessionDoc: harness.subscribeSessionDoc,
         getSessionDocState: harness.getSessionDocState,
         retrySessionDoc: harness.retrySessionDoc,
+        ...(onInvokeAction ? { invokePluginAction: onInvokeAction } : {}),
       }),
-      [basePort, harness],
+      [basePort, harness, onInvokeAction],
     )
     return e(PluginClientHostContext.Provider, { value: port }, children ?? null)
   }
 
   test('tiers client module: Fast Refresh exports, borrow CSS classes, pure parsers, and zero Emoji copy', { timeout: 60_000 }, () => {
     assert.equal(TIERS_BORROW_SESSION_DOC, 'borrow')
-    assert.equal(TIERS_BORROW_COMMAND_ID, 'borrow-model')
-    assert.equal(TIERS_BORROW_COMMAND_SLASH, 'model')
     assert.equal(TIERS_SWITCH_MODEL_TOOL, 'switch_model')
     assert.equal(TIERS_INPUT_META_KEY, 'builtin:tiers')
 
     const exportNames = Object.keys(rawTiersModule).filter((k) => k !== '__helmxClientCss').sort()
     assert.deepEqual(exportNames, [
-      'BorrowMenuItem',
       'BorrowToolbarPill',
       'SwitchModelToolRow',
       'TiersManagerScreen',
@@ -615,8 +612,8 @@ describe("tiers-client-interactions", () => {
     const cssText = rawTiersModule['__helmxClientCss']
     assert.equal(typeof cssText, 'string')
     assert.match(cssText as string, /\.tiers-borrow-pill/)
-    assert.match(cssText as string, /\.tiers-borrow-menu-item/)
     assert.match(cssText as string, /\.tiers-trace-row/)
+    assert.equal(/\.tiers-borrow-menu-item|\.tiers-borrow-anchor/.test(cssText as string), false)
 
     for (const [key, entry] of Object.entries(TIERS_COPY)) {
       assert.equal(EMOJI_RE.test(entry.en), false, `TIERS_COPY.${key}.en must contain zero Emoji`)
@@ -717,10 +714,90 @@ describe("tiers-client-interactions", () => {
     }
   })
 
-  test('BorrowToolbarPill & BorrowMenuItem: standby draftMeta (zero RPC), /model command, panel-isolated menu open, persisted armed/active pills, busy clear, and zero nested buttons', { timeout: 60_000 }, async () => {
-    mountSharedPluginNamespaces({ realHooks: true })
+  test('TiersManagerScreen ModelPickerControl keeps enableRegisteredModes=false even inside populated mode registry', { timeout: 60_000 }, async () => {
+    setBuiltinClientStub({
+      docs: {
+        state: {
+          tiers: { coder: { model: 'faux/workhorse', thinkingLevel: 'high' } },
+          templates: {},
+        },
+      },
+      hostModels: { models: TEST_MODELS, defaultModel: 'faux/workhorse' },
+    })
+    const registry = createComposerModelPickerModeRegistry()
+    function ModeRegistrar(): null {
+      useComposerModelPickerMode('tiers:one-turn', {
+        id: 'tiers:one-turn',
+        label: 'Next turn',
+        hint: 'Should not leak into manager',
+        onApply: () => {},
+      })
+      return null
+    }
+    const mounted = await mountWithHost(
+      e(
+        ComposerModelPickerModeContext.Provider,
+        { value: registry },
+        e(ModeRegistrar),
+        e(PluginClientContext.Provider, { value: makeSpyCtx() }, e(TiersManagerScreen, { screenId: 'main' })),
+      ),
+    )
     try {
-      // --- 1. Ineligible conversations render null with ZERO sessionDoc subscriptions ---
+      const pickerBtn = mounted.host.querySelector<HTMLButtonElement>('button.composer-model-button')
+      assert.ok(pickerBtn !== null)
+      await act(async () => {
+        pickerBtn.click()
+      })
+      const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+      assert.ok(popover !== null)
+      assert.ok(popover.querySelector('.composer-model-mode-bar') === null, 'TiersManagerScreen ModelPicker must NOT show composer mode bar')
+    } finally {
+      await mounted.unmount()
+    }
+  })
+
+  test('Composer + BorrowToolbarPill + ModelPicker: idle zero DOM, unified mode switcher, misfire guard, armed/active pills, busy clear, plugin disable cleanup, and no /model', { timeout: 60_000 }, async () => {
+    mountSharedPluginNamespaces({ realHooks: true })
+    resetPluginClientCache()
+    seedPluginClientModule('builtin:tiers', 'BorrowToolbarPill.tsx', rawTiersModule)
+
+    const tiersPluginSummary = {
+      id: 'builtin:tiers',
+      name: 'tiers',
+      version: '1.0.0',
+      locked: false,
+      enabled: true,
+      status: 'active' as const,
+      hooks: [],
+      actions: [],
+      tools: [],
+      clientHashes: { 'BorrowToolbarPill.tsx': 'seeded' },
+    }
+    const tiersToolbarContribution = {
+      pluginId: 'builtin:tiers',
+      surface: 'plugin.slot' as const,
+      spec: {
+        id: 'tiers-borrow-toolbar-pill',
+        target: COMPOSER_TOOLBAR_SLOT,
+        order: 15,
+        client: { module: 'BorrowToolbarPill.tsx', export: 'BorrowToolbarPill' },
+      },
+    }
+
+    const origFetch = globalThis.fetch
+    const fetchUrls: Array<{ url: string; method: string }> = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      fetchUrls.push({ url, method })
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as typeof globalThis.fetch
+
+    try {
+      // --- 1. Ineligible conversations register zero modes and render null with ZERO sessionDoc subscriptions ---
       const ineligibleHarness = createSessionDocHarness()
       const ctxIneligible = makeSpyCtx()
       const subMount = await mountWithHost(
@@ -735,7 +812,6 @@ describe("tiers-client-interactions", () => {
               null,
               e(BorrowToolbarPill, { conversation: makeConv(20, { parentConversationId: 1 }) }),
               e(BorrowToolbarPill, { conversation: makeConv(21, { ownedBy: 'helmx' }) }),
-              e(BorrowMenuItem, { conversation: makeConv(20, { parentConversationId: 1 }), onCloseMenu: () => {} }),
             ),
           ),
         ),
@@ -747,158 +823,120 @@ describe("tiers-client-interactions", () => {
         await subMount.unmount()
       }
 
-      // --- 2. Standby (#/a/<profileId>): /model opens picker, picking writes draftMeta locally (zero RPC), pill × clears without opening popover ---
-      const standbyHarness = createSessionDocHarness()
-      const ctxStandby = makeSpyCtx()
-      const registry = createComposerCommandRegistry()
-      const draftUpdates: Array<{ key: string; value: unknown }> = []
+      // --- 2. Full Composer + BorrowToolbarPill + ModelPicker persisted flow ---
+      const harness = createSessionDocHarness()
+      const actionCalls: Array<{ pluginId: string; actionId: string; input: unknown }> = []
+      const conv = makeConv(30)
+      const store = makeTestStore({
+        conversations: [conv],
+        models: TEST_MODELS,
+        modelDefaults: { modelTiers: TEST_TIERS },
+        plugins: [tiersPluginSummary],
+        uiContributions: [tiersToolbarContribution],
+      })
 
-      function StandbyComposerHarness() {
-        const [draftMeta, setDraftMetaState] = React.useState<Record<string, unknown>>({})
-        const setDraftMeta = (key: string, value: unknown) => {
-          draftUpdates.push({ key, value })
-          setDraftMetaState((prev) => {
-            const next = { ...prev }
-            if (value === undefined) delete next[key]
-            else next[key] = value
-            return next
-          })
-        }
-        return e(
-          ComposerCommandContext.Provider,
-          { value: registry },
-          e(
-            'div',
-            { 'data-helmx-panel': 'primary', className: 'composer-box' },
-            e('textarea', { 'aria-label': 'standby-composer-input' }),
-            e(BorrowToolbarPill, { profileId: 'assistant', draftMeta, setDraftMeta }),
-          ),
-        )
-      }
-
-      const standbyMount = await mountWithHost(
-        e(
-          WithSessionDocOverride,
-          { harness: standbyHarness },
-          e(PluginClientContext.Provider, { value: ctxStandby }, e(StandbyComposerHarness)),
-        ),
-      )
-      try {
-        // Idle standby: zero visible buttons & zero sessionDoc subscriptions
-        assert.equal(standbyMount.host.querySelectorAll('button').length, 0)
-        assert.equal(standbyHarness.subscribedKeys.length, 0)
-        const standbyTextarea = standbyMount.host.querySelector<HTMLTextAreaElement>('textarea')
-        assert.ok(standbyTextarea !== null)
-
-        // Trigger `/model` via ComposerCommandContext -> opens ModelPickerControl popover
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      const root = createRoot(host)
+      const renderComposer = async (currentStore = store, targetConv = conv) => {
         await act(async () => {
-          assert.equal(registry.invoke('builtin:tiers', TIERS_BORROW_COMMAND_ID).handled, true)
-        })
-        const popover = document.body.querySelector('.composer-model-popover')
-        assert.ok(popover !== null, '/model command must open borrow picker on standby')
-        assert.equal(popover.querySelector('.composer-model-reset') === null, true)
-
-        // Select tier/architect -> writes draftMeta locally with ZERO callAction RPCs and returns focus to textarea
-        const archBtn = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
-          (b) => (b.textContent ?? '').includes('tier/architect'),
-        )
-        assert.ok(archBtn !== undefined)
-        await act(async () => {
-          archBtn.click()
-        })
-        assert.equal(ctxStandby.actionCalls.length, 0, 'standby borrow selection must NOT call backend RPC')
-        assert.deepEqual(draftUpdates[0], {
-          key: TIERS_INPUT_META_KEY,
-          value: { borrowModel: 'tier/architect' },
-        })
-        await waitFor(() => document.activeElement === standbyTextarea, { timeoutMs: 2_000, intervalMs: 10 })
-        assert.ok(
-          document.activeElement === standbyTextarea,
-          'selecting a borrow model must return keyboard focus to the owning .composer-box textarea',
-        )
-        assert.match(standbyMount.host.textContent ?? '', /Next turn:/)
-        assert.match(standbyMount.host.textContent ?? '', /tier\/architect/)
-
-        // Assert zero nested <button>
-        assert.equal(standbyMount.host.querySelector('button button') === null, true, 'must never render nested <button>')
-
-        // Click × clear button -> clears draftMeta WITHOUT reopening Popover
-        const clearBtn = standbyMount.host.querySelector<HTMLButtonElement>('.tiers-borrow-pill-clear')
-        assert.ok(clearBtn !== null)
-        await act(async () => {
-          clearBtn.click()
-        })
-        assert.deepEqual(draftUpdates[1], { key: TIERS_INPUT_META_KEY, value: undefined })
-        assert.equal(document.body.querySelector('.composer-model-popover') === null, true, 'clicking × must not open popover')
-        assert.equal(standbyMount.host.querySelectorAll('button').length, 0)
-      } finally {
-        await standbyMount.unmount()
-      }
-
-      // --- 3. Panel-isolated BorrowMenuItem -> BorrowToolbarPill + persisted armed & busy active states ---
-      const persistedHarness = createSessionDocHarness()
-      const ctxPersisted = makeSpyCtx()
-      const convPrimary = makeConv(30)
-      const convSplit = makeConv(30)
-      let menuClosed = 0
-
-      function SplitAndPrimaryHarness({ conv }: { conv: ConversationSummary }) {
-        return e(
-          React.Fragment,
-          null,
-          e(
-            'div',
-            { 'data-helmx-panel': 'primary' },
-            e(BorrowToolbarPill, { conversation: conv }),
-          ),
-          e(
-            'div',
-            { 'data-helmx-panel': 'split', className: 'composer-box' },
-            e('textarea', { 'aria-label': 'split-composer-input' }),
-            e(BorrowToolbarPill, { conversation: convSplit }),
+          root.render(
             e(
-              DropdownMenuRoot,
-              { open: true },
+              HostStoreProviders,
+              { value: currentStore },
               e(
-                DropdownMenuContent,
-                { inline: true },
-                e(BorrowMenuItem, {
-                  conversation: convSplit,
-                  onCloseMenu: () => {
-                    menuClosed += 1
+                WithSessionDocOverride,
+                {
+                  harness,
+                  onInvokeAction: async (pluginId, actionId, input) => {
+                    actionCalls.push({ pluginId, actionId, input })
+                    if (actionId === 'set_borrow') {
+                      const inp = input as { model: string; effort?: string }
+                      harness.setBorrowDoc(targetConv.id, {
+                        phase: 'armed',
+                        requestedRef: inp.model,
+                        targetModel: inp.model,
+                        targetConcreteModel: inp.model === 'tier/architect' ? 'faux/flagship' : inp.model,
+                        targetLabel: inp.model,
+                        ...(inp.model.startsWith('tier/') ? { targetTierId: inp.model.slice(5) } : {}),
+                        ...(inp.effort ? { effort: inp.effort } : {}),
+                        restoreAfterTurn: true,
+                        updatedAt: 1_700_000_000_000,
+                      })
+                    } else if (actionId === 'clear_borrow') {
+                      harness.setBorrowDoc(targetConv.id, null)
+                    }
+                    return { ok: true }
                   },
-                }),
+                },
+                e(Composer, { conversation: targetConv, prefill: null }),
               ),
             ),
-          ),
-        )
+          )
+        })
       }
 
-      const persistedMount = await mountWithHost(
-        e(
-          WithSessionDocOverride,
-          { harness: persistedHarness },
-          e(PluginClientContext.Provider, { value: ctxPersisted }, e(SplitAndPrimaryHarness, { conv: convPrimary })),
-        ),
-      )
       try {
-        const splitTextarea = persistedMount.host.querySelector<HTMLTextAreaElement>('textarea[aria-label="split-composer-input"]')
-        assert.ok(splitTextarea !== null)
+        const flushUi = async () => {
+          await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 15))
+          })
+        }
+        await renderComposer()
 
-        // Click BorrowMenuItem inside split panel -> closes menu & opens ONLY split panel's popover
-        const menuItem = persistedMount.host.querySelector<HTMLElement>('.tiers-borrow-menu-item')
-        assert.ok(menuItem !== null)
+        // Idle eligible conversation: BorrowToolbarPill produces zero DOM inside .composer-toolbar-slot
+        const toolbarSlot = host.querySelector('.composer-toolbar-slot')
+        assert.ok(toolbarSlot !== null)
+        assert.ok(toolbarSlot.querySelector('.tiers-borrow-pill') === null, 'idle BorrowToolbarPill must render zero DOM')
+        assert.equal(toolbarSlot.querySelectorAll('button').length, 0)
+        assert.ok(host.querySelector('.tiers-borrow-menu-item') === null)
+
+        // Open `+` menu: verify NO BorrowMenuItem exists
+        const plusBtn = host.querySelector<HTMLButtonElement>('button.composer-plus-trigger')
+        assert.ok(plusBtn !== null)
         await act(async () => {
-          menuItem.click()
-          await Promise.resolve()
-          await new Promise((resolve) => setTimeout(resolve, 30))
+          plusBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+          plusBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
         })
-        assert.equal(menuClosed, 1)
-        const popovers = document.body.querySelectorAll('.composer-model-popover')
-        assert.equal(popovers.length, 1, 'split BorrowMenuItem must open exactly one panel popover (not primary)')
+        await flushUi()
+        assert.ok(document.body.querySelector('.tiers-borrow-menu-item') === null, '+ menu must not contain BorrowMenuItem')
+        await act(async () => {
+          document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        })
+        await flushUi()
 
-        // Select faux/flagship with inline xhigh chip -> invokes set_borrow action & returns focus to split textarea
-        const flagshipRow = Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row')).find(
+        // Open ModelPicker via trigger button -> starts on default "Switch model" tab
+        const modelBtn = host.querySelector<HTMLButtonElement>('button.composer-model-button')
+        assert.ok(modelBtn !== null)
+        assert.match(modelBtn.textContent ?? '', /workhorse/)
+        await act(async () => {
+          modelBtn.click()
+        })
+        let popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(popover !== null)
+        const modeBar = popover.querySelector<HTMLElement>('.composer-model-mode-bar')
+        assert.ok(modeBar !== null, 'ModelPicker must show .composer-model-mode-bar when Next turn mode is registered')
+        const tabs = Array.from(modeBar.querySelectorAll<HTMLElement>('[role="tab"]'))
+        assert.equal(tabs.length, 2)
+        assert.equal(tabs[0]?.textContent?.trim(), 'Switch model')
+        assert.equal(tabs[1]?.textContent?.trim(), 'Next turn')
+        assert.equal(tabs[0]?.getAttribute('aria-selected'), 'true')
+        assert.ok(popover.querySelector('.composer-model-mode-hint') === null)
+
+        // Switch to "Next turn" tab -> popover remains open, hint visible, reset row hidden
+        await act(async () => {
+          tabs[1]?.click()
+        })
+        popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(popover !== null, 'switching mode tab must keep popover open')
+        assert.equal(tabs[1]?.getAttribute('aria-selected'), 'true')
+        const hintEl = popover.querySelector('.composer-model-mode-hint')
+        assert.ok(hintEl !== null)
+        assert.match(hintEl.textContent ?? '', /Applies only to your next message, then restores automatically/)
+        assert.ok(popover.querySelector('.composer-model-reset') === null, 'hideResetDefault hides reset row in Next turn mode')
+
+        // Select faux/flagship xhigh chip in Next turn mode -> calls set_borrow, NOT conversation PATCH, restores textarea focus
+        const flagshipRow = Array.from(popover.querySelectorAll<HTMLElement>('.composer-model-row')).find(
           (row) =>
             !(row.textContent ?? '').includes('tier/') &&
             (row.querySelector('.composer-model-row-main') as HTMLButtonElement | null)?.title.includes('faux/flagship'),
@@ -908,92 +946,317 @@ describe("tiers-client-interactions", () => {
           (b) => b.textContent?.trim() === 'xhigh',
         )
         assert.ok(xhighChip !== undefined)
+        const textarea = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')
+        assert.ok(textarea !== null)
+
+        const fetchCountBefore = fetchUrls.filter((f) => f.method === 'PATCH').length
         await act(async () => {
           xhighChip.click()
         })
-        assert.deepEqual(ctxPersisted.actionCalls[0], {
+        await flushUi()
+        assert.equal(
+          fetchUrls.filter((f) => f.method === 'PATCH').length,
+          fetchCountBefore,
+          'Next turn selection must NOT dispatch persistent conversation PATCH',
+        )
+        assert.deepEqual(actionCalls[0], {
+          pluginId: 'builtin:tiers',
           actionId: 'set_borrow',
           input: { conversationId: 30, model: 'faux/flagship', effort: 'xhigh' },
         })
-        await waitFor(() => document.activeElement === splitTextarea, { timeoutMs: 2_000, intervalMs: 10 })
-        assert.ok(
-          document.activeElement === splitTextarea,
-          'persisted conversation borrow selection must return focus to owning .composer-box textarea',
-        )
-      } finally {
-        await persistedMount.unmount()
-      }
+        await waitFor(() => document.activeElement === textarea, { timeoutMs: 2_000, intervalMs: 10 })
+        assert.ok(document.activeElement === textarea)
+        assert.ok(document.body.querySelector('.composer-model-popover') === null, 'applying Next turn closes popover')
+        assert.match(modelBtn.textContent ?? '', /workhorse/, 'persistent ModelPicker trigger remains unchanged')
 
-      // --- 4. Busy persisted conversation: armed vs active pill & menu behavior ---
-      const activeHarness = createSessionDocHarness()
-      activeHarness.setBorrowDoc(40, {
-        phase: 'active',
-        requestedRef: 'tier/architect',
-        targetModel: 'tier/architect',
-        targetConcreteModel: 'faux/flagship',
-        targetLabel: 'tier/architect',
-        targetTierId: 'architect',
-        effort: 'high',
-        restoreAfterTurn: true,
-        updatedAt: 1_700_000_000_000,
-      })
-      const ctxActive = makeSpyCtx()
-      const busyConv = makeConv(40, { status: 'working' })
-      const idleBusyMenuConv = makeConv(41, { status: 'working' })
+        // Armed pill appears cleanly with zero nested <button>
+        assert.match(host.textContent ?? '', /Next turn:/)
+        assert.match(host.textContent ?? '', /flagship · xhigh/)
+        assert.ok(host.querySelector('.tiers-borrow-pill button button') === null, 'must never render nested <button>')
 
-      const activeMount = await mountWithHost(
-        e(
-          WithSessionDocOverride,
-          { harness: activeHarness },
-          e(
-            PluginClientContext.Provider,
-            { value: ctxActive },
-            e(
-              React.Fragment,
-              null,
-              e(BorrowToolbarPill, { conversation: busyConv }),
-              e(
-                DropdownMenuRoot,
-                { open: true },
-                e(
-                  DropdownMenuContent,
-                  { inline: true },
-                  e(BorrowMenuItem, { conversation: idleBusyMenuConv, onCloseMenu: () => {} }),
-                ),
-              ),
-            ),
-          ),
-        ),
-      )
-      try {
-        assert.match(activeMount.host.textContent ?? '', /This turn:/)
-        assert.match(activeMount.host.textContent ?? '', /tier\/architect/)
-        assert.equal(activeMount.host.querySelector('button button') === null, true)
+        // Misfire protection 1: clicking ModelPicker trigger button ALWAYS opens on "Switch model" default tab
+        await act(async () => {
+          modelBtn.click()
+        })
+        popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(popover !== null)
+        let reopenedTabs = Array.from(popover.querySelectorAll<HTMLElement>('.composer-model-mode-bar [role="tab"]'))
+        assert.equal(reopenedTabs[0]?.getAttribute('aria-selected'), 'true', 'trigger click must reset to Switch model')
+        // Switch to Next turn, then press Esc -> closes and resets
+        await act(async () => {
+          reopenedTabs[1]?.click()
+        })
+        assert.equal(reopenedTabs[1]?.getAttribute('aria-selected'), 'true')
+        await act(async () => {
+          popover!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        })
+        await flushUi()
+        assert.ok(document.body.querySelector('.composer-model-popover') === null)
 
-        const mainBtn = activeMount.host.querySelector<HTMLButtonElement>('.tiers-borrow-pill-main')
-        const clearBtn = activeMount.host.querySelector<HTMLButtonElement>('.tiers-borrow-pill-clear')
-        assert.ok(mainBtn !== null && clearBtn !== null)
-        assert.equal(mainBtn.disabled, true, 'main pill trigger is disabled while active turn is working')
-        assert.equal(clearBtn.disabled, false, 'sibling × button stays enabled while busy in active borrow')
+        // Misfire protection 2: Ctrl+L ALWAYS opens on "Switch model" default tab, second Ctrl+L closes
+        await act(async () => {
+          window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-model-picker', panel: 'primary' } }))
+        })
+        popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(popover !== null)
+        reopenedTabs = Array.from(popover.querySelectorAll<HTMLElement>('.composer-model-mode-bar [role="tab"]'))
+        assert.equal(reopenedTabs[0]?.getAttribute('aria-selected'), 'true', 'Ctrl+L must open on Switch model default tab')
+        await act(async () => {
+          window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-model-picker', panel: 'primary' } }))
+        })
+        await flushUi()
+        assert.ok(document.body.querySelector('.composer-model-popover') === null)
 
-        // Busy menu item without active borrow is disabled
-        const busyMenuItem = activeMount.host.querySelector<HTMLElement>('.tiers-borrow-menu-item')
-        assert.ok(busyMenuItem !== null)
-        assert.equal(busyMenuItem.getAttribute('aria-disabled'), 'true')
+        // Armed pill main button -> jumps DIRECTLY into "Next turn" mode with current armed selection highlighted
+        const pillMain = host.querySelector<HTMLButtonElement>('.tiers-borrow-pill-main')
+        assert.ok(pillMain !== null)
+        assert.equal(pillMain.disabled, false, 'armed pillMain must be enabled before click')
+        await act(async () => {
+          pillMain.click()
+        })
+        popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(popover !== null, 'clicking armed pill opens ModelPicker popover')
+        const pillOpenedTabs = Array.from(popover.querySelectorAll<HTMLElement>('.composer-model-mode-bar [role="tab"]'))
+        assert.equal(pillOpenedTabs[1]?.getAttribute('aria-selected'), 'true', 'armed pill openMode must preselect Next turn tab')
+        const activeTargetBtn = popover.querySelector<HTMLButtonElement>('.composer-model-row-main[aria-current="true"]')
+        assert.ok(activeTargetBtn !== null)
+        assert.match(activeTargetBtn.title, /faux\/flagship/)
+        const activeChip = popover.querySelector<HTMLButtonElement>('.composer-model-level-chip[aria-pressed="true"]')
+        assert.ok(activeChip !== null && activeChip.textContent?.trim() === 'xhigh')
 
-        // Click sibling × -> calls clear_borrow without opening Popover
+        // Close popover cleanly, then click sibling × -> clears borrow WITHOUT opening popover
+        await act(async () => {
+          popover!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        })
+        await flushUi()
+        const clearBtn = host.querySelector<HTMLButtonElement>('.tiers-borrow-pill-clear')
+        assert.ok(clearBtn !== null)
         await act(async () => {
           clearBtn.click()
         })
-        assert.deepEqual(ctxActive.actionCalls[0], {
+        await flushUi()
+        assert.deepEqual(actionCalls[1], {
+          pluginId: 'builtin:tiers',
           actionId: 'clear_borrow',
-          input: { conversationId: 40 },
+          input: { conversationId: 30 },
         })
-        assert.equal(document.body.querySelector('.composer-model-popover') === null, true)
+        assert.ok(document.body.querySelector('.composer-model-popover') === null, 'clicking × must not open popover')
+        assert.ok(host.querySelector('.tiers-borrow-pill') === null)
+
+        // Busy conversation with active borrow: pill renders "This turn", main disabled, Next turn mode absent, × enabled
+        const busyConv = makeConv(30, { status: 'working' })
+        harness.setBorrowDoc(30, {
+          phase: 'active',
+          requestedRef: 'tier/architect',
+          targetModel: 'tier/architect',
+          targetConcreteModel: 'faux/flagship',
+          targetLabel: 'tier/architect',
+          targetTierId: 'architect',
+          effort: 'high',
+          restoreAfterTurn: true,
+          updatedAt: 1_700_000_000_001,
+        })
+        await renderComposer(
+          makeTestStore({
+            conversations: [busyConv],
+            models: TEST_MODELS,
+            modelDefaults: { modelTiers: TEST_TIERS },
+            plugins: [tiersPluginSummary],
+            uiContributions: [tiersToolbarContribution],
+          }),
+          busyConv,
+        )
+        assert.match(host.textContent ?? '', /This turn:/)
+        assert.match(host.textContent ?? '', /tier\/architect/)
+        const busyMain = host.querySelector<HTMLButtonElement>('.tiers-borrow-pill-main')
+        const busyClear = host.querySelector<HTMLButtonElement>('.tiers-borrow-pill-clear')
+        assert.ok(busyMain !== null && busyClear !== null)
+        assert.equal(busyMain.disabled, true, 'main pill trigger disabled while active borrow is working')
+        assert.equal(busyClear.disabled, false, 'sibling × stays enabled while active borrow is working')
+
+        await act(async () => {
+          modelBtn.click()
+        })
+        popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(popover !== null)
+        assert.ok(popover.querySelector('.composer-model-mode-bar') === null, 'Next turn tab disappears while active/busy')
+        await act(async () => {
+          popover!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        })
+        await flushUi()
+
+        // Clicking sibling × clears active borrow cleanly
+        await act(async () => {
+          busyClear.click()
+        })
+        await flushUi()
+        assert.deepEqual(actionCalls[2], {
+          pluginId: 'builtin:tiers',
+          actionId: 'clear_borrow',
+          input: { conversationId: 30 },
+        })
+        assert.ok(document.body.querySelector('.composer-model-popover') === null)
+
+        // Disabling builtin:tiers removes pill and mode bar cleanly without phantom prompt/mode
+        await renderComposer(
+          makeTestStore({
+            conversations: [conv],
+            models: TEST_MODELS,
+            modelDefaults: { modelTiers: TEST_TIERS },
+            plugins: [{ ...tiersPluginSummary, enabled: false, status: 'disabled' }],
+            uiContributions: [],
+          }),
+          conv,
+        )
+        assert.ok(host.querySelector('.tiers-borrow-pill') === null)
+        await act(async () => {
+          modelBtn.click()
+        })
+        popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(popover !== null)
+        assert.ok(popover.querySelector('.composer-model-mode-bar') === null, 'disabling builtin:tiers must remove Next turn tab')
       } finally {
-        await activeMount.unmount()
+        await act(async () => {
+          root.unmount()
+        })
+        host.remove()
+      }
+
+      // --- 3. Standby (#/a/<profileId>): unified ModelPicker Next turn tab, draftMeta without dirtying drafts, armed pill ---
+      resetStandbyDrafts()
+      const standbyHarness = createSessionDocHarness()
+      const standbyActions: Array<{ pluginId: string; actionId: string }> = []
+      const standbyStore = makeTestStore({
+        profiles: [
+          {
+            id: 'assistant',
+            name: 'Assistant',
+            model: 'faux/workhorse',
+            thinkingLevel: 'high',
+            cwd: '/repo',
+            nodeId: 'local',
+          },
+        ],
+        models: TEST_MODELS,
+        modelDefaults: { modelTiers: TEST_TIERS },
+        plugins: [tiersPluginSummary],
+        uiContributions: [tiersToolbarContribution],
+      })
+      const standbyHost = document.createElement('div')
+      document.body.appendChild(standbyHost)
+      const standbyRoot = createRoot(standbyHost)
+      try {
+        await act(async () => {
+          standbyRoot.render(
+            e(
+              HostStoreProviders,
+              { value: standbyStore },
+              e(
+                WithSessionDocOverride,
+                {
+                  harness: standbyHarness,
+                  onInvokeAction: async (pluginId, actionId) => {
+                    standbyActions.push({ pluginId, actionId })
+                    return {}
+                  },
+                },
+                e(AgentStandbyPane, { profileId: 'assistant' }),
+              ),
+            ),
+          )
+        })
+
+        // Idle standby: zero pill buttons and zero sessionDoc subscriptions
+        assert.ok(standbyHost.querySelector('.tiers-borrow-pill') === null)
+        assert.equal(standbyHarness.subscribedKeys.length, 0)
+        const standbyTextarea = standbyHost.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')
+        assert.ok(standbyTextarea !== null)
+
+        const standbyModelBtn = standbyHost.querySelector<HTMLButtonElement>('button.composer-model-button')
+        assert.ok(standbyModelBtn !== null)
+        await act(async () => {
+          standbyModelBtn.click()
+        })
+        let standbyPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(standbyPopover !== null)
+        const standbyTabs = Array.from(standbyPopover.querySelectorAll<HTMLElement>('.composer-model-mode-bar [role="tab"]'))
+        assert.equal(standbyTabs.length, 2)
+        assert.equal(standbyTabs[0]?.getAttribute('aria-selected'), 'true')
+        await act(async () => {
+          standbyTabs[1]?.click()
+        })
+        assert.equal(standbyTabs[1]?.getAttribute('aria-selected'), 'true')
+        assert.ok(standbyPopover.querySelector('.composer-model-reset') === null)
+
+        // Pick tier/architect -> updates draftMeta locally (ZERO RPC & standbyDraftsDirty stays false)
+        const archBtn = Array.from(standbyPopover.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
+          (b) => (b.textContent ?? '').includes('tier/architect'),
+        )
+        assert.ok(archBtn !== undefined)
+        const flushStandby = async () => {
+          await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 15))
+          })
+        }
+        await act(async () => {
+          archBtn.click()
+        })
+        await flushStandby()
+        assert.equal(standbyActions.length, 0, 'standby Next turn selection must NOT call backend RPC')
+        assert.equal(standbyDraftsDirty(), false, 'standby Next turn draftMeta must not mark text drafts dirty')
+        await waitFor(() => document.activeElement === standbyTextarea, { timeoutMs: 2_000, intervalMs: 10 })
+        assert.ok(document.activeElement === standbyTextarea)
+        assert.match(standbyHost.textContent ?? '', /Next turn:/)
+        assert.match(standbyHost.textContent ?? '', /tier\/architect/)
+
+        // Clicking ModelPicker trigger resets to Switch model; clicking armed pill jumps directly to Next turn
+        await act(async () => {
+          standbyModelBtn.click()
+        })
+        standbyPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(standbyPopover !== null)
+        assert.equal(
+          standbyPopover.querySelector('.composer-model-mode-bar [role="tab"]')?.getAttribute('aria-selected'),
+          'true',
+          'standby trigger click must reset to Switch model',
+        )
+        await act(async () => {
+          standbyPopover!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        })
+        await flushStandby()
+
+        const standbyPillMain = standbyHost.querySelector<HTMLButtonElement>('.tiers-borrow-pill-main')
+        assert.ok(standbyPillMain !== null)
+        await act(async () => {
+          standbyPillMain.click()
+        })
+        standbyPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(standbyPopover !== null)
+        const standbyPillTabs = Array.from(standbyPopover.querySelectorAll<HTMLElement>('.composer-model-mode-bar [role="tab"]'))
+        assert.equal(standbyPillTabs[1]?.getAttribute('aria-selected'), 'true', 'standby armed pill jumps straight to Next turn')
+        await act(async () => {
+          standbyPopover!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        })
+        await flushStandby()
+
+        // Click sibling × clears draftMeta without reopening Popover
+        const clearBtn = standbyHost.querySelector<HTMLButtonElement>('.tiers-borrow-pill-clear')
+        assert.ok(clearBtn !== null)
+        await act(async () => {
+          clearBtn.click()
+        })
+        assert.ok(document.body.querySelector('.composer-model-popover') === null)
+        assert.ok(standbyHost.querySelector('.tiers-borrow-pill') === null)
+      } finally {
+        await act(async () => {
+          standbyRoot.unmount()
+        })
+        standbyHost.remove()
       }
     } finally {
+      globalThis.fetch = origFetch
+      resetStandbyDrafts()
+      resetPluginClientCache()
       mountSharedPluginNamespaces({ realHooks: false })
     }
   })
@@ -1111,148 +1374,73 @@ describe("tiers-client-interactions", () => {
     }
   })
 
-  test('BorrowMenuItem under controlled DropdownMenu + 120Hz rAF + touch PointerEvent keeps .composer-model-popover open', { timeout: 60_000 }, async () => {
-    mountSharedPluginNamespaces({ realHooks: true })
-    const originalRaf = window.requestAnimationFrame
-    const originalCancelRaf = window.cancelAnimationFrame
-    const cancelledRafIds = new Set<number>()
-    let nextRafId = 1
-    const fastFrameRaf = ((cb: FrameRequestCallback): number => {
-      const id = nextRafId++
-      queueMicrotask(() => {
-        if (!cancelledRafIds.has(id)) {
-          cb(performance.now())
-        }
-      })
-      return id
-    }) as typeof window.requestAnimationFrame
-    const fastCancelRaf = ((id: number): void => {
-      cancelledRafIds.add(id)
-    }) as typeof window.cancelAnimationFrame
-    window.requestAnimationFrame = fastFrameRaf
-    window.cancelAnimationFrame = fastCancelRaf
-
-    const harness = createSessionDocHarness()
-    const ctx = makeSpyCtx()
-    const conv = makeConv(51)
-
-    function ControlledMenuBorrowHarness() {
-      const [plusMenuOpen, setPlusMenuOpen] = React.useState(false)
-      const plusMenuClosedByActionRef = React.useRef(false)
-      const closePlusMenu = React.useCallback(() => {
-        plusMenuClosedByActionRef.current = true
-        setPlusMenuOpen(false)
-      }, [])
-
-      return e(
-        'div',
-        { 'data-helmx-panel': 'primary', className: 'composer-box' },
-        e('textarea', { 'aria-label': 'touch-borrow-input' }),
-        e(
-          DropdownMenuRoot,
-          {
-            open: plusMenuOpen,
-            onOpenChange: (next: boolean) => {
-              if (next) plusMenuClosedByActionRef.current = false
-              setPlusMenuOpen(next)
-            },
-          },
-          e(
-            DropdownMenuTrigger,
-            { asChild: true },
-            e('button', { type: 'button', className: 'composer-plus-trigger' }, '+'),
-          ),
-          e(
-            DropdownMenuContent,
-            {
-              portalled: true,
-              align: 'start',
-              side: 'top',
-              sideOffset: 8,
-              className: 'composer-plus-menu',
-              onEscapeKeyDown: () => {
-                plusMenuClosedByActionRef.current = false
-              },
-              onCloseAutoFocus: (event: Event) => {
-                const closedByAction = plusMenuClosedByActionRef.current
-                plusMenuClosedByActionRef.current = false
-                const active = document.activeElement
-                const anotherTargetFocused =
-                  active !== null && active !== document.body && active !== document.documentElement
-                if (closedByAction || anotherTargetFocused) {
-                  event.preventDefault()
-                }
-              },
-            },
-            e(BorrowMenuItem, {
-              conversation: conv,
-              onCloseMenu: closePlusMenu,
-            }),
-          ),
-        ),
-        e(BorrowToolbarPill, { conversation: conv }),
-      )
+  test('ModelPickerControl coarse touch vs desktop auto-focus when opening registered mode directly via openMode()', { timeout: 60_000 }, async () => {
+    const originalMatchMedia = window.matchMedia
+    const stubCoarse = (coarse: boolean): void => {
+      window.matchMedia = ((query: string) => ({
+        matches: coarse && query === '(hover: none) and (pointer: coarse)',
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      })) as typeof window.matchMedia
     }
 
-    const mounted = await mountWithHost(
-      e(
-        WithSessionDocOverride,
-        { harness },
-        e(PluginClientContext.Provider, { value: ctx }, e(ControlledMenuBorrowHarness)),
-      ),
-    )
+    const runScenario = async (coarse: boolean): Promise<void> => {
+      stubCoarse(coarse)
+      const registry = createComposerModelPickerModeRegistry()
+      let openOneTurn: (() => boolean) | null = null
+
+      function ModeHarness() {
+        const mode = useComposerModelPickerMode('tiers:one-turn', {
+          id: 'tiers:one-turn',
+          label: 'Next turn',
+          hint: 'One-turn test mode',
+          onApply: () => {},
+        })
+        openOneTurn = mode.openMode
+        return e(ModelPickerControl, {
+          effectiveModel: 'faux/workhorse',
+          activeThinkingLevel: '',
+          enableRegisteredModes: true,
+          onApply: () => {},
+        })
+      }
+
+      const mounted = await mountWithHost(
+        e(ComposerModelPickerModeContext.Provider, { value: registry }, e(ModeHarness)),
+      )
+      try {
+        await act(async () => {
+          assert.equal(openOneTurn?.(), true)
+        })
+        await act(async () => {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve())
+          })
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        })
+        const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+        assert.ok(popover !== null, `Popover must remain open after rAF (coarse=${coarse})`)
+        if (coarse) {
+          assert.ok(document.activeElement === popover, 'coarse touch keeps focus on .composer-model-popover')
+        } else {
+          const searchInput = popover.querySelector<HTMLInputElement>('input')
+          assert.ok(searchInput !== null && document.activeElement === searchInput, 'desktop keeps focus on search input')
+        }
+      } finally {
+        await mounted.unmount()
+      }
+    }
+
     try {
-      const trigger = mounted.host.querySelector<HTMLButtonElement>('button.composer-plus-trigger')
-      assert.ok(trigger !== null)
-
-      // Open the controlled `+` menu using a touch PointerEvent sequence
-      await act(async () => {
-        trigger.dispatchEvent(
-          new PointerEvent('pointerdown', { pointerType: 'touch', button: 0, bubbles: true, cancelable: true }),
-        )
-        trigger.dispatchEvent(
-          new PointerEvent('pointerup', { pointerType: 'touch', button: 0, bubbles: true, cancelable: true }),
-        )
-        trigger.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-      })
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      })
-
-      const menuItem = document.body.querySelector<HTMLElement>('.tiers-borrow-menu-item')
-      assert.ok(menuItem !== null, 'BorrowMenuItem must render inside the open controlled DropdownMenu')
-
-      // Tap BorrowMenuItem via touch PointerEvent sequence while rAF fires at microtask (120Hz fast-frame) speed
-      await act(async () => {
-        menuItem.dispatchEvent(
-          new PointerEvent('pointerdown', { pointerType: 'touch', button: 0, bubbles: true, cancelable: true }),
-        )
-        menuItem.dispatchEvent(
-          new PointerEvent('pointerup', { pointerType: 'touch', button: 0, bubbles: true, cancelable: true }),
-        )
-        menuItem.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-      })
-      // Flush microtask + macrotask turn (FocusScope setTimeout(0) + queueMicrotask->setTimeout(0))
-      await act(async () => {
-        await Promise.resolve()
-        await new Promise((resolve) => setTimeout(resolve, 0))
-      })
-      const popoverAfterTurn = document.body.querySelector<HTMLElement>('.composer-model-popover')
-      assert.ok(popoverAfterTurn !== null, '.composer-model-popover must be open right after microtask/macrotask turn')
-      assert.ok(document.activeElement !== trigger, 'closing + menu via BorrowMenuItem must not steal focus to trigger')
-
-      // Still stably open after 40ms
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 40))
-      })
-      const popoversAfter40ms = document.body.querySelectorAll('.composer-model-popover')
-      assert.equal(popoversAfter40ms.length, 1, '.composer-model-popover must stay open after 40ms')
-      assert.ok(document.activeElement !== trigger, 'focus must stay away from + trigger after 40ms')
+      await runScenario(false)
+      await runScenario(true)
     } finally {
-      window.requestAnimationFrame = originalRaf
-      window.cancelAnimationFrame = originalCancelRaf
-      mountSharedPluginNamespaces({ realHooks: false })
-      await mounted.unmount()
+      window.matchMedia = originalMatchMedia
     }
   })
 
@@ -1330,85 +1518,6 @@ describe("tiers-client-interactions", () => {
       }
     } finally {
       window.matchMedia = originalMatchMedia
-    }
-  })
-
-  test('focusWithCaret(textarea, 0) followed immediately by opening BorrowToolbarPill does not steal focus back from Popover on next rAF', { timeout: 60_000 }, async () => {
-    mountSharedPluginNamespaces({ realHooks: true })
-    const originalMatchMedia = window.matchMedia
-    const stubCoarse = (coarse: boolean): void => {
-      window.matchMedia = ((query: string) => ({
-        matches: coarse && query === '(hover: none) and (pointer: coarse)',
-        media: query,
-        onchange: null,
-        addListener: () => {},
-        removeListener: () => {},
-        addEventListener: () => {},
-        removeEventListener: () => {},
-        dispatchEvent: () => false,
-      })) as typeof window.matchMedia
-    }
-
-    const runScenario = async (coarse: boolean): Promise<void> => {
-      stubCoarse(coarse)
-      const harness = createSessionDocHarness()
-      const ctx = makeSpyCtx()
-      const registry = createComposerCommandRegistry()
-      const conv = makeConv(60 + (coarse ? 1 : 0))
-
-      const mounted = await mountWithHost(
-        e(
-          WithSessionDocOverride,
-          { harness },
-          e(
-            PluginClientContext.Provider,
-            { value: ctx },
-            e(
-              ComposerCommandContext.Provider,
-              { value: registry },
-              e(
-                'div',
-                { 'data-helmx-panel': 'primary', className: 'composer-box' },
-                e('textarea', { 'aria-label': `slash-model-input-${coarse ? 'touch' : 'desktop'}` }),
-                e(BorrowToolbarPill, { conversation: conv }),
-              ),
-            ),
-          ),
-        ),
-      )
-      try {
-        const textarea = mounted.host.querySelector<HTMLTextAreaElement>('textarea')
-        assert.ok(textarea !== null)
-        await act(async () => {
-          focusWithCaret(textarea, 0)
-          assert.equal(registry.invoke('builtin:tiers', TIERS_BORROW_COMMAND_ID).handled, true)
-        })
-        await act(async () => {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve())
-          })
-          await new Promise((resolve) => setTimeout(resolve, 20))
-        })
-        const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-        assert.ok(popover !== null, `Popover must remain open after rAF (coarse=${coarse})`)
-        assert.ok(document.activeElement !== textarea, `next rAF must not steal focus back to textarea (coarse=${coarse})`)
-        if (coarse) {
-          assert.ok(document.activeElement === popover, 'coarse touch keeps focus on .composer-model-popover')
-        } else {
-          const searchInput = popover.querySelector<HTMLInputElement>('input')
-          assert.ok(searchInput !== null && document.activeElement === searchInput, 'desktop keeps focus on search input')
-        }
-      } finally {
-        await mounted.unmount()
-      }
-    }
-
-    try {
-      await runScenario(false)
-      await runScenario(true)
-    } finally {
-      window.matchMedia = originalMatchMedia
-      mountSharedPluginNamespaces({ realHooks: false })
     }
   })
 })

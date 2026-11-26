@@ -13,12 +13,14 @@ import {
 import {
   Button,
   ComposerCommandContext,
+  ComposerModelPickerModeContext,
   HelmxIcon,
   IconButton,
   PluginSlot,
   Stack,
   Tooltip,
   createComposerCommandRegistry,
+  createComposerModelPickerModeRegistry,
   useHostModels,
   type HelmxShortcutEventDetail,
 } from '@helmx/plugin-client'
@@ -280,6 +282,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     tryFocusTextarea,
   ])
   const [commandRegistry] = useState(() => createComposerCommandRegistry())
+  const modelPickerModeRegistry = useMemo(() => createComposerModelPickerModeRegistry(), [])
   const commandRegistryVersion = useSyncExternalStore(
     commandRegistry.subscribe,
     commandRegistry.getVersion,
@@ -736,23 +739,25 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
 
       {standbyReady ? (
         <ComposerCommandContext.Provider value={commandRegistry}>
-          <StandbyComposer
-            draftKey={draftKey}
-            draft={draft}
-            profile={profile}
-            modelDefaults={modelDefaults}
-            envError={envError}
-            anchored={draft.conversationId !== undefined}
-            anchoredConversation={anchoredConversation}
-            runningCommand={runningCommand}
-            slashPluginCommands={slashPluginCommands}
-            onRunPluginCommand={runPluginCommand}
-            isSplit={isSplit}
-            textareaRef={textareaRef}
-            onSend={submitDraft}
-            onAddFiles={addFiles}
-            onResetEnvToDefault={resetEnvToDefault}
-          />
+          <ComposerModelPickerModeContext.Provider value={modelPickerModeRegistry}>
+            <StandbyComposer
+              draftKey={draftKey}
+              draft={draft}
+              profile={profile}
+              modelDefaults={modelDefaults}
+              envError={envError}
+              anchored={draft.conversationId !== undefined}
+              anchoredConversation={anchoredConversation}
+              runningCommand={runningCommand}
+              slashPluginCommands={slashPluginCommands}
+              onRunPluginCommand={runPluginCommand}
+              isSplit={isSplit}
+              textareaRef={textareaRef}
+              onSend={submitDraft}
+              onAddFiles={addFiles}
+              onResetEnvToDefault={resetEnvToDefault}
+            />
+          </ComposerModelPickerModeContext.Provider>
         </ComposerCommandContext.Provider>
       ) : null}
     </div>
@@ -888,6 +893,7 @@ function StandbyComposer({
 
   return (
     <ComposerInputShell
+      shortcutPanel={isSplit ? 'split' : 'primary'}
       aboveBox={
         <>
           <StandbyEnvBar

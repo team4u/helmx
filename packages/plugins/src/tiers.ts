@@ -1,6 +1,5 @@
-/** builtin:tiers: semantic model tiers (`tier/<id>`), preset templates, one-turn model borrow (`/model`), and `switch_model` relay. */
+/** builtin:tiers: semantic model tiers (`tier/<id>`), preset templates, one-turn model borrow, and `switch_model` relay. */
 import {
-  COMPOSER_MENU_SLOT,
   COMPOSER_TOOLBAR_SLOT,
   HelmxError,
   MODEL_TIER_DESCRIPTION_MAX_LENGTH,
@@ -24,8 +23,6 @@ import {
   MAX_TIERS_COUNT,
   MODEL_TIERS_SKILL_ID,
   SWITCH_MODEL_META_SCHEMA,
-  TIERS_BORROW_COMMAND_ID,
-  TIERS_BORROW_COMMAND_SLASH,
   TIERS_BORROW_ELIGIBLE_SCOPE,
   TIERS_BORROW_KV,
   TIERS_BORROW_SESSION_DOC,
@@ -42,9 +39,7 @@ import {
   asTiersDeletedConversationId,
   createEmptyTiersState,
   isTiersBorrowEligible,
-  parseModelSlashInput,
   parseTiersBorrowInputMeta,
-  type ParsedModelSlashInput,
   type ParsedTiersBorrowInputMeta,
   type SwitchModelPresentationMeta,
   type TierBorrowPhase,
@@ -70,15 +65,12 @@ export {
   TIER_THINKING_LEVELS,
   TIERS_BORROW_KV,
   TIERS_BORROW_SESSION_DOC,
-  TIERS_BORROW_COMMAND_ID,
-  TIERS_BORROW_COMMAND_SLASH,
   TIERS_SWITCH_MODEL_TOOL,
   TIERS_INPUT_META_KEY,
   TIERS_BORROW_ELIGIBLE_SCOPE,
   TIER_BORROW_SESSION_VIEW_SCHEMA,
   SWITCH_MODEL_META_SCHEMA,
   isTiersBorrowEligible,
-  parseModelSlashInput,
   parseTiersBorrowInputMeta,
   resolveBorrowTarget,
   toTierBorrowSessionView,
@@ -91,7 +83,6 @@ export {
   type TierBorrowRecord,
   type TierBorrowSessionView,
   type SwitchModelPresentationMeta,
-  type ParsedModelSlashInput,
   type ParsedTiersBorrowInputMeta,
   type ResolvedBorrowTarget,
   type ClearBorrowResult,
@@ -554,31 +545,10 @@ export function createTiersPlugin(): PluginDefinition {
         },
       })
 
-      ctx.ui.command({
-        id: TIERS_BORROW_COMMAND_ID,
-        title: { en: 'Borrow model for one turn', 'zh-CN': '单轮借用模型' },
-        description: {
-          en: 'Pick a tier or model for the next turn only (auto-restores after the turn)',
-          'zh-CN': '仅为下一轮临时选用档位或模型（回合结束后自动恢复）',
-        },
-        icon: 'sparkles',
-        slash: TIERS_BORROW_COMMAND_SLASH,
-        actionId: 'get_borrow',
-        input: {},
-        scope: TIERS_BORROW_ELIGIBLE_SCOPE,
-        keywords: ['model', 'borrow', 'tier', 'switch', '模型', '借用', '档位', '临时切换'],
-      })
-
       const label = { en: 'Model Tiers', 'zh-CN': '模型档位' }
       ctx.ui.sidebarItem({ id: 'tiers-manager', label, icon: 'layers', target: `screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}`, order: 16 })
       ctx.ui.screen({ id: TIERS_SCREEN_ID, label, icon: 'layers', client: { module: 'manager.tsx', export: 'TiersManagerScreen' } })
       ctx.ui.settingsPanel({ id: 'tiers-settings', label, order: 26, client: { module: 'settings.tsx', export: 'TiersSettingsPanel' } })
-      ctx.ui.slot({
-        id: 'tiers-borrow-menu-item',
-        target: COMPOSER_MENU_SLOT,
-        order: 15,
-        client: { module: 'BorrowMenuItem.tsx', export: 'BorrowMenuItem' },
-      })
       ctx.ui.slot({
         id: 'tiers-borrow-toolbar-pill',
         target: COMPOSER_TOOLBAR_SLOT,

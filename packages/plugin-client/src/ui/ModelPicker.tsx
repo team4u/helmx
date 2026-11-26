@@ -1,7 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { MODEL_TIER_PREFIX, type HostModelEntry, type ModelTierCatalogEntry } from '@helmx/protocol/browser'
+import {
+  ComposerModelPickerModeContext,
+  type ComposerModelPickerModeRegistration,
+} from '../composer-model-modes.js'
 import { HelmxIcon } from '../icons.js'
 import { Popover, PopoverAnchor, PopoverContent, PopoverPortal, PopoverTrigger } from './Popover.js'
+import { SegmentedControl } from './Tabs.js'
 import { usePluginClientHost } from '../host-port.js'
 import { useHostModels } from '../conversation-hooks.js'
 import {
@@ -35,6 +40,10 @@ import {
 const EMPTY_TIERS: ReadonlyArray<ModelTierCatalogEntry> = []
 const EMPTY_MODELS: ReadonlyArray<HostModelEntry> = []
 const EMPTY_NAV_ITEMS: ReadonlyArray<{ id: string }> = []
+const EMPTY_REGISTERED_MODES: readonly ComposerModelPickerModeRegistration[] = Object.freeze([])
+const NOOP_SUBSCRIBE = (): (() => void) => () => {}
+const getEmptyRegisteredModes = (): readonly ComposerModelPickerModeRegistration[] => EMPTY_REGISTERED_MODES
+const DEFAULT_MODE_VALUE = '__default__'
 
 export interface ModelPickerControlProps {
   /** Currently effective model id (button label, capability lookup, initial highlight). */
@@ -69,6 +78,8 @@ export interface ModelPickerControlProps {
   renderTrigger?: (state: { open: boolean; disabled: boolean; pending: boolean }) => ReactNode
   /** Enable the host Ctrl+L panel shortcut toggle. */
   enableShortcut?: boolean
+  /** Enable ComposerModelPickerModeContext mode tabs inside the popover (host composer/standby only). */
+  enableRegisteredModes?: boolean
   /** Hide inline thinking-level chips (plain model-id config fields, e.g. plugin config format:'model'). */
   showThinkingLevels?: boolean
   /** Include mounted runtime model tiers (`tier/<id>`) at the top of the picker (default `true`; pass `false` when selecting concrete models only). */
@@ -112,6 +123,7 @@ export function ModelPickerControl({
   showResetDefault = true,
   renderTrigger,
   enableShortcut = true,
+  enableRegisteredModes = false,
   showThinkingLevels = true,
   allowTiers = true,
   disabled = false,
@@ -128,10 +140,17 @@ export function ModelPickerControl({
   // fabricated empty catalog); models: [] = loaded and genuinely empty.
   const catalog = useHostModels()
   const host = usePluginClientHost()
+  const modeRegistry = useContext(ComposerModelPickerModeContext)
+  const registeredModes = useSyncExternalStore(
+    enableRegisteredModes && modeRegistry !== undefined ? modeRegistry.subscribe : NOOP_SUBSCRIBE,
+    enableRegisteredModes && modeRegistry !== undefined ? modeRegistry.getModes : getEmptyRegisteredModes,
+    getEmptyRegisteredModes,
+  )
   const copy: ModelPickerControlCopy = { ...DEFAULT_MODEL_PICKER_COPY, ...copyOverride }
   const models = catalog?.models ?? []
   const catalogUnknown = catalog === undefined
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
+  const [activeModeKey, setActiveModeKey] = useState<string | null>(null)
   const isControlled = openProp !== undefined
   const open = isControlled ? openProp : uncontrolledOpen
   const openRef = useRef(open)
@@ -139,12 +158,23 @@ export function ModelPickerControl({
   const setOpen = useCallback(
     (next: boolean | ((prev: boolean) => boolean)): void => {
       const resolved = typeof next === 'function' ? next(openRef.current) : next
+      if (!resolved) {
+        setActiveModeKey(null)
+      }
       if (!isControlled) {
         setUncontrolledOpen(resolved)
       }
       onOpenChange?.(resolved)
     },
     [isControlled, onOpenChange],
+  )
+  const handlePopoverOpenChange = useCallback(
+    (nextOpen: boolean): void => {
+      // Trigger clicks and closures always return to default persistent-switch mode.
+      setActiveModeKey(null)
+      setOpen(nextOpen)
+    },
+    [setOpen],
   )
   const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
@@ -159,14 +189,43 @@ export function ModelPickerControl({
     'toggle-model-picker',
     () => {
       if (!enableShortcut) return
-      if (disabled) {
+      if (disabled || pending) {
+        setActiveModeKey(null)
         setOpen(false)
         return
       }
+      setActiveModeKey(null)
       setOpen((prev) => !prev)
     },
     fallbackPanel,
   )
+
+  useEffect(() => {
+    if (!enableRegisteredModes || modeRegistry === undefined || disabled || pending) return
+    return modeRegistry.setOpenMode((modeKey) => {
+      const exists = modeRegistry.getModes().some((entry) => entry.key === modeKey)
+      if (!exists) return
+      setActiveModeKey(modeKey)
+      setOpen(true)
+    })
+  }, [enableRegisteredModes, modeRegistry, disabled, pending, setOpen])
+
+  const activeMode =
+    enableRegisteredModes && activeModeKey !== null
+      ? (registeredModes.find((entry) => entry.key === activeModeKey) ?? null)
+      : null
+
+  useEffect(() => {
+    if (!open) {
+      setActiveModeKey(null)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (activeModeKey !== null && activeMode === null) {
+      setActiveModeKey(null)
+    }
+  }, [activeModeKey, activeMode])
 
   const rawTiers = allowTiers ? (catalog?.modelTiers ?? EMPTY_TIERS) : EMPTY_TIERS
   const { filteredTiers, filteredModels, navItems, filteredKeys, allUnavailable } = useMemo(() => {
@@ -256,11 +315,18 @@ export function ModelPickerControl({
 
   const applySelection = (model: string | undefined, level: string | null): void => {
     if (model === undefined || model === '') return
+    const modeToApply = activeMode
+    setActiveModeKey(null)
     setOpen(false)
+    if (modeToApply !== null) {
+      void modeToApply.spec.onApply({ modelKey: model, thinkingLevel: level ?? '' })
+      return
+    }
     void onApply(model, level)
   }
 
   const resetDefault = (): void => {
+    setActiveModeKey(null)
     setOpen(false)
     void onResetDefault?.()
   }
@@ -282,11 +348,14 @@ export function ModelPickerControl({
   const customTrigger = renderTrigger !== undefined ? renderTrigger({ open, disabled, pending }) : undefined
   const hasCustomTrigger =
     customTrigger !== null && customTrigger !== undefined && customTrigger !== false
-  const shouldShowReset = showResetDefault && onResetDefault !== undefined
+  const hideResetForMode = activeMode !== null && activeMode.spec.hideResetDefault !== false
+  const shouldShowReset = showResetDefault && onResetDefault !== undefined && !hideResetForMode
+  const listEffectiveModel = activeMode !== null ? activeMode.spec.effectiveModel : effectiveModel
+  const listActiveThinkingLevel = activeMode !== null ? (activeMode.spec.activeThinkingLevel ?? '') : activeThinkingLevel
 
   return (
     <span className="composer-picker-root" ref={rootRef}>
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={handlePopoverOpenChange}>
         {renderTrigger !== undefined ? (
           hasCustomTrigger ? (
             <PopoverTrigger asChild>{customTrigger}</PopoverTrigger>
@@ -357,6 +426,31 @@ export function ModelPickerControl({
               event.stopPropagation()
             }}
           >
+            {enableRegisteredModes && registeredModes.length > 0 ? (
+              <div className="composer-model-mode-bar">
+                <SegmentedControl
+                  size="sm"
+                  aria-label={copy.modeBarAria ?? DEFAULT_MODEL_PICKER_COPY.modeBarAria}
+                  value={activeMode !== null ? activeMode.key : DEFAULT_MODE_VALUE}
+                  onValueChange={(nextValue) => {
+                    setActiveModeKey(nextValue === DEFAULT_MODE_VALUE ? null : nextValue)
+                  }}
+                  items={[
+                    {
+                      value: DEFAULT_MODE_VALUE,
+                      label: copy.defaultModeLabel ?? DEFAULT_MODEL_PICKER_COPY.defaultModeLabel!,
+                    },
+                    ...registeredModes.map((entry) => ({
+                      value: entry.key,
+                      label: entry.spec.label,
+                    })),
+                  ]}
+                />
+                {activeMode?.spec.hint !== undefined && activeMode.spec.hint !== '' ? (
+                  <div className="composer-model-mode-hint">{activeMode.spec.hint}</div>
+                ) : null}
+              </div>
+            ) : null}
             {shouldShowReset ? (
               <button type="button" className="popover-item" disabled={disabled} onClick={resetDefault} title={resetTitle}>
                 {resetLabel}
@@ -415,7 +509,7 @@ export function ModelPickerControl({
                   </div>
                   {filteredTiers.map((tier, idx) => {
                     const tierRef = `${MODEL_TIER_PREFIX}/${tier.id}`
-                    const isCurrent = tierRef === effectiveModel
+                    const isCurrent = tierRef === listEffectiveModel
                     const targetShort = formatModelShortName(tier.model)
                     return (
                       <div
@@ -461,10 +555,10 @@ export function ModelPickerControl({
                 const idx = filteredTiers.length + modelIdx
                 const levels = m.thinkingLevels ?? ['off']
                 const rowSupportsThinking = showThinkingLevels && levels.some((level) => level !== 'off')
-                const isCurrent = m.id === effectiveModel
+                const isCurrent = m.id === listEffectiveModel
                 // Level highlight only for the effective model's row: for other
                 // models the default chain resolves server-side.
-                const activeRowLevel = isCurrent ? resolveEffectiveThinkingLevel(levels, activeThinkingLevel) : ''
+                const activeRowLevel = isCurrent ? resolveEffectiveThinkingLevel(levels, listActiveThinkingLevel) : ''
                 const display = formatModelRowDisplay(m)
                 return (
                   <div
@@ -497,7 +591,7 @@ export function ModelPickerControl({
                             type="button"
                             className="segmented-control-btn composer-model-level-chip"
                             disabled={disabled}
-                            aria-pressed={m.id === effectiveModel && level === activeRowLevel ? 'true' : undefined}
+                            aria-pressed={m.id === listEffectiveModel && level === activeRowLevel ? 'true' : undefined}
                             title={formatModelPickerCopy(copy.levelChipTitle, { model: m.id, level })}
                             onClick={() => applySelection(m.id, level)}
                           >
