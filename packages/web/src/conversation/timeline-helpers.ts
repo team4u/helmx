@@ -13,6 +13,7 @@ import type {
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import type {
   AssistantModelIdentity,
+  AssistantSegment,
   AssistantTurn,
   AssistantTurnBusyOptions,
   EditRequestTarget,
@@ -339,6 +340,23 @@ export function buildAssistantModelBoundaries(
   return boundaries
 }
 
+/** Visits every tool trace of an assistant turn in display order, descending into folded
+ * step groups so callers see one flat sequence regardless of folding. */
+function forEachTurnToolTrace(
+  segments: ReadonlyArray<AssistantSegment>,
+  visit: (tool: ToolTrace) => void,
+): void {
+  for (const seg of segments) {
+    if (seg.kind === 'tool') {
+      visit(seg.tool)
+    } else if (seg.kind === 'step-group') {
+      for (const step of seg.steps) {
+        if (step.kind === 'tool') visit(step.tool)
+      }
+    }
+  }
+}
+
 export function collectToolCallsByName(
   items: ReadonlyArray<TimelineItem>,
 ): Map<string, TimelineToolCallSummary[]> {
@@ -354,24 +372,16 @@ export function collectToolCallsByName(
       ...(tool.input !== undefined ? { input: tool.input } : {}),
       ...(tool.presentationMeta !== undefined ? { presentationMeta: tool.presentationMeta } : {}),
     }
-    let bucket = byName.get(tool.toolName)
-    if (bucket === undefined) {
-      bucket = []
-      byName.set(tool.toolName, bucket)
+    const bucket = byName.get(tool.toolName)
+    if (bucket !== undefined) {
+      bucket.push(summary)
+    } else {
+      byName.set(tool.toolName, [summary])
     }
-    bucket.push(summary)
   }
   for (const item of items) {
     if (item.kind !== 'assistant') continue
-    for (const seg of item.segments) {
-      if (seg.kind === 'tool') {
-        pushTool(seg.tool)
-      } else if (seg.kind === 'step-group') {
-        for (const step of seg.steps) {
-          if (step.kind === 'tool') pushTool(step.tool)
-        }
-      }
-    }
+    forEachTurnToolTrace(item.segments, pushTool)
   }
   return byName
 }
