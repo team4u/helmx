@@ -28,7 +28,7 @@ import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, ty
  * - `settings/models[/<providerId>|/defaults|/<providerId>/defaults]` model center (defaults is the reserved segment = global-default tab)
  * - `settings/skills[/<skillId>]`                                skill center (may carry node=<nodeId> param)
  * - `settings/nodes[/<nodeId>]`                                  node center
- * - `settings/plugins[/<pluginId>]`                              plugin center
+ * - `settings/plugins[/<pluginId>|/core[/<coreOwner>[/<coreAction>]]]` plugin center (core is the reserved segment = kernel core capabilities tab)
  */
 export interface WorkspaceLocationState {
   primaryTarget: ResolvedTarget
@@ -253,6 +253,7 @@ function parseTargetValue(raw: string): ResolvedTarget | null {
     }
     const sub = rest.slice(slashIdx + 1)
     if (center === 'models') return parseModelsSubTarget(sub)
+    if (center === 'plugins') return parsePluginsSubTarget(sub)
     // Single-sub-item centers: exactly one path segment
     if (sub === '' || sub.includes('/')) return null
     const subId = decodeSegment(sub)
@@ -260,10 +261,44 @@ function parseTargetValue(raw: string): ResolvedTarget | null {
     if (center === 'profiles') return { kind: 'profiles', profileId: subId }
     if (center === 'skills') return { kind: 'skills', skillId: subId }
     if (center === 'nodes') return { kind: 'nodes', nodeId: subId }
-    if (center === 'plugins') return { kind: 'plugins', pluginId: subId }
     return null
   }
   return null
+}
+
+/**
+ * Parse the plugins center sub-path:
+ * - `core` -> `{ kind: 'plugins', tab: 'core' }`
+ * - `core/<coreOwner>` -> `{ kind: 'plugins', tab: 'core', coreOwner }`
+ * - `core/<coreOwner>/<coreAction>` -> `{ kind: 'plugins', tab: 'core', coreOwner, coreAction }`
+ * - `<pluginId>` (non-'core', single segment) -> `{ kind: 'plugins', pluginId }`
+ * `core` is a reserved segment (kernel capabilities tab) and is never treated as a pluginId.
+ */
+function parsePluginsSubTarget(sub: string): ResolvedTarget | null {
+  if (sub === '') return null
+  const slashIdx = sub.indexOf('/')
+  const first = slashIdx === -1 ? sub : sub.slice(0, slashIdx)
+  if (first === '') return null
+  if (first === 'core') {
+    if (slashIdx === -1) return { kind: 'plugins', tab: 'core' }
+    const rest = sub.slice(slashIdx + 1)
+    if (rest === '') return null
+    const actionSlashIdx = rest.indexOf('/')
+    if (actionSlashIdx === -1) {
+      const coreOwner = decodeSegment(rest)
+      return coreOwner === null ? null : { kind: 'plugins', tab: 'core', coreOwner }
+    }
+    const ownerSeg = rest.slice(0, actionSlashIdx)
+    const actionSeg = rest.slice(actionSlashIdx + 1)
+    if (ownerSeg === '' || actionSeg === '' || actionSeg.includes('/')) return null
+    const coreOwner = decodeSegment(ownerSeg)
+    const coreAction = decodeSegment(actionSeg)
+    if (coreOwner === null || coreAction === null) return null
+    return { kind: 'plugins', tab: 'core', coreOwner, coreAction }
+  }
+  if (slashIdx !== -1) return null
+  const pluginId = decodeSegment(first)
+  return pluginId === null ? null : { kind: 'plugins', pluginId }
 }
 
 /**
@@ -293,7 +328,20 @@ function formatTargetValue(target: ResolvedTarget): string {
   if (target.kind === 'overview') return 'overview'
   if (target.kind === 'screen') return `views/${encodeSegment(target.pluginId)}/${encodeSegment(target.screenId)}`
   if (target.kind === 'plugins') {
-    return target.pluginId === undefined || target.pluginId === '' ? 'settings/plugins' : `settings/plugins/${encodeSegment(target.pluginId)}`
+    if (target.tab === 'core' || (target.coreOwner !== undefined && target.coreOwner !== '')) {
+      const parts = ['settings/plugins/core']
+      if (target.coreOwner !== undefined && target.coreOwner !== '') {
+        parts.push(encodeSegment(target.coreOwner))
+        if (target.coreAction !== undefined && target.coreAction !== '') {
+          parts.push(encodeSegment(target.coreAction))
+        }
+      }
+      return parts.join('/')
+    }
+    // `core` is a reserved segment, never serialized as a pluginId (plugins is the default tab and is not serialized)
+    return target.pluginId === undefined || target.pluginId === '' || target.pluginId === 'core'
+      ? 'settings/plugins'
+      : `settings/plugins/${encodeSegment(target.pluginId)}`
   }
   if (target.kind === 'profiles') {
     return target.profileId === undefined || target.profileId === '' ? 'settings/profiles' : `settings/profiles/${encodeSegment(target.profileId)}`
@@ -577,7 +625,13 @@ const isTargetSlotChanged = (prev: ResolvedTarget | null, next: ResolvedTarget |
 export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: WorkspaceLocationState): boolean {
   const isOpeningDrawer = (prevT: ResolvedTarget, nextT: ResolvedTarget): boolean => {
     if (prevT.kind === 'plugins' && nextT.kind === 'plugins') {
-      return prevT.pluginId === undefined && nextT.pluginId !== undefined
+      const prevHasDrawer =
+        (prevT.pluginId !== undefined && prevT.pluginId !== '') ||
+        (prevT.coreOwner !== undefined && prevT.coreOwner !== '')
+      const nextHasDrawer =
+        (nextT.pluginId !== undefined && nextT.pluginId !== '') ||
+        (nextT.coreOwner !== undefined && nextT.coreOwner !== '')
+      return !prevHasDrawer && nextHasDrawer
     }
     if (prevT.kind === 'profiles' && nextT.kind === 'profiles') {
       return prevT.profileId === undefined && nextT.profileId !== undefined

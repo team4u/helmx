@@ -237,7 +237,7 @@ test('PluginCenter DOM 交互：渲染「全部 / 应用视图 / 已启用 / 已
 
     const enabledCount = mockPlugins.filter((p) => p.enabled).length
     const disabledCount = mockPlugins.filter((p) => !p.enabled).length
-    const tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+    const tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('.tabs-pills [role="tab"]'))
     assert.equal(tabs.length, 4, '应渲染 全部 / 应用视图 / 已启用 / 已停用 四个筛选药丸')
 
     const viewsTab = tabs.find((t) => t.textContent?.includes('With views'))
@@ -375,4 +375,293 @@ test('PluginCenter SSR：zh-CN locale 渲染中文标题、筛选标签与空状
   const emptyHtml = renderToString(e(HostStoreProviders, { value: emptyStore }, e(PluginCenter)))
   assert.match(emptyHtml, /未找到匹配的插件/)
   assert.match(emptyHtml, /请尝试调整搜索关键字或切换启用状态筛选。/)
+})
+
+// ---------------------------------------------------------------------------
+// 6. Core 内核能力页签、卡片、只读详情抽屉与双向导航
+// ---------------------------------------------------------------------------
+
+const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
+
+const mockCoreActions: import('@helmx/protocol').ActionManifest[] = [
+  {
+    pluginId: 'core:conversations',
+    id: 'search',
+    description: 'Full-text FTS5 search across conversations',
+    idempotent: true,
+    exposeToPrompt: false,
+    cli: { hidden: true, command: ['search'] },
+    inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },
+    outputSchema: { type: 'array' },
+  },
+  {
+    pluginId: 'core:plugins',
+    id: 'list',
+    description: 'List registered plugins and statuses',
+    idempotent: true,
+    exposeToPrompt: false,
+    cli: { hidden: true, command: ['plugins', 'list'] },
+    inputSchema: { type: 'object', properties: {} },
+    outputSchema: { type: 'array' },
+  },
+  {
+    pluginId: 'builtin:workflow',
+    id: 'run',
+    description: 'Non-core plugin action must not leak into core tab',
+    inputSchema: {},
+    outputSchema: {},
+  },
+]
+
+const mockCoreSkills: import('@helmx/protocol').SkillSummary[] = [
+  {
+    id: 'helmx-cli',
+    name: 'Helmx CLI Manual',
+    description: 'Host CLI guidance',
+    references: ['references/cli.md'],
+    managedByPlugin: 'core:host',
+  },
+  {
+    id: 'app-builder',
+    name: 'App Builder',
+    description: 'Build full-stack Helmx micro-app plugins',
+    references: ['references/fullstack-template.md'],
+    managedByPlugin: 'core:plugins',
+  },
+  {
+    id: 'workflow-guide',
+    name: 'Workflow Guide',
+    description: 'Builtin workflow plugin skill',
+    references: [],
+    managedByPlugin: 'builtin:workflow',
+  },
+]
+
+test('PluginCenter Core 页签：消费 useCatalogActions/useSkills 分组聚合 core:* 能力与受管技能并支持筛选搜索', { timeout: 60_000 }, async () => {
+  const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  const opened: unknown[] = []
+  const store = makeTestStore({
+    plugins: mockPlugins,
+    actions: mockCoreActions,
+    skills: mockCoreSkills,
+    primaryTarget: { kind: 'plugins', tab: 'core' },
+  })
+  spyOpenTarget(store, opened)
+
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
+    })
+
+    // 应渲染 core:conversations, core:plugins, core:host 三张内核卡片，不包含 builtin:workflow
+    const cards = Array.from(host.querySelectorAll('.core-capability-card'))
+    assert.deepEqual(
+      cards.map((el) => el.getAttribute('data-core-owner')),
+      ['core:conversations', 'core:plugins', 'core:host'],
+    )
+    assert.doesNotMatch(host.innerHTML, emojiRegex)
+
+    // 筛选药丸：All(3) / Actions(2) / Managed skills(2)
+    const pills = Array.from(host.querySelectorAll<HTMLButtonElement>('.tabs-pills [role="tab"]'))
+    assert.equal(pills.length, 3)
+
+    const skillsPill = pills.find((p) => p.textContent?.includes('Managed skills'))!
+    await act(async () => {
+      skillsPill.click()
+    })
+    assert.deepEqual(
+      Array.from(host.querySelectorAll('.core-capability-card')).map((el) => el.getAttribute('data-core-owner')),
+      ['core:plugins', 'core:host'],
+    )
+
+    const actionsPill = pills.find((p) => p.textContent?.includes('Actions'))!
+    await act(async () => {
+      actionsPill.click()
+    })
+    assert.deepEqual(
+      Array.from(host.querySelectorAll('.core-capability-card')).map((el) => el.getAttribute('data-core-owner')),
+      ['core:conversations', 'core:plugins'],
+    )
+
+    // 切回 All 并按受管技能关键字检索 helmx-cli -> 仅命中 core:host
+    const allPill = pills.find((p) => p.textContent?.includes('All'))!
+    await act(async () => {
+      allPill.click()
+    })
+    const searchInput = host.querySelector<HTMLInputElement>('.search-box-toolbar input')!
+    await act(async () => {
+      typeIntoInput(searchInput, 'helmx-cli')
+    })
+    const filtered = Array.from(host.querySelectorAll('.core-capability-card'))
+    assert.equal(filtered.length, 1)
+    assert.equal(filtered[0]?.getAttribute('data-core-owner'), 'core:host')
+
+    // 点击卡片触发 openTarget({ kind: 'plugins', tab: 'core', coreOwner: 'core:host' })
+    await act(async () => {
+      filtered[0]?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    assert.deepEqual(opened.at(-1), { kind: 'plugins', tab: 'core', coreOwner: 'core:host' })
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('PluginCenter Core 只读抽屉：Action 详情双向选中、受管技能跳转到技能中心、zh-CN 零 Emoji', { timeout: 60_000 }, async () => {
+  const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  const opened: unknown[] = []
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    plugins: mockPlugins,
+    actions: mockCoreActions,
+    skills: mockCoreSkills,
+    primaryTarget: { kind: 'plugins', tab: 'core', coreOwner: 'core:plugins', coreAction: 'list' },
+  })
+  spyOpenTarget(store, opened)
+
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
+    })
+
+    const drawer = host.querySelector('.primary-drawer-content')
+    assert.ok(drawer, 'CoreCapabilityDetailDrawer 应展开')
+    assert.match(drawer.textContent ?? '', /内核/)
+    assert.match(drawer.textContent ?? '', /只读/)
+    assert.match(drawer.textContent ?? '', /core:plugins\.list/)
+    assert.match(drawer.textContent ?? '', /helmx plugins list/)
+    assert.ok(drawer.querySelector('[data-core-action-detail="list"]'), '应高亮并展开指定的 action 契约详情')
+    assert.ok(drawer.querySelector('[data-core-managed-skill="app-builder"]'), '应展示受管技能 app-builder')
+    assert.doesNotMatch(drawer.innerHTML, emojiRegex)
+
+    // 点击受管技能「在技能中心查看」-> openTarget({ kind: 'skills', skillId: 'app-builder' })
+    const openSkillBtn = drawer.querySelector<HTMLButtonElement>('[data-core-open-skill="app-builder"]')
+    assert.ok(openSkillBtn)
+    await act(async () => {
+      openSkillBtn.click()
+    })
+    assert.deepEqual(opened.at(-1), { kind: 'skills', skillId: 'app-builder' })
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('PluginDetailDrawer：展示插件受管技能并支持一键跳转到技能中心', { timeout: 60_000 }, async () => {
+  const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  const opened: unknown[] = []
+  const store = makeTestStore({
+    plugins: mockPlugins,
+    skills: mockCoreSkills,
+    primaryTarget: { kind: 'plugins', pluginId: 'builtin:workflow' },
+  })
+  spyOpenTarget(store, opened)
+
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
+    })
+
+    const skillBtn = host.querySelector<HTMLButtonElement>('[data-plugin-managed-skill="workflow-guide"]')
+    assert.ok(skillBtn, 'PluginDetailDrawer 应展示属于 builtin:workflow 的受管技能')
+    await act(async () => {
+      skillBtn.click()
+    })
+    assert.deepEqual(opened.at(-1), { kind: 'skills', skillId: 'workflow-guide' })
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('PluginCenter: 顶栏页签切换（Plugins <-> Core）、动作点击选中/收起与缺失动作诊断', { timeout: 60_000 }, async () => {
+  const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  const opened: unknown[] = []
+  const store = makeTestStore({
+    plugins: mockPlugins,
+    actions: mockCoreActions,
+    skills: mockCoreSkills,
+    primaryTarget: { kind: 'plugins' },
+  })
+  spyOpenTarget(store, opened)
+
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
+    })
+
+    // 点击顶部 Core 页签 -> openTarget({ kind: 'plugins', tab: 'core' })
+    const coreTabTrigger = Array.from(host.querySelectorAll<HTMLButtonElement>('.model-center-tabs [role="tab"]')).find(
+      (btn) => btn.textContent?.includes('Core'),
+    )
+    assert.ok(coreTabTrigger, '应渲染 Core 顶栏页签')
+    await act(async () => {
+      coreTabTrigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+      coreTabTrigger.click()
+    })
+    // Radix Tabs activates via pointerdown/click; ensure store updated when clicked
+    await act(async () => {
+      store.applyPrimaryTarget({ kind: 'plugins', tab: 'core', coreOwner: 'core:conversations' })
+    })
+
+    // 在 CoreCapabilityDetailDrawer 中点击 search 动作 -> 选中；再次点击 -> 收起
+    const actionBtn = host.querySelector<HTMLButtonElement>('[data-core-action-item="search"] button')
+    assert.ok(actionBtn)
+    await act(async () => {
+      actionBtn.click()
+    })
+    assert.deepEqual(opened.at(-1), {
+      kind: 'plugins',
+      tab: 'core',
+      coreOwner: 'core:conversations',
+      coreAction: 'search',
+    })
+
+    await act(async () => {
+      actionBtn.click()
+    })
+    assert.deepEqual(opened.at(-1), {
+      kind: 'plugins',
+      tab: 'core',
+      coreOwner: 'core:conversations',
+    })
+
+    // 传入不存在的 coreAction -> 显式展示警告诊断
+    await act(async () => {
+      store.applyPrimaryTarget({
+        kind: 'plugins',
+        tab: 'core',
+        coreOwner: 'core:conversations',
+        coreAction: 'nonexistent',
+      })
+    })
+    assert.match(host.textContent ?? '', /core:conversations\.nonexistent/)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
 })

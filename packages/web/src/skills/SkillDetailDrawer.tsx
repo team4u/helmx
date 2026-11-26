@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { SkillSummary } from '@helmx/protocol/browser'
 import {
   Badge,
+  Button,
   Callout,
   CopyButton,
   DetailDrawer,
@@ -9,13 +10,16 @@ import {
   HelmxIcon,
   MonoId,
   Select,
+  Stack,
   type BadgeTone,
   type SelectOption,
 } from '@helmx/plugin-client'
 import { CodeBlockView, MarkdownView } from '../conversation/MarkdownView.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { useOptionalStoreActions } from '../lib/store-context.js'
 import {
   getSkillSourceBadge,
+  resolveSkillOwnerTarget,
   skillsApi,
 } from './skill-center-model.js'
 import {
@@ -75,6 +79,7 @@ export function SkillDetailDrawer({
   nodeScope,
 }: SkillDetailDrawerProps): React.JSX.Element {
   const { t } = useWebLocale()
+  const actions = useOptionalStoreActions()
   const [loading, setLoading] = useState(false)
   const [content, setContent] = useState<string>(() => initialContent ?? '')
   const [error, setError] = useState<string | null>(null)
@@ -131,7 +136,11 @@ export function SkillDetailDrawer({
 
   const sourceBadge = skill ? getSkillSourceBadge(skill, t) : null
   const badgeTone: BadgeTone =
-    sourceBadge?.variant === 'agents' || sourceBadge?.variant === 'node' ? 'accent' : 'neutral'
+    sourceBadge?.variant === 'agents' || sourceBadge?.variant === 'node' || sourceBadge?.variant === 'core'
+      ? 'accent'
+      : 'neutral'
+  const isDiscoveryRoot = skill?.source === 'agents' || skill?.source === 'node'
+  const ownerTarget = skill !== null && !isDiscoveryRoot ? resolveSkillOwnerTarget(skill.managedByPlugin) : null
 
   const fileOptions: Array<SelectOption<string>> = files.map((f) => ({
     value: f.path,
@@ -179,6 +188,23 @@ export function SkillDetailDrawer({
                 ? t('skills.drawer.nodeWorkspaceSource', { node: nodeScope.nodeId, cwd: nodeScope.cwd })
                 : t('skills.drawer.nodeSource', { node: nodeScope.nodeId })}
             </div>
+          )}
+          {ownerTarget !== null && skill?.managedByPlugin && (
+            <Stack direction="horizontal" gap="xs" align="center" wrap className="text-subtle">
+              <span>{t('skills.drawer.managedByOwner', { owner: skill.managedByPlugin })}</span>
+              {actions !== null && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  icon="arrow-up-right"
+                  onClick={() => actions.openTarget(ownerTarget)}
+                >
+                  {ownerTarget.tab === 'core'
+                    ? t('skills.drawer.openCoreOwner')
+                    : t('skills.drawer.openPluginOwner')}
+                </Button>
+              )}
+            </Stack>
           )}
         </>
       }
