@@ -395,4 +395,136 @@ export const pluginsMessages = {
   'plugins.config.unsetOption': { en: 'Not set', 'zh-CN': '未设置' },
   'plugins.config.nodeOffline': { en: '{node} (offline)', 'zh-CN': '{node}（离线）' },
   'plugins.config.referenceNotFound': { en: '{value} (not found)', 'zh-CN': '{value}（不存在）' },
+
+  // Center top-level tabs and core capabilities tab
+  'plugins.center.viewsAria': { en: 'Plugin center views', 'zh-CN': '插件中心视图' },
+  'plugins.center.tabPlugins': { en: 'Plugins', 'zh-CN': '扩展插件' },
+  'plugins.center.tabCore': { en: 'Core', 'zh-CN': '内核能力' },
+  'plugins.center.refreshCoreTitle': {
+    en: 'Refresh core capabilities and skills',
+    'zh-CN': '刷新内核能力与技能目录',
+  },
+  'plugins.drawer.managedSkillsTitle': {
+    en: 'Managed skills ({count})',
+    'zh-CN': '受管技能（{count}）',
+  },
+  'plugins.drawer.openSkillTitle': {
+    en: 'Open {id} in Skills Center',
+    'zh-CN': '在技能中心查看 {id}',
+  },
+
+  // Core capability cards, filters and read-only detail drawer
+  'plugins.core.badge': { en: 'Core', 'zh-CN': '内核' },
+  'plugins.core.readOnly': { en: 'Read-only', 'zh-CN': '只读' },
+  'plugins.core.alwaysActive': { en: 'Always active', 'zh-CN': '常驻运行' },
+  'plugins.core.searchPlaceholder': {
+    en: 'Search core domain, owner ID, action or managed skill…',
+    'zh-CN': '搜索内核域、Owner ID、Action 或受管技能…',
+  },
+  'plugins.core.searchAria': { en: 'Search core capabilities', 'zh-CN': '搜索内核能力' },
+  'plugins.core.clearSearch': { en: 'Clear core search', 'zh-CN': '清空内核能力搜索' },
+  'plugins.core.filterAria': { en: 'Filter core capabilities', 'zh-CN': '筛选内核能力' },
+  'plugins.core.tabActions': { en: 'Actions', 'zh-CN': '动作能力' },
+  'plugins.core.tabSkills': { en: 'Managed skills', 'zh-CN': '受管技能' },
+  'plugins.core.emptyTitle': { en: 'No matching core capabilities', 'zh-CN': '未找到匹配的内核能力' },
+  'plugins.core.emptyHint': {
+    en: 'Try adjusting the search keywords or switching filters.',
+    'zh-CN': '请尝试调整搜索关键字或切换筛选条件。',
+  },
+  'plugins.core.actionsPill': { en: '{count} Actions', 'zh-CN': '{count} Actions' },
+  'plugins.core.skillsPill': { en: '{count} Skills', 'zh-CN': '{count} Skills' },
+  'plugins.core.actionsTitle': { en: '{count} core actions', 'zh-CN': '{count} 个内核动作' },
+  'plugins.core.skillsTitle': { en: '{count} managed skills', 'zh-CN': '{count} 个受管技能' },
+  'plugins.core.owner.conversations.name': { en: 'Conversations', 'zh-CN': '会话管理' },
+  'plugins.core.owner.conversations.desc': {
+    en: 'Kernel conversation lifecycle, FTS5 search, messaging, compaction and history operations.',
+    'zh-CN': '内核会话生命周期、FTS5 全文检索、消息投递、压缩与历史记录能力。',
+  },
+  'plugins.core.owner.profiles.name': { en: 'Profiles', 'zh-CN': '角色配置' },
+  'plugins.core.owner.profiles.desc': {
+    en: 'Agent profile definitions, model bindings, starters and alignment.',
+    'zh-CN': '智能体角色定义、模型绑定、引导词与配置对齐能力。',
+  },
+  'plugins.core.owner.models.name': { en: 'Models & Providers', 'zh-CN': '模型与网关' },
+  'plugins.core.owner.models.desc': {
+    en: 'Model catalog inspection, global defaults and sanitized provider summaries.',
+    'zh-CN': '模型目录检索、全局默认配置与脱敏供应商摘要能力。',
+  },
+  'plugins.core.owner.nodes.name': { en: 'Compute Nodes', 'zh-CN': '计算节点' },
+  'plugins.core.owner.nodes.desc': {
+    en: 'Compute node registry inspection, status checks and drain controls.',
+    'zh-CN': '计算节点注册表查询、状态检查与排空控制能力。',
+  },
+  'plugins.core.owner.plugins.name': { en: 'Plugins & Apps', 'zh-CN': '插件与微应用' },
+  'plugins.core.owner.plugins.desc': {
+    en: 'Plugin lifecycle inspection, sanitized config access, doctor checks and app-builder guidance.',
+    'zh-CN': '插件生命周期查询、脱敏配置读取、体检与微应用开发指引。',
+  },
+  'plugins.core.owner.asks.name': { en: 'AskDock', 'zh-CN': '交互审批' },
+  'plugins.core.owner.asks.desc': {
+    en: 'CAS-guarded approval resolution and pending ask inspection.',
+    'zh-CN': '基于 CAS 乐观锁的交互审批响应与待处理请求查询。',
+  },
+  'plugins.core.owner.skills.name': { en: 'Skills Catalog', 'zh-CN': '技能目录' },
+  'plugins.core.owner.skills.desc': {
+    en: 'Hub skill catalog listing and skill document inspection.',
+    'zh-CN': 'Hub 技能目录列表与技能文档只读检索能力。',
+  },
+  'plugins.core.owner.host.name': { en: 'Host & CLI', 'zh-CN': '宿主与命令行' },
+  'plugins.core.owner.host.desc': {
+    en: 'Host-level operational contracts, CLI usage manuals and core host skills.',
+    'zh-CN': '宿主级运行契约、命令行操作规范与核心宿主受管技能。',
+  },
+  'plugins.core.owner.fallbackDesc': {
+    en: 'Kernel-owned core capability namespace ({parts}).',
+    'zh-CN': '内核原生能力域（{parts}）。',
+  },
+  'plugins.core.owner.fallbackEmptyDesc': {
+    en: 'Kernel-owned core capability namespace.',
+    'zh-CN': '内核原生能力域。',
+  },
+  'plugins.core.drawerTitleFallback': { en: 'Core capability details', 'zh-CN': '内核能力详情' },
+  'plugins.core.drawerAriaSelected': {
+    en: '{name} core capability details',
+    'zh-CN': '{name} 内核能力详情',
+  },
+  'plugins.core.noSelection': { en: 'No core capability selected', 'zh-CN': '未选择内核能力' },
+  'plugins.core.readOnlyHint': {
+    en: 'Kernel-owned capability namespace; always active and read-only.',
+    'zh-CN': '由内核直接提供，常驻启用且只读，不可停用或卸载。',
+  },
+  'plugins.core.actionsSection': { en: 'Actions ({count})', 'zh-CN': '动作清单（{count}）' },
+  'plugins.core.skillsSection': { en: 'Managed skills ({count})', 'zh-CN': '受管技能（{count}）' },
+  'plugins.core.noManagedSkills': {
+    en: 'No managed skills under this owner.',
+    'zh-CN': '该内核域下暂无受管技能。',
+  },
+  'plugins.core.openSkill': { en: 'Open in Skills Center', 'zh-CN': '在技能中心查看' },
+  'plugins.core.actionNotFound': {
+    en: 'Action {action} was not found in this core namespace.',
+    'zh-CN': '未在该内核域下找到动作 {action}。',
+  },
+  'plugins.core.actionDetailTitle': { en: 'Action contract: {id}', 'zh-CN': '动作契约：{id}' },
+  'plugins.core.copyActionId': { en: 'Copy', 'zh-CN': '复制' },
+  'plugins.core.closeActionDetail': { en: 'Collapse', 'zh-CN': '收起' },
+  'plugins.core.idempotent': { en: 'Idempotent', 'zh-CN': '幂等只读' },
+  'plugins.core.nonIdempotent': { en: 'Mutating', 'zh-CN': '状态变更' },
+  'plugins.core.cliHidden': {
+    en: 'CLI contract (not dynamically mounted)',
+    'zh-CN': 'CLI 契约（非动态挂载）',
+  },
+  'plugins.core.field.actionId': { en: 'Action ID', 'zh-CN': '动作 ID' },
+  'plugins.core.field.cliCommand': { en: 'CLI command', 'zh-CN': 'CLI 命令' },
+  'plugins.core.field.visibility': { en: 'Visibility', 'zh-CN': '可见性' },
+  'plugins.core.field.idempotency': { en: 'Idempotency', 'zh-CN': '幂等性' },
+  'plugins.core.field.promptExposure': { en: 'Prompt catalog', 'zh-CN': '提示词目录' },
+  'plugins.core.field.toolExposure': { en: 'Agent tool', 'zh-CN': 'Agent 工具' },
+  'plugins.core.exposed': { en: 'Exposed', 'zh-CN': '已暴露' },
+  'plugins.core.onDemandOnly': {
+    en: 'On-demand (run_action)',
+    'zh-CN': '按需发现（run_action）',
+  },
+  'plugins.core.notExposed': { en: 'Not exposed', 'zh-CN': '未暴露' },
+  'plugins.core.inputSchema': { en: 'Input schema', 'zh-CN': '输入 Schema' },
+  'plugins.core.outputSchema': { en: 'Output schema', 'zh-CN': '输出 Schema' },
 } satisfies MessageTable

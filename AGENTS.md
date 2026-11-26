@@ -51,7 +51,7 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 ## 4. 高频改动联动检查单（改 X 同步 Y）
 
 - **跨包类型 / 接口 / 导出** → 先改所属包（通用 `@helmx/protocol`，插件业务 `@helmx/plugins`），再 `rg` 普查同步全仓。生产源码禁相对路径跨包或导他包私有 `src`；新增依赖须声明且无环。
-- **面向用户的 HTTP 接口** → 同步 `helmx` CLI（`packages/cli/src/commands/`，含 `--json`/`--current`）、`@helmx/protocol` 的 `CORE_CLI_COMMAND_PATHS` 与 `builtin:profile` 的 `helmx-cli` 技能（`services.test.ts` 双向锁定）。
+- **面向用户的 HTTP 接口** → 同步 `helmx` CLI（`packages/cli/src/commands/`，含 `--json`/`--current`）、`@helmx/protocol` 的 `CORE_CLI_COMMAND_PATHS` 与内核 `core:host` 的 `helmx-cli` 技能（`packages/kernel/src/runtime/core-skills/helmx-cli.ts`，`services.test.ts` 双向锁定）。
 - **插件业务能力** → 用 `ctx.action({ id, inputSchema, outputSchema })` 单点声明获五端映射：HTTP（`POST /api/actions/<pluginId>/<actionId>`）、CLI（`helmx <plugin> <action>`，剥 `builtin:`，`cli.command` 可覆写）、Tool（`exposeAsTool` 或 `run_action`）、Workflow `action()` 与 Web UI。
 - **Web 界面与插件 `client.tsx`** → 先读 `docs/conventions/web-frontend.md` 与 `web-navigation.md`，严守五条铁律：
   1. **零 Emoji**：全界面文案与控件严禁 Emoji，图标统一 `lucide-react`（`HelmxIcon`）或纯文本；

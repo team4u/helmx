@@ -611,6 +611,8 @@ test('listDir permission failure surfaces as an explicit unavailable section (ne
       }),
   })
   t.after(() => env.close(), { timeout: 60_000 })
+  // 内核核心技能由 KernelRuntime.initialize() 自举；独立 PluginHost 单测显式预置 Hub 技能验证降级保留行为。
+  writeHubSkill(env.dataDir, 'hub-sample', SKILL_MD('Hub Sample', 'Hub fallback skill'))
 
   const sections = await runBeforeTurn(env, makeTurn(workspace, { nodeId: 'remote-1' }))
   const unavailable = sections.find((s) => s.id === 'profile.node-skills-unavailable')

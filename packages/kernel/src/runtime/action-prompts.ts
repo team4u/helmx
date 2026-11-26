@@ -10,7 +10,7 @@
  * via `run_action describe`.
  */
 import type { ActionManifest, JsonSchema } from '@helmx/protocol'
-import { escapeXml } from '@helmx/protocol'
+import { escapeXml, isCoreNamespace, stripBuiltinNamespace } from '@helmx/protocol'
 
 /** Host-managed section ID (set-or-clear; removed immediately when catalog is empty, leaving no phantom text). */
 export const ACTIONS_PROMPT_SECTION_ID = 'prompt.actions'
@@ -22,15 +22,20 @@ export interface ActionDirectoryEntry {
 }
 
 /**
- * Equivalent CLI command (real registered mount path): `cli.command` override takes precedence, otherwise
- * `[pluginId without 'builtin:', actionId]`; `cli.hidden` suppresses CLI rendering so nonexistent top-level
- * commands are never advertised.
+ * Equivalent CLI command (real registered command path):
+ * - non-public (`ui`/`internal`) and `cli.hidden` actions return `undefined`;
+ * - `core:*` actions only advertise an explicit `cli.command` (static core CLI command; never fabricate `helmx core:*`);
+ * - plugin actions use `cli.command` when declared, otherwise `[stripBuiltinNamespace(pluginId), actionId]`.
  */
 export function actionCliCommand(manifest: ActionManifest): string | undefined {
   if (manifest.visibility === 'ui' || manifest.visibility === 'internal') return undefined
   if (manifest.cli?.hidden === true) return undefined
-  const command = manifest.cli?.command ?? [manifest.pluginId.replace(/^builtin:/, ''), manifest.id]
-  return `helmx ${command.join(' ')}`
+  if (isCoreNamespace(manifest.pluginId)) {
+    const command = manifest.cli?.command
+    return command !== undefined && command.length > 0 ? `helmx ${command.join(' ')}` : undefined
+  }
+  const command = manifest.cli?.command ?? [stripBuiltinNamespace(manifest.pluginId), manifest.id]
+  return command.length > 0 ? `helmx ${command.join(' ')}` : undefined
 }
 
 /** Collapse multi-line / excess whitespace descriptions onto a single line (one line per catalog action). */

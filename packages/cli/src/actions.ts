@@ -16,7 +16,13 @@
  * - Command path conflicts, empty paths, and core command shadowing all fail explicitly — never silently dropped.
  * - Output is rendered via printValue with zero business-field hardcoding; --json preserves raw output.
  */
-import type { ActionManifest, JsonSchema, PluginActionCliPositionalSpec } from '@helmx/protocol'
+import {
+  isCoreNamespace,
+  stripBuiltinNamespace,
+  type ActionManifest,
+  type JsonSchema,
+  type PluginActionCliPositionalSpec,
+} from '@helmx/protocol'
 import path from 'node:path'
 import { CliError } from './errors.js'
 import type { HubClient } from './hub-client.js'
@@ -26,10 +32,6 @@ import { printValue } from './output.js'
 import type { FlagSpec } from './args.js'
 
 const RESERVED_FLAG_NAMES = new Set(['json', 'help', 'input', 'current', 'h'])
-
-function stripBuiltin(pluginId: string): string {
-  return pluginId.startsWith('builtin:') ? pluginId.slice('builtin:'.length) : pluginId
-}
 
 function manifestLabel(manifest: ActionManifest): string {
   return `${manifest.pluginId}.${manifest.id}`
@@ -449,6 +451,16 @@ interface DynamicCommand {
 /** Convert an ActionManifest into a dynamic CLI CommandSpec (validating path and cli extensions). */
 export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
   if (
+    manifest === null ||
+    typeof manifest !== 'object' ||
+    typeof manifest.pluginId !== 'string' ||
+    manifest.pluginId.length === 0 ||
+    typeof manifest.id !== 'string' ||
+    manifest.id.length === 0
+  ) {
+    throw new CliError('action manifest must be an object with non-empty pluginId and id', 'invalid_manifest')
+  }
+  if (
     manifest.visibility !== undefined &&
     manifest.visibility !== 'public' &&
     manifest.visibility !== 'ui' &&
@@ -459,10 +471,16 @@ export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
       'invalid_manifest',
     )
   }
+  if (isCoreNamespace(manifest.pluginId)) {
+    throw new CliError(
+      `action ${manifest.pluginId}.${manifest.id} belongs to reserved core:* namespace and is served by static core CLI commands`,
+      'core_action',
+    )
+  }
   if (manifest.cli?.hidden === true || manifest.visibility === 'ui' || manifest.visibility === 'internal') {
     throw new CliError('hidden', 'hidden_action')
   }
-  const segments = manifest.cli?.command ?? [stripBuiltin(manifest.pluginId), manifest.id]
+  const segments = manifest.cli?.command ?? [stripBuiltinNamespace(manifest.pluginId), manifest.id]
   if (segments.length === 0) throw new CliError(`action ${manifest.pluginId}.${manifest.id} has an empty cli.command path`, 'invalid_command_path')
   for (const seg of segments) {
     if (typeof seg !== 'string' || seg.length === 0 || seg.startsWith('-') || seg.includes(' ') || seg.includes('/') || seg.includes(':')) {
@@ -616,7 +634,7 @@ export async function loadDynamicCommands(hub: HubClient, corePaths: readonly (r
     try {
       dyn = dynamicCommandOf(manifest)
     } catch (err) {
-      if (err instanceof CliError && err.code === 'hidden_action') continue
+      if (err instanceof CliError && (err.code === 'hidden_action' || err.code === 'core_action')) continue
       throw err
     }
     assertNoConflict(taken, dyn.spec.path)

@@ -16,7 +16,7 @@ import type {
   SidebarItemSpec,
   SkillSummary,
 } from '@helmx/protocol/browser'
-import { parseLocalizedText, resolveLocalizedText } from '@helmx/protocol/browser'
+import { isSkillOwnerActive, parseLocalizedText, resolveLocalizedText } from '@helmx/protocol/browser'
 import { isPluginSummaryActive, type PluginActivityLike } from '../lib/live-state.js'
 import type { HelmxStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
@@ -454,9 +454,9 @@ export function isHumanSelectableProfile(
   return isProfileVisible(profile, enabledPluginIds)
 }
 
-/** 插件自举/托管的 Skill 在对应插件未启用时隐藏（技能库与 / 斜杠菜单消费）。 */
+/** 内核（core:<domain>）与插件自举/托管的 Skill：合法 core:<domain> 恒定可见；插件托管技能在对应插件未启用时隐藏（与内核 isSkillAvailable 同源）。 */
 export function isSkillVisible(skill: SkillSummary, enabledPluginIds: ReadonlySet<string>): boolean {
-  return skill.managedByPlugin === undefined || enabledPluginIds.has(skill.managedByPlugin)
+  return isSkillOwnerActive(skill.managedByPlugin, enabledPluginIds)
 }
 
 /** 按标题或 #id 模糊过滤会话（供命令面板快速跳转）。 */

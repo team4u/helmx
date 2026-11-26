@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { SkillSummary } from '@helmx/protocol/browser'
 import {
   Badge,
+  Button,
   Callout,
   CopyButton,
   DetailDrawer,
@@ -9,13 +10,17 @@ import {
   HelmxIcon,
   MonoId,
   Select,
+  Stack,
   type BadgeTone,
   type SelectOption,
 } from '@helmx/plugin-client'
 import { CodeBlockView, MarkdownView } from '../conversation/MarkdownView.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { useOptionalStoreActions } from '../lib/store-context.js'
+import type { ResolvedTarget } from '../lib/types.js'
 import {
   getSkillSourceBadge,
+  resolveSkillOwnerTarget,
   skillsApi,
 } from './skill-center-model.js'
 import {
@@ -30,6 +35,10 @@ export interface SkillDetailDrawerProps {
   skill: SkillSummary | null
   open: boolean
   onClose: () => void
+  /** Whether the parent SkillCenter is mounted in the split pane (keeps owner navigation pane-aware). */
+  isSplit?: boolean
+  /** Optional pane-aware owner navigation callback (defaults to store openTarget honoring `isSplit`). */
+  onOpenOwner?: (target: Extract<ResolvedTarget, { kind: 'plugins' }>) => void
   /** Render inline explicitly (for tests and unified SSR assertions). */
   inline?: boolean
   /** Initial content injection (mainly for SSR tests asserting the doc area). */
@@ -69,12 +78,15 @@ export function SkillDetailDrawer({
   skill,
   open,
   onClose,
+  isSplit = false,
+  onOpenOwner,
   inline = false,
   initialContent,
   readSkill,
   nodeScope,
 }: SkillDetailDrawerProps): React.JSX.Element {
   const { t } = useWebLocale()
+  const actions = useOptionalStoreActions()
   const [loading, setLoading] = useState(false)
   const [content, setContent] = useState<string>(() => initialContent ?? '')
   const [error, setError] = useState<string | null>(null)
@@ -131,7 +143,11 @@ export function SkillDetailDrawer({
 
   const sourceBadge = skill ? getSkillSourceBadge(skill, t) : null
   const badgeTone: BadgeTone =
-    sourceBadge?.variant === 'agents' || sourceBadge?.variant === 'node' ? 'accent' : 'neutral'
+    sourceBadge?.variant === 'agents' || sourceBadge?.variant === 'node' || sourceBadge?.variant === 'core'
+      ? 'accent'
+      : 'neutral'
+  const isDiscoveryRoot = skill?.source === 'agents' || skill?.source === 'node'
+  const ownerTarget = skill !== null && !isDiscoveryRoot ? resolveSkillOwnerTarget(skill.managedByPlugin) : null
 
   const fileOptions: Array<SelectOption<string>> = files.map((f) => ({
     value: f.path,
@@ -179,6 +195,26 @@ export function SkillDetailDrawer({
                 ? t('skills.drawer.nodeWorkspaceSource', { node: nodeScope.nodeId, cwd: nodeScope.cwd })
                 : t('skills.drawer.nodeSource', { node: nodeScope.nodeId })}
             </div>
+          )}
+          {ownerTarget !== null && skill?.managedByPlugin && (
+            <Stack direction="horizontal" gap="xs" align="center" wrap className="text-subtle">
+              <span>{t('skills.drawer.managedByOwner', { owner: skill.managedByPlugin })}</span>
+              {(onOpenOwner !== undefined || actions !== null) && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  icon="arrow-up-right"
+                  onClick={() => {
+                    if (onOpenOwner !== undefined) onOpenOwner(ownerTarget)
+                    else actions?.openTarget(ownerTarget, isSplit ? { split: true } : undefined)
+                  }}
+                >
+                  {ownerTarget.tab === 'core'
+                    ? t('skills.drawer.openCoreOwner')
+                    : t('skills.drawer.openPluginOwner')}
+                </Button>
+              )}
+            </Stack>
           )}
         </>
       }

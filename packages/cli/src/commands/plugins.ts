@@ -3,16 +3,18 @@
  * (DX loop), install/update/remove (managed package management), and actions list.
  * Local offline DX commands live in sibling modules (`plugins-init.ts`, `plugins-types.ts`, `plugins-build.ts`).
  */
-import type {
-  ActionManifest,
-  PluginDoctorReport,
-  PluginInstallResult,
-  PluginManifestProjection,
-  PluginReloadResult,
-  PluginRemoveResult,
-  PluginRescanResult,
-  PluginSummary,
-  PluginUpdateResult,
+import {
+  isCoreNamespace,
+  stripBuiltinNamespace,
+  type ActionManifest,
+  type PluginDoctorReport,
+  type PluginInstallResult,
+  type PluginManifestProjection,
+  type PluginReloadResult,
+  type PluginRemoveResult,
+  type PluginRescanResult,
+  type PluginSummary,
+  type PluginUpdateResult,
 } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { printTableColumns, printValue, resolveDisplayString } from '../output.js'
@@ -620,7 +622,12 @@ export function pluginsCommands(): CommandSpec[] {
           label: 'cli',
           value: (a) => {
             if (a.cli?.hidden === true || a.visibility === 'ui' || a.visibility === 'internal') return '(hidden)'
-            const prefix = a.pluginId.startsWith('builtin:') ? a.pluginId.slice('builtin:'.length) : a.pluginId
+            if (isCoreNamespace(a.pluginId)) {
+              return a.cli?.command !== undefined && a.cli.command.length > 0
+                ? `helmx ${a.cli.command.join(' ')}`
+                : '(hidden)'
+            }
+            const prefix = stripBuiltinNamespace(a.pluginId)
             return `helmx ${(a.cli?.command ?? [prefix, a.id]).join(' ')}`
           },
         },

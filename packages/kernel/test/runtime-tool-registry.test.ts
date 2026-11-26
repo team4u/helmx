@@ -274,7 +274,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
         description: 'Search conversations',
         exposeToPrompt: false,
         idempotent: true,
-        cli: { hidden: true, command: ['search'] },
+        cli: { command: ['search'] },
         inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },
         outputSchema: { type: 'array', items: { type: 'object' } },
       },
@@ -284,9 +284,18 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
         description: 'List profiles',
         exposeToPrompt: false,
         idempotent: true,
-        cli: { hidden: true, command: ['profiles', 'list'] },
+        cli: { command: ['profiles', 'list'] },
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: { type: 'array', items: { type: 'object' } },
+      },
+      {
+        pluginId: 'core:profiles',
+        id: 'no_cli_hidden',
+        description: 'Hidden CLI core action',
+        exposeToPrompt: false,
+        cli: { hidden: true },
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        outputSchema: { type: 'object' },
       },
     ]
 
@@ -351,6 +360,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
         'builtin:zeta.inspect',
         'core:conversations.search',
         'core:profiles.list',
+        'core:profiles.no_cli_hidden',
       ],
     )
     assert.deepEqual(items[4], {
@@ -373,6 +383,15 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       idempotent: true,
       exposeAsTool: false,
     })
+    assert.deepEqual(items[6], {
+      actionId: 'core:profiles.no_cli_hidden',
+      pluginId: 'core:profiles',
+      id: 'no_cli_hidden',
+      description: 'Hidden CLI core action',
+      parameterSummary: '(no parameters)',
+      exposeAsTool: false,
+    })
+    assert.equal(Object.hasOwn(items[6]!, 'cli'), false, 'hidden core:* action must omit cli field')
     assert.deepEqual(items[0], {
       actionId: 'builtin:alpha.normal',
       pluginId: 'builtin:alpha',
@@ -429,7 +448,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.equal(corePrefix.isError, undefined)
     assert.deepEqual(
       (JSON.parse(corePrefix.output[0]!.text) as Array<Record<string, unknown>>).map((i) => i['actionId']),
-      ['core:conversations.search', 'core:profiles.list'],
+      ['core:conversations.search', 'core:profiles.list', 'core:profiles.no_cli_hidden'],
     )
     const builtinPrefix = await runActionTool.execute({ list: true, pluginId: 'builtin:' }, { conversationId: 1 }, {})
     assert.equal(builtinPrefix.isError, undefined)

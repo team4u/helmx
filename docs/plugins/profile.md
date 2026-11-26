@@ -10,10 +10,10 @@
 
 ### 启动自举
 
-插件服务 `profile-skills` 在启动时完成两件事：
+插件服务 `profile-skills` 在启动时完成默认 Profile 托管声明补写（**不再自举任何内核技能**——`helmx-cli`、`app-builder`、`conversations`、`profiles` 四本核心技能已由内核按 `core:host`、`core:plugins`、`core:conversations`、`core:profiles` 在 `KernelRuntime.initialize()` 阶段直接自举并纳入活跃 owner 退役对账）：
 
-1. **同步受管系统技能 `helmx-cli`、`app-builder` 与 `profile`**：经 `ctx.host.skills.ensureSkill` 把 `skills/helmx-cli/`（CLI 参考与插件开发专题）、`skills/app-builder/`（全栈微应用开发 SOP 与可运行模板，面向标准 `ctx.ui.screen` 外部插件）与 `skills/profile/`（跨角色历史会话检索、上下文回溯、会话生命周期管理及 Profile 配置管理，引导优先使用结构化 `core:conversations.*` / `core:profiles.*` Action）以源码版本为准逐文件覆盖、缺失补齐。PluginHost 校验 SKILL.md frontmatter 的 `managedByPlugin` 绑定 `builtin:profile`，受管技能常规写入接口 403 拒绝。技能目录同时合入机器级共享来源 `~/.agents/skills`。
-2. **补写默认 Profile 托管声明**：默认 `assistant` Profile 由内核先行创建；插件启动时若其 `profile.json` 缺少 `managedByPlugin`，显式补写 `builtin:profile`（已存在时原样保留，不做旧数据归一化）。默认 Profile 不存在属内核未初始化异常，如实上抛。
+1. **补写默认 Profile 托管声明**：默认 `assistant` Profile 由内核先行创建；插件启动时若其 `profile.json` 缺少 `managedByPlugin`，显式补写 `builtin:profile`（已存在时原样保留，不做旧数据归一化）。默认 Profile 不存在属内核未初始化异常，如实上抛。
+2. **技能目录投影**：每回合从 `ctx.host.skills.list()` 实时读取 Hub 数据目录、机器级共享来源 `~/.agents/skills` 与远端/工作区节点只读技能；其中 `core:<domain>` 技能与当前已启用插件的受管技能保持可见，已停用插件的受管技能即时不可见。
 
 ### `before_turn` 注入流水线
 
@@ -85,9 +85,7 @@ Web 技能中心与 `helmx skills list/read` 共用同一套基于节点与可�
 | AGENTS.md 读取与注入 | `packages/plugins/src/profile/agents-md.ts` |
 | 节点技能库发现与读取 | `packages/plugins/src/profile/node-skills.ts` |
 | 协作目录计算与渲染 | `packages/plugins/src/profile/catalog.ts` |
-| helmx-cli 技能资产 | `packages/plugins/src/profile/skill/`（构建后随包分发） |
-| app-builder 技能资产 | `packages/plugins/src/profile/assets/app-builder/`（构建后随包分发） |
-| profile 技能资产 | `packages/plugins/src/profile/assets/profile/`（构建后随包分发） |
+| 内核受管核心技能（已迁出至内核） | `packages/kernel/src/runtime/core-skills/`（`helmx-cli` / `app-builder` / `conversations` / `profiles`） |
 | 测试 | `packages/plugins/test/profile-agents-md.test.ts`、`profile-node-skills.test.ts`、`profile-collaboration.test.ts`、`profile-collaboration.integration.test.ts`、`profile-starters.test.ts` |
 
 ## 相关文档

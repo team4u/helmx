@@ -25,7 +25,6 @@ import { fileURLToPath } from 'node:url'
 import { runCli } from '../../cli/src/index.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { MemoryStore } from '../../plugins/src/memory/store.js'
-import { HELMX_CLI_SKILL_ASSET } from '../../plugins/src/profile.js'
 import {
   createHubTestApp,
   openHubHttpEnv,
@@ -989,26 +988,43 @@ test('跨重启持久闭环：helmx-cli 受管技能篡改恢复与只读门禁�
   const MARK = 'restart-persist-mark-PERSIST'
   let seqAfterFirst = 0
   let initialId = 0
+  let expectedHelmxCliMd = ''
+  let expectedSkillAndPluginDevMd = ''
+  let expectedCodeSplittingMd = ''
 
   const first = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
-    // 校验 helmx-cli、app-builder 与 generative-ui 受管技能内容后模拟磁盘篡改/误删 + 用户自建技能
+    // 校验内核受管技能（helmx-cli / app-builder / conversations / profiles）与 generative-ui 归属，随后模拟磁盘篡改/误删 + 遗留 builtin:profile 旧目录 + 用户自建技能
     const skills = await first.kernel.skills.list()
     const helmxCli = skills.find((s) => s.id === 'helmx-cli')!
-    assert.equal(helmxCli.managedByPlugin, 'builtin:profile')
+    assert.equal(helmxCli.managedByPlugin, 'core:host')
     assert.ok(helmxCli.references.includes('references/plugin-client-code-splitting.md'))
+    assert.ok(helmxCli.references.includes('references/skill-and-plugin-dev.md'))
+    expectedHelmxCliMd = await first.kernel.skills.readFile('helmx-cli')
+    expectedSkillAndPluginDevMd = await first.kernel.skills.readFile('helmx-cli', 'references/skill-and-plugin-dev.md')
+    expectedCodeSplittingMd = await first.kernel.skills.readFile('helmx-cli', 'references/plugin-client-code-splitting.md')
+
     const appBuilder = skills.find((s) => s.id === 'app-builder')
-    assert.ok(appBuilder !== undefined, 'builtin:profile 应自举受管 app-builder 技能')
-    assert.equal(appBuilder.managedByPlugin, 'builtin:profile')
+    assert.ok(appBuilder !== undefined, '内核应自举受管 app-builder 技能')
+    assert.equal(appBuilder.managedByPlugin, 'core:plugins')
     assert.ok(appBuilder.references.includes('references/fullstack-template.md'))
     const appBuilderMd = await first.kernel.skills.readFile('app-builder')
     assert.ok(appBuilderMd.includes('helmx plugins doctor') && appBuilderMd.includes('helmx plugins install'))
     assert.ok(!appBuilderMd.includes('builtin:apps') && !appBuilderMd.includes('helmx apps'))
+
+    const conversationsSkill = skills.find((s) => s.id === 'conversations')
+    assert.ok(conversationsSkill !== undefined, '内核应自举受管 conversations 技能')
+    assert.equal(conversationsSkill.managedByPlugin, 'core:conversations')
+    const profilesSkill = skills.find((s) => s.id === 'profiles')
+    assert.ok(profilesSkill !== undefined, '内核应自举受管 profiles 技能')
+    assert.equal(profilesSkill.managedByPlugin, 'core:profiles')
+    assert.equal(skills.find((s) => s.id === 'profile'), undefined, '旧 profile 技能应已拆分为 conversations / profiles')
     assert.equal(skills.find((s) => s.id === 'generative-ui')?.managedByPlugin, 'builtin:json-render')
 
     writeFileSync(join(dataDir, 'skills', 'helmx-cli', 'SKILL.md'), '---\nname: helmx-cli\ndescription: tampered\n---\ntampered\n')
     rmSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'skill-and-plugin-dev.md'))
     rmSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'plugin-client-code-splitting.md'))
+    writeSkill(dataDir, 'profile', '---\nname: profile\ndescription: legacy\nmanagedByPlugin: builtin:profile\n---\nlegacy\n', {})
     writeSkill(dataDir, 'user-skill', '---\nname: user-skill\ndescription: user self create\n---\nbody\n', { 'notes.md': '# user\n' })
 
     // 初始会话历史落库 + 双 Profile 独立 SYSTEM/MEMORY 校验
@@ -1037,16 +1053,17 @@ test('跨重启持久闭环：helmx-cli 受管技能篡改恢复与只读门禁�
 
   const second = await openHubHttpEnv({ dataDir, cwd: dataDir })
   try {
-    // 1. 受管技能覆盖回源码且写接口 403，用户自建技能完好可写
-    assert.equal(readFileSync(join(dataDir, 'skills', 'helmx-cli', 'SKILL.md'), 'utf8'), HELMX_CLI_SKILL_ASSET.skillMd)
+    // 1. 受管技能覆盖回源码且写接口 403，旧 builtin:profile 目录退役，用户自建技能完好可写
+    assert.equal(readFileSync(join(dataDir, 'skills', 'helmx-cli', 'SKILL.md'), 'utf8'), expectedHelmxCliMd)
     assert.equal(
       readFileSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'skill-and-plugin-dev.md'), 'utf8'),
-      HELMX_CLI_SKILL_ASSET.references['skill-and-plugin-dev.md'],
+      expectedSkillAndPluginDevMd,
     )
     assert.equal(
       readFileSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'plugin-client-code-splitting.md'), 'utf8'),
-      HELMX_CLI_SKILL_ASSET.references['plugin-client-code-splitting.md'],
+      expectedCodeSplittingMd,
     )
+    assert.ok(!existsSync(join(dataDir, 'skills', 'profile')), '重启后 builtin:profile 遗留的旧 profile 技能目录应退役清除')
     await assert.rejects(
       () => second.kernel.skills.writeFile('helmx-cli', 'SKILL.md', 'tamper'),
       (err: unknown) => err instanceof HelmxError && err.code === 'managed_skill_readonly' && err.status === 403,

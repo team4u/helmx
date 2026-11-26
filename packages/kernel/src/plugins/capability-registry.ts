@@ -14,7 +14,9 @@ import {
   CORE_CLI_COMMAND_PATHS,
   HelmxError,
   KERNEL_TOOL_NAMES,
+  isCoreNamespace,
   matchesConversationScope,
+  stripBuiltinNamespace,
   type ActionManifest,
   type ConversationScope,
   type ConversationSummary,
@@ -109,7 +111,7 @@ export const PROVIDER_SAFE_TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
  * semantic prefix + short hash of the qualified ID (avoids illegal `:`/`.`, and hash prevents collisions).
  */
 export function actionToolAlias(pluginId: string, actionId: string): string {
-  const semantic = `${pluginId.replace(/^builtin:/, '')}.${actionId}`
+  const semantic = `${stripBuiltinNamespace(pluginId)}.${actionId}`
     .replace(/[^A-Za-z0-9_-]+/g, '_')
     .replace(/_+/g, '_')
     .replace(/^_|_$/g, '')
@@ -135,19 +137,24 @@ export function parseQualifiedActionId(qualified: string): { pluginId: string; a
 const VALID_ACTION_VISIBILITIES = new Set<PluginActionVisibility>(['public', 'ui', 'internal']);
 const ALLOWED_EXPOSE_AS_TOOL_KEYS = new Set(['name', 'description', 'replay', 'formatOutput']);
 const KERNEL_TOOL_NAME_SET: ReadonlySet<string> = new Set<string>(KERNEL_TOOL_NAMES);
+const CORE_CLI_COMMAND_PATH_SET: ReadonlySet<string> = new Set<string>(CORE_CLI_COMMAND_PATHS);
 const CORE_CLI_COMMAND_SEGMENT_LIST: ReadonlyArray<readonly string[]> = CORE_CLI_COMMAND_PATHS.map((p) => p.split(' '));
 
-/** Resolves the effective CLI command path for a CLI-exposed action, or `undefined` if hidden/non-public. */
+/**
+ * Resolves the effective dynamic CLI command path for a plugin action, or `undefined` if hidden,
+ * non-public, or kernel-owned (`core:*` actions map to static `CORE_CLI_COMMAND_PATHS` commands
+ * validated at registration and are never dynamically mounted by the CLI).
+ */
 function resolveActionCliCommand(
   pluginId: string,
   actionId: string,
   visibility: PluginActionVisibility,
   cli?: PluginActionSpec<unknown, unknown>['cli'],
 ): readonly string[] | undefined {
+  if (isCoreNamespace(pluginId)) return undefined;
   if (visibility !== 'public' || cli?.hidden === true) return undefined;
   if (cli?.command !== undefined) return cli.command;
-  const prefix = pluginId.startsWith('builtin:') ? pluginId.slice('builtin:'.length) : pluginId;
-  return [prefix, actionId];
+  return [stripBuiltinNamespace(pluginId), actionId];
 }
 
 /** Matches CLI `assertNoConflict` semantics: exact equality or either path being a prefix of the other. */
@@ -623,6 +630,39 @@ export class CapabilityRegistry {
       }
     }
     const prompt = validatedPromptFields(`Plugin ${pluginId} action ${spec.id}`, spec, 'invalid_action_spec');
+
+    // Registration-time contract for kernel-owned `core:*` actions:
+    // - Never expose via derived plugin tools (kernel tools install through RuntimeToolRegistry).
+    // - Any declared `cli.command` must point to a real static `CORE_CLI_COMMAND_PATHS` command.
+    // - Public non-hidden core actions must explicitly declare `cli.command` (never fabricate `helmx core:*`).
+    if (isCoreNamespace(pluginId)) {
+      if (exposeAsToolEnabled) {
+        throw new HelmxError(
+          'invalid_action_spec',
+          `Core action ${pluginId}.${spec.id} cannot enable exposeAsTool (kernel tools are registered via RuntimeToolRegistry)`,
+          400,
+          { pluginId, actionId: spec.id },
+        );
+      }
+      if (spec.cli?.command !== undefined) {
+        const joined = spec.cli.command.join(' ');
+        if (!CORE_CLI_COMMAND_PATH_SET.has(joined)) {
+          throw new HelmxError(
+            'invalid_action_spec',
+            `Core action ${pluginId}.${spec.id} cli.command "helmx ${joined}" must match a static command in CORE_CLI_COMMAND_PATHS`,
+            400,
+            { pluginId, actionId: spec.id, command: [...spec.cli.command] },
+          );
+        }
+      } else if (visibility === 'public' && spec.cli?.hidden !== true) {
+        throw new HelmxError(
+          'invalid_action_spec',
+          `Core action ${pluginId}.${spec.id} must declare cli.command pointing to a static CORE_CLI_COMMAND_PATHS entry or set cli.hidden: true`,
+          400,
+          { pluginId, actionId: spec.id },
+        );
+      }
+    }
 
     let pluginActions = this.actions.get(pluginId);
     if (!pluginActions) {

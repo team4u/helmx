@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import type { PluginClientBundle, PluginClientNpmRoot } from '@helmx/protocol';
+import { isBuiltinNamespace, type PluginClientBundle, type PluginClientNpmRoot } from '@helmx/protocol';
 import { atomicWriteFileSync } from '@helmx/env-io';
 import { isInside, realpathOrNull, safeFileName, sha256 } from './client-paths.js';
 
@@ -434,7 +434,7 @@ export function resolveProviderCacheDir(
   fallbackCacheDir: string,
   builtinCacheDir?: string | false,
 ): string {
-  if (!pluginId.startsWith('builtin:') || builtinCacheDir === false) {
+  if (!isBuiltinNamespace(pluginId) || builtinCacheDir === false) {
     return fallbackCacheDir;
   }
   if (typeof builtinCacheDir === 'string') {

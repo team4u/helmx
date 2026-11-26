@@ -140,7 +140,7 @@ flowchart TD
 
 ## API 与 CLI 同权
 
-Hub 不存在仅 Web 可用或仅 CLI 可用的私有接口。新增面向用户的 HTTP 接口必须在同一次改动补齐 CLI 映射（`packages/cli/src/commands/`，含 `--json` 与 `--current` 会话/节点自动感知），并同步 `@helmx/protocol` 的 `CORE_CLI_COMMAND_PATHS` 与 `builtin:profile` 的 `helmx-cli` 技能文档（测试双向锁定校验）。
+Hub 不存在仅 Web 可用或仅 CLI 可用的私有接口。新增面向用户的 HTTP 接口必须在同一次改动补齐 CLI 映射（`packages/cli/src/commands/`，含 `--json` 与 `--current` 会话/节点自动感知），并同步 `@helmx/protocol` 的 `CORE_CLI_COMMAND_PATHS` 与内核 `core:host` 的 `helmx-cli` 技能文档（`packages/kernel/src/runtime/core-skills/helmx-cli.ts`，测试双向锁定校验）。
 
 插件通过 `ctx.action({ id, inputSchema, outputSchema })` 单点声明动作，自动获得五端映射：
 

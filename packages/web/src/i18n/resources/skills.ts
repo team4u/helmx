@@ -9,6 +9,7 @@ import type { MessageTable } from '../messages.js'
 export const skillsMessages = {
   // Category taxonomy shared by the filter tabs and the source badges
   // ('all'/'builtin' reuse common.all / common.builtIn).
+  'skills.category.core': { en: 'Core', 'zh-CN': '内核' },
   'skills.category.plugins': { en: 'Plugins', 'zh-CN': '插件' },
   'skills.category.shared': { en: 'Shared', 'zh-CN': '共享' },
   'skills.category.node': { en: 'Node', 'zh-CN': '节点' },
@@ -42,6 +43,9 @@ export const skillsMessages = {
   // Node-sourced skill detail (provenance note under the drawer title).
   'skills.drawer.nodeSource': { en: 'Node source: {node}', 'zh-CN': '节点来源：{node}' },
   'skills.drawer.nodeWorkspaceSource': { en: 'Node workspace source: {node} · {cwd}', 'zh-CN': '节点工作区来源：{node} · {cwd}' },
+  'skills.drawer.managedByOwner': { en: 'Managed by {owner}', 'zh-CN': '由 {owner} 托管' },
+  'skills.drawer.openCoreOwner': { en: 'Inspect core capability', 'zh-CN': '查看内核能力' },
+  'skills.drawer.openPluginOwner': { en: 'Inspect plugin', 'zh-CN': '查看插件详情' },
 
   // SkillCard copy.
   'skills.card.noDescription': { en: 'No description', 'zh-CN': '暂无描述' },
