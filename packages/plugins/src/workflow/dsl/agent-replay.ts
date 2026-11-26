@@ -11,6 +11,7 @@ import type { ResolvedAgentCallConfig } from './agent-call-config.js'
 import {
   applyExecutionToNode,
   buildAgentWithMetaResult,
+  completedChildOf,
   parseStructuredOutput,
   recordCompletedLabel,
 } from './agent-node-state.js'
@@ -35,7 +36,7 @@ export async function replayFailedAttempts(
   payload: WorkerAgentCallPayload,
   recordAttempt: RecordAgentAttempt,
 ): Promise<AgentReplayOutcome> {
-  const { opts, scope, workflowRootPath, attemptLimit, agentId, label, agentType, model, isolation, node, keyInput } = cfg
+  const { opts, scope, attemptLimit, agentId, node, keyInput } = cfg
   const maxAttempts = opts.maxAttempts ?? 1
   const resumeAgent = ctx.host.resumeAgent
 
@@ -113,15 +114,7 @@ export async function replayFailedAttempts(
         }
       }
       if (persistedHandle !== undefined) {
-        recordCompletedLabel(ctx.completedByLabel, {
-          agentId,
-          label,
-          agentType,
-          workflowRootPath,
-          resumeRef: persistedHandle,
-          ...(model !== undefined ? { model } : {}),
-          ...(isolation !== undefined ? { isolation } : {}),
-        })
+        recordCompletedLabel(ctx.completedByLabel, completedChildOf(cfg, { resumeRef: persistedHandle }))
       }
       const metaRes = buildAgentWithMetaResult({
         ok: false,
@@ -145,15 +138,7 @@ export async function replayFailedAttempts(
       }
     }
 
-    resumeTarget = {
-      agentId,
-      label,
-      agentType,
-      workflowRootPath,
-      resumeRef: persistedHandle,
-      ...(model !== undefined ? { model } : {}),
-      ...(isolation !== undefined ? { isolation } : {}),
-    }
+    resumeTarget = completedChildOf(cfg, { resumeRef: persistedHandle })
     attemptPrompt = agentRetryPrompt(opts.prompt, attempt, redactedError)
     attempt++
     attemptIndex = ctx.nextCallIndex()
@@ -223,7 +208,7 @@ export async function replayCachedSuccess(
 
   if (replayedEntry === undefined || !replayedEntry.ok) return false
 
-  const { node, compiledSchema, agentId, label, agentType, workflowRootPath, model, isolation } = cfg
+  const { node, compiledSchema } = cfg
   if (replayedEntry.execution !== undefined) applyExecutionToNode(node, replayedEntry.execution)
   if (replayedEntry.gate !== undefined) node.gate = replayedEntry.gate
   node.prompt = replayedEntry.prompt ?? replayState.attemptPrompt
@@ -243,15 +228,10 @@ export async function replayCachedSuccess(
     replayedEntry.execution?.conversationId !== undefined && replayedEntry.execution.executionId === undefined
       ? String(replayedEntry.execution.conversationId)
       : undefined
-  recordCompletedLabel(ctx.completedByLabel, {
-    agentId,
-    label,
-    agentType,
-    workflowRootPath,
-    ...(model !== undefined ? { model } : {}),
-    ...(isolation !== undefined ? { isolation } : {}),
-    ...(nativeResumeRef !== undefined ? { resumeRef: nativeResumeRef } : { replayed: true }),
-  })
+  recordCompletedLabel(
+    ctx.completedByLabel,
+    completedChildOf(cfg, nativeResumeRef !== undefined ? { resumeRef: nativeResumeRef } : { replayed: true }),
+  )
   ctx.emitNode(cfg.index, node)
   if (!ctx.inPlaceResume) {
     await recordAttempt({

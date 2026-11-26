@@ -32,6 +32,11 @@ export function errorMessageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Fatal answer for a call whose run was aborted or stopped before the call could proceed. */
+export function respondWorkflowAborted(ctx: RuntimeSharedContext, callId: number): void {
+  ctx.respond(callId, false, undefined, 'Workflow aborted.', true)
+}
+
 export async function waitReadyGate(
   gate: Promise<void> | undefined,
   onEnter: () => void,

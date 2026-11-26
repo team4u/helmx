@@ -7,6 +7,7 @@ import type { AgentExecutionInfo } from '@helmx/protocol'
 import { extractWorktreeExecutionMeta, type WorkflowNodeState } from '../../contracts.js'
 import { scopedResumeKey } from './boundary.js'
 import type { AgentWithMetaResult, CompiledSchema, JournalAgentExecution, WorkflowGateResult } from './types.js'
+import type { ResolvedAgentCallConfig } from './agent-call-config.js'
 import type { CompletedChild } from './runtime-shared.js'
 
 export function parseStructuredOutput(text: string, compiled: CompiledSchema | undefined): unknown {
@@ -39,6 +40,27 @@ export function recordCompletedLabel(
   child: CompletedChild,
 ): void {
   completedByLabel.set(scopedResumeKey(child.workflowRootPath, child.label), child)
+}
+
+/**
+ * Registry entry behind `agent({ resume: <label> })`: the call identity plus, when the child left a
+ * live conversation handle, the `resumeRef` to continue it (a replayed-only child carries `replayed` instead).
+ */
+export function completedChildOf(
+  cfg: Pick<ResolvedAgentCallConfig, 'agentId' | 'label' | 'agentType' | 'workflowRootPath' | 'model' | 'isolation'>,
+  handle: { resumeRef?: string; replayed?: true } = {},
+): CompletedChild {
+  const { agentId, label, agentType, workflowRootPath, model, isolation } = cfg
+  return {
+    agentId,
+    label,
+    agentType,
+    workflowRootPath,
+    ...(model !== undefined ? { model } : {}),
+    ...(isolation !== undefined ? { isolation } : {}),
+    ...(handle.resumeRef !== undefined ? { resumeRef: handle.resumeRef } : {}),
+    ...(handle.replayed === true ? { replayed: true } : {}),
+  }
 }
 
 export function buildAgentWithMetaResult(params: {
