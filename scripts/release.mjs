@@ -5,7 +5,7 @@
  * 与 release.yml 流水线的职责边界（参考 actiondock 模式，触发事实源保持不变）：
  * - 本脚本：工作区/分支守卫 → 变更明细预览 → 本地全量质量门禁 → 锁步 bump 全部
  *   packages/<pkg>/package.json 版本 → 创建 chore(release): v<ver> 提交与轻量 tag → 推送
- *   main 与 tag。**不创建 GitHub Release、不触碰 npm**。
+ *   main 与 tag。`--dry-run` 在预览后即止；**不创建 GitHub Release、不触碰 npm**。
  * - release.yml（由推送的 v* tag 触发）：verify → build → npm-publish → notes。GitHub
  *   Release 及其 Release notes 由流水线的 notes 作业在 npm 发布完成后如实渲染，本地
  *   不预写任何发布说明，避免与实际发布结果漂移。
@@ -70,7 +70,7 @@ function printHelp() {
 
 守卫与流程选项:
   --notes-file <路径>   指定手工精选的 Markdown 变更说明（写入 CHANGELOG.md 对应版本小节）
-  --dry-run             模拟运行：只预览变更明细与计划动作，不修改任何文件
+  --dry-run             模拟运行：只预览变更明细与计划动作，不跑本地门禁、不修改任何文件
   --skip-verify         跳过本地全量质量门禁（typecheck/lint/check:hygiene/build/test:all；
                         流水线仍会全量重验，此项只是本地提速逃生口）
   --push                提交后推送 main 与 v* tag（触发 release.yml）
@@ -245,7 +245,16 @@ function main() {
   console.log(changelogBody || '-（无可列出的提交）');
   console.log('');
 
-  // 3. 本地全量质量门禁（流水线会重验，这里提前拦截省一轮 CI）
+  // 3. 模拟运行到此为止：只预览，不跑本地门禁（正式运行无论如何会重跑，门禁结果对预览没有信息量）
+  if (options.dryRun) {
+    const gate = options.skipVerify
+      ? '跳过本地门禁（--skip-verify）'
+      : '本地门禁（build / typecheck / lint / check:hygiene / test:all）';
+    console.log(`[模拟运行] 未修改任何文件，也未运行本地门禁。正式运行计划: ${gate} → 锁步 bump ${updatedPreviewCount()} 个 package.json → ${existingSection !== null ? '沿用' : '更新'} CHANGELOG.md → 提交 chore(release): v${targetVersion} → ${options.push ? '推送 main + tag' : '（未指定 --push，不会推送）'} v${targetVersion}`);
+    return;
+  }
+
+  // 4. 本地全量质量门禁（流水线会重验，这里提前拦截省一轮 CI）
   if (options.skipVerify) {
     console.log('提示: --skip-verify 跳过本地门禁（release.yml 仍会全量验证）。');
   } else {
@@ -262,12 +271,7 @@ function main() {
     console.log('本地门禁全部通过。\n');
   }
 
-  if (options.dryRun) {
-    console.log(`[模拟运行] 未执行任何修改。计划: 锁步 bump ${updatedPreviewCount()} 个 package.json → ${existingSection !== null ? '沿用' : '更新'} CHANGELOG.md → 提交 chore(release): v${targetVersion} → ${options.push ? '推送 main + tag' : '（未指定 --push，不会推送）'} v${targetVersion}`);
-    return;
-  }
-
-  // 4. 锁步 bump + CHANGELOG 更新/沿用 + 仅提交发版文件 + 轻量 tag
+  // 5. 锁步 bump + CHANGELOG 更新/沿用 + 仅提交发版文件 + 轻量 tag
   const updated = bumpWorkspaceVersions(targetVersion);
   console.log(`锁步更新版本至 ${targetVersion}（${updated.length} 个 package.json）`);
   if (existingSection !== null) {
@@ -289,7 +293,7 @@ function main() {
   git(['tag', tag]);
   console.log(`已创建提交 chore(release): v${targetVersion} 与轻量 tag ${tag}`);
 
-  // 5. 推送 main 与 tag（tag 推送即触发 release.yml）
+  // 6. 推送 main 与 tag（tag 推送即触发 release.yml）
   if (options.push) {
     const pushTarget = branch === 'main' ? 'main' : 'HEAD:main';
     git(['push', 'origin', pushTarget]);

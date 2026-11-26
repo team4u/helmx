@@ -305,6 +305,24 @@ test('release.mjs auto-summary: merge commits are excluded structurally, whateve
   assert.doesNotMatch(body, /Merge branch|merge\(main\)|看起来像普通提交的 merge|chore\(release\)/)
 })
 
+test('release.mjs --dry-run: previews without running the local gate even when --skip-verify is absent', { timeout: 60_000 }, (t) => {
+  const fixture = makeFixtureRepo(useTempDir(t, 'helmx-release-dry-run-'), '0.1.1', { withChangelog: true })
+  const payloadBefore = readFileSync(path.join(fixture.dir, 'packages', 'payload', 'package.json'), 'utf8')
+  // 不带 --skip-verify：fixture 没有 build 脚本，门禁一旦被触发 pnpm build 必然失败
+  const res = fixture.runRelease(['--minor', '--dry-run'])
+  assert.equal(res.status, 0, `dry-run must not run the gate:\nstdout: ${res.stdout}\nstderr: ${res.stderr}`)
+  assert.match(res.stdout, /\[模拟运行\] 未修改任何文件，也未运行本地门禁/)
+  assert.match(res.stdout, /正式运行计划: 本地门禁（build \/ typecheck \/ lint \/ check:hygiene \/ test:all）/)
+  assert.doesNotMatch(res.stdout, /^- build\.\.\.$/m)
+  assert.equal(readFileSync(path.join(fixture.dir, 'packages', 'payload', 'package.json'), 'utf8'), payloadBefore)
+  assert.doesNotMatch(readFileSync(path.join(fixture.dir, 'CHANGELOG.md'), 'utf8'), /## v0\.2\.0/)
+  assert.equal(fixture.git(['status', '--porcelain']).trim(), '')
+
+  const skipped = fixture.runRelease(['--minor', '--dry-run', '--skip-verify'])
+  assert.equal(skipped.status, 0, `dry-run --skip-verify failed:\n${skipped.stderr}`)
+  assert.match(skipped.stdout, /正式运行计划: 跳过本地门禁（--skip-verify）/)
+})
+
 test('assertPnpmArgsShellSafe: pnpm gate arguments stay shell-inert (the .cmd shim must go through cmd.exe)', { timeout: 60_000 }, () => {
   // 门禁实际使用的全部命令名（build / typecheck:only / lint / check:hygiene / test:all:run）必须放行
   assert.doesNotThrow(() => assertPnpmArgsShellSafe(['build']));
