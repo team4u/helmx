@@ -22,6 +22,7 @@ import { CompactionTask, defineExtension, hook } from '@earendil-works/pi-durabl
 import type { ConversationLive, HelmxEventFrame } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
+import type { ConversationTracker } from '../src/runtime/conversations.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
@@ -314,12 +315,8 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         ),
         false,
       )
-      const tracker = (kernel as unknown as {
-        tracker: {
-          mirrors: Map<number, { trackedInputs: Map<string, unknown>; submissionIndex: Map<number, string> }>
-        }
-      }).tracker
-      const mirror = tracker.mirrors.get(1)
+      const tracker = (kernel as unknown as { tracker: ConversationTracker }).tracker
+      const mirror = tracker.core.mirrors.get(1)
       assert.equal(mirror?.trackedInputs.size ?? 0, 0, 'trackedInputs must be empty after abort cleanup')
       assert.equal(mirror?.submissionIndex.size ?? 0, 0, 'submissionIndex must be empty after abort cleanup')
     } finally {

@@ -639,11 +639,9 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
       assert.deepEqual(committed, ['ix-1'])
       assert.deepEqual(settled[0]!.inputs.map((i) => i.id), ['ix-1'])
       // Tracking records and correlation index are cleared after settle.
-      const internals = (tracker as unknown as {
-        mirrors: Map<number, { trackedInputs: Map<string, unknown>; submissionIndex: Map<number, string> }>
-      })
-      assert.equal(internals.mirrors.get(id)?.trackedInputs.size ?? 0, 0, 'tracking records cleared after settle')
-      assert.equal(internals.mirrors.get(id)?.submissionIndex.size ?? 0, 0, 'correlation index cleared after settle')
+      const { mirrors } = tracker.core
+      assert.equal(mirrors.get(id)?.trackedInputs.size ?? 0, 0, 'tracking records cleared after settle')
+      assert.equal(mirrors.get(id)?.submissionIndex.size ?? 0, 0, 'correlation index cleared after settle')
     } finally {
       await harness.close(BACKGROUND_CONTEXT)
       await store.close()
