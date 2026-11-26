@@ -1,5 +1,5 @@
-import React, { useId } from 'react'
-import { mergeAriaDescribedBy, useFieldContext } from './field-context.js'
+import React from 'react'
+import { useToggleControl } from './toggle-control.js'
 
 export interface SwitchProps {
   checked: boolean
@@ -38,59 +38,43 @@ export function Switch({
   'aria-label': ariaLabel,
   'aria-describedby': ariaDescribedBy,
 }: SwitchProps) {
-  const generatedId = useId()
-  const field = useFieldContext()
-  const hasOwnLabel = label !== undefined && label !== null && label !== ''
-  // When Switch renders its own <label htmlFor>, keep a self-contained ID so
-  // an enclosing <Field> label does not collide with the inner label.
-  const switchId = id ?? (hasOwnLabel ? generatedId : (field?.controlId ?? generatedId))
-  const resolvedInvalid = invalid ?? field?.invalid ?? false
-  const resolvedRequired = required ?? (field?.required === true ? true : undefined)
-  const resolvedDescribedBy = mergeAriaDescribedBy(ariaDescribedBy, field?.describedBy)
-
-  const handleClick = () => {
-    if (!disabled) {
-      onChange(!checked)
-    }
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (disabled) return
-    if (e.key === ' ' || e.key === 'Enter') {
-      e.preventDefault()
-      onChange(!checked)
-    }
-  }
+  const control = useToggleControl({
+    checked,
+    onChange,
+    disabled,
+    invalid,
+    required,
+    label,
+    id,
+    'aria-label': ariaLabel,
+    'aria-describedby': ariaDescribedBy,
+  })
 
   const wrapClass = ['helmx-switch-wrap', disabled && 'is-disabled', className].filter(Boolean).join(' ')
   const buttonClass = ['helmx-switch', checked && 'is-checked'].filter(Boolean).join(' ')
 
-  const switchButton = (
-    <button
-      type="button"
-      role="switch"
-      id={switchId}
-      name={name}
-      aria-checked={checked}
-      aria-label={ariaLabel ?? (typeof label === 'string' ? label : undefined)}
-      aria-invalid={resolvedInvalid ? true : undefined}
-      aria-required={resolvedRequired}
-      aria-describedby={resolvedDescribedBy}
-      disabled={disabled}
-      className={buttonClass}
-      onClick={handleClick}
-      onKeyDown={handleKeyDown}
-      title={title}
-    >
-      <span className="helmx-switch-thumb" />
-    </button>
-  )
-
   return (
     <span className={wrapClass} style={style} title={title}>
-      {switchButton}
-      {hasOwnLabel ? (
-        <label htmlFor={switchId} className="helmx-switch-label">
+      <button
+        type="button"
+        role="switch"
+        id={control.controlId}
+        name={name}
+        aria-checked={checked}
+        aria-label={control.ariaLabel}
+        aria-invalid={control.ariaInvalid}
+        aria-required={control.ariaRequired}
+        aria-describedby={control.ariaDescribedBy}
+        disabled={disabled}
+        className={buttonClass}
+        onClick={control.onClick}
+        onKeyDown={control.onKeyDown}
+        title={title}
+      >
+        <span className="helmx-switch-thumb" />
+      </button>
+      {control.hasOwnLabel ? (
+        <label htmlFor={control.controlId} className="helmx-switch-label">
           {label}
         </label>
       ) : null}

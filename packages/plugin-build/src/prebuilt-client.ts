@@ -20,6 +20,7 @@ import {
   prebuiltChunkFileName,
   type BuildPluginClientBundleDirOptions,
   type BuildPluginClientBundleDirResult,
+  type PluginClientNpmRoot,
   type PrebuiltClientManifest,
   type PrebuiltClientModuleEntry,
 } from '@helmx/protocol';
@@ -43,6 +44,24 @@ async function writeBundleFile(filePath: string, content: string | Uint8Array): 
   if (process.platform !== 'win32') {
     await fsp.chmod(filePath, 0o644);
   }
+}
+
+/**
+ * Writes `fileName` together with its `.gz` sibling into `dir` and returns the total bytes written.
+ * Pre-compressed `gzipped` bytes are reused when the compiler already produced them.
+ */
+async function writeCodeWithGzip(dir: string, fileName: string, code: string, gzipped?: Uint8Array): Promise<number> {
+  const codeBytes = Buffer.from(code, 'utf8');
+  const gz = gzipped ?? (await compressAsset(codeBytes));
+  await Promise.all([
+    writeBundleFile(join(dir, fileName), code),
+    writeBundleFile(join(dir, `${fileName}.gz`), gz),
+  ]);
+  return codeBytes.byteLength + gz.byteLength;
+}
+
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 const CLIENT_ENTRY_PATTERN = /\.(ts|tsx)$/;
@@ -70,6 +89,157 @@ function discoverClientModules(clientRootReal: string): string[] {
   return found;
 }
 
+/** Validates `clientRoot` and returns its real path (`client_root_invalid` when missing or not a directory). */
+function resolveClientRootReal(pluginId: string, clientRoot: string): string {
+  const rootReal = realPathOrThrow(clientRoot, `plugin ${pluginId} clientRoot is missing or inaccessible: ${clientRoot}`);
+  if (!statSync(rootReal).isDirectory()) {
+    throw new HelmxError('client_root_invalid', `plugin ${pluginId} clientRoot is not a directory: ${clientRoot}`, 400, {
+      pluginId,
+      clientRoot,
+    });
+  }
+  return rootReal;
+}
+
+/** Validates an explicit `modules` list, rejecting an empty list and deduplicating while preserving caller order. */
+function resolveExplicitModules(pluginId: string, modules: ReadonlyArray<string>): string[] {
+  if (modules.length === 0) {
+    throw new HelmxError(
+      'invalid_client_module',
+      `plugin ${pluginId} buildPluginClientBundleDir modules list cannot be empty`,
+      400,
+      { pluginId },
+    );
+  }
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const moduleRef of modules) {
+    assertModuleRefShape(pluginId, moduleRef);
+    if (seen.has(moduleRef)) continue;
+    seen.add(moduleRef);
+    unique.push(moduleRef);
+  }
+  return unique;
+}
+
+/** Picks the entry modules to build: the explicit `modules` list, or every non-declaration `.ts`/`.tsx` under `clientRoot`. */
+function resolveTargetModules(
+  pluginId: string,
+  clientRoot: string,
+  rootReal: string,
+  modules: ReadonlyArray<string> | undefined,
+): string[] {
+  if (modules !== undefined) return resolveExplicitModules(pluginId, modules);
+  const discovered = discoverClientModules(rootReal);
+  if (discovered.length === 0) {
+    throw new HelmxError(
+      'client_root_invalid',
+      `plugin ${pluginId} has no .ts/.tsx entry modules in clientRoot: ${clientRoot}`,
+      400,
+      { pluginId, clientRoot },
+    );
+  }
+  return discovered;
+}
+
+interface ResolvedClientEntry {
+  moduleRef: string;
+  entryReal: string;
+}
+
+interface PrebuiltBuildContext {
+  pluginId: string;
+  rootReal: string;
+  npmRoots: ReadonlyArray<PluginClientNpmRoot>;
+  /** Sibling staging directory receiving all artifacts before they are swapped into `outDir`. */
+  stagingOut: string;
+}
+
+/**
+ * Compiles one entry module into the staging directory (entry `.mjs` + `.gz`, split chunks `.js` + `.gz`)
+ * and returns its manifest entry together with the bytes written.
+ */
+async function compileAndWriteModule(
+  ctx: PrebuiltBuildContext,
+  entry: ResolvedClientEntry,
+): Promise<{ manifestEntry: PrebuiltClientModuleEntry; bytes: number }> {
+  const built = await compileClientBundle({
+    pluginId: ctx.pluginId,
+    rootReal: ctx.rootReal,
+    entryReal: entry.entryReal,
+    moduleRef: entry.moduleRef,
+    stagingDir: ctx.stagingOut,
+    npmRoots: ctx.npmRoots,
+  });
+  // Created only after a successful compile so a failing build leaves nothing behind to clean up.
+  mkdirSync(ctx.stagingOut, { recursive: true });
+
+  const contentHash = built.list.contentHash;
+  const entryFile = `${safeFileName(entry.moduleRef)}.${contentHash}.mjs`;
+  let bytes = await writeCodeWithGzip(ctx.stagingOut, entryFile, built.mainJs);
+
+  const chunkNames = Object.keys(built.chunks).sort();
+  const chunkBytes = await Promise.all(
+    chunkNames.map((chunkName) => {
+      const chunk = built.chunks[chunkName]!;
+      const chunkFile = prebuiltChunkFileName(entryFile, chunkName, ctx.pluginId);
+      return writeCodeWithGzip(ctx.stagingOut, chunkFile, chunk.code, chunk.gzipped);
+    }),
+  );
+  bytes += chunkBytes.reduce((sum, written) => sum + written, 0);
+
+  return {
+    manifestEntry: {
+      entryFile,
+      contentHash,
+      exports: [...built.entryExports],
+      ...(chunkNames.length > 0 ? { chunks: chunkNames } : {}),
+    },
+    bytes,
+  };
+}
+
+/**
+ * Moves `backupOut` back to `resolvedOut` after a failed swap. When the restore itself fails, both
+ * failures are reported together because the previous bundle then only survives at `backupOut`.
+ */
+async function restorePreviousBundle(pluginId: string, swapErr: unknown, backupOut: string, resolvedOut: string): Promise<void> {
+  try {
+    await renameAtomically(backupOut, resolvedOut);
+  } catch (restoreErr) {
+    throw new HelmxError(
+      'client_compile_failed',
+      `prebuilt client swap failed (${describeError(swapErr)}); backup restore failed (${describeError(restoreErr)}); previous bundle preserved at ${backupOut}`,
+      500,
+      { pluginId, outDir: resolvedOut, backupOut },
+    );
+  }
+}
+
+/**
+ * Atomically replaces `resolvedOut` with `stagingOut`: the previous bundle is first moved aside to
+ * `<stagingOut>.prev` and restored when the swap fails midway, so `outDir` never ends up missing.
+ */
+async function swapStagingIntoPlace(pluginId: string, stagingOut: string, resolvedOut: string): Promise<void> {
+  let backupOut: string | undefined;
+  try {
+    if (existsSync(resolvedOut)) {
+      backupOut = `${stagingOut}.prev`;
+      await renameAtomically(resolvedOut, backupOut);
+    }
+    await renameAtomically(stagingOut, resolvedOut);
+  } catch (swapErr) {
+    // Restore only when the previous bundle was moved aside and nothing has taken its place yet.
+    if (backupOut !== undefined && !existsSync(resolvedOut) && existsSync(backupOut)) {
+      await restorePreviousBundle(pluginId, swapErr, backupOut, resolvedOut);
+    }
+    throw swapErr;
+  }
+  if (backupOut !== undefined) {
+    rmSync(backupOut, { recursive: true, force: true });
+  }
+}
+
 /**
  * Compiles one or more client entry modules under `clientRoot` into a standalone prebuilt directory
  * containing `manifest.json`, entry `.mjs` + `.gz`, and all split chunks `.js` + `.gz`.
@@ -81,151 +251,36 @@ export async function buildPluginClientBundleDir(
   if (typeof pluginId !== 'string' || pluginId.length === 0) {
     throw new HelmxError('invalid_plugin_definition', 'buildPluginClientBundleDir requires a non-empty pluginId', 400);
   }
-  const rootReal = realPathOrThrow(clientRoot, `plugin ${pluginId} clientRoot is missing or inaccessible: ${clientRoot}`);
-  if (!statSync(rootReal).isDirectory()) {
-    throw new HelmxError('client_root_invalid', `plugin ${pluginId} clientRoot is not a directory: ${clientRoot}`, 400, {
-      pluginId,
-      clientRoot,
-    });
-  }
-
-  let targetModules: string[];
-  if (options.modules !== undefined) {
-    if (options.modules.length === 0) {
-      throw new HelmxError('invalid_client_module', `plugin ${pluginId} buildPluginClientBundleDir modules list cannot be empty`, 400, {
-        pluginId,
-      });
-    }
-    const seen = new Set<string>();
-    targetModules = [];
-    for (const m of options.modules) {
-      assertModuleRefShape(pluginId, m);
-      if (!seen.has(m)) {
-        seen.add(m);
-        targetModules.push(m);
-      }
-    }
-  } else {
-    targetModules = discoverClientModules(rootReal);
-    if (targetModules.length === 0) {
-      throw new HelmxError(
-        'client_root_invalid',
-        `plugin ${pluginId} has no .ts/.tsx entry modules in clientRoot: ${clientRoot}`,
-        400,
-        { pluginId, clientRoot },
-      );
-    }
-  }
-
-  const resolvedEntries = targetModules.map((moduleRef) => {
-    assertModuleRefShape(pluginId, moduleRef);
-    return {
-      moduleRef,
-      entryReal: assertEntryInsideRoot(pluginId, rootReal, moduleRef),
-    };
-  });
+  const rootReal = resolveClientRootReal(pluginId, clientRoot);
+  const targetModules = resolveTargetModules(pluginId, clientRoot, rootReal, options.modules);
+  const resolvedEntries: ResolvedClientEntry[] = targetModules.map((moduleRef) => ({
+    moduleRef,
+    entryReal: assertEntryInsideRoot(pluginId, rootReal, moduleRef),
+  }));
 
   const resolvedOut = resolve(outDir);
-  const outParent = dirname(resolvedOut);
-  const stagingOut = join(outParent, `.${basename(resolvedOut)}.staging-${process.pid}-${randomUUID().slice(0, 8)}`);
-  let stagingCreated = false;
+  // Sibling staging directory (unique per process) keeps partial builds invisible until the atomic swap.
+  const stagingOut = join(dirname(resolvedOut), `.${basename(resolvedOut)}.staging-${process.pid}-${randomUUID().slice(0, 8)}`);
+  const buildContext: PrebuiltBuildContext = { pluginId, rootReal, npmRoots, stagingOut };
 
   try {
     const manifestModules: Record<string, PrebuiltClientModuleEntry> = {};
     let totalBytes = 0;
-
-    for (const { moduleRef, entryReal } of resolvedEntries) {
-      const built = await compileClientBundle({
-        pluginId,
-        rootReal,
-        entryReal,
-        moduleRef,
-        stagingDir: stagingOut,
-        npmRoots,
-      });
-      if (!stagingCreated) {
-        mkdirSync(stagingOut, { recursive: true });
-        stagingCreated = true;
-      }
-
-      const baseName = safeFileName(moduleRef);
-      const contentHash = built.list.contentHash;
-      const entryFile = `${baseName}.${contentHash}.mjs`;
-      const entryCodeBytes = Buffer.from(built.mainJs, 'utf8');
-      const entryGz = await compressAsset(entryCodeBytes);
-      await Promise.all([
-        writeBundleFile(join(stagingOut, entryFile), built.mainJs),
-        writeBundleFile(join(stagingOut, `${entryFile}.gz`), entryGz),
-      ]);
-      totalBytes += entryCodeBytes.byteLength + entryGz.byteLength;
-
-      const chunkNames = Object.keys(built.chunks).sort();
-      await Promise.all(
-        chunkNames.map(async (chunkName) => {
-          const chunkData = built.chunks[chunkName]!;
-          const chunkFile = prebuiltChunkFileName(entryFile, chunkName, pluginId);
-          const chunkCodeBytes = Buffer.from(chunkData.code, 'utf8');
-          const chunkGz = chunkData.gzipped ?? (await compressAsset(chunkCodeBytes));
-          await Promise.all([
-            writeBundleFile(join(stagingOut, chunkFile), chunkData.code),
-            writeBundleFile(join(stagingOut, `${chunkFile}.gz`), chunkGz),
-          ]);
-          totalBytes += chunkCodeBytes.byteLength + chunkGz.byteLength;
-        }),
-      );
-
-      manifestModules[moduleRef] = {
-        entryFile,
-        contentHash,
-        exports: [...built.entryExports],
-        ...(chunkNames.length > 0 ? { chunks: chunkNames } : {}),
-      };
+    for (const entry of resolvedEntries) {
+      const written = await compileAndWriteModule(buildContext, entry);
+      manifestModules[entry.moduleRef] = written.manifestEntry;
+      totalBytes += written.bytes;
     }
 
-    const manifestRaw: PrebuiltClientManifest = {
-      version: PREBUILT_CLIENT_MANIFEST_VERSION,
-      modules: manifestModules,
-    };
-    const manifest = assertPrebuiltClientManifest(manifestRaw, stagingOut);
+    const manifest = assertPrebuiltClientManifest(
+      { version: PREBUILT_CLIENT_MANIFEST_VERSION, modules: manifestModules } satisfies PrebuiltClientManifest,
+      stagingOut,
+    );
     const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
     await writeBundleFile(join(stagingOut, PREBUILT_CLIENT_MANIFEST_FILE), manifestText);
     totalBytes += Buffer.byteLength(manifestText, 'utf8');
 
-    let backupOut: string | undefined;
-    let swapSucceeded = false;
-    try {
-      if (existsSync(resolvedOut)) {
-        backupOut = `${stagingOut}.prev`;
-        await renameAtomically(resolvedOut, backupOut);
-      }
-      await renameAtomically(stagingOut, resolvedOut);
-      stagingCreated = false;
-      swapSucceeded = true;
-    } catch (swapErr) {
-      let restoreErr: unknown;
-      if (backupOut !== undefined && !existsSync(resolvedOut) && existsSync(backupOut)) {
-        try {
-          await renameAtomically(backupOut, resolvedOut);
-        } catch (err) {
-          restoreErr = err;
-        }
-      }
-      if (restoreErr !== undefined) {
-        const swapMsg = swapErr instanceof Error ? swapErr.message : String(swapErr);
-        const restoreMsg = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
-        throw new HelmxError(
-          'client_compile_failed',
-          `prebuilt client swap failed (${swapMsg}); backup restore failed (${restoreMsg}); previous bundle preserved at ${backupOut}`,
-          500,
-          { pluginId, outDir: resolvedOut, backupOut },
-        );
-      }
-      throw swapErr;
-    } finally {
-      if (swapSucceeded && backupOut !== undefined) {
-        rmSync(backupOut, { recursive: true, force: true });
-      }
-    }
+    await swapStagingIntoPlace(pluginId, stagingOut, resolvedOut);
 
     return {
       pluginId,
@@ -236,8 +291,7 @@ export async function buildPluginClientBundleDir(
       totalBytes,
     };
   } finally {
-    if (stagingCreated) {
-      rmSync(stagingOut, { recursive: true, force: true });
-    }
+    // No-op once the staging directory was swapped into place or was never created (per-process unique path).
+    rmSync(stagingOut, { recursive: true, force: true });
   }
 }

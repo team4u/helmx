@@ -239,12 +239,18 @@ function buildKeyframePrefix(pluginId: string): string {
   return `helmx-kf-${slug}-`
 }
 
+type SelectorBracketKind = 'paren' | 'bracket'
+
+// Parens and brackets are tracked separately (not as one shared depth) so a mismatched closer such
+// as `(]` cannot let a later top-level comma split inside an unclosed `:not(` / `:is(` function.
+const SELECTOR_OPENERS: Readonly<Record<string, SelectorBracketKind>> = { '(': 'paren', '[': 'bracket' }
+const SELECTOR_CLOSERS: Readonly<Record<string, SelectorBracketKind>> = { ')': 'paren', ']': 'bracket' }
+
 /** Splits a selector list by top-level commas, respecting quotes, parens, brackets, and comments. */
 function splitSelectorList(selectorText: string): string[] {
   const parts: string[] = []
+  const depth: Record<SelectorBracketKind, number> = { paren: 0, bracket: 0 }
   let start = 0
-  let parenDepth = 0
-  let bracketDepth = 0
   let i = 0
   const len = selectorText.length
 
@@ -259,15 +265,20 @@ function splitSelectorList(selectorText: string): string[] {
       i = afterComment
       continue
     }
-    if (ch === '(') {
-      parenDepth++
-    } else if (ch === ')') {
-      if (parenDepth > 0) parenDepth--
-    } else if (ch === '[') {
-      bracketDepth++
-    } else if (ch === ']') {
-      if (bracketDepth > 0) bracketDepth--
-    } else if (ch === ',' && parenDepth === 0 && bracketDepth === 0) {
+    const opener = SELECTOR_OPENERS[ch]
+    if (opener !== undefined) {
+      depth[opener]++
+      i++
+      continue
+    }
+    const closer = SELECTOR_CLOSERS[ch]
+    if (closer !== undefined) {
+      // A stray closer must not drive depth negative, or following top-level commas would stop splitting.
+      if (depth[closer] > 0) depth[closer]--
+      i++
+      continue
+    }
+    if (ch === ',' && depth.paren === 0 && depth.bracket === 0) {
       parts.push(selectorText.slice(start, i))
       start = i + 1
     }
