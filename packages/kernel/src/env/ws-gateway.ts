@@ -1,10 +1,10 @@
 /** Node gateway: one birpc instance per connection, shared by control plane and env RPC. */
-import type { Server as HttpServer, IncomingMessage } from 'node:http'
-import type { Duplex } from 'node:stream'
+import type { Server as HttpServer } from 'node:http'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { createBirpc } from 'birpc'
 import type { NodeHeartbeatInput, NodeRegisterInput, NodeRegisterResult } from '@helmx/protocol'
 import type { HubConnectionLocal, NodeRegistry, NodeSideFunctions } from './registry.js'
+import { attachWsUpgradeRoute } from './ws-upgrade-route.js'
 
 export interface NodeWsGatewayOptions {
   registry: NodeRegistry
@@ -32,19 +32,12 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
   } = options
   const wss = new WebSocketServer({ noServer: true, maxPayload })
   let closing: Promise<void> | undefined
-  const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
-    let url: URL
-    try {
-      url = new URL(request.url ?? '/', 'http://localhost')
-    } catch {
-      socket.destroy()
-      return
-    }
-    if (url.pathname !== path) return
-    if (closing) { socket.destroy(); return }
-    wss.handleUpgrade(request, socket, head, (ws) => handleConnection(ws, url.searchParams.get('nodeId')))
-  }
-  server.on('upgrade', onUpgrade)
+  const detachUpgradeRoute = attachWsUpgradeRoute(server, {
+    wss,
+    path,
+    isClosing: () => closing !== undefined,
+    onConnection: (ws, url) => handleConnection(ws, url.searchParams.get('nodeId')),
+  })
 
   function handleConnection(ws: WebSocket, routedNodeId: string | null): void {
     let callbacks: HubConnectionLocal | undefined
@@ -117,7 +110,7 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
     get onlineCount() { return registry.list().length },
     close() {
       if (!closing) closing = (async () => {
-        server.removeListener('upgrade', onUpgrade)
+        detachUpgradeRoute()
         for (const socket of wss.clients) socket.terminate()
         await registry.close()
         await new Promise<void>((resolve) => wss.close(() => resolve()))
