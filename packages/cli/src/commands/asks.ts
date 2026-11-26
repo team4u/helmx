@@ -36,7 +36,7 @@ export function asksCommands(): CommandSpec[] {
     path: ['asks', 'answer'],
     description: 'Submit answers to a pending ask (POST /api/asks/:id/answer; supports CAS)',
     flags: [
-      { name: 'answers', type: 'json', required: true, help: 'JSON object mapping fieldName to answer value' },
+      { name: 'answers', type: 'json', required: true, help: 'JSON object mapping field names to string or string[] values' },
       { name: 'expected-state-seq', type: 'number', help: 'CAS sequence guard; resolves as superseded if terminal state advanced' },
     ],
     positional: '<id>',
@@ -45,7 +45,7 @@ export function asksCommands(): CommandSpec[] {
       assertNoExtraPositionals(ctx.positionals, 1)
       const answers = ctx.flags.get('answers')
       if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) {
-        throw new CliError('--answers must be a JSON object mapping fieldName to answer value', 'invalid_flag_value')
+        throw new CliError('--answers must be a JSON object mapping field names to string or string[] values', 'invalid_flag_value')
       }
       const body: Record<string, unknown> = { answers }
       const seq = flagValue<number>(ctx.flags, 'expected-state-seq')

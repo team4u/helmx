@@ -44,7 +44,7 @@
 | 配置 | 类型 | 缺省 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `maxConcurrentAgents` | integer | 按 CPU 并行度计算（2..32） | 单个 run 的并发 agent 上限（1..128） |
-| `maxSubagentDepth` | integer | 2 | 受管子代理嵌套深度上限（1..5）；主会话为第 0 层，变更只影响新派生任务树 |
+| `maxSubagentDepth` | integer | 1 | 受管子代理嵌套深度上限（1..5）；主会话为第 0 层，变更只影响新派生任务树 |
 | `autoRecoverOnRestart` | boolean | `true` | Hub 重启后尝试恢复在途任务。设为 `false` 或 `HELMX_AUTO_RECOVER=0` 时，关停会中止任务，启动时会把遗留的运行标为失败。 |
 
 状态按冷热分层持久化与投影，彻底消除整表写放大：
@@ -58,7 +58,7 @@
 
 工作流定义文件唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js`。引擎经 `emitEvent` 发布 `workflow.updated`（全局仅状态失效提示）与 `workflow.settled`（完整 summary，`broadcast: false` 进程内分发）。
 
-**嵌套深度契约**：受管子代理（经 `subagent` / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）非分叉默认可嵌套 2 层，达到子树上限即编排叶子；`fork: true` 默认收口为当前子层级的叶子（`maxSubagentDepth = childDepth`）并持久记录 `forked: true`，在 `before_turn` 注入 `<forked_subagent_context>` 边界段落防止重复派发继承来的父级委托指令，仅当显式传入 `maxSubagentDepth`（且不超出继承上限）时才允许继续嵌套。三道防线：`before_turn` 剥离叶子回合的派工工具（含所有活跃 `helmx.dispatch-tools` 提供方声明的工具，自然抑制 `<available_profiles>`）、工具/动作入口前置拒绝（`403 subagent_depth_exceeded`）、`agent_spawn` 钩子（priority 300）兜底。会话级 `conversations fork` 与非分叉 Swarm 成员不进登记表、不受限。DSL `workflow()` 脚本组合深度上限为 2 层（`MAX_WORKFLOW_NESTING_DEPTH = 2`），与子代理层级分别计数。
+**嵌套深度契约**：受管子代理（经 `subagent` / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认上限为 1 层（即第 1 层子代理默认即为编排叶子，不能继续派生子代理、工作流或 Swarm）；非分叉子代理仅当通过插件配置或显式 `maxSubagentDepth`（2..5）授予更高上限时才允许继续嵌套。`fork: true` 即使在全局配置调高时仍默认收口为当前子层级的叶子（`maxSubagentDepth = childDepth`）并持久记录 `forked: true`，在 `before_turn` 注入 `<forked_subagent_context>` 边界段落防止重复派发继承来的父级委托指令，仅当显式传入 `maxSubagentDepth`（且不超出继承上限）时才允许继续嵌套。`builtin:swarm` 成员通过 `helmx.conversation-depth` 上报 `depth = 1`（`forkFrom` 成员标记为叶子），统一复用本插件 `maxSubagentDepth` 上限（默认 `1`）。三道防线：`before_turn` 剥离叶子回合的派工工具（含所有活跃 `helmx.dispatch-tools` 提供方声明的工具，自然抑制 `<available_profiles>`）、工具/动作入口前置拒绝（`403 subagent_depth_exceeded`）、`agent_spawn` 钩子（priority 300）兜底。人工会话级 `conversations fork` 不进登记表、不受限。DSL `workflow()` 脚本组合深度上限为 2 层（`MAX_WORKFLOW_NESTING_DEPTH = 2`），与子代理层级分别计数。
 
 ## 停用与失败语义
 

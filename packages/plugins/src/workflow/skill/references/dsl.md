@@ -39,8 +39,8 @@ Supported options:
 
 - `label`: display name and the local continuation handle;
 - `phase`: phase assignment;
-- `agentType`: Profile ID;
-- `model`, `effort`: execution overrides (`effort`: `off | minimal | low | medium | high | xhigh | max`);
+- `agentType`: native Profile ID (lowercase `a-z`, `0-9`, hyphen) or a plugin-claimed external runtime `<namespace>:<kind>` (never pass a model tier `tier/<id>` or `provider/model`);
+- `model`, `effort`: execution overrides (`model` accepts semantic tier `'tier/<id>'` or concrete `'provider/model'`; omit `effort` to inherit the tier's preset thinking level, or override with `off | minimal | low | medium | high | xhigh | max`);
 - `isolation: "worktree"`: independent managed Git worktree;
 - `nodeId`: target compute node ID (overrides Profile/parent node; explicit `"local"` switches back to the Hub host; remote nodes require `cwd` or a compatible Profile `cwd`);
 - `cwd`: absolute target workspace;
@@ -49,7 +49,7 @@ Supported options:
 - `resume`: continue an existing agent context by its local label;
 - `schema`: JSON Schema for the result boundary;
 - `attachments`: authorized artifact IDs;
-- `maxSubagentDepth`: absolute task-tree depth cap;
+- `maxSubagentDepth`: absolute task-tree depth cap (`1..5`, default `1`; root is depth 0, so depth-1 nodes are leaves unless plugin config or explicit `2..5` grants deeper nesting);
 - `maxAttempts`: bounded retry count for the agent node.
 
 Do not combine `resume` with a new `agentType`, `model`, `isolation`, `nodeId`, `cwd`, or `effort`. Continuations require an existing idle execution that still belongs to the current task tree.

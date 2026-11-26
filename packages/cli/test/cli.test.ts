@@ -349,10 +349,10 @@ test('asks answer sends answers JSON and expectedStateSeq', { timeout: 60_000 },
     },
     { autoRegisterCleanup: t },
   )
-  const r = await runCliCaptured(['asks', 'answer', 'ask-1', '--answers', '{"field":"value"}', '--expected-state-seq', '10', '--json'], makeCliEnv(hub.url, dir))
+  const r = await runCliCaptured(['asks', 'answer', 'ask-1', '--answers', '{"field":"value","tags":["a","b"]}', '--expected-state-seq', '10', '--json'], makeCliEnv(hub.url, dir))
   assert.equal(r.code, 0, r.err)
   const hit = hub.recorded.hits.find((h) => h.path === '/api/asks/ask-1/answer')!
-  assert.deepEqual(hit.body, { answers: { field: 'value' }, expectedStateSeq: 10 })
+  assert.deepEqual(hit.body, { answers: { field: 'value', tags: ['a', 'b'] }, expectedStateSeq: 10 })
 })
 
 test('skills read prints {text} directly as raw text in non-JSON mode', { timeout: 60_000 }, async (t) => {

@@ -5,7 +5,6 @@ import type {
   CommandSpec,
   ComposerCompleterSpec,
   MarkdownCodeBlockSpec,
-  ConversationAbortResponse,
   ConversationDetail,
   ConversationEntry,
   ConversationLive,
@@ -432,7 +431,6 @@ export interface HelmxStoreValue {
   conversationLives: Record<number, ConversationLive>
   conversationArtifacts: Record<number, ArtifactMetadata[]>
   pendingAsks: AskSpec[]
-  resolvedAsksByConv: Record<number, Array<{ ask: AskSpec; status: 'answered' | 'cancelled' | 'superseded' }>>
   plugins: PluginSummary[]
   uiContributions: PluginUiContribution[]
   groupedUi: GroupedUiSpecs
@@ -551,5 +549,4 @@ export interface HelmxStoreValue {
   resumeNoticeTimer(id: string): void
   pushNotice(notice: Omit<ToastNotice, 'id' | 'createdAt'>): void
   invokePluginAction(pluginId: string, actionId: string, input: unknown, conversationId?: number): Promise<unknown>
-  abortConversation(conversationId: number): Promise<ConversationAbortResponse>
 }

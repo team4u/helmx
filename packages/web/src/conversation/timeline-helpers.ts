@@ -243,11 +243,21 @@ function summarizeValue(value: unknown): string {
  * preferred field get a compact `k=v` digest instead (values capped per entry by design).
  */
 export function toolSummaryText(toolName: string, input: unknown): string {
-  void toolName
   let raw = ''
-  if (typeof input === 'string') {
+  if (toolName === 'ask_user' && isStringRecord(input)) {
+    const title = typeof input.title === 'string' ? input.title.trim() : ''
+    if (title !== '') {
+      raw = title
+    } else if (Array.isArray(input.questions) && input.questions.length > 0) {
+      const first = input.questions[0]
+      if (isStringRecord(first) && typeof first.question === 'string' && first.question.trim() !== '') {
+        raw = first.question.trim()
+      }
+    }
+  }
+  if (raw === '' && typeof input === 'string') {
     raw = input
-  } else if (isStringRecord(input)) {
+  } else if (raw === '' && isStringRecord(input)) {
     const preferred = ['command', 'file_path', 'path', 'pattern', 'prompt', 'query', 'url', 'skill_id']
     for (const key of preferred) {
       const v = input[key]

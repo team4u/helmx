@@ -247,6 +247,24 @@ export class WorkflowService {
       .sort((a, b) => b.createdAt - a.createdAt)
   }
 
+  /** Zero-IO lookup of running background subagent specs for a parent conversation (used for concurrent duplicate checks). */
+  listActiveSubagentRuns(
+    parentConversationId: number,
+  ): Array<{ runId: string; parentToolCallId?: string; spec: PersistedSubagentSpec }> {
+    const out: Array<{ runId: string; parentToolCallId?: string; spec: PersistedSubagentSpec }> = []
+    for (const active of this.active.values()) {
+      if (active.conversationId !== parentConversationId) continue
+      if (active.header.kind !== 'subagent' || active.header.status !== 'running') continue
+      if (active.detail.subagentSpec === undefined) continue
+      out.push({
+        runId: active.runId,
+        ...(active.header.parentToolCallId !== undefined ? { parentToolCallId: active.header.parentToolCallId } : {}),
+        spec: active.detail.subagentSpec,
+      })
+    }
+    return out
+  }
+
   /** Zero-IO memory scan of all run headers (active runs overlaid with live node state). */
   listRuns(): WorkflowRunSummary[] {
     const headers = this.repo.listHeaders()
@@ -959,6 +977,7 @@ export class WorkflowService {
       agentId,
       requestId: deterministicRequestId,
       prompt: this.redact(request.prompt),
+      ...(explicitLabel !== '' ? { label: this.redact(explicitLabel) } : {}),
       ...(request.agentType ? { agentType: request.agentType } : {}),
       ...(request.nodeId !== undefined ? { nodeId: request.nodeId } : {}),
       ...(request.cwd !== undefined ? { cwd: this.redact(request.cwd) } : {}),

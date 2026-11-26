@@ -475,3 +475,62 @@ test('时间线与工作台防撑爆契约：helmx/spawn-* 收为紧凑图标徽
     wbUi.unmount()
   }
 })
+
+test('已结束的同步 isolation:worktree subagent 行在时间线直接挂载紧凑 cleanup 按钮且点击不打开抽屉', { timeout: 60_000 }, async () => {
+  const parent = makeConvSummary(1)
+  const abortedChild = makeConvSummary(601, {
+    parentConversationId: 1,
+    parentToolCallId: 'call-sync-aborted',
+    status: 'idle',
+  })
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [parent, abortedChild],
+    runsByConversation: { 1: [] },
+    worktreeSlots,
+    locale: 'en',
+  })
+
+  const ui = h.mountNode(
+    e(SubagentToolView, {
+      callId: 'call-sync-aborted',
+      toolName: 'subagent',
+      input: { prompt: '同步隔离任务', isolation: 'worktree', background: false },
+      status: 'error',
+      presentationMeta: {
+        ok: false,
+        status: 'aborted',
+        execution: {
+          nodeId: 'local',
+          conversationId: 601,
+          effectiveCwd: '/repo/.helmx-worktrees/sync-601',
+          worktree: {
+            id: 'local:/repo/.helmx-worktrees/sync-601',
+            path: '/repo/.helmx-worktrees/sync-601',
+            branch: 'helmx/spawn-sync601',
+          },
+        },
+      },
+      conversationId: 1,
+    }),
+  )
+  try {
+    const statusNode = ui.container.querySelector('.wf-trace-right .status-light, .wf-trace-right [data-status], .wf-trace-right')
+    assert.ok(statusNode !== null)
+    assert.match(ui.container.querySelector('.wf-trace-right')?.textContent ?? '', /Aborted/)
+    assert.ok(ui.container.querySelector('.wf-wt-badge') !== null, '同步中止隔离行应展示 worktree 徽章')
+    const cleanupBtn = ui.container.querySelector('.wf-trace-right [aria-label="Clean up isolated worktree"]') as HTMLButtonElement | null
+    assert.ok(cleanupBtn !== null, '无 WorkflowRun 的已结束同步隔离行应在右侧渲染紧凑 cleanup 按钮')
+    assert.equal(cleanupBtn.textContent?.trim(), '')
+    await act(async () => {
+      cleanupBtn.click()
+    })
+    assert.deepEqual(
+      h.log.actions.map((a) => [a.pluginId, a.actionId, a.input]),
+      [['builtin:worktree', 'cleanup_worktree', { worktreeId: 'local:/repo/.helmx-worktrees/sync-601' }]],
+    )
+    assert.deepEqual(h.log.drawers, [], '点击行内 cleanup 按钮绝不应触发打开子会话抽屉')
+  } finally {
+    ui.unmount()
+  }
+})

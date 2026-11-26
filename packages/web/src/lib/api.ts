@@ -1,10 +1,10 @@
 import type {
   ActionManifest,
   ArtifactMetadata,
+  AskAnswers,
   AskSpec,
   AuthStatus,
   AuthToken,
-  ConversationAbortResponse,
   ConversationCompactResponse,
   ConversationBulkDeleteResponse,
   ConversationDetail,
@@ -250,8 +250,8 @@ export const conversationsApi = {
       input,
     )
   },
-  abort(id: number): Promise<ConversationAbortResponse> {
-    return apiRequest<ConversationAbortResponse>('POST', `/api/conversations/${id}/abort`)
+  abort(id: number): Promise<{ ok: boolean }> {
+    return apiRequest<{ ok: boolean }>('POST', `/api/conversations/${id}/abort`)
   },
   reset(id: number, handoff?: string): Promise<ConversationSummary> {
     return apiRequest<ConversationSummary>(
@@ -416,7 +416,7 @@ export const nodesApi = {
 
 export const asksApi = {
   list: (opts?: { signal?: AbortSignal }) => apiRequest<AskSpec[]>('GET', '/api/asks', undefined, opts?.signal),
-  answer: (askId: string, answers: Record<string, string>, expectedStateSeq?: number) =>
+  answer: (askId: string, answers: AskAnswers, expectedStateSeq?: number) =>
     apiRequest<{ ok: boolean }>('POST', `/api/asks/${encodeURIComponent(askId)}/answer`, {
       answers,
       ...(expectedStateSeq !== undefined ? { expectedStateSeq } : {}),

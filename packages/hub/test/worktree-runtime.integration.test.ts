@@ -707,6 +707,41 @@ describe('external runtime agentType without plugin take over', { timeout: 60_00
       },
     )
   })
+
+  it('isolation: worktree + agentType: tier/coder rejects before worktree allocation (validation_error, zero orphan worktrees)', { timeout: 60_000 }, async () => {
+    const { env, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't5e-tier-wt')
+    const worktreesBefore = (
+      (await env.kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as { worktrees: unknown[] }
+    ).worktrees.length
+    const gitListBefore = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repo, encoding: 'utf8' })
+
+    await assert.rejects(
+      () =>
+        env.kernel.agentSpawn.spawnAgent({
+          parentConversationId: parentId,
+          prompt: 'isolated tier mistake',
+          isolation: 'worktree',
+          agentType: 'tier/coder',
+        } as AgentSpawnRequest),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmxError, `should throw HelmxError, got ${err}`)
+        assert.equal(err.code, 'validation_error')
+        assert.equal(err.status, 400)
+        assert.ok(err.message.includes('tier/coder'), `message should reference tier/coder: ${err.message}`)
+        assert.ok(err.message.includes('model'), `message should guide to model parameter: ${err.message}`)
+        assert.equal(err.message.toLowerCase().includes('illegal profile id'), false)
+        return true
+      },
+    )
+
+    const worktreesAfter = (
+      (await env.kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as { worktrees: unknown[] }
+    ).worktrees.length
+    const gitListAfter = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repo, encoding: 'utf8' })
+    assert.equal(worktreesAfter, worktreesBefore, 'must not register any orphan worktree')
+    assert.equal(gitListAfter, gitListBefore, 'must not allocate any git worktree on disk')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1064,6 +1099,99 @@ describe('createHelmx background subagent all chain (background + worktree + gat
       } catch {
         /* finally exhaust force */
       }
+    }
+  })
+
+  it('sync subagent(isolation: worktree, background: false) aborted by parent keeps worktree metadata in tool result & details and stays cleanable via returned worktreeId', { timeout: 60_000 }, async () => {
+    const { env, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't-sync-wt-abort')
+    let childEntered = false
+    let releaseChildHang: (() => void) | undefined
+    const abortableChildHang = (_ctx: unknown, streamOpts?: { signal?: AbortSignal }) =>
+      new Promise<AssistantMessage>((resolve, reject) => {
+        childEntered = true
+        const onAbort = () => reject(new Error('child stream aborted by signal'))
+        if (streamOpts?.signal?.aborted) {
+          onAbort()
+          return
+        }
+        streamOpts?.signal?.addEventListener('abort', onAbort, { once: true })
+        releaseChildHang = () => {
+          streamOpts?.signal?.removeEventListener('abort', onAbort)
+          resolve(fauxAssistantMessage('released on cleanup'))
+        }
+      })
+    env.faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall('subagent', { prompt: 'sync isolated task to abort', isolation: 'worktree', background: false }, { id: 'call-sync-wt-abort' })],
+        { stopReason: 'toolUse' },
+      ),
+      abortableChildHang as never,
+      fauxAssistantMessage('aborted child should not answer'),
+    ])
+
+    try {
+      await env.kernel.conversations.submitInput(parentId, 'run sync worktree subagent and abort it')
+
+      const enterDeadline = Date.now() + 10_000
+      while (Date.now() < enterDeadline) {
+        if (childEntered && env.kernel.conversations.listConversations().some((c) => c.parentConversationId === parentId)) {
+          break
+        }
+        await new Promise((r) => setTimeout(r, 25))
+      }
+      assert.ok(childEntered, 'child subagent should have entered its model turn')
+      const child = env.kernel.conversations.listConversations().find((c) => c.parentConversationId === parentId)
+      assert.ok(child, 'child conversation should exist')
+      assert.ok(existsSync(child.cwd), 'managed worktree directory should exist on disk')
+
+      await env.kernel.conversations.abortConversation(parentId)
+      await env.kernel.conversations.waitForIdle(parentId)
+      await env.kernel.conversations.waitForIdle(child.id)
+
+      const detail = await env.kernel.conversations.getConversationDetail(parentId, { limit: 100 })
+      const toolEntry = [...detail.entries]
+        .reverse()
+        .find((e) => e.kind === 'pi.tool-result' && JSON.stringify(e.model ?? '').includes('"call-sync-wt-abort"'))
+      assert.ok(toolEntry, 'parent conversation must persist pi.tool-result for aborted subagent')
+      const msg = (toolEntry.model as Array<{
+        isError?: boolean
+        content?: Array<{ type: string; text?: string }>
+        details?: {
+          ok?: boolean
+          status?: string
+          execution?: {
+            conversationId?: number
+            effectiveCwd?: string
+            worktree?: { id?: string; path?: string; branch?: string }
+          }
+        }
+      }> | undefined)?.[0]
+      assert.equal(msg?.isError, true, 'aborted tool result must have isError: true')
+      const fullText = (msg?.content ?? []).map((b) => b.text ?? '').join('\n')
+      assert.match(fullText, /Tool subagent was aborted/, `must preserve harness abort diagnostic: ${fullText}`)
+      assert.equal(msg?.details?.ok, false)
+      assert.equal(msg?.details?.status, 'aborted')
+      assert.equal(msg?.details?.execution?.conversationId, child.id, 'details must retain child conversationId')
+      const wtId = msg?.details?.execution?.worktree?.id
+      const wtPath = msg?.details?.execution?.worktree?.path
+      const wtBranch = msg?.details?.execution?.worktree?.branch
+      assert.ok(wtId && wtPath && wtBranch, `details must retain worktree metadata: ${JSON.stringify(msg?.details)}`)
+      assert.ok(fullText.includes(wtId), `model-visible output must include worktreeId=${wtId}: ${fullText}`)
+      assert.ok(fullText.includes(wtPath), `model-visible output must include worktree.path=${wtPath}: ${fullText}`)
+      assert.ok(fullText.includes(wtBranch), `model-visible output must include worktree.branch=${wtBranch}: ${fullText}`)
+      assert.ok(existsSync(wtPath), 'aborted worktree must remain on disk without silent auto-delete')
+
+      if (PROCESS_SCAN_ON) {
+        const cleaned = await env.invoke.cleanupWorktree({ worktreeId: wtId, deleteBranch: true })
+        assert.equal(cleaned.removed, true, 'worktree recovered from aborted tool result must clean up cleanly')
+        assert.equal(cleaned.branchDeleted, true)
+        assert.ok(!existsSync(wtPath))
+      } else {
+        await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ worktreeId: wtId, deleteBranch: true }))
+      }
+    } finally {
+      releaseChildHang?.()
     }
   })
 })

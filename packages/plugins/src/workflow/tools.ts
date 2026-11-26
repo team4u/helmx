@@ -7,6 +7,7 @@
 import {
   HelmxError,
   NODE_ID_PATTERN,
+  agentTypeSyntaxError,
   isValidNodeId,
   safeResultText,
   type AgentExecutionInfo,
@@ -22,6 +23,7 @@ import {
 import type { BackgroundPolicy } from './background.js'
 import { EFFORT_LEVELS, normalizeWorkflowArgs } from './dsl/index.js'
 import { deriveSubagentNameFromPrompt, type WorkflowService } from './runs/index.js'
+import { InflightSubagentRegistry, subagentCallSignature } from './subagent-dedup.js'
 import { executionOf } from './tool-result.js'
 
 export interface WorkflowToolDeps {
@@ -186,23 +188,29 @@ function workflowBackgroundHandle(run: WorkflowRunSummary) {
 
 export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToolDeps): void {
   const { workflows, assertCanSpawn, resolveBackground, syncRunsDoc } = deps
+  const inflightSubagents = new InflightSubagentRegistry()
 
   // ---- 模型工具：subagent ----
   ctx.tool({
     name: 'subagent',
     replay: 'safe',
     promptGuidelines: [
-      'Pass a short descriptive label (4-40 chars); for background runs, keep responding or doing other work and wait for the automatic steer report instead of polling.',
+      'Pass a short descriptive label (4-40 chars); in human conversations, omit background so tasks run in background and automatically steer results back when done (never poll or sleep).',
+      'Never pass background: false for isolation: "worktree" edits, shell gates, or multi-step tasks; pass distinct label values when intentionally running parallel copies of a similar task.',
       'Full subagent, runtime, worktree, and lifecycle reference: load_skill({ skillId: "workflow", path: "references/subagents.md" }).',
     ],
     description:
-      'Spawn a subagent for one delegated task. Human conversations default to background (returns runId; completion arrives as a steer follow-up); automated conversations (bot/helmx) run synchronously (background:true rejected). Pass background:false only when the next step depends on the result. Supports label, agentType (Profile ID or external runtime), fork, nodeId, cwd, isolation:"worktree", model, effort, gate, schema, attachments, maxSubagentDepth, and resume. See load_skill({ skillId: "workflow", path: "references/subagents.md" }).',
+      'Spawn a subagent for one delegated task. Human conversations default to background (returns runId; completion automatically steers results back to the parent, so even tasks you will later inspect, merge, or summarize should omit background); automated conversations (bot/helmx) run synchronously (background:true rejected). Never pass background: false for isolation:"worktree", gate, or multi-step work; reserve background:false strictly for quick seconds-long read-only lookups. Concurrent identical calls in the same parent conversation are rejected (pass distinct label values for intentional parallel attempts). Supports label, agentType (Profile ID or <namespace>:<kind> external runtime; never tier/<id>), fork, nodeId, cwd, isolation:"worktree", model (\'tier/<id>\' or \'provider/model\'), effort, gate, schema, attachments, maxSubagentDepth, and resume. See load_skill({ skillId: "workflow", path: "references/subagents.md" }).',
     inputSchema: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'Subagent task instructions' },
         label: { type: 'string', description: 'Short task label (4-40 chars, optional)' },
-        agentType: { type: 'string', description: 'Profile ID or external runtime (defaults to assistant; fork inherits parent)' },
+        agentType: {
+          type: 'string',
+          description:
+            "Child runtime: a native Profile ID (lowercase a-z, 0-9, hyphen; see <available_profiles>, defaults to assistant; fork inherits parent) or an external runtime '<namespace>:<kind>' claimed by a plugin. Never pass a model tier ('tier/<id>') or 'provider/model' here — use 'model' instead.",
+        },
         nodeId: {
           type: 'string',
           minLength: 1,
@@ -223,7 +231,8 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         },
         background: {
           type: 'boolean',
-          description: 'Run in background (default true for human, false for automated)',
+          description:
+            'Run in background (default true for human, false for automated). In human conversations, omit this for isolation:"worktree", gate, or multi-step tasks; reserve background:false strictly for seconds-long read-only queries.',
         },
         isolation: {
           type: 'string',
@@ -234,11 +243,15 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         schema: { type: 'object', description: 'Structured-output JSON Schema (optional)' },
         gate: { type: 'string', description: 'Acceptance shell command (optional; exit != 0 fails)' },
         resume: { type: 'string', description: 'Prior execution.conversationId or executionId to continue' },
-        model: { type: 'string', description: "Model override 'provider/model' (optional)" },
+        model: {
+          type: 'string',
+          description:
+            "Model override: semantic tier 'tier/<id>' (see <available_model_tiers>) or concrete 'provider/model' (optional; inherits the tier's preset effort unless 'effort' is explicitly set).",
+        },
         effort: {
           type: 'string',
           enum: [...EFFORT_LEVELS],
-          description: 'Reasoning effort (optional)',
+          description: "Reasoning effort override (optional; overrides the tier preset when 'model' is a 'tier/<id>').",
         },
         maxSubagentDepth: {
           type: 'number',
@@ -306,6 +319,16 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         }
         nodeId = a['nodeId']
       }
+      if (a['agentType'] !== undefined) {
+        if (typeof a['agentType'] !== 'string') {
+          const err = `agentType must be a string (received ${a['agentType'] === null ? 'null' : typeof a['agentType']})`
+          return subagentError(`subagent_failed: ${err}`, err)
+        }
+        const err = agentTypeSyntaxError(a['agentType'])
+        if (err !== undefined) {
+          return subagentError(`subagent_failed: ${err}`, err)
+        }
+      }
       const backgroundChoice = resolveBackground(
         context.conversationId,
         a['background'] === undefined ? undefined : a['background'] === true,
@@ -315,6 +338,18 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
       }
 
       let resolved: AgentExecutionInfo | undefined
+      const recordAbortFallback = (info: AgentExecutionInfo): void => {
+        const exec = executionOf(info)
+        const execMeta = presentationExecutionOf(info)
+        context.setAbortFallback?.({
+          output: safeResultText({ ok: false, status: 'aborted', execution: exec }),
+          presentationMeta: {
+            ok: false,
+            status: 'aborted',
+            ...(execMeta !== undefined ? { execution: execMeta } : {}),
+          },
+        })
+      }
       const formatBackgroundHandle = (runId: string, exec?: AgentExecutionInfo) => {
         const summary = workflows.getRun(runId)
         const headerExec =
@@ -344,15 +379,67 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         }
       }
 
+      const redact = (text: string) => ctx.host.redact(text)
+      const hasCallId = typeof context.callId === 'string' && context.callId !== ''
+      const existingBgRun =
+        backgroundChoice.background && hasCallId
+          ? workflows.findRunByParentToolCall(context.conversationId, context.callId!)
+          : undefined
+      if (existingBgRun !== undefined) {
+        syncRunsDoc?.()
+        return formatBackgroundHandle(existingBgRun.id, existingBgRun.kind === 'subagent' ? existingBgRun.execution : undefined)
+      }
+      const existingSyncChild =
+        !backgroundChoice.background && hasCallId && a['resume'] === undefined
+          ? ctx.host
+              .listConversations()
+              .find((c) => c.parentConversationId === context.conversationId && c.parentToolCallId === context.callId)
+          : undefined
+
+      let releaseClaim: (() => void) | undefined
+      if (existingSyncChild === undefined) {
+        const signature = subagentCallSignature(
+          {
+            prompt: String(a['prompt']),
+            ...(label !== undefined ? { label } : {}),
+            ...(a['agentType'] !== undefined ? { agentType: String(a['agentType']) } : {}),
+            ...(nodeId !== undefined ? { nodeId } : {}),
+            ...(a['cwd'] !== undefined ? { cwd: String(a['cwd']) } : {}),
+            ...(a['isolation'] !== undefined ? { isolation: 'worktree' } : {}),
+            ...(a['fork'] === true ? { fork: true } : {}),
+            ...(a['resume'] !== undefined ? { resume: String(a['resume']) } : {}),
+            ...(a['model'] !== undefined ? { model: String(a['model']) } : {}),
+            ...(a['effort'] !== undefined ? { effort: String(a['effort']) } : {}),
+            ...(a['gate'] !== undefined ? { gate: String(a['gate']) } : {}),
+            ...(a['maxSubagentDepth'] !== undefined ? { maxSubagentDepth: Number(a['maxSubagentDepth']) } : {}),
+            ...(a['schema'] !== undefined ? { schema: a['schema'] as Record<string, unknown> } : {}),
+            ...(Array.isArray(a['attachments']) ? { attachments: a['attachments'] as string[] } : {}),
+          },
+          redact,
+        )
+        const dedupKey = `${context.conversationId}\u0000${signature}`
+        const inflightConflict = inflightSubagents.findConflict(dedupKey, context.callId)
+        if (inflightConflict !== undefined) {
+          const reason =
+            inflightConflict.callId !== undefined
+              ? `duplicate_subagent_call: identical subagent call is already in flight (callId=${inflightConflict.callId}); wait for it or pass a distinct label for intentional parallel copies`
+              : 'duplicate_subagent_call: identical subagent call is already in flight; wait for it or pass a distinct label for intentional parallel copies'
+          return subagentError(`subagent_failed: ${reason}`, reason)
+        }
+        const activeDuplicate = (workflows.listActiveSubagentRuns?.(context.conversationId) ?? []).find(
+          (run) =>
+            (context.callId === undefined || run.parentToolCallId !== context.callId) &&
+            subagentCallSignature(run.spec, redact) === signature,
+        )
+        if (activeDuplicate !== undefined) {
+          const reason = `duplicate_subagent_call: identical subagent run ${activeDuplicate.runId} is already running; wait for its completion report or pass a distinct label for intentional parallel copies`
+          return subagentError(`subagent_failed: ${reason}`, reason)
+        }
+        releaseClaim = inflightSubagents.claim(dedupKey, context.callId)
+      }
+
       try {
         if (backgroundChoice.background) {
-          if (typeof context.callId === 'string' && context.callId !== '') {
-            const existing = workflows.findRunByParentToolCall(context.conversationId, context.callId)
-            if (existing !== undefined) {
-              syncRunsDoc?.()
-              return formatBackgroundHandle(existing.id, existing.kind === 'subagent' ? existing.execution : undefined)
-            }
-          }
           assertCanSpawn(context.conversationId)
           const request: AgentSpawnRequest = {
             parentConversationId: context.conversationId,
@@ -375,6 +462,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
             ...(Array.isArray(a['attachments']) ? { attachments: a['attachments'] as string[] } : {}),
             onResolved: (info) => {
               resolved = info
+              recordAbortFallback(info)
             },
             signal: context.signal,
           }
@@ -388,17 +476,10 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         }
 
         // 同步路径：直调 ctx.host.spawnAgent，不落 WorkflowRun；优雅重启重放时按 (parent, callId) 原位 reattach。
-        const hasCallId = typeof context.callId === 'string' && context.callId !== ''
-        const existingChild =
-          hasCallId && a['resume'] === undefined
-            ? ctx.host
-                .listConversations()
-                .find((c) => c.parentConversationId === context.conversationId && c.parentToolCallId === context.callId)
-            : undefined
+        const existingChild = existingSyncChild
         if (existingChild === undefined) assertCanSpawn(context.conversationId)
 
         const requestId = hasCallId ? `helmx:spawn:${context.conversationId}:${context.callId}` : undefined
-        const redact = (text: string) => ctx.host.redact(text)
         const syncTitle =
           existingChild === undefined && a['resume'] === undefined
             ? label !== undefined
@@ -436,6 +517,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
               }),
           onResolved: (info) => {
             resolved = info
+            recordAbortFallback(info)
           },
           signal: context.signal,
         }
@@ -461,8 +543,12 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         }
         const message = error instanceof Error ? error.message : String(error)
         const execMeta = resolved !== undefined ? presentationExecutionOf(resolved) : undefined
+        const errorText =
+          resolved !== undefined
+            ? `subagent_failed: ${message}\n${safeResultText({ execution: executionOf(resolved) })}`
+            : `subagent_failed: ${message}`
         return {
-          output: [{ type: 'text' as const, text: `subagent_failed: ${message}` }],
+          output: [{ type: 'text' as const, text: errorText }],
           isError: true,
           structuredOutput: {
             ok: false,
@@ -475,6 +561,8 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
             ...(execMeta !== undefined ? { execution: execMeta } : {}),
           },
         }
+      } finally {
+        releaseClaim?.()
       }
     },
   })
@@ -488,7 +576,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
       'Set a concise meta.name or label; for background runs, keep working and wait for the terminal steer report instead of polling.',
     ],
     description:
-      'Run a deterministic SubagentWorkflow JS script in the current conversation. Provide exactly one of script, scriptPath, or name (or only resumeFromRunId to replay). Human conversations default to background (returns handle; completion arrives as a steer follow-up); automated conversations run synchronously. See load_skill({ skillId: "workflow", path: "references/dsl.md" }).',
+      'Run a deterministic SubagentWorkflow JS script in the current conversation. Provide exactly one of script, scriptPath, or name (or only resumeFromRunId to replay). Human conversations default to background (returns handle; completion arrives as a steer follow-up — omit background so the parent turn stays responsive); automated conversations run synchronously. See load_skill({ skillId: "workflow", path: "references/dsl.md" }).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -500,7 +588,8 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         resumeFromRunId: { type: 'string', description: 'Existing runId to replay from checkpoint (optional)' },
         background: {
           type: 'boolean',
-          description: 'Run in background (default true for human, false for automated)',
+          description:
+            'Run in background (default true for human, false for automated; omit in human conversations so the parent turn stays responsive and receives the terminal steer report)',
         },
       },
       additionalProperties: false,

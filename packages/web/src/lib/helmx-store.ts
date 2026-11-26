@@ -8,7 +8,6 @@ import type {
   ActionManifest,
   ArtifactMetadata,
   AskSpec,
-  ConversationAbortResponse,
   ConversationDetail,
   ConversationLive,
   ConversationSummary,
@@ -28,7 +27,7 @@ import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { createWebTranslator, type WebMessageKey } from '../i18n/catalog.js'
 import { resetStandbyDrafts } from '../conversation/standby-model.js'
 import { ESC_ABORT_WINDOW_MS, getStoredSidebarCollapsed } from '../shell/shortcuts-model.js'
-import { authApi, conversationsApi, setStoredToken, type ModelCatalogDefaults, type ModelDescriptor } from './api.js'
+import { authApi, setStoredToken, type ModelCatalogDefaults, type ModelDescriptor } from './api.js'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
 import { DEFAULT_WORKBENCH_TAB, isSameDrawerStack, topDrawerFrame, type DrawerFrame } from './drawer-stack-model.js'
 import { errorText } from './error-text.js'
@@ -84,7 +83,6 @@ import { createStoreNavActions, type StoreNavActions } from './store/nav-actions
 import { createStoreRequestActions, type StoreRequestActions } from './store/requests-actions.js'
 import { StoreSubscriptionBus } from './store/subscriptions.js'
 import type {
-  AbortedComposerRestore,
   AuthSlice,
   CatalogSlice,
   ConversationBackgroundSlice,
@@ -95,7 +93,6 @@ import type {
   PluginsUiSlice,
   PrefsSlice,
   ProfilesSlice,
-  ResolvedAskEntry,
   StoreBootLocation,
   StoreDomainKey,
   StoreListener,
@@ -105,7 +102,6 @@ import type {
 } from './store/types.js'
 
 export type {
-  AbortedComposerRestore,
   AuthSlice,
   CatalogSlice,
   ConversationBackgroundSlice,
@@ -115,7 +111,6 @@ export type {
   PluginsUiSlice,
   PrefsSlice,
   ProfilesSlice,
-  ResolvedAskEntry,
   StoreBootLocation,
   StoreDomainKey,
   StoreListener,
@@ -179,8 +174,6 @@ export class HelmxExternalStore {
   private pluginById = new Map<string, PluginSummary>()
   private pendingAsksByConv = new Map<number, AskSpec[]>()
   private artifactsState: Record<number, ArtifactMetadata[]> = {}
-  private abortedRestoresByConv: Record<number, AbortedComposerRestore> = {}
-  private abortedRestoreSeq = 0
   private loadErrorsState: Record<string, string> = {}
   private navState: NavSlice
   private locationTargetsSlice: LocationTargetsSlice
@@ -348,7 +341,6 @@ export class HelmxExternalStore {
         setNotices: this.setNotices,
         pushNotice: this.pushNotice,
         loadEarlierEntries: this.loadEarlierEntries,
-        abortConversation: (id) => this.abortConversation(id),
       },
       { escAbortWindowMs: options?.escAbortWindowMs ?? ESC_ABORT_WINDOW_MS },
     )
@@ -428,7 +420,6 @@ export class HelmxExternalStore {
       resumeNoticeTimer: this.resumeNoticeTimer,
       pushNotice: this.pushNotice,
       invokePluginAction: this.invokePluginAction,
-      abortConversation: this.abortConversation,
     }
   }
 
@@ -471,12 +462,6 @@ export class HelmxExternalStore {
   subscribeConversationPendingAsks = (conversationId: number, listener: StoreListener): (() => void) =>
     this.bus.subscribeConversationPendingAsks(conversationId, listener)
 
-  subscribeResolvedAsks = (conversationId: number, listener: StoreListener): (() => void) =>
-    this.bus.subscribeResolvedAsks(conversationId, listener)
-
-  subscribeAbortedRestore = (conversationId: number, listener: StoreListener): (() => void) =>
-    this.bus.subscribeAbortedRestore(conversationId, listener)
-
   subscribeHighlightForConversation = (conversationId: number, listener: StoreListener): (() => void) =>
     this.bus.subscribeHighlightForConversation(conversationId, listener)
 
@@ -514,7 +499,6 @@ export class HelmxExternalStore {
   getConversationLivesMap = (): Record<number, ConversationLive> => this.liveState.conversationLives
   getConversationArtifactsMap = (): Record<number, ArtifactMetadata[]> => this.artifactsState
   getPendingAsks = (): AskSpec[] => this.liveState.pendingAsks
-  getResolvedAsksMap = (): Record<number, ResolvedAskEntry[]> => this.liveState.resolvedAsksByConv
   getPlugins = (): PluginSummary[] => this.liveState.plugins
   getPluginSummary = (pluginId: string): PluginSummary | undefined => this.pluginById.get(pluginId)
   getGroupedUi = (): GroupedUiSpecs => this.groupedUi
@@ -543,8 +527,6 @@ export class HelmxExternalStore {
   getConversationSummary = (id: number): ConversationSummary | undefined => this.summaryById.get(id)
   getConversationArtifacts = (id: number): ArtifactMetadata[] | undefined => this.artifactsState[id]
   getConversationPendingAsks = (id: number): AskSpec[] => this.pendingAsksByConv.get(id) ?? EMPTY_PENDING_ASKS
-  getResolvedAsks = (id: number): ResolvedAskEntry[] | undefined => this.liveState.resolvedAsksByConv[id]
-  getAbortedRestore = (id: number): AbortedComposerRestore | undefined => this.abortedRestoresByConv[id]
   getHighlightedEntryForConversation = (id: number): { conversationId: number; entryId: string } | null =>
     this.navState.highlightedEntry?.conversationId === id ? this.navState.highlightedEntry : null
   getLoadError = (key: string): string | undefined => this.loadErrorsState[key]
@@ -801,14 +783,6 @@ export class HelmxExternalStore {
       plan.domains.add('pendingAsks')
       plan.domains.add('asks')
       plan.domains.add('all')
-    }
-    if (next.resolvedAsksByConv !== prev.resolvedAsksByConv) {
-      addChangedRecordKeys(prev.resolvedAsksByConv, next.resolvedAsksByConv, plan.resolvedAskIds)
-      if (plan.resolvedAskIds.size > 0) {
-        plan.domains.add('resolvedAsksMap')
-        plan.domains.add('asks')
-        plan.domains.add('all')
-      }
     }
     if (next.plugins !== prev.plugins) {
       const nextPluginMap = new Map<string, PluginSummary>()
@@ -1186,48 +1160,6 @@ export class HelmxExternalStore {
     this.patchAuth({ authConfigured: true, authError: null, authenticated: true })
   }
 
-  /** Aborts the conversation turn and queues any human withdrawn inputs for composer restoration. */
-  abortConversation = async (conversationId: number): Promise<ConversationAbortResponse> => {
-    const res = await conversationsApi.abort(conversationId)
-    const humanWithdrawn = (res.withdrawnInputs ?? []).filter((q) => q.origin === 'human')
-    if (humanWithdrawn.length > 0) {
-      const existing = this.abortedRestoresByConv[conversationId]
-      const nextSeq = ++this.abortedRestoreSeq
-      this.abortedRestoresByConv = {
-        ...this.abortedRestoresByConv,
-        [conversationId]: {
-          items: existing !== undefined ? [...existing.items, ...humanWithdrawn] : [...humanWithdrawn],
-          seq: nextSeq,
-        },
-      }
-      const plan = emptyPlan()
-      plan.abortedRestoreIds.add(conversationId)
-      this.emit(plan)
-    }
-    return res
-  }
-
-  consumeAbortedRestore = (conversationId: number, seq: number): void => {
-    const current = this.abortedRestoresByConv[conversationId]
-    if (current === undefined || current.seq !== seq) return
-    const next = { ...this.abortedRestoresByConv }
-    delete next[conversationId]
-    this.abortedRestoresByConv = next
-    const plan = emptyPlan()
-    plan.abortedRestoreIds.add(conversationId)
-    this.emit(plan)
-  }
-
-  clearAbortedRestore = (conversationId: number): void => {
-    if (!Object.hasOwn(this.abortedRestoresByConv, conversationId)) return
-    const next = { ...this.abortedRestoresByConv }
-    delete next[conversationId]
-    this.abortedRestoresByConv = next
-    const plan = emptyPlan()
-    plan.abortedRestoreIds.add(conversationId)
-    this.emit(plan)
-  }
-
   /** Resets non-URL timers and caches before the provider resets window.history. */
   prepareLogoutHistoryReset(): void {
     this.cancelInFlightAuthCheck()
@@ -1270,10 +1202,6 @@ export class HelmxExternalStore {
     if (this.noticesState.some((item) => item.id === ESC_ABORT_NOTICE_ID)) {
       this.setNotices((prev) => prev.filter((item) => item.id !== ESC_ABORT_NOTICE_ID), plan, true)
     }
-    for (const key of Object.keys(this.abortedRestoresByConv)) {
-      plan.abortedRestoreIds.add(Number(key))
-    }
-    this.abortedRestoresByConv = {}
     this.patchCatalog(
       {
         profilesLoaded: false,

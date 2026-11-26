@@ -21,7 +21,6 @@ export const PLAN_ELIGIBLE_SCOPE: ConversationScope = {
 }
 export const PLAN_TOOL_SAVE = 'plan_save' as const
 export const PLAN_TOOL_PROPOSE = 'plan_propose' as const
-export const PLAN_TOOL_ASK = 'plan_ask' as const
 export const PLAN_TOOL_BASH = 'plan_bash' as const
 
 export const PLAN_KV_NAMESPACE = 'plans' as const
@@ -32,28 +31,21 @@ export const PLAN_TITLE_MAX_CHARS = 120
 export const PLAN_MARKDOWN_MAX_BYTES = 98_304
 export const PLAN_SUMMARY_MAX_CHARS = 300
 export const PLAN_HANDOFF_MAX_BYTES = 131_072
-export const PLAN_ASK_MAX_QUESTIONS = 4
-export const PLAN_ASK_MIN_OPTIONS = 2
-export const PLAN_ASK_MAX_OPTIONS = 6
-export const PLAN_ASK_QUESTION_MAX_CHARS = 300
-export const PLAN_ASK_OPTION_LABEL_MAX_CHARS = 120
-export const PLAN_ASK_OPTION_DESC_MAX_CHARS = 200
 export const PLAN_BASH_DEFAULT_TIMEOUT_MS = 60_000
 export const PLAN_BASH_MAX_TIMEOUT_MS = 120_000
 
-/** Strict tool whitelist enforced during planning mode (read-only research + plan authoring & clarification tools only). */
+/** Strict tool whitelist enforced during planning mode (read-only research, kernel `ask_user`, and plan authoring tools only). */
 export const PLAN_MODE_TOOL_WHITELIST: ReadonlySet<string> = new Set([
   'read',
   'read_artifact',
   'load_skill',
+  'ask_user',
   PLAN_TOOL_BASH,
-  PLAN_TOOL_ASK,
   PLAN_TOOL_SAVE,
   PLAN_TOOL_PROPOSE,
 ])
 
 export type PlanMode = 'normal' | 'planning'
-export type PlanAskKind = 'propose' | 'clarify'
 
 export interface PlanDraftSummary {
   title: string
@@ -75,7 +67,6 @@ export interface PlanApprovedInfo {
 export interface PlanSessionView {
   mode: PlanMode
   awaitingApproval: boolean
-  awaitingClarification?: boolean
   draft?: PlanDraftSummary
   approved?: PlanApprovedInfo
 }
@@ -101,12 +92,6 @@ export type PlanToolPresentationMeta =
       artifactName?: string
       executionModel?: string
     }
-  | {
-      kind: 'ask'
-      title: string
-      questionCount: number
-      outcome: 'answered' | 'cancelled' | 'superseded' | 'error'
-    }
 
 export interface PlanPluginConfig {
   executionModel?: string
@@ -120,7 +105,6 @@ export interface PlanConversationRecord {
   conversationId: number
   mode: PlanMode
   pendingAskId?: string
-  pendingAskKind?: PlanAskKind
   draft?: PlanDraftSummary
   approved?: PlanApprovedInfo
 }
@@ -156,23 +140,8 @@ export const PLAN_PROPOSE_META_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-export const PLAN_ASK_META_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    kind: { type: 'string', enum: ['ask'] },
-    title: { type: 'string', minLength: 1, maxLength: PLAN_TITLE_MAX_CHARS },
-    questionCount: { type: 'integer', minimum: 1, maximum: PLAN_ASK_MAX_QUESTIONS },
-    outcome: {
-      type: 'string',
-      enum: ['answered', 'cancelled', 'superseded', 'error'],
-    },
-  },
-  required: ['kind', 'title', 'questionCount', 'outcome'],
-  additionalProperties: false,
-}
-
 export const PLAN_TOOL_META_SCHEMA: JsonSchema = {
-  anyOf: [PLAN_SAVE_META_SCHEMA, PLAN_PROPOSE_META_SCHEMA, PLAN_ASK_META_SCHEMA],
+  anyOf: [PLAN_SAVE_META_SCHEMA, PLAN_PROPOSE_META_SCHEMA],
 }
 
 const PLAN_DRAFT_SCHEMA: JsonSchema = {
@@ -207,7 +176,6 @@ export const PLAN_SESSION_VIEW_SCHEMA: JsonSchema = {
   properties: {
     mode: { type: 'string', enum: ['normal', 'planning'] },
     awaitingApproval: { type: 'boolean' },
-    awaitingClarification: { type: 'boolean' },
     draft: PLAN_DRAFT_SCHEMA,
     approved: PLAN_APPROVED_SCHEMA,
   },

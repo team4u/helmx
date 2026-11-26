@@ -8,7 +8,7 @@ import {
   type HelmxLocale,
   type LocalizedText,
 } from '@helmx/plugin-client'
-import type { PlanAskOutcome, PlanMode, PlanProposeOutcome } from './types.ts'
+import type { PlanMode, PlanProposeOutcome } from './types.ts'
 
 const isZh = (locale: HelmxLocale): boolean => locale === 'zh-CN'
 
@@ -18,7 +18,6 @@ export const PLAN_COPY = {
   toolbarNormal: { en: 'Plan', 'zh-CN': '计划' },
   toolbarPlanning: { en: 'Plan', 'zh-CN': '计划' },
   toolbarAwaiting: { en: 'Awaiting approval', 'zh-CN': '待审批' },
-  toolbarAwaitingClarification: { en: 'Awaiting answers', 'zh-CN': '待澄清' },
   toolbarTitleNormal: {
     en: 'Plan mode is off — click to enter plan mode (Ctrl+.)',
     'zh-CN': '计划模式已关闭 — 点击进入计划模式 (Ctrl+.)',
@@ -30,10 +29,6 @@ export const PLAN_COPY = {
   toolbarTitleAwaiting: {
     en: 'Plan awaiting approval — click to toggle plan mode (Ctrl+.)',
     'zh-CN': '计划等待审批 — 点击切换计划模式 (Ctrl+.)',
-  },
-  toolbarTitleAwaitingClarification: {
-    en: 'Clarifying questions awaiting response — click to toggle plan mode (Ctrl+.)',
-    'zh-CN': '澄清问题等待回复 — 点击切换计划模式 (Ctrl+.)',
   },
   toolbarTitleStandbyNormal: {
     en: 'Start first message in plan mode (Ctrl+.)',
@@ -48,7 +43,6 @@ export const PLAN_COPY = {
   trayRegionAria: { en: 'Active plan mode', 'zh-CN': '进行中的计划模式' },
   trayPlanningStatus: { en: 'Planning', 'zh-CN': '计划中' },
   trayAwaitingStatus: { en: 'Awaiting approval', 'zh-CN': '等待审批' },
-  trayClarifyingStatus: { en: 'Awaiting answers', 'zh-CN': '等待澄清' },
   trayNoDraftTitle: { en: 'Plan session', 'zh-CN': '计划会话' },
   trayNoDraftHint: { en: 'No draft saved yet', 'zh-CN': '暂未保存计划草稿' },
   trayOpenPlan: { en: 'View plan', 'zh-CN': '查看计划' },
@@ -61,7 +55,6 @@ export const PLAN_COPY = {
   modeNormal: { en: 'Normal', 'zh-CN': '普通模式' },
   modePlanning: { en: 'Planning', 'zh-CN': '计划模式' },
   modeAwaiting: { en: 'Awaiting approval', 'zh-CN': '等待审批' },
-  modeClarifying: { en: 'Awaiting answers', 'zh-CN': '等待澄清' },
   enterPlanning: { en: 'Enter plan mode', 'zh-CN': '进入计划模式' },
   exitPlanning: { en: 'Exit plan mode', 'zh-CN': '退出计划模式' },
   loading: { en: 'Loading plan…', 'zh-CN': '正在加载计划…' },
@@ -101,7 +94,6 @@ export const PLAN_COPY = {
   // Tool rows
   toolSaveTitle: { en: 'Save plan', 'zh-CN': '保存计划' },
   toolProposeTitle: { en: 'Propose plan', 'zh-CN': '提交计划审批' },
-  toolAskTitle: { en: 'Clarifying questions', 'zh-CN': '需求澄清' },
   toolStatusRunning: { en: 'Running', 'zh-CN': '运行中' },
   toolStatusSaved: { en: 'Saved', 'zh-CN': '已保存' },
   toolStatusDone: { en: 'Completed', 'zh-CN': '已完成' },
@@ -116,12 +108,6 @@ export const PLAN_COPY = {
   outcomeCancelled: { en: 'Cancelled', 'zh-CN': '已取消' },
   outcomeSuperseded: { en: 'Superseded', 'zh-CN': '已失效' },
   outcomeError: { en: 'Failed', 'zh-CN': '失败' },
-
-  // Ask outcomes
-  askOutcomeAnswered: { en: 'Answered', 'zh-CN': '已回答' },
-  askOutcomeCancelled: { en: 'Cancelled', 'zh-CN': '已取消' },
-  askOutcomeSuperseded: { en: 'Superseded', 'zh-CN': '已失效' },
-  askOutcomeError: { en: 'Failed', 'zh-CN': '失败' },
 
   // Action labels
   actionToggle: { en: 'Toggle plan mode', 'zh-CN': '切换计划模式' },
@@ -138,13 +124,6 @@ const OUTCOME_COPY: Record<PlanProposeOutcome, LocalizedText> = {
   error: PLAN_COPY.outcomeError,
 }
 
-const ASK_OUTCOME_COPY: Record<PlanAskOutcome, LocalizedText> = {
-  answered: PLAN_COPY.askOutcomeAnswered,
-  cancelled: PLAN_COPY.askOutcomeCancelled,
-  superseded: PLAN_COPY.askOutcomeSuperseded,
-  error: PLAN_COPY.askOutcomeError,
-}
-
 export function planVersionLabel(version: number): string {
   return `v${version}`
 }
@@ -153,10 +132,8 @@ export function planModeLabel(
   mode: PlanMode,
   awaitingApproval: boolean,
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
-  awaitingClarification = false,
 ): string {
   if (awaitingApproval) return resolveLocalizedText(PLAN_COPY.modeAwaiting, locale)
-  if (awaitingClarification) return resolveLocalizedText(PLAN_COPY.modeClarifying, locale)
   return resolveLocalizedText(mode === 'planning' ? PLAN_COPY.modePlanning : PLAN_COPY.modeNormal, locale)
 }
 
@@ -165,21 +142,6 @@ export function planOutcomeLabel(
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   return resolveLocalizedText(OUTCOME_COPY[outcome], locale)
-}
-
-export function planAskOutcomeLabel(
-  outcome: PlanAskOutcome,
-  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
-): string {
-  return resolveLocalizedText(ASK_OUTCOME_COPY[outcome], locale)
-}
-
-export function planAskQuestionCountLabel(
-  count: number,
-  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
-): string {
-  if (isZh(locale)) return `${count} 个问题`
-  return count === 1 ? '1 question' : `${count} questions`
 }
 
 export function planSaveStatsLabel(
@@ -206,17 +168,12 @@ export function planDraftTrayMeta(
   awaitingApproval: boolean,
   updatedText: string | undefined,
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
-  awaitingClarification = false,
 ): string {
-  if (!hasDraft && !awaitingClarification) {
+  if (!hasDraft) {
     return resolveLocalizedText(PLAN_COPY.trayNoDraftHint, locale)
   }
   const statusText = resolveLocalizedText(
-    awaitingApproval
-      ? PLAN_COPY.trayAwaitingStatus
-      : awaitingClarification
-        ? PLAN_COPY.trayClarifyingStatus
-        : PLAN_COPY.trayPlanningStatus,
+    awaitingApproval ? PLAN_COPY.trayAwaitingStatus : PLAN_COPY.trayPlanningStatus,
     locale,
   )
   return updatedText ? `${statusText} · ${updatedText}` : statusText

@@ -796,4 +796,191 @@ describe('Ask CAS semantics preservation', { timeout: 60_000 }, () => {
       await ctx.close()
     }
   })
+
+  it('question kind, multi-choice string[], allowCustom, multiline/confirm labels, redaction on ask.resolved, and supersedeOrphanedByOwner', { timeout: 60_000 }, async () => {
+    const ctx = await openService()
+    try {
+      const serviceWithRedact = new AskService({
+        store: ctx.store,
+        redact: (text) => text.replaceAll('SECRET_VAL', '[REDACTED]'),
+        onEvent: (type, payload) => {
+          ctx.events.push({ type, payload })
+        },
+        onConvPendingChanged: (id) => ctx.pendingChanged.push(id),
+      })
+
+      // Invalid cross-field flags reject strictly
+      await assert.rejects(
+        () =>
+          serviceWithRedact.createAsk({
+            conversationId: 1,
+            kind: 'question',
+            title: 'Bad multi',
+            fields: [{ name: 'q', label: 'Q', type: 'text', multiple: true }],
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+      await assert.rejects(
+        () =>
+          serviceWithRedact.createAsk({
+            conversationId: 1,
+            kind: 'question',
+            title: 'Bad strict choice placeholder',
+            fields: [
+              {
+                name: 'q',
+                label: 'Q',
+                type: 'choice',
+                allowCustom: false,
+                placeholder: 'No custom allowed',
+                options: [{ value: 'a', label: 'A' }],
+              },
+            ],
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+
+      const pQuestion = serviceWithRedact.createAsk({
+        conversationId: 1,
+        kind: 'question',
+        ownerPluginId: 'core:ask_user',
+        title: { en: 'Clarify', 'zh-CN': '澄清' },
+        fields: [
+          {
+            name: 'targets',
+            label: 'Targets',
+            type: 'choice',
+            multiple: true,
+            allowCustom: true,
+            required: true,
+            defaultValue: ['web'],
+            options: [
+              { value: 'web', label: 'Web', recommended: true },
+              { value: 'cli', label: 'CLI' },
+            ],
+          },
+          {
+            name: 'envChoice',
+            label: 'Env',
+            type: 'choice',
+            allowCustom: true,
+            required: true,
+            options: [
+              { value: 'prod', label: 'Prod' },
+              { value: 'stage', label: 'Staging' },
+            ],
+          },
+          {
+            name: 'notes',
+            label: 'Notes',
+            type: 'text',
+            multiline: true,
+            placeholder: 'Details...',
+          },
+          {
+            name: 'proceed',
+            label: 'Proceed?',
+            type: 'confirm',
+            confirmLabel: 'Go ahead',
+            rejectLabel: 'Skip step',
+          },
+        ],
+      })
+      await new Promise((r) => setTimeout(r, 20))
+      const created = serviceWithRedact.listAsks('pending')[0]!
+      assert.equal(created.kind, 'question')
+      assert.equal(created.fields[0]?.multiple, true)
+      assert.deepEqual(created.fields[0]?.defaultValue, ['web'])
+      assert.equal(created.fields[0]?.options?.[0]?.recommended, true)
+
+      // Multi-choice validation rejects non-array, empty array (when required), and duplicates
+      await assert.rejects(
+        () => serviceWithRedact.answerAsk(created.id, { targets: 'web', envChoice: 'prod' }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+      await assert.rejects(
+        () => serviceWithRedact.answerAsk(created.id, { targets: [], envChoice: 'prod' }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+      await assert.rejects(
+        () => serviceWithRedact.answerAsk(created.id, { targets: ['web', 'web'], envChoice: 'prod' }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+
+      // Strict choice (allowCustom omitted/false) still rejects custom strings
+      const pStrict = serviceWithRedact.createAsk({
+        conversationId: 1,
+        kind: 'approval',
+        title: 'Strict Approval',
+        fields: [
+          {
+            name: 'decision',
+            label: 'Decision',
+            type: 'choice',
+            required: true,
+            options: [{ value: 'ok', label: 'OK' }],
+          },
+        ],
+      })
+      await new Promise((r) => setTimeout(r, 20))
+      const strictAsk = serviceWithRedact.listAsks('pending').find((a) => a.title === 'Strict Approval')!
+      await assert.rejects(
+        () => serviceWithRedact.answerAsk(strictAsk.id, { decision: 'custom-rogue' }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+      await serviceWithRedact.cancelAsk(strictAsk.id)
+      await pStrict
+
+      // Valid multi-choice + custom value + SecretStash redaction
+      await serviceWithRedact.answerAsk(created.id, {
+        targets: ['web', 'custom-SECRET_VAL'],
+        envChoice: 'my-custom-env-SECRET_VAL',
+        notes: 'line1\nSECRET_VAL',
+        proceed: 'true',
+      })
+      const result = await assertSettlesWithin(pQuestion, 2_000, 'question answer')
+      assert.equal(result.status, 'answered')
+      assert.deepEqual(result.answers, {
+        targets: ['web', 'custom-[REDACTED]'],
+        envChoice: 'my-custom-env-[REDACTED]',
+        notes: 'line1\n[REDACTED]',
+        proceed: 'true',
+      })
+      const resolvedEvent = ctx.events.find(
+        (e) => e.type === 'ask.resolved' && (e.payload as { askId?: string }).askId === created.id,
+      )
+      assert.ok(resolvedEvent, 'ask.resolved event emitted')
+      assert.deepEqual((resolvedEvent!.payload as { answers?: unknown }).answers, {
+        targets: ['web', 'custom-[REDACTED]'],
+        envChoice: 'my-custom-env-[REDACTED]',
+        notes: 'line1\n[REDACTED]',
+        proceed: 'true',
+      })
+
+      // supersedeOrphanedByOwner settles only matching pending asks
+      const pOwn = serviceWithRedact.createAsk({
+        conversationId: 1,
+        ownerPluginId: 'core:ask_user',
+        title: 'Orphaned user ask',
+        fields: [{ name: 'x', label: 'X', type: 'text' }],
+      })
+      const pOther = serviceWithRedact.createAsk({
+        conversationId: 1,
+        ownerPluginId: 'builtin:plan',
+        title: 'Other plugin ask',
+        fields: [{ name: 'x', label: 'X', type: 'text' }],
+      })
+      await new Promise((r) => setTimeout(r, 20))
+      const count = await serviceWithRedact.supersedeOrphanedByOwner('core:ask_user')
+      assert.equal(count, 1)
+      const ownRes = await assertSettlesWithin(pOwn, 2_000, 'orphan superseded')
+      assert.equal(ownRes.status, 'superseded')
+      assert.equal(serviceWithRedact.listAsks('pending').length, 1)
+      assert.equal(serviceWithRedact.listAsks('pending')[0]?.ownerPluginId, 'builtin:plan')
+      await serviceWithRedact.cancelAsk(serviceWithRedact.listAsks('pending')[0]!.id)
+      await pOther
+    } finally {
+      await ctx.close()
+    }
+  })
 })

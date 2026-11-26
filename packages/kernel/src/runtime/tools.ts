@@ -48,6 +48,14 @@ export {
   type ArtifactFileBytes,
   type ArtifactReadHandle,
 } from './tools/artifact-tools.js'
+export {
+  ASK_USER_OWNER_ID,
+  ASK_USER_PROMPT_SNIPPET,
+  ASK_USER_SCOPE,
+  ASK_USER_TOOL_NAME,
+  createAskUserTool,
+  type AskUserToolDeps,
+} from './tools/ask-tools.js'
 // Shape detection and pure lexical helpers live in `@helmx/protocol` (browser-safe, shared by kernel and
 // `@helmx/plugins`); re-exported here to preserve existing relative-path imports.
 export { isAbsoluteTargetPath, targetPathShape } from '@helmx/protocol'

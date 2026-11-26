@@ -66,7 +66,7 @@ function makeKernel(dataDir: string): KernelHttpTarget {
       waitForInput: async () => {
         throw new Error('unused')
       },
-      abortConversation: async () => ({ ok: true, withdrawnInputs: [] }),
+      abortConversation: async () => {},
       resetConversation: async () => {
         throw new Error('unused')
       },

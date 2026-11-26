@@ -303,6 +303,32 @@ export const ARTIFACT_READ_META_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
+/** Presentation metadata schema for built-in `ask_user` tool (summary of posed questions and human answers). */
+export const ASK_USER_TOOL_META_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    title: { type: 'string', minLength: 1, maxLength: 120 },
+    questionCount: { type: 'integer', minimum: 1, maximum: 4 },
+    outcome: { type: 'string', enum: ['answered', 'cancelled', 'superseded', 'error'] },
+    items: {
+      type: 'array',
+      maxItems: 4,
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', minLength: 1, maxLength: 40 },
+          question: { type: 'string', minLength: 1, maxLength: 300 },
+          answer: { type: 'string', maxLength: 1000 },
+        },
+        required: ['id', 'question', 'answer'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['title', 'questionCount', 'outcome'],
+  additionalProperties: false,
+}
+
 /**
  * Single source of truth of foundational kernel tool names installed under `helmx-core`
  * (`packages/kernel/src/runtime/tool-registry.ts`). Consumed by `PluginHost` /
@@ -317,6 +343,7 @@ export const KERNEL_TOOL_NAMES = [
   'read_artifact',
   'register_artifact',
   'run_action',
+  'ask_user',
 ] as const
 
 export type KernelToolName = (typeof KERNEL_TOOL_NAMES)[number]
@@ -329,4 +356,5 @@ export const KERNEL_TOOL_PRESENTATION_META_SCHEMAS: Readonly<Record<string, Json
   bash: BASH_TOOL_META_SCHEMA,
   register_artifact: ARTIFACT_REGISTER_META_SCHEMA,
   read_artifact: ARTIFACT_READ_META_SCHEMA,
+  ask_user: ASK_USER_TOOL_META_SCHEMA,
 }

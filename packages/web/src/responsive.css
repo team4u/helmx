@@ -57,6 +57,12 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .composer-toolbar .composer-model-button { max-width: 100%; }
   .composer-status-row { margin-bottom: 0; }
   .dock-tray-action-label { display: none; }
+  .ask-dock { padding: 10px; }
+  .ask-dock-shortcut-hint { display: none; }
+  .ask-dock-choice-btn { padding: 7px 9px; gap: 7px; }
+  .ask-dock-choice-custom { padding-left: 0; }
+  .ask-dock .input,
+  .ask-dock .textarea { font-size: 16px; }
 }
 @container (max-width: 450px) {
   .conversation-topbar .pane-title { min-width: 40px; }

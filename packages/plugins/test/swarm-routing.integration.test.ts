@@ -28,6 +28,7 @@ import {
   type FauxProviderHandle,
 } from './helpers/plugin-test-env.js'
 import {
+  WORKFLOW_ID,
   WORKTREE_ID,
   captureRequestMeta,
   openSwarmEnv,
@@ -1096,7 +1097,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
     }
   })
 
-  test('swarm-int18: forkFrom worker persists forked=true, injects context boundary & strips dispatch tools/catalog while non-forked worker retains them', { timeout: 60_000 }, async (t) => {
+  test('swarm-int18: forkFrom worker persists forked=true & context boundary, non-forked worker follows builtin:workflow.maxSubagentDepth (default 1, opt-in 2)', { timeout: 60_000 }, async (t) => {
     const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-fork-guard-'), gitTemplate)
     try {
       const { kernel } = env.app
@@ -1116,6 +1117,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       let forkedRwSawHistory = false
       let forkedRoMeta: ReturnType<typeof captureRequestMeta> | undefined
       let plainRwMeta: ReturnType<typeof captureRequestMeta> | undefined
+      let delegatingRwMeta: ReturnType<typeof captureRequestMeta> | undefined
 
       setSwarmRoleResponses(env.faux, {
         forked_rw: [
@@ -1149,10 +1151,21 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
           },
           fauxAssistantMessage('plain_rw settled'),
         ],
+        delegating_rw: [
+          (ctx) => {
+            delegatingRwMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'delegating_rw done' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('delegating_rw settled'),
+        ],
         coordinator: [
           fauxAssistantMessage('Coordinator noted forked_rw done.'),
           fauxAssistantMessage('Coordinator noted forked_ro done.'),
           fauxAssistantMessage('Coordinator noted plain_rw done.'),
+          fauxAssistantMessage('Coordinator noted delegating_rw done.'),
         ],
       })
 
@@ -1209,28 +1222,60 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       assert.equal(forkedRoMeta.toolNames.includes('SubagentWorkflow'), false)
       assert.equal(forkedRoMeta.sectionsById['profile.catalog'], undefined)
 
-      // 3) Control non-forked worker: NO context boundary clause, retains subagent/SubagentWorkflow & profile.catalog
+      // 3) Default non-forked worker: NO context boundary clause, defaults to depth-1 leaf (strips dispatch tools & profile.catalog, rejects workflow.run)
       assert.ok(plainRwMeta, 'must capture plain_rw request metadata')
       const plainSec = plainRwMeta.sectionsById['swarm.active_group'] ?? ''
       assert.equal(plainSec.includes('Context boundary:'), false, 'non-forked worker must not get forked context boundary')
       assert.equal(plainSec.includes('ALREADY fulfilled'), false)
-      assert.equal(plainRwMeta.toolNames.includes('subagent'), true, 'non-forked worker retains subagent')
-      assert.equal(plainRwMeta.toolNames.includes('SubagentWorkflow'), true, 'non-forked worker retains SubagentWorkflow')
-      assert.equal(plainRwMeta.toolNames.includes('swarm_board_post'), true)
-      assert.ok(typeof plainRwMeta.sectionsById['profile.catalog'] === 'string', 'non-forked worker retains profile.catalog')
-      assert.ok(plainRwMeta.sectionsById['profile.catalog'].includes('id="reviewer"'))
+      for (const stripped of ['subagent', 'SubagentWorkflow', 'swarm_create_group', 'swarm_dispatch_worker']) {
+        assert.equal(plainRwMeta.toolNames.includes(stripped), false, `default non-forked worker strips ${stripped}`)
+      }
+      for (const kept of ['swarm_board_post', 'bash', 'read', 'write']) {
+        assert.equal(plainRwMeta.toolNames.includes(kept), true, `default non-forked worker retains ${kept}`)
+      }
+      assert.equal(plainRwMeta.sectionsById['profile.catalog'], undefined, 'default non-forked worker suppresses profile.catalog')
+      await assert.rejects(
+        () =>
+          kernel.plugins.invokeAction(WORKFLOW_ID, 'run', {
+            script: 'export const meta = { name: "blocked", description: "d" }\nreturn 1',
+            conversationId: plainRw.workerConversationId,
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+      )
 
-      // 4) Persisted forked=true in board_status and meta.json
+      // 4) Raising single-source config `builtin:workflow.maxSubagentDepth` to 2 unlocks non-forked worker dispatch tools & catalog
+      await kernel.plugins.setConfig(WORKFLOW_ID, { maxSubagentDepth: 2 })
+      await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'delegating_rw', prompt: 'Run non-forked worker under global depth-2 ceiling.' },
+        { conversationId: coord.id },
+      )
+      await waitFor(() => delegatingRwMeta !== undefined && kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      assert.ok(delegatingRwMeta, 'must capture delegating_rw request metadata')
+      const delegSec = delegatingRwMeta.sectionsById['swarm.active_group'] ?? ''
+      assert.equal(delegSec.includes('Context boundary:'), false, 'non-forked delegating worker must not get forked context boundary')
+      assert.equal(delegatingRwMeta.toolNames.includes('subagent'), true, 'non-forked worker retains subagent under ceiling 2')
+      assert.equal(delegatingRwMeta.toolNames.includes('SubagentWorkflow'), true, 'non-forked worker retains SubagentWorkflow under ceiling 2')
+      assert.equal(delegatingRwMeta.toolNames.includes('swarm_board_post'), true)
+      assert.ok(typeof delegatingRwMeta.sectionsById['profile.catalog'] === 'string', 'non-forked worker retains profile.catalog under ceiling 2')
+      assert.ok(delegatingRwMeta.sectionsById['profile.catalog'].includes('id="reviewer"'))
+
+      // 5) Persisted forked=true in board_status and meta.json (no extra maxSubagentDepth field)
       const status = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId }, { conversationId: coord.id })) as BoardViewDoc
       assert.equal(status.members.find((m) => m.name === 'forked_rw')?.forked, true)
       assert.equal(status.members.find((m) => m.name === 'forked_ro')?.forked, true)
       assert.equal(status.members.find((m) => m.name === 'plain_rw')?.forked, undefined)
+      assert.equal(status.members.find((m) => m.name === 'delegating_rw')?.forked, undefined)
 
       const metaPath = join(env.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId, 'meta.json')
       const persistedMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
       assert.equal(persistedMeta.members.find((m) => m.name === 'forked_rw')?.forked, true)
       assert.equal(persistedMeta.members.find((m) => m.name === 'forked_ro')?.forked, true)
       assert.equal(persistedMeta.members.find((m) => m.name === 'plain_rw')?.forked, undefined)
+      assert.equal(persistedMeta.members.find((m) => m.name === 'delegating_rw')?.forked, undefined)
 
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
     } finally {

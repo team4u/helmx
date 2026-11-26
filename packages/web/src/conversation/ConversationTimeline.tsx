@@ -18,15 +18,12 @@ import {
   useGroupedUi,
   useHighlightedEntryForConversation,
   useLoadError,
-  useResolvedAsks,
   useStoreActions,
-  type ResolvedAskEntry,
 } from '../lib/store-context.js'
 import { AssistantModelBoundary, AssistantTurnView } from './AssistantTurn.js'
 import {
   ContextDivider,
   PluginCard,
-  ResolvedAskRow,
   TimelineLiveWaitingRow,
   TurnErrorNotice,
 } from './TimelineAuxRows.js'
@@ -54,7 +51,6 @@ import {
 } from './timeline-model.js'
 import { useTimelineScroll, type TimelineOutlineScrollRequest } from './use-timeline-scroll.js'
 
-const EMPTY_RESOLVED_ASKS: ResolvedAskEntry[] = []
 const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
 interface TimelineBeforeCommitSnapshotProps {
@@ -113,7 +109,6 @@ export function ConversationTimeline({
   starters,
 }: ConversationTimelineProps) {
   const groupedUi = useGroupedUi()
-  const resolvedAsks = useResolvedAsks(conversation.id) ?? EMPTY_RESOLVED_ASKS
   const highlightedEntry = useHighlightedEntryForConversation(conversation.id)
   const conversationDetail = useConversationDetail(conversation.id)
   const historyError = useLoadError(`history:${conversation.id}`)
@@ -194,7 +189,7 @@ export function ConversationTimeline({
       .join(',')
   }, [items])
 
-  const contentFingerprint = `${items.length}:${detailEntries.length}:${conversation.status}:${conversation.contextUsage?.compacting === true ? 1 : 0}:${lastTurnSummary}:${live?.updatedAt ?? 0}:${live?.thinking?.length ?? 0}:${live?.text.length ?? 0}:${live?.queuedInputs?.map((q) => `${q.id}:${q.mode}`).join(',') ?? ''}:${resolvedAsks.length}`
+  const contentFingerprint = `${items.length}:${detailEntries.length}:${conversation.status}:${conversation.contextUsage?.compacting === true ? 1 : 0}:${lastTurnSummary}:${live?.updatedAt ?? 0}:${live?.thinking?.length ?? 0}:${live?.text.length ?? 0}:${live?.queuedInputs?.map((q) => `${q.id}:${q.mode}`).join(',') ?? ''}`
   const detailsReady = conversationDetail !== undefined
   const anchorSignature = useMemo(() => items.map((item) => timelineAnchorId(item)).join('\n'), [items])
   const clearProcessToggle = useCallback(() => setProcessToggle(null), [])
@@ -290,7 +285,7 @@ export function ConversationTimeline({
   const loading = !detailsReady
   const hasOlderCursor = Boolean(conversationDetail?.nextCursor)
   const showEmptyState =
-    !loading && !sendingPending && !isWorking && items.length === 0 && resolvedAsks.length === 0
+    !loading && !sendingPending && !isWorking && items.length === 0
   const startersVisible =
     starters !== undefined &&
     starters.length > 0 &&
@@ -301,8 +296,7 @@ export function ConversationTimeline({
     conversation.status !== 'blocked' &&
     !sendingPending &&
     (live?.queuedInputs?.length ?? 0) === 0 &&
-    items.length === 0 &&
-    resolvedAsks.length === 0
+    items.length === 0
   const hasLeadingCenterSlot =
     hasOlderCursor || Boolean(historyError) || loading || showEmptyState || startersVisible
 
@@ -427,9 +421,6 @@ export function ConversationTimeline({
             {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
               <TimelineLiveWaitingRow conversation={conversation} isWorking={isWorking} />
             ) : null}
-            {resolvedAsks.map(({ ask, status }) => (
-              <ResolvedAskRow key={`ask:${ask.id}`} ask={ask} status={status} />
-            ))}
             {conversation.status === 'error' ? (
               <TurnErrorNotice
                 conversation={conversation}

@@ -26,7 +26,6 @@ export interface LiveState {
   pendingEntries: Record<number, ConversationEntry[]>
   conversationLives: Record<number, ConversationLive>
   pendingAsks: AskSpec[]
-  resolvedAsksByConv: Record<number, Array<{ ask: AskSpec; status: 'answered' | 'cancelled' | 'superseded' }>>
   plugins: PluginSummary[]
   uiContributions: PluginUiContribution[]
   pluginDocs: Record<string, unknown>
@@ -36,7 +35,7 @@ export interface LiveState {
 }
 
 export function emptyLiveState(): LiveState {
-  return { seq: -1, conversations: [], conversationDetails: {}, pendingEntries: {}, conversationLives: {}, pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [], pluginDocs: {}, nodes: [], nodesLoaded: false }
+  return { seq: -1, conversations: [], conversationDetails: {}, pendingEntries: {}, conversationLives: {}, pendingAsks: [], plugins: [], uiContributions: [], pluginDocs: {}, nodes: [], nodesLoaded: false }
 }
 
 function sortConversations(list: ConversationSummary[]): ConversationSummary[] {
@@ -308,7 +307,7 @@ export function applySnapshot(previous: LiveState, snapshot: HelmxSnapshot): Liv
   }
   const uiContributions = snapshot.ui.filter((item) => !inactivePluginIds.has(item.pluginId))
   const hasNodes = Array.isArray(snapshot.nodes)
-  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationDetails, conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions, pluginDocs, nodes: hasNodes ? sortNodes(snapshot.nodes!) : [], nodesLoaded: hasNodes, resolvedAsksByConv: previous.resolvedAsksByConv }
+  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationDetails, conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions, pluginDocs, nodes: hasNodes ? sortNodes(snapshot.nodes!) : [], nodesLoaded: hasNodes }
 }
 
 export function entryMatchesReference(entry: ConversationEntry, reference: string): boolean {
@@ -506,9 +505,7 @@ export function applyEventFrame(state: LiveState, frame: HelmxEventFrame): LiveS
       break
     case 'ask.resolved':
       if ('askId' in event) {
-        const ask = state.pendingAsks.find((item) => item.id === event.askId)
         next.pendingAsks = state.pendingAsks.filter((item) => item.id !== event.askId)
-        if (ask) next.resolvedAsksByConv = { ...state.resolvedAsksByConv, [ask.conversationId]: [...(state.resolvedAsksByConv[ask.conversationId] ?? []), { ask, status: event.status }] }
       }
       break
     case 'plugin.changed':

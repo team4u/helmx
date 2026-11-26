@@ -35,8 +35,6 @@ export class StoreSubscriptionBus {
   private readonly summaryListeners = new Map<number, Set<StoreListener>>()
   private readonly artifactsListeners = new Map<number, Set<StoreListener>>()
   private readonly pendingAskListeners = new Map<number, Set<StoreListener>>()
-  private readonly resolvedAsksListeners = new Map<number, Set<StoreListener>>()
-  private readonly abortedRestoreListeners = new Map<number, Set<StoreListener>>()
   private readonly highlightListeners = new Map<number, Set<StoreListener>>()
   private readonly loadErrorListeners = new Map<string, Set<StoreListener>>()
   private readonly pluginDocListeners = new Map<string, Set<StoreListener>>()
@@ -60,12 +58,6 @@ export class StoreSubscriptionBus {
   subscribeConversationPendingAsks = (conversationId: number, listener: StoreListener): (() => void) =>
     addListener(this.pendingAskListeners, conversationId, listener)
 
-  subscribeResolvedAsks = (conversationId: number, listener: StoreListener): (() => void) =>
-    addListener(this.resolvedAsksListeners, conversationId, listener)
-
-  subscribeAbortedRestore = (conversationId: number, listener: StoreListener): (() => void) =>
-    addListener(this.abortedRestoreListeners, conversationId, listener)
-
   subscribeHighlightForConversation = (conversationId: number, listener: StoreListener): (() => void) =>
     addListener(this.highlightListeners, conversationId, listener)
 
@@ -86,8 +78,6 @@ export class StoreSubscriptionBus {
     collectListeners(this.summaryListeners, plan.summaryIds, listeners)
     collectListeners(this.artifactsListeners, plan.artifactIds, listeners)
     collectListeners(this.pendingAskListeners, plan.pendingAskIds, listeners)
-    collectListeners(this.resolvedAsksListeners, plan.resolvedAskIds, listeners)
-    collectListeners(this.abortedRestoreListeners, plan.abortedRestoreIds, listeners)
     collectListeners(this.highlightListeners, plan.highlightIds, listeners)
     collectListeners(this.loadErrorListeners, plan.loadErrorKeys, listeners)
     collectListeners(this.pluginDocListeners, plan.pluginDocKeys, listeners)

@@ -169,6 +169,14 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       assert.equal(nodeIdSchema.pattern, NODE_ID_PATTERN, 'nodeId 声明应复用协议权威 NODE_ID_PATTERN')
       const isolationSchema = props['isolation'] as { enum?: unknown[] }
       assert.deepEqual(isolationSchema.enum, ['worktree'], 'isolation 声明应仅允许 worktree')
+      const modelSchema = props['model'] as { description?: string }
+      assert.ok(modelSchema.description?.includes('tier/<id>'), 'model 声明应包含 tier/<id> 指引')
+      const agentTypeSchema = props['agentType'] as { description?: string; pattern?: string }
+      assert.equal(agentTypeSchema.pattern, undefined, 'agentType 不得加 JSON Schema pattern 以免丢失自愈纠偏提示')
+      assert.ok(
+        agentTypeSchema.description?.includes('tier/<id>') && agentTypeSchema.description?.includes('Never'),
+        'agentType 声明应明确禁止传 tier/<id>',
+      )
 
       // hook 载荷：各值原样到达（未静默丢字段）。
       assert.equal(spawns.length, 1, 'agent_spawn 钩子应恰好触发一次')
@@ -742,6 +750,7 @@ test('subagent 失败于子会话创建后：错误结果不附文本 footer，�
     // 失败仍附 structuredOutput.execution：前端直接读取结构化关联子会话。
     const child = app.kernel.conversations.listConversations().find((c) => c.parentConversationId === 1)
     assert.ok(child, '子会话应已创建')
+    assert.ok(text.includes(String(child.id)), `失败输出文本应包含 execution.conversationId：${text}`)
     assert.equal(
       (structured['execution'] as Record<string, unknown>)?.['conversationId'],
       child.id,
@@ -1129,5 +1138,344 @@ describe('subagent / SubagentWorkflow 工具 presentationMeta 轻量投影与 Sc
     assert.equal(errRes.structuredOutput['summary'], 'boom')
     assert.deepEqual(errRes.presentationMeta, { ok: false, status: 'failed' })
     validateOrThrow(wfTool.presentationMetaSchema!, errRes.presentationMeta, 'workflow.err.presentationMeta')
+  })
+
+  it('人类会话默认后台调用 subagent 传 agentType: tier/reviewer 时同步拦截：返回 isError 纠偏提示、绝不落盘 WorkflowRun、不触发 agent_spawn', { timeout: 60_000 }, async (t) => {
+    const dataDir = useTempDir(t, 'helmx-subagent-tier-guard-')
+    const faux = makeFauxProvider()
+    const kernel = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      cwd: dataDir,
+      model: 'faux/faux-1',
+      providers: [faux.provider],
+    })
+    try {
+      await kernel.plugins.register(createWorkflowPlugin())
+      await kernel.plugins.register(createWorktreePlugin())
+      const spawns: AgentSpawnRequest[] = []
+      await kernel.plugins.register(spawnObserver(spawns))
+
+      faux.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall('subagent', {
+              prompt: '审查本次改动',
+              agentType: 'tier/reviewer',
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('收到纠偏提示，已停止错误派工'),
+      ])
+
+      await kernel.conversations.submitInput(1, '请派审查子代理')
+      await kernel.conversations.waitForIdle(1)
+
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 30 })
+      const toolEntry = [...detail.entries].reverse().find((e) => e.kind === 'pi.tool-result' && toolNameOf(e.model) === 'subagent')
+      assert.ok(toolEntry, '应存在 subagent 的 pi.tool-result')
+      const toolMsg = toolEntry.model?.[0] as { isError?: boolean; content?: Array<{ type: string; text?: string }> }
+      assert.equal(toolMsg.isError, true, '传入 tier/reviewer 到 agentType 必须返回 isError: true')
+      const text = toolResultText(detail, 'subagent')
+      assert.ok(text.includes('tier/reviewer'), `错误信息应点名 tier/reviewer: ${text}`)
+      assert.ok(text.includes('model'), `错误信息应提示使用 model 参数: ${text}`)
+      assert.equal(text.toLowerCase().includes('illegal profile id'), false, `不应退化为 illegal profile id: ${text}`)
+
+      const runsResult = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: unknown[] }
+      assert.deepEqual(runsResult.runs, [], '默认后台模式被前置校验拦截后绝不得创建/落盘任何 WorkflowRun')
+      assert.equal(spawns.length, 0, '前置拦截后不得进入 agent_spawn 钩子链')
+      assert.equal(
+        kernel.conversations.listConversations().filter((c) => c.parentConversationId === 1).length,
+        0,
+        '不得创建子会话',
+      )
+
+      // 组合 isolation: 'worktree' + agentType: 'tier/coder'：同样在分配 worktree 之前拦截
+      faux.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall('subagent', {
+              prompt: '隔离开发',
+              agentType: 'tier/coder',
+              isolation: 'worktree',
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('收到 worktree + tier 纠偏提示'),
+      ])
+      await kernel.conversations.submitInput(1, '派发隔离 coder')
+      await kernel.conversations.waitForIdle(1)
+
+      const wtDetail = await kernel.conversations.getConversationDetail(1, { limit: 30 })
+      const wtToolEntry = [...wtDetail.entries].reverse().find((e) => e.kind === 'pi.tool-result' && toolNameOf(e.model) === 'subagent')
+      assert.ok(wtToolEntry)
+      assert.equal((wtToolEntry.model?.[0] as { isError?: boolean }).isError, true)
+      const wtText = toolResultText(wtDetail, 'subagent')
+      assert.ok(wtText.includes('tier/coder') && wtText.includes('model'), `应含 tier/coder 与 model 提示: ${wtText}`)
+      assert.equal(wtText.toLowerCase().includes('illegal profile id'), false)
+      const wtRuns = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: unknown[] }
+      assert.deepEqual(wtRuns.runs, [], '不得创建 WorkflowRun')
+      const wtList = (await kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as { worktrees: unknown[] }
+      assert.deepEqual(wtList.worktrees, [], '不得分配孤儿 worktree')
+      assert.equal(spawns.length, 0, '不得触发 agent_spawn 钩子')
+    } finally {
+      await kernel.close()
+    }
+  })
+})
+
+describe('subagent 并发重复派工护栏', { timeout: 60_000 }, () => {
+  function captureDedupTools(
+    workflowsStub: Record<string, unknown>,
+    hostStub: Record<string, unknown> = {},
+  ) {
+    const tools = new Map<string, {
+      execute(args: unknown, context: { conversationId: number; callId?: string; signal?: AbortSignal }): Promise<unknown>
+    }>()
+    const ctx = {
+      host: {
+        listConversations: () => [],
+        redact: (text: string) => text,
+        ...hostStub,
+      },
+      tool(spec: { name: string; execute(args: unknown, context: { conversationId: number; callId?: string }): Promise<unknown> }) {
+        tools.set(spec.name, spec)
+      },
+    } as unknown as HelmxPluginContext
+    registerWorkflowTools(ctx, {
+      workflows: workflowsStub as never,
+      assertCanSpawn: () => {},
+      resolveBackground: (_convId, explicit) => ({ ok: true, background: explicit !== false }),
+      syncRunsDoc: () => {},
+    })
+    return tools
+  }
+
+  it('同步路径：同父会话在途完全同参（含嵌套 schema 键序差异）被拒绝，传不同 label 放行，完成后可再次派发', { timeout: 60_000 }, async () => {
+    const gates: Array<() => void> = []
+    let spawnCount = 0
+    const tools = captureDedupTools(
+      {
+        findRunByParentToolCall: () => undefined,
+        listActiveSubagentRuns: () => [],
+        isHostClosing: () => false,
+        isAutoRecoverOnRestart: () => false,
+      },
+      {
+        spawnAgent: async () => {
+          spawnCount += 1
+          await new Promise<void>((resolve) => {
+            gates.push(resolve)
+          })
+          return `done-${spawnCount}`
+        },
+      },
+    )
+    const subagent = tools.get('subagent')!
+
+    const p1 = subagent.execute(
+      {
+        prompt: '修复构建',
+        isolation: 'worktree',
+        schema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'string' } } },
+        background: false,
+      },
+      { conversationId: 1, callId: 'c-sync-1' },
+    )
+    // Concurrent duplicate with reversed schema key order -> immediately rejected before spawnAgent runs.
+    const dupRes = (await subagent.execute(
+      {
+        prompt: '修复构建',
+        isolation: 'worktree',
+        schema: { properties: { b: { type: 'string' }, a: { type: 'number' } }, type: 'object' },
+        background: false,
+      },
+      { conversationId: 1, callId: 'c-sync-2' },
+    )) as { isError?: boolean; structuredOutput?: Record<string, unknown> }
+    assert.equal(dupRes.isError, true)
+    assert.match(String(dupRes.structuredOutput?.['result']), /duplicate_subagent_call/)
+    assert.match(String(dupRes.structuredOutput?.['result']), /c-sync-1/)
+    assert.equal(spawnCount, 1, '重复调用不得进入 spawnAgent')
+
+    // Distinct label escapes dedup for intentional parallel attempts.
+    const p3 = subagent.execute(
+      {
+        prompt: '修复构建',
+        label: 'attempt-2',
+        isolation: 'worktree',
+        schema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'string' } } },
+        background: false,
+      },
+      { conversationId: 1, callId: 'c-sync-3' },
+    )
+    assert.equal(spawnCount, 2, '传不同 label 应允许并发执行')
+
+    for (const release of gates) release()
+    const r1 = (await p1) as { structuredOutput?: Record<string, unknown> }
+    const r3 = (await p3) as { structuredOutput?: Record<string, unknown> }
+    assert.equal(r1.structuredOutput?.['ok'], true)
+    assert.equal(r3.structuredOutput?.['ok'], true)
+
+    // Once completed, the exact same arguments succeed again.
+    gates.length = 0
+    const p4 = subagent.execute(
+      {
+        prompt: '修复构建',
+        isolation: 'worktree',
+        schema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'string' } } },
+        background: false,
+      },
+      { conversationId: 1, callId: 'c-sync-4' },
+    )
+    for (const release of gates) release()
+    const r4 = (await p4) as { structuredOutput?: Record<string, unknown> }
+    assert.equal(r4.structuredOutput?.['ok'], true)
+    assert.equal(spawnCount, 3)
+  })
+
+  it('后台路径：句柄返回后 run 仍在运行时拦截同参调用；同 callId 重放与不同 label 放行；终态后解除拦截', { timeout: 60_000 }, async () => {
+    const activeRuns: Array<{
+      runId: string
+      parentToolCallId?: string
+      status: 'running' | 'completed'
+      spec: Record<string, unknown>
+      header: Record<string, unknown>
+    }> = []
+    let seq = 0
+    const tools = captureDedupTools({
+      findRunByParentToolCall: (convId: number, callId: string) =>
+        activeRuns.find((r) => r.parentToolCallId === callId && convId === 1)?.header,
+      listActiveSubagentRuns: () =>
+        activeRuns
+          .filter((r) => r.status === 'running')
+          .map((r) => ({ runId: r.runId, parentToolCallId: r.parentToolCallId, spec: r.spec })),
+      startBackgroundAgent: async (
+        req: AgentSpawnRequest,
+        opts?: { parentToolCallId?: string; label?: string },
+      ) => {
+        seq += 1
+        const runId = `wf_bg_${seq}`
+        const header = {
+          id: runId,
+          name: opts?.label ?? 'subagent',
+          conversationId: 1,
+          kind: 'subagent',
+          status: 'running',
+          phase: 'running',
+          parentToolCallId: opts?.parentToolCallId,
+        }
+        activeRuns.push({
+          runId,
+          parentToolCallId: opts?.parentToolCallId,
+          status: 'running',
+          spec: {
+            agentId: `${runId}:subagent-0`,
+            requestId: `helmx:spawn:${runId}`,
+            prompt: req.prompt,
+            ...(opts?.label !== undefined ? { label: opts.label } : {}),
+            ...(req.isolation === 'worktree' ? { isolation: 'worktree' } : {}),
+          },
+          header,
+        })
+        return { run: header, execution: { conversationId: 100 + seq, nodeId: 'local' } }
+      },
+      getRun: (runId: string) => activeRuns.find((r) => r.runId === runId)!.header,
+      loadRunHeaderAndDetail: (runId: string) => {
+        const found = activeRuns.find((r) => r.runId === runId)!
+        return { header: found.header, detail: { id: runId } }
+      },
+      isHostClosing: () => false,
+      isAutoRecoverOnRestart: () => false,
+    })
+    const subagent = tools.get('subagent')!
+
+    const bg1 = (await subagent.execute(
+      { prompt: '后台审查', isolation: 'worktree' },
+      { conversationId: 1, callId: 'c-bg-1' },
+    )) as { structuredOutput?: Record<string, unknown> }
+    assert.equal(bg1.structuredOutput?.['ok'], true)
+    assert.equal(bg1.structuredOutput?.['runId'], 'wf_bg_1')
+
+    // Even after startBackgroundAgent returns, while wf_bg_1 is still running, identical call is rejected.
+    const dupBg = (await subagent.execute(
+      { prompt: '后台审查', isolation: 'worktree' },
+      { conversationId: 1, callId: 'c-bg-2' },
+    )) as { isError?: boolean; structuredOutput?: Record<string, unknown> }
+    assert.equal(dupBg.isError, true)
+    assert.match(String(dupBg.structuredOutput?.['result']), /duplicate_subagent_call/)
+    assert.match(String(dupBg.structuredOutput?.['result']), /wf_bg_1/)
+
+    // Replay with same callId returns existing handle rather than blocking itself.
+    const replayBg = (await subagent.execute(
+      { prompt: '后台审查', isolation: 'worktree' },
+      { conversationId: 1, callId: 'c-bg-1' },
+    )) as { isError?: boolean; structuredOutput?: Record<string, unknown> }
+    assert.equal(replayBg.isError, undefined)
+    assert.equal(replayBg.structuredOutput?.['runId'], 'wf_bg_1')
+
+    // Distinct label succeeds.
+    const bgLabel = (await subagent.execute(
+      { prompt: '后台审查', label: 'shard-2', isolation: 'worktree' },
+      { conversationId: 1, callId: 'c-bg-3' },
+    )) as { structuredOutput?: Record<string, unknown> }
+    assert.equal(bgLabel.structuredOutput?.['ok'], true)
+    assert.equal(bgLabel.structuredOutput?.['runId'], 'wf_bg_2')
+
+    // Once wf_bg_1 settles, repeating the same unlabeled call succeeds again.
+    activeRuns[0]!.status = 'completed'
+    activeRuns[0]!.header['status'] = 'completed'
+    const bgAfterSettle = (await subagent.execute(
+      { prompt: '后台审查', isolation: 'worktree' },
+      { conversationId: 1, callId: 'c-bg-4' },
+    )) as { structuredOutput?: Record<string, unknown> }
+    assert.equal(bgAfterSettle.structuredOutput?.['ok'], true)
+    assert.equal(bgAfterSettle.structuredOutput?.['runId'], 'wf_bg_3')
+  })
+
+  it('端到端：同一条 assistant 消息并行调用两个完全一致的 subagent 时只派生一个子任务并显式拒绝重复调用', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'sa-parallel-dup')
+    const faux = makeFauxProvider()
+    const app = await createHelmx({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/faux-1',
+      providers: [faux.provider],
+    })
+    try {
+      faux.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall('subagent', { prompt: '并行重复派工任务' }, { id: 'dup-call-1' }),
+            fauxToolCall('subagent', { prompt: '并行重复派工任务' }, { id: 'dup-call-2' }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        ...Array.from({ length: 6 }, () => fauxAssistantMessage('完成响应')),
+      ])
+      await app.kernel.conversations.submitInput(1, '并行派两个一模一样的任务')
+      await app.kernel.conversations.waitForIdle(1)
+
+      const detail = await app.kernel.conversations.getConversationDetail(1, { limit: 100 })
+      const toolResults = detail.entries
+        .filter((e) => e.kind === 'pi.tool-result' && toolNameOf(e.model) === 'subagent')
+        .map((e) => e.model?.[0] as { toolCallId?: string; isError?: boolean; content?: Array<{ text?: string }> })
+
+      assert.equal(toolResults.length, 2, '两条 toolCall 均应产生结果')
+      const dupResult = toolResults.find((r) => r.toolCallId === 'dup-call-2')
+      assert.ok(dupResult, '应包含第二次调用的 toolResult')
+      assert.equal(dupResult.isError, true, '第二次同参并行调用应报错')
+      const dupText = (dupResult.content ?? []).map((b) => b.text ?? '').join('\n')
+      assert.match(dupText, /duplicate_subagent_call/, `应返回 duplicate_subagent_call：${dupText}`)
+
+      const runs = (await app.kernel.plugins.invokeAction('builtin:workflow', 'runs', {
+        conversationId: 1,
+      })) as { runs: Array<{ id: string }> }
+      assert.equal(runs.runs.length, 1, '同批次重复调用只应创建 1 个后台 Run')
+    } finally {
+      await app.close()
+    }
   })
 })

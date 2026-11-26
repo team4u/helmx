@@ -1,11 +1,10 @@
 /**
  * Auxiliary timeline rows extracted from ConversationTimeline:
- * ContextDivider, PluginCard, ResolvedAskRow, TurnErrorNotice, and TimelineLiveWaitingRow.
+ * ContextDivider, PluginCard, TurnErrorNotice, and TimelineLiveWaitingRow.
  */
 import { useState } from 'react'
-import { resolveLocalizedText, type AskSpec, type ConversationSummary } from '@helmx/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import { Button, HelmxIcon, useSharedNowMs } from '@helmx/plugin-client'
-import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatStopwatchMs, resolveConversationTiming } from '../lib/format.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
@@ -66,35 +65,6 @@ export function PluginCard({ item, conversationId }: { item: PluginCardItem; con
         label={t('conv.timeline.cardsLabel')}
         slotProps={{ entry: item.entry, conversationId }}
       />
-    </div>
-  )
-}
-
-function resolvedAskLabel(status: string, t: WebMessageTranslator): string {
-  if (status === 'answered') return t('conv.ask.approved')
-  if (status === 'cancelled') return t('conv.ask.cancelled')
-  if (status === 'superseded') return t('conv.ask.superseded')
-  return status
-}
-
-export function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answered' | 'cancelled' | 'superseded' }) {
-  const { locale, t } = useWebLocale()
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="trace-entry">
-      <button type="button" className="trace-row" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <span className="trace-row-left">
-          <HelmxIcon name="check-circle" size={12} />
-          <span className="trace-tool-name">{t('conv.ask.rowTitle')}</span>
-          <span className="trace-tool-summary">{resolveLocalizedText(ask.title, locale)}</span>
-        </span>
-        <span className="trace-row-right">{resolvedAskLabel(status, t)}</span>
-      </button>
-      {open ? (
-        <div className="trace-expanded-body selectable">
-          {ask.description !== undefined ? <span>{resolveLocalizedText(ask.description, locale)}</span> : null}
-        </div>
-      ) : null}
     </div>
   )
 }

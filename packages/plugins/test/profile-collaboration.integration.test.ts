@@ -395,7 +395,7 @@ test('协作3: CLI 动态命令 helmx profile list_mentionable——--current/�
 // 4. 点名委派真链路：subagent(agentType) → 真子会话 → 父目录/子 SYSTEM 隔离
 // ---------------------------------------------------------------------------
 
-test('协作4: 点名委派真链路——subagent(agentType reviewer) 派生真子会话，父收尾上下文含协作目录；一层子代理保留派工工具故同样注入目录', { timeout: 60_000 }, async () => {
+test('协作4: 点名委派真链路——subagent(agentType reviewer) 派生真子会话，父收尾上下文含协作目录；默认第 1 层子代理剥离派工工具不含协作目录', { timeout: 60_000 }, async () => {
   const env = await makeCollabEnv()
   try {
     const kernel = env.app.kernel
@@ -430,12 +430,11 @@ test('协作4: 点名委派真链路——subagent(agentType reviewer) 派生真
     const childRequests = env.requests.filter((r) => r.systemSections.some((s) => s.startsWith('# 代码审查员')))
     assert.equal(childRequests.length, 1, `reviewer SYSTEM 应注入恰一次（子代理回合）：${JSON.stringify(env.requests)}`)
     const childReq = childRequests[0]!
-    // 深度契约（默认上限 2）：主会话直接派生的一层子代理保留派工工具，
-    // 协作目录随工具清单自然注入（可继续点名委派）；仅达到上限的叶子
-    // 子代理被剥离派工工具后不注入（见 subagent-depth.test.ts）。
+    // 深度契约（默认上限 1）：主会话直接派生的第 1 层子代理默认即为编排叶子，
+    // 被 builtin:workflow 剥离派工工具，因此不注入协作目录（见 subagent-depth.test.ts）。
     assert.ok(
-      childReq.systemSections.some((s) => s.includes('<available_profiles>')),
-      '一层子代理回合应含协作目录（保留派工工具，可继续点名委派）',
+      childReq.systemSections.every((s) => !s.includes('<available_profiles>')),
+      '默认第 1 层子代理作为叶子剥离派工工具，不注入协作目录',
     )
     assert.ok(
       childReq.systemSections.every((s) => !s.includes('@reviewer')),

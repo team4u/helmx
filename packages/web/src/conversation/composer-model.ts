@@ -1,4 +1,4 @@
-import type { ConversationStatus, QueuedConversationInput } from '@helmx/protocol/browser'
+import type { ConversationStatus } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { useMaxWidthMediaQuery } from '../lib/use-media-query.js'
 import type { EditRequestTarget } from '../conversation/timeline-model.js'
@@ -24,54 +24,6 @@ export function attachmentsOfEditTarget(target: EditRequestTarget): PendingAttac
     size: a.size,
     mimeType: a.mimeType,
   }))
-}
-
-function deduplicateAttachments(items: ReadonlyArray<PendingAttachment>): PendingAttachment[] {
-  const seen = new Set<string>()
-  const out: PendingAttachment[] = []
-  for (const item of items) {
-    if (seen.has(item.artifactId)) continue
-    seen.add(item.artifactId)
-    out.push(item)
-  }
-  return out
-}
-
-/** Merge human queued/steering inputs withdrawn by an abort back into the composer draft. */
-export function mergeRestoredQueuedInputs(
-  currentText: string,
-  currentAttachments: ReadonlyArray<PendingAttachment>,
-  withdrawnInputs: ReadonlyArray<QueuedConversationInput>,
-): { text: string; attachments: PendingAttachment[] } | null {
-  const humanInputs = withdrawnInputs.filter((q) => q.origin === 'human')
-  if (humanInputs.length === 0) return null
-  const restoredText = humanInputs
-    .map((q) => q.text)
-    .filter((s) => s !== '')
-    .join('\n\n')
-  const restoredAttachments = deduplicateAttachments(
-    humanInputs.flatMap((q) =>
-      (q.attachments ?? []).map((a) => ({
-        artifactId: a.id,
-        name: a.name,
-        size: a.size,
-        mimeType: a.mimeType,
-      })),
-    ),
-  )
-  if (currentText.trim() === '' && currentAttachments.length === 0) {
-    return { text: restoredText, attachments: restoredAttachments }
-  }
-  const text =
-    restoredText !== '' && currentText !== ''
-      ? `${restoredText}\n\n${currentText}`
-      : restoredText !== ''
-        ? restoredText
-        : currentText
-  return {
-    text,
-    attachments: deduplicateAttachments([...restoredAttachments, ...currentAttachments]),
-  }
 }
 
 /** Whether the selected edit target constitutes an in-place edit (a

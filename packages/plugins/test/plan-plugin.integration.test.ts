@@ -34,7 +34,6 @@ import {
   PLAN_PLUGIN_ID,
   PLAN_SESSION_DOC,
   PLAN_SKILL_ID,
-  PLAN_TOOL_ASK,
   PLAN_TOOL_BASH,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
@@ -297,13 +296,13 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
     assert.ok(typeof planModeSection === 'string' && /READ-ONLY Plan Mode/i.test(planModeSection))
     assert.ok(
       planModeSection.includes('plan_bash') &&
-        planModeSection.includes('plan_ask') &&
+        planModeSection.includes('ask_user') &&
         planModeSection.includes('plan_save') &&
         planModeSection.includes('plan_propose'),
     )
     assert.equal(planReq.toolNames.includes('bash'), false)
     assert.equal(planReq.toolNames.includes(PLAN_TOOL_BASH), true)
-    assert.equal(planReq.toolNames.includes(PLAN_TOOL_ASK), true)
+    assert.equal(planReq.toolNames.includes('ask_user'), true)
 
     // Bare `/plan` enters planning mode without hitting model
     const bareConv = await kernel.conversations.createConversation({ title: 'Bare slash' })
@@ -887,7 +886,7 @@ test('T7: pending ask abort, set_mode/toggle cancellation, disable 409 gates, re
     assert.equal(disabledReqs[0]!.toolNames.includes('subagent'), true)
     assert.equal(disabledReqs[0]!.toolNames.includes(PLAN_TOOL_SAVE), false)
     assert.equal(disabledReqs[0]!.toolNames.includes(PLAN_TOOL_PROPOSE), false)
-    assert.equal(disabledReqs[0]!.toolNames.includes(PLAN_TOOL_ASK), false)
+    assert.equal(disabledReqs[0]!.toolNames.includes('ask_user'), true)
     assert.equal(disabledReqs[0]!.toolNames.includes(PLAN_TOOL_BASH), false)
     assert.equal(disabledReqs[0]!.sectionsById[PLAN_MODE_SECTION_ID], undefined)
 
@@ -902,7 +901,7 @@ test('T7: pending ask abort, set_mode/toggle cancellation, disable 409 gates, re
     await k2.conversations.submitInput(cid, 'turn after re-enable')
     await k2.conversations.waitForIdle(cid)
     assert.equal(reenabledReqs[0]!.toolNames.includes(PLAN_TOOL_SAVE), true)
-    assert.equal(reenabledReqs[0]!.toolNames.includes(PLAN_TOOL_ASK), true)
+    assert.equal(reenabledReqs[0]!.toolNames.includes('ask_user'), true)
     assert.equal(reenabledReqs[0]!.toolNames.includes(PLAN_TOOL_BASH), true)
     assert.equal(reenabledReqs[0]!.toolNames.includes('bash'), false)
     assert.equal(reenabledReqs[0]!.toolNames.includes('write'), false)
@@ -1001,10 +1000,10 @@ test('T8: spawned subagent reads approved plan artifact via read_artifact and de
 })
 
 // ---------------------------------------------------------------------------
-// T9: plan_bash, plan_ask, update_draft before approval, and manual /clear resetConversation
+// T9: plan_bash, kernel ask_user in plan mode, update_draft before approval, and manual /clear resetConversation
 // ---------------------------------------------------------------------------
 
-test('T9: plan_bash blocks mutations & runs read-only pwd, plan_ask clarifies, update_draft edits before approval, and resetConversation clears plan state', TIMEOUT, async () => {
+test('T9: plan_bash blocks mutations & runs read-only pwd, ask_user clarifies inside plan mode without setting awaitingApproval, update_draft edits before approval, and resetConversation clears plan state', TIMEOUT, async () => {
   const env = await openPlanIntegrationEnv()
   try {
     const { kernel } = env.app
@@ -1042,22 +1041,28 @@ test('T9: plan_bash blocks mutations & runs read-only pwd, plan_ask clarifies, u
     assert.equal(bashResults[0]?.isError, true)
     assert.equal(bashResults[1]?.isError, false)
 
-    // 2) plan_ask: creates real choice AskDoc, updates awaitingClarification & zh-CN badge, resumes cleanly
+    // 2) kernel ask_user inside planning mode: creates question AskDoc with allowCustom without triggering awaitingApproval
     let sawClarificationAnswer = ''
     env.faux.setResponses([
       () =>
         fauxAssistantMessage(
           [
-            fauxToolCall(PLAN_TOOL_ASK, {
+            fauxToolCall('ask_user', {
               title: 'Storage Strategy',
               questions: [
                 {
                   id: 'store',
                   question: 'Which persistence layer should the module use?',
                   options: [
-                    { value: 'sqlite', label: 'SQLite', description: 'Zero-config embedded DB' },
+                    { value: 'sqlite', label: 'SQLite', description: 'Zero-config embedded DB', recommended: true },
                     { value: 'kv', label: 'Plugin KV', description: 'JSON document namespace' },
                   ],
+                },
+                {
+                  id: 'notes',
+                  question: 'Any constraints?',
+                  type: 'text',
+                  required: false,
                 },
               ],
             }),
@@ -1073,15 +1078,15 @@ test('T9: plan_bash blocks mutations & runs read-only pwd, plan_ask clarifies, u
     await waitFor(() => kernel.asks.listAsks('pending').length === 1)
 
     const clarifyAsk = kernel.asks.listAsks('pending')[0]!
+    assert.equal(clarifyAsk.kind, 'question')
     assert.equal(clarifyAsk.fields[0]?.type, 'choice')
+    assert.equal(clarifyAsk.fields[0]?.allowCustom, true)
+    assert.equal(clarifyAsk.fields[0]?.options?.[0]?.recommended, true)
     assert.equal(clarifyAsk.fields[1]?.name, 'notes')
-    assert.ok(clarifyAsk.hint !== undefined)
+    assert.equal(clarifyAsk.hint, undefined)
     const clarifySession = readPlanSession(kernel, cid)
-    assert.equal(clarifySession.awaitingClarification, true)
+    assert.equal(clarifySession.mode, 'planning')
     assert.equal(clarifySession.awaitingApproval, false)
-    const clarifyBadge = readPlanBadges(kernel).byConversation[String(cid)]
-    assert.equal(clarifyBadge?.tone, 'warn')
-    assert.deepEqual(clarifyBadge?.footerText, { en: 'Awaiting clarification', 'zh-CN': '等待澄清回复' })
 
     await kernel.asks.answerAsk(
       clarifyAsk.id,
@@ -1089,7 +1094,7 @@ test('T9: plan_bash blocks mutations & runs read-only pwd, plan_ask clarifies, u
       clarifyAsk.expectedStateSeq,
     )
     await kernel.conversations.waitForIdle(cid)
-    assert.equal(readPlanSession(kernel, cid).awaitingClarification, undefined)
+    assert.equal(readPlanSession(kernel, cid).awaitingApproval, false)
     assert.match(sawClarificationAnswer, /sqlite \(SQLite\)/)
     assert.match(sawClarificationAnswer, /Use WAL mode/)
 
@@ -1185,7 +1190,7 @@ test('T9: builtin:plan bootstraps managed skill plan and removes it cleanly from
     assert.ok(skillMd.includes('managedByPlugin: builtin:plan'))
     for (const token of [
       PLAN_TOOL_BASH,
-      PLAN_TOOL_ASK,
+      'ask_user',
       PLAN_TOOL_SAVE,
       PLAN_TOOL_PROPOSE,
       'builtin:plan.get',

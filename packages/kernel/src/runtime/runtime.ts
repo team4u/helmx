@@ -70,6 +70,8 @@ import {
 } from './runtime-services.js'
 import { registerCoreActions } from './core-actions.js'
 import { bootstrapCoreSkills } from './core-skills/index.js'
+import { clearRegistryToolAbortFallbacks } from './tool-registry.js'
+import { ASK_USER_OWNER_ID } from './tools.js'
 
 export type KernelRuntimeOptions = KernelBootOptions
 
@@ -288,6 +290,7 @@ export class KernelRuntime {
       conversations: this.conversations,
       cwd: this.init.cwd,
     })
+    await this.svc.asks.supersedeOrphanedByOwner(ASK_USER_OWNER_ID)
     this.svc.asks.reportOrphans()
     const recovered = await recoverExistingConversations({
       conversations: this.conversations,
@@ -754,6 +757,7 @@ export class KernelRuntime {
       stashService: this.stashService,
       emitDiagnostic: (input) => this.emitDiagnostic(input),
     })
+    clearRegistryToolAbortFallbacks(this.registry)
     this.processTokenHandle = undefined
   }
 }

@@ -7,18 +7,30 @@
  * ========================================================================== */
 
 .ask-dock {
-  margin: 0 auto 10px;
+  margin: 0 auto 8px;
   width: 100%;
   max-width: var(--conversation-max-width);
   box-sizing: border-box;
   background: var(--bg-elevated);
-  border: 1px solid var(--warn-border);
-  border-radius: var(--radius-md);
-  padding: 12px 14px;
-  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  padding: 10px 12px;
+  box-shadow: none;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+}
+
+.ask-dock--question {
+  border-color: var(--border-strong);
+}
+
+.ask-dock--approval {
+  border-color: var(--warn-border);
+}
+
+.ask-dock:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .ask-dock-header {
@@ -35,20 +47,6 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-/* 机器元数据 info 入口（Popover 触发器） */
-.ask-dock-meta-btn {
-  flex-shrink: 0;
-}
-
-.ask-dock-meta-popover {
-  padding: 10px 12px;
-  max-width: 280px;
-}
-
-.ask-dock-meta-hint {
-  margin-top: var(--space-2);
 }
 
 .ask-dock-source-btn {
@@ -89,23 +87,85 @@
   overflow: auto;
 }
 
+.ask-dock-step-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.ask-dock-step-nav-btn {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.ask-dock-step-nav-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.ask-dock-step-nav-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--border-focus);
+}
+
+.ask-dock-step-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ask-dock-step-counter {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.ask-dock-step-panel[hidden] {
+  display: none;
+}
+
+.ask-dock-choice-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ask-dock-choice-meta {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
 .ask-dock-choice-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .ask-dock-choice-btn {
   appearance: none;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 7px 10px;
   margin: 0;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: transparent;
   color: var(--fg);
   font-family: inherit;
   text-align: left;
@@ -115,14 +175,14 @@
 
 .ask-dock-choice-btn:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--border-strong);
+  border-color: var(--border);
 }
 
 .ask-dock-choice-btn:focus-visible {
   outline: none;
   border-color: var(--border-focus);
   background: var(--bg-hover);
-  box-shadow: none;
+  box-shadow: 0 0 0 1px var(--border-focus);
 }
 
 .ask-dock-choice-btn:disabled {
@@ -135,33 +195,37 @@
   border-color: var(--accent-border);
 }
 
+.ask-dock-choice-btn--selected:focus-visible {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 1px var(--border-focus);
+}
+
 .ask-dock-choice-btn--selected:hover:not(:disabled) {
   background: var(--accent-bg);
   border-color: var(--accent);
 }
 
-.ask-dock-choice-radio {
+.ask-dock-choice-key {
   flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
-  border-radius: 50%;
-  border: 1.5px solid var(--border-strong);
-  background: var(--bg-elevated);
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
   box-sizing: border-box;
-  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
 }
 
-.ask-dock-choice-btn--selected .ask-dock-choice-radio {
-  border-color: var(--accent);
-}
-
-.ask-dock-choice-btn--selected .ask-dock-choice-radio::after {
-  content: '';
-  position: absolute;
-  inset: 3px;
-  border-radius: 50%;
-  background: var(--accent);
+.ask-dock-choice-btn--selected .ask-dock-choice-key {
+  background: var(--bg-elevated);
+  color: var(--accent);
 }
 
 .ask-dock-choice-body {
@@ -170,6 +234,14 @@
   gap: 2px;
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.ask-dock-choice-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
 
 .ask-dock-choice-label {
@@ -184,6 +256,13 @@
   color: var(--accent);
 }
 
+.ask-dock-choice-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+}
+
 .ask-dock-choice-desc {
   font-size: 12px;
   line-height: 1.35;
@@ -191,8 +270,66 @@
   overflow-wrap: anywhere;
 }
 
+.ask-dock-choice-check {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+
+.ask-dock-choice-check--multi {
+  border-radius: var(--radius-xs);
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-elevated);
+  box-sizing: border-box;
+}
+
+.ask-dock-choice-check--multi.ask-dock-choice-check--active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg-elevated);
+}
+
+.ask-dock-choice-custom {
+  padding: 2px 0 2px 26px;
+}
+
 .ask-dock-hint {
-  margin-top: 2px;
+  margin-top: 0;
+}
+
+.ask-dock-actions-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.ask-dock-shortcut-hint {
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+
+.ask-user-tool-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.ask-user-tool-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ask-user-tool-items {
+  margin-bottom: 0;
 }
 
 .ask-dock .composer-picker-root {

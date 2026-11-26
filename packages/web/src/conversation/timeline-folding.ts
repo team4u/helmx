@@ -14,10 +14,10 @@ export interface RawSegment {
   live?: 'generation' | 'flat'
 }
 
-/** Fold exemption: thinking and ordinary tool rows (running, done, failed) fold; only tool.view business cards stay standalone. */
+/** Fold exemption: thinking and ordinary tool rows fold; tool.view cards and built-in `ask_user` prompts stay standalone in chronological order. */
 export function isFoldableStep(step: FoldableStep): boolean {
   if (step.kind === 'thinking') return true
-  return step.tool.toolView === undefined
+  return step.tool.toolView === undefined && step.tool.toolName !== 'ask_user'
 }
 
 function foldableOfRaw(seg: RawSegment): FoldableStep {

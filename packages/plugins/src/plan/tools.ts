@@ -1,22 +1,15 @@
 /**
- * builtin:plan model tools (`plan_save`, `plan_propose`, `plan_ask`, and `plan_bash`).
+ * builtin:plan model tools (`plan_save`, `plan_propose`, and `plan_bash`).
  */
 import { randomUUID } from 'node:crypto'
 import {
   HelmxError,
   type AskCreateSpec,
-  type AskFieldSpec,
   type AskResult,
   type HelmxPluginContext,
   type PluginToolResultEnvelope,
 } from '@helmx/protocol'
 import {
-  PLAN_ASK_MAX_OPTIONS,
-  PLAN_ASK_MAX_QUESTIONS,
-  PLAN_ASK_MIN_OPTIONS,
-  PLAN_ASK_OPTION_DESC_MAX_CHARS,
-  PLAN_ASK_OPTION_LABEL_MAX_CHARS,
-  PLAN_ASK_QUESTION_MAX_CHARS,
   PLAN_BASH_DEFAULT_TIMEOUT_MS,
   PLAN_BASH_MAX_TIMEOUT_MS,
   PLAN_HANDOFF_MAX_BYTES,
@@ -24,7 +17,6 @@ import {
   PLAN_PLUGIN_ID,
   PLAN_SUMMARY_MAX_CHARS,
   PLAN_TITLE_MAX_CHARS,
-  PLAN_TOOL_ASK,
   PLAN_TOOL_BASH,
   PLAN_TOOL_META_SCHEMA,
   PLAN_TOOL_PROPOSE,
@@ -32,7 +24,6 @@ import {
   isPlanConversationEligible,
   validateAndRedactPlanDraft,
   type PlanApprovedInfo,
-  type PlanAskKind,
   type PlanConversationRecord,
   type PlanDraftSummary,
   type PlanToolPresentationMeta,
@@ -41,24 +32,6 @@ import { validateReadOnlyShellCommand } from './read-only-shell.js'
 import type { PlanStateManager } from './state.js'
 
 const utf8Encoder = new TextEncoder()
-const ASK_QUESTION_ID_RE = /^[A-Za-z0-9_-]{1,40}$/
-
-interface PlanAskOptionInput {
-  value: string
-  label: string
-  description?: string
-}
-
-interface PlanAskQuestionInput {
-  id: string
-  question: string
-  options: PlanAskOptionInput[]
-}
-
-interface PlanAskInput {
-  title?: string
-  questions: PlanAskQuestionInput[]
-}
 
 function errorMessageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -172,7 +145,7 @@ async function awaitPlanAsk(params: {
       const latest = state.getRecord(conversationId)
       const clearPendingOnly = async (): Promise<void> => {
         if (latest === undefined || latest.pendingAskId !== askId) return
-        const { pendingAskId: _cleared, pendingAskKind: _clearedKind, ...rest } = latest
+        const { pendingAskId: _cleared, ...rest } = latest
         state.writeRecord(conversationId, rest)
         await state.flushKv()
         state.syncProjections(conversationId, rest)
@@ -201,7 +174,7 @@ async function awaitPlanAsk(params: {
     await state.enqueueConversation(conversationId, async () => {
       const latest = state.getRecord(conversationId)
       if (latest?.pendingAskId === askId) {
-        const { pendingAskId: _cleared, pendingAskKind: _clearedKind, ...rest } = latest
+        const { pendingAskId: _cleared, ...rest } = latest
         state.writeRecord(conversationId, rest)
         await state.flushKv()
         state.syncProjections(conversationId, rest)
@@ -226,14 +199,13 @@ async function preparePlanningAsk(params: {
   ctx: HelmxPluginContext
   state: PlanStateManager
   conversationId: number
-  kind: PlanAskKind
   toolName: string
   requireDraft?: boolean
 }): Promise<
   | { ok: true; askId: string; expectedStateSeq: number; current: PlanConversationRecord }
   | { ok: false; result: PluginToolResultEnvelope }
 > {
-  const { ctx, state, conversationId, kind, toolName, requireDraft } = params
+  const { ctx, state, conversationId, toolName, requireDraft } = params
   return state.enqueueConversation(conversationId, async () => {
     if (state.isStopping()) {
       return {
@@ -263,7 +235,7 @@ async function preparePlanningAsk(params: {
     }
     if (current!.pendingAskId !== undefined || state.hasInFlightAsk(conversationId)) {
       const activeMeta: PlanToolPresentationMeta | undefined =
-        kind === 'propose' && current?.draft !== undefined
+        current?.draft !== undefined
           ? {
               kind: 'propose',
               title: current.draft.title,
@@ -286,7 +258,6 @@ async function preparePlanningAsk(params: {
       conversationId,
       mode: 'planning',
       pendingAskId: askId,
-      pendingAskKind: kind,
     }
     state.writeRecord(conversationId, nextRecord)
     try {
@@ -453,7 +424,6 @@ export function registerPlanTools(
         ctx,
         state,
         conversationId,
-        kind: 'propose',
         toolName: PLAN_TOOL_PROPOSE,
         requireDraft: true,
       })
@@ -469,6 +439,7 @@ export function registerPlanTools(
         id: askId,
         conversationId,
         ownerPluginId: PLAN_PLUGIN_ID,
+        kind: 'approval',
         title: {
           en: `Plan Approval v${draft.version}: ${draft.title}`,
           'zh-CN': `计划审批 v${draft.version}：${draft.title}`,
@@ -490,9 +461,10 @@ export function registerPlanTools(
               {
                 value: 'approve_handoff',
                 label: { en: 'Approve & start fresh context', 'zh-CN': '批准并在新上下文执行' },
+                recommended: true,
                 description: {
-                  en: 'Recommended — archive plan and start execution with a clean context',
-                  'zh-CN': '推荐 — 归档计划并以干净上下文开始执行',
+                  en: 'Archive plan and start execution with a clean context',
+                  'zh-CN': '归档计划并以干净上下文开始执行',
                 },
               },
               {
@@ -578,7 +550,8 @@ export function registerPlanTools(
           }
 
           const decision = askResult.answers['decision'] ?? ''
-          const rawFeedback = askResult.answers['feedback'] ?? ''
+          const rawFeedback =
+            typeof askResult.answers['feedback'] === 'string' ? askResult.answers['feedback'] : ''
           const feedback = ctx.host.redact(rawFeedback).trim()
           const rawSelectedModel = askResult.answers['executionModel']
           const selectedModel =
@@ -681,7 +654,7 @@ export function registerPlanTools(
           }
 
           if (latest !== undefined) {
-            const { pendingAskId: _cleared, pendingAskKind: _clearedKind, ...rest } = latest
+            const { pendingAskId: _cleared, ...rest } = latest
             const nextRecord: PlanConversationRecord = {
               ...rest,
               conversationId,
@@ -747,309 +720,6 @@ export function registerPlanTools(
                 : {}),
             },
             control: { handoff },
-          }
-        },
-      })
-    },
-  })
-
-  ctx.tool<PlanAskInput>({
-    name: PLAN_TOOL_ASK,
-    description:
-      'Ask 1-4 structured multiple-choice clarifying questions via AskDoc (plan mode only, top-level human conversations only).',
-    promptGuidelines: [
-      'Use plan_ask while in plan mode when genuine requirements or architectural choices need human clarification before drafting the plan.',
-    ],
-    inputSchema: {
-      type: 'object',
-      properties: {
-        title: {
-          type: 'string',
-          minLength: 1,
-          maxLength: PLAN_TITLE_MAX_CHARS,
-          description: `Optional card title (1-${PLAN_TITLE_MAX_CHARS} characters)`,
-        },
-        questions: {
-          type: 'array',
-          minItems: 1,
-          maxItems: PLAN_ASK_MAX_QUESTIONS,
-          description: `1-${PLAN_ASK_MAX_QUESTIONS} concise clarifying questions`,
-          items: {
-            type: 'object',
-            properties: {
-              id: {
-                type: 'string',
-                minLength: 1,
-                maxLength: 40,
-                description: 'Stable identifier (alphanumeric, _ or -; cannot be "notes")',
-              },
-              question: {
-                type: 'string',
-                minLength: 1,
-                maxLength: PLAN_ASK_QUESTION_MAX_CHARS,
-                description: `Question prompt (1-${PLAN_ASK_QUESTION_MAX_CHARS} characters)`,
-              },
-              options: {
-                type: 'array',
-                minItems: PLAN_ASK_MIN_OPTIONS,
-                maxItems: PLAN_ASK_MAX_OPTIONS,
-                items: {
-                  type: 'object',
-                  properties: {
-                    value: {
-                      type: 'string',
-                      minLength: 1,
-                      maxLength: 64,
-                      description: 'Option machine value',
-                    },
-                    label: {
-                      type: 'string',
-                      minLength: 1,
-                      maxLength: PLAN_ASK_OPTION_LABEL_MAX_CHARS,
-                      description: `Option display label (1-${PLAN_ASK_OPTION_LABEL_MAX_CHARS} characters)`,
-                    },
-                    description: {
-                      type: 'string',
-                      maxLength: PLAN_ASK_OPTION_DESC_MAX_CHARS,
-                      description: `Optional option explanation (up to ${PLAN_ASK_OPTION_DESC_MAX_CHARS} characters)`,
-                    },
-                  },
-                  required: ['value', 'label'],
-                  additionalProperties: false,
-                },
-              },
-            },
-            required: ['id', 'question', 'options'],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: ['questions'],
-      additionalProperties: false,
-    },
-    presentationMetaSchema: PLAN_TOOL_META_SCHEMA,
-    async execute(input, context): Promise<PluginToolResultEnvelope> {
-      const rawTitle = typeof input?.title === 'string' ? input.title.trim() : ''
-      if (input?.title !== undefined && (rawTitle.length === 0 || rawTitle.length > PLAN_TITLE_MAX_CHARS)) {
-        return toolError(`plan_ask title must be 1-${PLAN_TITLE_MAX_CHARS} characters when provided.`)
-      }
-      const explicitTitle = rawTitle !== '' ? ctx.host.redact(rawTitle).trim() : undefined
-      if (rawTitle !== '' && (explicitTitle === undefined || explicitTitle.length === 0 || explicitTitle.length > PLAN_TITLE_MAX_CHARS)) {
-        return toolError(`plan_ask title after redaction must be 1-${PLAN_TITLE_MAX_CHARS} characters.`)
-      }
-      const metaTitle = explicitTitle ?? 'Clarifying Questions'
-
-      if (!Array.isArray(input?.questions) || input.questions.length < 1 || input.questions.length > PLAN_ASK_MAX_QUESTIONS) {
-        return toolError(`plan_ask requires 1-${PLAN_ASK_MAX_QUESTIONS} questions.`)
-      }
-
-      const questionIds = new Set<string>()
-      const normalizedQuestions: Array<{
-        id: string
-        question: string
-        options: Array<{ value: string; label: string; description?: string }>
-      }> = []
-
-      for (const rawQ of input.questions) {
-        const id = typeof rawQ?.id === 'string' ? rawQ.id.trim() : ''
-        if (!ASK_QUESTION_ID_RE.test(id) || id === 'notes') {
-          return toolError(`Invalid plan_ask question id "${id}": must match /^[A-Za-z0-9_-]{1,40}$/ and cannot be "notes".`)
-        }
-        if (questionIds.has(id)) {
-          return toolError(`Duplicate plan_ask question id: "${id}".`)
-        }
-        questionIds.add(id)
-
-        const rawPrompt = typeof rawQ?.question === 'string' ? rawQ.question.trim() : ''
-        const safePrompt = ctx.host.redact(rawPrompt).trim()
-        if (safePrompt.length === 0 || safePrompt.length > PLAN_ASK_QUESTION_MAX_CHARS) {
-          return toolError(
-            `Question "${id}" prompt must be 1-${PLAN_ASK_QUESTION_MAX_CHARS} characters.`,
-          )
-        }
-
-        if (
-          !Array.isArray(rawQ?.options) ||
-          rawQ.options.length < PLAN_ASK_MIN_OPTIONS ||
-          rawQ.options.length > PLAN_ASK_MAX_OPTIONS
-        ) {
-          return toolError(
-            `Question "${id}" must have ${PLAN_ASK_MIN_OPTIONS}-${PLAN_ASK_MAX_OPTIONS} options.`,
-          )
-        }
-
-        const optValues = new Set<string>()
-        const normalizedOptions: Array<{ value: string; label: string; description?: string }> = []
-        for (const rawOpt of rawQ.options) {
-          const val = typeof rawOpt?.value === 'string' ? rawOpt.value.trim() : ''
-          if (val === '' || val.length > 64) {
-            return toolError(`Question "${id}" option value must be a non-empty string within 64 characters.`)
-          }
-          if (optValues.has(val)) {
-            return toolError(`Question "${id}" has duplicate option value "${val}".`)
-          }
-          optValues.add(val)
-
-          const rawLabel = typeof rawOpt?.label === 'string' ? rawOpt.label.trim() : ''
-          const safeLabel = ctx.host.redact(rawLabel).trim()
-          if (safeLabel.length === 0 || safeLabel.length > PLAN_ASK_OPTION_LABEL_MAX_CHARS) {
-            return toolError(
-              `Question "${id}" option "${val}" label must be 1-${PLAN_ASK_OPTION_LABEL_MAX_CHARS} characters.`,
-            )
-          }
-
-          let safeDesc: string | undefined
-          if (rawOpt?.description !== undefined) {
-            if (typeof rawOpt.description !== 'string') {
-              return toolError(`Question "${id}" option "${val}" description must be a string.`)
-            }
-            const trimmedDesc = ctx.host.redact(rawOpt.description.trim()).trim()
-            if (trimmedDesc.length > PLAN_ASK_OPTION_DESC_MAX_CHARS) {
-              return toolError(
-                `Question "${id}" option "${val}" description exceeds ${PLAN_ASK_OPTION_DESC_MAX_CHARS} characters.`,
-              )
-            }
-            if (trimmedDesc !== '') safeDesc = trimmedDesc
-          }
-
-          normalizedOptions.push({
-            value: val,
-            label: safeLabel,
-            ...(safeDesc !== undefined ? { description: safeDesc } : {}),
-          })
-        }
-
-        normalizedQuestions.push({
-          id,
-          question: safePrompt,
-          options: normalizedOptions,
-        })
-      }
-
-      if (context.signal?.aborted) {
-        return toolError('plan_ask aborted before creating prompt.')
-      }
-
-      const conversationId = context.conversationId
-      const prepared = await preparePlanningAsk({
-        ctx,
-        state,
-        conversationId,
-        kind: 'clarify',
-        toolName: PLAN_TOOL_ASK,
-      })
-      if (!prepared.ok) {
-        return prepared.result
-      }
-
-      const fields: AskFieldSpec[] = [
-        ...normalizedQuestions.map(
-          (q): AskFieldSpec => ({
-            name: q.id,
-            label: q.question,
-            type: 'choice',
-            required: true,
-            options: q.options.map((o) => ({
-              value: o.value,
-              label: o.label,
-              ...(o.description !== undefined ? { description: o.description } : {}),
-            })),
-          }),
-        ),
-        {
-          name: 'notes',
-          label: { en: 'Additional context (optional)', 'zh-CN': '补充说明（可选）' },
-          type: 'text',
-          required: false,
-        },
-      ]
-
-      const askSpec: AskCreateSpec = {
-        id: prepared.askId,
-        conversationId,
-        ownerPluginId: PLAN_PLUGIN_ID,
-        title:
-          explicitTitle !== undefined
-            ? explicitTitle
-            : { en: 'Clarifying Questions', 'zh-CN': '需求澄清' },
-        hint: {
-          en: 'Tip: You can also reply freely in the composer below.',
-          'zh-CN': '提示：也可直接在下方输入框自由回复。',
-        },
-        expectedStateSeq: prepared.expectedStateSeq,
-        fields,
-      }
-
-      const questionCount = normalizedQuestions.length
-      return awaitPlanAsk({
-        ctx,
-        state,
-        conversationId,
-        askId: prepared.askId,
-        askSpec,
-        signal: context.signal,
-        async onSettled(settled) {
-          if (!settled.ok) {
-            await settled.clearPendingOnly()
-            return toolError(
-              `Failed to create clarifying ask: ${ctx.host.redact(errorMessageOf(settled.error))}`,
-              {
-                kind: 'ask',
-                title: metaTitle,
-                questionCount,
-                outcome: 'error',
-              },
-            )
-          }
-
-          await settled.clearPendingOnly()
-          const { askResult } = settled
-
-          if (askResult.status === 'superseded') {
-            return {
-              output:
-                'Clarifying prompt was superseded because a new user message arrived or the conversation state changed.',
-              presentationMeta: {
-                kind: 'ask',
-                title: metaTitle,
-                questionCount,
-                outcome: 'superseded',
-              },
-            }
-          }
-
-          if (askResult.status === 'cancelled') {
-            return {
-              output: 'Clarifying prompt was cancelled by the user.',
-              presentationMeta: {
-                kind: 'ask',
-                title: metaTitle,
-                questionCount,
-                outcome: 'cancelled',
-              },
-            }
-          }
-
-          const lines: string[] = ['User clarification answers:']
-          for (const q of normalizedQuestions) {
-            const val = askResult.answers[q.id] ?? ''
-            const matchedOpt = q.options.find((o) => o.value === val)
-            const display = matchedOpt !== undefined ? `${val} (${matchedOpt.label})` : val
-            lines.push(`- ${q.id} (${q.question}): ${display}`)
-          }
-          const notes = ctx.host.redact(askResult.answers['notes'] ?? '').trim()
-          if (notes !== '') {
-            lines.push(`- notes: ${notes}`)
-          }
-
-          return {
-            output: lines.join('\n'),
-            presentationMeta: {
-              kind: 'ask',
-              title: metaTitle,
-              questionCount,
-              outcome: 'answered',
-            },
           }
         },
       })

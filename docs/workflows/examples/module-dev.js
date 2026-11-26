@@ -145,7 +145,7 @@ if (planOutput.strategy === "direct") {
         model: args.modelC,
         cwd: modWt.path,
         isolation: "worktree",
-        maxSubagentDepth: task.maxSubagentDepth ?? 2,
+        maxSubagentDepth: task.maxSubagentDepth ?? 1,
         maxAttempts: 3,
         timeoutMs: 300_000,
         gateTimeoutMs: 120_000,

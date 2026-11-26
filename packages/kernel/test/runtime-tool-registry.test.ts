@@ -9,6 +9,7 @@ import {
   TOOL_PRESENTATION_META_MAX_DEPTH,
   TOOL_PRESENTATION_META_MAX_NODES,
   type ActionManifest,
+  type JsonSchema,
   type PluginToolControl,
   type PluginToolResultEnvelope,
 } from '@helmx/protocol'
@@ -46,7 +47,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.deepEqual(res.output, [{ type: 'text', text: 'normal-output' }])
   })
 
-  it('installKernelTools: registers helmx-core extension (7 core tools) all wrapped with wrapToolExecute', { timeout: 60_000 }, async () => {
+  it('installKernelTools: registers helmx-core extension (8 core tools) all wrapped with wrapToolExecute', { timeout: 60_000 }, async () => {
     const installed: Extension[] = []
     const fakeRegistry = {
       install(ext: Extension) {
@@ -124,7 +125,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     const toolNames = coreExt.tools!.map((t) => t.name)
     assert.deepEqual(
       toolNames.sort(),
-      ['bash', 'edit', 'read', 'read_artifact', 'register_artifact', 'run_action', 'write'].sort(),
+      ['ask_user', 'bash', 'edit', 'read', 'read_artifact', 'register_artifact', 'run_action', 'write'].sort(),
     )
 
     // Verify run_action meta-tool behavior
@@ -584,11 +585,25 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       { conversationId: 10, callId: 'call-custom-1' },
       { abortSignal: undefined },
     )
-    assert.deepEqual(executedToolCall, {
-      name: 'custom_search',
-      args: { q: 'helmx' },
-      context: { conversationId: 10, callId: 'call-custom-1', signal: undefined },
-    })
+    assert.ok(executedToolCall !== undefined)
+    const forwardedCtx = executedToolCall.context as Record<string, unknown>
+    assert.equal(typeof forwardedCtx['setAbortFallback'], 'function')
+    assert.deepEqual(
+      {
+        name: executedToolCall.name,
+        args: executedToolCall.args,
+        context: {
+          conversationId: forwardedCtx['conversationId'],
+          callId: forwardedCtx['callId'],
+          signal: forwardedCtx['signal'],
+        },
+      },
+      {
+        name: 'custom_search',
+        args: { q: 'helmx' },
+        context: { conversationId: 10, callId: 'call-custom-1', signal: undefined },
+      },
+    )
     assert.ok(res.output[0]!.text.includes('***'))
     assert.ok(!res.output[0]!.text.includes('token-123'))
 
@@ -1692,5 +1707,216 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.equal(bridged['isError'], undefined)
     assert.deepEqual(bridged['output'], [{ type: 'text', text: 'switching model [REDACTED]' }])
     assert.deepEqual(bridged['control'], { handoff: 'resume with [REDACTED]', terminate: true })
+  })
+
+  it('setAbortFallback: merges redacted schema-validated output & details on ToolTask abort, cleans up on normal completion or non-abort error, and ignores broken fallback without dropping abort error', { timeout: 60_000 }, async () => {
+    const installed: Extension[] = []
+    const sharedRegistry = {
+      install(ext: Extension) {
+        installed.push(ext)
+      },
+    }
+    const redact = (t: string) => t.replaceAll('SECRET', '[REDACTED]')
+    const metaSchema: JsonSchema = {
+      type: 'object',
+      properties: {
+        ok: { type: 'boolean' },
+        status: { type: 'string' },
+        tag: { type: 'string' },
+      },
+      required: ['ok', 'status', 'tag'],
+      additionalProperties: false,
+    }
+    const fakeConv = {
+      id: 1,
+      title: 'test',
+      profileId: 'assistant',
+      ownedBy: 'human' as const,
+      tags: [],
+      cwd: '/tmp/test',
+      model: 'faux/faux-1',
+      thinkingLevel: '',
+      status: 'idle' as const,
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 0,
+      createdAt: 0,
+      updatedAt: 0,
+    }
+    const cap = new CapabilityRegistry()
+    const tracker = new PluginTaskTracker()
+    const execOpts = {
+      tracker,
+      isPluginRegistered: () => true,
+      assertActive: () => {},
+      getConversation: () => fakeConv,
+    }
+    let behavior: 'abort_after_fallback' | 'normal' | 'throw_error' | 'invalid_fallback_abort' = 'abort_after_fallback'
+    cap.registerTool('demo', {
+      name: 'abort_meta_tool',
+      description: 'abort fallback tool',
+      inputSchema: { type: 'object', properties: {} },
+      presentationMetaSchema: metaSchema,
+      async execute(_input, ctx) {
+        if (behavior === 'abort_after_fallback') {
+          ctx.setAbortFallback?.({
+            output: 'fallback SECRET coord',
+            presentationMeta: { ok: false, status: 'aborted', tag: 'tag:SECRET' },
+          })
+          abortController.abort()
+          return { output: 'should be overridden by abort' }
+        }
+        if (behavior === 'normal') {
+          ctx.setAbortFallback?.({
+            output: 'should not leak',
+            presentationMeta: { ok: false, status: 'aborted', tag: 'leaked' },
+          })
+          return { output: 'normal done', presentationMeta: { ok: true, status: 'completed', tag: 'ok' } }
+        }
+        if (behavior === 'throw_error') {
+          ctx.setAbortFallback?.({
+            output: 'should not leak on error',
+            presentationMeta: { ok: false, status: 'aborted', tag: 'leaked' },
+          })
+          throw new Error('non-abort failure')
+        }
+        ctx.setAbortFallback?.({
+          output: 'fallback before invalid meta',
+          presentationMeta: { wrongKey: 123 },
+        })
+        abortController.abort()
+        return { output: 'aborted' }
+      },
+    })
+
+    const fakeHost: PluginHostToolTarget = {
+      invokeAction: (p, a, input, ctx) => cap.invokeAction(p, a, input, ctx ?? {}, execOpts),
+      executeTool: (name, input, ctx) => cap.executeTool(name, input, ctx, execOpts),
+      listTools: () => cap.listTools(['demo']),
+      listActions: () => [],
+    }
+    const artifacts = {
+      spill: async (_convId: number, _id: string, text: string) => ({ text }),
+      get: async () => ({} as never),
+      readContent: async () => '',
+      readBuffer: async () => new Uint8Array(),
+    }
+    const fakeToolDeps: HelmxToolDeps = {
+      dataDir: '/tmp/test',
+      defaultCwd: '/tmp/test',
+      hubUrl: 'http://127.0.0.1:3202',
+      redact,
+      artifacts,
+    }
+
+    const registryModule = new RuntimeToolRegistry({
+      registry: sharedRegistry,
+      toolDeps: fakeToolDeps,
+      getPluginHost: () => fakeHost,
+      isArtifactAuthorized: () => true,
+      redact,
+      getConversation: () => fakeConv,
+    })
+    const bridge = new HookBridge({
+      registry: sharedRegistry,
+      pluginHost: () =>
+        ({
+          ...fakeHost,
+          runHook: async () => ({ action: 'continue' }),
+          runHookAround: async (_name: string, payload: unknown, next: (p: unknown) => Promise<unknown>) => next(payload),
+        }) as unknown as PluginHost,
+      prepareToolResult: (convId, res, opts) => prepareToolResultWith(artifacts, redact, convId, res, opts),
+      safeSummary: () => undefined,
+      currentRunInputs: () => [],
+      redact,
+      artifacts,
+    })
+
+    bridge.install()
+    registryModule.refreshPluginTools()
+
+    const pluginExt = installed.find((e) => e.name === 'helmx-plugins')!
+    const tool = pluginExt.tools!.find((t) => t.name === 'abort_meta_tool')!
+    const bridgeExt = installed.find((e) => e.name === 'helmx-hook-bridge')!
+    const toolHook = (bridgeExt.hooks![0] as unknown as {
+      handlers: {
+        afterTool: (
+          call: { id: string; name: string; arguments: Record<string, unknown> },
+          result: Record<string, unknown>,
+          api: { conversationId: number },
+        ) => Promise<Record<string, unknown>>
+      }
+    }).handlers
+
+    // 1. Aborted call retains staged fallback until HookBridge.afterTool consumes it once.
+    let abortController = new AbortController()
+    await assert.rejects(
+      () => tool.execute({}, { conversationId: 1, callId: 'c-abort-1' } as never, { abortSignal: abortController.signal } as never),
+      (err: unknown) => err instanceof Error && err.name === 'AbortError',
+    )
+    const rawAbortResult = {
+      output: [],
+      isError: true,
+      diagnostics: [{ severity: 'error', code: 'aborted', message: 'Tool abort_meta_tool was aborted' }],
+    }
+    const merged = await toolHook.afterTool({ id: 'c-abort-1', name: 'abort_meta_tool', arguments: {} }, rawAbortResult, {
+      conversationId: 1,
+    })
+    assert.equal(merged['isError'], true)
+    assert.deepEqual(merged['diagnostics'], rawAbortResult.diagnostics)
+    assert.deepEqual(merged['output'], [{ type: 'text', text: 'fallback [REDACTED] coord' }])
+    assert.deepEqual(merged['details'], { ok: false, status: 'aborted', tag: 'tag:[REDACTED]' })
+
+    // Second lookup for the same callId does not re-consume the fallback.
+    const second = await toolHook.afterTool({ id: 'c-abort-1', name: 'abort_meta_tool', arguments: {} }, rawAbortResult, {
+      conversationId: 1,
+    })
+    assert.equal(second['details'], undefined)
+    assert.deepEqual(second['output'], [])
+
+    // 2. Normal completion cleans up fallback immediately.
+    behavior = 'normal'
+    abortController = new AbortController()
+    const okRes = await tool.execute({}, { conversationId: 1, callId: 'c-normal-1' } as never, { abortSignal: abortController.signal } as never)
+    assert.deepEqual(okRes.details, { ok: true, status: 'completed', tag: 'ok' })
+    const afterNormalAbortProbe = await toolHook.afterTool(
+      { id: 'c-normal-1', name: 'abort_meta_tool', arguments: {} },
+      rawAbortResult,
+      { conversationId: 1 },
+    )
+    assert.equal(afterNormalAbortProbe['details'], undefined)
+
+    // 3. Non-abort throw cleans up fallback immediately.
+    behavior = 'throw_error'
+    abortController = new AbortController()
+    await assert.rejects(
+      () => tool.execute({}, { conversationId: 1, callId: 'c-err-1' } as never, { abortSignal: abortController.signal } as never),
+      (err: unknown) => err instanceof Error && err.message === 'non-abort failure',
+    )
+    const afterErrAbortProbe = await toolHook.afterTool(
+      { id: 'c-err-1', name: 'abort_meta_tool', arguments: {} },
+      rawAbortResult,
+      { conversationId: 1 },
+    )
+    assert.equal(afterErrAbortProbe['details'], undefined)
+
+    // 4. Schema-invalid fallback is ignored gracefully without losing original abort result.
+    behavior = 'invalid_fallback_abort'
+    abortController = new AbortController()
+    await assert.rejects(
+      () => tool.execute({}, { conversationId: 1, callId: 'c-bad-fb' } as never, { abortSignal: abortController.signal } as never),
+      (err: unknown) => err instanceof Error && err.name === 'AbortError',
+    )
+    const badFallbackMerged = await toolHook.afterTool(
+      { id: 'c-bad-fb', name: 'abort_meta_tool', arguments: {} },
+      rawAbortResult,
+      { conversationId: 1 },
+    )
+    assert.equal(badFallbackMerged['isError'], true)
+    assert.deepEqual(badFallbackMerged['diagnostics'], rawAbortResult.diagnostics)
+    assert.equal(badFallbackMerged['details'], undefined)
+    assert.deepEqual(badFallbackMerged['output'], [])
   })
 })

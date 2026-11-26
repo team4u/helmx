@@ -3,7 +3,12 @@
  */
 import { HelmxError, type ConversationSummary, type DispatchToolsCapability, type MaybePromise, type PluginDefinition } from '@helmx/protocol'
 import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
-import { WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID } from './contracts.js'
+import {
+  CONVERSATION_DEPTH_CAPABILITY_ID,
+  WORKFLOW_PLUGIN_ID,
+  WORKTREE_PLUGIN_ID,
+  type ConversationDepthCapability,
+} from './contracts.js'
 import {
   BOARD_BADGES_DOC_NAME,
   BOARD_VIEW_DOC_NAME,
@@ -119,6 +124,17 @@ export function createSwarmPlugin(): PluginDefinition {
       registerSwarmActions(ctx, coordinator)
       ctx.provide<DispatchToolsCapability>('helmx.dispatch-tools', {
         toolNames: ['swarm_dispatch_worker'],
+      })
+      ctx.provide<ConversationDepthCapability>(CONVERSATION_DEPTH_CAPABILITY_ID, {
+        depthOf(conversationId) {
+          if (!active) return undefined
+          const found = groupsRuntime.findWorkerMember(conversationId)
+          if (found === undefined) return undefined
+          return {
+            depth: 1,
+            ...(found.member.forked === true ? { leaf: true } : {}),
+          }
+        },
       })
       registerSwarmHooks(ctx, coordinator)
       registerSwarmUi(ctx)

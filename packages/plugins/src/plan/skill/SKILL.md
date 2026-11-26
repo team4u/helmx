@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Use when working in or managing read-only Plan Mode (/plan, Ctrl+.)—covers eligibility, read-only tools (plan_bash, plan_ask, plan_save, plan_propose), self-contained draft authoring, AskDoc approval/handoff, and builtin:plan actions.
+description: Use when working in or managing read-only Plan Mode (/plan, Ctrl+.)—covers eligibility, read-only tools (plan_bash, ask_user, plan_save, plan_propose), self-contained draft authoring, AskDoc approval/handoff, and builtin:plan actions.
 managedByPlugin: builtin:plan
 ---
 
@@ -15,14 +15,13 @@ Use `builtin:plan` for controlled read-only codebase exploration, structured req
 
 ## Read-Only Planning Sandbox & Tools
 
-While `mode === "planning"`, `before_turn` enforces a strict tool whitelist of **7 tools only**: `read`, `read_artifact`, `load_skill`, `plan_bash`, `plan_ask`, `plan_save`, and `plan_propose`. All mutating or dispatch tools (`bash`, `write`, `edit`, `register_artifact`, `run_action`, `subagent`, `SubagentWorkflow`, `cleanup_worktree`, `update_memory`, `swarm_*`) are stripped until approval or exit.
+While `mode === "planning"`, `before_turn` enforces a strict tool whitelist of **7 tools only**: `read`, `read_artifact`, `load_skill`, `ask_user`, `plan_bash`, `plan_save`, and `plan_propose`. All mutating or dispatch tools (`bash`, `write`, `edit`, `register_artifact`, `run_action`, `subagent`, `SubagentWorkflow`, `cleanup_worktree`, `update_memory`, `swarm_*`) are stripped until approval or exit.
 
 1. **`plan_bash({ command, timeoutMs? })`**:
    - Read-only shell inspection on the conversation node (default `60_000` ms, max `120_000` ms).
    - Validated before execution: blocks mutating commands, file write redirections, command substitution, mutating `helmx` flags or unknown plugins, `helmx-hub`, and `helmx-node`.
-2. **`plan_ask({ title?, questions })`**:
-   - Ask `1–4` concise multiple-choice clarifying questions via `AskDoc` when requirements or architecture tradeoffs have genuine ambiguity.
-   - Each question requires `{ id, question, options }` (`id` matches `/^[A-Za-z0-9_-]{1,40}$/` and cannot be `"notes"`; `2–6` options with `{ value, label, description? }`). An optional free-text `notes` field is appended automatically.
+2. **`ask_user({ title?, questions })`**:
+   - Kernel built-in structured prompt tool (available in both normal and planning modes for top-level human conversations) to ask `1–4` clarifying questions (`single_select`, `multi_select`, `text`, or `confirm`).
 3. **`plan_save({ title, markdown })`**:
    - Save or revise the conversation's plan draft (`title`: `1–120` chars; `markdown`: `1–98,304` UTF-8 bytes; redacted; increments `draft.version`).
    - **Author self-contained drafts**: if the user approves with fresh-context handoff, prior exploration turns and file reads are cleared and the executor receives ONLY this Markdown. Always include exact file paths, key symbol/API names, concrete step-by-step changes, edge cases/constraints, and exact verification commands.
@@ -43,7 +42,7 @@ The `plan_propose` approval card offers `decision`, optional `executionModel` (+
 
 Note: `run_action` is stripped while inside `planning` mode; call these actions from `normal` mode, HTTP, or CLI (`helmx plan <action>`). `conversationId` defaults to the current conversation (`--current` in CLI); passing a conflicting `conversationId` fails with `400 validation_error`:
 
-- `builtin:plan.get` (`{ conversationId? }`) — read `PlanSessionView` (`mode`, `awaitingApproval`, `awaitingClarification?`, `draft?`, `approved?`). CLI: `helmx plan get --current --json`.
+- `builtin:plan.get` (`{ conversationId? }`) — read `PlanSessionView` (`mode`, `awaitingApproval`, `draft?`, `approved?`). CLI: `helmx plan get --current --json`.
 - `builtin:plan.toggle` (`{ conversationId? }`) — toggle between `normal` and `planning` (exiting to `normal` cancels any pending plan ask). CLI: `helmx plan toggle --current`.
 - `builtin:plan.set_mode` (`{ conversationId?, mode: "normal" | "planning" }`) — set mode explicitly. CLI: `helmx plan set_mode --current --input '{"mode":"planning"}'`.
 - `builtin:plan.update_draft` (`{ conversationId?, title, markdown, expectedVersion? }`) — update draft title and markdown with optional optimistic concurrency check (`expectedVersion`; mismatch fails with `409 plan_draft_conflict`). Requires either `mode === "planning"` or an existing draft. CLI: `helmx plan update_draft --current --input '{"title":"...","markdown":"..."}'`.

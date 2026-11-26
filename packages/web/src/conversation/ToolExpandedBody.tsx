@@ -23,7 +23,7 @@
 import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolEditDiff } from '@helmx/protocol/browser'
-import { Button, CopyButton, HelmxIcon } from '@helmx/plugin-client'
+import { Badge, Button, CopyButton, HelmxIcon, type BadgeTone } from '@helmx/plugin-client'
 import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'
@@ -44,11 +44,13 @@ import {
   headLines,
   inputKvEntries,
   inputPathOf,
+  parseAskUserToolMeta,
   prettyJson,
   readBodyData,
   tailLines,
   truncationPreviewNote,
   writeBodyData,
+  type AskUserToolOutcome,
 } from './tool-body-model.js'
 
 export interface ToolBodyProps {
@@ -699,12 +701,71 @@ function ArtifactEntry({ tool, conversationId }: { tool: ToolTrace; conversation
   )
 }
 
+function askOutcomeBadgeTone(outcome: AskUserToolOutcome): BadgeTone {
+  switch (outcome) {
+    case 'answered':
+      return 'ok'
+    case 'cancelled':
+    case 'superseded':
+      return 'neutral'
+    case 'error':
+      return 'err'
+  }
+}
+
+function AskUserToolBody({ tool, conversationId, resultFetch }: ToolBodyProps): ReactNode {
+  const { t } = useWebLocale()
+  const meta = useMemo(() => parseAskUserToolMeta(tool.presentationMeta), [tool.presentationMeta])
+  if (meta === undefined) {
+    return <GenericToolBody tool={tool} conversationId={conversationId} resultFetch={resultFetch} />
+  }
+  const hasItems = meta.items !== undefined && meta.items.length > 0
+  const isGenericTitle = meta.title === 'Clarifying Questions' || meta.title === '问题确认'
+  const showHeader = !hasItems || !isGenericTitle
+  const outcomeLabel =
+    meta.outcome === 'answered'
+      ? t('conv.ask.outcomeAnswered')
+      : meta.outcome === 'cancelled'
+        ? t('conv.ask.outcomeCancelled')
+        : meta.outcome === 'superseded'
+          ? t('conv.ask.outcomeSuperseded')
+          : t('conv.ask.outcomeError')
+  const countLabel =
+    meta.questionCount === 1
+      ? t('conv.ask.toolQuestionSingle')
+      : t('conv.ask.toolQuestionsCount', { count: meta.questionCount })
+  return (
+    <>
+      {showHeader ? (
+        <div className="ask-user-tool-head">
+          <span className="ask-user-tool-title">{meta.title}</span>
+          <Badge tone="neutral">{countLabel}</Badge>
+          <Badge tone={askOutcomeBadgeTone(meta.outcome)}>{outcomeLabel}</Badge>
+        </div>
+      ) : null}
+      {hasItems ? (
+        <div className="kv-list trace-kv ask-user-tool-items">
+          {meta.items!.map((item) => (
+            <Fragment key={item.id}>
+              <span className="kv-key">{item.question}</span>
+              <span className="kv-val">{item.answer}</span>
+            </Fragment>
+          ))}
+        </div>
+      ) : tool.isError && tool.resultText !== undefined && tool.resultText.trim() !== '' ? (
+        <span className="trace-tool-note">{tool.resultText}</span>
+      ) : null}
+    </>
+  )
+}
+
 /** Small built-in dispatch table: not an extension framework; unmatched tools take the generic key-value shape. */
 const TOOL_BODY_MAP: Record<string, (props: ToolBodyProps) => ReactNode> = {
   edit: EditToolBody,
   write: WriteToolBody,
   read: ReadToolBody,
   bash: BashToolBody,
+  ask_user: AskUserToolBody,
 }
 
 export function ToolRawBody({ tool, conversationId }: { tool: ToolTrace; conversationId: number }): ReactNode {

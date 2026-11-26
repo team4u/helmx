@@ -5,8 +5,12 @@
  * - 启动时分页遍历全量校验持久条目（坏记录在插件定义阶段显式失败，不带病运行）；
  * - `depthFactsOf` 纯 O(1) 内存查询（零 structuredClone 开销），与 before_turn / tool / agent_spawn 三道防线共用。
  */
-import { HelmxError, type PluginKvHandle } from '@helmx/protocol'
-import { HARD_MAX_SUBAGENT_DEPTH } from '../contracts.js'
+import { HelmxError, type PluginKvHandle, type ProvidedCapability } from '@helmx/protocol'
+import {
+  HARD_MAX_SUBAGENT_DEPTH,
+  type ConversationDepthCapability,
+  type ConversationDepthFact,
+} from '../contracts.js'
 
 /** 受管子代理登记条目（持久事实）。 */
 export interface ManagedSubagentEntry {
@@ -74,9 +78,34 @@ function validateEntry(conversationId: number, entry: ManagedSubagentEntry): Man
   return entry
 }
 
+function validateExternalDepthFact(
+  conversationId: number,
+  pluginId: string,
+  fact: ConversationDepthFact,
+): ConversationDepthFact {
+  if (
+    fact === null ||
+    typeof fact !== 'object' ||
+    Array.isArray(fact) ||
+    !Number.isInteger(fact.depth) ||
+    fact.depth < 1 ||
+    fact.depth > HARD_MAX_SUBAGENT_DEPTH ||
+    (fact.leaf !== undefined && typeof fact.leaf !== 'boolean')
+  ) {
+    throw new HelmxError(
+      'subagent_record_invalid',
+      `插件 ${pluginId} 返回的会话 ${conversationId} 深度事实无效`,
+      500,
+      { conversationId, pluginId },
+    )
+  }
+  return fact
+}
+
 export function createManagedSubagentRegistry(deps: {
   kv: PluginKvHandle<ManagedSubagentEntry>
   configuredMaxSubagentDepth: () => number
+  externalDepthSources?: () => ReadonlyArray<ProvidedCapability<ConversationDepthCapability>>
 }): ManagedSubagentRegistry {
   const { kv } = deps
   const entries = new Map<number, ManagedSubagentEntry>()
@@ -103,10 +132,31 @@ export function createManagedSubagentRegistry(deps: {
 
   function depthFactsOf(conversationId: number): { managed: boolean; depth: number; maxSubagentDepth: number; forked: boolean } {
     const entry = entries.get(conversationId)
-    if (entry === undefined) {
-      return { managed: false, depth: 0, maxSubagentDepth: deps.configuredMaxSubagentDepth(), forked: false }
+    if (entry !== undefined) {
+      return { managed: true, depth: entry.depth, maxSubagentDepth: entry.maxSubagentDepth, forked: entry.forked === true }
     }
-    return { managed: true, depth: entry.depth, maxSubagentDepth: entry.maxSubagentDepth, forked: entry.forked === true }
+    if (deps.externalDepthSources !== undefined) {
+      let matched = false
+      let depth = 0
+      let isLeaf = false
+      for (const provider of deps.externalDepthSources()) {
+        const raw = provider.impl?.depthOf?.(conversationId)
+        if (raw === undefined) continue
+        const validated = validateExternalDepthFact(conversationId, provider.pluginId, raw)
+        matched = true
+        if (validated.depth > depth) depth = validated.depth
+        if (validated.leaf === true) isLeaf = true
+      }
+      if (matched) {
+        return {
+          managed: true,
+          depth,
+          maxSubagentDepth: isLeaf ? depth : Math.max(depth, deps.configuredMaxSubagentDepth()),
+          forked: false,
+        }
+      }
+    }
+    return { managed: false, depth: 0, maxSubagentDepth: deps.configuredMaxSubagentDepth(), forked: false }
   }
 
   function registerManagedSubagent(

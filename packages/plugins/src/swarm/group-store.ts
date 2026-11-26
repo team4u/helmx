@@ -388,6 +388,20 @@ export function createCollabGroupRuntime(
     return undefined
   }
 
+  const findWorkerMember = (id: number): { group: CollabGroupRecord; member: GroupMemberState } | undefined => {
+    for (const g of groupsById.values()) {
+      if (g.status !== 'active') continue
+      const member = g.members.find((m) => m.conversationId === id && m.lifecycle === 'active')
+      if (member) return { group: g, member }
+    }
+    const sorted = [...groupsById.values()].sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
+    for (const g of sorted) {
+      const member = g.members.find((m) => m.conversationId === id)
+      if (member) return { group: g, member }
+    }
+    return undefined
+  }
+
   const findLatestGroupForConversation = (id: number): CollabGroupRecord | undefined =>
     findGroupByParticipant(id)?.group ??
     [...groupsById.values()]
@@ -480,6 +494,7 @@ export function createCollabGroupRuntime(
     getGroup: (id) => groupsById.get(id),
     findActiveGroupByCoordinator,
     findGroupByParticipant,
+    findWorkerMember,
     findLatestGroupForConversation,
     getPosts: (id) => postsByGroup.get(id) ?? [],
     ensurePostsLoaded: healing.ensurePostsLoaded,

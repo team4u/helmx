@@ -306,6 +306,7 @@ export function assembleRuntimeServices(
     store: options.store,
     validateConversation: (id) => options.store.getConv(id) !== undefined,
     assertWritable: options.assertWritable,
+    redact: (t) => options.stashService.redact(t),
     onEvent: (type, payload) => events.publish(type, payload),
     onConvPendingChanged: (id) => {
       tracker.setPendingAskCount(id, asks.pendingCount(id))
@@ -345,6 +346,19 @@ export function assembleRuntimeServices(
     cancelPendingAsksForRewrite: async (id) => {
       const pendingAsks = asks.listPendingByConversation(id)
       await Promise.all(pendingAsks.map((ask) => asks.cancelAsk(ask.id, 'superseded')))
+    },
+    supersedePendingAsks: async (id) => {
+      const pendingAsks = asks.listPendingByConversation(id)
+      for (const ask of pendingAsks) {
+        try {
+          await asks.cancelAsk(ask.id, 'superseded')
+        } catch (err) {
+          if (err instanceof HelmxError && (err.code === 'ask_already_settled' || err.code === 'not_found')) {
+            continue
+          }
+          throw err
+        }
+      }
     },
     markOwnership: (id, owner) => ownership.markOwnership(id, owner),
     ownershipOf: (id) => ownership.getOwnership(id),
@@ -401,6 +415,7 @@ export function assembleRuntimeServices(
       conversations.isArtifactAuthorized(convId, artifactConvId),
     redact: (t) => options.stashService.redact(t),
     getConversation: (id) => conversations.getConversation(id),
+    asks,
   })
 
   // ---- Asset hot-reload coordinator ----

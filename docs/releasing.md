@@ -55,7 +55,7 @@ CLI 与 node 的附加门：
 ```bash
 # 0. 一次性前置：在 npmjs.com 为 @helmx/hub / @helmx/cli / @helmx/node 配置 Trusted
 #    Publisher（repository team4u/helmx、workflow release.yml、environment 留空），见上文；
-# 1. 预览（不修改任何文件）
+# 1. 预览（只读：不跑本地门禁，不修改任何文件）
 pnpm release --dry-run
 # 2. 正式发版：本地门禁 → 锁步 bump → chore(release) 提交 → 推送 main 与 tag
 pnpm release --minor --push        # 档位见下文；或 --patch / --major / --prerelease / 显式版本号

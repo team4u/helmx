@@ -46,15 +46,15 @@ pnpm helmx workflows run ./review.js --args '{"pr": 1024, "strict": true}' --con
 | :--- | :--- | :--- |
 | `label` | `string` | 展示名；同时是本 run 内 `resume` 的引用句柄 |
 | `phase` | `string` | 所属阶段名（覆盖当前 ambient 阶段） |
-| `model` | `string` | 模型覆盖，如 `'provider/model'` |
-| `agentType` | `string` | Profile ID（专家角色标识） |
+| `model` | `string` | 模型覆盖，支持语义档位 `'tier/<id>'` 或具体 `'provider/model'`（传 `'tier/<id>'` 且省略 `effort` 时继承档位预设思考力度） |
+| `agentType` | `string` | 原生 Profile ID（小写 `a-z0-9-`，不带 `@`）或插件认领的外部运行时 `<namespace>:<kind>`；不要把 `'tier/<id>'` 或具体模型填进 `agentType`（模型请走 `model`） |
 | `isolation` | `'worktree'` | 启用独立 Git Worktree 隔离（唯一合法值） |
 | `gate` | `string` | 验收 shell 命令，退出码非 0 或超时判定失败；完整结果（`exitCode`、`timedOut`）经 `agent.withMeta` 回传 |
 | `resume` | `string` | 续接本 run 内既有智能体的 label |
 | `effort` | `string` | 思考力度：`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
 | `schema` | `object` | 结构化输出的 JSON Schema |
 | `attachments` | `string[]` | 本次调用携带的产物 ID 列表 |
-| `maxSubagentDepth` | `number` | 相对任务树根的绝对子代理层级上限（1..5 整数；默认继承上限 2，根会话为第 0 层）。根会话可为大任务提高上限；受管子代理不得提高继承上限。续接未传时保留授权，显式设置重新校验；字段参与恢复缓存指纹 |
+| `maxSubagentDepth` | `number` | 相对任务树根的绝对子代理层级上限（1..5 整数；默认继承上限 1，根会话为第 0 层）。根会话可为大任务提高上限；受管子代理不得提高继承上限。续接未传时保留授权，显式设置重新校验；字段参与恢复缓存指纹 |
 | `nodeId` | `string` | 目标计算节点 ID（匹配 `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`；覆写 Profile/父会话默认节点；显式 `'local'` 可切回 Hub 本机；指向远端节点时需提供 `cwd` 或使用同节点兼容的 Profile `cwd`）。字段参与恢复缓存指纹 |
 | `cwd` | `string` | 子代理工作目录（跨平台绝对路径）。不带 `isolation` 时直接在该目录运行；带 `isolation: 'worktree'` 时从该目录切出子级 Worktree。字段参与恢复缓存指纹 |
 | `timeoutMs` | `number` | 单回合超时毫秒数（1_000 .. 3_600_000 整数）。超时中止子会话并按失败返回；只限制执行时限，不改变调用身份，不记入恢复缓存 Key |
@@ -80,7 +80,7 @@ const result = await agent("提取提交的修改范围与风险点", {
 if (result === null) throw new Error("结构化输出校验失败")
 ```
 
-**跨 Profile 点名**：`agentType` 填真实 Profile ID（如 `reviewer`），不带 `@` 前缀，也不是显示名。用户在会话里写 `@reviewer` 是向当前智能体点名——那只是认知约定，实际执行仍由当前会话经 `subagent` 的 `agentType`（或脚本内 `agent()`）落地，点名本身不构成授权。
+**跨 Profile 点名与模型档位区分**：`agentType` 填真实 Profile ID（如 `ops` 或 `lx`）或插件认领的外部运行时 `<namespace>:<kind>`，不带 `@` 前缀，也不是显示名；选择模型档位（如 `model: "tier/reviewer"`）则始终走 `model` 参数，不能填进 `agentType`。用户在会话里写 `@ops` 是向当前智能体点名——那只是认知约定，实际执行仍由当前会话经 `subagent` 的 `agentType`（或脚本内 `agent()`）落地，点名本身不构成授权。
 
 **同步节点语义**：`agent()` 没有也不接受 `background` 选项——run 内的 DSL 节点始终等待真实结果（可用键固定列表不含 `background`，传未知选项名直接报错）。后台策略发生在工具层：`subagent` / `SubagentWorkflow` 模型工具按当前会话归属缺省（人类直连会话缺省后台、自动化会话缺省同步且显式 `background: true` 被拒绝）；CLI/动作 `pnpm helmx workflows run` 则是缺省启动即返回、`--wait` 才同步。三个入口互不混同，不要在脚本里期待后台句柄。
 

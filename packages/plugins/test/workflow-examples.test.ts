@@ -398,7 +398,7 @@ describe('module-dev example', () => {
     assert.equal(t1.cwd, MOD_WT.path)
     assert.equal(t1.isolation, 'worktree')
     assert.equal(t1.model, 'provider/c')
-    assert.equal(t1.maxSubagentDepth, 2)
+    assert.equal(t1.maxSubagentDepth, 1)
     assert.equal(t1.timeoutMs, 300_000)
     assert.equal(t1.gateTimeoutMs, 120_000)
     assert.ok(t1.gate!.includes('pnpm test model'))

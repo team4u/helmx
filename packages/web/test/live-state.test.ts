@@ -97,7 +97,6 @@ test('同一批到达的 ask.upsert/resolved 记录准确，插件停用清除�
   state = applyEventFrame(state, { seq: 11, event: { type: 'ask.upsert', ask: { ...ask, fields: [] } } })
   state = applyEventFrame(state, { seq: 12, event: { type: 'ask.resolved', askId: 'a', status: 'superseded' } })
   assert.deepEqual(state.pendingAsks, [])
-  assert.equal(state.resolvedAsksByConv[1]?.[0]?.status, 'superseded')
   state = { ...state, pluginDocs: { 'p/doc': { secret: false } } }
   const plugin = { id: 'p', name: 'P', version: '1', enabled: false, locked: false, hooks: [], actions: [], tools: [] }
   state = applyEventFrame(state, { seq: 13, event: { type: 'plugin.changed', plugin, ui: [] } })

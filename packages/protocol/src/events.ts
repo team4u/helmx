@@ -7,7 +7,7 @@
  * always fall back to a full snapshot alignment — never a fake success across a gap.
  */
 
-import type { AskSpec } from './ask.js'
+import type { AskAnswers, AskSpec } from './ask.js'
 import type { Profile } from './assets.js'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from './conversation.js'
 import type { ConversationLiveDelta } from './live-delta.js'
@@ -122,6 +122,7 @@ export interface AskResolvedEvent {
   type: 'ask.resolved'
   askId: string
   status: 'answered' | 'cancelled' | 'superseded'
+  answers?: AskAnswers
 }
 
 export interface PluginChangedEvent {
