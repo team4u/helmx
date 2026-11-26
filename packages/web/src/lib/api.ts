@@ -1,6 +1,7 @@
 import type {
   ActionManifest,
   ArtifactMetadata,
+  AskAnswers,
   AskSpec,
   AuthStatus,
   AuthToken,
@@ -412,7 +413,7 @@ export const nodesApi = {
 
 export const asksApi = {
   list: (opts?: { signal?: AbortSignal }) => apiRequest<AskSpec[]>('GET', '/api/asks', undefined, opts?.signal),
-  answer: (askId: string, answers: Record<string, string>, expectedStateSeq?: number) =>
+  answer: (askId: string, answers: AskAnswers, expectedStateSeq?: number) =>
     apiRequest<{ ok: boolean }>('POST', `/api/asks/${encodeURIComponent(askId)}/answer`, {
       answers,
       ...(expectedStateSeq !== undefined ? { expectedStateSeq } : {}),

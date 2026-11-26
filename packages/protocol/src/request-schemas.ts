@@ -80,9 +80,14 @@ const ConversationInputSchema = Type.Object(
   { additionalProperties: false },
 )
 
+const AskAnswerValueSchema = Type.Union([
+  Type.String(),
+  Type.Array(NonEmptyString, { maxItems: 32 }),
+])
+
 const AskAnswerSchema = Type.Object(
   {
-    answers: Type.Object({}, { additionalProperties: Type.String() }),
+    answers: Type.Object({}, { additionalProperties: AskAnswerValueSchema }),
     expectedStateSeq: Type.Optional(SafeNonNegativeInt),
   },
   { additionalProperties: false },

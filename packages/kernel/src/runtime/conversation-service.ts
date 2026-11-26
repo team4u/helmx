@@ -90,6 +90,8 @@ interface ConversationServiceOptions {
   readonly cancelAsksByConversation: (id: number) => Promise<void>
   /** Supersede pending asks before in-place rewrite+resend (host injects asks.listPendingByConversation + cancelAsk). */
   readonly cancelPendingAsksForRewrite: (id: number) => Promise<void>
+  /** Supersede pending asks when direct human input arrives (host injects idempotent ask settlement). */
+  readonly supersedePendingAsks?: (id: number) => Promise<void>
   /** Ownership annotation (host-injected). */
   readonly markOwnership: (id: number, owner: ConversationOwnership) => void
   /** Current ownership lookup (for summary projection). */
@@ -1219,7 +1221,11 @@ export class ConversationService {
     }
     // Re-read metadata after prepareInput so mutations performed by onInput hooks (e.g. tags) are preserved.
     this.inputPipeline.applyFirstInputTitle(requireConv(this.store, id), prepared.effectiveText)
-    return this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
+    const submitted = await this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
+    if (prepared.finalInput.origin === 'human' && prepared.finalWhenBusy !== 'reject') {
+      await this.o.supersedePendingAsks?.(id)
+    }
+    return submitted
   }
 
   // ------------------------------------------------------------------

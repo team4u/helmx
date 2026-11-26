@@ -20,6 +20,7 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { AskDock } = await import('../src/conversation/AskDock.js')
 const { ResolvedAskRow } = await import('../src/conversation/TimelineAuxRows.js')
+const { ToolExpandedBody } = await import('../src/conversation/ToolExpandedBody.js')
 const { makeTestStore } = await import('./helpers/store.js')
 type HelmxExternalStore = import('../src/lib/helmx-store.js').HelmxExternalStore
 const { TestStoreProvider } = await import('./helpers/host-store.js')
@@ -851,5 +852,392 @@ describe("ask-dock", () => {
         executionThinkingLevel: '',
       },
     })
+  })
+
+  test('question AskDock removes radio dots, shows keycaps & recommended badge, and requires explicit Confirm without auto-submit', { timeout: 60_000 }, async () => {
+    installFetch()
+    const questionAsk: AskSpec = {
+      id: 'ask-q-single',
+      conversationId: 1,
+      ownerPluginId: 'core:ask_user',
+      kind: 'question',
+      title: 'Pick Framework',
+      fields: [
+        {
+          name: 'framework',
+          label: 'Which framework should we scaffold?',
+          type: 'choice',
+          required: true,
+          options: [
+            { value: 'react', label: 'React', recommended: true, description: 'Team default' },
+            { value: 'vue', label: 'Vue', description: 'Lightweight SPA' },
+          ],
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [questionAsk] }), 1)
+
+    const card = document.querySelector<HTMLFormElement>('form.ask-dock')!
+    assert.ok(card.classList.contains('ask-dock--question'))
+    assert.equal(card.getAttribute('data-ask-kind'), 'question')
+    assert.equal(document.querySelectorAll('.ask-dock-choice-radio').length, 0)
+
+    const statusEl = card.querySelector('.ask-dock-header .helmx-status-light')
+    assert.match(statusEl?.textContent ?? '', /Awaiting reply/)
+    assert.deepEqual(
+      [...card.querySelectorAll('.ask-dock-choice-key')].map((el) => el.textContent),
+      ['1', '2'],
+    )
+    assert.match(card.querySelector('.ask-dock-choice-badge')?.textContent ?? '', /Recommended/)
+
+    const radios = [...card.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    await act(async () => {
+      radios[1]!.click()
+    })
+    assert.equal(radios[1]?.getAttribute('aria-checked'), 'true')
+    assert.equal(posts.length, 0, 'single-question choice click must highlight without auto-submitting')
+
+    const actionLabels = [...card.querySelectorAll<HTMLButtonElement>('.ask-dock-actions button')].map((b) =>
+      b.textContent?.trim(),
+    )
+    assert.ok(actionLabels.includes('Skip'))
+    assert.ok(actionLabels.includes('Confirm'))
+
+    const confirmBtn = card.querySelector<HTMLButtonElement>('button[type="submit"]')!
+    await act(async () => {
+      confirmBtn.click()
+    })
+    assert.equal(posts.length, 1)
+    assert.deepEqual(posts[0]?.body, { answers: { framework: 'vue' } })
+  })
+
+  test('multi-select choice uses role=checkbox, supports inline Other custom input + IME Enter guard, and submits string[]', { timeout: 60_000 }, async () => {
+    installFetch()
+    const multiAsk: AskSpec = {
+      id: 'ask-q-multi',
+      conversationId: 1,
+      kind: 'question',
+      title: 'Capabilities',
+      fields: [
+        {
+          name: 'features',
+          label: 'Select features to enable',
+          type: 'choice',
+          multiple: true,
+          allowCustom: true,
+          required: true,
+          placeholder: 'Add custom capability...',
+          options: [
+            { value: 'auth', label: 'Authentication' },
+            { value: 'db', label: 'Database' },
+          ],
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [multiAsk] }), 1)
+
+    const group = document.querySelector('[role="group"]')
+    assert.ok(group !== null)
+    const boxes = [...document.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')]
+    assert.equal(boxes.length, 3, 'two preset options + Other custom option')
+
+    await act(async () => {
+      boxes[0]!.click()
+    })
+    await act(async () => {
+      boxes[1]!.click()
+    })
+    assert.equal(boxes[0]?.getAttribute('aria-checked'), 'true')
+    assert.equal(boxes[1]?.getAttribute('aria-checked'), 'true')
+
+    await act(async () => {
+      boxes[2]!.click()
+    })
+    assert.equal(boxes[2]?.getAttribute('aria-checked'), 'true')
+    const customInput = document.querySelector<HTMLInputElement>('.ask-dock-choice-custom input.input')!
+    assert.ok(customInput !== null)
+    assert.equal(customInput.placeholder, 'Add custom capability...')
+    assert.ok(document.activeElement === customInput, 'activating Other focuses the inline custom input')
+
+    await act(async () => {
+      setInputValue(customInput, 'audit-log')
+    })
+    const composingEnter = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    await act(async () => {
+      customInput.dispatchEvent(composingEnter)
+    })
+    assert.equal(composingEnter.defaultPrevented, true, 'IME composing Enter must not submit')
+    assert.equal(posts.length, 0)
+
+    const submitBtn = document.querySelector<HTMLButtonElement>('button[type="submit"]')!
+    await act(async () => {
+      submitBtn.click()
+    })
+    assert.equal(posts.length, 1)
+    assert.deepEqual(posts[0]?.body, {
+      answers: {
+        features: ['auth', 'db', 'audit-log'],
+      },
+    })
+  })
+
+  test('digit shortcuts 1-9 select preset or activate Other without stealing focus inside inputs', { timeout: 60_000 }, async () => {
+    installFetch()
+    const customSingleAsk: AskSpec = {
+      id: 'ask-q-digits',
+      conversationId: 1,
+      kind: 'question',
+      title: 'Target Runtime',
+      fields: [
+        {
+          name: 'runtime',
+          label: 'Runtime',
+          type: 'choice',
+          allowCustom: true,
+          required: true,
+          options: [
+            { value: 'node', label: 'Node.js' },
+            { value: 'deno', label: 'Deno' },
+          ],
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [customSingleAsk] }), 1)
+
+    const card = document.querySelector<HTMLFormElement>('form.ask-dock')!
+    const radios = [...card.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    card.focus()
+
+    await act(async () => {
+      card.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true, cancelable: true }))
+    })
+    assert.equal(radios[1]?.getAttribute('aria-checked'), 'true')
+    assert.equal(posts.length, 0)
+
+    // Key 3 activates "Other" inline input and focuses it
+    await act(async () => {
+      card.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true, cancelable: true }))
+    })
+    const customInput = card.querySelector<HTMLInputElement>('.ask-dock-choice-custom input.input')!
+    assert.ok(customInput !== null)
+    assert.ok(document.activeElement === customInput)
+
+    // Digit key typed inside input must NOT jump back to preset option 1
+    await act(async () => {
+      customInput.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true, cancelable: true }))
+    })
+    assert.equal(radios[0]?.getAttribute('aria-checked'), 'false')
+
+    await act(async () => {
+      setInputValue(customInput, 'bun')
+    })
+    await act(async () => {
+      customInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.equal(posts.length, 1)
+    assert.deepEqual(posts[0]?.body, { answers: { runtime: 'bun' } })
+  })
+
+  test('multi-question prompt renders 1/N stepper, hides inactive steps, auto-advances on single-select click, and submits via Confirm', { timeout: 60_000 }, async () => {
+    installFetch()
+    const stepperAsk: AskSpec = {
+      id: 'ask-q-stepper',
+      conversationId: 1,
+      kind: 'question',
+      title: 'Service Wizard',
+      fields: [
+        {
+          name: 'transport',
+          label: 'Transport',
+          type: 'choice',
+          required: true,
+          options: [
+            { value: 'http', label: 'HTTP' },
+            { value: 'grpc', label: 'gRPC' },
+          ],
+        },
+        {
+          name: 'addons',
+          label: 'Add-ons',
+          type: 'choice',
+          multiple: true,
+          required: true,
+          options: [
+            { value: 'metrics', label: 'Metrics' },
+            { value: 'tracing', label: 'Tracing' },
+          ],
+        },
+        {
+          name: 'notes',
+          label: 'Notes',
+          type: 'text',
+          multiline: true,
+          required: false,
+          placeholder: 'Optional rollout notes',
+        },
+      ],
+      status: 'pending',
+      createdAt: 100,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [stepperAsk] }), 1)
+
+    const card = document.querySelector<HTMLFormElement>('form.ask-dock')!
+    const counter = () => card.querySelector('.ask-dock-step-counter')?.textContent?.trim()
+    const panels = [...card.querySelectorAll<HTMLElement>('.ask-dock-step-panel')]
+    assert.equal(counter(), '1 / 3')
+    assert.deepEqual(panels.map((p) => p.hidden), [false, true, true])
+
+    // Arrow key navigation on step 0 does NOT skip ahead
+    const step0Radios = [...panels[0]!.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    await act(async () => {
+      step0Radios[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    })
+    assert.equal(counter(), '1 / 3')
+
+    // Explicit click on preset option auto-advances to next unanswered step (2 / 3)
+    await act(async () => {
+      step0Radios[0]!.click()
+    })
+    assert.equal(counter(), '2 / 3')
+    assert.deepEqual(panels.map((p) => p.hidden), [true, false, true])
+
+    // Multi-select step lets user toggle multiple without jumping away
+    const step1Boxes = [...panels[1]!.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')]
+    await act(async () => {
+      step1Boxes[0]!.click()
+    })
+    await act(async () => {
+      step1Boxes[1]!.click()
+    })
+    assert.equal(counter(), '2 / 3')
+
+    // Previous button goes back to 1 / 3; pill jumps directly to 3 / 3
+    const prevBtn = [...card.querySelectorAll<HTMLButtonElement>('.ask-dock-step-actions button')].find((b) =>
+      b.textContent?.includes('Previous'),
+    )!
+    await act(async () => {
+      prevBtn.click()
+    })
+    assert.equal(counter(), '1 / 3')
+
+    const pills = [...card.querySelectorAll<HTMLButtonElement>('.ask-dock-step-pill')]
+    await act(async () => {
+      pills[2]!.click()
+    })
+    assert.equal(counter(), '3 / 3')
+    const textarea = panels[2]!.querySelector<HTMLTextAreaElement>('textarea.textarea')!
+    assert.ok(textarea !== null)
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+      setter?.call(textarea, 'canary first')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    const confirmBtn = card.querySelector<HTMLButtonElement>('button[type="submit"]')!
+    await act(async () => {
+      confirmBtn.click()
+    })
+    assert.equal(posts.length, 1)
+    assert.deepEqual(posts[0]?.body, {
+      answers: {
+        transport: 'http',
+        addons: ['metrics', 'tracing'],
+        notes: 'canary first',
+      },
+    })
+  })
+
+  test('ResolvedAskRow shows Question/Replied + formatted Q&A answers, and ToolExpandedBody renders AskUserToolBody', { timeout: 60_000 }, async () => {
+    const resolvedQuestion: AskSpec = {
+      id: 'ask-resolved-q',
+      conversationId: 1,
+      kind: 'question',
+      title: 'Scaffold Choices',
+      fields: [
+        {
+          name: 'stack',
+          label: 'Stack',
+          type: 'choice',
+          multiple: true,
+          options: [
+            { value: 'ts', label: 'TypeScript' },
+            { value: 'py', label: 'Python' },
+          ],
+        },
+        {
+          name: 'proceed',
+          label: 'Proceed?',
+          type: 'confirm',
+          confirmLabel: 'Go now',
+        },
+      ],
+      status: 'answered',
+      createdAt: 100,
+    }
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(
+        e(
+          TestStoreProvider,
+          { value: makeStore() },
+          e('div', null,
+            e(ResolvedAskRow, {
+              ask: resolvedQuestion,
+              status: 'answered',
+              answers: { stack: ['ts', 'rust'], proceed: 'true' },
+            }),
+            e(ToolExpandedBody, {
+              conversationId: 1,
+              tool: {
+                key: 'tool:ask_user:1',
+                toolName: 'ask_user',
+                callId: 'call-1',
+                status: 'done',
+                isError: false,
+                presentationMeta: {
+                  title: 'Database Choice',
+                  questionCount: 1,
+                  outcome: 'answered',
+                  items: [{ id: 'db', question: 'Engine?', answer: 'sqlite (SQLite)' }],
+                },
+              },
+            }),
+          ),
+        ),
+      )
+    })
+
+    const rowBtn = host.querySelector<HTMLButtonElement>('.trace-row')!
+    assert.match(rowBtn.textContent ?? '', /Question/)
+    assert.match(rowBtn.textContent ?? '', /Scaffold Choices/)
+    assert.match(rowBtn.textContent ?? '', /Replied/)
+
+    await act(async () => {
+      rowBtn.click()
+    })
+    const qaText = host.querySelector('.ask-dock-resolved-qa')?.textContent ?? ''
+    assert.match(qaText, /TypeScript, rust/)
+    assert.match(qaText, /Go now/)
+
+    const toolHead = host.querySelector('.ask-user-tool-head')?.textContent ?? ''
+    assert.match(toolHead, /Database Choice/)
+    assert.match(toolHead, /1 question/)
+    assert.match(toolHead, /Answered/)
+    const toolItems = host.querySelector('.ask-user-tool-items')?.textContent ?? ''
+    assert.match(toolItems, /Engine\?/)
+    assert.match(toolItems, /sqlite \(SQLite\)/)
   })
 })

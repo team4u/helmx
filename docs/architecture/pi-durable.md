@@ -74,9 +74,11 @@ stateDiagram-v2
 
 `SecretStash` 防的是**持久化泄漏与上下文泄漏**：提示词注入、日志落盘、数据库文件被读取都拿不到已登记明文。但它**不承诺对可信代码零泄漏**：任意 Shell 命令与进程内插件（含全栈微应用）天然拥有宿主权限，可以读环境变量、扫描进程内存——这是可信代码的固有权限，本模块不设防也不应宣称设防。
 
-## AskDoc：CAS 乐观锁审批
+## AskDoc 与 `ask_user`：通用人机提问与 CAS 乐观锁审批
 
-智能体或插件需要人类确认时创建 `AskDoc` 并把会话置为 `blocked`。字段类型支持 `text`（文本输入）、`select`（单选列表）与 `confirm`（确认框）。`ctx.host.createAsk(spec)` 返回 Promise，正常三态终局（`answered / cancelled / superseded`）均 resolve，只有验证/I/O/宿主失败才 reject——调用方无需区分「人取消了」与「系统坏了」。
+智能体或插件需要人类澄清或确认时创建 `AskDoc`（支持 `kind: 'question' | 'approval'`）并把会话置为 `blocked`。字段类型支持 `text`（含 `multiline`、`placeholder`）、`select`（单选列表）、`choice`（结构化选项卡片，支持 `recommended` 推荐徽标、`multiple` 多选返回 `string[]`、`allowCustom` 内联「其他」自定义输入）、`confirm`（确认框，支持 `confirmLabel`/`rejectLabel`）与 `model`。`ctx.host.createAsk(spec)` 返回 Promise，正常三态终局（`answered / cancelled / superseded`）均 resolve，只有验证/I/O/宿主失败才 reject——调用方无需区分「人取消了」与「系统坏了」；结算事件 `ask.resolved` 同步携带经 `SecretStash` 脱敏后的 `answers` 供时间线回看。
+
+内核提供内建工具 `ask_user`（`ownerPluginId = 'core:ask_user'`，仅注入顶层人类直连会话，自动从子代理与 `ownedBy: 'helmx'` 会话剥离），统一承接普通模式与计划模式下的结构化澄清提问；人类用户在 Composer 直接发送非 `whenBusy: 'reject'` 的新输入时，内核提交新输入后自动将同一会话的挂起 AskDoc 结算为 `superseded`，重启初始化时也会自动清理残留的孤儿 `core:ask_user` AskDoc，避免会话永久卡死在 `blocked`。
 
 ### expectedStateSeq 防竞态
 

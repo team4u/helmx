@@ -21,6 +21,18 @@
   gap: 10px;
 }
 
+.ask-dock--question {
+  border-color: var(--accent-border);
+}
+
+.ask-dock--approval {
+  border-color: var(--warn-border);
+}
+
+.ask-dock:focus:not(:focus-visible) {
+  outline: none;
+}
+
 .ask-dock-header {
   display: flex;
   align-items: center;
@@ -89,6 +101,102 @@
   overflow: auto;
 }
 
+.ask-dock-step-counter {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  flex-shrink: 0;
+}
+
+.ask-dock-stepper {
+  min-width: 0;
+}
+
+.ask-dock-step-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ask-dock-step-pill {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 220px;
+  min-width: 0;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.ask-dock-step-pill:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.ask-dock-step-pill:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.ask-dock-step-pill--active {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.ask-dock-step-pill--answered:not(.ask-dock-step-pill--active) {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.ask-dock-step-num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  opacity: 0.78;
+  flex-shrink: 0;
+}
+
+.ask-dock-step-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-dock-step-check {
+  color: var(--ok, var(--accent));
+  flex-shrink: 0;
+}
+
+.ask-dock-step-panel[hidden] {
+  display: none;
+}
+
+.ask-dock-choice-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ask-dock-choice-meta {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
 .ask-dock-choice-group {
   display: flex;
   flex-direction: column;
@@ -99,9 +207,9 @@
   appearance: none;
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 11px;
   margin: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -140,28 +248,29 @@
   border-color: var(--accent);
 }
 
-.ask-dock-choice-radio {
+.ask-dock-choice-key {
   flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
-  border-radius: 50%;
-  border: 1.5px solid var(--border-strong);
-  background: var(--bg-elevated);
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
   box-sizing: border-box;
-  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
 }
 
-.ask-dock-choice-btn--selected .ask-dock-choice-radio {
-  border-color: var(--accent);
-}
-
-.ask-dock-choice-btn--selected .ask-dock-choice-radio::after {
-  content: '';
-  position: absolute;
-  inset: 3px;
-  border-radius: 50%;
-  background: var(--accent);
+.ask-dock-choice-btn--selected .ask-dock-choice-key {
+  border-color: var(--accent-border);
+  background: var(--bg-elevated);
+  color: var(--accent);
 }
 
 .ask-dock-choice-body {
@@ -170,6 +279,14 @@
   gap: 2px;
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.ask-dock-choice-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
 
 .ask-dock-choice-label {
@@ -184,6 +301,10 @@
   color: var(--accent);
 }
 
+.ask-dock-choice-badge {
+  flex-shrink: 0;
+}
+
 .ask-dock-choice-desc {
   font-size: 12px;
   line-height: 1.35;
@@ -191,8 +312,76 @@
   overflow-wrap: anywhere;
 }
 
+.ask-dock-choice-check {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+
+.ask-dock-choice-check--multi {
+  border-radius: var(--radius-xs);
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-elevated);
+  box-sizing: border-box;
+}
+
+.ask-dock-choice-check--multi.ask-dock-choice-check--active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg-elevated);
+}
+
+.ask-dock-choice-custom {
+  padding: 2px 0 2px 30px;
+}
+
+.ask-dock-footer-hints {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
 .ask-dock-hint {
   margin-top: 2px;
+}
+
+.ask-dock-shortcut-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+
+.ask-dock-resolved-desc {
+  margin-bottom: 6px;
+}
+
+.ask-dock-resolved-qa {
+  margin-top: 4px;
+}
+
+.ask-user-tool-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.ask-user-tool-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ask-user-tool-items {
+  margin-bottom: 8px;
 }
 
 .ask-dock .composer-picker-root {

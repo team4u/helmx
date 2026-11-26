@@ -3,7 +3,7 @@
  * (`parseStoredAskSpec`, `parseStoredAskResult`) for `helmx_asks`.
  */
 
-import { HelmxError, isPlainObject, parseLocalizedText } from '@helmx/protocol'
+import { HelmxError, isPlainObject, parseLocalizedText, parseNonEmptyLocalizedText, type AskAnswers } from '@helmx/protocol'
 import type { SqliteExecutor } from '@earendil-works/chord/sqlite'
 import { addConvIndex, parseStoredJson, removeConvIndex } from './shared.js'
 import type { SqliteMirrorQueue } from './write-queue.js'
@@ -254,6 +254,9 @@ export function parseStoredAskSpec(
   if (parsed.description !== undefined && parseLocalizedText(parsed.description) === undefined) {
     throw corrupted('invalid spec.description')
   }
+  if (parsed.kind !== undefined && parsed.kind !== 'question' && parsed.kind !== 'approval') {
+    throw corrupted('invalid spec.kind')
+  }
   if (parsed.hint !== undefined && parseLocalizedText(parsed.hint) === undefined) {
     throw corrupted('invalid spec.hint')
   }
@@ -278,8 +281,46 @@ export function parseStoredAskSpec(
     if (field.required !== undefined && typeof field.required !== 'boolean') {
       throw corrupted(`field '${field.name}' has invalid required flag`)
     }
-    if (field.defaultValue !== undefined && typeof field.defaultValue !== 'string') {
-      throw corrupted(`field '${field.name}' has invalid defaultValue`)
+    if (field.multiple !== undefined && (field.type !== 'choice' || typeof field.multiple !== 'boolean')) {
+      throw corrupted(`field '${field.name}' has invalid multiple flag`)
+    }
+    if (field.allowCustom !== undefined && (field.type !== 'choice' || typeof field.allowCustom !== 'boolean')) {
+      throw corrupted(`field '${field.name}' has invalid allowCustom flag`)
+    }
+    if (field.multiline !== undefined && (field.type !== 'text' || typeof field.multiline !== 'boolean')) {
+      throw corrupted(`field '${field.name}' has invalid multiline flag`)
+    }
+    if (field.placeholder !== undefined) {
+      if (field.type !== 'text' && !(field.type === 'choice' && field.allowCustom === true)) {
+        throw corrupted(`field '${field.name}' has placeholder on unsupported field type`)
+      }
+      if (parseLocalizedText(field.placeholder) === undefined) {
+        throw corrupted(`field '${field.name}' has invalid placeholder`)
+      }
+    }
+    if (
+      field.confirmLabel !== undefined &&
+      (field.type !== 'confirm' || parseNonEmptyLocalizedText(field.confirmLabel) === undefined)
+    ) {
+      throw corrupted(`field '${field.name}' has invalid confirmLabel`)
+    }
+    if (
+      field.rejectLabel !== undefined &&
+      (field.type !== 'confirm' || parseNonEmptyLocalizedText(field.rejectLabel) === undefined)
+    ) {
+      throw corrupted(`field '${field.name}' has invalid rejectLabel`)
+    }
+    if (field.defaultValue !== undefined) {
+      if (field.type === 'choice' && field.multiple === true) {
+        if (
+          !Array.isArray(field.defaultValue) ||
+          (field.defaultValue as unknown[]).some((item) => typeof item !== 'string' || item.trim() === '')
+        ) {
+          throw corrupted(`field '${field.name}' has invalid multi-choice defaultValue`)
+        }
+      } else if (typeof field.defaultValue !== 'string') {
+        throw corrupted(`field '${field.name}' has invalid defaultValue`)
+      }
     }
     if (field.thinkingLevelField !== undefined) {
       if (
@@ -299,7 +340,8 @@ export function parseStoredAskSpec(
             typeof o.value !== 'string' ||
             o.value.length === 0 ||
             (o.label !== undefined && parseLocalizedText(o.label) === undefined) ||
-            (o.description !== undefined && parseLocalizedText(o.description) === undefined),
+            (o.description !== undefined && parseLocalizedText(o.description) === undefined) ||
+            (o.recommended !== undefined && typeof o.recommended !== 'boolean'),
         )
       ) {
         throw corrupted(`${field.type} field '${field.name}' has invalid options`)
@@ -309,15 +351,17 @@ export function parseStoredAskSpec(
   return parsed
 }
 
-export function parseStoredAskResult(what: string, raw: string): Record<string, string> {
+export function parseStoredAskResult(what: string, raw: string): AskAnswers {
   const parsed = parseStoredJson<unknown>(what, raw)
-  if (!isPlainObject(parsed) || Object.values(parsed).some((v) => typeof v !== 'string')) {
+  const isValidVal = (v: unknown): boolean =>
+    typeof v === 'string' || (Array.isArray(v) && v.every((item) => typeof item === 'string'))
+  if (!isPlainObject(parsed) || Object.values(parsed).some((v) => !isValidVal(v))) {
     throw new HelmxError(
       'store_data_corrupted',
-      `Persisted data corrupted (${what}): expected JSON object mapping field names to strings`,
+      `Persisted data corrupted (${what}): expected JSON object mapping field names to strings or string arrays`,
       500,
       { what, raw: raw.slice(0, 200) },
     )
   }
-  return parsed as Record<string, string>
+  return parsed as AskAnswers
 }

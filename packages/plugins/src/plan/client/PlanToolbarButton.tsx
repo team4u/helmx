@@ -58,15 +58,9 @@ function PlanToolbarButtonConversation({ conversationId }: { conversationId: num
     )
   }
 
-  const awaitingClarification = effectiveView.awaitingClarification === true && !effectiveView.awaitingApproval
-  const label =
-    visual === 'awaiting'
-      ? t(awaitingClarification ? PLAN_COPY.toolbarAwaitingClarification : PLAN_COPY.toolbarAwaiting)
-      : t(PLAN_COPY.toolbarPlanning)
+  const label = visual === 'awaiting' ? t(PLAN_COPY.toolbarAwaiting) : t(PLAN_COPY.toolbarPlanning)
   const baseTitle =
-    visual === 'awaiting'
-      ? t(awaitingClarification ? PLAN_COPY.toolbarTitleAwaitingClarification : PLAN_COPY.toolbarTitleAwaiting)
-      : t(PLAN_COPY.toolbarTitlePlanning)
+    visual === 'awaiting' ? t(PLAN_COPY.toolbarTitleAwaiting) : t(PLAN_COPY.toolbarTitlePlanning)
   const title = docError ? `${baseTitle} (${docError})` : baseTitle
   const stateClass = visual === 'awaiting' ? 'plan-toolbar-btn--awaiting' : 'plan-toolbar-btn--planning'
 
@@ -87,10 +81,7 @@ function PlanToolbarButtonConversation({ conversationId }: { conversationId: num
       {pending ? (
         <HelmxIcon name="loader" size={11} className="spin-slow" />
       ) : visual === 'awaiting' ? (
-        <StatusLight
-          tone="blocked"
-          aria-label={t(awaitingClarification ? PLAN_COPY.modeClarifying : PLAN_COPY.modeAwaiting)}
-        />
+        <StatusLight tone="blocked" aria-label={t(PLAN_COPY.modeAwaiting)} />
       ) : (
         <HelmxIcon name="list-tree" size={11.5} />
       )}

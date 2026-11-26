@@ -2,13 +2,14 @@
  * Auxiliary timeline rows extracted from ConversationTimeline:
  * ContextDivider, PluginCard, ResolvedAskRow, TurnErrorNotice, and TimelineLiveWaitingRow.
  */
-import { useState } from 'react'
-import { resolveLocalizedText, type AskSpec, type ConversationSummary } from '@helmx/protocol/browser'
+import { Fragment, useState } from 'react'
+import { resolveLocalizedText, type AskAnswers, type AskKind, type AskSpec, type ConversationSummary } from '@helmx/protocol/browser'
 import { Button, HelmxIcon, useSharedNowMs } from '@helmx/plugin-client'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatStopwatchMs, resolveConversationTiming } from '../lib/format.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { formatAskAnswerSummary, resolveAskKind } from './ask-dock-model.js'
 import type { DividerItem, EditRequestTarget, PluginCardItem } from './timeline-model.js'
 
 export function ContextDivider({ item }: { item: DividerItem }) {
@@ -70,29 +71,65 @@ export function PluginCard({ item, conversationId }: { item: PluginCardItem; con
   )
 }
 
-function resolvedAskLabel(status: string, t: WebMessageTranslator): string {
-  if (status === 'answered') return t('conv.ask.approved')
-  if (status === 'cancelled') return t('conv.ask.cancelled')
+function resolvedAskLabel(status: string, kind: AskKind, t: WebMessageTranslator): string {
+  if (status === 'answered') return kind === 'question' ? t('conv.ask.replied') : t('conv.ask.approved')
+  if (status === 'cancelled') return kind === 'question' ? t('conv.ask.skipped') : t('conv.ask.cancelled')
   if (status === 'superseded') return t('conv.ask.superseded')
   return status
 }
 
-export function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answered' | 'cancelled' | 'superseded' }) {
+export function ResolvedAskRow({
+  ask,
+  status,
+  answers,
+}: {
+  ask: AskSpec
+  status: 'answered' | 'cancelled' | 'superseded'
+  answers?: AskAnswers
+}) {
   const { locale, t } = useWebLocale()
   const [open, setOpen] = useState(false)
+  const kind = resolveAskKind(ask)
+  const isQuestion = kind === 'question'
+  const labels = isQuestion
+    ? {
+        skipped: t('conv.ask.skipped'),
+        yes: t('composer.ask.confirmYes'),
+        no: t('composer.ask.confirmNo'),
+      }
+    : {
+        skipped: t('conv.ask.skipped'),
+        yes: t('composer.ask.approve'),
+        no: t('composer.ask.reject'),
+      }
+  const hasQaBody = status === 'answered' && answers !== undefined && ask.fields.length > 0
   return (
     <div className="trace-entry">
       <button type="button" className="trace-row" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         <span className="trace-row-left">
-          <HelmxIcon name="check-circle" size={12} />
-          <span className="trace-tool-name">{t('conv.ask.rowTitle')}</span>
+          <HelmxIcon name={isQuestion ? 'message-circle' : 'check-circle'} size={12} />
+          <span className="trace-tool-name">{t(isQuestion ? 'conv.ask.questionRowTitle' : 'conv.ask.rowTitle')}</span>
           <span className="trace-tool-summary">{resolveLocalizedText(ask.title, locale)}</span>
         </span>
-        <span className="trace-row-right">{resolvedAskLabel(status, t)}</span>
+        <span className="trace-row-right">{resolvedAskLabel(status, kind, t)}</span>
       </button>
       {open ? (
         <div className="trace-expanded-body selectable">
-          {ask.description !== undefined ? <span>{resolveLocalizedText(ask.description, locale)}</span> : null}
+          {ask.description !== undefined ? (
+            <div className="ask-dock-resolved-desc">{resolveLocalizedText(ask.description, locale)}</div>
+          ) : null}
+          {hasQaBody ? (
+            <div className="kv-list trace-kv ask-dock-resolved-qa">
+              {ask.fields.map((field) => (
+                <Fragment key={field.name}>
+                  <span className="kv-key">{resolveLocalizedText(field.label, locale)}</span>
+                  <span className="kv-val">
+                    {formatAskAnswerSummary(field, answers[field.name], locale, labels)}
+                  </span>
+                </Fragment>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

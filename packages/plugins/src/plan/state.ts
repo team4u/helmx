@@ -69,13 +69,10 @@ export function createEmptyPlanSessionView(): PlanSessionView {
 
 export function toPlanSessionView(record: PlanConversationRecord | undefined): PlanSessionView {
   if (record === undefined) return createEmptyPlanSessionView()
-  const hasPending = record.mode === 'planning' && record.pendingAskId !== undefined
-  const awaitingClarification = hasPending && record.pendingAskKind === 'clarify'
-  const awaitingApproval = hasPending && !awaitingClarification
+  const awaitingApproval = record.mode === 'planning' && record.pendingAskId !== undefined
   return {
     mode: record.mode,
     awaitingApproval,
-    ...(awaitingClarification ? { awaitingClarification: true } : {}),
     ...(record.draft !== undefined ? { draft: record.draft } : {}),
     ...(record.approved !== undefined ? { approved: record.approved } : {}),
   }
@@ -85,13 +82,6 @@ export function toPlanBadgeEntry(record: PlanConversationRecord | undefined): Pl
   if (record === undefined) return undefined
   if (record.mode === 'planning') {
     if (record.pendingAskId !== undefined) {
-      if (record.pendingAskKind === 'clarify') {
-        return {
-          count: 1,
-          tone: 'warn',
-          footerText: { en: 'Awaiting clarification', 'zh-CN': '等待澄清回复' },
-        }
-      }
       return {
         count: 1,
         tone: 'warn',
@@ -321,12 +311,7 @@ export function createPlanStateManager(deps: {
     const nextRecord: PlanConversationRecord = {
       conversationId,
       mode: nextMode,
-      ...(keepPendingAskId !== undefined
-        ? {
-            pendingAskId: keepPendingAskId,
-            ...(latest?.pendingAskKind !== undefined ? { pendingAskKind: latest.pendingAskKind } : {}),
-          }
-        : {}),
+      ...(keepPendingAskId !== undefined ? { pendingAskId: keepPendingAskId } : {}),
       ...(latest?.draft !== undefined ? { draft: latest.draft } : {}),
       ...(latest?.approved !== undefined ? { approved: latest.approved } : {}),
     }
@@ -356,7 +341,7 @@ export function createPlanStateManager(deps: {
       await cancelAskSafe(askId, 'superseded')
       const latest = getRecord(conversationId)
       if (latest === undefined || latest.pendingAskId !== askId) return
-      const { pendingAskId: _removed, pendingAskKind: _removedKind, ...rest } = latest
+      const { pendingAskId: _removed, ...rest } = latest
       writeRecord(conversationId, rest)
       try {
         await flushKv()
@@ -501,7 +486,7 @@ export function createPlanStateManager(deps: {
         const latest = getRecord(candidate.conversationId)
         if (latest === undefined || latest.pendingAskId !== candidate.pendingAskId) return
         await cancelAskSafe(latest.pendingAskId!, 'superseded')
-        const { pendingAskId: _removed, pendingAskKind: _removedKind, ...rest } = latest
+        const { pendingAskId: _removed, ...rest } = latest
         writeRecord(candidate.conversationId, rest)
         changed = true
       })

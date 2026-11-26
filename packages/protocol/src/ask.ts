@@ -1,9 +1,14 @@
 /**
- * AskDoc approval contract: structured human-in-the-loop prompts with optional expectedStateSeq guard.
+ * AskDoc approval & question contract: structured human-in-the-loop prompts with optional expectedStateSeq guard.
  */
 import type { LocalizedText } from './locale.js'
 
+export type AskKind = 'question' | 'approval'
+
 export type AskFieldType = 'text' | 'select' | 'confirm' | 'choice' | 'model'
+
+export type AskAnswerValue = string | string[]
+export type AskAnswers = Record<string, AskAnswerValue>
 
 /** A single candidate option of a select or choice field. */
 export interface AskFieldOption {
@@ -11,9 +16,11 @@ export interface AskFieldOption {
   value: string
   /** Optional secondary description shown below or beside the option label. */
   description?: LocalizedText
+  /** Whether this option should display a recommended badge in the UI. */
+  recommended?: boolean
 }
 
-/** Definition of a single question field. */
+/** Definition of a single question or approval field. */
 export interface AskFieldSpec {
   name: string
   label: LocalizedText
@@ -21,8 +28,24 @@ export interface AskFieldSpec {
   /** Candidate list when type is select or choice. */
   options?: Array<AskFieldOption>
   required?: boolean
-  /** Optional pre-selected initial value (must match an option value for select/choice, or 'true'|'false' for confirm when non-empty). */
-  defaultValue?: string
+  /**
+   * Optional pre-selected initial value:
+   * - `string[]` when `type === 'choice'` and `multiple === true`
+   * - `string` otherwise (must match an option value for select or strict choice, or 'true'|'false' for confirm when non-empty).
+   */
+  defaultValue?: AskAnswerValue
+  /** Whether a choice field allows selecting multiple options (valid only when `type === 'choice'`). */
+  multiple?: boolean
+  /** Whether a choice field allows inline custom free-text answers (valid only when `type === 'choice'`; defaults to false). */
+  allowCustom?: boolean
+  /** Whether a text field uses multiline textarea input (valid only when `type === 'text'`). */
+  multiline?: boolean
+  /** Optional placeholder shown in text fields or inline custom choice inputs. */
+  placeholder?: LocalizedText
+  /** Custom positive button label (valid only when `type === 'confirm'`). */
+  confirmLabel?: LocalizedText
+  /** Custom negative button label (valid only when `type === 'confirm'`). */
+  rejectLabel?: LocalizedText
   /** Optional companion answer key for thinking level (valid only when type is 'model'). */
   thinkingLevelField?: string
 }
@@ -34,6 +57,8 @@ export interface AskSpec {
   id: string
   conversationId: number
   ownerPluginId?: string
+  /** Semantic tone of the prompt ('question' for model clarifications, 'approval' for confirmations/gates; defaults to 'approval' in UI when omitted). */
+  kind?: AskKind
   title: LocalizedText
   description?: LocalizedText
   /** Optional subtle guidance text displayed below the form fields. */
@@ -61,13 +86,13 @@ export interface AskResult {
   id: string
   status: 'answered' | 'cancelled' | 'superseded'
   /** fieldName -> answer value; an empty object in non-answered states. */
-  answers: Record<string, string>
+  answers: AskAnswers
 }
 
 /** Human-submitted answers (`POST /api/asks/:id/answer`). */
 export interface AskAnswer {
   askId: string
   /** fieldName -> answer value. */
-  answers: Record<string, string>
+  answers: AskAnswers
   answeredAt: number
 }

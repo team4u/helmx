@@ -35,6 +35,7 @@ import {
   REQUEST_SCHEMA_PATTERNS,
   isStrictSemver,
   stripSemverVPrefix,
+  type AskAnswers,
   type ConversationOwnership,
   type ConversationScope,
   type ConversationStatus,
@@ -1137,7 +1138,7 @@ function registerAskCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRe
     cli: { command: ['asks', 'answer'] },
     inputSchema: extendRequestSchema(REQUEST_SCHEMAS.askAnswer, { id: ID_STRING }, ['id']),
     outputSchema: OK_OUTPUT_SCHEMA,
-    handler: async (input: { id: string; answers: Record<string, string>; expectedStateSeq?: number }) => {
+    handler: async (input: { id: string; answers: AskAnswers; expectedStateSeq?: number }) => {
       await runtime.asks.answerAsk(input.id, { ...input.answers }, input.expectedStateSeq)
       return { ok: true }
     },

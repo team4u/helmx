@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   ARTIFACT_READ_META_SCHEMA,
   ARTIFACT_REGISTER_META_SCHEMA,
+  ASK_USER_TOOL_META_SCHEMA,
   BASH_TOOL_META_SCHEMA,
   EDIT_TOOL_RESULT_SCHEMA,
   HelmxError,
@@ -520,6 +521,7 @@ test('kernel builtin tool presentationMeta schemas compile and enforce strict sh
   assert.equal(KERNEL_TOOL_PRESENTATION_META_SCHEMAS['bash'], BASH_TOOL_META_SCHEMA)
   assert.equal(KERNEL_TOOL_PRESENTATION_META_SCHEMAS['register_artifact'], ARTIFACT_REGISTER_META_SCHEMA)
   assert.equal(KERNEL_TOOL_PRESENTATION_META_SCHEMAS['read_artifact'], ARTIFACT_READ_META_SCHEMA)
+  assert.equal(KERNEL_TOOL_PRESENTATION_META_SCHEMAS['ask_user'], ASK_USER_TOOL_META_SCHEMA)
 
   assertBoundedPresentationMeta({ path: '/a.ts', nodeId: 'local' }, { schema: READ_TOOL_META_SCHEMA })
   assert.throws(() => assertBoundedPresentationMeta({ path: '/a.ts', nodeId: 'local', content: 'leak' }, { schema: READ_TOOL_META_SCHEMA }))
@@ -546,9 +548,26 @@ test('kernel builtin tool presentationMeta schemas compile and enforce strict sh
   assert.throws(() =>
     assertBoundedPresentationMeta({ id: 'a1', offset: 0, nextOffset: 4096, bytes: 4096, chunk: 'duplicated-body' }, { schema: ARTIFACT_READ_META_SCHEMA }),
   )
+
+  assertBoundedPresentationMeta(
+    {
+      title: 'Clarify',
+      questionCount: 1,
+      outcome: 'answered',
+      items: [{ id: 'db', question: 'Which DB?', answer: 'postgres' }],
+    },
+    { schema: ASK_USER_TOOL_META_SCHEMA },
+  )
+  assertBoundedPresentationMeta({ title: 'Clarify', questionCount: 2, outcome: 'superseded' }, { schema: ASK_USER_TOOL_META_SCHEMA })
+  assert.throws(() =>
+    assertBoundedPresentationMeta(
+      { title: 'Clarify', questionCount: 0, outcome: 'answered' },
+      { schema: ASK_USER_TOOL_META_SCHEMA },
+    ),
+  )
 })
 
-test('KERNEL_TOOL_NAMES is the single source of truth for the 7 foundational kernel tools', { timeout: 60_000 }, () => {
+test('KERNEL_TOOL_NAMES is the single source of truth for the 8 foundational kernel tools', { timeout: 60_000 }, () => {
   const expected: readonly KernelToolName[] = [
     'bash',
     'read',
@@ -557,6 +576,7 @@ test('KERNEL_TOOL_NAMES is the single source of truth for the 7 foundational ker
     'read_artifact',
     'register_artifact',
     'run_action',
+    'ask_user',
   ]
   assert.deepEqual([...KERNEL_TOOL_NAMES], [...expected])
   assert.equal(new Set(KERNEL_TOOL_NAMES).size, KERNEL_TOOL_NAMES.length)

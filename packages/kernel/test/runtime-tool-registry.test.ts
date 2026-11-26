@@ -46,7 +46,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.deepEqual(res.output, [{ type: 'text', text: 'normal-output' }])
   })
 
-  it('installKernelTools: registers helmx-core extension (7 core tools) all wrapped with wrapToolExecute', { timeout: 60_000 }, async () => {
+  it('installKernelTools: registers helmx-core extension (8 core tools) all wrapped with wrapToolExecute', { timeout: 60_000 }, async () => {
     const installed: Extension[] = []
     const fakeRegistry = {
       install(ext: Extension) {
@@ -124,7 +124,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     const toolNames = coreExt.tools!.map((t) => t.name)
     assert.deepEqual(
       toolNames.sort(),
-      ['bash', 'edit', 'read', 'read_artifact', 'register_artifact', 'run_action', 'write'].sort(),
+      ['ask_user', 'bash', 'edit', 'read', 'read_artifact', 'register_artifact', 'run_action', 'write'].sort(),
     )
 
     // Verify run_action meta-tool behavior

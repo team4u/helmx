@@ -17,7 +17,7 @@
  * - after restart, pending asks remain and emit diagnostic notifications.
  */
 
-import type { AskCreateSpec, AskResult, AskSpec } from '@helmx/protocol'
+import type { AskAnswers, AskAnswerValue, AskCreateSpec, AskFieldSpec, AskResult, AskSpec } from '@helmx/protocol'
 import { HelmxError, isPlainObject, parseLocalizedText, parseNonEmptyLocalizedText } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 
@@ -26,11 +26,15 @@ import type { HelmxStore } from './store.js'
 interface AskSettled {
   askId: string
   status: 'answered' | 'cancelled' | 'superseded'
-  answers?: Record<string, string>
+  answers?: AskAnswers
 }
 
 /** Waiter settlement outcome: normal terminal state or host-side failure (IO/persistence), causing createAsk to reject. */
 type WaiterOutcome = AskSettled | { failure: unknown }
+
+function redactAnswerValue(value: AskAnswerValue, redact: (text: string) => string): AskAnswerValue {
+  return Array.isArray(value) ? value.map((item) => redact(item)) : redact(value)
+}
 
 export class AskService {
   private readonly store: HelmxStore
@@ -46,6 +50,7 @@ export class AskService {
   /** Conversation existence validation port (injected by host; omitted in standalone AskService unit tests). */
   private readonly validateConversation?: (conversationId: number) => boolean | Promise<boolean>
   private readonly assertWritable: () => void
+  private readonly redact: (text: string) => string
 
   constructor(options: {
     store: HelmxStore
@@ -53,12 +58,14 @@ export class AskService {
     onConvPendingChanged: (conversationId: number) => void
     validateConversation?: (conversationId: number) => boolean | Promise<boolean>
     assertWritable?: () => void
+    redact?: (text: string) => string
   }) {
     this.store = options.store
     this.onEvent = options.onEvent
     this.onConvPendingChanged = options.onConvPendingChanged
     this.validateConversation = options.validateConversation
     this.assertWritable = options.assertWritable ?? (() => {})
+    this.redact = options.redact ?? ((text) => text)
   }
 
   listAsks(status?: string): AskSpec[] {
@@ -205,7 +212,7 @@ export class AskService {
    */
   async answerAsk(
     id: string,
-    answers: Record<string, string>,
+    answers: AskAnswers,
     expectedStateSeq?: number,
   ): Promise<AskSpec> {
     this.assertWritable()
@@ -254,12 +261,18 @@ export class AskService {
 
     validateAnswersAgainstFields(spec, answers)
 
-    const stored: Record<string, string> = {}
+    const stored: AskAnswers = {}
     for (const field of spec.fields) {
-      stored[field.name] = answers[field.name] ?? ''
+      const raw = answers[field.name]
+      if (field.type === 'choice' && field.multiple === true) {
+        stored[field.name] = Array.isArray(raw) ? raw.map((item) => this.redact(item)) : []
+      } else {
+        stored[field.name] = this.redact(typeof raw === 'string' ? raw : '')
+      }
       if (field.type === 'model' && typeof field.thinkingLevelField === 'string' && field.thinkingLevelField !== '') {
-        if (answers[field.thinkingLevelField] !== undefined) {
-          stored[field.thinkingLevelField] = answers[field.thinkingLevelField]!
+        const thinkingRaw = answers[field.thinkingLevelField]
+        if (typeof thinkingRaw === 'string') {
+          stored[field.thinkingLevelField] = this.redact(thinkingRaw)
         }
       }
     }
@@ -274,6 +287,16 @@ export class AskService {
       throw new HelmxError('ask_already_settled', `AskDoc is already in ${row.status} state`, 409)
     }
     return this.settle(id, reason)
+  }
+
+  /** Settle all pending asks owned by `ownerPluginId` as `'superseded'` (e.g. startup recovery of orphaned asks). */
+  async supersedeOrphanedByOwner(ownerPluginId: string): Promise<number> {
+    this.assertWritable()
+    const orphaned = this.listAsks('pending').filter((ask) => ask.ownerPluginId === ownerPluginId)
+    for (const ask of orphaned) {
+      await this.settle(ask.id, 'superseded')
+    }
+    return orphaned.length
   }
 
   /** Startup diagnostics: emit notifications for leftover pending asks (never silently swallow). */
@@ -302,7 +325,7 @@ export class AskService {
   private async settle(
     id: string,
     status: 'answered' | 'cancelled' | 'superseded',
-    options: { answers?: Record<string, string> } = {},
+    options: { answers?: AskAnswers } = {},
   ): Promise<AskSpec> {
     const row = this.store.getAsk(id)
     if (!row) throw new HelmxError('not_found', `AskDoc not found: ${id}`, 404)
@@ -313,7 +336,12 @@ export class AskService {
       const spec = parseAskSpecRow(row)
       const settledSpec: AskSpec = { ...spec, status }
       // Never write fake answers on cancelled/superseded (result is populated only for answered).
-      const answers = status === 'answered' ? (options.answers ?? {}) : undefined
+      const answers =
+        status === 'answered'
+          ? Object.fromEntries(
+              Object.entries(options.answers ?? {}).map(([k, v]) => [k, redactAnswerValue(v, this.redact)]),
+            )
+          : undefined
       this.store.putAsk({
         ...row,
         status,
@@ -324,7 +352,10 @@ export class AskService {
       // Terminal state must persist to disk before emitting events or notifying waiters; SQL failure must never fake a terminal state.
       await this.store.flushPublic()
       this.onConvPendingChanged(spec.conversationId)
-      this.onEvent('ask.resolved', { askId: id, status })
+      this.onEvent(
+        'ask.resolved',
+        answers !== undefined ? { askId: id, status, answers } : { askId: id, status },
+      )
       const waiters = this.waiters.get(id) ?? []
       this.waiters.delete(id)
       for (const waiter of waiters) waiter({ askId: id, status, answers })
@@ -338,6 +369,69 @@ export class AskService {
       throw error
     }
   }
+}
+
+function isValidAskFieldRow(f: unknown): boolean {
+  if (
+    !isPlainObject(f) ||
+    typeof f.name !== 'string' ||
+    f.name.length === 0 ||
+    parseLocalizedText(f.label) === undefined
+  ) {
+    return false
+  }
+  if (f.type !== 'text' && f.type !== 'select' && f.type !== 'confirm' && f.type !== 'choice' && f.type !== 'model') {
+    return false
+  }
+  if (f.required !== undefined && typeof f.required !== 'boolean') return false
+  if (f.multiple !== undefined && (f.type !== 'choice' || typeof f.multiple !== 'boolean')) return false
+  if (f.allowCustom !== undefined && (f.type !== 'choice' || typeof f.allowCustom !== 'boolean')) return false
+  if (f.multiline !== undefined && (f.type !== 'text' || typeof f.multiline !== 'boolean')) return false
+  if (f.placeholder !== undefined) {
+    if (f.type !== 'text' && !(f.type === 'choice' && f.allowCustom === true)) return false
+    if (parseLocalizedText(f.placeholder) === undefined) return false
+  }
+  if (f.confirmLabel !== undefined && (f.type !== 'confirm' || parseNonEmptyLocalizedText(f.confirmLabel) === undefined)) {
+    return false
+  }
+  if (f.rejectLabel !== undefined && (f.type !== 'confirm' || parseNonEmptyLocalizedText(f.rejectLabel) === undefined)) {
+    return false
+  }
+  if (f.defaultValue !== undefined) {
+    if (f.type === 'choice' && f.multiple === true) {
+      if (
+        !Array.isArray(f.defaultValue) ||
+        f.defaultValue.some((item) => typeof item !== 'string' || item.trim() === '')
+      ) {
+        return false
+      }
+    } else if (typeof f.defaultValue !== 'string') {
+      return false
+    }
+  }
+  if (
+    f.thinkingLevelField !== undefined &&
+    (f.type !== 'model' || typeof f.thinkingLevelField !== 'string' || f.thinkingLevelField.trim() === '')
+  ) {
+    return false
+  }
+  if (f.type === 'select' || f.type === 'choice') {
+    if (
+      !Array.isArray(f.options) ||
+      f.options.some(
+        (o) =>
+          !isPlainObject(o) ||
+          typeof o.value !== 'string' ||
+          o.value.length === 0 ||
+          (o.label !== undefined && parseLocalizedText(o.label) === undefined) ||
+          (o.description !== undefined && parseLocalizedText(o.description) === undefined) ||
+          (o.recommended !== undefined && typeof o.recommended !== 'boolean'),
+      )
+    ) {
+      return false
+    }
+  }
+  return true
 }
 
 /** Parse and structurally validate a persisted AskRow specJson (fails loudly with store_data_corrupted instead of raw SyntaxError/TypeError). */
@@ -359,6 +453,7 @@ function parseAskSpecRow(row: { id: string; specJson: string }): AskSpec {
     parsed.id.length === 0 ||
     !Number.isInteger(parsed.conversationId) ||
     (parsed.conversationId as number) <= 0 ||
+    (parsed.kind !== undefined && parsed.kind !== 'question' && parsed.kind !== 'approval') ||
     parseLocalizedText(parsed.title) === undefined ||
     (parsed.description !== undefined && parseLocalizedText(parsed.description) === undefined) ||
     (parsed.hint !== undefined && parseLocalizedText(parsed.hint) === undefined) ||
@@ -369,29 +464,7 @@ function parseAskSpecRow(row: { id: string; specJson: string }): AskSpec {
     typeof parsed.createdAt !== 'number' ||
     !Number.isFinite(parsed.createdAt) ||
     !Array.isArray(parsed.fields) ||
-    parsed.fields.some(
-      (f) =>
-        !isPlainObject(f) ||
-        typeof f.name !== 'string' ||
-        f.name.length === 0 ||
-        parseLocalizedText(f.label) === undefined ||
-        (f.defaultValue !== undefined && typeof f.defaultValue !== 'string') ||
-        (f.thinkingLevelField !== undefined &&
-          (f.type !== 'model' ||
-            typeof f.thinkingLevelField !== 'string' ||
-            f.thinkingLevelField.trim() === '')) ||
-        (f.type !== 'text' && f.type !== 'select' && f.type !== 'confirm' && f.type !== 'choice' && f.type !== 'model') ||
-        ((f.type === 'select' || f.type === 'choice') &&
-          (!Array.isArray(f.options) ||
-            f.options.some(
-              (o) =>
-                !isPlainObject(o) ||
-                typeof o.value !== 'string' ||
-                o.value.length === 0 ||
-                (o.label !== undefined && parseLocalizedText(o.label) === undefined) ||
-                (o.description !== undefined && parseLocalizedText(o.description) === undefined),
-            ))),
-    )
+    parsed.fields.some((f) => !isValidAskFieldRow(f))
   ) {
     throw new HelmxError(
       'store_data_corrupted',
@@ -416,6 +489,9 @@ function validateAskSpec(spec: AskCreateSpec): void {
   }
   if (!Number.isInteger(spec.conversationId) || (spec.conversationId ?? 0) <= 0) {
     throw new HelmxError('validation_error', 'AskDoc requires conversationId (positive integer)')
+  }
+  if (spec.kind !== undefined && spec.kind !== 'question' && spec.kind !== 'approval') {
+    throw new HelmxError('validation_error', `AskDoc kind must be 'question' | 'approval' (got '${String(spec.kind)}')`)
   }
   if (parseNonEmptyLocalizedText(spec.title) === undefined) {
     throw new HelmxError('validation_error', 'AskDoc requires title (non-empty string or LocalizedText map)')
@@ -456,9 +532,6 @@ function validateAskSpec(spec: AskCreateSpec): void {
         `field '${field.name}' label must be a non-empty string or LocalizedText map`,
       )
     }
-    if (field.defaultValue !== undefined && typeof field.defaultValue !== 'string') {
-      throw new HelmxError('validation_error', `field '${field.name}' defaultValue must be a string`)
-    }
     if (
       field.type !== 'text' &&
       field.type !== 'select' &&
@@ -470,6 +543,66 @@ function validateAskSpec(spec: AskCreateSpec): void {
         'validation_error',
         `invalid type for field '${field.name}': ${String(field.type)} (only text | select | confirm | choice | model)`,
       )
+    }
+    if (field.multiple !== undefined) {
+      if (field.type !== 'choice') {
+        throw new HelmxError('validation_error', `field '${field.name}' multiple is only allowed on choice fields`)
+      }
+      if (typeof field.multiple !== 'boolean') {
+        throw new HelmxError('validation_error', `field '${field.name}' multiple must be a boolean`)
+      }
+    }
+    if (field.allowCustom !== undefined) {
+      if (field.type !== 'choice') {
+        throw new HelmxError('validation_error', `field '${field.name}' allowCustom is only allowed on choice fields`)
+      }
+      if (typeof field.allowCustom !== 'boolean') {
+        throw new HelmxError('validation_error', `field '${field.name}' allowCustom must be a boolean`)
+      }
+    }
+    if (field.multiline !== undefined) {
+      if (field.type !== 'text') {
+        throw new HelmxError('validation_error', `field '${field.name}' multiline is only allowed on text fields`)
+      }
+      if (typeof field.multiline !== 'boolean') {
+        throw new HelmxError('validation_error', `field '${field.name}' multiline must be a boolean`)
+      }
+    }
+    if (field.placeholder !== undefined) {
+      if (field.type !== 'text' && !(field.type === 'choice' && field.allowCustom === true)) {
+        throw new HelmxError(
+          'validation_error',
+          `field '${field.name}' placeholder is only allowed on text or allowCustom choice fields`,
+        )
+      }
+      if (parseLocalizedText(field.placeholder) === undefined) {
+        throw new HelmxError(
+          'validation_error',
+          `field '${field.name}' placeholder must be a string or valid LocalizedText map`,
+        )
+      }
+    }
+    if (field.confirmLabel !== undefined) {
+      if (field.type !== 'confirm') {
+        throw new HelmxError('validation_error', `field '${field.name}' confirmLabel is only allowed on confirm fields`)
+      }
+      if (parseNonEmptyLocalizedText(field.confirmLabel) === undefined) {
+        throw new HelmxError(
+          'validation_error',
+          `field '${field.name}' confirmLabel must be a non-empty string or LocalizedText map`,
+        )
+      }
+    }
+    if (field.rejectLabel !== undefined) {
+      if (field.type !== 'confirm') {
+        throw new HelmxError('validation_error', `field '${field.name}' rejectLabel is only allowed on confirm fields`)
+      }
+      if (parseNonEmptyLocalizedText(field.rejectLabel) === undefined) {
+        throw new HelmxError(
+          'validation_error',
+          `field '${field.name}' rejectLabel must be a non-empty string or LocalizedText map`,
+        )
+      }
     }
     if (field.thinkingLevelField !== undefined) {
       if (field.type !== 'model') {
@@ -503,7 +636,8 @@ function validateAskSpec(spec: AskCreateSpec): void {
             typeof o.value !== 'string' ||
             o.value === '' ||
             parseNonEmptyLocalizedText(o.label) === undefined ||
-            (o.description !== undefined && parseLocalizedText(o.description) === undefined),
+            (o.description !== undefined && parseLocalizedText(o.description) === undefined) ||
+            (o.recommended !== undefined && typeof o.recommended !== 'boolean'),
         )
       ) {
         throw new HelmxError(
@@ -511,28 +645,63 @@ function validateAskSpec(spec: AskCreateSpec): void {
           `${field.type} field '${field.name}' requires non-empty options (each with a non-empty value, LocalizedText label, and optional LocalizedText description)`,
         )
       }
-      if (
-        field.defaultValue !== undefined &&
-        field.defaultValue !== '' &&
-        !field.options.some((o) => o.value === field.defaultValue)
-      ) {
-        throw new HelmxError(
-          'validation_error',
-          `defaultValue '${field.defaultValue}' for ${field.type} field '${field.name}' must match an option value`,
-        )
-      }
     }
-    if (
-      field.type === 'confirm' &&
-      field.defaultValue !== undefined &&
-      field.defaultValue !== '' &&
-      field.defaultValue !== 'true' &&
-      field.defaultValue !== 'false'
-    ) {
-      throw new HelmxError(
-        'validation_error',
-        `defaultValue for confirm field '${field.name}' must be 'true' | 'false'`,
-      )
+    if (field.defaultValue !== undefined) {
+      if (field.type === 'choice' && field.multiple === true) {
+        if (!Array.isArray(field.defaultValue)) {
+          throw new HelmxError(
+            'validation_error',
+            `field '${field.name}' defaultValue must be a string array when multiple is true`,
+          )
+        }
+        const seen = new Set<string>()
+        for (const item of field.defaultValue) {
+          if (typeof item !== 'string' || item.trim() === '') {
+            throw new HelmxError(
+              'validation_error',
+              `field '${field.name}' defaultValue items must be non-empty strings`,
+            )
+          }
+          if (seen.has(item)) {
+            throw new HelmxError(
+              'validation_error',
+              `field '${field.name}' defaultValue contains duplicate value '${item}'`,
+            )
+          }
+          seen.add(item)
+          if (field.allowCustom !== true && !(field.options ?? []).some((o) => o.value === item)) {
+            throw new HelmxError(
+              'validation_error',
+              `defaultValue '${item}' for choice field '${field.name}' must match an option value`,
+            )
+          }
+        }
+      } else {
+        if (typeof field.defaultValue !== 'string') {
+          throw new HelmxError('validation_error', `field '${field.name}' defaultValue must be a string`)
+        }
+        if (
+          field.defaultValue !== '' &&
+          (field.type === 'select' || (field.type === 'choice' && field.allowCustom !== true)) &&
+          !(field.options ?? []).some((o) => o.value === field.defaultValue)
+        ) {
+          throw new HelmxError(
+            'validation_error',
+            `defaultValue '${field.defaultValue}' for ${field.type} field '${field.name}' must match an option value`,
+          )
+        }
+        if (
+          field.type === 'confirm' &&
+          field.defaultValue !== '' &&
+          field.defaultValue !== 'true' &&
+          field.defaultValue !== 'false'
+        ) {
+          throw new HelmxError(
+            'validation_error',
+            `defaultValue for confirm field '${field.name}' must be 'true' | 'false'`,
+          )
+        }
+      }
     }
   }
   for (const key of thinkingLevelFields) {
@@ -545,8 +714,12 @@ function validateAskSpec(spec: AskCreateSpec): void {
   }
 }
 
-/** Answer boundary validation: unknown fields / non-strings / out-of-range select or choice options / invalid confirm values. */
-function validateAnswersAgainstFields(spec: AskSpec, answers: Record<string, string>): void {
+function isMultiChoiceField(field: AskFieldSpec): boolean {
+  return field.type === 'choice' && field.multiple === true
+}
+
+/** Answer boundary validation: unknown fields / type mismatch / out-of-range options / invalid confirm values. */
+function validateAnswersAgainstFields(spec: AskSpec, answers: AskAnswers): void {
   if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) {
     throw new HelmxError('validation_error', 'answers must be an object')
   }
@@ -562,29 +735,82 @@ function validateAnswersAgainstFields(spec: AskSpec, answers: Record<string, str
     if (!byName.has(key) && !thinkingLevelKeys.has(key)) {
       throw new HelmxError('validation_error', `unknown answer field: ${key} (not declared on AskDoc)`)
     }
-    if (typeof value !== 'string') {
+    const field = byName.get(key)
+    if (field !== undefined && isMultiChoiceField(field)) {
+      if (!Array.isArray(value)) {
+        throw new HelmxError(
+          'validation_error',
+          `answer field '${key}' must be an array of strings`,
+        )
+      }
+    } else if (typeof value !== 'string') {
       throw new HelmxError('validation_error', `answer field '${key}' must be a string (got ${typeof value})`)
     }
   }
   for (const field of spec.fields) {
     const value = answers[field.name]
-    if (field.required && (value === undefined || value === '')) {
+    if (isMultiChoiceField(field)) {
+      if (value === undefined) {
+        if (field.required) {
+          throw new HelmxError('validation_error', `missing required field: ${field.name}`)
+        }
+        continue
+      }
+      if (!Array.isArray(value)) {
+        throw new HelmxError('validation_error', `answer field '${field.name}' must be an array of strings`)
+      }
+      if (value.length > 32) {
+        throw new HelmxError('validation_error', `answer field '${field.name}' exceeds 32 selections`)
+      }
+      if (field.required && value.length === 0) {
+        throw new HelmxError('validation_error', `missing required field: ${field.name}`)
+      }
+      const seen = new Set<string>()
+      for (const item of value) {
+        if (typeof item !== 'string' || item.trim() === '') {
+          throw new HelmxError(
+            'validation_error',
+            `answer items for multi-choice field '${field.name}' must be non-empty strings`,
+          )
+        }
+        if (seen.has(item)) {
+          throw new HelmxError(
+            'validation_error',
+            `duplicate selection '${item}' for multi-choice field '${field.name}'`,
+          )
+        }
+        seen.add(item)
+        if (field.allowCustom !== true) {
+          const valid = (field.options ?? []).some((o) => o.value === item)
+          if (!valid) {
+            throw new HelmxError(
+              'validation_error',
+              `answer '${item}' for choice field '${field.name}' is not among the allowed options`,
+            )
+          }
+        }
+      }
+      continue
+    }
+
+    const strValue = typeof value === 'string' ? value : undefined
+    if (field.required && (strValue === undefined || strValue.trim() === '')) {
       throw new HelmxError('validation_error', `missing required field: ${field.name}`)
     }
-    if (value === undefined || value === '') continue
-    if (field.type === 'select' || field.type === 'choice') {
-      const valid = (field.options ?? []).some((o) => o.value === value)
+    if (strValue === undefined || strValue === '') continue
+    if (field.type === 'select' || (field.type === 'choice' && field.allowCustom !== true)) {
+      const valid = (field.options ?? []).some((o) => o.value === strValue)
       if (!valid) {
         throw new HelmxError(
           'validation_error',
-          `answer '${value}' for ${field.type} field '${field.name}' is not among the allowed options`,
+          `answer '${strValue}' for ${field.type} field '${field.name}' is not among the allowed options`,
         )
       }
     }
-    if (field.type === 'confirm' && value !== 'true' && value !== 'false') {
+    if (field.type === 'confirm' && strValue !== 'true' && strValue !== 'false') {
       throw new HelmxError(
         'validation_error',
-        `answer for confirm field '${field.name}' must be 'true' | 'false' (got '${value}')`,
+        `answer for confirm field '${field.name}' must be 'true' | 'false' (got '${strValue}')`,
       )
     }
   }

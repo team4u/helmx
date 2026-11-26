@@ -14,6 +14,7 @@ import { Compile, type Validator } from 'typebox/compile'
 import type { TLocalizedValidationError } from 'typebox/error'
 import { HelmxError, parseLocalizedText, parseNonEmptyLocalizedText } from '@helmx/protocol'
 import type {
+  AskAnswers,
   AskSpec,
   ConversationEntry,
   ConversationLive,
@@ -202,11 +203,18 @@ const ASK_FIELD_SCHEMA = Type.Object({
         label: NON_EMPTY_LOCALIZED_TEXT_SCHEMA,
         value: NonEmptyString,
         description: Type.Optional(LOCALIZED_TEXT_SCHEMA),
+        recommended: Type.Optional(Type.Boolean()),
       }),
     ),
   ),
   required: Type.Optional(Type.Boolean()),
-  defaultValue: Type.Optional(Type.String()),
+  defaultValue: Type.Optional(Type.Union([Type.String(), Type.Array(NonEmptyString)])),
+  multiple: Type.Optional(Type.Boolean()),
+  allowCustom: Type.Optional(Type.Boolean()),
+  multiline: Type.Optional(Type.Boolean()),
+  placeholder: Type.Optional(LOCALIZED_TEXT_SCHEMA),
+  confirmLabel: Type.Optional(NON_EMPTY_LOCALIZED_TEXT_SCHEMA),
+  rejectLabel: Type.Optional(NON_EMPTY_LOCALIZED_TEXT_SCHEMA),
   thinkingLevelField: Type.Optional(NonEmptyString),
 })
 
@@ -214,6 +222,7 @@ const ASK_SPEC_CHECKER = Compile(
   Type.Object({
     id: NonEmptyString,
     conversationId: Type.Integer(),
+    kind: Type.Optional(Type.Enum(['question', 'approval'] as const)),
     title: NON_EMPTY_LOCALIZED_TEXT_SCHEMA,
     fields: Type.Array(ASK_FIELD_SCHEMA, { minItems: 1 }),
     status: Type.Enum(['pending', 'answered', 'cancelled', 'superseded'] as const),
@@ -251,6 +260,56 @@ function assertAskSpecShape(value: unknown): AskSpec {
         'ask.upsert field.label must be a non-empty LocalizedText (no blank strings or blank locale entries)',
         500,
       )
+    }
+    if (field.multiple !== undefined && field.type !== 'choice') {
+      throw new HelmxError('invalid_event', 'ask.upsert field.multiple is only allowed on choice fields', 500)
+    }
+    if (field.allowCustom !== undefined && field.type !== 'choice') {
+      throw new HelmxError('invalid_event', 'ask.upsert field.allowCustom is only allowed on choice fields', 500)
+    }
+    if (field.multiline !== undefined && field.type !== 'text') {
+      throw new HelmxError('invalid_event', 'ask.upsert field.multiline is only allowed on text fields', 500)
+    }
+    if (field.placeholder !== undefined) {
+      if (field.type !== 'text' && !(field.type === 'choice' && field.allowCustom === true)) {
+        throw new HelmxError(
+          'invalid_event',
+          'ask.upsert field.placeholder is only allowed on text or allowCustom choice fields',
+          500,
+        )
+      }
+      if (parseLocalizedText(field.placeholder) === undefined) {
+        throw new HelmxError('invalid_event', 'ask.upsert field.placeholder must be a valid LocalizedText', 500)
+      }
+    }
+    if (field.confirmLabel !== undefined) {
+      if (field.type !== 'confirm' || parseNonEmptyLocalizedText(field.confirmLabel) === undefined) {
+        throw new HelmxError(
+          'invalid_event',
+          'ask.upsert field.confirmLabel must be a non-empty LocalizedText on a confirm field',
+          500,
+        )
+      }
+    }
+    if (field.rejectLabel !== undefined) {
+      if (field.type !== 'confirm' || parseNonEmptyLocalizedText(field.rejectLabel) === undefined) {
+        throw new HelmxError(
+          'invalid_event',
+          'ask.upsert field.rejectLabel must be a non-empty LocalizedText on a confirm field',
+          500,
+        )
+      }
+    }
+    if (field.defaultValue !== undefined) {
+      if (Array.isArray(field.defaultValue)) {
+        if (!(field.type === 'choice' && field.multiple === true)) {
+          throw new HelmxError(
+            'invalid_event',
+            'ask.upsert array defaultValue is only allowed on multi-choice fields',
+            500,
+          )
+        }
+      }
     }
     if (field.thinkingLevelField !== undefined && (field.type !== 'model' || field.thinkingLevelField.trim() === '')) {
       throw new HelmxError(
@@ -302,6 +361,9 @@ const ASK_RESOLVED_CHECKER = Compile(
   Type.Object({
     askId: Type.String(),
     status: Type.Enum(['answered', 'cancelled', 'superseded'] as const),
+    answers: Type.Optional(
+      Type.Object({}, { additionalProperties: Type.Union([Type.String(), Type.Array(Type.String())]) }),
+    ),
   }),
 )
 
@@ -429,7 +491,12 @@ const CORE_EVENT_ASSEMBLERS: Readonly<Record<string, CoreEventAssembler>> = {
   }),
   'ask.resolved': (source) => {
     const parsed = parseEventShape(ASK_RESOLVED_CHECKER, source, 'ask.resolved requires string askId and valid status')
-    return { type: 'ask.resolved', askId: parsed.askId, status: parsed.status }
+    return {
+      type: 'ask.resolved',
+      askId: parsed.askId,
+      status: parsed.status,
+      ...(parsed.answers !== undefined ? { answers: parsed.answers as AskAnswers } : {}),
+    }
   },
   'plugin.changed': (source) => {
     const parsed = parseEventShape(

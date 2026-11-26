@@ -426,8 +426,8 @@ export function ConversationTimeline({
             {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
               <TimelineLiveWaitingRow conversation={conversation} isWorking={isWorking} />
             ) : null}
-            {resolvedAsks.map(({ ask, status }) => (
-              <ResolvedAskRow key={`ask:${ask.id}`} ask={ask} status={status} />
+            {resolvedAsks.map(({ ask, status, answers }) => (
+              <ResolvedAskRow key={`ask:${ask.id}`} ask={ask} status={status} answers={answers} />
             ))}
             {conversation.status === 'error' ? (
               <TurnErrorNotice

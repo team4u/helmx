@@ -94,6 +94,7 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'BASH_TOOL_META_SCHEMA',
     'ARTIFACT_REGISTER_META_SCHEMA',
     'ARTIFACT_READ_META_SCHEMA',
+    'ASK_USER_TOOL_META_SCHEMA',
     'KERNEL_TOOL_NAMES',
     'KERNEL_TOOL_PRESENTATION_META_SCHEMAS',
     'MODEL_THINKING_LEVELS',

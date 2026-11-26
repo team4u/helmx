@@ -88,25 +88,15 @@ function PlanActiveTrayInner({ conversationId }: { conversationId: number }): Re
   if (
     effectiveView === undefined ||
     effectiveView.mode !== 'planning' ||
-    (effectiveView.draft === undefined &&
-      !effectiveView.awaitingApproval &&
-      !effectiveView.awaitingClarification)
+    (effectiveView.draft === undefined && !effectiveView.awaitingApproval)
   ) {
     return null
   }
 
   const awaitingApproval = effectiveView.awaitingApproval
-  const awaitingClarification = effectiveView.awaitingClarification === true && !awaitingApproval
-  const awaitingAny = awaitingApproval || awaitingClarification
   const draft = effectiveView.draft
-  const statusTone = awaitingAny ? 'blocked' : 'working'
-  const statusText = t(
-    awaitingApproval
-      ? PLAN_COPY.trayAwaitingStatus
-      : awaitingClarification
-        ? PLAN_COPY.trayClarifyingStatus
-        : PLAN_COPY.trayPlanningStatus,
-  )
+  const statusTone = awaitingApproval ? 'blocked' : 'working'
+  const statusText = t(awaitingApproval ? PLAN_COPY.trayAwaitingStatus : PLAN_COPY.trayPlanningStatus)
   const draftTitle = draft?.title ?? t(PLAN_COPY.trayNoDraftHint)
   const updatedText =
     draft !== undefined && draft.updatedAt > 0 ? formatCompactTimestamp(draft.updatedAt) : undefined
@@ -115,7 +105,6 @@ function PlanActiveTrayInner({ conversationId }: { conversationId: number }): Re
     awaitingApproval,
     updatedText,
     locale,
-    awaitingClarification,
   )
   const toggleVerb = t(expanded ? PLAN_COPY.trayCollapse : PLAN_COPY.trayExpand)
 
@@ -138,7 +127,7 @@ function PlanActiveTrayInner({ conversationId }: { conversationId: number }): Re
 
   const versionBadge =
     draft !== undefined ? (
-      <Badge tone={awaitingAny ? 'warn' : 'accent'} className="dock-tray-badge tabular-nums">
+      <Badge tone={awaitingApproval ? 'warn' : 'accent'} className="dock-tray-badge tabular-nums">
         {planVersionLabel(draft.version)}
       </Badge>
     ) : undefined
@@ -176,7 +165,7 @@ function PlanActiveTrayInner({ conversationId }: { conversationId: number }): Re
   return (
     <DockTray
       classPrefix="plan-tray"
-      warn={awaitingAny}
+      warn={awaitingApproval}
       regionLabel={t(PLAN_COPY.trayRegionAria)}
       expanded={expanded}
       onToggle={() => setExpanded((v) => !v)}
