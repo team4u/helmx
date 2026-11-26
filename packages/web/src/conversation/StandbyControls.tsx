@@ -76,6 +76,9 @@ export function StandbyModelPicker({
     <ModelPickerControl
       effectiveModel={effectiveModel}
       activeThinkingLevel={effectiveThinkingLevel}
+      // The draft level is a conversation override the kernel ranks above a tier preset;
+      // effectiveThinkingLevel above already resolves `draft > tier preset > per-model > Profile > global`.
+      thinkingLevelPrecedence="override"
       fallbackPanel={isSplit ? 'split' : 'primary'}
       enableRegisteredModes={true}
       resetLabel={

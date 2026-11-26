@@ -704,6 +704,43 @@ test('profile-center-model: effective model / global inheritance, node cwd and a
   const unset = resolveEffectiveProfileModel({ id: 'worker', name: 'Worker' }, null)
   assert.deepEqual(unset, { source: 'unset' })
 
+  // Tier bindings mirror the kernel's default chain: the tier's own preset outranks the
+  // Profile/global level saved beside it and converges (clamps) to the target's levels.
+  const tierCatalog = {
+    models: [{ id: 'faux/omni', provider: 'faux', modelId: 'omni', available: true, thinkingLevels: ['high', 'xhigh', 'max'] }],
+    modelTiers: [
+      { id: 'scout', model: 'faux/omni', thinkingLevel: 'max', available: true, thinkingLevels: ['high', 'xhigh', 'max'] },
+      { id: 'reviewer', model: 'faux/omni', available: true, thinkingLevels: ['high', 'xhigh'] },
+    ],
+  }
+  assert.deepEqual(
+    resolveEffectiveProfileModel(
+      { ...mockProfiles[3], model: 'tier/scout', defaultModel: 'tier/scout', thinkingLevel: 'high' },
+      null,
+      tierCatalog,
+    ),
+    { model: 'tier/scout', thinkingLevel: 'max', source: 'bound' },
+  )
+  assert.deepEqual(
+    resolveEffectiveProfileModel(
+      { id: 'worker', name: 'Worker' },
+      { defaultModel: 'tier/scout', defaultThinkingLevel: 'high' },
+      tierCatalog,
+    ),
+    { model: 'tier/scout', thinkingLevel: 'max', source: 'global' },
+  )
+  // A tier without a preset keeps the configured level, converged like the kernel clamps it.
+  assert.deepEqual(
+    resolveEffectiveProfileModel({ id: 'worker', name: 'Worker' }, { defaultModel: 'tier/reviewer', defaultThinkingLevel: 'max' }, tierCatalog),
+    { model: 'tier/reviewer', thinkingLevel: 'xhigh', source: 'global' },
+  )
+  // Without the catalog a tier's preset is unknown and outranks the configured level, so the
+  // level stays hidden rather than displaying a value the kernel may not run.
+  assert.deepEqual(
+    resolveEffectiveProfileModel({ ...mockProfiles[3], model: 'tier/scout', defaultModel: 'tier/scout', thinkingLevel: 'high' }, null),
+    { model: 'tier/scout', thinkingLevel: undefined, source: 'bound' },
+  )
+
   assert.deepEqual(formatProfileLocation({ id: 'x', nodeId: 'gpu-1', cwd: '/srv/app' }), {
     nodeId: 'gpu-1',
     isRemoteNode: true,

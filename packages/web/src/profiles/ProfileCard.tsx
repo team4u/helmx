@@ -14,6 +14,7 @@ import {
   SelectCard,
   Stack,
   StatusLight,
+  useHostModels,
   type StatusLightTone,
 } from '@helmx/plugin-client'
 import {
@@ -68,7 +69,8 @@ export function ProfileCard({
   const actions = useOptionalStoreActions()
   const { t } = useWebLocale()
   const isSystem = isSystemProfile(profile)
-  const effectiveModel = resolveEffectiveProfileModel(profile, defaultModelInfo)
+  const hostModels = useHostModels()
+  const effectiveModel = resolveEffectiveProfileModel(profile, defaultModelInfo, hostModels)
   const location = formatProfileLocation(profile)
   const activity = summarizeProfileActivity(
     profile,
