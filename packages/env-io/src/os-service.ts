@@ -316,6 +316,28 @@ function specOptionsOf(cliEntryPath: string, dataDir: string, profile: OsService
   };
 }
 
+/** Per-call context shared by every service operation: command runner, rendered spec, and result identity fields. */
+interface ServiceOperationContext {
+  exec: ServiceExec;
+  desc: ServiceSpec;
+  /** Fields carried verbatim by every `ServiceOperationResult`, successful or not. */
+  base: Pick<ServiceOperationResult, 'platform' | 'configPath' | 'targetPath' | 'content'>;
+}
+
+function prepareServiceOperation(
+  cliEntryPath: string,
+  dataDir: string,
+  profile: OsServiceProfile,
+  options: ServiceOperationOptions,
+): ServiceOperationContext {
+  const desc = renderServiceSpec(specOptionsOf(cliEntryPath, dataDir, profile, options));
+  return {
+    exec: options.execCommand ?? defaultServiceExec,
+    desc,
+    base: { platform: desc.platform, configPath: desc.configPath, targetPath: desc.targetPath, content: desc.content },
+  };
+}
+
 /** Install and enable the OS service: render -> write copy -> write active path -> daemon-reload (linux) -> register. */
 export async function installOsService(
   cliEntryPath: string,
@@ -323,14 +345,7 @@ export async function installOsService(
   profile: OsServiceProfile,
   options: ServiceOperationOptions = {},
 ): Promise<ServiceOperationResult> {
-  const exec = options.execCommand ?? defaultServiceExec;
-  const desc = renderServiceSpec(specOptionsOf(cliEntryPath, dataDir, profile, options));
-  const base = {
-    platform: desc.platform,
-    configPath: desc.configPath,
-    targetPath: desc.targetPath,
-    content: desc.content,
-  };
+  const { exec, desc, base } = prepareServiceOperation(cliEntryPath, dataDir, profile, options);
 
   try {
     await fsp.mkdir(path.dirname(desc.configPath), { recursive: true });
@@ -373,14 +388,7 @@ export async function uninstallOsService(
   profile: OsServiceProfile,
   options: ServiceOperationOptions = {},
 ): Promise<ServiceOperationResult> {
-  const exec = options.execCommand ?? defaultServiceExec;
-  const desc = renderServiceSpec(specOptionsOf(cliEntryPath, dataDir, profile, options));
-  const base = {
-    platform: desc.platform,
-    configPath: desc.configPath,
-    targetPath: desc.targetPath,
-    content: desc.content,
-  };
+  const { exec, desc, base } = prepareServiceOperation(cliEntryPath, dataDir, profile, options);
 
   const uninstallResult = await exec.run(desc.uninstallCmd[0]!, desc.uninstallCmd.slice(1));
   if (uninstallResult.code !== 0 || uninstallResult.timedOut === true) {
@@ -454,8 +462,7 @@ export async function getOsServiceStatus(
   profile: OsServiceProfile,
   options: ServiceOperationOptions = {},
 ): Promise<OsServiceStatus> {
-  const exec = options.execCommand ?? defaultServiceExec;
-  const desc = renderServiceSpec(specOptionsOf(cliEntryPath, dataDir, profile, options));
+  const { exec, desc } = prepareServiceOperation(cliEntryPath, dataDir, profile, options);
   const base = { platform: desc.platform, configPath: desc.configPath, targetPath: desc.targetPath };
 
   const targetExists = await fsp

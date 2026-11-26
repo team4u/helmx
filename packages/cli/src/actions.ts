@@ -396,21 +396,29 @@ async function resolveReadFilePositional(
   return { field: pos.readFileInto!, value: content }
 }
 
+/** Everything needed to bind CLI positional arguments onto the action input object. */
+interface PositionalBinding {
+  manifest: ActionManifest
+  /** Raw CLI positional arguments in declaration order. */
+  positionals: readonly string[]
+  /** Input object under construction (receives the bound values). */
+  input: Record<string, unknown>
+  /** Whole `--input` JSON was passed: required positionals are no longer enforced locally. */
+  hasWholeInput: boolean
+  /** `inputSchema.properties`, for per-field type coercion. */
+  properties: Record<string, unknown>
+  cwd: string
+  env: NodeJS.ProcessEnv
+}
+
 /**
  * Map positional arguments in declaration order into the input object:
  * - readFileInto: see resolveReadFilePositional.
  * - Field already supplied via property flag -> explicit conflict error (never silently overwrite).
  * - Required positional omitted without --input -> explicit missing_positional error.
  */
-async function applyPositionals(
-  manifest: ActionManifest,
-  positionals: readonly string[],
-  input: Record<string, unknown>,
-  hasWholeInput: boolean,
-  properties: Record<string, unknown>,
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-): Promise<void> {
+async function applyPositionals(binding: PositionalBinding): Promise<void> {
+  const { manifest, positionals, input, hasWholeInput, properties, cwd, env } = binding
   const specs: PluginActionCliPositionalSpec[] = manifest.cli?.positional ?? []
   for (const [index, pos] of specs.entries()) {
     const raw = positionals[index]
@@ -555,15 +563,15 @@ export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
           obj[propName] = value
         }
         // Apply positionals last: conflicts with same-named property flags fail explicitly (never silently overwritten)
-        await applyPositionals(
+        await applyPositionals({
           manifest,
-          parsed.positionals,
-          obj,
-          false,
-          schemaPropertiesOf(manifest.inputSchema) ?? {},
-          ctx.cwd,
-          ctx.env,
-        )
+          positionals: parsed.positionals,
+          input: obj,
+          hasWholeInput: false,
+          properties: schemaPropertiesOf(manifest.inputSchema) ?? {},
+          cwd: ctx.cwd,
+          env: ctx.env,
+        })
         input = obj
       }
       // Final required-field check (covers both schema.required and positional.required; skipped when --input is passed, leaving validation to the server)
