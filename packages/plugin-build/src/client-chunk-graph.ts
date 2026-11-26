@@ -4,8 +4,7 @@
  * Consumes Pass 1 metafile basename -> output metadata mapping (reading `imports` edges only) and computes
  * the module partitioning for code splitting plus prerequisite topological order. Extracted from
  * `client-compiler.ts` as pure functions so partitioning, reference counting, and topological sorting can
- * be unit-tested independently. Iteration order matches the original inline algorithm statement-for-statement
- * (preserving Set iteration order for registration and `chunks` keys).
+ * be unit-tested independently while preserving Set iteration order.
  */
 import { basename } from 'node:path';
 
@@ -24,27 +23,43 @@ export interface ChunkGraphNode {
 /** Chunk graph: output basename -> node metadata. */
 export type ChunkGraph = ReadonlyMap<string, ChunkGraphNode>;
 
+function staticImportTargets(graph: ChunkGraph, file: string): string[] {
+  const imports = graph.get(file)?.imports;
+  if (!imports) return [];
+  const targets: string[] = [];
+  for (const imp of imports) {
+    if (imp.kind !== 'import-statement') continue;
+    const b = basename(imp.path);
+    if (graph.has(b)) targets.push(b);
+  }
+  return targets;
+}
+
+function expandStaticDfs(
+  graph: ChunkGraph,
+  seeds: Iterable<string>,
+  options: { includeSeeds: boolean; allow?: (basename: string) => boolean },
+): Set<string> {
+  const visited = new Set<string>(options.includeSeeds ? seeds : []);
+  const allow = options.allow;
+  const visit = (file: string): void => {
+    for (const target of staticImportTargets(graph, file)) {
+      if (visited.has(target)) continue;
+      if (allow !== undefined && !allow(target)) continue;
+      visited.add(target);
+      visit(target);
+    }
+  };
+  for (const seed of seeds) visit(seed);
+  return visited;
+}
+
 /**
  * Entry static import closure (includes the entry itself): depth-first traversal following static
  * `import-statement` edges, keeping only basenames present in the output graph.
  */
 export function collectStaticImportClosure(graph: ChunkGraph, entry: string): Set<string> {
-  const closure = new Set<string>([entry]);
-  const visit = (file: string): void => {
-    const node = graph.get(file);
-    if (!node || !node.imports) return;
-    for (const imp of node.imports) {
-      if (imp.kind === 'import-statement') {
-        const b = basename(imp.path);
-        if (graph.has(b) && !closure.has(b)) {
-          closure.add(b);
-          visit(b);
-        }
-      }
-    }
-  };
-  visit(entry);
-  return closure;
+  return expandStaticDfs(graph, [entry], { includeSeeds: true });
 }
 
 /**
@@ -57,37 +72,30 @@ export function collectDynamicImportTargets(
 ): Set<string> {
   const dynamicTargets = new Set<string>();
   const dynQueue: string[] = [];
-  const checkDynImports = (file: string): void => {
-    const node = graph.get(file);
-    if (!node || !node.imports) return;
-    for (const imp of node.imports) {
-      if (imp.kind === 'dynamic-import' && !imp.external) {
-        const b = basename(imp.path);
-        if (graph.has(b) && !dynamicTargets.has(b)) {
-          dynamicTargets.add(b);
-          dynQueue.push(b);
-        }
+  const collectDynamicEdges = (file: string): void => {
+    const imports = graph.get(file)?.imports;
+    if (!imports) return;
+    for (const imp of imports) {
+      if (imp.kind !== 'dynamic-import' || imp.external) continue;
+      const b = basename(imp.path);
+      if (graph.has(b) && !dynamicTargets.has(b)) {
+        dynamicTargets.add(b);
+        dynQueue.push(b);
       }
     }
   };
-  for (const f of baseClosure) checkDynImports(f);
-  while (dynQueue.length > 0) {
-    const d = dynQueue.shift()!;
-    const visited = new Set<string>([d]);
-    const qStatic = [d];
-    while (qStatic.length > 0) {
-      const cur = qStatic.shift()!;
-      checkDynImports(cur);
-      const node = graph.get(cur);
-      if (node && node.imports) {
-        for (const imp of node.imports) {
-          if (imp.kind === 'import-statement') {
-            const b = basename(imp.path);
-            if (graph.has(b) && !visited.has(b)) {
-              visited.add(b);
-              qStatic.push(b);
-            }
-          }
+  for (const file of baseClosure) collectDynamicEdges(file);
+  for (let dynHead = 0; dynHead < dynQueue.length; dynHead += 1) {
+    const root = dynQueue[dynHead]!;
+    const visited = new Set<string>([root]);
+    const staticQueue = [root];
+    for (let staticHead = 0; staticHead < staticQueue.length; staticHead += 1) {
+      const cur = staticQueue[staticHead]!;
+      collectDynamicEdges(cur);
+      for (const target of staticImportTargets(graph, cur)) {
+        if (!visited.has(target)) {
+          visited.add(target);
+          staticQueue.push(target);
         }
       }
     }
@@ -103,6 +111,21 @@ export interface AsyncChunkPlan {
   chunkDeps: Record<string, string[]>;
 }
 
+function topoSortSharedChunks(graph: ChunkGraph, neededShared: ReadonlySet<string>): string[] {
+  const sorted: string[] = [];
+  const visited = new Set<string>();
+  const visit = (chunk: string): void => {
+    if (visited.has(chunk)) return;
+    visited.add(chunk);
+    for (const dep of staticImportTargets(graph, chunk)) {
+      if (neededShared.has(dep)) visit(dep);
+    }
+    sorted.push(chunk);
+  };
+  for (const chunk of neededShared) visit(chunk);
+  return sorted;
+}
+
 /**
  * Partition async units and topologically sort shared prerequisites:
  * 1. Compute each dynamic target's exclusive static closure (excluding `baseClosure` members);
@@ -116,90 +139,39 @@ export function computeAsyncChunkPlan(
   dynamicTargets: ReadonlySet<string>,
 ): AsyncChunkPlan {
   const dynStaticClosures = new Map<string, Set<string>>();
-  for (const d of dynamicTargets) {
-    const closure = new Set<string>();
-    const visitDyn = (f: string): void => {
-      const node = graph.get(f);
-      if (!node || !node.imports) return;
-      for (const imp of node.imports) {
-        if (imp.kind === 'import-statement') {
-          const b = basename(imp.path);
-          if (graph.has(b) && !baseClosure.has(b) && !closure.has(b)) {
-            closure.add(b);
-            visitDyn(b);
-          }
-        }
-      }
-    };
-    visitDyn(d);
-    dynStaticClosures.set(d, closure);
+  for (const target of dynamicTargets) {
+    dynStaticClosures.set(
+      target,
+      expandStaticDfs(graph, [target], {
+        includeSeeds: false,
+        allow: (b) => !baseClosure.has(b),
+      }),
+    );
   }
 
   const refCount = new Map<string, number>();
-  for (const [, closure] of dynStaticClosures) {
+  for (const closure of dynStaticClosures.values()) {
     for (const chunk of closure) {
       refCount.set(chunk, (refCount.get(chunk) ?? 0) + 1);
     }
   }
-  const sharedAsyncChunks = new Set<string>();
-  for (const [chunk, count] of refCount) {
-    if (count >= 2) sharedAsyncChunks.add(chunk);
-  }
-  const addSharedDeps = (chunk: string): void => {
-    const node = graph.get(chunk);
-    if (!node || !node.imports) return;
-    for (const imp of node.imports) {
-      if (imp.kind === 'import-statement') {
-        const b = basename(imp.path);
-        if (graph.has(b) && !baseClosure.has(b) && !sharedAsyncChunks.has(b)) {
-          sharedAsyncChunks.add(b);
-          addSharedDeps(b);
-        }
-      }
-    }
-  };
-  for (const chunk of Array.from(sharedAsyncChunks)) addSharedDeps(chunk);
+  const initialShared = [...refCount.entries()]
+    .filter(([, count]) => count >= 2)
+    .map(([chunk]) => chunk);
+  const sharedAsyncChunks = expandStaticDfs(graph, initialShared, {
+    includeSeeds: true,
+    allow: (b) => !baseClosure.has(b),
+  });
 
   const chunkDeps: Record<string, string[]> = {};
-  for (const d of dynamicTargets) {
-    const staticClosure = dynStaticClosures.get(d) ?? new Set<string>();
-    const neededShared = new Set<string>();
-    for (const c of staticClosure) {
-      if (sharedAsyncChunks.has(c)) neededShared.add(c);
-    }
-    const collectMoreShared = (c: string): void => {
-      const node = graph.get(c);
-      if (!node || !node.imports) return;
-      for (const imp of node.imports) {
-        if (imp.kind === 'import-statement') {
-          const b = basename(imp.path);
-          if (sharedAsyncChunks.has(b) && !neededShared.has(b)) {
-            neededShared.add(b);
-            collectMoreShared(b);
-          }
-        }
-      }
-    };
-    for (const c of Array.from(neededShared)) collectMoreShared(c);
-
-    const sorted: string[] = [];
-    const visited = new Set<string>();
-    const topoVisit = (c: string): void => {
-      if (visited.has(c)) return;
-      visited.add(c);
-      const node = graph.get(c);
-      if (node && node.imports) {
-        for (const imp of node.imports) {
-          if (imp.kind === 'import-statement') {
-            const b = basename(imp.path);
-            if (neededShared.has(b)) topoVisit(b);
-          }
-        }
-      }
-      sorted.push(c);
-    };
-    for (const c of neededShared) topoVisit(c);
-    chunkDeps[d] = sorted;
+  for (const target of dynamicTargets) {
+    const staticClosure = dynStaticClosures.get(target) ?? new Set<string>();
+    const initialNeeded = [...staticClosure].filter((c) => sharedAsyncChunks.has(c));
+    const neededShared = expandStaticDfs(graph, initialNeeded, {
+      includeSeeds: true,
+      allow: (b) => sharedAsyncChunks.has(b),
+    });
+    chunkDeps[target] = topoSortSharedChunks(graph, neededShared);
   }
 
   return { sharedAsyncChunks, chunkDeps };

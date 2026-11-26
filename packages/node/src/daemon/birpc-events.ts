@@ -1,3 +1,5 @@
+import { decodeWsRawData } from './env-rpc-shared.js';
+
 /**
  * Adapter connecting `birpc` events to a WebSocket `'message'` stream: parses incoming JSON frames,
  * rejects non-objects via `onInvalidFrame`, and keeps wrapper references so `off()` cleanly removes
@@ -23,7 +25,13 @@ export function createSocketBirpcEvents(
   return {
     on(callback) {
       const wrapper = (raw: unknown): void => {
-        const text = typeof raw === 'string' ? String(raw) : Buffer.from(raw as ArrayBuffer).toString('utf8');
+        let text: string;
+        try {
+          text = decodeWsRawData(raw);
+        } catch {
+          onInvalidFrame('received unsupported WebSocket frame payload');
+          return;
+        }
         let parsed: unknown;
         try {
           parsed = JSON.parse(text);

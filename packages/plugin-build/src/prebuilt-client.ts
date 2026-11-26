@@ -16,6 +16,7 @@ import {
   PREBUILT_CLIENT_MANIFEST_VERSION,
   assertModuleRefShape,
   assertPrebuiltClientManifest,
+  compareCodeUnit,
   prebuiltChunkFileName,
   type BuildPluginClientBundleDirOptions,
   type BuildPluginClientBundleDirResult,
@@ -51,7 +52,7 @@ const DECLARATION_FILE_PATTERN = /\.d\.[cm]?ts$/i;
 function discoverClientModules(clientRootReal: string): string[] {
   const found: string[] = [];
   const visit = (dir: string, relPrefix: string): void => {
-    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => compareCodeUnit(a.name, b.name));
     for (const entry of entries) {
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
       const abs = join(dir, entry.name);
@@ -191,6 +192,7 @@ export async function buildPluginClientBundleDir(
     totalBytes += Buffer.byteLength(manifestText, 'utf8');
 
     let backupOut: string | undefined;
+    let swapSucceeded = false;
     try {
       if (existsSync(resolvedOut)) {
         backupOut = `${stagingOut}.prev`;
@@ -198,13 +200,29 @@ export async function buildPluginClientBundleDir(
       }
       await renameAtomically(stagingOut, resolvedOut);
       stagingCreated = false;
+      swapSucceeded = true;
     } catch (swapErr) {
+      let restoreErr: unknown;
       if (backupOut !== undefined && !existsSync(resolvedOut) && existsSync(backupOut)) {
-        await renameAtomically(backupOut, resolvedOut).catch(() => {});
+        try {
+          await renameAtomically(backupOut, resolvedOut);
+        } catch (err) {
+          restoreErr = err;
+        }
+      }
+      if (restoreErr !== undefined) {
+        const swapMsg = swapErr instanceof Error ? swapErr.message : String(swapErr);
+        const restoreMsg = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+        throw new HelmxError(
+          'client_compile_failed',
+          `prebuilt client swap failed (${swapMsg}); backup restore failed (${restoreMsg}); previous bundle preserved at ${backupOut}`,
+          500,
+          { pluginId, outDir: resolvedOut, backupOut },
+        );
       }
       throw swapErr;
     } finally {
-      if (backupOut !== undefined) {
+      if (swapSucceeded && backupOut !== undefined) {
         rmSync(backupOut, { recursive: true, force: true });
       }
     }

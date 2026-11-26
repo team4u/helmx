@@ -46,6 +46,8 @@ import {
   assertDistTag,
   assertListenUrlMatches,
   commitAndSwitchHubRelease,
+  hubControlRecordPath,
+  stopHubViaControlChannel,
   type CurrentReleaseRecord,
   type ReleaseLayout,
   type StagedRelease,
@@ -1589,4 +1591,18 @@ test('runControlledProcess: enforces per-stream tail-retaining output cap and ki
     }
     assert.equal(alive, false, 'grandchild holding inherited stdio must be killed on timeout');
   }
+});
+
+test('stopHubViaControlChannel returns no_control_record on ENOENT and throws on corrupt hub-control.json', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('hub-switch-control-');
+  t.after(async () => {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }, { timeout: 60_000 });
+
+  const missing = await stopHubViaControlChannel({ dataDir: dir });
+  assert.equal(missing.stopped, false);
+  if (!missing.stopped) assert.equal(missing.reason, 'no_control_record');
+
+  await fs.writeFile(hubControlRecordPath(dir), '{not-valid-json', 'utf8');
+  await assert.rejects(() => stopHubViaControlChannel({ dataDir: dir }), /corrupt/);
 });

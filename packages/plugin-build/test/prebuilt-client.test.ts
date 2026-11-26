@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, test } from 'node:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
@@ -162,4 +162,79 @@ test('buildPluginClientBundleDir: rejects empty modules, missing clientRoot, and
     (err: unknown) => err instanceof HelmxError && err.code === 'client_compile_failed',
   )
   assert.equal(existsSync(outDir), false, 'failed prebuild must not leave partial outDir on disk')
+})
+
+test('node-chunk-bridge does not permanently cache rejections; bundler avoids {} fallback & literal string corruption; module discovery uses code-unit order', { timeout: 60_000 }, async () => {
+  // 1. Discovery sorts by UTF-16 code unit ('Z.tsx' before 'a.tsx') and prebuild manifest keeps deterministic key order.
+  const sortRoot = join(workDir, 'sort-client')
+  const sortOut = join(workDir, 'sort-out')
+  mkdirSync(sortRoot, { recursive: true })
+  writeFileSync(join(sortRoot, 'a.tsx'), 'export const a = 1\n')
+  writeFileSync(join(sortRoot, 'Z.tsx'), 'export const z = 2\n')
+  const builtSort = await buildPluginClientBundleDir({ pluginId: 'test:sort', clientRoot: sortRoot, outDir: sortOut })
+  assert.deepEqual(Object.keys(builtSort.manifest.modules), ['Z.tsx', 'a.tsx'])
+
+  // 2. node-chunk-bridge retries cleanly after an initial missing-chunk rejection.
+  const bridgeRoot = join(workDir, 'bridge-retry')
+  const bridgeOut = join(workDir, 'bridge-out')
+  const emptyDir = join(workDir, 'bridge-empty')
+  mkdirSync(bridgeRoot, { recursive: true })
+  mkdirSync(emptyDir, { recursive: true })
+  writeFileSync(join(bridgeRoot, 'lazy.ts'), 'export const val = "recovered"\n')
+  writeFileSync(
+    join(bridgeRoot, 'index.tsx'),
+    'export const literalMarker = "import(\\"__HELMX_DYN_IMPORT__:lazy.js\\")"\n' +
+    'export const run = async () => (await import("./lazy.ts")).val\n',
+  )
+  const built = await buildPluginClientBundleDir({ pluginId: 'test:bridge-retry', clientRoot: bridgeRoot, outDir: bridgeOut })
+  const entry = built.manifest.modules['index.tsx']!
+  const g = globalThis as Record<string, unknown>
+  const prevBridge = g.__helmx_import_chunk
+  const prevLookup = g.__helmx_node_chunk_lookup
+  try {
+    installNodeChunkBridge([emptyDir])
+    const entryJs = readFileSync(join(bridgeOut, entry.entryFile), 'utf8')
+    const mod = (await import(`data:text/javascript;base64,${Buffer.from(entryJs, 'utf8').toString('base64')}`)) as {
+      literalMarker: string
+      run: () => Promise<string>
+    }
+    assert.equal(mod.literalMarker, 'import("__HELMX_DYN_IMPORT__:lazy.js")', 'user string literal must not be corrupted by dynamic-import rewriting')
+    await assert.rejects(
+      () => mod.run(),
+      (err: unknown) => err instanceof HelmxError && err.code === 'client_chunk_not_found',
+    )
+    // Copy chunk files into emptyDir so subsequent attempt succeeds (no permanent rejection caching).
+    for (const f of readdirSync(bridgeOut)) {
+      writeFileSync(join(emptyDir, f), readFileSync(join(bridgeOut, f)))
+    }
+    assert.equal(await mod.run(), 'recovered')
+  } finally {
+    g.__helmx_import_chunk = prevBridge
+    g.__helmx_node_chunk_lookup = prevLookup
+  }
+
+  // 3. Missing __helmx_chunk_share namespace throws explicitly instead of silently returning {} bindings.
+  const shareRoot = join(workDir, 'missing-share')
+  const shareOut = join(workDir, 'missing-share-out')
+  mkdirSync(shareRoot, { recursive: true })
+  writeFileSync(join(shareRoot, 'shared.ts'), 'export const token = "shared-secret"\n')
+  writeFileSync(join(shareRoot, 'lazy.ts'), 'import { token } from "./shared"\nexport const readToken = () => token\n')
+  writeFileSync(join(shareRoot, 'index.tsx'), 'import { token } from "./shared"\nexport const main = token\nexport const load = async () => (await import("./lazy")).readToken()\n')
+  const builtShare = await buildPluginClientBundleDir({ pluginId: 'test:missing-share', clientRoot: shareRoot, outDir: shareOut })
+  const shareEntry = builtShare.manifest.modules['index.tsx']!
+  const prevShare = g.__helmx_chunk_share
+  try {
+    g.__helmx_chunk_share = {}
+    installNodeChunkBridge([shareOut])
+    const lazyChunkName = shareEntry.chunks!.find((c) => c.includes('lazy'))!
+    const lazyCode = readFileSync(join(shareOut, prebuiltChunkFileName(shareEntry.entryFile, lazyChunkName)), 'utf8')
+    await assert.rejects(
+      import(`data:text/javascript;base64,${Buffer.from(lazyCode, 'utf8').toString('base64')}`),
+      /Missing shared plugin chunk namespace/,
+    )
+  } finally {
+    g.__helmx_chunk_share = prevShare
+    g.__helmx_import_chunk = prevBridge
+    g.__helmx_node_chunk_lookup = prevLookup
+  }
 })

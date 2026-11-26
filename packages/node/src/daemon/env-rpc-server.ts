@@ -3,35 +3,27 @@
  *
  * File and shell operations are handled by `LocalExecutionEnv` (our thin adapter over
  * `@earendil-works/pi-durable/env/node`'s `NodeExecutionEnv`, see `./local-env.ts`), scoped
- * per `cwd`, with `readerId` handles and per-exec `AbortController`s. Target-node host
- * environment discovery (`nodeHostEnv`) and passthrough tunneling (`nodeTunnelOpen` /
- * `nodeTunnelAbort`, supporting both TCP and controlled socketPath/Named Pipe) are delegated
- * to `./env-rpc-ipc.ts` and `./env-rpc-tunnel.ts` with centralized admission/draining guards.
+ * per `cwd`, with `readerId` handles (`./env-rpc-readers.ts`), per-exec `AbortController`s
+ * (`./env-rpc-exec.ts`), file/path-usage RPCs (`./env-rpc-files.ts`), and TCP passthrough
+ * tunneling (`./env-rpc-tunnel.ts`) guarded by centralized admission/draining policies.
  *
  * Error semantics: requests rejected due to upgrade draining return `node_draining`, while
  * user/host cancellation, generation retirement, and disposal return `aborted`.
  */
 
 import type { Duplex } from 'node:stream';
-import {
-  LocalExecutionEnv,
-  isManagedHelmxEnvKey,
-  type BinaryReader,
-  type DirReader,
-  type TextLineReader,
-} from './local-env.js';
-import { createNodePathUsageIo, scanPathUsage, setEnvEntry } from '@helmx/env-io';
 import type {
-  EnvExecInput,
-  EnvExecOk,
   EnvExecOutputEvent,
   NodeEnvRpcFunctions,
-  NodePathUsage,
   NodeTunnelOpenInput,
   RpcResult,
 } from '@helmx/protocol';
-import { drainingRejection, invalidInput, isRecord, rpcFail } from './env-rpc-shared.js';
+import { createExecManager } from './env-rpc-exec.js';
+import { createFileRpcMethods } from './env-rpc-files.js';
+import { createReaderRegistry } from './env-rpc-readers.js';
+import { drainingRejection, invalidInput, rpcFail } from './env-rpc-shared.js';
 import { createTunnelHandler } from './env-rpc-tunnel.js';
+import { LocalExecutionEnv } from './local-env.js';
 
 export interface NodeEnvRpcServerOptions {
   /** Base directory for relative paths (daemon data directory). */
@@ -62,54 +54,9 @@ export interface NodeEnvRpcServerOptions {
   readerIdleTtlMs?: number;
 }
 
-const readerNotFound = <T>(readerId: string): RpcResult<T> => ({
-  ok: false,
-  error: { code: 'not_found', message: `Unknown reader: ${readerId}` },
-});
-
-/** Binary transfer payload limit (64 MiB). */
-const MAX_BINARY_TRANSFER_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_CACHED_ENVS = 64;
 const DEFAULT_MAX_OPEN_READERS = 256;
 const DEFAULT_READER_IDLE_TTL_MS = 5 * 60 * 1000;
-
-/** Strict base64 decoder (standard alphabet + padding, rejecting invalid chars and oversized payloads). */
-const decodeBase64 = (content: string, what: string): Uint8Array => {
-  if (typeof content !== 'string') {
-    throw Object.assign(new Error(`${what} must be a base64 string`), { code: 'invalid' });
-  }
-  const encodedLimit = Math.ceil(MAX_BINARY_TRANSFER_BYTES / 3) * 4;
-  if (content.length > encodedLimit) {
-    throw Object.assign(new Error(`${what} exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`), { code: 'invalid' });
-  }
-  if (content.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(content)) {
-    throw Object.assign(new Error(`${what} is not valid base64 (standard alphabet)`), { code: 'invalid' });
-  }
-  const padding = content.endsWith('==') ? 2 : content.endsWith('=') ? 1 : 0;
-  const decodedBytes = (content.length / 4) * 3 - padding;
-  if (decodedBytes > MAX_BINARY_TRANSFER_BYTES) {
-    throw Object.assign(
-      new Error(`${what} exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit (decoded size ~${decodedBytes})`),
-      { code: 'invalid' },
-    );
-  }
-  return Buffer.from(content, 'base64');
-};
-
-/**
- * Split UTF-16 output chunks on code-point boundaries so surrogate pairs are never torn across
- * JSON frames (which would introduce U+FFFD replacement characters on reassembly).
- */
-const safeChunkEnd = (text: string, offset: number, limit: number): number => {
-  const desired = Math.min(offset + Math.max(limit, 1), text.length);
-  if (desired >= text.length) return text.length;
-  const code = text.charCodeAt(desired - 1);
-  if (code >= 0xd800 && code <= 0xdbff) {
-    const backed = desired - 1;
-    return backed > offset ? backed : desired + 1;
-  }
-  return desired;
-};
 
 /** `NodeEnvRpcFunctions` extended with lifecycle control (`dispose`, `setDraining`) and introspection. */
 export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
@@ -123,14 +70,6 @@ export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
   getOpenReaderCount(): number;
   getActiveTunnelCount(): number;
 }
-
-/** Void-returning RPCs that throw directly via birpc instead of wrapping in `RpcResult`. */
-const VOID_RPC_METHODS = new Set(['envAbortExec', 'envCleanup', 'nodeTunnelAbort']);
-
-const ADMIT_POLICIES: Record<string, { drainingWhat?: string; tracked?: 'exec'; optionalInput?: boolean }> = {
-  envExec: { drainingWhat: 'commands', tracked: 'exec' },
-  nodeTunnelOpen: { drainingWhat: 'tunnels' },
-};
 
 export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEnvRpcServer {
   const { defaultCwd, onExecOutput, shellEnv } = options;
@@ -156,8 +95,28 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     : DEFAULT_READER_IDLE_TTL_MS;
 
   const envs = new Map<string, LocalExecutionEnv>();
+  const activeEnvLeases = new Map<LocalExecutionEnv, number>();
   let disposed = false;
   let draining = false;
+
+  const isEnvBusy = (env: LocalExecutionEnv): boolean =>
+    env.hasActiveRunners() || (activeEnvLeases.get(env) ?? 0) > 0;
+
+  const evictOneIdleEnv = (): boolean => {
+    for (const [key, candidate] of envs.entries()) {
+      if (isEnvBusy(candidate)) continue;
+      envs.delete(key);
+      return true;
+    }
+    return false;
+  };
+
+  const pruneIdleEnvs = (): void => {
+    while (envs.size > maxCachedEnvs) {
+      if (!evictOneIdleEnv()) break;
+    }
+  };
+
   const envFor = (cwd?: string): LocalExecutionEnv => {
     if (disposed) {
       throw Object.assign(new Error('server disposed'), { code: 'aborted' });
@@ -171,93 +130,40 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       return env;
     }
     if (envs.size >= maxCachedEnvs) {
-      const oldest = envs.keys().next().value;
-      if (oldest !== undefined) envs.delete(oldest);
+      evictOneIdleEnv();
     }
     env = new LocalExecutionEnv({ cwd: base, ...(shellEnv ? { shellEnv: shellEnv as NodeJS.ProcessEnv } : {}) });
     envs.set(base, env);
     return env;
   };
 
-  type ReaderHandle =
-    | { kind: 'text'; reader: TextLineReader }
-    | { kind: 'binary'; reader: BinaryReader }
-    | { kind: 'dir'; reader: DirReader };
-
-  interface ReaderEntry {
-    handle: ReaderHandle;
-    lastUsedAt: number;
-  }
-
-  const readers = new Map<string, ReaderEntry>();
-  let readerSeq = 0;
-  let readerSweeper: NodeJS.Timeout | undefined;
-  const stopReaderSweeperIfEmpty = (): void => {
-    if (readers.size === 0 && readerSweeper !== undefined) {
-      clearInterval(readerSweeper);
-      readerSweeper = undefined;
-    }
-  };
-  const sweepExpiredReaders = (now = Date.now()): void => {
-    for (const [id, entry] of [...readers.entries()]) {
-      if (now - entry.lastUsedAt < readerIdleTtlMs) continue;
-      readers.delete(id);
-      void entry.handle.reader.close().catch(() => undefined);
-    }
-    stopReaderSweeperIfEmpty();
-  };
-  const ensureReaderSweeper = (): void => {
-    if (readerSweeper !== undefined || disposed || readers.size === 0) return;
-    const intervalMs = Math.min(30_000, Math.max(25, Math.floor(readerIdleTtlMs / 2)));
-    readerSweeper = setInterval(() => sweepExpiredReaders(), intervalMs);
-    readerSweeper.unref();
-  };
-  const putReader = async (handle: ReaderHandle): Promise<string> => {
-    if (disposed) {
-      await handle.reader.close();
-      throw Object.assign(new Error('server disposed'), { code: 'aborted' });
-    }
-    const now = Date.now();
-    sweepExpiredReaders(now);
-    if (readers.size >= maxOpenReaders) {
-      await handle.reader.close().catch(() => undefined);
-      throw Object.assign(
-        new Error(`Too many open readers on node (limit: ${maxOpenReaders})`),
-        { code: 'invalid' },
-      );
-    }
-    const id = `r${++readerSeq}`;
-    readers.set(id, { handle, lastUsedAt: now });
-    ensureReaderSweeper();
-    return id;
-  };
-  const getReader = <R extends TextLineReader | BinaryReader | DirReader>(
-    readerId: string,
-    kind: ReaderHandle['kind'],
-  ): R | undefined => {
-    const entry = readers.get(readerId);
-    if (entry === undefined) return undefined;
-    const now = Date.now();
-    if (now - entry.lastUsedAt >= readerIdleTtlMs) {
-      readers.delete(readerId);
-      stopReaderSweeperIfEmpty();
-      void entry.handle.reader.close().catch(() => undefined);
-      return undefined;
-    }
-    if (entry.handle.kind !== kind) return undefined;
-    entry.lastUsedAt = now;
-    return entry.handle.reader as R;
-  };
-  const closeReader = async (readerId: string): Promise<void> => {
-    const entry = readers.get(readerId);
-    if (entry === undefined) return;
-    readers.delete(readerId);
-    stopReaderSweeperIfEmpty();
-    await entry.handle.reader.close().catch(() => undefined);
+  const leaseEnv = (cwd?: string) => {
+    const env = envFor(cwd);
+    activeEnvLeases.set(env, (activeEnvLeases.get(env) ?? 0) + 1);
+    return {
+      env,
+      release: (): void => {
+        const count = activeEnvLeases.get(env) ?? 0;
+        if (count <= 1) activeEnvLeases.delete(env);
+        else activeEnvLeases.set(env, count - 1);
+        pruneIdleEnvs();
+      },
+    };
   };
 
-  type RunningExec = { controller: AbortController };
-  const running = new Map<string, RunningExec>();
+  const readers = createReaderRegistry({
+    maxOpenReaders,
+    readerIdleTtlMs,
+    isDisposed: () => disposed,
+  });
+
+  const execs = createExecManager({
+    leaseEnv,
+    onExecOutput,
+    shellEnv,
+    maxOutputChunkChars,
+    abortDrainGraceMs,
+  });
 
   const tunnels = createTunnelHandler({
     openTunnelStream: options.openTunnelStream,
@@ -265,334 +171,84 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     isDraining: () => draining,
   });
 
-  const unwrap = async <T, R = T extends void ? null : T>(
-    promise: Promise<{ ok: true; value: T } | { ok: false; error: unknown }>,
-  ): Promise<RpcResult<R>> => {
-    const result = await promise;
-    return result.ok ? { ok: true, value: (result.value ?? null) as R } : rpcFail(result.error);
-  };
+  const files = createFileRpcMethods({
+    envFor,
+    readers,
+    pathUsage: options.pathUsage,
+  });
 
-  /** Build child env while stripping daemon credentials (`HELMX_TOKEN` / `HELMX_EXECUTION_SCOPE`) unless explicitly supplied in `input.env`. */
-  const buildExecEnv = (
-    input: { env?: Record<string, string>; inheritEnv?: boolean },
-  ): { env: Record<string, string>; inheritEnv: false } => {
-    const merged: Record<string, string> = {};
-    if (input.inheritEnv !== false) {
-      for (const [key, value] of Object.entries(process.env)) {
-        if (value === undefined || isManagedHelmxEnvKey(key)) continue;
-        setEnvEntry(merged, key, value);
+  const pendingOperations = new Set<Promise<unknown>>();
+
+  const guardRpc = <TInput, TOutput>(
+    original: (input: TInput) => Promise<RpcResult<TOutput>>,
+    admit: { drainingWhat?: string; tracker?: <T>(promise: Promise<T>) => Promise<T> } = {},
+  ): ((input: TInput) => Promise<RpcResult<TOutput>>) =>
+    async (input: TInput): Promise<RpcResult<TOutput>> => {
+      if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        return invalidInput('RPC input must be an object');
       }
-    }
-    for (const [key, value] of Object.entries(shellEnv ?? {})) {
-      if (value !== undefined) setEnvEntry(merged, key, value);
-    }
-    for (const [key, value] of Object.entries(input.env ?? {})) {
-      if (value !== undefined) setEnvEntry(merged, key, value);
-    }
-    return { env: merged, inheritEnv: false as const };
-  };
-
-  const execWaiters = new Set<Promise<unknown>>();
-  const trackExec = <T>(promise: Promise<T>): Promise<T> => {
-    execWaiters.add(promise);
-    void promise.finally(() => execWaiters.delete(promise)).catch(() => undefined);
-    return promise;
-  };
-
-  const execOnce = async (input: EnvExecInput): Promise<RpcResult<EnvExecOk>> => {
-    const { execId, command, cwd, timeout, spill, window } = input;
-    if (typeof execId !== 'string' || execId.length === 0 || execId.length > 128) {
-      return invalidInput(`Invalid execId: ${JSON.stringify(execId)}`);
-    }
-    if (running.has(execId)) {
-      return invalidInput(`Duplicate execId in flight: ${JSON.stringify(execId)}`);
-    }
-    const executionEnv = envFor(cwd);
-    const controller = new AbortController();
-    running.set(execId, { controller });
-    const emit = (text: string, stream: 'stdout' | 'stderr', skipped?: EnvExecOutputEvent['skipped']): void => {
-      if (!onExecOutput) return;
-      for (let offset = 0; offset < text.length;) {
-        const end = safeChunkEnd(text, offset, maxOutputChunkChars);
-        onExecOutput({ execId, text: text.slice(offset, end), stream, ...(offset === 0 && skipped ? { skipped } : {}) });
-        offset = end;
+      if (admit.drainingWhat !== undefined && draining) {
+        return { ok: false, error: drainingRejection(admit.drainingWhat) };
       }
-    };
-    let forced: { ok: false; error: { code: 'aborted' | 'timeout'; message: string } } | undefined;
-    let execSettled = false;
-    let settleForce: (() => void) | undefined;
-    const drainTimers = new Set<NodeJS.Timeout>();
-    const forceSettleNow = (code: 'aborted' | 'timeout', message: string): void => {
-      if (execSettled) return;
-      execSettled = true;
-      forced = { ok: false, error: { code, message } };
-      settleForce?.();
-    };
-    controller.signal.addEventListener('abort', () => {
-      if (execSettled) return;
-      const timer = setTimeout(
-        () => forceSettleNow('aborted', 'Command aborted (stdio drain grace exceeded)'),
-        abortDrainGraceMs,
+      const recheckDisposedInFlight = admit.drainingWhat === undefined;
+      const operation = Promise.resolve().then(() =>
+        recheckDisposedInFlight && disposed
+          ? { ok: false as const, error: { code: 'aborted' as const, message: 'server disposed' } }
+          : original(input),
       );
-      drainTimers.add(timer);
-    }, { once: true });
-    if (timeout !== undefined && Number.isFinite(timeout) && timeout > 0) {
-      const timer = setTimeout(() => {
-        if (execSettled) return;
-        controller.abort(new Error('Command timed out'));
-        forceSettleNow('timeout', `Command timed out after ${timeout} seconds`);
-      }, timeout * 1000 + abortDrainGraceMs);
-      drainTimers.add(timer);
-    }
-    try {
-      const result = await new Promise<RpcResult<EnvExecOk>>((resolve) => {
-        settleForce = () => resolve(forced!);
-        void executionEnv.exec(command, {
-          ...(cwd === undefined ? {} : { cwd }),
-          ...buildExecEnv(input),
-          ...(timeout === undefined ? {} : { timeout }),
-          ...(spill === undefined ? {} : { spill }),
-          ...(window === undefined ? {} : { window }),
-          onOutput: (text, info) => emit(text, info.stream, info.skipped),
-        }, controller.signal).then(
-          (value) => { if (!execSettled) { execSettled = true; resolve(value.ok ? { ok: true, value: value.value } : rpcFail(value.error)); } },
-          (error: unknown) => { if (!execSettled) { execSettled = true; resolve(rpcFail(error)); } },
-        );
-      });
-      return result;
-    } finally {
-      running.delete(execId);
-      for (const timer of drainTimers) clearTimeout(timer);
-      drainTimers.clear();
-    }
-  };
-
-  const rpc: NodeEnvRpcFunctions = {
-    async envAbsolutePath({ path: target, cwd }) {
-      return unwrap(envFor(cwd).absolutePath(target));
-    },
-    async envJoinPath({ parts, cwd }) {
-      return unwrap(envFor(cwd).joinPath(parts));
-    },
-
-    async envReadTextFile({ path: target, cwd }) {
-      const env = envFor(cwd);
-      const info = await env.fileInfo(target);
-      if (info.ok && info.value.size > MAX_BINARY_TRANSFER_BYTES) {
-        return invalidInput(`readTextFile result exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
-      }
-      const result = await env.readTextFile(target);
-      if (!result.ok) return rpcFail(result.error);
-      if (Buffer.byteLength(result.value, 'utf8') > MAX_BINARY_TRANSFER_BYTES) {
-        return invalidInput(`readTextFile result exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
-      }
-      return { ok: true, value: result.value };
-    },
-    async envReadTextLines({ path: target, maxLines, cwd }) {
-      return unwrap(envFor(cwd).readTextLines(target, { maxLines }));
-    },
-    async envReadBinaryFile({ path: target, cwd }) {
-      const opened = await envFor(cwd).openBinaryReader(target, {});
-      if (!opened.ok) return rpcFail(opened.error);
-      const reader = opened.value;
+      const tracked = admit.tracker !== undefined ? admit.tracker(operation) : operation;
+      pendingOperations.add(tracked);
       try {
-        const info = await reader.info();
-        if (!info.ok) return rpcFail(info.error);
-        if (info.value.size > MAX_BINARY_TRANSFER_BYTES) {
-          return invalidInput(`readBinaryFile result exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
-        }
-        const result = await reader.read(0, MAX_BINARY_TRANSFER_BYTES + 1);
-        if (!result.ok) return rpcFail(result.error);
-        if (result.value.byteLength > MAX_BINARY_TRANSFER_BYTES) {
-          return invalidInput(`readBinaryFile result exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
-        }
-        return { ok: true, value: { base64: Buffer.from(result.value).toString('base64') } };
+        return await tracked;
+      } catch (error) {
+        return rpcFail(error);
       } finally {
-        await reader.close();
+        pendingOperations.delete(tracked);
       }
-    },
+    };
 
-    async envWriteFile({ path: target, content, encoding, cwd }) {
-      let bytes: Uint8Array | string;
-      try {
-        bytes = encoding === 'base64' ? decodeBase64(content, 'content') : content;
-      } catch (error) {
-        return rpcFail(error);
-      }
-      const size = typeof bytes === 'string' ? Buffer.byteLength(bytes, 'utf8') : bytes.byteLength;
-      if (size > MAX_BINARY_TRANSFER_BYTES) {
-        return invalidInput(
-          `content is ${size} bytes, exceeding the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`,
-        );
-      }
-      return unwrap(envFor(cwd).writeFile(target, bytes));
+  const rpcFunctions: NodeEnvRpcFunctions & {
+    nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcResult<null>>;
+    nodeTunnelAbort(tunnelId: string): Promise<void>;
+  } = {
+    envAbsolutePath: guardRpc(files.envAbsolutePath),
+    envJoinPath: guardRpc(files.envJoinPath),
+    envReadTextFile: guardRpc(files.envReadTextFile),
+    envReadTextLines: guardRpc(files.envReadTextLines),
+    envReadBinaryFile: guardRpc(files.envReadBinaryFile),
+    envWriteFile: guardRpc(files.envWriteFile),
+    envAppendFile: guardRpc(files.envAppendFile),
+    envFlushFile: guardRpc(files.envFlushFile),
+    envTruncateFile: guardRpc(files.envTruncateFile),
+    envRenameFile: guardRpc(files.envRenameFile),
+    envFileInfo: guardRpc(files.envFileInfo),
+    envListDir: guardRpc(files.envListDir),
+    envListFiles: guardRpc(files.envListFiles),
+    envCanonicalPath: guardRpc(files.envCanonicalPath),
+    envExists: guardRpc(files.envExists),
+    envPathUsage: guardRpc(files.envPathUsage),
+    envCreateDir: guardRpc(files.envCreateDir),
+    envRemove: guardRpc(files.envRemove),
+    envCreateTempDir: guardRpc(files.envCreateTempDir),
+    envCreateTempFile: guardRpc(files.envCreateTempFile),
+    envOpenTextLineReader: guardRpc(files.envOpenTextLineReader),
+    envTextReaderRead: guardRpc(files.envTextReaderRead),
+    envTextReaderClose: guardRpc(files.envTextReaderClose),
+    envOpenBinaryReader: guardRpc(files.envOpenBinaryReader),
+    envBinaryReaderInfo: guardRpc(files.envBinaryReaderInfo),
+    envBinaryReaderRead: guardRpc(files.envBinaryReaderRead),
+    envBinaryReaderScanLines: guardRpc(files.envBinaryReaderScanLines),
+    envBinaryReaderClose: guardRpc(files.envBinaryReaderClose),
+    envOpenDirReader: guardRpc(files.envOpenDirReader),
+    envDirReaderNext: guardRpc(files.envDirReaderNext),
+    envDirReaderClose: guardRpc(files.envDirReaderClose),
+    envExec: guardRpc(execs.execOnce, { drainingWhat: 'commands', tracker: execs.trackExec }),
+    envAbortExec: async (execId: string): Promise<void> => {
+      execs.abortExec(execId);
     },
-    async envAppendFile({ path: target, content, encoding, cwd }) {
-      let bytes: Uint8Array | string;
-      try {
-        bytes = encoding === 'base64' ? decodeBase64(content, 'content') : content;
-      } catch (error) {
-        return rpcFail(error);
-      }
-      const size = typeof bytes === 'string' ? Buffer.byteLength(bytes, 'utf8') : bytes.byteLength;
-      if (size > MAX_BINARY_TRANSFER_BYTES) return invalidInput(`content exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
-      return unwrap(envFor(cwd).appendFile(target, bytes));
-    },
-    async envFlushFile({ path: target, cwd }) {
-      return unwrap(envFor(cwd).flushFile(target));
-    },
-    async envTruncateFile({ path: target, size, cwd }) {
-      return unwrap(envFor(cwd).truncateFile(target, size));
-    },
-    async envRenameFile({ sourcePath, destinationPath, cwd }) {
-      return unwrap(envFor(cwd).renameFile(sourcePath, destinationPath));
-    },
-
-    async envFileInfo({ path: target, cwd }) {
-      return unwrap(envFor(cwd).fileInfo(target));
-    },
-    async envListDir({ path: target, cwd }) {
-      return unwrap(envFor(cwd).listDir(target));
-    },
-    async envListFiles() {
-      // Optional `listFiles` is not implemented on remote nodes; callers fall back to directory walks.
-      return { ok: false, error: { code: 'not_supported', message: 'listFiles is not available on this environment' } };
-    },
-    async envCanonicalPath({ path: target, cwd }) {
-      return unwrap(envFor(cwd).canonicalPath(target));
-    },
-    async envExists({ path: target, cwd }) {
-      return unwrap(envFor(cwd).exists(target));
-    },
-
-    /** Scan `/proc` via `@helmx/env-io` to report processes referencing `path` (read-only). */
-    async envPathUsage(raw: unknown): Promise<RpcResult<NodePathUsage>> {
-      if (!isRecord(raw) || Array.isArray(raw)) {
-        return invalidInput('envPathUsage input must be a plain object');
-      }
-      const unknownFields = Object.keys(raw).filter((key) => key !== 'path');
-      if (unknownFields.length > 0) {
-        return invalidInput(`envPathUsage rejects unknown field(s): ${unknownFields.join(', ')}`);
-      }
-      const target = (raw as { path?: unknown }).path;
-      if (typeof target !== 'string' || target.length === 0 || target.length > 4096 || target.includes('\u0000')) {
-        return invalidInput('envPathUsage path must be a non-empty string without NUL, at most 4096 chars');
-      }
-      const procRoot = options.pathUsage?.procRoot ?? '/proc';
-      const io = createNodePathUsageIo();
-      const result = await scanPathUsage(target, {
-        io,
-        platform: options.pathUsage?.platform?.() ?? process.platform,
-        ...(procRoot === '/proc' ? {} : { procRoot }),
-      });
-      if (result.ok) return { ok: true, value: result.value };
-      const code = result.error.code === 'invalid'
-        ? 'invalid'
-        : result.error.code === 'not_supported'
-          ? 'not_supported'
-          : result.error.code === 'permission_denied'
-            ? 'permission_denied'
-            : result.error.code === 'aborted'
-              ? 'aborted'
-              : 'unknown';
-      return { ok: false, error: { code, message: result.error.message } };
-    },
-
-    async envCreateDir({ path: target, recursive, cwd }) {
-      return unwrap(envFor(cwd).createDir(target, { recursive }));
-    },
-    async envRemove({ path: target, recursive, force, cwd }) {
-      return unwrap(envFor(cwd).remove(target, { recursive, force }));
-    },
-    async envCreateTempDir({ prefix, cwd }) {
-      return unwrap(envFor(cwd).createTempDir(prefix));
-    },
-    async envCreateTempFile({ prefix, suffix, cwd }) {
-      return unwrap(envFor(cwd).createTempFile({ prefix, suffix }));
-    },
-
-    async envOpenTextLineReader({ path: target, cwd }) {
-      const result = await envFor(cwd).openTextLineReader(target);
-      if (!result.ok) return rpcFail(result.error);
-      return { ok: true, value: { readerId: await putReader({ kind: 'text', reader: result.value }) } };
-    },
-    async envTextReaderRead({ readerId }) {
-      const reader = getReader<TextLineReader>(readerId, 'text');
-      if (reader === undefined) return readerNotFound(readerId);
-      const result = await reader.readLine();
-      if (!result.ok) return rpcFail(result.error);
-      return { ok: true, value: result.value ?? null };
-    },
-    async envTextReaderClose({ readerId }) {
-      await closeReader(readerId);
-      return { ok: true, value: null };
-    },
-
-    async envOpenBinaryReader({ path: target, noFollow, cwd }) {
-      const result = await envFor(cwd).openBinaryReader(target, { noFollow });
-      if (!result.ok) return rpcFail(result.error);
-      return { ok: true, value: { readerId: await putReader({ kind: 'binary', reader: result.value }) } };
-    },
-    async envBinaryReaderInfo({ readerId }) {
-      const reader = getReader<BinaryReader>(readerId, 'binary');
-      if (reader === undefined) return readerNotFound(readerId);
-      return unwrap(reader.info());
-    },
-    async envBinaryReaderRead({ readerId, offset, length }) {
-      const reader = getReader<BinaryReader>(readerId, 'binary');
-      if (reader === undefined) return readerNotFound(readerId);
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || length > MAX_BINARY_TRANSFER_BYTES) {
-        return invalidInput(
-          `length must be a safe integer no greater than ${MAX_BINARY_TRANSFER_BYTES}`,
-        );
-      }
-      const result = await reader.read(offset, length);
-      if (!result.ok) return rpcFail(result.error);
-      if (result.value.byteLength > MAX_BINARY_TRANSFER_BYTES) {
-        return invalidInput(
-          `binary reader chunk is ${result.value.byteLength} bytes, exceeding the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`,
-        );
-      }
-      return {
-        ok: true,
-        value: { base64: Buffer.from(result.value).toString('base64'), byteLength: result.value.byteLength },
-      };
-    },
-    async envBinaryReaderScanLines({ readerId, startLine, endLine }) {
-      const reader = getReader<BinaryReader>(readerId, 'binary');
-      if (reader === undefined) return readerNotFound(readerId);
-      return unwrap(reader.scanLines({ startLine, ...(endLine === undefined ? {} : { endLine }) }));
-    },
-    async envBinaryReaderClose({ readerId }) {
-      await closeReader(readerId);
-      return { ok: true, value: null };
-    },
-
-    async envOpenDirReader({ path: target, cwd }) {
-      const result = await envFor(cwd).openDirReader(target);
-      if (!result.ok) return rpcFail(result.error);
-      return { ok: true, value: { readerId: await putReader({ kind: 'dir', reader: result.value }) } };
-    },
-    async envDirReaderNext({ readerId, maxEntries }) {
-      const reader = getReader<DirReader>(readerId, 'dir');
-      if (reader === undefined) return readerNotFound(readerId);
-      return unwrap(reader.next(maxEntries));
-    },
-    async envDirReaderClose({ readerId }) {
-      await closeReader(readerId);
-      return { ok: true, value: null };
-    },
-
-    async envExec(input: EnvExecInput): Promise<RpcResult<EnvExecOk>> {
-      return execOnce(input);
-    },
-
-    async envAbortExec(execId: string): Promise<void> {
-      running.get(execId)?.controller.abort(new Error('aborted by hub'));
-    },
-
     /** Kill all running commands for `cwd` (or all cwds); rejected while draining or disposed. */
-    async envCleanup(cwd?: string): Promise<void> {
+    envCleanup: async (cwd?: string): Promise<void> => {
       if (disposed) {
         throw Object.assign(new Error('server disposed, rejecting envCleanup'), { code: 'aborted' });
       }
@@ -609,77 +265,33 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         }),
       );
     },
-
-  };
-  const rpcFunctions: NodeEnvRpcFunctions = Object.assign(rpc, {
-    nodeTunnelOpen: (input: NodeTunnelOpenInput): Promise<RpcResult<null>> => tunnels.nodeTunnelOpen(input),
+    nodeTunnelOpen: guardRpc(
+      (input: NodeTunnelOpenInput) => tunnels.nodeTunnelOpen(input),
+      { drainingWhat: 'tunnels' },
+    ),
     nodeTunnelAbort: tunnels.nodeTunnelAbort,
-  });
-
-  const guardRpcMethod = (
-    original: (...args: unknown[]) => Promise<RpcResult<unknown>>,
-    admit: { drainingWhat?: string; tracker?: <T>(promise: Promise<T>) => Promise<T>; optionalInput?: boolean },
-  ): ((...args: unknown[]) => Promise<RpcResult<unknown>>) =>
-    async (...args: unknown[]): Promise<RpcResult<unknown>> => {
-      if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
-      const input = args[0];
-      const missingAllowed = admit.optionalInput === true && input === undefined;
-      if (!missingAllowed && (!input || typeof input !== 'object' || Array.isArray(input))) {
-        return invalidInput('RPC input must be an object');
-      }
-      if (admit.drainingWhat !== undefined && draining) {
-        return { ok: false, error: drainingRejection(admit.drainingWhat) };
-      }
-      const recheckDisposedInFlight = admit.drainingWhat === undefined;
-      const operation = Promise.resolve().then(() =>
-        recheckDisposedInFlight && disposed
-          ? { ok: false as const, error: { code: 'aborted' as const, message: 'server disposed' } }
-          : original(...args),
-      );
-      const tracked = admit.tracker !== undefined ? admit.tracker(operation) : operation;
-      pendingOperations.add(tracked);
-      try {
-        return await tracked;
-      } catch (error) {
-        return rpcFail(error);
-      } finally {
-        pendingOperations.delete(tracked);
-      }
-    };
-
-  const pendingOperations = new Set<Promise<unknown>>();
-  const guarded = rpcFunctions as unknown as Record<string, unknown>;
-  for (const key of Object.keys(rpcFunctions)) {
-    if (VOID_RPC_METHODS.has(key)) continue;
-    const original = guarded[key];
-    if (typeof original !== 'function') continue;
-    const admit = ADMIT_POLICIES[key];
-    const tracker = admit?.tracked === 'exec' ? trackExec : undefined;
-    guarded[key] = guardRpcMethod(original as (...args: unknown[]) => Promise<RpcResult<unknown>>, {
-      drainingWhat: admit?.drainingWhat,
-      tracker,
-      optionalInput: admit?.optionalInput,
-    });
-  }
+  };
 
   let disposal: Promise<void> | undefined;
   const dispose = (): Promise<void> => {
     if (disposal) return disposal;
     disposed = true;
     disposal = (async () => {
-      if (readerSweeper !== undefined) {
-        clearInterval(readerSweeper);
-        readerSweeper = undefined;
-      }
-      for (const exec of running.values()) exec.controller.abort(new Error('connection closed'));
+      readers.stopSweeper();
+      execs.abortAll();
       tunnels.destroyAllTunnels();
-      await Promise.allSettled([...pendingOperations, ...execWaiters, ...tunnels.getTunnelWaiters()]);
-      const entries = [...readers.values()];
-      readers.clear();
-      await Promise.all(entries.map((entry) => entry.handle.reader.close()));
-      running.clear();
-      await Promise.all([...envs.values()].map((env) => env.cleanup()));
+      await Promise.allSettled([...pendingOperations, ...execs.getExecWaiters(), ...tunnels.getTunnelWaiters()]);
+      const readerSettled = await readers.closeAll();
+      execs.clearRunning();
+      const envList = [...envs.values()];
       envs.clear();
+      activeEnvLeases.clear();
+      const envSettled = await Promise.allSettled(envList.map((env) => env.cleanup()));
+      const failures = [...readerSettled, ...envSettled]
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r) => r.reason);
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, 'failed to dispose node env RPC server');
     })();
     return disposal;
   };
@@ -689,11 +301,8 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     setDraining: (value: boolean): void => {
       draining = value === true;
     },
-    getActiveExecCount: () => execWaiters.size,
-    getOpenReaderCount: () => {
-      sweepExpiredReaders();
-      return readers.size;
-    },
+    getActiveExecCount: () => execs.getActiveExecCount(),
+    getOpenReaderCount: () => readers.getOpenReaderCount(),
     getActiveTunnelCount: () => tunnels.getActiveTunnelCount(),
-  }) as NodeEnvRpcServer;
+  });
 }

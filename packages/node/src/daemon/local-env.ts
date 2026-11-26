@@ -426,6 +426,10 @@ export class LocalExecutionEnv {
     return this.#inner.createTempFile(options, toContext(signal));
   }
 
+  hasActiveRunners(): boolean {
+    return this.#activeRunners.size > 0;
+  }
+
   /** Terminate all commands currently running in this environment (for shutdown only, never per-request). */
   async cleanup(): Promise<void> {
     const runners = [...this.#activeRunners];

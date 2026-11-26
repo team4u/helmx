@@ -19,8 +19,39 @@ import {
   type PluginPackageSource,
 } from '@helmx/protocol';
 
-/** Minimal npm specifier check: non-empty with no whitespace (semver parsing belongs to npm). */
-const NPM_SPEC_PATTERN = /^\S+$/;
+/** Validates `npm:<spec>` strictly: rejects options, URLs/schemes, whitespace, and path traversal. */
+function assertNpmSpec(spec: string, raw: string): void {
+  const fail = (detail: string): HelmxError =>
+    new HelmxError('validation_error', `Invalid npm specifier (${detail}): ${spec}`, 400, { raw, spec });
+  if (spec.length === 0 || !/^\S+$/.test(spec) || /[\x00-\x1f\x7f]/.test(spec)) {
+    throw fail('empty, whitespace, or control character');
+  }
+  if (spec.startsWith('-')) throw fail('cannot start with "-"');
+  if (isReservedPluginNamespace(spec) || /^(?:builtin|core)%3a/i.test(spec)) {
+    throw fail('cannot use reserved builtin: or core: namespace');
+  }
+  if (spec.includes('\\') || spec.includes('..')) throw fail('contains backslash or ".." traversal');
+  if (spec.includes('://') || /[a-zA-Z][a-zA-Z0-9+.-]*:/.test(spec) || spec.includes(':')) {
+    throw fail('URL/file/protocol schemes are not allowed');
+  }
+  if (spec.startsWith('/') || spec.startsWith('.') || spec.startsWith('_') || spec.startsWith('~')) {
+    throw fail('local paths are not allowed');
+  }
+  if (spec.startsWith('@')) {
+    const slash = spec.indexOf('/');
+    if (slash <= 1 || slash === spec.length - 1) throw fail('expected @scope/name');
+    const rest = spec.slice(slash + 1);
+    if (rest.includes('/')) throw fail('unexpected "/" after package name');
+    const pkgName = rest.split('@')[0] ?? '';
+    if (pkgName.length === 0 || pkgName.startsWith('.') || pkgName.startsWith('_')) {
+      throw fail('invalid scoped package name');
+    }
+    return;
+  }
+  if (spec.includes('/')) throw fail('unscoped package name cannot contain "/"');
+  const pkgName = spec.split('@')[0] ?? '';
+  if (pkgName.length === 0) throw fail('missing package name');
+}
 
 /**
  * Strictly validates a git repository address (rejects path injection):
@@ -48,10 +79,6 @@ function assertGitRepo(repo: string, raw: string): void {
       throw fail('unparseable URL');
     }
     if (parsed.hostname === '' || /^\s+$/.test(parsed.hostname)) throw fail('missing hostname');
-    return;
-  }
-  if (/^https:\/\//i.test(repo)) {
-    // Unreachable: handled above; kept as defensive guard.
     return;
   }
   // SCP form (`user@host:path`, optional port): host/user precedes `:`, non-empty relative path follows.
@@ -135,12 +162,7 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
   }
   if (raw.startsWith('npm:')) {
     const spec = raw.slice('npm:'.length);
-    if (!NPM_SPEC_PATTERN.test(spec)) {
-      throw new HelmxError('validation_error', `Invalid npm specifier: ${spec} (expected npm:<spec>)`, 400, { raw });
-    }
-    if (isReservedPluginNamespace(spec)) {
-      throw new HelmxError('validation_error', `npm specifier cannot start with reserved builtin: or core: namespace (${spec})`, 400, { raw });
-    }
+    assertNpmSpec(spec, raw);
     return { kind: 'npm', raw, spec };
   }
   if (raw.startsWith('git+')) {
@@ -190,21 +212,16 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
     // Trailing `@ref` (e.g. `https://...git@v1`), only when no userinfo `@` precedes path
     const atOutsideUser = findTrailingRefAt(repo);
     if (atOutsideUser >= 0) {
+      if (ref !== undefined) {
+        throw new HelmxError('validation_error', `Git URL cannot specify both '#ref' and '@ref': ${raw}`, 400, { raw });
+      }
       ref = repo.slice(atOutsideUser + 1);
       repo = repo.slice(0, atOutsideUser);
       if (ref.length === 0 || ref.includes('/')) {
         throw new HelmxError('validation_error', `Invalid trailing @ref in git URL: ${raw}`, 400, { raw });
       }
     }
-    let parsedHost: URL;
-    try {
-      parsedHost = new URL(repo);
-    } catch {
-      throw new HelmxError('validation_error', `Invalid git URL: ${raw}`, 400, { raw });
-    }
-    if (parsedHost.hostname === '' || /^\s+$/.test(parsedHost.hostname)) {
-      throw new HelmxError('validation_error', `Git URL is missing hostname: ${raw}`, 400, { raw });
-    }
+    assertGitRepo(repo, raw);
     return { kind: 'git', raw, repo, ref, subdirectory };
   }
   // Local path: cross-platform absolute (POSIX `/`, Windows drive `C:\…` / `C:/…`, UNC `\\server\share`,

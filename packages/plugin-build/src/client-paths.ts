@@ -11,29 +11,42 @@ export function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
+function isMissingErrno(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
 export function realPathOrThrow(p: string, message: string): string {
   try {
     const st = statSync(p);
-    if (!st.isFile() && !st.isDirectory()) throw new Error('not a file or directory');
+    if (!st.isFile() && !st.isDirectory()) {
+      throw new HelmxError('client_root_invalid', message, 400, { path: p });
+    }
     return realpathSync(p);
-  } catch {
-    throw new HelmxError('client_root_invalid', message, 400, { path: p });
+  } catch (err) {
+    if (err instanceof HelmxError) throw err;
+    if (isMissingErrno(err)) {
+      throw new HelmxError('client_root_invalid', message, 400, { path: p });
+    }
+    throw err;
   }
 }
 
 export function realpathOrNull(p: string): string | null {
   try {
     return realpathSync(p);
-  } catch {
-    return null;
+  } catch (err) {
+    if (isMissingErrno(err)) return null;
+    throw err;
   }
 }
 
 export function isRegularFile(path: string): boolean {
   try {
     return statSync(path).isFile();
-  } catch {
-    return false;
+  } catch (err) {
+    if (isMissingErrno(err)) return false;
+    throw err;
   }
 }
 
@@ -59,18 +72,27 @@ export function assertEntryInsideRoot(pluginId: string, rootReal: string, module
   let real: string;
   try {
     const st = statSync(absPath);
-    if (!st.isFile()) throw new Error('not a regular file');
+    if (!st.isFile()) {
+      throw new HelmxError('client_root_invalid', `plugin ${pluginId} client module is not a regular file: ${moduleRef}`, 400, {
+        pluginId,
+        module: moduleRef,
+      });
+    }
     real = realpathSync(absPath);
-  } catch {
-    throw new HelmxError('client_root_invalid', `plugin ${pluginId} client module is missing: ${moduleRef}`, 400, {
-      pluginId,
-      module: moduleRef,
-    });
+  } catch (err) {
+    if (err instanceof HelmxError) throw err;
+    if (isMissingErrno(err)) {
+      throw new HelmxError('client_root_invalid', `plugin ${pluginId} client module is missing: ${moduleRef}`, 400, {
+        pluginId,
+        module: moduleRef,
+      });
+    }
+    throw err;
   }
-  if (!isInside(rootReal, real)) {
+  if (!isInsideClientSource(rootReal, real)) {
     throw new HelmxError(
       'client_module_out_of_root',
-      `plugin ${pluginId} client module escapes clientRoot (possible symlink escape): ${moduleRef}`,
+      `plugin ${pluginId} client module escapes clientRoot (possible symlink escape or node_modules entry): ${moduleRef}`,
       400,
       { pluginId, module: moduleRef },
     );

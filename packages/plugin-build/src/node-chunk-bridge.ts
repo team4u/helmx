@@ -110,7 +110,10 @@ async function loadSingleNodeChunk(
     }
     const dataUrl = `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`;
     return (await import(/* @vite-ignore */ dataUrl)) as Record<string, unknown>;
-  })();
+  })().catch((err: unknown) => {
+    cache.delete(key);
+    throw err;
+  });
   cache.set(key, run);
   return run;
 }

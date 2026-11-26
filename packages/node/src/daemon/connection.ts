@@ -48,13 +48,14 @@ const HEARTBEAT_BUDGET_MAX_MS = 30_000;
 const CLOSE_SETTLE_TIMEOUT_MS = 10_000;
 
 type RegisterOutcome = { kind: 'ack'; result: NodeRegisterResult } | { kind: 'timeout' } | { kind: 'error' };
-type HeartbeatOutcome = { kind: 'ack'; alive: boolean } | { kind: 'timeout' };
+type HeartbeatOutcome = { kind: 'ack'; alive: boolean } | { kind: 'timeout' } | { kind: 'error' };
 
 interface ConnectionGeneration {
   server: NodeEnvRpcServer;
   hubRpc: BirpcReturn<HubSideFunctions, NodeEnvRpcFunctions>;
   socket: WebSocket;
   heartbeatTimer: NodeJS.Timeout | undefined;
+  pushHeartbeatSoon?: (withCommit: boolean) => void;
   connectTimeout?: NodeJS.Timeout;
   registered: boolean;
   disposePromise?: Promise<void>;
@@ -232,27 +233,45 @@ export function createDaemonConnectionManager(deps: DaemonConnectionManagerDeps)
     const budget = Math.min(Math.max(Math.floor((interval * 3) / 4), HEARTBEAT_BUDGET_MIN_MS), HEARTBEAT_BUDGET_MAX_MS);
     let inFlight = false;
     let misses = 0;
+    let queuedSoon: { withCommit: boolean } | undefined;
 
-    gen.heartbeatTimer = setInterval(() => {
-      if (closed || generation !== gen || inFlight) return;
+    const sendHeartbeat = (withCommit = false): void => {
+      if (closed || generation !== gen || !gen.registered) return;
+      if (withCommit && !commitAcked && deps.getUpgradeCommit() !== undefined) {
+        commitPending = true;
+      }
+      if (inFlight) {
+        queuedSoon = { withCommit: (queuedSoon?.withCommit ?? false) || withCommit };
+        return;
+      }
       inFlight = true;
-      if (deps.getUpgradeCommit() !== undefined && !commitAcked) commitPending = true;
+      const commit = deps.getUpgradeCommit();
+      if (commit !== undefined && !commitAcked) commitPending = true;
+      const sendingCommit = commit !== undefined && !commitAcked && (commitPending || withCommit);
       const outcome = withinBudget<HeartbeatOutcome>(
-        (async () => {
+        (async (): Promise<HeartbeatOutcome> => {
           const beat = await collectNodeHealth(dataDir).catch(() => undefined);
-          const commit = deps.getUpgradeCommit();
-          const alive = await gen.hubRpc.heartbeat(identity.nodeId, {
+          const input: NodeHeartbeatInput = {
             ...(beat !== undefined ? { health: beat } : {}),
-            ...(commitPending && commit !== undefined ? { upgradeCommit: commit } : {}),
-          });
+            ...(sendingCommit ? { upgradeCommit: commit } : {}),
+          };
+          const alive = await gen.hubRpc.heartbeat(identity.nodeId, input);
           return { kind: 'ack', alive: alive === true };
         })(),
         budget,
         { kind: 'timeout' },
       )
-        .catch((): HeartbeatOutcome => ({ kind: 'ack', alive: false }))
+        .catch((error: unknown): HeartbeatOutcome => {
+          log(`heartbeat failed: ${error instanceof Error ? error.message : String(error)}`);
+          return { kind: 'error' };
+        })
         .finally(() => {
           inFlight = false;
+          const next = queuedSoon;
+          queuedSoon = undefined;
+          if (next !== undefined && !closed && generation === gen && gen.registered) {
+            sendHeartbeat(next.withCommit);
+          }
         });
 
       void outcome.then((r) => {
@@ -265,9 +284,13 @@ export function createDaemonConnectionManager(deps: DaemonConnectionManagerDeps)
           }
           return;
         }
+        if (r.kind === 'error') {
+          onGone('heartbeat failed');
+          return;
+        }
         if (r.alive) {
           misses = 0;
-          if (commitPending && deps.getUpgradeCommit() !== undefined) {
+          if (sendingCommit) {
             commitPending = false;
             commitAcked = true;
           }
@@ -276,6 +299,13 @@ export function createDaemonConnectionManager(deps: DaemonConnectionManagerDeps)
         log('heartbeat rejected (registration expired); reconnecting');
         onGone('heartbeat rejected');
       });
+    };
+
+    gen.pushHeartbeatSoon = (withCommit: boolean): void => {
+      sendHeartbeat(withCommit);
+    };
+    gen.heartbeatTimer = setInterval(() => {
+      sendHeartbeat(false);
     }, interval);
   };
 
@@ -324,8 +354,8 @@ export function createDaemonConnectionManager(deps: DaemonConnectionManagerDeps)
           log(`${message}; terminating connection`);
           onGone('invalid frame');
         }),
-        serialize: (data) => data,
-        deserialize: (data) => data as never,
+        serialize: (data: unknown) => data,
+        deserialize: (data: unknown) => data,
         timeout: 30 * 60 * 1000,
       },
     );
@@ -358,7 +388,10 @@ export function createDaemonConnectionManager(deps: DaemonConnectionManagerDeps)
         throw new Error('Hub does not support node streaming callback');
       }
       try {
-        void Promise.resolve(fn.asEvent(event as never)).catch(() => onGone('stream send failed'));
+        void Promise.resolve(fn.asEvent(event)).catch((error: unknown) => {
+          log(`stream event send failed: ${error instanceof Error ? error.message : String(error)}`);
+          onGone('stream send failed');
+        });
       } catch (error) {
         onGone('stream send failed');
         throw error;
@@ -484,16 +517,7 @@ export function createDaemonConnectionManager(deps: DaemonConnectionManagerDeps)
     pushHeartbeatSoon(withCommit: boolean): void {
       const gen = generation;
       if (gen === undefined || !gen.registered || gen.heartbeatTimer === undefined) return;
-      const beat = (async () => {
-        const health = await collectNodeHealth(dataDir).catch(() => undefined);
-        const commit = deps.getUpgradeCommit();
-        const input: NodeHeartbeatInput = {
-          ...(health !== undefined ? { health } : {}),
-          ...(withCommit && commit !== undefined ? { upgradeCommit: commit } : {}),
-        };
-        await gen.hubRpc.heartbeat(identity.nodeId, input).catch(() => false);
-      })();
-      void beat.catch(() => undefined);
+      gen.pushHeartbeatSoon?.(withCommit);
     },
     close(): Promise<void> {
       if (closePromise === undefined) {

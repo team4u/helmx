@@ -38,6 +38,8 @@ export function killProcessTree(pid: number): void {
   }
 }
 
+const MAX_PROBE_STDOUT_CHARS = 64 * 1024
+
 async function execProbeCommand(
   command: string,
   args: string[],
@@ -45,6 +47,7 @@ async function execProbeCommand(
 ): Promise<{ stdout: string; status: number | null }> {
   return await new Promise((resolve) => {
     let stdout = ''
+    let settled = false
     let child: ReturnType<typeof spawn>
     try {
       child = spawn(command, args, {
@@ -56,20 +59,31 @@ async function execProbeCommand(
       resolve({ stdout: '', status: null })
       return
     }
+    const finish = (result: { stdout: string; status: number | null }): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      child.stdout?.removeAllListeners('data')
+      child.stdout?.destroy()
+      resolve(result)
+    }
     const timeout = setTimeout(() => {
       if (child.pid !== undefined) killProcessTree(child.pid)
+      child.unref?.()
+      finish({ stdout: '', status: null })
     }, timeoutMs)
+    timeout.unref?.()
     child.stdout?.setEncoding('utf8')
+    child.stdout?.once('error', () => {})
     child.stdout?.on('data', (chunk: string) => {
-      stdout += chunk
+      if (stdout.length >= MAX_PROBE_STDOUT_CHARS) return
+      stdout += chunk.slice(0, MAX_PROBE_STDOUT_CHARS - stdout.length)
     })
     child.once('error', () => {
-      clearTimeout(timeout)
-      resolve({ stdout: '', status: null })
+      finish({ stdout: '', status: null })
     })
     child.once('close', (status) => {
-      clearTimeout(timeout)
-      resolve({ stdout, status })
+      finish({ stdout, status })
     })
   })
 }
