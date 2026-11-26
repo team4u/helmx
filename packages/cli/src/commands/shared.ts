@@ -4,6 +4,7 @@
  * never imports any specific command module so domain files keep zero horizontal coupling.
  */
 import type { AuthToken } from '@helmx/protocol'
+import type { FileHandle } from 'node:fs/promises'
 import path from 'node:path'
 import { CliError } from '../errors.js'
 import type { HubClient } from '../hub-client.js'
@@ -61,6 +62,26 @@ export function assertNoExtraPositionals(positionals: readonly string[], fromInd
   if (positionals.length > fromIndex) {
     throw new CliError(`unexpected ${what}: ${positionals.slice(fromIndex).join(' ')}`, 'unexpected_positional')
   }
+}
+
+/** A non-empty string flag value, or `undefined` when unset or empty (empty `--dir ''` falls back to the default). */
+function nonEmptyStringFlag(flags: Map<string, unknown>, name: string): string | undefined {
+  const value = flags.get(name)
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+/**
+ * Resolve a local-directory command's target: `--dir <path>` or the single `[dir]` positional
+ * (mutually exclusive; extra positionals are rejected), defaulting to the CLI cwd, resolved against it.
+ */
+export function resolveDirArgument(ctx: CommandContext): string {
+  const dirFlag = nonEmptyStringFlag(ctx.flags, 'dir')
+  const positionalDir = ctx.positionals[0]
+  if (dirFlag !== undefined && positionalDir !== undefined) {
+    throw new CliError('--dir and positional <dir> are mutually exclusive', 'conflicting_flags')
+  }
+  assertNoExtraPositionals(ctx.positionals, positionalDir !== undefined ? 1 : 0)
+  return path.resolve(ctx.cwd, dirFlag ?? positionalDir ?? ctx.cwd)
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +374,39 @@ export function pathDiagLines(requested: string, resolvedPath: string, ctx: Comm
   return `\n  requested path=${requested}\n  resolved path=${resolvedPath}\n  CLI cwd=${ctx.cwd}${hint}`
 }
 
+/** Which transfer step is active, so a failure can be attributed to the download or to the local write. */
+interface TransferProgress {
+  phase: 'download' | 'write'
+  totalBytes: number
+}
+
+/** Write the whole chunk, retrying short writes (`FileHandle.write` may accept only part of a chunk). */
+async function writeChunkFully(handle: FileHandle, chunk: Uint8Array): Promise<void> {
+  let written = 0
+  while (written < chunk.byteLength) {
+    const { bytesWritten } = await handle.write(chunk, written, chunk.byteLength - written)
+    written += bytesWritten
+  }
+}
+
+/** Stream `body` into the open temp file, recording the active phase and byte count in `progress`; the reader lock is always released. */
+async function streamBodyToFile(body: NonNullable<Response['body']>, handle: FileHandle, progress: TransferProgress): Promise<void> {
+  const reader = body.getReader()
+  try {
+    for (;;) {
+      progress.phase = 'download'
+      const { done, value } = await reader.read()
+      if (done) return
+      if (value.byteLength === 0) continue
+      progress.phase = 'write'
+      await writeChunkFully(handle, value)
+      progress.totalBytes += value.byteLength
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
 /** Stream a binary Response into a sibling temp file and atomically rename to caller's resolved output path. */
 export async function writeDownloadedOutput(
   ctx: CommandContext,
@@ -363,66 +417,44 @@ export async function writeDownloadedOutput(
   const fsp = await import('node:fs/promises')
   const { randomUUID } = await import('node:crypto')
   const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, output)
+  const diagnostics = pathDiagLines(output, resolvedPath, ctx, sessionCwd)
+  const details = pathDetails(output, resolvedPath, ctx, sessionCwd)
+  const writeFailure = (err: unknown): CliError =>
+    new CliError(
+      `failed to write ${what} file (${err instanceof Error ? err.message : String(err)})${diagnostics}`,
+      'write_failed',
+      1,
+      details,
+    )
+  const downloadFailure = (err: unknown): CliError =>
+    new CliError(
+      `failed to download ${what} content (${err instanceof Error ? err.message : String(err)})${diagnostics}`,
+      'download_failed',
+      1,
+      details,
+    )
   const tmpPath = path.join(path.dirname(resolvedPath), `.helmx-dl-${process.pid}-${randomUUID().slice(0, 8)}.tmp`)
-  let handle: Awaited<ReturnType<typeof fsp.open>> | undefined
+
+  let handle: FileHandle | undefined
   try {
     handle = await fsp.open(tmpPath, 'w')
   } catch (err) {
     await response.body?.cancel().catch(() => {})
-    throw new CliError(
-      `failed to write ${what} file (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
-      'write_failed',
-      1,
-      pathDetails(output, resolvedPath, ctx, sessionCwd),
-    )
+    throw writeFailure(err)
   }
 
-  let totalBytes = 0
-  let phase: 'download' | 'write' = 'download'
+  const progress: TransferProgress = { phase: 'download', totalBytes: 0 }
   try {
-    if (response.body !== null) {
-      const reader = response.body.getReader()
-      try {
-        for (;;) {
-          phase = 'download'
-          const { done, value } = await reader.read()
-          if (done) break
-          if (value.byteLength > 0) {
-            phase = 'write'
-            let written = 0
-            while (written < value.byteLength) {
-              const { bytesWritten } = await handle.write(value, written, value.byteLength - written)
-              written += bytesWritten
-            }
-            totalBytes += value.byteLength
-          }
-        }
-      } finally {
-        reader.releaseLock()
-      }
-    }
-    phase = 'write'
+    if (response.body !== null) await streamBodyToFile(response.body, handle, progress)
+    progress.phase = 'write'
     await handle.close()
     handle = undefined
     await fsp.rename(tmpPath, resolvedPath)
   } catch (err) {
     if (handle !== undefined) await handle.close().catch(() => {})
     await fsp.rm(tmpPath, { force: true }).catch(() => {})
-    if (phase === 'download') {
-      throw new CliError(
-        `failed to download ${what} content (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
-        'download_failed',
-        1,
-        pathDetails(output, resolvedPath, ctx, sessionCwd),
-      )
-    }
-    throw new CliError(
-      `failed to write ${what} file (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
-      'write_failed',
-      1,
-      pathDetails(output, resolvedPath, ctx, sessionCwd),
-    )
+    throw progress.phase === 'download' ? downloadFailure(err) : writeFailure(err)
   }
-  if (ctx.json) printValue(ctx.io, { written: resolvedPath, bytes: totalBytes }, true)
-  else ctx.io.out(`wrote ${resolvedPath} (${totalBytes} bytes)\n`)
+  if (ctx.json) printValue(ctx.io, { written: resolvedPath, bytes: progress.totalBytes }, true)
+  else ctx.io.out(`wrote ${resolvedPath} (${progress.totalBytes} bytes)\n`)
 }
