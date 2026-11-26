@@ -31,7 +31,6 @@ export type HelmxShortcutAction =
   | 'toggle-plan-mode'
   | 'toggle-plus-menu'
   | 'focus-composer'
-  | 'focus-search'
   | 'open-shortcuts'
 
 export interface HelmxShortcutDetail {
@@ -208,8 +207,8 @@ export function isInlineInputEscapeTarget(target: EventTarget | null): boolean {
 /**
  * Whether a keyboard event target is a visible, active editable control
  * (input, textarea, select, or contenteditable region) where plain single-key
- * shortcuts like `/` must not hijack typing. Hidden `<Activity mode="hidden">`
- * or `inert`/`aria-hidden` inputs are ignored.
+ * shortcuts (such as AskDock choice keys) must not hijack typing. Hidden
+ * `<Activity mode="hidden">` or `inert`/`aria-hidden` inputs are ignored.
  */
 export function isEditableShortcutTarget(target: EventTarget | null): boolean {
   if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false
@@ -362,11 +361,6 @@ export function buildShortcutCatalog(input: BuildShortcutCatalogInput): Shortcut
       id: 'nav:command-palette',
       keys: formatModShortcut('K'),
       label: t('modals.shortcuts.item.commandPalette'),
-    },
-    {
-      id: 'nav:focus-search',
-      keys: '/',
-      label: t('modals.shortcuts.item.focusSearch'),
     },
     {
       id: 'nav:new-topic',

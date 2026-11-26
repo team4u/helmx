@@ -190,10 +190,10 @@ test('SearchBox SSR: clearable=false hides the clear button; style lands on the 
   )
   assert.ok(cleared.includes('<button'), 'default clearable keeps the single clear button')
 
-  const optInSlash = renderToString(
-    e(SearchBox, { value: 'hello', onChange: () => {}, enableSlashFocus: true, className: 'search-box overview-search-box' }),
+  const optInEscape = renderToString(
+    e(SearchBox, { value: 'hello', onChange: () => {}, clearOnEscape: true, className: 'search-box overview-search-box' }),
   )
-  assert.ok(optInSlash.includes('class="search-box overview-search-box"'), 'enableSlashFocus preserves SSR safety and caller className')
+  assert.ok(optInEscape.includes('class="search-box overview-search-box"'), 'clearOnEscape preserves SSR safety and caller className')
 
   const screenToolbarSsr = renderToString(
     e(ScreenToolbar, { label: 'Library toolbar' }, e(SearchBox, { value: 'hello', onChange: () => {} })),
@@ -201,167 +201,7 @@ test('SearchBox SSR: clearable=false hides the clear button; style lands on the 
   assert.ok(screenToolbarSsr.includes('screen-toolbar') && screenToolbarSsr.includes('search-box'), 'ScreenToolbar + SearchBox renders cleanly under SSR')
 })
 
-test('SearchBox DOM: toolbar and opt-in SearchBox focus on panel-scoped focus-search shortcut without stealing unfocused split focus', { timeout: 60_000 }, async () => {
-  const container = document.createElement('div')
-  document.body.appendChild(container)
-  const root = createRoot(container)
-  const forwardedRef: { current: HTMLInputElement | null } = { current: null }
-  let callbackRefNode: HTMLInputElement | null = null
-
-  try {
-    await act(async () => {
-      root.render(
-        e(
-          'div',
-          null,
-          e(
-            'div',
-            { 'data-helmx-panel': 'primary' },
-            e(SearchBox, {
-              variant: 'toolbar',
-              value: 'alpha',
-              onChange: () => {},
-              ariaLabel: 'Primary toolbar search',
-              inputRef: forwardedRef,
-            }),
-          ),
-          e(
-            'div',
-            { 'data-helmx-panel': 'split' },
-            e(SearchBox, {
-              variant: 'toolbar',
-              value: 'beta',
-              onChange: () => {},
-              ariaLabel: 'Split toolbar search',
-              inputRef: (node) => {
-                callbackRefNode = node
-              },
-            }),
-          ),
-        ),
-      )
-    })
-
-    const primaryInput = container.querySelector<HTMLInputElement>('input[aria-label="Primary toolbar search"]')!
-    const splitInput = container.querySelector<HTMLInputElement>('input[aria-label="Split toolbar search"]')!
-    assert.ok(primaryInput !== null && splitInput !== null)
-    assert.ok(forwardedRef.current === primaryInput, 'object inputRef still receives the inner input element')
-    assert.ok(callbackRefNode === splitInput, 'callback inputRef still receives the inner input element')
-
-    const splitEv = new CustomEvent('helmx:shortcut', {
-      detail: { action: 'focus-search', panel: 'split' },
-      cancelable: true,
-    })
-    act(() => {
-      window.dispatchEvent(splitEv)
-    })
-    assert.equal(splitEv.defaultPrevented, true, 'matching split toolbar SearchBox prevents default on focus-search')
-    assert.ok(document.activeElement === splitInput, 'split toolbar SearchBox focuses only split input')
-    assert.ok(document.activeElement !== primaryInput, 'primary toolbar SearchBox does not steal split focus')
-
-    const primaryEv = new CustomEvent('helmx:shortcut', {
-      detail: { action: 'focus-search', panel: 'primary' },
-      cancelable: true,
-    })
-    act(() => {
-      window.dispatchEvent(primaryEv)
-    })
-    assert.equal(primaryEv.defaultPrevented, true, 'matching primary toolbar SearchBox prevents default on focus-search')
-    assert.ok(document.activeElement === primaryInput, 'primary toolbar SearchBox focuses primary input')
-
-    // Disabled, hidden, and default (non-toolbar, non-opt-in) SearchBoxes ignore focus-search
-    await act(async () => {
-      root.render(
-        e(
-          'div',
-          { 'data-helmx-panel': 'primary' },
-          e(SearchBox, { variant: 'toolbar', value: '', onChange: () => {}, disabled: true, ariaLabel: 'Disabled toolbar' }),
-          e('div', { hidden: true }, e(SearchBox, { variant: 'toolbar', value: '', onChange: () => {}, ariaLabel: 'Hidden toolbar' })),
-          e(SearchBox, { value: '', onChange: () => {}, ariaLabel: 'Default compact search' }),
-        ),
-      )
-    })
-    const ignoredEv = new CustomEvent('helmx:shortcut', {
-      detail: { action: 'focus-search', panel: 'primary' },
-      cancelable: true,
-    })
-    act(() => {
-      window.dispatchEvent(ignoredEv)
-    })
-    assert.equal(ignoredEv.defaultPrevented, false, 'disabled, hidden, and default SearchBoxes leave focus-search unhandled')
-
-    // Opt-in enableSlashFocus on default variant responds to focus-search while keeping custom className
-    await act(async () => {
-      root.render(
-        e(
-          'div',
-          { 'data-helmx-panel': 'primary' },
-          e(SearchBox, {
-            className: 'search-box overview-search-box',
-            value: 'query',
-            onChange: () => {},
-            ariaLabel: 'Opt-in search',
-            enableSlashFocus: true,
-          }),
-        ),
-      )
-    })
-    const optInInput = container.querySelector<HTMLInputElement>('input[aria-label="Opt-in search"]')!
-    const optInEv = new CustomEvent('helmx:shortcut', {
-      detail: { action: 'focus-search', panel: 'primary' },
-      cancelable: true,
-    })
-    act(() => {
-      window.dispatchEvent(optInEv)
-    })
-    assert.equal(optInEv.defaultPrevented, true)
-    assert.ok(document.activeElement === optInInput)
-
-    // SearchBox inside ScreenToolbar (without explicit variant="toolbar") auto-enables / focus and Escape clear/blur
-    let screenValue = 'flow'
-    await act(async () => {
-      root.render(
-        e(
-          'div',
-          { 'data-helmx-panel': 'primary' },
-          e(
-            ScreenToolbar,
-            { label: 'Workflow search' },
-            e(SearchBox, {
-              value: screenValue,
-              onChange: (next) => {
-                screenValue = next
-              },
-              ariaLabel: 'Screen toolbar search',
-            }),
-          ),
-        ),
-      )
-    })
-    const screenInput = container.querySelector<HTMLInputElement>('input[aria-label="Screen toolbar search"]')!
-    assert.ok(screenInput !== null)
-    const screenFocusEv = new CustomEvent('helmx:shortcut', {
-      detail: { action: 'focus-search', panel: 'primary' },
-      cancelable: true,
-    })
-    act(() => {
-      window.dispatchEvent(screenFocusEv)
-    })
-    assert.equal(screenFocusEv.defaultPrevented, true, 'SearchBox inside ScreenToolbar responds to focus-search automatically')
-    assert.ok(document.activeElement === screenInput)
-    await act(async () => {
-      screenInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
-    })
-    assert.equal(screenValue, '', 'SearchBox inside ScreenToolbar clears non-empty query on first Escape')
-  } finally {
-    await act(async () => {
-      root.unmount()
-    })
-    container.remove()
-  }
-})
-
-test('SearchBox DOM: toolbar Escape clears non-empty query then blurs when empty without overriding caller or default variant', { timeout: 60_000 }, async () => {
+test('SearchBox DOM: toolbar, ScreenToolbar, and opt-in clearOnEscape clear non-empty query then blur on Escape while forwarding inputRef', { timeout: 60_000 }, async () => {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -369,6 +209,8 @@ test('SearchBox DOM: toolbar Escape clears non-empty query then blurs when empty
   const emitted: string[] = []
   let clearedCalls = 0
   let windowEscapes = 0
+  const forwardedRef: { current: HTMLInputElement | null } = { current: null }
+  const callbackRef: { current: HTMLInputElement | null } = { current: null }
   const onWindowKeyDown = (ev: KeyboardEvent): void => {
     if (ev.key === 'Escape') windowEscapes += 1
   }
@@ -381,6 +223,7 @@ test('SearchBox DOM: toolbar Escape clears non-empty query then blurs when empty
         variant: 'toolbar',
         value: val,
         ariaLabel: 'Controlled toolbar search',
+        inputRef: forwardedRef,
         onChange: (next) => {
           emitted.push(next)
           setVal(next)
@@ -402,6 +245,7 @@ test('SearchBox DOM: toolbar Escape clears non-empty query then blurs when empty
       root.render(e(ControlledToolbar, { initial: 'hello' }))
     })
     const input = container.querySelector<HTMLInputElement>('input[aria-label="Controlled toolbar search"]')!
+    assert.ok(forwardedRef.current === input, 'object inputRef receives the inner input element')
     input.focus()
     assert.ok(document.activeElement === input)
 
@@ -448,13 +292,16 @@ test('SearchBox DOM: toolbar Escape clears non-empty query then blurs when empty
     assert.equal(callerInput.value, 'keep', 'caller preventDefault suppresses built-in clear')
     assert.equal(clearedCalls, 0)
 
-    // 5) Default variant (without enableSlashFocus) does not auto-clear or blur on Escape
+    // 5) Default variant (without clearOnEscape) does not auto-clear or blur on Escape
     let defaultCleared = false
     await act(async () => {
       root.render(
         e(SearchBox, {
           value: 'compact',
           ariaLabel: 'Compact default search',
+          inputRef: (node) => {
+            callbackRef.current = node
+          },
           onChange: () => {
             defaultCleared = true
           },
@@ -462,6 +309,7 @@ test('SearchBox DOM: toolbar Escape clears non-empty query then blurs when empty
       )
     })
     const compactInput = container.querySelector<HTMLInputElement>('input[aria-label="Compact default search"]')!
+    assert.ok(callbackRef.current === compactInput, 'callback inputRef receives the inner input element')
     compactInput.focus()
     const compactEsc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
     await act(async () => {
@@ -470,6 +318,51 @@ test('SearchBox DOM: toolbar Escape clears non-empty query then blurs when empty
     assert.equal(defaultCleared, false, 'default variant leaves Escape handling to caller')
     assert.equal(compactEsc.defaultPrevented, false)
     assert.ok(document.activeElement === compactInput)
+
+    // 6) Opt-in clearOnEscape on default variant and ScreenToolbar descendant SearchBox clear on Escape
+    let optInValue = 'alpha'
+    let screenValue = 'flow'
+    await act(async () => {
+      root.render(
+        e(
+          'div',
+          null,
+          e(SearchBox, {
+            className: 'search-box overview-search-box',
+            value: optInValue,
+            onChange: (next) => {
+              optInValue = next
+            },
+            ariaLabel: 'Opt-in clear search',
+            clearOnEscape: true,
+          }),
+          e(
+            ScreenToolbar,
+            { label: 'Workflow search' },
+            e(SearchBox, {
+              value: screenValue,
+              onChange: (next) => {
+                screenValue = next
+              },
+              ariaLabel: 'Screen toolbar search',
+            }),
+          ),
+        ),
+      )
+    })
+    const optInInput = container.querySelector<HTMLInputElement>('input[aria-label="Opt-in clear search"]')!
+    const screenInput = container.querySelector<HTMLInputElement>('input[aria-label="Screen toolbar search"]')!
+    assert.ok(optInInput !== null && screenInput !== null)
+    optInInput.focus()
+    await act(async () => {
+      optInInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    assert.equal(optInValue, '', 'opt-in clearOnEscape clears query on first Escape')
+    screenInput.focus()
+    await act(async () => {
+      screenInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    assert.equal(screenValue, '', 'SearchBox inside ScreenToolbar clears query on first Escape')
   } finally {
     window.removeEventListener('keydown', onWindowKeyDown)
     await act(async () => {

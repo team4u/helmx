@@ -25,7 +25,6 @@ export interface HelmxShortcutEventDetail {
     | 'toggle-plan-mode'
     | 'toggle-plus-menu'
     | 'focus-composer'
-    | 'focus-search'
     | string
   panel: HelmxPanel | 'drawer'
   drawerConversationId?: number
