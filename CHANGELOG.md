@@ -1,5 +1,70 @@
 # Changelog
 
+## v0.5.0 (2026-11-26)
+
+### 升级须知
+
+- **子代理默认派生层级由 2 调整为 1**：主会话直接派生的 `subagent`、工作流节点与 Swarm 成员默认即为叶子，不再注入 `subagent` / `SubagentWorkflow` 工具与角色目录，再派生返回 `403 subagent_depth_exceeded`。需要嵌套派生时显式传 `maxSubagentDepth`（2..5），或配置插件项 `builtin:workflow.maxSubagentDepth`。Swarm 成员（含非 `forkFrom`）统一上报 `depth=1`，默认不再持有 `swarm_dispatch_worker` 与 `swarm_create_group`；`forkFrom` 成员固定为叶子，调高全局上限也不变。人工 `conversations fork` 与直接创建子会话不受限。
+- **移除全局 `/` 单键聚焦页面搜索**（v0.4.0 引入）及快捷键总览中的对应条目；输入框内键入 `/` 调出斜杠命令菜单、`Mod+/` 打开快捷键总览不受影响，搜索框 `Esc` 先清空再失焦的行为保留。
+- **`plan_ask` 工具移除**：计划模式的澄清提问改用内核内建工具 `ask_user`，计划模式工具白名单仍为 7 个。
+- **插件 `ctx.ui.command` 的废弃别名 `surface: 'command'` 正式移除**：只接受 `surface: 'commandPalette'`，仍声明旧值的命令不会出现在命令面板。
+
+### 提问与审批
+
+- **内核内建工具 `ask_user`**（归属 `core:ask_user`，仅注入顶层人类会话，子代理与 `ownedBy: 'helmx'` 会话自动剥离）：一次提出 1~4 道题，题型 `single_select | multi_select | text | confirm`，选项 2~8 个，可标记 `recommended` 推荐项、`allowCustom` 内联「其他」自由输入；文本题支持 `multiline` 与 `placeholder`，确认题支持自定义 `confirmLabel` / `rejectLabel`；`required` 缺省为真。任何顶层人类会话由此获得结构化澄清能力，不再依赖计划模式。
+- **AskDoc 契约通用化**：新增 `kind: 'question' | 'approval'`（缺省 `approval`）；选择题支持多选（答案为字符串数组）、`allowCustom` 与 `recommended`；文本题支持 `multiline` / `placeholder`；确认题支持 `confirmLabel` / `rejectLabel`。`POST /api/asks/:id/answer` 与 `helmx asks answer --answers` 同步接受字符串或字符串数组，`ask.resolved` 事件携带答案，字段放错类型返回 `400 validation_error`。
+- **新输入统一结算挂起提问**：人类直接发送新消息（`whenBusy` 不是 `reject`）时，内核在提交后把该会话所有挂起 AskDoc 结算为 `superseded`（此前只有计划插件处理自家审批单）；`superseded` 结果明确告知模型「没有结构化答案，不得视为确认，先读新消息，不要重复提问」。启动时清理残留的 `core:ask_user` 提问单。
+- **输入待答卡守卫 `whenPendingAsk`**：`POST /api/conversations/:id/input`、`core:conversations.send`、`helmx send --when-pending-ask <supersede|reject>` 与 `input` Hook 的 `transform` 均可指定。缺省 `supersede`（行为同此前）；`reject` 时存在挂起 AskDoc 则原子返回 `409 ask_pending`（附 `conversationId` 与 `pendingAskIds`），不落条目、不改标题、不推进状态水位，供 IM / 纯文本通道避免误作废提问。配套新增 `docs/architecture/ask-doc-channels.md`（通道接入、字段文本映射、CAS 纪律）。
+- **`GET /api/asks` 支持过滤**：`?conversationId=<id>&status=pending|answered|cancelled|superseded`，`core:asks.list` 的同名参数改为下推查询；CLI `helmx asks list [--conversation <id> | --current] [--status <状态>]`。
+- **待答卡不再被界面操作误杀**：提问挂起期间，只改 `unread` / `pinned` 的 `PATCH /api/conversations/:id` 不再推进 `stateChangeSeq`；`blocked` 期间并行工具的进度摘要刷新同样不推进。标题、标签、模型、角色、节点、目录等实质变更照旧推进。计划模式在 `whenBusy: 'reject'` 或 `whenPendingAsk: 'reject'` 且有待答审批时不再进入，也不作废挂起卡。
+
+### AskDock 提问界面
+
+- **点选即答与全键盘操作**：单题单选提问点击选项立即提交；多题以 `1/N` 步进器呈现，点选后跳到下一未答题，末题按 `Enter` 或点「确认」提交。卡片出现时若焦点在中性位置或空输入框则自动聚焦首个控件；焦点不在输入类控件时由窗口层接管 `↑` `↓`、数字键 `1`~`9`、`Enter`、`[` `]`、`PageUp` / `PageDown`，多题支持 `←` `→` 切题；`Esc` 先把焦点移到「跳过 / 取消」，再按才走全局中止；输入法组合中的按键不触发提交。结算最后一张卡后焦点回到输入框，多卡堆叠时自动聚焦下一张。
+- **问答按时间线原位展示**：`ask_user` 提问行不参与折叠，按时间顺序独立展示，行内给出「问题 → 回答」摘要与已回答 / 已跳过 / 已取代 / 失败徽章，展开只显示问答内容（不再附带 Raw JSON）。
+- **界面精简**：去掉头部状态灯、归属插件与 CAS 水位信息弹层、第二行步骤胶囊；通用标题「问题确认」时把题干提升为卡片标题；「推荐」改为纯文字徽标；窄屏隐藏快捷键提示。选中项由强调色底改为中性灰底，单选仅在选中项显示对勾。
+
+### 会话时间线
+
+- **按轮次加载**：会话详情新增 `turns` 分页（`GET /api/conversations/:id?turns=1..50`、`core:conversations.get`、插件 `ctx.host.getConversationDetail`、CLI `helmx conversations get --turns <n>`），每页为最新 N 个完整回合，`nextCursor` 精确落在回合边界；与按条目数的 `limit`（1..500，服务端缺省 100）互斥，同传返回 `400 validation_error`。单个超长回合单页最多收集 200 条、硬上限 500 条，不会为凑满一页无限向前扫描。Web 端默认改按轮次拉取：桌面 10 回合、窄屏（≤680px）5 回合，长回合不再被条目数从中间截断。
+- **向上翻页不跳动**：加载更早内容导致回合容器重新挂载时按底部坐标恢复阅读位置；流式输出在尾部增长时不再误把阅读位置往下推；只插入更早条目时不误触「贴底」。首页落在长回合中段时「加载更早」最多自动补拉一页，补拉失败保留已加载内容并记入加载错误。
+- **时间线卡片折叠入口统一**：默认工具行、`ask_user` 行与过程组的折叠箭头统一在行首，行尾只保留状态、耗时与徽章；子代理、工作流、Swarm、计划等卡片（`replaceRow`）的入参 / 输出开关挪到行首同一位置，宿主 IO 面板成为唯一展开入口；没有跳转目标的行不再可点击，有目标的行以 `external-link` 图标提示。
+- **后台活动期间信息完整**：后台子代理仍在运行时，已结算回合下方的时间、耗时与模型标签照常显示（耗时沿用父回合自身数据），「复制」与「分叉」可用，仅收起会回退历史的「重新生成」；活动结束后恢复。
+- **Markdown 渲染统一**：上下文分割线（精简摘要 / 重置交接）的展开内容由纯文本改为 Markdown；工作流执行节点的 prompt 与字符串输出按 Markdown 渲染；计划、Swarm 帖子、工作流结果与后台汇报统一使用宿主 `MarkdownView`，排版一致并支持文件与产物链接预览。助手正文标题字号收敛为 1.35 / 1.2 / 1.08 / 1em，裸代码块补底色与边框；`#` 锚点链接不再新开标签页，大纲与滚动定位只索引回合正文的标题，忽略工具卡片内嵌套的标题。
+- **跨 worktree 文件链接预览**：Markdown 中的绝对路径与 `file://` 链接此前只有落在当前会话工作目录内才可预览，现在回退到「同一会话树、同一节点」内其它会话的工作目录去匹配（最长前缀优先），在主会话或评审会话里可直接点击子代理 worktree 的文件链接并定位行号；相对路径、其它会话树、其它节点与树外路径仍不解析。
+- **触屏点按不再粘滞高亮**：全部 `:hover` 规则（Web 与内置插件共 27 个样式文件）只在 `@media (hover: hover)` 内生效，并在 `html` 全局关闭系统原生点按高亮，按压反馈统一走 `:active`；`check:hygiene` 新增 `hover-media-gate` 红线，未门禁的 `:hover` 规则直接失败。
+
+### 通知、表单与界面一致性
+
+- **悬浮通知统一**：Toast 改为右上角的 Quiet Surface 卡片（最新在最上，最多显示 4 条，层级置于抽屉与模态之上），弹窗或抽屉打开时操作 Toast 不再连带关闭弹窗。模型与全局默认面板、插件配置、档位管理页、长期记忆等处的行内「已保存」文字改为悬浮通知；插件安装、配置项重置与密钥清除、长期记忆保存、每日整理暂停 / 恢复、立即触发 cron、删除 cron / webhook、删除档位模板、Magpie 手动刷新目录等此前没有反馈的操作补上成功通知，失败仍走行内错误。
+- **表单不再被后台刷新冲掉**：模型中心网关详情抽屉只在打开、切换网关或切换新建模式时重置表单，SSE 刷新不再清掉未保存的 API Key、地址与模型开关，过期的测试连接 / 刷新 / 保存结果被丢弃；角色详情抽屉同理，详情拉取返回时保留已改字段。
+- **输入框在途操作隔离**：切换会话后，上一会话的附件上传失败提示、清空上下文完成提示、斜杠命令失败后的草稿恢复不再作用到新会话。
+- **键盘聚焦与悬停同款**：按钮、导航行、工具行、页签、下拉项、分段控件的 `:focus-visible` 不再画亮色外圈，改为与 `:hover` 相同的底色与字色。
+- **角色技能白名单支持搜索**：候选技能 6 项起显示搜索框，按名称 / ID / 描述大小写不敏感过滤，被过滤隐藏的已选技能保持选中；有技能但无匹配时提示「没有匹配的技能」；焦点在搜索框时 `Esc` 先清空关键词，输入法组合中不关闭抽屉。
+
+### 子代理、工作流与 Swarm
+
+- **防重复派工**：同一父会话在途的「完全同参」`subagent` 调用（规范化签名含 prompt、label、agentType、节点、cwd、隔离方式、fork / resume、模型与思考等级、gate、schema、附件，忽略 callId 与 background）第二个返回 `duplicate_subagent_call`；`label` 不同、同 callId 重放可放行，终态后解除。
+- **中止后可清理 worktree**：同步子代理（`background: false` + `isolation: 'worktree'`）被中止时，结果保留 `status: 'aborted'`、执行会话 ID 与 worktree 的 id / path / branch，worktree 不自动删除，可凭 `worktreeId` 调 `cleanup_worktree`；时间线该行直接提供清理按钮。新增插件 API `setAbortFallback`，仅在工具任务因中止结算时合入最终结果（脱敏并按 schema 校验）。
+- **`agentType` 前置校验**：只接受空串、原生 Profile ID 或外部运行时 `<namespace>:<kind>`；误填模型档位 `tier/<id>` 提示改走 `model`，误加 `@` 前缀提示去掉，均在分配 worktree 之前返回 `400 validation_error`，不再留下孤儿工作树。入口覆盖内核 `agent_spawn`、`subagent` 参数与 DSL `agent()` / `goal()` 的 `opts.agentType`。
+- **计划模式只读守卫加固**：`plan_bash` 修复三类绕过——算术展开 `$(( ))` 内嵌套命令替换、子命令前置参数（如 `pnpm --dir <目录> install`、`npm --prefix`、`docker -H … rm`、`git stash -m list push`，未知前置 flag 一律拒绝）、未加引号 heredoc 正文中的命令替换与未闭合 heredoc。审批落盘失败时回滚内存状态（保持 `planning`、保留待答卡）；计划与运行角标各限 200 条，超限淘汰最早的终态条目。
+- **Swarm 与触发器并发修复**：同一协调会话并发建组按会话串行，重复建组返回 `swarm_group_already_active`（同 `createKey` 幂等）；`cron_delete` 等待在途 claim 释放写锁后再删，落盘失败回滚任务并恢复定时器；`webhook_delete` 落盘失败回滚元数据并保留 secret，不再误报 `webhook_delete_secret_failed`；cron 投递失败的错误信息与通知正文先脱敏再记录。
+- **其它内置插件修复**：`token-speed` 已见条目超限改为淘汰最旧一条（此前整表清空可能重复计数）；`json-render` 声明式输入本地编辑后，远端值变化时重新同步（此前永久忽略后续更新）；删除角色时 `memory` 即时清理该角色的禁用与初始化记录；Swarm 面板卸载或切换会话后迟到的 `abort_worker` / `close_group` 回调不再执行；KV 分页遇到重复或环回的 `nextCursor` 立即终止（此前可能死循环）。
+
+### Hub、节点与 CLI 稳定性
+
+- **CLI 如实报错**：`helmx models filter --provider <id>` 不带 `--disable` / `--clear` 时误入写分支、清空该提供商禁用模型列表的问题已修复，现为纯只读；读响应体失败不再被吞成空结果，按超时 / 中止 / `invalid_response` 报错，SSE 响应非 `text/event-stream` 或含非法 UTF-8 同样报错；`--tags` 非法 JSON 返回 `invalid_flag_value`；`plugins install --enable` 启用失败退出码为 1 并带 `enableError`；约 30 个命令的多余位置参数显式拒绝（`unexpected_positional`），不再静默忽略；`profiles --system-file` 与插件动作的文件位置参数按会话 `cwd` 解析而非进程目录；`plugins types` 支持 JSONC 形式的 tsconfig，同步前备份 `.helmx/types`、失败回滚。
+- **Hub 关闭与升级**：关闭步骤按序执行并逐项记录错误，不再相互掩盖；`/api/hub-update/apply` 的 `force` 不再因 Content-Type 大小写被忽略；损坏的 `hub-control.json` / `update-ready.json` 显式报错，不再伪装成「无记录 / 无更新」；适配器 500 兜底日志先脱敏再输出；`helmx stop` / `helmx update` 遇损坏控制记录同样显式报错。
+- **节点守护进程**：环境 LRU 不再逐出仍有活跃命令的环境（此前被逐出后清理不到进程，留下孤儿进程）；心跳排队串行发送，升级提交确认后不再每次心跳重发；隧道客户端在已中止的 signal 上不再建连，收到 `ok` 时复核连接代次（不再交付孤儿流）；节点隧道 hello 首帧兼容分片 `Buffer[]` / `ArrayBuffer`；env-io 过期锁清理改为原子隔离，shell 探测超时后立即结算且输出限 64 KiB（此前可能被脱离的孙进程挂死）。
+- **模型配置**：全局 `defaults.thinkingLevel` 此前在构造时被丢弃，现已生效；非法思考等级精确报出出错字段（`compactionThinkingLevel` / `modelThinkingLevels['<模型>']`）；清除已禁用模型的思考默认不再被 `409 model_disabled` 拒绝（设置仍拒）。
+- **工作目录护栏**：`restrictToCwd` 会话以 `agentType` 指向其它节点上的角色时，`spawnAgent` 入口即返回 `403 path_outside_workspace`（此前因无显式 `nodeId` / `cwd` 被放行）。
+- **协议与插件构建边界**：`meta` 含 `__proto__`、symbol 键、accessor 或不可枚举属性返回 `meta_invalid`；`moduleRef` 拒绝 `.tsx` 与 `sub/./x` 形态；插件配置字段 schema 拒绝未知属性与 secret 字段带 format，`PUT` 插件配置值新增接受字符串数组；`auth setup` / `login` 请求多余字段返回 `400`。`plugin-build` 严格校验 `npm:` 依赖规格，tarball 剔除符号链接、`.git` 与 `node_modules`，本地重装失败回滚；前端构建缓存补齐包含性校验与上限；插件 CSS 作用域化不再误删字符串字面量中的 `/* */`。
+- **其它**：首次创建的默认角色名改为 `Personal Assistant`（已存在的角色不受影响）。
+
+### 发版脚本
+
+- `pnpm release --dry-run` 只预览变更明细与计划动作，不再运行本地门禁；自动汇总的变更明细按 `--no-merges` 结构性排除 merge 提交（覆盖中文 `merge(x):` 等标题）。
+
 ## v0.4.0 (2026-11-26)
 
 ### 计划模式
