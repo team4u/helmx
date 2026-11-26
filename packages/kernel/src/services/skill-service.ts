@@ -34,11 +34,20 @@ function isWithin(child: string, parent: string): boolean {
   return child.startsWith(parent + sep)
 }
 
-/** Built-in plugin bootstrapped skill bundle asset: SKILL.md + references files. */
+/** Managed skill bundle asset bootstrapped by the kernel (`core:*`) or a plugin: SKILL.md + references files. */
 export interface BuiltinSkillAsset {
   id: string
   skillMd: string
   references: Record<string, string>
+}
+
+export interface EnsureSkillOptions {
+  /**
+   * When true, defer sweeping retired same-owner skill directories until the caller invokes
+   * `reconcileManagedOwners(...)` after a batch bootstrap finishes (prevents delete+recreate
+   * churn when one owner registers multiple skills in sequence).
+   */
+  deferOwnerReconcile?: boolean
 }
 
 /** Recursively collect relative paths of regular files in a skill bundle. Skips hidden files/dirs starting with `.`
@@ -271,28 +280,31 @@ export class SkillService {
   }
 
   /**
-   * Built-in plugin managed skill bootstrapper: skills/<id>/SKILL.md and references/* are managed system assets;
-   * on every startup they are overwritten file-by-file from the source declarations (reverting stale files and manual
-   * disk edits back to source) and missing files are added. Files whose byte contents already match are skipped
-   * (by byte comparison, not mtime, avoiding atomic rename churn in AssetWatcher hot reload).
+   * Managed skill bootstrapper (used by kernel `core:*` skills and plugins): `skills/<id>/SKILL.md` and
+   * `references/*` are managed system assets; on every startup they are overwritten file-by-file from the source
+   * declarations (reverting stale files and manual disk edits back to source) and missing files are added. Files
+   * whose byte contents already match are skipped (by byte comparison, not mtime, avoiding atomic rename churn in
+   * AssetWatcher hot reload).
    *
    * Source-of-authority reconciliation (no phantom residue): reference files no longer declared by the asset are
    * pruned from the references tree, and skill dirs whose SKILL.md still claims this asset's managedByPlugin owner
    * but whose id the owner no longer declares this session (rename/retire residue, e.g. swarm-collab -> swarm) are
-   * removed—otherwise retired content keeps serving stale manuals via load_skill forever. Scope stays narrow:
-   * files elsewhere in the kept skill dir (outside SKILL.md/references) and dirs owned by plugins that ensured
-   * nothing this session (disabled plugins) are left intact; the catalog already filters the latter.
+   * removed—otherwise retired content keeps serving stale manuals via load_skill forever. Active owners that now
+   * declare zero skills (e.g. `builtin:profile` after migrating skills to `core:*`) are reconciled explicitly via
+   * `reconcileManagedOwners(activeOwners)`; disabled plugins are excluded from `activeOwners` so their on-disk skill
+   * directories remain intact while hidden from the active catalog.
    *
-   * Security boundary unchanged: validate all reference paths up front (invalid assets write nothing);
-   * verify every directory segment along skills/<id>, references, and nested reference dirs is not a symlink, resolving
-   * the skills root via realpath just like readFile; existing targets must be regular files (rejecting symlinks/directories);
-   * errors other than ENOENT are rethrown. Deletions walk with lstat semantics only (symlinks are unlinked, never
-   * followed) and are confined to the verified skill dir / skills root by construction. Once added to managedSkillIds,
-   * normal write endpoints reject with 403.
+   * Security boundary unchanged: validate skill ID, frontmatter, and all reference paths up front (invalid assets
+   * write nothing); verify every directory segment along skills/<id>, references, and nested reference dirs is not a
+   * symlink, resolving the skills root via realpath just like readFile; existing targets must be regular files
+   * (rejecting symlinks/directories); errors other than ENOENT are rethrown. Deletions walk with lstat semantics only
+   * (symlinks are unlinked, never followed) and are confined to the verified skill dir / skills root by construction.
+   * Once added to managedSkillIds, normal write endpoints reject with 403.
    */
-  async ensureSkill(asset: BuiltinSkillAsset): Promise<void> {
+  async ensureSkill(asset: BuiltinSkillAsset, options?: EnsureSkillOptions): Promise<void> {
     assertSkillId(asset.id)
-    // Validate boundary up front: reject any invalid reference before creating directories or writing files.
+    // Validate frontmatter and references up front before creating directories or writing files.
+    const owner = parseSkillFrontmatter(asset.skillMd).managedByPlugin
     const references = Object.entries(asset.references).map(([name, content]) => ({
       rel: assertSafeSkillRelativePath(`references/${name}`),
       content,
@@ -325,24 +337,51 @@ export class SkillService {
     }
     // Reconcile to the declared asset (see method JSDoc): prune retired references, sweep retired same-owner dirs.
     await pruneUndeclaredReferenceFiles(join(dir, 'references'), new Set(references.map((r) => r.rel)))
-    const owner = parseSkillFrontmatter(asset.skillMd).managedByPlugin
     if (owner !== undefined) {
       const declared = this.managedIdsByOwner.get(owner) ?? new Set<string>()
       declared.add(asset.id)
       this.managedIdsByOwner.set(owner, declared)
-      await removeRetiredManagedSkillDirs(rootReal, owner, declared)
+      if (!options?.deferOwnerReconcile) {
+        await removeRetiredManagedSkillDirsForOwners(rootReal, new Set([owner]), this.managedIdsByOwner)
+      }
     }
     this.managedSkillIds.add(asset.id)
   }
 
-  /** Read-only guard for managed skills (403 managed_skill_readonly): source version at plugin startup is the sole
+  /**
+   * Reconcile on-disk managed skill directories for the given active owners: any skill directory whose
+   * `SKILL.md` frontmatter claims `managedByPlugin` matching one of `activeOwners` that was not declared via
+   * `ensureSkill` in this process (including active owners that declared zero skills, such as `builtin:profile`
+   * after migrating its skills out to `core:*`) is removed in a single pass.
+   *
+   * Owners NOT included in `activeOwners` (e.g. disabled or failed-to-start plugins), user-authored skills without
+   * `managedByPlugin`, symlinked directories/SKILL.md files, and unparseable frontmatter are left untouched.
+   */
+  async reconcileManagedOwners(activeOwners: Iterable<string>): Promise<void> {
+    const owners = new Set<string>()
+    for (const owner of activeOwners) {
+      if (typeof owner === 'string' && owner.trim() !== '') {
+        owners.add(owner)
+      }
+    }
+    if (owners.size === 0) return
+    const skillsRoot = join(this.dataDir, 'skills')
+    const rootReal = await realpath(skillsRoot).catch((err: unknown) => {
+      if ((err as { code?: string }).code === 'ENOENT') return undefined
+      throw err
+    })
+    if (rootReal === undefined) return
+    await removeRetiredManagedSkillDirsForOwners(rootReal, owners, this.managedIdsByOwner)
+  }
+
+  /** Read-only guard for managed skills (403 managed_skill_readonly): source version at startup is the sole
    * authority. Tracked in memory—rebuilt by ensureSkill on each startup without DB persistence
    * (user-created skills do not go through ensureSkill and are unaffected). */
   private assertSkillMutable(skillId: string): void {
     if (this.managedSkillIds.has(skillId)) {
       throw new HelmxError(
         'managed_skill_readonly',
-        `skill '${skillId}' is a managed built-in plugin system asset and cannot be written or deleted via normal APIs (synced from source at plugin startup)`,
+        `skill '${skillId}' is a managed system skill asset and cannot be written or deleted via normal APIs (synced from source at startup)`,
         403,
         { skillId },
       )
@@ -462,15 +501,18 @@ async function pruneUndeclaredReferenceFiles(referencesDir: string, declared: Re
   await walk(referencesDir, 'references')
 }
 
-/** Remove skill dirs that still claim `managedByPlugin: owner` in their SKILL.md frontmatter but are no longer in the
- * owner's declared set for this session (rename/retire residue). Symlinked entries and dirs without attributable
- * frontmatter (missing SKILL.md, other owners, unparseable frontmatter) are skipped—only unambiguous same-owner
- * residue is deleted. fs.rm with recursive+force unlinks symlinks without following, keeping deletion lstat-safe. */
-async function removeRetiredManagedSkillDirs(
+/** Remove skill dirs whose `SKILL.md` frontmatter claims `managedByPlugin` for any owner in `owners`, when the dir's
+ * skill id is not in that owner's declared set for this session (rename/retire residue, including active owners that
+ * now declare zero skills). Symlinked dirs, symlinked `SKILL.md` files, and dirs without attributable frontmatter
+ * (missing SKILL.md, owners outside `owners`, unparseable frontmatter) are skipped—only unambiguous residue of active
+ * reconciled owners is deleted. `fs.rm` with recursive+force unlinks nested symlinks without following, keeping
+ * deletion lstat-safe. */
+async function removeRetiredManagedSkillDirsForOwners(
   skillsRoot: string,
-  owner: string,
-  declared: ReadonlySet<string>,
+  owners: ReadonlySet<string>,
+  declaredByOwner: ReadonlyMap<string, ReadonlySet<string>>,
 ): Promise<void> {
+  if (owners.size === 0) return
   const entries = await readdir(skillsRoot, { withFileTypes: true }).catch((err: unknown) => {
     if ((err as { code?: string }).code === 'ENOENT') return undefined
     throw err
@@ -478,8 +520,15 @@ async function removeRetiredManagedSkillDirs(
   if (entries === undefined) return
   for (const entry of entries) {
     // Dirent.isDirectory() is lstat-based: symlinked dirs (and files) fall through here and are never touched.
-    if (!entry.isDirectory() || declared.has(entry.name)) continue
-    const skillMd = await readFile(join(skillsRoot, entry.name, 'SKILL.md'), 'utf8').catch((err: unknown) => {
+    if (!entry.isDirectory()) continue
+    const skillMdPath = join(skillsRoot, entry.name, 'SKILL.md')
+    const skillMdStat = await lstat(skillMdPath).catch((err: unknown) => {
+      if ((err as { code?: string }).code === 'ENOENT') return undefined
+      throw err
+    })
+    // Refuse to follow symlinked SKILL.md files during retirement scanning.
+    if (skillMdStat === undefined || !skillMdStat.isFile()) continue
+    const skillMd = await readFile(skillMdPath, 'utf8').catch((err: unknown) => {
       if ((err as { code?: string }).code === 'ENOENT') return undefined
       throw err
     })
@@ -490,7 +539,9 @@ async function removeRetiredManagedSkillDirs(
     } catch {
       continue // unattributable frontmatter is not ours to delete
     }
-    if (claimed !== owner) continue
+    if (claimed === undefined || !owners.has(claimed)) continue
+    const declared = declaredByOwner.get(claimed)
+    if (declared !== undefined && declared.has(entry.name)) continue
     await rm(join(skillsRoot, entry.name), { recursive: true, force: true })
   }
 }
