@@ -40,6 +40,37 @@ function RunningElapsed({ startedAt }: { startedAt: number }): ReactNode {
   return <span className="tabular-nums">{formatStopwatchMs(Math.max(0, nowMs - startedAt))}</span>
 }
 
+/** 可折叠单行轨迹外壳：点击 / Enter / Space 切换展开态；左右两栏内容由调用方填充。 */
+function TraceRowShell({
+  failed,
+  open,
+  onToggle,
+  children,
+}: {
+  failed: boolean
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <div
+      className={`trace-row${failed ? ' trace-row-error' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-expanded={open}
+      onClick={onToggle}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onToggle()
+        }
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
 function askTraceOutcome(outcome: AskUserToolOutcome, t: WebMessageTranslator): { label: string; tone: BadgeTone } {
   switch (outcome) {
     case 'answered':
@@ -119,19 +150,7 @@ export const TraceRow = memo(function TraceRow({
     const outcomeBadge = !isRunning && askMeta !== undefined ? askTraceOutcome(askMeta.outcome, t) : undefined
     return (
       <div className={`trace-entry${askFailed ? ' trace-entry-error' : ''}`}>
-        <div
-          className={`trace-row${askFailed ? ' trace-row-error' : ''}`}
-          role="button"
-          tabIndex={0}
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault()
-              setOpen((v) => !v)
-            }
-          }}
-        >
+        <TraceRowShell failed={askFailed} open={open} onToggle={() => setOpen((v) => !v)}>
           <span className="trace-row-left">
             <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} className="trace-row-chevron" />
             <HelmxIcon
@@ -156,7 +175,7 @@ export const TraceRow = memo(function TraceRow({
               right !== '' ? <span>{right}</span> : null
             )}
           </span>
-        </div>
+        </TraceRowShell>
         {open ? (
           <div className="trace-expanded-body selectable">
             <ToolExpandedBody tool={tool} conversationId={conversationId} />
@@ -210,19 +229,7 @@ export const TraceRow = memo(function TraceRow({
         </div>
       ) : (
         <>
-          <div
-            className={`trace-row${rowFailed ? ' trace-row-error' : ''}`}
-            role="button"
-            tabIndex={0}
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                setOpen((v) => !v)
-              }
-            }}
-          >
+          <TraceRowShell failed={rowFailed} open={open} onToggle={() => setOpen((v) => !v)}>
             <span className="trace-row-left">
               <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} className="trace-row-chevron" />
               <HelmxIcon
@@ -247,7 +254,7 @@ export const TraceRow = memo(function TraceRow({
             <span className="trace-row-right">
               {right !== '' ? <span>{right}</span> : null}
             </span>
-          </div>
+          </TraceRowShell>
           {toolView !== undefined ? (
             <div className="trace-toolview">
               <PluginUiView
