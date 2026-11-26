@@ -11,7 +11,9 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  useHostModels,
 } from '@helmx/plugin-client'
+import { resolveDefaultChainThinkingLevel } from '@helmx/plugin-client/pure'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { assetsApi } from '../lib/api.js'
 import {
@@ -69,6 +71,7 @@ export function ModelCenter({
   onTestConnection,
 }: ModelCenterProps): React.JSX.Element {
   const models = useModels()
+  const hostModels = useHostModels()
   const modelDefaults = useModelDefaults()
   const storeProviders = useProviders()
   const credentials = useCredentials()
@@ -109,6 +112,17 @@ export function ModelCenter({
         : {}),
     }
   }, [modelDefaults, savedDefaultOverride])
+
+  // "Current:" facts mirror the kernel's default chain: a tier's own preset outranks the level
+  // saved beside it, converged to the target model's supported levels (never the raw config value).
+  const defaultChainLevel = (modelRef: string | undefined, configuredLevel: string | undefined): string => {
+    const level = resolveDefaultChainThinkingLevel(hostModels, modelRef, configuredLevel)
+    return level !== '' && level !== 'off' ? level : ''
+  }
+  const defaultThinkingLevel = defaultModelInfo ? defaultChainLevel(defaultModelInfo.defaultModel, defaultModelInfo.defaultThinkingLevel) : ''
+  const compactionThinkingLevel = defaultModelInfo
+    ? defaultChainLevel(defaultModelInfo.defaultCompactionModel, defaultModelInfo.defaultCompactionThinkingLevel)
+    : ''
 
   useEffect(() => {
     let cancelled = false
@@ -381,9 +395,7 @@ export function ModelCenter({
             {defaultModelInfo?.defaultModel ? (
               <span>
                 {t('models.defaults.currentPrefix')} <strong className="mono">{defaultModelInfo.defaultModel}</strong>
-                {defaultModelInfo.defaultThinkingLevel &&
-                  defaultModelInfo.defaultThinkingLevel !== 'off' &&
-                  t('models.defaults.thinkingLevelSuffix', { level: defaultModelInfo.defaultThinkingLevel })}
+                {defaultThinkingLevel !== '' && t('models.defaults.thinkingLevelSuffix', { level: defaultThinkingLevel })}
               </span>
             ) : (
               <span>{t('models.defaults.unsetHint')}</span>
@@ -392,11 +404,8 @@ export function ModelCenter({
               <span>
                 {t('models.defaults.compactionCurrentPrefix')}{' '}
                 <strong className="mono">{defaultModelInfo.defaultCompactionModel}</strong>
-                {defaultModelInfo.defaultCompactionThinkingLevel &&
-                  defaultModelInfo.defaultCompactionThinkingLevel !== 'off' &&
-                  t('models.defaults.thinkingLevelSuffix', {
-                    level: defaultModelInfo.defaultCompactionThinkingLevel,
-                  })}
+                {compactionThinkingLevel !== '' &&
+                  t('models.defaults.thinkingLevelSuffix', { level: compactionThinkingLevel })}
               </span>
             )}
             <span className="text-subtle">{t('models.defaults.inheritanceChain')}</span>

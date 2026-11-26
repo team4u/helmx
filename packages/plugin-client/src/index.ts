@@ -116,6 +116,7 @@ export type { ModelPickerControlProps } from './ui/ModelPicker.js'
 export {
   formatModelShortName,
   initialModelActiveIndex,
+  resolveDefaultChainThinkingLevel,
   resolveEffectiveThinkingLevel,
   stepActiveIndex,
   usePanelShortcut,

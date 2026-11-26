@@ -7,7 +7,8 @@
  *   show the effective level;
  * - the fake "default" pseudo-level is removed; the selection is what you see;
  * - when the effective level is outside the catalog's supported list, it
- *   safely falls back to a valid level (off or the first).
+ *   clamps to the nearest supported level exactly like the kernel (upward
+ *   first, then downward; an explicit off passes).
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
@@ -117,12 +118,14 @@ test('DOM: without an override the control highlights the effective high and the
   }
 })
 
-test('DOM: when the catalog rejects the effective level (max), fall back to the first supported (minimal)', { timeout: 60_000 }, async () => {
+test('DOM: when the catalog rejects the effective level (max), clamp to the nearest supported level like the kernel (high)', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ thinkingLevel: 'max' }))
   try {
-    assert.equal(badgeOf(host), '· minimal', 'falls back to the first valid level for display')
+    // Kernel parity: max on a model capped at high runs at high (search upward first, then downward),
+    // so the badge and the highlighted chip show high, never the lowest supported level.
+    assert.equal(badgeOf(host), '· high', 'clamps to the nearest valid level for display')
     const popover = openModelPopover(host)
-    assert.equal(selectedLevel(popover), 'minimal')
+    assert.equal(selectedLevel(popover), 'high')
   } finally {
     unmount()
   }

@@ -4,7 +4,8 @@
  * - manifest lock: ModelPickerControl and the model pure functions are listed
  *   in the protocol PLUGIN_CLIENT_SHARED_EXPORTS manifest and really exported;
  * - pure helpers: short-name/route-splitting display, thinking-level
- *   convergence, keyboard index stepping, copy interpolation;
+ *   convergence (kernel clamp parity), default-chain tier presets, keyboard
+ *   index stepping, copy interpolation;
  * - SSR: the control renders the trigger (short name + level suffix) with no
  *   browser side effects and zero emoji, reading the catalog through the
  *   stable PluginClientHostHandlesContext (useHostModels);
@@ -33,15 +34,16 @@ import { test } from 'node:test'
 import { act } from 'react'
 import * as ReactDOMClient from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helmx/protocol'
+import { PLUGIN_CLIENT_SHARED_EXPORTS, type HostModelsSlice } from '@helmx/protocol'
 import * as SDK from '../src/index.js'
-import { ModelPickerControl } from '../src/ui/ModelPicker.js'
+import { ModelPickerControl, type ModelPickerControlProps } from '../src/ui/ModelPicker.js'
 import {
   DEFAULT_MODEL_PICKER_COPY,
   formatModelPickerCopy,
   formatModelRowDisplay,
   formatModelShortName,
   initialModelActiveIndex,
+  resolveDefaultChainThinkingLevel,
   resolveEffectiveThinkingLevel,
   stepActiveIndex,
 } from '../src/ui/model-picker-model.js'
@@ -62,7 +64,7 @@ const CATALOG_MODELS = [
 ]
 
 interface CatalogHandle {
-  slice: { models: typeof CATALOG_MODELS } | undefined
+  slice: HostModelsSlice | undefined
   listeners: Set<() => void>
 }
 
@@ -113,8 +115,17 @@ test('formatModelShortName / formatModelRowDisplay: nested route prefixes move t
 
 test('resolveEffectiveThinkingLevel / index stepping / copy interpolation semantics', { timeout: 60_000 }, () => {
   assert.equal(resolveEffectiveThinkingLevel(['off', 'low', 'high'], 'high'), 'high')
-  assert.equal(resolveEffectiveThinkingLevel(['off', 'low', 'high'], 'max'), 'off')
-  assert.equal(resolveEffectiveThinkingLevel(['low', 'high'], 'off'), 'low')
+  // Kernel parity (pi-ai clampThinkingLevel): an unsupported level clamps to the nearest supported
+  // one, searching upward first then downward, so the display never shows a level that does not run.
+  assert.equal(resolveEffectiveThinkingLevel(['off', 'low', 'high'], 'max'), 'high')
+  assert.equal(resolveEffectiveThinkingLevel(['off', 'high', 'xhigh'], 'max'), 'xhigh')
+  assert.equal(resolveEffectiveThinkingLevel(['off', 'low'], 'xhigh'), 'low')
+  assert.equal(resolveEffectiveThinkingLevel(['off', 'low'], 'ultra'), 'off', 'unknown level falls back to off/lowest')
+  // An explicit 'off' always passes (the kernel omits the reasoning parameter); an unconfigured
+  // level displays as off or the lowest supported level; no declared levels yields ''.
+  assert.equal(resolveEffectiveThinkingLevel(['low', 'high'], 'off'), 'off')
+  assert.equal(resolveEffectiveThinkingLevel(['high', 'xhigh'], ''), 'high')
+  assert.equal(resolveEffectiveThinkingLevel(['off', 'high'], ''), 'off')
   assert.equal(resolveEffectiveThinkingLevel([], 'high'), '')
   assert.equal(initialModelActiveIndex(CATALOG_MODELS, ''), -1)
   assert.equal(initialModelActiveIndex(CATALOG_MODELS, 'gpt'), 0)
@@ -124,6 +135,175 @@ test('resolveEffectiveThinkingLevel / index stepping / copy interpolation semant
   assert.equal(stepActiveIndex(0, 0, 1), -1)
   assert.equal(formatModelPickerCopy('Use {model} · thinking {level}', { model: 'a/b', level: 'high' }), 'Use a/b · thinking high')
   assert.equal(DEFAULT_MODEL_PICKER_COPY.defaultLabel, 'Default model')
+})
+
+const TIER_CATALOG: HostModelsSlice = {
+  models: [
+    ...CATALOG_MODELS,
+    { id: 'faux/sol', provider: 'faux', modelId: 'sol', available: true, thinkingLevels: ['high', 'xhigh'] },
+    { id: 'faux/omni', provider: 'faux', modelId: 'omni', available: true, thinkingLevels: ['off', 'high', 'xhigh', 'max'] },
+  ],
+  modelTiers: [
+    // Preset unsupported by the target: the kernel clamps max -> xhigh (never high).
+    { id: 'reviewer', model: 'faux/sol', thinkingLevel: 'max', available: true, thinkingLevels: ['high', 'xhigh'] },
+    { id: 'scout', model: 'faux/omni', thinkingLevel: 'max', available: true, thinkingLevels: ['off', 'high', 'xhigh', 'max'] },
+    // No preset: the level configured beside the reference applies.
+    { id: 'plain', model: 'faux/sol', available: true, thinkingLevels: ['high', 'xhigh'] },
+  ],
+}
+
+test('resolveDefaultChainThinkingLevel: a tier preset outranks the level configured beside the reference and clamps like the kernel', { timeout: 60_000 }, () => {
+  // Tier with preset: the configured level (global / Profile) never masks the preset.
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/scout', 'high'), 'max')
+  // Unsupported preset converges the way the kernel clamps it (upward first, then downward).
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/reviewer', 'high'), 'xhigh')
+  // Tier without preset falls back to the configured level, converged; empty stays empty.
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/plain', 'max'), 'xhigh')
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/plain', ''), 'high')
+  // Concrete references converge the configured level; one outside the catalog keeps it unconverged.
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/sol', 'max'), 'xhigh')
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/sol', ''), 'high')
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/missing', 'high'), 'high')
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, '', 'high'), '')
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, undefined, 'high'), '')
+  // Catalog unknown: a concrete reference's configured level is a plain (unconverged) fact; a
+  // tier's preset is unknown and outranks the configured level, so nothing honest can be shown.
+  assert.equal(resolveDefaultChainThinkingLevel(undefined, 'faux/sol', 'max'), 'max')
+  assert.equal(resolveDefaultChainThinkingLevel(undefined, 'tier/scout', 'high'), '')
+  // An unregistered tier (or one whose target is absent from the catalog) has no known preset to show.
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'tier/missing', 'high'), '')
+  assert.equal(
+    resolveDefaultChainThinkingLevel({ models: [], modelTiers: [{ id: 'ghost', model: 'faux/gone', thinkingLevel: 'max', available: false }] }, 'tier/ghost', 'high'),
+    '',
+  )
+})
+
+/** Mount the control over a catalog and return the trigger button text. */
+async function renderTriggerText(
+  props: Pick<ModelPickerControlProps, 'effectiveModel' | 'activeThinkingLevel'> & Partial<ModelPickerControlProps>,
+): Promise<{ text: string; container: HTMLElement; done: () => Promise<void> }> {
+  const handle: CatalogHandle = { slice: TIER_CATALOG, listeners: new Set() }
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  await act(async () => {
+    root.render(
+      e(PluginClientHostContext.Provider, { value: makePort(handle) },
+        e(ModelPickerControl, {
+          resetLabel: 'Reset',
+          resetTitle: 'Reset',
+          buttonTitle: 'Current model',
+          onApply: () => {},
+          onResetDefault: () => {},
+          ...props,
+        })),
+    )
+  })
+  const trigger = container.querySelector<HTMLButtonElement>('button.composer-model-button')
+  if (trigger === null) throw new Error('trigger button missing')
+  return {
+    text: trigger.textContent ?? '',
+    container,
+    done: async () => {
+      await act(async () => {
+        root.unmount()
+      })
+      container.remove()
+    },
+  }
+}
+
+test('tier-aware trigger: default precedence shows the tier preset (kernel-clamped) instead of the configured or lowest level', { timeout: 60_000 }, async () => {
+  // Global default / Profile binding context: the configured level ('high') is outranked by the preset.
+  const scout = await renderTriggerText({ effectiveModel: 'tier/scout', activeThinkingLevel: 'high' })
+  try {
+    assert.match(scout.text, /tier\/scout/)
+    assert.match(scout.text, /· max/)
+  } finally {
+    await scout.done()
+  }
+  // The preset the kernel would actually run: max on a high/xhigh model displays as xhigh, never high.
+  const reviewer = await renderTriggerText({ effectiveModel: 'tier/reviewer', activeThinkingLevel: '' })
+  try {
+    assert.match(reviewer.text, /· xhigh/)
+    assert.doesNotMatch(reviewer.text, /· high/)
+  } finally {
+    await reviewer.done()
+  }
+  // A tier without a preset keeps showing the configured level.
+  const plain = await renderTriggerText({ effectiveModel: 'tier/plain', activeThinkingLevel: 'xhigh' })
+  try {
+    assert.match(plain.text, /· xhigh/)
+  } finally {
+    await plain.done()
+  }
+  // Concrete models are unaffected: the context level displays as before.
+  const concrete = await renderTriggerText({ effectiveModel: 'faux/sol', activeThinkingLevel: 'high' })
+  try {
+    assert.match(concrete.text, /· high/)
+  } finally {
+    await concrete.done()
+  }
+})
+
+test('tier-aware trigger: override precedence keeps the explicit conversation level above the tier preset and falls back to it when empty', { timeout: 60_000 }, async () => {
+  const override = await renderTriggerText({
+    effectiveModel: 'tier/scout',
+    activeThinkingLevel: 'xhigh',
+    thinkingLevelPrecedence: 'override',
+  })
+  try {
+    assert.match(override.text, /· xhigh/)
+  } finally {
+    await override.done()
+  }
+  const empty = await renderTriggerText({
+    effectiveModel: 'tier/scout',
+    activeThinkingLevel: '',
+    thinkingLevelPrecedence: 'override',
+  })
+  try {
+    assert.match(empty.text, /· max/)
+  } finally {
+    await empty.done()
+  }
+})
+
+test('tier rows badge the kernel-clamped preset level', { timeout: 60_000 }, async () => {
+  const handle: CatalogHandle = { slice: TIER_CATALOG, listeners: new Set() }
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  try {
+    await act(async () => {
+      root.render(
+        e(PluginClientHostContext.Provider, { value: makePort(handle) },
+          e(ModelPickerControl, {
+            effectiveModel: 'faux/omni',
+            activeThinkingLevel: 'high',
+            resetLabel: 'Reset',
+            resetTitle: 'Reset',
+            buttonTitle: 'Current model',
+            onApply: () => {},
+            onResetDefault: () => {},
+          })),
+      )
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button.composer-model-button')?.click()
+    })
+    const rows = Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row'))
+    const reviewerRow = rows.find((row) => row.textContent?.includes('tier/reviewer'))
+    const scoutRow = rows.find((row) => row.textContent?.includes('tier/scout'))
+    assert.ok(reviewerRow !== null && reviewerRow !== undefined, 'reviewer tier row renders')
+    assert.equal(reviewerRow.querySelector('.badge-neutral')?.textContent, 'xhigh', 'unsupported preset badges the clamped level')
+    assert.equal(scoutRow?.querySelector('.badge-neutral')?.textContent, 'max')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
 })
 
 // ---------------------------------------------------------------------------

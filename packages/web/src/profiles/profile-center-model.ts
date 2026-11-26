@@ -1,8 +1,10 @@
 import type {
   ConversationSummary,
+  HostModelsSlice,
   PluginSummary,
   ProfileStarterPrompt,
 } from '@helmx/protocol/browser'
+import { resolveDefaultChainThinkingLevel } from '@helmx/plugin-client/pure'
 import {
   PROFILE_STARTERS_MAX_ITEMS,
   PROFILE_STARTER_LABEL_MAX_LENGTH,
@@ -203,29 +205,38 @@ export interface EffectiveProfileModelInfo {
   source: 'bound' | 'global' | 'unset'
 }
 
+/** Displayable thinking level: `undefined` for unset and `'off'` (both render without a level suffix). */
+function displayableThinkingLevel(level: string): string | undefined {
+  return level !== '' && level !== 'off' ? level : undefined
+}
+
 /**
  * Resolve the model and thinking level actually in effect for a profile
- * (own binding first, then the global default).
+ * (own binding first, then the global default). The level mirrors the kernel's
+ * default chain: a `tier/<id>` binding shows the tier's own preset (it outranks the
+ * Profile/global level saved beside it), converged to the target model's supported
+ * levels; pass the host model catalog so tiers can be resolved.
  */
 export function resolveEffectiveProfileModel(
   profile: Profile,
   defaultModelInfo?: { defaultModel?: string; defaultThinkingLevel?: string } | null,
+  catalog?: Pick<HostModelsSlice, 'models' | 'modelTiers'>,
 ): EffectiveProfileModelInfo {
   const boundModel = resolveProfileModel(profile)?.trim() ?? ''
   if (boundModel !== '') {
-    const thinking = profile.thinkingLevel?.trim()
     return {
       model: boundModel,
-      thinkingLevel: thinking && thinking !== 'off' ? thinking : undefined,
+      thinkingLevel: displayableThinkingLevel(resolveDefaultChainThinkingLevel(catalog, boundModel, profile.thinkingLevel)),
       source: 'bound',
     }
   }
   const globalModel = defaultModelInfo?.defaultModel?.trim() ?? ''
   if (globalModel !== '') {
-    const globalThinking = defaultModelInfo?.defaultThinkingLevel?.trim()
     return {
       model: globalModel,
-      thinkingLevel: globalThinking && globalThinking !== 'off' ? globalThinking : undefined,
+      thinkingLevel: displayableThinkingLevel(
+        resolveDefaultChainThinkingLevel(catalog, globalModel, defaultModelInfo?.defaultThinkingLevel),
+      ),
       source: 'global',
     }
   }
