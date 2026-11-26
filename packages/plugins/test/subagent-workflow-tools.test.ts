@@ -169,6 +169,14 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       assert.equal(nodeIdSchema.pattern, NODE_ID_PATTERN, 'nodeId 声明应复用协议权威 NODE_ID_PATTERN')
       const isolationSchema = props['isolation'] as { enum?: unknown[] }
       assert.deepEqual(isolationSchema.enum, ['worktree'], 'isolation 声明应仅允许 worktree')
+      const modelSchema = props['model'] as { description?: string }
+      assert.ok(modelSchema.description?.includes('tier/<id>'), 'model 声明应包含 tier/<id> 指引')
+      const agentTypeSchema = props['agentType'] as { description?: string; pattern?: string }
+      assert.equal(agentTypeSchema.pattern, undefined, 'agentType 不得加 JSON Schema pattern 以免丢失自愈纠偏提示')
+      assert.ok(
+        agentTypeSchema.description?.includes('tier/<id>') && agentTypeSchema.description?.includes('Never'),
+        'agentType 声明应明确禁止传 tier/<id>',
+      )
 
       // hook 载荷：各值原样到达（未静默丢字段）。
       assert.equal(spawns.length, 1, 'agent_spawn 钩子应恰好触发一次')
@@ -1129,5 +1137,90 @@ describe('subagent / SubagentWorkflow 工具 presentationMeta 轻量投影与 Sc
     assert.equal(errRes.structuredOutput['summary'], 'boom')
     assert.deepEqual(errRes.presentationMeta, { ok: false, status: 'failed' })
     validateOrThrow(wfTool.presentationMetaSchema!, errRes.presentationMeta, 'workflow.err.presentationMeta')
+  })
+
+  it('人类会话默认后台调用 subagent 传 agentType: tier/reviewer 时同步拦截：返回 isError 纠偏提示、绝不落盘 WorkflowRun、不触发 agent_spawn', { timeout: 60_000 }, async (t) => {
+    const dataDir = useTempDir(t, 'helmx-subagent-tier-guard-')
+    const faux = makeFauxProvider()
+    const kernel = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      cwd: dataDir,
+      model: 'faux/faux-1',
+      providers: [faux.provider],
+    })
+    try {
+      await kernel.plugins.register(createWorkflowPlugin())
+      await kernel.plugins.register(createWorktreePlugin())
+      const spawns: AgentSpawnRequest[] = []
+      await kernel.plugins.register(spawnObserver(spawns))
+
+      faux.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall('subagent', {
+              prompt: '审查本次改动',
+              agentType: 'tier/reviewer',
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('收到纠偏提示，已停止错误派工'),
+      ])
+
+      await kernel.conversations.submitInput(1, '请派审查子代理')
+      await kernel.conversations.waitForIdle(1)
+
+      const detail = await kernel.conversations.getConversationDetail(1, { limit: 30 })
+      const toolEntry = [...detail.entries].reverse().find((e) => e.kind === 'pi.tool-result' && toolNameOf(e.model) === 'subagent')
+      assert.ok(toolEntry, '应存在 subagent 的 pi.tool-result')
+      const toolMsg = toolEntry.model?.[0] as { isError?: boolean; content?: Array<{ type: string; text?: string }> }
+      assert.equal(toolMsg.isError, true, '传入 tier/reviewer 到 agentType 必须返回 isError: true')
+      const text = toolResultText(detail, 'subagent')
+      assert.ok(text.includes('tier/reviewer'), `错误信息应点名 tier/reviewer: ${text}`)
+      assert.ok(text.includes('model'), `错误信息应提示使用 model 参数: ${text}`)
+      assert.equal(text.toLowerCase().includes('illegal profile id'), false, `不应退化为 illegal profile id: ${text}`)
+
+      const runsResult = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: unknown[] }
+      assert.deepEqual(runsResult.runs, [], '默认后台模式被前置校验拦截后绝不得创建/落盘任何 WorkflowRun')
+      assert.equal(spawns.length, 0, '前置拦截后不得进入 agent_spawn 钩子链')
+      assert.equal(
+        kernel.conversations.listConversations().filter((c) => c.parentConversationId === 1).length,
+        0,
+        '不得创建子会话',
+      )
+
+      // 组合 isolation: 'worktree' + agentType: 'tier/coder'：同样在分配 worktree 之前拦截
+      faux.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall('subagent', {
+              prompt: '隔离开发',
+              agentType: 'tier/coder',
+              isolation: 'worktree',
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('收到 worktree + tier 纠偏提示'),
+      ])
+      await kernel.conversations.submitInput(1, '派发隔离 coder')
+      await kernel.conversations.waitForIdle(1)
+
+      const wtDetail = await kernel.conversations.getConversationDetail(1, { limit: 30 })
+      const wtToolEntry = [...wtDetail.entries].reverse().find((e) => e.kind === 'pi.tool-result' && toolNameOf(e.model) === 'subagent')
+      assert.ok(wtToolEntry)
+      assert.equal((wtToolEntry.model?.[0] as { isError?: boolean }).isError, true)
+      const wtText = toolResultText(wtDetail, 'subagent')
+      assert.ok(wtText.includes('tier/coder') && wtText.includes('model'), `应含 tier/coder 与 model 提示: ${wtText}`)
+      assert.equal(wtText.toLowerCase().includes('illegal profile id'), false)
+      const wtRuns = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: unknown[] }
+      assert.deepEqual(wtRuns.runs, [], '不得创建 WorkflowRun')
+      const wtList = (await kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as { worktrees: unknown[] }
+      assert.deepEqual(wtList.worktrees, [], '不得分配孤儿 worktree')
+      assert.equal(spawns.length, 0, '不得触发 agent_spawn 钩子')
+    } finally {
+      await kernel.close()
+    }
   })
 })

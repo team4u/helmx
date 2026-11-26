@@ -29,7 +29,12 @@ export const dispatchInputSchema = S.obj(
     prompt: S.str({ minLength: 1, description: 'Initial brief task assignment for this peer role' }),
     groupId: groupIdSchema,
     name: { ...memberNameSchema, description: 'Unique lowercase role name (e.g. author, verifier)' },
-    profileId: S.str({ minLength: 1, maxLength: 64, pattern: PROFILE_ID_PATTERN }),
+    profileId: S.str({
+      minLength: 1,
+      maxLength: 64,
+      pattern: PROFILE_ID_PATTERN,
+      description: 'Profile ID from <available_profiles> (lowercase a-z, 0-9, hyphen; never a model tier like tier/<id>)',
+    }),
     access: S.enm(
       ['readwrite', 'readonly'],
       "Task convention (default 'readwrite'): 'readwrite' for code-editing or integration slices (pair with isolation: 'worktree'), 'readonly' for research or verification",
@@ -40,8 +45,17 @@ export const dispatchInputSchema = S.obj(
     ),
     forkFrom: S.str({ minLength: 1, maxLength: 32, description: "Optional fork source: 'coordinator' or an existing member name" }),
     forkEntryId: S.int(1),
-    model: S.str({ minLength: 1, maxLength: 200 }),
-    effort: S.str({ minLength: 1, maxLength: 32 }),
+    model: S.str({
+      minLength: 1,
+      maxLength: 200,
+      description:
+        "Optional model override: semantic tier 'tier/<id>' (see <available_model_tiers>) or concrete 'provider/model' (inherits the tier's preset effort unless 'effort' is set)",
+    }),
+    effort: S.str({
+      minLength: 1,
+      maxLength: 32,
+      description: "Optional thinking/reasoning level override (overrides the tier's preset effort when 'model' is a 'tier/<id>')",
+    }),
     title: S.str({ minLength: 1, maxLength: 80 }),
     nodeId: S.str({
       minLength: 1,
@@ -111,7 +125,11 @@ export const listGroupsInputSchema = S.obj({
 export const switchModelInputSchema = S.obj(
   {
     ...workerRefProps,
-    model: S.str({ minLength: 1, maxLength: 200 }),
+    model: S.str({
+      minLength: 1,
+      maxLength: 200,
+      description: "Target model: semantic tier 'tier/<id>' or concrete 'provider/model'",
+    }),
     effort: S.str({ minLength: 1, maxLength: 32, description: 'Optional thinking/reasoning level override applied alongside the model switch' }),
     prompt: S.str({ minLength: 1, description: 'Optional resume instruction posted to the board as a coordinator brief to wake the member immediately after switching model' }),
   },

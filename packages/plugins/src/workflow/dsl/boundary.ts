@@ -5,6 +5,7 @@
 import { availableParallelism } from 'node:os'
 import { Script } from 'node:vm'
 import {
+  agentTypeSyntaxError,
   assertSchemaCompilable,
   isValidNodeId,
   NODE_ID_PATTERN,
@@ -398,6 +399,12 @@ export function validateAgentCallOptions(
   const phase = optionalOptionText(optsObj['phase'], 'agent() opts.phase')
   const model = optionalOptionText(optsObj['model'], 'agent() opts.model')
   const agentType = optionalOptionText(optsObj['agentType'], 'agent() opts.agentType')
+  if (agentType !== undefined) {
+    const agentTypeErr = agentTypeSyntaxError(agentType)
+    if (agentTypeErr !== undefined) {
+      throw new ScriptCallOptionError(`agent() opts.agentType: ${agentTypeErr}`)
+    }
+  }
   const isolationRaw = optionalOptionText(optsObj['isolation'], 'agent() opts.isolation')
   if (isolationRaw !== undefined && isolationRaw !== 'worktree') {
     throw new ScriptCallOptionError('agent() opts.isolation must be "worktree".')

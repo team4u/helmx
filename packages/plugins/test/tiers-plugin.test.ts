@@ -109,6 +109,7 @@ test('validation: rejects malformed IDs, recursive tier targets, invalid thinkin
   ])
   assert.ok(xml !== undefined)
   assert.match(xml, /<tier id="tier\/scout" effort="low">Fast search<\/tier>/)
+  assert.match(xml, /never agentType or profileId/)
   assert.doesNotMatch(xml, /tier\/broken/)
   assert.doesNotMatch(xml, /tier\/muted/)
   assert.equal(renderModelTiersCatalogSection([{ id: 'x', model: 'faux/fast', available: false }]), undefined)

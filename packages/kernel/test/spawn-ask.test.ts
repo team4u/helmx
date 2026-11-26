@@ -697,6 +697,43 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
     }
   })
 
+  it('tier/<id> and @<profile> in agentType reject early with 400 validation_error and corrective model/bare-id hint', { timeout: 60_000 }, async () => {
+    const th = await openSpawnHarness()
+    try {
+      await assert.rejects(
+        () =>
+          runNativeSpawn(th.deps, {
+            parentConversationId: 1,
+            prompt: 'x',
+            agentType: 'tier/reviewer',
+          } as never),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'validation_error' &&
+          err.status === 400 &&
+          err.message.includes('tier/reviewer') &&
+          err.message.includes('model') &&
+          !err.message.toLowerCase().includes('illegal profile id'),
+      )
+      await assert.rejects(
+        () =>
+          runNativeSpawn(th.deps, {
+            parentConversationId: 1,
+            prompt: 'x',
+            agentType: '@lx',
+          } as never),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'validation_error' &&
+          err.status === 400 &&
+          err.message.includes('@') &&
+          err.message.includes("'lx'"),
+      )
+    } finally {
+      await th.close()
+    }
+  })
+
   it('gate executes in child conversation cwd (request.cwd) and preserves diagnostics on failure', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {

@@ -13,7 +13,14 @@
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Conversation, EntryId, EntryRecord, SettledSubmissionRecord } from '@earendil-works/pi-durable'
-import { HelmxError, isAbsoluteAgentPath, isValidNodeId, NODE_ID_PATTERN, type AgentSpawnRequest } from '@helmx/protocol'
+import {
+  assertAgentTypeSyntax,
+  HelmxError,
+  isAbsoluteAgentPath,
+  isValidNodeId,
+  NODE_ID_PATTERN,
+  type AgentSpawnRequest,
+} from '@helmx/protocol'
 import { assistantTextOfEntry, readEntryById } from './entries.js'
 import { assertSpawnForkFields } from './spawn-fork.js'
 import { extractAcceptedStructuredOutputFromEntries } from './structured-output.js'
@@ -21,15 +28,20 @@ import { extractAcceptedStructuredOutputFromEntries } from './structured-output.
 const ENTRY_SCAN_PAGE_SIZE = 256
 
 /**
- * Validate shapes and mutual-exclusion constraints for `nodeId`, `requestId`, `reattach`, `resume`, and `fork`:
+ * Validate shapes and mutual-exclusion constraints for `agentType`, `nodeId`, `requestId`, `reattach`, `resume`, and `fork`:
+ * - `agentType`, when provided, must satisfy Profile ID or `<namespace>:<kind>` external runtime syntax (`400 validation_error`);
  * - `nodeId`, when provided, must satisfy `NODE_ID_PATTERN` and is mutually exclusive with `resume` (`400 validation_error`);
  * - `reattach` is mutually exclusive with `resume` and `fork` (`400 validation_error`);
  * - `reattach` must be a plain object containing `conversationId` or `executionId`;
  * - `reattach.conversationId` must be a positive safe integer paired with a non-empty `requestId` (for submission deduplication).
  */
 export function assertSpawnRequestModes(
-  request: Pick<AgentSpawnRequest, 'fork' | 'resume' | 'reattach' | 'requestId' | 'nodeId' | 'gateTimeoutMs'>,
+  request: Pick<
+    AgentSpawnRequest,
+    'agentType' | 'fork' | 'resume' | 'reattach' | 'requestId' | 'nodeId' | 'gateTimeoutMs'
+  >,
 ): void {
+  assertAgentTypeSyntax(request.agentType)
   assertSpawnForkFields(request)
   if (request.gateTimeoutMs !== undefined) {
     if (

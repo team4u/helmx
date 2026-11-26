@@ -24,6 +24,7 @@ import {
   MAX_AGENT_ATTEMPTS,
   runWorkflow,
   scopedResumeKey,
+  ScriptCallOptionError,
   validateAgentCallOptions,
   type WorkflowHost,
 } from '../src/workflow/dsl/index.js'
@@ -346,6 +347,57 @@ describe('workflow runtime dynamic nodeId pass-through, replay key & host-bounda
       () => validateAgentCallOptions('hi', { resume: 'prev', nodeId: 'gpu-1' }),
       /opts\.resume and opts\.nodeId are mutually exclusive/,
     )
+  })
+
+  it('host boundary rejects invalid agentType (tier/*, @prefix) while allowing Profile ID and <ns>:<kind> external runtime', timeout, async () => {
+    assert.throws(
+      () => validateAgentCallOptions('hi', { agentType: 'tier/reviewer' }),
+      (err: unknown) =>
+        err instanceof ScriptCallOptionError &&
+        err.message.includes('agent() opts.agentType') &&
+        err.message.includes('tier/reviewer') &&
+        err.message.includes('model'),
+    )
+    assert.throws(
+      () => validateAgentCallOptions(undefined, { objective: 'hi', agentType: 'tier/reviewer' }, true),
+      (err: unknown) =>
+        err instanceof ScriptCallOptionError &&
+        err.message.includes('agent() opts.agentType') &&
+        err.message.includes('tier/reviewer') &&
+        err.message.includes('model'),
+    )
+    assert.throws(
+      () => validateAgentCallOptions('hi', { agentType: '@lx' }),
+      (err: unknown) =>
+        err instanceof ScriptCallOptionError &&
+        err.message.includes('agent() opts.agentType') &&
+        err.message.includes("'lx'"),
+    )
+    assert.equal(validateAgentCallOptions('hi', { agentType: 'herdr:agy' }).agentType, 'herdr:agy')
+    assert.equal(validateAgentCallOptions('hi', { agentType: 'assistant' }).agentType, 'assistant')
+
+    // End-to-end DSL script runtime boundary: agent() and goal() reject tier/reviewer with model guidance.
+    const seen: Array<string | undefined> = []
+    const host = baseHost({
+      async spawnAgent(request) {
+        seen.push(request.agentType)
+        return { ok: true, text: `ok:${request.agentType ?? 'default'}` }
+      },
+    })
+    const badAgent = await runWorkflow({
+      script: META('bad-agent-type') + 'return await agent("review", { agentType: "tier/reviewer" })',
+      host,
+    })
+    assert.equal(badAgent.status, 'failed')
+    assert.match(badAgent.error ?? '', /opts\.agentType.*tier\/reviewer.*model/s)
+
+    const badGoal = await runWorkflow({
+      script: META('bad-goal-agent-type') + 'return await goal({ objective: "review", agentType: "tier/reviewer" })',
+      host,
+    })
+    assert.equal(badGoal.status, 'failed')
+    assert.match(badGoal.error ?? '', /opts\.agentType.*tier\/reviewer.*model/s)
+    assert.deepEqual(seen, [])
   })
 
   it('in-place reattach omits nodeId for native conversationId', timeout, async () => {
