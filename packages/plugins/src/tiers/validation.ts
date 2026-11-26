@@ -214,7 +214,7 @@ export function renderModelTiersCatalogSection(entries: ReadonlyArray<ModelTierC
     'Configured semantic model tiers (pass "tier/<id>" wherever a native model parameter is accepted):',
     ...rows,
     'Guidelines:',
-    '- Pick model="tier/<id>" according to task complexity, speed, and cost when delegating work or switching worker models; omit effort to inherit the tier\'s preset thinking level.',
+    "- Pick model=\"tier/<id>\" (never agentType or profileId) according to task complexity, speed, and cost when delegating work or switching worker models; omit effort to inherit the tier's preset thinking level.",
     '- In a top-level conversation, call `switch_model({ model: "tier/<id>" })` (or a concrete `provider/modelId`) to temporarily relay the current turn to another model; the original model restores automatically after the turn.',
     '- Load the "model-tiers" skill on demand for multi-tier collaboration patterns and template management.',
     '</available_model_tiers>',

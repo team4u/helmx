@@ -116,8 +116,6 @@ export interface ConversationBackgroundSlice {
   }
 }
 
-export type ResolvedAskEntry = HelmxStoreValue['resolvedAsksByConv'][number][number]
-
 export type HelmxStoreActions = Pick<
   HelmxStoreValue,
   | 'setTheme'
@@ -187,7 +185,6 @@ export type StoreDomainKey =
   | 'conversationLivesMap'
   | 'conversationArtifactsMap'
   | 'pendingAsks'
-  | 'resolvedAsksMap'
   | 'asks'
   | 'plugins'
   | 'groupedUi'
@@ -223,7 +220,6 @@ export interface NotifyPlan {
   summaryIds: Set<number>
   artifactIds: Set<number>
   pendingAskIds: Set<number>
-  resolvedAskIds: Set<number>
   highlightIds: Set<number>
   loadErrorKeys: Set<string>
   pluginDocKeys: Set<string>

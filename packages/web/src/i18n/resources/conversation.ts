@@ -61,7 +61,7 @@ export const conversationMessages = {
   'conv.ask.toolQuestionsCount': { en: '{count} questions', 'zh-CN': '{count} 个问题' },
   'conv.ask.outcomeAnswered': { en: 'Answered', 'zh-CN': '已回答' },
   'conv.ask.outcomeCancelled': { en: 'Skipped / Cancelled', 'zh-CN': '已跳过 / 取消' },
-  'conv.ask.outcomeSuperseded': { en: 'Superseded', 'zh-CN': '已被新输入取代' },
+  'conv.ask.outcomeSuperseded': { en: 'Superseded', 'zh-CN': '已取代' },
   'conv.ask.outcomeError': { en: 'Failed', 'zh-CN': '失败' },
 
   // --- Turn failure ------------------------------------------------------------

@@ -6,7 +6,7 @@ managedByPlugin: builtin:tiers
 
 # Model Tiers Collaboration Playbook
 
-Model tiers decouple **cognitive roles** (`tier/<id>`) from **concrete model IDs** (`provider/model`). You can define your own tier names and save multiple switchable preset templates without modifying workflows, profiles, or prompts.
+Model tiers decouple **semantic capability tiers** (`tier/<id>`) from **concrete model IDs** (`provider/model`). You can define your own tier names and save multiple switchable preset templates without modifying workflows, profiles, or prompts.
 
 ## Core Mechanics
 
@@ -17,6 +17,7 @@ Model tiers decouple **cognitive roles** (`tier/<id>`) from **concrete model IDs
    - If a referenced tier is missing or its underlying concrete model is disabled, execution fails explicitly (`404 model_tier_not_found` / `409 model_disabled`) instead of silently falling back to an unintended default model.
 3. **Native runtimes only**:
    - `tier/<id>` works everywhere a native session model is accepted (subagent dispatch, workflow `agent()`, Swarm worker creation and `switch_worker_model`, `Profile.model`, global defaults, CLI).
+   - Always pass `tier/<id>` via the **`model`** parameter—never in `agentType` or `profileId` (which select Profiles or external runtimes, not model tiers).
    - External CLI runtimes (e.g. `herdr:*`) manage their own models—never pass `model` to them.
 
 ## Discovering Active Tiers

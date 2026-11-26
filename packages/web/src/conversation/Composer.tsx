@@ -322,7 +322,11 @@ export const Composer = memo(function Composer({
             className="composer-dock-slot"
             slotProps={composerSlotProps}
           />
-          <AskDock conversationId={conversation.id} />
+          <AskDock
+            conversationId={conversation.id}
+            shortcutPanel={isDrawer ? 'drawer' : isSplit ? 'split' : 'primary'}
+            shortcutActive={staged}
+          />
           {envConfigurable ? (
             <SessionEnvBar
               key={`env-${conversation.id}`}

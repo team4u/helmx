@@ -14,6 +14,7 @@
  *   rejects whitespace/uppercase/path separators).
  */
 
+import { parseModelTierRef } from './assets.js'
 import { HelmxError } from './error.js'
 
 /** Minimal XML escaping for text and double-quoted attribute positions (`& < > "`; `'` needs no escape inside double quotes). */
@@ -61,5 +62,60 @@ export function assertProfileId(id: string): void {
     throw new HelmxError('validation_error', `illegal profile id: ${id} (only allows a-z 0-9 and hyphen)`, 400, {
       profileId: id,
     })
+  }
+}
+
+/**
+ * Pure syntax validator for `AgentSpawnRequest.agentType` (and DSL/tool `agentType` options).
+ *
+ * Accepts the union domain:
+ * - empty string `''` (omitted semantics),
+ * - native Profile ID (`^[a-z0-9][a-z0-9-]{0,63}$`), or
+ * - namespaced external runtime `<namespace>:<kind>` (non-empty on both sides of `:`, no whitespace).
+ *
+ * Returns a corrective diagnostic message for invalid values (explicitly diagnosing `'tier/<id>'`
+ * model tier references and `'@<profileId>'` mention prefixes), or `undefined` when syntactically valid.
+ */
+export function agentTypeSyntaxError(agentType: string): string | undefined {
+  if (agentType === '') return undefined
+  if (isValidProfileId(agentType)) return undefined
+  const colon = agentType.indexOf(':')
+  if (colon > 0 && colon < agentType.length - 1 && !/\s/.test(agentType)) {
+    return undefined
+  }
+  if (parseModelTierRef(agentType) !== undefined) {
+    return (
+      `invalid agentType '${agentType}': 'tier/<id>' is a model tier, not a Profile ID or external runtime; ` +
+      `pass '${agentType}' via the 'model' parameter instead, and omit 'agentType' or pass a Profile ID from <available_profiles>`
+    )
+  }
+  if (agentType.startsWith('@') && isValidProfileId(agentType.slice(1))) {
+    const bareId = agentType.slice(1)
+    return (
+      `invalid agentType '${agentType}': do not include the '@' mention prefix; ` +
+      `pass the bare Profile ID '${bareId}' directly`
+    )
+  }
+  return (
+    `invalid agentType '${agentType}': expected a lowercase Profile ID (a-z, 0-9, hyphen; e.g. 'assistant') ` +
+    `or an external runtime '<namespace>:<kind>' (e.g. 'herdr:agy'); ` +
+    `to select a model or model tier, use the 'model' parameter instead`
+  )
+}
+
+/** Assert `agentType` syntax per {@link agentTypeSyntaxError}; allows `undefined` and `''`, throws `400 validation_error`. */
+export function assertAgentTypeSyntax(agentType: unknown): void {
+  if (agentType === undefined) return
+  if (typeof agentType !== 'string') {
+    throw new HelmxError(
+      'validation_error',
+      `agentType must be a string (received ${agentType === null ? 'null' : typeof agentType})`,
+      400,
+      { agentType },
+    )
+  }
+  const error = agentTypeSyntaxError(agentType)
+  if (error !== undefined) {
+    throw new HelmxError('validation_error', error, 400, { agentType })
   }
 }

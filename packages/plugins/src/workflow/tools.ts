@@ -7,6 +7,7 @@
 import {
   HelmxError,
   NODE_ID_PATTERN,
+  agentTypeSyntaxError,
   isValidNodeId,
   safeResultText,
   type AgentExecutionInfo,
@@ -199,13 +200,17 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
       'Full subagent, runtime, worktree, and lifecycle reference: load_skill({ skillId: "workflow", path: "references/subagents.md" }).',
     ],
     description:
-      'Spawn a subagent for one delegated task. Human conversations default to background (returns runId; completion automatically steers results back to the parent, so even tasks you will later inspect, merge, or summarize should omit background); automated conversations (bot/helmx) run synchronously (background:true rejected). Never pass background: false for isolation:"worktree", gate, or multi-step work; reserve background:false strictly for quick seconds-long read-only lookups. Concurrent identical calls in the same parent conversation are rejected (pass distinct label values for intentional parallel attempts). Supports label, agentType (Profile ID or external runtime), fork, nodeId, cwd, isolation:"worktree", model, effort, gate, schema, attachments, maxSubagentDepth, and resume. See load_skill({ skillId: "workflow", path: "references/subagents.md" }).',
+      'Spawn a subagent for one delegated task. Human conversations default to background (returns runId; completion automatically steers results back to the parent, so even tasks you will later inspect, merge, or summarize should omit background); automated conversations (bot/helmx) run synchronously (background:true rejected). Never pass background: false for isolation:"worktree", gate, or multi-step work; reserve background:false strictly for quick seconds-long read-only lookups. Concurrent identical calls in the same parent conversation are rejected (pass distinct label values for intentional parallel attempts). Supports label, agentType (Profile ID or <namespace>:<kind> external runtime; never tier/<id>), fork, nodeId, cwd, isolation:"worktree", model (\'tier/<id>\' or \'provider/model\'), effort, gate, schema, attachments, maxSubagentDepth, and resume. See load_skill({ skillId: "workflow", path: "references/subagents.md" }).',
     inputSchema: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'Subagent task instructions' },
         label: { type: 'string', description: 'Short task label (4-40 chars, optional)' },
-        agentType: { type: 'string', description: 'Profile ID or external runtime (defaults to assistant; fork inherits parent)' },
+        agentType: {
+          type: 'string',
+          description:
+            "Child runtime: a native Profile ID (lowercase a-z, 0-9, hyphen; see <available_profiles>, defaults to assistant; fork inherits parent) or an external runtime '<namespace>:<kind>' claimed by a plugin. Never pass a model tier ('tier/<id>') or 'provider/model' here — use 'model' instead.",
+        },
         nodeId: {
           type: 'string',
           minLength: 1,
@@ -238,11 +243,15 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         schema: { type: 'object', description: 'Structured-output JSON Schema (optional)' },
         gate: { type: 'string', description: 'Acceptance shell command (optional; exit != 0 fails)' },
         resume: { type: 'string', description: 'Prior execution.conversationId or executionId to continue' },
-        model: { type: 'string', description: "Model override 'provider/model' (optional)" },
+        model: {
+          type: 'string',
+          description:
+            "Model override: semantic tier 'tier/<id>' (see <available_model_tiers>) or concrete 'provider/model' (optional; inherits the tier's preset effort unless 'effort' is explicitly set).",
+        },
         effort: {
           type: 'string',
           enum: [...EFFORT_LEVELS],
-          description: 'Reasoning effort (optional)',
+          description: "Reasoning effort override (optional; overrides the tier preset when 'model' is a 'tier/<id>').",
         },
         maxSubagentDepth: {
           type: 'number',
@@ -309,6 +318,16 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
           return subagentError('subagent_failed: nodeId 与 resume 互斥，不能在续接既有子会话时切换计算节点', 'nodeId 与 resume 互斥')
         }
         nodeId = a['nodeId']
+      }
+      if (a['agentType'] !== undefined) {
+        if (typeof a['agentType'] !== 'string') {
+          const err = `agentType must be a string (received ${a['agentType'] === null ? 'null' : typeof a['agentType']})`
+          return subagentError(`subagent_failed: ${err}`, err)
+        }
+        const err = agentTypeSyntaxError(a['agentType'])
+        if (err !== undefined) {
+          return subagentError(`subagent_failed: ${err}`, err)
+        }
       }
       const backgroundChoice = resolveBackground(
         context.conversationId,

@@ -99,7 +99,10 @@ export interface AgentSpawnRequest {
   title?: string
   /** 编排宿主分配的稳定调用标识，用于续接与取消。 */
   agentId?: string
-  /** Profile ID（原生子会话）。 */
+  /**
+   * 原生 Profile ID（`a-z0-9-`）或由 `agent_spawn` 钩子认领的外部运行时 `<namespace>:<kind>`
+   * （不可传 `tier/<id>` 等模型引用，模型应走 `model`）。
+   */
   agentType?: string
   model?: string
   effort?: string

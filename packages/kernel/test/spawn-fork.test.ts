@@ -25,7 +25,7 @@ import {
   type FauxResponseFactory,
 } from '@earendil-works/pi-ai/providers/faux'
 import { createNodeDaemon } from '@helmx/node'
-import { type HelmxHostApi } from '@helmx/protocol'
+import { HelmxError, type HelmxHostApi } from '@helmx/protocol'
 import { startHub } from '../src/http/index.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { selectCleanForkAnchorEntryId } from '../src/runtime/spawn-fork.js'
@@ -771,6 +771,27 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         'unsupported_runtime',
         400,
       )
+      await assert.rejects(
+        () =>
+          kernel.agentSpawn.spawnAgent({
+            parentConversationId: secretParent.id,
+            agentType: 'tier/reviewer',
+            fork: true,
+            prompt: 'tier passed to agentType on fork',
+          }),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'validation_error' &&
+          err.status === 400 &&
+          err.message.includes('tier/reviewer') &&
+          err.message.includes('model') &&
+          !err.message.toLowerCase().includes('illegal profile id'),
+      )
+      await assertRejectsCode(
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: secretParent.id, agentType: 'ghost-profile', fork: true, prompt: 'missing profile' }),
+        'not_found',
+        404,
+      )
       assert.equal(agentSpawnHookHits, hitsBeforeRejects, 'pre-hook rejections must never enter the agent_spawn hook chain')
 
       // 4. Disabled model returns 409 model_disabled.
@@ -1032,6 +1053,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         | 'bad-type'
         | 'bad-node-type'
         | 'bad-node-syntax'
+        | 'bad-agent-type-tier'
         | 'flip-to-empty'
         | 'flip-to-external-agent'
         | 'retarget-empty-parent' = 'bad-type'
@@ -1049,6 +1071,9 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
               }
               if (mode === 'bad-node-syntax') {
                 return { action: 'transform', value: { ...req, nodeId: '../bad' } }
+              }
+              if (mode === 'bad-agent-type-tier') {
+                return { action: 'transform', value: { ...req, agentType: 'tier/reviewer' } }
               }
               if (mode === 'flip-to-empty') {
                 return { action: 'transform', value: { ...req, fork: true } }
@@ -1089,6 +1114,17 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         () => kernel.agentSpawn.spawnAgent({ parentConversationId: 1, prompt: 'invalid nodeId syntax transform' }),
         'validation_error',
         400,
+      )
+
+      mode = 'bad-agent-type-tier'
+      await assert.rejects(
+        () => kernel.agentSpawn.spawnAgent({ parentConversationId: 1, prompt: 'invalid agentType tier transform' }),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'validation_error' &&
+          err.status === 400 &&
+          err.message.includes('tier/reviewer') &&
+          err.message.includes('model'),
       )
 
       mode = 'flip-to-empty'

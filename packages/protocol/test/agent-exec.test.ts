@@ -12,6 +12,8 @@
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
 import {
+  agentTypeSyntaxError,
+  assertAgentTypeSyntax,
   HelmxError,
   isValidNodeId,
   NODE_ID_PATTERN,
@@ -263,3 +265,95 @@ describe('NODE_ID_PATTERN / NODE_ID_REGEX / isValidNodeId (authoritative compute
     }
   })
 })
+
+describe('agentTypeSyntaxError / assertAgentTypeSyntax (agentType union domain contract)', () => {
+  it('accepts undefined (assert only), empty string, valid Profile IDs, and <namespace>:<kind> external runtimes', timeout, () => {
+    assert.doesNotThrow(() => assertAgentTypeSyntax(undefined))
+    for (const valid of ['', 'assistant', 'a', '0', 'code-2', `p${'x'.repeat(63)}`, 'herdr:agy', 'herdr:agy@lx', 'external:agent', 'test:unclaimed']) {
+      assert.equal(agentTypeSyntaxError(valid), undefined, `expected valid agentType: ${valid}`)
+      assert.doesNotThrow(() => assertAgentTypeSyntax(valid))
+    }
+  })
+
+  it('diagnoses tier/<id> model tier references with model-parameter guidance (never illegal profile id)', timeout, () => {
+    for (const tierRef of ['tier/reviewer', 'tier/coder', 'tier/scout']) {
+      const msg = agentTypeSyntaxError(tierRef)
+      assert.ok(msg, `expected diagnostic for ${tierRef}`)
+      assert.ok(msg.includes(tierRef))
+      assert.ok(msg.includes('tier/<id>'))
+      assert.ok(msg.includes('model'))
+      assert.ok(msg.includes('<available_profiles>'))
+      assert.equal(msg.toLowerCase().includes('illegal profile id'), false)
+      assert.throws(
+        () => assertAgentTypeSyntax(tierRef),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'validation_error' &&
+          err.status === 400 &&
+          err.message === msg &&
+          (err.details as { agentType?: unknown } | undefined)?.agentType === tierRef,
+      )
+    }
+  })
+
+  it('diagnoses @<profileId> mention prefix and suggests bare Profile ID', timeout, () => {
+    for (const [raw, bare] of [
+      ['@lx', 'lx'],
+      ['@assistant', 'assistant'],
+      ['@code-2', 'code-2'],
+    ] as const) {
+      const msg = agentTypeSyntaxError(raw)
+      assert.ok(msg, `expected diagnostic for ${raw}`)
+      assert.ok(msg.includes(raw))
+      assert.ok(msg.includes('@'))
+      assert.ok(msg.includes(`'${bare}'`))
+      assert.throws(
+        () => assertAgentTypeSyntax(raw),
+        (err: unknown) =>
+          err instanceof HelmxError && err.code === 'validation_error' && err.status === 400 && err.message === msg,
+      )
+    }
+  })
+
+  it('diagnoses other invalid non-empty strings (provider/model, whitespace, uppercase, malformed colon) with union contract', timeout, () => {
+    const invalid = ['openai/gpt-5', 'tier/', ':agy', 'herdr:', 'herdr: agy', 'a b', '   ', 'UPPER', '../etc', '@UPPER', `p${'x'.repeat(64)}`]
+    for (const bad of invalid) {
+      const msg = agentTypeSyntaxError(bad)
+      assert.ok(msg, `expected diagnostic for ${JSON.stringify(bad)}`)
+      assert.ok(msg.includes('a-z, 0-9, hyphen'))
+      assert.ok(msg.includes('<namespace>:<kind>'))
+      assert.ok(msg.includes('model'))
+      assert.throws(
+        () => assertAgentTypeSyntax(bad),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'validation_error' &&
+          err.status === 400 &&
+          err.message === msg &&
+          (err.details as { agentType?: unknown } | undefined)?.agentType === bad,
+      )
+    }
+  })
+
+  it('rejects non-string inputs with 400 validation_error', timeout, () => {
+    for (const bad of [null, 123, true, false, {}, ['assistant']]) {
+      assert.throws(
+        () => assertAgentTypeSyntax(bad),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'validation_error' &&
+          err.status === 400 &&
+          err.message.includes('agentType must be a string') &&
+          assertSameDetails(err.details, bad),
+      )
+    }
+  })
+})
+
+function assertSameDetails(details: unknown, expectedAgentType: unknown): boolean {
+  return (
+    typeof details === 'object' &&
+    details !== null &&
+    (details as { agentType?: unknown }).agentType === expectedAgentType
+  )
+}

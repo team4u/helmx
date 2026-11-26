@@ -26,7 +26,6 @@ import type {
   PluginsUiSlice,
   PrefsSlice,
   ProfilesSlice,
-  ResolvedAskEntry,
   StoreDomainKey,
   WorkbenchParamsState,
   WorkbenchSlice,
@@ -73,13 +72,6 @@ function subscribeArtifactsById(store: HelmxExternalStore, id: number, listener:
 }
 function readArtifactsById(store: HelmxExternalStore, id: number): ArtifactMetadata[] | undefined {
   return store.getConversationArtifacts(id)
-}
-
-function subscribeResolvedAsksById(store: HelmxExternalStore, id: number, listener: () => void): () => void {
-  return store.subscribeResolvedAsks(id, listener)
-}
-function readResolvedAsksById(store: HelmxExternalStore, id: number): ResolvedAskEntry[] | undefined {
-  return store.getResolvedAsks(id)
 }
 
 function subscribeHighlightById(store: HelmxExternalStore, id: number, listener: () => void): () => void {
@@ -477,10 +469,6 @@ export function useConversationArtifacts(conversationId: number | undefined): Ar
   return useKeyedSlice(subscribeArtifactsById, readArtifactsById, conversationId, undefined)
 }
 
-export function useResolvedAsks(conversationId: number | undefined): ResolvedAskEntry[] | undefined {
-  return useKeyedSlice(subscribeResolvedAsksById, readResolvedAsksById, conversationId, undefined)
-}
-
 export function useHighlightedEntryForConversation(
   conversationId: number | undefined,
 ): { conversationId: number; entryId: string } | null {
@@ -610,7 +598,6 @@ export type {
   PluginsUiSlice,
   PrefsSlice,
   ProfilesSlice,
-  ResolvedAskEntry,
   StoreDomainKey,
   WorkbenchParamsState,
   WorkbenchSlice,

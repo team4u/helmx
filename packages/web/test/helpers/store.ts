@@ -91,7 +91,7 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
   const {
     authReady, authConfigured, authenticated, authError, connectionError, sseConnected, kernelBootId,
     theme, themePreference, locale, localePreference, quietNotifyEnabled,
-    conversations, conversationDetails, conversationLives, pendingAsks, resolvedAsksByConv,
+    conversations, conversationDetails, conversationLives, pendingAsks,
     plugins, uiContributions, pluginDocs, nodes, nodesLoaded,
     conversationArtifacts, loadErrors,
     profiles, profilesLoaded, assetsLoaded, models, modelDefaults, providers, credentials, skills, actions,
@@ -155,7 +155,6 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
     conversationDetails: conversationDetails ?? {},
     conversationLives: conversationLives ?? {},
     pendingAsks: pendingAsks ?? [],
-    resolvedAsksByConv: resolvedAsksByConv ?? {},
     plugins: plugins ?? [],
     uiContributions: uiContributions ?? [],
     pluginDocs: pluginDocs ?? {},

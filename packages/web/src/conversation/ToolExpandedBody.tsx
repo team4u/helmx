@@ -719,6 +719,9 @@ function AskUserToolBody({ tool, conversationId, resultFetch }: ToolBodyProps): 
   if (meta === undefined) {
     return <GenericToolBody tool={tool} conversationId={conversationId} resultFetch={resultFetch} />
   }
+  const hasItems = meta.items !== undefined && meta.items.length > 0
+  const isGenericTitle = meta.title === 'Clarifying Questions' || meta.title === '问题确认'
+  const showHeader = !hasItems || !isGenericTitle
   const outcomeLabel =
     meta.outcome === 'answered'
       ? t('conv.ask.outcomeAnswered')
@@ -733,22 +736,25 @@ function AskUserToolBody({ tool, conversationId, resultFetch }: ToolBodyProps): 
       : t('conv.ask.toolQuestionsCount', { count: meta.questionCount })
   return (
     <>
-      <div className="ask-user-tool-head">
-        <span className="ask-user-tool-title">{meta.title}</span>
-        <Badge tone="neutral">{countLabel}</Badge>
-        <Badge tone={askOutcomeBadgeTone(meta.outcome)}>{outcomeLabel}</Badge>
-      </div>
-      {meta.items !== undefined && meta.items.length > 0 ? (
+      {showHeader ? (
+        <div className="ask-user-tool-head">
+          <span className="ask-user-tool-title">{meta.title}</span>
+          <Badge tone="neutral">{countLabel}</Badge>
+          <Badge tone={askOutcomeBadgeTone(meta.outcome)}>{outcomeLabel}</Badge>
+        </div>
+      ) : null}
+      {hasItems ? (
         <div className="kv-list trace-kv ask-user-tool-items">
-          {meta.items.map((item) => (
+          {meta.items!.map((item) => (
             <Fragment key={item.id}>
               <span className="kv-key">{item.question}</span>
               <span className="kv-val">{item.answer}</span>
             </Fragment>
           ))}
         </div>
+      ) : tool.isError && tool.resultText !== undefined && tool.resultText.trim() !== '' ? (
+        <span className="trace-tool-note">{tool.resultText}</span>
       ) : null}
-      <RawToolData tool={tool} resultFetch={resultFetch} />
     </>
   )
 }

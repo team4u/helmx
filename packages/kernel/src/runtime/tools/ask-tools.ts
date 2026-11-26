@@ -380,10 +380,6 @@ export function createAskUserTool(deps: AskUserToolDeps): ToolRegistration<typeo
         ownerPluginId: ASK_USER_OWNER_ID,
         kind: 'question',
         title: explicitTitle !== undefined ? explicitTitle : { en: 'Clarifying Questions', 'zh-CN': '问题确认' },
-        hint: {
-          en: 'Tip: You can also reply freely in the composer below.',
-          'zh-CN': '提示：也可直接在下方输入框自由回复。',
-        },
         expectedStateSeq: conv.stateChangeSeq,
         fields,
       }

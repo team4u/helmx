@@ -1083,7 +1083,7 @@ test('T9: plan_bash blocks mutations & runs read-only pwd, ask_user clarifies in
     assert.equal(clarifyAsk.fields[0]?.allowCustom, true)
     assert.equal(clarifyAsk.fields[0]?.options?.[0]?.recommended, true)
     assert.equal(clarifyAsk.fields[1]?.name, 'notes')
-    assert.ok(clarifyAsk.hint !== undefined)
+    assert.equal(clarifyAsk.hint, undefined)
     const clarifySession = readPlanSession(kernel, cid)
     assert.equal(clarifySession.mode, 'planning')
     assert.equal(clarifySession.awaitingApproval, false)

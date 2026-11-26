@@ -39,8 +39,8 @@ Supported options:
 
 - `label`: display name and the local continuation handle;
 - `phase`: phase assignment;
-- `agentType`: Profile ID;
-- `model`, `effort`: execution overrides (`effort`: `off | minimal | low | medium | high | xhigh | max`);
+- `agentType`: native Profile ID (lowercase `a-z`, `0-9`, hyphen) or a plugin-claimed external runtime `<namespace>:<kind>` (never pass a model tier `tier/<id>` or `provider/model`);
+- `model`, `effort`: execution overrides (`model` accepts semantic tier `'tier/<id>'` or concrete `'provider/model'`; omit `effort` to inherit the tier's preset thinking level, or override with `off | minimal | low | medium | high | xhigh | max`);
 - `isolation: "worktree"`: independent managed Git worktree;
 - `nodeId`: target compute node ID (overrides Profile/parent node; explicit `"local"` switches back to the Hub host; remote nodes require `cwd` or a compatible Profile `cwd`);
 - `cwd`: absolute target workspace;

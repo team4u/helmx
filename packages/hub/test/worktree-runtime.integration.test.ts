@@ -707,6 +707,41 @@ describe('external runtime agentType without plugin take over', { timeout: 60_00
       },
     )
   })
+
+  it('isolation: worktree + agentType: tier/coder rejects before worktree allocation (validation_error, zero orphan worktrees)', { timeout: 60_000 }, async () => {
+    const { env, repo } = await getSharedRuntime()
+    const parentId = await createSharedParent(env, repo, 't5e-tier-wt')
+    const worktreesBefore = (
+      (await env.kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as { worktrees: unknown[] }
+    ).worktrees.length
+    const gitListBefore = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repo, encoding: 'utf8' })
+
+    await assert.rejects(
+      () =>
+        env.kernel.agentSpawn.spawnAgent({
+          parentConversationId: parentId,
+          prompt: 'isolated tier mistake',
+          isolation: 'worktree',
+          agentType: 'tier/coder',
+        } as AgentSpawnRequest),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmxError, `should throw HelmxError, got ${err}`)
+        assert.equal(err.code, 'validation_error')
+        assert.equal(err.status, 400)
+        assert.ok(err.message.includes('tier/coder'), `message should reference tier/coder: ${err.message}`)
+        assert.ok(err.message.includes('model'), `message should guide to model parameter: ${err.message}`)
+        assert.equal(err.message.toLowerCase().includes('illegal profile id'), false)
+        return true
+      },
+    )
+
+    const worktreesAfter = (
+      (await env.kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as { worktrees: unknown[] }
+    ).worktrees.length
+    const gitListAfter = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repo, encoding: 'utf8' })
+    assert.equal(worktreesAfter, worktreesBefore, 'must not register any orphan worktree')
+    assert.equal(gitListAfter, gitListBefore, 'must not allocate any git worktree on disk')
+  })
 })
 
 // ---------------------------------------------------------------------------
