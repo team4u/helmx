@@ -422,7 +422,7 @@ export async function stopHubViaControlChannel(
   if (options.dataDir === '') {
     return { stopped: false, reason: 'no_control_record', detail: 'no data directory provided' };
   }
-  const control = await readHubControlRecord(options.dataDir).catch(() => null);
+  const control = await readHubControlRecord(options.dataDir);
   if (control === null) {
     return {
       stopped: false,

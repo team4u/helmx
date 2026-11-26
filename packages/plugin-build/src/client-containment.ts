@@ -11,7 +11,7 @@ import {
   isAbsoluteTargetPath,
   type PluginClientNpmRoot,
 } from '@helmx/protocol';
-import type { OnResolveArgs, Plugin as EsbuildPlugin, PluginBuild } from 'esbuild';
+import type { OnResolveArgs, OnResolveResult, Plugin as EsbuildPlugin, PluginBuild } from 'esbuild';
 import {
   findPackageDirOf,
   isInside,
@@ -329,6 +329,160 @@ function resolveInternal(b: PluginBuild, args: OnResolveArgs) {
   });
 }
 
+interface ContainmentContext {
+  pluginId: string;
+  rootReal: string;
+  entryReal: string;
+  npmRoots: ReadonlyArray<PluginClientNpmRoot>;
+  cache: ContainmentBuildCache;
+  authorizeNpmPackageDir: (pkgDir: string) => string | null;
+  authorizedNpmDirOf: (realPath: string) => string | null;
+  isNpmAuthorized: (realPath: string) => boolean;
+}
+
+function resolveEntryPoint(ctx: ContainmentContext, args: OnResolveArgs): OnResolveResult | null {
+  const real = cachedRealpath(ctx.cache, args.path);
+  if (real !== null && real === ctx.entryReal && isInsideClientSource(ctx.rootReal, real)) {
+    return null;
+  }
+  return {
+    errors: [{
+      text: `plugin ${ctx.pluginId} rejected unauthorized entry point (out of bounds): ${args.path}`,
+    }],
+  };
+}
+
+function isBypassedResolve(args: OnResolveArgs): boolean {
+  if (args.kind === 'url-token') return true;
+  if (args.kind === 'import-rule' && (/^(https?:)?\/\//i.test(args.path) || /^data:/i.test(args.path))) {
+    return true;
+  }
+  return (CLIENT_SHARED_EXTERNALS as readonly string[]).includes(args.path);
+}
+
+async function resolveRelativeSpec(
+  ctx: ContainmentContext,
+  b: PluginBuild,
+  args: OnResolveArgs,
+  importerNpmDir: string | null,
+): Promise<OnResolveResult | null> {
+  // Equivalent pruning: when an authorized package directory contains zero symlinks
+  // (outside nested node_modules) and the import is a simple `./...` path without
+  // `..` or `node_modules` segments, esbuild's native resolver cannot escape `importerNpmDir`.
+  if (
+    importerNpmDir !== null &&
+    args.resolveDir !== '' &&
+    isSimplePackageInternalRelative(args.path) &&
+    cachedIsSymlinkFreePkg(ctx.cache, importerNpmDir)
+  ) {
+    const resolveDirReal = cachedRealpath(ctx.cache, args.resolveDir);
+    if (resolveDirReal !== null && isInsideClientSource(importerNpmDir, resolveDirReal)) {
+      return null;
+    }
+  }
+  const resolved = await resolveInternal(b, args);
+  if (resolved.errors.length > 0 || !resolved.path) return null;
+  if (resolved.external || (resolved.namespace !== '' && resolved.namespace !== 'file') || !isAbsolute(resolved.path)) {
+    return null;
+  }
+  const real = cachedRealpath(ctx.cache, resolved.path);
+  if (importerNpmDir !== null) {
+    if (real !== null && isInsideClientSource(importerNpmDir, real)) return null;
+    return {
+      errors: [{
+        text: `plugin ${ctx.pluginId} rejected out of bounds relative import (escapes authorized npm package via ../ or symlink): ${real ?? resolved.path}`,
+      }],
+    };
+  }
+  if (real !== null && isInsideClientSource(ctx.rootReal, real)) return null;
+  return {
+    errors: [{
+      text: `plugin ${ctx.pluginId} rejected out of bounds relative import (escapes root via ../, symlink, or points to an undeclared npm file): ${real ?? resolved.path}`,
+    }],
+  };
+}
+
+async function resolveFromAuthorizedPackage(
+  ctx: ContainmentContext,
+  b: PluginBuild,
+  args: OnResolveArgs,
+  importer: string,
+  importerNpmDir: string,
+): Promise<OnResolveResult | null> {
+  const resolved = await resolveInternal(b, args);
+  if (resolved.errors.length > 0 || !resolved.path) {
+    const peerNpm = resolveNpmSpecifier(args.path, ctx.npmRoots, ctx.cache);
+    if (peerNpm !== null) {
+      ctx.authorizeNpmPackageDir(peerNpm.pkgDir);
+      return { path: peerNpm.path };
+    }
+    return null;
+  }
+  if (resolved.external || (resolved.namespace !== '' && resolved.namespace !== 'file') || !isAbsolute(resolved.path)) {
+    return null;
+  }
+  const real = cachedRealpath(ctx.cache, resolved.path);
+  if (real === null) {
+    return {
+      errors: [{
+        text: `plugin ${ctx.pluginId} rejected out of bounds transitive dependency "${args.path}" (imported by ${importer}): ${resolved.path}`,
+      }],
+    };
+  }
+  const transitivePkgDir = resolveTransitiveNpmPackageDir(args.path, args.resolveDir, resolved.path, real, ctx.cache);
+  if (transitivePkgDir !== null) {
+    ctx.authorizeNpmPackageDir(transitivePkgDir);
+    return null;
+  }
+  if (isInsideClientSource(importerNpmDir, real) || ctx.isNpmAuthorized(real)) return null;
+  return {
+    errors: [{
+      text: `plugin ${ctx.pluginId} rejected unauthorized transitive dependency "${args.path}" (imported by ${importer}, resolved to ${real}): resolved outside a valid node_modules package`,
+    }],
+  };
+}
+
+async function resolveFromClientRoot(
+  ctx: ContainmentContext,
+  b: PluginBuild,
+  args: OnResolveArgs,
+  importer: string,
+): Promise<OnResolveResult | null> {
+  const npm = resolveNpmSpecifier(args.path, ctx.npmRoots, ctx.cache);
+  if (npm !== null) {
+    ctx.authorizeNpmPackageDir(npm.pkgDir);
+    return { path: npm.path };
+  }
+  const declaredRoot = ctx.npmRoots.find((r) => r.specifiers.includes(args.path));
+  if (declaredRoot !== undefined) {
+    return {
+      errors: [{
+        text:
+          `plugin ${ctx.pluginId} cannot parse declared frontend dependency "${args.path}" inside ${join(declaredRoot.packageRoot, 'node_modules')} ` +
+          '(dependency not installed or package entry missing); install this dependency in the plugin directory and retry (managed installs add it automatically during install/update)',
+      }],
+    };
+  }
+  if (args.kind === 'import-rule') {
+    const resolved = await resolveInternal(b, args);
+    if (resolved.errors.length > 0 || !resolved.path) return null;
+    const real = cachedRealpath(ctx.cache, resolved.path);
+    if (real !== null && isInsideClientSource(ctx.rootReal, real)) return null;
+    return {
+      errors: [{
+        text: `plugin ${ctx.pluginId} rejected out of bounds stylesheet @import "${args.path}" (imported by ${importer}): ${real ?? resolved.path}`,
+      }],
+    };
+  }
+  return {
+    errors: [{
+      text:
+        `plugin ${ctx.pluginId} must reject bare dependency "${args.path}" (imported by ${importer}): ` +
+        `undeclared controlled npm dependency; clientRoot only permits relative imports, shared dependencies (${CLIENT_SHARED_EXTERNALS.join(', ')}), and declared npm specifiers`,
+    }],
+  };
+}
+
 /**
  * Enforces `clientRoot` and controlled-npm realpath containment at resolve and load time.
  */
@@ -358,6 +512,16 @@ export function containmentPlugin(
     return best;
   };
   const isNpmAuthorized = (realPath: string): boolean => authorizedNpmDirOf(realPath) !== null;
+  const ctx: ContainmentContext = {
+    pluginId,
+    rootReal,
+    entryReal,
+    npmRoots,
+    cache,
+    authorizeNpmPackageDir,
+    authorizedNpmDirOf,
+    isNpmAuthorized,
+  };
 
   return {
     name: 'helmx-containment',
@@ -367,23 +531,8 @@ export function containmentPlugin(
           return null;
         }
         const importer = args.importer || 'entry';
-        if (args.kind === 'entry-point') {
-          const real = cachedRealpath(cache, args.path);
-          if (real !== null && real === entryReal && isInsideClientSource(rootReal, real)) {
-            return null;
-          }
-          return {
-            errors: [{
-              text: `plugin ${pluginId} rejected unauthorized entry point (out of bounds): ${args.path}`,
-            }],
-          };
-        }
-        if (args.kind === 'url-token') return null;
-        if (args.kind === 'import-rule' && (/^(https?:)?\/\//i.test(args.path) || /^data:/i.test(args.path))) {
-          return null;
-        }
-        if ((CLIENT_SHARED_EXTERNALS as readonly string[]).includes(args.path)) return null;
-
+        if (args.kind === 'entry-point') return resolveEntryPoint(ctx, args);
+        if (isBypassedResolve(args)) return null;
         if (isAbsoluteImport(args.path)) {
           return {
             errors: [{
@@ -394,114 +543,11 @@ export function containmentPlugin(
             }],
           };
         }
-
         const importerReal = args.importer !== '' ? cachedRealpath(cache, args.importer) : null;
         const importerNpmDir = importerReal !== null ? authorizedNpmDirOf(importerReal) : null;
-
-        if (isRelativeSpecifier(args.path)) {
-          // Equivalent pruning: when an authorized package directory contains zero symlinks
-          // (outside nested node_modules) and the import is a simple `./...` path without
-          // `..` or `node_modules` segments, esbuild's native resolver cannot escape `importerNpmDir`.
-          if (
-            importerNpmDir !== null &&
-            args.resolveDir !== '' &&
-            isSimplePackageInternalRelative(args.path) &&
-            cachedIsSymlinkFreePkg(cache, importerNpmDir)
-          ) {
-            const resolveDirReal = cachedRealpath(cache, args.resolveDir);
-            if (resolveDirReal !== null && isInsideClientSource(importerNpmDir, resolveDirReal)) {
-              return null;
-            }
-          }
-          const resolved = await resolveInternal(b, args);
-          if (resolved.errors.length > 0 || !resolved.path) return null;
-          if (resolved.external || (resolved.namespace !== '' && resolved.namespace !== 'file') || !isAbsolute(resolved.path)) {
-            return null;
-          }
-          const real = cachedRealpath(cache, resolved.path);
-          if (importerNpmDir !== null) {
-            if (real !== null && isInsideClientSource(importerNpmDir, real)) return null;
-            return {
-              errors: [{
-                text: `plugin ${pluginId} rejected out of bounds relative import (escapes authorized npm package via ../ or symlink): ${real ?? resolved.path}`,
-              }],
-            };
-          }
-          if (real !== null && isInsideClientSource(rootReal, real)) return null;
-          return {
-            errors: [{
-              text: `plugin ${pluginId} rejected out of bounds relative import (escapes root via ../, symlink, or points to an undeclared npm file): ${real ?? resolved.path}`,
-            }],
-          };
-        }
-
-        if (importerNpmDir !== null) {
-          const resolved = await resolveInternal(b, args);
-          if (resolved.errors.length > 0 || !resolved.path) {
-            const peerNpm = resolveNpmSpecifier(args.path, npmRoots, cache);
-            if (peerNpm !== null) {
-              authorizeNpmPackageDir(peerNpm.pkgDir);
-              return { path: peerNpm.path };
-            }
-            return null;
-          }
-          if (resolved.external || (resolved.namespace !== '' && resolved.namespace !== 'file') || !isAbsolute(resolved.path)) {
-            return null;
-          }
-          const real = cachedRealpath(cache, resolved.path);
-          if (real === null) {
-            return {
-              errors: [{
-                text: `plugin ${pluginId} rejected out of bounds transitive dependency "${args.path}" (imported by ${importer}): ${resolved.path}`,
-              }],
-            };
-          }
-          const transitivePkgDir = resolveTransitiveNpmPackageDir(args.path, args.resolveDir, resolved.path, real, cache);
-          if (transitivePkgDir !== null) {
-            authorizeNpmPackageDir(transitivePkgDir);
-            return null;
-          }
-          if (isInsideClientSource(importerNpmDir, real) || isNpmAuthorized(real)) return null;
-          return {
-            errors: [{
-              text: `plugin ${pluginId} rejected unauthorized transitive dependency "${args.path}" (imported by ${importer}, resolved to ${real}): resolved outside a valid node_modules package`,
-            }],
-          };
-        }
-
-        const npm = resolveNpmSpecifier(args.path, npmRoots, cache);
-        if (npm !== null) {
-          authorizeNpmPackageDir(npm.pkgDir);
-          return { path: npm.path };
-        }
-        const declaredRoot = npmRoots.find((r) => r.specifiers.includes(args.path));
-        if (declaredRoot !== undefined) {
-          return {
-            errors: [{
-              text:
-                `plugin ${pluginId} cannot parse declared frontend dependency "${args.path}" inside ${join(declaredRoot.packageRoot, 'node_modules')} ` +
-                '(dependency not installed or package entry missing); install this dependency in the plugin directory and retry (managed installs add it automatically during install/update)',
-            }],
-          };
-        }
-        if (args.kind === 'import-rule') {
-          const resolved = await resolveInternal(b, args);
-          if (resolved.errors.length > 0 || !resolved.path) return null;
-          const real = cachedRealpath(cache, resolved.path);
-          if (real !== null && isInsideClientSource(rootReal, real)) return null;
-          return {
-            errors: [{
-              text: `plugin ${pluginId} rejected out of bounds stylesheet @import "${args.path}" (imported by ${importer}): ${real ?? resolved.path}`,
-            }],
-          };
-        }
-        return {
-          errors: [{
-            text:
-              `plugin ${pluginId} must reject bare dependency "${args.path}" (imported by ${importer}): ` +
-              `undeclared controlled npm dependency; clientRoot only permits relative imports, shared dependencies (${CLIENT_SHARED_EXTERNALS.join(', ')}), and declared npm specifiers`,
-          }],
-        };
+        if (isRelativeSpecifier(args.path)) return resolveRelativeSpec(ctx, b, args, importerNpmDir);
+        if (importerNpmDir !== null) return resolveFromAuthorizedPackage(ctx, b, args, importer, importerNpmDir);
+        return resolveFromClientRoot(ctx, b, args, importer);
       });
 
       b.onLoad({ filter: /.*/ }, (args) => {

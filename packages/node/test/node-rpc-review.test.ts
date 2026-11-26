@@ -503,3 +503,79 @@ test('birpc events adapter: off detaches exact wrapped listener independently pe
   events.off(callbackA);
   assert.equal(socket.listenerCount('message'), 0);
 });
+
+test('envFor LRU eviction never orphans envs with active runners from envCleanup/dispose, and envListFiles validates input', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('lru-active-');
+  const busyDir = path.join(dir, 'busy');
+  const otherA = path.join(dir, 'a');
+  const otherB = path.join(dir, 'b');
+  await fs.mkdir(busyDir, { recursive: true });
+  await fs.mkdir(otherA, { recursive: true });
+  await fs.mkdir(otherB, { recursive: true });
+
+  const server = createNodeEnvRpcServer({ defaultCwd: dir, maxCachedEnvs: 2 });
+  t.after(async () => {
+    await server.dispose().catch(() => undefined);
+    await fs.rm(dir, { recursive: true, force: true });
+  }, { timeout: 60_000 });
+
+  // Start a long-running exec in `busyDir` and then touch two other cwds beyond maxCachedEnvs=2.
+  const slow = server.envExec({ execId: 'lru-busy', command: 'sleep 30', cwd: busyDir, timeout: 60 });
+  await delay(150);
+  await server.envWriteFile({ path: 'x.txt', content: '1', cwd: otherA });
+  await server.envWriteFile({ path: 'y.txt', content: '2', cwd: otherB });
+
+  // `busyDir` env must NOT have been evicted: envCleanup(busyDir) must still kill it promptly.
+  const start = Date.now();
+  await server.envCleanup(busyDir);
+  const res = await slow;
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 5_000, `envCleanup(busyDir) should still reach active env after LRU pressure (elapsed=${elapsed}ms)`);
+  if (res.ok) assert.notEqual(res.value.exitCode, 0, 'killed child must not exit with code 0');
+
+  // envListFiles rejects missing/non-object/missing-path with invalid, and returns not_supported on valid input.
+  const missingArg = await (server.envListFiles as unknown as (input: unknown) => Promise<{ ok: boolean; error?: { code: string } }>)(undefined);
+  assert.equal(missingArg.ok, false);
+  assert.equal(missingArg.error?.code, 'invalid');
+  const missingPath = await (server.envListFiles as unknown as (input: unknown) => Promise<{ ok: boolean; error?: { code: string } }>)({});
+  assert.equal(missingPath.ok, false);
+  assert.equal(missingPath.error?.code, 'invalid');
+  const validUnsupported = await server.envListFiles({ path: '.' });
+  assert.equal(validUnsupported.ok, false);
+  assert.equal(!validUnsupported.ok && validUnsupported.error.code, 'not_supported');
+
+  // envAppendFile shares strict base64 validation with envWriteFile.
+  const badAppend = await server.envAppendFile({ path: 'x.txt', content: 'QQ!Q', encoding: 'base64', cwd: otherA });
+  assert.equal(badAppend.ok, false);
+  assert.equal(!badAppend.ok && badAppend.error.code, 'invalid');
+});
+
+test('reader registry closeAll settles all readers via Promise.allSettled even when a close throws', { timeout: 60_000 }, async () => {
+  const { createReaderRegistry } = await import('../src/daemon/env-rpc-readers.js');
+  const registry = createReaderRegistry({ maxOpenReaders: 8, readerIdleTtlMs: 60_000, isDisposed: () => false });
+  const closed: string[] = [];
+  await registry.putReader({
+    kind: 'text',
+    reader: {
+      readLine: async () => ({ ok: true, value: undefined }),
+      close: async () => {
+        closed.push('r1-throw');
+        throw new Error('close boom');
+      },
+    },
+  });
+  await registry.putReader({
+    kind: 'text',
+    reader: {
+      readLine: async () => ({ ok: true, value: undefined }),
+      close: async () => {
+        closed.push('r2-ok');
+      },
+    },
+  });
+  const settled = await registry.closeAll();
+  assert.deepEqual(closed.sort(), ['r1-throw', 'r2-ok']);
+  assert.equal(settled[0]?.status, 'rejected');
+  assert.equal(settled[1]?.status, 'fulfilled');
+  assert.equal(registry.getOpenReaderCount(), 0);
+});

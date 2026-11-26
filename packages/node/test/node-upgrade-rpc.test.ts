@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
+import net from 'node:net';
 import process from 'node:process';
 import { sleep as delay } from '@helmx/test-kit';
 import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helmx/test-kit/node';
@@ -779,4 +780,95 @@ test('commit survives disconnect in memory and retries in heartbeats on new conn
   const retried = hub.heartbeatInputs.filter((input) => input.upgradeCommit?.attemptId === 'att-retry-1');
   assert.ok(retried.length >= 1, 'heartbeat after reconnect should keep carrying commit');
   await hub.close();
+});
+
+test('pushHeartbeatSoon coordinates with in-flight heartbeat without overlapping and marks commitAcked once acked', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('helmx-node-hbcoord-');
+  const heartbeatInputs: NodeHeartbeatInput[] = [];
+  let inFlightCount = 0;
+  let maxConcurrentHeartbeats = 0;
+  let releaseFirstHeartbeat: (() => void) | undefined;
+  let markFirstHeartbeatEntered!: () => void;
+  const firstHeartbeatEntered = new Promise<void>((resolve) => {
+    markFirstHeartbeatEntered = resolve;
+  });
+  const server = http.createServer((_req, res) => res.writeHead(404).end());
+  const wss = new WebSocketServer({ noServer: true });
+  let pendingSocket: WebSocket | undefined;
+  server.on('upgrade', (req, socket, head) => {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      pendingSocket = ws;
+      const dispatchers: Array<(data: unknown) => void> = [];
+      createBirpc<NodeEnvRpcFunctions, {
+        register(input: NodeRegisterInput): Promise<NodeRegisterResult>;
+        heartbeat(nodeId: string, input?: NodeHeartbeatInput): Promise<boolean>;
+        onEnvExecOutput(event: EnvExecOutputEvent): void;
+      }>(
+        {
+          async register() {
+            return { ok: true, heartbeatMs: 120 };
+          },
+          async heartbeat(_nodeId, input) {
+            inFlightCount += 1;
+            maxConcurrentHeartbeats = Math.max(maxConcurrentHeartbeats, inFlightCount);
+            try {
+              if (input !== undefined) heartbeatInputs.push(input);
+              if (heartbeatInputs.length === 1) {
+                markFirstHeartbeatEntered();
+                await new Promise<void>((done) => { releaseFirstHeartbeat = done; });
+              }
+              return true;
+            } finally {
+              inFlightCount -= 1;
+            }
+          },
+          onEnvExecOutput() {},
+        },
+        {
+          post: (data) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(data)); },
+          on: (cb) => { dispatchers.push(cb as (data: unknown) => void); },
+          serialize: (data) => data,
+          deserialize: (data) => data as never,
+          timeout: 30_000,
+        },
+      );
+      ws.on('message', (raw) => {
+        const parsed = JSON.parse(typeof raw === 'string' ? raw : Buffer.from(raw as ArrayBuffer).toString('utf8')) as unknown;
+        for (const d of dispatchers) d(parsed);
+      });
+    });
+  });
+
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const port = (server.address() as net.AddressInfo).port;
+  const daemon = await createNodeDaemon({
+    hubUrl: `http://127.0.0.1:${port}`,
+    identity: { nodeId: 'hb-coord', token: 'hb-coord:sec' },
+    dataDir: dir,
+    installMode: 'release',
+  });
+  t.after(async () => {
+    releaseFirstHeartbeat?.();
+    await daemon.close().catch(() => undefined);
+    pendingSocket?.close();
+    wss.close(() => undefined);
+    await new Promise<void>((r) => server.close(() => r()));
+    await fs.rm(dir, { recursive: true, force: true });
+  }, { timeout: 60_000 });
+
+  assert.equal(await daemon.waitUntilRegistered(10_000), true);
+  await firstHeartbeatEntered;
+  // Trigger pushHeartbeatSoon while periodic heartbeat #1 (without commit) is still in flight.
+  await daemon.confirmUpgrade({ attemptId: 'att-coord-1', version: '2.0.0', previousVersion: '1.0.0', pid: process.pid });
+  assert.equal(maxConcurrentHeartbeats, 1, 'pushHeartbeatSoon must queue behind in-flight heartbeat rather than overlapping');
+  releaseFirstHeartbeat?.();
+  await waitFor(
+    () => heartbeatInputs.some((input) => input.upgradeCommit?.attemptId === 'att-coord-1'),
+    10_000,
+    'queued commit heartbeat sent after in-flight finishes',
+  );
+  await waitFor(() => heartbeatInputs.length >= 3, 10_000, 'subsequent periodic heartbeat');
+  assert.equal(maxConcurrentHeartbeats, 1, 'heartbeats must never overlap');
+  const commitCount = heartbeatInputs.filter((i) => i.upgradeCommit !== undefined).length;
+  assert.equal(commitCount, 1, 'once commit is acknowledged, subsequent periodic heartbeats stop resending upgradeCommit');
 });

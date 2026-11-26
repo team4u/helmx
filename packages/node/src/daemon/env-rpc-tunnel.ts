@@ -1,8 +1,8 @@
 /**
  * Node-side passthrough tunnel handler (`nodeTunnelOpen` / `nodeTunnelAbort`): opens a local TCP
- * socket (`host:port`, default `127.0.0.1`) or controlled local IPC socket / Windows Named Pipe
- * (`socketPath`) and pipes it bidirectionally to the daemon-injected WS tunnel duplex stream
- * (`openTunnelStream`). Credentials and plugin-specific handshakes stay strictly out of this layer.
+ * socket (`host:port`, default `127.0.0.1`) and pipes it bidirectionally to the daemon-injected
+ * WS tunnel duplex stream (`openTunnelStream`). Credentials and plugin-specific handshakes stay
+ * strictly out of this layer.
  */
 
 import net from 'node:net';
@@ -23,14 +23,14 @@ const assertValidTunnelHost = (raw: unknown): string | undefined => {
       { code: 'invalid' },
     );
   }
+  if (/\s/.test(raw)) {
+    throw Object.assign(new Error('nodeTunnelOpen host must not contain control or whitespace characters'), { code: 'invalid' });
+  }
   for (let i = 0; i < raw.length; i++) {
     const code = raw.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f || code === 0x20) {
+    if (code < 0x20 || code === 0x7f) {
       throw Object.assign(new Error('nodeTunnelOpen host must not contain control or whitespace characters'), { code: 'invalid' });
     }
-  }
-  if (raw.trim() !== raw) {
-    throw Object.assign(new Error('nodeTunnelOpen host must not have leading/trailing whitespace'), { code: 'invalid' });
   }
   return raw;
 };
@@ -207,6 +207,7 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     tcp.once('close', onHandshakePeerClosed);
     if (tcp.destroyed || tcp.readableEnded) {
       onHandshakePeerClosed();
+      return await rpcResult;
     }
     const streamPromise = Promise.resolve(openTunnelStream(tunnelId, tunnel.controller.signal));
     void streamPromise.then(

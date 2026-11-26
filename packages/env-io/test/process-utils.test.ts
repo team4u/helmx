@@ -124,3 +124,52 @@ test('withCrossProcessFileLock recovers dead-PID stale locks, rejects live holde
   );
   assert.equal(await fsp.stat(lockPath).then(() => true, () => false), true, 'empty/corrupt lock preserved');
 });
+
+test('readLogTailBounded and readLogFrom rethrow EISDIR instead of masking directory read errors as empty', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-env-io-logdir-');
+  const subDir = path.join(dir, 'dir-as-log');
+  await fsp.mkdir(subDir, { recursive: true });
+  await assert.rejects(
+    readLogTailBounded(subDir, 10),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === 'EISDIR',
+  );
+  await assert.rejects(
+    readLogFrom(subDir, 0),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === 'EISDIR',
+  );
+  assert.deepEqual(await readLogFrom(path.join(dir, 'missing.log'), 0), { text: '', offset: 0 });
+});
+
+test('withCrossProcessFileLock stale-lock recovery preserves mutual exclusion under concurrent races', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-env-io-lock-race-');
+  const lockPath = path.join(dir, 'race.lock');
+  await fsp.writeFile(lockPath, '424242 dead-owner\n', 'utf8');
+
+  let active = 0;
+  let maxActive = 0;
+  let completed = 0;
+  const results = await Promise.all(
+    Array.from({ length: 10 }, (_, idx) =>
+      withCrossProcessFileLock(
+        lockPath,
+        async () => {
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          await new Promise((resolve) => setTimeout(resolve, 15));
+          active -= 1;
+          completed += 1;
+          return idx;
+        },
+        {
+          waitMs: 10_000,
+          pollMs: 5,
+          isAlive: (pid) => pid === process.pid,
+        },
+      ),
+    ),
+  );
+  assert.equal(results.length, 10);
+  assert.equal(completed, 10);
+  assert.equal(maxActive, 1, 'concurrent stale-lock breakers must never enter critical section simultaneously');
+  assert.equal(await fsp.stat(lockPath).then(() => true, () => false), false, 'lock removed cleanly after all waiters finish');
+});

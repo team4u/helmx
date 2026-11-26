@@ -15,27 +15,38 @@ import {
   type PluginPackagesConfigPort,
 } from '@helmx/protocol';
 
+function readOptionalNonEmptyString(pluginId: string, field: string, value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw corruptSource(pluginId, `${field} must be a non-empty string`);
+  }
+  return value;
+}
+
 /** Validates `source` shape in a stored record (non-empty strings matching discriminated union fields). */
 function assertSourceShape(pluginId: string, v: unknown): PluginPackageSource {
   if (!isJsonObject(v)) throw corruptSource(pluginId, 'must be an object');
   const kind = v['kind'];
+  const raw = readOptionalNonEmptyString(pluginId, 'raw', v['raw']);
   if (kind === 'npm') {
     if (typeof v['spec'] !== 'string' || v['spec'].length === 0) throw corruptSource(pluginId, 'npm source missing spec');
-    return { kind: 'npm', raw: String(v['raw'] ?? `npm:${v['spec']}`), spec: v['spec'] };
+    return { kind: 'npm', raw: raw ?? `npm:${v['spec']}`, spec: v['spec'] };
   }
   if (kind === 'git') {
     if (typeof v['repo'] !== 'string' || v['repo'].length === 0) throw corruptSource(pluginId, 'git source missing repo');
+    const ref = readOptionalNonEmptyString(pluginId, 'ref', v['ref']);
+    const subdirectory = readOptionalNonEmptyString(pluginId, 'subdirectory', v['subdirectory']);
     return {
       kind: 'git',
-      raw: String(v['raw'] ?? v['repo']),
+      raw: raw ?? v['repo'],
       repo: v['repo'],
-      ...(v['ref'] !== undefined ? { ref: String(v['ref']) } : {}),
-      ...(v['subdirectory'] !== undefined ? { subdirectory: String(v['subdirectory']) } : {}),
+      ...(ref !== undefined ? { ref } : {}),
+      ...(subdirectory !== undefined ? { subdirectory } : {}),
     };
   }
   if (kind === 'local') {
     if (typeof v['path'] !== 'string' || v['path'].length === 0) throw corruptSource(pluginId, 'local source missing path');
-    return { kind: 'local', raw: String(v['raw'] ?? v['path']), path: v['path'] };
+    return { kind: 'local', raw: raw ?? v['path'], path: v['path'] };
   }
   throw corruptSource(pluginId, `unknown kind: ${String(kind)}`);
 }
@@ -93,7 +104,10 @@ export class PluginPackageManagerStore {
   async load(): Promise<void> {
     const cfg = await this.config.get();
     const packages = cfg['pluginPackages'];
-    if (packages === undefined) return;
+    if (packages === undefined) {
+      this.mirror.clear();
+      return;
+    }
     if (!isJsonObject(packages)) throw corrupt(`expected pluginId -> record map, got ${typeof packages}`);
     const next = new Map<string, PluginPackageRecord>();
     for (const [pluginId, value] of Object.entries(packages)) {
@@ -143,7 +157,7 @@ export class PluginPackageManagerStore {
       }
       const map = isJsonObject(existing) ? existing : {};
       const target = map[pluginId];
-      if (!isJsonObject(target)) return current;
+      if (target === undefined) return current;
       removed = parseRecord(pluginId, target);
       const next = { ...map };
       delete next[pluginId];

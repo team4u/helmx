@@ -667,3 +667,30 @@ test('findPackageDirOf: resolves package root across normal/scoped/pnpm/sub-pack
   assert.notEqual(found, noPkgFile, 'findPackageDirOf must never return the input file path itself')
   assert.equal(found, null)
 })
+
+test('assertEntryInsideRoot rejects nested node_modules entrypoints and preserves non-ENOENT errors', { timeout: 60_000 }, async () => {
+  const { assertEntryInsideRoot, realpathOrNull } = await import('../src/client-paths.js')
+  const pluginDir = join(workDir, 'entry-nm')
+  mkdirSync(join(pluginDir, 'node_modules', 'pkg'), { recursive: true })
+  writeFileSync(join(pluginDir, 'node_modules', 'pkg', 'index.tsx'), 'export const x = 1;\n')
+  assert.throws(
+    () => assertEntryInsideRoot('test:entry-nm', pluginDir, 'node_modules/pkg/index.tsx'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_module_out_of_root',
+  )
+
+  // Symlink loop yields ELOOP (non-ENOENT), preserved instead of masquerading as missing/null.
+  if (process.platform !== 'win32') {
+    const loopA = join(pluginDir, 'loop-a.tsx')
+    const loopB = join(pluginDir, 'loop-b.tsx')
+    symlinkSync(loopB, loopA)
+    symlinkSync(loopA, loopB)
+    assert.throws(
+      () => assertEntryInsideRoot('test:eloop', pluginDir, 'loop-a.tsx'),
+      (err: unknown) => (err as NodeJS.ErrnoException).code === 'ELOOP',
+    )
+    assert.throws(
+      () => realpathOrNull(loopA),
+      (err: unknown) => (err as NodeJS.ErrnoException).code === 'ELOOP',
+    )
+  }
+})

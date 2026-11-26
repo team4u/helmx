@@ -125,11 +125,20 @@ export async function readLogTailBounded(
   let handle: fsp.FileHandle;
   try {
     handle = await fsp.open(logFile, 'r');
-  } catch {
-    return '';
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+    throw error;
   }
   try {
     const stat = await handle.stat();
+    if (stat.isDirectory()) {
+      throw Object.assign(new Error(`EISDIR: illegal operation on a directory, read (${logFile})`), {
+        code: 'EISDIR',
+        errno: -21,
+        syscall: 'read',
+        path: logFile,
+      });
+    }
     if (stat.size <= 0) return '';
     const readBytes = Math.min(stat.size, maxBytes);
     const startOffset = stat.size - readBytes;
@@ -147,8 +156,6 @@ export async function readLogTailBounded(
     }
     const lines = text.split(/\r?\n/).filter((line) => line !== '');
     return lines.slice(-maxLines).join('\n');
-  } catch {
-    return '';
   } finally {
     await handle.close().catch(() => undefined);
   }
@@ -166,11 +173,20 @@ export async function readLogFrom(
   let handle: fsp.FileHandle;
   try {
     handle = await fsp.open(logFile, 'r');
-  } catch {
-    return { text: '', offset };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { text: '', offset };
+    throw error;
   }
   try {
     const stat = await handle.stat();
+    if (stat.isDirectory()) {
+      throw Object.assign(new Error(`EISDIR: illegal operation on a directory, read (${logFile})`), {
+        code: 'EISDIR',
+        errno: -21,
+        syscall: 'read',
+        path: logFile,
+      });
+    }
     if (stat.size <= offset) return { text: '', offset };
     const length = Math.min(stat.size - offset, maxBytes);
     const buffer = Buffer.alloc(length);
@@ -309,10 +325,34 @@ export async function withCrossProcessFileLock<T>(
             ? options.onError(lockPath, new Error(`unable to clear stale lock held by dead pid ${pid}`), 'create')
             : new Error(`unable to clear stale lock file (${lockPath}) held by dead pid ${pid}`);
         }
-        // CAS check before unlinking so we do not remove a fresh lock that just replaced the stale one.
-        const currentRaw = await fsp.readFile(lockPath, 'utf8').catch(() => null);
-        if (currentRaw === raw) {
-          await fsp.rm(lockPath, { force: true }).catch(() => undefined);
+        // Atomically quarantine the stale lock via rename before inspecting and deleting it, so
+        // concurrent stale-lock breakers cannot delete a fresh live lock created right after unlink.
+        const quarantine = `${lockPath}.${process.pid}.${randomUUID()}.stale`;
+        try {
+          await fsp.rename(lockPath, quarantine);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw options.onError
+            ? options.onError(lockPath, error, 'create')
+            : new Error(`failed to clear stale lock (${lockPath}): ${error instanceof Error ? error.message : String(error)}`);
+        }
+        try {
+          const movedRaw = await fsp.readFile(quarantine, 'utf8');
+          if (movedRaw !== raw) {
+            const movedHead = movedRaw.trim().split(/\s+/)[0] ?? '';
+            const movedPid = /^\d+$/.test(movedHead) ? Number(movedHead) : NaN;
+            const movedIsDead = Number.isSafeInteger(movedPid) && movedPid > 0 && !isAlive(movedPid);
+            if (!movedIsDead) {
+              // Restore newer live/unproven lock without overwriting any concurrent replacement.
+              try {
+                await fsp.link(quarantine, lockPath);
+              } catch {
+                await fsp.writeFile(lockPath, movedRaw, { flag: 'wx', mode: 0o600 }).catch(() => undefined);
+              }
+            }
+          }
+        } finally {
+          await fsp.rm(quarantine, { force: true }).catch(() => undefined);
         }
         continue;
       }

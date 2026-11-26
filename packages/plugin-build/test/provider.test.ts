@@ -187,3 +187,82 @@ test('concurrent compilePluginClientModule calls safely share the cache director
   }
   clearClientCompilerMemoryCache()
 })
+
+test('client-cache: recordMemoryCache skips on missing stat, readCachedResult validates containment, lazy chunk fails if deleted, and superseded bundles are pruned', { timeout: 60_000 }, async () => {
+  const {
+    DEPS_LIST_VERSION,
+    lookupMemoryCache,
+    readCachedResult,
+    recordMemoryCache,
+  } = await import('../src/client-cache.js')
+
+  clearClientCompilerMemoryCache()
+  const clientRoot = join(workDir, 'cache-hardening')
+  const cacheDir = join(workDir, 'cache-store')
+  mkdirSync(clientRoot, { recursive: true })
+  writeFileSync(join(clientRoot, 'lazy.ts'), 'export const ans = 1;\n')
+  writeFileSync(join(clientRoot, 'index.tsx'), 'export const load = async () => (await import("./lazy.js")).ans;\n')
+
+  // 1. Missing dep file during recordMemoryCache must NOT insert into memory cache (no permanent stale hit).
+  const first = await compilePluginClientModule('test:mem-skip', clientRoot, 'index.tsx', cacheDir)
+  const missingList = {
+    version: DEPS_LIST_VERSION as 9,
+    module: 'index.tsx',
+    root: clientRoot,
+    contentHash: first.contentHash,
+    dependencies: [{ path: 'missing-dep.ts', sha256: 'abc' }],
+  }
+  recordMemoryCache('missing-mem-key', clientRoot, missingList, first)
+  assert.equal(lookupMemoryCache('missing-mem-key', clientRoot), undefined, 'failed statSync must skip storing into memory cache')
+
+  // 2. readCachedResult rejects path traversal in dep.path, contentHash, and chunkName.
+  const stagingDir = join(cacheDir, 'plugin-staging', safeDirName('test:mem-skip'))
+  const baseName = safeFileName('index.tsx')
+  const depsPath = join(stagingDir, `${baseName}.deps.json`)
+  const validManifest = JSON.parse(readFileSync(depsPath, 'utf8')) as Record<string, unknown>
+  writeFileSync(depsPath, JSON.stringify({ ...validManifest, contentHash: '../evil' }))
+  assert.equal(readCachedResult(stagingDir, depsPath, clientRoot, 'index.tsx', []), undefined)
+
+  writeFileSync(depsPath, JSON.stringify({ ...validManifest, dependencies: [{ path: '../outside.ts', sha256: '00' }] }))
+  assert.equal(readCachedResult(stagingDir, depsPath, clientRoot, 'index.tsx', []), undefined)
+
+  writeFileSync(depsPath, JSON.stringify({ ...validManifest, chunks: ['../evil.js'] }))
+  assert.equal(readCachedResult(stagingDir, depsPath, clientRoot, 'index.tsx', []), undefined)
+
+  // Restore valid manifest, then delete the chunk file after readCachedResult returns lazy getters.
+  writeFileSync(depsPath, JSON.stringify(validManifest))
+  clearClientCompilerMemoryCache()
+  const hit = readCachedResult(stagingDir, depsPath, clientRoot, 'index.tsx', [])
+  assert.ok(hit !== undefined)
+  const chunkName = Object.keys(hit.result.chunks ?? {})[0]!
+  rmSync(join(stagingDir, `${baseName}.${first.contentHash}.chunk.${chunkName}`))
+  assert.throws(
+    () => hit.result.chunks![chunkName],
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_chunk_not_found',
+  )
+
+  // 3. Updating source prunes superseded bundle files from stagingDir.
+  writeFileSync(join(clientRoot, 'index.tsx'), 'export const load = async () => (await import("./lazy.js")).ans + 1;\n')
+  const second = await compilePluginClientModule('test:mem-skip', clientRoot, 'index.tsx', cacheDir)
+  assert.notEqual(second.contentHash, first.contentHash)
+  const remaining = readdirSync(stagingDir).filter((f) => f.startsWith(`${baseName}.`) && f.endsWith('.mjs'))
+  assert.deepEqual(remaining, [`${baseName}.${second.contentHash}.mjs`], 'superseded .mjs bundle files must be pruned')
+
+  // 4. memoryCompiledCache LRU bound evicts oldest entries beyond 128.
+  clearClientCompilerMemoryCache()
+  const lruFile = join(clientRoot, 'lru.ts')
+  writeFileSync(lruFile, 'export const k = 1;\n')
+  const lruList = {
+    version: DEPS_LIST_VERSION as 9,
+    module: 'lru.ts',
+    root: clientRoot,
+    contentHash: first.contentHash,
+    dependencies: [{ path: 'lru.ts', sha256: 'abc' }],
+  }
+  for (let i = 0; i < 140; i += 1) {
+    recordMemoryCache(`lru-key-${i}`, clientRoot, lruList, first)
+  }
+  assert.equal(lookupMemoryCache('lru-key-0', clientRoot), undefined, 'oldest entry must be evicted by LRU bound')
+  assert.ok(lookupMemoryCache('lru-key-139', clientRoot) !== undefined, 'newest entry must remain cached')
+  clearClientCompilerMemoryCache()
+})

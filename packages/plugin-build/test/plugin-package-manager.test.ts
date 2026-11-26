@@ -98,7 +98,36 @@ test('parsePluginSource: npm normalization and rejection', { timeout: 60_000 }, 
   const bare = parsePluginSource('npm:@scope/pkg', '/wd')
   assert.ok(bare.kind === 'npm' && bare.spec === '@scope/pkg')
 
-  for (const bad of ['npm:', 'npm: ', 'npm:builtin:evil', 'npm:core:evil', 'builtin:profile', 'builtin%3Aprofile', 'core:conversations', 'core%3Aconversations', 'core%3aconversations', '', '  ', 'file:///tmp/x', 'http://github.com/u/r', 'git+https://x.example/r', 'ftp://x/r', 'my-unknown-proto:foo', 'bare-name']) {
+  for (const bad of [
+    'npm:',
+    'npm: ',
+    'npm:-evil',
+    'npm:--registry=https://evil.example',
+    'npm:file:./pkg',
+    'npm:pkg@file:/etc/passwd',
+    'npm:https://evil.example/pkg.tgz',
+    'npm:../escape',
+    'npm:./local',
+    'npm:/abs/path',
+    'npm:a/b/c',
+    'npm:@scope/a/b',
+    'npm:foo\tbar',
+    'npm:builtin:evil',
+    'npm:core:evil',
+    'builtin:profile',
+    'builtin%3Aprofile',
+    'core:conversations',
+    'core%3Aconversations',
+    'core%3aconversations',
+    '',
+    '  ',
+    'file:///tmp/x',
+    'http://github.com/u/r',
+    'git+https://x.example/r',
+    'ftp://x/r',
+    'my-unknown-proto:foo',
+    'bare-name',
+  ]) {
     assert.throws(() => parsePluginSource(bad, '/wd'), (err: unknown) => err instanceof HelmxError && err.status === 400, `should reject: ${bad}`)
   }
 })
@@ -143,7 +172,25 @@ test('parsePluginSource: git shorthand / SCP / https with @ref / #subdirectory',
   assert.equal(gitSub.ref, 'main')
   assert.equal(gitSub.subdirectory, 'sub/dir')
 
-  for (const bad of ['git:', 'git:repo@', 'git:repo#', 'git:repo#sub#more', 'git:repo#../escape', 'https://', 'https://github.com/user/repo#sub#more#extra', 'git:repo@ref#sub#x']) {
+  const httpsRefSub = parsePluginSource('https://github.com/user/repo@v1#packages/foo', '/wd')
+  assert.ok(httpsRefSub.kind === 'git')
+  if (httpsRefSub.kind === 'git') {
+    assert.equal(httpsRefSub.ref, 'v1')
+    assert.equal(httpsRefSub.subdirectory, 'packages/foo')
+  }
+
+  for (const bad of [
+    'git:',
+    'git:repo@',
+    'git:repo#',
+    'git:repo#sub#more',
+    'git:repo#../escape',
+    'https://',
+    'https://github.com/user/repo#sub#more#extra',
+    'https://github.com/user/repo@v1#v2',
+    'https://github.com/user/repo/../../evil',
+    'git:repo@ref#sub#x',
+  ]) {
     assert.throws(() => parsePluginSource(bad, '/wd'), (err: unknown) => err instanceof HelmxError, `should reject: ${bad}`)
   }
 })
@@ -887,7 +934,7 @@ test('honest update rollback: failed restore reload no longer falsely reports ol
     const err = (await assertRejectsCode(() => env.manager.update('honest-rollback'), 'plugin_package_update_failed', 500)) as HelmxError
     const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
     assert.equal(details.rolledBack, false, 'failed restore reload must report rolledBack:false')
-    assert.match(err.message, /old directory already restore, but old instance reload failed/, 'error message must clarify directory restored while instance did not')
+    assert.match(err.message, /previous directory restored, but reloading the previous plugin instance failed/, 'error message must clarify directory restored while instance did not')
     assert.equal(updateCalls, 2, 'rollback path must genuinely attempt restore reload')
     const manifest = JSON.parse(readFileSync(join(env.dataDir, 'installed-plugins', 'honest-rollback', 'plugin.json'), 'utf8')) as { version: string }
     assert.equal(manifest.version, '1.0.0')
@@ -912,7 +959,7 @@ test('successful update rollback path: restore reload success still reports roll
     writeFileSync(join(userSrc, 'index.mjs'), PLUGIN_SRC('ok-rollback', '2.0.0'))
     const err = (await assertRejectsCode(() => env.manager.update('ok-rollback'), 'plugin_package_update_failed', 500)) as HelmxError
     assert.equal((err.details as { rolledBack?: boolean }).rolledBack, true)
-    assert.match(err.message, /already rollback to update before directory and instance/)
+    assert.match(err.message, /rolled back to previous directory and instance/)
   } finally {
     env.close()
   }
@@ -929,7 +976,7 @@ test('install record save fails and rollback deregister fails: keeps directory a
     const err = (await assertRejectsCode(() => env.manager.install(userSrc, { enable: true }), 'plugin_package_install_failed', 500)) as HelmxError
     const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
     assert.equal(details.rolledBack, false, 'failed rollback deregister must report rolledBack:false')
-    assert.match(err.message, /directory and instance already keep/, 'error message must warn that state remains preserved for manual handling')
+    assert.match(err.message, /directory and instance preserved for manual recovery/, 'error message must warn that state remains preserved for manual handling')
     const target = join(env.dataDir, 'installed-plugins', 'keep-dir')
     assert.ok(existsSync(join(target, 'index.mjs')), 'must not rm directory backing a live registered instance')
     assert.ok(!env.store.getRecord('keep-dir'), 'install record not persisted')
@@ -1239,5 +1286,158 @@ test('install rejects local source missing explicit manifest (plugin.json or pac
     assert.ok(!existsSync(join(env.dataDir, 'plugins', 'no-manifest')))
   } finally {
     env.close()
+  }
+})
+
+test('npm install passes "--" before spec, strips tarball symlinks/dotfiles/node_modules, and runs doctorDir once per install/update', { timeout: 60_000 }, async () => {
+  const { cpSync } = await import('node:fs')
+  const scratch = mkdtempSync(join(tmpdir(), 'helmx-npm-tar-'))
+  const packCalls: string[][] = []
+  const rawDir = join(scratch, 'tar-src')
+  const pkgDir = join(rawDir, 'package')
+  mkdirSync(join(pkgDir, '.git'), { recursive: true })
+  mkdirSync(join(pkgDir, 'node_modules', 'junk'), { recursive: true })
+  writeFileSync(join(pkgDir, 'plugin.json'), JSON.stringify({ id: 'tar-plugin', version: '1.0.0', main: 'index.mjs' }))
+  writeFileSync(join(pkgDir, 'index.mjs'), PLUGIN_SRC('tar-plugin', '1.0.0'))
+  writeFileSync(join(pkgDir, '.git', 'config'), 'secret')
+  writeFileSync(join(pkgDir, 'node_modules', 'junk', 'x.js'), 'junk')
+  symlinkSync('/etc/passwd', join(pkgDir, 'evil-link'))
+
+  const runner: PackageRunner = async (cmd, args, opts) => {
+    if (cmd === 'npm' && args[0] === 'pack') {
+      packCalls.push(args)
+      const destIdx = args.indexOf('--pack-destination')
+      const destDir = destIdx >= 0 ? args[destIdx + 1]! : opts.cwd
+      writeFileSync(join(destDir, 'tar-plugin-1.0.0.tgz'), 'fake-tgz')
+      return { code: 0, stdout: 'tar-plugin-1.0.0.tgz\n', stderr: '' }
+    }
+    if (cmd === 'tar') {
+      const cIdx = args.indexOf('-C')
+      const targetExtract = args[cIdx + 1]!
+      cpSync(rawDir, targetExtract, { recursive: true, verbatimSymlinks: true })
+      return { code: 0, stdout: '', stderr: '' }
+    }
+    return { code: 0, stdout: '', stderr: '' }
+  }
+  const env = makeEnv(runner)
+  let doctorCalls = 0
+  const origDoctor = env.host.doctorDir.bind(env.host)
+  env.host.doctorDir = async (dir, opts) => {
+    doctorCalls += 1
+    return origDoctor(dir, opts)
+  }
+  try {
+    const installed = await env.manager.install('npm:tar-plugin@^1.0.0')
+    assert.equal(installed.record.pluginId, 'tar-plugin')
+    assert.equal(doctorCalls, 1, 'install must run doctorDir only once')
+    const packArgs = packCalls[0]!
+    const sepIdx = packArgs.indexOf('--')
+    assert.ok(sepIdx >= 0 && packArgs[sepIdx + 1] === 'tar-plugin@^1.0.0', 'npm pack must pass -- before spec')
+    const managed = join(env.dataDir, 'installed-plugins', 'tar-plugin')
+    assert.equal(existsSync(join(managed, 'evil-link')), false, 'symlink in npm tarball must be stripped')
+    assert.equal(existsSync(join(managed, '.git')), false, '.git in npm tarball must be stripped')
+    assert.equal(existsSync(join(managed, 'node_modules')), false, 'node_modules in npm tarball must be stripped')
+
+    doctorCalls = 0
+    const src = writeLocalPlugin(env.cwd, 'tar-plugin', '1.1.0')
+    await env.manager.update('tar-plugin', { source: src })
+    assert.equal(doctorCalls, 1, 'update must run doctorDir only once')
+  } finally {
+    env.close()
+    rmSync(scratch, { recursive: true, force: true })
+  }
+})
+
+test('local reinstall rolls back when store.save fails; installRuntimeDeps rejects corrupt package.json; update errors label update stage', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  try {
+    const src = writeLocalPlugin(env.cwd, 'reinstall-rb', '1.0.0')
+    await env.manager.install(src, { enable: true })
+    writeLocalPlugin(env.cwd, 'reinstall-rb', '2.0.0')
+    env.store.failNextSave = true
+    const err = (await assertRejectsCode(() => env.manager.install(src), 'plugin_package_update_failed', 500)) as HelmxError
+    assert.equal((err.details as { rolledBack?: boolean }).rolledBack, true, 'store.save failure during local reinstall must roll back')
+    const manifestAfter = JSON.parse(readFileSync(join(env.dataDir, 'installed-plugins', 'reinstall-rb', 'plugin.json'), 'utf8')) as { version: string }
+    assert.equal(manifestAfter.version, '1.0.0')
+
+    // Corrupt package.json in staging fails with typed HelmxError instead of raw SyntaxError.
+    const badPkgSrc = writeLocalPlugin(env.cwd, 'bad-pkg-json', '1.0.0')
+    writeFileSync(join(badPkgSrc, 'package.json'), '{not-json')
+    await assertRejectsCode(() => env.manager.install(badPkgSrc), 'plugin_package_install_failed', 422)
+  } finally {
+    env.close()
+  }
+
+  // Update stage runner failure must report plugin_package_update_failed (not install).
+  const envFailUpdate = makeEnv(gitCloneRunner((repo) => {
+    writeFileSync(join(repo, 'plugin.json'), JSON.stringify({ id: 'git-stage-test', version: '1.0.0', main: 'index.mjs' }))
+    writeFileSync(join(repo, 'index.mjs'), PLUGIN_SRC('git-stage-test', '1.0.0'))
+  }))
+  try {
+    await envFailUpdate.manager.install('git:github.com/u/r')
+    const failingMgr = new PluginPackageManager({
+      dataDir: envFailUpdate.dataDir,
+      cwd: envFailUpdate.cwd,
+      store: envFailUpdate.store,
+      host: envFailUpdate.host,
+      runner: FAIL_RUNNER,
+    })
+    await assertRejectsCode(() => failingMgr.update('git-stage-test'), 'plugin_package_update_failed', 500)
+  } finally {
+    envFailUpdate.close()
+  }
+})
+
+test('store: assertSourceShape rejects non-string fields, delete throws config_corrupt on corrupt record, load clears mirror when undefined', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-pkg-store-hard-'))
+  try {
+    const cfgPort = createJsonConfigPort(dataDir)
+    // 1. Non-string source fields must throw config_corrupt instead of coercing via String().
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
+      pluginPackages: {
+        'p-bad-raw': {
+          id: 'plugpkg-p-bad-raw',
+          pluginId: 'p-bad-raw',
+          source: { kind: 'npm', raw: 12345, spec: 'foo' },
+          installPath: '/data/installed-plugins/p-bad-raw',
+          version: '1.0.0',
+          installedAt: 1,
+          updatedAt: 1,
+        },
+      },
+    }))
+    const store1 = new PluginPackageManagerStore(cfgPort)
+    await assertRejectsCode(() => store1.load(), 'config_corrupt', 500)
+
+    // 2. delete() on corrupt non-object record throws 500 config_corrupt instead of 404.
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
+      pluginPackages: {
+        'p-corrupt': 'not-an-object',
+      },
+    }))
+    const store2 = new PluginPackageManagerStore(cfgPort)
+    await assertRejectsCode(() => store2.delete('p-corrupt'), 'config_corrupt', 500)
+
+    // 3. load() clears mirror when pluginPackages becomes undefined.
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
+      pluginPackages: {
+        'p-ok': {
+          id: 'plugpkg-p-ok',
+          pluginId: 'p-ok',
+          source: { kind: 'local', raw: '/x', path: '/x' },
+          installPath: '/data/installed-plugins/p-ok',
+          version: '1.0.0',
+          installedAt: 1,
+          updatedAt: 1,
+        },
+      },
+    }))
+    await store2.load()
+    assert.equal(store2.listRecords().length, 1)
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({}))
+    await store2.load()
+    assert.equal(store2.listRecords().length, 0, 'load() must clear mirror when pluginPackages is undefined')
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
   }
 })

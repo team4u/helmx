@@ -14,9 +14,12 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { Duplex, PassThrough, type Duplex as DuplexType } from 'node:stream';
+import { WebSocketServer } from 'ws';
 import { sleep as delay } from '@helmx/test-kit';
 import { makeTempDir as tempDir } from '@helmx/test-kit/node';
 import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js';
+import { decodeWsRawData } from '../src/daemon/env-rpc-shared.js';
+import { openNodeTunnelStream } from '../src/daemon/tunnel-client.js';
 
 /** Real duplex pair: data written to `a` reads from `b` (relayed through tunnel stream). */
 function duplexPair(): [DuplexType, DuplexType] {
@@ -79,6 +82,8 @@ test('nodeTunnelOpen validates parameters strictly (unknown fields, invalid tunn
       { tunnelId: 't1', port: 80, host: '' },
       { tunnelId: 't1', port: 80, host: ' 127.0.0.1' },
       { tunnelId: 't1', port: 80, host: 'bad\nhost' },
+      { tunnelId: 't1', port: 80, host: 'bad\u00a0host' },
+      { tunnelId: 't1', port: 80, host: 'bad\thost' },
       { tunnelId: 't1', port: 80, host: 'a'.repeat(256) },
       { tunnelId: 't1', socketPath: '' },
       { tunnelId: 't1', socketPath: 'relative/herdr.sock' },
@@ -482,4 +487,86 @@ test('nodeTunnelOpen normalizes host connect failures to connect_failed includin
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test('openNodeTunnelStream fails fast on pre-aborted signal, re-checks generation on ok frame, and decodes Buffer[]/ArrayBuffer frames', { timeout: 60_000 }, async (t) => {
+  // 1. decodeWsRawData handles string, Buffer, Buffer[], and ArrayBuffer safely and enforces maxBytes.
+  assert.equal(decodeWsRawData([Buffer.from('{"type":'), Buffer.from('"ok"}')]), '{"type":"ok"}');
+  const ab = new TextEncoder().encode('{"type":"ok"}').buffer;
+  assert.equal(decodeWsRawData(ab), '{"type":"ok"}');
+  assert.throws(
+    () => decodeWsRawData([Buffer.alloc(10), Buffer.alloc(10)], 15),
+    (err: unknown) => (err as { code?: string }).code === 'invalid',
+  );
+
+  // 2. Real WS tunnel handshake server.
+  let wsConnections = 0;
+  let active = true;
+  let sendOkOnConnect = true;
+  const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  t.after(async () => {
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+  }, { timeout: 60_000 });
+  await new Promise<void>((resolve) => wss.once('listening', resolve));
+  const port = (wss.address() as net.AddressInfo).port;
+  const tunnelWsUrl = `ws://127.0.0.1:${port}`;
+
+  wss.on('connection', (ws) => {
+    wsConnections += 1;
+    ws.once('message', () => {
+      if (sendOkOnConnect) {
+        setTimeout(() => {
+          active = false;
+          ws.send(JSON.stringify({ type: 'ok' }));
+        }, 30);
+      }
+    });
+  });
+
+  // Pre-aborted signal must reject immediately without opening any WS connection.
+  const preAborted = new AbortController();
+  preAborted.abort();
+  await assert.rejects(
+    openNodeTunnelStream({
+      tunnelWsUrl,
+      nodeId: 'n1',
+      token: 'n1:sec',
+      tunnelId: 't-preabort',
+      isGenerationActive: () => true,
+      signal: preAborted.signal,
+    }),
+    (err: unknown) => (err as { code?: string }).code === 'aborted',
+  );
+  assert.equal(wsConnections, 0, 'pre-aborted signal must not initiate WS connection');
+
+  // If generation retires before { type: 'ok' } arrives, openNodeTunnelStream must reject instead of resolving Duplex.
+  await assert.rejects(
+    openNodeTunnelStream({
+      tunnelWsUrl,
+      nodeId: 'n1',
+      token: 'n1:sec',
+      tunnelId: 't-retired',
+      isGenerationActive: () => active,
+    }),
+    (err: unknown) => (err as { code?: string }).code === 'aborted',
+  );
+
+  // Successful handoff returns Duplex and detaches handshake error guard cleanly.
+  active = true;
+  sendOkOnConnect = false;
+  wss.removeAllListeners('connection');
+  wss.on('connection', (ws) => {
+    ws.once('message', () => {
+      ws.send(JSON.stringify({ type: 'ok' }));
+    });
+  });
+  const duplex = await openNodeTunnelStream({
+    tunnelWsUrl,
+    nodeId: 'n1',
+    token: 'n1:sec',
+    tunnelId: 't-ok',
+    isGenerationActive: () => true,
+  });
+  duplex.on('error', () => undefined);
+  duplex.destroy();
 });

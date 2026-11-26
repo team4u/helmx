@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
+import process from 'node:process'
+import { useTempDir } from '@helmx/test-kit/node'
 import {
+  createNodeShellProbeIo,
   isLegacyWslBashPath,
   isWslBashLauncherPath,
   resolveShellConfigWithIo,
@@ -209,6 +214,51 @@ describe('shell-config: Windows Git Bash detection and WSL filtering', { timeout
         ok: true,
         value: { shell: 'sh', args: ['-c'], commandTransport: 'argv' },
       })
+    }
+  })
+
+  it('execProbe settles on timeout even when detached grandchild holds stdout and bounds stdout accumulation', { timeout: 60_000 }, async (t) => {
+    const dir = useTempDir(t, 'helmx-shell-probe-')
+    const { execProbe } = createNodeShellProbeIo()
+
+    // 1. Bounded stdout accumulation (> 64 KiB).
+    const noisy = await execProbe(
+      process.execPath,
+      ['-e', "process.stdout.write('A'.repeat(120 * 1024))"],
+      5_000,
+    )
+    assert.equal(noisy.status, 0)
+    assert.equal(noisy.stdout.length, 64 * 1024)
+
+    // 2. Timeout settles promptly even when a detached grandchild inherits stdout.
+    if (process.platform !== 'win32') {
+      const grandPidFile = path.join(dir, 'grand.pid')
+      t.after(async () => {
+        const raw = await fsp.readFile(grandPidFile, 'utf8').catch(() => '')
+        const pid = Number(raw.trim())
+        if (Number.isInteger(pid) && pid > 0) {
+          try {
+            process.kill(pid, 'SIGKILL')
+          } catch {
+            // already exited
+          }
+        }
+      }, { timeout: 60_000 })
+
+      const script = [
+        "const fs = require('node:fs');",
+        "const { spawn } = require('node:child_process');",
+        "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: ['ignore', 'inherit', 'ignore'] });",
+        'g.unref();',
+        `fs.writeFileSync(${JSON.stringify(grandPidFile)}, String(g.pid));`,
+        'setInterval(() => {}, 1000);',
+      ].join('\n')
+      const startedAt = Date.now()
+      const timedOut = await execProbe(process.execPath, ['-e', script], 200)
+      const elapsed = Date.now() - startedAt
+      assert.equal(timedOut.status, null)
+      assert.equal(timedOut.stdout, '')
+      assert.ok(elapsed < 3_000, `execProbe should settle promptly on timeout (elapsed=${elapsed}ms)`)
     }
   })
 })

@@ -7,6 +7,7 @@
 
 import type { Duplex } from 'node:stream';
 import { WebSocket, createWebSocketStream } from 'ws';
+import { decodeWsRawData } from './env-rpc-shared.js';
 
 const TUNNEL_CONNECT_TIMEOUT_MS = 10_000;
 const TUNNEL_FIRST_FRAME_TIMEOUT_MS = 15_000;
@@ -28,12 +29,18 @@ export function openNodeTunnelStream(options: OpenNodeTunnelOptions): Promise<Du
       Object.assign(new Error('tunnel transport unavailable (connection generation retired)'), { code: 'aborted' }),
     );
   }
+  if (signal?.aborted) {
+    return Promise.reject(
+      Object.assign(new Error('tunnel handshake aborted'), { code: 'aborted' }),
+    );
+  }
   return new Promise<Duplex>((resolve, reject) => {
     let settled = false;
     let ws: WebSocket | undefined;
     let connectTimer: NodeJS.Timeout | undefined;
     let frameTimer: NodeJS.Timeout | undefined;
     let onAbort: (() => void) | undefined;
+    let onClose: (() => void) | undefined;
 
     const guardError = (err: Error): void => {
       if (settled) {
@@ -56,6 +63,7 @@ export function openNodeTunnelStream(options: OpenNodeTunnelOptions): Promise<Du
       ws?.removeAllListeners('message');
       ws?.removeAllListeners('open');
       ws?.removeListener('error', guardError);
+      if (onClose !== undefined) ws?.removeListener('close', onClose);
       ws?.once('error', () => {
         try {
           ws?.terminate();
@@ -80,16 +88,21 @@ export function openNodeTunnelStream(options: OpenNodeTunnelOptions): Promise<Du
       );
     };
 
+    onAbort = (): void => {
+      cleanup(Object.assign(new Error('tunnel handshake aborted'), { code: 'aborted' }));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+
     connectTimer = setTimeout(() => {
       cleanup(Object.assign(new Error(`tunnel WS connect timed out after ${TUNNEL_CONNECT_TIMEOUT_MS}ms`), { code: 'timeout' }));
     }, TUNNEL_CONNECT_TIMEOUT_MS);
     frameTimer = setTimeout(() => {
       cleanup(Object.assign(new Error(`tunnel control frame timed out after ${TUNNEL_FIRST_FRAME_TIMEOUT_MS}ms`), { code: 'timeout' }));
     }, TUNNEL_FIRST_FRAME_TIMEOUT_MS);
-    onAbort = (): void => {
-      cleanup(Object.assign(new Error('tunnel handshake aborted'), { code: 'aborted' }));
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
       ws = new WebSocket(tunnelWsUrl);
@@ -112,13 +125,14 @@ export function openNodeTunnelStream(options: OpenNodeTunnelOptions): Promise<Du
       if (settled) return;
       let frame: unknown;
       try {
-        const text = typeof raw === 'string' ? raw : Buffer.from(raw as ArrayBuffer).toString('utf8');
-        if (Buffer.byteLength(text, 'utf8') > TUNNEL_FIRST_FRAME_MAX_BYTES) {
+        const text = decodeWsRawData(raw, TUNNEL_FIRST_FRAME_MAX_BYTES);
+        frame = JSON.parse(text);
+      } catch (err) {
+        const code = (err as { code?: unknown } | null)?.code;
+        if (code === 'invalid') {
           cleanup(Object.assign(new Error('tunnel control frame exceeds 64KiB limit'), { code: 'invalid' }));
           return;
         }
-        frame = JSON.parse(text);
-      } catch {
         cleanup(Object.assign(new Error('tunnel control frame is not valid JSON'), { code: 'invalid' }));
         return;
       }
@@ -127,15 +141,43 @@ export function openNodeTunnelStream(options: OpenNodeTunnelOptions): Promise<Du
         cleanup(Object.assign(new Error('tunnel control frame is not a JSON object'), { code: 'invalid' }));
         return;
       }
-      if (frameTimer !== undefined) clearTimeout(frameTimer);
-      if (connectTimer !== undefined) clearTimeout(connectTimer);
-      if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort);
-      ws!.removeListener('message', onMessage);
       if (record.type === 'ok') {
+        if (!isGenerationActive() || signal?.aborted) {
+          cleanup(
+            Object.assign(
+              new Error(
+                signal?.aborted
+                  ? 'tunnel handshake aborted'
+                  : 'tunnel transport unavailable (connection generation retired)',
+              ),
+              { code: 'aborted' },
+            ),
+          );
+          return;
+        }
+        if (frameTimer !== undefined) clearTimeout(frameTimer);
+        if (connectTimer !== undefined) clearTimeout(connectTimer);
+        if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort);
+        ws!.removeListener('message', onMessage);
+        ws!.removeListener('error', guardError);
+        if (onClose !== undefined) ws!.removeListener('close', onClose);
         settled = true;
         resolve(createWebSocketStream(ws!));
         return;
       }
+      if (frameTimer !== undefined) clearTimeout(frameTimer);
+      if (connectTimer !== undefined) clearTimeout(connectTimer);
+      if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort);
+      ws!.removeListener('message', onMessage);
+      ws!.removeListener('error', guardError);
+      if (onClose !== undefined) ws!.removeListener('close', onClose);
+      ws!.once('error', () => {
+        try {
+          ws!.terminate();
+        } catch {
+          // Already destroyed.
+        }
+      });
       const detail = typeof record.message === 'string' ? record.message : JSON.stringify(frame).slice(0, 200);
       settled = true;
       try {
@@ -150,7 +192,8 @@ export function openNodeTunnelStream(options: OpenNodeTunnelOptions): Promise<Du
       );
     };
 
+    onClose = (): void => cleanup();
     ws.on('message', onMessage);
-    ws.once('close', () => cleanup());
+    ws.once('close', onClose);
   });
 }

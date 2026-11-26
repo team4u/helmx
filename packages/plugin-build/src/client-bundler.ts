@@ -6,6 +6,7 @@
  *   or emits namespace-bridged async chunks (`__helmx_chunk_share` + `__helmx_import_chunk`) for
  *   Bearer-safe Blob URL lazy loading (e.g. Mermaid diagram engines).
  */
+import { randomUUID } from 'node:crypto';
 import { basename, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { gzip, gzipSync } from 'node:zlib';
@@ -153,14 +154,29 @@ export async function compileClientBundle(params: {
   // Fast path: no dynamic imports -> converge into a single self-contained entry bundle.
   if (dynamicTargets.size === 0) {
     const mainJs = await convergeSingleBundle(pluginId, moduleRef, entryBaseName, virtualFiles, css);
-    const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, npmRoots, entryExports);
+    const list = buildDepsList({
+      rootReal,
+      moduleRef,
+      dependencies,
+      npmDeps,
+      npmRoots,
+      entryExports,
+    });
     return { mainJs, entryExports, list, chunks: {} };
   }
 
   // Split path: compute shared async chunks + prerequisite topological order and emit namespace bridges.
   const { sharedAsyncChunks, chunkDeps } = computeAsyncChunkPlan(metaByBase, baseClosure, dynamicTargets);
   const allUnits = new Set<string>([...sharedAsyncChunks, ...dynamicTargets]);
-  const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, npmRoots, entryExports, Array.from(allUnits));
+  const list = buildDepsList({
+    rootReal,
+    moduleRef,
+    dependencies,
+    npmDeps,
+    npmRoots,
+    entryExports,
+    chunks: Array.from(allUnits),
+  });
 
   const { mainJs, chunks } = await convergeSplitBundles({
     pluginId,
@@ -288,6 +304,9 @@ async function convergeSplitBundles(params: {
 
   const baseRegisterFiles = [...baseClosure].filter((f) => f !== entryBaseName && virtualFiles.has(f));
 
+  const dynPrefix = `__HELMX_DYN_${randomUUID().replace(/-/g, '')}__:`;
+  const dynImportPattern = new RegExp(`import\\s*\\(\\s*(["'\`])${dynPrefix}([^"'\`]+)\\1\\s*\\)`, 'g');
+
   async function bundleUnit(unitName: string, isMain: boolean): Promise<string> {
     const isNsBridge = !isMain && sharedAsyncChunks.has(unitName);
     let unitCode = virtualFiles.get(isNsBridge ? chunkNsBridges.get(unitName)! : unitName);
@@ -320,7 +339,7 @@ async function convergeSplitBundles(params: {
           setup(b) {
             b.onResolve({ filter: /.*/ }, (args) => {
               if (args.kind === 'dynamic-import') {
-                return { path: `__HELMX_DYN_IMPORT__:${basename(args.path)}`, external: true };
+                return { path: `${dynPrefix}${basename(args.path)}`, external: true };
               }
               if (args.kind === 'import-statement') {
                 if (args.path.startsWith('__helmx_chunk__:')) {
@@ -340,7 +359,10 @@ async function convergeSplitBundles(params: {
             b.onLoad({ filter: /.*/, namespace: 'proxy' }, (args) => {
               const target = args.path;
               const exports = metaByBase.get(target)?.exports ?? [];
-              const proxyLines = [`const __s = (globalThis.__helmx_chunk_share ?? {})[${chunkShareKeyExpr(target)}] || {};`];
+              const proxyLines = [
+                `const __s = globalThis.__helmx_chunk_share?.[${chunkShareKeyExpr(target)}];`,
+                `if (!__s) throw new Error(${JSON.stringify(`Missing shared plugin chunk namespace: ${target}`)});`,
+              ];
               for (const exp of exports) {
                 proxyLines.push(exp === 'default' ? 'export default __s["default"];' : `export const ${exp} = __s[${JSON.stringify(exp)}];`);
               }
@@ -356,13 +378,29 @@ async function convergeSplitBundles(params: {
         },
       ],
     });
-    return res.outputFiles[0]!.text.replace(
-      /import\s*\(\s*["'`]__HELMX_DYN_IMPORT__:([^"'`]+)["'`]\s*\)/g,
-      (_match, target: string) => {
+    const output = res.outputFiles[0]!.text.replace(
+      dynImportPattern,
+      (_match, _quote: string, target: string) => {
+        if (!allUnits.has(target)) {
+          throw new HelmxError('client_compile_failed', `Unknown dynamic chunk target "${target}" in ${moduleRef}`, 500, {
+            pluginId,
+            module: moduleRef,
+            target,
+          });
+        }
         const deps = chunkDeps[target] ?? [];
         return `globalThis.__helmx_import_chunk(${JSON.stringify(pluginId)}, ${JSON.stringify(moduleRef)}, ${JSON.stringify(contentHash)}, ${JSON.stringify(target)}, ${JSON.stringify(deps)})`;
       },
     );
+    if (output.includes(dynPrefix)) {
+      throw new HelmxError(
+        'client_compile_failed',
+        `Unrewritten dynamic import marker remained in converged bundle for ${moduleRef}`,
+        500,
+        { pluginId, module: moduleRef, unitName },
+      );
+    }
+    return output;
   }
 
   let mainJs: string;
@@ -378,12 +416,7 @@ async function convergeSplitBundles(params: {
       Array.from(allUnits).map(async (unitName) => {
         const code = await bundleUnit(unitName, false);
         const codeBuf = Buffer.from(code, 'utf8');
-        let gzipped: Uint8Array | undefined;
-        try {
-          gzipped = codeBuf.byteLength >= ASYNC_GZIP_THRESHOLD_BYTES ? await gzipAsync(codeBuf) : gzipSync(codeBuf);
-        } catch {
-          /* ignore */
-        }
+        const gzipped = codeBuf.byteLength >= ASYNC_GZIP_THRESHOLD_BYTES ? await gzipAsync(codeBuf) : gzipSync(codeBuf);
         chunks[unitName] = { code, gzipped };
       }),
     );
