@@ -123,8 +123,11 @@
 }
 
 .conversation-outline-item:hover,
+.conversation-outline-item:focus-visible,
 .conversation-outline-item.is-selected {
   background: var(--bg-hover);
+  outline: none;
+  box-shadow: none;
 }
 
 .conversation-outline-item.is-current {

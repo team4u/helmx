@@ -326,6 +326,7 @@ export const Composer = memo(function Composer({
             conversationId={conversation.id}
             shortcutPanel={isDrawer ? 'drawer' : isSplit ? 'split' : 'primary'}
             shortcutActive={staged}
+            onFocusReturn={returnFocusToTextarea}
           />
           {envConfigurable ? (
             <SessionEnvBar

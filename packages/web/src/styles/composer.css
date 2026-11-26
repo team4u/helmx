@@ -29,8 +29,10 @@
   border-color: var(--warn-border);
 }
 
-.ask-dock:focus:not(:focus-visible) {
+.ask-dock:focus,
+.ask-dock:focus-visible {
   outline: none;
+  box-shadow: none;
 }
 
 .ask-dock-header {
@@ -111,14 +113,12 @@
   transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 
-.ask-dock-step-nav-btn:hover:not(:disabled) {
+.ask-dock-step-nav-btn:hover:not(:disabled),
+.ask-dock-step-nav-btn:focus-visible:not(:disabled) {
+  outline: none;
   background: var(--bg-hover);
   color: var(--fg);
-}
-
-.ask-dock-step-nav-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 1px var(--border-focus);
+  box-shadow: none;
 }
 
 .ask-dock-step-nav-btn:disabled {
@@ -163,26 +163,22 @@
   width: 100%;
   padding: 7px 10px;
   margin: 0;
-  border: 1px solid transparent;
+  border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 
-.ask-dock-choice-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
-
-.ask-dock-choice-btn:focus-visible {
+.ask-dock-choice-btn:hover:not(:disabled),
+.ask-dock-choice-btn:focus-visible:not(:disabled) {
   outline: none;
-  border-color: var(--border-focus);
   background: var(--bg-hover);
-  box-shadow: 0 0 0 1px var(--border-focus);
+  color: var(--fg);
+  box-shadow: none;
 }
 
 .ask-dock-choice-btn:disabled {
@@ -191,18 +187,16 @@
 }
 
 .ask-dock-choice-btn--selected {
-  background: var(--accent-bg);
-  border-color: var(--accent-border);
+  background: var(--bg-muted);
+  color: var(--fg);
 }
 
-.ask-dock-choice-btn--selected:focus-visible {
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 1px var(--border-focus);
-}
-
-.ask-dock-choice-btn--selected:hover:not(:disabled) {
-  background: var(--accent-bg);
-  border-color: var(--accent);
+.ask-dock-choice-btn--selected:hover:not(:disabled),
+.ask-dock-choice-btn--selected:focus-visible:not(:disabled) {
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: none;
 }
 
 .ask-dock-choice-key {
@@ -223,9 +217,11 @@
   line-height: 1;
 }
 
+.ask-dock-choice-btn:hover:not(:disabled) .ask-dock-choice-key,
+.ask-dock-choice-btn:focus-visible:not(:disabled) .ask-dock-choice-key,
 .ask-dock-choice-btn--selected .ask-dock-choice-key {
   background: var(--bg-elevated);
-  color: var(--accent);
+  color: var(--fg);
 }
 
 .ask-dock-choice-body {
@@ -252,15 +248,16 @@
   overflow-wrap: anywhere;
 }
 
-.ask-dock-choice-btn--selected .ask-dock-choice-label {
-  color: var(--accent);
-}
-
 .ask-dock-choice-badge {
   flex-shrink: 0;
-  font-size: 11px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-size: 10.5px;
   font-weight: 500;
-  color: var(--accent);
+  line-height: 1.5;
 }
 
 .ask-dock-choice-desc {
@@ -277,19 +274,19 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--accent);
+  color: var(--fg);
 }
 
 .ask-dock-choice-check--multi {
-  border-radius: var(--radius-xs);
-  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
   background: var(--bg-elevated);
   box-sizing: border-box;
 }
 
 .ask-dock-choice-check--multi.ask-dock-choice-check--active {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--fg);
+  background: var(--fg);
   color: var(--bg-elevated);
 }
 
@@ -350,9 +347,12 @@
   gap: 8px;
 }
 
-.ask-dock .composer-model-button:hover:not(:disabled) {
+.ask-dock .composer-model-button:hover:not(:disabled),
+.ask-dock .composer-model-button:focus-visible:not(:disabled) {
+  outline: none;
   border-color: var(--border-strong);
   background: var(--bg-subtle);
+  box-shadow: none;
 }
 
 .ask-dock .composer-model-button .composer-model-label {

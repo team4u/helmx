@@ -25,11 +25,20 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.model-center-tab-btn:hover {
+.model-center-tab-btn:hover,
+.model-center-tab-btn:focus-visible {
+  outline: none;
   color: var(--fg);
+  background: var(--bg-hover);
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  box-shadow: none;
 }
+
 .model-center-tab-btn.tab-btn-active,
-.model-center-tab-btn[data-state='active'] {
+.model-center-tab-btn.tab-btn-active:focus-visible,
+.model-center-tab-btn[data-state='active'],
+.model-center-tab-btn[data-state='active']:focus-visible {
+  outline: none;
   color: var(--fg);
   border-bottom-color: var(--fg);
 }
@@ -91,9 +100,12 @@
   gap: 8px;
 }
 
-.model-defaults-panel .composer-model-button:hover:not(:disabled) {
+.model-defaults-panel .composer-model-button:hover:not(:disabled),
+.model-defaults-panel .composer-model-button:focus-visible:not(:disabled) {
+  outline: none;
   border-color: var(--border-strong);
   background: var(--bg-subtle);
+  box-shadow: none;
 }
 
 .model-defaults-panel .composer-model-button .composer-model-label {
@@ -219,9 +231,13 @@
 }
 
 .mchip:not(.on):hover:not(:disabled),
-.model-drawer-tag:not(.on):hover:not(:disabled) {
+.mchip:not(.on):focus-visible:not(:disabled),
+.model-drawer-tag:not(.on):hover:not(:disabled),
+.model-drawer-tag:not(.on):focus-visible:not(:disabled) {
+  outline: none;
   color: var(--fg);
   border-color: var(--fg-muted);
+  box-shadow: none;
 }
 
 .mchip:active,
@@ -232,13 +248,19 @@
 .mchip.on,
 .model-drawer-tag.on,
 .mchip.on:hover,
+.mchip.on:focus-visible,
 .model-drawer-tag.on:hover,
+.model-drawer-tag.on:focus-visible,
 .mchip.on:hover:not(:disabled),
-.model-drawer-tag.on:hover:not(:disabled) {
+.mchip.on:focus-visible:not(:disabled),
+.model-drawer-tag.on:hover:not(:disabled),
+.model-drawer-tag.on:focus-visible:not(:disabled) {
+  outline: none;
   color: var(--accent);
   background: var(--accent-bg);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   font-weight: 400;
+  box-shadow: none;
 }
 
 .mchip.pick,
@@ -284,9 +306,15 @@
 .mchip:hover .badge,
 .mchip:hover .mchip-tag,
 .mchip:hover .mtell,
+.mchip:focus-visible .badge,
+.mchip:focus-visible .mchip-tag,
+.mchip:focus-visible .mtell,
 .mchip.on:hover .badge,
 .mchip.on:hover .mchip-tag,
-.mchip.on:hover .mtell {
+.mchip.on:hover .mtell,
+.mchip.on:focus-visible .badge,
+.mchip.on:focus-visible .mchip-tag,
+.mchip.on:focus-visible .mtell {
   display: inline-flex;
   align-items: center;
   margin: 0 0 0 2px;
@@ -321,8 +349,11 @@
   transition: background 120ms, color 120ms, border-color 120ms;
 }
 
-.mchips-fold:hover {
+.mchips-fold:hover,
+.mchips-fold:focus-visible {
+  outline: none;
   color: var(--fg);
   background: var(--bg-subtle);
   border-color: var(--fg-muted);
+  box-shadow: none;
 }
