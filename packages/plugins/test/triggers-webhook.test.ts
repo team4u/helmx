@@ -1306,3 +1306,43 @@ test('webhook_update：读取请求体期间更新端点换代 rev → 在途旧
     rmSync(h.dataDir, { recursive: true, force: true })
   }
 })
+
+test('webhook_delete：doc.flush() 失败回滚元数据且保留 secret（不误报 webhook_delete_secret_failed）', { timeout: 60_000 }, async () => {
+  const h = await makeHarness()
+  const secret = 'whsec-rollback-secret'
+  try {
+    await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', {
+      id: 'del-rollback',
+      secret,
+      description: 'keep me on flush fail',
+    })
+
+    const prevFlush = h.docs.flush.bind(h.docs)
+    h.docs.flush = async () => {
+      throw new HelmxError('store_flush_failed', 'flush failed during delete', 500)
+    }
+    await rejectsCode(
+      h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_delete', { id: 'del-rollback' }),
+      'store_flush_failed',
+      500,
+    )
+    h.docs.flush = prevFlush
+
+    const listed = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {})) as {
+      webhooks: Array<{ id: string; description?: string }>
+    }
+    assert.equal(listed.webhooks.length, 1)
+    assert.equal(listed.webhooks[0]?.id, 'del-rollback')
+    assert.ok(
+      h.backend.secretsStore.has(`${TRIGGERS_PLUGIN_ID}:${webhookSecretKey('del-rollback')}`),
+      'flush 失败时 secret 不得被提前删除',
+    )
+
+    const res = await callWebhookRoute(h.host, 'del-rollback', 'still active', secret)
+    assert.equal(res.status, 202)
+    assert.equal(h.backend.dispatched.length, 1)
+  } finally {
+    await h.host.dispose()
+    rmSync(h.dataDir, { recursive: true, force: true })
+  }
+})

@@ -45,6 +45,8 @@ import {
   type SkillSummary,
 } from '@helmx/protocol'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
+import { errorMessageOf } from '../shared-helpers.js'
+import { isPathWithin, readFileBounded, type BoundedReadFailure } from './bounded-file-reader.js'
 
 /** 节点技能库在工作区内的相对目录（POSIX 分隔符；路径合成按 cwd 形状选规则）。 */
 export const NODE_SKILLS_RELATIVE_DIR = '.helmx/skills'
@@ -168,15 +170,6 @@ function errorCodeOf(err: unknown): string {
   return err instanceof HelmxError ? err.code : 'unknown'
 }
 
-function errorMessageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
-
-/** 目录与缺失（含 is_directory）属常态；其余错误显式不可读。 */
-function isAbsentFileError(error: { code: string; message: string }): boolean {
-  return error.code === 'not_found' || error.code === 'is_directory' || error.message.includes('EISDIR')
-}
-
 /** 根目录不存在或路径中存在非目录组件属常态空，其余错误显式不可读。 */
 function isAbsentRootError(error: { code: string; message: string }): boolean {
   return (
@@ -195,16 +188,6 @@ function joinUnderCwd(cwd: string, ...segments: string[]): string {
 /** 规范化目录去重键（Windows 下按大小写折叠，避免主目录作 cwd 时重复扫描）。 */
 function rootDedupKey(realRoot: string): string {
   return targetPathShape(realRoot) === 'win32' ? realRoot.toLowerCase() : realRoot
-}
-
-/** 校验 target 词法上位于 root 目录树内（防中间软链越出技能目录）。 */
-function isPathWithin(target: string, root: string): boolean {
-  const shape = targetPathShape(root)
-  const normTarget = shape === 'win32' ? target.toLowerCase() : target
-  const normRoot = shape === 'win32' ? root.toLowerCase() : root
-  const sep = shape === 'win32' ? '\\' : '/'
-  const prefix = normRoot.endsWith(sep) ? normRoot : normRoot + sep
-  return normTarget === normRoot || normTarget.startsWith(prefix)
 }
 
 /**
@@ -227,9 +210,39 @@ function resolveNodeSkillRoots(
   return roots
 }
 
+function formatNodeFileFailure(
+  safePath: string,
+  failure: BoundedReadFailure,
+  redact: (text: string) => string,
+): string {
+  switch (failure.stage) {
+    case 'canonical':
+      return `解析 ${safePath} 真实路径失败（${failure.code}）：${redact(failure.message)}`
+    case 'outside_dir':
+      return `${safePath} 解析到技能目录之外，拒绝读取`
+    case 'open':
+    case 'read':
+      return `读取 ${safePath} 失败（${failure.code}）：${redact(failure.message)}`
+    case 'info':
+      return `读取 ${safePath} 元信息失败（${failure.code}）：${redact(failure.message)}`
+    case 'after_info':
+      return `读取 ${safePath} 后复核元信息失败（${failure.code}）：${redact(failure.message)}`
+    case 'not_regular_file':
+      return `${safePath} 在打开后不是普通文件（kind=${failure.fileKind}），拒绝读取`
+    case 'size_exceeded':
+      return `${safePath} 为 ${failure.size} 字节，超过 ${failure.maxBytes} 字节读取上限，正文未读取`
+    case 'read_exceeded':
+      return `${safePath} 读取到 ${failure.bytesRead} 字节，超过 ${failure.maxBytes} 字节上限，正文不采用`
+    case 'file_changed':
+      return `${safePath} 读取期间发生变化（size ${failure.beforeSize} -> ${failure.afterSize}），不采用可能不完整的快照`
+    case 'size_mismatch':
+      return `${safePath} 实读 ${failure.bytesRead} 字节与稳定大小 ${failure.stableSize} 不一致，不采用可能不完整的快照`
+  }
+}
+
 /**
  * 有界安全读取节点上的一个文件（local 与 remote ExecutionEnv 共用同一契约，
- * 均在 BACKGROUND_CONTEXT 下调用；同 agents-md 的读取纪律，见模块头注释）。
+ * 均在 BACKGROUND_CONTEXT 下调用；同 agents-md 的读取纪律）。
  */
 async function readNodeFileBounded(
   env: ExecutionEnv,
@@ -238,69 +251,15 @@ async function readNodeFileBounded(
   withinDir?: string,
 ): Promise<NodeFileRead> {
   const safePath = redact(path)
-  const canonical = await env.canonicalPath(path, BACKGROUND_CONTEXT)
-  if (!canonical.ok) {
-    if (isAbsentFileError(canonical.error)) return { kind: 'absent' }
-    return {
-      kind: 'refused',
-      reason: `解析 ${safePath} 真实路径失败（${canonical.error.code}）：${redact(canonical.error.message)}`,
-    }
+  const read = await readFileBounded(env, path, {
+    maxBytes: MAX_NODE_SKILL_FILE_BYTES,
+    ...(withinDir !== undefined ? { withinDir } : {}),
+    decoder: NODE_SKILL_UTF8_DECODER,
+  })
+  if (read.kind === 'refused') {
+    return { kind: 'refused', reason: formatNodeFileFailure(safePath, read.failure, redact) }
   }
-  const realPath = canonical.value
-  if (withinDir !== undefined && !isPathWithin(realPath, withinDir)) {
-    return {
-      kind: 'refused',
-      reason: `${safePath} 解析到技能目录之外，拒绝读取`,
-    }
-  }
-
-  const openedR = await env.openBinaryReader(realPath, { noFollow: true }, BACKGROUND_CONTEXT)
-  if (!openedR.ok) {
-    // 打开失败即止步：绝无 readTextFile 等无界回退。
-    if (isAbsentFileError(openedR.error)) return { kind: 'absent' }
-    return {
-      kind: 'refused',
-      reason: `读取 ${safePath} 失败（${openedR.error.code}）：${redact(openedR.error.message)}`,
-    }
-  }
-  const reader = openedR.value
-  try {
-    const infoR = await reader.info(BACKGROUND_CONTEXT)
-    if (!infoR.ok) {
-      return { kind: 'refused', reason: `读取 ${safePath} 元信息失败（${infoR.error.code}）：${redact(infoR.error.message)}` }
-    }
-    const info = infoR.value
-    if (info.kind !== 'file') {
-      return { kind: 'refused', reason: `${safePath} 在打开后不是普通文件（kind=${info.kind}），拒绝读取` }
-    }
-    if (info.size > MAX_NODE_SKILL_FILE_BYTES) {
-      return { kind: 'refused', reason: `${safePath} 为 ${info.size} 字节，超过 ${MAX_NODE_SKILL_FILE_BYTES} 字节读取上限，正文未读取` }
-    }
-
-    const readR = await reader.read(0, MAX_NODE_SKILL_FILE_BYTES + 1, BACKGROUND_CONTEXT)
-    if (!readR.ok) {
-      return { kind: 'refused', reason: `读取 ${safePath} 失败（${readR.error.code}）：${redact(readR.error.message)}` }
-    }
-    const bytes = readR.value
-    if (bytes.byteLength > MAX_NODE_SKILL_FILE_BYTES) {
-      return { kind: 'refused', reason: `${safePath} 读取到 ${bytes.byteLength} 字节，超过 ${MAX_NODE_SKILL_FILE_BYTES} 字节上限，正文不采用` }
-    }
-
-    const afterR = await reader.info(BACKGROUND_CONTEXT)
-    if (!afterR.ok) {
-      return { kind: 'refused', reason: `读取 ${safePath} 后复核元信息失败（${afterR.error.code}）：${redact(afterR.error.message)}` }
-    }
-    const after = afterR.value
-    if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) {
-      return { kind: 'refused', reason: `${safePath} 读取期间发生变化（size ${info.size} -> ${after.size}），不采用可能不完整的快照` }
-    }
-    if (bytes.byteLength !== after.size) {
-      return { kind: 'refused', reason: `${safePath} 实读 ${bytes.byteLength} 字节与稳定大小 ${after.size} 不一致，不采用可能不完整的快照` }
-    }
-    return { kind: 'content', text: NODE_SKILL_UTF8_DECODER.decode(bytes) }
-  } finally {
-    await reader.close(BACKGROUND_CONTEXT)
-  }
+  return read
 }
 
 interface ReferenceScanState {

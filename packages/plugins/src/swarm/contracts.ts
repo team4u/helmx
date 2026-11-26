@@ -304,20 +304,6 @@ export const groupNotFoundError = (groupId: string): HelmxError =>
 export const groupClosedError = (groupId: string, detail = '已结单'): HelmxError =>
   swarmError('swarm_group_closed', `协作组 '${groupId}' ${detail}`, 409, { groupId })
 
-export function createKeyedQueue(): { enqueue: <T>(key: string, fn: () => Promise<T>) => Promise<T>; clear: () => void } {
-  const chains = new Map<string, Promise<unknown>>()
-  return {
-    enqueue<T>(key: string, fn: () => Promise<T>): Promise<T> {
-      const task = (chains.get(key) ?? Promise.resolve()).then(fn, fn)
-      const settled = task.then(() => undefined, () => undefined)
-      chains.set(key, settled)
-      void settled.finally(() => { if (chains.get(key) === settled) chains.delete(key) })
-      return task
-    },
-    clear: () => chains.clear(),
-  }
-}
-
 export async function setConversationTags(
   ctx: HelmxPluginContext,
   conv: Pick<ConversationSummary, 'id' | 'tags'>,
@@ -364,11 +350,6 @@ export function asConversationUpsertEvent(payload: unknown): { id: number; statu
   const c = payload['conversation']
   if (!isJsonObject(c) || !isPosIntId(c['id']) || typeof c['status'] !== 'string' || !isFiniteTime(c['updatedAt'])) return undefined
   return { id: c['id'], status: c['status'], updatedAt: c['updatedAt'] }
-}
-
-export function asConversationDeletedEvent(payload: unknown): number | undefined {
-  if (!isJsonObject(payload) || payload['type'] !== 'conversation.deleted') return undefined
-  return isPosIntId(payload['conversationId']) ? payload['conversationId'] : undefined
 }
 
 export function assertMemberName(value: unknown): string {

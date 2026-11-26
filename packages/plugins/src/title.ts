@@ -1,13 +1,18 @@
 /**
  * builtin:title: silent first-turn conversation titling + `/title` on-demand refresh command.
  */
-import { HelmxError, type ConversationSummary, type PluginDefinition } from '@helmx/protocol'
+import { HelmxError, type PluginDefinition } from '@helmx/protocol'
+import {
+  asDeletedConversationId,
+  errorMessageOf,
+  getConversationOrUndefined,
+  resolveTargetConversationId,
+} from './shared-helpers.js'
 import {
   TITLE_ACTION_GENERATE,
   TITLE_COMMAND_ID,
   TITLE_COMMAND_SLASH,
   TITLE_PLUGIN_ID,
-  asTitleDeletedConversationId,
   type TitleGenerateResult,
   type TitlePluginConfig,
   type TitlePluginOptions,
@@ -27,7 +32,6 @@ export {
   TITLE_COMMAND_ID,
   TITLE_COMMAND_SLASH,
   TITLE_PLUGIN_ID,
-  asTitleDeletedConversationId,
   type TitleGenerateResult,
   type TitlePluginConfig,
   type TitlePluginOptions,
@@ -88,18 +92,6 @@ async function raceWithAbort<T>(
     return await Promise.race([promise, aborted])
   } finally {
     if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
-  }
-}
-
-function getConversationOrUndefined(
-  read: (id: number) => ConversationSummary,
-  id: number,
-): ConversationSummary | undefined {
-  try {
-    return read(id)
-  } catch (err) {
-    if (err instanceof HelmxError && err.status === 404) return undefined
-    throw err
   }
 }
 
@@ -221,7 +213,7 @@ export function createTitlePlugin(options: TitlePluginOptions = {}): PluginDefin
 
         const latest =
           mode === 'auto'
-            ? getConversationOrUndefined((id) => ctx.host.getConversation(id), conversationId)
+            ? getConversationOrUndefined(ctx.host, conversationId)
             : ctx.host.getConversation(conversationId)
         if (latest === undefined) return undefined
 
@@ -284,7 +276,7 @@ export function createTitlePlugin(options: TitlePluginOptions = {}): PluginDefin
       })
 
       ctx.host.onEvent('conversation.deleted', (payload) => {
-        const conversationId = asTitleDeletedConversationId(payload)
+        const conversationId = asDeletedConversationId(payload)
         if (conversationId !== undefined) {
           abortConversationTasks(conversationId)
         }
@@ -346,26 +338,7 @@ export function createTitlePlugin(options: TitlePluginOptions = {}): PluginDefin
           additionalProperties: false,
         },
         handler(input, context) {
-          if (
-            input.conversationId !== undefined &&
-            context.conversationId !== undefined &&
-            input.conversationId !== context.conversationId
-          ) {
-            throw new HelmxError(
-              'validation_error',
-              `Conflicting conversationId: input ${input.conversationId} does not match context ${context.conversationId}`,
-              400,
-              { inputConversationId: input.conversationId, contextConversationId: context.conversationId },
-            )
-          }
-          const targetId = input.conversationId ?? context.conversationId
-          if (targetId === undefined) {
-            throw new HelmxError(
-              'validation_error',
-              'Missing conversation target: provide conversationId or run inside a conversation (--current)',
-              400,
-            )
-          }
+          const targetId = resolveTargetConversationId(input.conversationId, context)
           if (stopping) {
             throw new HelmxError('plugin_stopping', 'builtin:title is stopping', 409, { conversationId: targetId })
           }
@@ -397,7 +370,7 @@ export function createTitlePlugin(options: TitlePluginOptions = {}): PluginDefin
               if (err instanceof HelmxError) throw err
               throw new HelmxError(
                 'title_generation_failed',
-                ctx.host.redact(err instanceof Error ? err.message : String(err)).slice(0, 300),
+                ctx.host.redact(errorMessageOf(err)).slice(0, 300),
                 502,
                 { conversationId: targetId },
               )

@@ -1,11 +1,8 @@
 /*
- * builtin:json-render plugin styles (compiled into the preserved __helmxClientCss export; the host manages injection and reclamation).
- * Generic structure reuses host design-system primitives (.callout / .kv-list / .helmx-table-wrap /
- * .helmx-table / .stack-row, etc.) and design tokens; jr-* keeps only this plugin's private DSL layout
- * and specific styles (user-select exemption, card rhythm, metric-card grid), reclaimed wholesale when the plugin is disabled.
+ * builtin:json-render plugin styles (compiled into __helmxClientCss; reclaimed wholesale when disabled).
  */
 
-/* DSL Markdown and table cells allow free selection for copying (exemption from the chat-stream global user-select: none) */
+/* DSL Markdown and table cells allow free text selection (exemption from chat-stream user-select: none). */
 .jr-markdown {
   user-select: text;
 }
@@ -14,6 +11,86 @@
   user-select: text;
 }
 
+/* Self-contained table styles so .jr-table resists host .msg-ai-body table rules without :not(.jr-table). */
+.jr-table,
+.msg-ai-body .jr-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  table-layout: auto;
+  border: none;
+  background: transparent;
+}
+
+.jr-table th,
+.msg-ai-body .jr-table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.jr-table td,
+.msg-ai-body .jr-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  vertical-align: middle;
+  font-size: 12.5px;
+}
+
+.jr-table tr:last-child td,
+.msg-ai-body .jr-table tr:last-child td {
+  border-bottom: none;
+}
+
+.jr-table tr:hover td,
+.msg-ai-body .jr-table tr:hover td {
+  background: var(--bg-hover);
+}
+
+.jr-table th.jr-table-actions-col,
+.jr-table td.jr-table-actions-cell,
+.msg-ai-body .jr-table th.jr-table-actions-col,
+.msg-ai-body .jr-table td.jr-table-actions-cell {
+  text-align: right;
+}
+
+.jr-table td.jr-table-empty,
+.msg-ai-body .jr-table td.jr-table-empty {
+  color: var(--fg-muted);
+}
+
+/* Text primitive variants */
+.jr-text-title {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.jr-text-muted {
+  color: var(--fg-muted);
+  font-size: 12.5px;
+}
+
+.jr-text-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.jr-text-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Metrics */
 .jr-metric-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -39,6 +116,144 @@
   font-size: 18px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.jr-metric-tone-ok {
+  color: var(--ok);
+}
+
+.jr-metric-tone-warn {
+  color: var(--warn);
+}
+
+.jr-metric-tone-err {
+  color: var(--err);
+}
+
+.jr-metric-tone-accent {
+  color: var(--accent);
+}
+
+/* Steps */
+.jr-step-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.jr-step-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.jr-step-title {
+  font-size: 12.5px;
+}
+
+.jr-step-detail {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+/* BarList */
+.jr-bar-list {
+  gap: 6px;
+}
+
+.jr-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.jr-bar-label {
+  width: 120px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jr-bar-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+
+.jr-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.jr-bar-value {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  min-width: 40px;
+  text-align: right;
+}
+
+/* Accordion */
+.jr-accordion {
+  padding: 0;
+  overflow: hidden;
+}
+
+.jr-accordion-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.jr-accordion-body {
+  padding: 2px 12px 12px 31px;
+}
+
+/* Interactive inputs & tabs */
+.jr-secret-tag {
+  color: var(--warn);
+}
+
+.jr-input-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.jr-btn-shrink0 {
+  flex-shrink: 0;
+}
+
+.jr-submitting-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.jr-tabs {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.jr-tabs-panel {
+  padding: 12px 4px;
 }
 
 /* Inline card container inside chat code blocks (follows the host code-block spacing rhythm). */

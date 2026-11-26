@@ -1,10 +1,15 @@
 /** builtin:token-speed: real-time decoding speed (tok/s) read-only composer status plugin. */
-import { COMPOSER_STATUS_SLOT, HelmxError, type PluginDefinition } from '@helmx/protocol'
+import { COMPOSER_STATUS_SLOT, type PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
+import {
+  asConversationEntryEvent,
+  asDeletedConversationId,
+  ignoreConversationNotFound,
+} from './shared-helpers.js'
 import {
   CONTEXT_INVALIDATION_ENTRY_KINDS, DEFAULT_SLIDING_WINDOW_MS, DOC_WRITE_INTERVAL_MS, MAX_SLIDING_WINDOW_MS,
   MIN_SLIDING_WINDOW_MS, TOKEN_SPEED_DOC, TOKEN_SPEED_PLUGIN_ID, asAssistantCompletion,
-  asConversationDeletedId, asConversationEntryEnvelope, asConversationLiveFrame, type TokenSpeedStatus,
+  asConversationLiveFrame, type TokenSpeedStatus,
 } from './token-speed/contracts.js'
 import { ConversationTokenSpeedTracker } from './token-speed/tracker.js'
 
@@ -78,24 +83,22 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
         }
       })
       const cancelTimer = (s: ConvState): void => { if (s.timer !== undefined) clearTimeout(s.timer); s.timer = undefined; s.pending = undefined }
-      const ignoreNotFound = (fn: () => void): boolean => {
-        try {
-          fn()
+      const writeSpeedDoc = (id: number, value: TokenSpeedStatus | null): boolean =>
+        ignoreConversationNotFound(() => {
+          speedDoc.set(id, value)
           return true
-        } catch (err) {
-          if (err instanceof HelmxError && err.status === 404) return false
-          throw err
-        }
-      }
+        }) ?? false
 
       const publish = (id: number, status: TokenSpeedStatus | null, force: boolean, now: number): void => {
         const s = states.get(id)
         const prev = s?.lastPublished ?? null
-        const throttle =
+        const throttleMs =
           !force && s && status && prev && prev.phase === status.phase &&
           !(prev.tps === undefined && status.tps !== undefined) &&
           s.lastWriteAt !== undefined && now >= s.lastWriteAt && now - s.lastWriteAt < DOC_WRITE_INTERVAL_MS
-        if (throttle) {
+            ? Math.max(1, DOC_WRITE_INTERVAL_MS - (now - s.lastWriteAt))
+            : undefined
+        if (throttleMs !== undefined && s !== undefined && status !== null) {
           s.pending = status
           if (s.timer === undefined) {
             const timer = setTimeout(() => {
@@ -105,10 +108,10 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
               if (!active || pending === undefined || states.get(id) !== s) return
               s.lastWriteAt = nowOf(clock())
               s.lastPublished = pending
-              if (!ignoreNotFound(() => speedDoc.set(id, pending)) && states.get(id) === s) {
+              if (!writeSpeedDoc(id, pending) && states.get(id) === s) {
                 states.delete(id)
               }
-            }, Math.max(1, DOC_WRITE_INTERVAL_MS - (now - s.lastWriteAt!)))
+            }, throttleMs)
             timer.unref?.()
             s.timer = timer
           }
@@ -119,7 +122,7 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
           s.lastWriteAt = now
           s.lastPublished = status
         }
-        if (!ignoreNotFound(() => speedDoc.set(id, status)) && s && states.get(id) === s) {
+        if (!writeSpeedDoc(id, status) && s && states.get(id) === s) {
           states.delete(id)
         }
       }
@@ -127,7 +130,7 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
       const clearConversation = (id: number): void => {
         const s = states.get(id)
         if (s) { cancelTimer(s); states.delete(id) }
-        ignoreNotFound(() => speedDoc.delete(id))
+        ignoreConversationNotFound(() => { speedDoc.delete(id) })
       }
 
       ctx.host.onEvent('conversation.live', (raw) => {
@@ -145,7 +148,7 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
 
       ctx.host.onEvent('conversation.entry', (raw) => {
         if (!active) return
-        const env = asConversationEntryEnvelope(raw)
+        const env = asConversationEntryEvent(raw)
         if (!env) return
         if (CONTEXT_INVALIDATION_ENTRY_KINDS.has(env.kind)) { clearConversation(env.conversationId); return }
         if (env.kind !== 'pi.assistant') return
@@ -173,12 +176,12 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
         const now = nowOf(payload.settledAt)
         const terminal = s.tracker.settle(now) ?? null
         states.delete(id)
-        ignoreNotFound(() => speedDoc.set(id, terminal))
+        ignoreConversationNotFound(() => { speedDoc.set(id, terminal) })
       })
 
       ctx.host.onEvent('conversation.deleted', (raw) => {
         if (!active) return
-        const id = asConversationDeletedId(raw)
+        const id = asDeletedConversationId(raw)
         if (id !== undefined) clearConversation(id)
       })
 

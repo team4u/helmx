@@ -1,5 +1,4 @@
-/** builtin:title public contracts, constants, and boundary event guards. */
-import { isJsonObject } from '@helmx/protocol'
+/** builtin:title public contracts and constants. */
 
 export const TITLE_PLUGIN_ID = 'builtin:title' as const
 export const TITLE_ACTION_GENERATE = 'generate' as const
@@ -21,11 +20,3 @@ export interface TitleGenerateResult {
 export interface TitlePluginOptions {
   modelTimeoutMs?: number
 }
-
-const isPositiveInt = (v: unknown): v is number =>
-  typeof v === 'number' && Number.isInteger(v) && v > 0
-
-export const asTitleDeletedConversationId = (payload: unknown): number | undefined =>
-  isJsonObject(payload) && payload.type === 'conversation.deleted' && isPositiveInt(payload.conversationId)
-    ? payload.conversationId
-    : undefined

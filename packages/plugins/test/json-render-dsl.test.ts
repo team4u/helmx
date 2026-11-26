@@ -668,6 +668,58 @@ test('spec-primitives: 原型链查表拦截、组件切换 Hook 数量稳定，
   assert.equal(dispatched.length, 1)
   const resolvedBar = resolveSpecAction(dispatched[0]!.rawAction, dispatched[0]!.scope, 999)
   assert.equal(resolvedBar.kind, 'invalid', 'ActionBar 不得提前求值把缺失 target 变成 undefined 误回退到默认会话 999')
+
+  // 5) P0 UI fix: useRemoteSyncedState re-syncs when subsequent remote SSE updates arrive after local edits,
+  //    while preserving local uncommitted edits across unrelated renders when remote is unchanged;
+  //    CheckboxGroup memoizes Set so freshly allocated arrays with equal elements preserve user selection.
+  const syncedSpec = normalizeSpec({
+    component: 'Stack',
+    children: [
+      { component: 'TextInput', label: 'Note', value: '{$data.note}' },
+      { component: 'Select', label: 'Mode', value: '{$data.mode}', options: [{ label: 'A', value: 'a' }, { label: 'B', value: 'b' }, { label: 'C', value: 'c' }] },
+      { component: 'CheckboxGroup', label: 'Tags', value: '{$data.tags}', options: [{ label: 'X', value: 'x' }, { label: 'Y', value: 'y' }, { label: 'Z', value: 'z' }] },
+    ],
+  })
+  assert.ok(syncedSpec.root !== null)
+  const renderWithData = (data: Record<string, unknown>) => {
+    React.act(() => {
+      root.render(React.createElement(SpecNodeList, { nodes: [syncedSpec.root!], ctx: makeCtx({ $data: data }) }))
+    })
+  }
+
+  renderWithData({ note: 'v1', mode: 'a', tags: ['x'] })
+  const inputEl = container.querySelector('input[type="text"]') as HTMLInputElement | null
+  assert.ok(inputEl !== null)
+  assert.equal(inputEl.value, 'v1')
+  const xBox = () => container.querySelectorAll('[role="checkbox"]')[0] as HTMLButtonElement
+  const yBox = () => container.querySelectorAll('[role="checkbox"]')[1] as HTMLButtonElement
+  assert.equal(xBox().getAttribute('aria-checked'), 'true')
+  assert.equal(yBox().getAttribute('aria-checked'), 'false')
+
+  // Simulate user local edits to TextInput and CheckboxGroup
+  const setNativeInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+  React.act(() => {
+    setNativeInputValue.call(inputEl, 'local-draft')
+    inputEl.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  React.act(() => {
+    yBox().click()
+  })
+  assert.equal(inputEl.value, 'local-draft')
+  assert.equal(yBox().getAttribute('aria-checked'), 'true')
+
+  // Unrelated re-render with semantically identical remote data (fresh array instance ['x']):
+  // uncommitted local edits MUST NOT be overwritten!
+  renderWithData({ note: 'v1', mode: 'a', tags: ['x'], unrelatedTick: 2 })
+  assert.equal(inputEl.value, 'local-draft', 'unrelated re-render must preserve uncommitted TextInput draft')
+  assert.equal(yBox().getAttribute('aria-checked'), 'true', 'freshly allocated identical tags array must preserve local checkbox edit')
+
+  // Subsequent remote SSE push with changed values: MUST re-sync cleanly instead of sticking on dirty=true!
+  renderWithData({ note: 'v2-from-sse', mode: 'b', tags: ['z'] })
+  assert.equal(inputEl.value, 'v2-from-sse', 'subsequent SSE remote change must re-sync TextInput after local edit')
+  assert.equal(xBox().getAttribute('aria-checked'), 'false', 'subsequent SSE remote change must re-sync CheckboxGroup')
+  const zBox = container.querySelectorAll('[role="checkbox"]')[2] as HTMLButtonElement
+  assert.equal(zBox.getAttribute('aria-checked'), 'true', 'subsequent SSE remote change must check new remote tag z')
 })
 
 // ---------------------------------------------------------------------------

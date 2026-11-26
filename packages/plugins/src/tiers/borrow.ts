@@ -29,6 +29,14 @@ import {
   type TierThinkingLevel,
   type TiersStateDoc,
 } from './contracts.js'
+import {
+  createKeyedQueue,
+  errorMessageOf,
+  getConversationOrUndefined,
+  ignoreConversationNotFound,
+  isConversationNotFoundError,
+  listAllKvEntries,
+} from '../shared-helpers.js'
 
 const VALID_THINKING_LEVELS: ReadonlySet<string> = new Set<string>(MODEL_THINKING_LEVELS)
 
@@ -75,10 +83,6 @@ export interface TierBorrowManager {
     input: SwitchModelToolInput,
     context: PluginToolContext,
   ): Promise<PluginToolResultEnvelope>
-}
-
-function errorMessageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
 }
 
 function formatShortModelLabel(ref: string): string {
@@ -286,29 +290,287 @@ function isConversationBusy(conv: ConversationSummary): boolean {
   )
 }
 
-function getConversationOrUndefined(
-  read: (id: number) => ConversationSummary,
-  id: number,
-): ConversationSummary | undefined {
-  try {
-    return read(id)
-  } catch (err) {
-    if (err instanceof HelmxError && (err.status === 404 || err.code === 'not_found')) {
-      return undefined
-    }
-    throw err
+interface BorrowStore {
+  get(conversationId: number): TierBorrowRecord | undefined
+  listAllRecords(): TierBorrowRecord[]
+  syncSessionDoc(conversationId: number, record: TierBorrowRecord | undefined): void
+  saveRecord(conversationId: number, record: TierBorrowRecord | undefined): Promise<void>
+}
+
+interface ActivatedBorrowOutcome {
+  fromModel: string
+  updated: ConversationSummary
+  resolved: ResolvedBorrowTarget
+  changed: boolean
+  restoreAfterTurn: boolean
+  view: TierBorrowSessionView | null
+}
+
+function createBorrowStore(
+  kv: PluginKvHandle<TierBorrowRecord>,
+  borrowDoc: PluginSessionDocHandle<TierBorrowSessionView | null>,
+): BorrowStore {
+  const kvKey = (conversationId: number): string => String(conversationId)
+
+  const syncSessionDoc = (conversationId: number, record: TierBorrowRecord | undefined): void => {
+    ignoreConversationNotFound(() => {
+      if (record === undefined) {
+        borrowDoc.delete(conversationId)
+      } else {
+        borrowDoc.set(conversationId, toTierBorrowSessionView(record))
+      }
+    })
+  }
+
+  return {
+    get: (conversationId) => kv.get(kvKey(conversationId)),
+    listAllRecords: () => listAllKvEntries(kv).map((entry) => entry.value),
+    syncSessionDoc,
+    async saveRecord(conversationId, record) {
+      const key = kvKey(conversationId)
+      const prev = kv.get(key)
+      if (record === undefined) {
+        kv.delete(key)
+      } else {
+        kv.set(key, record)
+      }
+      try {
+        await kv.flush()
+      } catch (err) {
+        if (prev !== undefined) kv.set(key, prev)
+        else kv.delete(key)
+        throw err
+      }
+      syncSessionDoc(conversationId, record)
+    },
   }
 }
 
-function ignoreConversationNotFound(fn: () => void): void {
+function requireEligibleConversation(ctx: HelmxPluginContext, conversationId: number): ConversationSummary {
+  const conv = ctx.host.getConversation(conversationId)
+  if (!isTiersBorrowEligible(conv)) {
+    throw new HelmxError(
+      'tiers_borrow_unsupported_conversation',
+      `One-turn model borrow is only supported on top-level human conversations (conversation ${conv.id} is not eligible)`,
+      400,
+      { conversationId: conv.id },
+    )
+  }
+  return conv
+}
+
+function assertNotBusyForBorrow(conv: ConversationSummary, message: string): void {
+  if (isConversationBusy(conv)) {
+    throw new HelmxError('conversation_busy', message, 409, { conversationId: conv.id })
+  }
+}
+
+async function restoreActiveBorrow(
+  ctx: HelmxPluginContext,
+  store: BorrowStore,
+  conversationId: number,
+  isStopping: () => boolean,
+): Promise<void> {
+  if (isStopping()) return
+  const record = store.get(conversationId)
+  if (record === undefined || record.phase !== 'active') return
+
+  const conv = getConversationOrUndefined(ctx.host, conversationId)
+  if (conv === undefined) {
+    await store.saveRecord(conversationId, undefined)
+    return
+  }
+  // Invariant 1: never restore while a followUp/working turn or pending AskDoc is still active.
+  if (isConversationBusy(conv)) {
+    store.syncSessionDoc(conversationId, record)
+    return
+  }
+  // Invariant 2 (CAS model snapshot guard): clear only the record if restore is disabled or model changed externally.
+  if (!record.restoreAfterTurn || conv.modelOverride !== record.appliedModelOverride) {
+    await store.saveRecord(conversationId, undefined)
+    return
+  }
+
+  const patch: ConversationPatch = {
+    model: record.previousModelOverride ?? '',
+  }
+  const thinkingMatches = conv.thinkingLevelOverride === record.appliedThinkingLevelOverride
+  if (thinkingMatches && (record.effortChanged || record.previousThinkingLevelOverride !== undefined)) {
+    patch.thinkingLevel = record.previousThinkingLevelOverride ?? ''
+  }
+
   try {
-    fn()
+    await ctx.host.updateConversation(conversationId, patch)
   } catch (err) {
-    if (err instanceof HelmxError && (err.status === 404 || err.code === 'not_found')) {
+    if (isConversationNotFoundError(err)) {
+      await store.saveRecord(conversationId, undefined)
       return
     }
-    throw err
+    // Clear record on unrecoverable baseline errors and surface an honest warning rather than wedging borrow state.
+    await store.saveRecord(conversationId, undefined)
+    await ctx.host.emitEvent('notification', {
+      level: 'warning',
+      title: `Could not restore previous model for conversation #${conversationId}`,
+      body: ctx.host.redact(errorMessageOf(err)),
+      conversationId,
+    })
+    return
   }
+  await store.saveRecord(conversationId, undefined)
+}
+
+async function armConversationBorrow(
+  ctx: HelmxPluginContext,
+  store: BorrowStore,
+  readTiersState: () => TiersStateDoc,
+  isStopping: () => boolean,
+  conversationId: number,
+  targetRef: string,
+  opts: { effort?: string; source: TierBorrowSource },
+): Promise<TierBorrowSessionView> {
+  if (isStopping()) {
+    throw new HelmxError('plugin_stopping', 'builtin:tiers is stopping', 409, { conversationId })
+  }
+  let conv = requireEligibleConversation(ctx, conversationId)
+  assertNotBusyForBorrow(
+    conv,
+    `Conversation #${conversationId} is busy; cannot arm a one-turn model while a turn is active`,
+  )
+  if (store.get(conversationId)?.phase === 'active') {
+    await restoreActiveBorrow(ctx, store, conversationId, isStopping)
+    conv = requireEligibleConversation(ctx, conversationId)
+  }
+  const catalog = await ctx.host.listModels()
+  const resolved = resolveBorrowTarget(targetRef, catalog, readTiersState(), opts.effort)
+  const now = Date.now()
+  const record: TierBorrowRecord = {
+    conversationId: conv.id,
+    phase: 'armed',
+    requestedRef: resolved.requestedRef,
+    targetModel: resolved.targetModel,
+    targetConcreteModel: resolved.targetConcreteModel,
+    targetLabel: resolved.targetLabel,
+    ...(resolved.targetTierId !== undefined ? { targetTierId: resolved.targetTierId } : {}),
+    ...(resolved.effort !== undefined ? { appliedEffort: resolved.effort } : {}),
+    effortChanged: false,
+    restoreAfterTurn: true,
+    source: opts.source,
+    createdAt: now,
+    updatedAt: now,
+  }
+  await store.saveRecord(conversationId, record)
+  return toTierBorrowSessionView(record)
+}
+
+async function activateConversationBorrow(
+  ctx: HelmxPluginContext,
+  store: BorrowStore,
+  readTiersState: () => TiersStateDoc,
+  isStopping: () => boolean,
+  conversationId: number,
+  targetRef: string,
+  opts: {
+    effort?: string
+    source: TierBorrowSource
+    restoreAfterTurn?: boolean
+    allowWhileBusy?: boolean
+  },
+): Promise<ActivatedBorrowOutcome> {
+  if (isStopping()) {
+    throw new HelmxError('plugin_stopping', 'builtin:tiers is stopping', 409, { conversationId })
+  }
+  const conv = requireEligibleConversation(ctx, conversationId)
+  if (opts.allowWhileBusy !== true) {
+    assertNotBusyForBorrow(
+      conv,
+      `Conversation #${conversationId} is busy; cannot switch model for this input`,
+    )
+  }
+  const catalog = await ctx.host.listModels()
+  const resolved = resolveBorrowTarget(targetRef, catalog, readTiersState(), opts.effort)
+
+  const latestConv = requireEligibleConversation(ctx, conversationId)
+  const existing = store.get(conversationId)
+  const fromModel = latestConv.model || latestConv.modelOverride || ''
+  const fromThinking = latestConv.thinkingLevel
+
+  // Invariant 3: preserve original baseline across chained same-turn switches.
+  const keepExistingBaseline = existing !== undefined && existing.phase === 'active'
+  const previousModelOverride = keepExistingBaseline ? existing.previousModelOverride : latestConv.modelOverride
+  const previousThinkingLevelOverride = keepExistingBaseline
+    ? existing.previousThinkingLevelOverride
+    : latestConv.thinkingLevelOverride
+
+  const updated = await ctx.host.updateConversation(conversationId, {
+    model: resolved.targetModel,
+    ...(resolved.effort !== undefined ? { thinkingLevel: resolved.effort } : {}),
+  })
+
+  const changed = updated.model !== fromModel || updated.thinkingLevel !== fromThinking
+  const restoreAfterTurn = opts.restoreAfterTurn !== false
+  if (!restoreAfterTurn) {
+    if (existing !== undefined) {
+      await store.saveRecord(conversationId, undefined)
+    }
+    return { fromModel, updated, resolved, changed, restoreAfterTurn: false, view: null }
+  }
+
+  const appliedModelOverride = updated.modelOverride ?? resolved.targetConcreteModel
+  const appliedThinkingLevelOverride = updated.thinkingLevelOverride
+  const effortChanged = appliedThinkingLevelOverride !== previousThinkingLevelOverride
+  const now = Date.now()
+  const record: TierBorrowRecord = {
+    conversationId,
+    phase: 'active',
+    requestedRef: resolved.requestedRef,
+    targetModel: resolved.targetModel,
+    appliedModelOverride,
+    targetConcreteModel: resolved.targetConcreteModel,
+    targetLabel: resolved.targetLabel,
+    ...(resolved.targetTierId !== undefined ? { targetTierId: resolved.targetTierId } : {}),
+    ...(resolved.effort !== undefined ? { appliedEffort: resolved.effort } : {}),
+    ...(appliedThinkingLevelOverride !== undefined ? { appliedThinkingLevelOverride } : {}),
+    ...(previousModelOverride !== undefined ? { previousModelOverride } : {}),
+    ...(previousThinkingLevelOverride !== undefined ? { previousThinkingLevelOverride } : {}),
+    effortChanged,
+    restoreAfterTurn: true,
+    source: opts.source,
+    createdAt: keepExistingBaseline ? existing.createdAt : now,
+    updatedAt: now,
+  }
+  await store.saveRecord(conversationId, record)
+  return {
+    fromModel,
+    updated,
+    resolved,
+    changed,
+    restoreAfterTurn: true,
+    view: toTierBorrowSessionView(record),
+  }
+}
+
+function formatSwitchModelResult(outcome: ActivatedBorrowOutcome): PluginToolResultEnvelope {
+  const effectiveEffort =
+    outcome.resolved.effort ??
+    (outcome.resolved.targetTierId !== undefined &&
+    outcome.updated.thinkingLevelOverride !== undefined &&
+    VALID_THINKING_LEVELS.has(outcome.updated.thinkingLevelOverride)
+      ? (outcome.updated.thinkingLevelOverride as TierThinkingLevel)
+      : undefined)
+  const presentationMeta: SwitchModelPresentationMeta = {
+    fromModel: outcome.fromModel,
+    toModel: outcome.updated.model || outcome.resolved.targetConcreteModel,
+    toLabel: outcome.resolved.targetLabel,
+    ...(outcome.resolved.targetTierId !== undefined ? { tierId: outcome.resolved.targetTierId } : {}),
+    ...(effectiveEffort !== undefined ? { effort: effectiveEffort } : {}),
+    restoreAfterTurn: outcome.restoreAfterTurn,
+    changed: outcome.changed,
+  }
+  const effortClause = effectiveEffort !== undefined ? ` [effort: ${effectiveEffort}]` : ''
+  const output = outcome.restoreAfterTurn
+    ? `Switched conversation model to ${outcome.resolved.targetLabel} (${presentationMeta.toModel})${effortClause}. Your next reasoning step runs on this model, and the original model will be restored automatically when this turn finishes — continue directly with your response without calling switch_model again to restore.`
+    : `Permanently switched conversation model to ${outcome.resolved.targetLabel} (${presentationMeta.toModel})${effortClause}. Subsequent turns will remain on this model.`
+  return { output, presentationMeta }
 }
 
 export function createTierBorrowManager(deps: {
@@ -320,281 +582,9 @@ export function createTierBorrowManager(deps: {
   const { ctx, kv, borrowDoc, readTiersState } = deps
 
   let stopping = false
-  const convQueues = new Map<number, Promise<unknown>>()
-
-  const kvKey = (conversationId: number): string => String(conversationId)
-
-  const enqueueConversation = <T>(conversationId: number, op: () => Promise<T>): Promise<T> => {
-    const prev = convQueues.get(conversationId) ?? Promise.resolve()
-    const run = prev.then(op, op)
-    const settled = run.then(
-      () => undefined,
-      () => undefined,
-    )
-    convQueues.set(conversationId, settled)
-    void settled.then(() => {
-      if (convQueues.get(conversationId) === settled) {
-        convQueues.delete(conversationId)
-      }
-    })
-    return run
-  }
-
-  const listAllRecords = (): TierBorrowRecord[] => {
-    const records: TierBorrowRecord[] = []
-    let cursor: string | undefined
-    for (;;) {
-      const page = kv.list(cursor !== undefined ? { cursor } : undefined)
-      for (const item of page.items) {
-        records.push(item.value)
-      }
-      if (page.nextCursor === undefined) break
-      cursor = page.nextCursor
-    }
-    return records
-  }
-
-  const syncSessionDoc = (conversationId: number, record: TierBorrowRecord | undefined): void => {
-    if (record === undefined) {
-      ignoreConversationNotFound(() => {
-        borrowDoc.delete(conversationId)
-      })
-    } else {
-      ignoreConversationNotFound(() => {
-        borrowDoc.set(conversationId, toTierBorrowSessionView(record))
-      })
-    }
-  }
-
-  const saveRecord = async (
-    conversationId: number,
-    record: TierBorrowRecord | undefined,
-  ): Promise<void> => {
-    const key = kvKey(conversationId)
-    const prev = kv.get(key)
-    if (record === undefined) {
-      kv.delete(key)
-    } else {
-      kv.set(key, record)
-    }
-    try {
-      await kv.flush()
-    } catch (err) {
-      if (prev !== undefined) kv.set(key, prev)
-      else kv.delete(key)
-      throw err
-    }
-    syncSessionDoc(conversationId, record)
-  }
-
-  const requireEligibleConversation = (conversationId: number): ConversationSummary => {
-    const conv = ctx.host.getConversation(conversationId)
-    if (!isTiersBorrowEligible(conv)) {
-      throw new HelmxError(
-        'tiers_borrow_unsupported_conversation',
-        `One-turn model borrow is only supported on top-level human conversations (conversation ${conv.id} is not eligible)`,
-        400,
-        { conversationId: conv.id },
-      )
-    }
-    return conv
-  }
-
-  const restoreIfIdleUnlocked = async (conversationId: number): Promise<void> => {
-    if (stopping) return
-    const record = kv.get(kvKey(conversationId))
-    if (record === undefined || record.phase !== 'active') return
-
-    const conv = getConversationOrUndefined((id) => ctx.host.getConversation(id), conversationId)
-    if (conv === undefined) {
-      await saveRecord(conversationId, undefined)
-      return
-    }
-    // Invariant 1: never restore while a followUp/working turn or pending AskDoc is still active.
-    if (isConversationBusy(conv)) {
-      syncSessionDoc(conversationId, record)
-      return
-    }
-    if (!record.restoreAfterTurn) {
-      await saveRecord(conversationId, undefined)
-      return
-    }
-
-    // Invariant 2 (CAS model snapshot guard): if the user or another flow (e.g. plan_propose handoff)
-    // changed or cleared the conversation model override while borrowing, clear only the borrow record.
-    if (conv.modelOverride !== record.appliedModelOverride) {
-      await saveRecord(conversationId, undefined)
-      return
-    }
-
-    const patch: ConversationPatch = {
-      model: record.previousModelOverride ?? '',
-    }
-    const thinkingMatches = conv.thinkingLevelOverride === record.appliedThinkingLevelOverride
-    if (thinkingMatches && (record.effortChanged || record.previousThinkingLevelOverride !== undefined)) {
-      patch.thinkingLevel = record.previousThinkingLevelOverride ?? ''
-    }
-
-    try {
-      await ctx.host.updateConversation(conversationId, patch)
-    } catch (err) {
-      if (err instanceof HelmxError && (err.status === 404 || err.code === 'not_found')) {
-        await saveRecord(conversationId, undefined)
-        return
-      }
-      // Clear record on unrecoverable baseline errors (e.g., original model was disabled/removed during turn)
-      // and surface an honest warning rather than wedging the conversation in a permanently active borrow.
-      await saveRecord(conversationId, undefined)
-      await ctx.host.emitEvent('notification', {
-        level: 'warning',
-        title: `Could not restore previous model for conversation #${conversationId}`,
-        body: ctx.host.redact(errorMessageOf(err)),
-        conversationId,
-      })
-      return
-    }
-    await saveRecord(conversationId, undefined)
-  }
-
-  const armBorrowUnlocked = async (
-    conversationId: number,
-    targetRef: string,
-    opts: { effort?: string; source: TierBorrowSource },
-  ): Promise<TierBorrowSessionView> => {
-    if (stopping) {
-      throw new HelmxError('plugin_stopping', 'builtin:tiers is stopping', 409, { conversationId })
-    }
-    let conv = requireEligibleConversation(conversationId)
-    if (isConversationBusy(conv)) {
-      throw new HelmxError(
-        'conversation_busy',
-        `Conversation #${conversationId} is busy; cannot arm a one-turn model while a turn is active`,
-        409,
-        { conversationId },
-      )
-    }
-    const existing = kv.get(kvKey(conversationId))
-    if (existing?.phase === 'active') {
-      await restoreIfIdleUnlocked(conversationId)
-      conv = requireEligibleConversation(conversationId)
-    }
-    const catalog = await ctx.host.listModels()
-    const resolved = resolveBorrowTarget(targetRef, catalog, readTiersState(), opts.effort)
-    const now = Date.now()
-    const record: TierBorrowRecord = {
-      conversationId: conv.id,
-      phase: 'armed',
-      requestedRef: resolved.requestedRef,
-      targetModel: resolved.targetModel,
-      targetConcreteModel: resolved.targetConcreteModel,
-      targetLabel: resolved.targetLabel,
-      ...(resolved.targetTierId !== undefined ? { targetTierId: resolved.targetTierId } : {}),
-      ...(resolved.effort !== undefined ? { appliedEffort: resolved.effort } : {}),
-      effortChanged: false,
-      restoreAfterTurn: true,
-      source: opts.source,
-      createdAt: now,
-      updatedAt: now,
-    }
-    await saveRecord(conversationId, record)
-    return toTierBorrowSessionView(record)
-  }
-
-  const activateBorrowUnlocked = async (
-    conversationId: number,
-    targetRef: string,
-    opts: {
-      effort?: string
-      source: TierBorrowSource
-      restoreAfterTurn?: boolean
-      allowWhileBusy?: boolean
-    },
-  ): Promise<{
-    fromModel: string
-    updated: ConversationSummary
-    resolved: ResolvedBorrowTarget
-    changed: boolean
-    restoreAfterTurn: boolean
-    view: TierBorrowSessionView | null
-  }> => {
-    if (stopping) {
-      throw new HelmxError('plugin_stopping', 'builtin:tiers is stopping', 409, { conversationId })
-    }
-    const conv = requireEligibleConversation(conversationId)
-    if (opts.allowWhileBusy !== true && isConversationBusy(conv)) {
-      throw new HelmxError(
-        'conversation_busy',
-        `Conversation #${conversationId} is busy; cannot switch model for this input`,
-        409,
-        { conversationId },
-      )
-    }
-    const catalog = await ctx.host.listModels()
-    const resolved = resolveBorrowTarget(targetRef, catalog, readTiersState(), opts.effort)
-
-    // Re-read authoritative conversation & KV right before mutating.
-    const latestConv = requireEligibleConversation(conversationId)
-    const existing = kv.get(kvKey(conversationId))
-    const fromModel = latestConv.model || latestConv.modelOverride || ''
-    const fromThinking = latestConv.thinkingLevel
-
-    // Invariant 3: preserve original baseline across chained same-turn switches.
-    const keepExistingBaseline = existing !== undefined && existing.phase === 'active'
-    const previousModelOverride = keepExistingBaseline
-      ? existing.previousModelOverride
-      : latestConv.modelOverride
-    const previousThinkingLevelOverride = keepExistingBaseline
-      ? existing.previousThinkingLevelOverride
-      : latestConv.thinkingLevelOverride
-
-    const updated = await ctx.host.updateConversation(conversationId, {
-      model: resolved.targetModel,
-      ...(resolved.effort !== undefined ? { thinkingLevel: resolved.effort } : {}),
-    })
-
-    const changed = updated.model !== fromModel || updated.thinkingLevel !== fromThinking
-    const restoreAfterTurn = opts.restoreAfterTurn !== false
-
-    if (!restoreAfterTurn) {
-      if (existing !== undefined) {
-        await saveRecord(conversationId, undefined)
-      }
-      return { fromModel, updated, resolved, changed, restoreAfterTurn: false, view: null }
-    }
-
-    const appliedModelOverride = updated.modelOverride ?? resolved.targetConcreteModel
-    const appliedThinkingLevelOverride = updated.thinkingLevelOverride
-    const effortChanged = appliedThinkingLevelOverride !== previousThinkingLevelOverride
-    const now = Date.now()
-    const record: TierBorrowRecord = {
-      conversationId,
-      phase: 'active',
-      requestedRef: resolved.requestedRef,
-      targetModel: resolved.targetModel,
-      appliedModelOverride,
-      targetConcreteModel: resolved.targetConcreteModel,
-      targetLabel: resolved.targetLabel,
-      ...(resolved.targetTierId !== undefined ? { targetTierId: resolved.targetTierId } : {}),
-      ...(resolved.effort !== undefined ? { appliedEffort: resolved.effort } : {}),
-      ...(appliedThinkingLevelOverride !== undefined ? { appliedThinkingLevelOverride } : {}),
-      ...(previousModelOverride !== undefined ? { previousModelOverride } : {}),
-      ...(previousThinkingLevelOverride !== undefined ? { previousThinkingLevelOverride } : {}),
-      effortChanged,
-      restoreAfterTurn: true,
-      source: opts.source,
-      createdAt: keepExistingBaseline ? existing.createdAt : now,
-      updatedAt: now,
-    }
-    await saveRecord(conversationId, record)
-    return {
-      fromModel,
-      updated,
-      resolved,
-      changed,
-      restoreAfterTurn: true,
-      view: toTierBorrowSessionView(record),
-    }
-  }
+  const isStopping = (): boolean => stopping
+  const convQueue = createKeyedQueue<number>()
+  const store = createBorrowStore(kv, borrowDoc)
 
   return {
     setStopping(value: boolean): void {
@@ -602,37 +592,33 @@ export function createTierBorrowManager(deps: {
     },
 
     hydrate(): void {
-      for (const record of listAllRecords()) {
-        syncSessionDoc(record.conversationId, record)
+      for (const record of store.listAllRecords()) {
+        store.syncSessionDoc(record.conversationId, record)
       }
     },
 
     async reconcile(): Promise<void> {
-      const records = listAllRecords()
-      for (const record of records) {
-        await enqueueConversation(record.conversationId, async () => {
+      for (const record of store.listAllRecords()) {
+        await convQueue.enqueue(record.conversationId, async () => {
           if (stopping) return
-          const latest = kv.get(kvKey(record.conversationId))
+          const latest = store.get(record.conversationId)
           if (latest === undefined) return
-          const conv = getConversationOrUndefined(
-            (id) => ctx.host.getConversation(id),
-            record.conversationId,
-          )
-          if (conv === undefined) {
-            await saveRecord(record.conversationId, undefined)
+          if (getConversationOrUndefined(ctx.host, record.conversationId) === undefined) {
+            await store.saveRecord(record.conversationId, undefined)
             return
           }
           if (latest.phase === 'active') {
-            await restoreIfIdleUnlocked(record.conversationId)
+            await restoreActiveBorrow(ctx, store, record.conversationId, isStopping)
           } else {
-            syncSessionDoc(record.conversationId, latest)
+            store.syncSessionDoc(record.conversationId, latest)
           }
         })
       }
     },
 
     inUseItems(): PluginInUseItem[] {
-      return listAllRecords()
+      return store
+        .listAllRecords()
         .filter((record) => record.phase === 'active')
         .map((record) => ({
           kind: 'model_borrow',
@@ -643,18 +629,14 @@ export function createTierBorrowManager(deps: {
 
     async stop(): Promise<void> {
       stopping = true
-      const pending = [...convQueues.values()]
-      if (pending.length > 0) {
-        await Promise.allSettled(pending)
-      }
-      convQueues.clear()
+      await convQueue.drain()
       await kv.flush()
     },
 
     getBorrow(conversationId: number): TierBorrowSessionView | null {
       const conv = ctx.host.getConversation(conversationId)
       if (!isTiersBorrowEligible(conv)) return null
-      const record = kv.get(kvKey(conversationId))
+      const record = store.get(conversationId)
       return record !== undefined ? toTierBorrowSessionView(record) : null
     },
 
@@ -662,8 +644,8 @@ export function createTierBorrowManager(deps: {
       conversationId: number,
       input: { model: string; effort?: string; source?: TierBorrowSource },
     ): Promise<TierBorrowSessionView> {
-      return enqueueConversation(conversationId, () =>
-        armBorrowUnlocked(conversationId, input.model, {
+      return convQueue.enqueue(conversationId, () =>
+        armConversationBorrow(ctx, store, readTiersState, isStopping, conversationId, input.model, {
           effort: input.effort,
           source: input.source ?? 'ui',
         }),
@@ -671,62 +653,53 @@ export function createTierBorrowManager(deps: {
     },
 
     clearBorrow(conversationId: number): Promise<ClearBorrowResult> {
-      return enqueueConversation(conversationId, async () => {
+      return convQueue.enqueue(conversationId, async () => {
         if (stopping) {
           throw new HelmxError('plugin_stopping', 'builtin:tiers is stopping', 409, { conversationId })
         }
         ctx.host.getConversation(conversationId)
-        const existing = kv.get(kvKey(conversationId))
+        const existing = store.get(conversationId)
         if (existing === undefined) {
           return { cleared: false }
         }
-        await saveRecord(conversationId, undefined)
+        await store.saveRecord(conversationId, undefined)
         return { cleared: true, previousPhase: existing.phase }
       })
     },
 
     async handleInput(payload: HookPayloadMap['input']): Promise<HookResult<HookPayloadMap['input']>> {
-      if (stopping) return { action: 'continue' }
-      if (payload.input.origin !== 'human') return { action: 'continue' }
+      if (stopping || payload.input.origin !== 'human') return { action: 'continue' }
 
       const parsedMeta = parseTiersBorrowInputMeta(payload.input.meta)
-      const existingFast = kv.get(kvKey(payload.conversationId))
+      const existingFast = store.get(payload.conversationId)
       if (!parsedMeta.present && existingFast === undefined) {
         return { action: 'continue' }
       }
 
-      const convFast = getConversationOrUndefined(
-        (id) => ctx.host.getConversation(id),
-        payload.conversationId,
-      )
+      const convFast = getConversationOrUndefined(ctx.host, payload.conversationId)
       if (convFast === undefined || !isTiersBorrowEligible(convFast)) {
         return { action: 'continue' }
       }
 
-      return enqueueConversation(convFast.id, async (): Promise<HookResult<HookPayloadMap['input']>> => {
+      return convQueue.enqueue(convFast.id, async (): Promise<HookResult<HookPayloadMap['input']>> => {
         if (stopping) return { action: 'continue' }
-        let conv = getConversationOrUndefined((id) => ctx.host.getConversation(id), convFast.id)
+        let conv = getConversationOrUndefined(ctx.host, convFast.id)
         if (conv === undefined || !isTiersBorrowEligible(conv)) {
           return { action: 'continue' }
         }
 
-        // Self-heal lingering idle active borrow before processing the next human input.
-        const currentRecord = kv.get(kvKey(conv.id))
+        const currentRecord = store.get(conv.id)
         if (currentRecord?.phase === 'active' && !isConversationBusy(conv)) {
-          await restoreIfIdleUnlocked(conv.id)
-          conv = getConversationOrUndefined((id) => ctx.host.getConversation(id), conv.id)
+          await restoreActiveBorrow(ctx, store, conv.id, isStopping)
+          conv = getConversationOrUndefined(ctx.host, conv.id)
           if (conv === undefined) return { action: 'continue' }
         }
 
         if (parsedMeta.present) {
-          if (!parsedMeta.valid) {
-            return { action: 'block', reason: parsedMeta.reason }
-          }
-          if (isConversationBusy(conv)) {
-            return { action: 'continue' }
-          }
+          if (!parsedMeta.valid) return { action: 'block', reason: parsedMeta.reason }
+          if (isConversationBusy(conv)) return { action: 'continue' }
           try {
-            await activateBorrowUnlocked(conv.id, parsedMeta.borrowModel, {
+            await activateConversationBorrow(ctx, store, readTiersState, isStopping, conv.id, parsedMeta.borrowModel, {
               effort: parsedMeta.effort,
               source: 'meta',
               restoreAfterTurn: true,
@@ -737,13 +710,11 @@ export function createTierBorrowManager(deps: {
           }
         }
 
-        const armed = kv.get(kvKey(conv.id))
+        const armed = store.get(conv.id)
         if (armed !== undefined && armed.phase === 'armed') {
-          if (isConversationBusy(conv)) {
-            return { action: 'continue' }
-          }
+          if (isConversationBusy(conv)) return { action: 'continue' }
           try {
-            await activateBorrowUnlocked(conv.id, armed.targetModel, {
+            await activateConversationBorrow(ctx, store, readTiersState, isStopping, conv.id, armed.targetModel, {
               effort: armed.appliedEffort,
               source: armed.source,
               restoreAfterTurn: true,
@@ -762,31 +733,33 @@ export function createTierBorrowManager(deps: {
     },
 
     handleTurnSettled(conversationId: number): Promise<void> {
-      return enqueueConversation(conversationId, () => restoreIfIdleUnlocked(conversationId))
+      return convQueue.enqueue(conversationId, () =>
+        restoreActiveBorrow(ctx, store, conversationId, isStopping),
+      )
     },
 
     handleConversationDeleted(conversationId: number): Promise<void> {
-      return enqueueConversation(conversationId, async () => {
-        if (kv.get(kvKey(conversationId)) === undefined) {
-          syncSessionDoc(conversationId, undefined)
+      return convQueue.enqueue(conversationId, async () => {
+        if (store.get(conversationId) === undefined) {
+          store.syncSessionDoc(conversationId, undefined)
           return
         }
-        await saveRecord(conversationId, undefined)
+        await store.saveRecord(conversationId, undefined)
       })
     },
 
     handleConversationReset(conversationId: number): Promise<void> {
-      return enqueueConversation(conversationId, async () => {
+      return convQueue.enqueue(conversationId, async () => {
         if (stopping) return
-        const existing = kv.get(kvKey(conversationId))
+        const existing = store.get(conversationId)
         if (existing === undefined) return
         if (existing.phase === 'armed') {
-          await saveRecord(conversationId, undefined)
+          await store.saveRecord(conversationId, undefined)
           return
         }
-        const conv = getConversationOrUndefined((id) => ctx.host.getConversation(id), conversationId)
+        const conv = getConversationOrUndefined(ctx.host, conversationId)
         if (conv === undefined || !isConversationBusy(conv)) {
-          await saveRecord(conversationId, undefined)
+          await store.saveRecord(conversationId, undefined)
         }
       })
     },
@@ -796,40 +769,18 @@ export function createTierBorrowManager(deps: {
       context: PluginToolContext,
     ): Promise<PluginToolResultEnvelope> {
       const conversationId = context.conversationId
-      return enqueueConversation(conversationId, async (): Promise<PluginToolResultEnvelope> => {
+      return convQueue.enqueue(conversationId, async (): Promise<PluginToolResultEnvelope> => {
         if (stopping) {
           return { output: 'builtin:tiers is stopping; cannot switch model.', isError: true }
         }
         try {
-          const outcome = await activateBorrowUnlocked(conversationId, input.model, {
+          const outcome = await activateConversationBorrow(ctx, store, readTiersState, isStopping, conversationId, input.model, {
             effort: input.effort,
             source: 'tool',
             restoreAfterTurn: input.restoreAfterTurn,
             allowWhileBusy: true,
           })
-          const effectiveEffort =
-            outcome.resolved.effort ??
-            (outcome.resolved.targetTierId !== undefined &&
-            outcome.updated.thinkingLevelOverride !== undefined &&
-            VALID_THINKING_LEVELS.has(outcome.updated.thinkingLevelOverride)
-              ? (outcome.updated.thinkingLevelOverride as TierThinkingLevel)
-              : undefined)
-          const presentationMeta: SwitchModelPresentationMeta = {
-            fromModel: outcome.fromModel,
-            toModel: outcome.updated.model || outcome.resolved.targetConcreteModel,
-            toLabel: outcome.resolved.targetLabel,
-            ...(outcome.resolved.targetTierId !== undefined
-              ? { tierId: outcome.resolved.targetTierId }
-              : {}),
-            ...(effectiveEffort !== undefined ? { effort: effectiveEffort } : {}),
-            restoreAfterTurn: outcome.restoreAfterTurn,
-            changed: outcome.changed,
-          }
-          const effortClause = effectiveEffort !== undefined ? ` [effort: ${effectiveEffort}]` : ''
-          const output = outcome.restoreAfterTurn
-            ? `Switched conversation model to ${outcome.resolved.targetLabel} (${presentationMeta.toModel})${effortClause}. Your next reasoning step runs on this model, and the original model will be restored automatically when this turn finishes — continue directly with your response without calling switch_model again to restore.`
-            : `Permanently switched conversation model to ${outcome.resolved.targetLabel} (${presentationMeta.toModel})${effortClause}. Subsequent turns will remain on this model.`
-          return { output, presentationMeta }
+          return formatSwitchModelResult(outcome)
         } catch (err) {
           return {
             output: ctx.host.redact(errorMessageOf(err)),

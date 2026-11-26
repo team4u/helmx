@@ -1,4 +1,5 @@
 import { escapeXml, isPluginSummaryActive, isSkillAvailable, type DispatchToolsCapability, type HelmxPluginContext } from '@helmx/protocol'
+import { isTopLevelHumanConversation } from '../shared-helpers.js'
 import {
   ACTIVE_SWARM_GROUP_SECTION_ID,
   ARCHIVED_WORKER_TAG,
@@ -113,9 +114,8 @@ export function registerSwarmHooks(ctx: HelmxPluginContext, coordinator: SwarmCo
       conv.tags.includes(COORDINATOR_TAG) ||
       conv.tags.includes(WORKER_TAG) ||
       conv.tags.includes(ARCHIVED_WORKER_TAG) ||
-      conv.parentConversationId !== undefined ||
-      activeCoordGroup !== undefined ||
-      (conv.ownedBy !== undefined && conv.ownedBy !== 'human')
+      !isTopLevelHumanConversation(conv) ||
+      activeCoordGroup !== undefined
     const drop = new Set<string>()
     if (hideCreateGroup) {
       drop.add('swarm_create_group')

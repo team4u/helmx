@@ -15,7 +15,9 @@ import {
   type ConversationSummary,
   type ExternalTriggerEnvelope,
   type HelmxPluginContext,
+  type JsonSchema,
 } from '@helmx/protocol'
+import { errorMessageOf, reportPluginError } from '../shared-helpers.js'
 import {
   advanceCronAfterFire,
   armChunkedTimer,
@@ -34,7 +36,12 @@ import {
   type ProfileLookup,
   type TriggerSessionMode,
 } from './contracts.js'
-import type { TriggerDeliveryTarget, TriggerDispatchResult } from './delivery.js'
+import {
+  assertTriggerProfileExists,
+  buildTriggerDeliveryTarget,
+  type TriggerDeliveryTarget,
+  type TriggerDispatchResult,
+} from './delivery.js'
 
 const CRON_DOC_NAME = 'crons'
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
@@ -383,46 +390,281 @@ function clearRunDiagnostics(job: CronJob): CronJob {
 }
 
 // ---------------------------------------------------------------------------
-// Scheduler registration
+// Schemas, input validation, store & scheduler decomposition
 // ---------------------------------------------------------------------------
 
-export function registerCron(ctx: HelmxPluginContext, deps: CronDeps): CronRuntime {
-  return createCronScheduler(ctx, deps, defaultSchedulerClock())
+const CRON_ID_PROP: JsonSchema = { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' }
+const CRON_ID_INPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { id: CRON_ID_PROP },
+  required: ['id'],
+  additionalProperties: false,
+}
+const CRON_LIST_OUTPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { jobs: { type: 'array', items: { type: 'object' } } },
+  required: ['jobs'],
+  additionalProperties: false,
+}
+const CRON_JOB_OUTPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { job: { type: 'object' } },
+  required: ['job'],
+  additionalProperties: false,
+}
+const CRON_CREATE_INPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    id: CRON_ID_PROP,
+    schedule: { type: 'string', description: 'Standard 5-field cron expression (min hour day month weekday, e.g. "*/30 * * * *")' },
+    text: { type: 'string', minLength: 1, description: 'Self-contained task text delivered when triggered' },
+    description: { type: 'string', maxLength: 500 },
+    timezone: { type: 'string', description: 'IANA timezone name (e.g. Asia/Shanghai; defaults to UTC)' },
+    enabled: { type: 'boolean' },
+    catchUp: { type: 'boolean' },
+    mode: {
+      type: 'string',
+      enum: ['isolated', 'dedicated'],
+      description: 'Automated session mode when targetConversationId is omitted (isolated = fresh helmx conversation per run, default; dedicated = one persistent helmx conversation per job)',
+    },
+    profileId: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 64,
+      description: 'Target Profile ID for automated sessions (defaults to assistant; mutually exclusive with targetConversationId)',
+    },
+    keepLast: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_TRIGGER_KEEP_LAST,
+      description: `Number of settled isolated runs to retain automatically (1..${MAX_TRIGGER_KEEP_LAST}, default ${DEFAULT_TRIGGER_KEEP_LAST}; only valid in isolated mode)`,
+    },
+    targetConversationId: {
+      type: 'integer',
+      minimum: 1,
+      description: 'Explicit existing conversation ID to deliver into with followUp (mutually exclusive with mode/profileId/keepLast)',
+    },
+  },
+  required: ['id', 'schedule', 'text'],
+  additionalProperties: false,
+}
+const CRON_UPDATE_INPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    id: CRON_ID_PROP,
+    description: {
+      type: 'string',
+      maxLength: MAX_DESCRIPTION,
+      description: 'Job description (empty string clears description)',
+    },
+    schedule: {
+      type: 'string',
+      description: 'Standard 5-field cron expression (min hour day month weekday, e.g. "*/30 * * * *")',
+    },
+    timezone: { type: 'string', description: 'IANA timezone name (e.g. Asia/Shanghai)' },
+    text: { type: 'string', minLength: 1, description: 'Self-contained task text delivered when triggered' },
+    enabled: { type: 'boolean' },
+    catchUp: { type: 'boolean' },
+    mode: {
+      type: 'string',
+      enum: ['isolated', 'dedicated'],
+      description: 'Automated session mode when targetConversationId is omitted (isolated | dedicated)',
+    },
+    profileId: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 64,
+      description: 'Target Profile ID for automated sessions (mutually exclusive with targetConversationId)',
+    },
+    keepLast: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_TRIGGER_KEEP_LAST,
+      description: `Number of settled isolated runs to retain automatically (1..${MAX_TRIGGER_KEEP_LAST}; only valid in isolated mode)`,
+    },
+    targetConversationId: {
+      type: 'integer',
+      minimum: 1,
+      description: 'Explicit existing conversation ID to deliver into with followUp (mutually exclusive with mode/profileId/keepLast)',
+    },
+  },
+  required: ['id'],
+  additionalProperties: false,
+}
+const CRON_DELETE_OUTPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { deleted: { type: 'boolean' } },
+  required: ['deleted'],
+  additionalProperties: false,
+}
+const CRON_TRIGGER_OUTPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    triggered: { type: 'boolean' },
+    conversationId: { type: 'integer' },
+  },
+  required: ['triggered', 'conversationId'],
+  additionalProperties: false,
 }
 
-export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clock: CronClock): CronRuntime {
-  const doc = ctx.doc<CronDoc>(CRON_DOC_NAME, { version: 1, jobs: [] }, { public: true })
-  let stopping = false
-  let activeTickWrite: Promise<void> | undefined
-  const inflight = new Map<string, Promise<void>>()
-  const timers = new Map<string, TimerHandle>()
+interface CronUpdateInput {
+  id: string
+  description?: string
+  schedule?: string
+  timezone?: string
+  text?: string
+  enabled?: boolean
+  catchUp?: boolean
+  mode?: TriggerSessionMode
+  profileId?: string
+  keepLast?: number
+  targetConversationId?: number
+}
 
-  const log = (message: string): void => console.error(`[cron] ${message}`)
-  const emitError = (title: string, detail: unknown): void => {
-    const message = detail instanceof Error ? detail.message : String(detail)
-    try {
-      ctx.host.emitEvent('notification', { type: 'notification', level: 'error', title, body: `[cron] ${message}` })
-    } catch (eventErr) {
-      log(`notification event publish failed: ${eventErr instanceof Error ? eventErr.message : String(eventErr)}`)
-    }
-    log(`${title}：${message}`)
+function parseCronUpdateInput(rawInput: Record<string, unknown>): CronUpdateInput {
+  const input = rawInput as unknown as CronUpdateInput
+  if (typeof input.id !== 'string' || !ID_PATTERN.test(input.id)) {
+    failValidation(`invalid cron id (1..64 chars, alphanumeric _ - allowed, dots forbidden): ${String(input.id)}`, 'id')
   }
+  const hasPatchField =
+    input.description !== undefined ||
+    input.schedule !== undefined ||
+    input.timezone !== undefined ||
+    input.text !== undefined ||
+    input.enabled !== undefined ||
+    input.catchUp !== undefined ||
+    input.mode !== undefined ||
+    input.profileId !== undefined ||
+    input.keepLast !== undefined ||
+    input.targetConversationId !== undefined
+  if (!hasPatchField) {
+    failValidation('cron_update requires at least one updatable field besides id', 'id')
+  }
+  if (input.description !== undefined && (typeof input.description !== 'string' || input.description.length > MAX_DESCRIPTION)) {
+    failValidation(`cron description must be a string of at most ${MAX_DESCRIPTION} chars`, 'description')
+  }
+  if (input.schedule !== undefined && typeof input.schedule !== 'string') {
+    failValidation('cron schedule must be a string (standard five fields: min hour day month weekday)', 'schedule')
+  }
+  if (input.timezone !== undefined && (typeof input.timezone !== 'string' || input.timezone.length === 0)) {
+    failValidation('cron timezone must not be empty (an IANA zone name; defaults to UTC)', 'timezone')
+  }
+  if (input.text !== undefined && (typeof input.text !== 'string' || input.text.trim().length === 0)) {
+    failValidation('cron text must not be empty (the payload text delivered at trigger time)', 'text')
+  }
+  if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
+    failValidation('enabled must be a boolean', 'enabled')
+  }
+  if (input.catchUp !== undefined && typeof input.catchUp !== 'boolean') {
+    failValidation('catchUp must be a boolean', 'catchUp')
+  }
+  assertTriggerTargetPatchSyntax({
+    targetConversationId: input.targetConversationId,
+    mode: input.mode,
+    profileId: input.profileId,
+    keepLast: input.keepLast,
+  })
+  return input
+}
 
+function buildUpdatedCronJob(prevJob: CronJob, input: CronUpdateInput, now: number): CronJob {
+  const nextScheduleRaw = input.schedule ?? prevJob.schedule
+  const nextTimezone = input.timezone ?? prevJob.timezone
+  assertValidSchedule(nextScheduleRaw, nextTimezone)
+  const nextSchedule = nextScheduleRaw.trim()
+  const nextTarget = mergeTriggerTargetPatch(prevJob, {
+    targetConversationId: input.targetConversationId,
+    mode: input.mode,
+    profileId: input.profileId,
+    keepLast: input.keepLast,
+  })
+  const nextDescription =
+    input.description === undefined ? prevJob.description : input.description === '' ? undefined : input.description
+  const nextEnabled = input.enabled ?? prevJob.enabled
+  const nextCatchUp = input.catchUp ?? prevJob.catchUp
+  const nextText = input.text ?? prevJob.text
+  const nextRunAt = nextFireTime(nextSchedule, nextTimezone, now)
+  if (nextRunAt === undefined && nextEnabled) {
+    throw new HelmxError(
+      'cron_no_next_time',
+      `cron schedule has no future matching point in ${nextTimezone}; update refused: ${nextSchedule}`,
+      400,
+      { id: prevJob.id, schedule: nextSchedule, timezone: nextTimezone },
+    )
+  }
+  return {
+    id: prevJob.id,
+    rev: randomUUID(),
+    ...(nextDescription !== undefined ? { description: nextDescription } : {}),
+    schedule: nextSchedule,
+    timezone: nextTimezone,
+    text: nextText,
+    enabled: nextEnabled,
+    catchUp: nextCatchUp,
+    ...(nextTarget.targetConversationId !== undefined ? { targetConversationId: nextTarget.targetConversationId } : {}),
+    ...(nextTarget.mode !== undefined ? { mode: nextTarget.mode } : {}),
+    ...(nextTarget.profileId !== undefined ? { profileId: nextTarget.profileId } : {}),
+    ...(nextTarget.keepLast !== undefined ? { keepLast: nextTarget.keepLast } : {}),
+    ...(nextTarget.dedicatedConversationId !== undefined
+      ? { dedicatedConversationId: nextTarget.dedicatedConversationId }
+      : {}),
+    ...(prevJob.lastRunAt !== undefined ? { lastRunAt: prevJob.lastRunAt } : {}),
+    ...(nextRunAt !== undefined ? { nextRunAt } : {}),
+    ...(prevJob.lastError !== undefined ? { lastError: prevJob.lastError } : {}),
+    ...(prevJob.lastSkippedAt !== undefined ? { lastSkippedAt: prevJob.lastSkippedAt } : {}),
+    ...(prevJob.lastSkipReason !== undefined ? { lastSkipReason: prevJob.lastSkipReason } : {}),
+  }
+}
+
+interface CronStore {
+  readDoc(): CronDoc
+  findJob(id: string): CronJob | undefined
+  inUseItems(): Array<{ kind: string; id: string; label: string }>
+  tryUpdateJob(id: string, rev: string, mutate: (job: CronJob) => CronJob): Promise<boolean>
+  createJob(job: Omit<CronJob, 'nextRunAt'> & { nextRunAt?: number }): Promise<CronJob>
+  updateJob(input: CronUpdateInput, onBeforeFlush: () => void, onRollback: (prev: CronJob) => void): Promise<CronJob>
+  deleteJob(id: string, onBeforeFlush: () => void, onRollback: (deleted: CronJob) => void): Promise<void>
+  reconcileOnStart(): Promise<void>
+  drainWrites(): Promise<void>
+}
+
+function createCronStore(ctx: HelmxPluginContext, clock: CronClock): CronStore {
+  const doc = ctx.doc<CronDoc>(CRON_DOC_NAME, { version: 1, jobs: [] }, { public: true })
   const readDoc = (): CronDoc => parseCronDoc(doc.get())
 
-  const tryUpdateJob = async (id: string, rev: string, mutate: (job: CronJob) => CronJob): Promise<boolean> => {
-    while (activeTickWrite !== undefined) {
-      await activeTickWrite
+  let locked = false
+  const lockWaiters: Array<() => void> = []
+  const drainWaiters: Array<() => void> = []
+  const releaseWriteLock = (): void => {
+    const next = lockWaiters.shift()
+    if (next !== undefined) {
+      next()
+      return
     }
-    let releaseWrite!: () => void
-    activeTickWrite = new Promise<void>((r) => {
-      releaseWrite = r
-    })
+    locked = false
+    for (const notify of drainWaiters.splice(0)) notify()
+  }
+  const withWriteLock = async <T>(op: () => Promise<T>): Promise<T> => {
+    if (locked) {
+      await new Promise<void>((resolve) => {
+        lockWaiters.push(resolve)
+      })
+    } else {
+      locked = true
+    }
     try {
+      return await op()
+    } finally {
+      releaseWriteLock()
+    }
+  }
+
+  const tryUpdateJob = async (id: string, rev: string, mutate: (job: CronJob) => CronJob): Promise<boolean> =>
+    withWriteLock(async () => {
       const current = readDoc()
       const index = current.jobs.findIndex((j) => j.id === id)
-      if (index < 0 || current.jobs[index]!.rev !== rev) return false
-      const prevJob = current.jobs[index]!
+      const prevJob = index >= 0 ? current.jobs[index] : undefined
+      if (prevJob === undefined || prevJob.rev !== rev) return false
       const jobs = [...current.jobs]
       jobs[index] = mutate(prevJob)
       doc.set({ version: 1, jobs })
@@ -443,39 +685,270 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
         throw err
       }
       return true
-    } finally {
-      activeTickWrite = undefined
-      releaseWrite()
-    }
-  }
+    })
 
-  const buildTargetForJob = (job: CronJob): TriggerDeliveryTarget => {
-    if (job.targetConversationId !== undefined) {
-      return { kind: 'conversation', conversationId: job.targetConversationId }
-    }
-    if (job.mode === 'dedicated') {
-      return {
-        kind: 'dedicated',
-        triggerKind: 'cron',
-        triggerId: job.id,
-        label: job.description,
-        profileId: job.profileId,
-        dedicatedConversationId: job.dedicatedConversationId,
-        onDedicatedConversationId: async (conversationId) => {
-          await tryUpdateJob(job.id, job.rev, (j) => ({ ...j, dedicatedConversationId: conversationId }))
-        },
+  return {
+    readDoc,
+    findJob: (id) => readDoc().jobs.find((j) => j.id === id),
+    inUseItems: () =>
+      parseCronDoc(doc.get())
+        .jobs.filter((j) => j.enabled)
+        .map((j) => ({ kind: 'cron_job', id: j.id, label: `cron job "${j.id}" (${j.schedule})` })),
+    tryUpdateJob,
+
+    async createJob(jobInput) {
+      const nextRunAt = nextFireTime(jobInput.schedule, jobInput.timezone, clock.now())
+      if (nextRunAt === undefined) {
+        throw new HelmxError(
+          'cron_no_next_time',
+          `cron schedule has no future matching point in ${jobInput.timezone}; creation refused: ${jobInput.schedule}`,
+          400,
+          { id: jobInput.id, schedule: jobInput.schedule, timezone: jobInput.timezone },
+        )
       }
-    }
-    return {
-      kind: 'isolated',
-      triggerKind: 'cron',
-      triggerId: job.id,
-      label: job.description,
-      timezone: job.timezone,
-      profileId: job.profileId,
-      keepLast: job.keepLast ?? DEFAULT_TRIGGER_KEEP_LAST,
-    }
+      return withWriteLock(async () => {
+        const current = readDoc()
+        if (current.jobs.some((j) => j.id === jobInput.id)) {
+          throw new HelmxError('cron_duplicate_id', `cron job already exists: ${jobInput.id}`, 409, { id: jobInput.id })
+        }
+        const created: CronJob = { ...jobInput, nextRunAt }
+        doc.set({ version: 1, jobs: [...current.jobs, created] })
+        try {
+          await doc.flush()
+        } catch (err) {
+          doc.set(current)
+          throw err
+        }
+        return created
+      })
+    },
+
+    async updateJob(input, onBeforeFlush, onRollback) {
+      return withWriteLock(async () => {
+        const current = readDoc()
+        const index = current.jobs.findIndex((j) => j.id === input.id)
+        const prevJob = index >= 0 ? current.jobs[index] : undefined
+        if (prevJob === undefined) {
+          throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
+        }
+        const updated = buildUpdatedCronJob(prevJob, input, clock.now())
+        onBeforeFlush()
+        const jobs = [...current.jobs]
+        jobs[index] = updated
+        doc.set({ version: 1, jobs })
+        try {
+          await doc.flush()
+        } catch (err) {
+          try {
+            const latest = readDoc()
+            const curIdx = latest.jobs.findIndex((j) => j.id === input.id && j.rev === updated.rev)
+            if (curIdx >= 0) {
+              const rolledBack = [...latest.jobs]
+              rolledBack[curIdx] = prevJob
+              doc.set({ version: 1, jobs: rolledBack })
+            }
+          } catch {
+            doc.set(current)
+          }
+          onRollback(prevJob)
+          throw err
+        }
+        return updated
+      })
+    },
+
+    async deleteJob(id, onBeforeFlush, onRollback) {
+      await withWriteLock(async () => {
+        const current = readDoc()
+        const deletedJob = current.jobs.find((j) => j.id === id)
+        if (!deletedJob) {
+          throw new HelmxError('not_found', `cron job does not exist: ${id}`, 404, { id })
+        }
+        onBeforeFlush()
+        doc.set({ version: 1, jobs: current.jobs.filter((j) => j.id !== id) })
+        try {
+          await doc.flush()
+        } catch (err) {
+          try {
+            const latest = readDoc()
+            if (!latest.jobs.some((j) => j.id === id)) {
+              doc.set({ version: 1, jobs: [...latest.jobs, deletedJob] })
+            }
+          } catch {
+            doc.set(current)
+          }
+          onRollback(deletedJob)
+          throw err
+        }
+      })
+    },
+
+    async reconcileOnStart() {
+      const current = readDoc()
+      for (const job of current.jobs) {
+        assertValidSchedule(job.schedule, job.timezone)
+        if (job.enabled && job.nextRunAt === undefined) {
+          failCorrupt(`enabled cron job ${job.id} is missing nextRunAt`, { id: job.id })
+        }
+      }
+      const now = clock.now()
+      for (const job of current.jobs) {
+        if (job.enabled && !job.catchUp && job.nextRunAt !== undefined && job.nextRunAt < now) {
+          const nextRunAt = nextFireTime(job.schedule, job.timezone, now)
+          if (nextRunAt === undefined) {
+            throw new HelmxError('cron_no_next_time', `cron job ${job.id} has no future matching point`, 500, { id: job.id })
+          }
+          await tryUpdateJob(job.id, job.rev, (value) => ({ ...value, nextRunAt }))
+        }
+      }
+    },
+
+    async drainWrites() {
+      while (locked) {
+        await new Promise<void>((resolve) => {
+          drainWaiters.push(resolve)
+        })
+      }
+    },
   }
+}
+
+function registerCronActions(
+  ctx: HelmxPluginContext,
+  store: CronStore,
+  deps: CronDeps,
+  clock: CronClock,
+  targetForJob: (job: CronJob) => TriggerDeliveryTarget,
+  scheduleJob: (id: string) => void,
+  clearJobTimer: (id: string) => void,
+): void {
+  ctx.action({
+    id: 'cron_list',
+    description: 'List all cron jobs (incl. mode/lastRunAt/nextRunAt/lastError/lastSkippedAt scheduling state)',
+    exposeToPrompt: false,
+    idempotent: true,
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    outputSchema: CRON_LIST_OUTPUT_SCHEMA,
+    cli: { command: ['cron', 'list'] },
+    handler: () => ({ jobs: store.readDoc().jobs.map((job) => structuredClone(job)) }),
+  })
+
+  ctx.action({
+    id: 'cron_create',
+    description:
+      'Create a periodic cron job (5-field schedule, IANA timezone defaulting to UTC; defaults to isolated automated sessions with keepLast=10, or dedicated / explicit targetConversationId)',
+    exposeToPrompt: false,
+    inputSchema: CRON_CREATE_INPUT_SCHEMA,
+    outputSchema: CRON_JOB_OUTPUT_SCHEMA,
+    cli: { command: ['cron', 'create'] },
+    handler: async (input: Record<string, unknown>) => {
+      const job = normalizeCronInput(input as Parameters<typeof normalizeCronInput>[0])
+      await assertTriggerProfileExists(deps.profiles, job.profileId, 'refusing to schedule against the wrong role')
+      const created = await store.createJob(job)
+      if (created.enabled) scheduleJob(created.id)
+      return { job: structuredClone(created) }
+    },
+  })
+
+  ctx.action({
+    id: 'cron_update',
+    description:
+      'Update an existing cron job (description, schedule, timezone, text, enabled, catchUp, or delivery target); recomputes nextRunAt and reschedules timer while preserving runtime history',
+    exposeToPrompt: false,
+    inputSchema: CRON_UPDATE_INPUT_SCHEMA,
+    outputSchema: CRON_JOB_OUTPUT_SCHEMA,
+    cli: { command: ['cron', 'update'] },
+    handler: async (rawInput: Record<string, unknown>) => {
+      const input = parseCronUpdateInput(rawInput)
+      if (store.findJob(input.id) === undefined) {
+        throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
+      }
+      await assertTriggerProfileExists(deps.profiles, input.profileId, 'refusing to schedule against the wrong role')
+      const updated = await store.updateJob(
+        input,
+        () => clearJobTimer(input.id),
+        (prevJob) => {
+          if (prevJob.enabled) scheduleJob(input.id)
+        },
+      )
+      if (updated.enabled) scheduleJob(updated.id)
+      return { job: structuredClone(updated) }
+    },
+  })
+
+  ctx.action({
+    id: 'cron_delete',
+    description: 'Delete a cron job (in-flight deliveries end naturally; nothing revives)',
+    exposeToPrompt: false,
+    inputSchema: CRON_ID_INPUT_SCHEMA,
+    outputSchema: CRON_DELETE_OUTPUT_SCHEMA,
+    cli: { command: ['cron', 'delete'] },
+    handler: async (input: { id: string }) => {
+      await store.deleteJob(
+        input.id,
+        () => clearJobTimer(input.id),
+        (deletedJob) => {
+          if (deletedJob.enabled) scheduleJob(deletedJob.id)
+        },
+      )
+      return { deleted: true }
+    },
+  })
+
+  ctx.action({
+    id: 'cron_trigger',
+    description: 'Manually trigger a cron job once now (a real delivery; failures throw without affecting later scheduled runs)',
+    exposeToPrompt: false,
+    inputSchema: CRON_ID_INPUT_SCHEMA,
+    outputSchema: CRON_TRIGGER_OUTPUT_SCHEMA,
+    cli: { command: ['cron', 'trigger'] },
+    handler: async (input: { id: string }) => {
+      const job = store.findJob(input.id)
+      if (!job) throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
+      const res = await deps.dispatchTrigger(
+        { ...buildCronEnvelope(job, clock.now()), id: `cron:${job.id}:manual:${randomUUID()}` },
+        targetForJob(job),
+      )
+      return { triggered: true, conversationId: res.conversationId }
+    },
+  })
+}
+
+export function registerCron(ctx: HelmxPluginContext, deps: CronDeps): CronRuntime {
+  return createCronScheduler(ctx, deps, defaultSchedulerClock())
+}
+
+export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clock: CronClock): CronRuntime {
+  const store = createCronStore(ctx, clock)
+  let stopping = false
+  const inflight = new Map<string, Promise<void>>()
+  const timers = new Map<string, TimerHandle>()
+
+  const log = (message: string): void => {
+    console.error(`[cron] ${ctx.host.redact(message)}`)
+  }
+  const emitError = (title: string, detail: unknown): void => {
+    reportPluginError(ctx.host, { logTag: 'cron', title, detail, bodyPrefix: '[cron]' })
+  }
+  const clearJobTimer = (id: string): void => {
+    timers.get(id)?.clear()
+    timers.delete(id)
+  }
+  const targetForJob = (job: CronJob): TriggerDeliveryTarget =>
+    buildTriggerDeliveryTarget({
+      triggerKind: 'cron',
+      id: job.id,
+      description: job.description,
+      timezone: job.timezone,
+      targetConversationId: job.targetConversationId,
+      mode: job.mode,
+      profileId: job.profileId,
+      keepLast: job.keepLast,
+      dedicatedConversationId: job.dedicatedConversationId,
+      onDedicatedConversationId: async (conversationId) => {
+        await store.tryUpdateJob(job.id, job.rev, (j) => ({ ...j, dedicatedConversationId: conversationId }))
+      },
+    })
 
   const runJobTick = async (id: string): Promise<void> => {
     if (stopping) return
@@ -485,7 +958,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       emitError(title, err)
       if (tickRev !== undefined) {
         try {
-          const latest = readDoc().jobs.find((j) => j.id === id)
+          const latest = store.findJob(id)
           if (latest !== undefined && latest.rev !== tickRev) {
             rescheduledByBackoff = true
             return
@@ -497,11 +970,12 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       rescheduledByBackoff = true
       scheduleJob(id, clock.now() + DECISION_RETRY_FLOOR_MS)
     }
+
     try {
       let job: CronJob | undefined
       let decision: TickDecision
       try {
-        job = readDoc().jobs.find((j) => j.id === id)
+        job = store.findJob(id)
         if (!job) return
         tickRev = job.rev
         decision = decideTick(job, clock.now())
@@ -512,7 +986,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       if (decision.action === 'noop') return
       if (decision.action === 'skip-to-future') {
         try {
-          await tryUpdateJob(id, job.rev, (j) => ({ ...j, nextRunAt: decision.to }))
+          await store.tryUpdateJob(id, job.rev, (j) => ({ ...j, nextRunAt: decision.to }))
         } catch (err) {
           backoffOnFailure(`cron job ${id} skip-to-future persistence failed`, err)
         }
@@ -520,9 +994,6 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       }
 
       const fireAt = decision.at
-
-      // Overlap protection for automated jobs: if a previous run is still working/blocked,
-      // advance nextRunAt and record the skip rather than piling up concurrent runs.
       if (job.targetConversationId === undefined && deps.findActiveRun !== undefined) {
         let activeRun: ConversationSummary | undefined
         try {
@@ -534,7 +1005,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
         if (activeRun !== undefined) {
           const reason = `previous run #${activeRun.id} is still ${activeRun.status}`
           try {
-            await tryUpdateJob(id, job.rev, (j) => ({
+            await store.tryUpdateJob(id, job.rev, (j) => ({
               ...j,
               nextRunAt: advanceAfterFire(j.schedule, j.timezone, fireAt, clock.now()),
               lastSkippedAt: fireAt,
@@ -549,7 +1020,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
 
       let claimed: boolean
       try {
-        claimed = await tryUpdateJob(id, job.rev, (j) =>
+        claimed = await store.tryUpdateJob(id, job.rev, (j) =>
           clearRunDiagnostics({
             ...j,
             lastRunAt: fireAt,
@@ -561,21 +1032,21 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
         return
       }
       if (!claimed || stopping) return
-      const currentJob = readDoc().jobs.find((current) => current.id === id && current.rev === job.rev && current.enabled)
+      const currentJob = store.readDoc().jobs.find((current) => current.id === id && current.rev === job.rev && current.enabled)
       if (!currentJob) return
 
       try {
-        await deps.dispatchTrigger(buildCronEnvelope(currentJob, fireAt), buildTargetForJob(currentJob))
+        await deps.dispatchTrigger(buildCronEnvelope(currentJob, fireAt), targetForJob(currentJob))
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
+        const safeMessage = ctx.host.redact(errorMessageOf(err))
         try {
-          const written = await tryUpdateJob(id, job.rev, (j) => ({
+          const written = await store.tryUpdateJob(id, job.rev, (j) => ({
             ...j,
-            lastError: `delivery failed @${new Date(fireAt).toISOString()}: ${message}`,
+            lastError: `delivery failed @${new Date(fireAt).toISOString()}: ${safeMessage}`,
           }))
           if (!written) log(`cron job ${id} delivery failed, but generation changed; lastError not written back`)
         } catch (writeErr) {
-          log(`cron job ${id} lastError flush also failed: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`)
+          log(`cron job ${id} lastError flush also failed: ${errorMessageOf(writeErr)}`)
         }
         emitError(`cron job ${id} delivery failed`, err)
       }
@@ -594,11 +1065,10 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
 
   const scheduleJob = (id: string, notBefore?: number): void => {
     if (stopping) return
-    timers.get(id)?.clear()
-    timers.delete(id)
+    clearJobTimer(id)
     let job: CronJob | undefined
     try {
-      job = readDoc().jobs.find((j) => j.id === id)
+      job = store.findJob(id)
     } catch (err) {
       emitError(`cron job ${id} failed to read scheduling state`, err)
       return
@@ -624,444 +1094,17 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     )
   }
 
-  const idInputSchema = {
-    type: 'object',
-    properties: { id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' } },
-    required: ['id'],
-    additionalProperties: false,
-  } as const
-
-  ctx.action({
-    id: 'cron_list',
-    description: 'List all cron jobs (incl. mode/lastRunAt/nextRunAt/lastError/lastSkippedAt scheduling state)',
-    exposeToPrompt: false,
-    idempotent: true,
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    outputSchema: {
-      type: 'object',
-      properties: { jobs: { type: 'array', items: { type: 'object' } } },
-      required: ['jobs'],
-      additionalProperties: false,
-    },
-    cli: { command: ['cron', 'list'] },
-    handler: () => ({ jobs: readDoc().jobs.map((job) => structuredClone(job)) }),
-  })
-
-  ctx.action({
-    id: 'cron_create',
-    description:
-      'Create a periodic cron job (5-field schedule, IANA timezone defaulting to UTC; defaults to isolated automated sessions with keepLast=10, or dedicated / explicit targetConversationId)',
-    exposeToPrompt: false,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' },
-        schedule: { type: 'string', description: 'Standard 5-field cron expression (min hour day month weekday, e.g. "*/30 * * * *")' },
-        text: { type: 'string', minLength: 1, description: 'Self-contained task text delivered when triggered' },
-        description: { type: 'string', maxLength: 500 },
-        timezone: { type: 'string', description: 'IANA timezone name (e.g. Asia/Shanghai; defaults to UTC)' },
-        enabled: { type: 'boolean' },
-        catchUp: { type: 'boolean' },
-        mode: {
-          type: 'string',
-          enum: ['isolated', 'dedicated'],
-          description: 'Automated session mode when targetConversationId is omitted (isolated = fresh helmx conversation per run, default; dedicated = one persistent helmx conversation per job)',
-        },
-        profileId: {
-          type: 'string',
-          minLength: 1,
-          maxLength: 64,
-          description: 'Target Profile ID for automated sessions (defaults to assistant; mutually exclusive with targetConversationId)',
-        },
-        keepLast: {
-          type: 'integer',
-          minimum: 1,
-          maximum: MAX_TRIGGER_KEEP_LAST,
-          description: `Number of settled isolated runs to retain automatically (1..${MAX_TRIGGER_KEEP_LAST}, default ${DEFAULT_TRIGGER_KEEP_LAST}; only valid in isolated mode)`,
-        },
-        targetConversationId: {
-          type: 'integer',
-          minimum: 1,
-          description: 'Explicit existing conversation ID to deliver into with followUp (mutually exclusive with mode/profileId/keepLast)',
-        },
-      },
-      required: ['id', 'schedule', 'text'],
-      additionalProperties: false,
-    },
-    outputSchema: {
-      type: 'object',
-      properties: { job: { type: 'object' } },
-      required: ['job'],
-      additionalProperties: false,
-    },
-    cli: { command: ['cron', 'create'] },
-    handler: async (input: Record<string, unknown>) => {
-      const job = normalizeCronInput(input as Parameters<typeof normalizeCronInput>[0])
-      if (job.profileId !== undefined && deps.profiles !== undefined) {
-        if ((await deps.profiles.get(job.profileId)) === undefined) {
-          throw new HelmxError(
-            'validation_error',
-            `profileId does not exist: ${job.profileId} (refusing to schedule against the wrong role)`,
-            400,
-            { profileId: job.profileId },
-          )
-        }
-      }
-      const nextRunAt = nextFireTime(job.schedule, job.timezone, clock.now())
-      if (nextRunAt === undefined) {
-        throw new HelmxError(
-          'cron_no_next_time',
-          `cron schedule has no future matching point in ${job.timezone}; creation refused: ${job.schedule}`,
-          400,
-          { id: job.id, schedule: job.schedule, timezone: job.timezone },
-        )
-      }
-      while (activeTickWrite !== undefined) {
-        await activeTickWrite
-      }
-      let releaseCreate!: () => void
-      activeTickWrite = new Promise<void>((r) => {
-        releaseCreate = r
-      })
-      let created: CronJob
-      try {
-        const current = readDoc()
-        if (current.jobs.some((j) => j.id === job.id)) {
-          throw new HelmxError('cron_duplicate_id', `cron job already exists: ${job.id}`, 409, { id: job.id })
-        }
-        created = { ...job, nextRunAt }
-        doc.set({ version: 1, jobs: [...current.jobs, created] })
-        try {
-          await doc.flush()
-        } catch (err) {
-          doc.set(current)
-          throw err
-        }
-      } finally {
-        activeTickWrite = undefined
-        releaseCreate()
-      }
-      if (created.enabled) scheduleJob(created.id)
-      return { job: structuredClone(created) }
-    },
-  })
-
-  ctx.action({
-    id: 'cron_update',
-    description:
-      'Update an existing cron job (description, schedule, timezone, text, enabled, catchUp, or delivery target); recomputes nextRunAt and reschedules timer while preserving runtime history',
-    exposeToPrompt: false,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' },
-        description: {
-          type: 'string',
-          maxLength: MAX_DESCRIPTION,
-          description: 'Job description (empty string clears description)',
-        },
-        schedule: {
-          type: 'string',
-          description: 'Standard 5-field cron expression (min hour day month weekday, e.g. "*/30 * * * *")',
-        },
-        timezone: { type: 'string', description: 'IANA timezone name (e.g. Asia/Shanghai)' },
-        text: { type: 'string', minLength: 1, description: 'Self-contained task text delivered when triggered' },
-        enabled: { type: 'boolean' },
-        catchUp: { type: 'boolean' },
-        mode: {
-          type: 'string',
-          enum: ['isolated', 'dedicated'],
-          description: 'Automated session mode when targetConversationId is omitted (isolated | dedicated)',
-        },
-        profileId: {
-          type: 'string',
-          minLength: 1,
-          maxLength: 64,
-          description: 'Target Profile ID for automated sessions (mutually exclusive with targetConversationId)',
-        },
-        keepLast: {
-          type: 'integer',
-          minimum: 1,
-          maximum: MAX_TRIGGER_KEEP_LAST,
-          description: `Number of settled isolated runs to retain automatically (1..${MAX_TRIGGER_KEEP_LAST}; only valid in isolated mode)`,
-        },
-        targetConversationId: {
-          type: 'integer',
-          minimum: 1,
-          description: 'Explicit existing conversation ID to deliver into with followUp (mutually exclusive with mode/profileId/keepLast)',
-        },
-      },
-      required: ['id'],
-      additionalProperties: false,
-    },
-    outputSchema: {
-      type: 'object',
-      properties: { job: { type: 'object' } },
-      required: ['job'],
-      additionalProperties: false,
-    },
-    cli: { command: ['cron', 'update'] },
-    handler: async (rawInput: Record<string, unknown>) => {
-      const input = rawInput as {
-        id: string
-        description?: string
-        schedule?: string
-        timezone?: string
-        text?: string
-        enabled?: boolean
-        catchUp?: boolean
-        mode?: TriggerSessionMode
-        profileId?: string
-        keepLast?: number
-        targetConversationId?: number
-      }
-      if (typeof input.id !== 'string' || !ID_PATTERN.test(input.id)) {
-        failValidation(`invalid cron id (1..64 chars, alphanumeric _ - allowed, dots forbidden): ${String(input.id)}`, 'id')
-      }
-      const hasPatchField =
-        input.description !== undefined ||
-        input.schedule !== undefined ||
-        input.timezone !== undefined ||
-        input.text !== undefined ||
-        input.enabled !== undefined ||
-        input.catchUp !== undefined ||
-        input.mode !== undefined ||
-        input.profileId !== undefined ||
-        input.keepLast !== undefined ||
-        input.targetConversationId !== undefined
-      if (!hasPatchField) {
-        failValidation('cron_update requires at least one updatable field besides id', 'id')
-      }
-      if (input.description !== undefined && (typeof input.description !== 'string' || input.description.length > MAX_DESCRIPTION)) {
-        failValidation(`cron description must be a string of at most ${MAX_DESCRIPTION} chars`, 'description')
-      }
-      if (input.schedule !== undefined && typeof input.schedule !== 'string') {
-        failValidation('cron schedule must be a string (standard five fields: min hour day month weekday)', 'schedule')
-      }
-      if (input.timezone !== undefined && (typeof input.timezone !== 'string' || input.timezone.length === 0)) {
-        failValidation('cron timezone must not be empty (an IANA zone name; defaults to UTC)', 'timezone')
-      }
-      if (input.text !== undefined && (typeof input.text !== 'string' || input.text.trim().length === 0)) {
-        failValidation('cron text must not be empty (the payload text delivered at trigger time)', 'text')
-      }
-      if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
-        failValidation('enabled must be a boolean', 'enabled')
-      }
-      if (input.catchUp !== undefined && typeof input.catchUp !== 'boolean') {
-        failValidation('catchUp must be a boolean', 'catchUp')
-      }
-      assertTriggerTargetPatchSyntax({
-        targetConversationId: input.targetConversationId,
-        mode: input.mode,
-        profileId: input.profileId,
-        keepLast: input.keepLast,
-      })
-
-      if (!readDoc().jobs.some((j) => j.id === input.id)) {
-        throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
-      }
-      if (input.profileId !== undefined && deps.profiles !== undefined) {
-        if ((await deps.profiles.get(input.profileId)) === undefined) {
-          throw new HelmxError(
-            'validation_error',
-            `profileId does not exist: ${input.profileId} (refusing to schedule against the wrong role)`,
-            400,
-            { profileId: input.profileId },
-          )
-        }
-      }
-
-      while (activeTickWrite !== undefined) {
-        await activeTickWrite
-      }
-      let releaseUpdate!: () => void
-      activeTickWrite = new Promise<void>((r) => {
-        releaseUpdate = r
-      })
-      let updated: CronJob
-      try {
-        const current = readDoc()
-        const index = current.jobs.findIndex((j) => j.id === input.id)
-        if (index < 0) {
-          throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
-        }
-        const prevJob = current.jobs[index]!
-        const nextScheduleRaw = input.schedule ?? prevJob.schedule
-        const nextTimezone = input.timezone ?? prevJob.timezone
-        assertValidSchedule(nextScheduleRaw, nextTimezone)
-        const nextSchedule = nextScheduleRaw.trim()
-        const nextTarget = mergeTriggerTargetPatch(prevJob, {
-          targetConversationId: input.targetConversationId,
-          mode: input.mode,
-          profileId: input.profileId,
-          keepLast: input.keepLast,
-        })
-        const nextDescription =
-          input.description === undefined
-            ? prevJob.description
-            : input.description === ''
-              ? undefined
-              : input.description
-        const nextEnabled = input.enabled ?? prevJob.enabled
-        const nextCatchUp = input.catchUp ?? prevJob.catchUp
-        const nextText = input.text ?? prevJob.text
-        const nextRunAt = nextFireTime(nextSchedule, nextTimezone, clock.now())
-        if (nextRunAt === undefined && nextEnabled) {
-          throw new HelmxError(
-            'cron_no_next_time',
-            `cron schedule has no future matching point in ${nextTimezone}; update refused: ${nextSchedule}`,
-            400,
-            { id: prevJob.id, schedule: nextSchedule, timezone: nextTimezone },
-          )
-        }
-
-        updated = {
-          id: prevJob.id,
-          rev: randomUUID(),
-          ...(nextDescription !== undefined ? { description: nextDescription } : {}),
-          schedule: nextSchedule,
-          timezone: nextTimezone,
-          text: nextText,
-          enabled: nextEnabled,
-          catchUp: nextCatchUp,
-          ...(nextTarget.targetConversationId !== undefined ? { targetConversationId: nextTarget.targetConversationId } : {}),
-          ...(nextTarget.mode !== undefined ? { mode: nextTarget.mode } : {}),
-          ...(nextTarget.profileId !== undefined ? { profileId: nextTarget.profileId } : {}),
-          ...(nextTarget.keepLast !== undefined ? { keepLast: nextTarget.keepLast } : {}),
-          ...(nextTarget.dedicatedConversationId !== undefined
-            ? { dedicatedConversationId: nextTarget.dedicatedConversationId }
-            : {}),
-          ...(prevJob.lastRunAt !== undefined ? { lastRunAt: prevJob.lastRunAt } : {}),
-          ...(nextRunAt !== undefined ? { nextRunAt } : {}),
-          ...(prevJob.lastError !== undefined ? { lastError: prevJob.lastError } : {}),
-          ...(prevJob.lastSkippedAt !== undefined ? { lastSkippedAt: prevJob.lastSkippedAt } : {}),
-          ...(prevJob.lastSkipReason !== undefined ? { lastSkipReason: prevJob.lastSkipReason } : {}),
-        }
-
-        timers.get(input.id)?.clear()
-        timers.delete(input.id)
-        const jobs = [...current.jobs]
-        jobs[index] = updated
-        doc.set({ version: 1, jobs })
-        try {
-          await doc.flush()
-        } catch (err) {
-          try {
-            const latest = readDoc()
-            const curIdx = latest.jobs.findIndex((j) => j.id === input.id && j.rev === updated.rev)
-            if (curIdx >= 0) {
-              const rolledBack = [...latest.jobs]
-              rolledBack[curIdx] = prevJob
-              doc.set({ version: 1, jobs: rolledBack })
-            }
-          } catch {
-            doc.set(current)
-          }
-          if (prevJob.enabled) scheduleJob(input.id)
-          throw err
-        }
-      } finally {
-        activeTickWrite = undefined
-        releaseUpdate()
-      }
-      if (updated.enabled) scheduleJob(updated.id)
-      return { job: structuredClone(updated) }
-    },
-  })
-
-  ctx.action({
-    id: 'cron_delete',
-    description: 'Delete a cron job (in-flight deliveries end naturally; nothing revives)',
-    exposeToPrompt: false,
-    inputSchema: idInputSchema,
-    outputSchema: {
-      type: 'object',
-      properties: { deleted: { type: 'boolean' } },
-      required: ['deleted'],
-      additionalProperties: false,
-    },
-    cli: { command: ['cron', 'delete'] },
-    handler: async (input: { id: string }) => {
-      const current = readDoc()
-      const deletedJob = current.jobs.find((j) => j.id === input.id)
-      if (!deletedJob) {
-        throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
-      }
-      timers.get(input.id)?.clear()
-      timers.delete(input.id)
-      doc.set({ version: 1, jobs: current.jobs.filter((j) => j.id !== input.id) })
-      try {
-        await doc.flush()
-      } catch (err) {
-        try {
-          const latest = readDoc()
-          if (!latest.jobs.some((j) => j.id === input.id)) {
-            doc.set({ version: 1, jobs: [...latest.jobs, deletedJob] })
-          }
-        } catch {
-          doc.set(current)
-        }
-        scheduleJob(input.id)
-        throw err
-      }
-      return { deleted: true }
-    },
-  })
-
-  ctx.action({
-    id: 'cron_trigger',
-    description: 'Manually trigger a cron job once now (a real delivery; failures throw without affecting later scheduled runs)',
-    exposeToPrompt: false,
-    inputSchema: idInputSchema,
-    outputSchema: {
-      type: 'object',
-      properties: {
-        triggered: { type: 'boolean' },
-        conversationId: { type: 'integer' },
-      },
-      required: ['triggered', 'conversationId'],
-      additionalProperties: false,
-    },
-    cli: { command: ['cron', 'trigger'] },
-    handler: async (input: { id: string }) => {
-      const job = readDoc().jobs.find((j) => j.id === input.id)
-      if (!job) throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
-      const res = await deps.dispatchTrigger(
-        { ...buildCronEnvelope(job, clock.now()), id: `cron:${job.id}:manual:${randomUUID()}` },
-        buildTargetForJob(job),
-      )
-      return { triggered: true, conversationId: res.conversationId }
-    },
-  })
+  registerCronActions(ctx, store, deps, clock, targetForJob, scheduleJob, clearJobTimer)
 
   ctx.service({
     id: 'cron-scheduler',
     liveTasks: () => [...inflight.keys()].map((id) => `cron-dispatch:${id}`),
-    inUse: () =>
-      parseCronDoc(doc.get())
-        .jobs.filter((j) => j.enabled)
-        .map((j) => ({ kind: 'cron_job', id: j.id, label: `cron job "${j.id}" (${j.schedule})` })),
+    inUse: () => store.inUseItems(),
     async start() {
       stopping = false
       try {
-        const current = readDoc()
-        for (const job of current.jobs) {
-          assertValidSchedule(job.schedule, job.timezone)
-          if (job.enabled && job.nextRunAt === undefined) {
-            failCorrupt(`enabled cron job ${job.id} is missing nextRunAt`, { id: job.id })
-          }
-        }
-        const now = clock.now()
-        for (const job of current.jobs) {
-          if (job.enabled && !job.catchUp && job.nextRunAt !== undefined && job.nextRunAt < now) {
-            const nextRunAt = nextFireTime(job.schedule, job.timezone, now)
-            if (nextRunAt === undefined) {
-              throw new HelmxError('cron_no_next_time', `cron job ${job.id} has no future matching point`, 500, { id: job.id })
-            }
-            await tryUpdateJob(job.id, job.rev, (value) => ({ ...value, nextRunAt }))
-          }
-        }
-        for (const job of current.jobs) scheduleJob(job.id)
+        await store.reconcileOnStart()
+        for (const job of store.readDoc().jobs) scheduleJob(job.id)
       } catch (err) {
         emitError('cron scheduling failed to start', err)
         throw err
@@ -1072,13 +1115,13 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       for (const handle of timers.values()) handle.clear()
       timers.clear()
       if (inflight.size > 0) await Promise.allSettled([...inflight.values()])
-      while (activeTickWrite !== undefined) await activeTickWrite
+      await store.drainWrites()
     },
   })
 
   return {
     async tickNow() {
-      const current = readDoc()
+      const current = store.readDoc()
       await Promise.all(current.jobs.filter((j) => j.enabled).map((j) => tickJob(j.id)))
     },
     async settle() {
@@ -1086,10 +1129,8 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
         await Promise.allSettled([...inflight.values()])
         await new Promise((resolve) => setImmediate(resolve))
       }
-      while (activeTickWrite !== undefined) await activeTickWrite
+      await store.drainWrites()
     },
-    getJob(id: string) {
-      return readDoc().jobs.find((j) => j.id === id)
-    },
+    getJob: (id: string) => store.findJob(id),
   }
 }

@@ -6,10 +6,14 @@ import {
   type ModelCatalog,
   type ModelTiersCapability,
   type ModelTierSpec,
-  type PluginActionContext,
   type PluginDefinition,
 } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
+import {
+  asConversationEntryEvent,
+  asDeletedConversationId,
+  resolveTargetConversationId,
+} from './shared-helpers.js'
 import { readTiersSkillAsset } from './tiers/assets.js'
 import {
   createTierBorrowManager,
@@ -35,8 +39,6 @@ import {
   TIER_TEMPLATE_DESCRIPTION_MAX_LENGTH,
   TIER_TEMPLATE_NAME_MAX_LENGTH,
   TIER_THINKING_LEVELS,
-  asTiersConversationEntryEvent,
-  asTiersDeletedConversationId,
   createEmptyTiersState,
   isTiersBorrowEligible,
   parseTiersBorrowInputMeta,
@@ -112,36 +114,6 @@ const LIST_OUTPUT_SCHEMA = {
 
 const sortTemplates = (templates: Readonly<Record<string, TierTemplate>>): TierTemplate[] =>
   Object.values(templates).sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
-
-function resolveTargetConversationId(
-  inputConversationId: number | undefined,
-  context: PluginActionContext,
-): number {
-  if (
-    inputConversationId !== undefined &&
-    context.conversationId !== undefined &&
-    inputConversationId !== context.conversationId
-  ) {
-    throw new HelmxError(
-      'validation_error',
-      `Conflicting conversationId: input ${inputConversationId} does not match context ${context.conversationId}`,
-      400,
-      {
-        inputConversationId,
-        contextConversationId: context.conversationId,
-      },
-    )
-  }
-  const targetId = inputConversationId ?? context.conversationId
-  if (targetId === undefined) {
-    throw new HelmxError(
-      'validation_error',
-      'Missing conversation target: provide conversationId or run inside a conversation (--current)',
-      400,
-    )
-  }
-  return targetId
-}
 
 export function createTiersPlugin(): PluginDefinition {
   return {
@@ -286,14 +258,14 @@ export function createTiersPlugin(): PluginDefinition {
       })
 
       ctx.host.onEvent('conversation.deleted', async (payload) => {
-        const conversationId = asTiersDeletedConversationId(payload)
+        const conversationId = asDeletedConversationId(payload)
         if (conversationId !== undefined) {
           await borrowManager.handleConversationDeleted(conversationId)
         }
       })
 
       ctx.host.onEvent('conversation.entry', async (payload) => {
-        const entry = asTiersConversationEntryEvent(payload)
+        const entry = asConversationEntryEvent(payload)
         if (entry !== undefined && entry.kind === 'pi.reset') {
           await borrowManager.handleConversationReset(entry.conversationId)
         }

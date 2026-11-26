@@ -3,9 +3,10 @@
  * Persistence order: append+datasync board.jsonl BEFORE atomicWriteFile meta.json.
  */
 import { randomUUID } from 'node:crypto'
-import { mkdir, open, readdir, stat, truncate } from 'node:fs/promises'
+import { mkdir, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { redactJsonValue, type HelmxPluginContext, type MaybePromise } from '@helmx/protocol'
+import { createKeyedQueue, errorMessageOf } from '../shared-helpers.js'
 import {
   ACTIONABLE_WAKE_KINDS,
   COORDINATOR_BATCH_WINDOW_MS,
@@ -13,7 +14,6 @@ import {
   assertBoardPost,
   assertCollabGroupRecord,
   assertGroupId,
-  createKeyedQueue,
   groupClosedError,
   groupNotFoundError,
   hasPendingDeliverableWakeup,
@@ -35,93 +35,52 @@ import { reconcileOrphanConversations, reconcileOrphanWorktreeHolds } from './re
 import { createWakeDispatcher } from './wake-dispatcher.js'
 import { createBoardProjections } from './projections.js'
 import { createMemberHealing } from './member-healing.js'
+import { appendPostAndPersistMetaLocked, ensureGroupPostsLoaded, loadGroupFromDisk } from './group-disk.js'
 
 const generateGroupId = (): string => `grp_${Date.now().toString(36)}_${randomUUID().replaceAll('-', '').slice(0, 8)}`
 
-export function createCollabGroupRuntime(
+function resolveMemberLiveSnapshot(coord: SwarmCoordinator, conversationId: number): MemberLiveSnapshot {
+  const s = coord.readConversationOrUndefined(conversationId)
+  if (!s) return { liveState: 'missing' }
+  return {
+    liveState: s.status,
+    model: s.model,
+    ...(s.runDurationMs !== undefined ? { runDurationMs: s.runDurationMs } : {}),
+    ...(s.runStartedAt !== undefined ? { runStartedAt: s.runStartedAt } : {}),
+    ...(s.pendingAskSince !== undefined ? { pendingAskSince: s.pendingAskSince } : {}),
+    turnCount: s.completionSeq,
+  }
+}
+
+function collectBusyActiveMemberNames(
+  group: CollabGroupRecord,
+  coord: SwarmCoordinator,
+  excludeConvId?: number,
+): Set<string> {
+  const busy = new Set<string>()
+  for (const m of group.members) {
+    if (m.lifecycle !== 'active' || m.conversationId === excludeConvId) continue
+    if (coord.settlingWorkers.has(m.conversationId)) {
+      busy.add(m.name)
+      continue
+    }
+    const s = coord.readConversationOrUndefined(m.conversationId)
+    if (s && (s.status === 'working' || s.status === 'blocked' || hasPendingDeliverableWakeup(m))) {
+      busy.add(m.name)
+    }
+  }
+  return busy
+}
+
+function createManagedWorkerRegistry(
   ctx: HelmxPluginContext,
   getCoordinator: () => SwarmCoordinator,
-): CollabGroupRuntime {
-  const groupsRootDir = (): string => join(ctx.dataDir, 'groups')
-  const groupsById = new Map<string, CollabGroupRecord>()
-  const postsByGroup = new Map<string, BoardPost[]>()
-  const groupQueue = createKeyedQueue()
+  isStopping: () => boolean,
+) {
   const managedWorkerReleases = new Map<number, () => void>()
-  let stopping = false
-
-  const isAlive = (): boolean => {
-    const coord = getCoordinator()
-    return !stopping && coord.isActive() && !coord.isShutdown() && !ctx.host.isClosing
-  }
-  const logDiagnostic = (msg: string): void => console.error(`[swarm] ${ctx.host.redact(msg)}`)
-  const groupDirOf = (id: string): string => join(groupsRootDir(), id)
-  const metaPathOf = (id: string): string => join(groupDirOf(id), 'meta.json')
-  const boardPathOf = (id: string): string => join(groupDirOf(id), 'board.jsonl')
-  const redactObject = <T>(value: T): T => redactJsonValue(value, (text) => ctx.host.redact(text)) as T
-
-  const appendPostAndPersistMetaLocked = async (
-    groupId: string,
-    post: BoardPost,
-    next: CollabGroupRecord,
-  ): Promise<CollabGroupRecord> => {
-    await mkdir(groupDirOf(groupId), { recursive: true })
-    const boardPath = boardPathOf(groupId)
-    let priorByteLength = 0
-    try {
-      priorByteLength = (await stat(boardPath)).size
-    } catch (err) {
-      if (!isEnoent(err)) throw err
-    }
-    const handle = await open(boardPath, 'a')
-    try {
-      await handle.writeFile(`${JSON.stringify(post)}\n`, 'utf8')
-      await handle.datasync()
-    } catch (writeErr) {
-      await handle.truncate(priorByteLength).catch(() => {})
-      throw writeErr
-    } finally {
-      await handle.close()
-    }
-    try {
-      return await persistMetaLocked(next)
-    } catch (metaErr) {
-      await truncate(boardPath, priorByteLength).catch((truncErr) => {
-        logDiagnostic(`回滚截断协作组 '${groupId}' board.jsonl 失败：${truncErr instanceof Error ? truncErr.message : String(truncErr)}`)
-      })
-      throw metaErr
-    }
-  }
-
-  const runGroupLocked = <T>(groupId: string, fn: () => Promise<T>): Promise<T> =>
-    groupQueue.enqueue(groupId, () => mkdir(groupDirOf(groupId), { recursive: true }).then(() => ctx.host.withFileLock(metaPathOf(groupId), fn)))
-
-  const resolveMemberLive = (conversationId: number): MemberLiveSnapshot => {
-    const s = getCoordinator().readConversationOrUndefined(conversationId)
-    if (!s) return { liveState: 'missing' }
-    return {
-      liveState: s.status,
-      model: s.model,
-      ...(s.runDurationMs !== undefined ? { runDurationMs: s.runDurationMs } : {}),
-      ...(s.runStartedAt !== undefined ? { runStartedAt: s.runStartedAt } : {}),
-      ...(s.pendingAskSince !== undefined ? { pendingAskSince: s.pendingAskSince } : {}),
-      turnCount: s.completionSeq,
-    }
-  }
-
-  const getBusyActiveMemberNames = (group: CollabGroupRecord, excludeConvId?: number): Set<string> => {
-    const coord = getCoordinator()
-    const busy = new Set<string>()
-    for (const m of group.members) {
-      if (m.lifecycle !== 'active' || m.conversationId === excludeConvId) continue
-      if (coord.settlingWorkers.has(m.conversationId)) { busy.add(m.name); continue }
-      const s = coord.readConversationOrUndefined(m.conversationId)
-      if (s && (s.status === 'working' || s.status === 'blocked' || hasPendingDeliverableWakeup(m))) busy.add(m.name)
-    }
-    return busy
-  }
 
   const ensureWorkerManaged = (id: number): void => {
-    if (stopping || !getCoordinator().isActive() || managedWorkerReleases.has(id)) return
+    if (isStopping() || !getCoordinator().isActive() || managedWorkerReleases.has(id)) return
     if (!getCoordinator().readConversationOrUndefined(id)) return
     managedWorkerReleases.set(id, ctx.host.manageConversation(id))
   }
@@ -137,27 +96,168 @@ export function createCollabGroupRuntime(
     }
   }
 
-  const releaseAllManagedWorkers = (): void => {
-    for (const id of [...managedWorkerReleases.keys()]) releaseManagedWorker(id)
+  const syncRecordWorkerHolds = (
+    record: CollabGroupRecord,
+    onClosedGroup: (groupId: string) => void,
+  ): void => {
+    if (isStopping() || !getCoordinator().isActive()) return
+    if (record.status !== 'active') {
+      onClosedGroup(record.id)
+      for (const m of record.members) releaseManagedWorker(m.conversationId)
+      return
+    }
+    for (const m of record.members) {
+      if (m.lifecycle === 'active') ensureWorkerManaged(m.conversationId)
+      else releaseManagedWorker(m.conversationId)
+    }
   }
+
+  return {
+    ensureWorkerManaged,
+    releaseManagedWorker,
+    releaseAll: () => {
+      for (const id of [...managedWorkerReleases.keys()]) releaseManagedWorker(id)
+    },
+    syncRecordWorkerHolds,
+  }
+}
+
+interface AppendPostTransition {
+  post: BoardPost
+  nextGroup: CollabGroupRecord
+  membersToWake: string[]
+  shouldNotifyCoordinator: boolean
+  breakerTrip?: { seq: number; from: string; to: string[]; maxPeerHops: number }
+}
+
+function buildAppendPostTransition(
+  current: CollabGroupRecord,
+  draft: AppendPostDraft,
+  maxPeerHops: number,
+  redactObject: <T>(value: T) => T,
+): AppendPostTransition {
+  const next = structuredClone(current)
+  const now = Date.now()
+  const seq = next.headSeq + 1
+  const post = assertBoardPost(
+    redactObject<BoardPost>({
+      seq,
+      groupId: current.id,
+      from: draft.from,
+      to: [...draft.to],
+      resolvedTargets: [...draft.resolvedTargets],
+      wake: draft.wake,
+      kind: draft.kind,
+      refs: [...draft.refs],
+      body: draft.body,
+      ...(draft.idempotencyKey !== undefined ? { idempotencyKey: draft.idempotencyKey } : {}),
+      ...(draft.worktreeSnapshot !== undefined ? { worktreeSnapshot: draft.worktreeSnapshot } : {}),
+      createdAt: now,
+    }),
+  )
+
+  const sender = next.members.find((m) => m.name === post.from && m.lifecycle === 'active')
+  if (sender) {
+    sender.lastPostSeq = post.seq
+    sender.lastOutboundEdge = { seq: post.seq, to: [...post.to], kind: post.kind }
+    if (sender.readCursorSeq === current.headSeq) sender.readCursorSeq = post.seq
+  }
+
+  const activeNames = new Set(next.members.filter((m) => m.lifecycle === 'active').map((m) => m.name))
+  const wakeablePeers =
+    post.from !== 'coordinator' && post.from !== 'system' && post.wake && post.kind !== 'blocker'
+      ? post.resolvedTargets.filter((t) => t !== 'coordinator' && activeNames.has(t))
+      : []
+
+  let breakerTrip: { seq: number; from: string; to: string[]; maxPeerHops: number } | undefined
+  if (post.from === 'coordinator' || (post.from === 'system' && COORDINATOR_ESCALATION_KINDS.has(post.kind))) {
+    delete next.peerHopsSinceCoordinator
+  } else if (wakeablePeers.length > 0) {
+    const nextHops = (next.peerHopsSinceCoordinator ?? 0) + 1
+    if (nextHops > maxPeerHops) {
+      breakerTrip = { seq: post.seq, from: post.from, to: [...post.to], maxPeerHops }
+      delete next.peerHopsSinceCoordinator
+    } else {
+      next.peerHopsSinceCoordinator = nextHops
+    }
+  }
+
+  const membersToWake: string[] = []
+  if (post.wake && !breakerTrip) {
+    for (const target of post.resolvedTargets) {
+      if (target === 'coordinator') continue
+      const m = next.members.find((i) => i.name === target && i.lifecycle === 'active')
+      if (m) {
+        m.pendingWakeupSeq = post.seq
+        if (ACTIONABLE_WAKE_KINDS.has(post.kind)) m.lastWakeTaskSeq = post.seq
+        membersToWake.push(m.name)
+      }
+    }
+  }
+
+  let shouldNotifyCoordinator = false
+  if (
+    post.from !== 'coordinator' &&
+    ((post.resolvedTargets.includes('coordinator') && post.wake) || COORDINATOR_ESCALATION_KINDS.has(post.kind))
+  ) {
+    next.coordinatorPendingSeq = post.seq
+    shouldNotifyCoordinator = true
+  }
+
+  if (draft.lastStallWatermarkAfterPost !== undefined) next.lastStallWatermark = draft.lastStallWatermarkAfterPost
+  next.headSeq = post.seq
+  next.updatedAt = now
+  return { post, nextGroup: next, membersToWake, shouldNotifyCoordinator, breakerTrip }
+}
+
+export function createCollabGroupRuntime(
+  ctx: HelmxPluginContext,
+  getCoordinator: () => SwarmCoordinator,
+): CollabGroupRuntime {
+  const groupsRootDir = (): string => join(ctx.dataDir, 'groups')
+  const groupsById = new Map<string, CollabGroupRecord>()
+  const postsByGroup = new Map<string, BoardPost[]>()
+  const groupQueue = createKeyedQueue<string>()
+  const coordCreateQueue = createKeyedQueue<number>()
+  let stopping = false
+
+  const isAlive = (): boolean => {
+    const coord = getCoordinator()
+    return !stopping && coord.isActive() && !coord.isShutdown() && !ctx.host.isClosing
+  }
+  const logDiagnostic = (msg: string): void => console.error(`[swarm] ${ctx.host.redact(msg)}`)
+  const groupDirOf = (id: string): string => join(groupsRootDir(), id)
+  const metaPathOf = (id: string): string => join(groupDirOf(id), 'meta.json')
+  const boardPathOf = (id: string): string => join(groupDirOf(id), 'board.jsonl')
+  const redactObject = <T>(value: T): T => redactJsonValue(value, (text) => ctx.host.redact(text)) as T
+
+  const workerHolds = createManagedWorkerRegistry(ctx, getCoordinator, () => stopping)
+  const runGroupLocked = <T>(groupId: string, fn: () => Promise<T>): Promise<T> =>
+    groupQueue.enqueue(groupId, () => mkdir(groupDirOf(groupId), { recursive: true }).then(() => ctx.host.withFileLock(metaPathOf(groupId), fn)))
+
+  const resolveMemberLive = (conversationId: number): MemberLiveSnapshot =>
+    resolveMemberLiveSnapshot(getCoordinator(), conversationId)
+
+  const getBusyActiveMemberNames = (group: CollabGroupRecord, excludeConvId?: number): Set<string> =>
+    collectBusyActiveMemberNames(group, getCoordinator(), excludeConvId)
 
   const persistMetaLocked = async (record: CollabGroupRecord): Promise<CollabGroupRecord> => {
     const clean = assertCollabGroupRecord(redactObject(structuredClone(record)))
     await mkdir(groupDirOf(clean.id), { recursive: true })
     await ctx.host.atomicWriteFile(metaPathOf(clean.id), `${JSON.stringify(clean, null, 2)}\n`)
     groupsById.set(clean.id, clean)
-    if (!stopping && getCoordinator().isActive()) {
-      if (clean.status !== 'active') {
-        dispatcher.forgetGroupReportState(clean.id)
-        for (const m of clean.members) releaseManagedWorker(m.conversationId)
-      } else {
-        for (const m of clean.members) {
-          if (m.lifecycle === 'active') ensureWorkerManaged(m.conversationId)
-          else releaseManagedWorker(m.conversationId)
-        }
-      }
-    }
+    workerHolds.syncRecordWorkerHolds(clean, (id) => dispatcher.forgetGroupReportState(id))
     return clean
+  }
+
+  const diskPorts = {
+    ctx,
+    groupDirOf,
+    metaPathOf,
+    boardPathOf,
+    runGroupLocked,
+    persistMeta: persistMetaLocked,
+    logDiagnostic,
   }
 
   const syncCoordinatorProjectionSafely = (
@@ -194,7 +294,10 @@ export function createCollabGroupRuntime(
   }
 
   const updateGroupMeta = (groupId: string, fn: (draft: CollabGroupRecord) => void): Promise<void> =>
-    mutateGroup(groupId, (draft) => { fn(draft); return { group: draft, result: undefined } })
+    mutateGroup(groupId, (draft) => {
+      fn(draft)
+      return { group: draft, result: undefined }
+    })
 
   const updateMember = (groupId: string, memberName: string, fn: (member: GroupMemberState) => void): Promise<void> =>
     updateGroupMeta(groupId, (draft) => {
@@ -238,82 +341,33 @@ export function createCollabGroupRuntime(
 
       if (current.status !== 'active') throw groupClosedError(validId, '已结单，无法追加黑板消息')
 
-      const next = structuredClone(current)
-      const now = Date.now()
-      const seq = next.headSeq + 1
-      const post = assertBoardPost(
-        redactObject<BoardPost>({
-          seq, groupId: validId, from: draft.from, to: [...draft.to], resolvedTargets: [...draft.resolvedTargets],
-          wake: draft.wake, kind: draft.kind, refs: [...draft.refs], body: draft.body,
-          ...(draft.idempotencyKey !== undefined ? { idempotencyKey: draft.idempotencyKey } : {}),
-          ...(draft.worktreeSnapshot !== undefined ? { worktreeSnapshot: draft.worktreeSnapshot } : {}),
-          createdAt: now,
-        }),
+      const transition = buildAppendPostTransition(
+        current,
+        draft,
+        getCoordinator().getConfig().maxPeerHopsWithoutCoordinator,
+        redactObject,
       )
+      membersToWake = transition.membersToWake
+      shouldNotifyCoordinator = transition.shouldNotifyCoordinator
+      breakerTrip = transition.breakerTrip
 
-      const sender = next.members.find((m) => m.name === post.from && m.lifecycle === 'active')
-      if (sender) {
-        sender.lastPostSeq = post.seq
-        sender.lastOutboundEdge = { seq: post.seq, to: [...post.to], kind: post.kind }
-        if (sender.readCursorSeq === current.headSeq) sender.readCursorSeq = post.seq
-      }
-
-      const activeNames = new Set(next.members.filter((m) => m.lifecycle === 'active').map((m) => m.name))
-      const wakeablePeers =
-        post.from !== 'coordinator' && post.from !== 'system' && post.wake && post.kind !== 'blocker'
-          ? post.resolvedTargets.filter((t) => t !== 'coordinator' && activeNames.has(t))
-          : []
-
-      if (post.from === 'coordinator' || (post.from === 'system' && COORDINATOR_ESCALATION_KINDS.has(post.kind))) {
-        delete next.peerHopsSinceCoordinator
-      } else if (wakeablePeers.length > 0) {
-        const maxPeerHops = getCoordinator().getConfig().maxPeerHopsWithoutCoordinator
-        const nextHops = (next.peerHopsSinceCoordinator ?? 0) + 1
-        if (nextHops > maxPeerHops) {
-          breakerTrip = { seq: post.seq, from: post.from, to: [...post.to], maxPeerHops }
-          delete next.peerHopsSinceCoordinator
-        } else {
-          next.peerHopsSinceCoordinator = nextHops
-        }
-      }
-
-      membersToWake = []
-      if (post.wake && !breakerTrip) {
-        for (const target of post.resolvedTargets) {
-          if (target === 'coordinator') continue
-          const m = next.members.find((i) => i.name === target && i.lifecycle === 'active')
-          if (m) {
-            m.pendingWakeupSeq = post.seq
-            if (ACTIONABLE_WAKE_KINDS.has(post.kind)) m.lastWakeTaskSeq = post.seq
-            membersToWake.push(m.name)
-          }
-        }
-      }
-
-      if (
-        post.from !== 'coordinator' &&
-        ((post.resolvedTargets.includes('coordinator') && post.wake) || COORDINATOR_ESCALATION_KINDS.has(post.kind))
-      ) {
-        next.coordinatorPendingSeq = post.seq
-        shouldNotifyCoordinator = true
-      }
-
-      if (draft.lastStallWatermarkAfterPost !== undefined) next.lastStallWatermark = draft.lastStallWatermarkAfterPost
-      next.headSeq = post.seq
-      next.updatedAt = now
-
-      await appendPostAndPersistMetaLocked(validId, post, next)
+      await appendPostAndPersistMetaLocked(diskPorts, validId, transition.post, transition.nextGroup)
       const list = postsByGroup.get(validId) ?? []
-      list.push(post)
+      list.push(transition.post)
       postsByGroup.set(validId, list)
-      return post
+      return transition.post
     })
 
     syncCoordinatorProjectionSafely(coordinatorConversationId, { syncIndex: true })
 
     if (breakerTrip) {
       await appendPost(validId, {
-        from: 'system', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'blocker', refs: [breakerTrip.seq],
+        from: 'system',
+        to: ['coordinator'],
+        resolvedTargets: ['coordinator'],
+        wake: true,
+        kind: 'blocker',
+        refs: [breakerTrip.seq],
         body: `Peer handoff circuit breaker tripped after ${breakerTrip.maxPeerHops} consecutive peer-to-peer wakeups without coordinator intervention (latest #${breakerTrip.seq} from @${breakerTrip.from} -> ${breakerTrip.to.join(', ')}). Automated peer wakeups paused for coordinator decision.`,
       })
       return createdPost
@@ -326,7 +380,11 @@ export function createCollabGroupRuntime(
         if (
           latest &&
           !isPendingReportExhausted(latest) &&
-          shouldFlushCoordinatorReport({ group: latest, posts: postsByGroup.get(validId) ?? [], busyMemberNames: getBusyActiveMemberNames(latest) })
+          shouldFlushCoordinatorReport({
+            group: latest,
+            posts: postsByGroup.get(validId) ?? [],
+            busyMemberNames: getBusyActiveMemberNames(latest),
+          })
         ) {
           void dispatcher.scheduleCoordinatorReport(validId, COORDINATOR_BATCH_WINDOW_MS)
         }
@@ -336,15 +394,19 @@ export function createCollabGroupRuntime(
   }
 
   const dispatcher = createWakeDispatcher({
-    ctx, getCoordinator, isAlive,
+    ctx,
+    getCoordinator,
+    isAlive,
     getGroup: (id) => groupsById.get(id),
     getPosts: (id) => postsByGroup.get(id) ?? [],
-    updateGroupMeta, updateMember,
+    updateGroupMeta,
+    updateMember,
     reportLockPath: (id) => join(groupDirOf(id), 'report.lock'),
     wakeupLockPath: (id, name) => join(groupDirOf(id), `wakeup-${name}.lock`),
-    resolveMemberLive, getBusyActiveMemberNames,
+    resolveMemberLive,
+    getBusyActiveMemberNames,
     onWakeupRecoveryFailed: async (groupId, memberName, fromSeq, toSeq, err) => {
-      const safeErr = ctx.host.redact(err instanceof Error ? err.message : String(err))
+      const safeErr = ctx.host.redact(errorMessageOf(err))
       await appendPost(groupId, {
         from: 'system',
         to: ['coordinator'],
@@ -358,19 +420,27 @@ export function createCollabGroupRuntime(
   })
 
   const projections = createBoardProjections({
-    getCoordinator, isStopping: () => stopping,
+    getCoordinator,
+    isStopping: () => stopping,
     getAllGroups: () => [...groupsById.values()],
     getPosts: (id) => postsByGroup.get(id),
     resolveMemberLive,
   })
 
   const healing = createMemberHealing({
-    ctx, getCoordinator, isAlive,
-    getGroup: (id) => groupsById.get(id),
-    getPosts: (id) => postsByGroup.get(id),
-    setPostsCache: (id, posts) => void postsByGroup.set(id, posts),
-    updateGroupMeta, updateMember, appendPost, persistMeta: persistMetaLocked, runGroupLocked,
-    metaPath: metaPathOf, boardPath: boardPathOf, logDiagnostic, releaseManagedWorker, dispatcher,
+    ctx,
+    getCoordinator,
+    isAlive,
+    store: {
+      getGroup: (id) => groupsById.get(id),
+      getPosts: (id) => postsByGroup.get(id),
+      updateGroupMeta,
+      updateMember,
+      appendPost,
+      releaseManagedWorker: workerHolds.releaseManagedWorker,
+    },
+    logDiagnostic,
+    dispatcher,
   })
 
   const findActiveGroupByCoordinator = (id: number): CollabGroupRecord | undefined => {
@@ -419,10 +489,11 @@ export function createCollabGroupRuntime(
   return {
     async loadAllFromDisk() {
       stopping = false
-      releaseAllManagedWorkers()
+      workerHolds.releaseAll()
       groupsById.clear()
       postsByGroup.clear()
       groupQueue.clear()
+      coordCreateQueue.clear()
       projections.reset()
       dispatcher.resetWatermarks()
 
@@ -435,15 +506,22 @@ export function createCollabGroupRuntime(
       for (const entry of dirEntries) {
         if (!entry.isDirectory()) continue
         const groupId = assertGroupId(entry.name)
-        const { record, posts } = await healing.loadGroupFromDisk(groupId)
+        const { record, posts } = await loadGroupFromDisk(
+          {
+            ...diskPorts,
+            isCoordinatorMissing: (coordId) => !getCoordinator().readConversationOrUndefined(coordId),
+          },
+          groupId,
+        )
         groupsById.set(groupId, record)
         if (posts !== undefined) postsByGroup.set(groupId, posts)
       }
       for (const g of [...groupsById.values()]) {
         if (g.status !== 'active') continue
         for (const m of [...g.members]) {
-          if (m.lifecycle !== 'active') continue
-          if (getCoordinator().readConversationOrUndefined(m.conversationId)) ensureWorkerManaged(m.conversationId)
+          if (m.lifecycle === 'active' && getCoordinator().readConversationOrUndefined(m.conversationId)) {
+            workerHolds.ensureWorkerManaged(m.conversationId)
+          }
         }
       }
       projections.syncIndex()
@@ -457,17 +535,12 @@ export function createCollabGroupRuntime(
 
     async reconcileRecoveredGroups() {
       if (!isAlive()) return
-      // Phase 1: Reconcile pre-crash inflightReport and deleted active workers before orphan worktree
-      // cleanup and before any live wakeups/reports are dispatched.
       for (const g of [...groupsById.values()]) {
         if (!isAlive()) return
         if (g.status === 'active') await healing.prepareGroupRecovery(g.id)
       }
       if (!isAlive()) return
-      // Phase 2: Reclaim true orphan builtin:swarm worktree holds (runs after builtin:worktree.reconcile()
-      // and Phase 1 hold releases, and before Phase 3 dispatches any live recovery turns).
       await reconcileOrphanWorktreeHolds(ctx, groupsById.values(), logDiagnostic)
-      // Phase 3: Reconcile member inflight wakeups/nudges, resume pending work, and flush coordinator reports.
       for (const g of [...groupsById.values()]) {
         if (!isAlive()) return
         if (g.status === 'active') await healing.reconcileSingleRecoveredGroup(g.id)
@@ -478,8 +551,9 @@ export function createCollabGroupRuntime(
     async stopAndClear() {
       stopping = true
       await dispatcher.drain()
-      releaseAllManagedWorkers()
+      workerHolds.releaseAll()
       groupQueue.clear()
+      coordCreateQueue.clear()
       groupsById.clear()
       postsByGroup.clear()
       projections.reset()
@@ -497,7 +571,21 @@ export function createCollabGroupRuntime(
     findWorkerMember,
     findLatestGroupForConversation,
     getPosts: (id) => postsByGroup.get(id) ?? [],
-    ensurePostsLoaded: healing.ensurePostsLoaded,
+    ensurePostsLoaded: (groupId) =>
+      ensureGroupPostsLoaded(
+        {
+          ctx,
+          boardPathOf,
+          runGroupLocked,
+          logDiagnostic,
+          getGroup: (id) => groupsById.get(id),
+          getPosts: (id) => postsByGroup.get(id),
+          setPostsCache: (id, posts) => {
+            postsByGroup.set(id, posts)
+          },
+        },
+        groupId,
+      ),
 
     buildBoardView(groupId: string, postsOverride?: readonly BoardPost[]): BoardViewDoc {
       const validId = assertGroupId(groupId)
@@ -521,10 +609,13 @@ export function createCollabGroupRuntime(
 
     async onConversationDeleted(id: number) {
       if (stopping) return
-      releaseManagedWorker(id)
+      workerHolds.releaseManagedWorker(id)
       for (const g of [...groupsById.values()]) {
         if (g.coordinatorConversationId === id && !g.coordinatorDetached) {
-          await updateGroupMeta(g.id, (d) => { d.coordinatorDetached = true; d.updatedAt = Date.now() })
+          await updateGroupMeta(g.id, (d) => {
+            d.coordinatorDetached = true
+            d.updatedAt = Date.now()
+          })
         } else if (g.status === 'active' && g.members.some((m) => m.conversationId === id && m.lifecycle === 'active')) {
           await healing.reconcileDeletedWorker(g.id, id)
         } else if (g.members.some((m) => m.conversationId === id)) {
@@ -535,31 +626,41 @@ export function createCollabGroupRuntime(
     },
 
     async createGroup(input) {
-      const existing = findActiveGroupByCoordinator(input.coordinatorConversationId)
-      if (existing) {
-        if (input.createKey !== undefined && existing.createKey === input.createKey) return existing
-        throw swarmError(
-          'swarm_group_already_active',
-          `会话 #${input.coordinatorConversationId} 已存在活跃协作组 '${existing.id}'（同会话限 1 个活跃组）`,
-          409,
-          { conversationId: input.coordinatorConversationId, groupId: existing.id },
-        )
-      }
-      const now = Date.now()
-      const groupId = generateGroupId()
-      const record: CollabGroupRecord = {
-        id: groupId, title: input.title.trim(),
-        ...(input.objective?.trim() ? { objective: input.objective.trim() } : {}),
-        coordinatorConversationId: input.coordinatorConversationId,
-        ...(input.createKey !== undefined ? { createKey: input.createKey } : {}),
-        status: 'active', members: [], headSeq: 0, coordinatorNotifiedSeq: 0, coordinatorPendingSeq: 0, createdAt: now, updatedAt: now,
-      }
-      const saved = await runGroupLocked(groupId, () => {
-        postsByGroup.set(groupId, [])
-        return persistMetaLocked(record)
+      // Serialize per-coordinator creation to eliminate TOCTOU duplicate active groups.
+      return coordCreateQueue.enqueue(input.coordinatorConversationId, async () => {
+        const existing = findActiveGroupByCoordinator(input.coordinatorConversationId)
+        if (existing) {
+          if (input.createKey !== undefined && existing.createKey === input.createKey) return existing
+          throw swarmError(
+            'swarm_group_already_active',
+            `会话 #${input.coordinatorConversationId} 已存在活跃协作组 '${existing.id}'（同会话限 1 个活跃组）`,
+            409,
+            { conversationId: input.coordinatorConversationId, groupId: existing.id },
+          )
+        }
+        const now = Date.now()
+        const groupId = generateGroupId()
+        const record: CollabGroupRecord = {
+          id: groupId,
+          title: input.title.trim(),
+          ...(input.objective?.trim() ? { objective: input.objective.trim() } : {}),
+          coordinatorConversationId: input.coordinatorConversationId,
+          ...(input.createKey !== undefined ? { createKey: input.createKey } : {}),
+          status: 'active',
+          members: [],
+          headSeq: 0,
+          coordinatorNotifiedSeq: 0,
+          coordinatorPendingSeq: 0,
+          createdAt: now,
+          updatedAt: now,
+        }
+        const saved = await runGroupLocked(groupId, () => {
+          postsByGroup.set(groupId, [])
+          return persistMetaLocked(record)
+        })
+        syncCoordinatorProjectionSafely(saved.coordinatorConversationId, { syncIndex: true })
+        return saved
       })
-      syncCoordinatorProjectionSafely(saved.coordinatorConversationId, { syncIndex: true })
-      return saved
     },
 
     updateGroup: (groupId, patch) =>
@@ -588,7 +689,9 @@ export function createCollabGroupRuntime(
           const existingM = current.members.find((m) => m.name === memberInit.name && m.dispatchKey === memberInit.dispatchKey)
           if (existingM) {
             const list = postsByGroup.get(validId) ?? []
-            const existingP = (existingM.briefPostSeq !== undefined ? list.find((p) => p.seq === existingM.briefPostSeq) : undefined) ?? list.find((p) => p.kind === 'brief' && p.to.includes(existingM.name))
+            const existingP =
+              (existingM.briefPostSeq !== undefined ? list.find((p) => p.seq === existingM.briefPostSeq) : undefined) ??
+              list.find((p) => p.kind === 'brief' && p.to.includes(existingM.name))
             if (existingP) return { group: current, member: existingM, post: existingP, replayed: true }
           }
         }
@@ -597,22 +700,37 @@ export function createCollabGroupRuntime(
         const next = structuredClone(current)
         const now = Date.now()
         const seq = next.headSeq + 1
-        const memberState: GroupMemberState = { ...memberInit, briefPostSeq: seq, readCursorSeq: current.headSeq, pendingWakeupSeq: seq, lastWakeTaskSeq: seq }
+        const memberState: GroupMemberState = {
+          ...memberInit,
+          briefPostSeq: seq,
+          readCursorSeq: current.headSeq,
+          pendingWakeupSeq: seq,
+          lastWakeTaskSeq: seq,
+        }
         next.members.push(memberState)
         const post = assertBoardPost(
           redactObject<BoardPost>({
-            seq, groupId: validId, from: 'coordinator', to: [memberState.name], resolvedTargets: [memberState.name],
-            wake: true, kind: 'brief', refs: [], body: briefPrompt, createdAt: now,
+            seq,
+            groupId: validId,
+            from: 'coordinator',
+            to: [memberState.name],
+            resolvedTargets: [memberState.name],
+            wake: true,
+            kind: 'brief',
+            refs: [],
+            body: briefPrompt,
+            createdAt: now,
           }),
         )
         delete next.peerHopsSinceCoordinator
         next.headSeq = seq
         next.updatedAt = now
-        const savedGroup = await appendPostAndPersistMetaLocked(validId, post, next)
+        const savedGroup = await appendPostAndPersistMetaLocked(diskPorts, validId, post, next)
         const list = postsByGroup.get(validId) ?? []
         list.push(post)
         postsByGroup.set(validId, list)
-        return { group: savedGroup, member: savedGroup.members.find((m) => m.name === memberState.name)!, post, replayed: false }
+        const savedMember = savedGroup.members.find((m) => m.name === memberState.name) ?? memberState
+        return { group: savedGroup, member: savedMember, post, replayed: false }
       })
 
       syncCoordinatorProjectionSafely(added.group.coordinatorConversationId, { syncIndex: true })

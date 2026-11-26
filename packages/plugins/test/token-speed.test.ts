@@ -945,3 +945,19 @@ test('配置热更新：修改 slidingWindowMs 经 plugin.changed 即时热生�
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
+
+test('ConversationTokenSpeedTracker：seenEntries 超限采用 FIFO 淘汰最老条目而非整表清空', { timeout: 60_000 }, () => {
+  const tracker = trackerOf()
+  for (let i = 1; i <= 257; i += 1) {
+    tracker.observeFrame(i * 10, { generation: { taskId: i, attempt: 1 } })
+    tracker.noteCompletion({ taskId: i, entryId: `entry-${i}`, usageOutput: 10, stopReason: undefined, contentChars: 40 }, i * 10 + 5)
+  }
+  // entry-257 加入后集合大小为 257 > 256：仅最老的 entry-1 被淘汰，entry-2..entry-257 仍保留去重。
+  tracker.observeFrame(3000, { generation: { taskId: 300, attempt: 1 } })
+  tracker.noteCompletion({ taskId: 300, entryId: 'entry-2', usageOutput: 50, stopReason: undefined, contentChars: 200 }, 3010)
+  assert.equal(tracker.liveStatus(3010)?.outputTokens, 257 * 10, '次老条目 entry-2 不得因整表 clear 而丢失去重')
+
+  tracker.observeFrame(3020, { generation: { taskId: 301, attempt: 1 } })
+  tracker.noteCompletion({ taskId: 301, entryId: 'entry-1', usageOutput: 50, stopReason: undefined, contentChars: 200 }, 3030)
+  assert.equal(tracker.liveStatus(3030)?.outputTokens, 257 * 10 + 50, '最老条目 entry-1 应按 FIFO 被淘汰')
+})

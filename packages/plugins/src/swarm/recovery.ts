@@ -10,6 +10,7 @@ import {
   type ConversationEntry, type ConversationSummary, type HelmxHostApi, type HelmxPluginContext,
 } from '@helmx/protocol'
 import { lastAssistantText, truncate } from '../entry-text.js'
+import { errorMessageOf, isConversationNotFoundError } from '../shared-helpers.js'
 import {
   ARCHIVED_COORDINATOR_TAG, ARCHIVED_WORKER_TAG, COORDINATOR_TAG, SWARM_PLUGIN_ID, WORKER_TAG,
   assertBoardPost, setConversationTags, swarmError,
@@ -40,7 +41,7 @@ export function inspectBoardWalLines(rawBoard: string, groupId: string, headSeq:
     if (line.trim() === '') throw corrupt(`board.jsonl 第 ${i + 1} 行为空行`, { line: i + 1 })
     let parsed: unknown
     try { parsed = JSON.parse(line) } catch (err) {
-      throw corrupt(`board.jsonl 第 ${i + 1} 行 JSON 非法：${err instanceof Error ? err.message : String(err)}`, { line: i + 1 })
+      throw corrupt(`board.jsonl 第 ${i + 1} 行 JSON 非法：${errorMessageOf(err)}`, { line: i + 1 })
     }
     const post = assertBoardPost(parsed)
     if (post.groupId !== groupId || post.seq !== i + 1) {
@@ -91,7 +92,7 @@ export async function classifyInflightIntent(
     if (sub.status === 'done') return 'settled'
     return 'unanswered'
   } catch (err) {
-    if (err instanceof HelmxError && err.code === 'not_found') return 'missing_conv'
+    if (isConversationNotFoundError(err)) return 'missing_conv'
     throw err
   }
 }
@@ -221,7 +222,7 @@ export async function reconcileOrphanWorktreeHolds(
     listed = (await ctx.host.invokeAction(WORKTREE_PLUGIN_ID, 'list_worktrees', {})) as typeof listed
   } catch (err) {
     if (!(err instanceof HelmxError && (err.code === 'plugin_disabled' || err.code === 'unknown_action'))) {
-      logDiagnostic(`查询受管 worktree 失败：${err instanceof Error ? err.message : String(err)}`)
+      logDiagnostic(`查询受管 worktree 失败：${errorMessageOf(err)}`)
     }
     return false
   }
@@ -255,9 +256,7 @@ export async function reconcileOrphanWorktreeHolds(
         )
         continue
       }
-      logDiagnostic(
-        `回收孤儿 worktree '${wt.id}' 失败（已跳过不阻断启动）：${err instanceof Error ? err.message : String(err)}`,
-      )
+      logDiagnostic(`回收孤儿 worktree '${wt.id}' 失败（已跳过不阻断启动）：${errorMessageOf(err)}`)
     }
   }
   return true

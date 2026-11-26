@@ -2539,3 +2539,112 @@ test('swarm-unit17: listGroups returns bounded newest-first summaries, filters b
     (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
 })
+
+test('swarm-unit18: concurrent createGroup serializes per coordinatorConversationId (TOCTOU fix)', { timeout: 60_000 }, async () => {
+  const { mkdtempSync, rmSync, writeFileSync, mkdirSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { dirname, join } = await import('node:path')
+  const { createCollabGroupRuntime } = await import('../src/swarm/group-store.js')
+  const { resolveSwarmConfig } = await import('../src/swarm/contracts.js')
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-swarm-toctou-'))
+  try {
+    let enteredFirst = false
+    let releaseFirst!: () => void
+    const firstWriteGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const fakeCtx = {
+      dataDir: dir,
+      host: {
+        redact: (s: string) => s,
+        withFileLock: async <T>(_p: string, fn: () => Promise<T>) => fn(),
+        atomicWriteFile: async (filePath: string, content: string) => {
+          if (!enteredFirst) {
+            enteredFirst = true
+            await firstWriteGate
+          }
+          mkdirSync(dirname(filePath), { recursive: true })
+          writeFileSync(filePath, content, 'utf8')
+        },
+        manageConversation: () => () => {},
+      },
+    } as never
+    const fakeCoordinator = {
+      isActive: () => true,
+      isShutdown: () => false,
+      getConfig: () => resolveSwarmConfig({}),
+      writeIndex: () => {},
+      getDocs: () => ({
+        boardBadges: { get: () => ({ byConversation: {} }), set: () => {}, update: () => {}, flush: async () => {} },
+        boardView: {
+          get: () => null,
+          set: () => {},
+          update: () => {},
+          delete: () => {},
+          listConversationIds: () => [],
+          flush: async () => {},
+        },
+      }),
+      settlingWorkers: new Set<number>(),
+      reportError: () => {},
+      readConversationOrUndefined: (id: number) => ({
+        id,
+        title: `coord-${id}`,
+        profileId: 'assistant',
+        nodeId: 'local',
+        cwd: dir,
+        model: 'faux/faux-1',
+        thinkingLevel: 'off' as const,
+        unread: false,
+        pinned: false,
+        pendingAskCount: 0,
+        status: 'idle' as const,
+        tags: [],
+        createdAt: 1,
+        updatedAt: 1,
+        stateChangeSeq: 1,
+        completionSeq: 0,
+      }),
+    } as never
+
+    const runtime = createCollabGroupRuntime(fakeCtx, () => fakeCoordinator)
+    await runtime.loadAllFromDisk()
+
+    // Concurrent calls without createKey: first succeeds, second MUST reject 409 swarm_group_already_active
+    const p1 = runtime.createGroup({ coordinatorConversationId: 50, title: 'First' })
+    const p2 = runtime.createGroup({ coordinatorConversationId: 50, title: 'Second' })
+    // Concurrent idempotent call with same createKey after group #51 pauses in write: returns same groupId
+    let p3Settled = false
+    let releaseSecond!: () => void
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve })
+    let callsAfterFirst = 0
+    ;(fakeCtx as { host: { atomicWriteFile: (f: string, c: string) => Promise<void> } }).host.atomicWriteFile = async (
+      filePath: string,
+      content: string,
+    ) => {
+      callsAfterFirst += 1
+      if (callsAfterFirst === 1) await firstWriteGate
+      if (callsAfterFirst === 2) await secondGate
+      mkdirSync(dirname(filePath), { recursive: true })
+      writeFileSync(filePath, content, 'utf8')
+    }
+    releaseFirst()
+    const [r1, r2] = await Promise.allSettled([p1, p2])
+    assert.equal(r1.status, 'fulfilled')
+    assert.equal(r2.status, 'rejected')
+    assert.ok(r2.reason instanceof HelmxError && r2.reason.code === 'swarm_group_already_active' && r2.reason.status === 409)
+
+    const idemp1 = runtime.createGroup({ coordinatorConversationId: 51, title: 'Idem', createKey: 'k1' })
+    const idemp2 = runtime.createGroup({ coordinatorConversationId: 51, title: 'Idem', createKey: 'k1' }).then((g) => {
+      p3Settled = true
+      return g
+    })
+    await new Promise((r) => setImmediate(r))
+    assert.equal(p3Settled, false, 'concurrent idempotent createGroup must wait on coordinator lock')
+    releaseSecond()
+    const [g1, g2] = await Promise.all([idemp1, idemp2])
+    assert.equal(g1.id, g2.id)
+    assert.equal(runtime.listGroups().filter((g) => g.coordinatorConversationId === 50).length, 1)
+    assert.equal(runtime.listGroups().filter((g) => g.coordinatorConversationId === 51).length, 1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

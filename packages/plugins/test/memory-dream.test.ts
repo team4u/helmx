@@ -349,6 +349,7 @@ async function makeHarness(t: test.TestContext, options: { startMs?: number } = 
           (filter?.profileId === undefined || c.profileId === filter.profileId) &&
           (!filter?.topLevelOnly || c.parentConversationId === undefined),
       ),
+    onEvent: () => () => {},
     emitEvent: (type: string, payload: unknown) => {
       if (type === 'notification') fixture.events.push(payload as { title: string; body: string })
     },

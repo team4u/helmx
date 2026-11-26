@@ -49,16 +49,25 @@ export class SlidingWindow {
 
   getTps(now: number): number {
     const cutoff = now - this.windowMs
-    while (this.start < this.events.length && this.events[this.start]!.time < cutoff) this.start += 1
+    while (this.start < this.events.length) {
+      const head = this.events[this.start]
+      if (!head || head.time >= cutoff) break
+      this.start += 1
+    }
     if (this.start >= this.events.length) return 0
     let tokens = 0
-    for (let i = this.start; i < this.events.length; i += 1) tokens += this.events[i]!.tokens
+    for (let i = this.start; i < this.events.length; i += 1) {
+      const ev = this.events[i]
+      if (ev) tokens += ev.tokens
+    }
     if (tokens <= 0) return 0
-    const first = this.events[this.start]!
-    const last = this.events[this.events.length - 1]!
+    const first = this.events[this.start]
+    const last = this.events[this.events.length - 1]
+    if (!first || !last) return 0
+    const prev = this.start > 0 ? this.events[this.start - 1] : undefined
     const spanStart =
-      first.time === last.time && first.segment === last.segment && this.start > 0 && this.events[this.start - 1]!.segment === first.segment
-        ? this.events[this.start - 1]!.time
+      first.time === last.time && first.segment === last.segment && prev !== undefined && prev.segment === first.segment
+        ? prev.time
         : first.time
     return (1000 * tokens) / Math.max(now - spanStart, this.minSpanMs)
   }
@@ -100,13 +109,19 @@ export class ConversationTokenSpeedTracker {
     if (fact.entryId !== undefined) {
       if (this.seenEntries.has(fact.entryId)) return
       this.seenEntries.add(fact.entryId)
-      if (this.seenEntries.size > MAX_TRACKED) this.seenEntries.clear()
+      if (this.seenEntries.size > MAX_TRACKED) {
+        const oldestEntry = this.seenEntries.values().next().value
+        if (oldestEntry !== undefined) this.seenEntries.delete(oldestEntry)
+      }
     }
     const seg = this.pending.get(fact.taskId)
     if (!seg) return
     this.pending.delete(fact.taskId)
     this.completedAttempts.set(fact.taskId, seg.attempt)
-    if (this.completedAttempts.size > MAX_TRACKED) this.completedAttempts.delete(this.completedAttempts.keys().next().value!)
+    if (this.completedAttempts.size > MAX_TRACKED) {
+      const oldestTask = this.completedAttempts.keys().next().value
+      if (oldestTask !== undefined) this.completedAttempts.delete(oldestTask)
+    }
 
     if (fact.stopReason === 'error' || fact.stopReason === 'aborted') {
       if (this.active === seg) { this.active = undefined; this.window.reset() }
@@ -118,20 +133,20 @@ export class ConversationTokenSpeedTracker {
     const prevChars = seg.chars
     const contentChars = typeof fact.contentChars === 'number' && Number.isFinite(fact.contentChars) && fact.contentChars >= 0 ? fact.contentChars : undefined
     const deltaChars = contentChars !== undefined ? Math.max(0, contentChars - prevChars) : 0
-    const hasPosUsage = typeof fact.usageOutput === 'number' && Number.isFinite(fact.usageOutput) && fact.usageOutput > 0
-    if ((deltaChars > 0 || hasPosUsage) && !seg.baselineOnly) this.captureFirstContent(seg, now)
+    const usageOutput = typeof fact.usageOutput === 'number' && Number.isFinite(fact.usageOutput) && fact.usageOutput > 0 ? fact.usageOutput : undefined
+    if ((deltaChars > 0 || usageOutput !== undefined) && !seg.baselineOnly) this.captureFirstContent(seg, now)
 
     let estDelta = 0
-    if (deltaChars > 0) {
-      estDelta = estimateTokensOf(contentChars!) - estimateTokensOf(prevChars)
-      const tailTokens = hasPosUsage && !seg.baselineOnly ? Math.max(0, fact.usageOutput! - seg.tokens) : estDelta
-      seg.chars = Math.max(seg.chars, contentChars!)
+    if (contentChars !== undefined && deltaChars > 0) {
+      estDelta = estimateTokensOf(contentChars) - estimateTokensOf(prevChars)
+      const tailTokens = usageOutput !== undefined && !seg.baselineOnly ? Math.max(0, usageOutput - seg.tokens) : estDelta
+      seg.chars = Math.max(seg.chars, contentChars)
       if (now !== undefined) {
         if (seg.firstGrowthAt !== undefined && now > seg.firstGrowthAt) {
           seg.lastGrowthAt = now
           this.recordWindow(now, tailTokens, seg.id)
         } else if (seg.firstGrowthAt === undefined && !seg.baselineOnly && seg.emptySeenAt !== undefined && now >= seg.emptySeenAt) {
-          const eff = hasPosUsage ? fact.usageOutput! : estDelta
+          const eff = usageOutput !== undefined ? usageOutput : estDelta
           if (eff > 0) this.lastLiveTps = (eff * 1000) / Math.max(now - seg.emptySeenAt, this.minSpanMs)
         }
       }
