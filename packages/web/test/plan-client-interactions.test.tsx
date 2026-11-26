@@ -1472,6 +1472,7 @@ describe('plan-client-interactions', () => {
       const light = runningMount.host.querySelector('.helmx-status-light')
       assert.ok(light !== null)
       assert.equal(light.getAttribute('data-tone'), 'working')
+      assert.equal(runningMount.host.querySelectorAll('.spin-slow').length, 1, 'running row renders exactly one spinner (inside StatusLight)')
     } finally {
       await runningMount.unmount()
     }

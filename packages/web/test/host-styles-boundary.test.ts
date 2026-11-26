@@ -1,9 +1,9 @@
 /**
  * 宿主样式分片归属契约（静态结构断言，非属性值正则）：
- * `.status-dot` 通用状态灯词汇（base / working / blocked / done / error /
- * background + keyframes + prefers-reduced-motion）是宿主公共设计系统资产，
+ * `.status-dot` 与 `.status-spinner` 通用状态指示词汇（base / blocked / done / error /
+ * working / background + keyframes + prefers-reduced-motion）是宿主公共设计系统资产，
  * 被 @helmx/plugin-client 的 StatusLight 共享，必须完整归属 primitives.css；
- * navigation.css 只允许保留导航专有覆盖（如 .sidebar-overview-group 的 6px 小点），
+ * navigation.css 只允许保留导航专有覆盖（如 .sidebar-overview-group 的 6px 小点与右侧指示槽），
  * 避免「共享原语依赖导航私有样式」的架构漂移与级联回归。
  */
 import assert from 'node:assert/strict'

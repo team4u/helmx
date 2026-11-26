@@ -5,7 +5,7 @@
  * into the seven honest presentation tones behind a single status light.
  *
  * Tone semantics (shape + color + accessible name, never color alone):
- * - working: in flight (accent dot, soft pulse);
+ * - working: in flight (spinning loader icon, accent color);
  * - blocked: waiting for approval/input (solid warn dot);
  * - done: settled successfully / online / connected (solid ok dot);
  * - failed: settled with error (solid err dot);
@@ -95,8 +95,8 @@ export function normalizeStatusLightTone(status: string | undefined): StatusLigh
   return Object.prototype.hasOwnProperty.call(TONE_ALIASES, key) ? TONE_ALIASES[key]! : 'pending'
 }
 
-/** CSS dot class for a tone (reuses the host .status-dot design-system vocabulary). */
-export function statusLightDotClass(tone: StatusLightTone): string {
+/** CSS dot class for a non-working tone (reuses the host .status-dot design-system vocabulary). */
+export function statusLightDotClass(tone: Exclude<StatusLightTone, 'working'>): string {
   if (tone === 'idle') return 'status-dot'
   if (tone === 'failed') return 'status-dot status-dot-error'
   return `status-dot status-dot-${tone}`

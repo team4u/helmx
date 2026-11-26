@@ -21,7 +21,7 @@ import {
   buildAgentStandings,
   collectEnabledPluginIds,
   conversationStatusBadgeClass,
-  conversationStatusDotClass,
+  conversationStatusIndicatorClass,
   conversationStatusLabel,
   conversationStatusTooltip,
   extractSidebarViews,
@@ -467,12 +467,12 @@ test('conversationStatusLabel / BadgeClass 覆盖五态', { timeout: 60_000 }, (
   assert.equal(conversationStatusBadgeClass('idle'), 'badge badge-neutral')
 })
 
-test('conversationStatusDotClass 仅对非 idle 状态返回圆点类名', { timeout: 60_000 }, () => {
-  assert.equal(conversationStatusDotClass('idle'), null)
-  assert.equal(conversationStatusDotClass('working'), 'status-dot status-dot-working')
-  assert.equal(conversationStatusDotClass('blocked'), 'status-dot status-dot-blocked')
-  assert.equal(conversationStatusDotClass('done'), 'status-dot status-dot-done')
-  assert.equal(conversationStatusDotClass('error'), 'status-dot status-dot-error')
+test('conversationStatusIndicatorClass 仅对非 idle 状态返回指示器类名', { timeout: 60_000 }, () => {
+  assert.equal(conversationStatusIndicatorClass('idle'), null)
+  assert.equal(conversationStatusIndicatorClass('working'), 'status-spinner status-spinner-working')
+  assert.equal(conversationStatusIndicatorClass('blocked'), 'status-dot status-dot-blocked')
+  assert.equal(conversationStatusIndicatorClass('done'), 'status-dot status-dot-done')
+  assert.equal(conversationStatusIndicatorClass('error'), 'status-dot status-dot-error')
 })
 
 test('conversationStatusTooltip 生成准确悬停提示', { timeout: 60_000 }, () => {
@@ -903,14 +903,15 @@ test('Sidebar 状态圆点渲染验证：工作集各态圆点与提示', { time
   })
   const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
-  // 1) idle 不产生任何圆点（conversationStatusDotClass 对 idle 返回 null）
+  // 1) idle 不产生任何指示器（conversationStatusIndicatorClass 对 idle 返回 null）
   assert.ok(!html.includes('status-dot-idle'), 'idle 会话不得渲染状态圆点')
 
-  // 2) working 圆点带 doing 提示与无障碍属性
-  assert.ok(html.includes('class="status-dot status-dot-working"'), '应渲染 working 圆点')
-  assert.ok(html.includes('title="Running: 正在思考方案"'), 'working 圆点应带 doing 提示')
-  assert.ok(html.includes('aria-label="Running: 正在思考方案"'), '圆点应带 aria-label')
-  assert.ok(html.includes('role="status"'), '圆点应带 role=status')
+  // 2) working 旋转指示器带 doing 提示与无障碍属性
+  assert.ok(html.includes('class="status-spinner status-spinner-working"'), '应渲染 working 旋转指示器')
+  assert.match(html, /class="status-spinner status-spinner-working"[^>]*><svg[^>]*class="[^"]*\bspin-slow\b/, 'working 指示器应内含旋转 loader 图标')
+  assert.ok(html.includes('title="Running: 正在思考方案"'), 'working 指示器应带 doing 提示')
+  assert.ok(html.includes('aria-label="Running: 正在思考方案"'), '指示器应带 aria-label')
+  assert.ok(html.includes('role="status"'), '指示器应带 role=status')
 
   // 3) blocked / error / unread done 圆点
   assert.ok(html.includes('class="status-dot status-dot-blocked"'), '应渲染 blocked 圆点')

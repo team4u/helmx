@@ -288,8 +288,8 @@
   color: var(--err);
 }
 
-/* 通用状态灯词汇（宿主公共设计系统，供侧栏会话行与 @helmx/plugin-client StatusLight 共用）：
-   基础圆点 + working/blocked/done/error 色调与呼吸动效 + 后台在途空心环；
+/* 通用状态指示词汇（宿主公共设计系统，供侧栏会话行与 @helmx/plugin-client StatusLight 共用）：
+   基础圆点 + blocked/done/error 色调 + 旋转 loader 指示器（主运行 / 后台在途）；
    aborted 菱形与 pending 空心环见下方统一状态灯段。 */
 .status-dot {
   width: 7px;
@@ -299,12 +299,6 @@
   display: inline-block;
   vertical-align: middle;
   background: var(--fg-muted);
-}
-
-.status-dot-working {
-  background: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-bg);
-  animation: status-dot-pulse 1.8s ease-in-out infinite;
 }
 
 .status-dot-blocked {
@@ -322,44 +316,27 @@
   box-shadow: 0 0 0 2px var(--err-bg);
 }
 
-/* 后台在途空心环（单灯位）：父会话自身空闲/已完成但后台任务（子代理/工作流）
-   While running, it replaces the idle no-light/done green dot as the only status light of the row;
-   hollow with a slow breathing animation, clearly distinct from the solid working pulse of the main turn, never impersonating conversation activity. */
-.status-dot-background {
-  background: transparent;
-  border: 1.5px solid var(--accent);
-  box-sizing: border-box;
-  box-shadow: 0 0 0 2px var(--accent-bg);
-  animation: status-dot-background-pulse 2.6s ease-in-out infinite;
+/* 运行中 / 后台在途旋转指示器：复用内置 loader 图标（spin-slow 已受 prefers-reduced-motion 约束）；
+   主运行态使用 --accent，父会话空闲但后台任务在途使用弱化 --fg-muted 与更慢转速区分层级。 */
+.status-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+  vertical-align: middle;
 }
 
-@keyframes status-dot-background-pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 1.5px var(--accent-bg);
-    opacity: 0.85;
-  }
-  50% {
-    box-shadow: 0 0 0 3px var(--accent-bg);
-    opacity: 1;
-  }
+.status-spinner-working {
+  color: var(--accent);
 }
 
-@keyframes status-dot-pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 1.5px var(--accent-bg);
-    opacity: 0.85;
-  }
-  50% {
-    box-shadow: 0 0 0 3.5px var(--accent-bg);
-    opacity: 1;
-  }
+.status-spinner-background {
+  color: var(--fg-muted);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .status-dot-working,
-  .status-dot-background {
-    animation: none;
-  }
+.status-spinner-background > svg.spin-slow {
+  animation-duration: 1.8s;
 }
 
 /* 通用图标旋转动效（供 Button pending / LoadingState 等公共原语复用） */
@@ -385,10 +362,10 @@
   }
 }
 
-/* 统一状态灯（纯指示灯，不渲染可见状态文字）：执行/状态卡主状态位。
-   复用上方 .status-dot 视觉词汇（base/working/blocked/done/error/background 均在本文件），
+/* 统一状态灯（纯指示，不渲染可见状态文字）：执行/状态卡主状态位。
+   复用上方 .status-dot 与 .status-spinner 视觉词汇（base/working/blocked/done/error 均在本文件），
    这里补充 aborted 菱形（非灰色、与 blocked 实心圆区分）与 pending 空心中性环；
-   语义除颜色外还有形状（呼吸/空心/菱形），可访问名称走 role=img + aria-label
+   语义除颜色外还有形状（旋转/空心/菱形），可访问名称走 role=img + aria-label
    与屏幕阅读器专用文本，绝不只靠颜色表达；label 不再占据可见宽度（移动端友好）。 */
 .helmx-status-light {
   display: inline-flex;
@@ -397,7 +374,7 @@
   min-width: 0;
   max-width: 100%;
   flex-shrink: 0;
-  overflow: hidden;
+  overflow: visible;
   line-height: 1;
   vertical-align: middle;
 }

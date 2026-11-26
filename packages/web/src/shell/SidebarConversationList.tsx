@@ -29,6 +29,7 @@ import {
   DropdownMenuTrigger,
   HelmxIcon,
   IconButton,
+  LoadingState,
   SearchBox,
   Stack,
   Tooltip,
@@ -58,7 +59,7 @@ import {
   type OverviewGroupBy,
   type SidebarOverviewDescendantsSlice,
 } from '../overview/overview-model.js'
-import type { ConversationBackgroundIndex } from './background-activity-model.js'
+import { hasConversationStatusLight, type ConversationBackgroundIndex } from './background-activity-model.js'
 import { formatModShiftShortcut } from './shortcuts-model.js'
 import {
   activeConversationIdsOf,
@@ -458,6 +459,13 @@ const SidebarWorkingSetTreeItem = memo(
       card.hasError ? t('shell.overview.hasError') : '',
       card.hasWaiting ? t('shell.overview.waitingForYou') : '',
     ].filter(Boolean)
+    const showDone = card.root.unread && !viewedConversationIds.has(card.root.id)
+    const backgroundActivity = { active: card.backgroundActive, summary: card.backgroundSummary }
+    const hasStatusLight = hasConversationStatusLight({
+      conv: card.root,
+      background: backgroundActivity,
+      showDone,
+    })
 
     return (
       <div className="sidebar-overview-tree">
@@ -507,18 +515,22 @@ const SidebarWorkingSetTreeItem = memo(
               disabled={batchMode && !selectable}
               title={titleText}
             >
-              <span className="nav-status-slot">
-                <ConversationStatusDot
-                  conv={card.root}
-                  background={{ active: card.backgroundActive, summary: card.backgroundSummary }}
-                  showDone={card.root.unread && !viewedConversationIds.has(card.root.id)}
-                />
-              </span>
               <span className="nav-item-label">{titleText}</span>
             </button>
-            {(rootPresence.paneTag !== null || !batchMode) && (
-              <span className="nav-item-meta sidebar-overview-head-meta">
+            {(rootPresence.paneTag !== null || hasStatusLight || !batchMode) && (
+              <span
+                className={`nav-item-meta sidebar-overview-head-meta${rootPresence.paneTag === null && !hasStatusLight ? ' sidebar-overview-head-meta-actions-only' : ''}`}
+              >
                 <SidebarPaneTag paneTag={rootPresence.paneTag} />
+                {hasStatusLight && (
+                  <span className="sidebar-status-slot">
+                    <ConversationStatusDot
+                      conv={card.root}
+                      background={backgroundActivity}
+                      showDone={showDone}
+                    />
+                  </span>
+                )}
                 {!batchMode && (
                   <span className="nav-item-row-actions" onClick={(e) => e.stopPropagation()}>
                     <ConversationRowActionsMenu
@@ -683,6 +695,25 @@ const SidebarWorkingSetDescendantRow = memo(
       onOpenConversation(descendant.conv.id)
     }
 
+    const descShowDone = descendant.conv.unread && !viewedConversationIds.has(descendant.conv.id)
+    const descBackground = descendant.backgroundActive ? { active: true, summary: '' } : undefined
+    const descAggregate = {
+      activeCount: descendant.subtreeActiveCount,
+      errorCount: descendant.subtreeErrorCount,
+      waitingCount: descendant.subtreeWaitingCount,
+    }
+    const descHasStatusLight = hasConversationStatusLight({
+      conv: descendant.conv,
+      background: descBackground,
+      showDone: descShowDone,
+      aggregate: descAggregate,
+    })
+    const hasDescMeta =
+      (descendant.subtreeDescendantCount ?? 0) > 0 ||
+      chipAnchor !== undefined ||
+      presence.paneTag !== null ||
+      descHasStatusLight
+
     return (
       <div
         className={`nav-item nav-item-sub sidebar-overview-descendant${presenceNavClassSuffix(presence)}`}
@@ -706,37 +737,37 @@ const SidebarWorkingSetDescendantRow = memo(
           disabled={batchMode && !selectable}
           title={titleText}
         >
-          <span className="nav-status-slot">
-            <ConversationStatusDot
-              conv={descendant.conv}
-              background={descendant.backgroundActive ? { active: true, summary: '' } : undefined}
-              aggregate={{
-                activeCount: descendant.subtreeActiveCount,
-                errorCount: descendant.subtreeErrorCount,
-                waitingCount: descendant.subtreeWaitingCount,
-              }}
-              showDone={descendant.conv.unread && !viewedConversationIds.has(descendant.conv.id)}
-            />
-          </span>
           <span className="nav-item-label">{titleText}</span>
         </button>
-        <span className="nav-item-meta">
-          {(descendant.subtreeDescendantCount ?? 0) > 0 && (
-            <span
-              className={`sidebar-overview-desc-children tabular-nums${(descendant.subtreeActiveCount ?? 0) > 0 ? ' is-active' : ''}`}
-              title={descendantMetaTitle}
-            >
-              <HelmxIcon name="git-branch" size={9} /> {descendant.subtreeDescendantCount}
-            </span>
-          )}
-          {chipAnchor !== undefined && (
-            <ElapsedTimer
-              since={chipAnchor.since}
-              className={`sidebar-overview-desc-time mono tabular-nums${chipAnchor.kind === 'waiting' ? ' is-warn' : ''}`}
-            />
-          )}
-          <SidebarPaneTag paneTag={presence.paneTag} />
-        </span>
+        {hasDescMeta && (
+          <span className="nav-item-meta">
+            {(descendant.subtreeDescendantCount ?? 0) > 0 && (
+              <span
+                className={`sidebar-overview-desc-children tabular-nums${(descendant.subtreeActiveCount ?? 0) > 0 ? ' is-active' : ''}`}
+                title={descendantMetaTitle}
+              >
+                <HelmxIcon name="git-branch" size={9} /> {descendant.subtreeDescendantCount}
+              </span>
+            )}
+            {chipAnchor !== undefined && (
+              <ElapsedTimer
+                since={chipAnchor.since}
+                className={`sidebar-overview-desc-time mono tabular-nums${chipAnchor.kind === 'waiting' ? ' is-warn' : ''}`}
+              />
+            )}
+            <SidebarPaneTag paneTag={presence.paneTag} />
+            {descHasStatusLight && (
+              <span className="sidebar-status-slot">
+                <ConversationStatusDot
+                  conv={descendant.conv}
+                  background={descBackground}
+                  aggregate={descAggregate}
+                  showDone={descShowDone}
+                />
+              </span>
+            )}
+          </span>
+        )}
       </div>
     )
   },
@@ -1126,8 +1157,8 @@ export function SidebarConversationList({
       )}
 
       {!dataReady ? (
-        <div className="sidebar-search-empty" role="status">
-          {t('shell.overview.loading')}
+        <div className="sidebar-search-empty">
+          <LoadingState label={t('shell.overview.loading')} iconSize={12} />
         </div>
       ) : !workingSet.searchActive && workingSet.totalRootCount === 0 && cardGroups.length === 0 ? (
         <div className="sidebar-overview-empty">

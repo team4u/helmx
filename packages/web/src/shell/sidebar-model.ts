@@ -512,14 +512,14 @@ export function conversationStatusBadgeClass(status: ConversationSummary['status
   }
 }
 
-/** 会话状态圆点样式类：idle 状态返回 null（不显示圆点）。 */
-export function conversationStatusDotClass(
+/** 会话状态指示器样式类：idle 状态返回 null（不显示指示器）。 */
+export function conversationStatusIndicatorClass(
   status: ConversationSummary['status'],
 ): string | null {
   if (status === 'idle') return null
   switch (status) {
     case 'working':
-      return 'status-dot status-dot-working'
+      return 'status-spinner status-spinner-working'
     case 'blocked':
       return 'status-dot status-dot-blocked'
     case 'done':
