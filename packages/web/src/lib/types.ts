@@ -27,7 +27,7 @@ import type {
   ToolViewSpec,
   WorkbenchPanelSpec,
 } from '@helmx/protocol/browser'
-import { matchesConversationScope, parsePluginUiContribution } from '@helmx/protocol/browser'
+import { isCoreNamespace, matchesConversationScope, parsePluginUiContribution } from '@helmx/protocol/browser'
 import type { ModelDescriptor } from './api.js'
 import type { SessionDocKey } from './session-docs.js'
 
@@ -47,13 +47,14 @@ const PROTOTYPE_PARAM_KEY_RE = /^(?:__proto__|constructor|prototype)$/
 export const isPrototypeParamKey = (key: string): boolean => PROTOTYPE_PARAM_KEY_RE.test(key)
 
 export type ModelsCenterTab = 'providers' | 'defaults'
+export type PluginsCenterTab = 'plugins' | 'core'
 
 export type ResolvedTarget =
   | { kind: 'conversation'; conversationId: number }
   | { kind: 'agent'; profileId: string; nodeId?: string; cwd?: string }
   | { kind: 'screen'; pluginId: string; screenId: string; params?: Record<string, string> }
   | { kind: 'overview'; params?: Record<string, string> }
-  | { kind: 'plugins'; pluginId?: string }
+  | { kind: 'plugins'; pluginId?: string; tab?: PluginsCenterTab; coreOwner?: string; coreAction?: string }
   | { kind: 'profiles'; profileId?: string }
   | { kind: 'skills'; skillId?: string; nodeId?: string }
   | { kind: 'nodes'; nodeId?: string }
@@ -182,8 +183,32 @@ export function resolveTargetString(
     return { kind: 'plugins' }
   }
   if (target.startsWith('plugins:')) {
-    const pluginId = target.slice('plugins:'.length).trim()
-    return pluginId === '' ? { kind: 'plugins' } : { kind: 'plugins', pluginId }
+    const sub = target.slice('plugins:'.length).trim()
+    if (sub === '') return { kind: 'plugins' }
+    if (sub === 'core') return { kind: 'plugins', tab: 'core' }
+    if (sub.startsWith('core/')) {
+      const rest = sub.slice('core/'.length)
+      if (rest === '') return { kind: 'plugins', tab: 'core' }
+      const slashIdx = rest.indexOf('/')
+      if (slashIdx === -1) return { kind: 'plugins', tab: 'core', coreOwner: rest }
+      const coreOwner = rest.slice(0, slashIdx)
+      const coreAction = rest.slice(slashIdx + 1)
+      if (coreOwner === '' || coreAction.includes('/')) return null
+      return coreAction === ''
+        ? { kind: 'plugins', tab: 'core', coreOwner }
+        : { kind: 'plugins', tab: 'core', coreOwner, coreAction }
+    }
+    if (isCoreNamespace(sub)) {
+      const slashIdx = sub.indexOf('/')
+      if (slashIdx === -1) return { kind: 'plugins', tab: 'core', coreOwner: sub }
+      const coreOwner = sub.slice(0, slashIdx)
+      const coreAction = sub.slice(slashIdx + 1)
+      if (coreOwner === '' || coreAction.includes('/')) return null
+      return coreAction === ''
+        ? { kind: 'plugins', tab: 'core', coreOwner }
+        : { kind: 'plugins', tab: 'core', coreOwner, coreAction }
+    }
+    return { kind: 'plugins', pluginId: sub }
   }
   if (target === 'profiles') {
     return { kind: 'profiles' }
@@ -321,7 +346,14 @@ export function isSameResolvedTarget(a: ResolvedTarget | null, b: ResolvedTarget
     return apKeys.every((key) => Object.hasOwn(bp, key) && bp[key] === ap[key])
   }
   if (a.kind === 'plugins' && b.kind === 'plugins') {
-    return a.pluginId === b.pluginId
+    const aTab: PluginsCenterTab = a.tab === 'core' || (a.coreOwner !== undefined && a.coreOwner !== '') ? 'core' : 'plugins'
+    const bTab: PluginsCenterTab = b.tab === 'core' || (b.coreOwner !== undefined && b.coreOwner !== '') ? 'core' : 'plugins'
+    return (
+      aTab === bTab &&
+      a.pluginId === b.pluginId &&
+      a.coreOwner === b.coreOwner &&
+      a.coreAction === b.coreAction
+    )
   }
   if (a.kind === 'profiles' && b.kind === 'profiles') {
     return a.profileId === b.profileId

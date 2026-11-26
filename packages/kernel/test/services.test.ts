@@ -19,13 +19,31 @@ import {
   RESERVED_SLASH_COMMANDS,
   PLUGIN_CLIENT_SHARED_EXPORTS,
   CORE_CLI_COMMAND_PATHS,
+  parseSkillFrontmatter,
 } from '@helmx/protocol'
 import {
+  APP_BUILDER_SKILL_ASSET,
+  APP_BUILDER_SKILL_ID,
+  APP_BUILDER_SKILL_MD,
+  APP_BUILDER_SKILL_OWNER,
+  CONVERSATIONS_SKILL_ASSET,
+  CONVERSATIONS_SKILL_ID,
+  CONVERSATIONS_SKILL_MD,
+  CONVERSATIONS_SKILL_OWNER,
+  CORE_MANAGED_SKILLS,
   HELMX_CLI_SKILL_MD,
   HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD,
   HELMX_CLI_SKILL_ASSET,
+  HELMX_CLI_SKILL_ID,
+  HELMX_CLI_SKILL_OWNER,
+  PROFILES_SKILL_ASSET,
+  PROFILES_SKILL_ID,
+  PROFILES_SKILL_MD,
+  PROFILES_SKILL_OWNER,
+  bootstrapCoreSkills,
   renderSkillTemplate,
-} from '../../plugins/src/profile/assets.js'
+} from '../src/runtime/core-skills/index.js'
+import { KernelRuntime } from '../src/runtime/index.js'
 import { MANAGED_EXEC_ENV_VARS } from '../src/env/scoped-env.js'
 import { MemoryStore } from '../../plugins/src/memory/store.js'
 import { createProfileFileHost } from './helpers/profile-file-host.js'
@@ -392,10 +410,98 @@ test('helmx-cli skill assets stay synchronized with UI extensions and runtime ca
     )
   }
 
+  assert.ok(
+    HELMX_CLI_SKILL_MD.includes('helmx search <query> [--profile <id>] [--owned-by human|helmx] [--top-level] [--limit <n>] [--max-per-conversation <1..20>]'),
+    'SKILL.md should document helmx search filter flags and max-per-conversation',
+  )
+  assert.ok(
+    HELMX_CLI_SKILL_MD.includes('helmx models refresh [--provider <id>] [--providers <list>] [--force]'),
+    'SKILL.md should document helmx models refresh --providers and --force flags',
+  )
+  assert.ok(
+    HELMX_CLI_SKILL_MD.includes('--parent-conversation-id <id>') &&
+      HELMX_CLI_SKILL_MD.includes('--instructions <text>') &&
+      HELMX_CLI_SKILL_MD.includes('--restrict-to-cwd'),
+    'SKILL.md should document conversations create/compact and profiles flags',
+  )
+  assert.ok(
+    HELMX_CLI_SKILL_MD.includes('run_action({ list: true, pluginId?: "<pluginId>" })') &&
+      HELMX_CLI_SKILL_MD.includes('pluginId: "core:"') &&
+      HELMX_CLI_SKILL_MD.includes('pluginId: "builtin:"'),
+    'SKILL.md should document run_action list discovery with core:/builtin: prefix filters',
+  )
+  assert.ok(
+    HELMX_CLI_SKILL_MD.includes('helmx actions list --json') &&
+      HELMX_CLI_SKILL_MD.includes('run_action({ actionId, describe: true })'),
+    'SKILL.md should direct dynamic discovery and describe introspection',
+  )
+
   assert.throws(
     () => renderSkillTemplate('hello {{UNKNOWN_VAR}}', {}),
     (err: unknown) => err instanceof HelmxError && err.code === 'unreplaced_skill_placeholder',
   )
+})
+
+test('core-skills: kernel-owned core skills declare core:* ownership, split conversations/profiles, and leave zero placeholders', { timeout: 60_000 }, () => {
+  assert.deepEqual(
+    CORE_MANAGED_SKILLS.map((entry) => [entry.asset.id, entry.owner]),
+    [
+      [HELMX_CLI_SKILL_ID, HELMX_CLI_SKILL_OWNER],
+      [APP_BUILDER_SKILL_ID, APP_BUILDER_SKILL_OWNER],
+      [CONVERSATIONS_SKILL_ID, CONVERSATIONS_SKILL_OWNER],
+      [PROFILES_SKILL_ID, PROFILES_SKILL_OWNER],
+    ],
+  )
+  assert.equal(HELMX_CLI_SKILL_OWNER, 'core:host')
+  assert.equal(APP_BUILDER_SKILL_OWNER, 'core:plugins')
+  assert.equal(CONVERSATIONS_SKILL_OWNER, 'core:conversations')
+  assert.equal(PROFILES_SKILL_OWNER, 'core:profiles')
+  assert.ok(
+    !CORE_MANAGED_SKILLS.some((entry) => entry.asset.id === 'profile'),
+    'legacy combined profile skill id must be retired in favor of conversations + profiles',
+  )
+
+  for (const entry of CORE_MANAGED_SKILLS) {
+    const fm = parseSkillFrontmatter(entry.asset.skillMd)
+    assert.equal(fm.name, entry.asset.id)
+    assert.equal(fm.managedByPlugin, entry.owner)
+    assert.ok(fm.description.length > 0, `${entry.asset.id} must have a non-empty description`)
+    assert.ok(
+      !/\{\{[^}]*\}\}/.test(entry.asset.skillMd),
+      `${entry.asset.id} SKILL.md must leave zero template placeholders`,
+    )
+    for (const [refName, refContent] of Object.entries(entry.asset.references)) {
+      assert.ok(
+        !/\{\{[^}]*\}\}/.test(refContent),
+        `${entry.asset.id} reference "${refName}" must leave zero template placeholders`,
+      )
+    }
+  }
+
+  // app-builder migrated to core:plugins with fullstack-template reference
+  assert.equal(APP_BUILDER_SKILL_ASSET.skillMd, APP_BUILDER_SKILL_MD)
+  assert.ok(Object.hasOwn(APP_BUILDER_SKILL_ASSET.references, 'fullstack-template.md'))
+  assert.ok(APP_BUILDER_SKILL_MD.includes('helmx plugins doctor') && APP_BUILDER_SKILL_MD.includes('helmx plugins install'))
+
+  // conversations split out under core:conversations
+  assert.equal(CONVERSATIONS_SKILL_ASSET.skillMd, CONVERSATIONS_SKILL_MD)
+  assert.ok(CONVERSATIONS_SKILL_MD.includes('core:conversations.search'))
+  assert.ok(CONVERSATIONS_SKILL_MD.includes('core:conversations.list'))
+  assert.ok(CONVERSATIONS_SKILL_MD.includes('core:conversations.get'))
+  assert.ok(CONVERSATIONS_SKILL_MD.includes('core:conversations.entry'))
+  assert.ok(CONVERSATIONS_SKILL_MD.includes('403 ownership_violation'))
+  assert.ok(CONVERSATIONS_SKILL_MD.includes('409 self_mutation_forbidden'))
+  assert.ok(!CONVERSATIONS_SKILL_MD.includes('## Profile Management Actions'))
+
+  // profiles split out under core:profiles
+  assert.equal(PROFILES_SKILL_ASSET.skillMd, PROFILES_SKILL_MD)
+  assert.ok(PROFILES_SKILL_MD.includes('core:profiles.list'))
+  assert.ok(PROFILES_SKILL_MD.includes('core:profiles.get'))
+  assert.ok(PROFILES_SKILL_MD.includes('core:profiles.create'))
+  assert.ok(PROFILES_SKILL_MD.includes('core:profiles.update'))
+  assert.ok(PROFILES_SKILL_MD.includes('core:profiles.delete'))
+  assert.ok(PROFILES_SKILL_MD.includes('restrictToCwd'))
+  assert.ok(!PROFILES_SKILL_MD.includes('## Conversation Lifecycle Actions'))
 })
 
 test('skills: ensureSkill managed overrides — bootstrap, restore source on restart, fill missing files, reject symlink targets, enforce read-only', { timeout: 60_000 }, async () => {
@@ -632,6 +738,184 @@ test('skills: ensureSkill reconciles to the declared asset — prunes retired re
   })
   await skills.ensureSkill(asset)
   assert.ok(existsSync(join(dataDir, 'skills', 'demo-sibling', 'SKILL.md')), 'sibling must survive re-ensure of the first skill')
+
+  // Malformed frontmatter fails up front without leaving partial directories on disk.
+  await assert.rejects(
+    () =>
+      skills.ensureSkill({
+        id: 'bad-frontmatter',
+        skillMd: '---\nname: bad-frontmatter\nmanagedByPlugin:\n---\nbody\n',
+        references: {},
+      }),
+    /managedByPlugin value is empty/,
+  )
+  assert.ok(!existsSync(join(dataDir, 'skills', 'bad-frontmatter')), 'malformed frontmatter must not leave partial dir')
+})
+
+test('skills: bootstrapCoreSkills and reconcileManagedOwners retire zero-skill active owners while preserving disabled plugin skills and symlink safety', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const skills = new SkillService(dataDir)
+
+  // Seed legacy pre-migration layout under builtin:profile, a retired core:host dir, a disabled plugin skill,
+  // a user-authored skill, a symlinked skill dir, a dir with symlinked SKILL.md, and malformed frontmatter.
+  const writeRawSkill = async (id: string, skillMd: string) => {
+    await mkdir(join(dataDir, 'skills', id), { recursive: true })
+    await writeFile(join(dataDir, 'skills', id, 'SKILL.md'), skillMd)
+  }
+  await writeRawSkill('helmx-cli', '---\nname: helmx-cli\ndescription: old\nmanagedByPlugin: builtin:profile\n---\nold\n')
+  await writeRawSkill('app-builder', '---\nname: app-builder\ndescription: old\nmanagedByPlugin: builtin:profile\n---\nold\n')
+  await writeRawSkill('profile', '---\nname: profile\ndescription: legacy\nmanagedByPlugin: builtin:profile\n---\nlegacy\n')
+  await writeRawSkill('legacy-core-host', '---\nname: legacy-core-host\ndescription: stale\nmanagedByPlugin: core:host\n---\nstale\n')
+  await writeRawSkill('triggers', '---\nname: triggers\ndescription: disabled plugin\nmanagedByPlugin: builtin:triggers\n---\nkeep\n')
+  await seedSkill(dataDir, 'user-custom')
+  await writeRawSkill('broken-fm', '---\nname: broken-fm\nmanagedByPlugin:\n---\nbroken\n')
+
+  const outsideDir = join(scratchRoot, 'outside-retired-target')
+  await mkdir(outsideDir, { recursive: true })
+  await writeFile(join(outsideDir, 'SKILL.md'), '---\nname: linked\nmanagedByPlugin: builtin:profile\n---\noutside\n')
+  await symlink(outsideDir, join(dataDir, 'skills', 'linked-retired-dir'))
+
+  await mkdir(join(dataDir, 'skills', 'linked-skill-md-dir'), { recursive: true })
+  await symlink(join(outsideDir, 'SKILL.md'), join(dataDir, 'skills', 'linked-skill-md-dir', 'SKILL.md'))
+
+  // Step 1: Kernel core skills bootstrap overwrites helmx-cli/app-builder to core:*, writes conversations/profiles,
+  // and sweeps stale core:host residue while leaving builtin:profile/disabled plugin dirs untouched.
+  await bootstrapCoreSkills(skills)
+  assert.ok(!existsSync(join(dataDir, 'skills', 'legacy-core-host')), 'retired core:host dir must be swept')
+  assert.ok(existsSync(join(dataDir, 'skills', 'profile', 'SKILL.md')), 'plugin-owned dir waits for active plugin reconciliation')
+
+  // Step 2: Reconcile active plugin owners (builtin:profile is active with zero declared skills; builtin:triggers is disabled and omitted).
+  await skills.reconcileManagedOwners(['builtin:profile'])
+
+  // Legacy builtin:profile dir is retired; migrated core:* skills survive; disabled plugin & user & symlinked entries survive.
+  assert.ok(!existsSync(join(dataDir, 'skills', 'profile')), 'retired builtin:profile skill dir must be removed')
+  assert.equal(parseSkillFrontmatter(await skills.readFile('helmx-cli')).managedByPlugin, 'core:host')
+  assert.equal(parseSkillFrontmatter(await skills.readFile('app-builder')).managedByPlugin, 'core:plugins')
+  assert.equal(parseSkillFrontmatter(await skills.readFile('conversations')).managedByPlugin, 'core:conversations')
+  assert.equal(parseSkillFrontmatter(await skills.readFile('profiles')).managedByPlugin, 'core:profiles')
+  assert.ok(existsSync(join(dataDir, 'skills', 'triggers', 'SKILL.md')), 'disabled plugin skill dir must be preserved')
+  assert.ok(existsSync(join(dataDir, 'skills', 'user-custom', 'SKILL.md')), 'user-authored skill must be preserved')
+  assert.ok(existsSync(join(dataDir, 'skills', 'broken-fm', 'SKILL.md')), 'unparseable frontmatter dir must not be deleted')
+  assert.ok(existsSync(join(dataDir, 'skills', 'linked-retired-dir')), 'symlinked skill dir must never be deleted')
+  assert.ok(existsSync(join(outsideDir, 'SKILL.md')), 'symlink target outside skills root must stay untouched')
+  assert.ok(existsSync(join(dataDir, 'skills', 'linked-skill-md-dir', 'SKILL.md')), 'dir with symlinked SKILL.md must be skipped')
+})
+
+test('runtime: startup bootstraps core:* skills, retires active zero-skill builtin:profile dirs while keeping disabled plugin skills, and unifies ensurePluginSkill frontmatter parsing', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  await mkdir(join(dataDir, 'skills', 'profile'), { recursive: true })
+  await writeFile(
+    join(dataDir, 'skills', 'profile', 'SKILL.md'),
+    '---\nname: profile\ndescription: legacy\nmanagedByPlugin: builtin:profile\n---\nlegacy\n',
+  )
+  await mkdir(join(dataDir, 'skills', 'helmx-cli'), { recursive: true })
+  await writeFile(
+    join(dataDir, 'skills', 'helmx-cli', 'SKILL.md'),
+    '---\nname: helmx-cli\ndescription: old\nmanagedByPlugin: builtin:profile\n---\nold\n',
+  )
+  await mkdir(join(dataDir, 'skills', 'disabled-guide'), { recursive: true })
+  await writeFile(
+    join(dataDir, 'skills', 'disabled-guide', 'SKILL.md'),
+    '---\nname: disabled-guide\ndescription: disabled\nmanagedByPlugin: ext-disabled\n---\nkeep\n',
+  )
+  await seedSkill(dataDir, 'user-custom')
+
+  const kernel = await KernelRuntime.open({
+    dataDir,
+    cwd: dataDir,
+    autoResume: false,
+    externalSkillRoots: [],
+  })
+  try {
+    // Core skills are bootstrapped & read-only immediately after open().
+    const afterOpen = await kernel.skills.list()
+    assert.equal(afterOpen.find((s) => s.id === 'helmx-cli')?.managedByPlugin, 'core:host')
+    assert.equal(afterOpen.find((s) => s.id === 'app-builder')?.managedByPlugin, 'core:plugins')
+    assert.equal(afterOpen.find((s) => s.id === 'conversations')?.managedByPlugin, 'core:conversations')
+    assert.equal(afterOpen.find((s) => s.id === 'profiles')?.managedByPlugin, 'core:profiles')
+    await assert.rejects(
+      () => kernel.skills.writeFile('conversations', 'SKILL.md', 'tamper'),
+      (err: unknown) => err instanceof HelmxError && err.code === 'managed_skill_readonly' && err.status === 403,
+    )
+
+    // Register an active zero-skill builtin:profile plugin and a disabled ext-disabled plugin, then start().
+    await kernel.plugins.register(
+      {
+        id: 'builtin:profile',
+        name: 'Profile Stub',
+        version: '0.1.0',
+        definePlugin() {},
+      },
+      { enabled: true },
+    )
+    await kernel.plugins.register(
+      {
+        id: 'ext-disabled',
+        name: 'Disabled Plugin Stub',
+        version: '0.1.0',
+        definePlugin() {},
+      },
+      { enabled: false },
+    )
+    await kernel.start()
+
+    assert.ok(!existsSync(join(dataDir, 'skills', 'profile')), 'active zero-skill builtin:profile must retire old profile skill dir')
+    assert.ok(existsSync(join(dataDir, 'skills', 'disabled-guide', 'SKILL.md')), 'disabled plugin skill dir must survive startup')
+    assert.ok(existsSync(join(dataDir, 'skills', 'user-custom', 'SKILL.md')), 'user skill must survive startup')
+
+    // Unified parseSkillFrontmatter enforcement in ensurePluginSkill:
+    // 1) body-only managedByPlugin (without YAML frontmatter fence) must be rejected (no ad-hoc regex bypass).
+    await assert.rejects(
+      () =>
+        kernel.ensurePluginSkill(
+          {
+            id: 'body-spoof',
+            skillMd: '# No frontmatter\n\nmanagedByPlugin: ext-valid\n',
+            references: {},
+          },
+          'ext-valid',
+        ),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_skill' && err.status === 400,
+    )
+    // 2) empty managedByPlugin value in frontmatter -> 400 invalid_plugin_skill.
+    await assert.rejects(
+      () =>
+        kernel.ensurePluginSkill(
+          {
+            id: 'empty-owner',
+            skillMd: '---\nname: empty-owner\nmanagedByPlugin:\n---\nbody\n',
+            references: {},
+          },
+          'ext-valid',
+        ),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_skill' && err.status === 400,
+    )
+    // 3) mismatched core:* owner claimed by a plugin -> 400 invalid_plugin_skill.
+    await assert.rejects(
+      () =>
+        kernel.ensurePluginSkill(
+          {
+            id: 'core-spoof',
+            skillMd: '---\nname: core-spoof\nmanagedByPlugin: core:host\n---\nbody\n',
+            references: {},
+          },
+          'ext-valid',
+        ),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_skill' && err.status === 400,
+    )
+    // 4) quoted YAML scalar in frontmatter is parsed consistently and accepted.
+    await kernel.ensurePluginSkill(
+      {
+        id: 'quoted-valid',
+        skillMd: '---\nname: quoted-valid\ndescription: ok\nmanagedByPlugin: "ext-valid"\n---\nbody\n',
+        references: {},
+      },
+      'ext-valid',
+    )
+    assert.equal((await kernel.skills.list()).find((s) => s.id === 'quoted-valid')?.managedByPlugin, 'ext-valid')
+  } finally {
+    await kernel.close()
+  }
 })
 
 test('profiles: skills tri-state (omitted default, empty array persisted, allowlist deduped, invalid rejected)', { timeout: 60_000 }, async () => {

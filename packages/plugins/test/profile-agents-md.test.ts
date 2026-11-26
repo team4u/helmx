@@ -338,6 +338,10 @@ test('before_turn：工作区存在 AGENTS.md → 注入 profile.agents（system
   const workspace = await freshWorkspace()
   writeFileSync(join(workspace, AGENTS_MD_FILENAME), '# 项目约定\n\n所有提交使用中文 Conventional Commits。\n')
   const env = await makeEnv(workspace)
+  // 内核核心技能已迁至 core:* 并由 KernelRuntime.initialize() 自举；独立 PluginHost 单测显式预置一个 Hub 技能以验证段落序。
+  const hubSkillDir = join(env.dataDir, 'skills', 'hub-sample')
+  mkdirSync(hubSkillDir, { recursive: true })
+  writeFileSync(join(hubSkillDir, 'SKILL.md'), '---\nname: Hub Sample\ndescription: Hub skill fixture\n---\n\n# Hub Sample\n')
   try {
     const sections = await runBeforeTurn(env, makeTurn(workspace))
     const ids = sections.map((s) => s.id)

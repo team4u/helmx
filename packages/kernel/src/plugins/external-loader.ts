@@ -28,6 +28,9 @@ import { pathToFileURL } from 'node:url';
 import {
   HelmxError,
   PREBUILT_CLIENT_DIR_NAME,
+  isBuiltinNamespace,
+  isCoreNamespace,
+  isReservedPluginNamespace,
   parseNonEmptyLocalizedText,
   type LocalizedText,
   type PluginBuildProvider,
@@ -286,8 +289,8 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
   if (def.icon !== undefined && (typeof def.icon !== 'string' || def.icon.trim().length === 0)) {
     throw fail('icon must be a non-empty string when provided');
   }
-  if (def.id.startsWith('builtin:') || def.id.startsWith('core:')) {
-    const reservedPrefix = def.id.startsWith('core:') ? 'core:' : 'builtin:';
+  if (isReservedPluginNamespace(def.id)) {
+    const reservedPrefix = isCoreNamespace(def.id) ? 'core:' : 'builtin:';
     throw new HelmxError(
       'invalid_plugin_definition',
       `External plugin ${dirPath} id cannot start with '${reservedPrefix}': ${def.id}`,
@@ -627,7 +630,7 @@ export async function reloadExternalPlugin(
   plugins: ReloadablePluginHost,
   options: { doctor?: (dir: string) => Promise<void> } = {},
 ): Promise<{ pluginId: string; wasEnabled: boolean; generation: number }> {
-  if (pluginId.startsWith('builtin:')) {
+  if (isBuiltinNamespace(pluginId)) {
     throw new HelmxError(
       'plugin_locked',
       `built-in plugin ${pluginId} cannot be hot-reloaded (restart Hub to apply built-in plugin changes)`,

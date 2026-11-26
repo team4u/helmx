@@ -7,11 +7,12 @@
  * and tracks handler execution in `liveTasks` (shared with actions/tools for disable blocking).
  */
 import { HelmxError, isPluginSummaryActive, REQUEST_SCHEMAS } from '@helmx/protocol'
-import type { PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helmx/protocol'
+import type { PublicPluginSessionDoc } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
 import type { PluginHost } from '../plugins/index.js'
 import type { SecretStash } from '../services/index.js'
 import type { SessionDocEventHub } from '../runtime/events.js'
+import { readSanitizedPluginConfig, resolvePluginDoctorTarget } from '../runtime/guards/plugin-guards.js'
 import { compressGzip, markStreamingJsonBody } from './gzip.js'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
@@ -25,7 +26,6 @@ import {
 } from './validate.js'
 import { parseOptionalBooleanFlag, parseOptionalJsonObjectBody, type RouteContext } from './route-context.js'
 import { methodNotAllowed } from './route-context.js'
-import { assertDoctorTargetDir } from '../plugins/doctor-target.js'
 
 export type PluginRoutesHost = Pick<
   PluginHost,
@@ -89,7 +89,12 @@ export async function handlePluginsDomain(
       return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin static doctor checks')
     }
     const body = await readJsonBody(ctx.request)
-    return jsonOk(redactor, await kernel.plugins.doctorExternalPlugin(parseDoctorTarget(body)))
+    assertBodySchema(REQUEST_SCHEMAS.pluginDoctor, body, 'plugins doctor body')
+    const target = resolvePluginDoctorTarget(
+      body as { path?: string; id?: string },
+      { allowTarget: false },
+    )
+    return jsonOk(redactor, await kernel.plugins.doctorExternalPlugin(target))
   }
   if (second === 'rescan' && method === 'POST' && third === undefined) {
     if (kernel.plugins.rescanExternalPlugins === undefined) {
@@ -150,22 +155,12 @@ export async function handlePluginsDomain(
   }
   if (third === 'config' && fourth === undefined) {
     if (method === 'GET') {
-      const [raw, schema, sources] = await Promise.all([
-        Promise.resolve(kernel.plugins.getConfig(pluginId)),
-        Promise.resolve(kernel.plugins.getConfigSchema(pluginId)),
-        Promise.resolve(
-          kernel.plugins.getConfigSources !== undefined
-            ? kernel.plugins.getConfigSources(pluginId)
-            : undefined,
-        ),
-      ])
-      // Redact secret fields per schema before leaving the server.
-      const values = redactConfigValues(raw, schema)
-      return jsonOk(redactor, {
-        values,
-        schema,
-        ...(sources !== undefined ? { sources } : {}),
-      })
+      const snapshot = await readSanitizedPluginConfig(
+        kernel.plugins,
+        pluginId,
+        kernel.stash !== undefined ? (text) => kernel.stash!.redact(text) : undefined,
+      )
+      return jsonOk(redactor, snapshot)
     }
     if (method === 'PUT') {
       const body = await readJsonBody(ctx.request)
@@ -259,25 +254,6 @@ function parsePluginDisableBody(body: Record<string, unknown>): { force?: boolea
 function parsePluginUpdateBody(body: Record<string, unknown>): { source?: string } {
   assertBodySchema(REQUEST_SCHEMAS.pluginUpdate, body, 'plugins update body')
   return body.source !== undefined ? { source: body.source as string } : {}
-}
-
-/**
- * `POST /api/plugins/doctor` body: accepts `path` (absolute directory path)
- * or `id` (a registered plugin whose source directory is resolved server-side).
- */
-function parseDoctorTarget(body: Record<string, unknown>): { dir?: string; id?: string } {
-  assertBodySchema(REQUEST_SCHEMAS.pluginDoctor, body, 'plugins doctor body')
-  const pathDir = typeof body.path === 'string' ? (assertDoctorTargetDir(body.path, 'path'), body.path) : undefined
-  if (body.id !== undefined) {
-    if (pathDir !== undefined) {
-      throw new ValidationError('id and path are mutually exclusive; provide only one')
-    }
-    return { id: body.id as string }
-  }
-  if (pathDir === undefined) {
-    throw new ValidationError('must provide either path (absolute directory path) or id (registered plugin)')
-  }
-  return { dir: pathDir }
 }
 
 /** Parses `?conversationId=N` query param as a positive safe integer (400 otherwise). */
@@ -840,23 +816,4 @@ async function redactPluginRouteResponse(
     statusText: response.statusText,
     headers,
   })
-}
-
-/**
- * Redacts `secret: true` config fields before leaving the server (`'******'` when set, `''` otherwise).
- */
-function redactConfigValues(
-  raw: Record<string, unknown>,
-  schema: Record<string, PluginConfigFieldSchema>,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(raw)) {
-    if (!Object.hasOwn(schema, key)) continue
-    if (schema[key]?.secret === true) {
-      out[key] = typeof value === 'string' && value.length > 0 ? '******' : ''
-    } else {
-      out[key] = value
-    }
-  }
-  return out
 }

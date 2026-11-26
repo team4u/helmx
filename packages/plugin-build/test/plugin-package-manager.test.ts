@@ -98,7 +98,7 @@ test('parsePluginSource: npm normalization and rejection', { timeout: 60_000 }, 
   const bare = parsePluginSource('npm:@scope/pkg', '/wd')
   assert.ok(bare.kind === 'npm' && bare.spec === '@scope/pkg')
 
-  for (const bad of ['npm:', 'npm: ', 'npm:builtin:evil', 'builtin:profile', 'builtin%3Aprofile', '', '  ', 'file:///tmp/x', 'http://github.com/u/r', 'git+https://x.example/r', 'ftp://x/r', 'my-unknown-proto:foo', 'bare-name']) {
+  for (const bad of ['npm:', 'npm: ', 'npm:builtin:evil', 'npm:core:evil', 'builtin:profile', 'builtin%3Aprofile', 'core:conversations', 'core%3Aconversations', 'core%3aconversations', '', '  ', 'file:///tmp/x', 'http://github.com/u/r', 'git+https://x.example/r', 'ftp://x/r', 'my-unknown-proto:foo', 'bare-name']) {
     assert.throws(() => parsePluginSource(bad, '/wd'), (err: unknown) => err instanceof HelmxError && err.status === 400, `should reject: ${bad}`)
   }
 })
@@ -748,12 +748,24 @@ test('remove rejects explicitly when purge fails while keeping directory and rec
   }
 })
 
-test('remove protects builtins with 403 and rejects unmanaged plugins with 404', { timeout: 60_000 }, async () => {
+test('remove protects builtin: and core: namespaces with 403 and rejects unmanaged plugins with 404 (update returns 404 for unmanaged/reserved IDs)', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     await assert.rejects(
       env.manager.remove('builtin:profile'),
-      (err: unknown) => err instanceof HelmxError && err.status === 403,
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_locked' && err.status === 403,
+    )
+    await assert.rejects(
+      env.manager.remove('core:conversations'),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_locked' && err.status === 403,
+    )
+    await assert.rejects(
+      env.manager.update('builtin:profile'),
+      (err: unknown) => err instanceof HelmxError && err.code === 'unknown_plugin_package' && err.status === 404,
+    )
+    await assert.rejects(
+      env.manager.update('core:conversations'),
+      (err: unknown) => err instanceof HelmxError && err.code === 'unknown_plugin_package' && err.status === 404,
     )
     await assert.rejects(
       env.manager.remove('hand-placed'),

@@ -4182,14 +4182,68 @@ test('PluginHost.registerCoreAction: reserves core:* namespace, stays invisible 
       );
     }
 
-    // Valid core action is callable via prepareAction/invokeAction and visible in listActions,
-    // while invisible in list()/get()/listManifests()/listTools().
+    // Registration-time core CLI command contract:
+    // - public non-hidden core actions must declare cli.command in CORE_CLI_COMMAND_PATHS;
+    // - any declared cli.command not in CORE_CLI_COMMAND_PATHS is rejected (even when hidden: true);
+    // - exposeAsTool is forbidden on core:* actions.
+    throwsCode(
+      () =>
+        host.registerCoreAction('core:demo', {
+          id: 'missing_cli',
+          description: 'missing cli.command',
+          inputSchema: emptySchema,
+          outputSchema: emptySchema,
+          handler: () => ({}),
+        }),
+      'invalid_action_spec',
+    );
+    throwsCode(
+      () =>
+        host.registerCoreAction('core:demo', {
+          id: 'bogus_cli',
+          description: 'bogus cli.command',
+          cli: { command: ['demo', 'echo'] },
+          inputSchema: emptySchema,
+          outputSchema: emptySchema,
+          handler: () => ({}),
+        }),
+      'invalid_action_spec',
+    );
+    throwsCode(
+      () =>
+        host.registerCoreAction('core:demo', {
+          id: 'bogus_hidden_cli',
+          description: 'bogus hidden cli.command',
+          cli: { hidden: true, command: ['demo', 'echo'] },
+          inputSchema: emptySchema,
+          outputSchema: emptySchema,
+          handler: () => ({}),
+        }),
+      'invalid_action_spec',
+    );
+    throwsCode(
+      () =>
+        host.registerCoreAction('core:demo', {
+          id: 'tool_forbidden',
+          description: 'exposeAsTool forbidden',
+          exposeAsTool: true,
+          cli: { command: ['status'] },
+          inputSchema: emptySchema,
+          outputSchema: emptySchema,
+          handler: () => ({}),
+        }),
+      'invalid_action_spec',
+    );
+
+    // Valid core actions (matching static CORE_CLI_COMMAND_PATHS, including shared static commands
+    // and intentionally hidden CLI-less core actions) are callable via prepareAction/invokeAction
+    // and visible in listActions, while invisible in list()/get()/listManifests()/listTools().
     host.registerCoreAction('core:demo', {
       id: 'echo',
       description: 'Echo value',
       idempotent: true,
       exposeToPrompt: false,
-      cli: { hidden: true, command: ['demo', 'echo'] },
+      cli: { command: ['status'] },
       inputSchema: {
         type: 'object',
         properties: { text: { type: 'string' } },
@@ -4203,6 +4257,25 @@ test('PluginHost.registerCoreAction: reserves core:* namespace, stays invisible 
       },
       handler: (input: { text: string }) => ({ echoed: input.text }),
     });
+    host.registerCoreAction('core:demo', {
+      id: 'echo_shared',
+      description: 'Second action mapped to same static core CLI command',
+      idempotent: true,
+      exposeToPrompt: false,
+      cli: { command: ['status'] },
+      inputSchema: emptySchema,
+      outputSchema: emptySchema,
+      handler: () => ({}),
+    });
+    host.registerCoreAction('core:demo', {
+      id: 'internal_only',
+      description: 'Core action with no static CLI counterpart',
+      exposeToPrompt: false,
+      cli: { hidden: true },
+      inputSchema: emptySchema,
+      outputSchema: emptySchema,
+      handler: () => ({}),
+    });
 
     assert.equal(host.list().length, 0);
     assert.equal(host.get('core:demo'), undefined);
@@ -4210,7 +4283,7 @@ test('PluginHost.registerCoreAction: reserves core:* namespace, stays invisible 
     assert.equal(host.listTools().length, 0);
     assert.deepEqual(
       host.listActions().map((m) => `${m.pluginId}.${m.id}`),
-      ['core:demo.echo'],
+      ['core:demo.echo', 'core:demo.echo_shared', 'core:demo.internal_only'],
     );
     assert.deepEqual(host.prepareAction('core:demo', 'echo', { text: 'hi' }), { idempotent: true });
     assert.deepEqual(await host.invokeAction('core:demo', 'echo', { text: 'hi' }), { echoed: 'hi' });

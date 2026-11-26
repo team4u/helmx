@@ -11,6 +11,9 @@
 import {
   HelmxError,
   compareCodeUnit,
+  isBuiltinNamespace,
+  isCoreNamespace,
+  isValidCoreOwnerId,
   type ActionManifest,
   type ConversationSummary,
   type HookName,
@@ -197,7 +200,7 @@ export class PluginHost {
   ): Promise<void> {
     this.assertNotDisposed();
     assertDefinition(definition);
-    if (definition.id.startsWith('core:')) {
+    if (isCoreNamespace(definition.id)) {
       throw new HelmxError(
         'invalid_plugin_definition',
         `Plugin id '${definition.id}' cannot use reserved 'core:' namespace`,
@@ -208,7 +211,7 @@ export class PluginHost {
     const seq = ++this.registerSeq;
     const pluginId = definition.id;
     // Built-in plugin failures always abort startup; only external plugins with explicit isolation fall back to registerFailed.
-    const isolate = options.isolateFailure === true && !pluginId.startsWith('builtin:');
+    const isolate = options.isolateFailure === true && !isBuiltinNamespace(pluginId);
 
     await this.gate.enqueue(pluginId, async () => {
       this.assertNotDisposed();
@@ -223,7 +226,7 @@ export class PluginHost {
    */
   registerCoreAction<TIn, TOut>(ownerId: string, spec: PluginActionSpec<TIn, TOut>): void {
     this.assertNotDisposed();
-    if (typeof ownerId !== 'string' || !/^core:[A-Za-z0-9_-]+$/.test(ownerId)) {
+    if (typeof ownerId !== 'string' || !isValidCoreOwnerId(ownerId)) {
       throw new HelmxError(
         'invalid_core_action_owner',
         `Core action ownerId must start with 'core:' and match /^core:[A-Za-z0-9_-]+$/: ${String(ownerId)}`,
@@ -243,7 +246,7 @@ export class PluginHost {
     error: PluginDiagnosticError;
   }): void {
     this.assertNotDisposed();
-    if (typeof spec.id === 'string' && spec.id.startsWith('core:')) {
+    if (typeof spec.id === 'string' && isCoreNamespace(spec.id)) {
       throw new HelmxError(
         'invalid_plugin_definition',
         `Plugin id '${spec.id}' cannot use reserved 'core:' namespace`,

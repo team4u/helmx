@@ -342,3 +342,108 @@ test('浏览器前进/后退/replace 序列一致性验证', { timeout: 60_000 }
   assert.equal(history[currentIndex]!, '#/settings/plugins')
   assert.equal(history.length, 3)
 })
+
+// ---------------------------------------------------------------------------
+// 6. Core 内核能力页签、Owner 抽屉与 Action 详情 Hash 契约
+// ---------------------------------------------------------------------------
+
+test('core tab Hash 编解码、resolveTargetString 与历史栈策略', { timeout: 60_000 }, () => {
+  // 序列化（plugins 默认 tab 不序列化；core 为保留段）
+  assert.equal(serializeHash({ kind: 'plugins', tab: 'plugins' }), '#/settings/plugins')
+  assert.equal(serializeHash({ kind: 'plugins', tab: 'core' }), '#/settings/plugins/core')
+  assert.equal(
+    serializeHash({ kind: 'plugins', tab: 'core', coreOwner: 'core:host' }),
+    '#/settings/plugins/core/core:host',
+  )
+  assert.equal(
+    serializeHash({
+      kind: 'plugins',
+      tab: 'core',
+      coreOwner: 'core:conversations',
+      coreAction: 'search',
+    }),
+    '#/settings/plugins/core/core:conversations/search',
+  )
+
+  // 解析还原（含冒号编码容忍与非法多段拒绝）
+  assert.deepEqual(parseLocationHash('#/settings/plugins/core').primaryTarget, {
+    kind: 'plugins',
+    tab: 'core',
+  })
+  assert.deepEqual(parseLocationHash('#/settings/plugins/core/core:host').primaryTarget, {
+    kind: 'plugins',
+    tab: 'core',
+    coreOwner: 'core:host',
+  })
+  assert.deepEqual(parseLocationHash('#/settings/plugins/core/core%3Aplugins/list').primaryTarget, {
+    kind: 'plugins',
+    tab: 'core',
+    coreOwner: 'core:plugins',
+    coreAction: 'list',
+  })
+  // split 内同样支持 core/owner/action
+  assert.deepEqual(
+    parseLocationHash('#/c/1?split=settings%2Fplugins%2Fcore%2Fcore%3Ahost').splitTarget,
+    { kind: 'plugins', tab: 'core', coreOwner: 'core:host' },
+  )
+  assert.equal(
+    parseLocationHash('#/c/1?split=settings%2Fplugins%2Fcore%2F').splitTarget,
+    null,
+  )
+  assert.deepEqual(
+    parseLocationHash('#/settings/plugins/core/core:host/a/b').primaryTarget,
+    { kind: 'profiles' },
+  )
+
+  // resolveTargetString 支持声明式 plugins:core* 导航
+  assert.deepEqual(resolveTargetString('plugins:core', []), { kind: 'plugins', tab: 'core' })
+  assert.deepEqual(resolveTargetString('plugins:core/core:host', []), {
+    kind: 'plugins',
+    tab: 'core',
+    coreOwner: 'core:host',
+  })
+  assert.deepEqual(resolveTargetString('plugins:core/core:conversations/search', []), {
+    kind: 'plugins',
+    tab: 'core',
+    coreOwner: 'core:conversations',
+    coreAction: 'search',
+  })
+  assert.deepEqual(resolveTargetString('plugins:core:host', []), {
+    kind: 'plugins',
+    tab: 'core',
+    coreOwner: 'core:host',
+  })
+
+  // isSameResolvedTarget 比较 tab / coreOwner / coreAction
+  assert.equal(
+    isSameResolvedTarget({ kind: 'plugins' }, { kind: 'plugins', tab: 'plugins' }),
+    true,
+  )
+  assert.equal(
+    isSameResolvedTarget({ kind: 'plugins' }, { kind: 'plugins', tab: 'core' }),
+    false,
+  )
+  assert.equal(
+    isSameResolvedTarget(
+      { kind: 'plugins', tab: 'core', coreOwner: 'core:host' },
+      { kind: 'plugins', tab: 'core', coreOwner: 'core:host', coreAction: 'x' },
+    ),
+    false,
+  )
+
+  // 历史策略：plugins <-> core 切页签 replace；从列表打开 coreOwner 抽屉 push；抽屉内切 owner/action 或关闭 replace
+  const pluginsList = baseState({ kind: 'plugins' })
+  const coreList = baseState({ kind: 'plugins', tab: 'core' })
+  const coreOwnerA = baseState({ kind: 'plugins', tab: 'core', coreOwner: 'core:host' })
+  const coreOwnerAction = baseState({
+    kind: 'plugins',
+    tab: 'core',
+    coreOwner: 'core:conversations',
+    coreAction: 'search',
+  })
+  assert.equal(shouldPushLocationHistory(pluginsList, coreList), false)
+  assert.equal(shouldPushLocationHistory(coreList, pluginsList), false)
+  assert.equal(shouldPushLocationHistory(coreList, coreOwnerA), true)
+  assert.equal(shouldPushLocationHistory(coreOwnerA, coreOwnerAction), false)
+  assert.equal(shouldPushLocationHistory(coreOwnerAction, coreList), false)
+})

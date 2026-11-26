@@ -30,6 +30,8 @@ import { resolveNpmCommand, runControlledProcess, type ResolveNpmCommandIo } fro
 import {
   compareCodeUnit,
   HelmxError,
+  isCoreNamespace,
+  isReservedPluginNamespace,
   type PackageManagerHost,
   type PluginBuildProvider,
   type PluginInstallResult,
@@ -177,7 +179,7 @@ const COPY_IGNORE = new Set(['node_modules', '.git', '.staging']);
 const PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function safeDirName(pluginId: string): string {
-  if (!PLUGIN_ID_PATTERN.test(pluginId) || pluginId.startsWith('builtin:')) {
+  if (!PLUGIN_ID_PATTERN.test(pluginId) || isReservedPluginNamespace(pluginId)) {
     throw new HelmxError('invalid_plugin_definition', `plugin id is not allowed as a managed install directory name: ${pluginId}`, 400, { pluginId });
   }
   return pluginId;
@@ -744,8 +746,9 @@ export class PluginPackageManager implements PluginPackageManagerPort {
    */
   async remove(pluginId: string): Promise<PluginRemoveResult> {
     return this.enqueue(async () => {
-      if (pluginId.startsWith('builtin:')) {
-        throw new HelmxError('plugin_locked', `built-in plugin ${pluginId} cannot be removed`, 403, { pluginId });
+      if (isReservedPluginNamespace(pluginId)) {
+        const kind = isCoreNamespace(pluginId) ? 'core capability namespace' : 'built-in plugin';
+        throw new HelmxError('plugin_locked', `${kind} ${pluginId} cannot be removed`, 403, { pluginId });
       }
       const record = this.store.getRecord(pluginId);
       if (record === undefined) {

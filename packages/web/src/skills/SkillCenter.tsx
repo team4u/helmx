@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button, Callout, CardGrid, EmptyState, HelmxIcon, Select, Stack, type SelectOption } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useLocationTargets, useNodes, useSkills, useStoreActions } from '../lib/store-context.js'
+import type { ResolvedTarget } from '../lib/types.js'
 import { SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { SkillCard } from './SkillCard.js'
@@ -31,7 +32,7 @@ export interface SkillCenterProps {
   inlineDrawer?: boolean
 }
 
-const CATEGORY_TABS: SkillCategoryTab[] = ['all', 'builtin', 'plugins', 'agents', 'node', 'workspace']
+const CATEGORY_TABS: SkillCategoryTab[] = ['all', 'core', 'builtin', 'plugins', 'agents', 'node', 'workspace']
 
 /**
  * Full-screen skill center (primary stage) container.
@@ -99,6 +100,10 @@ export function SkillCenter({
 
   const handleCloseDrawer = () => {
     openTarget(skillCenterTarget(nodeId), isSplit ? { split: true } : undefined)
+  }
+
+  const handleOpenOwner = (target: Extract<ResolvedTarget, { kind: 'plugins' }>) => {
+    openTarget(target, isSplit ? { split: true } : undefined)
   }
 
   const { isSplitActive, toggleSplit } = usePaneSplitToggle({
@@ -248,6 +253,8 @@ export function SkillCenter({
           skill={selectedSkill}
           open={isDrawerOpen}
           onClose={handleCloseDrawer}
+          isSplit={isSplit}
+          onOpenOwner={handleOpenOwner}
           inline={inlineDrawer}
           readSkill={drawerReader}
           nodeScope={scope}

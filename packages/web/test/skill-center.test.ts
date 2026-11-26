@@ -16,13 +16,16 @@ import {
   filterSkills,
   getSkillSourceBadge,
   isSkillAgents,
+  isSkillCore,
   isSkillInTab,
   isSkillBuiltin,
   isSkillPlugin,
   isSkillWorkspace,
+  resolveSkillOwnerTarget,
   summarizeSkills,
   type SkillCategoryTab,
 } from '../src/skills/skill-center-model.js'
+import { isSkillVisible } from '../src/shell/sidebar-model.js'
 import {
   buildSkillFileList,
   extractSkillFrontmatter,
@@ -34,6 +37,7 @@ import {
 } from '../src/skills/skill-reader-model.js'
 import { makeTestStore, HelmxExternalStoreContext } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
+import { formatLocationHash, parseLocationHash } from '../src/lib/url-hash-model.js'
 import {
   parseSkillCatalogResult,
   parseSkillReadResult,
@@ -185,6 +189,7 @@ test('skill-center-model: buildSkillCategoryCounts counts each category accurate
   // 5. community-linter (community:linter) -> plugins
   // 6. git-commit (source: agents) -> agents
   assert.equal(counts.all, 6)
+  assert.equal(counts.core, 0)
   assert.equal(counts.builtin, 2)
   assert.equal(counts.workspace, 2)
   assert.equal(counts.plugins, 1)
@@ -192,13 +197,14 @@ test('skill-center-model: buildSkillCategoryCounts counts each category accurate
   assert.equal(counts.node, 0)
 
   const emptyCounts = buildSkillCategoryCounts([])
-  assert.deepEqual(emptyCounts, { all: 0, builtin: 0, workspace: 0, plugins: 0, agents: 0, node: 0 })
+  assert.deepEqual(emptyCounts, { all: 0, core: 0, builtin: 0, workspace: 0, plugins: 0, agents: 0, node: 0 })
 })
 
 test('skill-center-model: summarizeSkills metric summary', { timeout: 60_000 }, () => {
   const summary = summarizeSkills(mockSkills)
   assert.deepEqual(summary, {
     total: 6,
+    core: 0,
     builtin: 2,
     workspace: 2,
     plugins: 1,
@@ -2000,5 +2006,388 @@ test('SkillCenter: ?node=local 自愈归一为 Hub 并保持详情子项', { tim
     host.remove()
   } finally {
     stub.restore()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// core:* 受管技能分类、恒定可见性与双向导航
+// ---------------------------------------------------------------------------
+
+test('skill-center-model & sidebar-model: core:* 技能归属 Core 分类（绝不落入第三方插件）且恒定可见', { timeout: 60_000 }, () => {
+  const coreHostSkill = makeSkill({
+    id: 'helmx-cli',
+    name: 'Helmx CLI',
+    managedByPlugin: 'core:host',
+  })
+  const corePluginsSkill = makeSkill({
+    id: 'app-builder',
+    name: 'App Builder',
+    managedByPlugin: 'core:plugins',
+  })
+  const thirdPartySkill = makeSkill({
+    id: 'community-linter',
+    name: 'Community Linter',
+    managedByPlugin: 'community:linter',
+  })
+
+  // core:* 仅命中 isSkillCore，绝不落入 isSkillPlugin 或 isSkillBuiltin
+  assert.equal(isSkillCore(coreHostSkill), true)
+  assert.equal(isSkillCore(corePluginsSkill), true)
+  assert.equal(isSkillBuiltin(coreHostSkill), false)
+  assert.equal(isSkillPlugin(coreHostSkill), false, 'core:* 技能不得归类为第三方插件')
+  assert.equal(isSkillPlugin(corePluginsSkill), false, 'core:* 技能不得归类为第三方插件')
+  assert.equal(isSkillWorkspace(coreHostSkill), false)
+
+  // 分类计数与标签页过滤
+  const list = [coreHostSkill, corePluginsSkill, thirdPartySkill]
+  const counts = buildSkillCategoryCounts(list)
+  assert.deepEqual(counts, { all: 3, core: 2, builtin: 0, workspace: 0, plugins: 1, agents: 0, node: 0 })
+  assert.deepEqual(
+    filterSkills(list, { query: '', categoryTab: 'core' }).map((s) => s.id),
+    ['helmx-cli', 'app-builder'],
+  )
+  assert.deepEqual(
+    filterSkills(list, { query: '', categoryTab: 'plugins' }).map((s) => s.id),
+    ['community-linter'],
+  )
+  assert.equal(isSkillInTab(coreHostSkill, 'core'), true)
+  assert.equal(isSkillInTab(coreHostSkill, 'plugins'), false)
+
+  // 徽章与 owner 目标解析
+  assert.deepEqual(getSkillSourceBadge(coreHostSkill), { label: 'Core', variant: 'core' })
+  assert.deepEqual(resolveSkillOwnerTarget('core:host'), {
+    kind: 'plugins',
+    tab: 'core',
+    coreOwner: 'core:host',
+  })
+  assert.deepEqual(resolveSkillOwnerTarget('builtin:workflow'), {
+    kind: 'plugins',
+    pluginId: 'builtin:workflow',
+  })
+  assert.equal(resolveSkillOwnerTarget(undefined), null)
+
+  // sidebar-model.isSkillVisible: core:<domain> 技能不依赖 enabledPluginIds，畸形 core: 诚实拒绝
+  const emptyEnabled = new Set<string>()
+  const malformedCoreSkill = makeSkill({
+    id: 'bad-core',
+    name: 'Malformed Core',
+    managedByPlugin: 'core:bad.id',
+  })
+  assert.equal(isSkillVisible(coreHostSkill, emptyEnabled), true)
+  assert.equal(isSkillVisible(corePluginsSkill, emptyEnabled), true)
+  assert.equal(isSkillVisible(thirdPartySkill, emptyEnabled), false)
+  assert.equal(isSkillVisible(malformedCoreSkill, emptyEnabled), false)
+  assert.equal(isSkillCore(malformedCoreSkill), false)
+  assert.equal(isSkillPlugin(malformedCoreSkill), false)
+  assert.equal(resolveSkillOwnerTarget('core:bad.id'), null)
+  assert.equal(resolveSkillOwnerTarget('core:'), null)
+})
+
+test('SkillDetailDrawer: core:* 与插件受管技能支持双向导航回插件中心对应详情', { timeout: 60_000 }, async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  const opened: unknown[] = []
+  const store = makeTestStore({ primaryTarget: { kind: 'skills', skillId: 'helmx-cli' } })
+  ;(store.actions as unknown as { openTarget: (target: unknown) => void }).openTarget = (target) => {
+    opened.push(target)
+  }
+
+  const coreSkill = makeSkill({
+    id: 'helmx-cli',
+    name: 'Helmx CLI',
+    managedByPlugin: 'core:host',
+  })
+  const pluginSkill = makeSkill({
+    id: 'workflow-guide',
+    name: 'Workflow Guide',
+    managedByPlugin: 'builtin:workflow',
+  })
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(SkillDetailDrawer, {
+            skill: coreSkill,
+            open: true,
+            inline: true,
+            initialContent: '# Helmx CLI',
+            readSkill: async () => ({ text: '# Helmx CLI' }),
+            onClose: () => {},
+          }),
+        ),
+      )
+    })
+
+    const coreBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Inspect core capability'),
+    )
+    assert.ok(coreBtn, 'core:* 技能详情抽屉应渲染跳转内核能力的导航按钮')
+    await act(async () => {
+      coreBtn.click()
+    })
+    assert.deepEqual(opened.at(-1), { kind: 'plugins', tab: 'core', coreOwner: 'core:host' })
+
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(SkillDetailDrawer, {
+            skill: pluginSkill,
+            open: true,
+            inline: true,
+            initialContent: '# Workflow',
+            readSkill: async () => ({ text: '# Workflow' }),
+            onClose: () => {},
+          }),
+        ),
+      )
+    })
+
+    const pluginBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Inspect plugin'),
+    )
+    assert.ok(pluginBtn, '插件受管技能详情抽屉应渲染跳转插件详情的导航按钮')
+    await act(async () => {
+      pluginBtn.click()
+    })
+    assert.deepEqual(opened.at(-1), { kind: 'plugins', pluginId: 'builtin:workflow' })
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('SkillCenter(isSplit=true) & SkillDetailDrawer: 分屏上下文反向跳转 core 与普通插件归属仅替换 splitTarget 且 Hash 往返一致', { timeout: 60_000 }, async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.startsWith('/api/skills/')) {
+      return new Response(JSON.stringify({ text: '# Skill Body' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ error: { code: 'not_found', message: `unexpected ${url}` } }), {
+      status: 404,
+    })
+  }) as typeof fetch
+
+  const primary = { kind: 'conversation' as const, conversationId: 99 }
+  const coreSkill = makeSkill({
+    id: 'helmx-cli',
+    name: 'Helmx CLI',
+    managedByPlugin: 'core:host',
+  })
+  const pluginSkill = makeSkill({
+    id: 'workflow-guide',
+    name: 'Workflow Guide',
+    managedByPlugin: 'builtin:workflow',
+  })
+
+  const calls: Array<{ target: unknown; opts: unknown }> = []
+  const store = makeTestStore({
+    skills: [coreSkill, pluginSkill],
+    primaryTarget: primary,
+    splitTarget: { kind: 'skills', skillId: 'helmx-cli' },
+  })
+  const realOpenTarget = store.actions.openTarget
+  ;(store.actions as unknown as { openTarget: typeof realOpenTarget }).openTarget = (target, opts) => {
+    calls.push({ target, opts })
+    realOpenTarget(target, opts)
+  }
+
+  try {
+    // 1. 分屏 SkillCenter 中打开 core:* 技能详情 -> 点击归属按钮仅替换 splitTarget，主屏保持不变
+    await act(async () => {
+      root.render(
+        e(HostStoreProviders, { value: store }, e(SkillCenter, { isSplit: true, inlineDrawer: true })),
+      )
+    })
+    await act(async () => {
+      await flushMacrotask()
+    })
+
+    const coreBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Inspect core capability'),
+    )
+    assert.ok(coreBtn, '分屏 SkillCenter 应渲染跳转 core owner 的按钮')
+    await act(async () => {
+      coreBtn.click()
+    })
+
+    assert.deepEqual(calls.at(-1), {
+      target: { kind: 'plugins', tab: 'core', coreOwner: 'core:host' },
+      opts: { split: true },
+    })
+    const afterCoreOwner = store.getLocationTargetsSlice()
+    assert.deepEqual(afterCoreOwner.primaryTarget, primary, '分屏跳转 core owner 不得覆盖主屏')
+    assert.deepEqual(afterCoreOwner.splitTarget, {
+      kind: 'plugins',
+      tab: 'core',
+      coreOwner: 'core:host',
+    })
+
+    const coreOwnerHash = formatLocationHash({
+      primaryTarget: afterCoreOwner.primaryTarget,
+      splitTarget: afterCoreOwner.splitTarget,
+      drawerStack: [],
+      activeModal: null,
+    })
+    const parsedCoreOwner = parseLocationHash(coreOwnerHash)
+    assert.deepEqual(parsedCoreOwner.primaryTarget, primary)
+    assert.deepEqual(parsedCoreOwner.splitTarget, {
+      kind: 'plugins',
+      tab: 'core',
+      coreOwner: 'core:host',
+    })
+
+    // 2. 分屏切换到普通插件受管技能 -> 点击归属按钮仅替换 splitTarget，主屏保持不变
+    await act(async () => {
+      realOpenTarget({ kind: 'skills', skillId: 'workflow-guide' }, { split: true })
+    })
+    await act(async () => {
+      await flushMacrotask()
+    })
+
+    const pluginBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Inspect plugin'),
+    )
+    assert.ok(pluginBtn, '分屏 SkillCenter 应渲染跳转 plugin owner 的按钮')
+    await act(async () => {
+      pluginBtn.click()
+    })
+
+    assert.deepEqual(calls.at(-1), {
+      target: { kind: 'plugins', pluginId: 'builtin:workflow' },
+      opts: { split: true },
+    })
+    const afterPluginOwner = store.getLocationTargetsSlice()
+    assert.deepEqual(afterPluginOwner.primaryTarget, primary, '分屏跳转 plugin owner 不得覆盖主屏')
+    assert.deepEqual(afterPluginOwner.splitTarget, {
+      kind: 'plugins',
+      pluginId: 'builtin:workflow',
+    })
+
+    const pluginOwnerHash = formatLocationHash({
+      primaryTarget: afterPluginOwner.primaryTarget,
+      splitTarget: afterPluginOwner.splitTarget,
+      drawerStack: [],
+      activeModal: null,
+    })
+    const parsedPluginOwner = parseLocationHash(pluginOwnerHash)
+    assert.deepEqual(parsedPluginOwner.primaryTarget, primary)
+    assert.deepEqual(parsedPluginOwner.splitTarget, {
+      kind: 'plugins',
+      pluginId: 'builtin:workflow',
+    })
+
+    // 3. 单独挂载 SkillDetailDrawer({ isSplit: true }) 且不传 onOpenOwner 时，fallback 也必须携带 { split: true }
+    const standaloneCalls: Array<{ target: unknown; opts: unknown }> = []
+    const standaloneStore = makeTestStore({
+      primaryTarget: primary,
+      splitTarget: { kind: 'skills', skillId: 'helmx-cli' },
+    })
+    const realStandaloneOpen = standaloneStore.actions.openTarget
+    ;(standaloneStore.actions as unknown as { openTarget: typeof realStandaloneOpen }).openTarget = (
+      target,
+      opts,
+    ) => {
+      standaloneCalls.push({ target, opts })
+      realStandaloneOpen(target, opts)
+    }
+
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: standaloneStore },
+          e(SkillDetailDrawer, {
+            skill: coreSkill,
+            open: true,
+            isSplit: true,
+            inline: true,
+            initialContent: '# Helmx CLI',
+            readSkill: async () => ({ text: '# Helmx CLI' }),
+            onClose: () => {},
+          }),
+        ),
+      )
+    })
+
+    const standaloneCoreBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Inspect core capability'),
+    )
+    assert.ok(standaloneCoreBtn)
+    await act(async () => {
+      standaloneCoreBtn.click()
+    })
+    assert.deepEqual(standaloneCalls.at(-1), {
+      target: { kind: 'plugins', tab: 'core', coreOwner: 'core:host' },
+      opts: { split: true },
+    })
+    assert.deepEqual(standaloneStore.getLocationTargetsSlice().primaryTarget, primary)
+    assert.deepEqual(standaloneStore.getLocationTargetsSlice().splitTarget, {
+      kind: 'plugins',
+      tab: 'core',
+      coreOwner: 'core:host',
+    })
+
+    // 4. 对照：非分屏 SkillCenter 反向跳转不携带 split 选项，更新 primaryTarget 且 splitTarget 保持 null
+    const primaryCalls: Array<{ target: unknown; opts: unknown }> = []
+    const primaryStore = makeTestStore({
+      skills: [coreSkill, pluginSkill],
+      primaryTarget: { kind: 'skills', skillId: 'workflow-guide' },
+      splitTarget: null,
+    })
+    const realPrimaryOpen = primaryStore.actions.openTarget
+    ;(primaryStore.actions as unknown as { openTarget: typeof realPrimaryOpen }).openTarget = (
+      target,
+      opts,
+    ) => {
+      primaryCalls.push({ target, opts })
+      realPrimaryOpen(target, opts)
+    }
+
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: primaryStore }, e(SkillCenter, { inlineDrawer: true })))
+    })
+    await act(async () => {
+      await flushMacrotask()
+    })
+
+    const primaryPluginBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Inspect plugin'),
+    )
+    assert.ok(primaryPluginBtn)
+    await act(async () => {
+      primaryPluginBtn.click()
+    })
+    assert.deepEqual(primaryCalls.at(-1), {
+      target: { kind: 'plugins', pluginId: 'builtin:workflow' },
+      opts: undefined,
+    })
+    assert.deepEqual(primaryStore.getLocationTargetsSlice().primaryTarget, {
+      kind: 'plugins',
+      pluginId: 'builtin:workflow',
+    })
+    assert.equal(primaryStore.getLocationTargetsSlice().splitTarget, null)
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
   }
 })

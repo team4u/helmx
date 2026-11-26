@@ -1,9 +1,9 @@
 /**
  * builtin:profile: the resident roles-and-skills foundation (locked: true).
  *
- * Responsibilities (memory split to builtin:memory; this plugin has zero memory logic):
- * - Bootstrap the system-level built-in skill skills/helmx-cli (managed overwrite) and the default
- *   assistant Profile's managed metadata at startup;
+ * Responsibilities (memory split to builtin:memory; kernel-owned core skills helmx-cli /
+ * app-builder / conversations / profiles live in @helmx/kernel under core:* namespaces):
+ * - Bootstrap the default assistant Profile's managed metadata (`managedByPlugin: 'builtin:profile'`) at startup;
  * - before_turn injects profile.system (SYSTEM.md), profile.skills (the available skill
  *   catalog), profile.assets-missing (a missing-SYSTEM.md warning), and profile.agents /
  *   profile.agents-unavailable (the workspace AGENTS.md project conventions; read failures or a
@@ -24,12 +24,6 @@
  */
 import { HelmxError, escapeXml, isAbsoluteTargetPath, isPluginSummaryActive, isSkillAvailable, pathRulesForShape, targetPathShape, type DispatchToolsCapability, type HelmxHostProfilesPort, type JsonSchema, type PluginDefinition, type Profile, type SkillSummary } from '@helmx/protocol';
 import {
-  APP_BUILDER_SKILL_ASSET,
-  HELMX_CLI_SKILL_ASSET,
-  PROFILE_MANAGED_BY,
-  PROFILE_SKILL_ASSET,
-} from './profile/assets.js';
-import {
   describeHint,
   extractSystemSummary,
   isCollaborationCandidate,
@@ -47,18 +41,9 @@ import { listScopedSkills, SKILL_SUMMARY_JSON_SCHEMA, type ScopedSkillCatalog } 
 
 const DEFAULT_PROFILE_ID = 'assistant';
 
-export {
-  HELMX_CLI_SKILL_ID,
-  HELMX_CLI_SKILL_ASSET,
-  APP_BUILDER_SKILL_ID,
-  APP_BUILDER_SKILL_ASSET,
-  APP_BUILDER_SKILL_MD,
-  PROFILE_SKILL_ID,
-  PROFILE_SKILL_ASSET,
-  PROFILE_SKILL_MD,
-  PROFILE_MANAGED_BY,
-  renderSkillTemplate,
-} from './profile/assets.js'
+/** Plugin ID declaring ownership of the default `assistant` Profile metadata. */
+export const PROFILE_MANAGED_BY = 'builtin:profile';
+
 export {
   AGENTS_MD_FILENAME,
   MAX_AGENTS_MD_CHARS,
@@ -136,17 +121,12 @@ export function createProfilePlugin(): PluginDefinition {
     locked: true,
     definePlugin(ctx) {
       const { profiles, skills } = ctx.host;
-      // Sync the system-level built-in skills (helmx-cli, app-builder, profile) at startup:
-      // managed system assets are overwritten file-by-file per the source version, and missing files are
-      // backfilled; writes through the regular interface are rejected.
-      // managedByPlugin (ensureDefault does not normalize; this plugin bootstraps the declaration).
+      // Bootstrap the default assistant Profile's managedByPlugin metadata at startup
+      // (ensureDefault does not normalize; core skills are bootstrapped by @helmx/kernel under core:*).
       ctx.service({
         id: 'profile-skills',
         async start() {
           invalidateNodeSkillsCache(ctx.host);
-          await skills.ensureSkill(HELMX_CLI_SKILL_ASSET);
-          await skills.ensureSkill(APP_BUILDER_SKILL_ASSET);
-          await skills.ensureSkill(PROFILE_SKILL_ASSET);
           await ensureDefaultProfileManaged(profiles);
         },
         async stop() {

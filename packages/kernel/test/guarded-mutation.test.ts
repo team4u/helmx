@@ -618,3 +618,293 @@ test('markConversationOwnership rejects legacy/invalid owner values with 400 val
     await kernel.close().catch(() => {})
   }
 })
+
+// ---------------------------------------------------------------------------
+// 7. Guarded update / withdraw / delete mid-await races + untitled CAS + ownership inheritance
+// ---------------------------------------------------------------------------
+
+test('guarded update: flipping ownership to human inside await window -> 409 ownership_conflict, zero config mutation', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-update-race')
+  const kernel = await openRuntime(dir)
+  let barrier: { release: () => void } | undefined
+  try {
+    const conv = await kernel.conversations.createConversation({ title: 'before update', ownedBy: 'helmx' })
+    const seqBefore = conv.stateChangeSeq
+
+    barrier = barrierConversationHandle(kernel)
+    const attempt = kernel.conversations.updateConversationGuarded(
+      conv.id,
+      { title: 'hijacked title', tags: ['bad'] },
+      { expectedOwnership: 'helmx', expectedStateSeq: seqBefore },
+    )
+    await flushToBarrier()
+    kernel.ownership.markOwnership(conv.id, 'human')
+    barrier.release()
+
+    await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
+    const after = kernel.conversations.getConversation(conv.id)
+    assert.equal(after.title, 'before update', 'title must remain untouched on rejected guarded update')
+    assert.deepEqual(after.tags, [], 'tags must remain untouched on rejected guarded update')
+    assert.equal(after.stateChangeSeq, seqBefore, 'stateChangeSeq must remain untouched')
+  } finally {
+    barrier?.release()
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('guarded update: rejection matrix and success path (+1 seq, ownedBy preserved)', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-update-matrix')
+  const kernel = await openRuntime(dir)
+  try {
+    const humanConv = await kernel.conversations.createConversation({ title: 'human conv', ownedBy: 'human' })
+    await assert.rejects(
+      kernel.conversations.updateConversationGuarded(humanConv.id, { title: 'blocked' }),
+      isHelmxError('ownership_conflict', 409),
+    )
+
+    const helmxConv = await kernel.conversations.createConversation({ title: 'helmx conv', ownedBy: 'helmx' })
+    const seq0 = helmxConv.stateChangeSeq
+    await assert.rejects(
+      kernel.conversations.updateConversationGuarded(
+        helmxConv.id,
+        { title: 'stale' },
+        { expectedOwnership: 'helmx', expectedStateSeq: seq0 + 5 },
+      ),
+      isHelmxError('state_seq_conflict', 409),
+    )
+
+    const updated = await kernel.conversations.updateConversationGuarded(
+      helmxConv.id,
+      { title: 'helmx updated', pinned: true },
+      { expectedOwnership: 'helmx', expectedStateSeq: seq0 },
+    )
+    assert.equal(updated.title, 'helmx updated')
+    assert.equal(updated.pinned, true)
+    assert.equal(updated.ownedBy, 'helmx')
+    assert.equal(updated.stateChangeSeq, seq0 + 1)
+  } finally {
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('guarded withdraw: flipping ownership to human inside await window -> 409 ownership_conflict, queued input stays intact', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-withdraw-race')
+  const kernel = await openRuntime(dir)
+  let releaseTurn!: () => void
+  const turnGate = new Promise<void>((resolve) => {
+    releaseTurn = resolve
+  })
+  let releaseSubBarrier: (() => void) | undefined
+  try {
+    const conv = await kernel.conversations.createConversation({ title: 'withdraw race', ownedBy: 'helmx' })
+    kernel.__faux.setResponses([
+      (async () => {
+        await turnGate
+        return fauxAssistantMessage('first done')
+      }) as never,
+      fauxAssistantMessage('queued done'),
+    ])
+    await kernel.conversations.submitInput(conv.id, 'hold turn')
+    await waitFor(() => kernel.conversations.getConversation(conv.id).status === 'working')
+
+    const queued = await kernel.conversations.submitInput(conv.id, 'queued follow up', {
+      whenBusy: 'followUp',
+    })
+    const queuedSubId = Number(queued.submissionId)
+
+    // Install a one-shot barrier on harness.submission to deterministically pause inside withdrawQueuedInputGuarded.
+    type SubmissionFn = (id: never, ctx: unknown) => Promise<unknown>
+    const harness = (kernel as unknown as { harness: { submission: SubmissionFn } }).harness
+    const realSubmission = harness.submission.bind(harness) as SubmissionFn
+    const subGate = new Promise<void>((resolve) => {
+      releaseSubBarrier = resolve
+    })
+    let pausedOnce = false
+    harness.submission = ((id: never, ctx: unknown) => {
+      if (pausedOnce) return realSubmission(id, ctx)
+      pausedOnce = true
+      return new Promise((resolve, reject) => {
+        void subGate.then(() => {
+          void realSubmission(id, ctx).then(resolve, reject)
+        }, reject)
+      })
+    }) as SubmissionFn
+
+    const attempt = kernel.conversations.withdrawQueuedInputGuarded(
+      conv.id,
+      { submissionId: queuedSubId },
+      { expectedOwnership: 'helmx' },
+    )
+    await flushToBarrier()
+    kernel.ownership.markOwnership(conv.id, 'human')
+    releaseSubBarrier!()
+
+    await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
+    // Because withdrawal was blocked, releasing the turn processes the queued follow-up too.
+    releaseTurn()
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.equal(await kernel.conversations.getLastAssistantText(conv.id), 'queued done')
+
+    // Success path: helmx-owned conversation withdraws its own queued followUp cleanly.
+    const conv2 = await kernel.conversations.createConversation({ title: 'withdraw ok', ownedBy: 'helmx' })
+    let releaseTurn2!: () => void
+    const turnGate2 = new Promise<void>((resolve) => {
+      releaseTurn2 = resolve
+    })
+    kernel.__faux.setResponses([
+      (async () => {
+        await turnGate2
+        return fauxAssistantMessage('first2 done')
+      }) as never,
+      fauxAssistantMessage('should never run'),
+    ])
+    await kernel.conversations.submitInput(conv2.id, 'hold turn 2')
+    await waitFor(() => kernel.conversations.getConversation(conv2.id).status === 'working')
+    const queued2 = await kernel.conversations.submitInput(conv2.id, 'cancel me', { whenBusy: 'followUp' })
+    const withdrawRes = await kernel.conversations.withdrawQueuedInputGuarded(
+      conv2.id,
+      { submissionId: Number(queued2.submissionId) },
+      { expectedOwnership: 'helmx' },
+    )
+    assert.equal(withdrawRes.status, 'withdrawn')
+    releaseTurn2()
+    await kernel.conversations.waitForIdle(conv2.id)
+    assert.equal(await kernel.conversations.getLastAssistantText(conv2.id), 'first2 done')
+  } finally {
+    releaseSubBarrier?.()
+    releaseTurn()
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('guarded delete: flipping ownership to human inside deleteOneConversation await window -> 409 ownership_conflict, conversation survives', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-delete-race')
+  const kernel = await openRuntime(dir)
+  let barrier: { release: () => void } | undefined
+  try {
+    const conv = await kernel.conversations.createConversation({ title: 'delete race', ownedBy: 'helmx' })
+    barrier = barrierConversationHandle(kernel)
+    const attempt = kernel.conversations.deleteConversationGuarded(conv.id, {
+      expectedOwnership: 'helmx',
+      expectedStateSeq: conv.stateChangeSeq,
+    })
+    await flushToBarrier()
+    kernel.ownership.markOwnership(conv.id, 'human')
+    barrier.release()
+
+    await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
+    const survivor = kernel.conversations.getConversation(conv.id)
+    assert.equal(survivor.id, conv.id)
+    assert.equal(survivor.ownedBy, 'human')
+  } finally {
+    barrier?.release()
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('guarded submit with expectedStateSeq on untitled conversation succeeds without self-conflict and derives title only after commit', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-untitled-cas')
+  const kernel = await openRuntime(dir)
+  try {
+    // 1. Rejected whenIdle=reject on untitled conversation must leave title empty and seq unchanged.
+    const idleUntitled = await kernel.conversations.createConversation({ ownedBy: 'helmx' })
+    assert.equal(idleUntitled.title, '')
+    const seqIdle = idleUntitled.stateChangeSeq
+    await assert.rejects(
+      kernel.conversations.submitInputGuarded(
+        idleUntitled.id,
+        'should reject when idle',
+        { origin: 'agent', whenBusy: 'steer', whenIdle: 'reject' },
+        { expectedOwnership: 'helmx', expectedStateSeq: seqIdle },
+      ),
+      isHelmxError('conversation_idle', 409),
+    )
+    assert.equal(kernel.conversations.getConversation(idleUntitled.id).title, '')
+    assert.equal(kernel.conversations.getConversation(idleUntitled.id).stateChangeSeq, seqIdle)
+
+    // 2. Authorized guarded submit with exact expectedStateSeq on untitled conversation commits cleanly and derives title.
+    kernel.__faux.setResponses([fauxAssistantMessage('untitled ok')])
+    const { submissionId } = await kernel.conversations.submitInputGuarded(
+      idleUntitled.id,
+      'first automated task',
+      { origin: 'agent' },
+      { expectedOwnership: 'helmx', expectedStateSeq: seqIdle },
+    )
+    assert.ok(Number(submissionId) > 0)
+    await kernel.conversations.waitForIdle(idleUntitled.id)
+    assert.equal(kernel.conversations.getConversation(idleUntitled.id).title, 'first automated task')
+    assert.equal(await kernel.conversations.getLastAssistantText(idleUntitled.id), 'untitled ok')
+  } finally {
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('createConversation and forkConversation inherit parent/source ownership and honor explicit ownedBy', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-create-fork-ownership')
+  const kernel = await openRuntime(dir)
+  try {
+    const helmxParent = await kernel.conversations.createConversation({
+      title: 'helmx root',
+      ownedBy: 'helmx',
+    })
+    assert.equal(helmxParent.ownedBy, 'helmx')
+
+    // Child under helmx parent inherits 'helmx' when ownedBy is omitted; explicit 'human' overrides.
+    const inheritedChild = await kernel.conversations.createConversation({
+      title: 'inherited child',
+      parentConversationId: helmxParent.id,
+    })
+    assert.equal(inheritedChild.ownedBy, 'helmx')
+    assert.equal(kernel.ownership.getOwnership(inheritedChild.id), 'helmx')
+
+    const explicitHumanChild = await kernel.conversations.createConversation({
+      title: 'explicit human child',
+      parentConversationId: helmxParent.id,
+      ownedBy: 'human',
+    })
+    assert.equal(explicitHumanChild.ownedBy, 'human')
+    assert.equal(kernel.ownership.getOwnership(explicitHumanChild.id), 'human')
+
+    // Seed completed turns on helmx and human sources so both can be forked cleanly.
+    kernel.__faux.setResponses([
+      fauxAssistantMessage('helmx seed answer'),
+      fauxAssistantMessage('human seed answer'),
+    ])
+    await kernel.conversations.submitInput(helmxParent.id, 'helmx seed')
+    await kernel.conversations.waitForIdle(helmxParent.id)
+    const humanSource = await kernel.conversations.createConversation({ title: 'human root' })
+    await kernel.conversations.submitInput(humanSource.id, 'human seed')
+    await kernel.conversations.waitForIdle(humanSource.id)
+
+    // Fork inherits source ownership by default and returns ownedBy on the summary.
+    const forkOfHelmx = await kernel.conversations.forkConversation(helmxParent.id)
+    assert.equal(forkOfHelmx.ownedBy, 'helmx')
+    assert.equal(kernel.ownership.getOwnership(forkOfHelmx.id), 'helmx')
+
+    const forkOfHuman = await kernel.conversations.forkConversation(humanSource.id)
+    assert.equal(forkOfHuman.ownedBy, 'human')
+    assert.equal(kernel.ownership.getOwnership(forkOfHuman.id), 'human')
+
+    // Explicit ownedBy overrides inherited ownership on fork; invalid ownedBy rejects with 400.
+    const forkHelmxAsHuman = await kernel.conversations.forkConversation(helmxParent.id, {
+      title: 'promoted fork',
+      ownedBy: 'human',
+    })
+    assert.equal(forkHelmxAsHuman.ownedBy, 'human')
+    assert.equal(kernel.ownership.getOwnership(forkHelmxAsHuman.id), 'human')
+
+    const forkHumanAsHelmx = await kernel.conversations.forkConversation(humanSource.id, {
+      title: 'automated fork',
+      ownedBy: 'helmx',
+    })
+    assert.equal(forkHumanAsHelmx.ownedBy, 'helmx')
+    assert.equal(kernel.ownership.getOwnership(forkHumanAsHelmx.id), 'helmx')
+
+    await assert.rejects(
+      kernel.conversations.forkConversation(humanSource.id, { ownedBy: 'bot' as never }),
+      isHelmxError('validation_error', 400),
+    )
+  } finally {
+    await kernel.close().catch(() => {})
+  }
+})
