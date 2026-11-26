@@ -13,6 +13,8 @@
 
 import {
   HelmxError,
+  isPluginSummaryActive,
+  parseSkillFrontmatter,
   type ConversationInput,
   type TurnSettledPayload,
   type MaybePromise,
@@ -67,6 +69,7 @@ import {
   type RuntimeServicesInit,
 } from './runtime-services.js'
 import { registerCoreActions } from './core-actions.js'
+import { bootstrapCoreSkills } from './core-skills/index.js'
 
 export type KernelRuntimeOptions = KernelBootOptions
 
@@ -241,6 +244,7 @@ export class KernelRuntime {
   private async initialize(): Promise<void> {
     await this.nodes.initialize()
     await this.svc.profilesSvc.ensureDefault()
+    await bootstrapCoreSkills(this.svc.skillsSvc)
     await this.models.loadDefaultsFromConfig()
     if (this.init.providers !== undefined && this.init.externalModels === undefined) {
       for (const provider of this.init.providers) {
@@ -306,16 +310,38 @@ export class KernelRuntime {
   }
 
   async ensurePluginSkill(asset: PluginSkillAsset, pluginId: string): Promise<void> {
-    const managed = /^managedByPlugin:[ \t]*['\"]?([^'\"\n]+)['\"]?[ \t]*$/m.exec(asset.skillMd)
-    if (managed?.[1]?.trim() !== pluginId) {
+    let managedByPlugin: string | undefined
+    try {
+      managedByPlugin = parseSkillFrontmatter(asset.skillMd).managedByPlugin
+    } catch (error) {
       throw new HelmxError(
         'invalid_plugin_skill',
-        `Managed skill '${asset.id}' for plugin '${pluginId}' must declare 'managedByPlugin: ${pluginId}' in SKILL.md frontmatter (got: ${managed?.[1] ?? 'missing'})`,
+        `Managed skill '${asset.id}' for plugin '${pluginId}' has invalid SKILL.md frontmatter: ${error instanceof Error ? error.message : String(error)}`,
+        400,
+        { pluginId, skillId: asset.id },
+      )
+    }
+    if (managedByPlugin !== pluginId) {
+      throw new HelmxError(
+        'invalid_plugin_skill',
+        `Managed skill '${asset.id}' for plugin '${pluginId}' must declare 'managedByPlugin: ${pluginId}' in SKILL.md frontmatter (got: ${managedByPlugin ?? 'missing'})`,
         400,
         { pluginId, skillId: asset.id },
       )
     }
     await this.svc.skillsSvc.ensureSkill(asset)
+  }
+
+  private async reconcileActivePluginManagedSkills(): Promise<void> {
+    if (this.pluginHost === undefined) return
+    // Reconcile only active (enabled + started without error) plugin owners: retired directories of
+    // active plugins that now declare fewer or zero skills (e.g. `builtin:profile` after migrating
+    // core skills out) are removed, while disabled or failed-to-start plugins retain their on-disk dirs.
+    const activePluginIds = this.pluginHost
+      .list()
+      .filter(isPluginSummaryActive)
+      .map((plugin) => plugin.id)
+    await this.svc.skillsSvc.reconcileManagedOwners(activePluginIds)
   }
 
   emitHostEvent(type: string, payload: unknown, options?: { broadcast?: boolean }): MaybePromise<void> {
@@ -500,7 +526,10 @@ export class KernelRuntime {
         })
         this.nodeJoinGraceDone = true
       }
-      if (this.pluginHost) await this.pluginHost.start()
+      if (this.pluginHost) {
+        await this.pluginHost.start()
+        await this.reconcileActivePluginManagedSkills()
+      }
       // Converge recovered / initial conversations once all plugins have mounted runtime providers
       // and model tiers (covers cold-boot deferred `tier/*` resolution and provider thinking-level clamps)
       // before resuming the durable scheduler; skip the full scan when neither tiers/providers/defaults
