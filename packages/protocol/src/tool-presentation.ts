@@ -34,10 +34,13 @@ export const TOOL_DIFF_MAX_ROWS = 160
 export const TOOL_DIFF_MAX_TEXT_CHARS = 32_768
 export const TOOL_DIFF_MAX_ROW_CHARS = 4_096
 
-const lineNumber = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER }
-const text = { type: 'string', maxLength: TOOL_DIFF_MAX_ROW_CHARS }
+const lineNumber = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } as const
+const text = { type: 'string', maxLength: TOOL_DIFF_MAX_ROW_CHARS } as const
 
-/** SDK output and the Web presentation entry share the same schema, rejecting forged line numbers and invalid data. */
+/**
+ * SDK output and the Web presentation entry share the same schema, rejecting forged line numbers and invalid data.
+ * Typed with a structural schema shape (never TypeBox) so `@helmx/protocol/browser` validates directly against it.
+ */
 export const EDIT_TOOL_RESULT_SCHEMA = {
   type: 'object',
   properties: {
@@ -84,155 +87,110 @@ export const EDIT_TOOL_RESULT_SCHEMA = {
   },
   required: ['path', 'nodeId', 'replaced', 'diff'],
   additionalProperties: false,
-}
+} as const
 
 export type EditToolResultValidation =
   | { ok: true; value: EditToolResult }
   | { ok: false; error: string }
 
-const EDIT_RESULT_KEYS = ['path', 'nodeId', 'replaced', 'diff'] as const
-const EDIT_RESULT_KEY_SET = new Set<string>(EDIT_RESULT_KEYS)
-const EDIT_DIFF_KEYS = ['rows', 'addedLines', 'removedLines', 'firstChangedLine', 'truncated'] as const
-const EDIT_DIFF_KEY_SET = new Set<string>(EDIT_DIFF_KEYS)
-const CONTEXT_ROW_KEYS = ['kind', 'oldLine', 'newLine', 'text'] as const
-const CONTEXT_ROW_KEY_SET = new Set<string>(CONTEXT_ROW_KEYS)
-const REMOVE_ROW_KEYS = ['kind', 'oldLine', 'text'] as const
-const REMOVE_ROW_KEY_SET = new Set<string>(REMOVE_ROW_KEYS)
-const ADD_ROW_KEYS = ['kind', 'newLine', 'text'] as const
-const ADD_ROW_KEY_SET = new Set<string>(ADD_ROW_KEYS)
-
-function isSafeLineNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= Number.MAX_SAFE_INTEGER
+interface MiniSchemaNode {
+  readonly type?: 'object' | 'array' | 'string' | 'integer' | 'boolean'
+  readonly const?: unknown
+  readonly minLength?: number
+  readonly maxLength?: number
+  readonly minimum?: number
+  readonly maximum?: number
+  readonly maxItems?: number
+  readonly properties?: Readonly<Record<string, MiniSchemaNode>>
+  readonly required?: readonly string[]
+  readonly additionalProperties?: boolean
+  readonly items?: MiniSchemaNode
+  readonly oneOf?: readonly MiniSchemaNode[]
 }
 
-function isSafeNonNegativeInt(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER
-}
-
-function isBoundedRowText(value: unknown): value is string {
-  return typeof value === 'string' && value.length <= TOOL_DIFF_MAX_ROW_CHARS
-}
-
-function checkExactObjectKeys(
-  record: Record<string, unknown>,
-  required: readonly string[],
-  allowed: ReadonlySet<string>,
-  path: string,
-): string | null {
-  for (const key of required) {
-    if (!Object.hasOwn(record, key)) {
-      return `${path} must have required property '${key}'`
-    }
+function validateMiniSchemaNode(schema: MiniSchemaNode, value: unknown, path: string): string | null {
+  if (Object.hasOwn(schema, 'const')) {
+    return value === schema.const ? null : `${path} must equal ${JSON.stringify(schema.const)}`
   }
-  for (const key of Object.keys(record)) {
-    if (!allowed.has(key)) {
-      return `${path} must NOT have additional properties ('${key}')`
+  if (schema.oneOf !== undefined) {
+    let matches = 0
+    for (const branch of schema.oneOf) {
+      if (validateMiniSchemaNode(branch, value, path) === null) {
+        matches += 1
+      }
     }
+    return matches === 1 ? null : `${path} must match exactly one allowed shape`
   }
-  return null
+  switch (schema.type) {
+    case 'object': {
+      if (!isPlainObject(value)) return `${path} must be a plain object`
+      if (schema.required !== undefined) {
+        for (const key of schema.required) {
+          if (!Object.hasOwn(value, key)) return `${path} must have required property '${key}'`
+        }
+      }
+      if (schema.additionalProperties === false && schema.properties !== undefined) {
+        for (const key of Object.keys(value)) {
+          if (!Object.hasOwn(schema.properties, key)) {
+            return `${path} must NOT have additional properties ('${key}')`
+          }
+        }
+      }
+      if (schema.properties !== undefined) {
+        for (const [key, propSchema] of Object.entries(schema.properties)) {
+          if (!Object.hasOwn(value, key)) continue
+          const err = validateMiniSchemaNode(propSchema, value[key], path === '(root)' ? `/${key}` : `${path}/${key}`)
+          if (err !== null) return err
+        }
+      }
+      return null
+    }
+    case 'array': {
+      if (!Array.isArray(value)) return `${path} must be an array`
+      if (schema.maxItems !== undefined && value.length > schema.maxItems) {
+        return `${path} must NOT have more than ${schema.maxItems} items`
+      }
+      if (schema.items !== undefined) {
+        for (let i = 0; i < value.length; i += 1) {
+          const itemPath = `${path}/${i}`
+          if (!Object.hasOwn(value, i)) return `${itemPath} must not be a sparse array hole`
+          const err = validateMiniSchemaNode(schema.items, value[i], itemPath)
+          if (err !== null) return err
+        }
+      }
+      return null
+    }
+    case 'string': {
+      if (typeof value !== 'string') return `${path} must be a string`
+      if (schema.minLength !== undefined && value.length < schema.minLength) {
+        return `${path} must NOT have fewer than ${schema.minLength} characters`
+      }
+      if (schema.maxLength !== undefined && value.length > schema.maxLength) {
+        return `${path} must NOT have more than ${schema.maxLength} characters`
+      }
+      return null
+    }
+    case 'integer': {
+      if (typeof value !== 'number' || !Number.isInteger(value)) return `${path} must be an integer`
+      if (schema.minimum !== undefined && value < schema.minimum) return `${path} must be >= ${schema.minimum}`
+      if (schema.maximum !== undefined && value > schema.maximum) return `${path} must be <= ${schema.maximum}`
+      return null
+    }
+    case 'boolean':
+      return typeof value === 'boolean' ? null : `${path} must be a boolean`
+    default:
+      return `${path} has unsupported schema node`
+  }
 }
 
 /**
- * Dependency-free structural validator enforcing the exact {@link EDIT_TOOL_RESULT_SCHEMA}
- * contract for browser consumers (`@helmx/protocol/browser`) without pulling TypeBox into
- * eager web bundles.
+ * Dependency-free structural validator executing directly against {@link EDIT_TOOL_RESULT_SCHEMA}
+ * for browser consumers (`@helmx/protocol/browser`) without pulling TypeBox into eager web bundles.
  */
 export function validateEditToolResult(value: unknown): EditToolResultValidation {
-  if (!isPlainObject(value)) {
-    return { ok: false, error: '(root) must be a plain object' }
-  }
-  const rootKeyErr = checkExactObjectKeys(value, EDIT_RESULT_KEYS, EDIT_RESULT_KEY_SET, '(root)')
-  if (rootKeyErr !== null) return { ok: false, error: rootKeyErr }
-
-  if (typeof value.path !== 'string' || value.path.length < 1) {
-    return { ok: false, error: '/path must be a non-empty string' }
-  }
-  if (typeof value.nodeId !== 'string' || value.nodeId.length < 1) {
-    return { ok: false, error: '/nodeId must be a non-empty string' }
-  }
-  if (value.replaced !== true) {
-    return { ok: false, error: '/replaced must be true' }
-  }
-  if (!isPlainObject(value.diff)) {
-    return { ok: false, error: '/diff must be a plain object' }
-  }
-
-  const diff = value.diff
-  const diffKeyErr = checkExactObjectKeys(diff, EDIT_DIFF_KEYS, EDIT_DIFF_KEY_SET, '/diff')
-  if (diffKeyErr !== null) return { ok: false, error: diffKeyErr }
-
-  if (!Array.isArray(diff.rows)) {
-    return { ok: false, error: '/diff/rows must be an array' }
-  }
-  if (diff.rows.length > TOOL_DIFF_MAX_ROWS) {
-    return { ok: false, error: `/diff/rows must NOT have more than ${TOOL_DIFF_MAX_ROWS} items` }
-  }
-
-  for (let i = 0; i < diff.rows.length; i += 1) {
-    if (!Object.hasOwn(diff.rows, i)) {
-      return { ok: false, error: `/diff/rows/${i} must be a plain object` }
-    }
-    const row = diff.rows[i]
-    const rowPath = `/diff/rows/${i}`
-    if (!isPlainObject(row)) {
-      return { ok: false, error: `${rowPath} must be a plain object` }
-    }
-    switch (row.kind) {
-      case 'context': {
-        const keyErr = checkExactObjectKeys(row, CONTEXT_ROW_KEYS, CONTEXT_ROW_KEY_SET, rowPath)
-        if (keyErr !== null) return { ok: false, error: keyErr }
-        if (!isSafeLineNumber(row.oldLine)) {
-          return { ok: false, error: `${rowPath}/oldLine must be an integer >= 1` }
-        }
-        if (!isSafeLineNumber(row.newLine)) {
-          return { ok: false, error: `${rowPath}/newLine must be an integer >= 1` }
-        }
-        if (!isBoundedRowText(row.text)) {
-          return { ok: false, error: `${rowPath}/text must be a string of at most ${TOOL_DIFF_MAX_ROW_CHARS} chars` }
-        }
-        break
-      }
-      case 'remove': {
-        const keyErr = checkExactObjectKeys(row, REMOVE_ROW_KEYS, REMOVE_ROW_KEY_SET, rowPath)
-        if (keyErr !== null) return { ok: false, error: keyErr }
-        if (!isSafeLineNumber(row.oldLine)) {
-          return { ok: false, error: `${rowPath}/oldLine must be an integer >= 1` }
-        }
-        if (!isBoundedRowText(row.text)) {
-          return { ok: false, error: `${rowPath}/text must be a string of at most ${TOOL_DIFF_MAX_ROW_CHARS} chars` }
-        }
-        break
-      }
-      case 'add': {
-        const keyErr = checkExactObjectKeys(row, ADD_ROW_KEYS, ADD_ROW_KEY_SET, rowPath)
-        if (keyErr !== null) return { ok: false, error: keyErr }
-        if (!isSafeLineNumber(row.newLine)) {
-          return { ok: false, error: `${rowPath}/newLine must be an integer >= 1` }
-        }
-        if (!isBoundedRowText(row.text)) {
-          return { ok: false, error: `${rowPath}/text must be a string of at most ${TOOL_DIFF_MAX_ROW_CHARS} chars` }
-        }
-        break
-      }
-      default:
-        return { ok: false, error: `${rowPath}/kind must be 'context', 'remove', or 'add'` }
-    }
-  }
-
-  if (!isSafeNonNegativeInt(diff.addedLines)) {
-    return { ok: false, error: '/diff/addedLines must be a safe non-negative integer' }
-  }
-  if (!isSafeNonNegativeInt(diff.removedLines)) {
-    return { ok: false, error: '/diff/removedLines must be a safe non-negative integer' }
-  }
-  if (!isSafeLineNumber(diff.firstChangedLine)) {
-    return { ok: false, error: '/diff/firstChangedLine must be an integer >= 1' }
-  }
-  if (typeof diff.truncated !== 'boolean') {
-    return { ok: false, error: '/diff/truncated must be a boolean' }
-  }
-
-  return { ok: true, value: value as unknown as EditToolResult }
+  const error = validateMiniSchemaNode(EDIT_TOOL_RESULT_SCHEMA, value, '(root)')
+  if (error !== null) return { ok: false, error }
+  return { ok: true, value: value as EditToolResult }
 }
 
 const nonNegativeInt = { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }

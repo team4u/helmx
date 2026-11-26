@@ -99,6 +99,8 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'KERNEL_TOOL_PRESENTATION_META_SCHEMAS',
     'MODEL_THINKING_LEVELS',
     'assertJsonSafe',
+    'resolveConversationTiming',
+    'compareCodeUnit',
   ] as const
 
   /** Server-only contract validators and TypeBox UI/request schemas that must NOT bloat `@helmx/protocol/browser`. */
@@ -109,7 +111,6 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'REQUEST_SCHEMAS',
     'assertBoundedPresentationMeta',
     'assertSchemaCompilable',
-    'compareCodeUnit',
     'validateOrThrow',
     'validatePluginConfigFieldSchema',
     'validatePluginConfigFieldValue',
@@ -252,7 +253,10 @@ test('validatePluginConfigFieldSchema and validatePluginConfigFieldValue enforce
     ['number enum violating minimum', { type: 'number', minimum: 2, enum: [1, 2] }],
     ['boolean with enum', { type: 'boolean', enum: ['true'] }],
     ['secret with enum', { type: 'string', secret: true, enum: ['a'] }],
+    ['secret with format', { type: 'string', secret: true, format: 'model' }],
     ['secret with string[]', { type: 'string[]', secret: true }],
+    ['unknown schema key at declaration', { type: 'string', extraField: true }],
+    ['manifest key property rejected at declaration', { key: 'apiKey', type: 'string' }],
     ['format with enum', { type: 'string', format: 'model', enum: ['m1'] }],
     ['format on string[]', { type: 'string[]', format: 'node' }],
     ['minimum > maximum', { type: 'number', minimum: 10, maximum: 5 }],
@@ -267,6 +271,13 @@ test('validatePluginConfigFieldSchema and validatePluginConfigFieldValue enforce
       `expected rejection for ${label}`,
     )
   }
+  assert.equal(
+    validatePluginConfigFieldSchema({ key: 'model', type: 'string', secret: false, required: true, format: 'model' }, { allowSecretDefault: false, requireBooleanFlags: true }),
+    undefined,
+  )
+  assert.ok(
+    validatePluginConfigFieldSchema({ key: 'model', type: 'string', secret: false, required: true, bogus: 1 }, { allowSecretDefault: false, requireBooleanFlags: true }) !== undefined,
+  )
 
   // Runtime value checks
   const enumTags = { type: 'string[]' as const, enum: ['alpha', 'beta'] }

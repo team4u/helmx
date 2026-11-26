@@ -2,7 +2,7 @@
 import path from 'node:path'
 import { flagValue, type FlagSpec } from '../args.js'
 import { CliError } from '../errors.js'
-import { assertNoExtraPositionals, parsePositiveInt, type CommandSpec } from './shared.js'
+import { assertNoExtraPositionals, parsePositiveInt, type CommandContext, type CommandSpec } from './shared.js'
 
 export const LAUNCH_FLAGS = [
   { name: 'port', type: 'string', help: 'local Hub listen port' },
@@ -39,6 +39,27 @@ export function readLaunchOptions(flags: Map<string, unknown>, cwd: string) {
   }
 }
 
+export async function runLauncherCommand<T>(
+  ctx: CommandContext,
+  invoke: (
+    launcher: typeof import('../launcher/index.js'),
+    launcherCtx: { io: CommandContext['io']; root: string; fetchFn?: typeof fetch },
+  ) => Promise<T>,
+): Promise<T> {
+  const launcher = await import('../launcher/index.js')
+  const launcherCtx = {
+    io: ctx.io,
+    root: launcher.resolveInstallRoot(ctx.env),
+    ...(ctx.io.fetchImpl !== undefined ? { fetchFn: ctx.io.fetchImpl } : {}),
+  }
+  try {
+    return await invoke(launcher, launcherCtx)
+  } catch (error) {
+    if (error instanceof launcher.UsageError) throw new CliError(error.message, error.code)
+    throw error
+  }
+}
+
 export const startCommands: CommandSpec[] = [
   {
     path: ['start'],
@@ -51,22 +72,15 @@ export const startCommands: CommandSpec[] = [
     ],
     async run(ctx) {
       assertNoExtraPositionals(ctx.positionals, 0)
-      const { cmdStart, resolveInstallRoot, UsageError } = await import('../launcher/index.js')
-      try {
-        return await cmdStart(
-          { io: ctx.io, root: resolveInstallRoot(ctx.env), ...(ctx.io.fetchImpl !== undefined ? { fetchFn: ctx.io.fetchImpl } : {}) },
-          {
-            detached: ctx.flags.get('detached') === true,
-            tag: readNonEmptyFlag(ctx.flags, 'channel'),
-            registry: readNonEmptyFlag(ctx.flags, 'registry'),
-            json: ctx.json,
-            ...readLaunchOptions(ctx.flags, ctx.cwd),
-          },
-        )
-      } catch (error) {
-        if (error instanceof UsageError) throw new CliError(error.message, error.code)
-        throw error
-      }
+      return await runLauncherCommand(ctx, (launcher, launcherCtx) =>
+        launcher.cmdStart(launcherCtx, {
+          detached: ctx.flags.get('detached') === true,
+          tag: readNonEmptyFlag(ctx.flags, 'channel'),
+          registry: readNonEmptyFlag(ctx.flags, 'registry'),
+          json: ctx.json,
+          ...readLaunchOptions(ctx.flags, ctx.cwd),
+        }),
+      )
     },
   },
   {
@@ -75,13 +89,9 @@ export const startCommands: CommandSpec[] = [
     flags: [],
     async run(ctx) {
       assertNoExtraPositionals(ctx.positionals, 0)
-      const { cmdStop, resolveInstallRoot, UsageError } = await import('../launcher/index.js')
-      try {
-        return await cmdStop({ io: ctx.io, root: resolveInstallRoot(ctx.env) }, { json: ctx.json })
-      } catch (error) {
-        if (error instanceof UsageError) throw new CliError(error.message, error.code)
-        throw error
-      }
+      return await runLauncherCommand(ctx, (launcher, launcherCtx) =>
+        launcher.cmdStop({ io: launcherCtx.io, root: launcherCtx.root }, { json: ctx.json }),
+      )
     },
   },
   {
@@ -94,21 +104,14 @@ export const startCommands: CommandSpec[] = [
     ],
     async run(ctx) {
       assertNoExtraPositionals(ctx.positionals, 0)
-      const { cmdRestart, resolveInstallRoot, UsageError } = await import('../launcher/index.js')
-      try {
-        return await cmdRestart(
-          { io: ctx.io, root: resolveInstallRoot(ctx.env), ...(ctx.io.fetchImpl !== undefined ? { fetchFn: ctx.io.fetchImpl } : {}) },
-          {
-            tag: readNonEmptyFlag(ctx.flags, 'channel'),
-            registry: readNonEmptyFlag(ctx.flags, 'registry'),
-            json: ctx.json,
-            ...readLaunchOptions(ctx.flags, ctx.cwd),
-          },
-        )
-      } catch (error) {
-        if (error instanceof UsageError) throw new CliError(error.message, error.code)
-        throw error
-      }
+      return await runLauncherCommand(ctx, (launcher, launcherCtx) =>
+        launcher.cmdRestart(launcherCtx, {
+          tag: readNonEmptyFlag(ctx.flags, 'channel'),
+          registry: readNonEmptyFlag(ctx.flags, 'registry'),
+          json: ctx.json,
+          ...readLaunchOptions(ctx.flags, ctx.cwd),
+        }),
+      )
     },
   },
 ]

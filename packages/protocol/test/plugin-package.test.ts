@@ -17,6 +17,7 @@ import {
   HelmxError,
   PLUGIN_CLIENT_SHARED_EXPORTS,
   PREBUILT_CLIENT_MANIFEST_VERSION,
+  assertModuleRefShape,
   assertPrebuiltChunkName,
   assertPrebuiltClientManifest,
   assertPrebuiltRelativeFile,
@@ -156,6 +157,18 @@ test('PrebuiltClientManifest validation and chunk path helpers enforce integrity
     { version: 1, modules: { 'index.tsx': { entryFile: 'a.mjs', contentHash: 'abc', exports: [], chunks: ['../evil.js'] } } },
   ]) {
     assert.throws(() => assertPrebuiltClientManifest(bad, '/tmp/dist-client'), (e: unknown) => e instanceof HelmxError)
+  }
+})
+
+test('assertModuleRefShape rejects dot segments, parent escapes, absolute paths, and backslashes', { timeout: 60_000 }, () => {
+  assert.doesNotThrow(() => assertModuleRefShape('p', 'client.tsx'))
+  assert.doesNotThrow(() => assertModuleRefShape('p', 'sub/panel.tsx'))
+  for (const bad of ['./panel.tsx', 'sub/./panel.tsx', '../panel.tsx', 'sub/../panel.tsx', '/abs/panel.tsx', 'a\\panel.tsx']) {
+    assert.throws(
+      () => assertModuleRefShape('p', bad),
+      (e: unknown) => e instanceof HelmxError && e.code === 'invalid_client_module',
+      `expected rejection for moduleRef: ${bad}`,
+    )
   }
 })
 

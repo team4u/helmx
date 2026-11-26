@@ -225,6 +225,101 @@ describe('sanitizeAgentNamespacedMeta (standalone entry, same contract)', () => 
     const out = sanitizeAgentNamespacedMeta({ p: { a: [1, { b: null }] } }, metaCtx)
     assert.deepEqual(out, { p: { a: [1, { b: null }] } })
   })
+
+  it('rejects prototype-pollution keys, symbols, accessors (without invoking), non-enumerables, and namespace count bombs', timeout, () => {
+    const metaCtx = { ...ctx, field: 'meta' }
+    for (const protoKey of ['__proto__', 'constructor', 'prototype']) {
+      const topProto = Object.defineProperty({}, protoKey, {
+        value: { x: 1 },
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
+      assert.throws(
+        () => sanitizeAgentNamespacedMeta(topProto, metaCtx),
+        (err: unknown) => err instanceof HelmxError && err.code === 'meta_invalid' && err.message.includes('forbidden prototype key'),
+      )
+
+      const nestedProto = Object.defineProperty({}, protoKey, {
+        value: 1,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
+      assert.throws(
+        () => sanitizeAgentNamespacedMeta({ p: nestedProto }, metaCtx),
+        (err: unknown) => err instanceof HelmxError && err.code === 'meta_invalid' && err.message.includes('forbidden prototype key'),
+      )
+
+      const deeplyNested = Object.defineProperty({}, protoKey, {
+        value: { polluted: true },
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
+      assert.throws(
+        () => sanitizeAgentNamespacedMeta({ p: { nested: [deeplyNested] } }, metaCtx),
+        (err: unknown) => err instanceof HelmxError && err.code === 'meta_invalid',
+      )
+    }
+
+    // Symbol own keys (top-level and nested) rejected
+    const sym = Symbol('hidden')
+    assert.throws(
+      () => sanitizeAgentNamespacedMeta({ [sym]: { ok: true } }, metaCtx),
+      (err: unknown) => err instanceof HelmxError && err.code === 'meta_invalid' && err.message.includes('symbol key'),
+    )
+    assert.throws(
+      () => sanitizeAgentNamespacedMeta({ p: { [sym]: 1 } }, metaCtx),
+      (err: unknown) => err instanceof HelmxError && err.code === 'meta_invalid' && err.message.includes('symbol key'),
+    )
+
+    // Accessor / getter rejected WITHOUT invoking the getter
+    let topGetterCalled = false
+    const topWithGetter = Object.defineProperty({}, 'ns', {
+      get() {
+        topGetterCalled = true
+        return { ok: true }
+      },
+      enumerable: true,
+    })
+    assert.throws(
+      () => sanitizeAgentNamespacedMeta(topWithGetter, metaCtx),
+      (err: unknown) => err instanceof HelmxError && err.code === 'meta_invalid' && err.message.includes('accessor'),
+    )
+    assert.equal(topGetterCalled, false)
+
+    let nestedGetterCalled = false
+    const nestedWithGetter = Object.defineProperty({}, 'bad', {
+      get() {
+        nestedGetterCalled = true
+        return 'boom'
+      },
+      enumerable: true,
+    })
+    assert.throws(
+      () => sanitizeAgentNamespacedMeta({ p: nestedWithGetter }, metaCtx),
+      (err: unknown) => err instanceof HelmxError && err.code === 'meta_invalid' && err.message.includes('accessor'),
+    )
+    assert.equal(nestedGetterCalled, false)
+
+    // Non-enumerable own property rejected (top-level & nested)
+    const hiddenTop = Object.defineProperty({}, 'ns', { value: { ok: true }, enumerable: false })
+    assert.throws(
+      () => sanitizeAgentNamespacedMeta(hiddenTop, metaCtx),
+      (err: unknown) => err instanceof HelmxError && err.code === 'meta_invalid' && err.message.includes('non-enumerable'),
+    )
+
+    // Top-level namespace count > 64 rejected
+    const tooManyNamespaces: Record<string, Record<string, unknown>> = {}
+    for (let i = 0; i < 65; i += 1) tooManyNamespaces[`ns${i}`] = { ok: true }
+    assert.throws(
+      () => sanitizeAgentNamespacedMeta(tooManyNamespaces, metaCtx),
+      (err: unknown) => err instanceof HelmxError && err.code === 'meta_invalid' && err.message.includes('namespace count exceeds'),
+    )
+
+    assert.equal(({} as Record<string, unknown>)['polluted'], undefined)
+  })
 })
 
 describe('NODE_ID_PATTERN / NODE_ID_REGEX / isValidNodeId (authoritative compute node ID contract)', () => {

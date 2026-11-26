@@ -16,7 +16,7 @@ import type {
   PluginPromptFields,
   PluginRouteMethod,
   PluginStatus,
-} from './plugin-dto.js'
+} from './plugin-contract-types.js'
 
 export type PluginManifestAction = ActionManifest
 
@@ -108,7 +108,4 @@ export interface PluginManifestProjection {
   clientModules: PluginManifestClientModule[]
 }
 
-/** Deterministic UTF-16 code-unit string comparator (locale-independent). */
-export function compareCodeUnit(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0
-}
+export { compareCodeUnit } from './utils.js'

@@ -124,7 +124,7 @@ function applyStartersFlag(flags: Map<string, unknown>, body: Record<string, unk
 }
 
 /** Apply semantic flags to body (write only when given; inline overrides -file when both are passed). */
-async function applySemanticFlags(flags: Map<string, unknown>, body: Record<string, unknown>): Promise<void> {
+async function applySemanticFlags(flags: Map<string, unknown>, body: Record<string, unknown>, cwd: string): Promise<void> {
   for (const { flag, key } of PROFILE_FIELD_FLAGS) {
     const v = flagValue<string>(flags, flag)
     if (v !== undefined) body[key] = v
@@ -133,7 +133,7 @@ async function applySemanticFlags(flags: Map<string, unknown>, body: Record<stri
   if (systemInline !== undefined) body.system = systemInline
   else {
     const systemFile = flagValue<string>(flags, 'system-file')
-    if (systemFile !== undefined) body.system = await readTextFileFlag(systemFile, 'system-file')
+    if (systemFile !== undefined) body.system = await readTextFileFlag(systemFile, 'system-file', cwd)
   }
   applySkillsFlags(flags, body)
   applyStartersFlag(flags, body)
@@ -164,6 +164,7 @@ export function profilesCommands(): CommandSpec[] {
     path: ['profiles', 'list'],
     description: 'List Profiles (GET /api/profiles)',
     async run(ctx: CommandContext) {
+      assertNoExtraPositionals(ctx.positionals, 0)
       const hub = await ctx.hub()
       const list = await hub.get<Profile[]>('/api/profiles')
       if (ctx.json || !Array.isArray(list)) {
@@ -186,6 +187,7 @@ export function profilesCommands(): CommandSpec[] {
     positional: '<id>',
     async run(ctx: CommandContext) {
       const id = requirePositional(ctx.positionals, 0, 'id')
+      assertNoExtraPositionals(ctx.positionals, 1)
       const hub = await ctx.hub()
       printResult(ctx, await hub.get<Profile>(`/api/profiles/${encodeURIComponent(id)}`))
     },
@@ -209,7 +211,7 @@ export function profilesCommands(): CommandSpec[] {
         )
       }
       const body: Record<string, unknown> = hasInput ? coerceMetaFlag(ctx.flags.get('input'), 'input') : {}
-      await applySemanticFlags(ctx.flags, body)
+      await applySemanticFlags(ctx.flags, body, ctx.cwd)
       if (id !== undefined) {
         if (typeof body['id'] === 'string' && body['id'] !== id) {
           throw new CliError(`positional id "${id}" does not match id "${String(body['id'])}" in --input`, 'invalid_flag_value')
@@ -245,7 +247,7 @@ export function profilesCommands(): CommandSpec[] {
         // Full-replacement contract: GET and merge first so untouched fields (nodeId/cwd/model/tags/runtime...) are preserved
         body = await fetchProfileBase(hub, id)
         if (hasInput) Object.assign(body, coerceMetaFlag(ctx.flags.get('input'), 'input'))
-        await applySemanticFlags(ctx.flags, body)
+        await applySemanticFlags(ctx.flags, body, ctx.cwd)
       } else {
         // --input alone: explicit full replacement (caller guarantees completeness)
         body = coerceMetaFlag(ctx.flags.get('input'), 'input')
@@ -261,6 +263,7 @@ export function profilesCommands(): CommandSpec[] {
     positional: '<id>',
     async run(ctx: CommandContext) {
       const id = requirePositional(ctx.positionals, 0, 'id')
+      assertNoExtraPositionals(ctx.positionals, 1)
       const hub = await ctx.hub()
       printResult(ctx, await hub.delete<unknown>(`/api/profiles/${encodeURIComponent(id)}`))
     },

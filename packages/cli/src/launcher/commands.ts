@@ -186,7 +186,7 @@ async function ensureHubStartedDetached(ctx: CommandContext, flags: CommandFlags
       ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
       ...(ctx.core !== undefined ? { core: ctx.core } : {}),
     });
-    if (outcome.pid === undefined || outcome.url === null) {
+    if (outcome.pid === undefined || !outcome.url) {
       throw new UsageError('install finished without a running hub (internal error)', 'bootstrap_start_failed');
     }
     return { pid: outcome.pid, version: outcome.targetVersion, url: outcome.url as string, logPath: pathsOf(ctx.root).hubLogPath };

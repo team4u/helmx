@@ -15,7 +15,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { CliError } from '../errors.js'
 import type { CommandContext, CommandSpec } from './shared.js'
-import { assertNoExtraPositionals, printResult, repeatedValues } from './shared.js'
+import { assertNoExtraPositionals, isOutsideDir, printResult, repeatedValues } from './shared.js'
 
 async function readOptionalManifestObject(
   filePath: string,
@@ -56,11 +56,6 @@ function manifestString(
   return undefined
 }
 
-function isOutsidePluginBase(base: string, target: string): boolean {
-  const rel = path.relative(base, target)
-  return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)
-}
-
 async function resolveNearestRealpath(
   target: string,
 ): Promise<{ kind: 'ok'; real: string } | { kind: 'dangling-symlink' }> {
@@ -94,8 +89,8 @@ async function assertPathInsidePluginRoot(
   // Compare lexical containment against pluginDir (same base used by path.resolve) so 8.3 short paths
   // (e.g. Windows RUNNER~1) or symlinked parent dirs (/var -> /private/var) do not falsely mismatch dirReal.
   const lexicalEscapes = path.isAbsolute(rawSubpath)
-    ? isOutsidePluginBase(pluginDir, resolvedPath) && isOutsidePluginBase(dirReal, resolvedPath)
-    : isOutsidePluginBase(pluginDir, resolvedPath)
+    ? isOutsideDir(pluginDir, resolvedPath) && isOutsideDir(dirReal, resolvedPath)
+    : isOutsideDir(pluginDir, resolvedPath)
   if (lexicalEscapes) {
     throw new CliError(
       `plugin ${pluginDir} ${field} escapes plugin directory: ${rawSubpath}`,
@@ -104,7 +99,7 @@ async function assertPathInsidePluginRoot(
   }
   try {
     const resolved = await resolveNearestRealpath(resolvedPath)
-    if (resolved.kind === 'dangling-symlink' || isOutsidePluginBase(dirReal, resolved.real)) {
+    if (resolved.kind === 'dangling-symlink' || isOutsideDir(dirReal, resolved.real)) {
       throw new CliError(
         `plugin ${pluginDir} ${field} symlink escapes plugin directory: ${rawSubpath}`,
         'invalid_plugin_definition',

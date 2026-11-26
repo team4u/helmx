@@ -12,6 +12,7 @@ export function providersCommands(): CommandSpec[] {
     path: ['providers', 'list'],
     description: 'List model providers (GET /api/providers)',
     async run(ctx: CommandContext) {
+      assertNoExtraPositionals(ctx.positionals, 0)
       const hub = await ctx.hub()
       printResult(ctx, await hub.get<ProviderConfig[]>('/api/providers'))
     },
@@ -34,6 +35,7 @@ export function providersCommands(): CommandSpec[] {
     path: ['credentials', 'list'],
     description: 'List server-side credentials (GET /api/credentials; returns keys and configured flags only)',
     async run(ctx: CommandContext) {
+      assertNoExtraPositionals(ctx.positionals, 0)
       const hub = await ctx.hub()
       printResult(ctx, await hub.get<CredentialSummary[]>('/api/credentials'))
     },

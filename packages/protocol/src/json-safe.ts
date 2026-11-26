@@ -7,8 +7,116 @@
 import { HelmxError } from './error.js'
 import { isPlainObject } from './utils.js'
 
-const FORBIDDEN_JSON_KEYS = ['__proto__', 'constructor', 'prototype'] as const
-const FORBIDDEN_JSON_KEY_SET = new Set<string>(FORBIDDEN_JSON_KEYS)
+export const FORBIDDEN_JSON_KEYS = ['__proto__', 'constructor', 'prototype'] as const
+export const FORBIDDEN_JSON_KEY_SET: ReadonlySet<string> = new Set<string>(FORBIDDEN_JSON_KEYS)
+
+export interface PlainJsonGuardOptions {
+  /** Primary error factory when a structural invariant fails. */
+  makeError: (reason: string, extra?: Record<string, unknown>) => HelmxError
+  /** Optional string redactor applied to symbol descriptions and non-safe key diagnostics. */
+  redactText?: (text: string) => string
+  /** Optional custom reason suffix for missing array index descriptors (`sparse holes`). */
+  sparseHoleReason?: string
+}
+
+/** Define an own enumerable writable configurable data property without invoking `Object.prototype.__proto__`. */
+export function definePlainJsonProperty(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  })
+}
+
+/** Reject explicit own prototype-pollution keys (`__proto__`, `constructor`, `prototype`) on objects or arrays. */
+export function assertNoForbiddenJsonKeys(target: object, path: string, opts: PlainJsonGuardOptions): void {
+  for (const forbidden of FORBIDDEN_JSON_KEYS) {
+    if (Object.hasOwn(target, forbidden)) {
+      throw opts.makeError(`contains forbidden prototype key "${forbidden}" at ${path}`, { path, key: forbidden })
+    }
+  }
+}
+
+/**
+ * Inspect an own key of a plain object without invoking getters: rejects Symbol keys,
+ * non-enumerable properties, accessor descriptors, and forbidden prototype keys.
+ */
+export function readOwnEnumerableDataProperty(
+  target: object,
+  rawKey: string | symbol,
+  path: string,
+  opts: PlainJsonGuardOptions,
+): { rawKey: string; value: unknown } {
+  const redactText = opts.redactText ?? ((text: string) => text)
+  if (typeof rawKey !== 'string') {
+    throw opts.makeError(`contains a symbol key (${redactText(String(rawKey))}) at ${path}`, { path })
+  }
+  const desc = Object.getOwnPropertyDescriptor(target, rawKey)
+  if (desc === undefined || !desc.enumerable) {
+    const safeKey = redactText(rawKey)
+    throw opts.makeError(`contains a non-enumerable property "${safeKey}" at ${path}`, { path, key: safeKey })
+  }
+  if (desc.get !== undefined || desc.set !== undefined) {
+    const safeKey = redactText(rawKey)
+    throw opts.makeError(`contains an accessor property "${safeKey}" at ${path}`, { path, key: safeKey })
+  }
+  if (FORBIDDEN_JSON_KEY_SET.has(rawKey)) {
+    throw opts.makeError(`contains forbidden prototype key "${rawKey}" at ${path}`, { path, key: rawKey })
+  }
+  return { rawKey, value: desc.value }
+}
+
+/**
+ * Validate an array's own structure without invoking accessors: enforces `Array.prototype`,
+ * dense own enumerable data descriptors at `0..length-1`, and rejects Symbol keys,
+ * forbidden prototype keys, and extra non-index own properties.
+ */
+export function readPlainArrayElements(
+  current: unknown[],
+  path: string,
+  opts: PlainJsonGuardOptions,
+): unknown[] {
+  const redactText = opts.redactText ?? ((text: string) => text)
+  if (Object.getPrototypeOf(current) !== Array.prototype) {
+    throw opts.makeError(`contains a non-plain array at ${path}`, { path })
+  }
+  assertNoForbiddenJsonKeys(current, path, opts)
+  const elements: unknown[] = []
+  for (let i = 0; i < current.length; i += 1) {
+    const desc = Object.getOwnPropertyDescriptor(current, i)
+    if (desc === undefined) {
+      throw opts.makeError(
+        opts.sparseHoleReason
+          ? `${path}[${i}] ${opts.sparseHoleReason}`
+          : `contains a sparse array hole at ${path}[${i}]`,
+        { path: `${path}[${i}]` },
+      )
+    }
+    if (!desc.enumerable) {
+      throw opts.makeError(`contains a non-enumerable array element at ${path}[${i}]`, { path: `${path}[${i}]` })
+    }
+    if (desc.get !== undefined || desc.set !== undefined) {
+      throw opts.makeError(`contains an accessor array element at ${path}[${i}]`, { path: `${path}[${i}]` })
+    }
+    elements.push(desc.value)
+  }
+  for (const rawKey of Reflect.ownKeys(current)) {
+    if (rawKey === 'length') continue
+    if (typeof rawKey !== 'string') {
+      throw opts.makeError(`contains a symbol key (${redactText(String(rawKey))}) on array at ${path}`, { path })
+    }
+    if (FORBIDDEN_JSON_KEY_SET.has(rawKey)) {
+      throw opts.makeError(`contains forbidden prototype key "${rawKey}" at ${path}`, { path, key: rawKey })
+    }
+    const idx = Number(rawKey)
+    if (!Number.isInteger(idx) || idx < 0 || idx >= current.length || String(idx) !== rawKey) {
+      const safeKey = redactText(rawKey)
+      throw opts.makeError(`contains an extra own property "${safeKey}" on array at ${path}`, { path, key: safeKey })
+    }
+  }
+  return elements
+}
 
 export interface AssertJsonSafeOptions {
   /** Root path label included in error diagnostics (defaults to `'value'`). */
@@ -67,117 +175,26 @@ export function assertJsonSafe(value: unknown, options?: AssertJsonSafeOptions):
   const visiting = new WeakSet<object>()
   let nodes = 0
 
+  const guardOpts = (path: string): PlainJsonGuardOptions => ({
+    redactText,
+    makeError: (reason, extra) => new HelmxError(code, `${subject} ${reason}`, status, extra ?? { path }),
+  })
+
   function visitArray(current: unknown[], path: string, depth: number): unknown[] {
-    if (Object.getPrototypeOf(current) !== Array.prototype) {
-      throw new HelmxError(code, `${subject} contains a non-plain array at ${path}`, status, { path })
-    }
-    for (const forbidden of FORBIDDEN_JSON_KEYS) {
-      if (Object.hasOwn(current, forbidden)) {
-        throw new HelmxError(
-          code,
-          `${subject} contains forbidden prototype key "${forbidden}" at ${path}`,
-          status,
-          { path, key: forbidden },
-        )
-      }
-    }
-    const out: unknown[] = []
-    for (let i = 0; i < current.length; i += 1) {
-      const desc = Object.getOwnPropertyDescriptor(current, i)
-      if (desc === undefined) {
-        throw new HelmxError(code, `${subject} contains a sparse array hole at ${path}[${i}]`, status, {
-          path: `${path}[${i}]`,
-        })
-      }
-      if (!desc.enumerable) {
-        throw new HelmxError(code, `${subject} contains a non-enumerable array element at ${path}[${i}]`, status, {
-          path: `${path}[${i}]`,
-        })
-      }
-      if (desc.get !== undefined || desc.set !== undefined) {
-        throw new HelmxError(code, `${subject} contains an accessor array element at ${path}[${i}]`, status, {
-          path: `${path}[${i}]`,
-        })
-      }
-      out.push(visit(desc.value, `${path}[${i}]`, depth + 1))
-    }
-    // Inspect all own keys (`Reflect.ownKeys`) to reject symbols, prototype keys, or extra named properties on arrays.
-    for (const rawKey of Reflect.ownKeys(current)) {
-      if (rawKey === 'length') continue
-      if (typeof rawKey !== 'string') {
-        throw new HelmxError(
-          code,
-          `${subject} contains a symbol key (${redactText(String(rawKey))}) on array at ${path}`,
-          status,
-          { path },
-        )
-      }
-      if (FORBIDDEN_JSON_KEY_SET.has(rawKey)) {
-        throw new HelmxError(
-          code,
-          `${subject} contains forbidden prototype key "${rawKey}" at ${path}`,
-          status,
-          { path, key: rawKey },
-        )
-      }
-      const idx = Number(rawKey)
-      if (!Number.isInteger(idx) || idx < 0 || idx >= current.length || String(idx) !== rawKey) {
-        const safeKey = redactText(rawKey)
-        throw new HelmxError(
-          code,
-          `${subject} contains an extra own property "${safeKey}" on array at ${path}`,
-          status,
-          { path, key: safeKey },
-        )
-      }
-    }
-    return out
+    const elements = readPlainArrayElements(current, path, guardOpts(path))
+    return elements.map((el, i) => visit(el, `${path}[${i}]`, depth + 1))
   }
 
   function visitObject(current: object, path: string, depth: number): Record<string, unknown> {
     if (!isPlainObject(current)) {
       throw new HelmxError(code, `${subject} contains a non-plain object at ${path}`, status, { path })
     }
-    for (const forbidden of FORBIDDEN_JSON_KEYS) {
-      if (Object.hasOwn(current, forbidden)) {
-        throw new HelmxError(
-          code,
-          `${subject} contains forbidden prototype key "${forbidden}" at ${path}`,
-          status,
-          { path, key: forbidden },
-        )
-      }
-    }
+    const opts = guardOpts(path)
+    assertNoForbiddenJsonKeys(current, path, opts)
     const out: Record<string, unknown> = {}
     const seenKeys = new Set<string>()
-    for (const rawKey of Reflect.ownKeys(current)) {
-      if (typeof rawKey !== 'string') {
-        throw new HelmxError(
-          code,
-          `${subject} contains a symbol key (${redactText(String(rawKey))}) at ${path}`,
-          status,
-          { path },
-        )
-      }
-      const desc = Object.getOwnPropertyDescriptor(current, rawKey)
-      if (desc === undefined || !desc.enumerable) {
-        const safeKey = redactText(rawKey)
-        throw new HelmxError(
-          code,
-          `${subject} contains a non-enumerable property "${safeKey}" at ${path}`,
-          status,
-          { path, key: safeKey },
-        )
-      }
-      if (desc.get !== undefined || desc.set !== undefined) {
-        const safeKey = redactText(rawKey)
-        throw new HelmxError(
-          code,
-          `${subject} contains an accessor property "${safeKey}" at ${path}`,
-          status,
-          { path, key: safeKey },
-        )
-      }
+    for (const rawOwnKey of Reflect.ownKeys(current)) {
+      const { rawKey, value: rawValue } = readOwnEnumerableDataProperty(current, rawOwnKey, path, opts)
       const key = redactText(rawKey)
       if (FORBIDDEN_JSON_KEY_SET.has(key)) {
         throw new HelmxError(
@@ -196,7 +213,7 @@ export function assertJsonSafe(value: unknown, options?: AssertJsonSafeOptions):
         )
       }
       seenKeys.add(key)
-      out[key] = visit(desc.value, `${path}.${key}`, depth + 1)
+      definePlainJsonProperty(out, key, visit(rawValue, `${path}.${key}`, depth + 1))
     }
     return out
   }

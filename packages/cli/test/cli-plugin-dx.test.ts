@@ -20,6 +20,7 @@ import {
   startMockHub,
   useTempDir,
 } from './helpers/cli-harness.js'
+import { writeSdkTypesToDir } from '../src/commands/plugins-types.js'
 
 const DOCTOR_REPORT = {
   dir: '/abs/plugin',
@@ -724,13 +725,27 @@ test('plugins types: syncs offline .helmx/types, cleans stale files, preserves u
   assert.ok(r2.out.includes('@helmx/protocol'))
   assert.equal(await fsp.readFile(path.join(pluginDir, 'tsconfig.json'), 'utf8'), bareTsconfig)
 
-  // 3. Existing JSONC tsconfig.json with comments: reported as unreadable and untouched
-  const jsoncTsconfig = '// user comment\n{\n  "compilerOptions": { "strict": true, }\n}\n'
+  // 3. Existing JSONC tsconfig.json with comments and trailing commas: parses cleanly and remains untouched
+  const jsoncTsconfig = '// user comment\n{\n  /* block comment */ "compilerOptions": { "strict": true, }\n}\n'
   await fsp.writeFile(path.join(pluginDir, 'tsconfig.json'), jsoncTsconfig, 'utf8')
   const r3 = await runCliCaptured(['plugins', 'types', '--json'], env, { cwd: pluginDir })
   assert.equal(r3.code, 0, r3.err)
-  assert.equal((JSON.parse(r3.out) as { tsconfigStatus: string }).tsconfigStatus, 'unreadable')
+  assert.equal((JSON.parse(r3.out) as { tsconfigStatus: string }).tsconfigStatus, 'needs_paths')
   assert.equal(await fsp.readFile(path.join(pluginDir, 'tsconfig.json'), 'utf8'), jsoncTsconfig)
+
+  // 3b. Valid JSONC with configured Helmx paths -> status configured; invalid syntax -> unreadable
+  const jsoncConfigured =
+    `// header // path\n{\n  "compilerOptions": {\n    "paths": ${JSON.stringify(body1.recommendedCompilerOptions.paths)},\n  },\n}\n`
+  await fsp.writeFile(path.join(pluginDir, 'tsconfig.json'), jsoncConfigured, 'utf8')
+  const r3b = await runCliCaptured(['plugins', 'types', '--json'], env, { cwd: pluginDir })
+  assert.equal(r3b.code, 0, r3b.err)
+  assert.equal((JSON.parse(r3b.out) as { tsconfigStatus: string }).tsconfigStatus, 'configured')
+
+  const invalidTsconfig = '{ not valid jsonc'
+  await fsp.writeFile(path.join(pluginDir, 'tsconfig.json'), invalidTsconfig, 'utf8')
+  const r3c = await runCliCaptured(['plugins', 'types', '--json'], env, { cwd: pluginDir })
+  assert.equal(r3c.code, 0, r3c.err)
+  assert.equal((JSON.parse(r3c.out) as { tsconfigStatus: string }).tsconfigStatus, 'unreadable')
 
   // 4. Existing tsconfig.json already configured with Helmx paths -> status configured
   const configuredTsconfig = JSON.stringify(
@@ -900,4 +915,137 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
     0,
     `tsc --noEmit with real @types/react + @types/node failed:\n${withRealTypes.stdout}\n${withRealTypes.stderr}`,
   )
+})
+
+test('plugins install --enable surfaces enableError and exits non-zero; plugins client --output resolves cwd and reports UTF-8 bytes', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
+  const workDir = useTempDir(t, 'helmx-cli-client-cwd-')
+  const utf8Code = 'export const msg = "你好，世界";\n'
+  const expectedUtf8Bytes = Buffer.byteLength(utf8Code, 'utf8')
+  assert.notEqual(expectedUtf8Bytes, utf8Code.length)
+
+  const hub = await startMockHub(
+    {
+      'POST /api/plugins/install': () => ({
+        status: 201,
+        body: {
+          record: {
+            id: 'inst-1',
+            pluginId: 'my:pl',
+            source: { kind: 'local', raw: '/srv/my-pl', path: '/srv/my-pl' },
+            installPath: '/data/plugins/my:pl',
+            version: '1.0.0',
+            installedAt: 1,
+            updatedAt: 1,
+          },
+          summary: makePluginSummary({ id: 'my:pl', enabled: false, status: 'disabled' }),
+          enableError: { code: 'plugin_enable_failed', message: 'missing config key API_KEY' },
+        },
+      }),
+      'POST /api/plugins/my%3Apl/remove': () => ({
+        body: { pluginId: 'my:pl', installPath: '/data/plugins/my:pl', wasEnabled: false, installId: 'inst-1' },
+      }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dataDir)
+
+  // plugins install --enable with enableError: human mode exits 1 and surfaces enableError
+  const rHuman = await runCliCaptured(['plugins', 'install', '/srv/my-pl', '--enable'], env)
+  assert.equal(rHuman.code, 1)
+  assert.ok(rHuman.out.includes('Installed my:pl'))
+  assert.ok(rHuman.err.includes('plugin_enable_failed'))
+  assert.ok(rHuman.err.includes('missing config key API_KEY'))
+
+  // --json mode prints full result with enableError and exits 1
+  const rJson = await runCliCaptured(['plugins', 'install', '/srv/my-pl', '--enable', '--json'], env)
+  assert.equal(rJson.code, 1)
+  const installBody = JSON.parse(rJson.out) as { enableError?: { code: string; message: string } }
+  assert.equal(installBody.enableError?.code, 'plugin_enable_failed')
+
+  // plugins remove uses ctx.io.stdin TTY readLine without touching global process.stdin
+  let sawPrompt = false
+  const denied = await runCliCaptured(['plugins', 'remove', 'my:pl'], env, {
+    stdin: {
+      isTTY: true,
+      readAll: async () => 'no',
+      readLine: async (prompt) => {
+        sawPrompt = prompt.includes('my:pl')
+        return 'no'
+      },
+    },
+  })
+  assert.equal(sawPrompt, true)
+  assert.equal(denied.code, 1)
+  assert.ok(denied.err.includes('not_confirmed'))
+
+  const confirmed = await runCliCaptured(['plugins', 'remove', 'my:pl'], env, {
+    stdin: { isTTY: true, readAll: async () => '', readLine: async () => 'yes' },
+  })
+  assert.equal(confirmed.code, 0, confirmed.err)
+  assert.ok(confirmed.out.includes('Removed my:pl'))
+
+  // plugins client --output resolves against ctx.cwd and reports UTF-8 byte count
+  const clientRes = await runCliCaptured(
+    ['plugins', 'client', 'my:pl', '--output', 'out/bundle.mjs', '--json'],
+    env,
+    {
+      cwd: workDir,
+      fetch: (async () =>
+        new Response(utf8Code, {
+          status: 200,
+          headers: { 'content-type': 'application/javascript', 'x-helmx-client-hash': 'hash-utf8' },
+        })) as unknown as typeof fetch,
+    },
+  )
+  // Expect write failure if parent dir doesn't exist OR ensure directory exists first: test existing dir
+  assert.equal(clientRes.code, 1)
+  await fsp.mkdir(path.join(workDir, 'out'), { recursive: true })
+  const clientOk = await runCliCaptured(
+    ['plugins', 'client', 'my:pl', '--output', 'out/bundle.mjs', '--json'],
+    env,
+    {
+      cwd: workDir,
+      fetch: (async () =>
+        new Response(utf8Code, {
+          status: 200,
+          headers: { 'content-type': 'application/javascript', 'x-helmx-client-hash': 'hash-utf8' },
+        })) as unknown as typeof fetch,
+    },
+  )
+  assert.equal(clientOk.code, 0, clientOk.err)
+  const expectedOut = path.join(workDir, 'out', 'bundle.mjs')
+  assert.deepEqual(JSON.parse(clientOk.out), {
+    pluginId: 'my:pl',
+    module: 'client.tsx',
+    contentHash: 'hash-utf8',
+    bytes: expectedUtf8Bytes,
+    outputPath: expectedOut,
+  })
+  assert.equal(await fsp.readFile(expectedOut, 'utf8'), utf8Code)
+})
+
+test('writeSdkTypesToDir backs up existing .helmx/types before atomic swap and restores on failure', { timeout: 60_000 }, async (t) => {
+  const pluginDir = useTempDir(t, 'helmx-sdk-rollback-')
+  const typesDir = path.join(pluginDir, '.helmx', 'types')
+  await fsp.mkdir(typesDir, { recursive: true })
+  await fsp.writeFile(path.join(typesDir, 'existing.d.ts'), 'export const keep = true\n', 'utf8')
+
+  let callCount = 0
+  await assert.rejects(
+    () =>
+      writeSdkTypesToDir(pluginDir, {
+        async rename(src, dest) {
+          callCount += 1
+          if (callCount === 2) {
+            throw new Error('simulated swap failure')
+          }
+          await fsp.rename(src, dest)
+        },
+      }),
+    /simulated swap failure/,
+  )
+  assert.equal(await fsp.readFile(path.join(typesDir, 'existing.d.ts'), 'utf8'), 'export const keep = true\n')
+  const leftovers = await fsp.readdir(path.join(pluginDir, '.helmx'))
+  assert.deepEqual(leftovers, ['types'])
 })

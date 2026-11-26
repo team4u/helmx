@@ -1,24 +1,17 @@
 /**
- * Pure time-observability resolution and human formatting helpers for CLI output.
- * Mirrors `@helmx/plugin-client` timing semantics without introducing a browser-SDK dependency.
+ * Pure time-observability human formatting helpers for CLI output.
+ * Re-exports canonical `resolveConversationTiming` and timing types from `@helmx/protocol`.
  */
-import type { ConversationStatus } from '@helmx/protocol'
+import {
+  resolveConversationTiming,
+  type ConversationTimingInput,
+  type ConversationTimingSnapshot,
+} from '@helmx/protocol'
 
-export interface ConversationTimingInput {
-  status?: ConversationStatus
-  runDurationMs?: number
-  runStartedAt?: number
-  pendingAskSince?: number
-  pendingAskCount?: number
-}
-
-export interface ConversationTimingSnapshot {
-  settledRunMs: number
-  currentRunMs?: number
-  totalRunMs?: number
-  waitingMs?: number
-  isRunning: boolean
-  isBlocked: boolean
+export {
+  resolveConversationTiming,
+  type ConversationTimingInput,
+  type ConversationTimingSnapshot,
 }
 
 function isNonNegativeFinite(value: unknown): value is number {
@@ -53,50 +46,6 @@ export function formatStopwatchMs(ms: number | undefined): string {
     return `${Math.floor(totalSeconds / 60)}m${pad2(totalSeconds % 60)}s`
   }
   return `${Math.floor(totalSeconds / 3600)}h${pad2(Math.floor((totalSeconds % 3600) / 60))}m`
-}
-
-/**
- * Pure timing resolver for a conversation summary/detail and an optional wall-clock reading `nowMs`.
- * Never fabricates missing start anchors and never leaks live wall-clock deltas into idle/done/error states.
- */
-export function resolveConversationTiming(
-  conv: ConversationTimingInput,
-  nowMs?: number,
-): ConversationTimingSnapshot {
-  const settledRunMs = isNonNegativeFinite(conv.runDurationMs) ? conv.runDurationMs : 0
-  const hasPendingAsk =
-    typeof conv.pendingAskCount === 'number' &&
-    Number.isFinite(conv.pendingAskCount) &&
-    conv.pendingAskCount > 0
-  const isBlocked = conv.status === 'blocked' || hasPendingAsk
-  const hasRunStart = isNonNegativeFinite(conv.runStartedAt)
-  const isRunning = conv.status === 'working' || (isBlocked && hasRunStart)
-  const hasNow = isNonNegativeFinite(nowMs)
-
-  const currentRunMs =
-    isRunning && hasRunStart && hasNow ? Math.max(0, nowMs - conv.runStartedAt!) : undefined
-  const waitingMs =
-    isBlocked &&
-    (conv.pendingAskCount === undefined || hasPendingAsk) &&
-    isNonNegativeFinite(conv.pendingAskSince) &&
-    hasNow
-      ? Math.max(0, nowMs - conv.pendingAskSince!)
-      : undefined
-  const totalRunMs =
-    currentRunMs !== undefined
-      ? settledRunMs + currentRunMs
-      : settledRunMs > 0
-        ? settledRunMs
-        : undefined
-
-  return {
-    settledRunMs,
-    ...(currentRunMs !== undefined ? { currentRunMs } : {}),
-    ...(totalRunMs !== undefined ? { totalRunMs } : {}),
-    ...(waitingMs !== undefined ? { waitingMs } : {}),
-    isRunning,
-    isBlocked,
-  }
 }
 
 /**

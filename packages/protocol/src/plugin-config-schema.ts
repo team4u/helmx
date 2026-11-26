@@ -9,11 +9,32 @@ import {
   PLUGIN_CONFIG_FIELD_FORMATS,
   PLUGIN_CONFIG_FIELD_TYPES,
   type PluginConfigFieldSchema,
+  type PluginConfigFieldType,
 } from './plugin-dto.js'
 import { isPlainObject } from './utils.js'
 
 const CONFIG_FIELD_TYPE_SET: ReadonlySet<string> = new Set(PLUGIN_CONFIG_FIELD_TYPES)
 const CONFIG_FIELD_FORMAT_SET: ReadonlySet<string> = new Set(PLUGIN_CONFIG_FIELD_FORMATS)
+
+const BASE_CONFIG_FIELD_KEYS = [
+  'type',
+  'secret',
+  'required',
+  'label',
+  'description',
+  'format',
+  'minimum',
+  'maximum',
+  'integer',
+  'enum',
+  'default',
+] as const
+const DECLARATION_CONFIG_FIELD_KEY_SET: ReadonlySet<string> = new Set(BASE_CONFIG_FIELD_KEYS)
+const MANIFEST_CONFIG_FIELD_KEY_SET: ReadonlySet<string> = new Set([...BASE_CONFIG_FIELD_KEYS, 'key'])
+
+function isConfigFieldType(value: unknown): value is PluginConfigFieldType {
+  return typeof value === 'string' && CONFIG_FIELD_TYPE_SET.has(value)
+}
 
 export interface ValidatePluginConfigFieldSchemaOptions {
   /** Whether `secret: true` fields are allowed to carry `default` (true at declaration, false on public manifest projection). */
@@ -87,8 +108,15 @@ export function validatePluginConfigFieldSchema(
 ): string | undefined {
   if (!isPlainObject(raw)) return 'must be a plain object'
 
+  const allowedKeys = options.requireBooleanFlags ? MANIFEST_CONFIG_FIELD_KEY_SET : DECLARATION_CONFIG_FIELD_KEY_SET
+  for (const key of Object.keys(raw)) {
+    if (!allowedKeys.has(key)) {
+      return `contains unknown schema property '${key}'`
+    }
+  }
+
   const type = raw['type']
-  if (typeof type !== 'string' || !CONFIG_FIELD_TYPE_SET.has(type)) {
+  if (!isConfigFieldType(type)) {
     return `type must be one of ${PLUGIN_CONFIG_FIELD_TYPES.join(' | ')}`
   }
 
@@ -117,32 +145,37 @@ export function validatePluginConfigFieldSchema(
   }
 
   if (raw['format'] !== undefined) {
+    if (secret) return 'secret field must not declare format'
     if (type !== 'string' || typeof raw['format'] !== 'string' || !CONFIG_FIELD_FORMAT_SET.has(raw['format'])) {
       return `format ${JSON.stringify(raw['format'])} is invalid (string fields only; allowed: ${PLUGIN_CONFIG_FIELD_FORMATS.join(', ')})`
     }
   }
 
+  let minimum: number | undefined
+  let maximum: number | undefined
   for (const bound of ['minimum', 'maximum'] as const) {
-    if (raw[bound] !== undefined) {
-      if (type !== 'number' || typeof raw[bound] !== 'number' || !Number.isFinite(raw[bound])) {
+    const val = raw[bound]
+    if (val !== undefined) {
+      if (type !== 'number' || typeof val !== 'number' || !Number.isFinite(val)) {
         return `${bound} must be a finite number on number fields`
       }
+      if (bound === 'minimum') minimum = val
+      else maximum = val
     }
   }
-  if (
-    typeof raw['minimum'] === 'number' &&
-    typeof raw['maximum'] === 'number' &&
-    raw['minimum'] > raw['maximum']
-  ) {
-    return `minimum (${raw['minimum']}) must be <= maximum (${raw['maximum']})`
+  if (minimum !== undefined && maximum !== undefined && minimum > maximum) {
+    return `minimum (${minimum}) must be <= maximum (${maximum})`
   }
 
+  let integer: boolean | undefined
   if (raw['integer'] !== undefined) {
     if (type !== 'number' || typeof raw['integer'] !== 'boolean') {
       return 'integer must be a boolean on number fields'
     }
+    integer = raw['integer']
   }
 
+  let validatedEnum: Array<string | number> | undefined
   if (raw['enum'] !== undefined) {
     if (secret) return 'secret field must not declare enum'
     if (type === 'boolean') return 'enum is not allowed on boolean fields'
@@ -152,6 +185,7 @@ export function validatePluginConfigFieldSchema(
       return 'enum must be a non-empty array'
     }
     const seen = new Set<string | number>()
+    const items: Array<string | number> = []
     for (let i = 0; i < enumValues.length; i += 1) {
       if (!Object.hasOwn(enumValues, i)) return `enum[${i}] is sparse`
       const entry = enumValues[i]
@@ -161,23 +195,33 @@ export function validatePluginConfigFieldSchema(
         if (typeof entry !== 'number' || !Number.isFinite(entry)) {
           return `enum[${i}] must be a finite number for number fields`
         }
-        if (raw['integer'] === true && !Number.isInteger(entry)) {
+        if (integer === true && !Number.isInteger(entry)) {
           return `enum[${i}] must be an integer`
         }
-        if (typeof raw['minimum'] === 'number' && entry < raw['minimum']) {
-          return `enum[${i}] must be >= minimum (${raw['minimum']})`
+        if (minimum !== undefined && entry < minimum) {
+          return `enum[${i}] must be >= minimum (${minimum})`
         }
-        if (typeof raw['maximum'] === 'number' && entry > raw['maximum']) {
-          return `enum[${i}] must be <= maximum (${raw['maximum']})`
+        if (maximum !== undefined && entry > maximum) {
+          return `enum[${i}] must be <= maximum (${maximum})`
         }
       }
       if (seen.has(entry)) return `enum contains duplicate value ${JSON.stringify(entry)}`
       seen.add(entry)
+      items.push(entry)
     }
+    validatedEnum = items
   }
 
   if (raw['default'] !== undefined) {
-    const defaultReason = validatePluginConfigFieldValue(raw as unknown as PluginConfigFieldSchema, raw['default'])
+    const validatedField: Pick<PluginConfigFieldSchema, 'type' | 'secret' | 'enum' | 'minimum' | 'maximum' | 'integer'> = {
+      type,
+      ...(secret ? { secret: true } : {}),
+      ...(validatedEnum !== undefined ? { enum: validatedEnum } : {}),
+      ...(minimum !== undefined ? { minimum } : {}),
+      ...(maximum !== undefined ? { maximum } : {}),
+      ...(integer !== undefined ? { integer } : {}),
+    }
+    const defaultReason = validatePluginConfigFieldValue(validatedField, raw['default'])
     if (defaultReason !== undefined) {
       return `default ${defaultReason}`
     }

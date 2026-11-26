@@ -1,21 +1,24 @@
 /** Cross-node command execution; JSON and human output share the same success and exit semantics. */
-import type { EnvExecRequest, EnvExecResponse, EnvExecStreamFrame } from '@helmx/protocol'
+import {
+  ENV_EXEC_MAX_TIMEOUT_MS,
+  isPlainObject,
+  type EnvExecRequest,
+  type EnvExecResponse,
+  type EnvExecStreamFrame,
+} from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue } from '../args.js'
 import { runWithSignalAbort } from '../stream.js'
 import type { CommandContext, CommandSpec } from './shared.js'
-import { parsePositiveInt, printResult, resolveConversationTarget } from './shared.js'
+import { printResult, resolveConversationTarget } from './shared.js'
 
 const ENV_EXEC_FLAGS = [
   { name: 'node', type: 'string', help: 'target node ID (defaults to current conversation node, or local)' },
   { name: 'cwd', type: 'string', help: 'working directory on the target node (absolute path)' },
-  { name: 'timeout', type: 'number', help: 'command timeout in milliseconds (positive integer, max 600000)' },
+  { name: 'timeout', type: 'number', help: `command timeout in milliseconds (positive integer, max ${ENV_EXEC_MAX_TIMEOUT_MS})` },
   { name: 'stream', type: 'boolean', help: 'stream stdout/stderr and terminal exit frames incrementally' },
   { name: 'current', type: 'boolean', help: 'use HELMX_CONVERSATION_ID as the conversation context' },
 ] as const
-
-/** Matches backend POST /api/env/exec validation (timeoutMs <= 600_000); reject out-of-range values early on the CLI side. */
-const ENV_EXEC_TIMEOUT_MAX_MS = 600_000
 
 function commandFromPositionals(positionals: readonly string[]): string | string[] {
   if (positionals.length === 0) {
@@ -25,9 +28,43 @@ function commandFromPositionals(positionals: readonly string[]): string | string
   return [...positionals]
 }
 
-function validExit(value: Record<string, unknown>): boolean {
-  return typeof value.ok === 'boolean' && typeof value.timedOut === 'boolean' &&
-    (value.exitCode === null || (Number.isInteger(value.exitCode) && (value.exitCode as number) >= 0))
+function isValidExitCode(value: unknown): value is number | null {
+  return value === null || (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
+}
+
+function parseEnvExecResponse(value: unknown): EnvExecResponse | undefined {
+  if (!isPlainObject(value)) return undefined
+  if (
+    typeof value['ok'] !== 'boolean' ||
+    typeof value['timedOut'] !== 'boolean' ||
+    typeof value['output'] !== 'string' ||
+    !isValidExitCode(value['exitCode'])
+  ) {
+    return undefined
+  }
+  return {
+    ok: value['ok'],
+    exitCode: value['exitCode'],
+    timedOut: value['timedOut'],
+    output: value['output'],
+  }
+}
+
+function parseExitStreamFrame(value: Record<string, unknown>): Extract<EnvExecStreamFrame, { type: 'exit' }> | undefined {
+  if (
+    value['type'] !== 'exit' ||
+    typeof value['ok'] !== 'boolean' ||
+    typeof value['timedOut'] !== 'boolean' ||
+    !isValidExitCode(value['exitCode'])
+  ) {
+    return undefined
+  }
+  return {
+    type: 'exit',
+    ok: value['ok'],
+    exitCode: value['exitCode'],
+    timedOut: value['timedOut'],
+  }
 }
 
 function executionFailure(result: Pick<EnvExecResponse, 'ok' | 'exitCode' | 'timedOut'>): CliError | undefined {
@@ -57,11 +94,13 @@ export function envCommands(): CommandSpec[] {
       }
       if (cwd !== undefined) body.cwd = cwd
       if (timeout !== undefined) {
-        const timeoutMs = parsePositiveInt(String(timeout), '--timeout', 'invalid_flag_value')
-        if (timeoutMs > ENV_EXEC_TIMEOUT_MAX_MS) {
-          throw new CliError(`--timeout cannot exceed ${ENV_EXEC_TIMEOUT_MAX_MS}ms`, 'validation_error', 2)
+        if (!Number.isSafeInteger(timeout) || timeout <= 0) {
+          throw new CliError(`--timeout must be a positive integer, got "${String(timeout)}"`, 'invalid_flag_value')
         }
-        body.timeoutMs = timeoutMs
+        if (timeout > ENV_EXEC_MAX_TIMEOUT_MS) {
+          throw new CliError(`--timeout cannot exceed ${ENV_EXEC_MAX_TIMEOUT_MS}ms`, 'validation_error', 2)
+        }
+        body.timeoutMs = timeout
       }
       if (ctx.flags.get('current') === true) {
         body.conversationId = resolveConversationTarget(ctx.flags, undefined, ctx.env)
@@ -73,13 +112,14 @@ export function envCommands(): CommandSpec[] {
       }
       const hub = await ctx.hub()
       // Shell execution handles command timeouts itself; HTTP must not cut off long commands with the client 30s default.
-      const result = await hub.request<EnvExecResponse>('POST', '/api/env/exec', { body, timeoutMs: 0 })
-      if (!result || typeof result !== 'object' || !validExit(result as unknown as Record<string, unknown>) || typeof result.output !== 'string') {
+      const rawResult = await hub.request<unknown>('POST', '/api/env/exec', { body, timeoutMs: 0 })
+      const typedResult = parseEnvExecResponse(rawResult)
+      if (typedResult === undefined) {
         throw new CliError('Hub returned an invalid EnvExecResponse shape', 'invalid_response')
       }
-      if (ctx.json) printResult(ctx, result)
-      else if (result.output !== '') ctx.io.out(result.output.endsWith('\n') ? result.output : `${result.output}\n`)
-      const failure = executionFailure(result)
+      if (ctx.json) printResult(ctx, typedResult)
+      else if (typedResult.output !== '') ctx.io.out(typedResult.output.endsWith('\n') ? typedResult.output : `${typedResult.output}\n`)
+      const failure = executionFailure(typedResult)
       if (failure) throw failure
     },
   }]
@@ -110,8 +150,8 @@ async function runStreamed(ctx: CommandContext, body: EnvExecRequest): Promise<v
           return
         }
         if (raw.type === 'exit') {
-          if (!validExit(raw)) throw new CliError('Hub exit frame has invalid fields', 'invalid_response')
-          const frame = raw as Extract<EnvExecStreamFrame, { type: 'exit' }>
+          const frame = parseExitStreamFrame(raw)
+          if (frame === undefined) throw new CliError('Hub exit frame has invalid fields', 'invalid_response')
           terminal = true
           if (ctx.json) ctx.io.out(`${JSON.stringify(frame)}\n`)
           failure = executionFailure(frame)

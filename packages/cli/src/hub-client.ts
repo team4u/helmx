@@ -75,7 +75,7 @@ export class HubClient {
     return { authorization: `Bearer ${this.endpoint.token}`, ...extra }
   }
 
-  private signal(external?: AbortSignal): AbortSignal {
+  private signal(external?: AbortSignal): AbortSignal | undefined {
     return this.signalFor(undefined, external)
   }
 
@@ -102,7 +102,21 @@ export class HubClient {
   }
 
   private async parseEntity<T>(response: Response, where: string): Promise<T> {
-    const text = await response.text().catch(() => '')
+    let text: string
+    try {
+      text = await response.text()
+    } catch (err) {
+      if (err instanceof Error && err.name === 'TimeoutError') {
+        throw new CliError(`request timed out reading response body (${this.timeoutMs}ms): ${where}`, 'timeout')
+      }
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new CliError(`response body aborted: ${where}`, 'aborted')
+      }
+      throw new CliError(
+        `failed to read Hub response body (${where}): ${err instanceof Error ? err.message : String(err)}`,
+        'invalid_response',
+      )
+    }
     if (!response.ok) throw await this.toCliError(response, where, text)
     if (text === '') return undefined as T // empty body success such as 204 No Content
     try {
@@ -116,11 +130,38 @@ export class HubClient {
    * Per-request timeout control: defaults to instance timeout; explicit timeoutMs overrides,
    * and 0 disables request timeout (--wait long-polling), preserving only caller signal cancellation.
    */
-  private signalFor(timeoutMs: number | undefined, external?: AbortSignal): AbortSignal {
+  private signalFor(timeoutMs: number | undefined, external?: AbortSignal): AbortSignal | undefined {
     const ms = timeoutMs !== undefined ? timeoutMs : this.timeoutMs
-    if (ms <= 0) return external ?? new AbortController().signal
+    if (ms <= 0) return external
     const timeout = AbortSignal.timeout(ms)
     return external ? AbortSignal.any([timeout, external]) : timeout
+  }
+
+  /** Establish a streaming response guarded by connection-phase timeout only (once headers arrive, caller signal governs). */
+  private async openConnectStream(
+    where: string,
+    path: string,
+    init: Omit<RequestInit, 'signal'>,
+    callerSignal?: AbortSignal,
+  ): Promise<Response> {
+    const connectController = new AbortController()
+    const connectTimer = setTimeout(() => connectController.abort(), this.timeoutMs)
+    connectTimer.unref?.()
+    try {
+      return await this.fetchHub(
+        where,
+        path,
+        {
+          ...init,
+          signal: callerSignal
+            ? AbortSignal.any([connectController.signal, callerSignal])
+            : connectController.signal,
+        },
+        { callerSignal, connectTimeoutLabel: 'connection timed out' },
+      )
+    } finally {
+      clearTimeout(connectTimer)
+    }
   }
 
   /**
@@ -230,7 +271,7 @@ export class HubClient {
     const response = await this.fetchHub(`POST ${path}`, path, {
       method: 'POST',
       headers,
-      body: bytes as unknown as BodyInit,
+      body: Uint8Array.from(bytes),
       signal: this.signal(undefined),
     })
     return this.parseEntity<ArtifactMetadata>(response, `POST ${path}`)
@@ -291,25 +332,16 @@ export class HubClient {
   ): Promise<void> {
     const headers = this.authHeaders({ accept: 'application/x-ndjson' })
     if (opts.body !== undefined) headers['content-type'] = 'application/json'
-    const connectController = new AbortController()
-    const connectTimer = setTimeout(() => connectController.abort(), this.timeoutMs)
-    connectTimer.unref?.()
-    let response: Response
-    try {
-      response = await this.fetchHub(
-        `${method} ${path}`,
-        path,
-        {
-          method,
-          headers,
-          body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-          signal: AbortSignal.any([connectController.signal, ...(opts.signal ? [opts.signal] : [])]),
-        },
-        { callerSignal: opts.signal, connectTimeoutLabel: 'connection timed out' },
-      )
-    } finally {
-      clearTimeout(connectTimer)
-    }
+    const response = await this.openConnectStream(
+      `${method} ${path}`,
+      path,
+      {
+        method,
+        headers,
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      },
+      opts.signal,
+    )
     if (opts.signal?.aborted) throw new CliError(`stream cancelled: ${method} ${path}`, 'aborted')
     if (!response.ok) throw await this.toCliError(response, `${method} ${path}`)
     if (!response.body) {
@@ -390,28 +422,25 @@ export class HubClient {
       signal?: AbortSignal
     },
   ): Promise<void> {
-    const connectController = new AbortController()
-    const connectTimer = setTimeout(() => connectController.abort(), this.timeoutMs)
-    connectTimer.unref?.()
     const callerAborted = (): boolean => listeners.signal?.aborted === true
-    let response: Response
-    try {
-      response = await this.fetchHub(
-        `GET ${path}`,
-        path,
-        {
-          headers: this.authHeaders({ accept: 'text/event-stream' }),
-          signal: AbortSignal.any([connectController.signal, ...(listeners.signal ? [listeners.signal] : [])]),
-        },
-        { callerSignal: listeners.signal, connectTimeoutLabel: 'connection timed out' },
-      )
-    } finally {
-      clearTimeout(connectTimer)
-    }
+    const response = await this.openConnectStream(
+      `GET ${path}`,
+      path,
+      { headers: this.authHeaders({ accept: 'text/event-stream' }) },
+      listeners.signal,
+    )
     if (callerAborted()) throw new CliError('cancelled', 'aborted')
-    if (!response.ok || !response.body) throw await this.toCliError(response, `GET ${path}`)
+    if (!response.ok) throw await this.toCliError(response, `GET ${path}`)
+    if (!response.body) {
+      throw new CliError(`Hub did not return a streaming response body (GET ${path})`, 'invalid_response')
+    }
+    const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
+    if (contentType !== 'text/event-stream') {
+      await response.body.cancel().catch(() => {})
+      throw new CliError(`Hub response content-type is not text/event-stream (GET ${path})`, 'invalid_response')
+    }
     const reader = (response.body as ReadableStream<Uint8Array>).getReader()
-    const decoder = new TextDecoder()
+    const decoder = new TextDecoder('utf-8', { fatal: true })
     let buffer = ''
     let pendingCr = false
     const processBufferFrames = (): void => {
@@ -485,23 +514,12 @@ export class HubClient {
         if (callerAborted()) throw new CliError('cancelled', 'aborted')
         throw new CliError(`stream interrupted: GET ${path}`, 'aborted')
       }
+      if (err instanceof TypeError) {
+        throw new CliError(`Hub SSE stream contained invalid UTF-8 bytes (GET ${path})`, 'invalid_response')
+      }
       throw err
     } finally {
       await this.cancelReaderBounded(reader)
     }
-  }
-
-  /**
-   * Subscribe to `GET /api/events` via SSE: a plain delegation to streamSse (identical contract;
-   * the former duplicated copy is collapsed here). The timeout applies only to establishing the
-   * connection; once open, the stream is controlled solely by the caller's AbortSignal.
-   */
-  async streamEvents(
-    listeners: {
-      onFrame: (frame: { event: string; data: string }) => void
-      signal?: AbortSignal
-    },
-  ): Promise<void> {
-    await this.streamSse('/api/events', listeners)
   }
 }

@@ -11,7 +11,7 @@ import { credentialsPath, loadCliCredential } from '../credentials.js'
 import { CliError } from '../errors.js'
 import { HubClient, resolveEndpoint } from '../hub-client.js'
 import type { CommandContext, CommandSpec } from './shared.js'
-import { printResult } from './shared.js'
+import { assertNoExtraPositionals, printResult } from './shared.js'
 
 export type DoctorCheckStatus = 'ok' | 'warn' | 'error' | 'info'
 
@@ -260,6 +260,7 @@ export function doctorCommands(): CommandSpec[] {
       path: ['doctor'],
       description: 'Run read-only diagnostics on local data dir, Hub reachability/auth, models, and nodes',
       async run(ctx: CommandContext) {
+        assertNoExtraPositionals(ctx.positionals, 0)
         const checks: DoctorCheck[] = []
 
         const dataResult = await checkDataDir(ctx)

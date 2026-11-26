@@ -13,7 +13,7 @@ import { inflateRawSync } from 'node:zlib'
 import { CliError } from '../errors.js'
 import { HELMX_SDK_TSCONFIG_PATHS } from './scaffold-templates.js'
 import type { CommandContext, CommandSpec } from './shared.js'
-import { assertNoExtraPositionals, printResult } from './shared.js'
+import { assertNoExtraPositionals, isOutsideDir, printResult } from './shared.js'
 
 export const SDK_TYPES_SUBDIR = '.helmx/types'
 
@@ -79,13 +79,36 @@ function validateSdkTypesBundle(raw: unknown): SdkTypesBundle {
   }
 }
 
+function isNotFoundErrno(err: unknown): boolean {
+  return err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT'
+}
+
+function isModuleNotFoundErrno(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const code = (err as NodeJS.ErrnoException).code
+  return code === 'ENOENT' || code === 'ERR_MODULE_NOT_FOUND'
+}
+
+async function removeDirIfPresent(dirPath: string): Promise<void> {
+  try {
+    await fsp.rm(dirPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  } catch (err) {
+    if (isNotFoundErrno(err)) return
+    throw err
+  }
+}
+
 function maxTsMtimeMs(dirPath: string): number {
   let max = 0
   let entries
   try {
     entries = readdirSync(dirPath, { withFileTypes: true })
-  } catch {
-    return Number.POSITIVE_INFINITY
+  } catch (err) {
+    if (isNotFoundErrno(err)) return Number.POSITIVE_INFINITY
+    throw new CliError(
+      `failed to scan SDK source directory (${dirPath}): ${err instanceof Error ? err.message : String(err)}`,
+      'read_failed',
+    )
   }
   for (const ent of entries) {
     if (ent.name === 'node_modules' || ent.name === 'dist') continue
@@ -97,8 +120,12 @@ function maxTsMtimeMs(dirPath: string): number {
       try {
         const m = statSync(full).mtimeMs
         if (m > max) max = m
-      } catch {
-        return Number.POSITIVE_INFINITY
+      } catch (err) {
+        if (isNotFoundErrno(err)) return Number.POSITIVE_INFINITY
+        throw new CliError(
+          `failed to stat SDK source file (${full}): ${err instanceof Error ? err.message : String(err)}`,
+          'read_failed',
+        )
       }
     }
   }
@@ -113,8 +140,12 @@ async function tryLoadFreshDistSnapshot(): Promise<SdkTypesBundle | undefined> {
   let distMtimeMs: number
   try {
     distMtimeMs = statSync(distPath).mtimeMs
-  } catch {
-    return undefined
+  } catch (err) {
+    if (isNotFoundErrno(err)) return undefined
+    throw new CliError(
+      `failed to inspect built SDK types snapshot (${distPath}): ${err instanceof Error ? err.message : String(err)}`,
+      'sdk_types_unavailable',
+    )
   }
   const pkgRoot = path.resolve(here, '../..')
   const packagesRoot = path.resolve(pkgRoot, '..')
@@ -128,10 +159,15 @@ async function tryLoadFreshDistSnapshot(): Promise<SdkTypesBundle | undefined> {
     '../protocol/package.json',
     '../plugin-client/package.json',
   ]) {
+    const depPath = path.resolve(pkgRoot, rel)
     try {
-      if (statSync(path.resolve(pkgRoot, rel)).mtimeMs > distMtimeMs) return undefined
-    } catch {
-      return undefined
+      if (statSync(depPath).mtimeMs > distMtimeMs) return undefined
+    } catch (err) {
+      if (isNotFoundErrno(err)) return undefined
+      throw new CliError(
+        `failed to inspect workspace manifest (${depPath}): ${err instanceof Error ? err.message : String(err)}`,
+        'sdk_types_unavailable',
+      )
     }
   }
   try {
@@ -140,8 +176,14 @@ async function tryLoadFreshDistSnapshot(): Promise<SdkTypesBundle | undefined> {
       const jsonText = inflateRawSync(Buffer.from(mod.EMBEDDED_SDK_TYPES_PAYLOAD, 'base64')).toString('utf8')
       return validateSdkTypesBundle(JSON.parse(jsonText))
     }
-  } catch {
-    // Fall back to in-memory generator below
+  } catch (err) {
+    if (err instanceof CliError) throw err
+    if (!isModuleNotFoundErrno(err)) {
+      throw new CliError(
+        `built SDK types snapshot (${distPath}) is unreadable or corrupt: ${err instanceof Error ? err.message : String(err)}`,
+        'sdk_types_corrupt',
+      )
+    }
   }
   return undefined
 }
@@ -198,9 +240,76 @@ export async function loadSdkTypesBundle(): Promise<SdkTypesBundle> {
   }
 }
 
-function isOutsideDir(base: string, target: string): boolean {
-  const rel = path.relative(base, target)
-  return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)
+function stripJsonCommentsAndTrailingCommas(text: string): string {
+  // Phase 1: strip // and /* */ comments while preserving string literals untouched.
+  let withoutComments = ''
+  let i = 0
+  let inString = false
+  let escaped = false
+  while (i < text.length) {
+    const ch = text[i]!
+    if (inString) {
+      withoutComments += ch
+      if (escaped) {
+        escaped = false
+      } else if (ch === '\\') {
+        escaped = true
+      } else if (ch === '"') {
+        inString = false
+      }
+      i += 1
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      withoutComments += ch
+      i += 1
+      continue
+    }
+    const next = text[i + 1]
+    if (ch === '/' && next === '/') {
+      i += 2
+      while (i < text.length && text[i] !== '\n' && text[i] !== '\r') i += 1
+      continue
+    }
+    if (ch === '/' && next === '*') {
+      const closeIdx = text.indexOf('*/', i + 2)
+      if (closeIdx === -1) return text
+      i = closeIdx + 2
+      continue
+    }
+    withoutComments += ch
+    i += 1
+  }
+
+  // Phase 2: drop commas immediately followed by '}' or ']' (outside strings).
+  let out = ''
+  inString = false
+  escaped = false
+  for (let idx = 0; idx < withoutComments.length; idx += 1) {
+    const ch = withoutComments[idx]!
+    if (inString) {
+      out += ch
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      out += ch
+      continue
+    }
+    if (ch === ',') {
+      let look = idx + 1
+      while (look < withoutComments.length && /\s/.test(withoutComments[look]!)) look += 1
+      if (withoutComments[look] === '}' || withoutComments[look] === ']') {
+        continue
+      }
+    }
+    out += ch
+  }
+  return out
 }
 
 /** Guard `.helmx` and `.helmx/types` against symlink escapes or non-directory collisions. */
@@ -219,7 +328,7 @@ async function assertSafeManagedSubdir(dirReal: string, subPath: string, label: 
     }
   } catch (err) {
     if (err instanceof CliError) throw err
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+    if (!isNotFoundErrno(err)) {
       throw new CliError(
         `failed to inspect ${label} (${subPath}): ${err instanceof Error ? err.message : String(err)}`,
         'read_failed',
@@ -239,12 +348,12 @@ async function inspectTsconfigStatus(pluginDir: string): Promise<TsconfigTypesSt
   try {
     text = await fsp.readFile(tsconfigPath, 'utf8')
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
+    if (isNotFoundErrno(err)) return 'missing'
     return 'unreadable'
   }
   let parsed: unknown
   try {
-    parsed = JSON.parse(text)
+    parsed = JSON.parse(stripJsonCommentsAndTrailingCommas(text))
   } catch {
     return 'unreadable'
   }
@@ -256,16 +365,12 @@ async function inspectTsconfigStatus(pluginDir: string): Promise<TsconfigTypesSt
   const paths = (compilerOptions as Record<string, unknown>)['paths']
   if (paths === null || typeof paths !== 'object' || Array.isArray(paths)) return 'needs_paths'
 
-  const requiredMappings: ReadonlyArray<readonly [string, string]> = [
-    ['@helmx/protocol', '.helmx/types/protocol/index.d.ts'],
-    ['@helmx/protocol/browser', '.helmx/types/protocol/browser.d.ts'],
-    ['@helmx/plugin-client', '.helmx/types/plugin-client/index.d.ts'],
-  ]
   const pathsMap = paths as Record<string, unknown>
-  for (const [specifier, expectedTarget] of requiredMappings) {
+  for (const [specifier, targets] of Object.entries(HELMX_SDK_TSCONFIG_PATHS)) {
     const entries = pathsMap[specifier]
     if (!Array.isArray(entries)) return 'needs_paths'
-    const matched = entries.some((item) => typeof item === 'string' && normalizeTsconfigTarget(item) === expectedTarget)
+    const expectedTargets = new Set(targets.map(normalizeTsconfigTarget))
+    const matched = entries.some((item) => typeof item === 'string' && expectedTargets.has(normalizeTsconfigTarget(item)))
     if (!matched) return 'needs_paths'
   }
   return 'configured'
@@ -290,7 +395,11 @@ async function renameWithWindowsRetry(src: string, dest: string): Promise<void> 
  * Write or refresh `.helmx/types/` inside `pluginDir` from the embedded SDK declaration bundle.
  * Never modifies existing `tsconfig.json`; inspects it read-only and reports status + snippet.
  */
-export async function writeSdkTypesToDir(pluginDir: string): Promise<SyncPluginTypesResult> {
+export async function writeSdkTypesToDir(
+  pluginDir: string,
+  ops?: { rename?: (src: string, dest: string) => Promise<void> },
+): Promise<SyncPluginTypesResult> {
+  const doRename = ops?.rename ?? renameWithWindowsRetry
   const resolvedDir = path.resolve(pluginDir)
   let dirStat
   try {
@@ -315,8 +424,11 @@ export async function writeSdkTypesToDir(pluginDir: string): Promise<SyncPluginT
   const sortedRelPaths = Object.keys(bundle.files).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 
   await fsp.mkdir(helmxDir, { recursive: true })
-  const stagingDir = path.join(helmxDir, `.types-staging-${process.pid}-${randomUUID().slice(0, 8)}`)
+  const runSuffix = `${process.pid}-${randomUUID().slice(0, 8)}`
+  const stagingDir = path.join(helmxDir, `.types-staging-${runSuffix}`)
+  const backupDir = path.join(helmxDir, `.types-backup-${runSuffix}`)
   await fsp.mkdir(stagingDir, { recursive: true })
+  let backedUp = false
   try {
     const createdDirs = new Set<string>([stagingDir])
     for (const rel of sortedRelPaths) {
@@ -328,13 +440,41 @@ export async function writeSdkTypesToDir(pluginDir: string): Promise<SyncPluginT
       }
       await fsp.writeFile(dest, bundle.files[rel]!, 'utf8')
     }
-    await fsp.rm(typesDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
-    await renameWithWindowsRetry(stagingDir, typesDir)
+    try {
+      await doRename(typesDir, backupDir)
+      backedUp = true
+    } catch (err) {
+      if (!isNotFoundErrno(err)) throw err
+    }
+    try {
+      await doRename(stagingDir, typesDir)
+    } catch (swapErr) {
+      if (backedUp) {
+        try {
+          await doRename(backupDir, typesDir)
+          backedUp = false
+        } catch (restoreErr) {
+          throw new CliError(
+            `failed to replace SDK types in ${typesDir} (${swapErr instanceof Error ? swapErr.message : String(swapErr)}) and failed to restore backup at ${backupDir} (${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)})`,
+            'write_failed',
+          )
+        }
+      }
+      throw swapErr
+    }
+    if (backedUp) {
+      await removeDirIfPresent(backupDir)
+    }
   } catch (err) {
-    await fsp.rm(stagingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => {})
+    let cleanupDiagnostic = ''
+    try {
+      await removeDirIfPresent(stagingDir)
+    } catch (cleanupErr) {
+      cleanupDiagnostic = ` (staging cleanup also failed: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)})`
+    }
     if (err instanceof CliError) throw err
     throw new CliError(
-      `failed to write SDK types into ${typesDir}: ${err instanceof Error ? err.message : String(err)}`,
+      `failed to write SDK types into ${typesDir}: ${err instanceof Error ? err.message : String(err)}${cleanupDiagnostic}`,
       'write_failed',
     )
   }

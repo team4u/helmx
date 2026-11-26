@@ -858,6 +858,40 @@ test('models filter: lists disabled models / --disable full-replace / --clear re
   assert.equal(listJson.code, 0, listJson.err)
   assert.deepEqual(JSON.parse(listJson.out), catalog)
 
+  // --provider alone (no --disable/--clear): enters read mode filtered by provider (NEVER wipes disabled models via PUT).
+  const multiProviderCatalog = {
+    models: [
+      { provider: 'faux', modelId: 'faux-1', available: true },
+      { provider: 'faux', modelId: 'faux-2', available: true, disabled: true },
+      { provider: 'other', modelId: 'other-1', available: true, disabled: true },
+    ],
+    thinkingLevels: {},
+  }
+  const readHub = await startMockHub(
+    {
+      'GET /api/models': () => ({ body: multiProviderCatalog }),
+      'PUT /api/models/filter': () => {
+        throw new Error('PUT /api/models/filter must not be called in read mode')
+      },
+    },
+    { autoRegisterCleanup: t },
+  )
+  const readEnv = makeCliEnv(readHub.url, dir)
+  const providerHuman = await runCliCaptured(['models', 'filter', '--provider', 'faux'], readEnv)
+  assert.equal(providerHuman.code, 0, providerHuman.err)
+  assert.match(providerHuman.out, /faux\/faux-2/)
+  assert.doesNotMatch(providerHuman.out, /other\/other-1/)
+  const providerJson = await runCliCaptured(['models', 'filter', '--provider', 'faux', '--json'], readEnv)
+  assert.equal(providerJson.code, 0, providerJson.err)
+  assert.deepEqual(JSON.parse(providerJson.out), {
+    models: [
+      { provider: 'faux', modelId: 'faux-1', available: true },
+      { provider: 'faux', modelId: 'faux-2', available: true, disabled: true },
+    ],
+    thinkingLevels: {},
+  })
+  assert.equal(readHub.recorded.hits.every((h) => h.method === 'GET'), true)
+
   // --provider + --disable (repeatable): replaces disabled models for that provider.
   const disable = await runCliCaptured(
     ['models', 'filter', '--provider', 'faux', '--disable', 'faux-2', '--disable', 'faux-1', '--json'],
@@ -2930,4 +2964,68 @@ test('REQUEST_SCHEMAS <-> coreCommands() parity guard self-test: catches both un
     invalidAliasPosErrors.some((e) => e.includes('invalid positional "demoBody.target"')),
     `expected invalid positional error, got: ${invalidAliasPosErrors.join('; ')}`,
   )
+})
+
+test('coerceTags invalid JSON, profiles --system-file cwd resolution, and extra positional guards fail explicitly', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helmx-cli-extra-')
+  const workDir = useTempDir(t, 'helmx-cli-cwd-')
+  await fsp.mkdir(path.join(workDir, 'prompts'), { recursive: true })
+  await fsp.writeFile(path.join(workDir, 'prompts', 'sys.md'), 'System from ctx.cwd\n', 'utf8')
+  const hub = await startMockHub(
+    {
+      'POST /api/profiles': (body) => ({ status: 201, body }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dataDir)
+
+  // coerceTags invalid JSON starting with `[` throws invalid_flag_value cleanly (no uncaught SyntaxError)
+  const badTags = await runCliCaptured(
+    ['conversations', 'create', '--tags', '[not valid json', '--json'],
+    env,
+    { cwd: workDir },
+  )
+  assert.equal(badTags.code, 1)
+  assert.equal(parseCliError(badTags).code, 'invalid_flag_value')
+
+  // profiles create --system-file resolves relative paths against ctx.cwd (not process.cwd())
+  const created = await runCliCaptured(
+    ['profiles', 'create', 'custom-p', '--system-file', 'prompts/sys.md', '--json'],
+    env,
+    { cwd: workDir },
+  )
+  assert.equal(created.code, 0, created.err)
+  assert.equal((JSON.parse(created.out) as { system?: string }).system, 'System from ctx.cwd\n')
+
+  // Commands rejecting unexpected positional arguments without contacting Hub
+  const hitsBefore = hub.recorded.hits.length
+  const extraPositionals = [
+    ['models', 'list', 'extra'],
+    ['models', 'providers', 'extra'],
+    ['plugins', 'list', 'extra'],
+    ['plugins', 'enable', 'p1', 'extra'],
+    ['plugins', 'reload', 'p1', 'extra'],
+    ['plugins', 'rescan', 'extra'],
+    ['actions', 'list', 'extra'],
+    ['artifacts', 'list', '7', 'extra'],
+    ['artifacts', 'get', 'art-1', 'extra'],
+    ['asks', 'list', 'extra'],
+    ['nodes', 'list', 'extra'],
+    ['nodes', 'forwards', 'extra'],
+    ['profiles', 'get', 'p1', 'extra'],
+    ['profiles', 'delete', 'p1', 'extra'],
+    ['providers', 'list', 'extra'],
+    ['credentials', 'list', 'extra'],
+    ['skills', 'list', 'extra'],
+    ['skills', 'read', 'sk-1', 'extra'],
+    ['status', 'extra'],
+    ['doctor', 'extra'],
+    ['events', 'watch', 'extra'],
+  ]
+  for (const argv of extraPositionals) {
+    const res = await runCliCaptured([...argv, '--json'], env, { cwd: workDir })
+    assert.equal(res.code, 1, `expected extra positional rejection for ${argv.join(' ')}`)
+    assert.equal(parseCliError(res).code, 'unexpected_positional', `wrong error code for ${argv.join(' ')}`)
+  }
+  assert.equal(hub.recorded.hits.length, hitsBefore)
 })

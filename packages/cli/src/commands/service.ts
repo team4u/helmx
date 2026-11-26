@@ -1,6 +1,5 @@
 /** OS startup service management for the local Hub (`launchd` / `systemd --user` / `schtasks`). */
 import { realpathSync } from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { installOsService, uninstallOsService, getOsServiceStatus, type OsServiceProfile, type OsServiceStatus } from '@helmx/env-io'
@@ -59,9 +58,7 @@ function hubServiceProfile(dataDir: string, explicitDataDir?: string): OsService
 }
 
 async function runServiceAction(action: ServiceAction, ctx: Parameters<NonNullable<CommandSpec['run']>>[0], dataDirFlag: string | undefined): Promise<number> {
-  const dataDir = dataDirFlag !== undefined
-    ? path.resolve(ctx.cwd, dataDirFlag)
-    : (ctx.env.HELMX_DATA_DIR && ctx.env.HELMX_DATA_DIR !== '' ? ctx.env.HELMX_DATA_DIR : path.join(os.homedir(), '.helmx'))
+  const dataDir = dataDirFlag !== undefined ? path.resolve(ctx.cwd, dataDirFlag) : ctx.dataDir
   const entry = resolveCliServiceEntry()
   if (action === 'install') {
     const result = await installOsService(entry, dataDir, hubServiceProfile(dataDir, dataDirFlag))

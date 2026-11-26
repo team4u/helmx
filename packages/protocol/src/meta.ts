@@ -13,6 +13,13 @@
  * This file has zero runtime dependencies (only HelmxError); the kernel and internal/external plugins use it on equal footing.
  */
 import { HelmxError } from './error.js'
+import {
+  assertNoForbiddenJsonKeys,
+  definePlainJsonProperty,
+  readOwnEnumerableDataProperty,
+  readPlainArrayElements,
+  type PlainJsonGuardOptions,
+} from './json-safe.js'
 import { isPlainObject } from './utils.js'
 
 /**
@@ -89,14 +96,18 @@ function sanitizeJsonSafeValue(
     if (depth > MAX_META_DEPTH) {
       throw metaError(agentId, field, `${path} nesting depth exceeds ${MAX_META_DEPTH}`)
     }
+    const guardOpts: PlainJsonGuardOptions = {
+      makeError: (reason) => metaError(agentId, field, reason),
+      sparseHoleReason: 'array element must not be undefined (sparse holes rejected)',
+    }
     if (Array.isArray(value)) {
       if (value.length > MAX_META_ARRAY_LENGTH) {
         throw metaError(agentId, field, `${path} array length exceeds ${MAX_META_ARRAY_LENGTH}`)
       }
+      const elements = readPlainArrayElements(value, path, guardOpts)
       const out: JsonSafeValue[] = []
-      for (let i = 0; i < value.length; i += 1) {
-        const item = value[i]
-        // Sparse array holes and explicit undefined elements are equally pathological shapes (JSON has no representation for them).
+      for (let i = 0; i < elements.length; i += 1) {
+        const item = elements[i]
         if (item === undefined) {
           throw metaError(agentId, field, `${path}[${i}] array element must not be undefined (sparse holes rejected)`)
         }
@@ -107,12 +118,14 @@ function sanitizeJsonSafeValue(
     if (!isPlainObject(value)) {
       throw metaError(agentId, field, `${path} must be a plain object (class instances/Date/Map and other structured values rejected)`)
     }
-    const keys = Object.keys(value)
-    if (keys.length > MAX_META_KEYS_PER_LEVEL) {
+    assertNoForbiddenJsonKeys(value, path, guardOpts)
+    const ownKeys = Reflect.ownKeys(value)
+    if (ownKeys.length > MAX_META_KEYS_PER_LEVEL) {
       throw metaError(agentId, field, `${path} object key count exceeds ${MAX_META_KEYS_PER_LEVEL}`)
     }
     const out: Record<string, JsonSafeValue> = {}
-    for (const key of keys) {
+    for (const rawOwnKey of ownKeys) {
+      const { rawKey: key, value: propValue } = readOwnEnumerableDataProperty(value, rawOwnKey, path, guardOpts)
       if (key.length > MAX_META_STRING_LENGTH) {
         throw metaError(agentId, field, `${path} key name too long`)
       }
@@ -120,8 +133,12 @@ function sanitizeJsonSafeValue(
       // semantics (dropped during cloning); all other values are validated
       // recursively; undefined inside array elements is still explicitly rejected
       // (pathological shape).
-      if (value[key] === undefined) continue
-      out[key] = sanitizeJsonSafeValue(value[key], `${path}.${key}`, budget, depth + 1, agentId, field)
+      if (propValue === undefined) continue
+      definePlainJsonProperty(
+        out,
+        key,
+        sanitizeJsonSafeValue(propValue, `${path}.${key}`, budget, depth + 1, agentId, field),
+      )
     }
     return out
   }
@@ -150,13 +167,24 @@ export function sanitizeAgentNamespacedMeta(
   if (!isPlainObject(value)) {
     throw metaError(context.agentId, context.field, 'must be a map from namespaces to plain objects')
   }
+  const guardOpts: PlainJsonGuardOptions = {
+    makeError: (reason) => metaError(context.agentId, context.field, reason),
+  }
+  assertNoForbiddenJsonKeys(value, 'meta', guardOpts)
+  const ownKeys = Reflect.ownKeys(value)
+  if (ownKeys.length > MAX_META_KEYS_PER_LEVEL) {
+    throw metaError(context.agentId, context.field, `meta namespace count exceeds ${MAX_META_KEYS_PER_LEVEL}`)
+  }
   const budget = { remaining: MAX_META_TOTAL_NODES }
   const out: Record<string, JsonSafeObject> = {}
-  for (const namespace of Object.keys(value)) {
+  for (const rawOwnKey of ownKeys) {
+    const { rawKey: namespace, value: slot } = readOwnEnumerableDataProperty(value, rawOwnKey, 'meta', guardOpts)
     if (namespace.trim() === '') {
       throw metaError(context.agentId, context.field, 'namespace keys must be non-empty, non-whitespace-only strings')
     }
-    const slot = (value as Record<string, unknown>)[namespace]
+    if (namespace.length > MAX_META_STRING_LENGTH) {
+      throw metaError(context.agentId, context.field, 'meta namespace key name too long')
+    }
     if (!isPlainObject(slot)) {
       throw metaError(
         context.agentId,
@@ -164,14 +192,18 @@ export function sanitizeAgentNamespacedMeta(
         `the value of namespace '${namespace}' must be a plain object (business fields are validated by the namespace-owner plugin)`,
       )
     }
-    out[namespace] = sanitizeJsonSafeValue(
-      slot,
-      `meta.${namespace}`,
-      budget,
-      0,
-      context.agentId,
-      context.field,
-    ) as JsonSafeObject
+    definePlainJsonProperty(
+      out,
+      namespace,
+      sanitizeJsonSafeValue(
+        slot,
+        `meta.${namespace}`,
+        budget,
+        0,
+        context.agentId,
+        context.field,
+      ) as JsonSafeObject,
+    )
   }
   return out
 }

@@ -9,9 +9,11 @@ import { Type, type Static } from 'typebox'
 import { NODE_ID_PATTERN, NODE_ID_REGEX } from './agent-exec.js'
 import type { ProfileStarterPrompt, ProviderConfig } from './assets.js'
 import { MODEL_THINKING_LEVELS, type ConversationListFilter } from './conversation.js'
-import type { EnvExecRequest, NodeUpgradeInput } from './env-rpc.js'
+import { ENV_EXEC_MAX_TIMEOUT_MS, type EnvExecRequest, type NodeUpgradeInput } from './env-rpc.js'
 import type { ConversationSearchOptions } from './http.js'
+import type { PluginConfigFieldValue } from './plugin-dto.js'
 import { SKILL_ID_PATTERN } from './skill-contract.js'
+import { ENV_NAME_REGEX } from './utils.js'
 
 /** Maximum safe JS integer (`Number.MAX_SAFE_INTEGER`) shared with kernel boundary checks. */
 const MAX_SAFE_INTEGER = 9007199254740991
@@ -25,7 +27,7 @@ export const REQUEST_SCHEMA_PATTERNS = Object.freeze({
   httpUrlPrefix: /^https?:\/\//,
   nonWhitespace: /\S/,
   host: /^[^\s\x00-\x1f\x7f]+$/,
-  envName: /^[A-Za-z_][A-Za-z0-9_]*$/,
+  envName: ENV_NAME_REGEX,
   noNulByte: /^[^\u0000]*$/,
 })
 
@@ -33,11 +35,11 @@ export const REQUEST_SCHEMA_PATTERNS = Object.freeze({
 const IdString = Type.String({ pattern: REQUEST_SCHEMA_PATTERNS.id.source })
 const NodeIdString = Type.String({ pattern: NODE_ID_PATTERN })
 const NonEmptyString = Type.String({ minLength: 1 })
-const NonWhitespaceString = Type.String({ pattern: '\\S' })
+const NonWhitespaceString = Type.String({ pattern: REQUEST_SCHEMA_PATTERNS.nonWhitespace.source })
 const SafePositiveInt = Type.Integer({ minimum: 1, maximum: MAX_SAFE_INTEGER })
 const SafeNonNegativeInt = Type.Integer({ minimum: 0, maximum: MAX_SAFE_INTEGER })
 const ThinkingLevelSchema = Type.Enum(['', ...MODEL_THINKING_LEVELS] as const)
-const HostString = Type.String({ minLength: 1, pattern: '^[^\\s\\x00-\\x1f\\x7f]+$' })
+const HostString = Type.String({ minLength: 1, pattern: REQUEST_SCHEMA_PATTERNS.host.source })
 const PortInt = Type.Integer({ minimum: 1, maximum: 65535 })
 
 const CONVERSATION_COMMON_PROPS = {
@@ -182,7 +184,7 @@ const ProviderItemSchema = Type.Object(
   {
     id: IdString,
     protocol: Type.Enum(['openai', 'anthropic'] as const),
-    baseUrl: Type.String({ pattern: '^https?://' }),
+    baseUrl: Type.String({ pattern: REQUEST_SCHEMA_PATTERNS.httpUrlPrefix.source }),
     models: Type.Array(Type.String()),
     label: Type.Optional(Type.String()),
     enabled: Type.Boolean(),
@@ -204,16 +206,24 @@ const ActionInvokeSchema = Type.Object(
   {
     // input can be any JSON value (including null); only key presence is required.
     input: Type.Unknown(),
-    conversationId: Type.Optional(Type.Integer({ minimum: 1 })),
+    conversationId: Type.Optional(SafePositiveInt),
   },
   { additionalProperties: false },
 )
+
+const PluginConfigValueSchema = Type.Union([
+  Type.String(),
+  Type.Number(),
+  Type.Boolean(),
+  Type.Array(Type.String()),
+  Type.Null(),
+])
 
 const PluginConfigPutSchema = Type.Object(
   {
     values: Type.Object(
       {},
-      { additionalProperties: Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]) },
+      { additionalProperties: PluginConfigValueSchema },
     ),
   },
   { additionalProperties: false },
@@ -289,10 +299,11 @@ const ModelsRefreshSchema = Type.Object(
   { additionalProperties: false },
 )
 
-// setup/login historically tolerate extra fields (no unknown-key rejection); keep schema permissive and only constrain password shape.
-const AuthPasswordSchema = Type.Object({
-  password: NonEmptyString,
-})
+// Enforce strict password payload shape without unknown extra properties.
+const AuthPasswordSchema = Type.Object(
+  { password: NonEmptyString },
+  { additionalProperties: false },
+)
 
 const NodeIssueSchema = Type.Object(
   { nodeId: NonEmptyString },
@@ -329,17 +340,17 @@ const EnvExecSchema = Type.Object(
     nodeId: Type.Optional(NodeIdString),
     // Cross-platform cwd absoluteness (POSIX/drive/UNC) is a semantic rule validated explicitly in the handler.
     cwd: Type.Optional(Type.String()),
-    conversationId: Type.Optional(Type.Integer({ minimum: 1 })),
+    conversationId: Type.Optional(SafePositiveInt),
     env: Type.Optional(
       Type.Object(
         {},
         {
-          propertyNames: { pattern: '^[A-Za-z_][A-Za-z0-9_]*$' },
-          additionalProperties: Type.String({ pattern: '^[^\\u0000]*$' }),
+          propertyNames: { pattern: REQUEST_SCHEMA_PATTERNS.envName.source },
+          additionalProperties: Type.String({ pattern: REQUEST_SCHEMA_PATTERNS.noNulByte.source }),
         },
       ),
     ),
-    timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 600000 })),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: ENV_EXEC_MAX_TIMEOUT_MS })),
     stream: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
@@ -402,7 +413,8 @@ const _requestSchemaParityLocks: [
   AssertExact<Static<typeof EnvExecSchema>['conversationId'], EnvExecRequest['conversationId']>,
   AssertExact<Static<typeof EnvExecSchema>['timeoutMs'], EnvExecRequest['timeoutMs']>,
   AssertExact<Static<typeof EnvExecSchema>['stream'], EnvExecRequest['stream']>,
+  AssertExact<Static<typeof PluginConfigValueSchema>, PluginConfigFieldValue | null>,
 ] = [
-  true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+  true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
 ]
 void _requestSchemaParityLocks

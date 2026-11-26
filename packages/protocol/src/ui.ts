@@ -9,6 +9,7 @@ import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, C
 import type { NodeInfo } from './env-rpc.js'
 import type { HelmxLocale, LocaleTranslator, LocalizedText } from './locale.js'
 import type { PluginSummary } from './plugin-dto.js'
+import { isPlainObject } from './utils.js'
 
 /** Reserved CSS text export name kept by the compiler; the loader mounts it onto the page only after validating the module. */
 export const PLUGIN_CLIENT_CSS_EXPORT = '__helmxClientCss' as const
@@ -590,6 +591,7 @@ export type KnownPluginUiContribution =
   | { pluginId: string; surface: 'tool.view'; spec: ToolViewSpec }
   | { pluginId: string; surface: 'composer.completer'; spec: ComposerCompleterSpec }
   | { pluginId: string; surface: 'workbench.panel'; spec: WorkbenchPanelSpec }
+  // Phase-2 removal: keep 'command' union member until packages/web/src/lib/types.ts drops case 'command'
   | { pluginId: string; surface: 'commandPalette' | 'command'; spec: CommandSpec }
   | { pluginId: string; surface: 'settings.panel'; spec: SettingsPanelSpec }
   | { pluginId: string; surface: 'plugin.slot'; spec: PluginSlotContributionSpec }
@@ -604,6 +606,7 @@ export const KNOWN_PLUGIN_UI_SURFACES = [
   'composer.completer',
   'workbench.panel',
   'commandPalette',
+  // Phase-2 removal: deprecated legacy alias kept for Phase-1 cross-package parity
   'command',
   'settings.panel',
   'plugin.slot',
@@ -616,46 +619,63 @@ type _AssertAllKnownUiSurfacesListed =
 const _assertAllKnownUiSurfacesListed: _AssertAllKnownUiSurfacesListed = true
 void _assertAllKnownUiSurfacesListed
 
-const KNOWN_PLUGIN_UI_SURFACE_SET: ReadonlySet<string> = new Set(KNOWN_PLUGIN_UI_SURFACES)
-
 const COMMAND_SHORTCUT_MAX_LENGTH = 32
+
+function normalizeCommandSpec(baseUnknown: unknown, rawSpec: Record<string, unknown>): CommandSpec {
+  const baseSpec = baseUnknown as CommandSpec
+  if (!Object.hasOwn(rawSpec, 'shortcut')) return baseSpec
+  const rawShortcut = rawSpec['shortcut']
+  const trimmed = typeof rawShortcut === 'string' ? rawShortcut.trim() : ''
+  if (trimmed.length >= 1 && trimmed.length <= COMMAND_SHORTCUT_MAX_LENGTH) {
+    return trimmed === rawShortcut ? baseSpec : { ...baseSpec, shortcut: trimmed }
+  }
+  const { shortcut: _ignored, ...rest } = baseSpec
+  return rest
+}
+
+function asSurfaceSpec<T>(spec: unknown): T {
+  return spec as T
+}
 
 /**
  * Validate and narrow a PluginUiContribution: checks the known surface and a
  * non-null plain-object spec, then returns the discriminated-union member;
- * unknown surfaces or non-object specs return undefined.
+ * unknown surfaces or non-plain-object specs return undefined.
  */
 export function parsePluginUiContribution(
   item: PluginUiContribution,
 ): KnownPluginUiContribution | undefined {
   if (item === null || typeof item !== 'object') return undefined
-  if (typeof item.pluginId !== 'string' || typeof item.surface !== 'string') return undefined
-  if (!KNOWN_PLUGIN_UI_SURFACE_SET.has(item.surface)) return undefined
-  if (item.spec === null || typeof item.spec !== 'object' || Array.isArray(item.spec)) return undefined
-  if (item.surface === 'commandPalette' || item.surface === 'command') {
-    const rawSpec = item.spec as Record<string, unknown>
-    if (Object.hasOwn(rawSpec, 'shortcut')) {
-      const rawShortcut = rawSpec['shortcut']
-      const trimmed = typeof rawShortcut === 'string' ? rawShortcut.trim() : ''
-      if (trimmed.length >= 1 && trimmed.length <= COMMAND_SHORTCUT_MAX_LENGTH) {
-        if (trimmed !== rawShortcut) {
-          return {
-            pluginId: item.pluginId,
-            surface: item.surface,
-            spec: { ...rawSpec, shortcut: trimmed } as unknown as CommandSpec,
-          }
-        }
-      } else {
-        const { shortcut: _ignored, ...rest } = rawSpec
-        return {
-          pluginId: item.pluginId,
-          surface: item.surface,
-          spec: rest as unknown as CommandSpec,
-        }
-      }
-    }
+  const { pluginId, surface } = item
+  if (typeof pluginId !== 'string' || typeof surface !== 'string') return undefined
+  const validatedSpec = item.spec
+  if (!isPlainObject(validatedSpec)) return undefined
+
+  switch (surface) {
+    case 'sidebar.item':
+      return { pluginId, surface, spec: asSurfaceSpec<SidebarItemSpec>(item.spec) }
+    case 'screen':
+      return { pluginId, surface, spec: asSurfaceSpec<ScreenSpec>(item.spec) }
+    case 'timeline.renderer':
+      return { pluginId, surface, spec: asSurfaceSpec<TimelineRendererSpec>(item.spec) }
+    case 'markdown.codeBlock':
+      return { pluginId, surface, spec: asSurfaceSpec<MarkdownCodeBlockSpec>(item.spec) }
+    case 'tool.view':
+      return { pluginId, surface, spec: asSurfaceSpec<ToolViewSpec>(item.spec) }
+    case 'composer.completer':
+      return { pluginId, surface, spec: asSurfaceSpec<ComposerCompleterSpec>(item.spec) }
+    case 'workbench.panel':
+      return { pluginId, surface, spec: asSurfaceSpec<WorkbenchPanelSpec>(item.spec) }
+    case 'commandPalette':
+    case 'command':
+      return { pluginId, surface, spec: normalizeCommandSpec(item.spec, validatedSpec) }
+    case 'settings.panel':
+      return { pluginId, surface, spec: asSurfaceSpec<SettingsPanelSpec>(item.spec) }
+    case 'plugin.slot':
+      return { pluginId, surface, spec: asSurfaceSpec<PluginSlotContributionSpec>(item.spec) }
+    default:
+      return undefined
   }
-  return item as KnownPluginUiContribution
 }
 
 // ---------------------------------------------------------------------------
@@ -733,37 +753,48 @@ export interface PluginClientContext {
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc /
  *   usePluginDocState / usePluginSessionDoc / usePluginSessionDocState /
  *   useToolActivity / useTimelineToolCalls / useConversations / useConversation /
- *   usePlugins / useScreenParams (screen-local params scope provided by the host ScreenHost) /
- *   usePluginConfig / useHostModels / useHostNodes / useHostProfiles (stable-handle reads of host
- *   read-only catalog slices; isolation contract pinned by @helmx/plugin-client tests — unrelated
- *   host port revisions must not re-render consumers);
+ *   usePlugins / usePluginConfig / useScreenParams (screen-local params scope provided
+ *   by the host ScreenHost) / useHostModels / useHostNodes / useHostProfiles (stable-handle
+ *   reads of host read-only catalog slices; unrelated host port revisions must not re-render
+ *   consumers) / useSharedNowMs / usePluginAction / usePanelShortcut / useComposerCommand /
+ *   useComposerModelPickerMode;
  * - ModelPickerControl: shared model + thinking-level picker (reads the catalog via the useHostModels
  *   host port slice; apply/reset callbacks keep the PI follow-default semantics);
  * - model formatting pure functions: formatModelShortName / resolveEffectiveThinkingLevel / resolveDefaultChainThinkingLevel (kernel-ordered `conversation` / `compaction` level resolution);
- * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
- *   SegmentedControl / HelmxIcon / ViewBoundary / Callout / Dialog family / AlertDialog family
- *   (confirm dialogs) / ConfirmDialog (minimal double-confirm composition);
+ * - form, card & layout primitives: Button / IconButton / Badge / Stack / Input / Textarea /
+ *   Field / HelperText / ErrorText / Card / SelectCard / CardGrid / MonoId;
+ * - accessibility & overlay components: Switch / Select / MultiSelect / Checkbox / Tabs family
+ *   (Tabs / TabsList / TabsTrigger / TabsContent) / SegmentedControl / HelmxIcon / ViewBoundary /
+ *   Callout / Dialog family (Dialog / DialogPortal / DialogOverlay / DialogContent / DialogTitle /
+ *   DialogDescription / DialogClose / DialogTrigger) / Popover family (Popover / PopoverTrigger /
+ *   PopoverContent / PopoverClose) / Tooltip family (Tooltip / TooltipProvider / TooltipRoot /
+ *   TooltipTrigger / TooltipContent) / DropdownMenu family (DropdownMenu / DropdownMenuRoot /
+ *   DropdownMenuTrigger / DropdownMenuPortal / DropdownMenuContent / DropdownMenuItem /
+ *   DropdownMenuSeparator / DropdownMenuLabel / DropdownMenuGroup) / AlertDialog family (AlertDialog /
+ *   AlertDialogPortal / AlertDialogOverlay / AlertDialogContent / AlertDialogTitle /
+ *   AlertDialogDescription / AlertDialogAction / AlertDialogCancel / AlertDialogTrigger) /
+ *   ConfirmDialog (minimal double-confirm composition);
  * - unified light patterns: SearchBox (container-class search input with the single clear button,
  *   always type="text" per the shared search-box spec) / EmptyState (host .empty-state vocabulary
- *   with optional icon/title/hint/compact);
- * - StatusLight: unified status light (visually dot-only; the localized label
- *   becomes the screen-reader accessible name, never visible status text) for
- *   card main status slots, reusing the host .status-dot vocabulary;
+ *   with optional icon/title/hint/compact) / LoadingState;
+ * - StatusLight & tone helpers: StatusLight / STATUS_LIGHT_TONES / normalizeStatusLightTone /
+ *   isKnownStatusLightStatus (visually dot-only; localized label becomes the accessible name,
+ *   reusing the host .status-dot vocabulary);
  * - lightweight layout primitives: Screen (page container + header) / ScreenSection (sectioning) /
  *   ScreenToolbar (header-to-content toolbar row) / DataTable (composable table with unified
  *   loading/empty) / KvGrid (key-value overview) / DetailDrawer (right-side detail drawer shell
  *   over the host .primary-drawer-* vocabulary; the header/meta/body/footer stay composable JSX,
  *   state and data belong to the caller) / DockTray & DockTrayRow (shared composer-dock in-flight
  *   HUD tray over the host .dock-tray* vocabulary);
- * - content display: MarkdownView (standard markdown rendering) / CodeBlockView
- *   (syntax-highlighted code block) / CopyButton (copy button);
- * - formatting pure functions: formatTime (compact MM-DD HH:mm) / formatCompactTimestamp
+ * - content display: MarkdownView / MarkdownText / CodeBlockView (syntax-highlighted code block) /
+ *   ToolCallDetails / CopyButton;
+ * - formatting & timing pure functions: formatTime (compact MM-DD HH:mm) / formatCompactTimestamp
  *   (MM-DD HH:mm:ss log timestamp) / formatDurationMs (millisecond duration summary) /
  *   formatStopwatchMs (1Hz whole-second stopwatch Xs / XmYYs / XhYYm) /
  *   formatOffsetMs (relative offset +MM:SS / +H:MM:SS) /
  *   resolveConversationTiming (honest conversation timing snapshot) /
  *   formatBytes (human-readable bytes, 1024-based);
- * - PluginSlot: inter-plugin sub-slot rendering primitive.
+ * - inter-plugin slot primitives: PluginSlot / PluginScope.
  */
 
 /** Honest three-state lifecycle for reactive plugin doc / sessionDoc state hooks. */

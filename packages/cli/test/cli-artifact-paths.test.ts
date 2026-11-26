@@ -343,4 +343,35 @@ test('conversations file: reads text (--plain / --json / --current), rejects bin
   assert.equal(missingTarget.code, 1)
   assert.equal(parseCliError(missingTarget).code, 'missing_conversation_target')
   assert.equal(requestedUrls.length, hitsBefore)
+
+  // Verify response.body streams are cancelled on binary_content_requires_output (conversations file & artifacts get)
+  let wsBodyCancelled = false
+  let artBodyCancelled = false
+  const cancelTrackingFetch = (async (input: unknown) => {
+    const url = new URL(String(input))
+    if (url.pathname.startsWith('/api/conversations/')) {
+      return new Response(new ReadableStream<Uint8Array>({ cancel() { wsBodyCancelled = true } }), {
+        headers: { 'content-type': 'application/octet-stream' },
+      })
+    }
+    return new Response(new ReadableStream<Uint8Array>({ cancel() { artBodyCancelled = true } }), {
+      headers: { 'content-type': 'application/octet-stream' },
+    })
+  }) as unknown as typeof fetch
+
+  const wsBin = await runCliCaptured(['conversations', 'file', '7', 'bin.dat', '--json'], env, {
+    cwd: callerDir,
+    fetch: cancelTrackingFetch,
+  })
+  assert.equal(wsBin.code, 1)
+  assert.equal(parseCliError(wsBin).code, 'binary_content_requires_output')
+  assert.equal(wsBodyCancelled, true)
+
+  const artBin = await runCliCaptured(['artifacts', 'get', 'art-bin', '--json'], env, {
+    cwd: callerDir,
+    fetch: cancelTrackingFetch,
+  })
+  assert.equal(artBin.code, 1)
+  assert.equal(parseCliError(artBin).code, 'binary_content_requires_output')
+  assert.equal(artBodyCancelled, true)
 })
