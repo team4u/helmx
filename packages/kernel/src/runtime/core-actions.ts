@@ -27,15 +27,11 @@ import {
   REQUEST_SCHEMA_PATTERNS,
   isStrictSemver,
   stripSemverVPrefix,
-  type ConversationListFilter,
   type ConversationOwnership,
   type ConversationScope,
   type ConversationStatus,
   type JsonSchema,
-  type PluginActionContext,
   type PluginActionSpec,
-  type PluginConfigFieldSchema,
-  type Profile,
 } from '@helmx/protocol'
 import {
   parseConversationCompactBody,
@@ -48,15 +44,25 @@ import {
   parseProfileBody,
   ValidationError,
 } from '../http/validate.js'
-import { assertDoctorTargetDir } from '../plugins/doctor-target.js'
 import type { PluginHost } from '../plugins/plugin-host.js'
 import { redactJsonValue } from '../redact.js'
-import { parseSearchTerms } from './fts-search.js'
+import {
+  assertNotSelfConversationMutation,
+  normalizeConversationListFilter,
+  readSanitizedPluginConfig,
+  resolveConversationMutationAccess,
+  resolveCreateConversationOwnership,
+  resolveForkConversationOwnership,
+  resolvePluginDoctorTarget,
+} from './guards/index.js'
+import { normalizeModelRefreshInput } from './model-registry.js'
 import type { KernelRuntime } from './runtime.js'
 
 const MAX_SAFE_INTEGER = 9007199254740991
 
 const SAFE_POSITIVE_INT: JsonSchema = { type: 'integer', minimum: 1, maximum: MAX_SAFE_INTEGER }
+const SAFE_NON_NEGATIVE_INT: JsonSchema = { type: 'integer', minimum: 0, maximum: MAX_SAFE_INTEGER }
+const OWNERSHIP_SCHEMA: JsonSchema = { type: 'string', enum: ['human', 'helmx'] }
 const ID_STRING: JsonSchema = { type: 'string', pattern: REQUEST_SCHEMA_PATTERNS.id.source }
 const NODE_ID_STRING: JsonSchema = { type: 'string', pattern: NODE_ID_PATTERN }
 const FORWARD_ID_STRING: JsonSchema = {
@@ -104,88 +110,6 @@ function extendRequestSchema(
   }
 }
 
-function assertNotSelfMutation(
-  context: PluginActionContext,
-  targetConversationId: number,
-  actionId: string,
-): void {
-  if (context.conversationId !== undefined && context.conversationId === targetConversationId) {
-    throw new HelmxError(
-      'self_mutation_forbidden',
-      `conversation ${targetConversationId} cannot invoke core:conversations.${actionId} on itself`,
-      409,
-      { conversationId: targetConversationId, actionId },
-    )
-  }
-}
-
-/**
- * Watchdog Ownership Red Line (`AGENTS.md` §3):
- * When invoked from a `helmx`-owned background conversation, refuse any mutation targeting a `human`-owned
- * conversation (and, for cascading deletes, any `human`-owned descendant).
- */
-function assertCanMutateConversation(
-  runtime: KernelRuntime,
-  context: PluginActionContext,
-  targetConversationId: number,
-  options?: { checkSubtree?: boolean },
-): void {
-  if (context.conversationId === undefined) return
-  const callerOwnedBy = runtime.ownership.getOwnership(context.conversationId)
-  if (callerOwnedBy !== 'helmx') return
-  const targetOwnedBy = runtime.ownership.getOwnership(targetConversationId)
-  if (targetOwnedBy === 'human') {
-    throw new HelmxError(
-      'ownership_violation',
-      `helmx-owned conversation ${context.conversationId} cannot mutate human-owned conversation ${targetConversationId}`,
-      403,
-      {
-        callerConversationId: context.conversationId,
-        targetConversationId,
-        callerOwnedBy,
-        targetOwnedBy,
-      },
-    )
-  }
-  if (options?.checkSubtree !== true) return
-  const childrenOf = new Map<number, number[]>()
-  for (const conv of runtime.conversations.listConversations()) {
-    if (conv.parentConversationId === undefined) continue
-    const list = childrenOf.get(conv.parentConversationId)
-    if (list !== undefined) list.push(conv.id)
-    else childrenOf.set(conv.parentConversationId, [conv.id])
-  }
-  const queue = [...(childrenOf.get(targetConversationId) ?? [])]
-  const visited = new Set<number>([targetConversationId])
-  while (queue.length > 0) {
-    const childId = queue.shift()!
-    if (visited.has(childId)) continue
-    visited.add(childId)
-    const childOwnedBy = runtime.ownership.getOwnership(childId)
-    if (childOwnedBy === 'human') {
-      throw new HelmxError(
-        'ownership_violation',
-        `helmx-owned conversation ${context.conversationId} cannot delete conversation ${targetConversationId}: derived conversation ${childId} is owned by human`,
-        403,
-        {
-          callerConversationId: context.conversationId,
-          targetConversationId,
-          blockedDescendantId: childId,
-          callerOwnedBy,
-          targetOwnedBy: childOwnedBy,
-        },
-      )
-    }
-    for (const grand of childrenOf.get(childId) ?? []) queue.push(grand)
-  }
-}
-
-function assertProfileModelEnabled(runtime: KernelRuntime, profile: Profile): void {
-  if (profile.model === undefined) return
-  const slash = profile.model.indexOf('/')
-  runtime.models.assertModelEnabled(profile.model.slice(0, slash), profile.model.slice(slash + 1))
-}
-
 function requireHttpUrl(raw: string, field: string): string {
   let parsed: URL
   try {
@@ -217,35 +141,6 @@ function isSafeRelativePath(path: string): boolean {
   if (path.length === 0 || path.length > 512) return false
   if (path.startsWith('/') || path.includes('\\')) return false
   return path.split('/').every((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
-}
-
-function looksLikePathTarget(value: string): boolean {
-  return (
-    value.startsWith('/') ||
-    value.startsWith('\\') ||
-    value.startsWith('.') ||
-    value.startsWith('~') ||
-    /^[A-Za-z]:/.test(value) ||
-    value.includes('/') ||
-    value.includes('\\')
-  )
-}
-
-function redactPluginConfigValues(
-  raw: Record<string, unknown>,
-  schema: Record<string, PluginConfigFieldSchema>,
-  redactText: (text: string) => string,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(raw)) {
-    if (!Object.hasOwn(schema, key)) continue
-    if (schema[key]?.secret === true) {
-      out[key] = typeof value === 'string' && value.length > 0 ? '******' : ''
-    } else {
-      out[key] = redactJsonValue(value, redactText)
-    }
-  }
-  return out
 }
 
 /**
@@ -326,9 +221,6 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
       ownedBy?: ConversationOwnership
       topLevelOnly?: boolean
     }) => {
-      if (input.q.trim().length === 0 || parseSearchTerms(input.q).terms.length === 0) {
-        throw new ValidationError('q cannot be empty')
-      }
       const options = {
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
         ...(input.maxPerConversation !== undefined ? { maxPerConversation: input.maxPerConversation } : {}),
@@ -360,41 +252,7 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
       parentConversationId?: number
       topLevelOnly?: boolean
       all?: boolean
-    }) => {
-      if (input.all === true && input.parentConversationId !== undefined) {
-        throw new ValidationError('all and parentConversationId are mutually exclusive')
-      }
-      if (input.topLevelOnly === true && input.parentConversationId !== undefined) {
-        throw new ValidationError('topLevelOnly and parentConversationId are mutually exclusive')
-      }
-      if (input.topLevelOnly === true && input.all === true) {
-        throw new ValidationError('topLevelOnly and all are mutually exclusive')
-      }
-      const effectiveTopLevelOnly =
-        input.topLevelOnly !== undefined
-          ? input.topLevelOnly
-          : input.parentConversationId === undefined && input.all !== true
-            ? true
-            : undefined
-      const effectiveOwnedBy: ConversationOwnership | undefined =
-        input.ownedBy !== undefined
-          ? input.ownedBy
-          : input.parentConversationId === undefined &&
-              input.all !== true &&
-              input.tag === undefined &&
-              input.topLevelOnly !== false
-            ? 'human'
-            : undefined
-      const filter: ConversationListFilter = {
-        ...(input.profileId !== undefined ? { profileId: input.profileId } : {}),
-        ...(input.status !== undefined ? { status: input.status } : {}),
-        ...(input.tag !== undefined ? { tag: input.tag } : {}),
-        ...(effectiveOwnedBy !== undefined ? { ownedBy: effectiveOwnedBy } : {}),
-        ...(input.parentConversationId !== undefined ? { parentConversationId: input.parentConversationId } : {}),
-        ...(effectiveTopLevelOnly === true ? { topLevelOnly: true } : {}),
-      }
-      return runtime.conversations.listConversations(filter)
-    },
+    }) => runtime.conversations.listConversations(normalizeConversationListFilter(input)),
   })
 
   pluginHost.registerCoreAction(owner, {
@@ -443,13 +301,23 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
 
   pluginHost.registerCoreAction(owner, {
     id: 'create',
-    description: 'Create a new conversation',
+    description:
+      'Create a new conversation (automated helmx sessions default to ownedBy="helmx" and cannot create human-owned conversations)',
     exposeToPrompt: false,
     cli: { hidden: true, command: ['conversations', 'create'] },
-    inputSchema: toJsonSchema(REQUEST_SCHEMAS.conversationInit),
+    inputSchema: extendRequestSchema(REQUEST_SCHEMAS.conversationInit, {
+      ownedBy: OWNERSHIP_SCHEMA,
+    }),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: Record<string, unknown>) =>
-      runtime.conversations.createConversation(parseConversationInit(input)),
+    handler: async (input: Record<string, unknown> & { ownedBy?: ConversationOwnership }, context) => {
+      const { ownedBy, ...rest } = input
+      const effectiveOwnedBy = resolveCreateConversationOwnership(runtime, context, ownedBy)
+      const parsed = parseConversationInit(rest)
+      return runtime.conversations.createConversation({
+        ...parsed,
+        ...(effectiveOwnedBy !== undefined ? { ownedBy: effectiveOwnedBy } : {}),
+      })
+    },
   })
 
   pluginHost.registerCoreAction(owner, {
@@ -459,14 +327,25 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     cli: { hidden: true, command: ['conversations', 'update'] },
     inputSchema: extendRequestSchema(
       REQUEST_SCHEMAS.conversationPatch,
-      { conversationId: SAFE_POSITIVE_INT },
+      {
+        conversationId: SAFE_POSITIVE_INT,
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
+      },
       ['conversationId'],
     ),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: Record<string, unknown> & { conversationId: number }, context) => {
-      assertCanMutateConversation(runtime, context, input.conversationId)
-      const { conversationId, ...rest } = input
-      return runtime.conversations.updateConversation(conversationId, parseConversationPatch(rest))
+    handler: async (
+      input: Record<string, unknown> & { conversationId: number; expectedStateSeq?: number },
+      context,
+    ) => {
+      const { conversationId, expectedStateSeq, ...rest } = input
+      const access = resolveConversationMutationAccess(runtime, context, conversationId, {
+        expectedStateSeq,
+      })
+      const patch = parseConversationPatch(rest)
+      return access.guarded
+        ? runtime.conversations.updateConversationGuarded(conversationId, patch, access.guard)
+        : runtime.conversations.updateConversation(conversationId, patch)
     },
   })
 
@@ -480,6 +359,7 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
       {
         conversationId: SAFE_POSITIVE_INT,
         wait: { type: 'boolean' },
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
       },
       ['conversationId'],
     ),
@@ -489,21 +369,30 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
       required: ['submissionId'],
     },
     handler: async (
-      input: Record<string, unknown> & { conversationId: number; wait?: boolean },
+      input: Record<string, unknown> & {
+        conversationId: number
+        wait?: boolean
+        expectedStateSeq?: number
+      },
       context,
     ) => {
-      assertCanMutateConversation(runtime, context, input.conversationId)
-      const { conversationId, wait, ...rest } = input
+      const { conversationId, wait, expectedStateSeq, ...rest } = input
+      const access = resolveConversationMutationAccess(runtime, context, conversationId, {
+        expectedStateSeq,
+      })
       const parsed = parseInputBody(rest)
       // Honest origin invariant: any session-scoped send is agent-originated and cannot spoof human/trigger.
       const effectiveOrigin = context.conversationId !== undefined ? 'agent' : parsed.origin
-      const { submissionId } = await runtime.conversations.submitInput(conversationId, parsed.text, {
+      const submitOpts = {
         ...(effectiveOrigin !== undefined ? { origin: effectiveOrigin } : {}),
         ...(parsed.whenBusy !== undefined ? { whenBusy: parsed.whenBusy } : {}),
         ...(parsed.meta !== undefined ? { meta: parsed.meta } : {}),
         ...(parsed.attachments !== undefined ? { attachments: parsed.attachments } : {}),
         ...(parsed.replaceFromEntryId !== undefined ? { replaceFromEntryId: parsed.replaceFromEntryId } : {}),
-      })
+      }
+      const { submissionId } = access.guarded
+        ? await runtime.conversations.submitInputGuarded(conversationId, parsed.text, submitOpts, access.guard)
+        : await runtime.conversations.submitInput(conversationId, parsed.text, submitOpts)
       if (wait === true) {
         return runtime.conversations.waitForInput(conversationId, submissionId, context.signal)
       }
@@ -518,15 +407,29 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     cli: { hidden: true, command: ['conversations', 'withdraw'] },
     inputSchema: extendRequestSchema(
       REQUEST_SCHEMAS.conversationWithdraw,
-      { conversationId: SAFE_POSITIVE_INT },
+      {
+        conversationId: SAFE_POSITIVE_INT,
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
+      },
       ['conversationId'],
     ),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: { conversationId: number; submissionId: number }, context) => {
-      assertCanMutateConversation(runtime, context, input.conversationId)
-      return runtime.conversations.withdrawQueuedInput(input.conversationId, {
-        submissionId: input.submissionId,
+    handler: async (
+      input: { conversationId: number; submissionId: number; expectedStateSeq?: number },
+      context,
+    ) => {
+      const access = resolveConversationMutationAccess(runtime, context, input.conversationId, {
+        expectedStateSeq: input.expectedStateSeq,
       })
+      return access.guarded
+        ? runtime.conversations.withdrawQueuedInputGuarded(
+            input.conversationId,
+            { submissionId: input.submissionId },
+            access.guard,
+          )
+        : runtime.conversations.withdrawQueuedInput(input.conversationId, {
+            submissionId: input.submissionId,
+          })
     },
   })
 
@@ -537,15 +440,24 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     cli: { hidden: true, command: ['abort'] },
     inputSchema: {
       type: 'object',
-      properties: { conversationId: SAFE_POSITIVE_INT },
+      properties: {
+        conversationId: SAFE_POSITIVE_INT,
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
+      },
       required: ['conversationId'],
       additionalProperties: false,
     },
     outputSchema: OK_OUTPUT_SCHEMA,
-    handler: async (input: { conversationId: number }, context) => {
-      assertNotSelfMutation(context, input.conversationId, 'abort')
-      assertCanMutateConversation(runtime, context, input.conversationId)
-      await runtime.conversations.abortConversation(input.conversationId)
+    handler: async (input: { conversationId: number; expectedStateSeq?: number }, context) => {
+      assertNotSelfConversationMutation(context, input.conversationId, 'abort')
+      const access = resolveConversationMutationAccess(runtime, context, input.conversationId, {
+        expectedStateSeq: input.expectedStateSeq,
+      })
+      if (access.guarded) {
+        await runtime.conversations.abortConversationGuarded(input.conversationId, access.guard)
+      } else {
+        await runtime.conversations.abortConversation(input.conversationId)
+      }
       return { ok: true }
     },
   })
@@ -557,15 +469,26 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     cli: { hidden: true, command: ['conversations', 'reset'] },
     inputSchema: extendRequestSchema(
       REQUEST_SCHEMAS.conversationReset,
-      { conversationId: SAFE_POSITIVE_INT },
+      {
+        conversationId: SAFE_POSITIVE_INT,
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
+      },
       ['conversationId'],
     ),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: Record<string, unknown> & { conversationId: number }, context) => {
-      assertNotSelfMutation(context, input.conversationId, 'reset')
-      assertCanMutateConversation(runtime, context, input.conversationId)
-      const { conversationId, ...rest } = input
-      return runtime.conversations.resetConversation(conversationId, parseConversationResetBody(rest))
+    handler: async (
+      input: Record<string, unknown> & { conversationId: number; expectedStateSeq?: number },
+      context,
+    ) => {
+      assertNotSelfConversationMutation(context, input.conversationId, 'reset')
+      const { conversationId, expectedStateSeq, ...rest } = input
+      const access = resolveConversationMutationAccess(runtime, context, conversationId, {
+        expectedStateSeq,
+      })
+      const parsed = parseConversationResetBody(rest)
+      return access.guarded
+        ? runtime.conversations.resetConversationGuarded(conversationId, parsed, access.guard)
+        : runtime.conversations.resetConversation(conversationId, parsed)
     },
   })
 
@@ -576,31 +499,54 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     cli: { hidden: true, command: ['conversations', 'compact'] },
     inputSchema: extendRequestSchema(
       REQUEST_SCHEMAS.conversationCompact,
-      { conversationId: SAFE_POSITIVE_INT },
+      {
+        conversationId: SAFE_POSITIVE_INT,
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
+      },
       ['conversationId'],
     ),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: Record<string, unknown> & { conversationId: number }, context) => {
-      assertCanMutateConversation(runtime, context, input.conversationId)
-      const { conversationId, ...rest } = input
-      return runtime.conversations.compactConversation(conversationId, parseConversationCompactBody(rest))
+    handler: async (
+      input: Record<string, unknown> & { conversationId: number; expectedStateSeq?: number },
+      context,
+    ) => {
+      const { conversationId, expectedStateSeq, ...rest } = input
+      const access = resolveConversationMutationAccess(runtime, context, conversationId, {
+        expectedStateSeq,
+      })
+      const parsed = parseConversationCompactBody(rest)
+      return access.guarded
+        ? runtime.conversations.compactConversationGuarded(conversationId, parsed, access.guard)
+        : runtime.conversations.compactConversation(conversationId, parsed)
     },
   })
 
   pluginHost.registerCoreAction(owner, {
     id: 'fork',
-    description: 'Fork a new conversation from a specified entry or latest clean anchor',
+    description:
+      'Fork a new conversation from a specified entry or latest clean anchor (inherits source ownership; automated helmx sessions always produce helmx-owned forks)',
     exposeToPrompt: false,
     cli: { hidden: true, command: ['conversations', 'fork'] },
     inputSchema: extendRequestSchema(
       REQUEST_SCHEMAS.conversationFork,
-      { conversationId: SAFE_POSITIVE_INT },
+      {
+        conversationId: SAFE_POSITIVE_INT,
+        ownedBy: OWNERSHIP_SCHEMA,
+      },
       ['conversationId'],
     ),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: Record<string, unknown> & { conversationId: number }) => {
-      const { conversationId, ...rest } = input
-      return runtime.conversations.forkConversation(conversationId, parseConversationForkBody(rest))
+    handler: async (
+      input: Record<string, unknown> & { conversationId: number; ownedBy?: ConversationOwnership },
+      context,
+    ) => {
+      const { conversationId, ownedBy, ...rest } = input
+      const effectiveOwnedBy = resolveForkConversationOwnership(runtime, context, ownedBy)
+      const parsed = parseConversationForkBody(rest)
+      return runtime.conversations.forkConversation(conversationId, {
+        ...parsed,
+        ...(effectiveOwnedBy !== undefined ? { ownedBy: effectiveOwnedBy } : {}),
+      })
     },
   })
 
@@ -611,15 +557,25 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     cli: { hidden: true, command: ['conversations', 'delete'] },
     inputSchema: {
       type: 'object',
-      properties: { conversationId: SAFE_POSITIVE_INT },
+      properties: {
+        conversationId: SAFE_POSITIVE_INT,
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
+      },
       required: ['conversationId'],
       additionalProperties: false,
     },
     outputSchema: OK_OUTPUT_SCHEMA,
-    handler: async (input: { conversationId: number }, context) => {
-      assertNotSelfMutation(context, input.conversationId, 'delete')
-      assertCanMutateConversation(runtime, context, input.conversationId, { checkSubtree: true })
-      await runtime.conversations.deleteConversation(input.conversationId)
+    handler: async (input: { conversationId: number; expectedStateSeq?: number }, context) => {
+      assertNotSelfConversationMutation(context, input.conversationId, 'delete')
+      const access = resolveConversationMutationAccess(runtime, context, input.conversationId, {
+        checkSubtree: true,
+        expectedStateSeq: input.expectedStateSeq,
+      })
+      if (access.guarded) {
+        await runtime.conversations.deleteConversationGuarded(input.conversationId, access.guard)
+      } else {
+        await runtime.conversations.deleteConversation(input.conversationId)
+      }
       return { ok: true }
     },
   })
@@ -632,10 +588,14 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
 function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRegistrar): void {
   const owner = 'core:profiles'
 
-  const enrichProfile = async (profile: Profile): Promise<Profile> => ({
-    ...profile,
-    system: await runtime.profiles.getSystem(profile.id),
-  })
+  const profileHooks = {
+    assertModelEnabled: (providerId: string, modelId: string) =>
+      runtime.models.assertModelEnabled(providerId, modelId),
+    alignProfileConversations: (profileId: string) =>
+      runtime.conversations.alignProfileConversations(profileId),
+    isProfileInUse: (profileId: string) =>
+      runtime.conversations.listConversations().some((c) => c.profileId === profileId),
+  }
 
   pluginHost.registerCoreAction(owner, {
     id: 'list',
@@ -661,13 +621,7 @@ function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActi
       additionalProperties: false,
     },
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: { id: string }) => {
-      const found = await runtime.profiles.get(input.id)
-      if (found === undefined) {
-        throw new HelmxError('not_found', `profile not found: ${input.id}`, 404)
-      }
-      return enrichProfile(found)
-    },
+    handler: async (input: { id: string }) => runtime.profiles.getEnriched(input.id),
   })
 
   pluginHost.registerCoreAction(owner, {
@@ -677,30 +631,8 @@ function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActi
     cli: { hidden: true, command: ['profiles', 'create'] },
     inputSchema: toJsonSchema(REQUEST_SCHEMAS.profileCreate),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: Record<string, unknown>) => {
-      const profile = parseProfileBody(input, { requireId: true })
-      if (profile.managedByPlugin !== undefined) {
-        throw new HelmxError(
-          'profile_managed_by_plugin',
-          'managedByPlugin is declared by plugin bootstrap and cannot be set via profile create',
-          403,
-          { profileId: profile.id },
-        )
-      }
-      const existing = await runtime.profiles.get(profile.id)
-      if (existing?.managedByPlugin !== undefined) {
-        throw new HelmxError(
-          'profile_managed_by_plugin',
-          `cannot overwrite plugin-managed profile ${profile.id}`,
-          403,
-          { profileId: profile.id, managedByPlugin: existing.managedByPlugin },
-        )
-      }
-      assertProfileModelEnabled(runtime, profile)
-      const saved = await runtime.profiles.save(profile)
-      await runtime.conversations.alignProfileConversations(saved.id)
-      return enrichProfile(saved)
-    },
+    handler: async (input: Record<string, unknown>) =>
+      runtime.profiles.createProfile(parseProfileBody(input, { requireId: true }), profileHooks),
   })
 
   pluginHost.registerCoreAction(owner, {
@@ -711,54 +643,13 @@ function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActi
     cli: { hidden: true, command: ['profiles', 'update'] },
     inputSchema: extendRequestSchema(REQUEST_SCHEMAS.profileUpdate, { id: ID_STRING }, ['id']),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: Record<string, unknown> & { id: string }) => {
-      const existing = await runtime.profiles.get(input.id)
-      if (existing === undefined) {
-        throw new HelmxError('not_found', `profile not found: ${input.id}`, 404)
-      }
-      const patch = parseProfileBody(input, { requireId: false })
-      if (
-        Object.hasOwn(input, 'managedByPlugin') &&
-        input.managedByPlugin !== existing.managedByPlugin
-      ) {
-        throw new HelmxError(
-          'profile_managed_by_plugin',
-          `profile ${input.id} hosting metadata is declared by a plugin and cannot be set, modified, or removed`,
-          403,
-          { profileId: input.id, managedByPlugin: existing.managedByPlugin },
-        )
-      }
-      const updatableKeys = Object.keys(input).filter((k) => k !== 'id' && k !== 'managedByPlugin')
-      if (updatableKeys.length === 0) {
-        throw new ValidationError('profile update requires at least one updatable field')
-      }
-      const merged: Profile = { ...existing, id: input.id }
-      if (Object.hasOwn(input, 'name')) merged.name = patch.name
-      if (Object.hasOwn(input, 'model')) {
-        if (input.model === '') delete merged.model
-        else merged.model = patch.model
-      }
-      if (Object.hasOwn(input, 'thinkingLevel')) {
-        if (input.thinkingLevel === '') delete merged.thinkingLevel
-        else merged.thinkingLevel = patch.thinkingLevel
-      }
-      if (Object.hasOwn(input, 'nodeId')) merged.nodeId = patch.nodeId
-      if (Object.hasOwn(input, 'cwd')) merged.cwd = patch.cwd
-      if (Object.hasOwn(input, 'tags')) merged.tags = patch.tags
-      if (Object.hasOwn(input, 'skills')) merged.skills = patch.skills
-      if (Object.hasOwn(input, 'starters')) merged.starters = patch.starters
-      if (Object.hasOwn(input, 'restrictToCwd')) merged.restrictToCwd = patch.restrictToCwd
-      if (Object.hasOwn(input, 'system')) merged.system = patch.system
-      if (existing.managedByPlugin !== undefined) {
-        merged.managedByPlugin = existing.managedByPlugin
-      } else {
-        delete merged.managedByPlugin
-      }
-      assertProfileModelEnabled(runtime, merged)
-      const saved = await runtime.profiles.save(merged)
-      await runtime.conversations.alignProfileConversations(saved.id)
-      return enrichProfile(saved)
-    },
+    handler: async (input: Record<string, unknown> & { id: string }) =>
+      runtime.profiles.patchProfile(
+        input.id,
+        input,
+        parseProfileBody(input, { requireId: false }),
+        profileHooks,
+      ),
   })
 
   pluginHost.registerCoreAction(owner, {
@@ -774,27 +665,7 @@ function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActi
     },
     outputSchema: OK_OUTPUT_SCHEMA,
     handler: async (input: { id: string }) => {
-      const inUse = runtime.conversations.listConversations().some((c) => c.profileId === input.id)
-      if (inUse) {
-        throw new HelmxError(
-          'profile_in_use',
-          `profile ${input.id} is still bound by conversations; unbind before deleting`,
-          409,
-        )
-      }
-      const target = await runtime.profiles.get(input.id)
-      if (target?.managedByPlugin !== undefined) {
-        throw new HelmxError(
-          'profile_managed_by_plugin',
-          `profile ${input.id} is managed by plugin ${target.managedByPlugin} and cannot be deleted`,
-          403,
-          { profileId: input.id, managedByPlugin: target.managedByPlugin },
-        )
-      }
-      await runtime.profiles.delete(input.id, {
-        isProfileInUse: async (pid) =>
-          runtime.conversations.listConversations().some((c) => c.profileId === pid),
-      })
+      await runtime.profiles.deleteProfile(input.id, profileHooks)
       return { ok: true }
     },
   })
@@ -837,17 +708,8 @@ function registerModelCoreActions(runtime: KernelRuntime, pluginHost: CoreAction
     cli: { hidden: true, command: ['models', 'refresh'] },
     inputSchema: toJsonSchema(REQUEST_SCHEMAS.modelsRefresh),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: { provider?: string; providers?: string[]; force?: boolean }) => {
-      let providers: string[] | undefined
-      if (input.provider !== undefined) providers = [input.provider]
-      if (input.providers !== undefined) {
-        providers = providers !== undefined ? [...providers, ...input.providers] : [...input.providers]
-      }
-      return runtime.models.refreshModels({
-        ...(providers !== undefined ? { providers } : {}),
-        ...(input.force !== undefined ? { force: input.force } : {}),
-      })
-    },
+    handler: async (input: { provider?: string; providers?: string[]; force?: boolean }) =>
+      runtime.models.refreshModels(normalizeModelRefreshInput(input)),
   })
 
   pluginHost.registerCoreAction(owner, {
@@ -866,34 +728,8 @@ function registerModelCoreActions(runtime: KernelRuntime, pluginHost: CoreAction
       modelThinkingLevel?: string
       modelThinkingLevels?: Record<string, string>
     }) => {
-      const hasModelThinking = 'modelThinking' in input || 'modelThinkingLevel' in input
-      if (hasModelThinking && !('modelThinking' in input && 'modelThinkingLevel' in input)) {
-        throw new ValidationError('models default: modelThinking and modelThinkingLevel must be set together')
-      }
-      const hasModelThinkingLevels = 'modelThinkingLevels' in input
-      if (hasModelThinkingLevels && hasModelThinking) {
-        throw new ValidationError('models default: modelThinkingLevels cannot be combined with a modelThinking pair')
-      }
-      const modelThinkingUpdate = hasModelThinking
-        ? { model: input.modelThinking!, level: input.modelThinkingLevel! }
-        : undefined
-      await runtime.models.setDefaultModel(
-        input.model,
-        input.thinkingLevel,
-        input.compactionModel,
-        input.compactionThinkingLevel,
-        input.modelThinkingLevels,
-        modelThinkingUpdate,
-      )
-      const catalog = await runtime.models.listModels()
-      return {
-        ok: true,
-        defaultModel: catalog.defaultModel ?? '',
-        defaultThinkingLevel: catalog.defaultThinkingLevel ?? '',
-        modelThinkingLevels: catalog.modelThinkingLevels ?? {},
-        defaultCompactionModel: catalog.defaultCompactionModel ?? '',
-        defaultCompactionThinkingLevel: catalog.defaultCompactionThinkingLevel ?? '',
-      }
+      const defaults = await runtime.models.updateDefaults(input)
+      return { ok: true, ...defaults }
     },
   })
 
@@ -1142,13 +978,8 @@ function registerPluginCoreActions(
       },
       required: ['values', 'schema'],
     },
-    handler: (input: { id: string }) => {
-      const schema = pluginHost.getConfigSchema(input.id)
-      const raw = pluginHost.getConfig(input.id)
-      const sources = pluginHost.getConfigSources(input.id)
-      const values = redactPluginConfigValues(raw, schema, (text) => runtime.stash.redact(text))
-      return { values, schema, sources }
-    },
+    handler: (input: { id: string }) =>
+      readSanitizedPluginConfig(pluginHost, input.id, (text) => runtime.stash.redact(text)),
   })
 
   registrar.registerCoreAction(owner, {
@@ -1161,31 +992,8 @@ function registerPluginCoreActions(
       target: NON_WHITESPACE_STRING,
     }),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: { target?: string; path?: string; id?: string }) => {
-      const providedCount =
-        (input.target !== undefined ? 1 : 0) +
-        (input.path !== undefined ? 1 : 0) +
-        (input.id !== undefined ? 1 : 0)
-      if (providedCount === 0) {
-        throw new ValidationError('must provide one of target, path (absolute directory), or id (registered plugin)')
-      }
-      if (providedCount > 1) {
-        throw new ValidationError('target, path, and id are mutually exclusive; provide only one')
-      }
-      if (input.path !== undefined) {
-        assertDoctorTargetDir(input.path, 'path')
-        return pluginHost.doctorExternalPlugin({ dir: input.path })
-      }
-      if (input.id !== undefined) {
-        return pluginHost.doctorExternalPlugin({ id: input.id })
-      }
-      const target = input.target!
-      if (looksLikePathTarget(target)) {
-        assertDoctorTargetDir(target, 'target')
-        return pluginHost.doctorExternalPlugin({ dir: target })
-      }
-      return pluginHost.doctorExternalPlugin({ id: target })
-    },
+    handler: async (input: { target?: string; path?: string; id?: string }) =>
+      pluginHost.doctorExternalPlugin(resolvePluginDoctorTarget(input, { allowTarget: true })),
   })
 
   registrar.registerCoreAction(owner, {

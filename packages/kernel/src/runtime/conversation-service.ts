@@ -60,6 +60,7 @@ import { ConversationDetailService } from './conversation-detail.js'
 import { ConversationInputPipeline } from './conversation-input.js'
 import { ConversationProfileService } from './conversation-profile.js'
 import { ConversationRewind, type RewindInterval } from './conversation-rewind.js'
+import { normalizeConversationSearchInput } from './guards/conversation-guards.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric, type TrustedNodePlatformSource } from './target-cwd.js'
 
 interface ConversationServiceOptions {
@@ -659,13 +660,18 @@ export class ConversationService {
     )
     const id = conv.id as number
     const now = Date.now()
+    const effectiveOwnedBy: ConversationOwnership =
+      init.ownedBy ??
+      (parentMeta !== undefined && !this.store.isDeleted(parentMeta.id) && parentMeta.ownedBy === 'helmx'
+        ? 'helmx'
+        : 'human')
     this.store.upsertConv({
       id,
       title: init.title ?? '',
       profileId,
       tags: init.tags ?? [],
       parentConversationId: init.parentConversationId,
-      ownedBy: init.ownedBy ?? 'human',
+      ownedBy: effectiveOwnedBy,
       nodeId,
       cwd: effectiveCwd,
       model: effectiveModel ?? '',
@@ -693,7 +699,31 @@ export class ConversationService {
     return this.profileAlignment.withConversationChange(id, () => this.updateConversationConfiguration(id, patch))
   }
 
-  private async updateConversationConfiguration(id: number, patch: ConversationPatch): Promise<ConversationSummary> {
+  /**
+   * Automated guarded configuration update: runs inside the per-conversation serial mutation gate
+   * (ordered outside `withConversationChange`), checks ownership + optional CAS watermark up front
+   * and again synchronously with zero await gap right before irreversible `conversation.configure`.
+   */
+  async updateConversationGuarded(
+    id: number,
+    patch: ConversationPatch,
+    guard: GuardedMutationExpectation = {},
+  ): Promise<ConversationSummary> {
+    this.assertWritable()
+    this.assertGuardShape(guard)
+    return this.withMutationGate(id, () =>
+      this.profileAlignment.withConversationChange(id, () =>
+        this.updateConversationConfiguration(id, patch, guard),
+      ),
+    )
+  }
+
+  private async updateConversationConfiguration(
+    id: number,
+    patch: ConversationPatch,
+    guard?: GuardedMutationExpectation,
+  ): Promise<ConversationSummary> {
+    if (guard !== undefined) this.assertMutationGuard(id, guard)
     const meta = requireConv(this.store, id)
     if (patch.profileId !== undefined) {
       const found = await this.readProfile(patch.profileId)
@@ -771,6 +801,8 @@ export class ConversationService {
     }
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+    // Commit-point zero-await re-check before irreversible SDK configure and mirror persistence.
+    if (guard !== undefined) this.assertMutationGuard(id, guard)
     await conversation.configure(configureChange, BACKGROUND_CONTEXT)
     const latest = requireConv(this.store, id)
     const updated: typeof meta = {
@@ -797,8 +829,8 @@ export class ConversationService {
     if (patch.model !== undefined || patch.profileId !== undefined || patch.thinkingLevel !== undefined) {
       this.tracker.scheduleContextUsageRefresh(id)
     }
-    const summary = this.tracker.summaryOf(id)
-    this.events.publish('conversation.upsert', this.withOwnership(summary))
+    const summary = this.withOwnership(this.tracker.summaryOf(id))
+    this.events.publish('conversation.upsert', summary)
     return summary
   }
 
@@ -865,17 +897,39 @@ export class ConversationService {
         }
       }
       for (const target of subtree) {
-        // Re-check ownership synchronously right before each node deletion in case a descendant changed while awaiting child teardown.
-        const ownedBy = this.o.ownershipOf(target)
-        if (ownedBy === 'human' || (guard.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
-          throw new HelmxError(
-            'ownership_conflict',
-            `conversation ${target} is currently owned by ${ownedBy}; refusing automated deletion (human-ownership invariant)`,
-            409,
-            { conversationId: target, currentOwnership: ownedBy },
-          )
+        const assertTargetOwned = (): void => {
+          const ownedBy = this.o.ownershipOf(target)
+          if (ownedBy === 'human' || (guard.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
+            throw new HelmxError(
+              'ownership_conflict',
+              `conversation ${target} is currently owned by ${ownedBy}; refusing automated deletion (human-ownership invariant)`,
+              409,
+              {
+                conversationId: target,
+                currentOwnership: ownedBy,
+                ...(guard.expectedOwnership !== undefined ? { expectedOwnership: guard.expectedOwnership } : {}),
+              },
+            )
+          }
+          if (target === id && guard.expectedStateSeq !== undefined) {
+            const meta = this.store.getConv(id)
+            if (meta === undefined || this.store.isDeleted(id)) {
+              throw new HelmxError('not_found', `conversation not found: ${id}`, 404, { conversationId: id })
+            }
+            if (meta.stateChangeSeq !== guard.expectedStateSeq) {
+              throw new HelmxError(
+                'state_seq_conflict',
+                `conversation ${id} authoritative watermark ${meta.stateChangeSeq} does not match expected ${guard.expectedStateSeq} (stale probe snapshot; must not act on newer turn)`,
+                409,
+                { conversationId: id, currentSeq: meta.stateChangeSeq, expectedSeq: guard.expectedStateSeq },
+              )
+            }
+          }
         }
-        await this.deleteOneConversation(target)
+        // Re-check ownership synchronously right before each node deletion AND again inside
+        // `deleteOneConversation` with zero await gap right before irreversible abort/delete calls.
+        assertTargetOwned()
+        await this.deleteOneConversation(target, assertTargetOwned)
       }
     })
   }
@@ -961,14 +1015,19 @@ export class ConversationService {
   }
 
   /** Single-node deletion pipeline (the pre-cascade deleteConversation body, unchanged semantics). */
-  private async deleteOneConversation(id: number): Promise<void> {
+  private async deleteOneConversation(id: number, assertGuarded?: () => void): Promise<void> {
     requireConv(this.store, id)
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    // Zero-await guard re-check right before irreversible SDK abort and teardown side effects.
+    assertGuarded?.()
     if (conversation) await conversation.abort(BACKGROUND_CONTEXT)
+    assertGuarded?.()
     // Cascade-cancel asks and wait for completion; IO errors must propagate (blocking further deletion side effects)
     // rather than being swallowed into fake success.
     await this.o.cancelAsksByConversation(id)
+    assertGuarded?.()
     await this.artifactsSvc.deleteConversation(id)
+    assertGuarded?.()
     this.tracker.deleteConversation(id)
     this.store.deleteConv(id)
     this.o.evictConversationBase(id)
@@ -1105,8 +1164,6 @@ export class ConversationService {
     if (prepared.kind === 'handled') return { submissionId: prepared.submissionId }
 
     this.contextOps.assertOpen()
-    // Re-read metadata after prepareInput so mutations performed by onInput hooks (e.g. tags) are preserved.
-    this.inputPipeline.applyFirstInputTitle(requireConv(this.store, id), prepared.effectiveText)
 
     const content =
       prepared.resolvedAttachments !== undefined
@@ -1114,6 +1171,8 @@ export class ConversationService {
         : prepared.effectiveText
 
     if (replaceFromEntryId !== undefined) {
+      // Re-read metadata after prepareInput so mutations performed by onInput hooks (e.g. tags) are preserved.
+      this.inputPipeline.applyFirstInputTitle(requireConv(this.store, id), prepared.effectiveText)
       const finalInput = { ...prepared.finalInput, whenBusy: 'reject' as const }
       const targetId = replaceFromEntryId
       return this.rewind.withHistoryEdit(id, async () => {
@@ -1139,8 +1198,19 @@ export class ConversationService {
     if (opts?.mutationGuard !== undefined) {
       // Guarded submission serial gate: wraps only the commit-point re-check + SDK submit critical section;
       // input hooks execute outside the gate so re-entrant guarded mutations inside hooks will not deadlock.
-      return this.withMutationGate(id, () => this.inputPipeline.submitFreshInput(conversation, id, freshSubmission))
+      // Title derivation runs strictly AFTER guarded commit succeeds so rejected guards leave zero side effects
+      // and never advance `stateChangeSeq` before the commit-point CAS check.
+      return this.withMutationGate(id, async () => {
+        const result = await this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
+        const latestMeta = this.store.getConv(id)
+        if (latestMeta !== undefined && !this.store.isDeleted(id)) {
+          this.inputPipeline.applyFirstInputTitle(latestMeta, prepared.effectiveText)
+        }
+        return result
+      })
     }
+    // Re-read metadata after prepareInput so mutations performed by onInput hooks (e.g. tags) are preserved.
+    this.inputPipeline.applyFirstInputTitle(requireConv(this.store, id), prepared.effectiveText)
     return this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
   }
 
@@ -1247,8 +1317,30 @@ export class ConversationService {
 
   async withdrawQueuedInput(id: number, opts: { submissionId: number }): Promise<ConversationWithdrawResponse> {
     this.assertWritable()
+    return this.withdrawQueuedInputInternal(id, opts)
+  }
+
+  /**
+   * Automated guarded withdrawal: runs inside the per-conversation serial mutation gate, checks
+   * ownership + optional CAS watermark up front and again synchronously with zero await gap right
+   * before irreversible `harness.abortSubmission`.
+   */
+  async withdrawQueuedInputGuarded(
+    id: number,
+    opts: { submissionId: number },
+    guard: GuardedMutationExpectation = {},
+  ): Promise<ConversationWithdrawResponse> {
+    this.assertWritable()
+    this.assertGuardShape(guard)
+    return this.withMutationGate(id, () => this.withdrawQueuedInputInternal(id, opts, guard))
+  }
+
+  private async withdrawQueuedInputInternal(
+    id: number,
+    opts: { submissionId: number },
+    guard?: GuardedMutationExpectation,
+  ): Promise<ConversationWithdrawResponse> {
     if (this.o.isClosed()) throw new HelmxError('runtime_closed', 'kernel is closing; rejecting withdrawal', 503)
-    requireConv(this.store, id)
     const raw = opts.submissionId
     if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
       throw new HelmxError('validation_error', `submissionId must be a positive safe integer (received ${String(raw)})`, 400, {
@@ -1256,6 +1348,8 @@ export class ConversationService {
         submissionId: raw,
       })
     }
+    if (guard !== undefined) this.assertMutationGuard(id, guard)
+    requireConv(this.store, id)
     const sub = await this.harness.submission(raw as never, BACKGROUND_CONTEXT)
     const rec = sub ? ((await sub.status(BACKGROUND_CONTEXT)) as { conversationId?: unknown; type?: string; entry?: number; requestId?: string }) : undefined
     if (
@@ -1268,6 +1362,8 @@ export class ConversationService {
         submissionId: raw,
       })
     }
+    // Commit-point zero-await re-check before irreversible SDK submission withdrawal.
+    if (guard !== undefined) this.assertMutationGuard(id, guard)
     const outcome = await this.harness.abortSubmission(raw as never, BACKGROUND_CONTEXT, id as never)
     if (outcome === 'not_found') {
       throw new HelmxError('not_found', `submission ${raw} does not exist in conversation ${id}`, 404, {
@@ -1344,7 +1440,12 @@ export class ConversationService {
 
   async forkConversation(
     id: number,
-    opts?: { entryId?: number; title?: string; parentConversationId?: number },
+    opts?: {
+      entryId?: number
+      title?: string
+      parentConversationId?: number
+      ownedBy?: ConversationOwnership
+    },
   ): Promise<ConversationSummary> {
     this.assertWritable()
     return this.contextOps.forkConversation(id, opts)
@@ -1366,10 +1467,8 @@ export class ConversationService {
   }
 
   async search(query: string, options?: ConversationSearchOptions): Promise<SearchHit[]> {
-    if (typeof query !== 'string') {
-      throw new HelmxError('validation_error', 'search query must be a string', 400)
-    }
-    return this.store.search(query, options)
+    const normalized = normalizeConversationSearchInput(query, options)
+    return this.store.search(normalized.query, normalized.options)
   }
 
   /** Read a file strictly inside a conversation's bound workspace (text files are redacted via SecretStash). */
