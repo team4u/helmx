@@ -117,6 +117,10 @@ button, a, input, select, textarea { touch-action: manipulation; }
     line-height: 1.25;
     margin-bottom: 0;
   }
+  .toast-overlay {
+    top: max(8px, env(safe-area-inset-top));
+    max-height: calc(100dvh - 16px);
+  }
 }
 @media (max-width: 860px) {
   /* 窄屏只隐藏「开启分屏」入口；分屏已开启时保留激活态按钮与关闭按钮可点 */
@@ -372,6 +376,14 @@ button, a, input, select, textarea { touch-action: manipulation; }
   }
   .palette-header { padding: 8px 10px; gap: 6px; }
   .palette-modal .nav-item { min-height: 40px; }
+  .toast-overlay {
+    top: max(54px, calc(env(safe-area-inset-top) + 50px));
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    width: auto;
+    max-height: calc(100dvh - 66px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    align-items: stretch;
+  }
 }
 
 /* 命令面板关闭按钮响应式 */

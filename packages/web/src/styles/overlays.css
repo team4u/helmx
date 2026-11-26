@@ -5,20 +5,16 @@
 
 .toast-overlay {
   position: fixed;
-  /* 12px 内边距给盒阴影留渲染空间（overflow 裁切不剪影），负补偿保持视觉上 16px 贴角 */
-  right: 4px;
-  bottom: 4px;
-  padding: 12px;
+  top: 56px;
+  right: 16px;
   z-index: 9000;
-  pointer-events: none;
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 8px;
-  max-width: min(384px, 100vw);
-  /* 多条叠加时保最新在屏内、旧的从顶部裁掉；单条超高由 toast-body 行数钳制兜底 */
-  max-height: calc(100dvh - 8px);
-  justify-content: flex-end;
-  overflow: hidden;
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100dvh - 72px);
+  pointer-events: none;
 }
 
 @keyframes helmxPopoverEnter {
@@ -35,42 +31,94 @@
 @keyframes helmxToastEnter {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.98);
+    transform: translate3d(12px, -4px, 0) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 
 .toast-item {
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  width: 100%;
   pointer-events: auto;
+  display: flex;
   align-items: flex-start;
-  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: var(--radius-md);
+  background: var(--pop-bg);
+  backdrop-filter: blur(12px) saturate(1.15);
+  -webkit-backdrop-filter: blur(12px) saturate(1.15);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-toast);
+  color: var(--fg);
   animation: helmxToastEnter var(--dur-normal) var(--ease-out);
 }
 
+.toast-item[data-compact='true'] {
+  align-items: center;
+  padding: 9px 12px;
+}
+
+.toast-item[data-level='warning'] {
+  border-color: var(--warn-border);
+}
+
+.toast-item[data-level='error'] {
+  border-color: var(--err-border);
+}
+
+.toast-icon-badge {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.toast-item[data-level='warning'] .toast-icon-badge {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.toast-item[data-level='error'] .toast-icon-badge {
+  background: var(--err-bg);
+  color: var(--err);
+}
+
 .toast-content {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  gap: 3px;
+  padding-top: 1px;
+}
+
+.toast-item[data-compact='true'] .toast-content {
+  padding-top: 0;
 }
 
 .toast-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  font-size: 13px;
   font-weight: 600;
-  padding-right: 4px;
+  line-height: 1.4;
+  color: var(--fg);
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .toast-body {
   font-size: 12px;
+  line-height: 1.5;
   color: var(--fg-secondary);
   word-break: break-word;
+  overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
@@ -78,15 +126,60 @@
   overflow: hidden;
 }
 
-.toast-action-btn {
-  width: fit-content;
-  padding: 0 4px;
-  margin-top: 2px;
+.toast-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
 }
 
-.toast-close-btn {
+.btn.toast-action-btn {
+  height: 24px;
+  padding: 0 8px;
+  gap: 4px;
+  width: fit-content;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--bg-subtle);
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+.btn.toast-action-btn > span {
+  display: contents;
+}
+
+.btn.toast-action-btn:hover:not(:disabled),
+.btn.toast-action-btn:focus-visible:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.toast-trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
-  margin: -2px -4px 0 0;
+  margin: -1px -3px 0 0;
+}
+
+.toast-item[data-compact='true'] .toast-trailing {
+  margin: 0 -3px 0 0;
+}
+
+.btn.toast-close-btn {
+  color: var(--fg-muted);
+  opacity: 0.72;
+  transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.toast-item:hover .btn.toast-close-btn,
+.btn.toast-close-btn:hover:not(:disabled),
+.btn.toast-close-btn:focus-visible:not(:disabled) {
+  opacity: 1;
+  color: var(--fg);
 }
 
 /* ==========================================================================

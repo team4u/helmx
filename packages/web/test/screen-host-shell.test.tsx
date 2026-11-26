@@ -369,7 +369,7 @@ describe("screen-host-shell", () => {
     assert.ok(authErr, 'AuthGate 错误提示应使用 .callout.callout-error')
     assert.equal(document.querySelectorAll('select').length, 0)
 
-    // 2) ToastOverlay 区分 error/warning 统一原语类
+    // 2) ToastOverlay Quiet Surface 极简卡片、语义级别、倒序堆叠与 4 条栈上限
     const toastStore = makeTestStore({
       notices: [
         { id: 'n-err', type: 'notification', level: 'error', title: '连接失败', createdAt: 1000 },
@@ -381,10 +381,28 @@ describe("screen-host-shell", () => {
         <ToastOverlay />
       </HostStoreProviders>,
     )
-    assert.ok(host?.querySelector('[data-notice-id="n-err"].callout-error[role="alert"]'))
-    assert.ok(host?.querySelector('[data-notice-id="n-warn"].callout-warn[role="status"]'))
+    const toastRegion = host?.querySelector<HTMLElement>('.toast-overlay[role="region"]')
+    assert.ok(toastRegion !== null && toastRegion !== undefined, 'ToastOverlay 应使用 role="region" 容器')
+    assert.ok((toastRegion.getAttribute('aria-label') ?? '').trim().length > 0, 'Toast region 应具有非空 aria-label')
+
+    const errToast = host?.querySelector<HTMLElement>('[data-notice-id="n-err"].toast-item[data-level="error"][role="alert"]')
+    const warnToast = host?.querySelector<HTMLElement>('[data-notice-id="n-warn"].toast-item[data-level="warning"][role="status"]')
+    assert.ok(errToast !== null && errToast !== undefined)
+    assert.ok(warnToast !== null && warnToast !== undefined)
+    assert.equal(errToast.getAttribute('data-compact'), 'true')
+    assert.equal(warnToast.getAttribute('data-compact'), 'true')
+    for (const toastEl of [errToast, warnToast]) {
+      assert.equal(toastEl.classList.contains('callout'), false)
+      assert.equal(toastEl.classList.contains('callout-error'), false)
+      assert.equal(toastEl.classList.contains('callout-warn'), false)
+    }
+    assert.deepEqual(
+      [...(host?.querySelectorAll('.toast-item') ?? [])].map((el) => el.getAttribute('data-notice-id')),
+      ['n-warn', 'n-err'],
+    )
 
     // 2b) 标准「查看」按钮：view 深链优先、conversationId 回退、非法 view 不渲染按钮；
+    //     有 body 时位于 .toast-content，无 body 时紧凑行布局位于 .toast-trailing；
     //     关闭按钮常驻（右上角定位由样式承担，行为面断言其可点击关单）
     const openedTargets: unknown[] = []
     const dismissedIds: string[] = []
@@ -418,6 +436,17 @@ describe("screen-host-shell", () => {
         <ToastOverlay />
       </HostStoreProviders>,
     )
+    const viewToast = host?.querySelector<HTMLElement>('[data-notice-id="n-view"]')
+    const convToast = host?.querySelector<HTMLElement>('[data-notice-id="n-conv"]')
+    assert.ok(viewToast !== null && viewToast !== undefined)
+    assert.ok(convToast !== null && convToast !== undefined)
+    assert.equal(viewToast.getAttribute('data-compact'), null)
+    assert.ok(viewToast.querySelector('.toast-content .toast-action-btn') !== null, '有 body 的通知动作按钮应位于 .toast-content 内')
+    assert.ok(viewToast.querySelector('.toast-trailing .toast-action-btn') === null)
+    assert.equal(convToast.getAttribute('data-compact'), 'true')
+    assert.ok(convToast.querySelector('.toast-trailing .toast-action-btn') !== null, '无 body 的紧凑通知动作按钮应位于 .toast-trailing 内')
+    assert.ok(convToast.querySelector('.toast-content .toast-action-btn') === null)
+
     const viewBtn = host?.querySelector<HTMLButtonElement>('[data-notice-id="n-view"] .toast-action-btn')
     assert.ok(viewBtn, 'view 通知应渲染标准查看按钮')
     assert.equal(viewBtn.textContent, 'View')
@@ -447,6 +476,26 @@ describe("screen-host-shell", () => {
       closeBtn.click()
     })
     assert.equal(dismissedIds[2], 'n-bad', '关闭按钮应精确关单')
+
+    // 2c) 5 条通知栈上限：最多渲染最新 4 条且倒序排列
+    const stackStore = makeTestStore({
+      notices: [1, 2, 3, 4, 5].map((n) => ({
+        id: `n-${n}`,
+        type: 'notification',
+        level: 'info' as const,
+        title: `通知 ${n}`,
+        createdAt: 4000 + n,
+      })),
+    })
+    mount(
+      <HostStoreProviders value={stackStore}>
+        <ToastOverlay />
+      </HostStoreProviders>,
+    )
+    assert.deepEqual(
+      [...(host?.querySelectorAll('.toast-item') ?? [])].map((el) => el.getAttribute('data-notice-id')),
+      ['n-5', 'n-4', 'n-3', 'n-2'],
+    )
 
     // 3) Sidebar 折叠 / 展开按钮联动 toggleSidebarCollapsed
     let toggleCount = 0

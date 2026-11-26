@@ -28,27 +28,48 @@ function resolveNoticeTarget(
   return null
 }
 
+const MAX_VISIBLE_TOASTS = 4
+
 function ToastOverlayList({ notices }: { notices: ReadonlyArray<ToastNotice> }) {
   const conversations = useConversations()
   const { openTarget, dismissNotice, pauseNoticeTimer, resumeNoticeTimer } = useStoreActions()
   const { t } = useWebLocale()
+  const visibleNotices = (
+    notices.length > MAX_VISIBLE_TOASTS ? notices.slice(-MAX_VISIBLE_TOASTS) : notices
+  )
+    .slice()
+    .reverse()
 
   return (
-    <div className="toast-overlay" data-helmx-toast-overlay="true">
-      {notices.map((n) => {
-        const toneClass =
-          n.level === 'error'
-            ? 'callout-error'
-            : n.level === 'warning'
-              ? 'callout-warn'
-              : ''
+    <div className="toast-overlay" data-helmx-toast-overlay="true" role="region" aria-label={t('shell.toast.region')}>
+      {visibleNotices.map((n) => {
+        const hasBody = Boolean(n.body?.trim())
+        const isCompact = !hasBody
+        const iconName = n.level === 'error' ? 'alert-circle' : n.level === 'warning' ? 'alert-triangle' : 'info'
         const actionTarget = resolveNoticeTarget(n, conversations)
+        const actionButton = actionTarget ? (
+          <Button
+            variant="secondary"
+            size="xs"
+            className="toast-action-btn"
+            onClick={() => {
+              openTarget(actionTarget)
+              dismissNotice(n.id)
+            }}
+          >
+            <span>{t('shell.toast.view')}</span>
+            <HelmxIcon name="arrow-right" size={11} />
+          </Button>
+        ) : null
+
         return (
           <div
             key={n.id}
             data-notice-id={n.id}
+            data-level={n.level}
+            data-compact={isCompact ? 'true' : undefined}
             role={n.level === 'error' ? 'alert' : 'status'}
-            className={`callout toast-item ${toneClass}`.trim()}
+            className="toast-item"
             onMouseEnter={() => pauseNoticeTimer(n.id)}
             onMouseLeave={() => resumeNoticeTimer(n.id)}
             onFocus={() => pauseNoticeTimer(n.id)}
@@ -58,47 +79,25 @@ function ToastOverlayList({ notices }: { notices: ReadonlyArray<ToastNotice> }) 
               }
             }}
           >
+            <span className="toast-icon-badge" aria-hidden="true">
+              <HelmxIcon name={iconName} size={14} />
+            </span>
             <div className="toast-content">
-              <div className="toast-title">
-                <HelmxIcon
-                  name={
-                    n.level === 'error'
-                      ? 'alert-circle'
-                      : n.level === 'warning'
-                        ? 'alert-triangle'
-                        : 'activity'
-                  }
-                  size={13}
-                />
-                <span>{n.title}</span>
-              </div>
-              {n.body && (
-                <div className="toast-body">
-                  {n.body}
-                </div>
-              )}
-              {actionTarget && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="toast-action-btn"
-                  onClick={() => {
-                    openTarget(actionTarget)
-                    dismissNotice(n.id)
-                  }}
-                >
-                  {t('shell.toast.view')}
-                </Button>
-              )}
+              <div className="toast-title">{n.title}</div>
+              {hasBody && <div className="toast-body">{n.body}</div>}
+              {!isCompact && actionButton && <div className="toast-actions">{actionButton}</div>}
             </div>
-            <IconButton
-              variant="ghost"
-              size="xs"
-              className="toast-close-btn"
-              icon="x"
-              aria-label={t('shell.toast.dismiss')}
-              onClick={() => dismissNotice(n.id)}
-            />
+            <div className="toast-trailing">
+              {isCompact && actionButton}
+              <IconButton
+                variant="ghost"
+                size="xs"
+                className="toast-close-btn"
+                icon="x"
+                aria-label={t('shell.toast.dismiss')}
+                onClick={() => dismissNotice(n.id)}
+              />
+            </div>
           </div>
         )
       })}

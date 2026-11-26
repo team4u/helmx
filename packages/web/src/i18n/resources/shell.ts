@@ -93,6 +93,7 @@ export const shellMessages = {
   'shell.theme.currentLight': { en: 'Light', 'zh-CN': '浅色' },
 
   // Toast overlay
+  'shell.toast.region': { en: 'Notifications', 'zh-CN': '通知' },
   'shell.toast.view': { en: 'View', 'zh-CN': '查看' },
   'shell.toast.dismiss': { en: 'Dismiss', 'zh-CN': '关闭' },
 
