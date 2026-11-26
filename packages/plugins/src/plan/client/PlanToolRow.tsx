@@ -60,8 +60,9 @@ export function PlanToolRow(props: ToolViewProps): ReactNode {
           ? t(PLAN_COPY.toolAskTitle)
           : props.toolName
 
-  const iconName =
-    props.toolName === PLAN_TOOL_SAVE
+  const iconName = isRunning
+    ? 'loader'
+    : props.toolName === PLAN_TOOL_SAVE
       ? 'save'
       : props.toolName === PLAN_TOOL_ASK
         ? 'message-square'
@@ -152,7 +153,11 @@ export function PlanToolRow(props: ToolViewProps): ReactNode {
         onClick={() => ctx.openWorkbench(PLAN_PANEL_ID)}
       >
         <span className="trace-row-left">
-          <HelmxIcon name={iconName} size={12} />
+          <HelmxIcon
+            name={iconName}
+            size={12}
+            className={isRunning ? 'spin-slow' : undefined}
+          />
           <span className="trace-tool-name plan-trace-name" title={toolTitle}>
             {toolTitle}
           </span>

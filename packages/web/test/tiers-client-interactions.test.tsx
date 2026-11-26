@@ -1368,7 +1368,6 @@ describe("tiers-client-interactions", () => {
       assert.match(text, /tier\/architect/)
       assert.match(text, /Model faux\/disabled is disabled/)
       assert.equal(errorMount.host.querySelector('.trace-row-error') !== null, true)
-      assert.equal(errorMount.host.querySelectorAll('.spin-slow').length, 1, 'running row renders exactly one spinner (inside StatusLight)')
     } finally {
       await errorMount.unmount()
     }

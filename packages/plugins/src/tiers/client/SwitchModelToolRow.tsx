@@ -76,7 +76,11 @@ export function SwitchModelToolRow(props: ToolViewProps): ReactNode {
         }
       >
         <span className="trace-row-left">
-          <HelmxIcon name="sparkles" size={12} />
+          <HelmxIcon
+            name={isRunning ? 'loader' : 'sparkles'}
+            size={12}
+            className={isRunning ? 'spin-slow' : undefined}
+          />
           <span className="trace-tool-name tiers-trace-name" title={toolTitle}>
             {toolTitle}
           </span>

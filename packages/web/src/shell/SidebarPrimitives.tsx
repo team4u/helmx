@@ -47,12 +47,12 @@ export function HoverIconButton({
 }
 
 /**
- * Single-light-slot status indicator: className & kind are adjudicated by the pure
- * resolveStatusLight; each row renders exactly one indicator and never stacks a
- * second by order (working/blocked/error indicators are exclusive;
- * idle/done yield to the background spinner; with nothing in flight the
- * five states stay as-is). The tooltip shares the indicator's source; the
- * background summary is appended only on the background-spinner slot.
+ * Single-light-slot status light: dotClass is adjudicated by the pure
+ * resolveStatusLight; each row renders exactly one light and never stacks a
+ * second by order (working/blocked/error status lights are exclusive;
+ * idle/done yield to the background hollow ring; with nothing in flight the
+ * five states stay as-is). The tooltip shares the light's source; the
+ * background summary is appended only on the hollow-ring slot.
  */
 function StatusLightDot({
   status,
@@ -72,7 +72,7 @@ function StatusLightDot({
   const { t } = useWebLocale()
   if (status === 'done' && !showDone && !backgroundActive) return null
   const light = resolveStatusLight(status, backgroundActive)
-  if (light.className === null || light.kind === null) return null
+  if (light.dotClass === null) return null
   const tooltip = backgroundAwareStatusTooltip({
     status,
     doing,
@@ -81,19 +81,12 @@ function StatusLightDot({
     backgroundSummary,
     t,
   })
-  if (light.kind === 'spinner') {
-    return (
-      <span className={light.className} title={tooltip} aria-label={tooltip} role="status">
-        <HelmxIcon name="loader" size={12} className="spin-slow" />
-      </span>
-    )
-  }
   return (
-    <span className={light.className} title={tooltip} aria-label={tooltip} role="status" />
+    <span className={light.dotClass} title={tooltip} aria-label={tooltip} role="status" />
   )
 }
 
-/** The conversation row's single status indicator: main status first; idle/done with background work yields to the background spinner. */
+/** The conversation row's single status light: main status first; idle/done with background work yields to the hollow ring. */
 export function ConversationStatusDot({
   conv,
   background,
@@ -103,7 +96,7 @@ export function ConversationStatusDot({
   conv: ConversationSummary
   background?: ConversationBackgroundActivity
   showDone?: boolean
-  /** Optional descendant facts. The indicator remains one slot, but reflects the visible subtree. */
+  /** Optional descendant facts. The light remains one slot, but reflects the visible subtree. */
   aggregate?: StatusAggregateCounts
 }) {
   const aggregateStatus = resolveAggregateConversationStatus(conv, aggregate)

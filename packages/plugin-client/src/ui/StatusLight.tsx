@@ -13,11 +13,10 @@
  * accessible name via role="img" + aria-label plus a screen-reader-only span
  * when `label` is provided (a static image-like indicator, not a chatty live
  * region); hover titles are never the only channel. Tones reuse the host
- * `.status-dot` / `.status-spinner` vocabulary and differ in shape beyond
- * color (spinning loader / hollow ring / aborted diamond).
+ * `.status-dot` vocabulary and differ in shape beyond color (pulse / hollow
+ * ring / aborted diamond).
  */
 import { isValidElement, useId, type ReactNode } from 'react'
-import { HelmxIcon } from '../icons.js'
 import {
   normalizeStatusLightTone,
   statusLightDotClass,
@@ -111,13 +110,7 @@ export function StatusLight(props: StatusLightProps): ReactNode {
       {...(ariaLabel !== undefined ? { 'aria-label': ariaLabel } : {})}
       {...(ariaLabelledBy !== undefined ? { 'aria-labelledby': ariaLabelledBy } : {})}
     >
-      {tone === 'working' ? (
-        <span className="status-spinner status-spinner-working" aria-hidden="true">
-          <HelmxIcon name="loader" size={12} className="spin-slow" />
-        </span>
-      ) : (
-        <span className={statusLightDotClass(tone)} aria-hidden="true" />
-      )}
+      <span className={statusLightDotClass(tone)} aria-hidden="true" />
       {hasLabel ? (
         <span id={ariaLabelledBy} className="helmx-sr-only">
           {props.label}

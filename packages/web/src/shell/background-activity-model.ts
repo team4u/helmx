@@ -37,7 +37,7 @@ import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { resolveWorkbenchPanelBadge } from '../conversation/workbench-model.js'
-import { conversationStatusIndicatorClass, conversationStatusTooltip } from './sidebar-model.js'
+import { conversationStatusDotClass, conversationStatusTooltip } from './sidebar-model.js'
 
 /** Separator for summary fragments (matching the workbench footer join style). */
 const SUMMARY_SEPARATOR = ' · '
@@ -199,18 +199,14 @@ export function resolveStandingStatusIndicator(
   return { representative, backgroundActive, backgroundSummary: parts.join(SUMMARY_SEPARATOR) }
 }
 
-/** Full class name of the background in-flight spinner (shares the status-spinner base class). */
-const BACKGROUND_SPINNER_CLASS = 'status-spinner status-spinner-background'
+/** Full class name of the background in-flight hollow ring (shares the status-dot base class). */
+const BACKGROUND_DOT_CLASS = 'status-dot status-dot-background'
 
-export type StatusIndicatorKind = 'dot' | 'spinner'
-
-/** Single-light rendering verdict: base status indicator OR background spinner, never a second light. */
+/** Single-light rendering verdict: base status dot OR background hollow ring, never a second light. */
 export interface StatusLight {
-  /** Full class name of the single indicator slot; null = no indicator (idle with no background work). */
-  className: string | null
-  /** Visual primitive kind (`'spinner'` renders loader icon, `'dot'` renders CSS dot, `null` renders nothing). */
-  kind: StatusIndicatorKind | null
-  /** Whether this indicator is the background in-flight spinner (only then does the tooltip append the background summary). */
+  /** Full class name of the single light slot (status-dot prefix included); null = no light (idle with no background work). */
+  dotClass: string | null
+  /** Whether this light is the background hollow ring (only then does the tooltip append the background summary). */
   background: boolean
 }
 
@@ -222,28 +218,25 @@ export interface StatusAggregateCounts {
 
 /**
  * Single-light priority (each sidebar conversation/agent standing row keeps
- * exactly one indicator slot):
- * 1. working / blocked / error: the main status indicator is exclusive; the
- *    background spinner never renders;
+ * exactly one light slot):
+ * 1. working / blocked / error: the main status light is exclusive; the
+ *    background hollow ring never renders;
  * 2. idle / done with background work in flight on the row: render only the
- *    background spinner (idle's no-light and done's green dot yield — the
+ *    background hollow ring (idle's no-light and done's green dot yield — the
  *    parent conversation is idle/finished while the background keeps running);
- * 3. No background work: keep the existing five-state display (working spinner,
- *    done green dot, idle no light, blocked/error dots).
+ * 3. No background work: keep the existing five-state display (done green dot,
+ *    idle no light, the rest their own status dots).
  */
 export function resolveStatusLight(
   status: ConversationSummary['status'],
   backgroundActive: boolean,
 ): StatusLight {
-  const base = conversationStatusIndicatorClass(status)
-  if (status === 'working') {
-    return { className: base, kind: 'spinner', background: false }
+  const base = conversationStatusDotClass(status)
+  if (status === 'working' || status === 'blocked' || status === 'error') {
+    return { dotClass: base, background: false }
   }
-  if (status === 'blocked' || status === 'error') {
-    return { className: base, kind: 'dot', background: false }
-  }
-  if (backgroundActive) return { className: BACKGROUND_SPINNER_CLASS, kind: 'spinner', background: true }
-  return { className: base, kind: base === null ? null : 'dot', background: false }
+  if (backgroundActive) return { dotClass: BACKGROUND_DOT_CLASS, background: true }
+  return { dotClass: base, background: false }
 }
 
 /** Resolve effective status from a conversation and optional subtree aggregate counts. */
@@ -268,7 +261,7 @@ export function hasConversationStatusLight(input: {
   const aggregateStatus = resolveAggregateConversationStatus(input.conv, input.aggregate)
   const backgroundActive = input.background?.active === true && aggregateStatus !== 'working'
   if (aggregateStatus === 'done' && !showDone && !backgroundActive) return false
-  return resolveStatusLight(aggregateStatus, backgroundActive).kind !== null
+  return resolveStatusLight(aggregateStatus, backgroundActive).dotClass !== null
 }
 
 /**
