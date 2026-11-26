@@ -154,6 +154,7 @@ function formatQuestionAnswer(
   }
   return cleanVal
 }
+
 /** One question as the schema admits it (already validated by the harness; normalization stays defensive anyway). */
 type RawAskQuestion = Static<typeof askUserParameters>['questions'][number]
 
