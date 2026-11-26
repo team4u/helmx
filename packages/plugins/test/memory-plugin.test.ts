@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import { HelmxError, type ConversationSummary, type PluginDefinition } from '@helmx/protocol'
 import { PluginHost, ProfileService, type PluginDocStore, type PluginHostBackend } from '@helmx/kernel'
-import { MAX_MEMORY_CHARS, MEMORY_SKILL_ID, createMemoryPlugin, isMemorySessionEligible, isProfileMemoryEnabled, type MemoryPluginDoc } from '../src/memory.js'
+import { MAX_MEMORY_CHARS, MEMORY_PLUGIN_ID, MEMORY_SKILL_ID, createMemoryPlugin, isMemorySessionEligible, isProfileMemoryEnabled, type MemoryPluginDoc } from '../src/memory.js'
 import { MAX_MEMORY_CHARS as CLIENT_MAX_MEMORY_CHARS } from '../src/memory/client/models.js'
 import { MemoryStore } from '../src/memory/store.js'
 import { createProfilePlugin } from '../src/profile.js'
@@ -35,15 +35,22 @@ const makeConversation = (id: number, profileId = 'assistant'): ConversationSumm
 function makeBackend(): PluginHostBackend & {
   conversations: Map<number, ConversationSummary>
   notifications: Array<{ title: string; body: string; level: string }>
+  dispatchEvent(type: string, payload: unknown): Promise<void>
 } {
   const conversations = new Map<number, ConversationSummary>()
   conversations.set(1, makeConversation(1))
   conversations.set(2, makeConversation(2, 'coder'))
   const notifications: Array<{ title: string; body: string; level: string }> = []
+  const listeners = new Map<string, Set<(payload: unknown) => unknown>>()
   const backend = {
     ...createPluginHostBackendFixture(),
     conversations,
     notifications,
+    async dispatchEvent(type: string, payload: unknown) {
+      for (const listener of listeners.get(type) ?? []) {
+        await listener(payload)
+      }
+    },
     async dispatchTrigger() {},
     async submitInput() {},
     async createConversation(init: { profileId?: string }) {
@@ -75,8 +82,16 @@ function makeBackend(): PluginHostBackend & {
       throw new HelmxError('unsupported', 'test', 400)
     },
     async cancelAsk() {},
-    onEvent() {
-      return () => {}
+    onEvent(type: string, listener: (payload: unknown) => unknown) {
+      let set = listeners.get(type)
+      if (!set) {
+        set = new Set()
+        listeners.set(type, set)
+      }
+      set.add(listener)
+      return () => {
+        set.delete(listener)
+      }
     },
     async abortConversation() {},
     getConversationOwnership() {
@@ -673,5 +688,53 @@ test('memory 受管技能：启动自举、停用即时消失（零幻影提示�
     assert.ok((await readSkillsSection()).includes('id="memory"'), '重新启用后 memory 技能应恢复')
   } finally {
     await app.close().catch(() => {})
+  }
+})
+
+test('memory 删除 Profile 时清理 disabledProfiles 与 initializedProfiles（运行时事件与启动对账）', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-memory-prune-')
+  const docs = new MemoryDocStore()
+  const stateKey = `${MEMORY_PLUGIN_ID}:state`
+  const emptyDoc: MemoryPluginDoc = { disabledProfiles: [], initializedProfiles: [] }
+  // 1) 预先写入一个离线时已删除的 Profile 状态；assistant 仍存在应被保留。
+  docs.set(stateKey, {
+    disabledProfiles: ['stale-gone', 'coder'],
+    initializedProfiles: ['stale-gone', 'assistant'],
+  })
+  const { host, profiles, backend } = await setup(dir, [], docs)
+  try {
+    const afterStart = docs.get<MemoryPluginDoc>(stateKey, emptyDoc)
+    assert.deepEqual(afterStart.disabledProfiles, ['coder'], '启动对账应清理已删 Profile stale-gone（禁用列表）')
+    assert.deepEqual(afterStart.initializedProfiles, ['assistant'], '启动对账应清理已删 Profile stale-gone（初始化列表）')
+
+    // 2) 运行时初始化并禁用临时 Profile temp-role，随后模拟 profile.changed(removed: true)。
+    await profiles.save({ id: 'temp-role', name: 'Temp', tags: [] })
+    await host.invokeAction('builtin:memory', 'set', { profileId: 'temp-role', text: '# Temp' })
+    await host.invokeAction('builtin:memory', 'configure', { profileId: 'temp-role', enabled: false })
+    const beforeDelete = docs.get<MemoryPluginDoc>(stateKey, emptyDoc)
+    assert.ok(beforeDelete.initializedProfiles.includes('temp-role'))
+    assert.ok(beforeDelete.disabledProfiles.includes('temp-role'))
+
+    await profiles.delete('temp-role')
+    await backend.dispatchEvent('profile.changed', {
+      type: 'profile.changed',
+      profile: { id: 'temp-role', name: 'Temp', tags: [] },
+      removed: true,
+    })
+
+    const afterDelete = docs.get<MemoryPluginDoc>(stateKey, emptyDoc)
+    assert.equal(afterDelete.initializedProfiles.includes('temp-role'), false, '删除事件应立即移出 initializedProfiles')
+    assert.equal(afterDelete.disabledProfiles.includes('temp-role'), false, '删除事件应立即移出 disabledProfiles')
+
+    // 3) 以同名重建 Profile：状态干净（默认开启且未初始化，不会误发缺失告警）。
+    await profiles.save({ id: 'temp-role', name: 'Temp Reborn', tags: [] })
+    const status = (await host.invokeAction('builtin:memory', 'get', { profileId: 'temp-role' })) as {
+      enabled: boolean
+      initialized: boolean
+    }
+    assert.equal(status.enabled, true)
+    assert.equal(status.initialized, false)
+  } finally {
+    await host.dispose().catch(() => {})
   }
 })

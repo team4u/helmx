@@ -35,7 +35,7 @@ import {
   type TierBorrowRecord,
   type TierBorrowSessionView,
 } from '../src/tiers/contracts.js'
-import { resolveBorrowTarget } from '../src/tiers/borrow.js'
+import { createTierBorrowManager, resolveBorrowTarget } from '../src/tiers/borrow.js'
 import {
   assertConcreteModelRef,
   assertTierId,
@@ -1617,4 +1617,58 @@ test('reconcile & events: cold restart restores idle active borrow, respects CAS
     await host.dispose().catch(() => {})
     await cleanupDir(dataDir)
   }
+})
+
+test('borrow manager: listAllKvEntries infinite-loop guard stops when KV returns repeated nextCursor', { timeout: 60_000 }, async () => {
+  const { createPluginHostBackendFixture } = await import('../../kernel/test/helpers/plugin-host-backend.js')
+  const baseFixture = createPluginHostBackendFixture()
+  const record: TierBorrowRecord = {
+    conversationId: 77,
+    phase: 'armed',
+    requestedRef: 'faux/flagship',
+    targetModel: 'faux/flagship',
+    targetConcreteModel: 'faux/flagship',
+    targetLabel: 'flagship',
+    effortChanged: false,
+    restoreAfterTurn: true,
+    source: 'ui',
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  let listCalls = 0
+  const loopingKv = {
+    get: (key: string) => (key === '77' ? record : undefined),
+    set: () => {},
+    delete: () => false,
+    clear: () => {},
+    flush: async () => {},
+    list: (opts?: { cursor?: string }) => {
+      listCalls += 1
+      return {
+        items: [{ key: '77', value: record, updatedAt: 1 }],
+        nextCursor: opts?.cursor === undefined ? 'loop' : 'loop',
+      }
+    },
+  }
+  const synced: Array<{ id: number; value: TierBorrowSessionView | null }> = []
+  const manager = createTierBorrowManager({
+    ctx: {
+      host: {
+        ...baseFixture,
+        getConversation: (id: number) => makeConversationSummary({ id, status: 'idle' }),
+      },
+    } as never,
+    kv: loopingKv,
+    borrowDoc: {
+      get: () => null,
+      set: (id: number, val: TierBorrowSessionView | null) => synced.push({ id, value: val }),
+      delete: () => false,
+    } as never,
+    readTiersState: () => ({ tiers: {}, templates: {} }),
+  })
+  manager.hydrate()
+  assert.equal(listCalls, 2)
+  assert.equal(synced.length, 2)
+  await manager.reconcile()
+  assert.equal(listCalls, 4)
 })

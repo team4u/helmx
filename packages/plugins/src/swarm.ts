@@ -4,6 +4,12 @@
 import { HelmxError, type ConversationSummary, type DispatchToolsCapability, type MaybePromise, type PluginDefinition } from '@helmx/protocol'
 import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
 import {
+  asDeletedConversationId,
+  createKeyedQueue,
+  getConversationOrUndefined,
+  reportPluginError,
+} from './shared-helpers.js'
+import {
   CONVERSATION_DEPTH_CAPABILITY_ID,
   WORKFLOW_PLUGIN_ID,
   WORKTREE_PLUGIN_ID,
@@ -15,10 +21,8 @@ import {
   INDEX_DOC_NAME,
   SWARM_PLUGIN_ID,
   SWARM_SKILL_ID,
-  asConversationDeletedEvent,
   asConversationUpsertEvent,
   assertIndexDoc,
-  createKeyedQueue,
   resolveSwarmConfig,
   type BoardBadgesDoc,
   type BoardViewDoc,
@@ -68,17 +72,7 @@ export function createSwarmPlugin(): PluginDefinition {
       }
 
       const reportError = (title: string, detail: unknown): void => {
-        const msg = detail instanceof Error ? detail.message : String(detail)
-        try {
-          ctx.host.emitEvent('notification', {
-            type: 'notification',
-            level: 'error',
-            title: ctx.host.redact(title),
-            body: ctx.host.redact(`${title}：${msg}`),
-          })
-        } catch (eventErr) {
-          console.error(`[swarm] ${ctx.host.redact(`事件上报失败：${eventErr instanceof Error ? eventErr.message : String(eventErr)}`)}`)
-        }
+        reportPluginError(ctx.host, { logTag: 'swarm', title, detail, log: false })
       }
 
       const getConfig = (): SwarmConfig => resolveSwarmConfig(ctx.getConfig() as Record<string, unknown>)
@@ -93,15 +87,8 @@ export function createSwarmPlugin(): PluginDefinition {
         docs.index.set(next)
         return next
       }
-      const readConversationOrUndefined = (id: number | undefined): ConversationSummary | undefined => {
-        if (!Number.isInteger(id) || (id as number) <= 0) return undefined
-        try {
-          return ctx.host.getConversation(id as number)
-        } catch (err) {
-          if (err instanceof HelmxError && err.code === 'not_found') return undefined
-          throw err
-        }
-      }
+      const readConversationOrUndefined = (id: number | undefined): ConversationSummary | undefined =>
+        id === undefined ? undefined : getConversationOrUndefined(ctx.host, id)
 
       let coordinatorRef!: SwarmCoordinator
       const groupsRuntime = createCollabGroupRuntime(ctx, () => coordinatorRef)
@@ -195,7 +182,7 @@ export function createSwarmPlugin(): PluginDefinition {
           })
           deletedUnsub = ctx.host.onEvent('conversation.deleted', async (p) => {
             if (!active || shutdown) return
-            const id = asConversationDeletedEvent(p)
+            const id = asDeletedConversationId(p)
             if (id !== undefined) await groupsRuntime.onConversationDeleted(id)
           })
           active = true

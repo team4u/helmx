@@ -1,5 +1,6 @@
 /** builtin:token-speed public contracts, constants, and boundary event guards. */
 import { isJsonObject, type ConversationLiveMessage } from '@helmx/protocol/browser'
+import { asConversationEntryEvent } from '../shared-helpers.js'
 
 export const TOKEN_SPEED_PLUGIN_ID = 'builtin:token-speed'
 export const TOKEN_SPEED_DOC = 'speed'
@@ -64,12 +65,6 @@ export function asConversationLiveFrame(payload: unknown): {
   }
 }
 
-export function asConversationEntryEnvelope(payload: unknown): { conversationId: number; kind: string } | undefined {
-  if (!isJsonObject(payload) || payload.type !== 'conversation.entry' || !isPositiveInt(payload.conversationId)) return undefined
-  const entry = payload.entry
-  return isJsonObject(entry) && typeof entry.kind === 'string' && entry.kind ? { conversationId: payload.conversationId, kind: entry.kind } : undefined
-}
-
 export function asAssistantCompletion(payload: unknown): {
   conversationId: number
   taskId: number | undefined
@@ -78,7 +73,7 @@ export function asAssistantCompletion(payload: unknown): {
   stopReason: string
   contentChars?: number
 } | undefined {
-  const env = asConversationEntryEnvelope(payload)
+  const env = asConversationEntryEvent(payload)
   if (!env || env.kind !== 'pi.assistant') return undefined
   const entry = (payload as Record<string, unknown>).entry as Record<string, unknown>
   const model = entry.model
@@ -97,6 +92,3 @@ export function asAssistantCompletion(payload: unknown): {
     ...(contentChars !== undefined ? { contentChars } : {}),
   }
 }
-
-export const asConversationDeletedId = (payload: unknown): number | undefined =>
-  isJsonObject(payload) && payload.type === 'conversation.deleted' && isPositiveInt(payload.conversationId) ? payload.conversationId : undefined

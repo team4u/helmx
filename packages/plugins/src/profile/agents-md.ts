@@ -24,9 +24,10 @@
  * - 文件内容与错误信息先经宿主全局脱敏（SecretStash 机密不进系统提示词），
  *   超 64k 字符上限显式截断并附说明，绝不静默截断。
  */
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { HelmxError, escapeXml, pathRulesForShape, targetPathShape } from '@helmx/protocol'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
+import { errorMessageOf } from '../shared-helpers.js'
+import { readFileBounded, type BoundedReadFailure } from './bounded-file-reader.js'
 
 
 /** 工作区项目约定文件名（跨工具社区约定，逐回合实时重读）。 */
@@ -77,10 +78,6 @@ function errorCodeOf(err: unknown): string {
   return err instanceof HelmxError ? err.code : 'unknown'
 }
 
-function errorMessageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
-
 /** 统一的读取失败说明（错误码 + 脱敏后的错误消息，均 XML 转义）。 */
 function readFailureBody(
   agentsPath: string,
@@ -91,128 +88,31 @@ function readFailureBody(
   return `读取工作区 ${escapeXml(agentsPath)} 失败（${escapeXml(code)}）：${escapeXml(redact(message))}`
 }
 
-/**
- * 有界读取结果：absent=常态缺失（不注入）；refused=显式不可读（reason 已
- * 脱敏转义，直接进入不可用说明段）；content=同句柄稳定读到的 UTF-8 正文。
- */
-type AgentsMdRead =
-  | { kind: 'absent' }
-  | { kind: 'refused'; reason: string }
-  | { kind: 'content'; text: string }
-
-/** 目录与缺失（含 EISDIR 消息）属常态；其余错误显式不可读。 */
-function isAbsentFileError(error: { code: string; message: string }): boolean {
-  return error.code === 'not_found' || error.code === 'is_directory' || error.message.includes('EISDIR')
-}
-
-/**
- * 有界安全读取（local 与 remote ExecutionEnv 共用同一契约，均在
- * BACKGROUND_CONTEXT 下调用）：
- * - canonicalPath 先解析软链：悬空软链按不存在处理（常态）；解析后的
- *   realPath 是本次读取的锚点；
- * - openBinaryReader(realPath, { noFollow: true }) 在锚点上打开普通文件做
- *   有界定位读：目录报 is_directory、其余非普通文件报 invalid（节点实现
- *   O_NONBLOCK 打开，FIFO 不阻塞）；noFollow 拒最终组件软链——封死预检后
- *   路径被换成软链的竞态窗口，被换目标绝不会以本路径身份被读取；
- * - 打开后 kind/size 以同句柄 reader.info 为权威（fd 视图而非路径视图）：
- *   非普通文件与超过 MAX_AGENTS_MD_BYTES 均不读正文，显式拒绝；
- * - 正文只经 reader.read(0, MAX_AGENTS_MD_BYTES + 1)（SDK 契约：至多
- *   length 字节、仅 EOF 处更短），超限即实证拒绝，绝无先无界整读后拒绝；
- * - 读后二次同句柄 info 复核：size/mtime 与打开时不一致，或实读字节数与
- *   稳定 size 不一致，均按读取期间变化显式拒绝，绝不把旧前缀当完整快照；
- * - 全部路径 finally 关闭句柄（远端 reader 生命周期与连接绑定，显式 close
- *   立即回收）。
- */
-async function readAgentsMdBounded(
-  env: ExecutionEnv,
+function formatAgentsMdFailure(
   agentsPath: string,
+  failure: BoundedReadFailure,
   redact: (text: string) => string,
-): Promise<AgentsMdRead> {
-  const canonical = await env.canonicalPath(agentsPath, BACKGROUND_CONTEXT)
-  if (!canonical.ok) {
-    if (isAbsentFileError(canonical.error)) return { kind: 'absent' }
-    return {
-      kind: 'refused',
-      reason: `解析工作区 ${escapeXml(agentsPath)} 真实路径失败（${escapeXml(canonical.error.code)}）：${escapeXml(redact(canonical.error.message))}`,
-    }
-  }
-  const realPath = canonical.value
-
-  const openedR = await env.openBinaryReader(realPath, { noFollow: true }, BACKGROUND_CONTEXT)
-  if (!openedR.ok) {
-    // 打开失败即止步：绝无 readTextFile 等无界回退（路径可能已被换成
-    // FIFO / 软链，任何按路径整读都可能阻塞或读到劫持目标）。
-    if (isAbsentFileError(openedR.error)) return { kind: 'absent' }
-    return {
-      kind: 'refused',
-      reason: readFailureBody(agentsPath, openedR.error.code, openedR.error.message, redact),
-    }
-  }
-  const reader = openedR.value
-  try {
-    // 同句柄权威元信息（fd 视图）：kind/size 以打开后的 reader 为准。
-    const infoR = await reader.info(BACKGROUND_CONTEXT)
-    if (!infoR.ok) {
-      return {
-        kind: 'refused',
-        reason: readFailureBody(agentsPath, infoR.error.code, infoR.error.message, redact),
-      }
-    }
-    const info = infoR.value
-    if (info.kind !== 'file') {
-      return {
-        kind: 'refused',
-        reason: `工作区 ${escapeXml(agentsPath)} 在打开后不是普通文件（kind=${escapeXml(info.kind)}），拒绝读取`,
-      }
-    }
-    if (info.size > MAX_AGENTS_MD_BYTES) {
-      return {
-        kind: 'refused',
-        reason: `工作区 ${escapeXml(agentsPath)} 为 ${info.size} 字节，超过 ${MAX_AGENTS_MD_BYTES} 字节读取上限，本回合未读取正文`,
-      }
-    }
-
-    // 有界定位读：请求上限+1，读到上限+1 即实证超限（打开后文件仍可能增长）。
-    const readR = await reader.read(0, MAX_AGENTS_MD_BYTES + 1, BACKGROUND_CONTEXT)
-    if (!readR.ok) {
-      return {
-        kind: 'refused',
-        reason: readFailureBody(agentsPath, readR.error.code, readR.error.message, redact),
-      }
-    }
-    const bytes = readR.value
-    if (bytes.byteLength > MAX_AGENTS_MD_BYTES) {
-      return {
-        kind: 'refused',
-        reason: `工作区 ${escapeXml(agentsPath)} 读取到 ${bytes.byteLength} 字节，超过 ${MAX_AGENTS_MD_BYTES} 字节读取上限，本回合不注入正文`,
-      }
-    }
-
-    // 读后同句柄二次复核：读取期间变化（增长 / 截断 / 改写）显式拒绝。
-    const afterR = await reader.info(BACKGROUND_CONTEXT)
-    if (!afterR.ok) {
-      return {
-        kind: 'refused',
-        reason: readFailureBody(agentsPath, afterR.error.code, afterR.error.message, redact),
-      }
-    }
-    const after = afterR.value
-    if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) {
-      return {
-        kind: 'refused',
-        reason: `工作区 ${escapeXml(agentsPath)} 读取期间文件发生变化（size ${info.size} -> ${after.size}，mtime ${info.mtimeMs} -> ${after.mtimeMs}），本回合不注入可能不完整的快照`,
-      }
-    }
-    if (bytes.byteLength !== after.size) {
-      return {
-        kind: 'refused',
-        reason: `工作区 ${escapeXml(agentsPath)} 读取到 ${bytes.byteLength} 字节与稳定大小 ${after.size} 不一致，本回合不注入可能不完整的快照`,
-      }
-    }
-    return { kind: 'content', text: AGENTS_MD_UTF8_DECODER.decode(bytes) }
-  } finally {
-    // 成功 / 拒绝 / 异常路径一律显式关闭同一句柄。
-    await reader.close(BACKGROUND_CONTEXT)
+): string {
+  switch (failure.stage) {
+    case 'canonical':
+      return `解析工作区 ${escapeXml(agentsPath)} 真实路径失败（${escapeXml(failure.code)}）：${escapeXml(redact(failure.message))}`
+    case 'outside_dir':
+      return `工作区 ${escapeXml(agentsPath)} 解析到目录之外，拒绝读取`
+    case 'open':
+    case 'info':
+    case 'read':
+    case 'after_info':
+      return readFailureBody(agentsPath, failure.code, failure.message, redact)
+    case 'not_regular_file':
+      return `工作区 ${escapeXml(agentsPath)} 在打开后不是普通文件（kind=${escapeXml(failure.fileKind)}），拒绝读取`
+    case 'size_exceeded':
+      return `工作区 ${escapeXml(agentsPath)} 为 ${failure.size} 字节，超过 ${failure.maxBytes} 字节读取上限，本回合未读取正文`
+    case 'read_exceeded':
+      return `工作区 ${escapeXml(agentsPath)} 读取到 ${failure.bytesRead} 字节，超过 ${failure.maxBytes} 字节读取上限，本回合不注入正文`
+    case 'file_changed':
+      return `工作区 ${escapeXml(agentsPath)} 读取期间文件发生变化（size ${failure.beforeSize} -> ${failure.afterSize}，mtime ${failure.beforeMtime} -> ${failure.afterMtime}），本回合不注入可能不完整的快照`
+    case 'size_mismatch':
+      return `工作区 ${escapeXml(agentsPath)} 读取到 ${failure.bytesRead} 字节与稳定大小 ${failure.stableSize} 不一致，本回合不注入可能不完整的快照`
   }
 }
 
@@ -268,9 +168,12 @@ export async function computeAgentsMdSection(
   }
 
   try {
-    const read = await readAgentsMdBounded(env, agentsPath, redact)
+    const read = await readFileBounded(env, agentsPath, {
+      maxBytes: MAX_AGENTS_MD_BYTES,
+      decoder: AGENTS_MD_UTF8_DECODER,
+    })
     if (read.kind === 'absent') return { kind: 'none' }
-    if (read.kind === 'refused') return unavailableSection(agentsPath, nodeId, read.reason)
+    if (read.kind === 'refused') return unavailableSection(agentsPath, nodeId, formatAgentsMdFailure(agentsPath, read.failure, redact))
     // 纯空白文件＝无项目约定，不注入（与 SYSTEM.md 空白同口径）。
     if (read.text.trim() === '') return { kind: 'none' }
     // 脱敏先于长度检查与截断：工作区文件可能意外包含机密明文。

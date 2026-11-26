@@ -14,6 +14,7 @@
  */
 import { HelmxError } from '@helmx/protocol'
 import type { ConversationSummary, ExternalTriggerEnvelope } from '@helmx/protocol'
+import { errorMessageOf, isConversationNotFoundError } from '../shared-helpers.js'
 import {
   DEFAULT_TRIGGER_KEEP_LAST,
   DEFAULT_TRIGGER_PROFILE_ID,
@@ -23,6 +24,7 @@ import {
   type ConversationLookup,
   type ProfileLookup,
   type TriggerKind,
+  type TriggerSessionMode,
 } from './contracts.js'
 
 export type TriggerDeliveryTarget =
@@ -172,12 +174,67 @@ export async function pruneIsolatedRuns(
       if (err instanceof HelmxError && PRUNE_BENIGN_ERROR_CODES.has(err.code)) {
         continue
       }
-      console.error(
-        `[triggers] failed to prune old ${sourceTag} run #${conv.id}: ${err instanceof Error ? err.message : String(err)}`,
-      )
+      console.error(`[triggers] failed to prune old ${sourceTag} run #${conv.id}: ${errorMessageOf(err)}`)
     }
   }
   return deleted
+}
+
+export interface TriggerDeliverySource {
+  triggerKind: TriggerKind
+  id: string
+  description?: string
+  timezone?: string
+  targetConversationId?: number
+  mode?: TriggerSessionMode
+  profileId?: string
+  keepLast?: number
+  dedicatedConversationId?: number
+  onDedicatedConversationId: (conversationId: number) => Promise<void>
+}
+
+/** Validate an explicit trigger `profileId` against `profiles`, rejecting unknown IDs cleanly. */
+export async function assertTriggerProfileExists(
+  profiles: ProfileLookup | undefined,
+  profileId: string | undefined,
+  reason: string,
+): Promise<void> {
+  if (profileId === undefined || profiles === undefined) return
+  if ((await profiles.get(profileId)) === undefined) {
+    throw new HelmxError(
+      'validation_error',
+      `profileId does not exist: ${profileId} (${reason})`,
+      400,
+      { profileId },
+    )
+  }
+}
+
+/** Construct a uniform delivery target for a cron job or webhook endpoint. */
+export function buildTriggerDeliveryTarget(source: TriggerDeliverySource): TriggerDeliveryTarget {
+  if (source.targetConversationId !== undefined) {
+    return { kind: 'conversation', conversationId: source.targetConversationId }
+  }
+  if (source.mode === 'dedicated') {
+    return {
+      kind: 'dedicated',
+      triggerKind: source.triggerKind,
+      triggerId: source.id,
+      label: source.description,
+      profileId: source.profileId,
+      dedicatedConversationId: source.dedicatedConversationId,
+      onDedicatedConversationId: source.onDedicatedConversationId,
+    }
+  }
+  return {
+    kind: 'isolated',
+    triggerKind: source.triggerKind,
+    triggerId: source.id,
+    label: source.description,
+    ...(source.timezone !== undefined ? { timezone: source.timezone } : {}),
+    profileId: source.profileId,
+    keepLast: source.keepLast ?? DEFAULT_TRIGGER_KEEP_LAST,
+  }
 }
 
 export function createDeliveryDispatch(options: {
@@ -215,15 +272,7 @@ export function createDeliveryDispatch(options: {
     }
 
     const effectiveProfileId = assertTriggerProfileId(target.profileId ?? DEFAULT_TRIGGER_PROFILE_ID)
-    const profile = await profiles.get(effectiveProfileId)
-    if (profile === undefined) {
-      throw new HelmxError(
-        'validation_error',
-        `profileId does not exist: ${effectiveProfileId} (refusing to deliver to the wrong role)`,
-        400,
-        { profileId: effectiveProfileId },
-      )
-    }
+    await assertTriggerProfileExists(profiles, effectiveProfileId, 'refusing to deliver to the wrong role')
 
     if (isClosing()) {
       throw new HelmxError('runtime_closing', 'the runtime is closing; new trigger deliveries are rejected', 409, {
@@ -302,7 +351,7 @@ function assertConversationExists(host: ConversationLookup, id: number): void {
   try {
     host.getConversation(id)
   } catch (err) {
-    if (err instanceof HelmxError && err.code === 'not_found') {
+    if (isConversationNotFoundError(err)) {
       throw new HelmxError(
         'not_found',
         `the trigger target conversation #${id} does not exist (possibly deleted; please update the trigger target)`,
@@ -333,7 +382,7 @@ async function resolveDedicatedConversation(
         return existing.id
       }
     } catch (err) {
-      if (!(err instanceof HelmxError && err.code === 'not_found')) throw err
+      if (!isConversationNotFoundError(err)) throw err
     }
   }
 

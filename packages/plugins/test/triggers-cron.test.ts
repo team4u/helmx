@@ -109,7 +109,7 @@ interface Harness {
 function makeHarness(
   startMs: number,
   docSeed?: CronDoc,
-  options?: { profileIds?: Iterable<string> },
+  options?: { profileIds?: Iterable<string>; redact?: (text: string) => string },
 ): Harness {
   const docs = new MemoryDocStore()
   if (docSeed !== undefined) docs.set('builtin:triggers:crons', docSeed)
@@ -169,6 +169,7 @@ function makeHarness(
       emitEvent(type: string, payload: unknown) {
         events.push({ type, payload })
       },
+      ...(options?.redact !== undefined ? { redact: options.redact } : {}),
     },
   })
   h.host = host
@@ -872,8 +873,14 @@ test('claim 冲刷期间删除任务，旧计划点不再投递', { timeout: 60_
   await h.clock.advance(5 * MIN)
   await started
   h.flushImpl = async () => {}
-  await h.host.invokeAction('builtin:triggers', 'cron_delete', { id: 'claim-delete' })
+  let deleteFinished = false
+  const deleting = h.host.invokeAction('builtin:triggers', 'cron_delete', { id: 'claim-delete' }).then(() => {
+    deleteFinished = true
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(deleteFinished, false, 'cron_delete 必须等待 active write lock 释放')
   release()
+  await deleting
   await h.runtime.settle()
   assert.equal(h.dispatched.length, 0)
   assert.deepEqual(await listJobs(h), [])
@@ -1439,4 +1446,94 @@ test('cron_update：校验边界（空 patch、404、互斥字段、dedicated+ke
   // 全部失败后原有 timer 与配置未受破坏
   assert.equal(h.clock.activeTimers(), 2)
   assert.equal(h.runtime.getJob('v1')?.schedule, '*/5 * * * *')
+})
+
+test('cron_delete：持写锁串行等待且 flush 失败回滚重排', { timeout: 60_000 }, async () => {
+  // 1) claim flush 持锁期间并发 cron_delete 必须排队等待，随后干净删除而不被残留写入复活
+  const h1 = track(makeHarness(T0))
+  await ready(h1)
+  await h1.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'del-race',
+    schedule: '*/5 * * * *',
+    text: 'run',
+  })
+  let claimEntered!: () => void
+  let releaseClaim!: () => void
+  const claimStarted = new Promise<void>((r) => { claimEntered = r })
+  const claimGate = new Promise<void>((r) => { releaseClaim = r })
+  h1.flushImpl = () => {
+    claimEntered()
+    return claimGate
+  }
+  await h1.clock.advance(5 * MIN)
+  await claimStarted
+
+  let deleteFinished = false
+  h1.flushImpl = async () => {}
+  const deletePromise = h1.host
+    .invokeAction('builtin:triggers', 'cron_delete', { id: 'del-race' })
+    .then((res) => {
+      deleteFinished = true
+      return res as { deleted: boolean }
+    })
+  await new Promise((r) => setImmediate(r))
+  assert.equal(deleteFinished, false, 'cron_delete 必须等待 active write lock 释放')
+
+  releaseClaim()
+  const deleted = await deletePromise
+  await h1.runtime.settle()
+  assert.deepEqual(deleted, { deleted: true })
+  assert.equal(h1.runtime.getJob('del-race'), undefined, '持锁完成后删除生效且不得被旧 claim 复活')
+
+  // 2) cron_delete flush 失败必须回滚 job 且重新调度启用任务的 timer
+  const h2 = track(makeHarness(T0))
+  await ready(h2)
+  await h2.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'del-fail',
+    schedule: '*/5 * * * *',
+    text: 'still alive',
+  })
+  assert.equal(h2.clock.activeTimers(), 1)
+  h2.flushImpl = async () => {
+    throw new HelmxError('store_flush_failed', 'flush boom', 500)
+  }
+  await assert.rejects(
+    h2.host.invokeAction('builtin:triggers', 'cron_delete', { id: 'del-fail' }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'store_flush_failed',
+  )
+  assert.equal(h2.runtime.getJob('del-fail')?.id, 'del-fail', 'delete flush 失败必须回滚 job')
+  assert.equal(h2.clock.activeTimers(), 1, 'delete flush 失败必须恢复原 timer')
+
+  h2.flushImpl = async () => {}
+  await h2.clock.advance(5 * MIN)
+  await h2.runtime.settle()
+  assert.equal(h2.dispatched.length, 1, '回滚恢复后的 cron 仍按计划触发')
+})
+
+test('error redaction：lastError 落盘与 SSE notification 均经过 ctx.host.redact 脱敏', { timeout: 60_000 }, async () => {
+  const redact = (text: string): string => text.replace(/sk-cron-secret/g, '[REDACTED]')
+  const h = track(makeHarness(T0, undefined, { redact }))
+  await ready(h)
+  h.dispatchImpl = async () => {
+    throw new Error('gateway rejected Bearer sk-cron-secret')
+  }
+  await h.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'secret-err',
+    schedule: '*/5 * * * *',
+    text: 'go',
+  })
+  await h.clock.advance(5 * MIN)
+  await h.runtime.settle()
+
+  const job = await soleJob(h)
+  assert.ok(typeof job.lastError === 'string')
+  assert.equal(job.lastError.includes('sk-cron-secret'), false, 'lastError 不得包含明文秘钥')
+  assert.equal(job.lastError.includes('[REDACTED]'), true, 'lastError 必须保留脱敏占位符')
+
+  const notif = h.events.find((e) => e.type === 'notification')?.payload as
+    | { title?: string; body?: string }
+    | undefined
+  assert.ok(notif !== undefined, '失败必须发 notification 事件')
+  assert.equal(notif.body?.includes('sk-cron-secret'), false, 'notification body 不得包含明文秘钥')
+  assert.equal(notif.body?.includes('[REDACTED]'), true, 'notification body 必须保留脱敏占位符')
 })

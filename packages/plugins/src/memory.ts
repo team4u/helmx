@@ -3,6 +3,7 @@
  */
 import { HelmxError, PROFILE_DETAIL_SECTION_SLOT, type HelmxHostProfilesPort, type PluginActionContext, type PluginDefinition } from '@helmx/protocol'
 import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
+import { reportPluginError } from './shared-helpers.js'
 import { isMemorySessionEligible, MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MemoryStore } from './memory/store.js'
 import {
   createDreamEngine,
@@ -125,6 +126,35 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
       const isInitialized = (profileId: string): boolean => stateDoc.get().initializedProfiles.includes(profileId)
       const markInitialized = (profileId: string): void => {
         stateDoc.update((c) => (c.initializedProfiles.includes(profileId) ? c : { ...c, initializedProfiles: [...c.initializedProfiles, profileId] }))
+      }
+      const pruneDeletedProfile = (profileId: string): void => {
+        missingNotified.delete(profileId)
+        stateDoc.update((c) => {
+          if (!c.disabledProfiles.includes(profileId) && !c.initializedProfiles.includes(profileId)) return c
+          return {
+            ...c,
+            disabledProfiles: c.disabledProfiles.filter((id) => id !== profileId),
+            initializedProfiles: c.initializedProfiles.filter((id) => id !== profileId),
+          }
+        })
+      }
+      const reconcileDeletedProfiles = async (): Promise<void> => {
+        const snapshot = stateDoc.get()
+        if (snapshot.disabledProfiles.length === 0 && snapshot.initializedProfiles.length === 0 && missingNotified.size === 0) {
+          return
+        }
+        const existingIds = new Set((await profiles.list()).map((p) => p.id))
+        for (const id of [...missingNotified]) {
+          if (!existingIds.has(id)) missingNotified.delete(id)
+        }
+        stateDoc.update((c) => {
+          const disabledProfiles = c.disabledProfiles.filter((id) => existingIds.has(id))
+          const initializedProfiles = c.initializedProfiles.filter((id) => existingIds.has(id))
+          if (disabledProfiles.length === c.disabledProfiles.length && initializedProfiles.length === c.initializedProfiles.length) {
+            return c
+          }
+          return { ...c, disabledProfiles, initializedProfiles }
+        })
       }
       const resolveAndRequire = async (explicit: string | undefined, context: PluginActionContext): Promise<string> => {
         const profileId = resolveActionProfileId(explicit, context, (id) => ctx.host.getConversation(id))
@@ -294,13 +324,12 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
         runs: {},
       })
       const emitDreamError = (title: string, detail: unknown): void => {
-        const message = ctx.host.redact(detail instanceof Error ? detail.message : String(detail))
-        try {
-          ctx.host.emitEvent('notification', { type: 'notification', level: 'error', title, body: `[memory-dream] ${message}` })
-        } catch {
-          // Best-effort reporting only.
-        }
-        console.error(`[memory-dream] ${title}：${message}`)
+        reportPluginError(ctx.host, {
+          logTag: 'memory-dream',
+          bodyPrefix: '[memory-dream]',
+          title,
+          detail,
+        })
       }
       const dream = createDreamEngine(
         {
@@ -322,12 +351,24 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
         options.dream,
       )
 
+      ctx.host.onEvent('profile.changed', (event) => {
+        if (
+          event &&
+          typeof event === 'object' &&
+          (event as { type?: unknown }).type === 'profile.changed' &&
+          (event as { removed?: unknown }).removed === true
+        ) {
+          const profileId = (event as { profile?: { id?: unknown } }).profile?.id
+          if (typeof profileId === 'string' && profileId !== '') pruneDeletedProfile(profileId)
+        }
+      })
       ctx.hook.onTurnSettled((payload) => dream.collectFromSettledTurn(payload))
       ctx.service({
         id: 'memory-dream',
         liveTasks: () => dream.liveTasks(),
         async start() {
           await ctx.host.skills.ensureSkill(readMemorySkillAsset())
+          await reconcileDeletedProfiles()
           await dream.start()
         },
         stop: () => dream.stop(),

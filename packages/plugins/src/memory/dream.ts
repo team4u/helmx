@@ -8,7 +8,8 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { HelmxError, type ConversationListFilter, type ConversationSummary, type PluginDocHandle, type TurnSettledPayload } from '@helmx/protocol'
 import { createDurableScheduler, parseNextCronTime, type SchedulerClock } from '../durable-scheduler.js'
-import { isMemorySessionEligible, MAX_MEMORY_CHARS } from './store.js'
+import { errorMessageOf, isTopLevelHumanConversation } from '../shared-helpers.js'
+import { MAX_MEMORY_CHARS } from './store.js'
 
 export const DREAM_TARGET_CHARS = 1_500
 export const DREAM_MAX_TOKENS = 16_384
@@ -105,7 +106,7 @@ export function nextDailyRunAt(hour: number, timezone: string, afterMs: number):
     return next
   } catch (err) {
     if (err instanceof HelmxError) throw err
-    throw new HelmxError('validation_error', `invalid dream schedule (hour=${hour} tz=${timezone}): ${err instanceof Error ? err.message : String(err)}`, 400, { hour, timezone })
+    throw new HelmxError('validation_error', `invalid dream schedule (hour=${hour} tz=${timezone}): ${errorMessageOf(err)}`, 400, { hour, timezone })
   }
 }
 
@@ -336,7 +337,7 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
 
     const modelConv = ports
       .listConversations({ profileId, topLevelOnly: true })
-      .filter((c) => isMemorySessionEligible(c) && (c.ownedBy ?? 'human') === 'human')
+      .filter((c) => isTopLevelHumanConversation(c))
       .reduce<ConversationSummary | undefined>((best, c) => (!best || c.updatedAt > best.updatedAt || (c.updatedAt === best.updatedAt && c.id > best.id) ? c : best), undefined)
     if (!modelConv) return finish('no_conversation_for_model', { candidateCount: candidates.length, beforeChars: memory.content.length })
 
@@ -413,7 +414,7 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
   const collectFromSettledTurn = async (payload: TurnSettledPayload): Promise<void> => {
     if (scheduler.isStopping() || payload.outcome !== 'completed') return
     const conv = payload.conversation
-    if (!isMemorySessionEligible(conv) || (conv.ownedBy ?? 'human') !== 'human' || !ports.isMemoryEnabled(conv.profileId)) return
+    if (!isTopLevelHumanConversation(conv) || !ports.isMemoryEnabled(conv.profileId)) return
     const humanText = payload.inputs
       .filter((i) => i.origin === 'human' && typeof i.text === 'string')
       .map((i) => stripExcerptNoise(i.text.trim()))

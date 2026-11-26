@@ -8,6 +8,7 @@ import {
   type JsonSchema,
   type ModelTierSpec,
 } from '@helmx/protocol'
+import { isTopLevelHumanConversation } from '../shared-helpers.js'
 
 export const TIERS_PLUGIN_ID = 'builtin:tiers' as const
 export const TIERS_STATE_DOC = 'state' as const
@@ -168,7 +169,7 @@ export type ParsedTiersBorrowInputMeta =
 export function isTiersBorrowEligible(
   conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy'>,
 ): boolean {
-  return conv.parentConversationId === undefined && (conv.ownedBy ?? 'human') === 'human'
+  return isTopLevelHumanConversation(conv)
 }
 
 /** Parse optional `input.meta['builtin:tiers']` standby borrow metadata with strict validation. */
@@ -204,29 +205,6 @@ export function parseTiersBorrowInputMeta(meta: unknown): ParsedTiersBorrowInput
     borrowModel: rawModel.trim(),
     ...(trimmedEffort !== undefined ? { effort: trimmedEffort } : {}),
   }
-}
-
-export function asTiersDeletedConversationId(payload: unknown): number | undefined {
-  if (!isJsonObject(payload)) return undefined
-  if (payload['type'] !== undefined && payload['type'] !== 'conversation.deleted') return undefined
-  const id = payload['conversationId']
-  return typeof id === 'number' && Number.isSafeInteger(id) && id >= 1 ? id : undefined
-}
-
-export function asTiersConversationEntryEvent(
-  payload: unknown,
-): { conversationId: number; kind: string } | undefined {
-  if (!isJsonObject(payload)) return undefined
-  if (payload['type'] !== undefined && payload['type'] !== 'conversation.entry') return undefined
-  const conversationId = payload['conversationId']
-  if (typeof conversationId !== 'number' || !Number.isSafeInteger(conversationId) || conversationId < 1) {
-    return undefined
-  }
-  const entry = payload['entry']
-  if (!isJsonObject(entry) || typeof entry['kind'] !== 'string' || entry['kind'] === '') {
-    return undefined
-  }
-  return { conversationId, kind: entry['kind'] }
 }
 
 export function createEmptyTiersState(): TiersStateDoc {

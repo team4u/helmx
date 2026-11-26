@@ -10,6 +10,7 @@ import {
   type TurnSettledPayload,
 } from '@helmx/protocol'
 import { lastAssistantText } from '../entry-text.js'
+import { isTopLevelHumanConversation } from '../shared-helpers.js'
 
 /** Give thinking/reasoning models ample room so completeText does not abort with stopReason=length. */
 export const TITLE_MAX_TOKENS = 2_048
@@ -229,8 +230,7 @@ export function isAutoTitleCandidate(
 ): AutoTitleEligibility {
   if (!autoTitleEnabled) return { eligible: false }
   if (payload.outcome !== 'completed') return { eligible: false }
-  if (payload.conversation.parentConversationId !== undefined) return { eligible: false }
-  if ((payload.conversation.ownedBy ?? 'human') !== 'human') return { eligible: false }
+  if (!isTopLevelHumanConversation(payload.conversation)) return { eligible: false }
 
   const humanInputs = payload.inputs.filter(
     (input) => input.origin === 'human' && input.text.trim() !== '',
