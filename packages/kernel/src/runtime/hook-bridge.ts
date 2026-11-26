@@ -5,6 +5,7 @@
  * outbound tool-result boundary (schema validation, redaction, and artifact spill) on `ToolTask.afterTool`.
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import type { JsonValue } from '@earendil-works/chord/json'
 import type { Message } from '@earendil-works/pi-ai'
 import {
   GenerationTask,
@@ -43,9 +44,17 @@ import {
   withSections,
   withToolDeclarations,
 } from './hook-projection.js'
-import { guardToolExecutionResult, type GuardToolResultOptions } from './tools/tool-result-contract.js'
+import {
+  guardToolExecutionResult,
+  pluginToolResult,
+  type GuardToolResultOptions,
+} from './tools/tool-result-contract.js'
 import { ASK_USER_PROMPT_SNIPPET, ASK_USER_SCOPE, ASK_USER_TOOL_NAME } from './tools/ask-tools.js'
-import { lookupRegistryToolSchemas, type ToolSchemaEntry } from './tool-registry.js'
+import {
+  consumeRegistryToolAbortFallback,
+  lookupRegistryToolSchemas,
+  type ToolSchemaEntry,
+} from './tool-registry.js'
 
 const REGISTER_STRUCTURED_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
@@ -98,9 +107,52 @@ export class HookBridge {
           hook(ToolTask, {
             /** All final tool outputs pass once through the redaction, schema, budget, and spill boundary before persistence. */
             afterTool: async (call, result, api) => {
+              let effectiveResult = result
+              const schemas = this.resolveToolSchemas(call.name)
+              const isHarnessAbort =
+                result.isError === true &&
+                Array.isArray(result.diagnostics) &&
+                result.diagnostics.some((d) => d.code === 'aborted')
+              if (isHarnessAbort && typeof call.id === 'string' && call.id !== '') {
+                const fallback = consumeRegistryToolAbortFallback(
+                  this.options.registry,
+                  api.conversationId,
+                  call.id,
+                  call.name,
+                )
+                if (fallback !== undefined && (fallback.output !== undefined || fallback.presentationMeta !== undefined)) {
+                  try {
+                    const normalized = pluginToolResult(
+                      {
+                        ...(fallback.output !== undefined ? { output: fallback.output } : {}),
+                        ...(fallback.presentationMeta !== undefined
+                          ? { presentationMeta: fallback.presentationMeta }
+                          : {}),
+                      },
+                      this.options.redact,
+                      {
+                        presentationMetaSchema: schemas.presentationMetaSchema,
+                        toolName: call.name,
+                        callId: call.id,
+                      },
+                    )
+                    effectiveResult = {
+                      ...result,
+                      output: [...(result.output ?? []), ...normalized.output],
+                      ...(normalized.details !== undefined ? { details: normalized.details as JsonValue } : {}),
+                    }
+                  } catch (fallbackError) {
+                    const msg = this.options.redact(
+                      fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+                    )
+                    process.stderr.write(
+                      `[helmx] abort fallback ignored for ${call.name} (${call.id}): ${msg}\n`,
+                    )
+                  }
+                }
+              }
               try {
-                const schemas = this.resolveToolSchemas(call.name)
-                return await this.options.prepareToolResult(api.conversationId, result, {
+                return await this.options.prepareToolResult(api.conversationId, effectiveResult, {
                   toolName: call.name,
                   callId: call.id,
                   structuredOutputSchema: schemas.structuredOutputSchema,

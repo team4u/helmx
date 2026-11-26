@@ -19,6 +19,7 @@ export interface PersistedSubagentSpec {
   agentId: string
   requestId: string
   prompt: string
+  label?: string
   agentType?: string
   nodeId?: string
   cwd?: string

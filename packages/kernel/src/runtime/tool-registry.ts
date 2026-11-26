@@ -25,7 +25,11 @@ import {
   KERNEL_TOOL_PRESENTATION_META_SCHEMAS,
   matchesConversationScope,
 } from '@helmx/protocol'
-import type { ConversationSummary, JsonSchema } from '@helmx/protocol'
+import type {
+  ConversationSummary,
+  JsonSchema,
+  PluginToolAbortFallback,
+} from '@helmx/protocol'
 import type { DerivedToolSpec, PluginHost } from '../plugins/index.js'
 import type { AskService } from './asks.js'
 import { actionCliCommand, compactActionSignature } from './action-prompts.js'
@@ -105,6 +109,41 @@ interface RegistryToolSchemaMaps {
 
 const registryToolSchemas = new WeakMap<object, RegistryToolSchemaMaps>()
 
+interface RegisteredAbortFallback {
+  readonly toolName: string
+  readonly fallback: PluginToolAbortFallback
+}
+
+const registryAbortFallbacks = new WeakMap<object, Map<string, RegisteredAbortFallback>>()
+
+function abortFallbackKey(conversationId: number, callId: string): string {
+  return `${conversationId}\u0000${callId}`
+}
+
+/**
+ * Consume and remove a registered tool abort fallback (called from `HookBridge.afterTool` when
+ * `ToolTask.abort` settles an aborted tool call; never consumed during graceful `writeAtClose`).
+ */
+export function consumeRegistryToolAbortFallback(
+  registry: object,
+  conversationId: number,
+  callId: string,
+  toolName: string,
+): PluginToolAbortFallback | undefined {
+  const map = registryAbortFallbacks.get(registry)
+  if (!map) return undefined
+  const key = abortFallbackKey(conversationId, callId)
+  const entry = map.get(key)
+  if (!entry || entry.toolName !== toolName) return undefined
+  map.delete(key)
+  return entry.fallback
+}
+
+/** Clear all staged abort fallbacks associated with a SDK registry (called on runtime close). */
+export function clearRegistryToolAbortFallbacks(registry: object): void {
+  registryAbortFallbacks.get(registry)?.clear()
+}
+
 /** Lookup registered kernel/plugin tool schemas attached to a shared SDK registry instance. */
 export function lookupRegistryToolSchemas(registry: object, toolName: string): ToolSchemaEntry | undefined {
   const maps = registryToolSchemas.get(registry)
@@ -121,6 +160,9 @@ export class RuntimeToolRegistry {
       kernel: this.kernelToolSchemas,
       plugin: this.pluginToolSchemas,
     })
+    if (!registryAbortFallbacks.has(options.registry)) {
+      registryAbortFallbacks.set(options.registry, new Map())
+    }
   }
 
   /** Lookup declared schemas for an installed kernel or plugin tool by name. */
@@ -285,49 +327,72 @@ export class RuntimeToolRegistry {
         ...(spec.replay !== undefined ? { replay: spec.replay } : {}),
         async execute(args: unknown, api: ToolExecutionApi, context: Context): Promise<ToolExecutionResult> {
           const toolApi: PluginToolApi = api
-          const result = await host.executeTool(spec.name, args, {
-            conversationId: toolApi.conversationId,
-            ...(typeof toolApi.callId === 'string' && toolApi.callId !== '' ? { callId: toolApi.callId } : {}),
-            signal: context.abortSignal,
-            ...(typeof toolApi.output === 'function'
-              ? {
-                  onUpdate: (partial) => {
-                    // SDK contract: `output()` throws after settlement (`Tool call has settled`) — silently
-                    // drop only that late-update case; propagate other errors (e.g. host faults) to plugin authors
-                    // rather than faking success. Redaction runs on full concatenated partial text (so secrets split
-                    // across chunks still match; synchronous `redact` snapshots current secrets and does not promise
-                    // eliminating all in-process leaks).
-                    const text = typeof partial.output === 'string'
-                      ? partial.output
-                      : partial.output.map((block) => block.text).join('')
-                    try {
-                      toolApi.output!(redact(text))
-                    } catch (err) {
-                      if (err instanceof Error && err.message.includes('has settled')) return
-                      throw err
-                    }
-                  },
-                }
-              : {}),
-          })
           const callId = typeof toolApi.callId === 'string' && toolApi.callId !== '' ? toolApi.callId : undefined
-          if (spec.sourceKind === 'action') {
-            return actionToolResult(result, args, (text) => redact(text), {
+          const fallbackKey =
+            callId !== undefined ? abortFallbackKey(toolApi.conversationId, callId) : undefined
+          const abortFallbacks =
+            fallbackKey !== undefined ? registryAbortFallbacks.get(registry) : undefined
+          try {
+            const result = await host.executeTool(spec.name, args, {
+              conversationId: toolApi.conversationId,
+              ...(callId !== undefined ? { callId } : {}),
+              signal: context.abortSignal,
+              ...(fallbackKey !== undefined && abortFallbacks !== undefined
+                ? {
+                    setAbortFallback: (fallback) => {
+                      if (fallback === undefined) {
+                        abortFallbacks.delete(fallbackKey)
+                      } else {
+                        abortFallbacks.set(fallbackKey, { toolName: spec.name, fallback })
+                      }
+                    },
+                  }
+                : {}),
+              ...(typeof toolApi.output === 'function'
+                ? {
+                    onUpdate: (partial) => {
+                      // SDK contract: `output()` throws after settlement (`Tool call has settled`) — silently
+                      // drop only that late-update case; propagate other errors (e.g. host faults) to plugin authors
+                      // rather than faking success. Redaction runs on full concatenated partial text (so secrets split
+                      // across chunks still match; synchronous `redact` snapshots current secrets and does not promise
+                      // eliminating all in-process leaks).
+                      const text = typeof partial.output === 'string'
+                        ? partial.output
+                        : partial.output.map((block) => block.text).join('')
+                      try {
+                        toolApi.output!(redact(text))
+                      } catch (err) {
+                        if (err instanceof Error && err.message.includes('has settled')) return
+                        throw err
+                      }
+                    },
+                  }
+                : {}),
+            })
+            if (spec.sourceKind === 'action') {
+              return actionToolResult(result, args, (text) => redact(text), {
+                structuredOutputSchema: spec.structuredOutputSchema,
+                presentationMetaSchema: spec.presentationMetaSchema,
+                projectPresentationMeta: spec.projectPresentationMeta,
+                formatOutput: spec.formatOutput,
+                toolName: spec.name,
+                ...(callId !== undefined ? { callId } : {}),
+              }) as ToolExecutionResult
+            }
+            // Wrap plugin `ctx.tool` return value into the SDK `ToolExecutionResult` contract.
+            return pluginToolResult(result, (text) => redact(text), {
               structuredOutputSchema: spec.structuredOutputSchema,
               presentationMetaSchema: spec.presentationMetaSchema,
-              projectPresentationMeta: spec.projectPresentationMeta,
-              formatOutput: spec.formatOutput,
               toolName: spec.name,
               ...(callId !== undefined ? { callId } : {}),
             }) as ToolExecutionResult
+          } finally {
+            // Retain staged abort fallback only when the call actually aborted so ToolTask.abort -> afterTool
+            // can merge it atomically; normal completion and non-abort failures clear immediately.
+            if (fallbackKey !== undefined && abortFallbacks !== undefined && !context.abortSignal?.aborted) {
+              abortFallbacks.delete(fallbackKey)
+            }
           }
-          // Wrap plugin `ctx.tool` return value into the SDK `ToolExecutionResult` contract.
-          return pluginToolResult(result, (text) => redact(text), {
-            structuredOutputSchema: spec.structuredOutputSchema,
-            presentationMetaSchema: spec.presentationMetaSchema,
-            toolName: spec.name,
-            ...(callId !== undefined ? { callId } : {}),
-          }) as ToolExecutionResult
         },
       })
       return wrapToolRegistration(raw)

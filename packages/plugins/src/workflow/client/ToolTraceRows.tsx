@@ -18,6 +18,7 @@ import {
   IconButton,
   KvGrid,
   MarkdownText,
+  PluginSlot,
   StatusLight,
   ToolCallDetails,
   formatCompactTimestamp,
@@ -138,10 +139,19 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const status: ExecutionStatus = useMemo(() => {
     if (hasPendingAsk) return 'blocked'
     if (!isLatest) {
+      if (execInfo?.status === 'aborted') return 'aborted'
       return props.status === 'error' ? 'error' : props.status === 'running' ? 'working' : 'done'
     }
     if (backgroundRun === undefined && isBgHandle && props.status === 'done' && execInfo?.status === 'running') {
       return 'working'
+    }
+    if (
+      backgroundRun === undefined &&
+      execInfo?.status === 'aborted' &&
+      childSummary?.status !== 'working' &&
+      childSummary?.status !== 'blocked'
+    ) {
+      return 'aborted'
     }
     return statusFromConversation(childSummary, backgroundRun, props.status)
   }, [hasPendingAsk, isLatest, childSummary, backgroundRun, props.status, isBgHandle, execInfo?.status])
@@ -230,6 +240,13 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const worktreeTooltip =
     worktreeBranch !== undefined ? worktreeBadgeTitle(worktreeBranch, execMeta?.worktree?.path, locale) : undefined
   const canNavigate = canOpenDrawer || canOpenWorkbench
+  const cleanupNodeId =
+    execMeta?.nodeId ?? (childSummary?.nodeId && childSummary.nodeId !== '' ? childSummary.nodeId : undefined)
+  const showSyncWorktreeCleanup =
+    backgroundRun === undefined &&
+    execMeta?.worktree !== undefined &&
+    isLatest &&
+    !isActive
 
   return (
     <div className="trace-entry">
@@ -291,6 +308,21 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
             settledMs={settledMs}
             className="trace-duration"
           />
+          {showSyncWorktreeCleanup && execMeta?.worktree !== undefined ? (
+            <PluginSlot
+              name="worktree-cleanup"
+              inline
+              slotProps={{
+                worktree: {
+                  path: execMeta.worktree.path,
+                  branch: execMeta.worktree.branch,
+                  ...(execMeta.worktree.id !== undefined ? { id: execMeta.worktree.id } : {}),
+                },
+                ...(cleanupNodeId !== undefined ? { nodeId: cleanupNodeId } : {}),
+                compact: true,
+              }}
+            />
+          ) : null}
         </span>
       </div>
 

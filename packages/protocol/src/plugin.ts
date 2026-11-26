@@ -313,12 +313,24 @@ export interface PluginActionSpec<TIn, TOut> extends PluginPromptFields {
   handler(input: TIn, context: PluginActionContext): MaybePromise<TOut>
 }
 
+/** ctx.tool abort 补偿载荷（仅在 ToolTask.abort 结算时合入最终 pi.tool-result）。 */
+export interface PluginToolAbortFallback {
+  output?: string | Array<PluginToolTextBlock>
+  presentationMeta?: Record<string, unknown>
+}
+
 /** ctx.tool：模型专用工具。 */
 export interface PluginToolContext {
   conversationId: number
   /** 当前工具调用 ID（供子会话/工作流绑定 parentToolCallId）。 */
   callId?: string
   signal?: AbortSignal
+  /**
+   * 登记当次工具调用在被用户中止（ToolTask.abort）时合入最终 pi.tool-result 的补偿载荷
+   * （output 与/或受 presentationMetaSchema 约束的 presentationMeta）。
+   * 正常返回、常规错误与优雅重启回退（writeAtClose）均不触发；重复调用覆写最新值，传 undefined 清除。
+   */
+  setAbortFallback?(fallback: PluginToolAbortFallback | undefined): void
   /**
    * 流式进度上报（完整 partial 语义，与 SDK ToolExecutionResult 同构）：
    * - output: string | Array<{ type: 'text'; text: string }> —— 至今累计快照
