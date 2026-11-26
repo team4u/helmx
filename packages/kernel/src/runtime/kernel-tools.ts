@@ -67,7 +67,7 @@ const runActionParameters = obj({
   pluginId: opt(
     str({
       description:
-        'Optional plugin ID filter used only with list: true: exact ID (e.g. "builtin:triggers", "core:conversations") or namespace prefix ending with ":" (e.g. "core:", "builtin:")',
+        'Optional plugin ID filter used only with list: true: exact ID (e.g. "core:conversations") or namespace prefix ending with ":" (e.g. "core:", "builtin:")',
     }),
   ),
 })
@@ -78,7 +78,7 @@ export function createRunActionTool(host: KernelToolHost): ToolRegistration<type
     name: 'run_action',
     description:
       'Invoke, inspect, or discover plugin-declared and core actions. ' +
-      'Set list: true (with optional pluginId — exact ID like "builtin:triggers" or namespace prefix ending with ":" like "core:" / "builtin:") to list reachable public actions in this conversation (including actions omitted from <available_actions>) without executing. ' +
+      'Set list: true (with optional pluginId — exact ID like "core:conversations" or namespace prefix ending with ":" like "core:" / "builtin:") to list reachable public actions in this conversation (including actions omitted from <available_actions>) without executing. ' +
       'Set describe: true with actionId ("pluginId.actionId") to read the full action manifest (inputSchema/outputSchema) without executing. ' +
       'Otherwise pass actionId ("pluginId.actionId") and optional input to invoke the action; invalid inputs fail explicitly.',
     parameters: runActionParameters,

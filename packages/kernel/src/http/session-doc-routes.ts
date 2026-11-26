@@ -75,17 +75,20 @@ export async function handleSessionDocsDomain(
 
   return port.multiplexResponse(subs, ctx.request, {
     snapshot: (sub) => {
-      const doc = snapshotDocOf(plugins, sub)
+      const doc = snapshotDocOf(plugins, sub.pluginId, sub.name, sub.conversationId)
       return { seq: port.seq, doc }
     },
   })
 }
 
-function snapshotDocOf(
+/** Ensures `getPublicSessionDoc` returns synchronously for atomic snapshot-after-subscribe semantics. */
+export function snapshotDocOf(
   plugins: Pick<PluginHost, 'getPublicSessionDoc'>,
-  sub: SessionDocSubscription,
+  pluginId: string,
+  name: string,
+  conversationId: number,
 ): PublicPluginSessionDoc {
-  const result = plugins.getPublicSessionDoc(sub.pluginId, sub.name, sub.conversationId)
+  const result = plugins.getPublicSessionDoc(pluginId, name, conversationId)
   if ((result as unknown) instanceof Promise) {
     throw new HelmxError(
       'not_implemented',

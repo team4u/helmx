@@ -4,19 +4,12 @@
  */
 import { REQUEST_SCHEMAS } from '@helmx/protocol'
 import type { AuthService } from '../services/index.js'
-import { jsonOk, errorResponse, readJsonBody, type JsonRedactor } from './http-utils.js'
+import { jsonOk, errorResponse, readJsonBody, bearerToken, type JsonRedactor } from './http-utils.js'
 import { assertBodySchema } from './validate.js'
 import type { RouteContext } from './route-context.js'
 
 export interface AuthRoutesTarget {
   readonly auth: Pick<AuthService, 'status' | 'verifyToken' | 'setup' | 'login'>
-}
-
-function bearerToken(request: Request): string | undefined {
-  const header = request.headers.get('authorization')
-  if (header === null) return undefined
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim())
-  return match?.[1] ?? undefined
 }
 
 export async function handleAuthDomain(

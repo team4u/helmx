@@ -24,7 +24,7 @@ import {
   type ReloadablePluginHost,
 } from './external-loader.js';
 import { externalPluginsDir } from './plugin-dir-name.js';
-import { doctorPluginDir } from './plugin-doctor.js';
+import { doctorPluginDir, type PluginDoctorHostFactory } from './plugin-doctor.js';
 import { readHelmxClientDependencies } from './plugin-manifest.js';
 import { requirePlugin } from './plugin-host-transitions.js';
 import { assertProvidersIdle } from './provider-coordinator.js';
@@ -43,6 +43,7 @@ interface DxReloadHostPort extends ReloadablePluginHost {
 export interface DxCoordinatorDeps {
   dataDir: string;
   buildProvider?: PluginBuildProvider;
+  createDoctorHost?: PluginDoctorHostFactory;
   plugins: ReadonlyMap<string, PluginState>;
   tracker: PluginTaskTracker;
   providers?: PluginProviderPort;
@@ -52,7 +53,7 @@ export interface DxCoordinatorDeps {
 }
 
 /**
- * host manifest must reach assertion: lifecycle operation after completion list() still find fewer than plugin i.e. internal state inconsistent.
+ * Host manifest invariant check: if a completed lifecycle operation cannot find the plugin in `list()`, internal state is inconsistent.
  */
 function requireSummary(
   host: Pick<DxReloadHostPort, 'list'>,
@@ -65,14 +66,14 @@ function requireSummary(
 }
 
 export async function doctorExternalPluginDir(
-  options: { dataDir: string; buildProvider?: PluginBuildProvider },
+  options: { dataDir: string; buildProvider?: PluginBuildProvider; createDoctorHost?: PluginDoctorHostFactory },
   target: { dir?: string; id?: string },
 ): Promise<PluginDoctorReport> {
   let dir: string;
   let requestedId: string | undefined;
   if (target.id !== undefined) {
     if (target.dir !== undefined) {
-      throw new HelmxError('validation_error', 'doctor target id and dir/path mutual exclusion (choose one provide)', 400);
+      throw new HelmxError('validation_error', 'doctor target.id and target.dir/path are mutually exclusive (provide only one)', 400);
     }
     if (target.id.trim().length === 0) {
       throw new HelmxError('validation_error', 'doctor target id must be a non-empty string', 400);
@@ -84,7 +85,7 @@ export async function doctorExternalPluginDir(
       const codeRoot = externalPluginsDir(options.dataDir);
       throw new HelmxError(
         'plugin_source_missing',
-        `in ${codeRoot} under not found id is ${target.id} external plugin source directory`,
+        `External plugin source directory for id '${target.id}' not found under ${codeRoot}`,
         404,
         { pluginId: target.id, pluginsDir: codeRoot },
       );
@@ -95,9 +96,12 @@ export async function doctorExternalPluginDir(
     assertDoctorTargetDir(target.dir, 'dir');
     dir = target.dir;
   } else {
-    throw new HelmxError('validation_error', 'doctor must provide target:dir/path(directory absolute path) or id(registered plugin)', 400);
+    throw new HelmxError('validation_error', 'doctor target must specify either dir/path (absolute directory path) or id (registered plugin)', 400);
   }
-  const report = await doctorPluginDir(dir, { buildProvider: options.buildProvider });
+  const report = await doctorPluginDir(dir, {
+    buildProvider: options.buildProvider,
+    hostFactory: options.createDoctorHost,
+  });
   return requestedId === undefined ? report : { ...report, requestedId };
 }
 
@@ -119,7 +123,10 @@ export async function reloadExternalPluginFlow(
     doctor: skipDoctor
       ? undefined
       : async (dir) => {
-          const report = await doctorPluginDir(dir, { buildProvider: deps.buildProvider });
+          const report = await doctorPluginDir(dir, {
+            buildProvider: deps.buildProvider,
+            hostFactory: deps.createDoctorHost,
+          });
           if (!report.ok) {
             const first = report.checks.find((c) => c.error !== undefined);
             throw new HelmxError(
@@ -187,10 +194,8 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
     assertManagedPluginUpdateSafe: (pluginId) => {
       assertManagedUpdateIdle(deps, pluginId);
     },
-    updateManagedPlugin: async (pluginId, dir, options) => {
+    updateManagedPlugin: async (pluginId) => {
       await deps.host.reloadExternalPlugin(pluginId, { doctor: false });
-      void dir;
-      void options;
       const summary = requireSummary(deps.host, pluginId, {
         code: 'plugin_package_update_failed',
         message: `Plugin ${pluginId} missing from host summary list after update reload`,
@@ -218,7 +223,10 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
     },
     listSummaries: () => deps.host.list(),
     doctorDir: (dir, options) =>
-      doctorPluginDir(dir, { buildProvider: options?.buildProvider ?? deps.buildProvider }),
+      doctorPluginDir(dir, {
+        buildProvider: options?.buildProvider ?? deps.buildProvider,
+        hostFactory: deps.createDoctorHost,
+      }),
     verifyPrebuiltDir: (dir) => verifyDeclaredPrebuiltDir(dir),
     readClientDependencies: (dir) => readHelmxClientDependencies(dir),
     externalPluginsDir: (dataDir) => externalPluginsDir(dataDir),

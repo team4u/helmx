@@ -30,18 +30,10 @@ import { withFileLock } from './file-lock.js'
 export type { Profile }
 
 export const DEFAULT_PROFILE_ID = 'assistant'
-const DEFAULT_PROFILE_NAME = 'person assist'
+const DEFAULT_PROFILE_NAME = 'Personal Assistant'
 /** Valid thinking level enum values (aligned with pi-ai ModelThinkingLevel; single source shared with HTTP validation). */
 export const PROFILE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 const THINKING_LEVELS = new Set<string>(PROFILE_THINKING_LEVELS)
-
-/**
- * Cross-platform absolute path check: POSIX `/`, Windows drive `^[a-zA-Z]:[\\/]` and UNC `^\\\\[^\\]+\\[^\\]+`.
- * Evaluates remote/Windows target path shape independently of the Hub host OS.
- */
-export function isCrossPlatformAbsolutePath(p: string): boolean {
-  return p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p) || /^\\\\[^\\]+\\[^\\]+/.test(p)
-}
 
 /**
  * Default resident system prompt (kernel-only, zero hardcoded plugin/skill/worktree copy).

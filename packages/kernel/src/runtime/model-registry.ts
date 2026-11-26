@@ -2,99 +2,56 @@
  * Model catalog registry: manages `Models` instances, runtime providers, dynamic catalog refreshes,
  * and global default model / reasoning effort configuration.
  *
- * Extracted from `runtime.ts` (decomposing god-class model responsibilities). Serialization guarantee:
- * reload / register / unregister / refresh all queue onto `modelsChain` so stale concurrent rebuilds
- * cannot overwrite newer sets; when `Models` is externally injected (tests/embedded), ownership stays
- * with the caller and mutating paths no-op.
+ * Serialization guarantee: reload / register / unregister / refresh all queue onto `modelsChain`
+ * so stale concurrent rebuilds cannot overwrite newer sets; when `Models` is externally injected
+ * (tests/embedded), ownership stays with the caller and mutating paths no-op.
  */
-import type { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
-import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import type { Models, Provider } from '@earendil-works/pi-ai/models'
 import type { ModelsStore } from '@earendil-works/pi-ai'
 import type {
   ModelCatalog,
   ModelProvidersRefreshResult,
-  ModelTierCatalogEntry,
-  ModelTiersCapability,
   ModelTierSpec,
-  ProvidedCapability,
 } from '@helmx/protocol'
-import { HelmxError, MODEL_TIER_PREFIX, isValidModelTierId } from '@helmx/protocol'
-
-const MODEL_TIERS_CAPABILITY_ID = 'helmx.model-tiers'
+import { HelmxError, MODEL_TIER_PREFIX } from '@helmx/protocol'
 import type { ConfigService, CredentialService, ProviderService, SecretStash } from '../services/index.js'
-import { THINKING_LEVELS, listModelCatalog, listModelProviders, buildModels, type ResolvedModelRef } from './models.js'
+import { createDiagnosticEmitter, type KernelDiagnosticEmitter } from './diagnostics.js'
+import {
+  assertConfigThinkingLevel,
+  assertInputThinkingLevel,
+  assertModelsStoreHealthy,
+  buildModelTierCatalogEntries,
+  parseDisabledModelsConfig,
+  parseModelRefOrThrow,
+  parseModelThinkingLevelsConfig,
+  validateModelThinkingLevels,
+  validateModelThinkingUpdate,
+  getModelDefaults,
+  modelDefaultsFromCatalog,
+  normalizeModelRefreshInput,
+  updateModelDefaults,
+  type ModelDefaultsPatch,
+  type ModelDefaultsPort,
+  type ModelDefaultsSnapshot,
+} from './model-config-helpers.js'
+import { ModelTiersCoordinator, type ModelTiersCapabilityHost } from './model-tiers-coordinator.js'
+import { RuntimeProviderTracker } from './model-runtime-providers.js'
+import { buildModels, listModelCatalog, listModelProviders, type ResolvedModelRef } from './models.js'
 
-export type { ResolvedModelRef }
-
-/** Built-in PI provider ID set (lazily built once for registration conflict preflight without hardcoding lists). */
-const builtinProviderIds = new Set(builtinProviders().map((p) => p.id))
-
-/**
- * File-level corruption detection for `models-store.json`: SDK refresh packages store I/O errors into
- * `result.errors` (without rejecting so one failing provider doesn't abort others), but file corruption is a
- * global failure — silently falling back to an empty catalog would drop all cached dynamic catalogs. Rethrows explicitly.
- */
-function assertModelsStoreHealthy(result: { errors: ReadonlyMap<string, Error> }): void {
-  for (const [providerId, err] of result.errors) {
-    if (err instanceof HelmxError && err.code === 'models_store_corrupted') {
-      throw new HelmxError(
-        'models_store_corrupted',
-        `models-store.json is corrupted (discovered while reading ${providerId}): ${err.message}`,
-        500,
-      )
-    }
-  }
+export type {
+  ModelDefaultsPatch,
+  ModelDefaultsPort,
+  ModelDefaultsSnapshot,
+  ResolvedModelRef,
+}
+export {
+  getModelDefaults,
+  modelDefaultsFromCatalog,
+  normalizeModelRefreshInput,
+  updateModelDefaults,
 }
 
-/**
- * Parse `config.json.disabledModels` (`providerId -> modelId[]`); defaults to `{}` and throws
- * `config_corrupt` explicitly on malformed structure (never silently discarded).
- */
-function parseDisabledModelsConfig(raw: unknown): Record<string, string[]> {
-  if (raw === undefined || raw === null) return {}
-  if (typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmxError('config_corrupt', 'config.json.disabledModels must be an object (providerId -> modelId[])', 500)
-  }
-  const result: Record<string, string[]> = {}
-  for (const [providerId, ids] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof providerId !== 'string' || providerId === '') {
-      throw new HelmxError('config_corrupt', `config.json.disabledModels key must be a non-empty provider ID: ${String(providerId)}`, 500)
-    }
-    if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string' && id !== '')) {
-      throw new HelmxError('config_corrupt', `config.json.disabledModels['${providerId}'] must be an array of non-empty strings`, 500)
-    }
-    result[providerId] = [...(ids as string[])]
-  }
-  return result
-}
-
-/**
- * Parse `config.json.modelThinkingLevels` (`'provider/modelId' -> thinking level`); defaults to `{}` and throws
- * `config_corrupt` explicitly on malformed structure (never silently discarded). Keys keep the full reference
- * verbatim (model IDs may themselves contain `/`, e.g. aggregate gateways), so lookups rebuild the key from
- * `provider + '/' + modelId` instead of re-parsing. Synchronous (used inside `configSvc.updateBy` locks);
- * level enum validation happens at the load boundary.
- */
-function parseModelThinkingLevelsConfig(raw: unknown): Record<string, string> {
-  if (raw === undefined || raw === null) return {}
-  if (typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmxError('config_corrupt', 'config.json.modelThinkingLevels must be an object (model reference -> thinking level)', 500)
-  }
-  const result: Record<string, string> = {}
-  for (const [ref, level] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof ref !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(ref)) {
-      throw new HelmxError('config_corrupt', `config.json.modelThinkingLevels key must be a 'provider/model' reference: ${ref}`, 500)
-    }
-    if (typeof level !== 'string' || level.trim() === '') {
-      throw new HelmxError('config_corrupt', `config.json.modelThinkingLevels['${ref}'] must be a non-empty thinking level`, 500)
-    }
-    result[ref] = level
-  }
-  return result
-}
-
-interface ModelRegistryOptions {
+export interface ModelRegistryOptions {
   readonly dataDir: string
   readonly providersSvc: ProviderService
   readonly credentialsSvc: CredentialService
@@ -114,6 +71,8 @@ interface ModelRegistryOptions {
   readonly isClosed?: () => boolean
   /** Writability guard (optional in standalone tests; throws on fatal storage error or closed runtime). */
   readonly assertWritable?: () => void
+  /** Diagnostic emitter for async tier/alignment warnings (optional; defaults to redacted console emitter). */
+  readonly emitDiagnostic?: KernelDiagnosticEmitter
 }
 
 export class ModelRegistry {
@@ -125,27 +84,15 @@ export class ModelRegistry {
   private readonly setModels: (m: Models) => void
   private readonly externalModels: boolean
   private readonly events: ModelRegistryOptions['events']
-  private readonly pluginHost: ModelRegistryOptions['pluginHost']
   private readonly alignAllConversations: ModelRegistryOptions['alignAllConversations']
   private readonly isClosed: () => boolean
   private readonly assertWritable: () => void
-  /** Runtime dynamically registered providers (injected by plugins via `HostOptions.providers.register`). */
-  private readonly runtimeProviders = new Map<string, Provider>()
-  /** Runtime provider ownership (`providerId` -> owning `pluginId`; cleared on unregister). */
-  private readonly runtimeProviderOwners = new Map<string, string>()
-  /** Serial chain for `models` mutations (shared by reload/register/unregister to prevent stale overwrites). */
+  private readonly runtimeTracker: RuntimeProviderTracker
+  private readonly tiersCoordinator: ModelTiersCoordinator
   private modelsChain: Promise<unknown> = Promise.resolve()
   private modelsRefreshAbort: AbortController | undefined
-  /** Monotonic generation counter (incremented per published set; prevents in-flight refreshes from publishing stale snapshots). */
   private modelsGeneration = 0
-  /** Monotonic epoch bumped whenever defaults, providers, catalog, or model tiers change (gates startup re-alignment). */
   private alignmentEpochValue = 0
-  /** In-flight usage counter for runtime providers (`providerId` -> active stream/refresh count; teardown preflight). */
-  private readonly runtimeProviderUsage = new Map<string, number>()
-  /** Retiring markers (held briefly inside the `modelsChain` critical section): ensures newly started streams/refreshes
-   * during `rebuild`'s await window fail deterministically and eliminates the TOCTOU gap between idle check and ownership
-   * deletion (usage increments occur outside this serial chain — see `wrapRuntimeProvider`). */
-  private readonly retiringRuntimeProviders = new Set<string>()
   /** Synchronously readable API key cache (warmed on startup, refreshed on reload, consumed by `buildModels` closure). */
   readonly apiKeyCache: Record<string, string> = {}
   private modelsCurrent: Models
@@ -159,17 +106,6 @@ export class ModelRegistry {
   modelPlaceholder = 'unconfigured'
   /** Explicitly disabled models (`providerId -> modelId[]`; from `config.json.disabledModels`). */
   private disabledModels: Record<string, string[]> = {}
-  /** Bound plugin capability host for consuming `'helmx.model-tiers'` providers. */
-  private boundCapabilityHost:
-    | {
-        consumeCapability<T>(capabilityId: string): ReadonlyArray<ProvidedCapability<T>>
-        onCapabilityChanged(capabilityId: string, listener: () => void): () => void
-      }
-    | undefined
-  /** Active `onChanged` unsubscribers keyed by provider implementation identity. */
-  private readonly tierSubscriptions = new Map<ModelTiersCapability, () => void>()
-  /** Unsubscribe handle for `PluginHost.onCapabilityChanged('helmx.model-tiers', ...)`. */
-  private releaseTierCapabilityListener: (() => void) | undefined
 
   constructor(
     options: ModelRegistryOptions,
@@ -184,12 +120,26 @@ export class ModelRegistry {
     this.setModels = options.externalModels ? () => { /* external inject: hot reload must not replace caller model set */ } : options.setModels
     this.externalModels = options.externalModels
     this.events = options.events
-    this.pluginHost = options.pluginHost
     this.alignAllConversations = options.alignAllConversations
     this.isClosed = options.isClosed ?? (() => false)
     this.assertWritable = options.assertWritable ?? (() => {})
+    const emitDiagnostic = options.emitDiagnostic ?? createDiagnosticEmitter({ redact: (t) => options.stash.redact(t) })
+    this.runtimeTracker = new RuntimeProviderTracker({
+      providersSvc: options.providersSvc,
+      assertOwnerAvailable: (ownerId) => options.pluginHost()?.assertProviderAvailable(ownerId),
+    })
+    this.tiersCoordinator = new ModelTiersCoordinator({
+      onChanged: () => {
+        this.alignmentEpochValue += 1
+        this.events.publish('models.changed', { providers: [] })
+      },
+      alignAllConversations: this.alignAllConversations,
+      isClosed: this.isClosed,
+      emitDiagnostic,
+    })
     this.modelsCurrent = initialModels
     this.defaultModel = defaults.model
+    this.defaultThinkingLevel = defaults.thinkingLevel
     this.defaultCompactionModel = defaults.compactionModel
     this.defaultCompactionThinkingLevel = defaults.compactionThinkingLevel
   }
@@ -214,36 +164,13 @@ export class ModelRegistry {
   }
 
   /** Attach `PluginHost` capability lookup so `ModelRegistry` consumes `'helmx.model-tiers'` automatically. */
-  bindPluginHost(host: {
-    consumeCapability<T>(capabilityId: string): ReadonlyArray<ProvidedCapability<T>>
-    onCapabilityChanged(capabilityId: string, listener: () => void): () => void
-  }): void {
-    this.unbindTierCapabilities()
-    this.boundCapabilityHost = host
-    this.releaseTierCapabilityListener = host.onCapabilityChanged(MODEL_TIERS_CAPABILITY_ID, () => {
-      this.syncTierCapabilities(true)
-    })
-    this.syncTierCapabilities(false)
-  }
-
-  private unbindTierCapabilities(): void {
-    const release = this.releaseTierCapabilityListener
-    this.releaseTierCapabilityListener = undefined
-    release?.()
-    for (const unsub of [...this.tierSubscriptions.values()]) {
-      try {
-        unsub()
-      } catch {
-        // Ignore cleanup errors from retiring plugin listeners.
-      }
-    }
-    this.tierSubscriptions.clear()
-    this.boundCapabilityHost = undefined
+  bindPluginHost(host: ModelTiersCapabilityHost): void {
+    this.tiersCoordinator.bind(host)
   }
 
   /** Wait for all in-flight model changes to settle and detach capability listeners before shutdown. */
   async dispose(): Promise<void> {
-    this.unbindTierCapabilities()
+    this.tiersCoordinator.unbind()
     await this.modelsChain
   }
 
@@ -262,190 +189,23 @@ export class ModelRegistry {
       disabledModels: this.disabledModels,
     })
     const tiers = this.getRegisteredTiers()
-    const tierEntries = Object.entries(tiers)
-    if (tierEntries.length > 0) {
-      const modelMap = new Map<string, (typeof catalog.models)[number]>(
-        catalog.models.map((m) => [`${m.provider}/${m.modelId}`, m]),
-      )
-      const modelTiers: ModelTierCatalogEntry[] = []
-      for (const [id, spec] of tierEntries) {
-        const slash = spec.model.indexOf('/')
-        const targetProvider = slash > 0 ? spec.model.slice(0, slash) : ''
-        const targetModelId = slash > 0 ? spec.model.slice(slash + 1) : ''
-        const disabled = targetProvider !== '' && targetModelId !== ''
-          ? this.isModelDisabled(targetProvider, targetModelId)
-          : false
-        const targetEntry = modelMap.get(spec.model)
-        const available = targetEntry !== undefined && targetEntry.available === true && !disabled
-        const thinkingLevels = catalog.thinkingLevels[spec.model]
-        modelTiers.push({
-          id,
-          model: spec.model,
-          ...(spec.thinkingLevel !== undefined && spec.thinkingLevel !== '' ? { thinkingLevel: spec.thinkingLevel } : {}),
-          ...(spec.description !== undefined && spec.description !== '' ? { description: spec.description } : {}),
-          available,
-          ...(disabled ? { disabled: true } : {}),
-          ...(thinkingLevels !== undefined ? { thinkingLevels } : {}),
-        })
-      }
-      catalog.modelTiers = modelTiers
+    if (Object.keys(tiers).length > 0) {
+      catalog.modelTiers = buildModelTierCatalogEntries(catalog, tiers, (p, m) => this.isModelDisabled(p, m))
     }
     return catalog
   }
 
-  /** Read active `'helmx.model-tiers'` capability providers from `PluginHost`. */
-  private readTierProviders(): ReadonlyArray<ProvidedCapability<ModelTiersCapability>> {
-    const host = this.boundCapabilityHost
-    if (host === undefined) return []
-    try {
-      return host
-        .consumeCapability<ModelTiersCapability>(MODEL_TIERS_CAPABILITY_ID)
-        .filter((entry) => entry.impl !== null && typeof entry.impl === 'object' && typeof entry.impl.getTiers === 'function')
-    } catch (err) {
-      if (err instanceof HelmxError && err.code === 'plugin_host_disposed') return []
-      throw err
-    }
-  }
-
-  private syncTierCapabilities(emitOnDelta: boolean): void {
-    const providers = this.readTierProviders()
-    const activeImpls = new Set(providers.map((entry) => entry.impl))
-    let changed = false
-
-    for (const [impl, unsub] of [...this.tierSubscriptions.entries()]) {
-      if (activeImpls.has(impl)) continue
-      this.tierSubscriptions.delete(impl)
-      changed = true
-      try {
-        unsub()
-      } catch {
-        // Ignore cleanup errors when detaching disabled providers.
-      }
-    }
-
-    for (const { impl } of providers) {
-      if (this.tierSubscriptions.has(impl)) continue
-      changed = true
-      const unsub =
-        typeof impl.onChanged === 'function'
-          ? impl.onChanged(() => this.handleTierSourceChanged())
-          : undefined
-      this.tierSubscriptions.set(impl, typeof unsub === 'function' ? unsub : () => {})
-    }
-
-    if (changed) {
-      this.alignmentEpochValue += 1
-    }
-
-    if (emitOnDelta && changed) {
-      this.events.publish('models.changed', { providers: [] })
-      void this.alignAllConversations().catch(() => {})
-    }
-  }
-
-  private async handleTierSourceChanged(): Promise<void> {
-    this.assertNoTierIdConflicts(this.readTierProviders())
-    this.alignmentEpochValue += 1
-    this.events.publish('models.changed', { providers: [] })
-    await this.alignAllConversations()
-  }
-
-  private assertNoTierIdConflicts(
-    providers: ReadonlyArray<ProvidedCapability<ModelTiersCapability>>,
-  ): void {
-    const ownerByTierId = new Map<string, string>()
-    for (const { pluginId, impl } of providers) {
-      const map = impl.getTiers()
-      if (map === null || typeof map !== 'object') continue
-      for (const id of Object.keys(map)) {
-        if (!isValidModelTierId(id)) continue
-        const existingOwner = ownerByTierId.get(id)
-        if (existingOwner !== undefined) {
-          throw new HelmxError(
-            'model_tier_conflict',
-            `Model tier '${MODEL_TIER_PREFIX}/${id}' is already registered by plugin '${existingOwner}'`,
-            409,
-            { tierId: id, owner: existingOwner },
-          )
-        }
-        ownerByTierId.set(id, pluginId)
-      }
-    }
-  }
-
   /** Collect active runtime model tiers from all mounted `'helmx.model-tiers'` capability providers. */
   getRegisteredTiers(): Record<string, ModelTierSpec> {
-    const providers = this.readTierProviders()
-    this.assertNoTierIdConflicts(providers)
-    const result: Record<string, ModelTierSpec> = {}
-    for (const { impl } of providers) {
-      const map = impl.getTiers()
-      if (map === null || typeof map !== 'object') continue
-      for (const [id, spec] of Object.entries(map)) {
-        if (!isValidModelTierId(id) || spec === null || typeof spec !== 'object' || typeof spec.model !== 'string') {
-          continue
-        }
-        result[id] = {
-          model: spec.model,
-          ...(typeof spec.thinkingLevel === 'string' && spec.thinkingLevel !== ''
-            ? { thinkingLevel: spec.thinkingLevel }
-            : {}),
-          ...(typeof spec.description === 'string' && spec.description !== ''
-            ? { description: spec.description }
-            : {}),
-        }
-      }
-    }
-    return result
+    return this.tiersCoordinator.getRegisteredTiers()
   }
 
-  /**
-   * Single authoritative model-reference resolver:
-   * - Concrete `'provider/modelId'` passes through unchanged;
-   * - `'tier/<id>'` resolves against mounted runtime tiers, failing explicitly with `404 model_tier_not_found`
-   *   when unconfigured/disabled (never silently falling back to global defaultModel) and rejecting nested
-   *   `tier -> tier` chains with `400 validation_error`.
-   */
   resolveModelRef(ref: string): ResolvedModelRef {
-    const parsed = this.parseModelRefOrThrow(ref)
-    if (parsed.provider !== MODEL_TIER_PREFIX) {
-      return {
-        provider: parsed.provider,
-        modelId: parsed.modelId,
-        canonicalRef: `${parsed.provider}/${parsed.modelId}`,
-      }
-    }
-    const tier = this.getRegisteredTiers()[parsed.modelId]
-    if (tier === undefined) {
-      throw new HelmxError(
-        'model_tier_not_found',
-        `Model tier '${ref}' is not registered`,
-        404,
-        { tierId: parsed.modelId, ref },
-      )
-    }
-    const target = this.parseModelRefOrThrow(tier.model)
-    if (target.provider === MODEL_TIER_PREFIX) {
-      throw new HelmxError(
-        'validation_error',
-        `Model tier '${ref}' cannot target another model tier '${tier.model}'`,
-        400,
-        { tierId: parsed.modelId, target: tier.model },
-      )
-    }
-    return {
-      provider: target.provider,
-      modelId: target.modelId,
-      canonicalRef: `${target.provider}/${target.modelId}`,
-      tierId: parsed.modelId,
-      ...(tier.thinkingLevel !== undefined && tier.thinkingLevel !== ''
-        ? { tierThinkingLevel: tier.thinkingLevel }
-        : {}),
-    }
+    return this.tiersCoordinator.resolveModelRef(ref)
   }
 
   listModelProviders() {
-    return listModelProviders(this.modelsCurrent, this.runtimeProviderOwners)
+    return listModelProviders(this.modelsCurrent, this.runtimeTracker.ownerByProvider)
   }
 
   /** Read global default model and reasoning effort from `config.json` at startup (throws on invalid format). */
@@ -463,7 +223,7 @@ export class ModelRegistry {
     if (this.defaultThinkingLevel === undefined) {
       const configuredLevel = raw['thinkingLevel'] as string | undefined | null
       if (configuredLevel !== undefined && configuredLevel !== '') {
-        this.assertConfigThinkingLevel(configuredLevel as string)
+        assertConfigThinkingLevel(configuredLevel as string, 'config.json.thinkingLevel')
         this.defaultThinkingLevel = configuredLevel as string
       }
     }
@@ -479,33 +239,17 @@ export class ModelRegistry {
     if (this.defaultCompactionThinkingLevel === undefined) {
       const configuredCompactionLevel = raw['compactionThinkingLevel'] as string | undefined | null
       if (configuredCompactionLevel !== undefined && configuredCompactionLevel !== '') {
-        this.assertConfigThinkingLevel(configuredCompactionLevel as string)
+        assertConfigThinkingLevel(configuredCompactionLevel as string, 'config.json.compactionThinkingLevel')
         this.defaultCompactionThinkingLevel = configuredCompactionLevel as string
       }
     }
     this.modelThinkingLevels = parseModelThinkingLevelsConfig(raw['modelThinkingLevels'])
-    for (const level of new Set(Object.values(this.modelThinkingLevels))) {
-      this.assertConfigThinkingLevel(level)
+    for (const [ref, level] of Object.entries(this.modelThinkingLevels)) {
+      assertConfigThinkingLevel(level, `config.json.modelThinkingLevels['${ref}']`)
     }
     this.disabledModels = parseDisabledModelsConfig(raw['disabledModels'])
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
     this.alignmentEpochValue += 1
-  }
-
-  private assertConfigThinkingLevel(level: string): void {
-    if (!THINKING_LEVELS.has(level)) {
-      throw new HelmxError('config_corrupt', `Invalid config.json.thinkingLevel (valid values: ${[...THINKING_LEVELS].join(' | ')})`, 500)
-    }
-  }
-
-  private assertInputThinkingLevel(level: string, label: string): void {
-    if (!THINKING_LEVELS.has(level)) {
-      throw new HelmxError(
-        'validation_error',
-        `Invalid ${label} '${level}'; valid values: ${[...THINKING_LEVELS].join(' | ')}`,
-        400,
-      )
-    }
   }
 
   /** Set global default model, reasoning effort, compaction model, and compaction reasoning effort (`config.json`). */
@@ -518,51 +262,46 @@ export class ModelRegistry {
     modelThinkingUpdate?: { model: string; level: string },
   ): Promise<void> {
     this.assertWritable()
+    const checkEnabled = (providerId: string, modelId: string): void => this.assertModelEnabled(providerId, modelId)
     const trimmed = model?.trim()
     if (trimmed !== undefined && trimmed !== '') {
       const ref = this.resolveModelRef(trimmed)
-      this.assertModelEnabled(ref.provider, ref.modelId)
+      checkEnabled(ref.provider, ref.modelId)
     }
     const trimmedCompaction = compactionModel?.trim()
     if (trimmedCompaction !== undefined && trimmedCompaction !== '') {
       const ref = this.resolveModelRef(trimmedCompaction)
-      this.assertModelEnabled(ref.provider, ref.modelId)
+      checkEnabled(ref.provider, ref.modelId)
     }
     const normalizeLevel = (rawLevel: string | undefined): string | undefined => {
       if (rawLevel === undefined) return undefined
       const level = rawLevel.trim()
-      if (level !== '') this.assertInputThinkingLevel(level, 'thinkingLevel')
+      if (level !== '') assertInputThinkingLevel(level, 'thinkingLevel')
       return level === '' ? undefined : level
     }
     const nextLevel = normalizeLevel(thinkingLevel)
     const nextCompactionLevel = normalizeLevel(compactionThinkingLevel)
     const nextModelThinkingLevels = modelThinkingLevels === undefined
       ? undefined
-      : this.validateModelThinkingLevels(modelThinkingLevels)
+      : validateModelThinkingLevels(modelThinkingLevels, checkEnabled)
     const nextModelThinkingUpdate = modelThinkingUpdate === undefined
       ? undefined
-      : this.validateModelThinkingUpdate(modelThinkingUpdate)
+      : validateModelThinkingUpdate(modelThinkingUpdate, checkEnabled)
     const updatedModelThinkingLevels = nextModelThinkingLevels !== undefined || nextModelThinkingUpdate !== undefined
     let nextResolvedModelThinkingLevels: Record<string, string> | undefined
     await this.configSvc.updateBy((current) => {
       const next = { ...current }
       if (trimmed === '') delete next.model
       else if (trimmed !== undefined) next.model = trimmed
-      if (thinkingLevel === undefined) {
-        // Leave existing thinkingLevel key untouched when omitted.
-      } else if (nextLevel === undefined) {
-        delete next.thinkingLevel
-      } else {
-        next.thinkingLevel = nextLevel
+      if (thinkingLevel !== undefined) {
+        if (nextLevel === undefined) delete next.thinkingLevel
+        else next.thinkingLevel = nextLevel
       }
       if (trimmedCompaction === '') delete next.compactionModel
       else if (trimmedCompaction !== undefined) next.compactionModel = trimmedCompaction
-      if (compactionThinkingLevel === undefined) {
-        // Leave existing compactionThinkingLevel key untouched when omitted.
-      } else if (nextCompactionLevel === undefined) {
-        delete next.compactionThinkingLevel
-      } else {
-        next.compactionThinkingLevel = nextCompactionLevel
+      if (compactionThinkingLevel !== undefined) {
+        if (nextCompactionLevel === undefined) delete next.compactionThinkingLevel
+        else next.compactionThinkingLevel = nextCompactionLevel
       }
       if (updatedModelThinkingLevels) {
         const resolved = nextModelThinkingLevels !== undefined
@@ -595,49 +334,9 @@ export class ModelRegistry {
     }
   }
 
-  private validateModelThinkingLevels(levels: Record<string, string>): Record<string, string> {
-    if (levels === null || typeof levels !== 'object' || Array.isArray(levels)) {
-      throw new HelmxError('validation_error', 'modelThinkingLevels must be an object mapping model references to thinking levels', 400)
-    }
-    const validated: Record<string, string> = {}
-    for (const [model, rawLevel] of Object.entries(levels)) {
-      if (!/^[^/\s]+\/[^\s]+$/.test(model)) {
-        throw new HelmxError('validation_error', `modelThinkingLevels key must be a 'provider/model' reference: ${model}`, 400)
-      }
-      const parsed = this.parseModelRefOrThrow(model)
-      if (parsed.provider === MODEL_TIER_PREFIX) {
-        throw new HelmxError('validation_error', `modelThinkingLevels applies to concrete models only (configure thinkingLevel directly on tier '${model}')`, 400)
-      }
-      if (typeof rawLevel !== 'string' || rawLevel.trim() === '') {
-        throw new HelmxError('validation_error', `modelThinkingLevels['${model}'] must be a non-empty thinking level`, 400)
-      }
-      const level = rawLevel.trim()
-      this.assertInputThinkingLevel(level, 'thinkingLevel')
-      validated[model] = level
-    }
-    return validated
-  }
-
-  private validateModelThinkingUpdate(update: { model: string; level: string }): { model: string; level: string } {
-    if (!/^[^/\s]+\/[^\s]+$/.test(update.model)) {
-      throw new HelmxError('validation_error', `modelThinking key must be a 'provider/model' reference: ${update.model}`, 400)
-    }
-    const parsed = this.parseModelRefOrThrow(update.model)
-    if (parsed.provider === MODEL_TIER_PREFIX) {
-      throw new HelmxError('validation_error', `modelThinking applies to concrete models only (configure thinkingLevel directly on tier '${update.model}')`, 400)
-    }
-    const level = update.level.trim()
-    if (level !== '') this.assertInputThinkingLevel(level, 'thinkingLevel')
-    return { model: update.model, level }
-  }
-
   /** Validate `'provider/model'` reference (shared by create/update). */
   parseModelRefOrThrow(ref: string): { provider: string; modelId: string } {
-    const slash = ref.indexOf('/')
-    if (slash <= 0 || slash >= ref.length - 1) {
-      throw new HelmxError('validation_error', `Model reference must be in 'provider/model' format: ${ref}`)
-    }
-    return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
+    return parseModelRefOrThrow(ref)
   }
 
   /** Look up the per-model thinking default for a resolved reference (keyed by the full `'provider/modelId'` string). */
@@ -647,9 +346,7 @@ export class ModelRegistry {
 
   /**
    * Set or clear one per-model thinking default (`config.json.modelThinkingLevels`): empty `level` clears the
-   * single entry, and the field itself is removed once the map becomes empty. Alignment then refreshes every
-   * conversation whose effective model matches, so the new default takes effect without touching explicit
-   * conversation overrides (which keep ranking above per-model defaults).
+   * single entry (allowed even when the target model is disabled), and the field itself is removed once empty.
    */
   async setModelThinkingDefault(
     model: string,
@@ -660,7 +357,7 @@ export class ModelRegistry {
     if (trimmedModel === '') {
       throw new HelmxError('validation_error', 'Per-model thinking default requires a model reference', 400)
     }
-    const ref = this.parseModelRefOrThrow(trimmedModel)
+    const ref = parseModelRefOrThrow(trimmedModel)
     if (ref.provider === MODEL_TIER_PREFIX) {
       throw new HelmxError(
         'validation_error',
@@ -668,9 +365,11 @@ export class ModelRegistry {
         400,
       )
     }
-    this.assertModelEnabled(ref.provider, ref.modelId)
     const trimmedLevel = level.trim()
-    if (trimmedLevel !== '') this.assertInputThinkingLevel(trimmedLevel, 'thinking level')
+    if (trimmedLevel !== '') {
+      assertInputThinkingLevel(trimmedLevel, 'thinking level')
+      this.assertModelEnabled(ref.provider, ref.modelId)
+    }
     const next = await this.configSvc.updateBy((current) => {
       const merged: Record<string, unknown> = { ...current }
       const existing = parseModelThinkingLevelsConfig(merged['modelThinkingLevels'])
@@ -690,9 +389,7 @@ export class ModelRegistry {
     return this.disabledModels[providerId]?.includes(modelId) === true
   }
 
-  /** Reject explicitly when a model is disabled (`409 model_disabled`), reused across explicit selection paths.
-   * When given the reserved `tier` prefix, dereferences the tier first (throwing `404 model_tier_not_found` if unconfigured)
-   * and verifies the underlying concrete model is enabled. */
+  /** Reject explicitly when a model is disabled (`409 model_disabled`), reused across explicit selection paths. */
   assertModelEnabled(providerId: string, modelId: string): void {
     let targetProvider = providerId
     let targetModelId = modelId
@@ -711,11 +408,7 @@ export class ModelRegistry {
     }
   }
 
-  /**
-   * Set disabled model list (`PUT /api/models/filter`): omitting `provider` clears all disabled entries
-   * (`modelIds` must be empty); persists atomically to `config.json` and returns updated catalog.
-   * Backend stores strings verbatim without verifying model existence (catalog flags match catalog entries only).
-   */
+  /** Set disabled model list (`PUT /api/models/filter`) and return updated catalog. */
   async setDisabledModels(provider: string | undefined, modelIds: string[]): Promise<ModelCatalog> {
     this.assertWritable()
     if (provider === MODEL_TIER_PREFIX) {
@@ -732,7 +425,6 @@ export class ModelRegistry {
     }
     const unique: string[] = []
     for (const id of modelIds) {
-      // `modelId` may contain `/` (aggregate gateways like OpenRouter/Magpie name models `'vendor/model'`; the slash belongs to the model ID).
       if (typeof id !== 'string' || id === '') {
         throw new HelmxError('validation_error', `Model ID must be a non-empty string: ${String(id)}`, 400)
       }
@@ -752,30 +444,21 @@ export class ModelRegistry {
       return merged
     })
     this.disabledModels = parseDisabledModelsConfig(next['disabledModels'])
-    // In-memory snapshot updated: emit models.changed so connected Web clients reload the catalog
-    // (subscriber assembly/redaction failures propagate synchronously instead of being swallowed).
     this.events.publish('models.changed', { providers: provider ? [provider] : [] })
     return this.listModels()
   }
 
-  /**
-   * Rebuild and publish the active model collection (shared across `providers.json`, credentials, and runtime provider changes).
-   * Serialized via `modelsChain` so stale concurrent rebuilds cannot overwrite newer sets;
-   * no-ops when `Models` is externally injected (caller owns the set).
-   */
+  /** Rebuild and publish the active model collection under `modelsChain` (no-ops for external models). */
   async reloadModels(): Promise<void> {
     this.assertWritable()
-    await this.enqueueModelsChange(async () => {
-      await this.rebuildModelsLocked()
-    })
+    await this.enqueueModelsChange(() => this.rebuildModelsLocked())
   }
 
-  /** Perform rebuild while holding `modelsChain` (no-op for externally injected sets). */
   private async rebuildModelsLocked(): Promise<void> {
     if (this.externalModels) return
     const providerConfigs = await this.providersSvc.list()
     const nextKeys = await this.credentialsSvc.listAll()
-    const collision = providerConfigs.find((config) => this.runtimeProviders.has(config.id))
+    const collision = providerConfigs.find((config) => this.runtimeTracker.has(config.id))
     if (collision) {
       throw new HelmxError('runtime_provider_conflict', `Gateway '${collision.id}' conflicts with a plugin-registered provider`, 409)
     }
@@ -783,13 +466,9 @@ export class ModelRegistry {
       providers: providerConfigs,
       apiKeys: () => nextKeys,
       modelsStore: this.modelsStore,
-      extraProviders: [...this.runtimeProviders.values()],
+      extraProviders: this.runtimeTracker.values(),
     })
-    // Restore cached catalog offline (`allowNetwork: false`). `models-store.json` corruption is a file-level failure
-    // rather than a single-provider error: SDK puts it in `result.errors` without rejecting, so throw explicitly
-    // here instead of silently falling back to an empty catalog.
-    await assertModelsStoreHealthy(await models.refresh({ allowNetwork: false }))
-    // Publish atomically only after full load succeeds; replace keys in place so deleted secrets also clear from cache.
+    assertModelsStoreHealthy(await models.refresh({ allowNetwork: false }))
     for (const id of Object.keys(this.apiKeyCache)) delete this.apiKeyCache[id]
     Object.assign(this.apiKeyCache, nextKeys)
     this.modelsGeneration += 1
@@ -799,13 +478,7 @@ export class ModelRegistry {
     this.events.publish('models.changed', { providers: [] })
   }
 
-  /**
-   * Register a dynamic runtime provider (injected by plugins via `HostOptions.providers.register`).
-   * Rejects conflicts (never overrides any existing provider): built-in providers, `providers.json` custom gateways,
-   * and providers registered by other owners; disabled `providers.json` entries with the same ID still reserve the namespace.
-   * Explicitly unsupported when `Models` is externally injected (caller owns the set; succeeding silently would lie).
-   * Returns an idempotent unregister callback that deletes and rebuilds only if the map still points to this instance.
-   */
+  /** Register a dynamic runtime provider (rejected on conflict or externally owned `Models`). */
   async registerRuntimeProvider(provider: Provider, pluginId?: string): Promise<() => Promise<void>> {
     this.assertWritable()
     if (this.externalModels) {
@@ -818,24 +491,19 @@ export class ModelRegistry {
     if (typeof provider?.id !== 'string' || provider.id === '') {
       throw new HelmxError('validation_error', `Runtime provider ID must be a non-empty string: ${String(provider?.id)}`, 400)
     }
-    // Capture this registration's wrapped instance so stale disposers never delete a later same-named registration.
     const registered = await this.enqueueModelsChange(async () => {
-      const conflict = await this.findRuntimeProviderConflict(provider.id)
+      const conflict = await this.runtimeTracker.findConflict(provider.id)
       if (conflict !== undefined) {
         throw new HelmxError('runtime_provider_conflict', conflict, 409)
       }
-      const registered = this.wrapRuntimeProvider(provider)
-      this.runtimeProviders.set(provider.id, registered)
-      if (pluginId !== undefined) this.runtimeProviderOwners.set(provider.id, pluginId)
+      const wrapped = this.runtimeTracker.addWrapped(provider, pluginId)
       try {
         await this.rebuildModelsLocked()
       } catch (error) {
-        // Roll back on failure so an orphaned map entry isn't picked up by subsequent reloads.
-        this.runtimeProviders.delete(provider.id)
-        this.runtimeProviderOwners.delete(provider.id)
+        this.runtimeTracker.remove(provider.id)
         throw error
       }
-      return registered
+      return wrapped
     })
     let disposed = false
     let disposing: Promise<void> | undefined
@@ -849,60 +517,23 @@ export class ModelRegistry {
     }
   }
 
-  /** Conflict detection: returns error message if conflicting (`undefined` = no conflict) across reserved namespaces, built-in/custom gateways, and runtime owners. */
-  private async findRuntimeProviderConflict(providerId: string): Promise<string | undefined> {
-    if (providerId === MODEL_TIER_PREFIX) {
-      return `Provider ID '${MODEL_TIER_PREFIX}' is reserved for model tiers; cannot register a provider with this ID`
-    }
-    const existing = this.runtimeProviders.get(providerId)
-    if (existing !== undefined) {
-      const owner = this.runtimeProviderOwners.get(providerId)
-      return `Provider ID '${providerId}' is already registered at runtime${owner !== undefined ? ` (plugin ${owner})` : ''}; cannot override`
-    }
-    const config = await this.providersSvc.get(providerId)
-    if (config !== undefined) {
-      return `Provider ID '${providerId}' conflicts with a custom gateway in providers.json (enabled: ${String(config.enabled)})`
-    }
-    const builtin = builtinProviderIds.has(providerId)
-    if (builtin) {
-      return `Provider ID '${providerId}' conflicts with a built-in PI provider; cannot override`
-    }
-    return undefined
-  }
-
-  /** Unregister only when the map still points to the same instance (idempotent; skips rebuild if already overwritten/deleted). */
   private async unregisterRuntimeProvider(provider: Provider): Promise<void> {
     if (this.externalModels) return
     await this.enqueueModelsChange(async () => {
-      if (this.runtimeProviders.get(provider.id) !== provider) return
-      const owner = this.runtimeProviderOwners.get(provider.id)
-      if ((this.runtimeProviderUsage.get(provider.id) ?? 0) > 0) {
-        throw new HelmxError('plugin_has_live_tasks', `Provider '${provider.id}' still has requests in flight`, 409, { providers: [provider.id] })
-      }
-      // No `await` between usage check and retiring mark (synchronous inside the serial chain): ensures any new
-      // stream attempt during `rebuild`'s await window (before `modelsCurrent` swaps) fails explicitly, guaranteeing
-      // no in-flight streams remain once unregister returns (preventing missed detections after ownership deletion).
-      this.retiringRuntimeProviders.add(provider.id)
-      this.runtimeProviders.delete(provider.id)
-      this.runtimeProviderOwners.delete(provider.id)
+      if (this.runtimeTracker.get(provider.id) !== provider) return
+      const owner = this.runtimeTracker.beginRetire(provider.id)
       try {
         await this.rebuildModelsLocked()
       } catch (error) {
-        this.runtimeProviders.set(provider.id, provider)
-        if (owner !== undefined) this.runtimeProviderOwners.set(provider.id, owner)
+        this.runtimeTracker.rollbackRetire(provider, owner)
         throw error
       } finally {
-        this.retiringRuntimeProviders.delete(provider.id)
+        this.runtimeTracker.endRetire(provider.id)
       }
     })
   }
 
-  /**
-   * Refresh dynamic model catalogs (`POST /api/models/refresh`).
-   * Holds in-flight counters on target runtime providers across the whole cycle (so teardown preflight rejects mid-refresh);
-   * captures instance and generation at start to avoid publishing stale snapshot events if replaced mid-flight;
-   * redacts errors via stash before returning.
-   */
+  /** Refresh dynamic model catalogs (`POST /api/models/refresh`). */
   async refreshModels(options?: {
     providers?: string[]
     allowNetwork?: boolean
@@ -931,9 +562,9 @@ export class ModelRegistry {
     const generationAtStart = this.modelsGeneration
     const targets =
       options?.providers && options.providers.length > 0
-        ? options.providers.filter((id) => this.runtimeProviders.has(id))
-        : [...this.runtimeProviders.keys()]
-    const release = this.acquireRuntimeProviders(targets)
+        ? options.providers.filter((id) => this.runtimeTracker.has(id))
+        : this.runtimeTracker.keys()
+    const release = this.runtimeTracker.acquire(targets)
     const controller = new AbortController()
     this.modelsRefreshAbort = controller
     let result: { aborted: boolean; errors: ReadonlyMap<string, Error> }
@@ -953,8 +584,7 @@ export class ModelRegistry {
       if (this.modelsRefreshAbort === controller) this.modelsRefreshAbort = undefined
       release()
     }
-    // File-level corruption (models_store_corrupted) affects the whole store rather than one provider; propagate explicitly.
-    await assertModelsStoreHealthy(result)
+    assertModelsStoreHealthy(result)
     const errors: Record<string, string> = {}
     for (const [providerId, err] of result.errors) {
       errors[providerId] = this.stash.redact(err instanceof Error ? err.message : String(err))
@@ -979,99 +609,9 @@ export class ModelRegistry {
     this.modelsRefreshAbort?.abort(reason)
   }
 
-  /**
-   * Teardown preflight: throws `409 plugin_has_live_tasks` if any runtime provider owned by `pluginId`
-   * has streams or refreshes in flight (prevents marking a plugin disabled while its provider remains live).
-   * Preserves current state while busy (model references stay available for subsequent turns).
-   */
+  /** Teardown preflight: throws `409 plugin_has_live_tasks` while any runtime provider owned by `pluginId` is active. */
   assertRuntimeProvidersIdle(pluginId: string): void {
-    const busy: string[] = []
-    for (const [id, owner] of this.runtimeProviderOwners) {
-      if (owner === pluginId && (this.runtimeProviderUsage.get(id) ?? 0) > 0) busy.push(id)
-    }
-    if (busy.length > 0) {
-      throw new HelmxError(
-        'plugin_has_live_tasks',
-        `Plugin '${pluginId}' still has in-flight model requests on runtime providers: ${busy.join(', ')}`,
-        409,
-        { providers: busy },
-      )
-    }
-  }
-
-  /** In-flight usage guard: increments per target provider and returns an idempotent release function. */
-  private acquireRuntimeProviders(ids: readonly string[]): () => void {
-    for (const id of ids) {
-      // Fail fast during unregistration window so new requests don't slip through after ownership deletion.
-      if (this.retiringRuntimeProviders.has(id)) {
-        throw new HelmxError(
-          'runtime_provider_retiring',
-          `Provider '${id}' is currently retiring (plugin disabling); rejecting new model request`,
-          409,
-          { providers: [id] },
-        )
-      }
-    }
-    for (const id of ids) {
-      const owner = this.runtimeProviderOwners.get(id)
-      if (owner !== undefined) this.pluginHost()?.assertProviderAvailable(owner)
-    }
-    for (const id of ids) {
-      this.runtimeProviderUsage.set(id, (this.runtimeProviderUsage.get(id) ?? 0) + 1)
-    }
-    let released = false
-    return () => {
-      if (released) return
-      released = true
-      for (const id of ids) {
-        const remaining = (this.runtimeProviderUsage.get(id) ?? 0) - 1
-        if (remaining <= 0) this.runtimeProviderUsage.delete(id)
-        else this.runtimeProviderUsage.set(id, remaining)
-      }
-    }
-  }
-
-  /**
-   * Usage-counting wrapper for runtime providers: increments on `stream`/`streamSimple` call and decrements
-   * when `stream.result()` settles (done/error/end) without consuming `asyncIterator`.
-   * Also wraps `refreshModels` so teardown preflight rejects during catalog refreshes.
-   */
-  private wrapRuntimeProvider(provider: Provider): Provider {
-    const acquire = () => this.acquireRuntimeProviders([provider.id])
-    // Pass-through wrapper: acquires before opening stream and releases via `result().then(release, release)`
-    // (synchronous throws release immediately); never consumes `asyncIterator` or mutates `options`.
-    const counted = (open: () => AssistantMessageEventStream): AssistantMessageEventStream => {
-      const release = acquire()
-      let stream: AssistantMessageEventStream
-      try {
-        stream = open()
-      } catch (err) {
-        release()
-        throw err
-      }
-      void stream.result().then(release, release)
-      return stream
-    }
-    const wrapped: Provider = {
-      ...provider,
-      get baseUrl() { return provider.baseUrl },
-      stream: (model, context, options) =>
-        counted(() => provider.stream(model, context, options)),
-      streamSimple: (model, context, options) =>
-        counted(() => provider.streamSimple(model, context, options)),
-    }
-    if (typeof provider.refreshModels === 'function') {
-      const base = provider.refreshModels.bind(provider)
-      wrapped.refreshModels = async (context) => {
-        const release = acquire()
-        try {
-          return await base(context)
-        } finally {
-          release()
-        }
-      }
-    }
-    return wrapped
+    this.runtimeTracker.assertIdle(pluginId)
   }
 
   /** Read the current global/per-model defaults snapshot (single source for HTTP and `core:models.default`). */
@@ -1082,167 +622,5 @@ export class ModelRegistry {
   /** Validate, apply, and echo back updated global/per-model defaults (single source for HTTP and `core:models.default`). */
   async updateDefaults(input: ModelDefaultsPatch): Promise<ModelDefaultsSnapshot> {
     return updateModelDefaults(this, input)
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Single-source model defaults & refresh normalization (shared by HTTP routes & core:models.*)
-// ---------------------------------------------------------------------------
-
-export interface ModelDefaultsSnapshot {
-  readonly defaultModel: string
-  readonly defaultThinkingLevel: string
-  readonly modelThinkingLevels: Record<string, string>
-  readonly defaultCompactionModel: string
-  readonly defaultCompactionThinkingLevel: string
-}
-
-export interface ModelDefaultsPatch {
-  readonly model?: string
-  readonly thinkingLevel?: string
-  readonly compactionModel?: string
-  readonly compactionThinkingLevel?: string
-  readonly modelThinking?: string
-  readonly modelThinkingLevel?: string
-  readonly modelThinkingLevels?: Record<string, string>
-}
-
-export interface ModelDefaultsPort {
-  listModels(): Promise<ModelCatalog>
-  setDefaultModel?: ModelRegistry['setDefaultModel']
-  setModelThinkingDefault?: ModelRegistry['setModelThinkingDefault']
-}
-
-/** Project canonical defaults snapshot fields from a `ModelCatalog`. */
-export function modelDefaultsFromCatalog(
-  catalog: Pick<
-    ModelCatalog,
-    | 'defaultModel'
-    | 'defaultThinkingLevel'
-    | 'modelThinkingLevels'
-    | 'defaultCompactionModel'
-    | 'defaultCompactionThinkingLevel'
-  >,
-): ModelDefaultsSnapshot {
-  return {
-    defaultModel: catalog.defaultModel ?? '',
-    defaultThinkingLevel: catalog.defaultThinkingLevel ?? '',
-    modelThinkingLevels: catalog.modelThinkingLevels ?? {},
-    defaultCompactionModel: catalog.defaultCompactionModel ?? '',
-    defaultCompactionThinkingLevel: catalog.defaultCompactionThinkingLevel ?? '',
-  }
-}
-
-/** Read current model defaults snapshot from any `ModelDefaultsPort`. */
-export async function getModelDefaults(
-  models: Pick<ModelDefaultsPort, 'listModels'>,
-): Promise<ModelDefaultsSnapshot> {
-  return modelDefaultsFromCatalog(await models.listModels())
-}
-
-/**
- * Single-source model defaults mutation shared by `PUT /api/models/default` and `core:models.default`:
- * - Enforces cross-field pairing (`modelThinking` + `modelThinkingLevel` must arrive together);
- * - Rejects combining bulk `modelThinkingLevels` with a single `modelThinking` pair;
- * - Rejects empty patches (at least one updatable field required);
- * - Persists via `setDefaultModel` (or `setModelThinkingDefault` fallback on partial ports) and returns the updated snapshot.
- */
-export async function updateModelDefaults(
-  models: ModelDefaultsPort,
-  input: ModelDefaultsPatch,
-): Promise<ModelDefaultsSnapshot> {
-  const hasModelThinking = input.modelThinking !== undefined || input.modelThinkingLevel !== undefined
-  if (hasModelThinking && (input.modelThinking === undefined || input.modelThinkingLevel === undefined)) {
-    throw new HelmxError(
-      'validation_error',
-      'models default body: modelThinking and modelThinkingLevel must be set together',
-      400,
-    )
-  }
-  const hasRegularFields =
-    input.model !== undefined ||
-    input.thinkingLevel !== undefined ||
-    input.compactionModel !== undefined ||
-    input.compactionThinkingLevel !== undefined
-  const hasModelThinkingLevels = input.modelThinkingLevels !== undefined
-  if (hasModelThinkingLevels && hasModelThinking) {
-    throw new HelmxError(
-      'validation_error',
-      'models default body: modelThinkingLevels cannot be combined with a modelThinking pair',
-      400,
-    )
-  }
-  if (!hasRegularFields && !hasModelThinkingLevels && !hasModelThinking) {
-    throw new HelmxError(
-      'validation_error',
-      'models default body requires at least one updatable field',
-      400,
-    )
-  }
-  if (models.setDefaultModel === undefined && (hasRegularFields || hasModelThinkingLevels)) {
-    throw new HelmxError(
-      'not_implemented',
-      'current runtime does not support setting the default model',
-      501,
-    )
-  }
-  const modelThinkingUpdate = hasModelThinking
-    ? { model: input.modelThinking!, level: input.modelThinkingLevel! }
-    : undefined
-  if (models.setDefaultModel !== undefined) {
-    if (input.compactionThinkingLevel !== undefined) {
-      await models.setDefaultModel(
-        input.model,
-        input.thinkingLevel,
-        input.compactionModel,
-        input.compactionThinkingLevel,
-        input.modelThinkingLevels,
-        modelThinkingUpdate,
-      )
-    } else if (input.compactionModel !== undefined) {
-      await models.setDefaultModel(
-        input.model,
-        input.thinkingLevel,
-        input.compactionModel,
-        undefined,
-        input.modelThinkingLevels,
-        modelThinkingUpdate,
-      )
-    } else {
-      await models.setDefaultModel(
-        input.model,
-        input.thinkingLevel,
-        undefined,
-        undefined,
-        input.modelThinkingLevels,
-        modelThinkingUpdate,
-      )
-    }
-  } else if (modelThinkingUpdate !== undefined && models.setModelThinkingDefault !== undefined) {
-    await models.setModelThinkingDefault(modelThinkingUpdate.model, modelThinkingUpdate.level)
-  } else {
-    throw new HelmxError(
-      'not_implemented',
-      'current runtime does not support setting model defaults',
-      501,
-    )
-  }
-  return getModelDefaults(models)
-}
-
-/** Merge single `provider` and list `providers` into one target list for `refreshModels`. */
-export function normalizeModelRefreshInput(input: {
-  readonly provider?: string
-  readonly providers?: readonly string[]
-  readonly force?: boolean
-}): { providers?: string[]; force?: boolean } {
-  let providers: string[] | undefined
-  if (input.provider !== undefined) providers = [input.provider]
-  if (input.providers !== undefined) {
-    providers = providers !== undefined ? [...providers, ...input.providers] : [...input.providers]
-  }
-  return {
-    ...(providers !== undefined ? { providers } : {}),
-    ...(input.force !== undefined ? { force: input.force } : {}),
   }
 }

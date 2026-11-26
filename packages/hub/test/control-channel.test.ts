@@ -15,6 +15,7 @@ import { useTempDir, waitFor } from '@helmx/test-kit/node';
 const makeTempRoot = useTempDir;
 import { controlRequest, CONTROL_TIMEOUT_MS } from '@helmx/env-io';
 import { hubControlRecordPath, readHubControlRecord, type HubControlRecord } from '../src/control.js';
+import { createHubShutdownCoordinator, runSequentialShutdownSteps } from '../src/shutdown.js';
 
 const repoFile = (rel: string): string => path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', rel);
 
@@ -121,3 +122,63 @@ function stderrOf(child: ChildProcess): string {
   return stderrText.get(child) ?? '';
 }
 const stderrText = new WeakMap<ChildProcess, string>();
+
+test('shutdown coordinator executes all steps sequentially, skips closeControl on control source, and preserves all errors', { timeout: 60_000 }, async () => {
+  const ran: string[] = [];
+  const recordedErrors: Array<{ step: string; msg: string }> = [];
+  let failed = 0;
+  const coordinator = createHubShutdownCoordinator({
+    stopHeartbeat: () => {
+      ran.push('heartbeat');
+      throw new Error('hb failed');
+    },
+    closeHub: () => {
+      ran.push('hub');
+    },
+    closeApp: () => {
+      ran.push('app');
+      throw new Error('app failed');
+    },
+    stopUpdater: () => {
+      ran.push('updater');
+    },
+    closeControl: () => {
+      ran.push('control');
+    },
+    onError: (err, step) => {
+      recordedErrors.push({ step, msg: err instanceof Error ? err.message : String(err) });
+    },
+    onFailure: () => {
+      failed += 1;
+    },
+  });
+
+  await coordinator('signal');
+  assert.deepEqual(ran, ['heartbeat', 'hub', 'app', 'updater', 'control']);
+  assert.deepEqual(recordedErrors, [
+    { step: 'heartbeat', msg: 'hb failed' },
+    { step: 'app', msg: 'app failed' },
+  ]);
+  assert.equal(failed, 1);
+
+  // Idempotent re-entry returns the same settled promise without re-running steps.
+  await coordinator('control');
+  assert.equal(ran.length, 5);
+
+  const controlOrder: string[] = [];
+  const controlCoordinator = createHubShutdownCoordinator({
+    stopHeartbeat: () => { controlOrder.push('heartbeat'); },
+    closeHub: () => { controlOrder.push('hub'); },
+    closeApp: () => { controlOrder.push('app'); },
+    stopUpdater: () => { controlOrder.push('updater'); },
+    closeControl: () => { controlOrder.push('control'); },
+  });
+  await controlCoordinator('control');
+  assert.deepEqual(controlOrder, ['heartbeat', 'hub', 'app', 'updater']);
+
+  const errs = await runSequentialShutdownSteps([
+    { name: 'first', run: () => { throw new Error('e1'); } },
+    { name: 'second', run: () => { throw new Error('e2'); } },
+  ]);
+  assert.equal(errs.length, 2);
+});

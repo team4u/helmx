@@ -20,6 +20,7 @@ import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
 import { requireConv } from './conversation-require.js'
 import { assertValidConversationOwnership } from './guards/conversation-guards.js'
+import { asEntryId, getSdkConversation, readSdkEntryPage } from './sdk-ids.js'
 import { resolveCleanForkAnchor } from './spawn-fork.js'
 import type { HelmxStore } from './store.js'
 
@@ -78,7 +79,7 @@ export class ConversationContextOps {
     id: number,
   ): Promise<{ meta: NonNullable<ReturnType<HelmxStore['getConv']>>; conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>> }> {
     const meta = requireConv(this.host.store, id)
-    const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    const conversation = await getSdkConversation(this.host.harness, id, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
     return { meta, conversation }
   }
@@ -191,13 +192,8 @@ export class ConversationContextOps {
     let entryId: number
     if (explicitEntryId !== undefined) {
       // Verify exact entry existence (min=max=entryId limit 1; missing yields 404).
-      const page = await sourceConv.entries(
-        { minEntryId: explicitEntryId as never, maxEntryId: explicitEntryId as never, order: 'ascending' },
-        1,
-        undefined,
-        BACKGROUND_CONTEXT,
-      )
-      if (page.items.length === 0 || (page.items[0] as { id: number }).id !== explicitEntryId) {
+      const page = await readSdkEntryPage(sourceConv, explicitEntryId, BACKGROUND_CONTEXT)
+      if (page.items.length === 0 || Number(page.items[0]!.id) !== explicitEntryId) {
         throw new HelmxError('not_found', `entry ${explicitEntryId} does not exist in conversation ${id}`, 404, {
           conversationId: id,
           entryId: explicitEntryId,
@@ -208,7 +204,7 @@ export class ConversationContextOps {
       entryId = await resolveCleanForkAnchor(this.host.harness, id)
     }
     const forked = await sourceConv.fork(
-      entryId as never,
+      asEntryId(entryId),
       { ownership: { kind: 'ownerless' } },
       BACKGROUND_CONTEXT,
     )

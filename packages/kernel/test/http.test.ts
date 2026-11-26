@@ -30,8 +30,10 @@ import {
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { HelmxError, type ConversationDetail, type ConversationEntry, type ConversationInputResult, type ConversationPatch, type ConversationSearchOptions, type ConversationSummary, type AskSpec, type PluginManifestProjection, type PluginSummary, type HelmxPluginContext } from '@helmx/protocol'
-import { createHubHandler, startHub } from '../src/http/index.js'
+import { createHubHandler, startHub, writeWebResponse } from '../src/http/index.js'
 import type { HttpEventHub, KernelHttpTarget } from '../src/http/index.js'
+import { EventEmitter } from 'node:events'
+import http from 'node:http'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 
@@ -2400,4 +2402,100 @@ test('POST /api/env/exec stream=true: isolates stdout/stderr streaming redactors
     [{ type: 'output', stream: 'stderr', text: 'sk-OUTSEC' }],
   )
   assert.equal(frames2[frames2.length - 1]?.type, 'exit')
+})
+
+test('startHub redacts kernel secrets before console.error and writeWebResponse rejects on res error events', { timeout: 60_000 }, async () => {
+  const localStash = new SecretStash()
+  localStash.addRedaction('sk-NODE-ADAPTER-LEAK-42')
+  const base = makeKernel()
+  const kernel = {
+    ...base,
+    stash: localStash,
+  } as unknown as KernelHttpTarget
+
+  const logged: string[] = []
+  const origConsoleError = console.error
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map((a) => String(a)).join(' '))
+  }
+  const hub = await startHub({
+    kernel,
+    port: 0,
+    productRoutes: () => {
+      throw new Error('upstream boom sk-NODE-ADAPTER-LEAK-42')
+    },
+  })
+  try {
+    const response = await fetch(`${hub.url}/api/product/explode`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    assert.equal(response.status, 500)
+    assert.ok(logged.some((line) => line.includes('[REDACTED]')), 'adapter diagnostic should preserve redacted marker')
+    assert.ok(
+      logged.every((line) => !line.includes('sk-NODE-ADAPTER-LEAK-42')),
+      'adapter error log must never expose registered secrets',
+    )
+  } finally {
+    console.error = origConsoleError
+    await hub.close()
+  }
+
+  // Null-body response error propagation
+  class MockServerResponse extends EventEmitter {
+    writableEnded = false
+    headersSent = false
+    writeHead(): this {
+      this.headersSent = true
+      return this
+    }
+    end(): this {
+      queueMicrotask(() => {
+        this.emit('error', new Error('mock write fail'))
+      })
+      return this
+    }
+  }
+  await assert.rejects(
+    writeWebResponse(new Response(null, { status: 204 }), new MockServerResponse() as unknown as http.ServerResponse),
+    /mock write fail/,
+  )
+
+  // Streaming response error propagation + source stream cancellation
+  let streamCancelled = false
+  const streamBody = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(new TextEncoder().encode('chunk'))
+    },
+    cancel() {
+      streamCancelled = true
+    },
+  })
+  class MockStreamResponse extends EventEmitter {
+    writable = true
+    writableEnded = false
+    writeHead(): this {
+      return this
+    }
+    write(): boolean {
+      queueMicrotask(() => {
+        this.emit('error', new Error('stream socket reset'))
+      })
+      return true
+    }
+    end(): this {
+      this.writableEnded = true
+      return this
+    }
+    destroy(): this {
+      return this
+    }
+  }
+  await assert.rejects(
+    writeWebResponse(
+      new Response(streamBody, { status: 200 }),
+      new MockStreamResponse() as unknown as http.ServerResponse,
+    ),
+    /stream socket reset/,
+  )
+  assert.equal(streamCancelled, true, 'source ReadableStream should be destroyed on response error')
 })

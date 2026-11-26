@@ -9,6 +9,7 @@ import { startHubUpdater } from './updater.js';
 import { createHubUpdateRoutes } from './updater-routes.js';
 import { loadHubChangelog } from './changelog.js';
 import { recordRunVersion } from './run-version.js';
+import { createHubShutdownCoordinator, runSequentialShutdownSteps } from './shutdown.js';
 
 const launchId = process.env.HELMX_HUB_ACTIVITY_LAUNCH_ID;
 delete process.env.HELMX_HUB_ACTIVITY_LAUNCH_ID;
@@ -83,38 +84,24 @@ try {
   });
   const listeningHub = hub;
   const activeHeartbeat = heartbeat;
-  let stopping = false;
+  const activeUpdater = updater;
   let control: HubControlHandle | undefined;
-  // Graceful shutdown order: heartbeat -> HTTP listener -> kernel -> control channel. The control
-  // channel's own `stop` handler runs this function and then removes its record itself, so that
-  // path must never reach the `control.close()` tail (it would await its own in-flight stop chain).
-  const stop = async () => {
-    if (stopping) return;
-    stopping = true;
-    const heldControl = control;
-    try {
-      try {
-        try {
-          try {
-            await activeHeartbeat.stop();
-          } finally {
-            await listeningHub.close();
-          }
-        } finally {
-          await app.close();
-        }
-      } finally {
-        try {
-          await updater?.stop();
-        } finally {
-          await heldControl?.close();
-        }
-      }
-    } catch (error) {
+  // Graceful shutdown order: heartbeat -> HTTP listener -> kernel -> updater -> control channel.
+  // The control-initiated path omits `closeControl` because `@helmx/env-io` closes the control
+  // listener after replying on `requestStop`.
+  const shutdown = createHubShutdownCoordinator({
+    stopHeartbeat: () => activeHeartbeat.stop(),
+    closeHub: () => listeningHub.close(),
+    closeApp: () => app.close(),
+    ...(activeUpdater ? { stopUpdater: () => activeUpdater.stop() } : {}),
+    closeControl: () => control?.close(),
+    onError: (error) => {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    },
+    onFailure: () => {
       process.exitCode = 1;
-    }
-  };
+    },
+  });
   // Control channel (cross-platform verified stop/restart; record lives under the data directory).
   // Started BEFORE printing the readiness banner so `helmx stop` / `helmx update` arriving immediately
   // after `start -d` never races `hub-control.json`. Failure to listen is fatal honesty: without it
@@ -123,20 +110,25 @@ try {
     dataDir: app.kernel.dataDir,
     version: hubVersion,
     port: listeningHub.url !== null ? Number(new URL(listeningHub.url).port) : port,
-    requestStop: stop,
+    requestStop: () => shutdown('control'),
   });
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
+  const onSignal = (): void => {
+    void shutdown('signal');
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
   process.stdout.write(`Helmx Hub: ${hub.url}\nData directory: ${app.kernel.dataDir}\n`);
 } catch (error) {
   // The listener / heartbeat / updater may already be active when a later step (kernel.start / control)
   // failed: close them cleanly before the kernel so no half-started listener or stale record outlives the process.
-  if (heartbeat !== undefined) await heartbeat.stop().catch(() => undefined);
-  if (hub !== undefined) await hub.close().catch(() => undefined);
-  try {
-    await app.close();
-  } finally {
-    await updater?.stop().catch(() => undefined);
-  }
+  const activeHeartbeat = heartbeat;
+  const activeHub = hub;
+  const activeUpdater = updater;
+  await runSequentialShutdownSteps([
+    ...(activeHeartbeat !== undefined ? [{ name: 'heartbeat', run: () => activeHeartbeat.stop() }] : []),
+    ...(activeHub !== undefined ? [{ name: 'http-hub', run: () => activeHub.close() }] : []),
+    { name: 'app', run: () => app.close() },
+    ...(activeUpdater ? [{ name: 'updater', run: () => activeUpdater.stop() }] : []),
+  ]);
   throw error;
 }

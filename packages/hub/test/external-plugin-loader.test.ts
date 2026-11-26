@@ -302,7 +302,7 @@ test('故障隔离与边界拒绝：无 manifest 零执行 / 坏 manifest / 冒�
   expectFailed('broken-manifest', 'plugin_manifest_invalid')
   expectFailed('array-manifest', 'plugin_manifest_invalid')
   expectFailed('fake-builtin', 'invalid_plugin_definition', /builtin:/)
-  expectFailed('colon-plugin', 'invalid_plugin_definition', /smoke number/)
+  expectFailed('colon-plugin', 'invalid_plugin_definition', /colons are reserved/)
   assert.equal(existsSync(join(sharedDataDir, 'plugins', 'vendor:plugin')), false)
   assert.equal(existsSync(join(sharedDataDir, 'plugins', 'vendor%3Aplugin')), false)
   expectFailed('traversal', 'plugin_manifest_invalid')

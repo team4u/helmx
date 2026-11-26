@@ -500,7 +500,7 @@ test('核心协同 3：SecretStash 跨层零泄漏（SQLite/模型请求/SSE/JSO
   assert.deepEqual(await host.executeTool('probe_echo', { text: 'hi' }, { conversationId: 1 }), { echoed: 'hi' })
   await rejectsExplicitly(() => host.executeTool('probe_echo', { text: '' }, { conversationId: 1 }), { code: 'validation_error', message: /validation failed/ })
   assert.deepEqual(calls, ['double:21', 'echo:hi'])
-  await rejectsExplicitly(() => host.invokeAction('test:core-probe', 'nope', {}), { code: 'unknown_action', message: /not declaration/ })
+  await rejectsExplicitly(() => host.invokeAction('test:core-probe', 'nope', {}), { code: 'unknown_action', message: /is not declared/ })
   await rejectsExplicitly(() => host.executeTool('nope', {}, { conversationId: 1 }), { code: 'unknown_tool', message: /not registered/ })
 
   const slowPromise = host.invokeAction('test:core-probe', 'slow', {})

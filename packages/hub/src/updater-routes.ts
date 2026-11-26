@@ -8,8 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
-import { errorResponse, jsonOk, type ProductRouteHandler } from '@helmx/kernel';
-import { BodyError, isHubActivityBusy, readBody, type HubActivityCounts } from '@helmx/protocol';
+import { errorResponse, jsonOk, readJsonBody, type ProductRouteHandler } from '@helmx/kernel';
+import { BodyError, isHubActivityBusy, type HubActivityCounts } from '@helmx/protocol';
 import { isBlockedVersionActive, isStrictSemver, readBlockedRelease, resolveBlockedCooldownMs } from '@helmx/env-io';
 import { readUpdateReady, type UpdateReadyRecord } from '@helmx/env-io/hub-payload';
 import type { HubUpdaterHandle } from './updater.js';
@@ -109,7 +109,7 @@ export function createHubUpdateRoutes(deps: HubUpdateRoutesDeps): ProductRouteHa
       if (request.method !== 'GET' && request.method !== 'HEAD') {
         return errorResponse(undefined, 405, 'method_not_allowed', 'use GET for status and POST for apply');
       }
-      const ready = deps.root !== null ? await readUpdateReady(deps.root).catch(() => null) : null;
+      const ready = deps.root !== null ? await readUpdateReady(deps.root) : null;
       const blocked = deps.root !== null ? await readBlockedRelease(deps.root) : null;
       const updaterStatus = deps.updater?.status() ?? null;
       return jsonOk(undefined, {
@@ -136,43 +136,24 @@ export function createHubUpdateRoutes(deps: HubUpdateRoutesDeps): ProductRouteHa
     applyInFlight = true;
     try {
       let force = false;
-      const contentType = request.headers.get('content-type') ?? '';
-      if (contentType.startsWith('application/json')) {
-        let rawBytes: Uint8Array;
+      const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+      if (mediaType === 'application/json' && request.body !== null) {
+        let parsed: Record<string, unknown>;
         try {
-          rawBytes = await readBody(request, MAX_APPLY_BODY_BYTES);
+          parsed = await readJsonBody(request, MAX_APPLY_BODY_BYTES);
         } catch (error) {
           if (error instanceof BodyError) {
             return errorResponse(undefined, error.status, error.code, error.message);
           }
           throw error;
         }
-        if (rawBytes.byteLength > 0) {
-          let text: string;
-          try {
-            text = new TextDecoder('utf-8', { fatal: true }).decode(rawBytes);
-          } catch {
-            return errorResponse(undefined, 400, 'invalid_json', 'body must be valid UTF-8 JSON');
-          }
-          if (text.trim() !== '') {
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(text);
-            } catch {
-              return errorResponse(undefined, 400, 'invalid_json', 'body must be valid JSON');
-            }
-            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-              return errorResponse(undefined, 400, 'invalid_body', 'body must be a JSON object');
-            }
-            const rawForce = (parsed as Record<string, unknown>)['force'];
-            if (rawForce !== undefined && typeof rawForce !== 'boolean') {
-              return errorResponse(undefined, 400, 'invalid_body', 'force must be a boolean');
-            }
-            force = rawForce === true;
-          }
+        const rawForce = parsed['force'];
+        if (rawForce !== undefined && typeof rawForce !== 'boolean') {
+          return errorResponse(undefined, 400, 'invalid_body', 'force must be a boolean');
         }
+        force = rawForce === true;
       }
-      const ready = await readUpdateReady(deps.root).catch(() => null);
+      const ready = await readUpdateReady(deps.root);
       if (ready === null) {
         return errorResponse(undefined, 409, 'no_staged_update', 'no staged update is waiting; run helmx update (or wait for the background check) first');
       }
@@ -184,7 +165,7 @@ export function createHubUpdateRoutes(deps: HubUpdateRoutesDeps): ProductRouteHa
       if (!force && isHubActivityBusy(counts)) {
         return errorResponse(undefined, 409, 'hub_busy', 'the Hub has live work (conversations, tools, compaction, or queued input); retry when idle or pass force', { counts });
       }
-      const control = await readHubControlRecord(deps.kernel.dataDir).catch(() => null);
+      const control = await readHubControlRecord(deps.kernel.dataDir);
       try {
         const spawned = await spawnHandoff(ready, control !== null ? { endpoint: control.endpoint, instanceId: control.instanceId } : null);
         return jsonOk(undefined, { ok: true, switching: true, targetVersion: ready.version, handoffPid: spawned.pid }, { status: 202 });

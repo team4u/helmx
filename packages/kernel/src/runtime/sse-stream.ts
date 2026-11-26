@@ -64,6 +64,7 @@ export class SseStreamController {
   private isClosed = false
   private isFlushing = false
   private outbound: OutboundEntry[] = []
+  private outboundHead = 0
   private outboundLiveBytes = 0
   private controller: ReadableStreamDefaultController<Uint8Array> | undefined
   private keepaliveTimer: ReturnType<typeof setInterval> | undefined
@@ -121,6 +122,7 @@ export class SseStreamController {
   beginReplayFlush(replayChunks: ReadonlyArray<Uint8Array>): void {
     if (this.isClosed || replayChunks.length === 0) return
     this.outbound = replayChunks.map((chunk) => ({ chunk, liveBytes: 0 }))
+    this.outboundHead = 0
     this.outboundLiveBytes = 0
     this.isFlushing = true
   }
@@ -131,6 +133,7 @@ export class SseStreamController {
     this.keepaliveTimer = setInterval(() => {
       if (!this.write(KEEPALIVE_CHUNK)) this.close()
     }, this.keepaliveMs)
+    this.keepaliveTimer.unref?.()
   }
 
   /** Idempotently stop keepalive timer, detach abort listener, invoke `onClose`, and close the stream controller. */
@@ -139,6 +142,7 @@ export class SseStreamController {
     this.isClosed = true
     this.isFlushing = false
     this.outbound = []
+    this.outboundHead = 0
     this.outboundLiveBytes = 0
     if (this.keepaliveTimer !== undefined) {
       clearInterval(this.keepaliveTimer)
@@ -175,8 +179,11 @@ export class SseStreamController {
         },
         pull: () => {
           if (this.isClosed || !this.isFlushing) return
-          const entry = this.outbound.shift()
-          if (entry === undefined) return
+          if (this.outboundHead >= this.outbound.length) return
+          const entry = this.outbound[this.outboundHead]!
+          // Drop reference immediately while advancing head index (O(1) dequeue).
+          this.outbound[this.outboundHead] = undefined as never
+          this.outboundHead += 1
           this.outboundLiveBytes -= entry.liveBytes
           const controller = this.controller
           if (controller === undefined) return
@@ -187,7 +194,9 @@ export class SseStreamController {
             this.close()
             return
           }
-          if (this.outbound.length === 0) {
+          if (this.outboundHead >= this.outbound.length) {
+            this.outbound = []
+            this.outboundHead = 0
             this.isFlushing = false
             this.startKeepalive()
           }

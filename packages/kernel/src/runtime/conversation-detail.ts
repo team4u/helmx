@@ -15,6 +15,7 @@ import { assistantTextOfModel, entryModelText, toConversationEntry } from './ent
 import { projectDetailEntry, stripEntrySignatures } from './entry-projection.js'
 import { coveredByRewind, rewindIntervalOf, type RewindInterval } from './conversation-rewind.js'
 import { pageVisibleEntries, pageVisibleTurns } from './conversation-pagination.js'
+import { getSdkConversation, readSdkEntryPage, scanSdkEntries } from './sdk-ids.js'
 import type { HelmxStore } from './store.js'
 
 /** Maximum encoded pagination cursor length (base64url; rejects oversized cursors to prevent abuse). */
@@ -130,7 +131,7 @@ export class ConversationDetailService {
         limit,
       })
     }
-    const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    const conversation = await getSdkConversation(this.host.harness, id, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
 
     let sdkCursor: unknown = undefined
@@ -181,15 +182,10 @@ export class ConversationDetailService {
       })
     }
     const summary = this.host.getConversation(id)
-    const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    const conversation = await getSdkConversation(this.host.harness, id, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-    const page = await conversation.entries(
-      { minEntryId: entryId as never, maxEntryId: entryId as never, order: 'ascending' },
-      1,
-      undefined,
-      BACKGROUND_CONTEXT,
-    )
-    const raw = page.items[0] as { id: number | string; kind: string } | undefined
+    const page = await readSdkEntryPage(conversation, entryId, BACKGROUND_CONTEXT)
+    const raw = page.items[0]
     if (raw === undefined || Number(raw.id) !== entryId) {
       throw new HelmxError('not_found', `entry ${entryId} does not exist in conversation ${id}`, 404, {
         conversationId: id,
@@ -211,7 +207,7 @@ export class ConversationDetailService {
         entryId,
       })
     }
-    return stripEntrySignatures(toConversationEntry(raw as never))
+    return stripEntrySignatures(toConversationEntry(raw))
   }
 
   /** Encode pagination cursor: base64url(JSON {conversationId, cursor}). */
@@ -252,7 +248,7 @@ export class ConversationDetailService {
   async rebuildFts(listConversationIds: () => Array<{ id: number; title: string }>): Promise<void> {
     await this.host.store.rebuildFts(async (index) => {
       for (const conv of listConversationIds()) {
-        const conversation = await this.host.harness.conversation(conv.id as never, BACKGROUND_CONTEXT)
+        const conversation = await getSdkConversation(this.host.harness, conv.id, BACKGROUND_CONTEXT)
         if (!conversation) continue
         // Filter covered entries across all closed helmx.rewind [from, through] intervals after full scan so superseded
         // entries are never re-indexed (shares identical interval rules with collectRewindIntervals and detail projection).
@@ -260,19 +256,8 @@ export class ConversationDetailService {
         const indexed: Array<{ id: number; entryKey: string; text: string }> = []
         let cursor: unknown = undefined
         for (;;) {
-          const page = await conversation.entries(
-            { order: 'ascending' },
-            50,
-            cursor as never,
-            BACKGROUND_CONTEXT,
-          )
-          for (const entry of page.items) {
-            const record = entry as {
-              id: number
-              kind: string
-              data?: unknown
-              model?: readonly unknown[]
-            }
+          const page = await scanSdkEntries(conversation, 'ascending', 50, cursor, BACKGROUND_CONTEXT)
+          for (const record of page.items) {
             if (record.kind === 'helmx.rewind') {
               const interval = rewindIntervalOf(record)
               if (interval !== undefined) rewindCuts.push(interval)
@@ -294,7 +279,7 @@ export class ConversationDetailService {
               const text =
                 typeof data?.text === 'string' && data.text !== ''
                   ? data.text
-                  : entryModelText(record as never)
+                  : entryModelText(record)
               const entryKey =
                 typeof data?.id === 'string' && data.id !== ''
                   ? `input:${data.id}`
@@ -304,8 +289,8 @@ export class ConversationDetailService {
             }
             const text =
               record.kind === 'pi.assistant'
-                ? assistantTextOfModel(record.model as unknown[] | undefined) || entryModelText(record as never)
-                : entryModelText(record as never)
+                ? assistantTextOfModel(record.model) || entryModelText(record)
+                : entryModelText(record)
             if (text) indexed.push({ id: Number(record.id), entryKey: `entry:${record.id}`, text })
           }
           if (!page.next) break

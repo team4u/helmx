@@ -18,7 +18,6 @@ import type {
   ConversationSummary,
 } from '@helmx/protocol'
 import { HelmxError, isValidNodeId, NODE_ID_PATTERN } from '@helmx/protocol'
-import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry } from '@earendil-works/pi-durable'
 import type { EnvFabric } from '../env/index.js'
 import { assertSchemaCompilable } from '../plugins/schema.js'
@@ -83,7 +82,6 @@ interface RuntimeAgentSpawnDeps {
   readonly stashService: SecretStash
   readonly assertWritable?: () => void
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
-  markConversationOwnership(id: number, owner: ConversationOwnership): void
 }
 
 export class RuntimeAgentSpawn {
@@ -206,50 +204,102 @@ export class RuntimeAgentSpawn {
   }
 
   /**
+   * Shared `Profile.restrictToCwd` boundary guard used by both `assertSpawnCwdScope` (at `spawnAgent`
+   * entry before hooks) and `resolveSpawnTarget` (ensuring remote `profile.nodeId`, explicit `requestNodeId`,
+   * and explicit `requestCwd` are enforced consistently across both entrypoints).
+   */
+  private assertParentCwdScopeViolations(options: {
+    parentConversationId: number
+    parentNodeId?: string
+    parentCwd?: string
+    profileNodeId?: string
+    forkSameProfile: boolean
+    requestNodeId?: string
+    requestCwd?: string
+    nodeLabel: 'requested' | 'resolved'
+  }): void {
+    const parentNodeId = options.parentNodeId ?? 'local'
+    const effectiveNodeId = resolveSpawnTargetNodeId(
+      options.profileNodeId,
+      options.parentNodeId,
+      options.forkSameProfile,
+      options.requestNodeId,
+    )
+    if (effectiveNodeId !== parentNodeId) {
+      const noun = options.nodeLabel === 'resolved' && options.requestNodeId === undefined
+        ? `resolved spawn target node '${effectiveNodeId}'`
+        : options.requestNodeId !== undefined
+          ? `requested nodeId '${effectiveNodeId}'`
+          : `profile target node '${effectiveNodeId}'`
+      throw new HelmxError(
+        'path_outside_workspace',
+        `path_outside_workspace: ${noun} differs from parent conversation node '${parentNodeId}'; ` +
+          'this conversation is restricted to its working directory (Profile.restrictToCwd)',
+        403,
+        {
+          parentConversationId: options.parentConversationId,
+          parentNodeId,
+          ...(options.requestNodeId !== undefined
+            ? { requestedNodeId: options.requestNodeId }
+            : {}),
+          ...(options.nodeLabel === 'resolved'
+            ? { resolvedNodeId: effectiveNodeId }
+            : {}),
+        },
+      )
+    }
+    if (options.requestCwd !== undefined && options.parentCwd !== undefined) {
+      const parentPlatform = resolveTargetPlatform(
+        parentNodeId,
+        trustedPlatformFromEnvFabric(this.deps.envFabric),
+      )
+      const violation = cwdScopeViolationText(options.requestCwd, options.parentCwd, parentPlatform)
+      if (violation !== undefined) {
+        throw new HelmxError('path_outside_workspace', violation, 403, {
+          parentConversationId: options.parentConversationId,
+          requestedCwd: options.requestCwd,
+          parentCwd: options.parentCwd,
+        })
+      }
+    }
+  }
+
+  /**
    * `Profile.restrictToCwd` guardrail at the spawn entry: when the parent conversation's Profile restricts
-   * to its cwd, an explicitly requested `nodeId` must stay on the parent's node and an explicitly requested
-   * `cwd` (model-directed choices) must stay inside that cwd. Runs before the `agent_spawn` hook chain:
-   * host/plugin-directed rewrites afterwards (workflow worktree isolation assigning a managed worktree as
-   * the child cwd) are trusted capabilities, not model choices.
+   * to its cwd, both explicit `request.nodeId` / remote `profile.nodeId` and explicit `request.cwd` must stay
+   * within the parent's node and working directory before `agent_spawn` hooks execute.
    */
   private async assertSpawnCwdScope(request: AgentSpawnRequest): Promise<void> {
     if (
-      (request.cwd === undefined && request.nodeId === undefined) ||
-      this.deps.toolDeps.restrictToCwdOf === undefined
+      this.deps.toolDeps.restrictToCwdOf === undefined ||
+      ((request.reattach !== undefined || request.resume !== undefined) &&
+        request.cwd === undefined &&
+        request.nodeId === undefined)
     ) {
       return
     }
     const parent = this.deps.store.getConv(request.parentConversationId)
     if (parent === undefined) return // missing parents reject later in the pipeline with their own explicit errors
     if (!(await this.deps.toolDeps.restrictToCwdOf(request.parentConversationId))) return
-    const parentNodeId = parent.nodeId ?? 'local'
-    if (request.nodeId !== undefined && request.nodeId !== parentNodeId) {
-      throw new HelmxError(
-        'path_outside_workspace',
-        `path_outside_workspace: requested nodeId '${request.nodeId}' differs from parent conversation node '${parentNodeId}'; ` +
-          'this conversation is restricted to its working directory (Profile.restrictToCwd)',
-        403,
-        {
-          parentConversationId: request.parentConversationId,
-          requestedNodeId: request.nodeId,
-          parentNodeId,
-        },
-      )
-    }
-    if (request.cwd !== undefined) {
-      const parentPlatform = resolveTargetPlatform(
-        parentNodeId,
-        trustedPlatformFromEnvFabric(this.deps.envFabric),
-      )
-      const violation = cwdScopeViolationText(request.cwd, parent.cwd, parentPlatform)
-      if (violation !== undefined) {
-        throw new HelmxError('path_outside_workspace', violation, 403, {
-          parentConversationId: request.parentConversationId,
-          requestedCwd: request.cwd,
-          parentCwd: parent.cwd,
-        })
-      }
-    }
+    const { profileId, forkSameProfile } = resolveForkMode(request.agentType, request.fork, parent.profileId)
+    const profile =
+      request.reattach === undefined &&
+      request.resume === undefined &&
+      request.nodeId === undefined &&
+      !profileId.includes(':') &&
+      typeof this.deps.conversations?.readProfile === 'function'
+        ? await this.deps.conversations.readProfile(profileId)
+        : undefined
+    this.assertParentCwdScopeViolations({
+      parentConversationId: request.parentConversationId,
+      parentNodeId: parent.nodeId,
+      parentCwd: parent.cwd,
+      profileNodeId: profile?.nodeId,
+      forkSameProfile,
+      requestNodeId: request.nodeId,
+      requestCwd: request.cwd,
+      nodeLabel: 'requested',
+    })
   }
 
   /** Fork request pre-validation and anchor locking (shared by entry preflight and final post-hook check). */
@@ -434,7 +484,6 @@ export class RuntimeAgentSpawn {
           createdAt: now,
           updatedAt: now,
         })
-        this.deps.markConversationOwnership(childId, 'helmx')
         await this.deps.store.flushPublic()
         await this.deps.tracker.observe(childId)
         if (this.deps.store.getConv(childId) !== undefined && !this.deps.store.isDeleted(childId)) {
@@ -526,45 +575,20 @@ export class RuntimeAgentSpawn {
     if (profile === undefined) {
       throw new HelmxError('not_found', `agentType '${profileId}' is not a registered Profile (profiles/${profileId} not found)`, 404)
     }
-    const restricted =
+    if (
       this.deps.toolDeps.restrictToCwdOf !== undefined &&
       (await this.deps.toolDeps.restrictToCwdOf(input.parentConversationId))
-    if (restricted) {
-      const parentNodeId = parent.nodeId ?? 'local'
-      const resolvedNodeId = resolveSpawnTargetNodeId(
-        profile.nodeId,
-        parent.nodeId,
+    ) {
+      this.assertParentCwdScopeViolations({
+        parentConversationId: input.parentConversationId,
+        parentNodeId: parent.nodeId,
+        parentCwd: parent.cwd,
+        profileNodeId: profile.nodeId,
         forkSameProfile,
-        input.requestNodeId,
-      )
-      if (resolvedNodeId !== parentNodeId) {
-        throw new HelmxError(
-          'path_outside_workspace',
-          `path_outside_workspace: resolved spawn target node '${resolvedNodeId}' differs from parent conversation node '${parentNodeId}'; ` +
-            'this conversation is restricted to its working directory (Profile.restrictToCwd)',
-          403,
-          {
-            parentConversationId: input.parentConversationId,
-            resolvedNodeId,
-            parentNodeId,
-            ...(input.requestNodeId !== undefined ? { requestedNodeId: input.requestNodeId } : {}),
-          },
-        )
-      }
-      if (input.requestCwd !== undefined && parent.cwd !== undefined) {
-        const parentPlatform = resolveTargetPlatform(
-          parentNodeId,
-          trustedPlatformFromEnvFabric(this.deps.envFabric),
-        )
-        const violation = cwdScopeViolationText(input.requestCwd, parent.cwd, parentPlatform)
-        if (violation !== undefined) {
-          throw new HelmxError('path_outside_workspace', violation, 403, {
-            parentConversationId: input.parentConversationId,
-            requestedCwd: input.requestCwd,
-            parentCwd: parent.cwd,
-          })
-        }
-      }
+        requestNodeId: input.requestNodeId,
+        requestCwd: input.requestCwd,
+        nodeLabel: 'resolved',
+      })
     }
     // Consolidate source cwd by target node platform (requestNodeId > fork/profile/parent node chain;
     // cross-node cwd isolation prevents leaking foreign parent/profile paths across nodes): worktree

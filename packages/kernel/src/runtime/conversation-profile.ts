@@ -22,7 +22,9 @@ import {
   type ResolvedModelRef,
 } from './models.js'
 import type { EventHub } from './events.js'
+import { getSdkConversation } from './sdk-ids.js'
 import type { HelmxStore } from './store.js'
+import { createKeyedMutex } from '../shared/keyed-mutex.js'
 
 interface ConversationProfileHost {
   readonly harness: Harness
@@ -45,7 +47,7 @@ interface ConversationProfileHost {
 
 export class ConversationProfileService {
   /** Serialize configuration mutations per conversation so inheritance refreshes and explicit overrides do not clobber each other. */
-  private readonly conversationChanges = new Map<number, Promise<unknown>>()
+  private readonly conversationChanges = createKeyedMutex<number>()
 
   constructor(private readonly host: ConversationProfileHost) {}
 
@@ -129,15 +131,8 @@ export class ConversationProfileService {
     })
   }
 
-  async withConversationChange<T>(id: number, change: () => Promise<T>): Promise<T> {
-    const previous = this.conversationChanges.get(id) ?? Promise.resolve()
-    const run = previous.then(change, change)
-    this.conversationChanges.set(id, run)
-    try {
-      return await run
-    } finally {
-      if (this.conversationChanges.get(id) === run) this.conversationChanges.delete(id)
-    }
+  withConversationChange<T>(id: number, change: () => Promise<T>): Promise<T> {
+    return this.conversationChanges.run(id, change)
   }
 
   /** Inherit model and thinking level separately; always reconcile against SDK to heal restarts and historical fork snapshots. */
@@ -163,7 +158,7 @@ export class ConversationProfileService {
         resolved?.tierThinkingLevel,
         batchProfiles,
       )
-      const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
+      const conversation = await getSdkConversation(this.host.harness, id, BACKGROUND_CONTEXT)
       if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       const agent = await conversation.agent(BACKGROUND_CONTEXT)
       const change: AgentChange = {

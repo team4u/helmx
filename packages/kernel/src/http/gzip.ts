@@ -13,6 +13,7 @@
  */
 import { promisify } from 'node:util'
 import { gzip as gzipCallback, gzipSync } from 'node:zlib'
+import { concatUint8Arrays, readBoundedChunks, stitchRemainingStream } from './stream-utils.js'
 
 const gzipAsync = promisify(gzipCallback)
 
@@ -39,16 +40,6 @@ const streamingJsonBodies = new WeakSet<ReadableStream<Uint8Array>>()
 export function markStreamingJsonBody(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
   streamingJsonBodies.add(body)
   return body
-}
-
-function concatChunks(chunks: readonly Uint8Array[], totalBytes: number): Uint8Array<ArrayBuffer> {
-  const out = new Uint8Array(new ArrayBuffer(totalBytes))
-  let offset = 0
-  for (const chunk of chunks) {
-    out.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return out
 }
 
 /** Parse Accept-Encoding to determine whether gzip is accepted (including x-gzip alias; q=0 means rejected). */
@@ -118,61 +109,10 @@ export async function gzipJsonResponse(request: Request, response: Response): Pr
   }
 
   const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let totalBytes = 0
-  let exceeded = false
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (value === undefined || value.byteLength === 0) continue
-      chunks.push(value)
-      totalBytes += value.byteLength
-      if (totalBytes > GZIP_JSON_MAX_BYTES) {
-        exceeded = true
-        break
-      }
-    }
-  } catch (err) {
-    await reader.cancel(err).catch(() => {})
-    throw err
-  }
+  const { chunks, totalBytes, exceeded } = await readBoundedChunks(reader, GZIP_JSON_MAX_BYTES)
 
   if (exceeded) {
-    let index = 0
-    const stitched = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        if (index < chunks.length) {
-          const next = chunks[index]!
-          chunks[index] = new Uint8Array(0)
-          index += 1
-          controller.enqueue(next)
-          return
-        }
-        try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) {
-              reader.releaseLock()
-              controller.close()
-              return
-            }
-            if (value !== undefined && value.byteLength > 0) {
-              controller.enqueue(value)
-              return
-            }
-          }
-        } catch (err) {
-          reader.releaseLock()
-          controller.error(err)
-        }
-      },
-      async cancel(reason) {
-        chunks.length = 0
-        await reader.cancel(reason).catch(() => {})
-      },
-    })
-    return new Response(stitched, {
+    return new Response(stitchRemainingStream(chunks, reader), {
       status: response.status,
       statusText: response.statusText,
       headers: new Headers(response.headers),
@@ -180,7 +120,7 @@ export async function gzipJsonResponse(request: Request, response: Response): Pr
   }
 
   reader.releaseLock()
-  const raw = concatChunks(chunks, totalBytes)
+  const raw = concatUint8Arrays(chunks, totalBytes)
   const identityResponse = () =>
     new Response(raw, {
       status: response.status,

@@ -412,3 +412,151 @@ it('ConversationSummary.modelOverride reflects explicit override, omits inherite
     await restarted.close()
   }
 })
+
+it('ModelRegistry constructor preserves defaults.thinkingLevel, names exact corrupt config fields, aligns disabled-model checks, and reports tier alignment rejections via emitDiagnostic', { timeout: 60_000 }, async (t) => {
+  const { createModels } = await import('@earendil-works/pi-ai')
+  const { HelmxError } = await import('@helmx/protocol')
+  const { ModelRegistry } = await import('../src/runtime/model-registry.js')
+  const { createFileModelsStore } = await import('../src/runtime/models-store.js')
+  const { ConfigService, CredentialService, ProviderService, SecretStash } = await import('../src/services/index.js')
+
+  const dir = await makeTempDir('helmx-model-reg-fixes-')
+  t.after(async () => { await cleanupDir(dir) }, { timeout: 60_000 })
+
+  // 1. Constructor preserves defaults.thinkingLevel.
+  const diagnostics: Array<{ level: string; source: string; message: string; error?: string }> = []
+  let failAlign = false
+  const registry = new ModelRegistry(
+    {
+      dataDir: dir,
+      providersSvc: new ProviderService(dir),
+      credentialsSvc: new CredentialService(dir),
+      configSvc: new ConfigService(dir),
+      stash: new SecretStash(),
+      modelsStore: createFileModelsStore(dir),
+      setModels: () => {},
+      externalModels: false,
+      events: { publish: () => {} },
+      pluginHost: () => undefined,
+      alignAllConversations: async () => {
+        if (failAlign) throw new Error('align boom')
+      },
+      emitDiagnostic: (event) => diagnostics.push({
+        level: event.level ?? 'error',
+        source: event.source,
+        message: event.message,
+        ...(event.error !== undefined ? { error: String(event.error) } : {}),
+      }),
+    },
+    createModels(),
+    { model: 'faux/faux-1', thinkingLevel: 'medium', compactionThinkingLevel: 'low' },
+  )
+  assert.equal(registry.defaultThinkingLevel, 'medium')
+  assert.equal(registry.defaultCompactionThinkingLevel, 'low')
+
+  // 2. Async tier source change / alignment rejections are routed to emitDiagnostic rather than unhandled or silent.
+  let tierChangeListener: (() => void | Promise<void>) | undefined
+  let capChangeListener: (() => void) | undefined
+  let hasTiers = true
+  registry.bindPluginHost({
+    consumeCapability: () =>
+      hasTiers
+        ? [
+            {
+              pluginId: 'test:tiers',
+              impl: {
+                getTiers: () => ({ fast: { model: 'faux/faux-1' } }),
+                onChanged: (cb: () => void | Promise<void>) => {
+                  tierChangeListener = cb
+                  return () => { tierChangeListener = undefined }
+                },
+              },
+            },
+          ] as never
+        : [],
+    onCapabilityChanged: (_cap, cb) => {
+      capChangeListener = cb
+      return () => { capChangeListener = undefined }
+    },
+  })
+  failAlign = true
+  await tierChangeListener?.()
+  await new Promise((r) => setTimeout(r, 20))
+  assert.ok(diagnostics.some((d) => d.source === 'models.tier_changed' && (d.error ?? '').includes('align boom')))
+  hasTiers = false
+  capChangeListener?.()
+  await new Promise((r) => setTimeout(r, 20))
+  assert.ok(diagnostics.some((d) => d.source === 'models.tier_align' && (d.error ?? '').includes('align boom')))
+  await registry.dispose()
+
+  // 3. Exact field names on corrupt config thinking levels.
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ compactionThinkingLevel: 'bogus' }))
+  const regCompaction = new ModelRegistry(
+    {
+      dataDir: dir,
+      providersSvc: new ProviderService(dir),
+      credentialsSvc: new CredentialService(dir),
+      configSvc: new ConfigService(dir),
+      stash: new SecretStash(),
+      modelsStore: createFileModelsStore(dir),
+      setModels: () => {},
+      externalModels: false,
+      events: { publish: () => {} },
+      pluginHost: () => undefined,
+      alignAllConversations: async () => {},
+    },
+    createModels(),
+    {},
+  )
+  await assert.rejects(
+    () => regCompaction.loadDefaultsFromConfig(),
+    (err: unknown) => err instanceof HelmxError && err.code === 'config_corrupt' && err.message.includes('config.json.compactionThinkingLevel'),
+  )
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ modelThinkingLevels: { 'faux/faux-1': 'bogus' } }))
+  const regPerModel = new ModelRegistry(
+    {
+      dataDir: dir,
+      providersSvc: new ProviderService(dir),
+      credentialsSvc: new CredentialService(dir),
+      configSvc: new ConfigService(dir),
+      stash: new SecretStash(),
+      modelsStore: createFileModelsStore(dir),
+      setModels: () => {},
+      externalModels: false,
+      events: { publish: () => {} },
+      pluginHost: () => undefined,
+      alignAllConversations: async () => {},
+    },
+    createModels(),
+    {},
+  )
+  await assert.rejects(
+    () => regPerModel.loadDefaultsFromConfig(),
+    (err: unknown) => err instanceof HelmxError && err.code === 'config_corrupt' && err.message.includes("config.json.modelThinkingLevels['faux/faux-1']"),
+  )
+
+  // 4. Consistent assertModelEnabled checks: clearing ('') disabled model's thinking default succeeds, setting rejects 409 model_disabled.
+  const kernelDir = await makeTempDir('helmx-disabled-thinking-')
+  t.after(async () => { await cleanupDir(kernelDir) }, { timeout: 60_000 })
+  const kernel = await open(kernelDir)
+  try {
+    await kernel.models.setModelThinkingDefault('faux/faux-1', 'high')
+    await kernel.models.setDisabledModels('faux', ['faux-1'])
+    await assertRejectsCode(() => kernel.models.setModelThinkingDefault('faux/faux-1', 'medium'), 'model_disabled')
+    await assertRejectsCode(
+      () => kernel.models.setDefaultModel(undefined, undefined, undefined, undefined, { 'faux/faux-1': 'low' }),
+      'model_disabled',
+    )
+    await assertRejectsCode(
+      () => kernel.models.setDefaultModel(undefined, undefined, undefined, undefined, undefined, { model: 'faux/faux-1', level: 'low' }),
+      'model_disabled',
+    )
+    // Clearing while disabled succeeds via both APIs.
+    await kernel.models.setModelThinkingDefault('faux/faux-1', '')
+    assert.deepEqual(kernel.models.modelThinkingLevels, {})
+    await kernel.models.setDefaultModel(undefined, undefined, undefined, undefined, undefined, { model: 'faux/faux-1', level: '' })
+    assert.deepEqual(kernel.models.modelThinkingLevels, {})
+  } finally {
+    await kernel.close()
+  }
+})

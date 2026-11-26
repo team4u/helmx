@@ -46,16 +46,6 @@ import { assertNoLiveTasks } from './service-coordinator.js';
 import type { PluginHostBackend, PluginProviderPort, PluginState } from './types.js';
 import type { ClientLifecycleLookup } from './ui-registry.js';
 
-/**
- * Package-internal sink allowing `doctorPluginDir` to capture a dry-run
- * `PluginManifestProjection` immediately after `definePlugin` succeeds and
- * before `enabled: false` teardown clears the host registries.
- */
-export const dryRunManifestSinks = new WeakMap<
-  PluginDefinition,
-  (manifest: PluginManifestProjection) => void
->();
-
 export interface PluginLifecycleContext extends PluginTransitionContext {
   host: PluginHostBackend;
   providers?: PluginProviderPort;
@@ -125,7 +115,11 @@ function commitEnabled(state: PluginState, ctx: PluginLifecycleContext): void {
 
 export async function runRegisterTransaction(
   definition: PluginDefinition,
-  options: { enabled?: boolean; isolateFailure?: boolean },
+  options: {
+    enabled?: boolean;
+    isolateFailure?: boolean;
+    onManifestProjected?: (manifest: PluginManifestProjection) => void;
+  },
   seq: number,
   isolate: boolean,
   ctx: PluginLifecycleContext,
@@ -167,9 +161,8 @@ export async function runRegisterTransaction(
 
   try {
     await runDefinition(state, ctx);
-    const dryRunSink = dryRunManifestSinks.get(definition);
-    if (dryRunSink !== undefined) {
-      dryRunSink(
+    if (options.onManifestProjected !== undefined) {
+      options.onManifestProjected(
         buildPluginManifestProjection({
           state,
           capabilityRegistry: ctx.capabilityRegistry,

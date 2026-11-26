@@ -239,7 +239,7 @@ test('assertExternalDefinition: display-copy name follows the LocalizedText rule
       (err: unknown) =>
         err instanceof HelmxError &&
         err.code === 'invalid_plugin_definition' &&
-        err.message.includes('name provide when must be display copy'),
+        err.message.includes('name must be display copy'),
       `expected rejection for name=${JSON.stringify(value)}`,
     )
   }

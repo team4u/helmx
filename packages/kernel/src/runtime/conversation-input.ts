@@ -17,6 +17,7 @@ import type {
   ConversationAttachmentRef,
   ConversationInput,
   GuardedMutationExpectation,
+  InputOrigin,
   WhenBusy,
 } from '@helmx/protocol'
 import { HelmxError, isPlainObject } from '@helmx/protocol'
@@ -24,10 +25,28 @@ import { randomUUID } from 'node:crypto'
 import { redactJsonValue } from '../redact.js'
 import type { SecretStash } from '../services/index.js'
 import { deriveTitle, type ConversationTracker } from './conversations.js'
-import { asConversationId } from './sdk-ids.js'
+import { asConversationId, getSdkSubmission } from './sdk-ids.js'
 import type { PromptContent } from './conversation-attachments.js'
-import type { SubmitInputOptions } from './conversation-service.js'
 import type { ConvMeta, HelmxStore } from './store.js'
+
+/** Optional parameters for input submission (shared shape across HTTP/CLI/internal). */
+export interface SubmitInputOptions {
+  origin?: InputOrigin
+  whenBusy?: WhenBusy
+  /** @internal Guarded submissions may ask the SDK to atomically reject idle conversations; never exposed on HTTP/CLI. */
+  whenIdle?: 'reject'
+  meta?: Record<string, unknown>
+  attachments?: string[]
+  replaceFromEntryId?: number
+  /** Internal durable idempotency key for completion callbacks; never exposed on HTTP input. */
+  requestId?: string
+  /**
+   * @internal Kernel guarded mutation channel (injected by submitInputGuarded; never exposed on host API
+   * or HTTP/CLI): synchronously re-checks ownership and watermark at commit point (right before SDK submit after the last await),
+   * failing 409/404 with zero submission side effects.
+   */
+  mutationGuard?: GuardedMutationExpectation
+}
 
 /** Minimal tracker callbacks needed to register, correlate, and roll back a durable input submission. */
 export interface DurableInputTracker {
@@ -158,7 +177,7 @@ export async function submitDurableInput(
     } else {
       tracker?.bindSubmission(conversationId, input.id, queueResult.submissionId)
     }
-    const submission = await harness.submission(queueResult.submissionId as never, BACKGROUND_CONTEXT)
+    const submission = await getSdkSubmission(harness, queueResult.submissionId, BACKGROUND_CONTEXT)
     if (submission === undefined) {
       throw new HelmxError(
         'not_found',

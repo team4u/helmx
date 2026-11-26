@@ -21,8 +21,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { AgentChange, Extension, Submission } from '@earendil-works/pi-durable'
-import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
+import type { AgentChange, Conversation, Extension, Submission } from '@earendil-works/pi-durable'
 import type {
   AgentSpawnRequest,
   ConversationAttachmentRef,
@@ -37,6 +36,7 @@ import type { Models } from '@earendil-works/pi-ai'
 import { THINKING_LEVELS, parseModelRef, type ModelRefParts, type ResolvedModelRef } from './models.js'
 import type { PromptContent } from './conversation-attachments.js'
 import { submitDurableInput, type DurableInputTracker } from './conversation-input.js'
+import { asEntryId, asSdkThinkingLevel, getSdkConversation } from './sdk-ids.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { resolveSpawnTargetChain } from './spawn-target.js'
 import {
@@ -171,6 +171,8 @@ export interface NativeSpawnDeps extends HelmxToolDeps {
    * `thinkingLevel` is the effective SDK effort (already clamped to target model capability) to avoid re-reading
    * ambiguous inheritance sources; `thinkingLevelOverride` is the clamped explicit override (`undefined` if
    * `request.effort` was omitted, preserving inheritance chain semantics).
+   *
+   * // Phase-2: convert to options object alongside packages/plugins/test/native-worktree.test.ts
    */
   registerChildConversation(
     childId: number,
@@ -328,11 +330,36 @@ interface NativeSpawnExecution {
   childId?: number
 }
 
-/** Resume resolution result: `childId` (guaranteed present on resume) + original conversation snapshot. */
-interface SpawnResumeContext {
-  childId: number | undefined
-  isResume: boolean
-  existing: ConversationSummary | undefined
+/** Resume resolution result: discriminated union narrowing `childId` and `existing` snapshot on resume. */
+type SpawnResumeContext =
+  | { readonly isResume: false }
+  | { readonly isResume: true; readonly childId: number; readonly existing: ConversationSummary }
+
+/** Bound structured-output session plus owning Harness map (eliminates non-null assertions). */
+interface PreparedStructuredOutput {
+  readonly session: StructuredOutputSession
+  readonly sessions: Map<number, StructuredOutputSession>
+}
+
+interface ResolveSpawnTargetForRequestOptions {
+  readonly deps: NativeSpawnDeps
+  readonly request: AgentSpawnRequest
+  readonly profile: ResolvedProfile
+  readonly parentSummary: ConversationSummary | undefined
+  readonly forkSameProfile: boolean
+  readonly resumeSummary: ConversationSummary | undefined
+}
+
+interface CreateChildConversationOptions {
+  readonly deps: NativeSpawnDeps
+  readonly request: AgentSpawnRequest
+  readonly execution: NativeSpawnExecution
+  readonly profile: ResolvedProfile
+  readonly profileId: string
+  readonly structured: PreparedStructuredOutput | undefined
+  readonly target: SpawnTarget
+  readonly parentSummary: ConversationSummary | undefined
+  readonly forkSameProfile: boolean
 }
 
 /** Spawn target resolution result: target node + effective cwd for child conversation (shared by gate and `onResolved`). */
@@ -351,10 +378,6 @@ async function runNativeSpawnTurn(
     return await runNativeReattachTurn(deps, request, reattachChildId)
   }
 
-  // ---- Resume resolution: strict numeric convId or mapped agentId; never guesses ('12abc' rejected). ----
-  // Resume config baseline: original conversation snapshot (`profileId`/`cwd`/`model`) is sole source of truth.
-  // Preserved by default; explicit `agentType`/`cwd`/`model` changes apply via `updateConversation`
-  // (real SDK configure + snapshot persistence without rebuilding identity fields).
   const resume = resolveSpawnResume(deps, request)
   const parentSummary = deps.getConversation(request.parentConversationId)
   if (request.fork === true && parentSummary === undefined) {
@@ -363,45 +386,35 @@ async function runNativeSpawnTurn(
     })
   }
 
-  // Profile resolution: resume preserves existing conversation's Profile (never silently reverts to assistant);
-  // fork inherits parent conversation's Profile by default; normal creation uses `agentType || DEFAULT_SPAWN_PROFILE`.
-  const forkResolution = resume.isResume
-    ? { profileId: request.agentType ?? resume.existing!.profileId, forkSameProfile: false }
+  const { profileId, forkSameProfile } = resume.isResume
+    ? { profileId: request.agentType ?? resume.existing.profileId, forkSameProfile: false }
     : resolveForkMode(request.agentType, request.fork, parentSummary?.profileId, DEFAULT_SPAWN_PROFILE)
-  const { profileId, forkSameProfile } = forkResolution
   const profile = await resolveProfileForSpawn(deps, profileId)
 
-  let summary: ConversationSummary | undefined = resume.existing
-  if (resume.isResume) {
-    summary = await applyResumeConfiguration(deps, request, resume.childId!, resume.existing!, profileId)
-  }
+  const summary = resume.isResume
+    ? await applyResumeConfiguration({
+        deps,
+        request,
+        childId: resume.childId,
+        existing: resume.existing,
+        profileId,
+      })
+    : undefined
 
-  // Creation path targets share the single authoritative chain with `ctx.host.resolveSpawnTarget` (`spawn-target.ts`);
-  // resume strictly preserves original snapshot (`nodeId`/`cwd`), with explicit `cwd` overrides consolidated above.
-  const target = resolveSpawnTargetForRequest(
+  const target = resolveSpawnTargetForRequest({
     deps,
     request,
-    resume.isResume,
     profile,
-    summary,
     parentSummary,
     forkSameProfile,
-  )
-  // Gate shares child's actual cwd (post-update cwd on resume, independent of caller cwd).
+    resumeSummary: summary,
+  })
   const gateCwd = target.childCwd
 
-  const structured = prepareStructuredSession(request)
-  if (structured !== undefined && deps.structuredOutputSessions === undefined) {
-    // Fail loudly on miswiring so structured outputs are never silently dropped.
-    throw new HelmxError(
-      'invalid_state',
-      'Request specifies schema but host did not inject structuredOutputSessions (wiring defect): nowhere to register structured output slot',
-      500,
-    )
-  }
-  let childId = resume.childId
+  const structured = prepareStructuredSession(deps, request)
+  let childId: number
   if (!resume.isResume) {
-    childId = await createChildConversation(
+    childId = await createChildConversation({
       deps,
       request,
       execution,
@@ -411,25 +424,24 @@ async function runNativeSpawnTurn(
       target,
       parentSummary,
       forkSameProfile,
-    )
+    })
   } else {
-    notifyResumeResolved(deps, request, childId!, target)
+    childId = resume.childId
+    notifyResumeResolved(deps, request, childId, target)
   }
 
-  const conversation = await deps.harness.conversation(childId as never, bg)
+  const conversation = await getSdkConversation(deps.harness, childId, bg)
   if (!conversation) {
     throw new HelmxError('not_found', `Child conversation not found: ${childId}`, 404)
   }
 
-  // Attach structured-output extension on resume if original conversation didn't carry it.
   if (resume.isResume && structured) {
-    const extension = buildStructuredOutputExtension(deps.structuredOutputSessions!)
+    const extension = buildStructuredOutputExtension(structured.sessions)
     deps.installChildExtension(extension)
     await conversation.configure({ extensions: { add: [extension] } }, bg)
   }
 
-  // Extensions are keyed by name in Registry; result slots must isolate by conversationId to avoid concurrent overwrites.
-  return await runChildTurn(deps, request, conversation, childId as number, structured, gateCwd)
+  return await runChildTurn({ deps, request, conversation, childId, structured, gateCwd })
 }
 
 /**
@@ -455,34 +467,21 @@ async function runNativeReattachTurn(
     nodeId: existing.nodeId ?? 'local',
     childCwd: existing.cwd !== '' ? existing.cwd : (request.reattach?.effectiveCwd ?? deps.defaultCwd),
   }
-  // No offline-node preflight here (unlike creation/resume in `resolveSpawnTargetForRequest`):
-  // reattach only re-binds listeners and the durable SubmissionHandle onto an existing child
-  // conversation — it executes no remote RPC up front. Hard-failing on `isOnline` at restart
-  // reattach time would kill in-place recovery whenever a registered node has not reconnected
-  // yet (the exact race the startup node-join grace closes); tool execution resolves the real
-  // online state per call and fails explicitly there when the node is genuinely gone.
-  const structured = prepareStructuredSession(request)
-  if (structured !== undefined && deps.structuredOutputSessions === undefined) {
-    throw new HelmxError(
-      'invalid_state',
-      'Request specifies schema but host did not inject structuredOutputSessions (wiring defect): nowhere to register structured output slot',
-      500,
-    )
-  }
+  const structured = prepareStructuredSession(deps, request)
   if (request.agentId) deps.agentSessions.set(request.agentId, childId)
   notifyResumeResolved(deps, request, childId, target)
 
   let structuredExtension: Extension | undefined
   if (structured !== undefined) {
-    deps.structuredOutputSessions!.set(childId, structured)
-    structuredExtension = buildStructuredOutputExtension(deps.structuredOutputSessions!)
+    structured.sessions.set(childId, structured.session)
+    structuredExtension = buildStructuredOutputExtension(structured.sessions)
     deps.installChildExtension(structuredExtension)
   }
 
-  const conversation = await deps.harness.conversation(childId as never, bg)
+  const conversation = await getSdkConversation(deps.harness, childId, bg)
   if (!conversation) {
-    if (structured !== undefined && deps.structuredOutputSessions?.get(childId) === structured) {
-      deps.structuredOutputSessions.delete(childId)
+    if (structured !== undefined && structured.sessions.get(childId) === structured.session) {
+      structured.sessions.delete(childId)
     }
     throw new HelmxError('not_found', `Child conversation not found: ${childId}`, 404, { conversationId: childId })
   }
@@ -492,7 +491,7 @@ async function runNativeReattachTurn(
       await conversation.configure({ extensions: { add: [structuredExtension] } }, bg)
     }
   }
-  return await runChildTurn(deps, request, conversation, childId, structured, target.childCwd)
+  return await runChildTurn({ deps, request, conversation, childId, structured, gateCwd: target.childCwd })
 }
 
 /** Strict synchronous validation of request shape (fails explicitly, never coerces silently). */
@@ -534,7 +533,7 @@ function assertSpawnRequestShape(request: AgentSpawnRequest): void {
 /** Strict resume resolution: missing ref, mismatched parent, or missing snapshot fail explicitly rather than creating a new conversation. */
 function resolveSpawnResume(deps: NativeSpawnDeps, request: AgentSpawnRequest): SpawnResumeContext {
   const resumeRef = request.resume
-  if (resumeRef === undefined) return { childId: undefined, isResume: false, existing: undefined }
+  if (resumeRef === undefined) return { isResume: false }
   const childId = resolveResumeRef(deps, resumeRef, request.parentConversationId)
   if (childId === undefined) {
     throw new HelmxError(
@@ -553,7 +552,7 @@ function resolveSpawnResume(deps: NativeSpawnDeps, request: AgentSpawnRequest): 
       { conversationId: childId },
     )
   }
-  return { childId, isResume: true, existing }
+  return { isResume: true, childId, existing }
 }
 
 /** Profile resolution: 404 when missing. */
@@ -571,23 +570,20 @@ async function resolveProfileForSpawn(deps: NativeSpawnDeps, profileId: string):
 
 /** Apply resume configuration updates: sync explicit `agentType`/`cwd`/`model`/`effort` changes via `updateConversation`,
  * then run disabled-model preflight on the effective model (`409 model_disabled`). */
-async function applyResumeConfiguration(
-  deps: NativeSpawnDeps,
-  request: AgentSpawnRequest,
-  childId: number,
-  existing: ConversationSummary,
-  profileId: string,
-): Promise<ConversationSummary> {
-  let summary: ConversationSummary | undefined = existing
+async function applyResumeConfiguration(options: {
+  deps: NativeSpawnDeps
+  request: AgentSpawnRequest
+  childId: number
+  existing: ConversationSummary
+  profileId: string
+}): Promise<ConversationSummary> {
+  const { deps, request, childId, existing, profileId } = options
+  let summary: ConversationSummary = existing
   const patch: ConversationPatch = {}
-  // Only treat explicit `agentType` differing from original Profile as a change (avoids spurious no-op writes).
   if (request.agentType !== undefined && request.agentType !== existing.profileId) {
     patch.profileId = profileId
   }
-  // Only rewrite `cwd` when explicitly given; default strictly preserves original conversation cwd (never resets to Profile/Hub).
   if (request.cwd !== undefined && request.cwd !== existing.cwd) patch.cwd = request.cwd
-  // Only rewrite `model` when explicitly changed (`'provider/model'` or `'tier/<id>'` override, or `''` to clear via `updateConversation`).
-  // Tier refs always route through `updateConversation` so both concrete model and preset tier effort apply cleanly.
   if (
     request.model !== undefined &&
     (parseModelTierRef(request.model) !== undefined || request.model !== deps.getModelOverride(childId))
@@ -598,33 +594,23 @@ async function applyResumeConfiguration(
   if (Object.keys(patch).length > 0) {
     summary = await deps.updateConversation(childId, patch)
   }
-  // Resume disabled-model preflight: after configuration and before submitting input, check the effective model.
-  // Explicit model changes are checked inside `updateConversation`; this catches inherited/bound models disabled later
-  // without bypassing disable rules. Empty model preserves unconfigured semantics (fails at submit with no_model).
-  if (summary!.model !== '') {
-    const modelRef = parseModelRef(summary!.model)
+  if (summary.model !== '') {
+    const modelRef = parseModelRef(summary.model)
     deps.assertModelEnabled?.(modelRef.provider, modelRef.modelId)
   }
-  return summary!
+  return summary
 }
 
 /** Target resolution: resume preserves snapshot verbatim; creation follows `request > profile > parent` chain
  * (normalized per target node platform before SDK `createConversation` / mirror registration / gate / `onResolved`:
  * unmappable POSIX cwds on win32 fail explicitly; unknown remote platforms pass through verbatim). */
-function resolveSpawnTargetForRequest(
-  deps: NativeSpawnDeps,
-  request: AgentSpawnRequest,
-  isResume: boolean,
-  profile: ResolvedProfile,
-  summary: ConversationSummary | undefined,
-  parentSummary: ConversationSummary | undefined,
-  forkSameProfile: boolean,
-): SpawnTarget {
+function resolveSpawnTargetForRequest(options: ResolveSpawnTargetForRequestOptions): SpawnTarget {
+  const { deps, request, profile, parentSummary, forkSameProfile, resumeSummary } = options
   let nodeId: string
   let childCwd: string
-  if (isResume) {
-    nodeId = summary!.nodeId ?? 'local'
-    childCwd = summary!.cwd
+  if (resumeSummary !== undefined) {
+    nodeId = resumeSummary.nodeId ?? 'local'
+    childCwd = resumeSummary.cwd
   } else {
     const chain = resolveSpawnTargetChain({
       requestNodeId: request.nodeId,
@@ -650,25 +636,39 @@ function resolveSpawnTargetForRequest(
 }
 
 /** Initialize structured-output session slot (plain-text spawn when schema is omitted). */
-function prepareStructuredSession(request: AgentSpawnRequest): StructuredOutputSession | undefined {
+function prepareStructuredSession(
+  deps: NativeSpawnDeps,
+  request: AgentSpawnRequest,
+): PreparedStructuredOutput | undefined {
   if (!request.schema) return undefined
   assertSchemaNotAsync(request.schema)
-  return { schema: request.schema, accepted: undefined }
+  if (deps.structuredOutputSessions === undefined) {
+    throw new HelmxError(
+      'invalid_state',
+      'Request specifies schema but host did not inject structuredOutputSessions (wiring defect): nowhere to register structured output slot',
+      500,
+    )
+  }
+  return {
+    sessions: deps.structuredOutputSessions,
+    session: { schema: request.schema, accepted: undefined },
+  }
 }
 
 /** Create new child conversation: model resolution -> disabled preflight -> extension install -> create/fork ->
  * claim gap window -> snapshot registration -> `onResolved` metadata callback. */
-async function createChildConversation(
-  deps: NativeSpawnDeps,
-  request: AgentSpawnRequest,
-  execution: NativeSpawnExecution,
-  profile: ResolvedProfile,
-  profileId: string,
-  structured: StructuredOutputSession | undefined,
-  target: SpawnTarget,
-  parentSummary: ConversationSummary | undefined,
-  forkSameProfile: boolean,
-): Promise<number> {
+async function createChildConversation(options: CreateChildConversationOptions): Promise<number> {
+  const {
+    deps,
+    request,
+    execution,
+    profile,
+    profileId,
+    structured,
+    target,
+    parentSummary,
+    forkSameProfile,
+  } = options
   const { resolvedModel, createModelRef, thinkingLevel, thinkingLevelOverride } = resolveInheritedModelAndThinking({
     request,
     forkSameProfile,
@@ -680,29 +680,27 @@ async function createChildConversation(
     modelThinkingLevelOf: deps.modelThinkingLevelOf,
     modelsForClamp: deps.modelsForClamp?.(),
   })
-  // Reject disabled models before creating the conversation (`409 model_disabled`), covering all resolution paths.
   deps.assertModelEnabled?.(resolvedModel.provider, resolvedModel.modelId)
-  const extension = structured ? buildStructuredOutputExtension(deps.structuredOutputSessions!) : undefined
+  const extension = structured ? buildStructuredOutputExtension(structured.sessions) : undefined
   const extensionsChange = extension
     ? { add: [extension] }
     : request.fork === true
       ? { remove: [{ name: STRUCTURED_OUTPUT_EXTENSION_NAME } as Extension] }
       : undefined
+  const sdkThinking = asSdkThinkingLevel(thinkingLevel)
   const agentChange: AgentChange = {
     model: { provider: resolvedModel.provider, modelId: resolvedModel.modelId },
     cwd: target.childCwd,
-    ...(thinkingLevel
-      ? { thinkingLevel: thinkingLevel as ModelThinkingLevel }
+    ...(sdkThinking !== undefined
+      ? { thinkingLevel: sdkThinking }
       : request.fork === true
         ? { thinkingLevel: null }
         : {}),
-    // Extensions must pass extension objects (SDK retains names, resolving snapshots after installation);
-    // when forking without schema, strip inherited `helmx-structured-output` from parent conversation.
     ...(extensionsChange !== undefined ? { extensions: extensionsChange } : {}),
   }
-  let conv
+  let conv: Conversation
   if (request.fork === true) {
-    const parentConv = await deps.harness.conversation(request.parentConversationId as never, bg)
+    const parentConv = await getSdkConversation(deps.harness, request.parentConversationId, bg)
     if (!parentConv) {
       throw new HelmxError('not_found', `Parent conversation not found: ${request.parentConversationId}`, 404, {
         parentConversationId: request.parentConversationId,
@@ -713,7 +711,7 @@ async function createChildConversation(
       : resolveCleanForkAnchor(deps.harness, request.parentConversationId))
     if (extension) deps.installChildExtension(extension)
     conv = await parentConv.fork(
-      anchorEntryId as never,
+      asEntryId(anchorEntryId),
       { ownership: { kind: 'ownerless' }, agent: agentChange },
       bg,
     )
@@ -724,13 +722,10 @@ async function createChildConversation(
       bg,
     )
   }
-  const childId = conv.id as number
+  const childId = Number(conv.id)
   if (request.agentId) deps.agentSessions.set(request.agentId, childId)
-  // Close concurrency gap (see `conversationInTurn` docs): between creation and `onResolved`, the snapshot
-  // status is not yet `working`, so claim synchronously alongside `agentSessions` registration.
   claimSpawnConversation(deps.harness, childId)
   execution.childId = childId
-  // Native spawns assign no business role tags (tags belong to host policies; kernel never hardcodes roles).
   const resolvedTitle = normalizeSpawnTitle(request.title, childId, deps.redact)
   await deps.registerChildConversation(
     childId,
@@ -744,7 +739,6 @@ async function createChildConversation(
     thinkingLevelOverride,
     resolvedTitle,
   )
-  // Emit resolved metadata once creation and snapshot registration are complete.
   request.onResolved?.({
     nodeId: target.nodeId,
     conversationId: childId,
@@ -779,16 +773,16 @@ function notifyResumeResolved(
  * violate the watchdog hard rule. When refused by the guard, the protected child keeps running independently while
  * the parent immediately terminates with `aborted` rather than forcing cancellation.
  */
-async function runChildTurn(
-  deps: NativeSpawnDeps,
-  request: AgentSpawnRequest,
-  conversation: Awaited<ReturnType<Harness['conversation']>> & object,
-  childId: number,
-  structured: StructuredOutputSession | undefined,
-  gateCwd: string,
-): Promise<unknown> {
-  const outputSessions = deps.structuredOutputSessions
-  if (structured !== undefined) outputSessions?.set(childId, structured)
+async function runChildTurn(options: {
+  deps: NativeSpawnDeps
+  request: AgentSpawnRequest
+  conversation: Awaited<ReturnType<Harness['conversation']>> & object
+  childId: number
+  structured: PreparedStructuredOutput | undefined
+  gateCwd: string
+}): Promise<unknown> {
+  const { deps, request, conversation, childId, structured, gateCwd } = options
+  if (structured !== undefined) structured.sessions.set(childId, structured.session)
 
   const abortChildTurn = (): Promise<void> => {
     const guarded = deps.abortChildConversationGuarded
@@ -796,16 +790,13 @@ async function runChildTurn(
     return Promise.resolve(conversation.abort(bg)).then(() => undefined)
   }
   let abortError: HelmxError | undefined
-  /** Settle parent immediately if guard refuses abort (absorbs race errors and suppresses late child outcomes). */
   let releaseParentOnGuardRefusal: ((error: HelmxError) => void) | undefined
   const onAbort = () => {
     abortError = new HelmxError('aborted', 'Subagent execution was cancelled (request.signal aborted)', 499, {
       conversationId: childId,
     })
     void abortChildTurn().then(
-      () => {
-        // Child aborted cleanly: `driveTurn` settles and falls back to `abortError`.
-      },
+      () => {},
       (guardError: unknown) => {
         const rawMessage = guardError instanceof Error ? guardError.message : String(guardError)
         const message = deps.redact(rawMessage)
@@ -834,8 +825,7 @@ async function runChildTurn(
       })
       throw new HelmxError('aborted', 'Subagent execution cancelled during startup', 499, { conversationId: childId })
     }
-    const turn = driveTurn(deps, request, conversation, childId, structured, gateCwd)
-    // Suppress unhandled rejections if `guardRefusal` settles the race first.
+    const turn = driveTurn({ deps, request, conversation, childId, structured, gateCwd })
     void turn.catch(() => {})
     return await Promise.race([turn, guardRefusal])
   } catch (error) {
@@ -843,7 +833,9 @@ async function runChildTurn(
     throw error
   } finally {
     if (request.signal) request.signal.removeEventListener('abort', onAbort)
-    if (outputSessions !== undefined && outputSessions.get(childId) === structured) outputSessions.delete(childId)
+    if (structured !== undefined && structured.sessions.get(childId) === structured.session) {
+      structured.sessions.delete(childId)
+    }
   }
 }
 
@@ -885,19 +877,20 @@ async function submitChildInput(
 }
 
 /** Submit a turn, await completion, and inspect terminal status (structured branch checks settled output before text). */
-async function driveTurn(
-  deps: NativeSpawnDeps,
-  request: AgentSpawnRequest,
-  conversation: Awaited<ReturnType<Harness['conversation']>> & object,
-  childId: number,
-  structured: StructuredOutputSession | undefined,
-  gateCwd: string,
-): Promise<unknown> {
+async function driveTurn(options: {
+  deps: NativeSpawnDeps
+  request: AgentSpawnRequest
+  conversation: Awaited<ReturnType<Harness['conversation']>> & object
+  childId: number
+  structured: PreparedStructuredOutput | undefined
+  gateCwd: string
+}): Promise<unknown> {
+  const { deps, request, conversation, childId, structured, gateCwd } = options
   const effectivePrompt = deps.redact ? deps.redact(request.prompt) : request.prompt
   const contractSuffix = structured
     ? `<structured_output_contract>
 After finishing your answer, call the register_structured_output tool to submit your final structured result (the output parameter must satisfy the JSON Schema below).
-Schema: ${JSON.stringify(structured.schema)}
+Schema: ${JSON.stringify(structured.session.schema)}
 </structured_output_contract>`
     : undefined
 
@@ -952,26 +945,26 @@ Schema: ${JSON.stringify(structured.schema)}
   }
 
   if (structured) {
-    if (structured.accepted !== undefined) {
+    if (structured.session.accepted !== undefined) {
       await settleGate(deps, request, gateCwd, childId)
-      return structured.accepted
+      return structured.session.accepted
     }
     if (settled.type === 'input' && settled.entry !== undefined) {
       const recovered = await recoverAcceptedStructuredOutput(
         conversation,
-        structured.schema,
+        structured.session.schema,
         settled.entry,
         settled.answer,
       )
       if (recovered.found) {
-        structured.accepted = recovered.value
+        structured.session.accepted = recovered.value
         await settleGate(deps, request, gateCwd, childId)
-        return structured.accepted
+        return structured.session.accepted
       }
     }
     // Tool not called: send one text self-heal follow-up (model may have printed raw JSON directly).
     const text = (await resolveTurnText(settled)) ?? ''
-    const parsed = parseSchemaCandidate(text, structured.schema)
+    const parsed = parseSchemaCandidate(text, structured.session.schema)
     if (parsed.ok) {
       await settleGate(deps, request, gateCwd, childId)
       return parsed.value
@@ -981,7 +974,7 @@ Schema: ${JSON.stringify(structured.schema)}
       `Your previous response did not submit the result via the register_structured_output tool. Please call ` +
       `register_structured_output immediately with an output parameter containing valid JSON matching the Schema below.` +
       `
-Schema: ${JSON.stringify(structured.schema)}`
+Schema: ${JSON.stringify(structured.session.schema)}`
     const heal = await submitChildInput(deps, conversation, childId, {
       text: healPrompt,
       content: healPrompt,
@@ -990,25 +983,25 @@ Schema: ${JSON.stringify(structured.schema)}`
     })
     const healSettled = await heal.wait(bg)
     assertNotUnanswered(healSettled, childId)
-    if (structured.accepted !== undefined) {
+    if (structured.session.accepted !== undefined) {
       await settleGate(deps, request, gateCwd, childId)
-      return structured.accepted
+      return structured.session.accepted
     }
     if (healSettled.type === 'input' && healSettled.entry !== undefined) {
       const recoveredHeal = await recoverAcceptedStructuredOutput(
         conversation,
-        structured.schema,
+        structured.session.schema,
         healSettled.entry,
         healSettled.answer,
       )
       if (recoveredHeal.found) {
-        structured.accepted = recoveredHeal.value
+        structured.session.accepted = recoveredHeal.value
         await settleGate(deps, request, gateCwd, childId)
-        return structured.accepted
+        return structured.session.accepted
       }
     }
     const lastText = (await resolveTurnText(healSettled)) ?? ''
-    const retry = parseSchemaCandidate(lastText, structured.schema)
+    const retry = parseSchemaCandidate(lastText, structured.session.schema)
     if (retry.ok) {
       await settleGate(deps, request, gateCwd, childId)
       return retry.value

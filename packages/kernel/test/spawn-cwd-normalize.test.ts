@@ -330,7 +330,6 @@ function spawnTargetResolver(options: {
     updateConversation: (() => {
       throw new Error('unused in this test')
     }) as never,
-    markConversationOwnership: () => undefined,
   })
   return (input: { parentConversationId: number; profileId?: string; requestNodeId?: string; requestCwd?: string; fork?: boolean }) =>
     spawn.resolveSpawnTarget(input)
@@ -372,7 +371,13 @@ test('resolveSpawnTarget: unmappable POSIX sourceCwd on remote win32 target reje
  * runner (a POSIX cwd is unmappable for a win32 local node, so the guard would defer to the later
  * unmappable_posix_root rejection instead of the path_outside_workspace under test).
  */
-function spawnEntryGuard(options: { restricted: boolean; parentCwd: string; parentNodeId?: string; platform?: 'linux' | 'win32' }) {
+function spawnEntryGuard(options: {
+  restricted: boolean
+  parentCwd: string
+  parentNodeId?: string
+  platform?: 'linux' | 'win32'
+  profiles?: Record<string, { nodeId?: string; cwd?: string }>
+}) {
   const hubPlatform = options.platform ?? 'linux'
   const spawn = new RuntimeAgentSpawn({
     store: {
@@ -387,7 +392,9 @@ function spawnEntryGuard(options: { restricted: boolean; parentCwd: string; pare
     harness: {} as never,
     registry: {} as never,
     tracker: {} as never,
-    conversations: {} as never,
+    conversations: (options.profiles
+      ? { readProfile: async (id: string) => options.profiles?.[id] }
+      : {}) as never,
     events: {} as never,
     envFabric: { hubPlatform: () => hubPlatform } as never,
     models: {} as never,
@@ -400,7 +407,6 @@ function spawnEntryGuard(options: { restricted: boolean; parentCwd: string; pare
     updateConversation: (() => {
       throw new Error('unused in this test')
     }) as never,
-    markConversationOwnership: () => undefined,
   })
   return (request: Record<string, unknown>) => spawn.spawnAgent(request as never)
 }
@@ -670,6 +676,25 @@ test('spawnAgent entry guard: rejects invalid nodeId, resume+nodeId, and restric
   // Unrestricted parent allows cross-node request.nodeId.
   const unrestricted = spawnEntryGuard({ restricted: false, parentCwd: '/tmp/helmx/repo' })
   await assert.rejects(unrestricted({ parentConversationId: 1, prompt: 'x', nodeId: 'gpu-1' }), /past-guard/)
+
+  // Remote profile.nodeId must also be enforced consistently at spawnAgent entry when request.nodeId & request.cwd are omitted.
+  const restrictedRemoteProfile = spawnEntryGuard({
+    restricted: true,
+    parentCwd: '/tmp/helmx/repo',
+    parentNodeId: 'local',
+    profiles: {
+      'remote-gpu': { nodeId: 'gpu-1', cwd: '/srv/gpu' },
+      'local-prof': { nodeId: 'local', cwd: '/tmp/helmx/repo' },
+    },
+  })
+  await assert.rejects(
+    restrictedRemoteProfile({ parentConversationId: 1, prompt: 'x', agentType: 'remote-gpu' }),
+    (e: unknown) => e instanceof HelmxError && e.code === 'path_outside_workspace' && e.status === 403,
+  )
+  await assert.rejects(
+    restrictedRemoteProfile({ parentConversationId: 1, prompt: 'x', agentType: 'local-prof' }),
+    /past-guard/,
+  )
 })
 
 test('resolveSpawnTarget: validates requestNodeId and enforces restrictToCwd against cross-node (requestNodeId or remote profile) and out-of-cwd', { timeout: 60_000 }, async () => {

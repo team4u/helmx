@@ -203,7 +203,7 @@ export async function openHelmxDatabase(dataDir: string): Promise<HelmxDatabase>
     // Lazy read-only probe via official SqliteStorage API (only invoked when helmx_conversation_fts is absent;
     // steady-state restarts never touch pi history): if pi history exists, leave fts_schema_version = 0 for rebuild.
     await ensureFtsSchema(db, async () => {
-      const piProbe = await storage.scanConversations({} as never, 1, undefined, BACKGROUND_CONTEXT)
+      const piProbe = await storage.scanConversations({}, 1, undefined, BACKGROUND_CONTEXT)
       return piProbe.items.length > 0
     })
   } catch (error) {

@@ -7,9 +7,8 @@
  * - Env option injection (managed `HELMX_TOKEN` / `HELMX_HUB_URL` / `HELMX_CONVERSATION_ID` /
  *   SecretStash secrets) via the `envOptions` callback: the secret service lives outside fabric,
  *   and fabric only consumes the callback output without holding secrets itself;
- * - Target-node host environment discovery (`getNodeHostEnv`) + passthrough tunnels (`openTunnel`):
- *   let optional plugins (e.g. `builtin:herdr`) discover target-node endpoints and open raw Duplex streams
- *   to controlled Unix Sockets / Windows Named Pipes without leaking plugin protocol logic into `@helmx/node`.
+ * - Passthrough tunnels (`openTunnel`): let plugins and runtimes open raw Duplex streams
+ *   to controlled Unix Sockets / Windows Named Pipes without leaking protocol logic into `@helmx/node`.
  *
  * Cache lifecycle (bounded without ref-counting or LRU machinery):
  * - **Conversation-scoped targets (`envForTarget` with `conversationId`)**: cached per
@@ -19,9 +18,9 @@
  *   finish normally (aborts kill explicitly elsewhere), and the instance is GC'd after the last in-flight
  *   operation finishes (no unbounded growth, no accidental kills);
  * - **Non-conversation targets (`envFor` / `envForTarget` without `conversationId`)**: short-lived
- *   objects—created fresh on every call and discarded after use, never cached (herdr file handoffs,
- *   gates, non-conversation HTTP execs). Remote instances self-register/unregister output sinks per
- *   `exec` lifecycle (see `remote-env.ts`), leaving nothing in registries when discarded.
+ *   objects—created fresh on every call and discarded after use, never cached (gates and non-conversation
+ *   HTTP execs). Remote instances self-register/unregister output sinks per `exec` lifecycle (see
+ *   `remote-env.ts`), leaving nothing in registries when discarded.
  */
 
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
@@ -46,6 +45,7 @@ import type { Duplex } from 'node:stream'
 import { NodeRegistry, normalizeTunnelTarget } from './registry.js'
 import { RemoteExecutionEnv } from './remote-env.js'
 import { createScopedExecutionEnv, type EnvTarget, type ScopedExecutionEnv } from './scoped-env.js'
+import type { EnvOptionsComposer } from './env-types.js'
 
 export { ExecOutputHub } from './exec-output.js'
 export { NodeRegistry, tokenAuthenticator, sha256hex, normalizeTunnelTarget } from './registry.js'
@@ -59,13 +59,7 @@ export { attachNodeTunnelGateway } from './ws-tunnel-gateway.js'
 export type { NodeTunnelGateway, NodeTunnelGatewayOptions } from './ws-tunnel-gateway.js'
 export { createScopedExecutionEnv } from './scoped-env.js'
 export type { EnvTarget, ScopedExecutionEnv } from './scoped-env.js'
-
-/** Injects environment options at exec time (sole channel for secrets and identity injection). */
-export type EnvOptionsComposer = (input: {
-  nodeId: string
-  cwd: string
-  conversationId?: number
-}) => Promise<Record<string, string>> | Record<string, string>
+export type { EnvOptionsComposer } from './env-types.js'
 
 interface EnvFabricOptions {
   /**
@@ -104,7 +98,7 @@ export interface EnvFabric {
   /** Internal connection registry (used to wire WS gateway: `attachNodeWsGateway(server, { registry })`). */
   readonly registry: NodeRegistry
   /**
-   * Unscoped execution environment (herdr file handoffs / gates / unscoped HTTP exec):
+   * Unscoped execution environment (gates / unscoped HTTP exec):
    * **short-lived instance**—created fresh on every call and discarded after use, never cached.
    * Local runs directly in-process; remote goes over RPC; unknown nodes return a `RemoteExecutionEnv`
    * (waits for reconnect on use), **never falling back to local**.
@@ -301,6 +295,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     authenticate: options.authenticate ?? (() => false),
     ...(options.heartbeatIntervalMs === undefined ? {} : { heartbeatIntervalMs: options.heartbeatIntervalMs }),
     ...(options.heartbeatTimeoutMs === undefined ? {} : { heartbeatTimeoutMs: options.heartbeatTimeoutMs }),
+    onError: (context, error) => logReleaseError(`${context}: ${error instanceof Error ? error.message : String(error)}`),
   })
   const hubPlatform = (): string => options.hubPlatform?.() || process.platform
   const remoteResolver = {

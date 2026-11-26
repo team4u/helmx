@@ -43,6 +43,7 @@ import {
   type PluginActionSpec,
 } from '@helmx/protocol'
 import {
+  isSafeRelativePath,
   parseConversationCompactBody,
   parseConversationForkBody,
   parseConversationInit,
@@ -51,8 +52,10 @@ import {
   parseDocNameParam,
   parseInputBody,
   parseProfileBody,
+  requireHttpUrl,
   ValidationError,
 } from '../http/validate.js'
+import { stripUndefinedProperties } from '../shared/json.js'
 import type { PluginHost } from '../plugins/plugin-host.js'
 import { redactJsonValue } from '../redact.js'
 import {
@@ -65,7 +68,7 @@ import {
   resolvePluginDoctorTarget,
 } from './guards/index.js'
 import { normalizeModelRefreshInput } from './model-registry.js'
-import type { KernelRuntime } from './runtime.js'
+import type { CoreActionsRuntimeHost } from './runtime-types.js'
 
 const MAX_SAFE_INTEGER = 9007199254740991
 
@@ -119,22 +122,6 @@ function extendRequestSchema(
   }
 }
 
-function requireHttpUrl(raw: string, field: string): string {
-  let parsed: URL
-  try {
-    parsed = new URL(raw)
-  } catch {
-    throw new ValidationError(`${field} must be a valid http(s) URL`)
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new ValidationError(`${field} must be an http(s) URL`)
-  }
-  if (parsed.hostname === '' || /^\s+$/.test(parsed.hostname)) {
-    throw new ValidationError(`${field} must contain a hostname`)
-  }
-  return raw
-}
-
 function requireStrictSemverField(raw: string): string {
   if (raw.trim() === '') {
     throw new ValidationError('targetVersion must be a non-empty version (omit to upgrade to latest)')
@@ -146,36 +133,17 @@ function requireStrictSemverField(raw: string): string {
   return raw
 }
 
-function isSafeRelativePath(path: string): boolean {
-  if (path.length === 0 || path.length > 512) return false
-  if (path.startsWith('/') || path.includes('\\')) return false
-  return path.split('/').every((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
-}
-
 /**
  * Normalize kernel DTOs to strict JSON values by omitting object keys whose value is `undefined`
  * (matching HTTP `JSON.stringify` serialization so `CapabilityRegistry`'s strict `jsonClone` accepts
  * optional TypeScript fields like `parentConversationId: undefined` or `description: undefined`).
  */
-function toStrictJsonValue<T>(value: T, seen = new WeakSet<object>()): T {
-  if (value === null || typeof value !== 'object') return value
-  if (seen.has(value)) {
-    throw new HelmxError('invalid_json_value', 'Core action output contains a circular reference', 500)
-  }
-  seen.add(value)
-  try {
-    if (Array.isArray(value)) {
-      return value.map((item) => toStrictJsonValue(item, seen)) as unknown as T
-    }
-    const out: Record<string, unknown> = {}
-    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      if (entry === undefined) continue
-      out[key] = toStrictJsonValue(entry, seen)
-    }
-    return out as T
-  } finally {
-    seen.delete(value)
-  }
+function toStrictJsonValue<T>(value: T): T {
+  return stripUndefinedProperties(value, {
+    onCycle: 'throw',
+    cycleErrorMessage: 'Core action output contains a circular reference',
+    objectFilter: 'all-objects',
+  })
 }
 
 /** Register a single core action while normalizing returned kernel DTOs for strict JSON cloning. */
@@ -191,7 +159,7 @@ function registerCore<TIn, TOut>(
 }
 
 /** Register all kernel-owned `core:*` actions onto `pluginHost`. */
-export function registerCoreActions(runtime: KernelRuntime, pluginHost: PluginHost): void {
+export function registerCoreActions(runtime: CoreActionsRuntimeHost, pluginHost: PluginHost): void {
   const hostProxy = {
     registerCoreAction: <TIn, TOut>(ownerId: string, spec: PluginActionSpec<TIn, TOut>): void =>
       registerCore(pluginHost, ownerId, spec),
@@ -211,7 +179,7 @@ type CoreActionRegistrar = Pick<PluginHost, 'registerCoreAction'>
 // core:conversations
 // ---------------------------------------------------------------------------
 
-function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRegistrar): void {
+function registerConversationCoreActions(runtime: CoreActionsRuntimeHost, pluginHost: CoreActionRegistrar): void {
   const owner = 'core:conversations'
 
   pluginHost.registerCoreAction(owner, {
@@ -598,7 +566,7 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
 // core:profiles
 // ---------------------------------------------------------------------------
 
-function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRegistrar): void {
+function registerProfileCoreActions(runtime: CoreActionsRuntimeHost, pluginHost: CoreActionRegistrar): void {
   const owner = 'core:profiles'
 
   const profileHooks = {
@@ -688,7 +656,7 @@ function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActi
 // core:models
 // ---------------------------------------------------------------------------
 
-function registerModelCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRegistrar): void {
+function registerModelCoreActions(runtime: CoreActionsRuntimeHost, pluginHost: CoreActionRegistrar): void {
   const owner = 'core:models'
 
   pluginHost.registerCoreAction(owner, {
@@ -764,7 +732,7 @@ function registerModelCoreActions(runtime: KernelRuntime, pluginHost: CoreAction
 // core:nodes
 // ---------------------------------------------------------------------------
 
-function registerNodeCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRegistrar): void {
+function registerNodeCoreActions(runtime: CoreActionsRuntimeHost, pluginHost: CoreActionRegistrar): void {
   const owner = 'core:nodes'
 
   pluginHost.registerCoreAction(owner, {
@@ -909,7 +877,7 @@ function registerNodeCoreActions(runtime: KernelRuntime, pluginHost: CoreActionR
 // ---------------------------------------------------------------------------
 
 function registerPluginCoreActions(
-  runtime: KernelRuntime,
+  runtime: CoreActionsRuntimeHost,
   registrar: CoreActionRegistrar,
   pluginHost: PluginHost,
 ): void {
@@ -1088,7 +1056,7 @@ function registerPluginCoreActions(
 // core:asks
 // ---------------------------------------------------------------------------
 
-function registerAskCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRegistrar): void {
+function registerAskCoreActions(runtime: CoreActionsRuntimeHost, pluginHost: CoreActionRegistrar): void {
   const owner = 'core:asks'
 
   pluginHost.registerCoreAction(owner, {
@@ -1153,7 +1121,7 @@ function registerAskCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRe
 // core:skills
 // ---------------------------------------------------------------------------
 
-function registerSkillCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRegistrar): void {
+function registerSkillCoreActions(runtime: CoreActionsRuntimeHost, pluginHost: CoreActionRegistrar): void {
   const owner = 'core:skills'
 
   pluginHost.registerCoreAction(owner, {

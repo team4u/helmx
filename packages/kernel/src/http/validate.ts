@@ -10,6 +10,7 @@ import { type Static, type TSchema } from 'typebox'
 import {
   assertJsonSafe,
   HelmxError,
+  isAbsoluteTargetPath,
   REQUEST_SCHEMAS,
   REQUEST_SCHEMA_PATTERNS,
   validateOrThrow,
@@ -21,10 +22,7 @@ import {
   type ProviderConfig,
   type WhenBusy,
 } from '@helmx/protocol'
-import {
-  isCrossPlatformAbsolutePath,
-  validateProfileStarters,
-} from '../services/profile-service.js'
+import { validateProfileStarters } from '../services/profile-service.js'
 
 export class ValidationError extends HelmxError {
   constructor(message: string, details?: unknown) {
@@ -95,6 +93,31 @@ export function requireIdParam(raw: string, field: string): string {
   return raw
 }
 
+/** Validate http(s) URL: restricted scheme, parseable, non-empty hostname. */
+export function requireHttpUrl(raw: unknown, field: string): string {
+  if (typeof raw !== 'string') throw new ValidationError(`${field} must be an http(s) URL string`)
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw new ValidationError(`${field} must be a valid http(s) URL`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new ValidationError(`${field} must be an http(s) URL`)
+  }
+  if (parsed.hostname === '' || /^\s+$/.test(parsed.hostname)) {
+    throw new ValidationError(`${field} must contain a hostname`)
+  }
+  return raw
+}
+
+/** Validate bounded POSIX-style relative path without traversal segments. */
+export function isSafeRelativePath(path: string): boolean {
+  if (path.length === 0 || path.length > 512) return false
+  if (path.startsWith('/') || path.includes('\\')) return false
+  return path.split('/').every((p) => p.length > 0 && p !== '.' && p !== '..')
+}
+
 // ---------------------------------------------------------------------------
 // Conversation bodies (init / patch / input / ask / reset / compact / fork / withdraw)
 // ---------------------------------------------------------------------------
@@ -106,7 +129,7 @@ function extractConversationCommon(
   if (parsed.tags !== undefined && parsed.tags.some((t) => t.length > 64)) {
     throw new ValidationError('each tags item must be 1-64 characters')
   }
-  if (parsed.cwd !== undefined && !isCrossPlatformAbsolutePath(parsed.cwd)) {
+  if (parsed.cwd !== undefined && !isAbsoluteTargetPath(parsed.cwd)) {
     throw new ValidationError('cwd must be an absolute path (POSIX /..., Windows drive C:\\..., or UNC \\\\server\\share)')
   }
   return {

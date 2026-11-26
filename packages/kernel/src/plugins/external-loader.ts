@@ -86,10 +86,6 @@ export interface ReloadablePluginHost extends ExternalPluginHost {
   unregister(pluginId: string): Promise<void>;
 }
 
-// Full/incremental scan implementation lives in scan-visitor.ts; re-exported here to preserve existing public exports
-// (used by hub tests and production consumers).
-export { loadExternalPlugins, rescanExternalPlugins } from './scan-visitor.js';
-
 // ---------------------------------------------------------------------------
 // Entrypoint resolution (explicit manifest required; zero blind probing)
 // ---------------------------------------------------------------------------
@@ -109,7 +105,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string> {
     if (code !== 'ENOENT' && code !== 'ENOTDIR') {
       throw new HelmxError(
         'plugin_scan_failed',
-        `external plugin directory cannot read: ${manifestPath}(${err instanceof Error ? err.message : String(err)})`,
+        `cannot read external plugin manifest ${manifestPath}: ${err instanceof Error ? err.message : String(err)}`,
         500,
         { manifestPath, code },
       );
@@ -284,7 +280,7 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
   const def = candidate as Record<string, unknown>;
   if (typeof def.id !== 'string' || def.id.length === 0) throw fail('missing non-empty string id');
   if (def.name !== undefined && parseNonEmptyLocalizedText(def.name) === undefined) {
-    throw fail(`name provide when must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`);
+    throw fail(`name must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values) when provided`);
   }
   if (def.icon !== undefined && (typeof def.icon !== 'string' || def.icon.trim().length === 0)) {
     throw fail('icon must be a non-empty string when provided');
@@ -301,7 +297,7 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
   if (def.id.includes(':')) {
     throw new HelmxError(
       'invalid_plugin_definition',
-      `External plugin ${dirPath} id cannot contain ':' (smoke number; colons are reserved for builtin: and core: namespaces): ${def.id}`,
+      `External plugin ${dirPath} id cannot contain ':' (colons are reserved for builtin: and core: namespaces): ${def.id}`,
       400,
       { dirPath, id: def.id },
     );

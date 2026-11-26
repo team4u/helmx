@@ -24,7 +24,7 @@ import type { ExecutionEnv, Result, ShellExecOptions, ShellExecResult } from '@e
 import type { ExecutionError } from '@earendil-works/pi-durable/env'
 import type { Context } from '@earendil-works/chord/context'
 import { prependEnvPath, setEnvEntry } from '@helmx/env-io'
-import type { EnvOptionsComposer } from './fabric.js'
+import type { EnvOptionsComposer } from './env-types.js'
 
 /** Execution target: conversation + node + working directory (resolved Profile × node product). */
 export interface EnvTarget {

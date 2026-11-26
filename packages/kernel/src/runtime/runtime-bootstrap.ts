@@ -23,6 +23,7 @@ import { buildModels, wrapModelsForCompaction, type CompactionModelResolution } 
 import { assertModelsStoreHealthyAtBoot, createFileModelsStore } from './models-store.js'
 import { openHelmxDatabase, type HelmxDatabase } from './sqlite.js'
 import type { ResolvedModelRef } from './model-registry.js'
+import { asSdkThinkingLevel, getSdkConversation } from './sdk-ids.js'
 import { HelmxStore } from './store.js'
 import type { ConversationTracker } from './conversations.js'
 
@@ -287,10 +288,11 @@ export async function ensureInitialConversation(deps: {
     modelRef,
     resolved?.tierThinkingLevel,
   )
+  const sdkThinking = asSdkThinkingLevel(thinking)
   const root = await deps.harness.root(BACKGROUND_CONTEXT, {
     agent: {
       ...(modelRef ? { model: { provider: modelRef.provider, modelId: modelRef.modelId } } : {}),
-      ...(thinking ? { thinkingLevel: thinking as never } : {}),
+      ...(sdkThinking ? { thinkingLevel: sdkThinking } : {}),
     },
   })
   const id = root.id as number
@@ -335,7 +337,7 @@ export async function recoverExistingConversations(deps: {
   const result = await deps.conversations.recover(async (id, parentConversationId) => {
     recoveredCount += 1
     const now = Date.now()
-    const conversation = await deps.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    const conversation = await getSdkConversation(deps.harness, id, BACKGROUND_CONTEXT)
     const agent = conversation ? await conversation.agent(BACKGROUND_CONTEXT).catch(() => undefined) : undefined
     deps.store.upsertConv({
       id,

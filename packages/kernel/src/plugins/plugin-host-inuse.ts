@@ -66,7 +66,7 @@ export async function collectPluginInUse(
       usages.push({
         kind: 'profile_model',
         id: profile.id,
-        label: `role "${profile.name || profile.id}" uses default model ${profile.model}`,
+        label: `profile "${profile.name || profile.id}" uses default model ${profile.model}`,
       });
     }
   }

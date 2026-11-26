@@ -8,10 +8,10 @@
  * identity (`instanceId`) before any shutdown path runs. The record contract (schema + reader)
  * lives in `@helmx/env-io` so the CLI and the Hub never drift apart.
  *
- * Deadlock note: the channel's own `stop` handling (`runStopAndClose` in env-io) closes the
- * server socket itself after `onStop` resolves, so the shutdown callback passed in here must
- * NOT call this wrapper's `close()` (which awaits the in-flight stop chain). The entrypoint
- * calls `close()` only on the signal path.
+ * Termination flow: the control channel's `runStopAndClose` in `@helmx/env-io` replies to the peer
+ * and closes the control listener itself after `onStop` resolves. Therefore `main.ts` runs
+ * `shutdown('control')` (which omits `control.close()`) inside `requestStop`, and calls
+ * `shutdown('signal')` (which includes `control.close()`) on `SIGINT`/`SIGTERM`.
  */
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -28,7 +28,7 @@ export interface HubControlHandle {
   endpoint: string;
   instanceId: string;
   server: ControlServer;
-  /** Signal-path shutdown: closes the listener and removes the record. Never call from `requestStop`. */
+  /** Signal-path shutdown: closes the listener and removes the record. */
   close(): Promise<void>;
 }
 
@@ -44,8 +44,9 @@ export function hubPackageVersion(): string {
 }
 
 /**
- * Start the control listener and persist the discovery record. `requestStop` performs the full
- * graceful shutdown (heartbeat -> HTTP -> kernel) but must not call the returned `close()`.
+ * Start the control listener and persist the discovery record. `requestStop` performs the
+ * graceful shutdown (heartbeat -> HTTP -> kernel -> updater); the control listener itself is closed
+ * by `runStopAndClose` after `onStop` resolves.
  */
 export async function startHubControlServer(options: {
   dataDir: string;
@@ -56,7 +57,6 @@ export async function startHubControlServer(options: {
   const instanceId = randomBytes(16).toString('hex');
   const endpoint = controlEndpoint(options.dataDir, instanceId, HUB_CONTROL_PRODUCT);
   const recordPath = hubControlRecordPath(options.dataDir);
-  let channelInitiated = false;
   const removeRecord = async (): Promise<void> => {
     const fsp = await import('node:fs/promises');
     await fsp.rm(recordPath, { force: true }).catch(() => undefined);
@@ -66,10 +66,6 @@ export async function startHubControlServer(options: {
     instanceId,
     onStatus: () => ({ pid: process.pid, state: 'serving' satisfies HubControlState, version: options.version }),
     onStop: async (): Promise<void> => {
-      // The channel flow (`runStopAndClose`) closes the listener itself after this resolves; mark
-      // the origin so the wrapper's `close()` (called from the entrypoint's signal path) turns into
-      // a no-op instead of awaiting its own in-flight stop chain.
-      channelInitiated = true;
       await options.requestStop();
       await removeRecord();
     },
@@ -96,7 +92,6 @@ export async function startHubControlServer(options: {
     instanceId,
     server,
     close: async (): Promise<void> => {
-      if (channelInitiated) return; // channel flow closes the listener and removed the record itself
       await server.close();
       await removeRecord();
     },

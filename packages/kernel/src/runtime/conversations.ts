@@ -41,21 +41,33 @@ import type {
 } from '@helmx/protocol'
 import {
   HelmxError,
-  deriveConversationTitle,
   isHubActivityBusy,
   sameConversationLiveContent,
   sameQueuedInputs,
 } from '@helmx/protocol'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { Harness, ConversationView, Observation, Observer } from '@earendil-works/pi-durable'
+import type { EntryRecord, Harness, ConversationView, Observation, Observer } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
 import type { ConvMeta, HelmxStore } from './store.js'
 import { summaryOf } from './store.js'
-import { assistantTextOfEntry, deriveConversationLive, toConversationEntry, type EntryRecordLike } from './entries.js'
-import { coveredByRewind, rewindIntervalOf, type RewindInterval } from './conversation-rewind.js'
+import { deriveConversationLive, toConversationEntry, type EntryRecordLike } from './entries.js'
+import { rewindIntervalOf, coveredByRewind, type RewindInterval } from './conversation-rewind.js'
 import { emitDiagnostic, type KernelDiagnosticInput, type KernelDiagnosticSink } from './diagnostics.js'
 import { compactionFailureNoticeOf } from './context-usage.js'
 import { ContextUsageRefresh, type ContextUsageHost } from './context-usage-refresh.js'
+import {
+  collectWindowWatermarks,
+  deriveTitle,
+  detectCompactionTransitions,
+  extractHelmxInputMetas,
+  findLatestAssistantEntry,
+  lastErrorOf,
+  latestVisibleEntryIdOf,
+  loadRunInputEntriesFromSdk,
+  statusNow,
+  summaryKeyOf,
+} from './conversation-tracker-helpers.js'
+import { getSdkConversation, getSdkTask, observeSdkConversation, scanSdkEntries } from './sdk-ids.js'
 import {
   type ConversationMirror,
   createConversationMirror,
@@ -65,6 +77,8 @@ import {
   type LiveStateShape,
   mergeInputMeta,
 } from './conversation-mirror.js'
+
+export { deriveTitle }
 
 export type { LiveStateShape }
 
@@ -233,8 +247,9 @@ export class ConversationTracker {
         this.clearLiveTimer(id)
       },
     }
-    const observation: Observation<ConversationView> = await this.harness.observeConversation(
-      id as never,
+    const observation: Observation<ConversationView> = await observeSdkConversation(
+      this.harness,
+      id,
       observer,
       BACKGROUND_CONTEXT,
     )
@@ -272,44 +287,27 @@ export class ConversationTracker {
     }
     // Report lingering compaction failures even right after restart/re-attach (once per runtime lifecycle).
     this.noteCompactionFailure(id, live)
-    let watermark = mirror.lastEmittedEntry
-    // Align context trigger watermark with entry event watermark so historical compaction markers in the initial
-    // snapshot do not trigger duplicate refreshes on subsequent adopts (initial refresh is scheduled below).
-    let usageWatermark = -1
-    let seenEntryId = mirror.lastSeenEntryId
-    for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
-      const numeric = Number(raw.id)
-      if (Number.isFinite(numeric) && numeric > watermark) watermark = numeric
-      if (Number.isFinite(numeric) && numeric > usageWatermark) usageWatermark = numeric
-      if (Number.isFinite(numeric) && numeric > seenEntryId) seenEntryId = numeric
-    }
-    mirror.lastEmittedEntry = watermark
-    mirror.lastSeenEntryId = seenEntryId
+    const watermarks = collectWindowWatermarks(
+      view.entries,
+      mirror.lastEmittedEntry,
+      mirror.lastSeenEntryId,
+    )
+    mirror.lastEmittedEntry = watermarks.watermark
+    mirror.lastSeenEntryId = watermarks.seenEntryId
     // Seed latest persisted assistant watermark (and in-memory lastAssistant cache) so subsequent streaming
     // adopt ticks do not re-trigger FTS5 trigram indexing for historical assistant entries already persisted before observe.
-    for (let i = view.entries.length - 1; i >= 0; i -= 1) {
-      const entry = view.entries[i] as
-        | { kind: string; id: number; model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }> }
-        | undefined
-      if (entry === undefined) continue
-      if (entry.kind === 'helmx.rewind' || entry.kind === 'pi.reset') break
-      if (entry.kind === 'pi.assistant') {
-        const text = assistantTextOfEntry(entry)
-        if (text !== '') {
-          const numericId = Number(entry.id)
-          if (Number.isFinite(numericId)) {
-            mirror.lastIndexedAssistantEntryId = numericId
-            mirror.lastAssistant ??= { entryId: numericId, text }
-          }
-          break
-        }
+    const latestAssistant = findLatestAssistantEntry(view.entries)
+    if (latestAssistant !== undefined) {
+      if (Number.isFinite(latestAssistant.entryId)) {
+        mirror.lastIndexedAssistantEntryId = latestAssistant.entryId
+        mirror.lastAssistant ??= latestAssistant
       }
     }
-    if (usageWatermark >= 0) this.usage.advanceWatermarkTo(id, usageWatermark)
-    const windowEntries = view.entries as never as ReadonlyArray<EntryRecordLike>
-    let initialLastEntryId = latestVisibleEntryIdOf(windowEntries)
-    this.lastEntryIds.set(id, Math.max(this.lastEntryIds.get(id) ?? 0, initialLastEntryId))
-    this.store.setLastEntryId?.(id, this.lastEntryIds.get(id)!)
+    if (watermarks.usageWatermark >= 0) this.usage.advanceWatermarkTo(id, watermarks.usageWatermark)
+    let initialLastEntryId = latestVisibleEntryIdOf(view.entries)
+    const mergedInitialLastEntryId = Math.max(this.lastEntryIds.get(id) ?? 0, initialLastEntryId)
+    this.lastEntryIds.set(id, mergedInitialLastEntryId)
+    this.store.setLastEntryId?.(id, mergedInitialLastEntryId)
     // Register inbox mirror before checking live.run: even after a restart/stopped run with queued inputs remaining,
     // queuedInputs derivation and listLiveViews snapshots preserve queued state honestly without fabricating UI queues.
     const inbox = view.docs['pi.inbox'] as { items?: InboxItemShape[] } | undefined
@@ -321,7 +319,7 @@ export class ConversationTracker {
     // Populate context usage cache on initial attach (initial read path for restart/fork/new conversations),
     // including idle conversations so opening a historical conversation displays its usage pill.
     this.usage.schedule(id)
-    if (initialLastEntryId === 0 && (view as { before?: unknown }).before !== undefined) {
+    if (initialLastEntryId === 0 && view.before !== undefined) {
       initialLastEntryId = await this.scanLatestVisibleEntryId(id)
       if (this.mirrors.get(id)?.observeGeneration !== generation) return
       const merged = Math.max(this.lastEntryIds.get(id) ?? 0, initialLastEntryId)
@@ -335,7 +333,7 @@ export class ConversationTracker {
     if (first !== undefined) mirror.runFirstEntry = first
     // Admitted inputs for this run: back-read entry via authoritative SDK submissionId -> entry mapping,
     // registering requestId tracking records and submissionId -> requestId indexes so markConsumed hits.
-    const loaded = await this.loadRunInputEntries(id, live.run.inputs as number[])
+    const loaded = await loadRunInputEntriesFromSdk(this.harness, id, live.run.inputs)
     // If stopObserving swapped generation, discard async read results rather than re-populating a cleaned mirror.
     if (this.mirrors.get(id)?.observeGeneration !== generation) return
     this.adoptInputsFromEntries(id, loaded.entries)
@@ -349,38 +347,6 @@ export class ConversationTracker {
     // Recovered active runs/queues make the runtime busy from the very first mirror write.
     this.syncMirrorBusyContribution(mirror)
     this.noteActivityMutation()
-  }
-
-  /** Back-read result: helmx.input entries + authoritative (submissionId, requestId) pairs. */
-  private async loadRunInputEntries(
-    id: number,
-    submissionIds: number[],
-  ): Promise<{ entries: Array<Record<string, unknown>>; pairs: Array<{ submissionId: number; requestId: string }> }> {
-    if (submissionIds.length === 0) return { entries: [], pairs: [] }
-    const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) return { entries: [], pairs: [] }
-    const out: Array<Record<string, unknown>> = []
-    const pairs: Array<{ submissionId: number; requestId: string }> = []
-    for (const submissionId of submissionIds) {
-      const submission = await this.harness.submission(submissionId as never, BACKGROUND_CONTEXT)
-      if (!submission) continue
-      const record = (await submission.status(BACKGROUND_CONTEXT)) as {
-        entry?: number
-        requestId?: string
-      }
-      const entryId = record.entry
-      if (entryId === undefined) continue
-      const page = await conversation.entries(
-        { minEntryId: entryId as never, maxEntryId: entryId as never, order: 'ascending' },
-        1,
-        undefined,
-        BACKGROUND_CONTEXT,
-      )
-      const raw = page.items[0] as Record<string, unknown> | undefined
-      if (raw !== undefined) out.push(raw)
-      if (record.requestId !== undefined) pairs.push({ submissionId, requestId: record.requestId })
-    }
-    return { entries: out, pairs }
   }
 
   /** Register restored authoritative (submissionId, requestId) pairs in the correlation index. */
@@ -452,18 +418,13 @@ export class ConversationTracker {
 
   /** Scan backwards from tail when the initial 50-entry view window contained only hidden entries. */
   private async scanLatestVisibleEntryId(id: number): Promise<number> {
-    const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    const conversation = await getSdkConversation(this.harness, id, BACKGROUND_CONTEXT)
     if (!conversation || typeof conversation.entries !== 'function') return 0
     const cuts: RewindInterval[] = []
     let cursor: unknown = undefined
     for (;;) {
-      const page = await conversation.entries(
-        { order: 'descending' },
-        100,
-        cursor as never,
-        BACKGROUND_CONTEXT,
-      )
-      for (const raw of page.items as never as ReadonlyArray<EntryRecordLike>) {
+      const page = await scanSdkEntries(conversation, 'descending', 100, cursor, BACKGROUND_CONTEXT)
+      for (const raw of page.items) {
         if (raw.kind === 'helmx.rewind') {
           const cut = rewindIntervalOf(raw)
           if (cut !== undefined) cuts.push(cut)
@@ -811,178 +772,139 @@ export class ConversationTracker {
     const prev = mirror.live
     mirror.live = live ?? {}
 
-    // Never drop compaction failures silently: emit an error notification once per new compactionFailure.
     this.noteCompactionFailure(id, live)
-
-    // When a context-changing entry commits (assistant step / compaction / reset / in-place rewrite) or active
-    // compaction state changes, schedule an async refresh (deduplicated synchronously; awaiting in observe is forbidden).
     this.usage.noteBoundary(id, view, prev, live)
 
-    // Assistant text: take the newest pi.assistant entry at the window tail, strictly deduplicated by entry ID
-    // so 100ms streaming progress snapshots never repeatedly re-index the same persisted assistant text into FTS5.
-    // Stop scanning backward immediately upon hitting helmx.rewind / pi.reset: right after an in-place rewrite
-    // appends a truncation marker (before a new answer exists), older pi.assistant entries are superseded and must
-    // never re-trigger onAssistantText to pollute FTS5 with stale answers.
-    for (let i = view.entries.length - 1; i >= 0; i -= 1) {
-      const entry = view.entries[i] as
-        | { kind: string; id: number; model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }> }
-        | undefined
-      if (entry === undefined) continue
-      if (entry.kind === 'helmx.rewind' || entry.kind === 'pi.reset') break
-      if (entry.kind === 'pi.assistant') {
-        const numericId = Number(entry.id)
-        if (Number.isFinite(numericId) && mirror.lastIndexedAssistantEntryId === numericId) break
-        const text = assistantTextOfEntry(entry)
-        if (text !== '') {
-          if (Number.isFinite(numericId)) mirror.lastIndexedAssistantEntryId = numericId
-          this.events.onAssistantText(id, entry.id, text)
-          break
-        }
-      }
+    const lastEntryAdvanced = this.adoptSnapshotEntries(id, mirror, view, prev, live)
+    const prevRun = prev?.run
+    const runContinued = prevRun !== undefined && isContinuedRun(prevRun, live?.run)
+    const settledInAdopt = this.settleEndedRunInAdopt(id, mirror, view, prevRun, live, runContinued)
+
+    if (live?.run) {
+      this.advanceLiveRunInAdopt(id, mirror, live.run, runContinued)
     }
 
-    // Observe helmx.input entries: only consider new items inside the current run window (>= run.first);
-    // historical helmx.input entries must never resurrect settled inputs into trackedInputs.
-    const first = mirror.runFirstEntry
-    const candidates: Array<Record<string, unknown>> = []
-    for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
-      const numeric = Number(raw.id)
-      if (first !== undefined && (!Number.isFinite(numeric) || numeric < first)) continue
-      candidates.push(raw as unknown as Record<string, unknown>)
+    this.emitLiveThrottled(id, live)
+    this.emitRunSummary(id)
+    if (!settledInAdopt && !live?.run && lastEntryAdvanced && this.store.getConv(id) !== undefined) {
+      const summary = this.summaryOf(id)
+      this.mirrorOf(id).lastSummaryKey = summaryKeyOf(summary)
+      this.events.onSummaryChanged(summary)
     }
-    this.adoptInputsFromEntries(id, candidates)
-    // Also rebuild queued inbox items (for followUp/steer inputs queued during busy runs before placement).
+    this.syncMirrorBusyContribution(mirror)
+    this.noteActivityMutation()
+  }
+
+  private adoptSnapshotEntries(
+    id: number,
+    mirror: ConversationMirror,
+    view: ConversationView,
+    prev: LiveStateShape | undefined,
+    live: LiveStateShape | undefined,
+  ): boolean {
+    const latestAssistant = findLatestAssistantEntry(view.entries)
+    if (latestAssistant !== undefined && mirror.lastIndexedAssistantEntryId !== latestAssistant.entryId) {
+      if (Number.isFinite(latestAssistant.entryId)) mirror.lastIndexedAssistantEntryId = latestAssistant.entryId
+      this.events.onAssistantText(id, latestAssistant.entryId, latestAssistant.text)
+    }
+
+    this.adoptInputsFromEntries(id, view.entries, mirror.runFirstEntry)
     const inbox = view.docs['pi.inbox'] as { items?: InboxItemShape[] } | undefined
     const inboxItems = inbox?.items ?? []
     mirror.inbox = inboxItems
     this.adoptInputsFromInbox(id, inboxItems)
 
-    // Newly persisted entries: advance watermark strictly in ascending ID order once per entry (preserves commit order
-    // even when SDK collapses multiple entries into one snapshot).
-    this.emitNewEntries(id, view.entries as never as ReadonlyArray<EntryRecordLike>)
+    this.emitNewEntries(id, view.entries)
 
-    // Detect whether this snapshot includes a new pi.compaction entry (independent of onEntryCommitted sink).
-    const prevSeenEntryId = mirror.lastSeenEntryId
-    let nextSeenEntryId = prevSeenEntryId
-    let hasNewCompactionEntry = false
-    for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
-      const numeric = Number(raw.id)
-      if (!Number.isFinite(numeric) || numeric <= prevSeenEntryId) continue
-      if (numeric > nextSeenEntryId) nextSeenEntryId = numeric
-      if (raw.kind === 'pi.compaction') hasNewCompactionEntry = true
-    }
-    mirror.lastSeenEntryId = nextSeenEntryId
-
-    // When a compaction task finishes without a pi.compaction entry and no other run/compaction is active,
-    // schedule async reconciliation (awaiting inside adopt is forbidden) to distinguish skipped no-op vs abort/failure.
-    const prevCompactions = prev?.compactions ?? []
-    const nextCompactions = live?.compactions ?? []
-    const nextTaskIds = new Set(nextCompactions.map((c) => c.taskId))
-    const finishedCompactions = prevCompactions.filter((c) => !nextTaskIds.has(c.taskId))
-    if (
-      finishedCompactions.length > 0 &&
-      nextCompactions.length === 0 &&
-      !hasNewCompactionEntry &&
-      live?.run === undefined
-    ) {
-      void this.reconcileFinishedCompaction(id, mirror.observeGeneration, finishedCompactions)
+    const compaction = detectCompactionTransitions(view.entries, prev, live, mirror.lastSeenEntryId)
+    mirror.lastSeenEntryId = compaction.nextSeenEntryId
+    if (compaction.finishedCompactionsToReconcile.length > 0) {
+      void this.reconcileFinishedCompaction(id, mirror.observeGeneration, compaction.finishedCompactionsToReconcile)
     }
 
-    // Update latest visible entry watermark before emitSettled / emitRunSummary so emitted upserts carry it.
     const prevLastEntryId = this.lastEntryIds.get(id) ?? this.store.getConv(id)?.lastEntryId ?? 0
-    const windowLatestVisible = latestVisibleEntryIdOf(view.entries as never as ReadonlyArray<EntryRecordLike>)
+    const windowLatestVisible = latestVisibleEntryIdOf(view.entries)
     const nextLastEntryId = Math.max(prevLastEntryId, windowLatestVisible)
     const lastEntryAdvanced = nextLastEntryId > prevLastEntryId
     if (lastEntryAdvanced) {
       this.lastEntryIds.set(id, nextLastEntryId)
       this.store.setLastEntryId?.(id, nextLastEntryId)
     }
+    return lastEntryAdvanced
+  }
 
-    // Settle the ended previous run first (including collapsed snapshots where run1 ends and run2 starts together).
-    // A changed taskId alone is NOT a run end: the SDK hands the run to a new generation task after every tool round
-    // (isContinuedRun keeps same-run handOver going); only run disappearance or a replacement logical run settles.
-    let settledInAdopt = false
-    const prevRun = prev?.run
-    const runContinued = prevRun !== undefined && isContinuedRun(prevRun, live?.run)
-    if (prevRun !== undefined && (!live?.run || live.run.taskId !== prevRun.taskId) && !runContinued) {
-      settledInAdopt = true
-      const runKey = `${id}:${prevRun.taskId}`
-      if (!this.settledRuns.has(runKey)) {
-        this.noteSettledRun(id, runKey)
-        mirror.lastSettledRun = prevRun.taskId
-        const failure = live?.runFailure
-        if (failure && failure.taskId === prevRun.taskId) {
-          for (const submissionId of failure.inputs) this.markConsumed(id, submissionId)
-          const consumed = this.takeConsumed(id)
-          if (failure.reason === 'aborted') {
-            // Aborted terminal state (observe path): settles as aborted without also reporting failed.
-            this.emitSettled(id, 'aborted', consumed, undefined)
-          } else {
-            this.emitSettled(
-              id,
-              'failed',
-              consumed,
-              `${failure.reason}${failure.detail ? `: ${failure.detail}` : ''}`,
-            )
-          }
+  private settleEndedRunInAdopt(
+    id: number,
+    mirror: ConversationMirror,
+    view: ConversationView,
+    prevRun: LiveStateShape['run'] | undefined,
+    live: LiveStateShape | undefined,
+    runContinued: boolean,
+  ): boolean {
+    if (prevRun === undefined || (live?.run && live.run.taskId === prevRun.taskId) || runContinued) {
+      return false
+    }
+    const runKey = `${id}:${prevRun.taskId}`
+    if (!this.settledRuns.has(runKey)) {
+      this.noteSettledRun(id, runKey)
+      mirror.lastSettledRun = prevRun.taskId
+      const failure = live?.runFailure
+      if (failure && failure.taskId === prevRun.taskId) {
+        for (const submissionId of failure.inputs) this.markConsumed(id, submissionId)
+        const consumed = this.takeConsumed(id)
+        if (failure.reason === 'aborted') {
+          this.emitSettled(id, 'aborted', consumed, undefined)
         } else {
-          const consumed = this.takeConsumed(id)
-          this.emitSettled(id, 'completed', consumed, undefined)
+          this.emitSettled(
+            id,
+            'failed',
+            consumed,
+            `${failure.reason}${failure.detail ? `: ${failure.detail}` : ''}`,
+          )
         }
-      }
-      this.resetRunState(id)
-      // Monotonically advance input-rebuild lower bound to snapshot tail so settled run entries (incl. helmx.input)
-      // become history and cannot resurrect on later snapshot scans.
-      const tail = view.entries.length
-        ? Number((view.entries[view.entries.length - 1] as EntryRecordLike).id)
-        : undefined
-      if (tail !== undefined && Number.isFinite(tail)) {
-        if (mirror.runFirstEntry === undefined || tail > mirror.runFirstEntry) mirror.runFirstEntry = tail
+      } else {
+        const consumed = this.takeConsumed(id)
+        this.emitSettled(id, 'completed', consumed, undefined)
       }
     }
+    this.resetRunState(id)
+    const tail = view.entries.length
+      ? Number(view.entries[view.entries.length - 1]?.id)
+      : undefined
+    if (tail !== undefined && Number.isFinite(tail)) {
+      if (mirror.runFirstEntry === undefined || tail > mirror.runFirstEntry) mirror.runFirstEntry = tail
+    }
+    return true
+  }
 
-    if (live?.run) {
+  private advanceLiveRunInAdopt(
+    id: number,
+    mirror: ConversationMirror,
+    run: NonNullable<LiveStateShape['run']>,
+    runContinued: boolean,
+  ): void {
+    if (!runContinued) {
+      const meta = this.store.getConv(id)
+      if (meta !== undefined && meta.runStartedAt === undefined) {
+        this.store.upsertConv({ ...meta, runStartedAt: Date.now() })
+      }
+    }
+    const runKey = `${id}:${run.taskId}`
+    if (mirror.runTaskId !== run.taskId) {
+      mirror.runTaskId = run.taskId
       if (!runContinued) {
-        const meta = this.store.getConv(id)
-        if (meta !== undefined && meta.runStartedAt === undefined) {
-          this.store.upsertConv({ ...meta, runStartedAt: Date.now() })
-        }
+        mirror.consumedInputs = new Set<string>()
       }
-      const runKey = `${id}:${live.run.taskId}`
-      if (mirror.runTaskId !== live.run.taskId) {
-        mirror.runTaskId = live.run.taskId
-        if (!runContinued) {
-          // New logical run: reset the turn's consumed set (same-run generation handOver keeps accumulating).
-          mirror.consumedInputs = new Set<string>()
-        }
-        this.settledRuns.delete(runKey)
-        this.dropSettledRunFromOrder(id, runKey)
-        const first = live.run.first !== undefined ? Number(live.run.first) : undefined
-        if (first !== undefined) {
-          if (mirror.runFirstEntry === undefined || first > mirror.runFirstEntry) mirror.runFirstEntry = first
-        }
+      this.settledRuns.delete(runKey)
+      this.dropSettledRunFromOrder(id, runKey)
+      const first = run.first !== undefined ? Number(run.first) : undefined
+      if (first !== undefined) {
+        if (mirror.runFirstEntry === undefined || first > mirror.runFirstEntry) mirror.runFirstEntry = first
       }
-      for (const submissionId of live.run.inputs) {
-        this.markConsumed(id, submissionId)
-      }
-      // During completion phase (answered, inputs cleared), leave consumedInputs intact so consumed records remain.
     }
-
-    // Live view: throttled pushes (forced flush on settlement inside emitSettled).
-    this.emitLiveThrottled(id, live)
-    // Live summary while run is active: covers run start (working even before first token) and semantic doing transitions.
-    this.emitRunSummary(id)
-    // When idle visible entries advance without a run settlement (e.g. compaction, reset, rewind, or write),
-    // push conversation.upsert so reconnect SWR watermarks stay current.
-    if (!settledInAdopt && !live?.run && lastEntryAdvanced && this.store.getConv(id) !== undefined) {
-      const summary = this.summaryOf(id)
-      this.mirrorOf(id).lastSummaryKey = summaryKeyOf(summary)
-      this.events.onSummaryChanged(summary)
+    for (const submissionId of run.inputs) {
+      this.markConsumed(id, submissionId)
     }
-    // Every snapshot application is a potential run/compaction/queue mutation: recompute the busy
-    // aggregate so an idle→busy flip rewrites the activity heartbeat synchronously (see adopt header).
-    this.syncMirrorBusyContribution(mirror)
-    this.noteActivityMutation()
   }
 
   /** Newly persisted entries: advance watermark by ascending ID, emitting each exactly once. */
@@ -1132,14 +1054,8 @@ export class ConversationTracker {
    *
    * On happy paths register/bind already holds the authoritative record, so entry observation only fills missing metadata
    * fields (origin/meta/attachments) without creating duplicates. */
-  private adoptInputsFromEntries(id: number, entries: ReadonlyArray<unknown>): void {
-    for (const raw of entries) {
-      const entry = raw as { kind?: string; data?: unknown }
-      // Custom input entry: SDK pickInputEntry writes {kind:'helmx.input', data} into entry.data;
-      // model only holds UserMessage (nothing in model[0].data).
-      if (entry?.kind !== 'helmx.input') continue
-      const meta = entry.data as HelmxInputMeta | undefined
-      if (!meta || typeof meta.id !== 'string' || typeof meta.text !== 'string') continue
+  private adoptInputsFromEntries(id: number, entries: ReadonlyArray<EntryRecord>, minEntryId?: number): void {
+    for (const meta of extractHelmxInputMetas(entries, minEntryId)) {
       this.upsertTrackedInput(id, meta.id, meta)
     }
   }
@@ -1403,7 +1319,7 @@ export class ConversationTracker {
       let hasCleanEmpty = false
       let hasManualEmpty = false
       for (const task of finished) {
-        const record = await this.harness.getTask(task.taskId as never, BACKGROUND_CONTEXT)
+        const record = await getSdkTask(this.harness, task.taskId, BACKGROUND_CONTEXT)
         if (this.isClosing || !this.store.getConv(id)) return
         const currentMirror = this.mirrors.get(id)
         if (currentMirror === undefined || currentMirror.observeGeneration !== generation) return
@@ -1435,7 +1351,7 @@ export class ConversationTracker {
       if (!hasQueuedInputs || mirror.live?.run !== undefined || (mirror.live?.compactions?.length ?? 0) > 0) {
         return
       }
-      const conv = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+      const conv = await getSdkConversation(this.harness, id, BACKGROUND_CONTEXT)
       if (this.isClosing || !this.store.getConv(id)) return
       const latestMirror = this.mirrors.get(id)
       if (latestMirror === undefined || latestMirror.observeGeneration !== generation) return
@@ -1540,52 +1456,4 @@ export class ConversationTracker {
       mirror.lastIndexedAssistantEntryId = undefined
     }
   }
-}
-
-function statusNow(meta: ConvMeta, outcome: TurnOutcome): ConversationStatus {
-  if (outcome === 'failed') return 'error'
-  if (outcome === 'aborted') return 'idle'
-  return meta.unread ? 'done' : 'idle'
-}
-
-/** Semantic summary fingerprint: status/doing/pendingAskCount/lastError/timing (other fields do not participate in push dedupe). */
-function summaryKeyOf(summary: ConversationSummary): string {
-  return `${summary.status}|${summary.doing ?? ''}|${summary.pendingAskCount}|${summary.lastError ?? ''}|${summary.runStartedAt ?? ''}|${summary.runDurationMs ?? 0}|${summary.pendingAskSince ?? ''}`
-}
-
-/** Build human-readable diagnostic summary from live.runFailure ('reason: detail'; omitted for non-error aborted/reset). */
-function lastErrorOf(
-  live: LiveStateShape | undefined,
-  redact: (text: string) => string,
-): string | undefined {
-  const failure = live?.runFailure
-  if (!failure || failure.reason === 'aborted' || failure.reason === 'reset') return undefined
-  const detail =
-    typeof failure.detail === 'string' && failure.detail.trim() !== ''
-      ? `: ${redact(failure.detail).slice(0, 400)}`
-      : ''
-  return `${failure.reason}${detail}`
-}
-
-// Inputs use durable input.id (requestId) as tracking identity, requiring no temporary key allocation.
-
-export { deriveConversationTitle as deriveTitle }
-
-/** Compute latest visible entry ID (excluding `pi.system` and entries covered by `helmx.rewind`; `0` when none). */
-function latestVisibleEntryIdOf(entries: ReadonlyArray<EntryRecordLike>): number {
-  const cuts: RewindInterval[] = []
-  for (const raw of entries) {
-    if (raw.kind !== 'helmx.rewind') continue
-    const cut = rewindIntervalOf(raw)
-    if (cut !== undefined) cuts.push(cut)
-  }
-  let latest = 0
-  for (const raw of entries) {
-    const numeric = Number(raw.id)
-    if (!Number.isSafeInteger(numeric) || numeric <= 0) continue
-    if (raw.kind === 'pi.system') continue
-    if (raw.kind !== 'helmx.rewind' && coveredByRewind(numeric, cuts)) continue
-    if (numeric > latest) latest = numeric
-  }
-  return latest
 }
