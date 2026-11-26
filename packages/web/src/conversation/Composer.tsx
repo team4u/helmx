@@ -1,7 +1,16 @@
 import { memo, useCallback, useId, useMemo, useRef, useState } from 'react'
 import type { ComposerMenuSlotProps, ComposerScopeProps, ConversationSummary, WhenBusy } from '@helmx/protocol/browser'
 import { COMPOSER_DOCK_SLOT, COMPOSER_MENU_SLOT, COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol/browser'
-import { Button, ComposerCommandContext, HelmxIcon, PluginSlot, createComposerCommandRegistry, useSharedNowMs } from '@helmx/plugin-client'
+import {
+  Button,
+  ComposerCommandContext,
+  ComposerModelPickerModeContext,
+  HelmxIcon,
+  PluginSlot,
+  createComposerCommandRegistry,
+  createComposerModelPickerModeRegistry,
+  useSharedNowMs,
+} from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
 import { pluginSlashCommandsFor } from '../lib/commands-model.js'
@@ -137,6 +146,7 @@ export const Composer = memo(function Composer({
   const composerDirtyKey = useId()
   const dirtySink = useConversationDirtySink()
   const [commandRegistry] = useState(() => createComposerCommandRegistry())
+  const modelPickerModeRegistry = useMemo(() => createComposerModelPickerModeRegistry(), [])
   const {
     text,
     attachments,
@@ -297,8 +307,12 @@ export const Composer = memo(function Composer({
 
   return (
     <ComposerCommandContext.Provider value={commandRegistry}>
-      <ComposerInputShell
-        aboveBox={
+      <ComposerModelPickerModeContext.Provider value={modelPickerModeRegistry}>
+        <ComposerInputShell
+          shortcutPanel={isDrawer ? 'drawer' : isSplit ? 'split' : 'primary'}
+          shortcutDrawerConversationId={isDrawer ? conversation.id : undefined}
+          shortcutActive={staged}
+          aboveBox={
         <>
           <PluginSlot
             ownerPluginId="builtin:composer"
@@ -429,6 +443,7 @@ export const Composer = memo(function Composer({
         </>
       }
       />
+      </ComposerModelPickerModeContext.Provider>
     </ComposerCommandContext.Provider>
   )
 })

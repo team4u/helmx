@@ -31,7 +31,6 @@ import {
   createTiersPlugin,
 } from '../src/tiers.js'
 import {
-  parseModelSlashInput,
   parseTiersBorrowInputMeta,
   type TierBorrowRecord,
   type TierBorrowSessionView,
@@ -949,16 +948,7 @@ test('borrow resolution: zero-tier direct refs, unique short id, ambiguous multi
     (err: unknown) => err instanceof HelmxError && err.code === 'model_not_found' && err.status === 404,
   )
 
-  // Pure slash & input.meta parsers
-  assert.deepEqual(parseModelSlashInput('/model'), { matched: true, kind: 'bare' })
-  assert.deepEqual(parseModelSlashInput('  /model   '), { matched: true, kind: 'bare' })
-  assert.deepEqual(parseModelSlashInput('/model flagship analyze\nthis diff'), {
-    matched: true,
-    kind: 'target',
-    targetRef: 'flagship',
-    remainder: 'analyze\nthis diff',
-  })
-  assert.deepEqual(parseModelSlashInput('/models list'), { matched: false })
+  // Input metadata parser
   assert.deepEqual(parseTiersBorrowInputMeta(undefined), { present: false })
   assert.deepEqual(
     parseTiersBorrowInputMeta({ [TIERS_INPUT_META_KEY]: { borrowModel: ' faux/flagship ', effort: 'high' } }),
@@ -968,18 +958,66 @@ test('borrow resolution: zero-tier direct refs, unique short id, ambiguous multi
   assert.equal(badMeta.present && !badMeta.valid, true)
 })
 
-test('integration: zero-tier /model <target> <msg> borrows & restores inherited and explicit overrides, strips prefix, and blocks invalid /model inputs', { timeout: 60_000 }, async () => {
+test('integration: builtin:tiers registers no /model command or menu slot, leaves /model text untouched, and set_borrow restores inherited & explicit overrides', { timeout: 60_000 }, async () => {
   const env = await openHelmxEnv({ defaultModel: 'faux/workhorse' })
   try {
     const { kernel } = env.app
-    // Confirm zero tiers are configured
+    // Confirm zero tiers are configured & no command/menu slot registered
     assert.equal((await kernel.models.listModels()).modelTiers, undefined)
+    const tiersUi = kernel.plugins.listUi().filter((u) => u.pluginId === TIERS_PLUGIN_ID)
+    assert.equal(tiersUi.some((u) => u.surface === 'command' || u.surface === 'commandPalette'), false)
+    assert.equal(
+      tiersUi.some(
+        (u) =>
+          u.surface === 'plugin.slot' &&
+          (u.spec as { target?: string }).target === 'builtin:composer/menu',
+      ),
+      false,
+    )
+    assert.equal(
+      tiersUi.some(
+        (u) =>
+          u.surface === 'plugin.slot' &&
+          (u.spec as { target?: string }).target === 'builtin:composer/toolbar',
+      ),
+      true,
+    )
+    assert.equal(tiersUi.some((u) => u.surface === 'tool.view'), true)
+    const actionIds = kernel.plugins
+      .listActions()
+      .filter((a) => a.pluginId === TIERS_PLUGIN_ID)
+      .map((a) => a.id)
+    assert.ok(actionIds.includes('get_borrow') && actionIds.includes('set_borrow') && actionIds.includes('clear_borrow'))
 
     // 1. Conversation inheriting global default (`modelOverride === undefined`)
     const inherited = await kernel.conversations.createConversation()
     assert.equal(inherited.model, 'faux/workhorse')
     assert.equal(inherited.modelOverride, undefined)
+    assert.equal(
+      kernel.plugins.listTools(inherited).some((t) => t.name === TIERS_SWITCH_MODEL_TOOL),
+      true,
+      'switch_model tool remains available on top-level human conversations',
+    )
 
+    // `/model ...` text is no longer intercepted or blocked by builtin:tiers
+    const slashHook = await kernel.plugins.runHook('input', {
+      conversationId: inherited.id,
+      input: { id: 'req-slash-ignored', text: '/model faux/flagship hello', origin: 'human', createdAt: Date.now() },
+    })
+    assert.ok(slashHook.action === 'continue' || slashHook.action === 'transform')
+    if (slashHook.action === 'transform') {
+      assert.equal(slashHook.value.input.text, '/model faux/flagship hello')
+    }
+    assert.equal(kernel.conversations.getConversation(inherited.id).model, 'faux/workhorse')
+    assert.equal(
+      await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'get_borrow', { conversationId: inherited.id }),
+      null,
+    )
+
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+      conversationId: inherited.id,
+      model: 'faux/flagship',
+    })
     const observedModels: string[] = []
     env.faux.setResponses([
       () => {
@@ -988,7 +1026,7 @@ test('integration: zero-tier /model <target> <msg> borrows & restores inherited 
       },
     ])
     const seqBeforeA = kernel.conversations.getConversation(inherited.id).completionSeq
-    await kernel.conversations.submitInput(inherited.id, '/model faux/flagship analyze this diff')
+    await kernel.conversations.submitInput(inherited.id, 'analyze this diff')
     await kernel.conversations.waitForIdle(inherited.id)
     assert.ok(kernel.conversations.getConversation(inherited.id).completionSeq > seqBeforeA)
 
@@ -996,15 +1034,6 @@ test('integration: zero-tier /model <target> <msg> borrows & restores inherited 
     const afterA = kernel.conversations.getConversation(inherited.id)
     assert.equal(afterA.model, 'faux/workhorse', 'must restore inherited default model')
     assert.equal(afterA.modelOverride, undefined, 'must clear modelOverride back to inherited default')
-    assert.equal(afterA.title.startsWith('/model'), false, 'auto-title must not retain /model prefix')
-
-    const detailA = await kernel.conversations.getConversationDetail(inherited.id)
-    const userEntryA = detailA.entries.find((e) => e.kind === 'helmx.input')
-    assert.equal(
-      (userEntryA?.data as { text?: string } | undefined)?.text,
-      'analyze this diff',
-      '/model <target> prefix must be stripped from persisted input',
-    )
 
     const borrowA = (await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'get_borrow', {
       conversationId: inherited.id,
@@ -1020,6 +1049,10 @@ test('integration: zero-tier /model <target> <msg> borrows & restores inherited 
     assert.equal(explicit.modelOverride, 'faux/fast')
     assert.equal(explicit.thinkingLevelOverride, 'low')
 
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+      conversationId: explicit.id,
+      model: 'flagship',
+    })
     const observedB: string[] = []
     env.faux.setResponses([
       () => {
@@ -1028,7 +1061,7 @@ test('integration: zero-tier /model <target> <msg> borrows & restores inherited 
       },
     ])
     const seqBeforeB = kernel.conversations.getConversation(explicit.id).completionSeq
-    await kernel.conversations.submitInput(explicit.id, '/model flagship check edge cases')
+    await kernel.conversations.submitInput(explicit.id, 'check edge cases')
     await kernel.conversations.waitForIdle(explicit.id)
     assert.ok(kernel.conversations.getConversation(explicit.id).completionSeq > seqBeforeB)
     assert.deepEqual(observedB, ['faux/flagship'])
@@ -1036,30 +1069,12 @@ test('integration: zero-tier /model <target> <msg> borrows & restores inherited 
     assert.equal(afterB.model, 'faux/fast')
     assert.equal(afterB.modelOverride, 'faux/fast', 'must restore original explicit modelOverride')
     assert.equal(afterB.thinkingLevelOverride, 'low', 'must restore original thinkingLevelOverride')
-
-    // 3. Bare `/model` and unknown target block explicitly; `/models status` passes through untouched
-    await assertRejectsCode(() => kernel.conversations.submitInput(explicit.id, '/model'), 'input_blocked')
-    await assertRejectsCode(() => kernel.conversations.submitInput(explicit.id, '/model faux/missing hello'), 'input_blocked')
-
-    env.faux.setResponses([fauxAssistantMessage('models-not-intercepted')])
-    const seqBeforeModels = kernel.conversations.getConversation(explicit.id).completionSeq
-    await kernel.conversations.submitInput(explicit.id, '/models status')
-    await kernel.conversations.waitForIdle(explicit.id)
-    assert.ok(kernel.conversations.getConversation(explicit.id).completionSeq > seqBeforeModels)
-    const detailB = await kernel.conversations.getConversationDetail(explicit.id)
-    assert.equal(
-      detailB.entries.some(
-        (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === '/models status',
-      ),
-      true,
-      '/models must not be intercepted by /model hook',
-    )
   } finally {
     await env.close()
   }
 })
 
-test('integration: /model <target> arms borrow (handled + sessionDoc), stale disabled armed target blocks honestly, actions & standby input.meta work', { timeout: 60_000 }, async () => {
+test('integration: set_borrow arms borrow (sessionDoc), stale disabled armed target blocks honestly, and standby input.meta works', { timeout: 60_000 }, async () => {
   const env = await openHelmxEnv({ defaultModel: 'faux/workhorse' })
   try {
     const { kernel } = env.app
@@ -1073,9 +1088,12 @@ test('integration: /model <target> arms borrow (handled + sessionDoc), stale dis
     const conv = await kernel.conversations.createConversation({ title: 'arm-test' })
     const callsBeforeArm = env.faux.state.callCount
 
-    // 1. `/model architect` with no body arms borrow without invoking the model
-    await kernel.conversations.submitInput(conv.id, '/model architect')
-    assert.equal(env.faux.state.callCount, callsBeforeArm, 'arming via /model <target> must not trigger a model turn')
+    // 1. set_borrow arms borrow without invoking the model
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+      conversationId: conv.id,
+      model: 'tier/architect',
+    })
+    assert.equal(env.faux.state.callCount, callsBeforeArm, 'arming via set_borrow must not trigger a model turn')
     const armedRes = (await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'get_borrow', {
       conversationId: conv.id,
     })) as TierBorrowSessionView | null
@@ -1197,21 +1215,20 @@ test('integration: followUp preserves borrow until idle, CAS guard respects manu
       },
     ])
     const seqA0 = kernel.conversations.getConversation(convA.id).completionSeq
-    await kernel.conversations.submitInput(convA.id, '/model faux/flagship first run')
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+      conversationId: convA.id,
+      model: 'faux/flagship',
+    })
+    await kernel.conversations.submitInput(convA.id, 'first run')
     await holdEntered.promise
 
     // While active & busy:
     // - inUse() blocks disabling builtin:tiers
     // - set_borrow fails with 409 conversation_busy
-    // - /model <target> <msg> is blocked while busy
     await assertRejectsCode(() => kernel.plugins.disable(TIERS_PLUGIN_ID), 'plugin_in_use')
     await assertRejectsCode(
       () => kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', { conversationId: convA.id, model: 'faux/fast' }),
       'conversation_busy',
-    )
-    await assertRejectsCode(
-      () => kernel.conversations.submitInput(convA.id, '/model faux/fast busy-attempt'),
-      'input_blocked',
     )
 
     // Queue followUp while Run 1 is held -> release Run 1 -> Run 2 must still run on faux/flagship
@@ -1232,7 +1249,11 @@ test('integration: followUp preserves borrow until idle, CAS guard respects manu
       fauxAssistantMessage('done-after-manual-switch'),
     ])
     const seqB0 = kernel.conversations.getConversation(convB.id).completionSeq
-    await kernel.conversations.submitInput(convB.id, '/model faux/flagship start')
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+      conversationId: convB.id,
+      model: 'faux/flagship',
+    })
+    await kernel.conversations.submitInput(convB.id, 'start')
     await holdEntered.promise
     await kernel.conversations.updateConversation(convB.id, { model: 'faux/fast' })
     holdRelease.resolve()
@@ -1251,7 +1272,11 @@ test('integration: followUp preserves borrow until idle, CAS guard respects manu
       fauxAssistantMessage('done-after-manual-clear'),
     ])
     const seqC0 = kernel.conversations.getConversation(convC.id).completionSeq
-    await kernel.conversations.submitInput(convC.id, '/model faux/flagship start')
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+      conversationId: convC.id,
+      model: 'faux/flagship',
+    })
+    await kernel.conversations.submitInput(convC.id, 'start')
     await holdEntered.promise
     await kernel.conversations.updateConversation(convC.id, { model: '' })
     holdRelease.resolve()
@@ -1269,7 +1294,11 @@ test('integration: followUp preserves borrow until idle, CAS guard respects manu
       fauxAssistantMessage('stay-on-flagship'),
     ])
     const seqD0 = kernel.conversations.getConversation(convD.id).completionSeq
-    await kernel.conversations.submitInput(convD.id, '/model faux/flagship start')
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+      conversationId: convD.id,
+      model: 'faux/flagship',
+    })
+    await kernel.conversations.submitInput(convD.id, 'start')
     await holdEntered.promise
     const clearActiveRes = (await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'clear_borrow', {
       conversationId: convD.id,
@@ -1377,7 +1406,7 @@ test('integration: switch_model chained relay (A->B->C restores A), permanent sw
     assert.equal(kernel.conversations.getConversation(conv.id).modelOverride, 'faux/workhorse')
     assert.equal(kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_BORROW_SESSION_DOC, conv.id).value, null)
 
-    // 3. Scope guard: child & helmx-owned conversations reject actions, ignore /model, and omit switch_model tool
+    // 3. Scope guard: child & helmx-owned conversations reject actions, ignore input.meta, and omit switch_model tool
     const helmxConv = await kernel.conversations.createConversation({ title: 'helmx-owned', ownedBy: 'helmx' })
     const childConv = await kernel.conversations.createConversation({
       title: 'child-conv',
@@ -1395,17 +1424,22 @@ test('integration: switch_model chained relay (A->B->C restores A), permanent sw
       )
       const hookInput = await kernel.plugins.runHook('input', {
         conversationId: ineligible.id,
-        input: { id: 'req-ineligible', text: '/model faux/flagship ignored', origin: 'human', createdAt: Date.now() },
+        input: {
+          id: 'req-ineligible',
+          text: 'ignored',
+          origin: 'human',
+          meta: { [TIERS_INPUT_META_KEY]: { borrowModel: 'faux/flagship' } },
+          createdAt: Date.now(),
+        },
       })
       assert.ok(
-        hookInput.action === 'continue' ||
-          (hookInput.action === 'transform' && hookInput.value.input.text === '/model faux/flagship ignored'),
-        '/model must not intercept or rewrite ineligible conversations',
+        hookInput.action === 'continue' || hookInput.action === 'transform',
+        'ineligible conversation must ignore borrow input meta (never handled or blocked)',
       )
       assert.equal(
         kernel.conversations.getConversation(ineligible.id).model,
         'faux/workhorse',
-        '/model must not switch model on ineligible conversations',
+        'must not switch model on ineligible conversations',
       )
       const toolsForConv = kernel.plugins.listTools(ineligible)
       assert.equal(
@@ -1467,7 +1501,7 @@ test('reconcile & events: cold restart restores idle active borrow, respects CAS
     targetLabel: 'flagship',
     effortChanged: false,
     restoreAfterTurn: true,
-    source: 'slash',
+    source: 'ui',
     createdAt: now,
     updatedAt: now,
   })
@@ -1483,7 +1517,7 @@ test('reconcile & events: cold restart restores idle active borrow, respects CAS
     previousModelOverride: 'faux/workhorse',
     effortChanged: false,
     restoreAfterTurn: true,
-    source: 'slash',
+    source: 'ui',
     createdAt: now,
     updatedAt: now,
   })

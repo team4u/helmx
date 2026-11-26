@@ -16,8 +16,6 @@ export const MODEL_TIERS_SKILL_ID = 'model-tiers' as const
 
 export const TIERS_BORROW_KV = 'borrows' as const
 export const TIERS_BORROW_SESSION_DOC = 'borrow' as const
-export const TIERS_BORROW_COMMAND_ID = 'borrow-model' as const
-export const TIERS_BORROW_COMMAND_SLASH = 'model' as const
 export const TIERS_SWITCH_MODEL_TOOL = 'switch_model' as const
 export const TIERS_INPUT_META_KEY = TIERS_PLUGIN_ID
 export const TIERS_BORROW_ELIGIBLE_SCOPE = {
@@ -60,7 +58,7 @@ export interface TiersPluginConfig {
 }
 
 export type TierBorrowPhase = 'armed' | 'active'
-export type TierBorrowSource = 'slash' | 'ui' | 'tool' | 'meta'
+export type TierBorrowSource = 'ui' | 'tool' | 'meta'
 
 /** Durable per-conversation borrow record persisted in `ctx.kv('borrows')`. */
 export interface TierBorrowRecord {
@@ -161,39 +159,16 @@ export const SWITCH_MODEL_META_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-export type ParsedModelSlashInput =
-  | { matched: false }
-  | { matched: true; kind: 'bare' }
-  | { matched: true; kind: 'target'; targetRef: string; remainder: string }
-
 export type ParsedTiersBorrowInputMeta =
   | { present: false }
   | { present: true; valid: true; borrowModel: string; effort?: string }
   | { present: true; valid: false; reason: string }
-
-const MODEL_SLASH_PREFIX_RE = /^\/model(?:\s|$)/
 
 /** One-turn model borrow & `switch_model` are restricted to top-level human-owned conversations. */
 export function isTiersBorrowEligible(
   conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy'>,
 ): boolean {
   return conv.parentConversationId === undefined && (conv.ownedBy ?? 'human') === 'human'
-}
-
-/** Parse `/model [target] [message]` without mis-matching `/models` or other prefixes. */
-export function parseModelSlashInput(text: string): ParsedModelSlashInput {
-  const trimmedStart = text.trimStart()
-  if (!MODEL_SLASH_PREFIX_RE.test(trimmedStart)) return { matched: false }
-  const afterWs = trimmedStart.slice('/model'.length).trimStart()
-  if (afterWs === '') return { matched: true, kind: 'bare' }
-  const match = /^(\S+)([\s\S]*)$/.exec(afterWs)
-  if (match === null || !match[1]) return { matched: true, kind: 'bare' }
-  return {
-    matched: true,
-    kind: 'target',
-    targetRef: match[1],
-    remainder: (match[2] ?? '').trim(),
-  }
 }
 
 /** Parse optional `input.meta['builtin:tiers']` standby borrow metadata with strict validation. */

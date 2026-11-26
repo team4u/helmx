@@ -23,10 +23,11 @@ export interface HelmxShortcutEventDetail {
     | 'toggle-model-picker'
     | 'toggle-process-groups'
     | 'toggle-plan-mode'
+    | 'toggle-plus-menu'
     | 'focus-composer'
     | 'focus-search'
     | string
-  panel: HelmxPanel
+  panel: HelmxPanel | 'drawer'
   drawerConversationId?: number
 }
 
@@ -165,6 +166,10 @@ export interface ModelPickerControlCopy {
   levelSuffix: string
   /** Trigger label when no model is effective and no placeholder was provided. */
   defaultLabel: string
+  /** Optional segmented tab label for the default persistent model-switch mode. */
+  defaultModeLabel?: string
+  /** Optional aria-label for the mode switcher segmented bar. */
+  modeBarAria?: string
   searchAria: string
   searchPlaceholder: string
   refreshCatalog: string
@@ -199,6 +204,8 @@ export const DEFAULT_MODEL_PICKER_COPY: Readonly<ModelPickerControlCopy> = Objec
   buttonAria: 'Model and thinking level: {model}{level}',
   levelSuffix: ' · {level}',
   defaultLabel: 'Default model',
+  defaultModeLabel: 'Switch model',
+  modeBarAria: 'Model selection mode',
   searchAria: 'Search models',
   searchPlaceholder: 'Search models…',
   refreshCatalog: 'Refresh dynamic model catalog',

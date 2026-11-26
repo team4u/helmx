@@ -130,6 +130,31 @@
   color: var(--fg-subtle);
 }
 
+/* ModelPicker 模式切换栏与搜索栏 */
+.composer-model-mode-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 4px 2px;
+  flex-shrink: 0;
+}
+.composer-model-mode-bar .helmx-tabs-segmented,
+.composer-model-mode-bar .segmented-control {
+  width: 100%;
+}
+.composer-model-mode-bar .segmented-control-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer-model-mode-hint {
+  padding: 0 6px 2px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--fg-muted);
+}
+
 /* ModelPicker 搜索栏与空态 */
 .composer-model-search-bar {
   display: flex;

@@ -98,6 +98,17 @@ export type {
   ComposerCommandInvokeResult,
   ComposerCommandRegistry,
 } from './composer-commands.js'
+export {
+  ComposerModelPickerModeContext,
+  createComposerModelPickerModeRegistry,
+  useComposerModelPickerMode,
+} from './composer-model-modes.js'
+export type {
+  ComposerModelPickerModeRegistration,
+  ComposerModelPickerModeRegistry,
+  ComposerModelPickerModeSelection,
+  ComposerModelPickerModeSpec,
+} from './composer-model-modes.js'
 
 // ---- Model picker (shared host/plugin model + thinking-level control) ----
 export { ModelPickerControl } from './ui/ModelPicker.js'

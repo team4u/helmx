@@ -21,20 +21,7 @@
   .tiers-card-actions { justify-content: flex-start; }
 }
 
-/* ---- Composer one-turn model borrow menu item & compact pill ---- */
-.tiers-borrow-anchor-idle {
-  display: none;
-}
-
-.tiers-borrow-anchor-open {
-  display: inline-flex;
-  align-items: center;
-  width: 0;
-  height: 32px;
-  overflow: visible;
-  flex-shrink: 0;
-}
-
+/* ---- Composer one-turn model borrow compact pill ---- */
 .tiers-borrow-pill {
   display: inline-flex;
   align-items: center;
@@ -45,14 +32,6 @@
   overflow: hidden;
   flex-shrink: 0;
   transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease, color var(--dur-fast) ease;
-}
-
-.tiers-borrow-pill .composer-picker-root {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  max-width: none;
-  flex: 1 1 auto;
 }
 
 .tiers-borrow-pill--armed {
@@ -176,44 +155,6 @@
     padding: 0 3px 0 6px;
     font-size: 11px;
   }
-}
-
-.tiers-borrow-menu-item {
-  justify-content: flex-start;
-}
-
-.tiers-borrow-menu-icon {
-  flex-shrink: 0;
-  color: var(--fg-muted);
-}
-
-.tiers-borrow-menu-item--active .tiers-borrow-menu-icon {
-  color: var(--accent);
-}
-
-.tiers-borrow-menu-label {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tiers-borrow-menu-trailing {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  margin-left: 8px;
-}
-
-.tiers-borrow-menu-check {
-  color: var(--accent);
-}
-
-.tiers-borrow-menu-hint {
-  font-size: 11px;
-  color: var(--fg-subtle);
 }
 
 /* ---- Timeline 26px switch_model trace row ---- */

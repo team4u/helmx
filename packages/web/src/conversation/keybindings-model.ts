@@ -23,6 +23,7 @@ import type { QueuedConversationInput } from '@helmx/protocol/browser'
  * and tooltips; multi-key aliases are forbidden). */
 export const COMPOSER_SHORTCUTS = {
   toggleModelPicker: 'Ctrl+L',
+  togglePlusMenu: 'Ctrl+;',
   togglePlanMode: 'Ctrl+.',
   recallQueuedOrHistory: '↑',
   sendOrSteer: 'Enter',

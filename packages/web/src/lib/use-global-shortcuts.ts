@@ -11,12 +11,14 @@ import {
   hasDialogOpen,
   hasMultipleNewTopicProfiles,
   hasNonModelPickerDialogOpen,
+  hasNonPlusMenuOverlayOpen,
   hasNonProfilePickerDialogOpen,
   hasNonWorkbenchDialogOpen,
   isConversationAbortable,
   isEditableShortcutTarget,
   isInlineInputEscapeTarget,
   isPeriodShortcutKey,
+  isSemicolonShortcutKey,
   isSlashShortcutKey,
   resolveFocusedPanel,
   resolveNewTopicTarget,
@@ -138,6 +140,34 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         ) return
         event.preventDefault()
         store.toggleSidebarCollapsed()
+        return
+      }
+
+      if (isCtrlOnly && isSemicolonShortcutKey(event)) {
+        if (activeModal !== null || hasNonPlusMenuOverlayOpen()) return
+        const top = topDrawerFrame(drawerStack)
+        if (top?.kind === 'conversation') {
+          if (hasNonWorkbenchDialogOpen()) return
+          event.preventDefault()
+          store.clearEscAbortPrompt()
+          const detail: HelmxShortcutDetail = {
+            action: 'toggle-plus-menu',
+            panel: 'drawer',
+            drawerConversationId: top.conversationId,
+          }
+          window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
+          return
+        }
+        if (
+          drawerStack.length === 0 &&
+          !hasDialogOpen() &&
+          (activeTarget.kind === 'conversation' || activeTarget.kind === 'agent')
+        ) {
+          event.preventDefault()
+          store.clearEscAbortPrompt()
+          const detail: HelmxShortcutDetail = { action: 'toggle-plus-menu', panel }
+          window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
+        }
         return
       }
 

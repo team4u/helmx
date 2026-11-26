@@ -60,14 +60,10 @@ export const TIERS_COPY = {
   errDuplicateId: { en: 'Duplicate tier ID found; each tier ID must be unique.', 'zh-CN': '存在重复的档位 ID，请保持每个档位 ID 唯一。' },
   errModelRequired: { en: 'Every tier must bind a concrete target model before saving.', 'zh-CN': '保存前请为每个档位绑定一个具体目标模型。' },
   errTemplateFields: { en: 'Template ID and name are both required.', 'zh-CN': '请填写模板 ID 与模板名称。' },
-  borrowMenuLabel: { en: 'One-turn model', 'zh-CN': '单轮借用模型' },
-  borrowMenuBusyTitle: {
-    en: 'Wait for the current turn to finish before selecting a one-turn model.',
-    'zh-CN': '请等待当前回合结束后再选择单轮借用模型。',
-  },
-  borrowMenuActiveBusyHint: {
-    en: 'A one-turn model is active for this turn; click × on the toolbar pill to keep it after the turn.',
-    'zh-CN': '当前回合正在借用模型；可在工具栏胶囊点击 × 取消自动恢复。',
+  oneTurnTabLabel: { en: 'Next turn', 'zh-CN': '仅下一轮' },
+  oneTurnModeHint: {
+    en: 'Applies only to your next message, then restores automatically',
+    'zh-CN': '仅对下一条消息生效，回合结束后自动恢复原模型',
   },
   borrowPillArmedPrefix: { en: 'Next turn:', 'zh-CN': '下一轮:' },
   borrowPillActivePrefix: { en: 'This turn:', 'zh-CN': '本轮借用:' },
@@ -75,10 +71,6 @@ export const TIERS_COPY = {
   borrowClearActiveAria: {
     en: 'Cancel auto-restore and stay on the borrowed model',
     'zh-CN': '取消自动恢复并留在当前模型',
-  },
-  borrowBusyNotice: {
-    en: 'Cannot pick a one-turn model while the conversation is busy.',
-    'zh-CN': '会话正忙时无法选择单轮借用模型。',
   },
   toolSwitchModelTitle: { en: 'Switch model', 'zh-CN': '切换模型' },
   toolSwitchModelBadgeOneTurn: { en: 'One-turn', 'zh-CN': '单轮' },

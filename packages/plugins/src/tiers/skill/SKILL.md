@@ -58,7 +58,7 @@ When a **top-level human conversation** only needs a stronger or specialized mod
   - When `restoreAfterTurn` is `true` (default), Helmx automatically restores the conversation's original model and thinking level once the turn settles. **Simply continue and finish your answer — NEVER call `switch_model` a second time just to switch back.**
   - Pass `restoreAfterTurn: false` only when the user explicitly asks to switch the conversation permanently.
 - **User-initiated one-turn borrow**:
-  - Users can also trigger a one-turn borrow directly via `/model <tier-or-provider/model> <message>` (immediate borrow + clean message without prefix), `/model <target>` (arm next turn), or the Composer `+` menu (`One-turn model` / bare `/model` picker).
+  - Users can arm a one-turn borrow directly from the bottom model picker's top **"Next turn"** mode tab (or click the armed `[ Next turn: <model> × ]` toolbar pill to re-pick or cancel), or via `helmx tiers set-borrow --current --model <target> [--effort <level>]` / `builtin:tiers.set_borrow`.
 - **Plan mode boundary**:
   - While a conversation is in read-only `/plan` mode, tool access is restricted to the plan-mode read-only whitelist (`switch_model` is unavailable during planning; pick an execution model in `plan_propose` approval or borrow before/after planning).
 
