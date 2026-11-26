@@ -12,6 +12,7 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { deferred } from '@helmx/test-kit'
 import * as React from 'react'
 import { act } from 'react'
 import { ensureHappyDom } from './helpers/dom-harness.js'
@@ -70,6 +71,8 @@ test('global-defaults-model: rows map conversion and validation', { timeout: 60_
 interface PanelMount {
   container: HTMLElement
   putBodies: Array<Record<string, unknown>>
+  requestedPaths: string[]
+  store: ReturnType<typeof makeTestStore>
   unmount: () => Promise<void>
 }
 
@@ -85,6 +88,8 @@ interface MountDefaultsOptions {
     defaultCompactionThinkingLevel?: string
     modelTiers?: Array<{ id: string; model: string; thinkingLevel?: string; available: boolean; thinkingLevels?: string[] }>
   }
+  /** Optional interceptor for fetch requests (returning a Response overrides the default mock; returning undefined falls through). */
+  onRequest?: (path: string, init?: RequestInit) => Promise<Response | undefined> | Response | undefined
 }
 
 /** Mount ModelCenter on the defaults tab with a fetch mock echoing per-model pair updates. */
@@ -105,9 +110,15 @@ async function mountDefaultsPanel(savedMap: Record<string, string>, options: Mou
   })
   const levels: Record<string, string> = { ...savedDefaults.modelThinkingLevels }
   const putBodies: Array<Record<string, unknown>> = []
+  const requestedPaths: string[] = []
   const originalFetch = globalThis.fetch
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = typeof input === 'string' ? input : (input as URL).toString()
+    requestedPaths.push(path)
+    if (options.onRequest) {
+      const custom = await options.onRequest(path, init)
+      if (custom !== undefined) return custom
+    }
     if (path === '/api/models/providers') return new Response(JSON.stringify([]), { status: 200 })
     if (path === '/api/models/default' && init?.method === 'PUT') {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
@@ -172,6 +183,8 @@ async function mountDefaultsPanel(savedMap: Record<string, string>, options: Mou
   return {
     container,
     putBodies,
+    requestedPaths,
+    store,
     unmount: async () => {
       globalThis.fetch = originalFetch
       await act(async () => {
@@ -249,6 +262,8 @@ test('GlobalDefaultsPanel: partially filled per-model rows block saving with a l
     )!
     await click(saveBtn)
     assert.equal(panel.putBodies.length, 0, 'partial row (model without level) must block any PUT')
+    assert.equal(saveBtn.disabled, false, 'validation early return must clear saving state')
+    assert.notEqual(saveBtn.getAttribute('aria-busy'), 'true')
     assert.match(panel.container.textContent ?? '', /Set a thinking level for anthropic\/claude-3-7-sonnet/)
   } finally {
     await panel.unmount()
@@ -354,5 +369,261 @@ test('GlobalDefaultsPanel: a selected model tier shows its own preset (kernel-cl
     assert.match(panel.container.querySelector('.model-defaults-status')?.textContent ?? '', /thinking level: max/)
   } finally {
     await panel.unmount()
+  }
+})
+
+test('GlobalDefaultsPanel: save recovers clickable state after refreshAssets updates defaultModelInfo mid-save and supports a second save', { timeout: 60_000 }, async () => {
+  // Hold the first refreshAssets `/api/profiles` call after `/api/models` resolves so React
+  // flushes the updated `defaultModelInfo` effect before `handleSave` enters `finally`.
+  const firstProfilesGate = deferred<Response>()
+  let profilesCalls = 0
+  const panel = await mountDefaultsPanel({}, {
+    modelDefaults: {
+      defaultModel: 'anthropic/claude-3-7-sonnet',
+      defaultThinkingLevel: 'low',
+    },
+    onRequest: async (path) => {
+      if (path === '/api/profiles') {
+        profilesCalls += 1
+        if (profilesCalls === 1) return firstProfilesGate.promise
+      }
+      return undefined
+    },
+  })
+  try {
+    const findSaveBtn = () =>
+      Array.from(panel.container.querySelectorAll('button')).find(
+        (btn) => (btn.textContent ?? '').includes('Save global defaults') || (btn.textContent ?? '').includes('Saving'),
+      ) as HTMLButtonElement
+
+    // Pick another model before saving so `defaultModelInfo` changes after save.
+    const defaultBtn = panel.container.querySelector('#model-defaults-model') as HTMLButtonElement
+    await click(defaultBtn)
+    const popover = document.body.querySelector('.composer-model-popover')
+    assert.ok(popover)
+    const gptRow = Array.from(popover.querySelectorAll('button.composer-model-row-main')).find(
+      (btn) => btn.textContent?.includes('gpt-4o-mini'),
+    )
+    assert.ok(gptRow)
+    await click(gptRow!)
+
+    const saveBtn = findSaveBtn()
+    assert.equal(saveBtn.disabled, false)
+
+    // Trigger save; `/api/models` resolves and updates `defaultModelInfo` while `/api/profiles` is still pending.
+    await click(saveBtn)
+    assert.equal(panel.putBodies.length, 1)
+    assert.equal(panel.putBodies[0]?.model, 'openai/gpt-4o-mini')
+    assert.equal(saveBtn.disabled, true, 'save button stays pending while refreshAssets awaits /api/profiles')
+    assert.equal(saveBtn.getAttribute('aria-busy'), 'true')
+
+    // Complete `/api/profiles` so `handleSave` finishes after `useEffect([defaultModelInfo])` already ran.
+    await act(async () => {
+      firstProfilesGate.resolve(new Response(JSON.stringify([]), { status: 200 }))
+    })
+
+    const recoveredBtn = findSaveBtn()
+    assert.equal(recoveredBtn.disabled, false, 'save button must recover clickable state after defaultModelInfo syncs')
+    assert.notEqual(recoveredBtn.getAttribute('aria-busy'), 'true')
+    assert.match(recoveredBtn.textContent ?? '', /Save global defaults/)
+    assert.match(panel.container.textContent ?? '', /Configuration saved/)
+
+    // Switch back to claude-3-7-sonnet and save a second time to verify interactivity is restored.
+    await click(defaultBtn)
+    const secondPopover = document.body.querySelector('.composer-model-popover')
+    assert.ok(secondPopover)
+    const claudeRow = Array.from(secondPopover.querySelectorAll('button.composer-model-row-main')).find(
+      (btn) => btn.textContent?.includes('claude-3-7-sonnet'),
+    )
+    assert.ok(claudeRow)
+    await click(claudeRow!)
+
+    await click(recoveredBtn)
+    assert.equal(panel.putBodies.length, 2)
+    assert.equal(panel.putBodies[1]?.model, 'anthropic/claude-3-7-sonnet')
+    assert.equal(findSaveBtn().disabled, false)
+  } finally {
+    firstProfilesGate.resolve(new Response(JSON.stringify([]), { status: 200 }))
+    await panel.unmount()
+  }
+})
+
+test('GlobalDefaultsPanel: external defaultModelInfo sync during in-flight PUT does not block saving cleanup', { timeout: 60_000 }, async () => {
+  const firstPutGate = deferred<Response>()
+  let putCalls = 0
+  let externalDefaultModel = 'anthropic/claude-3-7-sonnet'
+  const panel = await mountDefaultsPanel({}, {
+    modelDefaults: {
+      defaultModel: 'anthropic/claude-3-7-sonnet',
+      defaultThinkingLevel: 'low',
+    },
+    onRequest: (path, init) => {
+      if (path === '/api/models/default' && init?.method === 'PUT') {
+        putCalls += 1
+        if (putCalls === 1) return firstPutGate.promise
+      }
+      if (path === '/api/models' && putCalls === 1) {
+        return new Response(
+          JSON.stringify({
+            models: CATALOG_MODELS.map((m) => ({
+              provider: m.provider,
+              modelId: m.modelId,
+              available: m.available,
+            })),
+            thinkingLevels: Object.fromEntries(CATALOG_MODELS.map((m) => [m.id, m.thinkingLevels])),
+            defaultModel: externalDefaultModel,
+            defaultThinkingLevel: 'high',
+            modelThinkingLevels: {},
+            defaultCompactionModel: '',
+            defaultCompactionThinkingLevel: '',
+          }),
+          { status: 200 },
+        )
+      }
+      return undefined
+    },
+  })
+  try {
+    const findSaveBtn = () =>
+      Array.from(panel.container.querySelectorAll('button')).find(
+        (btn) => (btn.textContent ?? '').includes('Save global defaults') || (btn.textContent ?? '').includes('Saving'),
+      ) as HTMLButtonElement
+
+    await click(findSaveBtn())
+    assert.equal(findSaveBtn().disabled, true)
+
+    // Trigger an external store refresh while the PUT is still pending.
+    externalDefaultModel = 'openai/gpt-4o-mini'
+    await act(async () => {
+      await panel.store.refreshAssets()
+    })
+    assert.equal(findSaveBtn().disabled, true, 'button remains pending until the active PUT finishes')
+
+    await act(async () => {
+      firstPutGate.resolve(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            defaultModel: 'anthropic/claude-3-7-sonnet',
+            defaultThinkingLevel: 'low',
+            modelThinkingLevels: {},
+            defaultCompactionModel: '',
+            defaultCompactionThinkingLevel: '',
+          }),
+          { status: 200 },
+        ),
+      )
+    })
+
+    const recoveredBtn = findSaveBtn()
+    assert.equal(recoveredBtn.disabled, false)
+    assert.notEqual(recoveredBtn.getAttribute('aria-busy'), 'true')
+    assert.match(panel.container.textContent ?? '', /Configuration saved/)
+
+    await click(recoveredBtn)
+    assert.equal(putCalls, 2)
+    assert.equal(findSaveBtn().disabled, false)
+  } finally {
+    firstPutGate.resolve(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          defaultModel: 'anthropic/claude-3-7-sonnet',
+          defaultThinkingLevel: 'low',
+          modelThinkingLevels: {},
+          defaultCompactionModel: '',
+          defaultCompactionThinkingLevel: '',
+        }),
+        { status: 200 },
+      ),
+    )
+    await panel.unmount()
+  }
+})
+
+test('GlobalDefaultsPanel: save failure clears saving state and allows retrying', { timeout: 60_000 }, async () => {
+  let shouldFail = true
+  const panel = await mountDefaultsPanel({}, {
+    modelDefaults: {
+      defaultModel: 'anthropic/claude-3-7-sonnet',
+      defaultThinkingLevel: 'high',
+    },
+    onRequest: (path, init) => {
+      if (path === '/api/models/default' && init?.method === 'PUT' && shouldFail) {
+        return new Response(JSON.stringify({ error: 'Save failed on server' }), { status: 500 })
+      }
+      return undefined
+    },
+  })
+  try {
+    const findSaveBtn = () =>
+      Array.from(panel.container.querySelectorAll('button')).find(
+        (btn) => (btn.textContent ?? '').includes('Save global defaults') || (btn.textContent ?? '').includes('Saving'),
+      ) as HTMLButtonElement
+
+    await click(findSaveBtn())
+    assert.equal(findSaveBtn().disabled, false, 'failed save must reset pending state')
+    assert.notEqual(findSaveBtn().getAttribute('aria-busy'), 'true')
+    assert.ok(panel.container.querySelector('[role="alert"]'), 'failed save must surface an error callout')
+
+    shouldFail = false
+    await click(findSaveBtn())
+    assert.equal(panel.putBodies.length, 1)
+    assert.equal(findSaveBtn().disabled, false)
+    assert.ok(panel.container.querySelector('[role="alert"]') === null)
+    assert.match(panel.container.textContent ?? '', /Configuration saved/)
+  } finally {
+    await panel.unmount()
+  }
+})
+
+test('GlobalDefaultsPanel: unmounting while save is in flight suppresses post-unmount refresh and state updates', { timeout: 60_000 }, async () => {
+  const putGate = deferred<Response>()
+  const panel = await mountDefaultsPanel({}, {
+    modelDefaults: {
+      defaultModel: 'anthropic/claude-3-7-sonnet',
+      defaultThinkingLevel: 'high',
+    },
+    onRequest: (path, init) => {
+      if (path === '/api/models/default' && init?.method === 'PUT') {
+        return putGate.promise
+      }
+      return undefined
+    },
+  })
+
+  const mockedFetch = globalThis.fetch
+
+  const saveBtn = Array.from(panel.container.querySelectorAll('button')).find(
+    (btn) => (btn.textContent ?? '').includes('Save global defaults'),
+  ) as HTMLButtonElement
+  await click(saveBtn)
+  assert.equal(saveBtn.disabled, true)
+  const pathsBeforeUnmount = panel.requestedPaths.length
+
+  await panel.unmount()
+  const restoredFetch = globalThis.fetch
+  globalThis.fetch = mockedFetch
+  try {
+    // Resolve the in-flight PUT after unmount; no refreshAssets or state updates should follow.
+    await act(async () => {
+      putGate.resolve(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            defaultModel: 'anthropic/claude-3-7-sonnet',
+            defaultThinkingLevel: 'high',
+            modelThinkingLevels: {},
+            defaultCompactionModel: '',
+            defaultCompactionThinkingLevel: '',
+          }),
+          { status: 200 },
+        ),
+      )
+      await Promise.resolve()
+    })
+    assert.equal(panel.requestedPaths.length, pathsBeforeUnmount)
+  } finally {
+    globalThis.fetch = restoredFetch
   }
 })
