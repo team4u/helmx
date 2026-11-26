@@ -162,11 +162,3 @@ export function subscribeMagpieAutoRefresh(options: MagpieAutoRefreshSubscriptio
 export function noteMagpieManualRefresh(checkedAt = Date.now()): void {
   getSharedCoordinator().noteManualRefresh(checkedAt)
 }
-
-/**
- * @deprecated Phase-1 compatibility bridge for `packages/web/test/magpie-client-interactions.test.tsx`;
- * prefer `createMagpieAutoRefreshCoordinator()` with `.dispose()` in isolated tests.
- */
-export function resetMagpieAutoRefreshForTest(): void {
-  getSharedCoordinator().dispose()
-}

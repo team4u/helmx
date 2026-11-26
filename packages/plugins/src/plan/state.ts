@@ -11,6 +11,11 @@ import {
   type PluginSessionDocHandle,
 } from '@helmx/protocol'
 import {
+  createKeyedQueue,
+  ignoreConversationNotFound,
+  listAllKvEntries,
+} from '../shared-helpers.js'
+import {
   isPlanConversationEligible,
   validateAndRedactPlanDraft,
   type PlanBadgeEntry,
@@ -133,17 +138,6 @@ function isNotFoundOrSettledError(err: unknown): boolean {
   )
 }
 
-function ignoreConversationNotFound(fn: () => void): void {
-  try {
-    fn()
-  } catch (err) {
-    if (err instanceof HelmxError && (err.status === 404 || err.code === 'not_found')) {
-      return
-    }
-    throw err
-  }
-}
-
 export const MAX_PLAN_BADGE_ENTRIES = 200
 
 function planBadgeRecencyMs(record: PlanConversationRecord | undefined): number {
@@ -186,7 +180,7 @@ export function createPlanStateManager(deps: {
   const { ctx, kv, planDoc, badgesDoc } = deps
 
   let stopping = false
-  const convQueues = new Map<number, Promise<unknown>>()
+  const convQueue = createKeyedQueue<number>()
   const inFlightAsks = new Map<string, PlanInFlightAsk>()
   const expectedHandoffResets = new Map<number, number>()
   const writtenBadgeJsonByConv = new Map<string, string>()
@@ -195,21 +189,8 @@ export function createPlanStateManager(deps: {
   let badgesByConv: Record<string, PlanBadgeEntry> = {}
   let badgesHydrated = false
 
-  const enqueueConversation = <T>(conversationId: number, op: () => Promise<T>): Promise<T> => {
-    const prev = convQueues.get(conversationId) ?? Promise.resolve()
-    const run = prev.then(op, op)
-    const settled = run.then(
-      () => undefined,
-      () => undefined,
-    )
-    convQueues.set(conversationId, settled)
-    void settled.then(() => {
-      if (convQueues.get(conversationId) === settled) {
-        convQueues.delete(conversationId)
-      }
-    })
-    return run
-  }
+  const enqueueConversation = <T>(conversationId: number, op: () => Promise<T>): Promise<T> =>
+    convQueue.enqueue(conversationId, op)
 
   const kvKey = (conversationId: number): string => String(conversationId)
 
@@ -230,23 +211,8 @@ export function createPlanStateManager(deps: {
 
   const listAllRecords = (): PlanConversationRecord[] => {
     const recordsByKey = new Map<string, PlanConversationRecord>()
-    const seenCursors = new Set<string>()
-    let cursor: string | undefined
-    for (;;) {
-      const page = kv.list(cursor !== undefined ? { cursor } : undefined)
-      for (const item of page.items) {
-        recordsByKey.set(item.key, item.value)
-      }
-      if (
-        page.nextCursor === undefined ||
-        page.nextCursor === '' ||
-        page.nextCursor === cursor ||
-        seenCursors.has(page.nextCursor)
-      ) {
-        break
-      }
-      seenCursors.add(page.nextCursor)
-      cursor = page.nextCursor
+    for (const item of listAllKvEntries(kv)) {
+      recordsByKey.set(item.key, item.value)
     }
     return [...recordsByKey.values()]
   }

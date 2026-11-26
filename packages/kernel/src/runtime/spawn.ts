@@ -116,6 +116,19 @@ export interface ResolvedProfile {
   nodeId?: string
 }
 
+export interface RegisterChildConversationOptions {
+  readonly childId: number
+  readonly parentId: number
+  readonly profileId: string
+  readonly childCwd: string
+  readonly modelMirror: string
+  readonly tags: string[]
+  readonly thinkingLevel?: string
+  readonly nodeId?: string
+  readonly thinkingLevelOverride?: string
+  readonly title?: string
+}
+
 /**
  * Dependency ports for native spawn (host-injected; assembled in `runtime.ts`).
  * `resolveProfile` returning `undefined` means missing profile (throws explicitly instead of defaulting).
@@ -171,21 +184,8 @@ export interface NativeSpawnDeps extends HelmxToolDeps {
    * `thinkingLevel` is the effective SDK effort (already clamped to target model capability) to avoid re-reading
    * ambiguous inheritance sources; `thinkingLevelOverride` is the clamped explicit override (`undefined` if
    * `request.effort` was omitted, preserving inheritance chain semantics).
-   *
-   * // Phase-2: convert to options object alongside packages/plugins/test/native-worktree.test.ts
    */
-  registerChildConversation(
-    childId: number,
-    parentId: number,
-    profileId: string,
-    childCwd: string,
-    modelMirror: string,
-    tags: string[],
-    thinkingLevel?: string,
-    nodeId?: string,
-    thinkingLevelOverride?: string,
-    title?: string,
-  ): Promise<void>
+  registerChildConversation(options: RegisterChildConversationOptions): Promise<void>
   /**
    * Update child's `parentToolCallId` on resume to correlate with this parent tool call
    * (optional; host updates snapshot and broadcasts `conversation.upsert`). No-op if untracked.
@@ -727,18 +727,18 @@ async function createChildConversation(options: CreateChildConversationOptions):
   claimSpawnConversation(deps.harness, childId)
   execution.childId = childId
   const resolvedTitle = normalizeSpawnTitle(request.title, childId, deps.redact)
-  await deps.registerChildConversation(
+  await deps.registerChildConversation({
     childId,
-    request.parentConversationId,
+    parentId: request.parentConversationId,
     profileId,
-    target.childCwd,
-    createModelRef,
-    [],
-    thinkingLevel,
-    target.nodeId,
-    thinkingLevelOverride,
-    resolvedTitle,
-  )
+    childCwd: target.childCwd,
+    modelMirror: createModelRef,
+    tags: [],
+    ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+    nodeId: target.nodeId,
+    ...(thinkingLevelOverride !== undefined ? { thinkingLevelOverride } : {}),
+    title: resolvedTitle,
+  })
   request.onResolved?.({
     nodeId: target.nodeId,
     conversationId: childId,

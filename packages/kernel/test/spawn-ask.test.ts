@@ -76,7 +76,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
     resolveModel: () => ({ provider: 'faux', modelId: 'faux-1' }),
     agentSessions: new Map(),
     structuredOutputSessions: new Map(),
-    registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, _tags) => {
+    registerChildConversation: async ({ childId, parentId, profileId, childCwd, modelMirror }) => {
       parents.set(childId, parentId)
       mirrors.set(childId, {
         profileId,
@@ -995,9 +995,9 @@ describe('spawn parentToolCallId: real-time binding between parent tool call ID 
       th.faux.setResponses([fauxAssistantMessage('done')])
       let registeredChildId: number | undefined
       const originalRegister = th.deps.registerChildConversation
-      th.deps.registerChildConversation = async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel) => {
-        registeredChildId = childId
-        return originalRegister(childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel)
+      th.deps.registerChildConversation = async (options) => {
+        registeredChildId = options.childId
+        return originalRegister(options)
       }
       // Host runtime.ts injects parentToolCallId from api.callId in createSubagentTool;
       // engine contract: forward request field verbatim without swallowing or modifying (host callback persists mirror).

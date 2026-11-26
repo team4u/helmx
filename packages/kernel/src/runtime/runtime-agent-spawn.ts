@@ -426,7 +426,7 @@ export class RuntimeAgentSpawn {
       installChildExtension: (extension) => {
         this.deps.registry.install(extension as never)
       },
-      registerChildConversation: async (
+      registerChildConversation: async ({
         childId,
         parentId,
         profileId,
@@ -437,7 +437,7 @@ export class RuntimeAgentSpawn {
         nodeId,
         thinkingLevelOverride,
         title,
-      ) => {
+      }) => {
         const profile = await this.deps.conversations.readProfile(profileId)
         const parentMeta = this.deps.store.getConv(parentId)
         const { forkSameProfile } = resolveForkMode(profileId, finalRequest.fork, parentMeta?.profileId)

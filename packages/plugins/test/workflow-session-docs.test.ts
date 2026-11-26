@@ -423,7 +423,7 @@ test('会话删除事件触发重投影：祖先分片失去该子树 run，孤�
   // 会话 11 删除 → conversation.deleted 事件 → 重投影。
   backend.conversations.delete(11)
   const eventsFor11Before = sessionDocEvents().filter((e) => e.doc.conversationId === 11).length
-  backend.emit('conversation.deleted', { conversationId: 11 })
+  backend.emit('conversation.deleted', { type: 'conversation.deleted', conversationId: 11 })
   await tick()
 
   assert.equal(readShard(host, 1).runs.length, 0, `删除后根分片失去该子树 run（实际 ${JSON.stringify(readShard(host, 1))}）`)

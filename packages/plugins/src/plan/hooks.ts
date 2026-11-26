@@ -1,15 +1,18 @@
 /**
  * builtin:plan lifecycle hooks (`input`, `before_turn`) and `conversation.deleted` listener.
  */
-import { HelmxError, type ConversationSummary, type HelmxPluginContext } from '@helmx/protocol'
+import type { HelmxPluginContext } from '@helmx/protocol'
+import {
+  asConversationEntryEvent,
+  asDeletedConversationId,
+  getConversationOrUndefined,
+} from '../shared-helpers.js'
 import {
   PLAN_MODE_SECTION_ID,
   PLAN_MODE_TOOL_WHITELIST,
   PLAN_TOOL_BASH,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
-  asConversationEntryEvent,
-  asPlanDeletedConversationId,
   hasPlanModeInputMeta,
   isPlanConversationEligible,
   parsePlanSlashInput,
@@ -31,20 +34,6 @@ const PLAN_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_BASH,
 ])
-
-function getConversationOrUndefined(
-  read: (id: number) => ConversationSummary,
-  id: number,
-): ConversationSummary | undefined {
-  try {
-    return read(id)
-  } catch (err) {
-    if (err instanceof HelmxError && (err.status === 404 || err.code === 'not_found')) {
-      return undefined
-    }
-    throw err
-  }
-}
 
 export function registerPlanHooks(ctx: HelmxPluginContext, state: PlanStateManager): void {
   ctx.hook.onInput(
@@ -136,7 +125,7 @@ export function registerPlanHooks(ctx: HelmxPluginContext, state: PlanStateManag
   )
 
   ctx.host.onEvent('conversation.deleted', async (payload) => {
-    const conversationId = asPlanDeletedConversationId(payload)
+    const conversationId = asDeletedConversationId(payload)
     if (conversationId === undefined) return
     await state.cleanupDeletedConversation(conversationId)
   })

@@ -4,7 +4,11 @@
  * timeline / node drawer (the host reuses them via this package instead of
  * keeping separate copies).
  */
-import type { ConversationStatus } from '@helmx/protocol/browser'
+export {
+  resolveConversationTiming,
+  type ConversationTimingInput,
+  type ConversationTimingSnapshot,
+} from '@helmx/protocol/browser'
 
 /**
  * Humanize a byte count: base 1024 with KiB / MiB / GiB labels.
@@ -106,86 +110,4 @@ export function formatOffsetMs(ms: number | undefined): string {
   const hours = Math.floor(totalSeconds / 3600)
   const minutes = Math.floor((totalSeconds % 3600) / 60)
   return `+${hours}:${pad2(minutes)}:${pad2(seconds)}`
-}
-
-/** Structural subset of `ConversationSummary` required by `resolveConversationTiming`. */
-export interface ConversationTimingInput {
-  status: ConversationStatus
-  runDurationMs?: number
-  runStartedAt?: number
-  pendingAskSince?: number
-  pendingAskCount?: number
-}
-
-/**
- * Honest timing view derived from a conversation summary and an optional wall-clock reading `nowMs`.
- *
- * Contract:
- * - `settledRunMs`: cumulative settled logical-turn in-flight duration in ms (`0` when absent/invalid);
- * - `currentRunMs`: live elapsed ms of the active turn (`max(0, nowMs - runStartedAt)`), present ONLY when
- *   `isRunning === true` and both `runStartedAt` and `nowMs` are valid non-negative finite numbers
- *   (never fabricated when `runStartedAt` or `nowMs` is absent);
- * - `totalRunMs`: `settledRunMs + (currentRunMs ?? 0)` when `settledRunMs > 0` or `currentRunMs !== undefined`;
- *   `undefined` when neither settled duration (`settledRunMs === 0`) nor live elapsed time (`currentRunMs === undefined`)
- *   is present so idle conversations without recorded work stay unambiguously empty;
- * - `waitingMs`: live elapsed ms waiting on the earliest pending AskDoc (`max(0, nowMs - pendingAskSince)`),
- *   present ONLY when `isBlocked === true`, `pendingAskCount` is either omitted or a positive finite number,
- *   and both `pendingAskSince` and `nowMs` are valid non-negative finite numbers;
- * - `nowMs` participates ONLY while `isRunning` or `isBlocked` (never leaks live wall-clock deltas into idle/done/error states).
- */
-export interface ConversationTimingSnapshot {
-  settledRunMs: number
-  currentRunMs?: number
-  totalRunMs?: number
-  waitingMs?: number
-  isRunning: boolean
-  isBlocked: boolean
-}
-
-function isNonNegativeFinite(value: number | undefined): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
-}
-
-/**
- * Pure timing resolver for a conversation summary and an optional calibrated wall clock (`nowMs`).
- * Never calls `Date.now()` internally (SSR-safe and deterministic) and never fabricates missing start anchors.
- */
-export function resolveConversationTiming(
-  conv: ConversationTimingInput,
-  nowMs?: number,
-): ConversationTimingSnapshot {
-  const settledRunMs = isNonNegativeFinite(conv.runDurationMs) ? conv.runDurationMs : 0
-  const hasPendingAsk =
-    typeof conv.pendingAskCount === 'number' &&
-    Number.isFinite(conv.pendingAskCount) &&
-    conv.pendingAskCount > 0
-  const isBlocked = conv.status === 'blocked' || hasPendingAsk
-  const hasRunStart = isNonNegativeFinite(conv.runStartedAt)
-  const isRunning = conv.status === 'working' || (isBlocked && hasRunStart)
-  const hasNow = isNonNegativeFinite(nowMs)
-
-  const currentRunMs =
-    isRunning && hasRunStart && hasNow ? Math.max(0, nowMs - conv.runStartedAt!) : undefined
-  const waitingMs =
-    isBlocked &&
-    (conv.pendingAskCount === undefined || hasPendingAsk) &&
-    isNonNegativeFinite(conv.pendingAskSince) &&
-    hasNow
-      ? Math.max(0, nowMs - conv.pendingAskSince)
-      : undefined
-  const totalRunMs =
-    currentRunMs !== undefined
-      ? settledRunMs + currentRunMs
-      : settledRunMs > 0
-        ? settledRunMs
-        : undefined
-
-  return {
-    settledRunMs,
-    ...(currentRunMs !== undefined ? { currentRunMs } : {}),
-    ...(totalRunMs !== undefined ? { totalRunMs } : {}),
-    ...(waitingMs !== undefined ? { waitingMs } : {}),
-    isRunning,
-    isBlocked,
-  }
 }

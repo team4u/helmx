@@ -67,7 +67,7 @@ test('composerCompleter: disallowed client track, trigger allowlist, and source 
         label: 'x',
         trigger: '@',
         source: { kind: 'action', actionId: 'x' },
-        client: { module: './x.tsx', export: 'X' },
+        client: { module: 'x.tsx', export: 'X' },
       }, 'composerCompleter'),
     isHelmxError('invalid_ui_spec'),
     'client track should be rejected',
@@ -101,7 +101,7 @@ test('plugin.slot: requires client reference, clientRoot, valid relative module 
   ui.registerUi(
     'p1',
     'plugin.slot',
-    { id: 'slot-ok', target: 'owner/panel', client: { module: './slot.tsx', export: 'SlotPanel' } },
+    { id: 'slot-ok', target: 'owner/panel', client: { module: 'slot.tsx', export: 'SlotPanel' } },
     'slot',
     '/tmp/client-root',
   );
@@ -116,7 +116,7 @@ test('plugin.slot: requires client reference, clientRoot, valid relative module 
       ui.registerUi(
         'p1',
         'plugin.slot',
-        { id: 'no-root', target: 'owner/panel', client: { module: './slot.tsx', export: 'SlotPanel' } },
+        { id: 'no-root', target: 'owner/panel', client: { module: 'slot.tsx', export: 'SlotPanel' } },
         'slot',
       ),
     isHelmxError('invalid_ui_spec'),
@@ -139,7 +139,7 @@ test('plugin.slot: requires client reference, clientRoot, valid relative module 
       noBuilderUi.registerUi(
         'p1',
         'plugin.slot',
-        { id: 'no-builder', target: 'owner/panel', client: { module: './slot.tsx', export: 'SlotPanel' } },
+        { id: 'no-builder', target: 'owner/panel', client: { module: 'slot.tsx', export: 'SlotPanel' } },
         'slot',
         '/tmp/client-root',
       ),
@@ -199,7 +199,7 @@ test('display copy fields: one registerUi guard covers label/title/description o
       id: 'slot',
       target: 'owner/panel',
       title: { en: 'Extra', 'zh-CN': '扩展' },
-      client: { module: './slot.tsx', export: 'SlotView' },
+      client: { module: 'slot.tsx', export: 'SlotView' },
     },
     'slot',
     '/tmp/client-root',

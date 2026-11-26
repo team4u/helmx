@@ -86,7 +86,7 @@ async function openSpawnEnv(options: {
     resolveModel: () => ({ provider: 'faux', modelId: 'faux-1' }),
     agentSessions: new Map(),
     structuredOutputSessions: new Map(),
-    registerChildConversation: async (childId, parentId, profileId, childCwd, _modelMirror, _tags, _thinking, nodeId) => {
+    registerChildConversation: async ({ childId, parentId, profileId, childCwd, nodeId }) => {
       parents.set(childId, parentId)
       mirrors.set(childId, { profileId, cwd: childCwd, ...(nodeId !== undefined ? { nodeId } : {}), model: 'faux/faux-1' })
       const conv = await harness.conversation(childId as never, BACKGROUND_CONTEXT)

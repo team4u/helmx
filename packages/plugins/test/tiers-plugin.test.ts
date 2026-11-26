@@ -966,7 +966,7 @@ test('integration: builtin:tiers registers no /model command or menu slot, leave
     // Confirm zero tiers are configured & no command/menu slot registered
     assert.equal((await kernel.models.listModels()).modelTiers, undefined)
     const tiersUi = kernel.plugins.listUi().filter((u) => u.pluginId === TIERS_PLUGIN_ID)
-    assert.equal(tiersUi.some((u) => u.surface === 'command' || u.surface === 'commandPalette'), false)
+    assert.equal(tiersUi.some((u) => u.surface === 'commandPalette'), false)
     assert.equal(
       tiersUi.some(
         (u) =>

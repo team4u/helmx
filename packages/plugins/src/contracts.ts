@@ -13,7 +13,17 @@
  * 不携带运行时服务；业务值在消费方边界用这里的 schema 显式验证，非法输入
  * 显式拒绝、诊断不退化。protocol 不再出口这些类型。
  */
-import { HelmxError, sanitizeAgentNamespacedMeta, validateOrThrow, type AgentExecutionInfo, type AgentNamespacedMeta, type JsonSafeObject, type JsonSafeValue, type JsonSchema } from '@helmx/protocol'
+import {
+  HelmxError,
+  sanitizeAgentNamespacedMeta,
+  validateOrThrow,
+  type AgentExecutionInfo,
+  type AgentNamespacedMeta,
+  type JsonSafeObject,
+  type JsonSafeValue,
+  type JsonSchema,
+  type LocalizedText,
+} from '@helmx/protocol'
 import { isAbsoluteAgentPath } from '@helmx/protocol'
 import type {
   WorkflowNodeState,
@@ -139,7 +149,7 @@ export const WORKFLOW_RUN_BADGES_DOC = 'run-badges' as const
 interface WorkflowConversationBadgeSummary {
   count: number
   tone?: 'warn' | 'accent' | 'neutral'
-  footerText?: string
+  footerText?: LocalizedText
 }
 
 /** `builtin:workflow` 会话级文档 `runs` 的分片快照（当前会话及后代的 run，保留直接归属）。 */

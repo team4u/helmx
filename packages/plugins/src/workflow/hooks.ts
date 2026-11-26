@@ -8,6 +8,11 @@
 import { HelmxError, type DispatchToolsCapability, type HelmxPluginContext } from '@helmx/protocol'
 import { WORKFLOW_PLUGIN_ID, parseWorkflowSpawnMeta } from '../contracts.js'
 import { isAncestorOrSelf } from '../lineage.js'
+import {
+  asDeletedConversationId,
+  errorMessageOf,
+  getConversationOrUndefined,
+} from '../shared-helpers.js'
 import { WORKFLOW_STEER_TOOL_NAME } from './actions.js'
 import { depthExceededError, type ManagedSubagentRegistry } from './depth.js'
 import type { RunsProjection } from './projection.js'
@@ -27,15 +32,6 @@ interface WorkflowHookDeps {
   registry: ManagedSubagentRegistry
   workflows: WorkflowService
   projection: RunsProjection
-}
-
-function extractDeletedConversationId(payload: unknown): number | undefined {
-  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined
-  const record = payload as Record<string, unknown>
-  const candidate = record['conversationId'] ?? record['id']
-  return typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate >= 1
-    ? candidate
-    : undefined
 }
 
 export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHookDeps): void {
@@ -85,14 +81,8 @@ export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHoo
   const hasActiveSteerableSubagent = (callerId: number): boolean => {
     const active = workflows.listActiveRuns()
     if (active.length === 0) return false
-    const parentOf = (id: number): number | undefined => {
-      try {
-        return ctx.host.getConversation(id).parentConversationId
-      } catch (error) {
-        if (error instanceof HelmxError && error.code === 'not_found') return undefined
-        throw error
-      }
-    }
+    const parentOf = (id: number): number | undefined =>
+      getConversationOrUndefined(ctx.host, id)?.parentConversationId
     for (const run of active) {
       if (run.kind !== 'subagent' || run.status !== 'running') continue
       if (run.conversationId === callerId || isAncestorOrSelf(run.conversationId, callerId, parentOf)) {
@@ -146,7 +136,7 @@ export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHoo
     if (ctx.host.isClosing && workflows.isAutoRecoverOnRestart()) return
     const conversationId = payload.conversation.id
     void workflows.cancelRunsUnderConversation(conversationId).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = errorMessageOf(error)
       process.stderr.write(
         `builtin:workflow: 会话 ${conversationId} 中止后的后台运行级联取消失败: ${message}\n`,
       )
@@ -159,7 +149,7 @@ export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHoo
     projection.reprojectOnConversationTreeChange()
   })
   ctx.host.onEvent('conversation.deleted', (raw) => {
-    const deletedId = extractDeletedConversationId(raw)
+    const deletedId = asDeletedConversationId(raw)
     if (!projection.isStopping() && deletedId !== undefined) {
       registry.pruneConversation(deletedId)
       projection.reprojectOnConversationDeleted(deletedId)
@@ -171,7 +161,7 @@ export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHoo
           }
         })
         .catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error)
+          const message = errorMessageOf(error)
           process.stderr.write(`builtin:workflow: 会话 ${deletedId} 删除后的运行记录清理失败: ${message}\n`)
         })
       return

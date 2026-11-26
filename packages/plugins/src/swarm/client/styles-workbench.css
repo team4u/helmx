@@ -216,8 +216,8 @@
 .sw-panel-post-text.msg-ai-body li > p { margin: 0; }
 .sw-panel-post-text.msg-ai-body :is(blockquote, pre, hr) { margin: 6px 0; }
 .sw-panel-post-text.msg-ai-body code:not(pre code) { font-size: 12px; padding: 1px 4px; }
-.sw-panel-post-text.msg-ai-body table:not(.helmx-table):not(.jr-table) { font-size: 12px; }
-.sw-panel-post-text.msg-ai-body table:not(.helmx-table):not(.jr-table) :is(th, td) { padding: 4px 8px; }
+.sw-panel-post-text.msg-ai-body table:not(.helmx-table) { font-size: 12px; }
+.sw-panel-post-text.msg-ai-body table:not(.helmx-table) :is(th, td) { padding: 4px 8px; }
 .sw-panel-post-text.msg-ai-body > :first-child { margin-top: 0; }
 .sw-panel-post-text.msg-ai-body > :last-child { margin-bottom: 0; }
 

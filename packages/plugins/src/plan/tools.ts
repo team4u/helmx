@@ -30,6 +30,7 @@ import {
 } from './contracts.js'
 import { validateReadOnlyShellCommand } from './read-only-shell.js'
 import type { PlanStateManager } from './state.js'
+import { errorMessageOf } from '../shared-helpers.js'
 
 const utf8Encoder = new TextEncoder()
 
@@ -52,10 +53,6 @@ interface ParsedProposalAnswers {
   feedback: string
   selectedModel?: string
   selectedThinkingLevel?: string
-}
-
-function errorMessageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
 }
 
 function toolError(

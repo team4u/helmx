@@ -29,11 +29,7 @@ const {
   shouldShowInlineWindowLabel,
 } = await import('../../plugins/src/magpie/client/quota-model.js')
 const { parseStatus } = await import('../../plugins/src/magpie/client/models.js')
-const {
-  noteMagpieManualRefresh,
-  resetMagpieAutoRefreshForTest,
-  subscribeMagpieAutoRefresh,
-} = await import('../../plugins/src/magpie/client/auto-refresh.js')
+const { createMagpieAutoRefreshCoordinator } = await import('../../plugins/src/magpie/client/auto-refresh.js')
 type HelmxLocale = 'en' | 'zh-CN'
 
 const e = React.createElement
@@ -608,10 +604,10 @@ describe("magpie-client-interactions", () => {
     assert.equal(summary.primary?.windows[0]?.remainingPercent, 42)
 
     // auto-refresh 协调器单飞 + 手动刷新抑制 + 0ms 关闭
-    resetMagpieAutoRefreshForTest()
+    const coordinator = createMagpieAutoRefreshCoordinator()
     try {
       let calls = 0
-      const unsubOff = subscribeMagpieAutoRefresh({
+      const unsubOff = coordinator.subscribe({
         intervalMs: 0,
         run: async () => {
           calls += 1
@@ -620,8 +616,8 @@ describe("magpie-client-interactions", () => {
       assert.equal(calls, 0, 'intervalMs=0 不触发刷新')
       unsubOff()
 
-      noteMagpieManualRefresh(Date.now())
-      const unsubRecent = subscribeMagpieAutoRefresh({
+      coordinator.noteManualRefresh(Date.now())
+      const unsubRecent = coordinator.subscribe({
         intervalMs: 5000,
         run: async () => {
           calls += 1
@@ -630,7 +626,7 @@ describe("magpie-client-interactions", () => {
       assert.equal(calls, 0, '刚手动刷新完不立刻重发自动刷新')
       unsubRecent()
     } finally {
-      resetMagpieAutoRefreshForTest()
+      coordinator.dispose()
     }
   })
 

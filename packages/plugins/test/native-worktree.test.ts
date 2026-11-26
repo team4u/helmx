@@ -252,7 +252,7 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
     getLastAssistantText: (id) => lastTexts.get(id),
     resolveModel: () => ({ provider: 'faux', modelId: 'faux-1' }),
     agentSessions: new Map(),
-    registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror) => {
+    registerChildConversation: async ({ childId, parentId, profileId, childCwd, modelMirror }) => {
       parents.set(childId, parentId)
       mirrors.set(childId, {
         profileId,

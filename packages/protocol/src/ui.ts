@@ -591,8 +591,7 @@ export type KnownPluginUiContribution =
   | { pluginId: string; surface: 'tool.view'; spec: ToolViewSpec }
   | { pluginId: string; surface: 'composer.completer'; spec: ComposerCompleterSpec }
   | { pluginId: string; surface: 'workbench.panel'; spec: WorkbenchPanelSpec }
-  // Phase-2 removal: keep 'command' union member until packages/web/src/lib/types.ts drops case 'command'
-  | { pluginId: string; surface: 'commandPalette' | 'command'; spec: CommandSpec }
+  | { pluginId: string; surface: 'commandPalette'; spec: CommandSpec }
   | { pluginId: string; surface: 'settings.panel'; spec: SettingsPanelSpec }
   | { pluginId: string; surface: 'plugin.slot'; spec: PluginSlotContributionSpec }
 
@@ -606,8 +605,6 @@ export const KNOWN_PLUGIN_UI_SURFACES = [
   'composer.completer',
   'workbench.panel',
   'commandPalette',
-  // Phase-2 removal: deprecated legacy alias kept for Phase-1 cross-package parity
-  'command',
   'settings.panel',
   'plugin.slot',
 ] as const satisfies readonly KnownPluginUiContribution['surface'][]
@@ -667,7 +664,6 @@ export function parsePluginUiContribution(
     case 'workbench.panel':
       return { pluginId, surface, spec: asSurfaceSpec<WorkbenchPanelSpec>(item.spec) }
     case 'commandPalette':
-    case 'command':
       return { pluginId, surface, spec: normalizeCommandSpec(item.spec, validatedSpec) }
     case 'settings.panel':
       return { pluginId, surface, spec: asSurfaceSpec<SettingsPanelSpec>(item.spec) }

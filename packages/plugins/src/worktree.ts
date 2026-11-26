@@ -13,6 +13,7 @@
 import type { PluginDefinition } from '@helmx/protocol'
 import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
 import { WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID } from './contracts.js'
+import { asDeletedConversationId } from './shared-helpers.js'
 import { WorktreeIsolation } from './worktree/isolation.js'
 import { registerWorktreeActions } from './worktree/actions.js'
 import { resolveWorktreeContextSection, WORKTREE_CONTEXT_SECTION_ID } from './worktree/worktree-context.js'
@@ -100,8 +101,8 @@ export function createWorktreePlugin(): PluginDefinition {
       })
 
       ctx.host.onEvent('conversation.deleted', (event) => {
-        const candidate = event.conversationId
-        if (typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate >= 1) {
+        const candidate = asDeletedConversationId(event)
+        if (candidate !== undefined) {
           isolation.pruneConversation(candidate)
         }
       })

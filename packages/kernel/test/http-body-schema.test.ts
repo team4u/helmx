@@ -2,7 +2,7 @@
  * Behavior-parity regression tests after migrating HTTP body boundary validation to JSON Schema (AJV):
  * Mechanical type/shape/unknown-field validation moved to JSON Schema must retain identical rejection
  * criteria to the hand-written checks, especially:
- * - Unknown fields still universally return 400 (except auth setup/login, which keep wider compatibility);
+ * - Unknown fields universally return 400 (including auth setup/login);
  * - Explicit null and undefined are both rejected (not silently treated as absent);
  * - Endpoint-specific trim semantics are pinned (install source rejects whitespace; models refresh
  *   provider only rejects empty string; upgrade targetVersion allows leading/trailing whitespace);
@@ -718,12 +718,13 @@ test('env exec: command shape, env key/value, absolute cwd, numeric bounds, and 
 // Auth compatibility and diagnostic errors
 // ---------------------------------------------------------------------------
 
-test('auth setup/login: preserves wide compatibility with historical unknown fields while validating password shape strictly', { timeout: 60_000 }, async () => {
+test('auth setup/login: rejects unknown fields while validating password shape strictly', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
-  const withExtra = await call(kernel, 'POST', '/api/auth/setup', { password: 'long-enough-password', extra: 1 })
-  assert.equal(withExtra.status, 200)
-  assert.equal(calls.authSetup![0], 'long-enough-password')
+  await expect400(kernel, 'POST', '/api/auth/setup', { password: 'long-enough-password', extra: 1 })
+  await expect400(kernel, 'POST', '/api/auth/login', { password: 'long-enough-password', extra: 1 })
+  assert.deepEqual(calls.authSetup, [])
+  assert.deepEqual(calls.authLogin, [])
   await expect400(kernel, 'POST', '/api/auth/setup', {})
   await expect400(kernel, 'POST', '/api/auth/setup', { password: '' })
   await expect400(kernel, 'POST', '/api/auth/setup', { password: 1 })

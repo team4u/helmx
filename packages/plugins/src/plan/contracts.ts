@@ -8,6 +8,13 @@ import {
   type JsonSchema,
 } from '@helmx/protocol'
 import type { PluginClientAssets } from '../asset-paths.js'
+import {
+  asConversationEntryEvent,
+  asDeletedConversationId,
+  isTopLevelHumanConversation,
+} from '../shared-helpers.js'
+
+export { asConversationEntryEvent, asDeletedConversationId as asPlanDeletedConversationId }
 
 export const PLAN_PLUGIN_ID = 'builtin:plan' as const
 export const PLAN_SESSION_DOC = 'plan' as const
@@ -189,14 +196,7 @@ const PLAN_SLASH_RE = /^\/plan(?:\s+([\s\S]*))?$/
 export function isPlanConversationEligible(
   conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy'>,
 ): boolean {
-  return conv.parentConversationId === undefined && (conv.ownedBy ?? 'human') === 'human'
-}
-
-export function asPlanDeletedConversationId(payload: unknown): number | undefined {
-  if (!isJsonObject(payload)) return undefined
-  if (payload['type'] !== undefined && payload['type'] !== 'conversation.deleted') return undefined
-  const id = payload['conversationId']
-  return typeof id === 'number' && Number.isSafeInteger(id) && id >= 1 ? id : undefined
+  return isTopLevelHumanConversation(conv)
 }
 
 export function parsePlanSlashInput(
@@ -205,23 +205,6 @@ export function parsePlanSlashInput(
   const match = PLAN_SLASH_RE.exec(text.trim())
   if (match === null) return { matched: false }
   return { matched: true, remainder: (match[1] ?? '').trim() }
-}
-
-/** Extract `{ conversationId, kind }` from a `conversation.entry` host event payload. */
-export function asConversationEntryEvent(
-  payload: unknown,
-): { conversationId: number; kind: string } | undefined {
-  if (!isJsonObject(payload)) return undefined
-  if (payload['type'] !== undefined && payload['type'] !== 'conversation.entry') return undefined
-  const conversationId = payload['conversationId']
-  if (typeof conversationId !== 'number' || !Number.isSafeInteger(conversationId) || conversationId < 1) {
-    return undefined
-  }
-  const entry = payload['entry']
-  if (!isJsonObject(entry) || typeof entry['kind'] !== 'string' || entry['kind'] === '') {
-    return undefined
-  }
-  return { conversationId, kind: entry['kind'] }
 }
 
 /** Check whether `input.meta['builtin:plan']` explicitly requests entering planning mode. */

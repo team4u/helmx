@@ -6,11 +6,10 @@ import {
   COMPOSER_DOCK_SLOT,
   COMPOSER_MENU_SLOT,
   COMPOSER_TOOLBAR_SLOT,
-  HelmxError,
-  type PluginActionContext,
   type PluginDefinition,
 } from '@helmx/protocol'
 import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
+import { resolveTargetConversationId } from './shared-helpers.js'
 import {
   PLAN_BADGES_DOC,
   PLAN_COMMAND_ID,
@@ -85,36 +84,6 @@ function readPlanSkillAsset() {
     relativeDir: 'plan/skill',
     missingErrorCode: 'plan_skill_missing',
   })
-}
-
-function resolveTargetConversationId(
-  inputConversationId: number | undefined,
-  context: PluginActionContext,
-): number {
-  if (
-    inputConversationId !== undefined &&
-    context.conversationId !== undefined &&
-    inputConversationId !== context.conversationId
-  ) {
-    throw new HelmxError(
-      'validation_error',
-      `Conflicting conversationId: input ${inputConversationId} does not match context ${context.conversationId}`,
-      400,
-      {
-        inputConversationId,
-        contextConversationId: context.conversationId,
-      },
-    )
-  }
-  const targetId = inputConversationId ?? context.conversationId
-  if (targetId === undefined) {
-    throw new HelmxError(
-      'validation_error',
-      'Missing conversation target: provide conversationId or run inside a conversation (--current)',
-      400,
-    )
-  }
-  return targetId
 }
 
 export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinition {

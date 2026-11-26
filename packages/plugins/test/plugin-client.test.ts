@@ -388,7 +388,7 @@ test('HTTP：If-None-Match 命中 contentHash 时返回 304 Not Modified 且无 
   assert.ok(hash)
   assert.equal(etag, `"${hash}"`)
 
-  // 强 ETag / 裸 hash 匹配均返回 304
+  // 强 ETag 匹配返回 304；裸 hash 不再返回 304（仅认规范 ETag）
   const res304 = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx', {
     headers: { 'if-none-match': etag },
   })
@@ -398,10 +398,10 @@ test('HTTP：If-None-Match 命中 contentHash 时返回 304 Not Modified 且无 
   assert.equal(res304.headers.get('x-helmx-client-hash'), hash)
   assert.equal(res304.headers.get('vary'), 'Accept-Encoding')
 
-  const res304RawHash = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx', {
+  const res200RawHash = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx', {
     headers: { 'if-none-match': hash },
   })
-  assert.equal(res304RawHash.status, 304)
+  assert.equal(res200RawHash.status, 200)
 })
 
 test('HTTP：Accept-Encoding: gzip 返回 Content-Encoding: gzip 且解压后与原产物一致', { timeout: 60_000 }, async () => {
@@ -1386,14 +1386,22 @@ test('HTTP Chunk 304：只接受完整 chunk ETag，裸 contentHash 不匹配（
   )
   assert.equal(resOtherChunk.status, 200, '另一 chunk 的完整 ETag 不得命中')
 
-  // 主模块请求保留裸 hash 兼容（现有行为）
+  // 主模块请求匹配规范 quoted ETag 返回 304；裸 hash 不再返回 304
+  const resMainEtag = await call(
+    handler,
+    'GET',
+    '/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx',
+    { headers: { 'if-none-match': `"${contentHash}"` } },
+  )
+  assert.equal(resMainEtag.status, 304, '主模块请求匹配规范 quoted ETag 返回 304')
+
   const resMainRaw = await call(
     handler,
     'GET',
     '/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx',
     { headers: { 'if-none-match': contentHash } },
   )
-  assert.equal(resMainRaw.status, 304, '主模块请求保留裸 hash 304 兼容')
+  assert.equal(resMainRaw.status, 200, '主模块请求裸 hash 不再返回 304')
 })
 
 test('内存缓存 npm 依赖失效：受控 npm 依赖内容变化后不得永久返回旧 bundle', { timeout: 60_000 }, async () => {
