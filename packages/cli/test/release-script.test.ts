@@ -257,6 +257,54 @@ test('release.mjs: reuses pre-written CHANGELOG.md section and supports --notes-
   assert.doesNotMatch(written, /internal plumbing/)
 })
 
+test('release.mjs auto-summary: merge commits are excluded structurally, whatever their subject', { timeout: 60_000 }, (t) => {
+  const fixture = makeFixtureRepo(useTempDir(t, 'helmx-release-merges-'), '0.1.1', { withChangelog: true })
+  fixture.git(['tag', 'v0.1.1'])
+  const commit = (message: string) => {
+    writeFileSync(path.join(fixture.dir, 'notes.txt'), `${message}\n`)
+    fixture.git(['add', 'notes.txt'])
+    fixture.git(['commit', '-m', message])
+  }
+  const mergeTopic = (branch: string, message: string | null) => {
+    fixture.git(['checkout', '-b', branch])
+    commit(`feat(${branch}): work on branch`)
+    fixture.git(['checkout', 'main'])
+    fixture.git(['merge', '--no-ff', '--no-edit', ...(message === null ? [] : ['-m', message]), branch])
+  }
+  commit('feat(cli): real change')
+  // 三类 merge 提交在仓库历史里都真实存在：git 默认英文标题 / 中文 merge(x): 约定 / 普通标题的真 merge
+  mergeTopic('topic-default', null)
+  mergeTopic('topic-zh', 'merge(main): 同步集成分支')
+  mergeTopic('topic-plain', 'fix: 看起来像普通提交的 merge')
+  commit('chore(release): v0.1.2')
+
+  const dry = fixture.runRelease(['0.2.0', '--dry-run', '--skip-verify'])
+  assert.equal(dry.status, 0, `dry-run failed:\n${dry.stderr}`)
+  const summary = (dry.stdout.split('将写入/复用的变更明细:')[1] ?? '').split('\n\n')[0] ?? ''
+  assert.match(summary, /- feat\(cli\): real change/)
+  assert.match(summary, /- feat\(topic-zh\): work on branch/)
+  assert.doesNotMatch(summary, /Merge branch|merge\(main\)|看起来像普通提交的 merge|chore\(release\)/)
+
+  // notes 作业在 CHANGELOG 无目标小节时回退到同一函数：以 fixture 为 cwd 直接跑 CLI 入口（函数用 process.cwd()）
+  const out = path.join(fixture.dir, 'notes-out.md')
+  const notes = spawnSync(process.execPath, [releaseNotesSrc, '--tag', 'v0.2.0', '--out', 'notes-out.md'], {
+    cwd: fixture.dir,
+    encoding: 'utf8',
+    timeout: 30_000,
+    env: {
+      ...fixture.env,
+      HELMX_RELEASE_PAYLOAD_STATUS: 'published @helmx/hub@0.2.0',
+      HELMX_RELEASE_CLI_STATUS: 'published @helmx/cli@0.2.0',
+      HELMX_RELEASE_NODE_STATUS: 'published @helmx/node@0.2.0',
+    },
+  })
+  assert.equal(notes.status, 0, `release-notes failed:\n${notes.stderr}`)
+  const body = readFileSync(out, 'utf8')
+  assert.match(body, /## 变更明细（v0\.1\.1\.\.v0\.2\.0）/)
+  assert.match(body, /- feat\(cli\): real change/)
+  assert.doesNotMatch(body, /Merge branch|merge\(main\)|看起来像普通提交的 merge|chore\(release\)/)
+})
+
 test('assertPnpmArgsShellSafe: pnpm gate arguments stay shell-inert (the .cmd shim must go through cmd.exe)', { timeout: 60_000 }, () => {
   // 门禁实际使用的全部命令名（build / typecheck:only / lint / check:hygiene / test:all:run）必须放行
   assert.doesNotThrow(() => assertPnpmArgsShellSafe(['build']));

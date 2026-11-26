@@ -19,7 +19,10 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const FILTERED_SUBJECT = [/^chore\(release\):/, /^Merge (branch|pull request|remote-tracking branch|tag)/];
+// merge 提交由 `git log --no-merges` 按结构排除：英文默认标题、中文 `merge:` / `merge(x):`、
+// 以及 `fix:` / `feat:` 等普通标题的真 merge 一并覆盖，不依赖标题约定；
+// chore(release) 是普通提交、没有结构特征，只能按标题识别。
+const FILTERED_SUBJECT = [/^chore\(release\):/];
 const CHANGELOG_SECTION_PATTERN = /^## v(\d+\.\d+\.\d+(?:[-+][\w.-]+)?) \((\d{4}-\d{2}-\d{2})\)\s*$/;
 
 /** Run git in the current working directory, returning stdout; throws with stderr on failure. */
@@ -39,7 +42,7 @@ export function resolvePreviousTag(revSpec) {
 
 /** Commit subjects in baseRef..HEAD as markdown list items; noise commits filtered out. */
 export function commitSubjectsSince(baseRef) {
-  const subjects = runGit(['log', `${baseRef}..HEAD`, '--pretty=format:%s'])
+  const subjects = runGit(['log', '--no-merges', `${baseRef}..HEAD`, '--pretty=format:%s'])
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
