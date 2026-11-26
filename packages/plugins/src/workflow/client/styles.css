@@ -64,6 +64,14 @@
   color: var(--err);
 }
 
+/* 窄屏标题不收缩，#id 与 @profile 徽章会被压成只剩边框的空壳，整体隐藏；二者在子会话抽屉内仍可见 */
+@media (max-width: 680px) {
+  .wf-trace-id,
+  .wf-trace-profile {
+    display: none;
+  }
+}
+
 .wf-report-expanded {
   display: flex;
   flex-direction: column;
