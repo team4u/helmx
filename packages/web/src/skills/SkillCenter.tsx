@@ -31,7 +31,7 @@ export interface SkillCenterProps {
   inlineDrawer?: boolean
 }
 
-const CATEGORY_TABS: SkillCategoryTab[] = ['all', 'builtin', 'plugins', 'agents', 'node', 'workspace']
+const CATEGORY_TABS: SkillCategoryTab[] = ['all', 'core', 'builtin', 'plugins', 'agents', 'node', 'workspace']
 
 /**
  * Full-screen skill center (primary stage) container.

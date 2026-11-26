@@ -836,3 +836,44 @@ test('workspace-file 模态：往返编解码、行号范围与非法路径拦�
   assert.equal(shouldPushLocationHistory(fileState, singleLine), true)
   assert.equal(shouldPushLocationHistory(fileState, roundtrip(fileState)), false)
 })
+
+test('parse/format: 插件中心 core 页签（#/settings/plugins/core[/<owner>[/<action>]]）往返与历史策略', { timeout: 60_000 }, () => {
+  assert.deepEqual(parseLocationHash('#/settings/plugins/core').primaryTarget, {
+    kind: 'plugins',
+    tab: 'core',
+  })
+  assert.deepEqual(parseLocationHash('#/settings/plugins/core/core:conversations').primaryTarget, {
+    kind: 'plugins',
+    tab: 'core',
+    coreOwner: 'core:conversations',
+  })
+  assert.deepEqual(parseLocationHash('#/settings/plugins/core/core:conversations/search').primaryTarget, {
+    kind: 'plugins',
+    tab: 'core',
+    coreOwner: 'core:conversations',
+    coreAction: 'search',
+  })
+  // 非法多余路径段与保留段保护
+  assert.deepEqual(parseLocationHash('#/settings/plugins/core/a/b/c').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/settings/plugins/builtin:workflow/extra').primaryTarget, { kind: 'profiles' })
+  assert.equal(
+    formatLocationHash({ ...conversation(1), primaryTarget: { kind: 'plugins', tab: 'plugins' } }),
+    '#/settings/plugins',
+  )
+  assert.equal(
+    formatLocationHash({ ...conversation(1), primaryTarget: { kind: 'plugins', pluginId: 'core' } }),
+    '#/settings/plugins',
+  )
+
+  const state: WorkspaceLocationState = {
+    ...conversation(1),
+    primaryTarget: {
+      kind: 'plugins',
+      tab: 'core',
+      coreOwner: 'core:conversations',
+      coreAction: 'search',
+    },
+    splitTarget: { kind: 'skills', skillId: 'helmx-cli' },
+  }
+  assert.deepEqual(roundtrip(state), state)
+})

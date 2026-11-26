@@ -5,7 +5,7 @@ import {
   pluginErrorStageLabel,
   type PluginUsageItem,
 } from './plugin-card-model.js'
-import type { HelmxLocale, PluginDoctorReport, PluginSummary } from '@helmx/protocol/browser'
+import type { HelmxLocale, PluginDoctorReport, PluginSummary, SkillSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
@@ -78,6 +78,10 @@ export interface PluginDetailDrawerProps {
   externalUpdating?: boolean
   /** 显式指定是否内联渲染（便于测试与 SSR 统一断言） */
   inline?: boolean
+  /** Optional skills catalog for showing managed skills belonging to this plugin. */
+  skills?: SkillSummary[]
+  /** Optional handler to jump to a managed skill in Skills Center. */
+  onOpenSkill?: (skillId: string) => void
 }
 
 export interface PluginConfigFormProps {
@@ -390,6 +394,8 @@ export function PluginDetailDrawer({
   onRemoved,
   externalUpdating = false,
   inline = false,
+  skills,
+  onOpenSkill,
 }: PluginDetailDrawerProps): React.JSX.Element {
   const storeLocale = useOptionalLocale()
   const groupedUi = useOptionalGroupedUi()
@@ -1006,6 +1012,43 @@ export function PluginDetailDrawer({
                   <HelperText>{t('plugins.drawer.noHooks')}</HelperText>
                 )}
               </div>
+
+              {/* Managed skills (bidirectional navigation to Skills Center) */}
+              {(() => {
+                const managedSkills = (skills ?? []).filter(
+                  (s) => s.source !== 'agents' && s.source !== 'node' && s.managedByPlugin === plugin.id,
+                )
+                if (managedSkills.length === 0) return null
+                const handleOpenSkill = (skillId: string) => {
+                  if (onOpenSkill) onOpenSkill(skillId)
+                  else actions?.openTarget({ kind: 'skills', skillId })
+                }
+                return (
+                  <div className="plugin-capability-group">
+                    <div className="plugin-capability-group-header">
+                      <HelmxIcon name="sparkles" size={11} />
+                      <span className="plugin-capability-group-title">
+                        {t('plugins.drawer.managedSkillsTitle', { count: managedSkills.length })}
+                      </span>
+                    </div>
+                    <Stack direction="horizontal" gap="xs" align="center" wrap className="plugin-capability-tags">
+                      {managedSkills.map((skill) => (
+                        <Button
+                          key={skill.id}
+                          variant="default"
+                          size="xs"
+                          icon="arrow-up-right"
+                          data-plugin-managed-skill={skill.id}
+                          title={t('plugins.drawer.openSkillTitle', { id: skill.id })}
+                          onClick={() => handleOpenSkill(skill.id)}
+                        >
+                          <span className="mono">{skill.id}</span>
+                        </Button>
+                      ))}
+                    </Stack>
+                  </div>
+                )
+              })()}
             </div>
           </Card>
 

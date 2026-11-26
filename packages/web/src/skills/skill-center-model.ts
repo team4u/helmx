@@ -8,10 +8,11 @@
  */
 import type { SkillSummary } from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
+import type { ResolvedTarget } from '../lib/types.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { isNodeSourceSkill } from './skill-scope-model.js'
 
-export type SkillCategoryTab = 'all' | 'builtin' | 'plugins' | 'agents' | 'node' | 'workspace'
+export type SkillCategoryTab = 'all' | 'core' | 'builtin' | 'plugins' | 'agents' | 'node' | 'workspace'
 
 export interface SkillFilterOptions {
   query: string
@@ -20,6 +21,7 @@ export interface SkillFilterOptions {
 
 export interface SkillSummaryStats {
   total: number
+  core: number
   builtin: number
   plugins: number
   agents: number
@@ -28,19 +30,35 @@ export interface SkillSummaryStats {
 }
 
 /**
- * Whether the skill is a system built-in core skill:
- * - managedByPlugin starts with 'builtin:'
+ * Whether the skill is a kernel-owned core skill:
+ * - managedByPlugin starts with 'core:' (and not from a discovery source root)
+ */
+export function isSkillCore(skill: SkillSummary): boolean {
+  return !isNodeSourceSkill(skill) && !isSkillAgents(skill) && Boolean(skill.managedByPlugin?.startsWith('core:'))
+}
+
+/**
+ * Whether the skill is managed by a built-in plugin:
+ * - managedByPlugin starts with 'builtin:' (and not from a discovery source root)
  */
 export function isSkillBuiltin(skill: SkillSummary): boolean {
-  return Boolean(skill.managedByPlugin?.startsWith('builtin:'))
+  return !isNodeSourceSkill(skill) && !isSkillAgents(skill) && Boolean(skill.managedByPlugin?.startsWith('builtin:'))
 }
 
 /**
  * Whether the skill is managed by a third-party / external plugin:
- * - managedByPlugin set and not starting with 'builtin:'
+ * - managedByPlugin set and not starting with 'builtin:' or 'core:'
  */
 export function isSkillPlugin(skill: SkillSummary): boolean {
-  return Boolean(skill.managedByPlugin && !skill.managedByPlugin.startsWith('builtin:'))
+  return (
+    !isNodeSourceSkill(skill) &&
+    !isSkillAgents(skill) &&
+    Boolean(
+      skill.managedByPlugin &&
+        !skill.managedByPlugin.startsWith('builtin:') &&
+        !skill.managedByPlugin.startsWith('core:'),
+    )
+  )
 }
 
 /**
@@ -63,6 +81,7 @@ export function isSkillWorkspace(skill: SkillSummary): boolean {
 /** Whether the skill matches the given category pill tab. */
 export function isSkillInTab(skill: SkillSummary, tab: SkillCategoryTab): boolean {
   if (tab === 'all') return true
+  if (tab === 'core') return isSkillCore(skill)
   if (tab === 'builtin') return isSkillBuiltin(skill)
   if (tab === 'workspace') return isSkillWorkspace(skill)
   if (tab === 'plugins') return isSkillPlugin(skill)
@@ -113,6 +132,7 @@ export function filterSkills(
 /** Count skills per category tab. */
 export function buildSkillCategoryCounts(skills: SkillSummary[]): Record<SkillCategoryTab, number> {
   const list = Array.isArray(skills) ? skills : []
+  let core = 0
   let builtin = 0
   let workspace = 0
   let plugins = 0
@@ -124,6 +144,8 @@ export function buildSkillCategoryCounts(skills: SkillSummary[]): Record<SkillCa
       node++
     } else if (isSkillAgents(s)) {
       agents++
+    } else if (isSkillCore(s)) {
+      core++
     } else if (isSkillBuiltin(s)) {
       builtin++
     } else if (isSkillPlugin(s)) {
@@ -135,6 +157,7 @@ export function buildSkillCategoryCounts(skills: SkillSummary[]): Record<SkillCa
 
   return {
     all: list.length,
+    core,
     builtin,
     workspace,
     plugins,
@@ -148,6 +171,7 @@ export function summarizeSkills(skills: SkillSummary[]): SkillSummaryStats {
   const counts = buildSkillCategoryCounts(skills)
   return {
     total: counts.all,
+    core: counts.core,
     builtin: counts.builtin,
     plugins: counts.plugins,
     agents: counts.agents,
@@ -166,7 +190,7 @@ export function getSkillSourceBadge(
   t?: WebMessageTranslator,
 ): {
   label: string
-  variant: 'builtin' | 'workspace' | 'plugin' | 'agents' | 'node'
+  variant: 'core' | 'builtin' | 'workspace' | 'plugin' | 'agents' | 'node'
 } {
   const tt = t ?? englishWebTranslator
   if (isNodeSourceSkill(skill)) {
@@ -174,6 +198,9 @@ export function getSkillSourceBadge(
   }
   if (isSkillAgents(skill)) {
     return { label: tt('skills.category.shared'), variant: 'agents' }
+  }
+  if (isSkillCore(skill)) {
+    return { label: tt('skills.category.core'), variant: 'core' }
   }
   if (isSkillBuiltin(skill)) {
     return { label: tt('common.builtIn'), variant: 'builtin' }
@@ -190,6 +217,8 @@ export function skillCategoryTabLabel(tab: SkillCategoryTab, t?: WebMessageTrans
   switch (tab) {
     case 'all':
       return tt('common.all')
+    case 'core':
+      return tt('skills.category.core')
     case 'builtin':
       return tt('common.builtIn')
     case 'plugins':
@@ -201,6 +230,22 @@ export function skillCategoryTabLabel(tab: SkillCategoryTab, t?: WebMessageTrans
     case 'workspace':
       return tt('skills.category.workspace')
   }
+}
+
+/**
+ * Resolve the Plugin Center navigation target for a managed skill's owner
+ * (`core:*` -> Core capabilities drawer; plugin ID -> Plugin detail drawer).
+ */
+export function resolveSkillOwnerTarget(
+  managedByPlugin: string | undefined,
+): Extract<ResolvedTarget, { kind: 'plugins' }> | null {
+  if (managedByPlugin === undefined) return null
+  const owner = managedByPlugin.trim()
+  if (owner === '') return null
+  if (owner.startsWith('core:')) {
+    return { kind: 'plugins', tab: 'core', coreOwner: owner }
+  }
+  return { kind: 'plugins', pluginId: owner }
 }
 
 /** Skill HTTP API facade consumed by the skill center and drawer. */

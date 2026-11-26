@@ -51,7 +51,12 @@ export function SkillCard({
     }, 1500)
   }
 
-  const badgeTone: BadgeTone = sourceBadge.variant === 'agents' ? 'accent' : 'neutral'
+  const badgeTone: BadgeTone =
+    sourceBadge.variant === 'agents' || sourceBadge.variant === 'core' ? 'accent' : 'neutral'
+  const sourceTitleLabel =
+    sourceBadge.variant === 'core' && skill.managedByPlugin
+      ? `${sourceBadge.label} (${skill.managedByPlugin})`
+      : sourceBadge.label
 
   return (
     <SelectCard
@@ -67,7 +72,7 @@ export function SkillCard({
           <Badge
             tone={badgeTone}
             mono={sourceBadge.variant === 'plugin'}
-            title={t('skills.card.sourceTitle', { label: sourceBadge.label })}
+            title={t('skills.card.sourceTitle', { label: sourceTitleLabel })}
           >
             {sourceBadge.label}
           </Badge>

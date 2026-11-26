@@ -454,9 +454,13 @@ export function isHumanSelectableProfile(
   return isProfileVisible(profile, enabledPluginIds)
 }
 
-/** 插件自举/托管的 Skill 在对应插件未启用时隐藏（技能库与 / 斜杠菜单消费）。 */
+/** 内核（core:*）与插件自举/托管的 Skill：core:* 恒定可见；插件托管技能在对应插件未启用时隐藏（技能库与 / 斜杠菜单消费）。 */
 export function isSkillVisible(skill: SkillSummary, enabledPluginIds: ReadonlySet<string>): boolean {
-  return skill.managedByPlugin === undefined || enabledPluginIds.has(skill.managedByPlugin)
+  return (
+    skill.managedByPlugin === undefined ||
+    skill.managedByPlugin.startsWith('core:') ||
+    enabledPluginIds.has(skill.managedByPlugin)
+  )
 }
 
 /** 按标题或 #id 模糊过滤会话（供命令面板快速跳转）。 */
