@@ -52,6 +52,12 @@ export interface AskFieldSpec {
 
 export type AskStatus = 'pending' | 'answered' | 'cancelled' | 'superseded'
 
+/** Filter for listing AskDocs (`GET /api/asks`, `core:asks.list`, `AskService.listAsks`). */
+export interface AskListFilter {
+  conversationId?: number
+  status?: AskStatus
+}
+
 /** Ask document (`GET /api/asks` list item). */
 export interface AskSpec {
   id: string

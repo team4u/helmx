@@ -34,7 +34,7 @@ function newCallLog(): CallLog {
   return {
     authSetup: [], authLogin: [], credentialSet: [], providersSave: [],
     pluginDisable: [], pluginConfig: [], actionInvoke: [], submitInput: [],
-    resetConversation: [], forkConversation: [], answerAsk: [], withdrawQueuedInput: [],
+    resetConversation: [], forkConversation: [], listAsks: [], answerAsk: [], withdrawQueuedInput: [],
     setDefaultModel: [], setModelThinkingDefault: [], setDisabledModels: [], issueNodeToken: [],
     upgradeNode: [], startNodeForward: [], execEnv: [],
   }
@@ -139,7 +139,10 @@ function makeKernel(calls: CallLog = newCallLog()): CoreRoutesTarget {
       search: async () => [],
     },
     asks: {
-      listAsks: () => [],
+      listAsks: (filter?: unknown) => {
+        calls.listAsks!.push(filter)
+        return []
+      },
       answerAsk: async (id: string, answers: unknown, expectedStateSeq?: number) => {
         calls.answerAsk!.push([id, answers, expectedStateSeq])
         return { id } as never
@@ -277,10 +280,26 @@ test('input body: empty text allowed (202); attachment ID dedupe/empty array, en
   assert.equal(emptyArr.status, 202)
   assert.deepEqual(submitted[2]![2], {})
 
+  const pendingAskReject = await call(kernel, 'POST', '/api/conversations/1/input', {
+    text: 'x',
+    whenPendingAsk: 'reject',
+  })
+  assert.equal(pendingAskReject.status, 202)
+  assert.deepEqual(submitted[3]![2], { whenPendingAsk: 'reject' })
+
+  const pendingAskSupersede = await call(kernel, 'POST', '/api/conversations/1/input', {
+    text: 'x',
+    whenPendingAsk: 'supersede',
+  })
+  assert.equal(pendingAskSupersede.status, 202)
+  assert.deepEqual(submitted[4]![2], { whenPendingAsk: 'supersede' })
+
   for (const bad of [
     {},
     { text: 1 },
     { text: 'x', whenBusy: 'nope' },
+    { text: 'x', whenPendingAsk: 'answer' },
+    { text: 'x', whenPendingAsk: null },
     { text: 'x', origin: 'robot' },
     { text: 'x', meta: [1] },
     { text: 'x', meta: 'str' },
@@ -358,6 +377,40 @@ test('ask answer: every answer value must be string, expectedStateSeq non-negati
     { answers: { a: 'x' }, extra: 1 },
   ]) {
     await expect400(kernel, 'POST', '/api/asks/ask-1/answer', bad)
+  }
+})
+
+test('GET /api/asks: optional conversationId and status query filters validate and forward cleanly', { timeout: 60_000 }, async () => {
+  const calls = newCallLog()
+  const kernel = makeKernel(calls)
+
+  const all = await call(kernel, 'GET', '/api/asks')
+  assert.equal(all.status, 200)
+  assert.equal(calls.listAsks![0], undefined)
+
+  const byConv = await call(kernel, 'GET', '/api/asks?conversationId=42')
+  assert.equal(byConv.status, 200)
+  assert.deepEqual(calls.listAsks![1], { conversationId: 42 })
+
+  const byStatus = await call(kernel, 'GET', '/api/asks?status=pending')
+  assert.equal(byStatus.status, 200)
+  assert.deepEqual(calls.listAsks![2], { status: 'pending' })
+
+  const byBoth = await call(kernel, 'GET', '/api/asks?conversationId=42&status=answered')
+  assert.equal(byBoth.status, 200)
+  assert.deepEqual(calls.listAsks![3], { conversationId: 42, status: 'answered' })
+
+  for (const badQuery of [
+    '/api/asks?conversationId=0',
+    '/api/asks?conversationId=-1',
+    '/api/asks?conversationId=abc',
+    '/api/asks?conversationId=',
+    '/api/asks?conversationId=999999999999999999999',
+    '/api/asks?status=done',
+    '/api/asks?status=PENDING',
+    '/api/asks?status=',
+  ]) {
+    await expect400(kernel, 'GET', badQuery, undefined, badQuery)
   }
 })
 

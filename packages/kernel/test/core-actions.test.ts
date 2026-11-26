@@ -861,6 +861,16 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       assert.equal(asksList.status, 200)
       assert.equal(asksList.body.length, 2)
 
+      const httpPending1 = await apiCall(kernel, 'GET', '/api/asks?conversationId=1&status=pending')
+      assert.equal(httpPending1.status, 200)
+      assert.deepEqual(
+        (httpPending1.body as Array<{ id: string }>).map((a) => a.id),
+        ['ask-answer-test', 'ask-cancel-test'],
+      )
+      const httpOtherConv = await apiCall(kernel, 'GET', `/api/asks?conversationId=${subagentConv.id}&status=pending`)
+      assert.equal(httpOtherConv.status, 200)
+      assert.deepEqual(httpOtherConv.body, [])
+
       // core:asks.answer MUST be rejected from ANY conversation context (even top-level human #1!).
       const answerFromSession = await postCoreAction(
         kernel,
@@ -905,6 +915,19 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       assert.equal(cancelOk.status, 200)
       const ask2Result = await askPromise2
       assert.equal(ask2Result.status, 'cancelled')
+
+      const httpAnswered = await apiCall(kernel, 'GET', '/api/asks?conversationId=1&status=answered')
+      assert.equal(httpAnswered.status, 200)
+      assert.deepEqual(
+        (httpAnswered.body as Array<{ id: string }>).map((a) => a.id),
+        ['ask-answer-test'],
+      )
+      const httpCancelled = await apiCall(kernel, 'GET', '/api/asks?status=cancelled')
+      assert.equal(httpCancelled.status, 200)
+      assert.deepEqual(
+        (httpCancelled.body as Array<{ id: string }>).map((a) => a.id),
+        ['ask-cancel-test'],
+      )
 
       // ---- core:skills ----
       const skillDir = join(dir, 'skills', 'demo-skill')

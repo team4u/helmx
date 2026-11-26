@@ -355,6 +355,58 @@ test('asks answer sends answers JSON and expectedStateSeq', { timeout: 60_000 },
   assert.deepEqual(hit.body, { answers: { field: 'value', tags: ['a', 'b'] }, expectedStateSeq: 10 })
 })
 
+test('asks list supports --conversation, --current, and --status filters while keeping bare invocation unchanged', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-asks-filter-')
+  const hub = await startMockHub(
+    {
+      'GET /api/asks': () => ({ body: [] }),
+      'GET /api/asks?conversationId=21&status=pending': () => ({ body: [] }),
+      'GET /api/asks?conversationId=7&status=answered': () => ({ body: [] }),
+      'POST /api/conversations/1/input': () => ({ body: { submissionId: 'sub-1' }, status: 202 }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  const bare = await runCliCaptured(['asks', 'list', '--json'], env)
+  assert.equal(bare.code, 0, bare.err)
+  assert.equal(hub.recorded.hits.at(-1)?.path, '/api/asks')
+
+  const filtered = await runCliCaptured(['asks', 'list', '--conversation', '21', '--status', 'pending', '--json'], env)
+  assert.equal(filtered.code, 0, filtered.err)
+  assert.equal(hub.recorded.hits.at(-1)?.path, '/api/asks?conversationId=21&status=pending')
+
+  const byCurrent = await runCliCaptured(['asks', 'list', '--current', '--status', 'answered', '--json'], {
+    ...env,
+    HELMX_CONVERSATION_ID: '7',
+  })
+  assert.equal(byCurrent.code, 0, byCurrent.err)
+  assert.equal(hub.recorded.hits.at(-1)?.path, '/api/asks?conversationId=7&status=answered')
+
+  const conflict = await runCliCaptured(['asks', 'list', '--conversation', '1', '--current', '--json'], {
+    ...env,
+    HELMX_CONVERSATION_ID: '7',
+  })
+  assert.equal(conflict.code, 1)
+  assert.equal(parseCliError(conflict).code, 'conflicting_flags')
+
+  const badConv = await runCliCaptured(['asks', 'list', '--conversation', '0', '--json'], env)
+  assert.equal(badConv.code, 1)
+  assert.equal(parseCliError(badConv).code, 'invalid_flag_value')
+
+  const badStatus = await runCliCaptured(['asks', 'list', '--status', 'done', '--json'], env)
+  assert.equal(badStatus.code, 1)
+  assert.equal(parseCliError(badStatus).code, 'invalid_flag_value')
+
+  const sendRejectAsk = await runCliCaptured(['send', '1', 'hello', '--when-pending-ask', 'reject', '--json'], env)
+  assert.equal(sendRejectAsk.code, 0, sendRejectAsk.err)
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, { text: 'hello', whenPendingAsk: 'reject' })
+
+  const badPendingAsk = await runCliCaptured(['send', '1', 'hello', '--when-pending-ask', 'answer', '--json'], env)
+  assert.equal(badPendingAsk.code, 1)
+  assert.equal(parseCliError(badPendingAsk).code, 'invalid_flag_value')
+})
+
 test('skills read prints {text} directly as raw text in non-JSON mode', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(

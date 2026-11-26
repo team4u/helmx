@@ -21,6 +21,7 @@ import {
 } from './shared.js'
 
 const WHEN_BUSY = ['steer', 'followUp', 'reject'] as const
+const WHEN_PENDING_ASK = ['supersede', 'reject'] as const
 const ORIGINS = ['human', 'agent', 'trigger'] as const
 
 export function conversationsCommands(): CommandSpec[] {
@@ -91,6 +92,7 @@ export function conversationsCommands(): CommandSpec[] {
       flags: [
         ...convFlags,
         enumFlag('when-busy', WHEN_BUSY, 'policy when conversation is busy, defaults to steer'),
+        enumFlag('when-pending-ask', WHEN_PENDING_ASK, 'policy when conversation has a pending AskDoc, defaults to supersede'),
         enumFlag('origin', ORIGINS, 'input origin, defaults to human'),
         { name: 'meta', type: 'json', help: 'free-form metadata JSON object (forwarded to turn_settled)' },
         { name: 'attach', type: 'string', help: 'artifact ID(s) to attach (comma-separated)' },
@@ -113,8 +115,12 @@ export function conversationsCommands(): CommandSpec[] {
         }
         const body: Record<string, unknown> = { text }
         const whenBusy = flagValue<string>(ctx.flags, 'when-busy')
+        const whenPendingAsk = flagValue<string>(ctx.flags, 'when-pending-ask')
         const origin = flagValue<string>(ctx.flags, 'origin')
         if (whenBusy !== undefined) body.whenBusy = validateEnum(whenBusy, WHEN_BUSY, 'when-busy')
+        if (whenPendingAsk !== undefined) {
+          body.whenPendingAsk = validateEnum(whenPendingAsk, WHEN_PENDING_ASK, 'when-pending-ask')
+        }
         if (origin !== undefined) body.origin = validateEnum(origin, ORIGINS, 'origin')
         if (ctx.flags.has('meta')) body.meta = coerceMetaFlag(ctx.flags.get('meta'), 'meta')
         const attachRaw = flagValue<string>(ctx.flags, 'attach')

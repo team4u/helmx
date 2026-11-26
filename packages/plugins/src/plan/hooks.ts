@@ -56,7 +56,13 @@ export function registerPlanHooks(ctx: HelmxPluginContext, state: PlanStateManag
         return { action: 'continue' }
       }
 
+      const rejectMode =
+        payload.input.whenBusy === 'reject' || payload.input.whenPendingAsk === 'reject'
+
       if (!parsed.matched) {
+        if (rejectMode && hasPending) {
+          return { action: 'continue' }
+        }
         if (metaRequested) {
           await state.enterPlanningMode(conv.id)
           return { action: 'continue' }
@@ -65,6 +71,9 @@ export function registerPlanHooks(ctx: HelmxPluginContext, state: PlanStateManag
         return { action: 'continue' }
       }
 
+      if (rejectMode && hasPending) {
+        return { action: 'continue' }
+      }
       await state.enterPlanningMode(conv.id)
       if (parsed.remainder === '') {
         return { action: 'handled' }

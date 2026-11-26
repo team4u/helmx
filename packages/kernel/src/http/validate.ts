@@ -21,6 +21,7 @@ import {
   type Profile,
   type ProviderConfig,
   type WhenBusy,
+  type WhenPendingAsk,
 } from '@helmx/protocol'
 import { validateProfileStarters } from '../services/profile-service.js'
 
@@ -172,6 +173,7 @@ export function parseConversationPatch(body: Record<string, unknown>): Conversat
 export function parseInputBody(body: Record<string, unknown>): {
   text: string
   whenBusy?: WhenBusy
+  whenPendingAsk?: WhenPendingAsk
   origin?: InputOrigin
   meta?: Record<string, unknown>
   attachments?: string[]
@@ -187,6 +189,7 @@ export function parseInputBody(body: Record<string, unknown>): {
   return {
     text: parsed.text,
     ...(parsed.whenBusy !== undefined ? { whenBusy: parsed.whenBusy } : {}),
+    ...(parsed.whenPendingAsk !== undefined ? { whenPendingAsk: parsed.whenPendingAsk } : {}),
     ...(parsed.origin !== undefined ? { origin: parsed.origin } : {}),
     ...(meta !== undefined ? { meta } : {}),
     ...(attachments !== undefined ? { attachments } : {}),

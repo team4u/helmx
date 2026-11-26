@@ -140,6 +140,10 @@ function checkConversationInput(v: unknown): string | null {
     (typeof v.whenBusy === 'string' && ['steer', 'followUp', 'reject'].includes(v.whenBusy))
       ? null
       : 'field whenBusy must be steer|followUp|reject if present') ??
+    (v.whenPendingAsk === undefined ||
+    (typeof v.whenPendingAsk === 'string' && ['supersede', 'reject'].includes(v.whenPendingAsk))
+      ? null
+      : 'field whenPendingAsk must be supersede|reject if present') ??
     reqNonNegativeInt(v, 'createdAt') ??
     (v.meta === undefined || isObj(v.meta) ? null : 'field meta must be a plain object if present');
   if (err) return err;
