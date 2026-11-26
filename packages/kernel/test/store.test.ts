@@ -1255,21 +1255,27 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
       })
       assert.equal(store.earliestPendingAskCreatedAt(30), 300)
 
-      const blockedSummary = summaryOf(
-        store.getConv(30)!,
-        'blocked',
-        2,
-        'thinking...',
-        undefined,
-        0,
-        store.earliestPendingAskCreatedAt(30),
-      )
+      const blockedSummary = summaryOf({
+        meta: store.getConv(30)!,
+        status: 'blocked',
+        pendingAskCount: 2,
+        doing: 'thinking...',
+        lastEntryId: 0,
+        pendingAskSince: store.earliestPendingAskCreatedAt(30),
+      })
       assert.equal(blockedSummary.runDurationMs, 12_345)
       assert.equal(blockedSummary.runStartedAt, 9_876_543)
       assert.equal(blockedSummary.pendingAskSince, 300)
 
       // When pendingAskCount === 0, summaryOf must omit pendingAskSince even if passed.
-      const unblockedSummary = summaryOf(store.getConv(30)!, 'working', 0, 'thinking...', undefined, 0, 300)
+      const unblockedSummary = summaryOf({
+        meta: store.getConv(30)!,
+        status: 'working',
+        pendingAskCount: 0,
+        doing: 'thinking...',
+        lastEntryId: 0,
+        pendingAskSince: 300,
+      })
       assert.equal('pendingAskSince' in unblockedSummary, false)
 
       // Settling earliest ask advances earliestPendingAskCreatedAt to the next pending ask.
@@ -1306,7 +1312,7 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
           const meta30 = reopened2.store.getConv(30)!
           assert.equal(meta30.runDurationMs, 12_345)
           assert.equal(meta30.runStartedAt, undefined)
-          const idleSummary = summaryOf(meta30, 'idle', 0)
+          const idleSummary = summaryOf({ meta: meta30, status: 'idle', pendingAskCount: 0 })
           assert.equal(idleSummary.runDurationMs, 12_345)
           assert.equal('runStartedAt' in idleSummary, false)
         } finally {

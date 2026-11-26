@@ -694,7 +694,7 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
       )
       await tracker.observe(convId)
       assert.equal(tracker.summaryOf(convId)?.lastEntryId, 0)
-      assert.equal(summaryOf(store.getConv(convId)!, 'idle', 0).lastEntryId, 0)
+      assert.equal(summaryOf({ meta: store.getConv(convId)!, status: 'idle', pendingAskCount: 0 }).lastEntryId, 0)
 
       // Submit a visible turn: lastEntryId advances to the newest visible entry (assistant message).
       await conv.submit(
@@ -712,7 +712,7 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
       assert.ok(latestTurnVisible, 'expected visible entry after turn')
       expectedVisibleId = Number(latestTurnVisible.id)
       await waitFor(() => tracker.summaryOf(convId)?.lastEntryId === expectedVisibleId, 5_000)
-      assert.equal(summaryOf(store.getConv(convId)!, 'idle', 0).lastEntryId, expectedVisibleId)
+      assert.equal(summaryOf({ meta: store.getConv(convId)!, status: 'idle', pendingAskCount: 0 }).lastEntryId, expectedVisibleId)
       assert.ok(
         emittedSummaries.some((s) => s.lastEntryId === expectedVisibleId),
         'onSummaryChanged should carry updated lastEntryId',
@@ -736,7 +736,7 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
       assert.ok(latestAfterReset)
       expectedVisibleId = Number(latestAfterReset.id)
       await waitFor(() => tracker.summaryOf(convId)?.lastEntryId === expectedVisibleId, 5_000)
-      assert.equal(summaryOf(store.getConv(convId)!, 'idle', 0).lastEntryId, expectedVisibleId)
+      assert.equal(summaryOf({ meta: store.getConv(convId)!, status: 'idle', pendingAskCount: 0 }).lastEntryId, expectedVisibleId)
 
       tracker.close()
       await store.flushPublic()
@@ -770,7 +770,7 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
         },
       })
       await tracker2.observe(convId)
-      assert.equal(summaryOf(store2.getConv(convId)!, 'idle', 0).lastEntryId, expectedVisibleId)
+      assert.equal(summaryOf({ meta: store2.getConv(convId)!, status: 'idle', pendingAskCount: 0 }).lastEntryId, expectedVisibleId)
       assert.equal(tracker2.summaryOf(convId)?.lastEntryId, expectedVisibleId)
       tracker2.close()
     } finally {

@@ -50,6 +50,17 @@ interface RewindNewInput {
   content: string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>
 }
 
+/** Inputs of the rewind transaction body; `tx` is only valid inside the `conversation.commit` callback. */
+interface RewriteTransactionInput {
+  conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>
+  tx: Tx
+  id: number
+  replaceFromEntryId: number
+  createdAt: number
+  newInput: RewindNewInput
+  assertBeforeRewrite?: () => void
+}
+
 export class ConversationRewind {
   private readonly historyEditsInFlight = new Set<number>()
 
@@ -197,7 +208,8 @@ export class ConversationRewind {
     // Return covered range from inside transaction so post-tx cleanup removes only old FTS keys and stale
     // lastAssistant caches without touching the newly submitted input/response.
     const { submissionId, covered, ftsKeys } = await conversation.commit(
-      (tx) => this.rewriteTransaction(conversation, tx, id, replaceFromEntryId, createdAt, newInput, assertBeforeRewrite),
+      (tx) =>
+        this.rewriteTransaction({ conversation, tx, id, replaceFromEntryId, createdAt, newInput, assertBeforeRewrite }),
       BACKGROUND_CONTEXT,
     )
     this.registerRewoundInput(id, newInput.finalInput, submissionId)
@@ -209,15 +221,15 @@ export class ConversationRewind {
    * Rewind transaction body (runs inside commit callback—never invoke conversation.context() / harness reads that deadlock).
    * Phases: verify idle -> collect tail -> compute omissions -> submit new input -> append rewind marker.
    */
-  private async rewriteTransaction(
-    conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
-    tx: Tx,
-    id: number,
-    replaceFromEntryId: number,
-    createdAt: number,
-    newInput: RewindNewInput,
-    assertBeforeRewrite?: () => void,
-  ): Promise<{ submissionId: SubmissionId; covered: { from: number; through: number }; ftsKeys: string[] }> {
+  private async rewriteTransaction({
+    conversation,
+    tx,
+    id,
+    replaceFromEntryId,
+    createdAt,
+    newInput,
+    assertBeforeRewrite,
+  }: RewriteTransactionInput): Promise<{ submissionId: SubmissionId; covered: { from: number; through: number }; ftsKeys: string[] }> {
     // -- Re-verify inside transaction (pure tx reads before any writes) --
     const { tailId, headLowerBound } = await this.assertRewriteIdle(tx, id, replaceFromEntryId)
     const tailEntries = await this.scanTailEntries(tx, id, replaceFromEntryId)

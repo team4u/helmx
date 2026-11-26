@@ -17,7 +17,17 @@
  * - after restart, pending asks remain and emit diagnostic notifications.
  */
 
-import type { AskAnswers, AskAnswerValue, AskCreateSpec, AskFieldSpec, AskListFilter, AskResult, AskSpec } from '@helmx/protocol'
+import type {
+  AskAnswers,
+  AskAnswerValue,
+  AskCreateSpec,
+  AskFieldOption,
+  AskFieldSpec,
+  AskFieldType,
+  AskListFilter,
+  AskResult,
+  AskSpec,
+} from '@helmx/protocol'
 import { HelmxError, isPlainObject, parseLocalizedText, parseNonEmptyLocalizedText } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 
@@ -487,6 +497,40 @@ function parseAskSpecRow(row: { id: string; specJson: string }): AskSpec {
   return parsed as unknown as AskSpec
 }
 
+/** Field types accepted by `AskFieldSpec.type` (validation and error wording share this single list). */
+const ASK_FIELD_TYPES: readonly AskFieldType[] = ['text', 'select', 'confirm', 'choice', 'model']
+
+/**
+ * Cross-field registries consulted while validating each field: names must be unique and thinking-level
+ * companion keys must be unique and never collide with a field name (companions are answered alongside fields).
+ */
+class AskFieldRegistry {
+  private readonly names = new Set<string>()
+  private readonly thinkingLevelFields = new Set<string>()
+
+  registerName(name: string): void {
+    if (this.names.has(name)) {
+      throw new HelmxError('validation_error', `duplicate field.name: ${name}`)
+    }
+    this.names.add(name)
+  }
+
+  registerThinkingLevelField(key: string): void {
+    if (this.thinkingLevelFields.has(key)) {
+      throw new HelmxError('validation_error', `duplicate thinkingLevelField: ${key}`)
+    }
+    this.thinkingLevelFields.add(key)
+  }
+
+  assertThinkingLevelFieldsAreNotFields(): void {
+    for (const key of this.thinkingLevelFields) {
+      if (this.names.has(key)) {
+        throw new HelmxError('validation_error', `thinkingLevelField '${key}' collides with field.name`)
+      }
+    }
+  }
+}
+
 /** Full boundary validation for AskCreateSpec (rejects every invalid shape before persisting). */
 function validateAskSpec(spec: AskCreateSpec): void {
   if (spec === null || typeof spec !== 'object' || Array.isArray(spec)) {
@@ -524,202 +568,190 @@ function validateAskSpec(spec: AskCreateSpec): void {
   if (!Array.isArray(spec.fields) || spec.fields.length === 0) {
     throw new HelmxError('validation_error', 'AskDoc requires at least one field')
   }
-  const names = new Set<string>()
-  const thinkingLevelFields = new Set<string>()
+  const registry = new AskFieldRegistry()
   for (const field of spec.fields) {
-    if (field === null || typeof field !== 'object') {
-      throw new HelmxError('validation_error', 'field must be an object')
-    }
-    if (typeof field.name !== 'string' || field.name.trim() === '') {
-      throw new HelmxError('validation_error', 'field.name must be a non-empty string')
-    }
-    if (names.has(field.name)) {
-      throw new HelmxError('validation_error', `duplicate field.name: ${field.name}`)
-    }
-    names.add(field.name)
-    if (parseNonEmptyLocalizedText(field.label) === undefined) {
-      throw new HelmxError(
-        'validation_error',
-        `field '${field.name}' label must be a non-empty string or LocalizedText map`,
-      )
-    }
-    if (
-      field.type !== 'text' &&
-      field.type !== 'select' &&
-      field.type !== 'confirm' &&
-      field.type !== 'choice' &&
-      field.type !== 'model'
-    ) {
-      throw new HelmxError(
-        'validation_error',
-        `invalid type for field '${field.name}': ${String(field.type)} (only text | select | confirm | choice | model)`,
-      )
-    }
-    if (field.multiple !== undefined) {
-      if (field.type !== 'choice') {
-        throw new HelmxError('validation_error', `field '${field.name}' multiple is only allowed on choice fields`)
-      }
-      if (typeof field.multiple !== 'boolean') {
-        throw new HelmxError('validation_error', `field '${field.name}' multiple must be a boolean`)
-      }
-    }
-    if (field.allowCustom !== undefined) {
-      if (field.type !== 'choice') {
-        throw new HelmxError('validation_error', `field '${field.name}' allowCustom is only allowed on choice fields`)
-      }
-      if (typeof field.allowCustom !== 'boolean') {
-        throw new HelmxError('validation_error', `field '${field.name}' allowCustom must be a boolean`)
-      }
-    }
-    if (field.multiline !== undefined) {
-      if (field.type !== 'text') {
-        throw new HelmxError('validation_error', `field '${field.name}' multiline is only allowed on text fields`)
-      }
-      if (typeof field.multiline !== 'boolean') {
-        throw new HelmxError('validation_error', `field '${field.name}' multiline must be a boolean`)
-      }
-    }
-    if (field.placeholder !== undefined) {
-      if (field.type !== 'text' && !(field.type === 'choice' && field.allowCustom === true)) {
-        throw new HelmxError(
-          'validation_error',
-          `field '${field.name}' placeholder is only allowed on text or allowCustom choice fields`,
-        )
-      }
-      if (parseLocalizedText(field.placeholder) === undefined) {
-        throw new HelmxError(
-          'validation_error',
-          `field '${field.name}' placeholder must be a string or valid LocalizedText map`,
-        )
-      }
-    }
-    if (field.confirmLabel !== undefined) {
-      if (field.type !== 'confirm') {
-        throw new HelmxError('validation_error', `field '${field.name}' confirmLabel is only allowed on confirm fields`)
-      }
-      if (parseNonEmptyLocalizedText(field.confirmLabel) === undefined) {
-        throw new HelmxError(
-          'validation_error',
-          `field '${field.name}' confirmLabel must be a non-empty string or LocalizedText map`,
-        )
-      }
-    }
-    if (field.rejectLabel !== undefined) {
-      if (field.type !== 'confirm') {
-        throw new HelmxError('validation_error', `field '${field.name}' rejectLabel is only allowed on confirm fields`)
-      }
-      if (parseNonEmptyLocalizedText(field.rejectLabel) === undefined) {
-        throw new HelmxError(
-          'validation_error',
-          `field '${field.name}' rejectLabel must be a non-empty string or LocalizedText map`,
-        )
-      }
-    }
-    if (field.thinkingLevelField !== undefined) {
-      if (field.type !== 'model') {
-        throw new HelmxError(
-          'validation_error',
-          `field '${field.name}' thinkingLevelField is only allowed on model fields`,
-        )
-      }
-      if (typeof field.thinkingLevelField !== 'string' || field.thinkingLevelField.trim() === '') {
-        throw new HelmxError(
-          'validation_error',
-          `field '${field.name}' thinkingLevelField must be a non-empty string`,
-        )
-      }
-      if (thinkingLevelFields.has(field.thinkingLevelField)) {
-        throw new HelmxError(
-          'validation_error',
-          `duplicate thinkingLevelField: ${field.thinkingLevelField}`,
-        )
-      }
-      thinkingLevelFields.add(field.thinkingLevelField)
-    }
-    if (field.type === 'select' || field.type === 'choice') {
-      if (
-        !Array.isArray(field.options) ||
-        field.options.length === 0 ||
-        field.options.some(
-          (o) =>
-            o === null ||
-            typeof o !== 'object' ||
-            typeof o.value !== 'string' ||
-            o.value === '' ||
-            parseNonEmptyLocalizedText(o.label) === undefined ||
-            (o.description !== undefined && parseLocalizedText(o.description) === undefined) ||
-            (o.recommended !== undefined && typeof o.recommended !== 'boolean'),
-        )
-      ) {
-        throw new HelmxError(
-          'validation_error',
-          `${field.type} field '${field.name}' requires non-empty options (each with a non-empty value, LocalizedText label, and optional LocalizedText description)`,
-        )
-      }
-    }
-    if (field.defaultValue !== undefined) {
-      if (field.type === 'choice' && field.multiple === true) {
-        if (!Array.isArray(field.defaultValue)) {
-          throw new HelmxError(
-            'validation_error',
-            `field '${field.name}' defaultValue must be a string array when multiple is true`,
-          )
-        }
-        const seen = new Set<string>()
-        for (const item of field.defaultValue) {
-          if (typeof item !== 'string' || item.trim() === '') {
-            throw new HelmxError(
-              'validation_error',
-              `field '${field.name}' defaultValue items must be non-empty strings`,
-            )
-          }
-          if (seen.has(item)) {
-            throw new HelmxError(
-              'validation_error',
-              `field '${field.name}' defaultValue contains duplicate value '${item}'`,
-            )
-          }
-          seen.add(item)
-          if (field.allowCustom !== true && !(field.options ?? []).some((o) => o.value === item)) {
-            throw new HelmxError(
-              'validation_error',
-              `defaultValue '${item}' for choice field '${field.name}' must match an option value`,
-            )
-          }
-        }
-      } else {
-        if (typeof field.defaultValue !== 'string') {
-          throw new HelmxError('validation_error', `field '${field.name}' defaultValue must be a string`)
-        }
-        if (
-          field.defaultValue !== '' &&
-          (field.type === 'select' || (field.type === 'choice' && field.allowCustom !== true)) &&
-          !(field.options ?? []).some((o) => o.value === field.defaultValue)
-        ) {
-          throw new HelmxError(
-            'validation_error',
-            `defaultValue '${field.defaultValue}' for ${field.type} field '${field.name}' must match an option value`,
-          )
-        }
-        if (
-          field.type === 'confirm' &&
-          field.defaultValue !== '' &&
-          field.defaultValue !== 'true' &&
-          field.defaultValue !== 'false'
-        ) {
-          throw new HelmxError(
-            'validation_error',
-            `defaultValue for confirm field '${field.name}' must be 'true' | 'false'`,
-          )
-        }
-      }
-    }
+    validateAskField(field, registry)
   }
-  for (const key of thinkingLevelFields) {
-    if (names.has(key)) {
+  registry.assertThinkingLevelFieldsAreNotFields()
+}
+
+/** Validate one field in declaration order: identity, type, type-restricted attributes, options, then default value. */
+function validateAskField(field: AskFieldSpec, registry: AskFieldRegistry): void {
+  if (field === null || typeof field !== 'object') {
+    throw new HelmxError('validation_error', 'field must be an object')
+  }
+  if (typeof field.name !== 'string' || field.name.trim() === '') {
+    throw new HelmxError('validation_error', 'field.name must be a non-empty string')
+  }
+  registry.registerName(field.name)
+  if (parseNonEmptyLocalizedText(field.label) === undefined) {
+    throw new HelmxError(
+      'validation_error',
+      `field '${field.name}' label must be a non-empty string or LocalizedText map`,
+    )
+  }
+  if (!ASK_FIELD_TYPES.includes(field.type)) {
+    throw new HelmxError(
+      'validation_error',
+      `invalid type for field '${field.name}': ${String(field.type)} (only ${ASK_FIELD_TYPES.join(' | ')})`,
+    )
+  }
+  validateBooleanAttribute(field, 'multiple', 'choice')
+  validateBooleanAttribute(field, 'allowCustom', 'choice')
+  validateBooleanAttribute(field, 'multiline', 'text')
+  validatePlaceholder(field)
+  validateConfirmButtonLabel(field, 'confirmLabel')
+  validateConfirmButtonLabel(field, 'rejectLabel')
+  validateThinkingLevelField(field, registry)
+  if (field.type === 'select' || field.type === 'choice') {
+    validateFieldOptions(field)
+  }
+  validateFieldDefaultValue(field)
+}
+
+/** Boolean attribute restricted to one field type (`multiple`/`allowCustom` on choice, `multiline` on text). */
+function validateBooleanAttribute(
+  field: AskFieldSpec,
+  attr: 'multiple' | 'allowCustom' | 'multiline',
+  allowedType: AskFieldType,
+): void {
+  const value = field[attr]
+  if (value === undefined) return
+  if (field.type !== allowedType) {
+    throw new HelmxError('validation_error', `field '${field.name}' ${attr} is only allowed on ${allowedType} fields`)
+  }
+  if (typeof value !== 'boolean') {
+    throw new HelmxError('validation_error', `field '${field.name}' ${attr} must be a boolean`)
+  }
+}
+
+function validatePlaceholder(field: AskFieldSpec): void {
+  if (field.placeholder === undefined) return
+  if (field.type !== 'text' && !(field.type === 'choice' && field.allowCustom === true)) {
+    throw new HelmxError(
+      'validation_error',
+      `field '${field.name}' placeholder is only allowed on text or allowCustom choice fields`,
+    )
+  }
+  if (parseLocalizedText(field.placeholder) === undefined) {
+    throw new HelmxError(
+      'validation_error',
+      `field '${field.name}' placeholder must be a string or valid LocalizedText map`,
+    )
+  }
+}
+
+/** `confirmLabel` / `rejectLabel`: non-empty LocalizedText attributes restricted to confirm fields. */
+function validateConfirmButtonLabel(field: AskFieldSpec, attr: 'confirmLabel' | 'rejectLabel'): void {
+  const value = field[attr]
+  if (value === undefined) return
+  if (field.type !== 'confirm') {
+    throw new HelmxError('validation_error', `field '${field.name}' ${attr} is only allowed on confirm fields`)
+  }
+  if (parseNonEmptyLocalizedText(value) === undefined) {
+    throw new HelmxError(
+      'validation_error',
+      `field '${field.name}' ${attr} must be a non-empty string or LocalizedText map`,
+    )
+  }
+}
+
+function validateThinkingLevelField(field: AskFieldSpec, registry: AskFieldRegistry): void {
+  const companion = field.thinkingLevelField
+  if (companion === undefined) return
+  if (field.type !== 'model') {
+    throw new HelmxError(
+      'validation_error',
+      `field '${field.name}' thinkingLevelField is only allowed on model fields`,
+    )
+  }
+  if (typeof companion !== 'string' || companion.trim() === '') {
+    throw new HelmxError(
+      'validation_error',
+      `field '${field.name}' thinkingLevelField must be a non-empty string`,
+    )
+  }
+  registry.registerThinkingLevelField(companion)
+}
+
+function validateFieldOptions(field: AskFieldSpec): void {
+  if (!Array.isArray(field.options) || field.options.length === 0 || field.options.some(isInvalidFieldOption)) {
+    throw new HelmxError(
+      'validation_error',
+      `${field.type} field '${field.name}' requires non-empty options (each with a non-empty value, LocalizedText label, and optional LocalizedText description)`,
+    )
+  }
+}
+
+/** Structural option check (the spec arrives unvalidated from plugins/models, so nothing can be assumed). */
+function isInvalidFieldOption(option: unknown): boolean {
+  if (option === null || typeof option !== 'object') return true
+  const o = option as AskFieldOption
+  return (
+    typeof o.value !== 'string' ||
+    o.value === '' ||
+    parseNonEmptyLocalizedText(o.label) === undefined ||
+    (o.description !== undefined && parseLocalizedText(o.description) === undefined) ||
+    (o.recommended !== undefined && typeof o.recommended !== 'boolean')
+  )
+}
+
+function hasOptionValue(field: AskFieldSpec, value: string): boolean {
+  return (field.options ?? []).some((o) => o.value === value)
+}
+
+function validateFieldDefaultValue(field: AskFieldSpec): void {
+  const value = field.defaultValue
+  if (value === undefined) return
+  if (field.type === 'choice' && field.multiple === true) {
+    validateMultiChoiceDefault(field, value)
+    return
+  }
+  if (typeof value !== 'string') {
+    throw new HelmxError('validation_error', `field '${field.name}' defaultValue must be a string`)
+  }
+  // An empty default means "unset"; otherwise strict select/choice fields must default to an existing option.
+  const mustMatchOption = value !== '' && (field.type === 'select' || (field.type === 'choice' && field.allowCustom !== true))
+  if (mustMatchOption && !hasOptionValue(field, value)) {
+    throw new HelmxError(
+      'validation_error',
+      `defaultValue '${value}' for ${field.type} field '${field.name}' must match an option value`,
+    )
+  }
+  if (field.type === 'confirm' && value !== '' && value !== 'true' && value !== 'false') {
+    throw new HelmxError(
+      'validation_error',
+      `defaultValue for confirm field '${field.name}' must be 'true' | 'false'`,
+    )
+  }
+}
+
+function validateMultiChoiceDefault(field: AskFieldSpec, value: AskAnswerValue): void {
+  if (!Array.isArray(value)) {
+    throw new HelmxError(
+      'validation_error',
+      `field '${field.name}' defaultValue must be a string array when multiple is true`,
+    )
+  }
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (typeof item !== 'string' || item.trim() === '') {
       throw new HelmxError(
         'validation_error',
-        `thinkingLevelField '${key}' collides with field.name`,
+        `field '${field.name}' defaultValue items must be non-empty strings`,
+      )
+    }
+    if (seen.has(item)) {
+      throw new HelmxError(
+        'validation_error',
+        `field '${field.name}' defaultValue contains duplicate value '${item}'`,
+      )
+    }
+    seen.add(item)
+    if (field.allowCustom !== true && !hasOptionValue(field, item)) {
+      throw new HelmxError(
+        'validation_error',
+        `defaultValue '${item}' for choice field '${field.name}' must match an option value`,
       )
     }
   }
