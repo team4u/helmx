@@ -26,12 +26,10 @@ import { AssistantModelBoundary, AssistantTurnView } from './AssistantTurn.js'
 import { ProcessInspectorDrawer } from './ProcessInspectorDrawer.js'
 import { ProcessInspectorContext, type ProcessInspectorController } from './process-inspector-context.js'
 import {
-  findLatestProcessTarget,
   resolveProcessInspection,
   stepKeyOf,
   type ProcessInspectMode,
   type ProcessInspectTarget,
-  type ResolvedProcessInspection,
 } from './process-inspector-model.js'
 import {
   ContextDivider,
@@ -60,6 +58,7 @@ import {
   resolveAssistantAnchorEntry,
   type EditRequestTarget,
   type FoldableStep,
+  type ProcessShortcutCommand,
   type TimelineItem,
 } from './timeline-model.js'
 import { useTimelineScroll, type TimelineOutlineScrollRequest } from './use-timeline-scroll.js'
@@ -134,9 +133,10 @@ export function ConversationTimeline({
   const { t } = useWebLocale()
   const entryActions = useTimelineEntryActions(conversation, onRequestEdit)
   const [inspectTarget, setInspectTarget] = useState<ProcessInspectTarget | null>(null)
+  const [processToggle, setProcessToggle] = useState<{ turnKey: string; command: ProcessShortcutCommand } | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const itemsRef = useRef<ReadonlyArray<TimelineItem>>([])
-  const resolvedInspectionRef = useRef<ResolvedProcessInspection | null>(null)
+  const latestProcessTurnKeyRef = useRef<string | undefined>(undefined)
+  const processToggleSeqRef = useRef(0)
 
   const isWorking = conversation.status === 'working'
   const isCompacting = conversation.contextUsage?.compacting === true
@@ -189,13 +189,12 @@ export function ConversationTimeline({
   }, [items])
 
   const latestProcessTurnKey = useMemo(() => findLatestProcessTurnKey(items), [items])
-  itemsRef.current = items
+  latestProcessTurnKeyRef.current = latestProcessTurnKey
 
   const resolvedInspection = useMemo(
     () => resolveProcessInspection(items, inspectTarget),
     [items, inspectTarget],
   )
-  resolvedInspectionRef.current = resolvedInspection
 
   const lastHumanKey = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
@@ -217,6 +216,10 @@ export function ConversationTimeline({
   const detailsReady = conversationDetail !== undefined
   const anchorSignature = useMemo(() => items.map((item) => timelineAnchorId(item)).join('\n'), [items])
   const closeInspector = useCallback(() => setInspectTarget(null), [])
+  const resetConversationProcessUi = useCallback(() => {
+    setInspectTarget(null)
+    setProcessToggle(null)
+  }, [])
 
   const openStepGroup = useCallback(
     (
@@ -317,11 +320,11 @@ export function ConversationTimeline({
     outlineScrollRequest,
     outlineOpen,
     onActiveOutlineChange,
-    onConversationSwitch: closeInspector,
+    onConversationSwitch: resetConversationProcessUi,
     fetchEarlierEntries,
   })
 
-  // Ctrl+O global shortcut dispatch: opens or closes the latest process-group inspector drawer per pane.
+  // Ctrl+O 全局快捷键分发：只展开/折叠当前所属面板内最新一条含过程步骤的助手回合（一级流水）。
   useEffect(() => {
     const onShortcut = (event: Event): void => {
       if (!(event instanceof CustomEvent)) return
@@ -334,18 +337,22 @@ export function ConversationTimeline({
       if (root.closest('.conversation-drawer') !== null) return
       const myPanel = root.closest('[data-helmx-panel]')?.getAttribute('data-helmx-panel') ?? 'primary'
       if (panel !== myPanel) return
-      if (resolvedInspectionRef.current !== null) {
-        setInspectTarget(null)
-        return
-      }
-      const nextTarget = findLatestProcessTarget(itemsRef.current)
-      if (nextTarget !== null) {
-        setInspectTarget(nextTarget)
-      }
+      const targetTurnKey = latestProcessTurnKeyRef.current
+      if (targetTurnKey === undefined) return
+      const turnEl = innerRef.current?.querySelector<HTMLElement>('[data-latest-process-turn="true"]')
+      const rootToggles = turnEl?.querySelectorAll<HTMLElement>('[data-process-toggle="root"]')
+      const anyOpen =
+        rootToggles !== undefined &&
+        Array.from(rootToggles).some((el) => el.getAttribute('aria-expanded') === 'true')
+      const nextSeq = ++processToggleSeqRef.current
+      setProcessToggle({
+        turnKey: targetTurnKey,
+        command: { open: !anyOpen, seq: nextSeq },
+      })
     }
     window.addEventListener('helmx:shortcut', onShortcut)
     return () => window.removeEventListener('helmx:shortcut', onShortcut)
-  }, [])
+  }, [innerRef])
 
   const highlightClass = (entryId: string): string => {
     const matchedStore = highlightedEntry !== null && highlightedEntry.conversationId === conversation.id && highlightedEntry.entryId === entryId
@@ -501,6 +508,7 @@ export function ConversationTimeline({
                       anchorEntry={resolveAssistantAnchorEntry(item.entryIds, activeEntriesById)}
                       isLatestTurn={item.key === lastAssistantKey}
                       isTrailingTurn={item.key === trailingAssistantKey}
+                      processShortcut={processToggle?.turnKey === item.key ? processToggle.command : undefined}
                       onForkFromHere={entryActions.forkFromHere}
                       onRegenerate={
                         item.key === lastAssistantKey && !isWorking && !sendingPending && latestRetryTarget !== undefined
@@ -563,9 +571,12 @@ export function ConversationTimeline({
             }
           })
         }}
-        onFollowLive={() => {
+        onToggleFollowLive={() => {
           setInspectTarget((prev) => {
             if (prev === null || prev.kind !== 'step-group') return prev
+            if (prev.followLive === true) {
+              return { ...prev, followLive: false }
+            }
             return {
               kind: 'step-group',
               turnKey: prev.turnKey,

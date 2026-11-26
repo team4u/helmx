@@ -752,7 +752,7 @@ test('TraceRow：外层保持 div.trace-row[role="button"]，右侧显示 chevro
   }
 })
 
-test('StepGroup：落定态收为单行入口，失败徽标与总耗时在抽屉开合间始终可见', { timeout: 60_000 }, async () => {
+test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；展开后露出流水列表且点击单步弹二级抽屉', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
     const steps: FoldableStep[] = [
@@ -775,9 +775,8 @@ test('StepGroup：落定态收为单行入口，失败徽标与总耗时在抽�
 
     const summaryBtn = m.host.querySelector('button.trace-group-summary') as HTMLButtonElement
     assert.ok(summaryBtn !== null)
-    assert.equal(summaryBtn.getAttribute('aria-haspopup'), 'dialog')
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
-    assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), true, '含失败时加错误修饰类')
+    assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), true, '收起且含失败时加错误修饰类')
     assert.match(summaryBtn.textContent ?? '', /Thinking and execution \(3 steps\)/)
 
     const errorBadge = summaryBtn.querySelector('.trace-group-badge.trace-group-badge-error')
@@ -787,24 +786,39 @@ test('StepGroup：落定态收为单行入口，失败徽标与总耗时在抽�
     assert.equal(summaryBtn.querySelectorAll('.trace-group-meta').length, 1)
     assert.doesNotMatch(summaryBtn.textContent ?? '', /Model|Tools/)
 
-    // 打开右侧抽屉后：主时间线保持单行不撑长，摘要上仍保留失败徽标与总耗时
+    // 一级点击展开：就地展开单行流水列表并隐藏组级失败徽标（具体失败工具行已在列表内），不弹抽屉
     await act(async () => {
       summaryBtn.click()
     })
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
-    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
+    assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), false)
+    assert.ok(summaryBtn.querySelector('.trace-group-badge-error') === null)
     assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, '1.5s')
-    const drawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')
-    assert.ok(drawer !== null, '打开步骤抽屉')
-    assert.ok(drawer.querySelector('.process-step-item.is-error') !== null, '抽屉目录中标红失败步骤')
+    assert.ok(m.host.querySelector('.trace-group-steps') !== null)
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
 
-    // 关闭抽屉：恢复未检视态
+    // 点击一级列表中的失败 bash 行：打开二级单栏详情抽屉
+    const bashRow = m.host.querySelectorAll<HTMLElement>('.trace-group-steps .trace-row')[1]!
+    assert.ok(bashRow !== undefined)
+    await act(async () => {
+      bashRow.click()
+    })
+    const drawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')
+    assert.ok(drawer !== null, '点击子步骤行打开二级详情抽屉')
+    assert.match(drawer.textContent ?? '', /pnpm test/)
+    assert.match(drawer.textContent ?? '', /exit 1/)
+
+    // 关闭抽屉，并收起一级列表：恢复未展开态与组级失败徽标
     const closeBtn = drawer.querySelector<HTMLButtonElement>('.process-drawer-close-btn')!
     await act(async () => {
       closeBtn.click()
     })
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
     assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
+    await act(async () => {
+      summaryBtn.click()
+    })
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
+    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
   } finally {
     m.unmount()
   }
@@ -837,7 +851,7 @@ test('StepGroup: one total with localized timing details on hover and keyboard f
     assert.match(details.textContent ?? '', /Model 3\.2s/)
     assert.match(details.textContent ?? '', /Tools 10\.0s/)
     assert.match(details.textContent ?? '', /cumulative time, not elapsed time; parallel tools count separately/)
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false', 'Hover must not open the drawer')
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false', 'Hover must not expand the group')
     assert.equal(summaryBtn.getAttribute('aria-describedby'), details.id)
 
     await act(async () => { localeStore.setLocale('zh-CN') })
@@ -852,19 +866,20 @@ test('StepGroup: one total with localized timing details on hover and keyboard f
     await act(async () => { summaryBtn.focus() })
     await waitForCondition(() => document.querySelector('[role="tooltip"]') !== null)
     assert.match(document.querySelector('[role="tooltip"]')?.textContent ?? '', /模型 3\.2s/)
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false', 'Keyboard focus must not open the drawer')
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false', 'Keyboard focus must not expand the group')
 
     await act(async () => { summaryBtn.click() })
     await waitForCondition(() => document.querySelector('[role="tooltip"]') === null)
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
-    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') !== null)
+    assert.ok(m.host.querySelector('.trace-group-steps') !== null)
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
   } finally {
     localStorage.removeItem('helmx:locale')
     m.unmount()
   }
 })
 
-test('StepGroup：进行中（active=true）展示紧凑实时动态且不显示总耗时，单思考步委派 ThinkingRow 不嵌套摘要', { timeout: 60_000 }, async () => {
+test('StepGroup：进行中（active=true）默认就地展开流水且不显示总耗时，单思考步委派 ThinkingRow 不嵌套摘要', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
     const steps: FoldableStep[] = [
@@ -879,25 +894,36 @@ test('StepGroup：进行中（active=true）展示紧凑实时动态且不显示
     ]
     await m.render(stepGroupUi(steps, true))
     const summaryBtn = m.host.querySelector('button.trace-group-summary') as HTMLButtonElement
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false', '初始抽屉关闭，不阻塞主视图')
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true', '进行中一级流水默认展开，不弹抽屉')
     assert.match(summaryBtn.textContent ?? '', /Thinking and executing \(2 steps\)…/)
     assert.ok(summaryBtn.querySelector('.trace-group-meta') === null, '进行中不显示总耗时')
-    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed', '已有失败保留醒目提示')
-    assert.ok(m.host.querySelector('.trace-live-feed') !== null, '进行中保留紧凑实时动态')
-    assert.match(m.host.querySelector('.trace-live-feed')?.textContent ?? '', /read/)
-    assert.doesNotMatch(m.host.querySelector('.trace-live-feed')?.textContent ?? '', /\bbash\b/, '仅保留当前运行中步骤，不铺满历史步')
+    assert.ok(summaryBtn.querySelector('.trace-group-badge-error') === null, '展开态不显示失败徽标')
+    const stepList = m.host.querySelector('.trace-group-steps')
+    assert.ok(stepList !== null)
+    assert.match(stepList.textContent ?? '', /bash/)
+    assert.match(stepList.textContent ?? '', /read/)
 
-    // 点击实时动态中的运行行：直接打开抽屉并定位到该运行步骤
-    const liveRow = m.host.querySelector<HTMLElement>('.trace-live-feed .trace-row')!
+    // 进行中手动收起：露出已有失败徽标，仍不显示总耗时
+    await act(async () => {
+      summaryBtn.click()
+    })
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
+    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
+    assert.ok(summaryBtn.querySelector('.trace-group-meta') === null, 'active=true 时收起仍不显示总耗时')
+
+    // 重新展开并点击运行中行：打开二级抽屉查看运行中 read，落定后一级自动折叠而抽屉保持开启
+    await act(async () => {
+      summaryBtn.click()
+    })
+    const liveRow = m.host.querySelectorAll<HTMLElement>('.trace-group-steps .trace-row')[1]!
     await act(async () => {
       liveRow.click()
     })
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
     const drawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')!
     assert.ok(drawer !== null)
-    assert.match(drawer.querySelector('.process-detail-title')?.textContent ?? '', /read/)
+    assert.match(drawer.querySelector('.process-drawer-title')?.textContent ?? '', /read/)
 
-    // Settled groups show one bare cumulative duration; live feed disappears cleanly.
+    // Settled groups show one bare cumulative duration and collapse Level 1 cleanly.
     await m.render(
       stepGroupUi(
         [
@@ -908,7 +934,8 @@ test('StepGroup：进行中（active=true）展示紧凑实时动态且不显示
       ),
     )
     const settledBtn = m.host.querySelector<HTMLButtonElement>('button.trace-group-summary')!
-    assert.ok(m.host.querySelector('.trace-live-feed') === null, '落定后收为单行入口')
+    assert.equal(settledBtn.getAttribute('aria-expanded'), 'false')
+    assert.ok(m.host.querySelector('.trace-group-steps') === null, '落定后自动折叠一级流水')
     assert.equal(settledBtn.querySelector('.trace-group-meta')?.textContent, '500ms')
     assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') !== null, '已开抽屉无缝保持并更新')
 

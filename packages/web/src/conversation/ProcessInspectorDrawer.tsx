@@ -1,11 +1,12 @@
 /**
- * Unified right-side drawer for inspecting assistant thinking & tool execution
- * steps (master-detail split for multi-step groups, clean single-column view
- * for standalone thinking or tool calls).
+ * Clean single-column right-side detail drawer for Level 2 inspection of a
+ * settled thinking step, tool execution step, or plugin tool I/O payload.
+ * Multi-step navigation lives unobtrusively in the header (`N / M` dropdown,
+ * prev/next buttons, and Alt+Up/Down or [ / ] shortcuts).
  *
  * Exports only React components and TS types (Fast Refresh compliant).
  */
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from 'react'
 import {
   Badge,
   Button,
@@ -16,9 +17,13 @@ import {
   DialogOverlay,
   DialogPortal,
   DialogTitle,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuRoot,
+  DropdownMenuTrigger,
   HelmxIcon,
   IconButton,
-  Tooltip,
   useSharedNowMs,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -26,7 +31,6 @@ import { formatDurationMs, formatStopwatchMs } from '../lib/format.js'
 import { useIsMobile } from './composer-model.js'
 import { MarkdownView } from './MarkdownView.js'
 import {
-  filterVisibleStepIndices,
   isStepFailed,
   isStepRunning,
   stepKeyOf,
@@ -48,7 +52,7 @@ export interface ProcessInspectorDrawerProps {
   mode?: ProcessInspectMode
   followLive?: boolean
   onSelectStep: (index: number, stepKey: string) => void
-  onFollowLive?: () => void
+  onToggleFollowLive?: () => void
   onClose: () => void
 }
 
@@ -56,6 +60,15 @@ function StepElapsed({ startedAt }: { startedAt: number }): ReactNode {
   const nowMs = useSharedNowMs(true)
   if (nowMs === undefined) return null
   return <span className="tabular-nums">{formatStopwatchMs(Math.max(0, nowMs - startedAt))}</span>
+}
+
+function isStepBracketShortcutBlocked(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  if (target.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]') !== null) {
+    return true
+  }
+  const selection = typeof window !== 'undefined' ? window.getSelection() : null
+  return selection !== null && !selection.isCollapsed
 }
 
 export function ProcessInspectorDrawer({
@@ -68,92 +81,89 @@ export function ProcessInspectorDrawer({
   mode = 'default',
   followLive,
   onSelectStep,
-  onFollowLive,
+  onToggleFollowLive,
   onClose,
 }: ProcessInspectorDrawerProps): ReactNode {
   const { t } = useWebLocale()
   const isMobile = useIsMobile(680)
-  const [onlyErrors, setOnlyErrors] = useState(false)
   const [desktopFullscreen, setDesktopFullscreen] = useState(false)
   const contentRef = useRef<HTMLDivElement | null>(null)
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const detailScrollRef = useRef<HTMLDivElement | null>(null)
+  const stickyBottomRef = useRef(true)
   const prevOpenRef = useRef(open)
 
   if (prevOpenRef.current !== open) {
     prevOpenRef.current = open
-    if (!open) {
-      if (onlyErrors) setOnlyErrors(false)
-      if (desktopFullscreen) setDesktopFullscreen(false)
+    if (!open && desktopFullscreen) {
+      setDesktopFullscreen(false)
     }
   }
 
   const summary = useMemo(() => summarizeStepGroup(steps), [steps])
-  const effectiveOnlyErrors = onlyErrors && summary.errorCount > 0
-  const visibleIndices = useMemo(
-    () => filterVisibleStepIndices(steps, effectiveOnlyErrors),
-    [steps, effectiveOnlyErrors],
-  )
-
   const safeIndex = steps.length > 0 ? Math.max(0, Math.min(steps.length - 1, selectedIndex)) : -1
   const selectedStep = safeIndex >= 0 ? steps[safeIndex] : undefined
   const selectedStepKey = selectedStep !== undefined ? stepKeyOf(selectedStep, safeIndex) : ''
+  const selectedRunning = selectedStep !== undefined && isStepRunning(selectedStep)
+  const streamingContent =
+    selectedStep === undefined
+      ? ''
+      : selectedStep.kind === 'thinking'
+        ? selectedStep.thinking.text
+        : (selectedStep.tool.resultText ?? '')
 
+  // Reset scrollTop cleanly on step or mode switches without disturbing a settled step
   useEffect(() => {
-    if (!open || steps.length <= 1 || safeIndex < 0) return
-    const btn = optionRefs.current[safeIndex]
-    btn?.scrollIntoView?.({ block: 'nearest' })
-  }, [open, steps.length, safeIndex])
+    if (!open) return
+    stickyBottomRef.current = true
+    const el = detailScrollRef.current
+    if (el !== null) {
+      el.scrollTop = 0
+    }
+  }, [open, selectedStepKey, mode])
+
+  // Pin scrolling to the bottom while actively streaming unless the user scrolled up
+  useEffect(() => {
+    if (!open || !selectedRunning || !stickyBottomRef.current) return
+    const el = detailScrollRef.current
+    if (el !== null) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [open, selectedRunning, streamingContent])
 
   if (!open || steps.length === 0 || selectedStep === undefined) return null
 
   const isMulti = steps.length > 1
-  const hasOnlyThinking = steps.every((s) => s.kind === 'thinking')
-  const durationMs = (summary.modelDurationMs ?? 0) + (summary.toolDurationMs ?? 0)
-  const showTime = !active && durationMs > 0
-  const timeDetails = [
-    summary.modelDurationMs !== undefined
-      ? t('conv.thinking.modelTime', { duration: formatDurationMs(summary.modelDurationMs) })
-      : undefined,
-    summary.toolDurationMs !== undefined
-      ? t('conv.thinking.toolsTime', { duration: formatDurationMs(summary.toolDurationMs) })
-      : undefined,
-    t('conv.thinking.totalTimeTitle'),
-  ]
-    .filter(Boolean)
-    .join('\n')
+  const selectedFailed = isStepFailed(selectedStep)
+  const selectedToolStats = selectedStep.kind === 'tool' ? toolRowStats(selectedStep.tool, t) : undefined
+  const selectedToolSummary =
+    selectedStep.kind === 'tool' ? toolSummaryText(selectedStep.tool.toolName, selectedStep.tool.input) : ''
+  const nestedInDrawerStack =
+    !inline && typeof document !== 'undefined' && document.querySelector('.drawer-stack-dialog') !== null
 
-  const headerTitle: ReactNode = isMulti ? (
-    hasOnlyThinking ? (
-      active ? t('conv.thinking.stepsActive', { count: steps.length }) : t('conv.thinking.steps', { count: steps.length })
-    ) : active ? (
-      t('conv.thinking.execActive', { count: steps.length })
+  const headerTitle: ReactNode =
+    selectedStep.kind === 'thinking'
+      ? selectedStep.thinking.active
+        ? t('conv.thinking.activeLabel')
+        : t('conv.thinking.label')
+      : <span className="mono">{selectedStep.tool.toolName}</span>
+
+  const headerIcon: ReactNode =
+    selectedStep.kind === 'thinking' ? (
+      <HelmxIcon
+        name={selectedStep.thinking.active ? 'loader' : 'sparkles'}
+        size={14}
+        className={`process-drawer-status-icon${selectedStep.thinking.active ? ' spin-slow is-running' : ''}`}
+      />
     ) : (
-      t('conv.thinking.exec', { count: steps.length })
+      <HelmxIcon
+        name={toolStatusIcon(selectedStep.tool)}
+        size={14}
+        className={`process-drawer-status-icon${selectedStep.tool.status === 'running' ? ' spin-slow is-running' : ''}${selectedStep.tool.isError ? ' is-error' : ''}`}
+      />
     )
-  ) : selectedStep.kind === 'thinking' ? (
-    active ? t('conv.thinking.activeLabel') : t('conv.thinking.label')
-  ) : (
-    <span className="mono">{selectedStep.tool.toolName}</span>
-  )
 
-  const headerIcon: ReactNode = active ? (
-    <HelmxIcon name="loader" size={14} className="spin-slow process-drawer-status-icon" />
-  ) : isMulti ? (
-    <HelmxIcon name="list-tree" size={14} className="process-drawer-status-icon" />
-  ) : selectedStep.kind === 'thinking' ? (
-    <HelmxIcon name="sparkles" size={14} className="process-drawer-status-icon" />
-  ) : (
-    <HelmxIcon
-      name={toolStatusIcon(selectedStep.tool)}
-      size={14}
-      className={`process-drawer-status-icon${selectedStep.tool.isError ? ' is-error' : ''}`}
-    />
-  )
-
-  const visiblePos = visibleIndices.indexOf(safeIndex)
-  const prevStepIdx = visiblePos > 0 ? visibleIndices[visiblePos - 1] : undefined
-  const nextStepIdx =
-    visiblePos >= 0 && visiblePos < visibleIndices.length - 1 ? visibleIndices[visiblePos + 1] : undefined
+  const prevStepIdx = safeIndex > 0 ? safeIndex - 1 : undefined
+  const nextStepIdx = safeIndex < steps.length - 1 ? safeIndex + 1 : undefined
 
   const selectAtIndex = (index: number): void => {
     const step = steps[index]
@@ -161,37 +171,43 @@ export function ProcessInspectorDrawer({
     onSelectStep(index, stepKeyOf(step, index))
   }
 
-  const handleListKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (visibleIndices.length === 0) return
-    let nextTarget: number | undefined
-    if (event.key === 'ArrowDown') {
-      nextTarget = visiblePos >= 0 && visiblePos < visibleIndices.length - 1
-        ? visibleIndices[visiblePos + 1]
-        : visibleIndices[0]
-    } else if (event.key === 'ArrowUp') {
-      nextTarget = visiblePos > 0
-        ? visibleIndices[visiblePos - 1]
-        : visibleIndices[visibleIndices.length - 1]
-    } else if (event.key === 'Home') {
-      nextTarget = visibleIndices[0]
-    } else if (event.key === 'End') {
-      nextTarget = visibleIndices[visibleIndices.length - 1]
+  // Non-hijacking step navigation: never consume bare ArrowUp/ArrowDown so detail scrolling stays native.
+  const handleContentKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (!isMulti) return
+    if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      if (event.key === 'ArrowUp' && prevStepIdx !== undefined) {
+        event.preventDefault()
+        selectAtIndex(prevStepIdx)
+      } else if (event.key === 'ArrowDown' && nextStepIdx !== undefined) {
+        event.preventDefault()
+        selectAtIndex(nextStepIdx)
+      }
+      return
     }
-    if (nextTarget === undefined) return
-    event.preventDefault()
-    selectAtIndex(nextTarget)
-    optionRefs.current[nextTarget]?.focus({ preventScroll: true })
+    if (
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      !isStepBracketShortcutBlocked(event.target)
+    ) {
+      if (event.key === '[' && prevStepIdx !== undefined) {
+        event.preventDefault()
+        selectAtIndex(prevStepIdx)
+      } else if (event.key === ']' && nextStepIdx !== undefined) {
+        event.preventDefault()
+        selectAtIndex(nextStepIdx)
+      }
+    }
   }
 
-  const selectedRunning = isStepRunning(selectedStep)
-  const selectedFailed = isStepFailed(selectedStep)
-  const selectedToolStats = selectedStep.kind === 'tool' ? toolRowStats(selectedStep.tool, t) : undefined
-  const selectedToolSummary =
-    selectedStep.kind === 'tool' ? toolSummaryText(selectedStep.tool.toolName, selectedStep.tool.input) : ''
+  const handleDetailScroll = (event: UIEvent<HTMLDivElement>): void => {
+    const el = event.currentTarget
+    stickyBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 48
+  }
 
   const drawerClass = [
     'process-inspector-drawer',
-    isMulti ? 'process-inspector-drawer-multi' : 'process-inspector-drawer-single',
     !isMobile && desktopFullscreen ? 'process-inspector-drawer-fullscreen' : '',
   ]
     .filter(Boolean)
@@ -206,13 +222,16 @@ export function ProcessInspectorDrawer({
       }}
     >
       <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop process-inspector-backdrop" />
+        <DialogOverlay
+          className={`modal-backdrop process-inspector-backdrop${nestedInDrawerStack ? ' process-inspector-backdrop-nested' : ''}`}
+        />
         <DialogContent
           ref={contentRef}
           tabIndex={-1}
           className={drawerClass}
           aria-label={t('conv.process.drawerAria')}
           aria-describedby={undefined}
+          onKeyDown={handleContentKeyDown}
           onOpenAutoFocus={(event) => {
             event.preventDefault()
             contentRef.current?.focus({ preventScroll: true })
@@ -223,41 +242,143 @@ export function ProcessInspectorDrawer({
               {headerIcon}
               <div className="process-drawer-title-group">
                 <DialogTitle className="process-drawer-title">{headerTitle}</DialogTitle>
-                {isMulti ? (
-                  <Badge tone="neutral" mono className="tabular-nums">
-                    {t('conv.process.stepCounter', { current: safeIndex + 1, total: steps.length })}
-                  </Badge>
-                ) : null}
-                {active ? <Badge tone="accent">{t('conv.process.runningBadge')}</Badge> : null}
-                {summary.errorCount > 0 ? (
-                  <Badge tone="err" className="tabular-nums">
-                    {t('conv.thinking.errorCount', { count: summary.errorCount })}
-                  </Badge>
-                ) : null}
-                {showTime ? (
-                  <Tooltip content={timeDetails} className="trace-group-time-tooltip">
+                {selectedRunning ? (
+                  <Badge tone="accent">{t('conv.process.runningBadge')}</Badge>
+                ) : selectedFailed ? (
+                  <Badge tone="err">{t('conv.process.statusError')}</Badge>
+                ) : selectedStep.kind === 'thinking' || selectedStep.tool.status === 'done' ? (
+                  <Badge tone="ok">{t('conv.process.statusDone')}</Badge>
+                ) : (
+                  <Badge tone="neutral">{t('conv.process.statusUnknown')}</Badge>
+                )}
+                {selectedStep.kind === 'tool' ? (
+                  selectedStep.tool.status === 'running' && selectedStep.tool.startedAt !== undefined ? (
                     <span className="process-drawer-duration mono tabular-nums">
-                      {formatDurationMs(durationMs)}
+                      <StepElapsed startedAt={selectedStep.tool.startedAt} />
                     </span>
-                  </Tooltip>
+                  ) : selectedStep.tool.durationMs !== undefined ? (
+                    <span className="process-drawer-duration mono tabular-nums">
+                      {formatDurationMs(selectedStep.tool.durationMs)}
+                    </span>
+                  ) : null
+                ) : selectedStep.thinking.responseDurationMs !== undefined &&
+                  selectedStep.thinking.responseDurationMs > 0 ? (
+                  <span className="process-drawer-duration mono tabular-nums">
+                    {formatDurationMs(selectedStep.thinking.responseDurationMs)}
+                  </span>
+                ) : null}
+                {selectedToolStats !== undefined ? (
+                  <span className="trace-row-stats" title={selectedToolStats.title}>
+                    {selectedToolStats.removeCount !== undefined ? (
+                      <span className="trace-row-stats-remove">−{selectedToolStats.removeCount}</span>
+                    ) : null}
+                    {selectedToolStats.addCount !== undefined ? (
+                      <span className="trace-row-stats-add">+{selectedToolStats.addCount}</span>
+                    ) : null}
+                    {selectedToolStats.text !== undefined ? <span>{selectedToolStats.text}</span> : null}
+                  </span>
                 ) : null}
               </div>
             </div>
 
             <div className="process-drawer-actions">
-              {isMulti && active && followLive === false && onFollowLive !== undefined ? (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  icon="arrow-down-to-line"
-                  title={t('conv.process.followLiveTitle')}
-                  onClick={onFollowLive}
-                >
-                  {t('conv.process.followLive')}
-                </Button>
+              {selectedStep.kind === 'thinking' && selectedStep.thinking.text.trim() !== '' ? (
+                <CopyButton text={selectedStep.thinking.text} label={t('conv.process.copyThinking')} />
               ) : null}
               {isMulti ? (
                 <>
+                  {active && onToggleFollowLive !== undefined ? (
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className={followLive === true ? 'is-active' : undefined}
+                      aria-pressed={followLive === true}
+                      icon="arrow-down-to-line"
+                      title={followLive ? t('conv.process.pauseFollowTitle') : t('conv.process.followLiveTitle')}
+                      onClick={onToggleFollowLive}
+                    >
+                      {followLive ? t('conv.process.followingLive') : t('conv.process.followLive')}
+                    </Button>
+                  ) : null}
+                  {inline ? (
+                    <Badge tone="neutral" mono className="tabular-nums">
+                      {t('conv.process.stepCounter', { current: safeIndex + 1, total: steps.length })}
+                    </Badge>
+                  ) : (
+                    <DropdownMenuRoot>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className={`process-step-picker-trigger${summary.errorCount > 0 ? ' has-error' : ''}`}
+                          aria-label={t('conv.process.jumpToStepAria', {
+                            current: safeIndex + 1,
+                            total: steps.length,
+                          })}
+                          title={t('conv.process.jumpToStepAria', {
+                            current: safeIndex + 1,
+                            total: steps.length,
+                          })}
+                        >
+                          <span className="mono tabular-nums">
+                            {t('conv.process.stepCounter', { current: safeIndex + 1, total: steps.length })}
+                          </span>
+                          <HelmxIcon name="chevron-down" size={11} />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuPortal inline={inline}>
+                        <DropdownMenuContent className="process-step-menu" align="end">
+                          {steps.map((step, idx) => {
+                            const key = stepKeyOf(step, idx)
+                            const itemSelected = idx === safeIndex
+                            const itemFailed = isStepFailed(step)
+                            const itemRunning = isStepRunning(step)
+                            const itemTitle =
+                              step.kind === 'thinking'
+                                ? step.thinking.active
+                                  ? t('conv.thinking.activeLabel')
+                                  : t('conv.thinking.label')
+                                : step.tool.toolName
+                            const itemSummary =
+                              step.kind === 'thinking'
+                                ? thinkingPreviewLine(step.thinking.text)
+                                : toolSummaryText(step.tool.toolName, step.tool.input)
+                            return (
+                              <DropdownMenuItem
+                                key={`${key}:${idx}`}
+                                className={`process-step-menu-item${itemSelected ? ' is-selected' : ''}${itemFailed ? ' is-error' : ''}${itemRunning ? ' is-running' : ''}`}
+                                onSelect={() => selectAtIndex(idx)}
+                              >
+                                <span className="process-step-menu-index mono tabular-nums">{idx + 1}</span>
+                                {step.kind === 'thinking' ? (
+                                  <HelmxIcon
+                                    name={step.thinking.active ? 'loader' : 'sparkles'}
+                                    size={12}
+                                    className={`process-step-menu-icon${step.thinking.active ? ' spin-slow is-running' : ''}`}
+                                  />
+                                ) : (
+                                  <HelmxIcon
+                                    name={toolStatusIcon(step.tool)}
+                                    size={12}
+                                    className={`process-step-menu-icon${step.tool.status === 'running' ? ' spin-slow is-running' : ''}${itemFailed ? ' is-error' : ''}`}
+                                  />
+                                )}
+                                <span className="process-step-menu-text">
+                                  <span className={`process-step-menu-title${step.kind === 'tool' ? ' mono' : ''}`}>
+                                    {itemTitle}
+                                  </span>
+                                  {itemSummary !== '' ? (
+                                    <span className={`process-step-menu-sub${step.kind === 'tool' ? ' mono' : ''}`}>
+                                      {itemSummary}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </DropdownMenuItem>
+                            )
+                          })}
+                        </DropdownMenuContent>
+                      </DropdownMenuPortal>
+                    </DropdownMenuRoot>
+                  )}
                   <IconButton
                     variant="ghost"
                     size="sm"
@@ -303,209 +424,14 @@ export function ProcessInspectorDrawer({
             </div>
           </div>
 
-          <div className={`process-drawer-body${isMulti ? ' process-drawer-body-split' : ''}`}>
-            {isMulti ? (
-              <aside className="process-drawer-sidebar">
-                {summary.errorCount > 0 ? (
-                  <div
-                    className="process-drawer-filter"
-                    role="group"
-                    aria-label={t('conv.process.filterAria')}
-                  >
-                    <button
-                      type="button"
-                      className={`process-drawer-filter-btn${!effectiveOnlyErrors ? ' is-active' : ''}`}
-                      aria-pressed={!effectiveOnlyErrors}
-                      onClick={() => setOnlyErrors(false)}
-                    >
-                      {t('conv.process.filterAll', { count: steps.length })}
-                    </button>
-                    <button
-                      type="button"
-                      className={`process-drawer-filter-btn process-drawer-filter-btn-err${effectiveOnlyErrors ? ' is-active' : ''}`}
-                      aria-pressed={effectiveOnlyErrors}
-                      onClick={() => {
-                        setOnlyErrors(true)
-                        if (!isStepFailed(selectedStep)) {
-                          const firstFailed = steps.findIndex((s) => isStepFailed(s))
-                          if (firstFailed >= 0) selectAtIndex(firstFailed)
-                        }
-                      }}
-                    >
-                      {t('conv.process.filterErrors', { count: summary.errorCount })}
-                    </button>
-                  </div>
-                ) : null}
-                <div
-                  className="process-step-list"
-                  role="listbox"
-                  tabIndex={-1}
-                  aria-label={t('conv.process.stepsListAria')}
-                  onKeyDown={handleListKeyDown}
-                >
-                  {visibleIndices.map((idx) => {
-                    const step = steps[idx]!
-                    const key = stepKeyOf(step, idx)
-                    const isSelected = idx === safeIndex
-                    const stepFailed = isStepFailed(step)
-                    const stepRunning = isStepRunning(step)
-                    const stats = step.kind === 'tool' ? toolRowStats(step.tool, t) : undefined
-                    const subText =
-                      step.kind === 'thinking'
-                        ? thinkingPreviewLine(step.thinking.text)
-                        : toolSummaryText(step.tool.toolName, step.tool.input)
+          {selectedToolSummary !== '' ? (
+            <div className="process-detail-subheader">
+              <div className="process-detail-summary mono">{selectedToolSummary}</div>
+            </div>
+          ) : null}
 
-                    return (
-                      <button
-                        key={`${key}:${idx}`}
-                        ref={(el) => {
-                          optionRefs.current[idx] = el
-                        }}
-                        type="button"
-                        role="option"
-                        aria-selected={isSelected}
-                        className={[
-                          'process-step-item',
-                          isSelected ? 'is-selected' : '',
-                          stepFailed ? 'is-error' : '',
-                          stepRunning ? 'is-running' : '',
-                        ]
-                          .filter(Boolean)
-                          .join(' ')}
-                        onClick={() => selectAtIndex(idx)}
-                      >
-                        <div className="process-step-item-head">
-                          <span className="process-step-index mono tabular-nums">{idx + 1}</span>
-                          {step.kind === 'thinking' ? (
-                            <HelmxIcon
-                              name={step.thinking.active ? 'loader' : 'sparkles'}
-                              size={12}
-                              className={step.thinking.active ? 'spin-slow' : undefined}
-                            />
-                          ) : (
-                            <HelmxIcon
-                              name={toolStatusIcon(step.tool)}
-                              size={12}
-                              className={step.tool.status === 'running' ? 'spin-slow' : undefined}
-                            />
-                          )}
-                          <span
-                            className={`process-step-item-title${step.kind === 'tool' ? ' mono' : ''}`}
-                          >
-                            {step.kind === 'thinking'
-                              ? step.thinking.active
-                                ? t('conv.thinking.activeLabel')
-                                : t('conv.thinking.label')
-                              : step.tool.toolName}
-                          </span>
-                          <span className="process-step-item-meta mono tabular-nums">
-                            {step.kind === 'tool' ? (
-                              step.tool.status === 'running' ? (
-                                step.tool.startedAt !== undefined ? (
-                                  <StepElapsed startedAt={step.tool.startedAt} />
-                                ) : null
-                              ) : step.tool.durationMs !== undefined ? (
-                                formatDurationMs(step.tool.durationMs)
-                              ) : stepFailed ? (
-                                t('conv.tool.statusFailed')
-                              ) : null
-                            ) : step.thinking.responseDurationMs !== undefined &&
-                              step.thinking.responseDurationMs > 0 ? (
-                              formatDurationMs(step.thinking.responseDurationMs)
-                            ) : null}
-                          </span>
-                        </div>
-                        {subText !== '' || stats !== undefined ? (
-                          <div className="process-step-item-sub">
-                            {subText !== '' ? (
-                              <span className={`process-step-item-summary${step.kind === 'tool' ? ' mono' : ''}`}>
-                                {subText}
-                              </span>
-                            ) : null}
-                            {stats !== undefined ? (
-                              <span className="trace-row-stats">
-                                {stats.removeCount !== undefined ? (
-                                  <span className="trace-row-stats-remove">−{stats.removeCount}</span>
-                                ) : null}
-                                {stats.addCount !== undefined ? (
-                                  <span className="trace-row-stats-add">+{stats.addCount}</span>
-                                ) : null}
-                                {stats.text !== undefined ? <span>{stats.text}</span> : null}
-                              </span>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </button>
-                    )
-                  })}
-                </div>
-              </aside>
-            ) : null}
-
-            <div className="process-drawer-detail">
-              <div className="process-detail-head">
-                <div className="process-detail-head-row">
-                  <div className="process-detail-title-wrap">
-                    <span
-                      className={`process-detail-title${selectedStep.kind === 'tool' ? ' mono' : ''}`}
-                    >
-                      {selectedStep.kind === 'thinking'
-                        ? selectedStep.thinking.active
-                          ? t('conv.thinking.activeLabel')
-                          : t('conv.thinking.label')
-                        : selectedStep.tool.toolName}
-                    </span>
-                    {isMulti ? (
-                      <Badge tone="neutral" className="tabular-nums">
-                        {t('conv.process.stepNumber', { index: safeIndex + 1 })}
-                      </Badge>
-                    ) : null}
-                    {selectedRunning ? (
-                      <Badge tone="accent">{t('conv.process.runningBadge')}</Badge>
-                    ) : selectedFailed ? (
-                      <Badge tone="err">{t('conv.process.statusError')}</Badge>
-                    ) : selectedStep.kind === 'thinking' || selectedStep.tool.status === 'done' ? (
-                      <Badge tone="ok">{t('conv.process.statusDone')}</Badge>
-                    ) : (
-                      <Badge tone="neutral">{t('conv.process.statusUnknown')}</Badge>
-                    )}
-                    {selectedStep.kind === 'tool' ? (
-                      selectedStep.tool.status === 'running' && selectedStep.tool.startedAt !== undefined ? (
-                        <span className="process-detail-elapsed mono tabular-nums">
-                          <StepElapsed startedAt={selectedStep.tool.startedAt} />
-                        </span>
-                      ) : selectedStep.tool.durationMs !== undefined ? (
-                        <span className="process-detail-elapsed mono tabular-nums">
-                          {formatDurationMs(selectedStep.tool.durationMs)}
-                        </span>
-                      ) : null
-                    ) : selectedStep.thinking.responseDurationMs !== undefined &&
-                      selectedStep.thinking.responseDurationMs > 0 ? (
-                      <span className="process-detail-elapsed mono tabular-nums">
-                        {formatDurationMs(selectedStep.thinking.responseDurationMs)}
-                      </span>
-                    ) : null}
-                    {selectedToolStats !== undefined ? (
-                      <span className="trace-row-stats" title={selectedToolStats.title}>
-                        {selectedToolStats.removeCount !== undefined ? (
-                          <span className="trace-row-stats-remove">−{selectedToolStats.removeCount}</span>
-                        ) : null}
-                        {selectedToolStats.addCount !== undefined ? (
-                          <span className="trace-row-stats-add">+{selectedToolStats.addCount}</span>
-                        ) : null}
-                        {selectedToolStats.text !== undefined ? <span>{selectedToolStats.text}</span> : null}
-                      </span>
-                    ) : null}
-                  </div>
-                  {selectedStep.kind === 'thinking' && selectedStep.thinking.text.trim() !== '' ? (
-                    <CopyButton text={selectedStep.thinking.text} label={t('conv.process.copyThinking')} />
-                  ) : null}
-                </div>
-                {selectedToolSummary !== '' ? (
-                  <div className="process-detail-summary mono">{selectedToolSummary}</div>
-                ) : null}
-              </div>
-
+          <div className="process-drawer-body">
+            <div ref={detailScrollRef} className="process-drawer-detail" onScroll={handleDetailScroll}>
               <div key={`${selectedStepKey}:${mode}`} className="process-detail-body selectable">
                 {selectedStep.kind === 'thinking' ? (
                   <div className="process-thinking-body">
