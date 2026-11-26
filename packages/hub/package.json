@@ -28,9 +28,9 @@
     "@helmx/protocol": "workspace:*"
   },
   "devDependencies": {
-    "@earendil-works/chord": "1.6.0",
-    "@earendil-works/pi-ai": "1.6.0",
-    "@earendil-works/pi-durable": "1.6.0",
+    "@earendil-works/chord": "1.6.1",
+    "@earendil-works/pi-ai": "1.6.1",
+    "@earendil-works/pi-durable": "1.6.1",
     "@helmx/node": "workspace:*",
     "@helmx/test-kit": "workspace:*",
     "@types/ws": "^8.18.0",

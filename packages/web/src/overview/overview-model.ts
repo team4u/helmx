@@ -1139,7 +1139,10 @@ export function buildSidebarGroupedWorkingSet(input: {
 
 /** 侧栏总览单棵树的后代展示切片。 */
 export interface SidebarOverviewDescendantsSlice {
-  /** 当前应渲染为缩进子行的后代列表（沿用 card.descendants 的确定性排序）。 */
+  /**
+   * 当前应渲染为缩进子行的后代列表：展示序固定沿用 card.directDescendants 的稳定序
+   * （异常层级 > 活跃 > 安静，再 createdAt 升序），切换查看/点击只改变可见集，绝不重排。
+   */
   visible: OverviewDescendant[]
   /** 仍收拢在折叠开关后的安静后代数。 */
   hiddenCount: number
@@ -1151,6 +1154,9 @@ export interface SidebarOverviewDescendantsSlice {
  * 解析侧栏工作集中单棵树的子行切片：
  * - 侧栏只渲染直属子会话，孙级事实聚合到直属子行；
  * - 默认只透出当前查看项与最高优先级异常，且有硬上限；
+ * - 「当前查看 > 搜索命中 > 异常」的优先级只决定上限内谁被选中，展示序始终沿用
+ *   card.directDescendants 的稳定序——否则点击某条子行会让它跳到同级首位（嵌套滚动区
+ *   随之跳顶）；
  * - 手动展开后展示全部直属子会话，绝不在窄栏递归铺开深层树。
  */
 export function resolveSidebarOverviewDescendants(input: {
@@ -1204,7 +1210,9 @@ export function resolveSidebarOverviewDescendants(input: {
       matchedBranchIds.has(descendant.conv.id) ||
       isAttention(descendant),
   )
-  const visible = expanded ? ranked : autoVisible.slice(0, SIDEBAR_DESCENDANT_AUTO_LIMIT)
+  const selected = expanded ? ranked : autoVisible.slice(0, SIDEBAR_DESCENDANT_AUTO_LIMIT)
+  const selectedIds = new Set(selected.map((descendant) => descendant.conv.id))
+  const visible = descendants.filter((descendant) => selectedIds.has(descendant.conv.id))
   return {
     visible,
     hiddenCount: Math.max(0, ranked.length - visible.length),
