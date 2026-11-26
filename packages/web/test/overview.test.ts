@@ -46,9 +46,11 @@ import {
   saveSidebarGroupBy,
   sidebarOverviewCardsNeedLiveClock,
   OVERVIEW_DESCENDANT_LIMIT,
+  SIDEBAR_DESCENDANT_AUTO_LIMIT,
   SIDEBAR_GROUP_BY_STORAGE_KEY,
   SIDEBAR_PER_GROUP_QUIET_LIMIT,
   SIDEBAR_RECENT_QUIET_LIMIT,
+  type OverviewCard,
 } from '../src/overview/overview-model.js'
 import { buildAgentStandings } from '../src/shell/sidebar-model.js'
 import { formatLocationHash, hashHasPrimaryTarget, parseLocationHash, shouldPushLocationHistory } from '../src/lib/url-hash-model.js'
@@ -2397,16 +2399,16 @@ test('resolveSidebarOverviewDescendants & resolveSidebarOverviewPrimaryTarget: a
   // 若无可见子行兜底 → 仍直达 targetConversationId (#11)
   assert.equal(resolveSidebarOverviewPrimaryTarget(card, []), 11)
 
-  // 2) 正在主屏/分屏查看安静子会话 #12 → 当前项优先，审批项仍作为异常保底透出
+  // 2) 正在主屏/分屏查看安静子会话 #12 → 当前项保底透出但不置顶（展示序保持稳定），审批项仍作为异常保底透出
   const viewedSlice = resolveSidebarOverviewDescendants({
     card,
     expanded: false,
     activeConversationIds: new Set([12]),
   })
-  assert.deepEqual(viewedSlice.visible.map((d) => d.conv.id), [12, 11])
+  assert.deepEqual(viewedSlice.visible.map((d) => d.conv.id), [11, 12])
   assert.equal(viewedSlice.hiddenCount, 1)
 
-  // 3) 搜索命中安静子会话标题或 #id → 自动浮现命中项
+  // 3) 搜索命中安静子会话标题或 #id → 自动浮现命中项（同样不置顶）
   assert.equal(overviewDescendantMatchesQuery(card.descendants[1]!, '调研'), true)
   assert.equal(overviewDescendantMatchesQuery(card.descendants[1]!, '#12'), true)
   assert.equal(overviewDescendantMatchesQuery(card.descendants[1]!, '不存在'), false)
@@ -2416,7 +2418,7 @@ test('resolveSidebarOverviewDescendants & resolveSidebarOverviewPrimaryTarget: a
     activeConversationIds: new Set(),
     query: '调研',
   })
-  assert.deepEqual(searchSlice.visible.map((d) => d.conv.id), [12, 11])
+  assert.deepEqual(searchSlice.visible.map((d) => d.conv.id), [11, 12])
 
   // 4) 手动展开：展示全部后代，hiddenCount 归零，仍保留 hasCollapsibleQuiet 供收起
   const expandedSlice = resolveSidebarOverviewDescendants({
@@ -2427,6 +2429,69 @@ test('resolveSidebarOverviewDescendants & resolveSidebarOverviewPrimaryTarget: a
   assert.deepEqual(expandedSlice.visible.map((d) => d.conv.id), [11, 13, 12])
   assert.equal(expandedSlice.hiddenCount, 0)
   assert.equal(expandedSlice.hasCollapsibleQuiet, true)
+})
+
+test('resolveSidebarOverviewDescendants: switching the viewed child never reorders sibling rows while the current branch stays inside the auto cap', { timeout: 60_000 }, () => {
+  const visibleIds = (
+    card: OverviewCard,
+    input: { expanded: boolean; activeConversationIds: ReadonlySet<number> },
+  ): number[] => resolveSidebarOverviewDescendants({ card, ...input }).visible.map((d) => d.conv.id)
+
+  // 1) 展开态：4 个安静直属子会话，点击/切换查看任何一个都不得让它跳到同级首位
+  const quietCard = buildCards([
+    conv({ id: 1, status: 'idle', createdAt: 1000 }),
+    conv({ id: 12, parentConversationId: 1, title: 'worker-a', status: 'idle', createdAt: 1200 }),
+    conv({ id: 13, parentConversationId: 1, title: 'worker-b', status: 'idle', createdAt: 1300 }),
+    conv({ id: 14, parentConversationId: 1, title: 'worker-c', status: 'idle', createdAt: 1400 }),
+    conv({ id: 15, parentConversationId: 1, title: 'worker-d', status: 'idle', createdAt: 1500 }),
+  ])[0]!
+  assert.deepEqual(quietCard.directDescendants.map((d) => d.conv.id), [12, 13, 14, 15])
+  for (const viewed of [new Set<number>(), new Set([13]), new Set([15]), new Set([15, 13])]) {
+    assert.deepEqual(
+      visibleIds(quietCard, { expanded: true, activeConversationIds: viewed }),
+      [12, 13, 14, 15],
+      `expanded rows keep their order while viewing ${[...viewed].join(',')}`,
+    )
+  }
+  // 折叠态：安静子只在被查看时浮现；主屏 + 分屏同时在场时也按稳定序而非「最新点击置顶」
+  assert.deepEqual(visibleIds(quietCard, { expanded: false, activeConversationIds: new Set([15]) }), [15])
+  assert.deepEqual(visibleIds(quietCard, { expanded: false, activeConversationIds: new Set([15, 13]) }), [13, 15])
+
+  // 2) 折叠态点击非首位异常行：行序不变；查看安静子时保底浮现但排在异常行之后
+  const attentionCard = buildCards([
+    conv({ id: 2, status: 'idle', createdAt: 2000 }),
+    conv({ id: 21, parentConversationId: 2, title: 'failed-worker', status: 'error', createdAt: 2500 }),
+    conv({ id: 22, parentConversationId: 2, title: 'approval-worker', status: 'blocked', pendingAskCount: 1, createdAt: 2400 }),
+    conv({ id: 23, parentConversationId: 2, title: 'quiet-worker', status: 'idle', createdAt: 2300 }),
+  ])[0]!
+  assert.deepEqual(attentionCard.directDescendants.map((d) => d.conv.id), [22, 21, 23])
+  assert.deepEqual(visibleIds(attentionCard, { expanded: false, activeConversationIds: new Set() }), [22, 21])
+  assert.deepEqual(
+    visibleIds(attentionCard, { expanded: false, activeConversationIds: new Set([21]) }),
+    [22, 21],
+    '点击第二条异常行不得把它顶到首位',
+  )
+  assert.deepEqual(visibleIds(attentionCard, { expanded: false, activeConversationIds: new Set([23]) }), [22, 21, 23])
+  assert.deepEqual(visibleIds(attentionCard, { expanded: true, activeConversationIds: new Set([23]) }), [22, 21, 23])
+
+  // 3) 硬上限保底不退化：已有 SIDEBAR_DESCENDANT_AUTO_LIMIT 条异常行时，正在查看的安静子
+  //    仍优先占一个名额（最后一条异常行让位），位置保持在异常行之后
+  const cappedCard = buildCards([
+    conv({ id: 3, status: 'idle', createdAt: 3000 }),
+    conv({ id: 31, parentConversationId: 3, status: 'error', createdAt: 3100 }),
+    conv({ id: 32, parentConversationId: 3, status: 'error', createdAt: 3200 }),
+    conv({ id: 33, parentConversationId: 3, status: 'error', createdAt: 3300 }),
+    conv({ id: 34, parentConversationId: 3, title: 'viewed-quiet', status: 'idle', createdAt: 3400 }),
+  ])[0]!
+  assert.deepEqual(visibleIds(cappedCard, { expanded: false, activeConversationIds: new Set() }), [31, 32, 33])
+  const capped = resolveSidebarOverviewDescendants({
+    card: cappedCard,
+    expanded: false,
+    activeConversationIds: new Set([34]),
+  })
+  assert.equal(capped.visible.length, SIDEBAR_DESCENDANT_AUTO_LIMIT)
+  assert.deepEqual(capped.visible.map((d) => d.conv.id), [31, 32, 34], '当前查看项优先占上限名额但不置顶')
+  assert.equal(capped.hiddenCount, 1)
 })
 
 test('sidebar descendants stay bounded for wide and nested agent trees while preserving their direct-parent spine', { timeout: 60_000 }, () => {
@@ -2461,7 +2526,11 @@ test('sidebar descendants stay bounded for wide and nested agent trees while pre
     expanded: false,
     activeConversationIds: new Set([317]),
   })
-  assert.ok(viewingGrandchild.visible.some((item) => item.conv.id === 217), 'viewing a grandchild surfaces its direct parent')
+  assert.deepEqual(
+    viewingGrandchild.visible.map((item) => item.conv.id),
+    [200, 201, 217],
+    'viewing a grandchild surfaces its direct parent inside the cap without hoisting it above the error rows',
+  )
 
   const expanded = resolveSidebarOverviewDescendants({
     card,
