@@ -9,12 +9,17 @@
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
-import type { ConversationSummary, GuardedMutationExpectation } from '@helmx/protocol'
+import type {
+  ConversationOwnership,
+  ConversationSummary,
+  GuardedMutationExpectation,
+} from '@helmx/protocol'
 import { HelmxError, isPlainObject } from '@helmx/protocol'
 import type { SecretStash } from '../services/index.js'
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
 import { requireConv } from './conversation-require.js'
+import { assertValidConversationOwnership } from './guards/conversation-guards.js'
 import { resolveCleanForkAnchor } from './spawn-fork.js'
 import type { HelmxStore } from './store.js'
 
@@ -142,13 +147,21 @@ export class ConversationContextOps {
 
   /**
    * Fork a new conversation from a specified entry or latest clean anchor: calls SDK fork(entryId),
-   * registers helmx mirror (inheriting profile/tags/cwd/model/overrides with parent pointing to source), and aligns model.
+   * registers helmx mirror (inheriting profile/tags/cwd/model/overrides/ownership with parent pointing to source),
+   * and aligns model. Explicit `opts.ownedBy` overrides inherited source ownership.
    */
   async forkConversation(
     id: number,
-    opts?: { entryId?: number; title?: string; parentConversationId?: number },
+    opts?: {
+      entryId?: number
+      title?: string
+      parentConversationId?: number
+      ownedBy?: ConversationOwnership
+    },
   ): Promise<ConversationSummary> {
     this.assertOpen()
+    const explicitOwnedBy =
+      opts?.ownedBy !== undefined ? assertValidConversationOwnership(opts.ownedBy) : undefined
     const explicitEntryId = opts?.entryId
     if (explicitEntryId !== undefined && (!Number.isSafeInteger(explicitEntryId) || explicitEntryId <= 0)) {
       throw new HelmxError(
@@ -206,12 +219,15 @@ export class ConversationContextOps {
       opts?.title !== undefined && opts.title.trim() !== ''
         ? this.host.stash.redact(opts.title.trim())
         : `${baseTitle} (fork)`
+    const effectiveOwnedBy: ConversationOwnership =
+      explicitOwnedBy ?? (sourceMeta.ownedBy === 'helmx' ? 'helmx' : 'human')
     this.host.store.upsertConv({
       id: newId,
       title,
       profileId: sourceMeta.profileId,
       tags: [...sourceMeta.tags],
       parentConversationId: explicitParentId ?? id,
+      ownedBy: effectiveOwnedBy,
       nodeId: sourceMeta.nodeId ?? 'local',
       cwd: sourceMeta.cwd,
       model: sourceMeta.model,
@@ -228,8 +244,8 @@ export class ConversationContextOps {
     })
     await this.host.alignConversationModel(newId)
     await this.host.tracker.observe(newId)
-    const summary = this.host.tracker.summaryOf(newId)
-    this.host.events.publish('conversation.upsert', this.host.withOwnership(summary))
+    const summary = this.host.withOwnership(this.host.tracker.summaryOf(newId))
+    this.host.events.publish('conversation.upsert', summary)
     return summary
   }
 }

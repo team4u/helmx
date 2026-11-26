@@ -1228,4 +1228,468 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       await kernel.close()
     }
   })
+
+  it('closes human-ownership races across all automated core:conversations mutations and enforces create/fork ownership', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'conv-guarded-races')
+    const kernel = await openRuntime(dir)
+    const harness = (kernel as unknown as {
+      harness: {
+        conversation: (id: never, ctx: unknown) => Promise<unknown>
+        submission: (id: never, ctx: unknown) => Promise<unknown>
+      }
+    }).harness
+    const realConversation = harness.conversation.bind(harness)
+    const realSubmission = harness.submission.bind(harness)
+    let pendingRelease: (() => void) | undefined
+    const pauseNextConversationLookup = (): { release: () => void } => {
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      pendingRelease = release
+      let armed = true
+      harness.conversation = (id: never, ctx: unknown) => {
+        if (!armed) return realConversation(id, ctx)
+        armed = false
+        return new Promise((resolve, reject) => {
+          void gate.then(() => {
+            void realConversation(id, ctx).then(resolve, reject)
+          }, reject)
+        })
+      }
+      return {
+        release: () => {
+          harness.conversation = realConversation
+          release()
+        },
+      }
+    }
+    const flushTick = () => new Promise((resolve) => setImmediate(resolve))
+
+    try {
+      const helmxCaller = await kernel.conversations.createConversation({
+        title: 'Helmx Automation Caller',
+        ownedBy: 'helmx',
+      })
+
+      // 1. Create / fork ownership enforcement for automated helmx callers vs human/direct callers.
+      const autoCreated = await postCoreAction(
+        kernel,
+        'conversations',
+        'create',
+        { title: 'Auto Created Scratch' },
+        helmxCaller.id,
+      )
+      assert.equal(autoCreated.status, 200)
+      assert.equal(autoCreated.body.ownedBy, 'helmx', 'helmx caller create must default to ownedBy=helmx, never human')
+      assert.equal(kernel.ownership.getOwnership(autoCreated.body.id), 'helmx')
+
+      // Automated caller can immediately mutate the conversation it created.
+      const autoUpdateSelfCreated = await postCoreAction(
+        kernel,
+        'conversations',
+        'update',
+        { conversationId: autoCreated.body.id, title: 'Auto Created Renamed' },
+        helmxCaller.id,
+      )
+      assert.equal(autoUpdateSelfCreated.status, 200)
+      assert.equal(autoUpdateSelfCreated.body.title, 'Auto Created Renamed')
+      assert.equal(autoUpdateSelfCreated.body.ownedBy, 'helmx')
+
+      // Automated caller attempting explicit ownedBy='human' on create -> 403 ownership_violation.
+      const autoCreateHumanForbidden = await postCoreAction(
+        kernel,
+        'conversations',
+        'create',
+        { title: 'Spoofed Human', ownedBy: 'human' },
+        helmxCaller.id,
+      )
+      assert.equal(autoCreateHumanForbidden.status, 403)
+      assert.equal(autoCreateHumanForbidden.code, 'ownership_violation')
+
+      // Direct HTTP create under helmx parent inherits 'helmx'; explicit 'human' overrides.
+      const directChildInherited = await postCoreAction(kernel, 'conversations', 'create', {
+        title: 'Child Inherited',
+        parentConversationId: helmxCaller.id,
+      })
+      assert.equal(directChildInherited.status, 200)
+      assert.equal(directChildInherited.body.ownedBy, 'helmx')
+
+      const directChildExplicitHuman = await postCoreAction(kernel, 'conversations', 'create', {
+        title: 'Child Explicit Human',
+        parentConversationId: helmxCaller.id,
+        ownedBy: 'human',
+      })
+      assert.equal(directChildExplicitHuman.status, 200)
+      assert.equal(directChildExplicitHuman.body.ownedBy, 'human')
+
+      // Seed a human-owned conversation with a completed turn so it can be forked.
+      const humanSeed = await kernel.conversations.createConversation({
+        title: 'Human Source',
+        ownedBy: 'human',
+      })
+      kernel.__faux.setResponses([fauxAssistantMessage('human seed reply')])
+      await kernel.conversations.submitInput(humanSeed.id, 'seed question')
+      await kernel.conversations.waitForIdle(humanSeed.id)
+
+      // Automated caller forking a human conversation always produces ownedBy='helmx' and rejects explicit 'human'.
+      const autoForkOfHuman = await postCoreAction(
+        kernel,
+        'conversations',
+        'fork',
+        { conversationId: humanSeed.id, title: 'Auto Experiment Fork' },
+        helmxCaller.id,
+      )
+      assert.equal(autoForkOfHuman.status, 200)
+      assert.equal(autoForkOfHuman.body.ownedBy, 'helmx', 'helmx caller fork must produce ownedBy=helmx')
+      assert.equal(kernel.ownership.getOwnership(autoForkOfHuman.body.id), 'helmx')
+
+      const autoForkHumanForbidden = await postCoreAction(
+        kernel,
+        'conversations',
+        'fork',
+        { conversationId: humanSeed.id, ownedBy: 'human' },
+        helmxCaller.id,
+      )
+      assert.equal(autoForkHumanForbidden.status, 403)
+      assert.equal(autoForkHumanForbidden.code, 'ownership_violation')
+
+      // Direct HTTP fork inherits source ownership ('helmx' vs 'human') and honors explicit ownedBy override.
+      const directForkOfHelmx = await postCoreAction(kernel, 'conversations', 'fork', {
+        conversationId: autoForkOfHuman.body.id,
+        title: 'Inherited Helmx Fork',
+      })
+      assert.equal(directForkOfHelmx.status, 200)
+      assert.equal(directForkOfHelmx.body.ownedBy, 'helmx')
+
+      const directForkPromoted = await postCoreAction(kernel, 'conversations', 'fork', {
+        conversationId: autoForkOfHuman.body.id,
+        title: 'Promoted Human Fork',
+        ownedBy: 'human',
+      })
+      assert.equal(directForkPromoted.status, 200)
+      assert.equal(directForkPromoted.body.ownedBy, 'human')
+
+      // 2. Automated caller send rejects replaceFromEntryId via submitInputGuarded (400 validation_error).
+      const autoRewriteBlocked = await postCoreAction(
+        kernel,
+        'conversations',
+        'send',
+        { conversationId: autoCreated.body.id, text: 'rewrite', replaceFromEntryId: 1 },
+        helmxCaller.id,
+      )
+      assert.equal(autoRewriteBlocked.status, 400)
+      assert.equal(autoRewriteBlocked.code, 'validation_error')
+
+      // 3. Stale expectedStateSeq rejects with 409 state_seq_conflict on automated mutations.
+      const seqNow = kernel.conversations.getConversation(autoCreated.body.id).stateChangeSeq
+      for (const [actionId, payload] of [
+        ['update', { conversationId: autoCreated.body.id, title: 'stale', expectedStateSeq: seqNow + 50 }],
+        ['send', { conversationId: autoCreated.body.id, text: 'stale', expectedStateSeq: seqNow + 50 }],
+        ['abort', { conversationId: autoCreated.body.id, expectedStateSeq: seqNow + 50 }],
+        ['reset', { conversationId: autoCreated.body.id, expectedStateSeq: seqNow + 50 }],
+        ['compact', { conversationId: autoCreated.body.id, expectedStateSeq: seqNow + 50 }],
+        ['delete', { conversationId: autoCreated.body.id, expectedStateSeq: seqNow + 50 }],
+      ] as const) {
+        const staleRes = await postCoreAction(kernel, 'conversations', actionId, payload, helmxCaller.id)
+        assert.equal(staleRes.status, 409, `stale expectedStateSeq on core:conversations.${actionId} must return 409`)
+        assert.equal(staleRes.code, 'state_seq_conflict')
+      }
+
+      // 4. Deterministic mid-await human-ownership takeover race tests across send/abort/update/reset/compact/delete/withdraw.
+      const raceOps: Array<{
+        name: string
+        actionId: string
+        buildPayload: (convId: number) => Record<string, unknown>
+        verifyUntouched: (convId: number, seqBefore: number) => Promise<void> | void
+      }> = [
+        {
+          name: 'send',
+          actionId: 'send',
+          buildPayload: (convId) => ({ conversationId: convId, text: 'race inject' }),
+          verifyUntouched: async (convId) => {
+            const detail = await kernel.conversations.getConversationDetail(convId, { limit: 20 })
+            assert.equal(detail.entries.filter((e) => e.kind === 'helmx.input').length, 0)
+            assert.equal(kernel.conversations.getConversation(convId).title, '')
+          },
+        },
+        {
+          name: 'update',
+          actionId: 'update',
+          buildPayload: (convId) => ({ conversationId: convId, title: 'race hijack' }),
+          verifyUntouched: (convId, seqBefore) => {
+            assert.equal(kernel.conversations.getConversation(convId).title, '')
+            assert.equal(kernel.conversations.getConversation(convId).stateChangeSeq, seqBefore)
+          },
+        },
+        {
+          name: 'abort',
+          actionId: 'abort',
+          buildPayload: (convId) => ({ conversationId: convId }),
+          verifyUntouched: (convId, seqBefore) => {
+            assert.equal(kernel.conversations.getConversation(convId).stateChangeSeq, seqBefore)
+          },
+        },
+        {
+          name: 'reset',
+          actionId: 'reset',
+          buildPayload: (convId) => ({ conversationId: convId, handoff: 'race wipe' }),
+          verifyUntouched: (convId, seqBefore) => {
+            assert.equal(kernel.conversations.getConversation(convId).stateChangeSeq, seqBefore)
+          },
+        },
+        {
+          name: 'compact',
+          actionId: 'compact',
+          buildPayload: (convId) => ({ conversationId: convId, instructions: 'race compact' }),
+          verifyUntouched: (convId, seqBefore) => {
+            assert.equal(kernel.conversations.getConversation(convId).stateChangeSeq, seqBefore)
+          },
+        },
+        {
+          name: 'delete',
+          actionId: 'delete',
+          buildPayload: (convId) => ({ conversationId: convId }),
+          verifyUntouched: (convId) => {
+            assert.equal(kernel.conversations.getConversation(convId).ownedBy, 'human')
+          },
+        },
+      ]
+
+      for (const op of raceOps) {
+        const target = await kernel.conversations.createConversation({ ownedBy: 'helmx' })
+        const seqBefore = target.stateChangeSeq
+        const barrier = pauseNextConversationLookup()
+        const promise = postCoreAction(
+          kernel,
+          'conversations',
+          op.actionId,
+          op.buildPayload(target.id),
+          helmxCaller.id,
+        )
+        await flushTick()
+        kernel.ownership.markOwnership(target.id, 'human')
+        barrier.release()
+
+        const res = await promise
+        assert.equal(res.status, 409, `mid-await human takeover during core:conversations.${op.name} must return 409`)
+        assert.equal(res.code, 'ownership_conflict', `core:conversations.${op.name} must fail with ownership_conflict`)
+        await op.verifyUntouched(target.id, seqBefore)
+      }
+
+      // Deterministic race test for core:conversations.withdraw via harness.submission barrier.
+      let releaseTurn!: () => void
+      const turnGate = new Promise<void>((resolve) => {
+        releaseTurn = resolve
+      })
+      const withdrawTarget = await kernel.conversations.createConversation({
+        title: 'Withdraw Race Target',
+        ownedBy: 'helmx',
+      })
+      kernel.__faux.setResponses([
+        (async () => {
+          await turnGate
+          return fauxAssistantMessage('first turn ok')
+        }) as never,
+        fauxAssistantMessage('queued survives'),
+      ])
+      await kernel.conversations.submitInput(withdrawTarget.id, 'hold')
+      await waitFor(() => kernel.conversations.getConversation(withdrawTarget.id).status === 'working')
+      const queued = await kernel.conversations.submitInput(withdrawTarget.id, 'queued item', {
+        whenBusy: 'followUp',
+      })
+      let releaseSub!: () => void
+      const subGate = new Promise<void>((resolve) => {
+        releaseSub = resolve
+      })
+      let subArmed = true
+      harness.submission = (id: never, ctx: unknown) => {
+        if (!subArmed) return realSubmission(id, ctx)
+        subArmed = false
+        return new Promise((resolve, reject) => {
+          void subGate.then(() => {
+            void realSubmission(id, ctx).then(resolve, reject)
+          }, reject)
+        })
+      }
+      try {
+        const withdrawAttempt = postCoreAction(
+          kernel,
+          'conversations',
+          'withdraw',
+          { conversationId: withdrawTarget.id, submissionId: Number(queued.submissionId) },
+          helmxCaller.id,
+        )
+        await flushTick()
+        kernel.ownership.markOwnership(withdrawTarget.id, 'human')
+        harness.submission = realSubmission
+        releaseSub()
+
+        const withdrawRes = await withdrawAttempt
+        assert.equal(withdrawRes.status, 409)
+        assert.equal(withdrawRes.code, 'ownership_conflict')
+      } finally {
+        harness.submission = realSubmission
+        releaseSub()
+        releaseTurn()
+        await kernel.conversations.waitForIdle(withdrawTarget.id).catch(() => {})
+      }
+      assert.equal(await kernel.conversations.getLastAssistantText(withdrawTarget.id), 'queued survives')
+    } finally {
+      harness.conversation = realConversation
+      harness.submission = realSubmission
+      pendingRelease?.()
+      await kernel.close()
+    }
+  })
+
+  it('single-source domain parity between HTTP routes, core:* actions, and kernel services', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'domain-single-source-parity')
+    const kernel = await openRuntime(dir)
+    try {
+      // 1. Profile CRUD single source: disabled-model 409 preflight, model clearing + alignment, and default lock 403.
+      await kernel.models.setDisabledModels('faux', ['faux-2'])
+      const httpDisabledCreate = await apiCall(kernel, 'POST', '/api/profiles', {
+        id: 'blocked-http',
+        model: 'faux/faux-2',
+      })
+      const actionDisabledCreate = await postCoreAction(kernel, 'profiles', 'create', {
+        id: 'blocked-action',
+        model: 'faux/faux-2',
+      })
+      assert.equal(httpDisabledCreate.status, 409)
+      assert.equal(httpDisabledCreate.code, 'model_disabled')
+      assert.equal(actionDisabledCreate.status, 409)
+      assert.equal(actionDisabledCreate.code, 'model_disabled')
+
+      // Create an unbound profile, bind a conversation, then update profile model -> bound conversation aligns.
+      const createdProf = await postCoreAction(kernel, 'profiles', 'create', {
+        id: 'align-role',
+        name: 'Align Role',
+        model: 'faux/faux-1',
+      })
+      assert.equal(createdProf.status, 200)
+      const boundConv = await kernel.conversations.createConversation({
+        title: 'Bound To Align Role',
+        profileId: 'align-role',
+      })
+      assert.equal(boundConv.model, 'faux/faux-1')
+      // Attempt patching to disabled model -> 409 model_disabled.
+      const actionDisabledUpdate = await postCoreAction(kernel, 'profiles', 'update', {
+        id: 'align-role',
+        model: 'faux/faux-2',
+      })
+      assert.equal(actionDisabledUpdate.status, 409)
+      assert.equal(actionDisabledUpdate.code, 'model_disabled')
+      await kernel.models.setDisabledModels('faux', [])
+      const switchedProf = await postCoreAction(kernel, 'profiles', 'update', {
+        id: 'align-role',
+        model: 'faux/faux-2',
+      })
+      assert.equal(switchedProf.status, 200)
+      assert.equal(kernel.conversations.getConversation(boundConv.id).model, 'faux/faux-2')
+
+      // Default `assistant` profile deletion returns structured 403 profile_default_locked when unbound.
+      await kernel.conversations.updateConversation(1, { profileId: 'align-role' })
+      const httpDelDefault = await apiCall(kernel, 'DELETE', '/api/profiles/assistant')
+      const actionDelDefault = await postCoreAction(kernel, 'profiles', 'delete', { id: 'assistant' })
+      assert.equal(httpDelDefault.status, 403)
+      assert.equal(httpDelDefault.code, 'profile_default_locked')
+      assert.equal(actionDelDefault.status, 403)
+      assert.equal(actionDelDefault.code, 'profile_default_locked')
+
+      // 2. Model defaults single source: cross-field validation & snapshot parity across HTTP, action, and ModelRegistry.
+      for (const badBody of [
+        { modelThinking: 'faux/faux-1' },
+        { modelThinkingLevel: 'high' },
+        {
+          modelThinking: 'faux/faux-1',
+          modelThinkingLevel: 'high',
+          modelThinkingLevels: { 'faux/faux-1': 'low' },
+        },
+      ]) {
+        const httpBad = await apiCall(kernel, 'PUT', '/api/models/default', badBody)
+        const actionBad = await postCoreAction(kernel, 'models', 'default', badBody)
+        assert.equal(httpBad.status, 400)
+        assert.equal(httpBad.code, 'validation_error')
+        assert.equal(actionBad.status, 400)
+        assert.equal(actionBad.code, 'validation_error')
+        await assert.rejects(
+          () => kernel.models.updateDefaults(badBody),
+          (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
+        )
+      }
+      const actionSetDefaults = await postCoreAction(kernel, 'models', 'default', {
+        model: 'faux/faux-1',
+        modelThinking: 'faux/faux-1',
+        modelThinkingLevel: 'medium',
+      })
+      assert.equal(actionSetDefaults.status, 200)
+      const httpGetDefaults = await apiCall(kernel, 'GET', '/api/models/default')
+      const directDefaults = await kernel.models.getDefaults()
+      assert.equal(httpGetDefaults.status, 200)
+      assert.deepEqual(httpGetDefaults.body, directDefaults)
+      assert.equal(directDefaults.defaultModel, 'faux/faux-1')
+      assert.equal(directDefaults.modelThinkingLevels['faux/faux-1'], 'medium')
+
+      // 3. Plugin config redaction & doctor target resolution single source parity.
+      const leakedCred = 'sk-embedded-in-note-secret-98765'
+      kernel.stash.addRedaction(leakedCred)
+      await kernel.plugins.register({
+        id: 'test:parity-cfg',
+        name: 'Parity Config Plugin',
+        definePlugin: (ctx) => {
+          ctx.configSchema({
+            token: { type: 'string', secret: true },
+            emptySecret: { type: 'string', secret: true, default: '' },
+            unsetSecret: { type: 'string', secret: true },
+            note: { type: 'string', default: '' },
+          })
+        },
+      })
+      await kernel.plugins.setConfig('test:parity-cfg', {
+        token: 'super-secret-token',
+        note: `ref ${leakedCred}`,
+      })
+      const httpCfg = await apiCall(kernel, 'GET', '/api/plugins/test%3Aparity-cfg/config')
+      const actionCfg = await postCoreAction(kernel, 'plugins', 'config_get', { id: 'test:parity-cfg' })
+      assert.equal(httpCfg.status, 200)
+      assert.equal(actionCfg.status, 200)
+      assert.deepEqual(httpCfg.body, actionCfg.body)
+      assert.equal(httpCfg.body.values.token, '******')
+      assert.equal(httpCfg.body.values.emptySecret, '')
+      assert.equal(httpCfg.body.values.unsetSecret, undefined)
+      assert.equal(httpCfg.body.sources.unsetSecret, 'unset')
+      assert.equal(JSON.stringify(httpCfg.body).includes(leakedCred), false)
+
+      for (const badDoctor of [
+        {},
+        { path: './relative-plugin' },
+        { path: '/abs/plugin', id: 'test:parity-cfg' },
+      ]) {
+        const httpDoc = await apiCall(kernel, 'POST', '/api/plugins/doctor', badDoctor)
+        const actionDoc = await postCoreAction(kernel, 'plugins', 'doctor', badDoctor)
+        assert.equal(httpDoc.status, 400)
+        assert.equal(httpDoc.code, 'validation_error')
+        assert.equal(actionDoc.status, 400)
+        assert.equal(actionDoc.code, 'validation_error')
+      }
+
+      // 4. Conversation search validation single source across HTTP, core:conversations.search, and ConversationService.
+      for (const emptyQuery of ['', '   ', '\u0000']) {
+        const httpEmpty = await apiCall(kernel, 'GET', `/api/search?q=${encodeURIComponent(emptyQuery)}`)
+        assert.equal(httpEmpty.status, 400)
+        assert.equal(httpEmpty.code, 'validation_error')
+        await assert.rejects(
+          () => kernel.conversations.search(emptyQuery),
+          (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
+        )
+      }
+      const actionNulSearch = await postCoreAction(kernel, 'conversations', 'search', { q: '\u0000' })
+      assert.equal(actionNulSearch.status, 400)
+      assert.equal(actionNulSearch.code, 'validation_error')
+    } finally {
+      await kernel.close()
+    }
+  })
 })

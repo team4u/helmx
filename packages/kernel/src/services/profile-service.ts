@@ -362,7 +362,12 @@ export class ProfileService {
     this.options?.assertWritable?.()
     assertProfileId(id)
     if (id === DEFAULT_PROFILE_ID) {
-      throw new Error(`default profile '${DEFAULT_PROFILE_ID}' cannot be deleted`)
+      throw new HelmxError(
+        'profile_default_locked',
+        `default profile '${DEFAULT_PROFILE_ID}' cannot be deleted`,
+        403,
+        { profileId: id },
+      )
     }
     if (deps !== undefined && (await deps.isProfileInUse(id))) {
       throw new HelmxError('profile_in_use', `profile ${id} is still bound by conversations; unbind before deleting`, 409, {
@@ -397,4 +402,262 @@ export class ProfileService {
       return text
     })
   }
+
+  /** Read a profile by ID enriched with its `SYSTEM.md` body (`404 not_found` when missing). */
+  getEnriched(id: string): Promise<Profile> {
+    return getProfileWithSystem(this, id)
+  }
+
+  /** User/action Profile creation with `managedByPlugin` guard, disabled-model preflight, alignment, and system enrichment. */
+  createProfile(
+    profile: Profile,
+    hooks?: Pick<ProfileMutationHooks, 'assertModelEnabled' | 'alignProfileConversations'>,
+  ): Promise<Profile> {
+    return createManagedGuardedProfile(this, profile, hooks)
+  }
+
+  /** User/action Profile full replacement (`PUT`) with `managedByPlugin` immutability, model preflight, alignment, and enrichment. */
+  replaceProfile(
+    profileId: string,
+    profile: Profile,
+    hooks?: Pick<ProfileMutationHooks, 'assertModelEnabled' | 'alignProfileConversations'>,
+  ): Promise<Profile> {
+    return replaceManagedGuardedProfile(this, profileId, profile, hooks)
+  }
+
+  /** User/action Profile partial update (`core:profiles.update`) preserving untouched fields and `managedByPlugin`. */
+  patchProfile(
+    profileId: string,
+    rawInput: Record<string, unknown>,
+    parsedPatch: Profile,
+    hooks?: Pick<ProfileMutationHooks, 'assertModelEnabled' | 'alignProfileConversations'>,
+  ): Promise<Profile> {
+    return patchManagedGuardedProfile(this, profileId, rawInput, parsedPatch, hooks)
+  }
+
+  /** User/action Profile deletion with in-use check (fast path + service re-check), `managedByPlugin` lock, and default lock. */
+  deleteProfile(
+    profileId: string,
+    hooks?: Pick<ProfileMutationHooks, 'isProfileInUse'>,
+  ): Promise<void> {
+    return deleteManagedGuardedProfile(this, profileId, hooks)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Single-source Profile CRUD domain operations (shared by HTTP routes & core:profiles.*)
+// ---------------------------------------------------------------------------
+
+export interface ProfileStorePort {
+  get(id: string): Promise<Profile | undefined>
+  getSystem(id: string): Promise<string>
+  save(input: unknown): Promise<Profile>
+  delete(id: string, deps?: ProfileDeleteDeps): Promise<void>
+}
+
+export interface ProfileMutationHooks {
+  /** Reject disabled models before saving (`409 model_disabled`). */
+  readonly assertModelEnabled?: (providerId: string, modelId: string) => void
+  /** Re-align bound conversations after saving a Profile. */
+  readonly alignProfileConversations?: (profileId: string) => Promise<void> | void
+  /** Check whether any conversation still binds the Profile (`409 profile_in_use`). */
+  readonly isProfileInUse?: (profileId: string) => Promise<boolean> | boolean
+}
+
+/** Attach `SYSTEM.md` text onto a persisted Profile DTO. */
+export async function enrichProfileWithSystem(
+  store: Pick<ProfileStorePort, 'getSystem'>,
+  profile: Profile,
+): Promise<Profile> {
+  const system = await store.getSystem(profile.id)
+  return { ...profile, system }
+}
+
+/** Fetch a Profile by ID with its `SYSTEM.md` body (`404 not_found` if absent). */
+export async function getProfileWithSystem(
+  store: Pick<ProfileStorePort, 'get' | 'getSystem'>,
+  profileId: string,
+): Promise<Profile> {
+  const found = await store.get(profileId)
+  if (found === undefined) {
+    throw new HelmxError('not_found', `profile not found: ${profileId}`, 404, { profileId })
+  }
+  return enrichProfileWithSystem(store, found)
+}
+
+/** Disabled-model preflight for `profile.model` (`provider/modelId` or `tier/<id>`; `409 model_disabled`). */
+export function assertProfileModelEnabled(
+  model: string | undefined,
+  assertModelEnabled?: (providerId: string, modelId: string) => void,
+): void {
+  if (model === undefined || model === '' || assertModelEnabled === undefined) return
+  const slash = model.indexOf('/')
+  if (slash <= 0 || slash === model.length - 1) return
+  assertModelEnabled(model.slice(0, slash), model.slice(slash + 1))
+}
+
+/**
+ * Create a Profile via user/action boundary (`POST /api/profiles`, `core:profiles.create`):
+ * - Rejects spoofing `managedByPlugin` or overwriting an existing plugin-managed Profile (`403 profile_managed_by_plugin`);
+ * - Preflights disabled model bindings before writing (`409 model_disabled`);
+ * - Persists, aligns bound conversations, and returns the system-enriched Profile.
+ */
+export async function createManagedGuardedProfile(
+  store: Pick<ProfileStorePort, 'get' | 'getSystem' | 'save'>,
+  profile: Profile,
+  hooks?: Pick<ProfileMutationHooks, 'assertModelEnabled' | 'alignProfileConversations'>,
+): Promise<Profile> {
+  if (profile.managedByPlugin !== undefined) {
+    throw new HelmxError(
+      'profile_managed_by_plugin',
+      'managedByPlugin is declared by plugin bootstrap and cannot be set via profile create',
+      403,
+      { profileId: profile.id },
+    )
+  }
+  const existing = await store.get(profile.id)
+  if (existing?.managedByPlugin !== undefined) {
+    throw new HelmxError(
+      'profile_managed_by_plugin',
+      `cannot overwrite plugin-managed profile ${profile.id}`,
+      403,
+      { profileId: profile.id, managedByPlugin: existing.managedByPlugin },
+    )
+  }
+  assertProfileModelEnabled(profile.model, hooks?.assertModelEnabled)
+  const saved = await store.save(profile)
+  await hooks?.alignProfileConversations?.(saved.id)
+  return enrichProfileWithSystem(store, saved)
+}
+
+/**
+ * Full-replace an existing Profile (`PUT /api/profiles/:id`):
+ * - Verifies `profile.id` (when provided) matches `profileId` (`400 validation_error`);
+ * - Requires Profile existence (`404 not_found`);
+ * - Keeps `managedByPlugin` immutable (omission counts as stripping under full-replacement PUT -> `403`);
+ * - Preflights disabled models, saves, aligns conversations, and returns the system-enriched Profile.
+ */
+export async function replaceManagedGuardedProfile(
+  store: Pick<ProfileStorePort, 'get' | 'getSystem' | 'save'>,
+  profileId: string,
+  profile: Profile,
+  hooks?: Pick<ProfileMutationHooks, 'assertModelEnabled' | 'alignProfileConversations'>,
+): Promise<Profile> {
+  if (profile.id !== undefined && profile.id !== profileId) {
+    throw new HelmxError('validation_error', 'body.id (when provided) must match the path parameter', 400)
+  }
+  const existing = await store.get(profileId)
+  if (existing === undefined) {
+    throw new HelmxError('not_found', `profile not found: ${profileId}`, 404, { profileId })
+  }
+  if (profile.managedByPlugin !== existing.managedByPlugin) {
+    throw new HelmxError(
+      'profile_managed_by_plugin',
+      `profile ${profileId} hosting metadata is declared by a plugin and cannot be set, modified, or removed`,
+      403,
+      { profileId, managedByPlugin: existing.managedByPlugin },
+    )
+  }
+  assertProfileModelEnabled(profile.model, hooks?.assertModelEnabled)
+  const saved = await store.save({ ...profile, id: profileId })
+  await hooks?.alignProfileConversations?.(saved.id)
+  return enrichProfileWithSystem(store, saved)
+}
+
+/**
+ * Partially update an existing Profile (`core:profiles.update`):
+ * - Merges only keys present on `rawInput` onto the current Profile (empty string clears `model` / `thinkingLevel`);
+ * - Keeps `managedByPlugin` immutable (explicit mismatch throws `403`; omission preserves existing value);
+ * - Rejects updates with zero updatable fields (`400 validation_error`);
+ * - Preflights disabled models, saves, aligns conversations, and returns the system-enriched Profile.
+ */
+export async function patchManagedGuardedProfile(
+  store: Pick<ProfileStorePort, 'get' | 'getSystem' | 'save'>,
+  profileId: string,
+  rawInput: Record<string, unknown>,
+  parsedPatch: Profile,
+  hooks?: Pick<ProfileMutationHooks, 'assertModelEnabled' | 'alignProfileConversations'>,
+): Promise<Profile> {
+  const existing = await store.get(profileId)
+  if (existing === undefined) {
+    throw new HelmxError('not_found', `profile not found: ${profileId}`, 404, { profileId })
+  }
+  if (
+    Object.hasOwn(rawInput, 'managedByPlugin') &&
+    rawInput['managedByPlugin'] !== existing.managedByPlugin
+  ) {
+    throw new HelmxError(
+      'profile_managed_by_plugin',
+      `profile ${profileId} hosting metadata is declared by a plugin and cannot be set, modified, or removed`,
+      403,
+      { profileId, managedByPlugin: existing.managedByPlugin },
+    )
+  }
+  const updatableKeys = Object.keys(rawInput).filter((k) => k !== 'id' && k !== 'managedByPlugin')
+  if (updatableKeys.length === 0) {
+    throw new HelmxError('validation_error', 'profile update requires at least one updatable field', 400)
+  }
+  const merged: Profile = { ...existing, id: profileId }
+  if (Object.hasOwn(rawInput, 'name')) merged.name = parsedPatch.name
+  if (Object.hasOwn(rawInput, 'model')) {
+    if (rawInput['model'] === '') delete merged.model
+    else merged.model = parsedPatch.model
+  }
+  if (Object.hasOwn(rawInput, 'thinkingLevel')) {
+    if (rawInput['thinkingLevel'] === '') delete merged.thinkingLevel
+    else merged.thinkingLevel = parsedPatch.thinkingLevel
+  }
+  if (Object.hasOwn(rawInput, 'nodeId')) merged.nodeId = parsedPatch.nodeId
+  if (Object.hasOwn(rawInput, 'cwd')) merged.cwd = parsedPatch.cwd
+  if (Object.hasOwn(rawInput, 'tags')) merged.tags = parsedPatch.tags
+  if (Object.hasOwn(rawInput, 'skills')) merged.skills = parsedPatch.skills
+  if (Object.hasOwn(rawInput, 'starters')) merged.starters = parsedPatch.starters
+  if (Object.hasOwn(rawInput, 'restrictToCwd')) merged.restrictToCwd = parsedPatch.restrictToCwd
+  if (Object.hasOwn(rawInput, 'system')) merged.system = parsedPatch.system
+  if (existing.managedByPlugin !== undefined) {
+    merged.managedByPlugin = existing.managedByPlugin
+  } else {
+    delete merged.managedByPlugin
+  }
+  assertProfileModelEnabled(merged.model, hooks?.assertModelEnabled)
+  const saved = await store.save(merged)
+  await hooks?.alignProfileConversations?.(saved.id)
+  return enrichProfileWithSystem(store, saved)
+}
+
+/**
+ * Delete a Profile via user/action boundary (`DELETE /api/profiles/:id`, `core:profiles.delete`):
+ * - Fast-path in-use check (`409 profile_in_use`);
+ * - Blocks deleting plugin-managed Profiles (`403 profile_managed_by_plugin`);
+ * - Delegates to `store.delete(profileId, { isProfileInUse })` which re-checks bindings right
+ *   before removing files (preventing TOCTOU races) and enforces default-profile protection (`403`).
+ */
+export async function deleteManagedGuardedProfile(
+  store: Pick<ProfileStorePort, 'get' | 'delete'>,
+  profileId: string,
+  hooks?: Pick<ProfileMutationHooks, 'isProfileInUse'>,
+): Promise<void> {
+  if (hooks?.isProfileInUse !== undefined && (await hooks.isProfileInUse(profileId))) {
+    throw new HelmxError(
+      'profile_in_use',
+      `profile ${profileId} is still bound by conversations; unbind before deleting`,
+      409,
+      { profileId },
+    )
+  }
+  const target = await store.get(profileId)
+  if (target?.managedByPlugin !== undefined) {
+    throw new HelmxError(
+      'profile_managed_by_plugin',
+      `profile ${profileId} is managed by plugin ${target.managedByPlugin} and cannot be deleted`,
+      403,
+      { profileId, managedByPlugin: target.managedByPlugin },
+    )
+  }
+  await store.delete(
+    profileId,
+    hooks?.isProfileInUse !== undefined
+      ? { isProfileInUse: async (pid) => Boolean(await hooks.isProfileInUse!(pid)) }
+      : undefined,
+  )
 }

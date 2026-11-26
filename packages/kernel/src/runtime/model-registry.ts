@@ -1073,4 +1073,176 @@ export class ModelRegistry {
     }
     return wrapped
   }
+
+  /** Read the current global/per-model defaults snapshot (single source for HTTP and `core:models.default`). */
+  async getDefaults(): Promise<ModelDefaultsSnapshot> {
+    return getModelDefaults(this)
+  }
+
+  /** Validate, apply, and echo back updated global/per-model defaults (single source for HTTP and `core:models.default`). */
+  async updateDefaults(input: ModelDefaultsPatch): Promise<ModelDefaultsSnapshot> {
+    return updateModelDefaults(this, input)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Single-source model defaults & refresh normalization (shared by HTTP routes & core:models.*)
+// ---------------------------------------------------------------------------
+
+export interface ModelDefaultsSnapshot {
+  readonly defaultModel: string
+  readonly defaultThinkingLevel: string
+  readonly modelThinkingLevels: Record<string, string>
+  readonly defaultCompactionModel: string
+  readonly defaultCompactionThinkingLevel: string
+}
+
+export interface ModelDefaultsPatch {
+  readonly model?: string
+  readonly thinkingLevel?: string
+  readonly compactionModel?: string
+  readonly compactionThinkingLevel?: string
+  readonly modelThinking?: string
+  readonly modelThinkingLevel?: string
+  readonly modelThinkingLevels?: Record<string, string>
+}
+
+export interface ModelDefaultsPort {
+  listModels(): Promise<ModelCatalog>
+  setDefaultModel?: ModelRegistry['setDefaultModel']
+  setModelThinkingDefault?: ModelRegistry['setModelThinkingDefault']
+}
+
+/** Project canonical defaults snapshot fields from a `ModelCatalog`. */
+export function modelDefaultsFromCatalog(
+  catalog: Pick<
+    ModelCatalog,
+    | 'defaultModel'
+    | 'defaultThinkingLevel'
+    | 'modelThinkingLevels'
+    | 'defaultCompactionModel'
+    | 'defaultCompactionThinkingLevel'
+  >,
+): ModelDefaultsSnapshot {
+  return {
+    defaultModel: catalog.defaultModel ?? '',
+    defaultThinkingLevel: catalog.defaultThinkingLevel ?? '',
+    modelThinkingLevels: catalog.modelThinkingLevels ?? {},
+    defaultCompactionModel: catalog.defaultCompactionModel ?? '',
+    defaultCompactionThinkingLevel: catalog.defaultCompactionThinkingLevel ?? '',
+  }
+}
+
+/** Read current model defaults snapshot from any `ModelDefaultsPort`. */
+export async function getModelDefaults(
+  models: Pick<ModelDefaultsPort, 'listModels'>,
+): Promise<ModelDefaultsSnapshot> {
+  return modelDefaultsFromCatalog(await models.listModels())
+}
+
+/**
+ * Single-source model defaults mutation shared by `PUT /api/models/default` and `core:models.default`:
+ * - Enforces cross-field pairing (`modelThinking` + `modelThinkingLevel` must arrive together);
+ * - Rejects combining bulk `modelThinkingLevels` with a single `modelThinking` pair;
+ * - Rejects empty patches (at least one updatable field required);
+ * - Persists via `setDefaultModel` (or `setModelThinkingDefault` fallback on partial ports) and returns the updated snapshot.
+ */
+export async function updateModelDefaults(
+  models: ModelDefaultsPort,
+  input: ModelDefaultsPatch,
+): Promise<ModelDefaultsSnapshot> {
+  const hasModelThinking = input.modelThinking !== undefined || input.modelThinkingLevel !== undefined
+  if (hasModelThinking && (input.modelThinking === undefined || input.modelThinkingLevel === undefined)) {
+    throw new HelmxError(
+      'validation_error',
+      'models default body: modelThinking and modelThinkingLevel must be set together',
+      400,
+    )
+  }
+  const hasRegularFields =
+    input.model !== undefined ||
+    input.thinkingLevel !== undefined ||
+    input.compactionModel !== undefined ||
+    input.compactionThinkingLevel !== undefined
+  const hasModelThinkingLevels = input.modelThinkingLevels !== undefined
+  if (hasModelThinkingLevels && hasModelThinking) {
+    throw new HelmxError(
+      'validation_error',
+      'models default body: modelThinkingLevels cannot be combined with a modelThinking pair',
+      400,
+    )
+  }
+  if (!hasRegularFields && !hasModelThinkingLevels && !hasModelThinking) {
+    throw new HelmxError(
+      'validation_error',
+      'models default body requires at least one updatable field',
+      400,
+    )
+  }
+  if (models.setDefaultModel === undefined && (hasRegularFields || hasModelThinkingLevels)) {
+    throw new HelmxError(
+      'not_implemented',
+      'current runtime does not support setting the default model',
+      501,
+    )
+  }
+  const modelThinkingUpdate = hasModelThinking
+    ? { model: input.modelThinking!, level: input.modelThinkingLevel! }
+    : undefined
+  if (models.setDefaultModel !== undefined) {
+    if (input.compactionThinkingLevel !== undefined) {
+      await models.setDefaultModel(
+        input.model,
+        input.thinkingLevel,
+        input.compactionModel,
+        input.compactionThinkingLevel,
+        input.modelThinkingLevels,
+        modelThinkingUpdate,
+      )
+    } else if (input.compactionModel !== undefined) {
+      await models.setDefaultModel(
+        input.model,
+        input.thinkingLevel,
+        input.compactionModel,
+        undefined,
+        input.modelThinkingLevels,
+        modelThinkingUpdate,
+      )
+    } else {
+      await models.setDefaultModel(
+        input.model,
+        input.thinkingLevel,
+        undefined,
+        undefined,
+        input.modelThinkingLevels,
+        modelThinkingUpdate,
+      )
+    }
+  } else if (modelThinkingUpdate !== undefined && models.setModelThinkingDefault !== undefined) {
+    await models.setModelThinkingDefault(modelThinkingUpdate.model, modelThinkingUpdate.level)
+  } else {
+    throw new HelmxError(
+      'not_implemented',
+      'current runtime does not support setting model defaults',
+      501,
+    )
+  }
+  return getModelDefaults(models)
+}
+
+/** Merge single `provider` and list `providers` into one target list for `refreshModels`. */
+export function normalizeModelRefreshInput(input: {
+  readonly provider?: string
+  readonly providers?: readonly string[]
+  readonly force?: boolean
+}): { providers?: string[]; force?: boolean } {
+  let providers: string[] | undefined
+  if (input.provider !== undefined) providers = [input.provider]
+  if (input.providers !== undefined) {
+    providers = providers !== undefined ? [...providers, ...input.providers] : [...input.providers]
+  }
+  return {
+    ...(providers !== undefined ? { providers } : {}),
+    ...(input.force !== undefined ? { force: input.force } : {}),
+  }
 }
