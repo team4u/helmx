@@ -348,8 +348,11 @@ export function ModelPickerControl({
   const customTrigger = renderTrigger !== undefined ? renderTrigger({ open, disabled, pending }) : undefined
   const hasCustomTrigger =
     customTrigger !== null && customTrigger !== undefined && customTrigger !== false
+  const hasRegisteredModes = enableRegisteredModes && registeredModes.length > 0
   const hideResetForMode = activeMode !== null && activeMode.spec.hideResetDefault !== false
   const shouldShowReset = showResetDefault && onResetDefault !== undefined && !hideResetForMode
+  const activeModeHint = activeMode?.spec.hint !== undefined && activeMode.spec.hint !== '' ? activeMode.spec.hint : ''
+  const hasFooter = activeModeHint !== '' || shouldShowReset || navItems.length > 0
   const listEffectiveModel = activeMode !== null ? activeMode.spec.effectiveModel : effectiveModel
   const listActiveThinkingLevel = activeMode !== null ? (activeMode.spec.activeThinkingLevel ?? '') : activeThinkingLevel
 
@@ -396,6 +399,7 @@ export function ModelPickerControl({
             align="start"
             sideOffset={8}
             collisionPadding={12}
+            data-mode={activeMode !== null ? 'registered' : 'default'}
             className="composer-popover composer-model-popover"
             onOpenAutoFocus={(event) => {
               event.preventDefault()
@@ -426,78 +430,76 @@ export function ModelPickerControl({
               event.stopPropagation()
             }}
           >
-            {enableRegisteredModes && registeredModes.length > 0 ? (
-              <div className="composer-model-mode-bar">
-                <SegmentedControl
-                  size="sm"
-                  aria-label={copy.modeBarAria ?? DEFAULT_MODEL_PICKER_COPY.modeBarAria}
-                  value={activeMode !== null ? activeMode.key : DEFAULT_MODE_VALUE}
-                  onValueChange={(nextValue) => {
-                    setActiveModeKey(nextValue === DEFAULT_MODE_VALUE ? null : nextValue)
-                  }}
-                  items={[
-                    {
-                      value: DEFAULT_MODE_VALUE,
-                      label: copy.defaultModeLabel ?? DEFAULT_MODEL_PICKER_COPY.defaultModeLabel!,
-                    },
-                    ...registeredModes.map((entry) => ({
-                      value: entry.key,
-                      label: entry.spec.label,
-                    })),
-                  ]}
-                />
-                {activeMode?.spec.hint !== undefined && activeMode.spec.hint !== '' ? (
-                  <div className="composer-model-mode-hint">{activeMode.spec.hint}</div>
-                ) : null}
-              </div>
-            ) : null}
-            {shouldShowReset ? (
-              <button type="button" className="popover-item" disabled={disabled} onClick={resetDefault} title={resetTitle}>
-                {resetLabel}
-              </button>
-            ) : null}
-            <div className="composer-model-search-bar">
-              <div className="search-box composer-model-search-input">
-                <HelmxIcon name="search" size={13} />
-                <input
-                  ref={searchInputRef}
-                  aria-label={copy.searchAria}
-                  placeholder={copy.searchPlaceholder}
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.nativeEvent.isComposing) return
-                    if (event.key === 'ArrowDown') {
-                      event.preventDefault()
-                      setActiveIndex((prev) => stepActiveIndex(prev, navItems.length, 1))
-                    } else if (event.key === 'ArrowUp') {
-                      event.preventDefault()
-                      setActiveIndex((prev) => stepActiveIndex(prev, navItems.length, -1))
-                    } else if (event.key === 'Enter') {
-                      const chosen = navItems[activeIndex]
-                      if (chosen !== undefined) {
+            <div className="composer-model-header">
+              <div className="composer-model-search-bar">
+                <div className="search-box composer-model-search-input">
+                  <HelmxIcon name="search" size={13} />
+                  <input
+                    ref={searchInputRef}
+                    aria-label={copy.searchAria}
+                    placeholder={copy.searchPlaceholder}
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.nativeEvent.isComposing) return
+                      if (event.key === 'ArrowDown') {
                         event.preventDefault()
-                        event.stopPropagation()
-                        applySelection(chosen.id, null)
+                        setActiveIndex((prev) => stepActiveIndex(prev, navItems.length, 1))
+                      } else if (event.key === 'ArrowUp') {
+                        event.preventDefault()
+                        setActiveIndex((prev) => stepActiveIndex(prev, navItems.length, -1))
+                      } else if (event.key === 'Enter') {
+                        const chosen = navItems[activeIndex]
+                        if (chosen !== undefined) {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          applySelection(chosen.id, null)
+                        }
                       }
-                    }
-                  }}
-                />
+                    }}
+                  />
+                </div>
               </div>
-              {canRefresh ? (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-icon-sm composer-model-refresh-btn"
-                  disabled={refreshing}
-                  title={copy.refreshCatalog}
-                  aria-label={copy.refreshCatalog}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void refreshCatalog()
-                  }}
-                >
-                  <HelmxIcon name="rotate-cw" size={13} className={refreshing ? 'spin-slow' : undefined} />
-                </button>
+              {hasRegisteredModes || canRefresh ? (
+                <div className="composer-model-header-actions">
+                  {hasRegisteredModes ? (
+                    <div className="composer-model-mode-bar">
+                      <SegmentedControl
+                        size="sm"
+                        aria-label={copy.modeBarAria ?? DEFAULT_MODEL_PICKER_COPY.modeBarAria}
+                        value={activeMode !== null ? activeMode.key : DEFAULT_MODE_VALUE}
+                        onValueChange={(nextValue) => {
+                          setActiveModeKey(nextValue === DEFAULT_MODE_VALUE ? null : nextValue)
+                        }}
+                        items={[
+                          {
+                            value: DEFAULT_MODE_VALUE,
+                            label: copy.defaultModeLabel ?? DEFAULT_MODEL_PICKER_COPY.defaultModeLabel!,
+                          },
+                          ...registeredModes.map((entry) => ({
+                            value: entry.key,
+                            label: entry.spec.label,
+                          })),
+                        ]}
+                      />
+                    </div>
+                  ) : null}
+                  {canRefresh ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-icon-sm composer-model-refresh-btn"
+                      disabled={refreshing}
+                      title={copy.refreshCatalog}
+                      aria-label={copy.refreshCatalog}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void refreshCatalog()
+                      }}
+                    >
+                      <HelmxIcon name="rotate-cw" size={13} className={refreshing ? 'spin-slow' : undefined} />
+                    </button>
+                  ) : null}
+                </div>
               ) : null}
             </div>
             <div className="composer-model-scroll" onMouseLeave={() => setActiveIndex(-1)}>
@@ -505,7 +507,6 @@ export function ModelPickerControl({
                 <>
                   <div className="popover-header">
                     <span>{copy.tiersHeader}</span>
-                    <span className="kbd-hint popover-kbd-hint">{copy.navHint}</span>
                   </div>
                   {filteredTiers.map((tier, idx) => {
                     const tierRef = `${MODEL_TIER_PREFIX}/${tier.id}`
@@ -517,6 +518,7 @@ export function ModelPickerControl({
                         ref={(node) => {
                           itemRefs.current[idx] = node
                         }}
+                        data-current={isCurrent ? 'true' : undefined}
                         className={`popover-item composer-model-row${idx === activeIndex ? ' popover-item-active' : ''}`}
                         onMouseEnter={() => setActiveIndex(idx)}
                       >
@@ -529,6 +531,7 @@ export function ModelPickerControl({
                           onClick={() => applySelection(tierRef, null)}
                         >
                           <span className="composer-model-row-name-line">
+                            <HelmxIcon name="layers" size={12} className="composer-model-tier-icon" />
                             <span className="mono composer-model-row-name">{tierRef}</span>
                             <span className="popover-item-meta">· {targetShort}</span>
                             {isCurrent ? <HelmxIcon name="check" size={12} className="composer-model-row-check" /> : null}
@@ -547,9 +550,6 @@ export function ModelPickerControl({
               ) : null}
               <div className="popover-header">
                 <span>{copy.listHeader}</span>
-                {filteredTiers.length === 0 ? (
-                  <span className="kbd-hint popover-kbd-hint">{copy.navHint}</span>
-                ) : null}
               </div>
               {filteredModels.map((m, modelIdx) => {
                 const idx = filteredTiers.length + modelIdx
@@ -566,6 +566,7 @@ export function ModelPickerControl({
                     ref={(node) => {
                       itemRefs.current[idx] = node
                     }}
+                    data-current={isCurrent ? 'true' : undefined}
                     className={`popover-item composer-model-row${idx === activeIndex ? ' popover-item-active' : ''}`}
                     onMouseEnter={() => setActiveIndex(idx)}
                   >
@@ -625,6 +626,31 @@ export function ModelPickerControl({
                 <div className="popover-item composer-model-empty">{copy.noMatches}</div>
               ) : null}
             </div>
+            {hasFooter ? (
+              <div className="composer-model-footer" data-mode-active={activeMode !== null ? 'true' : undefined}>
+                {activeModeHint !== '' ? (
+                  <span className="composer-model-mode-hint">
+                    <HelmxIcon name="sparkles" size={11} />
+                    <span>{activeModeHint}</span>
+                  </span>
+                ) : null}
+                {shouldShowReset ? (
+                  <button
+                    type="button"
+                    className="composer-model-reset"
+                    disabled={disabled}
+                    onClick={resetDefault}
+                    title={resetTitle}
+                  >
+                    <HelmxIcon name="rotate-ccw" size={11} />
+                    <span>{resetLabel}</span>
+                  </button>
+                ) : null}
+                {navItems.length > 0 ? (
+                  <span className="kbd-hint popover-kbd-hint">{copy.navHint}</span>
+                ) : null}
+              </div>
+            ) : null}
           </PopoverContent>
         </PopoverPortal>
       </Popover>

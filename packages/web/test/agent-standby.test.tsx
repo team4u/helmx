@@ -643,7 +643,7 @@ describe("agent-standby", () => {
     clickButton('button.composer-model-button')
     const resetPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
     assert.ok(resetPopover !== null, 'the popover reopens after an explicit pick')
-    const resetBtn = [...resetPopover!.querySelectorAll<HTMLButtonElement>('button.popover-item')]
+    const resetBtn = [...resetPopover!.querySelectorAll<HTMLButtonElement>('button.composer-model-reset')]
       .find((btn) => btn.textContent?.includes('Follow profile default'))
     assert.ok(resetBtn, 'the restore-default item exists')
     assert.equal(resetBtn!.disabled, false, 'after an explicit pick you can still return to following the default')

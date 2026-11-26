@@ -283,6 +283,10 @@ test('empty loaded catalog (models: []) displays emptyCatalog copy and optional 
     })
     const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
     assert.ok(popover !== null, 'model picker popover opens')
+    assert.equal(popover.getAttribute('data-mode'), 'default')
+    assert.ok(popover.querySelector('.composer-model-header .composer-model-search-bar') !== null, 'header wraps search bar')
+    assert.ok(popover.querySelector('.composer-model-footer .composer-model-reset') !== null, 'reset button renders in footer')
+    assert.ok(popover.querySelector('.composer-model-footer .popover-kbd-hint') === null, 'empty catalog omits navHint')
     assert.match(popover.textContent ?? '', /No models available/, 'empty catalog shows emptyCatalog copy')
     assert.doesNotMatch(popover.textContent ?? '', /No matching models/, 'empty catalog must not misreport noMatches')
     const cta = popover.querySelector<HTMLButtonElement>('.composer-model-empty button')
@@ -292,6 +296,53 @@ test('empty loaded catalog (models: []) displays emptyCatalog copy and optional 
       cta.click()
     })
     assert.equal(openedModels, 1, 'clicking setup CTA invokes onOpenModelsCenter')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('populated catalog renders single-row header, current-row data attribute, and footer navHint without header kbd-hint', { timeout: 60_000 }, async () => {
+  const handle: CatalogHandle = { slice: { models: CATALOG_MODELS }, listeners: new Set() }
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          PluginClientHostContext.Provider,
+          { value: makePort(handle, { refreshModels: async () => ({ errors: {} }) }) },
+          e(ModelPickerControl, {
+            effectiveModel: 'openai/gpt-4o-mini',
+            activeThinkingLevel: 'medium',
+            resetLabel: 'Reset',
+            resetTitle: 'Reset',
+            buttonTitle: 'Current model',
+            onApply: () => {},
+            onResetDefault: () => {},
+          }),
+        ),
+      )
+    })
+    const trigger = container.querySelector<HTMLButtonElement>('button.composer-model-button')
+    assert.ok(trigger !== null)
+    await act(async () => {
+      trigger.click()
+    })
+    const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+    assert.ok(popover !== null)
+    assert.ok(popover.querySelector('.composer-model-header .composer-model-search-bar') !== null)
+    assert.ok(popover.querySelector('.composer-model-header .composer-model-header-actions .composer-model-refresh-btn') !== null)
+    assert.ok(popover.querySelector('.composer-model-scroll .popover-header .popover-kbd-hint') === null)
+    assert.ok(popover.querySelector('.composer-model-footer .composer-model-reset') !== null)
+    assert.ok(popover.querySelector('.composer-model-footer .popover-kbd-hint') !== null)
+    const currentRow = popover.querySelector<HTMLElement>('.composer-model-row[data-current="true"]')
+    assert.ok(currentRow !== null)
+    assert.match(currentRow.textContent ?? '', /gpt-4o-mini/)
+    assert.equal(currentRow.classList.contains('popover-item-active'), false)
   } finally {
     await act(async () => {
       root.unmount()

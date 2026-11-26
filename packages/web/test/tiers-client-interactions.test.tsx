@@ -455,6 +455,22 @@ describe("tiers-client-interactions", () => {
       await act(async () => {
         trigger.click()
       })
+      const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+      assert.ok(popover !== null)
+      assert.equal(popover.getAttribute('data-mode'), 'default')
+      assert.ok(popover.querySelector('.composer-model-header .composer-model-search-bar') !== null)
+      assert.ok(popover.querySelector('.composer-model-scroll .popover-header .popover-kbd-hint') === null)
+      assert.ok(popover.querySelector('.composer-model-footer .popover-kbd-hint') !== null)
+      assert.ok(popover.querySelector('.composer-model-footer .composer-model-reset') !== null)
+      const tierRow = Array.from(popover.querySelectorAll<HTMLElement>('.composer-model-row')).find((r) =>
+        (r.textContent ?? '').includes('tier/coder'),
+      )
+      assert.ok(tierRow !== undefined && tierRow.querySelector('.composer-model-tier-icon') !== null, 'tier rows render layers icon')
+      const currentRow = Array.from(popover.querySelectorAll<HTMLElement>('.composer-model-row')).find(
+        (r) => r.getAttribute('data-current') === 'true',
+      )
+      assert.ok(currentRow !== undefined && (currentRow.textContent ?? '').includes('workhorse'))
+      assert.equal(currentRow.classList.contains('popover-item-active'), false)
       const popoverText = document.body.textContent ?? ''
       assert.match(popoverText, /Model tiers/)
       assert.match(popoverText, /tier\/coder/)
@@ -494,6 +510,9 @@ describe("tiers-client-interactions", () => {
       await act(async () => {
         trigger.click()
       })
+      const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+      assert.ok(popover !== null)
+      assert.ok(popover.querySelector('.composer-model-tier-icon') === null, 'allowTiers=false renders zero tier icons')
       const popoverText = document.body.textContent ?? ''
       assert.doesNotMatch(popoverText, /Model tiers/)
       assert.doesNotMatch(popoverText, /tier\/architect/)
@@ -913,8 +932,19 @@ describe("tiers-client-interactions", () => {
         })
         let popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
         assert.ok(popover !== null)
-        const modeBar = popover.querySelector<HTMLElement>('.composer-model-mode-bar')
-        assert.ok(modeBar !== null, 'ModelPicker must show .composer-model-mode-bar when Next turn mode is registered')
+        assert.equal(popover.getAttribute('data-mode'), 'default')
+        const header = popover.querySelector<HTMLElement>('.composer-model-header')
+        assert.ok(header !== null, 'ModelPicker must render single-row .composer-model-header')
+        assert.ok(header.querySelector('.composer-model-search-bar') !== null, '.composer-model-header houses .composer-model-search-bar')
+        const modeBar = header.querySelector<HTMLElement>('.composer-model-mode-bar')
+        assert.ok(modeBar !== null, 'ModelPicker must show .composer-model-mode-bar inside .composer-model-header when Next turn mode is registered')
+        assert.ok(header.querySelector('.composer-model-mode-hint') === null, 'mode hint lives in footer instead of header')
+        const defaultFooter = popover.querySelector<HTMLElement>('.composer-model-footer')
+        assert.ok(defaultFooter !== null, 'ModelPicker must render .composer-model-footer')
+        assert.equal(defaultFooter.getAttribute('data-mode-active'), null, 'default mode footer omits data-mode-active')
+        assert.ok(defaultFooter.querySelector('.composer-model-reset') !== null, 'default mode shows .composer-model-reset in footer')
+        assert.ok(defaultFooter.querySelector('.popover-kbd-hint') !== null, 'footer houses navHint')
+        assert.ok(popover.querySelector('.composer-model-scroll .popover-header .popover-kbd-hint') === null, 'group headers omit navHint')
         const tabs = Array.from(modeBar.querySelectorAll<HTMLElement>('[role="tab"]'))
         assert.equal(tabs.length, 2)
         assert.equal(tabs[0]?.textContent?.trim(), 'Switch model')
@@ -922,14 +952,17 @@ describe("tiers-client-interactions", () => {
         assert.equal(tabs[0]?.getAttribute('aria-selected'), 'true')
         assert.ok(popover.querySelector('.composer-model-mode-hint') === null)
 
-        // Switch to "Next turn" tab -> popover remains open, hint visible, reset row hidden
+        // Switch to "Next turn" tab -> popover remains open, footer activates + shows hint, reset disappears
         await act(async () => {
           tabs[1]?.click()
         })
         popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
         assert.ok(popover !== null, 'switching mode tab must keep popover open')
+        assert.equal(popover.getAttribute('data-mode'), 'registered')
         assert.equal(tabs[1]?.getAttribute('aria-selected'), 'true')
-        const hintEl = popover.querySelector('.composer-model-mode-hint')
+        const activeFooter = popover.querySelector<HTMLElement>('.composer-model-footer[data-mode-active="true"]')
+        assert.ok(activeFooter !== null, 'Next turn mode marks .composer-model-footer[data-mode-active="true"]')
+        const hintEl = activeFooter.querySelector('.composer-model-mode-hint')
         assert.ok(hintEl !== null)
         assert.match(hintEl.textContent ?? '', /Applies only to your next message, then restores automatically/)
         assert.ok(popover.querySelector('.composer-model-reset') === null, 'hideResetDefault hides reset row in Next turn mode')

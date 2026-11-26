@@ -1156,7 +1156,7 @@ test('PluginConfigForm：format="model" 渲染宿主模型目录 Select 下拉�
     const optionTexts = Array.from(popover.querySelectorAll('button.composer-model-row-main')).map(
       (el) => el.textContent ?? '',
     )
-    assert.ok(Array.from(popover.querySelectorAll('button.popover-item')).some((b) => (b.textContent ?? '').includes('未选择模型')), '重置行应为未选择模型')
+    assert.ok(Array.from(popover.querySelectorAll('button.composer-model-reset')).some((b) => (b.textContent ?? '').includes('未选择模型')), '重置行应为未选择模型')
     const gptRow = optionTexts.find((t) => t.includes('gpt-5'))
     assert.ok(gptRow !== undefined && gptRow.includes('openai'), '应列出可用模型（名称 gpt-5 + 来源 openai）')
     assert.ok(!optionTexts.some((t) => t.includes('claude-disabled')), '不应列出已禁用模型')
