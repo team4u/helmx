@@ -15,15 +15,10 @@
  *
  * This file only exports components and TS types (Fast Refresh friendly).
  */
-import { useCallback, useContext, useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from 'react'
+import { useContext, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import { HelmxIcon } from '../icons.js'
 import { usePluginTranslator } from '../i18n.js'
 import { uiCopy } from '../ui-copy.js'
-import {
-  HELMX_SHORTCUT_EVENT,
-  isShortcutPanelMatch,
-  type HelmxShortcutEventDetail,
-} from './model-picker-model.js'
 import { ScreenToolbarContext } from './screen-toolbar-context.js'
 
 export type SearchBoxVariant = 'default' | 'toolbar'
@@ -42,36 +37,6 @@ function mergeClassTokens(base: string, extra?: string): string {
     .split(/\s+/)
     .filter((token) => token !== '' && !seen.has(token))
   return appended.length > 0 ? `${base} ${appended.join(' ')}` : base
-}
-
-function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
-  if (typeof ref === 'function') {
-    ref(value)
-  } else if (ref !== null && ref !== undefined) {
-    ;(ref as { current: T | null }).current = value
-  }
-}
-
-function isSearchInputFocusable(input: HTMLInputElement | null): boolean {
-  if (input === null || !input.isConnected || input.disabled) return false
-  const win = input.ownerDocument?.defaultView
-  let cur: Element | null = input
-  while (cur !== null) {
-    if ((cur as HTMLElement).hidden === true) return false
-    if (cur.hasAttribute('inert') || cur.getAttribute('aria-hidden') === 'true') return false
-    const inlineStyle = (cur as HTMLElement).style
-    if (inlineStyle?.display === 'none' || inlineStyle?.visibility === 'hidden') return false
-    if (win !== null && win !== undefined && typeof win.getComputedStyle === 'function') {
-      try {
-        const computed = win.getComputedStyle(cur)
-        if (computed.display === 'none' || computed.visibility === 'hidden') return false
-      } catch {
-        /* ignore detached or cross-realm elements */
-      }
-    }
-    cur = cur.parentElement
-  }
-  return true
 }
 
 export interface SearchBoxProps {
@@ -108,11 +73,10 @@ export interface SearchBoxProps {
   /** Invoked right after a clear action (e.g. restore input focus); state stays with onChange. */
   onCleared?: () => void
   /**
-   * Opt in/out of host `/` focus (`helmx:shortcut` `focus-search`) and built-in
-   * `Escape` clear-then-blur keyboard behavior. Defaults to `variant === 'toolbar'`
-   * or when rendered inside a `ScreenToolbar`.
+   * Opt in/out of built-in `Escape` clear-then-blur keyboard behavior.
+   * Defaults to `variant === 'toolbar'` or when rendered inside a `ScreenToolbar`.
    */
-  enableSlashFocus?: boolean
+  clearOnEscape?: boolean
 }
 
 /** Unified search input shell over the host container-class vocabulary; state stays with the caller. */
@@ -137,35 +101,9 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
     style,
     clearable = true,
     onCleared,
-    enableSlashFocus,
+    clearOnEscape,
   } = props
-  const slashFocusEnabled = enableSlashFocus ?? (variant === 'toolbar' || inScreenToolbar)
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const internalInputRef = useRef<HTMLInputElement | null>(null)
-  const mergedInputRef = useCallback(
-    (node: HTMLInputElement | null) => {
-      internalInputRef.current = node
-      assignRef(inputRef, node)
-    },
-    [inputRef],
-  )
-
-  useEffect(() => {
-    if (!slashFocusEnabled || disabled || typeof window === 'undefined') return
-    const onShortcut = (event: Event): void => {
-      if (event.defaultPrevented) return
-      const detail = (event as CustomEvent<Partial<HelmxShortcutEventDetail> | undefined>).detail
-      if (detail === undefined || detail === null || detail.action !== 'focus-search') return
-      if (!isShortcutPanelMatch(containerRef.current, detail.panel)) return
-      const input = internalInputRef.current
-      if (!isSearchInputFocusable(input)) return
-      event.preventDefault()
-      input!.focus()
-      input!.select?.()
-    }
-    window.addEventListener(HELMX_SHORTCUT_EVENT, onShortcut)
-    return () => window.removeEventListener(HELMX_SHORTCUT_EVENT, onShortcut)
-  }, [slashFocusEnabled, disabled])
+  const escapeClearEnabled = clearOnEscape ?? (variant === 'toolbar' || inScreenToolbar)
 
   const containerClass =
     variant === 'toolbar'
@@ -175,7 +113,7 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     onKeyDown?.(event)
-    if (!slashFocusEnabled || disabled || event.defaultPrevented) return
+    if (!escapeClearEnabled || disabled || event.defaultPrevented) return
     if (event.nativeEvent?.isComposing === true || event.keyCode === 229) return
     if (event.key === 'Escape' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
       event.preventDefault()
@@ -190,10 +128,10 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
   }
 
   return (
-    <div ref={containerRef} className={containerClass} style={style}>
+    <div className={containerClass} style={style}>
       {icon}
       <input
-        ref={mergedInputRef}
+        ref={inputRef}
         // Shared search-box spec: never type="search" (native clear X would
         // double the custom clear button and stack a second focus ring).
         type="text"

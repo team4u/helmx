@@ -1,6 +1,6 @@
 /**
  * The single global single-key shortcut dispatch hook:
- * strictly one key per function (Ctrl+L / Ctrl+O / Ctrl+. / Mod+K / Mod+I / Mod+/ / Mod+Shift+O / Mod+B / Mod+J / / / Esc×2), no aliases.
+ * strictly one key per function (Ctrl+L / Ctrl+O / Ctrl+. / Mod+K / Mod+I / Mod+/ / Mod+Shift+O / Mod+B / Mod+J / Esc×2), no aliases.
  * Display copy is not produced here, so no locale seam is needed.
  */
 import { useEffect } from 'react'
@@ -219,27 +219,6 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
       }
 
       if (hasDialogOpen()) return
-
-      if (
-        !event.ctrlKey &&
-        !event.metaKey &&
-        !event.altKey &&
-        !event.shiftKey &&
-        isSlashShortcutKey(event) &&
-        !hasAnyOpenOverlay(activeModal, drawerStack.length > 0) &&
-        !inEditable
-      ) {
-        const detail: HelmxShortcutDetail = { action: 'focus-search', panel }
-        const shortcutEvent = new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', {
-          detail,
-          cancelable: true,
-        })
-        window.dispatchEvent(shortcutEvent)
-        if (shortcutEvent.defaultPrevented) {
-          event.preventDefault()
-        }
-        return
-      }
 
       if (isCtrlOnly && keyLower === 'o') {
         event.preventDefault()

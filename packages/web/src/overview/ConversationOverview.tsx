@@ -927,7 +927,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
             placeholder={t('shell.overview.searchPlaceholder')}
             ariaLabel={t('shell.overview.searchLabel')}
             clearLabel={t('shell.overview.clearSearch')}
-            enableSlashFocus
+            clearOnEscape
           />
           <Select
             className="overview-filter-select"
