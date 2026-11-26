@@ -3,12 +3,12 @@ import { Badge, SegmentedControl } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
 import { useStoreActions } from '../lib/store-context.js'
-import { isMarkdown, looksLikeText, shouldDecodeText } from './artifact-preview-text.js'
-import { detectLanguage } from './code-language.js'
 import { FilePreviewBody } from './FilePreviewBody.js'
 import { MarkdownOutlinePopover } from './MarkdownOutlinePopover.js'
 import { PreviewModalShell } from './PreviewModalShell.js'
-import { useFilePreviewText, useMarkdownOutlineSync, type FilePreviewLoadState } from './use-file-preview.js'
+import { deriveFilePreviewKind } from './preview-modal/preview-kind-model.js'
+import { usePreviewBlobLoad } from './preview-modal/use-preview-blob-load.js'
+import { useFilePreviewText, useMarkdownOutlineSync } from './use-file-preview.js'
 
 export interface WorkspaceFilePreviewModalProps {
   conversationId: number
@@ -46,7 +46,9 @@ export function WorkspaceFilePreviewModal({
 }: WorkspaceFilePreviewModalProps): ReactNode {
   const { pushNotice } = useStoreActions()
   const { t } = useWebLocale()
-  const [state, setState] = useState<FilePreviewLoadState>({ phase: 'loading' })
+  const state = usePreviewBlobLoad(`${conversationId}:${path}`, (signal) =>
+    conversationsApi.fetchWorkspaceFileBlob(conversationId, path, true, signal),
+  )
   const [view, setView] = useState<'rich' | 'source'>(() => (startLine !== undefined ? 'source' : 'rich'))
   const modalBodyRef = useRef<HTMLDivElement | null>(null)
   const markdownPreviewRef = useRef<HTMLDivElement | null>(null)
@@ -55,49 +57,13 @@ export function WorkspaceFilePreviewModal({
     setView(startLine !== undefined ? 'source' : 'rich')
   }, [conversationId, path, startLine])
 
-  useEffect(() => {
-    let objectUrl: string | null = null
-    let cancelled = false
-    const controller = new AbortController()
-    setState({ phase: 'loading' })
-    void conversationsApi
-      .fetchWorkspaceFileBlob(conversationId, path, true, controller.signal)
-      .then((blob) => {
-        if (cancelled) return
-        objectUrl = URL.createObjectURL(blob)
-        setState({ phase: 'loaded', blob, blobUrl: objectUrl })
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setState({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
-        }
-      })
-    return () => {
-      cancelled = true
-      controller.abort()
-      if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
-    }
-  }, [conversationId, path])
-
   const fileName = posixBasename(path)
   const workspaceBaseDir = posixDirname(path)
   const fileMeta = useMemo(() => ({ name: fileName }), [fileName])
   const mime = state.phase === 'loaded' ? state.blob.type : ''
   const loadedBlob = state.phase === 'loaded' ? state.blob : undefined
   const { text, textState } = useFilePreviewText(loadedBlob, fileMeta, mime)
-
-  const isImage = mime.startsWith('image/')
-  const isAudio = mime.startsWith('audio/')
-  const isVideo = mime.startsWith('video/')
-  const isPdf = mime === 'application/pdf'
-  const isTextLike =
-    !isImage &&
-    !isAudio &&
-    !isVideo &&
-    !isPdf &&
-    (looksLikeText(mime) || isMarkdown(fileName, mime) || shouldDecodeText(fileMeta, mime))
-  const markdown = isMarkdown(fileName, mime)
-  const language = markdown ? 'markdown' : detectLanguage(fileName, mime)
+  const { isTextLike, markdown, language } = deriveFilePreviewKind(fileName, mime)
 
   const { markdownOutline, activeMarkdownHeading, jumpToMarkdownHeading } = useMarkdownOutlineSync({
     markdown,

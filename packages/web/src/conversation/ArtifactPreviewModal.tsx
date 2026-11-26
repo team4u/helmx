@@ -6,12 +6,12 @@ import {
   useStoreActions,
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { detectLanguage } from './code-language.js'
 import { FilePreviewBody } from './FilePreviewBody.js'
 import { MarkdownOutlinePopover } from './MarkdownOutlinePopover.js'
 import { PreviewModalShell } from './PreviewModalShell.js'
-import { isMarkdown, looksLikeText, shouldDecodeText } from './artifact-preview-text.js'
-import { useFilePreviewText, useMarkdownOutlineSync, type FilePreviewLoadState } from './use-file-preview.js'
+import { deriveFilePreviewKind } from './preview-modal/preview-kind-model.js'
+import { usePreviewBlobLoad } from './preview-modal/use-preview-blob-load.js'
+import { useFilePreviewText, useMarkdownOutlineSync } from './use-file-preview.js'
 
 export interface ArtifactPreviewModalProps {
   artifactId: string
@@ -29,7 +29,9 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
   const convArtifacts = useConversationArtifacts(conversationId)
   const { loadConversationArtifacts, pushNotice } = useStoreActions()
   const { t } = useWebLocale()
-  const [state, setState] = useState<FilePreviewLoadState>({ phase: 'loading' })
+  // 产物加载（含代数竞争保护与 ObjectURL 回收）；MIME 回退在渲染时响应式计算，
+  // 深链元数据后到不触发重新拉取。
+  const state = usePreviewBlobLoad(artifactId, () => artifactsApi.fetchBlob(artifactId))
   const [view, setView] = useState<'rich' | 'source'>('rich')
   const modalBodyRef = useRef<HTMLDivElement | null>(null)
   const markdownPreviewRef = useRef<HTMLDivElement | null>(null)
@@ -50,50 +52,13 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
     return (convArtifacts ?? []).find((a) => a.id === artifactId)
   }, [convArtifacts, conversationId, artifactId])
 
-  // 产物加载（含代数竞争保护与 ObjectURL 回收）；MIME 回退在渲染时响应式计算，
-  // 深链元数据后到不触发重新拉取。
-  useEffect(() => {
-    let objectUrl: string | null = null
-    let cancelled = false
-    setState({ phase: 'loading' })
-    void artifactsApi
-      .fetchBlob(artifactId)
-      .then((blob) => {
-        if (cancelled) return
-        objectUrl = URL.createObjectURL(blob)
-        setState({ phase: 'loaded', blob, blobUrl: objectUrl })
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setState({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
-        }
-      })
-    return () => {
-      cancelled = true
-      if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
-    }
-  }, [artifactId])
-
   // MIME：已加载用真实 Blob.type，否则回退元数据（响应式，深链元数据后到不重新拉取）。
   const mime = state.phase === 'loaded' ? (state.blob.type || meta?.mimeType || '') : (meta?.mimeType ?? '')
   const loadedBlob = state.phase === 'loaded' ? state.blob : undefined
   const { text, textState } = useFilePreviewText(loadedBlob, meta, mime)
 
   const name = meta?.name ?? artifactId
-
-  const isImage = mime.startsWith('image/')
-  const isAudio = mime.startsWith('audio/')
-  const isVideo = mime.startsWith('video/')
-  const isPdf = mime === 'application/pdf'
-  const isTextLike =
-    !isImage &&
-    !isAudio &&
-    !isVideo &&
-    !isPdf &&
-    (looksLikeText(mime) || isMarkdown(meta?.name, mime) || shouldDecodeText(meta, mime))
-  const markdown = isMarkdown(meta?.name, mime)
-  // Markdown 源码模式固定 markdown 高亮；其他文本产物按后缀 / mimeType 推导语言。
-  const language = markdown ? 'markdown' : detectLanguage(meta?.name, mime)
+  const { isTextLike, markdown, language } = deriveFilePreviewKind(meta?.name, mime)
 
   const { markdownOutline, activeMarkdownHeading, jumpToMarkdownHeading } = useMarkdownOutlineSync({
     markdown,

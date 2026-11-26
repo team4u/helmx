@@ -77,6 +77,16 @@ interface ProviderAsyncState {
   saveError: string | null
 }
 
+type ProviderOpKind = 'test' | 'refresh' | 'del' | 'save'
+type ProviderBusyFlag = 'testing' | 'refreshingCatalog' | 'deleting' | 'saving'
+
+/** 在途操作代数令牌：scope 切换或同 kind 新操作递增代数，旧令牌随即失效。 */
+interface ProviderOpToken {
+  kind: ProviderOpKind
+  seq: number
+  scopeGen: number
+}
+
 const INITIAL_ASYNC_STATE: ProviderAsyncState = {
   testing: false,
   refreshingCatalog: false,
@@ -176,10 +186,33 @@ export function ModelDetailDrawer({
     setCatalogView({ filter: '', expanded: false })
   }, [open, providerId, isNewCustom])
 
-  const isCurrentScopeOp = useCallback(
-    (kind: keyof typeof opGenRef.current, seq: number, scopeGen: number): boolean =>
-      mountedRef.current && scopeGenRef.current === scopeGen && opGenRef.current[kind] === seq,
+  // 代数令牌：scope 切换（打开/切供应商/切新建）或同 kind 新操作都会让旧令牌失效，
+  // 迟到响应一律丢弃；失败落 saveError 与忙态收尾统一经 reportOpError / settleOp。
+  const beginOp = useCallback((kind: ProviderOpKind): ProviderOpToken => {
+    const scopeGen = scopeGenRef.current
+    return { kind, seq: ++opGenRef.current[kind], scopeGen }
+  }, [])
+
+  const isCurrentOp = useCallback(
+    (op: ProviderOpToken): boolean =>
+      mountedRef.current && scopeGenRef.current === op.scopeGen && opGenRef.current[op.kind] === op.seq,
     [],
+  )
+
+  const reportOpError = useCallback(
+    (op: ProviderOpToken, err: unknown): void => {
+      if (!isCurrentOp(op)) return
+      setAsyncState((prev) => ({ ...prev, saveError: err instanceof Error ? err.message : String(err) }))
+    },
+    [isCurrentOp],
+  )
+
+  const settleOp = useCallback(
+    (op: ProviderOpToken, busy: ProviderBusyFlag): void => {
+      if (!isCurrentOp(op)) return
+      setAsyncState((prev) => ({ ...prev, [busy]: false }))
+    },
+    [isCurrentOp],
   )
 
   const updateForm = useCallback((patch: Partial<ProviderCredentialsFormState>) => {
@@ -215,8 +248,7 @@ export function ModelDetailDrawer({
 
   const handleTest = async () => {
     if (!provider || !canTestConnection) return
-    const scopeGen = scopeGenRef.current
-    const opSeq = ++opGenRef.current.test
+    const op = beginOp('test')
     setAsyncState((prev) => ({ ...prev, testing: true, testResult: null, saveError: null }))
     try {
       let nextResult: ProviderTestResult | null = null
@@ -231,36 +263,26 @@ export function ModelDetailDrawer({
           ? { success: false, latencyMs, message: t('models.test.failed', { error: refreshError }) }
           : { success: true, latencyMs, message: t('models.test.ok') }
       }
-      if (!isCurrentScopeOp('test', opSeq, scopeGen)) return
+      if (!isCurrentOp(op)) return
       setAsyncState((prev) => ({ ...prev, testResult: nextResult }))
     } catch (err) {
-      if (!isCurrentScopeOp('test', opSeq, scopeGen)) return
-      setAsyncState((prev) => ({
-        ...prev,
-        testResult: {
-          success: false,
-          message: err instanceof Error ? err.message : String(err),
-        },
-      }))
+      reportOpError(op, err)
     } finally {
-      if (isCurrentScopeOp('test', opSeq, scopeGen)) {
-        setAsyncState((prev) => ({ ...prev, testing: false }))
-      }
+      settleOp(op, 'testing')
     }
   }
 
   const handleRefreshCatalog = async () => {
     if (!provider) return
-    const scopeGen = scopeGenRef.current
-    const opSeq = ++opGenRef.current.refresh
+    const op = beginOp('refresh')
     setAsyncState((prev) => ({ ...prev, refreshingCatalog: true, saveError: null }))
     try {
       const res = await assetsApi.refreshModels([provider.id])
-      if (!isCurrentScopeOp('refresh', opSeq, scopeGen)) return
+      if (!isCurrentOp(op)) return
       if (actions?.refreshAssets) {
         await actions.refreshAssets()
       }
-      if (!isCurrentScopeOp('refresh', opSeq, scopeGen)) return
+      if (!isCurrentOp(op)) return
       const refreshError = res.errors?.[provider.id]
       if (refreshError) {
         setAsyncState((prev) => ({ ...prev, saveError: refreshError }))
@@ -275,31 +297,24 @@ export function ModelDetailDrawer({
         })
       }
     } catch (err) {
-      if (!isCurrentScopeOp('refresh', opSeq, scopeGen)) return
-      setAsyncState((prev) => ({
-        ...prev,
-        saveError: err instanceof Error ? err.message : String(err),
-      }))
+      reportOpError(op, err)
     } finally {
-      if (isCurrentScopeOp('refresh', opSeq, scopeGen)) {
-        setAsyncState((prev) => ({ ...prev, refreshingCatalog: false }))
-      }
+      settleOp(op, 'refreshingCatalog')
     }
   }
 
   const handleDeleteCredential = async () => {
     if (!provider) return
-    const scopeGen = scopeGenRef.current
-    const opSeq = ++opGenRef.current.del
+    const op = beginOp('del')
     setAsyncState((prev) => ({ ...prev, deleting: true, saveError: null }))
     try {
       await assetsApi.deleteCredential(provider.id)
-      if (!isCurrentScopeOp('del', opSeq, scopeGen)) return
+      if (!isCurrentOp(op)) return
       setDraft((prev) => ({ ...prev, apiKey: '' }))
       if (actions?.refreshAssets) {
         await actions.refreshAssets()
       }
-      if (!isCurrentScopeOp('del', opSeq, scopeGen)) return
+      if (!isCurrentOp(op)) return
       actions?.pushNotice?.({
         type: 'notification',
         level: 'info',
@@ -308,43 +323,29 @@ export function ModelDetailDrawer({
       })
       setConfirmDialog('none')
     } catch (err) {
-      if (!isCurrentScopeOp('del', opSeq, scopeGen)) return
-      setAsyncState((prev) => ({
-        ...prev,
-        saveError: err instanceof Error ? err.message : String(err),
-      }))
+      reportOpError(op, err)
     } finally {
-      if (isCurrentScopeOp('del', opSeq, scopeGen)) {
-        setAsyncState((prev) => ({ ...prev, deleting: false }))
-      }
+      settleOp(op, 'deleting')
     }
   }
 
   const handleDeleteCustomGateway = async () => {
     if (!provider || provider.custom !== true || !onDeleteCustomGateway) return
-    const scopeGen = scopeGenRef.current
-    const opSeq = ++opGenRef.current.del
+    const op = beginOp('del')
     setAsyncState((prev) => ({ ...prev, deleting: true, saveError: null }))
     try {
       await onDeleteCustomGateway(provider.id)
-      if (!isCurrentScopeOp('del', opSeq, scopeGen)) return
+      if (!isCurrentOp(op)) return
       setConfirmDialog('none')
     } catch (err) {
-      if (!isCurrentScopeOp('del', opSeq, scopeGen)) return
-      setAsyncState((prev) => ({
-        ...prev,
-        saveError: err instanceof Error ? err.message : String(err),
-      }))
+      reportOpError(op, err)
     } finally {
-      if (isCurrentScopeOp('del', opSeq, scopeGen)) {
-        setAsyncState((prev) => ({ ...prev, deleting: false }))
-      }
+      settleOp(op, 'deleting')
     }
   }
 
   const handleSaveProvider = async () => {
-    const scopeGen = scopeGenRef.current
-    const opSeq = ++opGenRef.current.save
+    const op = beginOp('save')
 
     if (isNewCustom) {
       const validationError = validateCustomGatewayInput(
@@ -373,15 +374,9 @@ export function ModelDetailDrawer({
           apiKey: draft.apiKey.trim() ? draft.apiKey.trim() : undefined,
         })
       } catch (err) {
-        if (!isCurrentScopeOp('save', opSeq, scopeGen)) return
-        setAsyncState((prev) => ({
-          ...prev,
-          saveError: err instanceof Error ? err.message : String(err),
-        }))
+        reportOpError(op, err)
       } finally {
-        if (isCurrentScopeOp('save', opSeq, scopeGen)) {
-          setAsyncState((prev) => ({ ...prev, saving: false }))
-        }
+        settleOp(op, 'saving')
       }
       return
     }
@@ -420,7 +415,7 @@ export function ModelDetailDrawer({
         })
       } else if (draft.apiKey.trim()) {
         await assetsApi.setCredential(provider.id, draft.apiKey.trim())
-        if (!isCurrentScopeOp('save', opSeq, scopeGen)) return
+        if (!isCurrentOp(op)) return
         if (actions?.refreshAssets) {
           await actions.refreshAssets()
         }
@@ -432,15 +427,9 @@ export function ModelDetailDrawer({
         })
       }
     } catch (err) {
-      if (!isCurrentScopeOp('save', opSeq, scopeGen)) return
-      setAsyncState((prev) => ({
-        ...prev,
-        saveError: err instanceof Error ? err.message : String(err),
-      }))
+      reportOpError(op, err)
     } finally {
-      if (isCurrentScopeOp('save', opSeq, scopeGen)) {
-        setAsyncState((prev) => ({ ...prev, saving: false }))
-      }
+      settleOp(op, 'saving')
     }
   }
 
