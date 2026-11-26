@@ -1,10 +1,14 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import test, { describe } from 'node:test'
 import * as React from 'react'
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { parseArtifactUrl, markdownUrlTransform } from '@helmx/plugin-client'
 import { groupUiContributions } from '../src/lib/types.js'
 
+;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
 const { MarkdownView } = await import('../src/conversation/MarkdownView.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
@@ -109,5 +113,72 @@ describe('MarkdownView 产物内联渲染', { timeout: 60_000 }, () => {
     // 服务端 SSR 阶段 loading 态直出 attachment-chip 加载骨架
     assert.match(html, /class="attachment-chip"/)
     assert.match(html, /架构图/)
+  })
+
+  test('MarkdownView：# 锚点链接不带 target="_blank" 并支持 onLinkClick 拦截', { timeout: 60_000 }, () => {
+    const store = makeMockStore()
+    const clicked: Array<{ href: string; defaultPrevented: boolean }> = []
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    let defaultPreventedAtBody: boolean | undefined
+    const blockRealNavigation = (event: Event): void => {
+      defaultPreventedAtBody = event.defaultPrevented
+      event.preventDefault()
+    }
+    document.body.addEventListener('click', blockRealNavigation)
+    try {
+      act(() => {
+        root.render(
+          React.createElement(
+            HostStoreProviders,
+            { value: store },
+            React.createElement(MarkdownView, {
+              text: '参见 [#7](#swarm-post-7) 或 [官网](https://helmx.dev)',
+              conversationId: 1,
+              onLinkClick: (href, event) => {
+                if (href.startsWith('#swarm-post-')) {
+                  event.preventDefault()
+                }
+                clicked.push({ href, defaultPrevented: event.defaultPrevented })
+              },
+            }),
+          ),
+        )
+      })
+
+      const hashAnchor = host.querySelector<HTMLAnchorElement>('a[href="#swarm-post-7"]')
+      assert.ok(hashAnchor !== null)
+      assert.equal(hashAnchor.getAttribute('target'), null, '# 锚点链接不得附加 target="_blank"')
+      assert.equal(hashAnchor.getAttribute('rel'), null)
+
+      const extAnchor = host.querySelector<HTMLAnchorElement>('a[href="https://helmx.dev"]')
+      assert.ok(extAnchor !== null)
+      assert.equal(extAnchor.getAttribute('target'), '_blank')
+      assert.equal(extAnchor.getAttribute('rel'), 'noreferrer noopener')
+
+      const hashEv = new MouseEvent('click', { bubbles: true, cancelable: true })
+      act(() => {
+        hashAnchor.dispatchEvent(hashEv)
+      })
+      assert.equal(defaultPreventedAtBody, true, 'onLinkClick 调用 preventDefault() 应生效')
+
+      const extEv = new MouseEvent('click', { bubbles: true, cancelable: true })
+      act(() => {
+        extAnchor.dispatchEvent(extEv)
+      })
+      assert.equal(defaultPreventedAtBody, false, '未拦截的外链在冒泡到宿主文档前不应被阻止')
+
+      assert.deepEqual(clicked, [
+        { href: '#swarm-post-7', defaultPrevented: true },
+        { href: 'https://helmx.dev', defaultPrevented: false },
+      ])
+    } finally {
+      document.body.removeEventListener('click', blockRealNavigation)
+      act(() => {
+        root.unmount()
+      })
+      host.remove()
+    }
   })
 })

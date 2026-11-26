@@ -365,3 +365,29 @@ test('card: 损坏数据显式标注并默认展开保留原文，不伪造完�
     ui.unmount()
   }
 })
+
+test('card: 字符串 Markdown 汇报结果通过宿主 MarkdownView (.wf-md-body .msg-ai-body) 渲染且透传 conversationId', { timeout: 60_000 }, () => {
+  const h = createWorkflowHostHarness({ conversationId: 1, locale: 'en' })
+  const ui = h.mountNode(
+    e(BackgroundReportCard, {
+      entry: makeReportEntry({
+        report: {
+          result: '# 结论标题\n\n- **关键结论** 与 `inline`',
+        },
+      }),
+      conversationId: 1,
+    }),
+  )
+  try {
+    clickToggle(ui.container)
+    const mdBody = ui.container.querySelector('.wf-report-expanded .wf-md-body [data-testid="markdown-view"].msg-ai-body')
+    assert.ok(mdBody !== null, '字符串 result 应通过宿主 MarkdownView (.wf-md-body .msg-ai-body) 渲染')
+    assert.equal(mdBody.getAttribute('data-conversation-id'), '1')
+    assert.equal(mdBody.querySelector('h1')?.textContent, '结论标题')
+    assert.equal(mdBody.querySelector('li strong')?.textContent, '关键结论')
+    assert.equal(mdBody.querySelector('li code')?.textContent, 'inline')
+    assert.ok(ui.container.querySelector('.wf-report-expanded pre.code-block-pre') === null)
+  } finally {
+    ui.unmount()
+  }
+})

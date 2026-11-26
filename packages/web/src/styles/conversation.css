@@ -507,11 +507,13 @@
 
 .msg-ai-body h1 {
   margin: 18px 0 8px;
+  font-size: 1.35em;
   letter-spacing: -0.015em;
 }
 
 .msg-ai-body h2 {
   margin: 18px 0 8px;
+  font-size: 1.2em;
   letter-spacing: -0.01em;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--line-2);
@@ -519,10 +521,12 @@
 
 .msg-ai-body h3 {
   margin: 14px 0 6px;
+  font-size: 1.08em;
 }
 
 .msg-ai-body h4 {
   margin: 12px 0 4px;
+  font-size: 1em;
   color: var(--fg-secondary);
 }
 
@@ -784,6 +788,20 @@ pre {
   margin: 10px 0;
   border: 1px solid var(--code-border);
   border-radius: var(--radius-sm);
+}
+
+.msg-ai-body > pre:not(.code-block-pre),
+.msg-ai-body :not(.code-block-wrap) > pre:not(.code-block-pre) {
+  margin: 10px 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 /* 语法高亮：与 pi 同源的语义色相映射（蓝=关键字、黄=函数、紫=类型、
@@ -1811,6 +1829,40 @@ pre {
 .context-divider-expand-btn {
   margin: 0 auto;
   display: flex;
+}
+
+.trace-expanded-body.context-divider-expanded {
+  font-family: inherit;
+  max-height: min(460px, 56vh);
+  overflow-y: auto;
+  overscroll-behavior: auto;
+}
+
+.context-divider-expanded .msg-ai-body {
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.context-divider-expanded .msg-ai-body :is(h1, h2, h3, h4) {
+  margin: 12px 0 6px;
+}
+
+.context-divider-expanded .msg-ai-body p,
+.context-divider-expanded .msg-ai-body ul,
+.context-divider-expanded .msg-ai-body ol {
+  margin: 0 0 8px;
+}
+
+.context-divider-expanded .msg-ai-body code:not(pre code) {
+  font-size: 0.88em;
+}
+
+.context-divider-expanded .msg-ai-body > :first-child {
+  margin-top: 0;
+}
+
+.context-divider-expanded .msg-ai-body > :last-child {
+  margin-bottom: 0;
 }
 
 /* 实际生成模型边界（相邻 assistant 回合模型不同；轻量化虚线区分于上下文分割线） */

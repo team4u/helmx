@@ -307,7 +307,22 @@ function createReactivePort(log: PortLog, init: PortStateInit = {}): ReactiveTes
       renderItem: slotRender,
     },
     markdown: {
-      view: ({ text, workspaceBaseDir }) => e('div', { 'data-md': 'host', 'data-base-dir': workspaceBaseDir ?? '' }, text),
+      view: ({ text, workspaceBaseDir, onLinkClick }) =>
+        e(
+          'div',
+          { 'data-md': 'host', 'data-base-dir': workspaceBaseDir ?? '' },
+          text,
+          onLinkClick !== undefined
+            ? e(
+                'a',
+                {
+                  href: '#seq-1',
+                  onClick: (ev: React.MouseEvent<HTMLAnchorElement>) => onLinkClick('#seq-1', ev),
+                },
+                'ref',
+              )
+            : null,
+        ),
       codeBlock: ({ code, language }) => e('pre', { 'data-code': 'host', 'data-lang': language }, code),
     },
     ...(init.overrides ?? {}),
@@ -1288,7 +1303,7 @@ test('PluginSlot: reappearing contribution on the render chain warns of a cycle 
 // 5. MarkdownView / CodeBlockView port delegation
 // ---------------------------------------------------------------------------
 
-test('MarkdownView / CodeBlockView render the host-port injected implementations (SSR safe)', { timeout: 60_000 }, () => {
+test('MarkdownView / CodeBlockView render the host-port injected implementations (SSR safe) and forward onLinkClick', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
   const html = renderToString(
@@ -1301,6 +1316,39 @@ test('MarkdownView / CodeBlockView render the host-port injected implementations
   assert.match(html, /# hi/)
   assert.match(html, /data-code="host"/, 'CodeBlockView delegates to the host codeBlock')
   assert.match(html, /data-lang="ts"/)
+
+  const clicked: string[] = []
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root: Root = createRoot(host)
+  try {
+    act(() => {
+      root.render(
+        e(
+          SDK.PluginClientHostContext.Provider,
+          { value: port },
+          e(SDK.MarkdownView, {
+            text: '# ref',
+            onLinkClick: (href, ev) => {
+              ev.preventDefault()
+              clicked.push(href)
+            },
+          }),
+        ),
+      )
+    })
+    const anchor = host.querySelector<HTMLAnchorElement>('a[href="#seq-1"]')
+    assert.ok(anchor !== null)
+    act(() => {
+      anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(clicked, ['#seq-1'])
+  } finally {
+    act(() => {
+      root.unmount()
+    })
+    host.remove()
+  }
 })
 
 test('markdownUrlTransform allows artifact:, file:, and Windows drive paths while filtering unsafe protocols', { timeout: 60_000 }, () => {

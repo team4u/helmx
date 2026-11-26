@@ -34,7 +34,7 @@ import {
   type TimelineRendererProps,
   type ToolViewProps,
 } from '@helmx/protocol'
-import type { PluginClientHostPort, PluginSessionDocKey } from '@helmx/plugin-client'
+import type { CodeBlockViewProps, MarkdownViewProps, PluginClientHostPort, PluginSessionDocKey } from '@helmx/plugin-client'
 import {
   boardProgressOf,
   isMemberDelivered,
@@ -56,7 +56,7 @@ import { ensureHappyDom } from './helpers/dom-harness.js'
 ensureHappyDom()
 
 const { createRoot } = await import('react-dom/client')
-const { PluginClientContext, PluginClientHostContext, resolveLocalizedText } = await import('@helmx/plugin-client')
+const { MarkdownText, PluginClientContext, PluginClientHostContext, resolveLocalizedText } = await import('@helmx/plugin-client')
 const { importBuiltinClientModule, mountSharedPluginNamespaces } = await import('./helpers/builtin-clients.js')
 
 const e = React.createElement
@@ -269,6 +269,19 @@ describe("swarm-client-interactions", () => {
       subscribeSessionDoc,
       getSessionDocState,
       loadConversationDetail: noopLoadConversationDetail,
+      markdown: {
+        view: ({ text, conversationId, onLinkClick }: MarkdownViewProps) =>
+          e(
+            'div',
+            {
+              className: 'msg-ai-body',
+              'data-testid': 'markdown-view',
+              'data-conversation-id': conversationId ?? '',
+            },
+            e(MarkdownText, { text, onLinkClick }),
+          ),
+        codeBlock: ({ code }: CodeBlockViewProps) => e('pre', null, code),
+      },
       ...(options?.serverNowMs !== undefined ? { getServerNow: () => options.serverNowMs! } : {}),
     } as unknown as PluginClientHostPort
     await act(async () => {
@@ -979,8 +992,10 @@ describe("swarm-client-interactions", () => {
       const bodyHosts = [...panel.host.querySelectorAll<HTMLElement>('.sw-panel-post-text')]
       assert.ok(bodyHosts.length === 2, '两个帖子的正文容器')
 
-      // 短帖全文渲染为 Markdown 元素，不再出现字面 ** 反引号语法
+      // 短帖全文渲染为宿主 MarkdownView (.msg-ai-body 在内层而非重复外层)，不再出现字面 ** 反引号语法
       const shortBody = bodyHosts[0]!
+      assert.equal(shortBody.classList.contains('msg-ai-body'), false)
+      assert.ok(shortBody.querySelector('[data-testid="markdown-view"].msg-ai-body') !== null)
       assert.ok(shortBody.querySelector('strong') !== null, '粗体渲染为 strong 元素')
       assert.ok(shortBody.querySelector('code') !== null, '行内代码渲染为 code 元素')
       assert.ok((shortBody.textContent ?? '').includes('**') === false, '正文无字面 ** 语法残留')

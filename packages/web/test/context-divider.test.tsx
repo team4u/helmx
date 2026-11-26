@@ -108,8 +108,38 @@ describe("context-divider", () => {
     const buttons = expandButtons(host)
     assert.equal(buttons.length, 1)
     assert.match(buttons[0]!.textContent ?? '', /Expand Handoff summary/)
+    assert.equal(buttons[0]!.getAttribute('aria-expanded'), 'false')
     act(() => { buttons[0]!.click() })
+    assert.equal(buttons[0]!.getAttribute('aria-expanded'), 'true')
     assert.match(host.textContent ?? '', /Handoff summary正文/)
     assert.match(host.textContent ?? '', /Context reset/)
+  })
+
+  test('pi.compaction 与 pi.reset：展开摘要使用宿主 MarkdownView（.context-divider-expanded .msg-ai-body）而非裸 pre/code', { timeout: 60_000 }, async () => {
+    const host = await renderTimeline([
+      entry('1', 'pi.compaction', { model: [{ role: 'user', content: '## 阶段总结\n\n- **完成项** 与 `code`' }] }),
+      entry('2', 'pi.reset', { data: { handoff: '### 交接计划\n\n1. 验证 **回归**' } }),
+    ])
+    const buttons = expandButtons(host)
+    assert.equal(buttons.length, 2)
+    act(() => {
+      buttons[0]!.click()
+      buttons[1]!.click()
+    })
+
+    const expandedPanels = [...host.querySelectorAll('.context-divider-expanded')]
+    assert.equal(expandedPanels.length, 2)
+    const compactBody = expandedPanels[0]!.querySelector('.msg-ai-body')
+    assert.ok(compactBody !== null)
+    assert.equal(compactBody.querySelector('h2')?.textContent, '阶段总结')
+    assert.equal(compactBody.querySelector('strong')?.textContent, '完成项')
+    assert.equal(compactBody.querySelector('code')?.textContent, 'code')
+    assert.ok(expandedPanels[0]!.querySelector('pre.code-block-pre') === null)
+
+    const handoffBody = expandedPanels[1]!.querySelector('.msg-ai-body')
+    assert.ok(handoffBody !== null)
+    assert.equal(handoffBody.querySelector('h3')?.textContent, '交接计划')
+    assert.equal(handoffBody.querySelector('li strong')?.textContent, '回归')
+    assert.ok(expandedPanels[1]!.querySelector('pre.code-block-pre') === null)
   })
 })

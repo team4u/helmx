@@ -357,3 +357,83 @@ test('DOM：瘦身 run 折叠零 inspect 请求；点击 Expand 按需拉取并�
     ui.unmount()
   }
 })
+
+test('DOM：WorkflowRunCard 字符串结果与 ExecutionNodeRow prompt/字符串 output 走宿主 MarkdownView；gate 与 JSON output 保留 pre', { timeout: 60_000 }, async () => {
+  const conv11 = makeConvSummary(11, { parentConversationId: 1, status: 'idle', title: '子代理节点' })
+  const richRun = run({
+    id: 'wf_md',
+    kind: 'workflow',
+    name: 'Markdown 校验流',
+    status: 'completed',
+    nodes: [
+      node({
+        id: 'agent-1',
+        kind: 'agent',
+        status: 'done',
+        conversationId: 11,
+        label: '审查员',
+        prompt: '### 任务目标\n\n- **检查** `src/app.ts`',
+        output: '## 节点输出\n\n- **通过** `ok`',
+        gateCommand: 'pnpm test',
+        gate: { ok: true, exitCode: 0, output: 'all passed' },
+      }),
+      node({
+        id: 'action-1',
+        kind: 'action',
+        status: 'done',
+        label: '结构化动作',
+        output: { passed: 3, failed: 0 },
+      }),
+    ],
+    result: '## 工作流报告\n\n- **全部完成** `report.md`',
+  })
+
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [summary(1, 'idle'), conv11],
+    runsByConversation: { 1: [richRun] },
+    locale: 'en',
+  })
+
+  const ui = h.mountNode(e(WorkflowWorkbenchPanel, { conversation: summary(1, 'idle') }))
+  try {
+    // 1. 展开 WorkflowRunCard 字符串 result -> 走 .wf-result-box .wf-md-body [data-testid="markdown-view"].msg-ai-body
+    const expandBtn = [...ui.container.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('Expand'))!
+    await act(async () => { expandBtn.click() })
+    const resultMd = ui.container.querySelector('.wf-result-box .wf-md-body [data-testid="markdown-view"].msg-ai-body')
+    assert.ok(resultMd !== null)
+    assert.equal(resultMd.getAttribute('data-conversation-id'), '1')
+    assert.equal(resultMd.querySelector('h2')?.textContent, '工作流报告')
+    assert.equal(resultMd.querySelector('li strong')?.textContent, '全部完成')
+    assert.equal(resultMd.querySelector('li code')?.textContent, 'report.md')
+
+    // 2. 展开 ExecutionNodeRow (agent-1)：prompt & 字符串 output 走 .wf-node-md-box MarkdownView；gate 保留 pre
+    const agentDetailToggle = ui.container.querySelector<HTMLButtonElement>('.wf-node-actions button[aria-expanded]')
+    assert.ok(agentDetailToggle !== null)
+    await act(async () => { agentDetailToggle.click() })
+
+    const agentCard = agentDetailToggle.closest('.wf-node-card')!
+    const mdBoxes = [...agentCard.querySelectorAll('.wf-node-md-box [data-testid="markdown-view"].msg-ai-body')]
+    assert.equal(mdBoxes.length, 2, 'prompt 与字符串 output 均应走 MarkdownView')
+    assert.equal(mdBoxes[0]!.querySelector('h3')?.textContent, '任务目标')
+    assert.equal(mdBoxes[0]!.querySelector('strong')?.textContent, '检查')
+    assert.equal(mdBoxes[1]!.querySelector('h2')?.textContent, '节点输出')
+    assert.equal(mdBoxes[1]!.querySelector('strong')?.textContent, '通过')
+    assert.equal(mdBoxes[1]!.querySelector('code')?.textContent, 'ok')
+
+    const gatePres = [...agentCard.querySelectorAll('pre.code-block-pre.wf-pre code')].map((el) => el.textContent)
+    assert.deepEqual(gatePres, ['pnpm test', 'all passed'])
+
+    // 3. 展开 ExecutionNodeRow (action-1)：对象 output 保留 pre.code-block-pre.wf-pre code
+    const actionBtn = [...ui.container.querySelectorAll<HTMLButtonElement>('button.wf-node-clickable')].find((b) =>
+      (b.textContent ?? '').includes('结构化动作'),
+    )
+    assert.ok(actionBtn !== undefined)
+    await act(async () => { actionBtn.click() })
+    const actionCard = actionBtn.closest('.wf-node-card')!
+    assert.equal(actionCard.querySelectorAll('.wf-node-md-box').length, 0)
+    assert.match(actionCard.querySelector('pre.code-block-pre.wf-pre code')?.textContent ?? '', /"passed": 3/)
+  } finally {
+    ui.unmount()
+  }
+})

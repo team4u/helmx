@@ -12,6 +12,7 @@ import {
   HelmxIcon,
   IconButton,
   KvGrid,
+  MarkdownView,
   PluginSlot,
   StatusLight,
   formatCompactTimestamp,
@@ -415,17 +416,23 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
             {node.prompt ? (
               <div className="wf-detail-block">
                 <div className="trace-section-label">{t(COPY.nodeSectionPrompt)}</div>
-                <pre className="code-block-pre wf-pre">
-                  <code>{node.prompt}</code>
-                </pre>
+                <div className="wf-md-body wf-node-md-box">
+                  <MarkdownView text={node.prompt} conversationId={parentConversationId} breaks />
+                </div>
               </div>
             ) : null}
             {outputPretty !== undefined ? (
               <div className="wf-detail-block">
                 <div className="trace-section-label">{t(COPY.nodeSectionOutput)}</div>
-                <pre className="code-block-pre wf-pre">
-                  <code>{outputPretty}</code>
-                </pre>
+                {typeof node.output === 'string' ? (
+                  <div className="wf-md-body wf-node-md-box">
+                    <MarkdownView text={node.output} conversationId={parentConversationId} />
+                  </div>
+                ) : (
+                  <pre className="code-block-pre wf-pre">
+                    <code>{outputPretty}</code>
+                  </pre>
+                )}
               </div>
             ) : null}
             {node.error ? (

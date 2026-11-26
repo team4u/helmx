@@ -373,7 +373,7 @@ export function ConversationTimeline({
                     ref={highlightScrollRef}
                     data-entry-id={item.entryId}
                   >
-                    <ContextDivider item={item} />
+                    <ContextDivider item={item} conversationId={conversation.id} />
                   </div>
                 )
               }

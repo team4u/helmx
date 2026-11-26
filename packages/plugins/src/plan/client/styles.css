@@ -156,11 +156,34 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg);
-  font-size: 13px;
-  line-height: 1.55;
 }
 
-.plan-tray-preview > :last-child {
+.plan-tray-preview .msg-ai-body {
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.plan-tray-preview .msg-ai-body :is(h1, h2, h3, h4) {
+  margin: 10px 0 4px;
+}
+
+.plan-tray-preview .msg-ai-body p,
+.plan-tray-preview .msg-ai-body ul,
+.plan-tray-preview .msg-ai-body ol {
+  margin: 0 0 6px;
+}
+
+.plan-tray-preview .msg-ai-body code:not(pre code) {
+  font-size: 0.88em;
+  padding: 1px 4px;
+}
+
+.plan-tray-preview .msg-ai-body > :first-child {
+  margin-top: 0;
+}
+
+.plan-tray-preview .msg-ai-body > :last-child {
   margin-bottom: 0;
 }
 
@@ -199,30 +222,34 @@
   overflow-wrap: anywhere;
 }
 
-/* Workbench markdown typography (compound selector overrides host .msg-ai-body cleanly) */
-.plan-markdown.msg-ai-body {
+/* Workbench markdown typography (descendant selector overrides host .msg-ai-body cleanly) */
+.plan-markdown .msg-ai-body {
   font-size: 13.5px;
   line-height: 1.6;
   color: var(--prose-fg);
   overflow-wrap: anywhere;
 }
 
-.plan-markdown.msg-ai-body > :last-child {
-  margin-bottom: 0;
-}
-
-.plan-markdown.msg-ai-body :is(h1, h2, h3, h4) {
+.plan-markdown .msg-ai-body :is(h1, h2, h3, h4) {
   margin: 12px 0 6px;
 }
 
-.plan-markdown.msg-ai-body h1 { font-size: 1.25em; }
-.plan-markdown.msg-ai-body h2 { font-size: 1.15em; }
-.plan-markdown.msg-ai-body h3 { font-size: 1.05em; }
-.plan-markdown.msg-ai-body h4 { font-size: 1em; }
+.plan-markdown .msg-ai-body h1 { font-size: 1.25em; }
+.plan-markdown .msg-ai-body h2 { font-size: 1.15em; }
+.plan-markdown .msg-ai-body h3 { font-size: 1.05em; }
+.plan-markdown .msg-ai-body h4 { font-size: 1em; }
 
-.plan-markdown.msg-ai-body code:not(pre code) {
+.plan-markdown .msg-ai-body code:not(pre code) {
   font-size: 12px;
   padding: 1px 4px;
+}
+
+.plan-markdown .msg-ai-body > :first-child {
+  margin-top: 0;
+}
+
+.plan-markdown .msg-ai-body > :last-child {
+  margin-bottom: 0;
 }
 
 .plan-editor {

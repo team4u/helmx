@@ -8,9 +8,10 @@ import { Button, HelmxIcon, useSharedNowMs } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatStopwatchMs, resolveConversationTiming } from '../lib/format.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { MarkdownView } from './MarkdownView.js'
 import type { DividerItem, EditRequestTarget, PluginCardItem } from './timeline-model.js'
 
-export function ContextDivider({ item }: { item: DividerItem }) {
+export function ContextDivider({ item, conversationId }: { item: DividerItem; conversationId?: number }) {
   const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
   const expandable = item.divider === 'reset' ? item.handoff : item.summary
@@ -36,6 +37,7 @@ export function ContextDivider({ item }: { item: DividerItem }) {
         <button
           type="button"
           className="trace-group-summary context-divider-expand-btn"
+          aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
         >
           <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
@@ -43,11 +45,9 @@ export function ContextDivider({ item }: { item: DividerItem }) {
         </button>
       ) : null}
       {open && expandable !== undefined ? (
-        <div className="trace-expanded-body selectable trace-expanded-body-flush">
+        <div className="trace-expanded-body selectable trace-expanded-body-flush context-divider-expanded">
           <div className="trace-section-label">{expandLabel}</div>
-          <pre className="code-block-pre">
-            <code>{expandable}</code>
-          </pre>
+          <MarkdownView text={expandable} conversationId={conversationId} />
         </div>
       ) : null}
     </div>

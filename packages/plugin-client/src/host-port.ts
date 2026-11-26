@@ -13,7 +13,7 @@
  * Types and context only in this file (no component exports, Fast Refresh friendly).
  */
 import { createContext, useContext } from 'react'
-import type { ComponentType, ReactNode } from 'react'
+import type { ComponentType, MouseEvent, ReactNode } from 'react'
 import type {
   AskSpec,
   ComposerController,
@@ -63,6 +63,8 @@ export interface MarkdownViewProps {
   breaks?: boolean
   /** Relative POSIX directory within the workspace (e.g. 'docs') used as base dir when resolving relative links/images in nested Markdown previews. */
   workspaceBaseDir?: string
+  /** Optional click interceptor for rendered anchor links (call event.preventDefault() to handle in-app, e.g. Swarm `#seq` peek links). */
+  onLinkClick?: (href: string, event: MouseEvent<HTMLAnchorElement>) => void
 }
 
 /** SDK CodeBlockViewProps (host syntax-highlighted code block props contract). */

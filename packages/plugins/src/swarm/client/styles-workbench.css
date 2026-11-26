@@ -208,17 +208,18 @@
 .sw-close-dialog-options { gap: 8px; }
 .sw-close-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
-/* Compact Markdown inside board posts (compound selector overrides host .msg-ai-body independent of injection order) */
-.sw-panel-post-text.msg-ai-body { margin: 0; font-size: 13px; line-height: 1.6; color: var(--fg-secondary); overflow-wrap: anywhere; }
-.sw-panel-post-text.msg-ai-body > :last-child { margin-bottom: 0; }
-.sw-panel-post-text.msg-ai-body p { margin: 0 0 6px; }
-.sw-panel-post-text.msg-ai-body :is(h1, h2, h3, h4) { margin: 10px 0 4px; font-size: 1em; }
-.sw-panel-post-text.msg-ai-body :is(ul, ol) { margin: 0 0 6px; padding-left: 18px; }
-.sw-panel-post-text.msg-ai-body li > p { margin: 0; }
-.sw-panel-post-text.msg-ai-body :is(blockquote, pre, hr) { margin: 6px 0; }
-.sw-panel-post-text.msg-ai-body code:not(pre code) { font-size: 12px; padding: 1px 4px; }
-.sw-panel-post-text.msg-ai-body table:not(.helmx-table):not(.jr-table) { font-size: 12px; }
-.sw-panel-post-text.msg-ai-body table:not(.helmx-table):not(.jr-table) :is(th, td) { padding: 4px 8px; }
+/* Compact Markdown inside board posts (descendant selector overrides host .msg-ai-body independent of injection order) */
+.sw-panel-post-text .msg-ai-body { margin: 0; font-size: 13px; line-height: 1.6; color: var(--fg-secondary); overflow-wrap: anywhere; }
+.sw-panel-post-text .msg-ai-body p { margin: 0 0 6px; }
+.sw-panel-post-text .msg-ai-body :is(h1, h2, h3, h4) { margin: 10px 0 4px; font-size: 1em; }
+.sw-panel-post-text .msg-ai-body :is(ul, ol) { margin: 0 0 6px; padding-left: 18px; }
+.sw-panel-post-text .msg-ai-body li > p { margin: 0; }
+.sw-panel-post-text .msg-ai-body :is(blockquote, pre, hr) { margin: 6px 0; }
+.sw-panel-post-text .msg-ai-body code:not(pre code) { font-size: 12px; padding: 1px 4px; }
+.sw-panel-post-text .msg-ai-body table:not(.helmx-table):not(.jr-table) { font-size: 12px; }
+.sw-panel-post-text .msg-ai-body table:not(.helmx-table):not(.jr-table) :is(th, td) { padding: 4px 8px; }
+.sw-panel-post-text .msg-ai-body > :first-child { margin-top: 0; }
+.sw-panel-post-text .msg-ai-body > :last-child { margin-bottom: 0; }
 
 .sw-panel-post-toggle { align-self: flex-start; }
 .sw-panel-post-worktree { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-muted); min-width: 0; max-width: 100%; }

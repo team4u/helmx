@@ -15,7 +15,7 @@ import {
   Input,
   KvGrid,
   LoadingState,
-  MarkdownText,
+  MarkdownView,
   PopoverContent,
   PopoverRoot,
   PopoverTrigger,
@@ -360,7 +360,9 @@ function WorkflowRunCard(props: WorkflowRunCardProps): ReactNode {
                       </Button>
                     </Callout>
                   ) : typeof inspected.result === 'string' ? (
-                    <MarkdownText text={inspected.result} />
+                    <div className="wf-md-body selectable">
+                      <MarkdownView text={inspected.result} conversationId={displayRun.conversationId} />
+                    </div>
                   ) : resultPretty !== undefined ? (
                     <pre className="code-block-pre wf-pre selectable">
                       <code>{resultPretty}</code>

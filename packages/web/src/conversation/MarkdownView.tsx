@@ -1,5 +1,5 @@
 import { createContext, Fragment, memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { MouseEvent, ReactNode } from 'react'
 import Markdown, { type Components, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -347,6 +347,7 @@ export const MarkdownView = memo(function MarkdownView({
   streaming,
   breaks,
   workspaceBaseDir,
+  onLinkClick,
 }: MarkdownViewProps): ReactNode {
   const { setActiveModal } = useStoreActions()
   const summary = useConversationSummary(conversationId)
@@ -386,7 +387,7 @@ export const MarkdownView = memo(function MarkdownView({
         <table>{children}</table>
       </div>
     ),
-    a: ({ href, children }) => {
+    a: ({ href, onClick, children }) => {
       const artifactId = parseArtifactUrl(href)
       if (artifactId !== null) {
         return (
@@ -434,8 +435,23 @@ export const MarkdownView = memo(function MarkdownView({
       if (isDisallowedFileUrl(href)) {
         return <span className="msg-md-disallowed-file">{children}</span>
       }
+      const isHashAnchor = typeof href === 'string' && href.startsWith('#')
+      const handleAnchorClick =
+        onLinkClick !== undefined
+          ? (event: MouseEvent<HTMLAnchorElement>) => {
+              onClick?.(event)
+              if (!event.defaultPrevented && typeof href === 'string') {
+                onLinkClick(href, event)
+              }
+            }
+          : onClick
       return (
-        <a href={href} target="_blank" rel="noreferrer noopener">
+        <a
+          href={href}
+          target={isHashAnchor ? undefined : '_blank'}
+          rel={isHashAnchor ? undefined : 'noreferrer noopener'}
+          onClick={handleAnchorClick}
+        >
           {children}
         </a>
       )
@@ -487,7 +503,7 @@ export const MarkdownView = memo(function MarkdownView({
       }
       return <img src={src} alt={alt} title={title} loading="lazy" />
     },
-  }), [conversationId, conversationCwd, workspaceBaseDir, setActiveModal, t])
+  }), [conversationId, conversationCwd, workspaceBaseDir, setActiveModal, t, onLinkClick])
 
   const lastSplitTextRef = useRef<string | null>(null)
   const headingCacheRef = useRef<Map<string, number> | null>(null)
