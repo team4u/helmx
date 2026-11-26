@@ -75,6 +75,7 @@
   - 未预装且非借用中时工具栏返回 `null`（零占位 DOM、零 Tab 焦点位）；预装态展示紧凑 24px 胶囊 `[ 下一轮: <label> | × ]`（点击主体调 `openMode()` 直达「仅下一轮」标签，点击独立兄弟按钮 `×` 取消预装）；借用中展示 `[ 本轮借用: <label> | × ]`（主体禁用且不注册模式标签，点击 `×` 即使忙态也可取消自动恢复）；停用 `builtin:tiers` 后模式标签即时消失。
 - **时间线工具行**（`SwitchModelToolRow`）：`toolView`（`replaceRow: true`）消费 `presentationMeta` 渲染 26px `.trace-row`，简洁区分「单轮自动恢复」与「持久切换」。
 - **共享模型选择器增强（`ModelPickerControl`）**：存在可用档位时在下拉列表顶部展示「模型档位」分组；配置具体模型目标的入口传 `allowTiers={false}` 防止递归绑定；支持可选受控 `open`/`onOpenChange`、`showResetDefault` 与 `renderTrigger`。
+- **档位预设的等级展示**：选中 `tier/<id>` 后，触发按钮显示该档位自带的 `thinkingLevel`（而非旁边的全局/Profile 等级或模型最低支持档），并按内核 clamp 规则收敛（如预设 `max` 而底层模型仅支持 `high|xhigh` 时显示 `xhigh`）；`thinkingLevelPrecedence` 声明上下文等级与预设的先后：默认 `'default'`（全局默认、Profile 绑定等默认链场景，预设优先），待命页会话草稿传 `'override'`（显式会话覆盖优先）。模型中心「当前生效」状态行与 Profile 卡片经 `resolveDefaultChainThinkingLevel` 走同一规则。
 
 ## 源码与测试入口
 

@@ -5,7 +5,7 @@
  * app re-exports instead of keeping a private copy.
  */
 import { useEffect, useRef } from 'react'
-import { MODEL_TIER_PREFIX } from '@helmx/protocol/browser'
+import { MODEL_TIER_PREFIX, parseModelTierRef, type HostModelsSlice } from '@helmx/protocol/browser'
 
 /** Host composer/standby panel identity (the `data-helmx-panel` DOM convention). */
 export type HelmxPanel = 'primary' | 'split'
@@ -76,14 +76,66 @@ export function formatModelRowDisplay(model: { provider: string; modelId: string
   }
 }
 
+/** Canonical thinking-level order, lowest to highest (pi-ai `EXTENDED_THINKING_LEVELS`). */
+const THINKING_LEVEL_ORDER: ReadonlyArray<string> = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
 /**
- * Resolve the effective thinking level against the model's capability list
- * (falling back to off or the first supported level by default). The default
- * chain itself stays server-authoritative; this only converges display.
+ * Resolve the effective thinking level against the model's capability list,
+ * mirroring the kernel's convergence (pi-ai `clampThinkingLevel`) so a stale
+ * or preset level never displays as a different level than the one that runs:
+ * a supported level passes through; an unsupported one clamps to the nearest
+ * supported level (searching upward first, then downward); an explicit `'off'`
+ * always passes (the kernel omits the reasoning parameter for it). An empty
+ * level (unconfigured) displays as `'off'` or the lowest supported level; a
+ * model without declared levels yields `''`. The default chain itself stays
+ * server-authoritative; this only converges display.
  */
 export function resolveEffectiveThinkingLevel(levels: ReadonlyArray<string>, activeLevel: string): string {
+  if (levels.length === 0) return ''
   const fallback = levels.includes('off') ? 'off' : (levels[0] ?? '')
-  return levels.includes(activeLevel) ? activeLevel : fallback
+  if (activeLevel === '') return fallback
+  if (levels.includes(activeLevel) || activeLevel === 'off') return activeLevel
+  const requested = THINKING_LEVEL_ORDER.indexOf(activeLevel)
+  if (requested < 0) return fallback
+  for (let i = requested + 1; i < THINKING_LEVEL_ORDER.length; i++) {
+    const candidate = THINKING_LEVEL_ORDER[i]
+    if (candidate !== undefined && levels.includes(candidate)) return candidate
+  }
+  for (let i = requested - 1; i >= 0; i--) {
+    const candidate = THINKING_LEVEL_ORDER[i]
+    if (candidate !== undefined && levels.includes(candidate)) return candidate
+  }
+  return fallback
+}
+
+/**
+ * Thinking level to display for a default-chain model reference (global default,
+ * compaction default, Profile binding). A `tier/<id>` selection carries its own
+ * preset, which the kernel ranks above the level configured beside the reference
+ * (`tier preset > per-model default > Profile/global level`), so the preset wins the
+ * display and the configured level only applies to concrete models or tiers without
+ * one; the result converges against the target's supported levels. Per-model defaults
+ * resolve server-side and are deliberately not folded in (same stance as the picker's
+ * row chips). Returns `''` when nothing can be shown honestly: no reference, or a tier
+ * whose preset or target capability is still unknown (a concrete reference outside the
+ * catalog keeps its configured level as a plain config fact, merely unconverged).
+ */
+export function resolveDefaultChainThinkingLevel(
+  catalog: Pick<HostModelsSlice, 'models' | 'modelTiers'> | undefined,
+  modelRef: string | undefined,
+  configuredLevel: string | undefined,
+): string {
+  const ref = modelRef?.trim() ?? ''
+  if (ref === '') return ''
+  const level = configuredLevel?.trim() ?? ''
+  const tierId = parseModelTierRef(ref)
+  if (tierId !== undefined) {
+    const tier = catalog?.modelTiers?.find((entry) => entry.id === tierId)
+    if (tier === undefined || tier.thinkingLevels === undefined) return ''
+    return resolveEffectiveThinkingLevel(tier.thinkingLevels, tier.thinkingLevel ?? level)
+  }
+  const model = catalog?.models.find((entry) => entry.id === ref)
+  return model === undefined ? level : resolveEffectiveThinkingLevel(model.thinkingLevels ?? [], level)
 }
 
 /**

@@ -73,20 +73,37 @@ interface PanelMount {
   unmount: () => Promise<void>
 }
 
+interface MountDefaultsOptions {
+  /** Catalog models (defaults to CATALOG_MODELS). */
+  models?: typeof CATALOG_MODELS
+  /** Saved global default chain (defaults to an unset chain carrying only `savedMap`). */
+  modelDefaults?: {
+    defaultModel?: string
+    defaultThinkingLevel?: string
+    modelThinkingLevels?: Record<string, string>
+    defaultCompactionModel?: string
+    defaultCompactionThinkingLevel?: string
+    modelTiers?: Array<{ id: string; model: string; thinkingLevel?: string; available: boolean; thinkingLevels?: string[] }>
+  }
+}
+
 /** Mount ModelCenter on the defaults tab with a fetch mock echoing per-model pair updates. */
-async function mountDefaultsPanel(savedMap: Record<string, string>): Promise<PanelMount> {
+async function mountDefaultsPanel(savedMap: Record<string, string>, options: MountDefaultsOptions = {}): Promise<PanelMount> {
+  const models = options.models ?? CATALOG_MODELS
+  const savedDefaults = {
+    defaultModel: '',
+    defaultThinkingLevel: '',
+    modelThinkingLevels: { ...savedMap },
+    defaultCompactionModel: '',
+    defaultCompactionThinkingLevel: '',
+    ...options.modelDefaults,
+  }
   const store = makeTestStore({
     primaryTarget: { kind: 'models', tab: 'defaults' },
-    models: CATALOG_MODELS,
-    modelDefaults: {
-      defaultModel: '',
-      defaultThinkingLevel: '',
-      modelThinkingLevels: { ...savedMap },
-      defaultCompactionModel: '',
-      defaultCompactionThinkingLevel: '',
-    },
+    models,
+    modelDefaults: savedDefaults,
   })
-  const levels: Record<string, string> = { ...savedMap }
+  const levels: Record<string, string> = { ...savedDefaults.modelThinkingLevels }
   const putBodies: Array<Record<string, unknown>> = []
   const originalFetch = globalThis.fetch
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -103,11 +120,13 @@ async function mountDefaultsPanel(savedMap: Record<string, string>): Promise<Pan
         if (body.modelThinkingLevel === '') delete levels[String(body.modelThinking)]
         else levels[String(body.modelThinking)] = String(body.modelThinkingLevel)
       }
+      savedDefaults.defaultModel = typeof body.model === 'string' ? body.model : ''
+      savedDefaults.defaultThinkingLevel = typeof body.thinkingLevel === 'string' ? body.thinkingLevel : ''
       return new Response(
         JSON.stringify({
           ok: true,
-          defaultModel: '',
-          defaultThinkingLevel: '',
+          defaultModel: savedDefaults.defaultModel,
+          defaultThinkingLevel: savedDefaults.defaultThinkingLevel,
           modelThinkingLevels: { ...levels },
           defaultCompactionModel: '',
           defaultCompactionThinkingLevel: '',
@@ -118,17 +137,18 @@ async function mountDefaultsPanel(savedMap: Record<string, string>): Promise<Pan
     if (path === '/api/models') {
       return new Response(
         JSON.stringify({
-          models: CATALOG_MODELS.map((m) => ({
+          models: models.map((m) => ({
             provider: m.provider,
             modelId: m.modelId,
             available: m.available,
           })),
-          thinkingLevels: Object.fromEntries(CATALOG_MODELS.map((m) => [m.id, m.thinkingLevels])),
-          defaultModel: '',
-          defaultThinkingLevel: '',
+          thinkingLevels: Object.fromEntries(models.map((m) => [m.id, m.thinkingLevels])),
+          defaultModel: savedDefaults.defaultModel,
+          defaultThinkingLevel: savedDefaults.defaultThinkingLevel,
           modelThinkingLevels: { ...levels },
-          defaultCompactionModel: '',
-          defaultCompactionThinkingLevel: '',
+          defaultCompactionModel: savedDefaults.defaultCompactionModel,
+          defaultCompactionThinkingLevel: savedDefaults.defaultCompactionThinkingLevel,
+          ...(savedDefaults.modelTiers !== undefined ? { modelTiers: savedDefaults.modelTiers } : {}),
         }),
         { status: 200 },
       )
@@ -230,6 +250,61 @@ test('GlobalDefaultsPanel: partially filled per-model rows block saving with a l
     await click(saveBtn)
     assert.equal(panel.putBodies.length, 0, 'partial row (model without level) must block any PUT')
     assert.match(panel.container.textContent ?? '', /Set a thinking level for anthropic\/claude-3-7-sonnet/)
+  } finally {
+    await panel.unmount()
+  }
+})
+
+test('GlobalDefaultsPanel: a selected model tier shows its own preset (kernel-clamped) on the trigger and in the status row', { timeout: 60_000 }, async () => {
+  const TIER_MODELS = [
+    { id: 'faux/sol', provider: 'faux', modelId: 'sol', available: true, thinkingLevels: ['high', 'xhigh'] },
+    { id: 'faux/omni', provider: 'faux', modelId: 'omni', available: true, thinkingLevels: ['off', 'high', 'xhigh', 'max'] },
+  ]
+  const TIER_TIERS = [
+    // Preset the target cannot run: the kernel clamps max -> xhigh (never the lowest level high).
+    { id: 'reviewer', model: 'faux/sol', thinkingLevel: 'max', available: true, thinkingLevels: ['high', 'xhigh'] },
+    { id: 'scout', model: 'faux/omni', thinkingLevel: 'max', available: true, thinkingLevels: ['off', 'high', 'xhigh', 'max'] },
+  ]
+  const panel = await mountDefaultsPanel({}, {
+    models: TIER_MODELS,
+    modelDefaults: {
+      defaultModel: 'tier/reviewer',
+      defaultThinkingLevel: 'high',
+      modelThinkingLevels: {},
+      modelTiers: TIER_TIERS,
+    },
+  })
+  try {
+    const defaultBtn = panel.container.querySelector('#model-defaults-model') as HTMLButtonElement
+    assert.ok(defaultBtn, 'default model row renders a ModelPickerControl trigger')
+    // Saved default tier beside a stale global level: the tier preset wins and clamps like the kernel.
+    assert.match(defaultBtn.textContent ?? '', /tier\/reviewer/)
+    assert.match(defaultBtn.textContent ?? '', /· xhigh/)
+    assert.doesNotMatch(defaultBtn.textContent ?? '', /· high/)
+    assert.match(panel.container.querySelector('.model-defaults-status')?.textContent ?? '', /thinking level: xhigh/)
+    assert.doesNotMatch(panel.container.querySelector('.model-defaults-status')?.textContent ?? '', /thinking level: high\)/)
+
+    // Picking another tier from the popover immediately shows its preset on the trigger.
+    await click(defaultBtn)
+    const popover = document.body.querySelector('.composer-model-popover')
+    assert.ok(popover, 'the model picker popover opens')
+    const scoutRow = Array.from(popover.querySelectorAll('button.composer-model-row-main')).find(
+      (btn) => btn.textContent?.includes('tier/scout'),
+    )
+    assert.ok(scoutRow, 'available tier rows list in the popover')
+    await click(scoutRow!)
+    assert.match(defaultBtn.textContent ?? '', /tier\/scout/)
+    assert.match(defaultBtn.textContent ?? '', /· max/)
+
+    // The tier reference persists with an empty level: the preset is intrinsic to the tier.
+    const saveBtn = Array.from(panel.container.querySelectorAll('button')).find(
+      (btn) => (btn.textContent ?? '').includes('Save global defaults'),
+    )!
+    await click(saveBtn)
+    assert.equal(panel.putBodies.length, 1)
+    assert.equal(panel.putBodies[0]?.model, 'tier/scout')
+    assert.equal(panel.putBodies[0]?.thinkingLevel, '')
+    assert.match(panel.container.querySelector('.model-defaults-status')?.textContent ?? '', /thinking level: max/)
   } finally {
     await panel.unmount()
   }

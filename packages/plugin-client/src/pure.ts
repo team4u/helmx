@@ -8,7 +8,7 @@
  * portals in tests. This sub-entry exposes only actively consumed pure helpers
  * with zero Radix and zero component imports.
  */
-export { resolveEffectiveThinkingLevel } from './ui/model-picker-model.js'
+export { resolveDefaultChainThinkingLevel, resolveEffectiveThinkingLevel } from './ui/model-picker-model.js'
 export {
   STATUS_LIGHT_TONES,
   normalizeStatusLightTone,
