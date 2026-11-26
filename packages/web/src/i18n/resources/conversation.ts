@@ -48,11 +48,21 @@ export const conversationMessages = {
   'conv.divider.collapse': { en: 'Collapse {label}', 'zh-CN': '收起{label}' },
   'conv.divider.expand': { en: 'Expand {label}', 'zh-CN': '展开{label}' },
 
-  // --- Resolved asks ----------------------------------------------------------
+  // --- Resolved asks & ask_user tool body -------------------------------------
   'conv.ask.approved': { en: 'Approved', 'zh-CN': '已批准' },
+  'conv.ask.replied': { en: 'Replied', 'zh-CN': '已回复' },
   'conv.ask.cancelled': { en: 'Cancelled', 'zh-CN': '已取消' },
+  'conv.ask.skipped': { en: 'Skipped', 'zh-CN': '已跳过' },
   'conv.ask.superseded': { en: 'Handled by terminal (superseded)', 'zh-CN': '已由终端处理 (superseded)' },
   'conv.ask.rowTitle': { en: 'Approval', 'zh-CN': '审批' },
+  'conv.ask.questionRowTitle': { en: 'Question', 'zh-CN': '问题' },
+  'conv.ask.toolTitle': { en: 'Ask user', 'zh-CN': '向用户提问' },
+  'conv.ask.toolQuestionSingle': { en: '1 question', 'zh-CN': '1 个问题' },
+  'conv.ask.toolQuestionsCount': { en: '{count} questions', 'zh-CN': '{count} 个问题' },
+  'conv.ask.outcomeAnswered': { en: 'Answered', 'zh-CN': '已回答' },
+  'conv.ask.outcomeCancelled': { en: 'Skipped / Cancelled', 'zh-CN': '已跳过 / 取消' },
+  'conv.ask.outcomeSuperseded': { en: 'Superseded', 'zh-CN': '已被新输入取代' },
+  'conv.ask.outcomeError': { en: 'Failed', 'zh-CN': '失败' },
 
   // --- Turn failure ------------------------------------------------------------
   'conv.turnFailed.label': { en: 'This turn failed', 'zh-CN': '本回合失败' },

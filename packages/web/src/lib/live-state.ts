@@ -1,6 +1,7 @@
 import {
   applyConversationLiveDelta,
   isPluginSummaryActive,
+  type AskAnswers,
   type AskSpec,
   type ConversationDetail,
   type ConversationEntry,
@@ -26,7 +27,7 @@ export interface LiveState {
   pendingEntries: Record<number, ConversationEntry[]>
   conversationLives: Record<number, ConversationLive>
   pendingAsks: AskSpec[]
-  resolvedAsksByConv: Record<number, Array<{ ask: AskSpec; status: 'answered' | 'cancelled' | 'superseded' }>>
+  resolvedAsksByConv: Record<number, Array<{ ask: AskSpec; status: 'answered' | 'cancelled' | 'superseded'; answers?: AskAnswers }>>
   plugins: PluginSummary[]
   uiContributions: PluginUiContribution[]
   pluginDocs: Record<string, unknown>
@@ -508,7 +509,17 @@ export function applyEventFrame(state: LiveState, frame: HelmxEventFrame): LiveS
       if ('askId' in event) {
         const ask = state.pendingAsks.find((item) => item.id === event.askId)
         next.pendingAsks = state.pendingAsks.filter((item) => item.id !== event.askId)
-        if (ask) next.resolvedAsksByConv = { ...state.resolvedAsksByConv, [ask.conversationId]: [...(state.resolvedAsksByConv[ask.conversationId] ?? []), { ask, status: event.status }] }
+        if (ask) {
+          const entry = {
+            ask,
+            status: event.status,
+            ...(event.answers !== undefined ? { answers: event.answers } : {}),
+          }
+          next.resolvedAsksByConv = {
+            ...state.resolvedAsksByConv,
+            [ask.conversationId]: [...(state.resolvedAsksByConv[ask.conversationId] ?? []), entry],
+          }
+        }
       }
       break
     case 'plugin.changed':

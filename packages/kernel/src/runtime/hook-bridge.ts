@@ -44,6 +44,7 @@ import {
   withToolDeclarations,
 } from './hook-projection.js'
 import { guardToolExecutionResult, type GuardToolResultOptions } from './tools/tool-result-contract.js'
+import { ASK_USER_PROMPT_SNIPPET, ASK_USER_SCOPE, ASK_USER_TOOL_NAME } from './tools/ask-tools.js'
 import { lookupRegistryToolSchemas, type ToolSchemaEntry } from './tool-registry.js'
 
 const REGISTER_STRUCTURED_OUTPUT_SCHEMA: JsonSchema = {
@@ -147,13 +148,17 @@ export class HookBridge {
     for (const spec of unscopedPluginTools) unscopedByName.set(spec.name, spec)
     const scopedPluginTools =
       host !== undefined && unscopedByName.size > 0 ? host.listTools(summary) : []
-    // Scope filtering: plugin tools are registered globally on the harness (`helmx-plugins`), so out-of-scope
-    // conversations must not see their declarations — filter to available tools for this conversation before
-    // entering hooks while retaining kernel tools.
+    // Scope filtering: plugin tools are registered globally on the harness (`helmx-plugins`), and `ask_user`
+    // is registered globally on `helmx-core`. Strip out-of-scope declarations for this conversation before
+    // entering hooks so non-eligible sessions (subagents / `helmx`-owned) never see them.
+    const isAskUserAllowed = matchesConversationScope(ASK_USER_SCOPE, summary)
+    const kernelScopedTools = isAskUserAllowed
+      ? runtimeTools
+      : runtimeTools.filter((tool) => tool.name !== ASK_USER_TOOL_NAME)
     const effectiveTools =
       unscopedByName.size > 0
-        ? this.scopeLocalTools(runtimeTools, unscopedByName, scopedPluginTools)
-        : runtimeTools
+        ? this.scopeLocalTools(kernelScopedTools, unscopedByName, scopedPluginTools)
+        : kernelScopedTools
     const original = request.messages as unknown as Array<Record<string, unknown>>
     const payload: BeforeTurnHookPayload = {
       conversation: summary,
@@ -273,7 +278,6 @@ export class HookBridge {
     requestTools: Array<{ name: string }>,
     outcome: { action: string; value?: unknown } | undefined,
   ): Array<{ name: string; promptSnippet?: string; promptGuidelines?: string[] }> {
-    if (declared.length === 0) return []
     const requestNames = new Set(requestTools.map((tool) => tool.name))
     const finalNames =
       outcome?.action === 'transform'
@@ -292,6 +296,12 @@ export class HookBridge {
         name: spec.name,
         ...(spec.promptSnippet !== undefined ? { promptSnippet: spec.promptSnippet } : {}),
         ...(spec.promptGuidelines !== undefined ? { promptGuidelines: spec.promptGuidelines } : {}),
+      })
+    }
+    if (requestNames.has(ASK_USER_TOOL_NAME) && finalNames.has(ASK_USER_TOOL_NAME)) {
+      out.push({
+        name: ASK_USER_TOOL_NAME,
+        promptSnippet: ASK_USER_PROMPT_SNIPPET,
       })
     }
     return out

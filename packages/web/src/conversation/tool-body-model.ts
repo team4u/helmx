@@ -256,6 +256,67 @@ export function toolRowStats(tool: ToolTrace, t?: WebMessageTranslator): ToolRow
   return undefined
 }
 
+export type AskUserToolOutcome = 'answered' | 'cancelled' | 'superseded' | 'error'
+
+export interface AskUserToolMetaItem {
+  id: string
+  question: string
+  answer: string
+}
+
+export interface AskUserToolMeta {
+  title: string
+  questionCount: number
+  outcome: AskUserToolOutcome
+  items?: AskUserToolMetaItem[]
+}
+
+const VALID_ASK_USER_OUTCOMES: ReadonlySet<string> = new Set<AskUserToolOutcome>([
+  'answered',
+  'cancelled',
+  'superseded',
+  'error',
+])
+
+export function parseAskUserToolMeta(meta: unknown): AskUserToolMeta | undefined {
+  const rec = asRecord(meta)
+  if (rec === undefined) return undefined
+  const title = stringField(rec, 'title')?.trim() ?? ''
+  const questionCount = rec['questionCount']
+  const outcome = rec['outcome']
+  if (
+    title === '' ||
+    typeof questionCount !== 'number' ||
+    !Number.isSafeInteger(questionCount) ||
+    questionCount < 1 ||
+    typeof outcome !== 'string' ||
+    !VALID_ASK_USER_OUTCOMES.has(outcome)
+  ) {
+    return undefined
+  }
+  let items: AskUserToolMetaItem[] | undefined
+  if (Array.isArray(rec['items'])) {
+    const parsedItems: AskUserToolMetaItem[] = []
+    for (const rawItem of rec['items']) {
+      const itemRec = asRecord(rawItem)
+      if (itemRec === undefined) continue
+      const id = stringField(itemRec, 'id')
+      const question = stringField(itemRec, 'question')
+      const answer = stringField(itemRec, 'answer')
+      if (id !== undefined && question !== undefined && answer !== undefined) {
+        parsedItems.push({ id, question, answer })
+      }
+    }
+    if (parsedItems.length > 0) items = parsedItems
+  }
+  return {
+    title,
+    questionCount,
+    outcome: outcome as AskUserToolOutcome,
+    ...(items !== undefined ? { items } : {}),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Folded step-group summary (pure aggregate stats for StepGroup / MultiStepGroup)
 // ---------------------------------------------------------------------------

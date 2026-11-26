@@ -23,7 +23,6 @@ import {
   PLAN_SESSION_DOC,
   PLAN_SESSION_VIEW_SCHEMA,
   PLAN_TITLE_MAX_CHARS,
-  PLAN_TOOL_ASK,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
   type PlanBadgesDoc,
@@ -47,7 +46,6 @@ export {
   PLAN_ELIGIBLE_SCOPE,
   PLAN_TOOL_SAVE,
   PLAN_TOOL_PROPOSE,
-  PLAN_TOOL_ASK,
   PLAN_TOOL_BASH,
   PLAN_KV_NAMESPACE,
   PLAN_MODE_SECTION_ID,
@@ -59,7 +57,6 @@ export {
   PLAN_MODE_TOOL_WHITELIST,
   PLAN_SAVE_META_SCHEMA,
   PLAN_PROPOSE_META_SCHEMA,
-  PLAN_ASK_META_SCHEMA,
   PLAN_TOOL_META_SCHEMA,
   PLAN_SESSION_VIEW_SCHEMA,
   isPlanConversationEligible,
@@ -68,7 +65,6 @@ export {
   parsePlanSlashInput,
   hasPlanModeInputMeta,
   type PlanMode,
-  type PlanAskKind,
   type PlanDraftSummary,
   type PlanApprovedInfo,
   type PlanSessionView,
@@ -350,7 +346,7 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
         })
         ctx.ui.toolView({
           id: 'plan-tool-row',
-          toolNames: [PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE, PLAN_TOOL_ASK],
+          toolNames: [PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE],
           replaceRow: true,
           client: { module: 'index.tsx', export: 'PlanToolRow' },
         })

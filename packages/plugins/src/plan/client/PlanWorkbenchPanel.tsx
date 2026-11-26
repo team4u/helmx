@@ -142,14 +142,11 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
   }
 
   const isPlanning = effectiveView.mode === 'planning'
-  const awaitingClarification = effectiveView.awaitingClarification === true && !effectiveView.awaitingApproval
-  const awaitingAny = effectiveView.awaitingApproval || awaitingClarification
-  const modeTone = awaitingAny ? 'warn' : isPlanning ? 'accent' : 'neutral'
+  const modeTone = effectiveView.awaitingApproval ? 'warn' : isPlanning ? 'accent' : 'neutral'
   const modeText = planModeLabel(
     effectiveView.mode,
     effectiveView.awaitingApproval,
     locale,
-    awaitingClarification,
   )
 
   const draft = effectiveView.draft

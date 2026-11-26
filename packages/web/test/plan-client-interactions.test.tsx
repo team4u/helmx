@@ -36,14 +36,11 @@ import {
   PLAN_PANEL_ID,
   PLAN_PLUGIN_ID,
   PLAN_SESSION_DOC,
-  PLAN_TOOL_ASK,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
 } from '../../plugins/src/plan/client/types.ts'
 import {
   PLAN_COPY,
-  planAskOutcomeLabel,
-  planAskQuestionCountLabel,
   planOutcomeLabel,
   planSaveStatsLabel,
 } from '../../plugins/src/plan/client/copy.ts'
@@ -293,7 +290,6 @@ describe('plan-client-interactions', () => {
     assert.equal(PLAN_PANEL_ID, 'plan')
     assert.equal(PLAN_COMMAND_ID, 'toggle-plan')
     assert.equal(PLAN_COMMAND_SLASH, 'plan')
-    assert.equal(PLAN_TOOL_ASK, 'plan_ask')
     assert.equal(PLAN_TOOL_SAVE, 'plan_save')
     assert.equal(PLAN_TOOL_PROPOSE, 'plan_propose')
 
@@ -329,13 +325,11 @@ describe('plan-client-interactions', () => {
       parsePlanSessionView({
         mode: 'planning',
         awaitingApproval: false,
-        awaitingClarification: true,
         draft: { title: 'Auth Plan', markdown: '# Steps', version: 2, updatedAt: 1000 },
       }),
       {
         mode: 'planning',
         awaitingApproval: false,
-        awaitingClarification: true,
         draft: { title: 'Auth Plan', markdown: '# Steps', version: 2, updatedAt: 1000 },
       },
     )
@@ -345,10 +339,6 @@ describe('plan-client-interactions', () => {
     assert.deepEqual(
       parsePlanToolPresentationMeta({ kind: 'save', title: 'Auth Plan', version: 1, lineCount: 10, charCount: 250 }),
       { kind: 'save', title: 'Auth Plan', version: 1, lineCount: 10, charCount: 250 },
-    )
-    assert.deepEqual(
-      parsePlanToolPresentationMeta({ kind: 'ask', title: 'Scope', questionCount: 2, outcome: 'answered' }),
-      { kind: 'ask', title: 'Scope', questionCount: 2, outcome: 'answered' },
     )
 
     // Zero Emoji, non-empty bilingual, and unified zh-CN terminology ("计划", never "规划") across PLAN_COPY
@@ -361,9 +351,6 @@ describe('plan-client-interactions', () => {
     }
     assert.equal(planOutcomeLabel('approved', 'zh-CN'), '已批准')
     assert.equal(planOutcomeLabel('approved_handoff', 'zh-CN'), '已批准 · 新上下文')
-    assert.equal(planAskOutcomeLabel('answered', 'zh-CN'), '已回答')
-    assert.equal(planAskQuestionCountLabel(2, 'en'), '2 questions')
-    assert.equal(planAskQuestionCountLabel(2, 'zh-CN'), '2 个问题')
     assert.equal(planSaveStatsLabel(1, 42, 'en'), '1 line · 42 chars')
   })
 
@@ -490,7 +477,7 @@ describe('plan-client-interactions', () => {
       await helmxMount.unmount()
     }
 
-    // 4. Eligible top-level human conversation: normal hidden anchor + Ctrl+. -> planning pill -> awaitingClarification -> awaitingApproval
+    // 4. Eligible top-level human conversation: normal hidden anchor + Ctrl+. -> planning pill -> awaitingApproval
     const liveHarness = createSessionDocHarness({
       [`${PLAN_PLUGIN_ID}/${PLAN_SESSION_DOC}/10`]: {
         hasValue: true,
@@ -547,15 +534,6 @@ describe('plan-client-interactions', () => {
         input: { conversationId: 10 },
         options: { conversationId: 10 },
       })
-
-      // Push awaitingClarification sessionDoc update
-      await act(async () => {
-        liveHarness.setDocValue(10, { mode: 'planning', awaitingApproval: false, awaitingClarification: true })
-      })
-      assert.equal(btn.getAttribute('data-plan-awaiting'), 'false')
-      assert.ok(btn.classList.contains('plan-toolbar-btn--awaiting'))
-      assert.match(btn.textContent ?? '', /Awaiting answers/)
-      assert.equal(btn.querySelector('.helmx-status-light')?.getAttribute('data-tone'), 'blocked')
 
       // Push awaitingApproval sessionDoc update
       await act(async () => {
@@ -853,17 +831,6 @@ describe('plan-client-interactions', () => {
       })
       assert.equal(mounted.host.textContent ?? '', '')
       assert.ok(mounted.host.querySelector('.dock-tray') === null, 'pre-draft planning mode must suppress redundant DockTray')
-
-      // 1c. awaitingClarification without draft still renders tray
-      await act(async () => {
-        harness.setDocValue(20, {
-          mode: 'planning',
-          awaitingApproval: false,
-          awaitingClarification: true,
-        })
-      })
-      assert.ok(mounted.host.querySelector('.dock-tray') !== null)
-      assert.match(mounted.host.textContent ?? '', /Awaiting answers/)
 
       // 2. Planning mode with saved draft
       await act(async () => {
@@ -1223,7 +1190,7 @@ describe('plan-client-interactions', () => {
     }
   })
 
-  test('PlanToolRow: renders plan_save, plan_propose & plan_ask from presentationMeta only (never JSON.parse(result)), handles error & missing meta honestly', { timeout: 60_000 }, async () => {
+  test('PlanToolRow: renders plan_save & plan_propose from presentationMeta only (never JSON.parse(result)), handles error & missing meta honestly', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx({ conversationId: 40 })
 
     // 1. plan_save with valid presentationMeta
@@ -1325,59 +1292,6 @@ describe('plan-client-interactions', () => {
       assert.match(text, /Approved/)
     } finally {
       await sameModelMount.unmount()
-    }
-
-    // 2b. plan_ask answered (en) & cancelled (zh-CN)
-    const askAnsweredMount = await mountWithSessionHost(
-      spy,
-      e(components.PlanToolRow, {
-        callId: 'call-ask-1',
-        toolName: PLAN_TOOL_ASK,
-        status: 'done',
-        conversationId: 40,
-        presentationMeta: {
-          kind: 'ask',
-          title: 'Architecture Scope',
-          questionCount: 2,
-          outcome: 'answered',
-        },
-      }),
-    )
-    try {
-      const text = askAnsweredMount.host.textContent ?? ''
-      assert.match(text, /Clarifying questions/)
-      assert.match(text, /Architecture Scope/)
-      assert.match(text, /2 questions/)
-      assert.match(text, /Answered/)
-      const light = askAnsweredMount.host.querySelector('.helmx-status-light')
-      assert.equal(light?.getAttribute('data-tone'), 'done')
-    } finally {
-      await askAnsweredMount.unmount()
-    }
-
-    const askCancelledZhMount = await mountWithSessionHost(
-      makeSpyCtx({ conversationId: 40, locale: 'zh-CN' }),
-      e(components.PlanToolRow, {
-        callId: 'call-ask-2',
-        toolName: PLAN_TOOL_ASK,
-        status: 'done',
-        conversationId: 40,
-        presentationMeta: {
-          kind: 'ask',
-          title: '接口鉴权方案',
-          questionCount: 1,
-          outcome: 'cancelled',
-        },
-      }),
-    )
-    try {
-      const text = askCancelledZhMount.host.textContent ?? ''
-      assert.match(text, /需求澄清/)
-      assert.match(text, /1 个问题/)
-      assert.match(text, /已取消/)
-      assert.equal(askCancelledZhMount.host.querySelector('.helmx-status-light')?.getAttribute('data-tone'), 'aborted')
-    } finally {
-      await askCancelledZhMount.unmount()
     }
 
     // 3. plan_propose revised & cancelled outcomes

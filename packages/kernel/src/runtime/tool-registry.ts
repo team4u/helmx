@@ -27,11 +27,13 @@ import {
 } from '@helmx/protocol'
 import type { ConversationSummary, JsonSchema } from '@helmx/protocol'
 import type { DerivedToolSpec, PluginHost } from '../plugins/index.js'
+import type { AskService } from './asks.js'
 import { actionCliCommand, compactActionSignature } from './action-prompts.js'
 import { createRunActionTool, type KernelToolHost } from './kernel-tools.js'
 import { actionToolResult, pluginToolResult } from './tools/tool-result-contract.js'
 import { throwIfToolAborted, type HelmxToolDeps } from './tool-deps.js'
 import {
+  createAskUserTool,
   createBashTool,
   createEditTool,
   createReadArtifactTool,
@@ -48,8 +50,10 @@ interface RuntimeToolRegistryOptions {
   readonly getPluginHost: () => PluginHostToolTarget | undefined
   readonly isArtifactAuthorized: (conversationId: number, artifactConversationId: number) => boolean
   readonly redact: (text: string) => string
-  /** Conversation summary lookup (used for `run_action` `describe` scope checks). */
+  /** Conversation summary lookup (used for `run_action` `describe` scope checks and `ask_user` scoping). */
   readonly getConversation: (conversationId: number) => ConversationSummary
+  /** AskService port for the built-in `ask_user` tool (optional in unit tests that do not exercise `ask_user`). */
+  readonly asks?: Pick<AskService, 'createAsk' | 'cancelAsk'>
 }
 
 type PluginToolApi = Pick<ToolExecutionApi, 'conversationId'> & {
@@ -230,6 +234,13 @@ export class RuntimeToolRegistry {
       ),
       wrapToolRegistration(createRegisterArtifactTool(toolDeps)),
       wrapToolRegistration(createRunActionTool(toolHost)),
+      wrapToolRegistration(
+        createAskUserTool({
+          asks: this.options.asks,
+          getConversation,
+          redact,
+        }),
+      ),
     ]
     this.kernelToolSchemas.clear()
     for (const tool of kernelTools) {

@@ -197,12 +197,16 @@ function parseMetaObject(raw: unknown): Record<string, unknown> | undefined {
 }
 
 export function parseAskAnswerBody(body: Record<string, unknown>): {
-  answers: Record<string, string>
+  answers: Record<string, string | string[]>
   expectedStateSeq?: number
 } {
   const parsed = parseBodyWithSchema(REQUEST_SCHEMAS.askAnswer, body, 'ask answer body')
+  const cloned: Record<string, string | string[]> = {}
+  for (const [key, val] of Object.entries(parsed.answers as Record<string, string | string[]>)) {
+    cloned[key] = Array.isArray(val) ? [...val] : val
+  }
   return {
-    answers: { ...(parsed.answers as Record<string, string>) },
+    answers: cloned,
     ...(parsed.expectedStateSeq !== undefined ? { expectedStateSeq: parsed.expectedStateSeq } : {}),
   }
 }

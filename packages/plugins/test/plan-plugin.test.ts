@@ -54,7 +54,6 @@ import { PluginHost, type PluginHostBackend } from '@helmx/kernel'
 import { pluginToolResult } from '@helmx/kernel/testing'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
-  PLAN_ASK_META_SCHEMA,
   PLAN_BADGES_DOC,
   PLAN_COMMAND_ID,
   PLAN_COMMAND_SLASH,
@@ -69,7 +68,6 @@ import {
   PLAN_SESSION_DOC,
   PLAN_SUMMARY_MAX_CHARS,
   PLAN_TITLE_MAX_CHARS,
-  PLAN_TOOL_ASK,
   PLAN_TOOL_BASH,
   PLAN_TOOL_META_SCHEMA,
   PLAN_TOOL_PROPOSE,
@@ -80,7 +78,6 @@ import {
   isPlanConversationEligible,
   parsePlanSlashInput,
   validateReadOnlyShellCommand,
-  type PlanAskKind,
   type PlanBadgesDoc,
   type PlanConversationRecord,
   type PlanPluginOptions,
@@ -588,7 +585,7 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
 
     const toolView = ui.find((u) => u.surface === 'tool.view')?.spec as Record<string, unknown>
     assert.equal(toolView['id'], 'plan-tool-row')
-    assert.deepEqual(toolView['toolNames'], [PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE, PLAN_TOOL_ASK])
+    assert.deepEqual(toolView['toolNames'], [PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE])
     assert.equal(toolView['replaceRow'], true)
     assert.deepEqual(toolView['client'], { module: 'index.tsx', export: 'PlanToolRow' })
 
@@ -611,7 +608,7 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
     assert.equal(getManifest?.idempotent, true)
 
     const tools = harness.host.listTools().filter((t) => t.sourcePluginId === PLAN_PLUGIN_ID)
-    assert.deepEqual(tools.map((t) => t.name).sort(), [PLAN_TOOL_ASK, PLAN_TOOL_BASH, PLAN_TOOL_PROPOSE, PLAN_TOOL_SAVE])
+    assert.deepEqual(tools.map((t) => t.name).sort(), [PLAN_TOOL_BASH, PLAN_TOOL_PROPOSE, PLAN_TOOL_SAVE])
     for (const tool of tools) {
       assert.equal(HAN_RE.test(tool.description), false)
       assert.equal(HAN_RE.test(JSON.stringify(tool.promptGuidelines ?? [])), false)
@@ -925,6 +922,7 @@ test('hooks: onBeforeTurn strips plan tools in normal/ineligible mode and enforc
       makeToolSpec('read_artifact'),
       makeToolSpec('bash'),
       makeToolSpec('load_skill'),
+      makeToolSpec('ask_user'),
       makeToolSpec('write'),
       makeToolSpec('edit'),
       makeToolSpec('register_artifact'),
@@ -935,7 +933,6 @@ test('hooks: onBeforeTurn strips plan tools in normal/ineligible mode and enforc
       makeToolSpec('update_memory'),
       makeToolSpec('swarm_dispatch_worker'),
       makeToolSpec(PLAN_TOOL_BASH),
-      makeToolSpec(PLAN_TOOL_ASK),
       makeToolSpec(PLAN_TOOL_SAVE),
       makeToolSpec(PLAN_TOOL_PROPOSE),
     ]
@@ -948,15 +945,15 @@ test('hooks: onBeforeTurn strips plan tools in normal/ineligible mode and enforc
       messages: [{ role: 'system', content: 'sys' }],
     })
 
-    // Normal mode: strips plan-only tools (plan_bash, plan_ask, plan_save, plan_propose), injects NO sections
+    // Normal mode: strips plan-only tools (plan_bash, plan_save, plan_propose), keeps ask_user, injects NO sections
     const normalOutcome = await harness.host.runHook('before_turn', basePayload(harness.conversations.get(1)!))
     assert.equal(normalOutcome.action, 'transform')
     if (normalOutcome.action === 'transform') {
       const names = normalOutcome.value.tools.map((t) => t.name)
       assert.equal(names.includes(PLAN_TOOL_BASH), false)
-      assert.equal(names.includes(PLAN_TOOL_ASK), false)
       assert.equal(names.includes(PLAN_TOOL_SAVE), false)
       assert.equal(names.includes(PLAN_TOOL_PROPOSE), false)
+      assert.equal(names.includes('ask_user'), true)
       assert.equal(names.includes('bash'), true)
       assert.equal(names.includes('write'), true)
       assert.equal(names.includes('edit'), true)
@@ -983,26 +980,25 @@ test('hooks: onBeforeTurn strips plan tools in normal/ineligible mode and enforc
     assert.equal(childOutcome.action, 'transform')
     if (childOutcome.action === 'transform') {
       assert.equal(childOutcome.value.tools.some((t) => t.name === PLAN_TOOL_BASH), false)
-      assert.equal(childOutcome.value.tools.some((t) => t.name === PLAN_TOOL_ASK), false)
       assert.equal(childOutcome.value.tools.some((t) => t.name === PLAN_TOOL_SAVE), false)
       assert.equal(childOutcome.value.tools.some((t) => t.name === PLAN_TOOL_PROPOSE), false)
       assert.equal(childOutcome.value.sections.some((s) => s.id === PLAN_MODE_SECTION_ID), false)
     }
 
-    // Planning mode -> strict whitelist only + plan.mode section (note raw bash is stripped in favor of plan_bash)
+    // Planning mode -> strict whitelist only + plan.mode section (keeps ask_user, strips raw bash in favor of plan_bash)
     await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
     const planningOutcome = await harness.host.runHook('before_turn', basePayload(harness.conversations.get(1)!))
     assert.equal(planningOutcome.action, 'transform')
     if (planningOutcome.action === 'transform') {
       const names = planningOutcome.value.tools.map((t) => t.name)
-      assert.deepEqual(names, ['read', 'read_artifact', 'load_skill', PLAN_TOOL_BASH, PLAN_TOOL_ASK, PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE])
+      assert.deepEqual(names, ['read', 'read_artifact', 'load_skill', 'ask_user', PLAN_TOOL_BASH, PLAN_TOOL_SAVE, PLAN_TOOL_PROPOSE])
       assert.equal(names.includes('bash'), false)
       assert.ok(names.every((n) => PLAN_MODE_TOOL_WHITELIST.has(n)))
       const section = planningOutcome.value.sections.find((s) => s.id === PLAN_MODE_SECTION_ID)
       assert.ok(section !== undefined)
       assert.match(section.text, /read-only/i)
       assert.match(section.text, /plan_bash/)
-      assert.match(section.text, /plan_ask/)
+      assert.match(section.text, /ask_user/)
       assert.match(section.text, /plan_save/)
       assert.match(section.text, /plan_propose/)
       assert.match(section.text, /self-contained/i)
@@ -1992,129 +1988,7 @@ test('plan_bash: guards mode/scope, blocks mutating commands locally, executes a
 })
 
 // ---------------------------------------------------------------------------
-// 9. plan_ask: clarification questions, validation, awaitingClarification & badges
-// ---------------------------------------------------------------------------
-
-test('plan_ask: validates questions, projects awaitingClarification, and handles answered/superseded/cancelled', TIMEOUT, async () => {
-  const harness = await openPlanHarness({
-    seedConversations: [makeConversationSummary({ id: 1, stateChangeSeq: 9 })],
-  })
-  try {
-    const outOfMode = (await harness.host.executeTool(
-      PLAN_TOOL_ASK,
-      {
-        questions: [
-          {
-            id: 'auth',
-            question: 'Auth method?',
-            options: [
-              { value: 'jwt', label: 'JWT' },
-              { value: 'session', label: 'Session' },
-            ],
-          },
-        ],
-      },
-      { conversationId: 1 },
-    )) as PluginToolResultEnvelope
-    assert.equal(outOfMode.isError, true)
-
-    await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
-
-    const reservedId = (await harness.host.executeTool(
-      PLAN_TOOL_ASK,
-      {
-        questions: [
-          {
-            id: 'notes',
-            question: 'Reserved?',
-            options: [
-              { value: 'a', label: 'A' },
-              { value: 'b', label: 'B' },
-            ],
-          },
-        ],
-      },
-      { conversationId: 1 },
-    )) as PluginToolResultEnvelope
-    assert.equal(reservedId.isError, true)
-
-    const pAsk = harness.host.executeTool(
-      PLAN_TOOL_ASK,
-      {
-        questions: [
-          {
-            id: 'auth',
-            question: 'Auth SECRET_TOKEN storage?',
-            options: [
-              { value: 'cookie', label: 'HttpOnly cookie', description: 'Protected from XSS' },
-              { value: 'header', label: 'Bearer header' },
-            ],
-          },
-        ],
-      },
-      { conversationId: 1 },
-    ) as Promise<PluginToolResultEnvelope>
-    await waitFor(() => harness.createdAsks.length === 1)
-
-    const askSpec = harness.createdAsks[0]!
-    assert.equal(askSpec.expectedStateSeq, 9)
-    assert.deepEqual(askSpec.title, { en: 'Clarifying Questions', 'zh-CN': '需求澄清' })
-    assert.ok(askSpec.hint !== undefined && typeof askSpec.hint === 'object')
-    assert.equal(askSpec.fields[0]?.type, 'choice')
-    assert.equal(String(askSpec.fields[0]?.label).includes('SECRET_TOKEN'), false)
-    assert.equal(askSpec.fields[1]?.name, 'notes')
-
-    const sessionClarifying = harness.readSessionDoc(1)
-    assert.equal(sessionClarifying.awaitingClarification, true)
-    assert.equal(sessionClarifying.awaitingApproval, false)
-    const clarifyBadge = harness.readBadgesDoc().byConversation['1']
-    assert.equal(clarifyBadge?.tone, 'warn')
-    assert.deepEqual(clarifyBadge?.footerText, { en: 'Awaiting clarification', 'zh-CN': '等待澄清回复' })
-
-    harness.answerAsk(askSpec.id!, { auth: 'cookie', notes: 'Also rotate SECRET_TOKEN' })
-    const resAnswered = await pAsk
-    assert.equal(resAnswered.isError, undefined)
-    assert.match(String(resAnswered.output), /cookie \(HttpOnly cookie\)/)
-    assert.match(String(resAnswered.output), /\[REDACTED\]/)
-    assert.deepEqual(resAnswered.presentationMeta, {
-      kind: 'ask',
-      title: 'Clarifying Questions',
-      questionCount: 1,
-      outcome: 'answered',
-    })
-    const formattedMeta = pluginToolResult(resAnswered, (t) => t, { presentationMetaSchema: PLAN_ASK_META_SCHEMA })
-    assert.deepEqual(formattedMeta.details, resAnswered.presentationMeta)
-    assert.equal(harness.readSessionDoc(1).awaitingClarification, undefined)
-
-    // Superseded outcome
-    const pSup = harness.host.executeTool(
-      PLAN_TOOL_ASK,
-      {
-        title: 'API Version',
-        questions: [
-          {
-            id: 'ver',
-            question: 'Version?',
-            options: [
-              { value: 'v1', label: 'v1' },
-              { value: 'v2', label: 'v2' },
-            ],
-          },
-        ],
-      },
-      { conversationId: 1 },
-    ) as Promise<PluginToolResultEnvelope>
-    await waitFor(() => harness.createdAsks.length === 2)
-    harness.cancelAsk(harness.createdAsks[1]!.id!, 'superseded')
-    const resSup = await pSup
-    assert.equal((resSup.presentationMeta as { outcome?: string }).outcome, 'superseded')
-  } finally {
-    await harness.close()
-  }
-})
-
-// ---------------------------------------------------------------------------
-// 10. update_draft action, CAS conflict, & pending approval draft refinement
+// 9. update_draft action, CAS conflict, & pending approval draft refinement
 // ---------------------------------------------------------------------------
 
 test('update_draft: updates draft with redaction, enforces expectedVersion CAS 409, and reflects in pending plan_propose', TIMEOUT, async () => {
