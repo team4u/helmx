@@ -369,7 +369,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
                 beforeCompact: async () => {
                   hookEntered()
                   await hookGate
-                  return { decline: true }
+                  return { kind: 'decline' }
                 },
               }),
             ],

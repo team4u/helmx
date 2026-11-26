@@ -425,7 +425,7 @@ export class ConversationRewind {
       },
       requestId: newInput.finalInput.id,
     }
-    return conversation.submit(tx, inputDraft)
+    return conversation.admit(tx, inputDraft)
   }
 
   /** Register with tracker after transaction (bindSubmission wires correlation index; observe path idempotently merges by requestId). */
