@@ -131,6 +131,7 @@ export function GlobalDefaultsPanel({
     setSaving(true)
     setSaveError(null)
     const gen = ++saveGeneration.current
+    const requestSyncGeneration = syncGeneration.current
     try {
       const issue = reviewModelThinkingRows(perModelRows)
       if (issue !== null) {
@@ -150,6 +151,7 @@ export function GlobalDefaultsPanel({
         modelThinkingLevelsFromRows(perModelRows),
       )
       if (!mountedRef.current || gen !== saveGeneration.current) return
+      if (requestSyncGeneration !== syncGeneration.current) return
       if (actions?.refreshAssets) {
         await actions.refreshAssets()
       }

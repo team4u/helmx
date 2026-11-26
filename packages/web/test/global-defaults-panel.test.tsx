@@ -448,7 +448,7 @@ test('GlobalDefaultsPanel: save recovers clickable state after refreshAssets upd
   }
 })
 
-test('GlobalDefaultsPanel: external defaultModelInfo sync during in-flight PUT does not block saving cleanup', { timeout: 60_000 }, async () => {
+test('GlobalDefaultsPanel: external defaultModelInfo sync during in-flight PUT skips stale onSaved/notice but clears saving for retry', { timeout: 60_000 }, async () => {
   const firstPutGate = deferred<Response>()
   let putCalls = 0
   let externalDefaultModel = 'anthropic/claude-3-7-sonnet'
@@ -498,6 +498,8 @@ test('GlobalDefaultsPanel: external defaultModelInfo sync during in-flight PUT d
       await panel.store.refreshAssets()
     })
     assert.equal(findSaveBtn().disabled, true, 'button remains pending until the active PUT finishes')
+    assert.match(panel.container.querySelector('.model-defaults-status')?.textContent ?? '', /openai\/gpt-4o-mini/)
+    const pathsBeforeStaleResolve = panel.requestedPaths.length
 
     await act(async () => {
       firstPutGate.resolve(
@@ -515,14 +517,26 @@ test('GlobalDefaultsPanel: external defaultModelInfo sync during in-flight PUT d
       )
     })
 
+    // Stale PUT must not overwrite external state via onSaved/refreshAssets or emit success notice/status.
+    assert.equal(panel.requestedPaths.length, pathsBeforeStaleResolve, 'stale PUT response must skip refreshAssets')
+    assert.match(
+      panel.container.querySelector('.model-defaults-status')?.textContent ?? '',
+      /openai\/gpt-4o-mini/,
+      'stale PUT response must not overwrite externally synced defaultModelInfo via onSaved',
+    )
+    assert.ok(panel.container.querySelector('[role="status"]') === null, 'stale PUT must not show success status')
+    assert.equal(panel.store.getSnapshot().notices.length, 0, 'stale PUT must not push success notice')
+
+    // Button still recovers clickable state and subsequent normal save succeeds.
     const recoveredBtn = findSaveBtn()
     assert.equal(recoveredBtn.disabled, false)
     assert.notEqual(recoveredBtn.getAttribute('aria-busy'), 'true')
-    assert.match(panel.container.textContent ?? '', /Configuration saved/)
 
     await click(recoveredBtn)
     assert.equal(putCalls, 2)
     assert.equal(findSaveBtn().disabled, false)
+    assert.match(panel.container.querySelector('[role="status"]')?.textContent ?? '', /Configuration saved/)
+    assert.equal(panel.store.getSnapshot().notices.length, 1)
   } finally {
     firstPutGate.resolve(
       new Response(
