@@ -17,6 +17,7 @@ import {
 import { CodeBlockView, MarkdownView } from '../conversation/MarkdownView.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useOptionalStoreActions } from '../lib/store-context.js'
+import type { ResolvedTarget } from '../lib/types.js'
 import {
   getSkillSourceBadge,
   resolveSkillOwnerTarget,
@@ -34,6 +35,10 @@ export interface SkillDetailDrawerProps {
   skill: SkillSummary | null
   open: boolean
   onClose: () => void
+  /** Whether the parent SkillCenter is mounted in the split pane (keeps owner navigation pane-aware). */
+  isSplit?: boolean
+  /** Optional pane-aware owner navigation callback (defaults to store openTarget honoring `isSplit`). */
+  onOpenOwner?: (target: Extract<ResolvedTarget, { kind: 'plugins' }>) => void
   /** Render inline explicitly (for tests and unified SSR assertions). */
   inline?: boolean
   /** Initial content injection (mainly for SSR tests asserting the doc area). */
@@ -73,6 +78,8 @@ export function SkillDetailDrawer({
   skill,
   open,
   onClose,
+  isSplit = false,
+  onOpenOwner,
   inline = false,
   initialContent,
   readSkill,
@@ -192,12 +199,15 @@ export function SkillDetailDrawer({
           {ownerTarget !== null && skill?.managedByPlugin && (
             <Stack direction="horizontal" gap="xs" align="center" wrap className="text-subtle">
               <span>{t('skills.drawer.managedByOwner', { owner: skill.managedByPlugin })}</span>
-              {actions !== null && (
+              {(onOpenOwner !== undefined || actions !== null) && (
                 <Button
                   variant="ghost"
                   size="xs"
                   icon="arrow-up-right"
-                  onClick={() => actions.openTarget(ownerTarget)}
+                  onClick={() => {
+                    if (onOpenOwner !== undefined) onOpenOwner(ownerTarget)
+                    else actions?.openTarget(ownerTarget, isSplit ? { split: true } : undefined)
+                  }}
                 >
                   {ownerTarget.tab === 'core'
                     ? t('skills.drawer.openCoreOwner')

@@ -217,7 +217,7 @@ export function PluginCenter({
   }
 
   const handleOpenSkill = (skillId: string) => {
-    openTarget({ kind: 'skills', skillId })
+    openTarget({ kind: 'skills', skillId }, isSplit ? { split: true } : undefined)
   }
 
   const handleRefreshCore = async () => {

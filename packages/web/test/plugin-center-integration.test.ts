@@ -21,6 +21,7 @@ const ReactDOMClient = await import('react-dom/client')
 const { renderToString } = await import('react-dom/server')
 
 import type { PluginSummary } from '@helmx/protocol'
+import { formatLocationHash, parseLocationHash } from '../src/lib/url-hash-model.js'
 const { makeTestStore } = await import('./helpers/store.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
@@ -658,6 +659,130 @@ test('PluginCenter: 顶栏页签切换（Plugins <-> Core）、动作点击选�
       })
     })
     assert.match(host.textContent ?? '', /core:conversations\.nonexistent/)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
+})
+
+test('PluginCenter(isSplit=true) -> SkillCenter 双向分屏导航：Core 与普通插件抽屉跳转受管技能仅替换 splitTarget 且 Hash 往返一致', { timeout: 60_000 }, async () => {
+  const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  const primary = { kind: 'conversation' as const, conversationId: 42 }
+  const calls: Array<{ target: unknown; opts: unknown }> = []
+  const store = makeTestStore({
+    plugins: mockPlugins,
+    actions: mockCoreActions,
+    skills: mockCoreSkills,
+    primaryTarget: primary,
+    splitTarget: { kind: 'plugins', tab: 'core', coreOwner: 'core:plugins' },
+  })
+  const realOpenTarget = store.actions.openTarget
+  ;(store.actions as unknown as { openTarget: typeof realOpenTarget }).openTarget = (target, opts) => {
+    calls.push({ target, opts })
+    realOpenTarget(target, opts)
+  }
+
+  try {
+    await act(async () => {
+      root.render(
+        e(HostStoreProviders, { value: store }, e(PluginCenter, { isSplit: true, inlineDrawer: true })),
+      )
+    })
+
+    // 1. 分屏 CoreCapabilityDetailDrawer -> 点击受管技能「在技能中心查看」仅替换 splitTarget，主屏保持不变
+    const coreSkillBtn = host.querySelector<HTMLButtonElement>('[data-core-open-skill="app-builder"]')
+    assert.ok(coreSkillBtn, '分屏 CoreCapabilityDetailDrawer 应渲染受管技能跳转按钮')
+    await act(async () => {
+      coreSkillBtn.click()
+    })
+
+    assert.deepEqual(calls.at(-1), {
+      target: { kind: 'skills', skillId: 'app-builder' },
+      opts: { split: true },
+    })
+    const afterCoreJump = store.getLocationTargetsSlice()
+    assert.deepEqual(afterCoreJump.primaryTarget, primary, '分屏从 Core 抽屉跳转技能不得覆盖主屏')
+    assert.deepEqual(afterCoreJump.splitTarget, { kind: 'skills', skillId: 'app-builder' })
+
+    const coreJumpHash = formatLocationHash({
+      primaryTarget: afterCoreJump.primaryTarget,
+      splitTarget: afterCoreJump.splitTarget,
+      drawerStack: [],
+      activeModal: null,
+    })
+    const parsedCoreJump = parseLocationHash(coreJumpHash)
+    assert.deepEqual(parsedCoreJump.primaryTarget, primary)
+    assert.deepEqual(parsedCoreJump.splitTarget, { kind: 'skills', skillId: 'app-builder' })
+
+    // 2. 分屏切换到普通插件抽屉 PluginDetailDrawer -> 点击受管技能同样仅替换 splitTarget
+    await act(async () => {
+      realOpenTarget({ kind: 'plugins', pluginId: 'builtin:workflow' }, { split: true })
+    })
+
+    const pluginSkillBtn = host.querySelector<HTMLButtonElement>('[data-plugin-managed-skill="workflow-guide"]')
+    assert.ok(pluginSkillBtn, '分屏 PluginDetailDrawer 应渲染受管技能跳转按钮')
+    await act(async () => {
+      pluginSkillBtn.click()
+    })
+
+    assert.deepEqual(calls.at(-1), {
+      target: { kind: 'skills', skillId: 'workflow-guide' },
+      opts: { split: true },
+    })
+    const afterPluginJump = store.getLocationTargetsSlice()
+    assert.deepEqual(afterPluginJump.primaryTarget, primary, '分屏从插件抽屉跳转技能不得覆盖主屏')
+    assert.deepEqual(afterPluginJump.splitTarget, { kind: 'skills', skillId: 'workflow-guide' })
+
+    const pluginJumpHash = formatLocationHash({
+      primaryTarget: afterPluginJump.primaryTarget,
+      splitTarget: afterPluginJump.splitTarget,
+      drawerStack: [],
+      activeModal: null,
+    })
+    const parsedPluginJump = parseLocationHash(pluginJumpHash)
+    assert.deepEqual(parsedPluginJump.primaryTarget, primary)
+    assert.deepEqual(parsedPluginJump.splitTarget, { kind: 'skills', skillId: 'workflow-guide' })
+
+    // 3. 对照：非分屏 PluginCenter 跳转技能不携带 split 选项，更新 primaryTarget 且不污染 splitTarget
+    const primaryStore = makeTestStore({
+      plugins: mockPlugins,
+      actions: mockCoreActions,
+      skills: mockCoreSkills,
+      primaryTarget: { kind: 'plugins', tab: 'core', coreOwner: 'core:plugins' },
+      splitTarget: null,
+    })
+    const primaryCalls: Array<{ target: unknown; opts: unknown }> = []
+    const realPrimaryOpen = primaryStore.actions.openTarget
+    ;(primaryStore.actions as unknown as { openTarget: typeof realPrimaryOpen }).openTarget = (target, opts) => {
+      primaryCalls.push({ target, opts })
+      realPrimaryOpen(target, opts)
+    }
+
+    await act(async () => {
+      root.render(
+        e(HostStoreProviders, { value: primaryStore }, e(PluginCenter, { inlineDrawer: true })),
+      )
+    })
+    const primarySkillBtn = host.querySelector<HTMLButtonElement>('[data-core-open-skill="app-builder"]')
+    assert.ok(primarySkillBtn)
+    await act(async () => {
+      primarySkillBtn.click()
+    })
+    assert.deepEqual(primaryCalls.at(-1), {
+      target: { kind: 'skills', skillId: 'app-builder' },
+      opts: undefined,
+    })
+    assert.deepEqual(primaryStore.getLocationTargetsSlice().primaryTarget, {
+      kind: 'skills',
+      skillId: 'app-builder',
+    })
+    assert.equal(primaryStore.getLocationTargetsSlice().splitTarget, null)
   } finally {
     await act(async () => {
       root.unmount()
