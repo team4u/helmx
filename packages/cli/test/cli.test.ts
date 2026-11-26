@@ -1760,7 +1760,7 @@ test('conversations entry: parses and validates [id] <entryId> and --current', {
   assert.equal(extra.code, 1)
 })
 
-test('conversations get: --limit/--cursor map to query params; --current reads env var', { timeout: 60_000 }, async (t) => {
+test('conversations get: --limit/--turns/--cursor map to query params; --current reads env var', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
@@ -1768,8 +1768,10 @@ test('conversations get: --limit/--cursor map to query params; --current reads e
         body: { id: 7, title: 'x', entries: [], nextCursor: '{"a":1}' },
       }),
       'GET /api/conversations/7?limit=10': () => ({ body: { id: 7, entries: [] } }),
+      'GET /api/conversations/7?turns=5': () => ({ body: { id: 7, entries: [] } }),
       'GET /api/conversations/7?cursor=%7B%22a%22%3A1%7D': () => ({ body: { id: 7, entries: [] } }),
       'GET /api/conversations/7?limit=10&cursor=%7B%22a%22%3A1%7D': () => ({ body: { id: 7, entries: [] } }),
+      'GET /api/conversations/7?turns=5&cursor=%7B%22a%22%3A1%7D': () => ({ body: { id: 7, entries: [] } }),
     },
     { autoRegisterCleanup: t },
   )
@@ -1783,6 +1785,10 @@ test('conversations get: --limit/--cursor map to query params; --current reads e
   assert.equal(limited.code, 0, limited.err)
   assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7?limit=10')
 
+  const turned = await runCliCaptured(['conversations', 'get', '7', '--turns', '5', '--json'], env)
+  assert.equal(turned.code, 0, turned.err)
+  assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7?turns=5')
+
   const cursor = await runCliCaptured(['conversations', 'get', '7', '--cursor', '{"a":1}', '--json'], env)
   assert.equal(cursor.code, 0, cursor.err)
   assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7?cursor=%7B%22a%22%3A1%7D')
@@ -1794,10 +1800,27 @@ test('conversations get: --limit/--cursor map to query params; --current reads e
   assert.equal(both.code, 0, both.err)
   assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7?limit=10&cursor=%7B%22a%22%3A1%7D')
 
-  // Invalid limit fails explicitly without sending request
-  const bad = await runCliCaptured(['conversations', 'get', '7', '--limit', '0', '--json'], env)
-  assert.equal(bad.code, 1)
-  assert.equal(parseCliError(bad).code, 'invalid_flag_value')
+  const turnedCursor = await runCliCaptured(
+    ['conversations', 'get', '--current', '--turns', '5', '--cursor', '{"a":1}', '--json'],
+    makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '7' }),
+  )
+  assert.equal(turnedCursor.code, 0, turnedCursor.err)
+  assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7?turns=5&cursor=%7B%22a%22%3A1%7D')
+
+  // Invalid limit / turns / conflict fail explicitly without sending request
+  const hitsBeforeInvalid = hub.hits.length
+  for (const args of [
+    ['conversations', 'get', '7', '--limit', '0', '--json'],
+    ['conversations', 'get', '7', '--turns', '0', '--json'],
+    ['conversations', 'get', '7', '--turns', '51', '--json'],
+    ['conversations', 'get', '7', '--turns', '1.5', '--json'],
+    ['conversations', 'get', '7', '--limit', '10', '--turns', '5', '--json'],
+  ]) {
+    const bad = await runCliCaptured(args, env)
+    assert.equal(bad.code, 1, args.join(' '))
+    assert.equal(parseCliError(bad).code, 'invalid_flag_value', args.join(' '))
+  }
+  assert.equal(hub.hits.length, hitsBeforeInvalid, 'invalid flag combinations must not hit Hub')
 })
 
 test('conversations list: --profile maps to profileId and --status validates against enum', { timeout: 60_000 }, async (t) => {

@@ -7,6 +7,7 @@ import type { Root } from 'react-dom/client'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { useConversationDetail } from '../src/lib/store-context.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
 
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -609,6 +610,99 @@ describe("timeline-scroll", () => {
         entries: [...baseEntries.map((x) => ({ ...x })), triggerEntry],
       })
       assert.equal(mockB.top(), 620, 'SWR 上方内容变化后通过 scrollAnchor 精确补偿 +120px，绝不跳回底部')
+    } finally {
+      document.elementFromPoint = origElementFromPoint
+    }
+  })
+
+  test('加载巨型回合更早步骤引起 turn:root -> turn:human:... 重挂载时，经 data-turn-tail-id 与 bottom 补偿保持阅读锚点', { timeout: 60_000 }, async () => {
+    const raf = installManualRaf()
+    const tailOnlyEntries: ConversationEntry[] = [
+      assistantEntry('20', '尾段开始'),
+      assistantEntry('21', '尾段结论'),
+    ]
+    const fullTurnEntries: ConversationEntry[] = [
+      humanEntry('10', '发起巨型回合'),
+      assistantEntry('11', '更早步骤 A'),
+      ...tailOnlyEntries,
+    ]
+    const conv = makeConv(12, { status: 'idle', lastEntryId: 21 })
+    const store = makeTestStore({
+      conversations: [conv],
+      conversationDetails: { [conv.id]: { ...conv, entries: tailOnlyEntries, nextCursor: 'earlier-page' } },
+    })
+
+    let resolveOlder!: () => void
+    const olderPromise = new Promise<void>((resolve) => {
+      resolveOlder = resolve
+    })
+    ;(store.actions as unknown as { loadEarlierEntries: (id: number) => Promise<void> }).loadEarlierEntries = async (id: number) => {
+      await olderPromise
+      store.updateLive((state) => ({
+        ...state,
+        conversationDetails: {
+          ...state.conversationDetails,
+          [id]: { ...conv, entries: fullTurnEntries, nextCursor: undefined },
+        },
+      }))
+    }
+
+    function LiveTimeline(): React.ReactNode {
+      const detail = useConversationDetail(conv.id)
+      return e(ConversationTimeline, {
+        conversation: conv,
+        detailEntries: detail?.entries ?? [],
+        onRequestEdit: () => {},
+      })
+    }
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    await act(async () => {
+      root!.render(e(HostStoreProviders, { value: store }, e(LiveTimeline)))
+    })
+    const scroller = host.querySelector<HTMLElement>('.timeline-scroll')!
+    const mock = setupClampedScroll(scroller, { scrollHeight: 1600, clientHeight: 800, scrollTop: 0 })
+    await exhaustInitialWindow(raf)
+
+    // Scroll up above bottom while viewing the partial mega-turn (turn:root, data-entry-id="20", data-turn-tail-id="21")
+    scroller.dispatchEvent(wheelUpEvent())
+    mock.setTopSilent(400)
+    scroller.dispatchEvent(new Event('scroll'))
+
+    const initialTurnEl = host.querySelector<HTMLElement>('[data-turn-tail-id="21"]')!
+    assert.ok(initialTurnEl !== null)
+    assert.equal(initialTurnEl.dataset.entryId, '20')
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 800, left: 0, width: 400, height: 800 } as DOMRect)
+    initialTurnEl.getBoundingClientRect = () => ({ top: 120, bottom: 320 } as DOMRect)
+
+    const origElementFromPoint = document.elementFromPoint
+    document.elementFromPoint = () => initialTurnEl
+    try {
+      await act(async () => {
+        host!.querySelector<HTMLButtonElement>('.timeline-load-older-btn')!.click()
+      })
+
+      // Prepended human + earlier assistant steps expand content upward, remounting wrapper under turn:human:in-10
+      mock.setHeight(2400)
+      await act(async () => {
+        resolveOlder()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      const remountedTurnEl = host.querySelector<HTMLElement>('[data-turn-tail-id="21"]')!
+      assert.ok(remountedTurnEl !== null)
+      assert.ok(remountedTurnEl !== initialTurnEl, 'key 从 turn:root 切换为 turn:human:... 时 DOM 应已重挂载')
+      assert.equal(remountedTurnEl.dataset.entryId, '11')
+      remountedTurnEl.getBoundingClientRect = () => ({ top: 180, bottom: 560 } as DOMRect)
+
+      await act(async () => {
+        raf.flush(2)
+      })
+      // bottom moved from 320 -> 560 (+240px), so scrollTop compensates 400 + 240 = 640
+      assert.equal(mock.top(), 640, '重挂载后通过 data-turn-tail-id + bottom 精确补偿 +240px')
     } finally {
       document.elementFromPoint = origElementFromPoint
     }

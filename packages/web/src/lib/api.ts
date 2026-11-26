@@ -199,9 +199,13 @@ export const conversationsApi = {
     const qs = params.toString()
     return apiRequest<ConversationSummary[]>('GET', `/api/conversations${qs ? `?${qs}` : ''}`, undefined, opts?.signal)
   },
-  getDetail(id: number, opts?: { limit?: number; cursor?: string; signal?: AbortSignal }): Promise<ConversationDetail> {
+  getDetail(
+    id: number,
+    opts?: { limit?: number; turns?: number; cursor?: string; signal?: AbortSignal },
+  ): Promise<ConversationDetail> {
     const params = new URLSearchParams()
     if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
+    if (opts?.turns !== undefined) params.set('turns', String(opts.turns))
     if (opts?.cursor) params.set('cursor', opts.cursor)
     const qs = params.toString()
     return apiRequest<ConversationDetail>('GET', `/api/conversations/${id}${qs ? `?${qs}` : ''}`, undefined, opts?.signal)

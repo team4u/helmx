@@ -15,6 +15,8 @@ export function isAbortError(error: unknown): boolean {
 export interface ControlledRequestContext {
   signal: AbortSignal
   isStale: () => boolean
+  /** Clears the active in-flight lock once network I/O has settled and before store commits notify React listeners. */
+  release: () => void
 }
 
 export interface ControlledRequestOptions<T> {
@@ -162,17 +164,24 @@ export class StoreRequestManager {
       controller.signal.aborted ||
       this.requestEpochs.get(key) !== reqEpoch
 
-    const task = exec({ signal: controller.signal, isStale })
-      .then((value): T | undefined => (isStale() ? undefined : value))
-      .catch((error: unknown): undefined => {
+    let task!: Promise<T | undefined>
+    const release = (): void => {
+      if (this.inFlightControllers.get(key) === controller) this.inFlightControllers.delete(key)
+      if (this.inFlight.get(key) === task) this.inFlight.delete(key)
+    }
+
+    task = (async (): Promise<T | undefined> => {
+      try {
+        const value = await exec({ signal: controller.signal, isStale, release })
+        release()
+        return isStale() ? undefined : value
+      } catch (error: unknown) {
+        release()
         if (isAbortError(error) || isStale()) return undefined
         onError?.(error)
         return undefined
-      })
-      .finally(() => {
-        if (this.inFlightControllers.get(key) === controller) this.inFlightControllers.delete(key)
-        if (this.inFlight.get(key) === task) this.inFlight.delete(key)
-      })
+      }
+    })()
 
     this.inFlight.set(key, task)
     return task

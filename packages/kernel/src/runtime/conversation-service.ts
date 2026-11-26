@@ -465,7 +465,10 @@ export class ConversationService {
   // Detail pagination & FTS rebuild (delegated to detailOps)
   // ------------------------------------------------------------------
 
-  async getConversationDetail(id: number, options?: { limit?: number; cursor?: string }): Promise<ConversationDetail> {
+  async getConversationDetail(
+    id: number,
+    options?: { limit?: number; turns?: number; cursor?: string },
+  ): Promise<ConversationDetail> {
     // contextUsage refresh and timeline pagination run in parallel inside detailOps; once both settle,
     // re-fetch authoritative summary before merging (see conversation-detail.ts); failure on either leg rejects.
     return this.detailOps.getConversationDetail(id, options)

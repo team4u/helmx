@@ -391,8 +391,8 @@ export function spaceForTarget(target: ResolvedTarget): SidebarSpace {
 }
 
 export const COMPACT_MOBILE_MAX_WIDTH = 680
-export const COMPACT_MOBILE_DETAIL_LIMIT = 40
-export const DESKTOP_DETAIL_LIMIT = 150
+export const COMPACT_MOBILE_DETAIL_TURNS = 5
+export const DESKTOP_DETAIL_TURNS = 10
 
 /** Whether the current viewport is a compact mobile layout (`<= 680px`). */
 export function isCompactMobileViewport(): boolean {
@@ -403,9 +403,9 @@ export function isCompactMobileViewport(): boolean {
   return typeof window.innerWidth === 'number' && window.innerWidth > 0 && window.innerWidth <= COMPACT_MOBILE_MAX_WIDTH
 }
 
-/** Default entry limit for conversation detail requests based on current viewport width. */
-export function defaultConversationDetailLimit(): number {
-  return isCompactMobileViewport() ? COMPACT_MOBILE_DETAIL_LIMIT : DESKTOP_DETAIL_LIMIT
+/** Default turn count for conversation detail requests based on current viewport width. */
+export function defaultConversationDetailTurns(): number {
+  return isCompactMobileViewport() ? COMPACT_MOBILE_DETAIL_TURNS : DESKTOP_DETAIL_TURNS
 }
 
 export interface HelmxStoreValue {
@@ -498,9 +498,9 @@ export interface HelmxStoreValue {
   loadConversationDetail(
     conversationId: number,
     force?: boolean,
-    opts?: { silent?: boolean; limit?: number },
+    opts?: { silent?: boolean; limit?: number; turns?: number },
   ): Promise<ConversationDetail | undefined>
-  loadEarlierEntries(conversationId: number): Promise<void>
+  loadEarlierEntries(conversationId: number, opts?: { quiet?: boolean }): Promise<void>
   /** Backfills a single entry's full text (fetched on demand after server-side
    * timeline preview truncation): same upsert semantics as the
    * conversation.entry event (same id replaced in place, order preserved), no

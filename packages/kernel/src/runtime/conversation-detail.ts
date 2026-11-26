@@ -20,6 +20,21 @@ import type { HelmxStore } from './store.js'
 const DETAIL_CURSOR_MAX_LENGTH = 2048
 /** Max per-conversation rewind-interval cache entries (bounded eviction prevents leaks across delete cycles). */
 const REWIND_CACHE_MAX_ENTRIES = 256
+/** Max turns per turn-aligned detail page (`?turns=1..50`). */
+export const MAX_PAGE_TURNS = 50
+/** Soft entry budget for turn-aligned paging: stops at next turn boundary once exceeded after >=1 complete turn. */
+export const TURN_SOFT_ENTRY_BUDGET = 200
+/** Hard entry cap for turn-aligned paging: bounds pathological mega-turns with 1-displayable-entry lookahead. */
+export const TURN_HARD_ENTRY_CAP = 500
+/** Batch size per SDK scan iteration during turn-aligned paging. */
+export const TURN_SCAN_BATCH_SIZE = 100
+
+const TURN_BOUNDARY_KINDS: ReadonlySet<string> = new Set([
+  'helmx.input',
+  'pi.user',
+  'pi.reset',
+  'pi.compaction',
+])
 
 interface RewindCacheEntry {
   readonly stateChangeSeq: number
@@ -88,7 +103,7 @@ export class ConversationDetailService {
    */
   async getConversationDetail(
     id: number,
-    options?: { limit?: number; cursor?: string },
+    options?: { limit?: number; turns?: number; cursor?: string },
   ): Promise<ConversationDetail> {
     const detail = await this.assembleDetail(id, options)
     if (this.host.scheduleContextUsage !== undefined) {
@@ -106,11 +121,23 @@ export class ConversationDetailService {
   /** Assemble detail body (paginated+projected entries + initial summary; updated summary overrides afterwards). */
   private async assembleDetail(
     id: number,
-    options?: { limit?: number; cursor?: string },
+    options?: { limit?: number; turns?: number; cursor?: string },
   ): Promise<ConversationDetail> {
+    if (options?.limit !== undefined && options?.turns !== undefined) {
+      throw new HelmxError('validation_error', 'limit and turns are mutually exclusive', 400)
+    }
+    const turns = options?.turns
+    if (turns !== undefined && (!Number.isInteger(turns) || turns < 1 || turns > MAX_PAGE_TURNS)) {
+      throw new HelmxError(
+        'validation_error',
+        `turns must be an integer between 1 and ${MAX_PAGE_TURNS} (received ${turns})`,
+        400,
+        { turns },
+      )
+    }
     const summary = this.host.getConversation(id)
-    const limit = options?.limit ?? 100
-    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    const limit = turns === undefined ? (options?.limit ?? 100) : undefined
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 500)) {
       throw new HelmxError('validation_error', `limit must be an integer between 1 and 500 (received ${limit})`, 400, {
         limit,
       })
@@ -129,14 +156,10 @@ export class ConversationDetailService {
     const rewindCuts = collectInline
       ? []
       : await this.resolveRewindIntervals(id, summary, conversation)
-    const { collected, nextCursor } = await this.pageVisibleEntries(
-      conversation,
-      id,
-      limit,
-      sdkCursor,
-      rewindCuts,
-      collectInline,
-    )
+    const { collected, nextCursor } =
+      turns !== undefined
+        ? await this.pageVisibleTurns(conversation, id, turns, sdkCursor, rewindCuts, collectInline)
+        : await this.pageVisibleEntries(conversation, id, limit!, sdkCursor, rewindCuts, collectInline)
     if (collectInline && nextCursor === undefined && (summary.lastEntryId ?? 0) > 0) {
       this.putRewindCache(id, summary.stateChangeSeq, summary.lastEntryId!, [...rewindCuts])
     }
@@ -257,6 +280,161 @@ export class ConversationDetailService {
     }
     void id
     return { collected, nextCursor }
+  }
+
+  /**
+   * Turn-aligned descending pagination (`?turns=1..50`) with exact boundary cursors and 1-displayable-entry lookahead:
+   * - Scans descending in `TURN_SCAN_BATCH_SIZE` batches; collects `helmx.rewind` inline on page 1 without treating it
+   *   as breaking `inTurnHead`, setting `seenTurnBody`, or counting as displayable in lookahead;
+   * - Stops cleanly before the older turn's body once `targetTurns` or `TURN_SOFT_ENTRY_BUDGET` (after >= 1 complete turn)
+   *   is reached, emitting `{ after: resumeAfterId, order: 'descending' }`;
+   * - Caps single pages at `TURN_HARD_ENTRY_CAP` (500) with bounded lookahead so mega-turns never emit empty trailing pages.
+   */
+  async pageVisibleTurns(
+    conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
+    id: number,
+    targetTurns: number,
+    initialCursor: unknown,
+    rewindCuts: RewindInterval[],
+    collectRewindsInline = false,
+  ): Promise<{
+    collected: Array<{ id: number; kind: string; model?: readonly unknown[]; data?: unknown }>
+    nextCursor: unknown
+  }> {
+    type RawEntry = { id: number; kind: string; model?: readonly unknown[]; data?: unknown }
+    const collected: RawEntry[] = []
+    let sdkCursor = initialCursor
+    let completedTurns = 0
+    let inTurnHead = false
+    let seenTurnBody = false
+    let resumeAfterId: number | undefined = undefined
+
+    const recordRewind = (raw: RawEntry): void => {
+      if (collectRewindsInline && raw.kind === 'helmx.rewind') {
+        const interval = rewindIntervalOf(raw)
+        if (interval !== undefined) rewindCuts.push(interval)
+      }
+    }
+
+    const lookaheadNextCursor = async (
+      remainingInPage: ReadonlyArray<RawEntry>,
+      nextBatchCursor: unknown,
+    ): Promise<{ collected: RawEntry[]; nextCursor: unknown }> => {
+      for (const item of remainingInPage) {
+        const itemId = Number(item.id)
+        if (item.kind === 'helmx.rewind') {
+          recordRewind(item)
+          resumeAfterId = itemId
+          continue
+        }
+        if (item.kind === 'pi.system' || coveredByRewind(itemId, rewindCuts)) {
+          resumeAfterId = itemId
+          continue
+        }
+        return {
+          collected,
+          nextCursor: { after: resumeAfterId!, order: 'descending' },
+        }
+      }
+      let lookCursor = nextBatchCursor
+      while (lookCursor !== undefined) {
+        const lookPage = await conversation.entries(
+          { order: 'descending' },
+          20,
+          lookCursor as never,
+          BACKGROUND_CONTEXT,
+        )
+        for (const item of lookPage.items as never as RawEntry[]) {
+          const itemId = Number(item.id)
+          if (item.kind === 'helmx.rewind') {
+            recordRewind(item)
+            resumeAfterId = itemId
+            continue
+          }
+          if (item.kind === 'pi.system' || coveredByRewind(itemId, rewindCuts)) {
+            resumeAfterId = itemId
+            continue
+          }
+          return {
+            collected,
+            nextCursor: { after: resumeAfterId!, order: 'descending' },
+          }
+        }
+        lookCursor = lookPage.next
+      }
+      return { collected, nextCursor: undefined }
+    }
+
+    for (;;) {
+      const page = await conversation.entries(
+        { order: 'descending' },
+        TURN_SCAN_BATCH_SIZE,
+        sdkCursor as never,
+        BACKGROUND_CONTEXT,
+      )
+      const items = page.items as never as RawEntry[]
+      for (let i = 0; i < items.length; i += 1) {
+        const raw = items[i]!
+        const numericId = Number(raw.id)
+        recordRewind(raw)
+        if (raw.kind === 'pi.system') {
+          if (collected.length > 0) resumeAfterId = numericId
+          continue
+        }
+        if (raw.kind === 'helmx.rewind') {
+          collected.push(raw)
+          resumeAfterId = numericId
+          if (collected.length >= TURN_HARD_ENTRY_CAP) {
+            return await lookaheadNextCursor(items.slice(i + 1), page.next)
+          }
+          continue
+        }
+        if (coveredByRewind(numericId, rewindCuts)) {
+          if (collected.length > 0) resumeAfterId = numericId
+          continue
+        }
+
+        const isActiveBoundary =
+          raw.kind === 'helmx.input' ||
+          raw.kind === 'pi.user' ||
+          ((raw.kind === 'pi.reset' || raw.kind === 'pi.compaction') && (inTurnHead || seenTurnBody))
+
+        if (isActiveBoundary) {
+          if (!inTurnHead) {
+            completedTurns += 1
+            inTurnHead = true
+          }
+          collected.push(raw)
+          resumeAfterId = numericId
+        } else {
+          if (
+            inTurnHead &&
+            (completedTurns >= targetTurns || (collected.length >= TURN_SOFT_ENTRY_BUDGET && completedTurns >= 1))
+          ) {
+            return {
+              collected,
+              nextCursor: { after: resumeAfterId!, order: 'descending' },
+            }
+          }
+          inTurnHead = false
+          if (!TURN_BOUNDARY_KINDS.has(raw.kind)) {
+            seenTurnBody = true
+          }
+          collected.push(raw)
+          resumeAfterId = numericId
+        }
+
+        if (collected.length >= TURN_HARD_ENTRY_CAP) {
+          return await lookaheadNextCursor(items.slice(i + 1), page.next)
+        }
+      }
+      if (page.next === undefined) {
+        break
+      }
+      sdkCursor = page.next
+    }
+    void id
+    return { collected, nextCursor: undefined }
   }
 
   /** Encode pagination cursor: base64url(JSON {conversationId, cursor}). */

@@ -25,10 +25,61 @@ import {
 import { reconcilePluginClientCache } from '../plugin-client.js'
 import { isAbortError, type StoreRequestManager } from '../request-manager.js'
 import { evictSessionDocSubscriptions, restoreSessionDocSubscriptions } from '../session-docs.js'
-import { defaultConversationDetailLimit, type ToastNotice } from '../types.js'
+import { defaultConversationDetailTurns, type ToastNotice } from '../types.js'
 import { isConversationStatusActive } from '../use-unread-sync.js'
 import { ASSET_LOAD_FAILURE_TITLES, emptyPlan, reconcileArtifactList } from './helpers.js'
 import type { CatalogSlice, NotifyPlan, StoreUpdater } from './types.js'
+
+const TURN_BOUNDARY_KINDS: ReadonlySet<string> = new Set([
+  'helmx.input',
+  'pi.user',
+  'pi.reset',
+  'pi.compaction',
+])
+
+function hasTurnBoundaryEntry(entries: ReadonlyArray<ConversationEntry>): boolean {
+  return entries.some((entry) => TURN_BOUNDARY_KINDS.has(entry.kind))
+}
+
+function hasAssistantTextBlock(entry: ConversationEntry): boolean {
+  if (!Array.isArray(entry.model)) return false
+  for (const msg of entry.model) {
+    if (msg === null || typeof msg !== 'object') continue
+    const content = (msg as { content?: unknown }).content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      if (
+        block !== null &&
+        typeof block === 'object' &&
+        (block as { type?: unknown }).type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string' &&
+        (block as { text: string }).text.trim() !== ''
+      ) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function hasMeaningfulTimelineEntry(entries: ReadonlyArray<ConversationEntry>): boolean {
+  for (const entry of entries) {
+    if (TURN_BOUNDARY_KINDS.has(entry.kind)) return true
+    if (entry.kind === 'pi.assistant') {
+      if (hasAssistantTextBlock(entry)) return true
+      continue
+    }
+    if (
+      entry.kind === 'pi.tool-result' ||
+      entry.kind === 'pi.system' ||
+      entry.kind === 'helmx.rewind'
+    ) {
+      continue
+    }
+    return true
+  }
+  return false
+}
 
 export interface StoreRequestsHost {
   readonly requests: StoreRequestManager
@@ -61,9 +112,9 @@ export interface StoreRequestActions {
   loadConversationDetail: (
     id: number,
     force?: boolean,
-    opts?: { silent?: boolean; limit?: number },
+    opts?: { silent?: boolean; limit?: number; turns?: number },
   ) => Promise<ConversationDetail | undefined>
-  loadEarlierEntries: (id: number) => Promise<void>
+  loadEarlierEntries: (id: number, opts?: { quiet?: boolean }) => Promise<void>
   backfillConversationEntry: (conversationId: number, entry: ConversationEntry) => void
   loadConversationArtifacts: (
     id: number,
@@ -237,7 +288,7 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
   const loadConversationDetail = async (
     id: number,
     force = false,
-    opts?: { silent?: boolean; limit?: number },
+    opts?: { silent?: boolean; limit?: number; turns?: number },
   ): Promise<ConversationDetail | undefined> => {
     const key = `conversation:${id}`
     const existing = host.requests.inFlight.get(key)
@@ -247,7 +298,10 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
 
     const silent = opts?.silent === true
     const hasCached = cachedDetail !== undefined
-    const limit = opts?.limit ?? defaultConversationDetailLimit()
+    const detailQuery =
+      opts?.limit !== undefined
+        ? { limit: opts.limit }
+        : { turns: opts?.turns ?? defaultConversationDetailTurns() }
 
     return host.requests.runControlled({
       key,
@@ -259,9 +313,10 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
           host.reportLoad(key, error)
         }
       },
-      exec: async ({ signal, isStale }) => {
-        const detail = await conversationsApi.getDetail(id, { limit, signal })
+      exec: async ({ signal, isStale, release }) => {
+        const detail = await conversationsApi.getDetail(id, { ...detailQuery, signal })
         if (isStale()) return undefined
+        release()
         const plan = emptyPlan()
         const loadErrors = host.getLoadErrorsMap()
         if (Object.hasOwn(loadErrors, key)) {
@@ -276,12 +331,12 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
     })
   }
 
-  const loadEarlierEntries = async (id: number): Promise<void> => {
+  const loadEarlierEntries = async (id: number, opts?: { quiet?: boolean }): Promise<void> => {
     const detail = host.getLiveState().conversationDetails[id]
     if (!detail?.nextCursor) return
     const key = `history:${id}`
     if (host.requests.inFlight.has(key)) return
-    const limit = defaultConversationDetailLimit()
+    const turns = defaultConversationDetailTurns()
     const cursor = detail.nextCursor
 
     await host.requests.runControlled<void>({
@@ -292,10 +347,53 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
       onError: (error) => {
         host.reportLoad(key, error)
       },
-      exec: async ({ signal, isStale }) => {
-        const page = await conversationsApi.getDetail(id, { limit, cursor, signal })
+      exec: async ({ signal, isStale, release }) => {
+        const page1 = await conversationsApi.getDetail(id, { turns, cursor, signal })
         if (isStale()) return undefined
-        host.updateLive((state) => mergeConversationDetail(state, page, true))
+        let pages: ConversationDetail[] = [page1]
+        if (!hasTurnBoundaryEntry(page1.entries) && Boolean(page1.nextCursor)) {
+          let page2: ConversationDetail
+          try {
+            page2 = await conversationsApi.getDetail(id, {
+              turns,
+              cursor: page1.nextCursor,
+              signal,
+            })
+          } catch (error) {
+            release()
+            if (!isAbortError(error) && !isStale()) {
+              host.updateLive((state) => mergeConversationDetail(state, page1, true))
+            }
+            throw error
+          }
+          if (isStale()) return undefined
+          pages = [page1, page2]
+        }
+        release()
+        host.updateLive((state) =>
+          pages.reduce((acc, page) => mergeConversationDetail(acc, page, true), state),
+        )
+        const latestPage = pages[pages.length - 1]!
+        const loadedEntries = pages.flatMap((page) => page.entries)
+        if (
+          opts?.quiet !== true &&
+          Boolean(latestPage.nextCursor) &&
+          !hasMeaningfulTimelineEntry(loadedEntries)
+        ) {
+          host.pushNotice({
+            type: 'notification',
+            level: 'info',
+            conversationId: id,
+            title: host.translate({
+              en: 'Loaded earlier steps of current turn',
+              'zh-CN': '已加载当前长回合的更早过程步骤',
+            }),
+            body: host.translate({
+              en: 'Earlier tool and process steps for this turn were added above. Click Load earlier again to reach the previous turn.',
+              'zh-CN': '已将本回合更早的工具与过程步骤加载到上方；再次点击“加载更早”可继续加载上一回合。',
+            }),
+          })
+        }
         return undefined
       },
     })

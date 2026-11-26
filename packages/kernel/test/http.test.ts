@@ -120,7 +120,7 @@ const submitted: Array<{ id: number; text: string; opts?: Record<string, unknown
 const aborted: number[] = []
 const withdrawn: Array<{ id: number; submissionId: number }> = []
 let detailFixture: ConversationDetail | undefined
-const detailCalls: Array<{ id: number; opts?: { limit?: number; cursor?: string } }> = []
+const detailCalls: Array<{ id: number; opts?: { limit?: number; turns?: number; cursor?: string } }> = []
 const updateCalls: Array<{ id: number; patch: ConversationPatch }> = []
 let entryFixture: ConversationEntry | undefined
 const entryCalls: Array<{ id: number; entryId: number }> = []
@@ -184,7 +184,7 @@ function makeKernel(): KernelHttpTarget {
         if (filter?.topLevelOnly) out = out.filter((c) => c.parentConversationId === undefined)
         return out
       },
-      async getConversationDetail(id: number, opts?: { limit?: number; cursor?: string }) {
+      async getConversationDetail(id: number, opts?: { limit?: number; turns?: number; cursor?: string }) {
         detailCalls.push({ id, opts })
         if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
         if (detailFixture !== undefined) {
@@ -817,7 +817,7 @@ test('GET /:id returns details (top-level summary fields + entries + nextCursor)
   assert.equal(typeof res.body.nextCursor, 'string')
 })
 
-test('GET /:id?limit/cursor forwards to kernel.getConversationDetail; invalid values return 400', { timeout: 60_000 }, async () => {
+test('GET /:id?limit/turns/cursor forwards to kernel.getConversationDetail; invalid values return 400', { timeout: 60_000 }, async () => {
   detailFixture = detailOf()
   const { handler } = makeHandlers()
   const ok = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}?limit=10&cursor=${encodeURIComponent('{"a":1}')}`)
@@ -826,7 +826,11 @@ test('GET /:id?limit/cursor forwards to kernel.getConversationDetail; invalid va
   assert.equal(last.id, ROOT_CONVERSATION_ID)
   assert.deepEqual(last.opts, { limit: 10, cursor: '{"a":1}' })
 
-  for (const bad of ['limit=0', 'limit=-1', 'limit=abc', 'limit=501']) {
+  const okTurns = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}?turns=10&cursor=${encodeURIComponent('{"a":2}')}`)
+  assert.equal(okTurns.status, 200)
+  assert.deepEqual(detailCalls.at(-1)!.opts, { turns: 10, cursor: '{"a":2}' })
+
+  for (const bad of ['limit=0', 'limit=-1', 'limit=abc', 'limit=501', 'turns=0', 'turns=-1', 'turns=abc', 'turns=51', 'turns=1.5', 'limit=10&turns=2']) {
     const res = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}?${bad}`)
     assert.equal(res.status, 400, bad)
     assert.equal(res.body.error.code, 'validation_error')

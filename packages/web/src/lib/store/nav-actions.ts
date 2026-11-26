@@ -64,7 +64,7 @@ export interface StoreNavHost {
   patchNav(patch: Partial<NavSlice>, plan?: NotifyPlan, deferEmit?: boolean): void
   setNotices(update: StoreUpdater<ToastNotice[]>, plan?: NotifyPlan, deferEmit?: boolean): void
   pushNotice(notice: Omit<ToastNotice, 'id' | 'createdAt'>): void
-  loadEarlierEntries(id: number): Promise<void>
+  loadEarlierEntries(id: number, opts?: { quiet?: boolean }): Promise<void>
   abortConversation(conversationId: number): Promise<unknown>
 }
 
@@ -400,7 +400,7 @@ export function createStoreNavActions(
         }
       }, 5000)
     } else if (detail.nextCursor && !host.getLoadErrorsMap()[`history:${detail.id}`]) {
-      void host.loadEarlierEntries(detail.id)
+      void host.loadEarlierEntries(detail.id, { quiet: true })
     } else if (!detail.nextCursor) {
       host.pushNotice({
         type: 'notification',

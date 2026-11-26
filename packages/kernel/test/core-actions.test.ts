@@ -1688,6 +1688,20 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       const actionNulSearch = await postCoreAction(kernel, 'conversations', 'search', { q: '\u0000' })
       assert.equal(actionNulSearch.status, 400)
       assert.equal(actionNulSearch.code, 'validation_error')
+
+      // 5. core:conversations.get supports turns (1..50) and rejects limit + turns conflict with 400 validation_error.
+      const getByTurns = await postCoreAction(kernel, 'conversations', 'get', {
+        conversationId: 1,
+        turns: 2,
+      })
+      assert.equal(getByTurns.status, 200)
+      const getConflict = await postCoreAction(kernel, 'conversations', 'get', {
+        conversationId: 1,
+        limit: 10,
+        turns: 2,
+      })
+      assert.equal(getConflict.status, 400)
+      assert.equal(getConflict.code, 'validation_error')
     } finally {
       await kernel.close()
     }

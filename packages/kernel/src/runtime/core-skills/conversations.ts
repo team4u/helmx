@@ -41,8 +41,8 @@ Follow a progressive funnel so you retrieve exact evidence without flooding cont
    - Enumerates conversations when you need to find recent threads by role, status (\`working | blocked | done | idle | error\`), tag, ownership, or parent conversation.
    - Mirrors \`GET /api/conversations\` defaults (top-level human conversations unless \`all\`, \`parentConversationId\`, \`tag\`, or \`ownedBy\` is specified).
 3. **Inspect conversation timeline (\`core:conversations.get\`)**
-   - Input: \`{ conversationId, limit?, cursor? }\`
-   - Fetches conversation metadata plus paginated recent timeline entries (\`limit\` \`1..500\`; pass the returned opaque \`nextCursor\` as \`cursor\` to walk older history). Long plain-text tool outputs may be head/tail truncated in detail pages.
+   - Input: \`{ conversationId, limit?, turns?, cursor? }\`
+   - Fetches conversation metadata plus paginated recent timeline entries (\`limit\` \`1..500\` or turn-aligned \`turns\` \`1..50\`, mutually exclusive; pass the returned opaque \`nextCursor\` as \`cursor\` to walk older history). Long plain-text tool outputs may be head/tail truncated in detail pages.
 4. **Read full hit entry (\`core:conversations.entry\`)**
    - Input: \`{ conversationId, entryId }\`
    - Fetches the complete, untruncated content of a specific timeline entry returned by \`search\` or \`get\`.
