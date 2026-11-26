@@ -7,22 +7,22 @@
  * ========================================================================== */
 
 .ask-dock {
-  margin: 0 auto 10px;
+  margin: 0 auto 8px;
   width: 100%;
   max-width: var(--conversation-max-width);
   box-sizing: border-box;
   background: var(--bg-elevated);
-  border: 1px solid var(--warn-border);
-  border-radius: var(--radius-md);
-  padding: 12px 14px;
-  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  padding: 10px 12px;
+  box-shadow: none;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .ask-dock--question {
-  border-color: var(--accent-border);
+  border-color: var(--border-strong);
 }
 
 .ask-dock--approval {
@@ -47,20 +47,6 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-/* 机器元数据 info 入口（Popover 触发器） */
-.ask-dock-meta-btn {
-  flex-shrink: 0;
-}
-
-.ask-dock-meta-popover {
-  padding: 10px 12px;
-  max-width: 280px;
-}
-
-.ask-dock-meta-hint {
-  margin-top: var(--space-2);
 }
 
 .ask-dock-source-btn {
@@ -101,84 +87,50 @@
   overflow: auto;
 }
 
+.ask-dock-step-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.ask-dock-step-nav-btn {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.ask-dock-step-nav-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.ask-dock-step-nav-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--border-focus);
+}
+
+.ask-dock-step-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .ask-dock-step-counter {
   font-size: 11.5px;
   font-weight: 500;
   color: var(--fg-muted);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: 1px 8px;
-  flex-shrink: 0;
-}
-
-.ask-dock-stepper {
-  min-width: 0;
-}
-
-.ask-dock-step-pills {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.ask-dock-step-pill {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 220px;
-  min-width: 0;
-  padding: 4px 9px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg-secondary);
-  font-family: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease, color var(--dur-fast) ease;
-}
-
-.ask-dock-step-pill:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-  color: var(--fg);
-}
-
-.ask-dock-step-pill:focus-visible {
-  outline: none;
-  border-color: var(--border-focus);
-}
-
-.ask-dock-step-pill--active {
-  background: var(--accent-bg);
-  border-color: var(--accent-border);
-  color: var(--accent);
-  font-weight: 500;
-}
-
-.ask-dock-step-pill--answered:not(.ask-dock-step-pill--active) {
-  border-color: var(--border-strong);
-  color: var(--fg);
-}
-
-.ask-dock-step-num {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  opacity: 0.78;
-  flex-shrink: 0;
-}
-
-.ask-dock-step-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ask-dock-step-check {
-  color: var(--ok, var(--accent));
+  padding: 0 4px;
   flex-shrink: 0;
 }
 
@@ -189,7 +141,7 @@
 .ask-dock-choice-wrap {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .ask-dock-choice-meta {
@@ -200,20 +152,20 @@
 .ask-dock-choice-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .ask-dock-choice-btn {
   appearance: none;
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
   width: 100%;
-  padding: 9px 11px;
+  padding: 7px 10px;
   margin: 0;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: transparent;
   color: var(--fg);
   font-family: inherit;
   text-align: left;
@@ -223,14 +175,14 @@
 
 .ask-dock-choice-btn:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--border-strong);
+  border-color: var(--border);
 }
 
 .ask-dock-choice-btn:focus-visible {
   outline: none;
   border-color: var(--border-focus);
   background: var(--bg-hover);
-  box-shadow: none;
+  box-shadow: 0 0 0 1px var(--border-focus);
 }
 
 .ask-dock-choice-btn:disabled {
@@ -243,6 +195,11 @@
   border-color: var(--accent-border);
 }
 
+.ask-dock-choice-btn--selected:focus-visible {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 1px var(--border-focus);
+}
+
 .ask-dock-choice-btn--selected:hover:not(:disabled) {
   background: var(--accent-bg);
   border-color: var(--accent);
@@ -250,15 +207,14 @@
 
 .ask-dock-choice-key {
   flex: 0 0 auto;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
   background: var(--bg-subtle);
   color: var(--fg-muted);
   font-family: var(--font-mono);
@@ -268,7 +224,6 @@
 }
 
 .ask-dock-choice-btn--selected .ask-dock-choice-key {
-  border-color: var(--accent-border);
   background: var(--bg-elevated);
   color: var(--accent);
 }
@@ -303,6 +258,9 @@
 
 .ask-dock-choice-badge {
   flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
 }
 
 .ask-dock-choice-desc {
@@ -314,9 +272,8 @@
 
 .ask-dock-choice-check {
   flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  margin-top: 1px;
+  width: 16px;
+  height: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -337,33 +294,24 @@
 }
 
 .ask-dock-choice-custom {
-  padding: 2px 0 2px 30px;
-}
-
-.ask-dock-footer-hints {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 6px 12px;
+  padding: 2px 0 2px 26px;
 }
 
 .ask-dock-hint {
-  margin-top: 2px;
+  margin-top: 0;
+}
+
+.ask-dock-actions-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .ask-dock-shortcut-hint {
-  margin-left: auto;
   font-size: 11px;
   color: var(--fg-subtle);
-}
-
-.ask-dock-resolved-desc {
-  margin-bottom: 6px;
-}
-
-.ask-dock-resolved-qa {
-  margin-top: 4px;
 }
 
 .ask-user-tool-head {
@@ -371,7 +319,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .ask-user-tool-title {
@@ -381,7 +329,7 @@
 }
 
 .ask-user-tool-items {
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 
 .ask-dock .composer-picker-root {

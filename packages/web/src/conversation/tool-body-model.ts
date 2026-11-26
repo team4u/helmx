@@ -317,6 +317,19 @@ export function parseAskUserToolMeta(meta: unknown): AskUserToolMeta | undefined
   }
 }
 
+export function formatAskUserInlineSummary(
+  meta: AskUserToolMeta | undefined,
+  fallbackSummary: string,
+): string {
+  if (meta?.outcome === 'answered' && meta.items !== undefined && meta.items.length > 0) {
+    return meta.items.map((item) => `${item.question} → ${item.answer}`).join(' · ')
+  }
+  if (meta !== undefined && meta.title !== 'Clarifying Questions' && meta.title !== '问题确认') {
+    return meta.title
+  }
+  return fallbackSummary
+}
+
 // ---------------------------------------------------------------------------
 // Folded step-group summary (pure aggregate stats for StepGroup / MultiStepGroup)
 // ---------------------------------------------------------------------------
