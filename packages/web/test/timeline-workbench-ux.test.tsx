@@ -282,51 +282,66 @@ describe("timeline-workbench-ux", () => {
     assert.equal(splitTurn2Toggle.getAttribute('aria-expanded'), 'false')
     assert.equal(drawerToggle.getAttribute('aria-expanded'), 'false')
 
-    // 按 Ctrl+O（primary 面板）：仅展开 primary 最新含过程回合（含思考详情）
+    // 按 Ctrl+O（primary 面板）：打开 primary 最新含过程回合的右侧抽屉（含思考详情）
     await act(async () => {
       window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
     })
     assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
-    assert.equal(primaryTurn1Toggle.getAttribute('aria-expanded'), 'false', '较早回合应保持折叠')
+    assert.equal(primaryTurn1Toggle.getAttribute('aria-expanded'), 'false', '较早回合应保持未打开')
     assert.equal(splitTurn2Toggle.getAttribute('aria-expanded'), 'false', '分屏面板不应被误触')
     assert.equal(drawerToggle.getAttribute('aria-expanded'), 'false', '子会话抽屉不应响应 Ctrl+O')
-    assert.match(primaryRoot.textContent ?? '', /primary-最新思考推理详情/)
+    const primaryDrawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')
+    assert.ok(primaryDrawer !== null, 'primary Ctrl+O 应打开过程检视抽屉')
+    assert.match(primaryDrawer.textContent ?? '', /primary-最新思考推理详情/)
 
-    // 再次按 Ctrl+O（primary 面板）：折叠最新含过程回合
+    // 再次按 Ctrl+O（primary 面板）：关闭抽屉
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
+    })
+    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
+
+    // 手动点击打开抽屉后，再按 Ctrl+O 应直接关闭（不与手动状态打架）
+    await act(async () => {
+      primaryTurn2Toggle.click()
+    })
+    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') !== null)
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
+    })
+    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
+
+    // 手动点击打开并通过抽屉关闭按钮收起后，再按 Ctrl+O 应重新打开
+    await act(async () => {
+      primaryTurn2Toggle.click()
+    })
+    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
+    const drawerCloseBtn = document.querySelector<HTMLButtonElement>('.process-drawer-close-btn')!
+    assert.ok(drawerCloseBtn !== null)
+    await act(async () => {
+      drawerCloseBtn.click()
+    })
+    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
+    })
+    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
+    // 先关闭 primary 抽屉再测试 split 面板
     await act(async () => {
       window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
     })
     assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
 
-    // 手动点击展开后，再按 Ctrl+O 应基于真实 DOM 展开态直接收起（不与手动状态打架）
-    await act(async () => {
-      primaryTurn2Toggle.click()
-    })
-    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
-    })
-    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
-
-    // 手动点击折叠后，再按 Ctrl+O 应直接展开
-    await act(async () => {
-      primaryTurn2Toggle.click()
-    })
-    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
-    await act(async () => {
-      primaryTurn2Toggle.click()
-    })
-    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
-    })
-    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
-
-    // 单独对 split 面板发 Ctrl+O：只展开 split 面板
+    // 单独对 split 面板发 Ctrl+O：只打开 split 面板过程抽屉
     await act(async () => {
       window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'split' } }))
     })
     assert.equal(splitTurn2Toggle.getAttribute('aria-expanded'), 'true')
+    const splitDrawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')
+    assert.ok(splitDrawer !== null)
+    assert.match(splitDrawer.textContent ?? '', /split-最新思考推理详情/)
   })
 
   test('ConversationPane 顶栏类名、分屏隐藏容器、标题 Popover 与抽屉环境条及按钮顺序正确', { timeout: 60_000 }, async () => {

@@ -51,11 +51,15 @@ import {
   writeBodyData,
 } from './tool-body-model.js'
 
+export type ToolExpandedSurface = 'inline' | 'drawer'
+
 export interface ToolBodyProps {
   tool: ToolTrace
   conversationId: number
   /** Full-text fetch state for the result text (drives the fetch button, error display, and the copy gate under server truncation). */
   resultFetch: ToolResultFullTextState
+  /** Presentation surface ('inline' uses compact folding caps; 'drawer' reveals more lines cleanly). */
+  surface?: ToolExpandedSurface
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +101,7 @@ function DiffRowView({ row, numbered }: { row: AppliedDiffRowView | PendingDiffR
 
 /** Local fold threshold for long diffs (data already client-side; expanding restores fully). */
 const DIFF_FOLD_ROWS = 32
+const DIFF_FOLD_ROWS_DRAWER = 200
 
 function DiffFoldButton({ hidden, expanded, onToggle }: { hidden: number; expanded: boolean; onToggle: () => void }): ReactNode {
   const { t } = useWebLocale()
@@ -112,7 +117,13 @@ function DiffFoldButton({ hidden, expanded, onToggle }: { hidden: number; expand
   )
 }
 
-function PendingDiffView({ pending }: { pending: PendingEditDiff | undefined }): ReactNode {
+function PendingDiffView({
+  pending,
+  foldRows = DIFF_FOLD_ROWS,
+}: {
+  pending: PendingEditDiff | undefined
+  foldRows?: number
+}): ReactNode {
   const { t } = useWebLocale()
   const [expanded, setExpanded] = useState(false)
   if (pending === undefined) {
@@ -123,14 +134,14 @@ function PendingDiffView({ pending }: { pending: PendingEditDiff | undefined }):
       <span className="trace-tool-note">{t('conv.diff.skipped', { reason: pending.reason })}</span>
     )
   }
-  const visible = expanded ? pending.rows : pending.rows.slice(0, DIFF_FOLD_ROWS)
+  const visible = expanded ? pending.rows : pending.rows.slice(0, foldRows)
   const hidden = pending.rows.length - visible.length
   return (
     <div className="trace-diff trace-diff-pending">
       {visible.map((row: PendingDiffRow, index: number) => (
         <DiffRowView key={index} row={row} numbered={false} />
       ))}
-      {pending.rows.length > DIFF_FOLD_ROWS ? <DiffFoldButton hidden={hidden} expanded={expanded} onToggle={() => setExpanded((v) => !v)} /> : null}
+      {pending.rows.length > foldRows ? <DiffFoldButton hidden={hidden} expanded={expanded} onToggle={() => setExpanded((v) => !v)} /> : null}
       {pending.truncated ? (
         <div className="trace-diff-note">
           {t('conv.diff.tooLong', { count: pending.rows.length, added: pending.addedLines, removed: pending.removedLines })}
@@ -141,11 +152,17 @@ function PendingDiffView({ pending }: { pending: PendingEditDiff | undefined }):
   )
 }
 
-function AppliedDiffView({ diff }: { diff: ToolEditDiff }): ReactNode {
+function AppliedDiffView({
+  diff,
+  foldRows = DIFF_FOLD_ROWS,
+}: {
+  diff: ToolEditDiff
+  foldRows?: number
+}): ReactNode {
   const { t } = useWebLocale()
   const [expanded, setExpanded] = useState(false)
   const rows = useMemo(() => decorateAppliedDiffRows(diff.rows), [diff])
-  const visible = expanded ? rows : rows.slice(0, DIFF_FOLD_ROWS)
+  const visible = expanded ? rows : rows.slice(0, foldRows)
   const hidden = rows.length - visible.length
   return (
     <div className="trace-diff">
@@ -158,7 +175,7 @@ function AppliedDiffView({ diff }: { diff: ToolEditDiff }): ReactNode {
           <DiffRowView row={row} numbered />
         </Fragment>
       ))}
-      {rows.length > DIFF_FOLD_ROWS ? <DiffFoldButton hidden={hidden} expanded={expanded} onToggle={() => setExpanded((v) => !v)} /> : null}
+      {rows.length > foldRows ? <DiffFoldButton hidden={hidden} expanded={expanded} onToggle={() => setExpanded((v) => !v)} /> : null}
       {diff.truncated ? (
         <div className="trace-diff-note">
           {t('conv.diff.someOmitted', { added: diff.addedLines, removed: diff.removedLines })}
@@ -314,9 +331,10 @@ function RawToolData({ tool, resultFetch, defaultOpen = false }: { tool: ToolTra
 // edit
 // ---------------------------------------------------------------------------
 
-function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
+function EditToolBody({ tool, resultFetch, surface = 'inline' }: ToolBodyProps): ReactNode {
   const { t } = useWebLocale()
   const inputPath = inputPathOf(tool.input)
+  const diffFoldRows = surface === 'drawer' ? DIFF_FOLD_ROWS_DRAWER : DIFF_FOLD_ROWS
   const pending = useMemo(
     () => tool.status === 'running' || tool.status === 'error' || tool.isError ? buildPendingEditDiff(tool.input) : undefined,
     [tool.input, tool.status, tool.isError],
@@ -330,7 +348,7 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
     return (
       <>
         <div className="trace-section-label">{t('conv.edit.pendingHunks', { path: inputPath !== undefined ? ` · ${inputPath}` : '' })}</div>
-        <PendingDiffView pending={pending} />
+        <PendingDiffView pending={pending} foldRows={diffFoldRows} />
         <RawToolData tool={tool} resultFetch={resultFetch} />
       </>
     )
@@ -344,7 +362,7 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
         </pre>
         {tool.resultTruncation !== undefined ? <TruncatedOutputFooter tool={tool} resultFetch={resultFetch} /> : null}
         <div className="trace-section-label">{t('conv.edit.requestedHunksFailed')}</div>
-        <PendingDiffView pending={pending} />
+        <PendingDiffView pending={pending} foldRows={diffFoldRows} />
         <RawToolData tool={tool} resultFetch={resultFetch} />
       </>
     )
@@ -356,7 +374,7 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
           <div className="trace-section-label">
             {t('conv.edit.appliedDiff', { path: resultCheck.value.path, added: resultCheck.value.diff.addedLines, removed: resultCheck.value.diff.removedLines })}
           </div>
-          <AppliedDiffView diff={resultCheck.value.diff} />
+          <AppliedDiffView diff={resultCheck.value.diff} foldRows={diffFoldRows} />
           <RawToolData tool={tool} resultFetch={resultFetch} />
         </>
       )
@@ -389,12 +407,14 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
 // ---------------------------------------------------------------------------
 
 const WRITE_PREVIEW_LINES = 12
+const WRITE_PREVIEW_LINES_DRAWER = 80
 
-function WriteToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
+function WriteToolBody({ tool, resultFetch, surface = 'inline' }: ToolBodyProps): ReactNode {
   const { t } = useWebLocale()
   const data = useMemo(() => writeBodyData(tool), [tool])
   const [expanded, setExpanded] = useState(false)
   const failed = tool.status === 'error' || tool.isError
+  const previewLines = surface === 'drawer' ? WRITE_PREVIEW_LINES_DRAWER : WRITE_PREVIEW_LINES
   const label =
     tool.status === 'running'
       ? t('conv.write.pending')
@@ -403,7 +423,7 @@ function WriteToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
         : tool.status === 'done'
           ? t('conv.write.content')
           : t('conv.write.contentUnknown')
-  const slice = data.content !== undefined ? headLines(data.content, WRITE_PREVIEW_LINES) : undefined
+  const slice = data.content !== undefined ? headLines(data.content, previewLines) : undefined
   const foldable = slice !== undefined && slice.hiddenLines > 0
   return (
     <>
@@ -450,12 +470,14 @@ function WriteToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
 }
 
 const READ_PREVIEW_LINES = 12
+const READ_PREVIEW_LINES_DRAWER = 80
 
-function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
+function ReadToolBody({ tool, resultFetch, surface = 'inline' }: ToolBodyProps): ReactNode {
   const { t } = useWebLocale()
   const data = useMemo(() => readBodyData(tool), [tool])
   const [expanded, setExpanded] = useState(false)
   const failed = tool.status === 'error' || tool.isError
+  const previewLines = surface === 'drawer' ? READ_PREVIEW_LINES_DRAWER : READ_PREVIEW_LINES
   // Read content always comes from tool.resultText (presentationMeta omits file content to avoid double writes), so server truncation applies directly.
   const truncated = tool.resultTruncation !== undefined
   if (failed) {
@@ -479,7 +501,7 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       </>
     )
   }
-  const slice = headLines(data.content, READ_PREVIEW_LINES)
+  const slice = headLines(data.content, previewLines)
   const foldable = slice.hiddenLines > 0
   const shown = expanded ? data.content : slice.visible
   return (
@@ -548,13 +570,15 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
 }
 
 const BASH_TAIL_LINES = 8
+const BASH_TAIL_LINES_DRAWER = 60
 
-function BashToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
+function BashToolBody({ tool, resultFetch, surface = 'inline' }: ToolBodyProps): ReactNode {
   const { t } = useWebLocale()
   const data = useMemo(() => bashBodyData(tool), [tool])
   const [expanded, setExpanded] = useState(false)
   const hasOutput = data.output !== undefined && data.output !== ''
-  const slice = hasOutput ? tailLines(data.output!, BASH_TAIL_LINES) : undefined
+  const tailLimit = surface === 'drawer' ? BASH_TAIL_LINES_DRAWER : BASH_TAIL_LINES
+  const slice = hasOutput ? tailLines(data.output!, tailLimit) : undefined
   return (
     <>
       {data.command !== undefined ? (
@@ -618,12 +642,14 @@ function BashToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
 // ---------------------------------------------------------------------------
 
 const GENERIC_RESULT_PREVIEW_LINES = 40
+const GENERIC_RESULT_PREVIEW_LINES_DRAWER = 100
 
-function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
+function GenericToolBody({ tool, resultFetch, surface = 'inline' }: ToolBodyProps): ReactNode {
   const { t } = useWebLocale()
   const kv = useMemo(() => inputKvEntries(tool.input), [tool.input])
   const [resultExpanded, setResultExpanded] = useState(false)
-  const slice = tool.resultText !== undefined ? headLines(tool.resultText, GENERIC_RESULT_PREVIEW_LINES) : undefined
+  const previewLines = surface === 'drawer' ? GENERIC_RESULT_PREVIEW_LINES_DRAWER : GENERIC_RESULT_PREVIEW_LINES
+  const slice = tool.resultText !== undefined ? headLines(tool.resultText, previewLines) : undefined
   return (
     <>
       {kv.length > 0 ? (
@@ -721,22 +747,38 @@ export function ToolRawBody({ tool, conversationId }: { tool: ToolTrace; convers
  * call (swarm / workflow / subagent / third-party cards) exposes readable I/O
  * with full-text fetch and copy gates without usurping host edit/bash views.
  */
-export function ToolIoBody({ tool, conversationId }: { tool: ToolTrace; conversationId: number }): ReactNode {
+export function ToolIoBody({
+  tool,
+  conversationId,
+  surface = 'inline',
+}: {
+  tool: ToolTrace
+  conversationId: number
+  surface?: ToolExpandedSurface
+}): ReactNode {
   const resultFetch = useToolResultFullText(tool, conversationId)
   return (
     <div className="trace-tool-body">
-      <GenericToolBody tool={tool} conversationId={conversationId} resultFetch={resultFetch} />
+      <GenericToolBody tool={tool} conversationId={conversationId} resultFetch={resultFetch} surface={surface} />
       {tool.artifactRef !== undefined ? <ArtifactEntry tool={tool} conversationId={conversationId} /> : null}
     </div>
   )
 }
 
-export function ToolExpandedBody({ tool, conversationId }: { tool: ToolTrace; conversationId: number }): ReactNode {
+export function ToolExpandedBody({
+  tool,
+  conversationId,
+  surface = 'inline',
+}: {
+  tool: ToolTrace
+  conversationId: number
+  surface?: ToolExpandedSurface
+}): ReactNode {
   const resultFetch = useToolResultFullText(tool, conversationId)
   const Body = Object.hasOwn(TOOL_BODY_MAP, tool.toolName) ? TOOL_BODY_MAP[tool.toolName]! : GenericToolBody
   return (
     <div className="trace-tool-body">
-      <Body tool={tool} conversationId={conversationId} resultFetch={resultFetch} />
+      <Body tool={tool} conversationId={conversationId} resultFetch={resultFetch} surface={surface} />
       {tool.artifactRef !== undefined ? <ArtifactEntry tool={tool} conversationId={conversationId} /> : null}
     </div>
   )

@@ -1,16 +1,21 @@
-import { memo, useId, useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewSpec } from '@helmx/protocol/browser'
 import { HelmxIcon, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { ToolExpandedBody, ToolIoBody, ToolRawBody } from './ToolExpandedBody.js'
-import { MarkdownView } from './MarkdownView.js'
+import { ProcessInspectorDrawer } from './ProcessInspectorDrawer.js'
+import { useProcessInspector } from './process-inspector-context.js'
+import {
+  liveThinkingTailPreview,
+  resolveSelectedStepIndex,
+  selectLivePreviewSteps,
+  type ProcessInspectMode,
+} from './process-inspector-model.js'
 import {
   buildToolViewProps,
   toolStatusIcon,
   toolSummaryText,
   type FoldableStep,
-  type ProcessShortcutCommand,
   type ToolTrace,
 } from './timeline-model.js'
 import { summarizeStepGroup, toolRowStats } from './tool-body-model.js'
@@ -18,7 +23,7 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatDurationMs, formatStopwatchMs } from '../lib/format.js'
 
 // ---------------------------------------------------------------------------
-// 工具单行轨迹 / 思考折叠组（ConversationTimeline 的行级渲染单元）
+// 工具单行轨迹 / 过程步骤触发行（详情由右侧宽抽屉 ProcessInspectorDrawer 承载）
 // ---------------------------------------------------------------------------
 
 /**
@@ -36,14 +41,22 @@ function RunningElapsed({ startedAt }: { startedAt: number }): ReactNode {
 export const TraceRow = memo(function TraceRow({
   tool,
   conversationId,
-  defaultOpen,
+  defaultOpen = false,
+  inline = false,
+  turnKey,
+  inspecting,
+  onInspect,
 }: {
   tool: ToolTrace
   conversationId: number
-  defaultOpen: boolean
+  defaultOpen?: boolean
+  inline?: boolean
+  turnKey?: string
+  inspecting?: boolean
+  onInspect?: () => void
 }) {
-  const [open, setOpen] = useState(defaultOpen)
-  const ioPanelId = useId()
+  const inspector = useProcessInspector()
+  const [localOpen, setLocalOpen] = useState(defaultOpen)
   const { t } = useWebLocale()
 
   const rowFailed = Boolean(tool.isError)
@@ -67,9 +80,8 @@ export const TraceRow = memo(function TraceRow({
   const stats = useMemo(() => toolRowStats(tool, t), [tool, t])
 
   // 命中插件 tool.view：replaceRow=true 时插件组件替换默认工具行，宿主同时
-  // 统一在行尾提供输入/输出检视开关（任意插件卡片均可展开查看完整入参、输出
-  // 与截断原文）；未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
-  // inline 插件视图保留工具行的原始数据入口，专属展开体仅用于宿主工具。
+  // 统一在行尾提供输入/输出检视开关（点击在右侧抽屉查看完整入参、输出与截断原文）；
+  // 未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态，点击行进入抽屉查看。
   // 顶层业务卡标记 data-outline-card-id（tool.key）：会话大纲二级锚精确定位。
   const toolView = tool.toolView
   const replaceRow = toolView !== undefined && (toolView.spec as ToolViewSpec).replaceRow === true
@@ -77,6 +89,33 @@ export const TraceRow = memo(function TraceRow({
     () => (toolView !== undefined ? { ...buildToolViewProps(tool, conversationId) } : undefined),
     [toolView, tool, conversationId],
   )
+
+  const inspectMode: ProcessInspectMode = replaceRow ? 'io' : toolView !== undefined ? 'raw' : 'default'
+  const usesContext = onInspect === undefined && inspector !== null && turnKey !== undefined
+  const isInspecting =
+    onInspect !== undefined
+      ? inspecting === true
+      : usesContext
+        ? inspector.activeTarget?.kind === 'standalone-tool' &&
+          inspector.activeTarget.turnKey === turnKey &&
+          inspector.activeTarget.toolKey === tool.key &&
+          inspector.activeTarget.mode === inspectMode
+        : localOpen
+
+  const handleInspect = (): void => {
+    if (onInspect !== undefined) {
+      onInspect()
+      return
+    }
+    if (usesContext) {
+      if (isInspecting) inspector.close()
+      else inspector.openStandaloneTool(turnKey, tool.key, inspectMode)
+      return
+    }
+    setLocalOpen((v) => !v)
+  }
+
+  const standaloneSteps = useMemo<FoldableStep[]>(() => [{ kind: 'tool', tool }], [tool])
 
   return (
     <div
@@ -95,43 +134,38 @@ export const TraceRow = memo(function TraceRow({
                 slotProps={toolViewProps}
               />
             </div>
-            <Tooltip content={open ? t('conv.tool.hideIo') : t('conv.tool.showIo')}>
+            <Tooltip content={isInspecting ? t('conv.tool.hideIo') : t('conv.tool.showIo')}>
               <button
                 type="button"
-                className={`trace-io-toggle${open ? ' trace-io-toggle-open' : ''}`}
-                aria-expanded={open}
-                aria-controls={ioPanelId}
+                className={`trace-io-toggle${isInspecting ? ' trace-io-toggle-open' : ''}`}
+                aria-haspopup="dialog"
+                aria-expanded={isInspecting}
                 aria-label={
-                  open
+                  isInspecting
                     ? t('conv.tool.hideIoAria', { name: tool.toolName })
                     : t('conv.tool.showIoAria', { name: tool.toolName })
                 }
-                onClick={() => setOpen((v) => !v)}
+                onClick={handleInspect}
               >
                 <HelmxIcon name="code" size={12} />
               </button>
             </Tooltip>
           </div>
-          <div id={ioPanelId} hidden={!open}>
-            {open ? (
-              <div className="trace-expanded-body selectable">
-                <ToolIoBody tool={tool} conversationId={conversationId} />
-              </div>
-            ) : null}
-          </div>
         </div>
       ) : (
         <>
           <div
-            className={`trace-row${rowFailed ? ' trace-row-error' : ''}`}
+            className={`trace-row${rowFailed ? ' trace-row-error' : ''}${isInspecting ? ' is-inspecting' : ''}`}
             role="button"
             tabIndex={0}
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
+            aria-haspopup="dialog"
+            aria-expanded={isInspecting}
+            title={t('conv.process.openToolDrawer', { name: tool.toolName })}
+            onClick={handleInspect}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()
-                setOpen((v) => !v)
+                handleInspect()
               }
             }}
           >
@@ -157,7 +191,7 @@ export const TraceRow = memo(function TraceRow({
             </span>
             <span className="trace-row-right">
               {right !== '' ? <span>{right}</span> : null}
-              <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} className="trace-row-chevron" />
+              <HelmxIcon name="chevron-right" size={11} className="trace-row-chevron" />
             </span>
           </div>
           {toolView !== undefined ? (
@@ -171,15 +205,21 @@ export const TraceRow = memo(function TraceRow({
               />
             </div>
           ) : null}
-          {open ? (
-            <div className="trace-expanded-body selectable">
-              {toolView === undefined
-                ? <ToolExpandedBody tool={tool} conversationId={conversationId} />
-                : <ToolRawBody tool={tool} conversationId={conversationId} />}
-            </div>
-          ) : null}
         </>
       )}
+      {onInspect === undefined && !usesContext && localOpen ? (
+        <ProcessInspectorDrawer
+          open
+          inline={inline}
+          conversationId={conversationId}
+          steps={standaloneSteps}
+          active={tool.status === 'running'}
+          selectedIndex={0}
+          mode={inspectMode}
+          onSelectStep={() => {}}
+          onClose={() => setLocalOpen(false)}
+        />
+      ) : null}
     </div>
   )
 })
@@ -188,12 +228,14 @@ export const StepGroup = memo(function StepGroup({
   steps,
   active,
   conversationId,
-  shortcutToggle,
+  turnKey,
+  segmentKey,
 }: {
   steps: FoldableStep[]
   active: boolean
   conversationId: number
-  shortcutToggle?: ProcessShortcutCommand
+  turnKey?: string
+  segmentKey?: string
 }) {
   const firstStep = steps[0]
   if (
@@ -207,7 +249,9 @@ export const StepGroup = memo(function StepGroup({
         text={firstStep.thinking.text}
         active={firstStep.thinking.active === true}
         conversationId={conversationId}
-        shortcutToggle={shortcutToggle}
+        turnKey={turnKey}
+        segmentKey={segmentKey}
+        stepKey={firstStep.thinking.key}
         isRootProcessToggle
       />
     )
@@ -218,7 +262,8 @@ export const StepGroup = memo(function StepGroup({
       steps={steps}
       active={active}
       conversationId={conversationId}
-      shortcutToggle={shortcutToggle}
+      turnKey={turnKey}
+      segmentKey={segmentKey}
     />
   )
 })
@@ -227,34 +272,58 @@ function MultiStepGroup({
   steps,
   active,
   conversationId,
-  shortcutToggle,
+  turnKey,
+  segmentKey,
 }: {
   steps: FoldableStep[]
   active: boolean
   conversationId: number
-  shortcutToggle?: ProcessShortcutCommand
+  turnKey?: string
+  segmentKey?: string
 }) {
-  const [userOverride, setUserOverride] = useState<boolean | null>(null)
-  const [prevActive, setPrevActive] = useState(active)
-  const [prevShortcutSeq, setPrevShortcutSeq] = useState<number | undefined>(shortcutToggle?.seq)
-  const [shortcutExpandSeq, setShortcutExpandSeq] = useState<number | null>(null)
+  const inspector = useProcessInspector()
+  const [localOpen, setLocalOpen] = useState(false)
+  const [localStepKey, setLocalStepKey] = useState<string | undefined>(undefined)
+  const [localStepIndex, setLocalStepIndex] = useState<number | undefined>(undefined)
+  const [localFollowLive, setLocalFollowLive] = useState<boolean>(active)
   const { t } = useWebLocale()
-  if (prevActive !== active) {
-    setPrevActive(active)
-    if (!active && userOverride !== null) {
-      setUserOverride(null)
+
+  const usesContext = inspector !== null && turnKey !== undefined && segmentKey !== undefined
+  const activeTarget =
+    usesContext &&
+    inspector.activeTarget?.kind === 'step-group' &&
+    inspector.activeTarget.turnKey === turnKey &&
+    inspector.activeTarget.segmentKey === segmentKey
+      ? inspector.activeTarget
+      : undefined
+  const isInspecting = usesContext ? activeTarget !== undefined : localOpen
+
+  const openGroup = (): void => {
+    if (usesContext) {
+      if (isInspecting) inspector.close()
+      else inspector.openStepGroup(turnKey, segmentKey, { followLive: active })
+      return
     }
+    if (localOpen) {
+      setLocalOpen(false)
+      return
+    }
+    setLocalStepKey(undefined)
+    setLocalStepIndex(undefined)
+    setLocalFollowLive(active)
+    setLocalOpen(true)
   }
-  if (shortcutToggle !== undefined && shortcutToggle.seq !== prevShortcutSeq) {
-    setPrevShortcutSeq(shortcutToggle.seq)
-    setUserOverride(shortcutToggle.open)
-    setShortcutExpandSeq(shortcutToggle.open ? shortcutToggle.seq : null)
+
+  const openAtStep = (stepKey: string, stepIndex: number): void => {
+    if (usesContext) {
+      inspector.openStepGroup(turnKey, segmentKey, { stepKey, stepIndex, followLive: false })
+      return
+    }
+    setLocalStepKey(stepKey)
+    setLocalStepIndex(stepIndex)
+    setLocalFollowLive(false)
+    setLocalOpen(true)
   }
-  const open = userOverride ?? active
-  const openedByCurrentShortcut =
-    shortcutToggle !== undefined &&
-    shortcutToggle.open &&
-    shortcutExpandSeq === shortcutToggle.seq
 
   const summary = useMemo(() => summarizeStepGroup(steps), [steps])
   const hasOnlyThinking = steps.every((s) => s.kind === 'thinking')
@@ -265,7 +334,7 @@ function MultiStepGroup({
     : active
       ? t('conv.thinking.execActive', { count: steps.length })
       : t('conv.thinking.exec', { count: steps.length })
-  const showErrorBadge = !open && summary.errorCount > 0
+  const showErrorBadge = summary.errorCount > 0
   // Parallel tools contribute their own durations; the tooltip explains the cumulative total.
   const durationMs = (summary.modelDurationMs ?? 0) + (summary.toolDurationMs ?? 0)
   const showTime = !active && durationMs > 0
@@ -279,23 +348,42 @@ function MultiStepGroup({
     t('conv.thinking.totalTimeTitle'),
   ].filter(Boolean).join('\n')
 
+  const livePreviewSteps = useMemo(
+    () => (active ? selectLivePreviewSteps(steps) : []),
+    [active, steps],
+  )
+
+  const localSelectedIndex = useMemo(
+    () =>
+      !usesContext && localOpen
+        ? resolveSelectedStepIndex(steps, {
+            selectedStepKey: localStepKey,
+            selectedStepIndex: localStepIndex,
+            followLive: localFollowLive,
+            active,
+          })
+        : 0,
+    [usesContext, localOpen, steps, localStepKey, localStepIndex, localFollowLive, active],
+  )
+
   return (
     <div className="trace-group">
       <Tooltip content={timeDetails} disabled={!showTime} className="trace-group-time-tooltip">
         <button
           type="button"
-          className={`trace-group-summary trace-group-summary-multi${showErrorBadge ? ' trace-group-summary-error' : ''}`}
-          aria-expanded={open}
+          className={`trace-group-summary trace-group-summary-multi${showErrorBadge ? ' trace-group-summary-error' : ''}${isInspecting ? ' is-inspecting' : ''}`}
+          aria-haspopup="dialog"
+          aria-expanded={isInspecting}
           data-process-toggle="root"
-          onClick={() => {
-            setShortcutExpandSeq(null)
-            setUserOverride(!open)
-          }}
-          title={showTime ? undefined : open ? t('conv.thinking.collapseExec') : t('conv.thinking.expandExec')}
+          onClick={openGroup}
+          title={showTime ? undefined : isInspecting ? t('conv.process.closeDrawer') : t('conv.process.openDrawer')}
         >
           <span className="trace-group-leading" aria-hidden="true">
-            <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-            {active ? <HelmxIcon name="loader" size={11} className="spin-slow" /> : null}
+            <HelmxIcon
+              name={active ? 'loader' : 'list-tree'}
+              size={12}
+              className={active ? 'spin-slow' : undefined}
+            />
           </span>
           <span className="trace-group-title">{summaryTitle}</span>
           {showErrorBadge ? (
@@ -304,30 +392,80 @@ function MultiStepGroup({
           {showTime ? (
             <span className="trace-group-meta tabular-nums">{formatDurationMs(durationMs)}</span>
           ) : null}
+          <HelmxIcon name="panel-right" size={11} className="trace-group-drawer-cue" />
         </button>
       </Tooltip>
-      {open ? (
-        <div className="trace-group-steps">
-          {steps.map((step, idx) =>
-            step.kind === 'thinking' ? (
-              <ThinkingRow
-                key={`think:${idx}`}
-                text={step.thinking.text}
-                active={step.thinking.active}
-                conversationId={conversationId}
-                defaultOpen={openedByCurrentShortcut}
-                shortcutToggle={shortcutToggle}
-              />
-            ) : (
+      {active && livePreviewSteps.length > 0 ? (
+        <div className="trace-live-feed">
+          {livePreviewSteps.map((item) => {
+            if (item.step.kind === 'thinking') {
+              const preview = liveThinkingTailPreview(item.step.thinking.text)
+              return (
+                <button
+                  key={`live-think:${item.stepKey}:${item.index}`}
+                  type="button"
+                  className="trace-live-thinking"
+                  title={t('conv.process.openThinkingDrawer')}
+                  onClick={() => openAtStep(item.stepKey, item.index)}
+                >
+                  <span className="trace-live-thinking-head">
+                    <HelmxIcon
+                      name={item.step.thinking.active ? 'loader' : 'sparkles'}
+                      size={11}
+                      className={item.step.thinking.active ? 'spin-slow' : undefined}
+                    />
+                    <span>
+                      {item.step.thinking.active ? t('conv.thinking.activeLabel') : t('conv.thinking.label')}
+                    </span>
+                  </span>
+                  {preview.visible !== '' ? (
+                    <div className="trace-live-thinking-preview">{preview.visible}</div>
+                  ) : null}
+                  {preview.truncated ? (
+                    <span className="trace-live-thinking-more">{t('conv.process.liveTruncatedHint')}</span>
+                  ) : null}
+                </button>
+              )
+            }
+            const stepSelected =
+              isInspecting &&
+              (usesContext
+                ? activeTarget !== undefined &&
+                  resolveSelectedStepIndex(steps, {
+                    selectedStepKey: activeTarget.selectedStepKey,
+                    selectedStepIndex: activeTarget.selectedStepIndex,
+                    followLive: activeTarget.followLive,
+                    active,
+                  }) === item.index
+                : localSelectedIndex === item.index)
+            return (
               <TraceRow
-                key={step.tool.key}
-                tool={step.tool}
+                key={item.step.tool.key}
+                tool={item.step.tool}
                 conversationId={conversationId}
-                defaultOpen={false}
+                inspecting={stepSelected}
+                onInspect={() => openAtStep(item.stepKey, item.index)}
               />
-            ),
-          )}
+            )
+          })}
         </div>
+      ) : null}
+      {!usesContext && localOpen ? (
+        <ProcessInspectorDrawer
+          open
+          conversationId={conversationId}
+          steps={steps}
+          active={active}
+          selectedIndex={localSelectedIndex}
+          followLive={localFollowLive}
+          onSelectStep={(idx, key) => {
+            setLocalStepIndex(idx)
+            setLocalStepKey(key)
+            setLocalFollowLive(false)
+          }}
+          onFollowLive={() => setLocalFollowLive(true)}
+          onClose={() => setLocalOpen(false)}
+        />
       ) : null}
     </div>
   )
@@ -338,51 +476,119 @@ export function ThinkingRow({
   conversationId,
   active = false,
   defaultOpen = false,
-  shortcutToggle,
+  inline = false,
+  turnKey,
+  segmentKey,
+  stepKey,
   isRootProcessToggle = false,
 }: {
   text: string
   conversationId?: number
   active?: boolean
   defaultOpen?: boolean
-  shortcutToggle?: ProcessShortcutCommand
+  inline?: boolean
+  turnKey?: string
+  segmentKey?: string
+  stepKey?: string
   isRootProcessToggle?: boolean
 }) {
-  const [userOverride, setUserOverride] = useState<boolean | null>(null)
-  const [prevActive, setPrevActive] = useState(active)
-  const [prevShortcutSeq, setPrevShortcutSeq] = useState<number | undefined>(shortcutToggle?.seq)
+  const inspector = useProcessInspector()
+  const [localOpen, setLocalOpen] = useState(defaultOpen)
   const { t } = useWebLocale()
-  if (prevActive !== active) {
-    setPrevActive(active)
-    if (!active && userOverride !== null) {
-      setUserOverride(null)
+
+  const usesContext = inspector !== null && turnKey !== undefined && segmentKey !== undefined
+  const isInspecting = usesContext
+    ? inspector.activeTarget?.kind === 'step-group' &&
+      inspector.activeTarget.turnKey === turnKey &&
+      inspector.activeTarget.segmentKey === segmentKey
+    : localOpen
+
+  const openThinkingDrawer = (): void => {
+    if (usesContext) {
+      if (isInspecting) inspector.close()
+      else {
+        inspector.openStepGroup(turnKey, segmentKey, {
+          ...(stepKey !== undefined ? { stepKey } : {}),
+          stepIndex: 0,
+          followLive: active,
+        })
+      }
+      return
     }
+    setLocalOpen((v) => !v)
   }
-  if (shortcutToggle !== undefined && shortcutToggle.seq !== prevShortcutSeq) {
-    setPrevShortcutSeq(shortcutToggle.seq)
-    setUserOverride(shortcutToggle.open)
-  }
-  const open = userOverride ?? (active || defaultOpen)
+
+  const standaloneSteps = useMemo<FoldableStep[]>(
+    () => [
+      {
+        kind: 'thinking',
+        thinking: {
+          key: stepKey ?? 'think:0',
+          text,
+          active,
+        },
+      },
+    ],
+    [stepKey, text, active],
+  )
+  const preview = useMemo(
+    () => (active ? liveThinkingTailPreview(text) : { visible: '', truncated: false }),
+    [active, text],
+  )
 
   return (
     <div className="trace-group">
       <button
         type="button"
-        className="trace-group-summary"
-        aria-expanded={open}
+        className={`trace-group-summary${isInspecting ? ' is-inspecting' : ''}`}
+        aria-haspopup="dialog"
+        aria-expanded={isInspecting}
         {...(isRootProcessToggle ? { 'data-process-toggle': 'root' } : {})}
-        onClick={() => setUserOverride(!open)}
-        title={open ? t('conv.thinking.collapseThinking') : t('conv.thinking.expandThinking')}
+        onClick={openThinkingDrawer}
+        title={isInspecting ? t('conv.process.closeDrawer') : t('conv.process.openThinkingDrawer')}
       >
-        <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-        {active ? <HelmxIcon name="loader" size={11} className="spin-slow" /> : null}
-        {active ? t('conv.thinking.activeLabel') : t('conv.thinking.label')}
+        <HelmxIcon
+          name={active ? 'loader' : 'sparkles'}
+          size={12}
+          className={active ? 'spin-slow' : undefined}
+        />
+        <span>{active ? t('conv.thinking.activeLabel') : t('conv.thinking.label')}</span>
+        <HelmxIcon name="panel-right" size={11} className="trace-group-drawer-cue" />
       </button>
-      {open ? (
-        <div className="trace-expanded-body selectable thinking-expanded-body">
-          {/* Active thinking blocks are live text still growing; static thinking never uses the streaming path */}
-          <MarkdownView text={text} conversationId={conversationId} streaming={active} />
-        </div>
+      {active && preview.visible !== '' ? (
+        <button
+          type="button"
+          className="trace-live-thinking trace-live-thinking-single"
+          title={t('conv.process.openThinkingDrawer')}
+          onClick={() => {
+            if (usesContext) {
+              inspector.openStepGroup(turnKey, segmentKey, {
+                ...(stepKey !== undefined ? { stepKey } : {}),
+                stepIndex: 0,
+                followLive: active,
+              })
+            } else {
+              setLocalOpen(true)
+            }
+          }}
+        >
+          <div className="trace-live-thinking-preview">{preview.visible}</div>
+          {preview.truncated ? (
+            <span className="trace-live-thinking-more">{t('conv.process.liveTruncatedHint')}</span>
+          ) : null}
+        </button>
+      ) : null}
+      {!usesContext && localOpen ? (
+        <ProcessInspectorDrawer
+          open
+          inline={inline}
+          conversationId={conversationId ?? 0}
+          steps={standaloneSteps}
+          active={active}
+          selectedIndex={0}
+          onSelectStep={() => {}}
+          onClose={() => setLocalOpen(false)}
+        />
       ) : null}
     </div>
   )
