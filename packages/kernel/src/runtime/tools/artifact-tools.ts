@@ -15,9 +15,10 @@
  * accepts arbitrary file paths. Honesty: only missing artifacts (`FileNotFoundError`) map to `artifact_not_found`;
  * storage failures surface the redacted underlying error (`artifact_read_failed`) rather than masquerading as missing.
  */
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord/json'
-import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
+import { defineTool, type ToolExecutionResult, type ToolRegistration } from '@earendil-works/pi-durable'
+import type { BinaryReader } from '@earendil-works/pi-durable/env'
 import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import { constants as fsConstants } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
@@ -109,6 +110,165 @@ export async function readArtifactBytesFromHandle(handle: ArtifactReadHandle): P
   return { ok: true, bytes: Buffer.concat(chunks, total), size: after.size }
 }
 
+/** Machine-readable `register_artifact` failure (no structured output; text is the diagnostic). */
+const registerFailure = (text: string): ToolExecutionResult => ({
+  output: [{ type: 'text', text }],
+  isError: true,
+})
+
+/** Lexically resolved source file request shared by the local and remote readers. */
+interface ArtifactSourceRequest {
+  /** Path exactly as the model gave it (used verbatim in diagnostics). */
+  readonly displayPath: string
+  readonly lexicalAbs: string
+}
+
+/** Bytes read from the source on the target node plus the path they were read from (canonical remotely). */
+type ArtifactSourceRead =
+  | { ok: true; bytes: Uint8Array; sourcePath: string }
+  | { ok: false; error: ToolExecutionResult }
+
+/** Classify a local `stat` result for `register_artifact`: directory / special file / over-cap rejections. */
+function localStatRejection(
+  displayPath: string,
+  info: { isDirectory(): boolean; isFile(): boolean; size: number },
+  notOrdinaryFileText: string,
+): ToolExecutionResult | undefined {
+  if (info.isDirectory()) return registerFailure(registerIsDirectoryText(displayPath))
+  if (!info.isFile()) return registerFailure(`register_failed: ${notOrdinaryFileText}`)
+  if (info.size > MAX_ARTIFACT_BYTES) return registerFailure(artifactTooLargeText(displayPath, info.size))
+  return undefined
+}
+
+/**
+ * Remote source read: requires EnvFabric (explicit failure on missing/offline; never falls back locally).
+ * Transport-level failures throw to the tool's catch-all (`register_failed`); shape/size/mutation rejections return.
+ */
+async function readRemoteArtifactSource(
+  deps: HelmxToolDeps,
+  context: Context,
+  target: { nodeId: string; base: string },
+  request: ArtifactSourceRequest,
+): Promise<ArtifactSourceRead> {
+  const remote = requireRemoteEnv(deps.envFabric, target.nodeId, target.base, 'read')
+  if ('error' in remote) return { ok: false, error: registerFailure(remote.error) }
+  const env = remote.env
+  // Resolve symlinks via `canonicalPath` first (consistent with `read`): `fileInfo` uses `lstat` semantics.
+  const targetRealR = await env.canonicalPath(request.lexicalAbs, context)
+  if (!targetRealR.ok) throw new Error(targetRealR.error.message)
+  const sourcePath = targetRealR.value
+  const infoR = await env.fileInfo(sourcePath, context)
+  if (!infoR.ok) throw new Error(infoR.error.message)
+  const info = infoR.value
+  if (info.kind === 'directory') return { ok: false, error: registerFailure(registerIsDirectoryText(request.displayPath)) }
+  if (info.kind !== 'file') {
+    return { ok: false, error: registerFailure(`register_failed: ${request.displayPath} is not ordinary file (kind=${info.kind})`) }
+  }
+  if (info.size > MAX_ARTIFACT_BYTES) {
+    return { ok: false, error: registerFailure(artifactTooLargeText(request.displayPath, info.size)) }
+  }
+  // Bounded binary read: `openBinaryReader` performs positional reads on one fd (daemon uses
+  // `O_NONBLOCK` + `fstat` to reject special files), avoiding unbounded `readBinaryFile` full-file buffering
+  // that would buffer gigabytes before rejecting. Open failures fail loudly with no fallback.
+  const readerR = await env.openBinaryReader(sourcePath, { noFollow: true }, context)
+  if (!readerR.ok) throw new Error(readerR.error.message)
+  try {
+    return await readThroughRemoteReader(readerR.value, request, sourcePath, context)
+  } finally {
+    // Release remote handle on cancel/error too (node readers tie to connection lifecycle; explicit close frees immediately).
+    await readerR.value.close(BACKGROUND_CONTEXT)
+  }
+}
+
+/** Re-verify kind/size on the opened fd, read `cap+1` bytes, then reject any mid-read mutation or size mismatch. */
+async function readThroughRemoteReader(
+  reader: BinaryReader,
+  request: ArtifactSourceRequest,
+  sourcePath: string,
+  context: Context,
+): Promise<ArtifactSourceRead> {
+  // Authoritative post-open metadata on the same fd (not path view); preflight size was only fast-reject.
+  const openedR = await reader.info(context)
+  if (!openedR.ok) throw new Error(openedR.error.message)
+  const opened = openedR.value
+  if (opened.kind !== 'file') {
+    return {
+      ok: false,
+      error: registerFailure(
+        `register_failed: ${request.displayPath} is not ordinary file after open (kind=${opened.kind}); read rejected`,
+      ),
+    }
+  }
+  if (opened.size > MAX_ARTIFACT_BYTES) {
+    return { ok: false, error: registerFailure(artifactTooLargeText(request.displayPath, opened.size)) }
+  }
+  // Request cap+1: SDK reads up to `length` bytes (stopping only on EOF) — enforces cap cleanly without reading entire multi-GB files.
+  const readR = await reader.read(0, MAX_ARTIFACT_BYTES + 1, context)
+  if (!readR.ok) throw new Error(readR.error.message)
+  const readBytes = readR.value
+  if (readBytes.byteLength > MAX_ARTIFACT_BYTES) {
+    return { ok: false, error: registerFailure(artifactTooLargeReadText(request.displayPath, readBytes.byteLength)) }
+  }
+  // Post-read check on same fd: reject if size/mtime shifted or byte count differs from opened size (never register truncated files as complete).
+  const afterR = await reader.info(context)
+  if (!afterR.ok) throw new Error(afterR.error.message)
+  const after = afterR.value
+  if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs) {
+    return {
+      ok: false,
+      error: registerFailure(
+        `file_changed: ${request.displayPath} changed during read ` +
+          `(size ${opened.size} -> ${after.size}, mtime ${opened.mtimeMs} -> ${after.mtimeMs}); refusing incomplete snapshot`,
+      ),
+    }
+  }
+  if (readBytes.byteLength !== opened.size) {
+    return {
+      ok: false,
+      error: registerFailure(
+        `file_changed: ${request.displayPath} read ${readBytes.byteLength} bytes, mismatching stable size ${opened.size}; refusing truncated snapshot`,
+      ),
+    }
+  }
+  return { ok: true, bytes: readBytes, sourcePath }
+}
+
+/**
+ * Local source read (matches `read` semantics): `stat` (follows symlinks) classifies dirs/special files/caps cleanly;
+ * `open` uses `O_NONBLOCK` (when supported) to prevent `stat -> open` FIFO swaps from blocking; `fstat` re-verifies
+ * on the same fd, then reads boundedly to EOF and checks mid-read changes (`file_changed`).
+ * `stat`/`open` failures throw raw OS errors to the tool's catch-all (`register_failed`).
+ */
+async function readLocalArtifactSource(request: ArtifactSourceRequest): Promise<ArtifactSourceRead> {
+  const preInfo = await stat(request.lexicalAbs)
+  const preflight = localStatRejection(
+    request.displayPath,
+    preInfo,
+    `${request.displayPath} is not ordinary file (special file)`,
+  )
+  if (preflight !== undefined) return { ok: false, error: preflight }
+  const handle = await open(request.lexicalAbs, artifactOpenFlags())
+  try {
+    const statInfo = await handle.stat()
+    const opened = localStatRejection(
+      request.displayPath,
+      statInfo,
+      `${request.displayPath} is not ordinary file after open (special file); read rejected`,
+    )
+    if (opened !== undefined) return { ok: false, error: opened }
+    const read = await readArtifactBytesFromHandle(handle)
+    if (!read.ok) {
+      if (read.code === 'artifact_too_large') {
+        return { ok: false, error: registerFailure(artifactTooLargeReadText(request.displayPath, read.read)) }
+      }
+      return { ok: false, error: registerFailure(`file_changed: ${request.displayPath} ${read.detail}`) }
+    }
+    return { ok: true, bytes: read.bytes, sourcePath: request.lexicalAbs }
+  } finally {
+    await handle.close()
+  }
+}
+
 const registerArtifactParameters = obj({
   path: str({ description: 'Source file path to register as a conversation artifact (relative to conversation cwd or absolute; supports ../ traversal, same boundary as bash)' }),
   name: opt(str({ description: 'Display name for the artifact (defaults to source filename)' })),
@@ -143,24 +303,21 @@ export function createRegisterArtifactTool(
       },
       required: ['artifactId', 'path', 'nodeId', 'name', 'size', 'mimeType'],
     },
-    async execute(args, api, context) {
+    async execute(args, api, context): Promise<ToolExecutionResult> {
       if (deps.artifacts.writeUploaded === undefined) {
-        return {
-          output: [
-            { type: 'text', text: 'register_failed: artifact service does not support writeUploaded; cannot register conversation artifact' },
-          ],
-          isError: true,
-        }
+        return registerFailure(
+          'register_failed: artifact service does not support writeUploaded; cannot register conversation artifact',
+        )
       }
       const target0 = await resolveToolTarget(deps, api, context)
       if ('error' in target0) {
-        return { output: [{ type: 'text', text: `register_failed: ${target0.error}` }], isError: true }
+        return registerFailure(`register_failed: ${target0.error}`)
       }
       const { nodeId, base, platform } = target0
       try {
         const resolvedR = resolveTargetPath(args.path, base, platform)
         if (!resolvedR.ok) {
-          return { output: [{ type: 'text', text: `invalid_path: ${resolvedR.reason}` }], isError: true }
+          return registerFailure(`invalid_path: ${resolvedR.reason}`)
         }
         const lexicalAbs = resolvedR.abs
         // Profile.restrictToCwd guardrail: lexical escapes (absolute paths / ../) reject before any IO.
@@ -169,195 +326,23 @@ export function createRegisterArtifactTool(
           (await deps.restrictToCwdOf(api.conversationId as number)) === true
         ) {
           const violation = cwdScopeViolationText(args.path, base, platform)
-          if (violation !== undefined) {
-            return { output: [{ type: 'text', text: violation }], isError: true }
-          }
+          if (violation !== undefined) return registerFailure(violation)
         }
-        const displayName = args.name ?? basenameForShape(lexicalAbs)
-        let bytes: Uint8Array
-        let sourcePath: string
-        if (nodeId !== 'local') {
-          // Remote: requires EnvFabric (explicit failure on missing/offline; never falls back locally).
-          const remote = requireRemoteEnv(deps.envFabric, nodeId, base, 'read')
-          if ('error' in remote) {
-            return { output: [{ type: 'text', text: remote.error }], isError: true }
-          }
-          const env = remote.env
-          // Resolve symlinks via `canonicalPath` first (consistent with `read`): `fileInfo` uses `lstat` semantics.
-          const targetRealR = await env.canonicalPath(lexicalAbs, context)
-          if (!targetRealR.ok) throw new Error(targetRealR.error.message)
-          sourcePath = targetRealR.value
-          const infoR = await env.fileInfo(sourcePath, context)
-          if (!infoR.ok) throw new Error(infoR.error.message)
-          const info = infoR.value
-          if (info.kind === 'directory') {
-            return {
-              output: [{ type: 'text', text: registerIsDirectoryText(args.path) }],
-              isError: true,
-            }
-          }
-          if (info.kind !== 'file') {
-            return {
-              output: [
-                { type: 'text', text: `register_failed: ${args.path} is not ordinary file (kind=${info.kind})` },
-              ],
-              isError: true,
-            }
-          }
-          if (info.size > MAX_ARTIFACT_BYTES) {
-            return {
-              output: [{ type: 'text', text: artifactTooLargeText(args.path, info.size) }],
-              isError: true,
-            }
-          }
-          // Bounded binary read: `openBinaryReader` performs positional reads on one fd (daemon uses
-          // `O_NONBLOCK` + `fstat` to reject special files), avoiding unbounded `readBinaryFile` full-file buffering
-          // that would buffer gigabytes before rejecting. Open failures fail loudly with no fallback.
-          const readerR = await env.openBinaryReader(sourcePath, { noFollow: true }, context)
-          if (!readerR.ok) throw new Error(readerR.error.message)
-          const reader = readerR.value
-          try {
-            // Authoritative post-open metadata on the same fd (not path view); preflight size was only fast-reject.
-            const openedR = await reader.info(context)
-            if (!openedR.ok) throw new Error(openedR.error.message)
-            const opened = openedR.value
-            if (opened.kind !== 'file') {
-              return {
-                output: [
-                  {
-                    type: 'text',
-                    text: `register_failed: ${args.path} is not ordinary file after open (kind=${opened.kind}); read rejected`,
-                  },
-                ],
-                isError: true,
-              }
-            }
-            if (opened.size > MAX_ARTIFACT_BYTES) {
-              return {
-                output: [{ type: 'text', text: artifactTooLargeText(args.path, opened.size) }],
-                isError: true,
-              }
-            }
-            // Request cap+1: SDK reads up to `length` bytes (stopping only on EOF) — enforces cap cleanly without reading entire multi-GB files.
-            const readR = await reader.read(0, MAX_ARTIFACT_BYTES + 1, context)
-            if (!readR.ok) throw new Error(readR.error.message)
-            const readBytes = readR.value
-            if (readBytes.byteLength > MAX_ARTIFACT_BYTES) {
-              return {
-                output: [{ type: 'text', text: artifactTooLargeReadText(args.path, readBytes.byteLength) }],
-                isError: true,
-              }
-            }
-            // Post-read check on same fd: reject if size/mtime shifted or byte count differs from opened size (never register truncated files as complete).
-            const afterR = await reader.info(context)
-            if (!afterR.ok) throw new Error(afterR.error.message)
-            const after = afterR.value
-            if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs) {
-              return {
-                output: [
-                  {
-                    type: 'text',
-                    text:
-                      `file_changed: ${args.path} changed during read ` +
-                      `(size ${opened.size} -> ${after.size}, mtime ${opened.mtimeMs} -> ${after.mtimeMs}); refusing incomplete snapshot`,
-                  },
-                ],
-                isError: true,
-              }
-            }
-            if (readBytes.byteLength !== opened.size) {
-              return {
-                output: [
-                  {
-                    type: 'text',
-                    text: `file_changed: ${args.path} read ${readBytes.byteLength} bytes, mismatching stable size ${opened.size}; refusing truncated snapshot`,
-                  },
-                ],
-                isError: true,
-              }
-            }
-            bytes = readBytes
-          } finally {
-            // Release remote handle on cancel/error too (node readers tie to connection lifecycle; explicit close frees immediately).
-            await reader.close(BACKGROUND_CONTEXT)
-          }
-        } else {
-          // Local matches `read` semantics: `stat` (follows symlinks) classifies dirs/special files/caps cleanly;
-          // `open` uses `O_NONBLOCK` (when supported) to prevent `stat -> open` FIFO swaps from blocking;
-          // `fstat` re-verifies on the same fd, then reads boundedly to EOF and checks mid-read changes (`file_changed`).
-          const preInfo = await stat(lexicalAbs)
-          if (preInfo.isDirectory()) {
-            return {
-              output: [{ type: 'text', text: registerIsDirectoryText(args.path) }],
-              isError: true,
-            }
-          }
-          if (!preInfo.isFile()) {
-            return {
-              output: [
-                { type: 'text', text: `register_failed: ${args.path} is not ordinary file (special file)` },
-              ],
-              isError: true,
-            }
-          }
-          if (preInfo.size > MAX_ARTIFACT_BYTES) {
-            return {
-              output: [{ type: 'text', text: artifactTooLargeText(args.path, preInfo.size) }],
-              isError: true,
-            }
-          }
-          const handle = await open(lexicalAbs, artifactOpenFlags())
-          try {
-            const statInfo = await handle.stat()
-            if (statInfo.isDirectory()) {
-              return {
-                output: [{ type: 'text', text: registerIsDirectoryText(args.path) }],
-                isError: true,
-              }
-            }
-            if (!statInfo.isFile()) {
-              return {
-                output: [
-                  { type: 'text', text: `register_failed: ${args.path} is not ordinary file after open (special file); read rejected` },
-                ],
-                isError: true,
-              }
-            }
-            if (statInfo.size > MAX_ARTIFACT_BYTES) {
-              return {
-                output: [{ type: 'text', text: artifactTooLargeText(args.path, statInfo.size) }],
-                isError: true,
-              }
-            }
-            const read = await readArtifactBytesFromHandle(handle)
-            if (!read.ok) {
-              if (read.code === 'artifact_too_large') {
-                return {
-                  output: [{ type: 'text', text: artifactTooLargeReadText(args.path, read.read) }],
-                  isError: true,
-                }
-              }
-              return {
-                output: [
-                  { type: 'text', text: `file_changed: ${args.path} ${read.detail}` },
-                ],
-                isError: true,
-              }
-            }
-            bytes = read.bytes
-          } finally {
-            await handle.close()
-          }
-          sourcePath = lexicalAbs
-        }
+        const source = { displayPath: args.path, lexicalAbs }
+        const read =
+          nodeId !== 'local'
+            ? await readRemoteArtifactSource(deps, context, { nodeId, base }, source)
+            : await readLocalArtifactSource(source)
+        if (!read.ok) return read.error
+
         const meta = await deps.artifacts.writeUploaded(api.conversationId as number, {
-          name: displayName,
-          bytes,
+          name: args.name ?? basenameForShape(lexicalAbs),
+          bytes: read.bytes,
           ...(args.mimeType !== undefined ? { mimeType: args.mimeType } : {}),
         })
         const registered = {
           artifactId: meta.id,
-          path: sourcePath,
+          path: read.sourcePath,
           nodeId,
           name: meta.name,
           size: meta.size,
@@ -369,7 +354,7 @@ export function createRegisterArtifactTool(
               type: 'text',
               text:
                 `[Artifact] id=${meta.id} name=${meta.name}\n` +
-                `register_artifact_ok: source ${sourcePath} (node ${nodeId}, ${meta.size} bytes, ${meta.mimeType})`,
+                `register_artifact_ok: source ${read.sourcePath} (node ${nodeId}, ${meta.size} bytes, ${meta.mimeType})`,
             },
           ],
           structuredOutput: registered as JsonValue,
@@ -377,10 +362,7 @@ export function createRegisterArtifactTool(
           details: { ...registered } as JsonValue,
         }
       } catch (error) {
-        return {
-          output: [{ type: 'text', text: `register_failed: ${deps.redact(String(error))}` }],
-          isError: true,
-        }
+        return registerFailure(`register_failed: ${deps.redact(String(error))}`)
       }
     },
   })
