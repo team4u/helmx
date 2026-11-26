@@ -60,7 +60,7 @@ test('compact signature: required/optional, types, array elements, nested object
   assert.ok(compactActionSignature({ type: 'string' }).includes('top-level type string'))
 })
 
-test('CLI rendering: strips builtin: prefix by default, honors overrides, omits hidden', { timeout: 60_000 }, () => {
+test('CLI rendering: strips builtin: prefix by default, renders explicit core:* CLI truthfully without fabricating defaults, honors overrides, omits hidden', { timeout: 60_000 }, () => {
   assert.equal(actionCliCommand(manifest()), 'helmx demo:probe plain')
   assert.equal(
     actionCliCommand(manifest({ pluginId: 'builtin:workflow' })),
@@ -72,6 +72,23 @@ test('CLI rendering: strips builtin: prefix by default, honors overrides, omits 
     'helmx team report make',
   )
   assert.equal(actionCliCommand(manifest({ cli: { hidden: true } })), undefined)
+  assert.equal(
+    actionCliCommand(manifest({ pluginId: 'core:conversations', id: 'search', cli: { command: ['search'] } })),
+    'helmx search',
+  )
+  assert.equal(
+    actionCliCommand(manifest({ pluginId: 'core:conversations', id: 'no_cmd' })),
+    undefined,
+    'core:* actions without explicit cli.command must never fabricate a nonexistent helmx core:* command',
+  )
+  assert.equal(
+    actionCliCommand(manifest({ pluginId: 'core:conversations', id: 'hidden_cmd', cli: { hidden: true, command: ['search'] } })),
+    undefined,
+  )
+  assert.equal(
+    actionCliCommand(manifest({ pluginId: 'core:conversations', id: 'ui_cmd', visibility: 'ui', cli: { command: ['search'] } })),
+    undefined,
+  )
 })
 
 test('catalog rendering: escaping, single-line normalization, no truncation, qualified IDs on guidelines, hidden omits CLI', { timeout: 60_000 }, () => {

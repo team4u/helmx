@@ -12,6 +12,7 @@ import type { Duplex } from 'node:stream'
 import type { AskCreateSpec, AskResult } from './ask.js'
 import type {
   ConversationDetail,
+  ConversationForkOptions,
   ConversationInit,
   ConversationInput,
   ConversationListFilter,
@@ -636,11 +637,12 @@ export interface HelmxHostApi {
   /**
    * 从源会话指定可见条目或最新干净锚点分叉新会话（与 POST /api/conversations/:id/fork 同源）。
    * 省略 entryId 时自动解析最新已完成干净锚点（无非系统历史抛 409 fork_empty_history）；
-   * 源会话或指定条目不存在抛 404 not_found；显式 entryId 非安全正整数抛 400 validation_error。
+   * 源会话或指定条目不存在抛 404 not_found；显式 entryId 非安全正整数抛 400 validation_error；
+   * 省略 ownedBy 时默认继承源会话归属权，自动化调用方可显式传 `'helmx'`。
    */
   forkConversation(
     id: number,
-    opts?: { entryId?: number; title?: string; parentConversationId?: number },
+    opts?: ConversationForkOptions,
   ): Promise<ConversationSummary>
   listConversations(filter?: ConversationListFilter): ConversationSummary[]
   /**

@@ -128,6 +128,18 @@ export interface ConversationInit {
   /** Currently effective model 'provider/model'; uses the Profile default when omitted. */
   model?: string
 }
+
+/** In-process conversation fork options (`ctx.host.forkConversation` / kernel `ConversationService.forkConversation`). */
+export interface ConversationForkOptions {
+  /** Fork anchor entry ID (positive safe integer); defaults to the latest clean anchor when omitted. */
+  entryId?: number
+  title?: string
+  /** Optional explicit parent conversation override (defaults to source conversation ID). */
+  parentConversationId?: number
+  /** Initial ownership for the forked conversation (defaults to inheriting source ownership; automated callers may pass 'helmx'). */
+  ownedBy?: ConversationOwnership
+}
+
 /** Partially update a conversation (`PATCH /api/conversations/:id`); undefined fields stay unchanged. */
 export interface ConversationPatch {
   profileId?: string

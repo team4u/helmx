@@ -3,6 +3,8 @@
  * Storage and hot-reload mechanics live in the kernel; only the cross-runtime shared data shapes are defined here.
  */
 
+import { isValidCoreOwnerId } from './namespace.js'
+
 /** Static starter prompt for an empty conversation; clicking only fills the draft, never submits directly. */
 export interface ProfileStarterPrompt {
   /** Display title; at most 24 Unicode code points after trimming. */
@@ -57,7 +59,11 @@ export interface SkillSummary {
   description?: string
   /** Relative paths of sub-files that support on-demand reading (e.g. 'references/xxx.md'). */
   references: string[]
-  /** Plugin ID managing this skill; when that plugin is not enabled, the conversation catalog, skill menu and load_skill are all unavailable. */
+  /**
+   * Managing owner ID for this skill:
+   * - a valid kernel `core:<domain>` owner ID (always active; resident kernel capabilities never appear in `enabledPluginIds`), or
+   * - a plugin ID (`builtin:*` or external); when that plugin is not enabled, the conversation catalog, skill menu and `load_skill` are all unavailable.
+   */
   managedByPlugin?: string
   /**
    * Source root marker: default 'data' (~/.helmx/skills); 'agents' marks the machine-level shared source ~/.agents/skills (the pi ecosystem skill library);
@@ -67,13 +73,28 @@ export interface SkillSummary {
   source?: 'data' | 'agents' | 'node'
 }
 
+/**
+ * Whether a skill's managing owner (`managedByPlugin`) is currently active:
+ * - unmanaged (`undefined`): always active;
+ * - valid kernel `core:<domain>` owner: always active (kernel capabilities are resident and never appear in `enabledPluginIds`);
+ * - plugin owner (`builtin:*` or external): active iff present in `enabledPluginIds`.
+ */
+export function isSkillOwnerActive(
+  managedByPlugin: string | undefined,
+  enabledPluginIds: ReadonlySet<string>,
+): boolean {
+  if (managedByPlugin === undefined) return true
+  if (isValidCoreOwnerId(managedByPlugin)) return true
+  return enabledPluginIds.has(managedByPlugin)
+}
+
 /** Availability rule shared by the conversation skill catalog and load_skill; not a filesystem or tool-execution permission boundary. */
 export function isSkillAvailable(
-  skill: SkillSummary,
+  skill: Pick<SkillSummary, 'id' | 'managedByPlugin'>,
   profile: Pick<Profile, 'skills'>,
   enabledPluginIds: ReadonlySet<string>,
 ): boolean {
-  return (skill.managedByPlugin === undefined || enabledPluginIds.has(skill.managedByPlugin)) &&
+  return isSkillOwnerActive(skill.managedByPlugin, enabledPluginIds) &&
     (profile.skills === undefined || profile.skills.includes(skill.id))
 }
 

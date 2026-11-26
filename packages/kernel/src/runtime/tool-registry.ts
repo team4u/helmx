@@ -203,18 +203,14 @@ export class RuntimeToolRegistry {
             a.pluginId < b.pluginId ? -1 : a.pluginId > b.pluginId ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
           )
           .map((m) => {
-            const cli =
-              actionCliCommand(m) ??
-              (m.pluginId.startsWith('core:') && m.cli?.command !== undefined
-                ? `helmx ${m.cli.command.join(' ')}`
-                : undefined)
+            const cli = actionCliCommand(m)
             return {
               actionId: `${m.pluginId}.${m.id}`,
               pluginId: m.pluginId,
               id: m.id,
               description: m.description,
               parameterSummary: compactActionSignature(m.inputSchema),
-              ...(cli ? { cli } : {}),
+              ...(cli !== undefined ? { cli } : {}),
               ...(m.idempotent ? { idempotent: true as const } : {}),
               exposeAsTool: m.exposeAsTool === true,
             }

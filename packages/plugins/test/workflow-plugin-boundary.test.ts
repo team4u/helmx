@@ -915,3 +915,94 @@ test('Workflow DSL resolveActionId 拦截 visibility=ui/internal（全限定与�
     actionId: 'shared_name',
   })
 })
+
+test('Workflow DSL resolveActionId excludes core:* from short-name resolution while preserving qualified core:* lookup', { timeout: 60_000 }, () => {
+  const host = {
+    listActions: () => [
+      {
+        pluginId: 'core:conversations',
+        id: 'search',
+        description: 'core search',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'core:conversations',
+        id: 'list',
+        description: 'core conv list',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'core:profiles',
+        id: 'list',
+        description: 'core profile list',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'core:conversations',
+        id: 'withdraw',
+        description: 'core only withdraw',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'core:env',
+        id: 'exec',
+        description: 'hypothetical core exec',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'builtin:demo',
+        id: 'search',
+        description: 'plugin search',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+      },
+    ],
+  } as unknown as Parameters<typeof resolveActionId>[0]
+
+  // Qualified core:* IDs resolve normally
+  assert.deepEqual(resolveActionId(host, 'core:conversations.search'), {
+    pluginId: 'core:conversations',
+    actionId: 'search',
+  })
+  assert.deepEqual(resolveActionId(host, 'core:conversations.withdraw'), {
+    pluginId: 'core:conversations',
+    actionId: 'withdraw',
+  })
+
+  // Plugin short name resolves cleanly without false ambiguity from same-named core:* actions
+  assert.deepEqual(resolveActionId(host, 'search'), {
+    pluginId: 'builtin:demo',
+    actionId: 'search',
+  })
+
+  // Built-in `exec` short name is not shadowed or made ambiguous by core:* actions
+  assert.deepEqual(resolveActionId(host, 'exec'), {
+    pluginId: 'env',
+    actionId: 'exec',
+    builtin: 'env.exec',
+  })
+
+  // Core-only short names must NEVER resolve via bare short ID (single or multiple core owners)
+  assert.throws(
+    () => resolveActionId(host, 'withdraw'),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'unknown_action' &&
+      err.status === 404 &&
+      err.message.includes('core:conversations.withdraw'),
+  )
+  assert.throws(
+    () => resolveActionId(host, 'list'),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'unknown_action' &&
+      err.status === 404 &&
+      err.message.includes('core:conversations.list') &&
+      err.message.includes('core:profiles.list'),
+  )
+})
