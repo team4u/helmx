@@ -46,8 +46,10 @@ export interface GlobalDefaultsPanelProps {
  * - saving goes through `assetsApi.setDefaultModel` (empty strings clear keys;
  *   per-model rows are submitted as one complete map together with the other
  *   global defaults);
- * - loading carries a generation guard (`loadGeneration`) so stale responses
- *   never overwrite newer state while the model catalog refreshes;
+ * - external `defaultModelInfo` sync (`syncGeneration`) and save requests
+ *   (`saveGeneration`) track separate generations so external state refreshes
+ *   triggered by a save never prevent `saving` cleanup, while stale or
+ *   post-unmount save responses remain guarded;
  * - strictly zero Emoji and built on design primitives.
  */
 interface KeyedModelThinkingRow extends ModelThinkingRow {
@@ -83,26 +85,35 @@ export function GlobalDefaultsPanel({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
-  const loadGeneration = useRef(0)
+  const syncGeneration = useRef(0)
+  const saveGeneration = useRef(0)
+  const mountedRef = useRef(true)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  useEffect(() => () => {
-    if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      saveGeneration.current += 1
+      if (saveTimerRef.current !== null) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+    }
   }, [])
 
   // Sync the local form when external state changes (deep-link navigation /
   // catalog refresh); only for passive property synchronization.
   useEffect(() => {
-    if (defaultModelInfo) {
-      const gen = ++loadGeneration.current
-      setFormModel(defaultModelInfo.defaultModel ?? '')
-      setFormLevel(defaultModelInfo.defaultThinkingLevel ?? '')
-      setFormCompactionModel(defaultModelInfo.defaultCompactionModel ?? '')
-      setFormCompactionLevel(defaultModelInfo.defaultCompactionThinkingLevel ?? '')
-      setPerModelRows(toKeyedRows(rowsFromModelThinkingLevels(defaultModelInfo.modelThinkingLevels)))
-      return () => {
-        loadGeneration.current = Math.max(loadGeneration.current, gen)
-      }
+    if (!defaultModelInfo) return
+    const gen = ++syncGeneration.current
+    setFormModel(defaultModelInfo.defaultModel ?? '')
+    setFormLevel(defaultModelInfo.defaultThinkingLevel ?? '')
+    setFormCompactionModel(defaultModelInfo.defaultCompactionModel ?? '')
+    setFormCompactionLevel(defaultModelInfo.defaultCompactionThinkingLevel ?? '')
+    setPerModelRows(toKeyedRows(rowsFromModelThinkingLevels(defaultModelInfo.modelThinkingLevels)))
+    return () => {
+      syncGeneration.current = Math.max(syncGeneration.current, gen)
     }
   }, [defaultModelInfo])
 
@@ -119,7 +130,8 @@ export function GlobalDefaultsPanel({
   const handleSave = async () => {
     setSaving(true)
     setSaveError(null)
-    const gen = ++loadGeneration.current
+    const gen = ++saveGeneration.current
+    const requestSyncGeneration = syncGeneration.current
     try {
       const issue = reviewModelThinkingRows(perModelRows)
       if (issue !== null) {
@@ -138,10 +150,12 @@ export function GlobalDefaultsPanel({
         undefined,
         modelThinkingLevelsFromRows(perModelRows),
       )
-      if (gen !== loadGeneration.current) return
+      if (!mountedRef.current || gen !== saveGeneration.current) return
+      if (requestSyncGeneration !== syncGeneration.current) return
       if (actions?.refreshAssets) {
         await actions.refreshAssets()
       }
+      if (!mountedRef.current || gen !== saveGeneration.current) return
       onSaved({
         defaultModel: res.defaultModel,
         defaultThinkingLevel: res.defaultThinkingLevel,
@@ -164,13 +178,15 @@ export function GlobalDefaultsPanel({
       if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current)
       saveTimerRef.current = setTimeout(() => {
         saveTimerRef.current = null
-        setSaveSuccess(false)
+        if (mountedRef.current) setSaveSuccess(false)
       }, 2400)
     } catch (err) {
-      if (gen !== loadGeneration.current) return
+      if (!mountedRef.current || gen !== saveGeneration.current) return
       setSaveError(err instanceof Error ? err.message : String(err))
     } finally {
-      if (gen === loadGeneration.current) setSaving(false)
+      if (mountedRef.current && gen === saveGeneration.current) {
+        setSaving(false)
+      }
     }
   }
 
