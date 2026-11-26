@@ -29,7 +29,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import type { ConversationSummary, HelmxLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helmx/protocol'
 import { groupUiContributions } from '../src/lib/types.js'
 import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
-import { conversationStatusIndicatorClass, conversationStatusTooltip } from '../src/shell/sidebar-model.js'
+import { conversationStatusDotClass, conversationStatusTooltip } from '../src/shell/sidebar-model.js'
 import {
   backgroundAwareStatusTooltip,
   collectBackgroundBadgeDocs,
@@ -296,27 +296,22 @@ test('background in flight from a non-primary conversation still surfaces; summa
   assert.equal(indicator?.backgroundSummary, '1 Running', 'identical footerText dedupes across conversations')
 })
 
-test('resolveStatusLight single-light priority: main status is exclusive; idle/done yield to the background spinner', { timeout: 60_000 }, () => {
-  // working/blocked/error: the main status indicator is exclusive; background work never joins the slot
-  assert.deepEqual(
-    resolveStatusLight('working', true),
-    { className: conversationStatusIndicatorClass('working'), kind: 'spinner', background: false },
-    'working status spinner must be exclusive with no background spinner',
-  )
-  for (const status of ['blocked', 'error'] as const) {
+test('resolveStatusLight single-light priority: main status is exclusive; idle/done yield to the background hollow ring', { timeout: 60_000 }, () => {
+  // working/blocked/error: the main status light is exclusive; background work never joins the light slot
+  for (const status of ['working', 'blocked', 'error'] as const) {
     assert.deepEqual(
       resolveStatusLight(status, true),
-      { className: conversationStatusIndicatorClass(status), kind: 'dot', background: false },
-      `${status} status light must be exclusive with no background spinner`,
+      { dotClass: conversationStatusDotClass(status), background: false },
+      `${status} status light must be exclusive with no background hollow ring`,
     )
   }
-  // idle/done with background in flight: background spinner only (idle's no-light and done's green dot yield)
-  assert.deepEqual(resolveStatusLight('idle', true), { className: 'status-spinner status-spinner-background', kind: 'spinner', background: true })
-  assert.deepEqual(resolveStatusLight('done', true), { className: 'status-spinner status-spinner-background', kind: 'spinner', background: true })
+  // idle/done with background in flight: hollow ring only (idle's no-light and done's green dot yield)
+  assert.deepEqual(resolveStatusLight('idle', true), { dotClass: 'status-dot status-dot-background', background: true })
+  assert.deepEqual(resolveStatusLight('done', true), { dotClass: 'status-dot status-dot-background', background: true })
   // no background work: the five states stay as-is
-  assert.deepEqual(resolveStatusLight('working', false), { className: 'status-spinner status-spinner-working', kind: 'spinner', background: false })
-  assert.deepEqual(resolveStatusLight('done', false), { className: 'status-dot status-dot-done', kind: 'dot', background: false })
-  assert.deepEqual(resolveStatusLight('idle', false), { className: null, kind: null, background: false })
+  assert.deepEqual(resolveStatusLight('working', false), { dotClass: 'status-dot status-dot-working', background: false })
+  assert.deepEqual(resolveStatusLight('done', false), { dotClass: 'status-dot status-dot-done', background: false })
+  assert.deepEqual(resolveStatusLight('idle', false), { dotClass: null, background: false })
 })
 
 test('tooltip composition: an exclusive status light states only the main turn; the hollow-ring slot appends base status + background summary', { timeout: 60_000 }, () => {
@@ -378,20 +373,20 @@ function sidebarConversationHtml(html: string): string {
   return idx === -1 ? html : html.slice(idx)
 }
 
-/** Count conversation status indicators (excluding the ActivityRail SSE StatusLight). */
+/** Count conversation status lights (excluding the ActivityRail SSE StatusLight). */
 function countStatusLights(html: string): number {
   return (
     sidebarConversationHtml(html).match(
-      /class="(?:status-dot(?: status-dot-(?:blocked|done|error))?|status-spinner status-spinner-(?:working|background))"/g,
+      /class="status-dot(?: status-dot-(?:working|blocked|done|error|background))?"/g,
     ) ?? []
   ).length
 }
 
-test('working/blocked/error conversations + background in flight: only the main status indicator renders, no background class', { timeout: 60_000 }, () => {
-  for (const [status, expectedClass] of [
-    ['working', 'status-spinner status-spinner-working'],
-    ['blocked', 'status-dot status-dot-blocked'],
-    ['error', 'status-dot status-dot-error'],
+test('working/blocked/error conversations + background in flight: only the main status light renders, no background class', { timeout: 60_000 }, () => {
+  for (const [status, dotClass] of [
+    ['working', 'status-dot-working'],
+    ['blocked', 'status-dot-blocked'],
+    ['error', 'status-dot-error'],
   ] as const) {
     const store = sidebarStore({
       conversations: [
@@ -414,14 +409,14 @@ test('working/blocked/error conversations + background in flight: only the main 
       },
     })
     const html = renderSidebar(store)
-    assert.ok(html.includes(`class="${expectedClass}"`), `${status} keeps the main status indicator`)
-    assert.ok(!html.includes('status-spinner-background'), `${status} status indicator is exclusive with no background spinner`)
+    assert.ok(html.includes(`class="status-dot ${dotClass}"`), `${status} keeps the main status light`)
+    assert.ok(!html.includes('status-dot-background'), `${status} status light is exclusive with no background hollow ring`)
     assert.ok(!html.includes('background task'), `${status} tooltip appends no background summary`)
-    assert.equal(countStatusLights(html), 1, `${status} collapsed standing row carries exactly one indicator`)
+    assert.equal(countStatusLights(html), 1, `${status} collapsed standing row carries exactly one light`)
   }
 })
 
-test('idle conversation + background in flight: only the background spinner renders; the tooltip states idle + background summary', { timeout: 60_000 }, () => {
+test('idle conversation + background in flight: only the background hollow ring renders; the tooltip states idle + background summary', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
@@ -434,16 +429,16 @@ test('idle conversation + background in flight: only the background spinner rend
     },
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('class="status-spinner status-spinner-background"'), 'the background in-flight spinner must render')
+  assert.ok(html.includes('class="status-dot status-dot-background"'), 'the background in-flight hollow ring must render')
   assert.ok(html.includes('title="Idle · background task: 2 Running"'), 'the tooltip states both the base status and the background summary')
   assert.ok(
-    !html.includes('status-spinner-working'),
+    !html.includes('status-dot-working'),
     'idle + background in flight must not masquerade as the conversation itself working',
   )
-  assert.equal(countStatusLights(html), 1, 'the collapsed standing row carries exactly one indicator')
+  assert.equal(countStatusLights(html), 1, 'the collapsed standing row carries exactly one light')
 })
 
-test('done conversation + background in flight: the green dot yields and only the background spinner renders', { timeout: 60_000 }, () => {
+test('done conversation + background in flight: the green dot yields and only the background hollow ring renders', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
@@ -456,10 +451,10 @@ test('done conversation + background in flight: the green dot yields and only th
     },
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('class="status-spinner status-spinner-background"'), 'the background in-flight spinner is the sole indicator')
-  assert.ok(!sidebarConversationHtml(html).includes('class="status-dot status-dot-done"'), 'the done green dot must yield, never side by side with the spinner')
+  assert.ok(html.includes('class="status-dot status-dot-background"'), 'the background in-flight hollow ring is the sole light')
+  assert.ok(!sidebarConversationHtml(html).includes('class="status-dot status-dot-done"'), 'the done green dot must yield, never side by side with the hollow ring')
   assert.ok(html.includes('title="Completed · background task: 1 Running"'), 'the tooltip states completed + background summary')
-  assert.equal(countStatusLights(html), 1, 'the collapsed standing row carries exactly one indicator')
+  assert.equal(countStatusLights(html), 1, 'the collapsed standing row carries exactly one light')
 })
 
 test('no background work: unread done keeps its green dot; read done and idle render no light', { timeout: 60_000 }, () => {
@@ -477,11 +472,11 @@ test('no background work: unread done keeps its green dot; read done and idle re
   })
   const html = renderSidebar(store)
   assert.ok(html.includes('class="status-dot status-dot-done"'), 'unread done keeps its green dot with nothing in flight')
-  assert.ok(!html.includes('status-spinner-background'), 'neutral history counts must not light the background spinner')
+  assert.ok(!html.includes('status-dot-background'), 'neutral history counts must not light the hollow ring')
   assert.equal(countStatusLights(html), 1, 'one light for the unread done conversation, none for idle')
 })
 
-test('working set rows: each root row carries its own single status indicator (done / background spinner / error)', { timeout: 60_000 }, () => {
+test('working set rows: each root row carries its own single status light (done / background hollow ring / error)', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', unread: true, createdAt: 9000, updatedAt: 9000 }),
@@ -496,11 +491,11 @@ test('working set rows: each root row carries its own single status indicator (d
     },
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('title="Idle · background task: 1 Running"'), 'the idle row with background work shows the background spinner')
+  assert.ok(html.includes('title="Idle · background task: 1 Running"'), 'the idle row with background work shows the hollow ring')
   assert.ok(html.includes('class="status-dot status-dot-error"'), 'the error row shows its own status light')
   assert.ok(html.includes('class="status-dot status-dot-done"'), 'the unread done row keeps its green dot')
   assert.equal(countStatusLights(html), 3, 'exactly one light per active/unread root row')
-  assert.equal((html.match(/status-spinner-background/g) ?? []).length, 1)
+  assert.equal((html.match(/status-dot-background/g) ?? []).length, 1)
 })
 
 test('working set root trees: error, blocked and background in-flight each render single-light semantics on their own tree row', { timeout: 60_000 }, () => {
@@ -524,10 +519,10 @@ test('working set root trees: error, blocked and background in-flight each rende
   assert.ok(html.includes('class="status-dot status-dot-error"'))
   assert.ok(html.includes('title="Error: model_error: boom"'))
   assert.ok(html.includes('class="status-dot status-dot-blocked"'))
-  assert.ok(html.includes('class="status-spinner status-spinner-background"'))
+  assert.ok(html.includes('class="status-dot status-dot-background"'))
   assert.ok(html.includes('title="Idle · background task: 4 Running"'))
-  // Blocked conversation #3 keeps its exclusive blocked dot (background spinner does not render on #3)
-  assert.equal((html.match(/status-spinner-background/g) ?? []).length, 1)
+  // Blocked conversation #3 keeps its exclusive blocked dot (background ring does not render on #3)
+  assert.equal((html.match(/status-dot-background/g) ?? []).length, 1)
   assert.equal(countStatusLights(html), 3)
 })
 
@@ -538,7 +533,7 @@ test('plugin disabled (contributions gone) or only neutral history counts left: 
   ]
   const common = { conversations, primaryTarget: { kind: 'conversation' as const, conversationId: 50 } }
   const disabled = renderSidebar(sidebarStore({ ...common, uiContributions: [], pluginDocs: {} }))
-  assert.ok(!disabled.includes('status-spinner-background'), 'with the contribution gone (disabled), the indicator disappears immediately')
+  assert.ok(!disabled.includes('status-dot-background'), 'with the contribution gone (disabled), the indicator disappears immediately')
   const neutral = renderSidebar(
     sidebarStore({
       ...common,
@@ -546,25 +541,25 @@ test('plugin disabled (contributions gone) or only neutral history counts left: 
       pluginDocs: { 'builtin:workflow/run-badges': badgesDoc({ '1': { count: 9, tone: 'neutral', footerText: '9 条历史' } }) },
     }),
   )
-  assert.ok(!neutral.includes('status-spinner-background'), 'neutral history counts must not misreport as in flight')
+  assert.ok(!neutral.includes('status-dot-background'), 'neutral history counts must not misreport as in flight')
 })
 
 // ---------------------------------------------------------------------------
 // Trailing status slot (sidebar-status-slot): right-aligned indicator sharing the row-actions centerline
 // ---------------------------------------------------------------------------
 
-/** Assert that the row's status indicator sits inside .nav-item-meta .sidebar-status-slot AFTER .nav-item-label (never inside .nav-item-main). */
+/** Assert that the row's status light sits inside .nav-item-meta .sidebar-status-slot AFTER .nav-item-label (never inside .nav-item-main). */
 function indicatorAfterLabel(row: Element, expectedSelector: string): boolean {
   const main = row.querySelector('.nav-item-main')
   const meta = row.querySelector('.nav-item-meta')
   const label = row.querySelector('.nav-item-label')
   const slot = meta?.querySelector('.sidebar-status-slot')
   if (!main || !meta || !label || !slot) return false
-  if (main.querySelector('.sidebar-status-slot, .nav-status-slot, .status-dot, .status-spinner') !== null) return false
+  if (main.querySelector('.sidebar-status-slot, .nav-status-slot, .status-dot') !== null) return false
   return slot.querySelector(expectedSelector) !== null
 }
 
-test('trailing status slot: root rows and expanded descendants render indicators in .nav-item-meta .sidebar-status-slot, omit on idle, and preserve in batch mode', { timeout: 60_000 }, async () => {
+test('trailing status slot: root rows and expanded descendants render status lights in .nav-item-meta .sidebar-status-slot, omit on idle, and preserve in batch mode', { timeout: 60_000 }, async () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '当前在跑', profileId: 'assistant', status: 'working', doing: '正在思考方案', createdAt: 9000, updatedAt: 9000 }),
@@ -586,9 +581,9 @@ test('trailing status slot: root rows and expanded descendants render indicators
   const idleRow = findNavRow(html, '纯空闲')
   const bgRow = findNavRow(html, '后台在跑')
 
-  assert.ok(indicatorAfterLabel(workingRow, '.status-spinner-working svg.spin-slow'), 'working spinner sits in trailing .sidebar-status-slot')
+  assert.ok(indicatorAfterLabel(workingRow, '.status-dot-working'), 'working dot sits in trailing .sidebar-status-slot')
   assert.ok(indicatorAfterLabel(doneRow, '.status-dot-done'), 'unread done dot sits in trailing .sidebar-status-slot')
-  assert.ok(indicatorAfterLabel(bgRow, '.status-spinner-background svg.spin-slow'), 'background spinner sits in trailing .sidebar-status-slot')
+  assert.ok(indicatorAfterLabel(bgRow, '.status-dot-background'), 'background hollow ring sits in trailing .sidebar-status-slot')
   assert.ok(idleRow.querySelector('.sidebar-status-slot') === null, 'idle row omits .sidebar-status-slot')
   assert.ok(idleRow.querySelector('.nav-item-main .nav-status-slot') === null, 'idle row omits leading .nav-status-slot')
   assert.equal(
@@ -614,7 +609,7 @@ test('trailing status slot: root rows and expanded descendants render indicators
     })
     const descRow = container.querySelector('.sidebar-overview-descendant')
     assert.ok(descRow !== null, 'expanded descendant row renders')
-    assert.ok(indicatorAfterLabel(descRow, '.status-spinner-working svg.spin-slow'), 'descendant spinner sits in trailing .sidebar-status-slot')
+    assert.ok(indicatorAfterLabel(descRow, '.status-dot-working'), 'descendant working dot sits in trailing .sidebar-status-slot')
 
     const batchToggle = container.querySelector<HTMLButtonElement>('.sidebar-batch-toggle')
     assert.ok(batchToggle !== null, 'batch mode toggle renders')
@@ -627,7 +622,7 @@ test('trailing status slot: root rows and expanded descendants render indicators
     assert.ok(batchWorkingRow !== undefined)
     assert.ok(batchWorkingRow.querySelector('.nav-item-row-actions') === null, 'batch mode hides row actions menu')
     assert.ok(
-      batchWorkingRow.querySelector('.sidebar-overview-head-meta .sidebar-status-slot .status-spinner-working') !== null,
+      batchWorkingRow.querySelector('.sidebar-overview-head-meta .sidebar-status-slot .status-dot-working') !== null,
       'batch mode preserves the trailing status slot',
     )
   } finally {
@@ -683,8 +678,8 @@ test('after Sidebar mounts, ensurePluginDoc loads the badge docs of hit panels o
 // Sidebar rendering and DOM updates: the contextUsage.compacting background hollow ring and single-light semantics
 // ---------------------------------------------------------------------------
 
-test('Sidebar render: idle/done conversations with compacting=true render the background spinner, working keeps the main spinner exclusive, workflow badges dedupe-join', { timeout: 60_000 }, () => {
-  // idle + compacting=true -> background spinner + compaction summary
+test('Sidebar render: idle/done conversations with compacting=true render the background hollow ring, working keeps the main light exclusive, workflow badges dedupe-join', { timeout: 60_000 }, () => {
+  // idle + compacting=true -> hollow ring + compaction summary
   const idleHtml = renderSidebar(
     sidebarStore({
       conversations: [
@@ -702,11 +697,11 @@ test('Sidebar render: idle/done conversations with compacting=true render the ba
       primaryTarget: { kind: 'conversation', conversationId: 50 },
     }),
   )
-  assert.ok(idleHtml.includes('class="status-spinner status-spinner-background"'), 'idle + compacting must render the background spinner')
+  assert.ok(idleHtml.includes('class="status-dot status-dot-background"'), 'idle + compacting must render the background hollow ring')
   assert.ok(idleHtml.includes('title="Idle · background task: Compacting context"'), 'the tooltip must include the compaction summary')
   assert.equal(countStatusLights(idleHtml), 1)
 
-  // done + compacting=true -> green dot yields to the background spinner
+  // done + compacting=true -> green dot yields to the hollow ring
   const doneHtml = renderSidebar(
     sidebarStore({
       conversations: [
@@ -724,12 +719,12 @@ test('Sidebar render: idle/done conversations with compacting=true render the ba
       primaryTarget: { kind: 'conversation', conversationId: 50 },
     }),
   )
-  assert.ok(doneHtml.includes('class="status-spinner status-spinner-background"'), 'done + compacting must render the background spinner')
+  assert.ok(doneHtml.includes('class="status-dot status-dot-background"'), 'done + compacting must render the background hollow ring')
   assert.ok(!sidebarConversationHtml(doneHtml).includes('class="status-dot status-dot-done"'), 'the done green dot must yield')
   assert.ok(doneHtml.includes('title="Completed · background task: Compacting context"'))
   assert.equal(countStatusLights(doneHtml), 1)
 
-  // working + compacting=true -> the working spinner stays exclusive (single-light invariant)
+  // working + compacting=true -> the solid working light stays exclusive (single-light invariant)
   const workingHtml = renderSidebar(
     sidebarStore({
       conversations: [
@@ -748,8 +743,8 @@ test('Sidebar render: idle/done conversations with compacting=true render the ba
       primaryTarget: { kind: 'conversation', conversationId: 50 },
     }),
   )
-  assert.ok(workingHtml.includes('class="status-spinner status-spinner-working"'), 'the working main status spinner must be exclusive')
-  assert.ok(!workingHtml.includes('status-spinner-background'), 'no background spinner while working')
+  assert.ok(workingHtml.includes('class="status-dot status-dot-working"'), 'the working main status light must be exclusive')
+  assert.ok(!workingHtml.includes('status-dot-background'), 'no background hollow ring while working')
   assert.ok(!workingHtml.includes('Compacting context'), 'no background summary appended to the tooltip while working')
   assert.equal(countStatusLights(workingHtml), 1)
 
@@ -775,12 +770,12 @@ test('Sidebar render: idle/done conversations with compacting=true render the ba
       },
     }),
   )
-  assert.ok(combinedHtml.includes('class="status-spinner status-spinner-background"'))
+  assert.ok(combinedHtml.includes('class="status-dot status-dot-background"'))
   assert.ok(combinedHtml.includes('title="Idle · background task: 2 Running · Compacting context"'))
   assert.equal(countStatusLights(combinedHtml), 1)
 })
 
-test('Sidebar DOM update: flipping a conversation compacting false -> true lights the background spinner immediately (no stale closure)', { timeout: 60_000 }, async () => {
+test('Sidebar DOM update: flipping a conversation compacting false -> true lights the hollow ring immediately (no stale closure)', { timeout: 60_000 }, async () => {
   const convIdle = conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'idle', createdAt: 9000, updatedAt: 9000 })
   const store = sidebarStore({
     conversations: [convIdle, conv({ id: 50, title: '别处', profileId: 'coder' })],
@@ -795,7 +790,7 @@ test('Sidebar DOM update: flipping a conversation compacting false -> true light
     root = createRoot(container)
     root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
   })
-  assert.ok(container.querySelector('.status-spinner-background') === null, 'no background spinner initially without compacting')
+  assert.ok(container.querySelector('.status-dot-background') === null, 'no hollow ring initially without compacting')
 
   // conversations 领域原位推进（与 SSE conversation.updated 同一链路），验证无过期闭包
   await act(async () => {
@@ -807,9 +802,9 @@ test('Sidebar DOM update: flipping a conversation compacting false -> true light
       ],
     }))
   })
-  const spinner = container.querySelector('.status-spinner-background')
-  assert.ok(spinner !== null, 'after the conversations update with compacting=true, the background spinner renders immediately')
-  assert.equal(spinner.getAttribute('title'), 'Idle · background task: Compacting context')
+  const ring = container.querySelector('.status-dot-background')
+  assert.ok(ring !== null, 'after the conversations update with compacting=true, the hollow ring lights immediately')
+  assert.equal(ring.getAttribute('title'), 'Idle · background task: Compacting context')
 
   await act(async () => {
     root?.unmount()

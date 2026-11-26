@@ -321,9 +321,9 @@
   font-weight: 500;
 }
 
-/* 前置状态槽（命令面板 / 总览卡片）：固定 14px 槽位，容纳 12px 旋转图标与命令面板图标。 */
+/* 前置状态槽（命令面板 / 总览卡片）：固定 10px 灯位，保持跨行标题左缘对齐，且为 7px 灯芯与呼吸光晕留足空间。 */
 .nav-status-slot {
-  width: 14px;
+  width: 10px;
   margin-left: 0;
   display: inline-flex;
   align-items: center;
