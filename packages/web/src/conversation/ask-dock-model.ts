@@ -1,15 +1,12 @@
 /**
- * Pure state, validation, navigation, and formatting helpers for AskDock & ResolvedAskRow
+ * Pure state, validation, navigation, and classification helpers for AskDock
  * (zero React/DOM dependencies; Fast Refresh compliant).
  */
-import {
-  resolveLocalizedText,
-  type AskAnswers,
-  type AskAnswerValue,
-  type AskFieldSpec,
-  type AskKind,
-  type AskSpec,
-  type HelmxLocale,
+import type {
+  AskAnswers,
+  AskFieldSpec,
+  AskKind,
+  AskSpec,
 } from '@helmx/protocol/browser'
 
 export interface TerminalSnapshot {
@@ -112,6 +109,71 @@ export function isSingleRequiredConfirm(ask: Pick<AskSpec, 'fields'>): boolean {
   return ask.fields.length === 1 && ask.fields[0]?.type === 'confirm' && ask.fields[0].required !== false
 }
 
+/** Single-question, single-select `question` prompts submit immediately on option click. */
+export function isSingleQuickChoiceQuestion(ask: Pick<AskSpec, 'kind' | 'fields'>): boolean {
+  return (
+    resolveAskKind(ask) === 'question' &&
+    ask.fields.length === 1 &&
+    ask.fields[0]?.type === 'choice' &&
+    ask.fields[0].multiple !== true
+  )
+}
+
+/** Promote the sole question text directly into the card header when the title is generic or identical. */
+export function shouldPromoteFieldLabelToHeader(
+  ask: Pick<AskSpec, 'kind' | 'fields'>,
+  titleText: string,
+  firstFieldLabel: string,
+): boolean {
+  if (resolveAskKind(ask) !== 'question' || ask.fields.length !== 1) return false
+  const trimmedTitle = titleText.trim()
+  return (
+    trimmedTitle === '' ||
+    trimmedTitle === 'Clarifying Questions' ||
+    trimmedTitle === '问题确认' ||
+    trimmedTitle === firstFieldLabel.trim()
+  )
+}
+
+export function resolveAskKeyboardChoiceTarget(
+  ask: Pick<AskSpec, 'fields'>,
+  isStepper: boolean,
+  activeStep: number,
+): { field: AskFieldSpec; fieldIndex: number } | undefined {
+  if (isStepper) {
+    const active = ask.fields[activeStep]
+    return active?.type === 'choice' ? { field: active, fieldIndex: activeStep } : undefined
+  }
+  const choiceIndices = ask.fields
+    .map((field, index) => (field.type === 'choice' ? index : -1))
+    .filter((index) => index >= 0)
+  if (choiceIndices.length !== 1) return undefined
+  const idx = choiceIndices[0]!
+  const field = ask.fields[idx]
+  return field !== undefined ? { field, fieldIndex: idx } : undefined
+}
+
+/**
+ * Only auto-focus a newly opened AskDock when focus is neutral (`null` / `body` / `html`),
+ * already inside `formEl`, or sitting inside an empty `.composer-textarea` (never hijack
+ * non-empty drafts, search boxes, popovers, or modals).
+ */
+export function shouldAutoFocusAskDock(activeElement: Element | null, formEl: HTMLElement | null): boolean {
+  if (formEl === null) return false
+  if (activeElement === null) return true
+  if (formEl.contains(activeElement)) return true
+  const tag = activeElement.tagName
+  if (tag === 'BODY' || tag === 'HTML') return true
+  if (
+    tag === 'TEXTAREA' &&
+    activeElement.classList.contains('composer-textarea') &&
+    (activeElement as HTMLTextAreaElement).value === ''
+  ) {
+    return true
+  }
+  return false
+}
+
 export function isPresetOptionValue(field: AskFieldSpec, value: string): boolean {
   return (field.options ?? []).some((o) => o.value === value)
 }
@@ -135,39 +197,4 @@ export function composeMultiChoiceValues(
     out.push(trimmedCustom)
   }
   return out
-}
-
-export function formatAskAnswerSummary(
-  field: AskFieldSpec,
-  value: AskAnswerValue | undefined,
-  locale: HelmxLocale,
-  labels: { skipped: string; yes: string; no: string },
-): string {
-  if (isMultiChoiceField(field)) {
-    const list = Array.isArray(value) ? value.map((item) => item.trim()).filter((item) => item !== '') : []
-    if (list.length === 0) return labels.skipped
-    return list
-      .map((item) => {
-        const match = (field.options ?? []).find((o) => o.value === item)
-        return match !== undefined ? resolveLocalizedText(match.label, locale) : item
-      })
-      .join(', ')
-  }
-
-  const str = typeof value === 'string' ? value.trim() : ''
-  if (str === '') return labels.skipped
-
-  if (field.type === 'choice' || field.type === 'select') {
-    const match = (field.options ?? []).find((o) => o.value === str)
-    return match !== undefined ? resolveLocalizedText(match.label, locale) : str
-  }
-  if (field.type === 'confirm') {
-    if (str === 'true') {
-      return field.confirmLabel !== undefined ? resolveLocalizedText(field.confirmLabel, locale) : labels.yes
-    }
-    if (str === 'false') {
-      return field.rejectLabel !== undefined ? resolveLocalizedText(field.rejectLabel, locale) : labels.no
-    }
-  }
-  return str
 }

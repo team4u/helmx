@@ -117,8 +117,6 @@ export interface ConversationBackgroundSlice {
   }
 }
 
-export type ResolvedAskEntry = HelmxStoreValue['resolvedAsksByConv'][number][number]
-
 export interface AbortedComposerRestore {
   items: QueuedConversationInput[]
   seq: number
@@ -194,7 +192,6 @@ export type StoreDomainKey =
   | 'conversationLivesMap'
   | 'conversationArtifactsMap'
   | 'pendingAsks'
-  | 'resolvedAsksMap'
   | 'asks'
   | 'plugins'
   | 'groupedUi'
@@ -230,7 +227,6 @@ export interface NotifyPlan {
   summaryIds: Set<number>
   artifactIds: Set<number>
   pendingAskIds: Set<number>
-  resolvedAskIds: Set<number>
   abortedRestoreIds: Set<number>
   highlightIds: Set<number>
   loadErrorKeys: Set<string>

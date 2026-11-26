@@ -95,7 +95,6 @@ import type {
   PluginsUiSlice,
   PrefsSlice,
   ProfilesSlice,
-  ResolvedAskEntry,
   StoreBootLocation,
   StoreDomainKey,
   StoreListener,
@@ -115,7 +114,6 @@ export type {
   PluginsUiSlice,
   PrefsSlice,
   ProfilesSlice,
-  ResolvedAskEntry,
   StoreBootLocation,
   StoreDomainKey,
   StoreListener,
@@ -471,9 +469,6 @@ export class HelmxExternalStore {
   subscribeConversationPendingAsks = (conversationId: number, listener: StoreListener): (() => void) =>
     this.bus.subscribeConversationPendingAsks(conversationId, listener)
 
-  subscribeResolvedAsks = (conversationId: number, listener: StoreListener): (() => void) =>
-    this.bus.subscribeResolvedAsks(conversationId, listener)
-
   subscribeAbortedRestore = (conversationId: number, listener: StoreListener): (() => void) =>
     this.bus.subscribeAbortedRestore(conversationId, listener)
 
@@ -514,7 +509,6 @@ export class HelmxExternalStore {
   getConversationLivesMap = (): Record<number, ConversationLive> => this.liveState.conversationLives
   getConversationArtifactsMap = (): Record<number, ArtifactMetadata[]> => this.artifactsState
   getPendingAsks = (): AskSpec[] => this.liveState.pendingAsks
-  getResolvedAsksMap = (): Record<number, ResolvedAskEntry[]> => this.liveState.resolvedAsksByConv
   getPlugins = (): PluginSummary[] => this.liveState.plugins
   getPluginSummary = (pluginId: string): PluginSummary | undefined => this.pluginById.get(pluginId)
   getGroupedUi = (): GroupedUiSpecs => this.groupedUi
@@ -543,7 +537,6 @@ export class HelmxExternalStore {
   getConversationSummary = (id: number): ConversationSummary | undefined => this.summaryById.get(id)
   getConversationArtifacts = (id: number): ArtifactMetadata[] | undefined => this.artifactsState[id]
   getConversationPendingAsks = (id: number): AskSpec[] => this.pendingAsksByConv.get(id) ?? EMPTY_PENDING_ASKS
-  getResolvedAsks = (id: number): ResolvedAskEntry[] | undefined => this.liveState.resolvedAsksByConv[id]
   getAbortedRestore = (id: number): AbortedComposerRestore | undefined => this.abortedRestoresByConv[id]
   getHighlightedEntryForConversation = (id: number): { conversationId: number; entryId: string } | null =>
     this.navState.highlightedEntry?.conversationId === id ? this.navState.highlightedEntry : null
@@ -801,14 +794,6 @@ export class HelmxExternalStore {
       plan.domains.add('pendingAsks')
       plan.domains.add('asks')
       plan.domains.add('all')
-    }
-    if (next.resolvedAsksByConv !== prev.resolvedAsksByConv) {
-      addChangedRecordKeys(prev.resolvedAsksByConv, next.resolvedAsksByConv, plan.resolvedAskIds)
-      if (plan.resolvedAskIds.size > 0) {
-        plan.domains.add('resolvedAsksMap')
-        plan.domains.add('asks')
-        plan.domains.add('all')
-      }
     }
     if (next.plugins !== prev.plugins) {
       const nextPluginMap = new Map<string, PluginSummary>()

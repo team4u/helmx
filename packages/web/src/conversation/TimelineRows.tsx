@@ -1,7 +1,7 @@
 import { memo, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewSpec } from '@helmx/protocol/browser'
-import { HelmxIcon, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
+import { Badge, HelmxIcon, Tooltip, useSharedNowMs, type BadgeTone } from '@helmx/plugin-client'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { ToolExpandedBody, ToolIoBody, ToolRawBody } from './ToolExpandedBody.js'
 import { MarkdownView } from './MarkdownView.js'
@@ -13,7 +13,14 @@ import {
   type ProcessShortcutCommand,
   type ToolTrace,
 } from './timeline-model.js'
-import { summarizeStepGroup, toolRowStats } from './tool-body-model.js'
+import {
+  formatAskUserInlineSummary,
+  parseAskUserToolMeta,
+  summarizeStepGroup,
+  toolRowStats,
+  type AskUserToolOutcome,
+} from './tool-body-model.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatDurationMs, formatStopwatchMs } from '../lib/format.js'
 
@@ -33,6 +40,19 @@ function RunningElapsed({ startedAt }: { startedAt: number }): ReactNode {
   return <span className="tabular-nums">{formatStopwatchMs(Math.max(0, nowMs - startedAt))}</span>
 }
 
+function askTraceOutcome(outcome: AskUserToolOutcome, t: WebMessageTranslator): { label: string; tone: BadgeTone } {
+  switch (outcome) {
+    case 'answered':
+      return { label: t('conv.ask.replied'), tone: 'ok' }
+    case 'cancelled':
+      return { label: t('conv.ask.skipped'), tone: 'neutral' }
+    case 'superseded':
+      return { label: t('conv.ask.outcomeSuperseded'), tone: 'neutral' }
+    case 'error':
+      return { label: t('conv.ask.outcomeError'), tone: 'err' }
+  }
+}
+
 export const TraceRow = memo(function TraceRow({
   tool,
   conversationId,
@@ -45,6 +65,13 @@ export const TraceRow = memo(function TraceRow({
   const [open, setOpen] = useState(defaultOpen)
   const ioPanelId = useId()
   const { t } = useWebLocale()
+
+  const toolView = tool.toolView
+  const isAskUserRow = toolView === undefined && tool.toolName === 'ask_user'
+  const askMeta = useMemo(
+    () => (isAskUserRow ? parseAskUserToolMeta(tool.presentationMeta) : undefined),
+    [isAskUserRow, tool.presentationMeta],
+  )
 
   const rowFailed = Boolean(tool.isError)
   // 运行中行右侧只显示实时已耗时秒表（左侧转圈已表意，与落定后的纯耗时形态一致）；
@@ -71,12 +98,72 @@ export const TraceRow = memo(function TraceRow({
   // 与截断原文）；未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
   // inline 插件视图保留工具行的原始数据入口，专属展开体仅用于宿主工具。
   // 顶层业务卡标记 data-outline-card-id（tool.key）：会话大纲二级锚精确定位。
-  const toolView = tool.toolView
   const replaceRow = toolView !== undefined && (toolView.spec as ToolViewSpec).replaceRow === true
   const toolViewProps = useMemo<Record<string, unknown> | undefined>(
     () => (toolView !== undefined ? { ...buildToolViewProps(tool, conversationId) } : undefined),
     [toolView, tool, conversationId],
   )
+
+  if (isAskUserRow) {
+    const isRunning = tool.status === 'running'
+    const askFailed = rowFailed || askMeta?.outcome === 'error'
+    const askSummary = formatAskUserInlineSummary(askMeta, toolSummaryText(tool.toolName, tool.input))
+    const askIcon = isRunning
+      ? 'loader'
+      : askFailed
+        ? 'alert-triangle'
+        : askMeta?.outcome === 'answered'
+          ? 'check'
+          : 'message-circle'
+    const outcomeBadge = !isRunning && askMeta !== undefined ? askTraceOutcome(askMeta.outcome, t) : undefined
+    return (
+      <div className={`trace-entry${askFailed ? ' trace-entry-error' : ''}`}>
+        <div
+          className={`trace-row${askFailed ? ' trace-row-error' : ''}`}
+          role="button"
+          tabIndex={0}
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              setOpen((v) => !v)
+            }
+          }}
+        >
+          <span className="trace-row-left">
+            <HelmxIcon
+              name={askIcon}
+              size={12}
+              className={isRunning ? 'spin-slow' : undefined}
+            />
+            <span className="trace-tool-name">{t('conv.ask.questionRowTitle')}</span>
+            {askSummary !== '' ? (
+              <span className="trace-tool-summary" title={askSummary}>{askSummary}</span>
+            ) : null}
+          </span>
+          <span className="trace-row-right">
+            {isRunning ? (
+              <>
+                <span>{t('composer.ask.awaitingQuestion')}</span>
+                {tool.startedAt !== undefined ? <RunningElapsed startedAt={tool.startedAt} /> : null}
+              </>
+            ) : outcomeBadge !== undefined ? (
+              <Badge tone={outcomeBadge.tone}>{outcomeBadge.label}</Badge>
+            ) : (
+              right !== '' ? <span>{right}</span> : null
+            )}
+            <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} className="trace-row-chevron" />
+          </span>
+        </div>
+        {open ? (
+          <div className="trace-expanded-body selectable">
+            <ToolExpandedBody tool={tool} conversationId={conversationId} />
+          </div>
+        ) : null}
+      </div>
+    )
+  }
 
   return (
     <div

@@ -219,7 +219,7 @@ test('连续常规步骤收拢为 step-group；出错工具保留在组内，too
   assert.ok(turn.segments.some((s) => s.kind === 'text' && s.text === '结论'))
 })
 
-test('isFoldableStep：仅 tool.view 命中豁免折叠（subagent/SubagentWorkflow 由 builtin:workflow 注册 tool.view 接管）', { timeout: 60_000 }, () => {
+test('isFoldableStep：tool.view 命中与内置 ask_user 均豁免折叠并按时间顺序独立展示', { timeout: 60_000 }, () => {
   const toolViews = [
     { pluginId: 'builtin:superagent', spec: { id: 'v', toolNames: ['dispatch_worker'] } },
     { pluginId: 'builtin:workflow', spec: { id: 'subagent', toolNames: ['subagent', 'SubagentWorkflow'] } },
@@ -231,23 +231,26 @@ test('isFoldableStep：仅 tool.view 命中豁免折叠（subagent/SubagentWorkf
         toolCallBlock('c2', 'subagent', { prompt: '子代理' }),
         toolCallBlock('c3', 'SubagentWorkflow', { script: 'wf' }),
         toolCallBlock('c4', 'read', { file_path: '/x' }),
+        toolCallBlock('c5', 'ask_user', { questions: [{ id: 'q1', question: 'Deploy?' }] }),
       ]),
       toolResultEntry('2', 'c1', 'dispatch_worker', { text: '{"workerConversationId":9}' }),
       toolResultEntry('3', 'c2', 'subagent', { text: 'ok' }),
       toolResultEntry('4', 'c3', 'SubagentWorkflow', { text: 'ok' }),
       toolResultEntry('5', 'c4', 'read', { text: 'ok' }),
+      toolResultEntry('6', 'c5', 'ask_user', { text: 'User answers:\n- q1 (Deploy?): yes' }),
     ],
     { toolViews },
   )
   const traces = collectToolTraces(items)
-  assert.equal(traces.length, 4)
+  assert.equal(traces.length, 5)
   assert.equal(traces[0]!.toolView?.pluginId, 'builtin:superagent')
   assert.equal(traces[1]!.toolView?.pluginId, 'builtin:workflow')
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[0]! }), false)
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[1]! }), false)
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[2]! }), false)
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[3]! }), true)
-  // 未注册 tool.view 的 subagent 工具（如插件停用）与普通工具一样可折叠：零工具名硬编码。
+  assert.equal(isFoldableStep({ kind: 'tool', tool: traces[4]! }), false)
+  // 未注册 tool.view 的 subagent 工具（如插件停用）与普通工具一样可折叠。
   const plain = buildTimelineItems(
     [assistantEntry('1', [toolCallBlock('cx', 'subagent', { prompt: 'p' })])],
     {},
@@ -255,12 +258,12 @@ test('isFoldableStep：仅 tool.view 命中豁免折叠（subagent/SubagentWorkf
   const plainTraces = collectToolTraces(plain)
   assert.equal(plainTraces[0]!.toolView, undefined)
   assert.equal(isFoldableStep({ kind: 'tool', tool: plainTraces[0]! }), true)
-  // 命中 tool.view 与业务工具的行独立露出；唯一的普通工具 c4 从第一步起进入分组。
+  // 命中 tool.view 与内置 ask_user 的行独立露出；唯一的普通工具 c4 从第一步起进入分组。
   const turn = items.find((i) => i.kind === 'assistant')!
   assert.ok(turn.kind === 'assistant')
   const exposed = turn.segments.filter((s) => s.kind === 'tool') as Array<{ kind: 'tool'; tool: ToolTrace }>
-  assert.equal(exposed.length, 3)
-  assert.deepEqual(exposed.map((e) => e.tool.callId), ['c1', 'c2', 'c3'])
+  assert.equal(exposed.length, 4)
+  assert.deepEqual(exposed.map((e) => e.tool.callId), ['c1', 'c2', 'c3', 'c5'])
   const group = turn.segments.find((s) => s.kind === 'step-group')
   assert.ok(group?.kind === 'step-group')
   assert.deepEqual(group.steps.map((step) => step.kind === 'tool' ? step.tool.callId : undefined), ['c4'])
