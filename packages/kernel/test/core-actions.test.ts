@@ -15,7 +15,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { HelmxError, type ActionManifest, type ConversationSummary } from '@helmx/protocol'
+import { CORE_CLI_COMMAND_PATHS, HelmxError, type ActionManifest, type ConversationSummary } from '@helmx/protocol'
 import { handleApi } from '../src/http/routes.js'
 import { actionCliCommand } from '../src/runtime/action-prompts.js'
 import { systemSectionsOf } from '../src/runtime/hook-projection.js'
@@ -147,16 +147,20 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
         'core:skills',
       ])
 
-      // Every core:* action must set exposeToPrompt: false and cli.hidden: true with cli.command,
-      // and actionCliCommand must stay undefined so dynamic CLI never collides with CORE_CLI_COMMAND_PATHS.
+      // Every core:* action must set exposeToPrompt: false and declare an explicit static cli.command
+      // matching CORE_CLI_COMMAND_PATHS (never lying with cli.hidden: true), and actionCliCommand must
+      // render the real `helmx ...` command while CLI dynamic mounting skips core:* by namespace.
+      const coreCliPathSet = new Set<string>(CORE_CLI_COMMAND_PATHS)
       for (const m of coreManifests) {
         assert.equal(m.exposeToPrompt, false, `${m.pluginId}.${m.id} must set exposeToPrompt: false`)
-        assert.equal(m.cli?.hidden, true, `${m.pluginId}.${m.id} must set cli.hidden: true`)
+        assert.equal(m.cli?.hidden, undefined, `${m.pluginId}.${m.id} must not use legacy cli.hidden: true`)
         assert.ok(
           Array.isArray(m.cli?.command) && m.cli!.command!.length > 0,
           `${m.pluginId}.${m.id} must declare cli.command`,
         )
-        assert.equal(actionCliCommand(m), undefined, `${m.pluginId}.${m.id} must stay hidden from dynamic CLI`)
+        const joined = m.cli!.command!.join(' ')
+        assert.ok(coreCliPathSet.has(joined), `${m.pluginId}.${m.id} cli.command "${joined}" must exist in CORE_CLI_COMMAND_PATHS`)
+        assert.equal(actionCliCommand(m), `helmx ${joined}`, `${m.pluginId}.${m.id} must render real static CLI command`)
       }
 
       // Forbidden sensitive capabilities must never be registered as core:* actions.
@@ -928,6 +932,298 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       })
       assert.equal(skillTraversal.status, 400)
       assert.equal(skillTraversal.code, 'path_traversal')
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('enforces guarded CAS APIs (expectedOwnership + expectedStateSeq) on automated core:conversations.send/abort and closes ownership flip TOCTOU races', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'conv-guarded-cas'))
+    try {
+      const helmxCaller = await kernel.conversations.createConversation({
+        title: 'Helmx Automated Caller',
+        ownedBy: 'helmx',
+      })
+      const sendRaceTarget = await kernel.conversations.createConversation({
+        title: 'Send Race Target',
+        ownedBy: 'helmx',
+      })
+      const abortRaceTarget = await kernel.conversations.createConversation({
+        title: 'Abort Race Target',
+        ownedBy: 'helmx',
+      })
+      const casTarget = await kernel.conversations.createConversation({
+        title: 'CAS Watermark Target',
+        ownedBy: 'helmx',
+      })
+
+      // 1. Deterministic TOCTOU race on core:conversations.send:
+      // Pause inside onInput hook, flip target ownership to 'human', release -> submitInputGuarded
+      // must atomically reject with 409 ownership_conflict without delivering the message.
+      let enteredHook!: () => void
+      const hookEntered = new Promise<void>((resolve) => {
+        enteredHook = resolve
+      })
+      let releaseHook!: () => void
+      const hookGate = new Promise<void>((resolve) => {
+        releaseHook = resolve
+      })
+      await kernel.plugins.register({
+        id: 'test:send-race-barrier',
+        definePlugin: (ctx) => {
+          ctx.hook.onInput(async (payload) => {
+            if (payload.conversationId === sendRaceTarget.id) {
+              enteredHook()
+              await hookGate
+            }
+          })
+        },
+      })
+
+      const sendRacePromise = postCoreAction(
+        kernel,
+        'conversations',
+        'send',
+        { conversationId: sendRaceTarget.id, text: 'race payload' },
+        helmxCaller.id,
+      )
+      await hookEntered
+      kernel.ownership.markOwnership(sendRaceTarget.id, 'human')
+      releaseHook()
+
+      const sendRaceRes = await sendRacePromise
+      assert.equal(sendRaceRes.status, 409)
+      assert.equal(sendRaceRes.code, 'ownership_conflict')
+      const sendDetail = await kernel.conversations.getConversationDetail(sendRaceTarget.id)
+      assert.equal(
+        sendDetail.entries.some((e) => JSON.stringify(e).includes('race payload')),
+        false,
+        'rejected guarded send must not persist message',
+      )
+
+      // 2. Deterministic TOCTOU race on core:conversations.abort:
+      // Pause at harness.conversation await point, flip target ownership to 'human', release ->
+      // abortConversationGuarded must atomically reject with 409 ownership_conflict.
+      type ConversationFn = (id: never, ctx: unknown) => Promise<unknown>
+      const harness = (kernel as unknown as { harness: { conversation: ConversationFn } }).harness
+      const realConversation = harness.conversation.bind(harness) as ConversationFn
+      let abortLookupEntered!: () => void
+      const abortLookupPromise = new Promise<void>((resolve) => {
+        abortLookupEntered = resolve
+      })
+      let releaseAbortLookup!: () => void
+      const abortLookupGate = new Promise<void>((resolve) => {
+        releaseAbortLookup = resolve
+      })
+      let interceptOnce = true
+      harness.conversation = async (id, ctx) => {
+        const conv = await realConversation(id, ctx)
+        if (interceptOnce && (id as unknown as number) === abortRaceTarget.id) {
+          interceptOnce = false
+          abortLookupEntered()
+          await abortLookupGate
+        }
+        return conv
+      }
+
+      const abortRacePromise = postCoreAction(
+        kernel,
+        'conversations',
+        'abort',
+        { conversationId: abortRaceTarget.id },
+        helmxCaller.id,
+      )
+      await abortLookupPromise
+      kernel.ownership.markOwnership(abortRaceTarget.id, 'human')
+      releaseAbortLookup()
+      harness.conversation = realConversation
+
+      const abortRaceRes = await abortRacePromise
+      assert.equal(abortRaceRes.status, 409)
+      assert.equal(abortRaceRes.code, 'ownership_conflict')
+
+      // 3. Stale expectedStateSeq rejects with 409 state_seq_conflict; exact expectedStateSeq succeeds;
+      // automated send rejects history rewrite (replaceFromEntryId).
+      const currentSeq = kernel.conversations.getConversation(casTarget.id).stateChangeSeq
+      const staleSend = await postCoreAction(
+        kernel,
+        'conversations',
+        'send',
+        { conversationId: casTarget.id, text: 'stale', expectedStateSeq: currentSeq + 99 },
+        helmxCaller.id,
+      )
+      assert.equal(staleSend.status, 409)
+      assert.equal(staleSend.code, 'state_seq_conflict')
+
+      const staleAbort = await postCoreAction(
+        kernel,
+        'conversations',
+        'abort',
+        { conversationId: casTarget.id, expectedStateSeq: currentSeq + 99 },
+        helmxCaller.id,
+      )
+      assert.equal(staleAbort.status, 409)
+      assert.equal(staleAbort.code, 'state_seq_conflict')
+
+      const rewriteBlocked = await postCoreAction(
+        kernel,
+        'conversations',
+        'send',
+        { conversationId: casTarget.id, text: 'rewrite attempt', replaceFromEntryId: 1 },
+        helmxCaller.id,
+      )
+      assert.equal(rewriteBlocked.status, 400)
+      assert.equal(rewriteBlocked.code, 'validation_error')
+
+      kernel.__faux.setResponses([fauxAssistantMessage('cas accepted')])
+      const okSend = await postCoreAction(
+        kernel,
+        'conversations',
+        'send',
+        { conversationId: casTarget.id, text: 'fresh cas', expectedStateSeq: currentSeq, wait: true },
+        helmxCaller.id,
+      )
+      assert.equal(okSend.status, 200)
+      assert.match(okSend.body.text, /cas accepted/)
+
+      const nextSeq = kernel.conversations.getConversation(casTarget.id).stateChangeSeq
+      assert.ok(nextSeq > currentSeq)
+      const okAbort = await postCoreAction(
+        kernel,
+        'conversations',
+        'abort',
+        { conversationId: casTarget.id, expectedStateSeq: nextSeq },
+        helmxCaller.id,
+      )
+      assert.equal(okAbort.status, 200)
+      assert.deepEqual(okAbort.body, { ok: true })
+
+      // Direct HTTP explicit expectedStateSeq also enforces CAS honestly.
+      const httpStaleAbort = await postCoreAction(kernel, 'conversations', 'abort', {
+        conversationId: casTarget.id,
+        expectedStateSeq: currentSeq,
+      })
+      assert.equal(httpStaleAbort.status, 409)
+      assert.equal(httpStaleAbort.code, 'state_seq_conflict')
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('enforces automation ownership on core:conversations.create and core:conversations.fork (never defaulting automated sessions to human)', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'conv-create-fork-ownership'))
+    try {
+      const helmxCaller = await kernel.conversations.createConversation({
+        title: 'Helmx Caller',
+        ownedBy: 'helmx',
+      })
+      const humanSource = await kernel.conversations.createConversation({
+        title: 'Human Source',
+        ownedBy: 'human',
+      })
+      const helmxSource = await kernel.conversations.createConversation({
+        title: 'Helmx Source',
+        ownedBy: 'helmx',
+      })
+
+      kernel.__faux.setResponses([
+        fauxAssistantMessage('human history'),
+        fauxAssistantMessage('helmx history'),
+      ])
+      await kernel.conversations.submitInput(humanSource.id, 'seed human')
+      await kernel.conversations.waitForIdle(humanSource.id)
+      await kernel.conversations.submitInput(helmxSource.id, 'seed helmx')
+      await kernel.conversations.waitForIdle(helmxSource.id)
+
+      // 1. helmx-owned caller creating a conversation MUST default to ownedBy: 'helmx' (never 'human'),
+      // and explicitly requesting ownedBy: 'human' MUST fail with 403 ownership_violation.
+      const autoCreated = await postCoreAction(
+        kernel,
+        'conversations',
+        'create',
+        { title: 'Auto Created' },
+        helmxCaller.id,
+      )
+      assert.equal(autoCreated.status, 200)
+      assert.equal(autoCreated.body.ownedBy, 'helmx')
+      assert.equal(kernel.ownership.getOwnership(autoCreated.body.id), 'helmx')
+
+      const autoCreateHumanSpoof = await postCoreAction(
+        kernel,
+        'conversations',
+        'create',
+        { title: 'Spoof Human', ownedBy: 'human' },
+        helmxCaller.id,
+      )
+      assert.equal(autoCreateHumanSpoof.status, 403)
+      assert.equal(autoCreateHumanSpoof.code, 'ownership_violation')
+
+      // Creating a child under a helmx parent inherits 'helmx' even from direct HTTP.
+      const underHelmxParent = await postCoreAction(kernel, 'conversations', 'create', {
+        title: 'Child Under Helmx',
+        parentConversationId: helmxSource.id,
+      })
+      assert.equal(underHelmxParent.status, 200)
+      assert.equal(underHelmxParent.body.ownedBy, 'helmx')
+      assert.equal(kernel.ownership.getOwnership(underHelmxParent.body.id), 'helmx')
+
+      // Direct HTTP explicit ownedBy: 'helmx' succeeds.
+      const explicitHelmxCreate = await postCoreAction(kernel, 'conversations', 'create', {
+        title: 'Explicit Helmx',
+        ownedBy: 'helmx',
+      })
+      assert.equal(explicitHelmxCreate.status, 200)
+      assert.equal(explicitHelmxCreate.body.ownedBy, 'helmx')
+      assert.equal(kernel.ownership.getOwnership(explicitHelmxCreate.body.id), 'helmx')
+
+      // 2. helmx-owned caller forking a human-owned or helmx-owned source MUST produce ownedBy: 'helmx',
+      // and explicitly requesting ownedBy: 'human' MUST fail with 403 ownership_violation.
+      const autoForkFromHuman = await postCoreAction(
+        kernel,
+        'conversations',
+        'fork',
+        { conversationId: humanSource.id, title: 'Auto Fork From Human' },
+        helmxCaller.id,
+      )
+      assert.equal(autoForkFromHuman.status, 200)
+      assert.equal(autoForkFromHuman.body.ownedBy, 'helmx')
+      assert.equal(kernel.ownership.getOwnership(autoForkFromHuman.body.id), 'helmx')
+
+      const autoForkSpoofHuman = await postCoreAction(
+        kernel,
+        'conversations',
+        'fork',
+        { conversationId: humanSource.id, title: 'Spoof Fork', ownedBy: 'human' },
+        helmxCaller.id,
+      )
+      assert.equal(autoForkSpoofHuman.status, 403)
+      assert.equal(autoForkSpoofHuman.code, 'ownership_violation')
+
+      // Direct HTTP fork inherits source ownership: helmx -> helmx, human -> human (overridable to helmx).
+      const inheritedHelmxFork = await postCoreAction(kernel, 'conversations', 'fork', {
+        conversationId: helmxSource.id,
+        title: 'Inherited Helmx Fork',
+      })
+      assert.equal(inheritedHelmxFork.status, 200)
+      assert.equal(inheritedHelmxFork.body.ownedBy, 'helmx')
+      assert.equal(kernel.ownership.getOwnership(inheritedHelmxFork.body.id), 'helmx')
+
+      const inheritedHumanFork = await postCoreAction(kernel, 'conversations', 'fork', {
+        conversationId: humanSource.id,
+        title: 'Inherited Human Fork',
+      })
+      assert.equal(inheritedHumanFork.status, 200)
+      assert.equal(inheritedHumanFork.body.ownedBy, 'human')
+      assert.equal(kernel.ownership.getOwnership(inheritedHumanFork.body.id), 'human')
+
+      const explicitHelmxFork = await postCoreAction(kernel, 'conversations', 'fork', {
+        conversationId: humanSource.id,
+        title: 'Explicit Helmx Fork',
+        ownedBy: 'helmx',
+      })
+      assert.equal(explicitHelmxFork.status, 200)
+      assert.equal(explicitHelmxFork.body.ownedBy, 'helmx')
+      assert.equal(kernel.ownership.getOwnership(explicitHelmxFork.body.id), 'helmx')
     } finally {
       await kernel.close()
     }

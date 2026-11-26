@@ -6,12 +6,19 @@
  * without duplicating business logic.
  *
  * Security & visibility invariants:
- * - Every `core:*` action sets `exposeToPrompt: false` and `cli: { hidden: true, command: [...] }`:
- *   hidden from `<available_actions>` prompt bloat and dynamic CLI registration (never colliding
- *   with `CORE_CLI_COMMAND_PATHS`), yet discoverable on demand via `run_action({ list: true, pluginId: "core:" })`;
+ * - Every `core:*` action sets `exposeToPrompt: false` and declares `cli: { command: [...] }` pointing to
+ *   its real static `CORE_CLI_COMMAND_PATHS` command (validated at registration; rendered truthfully in
+ *   `run_action({ list: true })` and `helmx actions list`, while never dynamically mounted by `@helmx/cli`),
+ *   discoverable on demand via `run_action({ list: true, pluginId: "core:" })`;
  * - `core:*` never appears in `PluginHost.list()` / `GET /api/plugins` / Plugin Center;
  * - Watchdog Ownership Red Line (`AGENTS.md` §3): a `helmx`-owned session cannot mutate a `human`-owned
- *   conversation via `core:conversations.{update,send,withdraw,abort,reset,compact,delete}` (`403 ownership_violation`);
+ *   conversation via `core:conversations.{update,send,withdraw,abort,reset,compact,delete}` (`403 ownership_violation`),
+ *   and automated `send`/`abort`/`reset`/`compact`/`delete` calls always execute through the kernel guarded APIs
+ *   (`submitInputGuarded`, `abortConversationGuarded`, `resetConversationGuarded`, `compactConversationGuarded`,
+ *   `deleteConversationGuarded`) carrying `{ expectedOwnership: 'helmx', expectedStateSeq }`;
+ * - Automated `create` / `fork` ownership invariant: `helmx`-owned sessions always produce `'helmx'`-owned
+ *   conversations (rejecting explicit `ownedBy: 'human'` with `403 ownership_violation`), and derived `create`
+ *   (under a `helmx` parent) / `fork` (from a `helmx` source) inherit `'helmx'` ownership by default;
  * - Self-Mutation Guard: a session cannot `abort`, `reset`, or `delete` itself (`409 self_mutation_forbidden`);
  * - Honest `origin`: `core:conversations.send` always forces `origin: 'agent'` inside any conversation context;
  * - Host-governance mutations require top-level `human`-owned sessions (`scope: { topLevelOnly: true, ownedBy: 'human' }`);
@@ -27,10 +34,12 @@ import {
   REQUEST_SCHEMA_PATTERNS,
   isStrictSemver,
   stripSemverVPrefix,
+  type ConversationForkOptions,
   type ConversationListFilter,
   type ConversationOwnership,
   type ConversationScope,
   type ConversationStatus,
+  type GuardedMutationExpectation,
   type JsonSchema,
   type PluginActionContext,
   type PluginActionSpec,
@@ -57,6 +66,8 @@ import type { KernelRuntime } from './runtime.js'
 const MAX_SAFE_INTEGER = 9007199254740991
 
 const SAFE_POSITIVE_INT: JsonSchema = { type: 'integer', minimum: 1, maximum: MAX_SAFE_INTEGER }
+const SAFE_NON_NEGATIVE_INT: JsonSchema = { type: 'integer', minimum: 0, maximum: MAX_SAFE_INTEGER }
+const CONVERSATION_OWNERSHIP_SCHEMA: JsonSchema = { type: 'string', enum: ['human', 'helmx'] }
 const ID_STRING: JsonSchema = { type: 'string', pattern: REQUEST_SCHEMA_PATTERNS.id.source }
 const NODE_ID_STRING: JsonSchema = { type: 'string', pattern: NODE_ID_PATTERN }
 const FORWARD_ID_STRING: JsonSchema = {
@@ -178,6 +189,85 @@ function assertCanMutateConversation(
     }
     for (const grand of childrenOf.get(childId) ?? []) queue.push(grand)
   }
+}
+
+function isAutomatedCaller(runtime: KernelRuntime, context: PluginActionContext): boolean {
+  return (
+    context.conversationId !== undefined &&
+    runtime.ownership.getOwnership(context.conversationId) === 'helmx'
+  )
+}
+
+/**
+ * Snapshot the target conversation's authoritative watermark at authorization time and build the
+ * kernel guarded mutation expectation (`expectedOwnership: 'helmx'` + CAS `expectedStateSeq`).
+ */
+function buildAutomationGuard(
+  runtime: KernelRuntime,
+  targetConversationId: number,
+  explicitExpectedStateSeq?: number,
+): GuardedMutationExpectation {
+  const target = runtime.conversations.getConversation(targetConversationId)
+  return {
+    expectedOwnership: 'helmx',
+    expectedStateSeq: explicitExpectedStateSeq ?? target.stateChangeSeq,
+  }
+}
+
+function assertOptionalStateSeq(
+  runtime: KernelRuntime,
+  targetConversationId: number,
+  expectedStateSeq?: number,
+): void {
+  if (expectedStateSeq === undefined) return
+  const target = runtime.conversations.getConversation(targetConversationId)
+  if (target.stateChangeSeq !== expectedStateSeq) {
+    throw new HelmxError(
+      'state_seq_conflict',
+      `conversation ${targetConversationId} authoritative watermark ${target.stateChangeSeq} does not match expected ${expectedStateSeq}`,
+      409,
+      {
+        conversationId: targetConversationId,
+        currentSeq: target.stateChangeSeq,
+        expectedSeq: expectedStateSeq,
+      },
+    )
+  }
+}
+
+/**
+ * Resolve ownership for newly created or forked conversations:
+ * - Automated (`helmx`-owned) sessions must always produce `'helmx'`-owned conversations and cannot
+ *   request `'human'` (`403 ownership_violation`).
+ * - Direct HTTP/CLI or `human`-owned sessions honor an explicit `ownedBy`, otherwise inherit from
+ *   the parent/source conversation, falling back to `'human'`.
+ */
+function resolveDerivedOwnership(
+  runtime: KernelRuntime,
+  context: PluginActionContext,
+  options: {
+    explicitOwnedBy?: ConversationOwnership
+    inheritedOwnedBy?: ConversationOwnership
+    actionId: 'create' | 'fork'
+  },
+): ConversationOwnership {
+  if (isAutomatedCaller(runtime, context)) {
+    if (options.explicitOwnedBy === 'human') {
+      throw new HelmxError(
+        'ownership_violation',
+        `helmx-owned conversation ${context.conversationId} cannot ${options.actionId} a human-owned conversation`,
+        403,
+        {
+          callerConversationId: context.conversationId,
+          callerOwnedBy: 'helmx',
+          requestedOwnedBy: 'human',
+          actionId: options.actionId,
+        },
+      )
+    }
+    return 'helmx'
+  }
+  return options.explicitOwnedBy ?? options.inheritedOwnedBy ?? 'human'
 }
 
 function assertProfileModelEnabled(runtime: KernelRuntime, profile: Profile): void {
@@ -315,7 +405,7 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     description: 'Full-text FTS5 search across conversation titles and message bodies',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['search'] },
+    cli: { command: ['search'] },
     inputSchema: toJsonSchema(REQUEST_SCHEMAS.conversationSearchQuery),
     outputSchema: ARRAY_OF_OBJECTS_OUTPUT_SCHEMA,
     handler: async (input: {
@@ -349,7 +439,7 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
       'List conversations with optional filters (defaults to top-level human conversations unless all/parentConversationId/tag/ownedBy/topLevelOnly=false is specified)',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['conversations', 'list'] },
+    cli: { command: ['conversations', 'list'] },
     inputSchema: toJsonSchema(REQUEST_SCHEMAS.conversationListQuery),
     outputSchema: ARRAY_OF_OBJECTS_OUTPUT_SCHEMA,
     handler: (input: {
@@ -402,7 +492,7 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     description: 'Get conversation summary and paginated timeline entries (use nextCursor for older pages)',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['conversations', 'get'] },
+    cli: { command: ['conversations', 'get'] },
     inputSchema: {
       type: 'object',
       properties: {
@@ -426,7 +516,7 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     description: 'Read a single untruncated timeline entry from a conversation',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['conversations', 'entry'] },
+    cli: { command: ['conversations', 'entry'] },
     inputSchema: {
       type: 'object',
       properties: {
@@ -443,20 +533,44 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
 
   pluginHost.registerCoreAction(owner, {
     id: 'create',
-    description: 'Create a new conversation',
+    description: 'Create a new conversation (automated sessions always produce helmx-owned conversations)',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['conversations', 'create'] },
-    inputSchema: toJsonSchema(REQUEST_SCHEMAS.conversationInit),
+    cli: { command: ['conversations', 'create'] },
+    inputSchema: extendRequestSchema(REQUEST_SCHEMAS.conversationInit, {
+      ownedBy: CONVERSATION_OWNERSHIP_SCHEMA,
+    }),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: Record<string, unknown>) =>
-      runtime.conversations.createConversation(parseConversationInit(input)),
+    handler: async (
+      input: Record<string, unknown> & { ownedBy?: ConversationOwnership },
+      context,
+    ) => {
+      const { ownedBy: rawOwnedBy, ...rest } = input
+      const init = parseConversationInit(rest)
+      let parentOwnedBy: ConversationOwnership | undefined
+      if (init.parentConversationId !== undefined) {
+        try {
+          parentOwnedBy = runtime.ownership.getOwnership(init.parentConversationId)
+        } catch (err) {
+          if (!(err instanceof HelmxError && err.code === 'not_found')) throw err
+        }
+      }
+      const effectiveOwnedBy = resolveDerivedOwnership(runtime, context, {
+        explicitOwnedBy: rawOwnedBy,
+        inheritedOwnedBy: parentOwnedBy,
+        actionId: 'create',
+      })
+      return runtime.conversations.createConversation({
+        ...init,
+        ownedBy: effectiveOwnedBy,
+      })
+    },
   })
 
   pluginHost.registerCoreAction(owner, {
     id: 'update',
     description: 'Partially update conversation metadata, profile, model, thinking level, node, or cwd',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['conversations', 'update'] },
+    cli: { command: ['conversations', 'update'] },
     inputSchema: extendRequestSchema(
       REQUEST_SCHEMAS.conversationPatch,
       { conversationId: SAFE_POSITIVE_INT },
@@ -472,14 +586,15 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
 
   pluginHost.registerCoreAction(owner, {
     id: 'send',
-    description: 'Submit input to a conversation (optionally waiting for the reply); forces origin="agent" in session context',
+    description: 'Submit input to a conversation (optionally waiting for the reply); forces origin="agent" in session context and uses guarded CAS submission for automated callers',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['send'] },
+    cli: { command: ['send'] },
     inputSchema: extendRequestSchema(
       REQUEST_SCHEMAS.conversationInput,
       {
         conversationId: SAFE_POSITIVE_INT,
         wait: { type: 'boolean' },
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
       },
       ['conversationId'],
     ),
@@ -489,21 +604,34 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
       required: ['submissionId'],
     },
     handler: async (
-      input: Record<string, unknown> & { conversationId: number; wait?: boolean },
+      input: Record<string, unknown> & {
+        conversationId: number
+        wait?: boolean
+        expectedStateSeq?: number
+      },
       context,
     ) => {
       assertCanMutateConversation(runtime, context, input.conversationId)
-      const { conversationId, wait, ...rest } = input
+      const { conversationId, wait, expectedStateSeq, ...rest } = input
       const parsed = parseInputBody(rest)
       // Honest origin invariant: any session-scoped send is agent-originated and cannot spoof human/trigger.
       const effectiveOrigin = context.conversationId !== undefined ? 'agent' : parsed.origin
-      const { submissionId } = await runtime.conversations.submitInput(conversationId, parsed.text, {
+      const submitOpts = {
         ...(effectiveOrigin !== undefined ? { origin: effectiveOrigin } : {}),
         ...(parsed.whenBusy !== undefined ? { whenBusy: parsed.whenBusy } : {}),
         ...(parsed.meta !== undefined ? { meta: parsed.meta } : {}),
         ...(parsed.attachments !== undefined ? { attachments: parsed.attachments } : {}),
         ...(parsed.replaceFromEntryId !== undefined ? { replaceFromEntryId: parsed.replaceFromEntryId } : {}),
-      })
+      }
+      const { submissionId } = isAutomatedCaller(runtime, context)
+        ? await runtime.conversations.submitInputGuarded(
+            conversationId,
+            parsed.text,
+            submitOpts,
+            buildAutomationGuard(runtime, conversationId, expectedStateSeq),
+          )
+        : (assertOptionalStateSeq(runtime, conversationId, expectedStateSeq),
+          await runtime.conversations.submitInput(conversationId, parsed.text, submitOpts))
       if (wait === true) {
         return runtime.conversations.waitForInput(conversationId, submissionId, context.signal)
       }
@@ -515,7 +643,7 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     id: 'withdraw',
     description: 'Withdraw a queued input submission from a conversation',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['conversations', 'withdraw'] },
+    cli: { command: ['conversations', 'withdraw'] },
     inputSchema: extendRequestSchema(
       REQUEST_SCHEMAS.conversationWithdraw,
       { conversationId: SAFE_POSITIVE_INT },
@@ -532,20 +660,31 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
 
   pluginHost.registerCoreAction(owner, {
     id: 'abort',
-    description: 'Abort the currently running turn of another conversation (self-abort forbidden)',
+    description: 'Abort the currently running turn of another conversation (self-abort forbidden; uses guarded CAS abort for automated callers)',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['abort'] },
+    cli: { command: ['abort'] },
     inputSchema: {
       type: 'object',
-      properties: { conversationId: SAFE_POSITIVE_INT },
+      properties: {
+        conversationId: SAFE_POSITIVE_INT,
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
+      },
       required: ['conversationId'],
       additionalProperties: false,
     },
     outputSchema: OK_OUTPUT_SCHEMA,
-    handler: async (input: { conversationId: number }, context) => {
+    handler: async (input: { conversationId: number; expectedStateSeq?: number }, context) => {
       assertNotSelfMutation(context, input.conversationId, 'abort')
       assertCanMutateConversation(runtime, context, input.conversationId)
-      await runtime.conversations.abortConversation(input.conversationId)
+      if (isAutomatedCaller(runtime, context)) {
+        await runtime.conversations.abortConversationGuarded(
+          input.conversationId,
+          buildAutomationGuard(runtime, input.conversationId, input.expectedStateSeq),
+        )
+      } else {
+        assertOptionalStateSeq(runtime, input.conversationId, input.expectedStateSeq)
+        await runtime.conversations.abortConversation(input.conversationId)
+      }
       return { ok: true }
     },
   })
@@ -554,18 +693,33 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     id: 'reset',
     description: 'Reset context of another conversation with optional handoff text (self-reset forbidden)',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['conversations', 'reset'] },
+    cli: { command: ['conversations', 'reset'] },
     inputSchema: extendRequestSchema(
       REQUEST_SCHEMAS.conversationReset,
-      { conversationId: SAFE_POSITIVE_INT },
+      {
+        conversationId: SAFE_POSITIVE_INT,
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
+      },
       ['conversationId'],
     ),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: Record<string, unknown> & { conversationId: number }, context) => {
+    handler: async (
+      input: Record<string, unknown> & { conversationId: number; expectedStateSeq?: number },
+      context,
+    ) => {
       assertNotSelfMutation(context, input.conversationId, 'reset')
       assertCanMutateConversation(runtime, context, input.conversationId)
-      const { conversationId, ...rest } = input
-      return runtime.conversations.resetConversation(conversationId, parseConversationResetBody(rest))
+      const { conversationId, expectedStateSeq, ...rest } = input
+      const parsed = parseConversationResetBody(rest)
+      if (isAutomatedCaller(runtime, context)) {
+        return runtime.conversations.resetConversationGuarded(
+          conversationId,
+          parsed,
+          buildAutomationGuard(runtime, conversationId, expectedStateSeq),
+        )
+      }
+      assertOptionalStateSeq(runtime, conversationId, expectedStateSeq)
+      return runtime.conversations.resetConversation(conversationId, parsed)
     },
   })
 
@@ -573,34 +727,72 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     id: 'compact',
     description: 'Enqueue manual context compaction for a conversation with optional instructions',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['conversations', 'compact'] },
+    cli: { command: ['conversations', 'compact'] },
     inputSchema: extendRequestSchema(
       REQUEST_SCHEMAS.conversationCompact,
-      { conversationId: SAFE_POSITIVE_INT },
+      {
+        conversationId: SAFE_POSITIVE_INT,
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
+      },
       ['conversationId'],
     ),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: Record<string, unknown> & { conversationId: number }, context) => {
+    handler: async (
+      input: Record<string, unknown> & { conversationId: number; expectedStateSeq?: number },
+      context,
+    ) => {
       assertCanMutateConversation(runtime, context, input.conversationId)
-      const { conversationId, ...rest } = input
-      return runtime.conversations.compactConversation(conversationId, parseConversationCompactBody(rest))
+      const { conversationId, expectedStateSeq, ...rest } = input
+      const parsed = parseConversationCompactBody(rest)
+      if (isAutomatedCaller(runtime, context)) {
+        return runtime.conversations.compactConversationGuarded(
+          conversationId,
+          parsed,
+          buildAutomationGuard(runtime, conversationId, expectedStateSeq),
+        )
+      }
+      assertOptionalStateSeq(runtime, conversationId, expectedStateSeq)
+      return runtime.conversations.compactConversation(conversationId, parsed)
     },
   })
 
   pluginHost.registerCoreAction(owner, {
     id: 'fork',
-    description: 'Fork a new conversation from a specified entry or latest clean anchor',
+    description: 'Fork a new conversation from a specified entry or latest clean anchor (inherits source ownership; automated sessions always produce helmx-owned forks)',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['conversations', 'fork'] },
+    cli: { command: ['conversations', 'fork'] },
     inputSchema: extendRequestSchema(
       REQUEST_SCHEMAS.conversationFork,
-      { conversationId: SAFE_POSITIVE_INT },
+      {
+        conversationId: SAFE_POSITIVE_INT,
+        ownedBy: CONVERSATION_OWNERSHIP_SCHEMA,
+      },
       ['conversationId'],
     ),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: Record<string, unknown> & { conversationId: number }) => {
-      const { conversationId, ...rest } = input
-      return runtime.conversations.forkConversation(conversationId, parseConversationForkBody(rest))
+    handler: async (
+      input: Record<string, unknown> & {
+        conversationId: number
+        ownedBy?: ConversationOwnership
+      },
+      context,
+    ) => {
+      const { conversationId, ownedBy: rawOwnedBy, ...rest } = input
+      const sourceOwnedBy = runtime.ownership.getOwnership(conversationId)
+      const effectiveOwnedBy = resolveDerivedOwnership(runtime, context, {
+        explicitOwnedBy: rawOwnedBy,
+        inheritedOwnedBy: sourceOwnedBy,
+        actionId: 'fork',
+      })
+      const forkOpts: ConversationForkOptions = {
+        ...parseConversationForkBody(rest),
+        ownedBy: effectiveOwnedBy,
+      }
+      const forked = await runtime.conversations.forkConversation(conversationId, forkOpts)
+      if (runtime.ownership.getOwnership(forked.id) !== effectiveOwnedBy) {
+        runtime.ownership.markOwnership(forked.id, effectiveOwnedBy)
+      }
+      return runtime.conversations.getConversation(forked.id)
     },
   })
 
@@ -608,18 +800,30 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
     id: 'delete',
     description: 'Delete another conversation and its derived child subtree (self-delete forbidden)',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['conversations', 'delete'] },
+    cli: { command: ['conversations', 'delete'] },
     inputSchema: {
       type: 'object',
-      properties: { conversationId: SAFE_POSITIVE_INT },
+      properties: {
+        conversationId: SAFE_POSITIVE_INT,
+        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
+      },
       required: ['conversationId'],
       additionalProperties: false,
     },
     outputSchema: OK_OUTPUT_SCHEMA,
-    handler: async (input: { conversationId: number }, context) => {
+    handler: async (input: { conversationId: number; expectedStateSeq?: number }, context) => {
       assertNotSelfMutation(context, input.conversationId, 'delete')
       assertCanMutateConversation(runtime, context, input.conversationId, { checkSubtree: true })
-      await runtime.conversations.deleteConversation(input.conversationId)
+      if (isAutomatedCaller(runtime, context)) {
+        await runtime.conversations.deleteConversationGuarded(
+          input.conversationId,
+          buildAutomationGuard(runtime, input.conversationId, input.expectedStateSeq),
+          { allowActive: true },
+        )
+      } else {
+        assertOptionalStateSeq(runtime, input.conversationId, input.expectedStateSeq)
+        await runtime.conversations.deleteConversation(input.conversationId)
+      }
       return { ok: true }
     },
   })
@@ -642,7 +846,7 @@ function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActi
     description: 'List all configured Profiles (summary metadata without SYSTEM.md body)',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['profiles', 'list'] },
+    cli: { command: ['profiles', 'list'] },
     inputSchema: EMPTY_INPUT_SCHEMA,
     outputSchema: ARRAY_OF_OBJECTS_OUTPUT_SCHEMA,
     handler: async () => runtime.profiles.list(),
@@ -653,7 +857,7 @@ function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActi
     description: 'Get a Profile by ID including its full SYSTEM.md text',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['profiles', 'get'] },
+    cli: { command: ['profiles', 'get'] },
     inputSchema: {
       type: 'object',
       properties: { id: ID_STRING },
@@ -674,7 +878,7 @@ function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActi
     id: 'create',
     description: 'Create a new Profile (rejects managedByPlugin spoofing and disabled models)',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['profiles', 'create'] },
+    cli: { command: ['profiles', 'create'] },
     inputSchema: toJsonSchema(REQUEST_SCHEMAS.profileCreate),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
     handler: async (input: Record<string, unknown>) => {
@@ -708,7 +912,7 @@ function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActi
     description:
       'Partially update an existing Profile (merges provided fields onto current config; managedByPlugin is immutable)',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['profiles', 'update'] },
+    cli: { command: ['profiles', 'update'] },
     inputSchema: extendRequestSchema(REQUEST_SCHEMAS.profileUpdate, { id: ID_STRING }, ['id']),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
     handler: async (input: Record<string, unknown> & { id: string }) => {
@@ -765,7 +969,7 @@ function registerProfileCoreActions(runtime: KernelRuntime, pluginHost: CoreActi
     id: 'delete',
     description: 'Delete an unused, non-managed Profile by ID',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['profiles', 'delete'] },
+    cli: { command: ['profiles', 'delete'] },
     inputSchema: {
       type: 'object',
       properties: { id: ID_STRING },
@@ -812,7 +1016,7 @@ function registerModelCoreActions(runtime: KernelRuntime, pluginHost: CoreAction
     description: 'List the available model catalog, thinking levels, and current defaults',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['models', 'list'] },
+    cli: { command: ['models', 'list'] },
     inputSchema: EMPTY_INPUT_SCHEMA,
     outputSchema: OBJECT_OUTPUT_SCHEMA,
     handler: async () => runtime.models.listModels(),
@@ -823,7 +1027,7 @@ function registerModelCoreActions(runtime: KernelRuntime, pluginHost: CoreAction
     description: 'List sanitized model provider summaries (never exposes plaintext API keys or tokens)',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['models', 'providers'] },
+    cli: { command: ['models', 'providers'] },
     inputSchema: EMPTY_INPUT_SCHEMA,
     outputSchema: ARRAY_OF_OBJECTS_OUTPUT_SCHEMA,
     handler: () =>
@@ -834,7 +1038,7 @@ function registerModelCoreActions(runtime: KernelRuntime, pluginHost: CoreAction
     id: 'refresh',
     description: 'Refresh dynamic model catalogs for all or specified providers',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['models', 'refresh'] },
+    cli: { command: ['models', 'refresh'] },
     inputSchema: toJsonSchema(REQUEST_SCHEMAS.modelsRefresh),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
     handler: async (input: { provider?: string; providers?: string[]; force?: boolean }) => {
@@ -854,7 +1058,7 @@ function registerModelCoreActions(runtime: KernelRuntime, pluginHost: CoreAction
     id: 'default',
     description: 'Set global default model, thinking level, compaction defaults, or per-model thinking defaults',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['models', 'default'] },
+    cli: { command: ['models', 'default'] },
     inputSchema: toJsonSchema(REQUEST_SCHEMAS.modelsDefaultPut),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
     handler: async (input: {
@@ -901,7 +1105,7 @@ function registerModelCoreActions(runtime: KernelRuntime, pluginHost: CoreAction
     id: 'filter',
     description: 'Set disabled models for a provider or clear all disabled model filters',
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['models', 'filter'] },
+    cli: { command: ['models', 'filter'] },
     inputSchema: toJsonSchema(REQUEST_SCHEMAS.modelsFilterPut),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
     handler: async (input: { provider?: string; disabledModels: string[] }) => {
@@ -923,7 +1127,7 @@ function registerNodeCoreActions(runtime: KernelRuntime, pluginHost: CoreActionR
     description: 'List registered compute nodes, online status, platform, and health metrics',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['nodes', 'list'] },
+    cli: { command: ['nodes', 'list'] },
     inputSchema: EMPTY_INPUT_SCHEMA,
     outputSchema: ARRAY_OF_OBJECTS_OUTPUT_SCHEMA,
     handler: async () => runtime.nodes.listNodes(),
@@ -934,7 +1138,7 @@ function registerNodeCoreActions(runtime: KernelRuntime, pluginHost: CoreActionR
     description: 'Check available @helmx/node updates for a remote node (defaults to current conversation node when omitted)',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['nodes', 'upgrade'] },
+    cli: { command: ['nodes', 'upgrade'] },
     inputSchema: {
       type: 'object',
       properties: {
@@ -964,7 +1168,7 @@ function registerNodeCoreActions(runtime: KernelRuntime, pluginHost: CoreActionR
     description: 'List active TCP port-forwarding sessions',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['nodes', 'forwards'] },
+    cli: { command: ['nodes', 'forwards'] },
     inputSchema: EMPTY_INPUT_SCHEMA,
     outputSchema: ARRAY_OF_OBJECTS_OUTPUT_SCHEMA,
     handler: () => runtime.nodeForward.list(),
@@ -975,7 +1179,7 @@ function registerNodeCoreActions(runtime: KernelRuntime, pluginHost: CoreActionR
     description: 'Inspect a single active TCP port-forwarding session by forwardId',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['nodes', 'forward-inspect'] },
+    cli: { command: ['nodes', 'forward-inspect'] },
     inputSchema: {
       type: 'object',
       properties: { id: FORWARD_ID_STRING },
@@ -997,7 +1201,7 @@ function registerNodeCoreActions(runtime: KernelRuntime, pluginHost: CoreActionR
     description: 'Remove a registered remote BYOM node and disconnect it immediately',
     scope: HOST_GOVERNANCE_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['nodes', 'remove'] },
+    cli: { command: ['nodes', 'remove'] },
     inputSchema: {
       type: 'object',
       properties: { id: NODE_ID_STRING },
@@ -1016,7 +1220,7 @@ function registerNodeCoreActions(runtime: KernelRuntime, pluginHost: CoreActionR
     description: 'Execute a self-upgrade on a registered online remote node',
     scope: HOST_GOVERNANCE_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['nodes', 'upgrade'] },
+    cli: { command: ['nodes', 'upgrade'] },
     inputSchema: extendRequestSchema(REQUEST_SCHEMAS.nodeUpgrade, { id: NODE_ID_STRING }, ['id']),
     outputSchema: OBJECT_OUTPUT_SCHEMA,
     handler: async (input: { id: string; targetVersion?: string; registryUrl?: string; force?: boolean }) => {
@@ -1037,7 +1241,7 @@ function registerNodeCoreActions(runtime: KernelRuntime, pluginHost: CoreActionR
     description: 'Stop an active TCP port-forwarding session by forwardId',
     scope: HOST_GOVERNANCE_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['nodes', 'forward-stop'] },
+    cli: { command: ['nodes', 'forward-stop'] },
     inputSchema: {
       type: 'object',
       properties: { id: FORWARD_ID_STRING },
@@ -1071,7 +1275,7 @@ function registerPluginCoreActions(
     description: 'List installed built-in and external plugins with status and capabilities',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['plugins', 'list'] },
+    cli: { command: ['plugins', 'list'] },
     inputSchema: EMPTY_INPUT_SCHEMA,
     outputSchema: ARRAY_OF_OBJECTS_OUTPUT_SCHEMA,
     handler: () => pluginHost.list(),
@@ -1082,7 +1286,7 @@ function registerPluginCoreActions(
     description: 'Inspect read-only extension contract manifest for one plugin (by id) or all plugins',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['plugins', 'manifest'] },
+    cli: { command: ['plugins', 'manifest'] },
     inputSchema: {
       type: 'object',
       properties: { id: ID_STRING },
@@ -1100,7 +1304,7 @@ function registerPluginCoreActions(
     description: 'Read a public global or session-scoped plugin document',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['plugins', 'doc'] },
+    cli: { command: ['plugins', 'doc'] },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1126,7 +1330,7 @@ function registerPluginCoreActions(
     description: 'Read plugin configuration schema, sources, and masked values (secret fields are never exposed)',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['plugins', 'config'] },
+    cli: { command: ['plugins', 'config'] },
     inputSchema: {
       type: 'object',
       properties: { id: ID_STRING },
@@ -1156,7 +1360,7 @@ function registerPluginCoreActions(
     description: 'Run static dry-run diagnostics on an external plugin directory or registered external plugin ID',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['plugins', 'doctor'] },
+    cli: { command: ['plugins', 'doctor'] },
     inputSchema: extendRequestSchema(REQUEST_SCHEMAS.pluginDoctor, {
       target: NON_WHITESPACE_STRING,
     }),
@@ -1193,7 +1397,7 @@ function registerPluginCoreActions(
     description: 'Update plugin configuration values (pass null for a key to reset to default)',
     scope: HOST_GOVERNANCE_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['plugins', 'config'] },
+    cli: { command: ['plugins', 'config'] },
     inputSchema: extendRequestSchema(REQUEST_SCHEMAS.pluginConfigPut, { id: ID_STRING }, ['id']),
     outputSchema: OK_OUTPUT_SCHEMA,
     handler: async (input: { id: string; values: Record<string, unknown> }) => {
@@ -1207,7 +1411,7 @@ function registerPluginCoreActions(
     description: 'Enable a registered plugin',
     scope: HOST_GOVERNANCE_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['plugins', 'enable'] },
+    cli: { command: ['plugins', 'enable'] },
     inputSchema: {
       type: 'object',
       properties: { id: ID_STRING },
@@ -1226,7 +1430,7 @@ function registerPluginCoreActions(
     description: 'Disable a registered plugin (pass force: true to bypass persistent resource-in-use warnings; live tasks still block)',
     scope: HOST_GOVERNANCE_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['plugins', 'disable'] },
+    cli: { command: ['plugins', 'disable'] },
     inputSchema: extendRequestSchema(REQUEST_SCHEMAS.pluginDisable, { id: ID_STRING }, ['id']),
     outputSchema: ARRAY_OF_OBJECTS_OUTPUT_SCHEMA,
     handler: async (input: { id: string; force?: boolean }) => {
@@ -1240,7 +1444,7 @@ function registerPluginCoreActions(
     description: 'Hot-reload an external plugin with doctor preflight',
     scope: HOST_GOVERNANCE_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['plugins', 'reload'] },
+    cli: { command: ['plugins', 'reload'] },
     inputSchema: {
       type: 'object',
       properties: { id: ID_STRING },
@@ -1256,7 +1460,7 @@ function registerPluginCoreActions(
     description: 'Incrementally rescan the external plugins directory and register newly discovered plugins as disabled',
     scope: HOST_GOVERNANCE_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['plugins', 'rescan'] },
+    cli: { command: ['plugins', 'rescan'] },
     inputSchema: EMPTY_INPUT_SCHEMA,
     outputSchema: OBJECT_OUTPUT_SCHEMA,
     handler: async () => pluginHost.rescanExternalPlugins(),
@@ -1275,7 +1479,7 @@ function registerAskCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRe
     description: 'List AskDoc approval requests, optionally filtered by conversationId and/or status',
     idempotent: true,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['asks', 'list'] },
+    cli: { command: ['asks', 'list'] },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1299,7 +1503,7 @@ function registerAskCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRe
     description: 'Cancel a pending AskDoc approval request',
     scope: HOST_GOVERNANCE_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['asks', 'cancel'] },
+    cli: { command: ['asks', 'cancel'] },
     inputSchema: {
       type: 'object',
       properties: { id: ID_STRING },
@@ -1318,7 +1522,7 @@ function registerAskCoreActions(runtime: KernelRuntime, pluginHost: CoreActionRe
     description: 'Answer a pending AskDoc approval request (human HTTP/CLI only; blocked in all conversation contexts)',
     scope: NO_CONVERSATION_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['asks', 'answer'] },
+    cli: { command: ['asks', 'answer'] },
     inputSchema: extendRequestSchema(REQUEST_SCHEMAS.askAnswer, { id: ID_STRING }, ['id']),
     outputSchema: OK_OUTPUT_SCHEMA,
     handler: async (input: { id: string; answers: Record<string, string>; expectedStateSeq?: number }) => {
@@ -1341,7 +1545,7 @@ function registerSkillCoreActions(runtime: KernelRuntime, pluginHost: CoreAction
     idempotent: true,
     scope: NO_CONVERSATION_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['skills', 'list'] },
+    cli: { command: ['skills', 'list'] },
     inputSchema: EMPTY_INPUT_SCHEMA,
     outputSchema: ARRAY_OF_OBJECTS_OUTPUT_SCHEMA,
     handler: async () => runtime.skills.list(),
@@ -1353,7 +1557,7 @@ function registerSkillCoreActions(runtime: KernelRuntime, pluginHost: CoreAction
     idempotent: true,
     scope: NO_CONVERSATION_SCOPE,
     exposeToPrompt: false,
-    cli: { hidden: true, command: ['skills', 'read'] },
+    cli: { command: ['skills', 'read'] },
     inputSchema: {
       type: 'object',
       properties: {

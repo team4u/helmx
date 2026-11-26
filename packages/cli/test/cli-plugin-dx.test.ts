@@ -503,6 +503,8 @@ test('plugins init: rejects invalid names and non-empty directory unless --force
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
   const bad = await runCliCaptured(['plugins', 'init', 'builtin:x'], env)
   assert.notEqual(bad.code, 0)
+  const badCore = await runCliCaptured(['plugins', 'init', 'core:x'], env)
+  assert.notEqual(badCore.code, 0)
   const bad2 = await runCliCaptured(['plugins', 'init', 'bad name'], env)
   assert.notEqual(bad2.code, 0)
 

@@ -5,6 +5,7 @@
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { isReservedPluginNamespace } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import {
   SCAFFOLD_CLIENT_APP_TSX,
@@ -22,7 +23,7 @@ import type { CommandContext, CommandSpec } from './shared.js'
 import { assertNoExtraPositionals, printResult } from './shared.js'
 import { writeSdkTypesToDir } from './plugins-types.js'
 
-/** Plugin ID / directory name: starts with alphanumeric, allows - _ (aligned with protocol plugin ID rules; builtin: forbidden). */
+/** Plugin ID / directory name: starts with alphanumeric, allows - _ (aligned with protocol plugin ID rules; builtin: and core: forbidden). */
 const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 
 /** Generate plugin skeleton files (validates parent dir, rejects non-empty targets, selects template, reports outputs). */
@@ -33,9 +34,9 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
   if (typeof name !== 'string' || name.length === 0) {
     throw new CliError('missing <name> (--name or positional argument)', 'missing_id')
   }
-  if (!PLUGIN_NAME_PATTERN.test(name) || name.startsWith('builtin:')) {
+  if (!PLUGIN_NAME_PATTERN.test(name) || isReservedPluginNamespace(name)) {
     throw new CliError(
-      `invalid plugin name: ${name} (must match ${PLUGIN_NAME_PATTERN}, and builtin: prefix is forbidden)`,
+      `invalid plugin name: ${name} (must match ${PLUGIN_NAME_PATTERN}, and builtin:/core: reserved namespaces are forbidden)`,
       'invalid_flag_value',
     )
   }

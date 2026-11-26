@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
-import { flagsFromSchema } from '../src/actions.js'
+import { dynamicCommandOf, flagsFromSchema } from '../src/actions.js'
 import {
   makeCliEnv,
   parseCliError,
@@ -814,4 +814,75 @@ test('enum and const schemas preserve real number/boolean/string/json types for 
   const badBoolPos = await runCliCaptured(['gadget', 'deploy', '2', 'yes', '--json'], env)
   assert.equal(badBoolPos.code, 1)
   assert.equal(parseCliError(badBoolPos).code, 'invalid_flag_value')
+})
+
+test('core:* actions are never dynamically mounted by CLI, never conflict with static core commands, and show truthful CLI in actions list', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-core-actions-')
+  const coreSearch = {
+    pluginId: 'core:conversations',
+    id: 'search',
+    description: 'Search conversations',
+    exposeToPrompt: false,
+    idempotent: true,
+    inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },
+    outputSchema: { type: 'array', items: { type: 'object' } },
+    cli: { command: ['search'] },
+  }
+  const coreConvList = {
+    pluginId: 'core:conversations',
+    id: 'list',
+    description: 'List conversations',
+    exposeToPrompt: false,
+    idempotent: true,
+    inputSchema: { type: 'object', properties: {} },
+    outputSchema: { type: 'array', items: { type: 'object' } },
+    cli: { command: ['conversations', 'list'] },
+  }
+  const pluginAction = {
+    pluginId: 'builtin:gadget',
+    id: 'deploy',
+    description: 'Deploy gadget',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' } } },
+    outputSchema: { type: 'object' },
+    cli: { command: ['gadget', 'deploy'] },
+  }
+
+  // dynamicCommandOf explicitly rejects core:* manifests with core_action
+  assert.throws(
+    () => dynamicCommandOf(coreSearch),
+    (err: unknown) => err instanceof Error && 'code' in err && (err as { code?: string }).code === 'core_action',
+  )
+
+  const hub = await startActionsHub(
+    [coreSearch, coreConvList, pluginAction],
+    {
+      'GET /api/search?q=hello': () => ({ body: [] }),
+    },
+    t,
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  // Dynamic plugin command works alongside non-hidden core:* manifests without command_conflict
+  const dyn = await runCliCaptured(['gadget', 'deploy', '--name', 'v1', '--json'], env)
+  assert.equal(dyn.code, 0, dyn.err)
+  assert.deepEqual(JSON.parse(dyn.out), { received: { input: { name: 'v1' } } })
+
+  // Static core command stays intact and handles requests directly
+  const staticSearch = await runCliCaptured(['search', 'hello', '--json'], env)
+  assert.equal(staticSearch.code, 0, staticSearch.err)
+
+  // `helmx --help` lists only plugin dynamic commands under Plugin commands (never core:* duplicates)
+  const help = await runCliCaptured(['--help'], env)
+  assert.equal(help.code, 0, help.err)
+  assert.ok(help.out.includes('gadget deploy'))
+  assert.ok(!help.out.includes('core:conversations'))
+
+  // `helmx actions list` renders core:* CLI commands truthfully (not `(hidden)`)
+  const listed = await runCliCaptured(['actions', 'list'], env)
+  assert.equal(listed.code, 0, listed.err)
+  assert.ok(listed.out.includes('core:conversations.search'))
+  assert.ok(listed.out.includes('helmx search'))
+  assert.ok(listed.out.includes('core:conversations.list'))
+  assert.ok(listed.out.includes('helmx conversations list'))
+  assert.ok(!listed.out.includes('(hidden)'))
 })

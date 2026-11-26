@@ -4,6 +4,7 @@
 import {
   HelmxError,
   isAbsoluteTargetPath,
+  isCoreNamespace,
   isValidNodeId,
   type EnvExecResponse,
 } from '@helmx/protocol'
@@ -30,8 +31,11 @@ export function resolveActionId(
     return { pluginId: BUILTIN_ENV_EXEC_PLUGIN, actionId: BUILTIN_ENV_EXEC_ACTION, builtin: 'env.exec' }
   }
   const manifests = host.listActions()
+  // Kernel `core:*` actions must always be addressed by fully-qualified ID (`core:<domain>.<action>`);
+  // exclude them from bare short-name resolution so they never shadow plugin actions or trigger false ambiguity.
+  const pluginManifests = manifests.filter((m) => !isCoreNamespace(m.pluginId))
   if (qualified === BUILTIN_ENV_EXEC_ACTION) {
-    const sameShort = manifests.filter((m) => m.id === BUILTIN_ENV_EXEC_ACTION && (m.visibility ?? 'public') === 'public')
+    const sameShort = pluginManifests.filter((m) => m.id === BUILTIN_ENV_EXEC_ACTION && (m.visibility ?? 'public') === 'public')
     if (sameShort.length === 0) {
       return { pluginId: BUILTIN_ENV_EXEC_PLUGIN, actionId: BUILTIN_ENV_EXEC_ACTION, builtin: 'env.exec' }
     }
@@ -55,7 +59,7 @@ export function resolveActionId(
       return { pluginId: manifest.pluginId, actionId: manifest.id }
     }
   }
-  const sameShort = manifests.filter((m) => m.id === qualified)
+  const sameShort = pluginManifests.filter((m) => m.id === qualified)
   const publicShort = sameShort.filter((m) => (m.visibility ?? 'public') === 'public')
   if (publicShort.length === 1) return { pluginId: publicShort[0]!.pluginId, actionId: publicShort[0]!.id }
   if (publicShort.length > 1) {
@@ -73,6 +77,18 @@ export function resolveActionId(
       `动作 "${blocked.pluginId}.${blocked.id}" 可见性为 '${blocked.visibility}'，禁止在工作流脚本中调用`,
       403,
       { pluginId: blocked.pluginId, actionId: blocked.id, visibility: blocked.visibility },
+    )
+  }
+  const coreShort = manifests.filter(
+    (m) => isCoreNamespace(m.pluginId) && m.id === qualified && (m.visibility ?? 'public') === 'public',
+  )
+  if (coreShort.length > 0) {
+    const coreCandidates = coreShort.map((m) => `${m.pluginId}.${m.id}`)
+    throw new HelmxError(
+      'unknown_action',
+      `未注册的插件动作短 id "${qualified}"（core:* 核心动作不支持短名解析，请使用全限定 id：${coreCandidates.join(', ')}）`,
+      404,
+      { qualified, coreCandidates },
     )
   }
   throw new HelmxError('unknown_action', `未注册的动作：${qualified}`, 404, { qualified })

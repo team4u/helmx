@@ -9,10 +9,15 @@
  *   or Hub-cwd-relative path (`./` or `../`). Local forms are detected before the generic scheme
  *   rejection because a Windows drive letter (`C:`) otherwise looks like a URI scheme prefix.
  *
- * Rejected: `file://`, plaintext `http://`, `builtin:` prefixes, empty strings, and bare relative names.
+ * Rejected: `file://`, plaintext `http://`, `builtin:` / `core:` prefixes, empty strings, and bare relative names.
  */
 import { resolve } from 'node:path';
-import { HelmxError, isAbsoluteTargetPath, type PluginPackageSource } from '@helmx/protocol';
+import {
+  HelmxError,
+  isAbsoluteTargetPath,
+  isReservedPluginNamespace,
+  type PluginPackageSource,
+} from '@helmx/protocol';
 
 /** Minimal npm specifier check: non-empty with no whitespace (semver parsing belongs to npm). */
 const NPM_SPEC_PATTERN = /^\S+$/;
@@ -112,8 +117,13 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
   if (raw !== raw.trim()) {
     throw new HelmxError('validation_error', `Plugin package source cannot have leading or trailing whitespace: ${raw}`, 400, { raw });
   }
-  if (raw.startsWith('builtin:') || raw.startsWith('builtin%3A')) {
-    throw new HelmxError('validation_error', `Plugin package source cannot use builtin: prefix (built-in plugins are not package-managed): ${raw}`, 400, { raw });
+  if (isReservedPluginNamespace(raw) || /^(?:builtin|core)%3a/i.test(raw)) {
+    throw new HelmxError(
+      'validation_error',
+      `Plugin package source cannot use reserved builtin: or core: namespace (built-in plugins and kernel core namespaces are not package-managed): ${raw}`,
+      400,
+      { raw },
+    );
   }
   if (raw.startsWith('file://')) {
     throw new HelmxError(
@@ -128,8 +138,8 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
     if (!NPM_SPEC_PATTERN.test(spec)) {
       throw new HelmxError('validation_error', `Invalid npm specifier: ${spec} (expected npm:<spec>)`, 400, { raw });
     }
-    if (spec.startsWith('builtin:')) {
-      throw new HelmxError('validation_error', `npm specifier cannot start with builtin: (${spec})`, 400, { raw });
+    if (isReservedPluginNamespace(spec)) {
+      throw new HelmxError('validation_error', `npm specifier cannot start with reserved builtin: or core: namespace (${spec})`, 400, { raw });
     }
     return { kind: 'npm', raw, spec };
   }
