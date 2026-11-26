@@ -91,6 +91,10 @@ export const DialogOverlay = React.forwardRef<
 
 export interface DialogContentProps extends React.ComponentPropsWithoutRef<typeof RadixDialog.Content> {}
 
+function isInsideToastOverlay(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('[data-helmx-toast-overlay]') !== null
+}
+
 /**
  * Dialog main content container:
  * binds the .modal style by default; supports the .modal-lg / .modal-fullscreen
@@ -99,7 +103,7 @@ export interface DialogContentProps extends React.ComponentPropsWithoutRef<typeo
 export const DialogContent = React.forwardRef<
   React.ComponentRef<typeof RadixDialog.Content>,
   DialogContentProps
->(function DialogContent({ className, style, ...props }, ref) {
+>(function DialogContent({ className, style, onPointerDownOutside, onInteractOutside, ...props }, ref) {
   const layer = React.useContext(OverlayLayerContext)
   const pluginScopeId = usePluginScopeId()
   const layeredStyle = layer === null
@@ -111,6 +115,18 @@ export const DialogContent = React.forwardRef<
       data-plugin-id={pluginScopeId}
       className={className ?? 'modal'}
       style={layeredStyle}
+      onPointerDownOutside={(event) => {
+        if (isInsideToastOverlay(event.target) || isInsideToastOverlay(event.detail.originalEvent.target)) {
+          event.preventDefault()
+        }
+        onPointerDownOutside?.(event)
+      }}
+      onInteractOutside={(event) => {
+        if (isInsideToastOverlay(event.target) || isInsideToastOverlay(event.detail.originalEvent.target)) {
+          event.preventDefault()
+        }
+        onInteractOutside?.(event)
+      }}
       {...props}
     />
   )

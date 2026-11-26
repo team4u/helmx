@@ -25,6 +25,7 @@ export const MEMORY_COPY = {
   textareaLabel: { en: 'Long-term memory', 'zh-CN': '长期记忆' },
   saving: { en: 'Saving…', 'zh-CN': '保存中…' },
   save: { en: 'Save memory', 'zh-CN': '保存记忆' },
+  savedNotice: { en: 'Long-term memory saved.', 'zh-CN': '长期记忆已保存。' },
   dirtyHint: {
     en: 'Unsaved changes (memory content is saved independently; it is not rolled back with "Cancel profile editing")',
     'zh-CN': '有未保存的修改（记忆内容独立保存，不随「取消角色编辑」回滚）',
@@ -42,6 +43,8 @@ export const MEMORY_COPY = {
   },
   dreamPause: { en: 'Pause auto', 'zh-CN': '暂停自动' },
   dreamResume: { en: 'Resume auto', 'zh-CN': '恢复自动' },
+  dreamPausedNotice: { en: 'Daily auto-organize paused.', 'zh-CN': '已暂停每日自动整理。' },
+  dreamResumedNotice: { en: 'Daily auto-organize resumed.', 'zh-CN': '已恢复每日自动整理。' },
   dreamGlobalHint: {
     en: 'The schedule is global for all profiles; pausing stops the daily consolidation only (collection keeps running, manual "Organize now" still works).',
     'zh-CN': '调度为全角色共用；暂停仅停止每日自动整理（候选照常收集，可随时手动「立即整理」）。',

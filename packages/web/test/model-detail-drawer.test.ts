@@ -733,3 +733,73 @@ test('ModelDetailDrawer: custom gateway create & delete confirm flow', { timeout
     container.remove()
   }
 })
+
+test('ModelDetailDrawer: saving omits inline status text and standalone save pushes unified toast', { timeout: 60_000 }, async () => {
+  const { assetsApi } = await import('../src/lib/api.js')
+  const originalSetCredential = assetsApi.setCredential
+  const originalFetch = globalThis.fetch
+  const provider: ProviderItem = {
+    id: 'openai',
+    name: 'OpenAI',
+    type: 'commercial',
+    configured: true,
+    modelsCount: 1,
+    models: [{ id: 'gpt-4o', name: 'GPT-4o', enabled: true }],
+  }
+
+  const store = makeTestStore()
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  try {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : (input as URL).toString()
+      if (path === '/api/models') {
+        return new Response(JSON.stringify({ models: [], thinkingLevels: {} }), { status: 200 })
+      }
+      return new Response(JSON.stringify([]), { status: 200 })
+    }) as typeof fetch
+    assetsApi.setCredential = async () => ({ ok: true })
+
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(ModelDetailDrawer, {
+            provider,
+            open: true,
+            inline: true,
+            onClose: () => {},
+          }),
+        ),
+      )
+    })
+
+    const apiKeyInput = container.querySelector('input[type="password"]') as HTMLInputElement
+    assert.ok(apiKeyInput)
+    await act(async () => {
+      typeIntoInput(apiKeyInput, 'sk-test-123456')
+    })
+
+    await act(async () => {
+      findButtonByText(container, 'Save configuration')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+
+    assert.doesNotMatch(container.textContent ?? '', /Configuration saved/, 'ModelDetailDrawer must not render inline Configuration saved text')
+    assert.ok(container.querySelector('[role="status"]') === null)
+    const notices = store.getNotices()
+    assert.equal(notices.length, 1)
+    assert.equal(notices[0]?.level, 'info')
+    assert.equal(notices[0]?.title, 'Provider configuration updated')
+    assert.match(notices[0]?.body ?? '', /openai/)
+  } finally {
+    globalThis.fetch = originalFetch
+    assetsApi.setCredential = originalSetCredential
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})

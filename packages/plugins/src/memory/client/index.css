@@ -62,9 +62,6 @@
   font-size: 11px;
   color: var(--fg-subtle);
 }
-.memory-dream-notice {
-  color: var(--fg-muted);
-}
 .memory-dream-diag {
   overflow-wrap: anywhere;
 }

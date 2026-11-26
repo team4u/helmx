@@ -69,13 +69,15 @@ describe("memory-client-interactions", () => {
     }
   }
 
-  function context(callAction: ClientContext['callAction']): ClientContext {
+  interface NotifyCall { message: string; tone: string }
+  function context(callAction: ClientContext['callAction'], notifications: NotifyCall[] = []): ClientContext {
     return {
       pluginId: 'builtin:memory', callAction,
       fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
       submitInput: async () => {},
       openScreen: () => {}, openSplitScreen: () => {}, openConversationDrawer: () => {},
-      openArtifact: () => {}, openWorkbench: () => {}, closeWorkbench: () => {}, notify: () => {},
+      openArtifact: () => {}, openWorkbench: () => {}, closeWorkbench: () => {},
+      notify: (message, tone = 'info') => { notifications.push({ message, tone }) },
       getPluginDoc: async () => undefined, getPluginSessionDoc: async () => undefined,
       theme: 'dark',
       locale: 'en',
@@ -84,7 +86,8 @@ describe("memory-client-interactions", () => {
   }
 
   async function mount(callAction: ClientContext['callAction']) {
-    let activeContext = context(callAction)
+    const notifications: NotifyCall[] = []
+    let activeContext = context(callAction, notifications)
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -98,7 +101,7 @@ describe("memory-client-interactions", () => {
     await render('a')
     let unmounted = false
     return {
-      host, render,
+      host, render, notifications,
       unmount() {
         if (unmounted) return
         unmounted = true
@@ -160,9 +163,11 @@ describe("memory-client-interactions", () => {
       assert.equal(editor(ui.host).value, 'B 修改')
       assert.ok(ui.host.querySelector('[role="alert"]') === null)
       assert.equal(calls.filter((call) => call.action === 'get' && call.profileId === 'a').length, 1)
+      assert.deepEqual(ui.notifications, [], 'stale A save must not emit saved toast after switching to B')
       await save(ui.host)
       const bSet = calls.find((call) => call.action === 'set' && call.profileId === 'b')
       assert.equal(bSet?.input.text, 'B 修改')
+      assert.deepEqual(ui.notifications, [{ message: 'Long-term memory saved.', tone: 'info' }])
     } finally { ui.unmount() }
   })
 
@@ -359,7 +364,8 @@ describe("memory-client-interactions", () => {
     try {
       await act(async () => { dreamRunButton(ui.host).click() })
       assert.equal(editor(ui.host).value, '原文\n- 整理新增行', '干净编辑区应刷新为整理后正文')
-      assert.match(ui.host.textContent!, /Dream applied \(2 candidates merged\)/)
+      assert.ok(ui.host.querySelector('.memory-dream-notice') === null, 'dream result must not render inline notice')
+      assert.deepEqual(ui.notifications, [{ message: 'Dream applied (2 candidates merged).', tone: 'info' }])
       assert.ok(statusCalls >= 2, '整理后应刷新 dream 状态')
       assert.equal(saveButton(ui.host).disabled, true, '编辑区与基线一致，保存不应显示可点')
       assert.doesNotMatch(ui.host.textContent!, /Unsaved changes/, '干净编辑区不得出现未保存提示')
@@ -381,8 +387,11 @@ describe("memory-client-interactions", () => {
       assert.match(ui.host.textContent!, /Unsaved changes/)
       await act(async () => { dreamRunButton(ui.host).click() })
       assert.equal(editor(ui.host).value, '我的未保存修改', '未保存草稿必须保留，绝不静默覆盖')
-      assert.match(ui.host.textContent!, /Dream applied \(2 candidates merged\)/)
-      assert.match(ui.host.textContent!, /Unsaved edits in the editor were kept/, '应警示保存草稿会覆盖整理结果')
+      assert.ok(ui.host.querySelector('.memory-dream-notice') === null)
+      assert.equal(ui.notifications.length, 1)
+      assert.equal(ui.notifications[0]?.tone, 'warning')
+      assert.match(ui.notifications[0]?.message ?? '', /Dream applied \(2 candidates merged\)/)
+      assert.match(ui.notifications[0]?.message ?? '', /Unsaved edits in the editor were kept/, '应警示保存草稿会覆盖整理结果')
       assert.match(ui.host.textContent!, /Unsaved changes/, '未保存提示保持')
       assert.equal(saveButton(ui.host).disabled, false, '脏草稿仍可显式保存')
     } finally { ui.unmount() }
@@ -408,7 +417,7 @@ describe("memory-client-interactions", () => {
       assert.match(ui.host.textContent!, /boom: dream_status 503/, '原始错误如实透出')
       statusFails = false
       await act(async () => { dreamRunButton(ui.host).click() })
-      assert.match(ui.host.textContent!, /Dream applied \(2 candidates merged\)/)
+      assert.deepEqual(ui.notifications, [{ message: 'Dream applied (2 candidates merged).', tone: 'info' }])
       assert.match(ui.host.textContent!, /daily 03:00/, '整理后状态行恢复')
       assert.equal(editor(ui.host).value, '原文\n- 整理新增行')
     } finally { ui.unmount() }
@@ -546,7 +555,7 @@ describe("memory-client-interactions", () => {
     try {
       await act(async () => { dreamRunButton(ui.host).click() })
       assert.equal(editor(ui.host).value, '原文', '刷新失败时编辑区不伪造新正文')
-      assert.match(ui.host.textContent!, /Dream applied \(2 candidates merged\)/, '整理本身的成果如实报告')
+      assert.deepEqual(ui.notifications, [{ message: 'Dream applied (2 candidates merged).', tone: 'info' }], '整理本身的成果如实报告')
       const alert = ui.host.querySelector('[role="alert"].memory-dream-refresh-error')
       assert.ok(alert !== null, '刷新失败必须有显式告警')
       assert.match(ui.host.textContent!, /failed to reload it; the editor still shows the previous version/)
@@ -556,6 +565,32 @@ describe("memory-client-interactions", () => {
       assert.equal(editor(ui.host).value, '原文\n- 整理新增行', '重试成功后编辑区追上整理后正文')
       assert.ok(ui.host.querySelector('[role="alert"].memory-dream-refresh-error') === null, '成功后告警消除')
       assert.match(ui.host.textContent!, /\/ 4000 chars/, '编辑区字数上限展示与 4000 硬上限一致')
+    } finally { ui.unmount() }
+  })
+
+  test('dream 自动整理开关切换推送暂停/恢复悬浮通知', { timeout: 60_000 }, async () => {
+    let autoEnabled = true
+    const action: ClientContext['callAction'] = async (name, input) => {
+      const id = String((input as { profileId?: string }).profileId ?? 'a')
+      if (name === 'get') return memory(id, '原文')
+      if (name === 'dream_status') return dreamStatus(id, { config: { enabled: autoEnabled, hour: 3, timezone: 'UTC' } })
+      if (name === 'dream_configure') {
+        autoEnabled = Boolean((input as { enabled?: boolean }).enabled)
+        return { enabled: autoEnabled }
+      }
+      return {}
+    }
+    const ui = await mount(action)
+    try {
+      const pauseBtn = [...ui.host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Pause auto')
+      assert.ok(pauseBtn !== undefined)
+      await act(async () => { pauseBtn.click() })
+      assert.deepEqual(ui.notifications[0], { message: 'Daily auto-organize paused.', tone: 'info' })
+
+      const resumeBtn = [...ui.host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Resume auto')
+      assert.ok(resumeBtn !== undefined)
+      await act(async () => { resumeBtn.click() })
+      assert.deepEqual(ui.notifications[1], { message: 'Daily auto-organize resumed.', tone: 'info' })
     } finally { ui.unmount() }
   })
 })

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
 import {
   Badge,
@@ -98,7 +98,6 @@ export function ModelDetailDrawer({
   const [refreshingCatalog, setRefreshingCatalog] = useState(false)
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null)
   const [saving, setSaving] = useState(false)
-  const [saveSuccess, setSaveSuccess] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleteGatewayConfirmOpen, setDeleteGatewayConfirmOpen] = useState(false)
@@ -106,30 +105,11 @@ export function ModelDetailDrawer({
   const [modelFilter, setModelFilter] = useState('')
   const [isExpanded, setIsExpanded] = useState(false)
 
-  const saveSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const clearSaveSuccessTimer = useCallback(() => {
-    if (saveSuccessTimerRef.current !== null) {
-      clearTimeout(saveSuccessTimerRef.current)
-      saveSuccessTimerRef.current = null
-    }
-  }, [])
-  const flashSaveSuccess = useCallback(() => {
-    clearSaveSuccessTimer()
-    setSaveSuccess(true)
-    saveSuccessTimerRef.current = setTimeout(() => {
-      saveSuccessTimerRef.current = null
-      setSaveSuccess(false)
-    }, 2400)
-  }, [clearSaveSuccessTimer])
-
-  useEffect(() => clearSaveSuccessTimer, [clearSaveSuccessTimer])
-
   const endpointEditable = isNewCustom || provider?.custom === true
   const canTestConnection = Boolean(!isNewCustom && provider && (onTestConnection || provider.dynamic))
   const filterEligible = isProviderFilterEligible(provider, catalogModels)
 
   useEffect(() => {
-    clearSaveSuccessTimer()
     if (isNewCustom || !provider) {
       setCustomId('')
       setCustomLabel('')
@@ -151,10 +131,9 @@ export function ModelDetailDrawer({
     }
     setTestResult(null)
     setSaveError(null)
-    setSaveSuccess(false)
     setModelFilter('')
     setIsExpanded(false)
-  }, [provider, isNewCustom, clearSaveSuccessTimer])
+  }, [provider, isNewCustom])
 
   const handleToggleModel = (modelId: string) => {
     setModels((prev) =>
@@ -233,7 +212,6 @@ export function ModelDetailDrawer({
       } else if (res.aborted) {
         setSaveError(t('models.refresh.cancelled'))
       } else {
-        flashSaveSuccess()
         actions?.pushNotice?.({
           type: 'notification',
           level: 'info',
@@ -265,7 +243,6 @@ export function ModelDetailDrawer({
         body: t('models.notice.secretDeletedBody', { name: provider.name }),
       })
       setDeleteConfirmOpen(false)
-      flashSaveSuccess()
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -300,8 +277,6 @@ export function ModelDetailDrawer({
         t,
       )
       if (validationError !== null) {
-        clearSaveSuccessTimer()
-        setSaveSuccess(false)
         setSaveError(validationError)
         return
       }
@@ -337,8 +312,6 @@ export function ModelDetailDrawer({
         t,
       )
       if (validationError !== null) {
-        clearSaveSuccessTimer()
-        setSaveSuccess(false)
         setSaveError(validationError)
         return
       }
@@ -364,8 +337,13 @@ export function ModelDetailDrawer({
         if (actions?.refreshAssets) {
           await actions.refreshAssets()
         }
+        actions?.pushNotice?.({
+          type: 'notification',
+          level: 'info',
+          title: t('models.notice.providerUpdated'),
+          body: t('models.notice.providerUpdatedBody', { providerId: provider.id }),
+        })
       }
-      flashSaveSuccess()
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -409,11 +387,6 @@ export function ModelDetailDrawer({
         footer={
           <Stack direction="horizontal" gap="sm" align="center" justify="between" className="flex-1">
             <div className="flex-1">
-              {saveSuccess && (
-                <span className="text-subtle" role="status">
-                  {t('models.saveSuccess')}
-                </span>
-              )}
               {saveError && (
                 <Callout tone="err">
                   <span className="callout-text" role="alert">{saveError}</span>

@@ -32,7 +32,7 @@ import {
 } from './models.ts'
 import {
   TIERS_COPY as C, buildTiersPickerCopy, tiersActionFailed, tiersPickModelWithHint,
-  tiersTemplateAppliedNotice, tiersTemplateDeleteConfirmBody, tiersTemplateSavedNotice,
+  tiersTemplateAppliedNotice, tiersTemplateDeleteConfirmBody, tiersTemplateDeletedNotice, tiersTemplateSavedNotice,
 } from './copy.ts'
 import './styles.css'
 
@@ -58,7 +58,6 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
   const [initialized, setInitialized] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
   const [tplForm, setTplForm] = useState({ id: '', name: '', desc: '' })
   const [pendingDelete, setPendingDelete] = useState<TierTemplateView | null>(null)
   const nextRowCounter = useRef(1)
@@ -74,16 +73,16 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
     }
   }, [rawDoc, parsed.tiers, initialized])
 
-  const mutateDraft = (updater: (prev: TierDraftRow[]) => TierDraftRow[]): void => { setError(null); setNotice(null); setDraft(updater) }
+  const mutateDraft = (updater: (prev: TierDraftRow[]) => TierDraftRow[]): void => { setError(null); setDraft(updater) }
 
   const runAction = async (fn: () => Promise<string | void>): Promise<void> => {
-    setError(null); setNotice(null); setBusy(true)
-    try { const msg = await fn(); if (msg) setNotice(msg) } catch (err) { setError(tiersActionFailed(err, locale)) } finally { setBusy(false) }
+    setError(null); setBusy(true)
+    try { const msg = await fn(); if (msg) ctx.notify(msg) } catch (err) { setError(tiersActionFailed(err, locale)) } finally { setBusy(false) }
   }
 
   const saveAll = (): Promise<void> => {
     const checked = validateDraftRows(draft)
-    if (!checked.ok) { setNotice(null); setError(t(VALIDATION_ERROR_COPY[checked.code])); return Promise.resolve() }
+    if (!checked.ok) { setError(t(VALIDATION_ERROR_COPY[checked.code])); return Promise.resolve() }
     return runAction(async () => {
       await ctx.callAction('replace', { tiers: checked.tiers })
       setDraft(tiersRecordToDraftRows(checked.tiers))
@@ -95,7 +94,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
     const id = tplForm.id.trim()
     const name = tplForm.name.trim()
     const desc = tplForm.desc.trim()
-    if (!id || !name) { setNotice(null); setError(t(C.errTemplateFields)); return Promise.resolve() }
+    if (!id || !name) { setError(t(C.errTemplateFields)); return Promise.resolve() }
     return runAction(async () => {
       await ctx.callAction('save_template', { id, name, ...(desc ? { description: desc } : {}) })
       setTplForm({ id: '', name: '', desc: '' })
@@ -154,7 +153,6 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
       </ScreenToolbar>
 
       {error && <Callout tone="err">{error}</Callout>}
-      {notice && <Callout tone="ok">{notice}</Callout>}
 
       <ScreenSection title={t(C.activeSection)}>
         {draft.length === 0 ? (
@@ -321,7 +319,12 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
         onConfirm={() => {
           const target = pendingDelete
           setPendingDelete(null)
-          if (target) void runAction(() => ctx.callAction('delete_template', { id: target.id }).then(() => undefined))
+          if (target) {
+            void runAction(async () => {
+              await ctx.callAction('delete_template', { id: target.id })
+              return tiersTemplateDeletedNotice(target.name, locale)
+            })
+          }
         }}
         onCancel={() => setPendingDelete(null)}
       />

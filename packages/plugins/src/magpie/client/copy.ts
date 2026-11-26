@@ -12,6 +12,10 @@ import { resolveLocalizedText } from '@helmx/plugin-client'
 export const MAGPIE_TITLE: LocalizedText = { en: 'Magpie Gateway', 'zh-CN': 'Magpie 网关' }
 export const MAGPIE_REFRESHING: LocalizedText = { en: 'Refreshing…', 'zh-CN': '刷新中...' }
 export const MAGPIE_REFRESH: LocalizedText = { en: 'Refresh model catalog', 'zh-CN': '刷新模型目录' }
+export const MAGPIE_REFRESHED_NOTICE: LocalizedText = {
+  en: 'Magpie model catalog refreshed.',
+  'zh-CN': '已刷新 Magpie 模型目录。',
+}
 export const MAGPIE_LOADING: LocalizedText = { en: 'Loading gateway status…', 'zh-CN': '网关状态读取中...' }
 
 /** Boolean yes/no display. */

@@ -86,6 +86,8 @@ export interface PluginDetailDrawerProps {
 
 export interface PluginConfigFormProps {
   pluginId: string
+  /** Optional display name used in saved notification toast; defaults to pluginId. */
+  pluginName?: string
   config: PluginConfigResponse
   /** 配置字段 label/description（LocalizedText）的解析 locale。 */
   locale: HelmxLocale
@@ -112,12 +114,14 @@ function initialFormValues(config: PluginConfigResponse): Record<string, ConfigV
  */
 export function PluginConfigForm({
   pluginId,
+  pluginName,
   config,
   locale,
   onSaved,
   inline = false,
 }: PluginConfigFormProps): React.JSX.Element {
   const t = useMemo(() => createWebTranslator(locale), [locale])
+  const actions = useOptionalStoreActions()
   const nodes = useOptionalNodes() ?? []
   const profiles = useOptionalProfiles() ?? []
   const entries = Object.entries(config.schema ?? {})
@@ -126,23 +130,11 @@ export function PluginConfigForm({
   const [values, setValues] = useState<Record<string, ConfigValue>>(() => initialFormValues(config))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
   const [resettingKey, setResettingKey] = useState<string | null>(null)
-  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     setValues(initialFormValues(config))
   }, [config])
-
-  useEffect(
-    () => () => {
-      if (savedTimerRef.current !== null) {
-        clearTimeout(savedTimerRef.current)
-        savedTimerRef.current = null
-      }
-    },
-    [],
-  )
 
   if (entries.length === 0) {
     return <HelperText>{t('plugins.config.empty')}</HelperText>
@@ -153,12 +145,12 @@ export function PluginConfigForm({
     setError(null)
     try {
       await pluginsApi.setConfig(pluginId, buildPluginConfigPayload(config.schema ?? {}, values))
-      setSaved(true)
-      if (savedTimerRef.current !== null) clearTimeout(savedTimerRef.current)
-      savedTimerRef.current = setTimeout(() => {
-        savedTimerRef.current = null
-        setSaved(false)
-      }, 1600)
+      actions?.pushNotice({
+        type: 'notification',
+        level: 'info',
+        title: t('plugins.config.savedNoticeTitle'),
+        body: t('plugins.config.savedNoticeBody', { name: pluginName || pluginId }),
+      })
       onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -171,8 +163,19 @@ export function PluginConfigForm({
   const resetField = async (key: string) => {
     setResettingKey(key)
     setError(null)
+    const fieldSchema = config.schema?.[key]
+    const fieldTitle =
+      fieldSchema?.label !== undefined ? resolveLocalizedText(fieldSchema.label, locale) || key : key
     try {
       await pluginsApi.setConfig(pluginId, buildResetFieldPayload(key))
+      actions?.pushNotice({
+        type: 'notification',
+        level: 'info',
+        title: t(fieldSchema?.secret ? 'plugins.config.clearedNoticeTitle' : 'plugins.config.resetNoticeTitle'),
+        body: t(fieldSchema?.secret ? 'plugins.config.clearedNoticeBody' : 'plugins.config.resetNoticeBody', {
+          field: fieldTitle,
+        }),
+      })
       onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -367,7 +370,7 @@ export function PluginConfigForm({
       )}
       <div>
         <Button variant="primary" size="sm" icon="check" pending={saving} onClick={() => void save()}>
-          {saved ? t('plugins.config.saved') : t('plugins.config.save')}
+          {t('plugins.config.save')}
         </Button>
       </div>
     </Stack>
@@ -1072,6 +1075,7 @@ export function PluginDetailDrawer({
               <PluginConfigForm
                 key={plugin.id}
                 pluginId={plugin.id}
+                pluginName={pluginTitle}
                 config={config}
                 locale={locale}
                 inline={inline}

@@ -257,7 +257,6 @@ export const modelsMessages = {
   },
 
   // Drawer footer
-  'models.saveSuccess': { en: 'Configuration saved', 'zh-CN': '配置已成功保存' },
   'models.saving': { en: 'Saving...', 'zh-CN': '保存中...' },
   'models.saveConfig': { en: 'Save configuration', 'zh-CN': '保存配置' },
   'models.errors.customGatewayEndpointEmpty': {

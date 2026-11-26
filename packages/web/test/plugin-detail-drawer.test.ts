@@ -1520,3 +1520,81 @@ test('PluginDetailDrawer：切换插件清空占用确认与错误、丢弃迟�
     container.remove()
   }
 })
+
+test('PluginConfigForm：保存、重置与清除密钥均推送统一悬浮通知且不改写按钮为 Saved', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const originalSetConfig = pluginsApi.setConfig
+  pluginsApi.setConfig = async () => ({ ok: true })
+  const store = makeTestStore()
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(PluginConfigForm, {
+            pluginId: 'test:custom',
+            pluginName: 'My Plugin',
+            locale: 'en',
+            config: {
+              values: { endpoint: 'http://10.0.0.1:9000', apiKey: '******' },
+              sources: { endpoint: 'configured', apiKey: 'configured' },
+              schema: {
+                endpoint: { type: 'string', label: 'Endpoint', default: 'http://127.0.0.1:3425' },
+                apiKey: { type: 'string', label: 'Access token', secret: true },
+              },
+            },
+            onSaved: () => {},
+          }),
+        ),
+      )
+    })
+
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Save configuration'),
+    )
+    assert.ok(saveBtn !== undefined)
+    await act(async () => {
+      saveBtn.click()
+    })
+    assert.match(saveBtn.textContent ?? '', /Save configuration/, 'save button keeps Save configuration label instead of inline Saved')
+    assert.equal(store.getNotices().length, 1)
+    assert.equal(store.getNotices()[0]?.level, 'info')
+    assert.equal(store.getNotices()[0]?.title, 'Plugin configuration saved')
+    assert.equal(store.getNotices()[0]?.body, 'My Plugin configuration updated')
+
+    const resetBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Reset'),
+    )
+    assert.ok(resetBtn !== undefined)
+    await act(async () => {
+      resetBtn.click()
+    })
+    assert.equal(store.getNotices().length, 2)
+    assert.equal(store.getNotices()[1]?.level, 'info')
+    assert.equal(store.getNotices()[1]?.title, 'Configuration field reset')
+    assert.equal(store.getNotices()[1]?.body, 'Endpoint restored to default')
+
+    const clearBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Clear'),
+    )
+    assert.ok(clearBtn !== undefined)
+    await act(async () => {
+      clearBtn.click()
+    })
+    assert.equal(store.getNotices().length, 3)
+    assert.equal(store.getNotices()[2]?.level, 'info')
+    assert.equal(store.getNotices()[2]?.title, 'Secret cleared')
+    assert.equal(store.getNotices()[2]?.body, 'Access token cleared')
+  } finally {
+    pluginsApi.setConfig = originalSetConfig
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})

@@ -127,6 +127,26 @@ export function triggersActionFailed(actionId: string, message: string, locale: 
   )
 }
 
+/** Row & drawer action success toast notices. */
+export function triggersCronTriggeredNotice(id: string, locale: HelmxLocale): string {
+  return resolveLocalizedText(
+    { en: `Triggered cron job "${id}".`, 'zh-CN': `已触发定时任务「${id}」。` },
+    locale,
+  )
+}
+export function triggersCronDeletedNotice(id: string, locale: HelmxLocale): string {
+  return resolveLocalizedText(
+    { en: `Deleted cron job "${id}".`, 'zh-CN': `已删除定时任务「${id}」。` },
+    locale,
+  )
+}
+export function triggersWebhookDeletedNotice(id: string, locale: HelmxLocale): string {
+  return resolveLocalizedText(
+    { en: `Deleted webhook endpoint "${id}".`, 'zh-CN': `已删除 Webhook 端点「${id}」。` },
+    locale,
+  )
+}
+
 /** Delivery target summary fragments (assembled by models.ts formatTriggerTargetSummary). */
 export function triggerTargetConversation(conversationId: number, locale: HelmxLocale): string {
   return resolveLocalizedText(

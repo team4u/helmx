@@ -603,6 +603,11 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
     // 模态已关闭
     modal = host.querySelector('.plugin-install-modal')
     assert.ok(modal === null, '安装成功后模态必须关闭')
+
+    // 成功安装后推送统一悬浮通知
+    const installNotice = store.getNotices().find((n) => n.title === 'Plugin installed')
+    assert.ok(installNotice !== undefined && installNotice.level === 'info')
+    assert.match(installNotice.body ?? '', /my-plugin/)
   } finally {
     pluginsApi.install = originalInstall
     pluginsApi.list = originalList

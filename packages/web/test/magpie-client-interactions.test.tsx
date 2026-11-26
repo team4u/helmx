@@ -55,10 +55,12 @@ describe("magpie-client-interactions", () => {
 
   interface SpyCtx extends PluginClientContextType {
     actionCalls: Array<{ actionId: string; input: unknown }>
+    notifications: Array<{ message: string; tone: string }>
   }
 
   function makeSpyCtx(locale: HelmxLocale = 'en'): SpyCtx {
     const actionCalls: Array<{ actionId: string; input: unknown }> = []
+    const notifications: Array<{ message: string; tone: string }> = []
     const base: PluginClientContextType = {
       pluginId: 'builtin:magpie',
       callAction: async (actionId, input) => {
@@ -73,14 +75,16 @@ describe("magpie-client-interactions", () => {
       openArtifact: () => {},
       openWorkbench: () => {},
       closeWorkbench: () => {},
-      notify: () => {},
+      notify: (message, tone = 'info') => {
+        notifications.push({ message, tone })
+      },
       getPluginDoc: async () => undefined,
       getPluginSessionDoc: async () => undefined,
       theme: 'dark',
       locale,
       translate: (text) => resolveLocalizedText(text, locale),
     }
-    return Object.assign(base, { actionCalls })
+    return Object.assign(base, { actionCalls, notifications })
   }
 
   async function mount(
@@ -309,6 +313,7 @@ describe("magpie-client-interactions", () => {
         [{ actionId: 'refresh', input: {} }],
         '点击触发 refresh 动作',
       )
+      assert.deepEqual(spy.notifications, [{ message: 'Magpie model catalog refreshed.', tone: 'info' }])
     } finally {
       unmount()
     }
@@ -324,6 +329,7 @@ describe("magpie-client-interactions", () => {
       })
       await act(async () => {})
       assert.match(host2.textContent ?? '', /网关不可达/, '刷新失败显式展示错误')
+      assert.deepEqual(failing.notifications, [])
     } finally {
       unmount2()
     }

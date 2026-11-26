@@ -92,6 +92,9 @@ export const tiersTemplateAppliedNotice = (name: string, locale: HelmxLocale): s
 export const tiersTemplateSavedNotice = (name: string, locale: HelmxLocale): string =>
   locale === 'zh-CN' ? `已保存模板「${name}」。` : `Saved template "${name}".`
 
+export const tiersTemplateDeletedNotice = (name: string, locale: HelmxLocale): string =>
+  locale === 'zh-CN' ? `已删除模板「${name}」。` : `Deleted template "${name}".`
+
 export const tiersActionFailed = (err: unknown, locale: HelmxLocale): string => {
   const detail = err instanceof Error ? err.message : String(err)
   return locale === 'zh-CN' ? `操作失败：${detail}` : `Operation failed: ${detail}`

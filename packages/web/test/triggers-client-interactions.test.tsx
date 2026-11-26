@@ -43,12 +43,14 @@ describe("triggers-client-interactions", () => {
     screenCalls: string[]
     drawerCalls: number[]
     actionCalls: Array<{ actionId: string; input: unknown }>
+    notifications: Array<{ message: string; tone: string }>
   }
 
   function makeSpyCtx(locale: HelmxLocale = 'en'): SpyCtx {
     const screenCalls: string[] = []
     const drawerCalls: number[] = []
     const actionCalls: Array<{ actionId: string; input: unknown }> = []
+    const notifications: Array<{ message: string; tone: string }> = []
     const base: PluginClientContextType = {
       pluginId: 'builtin:triggers',
       callAction: async (actionId, input) => {
@@ -67,14 +69,16 @@ describe("triggers-client-interactions", () => {
       openArtifact: () => {},
       openWorkbench: () => {},
       closeWorkbench: () => {},
-      notify: () => {},
+      notify: (message, tone = 'info') => {
+        notifications.push({ message, tone })
+      },
       getPluginDoc: async () => undefined,
       getPluginSessionDoc: async () => undefined,
       theme: 'dark',
       locale,
       translate: (text) => resolveLocalizedText(text, locale),
     }
-    return Object.assign(base, { screenCalls, drawerCalls, actionCalls })
+    return Object.assign(base, { screenCalls, drawerCalls, actionCalls, notifications })
   }
 
   async function mount(
@@ -212,6 +216,7 @@ describe("triggers-client-interactions", () => {
       await act(async () => {
         release?.()
       })
+      assert.deepEqual(spy.notifications[0], { message: 'Triggered cron job "daily-report".', tone: 'info' })
       assert.equal(trigger!.getAttribute('aria-busy'), null, '完成后移除 aria-busy')
       for (const b of allRowButtons) {
         assert.equal(b.disabled, false, `完成后恢复可点：${b.textContent}`)
@@ -255,6 +260,7 @@ describe("triggers-client-interactions", () => {
       await act(async () => {
         release?.()
       })
+      assert.deepEqual(spy.notifications[1], { message: 'Deleted cron job "daily-report".', tone: 'info' })
 
       // Confirm webhook delete
       await act(async () => {
@@ -278,6 +284,7 @@ describe("triggers-client-interactions", () => {
       await act(async () => {
         release?.()
       })
+      assert.deepEqual(spy.notifications[2], { message: 'Deleted webhook endpoint "ci".', tone: 'info' })
     } finally {
       unmount()
     }

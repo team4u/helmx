@@ -14,6 +14,7 @@ import {
   LoadingState,
   usePluginAction,
   usePluginConfig,
+  usePluginContext,
   usePluginDoc,
   usePluginLocale,
   usePluginTranslator,
@@ -48,6 +49,7 @@ import {
   MAGPIE_QUOTA_EMPTY,
   MAGPIE_QUOTA_SECTION,
   MAGPIE_REFRESH,
+  MAGPIE_REFRESHED_NOTICE,
   MAGPIE_REFRESHING,
   MAGPIE_TITLE,
   magpieRefreshIntervalLabel,
@@ -155,6 +157,7 @@ function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNo
 
 /** Magpie gateway settings panel (status + diagnostics + optional quotas + refresh action). */
 export function MagpieSettingsPanel(): ReactNode {
+  const ctx = usePluginContext()
   const t = usePluginTranslator()
   const doc = usePluginDoc<MagpieStatusView>('status')
   const config = usePluginConfig()
@@ -164,6 +167,7 @@ export function MagpieSettingsPanel(): ReactNode {
   const refreshAction = usePluginAction({
     onSuccess: () => {
       noteMagpieManualRefresh()
+      ctx.notify(t(MAGPIE_REFRESHED_NOTICE))
     },
   })
 

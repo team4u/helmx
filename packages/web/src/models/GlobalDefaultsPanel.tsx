@@ -84,21 +84,15 @@ export function GlobalDefaultsPanel({
   )
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [saveSuccess, setSaveSuccess] = useState(false)
   const syncGeneration = useRef(0)
   const saveGeneration = useRef(0)
   const mountedRef = useRef(true)
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
       saveGeneration.current += 1
-      if (saveTimerRef.current !== null) {
-        clearTimeout(saveTimerRef.current)
-        saveTimerRef.current = null
-      }
     }
   }, [])
 
@@ -174,12 +168,6 @@ export function GlobalDefaultsPanel({
         title: t('models.defaults.noticeUpdated'),
         body: noticeBody,
       })
-      setSaveSuccess(true)
-      if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current)
-      saveTimerRef.current = setTimeout(() => {
-        saveTimerRef.current = null
-        if (mountedRef.current) setSaveSuccess(false)
-      }, 2400)
     } catch (err) {
       if (!mountedRef.current || gen !== saveGeneration.current) return
       setSaveError(err instanceof Error ? err.message : String(err))
@@ -344,9 +332,6 @@ export function GlobalDefaultsPanel({
           <Button variant="ghost" onClick={handleReset} disabled={saving}>
             {t('models.defaults.reset')}
           </Button>
-          {saveSuccess && (
-            <span className="text-subtle" role="status">{t('models.saveSuccess')}</span>
-          )}
         </Stack>
         {saveError && (
           <Callout tone="err">

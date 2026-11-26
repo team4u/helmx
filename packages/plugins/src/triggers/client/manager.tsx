@@ -103,6 +103,9 @@ import {
   TRIGGERS_WEBHOOK_SECTION,
   triggersActionFailed,
   triggersConfirmDeleteBody,
+  triggersCronDeletedNotice,
+  triggersCronTriggeredNotice,
+  triggersWebhookDeletedNotice,
 } from './copy.ts'
 
 function ActionError({ message }: { message: string }): ReactNode {
@@ -164,6 +167,7 @@ function CronTable({
   onSelect: (id: string) => void
   onRequestDelete: (id: string) => void
 }): ReactNode {
+  const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
   return (
@@ -239,7 +243,16 @@ function CronTable({
                       iconName="zap"
                       disabled={actions.pending}
                       pending={actions.pendingKey === `trigger:${job.id}`}
-                      onClick={() => void actions.run('cron_trigger', { id: job.id }, { key: `trigger:${job.id}` })}
+                      onClick={() =>
+                        void actions.run(
+                          'cron_trigger',
+                          { id: job.id },
+                          {
+                            key: `trigger:${job.id}`,
+                            onSuccess: () => ctx.notify(triggersCronTriggeredNotice(job.id, locale)),
+                          },
+                        )
+                      }
                     />
                     <RowAction
                       label={t(TRIGGERS_DELETE)}
@@ -511,7 +524,16 @@ function TriggerDetailDrawer({
               icon="zap"
               disabled={actions.pending}
               pending={actions.pendingKey === `trigger:${cronJob.id}`}
-              onClick={() => void actions.run('cron_trigger', { id: cronJob.id }, { key: `trigger:${cronJob.id}` })}
+              onClick={() =>
+                void actions.run(
+                  'cron_trigger',
+                  { id: cronJob.id },
+                  {
+                    key: `trigger:${cronJob.id}`,
+                    onSuccess: () => ctx.notify(triggersCronTriggeredNotice(cronJob.id, locale)),
+                  },
+                )
+              }
             >
               {t(TRIGGERS_TRIGGER_NOW)}
             </Button>
@@ -632,6 +654,7 @@ function TriggerDetailDrawer({
 export function TriggersManagerScreen(
   props: ScreenProps & { inlineDrawer?: boolean },
 ): ReactNode {
+  const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
   const actions = usePluginAction({
@@ -656,9 +679,23 @@ export function TriggersManagerScreen(
     if (target === null) return
     setPendingDelete(null)
     if (target.kind === 'cron') {
-      void actions.run('cron_delete', { id: target.id }, { key: `delete:${target.id}` })
+      void actions.run(
+        'cron_delete',
+        { id: target.id },
+        {
+          key: `delete:${target.id}`,
+          onSuccess: () => ctx.notify(triggersCronDeletedNotice(target.id, locale)),
+        },
+      )
     } else {
-      void actions.run('webhook_delete', { id: target.id }, { key: `webhook-delete:${target.id}` })
+      void actions.run(
+        'webhook_delete',
+        { id: target.id },
+        {
+          key: `webhook-delete:${target.id}`,
+          onSuccess: () => ctx.notify(triggersWebhookDeletedNotice(target.id, locale)),
+        },
+      )
     }
   }
 

@@ -47,7 +47,6 @@ interface PanelState {
   error: string | null
   busy: Operation | null
   dreamStatus: DreamStatusResult | null
-  dreamNotice: string | null
   dreamError: string | null
   dreamBusy: DreamOperation | null
   dreamRefreshFailed: boolean
@@ -61,7 +60,6 @@ const emptyPanel = (profileId: string, generation: number, loading = false): Pan
   error: null,
   busy: loading ? 'load' : null,
   dreamStatus: null,
-  dreamNotice: null,
   dreamError: null,
   dreamBusy: loading ? 'status' : null,
   dreamRefreshFailed: false,
@@ -84,9 +82,11 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
   const currentProfile = useRef(effectiveId)
   const panelRef = useRef(panel)
   const callAction = useRef(ctx.callAction)
+  const notifyRef = useRef(ctx.notify)
 
   currentProfile.current = effectiveId
   callAction.current = ctx.callAction
+  notifyRef.current = ctx.notify
   panelRef.current = panel
 
   const isCurrent = useCallback(
@@ -184,16 +184,18 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
     const targetId = effectiveId
     const token = generation.current
     if (targetId === '' || view.dreamBusy !== null || view.busy !== null) return
-    patchPanel(targetId, token, { dreamBusy: 'run', dreamNotice: null, dreamError: null })
+    patchPanel(targetId, token, { dreamBusy: 'run', dreamError: null })
     try {
       const result = (await callAction.current('dream', { profileId: targetId })) as DreamRunResult
       if (!isCurrent(targetId, token)) return
       let notice = memoryDreamRunResult(result, locale)
+      let keptDirty = false
       if (result.applied && (await refreshMemoryAfterDream(targetId, token)) === 'kept-dirty') {
+        keptDirty = true
         notice = `${notice} ${t(C.dreamDraftKept)}`
       }
       if (!isCurrent(targetId, token)) return
-      patchPanel(targetId, token, { dreamNotice: notice })
+      notifyRef.current(notice, result.conflict || keptDirty ? 'warning' : 'info')
       await loadDreamStatus(targetId, token)
     } catch (err) {
       if (!isCurrent(targetId, token)) return
@@ -219,9 +221,12 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
     const targetId = effectiveId
     const token = generation.current
     if (targetId === '' || view.dreamStatus === null || view.dreamBusy !== null) return
-    patchPanel(targetId, token, { dreamBusy: 'auto', dreamNotice: null, dreamError: null })
+    const nextEnabled = !view.dreamStatus.config.enabled
+    patchPanel(targetId, token, { dreamBusy: 'auto', dreamError: null })
     try {
-      await callAction.current('dream_configure', { enabled: !view.dreamStatus.config.enabled })
+      await callAction.current('dream_configure', { enabled: nextEnabled })
+      if (!isCurrent(targetId, token)) return
+      notifyRef.current(t(nextEnabled ? C.dreamResumedNotice : C.dreamPausedNotice), 'info')
       await loadDreamStatus(targetId, token)
     } catch (err) {
       if (!isCurrent(targetId, token)) return
@@ -265,6 +270,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
         memory: fresh,
         ...(prev.draft === submittedText ? { draft: fresh.content } : {}),
       }))
+      notifyRef.current(t(C.savedNotice), 'info')
     } catch (err) {
       if (!isCurrent(targetId, token, req)) return
       patchPanel(targetId, token, { error: errorMessage(err) })
@@ -357,7 +363,6 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
             targetId={effectiveId}
             disabled={disabled}
             status={view.dreamStatus}
-            notice={view.dreamNotice}
             error={view.dreamError}
             busy={view.dreamBusy}
             refreshFailed={view.dreamRefreshFailed}
@@ -376,7 +381,6 @@ interface MemoryDreamBlockProps {
   targetId: string
   disabled: boolean
   status: DreamStatusResult | null
-  notice: string | null
   error: string | null
   busy: DreamOperation | null
   refreshFailed: boolean
@@ -389,7 +393,7 @@ interface MemoryDreamBlockProps {
 function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
   const t = usePluginTranslator()
   const locale = usePluginLocale()
-  const { status, notice, error, busy, disabled } = props
+  const { status, error, busy, disabled } = props
   const row = status?.profiles.find((p) => p.profileId === props.targetId)
   const autoConfig = status?.config ?? null
   const statusLoading = status === null && error === null
@@ -440,7 +444,6 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
           </Button>
         </div>
       )}
-      {notice !== null && <div className="text-subtle memory-dream-notice">{notice}</div>}
       {error !== null && <ErrorText live className="memory-section-error">{error}</ErrorText>}
       <div className="text-subtle">{t(C.dreamGlobalHint)}</div>
     </div>

@@ -34,7 +34,7 @@ function ToastOverlayList({ notices }: { notices: ReadonlyArray<ToastNotice> }) 
   const { t } = useWebLocale()
 
   return (
-    <div className="toast-overlay">
+    <div className="toast-overlay" data-helmx-toast-overlay="true">
       {notices.map((n) => {
         const toneClass =
           n.level === 'error'

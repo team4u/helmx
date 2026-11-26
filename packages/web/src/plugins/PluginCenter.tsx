@@ -240,6 +240,13 @@ export function PluginCenter({
         title: t('plugins.notice.installEnableFailedTitle'),
         body: `${enableError.code}: ${enableError.message}`,
       })
+    } else {
+      pushNotice({
+        type: 'notification',
+        level: 'info',
+        title: t('plugins.package.installNoticeTitle'),
+        body: t('plugins.package.installNoticeBody', { id: pluginId }),
+      })
     }
   }
 

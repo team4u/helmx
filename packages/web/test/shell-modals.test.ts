@@ -1,3 +1,4 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
@@ -1040,6 +1041,7 @@ test('ToastOverlay：悬停或聚焦暂停自动关闭计时器，移开后恢�
     })
     const toastEl = container.querySelector<HTMLElement>('.toast-item')
     assert.ok(toastEl !== null, 'toast renders immediately')
+    assert.ok(container.querySelector('.toast-overlay[data-helmx-toast-overlay="true"]') !== null, 'toast overlay carries marker attribute')
 
     // Mouse enter pauses auto-dismiss past the original 90ms window
     await act(async () => {
@@ -1054,6 +1056,70 @@ test('ToastOverlay：悬停或聚焦暂停自动关闭计时器，移开后恢�
     })
     await waitFor(() => store.getNotices().length === 0, { timeoutMs: 2000, intervalMs: 15 })
     assert.ok(container.querySelector('.toast-item') === null, 'toast disappears after hover ends')
+  } finally {
+    store.dispose()
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('ToastOverlay：在 Radix DetailDrawer 打开时点击关闭 Toast 不触发抽屉关闭', { timeout: 60_000 }, async () => {
+  const { act } = await import('react')
+  const ReactDOMClient = await import('react-dom/client')
+  const { DetailDrawer } = await import('@helmx/plugin-client')
+  const { HelmxExternalStore } = await import('../src/lib/helmx-store.js')
+  const { parseLocationHash } = await import('../src/lib/url-hash-model.js')
+  const { ToastOverlay } = await import('../src/shell/ToastOverlay.js')
+
+  const store = new HelmxExternalStore(parseLocationHash('#/c/1'))
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  let drawerCloseCount = 0
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(
+            React.Fragment,
+            null,
+            e(DetailDrawer, {
+              open: true,
+              onClose: () => {
+                drawerCloseCount += 1
+              },
+              title: 'Drawer title',
+              children: e('div', null, 'Body'),
+            }),
+            e(ToastOverlay),
+          ),
+        ),
+      )
+    })
+    // Wait for Radix DismissableLayer's setTimeout(0) outside-listener registration
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+
+    await act(async () => {
+      store.pushNotice({ type: 'notification', level: 'info', title: 'Configuration updated' })
+    })
+
+    const closeBtn = container.querySelector<HTMLButtonElement>('.toast-overlay[data-helmx-toast-overlay="true"] .toast-close-btn')
+    assert.ok(closeBtn !== null, 'toast close button renders inside marked toast overlay')
+
+    await act(async () => {
+      closeBtn.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }))
+      closeBtn.click()
+    })
+
+    assert.equal(store.getNotices().length, 0, 'clicking toast close button dismisses toast')
+    assert.equal(drawerCloseCount, 0, 'clicking toast inside ToastOverlay must not close open DetailDrawer')
   } finally {
     store.dispose()
     await act(async () => {

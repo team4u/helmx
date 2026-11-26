@@ -118,11 +118,13 @@ describe("tiers-client-interactions", () => {
   interface SpyCtx extends PluginClientContextType {
     actionCalls: Array<{ actionId: string; input: unknown }>
     openedScreens: string[]
+    notifications: Array<{ message: string; tone: string }>
   }
 
   function makeSpyCtx(): SpyCtx {
     const actionCalls: Array<{ actionId: string; input: unknown }> = []
     const openedScreens: string[] = []
+    const notifications: Array<{ message: string; tone: string }> = []
     const base: PluginClientContextType = {
       pluginId: 'builtin:tiers',
       callAction: async (actionId, input) => {
@@ -139,14 +141,16 @@ describe("tiers-client-interactions", () => {
       openArtifact: () => {},
       openWorkbench: () => {},
       closeWorkbench: () => {},
-      notify: () => {},
+      notify: (message, tone = 'info') => {
+        notifications.push({ message, tone })
+      },
       getPluginDoc: async () => undefined,
       getPluginSessionDoc: async () => undefined,
       theme: 'dark',
       locale: 'en',
       translate: (text) => resolveLocalizedText(text, 'en'),
     }
-    return Object.assign(base, { actionCalls, openedScreens })
+    return Object.assign(base, { actionCalls, openedScreens, notifications })
   }
 
   async function mountWithHost(
@@ -280,6 +284,8 @@ describe("tiers-client-interactions", () => {
         findButton(fullMount.host, 'Apply').click()
       })
       assert.deepEqual(ctx.actionCalls[0], { actionId: 'apply_template', input: { id: 'budget' } })
+      assert.ok(fullMount.host.querySelector('.callout-ok') === null, 'must not render inline callout-ok on apply_template')
+      assert.deepEqual(ctx.notifications[0], { message: 'Applied template "Budget Mode".', tone: 'info' })
       const afterApplyIds = Array.from(fullMount.host.querySelectorAll('.tiers-id-wrap input')).map(
         (el) => (el as HTMLInputElement).value,
       )
@@ -310,6 +316,8 @@ describe("tiers-client-interactions", () => {
         confirmDeleteBtn.click()
       })
       assert.deepEqual(ctx.actionCalls[1], { actionId: 'delete_template', input: { id: 'budget' } })
+      assert.ok(fullMount.host.querySelector('.callout-ok') === null, 'must not render inline callout-ok on delete_template')
+      assert.deepEqual(ctx.notifications[1], { message: 'Deleted template "Budget Mode".', tone: 'info' })
 
       // Save current active tiers as a new template
       const tplInputs = Array.from(fullMount.host.querySelectorAll('.tiers-template-form input')) as HTMLInputElement[]
@@ -326,6 +334,8 @@ describe("tiers-client-interactions", () => {
         actionId: 'save_template',
         input: { id: 'custom-1', name: 'Custom Roster' },
       })
+      assert.ok(fullMount.host.querySelector('.callout-ok') === null, 'must not render inline callout-ok on save_template')
+      assert.deepEqual(ctx.notifications[2], { message: 'Saved template "Custom Roster".', tone: 'info' })
 
       // Earlier we applied `budget` -> draft has `coder: faux/fast · low`. Verify integrated trigger + inline chips!
       const pickerBtn = fullMount.host.querySelector('button.composer-model-button') as HTMLButtonElement | null
@@ -362,6 +372,8 @@ describe("tiers-client-interactions", () => {
           },
         },
       })
+      assert.ok(fullMount.host.querySelector('.callout-ok') === null, 'must not render inline callout-ok on Save tiers')
+      assert.deepEqual(ctx.notifications[3], { message: 'Model tiers saved and synced to kernel.', tone: 'info' })
 
       // 2) Click model row body (`faux/workhorse`) -> updates model and resets thinkingLevel to follow default chain
       await act(async () => {

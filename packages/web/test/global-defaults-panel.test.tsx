@@ -426,7 +426,13 @@ test('GlobalDefaultsPanel: save recovers clickable state after refreshAssets upd
     assert.equal(recoveredBtn.disabled, false, 'save button must recover clickable state after defaultModelInfo syncs')
     assert.notEqual(recoveredBtn.getAttribute('aria-busy'), 'true')
     assert.match(recoveredBtn.textContent ?? '', /Save global defaults/)
-    assert.match(panel.container.textContent ?? '', /Configuration saved/)
+    assert.ok(panel.container.querySelector('[role="status"]') === null, 'save success must not render inline status text')
+    assert.doesNotMatch(panel.container.textContent ?? '', /Configuration saved/)
+    assert.equal(
+      panel.store.getSnapshot().notices.some((n) => n.level === 'info' && n.title === 'Global default model updated'),
+      true,
+      'save success must push unified info toast',
+    )
 
     // Switch back to claude-3-7-sonnet and save a second time to verify interactivity is restored.
     await click(defaultBtn)
@@ -535,8 +541,10 @@ test('GlobalDefaultsPanel: external defaultModelInfo sync during in-flight PUT s
     await click(recoveredBtn)
     assert.equal(putCalls, 2)
     assert.equal(findSaveBtn().disabled, false)
-    assert.match(panel.container.querySelector('[role="status"]')?.textContent ?? '', /Configuration saved/)
+    assert.ok(panel.container.querySelector('[role="status"]') === null, 'save success must not render inline status text')
     assert.equal(panel.store.getSnapshot().notices.length, 1)
+    assert.equal(panel.store.getSnapshot().notices[0]?.level, 'info')
+    assert.equal(panel.store.getSnapshot().notices[0]?.title, 'Global default model updated')
   } finally {
     firstPutGate.resolve(
       new Response(
@@ -585,7 +593,13 @@ test('GlobalDefaultsPanel: save failure clears saving state and allows retrying'
     assert.equal(panel.putBodies.length, 1)
     assert.equal(findSaveBtn().disabled, false)
     assert.ok(panel.container.querySelector('[role="alert"]') === null)
-    assert.match(panel.container.textContent ?? '', /Configuration saved/)
+    assert.ok(panel.container.querySelector('[role="status"]') === null, 'save success must not render inline status text')
+    assert.doesNotMatch(panel.container.textContent ?? '', /Configuration saved/)
+    assert.equal(
+      panel.store.getSnapshot().notices.some((n) => n.level === 'info' && n.title === 'Global default model updated'),
+      true,
+      'save success must push unified info toast',
+    )
   } finally {
     await panel.unmount()
   }
