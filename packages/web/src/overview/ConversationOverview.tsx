@@ -47,6 +47,7 @@ import {
   DropdownMenuTrigger,
   HelmxIcon,
   IconButton,
+  LoadingState,
   PluginSlot,
   SearchBox,
   SegmentedControl,
@@ -1059,7 +1060,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
 
         {dataReady === false ? (
           <div className="overview-grid">
-            <div className="overview-empty overview-loading" role="status">{t('shell.overview.loading')}</div>
+            <div className="overview-empty overview-loading">
+              <LoadingState label={t('shell.overview.loading')} iconSize={13} />
+            </div>
           </div>
         ) : visibleCards.length === 0 ? (
           <div className="overview-grid">

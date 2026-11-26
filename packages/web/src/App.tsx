@@ -15,7 +15,7 @@ import {
   type ExoticComponent,
   type ReactNode,
 } from 'react'
-import { Button, HelmxIcon, Stack, TooltipProvider } from '@helmx/plugin-client'
+import { Button, HelmxIcon, LoadingState, Stack, TooltipProvider } from '@helmx/plugin-client'
 import { AgentStandbyPane } from './conversation/AgentStandbyPane.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
 import { ConversationWindowStage } from './conversation/ConversationWindowStage.js'
@@ -539,7 +539,7 @@ function HelmxShellInner({
   if (!authReady) {
     return (
       <div className="app-loading-screen">
-        {t('shell.loading.connecting')}
+        <LoadingState label={t('shell.loading.connecting')} iconSize={14} />
       </div>
     )
   }
@@ -662,7 +662,7 @@ function HelmxShellInner({
               onPointerDownCapture={focusPrimary}
               onFocusCapture={focusPrimary}
             >
-              <Suspense fallback={<div className="screen-loading" role="status">{t('conv.shell.loadingView')}</div>}>
+              <Suspense fallback={<div className="screen-loading"><LoadingState label={t('conv.shell.loadingView')} iconSize={13} /></div>}>
                 {homeLandingPending ? (
                   <div className="home-landing-skeleton" role="status" aria-label={t('conv.shell.loadingWorkspace')}>
                     <div className="home-landing-skeleton-bar" />
@@ -701,7 +701,7 @@ function HelmxShellInner({
                   onPointerDownCapture={focusSplit}
                   onFocusCapture={focusSplit}
                 >
-                  <Suspense fallback={<div className="screen-loading" role="status">{t('conv.shell.loadingView')}</div>}>
+                  <Suspense fallback={<div className="screen-loading"><LoadingState label={t('conv.shell.loadingView')} iconSize={13} /></div>}>
                     {renderPaneTarget(splitTarget, { panel: 'split', onCloseSplit: closeSplit })}
                   </Suspense>
                 </div>
@@ -715,22 +715,22 @@ function HelmxShellInner({
         )}
 
         {activeModal?.kind === 'command-palette' && (
-          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingCommandPalette')}</div>}>
+          <Suspense fallback={<div className="screen-loading screen-loading-overlay"><LoadingState label={t('conv.shell.loadingCommandPalette')} iconSize={13} /></div>}>
             <CommandPaletteModal onClose={closeModal} />
           </Suspense>
         )}
         {activeModal?.kind === 'shortcuts' && (
-          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('modals.shortcuts.loading')}</div>}>
+          <Suspense fallback={<div className="screen-loading screen-loading-overlay"><LoadingState label={t('modals.shortcuts.loading')} iconSize={13} /></div>}>
             <ShortcutsModal onClose={closeModal} />
           </Suspense>
         )}
         {activeModal?.kind === 'hub-changelog' && (
-          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('shell.hubChangelog.loading')}</div>}>
+          <Suspense fallback={<div className="screen-loading screen-loading-overlay"><LoadingState label={t('shell.hubChangelog.loading')} iconSize={13} /></div>}>
             <HubChangelogModal from={activeModal.from} onClose={closeModal} />
           </Suspense>
         )}
         {activeModal?.kind === 'artifact-preview' && (
-          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingPreview')}</div>}>
+          <Suspense fallback={<div className="screen-loading screen-loading-overlay"><LoadingState label={t('conv.shell.loadingPreview')} iconSize={13} /></div>}>
             <ArtifactPreviewModal
               artifactId={activeModal.artifactId}
               conversationId={activeModal.conversationId}
@@ -739,7 +739,7 @@ function HelmxShellInner({
           </Suspense>
         )}
         {activeModal?.kind === 'workspace-file' && (
-          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingPreview')}</div>}>
+          <Suspense fallback={<div className="screen-loading screen-loading-overlay"><LoadingState label={t('conv.shell.loadingPreview')} iconSize={13} /></div>}>
             <WorkspaceFilePreviewModal
               conversationId={activeModal.conversationId}
               path={activeModal.path}

@@ -516,16 +516,16 @@ test('ConversationOverview card light matches the sidebar row verdict: idle root
     const card = container.querySelector<HTMLElement>('.overview-card')
     assert.ok(card !== null, 'the tree card renders')
     assert.ok(
-      card.querySelector('.overview-card-head .status-dot-background') !== null,
-      'idle root + tree background in-flight renders the hollow ring (row-consistent)',
+      card.querySelector('.overview-card-head .status-spinner-background') !== null,
+      'idle root + tree background in-flight renders the background spinner (row-consistent)',
     )
     assert.ok(
-      card.querySelector('.overview-card-head .status-dot-working') === null,
+      card.querySelector('.overview-card-head .status-spinner-working') === null,
       'the working background descendant no longer steals the card head light',
     )
     assert.ok(
-      card.querySelector('.overview-chip .status-dot-working') !== null,
-      'the background descendant chip carries its own working light',
+      card.querySelector('.overview-chip .status-spinner-working') !== null,
+      'the background descendant chip carries its own working spinner',
     )
   } finally {
     await act(async () => {
@@ -556,7 +556,7 @@ test('ConversationOverview renders the card grid with honest facts and directly 
     const attentionReason = cards[0]!.querySelector('.overview-card-attention')
     assert.equal(attentionReason?.textContent, 'Waiting for you')
     assert.equal(cards[0]!.querySelector('.overview-card-open')?.getAttribute('aria-describedby'), attentionReason?.id)
-    assert.ok(cards[1]!.querySelector('.overview-card-head .status-dot-working') !== null, 'the working root lights the card head exactly like a sidebar row')
+    assert.ok(cards[1]!.querySelector('.overview-card-head .status-spinner-working') !== null, 'the working root renders its spinner in the card head exactly like a sidebar row')
     assert.ok(cards[1]!.textContent?.includes('正在检索文档'), 'the running card states the real doing text')
     assert.ok(container.textContent?.includes('3 conversation groups'), 'the stats line counts visible cards')
 

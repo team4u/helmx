@@ -344,6 +344,11 @@
   font-size: 13px;
 }
 
+.app-loading-screen .loading-state {
+  padding: 0;
+  font-size: inherit;
+}
+
 .auth-gate {
   width: 100vw;
   height: 100dvh;
@@ -603,6 +608,11 @@
   padding: 24px;
   color: var(--fg-muted);
   font-size: 12.5px;
+}
+
+.screen-loading .loading-state {
+  padding: 0;
+  font-size: inherit;
 }
 
 .screen-loading-overlay {

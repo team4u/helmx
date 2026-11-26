@@ -14,6 +14,7 @@ import {
   HelmxIcon,
   IconButton,
   Input,
+  LoadingState,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -332,7 +333,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   if (conversation === undefined) {
     return (
       <div className={`${isSplit ? 'helmx-split-pane' : 'helmx-pane'} pane-loading`}>
-        {t('conv.pane.loading', { id: conversationId })}
+        <LoadingState label={t('conv.pane.loading', { id: conversationId })} iconSize={13} />
         {isDrawer && onCloseDrawer !== undefined ? (
           <span className="pane-loading-split-close">
             <IconButton

@@ -307,14 +307,16 @@ test('KvGrid: items render as paired kv-grid direct children by key/value', { ti
 })
 
 // ---------------------------------------------------------------------------
-// StatusLight: unified status light (visually dot-only)
+// StatusLight: unified status indicator (working = spinner; settled/neutral = dot/ring/diamond)
 // ---------------------------------------------------------------------------
 
-test('StatusLight: renders dot-only; the label is a screen-reader accessible name, never visible text', { timeout: 60_000 }, () => {
+test('StatusLight: renders indicator-only; working uses loader spinner and label is screen-reader accessible name', { timeout: 60_000 }, () => {
   const html = renderToString(e(StatusLight, { status: 'running', label: 'Running' }))
   assert.match(html, /helmx-status-light helmx-status-light-working/)
-  assert.match(html, /status-dot status-dot-working/)
-  assert.equal((html.match(/status-dot /g) ?? []).length, 1, 'exactly one dot')
+  assert.match(html, /status-spinner status-spinner-working/)
+  assert.match(html, /class="[^"]*\bspin-slow\b/)
+  assert.match(html, /<svg/)
+  assert.doesNotMatch(html, /status-dot/)
   // Accessible name: role=img + aria-label + sr-only text (no visible label node, no width cost).
   assert.match(html, /role="img"/)
   assert.match(html, /aria-label="Running"/)

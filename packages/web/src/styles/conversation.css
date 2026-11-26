@@ -2219,6 +2219,10 @@ pre {
   font-size: 12px;
 }
 
+.pane-loading .loading-state {
+  padding: 0;
+}
+
 .pane-loading-split-close {
   position: absolute;
   top: 8px;

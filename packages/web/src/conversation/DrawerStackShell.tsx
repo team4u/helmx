@@ -20,6 +20,7 @@ import {
   DialogTitle,
   HelmxIcon,
   IconButton,
+  LoadingState,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -308,8 +309,8 @@ export function DrawerStackShell({ activeConversationId, inline = false }: Drawe
                   <div className="drawer-stack-frame helmx-workbench" data-drawer-frame-visible={isTop ? 'true' : 'false'}>
                     <Suspense
                       fallback={
-                        <div className="screen-loading" role="status">
-                          {t('conv.shell.loadingWorkbench')}
+                        <div className="screen-loading">
+                          <LoadingState label={t('conv.shell.loadingWorkbench')} iconSize={13} />
                         </div>
                       }
                     >
