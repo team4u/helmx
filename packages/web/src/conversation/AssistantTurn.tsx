@@ -132,12 +132,18 @@ function AssistantTurnContent({
   const liveNowMs = useSharedNowMs(needsLiveClock)
   const liveTiming = liveTrackActive ? resolveConversationTiming(conversation, liveNowMs) : undefined
 
-  const isBusy = isAssistantTurnBusy(turn, conversation, { isLatestTurn, activeToolCallIds })
+  // 生成中（live / 父会话 working|blocked / 在途工具 / 激活步骤组）的页脚由实时秒表替代。
+  // 插件登记的后台活动（如 subagent 后台句柄）只说明该回合的工具仍在后台运行，父回合自身
+  // 已结算：其时间、耗时与模型标签是已确定的事实，若一并隐藏会让消息下方整行空白且没有
+  // 秒表兜底；因此后台活动只收起语义上会误导的复制/重新生成/分叉操作条。
+  const isGenerating = isAssistantTurnBusy(turn, conversation, { isLatestTurn })
+  const hasBackgroundActivity =
+    !isGenerating && isAssistantTurnBusy(turn, conversation, { activeToolCallIds })
 
   const timeMs = turn.settledAt ?? turn.startedAt
   const displayTime = formatMessageTime(timeMs)
   const durationText = turn.durationMs !== undefined && turn.durationMs > 0 ? formatDurationMs(turn.durationMs) : ''
-  const hasTimeInfo = !isBusy && (displayTime !== '' || durationText !== '')
+  const hasTimeInfo = !isGenerating && (displayTime !== '' || durationText !== '')
   const fullTimestamp = formatFullTimestamp(timeMs)
   let baseTooltipText = ''
   if (fullTimestamp !== '' && durationText !== '') {
@@ -164,12 +170,12 @@ function AssistantTurnContent({
   const tooltipLines = [baseTooltipText, breakdownParts.join(' · ')].filter((line) => line !== '')
   const tooltipText = tooltipLines.join('\n')
 
-  const showHoverBar = !isBusy && (lastText !== '' || turn.entryIds.length > 0)
-  // 实际生成模型标签：仅来自本回合已落库 pi.assistant 的可信身份；busy（live/
-  // 在途）回合不展示，避免把待生成内容归到任何模型；缺失则不显示。
+  const showHoverBar = !isGenerating && !hasBackgroundActivity && (lastText !== '' || turn.entryIds.length > 0)
+  // 实际生成模型标签：仅来自本回合已落库 pi.assistant 的可信身份；生成中回合不展示，
+  // 避免把待生成内容归到任何模型；缺失则不显示。
   const modelFull = turn.model !== undefined ? assistantModelFullLabel(turn.model, t) : ''
   const modelShort = turn.model !== undefined ? assistantModelShortLabel(turn.model) : ''
-  const showModelTag = !isBusy && modelShort !== ''
+  const showModelTag = !isGenerating && modelShort !== ''
 
   const showBlockedStopwatch = liveTiming?.isBlocked === true && liveTiming.waitingMs !== undefined
   const showWorkingStopwatch =

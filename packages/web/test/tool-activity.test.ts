@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import * as React from 'react'
 import { act, useContext } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
+import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
 import { compilePluginClientModule } from '@helmx/plugin-build'
 import { ToolActivityProvider } from '../src/conversation/ToolActivityProvider.js'
 import { ToolActivityContext } from '@helmx/plugin-client'
@@ -161,6 +161,9 @@ describe('tool-activity', () => {
     id: 1, title: '通用插件活动', profileId: 'default', tags: [], cwd: '/tmp', model: '', thinkingLevel: '', status: 'idle',
     stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false, pendingAskCount: 0, createdAt: 1, updatedAt: 2,
   }
+  const toolViewContribution = { pluginId: 'sample:background', surface: 'tool.view', spec: {
+    id: 'background', toolNames: ['background_job'], replaceRow: true, client: { module: 'client.tsx', export: 'ToolPanel' },
+  } } as const
   function entries(callId: string, start: number): ConversationEntry[] {
     return [
       { id: String(start), kind: 'helmx.input', data: { text: '启动后台任务', origin: 'human' } },
@@ -173,9 +176,6 @@ describe('tool-activity', () => {
   test('非 workflow 插件真实编译产物报告活动：done 工具仍隐藏本回合复制/分叉，重复 SSE 不循环，终态/停用释放', { timeout: 60_000 }, async () => {
     seed()
     const ui = mount()
-    const toolViewContribution = { pluginId: 'sample:background', surface: 'tool.view', spec: {
-      id: 'background', toolNames: ['background_job'], replaceRow: true, client: { module: 'client.tsx', export: 'ToolPanel' },
-    } } as const
     const timeline = e(ConversationTimeline, { conversation, detailEntries: [...entries('call-a', 1), ...entries('call-b', 5)], onRequestEdit: () => {} })
     const store = (activity: Record<string, boolean>, enabled = true) => makeTestStore({
       conversations: [conversation], uiContributions: enabled ? [toolViewContribution] : [],
@@ -196,6 +196,61 @@ describe('tool-activity', () => {
       assert.deepEqual(bars(), [true, true], '插件停用卸载 renderer 后必须释放活动')
       await ui.render(timeline, store({ 'call-a': false, 'call-b': false }))
       assert.deepEqual(bars(), [true, true], '恢复插件不能留下旧活动来源')
+    } finally { await ui.close() }
+  })
+
+  /** 已结算的父回合：带可信模型身份、时间与耗时（父回合自身 1.9s，后台句柄的工具结果仅 200ms）。 */
+  function timedEntries(callId: string, start: number, startedAt: number): ConversationEntry[] {
+    const identity = { role: 'assistant', provider: 'sample', model: 'demo-model' }
+    return [
+      { id: String(start), kind: 'helmx.input', data: { text: '派发后台子代理', origin: 'human' } },
+      { id: String(start + 1), kind: 'pi.assistant', model: [{ ...identity, timestamp: startedAt, durationMs: 200, content: [{ type: 'toolCall', id: callId, name: 'background_job', arguments: {} }] }] },
+      { id: String(start + 2), createdAt: startedAt + 400, kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: callId, toolName: 'background_job', durationMs: 200, content: [{ type: 'text', text: '已返回后台句柄' }] }] },
+      { id: String(start + 3), kind: 'pi.assistant', model: [{ ...identity, timestamp: startedAt + 400, durationMs: 1_500, content: [{ type: 'text', text: '已派发后台子代理' }] }] },
+    ]
+  }
+
+  test('已结算回合的后台活动只收起操作条：页脚保留模型、时间、耗时与 tooltip；生成中仍不显示时间信息', { timeout: 60_000 }, async () => {
+    seed()
+    const ui = mount()
+    const startedAt = Date.UTC(2025, 0, 15, 10, 0, 0)
+    const detailEntries = timedEntries('call-bg', 1, startedAt)
+    const render = (
+      conv: ConversationSummary,
+      activity: Record<string, boolean>,
+      live?: ConversationLive,
+    ) => ui.render(
+      e(ConversationTimeline, { conversation: conv, detailEntries, ...(live !== undefined ? { live } : {}), onRequestEdit: () => {} }),
+      makeTestStore({
+        conversations: [conv], uiContributions: [toolViewContribution], locale: 'zh-CN',
+        pluginDocs: { 'sample:background/activity': activity },
+      }),
+    )
+    const footer = () => ui.host.querySelector('.msg-ai-block .msg-ai-footer')
+    const hoverBar = () => ui.host.querySelector('.msg-ai-block .msg-hover-bar')
+    const titles = () => [...(footer()?.querySelectorAll('.msg-time-meta[title]') ?? [])].map((el) => el.getAttribute('title') ?? '')
+    try {
+      await render(conversation, { 'call-bg': true })
+      assert.ok(footer() !== null, '插件报告后台活动期间页脚仍须渲染，消息下方不能整行空白')
+      assert.match(footer()!.textContent ?? '', /耗时 1\.9s/, '耗时沿用父回合自身 durationMs，而非后台句柄的工具耗时')
+      assert.match(footer()!.textContent ?? '', /demo-model/, '模型标签照常显示')
+      assert.ok(titles().some((title) => /^完成于 .+ · 耗时 1\.9s/.test(title)), '时间与耗时的完整 tooltip 照常显示')
+      assert.ok(titles().some((title) => title === '实际生成模型：sample/demo-model'), '模型标签的 tooltip 照常显示')
+      assert.ok(hoverBar() === null, '后台活动只收起复制/重新生成/分叉操作条，维持 useToolActivity 的既有契约')
+
+      await render(conversation, { 'call-bg': false })
+      assert.ok(footer() !== null, '活动释放后页脚保持显示')
+      assert.ok(hoverBar() !== null, '活动释放后操作条恢复')
+
+      const live: ConversationLive = { conversationId: 1, text: '正在输出', tools: [], updatedAt: startedAt + 2_000 }
+      await render({ ...conversation, status: 'working' }, { 'call-bg': true }, live)
+      assert.ok(ui.host.querySelector('.msg-live-indicator') !== null, '生成中回合由实时秒表指示')
+      assert.ok(footer() === null, '回合 live 且会话 working 时不显示时间与模型，即使插件同时报告后台活动')
+      assert.ok(hoverBar() === null)
+
+      await render({ ...conversation, status: 'blocked', pendingAskCount: 1 }, { 'call-bg': true })
+      assert.ok(footer() === null, '最新回合在会话 blocked 时同样不显示时间信息')
+      assert.ok(hoverBar() === null)
     } finally { await ui.close() }
   })
 })
