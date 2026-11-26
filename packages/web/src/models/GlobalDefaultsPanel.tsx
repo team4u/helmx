@@ -9,7 +9,9 @@ import {
   IconButton,
   ModelPickerControl,
   Stack,
+  useHostModels,
 } from '@helmx/plugin-client'
+import { resolveDefaultChainThinkingLevel } from '@helmx/plugin-client/pure'
 import { assetsApi } from '../lib/api.js'
 import { useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -64,6 +66,7 @@ export function GlobalDefaultsPanel({
 }: GlobalDefaultsPanelProps): React.JSX.Element {
   const actions = useOptionalStoreActions()
   const { t } = useWebLocale()
+  const hostModels = useHostModels()
   const { copy, onNotice } = useModelPickerControlAdapter()
 
   const [formModel, setFormModel] = useState(() => defaultModelInfo?.defaultModel ?? '')
@@ -103,6 +106,16 @@ export function GlobalDefaultsPanel({
     }
   }, [defaultModelInfo])
 
+  // Triggers display the level each reference actually runs at, per the kernel chain:
+  // the default model follows `tier preset > per-model default > global level`, the
+  // compaction model follows `compaction level > tier preset > per-model default`.
+  const defaultPickerLevel = resolveDefaultChainThinkingLevel(hostModels, formModel, formLevel)
+  const compactionPickerLevel = resolveDefaultChainThinkingLevel(
+    hostModels,
+    formCompactionModel,
+    formCompactionLevel,
+    'compaction',
+  )
   const handleSave = async () => {
     setSaving(true)
     setSaveError(null)
@@ -195,7 +208,7 @@ export function GlobalDefaultsPanel({
               buttonTitle={formModel || t('models.defaults.optionUnset')}
               placeholderLabel={t('models.defaults.optionUnset')}
               effectiveModel={formModel}
-              activeThinkingLevel={formLevel}
+              activeThinkingLevel={defaultPickerLevel}
               resetLabel={t('models.defaults.optionUnset')}
               resetTitle={t('models.defaults.optionUnset')}
               popoverSide="bottom"
@@ -226,7 +239,7 @@ export function GlobalDefaultsPanel({
               buttonTitle={formCompactionModel || t('models.defaults.compactionOptionUnset')}
               placeholderLabel={t('models.defaults.compactionOptionUnset')}
               effectiveModel={formCompactionModel}
-              activeThinkingLevel={formCompactionLevel}
+              activeThinkingLevel={compactionPickerLevel}
               resetLabel={t('models.defaults.compactionOptionUnset')}
               resetTitle={t('models.defaults.compactionOptionUnset')}
               popoverSide="bottom"

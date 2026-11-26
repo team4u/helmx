@@ -113,15 +113,22 @@ export function ModelCenter({
     }
   }, [modelDefaults, savedDefaultOverride])
 
-  // "Current:" facts mirror the kernel's default chain: a tier's own preset outranks the level
-  // saved beside it, converged to the target model's supported levels (never the raw config value).
-  const defaultChainLevel = (modelRef: string | undefined, configuredLevel: string | undefined): string => {
-    const level = resolveDefaultChainThinkingLevel(hostModels, modelRef, configuredLevel)
+  // "Current:" facts mirror the kernel's chains, converged to the target model's supported levels
+  // (never the raw config value): the default model runs at `tier preset > per-model default >
+  // global level`; the compaction model at `compaction level > tier preset > per-model default`.
+  const defaultChainLevel = (
+    modelRef: string | undefined,
+    configuredLevel: string | undefined,
+    chain: 'conversation' | 'compaction' = 'conversation',
+  ): string => {
+    const level = resolveDefaultChainThinkingLevel(hostModels, modelRef, configuredLevel, chain)
     return level !== '' && level !== 'off' ? level : ''
   }
-  const defaultThinkingLevel = defaultModelInfo ? defaultChainLevel(defaultModelInfo.defaultModel, defaultModelInfo.defaultThinkingLevel) : ''
+  const defaultThinkingLevel = defaultModelInfo
+    ? defaultChainLevel(defaultModelInfo.defaultModel, defaultModelInfo.defaultThinkingLevel)
+    : ''
   const compactionThinkingLevel = defaultModelInfo
-    ? defaultChainLevel(defaultModelInfo.defaultCompactionModel, defaultModelInfo.defaultCompactionThinkingLevel)
+    ? defaultChainLevel(defaultModelInfo.defaultCompactionModel, defaultModelInfo.defaultCompactionThinkingLevel, 'compaction')
     : ''
 
   useEffect(() => {

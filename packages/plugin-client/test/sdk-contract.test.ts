@@ -60,6 +60,12 @@ test('every symbol in PLUGIN_CLIENT_SHARED_EXPORTS actually exists in this packa
   }
 })
 
+test('default-chain model helper is in the SDK export manifest and shared by the component and pure entries', { timeout: 60_000 }, () => {
+  assert.ok((PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes('resolveDefaultChainThinkingLevel'))
+  assert.equal(typeof SDK.resolveDefaultChainThinkingLevel, 'function')
+  assert.ok(SDK.resolveDefaultChainThinkingLevel === PureSDK.resolveDefaultChainThinkingLevel)
+})
+
 test('host-facing symbols (port / context / factory / explicit-addressing hooks) are really exported', { timeout: 60_000 }, () => {
   for (const name of [
     'PluginClientHostContext',
