@@ -176,6 +176,7 @@ pnpm helmx plugins doc builtin:workflow runs --current --watch --json
 - **标识与生命周期边界**：`capabilityId` 在注册、消费与订阅边界均按 `^[a-z0-9][a-z0-9._-]{0,63}$` 强校验；受插件 epoch 守卫约束；插件停用、停止、回滚或卸载时宿主自动释放其提供的全部能力与监听订阅，非活跃（disabled / deactivating / failed）插件的实现即时从 `consume` 视图消失。
 - **典型内置契约**：
   - `helmx.dispatch-tools`：`builtin:workflow`（`['subagent', 'SubagentWorkflow']`）与 `builtin:swarm`（`['swarm_dispatch_worker']`）声明各自派工工具，`builtin:profile` 动态消费以决定协作目录注入与 `@` 补全（零硬编码工具名，任意第三方派工插件自动生效）；
+  - `helmx.conversation-depth`：`builtin:swarm` 等派工插件提供 `depthOf(conversationId)` 上报 `{ depth, leaf? }`，由 `builtin:workflow` 在单一 `maxSubagentDepth` 策略（默认 `1`）下统一消费，执行 `before_turn` 剥离与 `subagent_depth_exceeded` 守卫；
   - `helmx.model-tiers`：`builtin:tiers` 提供 `{ getTiers, onChanged }`，内核 `ModelRegistry` 直接从 `PluginHost` 消费并在启停与变更时自动广播 `models.changed` 并对齐继承会话。
 
 ### 轻量按键持久存储（`ctx.kv`）

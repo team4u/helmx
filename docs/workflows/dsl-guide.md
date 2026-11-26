@@ -54,7 +54,7 @@ pnpm helmx workflows run ./review.js --args '{"pr": 1024, "strict": true}' --con
 | `effort` | `string` | 思考力度：`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
 | `schema` | `object` | 结构化输出的 JSON Schema |
 | `attachments` | `string[]` | 本次调用携带的产物 ID 列表 |
-| `maxSubagentDepth` | `number` | 相对任务树根的绝对子代理层级上限（1..5 整数；默认继承上限 2，根会话为第 0 层）。根会话可为大任务提高上限；受管子代理不得提高继承上限。续接未传时保留授权，显式设置重新校验；字段参与恢复缓存指纹 |
+| `maxSubagentDepth` | `number` | 相对任务树根的绝对子代理层级上限（1..5 整数；默认继承上限 1，根会话为第 0 层）。根会话可为大任务提高上限；受管子代理不得提高继承上限。续接未传时保留授权，显式设置重新校验；字段参与恢复缓存指纹 |
 | `nodeId` | `string` | 目标计算节点 ID（匹配 `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`；覆写 Profile/父会话默认节点；显式 `'local'` 可切回 Hub 本机；指向远端节点时需提供 `cwd` 或使用同节点兼容的 Profile `cwd`）。字段参与恢复缓存指纹 |
 | `cwd` | `string` | 子代理工作目录（跨平台绝对路径）。不带 `isolation` 时直接在该目录运行；带 `isolation: 'worktree'` 时从该目录切出子级 Worktree。字段参与恢复缓存指纹 |
 | `timeoutMs` | `number` | 单回合超时毫秒数（1_000 .. 3_600_000 整数）。超时中止子会话并按失败返回；只限制执行时限，不改变调用身份，不记入恢复缓存 Key |

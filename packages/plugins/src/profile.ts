@@ -336,10 +336,10 @@ export function createProfilePlugin(): PluginDefinition {
       ctx.hook.onBeforeTurn(
         async (turn) => {
           // Turns without available dispatch tools get no catalog (avoiding teaching calls to
-          // nonexistent tools; depth-capped leaf subagents had their dispatch tools stripped by the
-          // builtin:workflow hook, converging naturally here). The post-convergence tools are
-          // read-only here; no exclusion by parentConversationId (fork / Swarm workers also
-          // have parent chains and should keep collaboration ability; level-1 subagents keep dispatch tools by default and also get the catalog).
+          // nonexistent tools; depth-capped leaf subagents and Swarm workers had their dispatch
+          // tools stripped by builtin:workflow / builtin:swarm hooks, converging naturally here).
+          // The post-convergence tools are read-only here; no exclusion by parentConversationId
+          // (human `conversations fork` and subagents/workers with ceiling >= 2 keep collaboration ability).
           const tools = dispatchToolNames(turn.tools)
           if (tools.length === 0) return { action: 'continue' }
           const entries = await computeCatalog(turn.conversation.profileId)

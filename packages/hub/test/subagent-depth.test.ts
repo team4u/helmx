@@ -1,25 +1,26 @@
 /**
- * Subagent nesting depth contract: `builtin:workflow` managed subagents can nest up to 2 levels by default.
+ * Subagent, workflow & swarm nesting depth contract:
+ * By default, delegated children (`subagent`, `SubagentWorkflow`, and `builtin:swarm` workers)
+ * are level-1 orchestration leaves (`DEFAULT_MAX_SUBAGENT_DEPTH = 1`) and cannot spawn nested
+ * subagents, workflows, or swarms unless plugin config or explicit `maxSubagentDepth` (2..5)
+ * grants deeper nesting.
  *
- * Source of truth (persisted across restarts): plugin-private doc `subagent-conversations` registers child
- * conversations spawned through the `agent_spawn` pipeline (`onResolved` returns `conversationId`),
- * recording `depth` / `parentConversationId` / `maxSubagentDepth` (subtree ceiling snapshot).
- * Forked conversations and SuperAgent workers (created via `createConversation`, bypassing `spawn`)
- * stay outside the registry and are not subject to nesting caps. Missing/corrupt entries fail explicitly.
+ * Source of truth (persisted across restarts):
+ * - `builtin:workflow`: private KV namespace `depth` registers child conversations spawned
+ *   through the `agent_spawn` pipeline (`onResolved` returns `conversationId`), recording
+ *   `depth` / `parentConversationId` / `maxSubagentDepth` / optional `forked`.
+ * - `builtin:swarm`: exposes worker topological facts (`{ depth: 1, leaf?: true }`) via
+ *   the `'helmx.conversation-depth'` capability contract so `builtin:workflow` applies its
+ *   single `maxSubagentDepth` configuration uniformly.
+ * - Human `conversations fork` and direct `createConversation` stay outside the depth registry (depth 0).
  *
  * Three enforcement layers:
- * 1. `before_turn`: strips `subagent` / `SubagentWorkflow` on leaf turns at the subtree ceiling
- *    (depth-1 subagents keep dispatch tools so they can dispatch depth-2 children);
- * 2. Tool/action boundaries: `subagent` tool, `SubagentWorkflow` tool, and `run` action reject before creating
- *    any run record (`HelmxError('subagent_depth_exceeded')`, carrying facts);
- * 3. `agent_spawn` highest-priority fallback (priority 300, ahead of isolation=200 worktree allocation):
- *    direct `kernel.spawnAgent` calls also reject without recording new entries.
- *
- * Explicit grants: `AgentSpawnRequest.maxSubagentDepth` (and `subagent` tool param) can grant a subtree ceiling
- * (1..5), while managed subagents cannot raise their inherited ceiling; plugin config exposes a global default.
- *
- * Honesty discipline: all real execution (faux model, real child conversations, real doc persistence, real
- * restarts), no mocked engine, no fabricated rejection results.
+ * 1. `before_turn`: strips `subagent`, `SubagentWorkflow`, and all active `helmx.dispatch-tools`
+ *    declarations on leaf turns at the subtree ceiling (naturally suppressing `profile.catalog`);
+ * 2. Tool/action boundaries: `subagent` tool, `SubagentWorkflow` tool, and `run` action reject
+ *    before creating any run record (`HelmxError('subagent_depth_exceeded')`, status 403);
+ * 3. `agent_spawn` fallback: `builtin:workflow` (priority 300, ahead of `builtin:worktree`
+ *    priority 200) rejects direct `kernel.spawnAgent` calls with zero worktree or registry side effects.
  */
 
 import {
@@ -50,7 +51,7 @@ after(() => {
   rmSync(rootDir, { recursive: true, force: true })
 }, { timeout: 60_000 })
 
-/** Reads the persisted private depth KV namespace directly from `state.sqlite` after flushing (verifies restart source of truth). */
+/** Reads the persisted private depth KV namespace directly from `state.sqlite` after flushing. */
 function readRegistryRaw(dataDir: string): Record<string, unknown> {
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
   try {
@@ -133,6 +134,16 @@ function captureModelRequest(messages: readonly unknown[]): {
   }
 }
 
+async function waitUntil(predicate: () => boolean, label: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for: ${label}`)
+    }
+    await new Promise((r) => setTimeout(r, 15))
+  }
+}
+
 /**
  * Spawns a real child conversation chain (matching production `onResolved` + registry behavior):
  * each entry in `parents` acts as parent for the next spawned child; returns created child IDs.
@@ -141,14 +152,17 @@ async function spawnChain(
   app: Awaited<ReturnType<typeof createHelmx>>,
   faux: FauxProviderHandle,
   parents: number[],
+  firstMeta?: Record<string, Record<string, unknown>>,
 ): Promise<number[]> {
   const created: number[] = []
-  for (const parent of parents) {
+  for (let i = 0; i < parents.length; i += 1) {
+    const parent = parents[i]!
     let childId: number | undefined
     faux.setResponses([fauxAssistantMessage(`subagent ${parent} answer`)])
     await app.kernel.agentSpawn.spawnAgent({
       parentConversationId: parent,
       prompt: `from ${parent} derive`,
+      ...(i === 0 && firstMeta !== undefined ? { meta: firstMeta as never } : {}),
       onResolved: (info) => {
         if (info.conversationId !== undefined) childId = info.conversationId
       },
@@ -159,17 +173,12 @@ async function spawnChain(
   return created
 }
 
-
-
-// ---------------------------------------------------------------------------
-// 1. Depth 1 from top-level: fact registration + depth-1 subagent retains dispatch tools
-// ---------------------------------------------------------------------------
-
-describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_000 }, () => {
+describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeout: 60_000 }, () => {
   const sharedDir = join(tmpdir(), `helmx-subagent-depth-shared-${process.pid}-${Date.now()}`)
   let sharedFaux: FauxProviderHandle
   let sharedApp: Awaited<ReturnType<typeof createHelmx>>
   const observedToolsByConvId = new Map<number, string[]>()
+  const observedSectionsByConvId = new Map<number, Record<string, string>>()
 
   before(async () => {
     sharedFaux = makeFauxProvider()
@@ -183,14 +192,22 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     if (sharedApp.kernel.plugins.get('builtin:title')?.enabled) {
       await sharedApp.kernel.plugins.setConfig('builtin:title', { autoTitle: false })
     }
+    await sharedApp.kernel.services.profiles.save({ id: 'reviewer', name: '评审专家' })
     await sharedApp.kernel.plugins.register({
       id: 'test:depth-observer',
       name: 'deep observer',
       definePlugin(ctx) {
         ctx.hook.onBeforeTurn((turn) => {
-          const payload = turn as unknown as { conversation: { id: number }; tools: Array<{ name: string }> }
+          const payload = turn as unknown as {
+            conversation: { id: number }
+            tools: Array<{ name: string }>
+            sections: Array<{ id: string; text: string }>
+          }
           observedToolsByConvId.set(payload.conversation.id, payload.tools.map((t) => t.name))
-        })
+          const secMap: Record<string, string> = {}
+          for (const s of payload.sections) secMap[s.id] = s.text
+          observedSectionsByConvId.set(payload.conversation.id, secMap)
+        }, { priority: -200 })
       },
     })
   }, { timeout: 60_000 })
@@ -209,104 +226,59 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     return conv.id
   }
 
-  test('top-level spawn depth=1: records depth/parent/ceiling=2; depth-1 subagent keeps subagent/SubagentWorkflow', { timeout: 60_000 }, async () => {
-    const rootId = await createSharedRoot('depth1')
-    // Top-level: spawn a subagent (real native spawn, real child conversation, synchronous wait).
+  // -------------------------------------------------------------------------
+  // 1. Default leaf at depth 1: strips dispatch tools & catalog, rejects nested spawns/runs
+  // -------------------------------------------------------------------------
+
+  test('top-level spawn depth=1 defaults to leaf (ceiling=1): strips dispatch tools & catalog, rejects spawnAgent/run with 403', { timeout: 60_000 }, async () => {
+    const rootId = await createSharedRoot('depth1-default-leaf')
     sharedFaux.setResponses([
-      fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'sub- task', background: false })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'sub-task', background: false })], { stopReason: 'toolUse' }),
       fauxAssistantMessage('subagent answer'),
       fauxAssistantMessage('main turn complete'),
     ])
-    await sharedApp.kernel.conversations.submitInput(rootId, 'derive subagent')
+    await sharedApp.kernel.conversations.submitInput(rootId, 'derive default depth-1 subagent')
     await sharedApp.kernel.conversations.waitForIdle(rootId)
+
+    const rootTools = observedToolsByConvId.get(rootId)
+    assert.ok(rootTools?.includes('subagent') && rootTools.includes('SubagentWorkflow'), 'root keeps dispatch tools')
+    assert.ok(typeof observedSectionsByConvId.get(rootId)?.['profile.catalog'] === 'string', 'root gets profile.catalog')
 
     const child = sharedApp.kernel.conversations.listConversations().find((c) => c.parentConversationId === rootId)
     assert.ok(child, 'top-level spawn should create a real child conversation')
 
-    // Registry: private doc persists depth fact (survives restart).
+    // Registry persists depth=1 and ceiling=1.
     await sharedApp.kernel.kvStore.flush()
     const entry = registryEntry(sharedDir, child.id)
     assert.equal(entry['depth'], 1, 'direct child of top-level conversation has depth=1')
     assert.equal(entry['parentConversationId'], rootId)
-    assert.equal(entry['maxSubagentDepth'], 2, 'default subtree ceiling is 2')
+    assert.equal(entry['maxSubagentDepth'], 1, 'default subtree ceiling is 1')
 
-    // Depth-1 subagent `before_turn`: dispatch tools are preserved (can still dispatch depth-2).
-    sharedFaux.setResponses([fauxAssistantMessage('one layer subagent directly answer')])
-    await sharedApp.kernel.conversations.submitInput(child.id, 'subagent by mention question')
+    // Depth-1 `before_turn`: dispatch tools and profile.catalog are stripped at default ceiling 1.
+    sharedFaux.setResponses([fauxAssistantMessage('depth-1 leaf directly answers')])
+    await sharedApp.kernel.conversations.submitInput(child.id, 'direct turn on depth-1 leaf')
     await sharedApp.kernel.conversations.waitForIdle(child.id)
     const childTools = observedToolsByConvId.get(child.id)
     assert.ok(childTools, 'should observe tool list on subagent turn')
-    assert.ok(
-      childTools!.includes('subagent') && childTools!.includes('SubagentWorkflow'),
-      `depth-1 subagent turn should retain dispatch tools (actual: ${childTools!.join(',')})`,
+    assert.equal(childTools.includes('subagent'), false, 'default depth-1 subagent strips subagent')
+    assert.equal(childTools.includes('SubagentWorkflow'), false, 'default depth-1 subagent strips SubagentWorkflow')
+    assert.equal(childTools.includes('bash'), true, 'non-dispatch tools stay intact (bash present)')
+    assert.equal(
+      observedSectionsByConvId.get(child.id)?.['profile.catalog'],
+      undefined,
+      'default depth-1 subagent suppresses profile.catalog',
     )
-    assert.ok(childTools!.includes('bash'), 'non-dispatch tools stay intact (bash present)')
-  })
 
-  // -------------------------------------------------------------------------
-  // 2. Depth-1 subagent spawns depth-2 child: depth=2 recorded; depth-2 turn strips dispatch tools
-  // -------------------------------------------------------------------------
-
-  test('depth-1 subagent spawns depth-2 via subagent tool: records depth=2; depth-2 strips dispatch tools', { timeout: 60_000 }, async () => {
-    const rootId = await createSharedRoot('depth2')
-    // Deterministic FIFO consumption order for synchronous nested spawns:
-    // top-level toolUse(subagent) -> depth-1 toolUse(subagent) -> depth-2 text -> depth-1 text -> top-level text.
-    sharedFaux.setResponses([
-      fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'one layer task', background: false })], { stopReason: 'toolUse' }),
-      fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'two layer task', background: false })], { stopReason: 'toolUse' }),
-      fauxAssistantMessage('two layer subagent answer'),
-      fauxAssistantMessage('one layer subagent complete'),
-      fauxAssistantMessage('main turn complete'),
-    ])
-    await sharedApp.kernel.conversations.submitInput(rootId, 'derive one layer, let it continue dispatch two layer')
-    await sharedApp.kernel.conversations.waitForIdle(rootId)
-
-    const child1 = sharedApp.kernel.conversations.listConversations().find((c) => c.parentConversationId === rootId)
-    assert.ok(child1, 'should spawn depth-1 child conversation')
-    await sharedApp.kernel.conversations.waitForIdle(child1.id)
-    const child2 = sharedApp.kernel.conversations.listConversations().find((c) => c.parentConversationId === child1.id)
-    assert.ok(child2, 'depth-1 subagent should spawn depth-2 child conversation via tool')
-
-    await sharedApp.kernel.kvStore.flush()
-    const e1 = registryEntry(sharedDir, child1.id)
-    assert.equal(e1['depth'], 1)
-    assert.equal(e1['parentConversationId'], rootId)
-    const e2 = registryEntry(sharedDir, child2.id)
-    assert.equal(e2['depth'], 2, 'depth-2 subagent has depth=2')
-    assert.equal(e2['parentConversationId'], child1.id)
-    assert.equal(e2['maxSubagentDepth'], 2, 'subtree ceiling inherits parent effective ceiling')
-
-    // Depth-2 `before_turn`: dispatch tools are stripped at the ceiling (leaf).
-    sharedFaux.setResponses([fauxAssistantMessage('two layer leaf only can directly answer')])
-    await sharedApp.kernel.conversations.submitInput(child2.id, 'leaf by mention question')
-    await sharedApp.kernel.conversations.waitForIdle(child2.id)
-    const leafTools = observedToolsByConvId.get(child2.id)
-    assert.ok(leafTools, 'should observe tool list on depth-2 turn')
-    assert.ok(
-      !leafTools!.includes('subagent') && !leafTools!.includes('SubagentWorkflow'),
-      `depth-2 subagent turn should strip dispatch tools (actual: ${leafTools!.join(',')})`,
-    )
-    assert.ok(leafTools!.includes('bash'), 'non-dispatch tools stay intact (bash present)')
-  })
-
-  // -------------------------------------------------------------------------
-  // 3. Depth-2 rejection: spawnAgent fallback + run action entry, zero side effects
-  // ---------------------------------------------------------------------------
-
-  test('depth-2 rejects further spawns (403 subagent_depth_exceeded) and run actions with no run records; depth-1 still allowed', { timeout: 60_000 }, async () => {
-    const rootId = await createSharedRoot('depth3')
-    const child1 = (await spawnChain(sharedApp, sharedFaux, [rootId]))[0]!
-    const child2 = (await spawnChain(sharedApp, sharedFaux, [child1]))[0]!
     const beforeRunIds = new Set(
       ((await sharedApp.kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: Array<{ id: string }> }).runs.map((r) => r.id),
     )
 
-    // Direct call (with `isolation: 'worktree'` — must reject prior to worktree allocation with zero git/lease side effects).
+    // Direct `spawnAgent` (with `isolation: 'worktree'`) rejects prior to worktree allocation.
     await assert.rejects(
       () =>
         sharedApp.kernel.agentSpawn.spawnAgent({
-          parentConversationId: child2,
-          prompt: 'attempt dispatch three layer',
+          parentConversationId: child.id,
+          prompt: 'attempt depth-2 spawn',
           isolation: 'worktree',
         }),
       (err: unknown) => {
@@ -314,23 +286,22 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
         assert.equal(err.code, 'subagent_depth_exceeded')
         assert.equal(err.status, 403)
         const details = err.details as { depth?: number; maxSubagentDepth?: number } | undefined
-        assert.equal(details?.depth, 2, 'error details should report depth=2')
-        assert.equal(details?.maxSubagentDepth, 2)
+        assert.equal(details?.depth, 1)
+        assert.equal(details?.maxSubagentDepth, 1)
         return true
       },
     )
 
-    // `run` action (HTTP/CLI path) targeting depth-2 conversation rejects.
+    // `run` action targeting depth-1 conversation rejects with 403 and creates zero runs.
     await assert.rejects(
       () =>
         sharedApp.kernel.plugins.invokeAction('builtin:workflow', 'run', {
-          script: 'export const meta = { name: "t", description: "d" }\nreturn 1',
-          conversationId: child2,
+          script: 'export const meta = { name: "blocked", description: "d" }\nreturn 1',
+          conversationId: child.id,
         }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
+      (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
     )
 
-    // Zero new run records created.
     const runs = (await sharedApp.kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as {
       runs: Array<{ id: string }>
     }
@@ -339,26 +310,19 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       0,
       'rejected path must not create run records',
     )
-
-    // Depth-1 control: direct `spawnAgent` succeeds (depth-1 can spawn depth-2).
-    const anotherChild2 = (await spawnChain(sharedApp, sharedFaux, [child1]))[0]!
-    assert.ok(anotherChild2 > 0)
-    await sharedApp.kernel.kvStore.flush()
-    assert.equal(registryEntry(sharedDir, anotherChild2)['depth'], 2)
   })
 
   // -------------------------------------------------------------------------
-  // 4. Depth-1 subagent can run workflows (`run` action allowed); engine nodes register at depth=2
+  // 2. Workflow run from top-level spawns engine node at depth=1 (default leaf ceiling=1)
   // -------------------------------------------------------------------------
 
-  test('depth-1 subagent can run SubagentWorkflow: run action succeeds and engine node registers at depth=2', { timeout: 60_000 }, async () => {
-    const rootId = await createSharedRoot('depth4')
-    const child1 = (await spawnChain(sharedApp, sharedFaux, [rootId]))[0]!
+  test('workflow run from top-level spawns engine node at depth=1 (default ceiling=1) and rejects nested spawns/runs', { timeout: 60_000 }, async () => {
+    const rootId = await createSharedRoot('depth1-workflow-node')
     sharedFaux.setResponses([fauxAssistantMessage('engine node subagent answer')])
     const run = (await sharedApp.kernel.plugins.invokeAction('builtin:workflow', 'run', {
       script:
-        'export const meta = { name: "nested-one", description: "d" }\nconst t = await agent("node task")\nreturn t',
-      conversationId: child1,
+        'export const meta = { name: "root-node", description: "d" }\nconst t = await agent("node task")\nreturn t',
+      conversationId: rootId,
       wait: true,
     })) as { run: { status: string; result: unknown; nodes?: Array<{ conversationId?: number }> } }
     assert.equal(run.run.status, 'completed', JSON.stringify(run.run))
@@ -366,27 +330,112 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     assert.ok(nodeConv, 'engine node should spawn a real child conversation')
     await sharedApp.kernel.kvStore.flush()
     const entry = registryEntry(sharedDir, nodeConv)
-    assert.equal(entry['depth'], 2, 'engine node spawned from depth-1 registers with depth=2')
-    assert.equal(entry['parentConversationId'], child1)
-    // Depth-2 node is a leaf: direct `spawnAgent` rejects.
+    assert.equal(entry['depth'], 1)
+    assert.equal(entry['parentConversationId'], rootId)
+    assert.equal(entry['maxSubagentDepth'], 1)
+
     await assert.rejects(
-      () => sharedApp.kernel.agentSpawn.spawnAgent({ parentConversationId: nodeConv, prompt: 'three layer attempt' }),
+      () => sharedApp.kernel.agentSpawn.spawnAgent({ parentConversationId: nodeConv, prompt: 'nested attempt' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+    )
+    await assert.rejects(
+      () =>
+        sharedApp.kernel.plugins.invokeAction('builtin:workflow', 'run', {
+          script: 'export const meta = { name: "nested-wf", description: "d" }\nreturn 1',
+          conversationId: nodeConv,
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+    )
+  })
+
+  // -------------------------------------------------------------------------
+  // 3. Explicit maxSubagentDepth=2 from root permits depth-1 -> depth-2; depth-2 becomes leaf
+  // -------------------------------------------------------------------------
+
+  test('explicit maxSubagentDepth=2 permits depth-1 -> depth-2 via subagent tool and workflow run; depth-2 strips dispatch tools', { timeout: 60_000 }, async () => {
+    const rootId = await createSharedRoot('depth2-explicit')
+    sharedFaux.setResponses([
+      fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'one layer task', maxSubagentDepth: 2, background: false })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'two layer task', background: false })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('two layer subagent answer'),
+      fauxAssistantMessage('one layer subagent complete'),
+      fauxAssistantMessage('main turn complete'),
+    ])
+    await sharedApp.kernel.conversations.submitInput(rootId, 'derive one layer with ceiling 2, let it dispatch two layer')
+    await sharedApp.kernel.conversations.waitForIdle(rootId)
+
+    const child1 = sharedApp.kernel.conversations.listConversations().find((c) => c.parentConversationId === rootId)
+    assert.ok(child1, 'should spawn depth-1 child conversation')
+    await sharedApp.kernel.conversations.waitForIdle(child1.id)
+    const child2 = sharedApp.kernel.conversations.listConversations().find((c) => c.parentConversationId === child1.id)
+    assert.ok(child2, 'depth-1 subagent with ceiling=2 should spawn depth-2 child conversation via tool')
+
+    const c1Tools = observedToolsByConvId.get(child1.id)
+    assert.ok(c1Tools?.includes('subagent') && c1Tools.includes('SubagentWorkflow'), 'depth-1 with ceiling=2 retains dispatch tools')
+    assert.ok(typeof observedSectionsByConvId.get(child1.id)?.['profile.catalog'] === 'string', 'depth-1 with ceiling=2 retains profile.catalog')
+
+    await sharedApp.kernel.kvStore.flush()
+    const e1 = registryEntry(sharedDir, child1.id)
+    assert.equal(e1['depth'], 1)
+    assert.equal(e1['maxSubagentDepth'], 2)
+    const e2 = registryEntry(sharedDir, child2.id)
+    assert.equal(e2['depth'], 2)
+    assert.equal(e2['parentConversationId'], child1.id)
+    assert.equal(e2['maxSubagentDepth'], 2, 'subtree ceiling inherits parent effective ceiling')
+
+    // Depth-2 `before_turn`: dispatch tools & catalog are stripped at the ceiling (leaf).
+    sharedFaux.setResponses([fauxAssistantMessage('two layer leaf directly answers')])
+    await sharedApp.kernel.conversations.submitInput(child2.id, 'leaf turn question')
+    await sharedApp.kernel.conversations.waitForIdle(child2.id)
+    const leafTools = observedToolsByConvId.get(child2.id)
+    assert.ok(leafTools, 'should observe tool list on depth-2 turn')
+    assert.equal(leafTools.includes('subagent'), false)
+    assert.equal(leafTools.includes('SubagentWorkflow'), false)
+    assert.equal(leafTools.includes('bash'), true)
+    assert.equal(observedSectionsByConvId.get(child2.id)?.['profile.catalog'], undefined)
+
+    await assert.rejects(
+      () => sharedApp.kernel.agentSpawn.spawnAgent({ parentConversationId: child2.id, prompt: 'depth3 attempt' }),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmxError)
+        assert.equal(err.code, 'subagent_depth_exceeded')
+        assert.equal(err.status, 403)
+        const details = err.details as { depth?: number; maxSubagentDepth?: number } | undefined
+        assert.equal(details?.depth, 2)
+        assert.equal(details?.maxSubagentDepth, 2)
+        return true
+      },
+    )
+
+    // Depth-1 with ceiling=2 can also run a workflow whose engine node registers at depth=2.
+    sharedFaux.setResponses([fauxAssistantMessage('engine node depth-2 answer')])
+    const run = (await sharedApp.kernel.plugins.invokeAction('builtin:workflow', 'run', {
+      script: 'export const meta = { name: "depth2-wf", description: "d" }\nreturn await agent("node task")',
+      conversationId: child1.id,
+      wait: true,
+    })) as { run: { status: string; nodes?: Array<{ conversationId?: number }> } }
+    assert.equal(run.run.status, 'completed')
+    const nodeConv = run.run.nodes?.find((n) => n.conversationId !== undefined)?.conversationId
+    assert.ok(nodeConv)
+    await sharedApp.kernel.kvStore.flush()
+    assert.equal(registryEntry(sharedDir, nodeConv)['depth'], 2)
+    assert.equal(registryEntry(sharedDir, nodeConv)['maxSubagentDepth'], 2)
+    await assert.rejects(
+      () => sharedApp.kernel.agentSpawn.spawnAgent({ parentConversationId: nodeConv, prompt: 'depth3 from wf node' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
     )
   })
 
   // -------------------------------------------------------------------------
-  // 5. Background rejection contract: managed subagent (`helmx`-owned) rejects explicit `background: true`
+  // 4. Managed subagent rejects explicit `background: true`; sync default continues working
   // -------------------------------------------------------------------------
 
-  test('managed subagent rejects explicit background: true with no spawn/run; sync default continues working', { timeout: 60_000 }, async () => {
-    const rootId = await createSharedRoot('depth5')
-    const child1 = (await spawnChain(sharedApp, sharedFaux, [rootId]))[0]!
-    // Depth-1 subagent is a `helmx`-owned autonomous conversation: explicit `background: true` must fail
-    // without silently downgrading to sync, spawning a child, or creating a run (prevents premature parent return).
+  test('managed subagent (with ceiling=2) rejects explicit background: true with no spawn/run; sync default spawns depth-2 leaf', { timeout: 60_000 }, async () => {
+    const rootId = await createSharedRoot('depth-bg-reject')
+    const child1 = (await spawnChain(sharedApp, sharedFaux, [rootId], withWorkflowSpawnMeta(undefined, { maxSubagentDepth: 2 })))[0]!
     sharedFaux.setResponses([
       fauxAssistantMessage(
-        [fauxToolCall('subagent', { prompt: 'by refuse background task', background: true })],
+        [fauxToolCall('subagent', { prompt: 'refuse background task', background: true })],
         { stopReason: 'toolUse' },
       ),
       fauxAssistantMessage('one layer continue answer'),
@@ -405,7 +454,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     )
     const { runs } = (await sharedApp.kernel.plugins.invokeAction('builtin:workflow', 'runs', {
       conversationId: child1,
-    })) as { runs: Array<{ id: string; kind?: string }> }
+    })) as { runs: Array<{ id: string }> }
     assert.equal(runs.length, 0, 'rejected call must not create any run record')
     assert.equal(
       sharedApp.kernel.conversations.listConversations().filter((c) => c.parentConversationId === child1).length,
@@ -413,24 +462,21 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       'rejected call must not spawn a child conversation',
     )
 
-    // Default (omitting `background`) on the same managed conversation stays synchronous and waits for the result.
+    // Default (omitting `background`) on the same managed conversation stays synchronous.
     sharedFaux.setResponses([
-      fauxAssistantMessage(
-        [fauxToolCall('subagent', { prompt: 'sync two layer task' })],
-        { stopReason: 'toolUse' },
-      ),
+      fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'sync two layer task' })], { stopReason: 'toolUse' }),
       fauxAssistantMessage('sync two layer answer'),
       fauxAssistantMessage('one layer sync continue answer'),
     ])
-    await sharedApp.kernel.conversations.submitInput(child1, 'again dispatch a sync subagent')
+    await sharedApp.kernel.conversations.submitInput(child1, 'dispatch a sync subagent')
     await sharedApp.kernel.conversations.waitForIdle(child1)
     const child2 = sharedApp.kernel.conversations.listConversations().find((c) => c.parentConversationId === child1)
     assert.ok(child2, 'default sync invocation should spawn depth-2 child conversation')
     await sharedApp.kernel.kvStore.flush()
     const entry = registryEntry(sharedDir, child2.id)
-    assert.equal(entry['depth'], 2, 'sync depth-2 subagent also registers with depth=2')
+    assert.equal(entry['depth'], 2)
+    assert.equal(entry['maxSubagentDepth'], 2)
 
-    // Depth-2 subagent is a leaf: direct `spawnAgent` rejects.
     await assert.rejects(
       () => sharedApp.kernel.agentSpawn.spawnAgent({ parentConversationId: child2.id, prompt: 'three layer attempt' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
@@ -438,30 +484,27 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   })
 
   // -------------------------------------------------------------------------
-  // 6. Forked conversations are not misclassified
+  // 5. Human `conversations fork` and direct `createConversation` remain unaffected (depth 0)
   // -------------------------------------------------------------------------
 
-  test('forked conversations (with parentConversationId) are unaffected: spawn and run actions remain available', { timeout: 60_000 }, async () => {
-    const rootId = await createSharedRoot('depth6')
-    // Complete one top-level turn to obtain a forkable entry.
+  test('forked conversations and direct createConversation children remain depth 0: spawn and run actions succeed', { timeout: 60_000 }, async () => {
+    const rootId = await createSharedRoot('depth-non-managed')
     sharedFaux.setResponses([fauxAssistantMessage('top-level answer')])
-    await sharedApp.kernel.conversations.submitInput(rootId, '你好')
+    await sharedApp.kernel.conversations.submitInput(rootId, 'hello')
     await sharedApp.kernel.conversations.waitForIdle(rootId)
     const detail = await sharedApp.kernel.conversations.getConversationDetail(rootId, { limit: 10 })
     const numericEntry = detail.entries.find((e) => Number.isInteger(Number(e.id)) && Number(e.id) > 0)
-    assert.ok(numericEntry, 'should have a forkable entry (numeric entryId)')
-    const entryId = Number(numericEntry!.id)
+    assert.ok(numericEntry, 'should have a forkable entry')
 
-    const forked = await sharedApp.kernel.conversations.forkConversation(rootId, { entryId })
-    assert.equal(forked.parentConversationId, rootId, 'forked conversation carries parentConversationId')
+    const forked = await sharedApp.kernel.conversations.forkConversation(rootId, { entryId: Number(numericEntry!.id) })
+    assert.equal(forked.parentConversationId, rootId)
 
-    // Fork is outside the registry: both `spawnAgent` and `run` action succeed.
     sharedFaux.setResponses([fauxAssistantMessage('fork subagent answer')])
-    const spawned = await sharedApp.kernel.agentSpawn.spawnAgent({
+    const spawnedFromFork = await sharedApp.kernel.agentSpawn.spawnAgent({
       parentConversationId: forked.id,
       prompt: 'fork conversation normal derive',
     })
-    assert.ok(spawned !== undefined)
+    assert.ok(spawnedFromFork !== undefined)
     const run = (await sharedApp.kernel.plugins.invokeAction('builtin:workflow', 'run', {
       script: 'export const meta = { name: "fork-ok", description: "d" }\nreturn 7',
       conversationId: forked.id,
@@ -469,71 +512,72 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     })) as { run: { status: string; result: unknown } }
     assert.equal(run.run.status, 'completed')
     assert.equal(run.run.result, 7)
-  })
 
-  // -------------------------------------------------------------------------
-  // 7. Non-spawn child conversations are not misclassified (have parentConversationId, but bypass spawn)
-  // -------------------------------------------------------------------------
-
-  test('non-spawn child conversations are unaffected: direct createConversation children can spawn subagents normally', { timeout: 60_000 }, async () => {
-    const rootId = await createSharedRoot('depth7')
-    const worker = await sharedApp.kernel.conversations.createConversation({
-      title: 'direct child worker',
+    const directChild = await sharedApp.kernel.conversations.createConversation({
+      title: 'direct child',
       profileId: 'assistant',
       parentConversationId: rootId,
     })
-    assert.equal(worker.parentConversationId !== undefined, true, 'child conversation has parentConversationId')
-
-    // Direct child is outside the managed-subagent registry: `spawnAgent` succeeds.
-    sharedFaux.setResponses([fauxAssistantMessage('worker derive subagent answer')])
-    const spawned = await sharedApp.kernel.agentSpawn.spawnAgent({
-      parentConversationId: worker.id,
-      prompt: 'worker normal derive',
+    assert.equal(directChild.parentConversationId, rootId)
+    sharedFaux.setResponses([fauxAssistantMessage('direct child spawn answer')])
+    const spawnedFromDirect = await sharedApp.kernel.agentSpawn.spawnAgent({
+      parentConversationId: directChild.id,
+      prompt: 'direct child normal derive',
     })
-    assert.ok(spawned !== undefined)
+    assert.ok(spawnedFromDirect !== undefined)
   })
 
   // -------------------------------------------------------------------------
-  // 8. Restart restoration: depth/parent facts persist across restarts
+  // 6. Restart restoration: default depth-1 leaf & explicit depth-2 subtree persist
   // -------------------------------------------------------------------------
 
-  test('restart restoration: depth facts persist across restarts (depth-2 still rejects, depth-1 can still spawn)', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 'depth8')
+  test('restart restoration: depth facts persist across restarts for default depth-1 leaf and explicit depth-2 subtree', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'depth-restart')
+    let defaultChildId = 0
+    let grantedChild1Id = 0
+    let grantedChild2Id = 0
     {
       const faux = makeFauxProvider()
       const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
-        const child1 = (await spawnChain(app, faux, [1]))[0]!
-        await spawnChain(app, faux, [child1])
+        defaultChildId = (await spawnChain(app, faux, [1]))[0]!
+        ;[grantedChild1Id, grantedChild2Id] = await spawnChain(
+          app,
+          faux,
+          [1, 0],
+          withWorkflowSpawnMeta(undefined, { maxSubagentDepth: 2 }),
+        ).catch(async () => {
+          const c1 = (await spawnChain(app, faux, [1], withWorkflowSpawnMeta(undefined, { maxSubagentDepth: 2 })))[0]!
+          const c2 = (await spawnChain(app, faux, [c1]))[0]!
+          return [c1, c2]
+        })
       } finally {
         await app.close()
       }
     }
-    // Restart on the same `dataDir`: registry facts remain in effect.
     {
       const faux = makeFauxProvider()
       const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
-        const child1 = app.kernel.conversations.listConversations().find((c) => c.parentConversationId === 1)
-        assert.ok(child1, 'depth-1 child conversation should restore after restart')
-        const child2 = app.kernel.conversations
-          .listConversations()
-          .find((c) => c.parentConversationId === child1.id)
-        assert.ok(child2, 'depth-2 child conversation should restore after restart')
-
         await assert.rejects(
-          () =>
-            app.kernel.agentSpawn.spawnAgent({
-              parentConversationId: child2.id,
-              prompt: 'after restart dispatch three layer',
-            }),
+          () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: defaultChildId, prompt: 'after restart default leaf' }),
+          (err: unknown) => {
+            assert.ok(err instanceof HelmxError && err.code === 'subagent_depth_exceeded')
+            const details = err.details as { depth?: number; maxSubagentDepth?: number } | undefined
+            assert.equal(details?.depth, 1)
+            assert.equal(details?.maxSubagentDepth, 1)
+            return true
+          },
+        )
+        await assert.rejects(
+          () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: grantedChild2Id, prompt: 'after restart depth-2 leaf' }),
           (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
         )
-        // Depth-1 control still allowed (can spawn a new depth-2 child after restart).
-        const newChild2 = (await spawnChain(app, faux, [child1.id]))[0]!
+        const newChild2 = (await spawnChain(app, faux, [grantedChild1Id]))[0]!
         assert.ok(newChild2 > 0)
         await app.kernel.kvStore.flush()
         assert.equal(registryEntry(dir, newChild2)['depth'], 2)
+        assert.equal(registryEntry(dir, newChild2)['maxSubagentDepth'], 2)
       } finally {
         await app.close()
       }
@@ -541,66 +585,53 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   })
 
   // -------------------------------------------------------------------------
-  // 9. No legacy fallback: corrupt entries missing depth/ceiling fail explicitly
+  // 7. Corrupt registry entries fail explicitly without guessing
   // -------------------------------------------------------------------------
 
-  test('corrupt registry entries missing depth facts fail explicitly without guessing', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 'depth9')
-    let legacyChildId = 0
+  test('corrupt registry entries missing depth facts or non-boolean forked fail explicitly (subagent_record_invalid)', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'depth-corrupt')
+    let childId = 0
     {
       const faux = makeFauxProvider()
       const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
-        const child1 = (await spawnChain(app, faux, [1]))[0]!
-        legacyChildId = child1
+        childId = (await spawnChain(app, faux, [1]))[0]!
         await app.kernel.kvStore.flush()
       } finally {
         await app.close()
       }
     }
-    // Simulate legacy record by stripping new fields (`agentType`/`createdAt` only).
-    {
-      const registry = readRegistryRaw(dir)
-      const legacy = registry[String(legacyChildId)] as Record<string, unknown>
-      assert.ok(legacy, 'child conversation should have a registry entry')
-      writeDepthKvRaw(dir, String(legacyChildId), {
-        ...(typeof legacy['agentType'] === 'string' ? { agentType: legacy['agentType'] } : {}),
-        createdAt: legacy['createdAt'] ?? Date.now(),
-      })
-    }
-    const faux = makeFauxProvider()
+    const existing = registryEntry(dir, childId)
+    writeDepthKvRaw(dir, String(childId), { ...existing, forked: 'yes' })
     await assert.rejects(
-      () => createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] }),
+      () => createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [makeFauxProvider().provider] }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'subagent_record_invalid',
+    )
+
+    writeDepthKvRaw(dir, String(childId), {
+      ...(typeof existing['agentType'] === 'string' ? { agentType: existing['agentType'] } : {}),
+      createdAt: existing['createdAt'] ?? Date.now(),
+    })
+    await assert.rejects(
+      () => createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [makeFauxProvider().provider] }),
       /深度登记无效/,
     )
   })
 
   // -------------------------------------------------------------------------
-  // 10. Explicit ceiling grant: `maxSubagentDepth=3` allows depth 3; invalid values reject
+  // 8. Explicit ceiling grant: `maxSubagentDepth=3` allows depth 3; invalid values reject
   // -------------------------------------------------------------------------
 
   test('explicit depth grant: maxSubagentDepth=3 permits depth 3 as leaf; descendants inherit ceiling', { timeout: 60_000 }, async () => {
-    const rootId = await createSharedRoot('depth10')
+    const rootId = await createSharedRoot('depth3-explicit')
     await sharedApp.kernel.kvStore.flush()
     const beforeKeys = new Set(Object.keys(readRegistryRaw(sharedDir)))
 
-    sharedFaux.setResponses([fauxAssistantMessage('one layer answer')])
-    let grantedChild = 0
-    await sharedApp.kernel.agentSpawn.spawnAgent({
-      parentConversationId: rootId,
-      prompt: 'grant three layer sub- tree',
-      meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: 3 }),
-      onResolved: (info) => {
-        if (info.conversationId !== undefined) grantedChild = info.conversationId
-      },
-    })
-    assert.ok(grantedChild > 0, 'should spawn child conversation and return conversationId')
-    const child1 = grantedChild
+    const child1 = (await spawnChain(sharedApp, sharedFaux, [rootId], withWorkflowSpawnMeta(undefined, { maxSubagentDepth: 3 })))[0]!
     await sharedApp.kernel.kvStore.flush()
     assert.equal(registryEntry(sharedDir, child1)['maxSubagentDepth'], 3, 'registry should snapshot granted ceiling')
     assert.equal(registryEntry(sharedDir, child1)['depth'], 1)
 
-    // Full 3-level chain succeeds (root -> 2 -> 3), with depth 3 as the leaf.
     const child2 = (await spawnChain(sharedApp, sharedFaux, [child1]))[0]!
     const child3 = (await spawnChain(sharedApp, sharedFaux, [child2]))[0]!
     await sharedApp.kernel.kvStore.flush()
@@ -618,7 +649,6 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       },
     )
 
-    // Out-of-range / non-integer values reject explicitly without silent clamping.
     for (const invalid of [0, 6, 2.5]) {
       await assert.rejects(
         () =>
@@ -627,14 +657,9 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
             prompt: 'invalid grant',
             meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: invalid as number }),
           }),
-        (err: unknown) => {
-          assert.ok(err instanceof HelmxError, `maxSubagentDepth=${invalid} should throw HelmxError`)
-          assert.equal(err.code, 'validation_error')
-          return true
-        },
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
       )
     }
-    // Subagents cannot raise their inherited ceiling or override below target depth.
     for (const ceiling of [4, 1]) {
       await assert.rejects(
         () =>
@@ -646,7 +671,6 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
         (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
       )
     }
-    // Rejected paths record no new registry entries.
     await sharedApp.kernel.kvStore.flush()
     const registry = readRegistryRaw(sharedDir)
     assert.equal(
@@ -657,16 +681,16 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   })
 
   // -------------------------------------------------------------------------
-  // 11. Global config updated via host port persists across restarts for new subtrees
+  // 9. Global config `builtin:workflow.maxSubagentDepth` defaults to 1, persists across restarts
   // -------------------------------------------------------------------------
 
-  test('plugin config maxSubagentDepth persists across restarts and rejects invalid values', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 'depth11')
+  test('plugin config builtin:workflow.maxSubagentDepth defaults to 1, persists across restarts, and rejects invalid values', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'depth-wf-config')
     {
       const faux = makeFauxProvider()
       const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
-        assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2)
+        assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 1)
         for (const invalid of [0, 99, 2.5, Number.NaN]) {
           await assert.rejects(
             () => app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: invalid }),
@@ -674,11 +698,12 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
             `invalid config value ${String(invalid)} should be rejected at persistence boundary`,
           )
         }
-        assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2, 'invalid config must not corrupt valid config')
-        await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: 1 })
-        const child = (await spawnChain(app, faux, [1]))[0]!
+        assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 1, 'invalid config must not corrupt valid config')
+        await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: 2 })
+        const child1 = (await spawnChain(app, faux, [1]))[0]!
+        const child2 = (await spawnChain(app, faux, [child1]))[0]!
         await assert.rejects(
-          () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: child, prompt: 'exceeds global one layer' }),
+          () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: child2, prompt: 'exceeds global two layer' }),
           (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
         )
       } finally {
@@ -688,24 +713,30 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     const faux = makeFauxProvider()
     const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
-      assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 1)
-      const child = (await spawnChain(app, faux, [1]))[0]!
+      assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2)
+      const child1 = (await spawnChain(app, faux, [1]))[0]!
+      const child2 = (await spawnChain(app, faux, [child1]))[0]!
       await assert.rejects(
-        () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: child, prompt: 'after restart still over limit' }),
+        () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: child2, prompt: 'after restart still over limit' }),
         (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
       )
       await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: null })
-      assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2)
+      assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 1)
+      const defaultChild = (await spawnChain(app, faux, [1]))[0]!
+      await assert.rejects(
+        () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: defaultChild, prompt: 'reset back to 1' }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
+      )
     } finally {
       await app.close()
     }
   })
 
   // -------------------------------------------------------------------------
-  // 12. Fork default leaf ceiling + boundary section + resume & restart persistence
+  // 10. Fork default leaf ceiling (even under global maxSubagentDepth=2) + explicit opt-in
   // -------------------------------------------------------------------------
 
-  test('fork: true defaults to leaf (depth=1, ceiling=1, forked=true), strips dispatch tools & catalog, injects forked_context, and persists across resume & restart', { timeout: 60_000 }, async () => {
+  test('fork: true defaults to leaf (ceiling=1) even when global config is 2; explicit maxSubagentDepth=2 opts in', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'fork-leaf-default')
     let childIdForResume: number | undefined
     let topLevelMeta: ReturnType<typeof captureModelRequest> | undefined
@@ -763,11 +794,12 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
         if (app.kernel.plugins.get('builtin:title')?.enabled) {
           await app.kernel.plugins.setConfig('builtin:title', { autoTitle: false })
         }
+        await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: 2 })
         await app.kernel.services.profiles.save({ id: 'coder', name: '编码专家' })
 
         await app.kernel.conversations.submitInput(1, 'remember FORK_FACT_42')
         await app.kernel.conversations.waitForIdle(1)
-        assert.ok(typeof topLevelMeta?.sectionsById['profile.catalog'] === 'string', 'top-level should inject profile.catalog when another Profile exists')
+        assert.ok(typeof topLevelMeta?.sectionsById['profile.catalog'] === 'string')
 
         await app.kernel.conversations.submitInput(1, 'delegate forked leaf')
         await app.kernel.conversations.waitForIdle(1)
@@ -780,20 +812,18 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
         await app.kernel.kvStore.flush()
         const entry = registryEntry(dir, child.id)
         assert.equal(entry['depth'], 1)
-        assert.equal(entry['maxSubagentDepth'], 1, 'fork: true without explicit maxSubagentDepth defaults to leaf at child depth')
-        assert.equal(entry['forked'], true, 'depth KV must persist forked: true fact')
-        assert.equal(entry['parentConversationId'], 1)
+        assert.equal(entry['maxSubagentDepth'], 1, 'fork: true still defaults to leaf even when global maxSubagentDepth=2')
+        assert.equal(entry['forked'], true)
 
-        assert.ok(childMeta, 'should capture forked child model request')
-        assert.equal(childMeta.toolNames.includes('subagent'), false, 'forked leaf must strip subagent')
-        assert.equal(childMeta.toolNames.includes('SubagentWorkflow'), false, 'forked leaf must strip SubagentWorkflow')
-        assert.equal(childMeta.toolNames.includes('bash'), true, 'non-dispatch tools stay intact')
-        assert.equal(childMeta.sectionsById['profile.catalog'], undefined, 'profile.catalog must be suppressed when dispatch tools are stripped')
+        assert.ok(childMeta)
+        assert.equal(childMeta.toolNames.includes('subagent'), false)
+        assert.equal(childMeta.toolNames.includes('SubagentWorkflow'), false)
+        assert.equal(childMeta.toolNames.includes('bash'), true)
+        assert.equal(childMeta.sectionsById['profile.catalog'], undefined)
         const forkSection = childMeta.sectionsById['workflow.forked_context'] ?? ''
-        assert.ok(forkSection.includes('<forked_subagent_context>'), 'forked child must receive workflow.forked_context section')
-        assert.ok(forkSection.includes('ALREADY been fulfilled'), 'boundary section must forbid re-delegation of inherited instructions')
+        assert.ok(forkSection.includes('<forked_subagent_context>'))
+        assert.ok(forkSection.includes('ALREADY been fulfilled'))
 
-        // Forked leaf child rejects direct spawnAgent and workflow run action with 403 subagent_depth_exceeded
         await assert.rejects(
           () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: child.id, prompt: 'forbidden nested spawn' }),
           (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
@@ -807,11 +837,9 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
           (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
         )
 
-        // Resuming the forked child preserves maxSubagentDepth=1, forked=true, tool stripping, and boundary section
         await app.kernel.conversations.submitInput(1, 'resume forked leaf caller')
         await app.kernel.conversations.waitForIdle(1)
-
-        assert.ok(resumedChildMeta, 'should capture resumed forked child request')
+        assert.ok(resumedChildMeta)
         assert.equal(resumedChildMeta.toolNames.includes('subagent'), false)
         assert.equal(resumedChildMeta.toolNames.includes('SubagentWorkflow'), false)
         assert.equal(resumedChildMeta.sectionsById['profile.catalog'], undefined)
@@ -819,14 +847,14 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
 
         await app.kernel.kvStore.flush()
         const afterResumeEntry = registryEntry(dir, child.id)
-        assert.equal(afterResumeEntry['maxSubagentDepth'], 1, 'resuming forked child must preserve ceiling=1')
-        assert.equal(afterResumeEntry['forked'], true, 'resuming forked child must preserve forked=true')
+        assert.equal(afterResumeEntry['maxSubagentDepth'], 1)
+        assert.equal(afterResumeEntry['forked'], true)
       } finally {
         await app.close()
       }
     }
 
-    // Real Hub restart on same dataDir: leaf ceiling, forked fact, stripping, and boundary persist
+    // Real Hub restart on same dataDir preserves leaf ceiling and forked fact.
     {
       const faux = makeFauxProvider()
       faux.setResponses(Array.from({ length: 8 }, () => step))
@@ -836,23 +864,13 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
         assert.equal(entry['depth'], 1)
         assert.equal(entry['maxSubagentDepth'], 1)
         assert.equal(entry['forked'], true)
-
         await assert.rejects(
           () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: persistedChildId, prompt: 'post-restart nested spawn' }),
           (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
         )
-        await assert.rejects(
-          () =>
-            app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
-              script: 'export const meta = { name: "blocked-restart", description: "d" }\nreturn 1',
-              conversationId: persistedChildId,
-            }),
-          (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
-        )
-
         await app.kernel.conversations.submitInput(persistedChildId, 'post-restart forked check')
         await app.kernel.conversations.waitForIdle(persistedChildId)
-        assert.ok(afterRestartMeta, 'should capture post-restart forked child request')
+        assert.ok(afterRestartMeta)
         assert.equal(afterRestartMeta.toolNames.includes('subagent'), false)
         assert.equal(afterRestartMeta.toolNames.includes('SubagentWorkflow'), false)
         assert.equal(afterRestartMeta.sectionsById['profile.catalog'], undefined)
@@ -861,18 +879,13 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
         await app.close()
       }
     }
-  })
 
-  // -------------------------------------------------------------------------
-  // 13. Explicit maxSubagentDepth=2 opt-in on fork: true
-  // -------------------------------------------------------------------------
-
-  test('fork: true with explicit maxSubagentDepth=2 opts in to depth-2 nesting while keeping workflow.forked_context on depth-1 child', { timeout: 60_000 }, async () => {
+    // Explicit maxSubagentDepth=2 opt-in on fork: true on sharedApp (whose global default is 1).
     const rootId = await createSharedRoot('fork-explicit-depth2')
     let depth1Meta: ReturnType<typeof captureModelRequest> | undefined
     let depth2Meta: ReturnType<typeof captureModelRequest> | undefined
 
-    const step: FauxResponseFactory = (context) => {
+    const optInStep: FauxResponseFactory = (context) => {
       const req = captureModelRequest(context.messages)
       const lastUser = req.userTexts.at(-1) ?? ''
       if (req.lastNonSystemRole === 'user' && lastUser.includes('OPT_IN_DEPTH2')) {
@@ -901,12 +914,10 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       if (req.lastNonSystemRole === 'toolResult' && req.lastToolName === 'subagent' && lastUser.includes('delegate opt-in fork')) {
         return fauxAssistantMessage('parent opt-in finished')
       }
-      throw new Error(`unexpected faux request: role=${req.lastNonSystemRole}, lastUser=${lastUser}`)
+      throw new Error(`unexpected optInStep faux request: role=${req.lastNonSystemRole}, lastUser=${lastUser}`)
     }
 
-    sharedFaux.setResponses(Array.from({ length: 16 }, () => step))
-    await sharedApp.kernel.services.profiles.save({ id: 'coder', name: '编码专家' })
-
+    sharedFaux.setResponses(Array.from({ length: 16 }, () => optInStep))
     await sharedApp.kernel.conversations.submitInput(rootId, 'seed OPT_IN_DEPTH2')
     await sharedApp.kernel.conversations.waitForIdle(rootId)
     await sharedApp.kernel.conversations.submitInput(rootId, 'delegate opt-in fork')
@@ -918,16 +929,16 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     const child2 = sharedApp.kernel.conversations.listConversations().find((c) => c.parentConversationId === child1.id)
     assert.ok(child2, 'depth-1 forked child with explicit maxSubagentDepth=2 should spawn depth-2 child')
 
-    assert.ok(depth1Meta, 'should capture depth-1 forked request')
-    assert.ok(depth1Meta.toolNames.includes('subagent') && depth1Meta.toolNames.includes('SubagentWorkflow'), 'depth-1 with ceiling=2 retains dispatch tools')
-    assert.ok(typeof depth1Meta.sectionsById['profile.catalog'] === 'string', 'depth-1 with dispatch tools retains profile.catalog')
-    assert.ok((depth1Meta.sectionsById['workflow.forked_context'] ?? '').includes('<forked_subagent_context>'), 'depth-1 forked child still receives workflow.forked_context')
+    assert.ok(depth1Meta)
+    assert.ok(depth1Meta.toolNames.includes('subagent') && depth1Meta.toolNames.includes('SubagentWorkflow'))
+    assert.ok(typeof depth1Meta.sectionsById['profile.catalog'] === 'string')
+    assert.ok((depth1Meta.sectionsById['workflow.forked_context'] ?? '').includes('<forked_subagent_context>'))
 
-    assert.ok(depth2Meta, 'should capture depth-2 child request')
-    assert.equal(depth2Meta.toolNames.includes('subagent'), false, 'depth-2 child is a leaf and strips subagent')
-    assert.equal(depth2Meta.toolNames.includes('SubagentWorkflow'), false, 'depth-2 child is a leaf and strips SubagentWorkflow')
-    assert.equal(depth2Meta.sectionsById['profile.catalog'], undefined, 'depth-2 leaf suppresses profile.catalog')
-    assert.equal(depth2Meta.sectionsById['workflow.forked_context'], undefined, 'non-forked depth-2 child does not get workflow.forked_context')
+    assert.ok(depth2Meta)
+    assert.equal(depth2Meta.toolNames.includes('subagent'), false)
+    assert.equal(depth2Meta.toolNames.includes('SubagentWorkflow'), false)
+    assert.equal(depth2Meta.sectionsById['profile.catalog'], undefined)
+    assert.equal(depth2Meta.sectionsById['workflow.forked_context'], undefined)
 
     await sharedApp.kernel.kvStore.flush()
     const e1 = registryEntry(sharedDir, child1.id)
@@ -946,29 +957,251 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   })
 
   // -------------------------------------------------------------------------
-  // 14. Corrupt non-boolean forked in depth KV fails startup explicitly
+  // 11. builtin:swarm single-source depth contract (depth=1 default leaf + workflow config opt-in)
   // -------------------------------------------------------------------------
 
-  test('corrupt non-boolean forked field in depth KV fails startup explicitly (subagent_record_invalid)', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 'fork-corrupt-kv')
-    let childId = 0
+  test('builtin:swarm workers report depth=1 via helmx.conversation-depth, follow builtin:workflow.maxSubagentDepth (default 1), and keep forkFrom as leaf', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'swarm-depth')
+    let leafWorkerId = 0
+    let optinWorkerId = 0
+    let optinChildId = 0
+    let forkedWorkerId = 0
+    let groupId = ''
+
+    let leafWorkerMeta: ReturnType<typeof captureModelRequest> | undefined
+    let optinWorkerMeta: ReturnType<typeof captureModelRequest> | undefined
+    let optinChildMeta: ReturnType<typeof captureModelRequest> | undefined
+    let forkedWorkerMeta: ReturnType<typeof captureModelRequest> | undefined
+
+    const step: FauxResponseFactory = (context) => {
+      const req = captureModelRequest(context.messages)
+      const lastUser = req.userTexts.at(-1) ?? ''
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('SEED_COORD_CONTEXT')) {
+        return fauxAssistantMessage('seeded coord context')
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('<swarm_board_report')) {
+        return fauxAssistantMessage('coordinator received board report')
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('SWARM_LEAF_TASK')) {
+        leafWorkerMeta = req
+        return fauxAssistantMessage(
+          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'leaf done' })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('SWARM_OPTIN_CHILD_TASK')) {
+        optinChildMeta = req
+        return fauxAssistantMessage('optin child done')
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('SWARM_OPTIN_TASK')) {
+        optinWorkerMeta = req
+        return fauxAssistantMessage(
+          [fauxToolCall('subagent', { prompt: 'SWARM_OPTIN_CHILD_TASK', background: false })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (req.lastNonSystemRole === 'toolResult' && req.lastToolName === 'subagent') {
+        return fauxAssistantMessage(
+          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'optin done' })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('SWARM_FORKED_TASK')) {
+        forkedWorkerMeta = req
+        return fauxAssistantMessage(
+          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'forked done' })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (req.lastNonSystemRole === 'toolResult' && req.lastToolName === 'swarm_board_post') {
+        return fauxAssistantMessage('worker turn settled')
+      }
+      if (req.lastNonSystemRole === 'user' && lastUser.includes('POST_RESTART_SWARM_CHILD')) {
+        return fauxAssistantMessage('post-restart child ok')
+      }
+      throw new Error(`unexpected swarm step faux request: role=${req.lastNonSystemRole}, lastUser=${lastUser}`)
+    }
+
     {
       const faux = makeFauxProvider()
+      faux.setResponses(Array.from({ length: 48 }, () => step))
       const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
-        childId = (await spawnChain(app, faux, [1]))[0]!
+        if (app.kernel.plugins.get('builtin:title')?.enabled) {
+          await app.kernel.plugins.setConfig('builtin:title', { autoTitle: false })
+        }
+        await app.kernel.services.profiles.save({ id: 'reviewer', name: '评审专家' })
+
+        assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 1)
+
+        await app.kernel.conversations.submitInput(1, 'SEED_COORD_CONTEXT')
+        await app.kernel.conversations.waitForIdle(1)
+
+        const createdGroup = (await app.kernel.plugins.invokeAction('builtin:swarm', 'create_group', {
+          title: 'Swarm Depth Squad',
+          conversationId: 1,
+        })) as { groupId: string }
+        groupId = createdGroup.groupId
+
+        // 1) Under default ceiling 1, non-forked worker is a depth-1 leaf.
+        const leafRes = (await app.kernel.plugins.invokeAction(
+          'builtin:swarm',
+          'dispatch_worker',
+          { groupId, name: 'leaf_worker', prompt: 'SWARM_LEAF_TASK' },
+          { conversationId: 1 },
+        )) as { workerConversationId: number }
+        leafWorkerId = leafRes.workerConversationId
+        await app.kernel.conversations.waitForIdle(leafWorkerId)
+        await waitUntil(() => app.kernel.plugins.activeTaskCount('builtin:swarm') === 0, 'swarm active tasks settle')
+        await app.kernel.conversations.waitForIdle(1)
+
+        assert.ok(leafWorkerMeta)
+        assert.equal((leafWorkerMeta.sectionsById['swarm.active_group'] ?? '').includes('Context boundary:'), false)
+        for (const stripped of ['subagent', 'SubagentWorkflow', 'swarm_create_group', 'swarm_dispatch_worker']) {
+          assert.equal(leafWorkerMeta.toolNames.includes(stripped), false, `default swarm worker must strip ${stripped}`)
+        }
+        assert.equal(leafWorkerMeta.sectionsById['profile.catalog'], undefined)
+        assert.equal(leafWorkerMeta.toolNames.includes('swarm_board_post'), true)
+        assert.equal(leafWorkerMeta.toolNames.includes('bash'), true)
+
+        await assert.rejects(
+          () =>
+            app.kernel.agentSpawn.spawnAgent({
+              parentConversationId: leafWorkerId,
+              prompt: 'forbidden swarm child spawn',
+              isolation: 'worktree',
+            }),
+          (err: unknown) => {
+            assert.ok(err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403)
+            const details = err.details as { depth?: number; maxSubagentDepth?: number } | undefined
+            assert.equal(details?.depth, 1)
+            assert.equal(details?.maxSubagentDepth, 1)
+            return true
+          },
+        )
+        await assert.rejects(
+          () =>
+            app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
+              script: 'export const meta = { name: "swarm-blocked", description: "d" }\nreturn 1',
+              conversationId: leafWorkerId,
+            }),
+          (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+        )
+
+        // 2) Raising `builtin:workflow.maxSubagentDepth` to 2 unlocks non-forked workers, while `forkFrom` stays leaf.
+        await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: 2 })
+        const optinRes = (await app.kernel.plugins.invokeAction(
+          'builtin:swarm',
+          'dispatch_worker',
+          { groupId, name: 'optin_worker', prompt: 'SWARM_OPTIN_TASK' },
+          { conversationId: 1 },
+        )) as { workerConversationId: number }
+        optinWorkerId = optinRes.workerConversationId
+        await app.kernel.conversations.waitForIdle(optinWorkerId)
+        await waitUntil(() => app.kernel.plugins.activeTaskCount('builtin:swarm') === 0, 'optin worker settle')
+        await app.kernel.conversations.waitForIdle(1)
+
+        assert.ok(optinWorkerMeta)
+        assert.equal((optinWorkerMeta.sectionsById['swarm.active_group'] ?? '').includes('Context boundary:'), false)
+        assert.equal(optinWorkerMeta.toolNames.includes('subagent'), true)
+        assert.equal(optinWorkerMeta.toolNames.includes('SubagentWorkflow'), true)
+        assert.ok(typeof optinWorkerMeta.sectionsById['profile.catalog'] === 'string')
+
+        const childConv = app.kernel.conversations.listConversations().find((c) => c.parentConversationId === optinWorkerId)
+        assert.ok(childConv, 'optin_worker should spawn depth-2 child conversation under ceiling 2')
+        optinChildId = childConv.id
+        assert.ok(optinChildMeta)
+        assert.equal(optinChildMeta.toolNames.includes('subagent'), false)
+        assert.equal(optinChildMeta.toolNames.includes('SubagentWorkflow'), false)
+        assert.equal(optinChildMeta.sectionsById['profile.catalog'], undefined)
+
         await app.kernel.kvStore.flush()
+        const childEntry = registryEntry(dir, optinChildId)
+        assert.equal(childEntry['depth'], 2)
+        assert.equal(childEntry['parentConversationId'], optinWorkerId)
+        assert.equal(childEntry['maxSubagentDepth'], 2)
+        await assert.rejects(
+          () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: optinChildId, prompt: 'depth3 attempt' }),
+          (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+        )
+
+        const forkedRes = (await app.kernel.plugins.invokeAction(
+          'builtin:swarm',
+          'dispatch_worker',
+          { groupId, name: 'forked_worker', prompt: 'SWARM_FORKED_TASK', forkFrom: 'coordinator' },
+          { conversationId: 1 },
+        )) as { workerConversationId: number }
+        forkedWorkerId = forkedRes.workerConversationId
+        await app.kernel.conversations.waitForIdle(forkedWorkerId)
+        await waitUntil(() => app.kernel.plugins.activeTaskCount('builtin:swarm') === 0, 'forked worker settle')
+        await app.kernel.conversations.waitForIdle(1)
+        assert.ok(forkedWorkerMeta)
+        assert.ok((forkedWorkerMeta.sectionsById['swarm.active_group'] ?? '').includes('Context boundary:'))
+        assert.equal(forkedWorkerMeta.sectionsById['workflow.forked_context'], undefined, 'must not double-inject workflow.forked_context on swarm worker')
+        assert.equal(forkedWorkerMeta.toolNames.includes('subagent'), false)
+        assert.equal(forkedWorkerMeta.toolNames.includes('SubagentWorkflow'), false)
+        assert.equal(forkedWorkerMeta.sectionsById['profile.catalog'], undefined)
+        await assert.rejects(
+          () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: forkedWorkerId, prompt: 'forked worker blocked' }),
+          (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+        )
+        await assert.rejects(
+          () =>
+            app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
+              script: 'export const meta = { name: "forked-blocked", description: "d" }\nreturn 1',
+              conversationId: forkedWorkerId,
+            }),
+          (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+        )
       } finally {
         await app.close()
       }
     }
-    const existing = registryEntry(dir, childId)
-    writeDepthKvRaw(dir, String(childId), { ...existing, forked: 'yes' })
 
+    // 3) Real Hub restart preserves single-source config and resets cleanly to leaf when restored to 1.
     const faux = makeFauxProvider()
-    await assert.rejects(
-      () => createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'subagent_record_invalid',
-    )
+    faux.setResponses(Array.from({ length: 16 }, () => step))
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    try {
+      assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2)
+
+      await assert.rejects(
+        () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: forkedWorkerId, prompt: 'post-restart forked leaf blocked' }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+      )
+
+      let restartChildId = 0
+      await app.kernel.agentSpawn.spawnAgent({
+        parentConversationId: optinWorkerId,
+        prompt: 'POST_RESTART_SWARM_CHILD',
+        onResolved: (info) => {
+          if (info.conversationId !== undefined) restartChildId = info.conversationId
+        },
+      })
+      assert.ok(restartChildId > 0)
+      await app.kernel.kvStore.flush()
+      assert.equal(registryEntry(dir, restartChildId)['depth'], 2)
+      assert.equal(registryEntry(dir, restartChildId)['maxSubagentDepth'], 2)
+
+      await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: null })
+      assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 1)
+
+      for (const workerId of [leafWorkerId, optinWorkerId]) {
+        await assert.rejects(
+          () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: workerId, prompt: 'reset back to depth-1 leaf' }),
+          (err: unknown) => {
+            assert.ok(err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403)
+            const details = err.details as { depth?: number; maxSubagentDepth?: number } | undefined
+            assert.equal(details?.depth, 1)
+            assert.equal(details?.maxSubagentDepth, 1)
+            return true
+          },
+        )
+      }
+
+      await app.kernel.plugins.invokeAction('builtin:swarm', 'close_group', { groupId }, { conversationId: 1 })
+    } finally {
+      await app.close()
+    }
   })
 })

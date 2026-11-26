@@ -49,7 +49,7 @@ Supported options:
 - `resume`: continue an existing agent context by its local label;
 - `schema`: JSON Schema for the result boundary;
 - `attachments`: authorized artifact IDs;
-- `maxSubagentDepth`: absolute task-tree depth cap;
+- `maxSubagentDepth`: absolute task-tree depth cap (`1..5`, default `1`; root is depth 0, so depth-1 nodes are leaves unless plugin config or explicit `2..5` grants deeper nesting);
 - `maxAttempts`: bounded retry count for the agent node.
 
 Do not combine `resume` with a new `agentType`, `model`, `isolation`, `nodeId`, `cwd`, or `effort`. Continuations require an existing idle execution that still belongs to the current task tree.

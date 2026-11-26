@@ -98,17 +98,35 @@ export interface WorkflowRunRequest {
 }
 
 /**
- * 受管子代理默认派生深度上限：主会话直接派生的一层子代理默认可继续派生
- * 二层（1 → 2），达到上限的会话即编排叶子。派生请求（spawn meta 的
- * 'builtin:workflow' 命名空间 maxSubagentDepth）与插件配置可显式授予更深。
+ * 受管子代理（含 subagent、工作流节点与 Swarm 成员）默认派生深度上限：主会话为第 0 层，
+ * 主会话直接派生的第 1 层默认即为编排叶子（不可再派生子代理或工作流）。
+ * 派生请求（spawn meta 的 'builtin:workflow' 命名空间 maxSubagentDepth）与
+ * `builtin:workflow` 插件配置可显式授予更深（1..HARD_MAX_SUBAGENT_DEPTH）。
  */
-export const DEFAULT_MAX_SUBAGENT_DEPTH = 2 as const
+export const DEFAULT_MAX_SUBAGENT_DEPTH = 1 as const
 
 /**
  * 派生深度绝对上限：插件配置与 spawn meta maxSubagentDepth 的共同
  * 校验边界（越界显式拒绝，防失控递归派生）。
  */
 export const HARD_MAX_SUBAGENT_DEPTH = 5 as const
+
+/**
+ * 跨插件会话深度能力契约（由 builtin:swarm 等派生子会话的插件提供，builtin:workflow 统一消费）：
+ * 查询指定会话是否为受管派生会话及其当前深度（非受管返回 undefined）。
+ */
+export const CONVERSATION_DEPTH_CAPABILITY_ID = 'helmx.conversation-depth' as const
+
+export interface ConversationDepthFact {
+  /** 会话当前派生深度（主会话为 0，直接派生子成员为 1）。 */
+  depth: number
+  /** 可选：强制收口为当前深度叶子（如 forkFrom 分叉成员，即使全局上限更高也不继续派发）。 */
+  leaf?: boolean
+}
+
+export interface ConversationDepthCapability {
+  depthOf(conversationId: number): ConversationDepthFact | undefined
+}
 
 /** 内置编排插件 ID、托管技能 ID 与公共运行态文档名。 */
 export const WORKFLOW_PLUGIN_ID = 'builtin:workflow' as const
