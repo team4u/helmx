@@ -89,11 +89,11 @@ test('思考过程收拢契约：非进行中（思考结束或历史会话）�
 
   // 2. 验证思考正文未就地展开
   assert.doesNotMatch(html, /process-thinking-body/)
-  assert.doesNotMatch(html, /trace-live-thinking-preview/)
+  assert.doesNotMatch(html, /thinking-expanded-body/)
   assert.doesNotMatch(html, /<h1[^>]*>思考内容<\/h1>/)
 })
 
-test('思考进行中契约：active=true 时展示紧凑实时尾部预览并带转圈 loader 与「正在思考…」', { timeout: 60_000 }, () => {
+test('思考进行中契约：active=true 时默认展开内联流式正文并带转圈 loader 与「正在思考…」', { timeout: 60_000 }, () => {
   const markdownText = '# 思考中…'
   const html = renderToString(
     e(
@@ -105,9 +105,9 @@ test('思考进行中契约：active=true 时展示紧凑实时尾部预览并�
 
   assert.match(html, /Thinking…/)
   assert.match(html, /spin-slow/)
-  assert.match(html, /trace-live-thinking-preview/)
+  assert.match(html, /thinking-expanded-body/)
   assert.doesNotMatch(html, /process-inspector-drawer/)
-  assert.match(html, /title="View thinking in drawer"/)
+  assert.match(html, /title="Collapse thinking"/)
 })
 
 test('响应与等待态：使用 spinner 转圈指示器，不带「正在等待响应…」文本', { timeout: 60_000 }, () => {
@@ -165,7 +165,7 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
     updatedAt: 0,
   }
 
-  // 1. 思考中阶段（仅流式思考 live.thinking，尚无正文）：呈现「正在思考…」且展示紧凑实时预览
+  // 1. 思考中阶段（仅流式思考 live.thinking，尚无正文）：呈现「正在思考…」且展开内联流式正文框
   const htmlThinking = renderToString(
     e(
       HostStoreProviders,
@@ -179,12 +179,12 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
     ),
   )
   assert.match(htmlThinking, /Thinking…/)
-  assert.match(htmlThinking, /trace-live-thinking-preview/)
+  assert.match(htmlThinking, /thinking-expanded-body/)
   assert.match(htmlThinking, /正在Deep thinking方案…/)
   // 仅单思考步骤时不显示多余嵌套的「思考与执行过程 (1 步)」
   assert.doesNotMatch(htmlThinking, /思考与执行过程/)
 
-  // 2. 思考完毕开始产出正文阶段（live.text 到达）：思考过程自动收为单行入口，正文露出
+  // 2. 思考完毕开始产出正文阶段（live.text 到达）：思考过程自动收为单行抽屉入口，正文露出
   const htmlTextStreaming = renderToString(
     e(
       HostStoreProviders,
@@ -199,11 +199,11 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
   )
   assert.match(htmlTextStreaming, /Thinking/)
   assert.match(htmlTextStreaming, /这是最终生成的回复内容/)
-  // 思考已完，收为单行
-  assert.doesNotMatch(htmlTextStreaming, /trace-live-thinking-preview/)
+  // 思考已完，自动收起内联正文并暴露抽屉入口
+  assert.doesNotMatch(htmlTextStreaming, /thinking-expanded-body/)
   assert.doesNotMatch(htmlTextStreaming, /Thinking…/)
 
-  // 3. 回合结算落库后（历史会话）：思考过程收为单行入口
+  // 3. 回合结算落库后（历史会话）：思考过程收为单行抽屉入口
   const convSettled: ConversationSummary = { ...convWorking, status: 'idle' }
   const settledEntry = {
     id: '100',
@@ -235,7 +235,7 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
   assert.match(htmlSettled, /Thinking/)
   assert.match(htmlSettled, /历史正文/)
   // 历史思考收为单行入口
-  assert.doesNotMatch(htmlSettled, /trace-live-thinking-preview/)
+  assert.doesNotMatch(htmlSettled, /thinking-expanded-body/)
   assert.doesNotMatch(htmlSettled, /process-inspector-drawer/)
 })
 

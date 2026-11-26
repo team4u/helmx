@@ -16,14 +16,10 @@ import { createWebTranslator } from '../src/i18n/catalog.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import type { FoldableStep, TimelineItem, ToolTrace } from '../src/conversation/timeline-model.js'
 import {
-  filterVisibleStepIndices,
-  findLatestProcessTarget,
   isStepFailed,
   isStepRunning,
-  liveThinkingTailPreview,
   resolveProcessInspection,
   resolveSelectedStepIndex,
-  selectLivePreviewSteps,
   stepKeyOf,
   thinkingPreviewLine,
 } from '../src/conversation/process-inspector-model.js'
@@ -121,7 +117,7 @@ function mountNode() {
   }
 }
 
-describe('process-inspector-model & ProcessInspectorDrawer', () => {
+describe('process-inspector-model & two-level ProcessInspectorDrawer', () => {
   afterEach(async () => {
     while (roots.length > 0) {
       const item = roots.pop()!
@@ -142,7 +138,7 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
     resetPluginClientCache()
   }, { timeout: 60_000 })
 
-  test('pure domain model: keys, previews, selection, target resolution, and filters', { timeout: 60_000 }, () => {
+  test('pure domain model: keys, statuses, previews, selection, and target resolution', { timeout: 60_000 }, () => {
     const thinkStep = makeThinkingStep('think-1', '\n\n   First   non-empty   line  \nSecond line')
     const emptyThinkStep = makeThinkingStep('', '   ')
     const runningTool = makeToolStep('tool-run', 'bash', { status: 'running', input: { command: 'pnpm test' } })
@@ -164,29 +160,8 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
     const longLine = 'A'.repeat(100)
     assert.equal(thinkingPreviewLine(`  ${longLine}  \nSecond`), longLine)
 
-    const shortTail = liveThinkingTailPreview('one\n\ntwo\nthree\n   ')
-    assert.equal(shortTail.truncated, false)
-    assert.equal(shortTail.visible, 'one\n\ntwo\nthree')
-
-    const longTail = liveThinkingTailPreview('l1\nl2\nl3\nl4\nl5\nl6', 4)
-    assert.equal(longTail.truncated, true)
-    assert.equal(longTail.visible, 'l3\nl4\nl5\nl6')
-
-    // selectLivePreviewSteps prioritizes running/active steps, and falls back to trailing 2 during idle gap
+    // resolveSelectedStepIndex: empty, followLive, key lookup, index fallback, active running scan
     const mixedSteps: FoldableStep[] = [doneTool, thinkStep, runningTool, makeThinkingStep('t-active', 'active', { active: true })]
-    const activePreview = selectLivePreviewSteps(mixedSteps)
-    assert.deepEqual(
-      activePreview.map((s) => s.index),
-      [2, 3],
-    )
-    const settledOnly = [doneTool, thinkStep, failedTool]
-    const gapPreview = selectLivePreviewSteps(settledOnly)
-    assert.deepEqual(
-      gapPreview.map((s) => s.index),
-      [1, 2],
-    )
-
-    // resolveSelectedStepIndex: empty, followLive, key lookup, index fallback
     assert.equal(resolveSelectedStepIndex([], { followLive: true, active: true }), -1)
     assert.equal(
       resolveSelectedStepIndex(mixedSteps, { selectedStepKey: 'think-1', followLive: true, active: true }),
@@ -200,12 +175,16 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
       resolveSelectedStepIndex(mixedSteps, { selectedStepKey: 'missing', selectedStepIndex: 99, followLive: false, active: false }),
       3,
     )
+    assert.equal(
+      resolveSelectedStepIndex([doneTool, runningTool], { active: true }),
+      1,
+    )
+    assert.equal(
+      resolveSelectedStepIndex([doneTool, failedTool], { active: false }),
+      0,
+    )
 
-    // filterVisibleStepIndices
-    assert.deepEqual(filterVisibleStepIndices(settledOnly, false), [0, 1, 2])
-    assert.deepEqual(filterVisibleStepIndices(settledOnly, true), [2])
-
-    // resolveProcessInspection & findLatestProcessTarget across turns
+    // resolveProcessInspection across turns
     const soloTool: ToolTrace = {
       key: 'solo-1',
       toolName: 'dispatch_worker',
@@ -246,9 +225,6 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
       },
     ]
 
-    const latest = findLatestProcessTarget(items)
-    assert.deepEqual(latest, { kind: 'step-group', turnKey: 'turn-2', segmentKey: 'seg-2', followLive: true })
-
     const resolvedGroup = resolveProcessInspection(items, {
       kind: 'step-group',
       turnKey: 'turn-2',
@@ -272,7 +248,7 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
     assert.equal(resolveProcessInspection(items, { kind: 'step-group', turnKey: 'none', segmentKey: 'none' }), null)
   })
 
-  test('settled multi-step drawer: split view, error filter, step switch resets ToolExpandedBody state, keyboard nav, fullscreen & close triggers', { timeout: 60_000 }, async () => {
+  test('two-level flow: Level 1 inline expand -> Level 2 single-column drawer, header switcher, scroll reset, non-hijacking keys, fullscreen & close', { timeout: 60_000 }, async () => {
     const conv = makeConversation(1)
     const store = makeTestStore({
       locale: 'zh-CN',
@@ -323,95 +299,111 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
       }),
     )
 
+    // Level 1 collapsed initially
     const summaryBtn = ui.host.querySelector('button.trace-group-summary') as HTMLButtonElement | null
     assert.ok(summaryBtn !== null)
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
+    assert.ok(ui.host.querySelector('.trace-group-steps') === null)
     assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
 
+    // Level 1 expand renders inline step stream WITHOUT popping open drawer
     await act(async () => {
       summaryBtn.click()
+    })
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
+    const stepsContainer = ui.host.querySelector('.trace-group-steps') as HTMLElement | null
+    assert.ok(stepsContainer !== null)
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
+
+    // Click step 1 (bash echo first) -> opens clean single-column drawer (NO sidebar, NO duplicate second header)
+    const stepToolRows = stepsContainer.querySelectorAll('.trace-row')
+    assert.equal(stepToolRows.length, 2)
+    await act(async () => {
+      ;(stepToolRows[0] as HTMLElement).click()
     })
 
     const drawer = document.querySelector('[role="dialog"].process-inspector-drawer') as HTMLElement | null
     assert.ok(drawer !== null)
-    assert.ok(drawer.classList.contains('process-inspector-drawer-multi'))
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
+    assert.ok(drawer.querySelector('.process-drawer-sidebar') === null, 'Single-column drawer must have no left sidebar')
+    assert.ok(drawer.querySelector('.process-detail-head') === null, 'Unified single header must not duplicate title bar')
+    assert.equal(drawer.querySelector('.process-drawer-title')?.textContent, 'bash')
+    assert.ok((drawer.querySelector('.process-detail-subheader')?.textContent ?? '').includes('echo first'))
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('2 / 3'))
 
-    const listOptions = () => Array.from(drawer.querySelectorAll('[role="option"].process-step-item')) as HTMLButtonElement[]
-    assert.equal(listOptions().length, 3)
-    assert.equal(listOptions()[0]!.getAttribute('aria-selected'), 'true')
-
-    // Click step 1 (bash 70 lines): click "展开全部" so local expanded state turns true
-    await act(async () => {
-      listOptions()[1]!.click()
-    })
-    assert.equal(listOptions()[1]!.getAttribute('aria-selected'), 'true')
+    // Simulate scrolling down inside step 1 AND expanding 70-line output
+    const detailScroller = drawer.querySelector('.process-drawer-detail') as HTMLElement
+    detailScroller.scrollTop = 240
     const detailBodyBefore = drawer.querySelector('.process-detail-body')!
     assert.ok((detailBodyBefore.textContent ?? '').includes('alpha line 70'))
     const expandAllStep1 = Array.from(detailBodyBefore.querySelectorAll('button')).find((b) =>
       (b.textContent ?? '').includes('展开全部'),
     )
-    assert.ok(expandAllStep1 !== undefined, 'Expected 展开全部 button for 70-line bash output in drawer')
+    assert.ok(expandAllStep1 !== undefined, 'Expected 展开全部 button for 70-line bash output')
     await act(async () => {
       expandAllStep1.click()
     })
     assert.ok((detailBodyBefore.textContent ?? '').includes('alpha line 1'))
-    assert.ok((detailBodyBefore.textContent ?? '').includes('收起'))
 
-    // Switch to step 2 (also 70 lines): ToolExpandedBody state MUST reset back to collapsed ("展开全部")
+    // Bare ArrowDown / ArrowUp MUST NOT hijack scrolling or switch steps
     await act(async () => {
-      listOptions()[2]!.click()
+      drawer.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
     })
-    assert.equal(listOptions()[2]!.getAttribute('aria-selected'), 'true')
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('2 / 3'))
+
+    // Next-step button switches to step 2 -> resets BOTH ToolExpandedBody state AND detail scrollTop to 0
+    const nextBtn = drawer.querySelector('button[aria-label="下一步"]') as HTMLButtonElement | null
+    assert.ok(nextBtn !== null)
+    await act(async () => {
+      nextBtn.click()
+    })
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('3 / 3'))
+    assert.equal(detailScroller.scrollTop, 0, 'Switching steps must reset detail scrollTop to 0')
+    assert.ok((drawer.querySelector('.process-detail-subheader')?.textContent ?? '').includes('echo second'))
     const detailBodyAfter = drawer.querySelector('.process-detail-body')!
     assert.ok((detailBodyAfter.textContent ?? '').includes('beta-err line 70'))
-    assert.equal((detailBodyAfter.textContent ?? '').includes('beta-err line 1\n'), false)
     assert.ok(
       Array.from(detailBodyAfter.querySelectorAll('button')).some((b) => (b.textContent ?? '').includes('展开全部')),
-      'Switching step must reset local expanded state inside ToolExpandedBody',
+      'Switching step must reset ToolExpandedBody expanded state',
     )
 
-    // Switch back to step 0 then click "仅错误" filter -> filters list to 1 failed step and auto-selects it
+    // Keyboard step navigation: Alt+ArrowUp -> step 1, `]` -> step 2, `[` -> step 1
     await act(async () => {
-      listOptions()[0]!.click()
+      drawer.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true, cancelable: true }))
     })
-    assert.equal(listOptions()[0]!.getAttribute('aria-selected'), 'true')
-    const filterErrBtn = drawer.querySelector('.process-drawer-filter-btn-err') as HTMLButtonElement | null
-    assert.ok(filterErrBtn !== null)
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('2 / 3'))
     await act(async () => {
-      filterErrBtn.click()
+      drawer.dispatchEvent(new window.KeyboardEvent('keydown', { key: ']', bubbles: true, cancelable: true }))
     })
-    assert.equal(listOptions().length, 1)
-    assert.equal(listOptions()[0]!.getAttribute('aria-selected'), 'true')
-    assert.ok(listOptions()[0]!.classList.contains('is-error'))
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('3 / 3'))
+    await act(async () => {
+      drawer.dispatchEvent(new window.KeyboardEvent('keydown', { key: '[', bubbles: true, cancelable: true }))
+    })
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('2 / 3'))
 
-    // Restore All filter
-    const filterAllBtn = drawer.querySelector('.process-drawer-filter-btn:not(.process-drawer-filter-btn-err)') as HTMLButtonElement | null
-    assert.ok(filterAllBtn !== null)
+    // Bracket shortcut ignored when focus is inside an input element inside drawer
+    const dummyInput = document.createElement('input')
+    drawer.appendChild(dummyInput)
     await act(async () => {
-      filterAllBtn.click()
+      dummyInput.dispatchEvent(new window.KeyboardEvent('keydown', { key: ']', bubbles: true, cancelable: true }))
     })
-    assert.equal(listOptions().length, 3)
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('2 / 3'))
+    dummyInput.remove()
 
-    // Keyboard navigation in listbox: Home -> 0, ArrowDown -> 1, End -> 2, ArrowUp -> 1
-    const listbox = drawer.querySelector('[role="listbox"].process-step-list') as HTMLElement | null
-    assert.ok(listbox !== null)
+    // Header DropdownMenu step jumper: open N/M menu and pick step 0 (Thinking)
+    const pickerTrigger = drawer.querySelector('.process-step-picker-trigger') as HTMLButtonElement
     await act(async () => {
-      listbox.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true }))
+      pickerTrigger.dispatchEvent(new window.PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1 }))
+      pickerTrigger.click()
     })
-    assert.equal(listOptions()[0]!.getAttribute('aria-selected'), 'true')
+    await waitForCondition(() => document.querySelectorAll('.process-step-menu-item').length === 3)
+    const menuItems = Array.from(document.querySelectorAll('.process-step-menu-item')) as HTMLElement[]
+    assert.ok(menuItems[2]!.classList.contains('is-error'))
     await act(async () => {
-      listbox.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+      menuItems[0]!.click()
     })
-    assert.equal(listOptions()[1]!.getAttribute('aria-selected'), 'true')
-    await act(async () => {
-      listbox.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))
-    })
-    assert.equal(listOptions()[2]!.getAttribute('aria-selected'), 'true')
-    await act(async () => {
-      listbox.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
-    })
-    assert.equal(listOptions()[1]!.getAttribute('aria-selected'), 'true')
+    await waitForCondition(() => (drawer.querySelector('.process-drawer-title')?.textContent ?? '') === '思考过程')
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('1 / 3'))
+    assert.ok((drawer.querySelector('.process-thinking-body')?.textContent ?? '').includes('First thought'))
 
     // Desktop fullscreen toggle
     const fullscreenBtn = drawer.querySelector('button[aria-label="全屏展开抽屉"]') as HTMLButtonElement | null
@@ -422,18 +414,15 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
     assert.ok(drawer.classList.contains('process-inspector-drawer-fullscreen'))
     assert.ok(drawer.querySelector('button[aria-label="退出全屏"]') !== null)
 
-    // Close via close button
-    const closeBtn = drawer.querySelector('.process-drawer-close-btn') as HTMLButtonElement | null
-    assert.ok(closeBtn !== null)
+    // Close via close button, then Esc, then backdrop
+    const closeBtn = drawer.querySelector('.process-drawer-close-btn') as HTMLButtonElement
     await act(async () => {
       closeBtn.click()
     })
     await waitForCondition(() => document.querySelector('[role="dialog"].process-inspector-drawer') === null)
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
 
-    // Re-open and close via Escape
     await act(async () => {
-      summaryBtn.click()
+      ;(stepToolRows[0] as HTMLElement).click()
     })
     await waitForCondition(() => document.querySelector('[role="dialog"].process-inspector-drawer') !== null)
     await act(async () => {
@@ -441,9 +430,8 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
     })
     await waitForCondition(() => document.querySelector('[role="dialog"].process-inspector-drawer') === null)
 
-    // Re-open and close via backdrop pointer/click dismissal
     await act(async () => {
-      summaryBtn.click()
+      ;(stepToolRows[0] as HTMLElement).click()
     })
     await waitForCondition(() => document.querySelector('.process-inspector-backdrop') !== null)
     const backdrop = document.querySelector('.process-inspector-backdrop') as HTMLElement
@@ -454,7 +442,7 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
     await waitForCondition(() => document.querySelector('[role="dialog"].process-inspector-drawer') === null)
   })
 
-  test('live execution (active=true): compact feed, click running step, follow-latest lock/resume, and settled continuity', { timeout: 60_000 }, async () => {
+  test('live execution (active=true): original inline streaming thinking box + full Level 1 stream + drawer follow toggle & settled continuity', { timeout: 60_000 }, async () => {
     const conv = makeConversation(2, { status: 'working' })
     const store = makeTestStore({
       locale: 'zh-CN',
@@ -503,32 +491,42 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
       }),
     )
 
-    // Compact live feed shows trailing 4 lines of thinking + running tool, NOT earlier settled tool row
-    const liveFeed = ui.host.querySelector('.trace-live-feed') as HTMLElement | null
-    assert.ok(liveFeed !== null)
-    const thinkingPreview = liveFeed.querySelector('.trace-live-thinking-preview') as HTMLElement | null
-    assert.ok(thinkingPreview !== null)
-    assert.equal(thinkingPreview.textContent, 'line3\nline4\nline5\nline6')
-    assert.equal((liveFeed.textContent ?? '').includes('a.ts'), false)
-    assert.ok((liveFeed.textContent ?? '').includes('pnpm build'))
+    // Level 1 active stream shows ALL steps AND the original inline streaming thinking box
+    const groupSteps = ui.host.querySelector('.trace-group-steps') as HTMLElement | null
+    assert.ok(groupSteps !== null)
+    assert.ok((groupSteps.textContent ?? '').includes('a.ts'))
+    assert.ok((groupSteps.textContent ?? '').includes('pnpm build'))
+    const activeInlineThinking = groupSteps.querySelector('.thinking-expanded-body') as HTMLElement | null
+    assert.ok(activeInlineThinking !== null, 'Active thinking MUST preserve the original inline streaming Markdown box')
+    assert.ok((activeInlineThinking.textContent ?? '').includes('line1'))
+    assert.ok((activeInlineThinking.textContent ?? '').includes('line6'))
 
-    // Click running step in live feed -> opens drawer straight to that running step (index 2)
-    const runningRow = liveFeed.querySelector('div.trace-row[role="button"]') as HTMLElement | null
-    assert.ok(runningRow !== null)
+    // Click running step in Level 1 stream -> opens Level 2 drawer on running bash with blue .is-running icon
+    const toolRows = groupSteps.querySelectorAll('.trace-row')
+    assert.equal(toolRows.length, 2)
     await act(async () => {
-      runningRow.click()
+      ;(toolRows[1] as HTMLElement).click()
     })
     const drawer = document.querySelector('[role="dialog"].process-inspector-drawer') as HTMLElement | null
     assert.ok(drawer !== null)
-    const options = () => Array.from(drawer.querySelectorAll('[role="option"].process-step-item')) as HTMLButtonElement[]
-    assert.equal(options().length, 3)
-    assert.equal(options()[2]!.getAttribute('aria-selected'), 'true')
+    assert.ok(drawer.querySelector('.process-drawer-status-icon.is-running') !== null)
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('3 / 3'))
 
-    // Click step 0 manually -> pauses follow-live, so appending step 3 keeps step 0 selected and reveals "跟随最新"
+    // Toggle Follow button: initially pause/follow off after clicking specific step -> shows "跟随最新"
+    const followBtn = Array.from(drawer.querySelectorAll('button')).find((b) =>
+      (b.textContent ?? '').includes('跟随最新'),
+    )
+    assert.ok(followBtn !== undefined, 'Clicking a specific step starts unlocked ("跟随最新")')
+
+    // Click Prev twice across renders to lock on step 0 (`1 / 3`), then append step 3 -> stays on `1 / 4`
     await act(async () => {
-      options()[0]!.click()
+      ;(drawer.querySelector('button[aria-label="上一步"]') as HTMLButtonElement).click()
     })
-    assert.equal(options()[0]!.getAttribute('aria-selected'), 'true')
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('2 / 3'))
+    await act(async () => {
+      ;(drawer.querySelector('button[aria-label="上一步"]') as HTMLButtonElement).click()
+    })
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('1 / 3'))
 
     const runningStep3 = makeToolStep('live-3', 'edit', { status: 'running', input: { path: 'b.ts' } })
     await ui.render(
@@ -540,19 +538,18 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
         onRequestEdit: () => {},
       }),
     )
-    assert.equal(options().length, 4)
-    assert.equal(options()[0]!.getAttribute('aria-selected'), 'true')
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('1 / 4'))
 
-    const followBtn = Array.from(drawer.querySelectorAll('button')).find((b) =>
-      (b.textContent ?? '').includes('跟随最新'),
-    )
-    assert.ok(followBtn !== undefined, 'Expected follow-latest button when user inspected an earlier step')
+    // Enable follow-live -> reads "实时跟随中" and jumps to step 4 / 4
     await act(async () => {
       followBtn.click()
     })
-    assert.equal(options()[3]!.getAttribute('aria-selected'), 'true')
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('4 / 4'))
+    assert.ok(
+      Array.from(drawer.querySelectorAll('button')).some((b) => (b.textContent ?? '').includes('实时跟随中')),
+    )
 
-    // New live step arrives while followLive=true -> auto-advances to step 4
+    // Append step 4 while followLive=true -> auto-advances to 5 / 5
     const runningStep4 = makeToolStep('live-4', 'write', { status: 'running', input: { path: 'c.ts' } })
     await ui.render(
       store,
@@ -563,10 +560,9 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
         onRequestEdit: () => {},
       }),
     )
-    assert.equal(options().length, 5)
-    assert.equal(options()[4]!.getAttribute('aria-selected'), 'true')
+    assert.ok((drawer.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('5 / 5'))
 
-    // Turn settles (active=false, live=false): timeline collapses .trace-live-feed, open drawer stays open cleanly
+    // Turn settles (active=false, live=false): Level 1 auto-collapses while open drawer stays open cleanly
     const settledConv = makeConversation(2, { status: 'idle' })
     const settledSteps: FoldableStep[] = [
       settledStep0,
@@ -584,14 +580,14 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
         onRequestEdit: () => {},
       }),
     )
-    assert.ok(ui.host.querySelector('.trace-live-feed') === null)
+    assert.ok(ui.host.querySelector('.trace-group-steps') === null, 'Level 1 stream collapses cleanly on settle')
     const drawerAfterSettle = document.querySelector('[role="dialog"].process-inspector-drawer') as HTMLElement | null
     assert.ok(drawerAfterSettle !== null, 'Open drawer must remain open after turn settles')
-    assert.equal(options().length, 5)
-    assert.equal(options()[4]!.getAttribute('aria-selected'), 'true')
+    assert.ok((drawerAfterSettle.querySelector('.process-step-picker-trigger')?.textContent ?? '').includes('5 / 5'))
+    assert.equal(drawerAfterSettle.querySelector('.process-drawer-title')?.textContent, 'write')
   })
 
-  test('standalone ThinkingRow opens single-column drawer with MarkdownView & CopyButton', { timeout: 60_000 }, async () => {
+  test('standalone ThinkingRow opens single-column drawer with MarkdownView & CopyButton in header', { timeout: 60_000 }, async () => {
     const copied: string[] = []
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -622,12 +618,11 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
 
     const drawer = document.querySelector('[role="dialog"].process-inspector-drawer') as HTMLElement | null
     assert.ok(drawer !== null)
-    assert.ok(drawer.classList.contains('process-inspector-drawer-single'))
-    assert.ok(drawer.querySelector('[role="listbox"]') === null)
+    assert.ok(drawer.querySelector('.process-detail-head') === null)
     assert.ok(drawer.querySelector('.process-thinking-body h1') !== null)
     assert.ok((drawer.querySelector('.process-thinking-body')!.textContent ?? '').includes('step alpha'))
 
-    const copyBtn = Array.from(drawer.querySelectorAll('button')).find((b) =>
+    const copyBtn = Array.from(drawer.querySelectorAll<HTMLButtonElement>('.process-drawer-header button')).find((b) =>
       (b.getAttribute('aria-label') ?? b.textContent ?? '').includes('复制思考'),
     )
     assert.ok(copyBtn !== undefined)
@@ -755,7 +750,6 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
 
     const drawer = document.querySelector('[role="dialog"].process-inspector-drawer') as HTMLElement | null
     assert.ok(drawer !== null)
-    assert.ok(drawer.classList.contains('process-inspector-drawer-single'))
     assert.equal(ioToggle.getAttribute('aria-expanded'), 'true')
     assert.ok((drawer.textContent ?? '').includes('truncated-preview-only'))
 
@@ -802,6 +796,15 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
       },
     ]
 
+    const openStepFromTimeline = async (container: HTMLElement) => {
+      await act(async () => {
+        ;(container.querySelector('button.trace-group-summary') as HTMLButtonElement).click()
+      })
+      await act(async () => {
+        ;(container.querySelector('.trace-group-steps .trace-row') as HTMLElement).click()
+      })
+    }
+
     const ui = mountNode()
     await ui.render(
       store,
@@ -814,9 +817,7 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
       }),
     )
 
-    await act(async () => {
-      ;(ui.host.querySelector('button.trace-group-summary') as HTMLButtonElement).click()
-    })
+    await openStepFromTimeline(ui.host)
     assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') !== null)
 
     // Hiding pane via staged=false MUST dismiss the drawer immediately
@@ -844,7 +845,7 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
       }),
     )
     await act(async () => {
-      ;(ui.host.querySelector('button.trace-group-summary') as HTMLButtonElement).click()
+      ;(ui.host.querySelector('.trace-group-steps .trace-row') as HTMLElement).click()
     })
     assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') !== null)
 
@@ -861,7 +862,7 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
     await waitForCondition(() => document.querySelector('[role="dialog"].process-inspector-drawer') === null)
   })
 
-  test('nested inside DrawerStackShell: Esc dismisses only ProcessInspectorDrawer first, keeping DrawerStackShell open', { timeout: 60_000 }, async () => {
+  test('nested inside DrawerStackShell: applies light nested backdrop and Esc dismisses only ProcessInspectorDrawer first', { timeout: 60_000 }, async () => {
     const conv = makeConversation(30)
     const entries: ConversationEntry[] = [
       {
@@ -896,9 +897,13 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
     await ui.render(store, e(DrawerStackShell, { activeConversationId: 1 }))
 
     await waitForCondition(() => document.querySelector('.drawer-stack-dialog button.trace-group-summary') !== null)
-    const outerTrigger = document.querySelector('.drawer-stack-dialog button.trace-group-summary') as HTMLButtonElement
+    const groupTrigger = document.querySelector('.drawer-stack-dialog button.trace-group-summary') as HTMLButtonElement
     await act(async () => {
-      outerTrigger.click()
+      groupTrigger.click()
+    })
+    await waitForCondition(() => document.querySelector('.drawer-stack-dialog .trace-group-steps .trace-row') !== null)
+    await act(async () => {
+      ;(document.querySelector('.drawer-stack-dialog .trace-group-steps .trace-row') as HTMLElement).click()
     })
 
     await waitForCondition(() => document.querySelector('[role="dialog"].process-inspector-drawer') !== null)
@@ -906,6 +911,7 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
     const outerDrawer = document.querySelector('[role="dialog"].drawer-stack-dialog') as HTMLElement
     assert.ok(innerDrawer !== null)
     assert.ok(outerDrawer !== null)
+    assert.ok(document.querySelector('.process-inspector-backdrop-nested') !== null, 'Nested backdrop avoids double blur')
 
     // First Escape closes ONLY the inner ProcessInspectorDrawer
     await act(async () => {
@@ -967,11 +973,14 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
     await act(async () => {
       summaryBtn.click()
     })
+    await act(async () => {
+      ;(ui.host.querySelector('.trace-group-steps .trace-row') as HTMLElement).click()
+    })
 
     const drawer = document.querySelector('[role="dialog"].process-inspector-drawer') as HTMLElement
     const zhDrawerText = drawer.textContent ?? ''
-    assert.ok(zhDrawerText.includes(zh('conv.process.filterErrors', { count: 1 })))
-    assert.ok(zhDrawerText.includes(zh('conv.process.stepCounter', { current: 1, total: 2 })))
+    assert.ok(zhDrawerText.includes(zh('conv.process.statusError')))
+    assert.ok(zhDrawerText.includes(zh('conv.process.stepCounter', { current: 2, total: 2 })))
     assert.equal(EMOJI_RE.test(ui.host.textContent ?? ''), false)
     assert.equal(EMOJI_RE.test(zhDrawerText), false)
 
@@ -980,8 +989,8 @@ describe('process-inspector-model & ProcessInspectorDrawer', () => {
     })
     await waitForCondition(() => (summaryBtn.textContent ?? '').includes(en('conv.thinking.exec', { count: 2 })))
     const enDrawerText = drawer.textContent ?? ''
-    assert.ok(enDrawerText.includes(en('conv.process.filterErrors', { count: 1 })))
-    assert.ok(enDrawerText.includes(en('conv.process.stepCounter', { current: 1, total: 2 })))
+    assert.ok(enDrawerText.includes(en('conv.process.statusError')))
+    assert.ok(enDrawerText.includes(en('conv.process.stepCounter', { current: 2, total: 2 })))
     assert.equal(EMOJI_RE.test(ui.host.textContent ?? ''), false)
     assert.equal(EMOJI_RE.test(enDrawerText), false)
   })

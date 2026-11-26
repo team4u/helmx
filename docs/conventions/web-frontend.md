@@ -89,8 +89,8 @@ SDK 不导入 Web store、路由或渲染实现。`HelmxStoreProvider` 经 `Plug
 
 ## 会话工具展示
 
-- 常规工具保留 26px 单行轨迹与 `StepGroup` 汇总行：执行中（`active`）在时间线保留紧凑实时动态（最多显示运行中工具与正在思考的尾部 4 行预览），落定后收拢为单行入口保持对话流清爽；
-- 点击整组 `StepGroup`、单步思考、实时动态行、独立工具行或 `replaceRow` 插件卡 `<>` I/O 入口，统一打开右侧宽抽屉 `ProcessInspectorDrawer`（多步为主从分栏：左侧步骤目录 + 右侧宽屏详情，支持桌面一键切全屏、`Ctrl+O` / `Esc` 关闭；单步省略冗余目录）；专属详情体按工具语义呈现（`edit` 展示变更、`bash` 展示命令与输出尾部、`Thinking` 全高流式 Markdown 阅读），并提供原始数据入口；
+- 一级时间线保持轻量流水列表：`StepGroup` 就地折叠展开单行步骤序列（执行中默认展开，落定后自动收起；`Ctrl+O` 就地展开/收起最近过程回合），正在进行中的思考（`thinking.active`）保留内联流式 `MarkdownView` 框并在结束时自动收拢；
+- 二级详情按需滑出：点击任意已落定 `思考过程`、单行 `TraceRow` 工具或 `replaceRow` 插件卡 `<>` I/O 入口，统一打开右侧单栏详情抽屉 `ProcessInspectorDrawer`（桌面全屏可切换，`Esc` 关闭；所属多步组时顶栏提供 `N / M` 快速跳步菜单与上下步切换，`Alt+ArrowUp`/`Alt+ArrowDown` 或 `[`/`]` 切步）；专属详情体按工具语义呈现（`edit` 展示变更、`bash` 展示命令与输出尾部、`Thinking` 完整 Markdown 阅读），并提供原始数据入口；
 - 待执行、成功、失败与未知状态必须如实区分：`oldText / newText` 只是片段对比不代表已落盘；成功后的差异只消费内核实际执行结果，禁止重读当前文件冒充历史快照；失败态不承诺「未写入」；
 - `edit` 结果遵循 `@helmx/protocol` 的 `EditToolResult` 与 `EDIT_TOOL_RESULT_SCHEMA`，Web 在消费边界校验；
 - 内容折叠与数据截断须分清：折叠可展开已有全文，截断明确说明部分数据未传回，不提供虚假「展开全部」；脱敏影响行号映射时省略差异正文并明确标记。

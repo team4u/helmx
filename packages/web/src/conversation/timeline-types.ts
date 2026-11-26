@@ -158,3 +158,8 @@ export interface AssistantTurnBusyOptions {
   isLatestTurn?: boolean
   activeToolCallIds?: ReadonlySet<string>
 }
+
+export interface ProcessShortcutCommand {
+  open: boolean
+  seq: number
+}

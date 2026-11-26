@@ -282,63 +282,72 @@ describe("timeline-workbench-ux", () => {
     assert.equal(splitTurn2Toggle.getAttribute('aria-expanded'), 'false')
     assert.equal(drawerToggle.getAttribute('aria-expanded'), 'false')
 
-    // 按 Ctrl+O（primary 面板）：打开 primary 最新含过程回合的右侧抽屉（含思考详情）
+    // 按 Ctrl+O（primary 面板）：就地展开 primary 最新含过程回合的一级流水步骤列表（不直接弹抽屉）
     await act(async () => {
       window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
     })
     assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
-    assert.equal(primaryTurn1Toggle.getAttribute('aria-expanded'), 'false', '较早回合应保持未打开')
+    assert.equal(primaryTurn1Toggle.getAttribute('aria-expanded'), 'false', '较早回合应保持折叠')
     assert.equal(splitTurn2Toggle.getAttribute('aria-expanded'), 'false', '分屏面板不应被误触')
     assert.equal(drawerToggle.getAttribute('aria-expanded'), 'false', '子会话抽屉不应响应 Ctrl+O')
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null, 'Ctrl+O 只负责一级就地展开，不直接弹出二级抽屉')
+    assert.match(primaryRoot.textContent ?? '', /pnpm test/)
+
+    // 点击一级列表中的思考入口：弹出二级单栏详情抽屉查看完整思考内容，再关闭
+    const primaryStepThinking = primaryRoot.querySelector<HTMLButtonElement>('[data-latest-process-turn="true"] .trace-group-steps button.trace-group-summary')!
+    assert.ok(primaryStepThinking !== null)
+    await act(async () => {
+      primaryStepThinking.click()
+    })
     const primaryDrawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')
-    assert.ok(primaryDrawer !== null, 'primary Ctrl+O 应打开过程检视抽屉')
+    assert.ok(primaryDrawer !== null, '点击一级列表子步应弹出过程详情抽屉')
     assert.match(primaryDrawer.textContent ?? '', /primary-最新思考推理详情/)
-
-    // 再次按 Ctrl+O（primary 面板）：关闭抽屉
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
-    })
-    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
-    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
-
-    // 手动点击打开抽屉后，再按 Ctrl+O 应直接关闭（不与手动状态打架）
-    await act(async () => {
-      primaryTurn2Toggle.click()
-    })
-    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
-    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') !== null)
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
-    })
-    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
-    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
-
-    // 手动点击打开并通过抽屉关闭按钮收起后，再按 Ctrl+O 应重新打开
-    await act(async () => {
-      primaryTurn2Toggle.click()
-    })
-    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
-    const drawerCloseBtn = document.querySelector<HTMLButtonElement>('.process-drawer-close-btn')!
-    assert.ok(drawerCloseBtn !== null)
+    const drawerCloseBtn = primaryDrawer.querySelector<HTMLButtonElement>('.process-drawer-close-btn')!
     await act(async () => {
       drawerCloseBtn.click()
     })
-    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
-    })
-    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
-    // 先关闭 primary 抽屉再测试 split 面板
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
+
+    // 再次按 Ctrl+O（primary 面板）：收起最新含过程回合的一级流水列表
     await act(async () => {
       window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
     })
     assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
 
-    // 单独对 split 面板发 Ctrl+O：只打开 split 面板过程抽屉
+    // 手动点击展开一级列表后，再按 Ctrl+O 应基于真实 DOM 展开态直接收起（不与手动状态打架）
+    await act(async () => {
+      primaryTurn2Toggle.click()
+    })
+    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
+    })
+    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
+
+    // 手动点击折叠后，再按 Ctrl+O 应直接展开一级列表
+    await act(async () => {
+      primaryTurn2Toggle.click()
+    })
+    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
+    await act(async () => {
+      primaryTurn2Toggle.click()
+    })
+    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
+    })
+    assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
+
+    // 单独对 split 面板发 Ctrl+O：只就地展开 split 面板一级列表，点击思考子步可查看分屏抽屉内容
     await act(async () => {
       window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'split' } }))
     })
     assert.equal(splitTurn2Toggle.getAttribute('aria-expanded'), 'true')
+    assert.match(splitRoot.textContent ?? '', /pnpm test/)
+    const splitStepThinking = splitRoot.querySelector<HTMLButtonElement>('[data-latest-process-turn="true"] .trace-group-steps button.trace-group-summary')!
+    await act(async () => {
+      splitStepThinking.click()
+    })
     const splitDrawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')
     assert.ok(splitDrawer !== null)
     assert.match(splitDrawer.textContent ?? '', /split-最新思考推理详情/)
