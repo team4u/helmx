@@ -285,15 +285,15 @@ export class CapabilityRegistry {
 
     const resolvedToolName = toolSpec.explicitToolName ?? actionToolAlias(pluginId, spec.id);
     const cliCommand = resolveActionCliCommand(pluginId, spec.id, visibility, spec.cli);
-    assertNoIntraPluginActionConflicts(
+    assertNoIntraPluginActionConflicts({
       pluginId,
-      spec.id,
-      toolSpec.enabled,
+      actionId: spec.id,
+      exposeAsToolEnabled: toolSpec.enabled,
       resolvedToolName,
       cliCommand,
-      this.tools.get(pluginId),
-      pluginActions,
-    );
+      existingTools: this.tools.get(pluginId),
+      existingActions: pluginActions,
+    });
 
     assertSchemaCompilable(spec.inputSchema);
     assertSchemaCompilable(spec.outputSchema);
