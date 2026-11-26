@@ -1,7 +1,7 @@
 /**
  * @json-render standard primitive dispatcher (21 built-in components, Fast Refresh compliant).
  */
-import type { ReactNode } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import { Callout } from '@helmx/plugin-client'
 import { jsonRenderUnknownComponent } from './copy.ts'
 import type { NormalizedSpecNode } from './spec-normalize.ts'
@@ -34,37 +34,51 @@ import {
 
 export type { SpecRenderContext } from './primitive-context.ts'
 
+interface SpecImplProps {
+  node: NormalizedSpecNode
+  ctx: SpecRenderContext
+}
+
+/**
+ * 组件名 → 实现组件的分发表（表驱动，替代逐组件 switch）。
+ * 查表用 `Object.hasOwn` 守卫：`constructor` / `toString` 等原型链键必须按未登记组件降级，绝不命中继承属性。
+ * 每个条目是独立的组件类型，保证 React fiber 与 Hook 数量按组件稳定。
+ */
+const SPEC_IMPLS: Readonly<Record<string, ComponentType<SpecImplProps>>> = {
+  Stack: StackImpl,
+  Card: CardImpl,
+  Text: TextImpl,
+  Badge: BadgeImpl,
+  Markdown: MarkdownImpl,
+  MetricGrid: MetricGridImpl,
+  MetricCard: MetricCardImpl,
+  KeyValueList: KeyValueListImpl,
+  Callout: CalloutImpl,
+  Steps: StepsImpl,
+  BarList: BarListImpl,
+  Table: TableImpl,
+  Accordion: AccordionImpl,
+  TextInput: TextInputImpl,
+  Select: SelectImpl,
+  Switch: SwitchImpl,
+  CheckboxGroup: CheckboxGroupImpl,
+  Button: ButtonImpl,
+  ActionBar: ActionBarImpl,
+  Tabs: TabsImpl,
+  Slot: SlotImpl,
+}
+
 /** Render one normalized node with distinct per-component fibers so React hook counts remain stable. */
-function SpecNodeView({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }): ReactNode {
-  switch (node.component) {
-    case 'Stack': return <StackImpl node={node} ctx={ctx} />
-    case 'Card': return <CardImpl node={node} ctx={ctx} />
-    case 'Text': return <TextImpl node={node} ctx={ctx} />
-    case 'Badge': return <BadgeImpl node={node} ctx={ctx} />
-    case 'Markdown': return <MarkdownImpl node={node} ctx={ctx} />
-    case 'MetricGrid': return <MetricGridImpl node={node} ctx={ctx} />
-    case 'MetricCard': return <MetricCardImpl node={node} ctx={ctx} />
-    case 'KeyValueList': return <KeyValueListImpl node={node} ctx={ctx} />
-    case 'Callout': return <CalloutImpl node={node} ctx={ctx} />
-    case 'Steps': return <StepsImpl node={node} ctx={ctx} />
-    case 'BarList': return <BarListImpl node={node} ctx={ctx} />
-    case 'Table': return <TableImpl node={node} ctx={ctx} />
-    case 'Accordion': return <AccordionImpl node={node} ctx={ctx} />
-    case 'TextInput': return <TextInputImpl node={node} ctx={ctx} />
-    case 'Select': return <SelectImpl node={node} ctx={ctx} />
-    case 'Switch': return <SwitchImpl node={node} ctx={ctx} />
-    case 'CheckboxGroup': return <CheckboxGroupImpl node={node} ctx={ctx} />
-    case 'Button': return <ButtonImpl node={node} ctx={ctx} />
-    case 'ActionBar': return <ActionBarImpl node={node} ctx={ctx} />
-    case 'Tabs': return <TabsImpl node={node} ctx={ctx} />
-    case 'Slot': return <SlotImpl node={node} ctx={ctx} />
-    default:
-      return (
-        <Callout tone="warn">
-          <span>{jsonRenderUnknownComponent(node.component, ctx.locale)}</span>
-        </Callout>
-      )
+function SpecNodeView({ node, ctx }: SpecImplProps): ReactNode {
+  if (!Object.hasOwn(SPEC_IMPLS, node.component)) {
+    return (
+      <Callout tone="warn">
+        <span>{jsonRenderUnknownComponent(node.component, ctx.locale)}</span>
+      </Callout>
+    )
   }
+  const Impl = SPEC_IMPLS[node.component]!
+  return <Impl node={node} ctx={ctx} />
 }
 
 /** Render a list of normalized nodes. */

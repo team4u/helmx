@@ -2,11 +2,12 @@
  * Inline peek popover for Swarm board `#seq` references (Fast Refresh compliant).
  */
 import type { ReactNode, RefObject } from 'react'
-import { Badge, Button, Callout, HelmxIcon, IconButton, LoadingState, Popover, PopoverAnchor, PopoverContent, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
+import { Badge, Button, Callout, IconButton, LoadingState, Popover, PopoverAnchor, PopoverContent, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
 import { extractPostRefs, postKindBadgeTone, type BoardPost } from './board-model.ts'
 import * as C from './copy.ts'
 import { currentPeekSeq, previousPeekSeq, type PostPeekState } from './model-post-nav.ts'
 import { PostBodyText } from './PostBodyText.tsx'
+import { PostRefButtons, PostWorktreeLine } from './SwarmPostFragments.tsx'
 
 export interface SwarmPostPeekPopoverProps {
   peekState: PostPeekState
@@ -66,20 +67,8 @@ export function SwarmPostPeekPopover(props: SwarmPostPeekPopoverProps): ReactNod
           {post ? (
             <>
               <PostBodyText body={post.body} collapsible={false} selfSeq={post.seq} conversationId={props.conversationId} onRefClick={(seq) => onPushRef(seq)} />
-              {refs.length > 0 ? (
-                <div className="sw-panel-post-refs sw-peek-refs">
-                  {refs.map((refSeq) => (
-                    <button key={refSeq} type="button" className="sw-panel-post-ref mono tabular-nums" aria-label={C.panelRefJumpLabel(refSeq, locale)} onClick={() => onPushRef(refSeq)}>
-                      {`#${refSeq}`}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              {post.worktreeSnapshot ? (
-                <div className="sw-panel-post-worktree">
-                  <HelmxIcon name="git-branch" size={11} /><span>{C.panelWorktreeSummary(post.worktreeSnapshot, locale)}</span>
-                </div>
-              ) : null}
+              <PostRefButtons refs={refs} locale={locale} className="sw-peek-refs" onPick={(refSeq) => onPushRef(refSeq)} />
+              <PostWorktreeLine snapshot={post.worktreeSnapshot} locale={locale} />
             </>
           ) : loading ? (
             <LoadingState label={C.peekLoadingLabel(targetSeq, locale)} className="sw-peek-status" />

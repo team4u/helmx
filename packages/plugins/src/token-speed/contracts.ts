@@ -24,18 +24,29 @@ export interface TokenSpeedStatus {
 
 const isPositiveInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0
 
+/** 单个内容块贡献的字符数（text / thinking / toolCall 名称 + 参数 JSON 长度）。 */
+function contentBlockChars(block: Record<string, unknown>): number {
+  if (block.type === 'text' && typeof block.text === 'string') return block.text.length
+  if (block.type === 'thinking' && typeof block.thinking === 'string') return block.thinking.length
+  if (block.type === 'toolCall' && typeof block.name === 'string') return block.name.length + jsonCharsOf(block.arguments)
+  return 0
+}
+
+/** 参数的 JSON 序列化长度；未提供或不可序列化（循环引用等）按 0 计。 */
+function jsonCharsOf(value: unknown): number {
+  if (value === undefined) return 0
+  try {
+    const serialized = JSON.stringify(value)
+    return typeof serialized === 'string' ? serialized.length : 0
+  } catch {
+    return 0
+  }
+}
+
 export function contentCharsOfBlocks(content: readonly unknown[]): number {
   let chars = 0
-  for (const b of content) {
-    if (!isJsonObject(b)) continue
-    if (b.type === 'text' && typeof b.text === 'string') chars += b.text.length
-    else if (b.type === 'thinking' && typeof b.thinking === 'string') chars += b.thinking.length
-    else if (b.type === 'toolCall' && typeof b.name === 'string') {
-      chars += b.name.length
-      if (b.arguments !== undefined) {
-        try { const s = JSON.stringify(b.arguments); if (typeof s === 'string') chars += s.length } catch { /* skip non-JSON */ }
-      }
-    }
+  for (const block of content) {
+    if (isJsonObject(block)) chars += contentBlockChars(block)
   }
   return chars
 }
