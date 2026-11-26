@@ -29,7 +29,6 @@ export function emptyPlan(): NotifyPlan {
     artifactIds: new Set(),
     pendingAskIds: new Set(),
     resolvedAskIds: new Set(),
-    abortedRestoreIds: new Set(),
     highlightIds: new Set(),
     loadErrorKeys: new Set(),
     pluginDocKeys: new Set(),
@@ -46,7 +45,6 @@ export function hasNotifyChanges(plan: NotifyPlan): boolean {
     plan.artifactIds.size > 0 ||
     plan.pendingAskIds.size > 0 ||
     plan.resolvedAskIds.size > 0 ||
-    plan.abortedRestoreIds.size > 0 ||
     plan.highlightIds.size > 0 ||
     plan.loadErrorKeys.size > 0 ||
     plan.pluginDocKeys.size > 0 ||
@@ -62,7 +60,6 @@ export function mergeNotifyPlan(target: NotifyPlan, source: NotifyPlan): void {
   for (const v of source.artifactIds) target.artifactIds.add(v)
   for (const v of source.pendingAskIds) target.pendingAskIds.add(v)
   for (const v of source.resolvedAskIds) target.resolvedAskIds.add(v)
-  for (const v of source.abortedRestoreIds) target.abortedRestoreIds.add(v)
   for (const v of source.highlightIds) target.highlightIds.add(v)
   for (const v of source.loadErrorKeys) target.loadErrorKeys.add(v)
   for (const v of source.pluginDocKeys) target.pluginDocKeys.add(v)

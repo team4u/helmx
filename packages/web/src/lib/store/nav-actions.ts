@@ -10,6 +10,7 @@ import {
   persistSidebarCollapsed,
   resolveFocusedPanel,
 } from '../../shell/shortcuts-model.js'
+import { conversationsApi } from '../api.js'
 import { clearStandbyFocusRequest } from '../../conversation/standby-model.js'
 import {
   normalizeWorkbenchTab,
@@ -65,7 +66,6 @@ export interface StoreNavHost {
   setNotices(update: StoreUpdater<ToastNotice[]>, plan?: NotifyPlan, deferEmit?: boolean): void
   pushNotice(notice: Omit<ToastNotice, 'id' | 'createdAt'>): void
   loadEarlierEntries(id: number): Promise<void>
-  abortConversation(conversationId: number): Promise<unknown>
 }
 
 export interface StoreNavActions {
@@ -455,7 +455,7 @@ export function createStoreNavActions(
   const confirmOrArmEscAbort = (conversationId: number): void => {
     if (host.getNavSlice().pendingEscAbortConversationId === conversationId) {
       clearEscAbortPrompt()
-      void host.abortConversation(conversationId).catch((error: unknown) => {
+      void conversationsApi.abort(conversationId).catch((error: unknown) => {
         host.pushNotice({
           type: 'notification',
           level: 'error',
