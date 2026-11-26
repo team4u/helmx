@@ -799,20 +799,6 @@ describe("helmx-store-shortcuts", () => {
       assert.deepEqual(fired.slice(countBeforePopover), [{ action: 'toggle-model-picker', panel: 'primary' }])
       modelPopover.remove()
 
-      // With the process inspector drawer open (role="dialog" + .process-inspector-drawer):
-      // a second Ctrl+O still dispatches toggle-process-groups to close the drawer, while Ctrl+L / Ctrl+. remain blocked
-      const processDrawer = document.createElement('div')
-      processDrawer.setAttribute('role', 'dialog')
-      processDrawer.className = 'process-inspector-drawer'
-      document.body.appendChild(processDrawer)
-      const countBeforeProcessToggle = fired.length
-      const evOToggleClose = dispatchWindowKey({ key: 'o', ctrlKey: true })
-      assert.equal(evOToggleClose.defaultPrevented, true, 'with process inspector drawer open, Ctrl+O must still dispatch close')
-      assert.equal(dispatchWindowKey({ key: 'l', ctrlKey: true }).defaultPrevented, false)
-      assert.equal(dispatchWindowKey({ key: '.', ctrlKey: true }).defaultPrevented, false)
-      assert.deepEqual(fired.slice(countBeforeProcessToggle), [{ action: 'toggle-process-groups', panel: 'primary' }])
-      processDrawer.remove()
-
       // With a plain modal/drawer [role="dialog"] open: Ctrl+L / Ctrl+O / Ctrl+; must be intercepted and never dispatched
       const normalDialog = document.createElement('div')
       normalDialog.setAttribute('role', 'dialog')

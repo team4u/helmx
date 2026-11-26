@@ -1,7 +1,7 @@
 /**
- * Pure domain model for the right-side process inspector drawer and compact
- * timeline live-execution preview. Zero React / DOM dependencies; unit-tested
- * directly and shared by ConversationTimeline, TimelineRows, and ProcessInspectorDrawer.
+ * Pure domain model for the Level 2 right-side process detail drawer.
+ * Zero React / DOM dependencies; unit-tested directly and shared by
+ * ConversationTimeline, TimelineRows, and ProcessInspectorDrawer.
  */
 import type { AssistantTurn, FoldableStep, TimelineItem } from './timeline-types.js'
 
@@ -34,12 +34,6 @@ export interface ResolvedProcessInspection {
   mode: ProcessInspectMode
 }
 
-export interface LivePreviewStep {
-  step: FoldableStep
-  index: number
-  stepKey: string
-}
-
 export function stepKeyOf(step: FoldableStep, index: number): string {
   if (step.kind === 'tool') return step.tool.key
   return step.thinking.key !== '' ? step.thinking.key : `think:${index}`
@@ -59,43 +53,6 @@ export function thinkingPreviewLine(text: string): string {
     if (normalized !== '') return normalized
   }
   return ''
-}
-
-export function liveThinkingTailPreview(
-  text: string,
-  maxLines = 4,
-): { visible: string; truncated: boolean } {
-  const lines = text.split(/\r?\n/)
-  while (lines.length > 0 && lines[lines.length - 1]!.trim() === '') {
-    lines.pop()
-  }
-  if (lines.length === 0) return { visible: '', truncated: false }
-  if (maxLines <= 0) return { visible: '', truncated: true }
-  if (lines.length <= maxLines) {
-    return { visible: lines.join('\n'), truncated: false }
-  }
-  return {
-    visible: lines.slice(-maxLines).join('\n'),
-    truncated: true,
-  }
-}
-
-export function selectLivePreviewSteps(
-  steps: ReadonlyArray<FoldableStep>,
-  maxRows = 4,
-): LivePreviewStep[] {
-  if (steps.length === 0 || maxRows <= 0) return []
-  const indexed: LivePreviewStep[] = steps.map((step, index) => ({
-    step,
-    index,
-    stepKey: stepKeyOf(step, index),
-  }))
-  const running = indexed.filter((item) => isStepRunning(item.step))
-  if (running.length > 0) {
-    return running.slice(-maxRows)
-  }
-  const fallbackCount = Math.min(2, maxRows)
-  return indexed.slice(-fallbackCount)
 }
 
 export interface ResolveSelectedStepOptions {
@@ -192,37 +149,4 @@ export function resolveProcessInspection(
     selectedStep: step,
     mode: target.mode,
   }
-}
-
-export function findLatestProcessTarget(items: ReadonlyArray<TimelineItem>): ProcessInspectTarget | null {
-  for (let i = items.length - 1; i >= 0; i -= 1) {
-    const item = items[i]!
-    if (item.kind !== 'assistant') continue
-    for (let j = item.segments.length - 1; j >= 0; j -= 1) {
-      const seg = item.segments[j]!
-      if (seg.kind === 'step-group' && seg.steps.length > 0) {
-        return {
-          kind: 'step-group',
-          turnKey: item.key,
-          segmentKey: seg.key,
-          followLive: seg.active === true,
-        }
-      }
-    }
-  }
-  return null
-}
-
-export function filterVisibleStepIndices(
-  steps: ReadonlyArray<FoldableStep>,
-  onlyErrors: boolean,
-): number[] {
-  if (onlyErrors) {
-    const failedIndices: number[] = []
-    for (let i = 0; i < steps.length; i += 1) {
-      if (isStepFailed(steps[i]!)) failedIndices.push(i)
-    }
-    if (failedIndices.length > 0) return failedIndices
-  }
-  return steps.map((_, index) => index)
 }
