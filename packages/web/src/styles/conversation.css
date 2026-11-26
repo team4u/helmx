@@ -1405,8 +1405,32 @@ pre {
 
 .trace-row:hover .trace-row-chevron,
 .trace-row:focus-visible .trace-row-chevron,
-.trace-row[aria-expanded="true"] .trace-row-chevron {
+.trace-row[aria-expanded="true"] .trace-row-chevron,
+.trace-group-summary:hover .trace-row-chevron,
+.trace-group-summary:focus-visible .trace-row-chevron,
+.trace-group-summary[aria-expanded="true"] .trace-row-chevron {
   opacity: 0.9;
+}
+
+.trace-thinking-row .trace-row-left > svg {
+  color: var(--fg-muted);
+}
+
+.trace-thinking-title {
+  font-weight: 500;
+  color: var(--fg);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.trace-thinking-summary {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .trace-row-error .trace-row-left > svg {

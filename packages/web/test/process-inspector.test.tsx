@@ -315,8 +315,17 @@ describe('process-inspector-model & two-level ProcessInspectorDrawer', () => {
     assert.ok(stepsContainer !== null)
     assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
 
+    // 组内已落定 ThinkingRow 与 TraceRow 同构对齐：展示 sparkles、首行摘要、耗时与右侧 chevron，且无左侧折叠箭头
+    const thinkingGroupRow = stepsContainer.querySelector('.trace-row.trace-thinking-row') as HTMLElement | null
+    assert.ok(thinkingGroupRow !== null)
+    assert.ok(thinkingGroupRow.querySelector('.lucide-sparkles') !== null)
+    assert.ok(thinkingGroupRow.querySelector('.trace-row-chevron') !== null)
+    assert.equal(thinkingGroupRow.querySelector('.trace-thinking-title')?.textContent, '思考过程')
+    assert.equal(thinkingGroupRow.querySelector('.trace-thinking-summary')?.textContent, 'First thought')
+    assert.equal(thinkingGroupRow.querySelector('.trace-row-right')?.textContent, '500ms')
+
     // Click step 1 (bash echo first) -> opens clean single-column drawer (NO sidebar, NO duplicate second header)
-    const stepToolRows = stepsContainer.querySelectorAll('.trace-row')
+    const stepToolRows = stepsContainer.querySelectorAll('.trace-row:not(.trace-thinking-row)')
     assert.equal(stepToolRows.length, 2)
     await act(async () => {
       ;(stepToolRows[0] as HTMLElement).click()
@@ -610,6 +619,8 @@ describe('process-inspector-model & two-level ProcessInspectorDrawer', () => {
 
     const trigger = ui.host.querySelector('button.trace-group-summary') as HTMLButtonElement | null
     assert.ok(trigger !== null)
+    assert.ok(trigger.querySelector('.lucide-sparkles') !== null, 'Standalone settled ThinkingRow shows sparkles icon')
+    assert.ok(trigger.querySelector('.trace-row-chevron') !== null, 'Standalone settled ThinkingRow shows right chevron cue')
     assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
 
     await act(async () => {
@@ -845,7 +856,7 @@ describe('process-inspector-model & two-level ProcessInspectorDrawer', () => {
       }),
     )
     await act(async () => {
-      ;(ui.host.querySelector('.trace-group-steps .trace-row') as HTMLElement).click()
+      ;(ui.host.querySelector('.trace-group-steps .trace-row:not(.trace-thinking-row)') as HTMLElement).click()
     })
     assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') !== null)
 
@@ -974,7 +985,7 @@ describe('process-inspector-model & two-level ProcessInspectorDrawer', () => {
       summaryBtn.click()
     })
     await act(async () => {
-      ;(ui.host.querySelector('.trace-group-steps .trace-row') as HTMLElement).click()
+      ;(ui.host.querySelector('.trace-group-steps .trace-row:not(.trace-thinking-row)') as HTMLElement).click()
     })
 
     const drawer = document.querySelector('[role="dialog"].process-inspector-drawer') as HTMLElement

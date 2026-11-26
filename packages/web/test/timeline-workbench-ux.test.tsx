@@ -293,8 +293,8 @@ describe("timeline-workbench-ux", () => {
     assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null, 'Ctrl+O 只负责一级就地展开，不直接弹出二级抽屉')
     assert.match(primaryRoot.textContent ?? '', /pnpm test/)
 
-    // 点击一级列表中的思考入口：弹出二级单栏详情抽屉查看完整思考内容，再关闭
-    const primaryStepThinking = primaryRoot.querySelector<HTMLButtonElement>('[data-latest-process-turn="true"] .trace-group-steps button.trace-group-summary')!
+    // 点击一级列表中的思考行（同构 .trace-thinking-row）：弹出二级单栏详情抽屉查看完整思考内容，再关闭
+    const primaryStepThinking = primaryRoot.querySelector<HTMLElement>('[data-latest-process-turn="true"] .trace-group-steps .trace-thinking-row')!
     assert.ok(primaryStepThinking !== null)
     await act(async () => {
       primaryStepThinking.click()
@@ -344,7 +344,7 @@ describe("timeline-workbench-ux", () => {
     })
     assert.equal(splitTurn2Toggle.getAttribute('aria-expanded'), 'true')
     assert.match(splitRoot.textContent ?? '', /pnpm test/)
-    const splitStepThinking = splitRoot.querySelector<HTMLButtonElement>('[data-latest-process-turn="true"] .trace-group-steps button.trace-group-summary')!
+    const splitStepThinking = splitRoot.querySelector<HTMLElement>('[data-latest-process-turn="true"] .trace-group-steps .trace-thinking-row')!
     await act(async () => {
       splitStepThinking.click()
     })

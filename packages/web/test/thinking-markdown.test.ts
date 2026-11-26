@@ -80,8 +80,10 @@ test('思考过程收拢契约：非进行中（思考结束或历史会话）�
     ),
   )
 
-  // 1. 验证默认展示单行摘要按钮「Thinking」与抽屉提示标题
+  // 1. 验证默认展示单行摘要按钮「Thinking」、sparkles 图标与右侧钻取箭头（非左侧折叠箭头）
   assert.match(html, /Thinking/)
+  assert.match(html, /lucide-sparkles/)
+  assert.match(html, /trace-row-chevron/)
   assert.match(html, /title="View thinking in drawer"/)
   assert.match(html, /aria-haspopup="dialog"/)
   assert.match(html, /aria-expanded="false"/)

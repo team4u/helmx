@@ -9,6 +9,7 @@ import { useProcessInspector } from './process-inspector-context.js'
 import {
   resolveSelectedStepIndex,
   stepKeyOf,
+  thinkingPreviewLine,
   type ProcessInspectMode,
 } from './process-inspector-model.js'
 import {
@@ -432,6 +433,8 @@ function MultiStepGroup({
                   key={`think:${key}:${idx}`}
                   text={step.thinking.text}
                   active={step.thinking.active === true}
+                  responseDurationMs={step.thinking.responseDurationMs}
+                  inGroup
                   conversationId={conversationId}
                   inspecting={stepInspecting}
                   onInspect={() => inspectGroupStep(idx, key)}
@@ -477,6 +480,8 @@ export function ThinkingRow({
   text,
   conversationId,
   active = false,
+  responseDurationMs,
+  inGroup = false,
   defaultOpen = false,
   inline = false,
   shortcutToggle,
@@ -490,6 +495,8 @@ export function ThinkingRow({
   text: string
   conversationId?: number
   active?: boolean
+  responseDurationMs?: number
+  inGroup?: boolean
   defaultOpen?: boolean
   inline?: boolean
   shortcutToggle?: ProcessShortcutCommand
@@ -577,11 +584,17 @@ export function ThinkingRow({
           key: stepKey ?? 'think:0',
           text,
           active,
+          ...(responseDurationMs !== undefined ? { responseDurationMs } : {}),
         },
       },
     ],
-    [stepKey, text, active],
+    [stepKey, text, active, responseDurationMs],
   )
+  const settledPreview = useMemo(() => (inGroup && !active ? thinkingPreviewLine(text) : ''), [inGroup, active, text])
+  const settledDuration =
+    inGroup && !active && responseDurationMs !== undefined && responseDurationMs > 0
+      ? formatDurationMs(responseDurationMs)
+      : ''
 
   if (active) {
     const inlineOpen = activeInlineOverride ?? true
@@ -609,6 +622,54 @@ export function ThinkingRow({
     )
   }
 
+  const standaloneDrawerNode =
+    onInspect === undefined && !usesContext && localDrawerOpen ? (
+      <ProcessInspectorDrawer
+        open
+        inline={inline}
+        conversationId={conversationId ?? 0}
+        steps={standaloneSteps}
+        active={false}
+        selectedIndex={0}
+        onSelectStep={() => {}}
+        onClose={() => setLocalDrawerOpen(false)}
+      />
+    ) : null
+
+  if (inGroup) {
+    return (
+      <div className="trace-entry">
+        <div
+          className={`trace-row trace-thinking-row${isInspecting ? ' is-inspecting' : ''}`}
+          role="button"
+          tabIndex={0}
+          aria-haspopup="dialog"
+          aria-expanded={isInspecting}
+          {...(isRootProcessToggle ? { 'data-process-toggle': 'root' } : {})}
+          title={isInspecting ? t('conv.process.closeDrawer') : t('conv.process.openThinkingDrawer')}
+          onClick={openSettledDrawer}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              openSettledDrawer()
+            }
+          }}
+        >
+          <span className="trace-row-left">
+            <HelmxIcon name="sparkles" size={12} />
+            <span className="trace-thinking-title">{t('conv.thinking.label')}</span>
+            {settledPreview !== '' ? <span className="trace-thinking-summary">{settledPreview}</span> : null}
+          </span>
+          <span className="trace-row-right">
+            {settledDuration !== '' ? <span>{settledDuration}</span> : null}
+            <HelmxIcon name="chevron-right" size={11} className="trace-row-chevron" />
+          </span>
+        </div>
+        {standaloneDrawerNode}
+      </div>
+    )
+  }
+
   return (
     <div className="trace-group">
       <button
@@ -620,21 +681,11 @@ export function ThinkingRow({
         onClick={openSettledDrawer}
         title={isInspecting ? t('conv.process.closeDrawer') : t('conv.process.openThinkingDrawer')}
       >
-        <HelmxIcon name="chevron-right" size={12} />
-        {t('conv.thinking.label')}
+        <HelmxIcon name="sparkles" size={12} />
+        <span>{t('conv.thinking.label')}</span>
+        <HelmxIcon name="chevron-right" size={11} className="trace-row-chevron" />
       </button>
-      {onInspect === undefined && !usesContext && localDrawerOpen ? (
-        <ProcessInspectorDrawer
-          open
-          inline={inline}
-          conversationId={conversationId ?? 0}
-          steps={standaloneSteps}
-          active={false}
-          selectedIndex={0}
-          onSelectStep={() => {}}
-          onClose={() => setLocalDrawerOpen(false)}
-        />
-      ) : null}
+      {standaloneDrawerNode}
     </div>
   )
 }

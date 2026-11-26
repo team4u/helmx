@@ -798,7 +798,7 @@ test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；�
     assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
 
     // 点击一级列表中的失败 bash 行：打开二级单栏详情抽屉
-    const bashRow = m.host.querySelectorAll<HTMLElement>('.trace-group-steps .trace-row')[1]!
+    const bashRow = m.host.querySelectorAll<HTMLElement>('.trace-group-steps .trace-row:not(.trace-thinking-row)')[1]!
     assert.ok(bashRow !== undefined)
     await act(async () => {
       bashRow.click()
