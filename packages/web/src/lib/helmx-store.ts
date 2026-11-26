@@ -26,6 +26,10 @@ import type {
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { createWebTranslator, type WebMessageKey } from '../i18n/catalog.js'
 import { resetStandbyDrafts } from '../conversation/standby-model.js'
+import {
+  buildSameTreeWorkspacesMap,
+  type WorkspaceConversationNode,
+} from '../conversation/workspace-file-url.js'
 import { ESC_ABORT_WINDOW_MS, getStoredSidebarCollapsed } from '../shell/shortcuts-model.js'
 import { authApi, setStoredToken, type ModelCatalogDefaults, type ModelDescriptor } from './api.js'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
@@ -121,6 +125,21 @@ export type {
 
 const INFO_NOTICE_DURATION_MS = 6000
 const NOTICE_RESUME_GRACE_MS = 800
+const EMPTY_TREE_WORKSPACES: ReadonlyArray<WorkspaceConversationNode> = Object.freeze([])
+
+function isSameWorkspaceNodeList(
+  a: ReadonlyArray<WorkspaceConversationNode>,
+  b: ReadonlyArray<WorkspaceConversationNode>,
+): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!
+    const y = b[i]!
+    if (x.id !== y.id || x.nodeId !== y.nodeId || x.cwd !== y.cwd) return false
+  }
+  return true
+}
 
 interface NoticeTimerEntry {
   timer: ReturnType<typeof setTimeout> | null
@@ -171,6 +190,8 @@ export class HelmxExternalStore {
   private hostNodesSlice: HostNodesSlice | undefined = undefined
   private hostProfilesSlice: HostProfilesSlice | undefined = undefined
   private summaryById = new Map<number, ConversationSummary>()
+  private workspaceNodesById = new Map<number, WorkspaceConversationNode>()
+  private treeWorkspacesByConv = new Map<number, ReadonlyArray<WorkspaceConversationNode>>()
   private pluginById = new Map<string, PluginSummary>()
   private pendingAsksByConv = new Map<number, AskSpec[]>()
   private artifactsState: Record<number, ArtifactMetadata[]> = {}
@@ -525,6 +546,8 @@ export class HelmxExternalStore {
   getConversationLive = (id: number): ConversationLive | undefined => this.liveState.conversationLives[id]
   getConversationDetail = (id: number): ConversationDetail | undefined => this.liveState.conversationDetails[id]
   getConversationSummary = (id: number): ConversationSummary | undefined => this.summaryById.get(id)
+  getConversationTreeWorkspaces = (id: number): ReadonlyArray<WorkspaceConversationNode> =>
+    this.treeWorkspacesByConv.get(id) ?? EMPTY_TREE_WORKSPACES
   getConversationArtifacts = (id: number): ArtifactMetadata[] | undefined => this.artifactsState[id]
   getConversationPendingAsks = (id: number): AskSpec[] => this.pendingAsksByConv.get(id) ?? EMPTY_PENDING_ASKS
   getHighlightedEntryForConversation = (id: number): { conversationId: number; entryId: string } | null =>
@@ -758,6 +781,65 @@ export class HelmxExternalStore {
       this.summaryById = nextMap
       plan.domains.add('conversations')
       plan.domains.add('all')
+
+      let topologyChanged = next.conversations.length !== this.workspaceNodesById.size
+      if (!topologyChanged) {
+        for (const conv of next.conversations) {
+          const prevNode = this.workspaceNodesById.get(conv.id)
+          const nextNodeId = conv.nodeId ?? 'local'
+          const nextCwd = typeof conv.cwd === 'string' ? conv.cwd : ''
+          if (
+            prevNode === undefined ||
+            prevNode.nodeId !== nextNodeId ||
+            prevNode.cwd !== nextCwd ||
+            prevNode.parentConversationId !== conv.parentConversationId
+          ) {
+            topologyChanged = true
+            break
+          }
+        }
+      }
+      if (topologyChanged) {
+        const nextNodesById = new Map<number, WorkspaceConversationNode>()
+        const nextNodes: WorkspaceConversationNode[] = []
+        for (const conv of next.conversations) {
+          const node: WorkspaceConversationNode = {
+            id: conv.id,
+            nodeId: conv.nodeId ?? 'local',
+            cwd: typeof conv.cwd === 'string' ? conv.cwd : '',
+            ...(conv.parentConversationId !== undefined
+              ? { parentConversationId: conv.parentConversationId }
+              : {}),
+          }
+          nextNodesById.set(conv.id, node)
+          nextNodes.push(node)
+        }
+        const nextTreeMap = buildSameTreeWorkspacesMap(nextNodes)
+        const groupCache = new Map<
+          ReadonlyArray<WorkspaceConversationNode>,
+          ReadonlyArray<WorkspaceConversationNode>
+        >()
+        for (const [id, nextList] of nextTreeMap) {
+          if (nextList.length === 0) {
+            if (nextList !== EMPTY_TREE_WORKSPACES) {
+              nextTreeMap.set(id, EMPTY_TREE_WORKSPACES)
+            }
+            continue
+          }
+          let stable = groupCache.get(nextList)
+          if (stable === undefined) {
+            const prevList = this.treeWorkspacesByConv.get(id)
+            stable = prevList !== undefined && isSameWorkspaceNodeList(prevList, nextList) ? prevList : nextList
+            groupCache.set(nextList, stable)
+          }
+          if (stable !== nextList) {
+            nextTreeMap.set(id, stable)
+          }
+        }
+        this.workspaceNodesById = nextNodesById
+        this.treeWorkspacesByConv = nextTreeMap
+        plan.domains.add('workspaceTopology')
+      }
     }
     if (next.pendingAsks !== prev.pendingAsks) {
       const nextByConv = new Map<number, AskSpec[]>()

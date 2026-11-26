@@ -59,6 +59,7 @@ const {
   ComposerCommandContext,
   DropdownMenuContent,
   DropdownMenuRoot,
+  MarkdownText,
   PluginClientContext,
   PluginClientHostContext,
   createComposerCommandRegistry,
@@ -241,15 +242,14 @@ describe('plan-client-interactions', () => {
       },
       loadConversationDetail: async () => {},
       markdown: {
-        view: ({ text, conversationId }: MarkdownViewProps) =>
+        view: ({ text, className, onLinkClick, conversationId }: MarkdownViewProps) =>
           e(
             'div',
             {
-              className: 'msg-ai-body',
-              'data-testid': 'markdown-view',
-              'data-conversation-id': conversationId ?? '',
+              className: className ? `msg-ai-body ${className}` : 'msg-ai-body',
+              ...(conversationId !== undefined ? { 'data-md-conv-id': String(conversationId) } : {}),
             },
-            e(HelmxPluginClient.MarkdownText, { text }),
+            e(MarkdownText, { text, onLinkClick }),
           ),
         codeBlock: ({ code }: CodeBlockViewProps) => e('pre', null, code),
       },
@@ -884,8 +884,6 @@ describe('plan-client-interactions', () => {
         toggleBtn.click()
       })
       assert.equal(toggleBtn.getAttribute('aria-expanded'), 'true')
-      assert.ok(mounted.host.querySelector('.plan-tray-preview [data-testid="markdown-view"].msg-ai-body') !== null)
-      assert.equal(mounted.host.querySelector('.plan-tray-preview')?.classList.contains('msg-ai-body'), false)
       assert.equal(mounted.host.querySelector('.plan-tray-preview h1')?.textContent, 'Plan')
       const rowMain = mounted.host.querySelector<HTMLButtonElement>('.dock-tray-row-main')
       assert.ok(rowMain !== null, 'expected DockTrayRow when expanded')
@@ -1060,8 +1058,6 @@ describe('plan-client-interactions', () => {
       assert.match(mounted.host.textContent ?? '', /v4/)
       assert.match(mounted.host.textContent ?? '', /Updated /)
       assert.match(mounted.host.textContent ?? '', /Exit plan mode/)
-      assert.ok(mounted.host.querySelector('.plan-markdown [data-testid="markdown-view"].msg-ai-body') !== null)
-      assert.equal(mounted.host.querySelector('.plan-markdown')?.classList.contains('msg-ai-body'), false)
       assert.ok(mounted.host.querySelector('.plan-markdown h1') !== null, 'markdown headings must render structurally')
       assert.ok(mounted.host.querySelector('.plan-markdown li') !== null, 'markdown lists must render structurally')
       assert.ok(mounted.host.querySelector('.plan-markdown script') === null, 'raw HTML script tags must never be injected')

@@ -361,9 +361,11 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
                   </div>
                 </form>
               ) : draft.markdown.trim() !== '' ? (
-                <div className="plan-markdown selectable">
-                  <MarkdownView text={draft.markdown} conversationId={conversationId} />
-                </div>
+                <MarkdownView
+                  className="plan-markdown selectable"
+                  text={draft.markdown}
+                  conversationId={conversationId}
+                />
               ) : (
                 <div className="text-muted">{t(PLAN_COPY.draftEmptyMarkdown)}</div>
               )}

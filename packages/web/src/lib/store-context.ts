@@ -40,11 +40,13 @@ import type {
   ToastNotice,
 } from './types.js'
 import type { WorkspaceLocationState } from './url-hash-model.js'
+import type { WorkspaceConversationNode } from '../conversation/workspace-file-url.js'
 
 export const HelmxExternalStoreContext = createContext<HelmxExternalStore | null>(null)
 
 const UNSET = Symbol('helmx-store-unset')
 const NOOP_UNSUBSCRIBE = () => {}
+const EMPTY_TREE_WORKSPACES: ReadonlyArray<WorkspaceConversationNode> = Object.freeze([])
 
 function subscribeLiveById(store: HelmxExternalStore, id: number, listener: () => void): () => void {
   return store.subscribeConversationLive(id, listener)
@@ -461,8 +463,33 @@ export function useConversationDetail(conversationId: number | undefined): Conve
   return useKeyedSlice(subscribeDetailById, readDetailById, conversationId, undefined)
 }
 
+function subscribeWorkspaceTopology(store: HelmxExternalStore, listener: () => void): () => void {
+  return store.subscribeDomain('workspaceTopology', listener)
+}
+
 export function useConversationSummary(conversationId: number | undefined): ConversationSummary | undefined {
   return useKeyedSlice(subscribeSummaryById, readSummaryById, conversationId, undefined)
+}
+
+export function useConversationTreeWorkspaces(
+  conversationId: number | undefined,
+): ReadonlyArray<WorkspaceConversationNode> {
+  const external = useContext(HelmxExternalStoreContext)
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      external !== null && conversationId !== undefined
+        ? subscribeWorkspaceTopology(external, listener)
+        : NOOP_UNSUBSCRIBE,
+    [external, conversationId],
+  )
+  const getSnapshot = (): ReadonlyArray<WorkspaceConversationNode> | typeof UNSET => {
+    if (external === null) return UNSET
+    if (conversationId === undefined) return EMPTY_TREE_WORKSPACES
+    return external.getConversationTreeWorkspaces(conversationId)
+  }
+  const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  if (value !== UNSET) return value
+  throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
 }
 
 export function useConversationArtifacts(conversationId: number | undefined): ArtifactMetadata[] | undefined {

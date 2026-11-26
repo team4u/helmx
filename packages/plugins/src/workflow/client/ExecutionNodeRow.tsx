@@ -416,18 +416,23 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
             {node.prompt ? (
               <div className="wf-detail-block">
                 <div className="trace-section-label">{t(COPY.nodeSectionPrompt)}</div>
-                <div className="wf-md-body wf-node-md-box">
-                  <MarkdownView text={node.prompt} conversationId={parentConversationId} breaks />
-                </div>
+                <MarkdownView
+                  text={node.prompt}
+                  conversationId={convId ?? parentConversationId}
+                  className="wf-result-markdown wf-node-md-box"
+                  breaks
+                />
               </div>
             ) : null}
             {outputPretty !== undefined ? (
               <div className="wf-detail-block">
                 <div className="trace-section-label">{t(COPY.nodeSectionOutput)}</div>
                 {typeof node.output === 'string' ? (
-                  <div className="wf-md-body wf-node-md-box">
-                    <MarkdownView text={node.output} conversationId={parentConversationId} />
-                  </div>
+                  <MarkdownView
+                    text={node.output}
+                    conversationId={convId ?? parentConversationId}
+                    className="wf-result-markdown wf-node-md-box"
+                  />
                 ) : (
                   <pre className="code-block-pre wf-pre">
                     <code>{outputPretty}</code>

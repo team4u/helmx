@@ -138,6 +138,15 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
       (effectiveBoard.group.status === 'active' && effectiveBoard.members.some((m) => m.lifecycle === 'active' && (m.liveState === 'working' || m.liveState === 'blocked'))))
   const nowMs = useElapsedNowMs(timerActive)
   const groupTiming = effectiveBoard ? resolveGroupTimingView(effectiveBoard, conversations, nowMs, locale) : undefined
+  const memberConvByName = useMemo(() => {
+    const map = new Map<string, number>()
+    if (effectiveBoard !== undefined) {
+      for (const m of effectiveBoard.members) {
+        map.set(m.name, m.conversationId)
+      }
+    }
+    return map
+  }, [effectiveBoard])
 
   if (conversationId === undefined || (!link && !hasArchivedTag)) {
     return (
@@ -165,6 +174,10 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
   const isCoordinatorActive = effectiveBoard.group.status === 'active' && conversationId === effectiveBoard.group.coordinatorConversationId
   const headlineText = C.resolvePanelHeadlineText(effectiveBoard, locale)
   const visibleSeqs = new Set(model.recentPosts.map((p) => p.seq))
+  const resolvePostConversationId = (post: { from: string }): number =>
+    post.from === 'coordinator'
+      ? effectiveBoard.group.coordinatorConversationId
+      : (memberConvByName.get(post.from) ?? conversationId)
 
   const runAbortMember = (memberName: string): void => {
     if (busyAction) return
@@ -394,7 +407,13 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                       <span className="sw-panel-post-seq tabular-nums">{`#${post.seq}`}</span>
                     </span>
                   </div>
-                  <PostBodyText body={post.body} collapsible={shouldCollapsePostBody(post.body)} selfSeq={post.seq} onRefClick={(refSeq, el) => handleOpenPeek(post.seq, refSeq, el)} />
+                  <PostBodyText
+                    body={post.body}
+                    collapsible={shouldCollapsePostBody(post.body)}
+                    selfSeq={post.seq}
+                    conversationId={resolvePostConversationId(post)}
+                    onRefClick={(refSeq, el) => handleOpenPeek(post.seq, refSeq, el)}
+                  />
                   {refs.length > 0 ? (
                     <div className="sw-panel-post-refs">
                       {refs.map((refSeq) => (
@@ -418,6 +437,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
         {peekState ? (
           <SwarmPostPeekPopover
             peekState={peekState} anchorRef={peekAnchorRef} post={peekPost}
+            conversationId={peekPost ? resolvePostConversationId(peekPost) : conversationId}
             loading={peekReadState.loading && !peekPost} error={peekPost ? undefined : peekReadState.error}
             onPushRef={(seq) => setPeekState((prev) => (prev ? pushPostPeek(prev, seq) : prev))}
             onBack={() => setPeekState((prev) => (prev ? popPostPeek(prev) : undefined))}

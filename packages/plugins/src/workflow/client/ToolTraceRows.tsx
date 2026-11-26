@@ -465,10 +465,14 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
 // 3. BackgroundReportCard (`helmx.input` background settlement receipt)
 // ---------------------------------------------------------------------------
 
-function ReportExpandedBody(props: { view: BackgroundReportView; conversationId?: number; onOpenChild?: () => void }): ReactNode {
+function ReportExpandedBody(props: {
+  view: BackgroundReportView
+  conversationId?: number
+  onOpenChild?: () => void
+}): ReactNode {
   const locale = usePluginLocale()
   const t = (text: { en: string; 'zh-CN': string }) => resolveLocalizedText(text, locale)
-  const { view, conversationId, onOpenChild } = props
+  const { view, onOpenChild } = props
   const kvItems: Array<{ key: ReactNode; value: ReactNode }> = [
     ...(view.name !== undefined ? [{ key: t(COPY.reportKvName), value: view.name }] : []),
     { key: t(COPY.reportKvRunId), value: <span className="mono">{view.runId}</span> },
@@ -505,9 +509,11 @@ function ReportExpandedBody(props: { view: BackgroundReportView; conversationId?
         <div className="wf-detail-block">
           <div className="trace-section-label">{t(COPY.reportResultSection)}</div>
           {typeof view.result === 'string' ? (
-            <div className="wf-md-body">
-              <MarkdownView text={view.result} conversationId={conversationId} />
-            </div>
+            <MarkdownView
+              text={view.result}
+              conversationId={props.conversationId}
+              className="wf-result-markdown"
+            />
           ) : (
             <pre className="code-block-pre wf-pre">
               <code>{JSON.stringify(view.result, null, 2)}</code>
@@ -619,7 +625,7 @@ export function BackgroundReportCard(props: TimelineRendererProps): ReactNode {
             ) : (
               <ReportExpandedBody
                 view={view}
-                conversationId={props.conversationId ?? ctx.conversationId}
+                conversationId={convId ?? props.conversationId ?? ctx.conversationId}
                 onOpenChild={convId !== undefined ? () => ctx.openConversationDrawer(convId) : undefined}
               />
             )}

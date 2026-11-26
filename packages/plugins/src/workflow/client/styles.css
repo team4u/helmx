@@ -420,48 +420,6 @@
   min-width: 0;
 }
 
-.wf-md-body {
-  min-width: 0;
-}
-
-.wf-md-body .msg-ai-body {
-  font-size: 13.5px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-.wf-md-body .msg-ai-body :is(h1, h2, h3, h4) {
-  margin: 12px 0 6px;
-}
-
-.wf-md-body .msg-ai-body p,
-.wf-md-body .msg-ai-body ul,
-.wf-md-body .msg-ai-body ol {
-  margin: 0 0 8px;
-}
-
-.wf-md-body .msg-ai-body code:not(pre code) {
-  font-size: 0.88em;
-  padding: 1px 4px;
-}
-
-.wf-md-body .msg-ai-body > :first-child {
-  margin-top: 0;
-}
-
-.wf-md-body .msg-ai-body > :last-child {
-  margin-bottom: 0;
-}
-
-.wf-node-md-box {
-  padding: 8px 10px;
-  max-height: 320px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg);
-}
-
 .wf-pre {
   margin: 0;
   max-height: 240px;
@@ -520,6 +478,39 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Compact Markdown inside workflow run results, background reports & node details */
+.wf-result-markdown.msg-ai-body {
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+.wf-result-markdown.msg-ai-body p { margin: 0 0 6px; }
+.wf-result-markdown.msg-ai-body :is(h1, h2, h3, h4) { margin: 10px 0 4px; }
+.wf-result-markdown.msg-ai-body h1 { font-size: 1.2em; }
+.wf-result-markdown.msg-ai-body h2 { font-size: 1.12em; }
+.wf-result-markdown.msg-ai-body h3 { font-size: 1.05em; }
+.wf-result-markdown.msg-ai-body h4 { font-size: 1em; }
+.wf-result-markdown.msg-ai-body :is(ul, ol) { margin: 0 0 6px; padding-left: 18px; }
+.wf-result-markdown.msg-ai-body li > p { margin: 0; }
+.wf-result-markdown.msg-ai-body :is(blockquote, pre, hr) { margin: 6px 0; }
+.wf-result-markdown.msg-ai-body code:not(pre code) { font-size: 12px; padding: 1px 4px; }
+.wf-result-markdown.msg-ai-body table:not(.helmx-table):not(.jr-table) { font-size: 12px; }
+.wf-result-markdown.msg-ai-body table:not(.helmx-table):not(.jr-table) :is(th, td) { padding: 4px 8px; }
+.wf-result-markdown.msg-ai-body > :first-child { margin-top: 0; }
+.wf-result-markdown.msg-ai-body > :last-child { margin-bottom: 0; }
+
+.wf-node-md-box {
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg);
 }
 
 .wf-timing-tooltip {

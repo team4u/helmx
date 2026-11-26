@@ -23,8 +23,8 @@ import {
   type AnchorAlignment,
 } from './timeline-scroll-calibration.js'
 
-/** Same selector as the outline locate effect: H1~H3 inside an assistant turn body, in DOM order (= headingIndex). */
-const TURN_HEADING_SELECTOR = '.msg-ai-block .msg-ai-body h1, .msg-ai-block .msg-ai-body h2, .msg-ai-block .msg-ai-body h3'
+/** Same selector as the outline locate effect: H1~H3 inside the turn's own Markdown body (never nested trace/plugin cards), in DOM order (= headingIndex). */
+const TURN_HEADING_SELECTOR = '.msg-ai-block > .msg-ai-body h1, .msg-ai-block > .msg-ai-body h2, .msg-ai-block > .msg-ai-body h3'
 /** Keys that count as the user taking over the scroll position (releases the outline jump lock). */
 const JUMP_LOCK_RELEASE_KEYS: ReadonlySet<string> = new Set([
   'ArrowUp',

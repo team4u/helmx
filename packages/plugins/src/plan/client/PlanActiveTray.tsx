@@ -216,9 +216,11 @@ function PlanActiveTrayInner({ conversationId }: { conversationId: number }): Re
         }
       />
       {draft !== undefined && draft.markdown.trim() !== '' ? (
-        <div className="plan-tray-preview selectable">
-          <MarkdownView text={draft.markdown} conversationId={conversationId} />
-        </div>
+        <MarkdownView
+          className="plan-tray-preview selectable"
+          text={draft.markdown}
+          conversationId={conversationId}
+        />
       ) : null}
     </DockTray>
   )

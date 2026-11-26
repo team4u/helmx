@@ -19,16 +19,22 @@ const { HostStoreProviders } = await import('./helpers/host-store.js')
 
 const e = React.createElement
 
-function conv(id: number, cwd: string): ConversationSummary {
+function conv(
+  id: number,
+  cwd: string,
+  extra: Partial<Pick<ConversationSummary, 'nodeId' | 'parentConversationId' | 'status' | 'updatedAt'>> = {},
+): ConversationSummary {
   return {
     id,
     title: `Conv ${id}`,
     profileId: 'assistant',
-    nodeId: 'local',
+    nodeId: extra.nodeId ?? 'local',
     cwd,
+    ...(extra.parentConversationId !== undefined ? { parentConversationId: extra.parentConversationId } : {}),
     tags: [],
+    status: extra.status ?? 'idle',
     createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
+    updatedAt: extra.updatedAt ?? '2026-01-01T00:00:00Z',
   } as unknown as ConversationSummary
 }
 
@@ -324,6 +330,194 @@ describe('MarkdownView workspace file links and inline images', { timeout: 60_00
       mounted.unmount()
       shim.restore()
       globalThis.fetch = origFetch
+      resetBody()
+    }
+  })
+
+  test('resolves same-tree worktree absolute paths from parent & reviewer sibling while rejecting unrelated trees', { timeout: 60_000 }, async () => {
+    const opened: ActiveModal[] = []
+    const store = makeTestStore({
+      conversations: [
+        conv(1, '/root/code/helm'),
+        conv(2, '/root/code/.helmx-worktrees/helm-bbcc88d1', { parentConversationId: 1 }),
+        conv(3, '/root/code/helm', { parentConversationId: 1 }),
+        conv(99, '/root/code/.helmx-worktrees/helm-other'),
+      ],
+    })
+    spyActiveModal(store, opened)
+
+    const md = [
+      '- [conversations.ts:137](/root/code/.helmx-worktrees/helm-bbcc88d1/packages/cli/src/commands/conversations.ts:137)',
+      '- [other.ts:12](/root/code/.helmx-worktrees/helm-other/src/other.ts:12)',
+    ].join('\n')
+
+    resetBody()
+    const fromParent = mount(
+      e(HostStoreProviders, { value: store }, e(MarkdownView, { text: md, conversationId: 1 })),
+    )
+    try {
+      const chips = [...fromParent.host.querySelectorAll<HTMLButtonElement>('button.attachment-chip')]
+      assert.equal(chips.length, 1, 'only same-tree worktree link renders as attachment-chip')
+      assert.match(chips[0]!.textContent ?? '', /conversations\.ts:137/)
+
+      const unrelated = fromParent.host.querySelector<HTMLAnchorElement>('a[href*="helm-other"]')
+      assert.ok(unrelated !== null, 'unrelated tree link stays a plain <a>')
+
+      await act(async () => {
+        chips[0]!.click()
+      })
+      assert.deepEqual(opened, [
+        {
+          kind: 'workspace-file',
+          conversationId: 2,
+          path: 'packages/cli/src/commands/conversations.ts',
+          startLine: 137,
+        },
+      ])
+    } finally {
+      fromParent.unmount()
+      resetBody()
+    }
+
+    opened.length = 0
+    const fromReviewer = mount(
+      e(HostStoreProviders, { value: store }, e(MarkdownView, { text: md, conversationId: 3 })),
+    )
+    try {
+      const chips = [...fromReviewer.host.querySelectorAll<HTMLButtonElement>('button.attachment-chip')]
+      assert.equal(chips.length, 1)
+      await act(async () => {
+        chips[0]!.click()
+      })
+      assert.deepEqual(opened, [
+        {
+          kind: 'workspace-file',
+          conversationId: 2,
+          path: 'packages/cli/src/commands/conversations.ts',
+          startLine: 137,
+        },
+      ])
+    } finally {
+      fromReviewer.unmount()
+      resetBody()
+    }
+  })
+
+  test('supports className merging on single .msg-ai-body root and onLinkClick for hash links without target=_blank', { timeout: 60_000 }, async () => {
+    const store = makeTestStore({
+      conversations: [conv(1, '/root/code/helm')],
+    })
+    const clicked: Array<{ href: string; defaultPrevented: boolean }> = []
+
+    resetBody()
+    const mounted = mount(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(MarkdownView, {
+          text: 'See [#7](#swarm-post-7) and [Docs](https://example.com)',
+          conversationId: 1,
+          className: 'sw-panel-post-text',
+          onLinkClick: (href, ev) => {
+            if (href === '#swarm-post-7') ev.preventDefault()
+            clicked.push({ href, defaultPrevented: ev.defaultPrevented })
+          },
+        }),
+      ),
+    )
+
+    try {
+      const roots = [...mounted.host.querySelectorAll('.msg-ai-body')]
+      assert.equal(roots.length, 1, 'single .msg-ai-body root with zero nested wrappers')
+      assert.ok(roots[0]!.classList.contains('sw-panel-post-text'), 'className merged onto .msg-ai-body root')
+
+      const hashAnchor = mounted.host.querySelector<HTMLAnchorElement>('a[href="#swarm-post-7"]')
+      assert.ok(hashAnchor !== null)
+      assert.equal(hashAnchor.getAttribute('target'), null, 'hash-only anchor omits target=_blank')
+      assert.equal(hashAnchor.getAttribute('rel'), null, 'hash-only anchor omits rel')
+
+      const extAnchor = mounted.host.querySelector<HTMLAnchorElement>('a[href="https://example.com"]')
+      assert.ok(extAnchor !== null)
+      assert.equal(extAnchor.getAttribute('target'), '_blank')
+
+      await act(async () => {
+        hashAnchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      })
+      assert.deepEqual(clicked, [{ href: '#swarm-post-7', defaultPrevented: true }])
+    } finally {
+      mounted.unmount()
+      resetBody()
+    }
+  })
+
+  test('isolates MarkdownView from status/updatedAt churn while refreshing on workspace topology changes', { timeout: 60_000 }, async () => {
+    const opened: ActiveModal[] = []
+    const store = makeTestStore({
+      conversations: [
+        conv(1, '/root/code/helm'),
+        conv(2, '/root/code/.helmx-worktrees/helm-bbcc88d1', { parentConversationId: 1 }),
+      ],
+    })
+    spyActiveModal(store, opened)
+
+    let renderCount = 0
+    const text = 'New child link [foo.ts:9](/root/code/.helmx-worktrees/helm-new4/src/foo.ts:9)'
+
+    resetBody()
+    const mounted = mount(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(
+          React.Profiler,
+          {
+            id: 'md-isolation',
+            onRender: () => {
+              renderCount += 1
+            },
+          },
+          e(MarkdownView, { text, conversationId: 1 }),
+        ),
+      ),
+    )
+
+    try {
+      assert.equal(renderCount, 1)
+      assert.equal(mounted.host.querySelectorAll('button.attachment-chip').length, 0)
+
+      // High-frequency status / updatedAt updates on child #2 must NOT re-render MarkdownView for #1.
+      await act(async () => {
+        store.updateLive((prev) => ({
+          ...prev,
+          conversations: prev.conversations.map((c) =>
+            c.id === 2 ? ({ ...c, status: 'working', updatedAt: 999_999 } as unknown as ConversationSummary) : c,
+          ),
+        }))
+      })
+      assert.equal(renderCount, 1, 'status/updatedAt update does not trigger MarkdownView re-render')
+
+      // Adding child #4 with a new worktree cwd DOES update workspaceTopology and enable the preview chip.
+      await act(async () => {
+        store.updateLive((prev) => ({
+          ...prev,
+          conversations: [
+            ...prev.conversations,
+            conv(4, '/root/code/.helmx-worktrees/helm-new4', { parentConversationId: 1 }),
+          ],
+        }))
+      })
+      assert.equal(renderCount, 2, 'topology addition triggers MarkdownView re-render')
+
+      const chip = mounted.host.querySelector<HTMLButtonElement>('button.attachment-chip')
+      assert.ok(chip !== null, 'new child worktree link becomes clickable attachment-chip')
+      await act(async () => {
+        chip.click()
+      })
+      assert.deepEqual(opened, [
+        { kind: 'workspace-file', conversationId: 4, path: 'src/foo.ts', startLine: 9 },
+      ])
+    } finally {
+      mounted.unmount()
       resetBody()
     }
   })

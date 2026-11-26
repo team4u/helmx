@@ -3,7 +3,7 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
-import { Button, MarkdownView, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
+import { Button, MarkdownView, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
 import { previewPostBody } from './board-model.ts'
 import { SW_BODY_COLLAPSE, SW_BODY_EXPAND } from './copy.ts'
 import { linkifyPostRefs, parseSwarmPostHref } from './model-post-nav.ts'
@@ -11,13 +11,12 @@ import { linkifyPostRefs, parseSwarmPostHref } from './model-post-nav.ts'
 export interface PostBodyTextProps {
   body: string
   collapsible: boolean
-  conversationId?: number
   selfSeq?: number
+  conversationId?: number
   onRefClick?: (seq: number, anchorEl: HTMLElement) => void
 }
 
 export function PostBodyText(props: PostBodyTextProps): ReactNode {
-  const ctx = usePluginContext()
   const locale = usePluginLocale()
   const [expanded, setExpanded] = useState(false)
   const rawText = !props.collapsible || expanded ? props.body : previewPostBody(props.body)
@@ -37,13 +36,12 @@ export function PostBodyText(props: PostBodyTextProps): ReactNode {
 
   return (
     <div className="sw-panel-post-body">
-      <div className="sw-panel-post-text">
-        <MarkdownView
-          text={renderedText}
-          conversationId={props.conversationId ?? ctx.conversationId}
-          onLinkClick={props.onRefClick ? handleLinkClick : undefined}
-        />
-      </div>
+      <MarkdownView
+        className="sw-panel-post-text"
+        text={renderedText}
+        conversationId={props.conversationId}
+        onLinkClick={props.onRefClick ? handleLinkClick : undefined}
+      />
       {props.collapsible ? (
         <Button
           variant="ghost"

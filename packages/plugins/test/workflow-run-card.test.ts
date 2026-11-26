@@ -358,10 +358,43 @@ test('DOM：瘦身 run 折叠零 inspect 请求；点击 Expand 按需拉取并�
   }
 })
 
-test('DOM：WorkflowRunCard 字符串结果与 ExecutionNodeRow prompt/字符串 output 走宿主 MarkdownView；gate 与 JSON output 保留 pre', { timeout: 60_000 }, async () => {
+test('DOM：WorkflowRunCard 字符串结果通过 MarkdownView 渲染并携带 run.conversationId', { timeout: 60_000 }, async () => {
+  const mdRun = run({
+    id: 'wf_md',
+    kind: 'workflow',
+    name: 'Markdown 结果工作流',
+    conversationId: 42,
+    status: 'completed',
+    hasResult: true,
+    result: '结论见 [conversations.ts:137](/root/code/.helmx-worktrees/helm-bbcc88d1/packages/cli/src/commands/conversations.ts:137)',
+    nodes: [node({ id: 'a', status: 'done', label: '核查' })],
+  })
+  const h = createWorkflowHostHarness({
+    conversationId: 42,
+    conversations: [summary(42, 'idle')],
+    runsByConversation: { 42: [mdRun] },
+    locale: 'en',
+  })
+  const ui = h.mountNode(e(WorkflowWorkbenchPanel, { conversation: summary(42, 'idle') }))
+  try {
+    const expandBtn = [...ui.container.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('Expand'))!
+    await act(async () => {
+      expandBtn.click()
+    })
+    const mdEl = ui.container.querySelector<HTMLElement>('[data-testid="markdown-view"]')
+    assert.ok(mdEl !== null, '字符串结果应通过 MarkdownView 渲染')
+    assert.equal(mdEl.getAttribute('data-conversation-id'), '42', 'MarkdownView 应收到 run.conversationId')
+    assert.ok(mdEl.classList.contains('wf-result-markdown'), '应合并 wf-result-markdown 类')
+    assert.ok(mdEl.classList.contains('msg-ai-body'), '应合并 msg-ai-body 类')
+  } finally {
+    ui.unmount()
+  }
+})
+
+test('DOM：ExecutionNodeRow 的 prompt 与字符串 output 走宿主 MarkdownView（优先传节点 conversationId）；gate 与 JSON output 保留 pre', { timeout: 60_000 }, async () => {
   const conv11 = makeConvSummary(11, { parentConversationId: 1, status: 'idle', title: '子代理节点' })
   const richRun = run({
-    id: 'wf_md',
+    id: 'wf_node_md',
     kind: 'workflow',
     name: 'Markdown 校验流',
     status: 'completed',
@@ -397,10 +430,10 @@ test('DOM：WorkflowRunCard 字符串结果与 ExecutionNodeRow prompt/字符串
 
   const ui = h.mountNode(e(WorkflowWorkbenchPanel, { conversation: summary(1, 'idle') }))
   try {
-    // 1. 展开 WorkflowRunCard 字符串 result -> 走 .wf-result-box .wf-md-body [data-testid="markdown-view"].msg-ai-body
+    // 1. 展开 WorkflowRunCard 字符串 result -> 走 .wf-result-box [data-testid="markdown-view"].msg-ai-body.wf-result-markdown
     const expandBtn = [...ui.container.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('Expand'))!
     await act(async () => { expandBtn.click() })
-    const resultMd = ui.container.querySelector('.wf-result-box .wf-md-body [data-testid="markdown-view"].msg-ai-body')
+    const resultMd = ui.container.querySelector('.wf-result-box [data-testid="markdown-view"].msg-ai-body.wf-result-markdown')
     assert.ok(resultMd !== null)
     assert.equal(resultMd.getAttribute('data-conversation-id'), '1')
     assert.equal(resultMd.querySelector('h2')?.textContent, '工作流报告')
@@ -413,8 +446,10 @@ test('DOM：WorkflowRunCard 字符串结果与 ExecutionNodeRow prompt/字符串
     await act(async () => { agentDetailToggle.click() })
 
     const agentCard = agentDetailToggle.closest('.wf-node-card')!
-    const mdBoxes = [...agentCard.querySelectorAll('.wf-node-md-box [data-testid="markdown-view"].msg-ai-body')]
+    const mdBoxes = [...agentCard.querySelectorAll('[data-testid="markdown-view"].msg-ai-body.wf-result-markdown.wf-node-md-box')]
     assert.equal(mdBoxes.length, 2, 'prompt 与字符串 output 均应走 MarkdownView')
+    assert.equal(mdBoxes[0]!.getAttribute('data-conversation-id'), '11', '节点 prompt 应优先传入节点 conversationId')
+    assert.equal(mdBoxes[1]!.getAttribute('data-conversation-id'), '11', '节点字符串 output 应优先传入节点 conversationId')
     assert.equal(mdBoxes[0]!.querySelector('h3')?.textContent, '任务目标')
     assert.equal(mdBoxes[0]!.querySelector('strong')?.textContent, '检查')
     assert.equal(mdBoxes[1]!.querySelector('h2')?.textContent, '节点输出')

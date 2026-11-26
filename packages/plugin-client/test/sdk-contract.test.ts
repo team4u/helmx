@@ -307,22 +307,11 @@ function createReactivePort(log: PortLog, init: PortStateInit = {}): ReactiveTes
       renderItem: slotRender,
     },
     markdown: {
-      view: ({ text, workspaceBaseDir, onLinkClick }) =>
-        e(
-          'div',
-          { 'data-md': 'host', 'data-base-dir': workspaceBaseDir ?? '' },
-          text,
-          onLinkClick !== undefined
-            ? e(
-                'a',
-                {
-                  href: '#seq-1',
-                  onClick: (ev: React.MouseEvent<HTMLAnchorElement>) => onLinkClick('#seq-1', ev),
-                },
-                'ref',
-              )
-            : null,
-        ),
+      view: ({ text, workspaceBaseDir, className, onLinkClick }) =>
+        e('div', { 'data-md': 'host', 'data-base-dir': workspaceBaseDir ?? '', className },
+          onLinkClick
+            ? e('a', { href: '#custom-ref', onClick: (ev: React.MouseEvent<HTMLAnchorElement>) => onLinkClick('#custom-ref', ev) }, text)
+            : text),
       codeBlock: ({ code, language }) => e('pre', { 'data-code': 'host', 'data-lang': language }, code),
     },
     ...(init.overrides ?? {}),
@@ -1303,16 +1292,17 @@ test('PluginSlot: reappearing contribution on the render chain warns of a cycle 
 // 5. MarkdownView / CodeBlockView port delegation
 // ---------------------------------------------------------------------------
 
-test('MarkdownView / CodeBlockView render the host-port injected implementations (SSR safe) and forward onLinkClick', { timeout: 60_000 }, () => {
+test('MarkdownView / CodeBlockView render the host-port injected implementations (SSR safe) and forward className/onLinkClick', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
   const html = renderToString(
     e(SDK.PluginClientHostContext.Provider, { value: port },
       e('div', null,
-        e(SDK.MarkdownView, { text: '# hi', workspaceBaseDir: 'docs/sub' }),
+        e(SDK.MarkdownView, { text: '# hi', workspaceBaseDir: 'docs/sub', className: 'custom-md-class' }),
         e(SDK.CodeBlockView, { code: 'let x = 1', language: 'ts' }))))
   assert.match(html, /data-md="host"/, 'MarkdownView delegates to the host view')
   assert.match(html, /data-base-dir="docs\/sub"/, 'MarkdownView forwards workspaceBaseDir to host view')
+  assert.match(html, /custom-md-class/, 'MarkdownView forwards className to host view')
   assert.match(html, /# hi/)
   assert.match(html, /data-code="host"/, 'CodeBlockView delegates to the host codeBlock')
   assert.match(html, /data-lang="ts"/)
@@ -1320,29 +1310,26 @@ test('MarkdownView / CodeBlockView render the host-port injected implementations
   const clicked: string[] = []
   const host = document.createElement('div')
   document.body.appendChild(host)
-  const root: Root = createRoot(host)
+  const root = createRoot(host)
   try {
     act(() => {
       root.render(
-        e(
-          SDK.PluginClientHostContext.Provider,
-          { value: port },
+        e(SDK.PluginClientHostContext.Provider, { value: port },
           e(SDK.MarkdownView, {
             text: '# ref',
             onLinkClick: (href, ev) => {
               ev.preventDefault()
               clicked.push(href)
             },
-          }),
-        ),
+          })),
       )
     })
-    const anchor = host.querySelector<HTMLAnchorElement>('a[href="#seq-1"]')
-    assert.ok(anchor !== null)
+    const anchor = host.querySelector('a')
+    assert.ok(anchor !== null, 'host view rendered link')
     act(() => {
-      anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      anchor.click()
     })
-    assert.deepEqual(clicked, ['#seq-1'])
+    assert.deepEqual(clicked, ['#custom-ref'], 'MarkdownView forwards onLinkClick to host view')
   } finally {
     act(() => {
       root.unmount()

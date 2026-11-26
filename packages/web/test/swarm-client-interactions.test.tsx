@@ -270,13 +270,12 @@ describe("swarm-client-interactions", () => {
       getSessionDocState,
       loadConversationDetail: noopLoadConversationDetail,
       markdown: {
-        view: ({ text, conversationId, onLinkClick }: MarkdownViewProps) =>
+        view: ({ text, className, onLinkClick, conversationId }: MarkdownViewProps) =>
           e(
             'div',
             {
-              className: 'msg-ai-body',
-              'data-testid': 'markdown-view',
-              'data-conversation-id': conversationId ?? '',
+              className: className ? `msg-ai-body ${className}` : 'msg-ai-body',
+              ...(conversationId !== undefined ? { 'data-md-conv-id': String(conversationId) } : {}),
             },
             e(MarkdownText, { text, onLinkClick }),
           ),
@@ -992,10 +991,8 @@ describe("swarm-client-interactions", () => {
       const bodyHosts = [...panel.host.querySelectorAll<HTMLElement>('.sw-panel-post-text')]
       assert.ok(bodyHosts.length === 2, '两个帖子的正文容器')
 
-      // 短帖全文渲染为宿主 MarkdownView (.msg-ai-body 在内层而非重复外层)，不再出现字面 ** 反引号语法
+      // 短帖全文渲染为 Markdown 元素，不再出现字面 ** 反引号语法
       const shortBody = bodyHosts[0]!
-      assert.equal(shortBody.classList.contains('msg-ai-body'), false)
-      assert.ok(shortBody.querySelector('[data-testid="markdown-view"].msg-ai-body') !== null)
       assert.ok(shortBody.querySelector('strong') !== null, '粗体渲染为 strong 元素')
       assert.ok(shortBody.querySelector('code') !== null, '行内代码渲染为 code 元素')
       assert.ok((shortBody.textContent ?? '').includes('**') === false, '正文无字面 ** 语法残留')
@@ -2439,6 +2436,42 @@ describe("swarm-client-interactions", () => {
       assert.equal(spy.notifyCalls.length, 1)
       assert.equal(spy.notifyCalls[0]!.tone, 'warning')
       assert.match(spy.notifyCalls[0]!.message, /--allow-unverified-usage/)
+    } finally {
+      panel.unmount()
+    }
+    resetDefaultStubs()
+  })
+
+  test('SwarmWorkbenchPanel 与 SwarmPostPeekPopover 向 MarkdownView 传入发帖者 conversationId（worker 传成员会话、coordinator 传主控会话）并保留 #seq 预览', { timeout: 60_000 }, async () => {
+    const board = boardViewFixture()
+    const posts = board.posts as Array<Record<string, unknown>>
+    posts[0]!['body'] = 'Coordinator brief referencing #2 and [file](/repo/README.md).'
+    posts[1]!['body'] = 'Worker finding at [conversations.ts:137](/repo-wt/author/conversations.ts:137), see #1.'
+    setStubState({
+      docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+      sessionDocs: { 'builtin:swarm/board-view/50': board },
+    })
+    const spy = makeSpyCtx({ conversationId: 50 })
+    const panel = await mount(
+      spy,
+      e(components.SwarmWorkbenchPanel, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+    )
+    try {
+      const seq1Body = panel.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="1"] .sw-panel-post-text')
+      const seq2Body = panel.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="2"] .sw-panel-post-text')
+      assert.ok(seq1Body !== null && seq2Body !== null)
+      assert.equal(seq1Body.getAttribute('data-md-conv-id'), '50', 'coordinator 帖传主控会话 ID')
+      assert.equal(seq2Body.getAttribute('data-md-conv-id'), '51', 'worker 帖传作者成员会话 ID')
+
+      // 点击 #2 帖子中的 #1 内联引用 -> 浮卡内的 MarkdownView 传被预览帖(#1 coordinator) 的 conversationId=50
+      const ref1 = seq2Body.querySelector<HTMLAnchorElement>('a[href="#swarm-post-1"]')
+      assert.ok(ref1 !== null)
+      await act(async () => {
+        ref1.click()
+      })
+      const peekBody = panel.host.querySelector<HTMLElement>('.sw-peek-popover .sw-panel-post-text')
+      assert.ok(peekBody !== null, '点击 #1 展开 peek 浮卡')
+      assert.equal(peekBody.getAttribute('data-md-conv-id'), '50', 'peek 浮卡按被预览帖发帖者传 conversationId')
     } finally {
       panel.unmount()
     }

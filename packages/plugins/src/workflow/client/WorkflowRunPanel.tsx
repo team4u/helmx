@@ -360,9 +360,11 @@ function WorkflowRunCard(props: WorkflowRunCardProps): ReactNode {
                       </Button>
                     </Callout>
                   ) : typeof inspected.result === 'string' ? (
-                    <div className="wf-md-body selectable">
-                      <MarkdownView text={inspected.result} conversationId={displayRun.conversationId} />
-                    </div>
+                    <MarkdownView
+                      text={inspected.result}
+                      conversationId={displayRun.conversationId}
+                      className="wf-result-markdown selectable"
+                    />
                   ) : resultPretty !== undefined ? (
                     <pre className="code-block-pre wf-pre selectable">
                       <code>{resultPretty}</code>

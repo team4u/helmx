@@ -15,6 +15,19 @@ export interface WorkspaceFileRef {
   endLine?: number
 }
 
+export interface WorkspaceConversationNode {
+  readonly id: number
+  readonly nodeId: string
+  readonly cwd: string
+  readonly parentConversationId?: number
+}
+
+export interface ResolvedWorkspaceFileTarget extends WorkspaceFileRef {
+  conversationId: number
+}
+
+const EMPTY_WORKSPACE_NODES: ReadonlyArray<WorkspaceConversationNode> = Object.freeze([])
+
 const EXPLICIT_SCHEME_RE = /^[a-zA-Z][a-zA-Z\d+.-]*:/
 const WINDOWS_DRIVE_ABS_RE = /^[A-Za-z]:[\\/]/
 const BARE_LOCALHOST_RE = /^localhost(?::\d+)?$/i
@@ -282,4 +295,134 @@ export function parseWorkspaceFileRef(
       : {}),
     ...parseLineRange(fragment),
   }
+}
+
+/**
+ * Group conversation workspace nodes by `(rootConversationId, nodeId)` so every
+ * conversation in a task tree can resolve absolute / `file://` file links
+ * belonging to siblings or descendants on the same compute node.
+ */
+export function buildSameTreeWorkspacesMap(
+  nodes: ReadonlyArray<WorkspaceConversationNode>,
+): Map<number, ReadonlyArray<WorkspaceConversationNode>> {
+  const byId = new Map<number, WorkspaceConversationNode>()
+  for (const node of nodes) {
+    byId.set(node.id, node)
+  }
+
+  const rootCache = new Map<number, number>()
+  const rootOf = (startId: number): number => {
+    const cached = rootCache.get(startId)
+    if (cached !== undefined) return cached
+    const visited = new Set<number>()
+    const path: number[] = []
+    let curId: number | undefined = startId
+    let rootId = startId
+    while (curId !== undefined) {
+      const existingRoot = rootCache.get(curId)
+      if (existingRoot !== undefined) {
+        rootId = existingRoot
+        break
+      }
+      if (visited.has(curId)) {
+        const cycleStart = path.indexOf(curId)
+        rootId = Math.min(...path.slice(cycleStart))
+        break
+      }
+      visited.add(curId)
+      path.push(curId)
+      rootId = curId
+      const parentId: number | undefined = byId.get(curId)?.parentConversationId
+      if (parentId === undefined || !byId.has(parentId)) break
+      curId = parentId
+    }
+    for (const id of path) {
+      rootCache.set(id, rootId)
+    }
+    return rootId
+  }
+
+  const groups = new Map<string, WorkspaceConversationNode[]>()
+  const nodeGroupKey = new Map<number, string>()
+  for (const node of byId.values()) {
+    const rootId = rootOf(node.id)
+    const key = `${rootId}\0${node.nodeId || 'local'}`
+    nodeGroupKey.set(node.id, key)
+    if (typeof node.cwd === 'string' && node.cwd.trim() !== '') {
+      let list = groups.get(key)
+      if (list === undefined) {
+        list = []
+        groups.set(key, list)
+      }
+      list.push(node)
+    }
+  }
+
+  const frozenGroups = new Map<string, ReadonlyArray<WorkspaceConversationNode>>()
+  for (const [key, list] of groups) {
+    list.sort((a, b) => a.id - b.id)
+    frozenGroups.set(key, Object.freeze(list))
+  }
+
+  const result = new Map<number, ReadonlyArray<WorkspaceConversationNode>>()
+  for (const node of byId.values()) {
+    const key = nodeGroupKey.get(node.id)!
+    result.set(node.id, frozenGroups.get(key) ?? EMPTY_WORKSPACE_NODES)
+  }
+  return result
+}
+
+/**
+ * Resolve a Markdown file link/image against the viewer conversation first, then
+ * fall back ONLY for absolute / `file:` URLs to other workspaces in the same
+ * conversation tree on the same compute node (picking the most specific `cwd`
+ * match, breaking ties by highest conversation ID).
+ */
+export function resolveWorkspaceFileRef(
+  raw: string | undefined,
+  opts: {
+    conversationId: number
+    conversationCwd?: string
+    workspaceBaseDir?: string
+    treeWorkspaces?: ReadonlyArray<Pick<WorkspaceConversationNode, 'id' | 'cwd'>>
+  },
+): ResolvedWorkspaceFileTarget | null {
+  const primary = parseWorkspaceFileRef(raw, {
+    conversationCwd: opts.conversationCwd,
+    workspaceBaseDir: opts.workspaceBaseDir,
+  })
+  if (primary !== null) {
+    return { ...primary, conversationId: opts.conversationId }
+  }
+
+  if (typeof raw !== 'string' || opts.treeWorkspaces === undefined || opts.treeWorkspaces.length === 0) {
+    return null
+  }
+  const trimmed = raw.trim()
+  if (trimmed === '' || trimmed.startsWith('#') || trimmed.startsWith('//')) {
+    return null
+  }
+  const hashIdx = trimmed.indexOf('#')
+  const beforeHash = hashIdx === -1 ? trimmed : trimmed.slice(0, hashIdx)
+  if (
+    beforeHash === '' ||
+    (!/^file:/i.test(beforeHash) && !beforeHash.startsWith('/') && !isWindowsDriveOrUnc(beforeHash))
+  ) {
+    return null
+  }
+
+  let best: { id: number; ref: WorkspaceFileRef } | null = null
+  for (const ws of opts.treeWorkspaces) {
+    if (ws.id === opts.conversationId) continue
+    const candidate = parseWorkspaceFileRef(raw, { conversationCwd: ws.cwd })
+    if (candidate === null) continue
+    if (
+      best === null ||
+      candidate.path.length < best.ref.path.length ||
+      (candidate.path.length === best.ref.path.length && ws.id > best.id)
+    ) {
+      best = { id: ws.id, ref: candidate }
+    }
+  }
+  return best !== null ? { ...best.ref, conversationId: best.id } : null
 }

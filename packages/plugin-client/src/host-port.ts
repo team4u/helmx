@@ -63,7 +63,9 @@ export interface MarkdownViewProps {
   breaks?: boolean
   /** Relative POSIX directory within the workspace (e.g. 'docs') used as base dir when resolving relative links/images in nested Markdown previews. */
   workspaceBaseDir?: string
-  /** Optional click interceptor for rendered anchor links (call event.preventDefault() to handle in-app, e.g. Swarm `#seq` peek links). */
+  /** Extra CSS class merged onto the host root `.msg-ai-body` element. */
+  className?: string
+  /** Optional click interceptor for non-workspace / non-artifact links (call event.preventDefault() to handle in-app). */
   onLinkClick?: (href: string, event: MouseEvent<HTMLAnchorElement>) => void
 }
 

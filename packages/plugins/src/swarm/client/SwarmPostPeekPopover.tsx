@@ -12,6 +12,7 @@ export interface SwarmPostPeekPopoverProps {
   peekState: PostPeekState
   anchorRef: RefObject<HTMLElement | null>
   post: BoardPost | undefined
+  conversationId?: number
   loading: boolean
   error: string | undefined
   onPushRef: (seq: number) => void
@@ -64,7 +65,7 @@ export function SwarmPostPeekPopover(props: SwarmPostPeekPopoverProps): ReactNod
         <div className="sw-peek-body">
           {post ? (
             <>
-              <PostBodyText body={post.body} collapsible={false} selfSeq={post.seq} onRefClick={(seq) => onPushRef(seq)} />
+              <PostBodyText body={post.body} collapsible={false} selfSeq={post.seq} conversationId={props.conversationId} onRefClick={(seq) => onPushRef(seq)} />
               {refs.length > 0 ? (
                 <div className="sw-panel-post-refs sw-peek-refs">
                   {refs.map((refSeq) => (
