@@ -87,7 +87,7 @@ export const conversationMessages = {
   'conv.tool.showIoAria': { en: 'Show input & output for {name}', 'zh-CN': '查看 {name} 的输入与输出' },
   'conv.tool.hideIoAria': { en: 'Hide input & output for {name}', 'zh-CN': '收起 {name} 的输入与输出' },
 
-  // --- Thinking / step groups & process inspector drawer -------------------------
+  // --- Thinking / step groups ----------------------------------------------------
   'conv.thinking.stepsActive': { en: 'Thinking ({count} steps)…', 'zh-CN': '正在思考 ({count} 步)…' },
   'conv.thinking.steps': { en: 'Thinking ({count} steps)', 'zh-CN': '思考过程 ({count} 步)' },
   'conv.thinking.execActive': { en: 'Thinking and executing ({count} steps)…', 'zh-CN': '正在思考与执行 ({count} 步)…' },
@@ -105,27 +105,6 @@ export const conversationMessages = {
     en: 'Recorded cumulative time, not elapsed time; parallel tools count separately.',
     'zh-CN': '已记录的累计耗时；并行工具分别计时，并非实际经过时间。',
   },
-  'conv.process.closeDrawer': { en: 'Close execution inspector', 'zh-CN': '关闭执行过程抽屉' },
-  'conv.process.openThinkingDrawer': { en: 'View thinking in drawer', 'zh-CN': '在抽屉中查看思考过程' },
-  'conv.process.openToolDrawer': { en: 'Inspect {name} in drawer', 'zh-CN': '在抽屉中查看 {name}' },
-  'conv.process.drawerAria': { en: 'Execution step inspector', 'zh-CN': '步骤详情检视抽屉' },
-  'conv.process.stepCounter': { en: '{current} / {total}', 'zh-CN': '{current} / {total}' },
-  'conv.process.jumpToStepAria': { en: 'Jump to step ({current} / {total})', 'zh-CN': '跳转到指定步骤（{current} / {total}）' },
-  'conv.process.runningBadge': { en: 'Running', 'zh-CN': '执行中' },
-  'conv.process.statusDone': { en: 'Completed', 'zh-CN': '已完成' },
-  'conv.process.statusError': { en: 'Failed', 'zh-CN': '失败' },
-  'conv.process.statusUnknown': { en: 'Unknown', 'zh-CN': '状态未知' },
-  'conv.process.followLive': { en: 'Follow latest', 'zh-CN': '跟随最新' },
-  'conv.process.followingLive': { en: 'Following', 'zh-CN': '实时跟随中' },
-  'conv.process.followLiveTitle': { en: 'Automatically follow the latest execution step', 'zh-CN': '自动跟随最新执行步骤' },
-  'conv.process.pauseFollowTitle': { en: 'Pause following the latest execution step', 'zh-CN': '暂停自动跟随最新步骤' },
-  'conv.process.prevStep': { en: 'Previous step', 'zh-CN': '上一步' },
-  'conv.process.nextStep': { en: 'Next step', 'zh-CN': '下一步' },
-  'conv.process.enterFullscreen': { en: 'Expand drawer to fullscreen', 'zh-CN': '全屏展开抽屉' },
-  'conv.process.exitFullscreen': { en: 'Exit fullscreen', 'zh-CN': '退出全屏' },
-  'conv.process.copyThinking': { en: 'Copy thinking', 'zh-CN': '复制思考' },
-  'conv.process.emptyThinking': { en: '(No thinking content yet)', 'zh-CN': '（暂无思考内容）' },
-  'conv.process.closeTitle': { en: 'Close (Esc)', 'zh-CN': '关闭 (Esc)' },
 
   // --- Assistant turn footer / model identity ------------------------------------
   'conv.model.boundarySwitchedTo': { en: 'Effective model switched to {model}', 'zh-CN': '实际生成模型切换为 {model}' },

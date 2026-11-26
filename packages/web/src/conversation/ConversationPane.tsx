@@ -770,7 +770,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         detailEntries={detailEntries}
         timelineItems={timelineItems}
         sendingPending={sendingPending}
-        staged={staged}
         outlineOpen={outlineOpen}
         outlineScrollRequest={outlineScrollReq}
         onActiveOutlineChange={setActiveOutlineAnchor}

@@ -799,15 +799,13 @@ describe("helmx-store-shortcuts", () => {
       assert.deepEqual(fired.slice(countBeforePopover), [{ action: 'toggle-model-picker', panel: 'primary' }])
       modelPopover.remove()
 
-      // With a plain modal/drawer [role="dialog"] open: Ctrl+L / Ctrl+O / Ctrl+; must be intercepted and never dispatched
+      // With a plain modal/drawer [role="dialog"] open: Ctrl+L must be intercepted and never dispatched
       const normalDialog = document.createElement('div')
       normalDialog.setAttribute('role', 'dialog')
       document.body.appendChild(normalDialog)
       const countBeforeNormalDialog = fired.length
       const evLBlocked = dispatchWindowKey({ key: 'l', ctrlKey: true })
       assert.equal(evLBlocked.defaultPrevented, false)
-      const evOBlocked = dispatchWindowKey({ key: 'o', ctrlKey: true })
-      assert.equal(evOBlocked.defaultPrevented, false)
       const evSemiBlockedByDialog = dispatchWindowKey({ key: ';', ctrlKey: true })
       assert.equal(evSemiBlockedByDialog.defaultPrevented, false)
       assert.equal(fired.length, countBeforeNormalDialog)

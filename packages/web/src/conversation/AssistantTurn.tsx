@@ -4,14 +4,7 @@ import { CopyButton, HelmxIcon, IconButton, ToolActivityContext, useSharedNowMs 
 import { MarkdownView } from './MarkdownView.js'
 import { StepGroup, TraceRow } from './TimelineRows.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'
-import {
-  isAssistantTurnBusy,
-  assistantModelFullLabel,
-  assistantModelShortLabel,
-  type AssistantModelIdentity,
-  type AssistantTurn,
-  type ProcessShortcutCommand,
-} from './timeline-model.js'
+import { isAssistantTurnBusy, assistantModelFullLabel, assistantModelShortLabel, type AssistantModelIdentity, type AssistantTurn, type ProcessShortcutCommand } from './timeline-model.js'
 import {
   formatDurationMs,
   formatFullTimestamp,
@@ -203,8 +196,6 @@ function AssistantTurnContent({
               active={seg.active === true}
               conversationId={conversation.id}
               shortcutToggle={processShortcut}
-              turnKey={turn.key}
-              segmentKey={seg.key}
             />
           )
         }
@@ -213,7 +204,6 @@ function AssistantTurnContent({
             key={seg.key}
             tool={seg.tool}
             conversationId={conversation.id}
-            turnKey={turn.key}
             defaultOpen={false}
           />
         )

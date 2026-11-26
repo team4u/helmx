@@ -1405,32 +1405,8 @@ pre {
 
 .trace-row:hover .trace-row-chevron,
 .trace-row:focus-visible .trace-row-chevron,
-.trace-row[aria-expanded="true"] .trace-row-chevron,
-.trace-group-summary:hover .trace-row-chevron,
-.trace-group-summary:focus-visible .trace-row-chevron,
-.trace-group-summary[aria-expanded="true"] .trace-row-chevron {
+.trace-row[aria-expanded="true"] .trace-row-chevron {
   opacity: 0.9;
-}
-
-.trace-thinking-row .trace-row-left > svg {
-  color: var(--fg-muted);
-}
-
-.trace-thinking-title {
-  font-weight: 500;
-  color: var(--fg);
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
-.trace-thinking-summary {
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11.5px;
-  flex: 0 1 auto;
-  min-width: 0;
 }
 
 .trace-row-error .trace-row-left > svg {
@@ -1595,8 +1571,7 @@ pre {
   min-width: 0;
 }
 .trace-expanded-body .trace-section-label,
-.trace-tool-body .trace-section-label,
-.process-detail-body .trace-section-label {
+.trace-tool-body .trace-section-label {
   font-family: var(--font-sans);
   font-size: 11.5px;
   font-weight: 500;
@@ -1714,8 +1689,7 @@ pre {
 /* 工具展开体内的代码块（输入/输出/原始数据/源码预览）统一带框与内边距；
  * 思考过程内的 Markdown 代码块已有 .code-block-wrap 承载外框，保持原有内嵌样式不变。 */
 .trace-expanded-body .code-block-pre:not(.code-lines-pre),
-.trace-tool-body .code-block-pre:not(.code-lines-pre),
-.process-detail-body .code-block-pre:not(.code-lines-pre) {
+.trace-tool-body .code-block-pre:not(.code-lines-pre) {
   padding: 8px 10px;
   background: var(--code-bg);
   border: 1px solid var(--code-border);
@@ -1725,8 +1699,7 @@ pre {
 }
 
 .trace-expanded-body .code-block-wrap .code-block-pre:not(.code-lines-pre),
-.trace-tool-body .code-block-wrap .code-block-pre:not(.code-lines-pre),
-.process-detail-body .code-block-wrap .code-block-pre:not(.code-lines-pre) {
+.trace-tool-body .code-block-wrap .code-block-pre:not(.code-lines-pre) {
   padding: 10px 12px;
   border: none;
   border-radius: 0;
@@ -2282,267 +2255,5 @@ pre {
 @media (max-width: 680px) {
   .timeline-starters { gap: 6px; }
   .timeline-starter-btn { font-size: 12px; }
-}
-
-/* ==========================================================================
- * 5.2 二级单栏过程检视抽屉（ProcessInspectorDrawer）与时间线选中高亮
- * ========================================================================== */
-
-.trace-group-summary.is-inspecting,
-.trace-row.is-inspecting {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-
-/* 右侧单栏详情抽屉：使用 Radix Dialog 原语与 OverlayLayerContext 动态叠层 */
-.process-inspector-backdrop {
-  position: fixed;
-  inset: 0;
-  background: var(--bg-backdrop);
-  backdrop-filter: blur(8px) saturate(1.1);
-  -webkit-backdrop-filter: blur(8px) saturate(1.1);
-  animation: helmxOverlayFadeIn var(--dur-normal) var(--ease-out);
-}
-
-.process-inspector-backdrop-nested {
-  background: rgba(0, 0, 0, 0.18);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-.process-inspector-drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(720px, 92vw);
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-elevated);
-  border-left: 1px solid var(--border);
-  box-shadow: -8px 0 28px rgba(0, 0, 0, 0.28);
-  outline: none;
-  overflow: hidden;
-  animation: drawerSlideIn var(--dur-normal) var(--ease-out);
-  transition: width 0.16s var(--ease-out);
-}
-
-.process-inspector-drawer-fullscreen {
-  width: 100vw;
-  max-width: 100vw;
-  border-left: none;
-}
-
-.process-drawer-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 46px;
-  padding: 8px 12px 8px 16px;
-  border-bottom: 1px solid var(--line-2);
-  background: var(--bg-elevated);
-  flex-shrink: 0;
-}
-
-.process-drawer-header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.process-drawer-status-icon {
-  flex-shrink: 0;
-  color: var(--fg-secondary);
-}
-
-.process-drawer-status-icon.is-running {
-  color: var(--accent);
-}
-
-.process-drawer-status-icon.is-error {
-  color: var(--err);
-}
-
-.process-drawer-title-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
-.process-drawer-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--fg);
-  margin: 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.process-drawer-duration {
-  font-size: 11.5px;
-  color: var(--fg-muted);
-  cursor: default;
-}
-
-.process-drawer-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.process-step-picker-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg-subtle);
-  color: var(--fg-secondary);
-  font-size: 11.5px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
-}
-
-.process-step-picker-trigger:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-  color: var(--fg);
-}
-
-.process-step-picker-trigger.has-error {
-  border-color: var(--err-border);
-  color: var(--err);
-}
-
-.process-step-menu {
-  width: min(360px, 88vw);
-  max-height: min(360px, 60vh);
-  overflow-y: auto;
-  padding: 4px;
-}
-
-.process-step-menu-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  padding: 6px 8px;
-}
-
-.process-step-menu-item.is-selected {
-  background: var(--nav-active-bg);
-  color: var(--nav-active-fg);
-}
-
-.process-step-menu-index {
-  flex-shrink: 0;
-  min-width: 1.5em;
-  font-size: 11px;
-  color: var(--fg-muted);
-  line-height: 1.4;
-}
-
-.process-step-menu-icon {
-  flex-shrink: 0;
-  margin-top: 2px;
-  color: var(--fg-muted);
-}
-
-.process-step-menu-icon.is-running {
-  color: var(--accent);
-}
-
-.process-step-menu-icon.is-error {
-  color: var(--err);
-}
-
-.process-step-menu-text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.process-step-menu-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.process-step-menu-sub {
-  font-size: 11px;
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.process-detail-subheader {
-  padding: 7px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-subtle);
-  flex-shrink: 0;
-}
-
-.process-detail-summary {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--fg-secondary);
-  word-break: break-all;
-  overflow-wrap: anywhere;
-}
-
-.process-drawer-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.process-drawer-detail {
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-}
-
-.process-detail-body {
-  padding: 14px 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.process-thinking-body {
-  font-family: var(--font-sans);
-  color: var(--fg-secondary);
-}
-
-.process-thinking-body .msg-ai-body {
-  font-size: 13.5px;
-  line-height: 1.65;
-  color: var(--fg-secondary);
 }
 
