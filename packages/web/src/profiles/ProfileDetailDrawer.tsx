@@ -5,6 +5,7 @@ import {
 } from '@helmx/protocol/browser'
 import type { Profile, StarterDraft } from './profile-center-model.js'
 import {
+  PROFILE_SKILL_SEARCH_THRESHOLD,
   buildProfileSavePayload,
   isSystemProfile,
   profileIdValid,
@@ -31,6 +32,7 @@ import {
   ModelPickerControl,
   MonoId,
   PluginSlot,
+  SearchBox,
   Select,
   Stack,
   Switch,
@@ -43,6 +45,7 @@ import { summarizeSingleLine } from '../lib/format.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { buildNodeSelectOptions } from '../modals/nodes-modal-model.js'
 import { useModelPickerControlAdapter } from '../conversation/model-picker-adapter.js'
+import { filterSkills } from '../skills/skill-center-model.js'
 
 export interface ProfileDetailDrawerProps {
   profile: Profile | null
@@ -145,7 +148,8 @@ function mergeProfileDetailIntoForm(base: FormState, detail: Profile): FormState
 /**
  * 智能体角色详情与配置抽屉（520px-560px 宽度）：
  * - 基于 Radix Dialog 原语实现平滑右侧滑出；
- * - 覆盖角色 ID、名称、描述、默认模型、默认节点、工作目录、系统提示词、插件扩展子插槽与技能白名单；
+ * - 覆盖角色 ID、名称、描述、默认模型、默认节点、工作目录、系统提示词、插件扩展子插槽与技能白名单
+ *   （候选技能超过 PROFILE_SKILL_SEARCH_THRESHOLD 时提供按名称 / ID / 描述搜索，焦点在搜索框时 Esc 先清空搜索再关抽屉）；
  * - 提供脏表单防护、新建校验与删除二次确认；
  * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
  */
@@ -170,10 +174,12 @@ export function ProfileDetailDrawer({
   const [error, setError] = useState<string | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
+  const [skillQuery, setSkillQuery] = useState('')
+  const skillSearchInputRef = useRef<HTMLInputElement | null>(null)
 
   const activeFetchIdRef = useRef<string | null>(null)
 
-  // 当 Drawer 打开或传入的目标 profile / isNew 变化时重置表单态
+  // 当 Drawer 打开或传入的目标 profile / isNew 变化时重置表单态（技能搜索关键词一并清空）
   useEffect(() => {
     if (!open) {
       setError(null)
@@ -187,6 +193,7 @@ export function ProfileDetailDrawer({
     setForm(initial)
     setBaseline(initial)
     setError(null)
+    setSkillQuery('')
 
     // 若编辑已有角色，尝试拉取全文详情（含完整 SYSTEM.md；MEMORY.md 由
     // builtin:memory 插件子插槽自治拉取，不经宿主 Profile 表单）
@@ -275,6 +282,11 @@ export function ProfileDetailDrawer({
 
   // 可用技能列表
   const availableSkills = skills ?? []
+  // 与技能中心同一匹配范围（id / name / description / references），不另写匹配逻辑
+  const visibleSkills = useMemo(
+    () => filterSkills(availableSkills, { query: skillQuery, categoryTab: 'all' }),
+    [availableSkills, skillQuery],
+  )
 
   // 技能勾选切换
   const handleToggleSkill = (skillId: string, checked: boolean) => {
@@ -287,6 +299,24 @@ export function ProfileDetailDrawer({
       }
       return { ...prev, selectedSkillIds: Array.from(set) }
     })
+  }
+
+  // 分层 Esc（焦点限定：仅焦点在技能搜索框时介入，其余位置沿用原关闭链）。
+  // Radix DismissableLayer 在 document 捕获阶段处理 Escape，React 合成事件拦不住，
+  // 只能经 DetailDrawer 的 onEscapeKeyDown 钩子拦截。
+  const handleDrawerEscapeKeyDown = (event: KeyboardEvent) => {
+    if (skillSearchInputRef.current === null || document.activeElement !== skillSearchInputRef.current) {
+      return
+    }
+    // IME 组合中 Esc 属于输入法（确认/取消候选），不关抽屉
+    if (event.isComposing || event.keyCode === 229) {
+      event.preventDefault()
+      return
+    }
+    if (skillQuery !== '') {
+      event.preventDefault()
+      setSkillQuery('')
+    }
   }
 
   // 保存操作
@@ -371,6 +401,7 @@ export function ProfileDetailDrawer({
       open={open}
       inline={inline}
       onClose={handleRequestClose}
+      onEscapeKeyDown={handleDrawerEscapeKeyDown}
       title={titleText}
       titleClassName="break-word"
       titleExtra={
@@ -733,9 +764,11 @@ export function ProfileDetailDrawer({
           <Switch
             id="profile-form-skills-switch"
             checked={form.useAllSkills}
-            onChange={(val) =>
+            onChange={(val) => {
+              // 切回「全部可用技能」时清空关键词，避免再次关闭白名单时列表被旧关键词过滤
+              if (val) setSkillQuery('')
               setForm((prev) => ({ ...prev, useAllSkills: val }))
-            }
+            }}
             label={t('profiles.card.allSkills')}
           />
         }
@@ -745,35 +778,51 @@ export function ProfileDetailDrawer({
             {t('profiles.drawer.skills.allHint')}
           </HelperText>
         ) : (
-          <Stack direction="vertical" gap="sm" className="profile-skills-scroll">
-            {availableSkills.length === 0 ? (
-              <HelperText>{t('profiles.drawer.skills.empty')}</HelperText>
-            ) : (
-              availableSkills.map((s) => {
-                const desc = summarizeSingleLine(s.description)
-                return (
-                  <Checkbox
-                    key={s.id}
-                    checked={form.selectedSkillIds.includes(s.id)}
-                    onChange={(checked) => handleToggleSkill(s.id, checked)}
-                    label={
-                      <span className="profile-skill-option-label">
-                        <span className="flex-row text-muted">
-                          <span>{s.name}</span>
-                          <span className="mono text-subtle">({s.id})</span>
-                        </span>
-                        {desc !== '' ? (
-                          <span className="profile-skill-desc" title={s.description}>
-                            {desc}
+          <>
+            {/* 搜索框在滚动容器外，列表滚动时保持可见；不传 clearOnEscape：Radix Dialog 内由抽屉级 onEscapeKeyDown 分层处理 */}
+            {availableSkills.length > PROFILE_SKILL_SEARCH_THRESHOLD ? (
+              <SearchBox
+                value={skillQuery}
+                onChange={setSkillQuery}
+                inputRef={skillSearchInputRef}
+                placeholder={t('profiles.drawer.skills.searchPlaceholder')}
+                ariaLabel={t('profiles.drawer.skills.searchAria')}
+                clearLabel={t('profiles.drawer.skills.clearSearch')}
+                onCleared={() => skillSearchInputRef.current?.focus()}
+              />
+            ) : null}
+            <Stack direction="vertical" gap="sm" className="profile-skills-scroll">
+              {availableSkills.length === 0 ? (
+                <HelperText>{t('profiles.drawer.skills.empty')}</HelperText>
+              ) : visibleSkills.length === 0 ? (
+                <HelperText>{t('profiles.drawer.skills.noMatches')}</HelperText>
+              ) : (
+                visibleSkills.map((s) => {
+                  const desc = summarizeSingleLine(s.description)
+                  return (
+                    <Checkbox
+                      key={s.id}
+                      checked={form.selectedSkillIds.includes(s.id)}
+                      onChange={(checked) => handleToggleSkill(s.id, checked)}
+                      label={
+                        <span className="profile-skill-option-label">
+                          <span className="flex-row text-muted">
+                            <span>{s.name}</span>
+                            <span className="mono text-subtle">({s.id})</span>
                           </span>
-                        ) : null}
-                      </span>
-                    }
-                  />
-                )
-              })
-            )}
-          </Stack>
+                          {desc !== '' ? (
+                            <span className="profile-skill-desc" title={s.description}>
+                              {desc}
+                            </span>
+                          ) : null}
+                        </span>
+                      }
+                    />
+                  )
+                })
+              )}
+            </Stack>
+          </>
         )}
       </Card>
     </DetailDrawer>

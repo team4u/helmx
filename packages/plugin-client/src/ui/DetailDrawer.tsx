@@ -71,6 +71,15 @@ export interface DetailDrawerProps {
    * stack; state and data belong to the caller.
    */
   aux?: ReactNode
+  /**
+   * Escape hook of the underlying Radix DismissableLayer, passed through
+   * verbatim (call `event.preventDefault()` to keep the drawer open). The layer
+   * listens on `document` in the capture phase, so a React synthetic handler
+   * cannot intercept it; callers needing layered Escape semantics (clear an
+   * inner search first, close the drawer second) hook in here. No policy lives
+   * in this shell.
+   */
+  onEscapeKeyDown?: (event: KeyboardEvent) => void
 }
 
 /**
@@ -103,6 +112,7 @@ export function DetailDrawer(props: DetailDrawerProps): ReactNode {
     closeIcon = <HelmxIcon name="x" size={14} />,
     children,
     aux,
+    onEscapeKeyDown,
   } = props
   return (
     <Dialog
@@ -124,6 +134,7 @@ export function DetailDrawer(props: DetailDrawerProps): ReactNode {
             event.preventDefault()
             contentRef.current?.focus({ preventScroll: true })
           }}
+          onEscapeKeyDown={onEscapeKeyDown}
         >
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">

@@ -378,6 +378,13 @@ export const profilesApi = {
 }
 
 // ---------------------------------------------------------------------------
+// Skill allowlist search (detail drawer)
+// ---------------------------------------------------------------------------
+
+/** Show the skill allowlist search box in ProfileDetailDrawer once candidate skills exceed this count (6+). */
+export const PROFILE_SKILL_SEARCH_THRESHOLD = 5
+
+// ---------------------------------------------------------------------------
 // Profile form normalization & PUT save payload
 // ---------------------------------------------------------------------------
 

@@ -261,6 +261,13 @@ export const profilesMessages = {
     'zh-CN': '已允许此角色无限制使用系统内所有可用技能。',
   },
   'profiles.drawer.skills.empty': { en: 'No skills loaded', 'zh-CN': '暂无已加载的技能' },
+  'profiles.drawer.skills.searchPlaceholder': {
+    en: 'Search skills by name, ID or description…',
+    'zh-CN': '搜索技能名称、ID 或描述…',
+  },
+  'profiles.drawer.skills.searchAria': { en: 'Search skills', 'zh-CN': '搜索技能' },
+  'profiles.drawer.skills.clearSearch': { en: 'Clear search', 'zh-CN': '清空搜索' },
+  'profiles.drawer.skills.noMatches': { en: 'No matching skills', 'zh-CN': '没有匹配的技能' },
   'profiles.drawer.delete': { en: 'Delete profile', 'zh-CN': '删除角色' },
   'profiles.drawer.saving': { en: 'Saving…', 'zh-CN': '保存中…' },
   'profiles.drawer.save': { en: 'Save profile', 'zh-CN': '保存角色' },

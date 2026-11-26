@@ -8,6 +8,9 @@
  *   opt-in (absent when not passed);
  * - DOM interaction contract: the header close button and the Radix Escape
  *   chain both funnel into onClose (single close channel, no double fire);
+ * - onEscapeKeyDown passthrough: preventDefault inside the hook keeps the
+ *   drawer open (layered Escape for inner search boxes), letting it through
+ *   closes as before;
  * - open=false renders nothing;
  * - bidirectional manifest locking is covered by sdk-contract.test.ts.
  */
@@ -182,6 +185,66 @@ test('DetailDrawer DOM interaction: Escape on the dialog content funnels into on
     )
   })
   assert.ok(closeCalls === 1, `Escape triggers exactly one close request (got ${closeCalls})`)
+
+  await act(async () => {
+    root.unmount()
+  })
+  container.remove()
+})
+
+test('DetailDrawer DOM interaction: onEscapeKeyDown is passed through verbatim; preventDefault keeps the drawer open', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  // Counters are read through functions: assert.ok(x === 1) would otherwise narrow the
+  // captured `let` counter to the literal 1 and reject the later `=== 2` comparison.
+  let closeCount = 0
+  let interceptedCount = 0
+  const closeCalls = () => closeCount
+  const intercepted = () => interceptedCount
+  let swallow = true
+  function TestApp() {
+    return e(
+      DetailDrawer,
+      {
+        open: true,
+        inline: true,
+        onClose: () => { closeCount += 1 },
+        title: 'Layered escape',
+        onEscapeKeyDown: (event: KeyboardEvent) => {
+          interceptedCount += 1
+          // Radix listens on `document` in the capture phase: only preventDefault here can keep the layer open.
+          if (swallow) event.preventDefault()
+        },
+        children: 'body',
+      },
+    )
+  }
+
+  await act(async () => {
+    root.render(e(TestApp))
+  })
+
+  const content = container.querySelector<HTMLElement>('.primary-drawer-content')
+  assert.ok(content !== null, 'dialog content renders inline for interaction testing')
+  await act(async () => {
+    content.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+  })
+  assert.ok(intercepted() === 1, `the hook receives the Escape keydown once (got ${intercepted()})`)
+  assert.ok(closeCalls() === 0, `preventDefault in onEscapeKeyDown suppresses the close request (got ${closeCalls()})`)
+
+  // Without preventDefault the same hook stays transparent and the Radix chain closes as before.
+  swallow = false
+  await act(async () => {
+    content.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+  })
+  assert.ok(intercepted() === 2, `the hook is invoked for every Escape (got ${intercepted()})`)
+  assert.ok(closeCalls() === 1, `an unprevented Escape funnels into onClose exactly once (got ${closeCalls()})`)
 
   await act(async () => {
     root.unmount()
