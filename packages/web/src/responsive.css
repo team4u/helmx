@@ -69,6 +69,8 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .conversation-topbar .pane-cwd-subtitle { max-width: 30vw; }
   .trace-row { gap: 6px; padding: 2px 6px; }
   .trace-row-left { gap: 5px; }
+  /* replaceRow 卡行首折叠开关随默认行同步收窄：chevron 居 x=6、插件行首图标居 x=22 */
+  .trace-io-toggle { width: 22px; padding-left: 6px; }
   .dock-tray-bar-toggle { padding-left: 6px; }
   .dock-tray-elapsed { display: none; }
 }

@@ -28,9 +28,17 @@
 .trace-block-head {
   display: flex;
   align-items: flex-start;
-  gap: 2px;
+  gap: 0;
   width: 100%;
   min-width: 0;
+  border-radius: var(--radius-xs);
+}
+
+/* head 整行是唯一的悬停高亮区（与默认 .trace-row 一致）：内部插件行与折叠开关
+ * 不再各自绘制背景，避免出现两块分离的高亮；键盘焦点落在任一内部控件时同样整行高亮 */
+.trace-block-head:hover,
+.trace-block-head:has(:focus-visible) {
+  background: var(--bg-hover);
 }
 
 .trace-block-view {
@@ -39,32 +47,40 @@
   overflow: hidden;
 }
 
+/* 插件行去掉左内边距：行首状态图标落在 x=26（折叠开关 26px 宽、chevron 居 x=8），
+ * 与默认 .trace-row 的 chevron → 状态图标间距一致 */
+.trace-block-view .trace-row {
+  padding-left: 0;
+}
+
+.trace-block-view .trace-row:hover,
+.trace-block-view .trace-row:focus-visible {
+  background: transparent;
+}
+
+/* 行首折叠开关：chevron 落在 x=8 与默认行 chevron 对齐；透明度沿用 .trace-row-chevron
+ * 的静音 0.35 → 整行悬停/展开 0.9，展开态用强调色 */
 .trace-io-toggle {
   height: 26px;
   width: 26px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  padding: 0;
+  justify-content: flex-start;
+  padding: 0 0 0 8px;
   border: none;
   border-radius: var(--radius-xs);
   background: transparent;
   color: var(--fg-muted);
-  opacity: 0.58;
+  opacity: 0.35;
   cursor: pointer;
-  transition: background 100ms ease, color 100ms ease, opacity 120ms ease;
+  transition: color 100ms ease, opacity 120ms ease;
 }
 
-.trace-block-head:hover .trace-io-toggle {
-  opacity: 0.85;
-}
-
-.trace-io-toggle:hover,
-.trace-io-toggle:focus-visible {
-  background: var(--bg-hover);
-  color: var(--fg);
-  opacity: 1;
+.trace-block-head:hover .trace-io-toggle,
+.trace-io-toggle:focus-visible,
+.trace-io-toggle[aria-expanded="true"] {
+  opacity: 0.9;
 }
 
 .trace-io-toggle:focus-visible {
@@ -73,9 +89,7 @@
 }
 
 .trace-io-toggle-open {
-  background: var(--bg-hover);
   color: var(--accent);
-  opacity: 1;
 }
 
 .trace-section-label {
@@ -237,7 +251,10 @@
   box-shadow: none;
 }
 
-.trace-row-chevron {
+/* 左侧 .trace-row-chevron 只表折叠/展开；右侧 .trace-row-link 表「点击跳转」
+ * （external-link），二者共用静音 0.35 → 悬停/展开 0.9 的透明度行为 */
+.trace-row-chevron,
+.trace-row-link {
   color: var(--fg-muted);
   opacity: 0.35;
   transition: opacity 120ms ease;
@@ -246,11 +263,14 @@
 
 .trace-row:hover .trace-row-chevron,
 .trace-row:focus-visible .trace-row-chevron,
-.trace-row[aria-expanded="true"] .trace-row-chevron {
+.trace-row[aria-expanded="true"] .trace-row-chevron,
+.trace-row:hover .trace-row-link,
+.trace-row:focus-visible .trace-row-link {
   opacity: 0.9;
 }
 
-.trace-row-error .trace-row-left > svg {
+/* 错误行仅状态图标染红；左侧折叠 chevron 保持中性（折叠指示不携带状态语义） */
+.trace-row-error .trace-row-left > svg:not(.trace-row-chevron) {
   color: var(--err);
 }
 

@@ -161,7 +161,7 @@ export function PlanToolRow(props: ToolViewProps): ReactNode {
           {durationText !== '' ? (
             <span className="trace-duration tabular-nums">{durationText}</span>
           ) : null}
-          <HelmxIcon name="chevron-right" size={11} className="trace-row-chevron" />
+          <HelmxIcon name="external-link" size={11} className="trace-row-link" />
         </span>
       </button>
     </div>

@@ -59,8 +59,6 @@ export const TRACE_INSPECT = L('Inspect member', '检视成员')
 export const TRACE_ARCHIVE = L('Archive member', '归档成员')
 export const TRACE_CLOSE_GROUP = L('Close swarm group', '结单协同编组')
 export const TRACE_UNKNOWN_TOOL = L('Swarm tool', '协同工具')
-export const TRACE_EXPAND_DETAILS = L('Show raw details', '查看原始详情')
-export const TRACE_COLLAPSE_DETAILS = L('Hide raw details', '收起原始详情')
 
 export const traceOpenMemberLabel = (name: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   T(locale, `Open @${name} conversation drawer`, `打开 @${name} 会话抽屉`)

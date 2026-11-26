@@ -7,7 +7,7 @@
  *    - 自身 settled 但子孙在途时展示子孙实时命令，绝不拿旧 doing 冒充；
  *    - live 行传 includeDetail:false 不主动拉取详情。
  * 2. 时间线单行收口：
- *    - SubagentToolView：后台派发句柄绝不暴露 ~34ms 派发确认耗时；前置错误原地展开 ToolCallDetails；
+ *    - SubagentToolView：后台派发句柄绝不暴露 ~34ms 派发确认耗时；无导航目标时行不可点、不内嵌调用详情（展开入口由宿主提供）；
  *    - WorkflowWorkbenchPanel：响应 params.runId 聚焦直开高亮，右上角 Library 按钮跳转工作流库；
  *    - 全表面零 Emoji 约束。
  */
@@ -212,7 +212,7 @@ test('WorkflowActiveTray：子树 live bash 命令透传、审批优先于 worki
   }
 })
 
-test('SubagentToolView 后台句柄禁暴露 ~34ms、前置错误展开 ToolCallDetails；WorkflowWorkbenchPanel 聚焦 runId 高亮', { timeout: 60_000 }, () => {
+test('SubagentToolView 后台句柄禁暴露 ~34ms、无导航目标行不可点；WorkflowWorkbenchPanel 聚焦 runId 高亮', { timeout: 60_000 }, () => {
   const rootConv = makeConvSummary(1, { ownedBy: 'human' })
   const h = createWorkflowHostHarness({
     conversationId: 1,
@@ -249,7 +249,8 @@ test('SubagentToolView 后台句柄禁暴露 ~34ms、前置错误展开 ToolCall
     handleUi.unmount()
   }
 
-  // 2. 未落库前置错误原地展开 ToolCallDetails
+  // 2. 未落库前置错误：无导航目标 → 行主体是同 class 的非交互元素，不在行内伪造 ToolCallDetails
+  //    展开块（折叠/展开入口由宿主 .trace-block-head 行首 chevron 提供），错误首行仍在摘要中如实可见
   const errUi = h.mountNode(
     e(SubagentToolView, {
       callId: 'call_err',
@@ -261,11 +262,17 @@ test('SubagentToolView 后台句柄禁暴露 ~34ms、前置错误展开 ToolCall
     }),
   )
   try {
-    const toggle = errUi.container.querySelector('button.wf-trace-toggle') as HTMLButtonElement
-    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
-    act(() => toggle.click())
-    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
-    assert.ok(errUi.container.textContent?.includes('Invalid nodeId parameter'))
+    assert.ok(errUi.container.querySelector('button.wf-trace-toggle') === null, '无导航目标时不渲染可点击的行按钮')
+    assert.ok(errUi.container.querySelector('button.trace-row') === null, '整行不存在其他可点按钮')
+    const rowBody = errUi.container.querySelector<HTMLElement>('.wf-trace-toggle')
+    assert.ok(rowBody !== null && rowBody.tagName === 'DIV', '行主体渲染为同 class 的非交互 div')
+    assert.equal(rowBody!.getAttribute('aria-expanded'), null, '不声明折叠语义')
+    assert.equal(rowBody!.getAttribute('aria-controls'), null, '不指向任何展开面板')
+    assert.match(errUi.container.querySelector('.trace-row')?.className ?? '', /\bwf-trace-row-static\b/, '静态行标记不可点光标修饰类')
+    act(() => rowBody!.click())
+    assert.ok(errUi.container.querySelector('details') === null, '点击不展开任何内嵌调用详情')
+    assert.equal(h.log.workbenchTabs.length, 1, '点击静态行不触发工作台跳转（仅前序用例的一次）')
+    assert.ok(errUi.container.textContent?.includes('Invalid nodeId parameter'), '错误首行仍在行摘要中如实展示')
   } finally {
     errUi.unmount()
   }

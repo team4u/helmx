@@ -25,6 +25,12 @@
   flex-shrink: 0;
 }
 
+/* 无导航目标的行不可点：不显示手型光标（折叠入口由宿主 .trace-block-head 行首 chevron 提供） */
+.wf-trace-row-static,
+.wf-trace-row-static .wf-trace-toggle {
+  cursor: default;
+}
+
 .wf-trace-name {
   flex: 0 0 auto;
   white-space: nowrap;

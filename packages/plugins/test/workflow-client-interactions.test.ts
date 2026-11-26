@@ -1,6 +1,7 @@
 /**
  * builtin:workflow 插件 client 交互测试（真实编译产物 + 共享宿主 SDK + DOM 事件）：
- * - SubagentToolView / WorkflowToolView 点击导航抽屉或工作台、未落库错误可展开 ToolCallDetails；
+ * - SubagentToolView / WorkflowToolView 点击导航抽屉或工作台；无导航目标（引擎未建出 run）时行不可点，
+ *   折叠入口由宿主行首 chevron 提供；
  * - WorkflowWorkbenchPanel 顶栏状态（loading / error / empty）与「恢复失败 (N)」批量续跑（防连点 + skipped + 非法返回报错）；
  * - ExecutionNodeRow 主体 button 打开抽屉、同级动作区 Abort / Resume / worktree-cleanup 无嵌套交互不冒泡；
  * - 单卡 Resume 防连点、传 { resumeFromRunId, conversationId } 且 resumedByRunId 接管后隐藏。
@@ -147,6 +148,23 @@ test('WorkflowToolView 点击定位工作台 runId；外部子代理点击定位
     assert.deepEqual(h.log.workbenchParams.at(-1), { runId: 'wf_nodes' })
   } finally {
     wfUi.unmount()
+  }
+
+  // 引擎尚未建出关联 run：行主体是非交互 div，不在行内伪造 ToolCallDetails 展开块，点击不跳转
+  const missingUi = h.mountNode(e(WorkflowToolView, { callId: 'wf_missing', toolName: 'SubagentWorkflow', input: { script: 'y' }, status: 'error', result: 'Invalid nodeId parameter', conversationId: 1 }))
+  try {
+    assert.ok(missingUi.container.querySelector('button.wf-trace-toggle') === null, '无 run 时不渲染可点击的行按钮')
+    const staticBody = missingUi.container.querySelector<HTMLElement>('.wf-trace-toggle')
+    assert.ok(staticBody !== null && staticBody.tagName === 'DIV', '行主体为同 class 的非交互 div')
+    assert.equal(staticBody!.getAttribute('aria-expanded'), null)
+    assert.match(missingUi.container.querySelector('.trace-row')?.className ?? '', /\bwf-trace-row-static\b/)
+    const tabsBefore = h.log.workbenchTabs.length
+    act(() => staticBody!.click())
+    assert.equal(h.log.workbenchTabs.length, tabsBefore, '点击静态行不打开工作台')
+    assert.ok(missingUi.container.querySelector('details') === null, '不内嵌调用详情')
+    assert.ok(missingUi.container.textContent?.includes('Invalid nodeId parameter'), '错误首行仍在摘要中如实展示')
+  } finally {
+    missingUi.unmount()
   }
 
   const extUi = h.mountNode(

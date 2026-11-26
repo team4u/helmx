@@ -273,7 +273,7 @@
   gap: var(--space-2);
 }
 
-/* ---- Timeline 26px tool trace row ---- */
+/* ---- Timeline 26px tool trace row（悬停/焦点高亮由宿主 .trace-block-head 整行提供） ---- */
 .plan-trace-row {
   width: 100%;
   min-width: 0;
@@ -281,7 +281,6 @@
 
 .plan-trace-row:focus-visible {
   outline: none;
-  background: var(--bg-hover);
   box-shadow: none;
 }
 

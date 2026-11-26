@@ -1238,6 +1238,11 @@ describe('plan-client-interactions', () => {
 
       const rowBtn = saveMount.host.querySelector<HTMLButtonElement>('button.trace-row')
       assert.ok(rowBtn !== null)
+      // 右侧只放 external-link 跳转提示（行点击打开工作台），不再出现折叠 chevron
+      const right = rowBtn.querySelector('.trace-row-right')
+      assert.ok(right?.querySelector('.trace-row-link.lucide-external-link') !== null, '右侧为 external-link 跳转提示')
+      assert.ok(right?.querySelector('.trace-row-chevron') === null, '右侧不出现 chevron')
+      assert.equal(rowBtn.getAttribute('aria-expanded'), null, '跳转行不声明折叠语义')
       await act(async () => {
         rowBtn.click()
       })

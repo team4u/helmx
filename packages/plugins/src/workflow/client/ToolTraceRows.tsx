@@ -4,6 +4,8 @@
  *   to eliminate 60Hz token re-renders across historical timeline rows);
  * - WorkflowToolView (SubagentWorkflow tool call);
  * - BackgroundReportCard (helmx.input background settlement receipt).
+ * Fold/collapse entry for the two tool views is the host's leading chevron
+ * (replaceRow IO panel); the row body is a navigation button only when it has a target.
  * Exports only React components and TS types (Fast Refresh compliant).
  */
 import { useId, useMemo, useState } from 'react'
@@ -20,7 +22,6 @@ import {
   MarkdownView,
   PluginSlot,
   StatusLight,
-  ToolCallDetails,
   formatCompactTimestamp,
   resolveLocalizedText,
   useConversation,
@@ -131,8 +132,6 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
     [props.callId, subagentCalls, viewerConversationId, childId, conversations, execMeta?.executionId, execInfo?.executionId],
   )
 
-  const [detailsOpen, setDetailsOpen] = useState(false)
-  const detailsId = useId()
   const isBgHandle = execInfo?.background === true && execInfo.runId !== undefined
   const hasPendingAsk = isLatest && (childConv.pendingAsks.length > 0 || (childSummary?.pendingAskCount ?? 0) > 0)
 
@@ -197,23 +196,14 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const canOpenDrawer = childId !== undefined
   const canOpenWorkbench = !canOpenDrawer && targetWorkbenchRunId !== undefined
 
-  const handleActivate = (): void => {
-    if (canOpenDrawer && childId !== undefined) {
-      ctx.openConversationDrawer(childId)
-      return
-    }
-    if (canOpenWorkbench && targetWorkbenchRunId !== undefined) {
-      ctx.openWorkbench('tasks', { runId: targetWorkbenchRunId })
-      return
-    }
-    setDetailsOpen((v) => !v)
-  }
-
-  const actionAria = canOpenDrawer && childId !== undefined
-    ? traceOpenChildLabel(childId, locale)
-    : canOpenWorkbench && targetWorkbenchRunId !== undefined
-      ? traceOpenWorkbenchRunLabel(targetWorkbenchRunId, locale)
-      : t(detailsOpen ? COPY.collapseDetails : COPY.expandDetails)
+  // 有导航目标时行主体是跳转按钮；无目标时渲染为非交互元素——折叠/展开入口统一由宿主
+  // 行首 chevron（IO 面板）提供，行内不再伪造第二个展开入口。
+  const navigation =
+    canOpenDrawer && childId !== undefined
+      ? { go: () => ctx.openConversationDrawer(childId), aria: traceOpenChildLabel(childId, locale) }
+      : canOpenWorkbench && targetWorkbenchRunId !== undefined
+        ? { go: () => ctx.openWorkbench('tasks', { runId: targetWorkbenchRunId }), aria: traceOpenWorkbenchRunLabel(targetWorkbenchRunId, locale) }
+        : undefined
 
   const idTag =
     childId !== undefined
@@ -240,7 +230,6 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const worktreeIsManaged = worktree !== undefined && isManagedWorktree(worktree)
   const worktreeTooltip =
     worktreeBranch !== undefined ? worktreeBadgeTitle(worktreeBranch, execMeta?.worktree?.path, locale) : undefined
-  const canNavigate = canOpenDrawer || canOpenWorkbench
   const cleanupNodeId =
     execMeta?.nodeId ?? (childSummary?.nodeId && childSummary.nodeId !== '' ? childSummary.nodeId : undefined)
   const showSyncWorktreeCleanup =
@@ -249,57 +238,65 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
     isLatest &&
     !isActive
 
+  const rowBody = (
+    <>
+      <HelmxIcon name="bot" size={12} />
+      <span className="trace-tool-name wf-trace-name" title={resolvedTitle.text}>
+        {resolvedTitle.text}
+      </span>
+      {idTag ? (
+        <span className="wf-trace-id tabular-nums" title={idTag}>
+          {idTag}
+        </span>
+      ) : null}
+      {childId !== undefined && childSummary?.profileId ? (
+        <Badge
+          tone="neutral"
+          className="wf-trace-badge wf-trace-profile"
+          title={`@${childSummary.profileId}`}
+        >
+          {`@${childSummary.profileId}`}
+        </Badge>
+      ) : null}
+      {worktreeBranch !== undefined ? (
+        <Badge
+          tone="neutral"
+          icon="git-branch"
+          className={`wf-trace-badge wf-wt-badge${worktreeIsManaged ? ' wf-wt-badge-compact' : ''}`}
+          title={worktreeTooltip}
+          aria-label={worktreeTooltip}
+        >
+          {!worktreeIsManaged ? <span className="wf-wt-branch">{worktreeBranch}</span> : null}
+        </Badge>
+      ) : null}
+      {!isLatest ? (
+        <Badge tone="neutral" className="wf-trace-badge">
+          {t(COPY.resumedBelow)}
+        </Badge>
+      ) : null}
+      {displaySummary ? (
+        <span className={`trace-tool-summary${isError ? ' wf-trace-error' : ''}`} title={displaySummary}>
+          {displaySummary}
+        </span>
+      ) : null}
+    </>
+  )
+
   return (
     <div className="trace-entry">
-      <div className={`trace-row${isError ? ' trace-row-error' : ''}`}>
-        <button
-          type="button"
-          className="trace-row-left wf-trace-toggle"
-          aria-expanded={canNavigate ? undefined : detailsOpen}
-          aria-controls={canNavigate ? undefined : detailsId}
-          aria-label={`${resolvedTitle.text} — ${actionAria}`}
-          onClick={handleActivate}
-        >
-          <HelmxIcon name="bot" size={12} />
-          <span className="trace-tool-name wf-trace-name" title={resolvedTitle.text}>
-            {resolvedTitle.text}
-          </span>
-          {idTag ? (
-            <span className="wf-trace-id tabular-nums" title={idTag}>
-              {idTag}
-            </span>
-          ) : null}
-          {childId !== undefined && childSummary?.profileId ? (
-            <Badge
-              tone="neutral"
-              className="wf-trace-badge wf-trace-profile"
-              title={`@${childSummary.profileId}`}
-            >
-              {`@${childSummary.profileId}`}
-            </Badge>
-          ) : null}
-          {worktreeBranch !== undefined ? (
-            <Badge
-              tone="neutral"
-              icon="git-branch"
-              className={`wf-trace-badge wf-wt-badge${worktreeIsManaged ? ' wf-wt-badge-compact' : ''}`}
-              title={worktreeTooltip}
-              aria-label={worktreeTooltip}
-            >
-              {!worktreeIsManaged ? <span className="wf-wt-branch">{worktreeBranch}</span> : null}
-            </Badge>
-          ) : null}
-          {!isLatest ? (
-            <Badge tone="neutral" className="wf-trace-badge">
-              {t(COPY.resumedBelow)}
-            </Badge>
-          ) : null}
-          {displaySummary ? (
-            <span className={`trace-tool-summary${isError ? ' wf-trace-error' : ''}`} title={displaySummary}>
-              {displaySummary}
-            </span>
-          ) : null}
-        </button>
+      <div className={`trace-row${navigation === undefined ? ' wf-trace-row-static' : ''}${isError ? ' trace-row-error' : ''}`}>
+        {navigation !== undefined ? (
+          <button
+            type="button"
+            className="trace-row-left wf-trace-toggle"
+            aria-label={`${resolvedTitle.text} — ${navigation.aria}`}
+            onClick={navigation.go}
+          >
+            {rowBody}
+          </button>
+        ) : (
+          <div className="trace-row-left wf-trace-toggle">{rowBody}</div>
+        )}
 
         <span className="trace-row-right wf-trace-right">
           <StatusLight status={executionLightStatus(status)} label={displayStatusLabel} />
@@ -326,16 +323,6 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
           ) : null}
         </span>
       </div>
-
-      {!canNavigate ? (
-        <div id={detailsId} hidden={!detailsOpen}>
-          {detailsOpen ? (
-            <div className="trace-expanded-body">
-              <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} />
-            </div>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   )
 }
@@ -351,8 +338,6 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const conversations = useConversations()
   const viewerConversationId = props.conversationId ?? ctx.conversationId
   const { runs } = useWorkflowRunsDoc(viewerConversationId)
-  const [detailsOpen, setDetailsOpen] = useState(false)
-  const detailsId = useId()
 
   const presentationMeta = useMemo(() => readToolPresentationMeta(props), [props])
   const run = useMemo(
@@ -401,38 +386,44 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const totalNodes = run?.nodes?.length ?? 0
   const doneNodes = run?.nodes?.filter((n) => n.status === 'done').length ?? 0
 
-  const handleActivate = (): void => {
-    if (run !== undefined) {
-      ctx.openWorkbench('tasks', { runId: run.id })
-      return
-    }
-    setDetailsOpen((v) => !v)
-  }
+  // 有 run 时行主体是跳转按钮；无 run（引擎尚未建出关联记录）时渲染为非交互元素，
+  // 原始入参/返回经宿主行首 chevron 的 IO 面板查看。
+  const navigation = run !== undefined
+    ? { go: () => ctx.openWorkbench('tasks', { runId: run.id }), aria: traceOpenWorkbenchRunLabel(run.id, locale) }
+    : undefined
+
+  const rowBody = (
+    <>
+      <HelmxIcon name="workflow" size={12} />
+      <span className="trace-tool-name wf-trace-name" title={title}>
+        {title}
+      </span>
+      {totalNodes > 0 ? (
+        <Badge tone="neutral" className="wf-trace-badge tabular-nums">{`${doneNodes}/${totalNodes}`}</Badge>
+      ) : null}
+      {summaryText ? (
+        <span className={`trace-tool-summary${isError ? ' wf-trace-error' : ''}`} title={summaryText}>
+          {summaryText}
+        </span>
+      ) : null}
+    </>
+  )
 
   return (
     <div className="trace-entry">
-      <div className={`trace-row${isError ? ' trace-row-error' : ''}`}>
-        <button
-          type="button"
-          className="trace-row-left wf-trace-toggle"
-          aria-expanded={run !== undefined ? undefined : detailsOpen}
-          aria-controls={run !== undefined ? undefined : detailsId}
-          aria-label={run !== undefined ? `${title} — ${traceOpenWorkbenchRunLabel(run.id, locale)}` : `${title} — ${t(detailsOpen ? COPY.collapseDetails : COPY.expandDetails)}`}
-          onClick={handleActivate}
-        >
-          <HelmxIcon name="workflow" size={12} />
-          <span className="trace-tool-name wf-trace-name" title={title}>
-            {title}
-          </span>
-          {totalNodes > 0 ? (
-            <Badge tone="neutral" className="wf-trace-badge tabular-nums">{`${doneNodes}/${totalNodes}`}</Badge>
-          ) : null}
-          {summaryText ? (
-            <span className={`trace-tool-summary${isError ? ' wf-trace-error' : ''}`} title={summaryText}>
-              {summaryText}
-            </span>
-          ) : null}
-        </button>
+      <div className={`trace-row${navigation === undefined ? ' wf-trace-row-static' : ''}${isError ? ' trace-row-error' : ''}`}>
+        {navigation !== undefined ? (
+          <button
+            type="button"
+            className="trace-row-left wf-trace-toggle"
+            aria-label={`${title} — ${navigation.aria}`}
+            onClick={navigation.go}
+          >
+            {rowBody}
+          </button>
+        ) : (
+          <div className="trace-row-left wf-trace-toggle">{rowBody}</div>
+        )}
 
         <span className="trace-row-right wf-trace-right">
           <StatusLight status={executionLightStatus(status)} label={statusLabel(status, locale)} />
@@ -448,16 +439,6 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
           )}
         </span>
       </div>
-
-      {run === undefined ? (
-        <div id={detailsId} hidden={!detailsOpen}>
-          {detailsOpen ? (
-            <div className="trace-expanded-body">
-              <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} />
-            </div>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   )
 }

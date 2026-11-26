@@ -94,8 +94,9 @@ export const TraceRow = memo(function TraceRow({
   const stats = useMemo(() => toolRowStats(tool, t), [tool, t])
 
   // 命中插件 tool.view：replaceRow=true 时插件组件替换默认工具行，宿主同时
-  // 统一在行尾提供输入/输出检视开关（任意插件卡片均可展开查看完整入参、输出
-  // 与截断原文）；未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
+  // 统一在行首提供输入/输出折叠开关（左侧 chevron 只表折叠/展开，与默认行的
+  // chevron 同在 x=8；任意插件卡片均可展开查看完整入参、输出与截断原文）；
+  // 未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
   // inline 插件视图保留工具行的原始数据入口，专属展开体仅用于宿主工具。
   // 顶层业务卡标记 data-outline-card-id（tool.key）：会话大纲二级锚精确定位。
   const replaceRow = toolView !== undefined && (toolView.spec as ToolViewSpec).replaceRow === true
@@ -132,6 +133,7 @@ export const TraceRow = memo(function TraceRow({
           }}
         >
           <span className="trace-row-left">
+            <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} className="trace-row-chevron" />
             <HelmxIcon
               name={askIcon}
               size={12}
@@ -153,7 +155,6 @@ export const TraceRow = memo(function TraceRow({
             ) : (
               right !== '' ? <span>{right}</span> : null
             )}
-            <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} className="trace-row-chevron" />
           </span>
         </div>
         {open ? (
@@ -173,15 +174,6 @@ export const TraceRow = memo(function TraceRow({
       {toolView !== undefined && replaceRow ? (
         <div className="trace-block">
           <div className="trace-block-head">
-            <div className="trace-block-view">
-              <PluginUiView
-                pluginId={toolView.pluginId}
-                spec={toolView.spec}
-                conversationId={conversationId}
-                label={t('conv.tool.viewLabel', { name: tool.toolName })}
-                slotProps={toolViewProps}
-              />
-            </div>
             <Tooltip content={open ? t('conv.tool.hideIo') : t('conv.tool.showIo')}>
               <button
                 type="button"
@@ -195,9 +187,18 @@ export const TraceRow = memo(function TraceRow({
                 }
                 onClick={() => setOpen((v) => !v)}
               >
-                <HelmxIcon name="code" size={12} />
+                <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
               </button>
             </Tooltip>
+            <div className="trace-block-view">
+              <PluginUiView
+                pluginId={toolView.pluginId}
+                spec={toolView.spec}
+                conversationId={conversationId}
+                label={t('conv.tool.viewLabel', { name: tool.toolName })}
+                slotProps={toolViewProps}
+              />
+            </div>
           </div>
           <div id={ioPanelId} hidden={!open}>
             {open ? (
@@ -223,6 +224,7 @@ export const TraceRow = memo(function TraceRow({
             }}
           >
             <span className="trace-row-left">
+              <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} className="trace-row-chevron" />
               <HelmxIcon
                 name={rowIcon}
                 size={12}
@@ -244,7 +246,6 @@ export const TraceRow = memo(function TraceRow({
             </span>
             <span className="trace-row-right">
               {right !== '' ? <span>{right}</span> : null}
-              <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} className="trace-row-chevron" />
             </span>
           </div>
           {toolView !== undefined ? (

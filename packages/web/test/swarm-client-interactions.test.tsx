@@ -7,7 +7,8 @@
  *    swarm:board-report / swarm:board-wakeup 单行回执渲染器、@ composerCompleter、
  *    零 screen / 零顶栏 action / 零 sidebarItem、双语 LocalizedText、零 Emoji）；
  * 2. SwarmToolView 26px 工具轨迹行：dispatch 完成态点击打开成员会话抽屉、黑板发布行点击
- *    打开协同工作台面板、无法定目标的行展开原始详情、错误态如实展示首行、zh-CN 自然语言；
+ *    打开协同工作台面板、有目标行右侧 external-link 提示跳转、无法定目标的行不可点
+ *    （折叠入口由宿主行首 chevron 提供）、错误态如实展示首行、zh-CN 自然语言；
  * 3. SwarmActiveTray：无活跃事项返回 null；working/blocked 成员渲染 32px HUD（人数、进度、
  *    自然语言动态、时长），展开行点击打开 ConversationDrawer，中止按钮恒为主控动作，
  *    worker 会话即便被直接挂载也返回 null（防御路径，零订阅零渲染）；
@@ -558,7 +559,7 @@ describe("swarm-client-interactions", () => {
   // 2. SwarmToolView trace rows
   // ---------------------------------------------------------------------------
 
-  test('SwarmToolView：dispatch 完成态点击打开成员会话抽屉，黑板发布行打开工作台面板，运行中无目标行展开原始详情', { timeout: 60_000 }, async () => {
+  test('SwarmToolView：dispatch 完成态点击打开成员会话抽屉，黑板发布行打开工作台面板，有目标行右侧 external-link，无目标行不可点', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx({ conversationId: 50 })
 
     // dispatch_worker done：读取 presentationMeta 中的 workerConversationId，点击打开子会话抽屉
@@ -578,9 +579,12 @@ describe("swarm-client-interactions", () => {
       assert.match(text, /@author/, '成员名摘要')
       assert.match(text, /#1/, 'presentationMeta.seq 徽标')
       assert.match(text, /Implement token refresh/, '派工任务摘要')
-      assert.equal(dispatchMount.host.querySelector('.sw-trace-row-btn') !== null, true)
+      assert.equal(dispatchMount.host.querySelector('button.sw-trace-row-btn') !== null, true)
+      const dispatchLink = dispatchMount.host.querySelector('.trace-row-right .trace-row-link')
+      assert.ok(dispatchLink?.classList.contains('lucide-external-link') === true, '成员目标行右侧为 external-link 跳转提示')
+      assert.ok(dispatchMount.host.querySelector('.trace-row-right .trace-row-chevron') === null, '右侧不再出现 chevron')
       await act(async () => {
-        dispatchMount.host.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!.click()
+        dispatchMount.host.querySelector<HTMLButtonElement>('button.sw-trace-row-btn')!.click()
       })
       assert.deepEqual(spy.drawerCalls, [51], '点击打开成员会话抽屉')
       assert.equal(spy.workbenchCalls.length, 0, '成员行不打开工作台')
@@ -600,12 +604,20 @@ describe("swarm-client-interactions", () => {
     )
     try {
       assert.doesNotMatch(jsonOnlyMount.host.textContent ?? '', /#8/, '无 presentationMeta 时不解析 result 中的 postSeq')
-      const rowBtn = jsonOnlyMount.host.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!
-      assert.equal(rowBtn.getAttribute('aria-expanded'), 'false', '无 presentationMeta 时退化为展开原始详情')
+      const staticRow = jsonOnlyMount.host.querySelector<HTMLElement>('.trace-row.sw-trace-row')
+      assert.ok(staticRow !== null, '无目标行仍渲染 26px .trace-row')
+      assert.equal(staticRow!.tagName, 'DIV', '无目标行是非交互元素，不是 button')
+      assert.equal(staticRow!.getAttribute('role'), null, '无目标行不声明 role=button')
+      assert.equal(staticRow!.getAttribute('aria-expanded'), null, '无目标行不声明 aria-expanded')
+      assert.equal(staticRow!.getAttribute('aria-controls'), null, '无目标行不声明 aria-controls')
+      assert.ok(staticRow!.querySelector('.trace-row-link') === null, '无目标行右侧无跳转提示')
+      assert.ok(jsonOnlyMount.host.querySelector('.trace-row-chevron') === null, '插件行自身不渲染折叠 chevron（由宿主行首提供）')
+      assert.ok(jsonOnlyMount.host.querySelector('details.tool-call-details') === null, '不再内嵌 ToolCallDetails 展开块')
       await act(async () => {
-        rowBtn.click()
+        staticRow!.click()
       })
-      assert.deepEqual(spy.drawerCalls, [51], '绝不解析 result.workerConversationId #99 并打开抽屉')
+      assert.deepEqual(spy.drawerCalls, [51], '点击不可点行绝不解析 result.workerConversationId #99 并打开抽屉')
+      assert.ok(jsonOnlyMount.host.querySelector('details.tool-call-details') === null, '点击后也不伪造展开体')
     } finally {
       jsonOnlyMount.unmount()
     }
@@ -662,8 +674,9 @@ describe("swarm-client-interactions", () => {
       assert.match(text, /-> @verifier/, '目标自然化')
       assert.match(text, /ready for review/, '正文摘要')
       assert.match(text, /#2/, '#seq 仅作辅助信息')
+      assert.ok(postMount.host.querySelector('.trace-row-right .trace-row-link.lucide-external-link') !== null, '编组目标行右侧同样为 external-link')
       await act(async () => {
-        postMount.host.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!.click()
+        postMount.host.querySelector<HTMLButtonElement>('button.sw-trace-row-btn')!.click()
       })
       assert.deepEqual(spy.workbenchCalls, ['groups'], '编组级行打开协同工作台面板（短本地 panelId）')
       assert.deepEqual(spy.workbenchParamCalls, [{ groupId: 'grp-live', postSeq: 2 }], '携带聚焦参数 groupId/postSeq')
@@ -671,7 +684,7 @@ describe("swarm-client-interactions", () => {
       postMount.unmount()
     }
 
-    // 运行中的 abort_worker（无法确定目标）：点击展开原始详情，不伪造目标
+    // 运行中的 abort_worker（无法确定目标）：行不可点、不伪造目标，也不内嵌调用详情
     const runningMount = await mount(
       spy,
       e(components.SwarmToolView, toolViewProps({
@@ -683,16 +696,17 @@ describe("swarm-client-interactions", () => {
       })),
     )
     try {
-      const rowBtn = runningMount.host.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!
-      assert.equal(rowBtn.getAttribute('aria-expanded'), 'false', '未知目标行为详情展开开关')
+      const staticRow = runningMount.host.querySelector<HTMLElement>('.trace-row.sw-trace-row')
+      assert.ok(staticRow !== null && staticRow!.tagName === 'DIV', '未知目标行渲染为非交互 div')
+      assert.equal(staticRow!.getAttribute('aria-expanded'), null, '不声明折叠语义')
+      assert.match(runningMount.host.textContent ?? '', /Abort member/, '标题与摘要照常展示')
+      assert.ok(runningMount.host.querySelector('button.trace-row') === null, '整行不存在可点按钮')
       await act(async () => {
-        rowBtn.click()
+        staticRow!.click()
       })
-      assert.equal(rowBtn.getAttribute('aria-expanded'), 'true')
-      const details = runningMount.host.querySelector('details.tool-call-details') as HTMLDetailsElement | null
-      assert.ok(details !== null, '展开原始工具数据')
-      assert.equal(details.open, true, '点一次行即直接展开输入输出，无需二次点击 summary')
+      assert.ok(runningMount.host.querySelector('details.tool-call-details') === null, '点击不展开任何内嵌详情（入口由宿主行首 chevron 提供）')
       assert.deepEqual(spy.drawerCalls, [51], '未新增抽屉调用（未伪造目标）')
+      assert.equal(spy.workbenchCalls.length, 1, '未新增工作台调用')
     } finally {
       runningMount.unmount()
     }

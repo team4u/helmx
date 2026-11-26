@@ -1,10 +1,10 @@
 /**
  * builtin:swarm tool-call timeline one-line renderer (26px `.trace-row`, Fast Refresh compliant).
  */
-import { useId, useMemo, useState, type ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import type { ToolViewProps } from '@helmx/protocol/browser'
 import {
-  Badge, HelmxIcon, StatusLight, ToolCallDetails, formatDurationMs, resolveLocalizedText,
+  Badge, HelmxIcon, StatusLight, formatDurationMs, resolveLocalizedText,
   usePluginContext, usePluginDoc, usePluginLocale, useToolActivity, type HelmxLocale, type StatusLightTone,
 } from '@helmx/plugin-client'
 import { SWARM_WORKBENCH_PANEL_ID, type SwarmIndexDoc } from './models.ts'
@@ -71,8 +71,6 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const index = usePluginDoc<SwarmIndexDoc>('index')
-  const [detailsOpen, setDetailsOpen] = useState(false)
-  const detailsId = useId()
 
   const meta = extractSwarmPresentationMeta(props)
   const facts = useMemo(() => resolveSwarmToolFacts(props.toolName, props.input, meta), [props.toolName, props.input, meta])
@@ -114,49 +112,55 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
   const displaySummary = isError && errorLine ? errorLine : summary
   const seqBadge = facts.seq !== undefined ? `#${facts.seq}` : undefined
 
+  // 右侧 external-link 仅提示「点击跳转」；折叠/展开统一由宿主行首 chevron 提供，
+  // 无跳转目标的行不再可点（不伪造展开入口，调用详情经宿主 IO 面板查看）。
+  const rowBody = (
+    <>
+      <span className="trace-row-left">
+        <HelmxIcon name={facts.toolName === 'swarm_dispatch_worker' ? 'bot' : 'network'} size={12} />
+        <span className="trace-tool-name sw-trace-name" title={title}>{title}</span>
+        {displaySummary ? <span className={`trace-tool-summary${isError ? ' sw-trace-error' : ''}`} title={displaySummary}>{displaySummary}</span> : null}
+      </span>
+      <span className="trace-row-right sw-trace-right">
+        {seqBadge ? <Badge tone="neutral" className="sw-trace-badge tabular-nums">{seqBadge}</Badge> : null}
+        <StatusLight tone={lightTone} label={lightLabel} />
+        {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
+        {clickTarget !== undefined ? <HelmxIcon name="external-link" size={11} className="trace-row-link" /> : null}
+      </span>
+    </>
+  )
+
+  if (clickTarget === undefined) {
+    return (
+      <div className="trace-entry">
+        <div className={`trace-row sw-trace-row${isError ? ' trace-row-error' : ''}`}>{rowBody}</div>
+      </div>
+    )
+  }
+
   const labelTarget =
-    clickTarget?.kind === 'member' && facts.memberName
+    clickTarget.kind === 'member' && facts.memberName
       ? C.traceOpenMemberLabel(facts.memberName, locale)
-      : clickTarget?.kind === 'group'
-        ? C.traceOpenWorkbenchLabel(locale)
-        : resolveLocalizedText(detailsOpen ? C.TRACE_COLLAPSE_DETAILS : C.TRACE_EXPAND_DETAILS, locale)
+      : C.traceOpenWorkbenchLabel(locale)
 
   return (
     <div className="trace-entry">
       <button
         type="button"
-        className={`trace-row sw-trace-row-btn${isError ? ' trace-row-error' : ''}`}
+        className={`trace-row sw-trace-row sw-trace-row-btn${isError ? ' trace-row-error' : ''}`}
         aria-label={`${[title, summary, seqBadge].filter(Boolean).join(' ')} — ${labelTarget}`}
-        aria-expanded={clickTarget === undefined ? detailsOpen : undefined}
-        aria-controls={clickTarget === undefined ? detailsId : undefined}
         onClick={() => {
-          if (clickTarget?.kind === 'member') ctx.openConversationDrawer(clickTarget.conversationId)
-          else if (clickTarget?.kind === 'group') {
+          if (clickTarget.kind === 'member') ctx.openConversationDrawer(clickTarget.conversationId)
+          else {
             const focusParams: Record<string, unknown> = {}
             if (targetGroupId !== undefined) focusParams['groupId'] = targetGroupId
             if (facts.seq !== undefined) focusParams['postSeq'] = facts.seq
             ctx.openWorkbench(SWARM_WORKBENCH_PANEL_ID, Object.keys(focusParams).length > 0 ? focusParams : undefined)
           }
-          else setDetailsOpen((prev) => !prev)
         }}
       >
-        <span className="trace-row-left">
-          <HelmxIcon name={facts.toolName === 'swarm_dispatch_worker' ? 'bot' : 'network'} size={12} />
-          <span className="trace-tool-name sw-trace-name" title={title}>{title}</span>
-          {displaySummary ? <span className={`trace-tool-summary${isError ? ' sw-trace-error' : ''}`} title={displaySummary}>{displaySummary}</span> : null}
-        </span>
-        <span className="trace-row-right sw-trace-right">
-          {seqBadge ? <Badge tone="neutral" className="sw-trace-badge tabular-nums">{seqBadge}</Badge> : null}
-          <StatusLight tone={lightTone} label={lightLabel} />
-          {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
-          <HelmxIcon name={clickTarget?.kind === 'member' ? 'external-link' : clickTarget === undefined && detailsOpen ? 'chevron-down' : 'chevron-right'} size={11} />
-        </span>
+        {rowBody}
       </button>
-      {clickTarget === undefined ? (
-        <div id={detailsId} hidden={!detailsOpen}>
-          {detailsOpen ? <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} defaultOpen /> : null}
-        </div>
-      ) : null}
     </div>
   )
 }

@@ -11,7 +11,8 @@
  * 6. TraceRow：无插件接管可点击展开内置体；tool.view inline 保留原始数据
  *    入口，插件视图不被内置体替换；单行统计 +N −N / N 行；运行中行
  *    右侧仅实时耗时秒表（startedAt 锚点，无锚点留空不编造）；摘要完整渲染
- *    命令首行、不按字符数截断（宽度裁剪交给 CSS 省略）。
+ *    命令首行、不按字符数截断（宽度裁剪交给 CSS 省略）；折叠 chevron 统一在
+ *    左侧首位（右侧只放耗时/徽标），replaceRow 卡的 IO 开关同为行首 chevron 形态。
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
@@ -705,10 +706,10 @@ test('TraceRow：摘要完整渲染命令首行且不按字符数截断，宽度
 })
 
 // ---------------------------------------------------------------------------
-// TraceRow 右侧 chevron 指示器与 StepGroup 折叠错误徽标 / 总耗时
+// TraceRow 左侧 chevron 折叠指示器与 StepGroup 折叠错误徽标 / 总耗时
 // ---------------------------------------------------------------------------
 
-test('TraceRow：外层保持 div.trace-row[role="button"]，右侧显示 chevron 指示器并随展开切换且不污染耗时文本', { timeout: 60_000 }, async () => {
+test('TraceRow：外层保持 div.trace-row[role="button"]，chevron 位于 .trace-row-left 首位并随展开切换，右侧只放耗时文本', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
     await m.render(
@@ -718,25 +719,65 @@ test('TraceRow：外层保持 div.trace-row[role="button"]，右侧显示 chevro
     assert.ok(row !== null, '外层可点击元素必须保持 div.trace-row')
     assert.equal(row.getAttribute('role'), 'button')
     assert.equal(row.getAttribute('aria-expanded'), 'false')
+    const leftEl = row.querySelector('.trace-row-left')
+    assert.ok(leftEl !== null, '左侧区存在')
+    const chevronCollapsed = leftEl?.firstElementChild
+    assert.ok(chevronCollapsed?.classList.contains('trace-row-chevron') === true, 'chevron 是 .trace-row-left 的首个子元素')
+    assert.ok(chevronCollapsed?.classList.contains('lucide-chevron-right') === true, '收起态为 chevron-right')
+    assert.ok(leftEl?.children[1]?.classList.contains('lucide-check') === true, 'chevron 之后紧跟状态图标（done → check）')
     const rightEl = row.querySelector('.trace-row-right')
-    assert.equal(rightEl?.textContent, '120ms', 'chevron SVG 不污染 .trace-row-right 纯文本')
-    const chevronCollapsed = rightEl?.querySelector('.trace-row-chevron')
-    assert.ok(chevronCollapsed !== null, '渲染 .trace-row-chevron')
-    assert.ok(chevronCollapsed.classList.contains('lucide-chevron-right'), '收起态为 chevron-right')
+    assert.equal(rightEl?.textContent, '120ms', '右侧纯耗时文本')
+    assert.equal(rightEl?.children.length, 1, '右侧只保留耗时 span，不再出现 chevron')
 
     await act(async () => {
       row.click()
     })
     assert.equal(row.getAttribute('aria-expanded'), 'true')
     assert.equal(rightEl?.textContent, '120ms')
-    const chevronExpanded = rightEl?.querySelector('.trace-row-chevron')
-    assert.ok(chevronExpanded?.classList.contains('lucide-chevron-down'), '展开态切换为 chevron-down')
+    const chevronExpanded = leftEl?.firstElementChild
+    assert.ok(chevronExpanded?.classList.contains('lucide-chevron-down') === true, '展开态切换为 chevron-down')
 
-    // right 为空串（unknown 状态且无耗时）：仍保留 chevron 且不渲染多余空 span 文本
+    // right 为空串（unknown 状态且无耗时）：右侧不渲染任何子节点，chevron 仍留在左侧
     await m.render(rowUi(trace({ toolName: 'bash', status: 'unknown', isError: false })))
     const unknownRight = m.host.querySelector('.trace-row-right')
     assert.equal(unknownRight?.textContent, '')
-    assert.ok(unknownRight?.querySelector('.trace-row-chevron') !== null)
+    assert.equal(unknownRight?.children.length, 0)
+    const unknownLeft = m.host.querySelector('.trace-row-left')
+    assert.ok(unknownLeft?.firstElementChild?.classList.contains('trace-row-chevron') === true)
+    assert.ok(unknownLeft?.children[1]?.classList.contains('lucide-circle') === true, 'unknown 状态图标 circle 同样紧随 chevron')
+  } finally {
+    m.unmount()
+  }
+})
+
+test('ask_user 行：chevron 同样位于 .trace-row-left 首位，右侧仅问题摘要之外的结果徽标', { timeout: 60_000 }, async () => {
+  const m = createMount()
+  try {
+    await m.render(
+      rowUi(trace({
+        toolName: 'ask_user',
+        status: 'done',
+        input: { question: '继续采用方案 A 吗？' },
+        presentationMeta: { title: '继续采用方案 A 吗？', questionCount: 1, outcome: 'answered' },
+      })),
+    )
+    const row = m.host.querySelector('div.trace-row') as HTMLElement | null
+    assert.ok(row !== null, 'ask_user 行复用 div.trace-row[role="button"]')
+    assert.equal(row.getAttribute('role'), 'button')
+    assert.equal(row.getAttribute('aria-expanded'), 'false')
+    const leftEl = row.querySelector('.trace-row-left')
+    assert.ok(leftEl?.firstElementChild?.classList.contains('trace-row-chevron') === true, 'chevron 在左侧首位')
+    assert.ok(leftEl?.firstElementChild?.classList.contains('lucide-chevron-right') === true)
+    assert.match(leftEl?.textContent ?? '', /继续采用方案 A 吗？/, '问题摘要仍在左侧')
+    const rightEl = row.querySelector('.trace-row-right')
+    assert.ok(rightEl !== null)
+    assert.ok(rightEl?.querySelector('.trace-row-chevron') === null, '右侧不再出现 chevron')
+    assert.ok(rightEl?.querySelector('.badge') !== null, '右侧保留结果徽标')
+    await act(async () => {
+      row.click()
+    })
+    assert.equal(row.getAttribute('aria-expanded'), 'true')
+    assert.ok(leftEl?.firstElementChild?.classList.contains('lucide-chevron-down') === true, '展开后切换为 chevron-down')
   } finally {
     m.unmount()
   }
@@ -1267,9 +1308,18 @@ test('TraceRow：replaceRow=true 卡片统一提供宿主输入/输出展开开�
     await waitForCondition(() => m.host.querySelector('.demo-card-row') !== null)
     assert.ok(m.host.querySelector('.trace-row') === null, 'replaceRow=true 仍不渲染宿主默认 .trace-row')
 
+    const head = m.host.querySelector('.trace-block-head')
+    const view = m.host.querySelector('.trace-block-view')
     const toggle = m.host.querySelector<HTMLButtonElement>('.trace-io-toggle')
-    assert.ok(toggle !== null, 'replaceRow=true 渲染统一输入/输出展开开关')
-    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    assert.ok(head !== null && view !== null && toggle !== null, 'replaceRow=true 渲染统一输入/输出折叠开关')
+    assert.ok(
+      Boolean(toggle!.compareDocumentPosition(view!) & Node.DOCUMENT_POSITION_FOLLOWING),
+      'IO 开关位于 trace-block-view 之前（行首），与默认行左侧 chevron 同位',
+    )
+    assert.ok(head!.firstElementChild === toggle, 'IO 开关是 trace-block-head 的首个子元素')
+    assert.ok(toggle!.querySelector('.lucide-chevron-right') !== null, '收起态为 chevron-right 形态（不再是 code 图标）')
+    assert.ok(toggle!.querySelector('.lucide-code') === null, '不再渲染 code 图标')
+    assert.equal(toggle!.getAttribute('aria-expanded'), 'false')
     assert.match(toggle.getAttribute('aria-label') ?? '', /Show input & output for swarm_dispatch_worker/)
     const panelId = toggle.getAttribute('aria-controls')
     assert.ok(panelId !== null && panelId !== '')
@@ -1283,12 +1333,13 @@ test('TraceRow：replaceRow=true 卡片统一提供宿主输入/输出展开开�
     assert.equal(cardClicks, 1)
     assert.equal(toggle.getAttribute('aria-expanded'), 'false')
 
-    // 点击 I/O 开关展开：可见 KV 多行入参、输出、截断全文提示、产物入口与原始数据
+    // 点击 I/O 开关展开：chevron 转为 down，可见 KV 多行入参、输出、截断全文提示、产物入口与原始数据
     await act(async () => {
-      toggle.click()
+      toggle!.click()
     })
-    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
-    assert.equal(toggle.classList.contains('trace-io-toggle-open'), true)
+    assert.equal(toggle!.getAttribute('aria-expanded'), 'true')
+    assert.equal(toggle!.classList.contains('trace-io-toggle-open'), true)
+    assert.ok(toggle!.querySelector('.lucide-chevron-down') !== null, '展开态切换为 chevron-down')
     assert.equal(panel.hidden, false)
     assert.ok(panel.querySelector('.trace-kv') !== null, '入参以可读键值形态展示')
     assert.match(panel.textContent ?? '', /Line 1: audit auth\nLine 2: run tests/, '多行入参按真实换行展示')
@@ -1307,9 +1358,10 @@ test('TraceRow：replaceRow=true 卡片统一提供宿主输入/输出展开开�
 
     // 再次点击收起
     await act(async () => {
-      toggle.click()
+      toggle!.click()
     })
-    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    assert.equal(toggle!.getAttribute('aria-expanded'), 'false')
+    assert.ok(toggle!.querySelector('.lucide-chevron-right') !== null, '收起后回到 chevron-right')
     assert.equal(panel.hidden, true)
 
     // 2) 插件 replaceRow=true 接管 bash 且运行中无输出时：不越权渲染宿主 BashToolBody，也不呈现空白，且支持 zh-CN 文案
