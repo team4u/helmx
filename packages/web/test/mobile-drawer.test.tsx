@@ -271,7 +271,7 @@ test('useMobileDrawerSwipe hook: opens/closes on valid swipes and cancels on mul
   }
 })
 
-test('App mobile shell: hamburger button carries the attention count badge (no standalone overview button) and swipe opens/closes the drawer', { timeout: 60_000 }, async () => {
+test('App mobile shell: hamburger button carries the numberless attention status dot (no standalone overview button) and swipe opens/closes the drawer', { timeout: 60_000 }, async () => {
   const originalFetch = globalThis.fetch
   const originalMatchMedia = window.matchMedia
   const originalWidth = window.innerWidth
@@ -346,7 +346,7 @@ test('App mobile shell: hamburger button carries the attention count badge (no s
       root.render(e(App))
     })
     const deadline = Date.now() + 3000
-    while (container.querySelector('.mobile-nav-badge') === null && Date.now() < deadline) {
+    while (container.querySelector('.mobile-nav-dot') === null && Date.now() < deadline) {
       await act(async () => {
         await new Promise((r) => setTimeout(r, 15))
       })
@@ -356,10 +356,11 @@ test('App mobile shell: hamburger button carries the attention count badge (no s
     assert.ok(shell !== null, 'App mounts the shell')
     assert.ok(!shell.classList.contains('mq-overview-on'), 'legacy overview topbar reservation class is removed')
     assert.ok(container.querySelector('.mobile-quick-overview-btn') === null, 'standalone overview quick button is removed')
+    assert.ok(container.querySelector('.overview-count-badge') === null, 'numeric count badge is removed')
 
     const toggleBtn = container.querySelector<HTMLButtonElement>('.mobile-nav-toggle')!
-    const badge = toggleBtn.querySelector<HTMLElement>('.mobile-nav-badge[data-tone="running"]')
-    assert.ok(badge !== null && badge.textContent === '1', 'hamburger carries the shared attention count badge')
+    const dot = toggleBtn.querySelector<HTMLElement>('.attention-status-dot.mobile-nav-dot[data-tone="running"]')
+    assert.ok(dot !== null && dot.textContent === '' && dot.getAttribute('aria-hidden') === 'true', 'hamburger carries the numberless attention status dot')
     assert.ok(toggleBtn.getAttribute('aria-label')?.includes('1') === true, 'hamburger aria-label includes attention summary')
 
     // 非边缘右滑打开侧栏抽屉

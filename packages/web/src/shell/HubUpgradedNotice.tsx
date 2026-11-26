@@ -1,5 +1,5 @@
 /**
- * Hub 被动升级一次性提示条（总览页顶部，与 HubUpdateCard 同域）：
+ * Hub 被动升级一次性提示条（主舞台壳层顶部，与 HubUpdateCard 同域）：
  * - 数据来自 /api/hub-update/status 的 `upgradedFrom`（Hub 进程级「上次运行版本」对比，
  *   与浏览器无关）；`changelogAvailable` 决定是否给出「查看更新内容」入口；
  * - 「知道了」或打开过 changelog 即在本浏览器记为已读（localStorage 记当前版本），

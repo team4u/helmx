@@ -1,9 +1,9 @@
 /**
  * 侧栏空间切换、工作集快速切换与双语交互测试（happy-dom + 真实 React 事件）：
- * - Activity Rail 对话/视图/设置三空间切换与总览空间归属；
- * - 侧栏顶栏「会话总览」按钮（带同源态势计数角标）与分组栏「新话题」按钮（单/多角色、空态引导、移动端防误关）；
- * - 工作集：活跃全量 + 近期截断（SIDEBAR_RECENT_QUIET_LIMIT）+ 在场保底 + 底部「查看全部」；
- * - 侧栏搜索：突破近期上限、搜索防藏匿自动展开分节与命中后代、Esc 两段清空/收起、带 ?sp.q 跳转总览；
+ * - Activity Rail 对话/视图/设置三空间切换与总览空间记忆归属（顶栏不设常驻会话总览按钮）；
+ * - 分组栏「新话题」按钮（单/多角色、空态引导、移动端防误关）；
+ * - 工作集：活跃全量 + 近期截断（SIDEBAR_RECENT_QUIET_LIMIT）+ 在场保底 + 底部「查看全部」与「已归档会话」入口；
+ * - 侧栏搜索：突破近期上限、搜索防藏匿自动展开分节与命中后代、Esc 两段清空/收起、带 ?sp.q 跳转总览（含仅已归档可查兜底）；
  * - 行命中范围、非模态行菜单、后代展开移动端防误关、分屏焦点同步与 Rail 语言切换。
  */
 import './helpers/register-happy-dom.js'
@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import type { ConversationSummary, PluginUiContribution } from '@helmx/protocol'
+import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 import type { LocalePreference } from '../src/lib/types.js'
 import { SIDEBAR_GROUP_BY_STORAGE_KEY, SIDEBAR_RECENT_QUIET_LIMIT } from '../src/overview/overview-model.js'
 import { makeTestStore } from './helpers/store.js'
@@ -97,24 +98,23 @@ function render(store: HelmxExternalStore, element: React.ReactElement): void {
   root.render(e(HostStoreProviders, { value: store }, element))
 }
 
-test('Sidebar 空间切换：对话空间顶栏渲染总览入口与工作集，视图/设置空间各自独立渲染且记住总览目标', { timeout: 60_000 }, async () => {
+test('Sidebar 空间切换：顶栏移除常驻总览按钮，视图/设置空间各自独立渲染且记住总览目标', { timeout: 60_000 }, async () => {
   const store = makeStore()
   render(store, e(LiveSidebar))
   await act(async () => {})
 
   const body = document.body
   assert.ok(body.querySelector('.activity-rail'), '应渲染 Activity Rail')
-  assert.ok(body.querySelector('.sidebar-header .sidebar-overview-open-btn'), '对话空间顶栏渲染会话总览入口')
+  assert.ok(body.querySelector('.sidebar-header .sidebar-overview-open-btn') === null, '顶栏不再设常驻会话总览按钮')
   assert.ok(body.querySelector('.sidebar-overview-entry') === null, '旧顶置会话总览整行已移除')
   assert.ok(body.querySelector('.sidebar-overview-group'), '对话空间渲染工作集')
   assert.ok(!body.textContent!.includes('Herdr 终端'), '默认不渲染视图空间项')
 
-  // 点顶栏总览钮进入 #/overview，按钮点亮且对话空间 Rail 按钮保持激活高亮
+  // 进入 #/overview 后，对话空间 Rail 按钮保持激活高亮
   await act(async () => {
-    body.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')!.click()
+    store.openTarget({ kind: 'overview' })
   })
   assert.deepEqual(store.getPrimaryTarget(), { kind: 'overview' })
-  assert.ok(body.querySelector('.sidebar-overview-open-btn')?.classList.contains('is-active'), '主屏停总览时顶栏总览按钮点亮')
   const convSpaceBtn = body.querySelector<HTMLButtonElement>('button[aria-label="Conversations space"]')!
   assert.ok(convSpaceBtn.classList.contains('rail-btn-active'), '主屏停总览时对话空间图标保持高亮')
 
@@ -222,6 +222,56 @@ test('Sidebar 工作集截断、在场保底、近期排序与全量搜索透传
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
   })
   assert.ok(document.body.querySelector('.sidebar-search-input') === null, '空输入再按 Esc 收起筛选框')
+  assert.ok(document.body.querySelector('.sidebar-view-archived-btn') === null, '无已归档会话时不渲染已归档入口')
+})
+
+test('Sidebar 底部已归档会话入口与搜索无未归档命中时的总览下钻兜底', { timeout: 60_000 }, async () => {
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    conversations: [
+      conv({ id: 1, title: '当前未归档话题', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 2, title: '旧方案封存一', profileId: 'assistant', tags: [ARCHIVED_TAG], createdAt: 5000, updatedAt: 5000 }),
+      conv({ id: 3, title: '旧方案封存二', profileId: 'coder', tags: [ARCHIVED_TAG], createdAt: 4000, updatedAt: 4000 }),
+      conv({ id: 4, parentConversationId: 2, title: '已归档子任务', tags: [ARCHIVED_TAG], createdAt: 5100 }),
+      conv({ id: 5, title: '自动化归档', ownedBy: 'helmx', tags: [ARCHIVED_TAG], createdAt: 3000 }),
+    ],
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '编码专员' },
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 1 },
+  })
+  let closeCount = 0
+  render(store, e(LiveSidebar, { onClose: () => { closeCount += 1 } }))
+  await act(async () => {})
+
+  const archivedBtn = document.body.querySelector<HTMLButtonElement>('.sidebar-view-all-btn.sidebar-view-archived-btn')
+  assert.ok(archivedBtn !== null, '存在可见人类已归档根树时渲染底部已归档入口')
+  assert.ok(archivedBtn.textContent?.includes('已归档会话 (2)'), '仅统计可见人类已归档根树数')
+
+  await act(async () => {
+    archivedBtn.click()
+  })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'overview', params: { bucket: 'archived' } })
+  assert.equal(closeCount, 1)
+
+  // 开启搜索且关键词在未归档会话中零命中：因存在已归档会话，仍提供「在会话总览中查看匹配」按钮
+  await act(async () => {
+    document.body.querySelector<HTMLButtonElement>('button[aria-label="筛选会话"]')!.click()
+  })
+  const input = document.body.querySelector<HTMLInputElement>('.sidebar-search-input')!
+  await act(async () => {
+    setInputValue(input, '旧方案封存')
+  })
+  assert.equal(document.body.querySelectorAll('.sidebar-overview-item').length, 0, '未归档工作集无命中')
+  assert.ok(document.body.querySelector('.sidebar-view-archived-btn') === null, '搜索态收起静态已归档按钮')
+  const matchesBtn = document.body.querySelector<HTMLButtonElement>('.sidebar-view-all-btn')
+  assert.ok(matchesBtn !== null && matchesBtn.textContent?.includes('在会话总览中查看匹配'), '有已归档历史时搜索无命中仍保留去总览查入口')
+  await act(async () => {
+    matchesBtn.click()
+  })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'overview', params: { q: '旧方案封存' } })
+  assert.equal(closeCount, 2)
 })
 
 test('Sidebar 分组栏新话题入口与空态引导：单角色直进待命；多角色下拉不误关移动端抽屉，选角后进待命并关闭', { timeout: 60_000 }, async () => {
@@ -519,7 +569,8 @@ test('Sidebar Rail 底部语言按钮紧邻主题按钮：三态菜单（auto/en
   })
   const triggerAfter = document.body.querySelector('.activity-rail-footer button.sidebar-locale-toggle') as HTMLButtonElement | null
   assert.equal(triggerAfter?.getAttribute('aria-label'), '界面语言')
-  assert.equal(document.body.querySelector('.sidebar-overview-open-btn')?.getAttribute('aria-label'), '会话总览')
+  assert.ok(document.body.querySelector('.sidebar-overview-open-btn') === null)
+  assert.equal(document.body.querySelector('.sidebar-context-title')?.textContent, '会话')
   assert.equal(document.body.querySelector('.sidebar-group-by-label')?.textContent, '按状态')
 
   const navDesc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages') ?? Object.getOwnPropertyDescriptor(navigator, 'languages')

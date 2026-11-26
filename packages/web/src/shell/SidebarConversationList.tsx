@@ -1,8 +1,8 @@
 /**
  * 侧栏对话空间工作集列表（分组栏动作 + 活跃与近期根会话树）：
  *
- * - 入口收敛：「会话总览」位于侧栏顶栏（#/overview，带同源态势计数角标）；
- *   「新建话题」合并至工作集分组栏右侧操作区（单角色直进待命页，多角色下拉选角且最近活跃角色置顶）；
+ * - 入口收敛：「新建话题」位于工作集分组栏右侧操作区（单角色直进待命页，多角色下拉选角且最近活跃角色置顶）；
+ *   会话总览（#/overview）降级为按需下钻大盘（侧栏顶栏不设常驻总览按钮），由工作集底部与命令面板触发；
  * - 下方工作集（与 #/overview 共享 overview-model 的唯一树聚合、分桶与排序纯函数）：
  *   - 支持分组维度切换（按状态 / 按角色 / 按节点，localStorage 持久化）：
  *     - 按状态：活跃三桶（需处理 > 进行中 > 未读完成）全量展示（createdAt 倒序不跳行），
@@ -11,9 +11,10 @@
  *     - 按节点：按运行节点归组（活跃节点优先），每组独立截取近期安静会话；
  *   - 0 会话空态额外提供显式「+ 新话题」引导按钮；
  *   - 超限时底部呈现「查看全部 N 个会话」直达 #/overview（透传当前分组维度）；
- *   - 侧栏搜索突破近期上限检索全量未归档人类根树，底部提供带 ?sp.q 透传的「在会话总览中查看匹配」；
+ *   - 存在可见人类已归档根树时，底部呈现「已归档会话 (N)」直达 #/overview?sp.bucket=archived；
+ *   - 侧栏搜索突破近期上限检索全量未归档人类根树，命中或存在已归档会话时底部提供带 ?sp.q 透传的「在会话总览中查看匹配」；
  * - 职责边界：侧栏专注快速切换、新开话题与当前工作集的批量选择/全选/归档/删除
- *   （已归档治理仍归一到 #/overview）；
+ *   （已归档治理归一到 #/overview）；
  * - 移动端防误关契约：工具栏按钮、批量操作栏与空态引导按钮不挂 .nav-item，批量模式下的行点击、
  *   勾选框、子会话行以及展开子会话和行尾动作菜单均显式 stopPropagation，
  *   避免冒泡触发 App 外层 .nav-item 关闭移动端抽屉。
@@ -44,6 +45,7 @@ import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
 import { useBatchConversationDelete } from './use-batch-conversation-delete.js'
 import {
+  buildArchivedOverviewCards,
   buildNewTopicCandidates,
   buildOverviewCards,
   buildSidebarGroupedWorkingSet,
@@ -839,6 +841,17 @@ export function SidebarConversationList({
     [store.conversations, background, store.profiles, store.plugins, viewedConversationIds, t],
   )
 
+  const archivedCount = useMemo(
+    () =>
+      buildArchivedOverviewCards({
+        conversations: store.conversations,
+        background,
+        profiles: store.profiles,
+        plugins: store.plugins,
+      }).length,
+    [store.conversations, background, store.profiles, store.plugins],
+  )
+
   const agentStandings = useMemo(
     () =>
       buildAgentStandings({
@@ -1300,7 +1313,18 @@ export function SidebarConversationList({
           </button>
         )}
 
-        {workingSet.searchActive && hasVisibleMatchedCards && (
+        {!workingSet.searchActive && archivedCount > 0 && (
+          <button
+            type="button"
+            className="sidebar-view-all-btn sidebar-view-archived-btn"
+            onClick={() => openOverview({ bucket: 'archived' })}
+          >
+            <span>{t('shell.sidebar.viewArchivedConversations', { count: archivedCount })}</span>
+            <HelmxIcon name="arrow-right" size={12} />
+          </button>
+        )}
+
+        {workingSet.searchActive && (hasVisibleMatchedCards || archivedCount > 0) && (
           <button
             type="button"
             className="sidebar-view-all-btn"

@@ -96,40 +96,6 @@
   display: none;
 }
 
-/* 移动端忙时独立发送双按钮（[插话] / [排队]） */
-.composer-busy-mobile-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-.composer-toolbar .composer-mobile-steer-btn,
-.composer-toolbar .composer-mobile-queue-btn {
-  height: 32px;
-  min-height: 32px;
-  padding: 0 11px;
-  border-radius: var(--radius-pill);
-  font-size: 12px;
-  font-weight: 500;
-  gap: 4px;
-  line-height: 1;
-}
-.composer-toolbar .composer-mobile-steer-btn {
-  background: var(--fg);
-  border-color: transparent;
-  color: var(--fg-on-solid);
-}
-.composer-toolbar .composer-mobile-steer-btn:hover:not(:disabled) {
-  background: var(--fg-secondary);
-  border-color: transparent;
-  color: var(--fg-on-solid);
-}
-.composer-toolbar .composer-mobile-steer-btn:disabled {
-  opacity: 0.55;
-  background: var(--bg-muted);
-  color: var(--fg-subtle);
-}
-
 /* ModelPicker 顶栏、搜索与模式切换 */
 .composer-model-header {
   display: flex;

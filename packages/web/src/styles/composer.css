@@ -676,7 +676,14 @@ button.attachment-chip:disabled {
 .composer-toolbar .btn-send.btn-primary:hover:not(:disabled) { background: var(--fg-secondary); color: var(--fg-on-solid); border-color: transparent; }
 .composer-toolbar .btn-send.btn-primary:disabled { opacity: 1; background: var(--bg-muted); color: var(--fg-subtle); }
 
-/* 正忙分体引导/发送主按钮 */
+/* 正忙态独立停止钮 + 分体引导/发送主按钮 */
+.composer-busy-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .composer-split-send {
   display: inline-flex;
   align-items: stretch;
@@ -830,15 +837,5 @@ button.attachment-chip:disabled {
 .composer-busy-menu-item[data-highlighted] .composer-busy-menu-icon,
 .composer-busy-menu-item:hover:not(:disabled) .composer-busy-menu-icon {
   color: var(--fg);
-}
-
-.composer-busy-menu-item.helmx-dropdown-item-danger .composer-busy-menu-icon,
-.composer-busy-menu-item.helmx-dropdown-item-danger .composer-busy-menu-title {
-  color: var(--err);
-}
-
-.composer-busy-menu-item.helmx-dropdown-item-danger[data-highlighted],
-.composer-busy-menu-item.helmx-dropdown-item-danger:hover:not(:disabled) {
-  background: var(--err-bg);
 }
 

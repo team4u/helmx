@@ -32,7 +32,7 @@
 | `#/settings/nodes[/<nodeId>]` | 节点中心 |
 | `#/settings/plugins[/<pluginId> \| /core[/<coreOwner>[/<coreAction>]]]` | 插件中心（`core` 保留段 = 内核能力透视 Tab，支持只读抽屉深链与技能双向导航） |
 
-侧栏空间（`conversations | views | settings`）由主屏目标唯一推导，不是独立 URL/Store 状态（`#/overview` 归属 `conversations` 空间，入口位于对话空间侧栏顶栏并携带同源态势计数角标，与下方活跃+近期工作集分工）：Rail 点击经 `store.openSpace` 导航到该空间最近记忆的主屏目标（无记忆取空间缺省），经 push 入栈；已在当前空间 no-op 不产生历史项；记忆指向已失效目标时安全清理并回退缺省，绝不伪造不存在目标。浏览器前进/后退（hashchange/popstate）以 URL 为唯一事实来源。路径段内斜杠必须编码、冒号保留可读；非法段（含全部旧路径形态）静默回退默认主屏 `#/settings/profiles`。**首页落地**：空 Hash 进入不是导航意图——认证与资产就绪后主屏以 replace 落到会话总览 `#/overview`（并发主入口）；全新系统（无可见根会话树）回退对话空间缺省目标（最新根会话所属角色的待命页，无会话时首个可用角色），不入历史栈。
+侧栏空间（`conversations | views | settings`）由主屏目标唯一推导，不是独立 URL/Store 状态（`#/overview` 归属 `conversations` 空间，侧栏顶栏不设常驻总览按钮，按需由对话工作集底部的「查看全部」「已归档会话 `sp.bucket=archived`」「搜索查看匹配」或全局命令面板进入；全局会话态势收敛为无数字染色状态圆点 `.attention-status-dot`，在跨空间浏览或桌面侧栏折叠时挂于 Activity Rail 对话空间图标、移动端挂于左上角汉堡按钮，明细计数由 Tooltip / `aria-label` 承载）：Rail 点击经 `store.openSpace` 导航到该空间最近记忆的主屏目标（无记忆取空间缺省），经 push 入栈；已在当前空间 no-op 不产生历史项；记忆指向已失效目标时安全清理并回退缺省，绝不伪造不存在目标。浏览器前进/后退（hashchange/popstate）以 URL 为唯一事实来源。路径段内斜杠必须编码、冒号保留可读；非法段（含全部旧路径形态）静默回退默认主屏 `#/settings/profiles`。**首页落地**：空 Hash 进入不是导航意图——认证与资产就绪后主屏统一以 replace 落到对话空间缺省目标（存在未归档人类根会话时落到最新根会话所属角色的待命页 `#/a/<profileId>`，无会话时落到首个可用角色待命页，无可用角色时保持解析缺省 `#/settings/profiles`），不入历史栈。
 
 ### 智能体待命目标与「首次发送才落库」
 

@@ -8,7 +8,6 @@ import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 import {
   applyScreenParamsPatch,
   defaultSpaceTarget,
-  hasVisibleConversationRoots,
   standbyFallbackTarget,
   isSpaceTargetAvailable,
   partitionScreenParamsPatch,
@@ -212,15 +211,10 @@ test('defaultSpaceTarget: conversations prefers the profile of the latest unarch
   // no usable profile at all returns null
   assert.equal(defaultSpaceTarget('conversations', makeInput()), null)
 
-  // automated top-level helmx conversations never count as visible human roots or influence defaultSpaceTarget
+  // automated top-level helmx conversations never influence defaultSpaceTarget
   const automatedOnly = [
     makeConversation({ id: 20, profileId: 'reviewer', ownedBy: 'helmx', updatedAt: 9999 }),
   ]
-  assert.equal(
-    hasVisibleConversationRoots({ conversations: automatedOnly, profiles, plugins }),
-    false,
-    'only automated roots present: fresh-system landing still treats human root set as empty',
-  )
   assert.deepEqual(
     defaultSpaceTarget('conversations', makeInput({ conversations: automatedOnly, profiles, plugins })),
     { kind: 'agent', profileId: 'assistant' },
@@ -228,7 +222,7 @@ test('defaultSpaceTarget: conversations prefers the profile of the latest unarch
   )
 })
 
-test('space-navigation: enabled=true 且 status=failed 的插件托管 Profile、根会话与 Screen 均不计入活跃可见/导航目标', { timeout: 60_000 }, () => {
+test('space-navigation: enabled=true 且 status=failed 的插件托管 Profile 与 Screen 均不计入活跃导航目标', { timeout: 60_000 }, () => {
   const plugins = [
     {
       id: 'plugin:failed',
@@ -249,17 +243,7 @@ test('space-navigation: enabled=true 且 status=failed 的插件托管 Profile�
     { pluginId: 'plugin:ok', surface: 'sidebar.item', spec: { id: 'ok-nav', label: '正常入口', target: 'screen:plugin:ok/ok-board', order: 2 } },
   ])
 
-  // 1) 仅有 failed 插件托管 Profile 的根会话时，不视为存在可见根会话
-  assert.equal(
-    hasVisibleConversationRoots({
-      conversations: [makeConversation({ id: 1, profileId: 'failed-bot', updatedAt: 100 })],
-      profiles,
-      plugins,
-    }),
-    false,
-  )
-
-  // 2) isSpaceTargetAvailable：failed 插件的 agent 与 screen 均不可用，active 插件可用
+  // 1) isSpaceTargetAvailable：failed 插件的 agent 与 screen 均不可用，active 插件可用
   const input = makeInput({
     conversations: [makeConversation({ id: 1, profileId: 'failed-bot', updatedAt: 100 })],
     profiles,
@@ -271,11 +255,11 @@ test('space-navigation: enabled=true 且 status=failed 的插件托管 Profile�
   assert.equal(isSpaceTargetAvailable({ kind: 'screen', pluginId: 'plugin:failed', screenId: 'broken-board' }, input), false)
   assert.equal(isSpaceTargetAvailable({ kind: 'screen', pluginId: 'plugin:ok', screenId: 'ok-board' }, input), true)
 
-  // 3) defaultSpaceTarget：对话空间跳过 failed-bot（即使其拥有最新根会话），视图空间跳过 failed 插件 Screen
+  // 2) defaultSpaceTarget：对话空间跳过 failed-bot（即使其拥有最新根会话），视图空间跳过 failed 插件 Screen
   assert.deepEqual(defaultSpaceTarget('conversations', input), { kind: 'agent', profileId: 'ok-bot' })
   assert.deepEqual(defaultSpaceTarget('views', input), { kind: 'screen', pluginId: 'plugin:ok', screenId: 'ok-board' })
 
-  // 4) 没有任何活跃 Profile 时返回 null（不退回 failed-bot）
+  // 3) 没有任何活跃 Profile 时返回 null（不退回 failed-bot）
   assert.equal(
     defaultSpaceTarget('conversations', makeInput({ profiles: [makeProfile('failed-bot', { managedByPlugin: 'plugin:failed' })], plugins })),
     null,
@@ -332,58 +316,6 @@ test('resolveSpaceSwitch: same space no-op; valid memory first; stale memory cle
 // ---------------------------------------------------------------------------
 // space-navigation: standbyFallbackTarget & screen params patch
 // ---------------------------------------------------------------------------
-
-test('hasVisibleConversationRoots: the honest "not a fresh system" verdict for the overview home landing', { timeout: 60_000 }, () => {
-  const base = {
-    profiles: [makeProfile('assistant'), makeProfile('bot-x', { managedByPlugin: 'plugin:off' })],
-    plugins: [{ id: 'plugin:off', enabled: false }],
-  }
-  // 全新系统 / 全部归档：无可见根树，回退待命页落地。
-  assert.equal(hasVisibleConversationRoots({ ...base, conversations: [] }), false, 'a fresh system has no visible roots')
-  assert.equal(
-    hasVisibleConversationRoots({
-      ...base,
-      conversations: [makeConversation({ id: 1, profileId: 'assistant', tags: [ARCHIVED_TAG] })],
-    }),
-    false,
-    'an archived root is invisible everywhere',
-  )
-  // 停用插件托管的 Profile 根同样不可见；子会话不算根。
-  assert.equal(
-    hasVisibleConversationRoots({
-      ...base,
-      conversations: [makeConversation({ id: 2, profileId: 'bot-x' })],
-    }),
-    false,
-    'a root whose profile is hidden by a disabled plugin is invisible',
-  )
-  assert.equal(
-    hasVisibleConversationRoots({
-      ...base,
-      conversations: [makeConversation({ id: 3, profileId: 'assistant', parentConversationId: 99 })],
-    }),
-    false,
-    'child conversations never count as roots',
-  )
-  // 健康根：可见（含孤儿 Profile 根——profile 未找到按可见处理，与侧栏孤儿
-  // 站位兜底同口径）。
-  assert.equal(
-    hasVisibleConversationRoots({
-      ...base,
-      conversations: [makeConversation({ id: 4, profileId: 'assistant' })],
-    }),
-    true,
-    'a healthy root tree is visible',
-  )
-  assert.equal(
-    hasVisibleConversationRoots({
-      ...base,
-      conversations: [makeConversation({ id: 5, profileId: 'ghost' })],
-    }),
-    true,
-    'an orphan-profile root still counts as visible',
-  )
-})
 
 test('standbyFallbackTarget: no summary falls to the profile center; remote coordinates kept, local/empty omitted', { timeout: 60_000 }, () => {
   assert.deepEqual(standbyFallbackTarget(undefined), { kind: 'profiles' })

@@ -10,7 +10,7 @@ ensureHappyDom()
 
 import * as React from 'react'
 const { act } = await import('react') as typeof import('react')
-const { HubUpdateCard } = await import('../src/overview/HubUpdateCard.js')
+const { HubUpdateCard } = await import('../src/shell/HubUpdateCard.js')
 
 interface FetchLog { method: string; path: string; body?: Record<string, unknown> }
 
@@ -110,8 +110,8 @@ test('apply posts to /api/hub-update/apply and hub_busy surfaces counts with a f
 })
 
 test('HubUpgradedNotice appears once per version and opens the sliced changelog', { timeout: 60_000 }, async (t) => {
-  const { HubUpgradedNotice } = await import('../src/overview/HubUpgradedNotice.js'
-  ) as typeof import('../src/overview/HubUpgradedNotice.js')
+  const { HubUpgradedNotice } = await import('../src/shell/HubUpgradedNotice.js'
+  ) as typeof import('../src/shell/HubUpgradedNotice.js')
   const { act } = await import('react') as typeof import('react')
   const { mountDomRoot } = await import('./helpers/dom-harness.js')
   const { makeTestStore, HelmxExternalStoreContext } = await import('./helpers/store.js')
@@ -290,7 +290,7 @@ test('HubUpdateCard keeps polling across transient network errors during switch 
 })
 
 test('HubUpgradedNotice dismiss hides immediately without waiting for parent rerender and shares status polling with HubUpdateCard', { timeout: 60_000 }, async (t) => {
-  const { HubUpgradedNotice } = await import('../src/overview/HubUpgradedNotice.js')
+  const { HubUpgradedNotice } = await import('../src/shell/HubUpgradedNotice.js')
   const { mountDomRoot } = await import('./helpers/dom-harness.js')
   const { makeTestStore, HelmxExternalStoreContext } = await import('./helpers/store.js')
 
@@ -382,4 +382,79 @@ test('HubUpdateCard times out honestly across continuous transient network failu
   await waitForCondition(() => mounted.host.querySelector('.hub-update-card-error') !== null)
   assert.ok(offlineAttempts >= 2, 'must keep retrying across transient failures until timeout budget expires')
   assert.match(mounted.host.querySelector('.hub-update-card-error')?.textContent ?? '', /1\.3\.0/)
+})
+
+test('App main stage mounts HubUpgradedNotice and HubUpdateCard globally across non-overview routes', { timeout: 60_000 }, async (t) => {
+  const { App } = await import('../src/App.js')
+  const { mountDomRoot } = await import('./helpers/dom-harness.js')
+  const { hangingEventStream } = await import('./helpers/sse-stream.js')
+  const encoder = new TextEncoder()
+  const originalFetch = globalThis.fetch
+  const originalHash = window.location.hash
+  const storage = globalThis.localStorage
+  storage?.removeItem('helmx:hub-changelog-seen')
+  window.history.replaceState(null, '', '#/a/assistant')
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/auth/status') {
+      return Response.json({ configured: true, authenticated: true })
+    }
+    if (path === '/api/events') {
+      return new Response(
+        hangingEventStream(
+          (send) => {
+            send(
+              encoder.encode(
+                `event: snapshot\ndata: ${JSON.stringify({
+                  bootId: 'hub-card-shell-boot',
+                  seq: 1,
+                  conversations: [],
+                  pendingAsks: [],
+                  plugins: [],
+                  ui: [],
+                })}\n\n`,
+              ),
+            )
+          },
+          { signal: init?.signal },
+        ),
+        { status: 200 },
+      )
+    }
+    if (path === '/api/profiles') {
+      return Response.json([{ id: 'assistant', name: 'Assistant' }])
+    }
+    if (path === '/api/hub-update/status') {
+      return Response.json({
+        active: true,
+        currentVersion: '0.3.1',
+        readyVersion: '0.3.2',
+        lastError: null,
+        blocked: null,
+        upgradedFrom: '0.3.0',
+        changelogAvailable: true,
+      })
+    }
+    return Response.json([])
+  }) as typeof fetch
+
+  t.after(() => {
+    globalThis.fetch = originalFetch
+    storage?.removeItem('helmx:hub-changelog-seen')
+    window.history.replaceState(null, '', originalHash || '#')
+  })
+
+  const mounted = await mountDomRoot(React.createElement(App))
+  t.after(mounted.unmount)
+
+  await waitForCondition(
+    () =>
+      mounted.host.querySelector('main.helmx-main-stage > .hub-upgraded-notice') !== null &&
+      mounted.host.querySelector('main.helmx-main-stage > .hub-update-card:not(.hub-upgraded-notice)') !== null,
+  )
+  assert.ok(mounted.host.querySelector('.agent-standby-pane') !== null, 'primary pane stays on standby page')
+  assert.ok(mounted.host.querySelector('.conversation-overview') === null, 'overview is not mounted')
+  assert.match(mounted.host.querySelector('main.helmx-main-stage > .hub-upgraded-notice')?.textContent ?? '', /0\.3\.0.*0\.3\.1/)
+  assert.match(mounted.host.querySelector('main.helmx-main-stage > .hub-update-card:not(.hub-upgraded-notice)')?.textContent ?? '', /0\.3\.1 -> 0\.3\.2/)
 })

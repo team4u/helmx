@@ -423,7 +423,6 @@ export const Composer = memo(function Composer({
           commandRunning={runningCommand !== null}
           envBlocker={envBlocker}
           text={text}
-          isMobile={isMobile}
           send={send}
           abortTurn={abortTurn}
         />

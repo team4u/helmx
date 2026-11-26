@@ -170,7 +170,7 @@ export const shellMessages = {
     'zh-CN': '{base} · 后台任务: {summary}',
   },
 
-  // Global cross-agent attention (overview entry pulse dot, mobile hamburger badge, collapsed rail)
+  // Global cross-agent attention (mobile hamburger status dot & conversations rail status dot)
   'shell.attention.openConversation': { en: 'Open conversation {id}', 'zh-CN': '打开会话 {id}' },
   'shell.attention.descendantsActive': {
     en: '{count} sub-conversations active',
@@ -309,6 +309,10 @@ export const shellMessages = {
   'shell.sidebar.viewAllConversations': {
     en: 'View all {count} conversations',
     'zh-CN': '查看全部 {count} 个会话',
+  },
+  'shell.sidebar.viewArchivedConversations': {
+    en: 'Archived conversations ({count})',
+    'zh-CN': '已归档会话 ({count})',
   },
   'shell.sidebar.viewMatchesInOverview': {
     en: 'Open matches in overview',

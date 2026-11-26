@@ -84,7 +84,7 @@
 
 /* 快捷入口计数徽标（sidebar.item 通用 badge 声明驱动）：紧凑计数 + 灯色，
  * 只呈现插件公开 doc 的真实聚合事实，无信号时不渲染；专用类与对话空间
- * 按钮解耦（态势感知统一走 overview-count-badge 计数徽标）。
+ * 按钮解耦（全局态势感知统一走 attention-status-dot 无数字状态圆点）。
  * tone 词汇 = SidebarBadgeTone 五值。 */
 .rail-quick-badge {
   position: absolute;
@@ -126,20 +126,20 @@
   box-sizing: border-box;
 }
 
-/* 快捷入口按钮与空间按钮锚定计数徽标 / 静默灯点（badge 绝对定位于右上角）。 */
+/* 快捷入口按钮与空间按钮锚定计数徽标 / 状态圆点（绝对定位于右上角）。 */
 .rail-quick-btn,
 .rail-space-btn {
   position: relative;
 }
 
-.rail-space-badge {
-  top: 0;
-  right: 0;
-  min-width: 13px;
-  height: 13px;
+.rail-space-dot {
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
 }
 
-.rail-space-badge-collapsed-only {
+.rail-space-dot-collapsed-only {
   display: none;
 }
 
@@ -328,8 +328,8 @@
   .helmx-shell.sidebar-collapsed .desktop-sidebar-expand-btn {
     display: inline-flex;
   }
-  .helmx-shell.sidebar-collapsed .rail-space-badge-collapsed-only {
-    display: inline-flex;
+  .helmx-shell.sidebar-collapsed .rail-space-dot-collapsed-only {
+    display: block;
   }
 }
 
@@ -724,40 +724,27 @@
 }
 
 
-/* 全局态势计数徽标（tone 染色）：移动端汉堡按钮 .mobile-nav-toggle、
- * Activity Rail 对话空间按钮与侧栏顶栏总览按钮共用；计数 = 同源 indicator.totalCount（有信号的树数，
- * 99+ 折叠），tone = 聚合灯色；有信号才渲染，全安静零徽标。 */
-.overview-count-badge {
+/* 全局态势无数字状态圆点（tone 四色染色）：移动端汉堡按钮 .mobile-nav-toggle 与
+ * Activity Rail 对话空间按钮共用；tone = 聚合灯色（error > blocked > running > done），
+ * 有信号才渲染，全安静零圆点；明细计数由按钮 Tooltip / aria-label 承载。 */
+.attention-status-dot {
   position: absolute;
-  top: -3px;
-  right: -3px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   border-radius: 999px;
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-on-solid);
-  box-sizing: border-box;
   pointer-events: none;
 }
 
-.overview-count-badge[data-tone='error'] { background: var(--err); }
-.overview-count-badge[data-tone='blocked'] { background: var(--warn); }
-.overview-count-badge[data-tone='running'] { background: var(--accent); }
-.overview-count-badge[data-tone='done'] { background: var(--ok); }
+.attention-status-dot[data-tone='error'] { background: var(--err); }
+.attention-status-dot[data-tone='blocked'] { background: var(--warn); }
+.attention-status-dot[data-tone='running'] { background: var(--accent); }
+.attention-status-dot[data-tone='done'] { background: var(--ok); }
 
-/* Hub 更新卡片（总览页顶部；仅存在就绪更新时渲染） */
+/* Hub 更新卡片与升级提示条（主舞台壳层顶部；仅存在就绪更新或未读升级时渲染） */
 .helmx-card.hub-update-card {
-  margin: 0 16px 10px;
+  margin: 8px 16px 0;
   padding: 8px 12px;
   font-size: 13px;
   line-height: 1.45;
+  flex-shrink: 0;
 }
 .hub-update-card-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .hub-update-card-error, .hub-update-card-busy { color: var(--fg-muted); flex: 0 1 auto; overflow-wrap: anywhere; }

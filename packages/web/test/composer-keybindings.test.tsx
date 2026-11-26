@@ -1,6 +1,6 @@
 /**
  * Unit tests for Composer / Standby single-key shortcuts, queued-input recall, cross-component
- * Ctrl+L wiring, COMPOSER_DOCK_SLOT and the mobile dual buttons.
+ * Ctrl+L wiring, COMPOSER_DOCK_SLOT and unified busy send/stop controls.
  *
  * Strictly one function per shortcut, single-key muscle memory; coverage:
  * 1. keybindings-model pure logic (↑ / Enter / Mod+Enter / panel matching / index cycling,
@@ -15,8 +15,8 @@
  *    to the outer double-Esc);
  * 6. COMPOSER_DOCK_SLOT renders directly above <AskDock /> passing ComposerScopeProps (never tucked
  *    into the mobile more menu);
- * 7. Mobile (<=680px) busy state explicitly renders [steer] + [queue] buttons; desktop badges carry
- *    .kbd-hint uniformly;
+ * 7. Busy state with input uniformly renders .composer-busy-actions across desktop and mobile
+ *    (standalone Stop button + [Steer | v] split capsule with Steer and Queue send dropdown items);
  * 8. Standby pane global-default model inheritance, native Shift+Tab, Ctrl+L and static '/' skill completion;
  * 9. Zero-emoji and Fast Refresh checks.
  */
@@ -662,10 +662,10 @@ describe("composer-keybindings", () => {
   })
 
   // ---------------------------------------------------------------------------
-  // 7. Mobile busy dual buttons [steer] + [queue] and desktop .kbd-hint
+  // 7. Unified busy controls (.composer-busy-actions) across desktop and mobile
   // ---------------------------------------------------------------------------
 
-  test('ComposerSendControls: mobile busy with input explicitly renders Stop, [steer] and [queue] buttons; desktop keeps the split dropdown and .kbd-hint', { timeout: 60_000 }, async () => {
+  test('ComposerSendControls: busy with input uniformly renders .composer-busy-actions (standalone Stop + split Steer button + 2-item dropdown) across mobile and desktop', { timeout: 60_000 }, async () => {
     const sent: Array<string | undefined> = []
     let aborted = 0
     const send = async (mode?: 'steer' | 'followUp' | 'reject') => {
@@ -676,55 +676,64 @@ describe("composer-keybindings", () => {
     }
     const blocker = { blocked: false, reason: null }
 
-    // Mobile busy: renders compact Stop + [steer] + [queue] independent buttons explicitly, no narrow
-    // split trigger. ComposerSendControls reads the locale via useWebLocale, so it mounts inside a
-    // store provider.
-    const mobileHost = mountTree(
-      e(HelmxExternalStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
-        working: true,
-        editingEntryId: null,
-        sending: false,
-        uploading: 0,
-        envBlocker: blocker,
-        text: '测试指令',
-        isMobile: true,
-        send,
-        abortTurn,
-      })),
-    )
-    assert.ok(mobileHost.querySelector('.composer-split-trigger') === null, 'mobile renders no narrow split trigger')
-    const stopBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-abort-button')
-    const steerBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-steer-btn')
-    const queueBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-queue-btn')
-    assert.ok(stopBtn !== null, 'mobile busy with text keeps compact Stop button reachable')
-    assert.ok(steerBtn && steerBtn.textContent?.includes('Steer'), 'mobile shows the [steer] button')
-    assert.ok(queueBtn && queueBtn.textContent?.includes('Queue'), 'mobile shows the [queue] button')
+    for (const isMobileViewport of [true, false]) {
+      stubMatchMedia(isMobileViewport)
+      sent.length = 0
+      aborted = 0
 
-    await act(async () => {
-      stopBtn.click()
-      steerBtn.click()
-      queueBtn.click()
-    })
-    assert.equal(aborted, 1, 'mobile compact Stop button aborts the active turn')
-    assert.deepEqual(sent, ['steer', 'followUp'])
+      const host = mountTree(
+        e(HelmxExternalStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
+          working: true,
+          editingEntryId: null,
+          sending: false,
+          uploading: 0,
+          envBlocker: blocker,
+          text: '测试指令',
+          send,
+          abortTurn,
+        })),
+      )
 
-    // Desktop: renders the split dropdown; menu-item badges carry the .kbd-hint class
-    const desktopHost = mountTree(
-      e(HelmxExternalStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
-        working: true,
-        editingEntryId: null,
-        sending: false,
-        uploading: 0,
-        envBlocker: blocker,
-        text: '桌面指令',
-        isMobile: false,
-        send,
-        abortTurn,
-      })),
-    )
-    assert.ok(desktopHost.querySelector('.composer-busy-mobile-actions') === null)
-    const trigger = desktopHost.querySelector<HTMLButtonElement>('button.composer-split-trigger')
-    assert.ok(trigger, 'desktop keeps the split dropdown trigger')
+      const busyActions = host.querySelector<HTMLElement>('.composer-busy-actions')
+      assert.ok(busyActions !== null, `viewport mobile=${isMobileViewport} renders unified .composer-busy-actions`)
+      const stopBtn = busyActions.querySelector<HTMLButtonElement>('button.btn-send.composer-abort-button')
+      const splitMain = busyActions.querySelector<HTMLButtonElement>('.composer-split-send button.composer-split-main.composer-steer-action')
+      const splitTrigger = busyActions.querySelector<HTMLButtonElement>('.composer-split-send button.composer-split-trigger')
+      assert.ok(stopBtn !== null, 'standalone circular Stop button renders alongside split capsule')
+      assert.equal(stopBtn.getAttribute('aria-label'), 'Stop the current execution')
+      assert.ok(splitMain !== null, 'split main Steer button renders')
+      assert.equal(splitMain.textContent?.trim(), 'Steer')
+      assert.equal(splitMain.getAttribute('aria-label'), 'Steer')
+      assert.ok(splitTrigger !== null, 'split dropdown trigger renders')
+
+      await act(async () => {
+        stopBtn.click()
+        splitMain.click()
+      })
+      assert.equal(aborted, 1, 'clicking standalone Stop button aborts the active turn')
+      assert.deepEqual(sent, ['steer'], 'clicking split main button sends steer')
+
+      // Open dropdown menu -> must contain only Steer (Enter) and Queue send (⌘/Ctrl+Enter), no Stop item or separator
+      await act(async () => {
+        splitTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+      })
+      const menuContent = document.body.querySelector<HTMLElement>('.composer-busy-dropdown-content')
+      assert.ok(menuContent !== null, 'busy strategy dropdown opens')
+      const menuItems = Array.from(menuContent.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      assert.equal(menuItems.length, 2, 'dropdown contains only Steer and Queue send (no duplicate Stop item)')
+      assert.equal(menuContent.querySelectorAll('[role="separator"]').length, 0, 'dropdown omits bottom separator')
+      assert.match(menuItems[0]!.textContent ?? '', /Steer/)
+      assert.equal(menuItems[0]!.querySelector('.kbd-hint')?.textContent, 'Enter')
+      const queueItem = menuContent.querySelector<HTMLElement>('.composer-queue-button')
+      assert.ok(queueItem !== null && queueItem === menuItems[1]!)
+      assert.match(queueItem.textContent ?? '', /Queue send/)
+      assert.equal(queueItem.querySelector('.kbd-hint')?.textContent, '⌘/Ctrl+Enter')
+
+      await act(async () => {
+        queueItem.click()
+      })
+      assert.deepEqual(sent, ['steer', 'followUp'], 'clicking dropdown Queue send triggers followUp')
+    }
   })
 
   // ---------------------------------------------------------------------------
@@ -1077,11 +1086,12 @@ describe("composer-keybindings", () => {
     globalThis.fetch = originalFetchC
   })
 
-  test('zh-CN locale: ComposerSendControls mobile busy buttons render the Chinese copy', { timeout: 60_000 }, async () => {
+  test('zh-CN locale: ComposerSendControls unified busy controls render the Chinese copy', { timeout: 60_000 }, async () => {
     const sent: Array<string | undefined> = []
+    let aborted = 0
     const send = async (mode?: 'steer' | 'followUp' | 'reject') => { sent.push(mode) }
     const blocker = { blocked: false, reason: null }
-    const mobileHost = mountTree(
+    const zhHost = mountTree(
       e(HelmxExternalStoreContext.Provider, { value: makeTestStore({ locale: 'zh-CN' }) }, e(ComposerSendControls, {
         working: true,
         editingEntryId: null,
@@ -1089,19 +1099,34 @@ describe("composer-keybindings", () => {
         uploading: 0,
         envBlocker: blocker,
         text: '中文指令',
-        isMobile: true,
         send,
-        abortTurn: async () => {},
+        abortTurn: async () => { aborted += 1 },
       })),
     )
-    const steerBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-steer-btn')
-    const queueBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-queue-btn')
-    assert.ok(steerBtn && steerBtn.textContent?.includes('插话'), 'mobile shows the zh-CN steer button')
-    assert.ok(queueBtn && queueBtn.textContent?.includes('排队'), 'mobile shows the zh-CN queue button')
+    const stopBtn = zhHost.querySelector<HTMLButtonElement>('.composer-busy-actions button.composer-abort-button')
+    const steerBtn = zhHost.querySelector<HTMLButtonElement>('.composer-busy-actions button.composer-split-main')
+    const trigger = zhHost.querySelector<HTMLButtonElement>('.composer-busy-actions button.composer-split-trigger')
+    assert.ok(stopBtn !== null && stopBtn.getAttribute('aria-label') === '停止当前执行')
+    assert.ok(steerBtn !== null && steerBtn.textContent?.trim() === '插话', 'shows the zh-CN steer short label')
+    assert.equal(steerBtn.getAttribute('aria-label'), '插话引导')
+    assert.ok(trigger !== null)
     await act(async () => {
+      stopBtn.click()
       steerBtn.click()
-      queueBtn.click()
+      trigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
     })
-    assert.deepEqual(sent, ['steer', 'followUp'], 'zh-CN buttons keep the original send policies')
+    const dropdown = document.body.querySelector<HTMLElement>('.composer-busy-dropdown-content')
+    assert.ok(dropdown !== null)
+    const menuItems = Array.from(dropdown.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    assert.equal(menuItems.length, 2)
+    assert.match(menuItems[0]!.textContent ?? '', /插话引导/)
+    const queueItem = dropdown.querySelector<HTMLElement>('.composer-queue-button')
+    assert.ok(queueItem !== null)
+    assert.match(queueItem.textContent ?? '', /排队发送/)
+    await act(async () => {
+      queueItem.click()
+    })
+    assert.equal(aborted, 1)
+    assert.deepEqual(sent, ['steer', 'followUp'], 'zh-CN controls keep the steer and followUp send policies')
   })
 })

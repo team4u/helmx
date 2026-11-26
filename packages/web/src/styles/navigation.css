@@ -23,26 +23,6 @@
   flex-shrink: 0;
 }
 
-/* 侧栏顶栏会话总览按钮（仅对话空间）：挂同源 overview-count-badge 计数角标 */
-.sidebar-overview-open-btn {
-  position: relative;
-}
-
-.btn.sidebar-overview-open-btn.is-active,
-.btn.sidebar-overview-open-btn.is-active:hover:not(:disabled) {
-  background: var(--nav-active-bg);
-  color: var(--nav-active-fg);
-  border-color: transparent;
-  box-shadow: var(--seg-edge);
-}
-
-.btn.sidebar-overview-open-btn.is-split,
-.btn.sidebar-overview-open-btn.is-split:hover:not(:disabled) {
-  background: var(--nav-split-bg);
-  color: var(--fg);
-  border-color: var(--border);
-}
-
 .sidebar-scroll {
   flex: 1;
   overflow-y: auto;
@@ -346,7 +326,7 @@
   flex-shrink: 0;
 }
 
-/* 左栏一级项徽标（视图徽标与总览态势计数徽标）：计数用宿主 badge 语义类，
+/* 左栏一级项视图徽标：计数用宿主 badge 语义类，
  * 静默灯点用独立小圆点；悬停动作浮现时不淡出——注意力事实常驻可见。 */
 .sidebar-view-badge {
   height: 16px;
@@ -1051,7 +1031,7 @@
   color: var(--fg-muted);
 }
 
-/* 侧栏底部「查看全部 / 在会话总览中查看匹配」入口 */
+/* 侧栏底部「查看全部 / 已归档会话 / 在会话总览中查看匹配」入口 */
 .sidebar-view-all-btn {
   display: flex;
   align-items: center;
@@ -1069,6 +1049,10 @@
   cursor: pointer;
   text-align: left;
   transition: background 120ms ease, color 120ms ease;
+}
+
+.sidebar-view-all-btn + .sidebar-view-all-btn {
+  margin-top: 0;
 }
 
 .sidebar-view-all-btn:hover {

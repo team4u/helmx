@@ -1,5 +1,13 @@
+/**
+ * 主导航侧栏（Activity Rail + Context Sidebar）：
+ * - Activity Rail（48px）：三空间（对话 / 视图 / 设置）切换 + 插件 quickEntry + 语言/主题/变更日志；
+ *   对话空间按钮在跨空间浏览或桌面侧栏折叠时展示无数字态势染色圆点（.rail-space-dot），Tooltip 与
+ *   aria-label 携带同源态势明细摘要；
+ * - Context Sidebar：顶栏仅保留后台通知开关、全局命令面板与侧栏收起/关闭按钮（不设顶栏会话总览按钮）；
+ *   对话空间主体承载活跃+近期工作集及底部「查看全部 / 已归档会话 / 搜索查看匹配」总览按需下钻入口。
+ */
 import { useMemo, type ReactNode, type RefObject } from 'react'
-import { Badge, Button, HelmxIcon, IconButton, Tooltip } from '@helmx/plugin-client'
+import { Badge, HelmxIcon, IconButton, Tooltip } from '@helmx/plugin-client'
 import {
   useAuthConnection,
   useConversations,
@@ -265,11 +273,10 @@ function ActivityRail({
                 <HelmxIcon name={SPACE_ICONS[key]} size={16} />
                 {showSpaceBadge && attentionIndicator.tone !== null && (
                   <span
-                    className={`overview-count-badge rail-space-badge${showBadgeCollapsedOnly ? ' rail-space-badge-collapsed-only' : ''}`}
+                    className={`attention-status-dot rail-space-dot${showBadgeCollapsedOnly ? ' rail-space-dot-collapsed-only' : ''}`}
                     data-tone={attentionIndicator.tone}
-                  >
-                    {sidebarBadgeCountLabel(attentionIndicator.totalCount)}
-                  </span>
+                    aria-hidden="true"
+                  />
                 )}
               </button>
             </Tooltip>
@@ -440,10 +447,6 @@ export function Sidebar({
 
   const space = spaceForTarget(primaryTarget)
   const { indicator: attentionIndicator, background, viewedConversationIds } = useGlobalAttention()
-  const overviewPresence = resolveSidebarTargetPresence(sidebarStore, (target) => target.kind === 'overview')
-  const attentionSummary = composeAttentionSummary(attentionIndicator, t)
-  const overviewLabel =
-    attentionSummary !== '' ? `${t('shell.overview.title')} · ${attentionSummary}` : t('shell.overview.title')
 
   const railQuickEntries = useMemo(
     () =>
@@ -532,31 +535,6 @@ export function Sidebar({
                 onClick={() => setActiveModal({ kind: 'command-palette' })}
               />
             </Tooltip>
-            {space === 'conversations' && (
-              <Tooltip content={overviewLabel} side="bottom">
-                <Button
-                  variant="default"
-                  size="sm"
-                  className={`btn-icon-sm sidebar-overview-open-btn${overviewPresence.active ? ' is-active' : overviewPresence.splitSecondary ? ' is-split' : ''}${overviewPresence.focused ? ' nav-item-focused' : ''}`}
-                  icon="activity"
-                  aria-label={overviewLabel}
-                  aria-current={overviewPresence.active ? 'page' : undefined}
-                  onClick={() => {
-                    openTarget({ kind: 'overview' })
-                    onClose?.()
-                  }}
-                >
-                  {attentionIndicator.totalCount > 0 && attentionIndicator.tone !== null ? (
-                    <span
-                      className="overview-count-badge sidebar-overview-entry-badge"
-                      data-tone={attentionIndicator.tone}
-                    >
-                      {sidebarBadgeCountLabel(attentionIndicator.totalCount)}
-                    </span>
-                  ) : null}
-                </Button>
-              </Tooltip>
-            )}
             <Tooltip content={collapseWithShortcut} side="bottom">
               <IconButton
                 variant="default"

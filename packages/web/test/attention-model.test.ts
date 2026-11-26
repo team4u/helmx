@@ -7,8 +7,9 @@
  *   collectViewedConversationIds、composeHonestTreeSummary / composeAttentionSummary；
  * - 命令面板态势优先排序：selectRecentConversationsForPalette 可选 background
  *   索引（需处理 > 运行中 > 未读完成 > 其余按 updatedAt 倒序）；
- * - Sidebar 渲染与交互：会话总览入口挂在对话列表顶部，同源全局计数徽标不随
- *   切换当前活跃会话而跳变、全安静时零徽标、点击直达 #/overview；
+ * - Sidebar 渲染与交互：顶栏无常驻会话总览按钮，Activity Rail 对话空间图标在跨空间浏览或桌面折叠时
+ *   展示无数字染色圆点（.attention-status-dot.rail-space-dot），aria-label/Tooltip 明细不随
+ *   切换当前活跃会话而跳变、全安静时零圆点、空间切换可恢复 #/overview 记忆；
  * - 挂载路径：useGlobalAttention 自洽发现并按需加载 workbench badge doc
  *   （移动端合着抽屉也不漏后台任务）；
  * - 命令面板渲染：会话行（最近 + 匹配）行首灯槽对齐展示 ConversationStatusDot。
@@ -428,45 +429,59 @@ function attentionScenarioStore(): HelmxExternalStore {
   })
 }
 
-test('Sidebar places the overview icon button in the conversations header with the same-source count badge (no top nav row)', { timeout: 60_000 }, () => {
-  const html = renderSidebar(attentionScenarioStore())
-  assert.ok(!html.includes('sidebar-conv-primary-nav'), 'the legacy top overview nav row block is gone')
-  const headerIdx = html.indexOf('sidebar-header')
-  const scrollIdx = html.indexOf('sidebar-scroll')
-  const btnIdx = html.indexOf('sidebar-overview-open-btn')
-  assert.ok(headerIdx > 0 && btnIdx > headerIdx && btnIdx < scrollIdx, 'the overview button lives in the sidebar header before the scroll list')
-  const btnEnd = html.indexOf('</button>', btnIdx)
-  const btnHtml = html.slice(btnIdx, btnEnd < 0 ? undefined : btnEnd)
-  assert.ok(btnHtml.includes('sidebar-overview-entry-badge'), 'the same-source count badge rides the header overview button when a tree has a signal')
-  assert.ok(btnHtml.includes('data-tone="error"'), 'the badge states the honest top tone (error leads the scenario)')
-  assert.ok(btnHtml.includes('>2<'), 'the badge states the honest signal-tree count (error tree + working tree)')
+test('Sidebar omits the topbar overview button and renders the numberless attention status dot on the conversations rail icon (other space or collapsed)', { timeout: 60_000 }, () => {
+  const expandedConvHtml = renderSidebar(attentionScenarioStore())
+  assert.ok(!expandedConvHtml.includes('sidebar-conv-primary-nav'), 'the legacy top overview nav row block is gone')
+  assert.ok(!expandedConvHtml.includes('sidebar-overview-open-btn'), 'the topbar overview button is removed')
+  assert.ok(!expandedConvHtml.includes('overview-count-badge'), 'numeric overview count badge is removed')
+  assert.ok(!expandedConvHtml.includes('rail-space-dot'), 'expanded conversations space omits duplicate rail dot')
 
-  // Switching primaryTarget onto the running root (#2) keeps the sidebar overview count steady at 2.
-  const viewingRunningStore = attentionScenarioStore()
-  viewingRunningStore.openTarget({ kind: 'conversation', conversationId: 2 })
-  const viewingRunningHtml = renderSidebar(viewingRunningStore)
-  const runningBtnIdx = viewingRunningHtml.indexOf('sidebar-overview-open-btn')
-  const runningBtnEnd = viewingRunningHtml.indexOf('</button>', runningBtnIdx)
-  const runningBtnHtml = viewingRunningHtml.slice(runningBtnIdx, runningBtnEnd < 0 ? undefined : runningBtnEnd)
-  assert.ok(runningBtnHtml.includes('>2<'), 'viewing an active conversation keeps the sidebar overview badge count unchanged')
+  // Viewing another space (settings): conversations rail icon surfaces the numberless error dot + summary aria-label
+  const inSettingsStore = attentionScenarioStore()
+  inSettingsStore.openSpace('settings')
+  const inSettingsHtml = renderSidebar(inSettingsStore)
+  assert.ok(
+    inSettingsHtml.includes('class="attention-status-dot rail-space-dot" data-tone="error" aria-hidden="true"></span>'),
+    'conversations rail button renders the numberless status dot with top tone (error) in another space',
+  )
+  assert.ok(
+    inSettingsHtml.includes('aria-label="Conversations space · 1 need attention · 1 running"'),
+    'conversations rail button aria-label carries the honest bucket summary',
+  )
 
-  const quietHtml = renderSidebar(
+  // Collapsed desktop sidebar while viewing active running root (#2): collapsed-only dot & summary stay invariant
+  const viewingRunningCollapsed = attentionScenarioStore()
+  viewingRunningCollapsed.openTarget({ kind: 'conversation', conversationId: 2 })
+  viewingRunningCollapsed.actions.setSidebarCollapsed(true)
+  const collapsedHtml = renderSidebar(viewingRunningCollapsed)
+  assert.ok(
+    collapsedHtml.includes('class="attention-status-dot rail-space-dot rail-space-dot-collapsed-only" data-tone="error" aria-hidden="true"></span>'),
+    'collapsed conversations rail button renders the collapsed-only numberless status dot',
+  )
+  assert.ok(
+    collapsedHtml.includes('aria-label="Conversations space · 1 need attention · 1 running"'),
+    'viewing an active conversation keeps the rail attention summary unchanged',
+  )
+
+  const quietSettingsHtml = renderSidebar(
     sidebarStore({
       conversations: [
         conv({ id: 50, title: '当前查看', profileId: 'coder', status: 'idle' }),
         conv({ id: 51, title: '安静', profileId: 'coder', status: 'done', unread: false }),
       ],
-      primaryTarget: { kind: 'conversation', conversationId: 50 },
+      primaryTarget: { kind: 'profiles' },
     }),
   )
-  assert.ok(quietHtml.includes('sidebar-overview-open-btn'), 'the overview button renders even when all trees are quiet')
-  assert.ok(!quietHtml.includes('sidebar-overview-entry-badge'), 'no count badge without any signal (honest quiet)')
-  assert.ok(!html.includes('sidebar-attention-group'), 'the legacy flat attention group is gone for good')
-  assert.ok(!html.includes('attention-row'), 'no legacy attention row residue')
+  assert.ok(!quietSettingsHtml.includes('sidebar-overview-open-btn'), 'no header overview button')
+  assert.ok(!quietSettingsHtml.includes('attention-status-dot'), 'no status dot without any signal (honest quiet)')
+  assert.ok(!expandedConvHtml.includes('sidebar-attention-group'), 'the legacy flat attention group is gone for good')
+  assert.ok(!expandedConvHtml.includes('attention-row'), 'no legacy attention row residue')
 })
 
-test('interaction: clicking the header overview button opens #/overview and lights both the button and conversations rail icon active', { timeout: 60_000 }, async () => {
+test('interaction: conversations rail icon shows numberless dot outside conversations space and restores remembered #/overview on click', { timeout: 60_000 }, async () => {
   const store = attentionScenarioStore()
+  store.openTarget({ kind: 'overview' })
+  store.openSpace('settings')
   const container = document.createElement('div')
   document.body.appendChild(container)
   let root: Root | undefined
@@ -475,19 +490,17 @@ test('interaction: clicking the header overview button opens #/overview and ligh
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
-    const btn = container.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')
-    assert.ok(btn !== null, 'the header overview button renders')
-    assert.ok(btn.classList.contains('is-active') === false, 'the button stays inert outside the overview stage')
-    assert.ok(btn.getAttribute('aria-current') === null, 'no aria-current outside the overview stage')
+    assert.ok(container.querySelector('.sidebar-overview-open-btn') === null)
+    const convSpaceBtn = container.querySelector<HTMLButtonElement>('.rail-space-btn')
+    assert.ok(convSpaceBtn !== null)
+    const dot = convSpaceBtn.querySelector<HTMLElement>('.attention-status-dot.rail-space-dot[data-tone="error"]')
+    assert.ok(dot !== null && dot.textContent === '' && dot.getAttribute('aria-hidden') === 'true')
     await act(async () => {
-      btn.click()
+      convSpaceBtn.click()
     })
-    const primary = store.getPrimaryTarget()
-    assert.ok(primary.kind === 'overview', 'clicking navigates to the overview stage')
-    const btnAfter = container.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')
-    assert.ok(btnAfter !== null)
-    assert.ok(btnAfter.classList.contains('is-active') === true, 'the button lights up while the overview is the primary stage')
-    assert.ok(btnAfter.getAttribute('aria-current') === 'page', 'the active button carries aria-current="page"')
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'overview' }, 'clicking conversations rail restores remembered #/overview')
+    assert.ok(convSpaceBtn.classList.contains('rail-btn-active'), 'conversations rail lights active on #/overview')
+    assert.ok(convSpaceBtn.querySelector('.rail-space-dot') === null, 'dot clears once back in expanded conversations space')
   } finally {
     await act(async () => {
       root?.unmount()
@@ -710,7 +723,7 @@ function stubMobileMatchMedia(): () => void {
   }
 }
 
-test('the overview entry mounts only in the conversations space (mobile drawer included)', { timeout: 60_000 }, () => {
+test('conversations rail status dot mounts in non-conversations spaces (mobile drawer included) and stays absent when expanded in conversations space', { timeout: 60_000 }, () => {
   const htmlInViewsSpace = (mobile: boolean): string => {
     const restore = mobile ? stubMobileMatchMedia() : undefined
     try {
@@ -727,8 +740,14 @@ test('the overview entry mounts only in the conversations space (mobile drawer i
       restore?.()
     }
   }
-  assert.ok(!htmlInViewsSpace(true).includes('sidebar-overview-open-btn'), 'mobile: the views space keeps its own list without the overview button')
-  assert.ok(!htmlInViewsSpace(false).includes('sidebar-overview-open-btn'), 'desktop: the views space stays clean')
+  for (const mobile of [true, false]) {
+    const viewsHtml = htmlInViewsSpace(mobile)
+    assert.ok(!viewsHtml.includes('sidebar-overview-open-btn'), `mobile=${mobile}: views space renders no overview button`)
+    assert.ok(
+      viewsHtml.includes('class="attention-status-dot rail-space-dot" data-tone="running" aria-hidden="true"></span>'),
+      `mobile=${mobile}: views space surfaces the numberless running dot on the conversations rail icon`,
+    )
+  }
   const restoreMobile = stubMobileMatchMedia()
   try {
     const html = renderSidebar(
@@ -737,7 +756,8 @@ test('the overview entry mounts only in the conversations space (mobile drawer i
         primaryTarget: { kind: 'conversation', conversationId: 2 },
       }),
     )
-    assert.ok(html.includes('sidebar-overview-open-btn'), 'the conversations space (mobile drawer included) shows the header overview button')
+    assert.ok(!html.includes('sidebar-overview-open-btn'), 'conversations space omits the topbar overview button on mobile too')
+    assert.ok(!html.includes('rail-space-dot'), 'expanded conversations space omits duplicate rail dot')
   } finally {
     restoreMobile()
   }

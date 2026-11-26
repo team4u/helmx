@@ -136,17 +136,12 @@ export const composerMessages = {
   'composer.sendControls.steer': { en: 'Steer', 'zh-CN': '插话引导' },
   'composer.sendControls.steerShort': { en: 'Steer', 'zh-CN': '插话' },
   'composer.sendControls.queueSend': { en: 'Queue send', 'zh-CN': '排队发送' },
-  'composer.sendControls.queue': { en: 'Queue', 'zh-CN': '排队' },
   'composer.sendControls.steerHint': { en: 'Inject at the next step boundary', 'zh-CN': '下一个步骤边界注入' },
   'composer.sendControls.steerHintEnter': { en: 'Inject at the next step boundary (Enter)', 'zh-CN': '下一个步骤边界注入（Enter）' },
   'composer.sendControls.queueHint': { en: 'Handle after the current turn ends', 'zh-CN': '当前回合结束后处理' },
   'composer.sendControls.queueHintKbd': { en: 'Handle after the current turn ends (⌘/Ctrl+Enter)', 'zh-CN': '当前回合结束后处理（⌘/Ctrl+Enter）' },
   'composer.sendControls.chooseStrategy': { en: 'Choose a send strategy', 'zh-CN': '选择发送策略' },
   'composer.sendControls.chooseStrategyTitle': { en: 'Choose a send strategy (steer / queue)', 'zh-CN': '选择发送策略（插话 / 排队）' },
-  'composer.sendControls.stopMenuTitle': { en: 'Stop execution', 'zh-CN': '停止执行' },
-  'composer.sendControls.abortNow': { en: 'Abort the current turn immediately', 'zh-CN': '立即中止当前回合' },
-  'composer.sendControls.updateLabel': { en: 'Update', 'zh-CN': '更新' },
-  'composer.sendControls.insertLabel': { en: 'Insert', 'zh-CN': '插话' },
 
   // ---- Model picker (shared by conversation & standby) ----
   'composer.model.buttonAria': { en: 'Model and thinking level: {model}{level}', 'zh-CN': '模型与思考档位：{model}{level}' },

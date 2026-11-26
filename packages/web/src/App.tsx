@@ -50,9 +50,11 @@ import { useVersionWatcher, type VersionDeferReason } from './shell/use-version-
 import { versionDeferHint } from './shell/version-watch-model.js'
 import { useGlobalAttention } from './shell/use-attention-indicator.js'
 import { composeAttentionSummary } from './shell/attention-model.js'
-import { extractRailQuickEntries, sidebarBadgeCountLabel } from './shell/sidebar-model.js'
+import { extractRailQuickEntries } from './shell/sidebar-model.js'
 import { useSidebarBadges } from './shell/use-sidebar-badges.js'
 import { MobileQuickNav } from './shell/MobileQuickNav.js'
+import { HubUpdateCard } from './shell/HubUpdateCard.js'
+import { HubUpgradedNotice } from './shell/HubUpgradedNotice.js'
 import { useMobileDrawerSwipe } from './shell/use-mobile-drawer-swipe.js'
 import { useIsMobileViewport, useMaxWidthMediaQuery } from './lib/use-media-query.js'
 import { loadSplitRatio, saveSplitRatio } from './shell/split-ratio-model.js'
@@ -414,9 +416,9 @@ function HelmxShellInner({
   })
   const [landingSettled, setLandingSettled] = useState(!bootLanding.needsHomeLanding)
 
-  // 全局并发态势（与侧栏总览入口及 #/overview 三活跃桶 1:1 同源的 indicator）。
+  // 全局并发态势（与 Activity Rail 对话空间圆点及 #/overview 三活跃桶 1:1 同源的 indicator）。
   // 抽屉关闭时也保持计算——badge doc 的发现与按需加载内聚在 Hook；移动端
-  // 快捷导航簇与侧栏总览入口共用同一 indicator。
+  // 汉堡按钮与 Activity Rail 对话空间按钮共用同一 indicator。
   const attention = useGlobalAttention()
   const groupedUi = useGroupedUi()
   const conversations = useConversations()
@@ -581,7 +583,7 @@ function HelmxShellInner({
         : undefined
 
   // 移动端插件快捷入口仅在「不在该视图上」时渲染（主屏已停在入口目标时就地隐藏）；
-  // 顶栏左让位宽度（mq-quick-on）跟随真实可见性，会话态势角标已直接挂在汉堡按钮上。
+  // 顶栏左让位宽度（mq-quick-on）跟随真实可见性，会话态势无数字状态圆点直接挂在汉堡按钮上。
   const mobileQuickEntryVisible =
     firstQuickEntry !== null && !isSameResolvedTarget(primaryTarget, firstQuickEntry.target)
   const attentionSummary = composeAttentionSummary(attention.indicator, t)
@@ -611,12 +613,10 @@ function HelmxShellInner({
           onClick={() => setSidebarOpen((open) => !open)}
         >
           {attention.indicator.totalCount > 0 && attention.indicator.tone !== null ? (
-            <span className="overview-count-badge mobile-nav-badge" data-tone={attention.indicator.tone}>
-              {sidebarBadgeCountLabel(attention.indicator.totalCount)}
-            </span>
+            <span className="attention-status-dot mobile-nav-dot" data-tone={attention.indicator.tone} aria-hidden="true" />
           ) : null}
         </Button>
-        {/* 移动端首个 quickEntry 插件视图一键直达（会话总览与态势计数已合并进
+        {/* 移动端首个 quickEntry 插件视图一键直达（会话态势状态圆点已合并进
             左上角汉堡按钮，省回顶栏宽度）；无插件 quickEntry 或已停在该视图时返回 null。 */}
         <MobileQuickNav quickEntry={firstQuickEntry} quickEntryBadge={quickEntryBadge} />
         {sidebarOpen && (
@@ -646,6 +646,8 @@ function HelmxShellInner({
             </div>
           )}
           <VersionBannerSlot />
+          <HubUpgradedNotice />
+          <HubUpdateCard />
           <div
             ref={panesRef}
             className={`helmx-panes${splitTarget !== null ? ' has-split' : ''}${splitTarget !== null && resizingSplit ? ' is-resizing' : ''}`}

@@ -1,5 +1,5 @@
 /**
- * 会话总览（#/overview 并发主入口）测试：
+ * 会话总览（#/overview 一级看板与治理大盘）测试：
  * - 纯函数契约：buildOverviewCards（含安静树、桶序 + createdAt 倒序、后代
  *   芯片信号优先与截断计数、暴露边界继承态势口径、诚实摘要复用）、
  *   filterOverviewCards（桶/角色/节点 AND 组合、quiet 仅在 all、本机节点归一）、
@@ -7,7 +7,7 @@
  * - URL：#/overview 解析/序列化往返、hashHasPrimaryTarget、对话空间归属；
  * - 交互：卡片网格渲染与筛选切换、卡面/后代芯片直进主屏会话（与会话列表
  *   点击一致）、抽屉速览与右分屏收进卡片 `...` 菜单（托管卡也保留）、顶栏
- *   新话题（单候选直进 / 多候选下拉选角）、Rail 总览按钮一键直达与 tone 灯点。
+ *   新话题（单候选直进 / 多候选下拉选角）、侧栏底部总览/已归档入口与 Rail 无数字态势圆点。
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
@@ -913,11 +913,12 @@ test('ConversationOverview card meta slot: contributions render with tree props;
   }
 })
 
-test('Sidebar overview entry: top primary nav row opens #/overview with the same-source count badge and belongs to conversations space', { timeout: 60_000 }, async () => {
+test('Sidebar overview & rail dot contract: no topbar overview button, archived footer entry opens #/overview?sp.bucket=archived, and rail icon shows numberless status dot across spaces or when collapsed', { timeout: 60_000 }, async () => {
   const store = overviewStore({
     conversations: [
       conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
       conv({ id: 50, title: '当前查看', profileId: 'coder', status: 'idle', createdAt: 7000, updatedAt: 7000 }),
+      conv({ id: 60, title: '已归档历史', profileId: 'assistant', tags: [ARCHIVED_TAG], createdAt: 6000, updatedAt: 6000 }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
   })
@@ -929,55 +930,64 @@ test('Sidebar overview entry: top primary nav row opens #/overview with the same
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
-    // Rail 总览按钮与旧顶置整行均已移除，唯一收敛到侧栏顶栏总览按钮
     assert.ok(container.querySelector('.rail-overview-btn') === null, 'the rail overview button is gone for good')
     assert.ok(container.querySelector('.sidebar-overview-entry') === null, 'the legacy top overview nav row is gone')
-    const overviewBtn = container.querySelector<HTMLButtonElement>('.sidebar-header .sidebar-overview-open-btn')
-    assert.ok(overviewBtn !== null, 'the header overview button renders in conversations space')
-    assert.ok(
-      overviewBtn.getAttribute('aria-label')?.includes('Conversation overview'),
-      'the button label states the overview',
-    )
-    const badge = overviewBtn.querySelector<HTMLElement>('.sidebar-overview-entry-badge[data-tone="running"]')
-    assert.ok(badge !== null, 'the same-source attention count badge rides the header overview button')
-    assert.ok(badge.textContent === '1', 'the badge states the honest signal-tree count (1 working tree)')
-    await act(async () => {
-      overviewBtn.click()
-    })
-    const primary = store.getPrimaryTarget()
-    assert.ok(primary.kind === 'overview', 'clicking navigates to the overview stage')
+    assert.ok(container.querySelector('.sidebar-overview-open-btn') === null, 'topbar overview button is removed')
+    assert.ok(container.querySelector('.overview-count-badge') === null, 'numeric count badge is removed')
 
-    // 主屏停总览时，对话空间 Rail 图标保持激活高亮（与 views / settings 同构），展开态不重复挂角标
+    const archivedBtn = container.querySelector<HTMLButtonElement>('.sidebar-view-archived-btn')
+    assert.ok(archivedBtn !== null, 'archived conversations footer button renders when archived human roots exist')
+    assert.ok(archivedBtn.textContent?.includes('Archived conversations (1)'))
+    await act(async () => {
+      archivedBtn.click()
+    })
+    assert.deepEqual(
+      store.getPrimaryTarget(),
+      { kind: 'overview', params: { bucket: 'archived' } },
+      'clicking archived footer entry opens #/overview?sp.bucket=archived',
+    )
+
+    // 主屏停总览时，对话空间 Rail 图标保持激活高亮（与 views / settings 同构），展开态不重复挂圆点
     const convSpaceBtn = container.querySelector<HTMLButtonElement>('button[aria-label="Conversations space"]')
     assert.ok(convSpaceBtn?.classList.contains('rail-btn-active'), 'conversations rail button stays active on #/overview')
-    assert.ok(convSpaceBtn?.querySelector('.rail-space-badge') === null, 'expanded conversations rail omits duplicate badge')
+    assert.ok(convSpaceBtn?.querySelector('.rail-space-dot') === null, 'expanded conversations rail omits duplicate dot')
 
-    // 切去设置空间时，对话空间 Rail 图标浮现同源态势计数角标（消除非对话空间盲区）
+    // 切去设置空间时，对话空间 Rail 图标浮现无数字态势染色圆点，Tooltip/aria-label 保留明细
     await act(async () => {
       store.openSpace('settings')
     })
     assert.equal(store.getPrimaryTarget().kind, 'profiles')
     const convRailInSettings = container.querySelector<HTMLButtonElement>('.rail-space-btn')
-    const railBadge = convRailInSettings?.querySelector<HTMLElement>('.rail-space-badge[data-tone="running"]') ?? null
-    assert.ok(railBadge !== null && railBadge.textContent === '1', 'conversations rail icon shows shared attention count when viewing another space')
+    const railDot = convRailInSettings?.querySelector<HTMLElement>('.attention-status-dot.rail-space-dot[data-tone="running"]') ?? null
+    assert.ok(
+      railDot !== null && railDot.textContent === '' && railDot.getAttribute('aria-hidden') === 'true',
+      'conversations rail icon shows numberless status dot when viewing another space',
+    )
     assert.ok(
       convRailInSettings?.getAttribute('aria-label')?.includes('1 running') === true,
-      'attention summary rides the conversations rail aria-label when badged',
+      'attention summary rides the conversations rail aria-label when dotted',
     )
 
-    // 再点回对话空间：从空间记忆原样恢复 #/overview，展开态下 Rail 角标随之收起
+    // 再点回对话空间：从空间记忆原样恢复 #/overview?sp.bucket=archived，展开态下 Rail 圆点随之收起
     await act(async () => {
       store.openSpace('conversations')
     })
-    assert.equal(store.getPrimaryTarget().kind, 'overview', 'returning to conversations restores remembered #/overview')
-    assert.ok(container.querySelector('.rail-space-badge') === null)
+    assert.deepEqual(
+      store.getPrimaryTarget(),
+      { kind: 'overview', params: { bucket: 'archived' } },
+      'returning to conversations restores remembered #/overview target',
+    )
+    assert.ok(container.querySelector('.rail-space-dot') === null)
 
-    // 桌面侧栏折叠态下停在对话空间：渲染仅折叠可见的 Rail 角标
+    // 桌面侧栏折叠态下停在对话空间：渲染仅折叠可见的无数字 Rail 圆点
     await act(async () => {
       store.actions.setSidebarCollapsed(true)
     })
-    const collapsedBadge = container.querySelector<HTMLElement>('.rail-space-badge-collapsed-only[data-tone="running"]')
-    assert.ok(collapsedBadge !== null && collapsedBadge.textContent === '1', 'collapsed desktop sidebar surfaces the conversations rail badge')
+    const collapsedDot = container.querySelector<HTMLElement>('.attention-status-dot.rail-space-dot.rail-space-dot-collapsed-only[data-tone="running"]')
+    assert.ok(
+      collapsedDot !== null && collapsedDot.textContent === '' && collapsedDot.getAttribute('aria-hidden') === 'true',
+      'collapsed desktop sidebar surfaces the numberless conversations rail dot',
+    )
   } finally {
     await act(async () => {
       root?.unmount()
@@ -985,15 +995,16 @@ test('Sidebar overview entry: top primary nav row opens #/overview with the same
     container.remove()
   }
 
-  // 无信号时徽标不渲染（诚实：无信号不装忙）
+  // 无信号且无归档时圆点与归档按钮均不渲染
   const quiet = overviewStore({
     conversations: [conv({ id: 50, title: '安静', profileId: 'coder' })],
-    primaryTarget: { kind: 'conversation', conversationId: 50 },
+    primaryTarget: { kind: 'profiles' },
   })
   const html = renderToString(e(HelmxExternalStoreContext.Provider, { value: quiet }, e(Sidebar)))
   assert.ok(!html.includes('rail-overview-btn'), 'the rail overview button never renders')
-  assert.ok(html.includes('sidebar-overview-open-btn'), 'the header overview button always renders in conversations space')
-  assert.ok(!html.includes('sidebar-overview-entry-badge'), 'no count badge without any signal')
+  assert.ok(!html.includes('sidebar-overview-open-btn'), 'no header overview button')
+  assert.ok(!html.includes('attention-status-dot'), 'no status dot without any signal')
+  assert.ok(!html.includes('rail-space-dot'), 'no rail space dot without any signal')
 })
 
 // ---------------------------------------------------------------------------

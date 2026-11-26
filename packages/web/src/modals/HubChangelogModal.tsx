@@ -1,7 +1,7 @@
 /**
  * Hub 变更日志弹窗（已安装版本 changelog，数据来自随包分发的 CHANGELOG.md）：
  * - 侧栏底部「版本与更新」入口打开全量视图；
- * - 总览升级提示条带 `from` 打开「本次更新」切片（跨过的版本，新版本在上）；
+ * - 主舞台升级提示条带 `from` 打开「本次更新」切片（跨过的版本，新版本在上）；
  * - 未随附 changelog（老 payload / 特殊部署）如实显示空态，不装假数据。
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'

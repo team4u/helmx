@@ -1,6 +1,9 @@
 /**
- * 会话总览（并发主入口，对话空间主舞台 `#/overview`，冷启动默认落地）：
+ * 会话总览（对话空间一级全量看板与治理大盘 `#/overview`）：
  *
+ * - 入口定位：通过侧栏工作集底部（「查看全部 N 个会话」「已归档会话 (N)」及搜索态「在会话总览中查看匹配」）、
+ *   全局命令面板（Mod+K）或 `#/overview` 深链按需进入；冷启动空 Hash 默认直进对话空间待命页，Hub 升级卡与
+ *   被动升级提示条挂载于主舞台壳层而非本页；
  * - 复用态势模型的唯一树聚合口径：一张卡片 = 一棵根会话树（含安静树），
  *   卡面只呈现真实事实（根会话状态 + 树级后台在途的灯位、lastError /
  *   doing / 后台摘要 / 后代运行计数），绝不编造进度；
@@ -15,7 +18,7 @@
  *   也至少保留这两个只读视图动作；
  * - 顶栏「新话题」：单候选角色直进待命页，多候选下拉选角（最近活跃根会话
  *   所属角色置顶，远端节点 @后缀标注）；首次发送才落库，不预创建会话；
- * - 筛选：全部 / 需处理 / 进行中 / 未读（SegmentedControl）+ 角色 / 节点 /
+ * - 筛选：全部 / 需处理 / 进行中 / 未读 / 已归档（SegmentedControl）+ 角色 / 节点 /
  *   来源（SDK Select）+ 标题/摘要搜索，全部状态经唯一 URL Hash 导航模型
  *   持久化（overview 目标的 sp. / ssp. 路由参数，仅参数变化 replace，
  *   刷新/前进/后退/深链可恢复）；来源 = 常规对话 vs 托管会话，托管判定与
@@ -32,8 +35,6 @@
  *   大堂，不是新的通知收件箱；
  * - 移动端主舞台自适应：筛选折行、卡片网格单列化（responsive 断点）。
  */
-import { HubUpdateCard } from './HubUpdateCard.js'
-import { HubUpgradedNotice } from './HubUpgradedNotice.js'
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
@@ -477,12 +478,6 @@ const OverviewCardView = memo(function OverviewCardView({
 })
 
 export function ConversationOverview({ isSplit = false, onCloseSplit }: ConversationOverviewProps): ReactNode {
-  const hubUpdateCard = (
-    <>
-      <HubUpgradedNotice />
-      <HubUpdateCard />
-    </>
-  )
   const { locale, t } = useWebLocale()
   const { openTarget, openConversationDrawer, setScreenParams, pushNotice } = useStoreActions()
   const { background, viewedConversationIds } = useGlobalAttention()
@@ -904,7 +899,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           )}
         </div>
       </div>
-      {hubUpdateCard}
 
       <div className="primary-center-toolbar overview-toolbar">
         <SegmentedControl<BucketFilterValue>

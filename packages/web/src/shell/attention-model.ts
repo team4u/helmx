@@ -15,8 +15,8 @@
  *
  * 诚实性：摘要只呈现真实 lastError / doing / backgroundSummary / 后代运行
  * 计数，绝不编造进度百分比；tone 只是既有五态事实的聚合灯色。逐树明细的
- * 展示形态是会话总览（overview-model 消费 aggregateAttentionTrees），侧栏
- * 总览入口与移动端快捷总览按钮消费同源全局计数徽标与灯色。
+ * 展示形态是侧栏工作集与会话总览（overview-model 消费 aggregateAttentionTrees），
+ * Activity Rail 对话空间图标与移动端汉堡按钮消费同源无数字态势状态圆点及可读摘要。
  */
 
 import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
@@ -52,7 +52,7 @@ function isMachineActive(
 }
 
 /**
- * 全局态势微标（移动端快捷总览按钮与侧栏总览入口消费）：
+ * 全局态势指示（移动端汉堡按钮与 Activity Rail 对话空间圆点消费）：
  * 与会话总览 `#/overview` 三活跃桶 1:1 同源对账——`needs_attention` 与
  * `running` 始终计全量活跃根树，仅 `unread_done` 对正在查看的根会话做乐观已读。
  */
@@ -198,7 +198,7 @@ export function aggregateAttentionTrees(input: {
 }
 
 /**
- * 构建全局态势微标（移动端总览按钮与侧栏总览入口的同源 indicator）：
+ * 构建全局态势指示（移动端汉堡按钮与 Activity Rail 对话空间按钮的同源 indicator）：
  * 直接汇总 aggregateAttentionTrees 的三桶结果与最高优先级灯色
  * （error > blocked > running > done），与 `#/overview` 桶计数 1:1 同源对账。
  */
@@ -311,7 +311,7 @@ const TONE_RANK: Record<Exclude<GlobalAttentionTone, null>, number> = {
 const EMPTY_VIEWED: ReadonlySet<number> = new Set()
 
 /**
- * 态势可读摘要（移动端总览按钮与侧栏总览入口的 aria-label / title 附加段）：
+ * 态势可读摘要（移动端汉堡按钮与 Activity Rail 对话空间按钮的 aria-label / Tooltip 附加段）：
  * 只列出非零桶，以「 · 」连接；无信号返回空串（调用方据此不加后缀）。
  */
 export function composeAttentionSummary(

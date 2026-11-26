@@ -2,10 +2,10 @@
  * 全局并发态势 Hook：把 attention-model 纯函数接进 store 现场。
  *
  * 单一职责：从 store 各切片（会话 / 插件 / Profile / workbench 面板 / 插件
- * doc / 当前导航目标）推导后台在途索引与态势微标，并自洽发现、按需加载
+ * doc / 当前导航目标）推导后台在途索引与态势指示，并自洽发现、按需加载
  * workbench badge doc——不依赖侧栏抽屉是否展开（移动端合着抽屉时后台
  * 任务也不失明；ensurePluginDoc 幂等，多处挂载不重复请求）。
- * 侧栏总览入口、移动端快捷总览按钮与会话总览页共用本 Hook 的同源输出。
+ * Activity Rail 对话空间圆点、移动端汉堡按钮圆点、侧栏工作集与会话总览页共用本 Hook 的同源输出。
  */
 import { useEffect, useMemo } from 'react'
 import {

@@ -863,12 +863,12 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
   assert.equal(selectedIds.size, 0)
 })
 
-test('SSR 渲染回归：Sidebar 渲染顶栏总览/分组栏新话题/工作集与极简无 Emoji 验证', { timeout: 60_000 }, () => {
+test('SSR 渲染回归：Sidebar 顶栏极简收敛、分组栏新话题/工作集与无 Emoji 验证', { timeout: 60_000 }, () => {
   const store = makeTestStore()
   const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
-  // 顶栏总览与分组栏新话题/批量管理入口，工作集过滤按钮；默认不展开批量操作栏，双模式分段器已移除
-  assert.ok(html.includes('sidebar-overview-open-btn'), '应渲染顶栏会话总览按钮')
+  // 顶栏不再设常驻总览按钮；分组栏保留新话题/批量管理/过滤入口；默认不展开批量操作栏
+  assert.ok(!html.includes('sidebar-overview-open-btn'), '顶栏不再渲染常驻会话总览按钮')
   assert.ok(!html.includes('sidebar-conv-primary-nav'), '旧顶置一级导航区已收敛')
   assert.ok(html.includes('sidebar-new-topic-btn'), '应渲染新话题入口')
   assert.ok(html.includes('aria-label="Filter conversations"'), '应渲染工作集过滤按钮')

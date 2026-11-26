@@ -29,7 +29,6 @@ import type { StoreRequestManager } from '../request-manager.js'
 import {
   applyScreenParamsPatch,
   defaultSpaceTarget,
-  hasVisibleConversationRoots,
   partitionScreenParamsPatch,
   resolveSpaceSwitch,
   type SpaceTargetInput,
@@ -379,10 +378,6 @@ export function createStoreNavActions(
   const performHomeLanding = (initialLocation: WorkspaceLocationState): void => {
     if (!isSameLocationState(host.getLocationState(), initialLocation)) return
     const input = buildSpaceTargetInput()
-    if (hasVisibleConversationRoots(input)) {
-      openTarget({ kind: 'overview' }, { history: 'replace' })
-      return
-    }
     const home = defaultSpaceTarget('conversations', input)
     if (home === null) return
     openTarget(home, { history: 'replace' })

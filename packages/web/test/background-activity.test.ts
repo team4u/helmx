@@ -934,7 +934,7 @@ test('ViewNavGroup and SettingsNavGroup split double-open: main/split highlights
 // Locale wiring: shell chrome copy follows the active store locale
 // ---------------------------------------------------------------------------
 
-test('zh-CN sidebar render: conversations working set shows Chinese chrome copy (no archived sidebar group)', { timeout: 60_000 }, () => {
+test('zh-CN sidebar render: conversations working set shows Chinese chrome copy and archived footer entry (no archived rows in working set)', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     locale: 'zh-CN',
     conversations: [
@@ -943,7 +943,8 @@ test('zh-CN sidebar render: conversations working set shows Chinese chrome copy 
     ],
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('aria-label="会话总览"'), 'header overview button renders zh-CN copy')
+  assert.ok(!html.includes('sidebar-overview-open-btn'), 'header overview button is omitted')
+  assert.ok(html.includes('已归档会话 (1)'), 'archived footer entry renders zh-CN copy')
   assert.ok(html.includes('按状态'), 'working set group-by switcher renders zh-CN copy')
   assert.ok(html.includes('筛选会话'), 'filter tooltip/aria-label renders zh-CN')
   assert.ok(!html.includes('已归档历史'), 'archived conversations are governed in #/overview, not duplicated in the sidebar')

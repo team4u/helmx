@@ -1,5 +1,5 @@
 /**
- * Hub 更新卡片（总览页顶部）：消费 `/api/hub-update/*` 产品路由。
+ * Hub 更新卡片（主舞台壳层顶部）：消费 `/api/hub-update/*` 产品路由。
  *
  * - 仅在存在就绪更新（readyVersion）或处于切换状态机（switching / switched / error）时渲染，
  *   平时零占地（unmanaged 的 docker/dev Hub 返回 active:false，同样不渲染）；

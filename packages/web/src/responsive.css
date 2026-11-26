@@ -56,10 +56,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .composer-toolbar .composer-picker-root { max-width: 100%; }
   .composer-toolbar .composer-model-button { max-width: 100%; }
   .composer-status-row { margin-bottom: 0; }
-  .composer-toolbar .composer-queue-button { width: 32px; height: 32px; padding: 0; border-radius: 50%; }
-  .composer-split-send .composer-split-main { padding: 0 8px; }
-  .composer-split-trigger { width: 22px; }
-  .composer-action-label { display: none; }
   .dock-tray-action-label { display: none; }
 }
 @container (max-width: 450px) {
@@ -69,6 +65,11 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .trace-row-left { gap: 5px; }
   .dock-tray-bar-toggle { padding-left: 6px; }
   .dock-tray-elapsed { display: none; }
+}
+@container (max-width: 340px) {
+  .composer-split-send .composer-split-main { padding: 0 8px; }
+  .composer-split-trigger { width: 22px; }
+  .composer-action-label { display: none; }
 }
 @media (hover: none) {
   .msg-hover-bar { opacity: 0.85; }
@@ -170,12 +171,14 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .mobile-nav-toggle:active {
     background: var(--bg-hover);
   }
-  .mobile-nav-toggle .overview-count-badge {
-    top: 2px;
-    right: 2px;
+  .mobile-nav-toggle .mobile-nav-dot {
+    top: 6px;
+    right: 6px;
+    width: 7px;
+    height: 7px;
   }
   /* 移动端插件快捷入口（根挂载，紧随汉堡按钮）：仅承载首个 quickEntry 插件视图；
-     会话态势计数徽标已合入 .mobile-nav-toggle 汉堡按钮。主屏已停在该视图或抽屉
+     会话态势无数字状态圆点已合入 .mobile-nav-toggle 汉堡按钮。主屏已停在该视图或抽屉
      拉开时隐藏（抽屉内侧栏已有同源入口）。 */
   .mobile-quick-nav {
     display: flex;
@@ -205,7 +208,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
     background: var(--bg-hover);
   }
   /* quickEntry 插件徽标（sidebar.item 通用 badge 声明驱动）：计数徽标与
-     安静圆点专用类——总览按钮已改用 overview-count-badge（态势计数），
+     安静圆点专用类——全局会话态势已收敛为 .attention-status-dot 无数字圆点，
      本类只服务插件徽标；tone 词汇 = SidebarBadgeTone 五值。 */
   .mobile-quick-badge {
     position: absolute;
@@ -284,16 +287,24 @@ button, a, input, select, textarea { touch-action: manipulation; }
     padding-top: 8px;
   }
   /* 默认只为左上角固定汉堡按钮让位；仅当插件 quickEntry 真实可见（mq-quick-on）时
-     叠加让位宽度，无插件快捷入口时顶栏左让位收敛至 48px。 */
+     叠加让位宽度，无插件快捷入口时顶栏与壳层顶部卡片左让位收敛至 48px。 */
+  .version-banner,
   .helmx-panes > .helmx-pane > .pane-topbar,
   .helmx-primary-pane .helmx-pane > .pane-topbar,
   .primary-center-topbar {
     padding-left: max(48px, calc(env(safe-area-inset-left) + 44px));
   }
+  .helmx-main-stage > .helmx-card.hub-update-card {
+    margin-left: max(48px, calc(env(safe-area-inset-left) + 44px));
+  }
+  .helmx-shell.mq-quick-on .version-banner,
   .helmx-shell.mq-quick-on .helmx-panes > .helmx-pane > .pane-topbar,
   .helmx-shell.mq-quick-on .helmx-primary-pane .helmx-pane > .pane-topbar,
   .helmx-shell.mq-quick-on .primary-center-topbar {
     padding-left: max(88px, calc(env(safe-area-inset-left) + 84px));
+  }
+  .helmx-shell.mq-quick-on .helmx-main-stage > .helmx-card.hub-update-card {
+    margin-left: max(88px, calc(env(safe-area-inset-left) + 84px));
   }
   /* 移动端重连浮动胶囊避开左上角固定 .mobile-nav-toggle 并尊重顶部安全区 */
   .connection-banner {

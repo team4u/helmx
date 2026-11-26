@@ -26,32 +26,6 @@ export interface SpaceTargetInput {
   grouped: GroupedUiSpecs
 }
 
-/**
- * Whether at least one visible conversation root tree exists — the honest
- * "not a fresh system" verdict for the overview home landing. Exposure boundary
- * mirrors aggregateAttentionTrees: archived roots and roots whose Profile is
- * hidden by a disabled plugin are invisible everywhere (neither sidebar nor
- * overview); a root whose Profile record is missing (orphan) still counts as
- * visible, same as the sidebar's orphan-standing fallback.
- */
-export function hasVisibleConversationRoots(input: {
-  conversations: ReadonlyArray<ConversationSummary>
-  profiles: ReadonlyArray<Profile>
-  plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
-}): boolean {
-  const enabledPluginIds = collectEnabledPluginIds(input.plugins)
-  return input.conversations.some(
-    (conv) =>
-      conv.parentConversationId === undefined &&
-      (conv.ownedBy ?? 'human') === 'human' &&
-      !isConversationArchived(conv) &&
-      (() => {
-        const profile = input.profiles.find((p) => p.id === conv.profileId)
-        return profile === undefined || isProfileVisible(profile, enabledPluginIds)
-      })(),
-  )
-}
-
 /** Whether a space jump-back target is still available: conversations must be
  * in the list; agent standby requires the profile to still exist and its managing
  * plugin (if any) to be active; screens must still be contributed by an active
