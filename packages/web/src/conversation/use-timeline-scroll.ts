@@ -117,6 +117,7 @@ export function useTimelineScroll({
   const lastScrollTopRef = useRef(0)
   const prevFingerprintRef = useRef<{ conversationId: number; value: string } | null>(null)
   const lastHumanRef = useRef<{ conversationId: number; key: string | undefined } | null>(null)
+  const prevEntrySpanRef = useRef<{ conversationId: number; headId: string | undefined; tailId: string | undefined } | null>(null)
   const lastOutlineTickRef = useRef<number | null>(null)
   const lastActiveAnchorRef = useRef<OutlineAnchor | undefined>(undefined)
   /** Anchor wrappers (`[data-entry-id]`) in document order, refreshed whenever the anchor set changes. */
@@ -597,19 +598,7 @@ export function useTimelineScroll({
     if (stickToBottomRef.current) return
     const scroller = scrollRef.current
     if (scroller === null) return
-    const { anchor } = pending
-    const anchorEntryId = anchor.element.dataset.entryId
-    const resolvedAnchor =
-      anchor.element.isConnected && scroller.contains(anchor.element)
-        ? anchor
-        : anchorEntryId !== undefined
-          ? (() => {
-              const matched = Array.from(scroller.querySelectorAll<HTMLElement>('[data-entry-id]'))
-                .find((el) => el.dataset.entryId === anchorEntryId)
-              return matched !== undefined ? { element: matched, top: anchor.top } : undefined
-            })()
-          : undefined
-    restoreTimelineScrollAnchor(scroller, resolvedAnchor)
+    restoreTimelineScrollAnchor(scroller, pending.anchor)
     lastScrollTopRef.current = scroller.scrollTop
     syncScrollBottomVisibility(scroller)
   }, [conversationId, detailEntries, syncScrollBottomVisibility])
@@ -626,8 +615,25 @@ export function useTimelineScroll({
         setHasUnreadScrollUpdates(true)
       }
       prevFingerprintRef.current = { conversationId, value: contentFingerprint }
+      const prevSpan = prevEntrySpanRef.current
+      const newHeadId = detailEntries[0]?.id
+      const newTailId = detailEntries.at(-1)?.id
+      const prependedOnly =
+        prevSpan !== null &&
+        prevSpan.conversationId === conversationId &&
+        prevSpan.headId !== undefined &&
+        newHeadId !== undefined &&
+        newHeadId !== prevSpan.headId &&
+        newTailId === prevSpan.tailId &&
+        detailEntries.some((entry) => entry.id === prevSpan.headId)
+      prevEntrySpanRef.current = { conversationId, headId: newHeadId, tailId: newTailId }
       const previous = lastHumanRef.current
-      if (previous?.conversationId === conversationId && lastHumanKey !== undefined && lastHumanKey !== previous.key) {
+      if (
+        previous?.conversationId === conversationId &&
+        lastHumanKey !== undefined &&
+        lastHumanKey !== previous.key &&
+        !(previous.key === undefined && prependedOnly)
+      ) {
         stickToBottomRef.current = true
         programmaticBottomScrollRef.current = false
         setHasUnreadScrollUpdates(false)

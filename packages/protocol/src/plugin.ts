@@ -668,10 +668,10 @@ export interface HelmxHostApi {
   searchConversations(query: string, options?: ConversationSearchOptions): Promise<SearchHit[]>
   /** 读取单个会话摘要；不存在时抛 HelmxError。 */
   getConversation(id: number): ConversationSummary
-  /** 会话详情（时间线条目 + 元数据；limit 1..500，cursor 分页）。 */
+  /** 会话详情（时间线条目 + 元数据；limit 1..500 与 turns 1..50 互斥，cursor 分页）。 */
   getConversationDetail(
     id: number,
-    options?: { limit?: number; cursor?: string },
+    options?: { limit?: number; turns?: number; cursor?: string },
   ): Promise<ConversationDetail>
   /**
    * 按幂等 requestId 只读查询会话持久提交状态（供插件恢复对账，绝不凭无关回合状态猜测提交是否生效）：

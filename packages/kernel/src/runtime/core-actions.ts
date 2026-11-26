@@ -266,7 +266,8 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
 
   pluginHost.registerCoreAction(owner, {
     id: 'get',
-    description: 'Get conversation summary and paginated timeline entries (use nextCursor for older pages)',
+    description:
+      'Get conversation summary and paginated timeline entries (limit 1..500 or turn-aligned turns 1..50, mutually exclusive; use nextCursor for older pages)',
     idempotent: true,
     exposeToPrompt: false,
     cli: { command: ['conversations', 'get'] },
@@ -275,15 +276,18 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
       properties: {
         conversationId: SAFE_POSITIVE_INT,
         limit: { type: 'integer', minimum: 1, maximum: 500 },
+        turns: { type: 'integer', minimum: 1, maximum: 50 },
         cursor: NON_EMPTY_STRING,
       },
       required: ['conversationId'],
       additionalProperties: false,
+      not: { type: 'object', required: ['limit', 'turns'] },
     },
     outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (input: { conversationId: number; limit?: number; cursor?: string }) =>
+    handler: async (input: { conversationId: number; limit?: number; turns?: number; cursor?: string }) =>
       runtime.conversations.getConversationDetail(input.conversationId, {
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        ...(input.turns !== undefined ? { turns: input.turns } : {}),
         ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
       }),
   })

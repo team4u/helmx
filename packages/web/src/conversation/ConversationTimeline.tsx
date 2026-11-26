@@ -397,6 +397,7 @@ export function ConversationTimeline({
                   className={`${highlightClass(anchorId)}${cvClass !== '' ? ` ${cvClass}` : ''}`.trim()}
                   ref={highlightScrollRef}
                   data-entry-id={anchorId}
+                  data-turn-tail-id={item.entryIds.at(-1)}
                   data-latest-process-turn={item.key === latestProcessTurnKey ? 'true' : undefined}
                 >
                   {modelBoundary !== undefined ? <AssistantModelBoundary model={modelBoundary} /> : null}

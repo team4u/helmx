@@ -10,7 +10,12 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationSummary } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
-import { ConversationDetailService } from '../src/runtime/conversation-detail.js'
+import {
+  ConversationDetailService,
+  MAX_PAGE_TURNS,
+  TURN_HARD_ENTRY_CAP,
+  TURN_SOFT_ENTRY_BUDGET,
+} from '../src/runtime/conversation-detail.js'
 import { deferred } from './helpers.js'
 
 interface HostState {
@@ -252,4 +257,220 @@ test('Page 1 collects helmx.rewind inline without pre-scan; rewind cache serves 
     (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
   )
   assert.equal(collectRewindCalls, 2, 'stateChangeSeq change must invalidate rewindCache')
+})
+
+function makeTurnService(
+  allAsc: Array<{ id: number; kind: string; model?: unknown[]; data?: unknown }>,
+  opts: {
+    id?: number
+    collectRewindIntervals?: () => Promise<Array<{ from: number; through: number; marker: number }>>
+  } = {},
+): {
+  service: ConversationDetailService
+  scanLog: Array<{ limit: number; after?: number }>
+} {
+  const id = opts.id ?? 15
+  const allDesc = [...allAsc].sort((a, b) => b.id - a.id)
+  const scanLog: Array<{ limit: number; after?: number }> = []
+  const lastEntryId = allDesc[0]?.id ?? 0
+  const summary: ConversationSummary = { ...summaryOf(id, true), lastEntryId }
+
+  const fauxConversation = {
+    entries: async (
+      query: { order?: string; minEntryId?: number; maxEntryId?: number },
+      limit: number,
+      cursor?: { after?: number; order?: string },
+    ) => {
+      if (query.minEntryId !== undefined && query.maxEntryId !== undefined) {
+        const hit = allDesc.find((e) => e.id === query.minEntryId)
+        return { items: hit ? [hit] : [] }
+      }
+      scanLog.push({ limit, ...(cursor?.after !== undefined ? { after: cursor.after } : {}) })
+      const filtered = cursor?.after !== undefined
+        ? allDesc.filter((e) => e.id < cursor.after!)
+        : allDesc
+      const slice = filtered.slice(0, limit)
+      const last = slice.at(-1)
+      const hasMore = slice.length < filtered.length
+      return {
+        items: slice,
+        ...(hasMore && last !== undefined ? { next: { after: last.id, order: 'descending' } } : {}),
+      }
+    },
+  }
+
+  const service = new ConversationDetailService({
+    harness: { conversation: async () => fauxConversation } as never,
+    store: {} as never,
+    stash: {} as never,
+    getConversation: () => summary,
+    collectRewindIntervals:
+      opts.collectRewindIntervals ??
+      (async () => {
+        const cuts: Array<{ from: number; through: number; marker: number }> = []
+        for (const e of allAsc) {
+          if (e.kind === 'helmx.rewind') {
+            const d = e.data as { fromEntryId: number; throughEntryId: number }
+            cuts.push({ from: d.fromEntryId, through: d.throughEntryId, marker: e.id })
+          }
+        }
+        return cuts
+      }),
+  })
+  return { service, scanLog }
+}
+
+test('pageVisibleTurns: validation rejects out-of-range turns and limit+turns conflict', { timeout: 60_000 }, async () => {
+  const { service } = makeTurnService([{ id: 1, kind: 'helmx.input', data: { id: 'i1', text: 'hi' } }])
+  await assert.rejects(
+    service.getConversationDetail(15, { limit: 10, turns: 1 }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+  )
+  for (const badTurns of [0, -1, 1.5, MAX_PAGE_TURNS + 1]) {
+    await assert.rejects(
+      service.getConversationDetail(15, { turns: badTurns }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+    )
+  }
+})
+
+test('pageVisibleTurns: coalesces helmx.input + pi.system + pi.user, handles dividers and trailing compaction', { timeout: 60_000 }, async () => {
+  const entries = [
+    // Turn 1
+    { id: 1, kind: 'helmx.input', data: { id: 'i1', text: 'q1' } },
+    { id: 2, kind: 'pi.user', model: [{ role: 'user', content: 'q1' }] },
+    { id: 3, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'a1' }] }] },
+    // Turn 2 opens with pi.reset and coalesces helmx.input + pi.system + pi.user
+    { id: 4, kind: 'pi.reset', model: [{ role: 'user', content: 'handoff' }] },
+    { id: 5, kind: 'helmx.input', data: { id: 'i2', text: 'q2' } },
+    { id: 6, kind: 'pi.system', model: [{ role: 'system', content: '' }] },
+    { id: 7, kind: 'pi.user', model: [{ role: 'user', content: 'q2' }] },
+    { id: 8, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'bash', arguments: {} }] }] },
+    { id: 9, kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'c1', content: [{ type: 'text', text: 'ok' }] }] },
+    { id: 10, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'a2' }] }] },
+    // Trailing compaction divider after Turn 2
+    { id: 11, kind: 'pi.compaction', model: [{ role: 'user', content: 'summary' }] },
+  ]
+  const { service } = makeTurnService(entries)
+
+  // turns=1 includes trailing compaction (11) + full Turn 2 (4,5,7,8,9,10) with pi.system (6) hidden
+  const page1 = await service.getConversationDetail(15, { turns: 1 })
+  assert.deepEqual(page1.entries.map((e) => e.id), ['4', '5', '7', '8', '9', '10', '11'])
+  assert.ok(page1.nextCursor !== undefined)
+
+  // turns=1 with Page 1 cursor delivers Turn 1 (1,2,3) and ends cleanly
+  const page2 = await service.getConversationDetail(15, { turns: 1, cursor: page1.nextCursor })
+  assert.deepEqual(page2.entries.map((e) => e.id), ['1', '2', '3'])
+  assert.equal(page2.nextCursor, undefined)
+})
+
+test('pageVisibleTurns: preserves helmx.rewind markers across turn boundary without breaking inTurnHead', { timeout: 60_000 }, async () => {
+  const entries = [
+    { id: 1, kind: 'helmx.input', data: { id: 'i1', text: 't1' } },
+    { id: 2, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 't1-ans' }] }] },
+    // Rewound span [3, 5] followed by marker 6 right before Turn 2
+    { id: 3, kind: 'helmx.input', data: { id: 'i-old', text: 'old' } },
+    { id: 4, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'old-ans' }] }] },
+    { id: 5, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'old-ans-2' }] }] },
+    { id: 6, kind: 'helmx.rewind', data: { fromEntryId: 3, throughEntryId: 5 } },
+    { id: 7, kind: 'helmx.input', data: { id: 'i2', text: 't2' } },
+    { id: 8, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 't2-ans' }] }] },
+  ]
+  const { service } = makeTurnService(entries)
+
+  const page1 = await service.getConversationDetail(15, { turns: 1 })
+  assert.deepEqual(page1.entries.map((e) => e.id), ['6', '7', '8'])
+  assert.ok(page1.nextCursor !== undefined)
+
+  const page2 = await service.getConversationDetail(15, { turns: 1, cursor: page1.nextCursor })
+  assert.deepEqual(page2.entries.map((e) => e.id), ['1', '2'])
+  assert.equal(page2.nextCursor, undefined)
+})
+
+test('pageVisibleTurns: TURN_SOFT_ENTRY_BUDGET stops cleanly after >=1 complete turn without splitting turns', { timeout: 60_000 }, async () => {
+  const entries: Array<{ id: number; kind: string; model?: unknown[]; data?: unknown }> = []
+  let seq = 1
+  // Turn 1: 30 entries
+  entries.push({ id: seq++, kind: 'helmx.input', data: { id: 't1', text: 'turn1' } })
+  for (let i = 0; i < 29; i += 1) {
+    entries.push({ id: seq++, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: `t1-${i}` }] }] })
+  }
+  // Turn 2: 90 entries
+  const turn2Start = seq
+  entries.push({ id: seq++, kind: 'helmx.input', data: { id: 't2', text: 'turn2' } })
+  for (let i = 0; i < 89; i += 1) {
+    entries.push({ id: seq++, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: `t2-${i}` }] }] })
+  }
+  // Turn 3 (latest): 130 entries (< 200), so Turn 3 + Turn 2 = 220 >= TURN_SOFT_ENTRY_BUDGET (200)
+  entries.push({ id: seq++, kind: 'helmx.input', data: { id: 't3', text: 'turn3' } })
+  for (let i = 0; i < 129; i += 1) {
+    entries.push({ id: seq++, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: `t3-${i}` }] }] })
+  }
+
+  const { service } = makeTurnService(entries)
+  const page1 = await service.getConversationDetail(15, { turns: 10 })
+  assert.equal(page1.entries.length, 220)
+  assert.ok(page1.entries.length >= TURN_SOFT_ENTRY_BUDGET)
+  assert.equal(page1.entries[0]!.id, String(turn2Start))
+  assert.ok(page1.nextCursor !== undefined)
+
+  const page2 = await service.getConversationDetail(15, { turns: 10, cursor: page1.nextCursor })
+  assert.equal(page2.entries.length, 30)
+  assert.equal(page2.entries[0]!.id, '1')
+  assert.equal(page2.nextCursor, undefined)
+})
+
+test('pageVisibleTurns: TURN_HARD_ENTRY_CAP performs bounded 1-displayable-entry lookahead across pi.system/helmx.rewind/rewound spans', { timeout: 60_000 }, async () => {
+  // Case A: mega-turn with 500 visible body entries + 25 hidden/rewind entries at the very beginning -> nextCursor must be undefined
+  const noOlderEntries: Array<{ id: number; kind: string; model?: unknown[]; data?: unknown }> = []
+  let idA = 1
+  for (let i = 0; i < 12; i += 1) {
+    noOlderEntries.push({ id: idA++, kind: 'pi.system', model: [{ role: 'system', content: '' }] })
+  }
+  const rewindFrom = idA
+  for (let i = 0; i < 15; i += 1) {
+    noOlderEntries.push({ id: idA++, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: `rewound-${i}` }] }] })
+  }
+  const rewindThrough = idA - 1
+  noOlderEntries.push({ id: idA++, kind: 'helmx.rewind', data: { fromEntryId: rewindFrom, throughEntryId: rewindThrough } })
+  // 499 more assistant entries -> total collected = 1 (rewind marker) + 499 = 500 (TURN_HARD_ENTRY_CAP)
+  for (let i = 0; i < TURN_HARD_ENTRY_CAP - 1; i += 1) {
+    noOlderEntries.push({ id: idA++, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: `body-${i}` }] }] })
+  }
+  const svcA = makeTurnService(noOlderEntries)
+  const resA = await svcA.service.getConversationDetail(15, { turns: 1 })
+  assert.equal(resA.entries.length, TURN_HARD_ENTRY_CAP)
+  assert.equal(resA.nextCursor, undefined, 'lookahead across >20 non-displayable entries must return undefined nextCursor')
+  assert.ok(svcA.scanLog.some((call) => call.limit === 20), 'lookahead should scan subsequent batches of 20')
+
+  // Case B: 1 older displayable entry sits behind pi.system + helmx.rewind + rewound span right after TURN_HARD_ENTRY_CAP
+  const withOlderEntries: Array<{ id: number; kind: string; model?: unknown[]; data?: unknown }> = [
+    { id: 1, kind: 'helmx.input', data: { id: 'root', text: 'mega prompt' } },
+  ]
+  let idB = 2
+  for (let i = 0; i < 10; i += 1) {
+    withOlderEntries.push({ id: idB++, kind: 'pi.system', model: [{ role: 'system', content: '' }] })
+  }
+  const rwFrom = idB
+  for (let i = 0; i < 15; i += 1) {
+    withOlderEntries.push({ id: idB++, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: `rw-${i}` }] }] })
+  }
+  const rwThrough = idB - 1
+  const rwMarkerId = idB++
+  withOlderEntries.push({ id: rwMarkerId, kind: 'helmx.rewind', data: { fromEntryId: rwFrom, throughEntryId: rwThrough } })
+  for (let i = 0; i < TURN_HARD_ENTRY_CAP; i += 1) {
+    withOlderEntries.push({ id: idB++, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: `step-${i}` }] }] })
+  }
+  const svcB = makeTurnService(withOlderEntries)
+  const page1B = await svcB.service.getConversationDetail(15, { turns: 1 })
+  assert.equal(page1B.entries.length, TURN_HARD_ENTRY_CAP)
+  assert.ok(page1B.nextCursor !== undefined, 'lookahead must surface nextCursor past hidden/rewind span')
+
+  const page2B = await svcB.service.getConversationDetail(15, { turns: 1, cursor: page1B.nextCursor })
+  assert.deepEqual(
+    page2B.entries.map((e) => e.id),
+    ['1', String(rwMarkerId)],
+    'next page must preserve helmx.rewind marker alongside older displayable entry while hiding rewound/system entries',
+  )
+  assert.equal(page2B.nextCursor, undefined)
 })

@@ -134,7 +134,8 @@ export function conversationsCommands(): CommandSpec[] {
     description: 'Get conversation details (GET /api/conversations/:id; includes paginated timeline)',
     flags: [
       ...convFlags,
-      { name: 'limit', type: 'number', help: 'maximum timeline entries to return (default 50)' },
+      { name: 'limit', type: 'number', help: 'maximum timeline entries to return (1..500; mutually exclusive with --turns)' },
+      { name: 'turns', type: 'number', help: 'turn-aligned pagination count (1..50; mutually exclusive with --limit)' },
       { name: 'cursor', type: 'string', help: 'pagination cursor (pass back nextCursor from previous response)' },
     ],
     positional: '[id]',
@@ -143,12 +144,22 @@ export function conversationsCommands(): CommandSpec[] {
       assertNoExtraPositionals(ctx.positionals, 1)
       const query = new URLSearchParams()
       const limit = flagValue<number>(ctx.flags, 'limit')
+      const turns = flagValue<number>(ctx.flags, 'turns')
       const cursor = flagValue<string>(ctx.flags, 'cursor')
+      if (limit !== undefined && turns !== undefined) {
+        throw new CliError('--limit and --turns are mutually exclusive', 'invalid_flag_value')
+      }
       if (limit !== undefined) {
-        if (!Number.isInteger(limit) || limit < 1) {
-          throw new CliError(`--limit must be a positive integer, got "${limit}"`, 'invalid_flag_value')
+        if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+          throw new CliError(`--limit must be an integer between 1 and 500, got "${limit}"`, 'invalid_flag_value')
         }
         query.set('limit', String(limit))
+      }
+      if (turns !== undefined) {
+        if (!Number.isInteger(turns) || turns < 1 || turns > 50) {
+          throw new CliError(`--turns must be an integer between 1 and 50, got "${turns}"`, 'invalid_flag_value')
+        }
+        query.set('turns', String(turns))
       }
       if (cursor !== undefined) query.set('cursor', cursor)
       const qs = query.size > 0 ? `?${query.toString()}` : ''

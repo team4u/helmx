@@ -61,7 +61,7 @@
 
 **`helmx conversations list [--profile <id>] [--status <st>] [--tag <tag>] [--all | --parent <id>]`** — 列出会话。`--status` 取值 `working|blocked|done|idle|error`。默认仅顶层会话；`--all` 全量；`--parent <id>` 仅列出直接子会话（与 `--all` 互斥）。
 
-**`helmx conversations get [id] [--current] [--limit <n>] [--cursor <str>]`** — 会话详情与分页时间线；`--limit` 缺省 50。详情对超长纯文本 tool-result 做头尾截断（携带 `truncated/totalChars/totalLines`），过滤 `pi.system` 与剥离供应商签名载荷。
+**`helmx conversations get [id] [--current] [--limit <n> | --turns <n>] [--cursor <str>]`** — 会话详情与分页时间线；`--limit`（`1..500`，服务端缺省 100）与按轮次分页 `--turns`（`1..50`）互斥。详情对超长纯文本 tool-result 做头尾截断（携带 `truncated/totalChars/totalLines`），过滤 `pi.system` 与剥离供应商签名载荷。
 
 **`helmx conversations entry [id] <entryId> [--current]`** — 单条时间线条目全文（详情投影截断后的未截断原文；被 rewind 隐藏的条目 404）。
 
