@@ -6,7 +6,12 @@
  *   read-only contract formatting helpers;
  * - Strictly zero React/DOM dependencies (Fast Refresh compliant).
  */
-import type { ActionManifest, SkillSummary } from '@helmx/protocol/browser'
+import {
+  CORE_NAMESPACE_PREFIX,
+  isValidCoreOwnerId,
+  type ActionManifest,
+  type SkillSummary,
+} from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageKey, type WebMessageTranslator } from '../i18n/catalog.js'
 
 export type CoreCapabilityFilter = 'all' | 'actions' | 'skills'
@@ -99,9 +104,9 @@ const CORE_OWNER_META: Record<string, CoreOwnerMeta> = {
   },
 }
 
-/** Whether an owner/plugin identifier belongs to the kernel-reserved `core:*` namespace. */
+/** Whether an owner/plugin identifier is a valid kernel-reserved `core:<domain>` namespace. */
 export function isCoreNamespace(id: string | undefined): id is string {
-  return typeof id === 'string' && id.startsWith('core:') && id.length > 'core:'.length
+  return typeof id === 'string' && isValidCoreOwnerId(id)
 }
 
 function formatFallbackOwnerName(domain: string): string {
@@ -115,7 +120,7 @@ function resolveOwnerDisplay(
   skillCount: number,
   t: WebMessageTranslator,
 ): { domain: string; name: string; description: string; icon: string; order: number } {
-  const domain = ownerId.slice('core:'.length)
+  const domain = ownerId.slice(CORE_NAMESPACE_PREFIX.length)
   const meta = Object.hasOwn(CORE_OWNER_META, domain) ? CORE_OWNER_META[domain] : undefined
   if (meta !== undefined) {
     return {

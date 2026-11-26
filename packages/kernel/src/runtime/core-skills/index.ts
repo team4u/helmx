@@ -11,7 +11,7 @@
  * directories (`helmx-cli`, `app-builder`) already carry `core:*` ownership on disk before
  * active plugin owner reconciliation sweeps retired `builtin:profile` directories (e.g. `profile`).
  */
-import { HelmxError, parseSkillFrontmatter } from '@helmx/protocol'
+import { HelmxError, isValidCoreOwnerId, parseSkillFrontmatter } from '@helmx/protocol'
 import type { BuiltinSkillAsset, SkillService } from '../../services/skill-service.js'
 import {
   APP_BUILDER_FULLSTACK_TEMPLATE_MD,
@@ -98,10 +98,10 @@ export const CORE_SKILL_OWNERS: readonly string[] = [
  */
 export async function bootstrapCoreSkills(skills: SkillService): Promise<void> {
   for (const entry of CORE_MANAGED_SKILLS) {
-    if (!entry.owner.startsWith('core:')) {
+    if (!isValidCoreOwnerId(entry.owner)) {
       throw new HelmxError(
         'invalid_core_skill',
-        `Core managed skill '${entry.asset.id}' must use a 'core:*' owner (got: '${entry.owner}')`,
+        `Core managed skill '${entry.asset.id}' must use a valid 'core:<domain>' owner (got: '${entry.owner}')`,
         500,
         { skillId: entry.asset.id, owner: entry.owner },
       )

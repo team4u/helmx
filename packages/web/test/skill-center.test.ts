@@ -2065,11 +2065,21 @@ test('skill-center-model & sidebar-model: core:* 技能归属 Core 分类（绝�
   })
   assert.equal(resolveSkillOwnerTarget(undefined), null)
 
-  // sidebar-model.isSkillVisible: core:* 技能不依赖 enabledPluginIds，始终可见
+  // sidebar-model.isSkillVisible: core:<domain> 技能不依赖 enabledPluginIds，畸形 core: 诚实拒绝
   const emptyEnabled = new Set<string>()
+  const malformedCoreSkill = makeSkill({
+    id: 'bad-core',
+    name: 'Malformed Core',
+    managedByPlugin: 'core:bad.id',
+  })
   assert.equal(isSkillVisible(coreHostSkill, emptyEnabled), true)
   assert.equal(isSkillVisible(corePluginsSkill, emptyEnabled), true)
   assert.equal(isSkillVisible(thirdPartySkill, emptyEnabled), false)
+  assert.equal(isSkillVisible(malformedCoreSkill, emptyEnabled), false)
+  assert.equal(isSkillCore(malformedCoreSkill), false)
+  assert.equal(isSkillPlugin(malformedCoreSkill), false)
+  assert.equal(resolveSkillOwnerTarget('core:bad.id'), null)
+  assert.equal(resolveSkillOwnerTarget('core:'), null)
 })
 
 test('SkillDetailDrawer: core:* 与插件受管技能支持双向导航回插件中心对应详情', { timeout: 60_000 }, async () => {

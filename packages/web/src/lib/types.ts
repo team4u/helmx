@@ -27,7 +27,7 @@ import type {
   ToolViewSpec,
   WorkbenchPanelSpec,
 } from '@helmx/protocol/browser'
-import { matchesConversationScope, parsePluginUiContribution } from '@helmx/protocol/browser'
+import { isCoreNamespace, matchesConversationScope, parsePluginUiContribution } from '@helmx/protocol/browser'
 import type { ModelDescriptor } from './api.js'
 import type { SessionDocKey } from './session-docs.js'
 
@@ -198,7 +198,7 @@ export function resolveTargetString(
         ? { kind: 'plugins', tab: 'core', coreOwner }
         : { kind: 'plugins', tab: 'core', coreOwner, coreAction }
     }
-    if (sub.startsWith('core:')) {
+    if (isCoreNamespace(sub)) {
       const slashIdx = sub.indexOf('/')
       if (slashIdx === -1) return { kind: 'plugins', tab: 'core', coreOwner: sub }
       const coreOwner = sub.slice(0, slashIdx)

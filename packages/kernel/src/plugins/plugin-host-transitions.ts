@@ -5,6 +5,7 @@
 import { join } from 'node:path';
 import {
   HelmxError,
+  isBuiltinNamespace,
   type HookName,
   type LocalizedText,
   type PluginConfigFieldSchema,
@@ -178,7 +179,7 @@ export async function rollbackEnablePlugin(
     }
   }
   const pluginId = state.definition.id;
-  if (!pluginId.startsWith('builtin:')) {
+  if (!isBuiltinNamespace(pluginId)) {
     state.lastError = toDiagnosticError(err, 'enable');
     ctx.emitPluginChanged(state);
   }
@@ -268,7 +269,7 @@ export function summaryWithManagedPackage(
 ): PluginSummary {
   const base = pluginSummaryOf(state, capabilityRegistry, uiRegistry, publicConfig);
   const record = packageManager?.getRecord(base.id);
-  if (record === undefined || base.id.startsWith('builtin:')) return base;
+  if (record === undefined || isBuiltinNamespace(base.id)) return base;
   return {
     ...base,
     managed: {

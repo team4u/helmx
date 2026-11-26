@@ -6,7 +6,13 @@
  * Follows the web Fast Refresh rule: pure functions, constants and data
  * models live here, never mixed into components.
  */
-import type { SkillSummary } from '@helmx/protocol/browser'
+import {
+  isBuiltinNamespace,
+  isCoreNamespace,
+  isReservedPluginNamespace,
+  isValidCoreOwnerId,
+  type SkillSummary,
+} from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 import type { ResolvedTarget } from '../lib/types.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
@@ -31,10 +37,14 @@ export interface SkillSummaryStats {
 
 /**
  * Whether the skill is a kernel-owned core skill:
- * - managedByPlugin starts with 'core:' (and not from a discovery source root)
+ * - managedByPlugin is a valid `core:<domain>` owner (and not from a discovery source root)
  */
 export function isSkillCore(skill: SkillSummary): boolean {
-  return !isNodeSourceSkill(skill) && !isSkillAgents(skill) && Boolean(skill.managedByPlugin?.startsWith('core:'))
+  return (
+    !isNodeSourceSkill(skill) &&
+    !isSkillAgents(skill) &&
+    Boolean(skill.managedByPlugin && isValidCoreOwnerId(skill.managedByPlugin))
+  )
 }
 
 /**
@@ -42,22 +52,22 @@ export function isSkillCore(skill: SkillSummary): boolean {
  * - managedByPlugin starts with 'builtin:' (and not from a discovery source root)
  */
 export function isSkillBuiltin(skill: SkillSummary): boolean {
-  return !isNodeSourceSkill(skill) && !isSkillAgents(skill) && Boolean(skill.managedByPlugin?.startsWith('builtin:'))
+  return (
+    !isNodeSourceSkill(skill) &&
+    !isSkillAgents(skill) &&
+    Boolean(skill.managedByPlugin && isBuiltinNamespace(skill.managedByPlugin))
+  )
 }
 
 /**
  * Whether the skill is managed by a third-party / external plugin:
- * - managedByPlugin set and not starting with 'builtin:' or 'core:'
+ * - managedByPlugin set and not in host-reserved namespaces (`builtin:` or `core:`)
  */
 export function isSkillPlugin(skill: SkillSummary): boolean {
   return (
     !isNodeSourceSkill(skill) &&
     !isSkillAgents(skill) &&
-    Boolean(
-      skill.managedByPlugin &&
-        !skill.managedByPlugin.startsWith('builtin:') &&
-        !skill.managedByPlugin.startsWith('core:'),
-    )
+    Boolean(skill.managedByPlugin && !isReservedPluginNamespace(skill.managedByPlugin))
   )
 }
 
@@ -242,8 +252,8 @@ export function resolveSkillOwnerTarget(
   if (managedByPlugin === undefined) return null
   const owner = managedByPlugin.trim()
   if (owner === '') return null
-  if (owner.startsWith('core:')) {
-    return { kind: 'plugins', tab: 'core', coreOwner: owner }
+  if (isCoreNamespace(owner)) {
+    return isValidCoreOwnerId(owner) ? { kind: 'plugins', tab: 'core', coreOwner: owner } : null
   }
   return { kind: 'plugins', pluginId: owner }
 }
