@@ -23,7 +23,7 @@
  * formatTokens lives in lib/format.ts (the repo's single implementation,
  * shared with the conversation usage display).
  */
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { formatTokens } from '../lib/format.js'
 
 export type ContextUsageTone = 'default' | 'warn' | 'high'
@@ -44,7 +44,7 @@ export interface ContextUsageInput {
 }
 
 /** Assemble the read-only status text (pure function); null renders no status text at all. */
-export function contextUsageLabel(usage: ContextUsageInput, t: WebMessageTranslator = englishWebTranslator): ContextUsageLabel | null {
+export function contextUsageLabel(usage: ContextUsageInput, t: WebMessageTranslator): ContextUsageLabel | null {
   if (usage.compacting === true) {
     return { text: t('composer.context.compactingStatus'), tone: 'default', title: t('composer.compaction.inProgress') }
   }

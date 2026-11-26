@@ -3,11 +3,11 @@ import { HelmxIcon, IconButton, StatusLight, Tooltip } from '@helmx/plugin-clien
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { sidebarPaneTagLabel, type SidebarTargetPresence } from './sidebar-model.js'
+import type { ConversationBackgroundActivity } from './conversation-status-model.js'
 import {
   backgroundAwareStatusTooltip,
   resolveAggregateConversationStatus,
   resolveStatusLight,
-  type ConversationBackgroundActivity,
   type StatusAggregateCounts,
 } from './background-activity-model.js'
 

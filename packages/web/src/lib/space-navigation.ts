@@ -4,7 +4,7 @@
  */
 import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
-import { collectEnabledPluginIds, isProfileVisible } from '../shell/sidebar-model.js'
+import { collectEnabledPluginIds, isProfileVisible } from '../shell/conversation-status-model.js'
 import { isPluginSummaryActive, type PluginActivityLike } from './live-state.js'
 import {
   isPrototypeParamKey,

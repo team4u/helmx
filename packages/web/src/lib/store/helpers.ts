@@ -1,8 +1,10 @@
 /**
  * Pure diffing, reconciliation, and equality utilities shared across store slices.
  */
-import type { ArtifactMetadata, AskSpec, LocalizedText } from '@helmx/protocol/browser'
-import type { BackgroundBadgeDocRef, ConversationBackgroundIndex } from '../../shell/background-activity-model.js'
+import type { ArtifactMetadata, AskSpec } from '@helmx/protocol/browser'
+import type { WebMessageKey } from '../../i18n/catalog.js'
+import type { BackgroundBadgeDocRef } from '../../shell/background-activity-model.js'
+import type { ConversationBackgroundIndex } from '../../shell/conversation-status-model.js'
 import type { AuthSlice, NotifyPlan, StoreUpdater } from './types.js'
 
 export const ESC_ABORT_NOTICE_ID = 'esc-abort-confirm'
@@ -11,13 +13,13 @@ export const EMPTY_BADGE_DOCS: ReadonlyArray<BackgroundBadgeDocRef> = Object.fre
 export const EMPTY_PENDING_BADGE_DOCS: ReadonlySet<string> = new Set<string>()
 export const EMPTY_BACKGROUND_INDEX: ConversationBackgroundIndex = new Map()
 
-export const ASSET_LOAD_FAILURE_TITLES: ReadonlyArray<LocalizedText> = [
-  { en: 'Profiles failed to load', 'zh-CN': '角色加载失败' },
-  { en: 'Models failed to load', 'zh-CN': '模型加载失败' },
-  { en: 'Providers failed to load', 'zh-CN': '网关加载失败' },
-  { en: 'Credentials failed to load', 'zh-CN': '凭据加载失败' },
-  { en: 'Skills failed to load', 'zh-CN': '技能加载失败' },
-  { en: 'Plugin actions failed to load', 'zh-CN': '插件动作加载失败' },
+export const ASSET_LOAD_FAILURE_TITLES: ReadonlyArray<WebMessageKey> = [
+  'shell.assets.profilesLoadFailed',
+  'shell.assets.modelsLoadFailed',
+  'shell.assets.providersLoadFailed',
+  'shell.assets.credentialsLoadFailed',
+  'shell.assets.skillsLoadFailed',
+  'shell.assets.actionsLoadFailed',
 ]
 
 export function emptyPlan(): NotifyPlan {

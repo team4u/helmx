@@ -36,9 +36,9 @@
  */
 
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { MAX_ANCESTRY_DEPTH } from '../conversation/ancestry-model.js'
-import type { ConversationBackgroundIndex } from './background-activity-model.js'
+import type { ConversationBackgroundIndex } from './conversation-status-model.js'
 
 /** Browser notification permission: the standard three states plus host-unsupported (happy-dom / old environments without Notification). */
 export type BrowserNotificationPermission = 'default' | 'granted' | 'denied' | 'unsupported'
@@ -137,15 +137,6 @@ export function resolveActivitySnapshot(input: {
   }
 }
 
-/** Completion-notice title when no participant of the root tree is in error (English bridge value; the catalog key is shell.quiet.completedTitle). */
-export const COMPLETED_NOTIFICATION_TITLE = 'Helmx conversation completed'
-
-/** Finish-notice title when any participant of the root tree is in error — never claims completion (English bridge value; shell.quiet.endedTitle). */
-export const ENDED_NOTIFICATION_TITLE = 'Helmx conversation finished'
-
-/** Notice title for waiting on human input/approval (blocked) (English bridge value; shell.quiet.waitingTitle). */
-export const WAITING_NOTIFICATION_TITLE = 'Helmx is waiting for you'
-
 /** Maximum root entries listed in a body; anything beyond folds into "{count} pending in total". */
 const MAX_LISTED_CONVERSATIONS = 3
 
@@ -192,10 +183,10 @@ export function composeTreeCompletionNotification(input: {
   /** ids of conversations that accumulated machine activity this cycle (spawned children included). */
   accumulatedConversationIds: ReadonlySet<number>
   conversations: ReadonlyArray<ConversationSummary>
-  /** Locale translator for title/body copy; English bridge when omitted (not-yet-migrated callers). */
-  t?: WebMessageTranslator
+  /** Locale translator for title/body copy. */
+  t: WebMessageTranslator
 }): QuietNotificationDraft | null {
-  const t = input.t ?? englishWebTranslator
+  const { t } = input
   if (input.accumulatedConversationIds.size === 0) return null
   const byId = new Map<number, ConversationSummary>(
     input.conversations.map((conversation) => [conversation.id, conversation] as [number, ConversationSummary]),
@@ -254,10 +245,10 @@ export function composeTreeBlockedNotification(input: {
   /** Optional: this tree's accumulated participant ids this cycle (for honest failure detection). */
   accumulatedConversationIds?: ReadonlySet<number>
   conversations: ReadonlyArray<ConversationSummary>
-  /** Locale translator for title/body copy; English bridge when omitted (not-yet-migrated callers). */
-  t?: WebMessageTranslator
+  /** Locale translator for title/body copy. */
+  t: WebMessageTranslator
 }): QuietNotificationDraft | null {
-  const t = input.t ?? englishWebTranslator
+  const { t } = input
   const byId = new Map<number, ConversationSummary>(
     input.conversations.map((conversation) => [conversation.id, conversation] as [number, ConversationSummary]),
   )

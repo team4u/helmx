@@ -5,38 +5,32 @@
  */
 import type { HelmxLocale } from '@helmx/protocol/browser'
 import { normalizeLocaleTag } from '@helmx/protocol/browser'
+import {
+  readStorageItem,
+  setOrRemoveStorageItem,
+  type StorageReader,
+  type StorageRemover,
+  type StorageWriter,
+} from './storage.js'
 import type { LocalePreference, ThemeMode, ThemePreference } from './types.js'
+
 export const THEME_STORAGE_KEY = 'helmx:theme'
 export const QUIET_NOTIFY_STORAGE_KEY = 'helmx:quiet-notify'
 export const LOCALE_STORAGE_KEY = 'helmx:locale'
 
 /** Read the persisted theme preference; falls back to 'system' when storage is unavailable or the value is invalid. */
-export function getStoredPreference(storage?: Pick<Storage, 'getItem'>): ThemePreference {
-  try {
-    const store = storage ?? localStorage
-    const saved = store.getItem(THEME_STORAGE_KEY)
-    if (saved === 'light' || saved === 'dark') return saved
-    return 'system'
-  } catch {
-    return 'system'
-  }
+export function getStoredPreference(storage?: StorageReader | null): ThemePreference {
+  const saved = readStorageItem(THEME_STORAGE_KEY, storage)
+  if (saved === 'light' || saved === 'dark') return saved
+  return 'system'
 }
 
 /** Persist the theme preference; 'system' removes the explicit key to follow the system color scheme. */
 export function persistThemePreference(
   pref: ThemePreference,
-  storage?: Pick<Storage, 'setItem' | 'removeItem'>,
+  storage?: (StorageWriter & StorageRemover) | null,
 ): void {
-  try {
-    const store = storage ?? localStorage
-    if (pref === 'system') {
-      store.removeItem(THEME_STORAGE_KEY)
-    } else {
-      store.setItem(THEME_STORAGE_KEY, pref)
-    }
-  } catch {
-    /* The in-memory theme still works. */
-  }
+  setOrRemoveStorageItem(THEME_STORAGE_KEY, pref === 'system' ? null : pref, storage)
 }
 
 /** Cycles the theme preference in system -> light -> dark -> system order. */
@@ -47,30 +41,16 @@ export function nextThemePreference(prev: ThemePreference): ThemePreference {
 }
 
 /** Background browser notification preference (localStorage 'helmx:quiet-notify' = '1'). */
-export function getStoredQuietNotify(storage?: Pick<Storage, 'getItem'>): boolean {
-  try {
-    const store = storage ?? localStorage
-    return store.getItem(QUIET_NOTIFY_STORAGE_KEY) === '1'
-  } catch {
-    return false
-  }
+export function getStoredQuietNotify(storage?: StorageReader | null): boolean {
+  return readStorageItem(QUIET_NOTIFY_STORAGE_KEY, storage) === '1'
 }
 
 /** Persist the background browser notification toggle. */
 export function persistQuietNotify(
   enabled: boolean,
-  storage?: Pick<Storage, 'setItem' | 'removeItem'>,
+  storage?: (StorageWriter & StorageRemover) | null,
 ): void {
-  try {
-    const store = storage ?? localStorage
-    if (enabled) {
-      store.setItem(QUIET_NOTIFY_STORAGE_KEY, '1')
-    } else {
-      store.removeItem(QUIET_NOTIFY_STORAGE_KEY)
-    }
-  } catch {
-    /* The in-memory preference still applies to this session. */
-  }
+  setOrRemoveStorageItem(QUIET_NOTIFY_STORAGE_KEY, enabled ? '1' : null, storage)
 }
 
 // ---------------------------------------------------------------------------
@@ -78,14 +58,9 @@ export function persistQuietNotify(
 // ---------------------------------------------------------------------------
 
 /** Read the persisted UI locale preference; returns 'auto' when the key is absent. */
-export function getStoredLocalePreference(storage?: Pick<Storage, 'getItem'>): LocalePreference {
-  try {
-    const store = storage ?? localStorage
-    const raw = store.getItem(LOCALE_STORAGE_KEY)
-    return raw === null ? 'auto' : normalizeLocaleTag(raw)
-  } catch {
-    return 'auto'
-  }
+export function getStoredLocalePreference(storage?: StorageReader | null): LocalePreference {
+  const raw = readStorageItem(LOCALE_STORAGE_KEY, storage)
+  return raw === null ? 'auto' : normalizeLocaleTag(raw)
 }
 
 /**
@@ -94,48 +69,14 @@ export function getStoredLocalePreference(storage?: Pick<Storage, 'getItem'>): L
  */
 export function persistLocalePreference(
   pref: LocalePreference,
-  storage?: Pick<Storage, 'setItem' | 'removeItem'>,
+  storage?: (StorageWriter & StorageRemover) | null,
 ): void {
-  try {
-    const store = storage ?? localStorage
-    if (pref === 'auto') {
-      store.removeItem(LOCALE_STORAGE_KEY)
-    } else {
-      store.setItem(LOCALE_STORAGE_KEY, pref)
-    }
-  } catch {
-    /* The in-memory preference still applies to this session. */
-  }
+  setOrRemoveStorageItem(LOCALE_STORAGE_KEY, pref === 'auto' ? null : pref, storage)
 }
 
 /** Resolve a LocalePreference into the effective HelmxLocale. */
 export function resolveLocale(pref: LocalePreference, languages?: readonly string[]): HelmxLocale {
   return pref === 'auto' ? resolveBrowserLocale(languages) : pref
-}
-
-/**
- * Read the persisted UI locale preference. Returns undefined when the key is
- * absent (caller falls back to the browser locale, mirroring the theme
- * 'system' default); stored values are normalized through normalizeLocaleTag
- * (zh-* -> zh-CN, anything invalid/unsupported -> 'en').
- */
-export function getStoredLocale(storage?: Pick<Storage, 'getItem'>): HelmxLocale | undefined {
-  try {
-    const store = storage ?? localStorage
-    const raw = store.getItem(LOCALE_STORAGE_KEY)
-    return raw === null ? undefined : normalizeLocaleTag(raw)
-  } catch {
-    return undefined
-  }
-}
-
-/** Persist the UI locale preference; the value is always a supported HelmxLocale. */
-export function persistLocale(locale: HelmxLocale, storage?: Pick<Storage, 'setItem' | 'removeItem'>): void {
-  try {
-    ;(storage ?? localStorage).setItem(LOCALE_STORAGE_KEY, locale)
-  } catch {
-    /* The in-memory locale still applies to this session. */
-  }
 }
 
 /**
@@ -165,10 +106,10 @@ export function resolveBrowserLocale(languages?: readonly string[]): HelmxLocale
  * browser locale decides (zh-* -> zh-CN, others -> 'en').
  */
 export function resolveInitialLocale(
-  storage?: Pick<Storage, 'getItem'>,
+  storage?: StorageReader | null,
   languages?: readonly string[],
 ): HelmxLocale {
-  return getStoredLocale(storage) ?? resolveBrowserLocale(languages)
+  return resolveLocale(getStoredLocalePreference(storage), languages)
 }
 
 /** Sync the effective locale to the root document lang attribute. */

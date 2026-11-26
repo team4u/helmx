@@ -28,6 +28,7 @@ import type {
 import { conversationsApi } from '../src/lib/api.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import type { ArtifactMetadata } from '@helmx/protocol'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import {
   COMPLETION_VISIBLE_LIMIT,
   buildCompletionActionCall,
@@ -40,6 +41,8 @@ import {
   replaceTriggerToken,
   verifyCompletionActionManifest,
 } from '../src/conversation/composer-completion-model.js'
+
+const enT = createWebTranslator('en')
 
 // ---------------------------------------------------------------------------
 // Pure model
@@ -98,16 +101,16 @@ test('completersForTrigger: trigger + scope filtering with stable priority desc'
 
 test('extract/parse: per-item boundary validation; invalid items dropped with diagnostics', { timeout: 60_000 }, () => {
   const good = { id: 'a', label: 'A', insertText: 'x' }
-  const doc = extractCompletionItems({ items: [good, { id: '', label: 'B', insertText: 'y' }, null, { id: 'c', label: 'C', insertText: 'z', hint: 1 }] }, 'items')
+  const doc = extractCompletionItems({ items: [good, { id: '', label: 'B', insertText: 'y' }, null, { id: 'c', label: 'C', insertText: 'z', hint: 1 }] }, 'items', enT)
   assert.equal(doc.items!.length, 1)
   assert.equal(doc.items![0]!.id, 'a')
   assert.match(doc.error!, /3 invalid candidates dropped/)
-  assert.equal(extractCompletionItems({ nope: [] }, 'items').error !== undefined, true, 'a missing array field diagnoses explicitly')
-  assert.equal(extractCompletionItems(undefined, 'items').items, null, 'not-loaded is not an error')
-  const action = parseCompletionActionResult({ items: [good, 'bad'] })
+  assert.equal(extractCompletionItems({ nope: [] }, 'items', enT).error !== undefined, true, 'a missing array field diagnoses explicitly')
+  assert.equal(extractCompletionItems(undefined, 'items', enT).items, null, 'not-loaded is not an error')
+  const action = parseCompletionActionResult({ items: [good, 'bad'] }, enT)
   assert.equal(action.items!.length, 1)
   assert.match(action.error!, /1 invalid candidates dropped/)
-  assert.match(parseCompletionActionResult({ nope: 1 }).error!, /missing the items array/)
+  assert.match(parseCompletionActionResult({ nope: 1 }, enT).error!, /missing the items array/)
 })
 
 test('verifyCompletionActionManifest: requires a real manifest with idempotent:true', { timeout: 60_000 }, () => {
@@ -115,9 +118,9 @@ test('verifyCompletionActionManifest: requires a real manifest with idempotent:t
     { pluginId: 'p1', id: 'search', description: '', inputSchema: {}, outputSchema: {}, idempotent: true },
     { pluginId: 'p1', id: 'mutate', description: '', inputSchema: {}, outputSchema: {} },
   ]
-  assert.equal(verifyCompletionActionManifest(actions, 'p1', 'search'), null)
-  assert.match(verifyCompletionActionManifest(actions, 'p1', 'mutate')!, /idempotent/)
-  assert.match(verifyCompletionActionManifest(actions, 'p1', 'ghost')!, /not registered/)
+  assert.equal(verifyCompletionActionManifest(actions, 'p1', 'search', enT), null)
+  assert.match(verifyCompletionActionManifest(actions, 'p1', 'mutate', enT)!, /idempotent/)
+  assert.match(verifyCompletionActionManifest(actions, 'p1', 'ghost', enT)!, /not registered/)
 })
 
 test('buildCompletionActionCall: a real conversation passes conversationId; draft state decides profileId by schema or rejects explicitly', { timeout: 60_000 }, () => {
@@ -150,17 +153,17 @@ test('buildCompletionActionCall: a real conversation passes conversationId; draf
     outputSchema: {},
   }
 
-  assert.deepEqual(buildCompletionActionCall(profileAware, 'co', { conversationId: 7, profileId: 'assistant' }), {
+  assert.deepEqual(buildCompletionActionCall(profileAware, 'co', { conversationId: 7, profileId: 'assistant' }, enT), {
     input: { query: 'co', conversationId: 7 },
     conversationId: 7,
   })
-  assert.deepEqual(buildCompletionActionCall(profileAware, 'co', { profileId: 'assistant' }), {
+  assert.deepEqual(buildCompletionActionCall(profileAware, 'co', { profileId: 'assistant' }, enT), {
     input: { query: 'co', profileId: 'assistant' },
   })
-  assert.deepEqual(buildCompletionActionCall(queryOnly, 'hi', { profileId: 'assistant' }), {
+  assert.deepEqual(buildCompletionActionCall(queryOnly, 'hi', { profileId: 'assistant' }, enT), {
     input: { query: 'hi' },
   })
-  const rejected = buildCompletionActionCall(convRequired, 'hi', { profileId: 'assistant' })
+  const rejected = buildCompletionActionCall(convRequired, 'hi', { profileId: 'assistant' }, enT)
   assert.equal(rejected.input, null)
   assert.match(rejected.error!, /requires an existing conversation/)
 })

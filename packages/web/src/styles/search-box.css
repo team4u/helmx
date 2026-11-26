@@ -1,11 +1,8 @@
 /* ==========================================================================
- * 搜索框统一规范（位于 primitives.css 之后，无需 !important 即可中和内层 .input）
- * 外观统一交给容器类（.search-box / .search-box-toolbar / .sidebar-search），
- * 内层输入框透明无边框，避免双层描边与高亮套高亮。
+ * 侧栏搜索框中性覆写与原生 search 兜底（共享 .search-box 规范归属 primitives.css）
+ * 位于 navigation.css 与 primitives.css 之后，中和内层 .input 描边与原生清除 X。
  * ========================================================================== */
 
-.search-box > input,
-.search-box > .input,
 .sidebar-search .sidebar-search-input,
 .sidebar-search-input {
   border: none;
@@ -17,8 +14,6 @@
   min-height: 0;
 }
 
-.search-box > input:focus,
-.search-box > .input:focus,
 .sidebar-search .sidebar-search-input:focus,
 .sidebar-search-input:focus {
   border-color: transparent;

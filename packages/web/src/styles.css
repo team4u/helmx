@@ -9,6 +9,9 @@
 @import './styles/shell.css' layer(host-components);
 @import './styles/navigation.css' layer(host-components);
 @import './styles/conversation.css' layer(host-components);
+@import './styles/markdown.css' layer(host-components);
+@import './styles/timeline.css' layer(host-components);
+@import './styles/tool-trace.css' layer(host-components);
 @import './styles/forms.css' layer(host-components);
 @import './styles/primitives.css' layer(host-components);
 @import './styles/composer.css' layer(host-components);

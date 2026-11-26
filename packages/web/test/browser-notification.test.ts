@@ -25,11 +25,12 @@ import vm from 'node:vm'
 
 
 const {
+  browserNotificationClient,
   isPageActive,
   readBrowserNotificationPermission,
+  registerBrowserNotificationNavigator,
   registerBrowserNotificationServiceWorker,
   requestBrowserNotificationPermission,
-  resetBrowserNotificationServiceWorkerForTest,
   showBrowserNotification,
 } = await import('../src/lib/browser-notification.js')
 
@@ -168,7 +169,7 @@ function installFakeServiceWorker(options: {
       }
     },
     restore: () => {
-      resetBrowserNotificationServiceWorkerForTest()
+      browserNotificationClient.reset()
       if (originalDesc !== undefined) {
         Object.defineProperty(navigator, 'serviceWorker', originalDesc)
       } else {
@@ -216,7 +217,7 @@ test('权限未授予时投递返回 false 且不构造通知', { timeout: 60_00
 })
 
 test('权限授予后无 SW 时回退 new Notification：透传 title/body/tag/icon，onclick 先聚焦窗口再回调', { timeout: 60_000 }, () => {
-  resetBrowserNotificationServiceWorkerForTest()
+  browserNotificationClient.reset()
   const instances = installFakeNotification({ permission: 'granted' })
   const clicked: string[] = []
   const focused: boolean[] = []
@@ -249,14 +250,14 @@ test('权限授予后无 SW 时回退 new Notification：透传 title/body/tag/i
 })
 
 test('通知构造异常且无 SW：返回 false 不抛出（不伪造成功）', { timeout: 60_000 }, () => {
-  resetBrowserNotificationServiceWorkerForTest()
+  browserNotificationClient.reset()
   installFakeNotification({ permission: 'granted', constructThrows: true })
   assert.equal(showBrowserNotification({ title: 'x' }), false)
   uninstallNotification()
 })
 
 test('Service Worker 幂等注册、并发去重、消息监听去重与测试复位', { timeout: 60_000 }, async () => {
-  resetBrowserNotificationServiceWorkerForTest()
+  browserNotificationClient.reset()
   assert.equal(await registerBrowserNotificationServiceWorker(), null)
 
   const sw = installFakeServiceWorker()
@@ -274,7 +275,7 @@ test('Service Worker 幂等注册、并发去重、消息监听去重与测试�
     assert.equal(sw.listenerCounts.add, 1)
     assert.equal(sw.listenerCounts.activeMessageListeners, 1)
 
-    resetBrowserNotificationServiceWorkerForTest()
+    browserNotificationClient.reset()
     assert.equal(sw.listenerCounts.remove, 1)
     assert.equal(sw.listenerCounts.activeMessageListeners, 0)
   } finally {
@@ -346,27 +347,32 @@ test('SW 激活态通过 registration.showNotification 投递（兼容 Android C
   }
 })
 
-test('helmx:notification-click 无匹配回调时：仅对 /# 开头相对路径更新 window.location.hash', { timeout: 60_000 }, async () => {
+test('helmx:notification-click 无匹配回调时：仅对 /# 开头相对路径回调注入的 navigator，不直接改写 location.hash', { timeout: 60_000 }, async () => {
   const sw = installFakeServiceWorker({ active: true })
   const originalHash = window.location.hash
+  const navigated: string[] = []
+  const disposeNav = registerBrowserNotificationNavigator((url) => navigated.push(url))
   try {
     window.location.hash = '#/settings/profiles'
     await registerBrowserNotificationServiceWorker()
 
     sw.dispatchMessage({ type: 'helmx:notification-click', url: '/#/c/99', tag: 'helmx-conv-99' })
-    assert.equal(window.location.hash, '#/c/99')
+    assert.deepEqual(navigated, ['/#/c/99'])
+    assert.equal(window.location.hash, '#/settings/profiles', 'browser-notification must not mutate window.location.hash directly')
 
     // 忽略非 /# 开头或外部路径
     sw.dispatchMessage({ type: 'helmx:notification-click', url: 'https://evil.example/#/c/1' })
-    assert.equal(window.location.hash, '#/c/99')
-
     sw.dispatchMessage({ type: 'helmx:notification-click', url: '/api/health' })
-    assert.equal(window.location.hash, '#/c/99')
-
     // 无关消息类型忽略
     sw.dispatchMessage({ type: 'other:event', url: '/#/c/1' })
-    assert.equal(window.location.hash, '#/c/99')
+    assert.deepEqual(navigated, ['/#/c/99'])
+
+    // 注销 navigator 后不再触发回调
+    disposeNav()
+    sw.dispatchMessage({ type: 'helmx:notification-click', url: '/#/c/100' })
+    assert.deepEqual(navigated, ['/#/c/99'])
   } finally {
+    disposeNav()
     window.location.hash = originalHash
     sw.restore()
   }
@@ -441,7 +447,7 @@ test('SW showNotification 异常或异步失败时清理 handler；超上限按 
 })
 
 test('Android Chrome 首载未缓存 SW 时 new Notification 抛 TypeError：诚实返回 false，并异步探测 getRegistration("/") 补发', { timeout: 60_000 }, async () => {
-  resetBrowserNotificationServiceWorkerForTest()
+  browserNotificationClient.reset()
   const sw = installFakeServiceWorker({ active: true })
   installFakeNotification({
     permission: 'granted',

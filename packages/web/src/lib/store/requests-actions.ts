@@ -11,6 +11,7 @@ import type {
   NodeInfo,
   PluginSummary,
 } from '@helmx/protocol/browser'
+import type { WebMessageKey } from '../../i18n/catalog.js'
 import { assetsApi, conversationsApi, nodesApi, pluginsApi } from '../api.js'
 import { errorText } from '../error-text.js'
 import {
@@ -26,7 +27,7 @@ import { reconcilePluginClientCache } from '../plugin-client.js'
 import { isAbortError, type StoreRequestManager } from '../request-manager.js'
 import { evictSessionDocSubscriptions, restoreSessionDocSubscriptions } from '../session-docs.js'
 import { defaultConversationDetailTurns, type ToastNotice } from '../types.js'
-import { isConversationStatusActive } from '../use-unread-sync.js'
+import { isConversationStatusActive } from '../sync-watermarks.js'
 import { ASSET_LOAD_FAILURE_TITLES, emptyPlan, reconcileArtifactList } from './helpers.js'
 import type { CatalogSlice, NotifyPlan, StoreUpdater } from './types.js'
 
@@ -88,6 +89,7 @@ export interface StoreRequestsHost {
   getConversationArtifactsMap(): Record<number, ArtifactMetadata[]>
   getLoadErrorsMap(): Record<string, string>
   translate(text: LocalizedText): string
+  tt(key: WebMessageKey, params?: Record<string, string | number>): string
   emit(plan: NotifyPlan): void
   patchCatalog(patch: Partial<CatalogSlice>, plan?: NotifyPlan, deferEmit?: boolean): void
   updateLive(update: (state: LiveState) => LiveState, plan?: NotifyPlan, deferEmit?: boolean): void
@@ -162,7 +164,7 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
         host.pushNotice({
           type: 'notification',
           level: 'error',
-          title: host.translate(ASSET_LOAD_FAILURE_TITLES[0]!),
+          title: host.tt(ASSET_LOAD_FAILURE_TITLES[0]!),
           body: nextMessage,
         })
       },
@@ -207,7 +209,7 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
           host.pushNotice({
             type: 'notification',
             level: 'error',
-            title: host.translate(ASSET_LOAD_FAILURE_TITLES[index + 1]!),
+            title: host.tt(ASSET_LOAD_FAILURE_TITLES[index + 1]!),
             body: errorText(result.reason),
           })
         }
@@ -277,7 +279,7 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
         host.pushNotice({
           type: 'notification',
           level: 'error',
-          title: host.translate({ en: 'Compute nodes failed to load', 'zh-CN': '计算节点加载失败' }),
+          title: host.tt('shell.assets.nodesLoadFailed'),
           body: errorText(error),
         })
       }
@@ -382,15 +384,9 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
           host.pushNotice({
             type: 'notification',
             level: 'info',
-            conversationId: id,
-            title: host.translate({
-              en: 'Loaded earlier steps of current turn',
-              'zh-CN': '已加载当前长回合的更早过程步骤',
-            }),
-            body: host.translate({
-              en: 'Earlier tool and process steps for this turn were added above. Click Load earlier again to reach the previous turn.',
-              'zh-CN': '已将本回合更早的工具与过程步骤加载到上方；再次点击“加载更早”可继续加载上一回合。',
-            }),
+            target: { kind: 'conversation', conversationId: id },
+            title: host.tt('shell.history.earlierStepsLoadedTitle'),
+            body: host.tt('shell.history.earlierStepsLoadedBody'),
           })
         }
         return undefined
@@ -450,9 +446,9 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
           host.pushNotice({
             type: 'notification',
             level: 'error',
-            title: host.translate({ en: 'Conversation artifacts failed to load', 'zh-CN': '会话产物加载失败' }),
+            title: host.tt('shell.assets.artifactsLoadFailed'),
             body: errorText(error),
-            conversationId: id,
+            target: { kind: 'conversation', conversationId: id },
           })
         }
       },
@@ -558,10 +554,11 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
           host.pushNotice({
             type: 'notification',
             level: 'error',
-            title: host.translate({ en: 'Plugin state failed to load', 'zh-CN': '插件状态读取失败' }),
-            body: host.translate({
-              en: `${pluginId}/${name}: ${errorText(error)}`,
-              'zh-CN': `${pluginId}/${name}：${errorText(error)}`,
+            title: host.tt('shell.assets.pluginStateLoadFailed'),
+            body: host.tt('shell.assets.pluginStateLoadFailedBody', {
+              pluginId,
+              name,
+              error: errorText(error),
             }),
           })
         }

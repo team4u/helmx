@@ -102,4 +102,70 @@ export const skillsMessages = {
   'skills.reader.mainFile': { en: 'Main file', 'zh-CN': '主规程' },
   'skills.reader.fieldHeader': { en: 'Field', 'zh-CN': '字段' },
   'skills.reader.valueHeader': { en: 'Value', 'zh-CN': '内容' },
+
+  // Scoped node-skill API validation errors
+  'skills.scopeApi.catalogInvalid': {
+    en: 'skill_catalog invalid output: {detail}',
+    'zh-CN': 'skill_catalog 输出不合法：{detail}',
+  },
+  'skills.scopeApi.notObject': {
+    en: 'return value is not an object',
+    'zh-CN': '返回值不是对象',
+  },
+  'skills.scopeApi.nodeIdRequired': {
+    en: 'nodeId must be a non-empty string (authoritative server-echoed node)',
+    'zh-CN': 'nodeId 必须是非空字符串（服务端回显的生效节点）',
+  },
+  'skills.scopeApi.cwdInvalid': {
+    en: 'cwd, when present, must be a non-empty string (authoritative server-echoed working directory)',
+    'zh-CN': 'cwd 若存在必须是非空字符串（服务端回显的生效工作目录）',
+  },
+  'skills.scopeApi.skillsArrayRequired': {
+    en: 'skills must be an array',
+    'zh-CN': 'skills 必须是数组',
+  },
+  'skills.scopeApi.skillEntryNotObject': {
+    en: 'skills[{index}] is not an object',
+    'zh-CN': 'skills[{index}] 不是对象',
+  },
+  'skills.scopeApi.skillIdRequired': {
+    en: 'skills[{index}].id must be a non-empty string',
+    'zh-CN': 'skills[{index}].id 必须是非空字符串',
+  },
+  'skills.scopeApi.skillNameRequired': {
+    en: 'skills[{index}].name must be a string',
+    'zh-CN': 'skills[{index}].name 必须是字符串',
+  },
+  'skills.scopeApi.skillRefsInvalid': {
+    en: 'skills[{index}].references must be a string array',
+    'zh-CN': 'skills[{index}].references 必须是字符串数组',
+  },
+  'skills.scopeApi.skillPluginInvalid': {
+    en: 'skills[{index}].managedByPlugin must be a string',
+    'zh-CN': 'skills[{index}].managedByPlugin 必须是字符串',
+  },
+  'skills.scopeApi.skillSourceInvalid': {
+    en: 'skills[{index}].source must be data|agents|node',
+    'zh-CN': 'skills[{index}].source 必须是 data|agents|node',
+  },
+  'skills.scopeApi.skillDescInvalid': {
+    en: 'skills[{index}].description must be a string',
+    'zh-CN': 'skills[{index}].description 必须是字符串',
+  },
+  'skills.scopeApi.shadowedInvalid': {
+    en: 'shadowedNodeSkillIds must be a string array',
+    'zh-CN': 'shadowedNodeSkillIds 必须是字符串数组',
+  },
+  'skills.scopeApi.nodeUnavailableInvalid': {
+    en: 'nodeUnavailable must be a string',
+    'zh-CN': 'nodeUnavailable 必须是字符串',
+  },
+  'skills.scopeApi.readNotObject': {
+    en: 'skill_read invalid output: return value is not an object',
+    'zh-CN': 'skill_read 输出不合法：返回值不是对象',
+  },
+  'skills.scopeApi.readTextInvalid': {
+    en: 'skill_read invalid output: text must be a string',
+    'zh-CN': 'skill_read 输出不合法：text 必须是字符串',
+  },
 } satisfies MessageTable

@@ -162,12 +162,12 @@ function mountWatcher(initialHtml = builtIndexHtml(CURRENT_ENTRY), nav: { locati
     const { activeModal, drawerStack } = overrides
     act(() => {
       store.setKernelBootId(bootId)
-      if (activeModal !== undefined) store.setActiveModal(activeModal)
+      if (activeModal !== undefined) store.actions.setActiveModal(activeModal)
       if (drawerStack !== undefined) {
-        store.closeAllDrawers()
+        store.actions.closeAllDrawers()
         for (const frame of drawerStack) {
-          if (frame.kind === 'conversation') store.openConversationDrawer(frame.conversationId)
-          else store.openWorkbenchDrawer({ tab: frame.tab, conversationId: frame.conversationId })
+          if (frame.kind === 'conversation') store.actions.openConversationDrawer(frame.conversationId)
+          else store.actions.openWorkbenchDrawer({ tab: frame.tab, conversationId: frame.conversationId })
         }
       }
     })
@@ -344,7 +344,7 @@ describe("use-version-watcher", () => {
     assert.equal(h.reloads(), 0)
 
     act(() => {
-      h.store().openTarget({ kind: 'agent', profileId: 'p1' })
+      h.store().actions.openTarget({ kind: 'agent', profileId: 'p1' })
     })
     await flush()
     assert.equal(h.view().deferReason, 'draft', '切到该待命页后标识为当前输入内容')
@@ -656,7 +656,7 @@ describe("use-version-watcher", () => {
 
     // 关掉抽屉但分屏打开会话 9，仍属于当前可见草稿
     act(() => {
-      h.store().openTarget({ kind: 'conversation', conversationId: 9 }, { split: true })
+      h.store().actions.openTarget({ kind: 'conversation', conversationId: 9 }, { split: true })
     })
     h.renderStore('boot-2', { activeModal: null, drawerStack: [] })
     await flush()
@@ -730,7 +730,7 @@ describe("use-version-watcher", () => {
     assert.equal(h.view().deferReason, 'background-draft', '当前看会话 1 时，会话 7 上报为后台草稿')
 
     act(() => {
-      h.store().openTarget({ kind: 'conversation', conversationId: HOST_CONVERSATION.id })
+      h.store().actions.openTarget({ kind: 'conversation', conversationId: HOST_CONVERSATION.id })
     })
     await flush()
     assert.equal(h.view().deferReason, 'draft', '切到会话 7 后识别为当前输入内容')

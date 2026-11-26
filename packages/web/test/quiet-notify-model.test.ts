@@ -21,20 +21,23 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationSummary } from '@helmx/protocol'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import {
-  COMPLETED_NOTIFICATION_TITLE,
   composeTreeBlockedNotification,
   composeTreeCompletionNotification,
-  ENDED_NOTIFICATION_TITLE,
   getBlockedWatermark,
   resolveActivitySnapshot,
   shouldDeliverQuietNotification,
-  WAITING_NOTIFICATION_TITLE,
 } from '../src/shell/quiet-notify-model.js'
+import type { ConversationBackgroundIndex } from '../src/shell/conversation-status-model.js'
 import {
   summarizeConversationBackgroundActivity,
-  type ConversationBackgroundIndex,
 } from '../src/shell/background-activity-model.js'
+
+const enT = createWebTranslator('en')
+const COMPLETED_NOTIFICATION_TITLE = enT('shell.quiet.completedTitle')
+const ENDED_NOTIFICATION_TITLE = enT('shell.quiet.endedTitle')
+const WAITING_NOTIFICATION_TITLE = enT('shell.quiet.waitingTitle')
 
 function conv(partial: Partial<ConversationSummary> & { id: number }): ConversationSummary {
   return {
@@ -159,6 +162,7 @@ test('contextUsage.compacting=true counts as that root tree machine activity; on
       panels: [],
       conversations: compactingConvs,
       pluginDocs: {},
+      t: enT,
     }),
   })
   assert.deepEqual([...(busySnap.trees.get(7)?.activeConversationIds ?? [])], [7])
@@ -172,6 +176,7 @@ test('contextUsage.compacting=true counts as that root tree machine activity; on
       panels: [],
       conversations: blockedCompacting,
       pluginDocs: {},
+      t: enT,
     }),
   })
   assert.deepEqual([...(blockedSnap.trees.get(8)?.activeConversationIds ?? [])], [8])
@@ -186,6 +191,7 @@ test('contextUsage.compacting=true counts as that root tree machine activity; on
       panels: [],
       conversations: finishedConvs,
       pluginDocs: {},
+      t: enT,
     }),
   })
   assert.equal(quietSnap.trees.size, 0)
@@ -194,6 +200,7 @@ test('contextUsage.compacting=true counts as that root tree machine activity; on
     rootId: 7,
     accumulatedConversationIds: busySnap.trees.get(7)!.activeConversationIds,
     conversations: finishedConvs,
+    t: enT,
   })
   assert.ok(draft)
   assert.equal(draft.title, COMPLETED_NOTIFICATION_TITLE)
@@ -210,6 +217,7 @@ test('an empty accumulated participant set (machine never active) produces no co
     rootId: 1,
     accumulatedConversationIds: new Set(),
     conversations: [conv({ id: 1 })],
+    t: enT,
   })
   assert.equal(draft, null)
 })
@@ -223,6 +231,7 @@ test('single-tree successful completion: title "Helmx conversation completed", b
     rootId: 2,
     accumulatedConversationIds: new Set([2]),
     conversations,
+    t: enT,
   })
   assert.ok(draft)
   assert.equal(draft.title, COMPLETED_NOTIFICATION_TITLE)
@@ -236,6 +245,7 @@ test('a purely-background cycle ending (parent idle throughout) still produces a
     rootId: 7,
     accumulatedConversationIds: new Set([7]),
     conversations: [conv({ id: 7, title: '大规模重构', status: 'idle' })],
+    t: enT,
   })
   assert.ok(draft)
   assert.equal(draft.title, COMPLETED_NOTIFICATION_TITLE)
@@ -254,6 +264,7 @@ test('spawned child conversations merge into the root: children are neither list
     rootId: 5,
     accumulatedConversationIds: new Set([12, 13, 131]),
     conversations,
+    t: enT,
   })
   assert.ok(draft)
   assert.equal(draft.title, COMPLETED_NOTIFICATION_TITLE)
@@ -269,6 +280,7 @@ test('any accumulated participant (root or child) in error: the title becomes "H
       conv({ id: 1, title: '父会话', status: 'done', updatedAt: 100 }),
       conv({ id: 12, parentConversationId: 1, title: '失败子代理', status: 'error', updatedAt: 200 }),
     ],
+    t: enT,
   })
   assert.ok(childFailed)
   assert.equal(childFailed.title, ENDED_NOTIFICATION_TITLE)
@@ -280,6 +292,7 @@ test('any accumulated participant (root or child) in error: the title becomes "H
     rootId: 2,
     accumulatedConversationIds: new Set([2]),
     conversations: [conv({ id: 2, title: '失败主会话', status: 'error', updatedAt: 300 })],
+    t: enT,
   })
   assert.ok(rootFailed)
   assert.equal(rootFailed.title, ENDED_NOTIFICATION_TITLE)
@@ -301,6 +314,7 @@ test('mid-chain deleted parents and parent cycles: finite merging along survivin
     rootId: 5,
     accumulatedConversationIds: new Set([111]),
     conversations: partial,
+    t: enT,
   })
   assert.ok(draftPartial)
   assert.equal(draftPartial.body, '#11 中间层')
@@ -318,6 +332,7 @@ test('mid-chain deleted parents and parent cycles: finite merging along survivin
     rootId: 9,
     accumulatedConversationIds: new Set([9]),
     conversations: [],
+    t: enT,
   })
   assert.ok(deletedDraft)
   assert.equal(deletedDraft.title, COMPLETED_NOTIFICATION_TITLE)
@@ -330,6 +345,7 @@ test('automated helmx top-level trees stay silent on normal completion but still
     rootId: 30,
     accumulatedConversationIds: new Set([30]),
     conversations: [conv({ id: 30, title: 'Cron · nightly', ownedBy: 'helmx', status: 'done' })],
+    t: enT,
   })
   assert.equal(autoSuccess, null, 'automated success stays silent')
 
@@ -337,6 +353,7 @@ test('automated helmx top-level trees stay silent on normal completion but still
     rootId: 31,
     accumulatedConversationIds: new Set([31]),
     conversations: [conv({ id: 31, title: 'Cron · nightly', ownedBy: 'helmx', status: 'error' })],
+    t: enT,
   })
   assert.ok(autoError, 'automated failure still notifies')
   assert.equal(autoError.title, ENDED_NOTIFICATION_TITLE)
@@ -346,6 +363,7 @@ test('automated helmx top-level trees stay silent on normal completion but still
     rootId: 32,
     blockedConversationIds: new Set([32]),
     conversations: [conv({ id: 32, title: 'Cron · deploy', ownedBy: 'helmx', status: 'blocked', pendingAskCount: 1 })],
+    t: enT,
   })
   assert.ok(autoBlocked, 'automated AskDoc approval still notifies')
   assert.equal(autoBlocked.title, WAITING_NOTIFICATION_TITLE)
@@ -371,6 +389,7 @@ test('one blocked conversation in a tree: title "Helmx is waiting for you", jump
     rootId: 1,
     blockedConversationIds: new Set([1]),
     conversations,
+    t: enT,
   })
   assert.ok(draft)
   assert.equal(draft.title, WAITING_NOTIFICATION_TITLE)
@@ -388,6 +407,7 @@ test('a blocked child agent conversation: the body lists the root title while th
     blockedConversationIds: new Set([12]),
     accumulatedConversationIds: new Set([5, 12]),
     conversations,
+    t: enT,
   })
   assert.ok(draft)
   assert.equal(draft.title, WAITING_NOTIFICATION_TITLE)
@@ -407,6 +427,7 @@ test('multiple blocked conversations in one tree dedupe by root; jump to the mos
     blockedConversationIds: new Set([51, 52]),
     accumulatedConversationIds: new Set([5, 51, 52, 53]),
     conversations,
+    t: enT,
   })
   assert.ok(draft)
   assert.equal(draft.title, WAITING_NOTIFICATION_TITLE)
@@ -419,6 +440,7 @@ test('returns null when every blocked conversation was already deleted', { timeo
     rootId: 1,
     blockedConversationIds: new Set([2]),
     conversations: [conv({ id: 1, title: '正常根会话', status: 'done' })],
+    t: enT,
   })
   assert.equal(draft, null)
 })

@@ -25,6 +25,18 @@ import { PluginClientContext } from './plugin-context.js'
 const NOOP_UNSUBSCRIBE = (): void => {}
 const EMPTY_SLOT_ITEMS: ReadonlyArray<PluginSlotPortItem> = []
 
+/** Explicit dependency carrier so React hooks track reactive store snapshots without a lint suppression. */
+function collectSlotItemsWithDeps(
+  collectItems: (qualified: string, conversationId?: number) => ReadonlyArray<PluginSlotPortItem>,
+  qualified: string,
+  conversationId: number | undefined,
+  _pluginsSnapshot: unknown,
+  _summary: unknown,
+  _detailFallback: unknown,
+): ReadonlyArray<PluginSlotPortItem> {
+  return collectItems(qualified, conversationId)
+}
+
 export interface PluginSlotProps {
   /** Short internal slot name of this plugin (auto-prefixed with ctx.pluginId); containing '/' means an explicit fully qualified name. */
   name: string
@@ -157,9 +169,17 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
   const validQualified = hasValidOwner && isValidQualifiedSlotTarget(qualified) ? qualified : null
 
   const items = useMemo(
-    () => (validQualified !== null ? host.slots.collectItems(validQualified, conversationId) : EMPTY_SLOT_ITEMS),
-    // pluginsSnapshot / summary / detailFallback represent the subscribed inputs read inside host.slots.collectItems
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    () =>
+      validQualified !== null
+        ? collectSlotItemsWithDeps(
+            host.slots.collectItems,
+            validQualified,
+            conversationId,
+            pluginsSnapshot,
+            summary,
+            detailFallback,
+          )
+        : EMPTY_SLOT_ITEMS,
     [host, validQualified, conversationId, pluginsSnapshot, summary, detailFallback],
   )
 

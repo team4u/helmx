@@ -32,21 +32,15 @@ import {
   IconButton,
   LoadingState,
   SearchBox,
-  Stack,
   Tooltip,
-  useSharedNowMs,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { openStandbyWithFocus } from '../conversation/standby-focus.js'
-import { formatStopwatchMs } from '../lib/format.js'
 import { useAuthConnection, useProfilesSlice, useStoreActions } from '../lib/store-context.js'
 import { BatchActionBar } from '../ui/BatchActionBar.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
-import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
-import { useBatchConversationDelete } from './use-batch-conversation-delete.js'
 import {
   buildArchivedOverviewCards,
-  buildNewTopicCandidates,
   buildOverviewCards,
   buildSidebarGroupedWorkingSet,
   loadSidebarGroupBy,
@@ -61,22 +55,25 @@ import {
   type OverviewGroupBy,
   type SidebarOverviewDescendantsSlice,
 } from '../overview/overview-model.js'
-import { hasConversationStatusLight, type ConversationBackgroundIndex } from './background-activity-model.js'
-import { formatModShiftShortcut } from './shortcuts-model.js'
+import { hasConversationStatusLight } from './background-activity-model.js'
+import type { ConversationBackgroundIndex } from './conversation-status-model.js'
+import { ElapsedTimer } from './ElapsedTimer.js'
+import { NewTopicButton } from './NewTopicButton.js'
+import { useBulkArchive } from './use-bulk-archive.js'
+import { useCollapsibleGroups } from './use-collapsible-groups.js'
 import {
   activeConversationIdsOf,
   buildAgentStandings,
+  buildNewTopicCandidates,
   getConversationPresence,
-  isConversationArchivable,
   isConversationBulkSelectable,
   openAgentStandby,
   presenceNavClassSuffix,
   resolveSidebarTargetPresence,
   shouldSkipNavRowClick,
-  type AgentStanding,
   type SidebarStoreView,
 } from './sidebar-model.js'
-import { ConversationStatusDot, RemoteNodeTag, SidebarPaneTag } from './SidebarPrimitives.js'
+import { ConversationStatusDot, SidebarPaneTag } from './SidebarPrimitives.js'
 
 export interface SidebarConversationListProps {
   store: SidebarStoreView
@@ -85,243 +82,13 @@ export interface SidebarConversationListProps {
   onNavigate?: () => void
 }
 
-const EMPTY_COLLAPSED_KEYS: ReadonlySet<string> = new Set()
+const EMPTY_DESCENDANT_SLICE: SidebarOverviewDescendantsSlice = Object.freeze({
+  visible: [],
+  hiddenCount: 0,
+  hasCollapsibleQuiet: false,
+})
 
-function renderNewTopicMenuItems(
-  candidates: ReadonlyArray<AgentStanding>,
-  formatNewTopicUnder: (label: string) => string,
-  onSelectProfile: (profileId: string) => void,
-): ReactNode {
-  return candidates.map((standing) => {
-    const nodeId = standing.primaryConversation?.nodeId
-    const remoteNodeId = nodeId !== undefined && nodeId !== '' && nodeId !== 'local' ? nodeId : null
-    return (
-      <DropdownMenuItem
-        key={standing.profileId}
-        title={formatNewTopicUnder(standing.label)}
-        onSelect={() => onSelectProfile(standing.profileId)}
-      >
-        <span className="pane-more-item-label">
-          <HelmxIcon name="bot" size={13} />
-          {standing.label}
-          {remoteNodeId !== null && <RemoteNodeTag nodeId={remoteNodeId} />}
-        </span>
-      </DropdownMenuItem>
-    )
-  })
-}
-
-/** 工作集分组栏右侧紧凑「新话题」图标按钮：单候选直进待命页，多候选下拉选角（不挂 .nav-item 防移动端误关抽屉）。 */
-function SidebarNewTopicButton({
-  candidates,
-  store,
-  onSelectProfile,
-}: {
-  candidates: ReadonlyArray<AgentStanding>
-  store: SidebarStoreView
-  onSelectProfile: (profileId: string, opts?: { flush?: boolean }) => void
-}): ReactNode {
-  const { t } = useWebLocale()
-  const pickedRef = useRef(false)
-  if (candidates.length === 0) return null
-
-  const standbyPresence = resolveSidebarTargetPresence(store, (target) => target.kind === 'agent')
-  const stateClass = standbyPresence.active
-    ? ' is-active'
-    : standbyPresence.splitSecondary
-      ? ' is-split'
-      : ''
-  const buttonClassName = `sidebar-header-icon-btn sidebar-new-topic-btn${stateClass}${standbyPresence.focused ? ' nav-item-focused' : ''}`
-
-  const newTopicShortcut = formatModShiftShortcut('O')
-  const singleCandidate = candidates.length === 1 ? (candidates[0] ?? null) : null
-  if (singleCandidate !== null) {
-    const label = t('shell.agents.newTopicUnderWithShortcut', { label: singleCandidate.label, shortcut: newTopicShortcut })
-    return (
-      <Tooltip content={label} side="top">
-        <IconButton
-          variant="ghost"
-          size="xs"
-          className={buttonClassName}
-          icon={<HelmxIcon name="plus" size={13} />}
-          aria-label={t('conv.pane.newTopic')}
-          aria-current={standbyPresence.active ? 'page' : undefined}
-          onClick={() => onSelectProfile(singleCandidate.profileId)}
-        />
-      </Tooltip>
-    )
-  }
-
-  return (
-    <DropdownMenu
-      onOpenChange={(open) => {
-        if (open) pickedRef.current = false
-      }}
-    >
-      <Tooltip content={t('conv.pane.newTopicWithShortcut', { shortcut: newTopicShortcut })} side="top">
-        <DropdownMenuTrigger asChild>
-          <IconButton
-            variant="ghost"
-            size="xs"
-            className={buttonClassName}
-            icon={<HelmxIcon name="plus" size={13} />}
-            aria-label={t('conv.pane.newTopic')}
-            aria-haspopup="menu"
-            aria-current={standbyPresence.active ? 'page' : undefined}
-          />
-        </DropdownMenuTrigger>
-      </Tooltip>
-      <DropdownMenuPortal>
-        <DropdownMenuContent
-          className="pane-more-popover"
-          align="end"
-          sideOffset={4}
-          onCloseAutoFocus={(e) => {
-            if (pickedRef.current) {
-              pickedRef.current = false
-              e.preventDefault()
-            }
-          }}
-        >
-          {renderNewTopicMenuItems(
-            candidates,
-            (label) => t('shell.agents.newTopicUnder', { label }),
-            (profileId) => {
-              pickedRef.current = true
-              onSelectProfile(profileId, { flush: false })
-            },
-          )}
-        </DropdownMenuContent>
-      </DropdownMenuPortal>
-    </DropdownMenu>
-  )
-}
-
-/** 0 会话空态显式「+ 新话题」引导按钮（独立类名，避免与工具栏 .sidebar-new-topic-btn 混用）。 */
-function SidebarEmptyNewTopicButton({
-  candidates,
-  onSelectProfile,
-}: {
-  candidates: ReadonlyArray<AgentStanding>
-  onSelectProfile: (profileId: string, opts?: { flush?: boolean }) => void
-}): ReactNode {
-  const { t } = useWebLocale()
-  const pickedRef = useRef(false)
-  if (candidates.length === 0) return null
-
-  const newTopicShortcut = formatModShiftShortcut('O')
-  const singleCandidate = candidates.length === 1 ? (candidates[0] ?? null) : null
-  if (singleCandidate !== null) {
-    return (
-      <Button
-        size="sm"
-        className="sidebar-empty-new-topic-btn"
-        icon={<HelmxIcon name="plus" size={12} />}
-        title={t('shell.agents.newTopicUnderWithShortcut', { label: singleCandidate.label, shortcut: newTopicShortcut })}
-        aria-label={t('conv.pane.newTopic')}
-        onClick={() => onSelectProfile(singleCandidate.profileId)}
-      >
-        {t('conv.pane.newTopic')}
-      </Button>
-    )
-  }
-
-  return (
-    <DropdownMenu
-      onOpenChange={(open) => {
-        if (open) pickedRef.current = false
-      }}
-    >
-      <DropdownMenuTrigger asChild>
-        <Button
-          size="sm"
-          className="sidebar-empty-new-topic-btn"
-          icon={<HelmxIcon name="plus" size={12} />}
-          title={t('conv.pane.newTopicWithShortcut', { shortcut: newTopicShortcut })}
-          aria-label={t('conv.pane.newTopic')}
-          aria-haspopup="menu"
-        >
-          <Stack inline direction="horizontal" gap="xs" align="center">
-            <span>{t('conv.pane.newTopic')}</span>
-            <HelmxIcon name="chevron-down" size={11} />
-          </Stack>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuPortal>
-        <DropdownMenuContent
-          className="pane-more-popover"
-          align="start"
-          sideOffset={4}
-          onCloseAutoFocus={(e) => {
-            if (pickedRef.current) {
-              pickedRef.current = false
-              e.preventDefault()
-            }
-          }}
-        >
-          {renderNewTopicMenuItems(
-            candidates,
-            (label) => t('shell.agents.newTopicUnder', { label }),
-            (profileId) => {
-              pickedRef.current = true
-              onSelectProfile(profileId, { flush: false })
-            },
-          )}
-        </DropdownMenuContent>
-      </DropdownMenuPortal>
-    </DropdownMenu>
-  )
-}
-
-/** 叶子秒表组件：将 1Hz `useSharedNowMs` 订阅收窄至单个计时文本节点，避免侧栏整树每秒重渲染。 */
-function ElapsedTimer({
-  since,
-  prefixLabel,
-  className,
-  leadingSeparator = false,
-  trailingSeparator = false,
-}: {
-  since?: number
-  prefixLabel?: string
-  className: string
-  leadingSeparator?: boolean
-  trailingSeparator?: boolean
-}): ReactNode {
-  const nowMs = useSharedNowMs(since !== undefined)
-  if (since === undefined || nowMs === undefined) {
-    if (prefixLabel !== undefined) {
-      return (
-        <span className={className} title={prefixLabel}>
-          {prefixLabel}
-        </span>
-      )
-    }
-    return leadingSeparator && trailingSeparator ? (
-      <span className="sidebar-overview-meta-sep" aria-hidden="true">
-        ·
-      </span>
-    ) : null
-  }
-  const formatted = formatStopwatchMs(Math.max(0, nowMs - since))
-  const text = prefixLabel !== undefined ? `${prefixLabel} ${formatted}` : formatted
-  return (
-    <>
-      {leadingSeparator && (
-        <span className="sidebar-overview-meta-sep" aria-hidden="true">
-          ·
-        </span>
-      )}
-      <span className={className} title={prefixLabel !== undefined ? text : undefined}>
-        {text}
-      </span>
-      {trailingSeparator && (
-        <span className="sidebar-overview-meta-sep" aria-hidden="true">
-          ·
-        </span>
-      )}
-    </>
-  )
-}
+// NewTopic and ElapsedTimer extracted to shell/NewTopicButton.tsx and shell/ElapsedTimer.tsx.
 
 interface SidebarWorkingSetTreeItemProps {
   card: OverviewCard
@@ -433,6 +200,7 @@ const SidebarWorkingSetTreeItem = memo(
           <ElapsedTimer
             since={runningSince}
             className="sidebar-overview-meta-time mono tabular-nums"
+            separatorClassName="sidebar-overview-meta-sep"
             leadingSeparator={leadingParts.length > 0}
             trailingSeparator={trailingParts.length > 0}
           />
@@ -800,11 +568,6 @@ export function SidebarConversationList({
   const [searchOpen, setSearchOpen] = useState(false)
   const [groupBy, setGroupBy] = useState<OverviewGroupBy>(() => loadSidebarGroupBy())
   const [groupMenuOpen, setGroupMenuOpen] = useState(false)
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
-  const [searchCollapseState, setSearchCollapseState] = useState<{ query: string; keys: Set<string> }>({
-    query: '',
-    keys: new Set(),
-  })
   const [expandedCardIds, setExpandedCardIds] = useState<Set<number>>(new Set())
   const searchInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -814,8 +577,6 @@ export function SidebarConversationList({
   }, [])
 
   const filterOpen = searchOpen || search !== ''
-  const normalizedQuery = search.trim()
-  const searchActive = normalizedQuery !== ''
 
   useEffect(() => {
     if (searchOpen) {
@@ -878,31 +639,7 @@ export function SidebarConversationList({
   )
 
   const cardGroups = workingSet.groups
-
-  const activeCollapsedKeys = useMemo<ReadonlySet<string>>(() => {
-    if (searchActive) {
-      return searchCollapseState.query === normalizedQuery ? searchCollapseState.keys : EMPTY_COLLAPSED_KEYS
-    }
-    return collapsedGroups
-  }, [searchActive, searchCollapseState, normalizedQuery, collapsedGroups])
-
-  const toggleGroupCollapsed = (groupKey: string): void => {
-    if (searchActive) {
-      setSearchCollapseState((prev) => {
-        const nextKeys = prev.query === normalizedQuery ? new Set(prev.keys) : new Set<string>()
-        if (nextKeys.has(groupKey)) nextKeys.delete(groupKey)
-        else nextKeys.add(groupKey)
-        return { query: normalizedQuery, keys: nextKeys }
-      })
-      return
-    }
-    setCollapsedGroups((prev) => {
-      const next = new Set(prev)
-      if (next.has(groupKey)) next.delete(groupKey)
-      else next.add(groupKey)
-      return next
-    })
-  }
+  const { activeCollapsedKeys, toggleGroupCollapsed, normalizedQuery } = useCollapsibleGroups(search)
 
   const toggleCardExpanded = useCallback((rootConversationId: number): void => {
     setExpandedCardIds((prev) => {
@@ -918,41 +655,14 @@ export function SidebarConversationList({
     [cardGroups, activeCollapsedKeys],
   )
 
-  const [archiving, setArchiving] = useState(false)
-  const selectableCardIds = useMemo(
-    () => renderedCards.filter((card) => isConversationBulkSelectable(card.root)).map((card) => card.root.id),
-    [renderedCards],
-  )
-  const batch = useBatchConversationDelete({
-    selectableIds: selectableCardIds,
+  const renderedRoots = useMemo(() => renderedCards.map((card) => card.root), [renderedCards])
+  const batch = useBulkArchive({
+    renderedRoots,
+    targetArchived: true,
     pushNotice: store.pushNotice,
     t,
-    busy: archiving,
   })
-  const effectiveArchivableSelectedIds = useMemo(
-    () =>
-      renderedCards
-        .filter((card) => batch.selectedIds.has(card.root.id) && isConversationArchivable(card.root))
-        .map((card) => card.root.id),
-    [renderedCards, batch.selectedIds],
-  )
-
-  const executeBatchArchive = async (): Promise<void> => {
-    if (effectiveArchivableSelectedIds.length === 0 || archiving || batch.deleting) return
-    setArchiving(true)
-    try {
-      const archivableSet = new Set(effectiveArchivableSelectedIds)
-      const convs = renderedCards
-        .filter((card) => archivableSet.has(card.root.id))
-        .map((card) => card.root)
-      if (convs.length === 0) return
-      const outcome = await patchConversationsArchived(convs, true)
-      store.pushNotice(archiveBatchNotice(true, outcome, t))
-      batch.exitBatchMode()
-    } finally {
-      setArchiving(false)
-    }
-  }
+  const { selectableIds: selectableCardIds, archiving, effectiveArchivableSelectedIds, executeBatchArchive } = batch
 
   const descendantSlicesByRoot = useMemo(() => {
     const map = new Map<number, SidebarOverviewDescendantsSlice>()
@@ -1025,6 +735,14 @@ export function SidebarConversationList({
   ]
   const currentGroupLabel = groupByOptions.find((option) => option.value === groupBy)?.label ?? t('shell.overview.groupByStatus')
   const hasVisibleMatchedCards = cardGroups.some((group) => group.cards.length > 0)
+
+  const standbyPresence = resolveSidebarTargetPresence(store, (target) => target.kind === 'agent')
+  const standbyStateClass = standbyPresence.active
+    ? ' is-active'
+    : standbyPresence.splitSecondary
+      ? ' is-split'
+      : ''
+  const newTopicButtonClass = `sidebar-header-icon-btn sidebar-new-topic-btn${standbyStateClass}${standbyPresence.focused ? ' nav-item-focused' : ''}`
 
   return (
     <div className="sidebar-group sidebar-overview-group">
@@ -1105,9 +823,11 @@ export function SidebarConversationList({
               onClick={batch.toggleBatchMode}
             />
           </Tooltip>
-          <SidebarNewTopicButton
+          <NewTopicButton
+            variant="icon"
+            className={newTopicButtonClass}
             candidates={newTopicCandidates}
-            store={store}
+            active={standbyPresence.active}
             onSelectProfile={openStandby}
           />
         </div>
@@ -1176,7 +896,12 @@ export function SidebarConversationList({
       ) : !workingSet.searchActive && workingSet.totalRootCount === 0 && cardGroups.length === 0 ? (
         <div className="sidebar-overview-empty">
           <span>{t('shell.sidebar.overviewEmpty')}</span>
-          <SidebarEmptyNewTopicButton candidates={newTopicCandidates} onSelectProfile={openStandby} />
+          <NewTopicButton
+            variant="empty"
+            className="sidebar-empty-new-topic-btn"
+            candidates={newTopicCandidates}
+            onSelectProfile={openStandby}
+          />
         </div>
       ) : cardGroups.length === 0 ? (
           <div className="sidebar-search-empty">{t('shell.overview.emptyFiltered')}</div>
@@ -1272,13 +997,7 @@ export function SidebarConversationList({
                         <SidebarWorkingSetTreeItem
                           key={card.root.id}
                           card={card}
-                          descendantSlice={
-                            descendantSlicesByRoot.get(card.root.id) ?? {
-                              visible: [],
-                              hiddenCount: 0,
-                              hasCollapsibleQuiet: false,
-                            }
-                          }
+                          descendantSlice={descendantSlicesByRoot.get(card.root.id) ?? EMPTY_DESCENDANT_SLICE}
                           expanded={expandedCardIds.has(card.root.id)}
                           store={store}
                           viewedConversationIds={viewedConversationIds}

@@ -105,7 +105,7 @@ const mockPluginsWithFailure: PluginSummary[] = [
 function spyOpenTarget(store: import('../src/lib/helmx-store.js').HelmxExternalStore, opened: unknown[]): void {
   ;(store.actions as unknown as { openTarget: (target: unknown) => void }).openTarget = (target) => {
     opened.push(target)
-    store.applyPrimaryTarget(
+    store.navActions.applyPrimaryTarget(
       typeof target === 'string' ? { kind: 'plugins' } : target as import('../src/lib/types.js').ResolvedTarget,
     )
   }
@@ -624,7 +624,7 @@ test('PluginCenter: 顶栏页签切换（Plugins <-> Core）、动作点击选�
     })
     // Radix Tabs activates via pointerdown/click; ensure store updated when clicked
     await act(async () => {
-      store.applyPrimaryTarget({ kind: 'plugins', tab: 'core', coreOwner: 'core:conversations' })
+      store.navActions.applyPrimaryTarget({ kind: 'plugins', tab: 'core', coreOwner: 'core:conversations' })
     })
 
     // 在 CoreCapabilityDetailDrawer 中点击 search 动作 -> 选中；再次点击 -> 收起
@@ -651,7 +651,7 @@ test('PluginCenter: 顶栏页签切换（Plugins <-> Core）、动作点击选�
 
     // 传入不存在的 coreAction -> 显式展示警告诊断
     await act(async () => {
-      store.applyPrimaryTarget({
+      store.navActions.applyPrimaryTarget({
         kind: 'plugins',
         tab: 'core',
         coreOwner: 'core:conversations',

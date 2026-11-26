@@ -20,6 +20,7 @@ const {
 } = await import('../src/plugins/plugin-card-model.js')
 const { createWebTranslator } = await import('../src/i18n/catalog.js')
 const { HelmxExternalStoreContext, makeTestStore } = await import('./helpers/store.js')
+const enT = createWebTranslator('en')
 
 // ---------------------------------------------------------------------------
 // 辅助 Mock 插件数据
@@ -556,17 +557,18 @@ test('getPluginDescription：LocalizedText 地图按 locale 解析，纯字符�
     actions: [],
     hooks: [],
   })
-  assert.equal(getPluginDescription(localized, 'zh-CN'), '编排子代理执行任务。')
-  assert.equal(getPluginDescription(localized, 'en'), 'Orchestrates sub-agents.')
+  assert.equal(getPluginDescription(localized, 'zh-CN', enT), '编排子代理执行任务。')
+  assert.equal(getPluginDescription(localized, 'en', enT), 'Orchestrates sub-agents.')
   // 地图缺当前语言键时回落 en（协议 resolveLocalizedText 语义）
-  assert.equal(getPluginDescription(makePlugin({ description: { en: 'English only.' } }), 'zh-CN'), 'English only.')
+  assert.equal(getPluginDescription(makePlugin({ description: { en: 'English only.' } }), 'zh-CN', enT), 'English only.')
   // 纯字符串描述（向后兼容）在任意 locale 下原样返回
-  assert.equal(getPluginDescription(makePlugin({ description: '纯字符串描述' }), 'zh-CN'), '纯字符串描述')
+  assert.equal(getPluginDescription(makePlugin({ description: '纯字符串描述' }), 'zh-CN', enT), '纯字符串描述')
   // 未声明描述回退能力透视文案（保持既有行为）
   assert.match(
     getPluginDescription(
       makePlugin({ description: undefined, tools: ['subagent'], actions: [], hooks: [] }),
       'en',
+      enT,
     ),
     /Provides 1 tools capabilities\./,
   )

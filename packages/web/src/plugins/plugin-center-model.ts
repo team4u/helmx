@@ -6,7 +6,7 @@
  */
 import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
 import type { GroupedUiSpecs } from '../lib/types.js'
 import { pluginHasOpenableScreen } from './plugin-card-model.js'
@@ -16,7 +16,7 @@ export type PluginStatusFilter = 'all' | 'views' | 'enabled' | 'disabled'
 /** Localized status filter tab label (reuses common.all / plugins.center.tabViews / common.enabled / common.disabled). */
 export function pluginStatusTabLabel(
   status: PluginStatusFilter,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   switch (status) {
     case 'all':

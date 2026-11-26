@@ -27,17 +27,20 @@ import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
 import { makeTestStore, HelmxExternalStoreContext } from './helpers/store.js'
 import {
+  browserNotificationClient,
   registerBrowserNotificationServiceWorker,
-  resetBrowserNotificationServiceWorkerForTest,
 } from '../src/lib/browser-notification.js'
 import { useQuietNotifier, quietNotifyTimings } from '../src/shell/use-quiet-notifier.js'
 import {
-  COMPLETED_NOTIFICATION_TITLE,
-  ENDED_NOTIFICATION_TITLE,
-  WAITING_NOTIFICATION_TITLE,
   composeTreeBlockedNotification,
   composeTreeCompletionNotification,
 } from '../src/shell/quiet-notify-model.js'
+
+const enT = createWebTranslator('en')
+const zhT = createWebTranslator('zh-CN')
+const COMPLETED_NOTIFICATION_TITLE = enT('shell.quiet.completedTitle')
+const ENDED_NOTIFICATION_TITLE = enT('shell.quiet.endedTitle')
+const WAITING_NOTIFICATION_TITLE = enT('shell.quiet.waitingTitle')
 
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
@@ -1046,7 +1049,7 @@ test('SW 激活时 completion 与 blocked 通知透传目标会话 url（/#/c/<i
     assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 5 })
     harness.unmount()
   } finally {
-    resetBrowserNotificationServiceWorkerForTest()
+    browserNotificationClient.reset()
     if (originalSwDesc !== undefined) {
       Object.defineProperty(navigator, 'serviceWorker', originalSwDesc)
     } else {
@@ -1061,9 +1064,6 @@ test('SW 激活时 completion 与 blocked 通知透传目标会话 url（/#/c/<i
 // ---------------------------------------------------------------------------
 // 通知展示文案双语（en/zh-CN）：title/body 投递时刻随当前 locale
 // ---------------------------------------------------------------------------
-
-const zhT = createWebTranslator('zh-CN')
-const enT = createWebTranslator('en')
 
 test('通知文案纯函数：composeTree* 直接走 shell.quiet.* i18n 词条，零英文二次解析', { timeout: 60_000 }, () => {
   const okConv = conv({ id: 5, title: '修复构建失败', status: 'done' })

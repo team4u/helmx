@@ -17,10 +17,12 @@
 import { useSyncExternalStore } from 'react'
 import type { ArtifactMetadata, ConversationInit, ConversationSummary, Profile } from '@helmx/protocol/browser'
 import { resolveEffectiveThinkingLevel } from '@helmx/plugin-client/pure'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
+import { isElementVisibleInDocument } from '../lib/dom-visibility.js'
+import { resolveFocusedPanel } from '../lib/panel-focus.js'
 import type { ActiveModal, FocusedPanel, ResolvedTarget } from '../lib/types.js'
-import { hasDialogOpen, resolveFocusedPanel } from '../shell/shortcuts-model.js'
-import { isElementVisibleInDocument, isTextInputElement } from '../shell/version-watch-model.js'
+import { hasDialogOpen } from '../shell/shortcuts-model.js'
+import { isTextInputElement } from '../shell/version-watch-model.js'
 import { envDraftError, parseCompactSlashCommand, type EnvDraft } from './composer-model.js'
 
 /** Attachments staged locally before sending (no conversation created, nothing uploaded). */
@@ -552,7 +554,7 @@ export function resolveStandbyThinkingLevel(
 /** Post-customization validation (reuses the conversation environment bar's
  * rule: the directory is required and must be an absolute path). Always passes
  * while not customized. */
-export function standbyEnvError(draft: Pick<StandbyDraftState, 'envCustomized' | 'envNodeId' | 'envCwd'>, t: WebMessageTranslator = englishWebTranslator): string | null {
+export function standbyEnvError(draft: Pick<StandbyDraftState, 'envCustomized' | 'envNodeId' | 'envCwd'>, t: WebMessageTranslator): string | null {
   if (!draft.envCustomized) return null
   return envDraftError({ nodeId: draft.envNodeId || 'local', cwd: draft.envCwd ?? '' } satisfies EnvDraft, t)
 }
@@ -562,7 +564,7 @@ export function standbyEnvError(draft: Pick<StandbyDraftState, 'envCustomized' |
 export function admitStandbyFiles(
   draft: Pick<StandbyDraftState, 'localFiles'>,
   files: ReadonlyArray<File>,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): { draft: Pick<StandbyDraftState, 'localFiles'>; accepted: File[]; rejected: Array<{ file: File; reason: string }> } {
   const next = [...draft.localFiles]
   const accepted: File[] = []
@@ -646,7 +648,7 @@ export async function executeStandbySend(
   key: string,
   profileId: string,
   deps: StandbySendDeps,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): Promise<StandbySendResult> {
   const record = getStandbyDraft(key)
   const payload = record.text.trim()

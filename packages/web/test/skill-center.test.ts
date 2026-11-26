@@ -25,7 +25,9 @@ import {
   summarizeSkills,
   type SkillCategoryTab,
 } from '../src/skills/skill-center-model.js'
-import { isSkillVisible } from '../src/shell/sidebar-model.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
+const enT = createWebTranslator('en')
+import { isSkillVisible } from '../src/shell/conversation-status-model.js'
 import {
   buildSkillFileList,
   extractSkillFrontmatter,
@@ -267,26 +269,26 @@ test('skill-center-model: getSkillSourceBadge mapping', { timeout: 60_000 }, () 
   const codeSkill = makeSkill({ id: 'code-review' })
   const sharedSkill = makeSkill({ id: 'git-commit', source: 'agents' })
 
-  const badgeBuiltin = getSkillSourceBadge(cliSkill)
+  const badgeBuiltin = getSkillSourceBadge(cliSkill, enT)
   assert.equal(badgeBuiltin.label, 'Built-in')
   assert.equal(badgeBuiltin.variant, 'builtin')
 
-  const badgePlugin = getSkillSourceBadge(mockSkills[4])
+  const badgePlugin = getSkillSourceBadge(mockSkills[4], enT)
   assert.equal(badgePlugin.label, 'community:linter')
   assert.equal(badgePlugin.variant, 'plugin')
 
-  const badgeWs = getSkillSourceBadge(codeSkill)
+  const badgeWs = getSkillSourceBadge(codeSkill, enT)
   assert.equal(badgeWs.label, 'Workspace')
   assert.equal(badgeWs.variant, 'workspace')
 
   // Shared-root skills resolve to the agents badge first (no managedByPlugin, never posing as workspace)
-  const badgeAgents = getSkillSourceBadge(sharedSkill)
+  const badgeAgents = getSkillSourceBadge(sharedSkill, enT)
   assert.equal(badgeAgents.label, 'Shared')
   assert.equal(badgeAgents.variant, 'agents')
 })
 
 test('skill-reader-model: buildSkillFileList main file first + reference short names and directory hints', { timeout: 60_000 }, () => {
-  const files = buildSkillFileList(['references/cli-reference.md', 'scripts/deploy.py'])
+  const files = buildSkillFileList(['references/cli-reference.md', 'scripts/deploy.py'], enT)
   assert.equal(files.length, 3)
 
   // Main file first: read path is the empty string, display name fixed to SKILL.md
@@ -312,13 +314,13 @@ test('skill-reader-model: buildSkillFileList main file first + reference short n
   })
 
   // Root-level files fall back to ./ for the directory hint; empty and invalid entries are filtered; an empty list keeps only the main file
-  assert.deepEqual(buildSkillFileList(['notes.md']), [
+  assert.deepEqual(buildSkillFileList(['notes.md'], enT), [
     { path: '', fileName: 'SKILL.md', meta: 'Main file', displayPath: 'SKILL.md' },
     { path: 'notes.md', fileName: 'notes.md', meta: './', displayPath: 'notes.md' },
   ])
-  assert.equal(buildSkillFileList(['', '   ', undefined as unknown as string]).length, 1)
-  assert.equal(buildSkillFileList(undefined).length, 1)
-  assert.equal(buildSkillFileList(null).length, 1)
+  assert.equal(buildSkillFileList(['', '   ', undefined as unknown as string], enT).length, 1)
+  assert.equal(buildSkillFileList(undefined, enT).length, 1)
+  assert.equal(buildSkillFileList(null, enT).length, 1)
 })
 
 test('skill-reader-model: skillFileBasename and isSkillMarkdownFile classification', { timeout: 60_000 }, () => {
@@ -419,7 +421,7 @@ test('skill-reader-model: renderSkillFrontmatterTable converts fields in order i
       { key: 'name', value: 'agent-browser' },
       { key: 'description', value: 'Browser automation CLI' },
       { key: 'managedByPlugin', value: 'builtin:profile' },
-    ]),
+    ], enT),
     [
       '## Skill metadata',
       '',
@@ -432,12 +434,12 @@ test('skill-reader-model: renderSkillFrontmatterTable converts fields in order i
   )
 
   // An empty field sequence returns '' (nothing to render; no empty table injected)
-  assert.equal(renderSkillFrontmatterTable([]), '')
+  assert.equal(renderSkillFrontmatterTable([], enT), '')
 
   // Safe escaping: pipes / newlines / angle brackets / ampersands / backslashes never break the table column structure
   const escaped = renderSkillFrontmatterTable([
     { key: 'description', value: 'a | b\nsecond <hr> & "x" \\y' },
-  ])
+  ], enT)
   assert.ok(
     escaped.includes('| description | a \\| b second &lt;hr> &amp; "x" \\\\y |'),
     '竖线转义、换行折空格、< 转字符引用、& 转义、反斜杠加倍',
@@ -450,7 +452,7 @@ test('skill-reader-model: renderSkillFrontmatterTable converts fields in order i
 test('skill-reader-model: renderSkillDocMarkdown unified doc view (table + body in one flow, unclosed fallback)', { timeout: 60_000 }, () => {
   // With frontmatter: the metadata table comes first, the body follows
   assert.equal(
-    renderSkillDocMarkdown('---\nname: helmx-cli\ndescription: 手册\n---\n\n# 正文\n\n段落。'),
+    renderSkillDocMarkdown('---\nname: helmx-cli\ndescription: 手册\n---\n\n# 正文\n\n段落。', enT),
     [
       '## Skill metadata',
       '',
@@ -466,24 +468,24 @@ test('skill-reader-model: renderSkillDocMarkdown unified doc view (table + body 
   )
 
   // Without frontmatter: the body returns verbatim
-  assert.equal(renderSkillDocMarkdown('# 标题\n\n正文'), '# 标题\n\n正文')
+  assert.equal(renderSkillDocMarkdown('# 标题\n\n正文', enT), '# 标题\n\n正文')
 
   // Unclosed frontmatter: fall back to the raw text, never truncate the body
   const unclosed = '---\nname: x\n# 正文'
-  assert.equal(renderSkillDocMarkdown(unclosed), unclosed)
+  assert.equal(renderSkillDocMarkdown(unclosed, enT), unclosed)
 
   // Starting with a non-fence divider: no false positives, raw text returned
   const dashes = '----\nname: x\n----\n# 正文'
-  assert.equal(renderSkillDocMarkdown(dashes), dashes)
+  assert.equal(renderSkillDocMarkdown(dashes, enT), dashes)
 
   // Frontmatter only: just the metadata table
   assert.equal(
-    renderSkillDocMarkdown('---\nname: x\n---\n'),
+    renderSkillDocMarkdown('---\nname: x\n---\n', enT),
     '## Skill metadata\n\n| Field | Value |\n| --- | --- |\n| name | x |',
   )
 
   // Empty frontmatter (no fields): body verbatim, no empty table injected
-  assert.equal(renderSkillDocMarkdown('---\n---\n# 正文'), '# 正文')
+  assert.equal(renderSkillDocMarkdown('---\n---\n# 正文', enT), '# 正文')
 })
 
 test('skill-reader-model: skillFileLanguage derives the syntax language from the file suffix', { timeout: 60_000 }, () => {
@@ -1416,7 +1418,7 @@ test('skill-scope-model: buildSkillNodeOptions 仅列 Hub 与在线节点（排�
     nodeEntry('offline-box', false, { hostname: 'stale-box', platform: 'linux' }),
   ]
 
-  const defaultOptions = buildSkillNodeOptions(nodes, undefined)
+  const defaultOptions = buildSkillNodeOptions(nodes, undefined, enT)
   assert.deepEqual(
     defaultOptions.map((o) => o.value),
     [HUB_SKILL_NODE_ID, 'code2', 'lx'],
@@ -1428,13 +1430,13 @@ test('skill-scope-model: buildSkillNodeOptions 仅列 Hub 与在线节点（排�
   assert.equal(defaultOptions[2]!.meta, 'fjayblue · win32 · Online')
 
   // 深链指向已注册但离线的节点：保留只读可见项，不静默回退 Hub
-  const offlineLinkOptions = buildSkillNodeOptions(nodes, 'offline-box')
+  const offlineLinkOptions = buildSkillNodeOptions(nodes, 'offline-box', enT)
   assert.equal(offlineLinkOptions.length, 4)
   assert.equal(offlineLinkOptions[3]!.value, 'offline-box')
   assert.ok(String(offlineLinkOptions[3]!.meta).includes('Offline'))
 
   // 深链指向未注册节点：同样保留可见项
-  const ghostOptions = buildSkillNodeOptions(nodes, 'ghost-node')
+  const ghostOptions = buildSkillNodeOptions(nodes, 'ghost-node', enT)
   assert.equal(ghostOptions[3]!.value, 'ghost-node')
   assert.equal(ghostOptions[3]!.meta, 'Unregistered or offline')
 })
@@ -1489,12 +1491,13 @@ test('skill-center-model: source=node 技能独立分类（tab、计数、徽章
   assert.equal(counts.node, 1)
   assert.equal(counts.all, 7)
   assert.equal(counts.workspace, 2, '节点技能不挤占工作区计数')
-  const badge = getSkillSourceBadge(nodeSkill)
+  const badge = getSkillSourceBadge(nodeSkill, enT)
   assert.equal(badge.variant, 'node')
   assert.equal(badge.label, 'Node')
 })
 
 test('skill-scope-api: parseSkillCatalogResult 边界校验（nodeId 必填、cwd 可选、非法输入显式拒绝）', { timeout: 60_000 }, () => {
+  const t = createWebTranslator('en')
   const valid = parseSkillCatalogResult({
     nodeId: 'remote-1',
     cwd: '/remote/work',
@@ -1504,41 +1507,43 @@ test('skill-scope-api: parseSkillCatalogResult 边界校验（nodeId 必填、cw
     ],
     shadowedNodeSkillIds: ['dup'],
     nodeUnavailable: '目标节点 remote-1 当前离线',
-  })
+  }, t)
   assert.equal(valid.skills.length, 2)
   assert.equal(valid.skills[1]!.source, 'node')
   assert.deepEqual(valid.shadowedNodeSkillIds, ['dup'])
   assert.equal(valid.nodeUnavailable, '目标节点 remote-1 当前离线')
 
   // 节点级目录不携带 cwd
-  const nodeOnly = parseSkillCatalogResult({ nodeId: 'code2', skills: [] })
+  const nodeOnly = parseSkillCatalogResult({ nodeId: 'code2', skills: [] }, t)
   assert.deepEqual(nodeOnly, { skills: [], shadowedNodeSkillIds: [] })
 
   // 非法形状显式拒绝（绝不静默截断/编造）
-  assert.throws(() => parseSkillCatalogResult(null), /skill_catalog/)
-  assert.throws(() => parseSkillCatalogResult({}), /nodeId/)
-  assert.throws(() => parseSkillCatalogResult({ skills: [] }), /nodeId/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: '  ', skills: [] }), /nodeId/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '  ', skills: [] }), /cwd/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: 5, skills: [] }), /cwd/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local' }), /skills/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: 'x' }), /skills/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: '', name: 'x', references: [] }] }), /id/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: 'a', name: 1, references: [] }] }), /name/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: 'a', name: 'x', references: [1] }] }), /references/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [], shadowedNodeSkillIds: [1] }), /shadowedNodeSkillIds/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [], nodeUnavailable: 5 }), /nodeUnavailable/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: 'a', name: 'x', references: [], source: 'weird' }] }), /source/)
+  assert.throws(() => parseSkillCatalogResult(null, t), /skill_catalog/)
+  assert.throws(() => parseSkillCatalogResult({}, t), /nodeId/)
+  assert.throws(() => parseSkillCatalogResult({ skills: [] }, t), /nodeId/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: '  ', skills: [] }, t), /nodeId/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '  ', skills: [] }, t), /cwd/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: 5, skills: [] }, t), /cwd/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local' }, t), /skills/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: 'x' }, t), /skills/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: '', name: 'x', references: [] }] }, t), /id/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: 'a', name: 1, references: [] }] }, t), /name/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: 'a', name: 'x', references: [1] }] }, t), /references/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [], shadowedNodeSkillIds: [1] }, t), /shadowedNodeSkillIds/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [], nodeUnavailable: 5 }, t), /nodeUnavailable/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: 'a', name: 'x', references: [], source: 'weird' }] }, t), /source/)
+  assert.throws(() => parseSkillCatalogResult({}, createWebTranslator('zh-CN')), /skill_catalog 输出不合法/)
 })
 
 test('skill-scope-api: fetch/read 调用形状（nodeId 必填、cwd 可选）', { timeout: 60_000 }, async () => {
+  const t = createWebTranslator('en')
   const calls: Array<{ pluginId: string; actionId: string; input: unknown }> = []
   const invoke = async (pluginId: string, actionId: string, input: unknown): Promise<unknown> => {
     calls.push({ pluginId, actionId, input })
     if (actionId === 'skill_catalog') return { nodeId: 'remote-1', skills: [], shadowedNodeSkillIds: [] }
     return { text: '# SKILL' }
   }
-  const catalog = await fetchScopedSkillCatalog(invoke, { nodeId: 'remote-1' })
+  const catalog = await fetchScopedSkillCatalog(invoke, { nodeId: 'remote-1' }, t)
   assert.deepEqual(catalog, { skills: [], shadowedNodeSkillIds: [] })
   assert.deepEqual(calls[0], {
     pluginId: 'builtin:profile',
@@ -1546,7 +1551,7 @@ test('skill-scope-api: fetch/read 调用形状（nodeId 必填、cwd 可选）',
     input: { nodeId: 'remote-1' },
   })
 
-  await fetchScopedSkillCatalog(invoke, { nodeId: 'remote-1', cwd: '/w' })
+  await fetchScopedSkillCatalog(invoke, { nodeId: 'remote-1', cwd: '/w' }, t)
   assert.deepEqual(calls[1], {
     pluginId: 'builtin:profile',
     actionId: 'skill_catalog',
@@ -1554,10 +1559,10 @@ test('skill-scope-api: fetch/read 调用形状（nodeId 必填、cwd 可选）',
   })
 
   // 主文件读取不携带 path 键；references 读取原样透传
-  const main = await readScopedSkillFile(invoke, { nodeId: 'remote-1' }, 'node-skill')
+  const main = await readScopedSkillFile(invoke, { nodeId: 'remote-1' }, 'node-skill', undefined, t)
   assert.equal(main.text, '# SKILL')
   assert.deepEqual(calls[2]!.input, { nodeId: 'remote-1', skillId: 'node-skill' })
-  await readScopedSkillFile(invoke, { nodeId: 'local', cwd: '/w' }, 'node-skill', 'references/guide.md')
+  await readScopedSkillFile(invoke, { nodeId: 'local', cwd: '/w' }, 'node-skill', 'references/guide.md', t)
   assert.deepEqual(calls[3]!.input, {
     nodeId: 'local',
     cwd: '/w',
@@ -1566,9 +1571,10 @@ test('skill-scope-api: fetch/read 调用形状（nodeId 必填、cwd 可选）',
   })
 
   // 读取输出同样过边界校验
-  assert.deepEqual(parseSkillReadResult({ text: 'x' }), { text: 'x' })
-  assert.throws(() => parseSkillReadResult({}), /text/)
-  assert.throws(() => parseSkillReadResult('nope'), /skill_read/)
+  assert.deepEqual(parseSkillReadResult({ text: 'x' }, t), { text: 'x' })
+  assert.throws(() => parseSkillReadResult({}, t), /text/)
+  assert.throws(() => parseSkillReadResult('nope', t), /skill_read/)
+  assert.throws(() => parseSkillReadResult('nope', createWebTranslator('zh-CN')), /skill_read 输出不合法/)
 })
 
 // ---------------------------------------------------------------------------
@@ -1955,7 +1961,7 @@ test('SkillCenter: 切换节点的代数竞争保护——慢的旧目录不得�
 
     // 未等第一个返回就切到第二个节点
     await act(async () => {
-      store.openTarget({ kind: 'skills', nodeId: 'lx' })
+      store.actions.openTarget({ kind: 'skills', nodeId: 'lx' })
     })
     await act(async () => {
       await flushMacrotask()
@@ -2054,7 +2060,7 @@ test('skill-center-model & sidebar-model: core:* 技能归属 Core 分类（绝�
   assert.equal(isSkillInTab(coreHostSkill, 'plugins'), false)
 
   // 徽章与 owner 目标解析
-  assert.deepEqual(getSkillSourceBadge(coreHostSkill), { label: 'Core', variant: 'core' })
+  assert.deepEqual(getSkillSourceBadge(coreHostSkill, enT), { label: 'Core', variant: 'core' })
   assert.deepEqual(resolveSkillOwnerTarget('core:host'), {
     kind: 'plugins',
     tab: 'core',

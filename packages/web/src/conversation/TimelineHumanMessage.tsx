@@ -74,7 +74,7 @@ export const TimelineHumanMessage = memo(function TimelineHumanMessage({
           level: 'error',
           title: t('conv.human.cannotEditTitle'),
           body: t('conv.human.cannotEditBody', { entryId: item.entryId }),
-          conversationId: conversation.id,
+          target: { kind: 'conversation', conversationId: conversation.id },
         })
         return
       }

@@ -23,20 +23,26 @@ import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
+import { createWebTranslator } from '../src/i18n/catalog.js'
+
+const enT = createWebTranslator('en')
 import { renderToString } from 'react-dom/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ConversationSummary, HelmxLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helmx/protocol'
 import { groupUiContributions } from '../src/lib/types.js'
 import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
-import { conversationStatusDotClass, conversationStatusTooltip } from '../src/shell/sidebar-model.js'
+import {
+  conversationStatusDotClass,
+  conversationStatusTooltip,
+  type ConversationBackgroundIndex,
+} from '../src/shell/conversation-status-model.js'
 import {
   backgroundAwareStatusTooltip,
   collectBackgroundBadgeDocs,
   resolveStandingStatusIndicator,
   resolveStatusLight,
   summarizeConversationBackgroundActivity,
-  type ConversationBackgroundIndex,
 } from '../src/shell/background-activity-model.js'
 import { makeTestStore, HelmxExternalStoreContext, type TestStoreOverrides } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
@@ -101,6 +107,7 @@ function summarize(input: {
     conversations: input.conversations,
     pluginDocs: input.pluginDocs ?? {},
     ...(input.locale !== undefined ? { locale: input.locale } : {}),
+    t: enT,
   })
 }
 
@@ -316,32 +323,32 @@ test('resolveStatusLight single-light priority: main status is exclusive; idle/d
 
 test('tooltip composition: an exclusive status light states only the main turn; the hollow-ring slot appends base status + background summary', { timeout: 60_000 }, () => {
   assert.equal(
-    backgroundAwareStatusTooltip({ status: 'idle', backgroundActive: false }),
-    conversationStatusTooltip('idle'),
+    backgroundAwareStatusTooltip({ status: 'idle', backgroundActive: false, t: enT }),
+    conversationStatusTooltip('idle', undefined, undefined, enT),
   )
   assert.equal(
-    backgroundAwareStatusTooltip({ status: 'idle', backgroundActive: true, backgroundSummary: '2 Running' }),
+    backgroundAwareStatusTooltip({ status: 'idle', backgroundActive: true, backgroundSummary: '2 Running', t: enT }),
     'Idle · background task: 2 Running',
   )
   assert.equal(
-    backgroundAwareStatusTooltip({ status: 'done', backgroundActive: true, backgroundSummary: '' }),
+    backgroundAwareStatusTooltip({ status: 'done', backgroundActive: true, backgroundSummary: '', t: enT }),
     'Completed · background task running',
   )
   // working/blocked/error: even with background in flight, the tooltip shows only the main status/doing/lastError
   assert.equal(
-    backgroundAwareStatusTooltip({ status: 'working', doing: '正在思考方案', backgroundActive: true, backgroundSummary: '2 Running' }),
+    backgroundAwareStatusTooltip({ status: 'working', doing: '正在思考方案', backgroundActive: true, backgroundSummary: '2 Running', t: enT }),
     'Running: 正在思考方案',
   )
   assert.equal(
-    backgroundAwareStatusTooltip({ status: 'blocked', backgroundActive: true, backgroundSummary: '2 Running' }),
+    backgroundAwareStatusTooltip({ status: 'blocked', backgroundActive: true, backgroundSummary: '2 Running', t: enT }),
     'Awaiting confirmation',
   )
   assert.equal(
-    backgroundAwareStatusTooltip({ status: 'error', lastError: 'model_error: x', backgroundActive: true }),
+    backgroundAwareStatusTooltip({ status: 'error', lastError: 'model_error: x', backgroundActive: true, t: enT }),
     'Error: model_error: x',
   )
   assert.equal(
-    backgroundAwareStatusTooltip({ status: 'error', lastError: 'model_error: x', backgroundActive: false }),
+    backgroundAwareStatusTooltip({ status: 'error', lastError: 'model_error: x', backgroundActive: false, t: enT }),
     'Error: model_error: x',
   )
 })

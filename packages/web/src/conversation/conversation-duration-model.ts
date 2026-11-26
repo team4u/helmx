@@ -9,7 +9,7 @@
  *   and the outline header, so the status row never duplicates either.
  */
 import type { ConversationStatus } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { formatStopwatchMs, resolveConversationTiming } from '../lib/format.js'
 
 export interface ConversationDurationInput {
@@ -45,8 +45,8 @@ export function conversationDurationNeedsLiveClock(conv: ConversationDurationInp
 /** Waiting-approval stopwatch text for `.composer-status-row`; `null` renders nothing. */
 export function conversationDurationLabel(
   conv: ConversationDurationInput,
-  nowMs?: number,
-  t: WebMessageTranslator = englishWebTranslator,
+  nowMs: number | undefined,
+  t: WebMessageTranslator,
 ): string | null {
   const timing = resolveConversationTiming(conv, nowMs)
   if (!timing.isBlocked || timing.waitingMs === undefined) return null

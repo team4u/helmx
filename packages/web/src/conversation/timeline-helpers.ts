@@ -10,7 +10,7 @@ import type {
   ToolResultTruncation,
   ToolViewProps,
 } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import type {
   AssistantModelIdentity,
   AssistantTurn,
@@ -308,11 +308,10 @@ export function assistantModelShortLabel(identity: AssistantModelIdentity): stri
   return identity.model.split('/').pop() ?? identity.model
 }
 
-export function assistantModelFullLabel(identity: AssistantModelIdentity, t?: WebMessageTranslator): string {
-  const tt = t ?? englishWebTranslator
+export function assistantModelFullLabel(identity: AssistantModelIdentity, t: WebMessageTranslator): string {
   const base = `${identity.provider}/${identity.model}`
   return identity.thinkingLevel !== undefined
-    ? tt('conv.model.thinkingSuffix', { base, level: identity.thinkingLevel })
+    ? t('conv.model.thinkingSuffix', { base, level: identity.thinkingLevel })
     : base
 }
 

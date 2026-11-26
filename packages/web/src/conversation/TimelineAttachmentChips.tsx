@@ -86,6 +86,7 @@ export function AttachmentChips({
           <LazyMount
             key={att.id}
             inline
+            scrollRootSelector=".timeline-scroll"
             fallback={
               <span className="attachment-chip" title={att.name}>
                 <HelmxIcon name="file-text" size={11} />

@@ -8,18 +8,20 @@
  * - 主屏已停在该插件视图或无 quickEntry 时返回 null（零占位残留）；仅移动端视口渲染；
  * - 点击走标准 store 路由（openTarget），零插件 ID 特判。
  */
-import type { ReactNode } from 'react'
+import { useEffect, useMemo, type ReactNode } from 'react'
 import { HelmxIcon } from '@helmx/plugin-client'
-import { usePrimaryTarget, useStoreActions } from '../lib/store-context.js'
+import { useConversations, useGroupedUi, usePrimaryTarget, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useIsMobileViewport } from '../lib/use-media-query.js'
 import { isSameResolvedTarget } from '../lib/types.js'
 import {
   composeSidebarBadgeLabel,
+  extractRailQuickEntries,
   sidebarBadgeCountLabel,
   type ResolvedSidebarBadge,
   type SidebarViewItem,
 } from './sidebar-model.js'
+import { useSidebarBadges } from './use-sidebar-badges.js'
 
 export interface MobileQuickNavProps {
   /** 首个已声明 quickEntry 的插件视图（无则为 null，不渲染任何内容）。 */
@@ -59,4 +61,31 @@ export function MobileQuickNav({ quickEntry, quickEntryBadge = null }: MobileQui
       </button>
     </div>
   )
+}
+
+/** Isolates root shell from `useConversations` / `useGroupedUi` / `useSidebarBadges` churn. */
+export function MobileQuickNavSlot({
+  onVisibilityChange,
+}: {
+  onVisibilityChange: (visible: boolean) => void
+}): ReactNode {
+  const { locale } = useWebLocale()
+  const groupedUi = useGroupedUi()
+  const conversations = useConversations()
+  const primaryTarget = usePrimaryTarget()
+
+  const firstQuickEntry = useMemo(
+    () => extractRailQuickEntries(groupedUi.sidebarItems, groupedUi.screens, conversations, locale)[0] ?? null,
+    [groupedUi.sidebarItems, groupedUi.screens, conversations, locale],
+  )
+  const quickBadgeItems = useMemo(() => (firstQuickEntry !== null ? [firstQuickEntry] : []), [firstQuickEntry])
+  const quickEntryBadges = useSidebarBadges(quickBadgeItems)
+  const quickEntryBadge = firstQuickEntry !== null ? (quickEntryBadges.get(firstQuickEntry.key) ?? null) : null
+  const visible = firstQuickEntry !== null && !isSameResolvedTarget(primaryTarget, firstQuickEntry.target)
+
+  useEffect(() => {
+    onVisibilityChange(visible)
+  }, [visible, onVisibilityChange])
+
+  return <MobileQuickNav quickEntry={firstQuickEntry} quickEntryBadge={quickEntryBadge} />
 }

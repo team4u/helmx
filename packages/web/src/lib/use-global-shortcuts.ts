@@ -5,7 +5,6 @@
  */
 import { useEffect } from 'react'
 import {
-  activeTargetForPanel,
   hasAnyOpenOverlay,
   hasBlockingAlertDialog,
   hasDialogOpen,
@@ -20,21 +19,22 @@ import {
   isPeriodShortcutKey,
   isSemicolonShortcutKey,
   isSlashShortcutKey,
-  resolveFocusedPanel,
   resolveNewTopicTarget,
   resolveShortcutKeyLower,
   type HelmxShortcutDetail,
 } from '../shell/shortcuts-model.js'
+import { activeTargetForPanel, resolveFocusedPanel } from './panel-focus.js'
 import { topConversationDrawerId, topDrawerFrame } from './drawer-stack-model.js'
 import { openStandbyWithFocus } from '../conversation/standby-focus.js'
 import type { HelmxExternalStore } from './helmx-store.js'
+import { isImeComposing } from './ime.js'
 import { isSameResolvedTarget } from './types.js'
 
 export function useGlobalShortcuts(store: HelmxExternalStore): void {
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (!store.getAuthenticated()) return
-      if (event.isComposing) return
+      if (isImeComposing(event, false)) return
 
       const targetEl =
         typeof HTMLElement !== 'undefined' && event.target instanceof HTMLElement
@@ -42,7 +42,7 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
           : (typeof document !== 'undefined' ? document.activeElement : null)
       const inEditable = isEditableShortcutTarget(targetEl)
       const hasModifier = event.ctrlKey || event.metaKey || event.altKey
-      if (event.keyCode === 229 && inEditable && !hasModifier) return
+      if (isImeComposing(event) && inEditable && !hasModifier) return
 
       const keyLower = resolveShortcutKeyLower(event)
       const isMod = (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey
@@ -58,16 +58,16 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
       if (isMod && keyLower === 'k') {
         if (event.defaultPrevented || hasBlockingAlertDialog()) return
         event.preventDefault()
-        store.clearEscAbortPrompt()
-        store.setActiveModal((current) => (current?.kind === 'command-palette' ? null : { kind: 'command-palette' }))
+        store.navActions.clearEscAbortPrompt()
+        store.navActions.setActiveModal((current) => (current?.kind === 'command-palette' ? null : { kind: 'command-palette' }))
         return
       }
 
       if (isMod && isSlashShortcutKey(event)) {
         if (event.defaultPrevented || hasBlockingAlertDialog()) return
         event.preventDefault()
-        store.clearEscAbortPrompt()
-        store.setActiveModal((current) => (current?.kind === 'shortcuts' ? null : { kind: 'shortcuts' }))
+        store.navActions.clearEscAbortPrompt()
+        store.navActions.setActiveModal((current) => (current?.kind === 'shortcuts' ? null : { kind: 'shortcuts' }))
         return
       }
 
@@ -77,21 +77,21 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
           hasAnyOpenOverlay(activeModal, drawerStack.length > 0) ||
           isInlineInputEscapeTarget(event.target)
         ) {
-          store.clearEscAbortPrompt()
+          store.navActions.clearEscAbortPrompt()
           return
         }
         if (activeTarget.kind !== 'conversation') {
-          store.clearEscAbortPrompt()
+          store.navActions.clearEscAbortPrompt()
           return
         }
         const convId = activeTarget.conversationId
         const conv = store.getConversationSummary(convId) ?? store.getConversationDetail(convId)
         if (!isConversationAbortable(conv)) {
-          store.clearEscAbortPrompt()
+          store.navActions.clearEscAbortPrompt()
           return
         }
         event.preventDefault()
-        store.confirmOrArmEscAbort(convId)
+        store.navActions.confirmOrArmEscAbort(convId)
         return
       }
 
@@ -104,8 +104,8 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         const drawerConversationId = topConversationDrawerId(drawerStack)
         if (top?.kind !== 'workbench' && activeTarget.kind !== 'conversation' && drawerConversationId === undefined) return
         event.preventDefault()
-        store.clearEscAbortPrompt()
-        store.setWorkbenchOpen((open) => !open)
+        store.navActions.clearEscAbortPrompt()
+        store.navActions.setWorkbenchOpen((open) => !open)
         return
       }
 
@@ -114,7 +114,7 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         const top = topDrawerFrame(drawerStack)
         if (top?.kind === 'conversation') {
           event.preventDefault()
-          store.clearEscAbortPrompt()
+          store.navActions.clearEscAbortPrompt()
           const detail: HelmxShortcutDetail = {
             action: 'focus-composer',
             panel,
@@ -125,7 +125,7 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         }
         if (drawerStack.length === 0 && (activeTarget.kind === 'conversation' || activeTarget.kind === 'agent')) {
           event.preventDefault()
-          store.clearEscAbortPrompt()
+          store.navActions.clearEscAbortPrompt()
           const detail: HelmxShortcutDetail = { action: 'focus-composer', panel }
           window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
         }
@@ -139,7 +139,7 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
           hasNonWorkbenchDialogOpen()
         ) return
         event.preventDefault()
-        store.toggleSidebarCollapsed()
+        store.actions.toggleSidebarCollapsed()
         return
       }
 
@@ -149,7 +149,7 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         if (top?.kind === 'conversation') {
           if (hasNonWorkbenchDialogOpen()) return
           event.preventDefault()
-          store.clearEscAbortPrompt()
+          store.navActions.clearEscAbortPrompt()
           const detail: HelmxShortcutDetail = {
             action: 'toggle-plus-menu',
             panel: 'drawer',
@@ -164,7 +164,7 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
           (activeTarget.kind === 'conversation' || activeTarget.kind === 'agent')
         ) {
           event.preventDefault()
-          store.clearEscAbortPrompt()
+          store.navActions.clearEscAbortPrompt()
           const detail: HelmxShortcutDetail = { action: 'toggle-plus-menu', panel }
           window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
         }
@@ -188,7 +188,7 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
           return
         }
         event.preventDefault()
-        store.clearEscAbortPrompt()
+        store.navActions.clearEscAbortPrompt()
         const profiles = store.getProfilesSlice().profiles
         const plugins = store.getPlugins()
         const target = resolveNewTopicTarget({
@@ -210,11 +210,11 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         if (target.kind === 'agent') {
           openStandbyWithFocus(
             { panel, profileId: target.profileId },
-            () => store.openTarget(target, panel === 'split' ? { split: true } : undefined),
+            () => store.actions.openTarget(target, panel === 'split' ? { split: true } : undefined),
           )
           return
         }
-        store.openTarget(target, panel === 'split' ? { split: true } : undefined)
+        store.actions.openTarget(target, panel === 'split' ? { split: true } : undefined)
         return
       }
 
@@ -239,8 +239,8 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
       const detail = (event as CustomEvent<Partial<HelmxShortcutDetail> | undefined>).detail
       if (detail?.action !== 'open-shortcuts') return
       if (hasBlockingAlertDialog()) return
-      store.clearEscAbortPrompt()
-      store.setActiveModal({ kind: 'shortcuts' })
+      store.navActions.clearEscAbortPrompt()
+      store.actions.setActiveModal({ kind: 'shortcuts' })
     }
 
     window.addEventListener('keydown', keydown)

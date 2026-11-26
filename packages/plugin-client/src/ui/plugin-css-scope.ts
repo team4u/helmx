@@ -79,12 +79,163 @@ const ANIMATION_KEYWORDS = new Set([
 
 const PLUGIN_LAYER_NAME = 'plugin-ui'
 
+function isCssWhitespace(ch: string): boolean {
+  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f'
+}
+
+/** Advances from an opening quote (`"` or `'`) to the index immediately after its closing quote. */
+function advancePastQuotedString(text: string, quoteStart: number): number {
+  const quote = text.charAt(quoteStart)
+  let i = quoteStart + 1
+  const len = text.length
+  while (i < len) {
+    const ch = text.charAt(i)
+    if (ch === '\\') {
+      i += 2
+      continue
+    }
+    if (ch === quote) return i + 1
+    i++
+  }
+  return len
+}
+
+/** If a CSS comment starts at `start`, returns the index immediately after `* /`; otherwise `start`. */
+function advancePastComment(text: string, start: number): number {
+  if (text.charAt(start) !== '/' || text.charAt(start + 1) !== '*') return start
+  const end = text.indexOf('*/', start + 2)
+  return end === -1 ? text.length : end + 2
+}
+
+/** Advances `start` past CSS whitespace and comments. */
+function skipWhitespaceAndComments(text: string, start: number): number {
+  let i = start
+  const len = text.length
+  while (i < len) {
+    if (isCssWhitespace(text.charAt(i))) {
+      i++
+      continue
+    }
+    const afterComment = advancePastComment(text, i)
+    if (afterComment !== i) {
+      i = afterComment
+      continue
+    }
+    break
+  }
+  return i
+}
+
+/**
+ * Strips `/* ... * /` comments only outside quoted strings so patterns like
+ * `[data-x="/*keep* /"]` or `content: "/*keep* /"` are preserved verbatim.
+ */
+function stripCssComments(text: string): string {
+  if (!text.includes('/*')) return text
+  let out = ''
+  let i = 0
+  const len = text.length
+  while (i < len) {
+    const ch = text.charAt(i)
+    if (ch === '"' || ch === "'") {
+      const next = advancePastQuotedString(text, i)
+      out += text.slice(i, next)
+      i = next
+      continue
+    }
+    const afterComment = advancePastComment(text, i)
+    if (afterComment !== i) {
+      i = afterComment
+      continue
+    }
+    out += ch
+    i++
+  }
+  return out
+}
+
+/**
+ * Scans forward from `start` to the first top-level occurrence of any character in `stopChars`,
+ * skipping quoted strings and comments (and optionally nested `{ ... }` blocks).
+ */
+function scanUntilDelimiter(
+  text: string,
+  start: number,
+  stopChars: string,
+  trackBraces = false,
+): { index: number; delimiter: string } {
+  let i = start
+  let braceDepth = 0
+  const len = text.length
+
+  while (i < len) {
+    const ch = text.charAt(i)
+    if (ch === '"' || ch === "'") {
+      i = advancePastQuotedString(text, i)
+      continue
+    }
+    const afterComment = advancePastComment(text, i)
+    if (afterComment !== i) {
+      i = afterComment
+      continue
+    }
+    if (trackBraces) {
+      if (ch === '{') {
+        braceDepth++
+        i++
+        continue
+      }
+      if (ch === '}') {
+        if (braceDepth > 0) braceDepth--
+        i++
+        continue
+      }
+    }
+    if (braceDepth === 0 && stopChars.includes(ch)) {
+      return { index: i, delimiter: ch }
+    }
+    i++
+  }
+
+  return { index: len, delimiter: '' }
+}
+
+/** Finds the matching `}` for the `{` at `openIndex`, respecting strings and comments. */
+function findMatchingBrace(css: string, openIndex: number): number {
+  let depth = 0
+  let i = openIndex
+  const len = css.length
+  while (i < len) {
+    const ch = css.charAt(i)
+    if (ch === '"' || ch === "'") {
+      i = advancePastQuotedString(css, i)
+      continue
+    }
+    const afterComment = advancePastComment(css, i)
+    if (afterComment !== i) {
+      i = afterComment
+      continue
+    }
+    if (ch === '{') {
+      depth++
+    } else if (ch === '}') {
+      depth--
+      if (depth === 0) return i
+    }
+    i++
+  }
+  return len - 1
+}
+
 function escapeCssAttrValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
 function buildKeyframePrefix(pluginId: string): string {
-  const slug = pluginId.replace(/[^a-zA-Z0-9-]/g, (ch) => `_${ch.codePointAt(0)!.toString(16)}_`)
+  const slug = pluginId.replace(/[^a-zA-Z0-9-]/g, (ch) => {
+    const cp = ch.codePointAt(0)
+    return cp !== undefined ? `_${cp.toString(16)}_` : '_'
+  })
   return `helmx-kf-${slug}-`
 }
 
@@ -94,49 +245,35 @@ function splitSelectorList(selectorText: string): string[] {
   let start = 0
   let parenDepth = 0
   let bracketDepth = 0
-  let quote: string | null = null
+  let i = 0
+  const len = selectorText.length
 
-  for (let i = 0; i < selectorText.length; i++) {
-    const ch = selectorText[i]!
-    if (quote !== null) {
-      if (ch === '\\') {
-        i++
-      } else if (ch === quote) {
-        quote = null
-      }
-      continue
-    }
-    if (ch === '/' && selectorText[i + 1] === '*') {
-      const end = selectorText.indexOf('*/', i + 2)
-      if (end === -1) break
-      i = end + 1
-      continue
-    }
+  while (i < len) {
+    const ch = selectorText.charAt(i)
     if (ch === '"' || ch === "'") {
-      quote = ch
+      i = advancePastQuotedString(selectorText, i)
+      continue
+    }
+    const afterComment = advancePastComment(selectorText, i)
+    if (afterComment !== i) {
+      i = afterComment
       continue
     }
     if (ch === '(') {
       parenDepth++
-      continue
-    }
-    if (ch === ')') {
+    } else if (ch === ')') {
       if (parenDepth > 0) parenDepth--
-      continue
-    }
-    if (ch === '[') {
+    } else if (ch === '[') {
       bracketDepth++
-      continue
-    }
-    if (ch === ']') {
+    } else if (ch === ']') {
       if (bracketDepth > 0) bracketDepth--
-      continue
-    }
-    if (ch === ',' && parenDepth === 0 && bracketDepth === 0) {
+    } else if (ch === ',' && parenDepth === 0 && bracketDepth === 0) {
       parts.push(selectorText.slice(start, i))
       start = i + 1
     }
+    i++
   }
+
   parts.push(selectorText.slice(start))
   return parts
 }
@@ -167,8 +304,8 @@ function scopeSingleSelector(rawSelector: string, scopeAttr: string): string {
   // Type selector at start (e.g. `button.foo`, `table td`): place `:where(...)`
   // AFTER the tag name for the self-match variant (`button:where([...]).foo`).
   const leadingTag = trimmed.match(/^([a-zA-Z_-][a-zA-Z0-9_-]*)(.*)$/)
-  if (leadingTag !== null) {
-    const tag = leadingTag[1]!
+  if (leadingTag !== null && leadingTag[1] !== undefined) {
+    const tag = leadingTag[1]
     const rest = leadingTag[2] ?? ''
     return `${scopeAttr} ${trimmed}, ${tag}${scopeAttr}${rest}`
   }
@@ -179,7 +316,7 @@ function scopeSingleSelector(rawSelector: string, scopeAttr: string): string {
 }
 
 function scopeSelectorList(selectorText: string, scopeAttr: string): string {
-  const withoutComments = selectorText.replace(/\/\*[\s\S]*?\*\//g, '').trim()
+  const withoutComments = stripCssComments(selectorText).trim()
   if (withoutComments === '') return selectorText
   const scoped = splitSelectorList(withoutComments)
     .map((part) => scopeSingleSelector(part, scopeAttr))
@@ -187,51 +324,23 @@ function scopeSelectorList(selectorText: string, scopeAttr: string): string {
   return scoped.join(', ')
 }
 
-/** Finds the matching `}` for the `{` at `openIndex`, respecting strings and comments. */
-function findMatchingBrace(css: string, openIndex: number): number {
-  let depth = 0
-  let quote: string | null = null
-  for (let i = openIndex; i < css.length; i++) {
-    const ch = css[i]!
-    if (quote !== null) {
-      if (ch === '\\') {
-        i++
-      } else if (ch === quote) {
-        quote = null
-      }
-      continue
-    }
-    if (ch === '/' && css[i + 1] === '*') {
-      const end = css.indexOf('*/', i + 2)
-      if (end === -1) return css.length - 1
-      i = end + 1
-      continue
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch
-      continue
-    }
-    if (ch === '{') {
-      depth++
-    } else if (ch === '}') {
-      depth--
-      if (depth === 0) return i
-    }
-  }
-  return css.length - 1
-}
-
-function parseKeyframeName(trimmedPrelude: string): { atRule: string; rawName: string; unquotedName: string; quote: string | null } | null {
-  const match = trimmedPrelude.match(/^(@(?:-webkit-|-moz-)?keyframes)\s+(?:"([^"]+)"|'([^']+)'|([a-zA-Z_-][a-zA-Z0-9_-]*))$/i)
+function parseKeyframeName(
+  trimmedPrelude: string,
+): { atRule: string; rawName: string; unquotedName: string; quote: string | null } | null {
+  const match = trimmedPrelude.match(
+    /^(@(?:-webkit-|-moz-)?keyframes)\s+(?:"([^"]+)"|'([^']+)'|([a-zA-Z_-][a-zA-Z0-9_-]*))$/i,
+  )
   if (match === null) return null
-  const atRule = match[1]!
+  const atRule = match[1]
+  if (atRule === undefined) return null
   if (match[2] !== undefined) {
     return { atRule, rawName: `"${match[2]}"`, unquotedName: match[2], quote: '"' }
   }
   if (match[3] !== undefined) {
     return { atRule, rawName: `'${match[3]}'`, unquotedName: match[3], quote: "'" }
   }
-  const ident = match[4]!
+  const ident = match[4]
+  if (ident === undefined) return null
   return { atRule, rawName: ident, unquotedName: ident, quote: null }
 }
 
@@ -240,62 +349,20 @@ function collectKeyframes(css: string, kfPrefix: string, keyframeMap: Map<string
   const len = css.length
 
   while (i < len) {
-    if (/\s/.test(css[i]!)) {
-      i++
-      continue
-    }
-    if (css[i] === '/' && css[i + 1] === '*') {
-      const end = css.indexOf('*/', i + 2)
-      if (end === -1) break
-      i = end + 2
-      continue
-    }
+    i = skipWhitespaceAndComments(css, i)
+    if (i >= len) break
 
     const preludeStart = i
-    let quote: string | null = null
-    let delimiter = ''
-    while (i < len) {
-      const ch = css[i]!
-      if (quote !== null) {
-        if (ch === '\\') {
-          i += 2
-          continue
-        }
-        if (ch === quote) quote = null
-        i++
-        continue
-      }
-      if (ch === '/' && css[i + 1] === '*') {
-        const end = css.indexOf('*/', i + 2)
-        if (end === -1) {
-          i = len
-          break
-        }
-        i = end + 2
-        continue
-      }
-      if (ch === '"' || ch === "'") {
-        quote = ch
-        i++
-        continue
-      }
-      if (ch === '{' || ch === ';') {
-        delimiter = ch
-        break
-      }
-      i++
-    }
-
-    const prelude = css.slice(preludeStart, i)
+    const { index: delimIdx, delimiter } = scanUntilDelimiter(css, preludeStart, '{;')
     if (delimiter === ';') {
-      i++
+      i = delimIdx + 1
       continue
     }
     if (delimiter !== '{') break
 
-    const closeIndex = findMatchingBrace(css, i)
-    const body = css.slice(i + 1, closeIndex)
-    const trimmedPrelude = prelude.replace(/\/\*[\s\S]*?\*\//g, '').trim()
+    const closeIndex = findMatchingBrace(css, delimIdx)
+    const body = css.slice(delimIdx + 1, closeIndex)
+    const trimmedPrelude = stripCssComments(css.slice(preludeStart, delimIdx)).trim()
 
     if (trimmedPrelude.startsWith('@')) {
       const atName = (trimmedPrelude.match(/^@([a-zA-Z_-]+)/)?.[1] ?? '').toLowerCase()
@@ -324,15 +391,11 @@ function rewriteAnimationValue(value: string, keyframeMap: ReadonlyMap<string, s
   const len = value.length
 
   while (i < len) {
-    const ch = value[i]!
-    if (ch === '/' && value[i + 1] === '*') {
-      const end = value.indexOf('*/', i + 2)
-      if (end === -1) {
-        out += value.slice(i)
-        break
-      }
-      out += value.slice(i, end + 2)
-      i = end + 2
+    const ch = value.charAt(i)
+    const afterComment = advancePastComment(value, i)
+    if (afterComment !== i) {
+      out += value.slice(i, afterComment)
+      i = afterComment
       continue
     }
     if (ch === '(') {
@@ -348,32 +411,24 @@ function rewriteAnimationValue(value: string, keyframeMap: ReadonlyMap<string, s
       continue
     }
     if (ch === '"' || ch === "'") {
-      const quote = ch
-      let j = i + 1
-      while (j < len) {
-        if (value[j] === '\\') {
-          j += 2
-          continue
-        }
-        if (value[j] === quote) break
-        j++
-      }
-      const raw = value.slice(i, j + 1)
-      const inner = value.slice(i + 1, j)
-      if (parenDepth === 0 && keyframeMap.has(inner)) {
-        out += `${quote}${keyframeMap.get(inner)!}${quote}`
+      const next = advancePastQuotedString(value, i)
+      const raw = value.slice(i, next)
+      const inner = next > i + 1 && value.charAt(next - 1) === ch ? value.slice(i + 1, next - 1) : ''
+      const renamed = keyframeMap.get(inner)
+      if (parenDepth === 0 && renamed !== undefined) {
+        out += `${ch}${renamed}${ch}`
       } else {
         out += raw
       }
-      i = j + 1
+      i = next
       continue
     }
     if (parenDepth === 0 && /[a-zA-Z_-]/.test(ch)) {
-      const prev = i > 0 ? value[i - 1]! : ''
+      const prev = i > 0 ? value.charAt(i - 1) : ''
       let j = i + 1
-      while (j < len && /[a-zA-Z0-9_-]/.test(value[j]!)) j++
+      while (j < len && /[a-zA-Z0-9_-]/.test(value.charAt(j))) j++
       const ident = value.slice(i, j)
-      const next = j < len ? value[j]! : ''
+      const next = j < len ? value.charAt(j) : ''
       // Ignore numeric units (e.g. `1s`, `200ms`), custom properties (`--x`),
       // function names (`cubic-bezier(...)`), and standard animation keywords.
       const isUnit = /[0-9.]/.test(prev)
@@ -393,78 +448,52 @@ function rewriteAnimationValue(value: string, keyframeMap: ReadonlyMap<string, s
   return out
 }
 
-/** Rewrites `animation` / `animation-name` declarations inside a style rule declaration block. */
-function rewriteAnimationDeclarations(body: string, keyframeMap: ReadonlyMap<string, string>): string {
+/** Rewrites `animation` / `animation-name` declarations inside a style rule body, including nested rules. */
+function rewriteStyleRuleBody(body: string, keyframeMap: ReadonlyMap<string, string>): string {
   if (keyframeMap.size === 0 || !/animation/i.test(body)) return body
   let out = ''
   let i = 0
   const len = body.length
 
   while (i < len) {
-    const start = i
-    let quote: string | null = null
-    let colonIndex = -1
-    let braceDepth = 0
-    while (i < len) {
-      const ch = body[i]!
-      if (quote !== null) {
-        if (ch === '\\') {
-          i += 2
-          continue
-        }
-        if (ch === quote) quote = null
-        i++
-        continue
+    const wsStart = i
+    i = skipWhitespaceAndComments(body, i)
+    out += body.slice(wsStart, i)
+    if (i >= len) break
+
+    const stmtStart = i
+    const { index: delimIdx, delimiter } = scanUntilDelimiter(body, stmtStart, '{;')
+
+    if (delimiter === '{') {
+      const prelude = body.slice(stmtStart, delimIdx)
+      const closeIndex = findMatchingBrace(body, delimIdx)
+      const nestedBody = body.slice(delimIdx + 1, closeIndex)
+      if (prelude.trimStart().startsWith('--')) {
+        out += body.slice(stmtStart, closeIndex + 1)
+      } else {
+        out += `${prelude}{${rewriteStyleRuleBody(nestedBody, keyframeMap)}}`
       }
-      if (ch === '/' && body[i + 1] === '*') {
-        const end = body.indexOf('*/', i + 2)
-        if (end === -1) {
-          i = len
-          break
-        }
-        i = end + 2
-        continue
-      }
-      if (ch === '"' || ch === "'") {
-        quote = ch
-        i++
-        continue
-      }
-      if (ch === '{') {
-        braceDepth++
-        i++
-        continue
-      }
-      if (ch === '}') {
-        if (braceDepth > 0) braceDepth--
-        i++
-        continue
-      }
-      if (braceDepth === 0 && ch === ':' && colonIndex === -1) {
-        colonIndex = i
-        i++
-        continue
-      }
-      if (braceDepth === 0 && ch === ';') {
-        break
-      }
-      i++
+      i = closeIndex + 1
+      continue
     }
 
-    const end = i < len ? i + 1 : i
-    if (colonIndex !== -1) {
-      const rawProp = body.slice(start, colonIndex)
-      const propName = rawProp.replace(/\/\*[\s\S]*?\*\//g, '').trim().toLowerCase()
+    const stmtEnd = delimiter === ';' ? delimIdx + 1 : len
+    const declaration = body.slice(stmtStart, delimIdx)
+    const { index: colonOffset, delimiter: colonDelim } = scanUntilDelimiter(declaration, 0, ':', true)
+    if (colonDelim === ':') {
+      const rawProp = declaration.slice(0, colonOffset)
+      const propName = stripCssComments(rawProp).trim().toLowerCase()
       if (ANIMATION_PROPERTIES.has(propName)) {
-        const valueSlice = body.slice(colonIndex + 1, i)
-        const suffix = i < len ? ';' : ''
+        const valueSlice = declaration.slice(colonOffset + 1)
+        const suffix = delimiter === ';' ? ';' : ''
         out += `${rawProp}:${rewriteAnimationValue(valueSlice, keyframeMap)}${suffix}`
-        i = end
+        i = stmtEnd
         continue
       }
     }
-    out += body.slice(start, end)
-    i = end
+
+    out += body.slice(stmtStart, stmtEnd)
+    i = stmtEnd
   }
 
   return out
@@ -480,61 +509,18 @@ function scopeBlock(
   const len = css.length
 
   while (i < len) {
-    if (/\s/.test(css[i]!)) {
-      out += css[i]!
-      i++
-      continue
-    }
-    if (css[i] === '/' && css[i + 1] === '*') {
-      const end = css.indexOf('*/', i + 2)
-      if (end === -1) {
-        out += css.slice(i)
-        break
-      }
-      out += css.slice(i, end + 2)
-      i = end + 2
-      continue
-    }
+    const wsStart = i
+    i = skipWhitespaceAndComments(css, i)
+    out += css.slice(wsStart, i)
+    if (i >= len) break
 
     const preludeStart = i
-    let quote: string | null = null
-    let delimiter = ''
-    while (i < len) {
-      const ch = css[i]!
-      if (quote !== null) {
-        if (ch === '\\') {
-          i += 2
-          continue
-        }
-        if (ch === quote) quote = null
-        i++
-        continue
-      }
-      if (ch === '/' && css[i + 1] === '*') {
-        const end = css.indexOf('*/', i + 2)
-        if (end === -1) {
-          i = len
-          break
-        }
-        i = end + 2
-        continue
-      }
-      if (ch === '"' || ch === "'") {
-        quote = ch
-        i++
-        continue
-      }
-      if (ch === '{' || ch === ';') {
-        delimiter = ch
-        break
-      }
-      i++
-    }
+    const { index: delimIdx, delimiter } = scanUntilDelimiter(css, preludeStart, '{;')
+    const prelude = css.slice(preludeStart, delimIdx)
 
-    const prelude = css.slice(preludeStart, i)
     if (delimiter === ';') {
       out += `${prelude};`
-      i++
+      i = delimIdx + 1
       continue
     }
     if (delimiter !== '{') {
@@ -542,9 +528,9 @@ function scopeBlock(
       break
     }
 
-    const closeIndex = findMatchingBrace(css, i)
-    const body = css.slice(i + 1, closeIndex)
-    const trimmedPrelude = prelude.replace(/\/\*[\s\S]*?\*\//g, '').trim()
+    const closeIndex = findMatchingBrace(css, delimIdx)
+    const body = css.slice(delimIdx + 1, closeIndex)
+    const trimmedPrelude = stripCssComments(prelude).trim()
 
     if (trimmedPrelude.startsWith('@')) {
       const atNameMatch = trimmedPrelude.match(/^@([a-zA-Z_-]+)/)
@@ -567,7 +553,7 @@ function scopeBlock(
       }
     } else {
       const scopedPrelude = scopeSelectorList(prelude, scopeAttr)
-      const rewrittenBody = rewriteAnimationDeclarations(body, keyframeMap)
+      const rewrittenBody = rewriteStyleRuleBody(body, keyframeMap)
       out += `${scopedPrelude} {${rewrittenBody}}`
     }
 
@@ -587,50 +573,18 @@ function splitLeadingPreludeStatements(css: string): { leading: string; rest: st
   let splitIndex = 0
 
   while (i < len) {
-    while (i < len) {
-      if (/\s/.test(css[i]!)) {
-        i++
-        continue
-      }
-      if (css[i] === '/' && css[i + 1] === '*') {
-        const end = css.indexOf('*/', i + 2)
-        if (end === -1) return { leading: css.slice(0, splitIndex), rest: css.slice(splitIndex) }
-        i = end + 2
-        continue
-      }
-      break
-    }
-    if (i >= len || css[i] !== '@') break
+    i = skipWhitespaceAndComments(css, i)
+    if (i >= len || css.charAt(i) !== '@') break
     const head = css.slice(i, i + 16).toLowerCase()
     if (!head.startsWith('@charset') && !head.startsWith('@import')) break
 
-    let quote: string | null = null
-    while (i < len) {
-      const ch = css[i]!
-      if (quote !== null) {
-        if (ch === '\\') {
-          i += 2
-          continue
-        }
-        if (ch === quote) quote = null
-        i++
-        continue
-      }
-      if (ch === '"' || ch === "'") {
-        quote = ch
-        i++
-        continue
-      }
-      if (ch === ';') {
-        i++
-        splitIndex = i
-        break
-      }
-      if (ch === '{') {
-        return { leading: css.slice(0, splitIndex), rest: css.slice(splitIndex) }
-      }
-      i++
+    const { index: delimIdx, delimiter } = scanUntilDelimiter(css, i, '{;')
+    if (delimiter === ';') {
+      i = delimIdx + 1
+      splitIndex = i
+      continue
     }
+    return { leading: css.slice(0, splitIndex), rest: css.slice(splitIndex) }
   }
 
   return { leading: css.slice(0, splitIndex), rest: css.slice(splitIndex) }
@@ -638,27 +592,13 @@ function splitLeadingPreludeStatements(css: string): { leading: string; rest: st
 
 /** Checks whether the non-whitespace/non-comment content is already a single `@layer plugin-ui { ... }` wrapper. */
 function isWrappedInPluginLayer(css: string): boolean {
-  let i = 0
-  const len = css.length
-  while (i < len) {
-    if (/\s/.test(css[i]!)) {
-      i++
-      continue
-    }
-    if (css[i] === '/' && css[i + 1] === '*') {
-      const end = css.indexOf('*/', i + 2)
-      if (end === -1) return false
-      i = end + 2
-      continue
-    }
-    break
-  }
+  const i = skipWhitespaceAndComments(css, 0)
   const rest = css.slice(i)
   const match = rest.match(/^@layer\s+plugin-ui\s*\{/i)
   if (match === null) return false
   const openBrace = i + match[0].length - 1
   const closeBrace = findMatchingBrace(css, openBrace)
-  const trailing = css.slice(closeBrace + 1).replace(/\/\*[\s\S]*?\*\//g, '').trim()
+  const trailing = stripCssComments(css.slice(closeBrace + 1)).trim()
   return trailing === ''
 }
 
@@ -666,7 +606,7 @@ function isWrappedInPluginLayer(css: string): boolean {
  * Scope a plugin's stylesheet under `@layer plugin-ui` and `:where([data-plugin-id="<pluginId>"])`,
  * while scoping plugin `@keyframes` names and matching `animation` declarations.
  * Pure, idempotent, zero-specificity-overhead, and safe for `@media`,
- * `@supports`, `@container`, `@keyframes`, `@font-face`, and portalled roots.
+ * `@supports`, `@container`, `@keyframes`, `@font-face`, nested CSS rules, and portalled roots.
  */
 export function scopePluginCss(css: string, pluginId: string): string {
   if (css.trim() === '' || pluginId.trim() === '') return css

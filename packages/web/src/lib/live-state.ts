@@ -550,6 +550,11 @@ export function applyEventFrame(state: LiveState, frame: HelmxEventFrame): LiveS
   return next
 }
 
+export interface SseCursor {
+  bootId: string
+  seq: number
+}
+
 export interface SseMessage { event: string; data: string }
 
 /** ReadableStream 的 chunk 不对应 SSE 帧边界；支持 CRLF、分段、多 data 行与注释。 */

@@ -25,9 +25,11 @@ import {
 import { isConversationArchived } from '../conversation/archive-model.js'
 import {
   collectEnabledPluginIds,
+  isHumanSelectableProfile,
+} from '../shell/conversation-status-model.js'
+import {
   isConversationArchivable,
   isConversationDeletable,
-  isHumanSelectableProfile,
 } from '../shell/sidebar-model.js'
 import { patchConversationArchived } from '../shell/archive-ops.js'
 import { formatModShiftShortcut, formatModShortcut } from '../shell/shortcuts-model.js'
@@ -38,7 +40,6 @@ import {
   useConversationSummary,
   useGroupedUi,
   useLoadError,
-  useLocationTargets,
   usePlugins,
   useProfilesSlice,
   useStoreActions,
@@ -47,6 +48,7 @@ import {
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
+import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { Composer } from './Composer.js'
 import { openStandbyWithFocus } from './standby-focus.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
@@ -148,13 +150,11 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const detailError = useLoadError(`conversation:${conversationId}`)
   const { profiles } = useProfilesSlice()
   const plugins = usePlugins()
-  const { splitTarget } = useLocationTargets()
   const { workbenchOpen, workbenchTab } = useWorkbenchState()
   const {
     loadConversationDetail,
     loadEarlierEntries,
     pushNotice,
-    closeSplit,
     openTarget,
     openWorkbenchDrawer,
   } = useStoreActions()
@@ -174,9 +174,13 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const outlineTickRef = useRef(0)
   const prefillTickRef = useRef(0)
   const prevConversationIdRef = useRef(conversationId)
-  const moreMenuRef = useRef<HTMLSpanElement | null>(null)
   const moreButtonRef = useRef<HTMLButtonElement | null>(null)
   const moreInteractedOutsideRef = useRef(false)
+  const { isSplitActive, toggleSplit } = usePaneSplitToggle({
+    isSplit,
+    onCloseSplit,
+    getSplitTarget: () => ({ kind: 'conversation', conversationId }),
+  })
 
   const isWorking = conversation?.status === 'working'
   const isCompacting = conversation?.contextUsage?.compacting === true
@@ -386,7 +390,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         type: 'notification',
         level: 'info',
         title: successTitle,
-        conversationId,
+        target: { kind: 'conversation', conversationId },
       })
     } catch (err) {
       pushNotice({
@@ -394,7 +398,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         level: 'error',
         title: t('conv.pane.actionFailedTitle', { title: successTitle }),
         body: err instanceof Error ? err.message : String(err),
-        conversationId,
+        target: { kind: 'conversation', conversationId },
       })
     } finally {
       setActionPending(null)
@@ -425,18 +429,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     setRenaming(false)
     if (next === '' || next === conversation.title) return
     await runAction('rename', () => conversationsApi.patch(conversationId, { title: next }), t('conv.pane.conversationRenamed'))
-  }
-
-  const toggleSplit = (): void => {
-    if (isSplit) {
-      onCloseSplit?.()
-      return
-    }
-    if (splitTarget !== null) {
-      closeSplit()
-      return
-    }
-    openTarget({ kind: 'conversation', conversationId }, { split: true })
   }
 
   return (
@@ -550,10 +542,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             <Button
               size="sm"
               icon={<HelmxIcon name="plus" size={12} />}
-              pending={actionPending === 'new-thread'}
               aria-label={t('conv.pane.newTopic')}
               title={t('conv.pane.newTopicTitle', { shortcut: formatModShiftShortcut('O') })}
-              disabled={actionPending !== null && actionPending !== 'new-thread'}
+              disabled={actionPending !== null}
               onClick={() => startNewThread()}
             >
               <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
@@ -601,14 +592,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           ) : isSplit && onCloseSplit !== undefined ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
-            <span className={splitTarget === null ? 'pane-split-btn' : undefined}>
+            <span className={isSplitActive ? undefined : 'pane-split-btn'}>
               <SplitToggleButton
-                isSplitActive={splitTarget !== null}
+                isSplitActive={isSplitActive}
                 onToggleSplit={toggleSplit}
               />
             </span>
           )}
-          <span className="pane-more-menu" ref={moreMenuRef}>
+          <span className="pane-more-menu">
             <DropdownMenu
               open={moreOpen}
               onOpenChange={(next) => {

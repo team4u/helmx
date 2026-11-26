@@ -6,7 +6,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -14,6 +13,7 @@ import {
   type CSSProperties,
   type ExoticComponent,
   type ReactNode,
+  type RefObject,
 } from 'react'
 import { Button, HelmxIcon, LoadingState, Stack, TooltipProvider } from '@helmx/plugin-client'
 import { AgentStandbyPane } from './conversation/AgentStandbyPane.js'
@@ -22,25 +22,18 @@ import { ConversationWindowStage } from './conversation/ConversationWindowStage.
 import { standbyDraftKey } from './conversation/standby-model.js'
 import { DrawerStackShell } from './conversation/DrawerStackShell.js'
 import { useWebLocale } from './i18n/use-web-locale.js'
+import { isElementVisibleInDocument } from './lib/dom-visibility.js'
 import { HelmxStoreProvider } from './lib/HelmxStoreProvider.js'
 import {
   useActiveModal,
   useAuthConnection,
-  useConversations,
   useDrawerStack,
-  useGroupedUi,
+  useHomeLandingPending,
   useLocationTargets,
-  useProfilesSlice,
   useSidebarCollapsed,
   useStoreActions,
 } from './lib/store-context.js'
-import {
-  hashHasPrimaryTarget,
-  isSameLocationState,
-  parseLocationHash,
-  type WorkspaceLocationState,
-} from './lib/url-hash-model.js'
-import { isSameResolvedTarget, type ResolvedTarget } from './lib/types.js'
+import { type ResolvedTarget } from './lib/types.js'
 import { ScreenHost } from './screens/ScreenHost.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
@@ -50,9 +43,7 @@ import { useVersionWatcher, type VersionDeferReason } from './shell/use-version-
 import { versionDeferHint } from './shell/version-watch-model.js'
 import { useGlobalAttention } from './shell/use-attention-indicator.js'
 import { composeAttentionSummary } from './shell/attention-model.js'
-import { extractRailQuickEntries } from './shell/sidebar-model.js'
-import { useSidebarBadges } from './shell/use-sidebar-badges.js'
-import { MobileQuickNav } from './shell/MobileQuickNav.js'
+import { MobileQuickNavSlot } from './shell/MobileQuickNav.js'
 import { HubUpdateCard } from './shell/HubUpdateCard.js'
 import { HubUpgradedNotice } from './shell/HubUpgradedNotice.js'
 import { useMobileDrawerSwipe } from './shell/use-mobile-drawer-swipe.js'
@@ -62,6 +53,7 @@ import { SplitResizeHandle } from './ui/SplitResizeHandle.js'
 
 /** SSE 断线横幅展示防抖：短于 1500ms 的瞬断或页面初始握手不闪现重连提示。 */
 const CONNECTION_BANNER_DELAY_MS = 1500
+
 /** Matches `@media (max-width: 860px)` off-canvas mobile sidebar breakpoint in `responsive.css`. */
 const MOBILE_DRAWER_MAX_WIDTH = 860
 const MOBILE_SIDEBAR_ID = 'helmx-mobile-sidebar'
@@ -69,25 +61,21 @@ const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',
   'input:not([disabled]):not([type="hidden"])',
-  'select:not([disabled])',
   'textarea:not([disabled])',
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ')
 
 function listFocusableElements(container: HTMLElement): HTMLElement[] {
-  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((el) => {
-    if (el.hasAttribute('disabled') || el.getAttribute('aria-hidden') === 'true') return false
-    let cur: HTMLElement | null = el
-    while (cur !== null && cur !== container) {
-      if (cur.hidden || cur.hasAttribute('inert')) return false
-      if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
-        const style = window.getComputedStyle(cur)
-        if (style.display === 'none' || style.visibility === 'hidden') return false
-      }
-      cur = cur.parentElement
-    }
-    return true
-  })
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (el) =>
+      !el.hasAttribute('disabled') &&
+      el.getAttribute('aria-hidden') !== 'true' &&
+      isElementVisibleInDocument(el, {
+        stopAt: container,
+        checkInert: true,
+        checkVisibilityStyle: true,
+      }),
+  )
 }
 
 const LazyRetryContext = createContext<(() => void) | undefined>(undefined)
@@ -366,20 +354,57 @@ function VersionBannerSlot() {
   )
 }
 
+function MobileNavToggleButton({
+  toggleRef,
+  sidebarOpen,
+  isDrawerViewport,
+  mobileSidebarId,
+  onToggle,
+}: {
+  toggleRef: RefObject<HTMLButtonElement | null>
+  sidebarOpen: boolean
+  isDrawerViewport: boolean
+  mobileSidebarId: string
+  onToggle: () => void
+}) {
+  const { t } = useWebLocale()
+  const attention = useGlobalAttention()
+  const attentionSummary = composeAttentionSummary(attention.indicator, t)
+  const label = attentionSummary !== '' ? `${t('shell.nav.toggleNav')} · ${attentionSummary}` : t('shell.nav.toggleNav')
+  return (
+    <Button
+      ref={toggleRef}
+      variant="ghost"
+      className="mobile-nav-toggle"
+      icon={<HelmxIcon name="menu" />}
+      title={label}
+      aria-label={label}
+      aria-expanded={isDrawerViewport ? sidebarOpen : undefined}
+      aria-controls={isDrawerViewport ? mobileSidebarId : undefined}
+      onClick={onToggle}
+    >
+      {attention.indicator.totalCount > 0 && attention.indicator.tone !== null ? (
+        <span className="attention-status-dot mobile-nav-dot" data-tone={attention.indicator.tone} aria-hidden="true" />
+      ) : null}
+    </Button>
+  )
+}
+
 function HelmxShellInner({
   connectionBannerDelayMs = CONNECTION_BANNER_DELAY_MS,
 }: {
   connectionBannerDelayMs?: number
 }) {
   const { authReady, authError, authenticated, sseConnected, connectionError } = useAuthConnection()
-  const { assetsLoaded } = useProfilesSlice()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
+  const homeLandingPending = useHomeLandingPending()
   const sidebarCollapsed = useSidebarCollapsed()
   const drawerStack = useDrawerStack()
   const activeModal = useActiveModal()
   const { setActiveModal, setFocusedPanel, checkAuth, closeSplit } = useStoreActions()
-  const { locale, t } = useWebLocale()
+  const { t } = useWebLocale()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [mobileQuickEntryVisible, setMobileQuickEntryVisible] = useState(false)
   const [showConnectionBanner, setShowConnectionBanner] = useState(false)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const panesRef = useRef<HTMLDivElement | null>(null)
@@ -391,6 +416,7 @@ function HelmxShellInner({
   const isMobileDrawerOpen = isDrawerViewport && sidebarOpen
   const openMobileSidebar = useCallback(() => setSidebarOpen(true), [])
   const closeMobileSidebar = useCallback(() => setSidebarOpen(false), [])
+  const toggleMobileSidebar = useCallback(() => setSidebarOpen((open) => !open), [])
   useMobileDrawerSwipe({
     containerRef: shellRef,
     enabled: authReady && !authError && authenticated && isMobileViewport && activeModal === null && drawerStack.length === 0,
@@ -403,46 +429,9 @@ function HelmxShellInner({
   const handleCommitSplitRatio = useCallback((next: number) => {
     setSplitRatio(saveSplitRatio(next))
   }, [])
-  const [bootLanding] = useState<{ needsHomeLanding: boolean; initialLocation: WorkspaceLocationState | null }>(() => {
-    if (typeof window === 'undefined') {
-      return { needsHomeLanding: false, initialLocation: null }
-    }
-    const rawHash = window.location.hash
-    const parsed = parseLocationHash(rawHash)
-    return {
-      needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null && parsed.drawerStack.length === 0,
-      initialLocation: parsed,
-    }
-  })
-  const [landingSettled, setLandingSettled] = useState(!bootLanding.needsHomeLanding)
-
-  // 全局并发态势（与 Activity Rail 对话空间圆点及 #/overview 三活跃桶 1:1 同源的 indicator）。
-  // 抽屉关闭时也保持计算——badge doc 的发现与按需加载内聚在 Hook；移动端
-  // 汉堡按钮与 Activity Rail 对话空间按钮共用同一 indicator。
-  const attention = useGlobalAttention()
-  const groupedUi = useGroupedUi()
-  const conversations = useConversations()
-  // 首个插件全局快捷入口（sidebar.item quickEntry，仅认当前启用插件真实存在
-  // 的 screen）：移动端免开汉堡一键直达。
-  const firstQuickEntry = useMemo(
-    () => extractRailQuickEntries(groupedUi.sidebarItems, groupedUi.screens, conversations, locale)[0] ?? null,
-    [groupedUi.sidebarItems, groupedUi.screens, conversations, locale],
-  )
-  // 快捷入口的 sidebar.item badge 解析（doc 按需发现加载内聚在 Hook）：
-  // 无信号为 null，移动端快捷簇零渲染残留；插件停用后贡献与 doc 消失即归零。
-  const quickBadgeItems = useMemo(() => (firstQuickEntry !== null ? [firstQuickEntry] : []), [firstQuickEntry])
-  const quickEntryBadges = useSidebarBadges(quickBadgeItems)
-  const quickEntryBadge = firstQuickEntry !== null ? (quickEntryBadges.get(firstQuickEntry.key) ?? null) : null
   const closeModal = useCallback(() => setActiveModal(null), [setActiveModal])
   const focusPrimary = useCallback(() => setFocusedPanel?.('primary'), [setFocusedPanel])
   const focusSplit = useCallback(() => setFocusedPanel?.('split'), [setFocusedPanel])
-
-  useEffect(() => {
-    if (landingSettled) return
-    if (authenticated && assetsLoaded && sseConnected) {
-      setLandingSettled(true)
-    }
-  }, [landingSettled, authenticated, assetsLoaded, sseConnected])
 
   useEffect(() => {
     if (!authenticated || sseConnected) {
@@ -558,17 +547,6 @@ function HelmxShellInner({
 
   if (!authenticated) return <AuthGate />
 
-  const currentLocation: WorkspaceLocationState = {
-    primaryTarget,
-    splitTarget,
-    drawerStack,
-    activeModal,
-  }
-  const homeLandingPending =
-    !landingSettled &&
-    bootLanding.initialLocation !== null &&
-    isSameLocationState(currentLocation, bootLanding.initialLocation)
-
   const activeTarget =
     focusedPanel === 'split' && splitTarget !== null
       ? splitTarget
@@ -582,14 +560,6 @@ function HelmxShellInner({
         ? fallbackTarget.conversationId
         : undefined
 
-  // 移动端插件快捷入口仅在「不在该视图上」时渲染（主屏已停在入口目标时就地隐藏）；
-  // 顶栏左让位宽度（mq-quick-on）跟随真实可见性，会话态势无数字状态圆点直接挂在汉堡按钮上。
-  const mobileQuickEntryVisible =
-    firstQuickEntry !== null && !isSameResolvedTarget(primaryTarget, firstQuickEntry.target)
-  const attentionSummary = composeAttentionSummary(attention.indicator, t)
-  const mobileNavToggleLabel =
-    attentionSummary !== '' ? `${t('shell.nav.toggleNav')} · ${attentionSummary}` : t('shell.nav.toggleNav')
-
   return (
       <div
         ref={shellRef}
@@ -601,24 +571,14 @@ function HelmxShellInner({
           }
         }}
       >
-        <Button
-          ref={mobileNavToggleRef}
-          variant="ghost"
-          className="mobile-nav-toggle"
-          icon={<HelmxIcon name="menu" />}
-          title={mobileNavToggleLabel}
-          aria-label={mobileNavToggleLabel}
-          aria-expanded={isDrawerViewport ? sidebarOpen : undefined}
-          aria-controls={isDrawerViewport ? MOBILE_SIDEBAR_ID : undefined}
-          onClick={() => setSidebarOpen((open) => !open)}
-        >
-          {attention.indicator.totalCount > 0 && attention.indicator.tone !== null ? (
-            <span className="attention-status-dot mobile-nav-dot" data-tone={attention.indicator.tone} aria-hidden="true" />
-          ) : null}
-        </Button>
-        {/* 移动端首个 quickEntry 插件视图一键直达（会话态势状态圆点已合并进
-            左上角汉堡按钮，省回顶栏宽度）；无插件 quickEntry 或已停在该视图时返回 null。 */}
-        <MobileQuickNav quickEntry={firstQuickEntry} quickEntryBadge={quickEntryBadge} />
+        <MobileNavToggleButton
+          toggleRef={mobileNavToggleRef}
+          sidebarOpen={sidebarOpen}
+          isDrawerViewport={isDrawerViewport}
+          mobileSidebarId={MOBILE_SIDEBAR_ID}
+          onToggle={toggleMobileSidebar}
+        />
+        <MobileQuickNavSlot onVisibilityChange={setMobileQuickEntryVisible} />
         {sidebarOpen && (
           <div
             className="sidebar-backdrop"

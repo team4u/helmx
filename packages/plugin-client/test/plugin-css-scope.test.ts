@@ -217,3 +217,34 @@ test('scopePluginCss DOM: layered host-base/host-components/plugin-ui isolates s
     pluginAStyle.remove()
   }
 })
+
+test('scopePluginCss: quote-aware comment stripping preserves /* */ inside strings and rewrites nested rule animations', { timeout: 60_000 }, () => {
+  const raw = `
+    @keyframes fadeSpin {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .badge[data-glob="/*keep*/"] /* real comment */ {
+      content: "/*also-keep*/";
+      animation: fadeSpin 1s ease-in;
+      &:hover {
+        color: blue;
+        animation-name: fadeSpin;
+      }
+      @media (max-width: 640px) {
+        animation: fadeSpin 400ms linear;
+      }
+    }
+  `
+  const scoped = scopePluginCss(raw, 'ext:nested')
+  assert.match(scoped, /\[data-glob="\/\*keep\*\/"\]/, 'attribute selector string literal containing /* */ must remain intact')
+  assert.doesNotMatch(scoped, /real comment/, 'actual comment in selector prelude is stripped')
+  assert.match(scoped, /content:\s*"\/\*also-keep\*\/";/, 'declaration string literal containing /* */ must remain intact')
+
+  const kfMatch = scoped.match(/@keyframes\s+([a-zA-Z0-9_-]+)/)
+  assert.ok(kfMatch !== null && kfMatch[1] !== undefined)
+  const scopedName = kfMatch[1]
+  assert.match(scoped, new RegExp(`animation:\\s*${scopedName} 1s ease-in;`))
+  assert.match(scoped, new RegExp(`&:hover\\s*\\{[\\s\\S]*?animation-name:\\s*${scopedName};`))
+  assert.match(scoped, new RegExp(`@media \\(max-width: 640px\\)\\s*\\{[\\s\\S]*?animation:\\s*${scopedName} 400ms linear;`))
+})

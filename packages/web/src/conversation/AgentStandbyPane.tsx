@@ -27,12 +27,13 @@ import {
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi, type ModelCatalogDefaults } from '../lib/api.js'
 import {
-  executePluginSlashAction,
   matchExactPluginSlash,
   pluginSlashCommandsFor,
   removeTokenBeforeCaret,
   type QualifiedCommand,
 } from '../lib/commands-model.js'
+import { isImeComposing } from '../lib/ime.js'
+import { dispatchPluginSlashCommand } from './plugin-command-exec.js'
 import { errorText } from '../lib/error-text.js'
 import {
   useActiveModal,
@@ -48,9 +49,12 @@ import {
 } from '../lib/store-context.js'
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
-import { buildNewTopicCandidates } from '../overview/overview-model.js'
+import {
+  collectEnabledPluginIds,
+  isHumanSelectableProfile,
+} from '../shell/conversation-status-model.js'
 import { formatModShiftShortcut, formatModShortcut } from '../shell/shortcuts-model.js'
-import { collectEnabledPluginIds, isHumanSelectableProfile } from '../shell/sidebar-model.js'
+import { buildNewTopicCandidates } from '../shell/sidebar-model.js'
 import { standbySkillScope } from '../skills/skill-scope-model.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
@@ -350,11 +354,13 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     [profileId, inheritedNodeId, inheritedCwd],
   )
   const viewingRef = useRef(false)
-  viewingRef.current = isSplit
+  const isViewingTarget = isSplit
     ? isSameResolvedTarget(splitTarget, coordinateTarget)
     : isSameResolvedTarget(primaryTarget, coordinateTarget)
+  useLayoutEffect(() => {
+    viewingRef.current = isViewingTarget
+  }, [isViewingTarget])
   useEffect(() => {
-    viewingRef.current = true
     return () => { viewingRef.current = false }
   }, [])
 
@@ -370,7 +376,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           level: 'error',
           title,
           body: errorText(err),
-          ...(conversationId !== undefined ? { conversationId } : {}),
+          ...(conversationId !== undefined ? { target: { kind: 'conversation', conversationId } } : {}),
         })
       },
       notifySentInBackground: (conversationId) => {
@@ -379,7 +385,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           level: 'info',
           title: t('composer.standby.sentInBackgroundTitle'),
           body: t('composer.standby.sentInBackgroundBody', { id: conversationId }),
-          conversationId,
+          target: { kind: 'conversation', conversationId },
         })
       },
       navigateToConversation: (conversationId) => {
@@ -435,58 +441,31 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         updateStandbyDraft(draftKey, { text: beforeText })
       }
     }
-    const applyTokenOrClear = (): void => {
+    const applyDraftUpdate = (): void => {
       updateStandbyDraft(draftKey, { text: resolved.next })
       if (mode === 'token' && el !== null && el.isConnected) focusWithCaret(el, resolved.nextCaret)
     }
 
-    if (commandRegistry.has(cmd.pluginId, cmd.spec.id)) {
-      applyTokenOrClear()
-      const handleLocalError = (err: unknown): void => {
-        restoreDraftIfUntouched()
-        pushNotice({
-          type: 'notification',
-          level: 'error',
-          title: t('composer.command.failed', { command: `/${cmd.spec.slash ?? cmd.spec.id}` }),
-          body: errorText(err),
-          ...(record.conversationId !== undefined ? { conversationId: record.conversationId } : {}),
-        })
-      }
-      try {
-        const invoked = commandRegistry.invoke(cmd.pluginId, cmd.spec.id)
-        if (invoked.handled) {
-          if (
-            invoked.result !== undefined &&
-            invoked.result !== null &&
-            typeof (invoked.result as PromiseLike<void>).then === 'function'
-          ) {
-            void Promise.resolve(invoked.result).catch(handleLocalError)
-          }
-          return
-        }
-      } catch (err) {
-        handleLocalError(err)
-        return
-      }
-    }
-
-    commandPendingRef.current = true
-    setRunningCommand(cmd)
-    applyTokenOrClear()
-    void executePluginSlashAction(cmd, {
+    void dispatchPluginSlashCommand({
+      cmd,
+      generation: gen,
+      isCurrentGeneration: (g) => g === commandGenRef.current,
+      commandRegistry,
+      ...(record.conversationId !== undefined ? { conversationId: record.conversationId } : {}),
       invokePluginAction,
       pushNotice,
       locale,
       t,
-      ...(record.conversationId !== undefined ? { conversationId: record.conversationId } : {}),
-    }).catch(() => {
-      restoreDraftIfUntouched()
-    }).finally(() => {
-      if (gen === commandGenRef.current) {
-        commandPendingRef.current = false
-        if (mountedRef.current) setRunningCommand(null)
-      }
-    })
+      applyDraftUpdate,
+      restoreDraftIfUntouched,
+      setPending: (pending, command) => {
+        commandPendingRef.current = pending
+        if (mountedRef.current) setRunningCommand(command)
+      },
+      ...(record.conversationId !== undefined
+        ? { noticeTarget: { kind: 'conversation' as const, conversationId: record.conversationId } }
+        : {}),
+    }).catch(() => {})
   }, [commandRegistry, draftKey, invokePluginAction, locale, pushNotice, t])
 
   const runPluginCommand = useStableCallback((cmd: QualifiedCommand): void => {
@@ -853,7 +832,7 @@ function StandbyComposer({
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.defaultPrevented || e.nativeEvent.defaultPrevented) return
     if (completions.shouldDeferKeyToPopover(e)) return
-    if (isComposerSubmitEnterEvent(e) && !e.nativeEvent.isComposing) {
+    if (isComposerSubmitEnterEvent(e) && !isImeComposing(e)) {
       e.preventDefault()
       if (!sendDisabled) onSend()
     }
@@ -893,147 +872,157 @@ function StandbyComposer({
 
   return (
     <ComposerInputShell
-      shortcutPanel={isSplit ? 'split' : 'primary'}
-      aboveBox={
-        <>
-          <StandbyEnvBar
+      attachments={attachmentItems}
+      shortcuts={{ panel: isSplit ? 'split' : 'primary' }}
+      draft={{
+        textareaRef,
+        ariaLabel: t('composer.standby.firstMessageAria', { name: profile.name || profile.id }),
+        value: draft.text,
+        readOnly: busy,
+        placeholder: isMobile ? t('composer.standby.placeholderMobile') : t('composer.standby.placeholder'),
+        onTextChange: (nextValue, caret) => {
+          updateStandbyDraft(draftKey, { text: nextValue })
+          completions.detectPopover(nextValue, caret)
+        },
+        onKeyUp: completions.handleTextareaKeyUp,
+        onClick: completions.handleTextareaClick,
+        onKeyDown,
+        onPaste: fileHandlers.onPaste,
+      }}
+      dnd={{
+        dragging: fileHandlers.dragging,
+        onDragEnter: fileHandlers.onDragEnter,
+        onDragOver: fileHandlers.onDragOver,
+        onDragLeave: fileHandlers.onDragLeave,
+        onDrop: fileHandlers.onDrop,
+      }}
+      plusMenu={{
+        fileInputRef: fileHandlers.fileInputRef,
+        uploadButtonLabel: t('composer.standby.chooseAttachments'),
+        uploadDisabled: busy,
+        disabled: busy,
+        onOpenFilePicker: fileHandlers.openFilePicker,
+        onFileInputChange: fileHandlers.onFileInputChange,
+        renderSlot: (closeMenu) => (
+          <PluginSlot
+            ownerPluginId="builtin:composer"
+            name={COMPOSER_MENU_SLOT}
+            slotProps={{
+              effectiveModel,
+              profileId: profile.id,
+              draftMeta: draft.inputMeta,
+              setDraftMeta,
+              disabled: configLocked,
+              onCloseMenu: closeMenu,
+            } satisfies ComposerMenuSlotProps}
+          />
+        ),
+      }}
+      completions={{
+        slashOpen: completions.slashOpen,
+        popoverQuery: completions.popoverQuery,
+        slashMenuItems: completions.slashMenuItems,
+        onPickSlash: completions.applySlashPick,
+        onCloseSlash: completions.closeSlashPopover,
+        completionOpen: completions.completionOpen,
+        completionTrigger: completions.completionTrigger,
+        completionSnapshot: completions.completionSnapshot,
+        onPickCompletion: completions.applyCompletionPick,
+        onCloseCompletion: completions.closeCompletionPopover,
+      }}
+      slots={{
+        aboveBox: (
+          <>
+            <StandbyEnvBar
+              draftKey={draftKey}
+              draft={draft}
+              profile={profile}
+              disabled={configLocked}
+              onResetToDefault={onResetEnvToDefault}
+            />
+            {anchored ? (
+              <div className="agent-standby-anchored callout" role="status">
+                <HelmxIcon name="lock" size={12} />
+                <span className="agent-standby-anchored-text">
+                  {t('composer.standby.anchoredNotice', { id: draft.conversationId! })}
+                </span>
+                <Tooltip content={t('composer.standby.openCreatedInPanel')} side="top">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      if (draft.conversationId === undefined) return
+                      openTarget(
+                        { kind: 'conversation', conversationId: draft.conversationId },
+                        isSplit ? { split: true } : undefined,
+                      )
+                    }}
+                  >
+                    {t('composer.standby.viewConversation')}
+                  </Button>
+                </Tooltip>
+              </div>
+            ) : null}
+            {draft.error !== null ? (
+              <div className="agent-standby-error callout callout-error" role="alert">
+                <span className="agent-standby-error-text">{draft.error}</span>
+                <Button size="sm" disabled={busy} onClick={onSend}>
+                  {t('common.retry')}
+                </Button>
+              </div>
+            ) : null}
+          </>
+        ),
+        boxBanner: runningCommand !== null ? <ComposerCommandBanner command={runningCommand} /> : undefined,
+        modelPicker: (
+          <StandbyModelPicker
             draftKey={draftKey}
             draft={draft}
             profile={profile}
+            modelDefaults={modelDefaults}
             disabled={configLocked}
-            onResetToDefault={onResetEnvToDefault}
+            isSplit={isSplit}
+            onReturnFocus={returnFocusToTextarea}
           />
-          {anchored ? (
-            <div className="agent-standby-anchored callout" role="status">
-              <HelmxIcon name="lock" size={12} />
-              <span className="agent-standby-anchored-text">
-                {t('composer.standby.anchoredNotice', { id: draft.conversationId! })}
-              </span>
-              <Tooltip content={t('composer.standby.openCreatedInPanel')} side="top">
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    if (draft.conversationId === undefined) return
-                    openTarget(
-                      { kind: 'conversation', conversationId: draft.conversationId },
-                      isSplit ? { split: true } : undefined,
-                    )
-                  }}
-                >
-                  {t('composer.standby.viewConversation')}
-                </Button>
-              </Tooltip>
-            </div>
-          ) : null}
-          {draft.error !== null ? (
-            <div className="agent-standby-error callout callout-error" role="alert">
-              <span className="agent-standby-error-text">{draft.error}</span>
-              <Button size="sm" disabled={busy} onClick={onSend}>
-                {t('common.retry')}
-              </Button>
-            </div>
-          ) : null}
-        </>
-      }
-      boxBanner={runningCommand !== null ? <ComposerCommandBanner command={runningCommand} /> : undefined}
-      attachments={attachmentItems}
-      textareaRef={textareaRef}
-      textareaAriaLabel={t('composer.standby.firstMessageAria', { name: profile.name || profile.id })}
-      value={draft.text}
-      readOnly={busy}
-      placeholder={isMobile ? t('composer.standby.placeholderMobile') : t('composer.standby.placeholder')}
-      onTextChange={(nextValue, caret) => {
-        updateStandbyDraft(draftKey, { text: nextValue })
-        completions.detectPopover(nextValue, caret)
+        ),
+        toolbar: (
+          <PluginSlot
+            ownerPluginId="builtin:composer"
+            name={COMPOSER_TOOLBAR_SLOT}
+            className="composer-toolbar-slot"
+            slotProps={{
+              effectiveModel,
+              profileId: profile.id,
+              draftMeta: draft.inputMeta,
+              setDraftMeta,
+              disabled: configLocked,
+            } satisfies ComposerToolbarSlotProps}
+          />
+        ),
+        sendControls: (
+          <span className="composer-toolbar-right">
+            <IconButton
+              variant="primary"
+              size="md"
+              pill
+              pending={inFlight}
+              disabled={sendDisabled}
+              className="btn-send"
+              icon={<HelmxIcon name="arrow-up" size={18} />}
+              onClick={onSend}
+              title={envError !== null ? envError : t('composer.standby.sendTitle')}
+              aria-label={busy ? t('composer.standby.sendingAria') : runningCommand !== null ? t('composer.command.runningAria') : t('composer.sendControls.send')}
+            />
+          </span>
+        ),
+        statusRow: (
+          <PluginSlot
+            ownerPluginId="builtin:composer"
+            name={COMPOSER_STATUS_SLOT}
+            className="composer-status-slot"
+            slotProps={{ effectiveModel, profileId: profile.id } satisfies ComposerStatusSlotProps}
+          />
+        ),
       }}
-      onKeyUp={completions.handleTextareaKeyUp}
-      onClick={completions.handleTextareaClick}
-      onKeyDown={onKeyDown}
-      onPaste={fileHandlers.onPaste}
-      dragging={fileHandlers.dragging}
-      onDragEnter={fileHandlers.onDragEnter}
-      onDragOver={fileHandlers.onDragOver}
-      onDragLeave={fileHandlers.onDragLeave}
-      onDrop={fileHandlers.onDrop}
-      fileInputRef={fileHandlers.fileInputRef}
-      uploadButtonLabel={t('composer.standby.chooseAttachments')}
-      uploadDisabled={busy}
-      plusMenuDisabled={busy}
-      onOpenFilePicker={fileHandlers.openFilePicker}
-      onFileInputChange={fileHandlers.onFileInputChange}
-      renderMenuSlot={(closeMenu) => (
-        <PluginSlot
-          ownerPluginId="builtin:composer"
-          name={COMPOSER_MENU_SLOT}
-          slotProps={{
-            effectiveModel,
-            profileId: profile.id,
-            draftMeta: draft.inputMeta,
-            setDraftMeta,
-            disabled: configLocked,
-            onCloseMenu: closeMenu,
-          } satisfies ComposerMenuSlotProps}
-        />
-      )}
-      slashOpen={completions.slashOpen}
-      popoverQuery={completions.popoverQuery}
-      slashMenuItems={completions.slashMenuItems}
-      onPickSlash={completions.applySlashPick}
-      onCloseSlash={completions.closeSlashPopover}
-      completionOpen={completions.completionOpen}
-      completionTrigger={completions.completionTrigger}
-      completionSnapshot={completions.completionSnapshot}
-      onPickCompletion={completions.applyCompletionPick}
-      onCloseCompletion={completions.closeCompletionPopover}
-      modelPicker={
-        <StandbyModelPicker
-          draftKey={draftKey}
-          draft={draft}
-          profile={profile}
-          modelDefaults={modelDefaults}
-          disabled={configLocked}
-          isSplit={isSplit}
-          onReturnFocus={returnFocusToTextarea}
-        />
-      }
-      toolbarSlot={
-        <PluginSlot
-          ownerPluginId="builtin:composer"
-          name={COMPOSER_TOOLBAR_SLOT}
-          className="composer-toolbar-slot"
-          slotProps={{
-            effectiveModel,
-            profileId: profile.id,
-            draftMeta: draft.inputMeta,
-            setDraftMeta,
-            disabled: configLocked,
-          } satisfies ComposerToolbarSlotProps}
-        />
-      }
-      sendControls={
-        <span className="composer-toolbar-right">
-          <IconButton
-            variant="primary"
-            size="md"
-            pill
-            pending={inFlight}
-            disabled={sendDisabled}
-            className="btn-send"
-            icon={<HelmxIcon name="arrow-up" size={18} />}
-            onClick={onSend}
-            title={envError !== null ? envError : t('composer.standby.sendTitle')}
-            aria-label={busy ? t('composer.standby.sendingAria') : runningCommand !== null ? t('composer.command.runningAria') : t('composer.sendControls.send')}
-          />
-        </span>
-      }
-      statusRow={
-        <PluginSlot
-          ownerPluginId="builtin:composer"
-          name={COMPOSER_STATUS_SLOT}
-          className="composer-status-slot"
-          slotProps={{ effectiveModel, profileId: profile.id } satisfies ComposerStatusSlotProps}
-        />
-      }
     />
   )
 }

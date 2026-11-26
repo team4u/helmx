@@ -12,7 +12,7 @@ import {
   type ActionManifest,
   type SkillSummary,
 } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageKey, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageKey, WebMessageTranslator } from '../i18n/catalog.js'
 
 export type CoreCapabilityFilter = 'all' | 'actions' | 'skills'
 
@@ -155,7 +155,7 @@ function resolveOwnerDisplay(
 export function buildCoreCapabilityOwners(
   actions: ReadonlyArray<ActionManifest>,
   skills: ReadonlyArray<SkillSummary>,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): CoreCapabilityOwner[] {
   const bucketMap = new Map<string, { actions: ActionManifest[]; skills: SkillSummary[] }>()
 
@@ -275,7 +275,7 @@ export function summarizeCoreCapabilities(
 /** Localized pill label for CoreCapabilities filters. */
 export function coreCapabilityFilterLabel(
   filter: CoreCapabilityFilter,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   switch (filter) {
     case 'all':

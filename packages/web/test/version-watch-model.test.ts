@@ -11,6 +11,8 @@ import assert from 'node:assert/strict'
 import { describe, afterEach, test } from 'node:test'
 
 
+import { isElementVisibleInDocument } from '../src/lib/dom-visibility.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import {
   applyProbeResult,
   buildIndexProbeUrl,
@@ -21,7 +23,6 @@ import {
   FINGERPRINT_RELOAD_GUARD_KEY,
   initialVersionWatchState,
   isComposerManagedInput,
-  isElementVisibleInDocument,
   isTextInputElement,
   parseIndexHtmlProductionEntry,
   PRELOAD_RELOAD_GUARD_KEY,
@@ -51,6 +52,7 @@ import {
   subscribeStandbyDrafts,
   updateStandbyDraft,
 } from '../src/conversation/standby-model.js'
+const enT = createWebTranslator('en')
 describe("version-watch-model", () => {
 
 
@@ -297,18 +299,18 @@ describe("version-watch-model", () => {
     assert.equal(resolveVersionDeferReason({ foregroundDraft: false, backgroundDraft: true, modalOpen: true }), 'background-draft-and-modal')
     assert.equal(resolveVersionDeferReason({ foregroundDraft: false, backgroundDraft: false, modalOpen: true }), 'modal')
 
-    assert.ok(versionDeferHint('draft').includes('Unsubmitted input'))
-    assert.ok(!versionDeferHint('draft').includes('window'), 'a pure draft never mentions a window')
-    assert.ok(versionDeferHint('background-draft').includes('Another conversation'))
-    assert.ok(versionDeferHint('modal').includes('window is open'))
-    assert.ok(!versionDeferHint('modal').includes('input'), 'a pure modal never mentions input')
-    assert.ok(versionDeferHint('draft-and-modal').includes('Unsubmitted input'))
-    assert.ok(versionDeferHint('draft-and-modal').includes('an open window'))
-    assert.ok(versionDeferHint('background-draft-and-modal').includes('Another conversation'))
-    assert.ok(versionDeferHint('background-draft-and-modal').includes('window is open'))
-    assert.equal(versionDeferHint(null), '')
+    assert.ok(versionDeferHint('draft', enT).includes('Unsubmitted input'))
+    assert.ok(!versionDeferHint('draft', enT).includes('window'), 'a pure draft never mentions a window')
+    assert.ok(versionDeferHint('background-draft', enT).includes('Another conversation'))
+    assert.ok(versionDeferHint('modal', enT).includes('window is open'))
+    assert.ok(!versionDeferHint('modal', enT).includes('input'), 'a pure modal never mentions input')
+    assert.ok(versionDeferHint('draft-and-modal', enT).includes('Unsubmitted input'))
+    assert.ok(versionDeferHint('draft-and-modal', enT).includes('an open window'))
+    assert.ok(versionDeferHint('background-draft-and-modal', enT).includes('Another conversation'))
+    assert.ok(versionDeferHint('background-draft-and-modal', enT).includes('window is open'))
+    assert.equal(versionDeferHint(null, enT), '')
     for (const reason of ['draft', 'background-draft', 'modal', 'draft-and-modal', 'background-draft-and-modal'] as const) {
-      assert.ok(versionDeferHint(reason).endsWith('auto refresh deferred'))
+      assert.ok(versionDeferHint(reason, enT).endsWith('auto refresh deferred'))
     }
   })
 

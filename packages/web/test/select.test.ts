@@ -279,10 +279,11 @@ test('CSS stacking regression: Popover 内容节点必须声明 z-index: 80，Se
   // [data-radix-popper-content-wrapper]; if .helmx-popover-content computes to 'auto',
   // inline z-index: auto overrides the wrapper rule and lets .timeline-container::after (z-index: 2)
   // paint a horizontal seam straight across the popover.
+  const tokensCss = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8')
   const formsCss = readFileSync(new URL('../src/styles/forms.css', import.meta.url), 'utf8')
   const overlaysCss = readFileSync(new URL('../src/styles/overlays.css', import.meta.url), 'utf8')
   const style = document.createElement('style')
-  style.textContent = `${formsCss}\n${overlaysCss}`
+  style.textContent = `${tokensCss}\n${formsCss}\n${overlaysCss}`
   document.head.appendChild(style)
 
   const makeWrapped = (className: string, inlineZ?: string): HTMLElement => {

@@ -16,6 +16,7 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import {
   assistantModelFullLabel,
   assistantModelShortLabel,
@@ -28,6 +29,8 @@ import {
 } from '../src/conversation/timeline-model.js'
 import { makeTestStore as makeMockStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
+
+const enT = createWebTranslator('en')
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -142,8 +145,8 @@ test('parseAssistantModelIdentity：身份不完整/非法返回 undefined，绝
 test('模型标签：短标签取 model 末段，完整标签 provider/model（+ 思考档位）', { timeout: 60_000 }, () => {
   const id: AssistantModelIdentity = { provider: 'faux', model: 'glm-4.7', thinkingLevel: 'high' }
   assert.equal(assistantModelShortLabel(id), 'glm-4.7')
-  assert.equal(assistantModelFullLabel(id), 'faux/glm-4.7 · thinking high')
-  assert.equal(assistantModelFullLabel({ provider: 'faux', model: 'glm-4.7' }), 'faux/glm-4.7')
+  assert.equal(assistantModelFullLabel(id, enT), 'faux/glm-4.7 · thinking high')
+  assert.equal(assistantModelFullLabel({ provider: 'faux', model: 'glm-4.7' }, enT), 'faux/glm-4.7')
   // 与 Composer 模型按钮同口径：含 '/' 的 model id 取末段
   assert.equal(assistantModelShortLabel({ provider: 'p', model: 'vendor/glm-4.7' }), 'glm-4.7')
 })
@@ -276,9 +279,9 @@ test('A→B→C 三段模型：拆分为三个回合，前两个新模型回合�
   ])
   const turns = assistantTurns(items)
   assert.equal(turns.length, 3)
-  assert.equal(assistantModelFullLabel(turns[0]!.model!), 'faux/m-a')
-  assert.equal(assistantModelFullLabel(turns[1]!.model!), 'faux/m-b')
-  assert.equal(assistantModelFullLabel(turns[2]!.model!), 'openai/m-c')
+  assert.equal(assistantModelFullLabel(turns[0]!.model!, enT), 'faux/m-a')
+  assert.equal(assistantModelFullLabel(turns[1]!.model!, enT), 'faux/m-b')
+  assert.equal(assistantModelFullLabel(turns[2]!.model!, enT), 'openai/m-c')
   // 首个回合无边界；B、C 两个新模型回合各一处
   assert.deepEqual(boundaryKeys(items), [turns[1]!.key, turns[2]!.key])
 })

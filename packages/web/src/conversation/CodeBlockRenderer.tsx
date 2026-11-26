@@ -5,28 +5,16 @@
  * - 无命中（含插件停用后贡献消失）→ 回退宿主普通代码块；
  * - 不 import 任何具体语言实现（JSON / Mermaid 均为插件）。
  */
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
-import type { ComponentType } from 'react'
+import type { ReactNode } from 'react'
 import type { MarkdownCodeBlockProps } from '@helmx/protocol/browser'
-import { Button, CopyButton, createPluginClientContext, HelmxIcon, LoadingState, PluginClientContext, PluginScope, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
+import { Button, CopyButton, HelmxIcon, LoadingState, PluginClientContext, PluginScope, ViewBoundary } from '@helmx/plugin-client'
 import { isPluginSummaryActive } from '../lib/live-state.js'
 import { usePluginsUi } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import {
-  getCachedClientComponent,
-  getPluginClientCacheRevision,
-  loadPluginClientModule,
-  PluginClientError,
-  requireClientExport,
-  subscribePluginClientCacheInvalidation,
-} from '../lib/plugin-client.js'
+import { getPluginClientCacheRevision } from '../lib/plugin-client.js'
+import { usePluginClientComponent } from '../ui/use-plugin-client-component.js'
 import { matchMarkdownCodeBlock } from './codeblock-registry-model.js'
 import { StandardCodeBlock } from './StandardCodeBlock.js'
-
-type ClientState =
-  | { phase: 'loading' }
-  | { phase: 'error'; message: string }
-  | { phase: 'ready'; Component: ComponentType<MarkdownCodeBlockProps> }
 
 function CodeBlockError({ language, code, message, onRetry }: { language: string; code: string; message: string; onRetry: () => void }): ReactNode {
   const { t } = useWebLocale()
@@ -85,53 +73,13 @@ function PluginCodeBlock(props: {
   conversationId?: number
 }): ReactNode {
   const { pluginId, clientRef, expectedHash, language, code, conversationId } = props
-  const port = usePluginClientHost()
   const { t } = useWebLocale()
-  const ctx = useMemo(
-    () => createPluginClientContext(port, pluginId, conversationId),
-    [port, pluginId, conversationId],
-  )
-  const revision = useSyncExternalStore(
-    subscribePluginClientCacheInvalidation,
-    () => getPluginClientCacheRevision(pluginId),
-    () => getPluginClientCacheRevision(pluginId),
-  )
-  const [retry, setRetry] = useState(0)
-  const [client, setClient] = useState<ClientState>(() => {
-    const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export, expectedHash)
-    return cached !== undefined ? { phase: 'ready', Component: cached as unknown as ComponentType<MarkdownCodeBlockProps> } : { phase: 'loading' }
+  const { ctx, client, retryModule } = usePluginClientComponent<MarkdownCodeBlockProps>({
+    pluginId,
+    clientRef,
+    expectedHash,
+    conversationId,
   })
-
-  useEffect(() => {
-    let cancelled = false
-    if (getCachedClientComponent(pluginId, clientRef.module, clientRef.export, expectedHash) === undefined) {
-      setClient((prev) => (prev.phase === 'loading' ? prev : { phase: 'loading' }))
-    }
-    void (async () => {
-      try {
-        const loaded = await loadPluginClientModule(pluginId, clientRef.module, expectedHash)
-        const exported = requireClientExport(pluginId, clientRef.module, clientRef.export, loaded.module)
-        if (typeof exported !== 'function') {
-          throw new PluginClientError(
-            'client_export_not_component',
-            `Plugin ${pluginId} module ${clientRef.module} export ${clientRef.export} is not a component function`,
-            0,
-          )
-        }
-        if (!cancelled) {
-          const Component = exported as unknown as ComponentType<MarkdownCodeBlockProps>
-          setClient((prev) => (prev.phase === 'ready' && prev.Component === Component ? prev : { phase: 'ready', Component }))
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setClient({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [pluginId, clientRef.module, clientRef.export, expectedHash, retry, revision])
 
   if (client.phase === 'loading') {
     return (
@@ -149,10 +97,7 @@ function PluginCodeBlock(props: {
         language={language}
         code={code}
         message={client.message}
-        onRetry={() => {
-          setClient({ phase: 'loading' })
-          setRetry((value) => value + 1)
-        }}
+        onRetry={retryModule}
       />
     )
   }

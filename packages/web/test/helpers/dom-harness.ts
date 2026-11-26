@@ -25,6 +25,7 @@ interface BaselineGlobals {
   revokeObjectURL: typeof URL.revokeObjectURL
   Blob: typeof globalThis.Blob
   matchMedia: typeof window.matchMedia
+  intersectionObserverDesc: PropertyDescriptor | undefined
   notificationDesc: PropertyDescriptor | undefined
   docHiddenDesc: PropertyDescriptor | undefined
   docVisibilityDesc: PropertyDescriptor | undefined
@@ -43,6 +44,7 @@ function captureBaseline(): void {
     revokeObjectURL: URL.revokeObjectURL,
     Blob: globalThis.Blob,
     matchMedia: window.matchMedia,
+    intersectionObserverDesc: Object.getOwnPropertyDescriptor(globalThis, 'IntersectionObserver'),
     notificationDesc: Object.getOwnPropertyDescriptor(globalThis, 'Notification'),
     docHiddenDesc: Object.getOwnPropertyDescriptor(document, 'hidden'),
     docVisibilityDesc: Object.getOwnPropertyDescriptor(document, 'visibilityState'),
@@ -73,6 +75,16 @@ export function ensureHappyDom(): void {
     registered = true
   }
   if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    const g = globalThis as Record<string, unknown>
+    // happy-dom exposes an unimplemented stub IntersectionObserver (no-op observe)
+    // that would stall IntersectionObserver consumers in tests; remove the stub
+    // upfront so SSR/fallback paths run immediately unless a test installs a fake.
+    if (
+      typeof g.IntersectionObserver === 'function' &&
+      String((g.IntersectionObserver as { prototype?: { observe?: unknown } }).prototype?.observe).includes('TODO: Implement')
+    ) {
+      delete g.IntersectionObserver
+    }
     captureBaseline()
   }
   const g = globalThis as Record<string, unknown>
@@ -101,6 +113,7 @@ export function resetHappyDom(): void {
     URL.revokeObjectURL = baseline.revokeObjectURL
     globalThis.Blob = baseline.Blob
     window.matchMedia = baseline.matchMedia
+    restoreProperty(globalThis, 'IntersectionObserver', baseline.intersectionObserverDesc)
     restoreProperty(globalThis, 'Notification', baseline.notificationDesc)
     restoreProperty(document, 'hidden', baseline.docHiddenDesc)
     restoreProperty(document, 'visibilityState', baseline.docVisibilityDesc)

@@ -17,6 +17,9 @@ import {
   type ToolTrace,
 } from '../src/conversation/timeline-model.js'
 import { readBodyData, truncationPreviewNote } from '../src/conversation/tool-body-model.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
+
+const enT = createWebTranslator('en')
 
 function entry(id: string, kind: string, extra: { data?: unknown; model?: unknown[] } = {}): ConversationEntry {
   return { id, kind, ...(extra.data !== undefined ? { data: extra.data } : {}), ...(extra.model !== undefined ? { model: extra.model } : {}) }
@@ -122,9 +125,9 @@ test('readBodyData：始终读取 resultText（不消费 presentationMeta.conten
 })
 
 test('truncationPreviewNote：总量未知不伪造，绝不把预览行数当全文', { timeout: 60_000 }, () => {
-  assert.equal(truncationPreviewNote({ truncated: true }), 'Output too long; the server returned a preview only')
-  assert.equal(truncationPreviewNote({ truncated: true, totalLines: 300 }), 'Output too long; the server returned a preview only (300 lines in total)')
-  assert.equal(truncationPreviewNote({ truncated: true, totalChars: 9000 }), 'Output too long; the server returned a preview only (9000 chars in total)')
+  assert.equal(truncationPreviewNote({ truncated: true }, enT), 'Output too long; the server returned a preview only')
+  assert.equal(truncationPreviewNote({ truncated: true, totalLines: 300 }, enT), 'Output too long; the server returned a preview only (300 lines in total)')
+  assert.equal(truncationPreviewNote({ truncated: true, totalChars: 9000 }, enT), 'Output too long; the server returned a preview only (9000 chars in total)')
 })
 
 // ---------------------------------------------------------------------------

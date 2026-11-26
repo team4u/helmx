@@ -855,6 +855,28 @@ describe("timeline-containment", () => {
       })
       assert.ok(host.querySelector('.lazy-child') !== null)
       assert.equal(unmountCount, 0, '挂载后保持已挂载状态不反复卸载')
+      assert.ok(io.root === null, '未传 scrollRootSelector 时 root 为 null')
+
+      // 4) scrollRootSelector 解析自定义滚动祖先而非硬编码 .timeline-scroll
+      act(() => root!.unmount())
+      root = undefined
+      host.remove()
+      FakeIntersectionObserver.instances = []
+      host = document.createElement('div')
+      host.className = 'custom-scroll-root'
+      document.body.appendChild(host)
+      await act(async () => {
+        root = createRoot(host!)
+        root.render(
+          e(LazyMount, {
+            scrollRootSelector: '.custom-scroll-root',
+            fallback: e('div', { className: 'lazy-fallback-custom' }, 'placeholder'),
+            children: e('div', { className: 'lazy-child-custom' }, 'loaded'),
+          }),
+        )
+      })
+      assert.equal(FakeIntersectionObserver.instances.length, 1)
+      assert.ok(FakeIntersectionObserver.instances[0]!.root === host, 'scrollRootSelector 应绑定到匹配的滚动根容器')
     } finally {
       ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = savedIO
       FakeIntersectionObserver.instances = prevInstances

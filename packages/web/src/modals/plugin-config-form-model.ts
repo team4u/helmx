@@ -20,7 +20,7 @@ import type {
   Profile,
 } from '@helmx/protocol/browser'
 import type { SelectOption } from '@helmx/plugin-client'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 
 export type ConfigValue = PluginConfigFieldValue
 
@@ -133,18 +133,17 @@ export function buildResetFieldPayload(key: string): Record<string, null> {
  */
 export function buildNodeConfigOptions(
   nodes: readonly NodeInfo[],
-  currentNode?: string,
-  t?: WebMessageTranslator,
+  currentNode: string | undefined,
+  t: WebMessageTranslator,
 ): SelectOption<string>[] {
-  const tt = t ?? englishWebTranslator
-  const list: SelectOption<string>[] = [{ value: '', label: tt('plugins.config.unsetOption') }]
+  const list: SelectOption<string>[] = [{ value: '', label: t('plugins.config.unsetOption') }]
   for (const node of nodes) {
     list.push({
       value: node.id,
-      label: node.online ? node.id : tt('plugins.config.nodeOffline', { node: node.id }),
+      label: node.online ? node.id : t('plugins.config.nodeOffline', { node: node.id }),
     })
   }
-  appendMissingReference(list, currentNode, tt)
+  appendMissingReference(list, currentNode, t)
   return list
 }
 
@@ -155,18 +154,17 @@ export function buildNodeConfigOptions(
  */
 export function buildProfileConfigOptions(
   profiles: readonly Profile[],
-  currentProfile?: string,
-  t?: WebMessageTranslator,
+  currentProfile: string | undefined,
+  t: WebMessageTranslator,
 ): SelectOption<string>[] {
-  const tt = t ?? englishWebTranslator
-  const list: SelectOption<string>[] = [{ value: '', label: tt('plugins.config.unsetOption') }]
+  const list: SelectOption<string>[] = [{ value: '', label: t('plugins.config.unsetOption') }]
   for (const profile of profiles) {
     list.push({
       value: profile.id,
       label: profile.name !== undefined && profile.name !== '' ? `${profile.name} (${profile.id})` : profile.id,
     })
   }
-  appendMissingReference(list, currentProfile, tt)
+  appendMissingReference(list, currentProfile, t)
   return list
 }
 
@@ -177,15 +175,14 @@ export function buildProfileConfigOptions(
 export function buildEnumConfigOptions(
   enumValues: readonly (string | number)[],
   currentValues: readonly (string | number)[] = [],
-  t?: WebMessageTranslator,
+  t: WebMessageTranslator,
 ): SelectOption<string>[] {
-  const tt = t ?? englishWebTranslator
   const list: SelectOption<string>[] = enumValues.map((entry) => {
     const value = String(entry)
     return { value, label: value }
   })
   for (const current of currentValues) {
-    appendMissingReference(list, String(current), tt)
+    appendMissingReference(list, String(current), t)
   }
   return list
 }

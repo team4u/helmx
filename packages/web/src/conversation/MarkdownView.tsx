@@ -291,6 +291,7 @@ function WorkspaceMediaGate({
   return (
     <LazyMount
       inline
+      scrollRootSelector=".timeline-scroll"
       fallback={
         <span className="attachment-chip">
           <HelmxIcon name="file-text" size={11} />
@@ -369,6 +370,7 @@ export const MarkdownView = memo(function MarkdownView({
         return (
           <LazyMount
             minHeight={estimatedHeight}
+            scrollRootSelector=".timeline-scroll"
             fallback={
               <div className="code-block-wrap">
                 <div className="code-block-header">
@@ -469,6 +471,7 @@ export const MarkdownView = memo(function MarkdownView({
         return (
           <LazyMount
             inline
+            scrollRootSelector=".timeline-scroll"
             fallback={
               <span className="attachment-chip">
                 <HelmxIcon name="file-text" size={11} />

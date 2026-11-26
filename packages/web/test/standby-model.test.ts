@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict'
 import { describe, afterEach, test } from 'node:test'
 import type { ArtifactMetadata, ConversationInit, ConversationSummary, Profile } from '@helmx/protocol'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import {
   STANDBY_PROFILE_SEARCH_THRESHOLD,
   standbyManageAction,
@@ -38,6 +39,7 @@ import {
   type StandbySendDeps,
   type StandbySendResult,
 } from '../src/conversation/standby-model.js'
+const enT = createWebTranslator('en')
 describe("standby-model", () => {
 
 
@@ -123,7 +125,7 @@ describe("standby-model", () => {
   }
 
   async function run(key: string, profileId: string, deps: StandbySendDeps): Promise<StandbySendResult> {
-    return executeStandbySend(key, profileId, deps)
+    return executeStandbySend(key, profileId, deps, enT)
   }
 
   test('synchronous dedupe: a second call after the sending flag is claimed returns busy with no duplicate create', { timeout: 60_000 }, async () => {
@@ -151,7 +153,7 @@ describe("standby-model", () => {
   test('step order: create -> patch thinkingLevel -> per-file upload -> submit carries attachments', { timeout: 60_000 }, async () => {
     const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
     const log = makeLog()
-    const { draft } = admitStandbyFiles(getStandbyDraft(key), [makeFile('a.txt'), makeFile('b.txt')])
+    const { draft } = admitStandbyFiles(getStandbyDraft(key), [makeFile('a.txt'), makeFile('b.txt')], enT)
     updateStandbyDraft(key, { ...draft, text: '带附件', thinkingLevel: 'high', model: 'faux/glm-4.6' })
     const result = await run(key, 'assistant', makeDeps(log))
     assert.equal(result, 'sent')
@@ -208,7 +210,7 @@ describe("standby-model", () => {
     const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
     const log = makeLog()
     log.failures.uploadNames = ['b.txt']
-    const { draft } = admitStandbyFiles(getStandbyDraft(key), [makeFile('a.txt'), makeFile('b.txt')])
+    const { draft } = admitStandbyFiles(getStandbyDraft(key), [makeFile('a.txt'), makeFile('b.txt')], enT)
     updateStandbyDraft(key, { ...draft, text: '部分上传失败' })
     assert.equal(await run(key, 'assistant', makeDeps(log)), 'failed')
     assert.equal(getStandbyDraft(key).conversationId, 9)
@@ -264,17 +266,17 @@ describe("standby-model", () => {
   })
 
   test('standbyEnvError: always passes when not customized; applies the absolute-path validation once customized', { timeout: 60_000 }, () => {
-    assert.equal(standbyEnvError({ envCustomized: false, envNodeId: undefined, envCwd: undefined }), null)
-    assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: '' }), 'Enter the working directory on the target node (absolute path)')
-    assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: 'relative/path' }), 'Working directory must be an absolute path (POSIX / or Windows drive letter)')
-    assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: '/abs' }), null)
+    assert.equal(standbyEnvError({ envCustomized: false, envNodeId: undefined, envCwd: undefined }, enT), null)
+    assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: '' }, enT), 'Enter the working directory on the target node (absolute path)')
+    assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: 'relative/path' }, enT), 'Working directory must be an absolute path (POSIX / or Windows drive letter)')
+    assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: '/abs' }, enT), null)
   })
 
   test('admitStandbyFiles: rejects above the 15 MiB cap and keeps accepted items', { timeout: 60_000 }, () => {
     const big = makeFile('big.bin')
     Object.defineProperty(big, 'size', { value: 16 * 1024 * 1024 })
     const small = makeFile('small.txt')
-    const { draft, accepted, rejected } = admitStandbyFiles(getStandbyDraft('x'), [big, small])
+    const { draft, accepted, rejected } = admitStandbyFiles(getStandbyDraft('x'), [big, small], enT)
     assert.deepEqual(accepted.map((f) => f.name), ['small.txt'])
     assert.deepEqual(rejected.map((r) => r.file.name), ['big.bin'])
     assert.equal(rejected[0]!.reason.includes('15 MiB'), true)
@@ -376,7 +378,7 @@ describe("standby-model", () => {
       log.uploads.push({ id, name: file.name })
       return { id: 'art-1', conversationId: id, kind: 'upload', name: file.name, path: '', mimeType: file.type, size: file.size, createdAt: 0 }
     }
-    const { draft } = admitStandbyFiles(getStandbyDraft(key), [makeFile('wait.txt')])
+    const { draft } = admitStandbyFiles(getStandbyDraft(key), [makeFile('wait.txt')], enT)
     updateStandbyDraft(key, { ...draft, text: '上传中释放' })
     const task = run(key, 'assistant', deps)
     await new Promise((r) => setTimeout(r, 5))
@@ -398,7 +400,7 @@ describe("standby-model", () => {
     } as unknown as File
     const real = makeFile('real.txt')
     const realBlobLike = Object.assign(new Blob(['blob']), { name: 'blob-named.txt' }) as unknown as File
-    const { draft, accepted, rejected } = admitStandbyFiles(getStandbyDraft('x'), [fake, readableButNotBlob, real, realBlobLike])
+    const { draft, accepted, rejected } = admitStandbyFiles(getStandbyDraft('x'), [fake, readableButNotBlob, real, realBlobLike], enT)
     assert.deepEqual(accepted.map((f) => f.name), ['real.txt', 'blob-named.txt'], 'real Blobs/Files both stage')
     assert.equal(rejected.length, 2)
     assert.equal(rejected[0]!.file, fake)
@@ -469,7 +471,7 @@ describe("standby-model", () => {
   test('transferStandbyDraftOnProfileSwitch: migrates text, localFiles, inputMeta only and notifies listeners', { timeout: 60_000 }, () => {
     const from = standbyDraftKey({ panel: 'primary', profileId: 'assistant', nodeId: 'remote-1', cwd: '/work' })
     const to = standbyDraftKey({ panel: 'primary', profileId: 'coder' })
-    const { draft } = admitStandbyFiles(getStandbyDraft(from), [makeFile('spec.md', 'hello')])
+    const { draft } = admitStandbyFiles(getStandbyDraft(from), [makeFile('spec.md', 'hello')], enT)
     updateStandbyDraft(from, {
       ...draft,
       text: 'draft prompt',
@@ -521,7 +523,7 @@ describe("standby-model", () => {
 
     const occupiedTargets: Array<Partial<ReturnType<typeof getStandbyDraft>>> = [
       { text: 'existing target text' },
-      { localFiles: admitStandbyFiles(getStandbyDraft('tmp'), [makeFile('t.txt')]).draft.localFiles },
+      { localFiles: admitStandbyFiles(getStandbyDraft('tmp'), [makeFile('t.txt')], enT).draft.localFiles },
       { uploaded: [{ artifactId: 'a1', name: 'up.txt', size: 3, mimeType: 'text/plain' }] },
       { sending: true },
       { conversationId: 77 },

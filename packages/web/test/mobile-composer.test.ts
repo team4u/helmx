@@ -1,24 +1,27 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import { busyEnterMode, getComposerPlaceholder } from '../src/conversation/composer-model.js'
+
+const enT = createWebTranslator('en')
 
 test('mobile placeholder copy: extremely short on small screens to avoid wrapping', { timeout: 60_000 }, () => {
   // Mobile / small-screen mode
-  const mobileDefault = getComposerPlaceholder(false, true)
+  const mobileDefault = getComposerPlaceholder(false, true, enT)
   assert.equal(mobileDefault, 'Type a message…')
   assert.doesNotMatch(mobileDefault, /⌘/)
   assert.doesNotMatch(mobileDefault, /[；;]/)
 
-  const mobileWorking = getComposerPlaceholder(true, true)
+  const mobileWorking = getComposerPlaceholder(true, true, enT)
   assert.equal(mobileWorking, 'Add notes or queued instructions…')
   assert.doesNotMatch(mobileWorking, /⌘/)
 
   // Desktop full-featured mode
-  const desktopDefault = getComposerPlaceholder(false, false)
+  const desktopDefault = getComposerPlaceholder(false, false, enT)
   assert.equal(desktopDefault, 'Type a message; / for commands and skills, ⌘V to paste attachments')
   assert.match(desktopDefault, /⌘V to paste attachments/)
 
-  const desktopWorking = getComposerPlaceholder(true, false)
+  const desktopWorking = getComposerPlaceholder(true, false, enT)
   assert.match(desktopWorking, /⌘\/Ctrl\+Enter/)
   // Default busy mode: Enter steers ahead; ⌘/Ctrl+Enter queues the send.
   assert.match(desktopWorking, /(Enter steers · ⌘\/Ctrl\+Enter queues)/)

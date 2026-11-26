@@ -3,7 +3,7 @@
  * timed failed-doc retry suppression, asset-refresh generation tracking,
  * and lifecycle timers for HelmxExternalStore.
  */
-import type { ArtifactsSyncWatermark } from './use-unread-sync.js'
+import type { ArtifactsSyncWatermark } from './sync-watermarks.js'
 
 /** Cooldown before a failed plugin public doc can be retried automatically (ms). */
 export const FAILED_DOC_RETRY_COOLDOWN_MS = 30_000

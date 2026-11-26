@@ -472,4 +472,52 @@ export const shellMessages = {
     'zh-CN': '该视图不存在或所属插件已停用（{pluginId}/{screenId}）。请在设置中确认对应插件已启用。',
   },
   'shell.screen.viewLabel': { en: 'View {id}', 'zh-CN': '视图 {id}' },
+
+  // Store-level notices, asset failures & auth connection errors
+  'shell.notify.unsupportedTitle': {
+    en: 'Notifications unsupported in this browser',
+    'zh-CN': '当前浏览器不支持通知',
+  },
+  'shell.notify.unsupportedBody': {
+    en: 'The browser notification API is unavailable, so background notification alerts cannot be enabled.',
+    'zh-CN': '浏览器通知 API 不可用，无法开启后台通知提醒。',
+  },
+  'shell.notify.permissionDeniedTitle': {
+    en: 'Browser notification permission not granted',
+    'zh-CN': '浏览器通知权限未授予',
+  },
+  'shell.notify.permissionDeniedBody': {
+    en: 'Allow notifications in the browser site settings, then enable background notifications again.',
+    'zh-CN': '请在浏览器站点设置中允许通知后重新开启。',
+  },
+  'shell.assets.profilesLoadFailed': { en: 'Profiles failed to load', 'zh-CN': '角色加载失败' },
+  'shell.assets.modelsLoadFailed': { en: 'Models failed to load', 'zh-CN': '模型加载失败' },
+  'shell.assets.providersLoadFailed': { en: 'Providers failed to load', 'zh-CN': '网关加载失败' },
+  'shell.assets.credentialsLoadFailed': { en: 'Credentials failed to load', 'zh-CN': '凭据加载失败' },
+  'shell.assets.skillsLoadFailed': { en: 'Skills failed to load', 'zh-CN': '技能加载失败' },
+  'shell.assets.actionsLoadFailed': { en: 'Plugin actions failed to load', 'zh-CN': '插件动作加载失败' },
+  'shell.assets.nodesLoadFailed': { en: 'Compute nodes failed to load', 'zh-CN': '计算节点加载失败' },
+  'shell.assets.artifactsLoadFailed': { en: 'Conversation artifacts failed to load', 'zh-CN': '会话产物加载失败' },
+  'shell.assets.pluginStateLoadFailed': { en: 'Plugin state failed to load', 'zh-CN': '插件状态读取失败' },
+  'shell.assets.pluginStateLoadFailedBody': { en: '{pluginId}/{name}: {error}', 'zh-CN': '{pluginId}/{name}：{error}' },
+  'shell.history.earlierStepsLoadedTitle': {
+    en: 'Loaded earlier steps of current turn',
+    'zh-CN': '已加载当前长回合的更早过程步骤',
+  },
+  'shell.history.earlierStepsLoadedBody': {
+    en: 'Earlier tool and process steps for this turn were added above. Click Load earlier again to reach the previous turn.',
+    'zh-CN': '已将本回合更早的工具与过程步骤加载到上方；再次点击“加载更早”可继续加载上一回合。',
+  },
+  'shell.nav.invalidScreenParamTitle': {
+    en: 'Ignored invalid Screen parameter key',
+    'zh-CN': '已忽略非法 Screen 参数键',
+  },
+  'shell.nav.invalidScreenParamBody': {
+    en: 'Parameter {key} must use a valid key and a string value',
+    'zh-CN': '参数 {key} 必须使用合法键和字符串值',
+  },
+  'shell.auth.kernelConnectFailed': {
+    en: 'Cannot connect to the Helmx kernel: {error}',
+    'zh-CN': '无法连接 Helmx 内核：{error}',
+  },
 } satisfies MessageTable

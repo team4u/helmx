@@ -309,144 +309,155 @@ export const Composer = memo(function Composer({
     <ComposerCommandContext.Provider value={commandRegistry}>
       <ComposerModelPickerModeContext.Provider value={modelPickerModeRegistry}>
         <ComposerInputShell
-          shortcutPanel={isDrawer ? 'drawer' : isSplit ? 'split' : 'primary'}
-          shortcutDrawerConversationId={isDrawer ? conversation.id : undefined}
-          shortcutActive={staged}
-          aboveBox={
-        <>
-          <PluginSlot
-            ownerPluginId="builtin:composer"
-            name={COMPOSER_DOCK_SLOT}
-            conversationId={conversation.id}
-            composer={composer}
-            className="composer-dock-slot"
-            slotProps={composerSlotProps}
-          />
-          <AskDock
-            conversationId={conversation.id}
-            shortcutPanel={isDrawer ? 'drawer' : isSplit ? 'split' : 'primary'}
-            shortcutActive={staged}
-            onFocusReturn={returnFocusToTextarea}
-          />
-          {envConfigurable ? (
-            <SessionEnvBar
-              key={`env-${conversation.id}`}
-              conversation={conversation}
-              sendBlocked={sendInFlight}
-              onBlockerChange={handleEnvBlocker}
-            />
-          ) : null}
-        </>
-      }
-      boxBanner={
-        editingEntryId !== null || runningCommand !== null ? (
-          <>
-            {runningCommand !== null ? <ComposerCommandBanner command={runningCommand} /> : null}
-            {editingEntryId !== null ? (
-              <div className="composer-edit-banner" role="status">
-                <span className="composer-edit-banner-text">
-                  <HelmxIcon name="edit" size={12} />
-                  <span>{working ? t('conv.composer.editingWorking') : t('conv.composer.editingIdle')}</span>
-                </span>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  icon="x"
-                  className="composer-edit-cancel"
-                  onClick={cancelEdit}
-                  title={t('conv.composer.cancelEditTitle')}
-                >
-                  <span>{t('common.cancel')}</span>
-                  <span className="kbd-hint composer-inline-kbd">Esc</span>
-                </Button>
-              </div>
-            ) : null}
-          </>
-        ) : undefined
-      }
-      attachments={attachmentItems}
-      textareaRef={textareaRef}
-      textareaAriaLabel={t('conv.composer.inputAria')}
-      value={text}
-      placeholder={getComposerPlaceholder(working, isMobile, t)}
-      onTextChange={(nextValue, caret) => {
-        setDraftState(nextValue)
-        completions.detectPopover(nextValue, caret)
-      }}
-      onKeyUp={completions.handleTextareaKeyUp}
-      onClick={completions.handleTextareaClick}
-      onKeyDown={onKeyDown}
-      onPaste={fileHandlers.onPaste}
-      dragging={fileHandlers.dragging}
-      onDragEnter={fileHandlers.onDragEnter}
-      onDragOver={fileHandlers.onDragOver}
-      onDragLeave={fileHandlers.onDragLeave}
-      onDrop={fileHandlers.onDrop}
-      fileInputRef={fileHandlers.fileInputRef}
-      uploadButtonLabel={t('composer.plusMenu.upload')}
-      onOpenFilePicker={fileHandlers.openFilePicker}
-      onFileInputChange={fileHandlers.onFileInputChange}
-      renderMenuSlot={(closeMenu) => (
-        <PluginSlot
-          ownerPluginId="builtin:composer"
-          name={COMPOSER_MENU_SLOT}
-          conversationId={conversation.id}
-          composer={composer}
-          slotProps={{ ...composerSlotProps, onCloseMenu: closeMenu } satisfies ComposerMenuSlotProps & Record<string, unknown>}
+          attachments={attachmentItems}
+          shortcuts={{
+            panel: isDrawer ? 'drawer' : isSplit ? 'split' : 'primary',
+            drawerConversationId: isDrawer ? conversation.id : undefined,
+            active: staged,
+          }}
+          draft={{
+            textareaRef,
+            ariaLabel: t('conv.composer.inputAria'),
+            value: text,
+            placeholder: getComposerPlaceholder(working, isMobile, t),
+            onTextChange: (nextValue, caret) => {
+              setDraftState(nextValue)
+              completions.detectPopover(nextValue, caret)
+            },
+            onKeyUp: completions.handleTextareaKeyUp,
+            onClick: completions.handleTextareaClick,
+            onKeyDown,
+            onPaste: fileHandlers.onPaste,
+          }}
+          dnd={{
+            dragging: fileHandlers.dragging,
+            onDragEnter: fileHandlers.onDragEnter,
+            onDragOver: fileHandlers.onDragOver,
+            onDragLeave: fileHandlers.onDragLeave,
+            onDrop: fileHandlers.onDrop,
+          }}
+          plusMenu={{
+            fileInputRef: fileHandlers.fileInputRef,
+            uploadButtonLabel: t('composer.plusMenu.upload'),
+            onOpenFilePicker: fileHandlers.openFilePicker,
+            onFileInputChange: fileHandlers.onFileInputChange,
+            renderSlot: (closeMenu) => (
+              <PluginSlot
+                ownerPluginId="builtin:composer"
+                name={COMPOSER_MENU_SLOT}
+                conversationId={conversation.id}
+                composer={composer}
+                slotProps={{ ...composerSlotProps, onCloseMenu: closeMenu } satisfies ComposerMenuSlotProps & Record<string, unknown>}
+              />
+            ),
+            commands: plusMenuCommands,
+            commandsDisabled: runningCommand !== null,
+            onRunCommand: runPluginCommandDirect,
+          }}
+          completions={{
+            slashOpen: completions.slashOpen,
+            popoverQuery: completions.popoverQuery,
+            slashMenuItems: completions.slashMenuItems,
+            onPickSlash: completions.applySlashPick,
+            onCloseSlash: completions.closeSlashPopover,
+            completionOpen: completions.completionOpen,
+            completionTrigger: completions.completionTrigger,
+            completionSnapshot: completions.completionSnapshot,
+            onPickCompletion: completions.applyCompletionPick,
+            onCloseCompletion: completions.closeCompletionPopover,
+          }}
+          slots={{
+            aboveBox: (
+              <>
+                <PluginSlot
+                  ownerPluginId="builtin:composer"
+                  name={COMPOSER_DOCK_SLOT}
+                  conversationId={conversation.id}
+                  composer={composer}
+                  className="composer-dock-slot"
+                  slotProps={composerSlotProps}
+                />
+                <AskDock
+                  conversationId={conversation.id}
+                  shortcutPanel={isDrawer ? 'drawer' : isSplit ? 'split' : 'primary'}
+                  shortcutActive={staged}
+                  onFocusReturn={returnFocusToTextarea}
+                />
+                {envConfigurable ? (
+                  <SessionEnvBar
+                    key={`env-${conversation.id}`}
+                    conversation={conversation}
+                    sendBlocked={sendInFlight}
+                    onBlockerChange={handleEnvBlocker}
+                  />
+                ) : null}
+              </>
+            ),
+            boxBanner:
+              editingEntryId !== null || runningCommand !== null ? (
+                <>
+                  {runningCommand !== null ? <ComposerCommandBanner command={runningCommand} /> : null}
+                  {editingEntryId !== null ? (
+                    <div className="composer-edit-banner" role="status">
+                      <span className="composer-edit-banner-text">
+                        <HelmxIcon name="edit" size={12} />
+                        <span>{working ? t('conv.composer.editingWorking') : t('conv.composer.editingIdle')}</span>
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        icon="x"
+                        className="composer-edit-cancel"
+                        onClick={cancelEdit}
+                        title={t('conv.composer.cancelEditTitle')}
+                      >
+                        <span>{t('common.cancel')}</span>
+                        <span className="kbd-hint composer-inline-kbd">Esc</span>
+                      </Button>
+                    </div>
+                  ) : null}
+                </>
+              ) : undefined,
+            modelPicker: <ModelPicker conversation={conversation} onReturnFocus={returnFocusToTextarea} />,
+            toolbar: (
+              <PluginSlot
+                ownerPluginId="builtin:composer"
+                name={COMPOSER_TOOLBAR_SLOT}
+                conversationId={conversation.id}
+                composer={composer}
+                className="composer-toolbar-slot"
+                slotProps={composerSlotProps}
+              />
+            ),
+            sendControls: (
+              <ComposerSendControls
+                working={working}
+                editingEntryId={editingEntryId}
+                sending={sending}
+                uploading={uploading}
+                commandRunning={runningCommand !== null}
+                envBlocker={envBlocker}
+                text={text}
+                send={send}
+                abortTurn={abortTurn}
+              />
+            ),
+            statusRow: (
+              <>
+                <ContextUsageStatus conversation={conversation} />
+                <ConversationDurationStatus conversation={conversation} />
+                <PluginSlot
+                  ownerPluginId="builtin:composer"
+                  name={COMPOSER_STATUS_SLOT}
+                  conversationId={conversation.id}
+                  composer={composer}
+                  className="composer-status-slot"
+                  slotProps={composerSlotProps}
+                />
+              </>
+            ),
+          }}
         />
-      )}
-      menuCommands={plusMenuCommands}
-      menuCommandsDisabled={runningCommand !== null}
-      onRunMenuCommand={runPluginCommandDirect}
-      slashOpen={completions.slashOpen}
-      popoverQuery={completions.popoverQuery}
-      slashMenuItems={completions.slashMenuItems}
-      onPickSlash={completions.applySlashPick}
-      onCloseSlash={completions.closeSlashPopover}
-      completionOpen={completions.completionOpen}
-      completionTrigger={completions.completionTrigger}
-      completionSnapshot={completions.completionSnapshot}
-      onPickCompletion={completions.applyCompletionPick}
-      onCloseCompletion={completions.closeCompletionPopover}
-      modelPicker={<ModelPicker conversation={conversation} onReturnFocus={returnFocusToTextarea} />}
-      toolbarSlot={
-        <PluginSlot
-          ownerPluginId="builtin:composer"
-          name={COMPOSER_TOOLBAR_SLOT}
-          conversationId={conversation.id}
-          composer={composer}
-          className="composer-toolbar-slot"
-          slotProps={composerSlotProps}
-        />
-      }
-      sendControls={
-        <ComposerSendControls
-          working={working}
-          editingEntryId={editingEntryId}
-          sending={sending}
-          uploading={uploading}
-          commandRunning={runningCommand !== null}
-          envBlocker={envBlocker}
-          text={text}
-          send={send}
-          abortTurn={abortTurn}
-        />
-      }
-      statusRow={
-        <>
-          <ContextUsageStatus conversation={conversation} />
-          <ConversationDurationStatus conversation={conversation} />
-          <PluginSlot
-            ownerPluginId="builtin:composer"
-            name={COMPOSER_STATUS_SLOT}
-            conversationId={conversation.id}
-            composer={composer}
-            className="composer-status-slot"
-            slotProps={composerSlotProps}
-          />
-        </>
-      }
-      />
       </ComposerModelPickerModeContext.Provider>
     </ComposerCommandContext.Provider>
   )

@@ -126,10 +126,12 @@ test('node-center-model: isNodeLocal detects the local node', { timeout: 60_000 
   assert.equal(isNodeLocal({ id: 'worker-1', kind: 'byom' }), false)
 })
 
+const enT = createWebTranslator('en')
+
 test('node-center-model: getNodeDisplayName formats display names', { timeout: 60_000 }, () => {
-  assert.equal(getNodeDisplayName({ id: 'local', label: '工作区核心' }), '工作区核心')
-  assert.equal(getNodeDisplayName({ id: 'local' }), 'Local kernel')
-  assert.equal(getNodeDisplayName({ id: 'node-x' }), 'node-x')
+  assert.equal(getNodeDisplayName({ id: 'local', label: '工作区核心' }, enT), '工作区核心')
+  assert.equal(getNodeDisplayName({ id: 'local' }, enT), 'Local kernel')
+  assert.equal(getNodeDisplayName({ id: 'node-x' }, enT), 'node-x')
 })
 
 test('node-center-model zh-CN: getNodeDisplayName resolves fallbacks through the zh translator', { timeout: 60_000 }, () => {
@@ -138,8 +140,8 @@ test('node-center-model zh-CN: getNodeDisplayName resolves fallbacks through the
   assert.equal(getNodeDisplayName({ id: '' }, zh), '未知节点')
   // Labels always win and are trimmed, regardless of locale
   assert.equal(getNodeDisplayName({ id: 'x', label: '  GPU 推理集群节点 A  ' }, zh), 'GPU 推理集群节点 A')
-  // The default translator keeps the English bridge behavior
-  assert.equal(getNodeDisplayName({ id: 'local' }), 'Local kernel')
+  // English translator matches English copy
+  assert.equal(getNodeDisplayName({ id: 'local' }, enT), 'Local kernel')
 })
 
 test('node-center-model: formatNodePlatformArch combines platform and architecture', { timeout: 60_000 }, () => {

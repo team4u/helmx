@@ -1,3 +1,5 @@
+import { readStorageItem, setOrRemoveStorageItem } from './storage.js'
+
 import type {
   ActionManifest,
   ArtifactMetadata,
@@ -63,15 +65,12 @@ let memoryToken: string | null | undefined
 
 export function getStoredToken(): string | null {
   if (memoryToken !== undefined) return memoryToken
-  try { return localStorage.getItem(TOKEN_STORAGE_KEY) } catch { return null }
+  return readStorageItem(TOKEN_STORAGE_KEY)
 }
 
 export function setStoredToken(token: string | null): void {
   memoryToken = token || null
-  try {
-    if (memoryToken === null) localStorage.removeItem(TOKEN_STORAGE_KEY)
-    else localStorage.setItem(TOKEN_STORAGE_KEY, memoryToken)
-  } catch { /* Storage disabled: this tab keeps in-memory credentials. */ }
+  setOrRemoveStorageItem(TOKEN_STORAGE_KEY, memoryToken)
 }
 
 export class ApiClientError extends Error {

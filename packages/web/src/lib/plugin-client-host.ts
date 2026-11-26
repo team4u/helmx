@@ -147,7 +147,7 @@ export function createPluginClientHostPort(store: HelmxExternalStore): PluginCli
         type: 'notification',
         level: tone === 'warning' ? 'warning' : tone === 'error' ? 'error' : 'info',
         title: message,
-        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(conversationId !== undefined ? { target: { kind: 'conversation', conversationId } } : {}),
       }),
 
     // ---- Detail loading ----

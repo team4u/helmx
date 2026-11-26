@@ -14,15 +14,19 @@ import type {
   SidebarBadgeTone,
   SidebarItemBadgeSpec,
   SidebarItemSpec,
-  SkillSummary,
 } from '@helmx/protocol/browser'
-import { isSkillOwnerActive, parseLocalizedText, resolveLocalizedText } from '@helmx/protocol/browser'
-import { isPluginSummaryActive, type PluginActivityLike } from '../lib/live-state.js'
+import { parseLocalizedText, resolveLocalizedText } from '@helmx/protocol/browser'
+import type { PluginActivityLike } from '../lib/live-state.js'
+import { resolveFocusedPanel } from '../lib/panel-focus.js'
 import type { HelmxStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
-import { resolveFocusedPanel } from './shortcuts-model.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
+import {
+  collectEnabledPluginIds,
+  isHumanSelectableProfile,
+  isProfileVisible,
+} from './conversation-status-model.js'
 
 export interface SidebarPartition {
   /** sidebar.item 的 'conversation:profile:<id>' 已指向的 profileId 集合。 */
@@ -272,6 +276,36 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
 }
 
 /**
+ * 推导「新话题」候选角色列表（全屏总览与侧栏工作集共用）：
+ * 仅保留人类可新建对话的可见角色，最近活跃的未归档根会话所属角色置顶，
+ * 其余按站位 order 与 profileId 字典序稳定排列。
+ */
+export function buildNewTopicCandidates(input: AgentStandingsInput): AgentStanding[] {
+  const standings = buildAgentStandings(input)
+  const creatable = standings.filter((standing) => standing.canCreateConversation)
+  const latestRootProfileId =
+    input.conversations
+      .filter(
+        (c) =>
+          c.parentConversationId === undefined &&
+          !isConversationArchived(c) &&
+          (c.ownedBy ?? 'human') === 'human',
+      )
+      .reduce<ConversationSummary | null>(
+        (best, c) =>
+          best === null || c.updatedAt > best.updatedAt || (c.updatedAt === best.updatedAt && c.id > best.id)
+            ? c
+            : best,
+        null,
+      )?.profileId ?? null
+  return [...creatable].sort((a, b) => {
+    if (a.profileId === latestRootProfileId) return -1
+    if (b.profileId === latestRootProfileId) return 1
+    return a.order - b.order || a.profileId.localeCompare(b.profileId)
+  })
+}
+
+/**
  * 提取 sidebar.item 中声明 quickEntry 的全局快捷入口（供 Activity Rail 与
  * 移动抽屉渲染）：仅收 screen: 目标且目标 screen 确实存在于当前启用插件的
  * screen 贡献中（插件停用后贡献即时消失，入口随之消失，无需特判插件 ID）。
@@ -428,37 +462,6 @@ export function composeSidebarBadgeLabel(label: string, badge: ResolvedSidebarBa
   return badge !== null && badge !== undefined && badge.summary !== '' ? `${label} · ${badge.summary}` : label
 }
 
-// ---------------------------------------------------------------------------
-// 插件痕迹清理：ownedBy / parentConversationId 归一 + 插件自举资产可见性
-// ---------------------------------------------------------------------------
-
-/** 收集处于活跃运行态的插件 ID 集合（资产可见性与导航判定的统一输入；enabled=true 且 status='failed' 不计入）。 */
-export function collectEnabledPluginIds(
-  plugins: ReadonlyArray<{ id: string } & PluginActivityLike>,
-): Set<string> {
-  return new Set(plugins.filter((p) => isPluginSummaryActive(p)).map((p) => p.id))
-}
-
-/** 插件自举/托管的 Profile 在对应插件未启用时隐藏（Profile 编辑器列表消费）。 */
-export function isProfileVisible(profile: Profile, enabledPluginIds: ReadonlySet<string>): boolean {
-  return profile.managedByPlugin === undefined || enabledPluginIds.has(profile.managedByPlugin)
-}
-
-/**
- * 人类可在该 Agent 下新建对话的 Profile（仅判定插件托管可见性）。
- */
-export function isHumanSelectableProfile(
-  profile: Profile,
-  enabledPluginIds: ReadonlySet<string>,
-): boolean {
-  return isProfileVisible(profile, enabledPluginIds)
-}
-
-/** 内核（core:<domain>）与插件自举/托管的 Skill：合法 core:<domain> 恒定可见；插件托管技能在对应插件未启用时隐藏（与内核 isSkillAvailable 同源）。 */
-export function isSkillVisible(skill: SkillSummary, enabledPluginIds: ReadonlySet<string>): boolean {
-  return isSkillOwnerActive(skill.managedByPlugin, enabledPluginIds)
-}
-
 /** 按标题或 #id 模糊过滤会话（供命令面板快速跳转）。 */
 export function fuzzyMatchConversations(
   conversations: ConversationSummary[],
@@ -473,79 +476,6 @@ export function fuzzyMatchConversations(
       c.profileId.toLowerCase().includes(q) ||
       (numeric !== null && c.id === numeric),
   )
-}
-
-/** 会话五态的展示文案（支持 i18n，缺省回落英文桥接）。 */
-export function conversationStatusLabel(
-  status: ConversationSummary['status'],
-  t: WebMessageTranslator = englishWebTranslator,
-): string {
-  switch (status) {
-    case 'working':
-      return t('shell.status.working')
-    case 'blocked':
-      return t('shell.status.blocked')
-    case 'done':
-      return t('shell.status.done')
-    case 'idle':
-      return t('shell.status.idle')
-    case 'error':
-      return t('shell.status.error')
-    default:
-      return status
-  }
-}
-
-/** 会话五态对应的徽章样式类。 */
-export function conversationStatusBadgeClass(status: ConversationSummary['status']): string {
-  switch (status) {
-    case 'working':
-      return 'badge badge-accent'
-    case 'blocked':
-      return 'badge badge-warn'
-    case 'done':
-      return 'badge badge-ok'
-    case 'error':
-      return 'badge badge-err'
-    default:
-      return 'badge badge-neutral'
-  }
-}
-
-/** 会话状态圆点样式类：idle 状态返回 null（不显示圆点）。 */
-export function conversationStatusDotClass(
-  status: ConversationSummary['status'],
-): string | null {
-  if (status === 'idle') return null
-  switch (status) {
-    case 'working':
-      return 'status-dot status-dot-working'
-    case 'blocked':
-      return 'status-dot status-dot-blocked'
-    case 'done':
-      return 'status-dot status-dot-done'
-    case 'error':
-      return 'status-dot status-dot-error'
-    default:
-      return 'status-dot'
-  }
-}
-
-/** 会话状态悬浮提示文案；error 附带当前失败诊断摘要（lastError）。 */
-export function conversationStatusTooltip(
-  status: ConversationSummary['status'],
-  doing?: string,
-  lastError?: string,
-  t: WebMessageTranslator = englishWebTranslator,
-): string {
-  const base = conversationStatusLabel(status, t)
-  if (status === 'working' && doing?.trim()) {
-    return `${base}: ${doing.trim()}`
-  }
-  if (status === 'error' && lastError?.trim()) {
-    return `${base}: ${lastError.trim()}`
-  }
-  return base
 }
 
 /** Whether a top-level conversation is an automated session (`ownedBy === 'helmx'` without parent). */
@@ -602,7 +532,7 @@ const PANE_TAG_LABEL_KEYS: Record<
 /** 将侧栏分屏微标键映射为当前语言的展示文案（en: Main/Split/Main·Split；zh-CN: 主/分/主·分）。 */
 export function sidebarPaneTagLabel(
   paneTag: NonNullable<SidebarTargetPresence['paneTag']>,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   return t(PANE_TAG_LABEL_KEYS[paneTag])
 }

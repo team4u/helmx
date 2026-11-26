@@ -20,7 +20,8 @@
  */
 export const INDEX_PROBE_URL = '/index.html'
 
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
+import { tryReadStorageItem, writeStorageItem } from '../lib/storage.js'
 
 /** Production-entry fingerprint: same-origin absolute path `/assets/<name>.js` (the default Vite base '/' build shape). */
 const PRODUCTION_ENTRY_PATTERN = /^\/assets\/[A-Za-z0-9_.@-]+\.js$/
@@ -220,29 +221,6 @@ export function isComposerManagedInput(el: Element | null): boolean {
   return el !== null && el.getAttribute('data-composer-draft-managed') === 'true'
 }
 
-/**
- * Whether an element is still connected and not hidden via `hidden` or
- * `display: none` on itself or any ancestor (covers React `<Activity mode="hidden">`).
- */
-export function isElementVisibleInDocument(el: Element | null): boolean {
-  if (el === null || !el.isConnected) return false
-  const win = el.ownerDocument?.defaultView
-  let cur: Element | null = el
-  while (cur !== null) {
-    if ((cur as HTMLElement).hidden === true) return false
-    if ((cur as HTMLElement).style?.display === 'none') return false
-    if (win !== null && win !== undefined) {
-      try {
-        if (win.getComputedStyle(cur).display === 'none') return false
-      } catch {
-        /* ignore detached/foreign elements */
-      }
-    }
-    cur = cur.parentElement
-  }
-  return true
-}
-
 /** Auto-refresh defer reason (null = not deferred; drives the version-banner copy). */
 export type VersionDeferReason =
   | 'draft'
@@ -270,7 +248,7 @@ export function resolveVersionDeferReason(input: {
 /** Defer reason → banner hint copy. */
 export function versionDeferHint(
   reason: VersionDeferReason,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   switch (reason) {
     case 'draft':
@@ -302,14 +280,9 @@ export const PRELOAD_RELOAD_GUARD_KEY = 'helmx:version-preload-reload'
  * denies: keep the notice and allow only manual refresh, never loop across reloads.
  */
 export function claimPreloadAutoReload(storage: Storage | null): boolean {
-  if (storage === null) return false
-  try {
-    if (storage.getItem(PRELOAD_RELOAD_GUARD_KEY) !== null) return false
-    storage.setItem(PRELOAD_RELOAD_GUARD_KEY, '1')
-    return true
-  } catch {
-    return false
-  }
+  const read = tryReadStorageItem(PRELOAD_RELOAD_GUARD_KEY, storage)
+  if (!read.ok || read.value !== null) return false
+  return writeStorageItem(PRELOAD_RELOAD_GUARD_KEY, '1', storage)
 }
 
 // ---------------------------------------------------------------------------
@@ -380,12 +353,7 @@ export const FINGERPRINT_RELOAD_GUARD_KEY = 'helmx:version-fingerprint-reload'
  */
 export function claimFingerprintAutoReload(storage: Storage | null, latestEntry: string | null): boolean {
   if (latestEntry === null) return true
-  if (storage === null) return false
-  try {
-    if (storage.getItem(FINGERPRINT_RELOAD_GUARD_KEY) === latestEntry) return false
-    storage.setItem(FINGERPRINT_RELOAD_GUARD_KEY, latestEntry)
-    return true
-  } catch {
-    return false
-  }
+  const read = tryReadStorageItem(FINGERPRINT_RELOAD_GUARD_KEY, storage)
+  if (!read.ok || read.value === latestEntry) return false
+  return writeStorageItem(FINGERPRINT_RELOAD_GUARD_KEY, latestEntry, storage)
 }

@@ -266,7 +266,7 @@
   border: 0;
   background: var(--border);
   cursor: col-resize;
-  z-index: 6;
+  z-index: var(--z-resizer);
   touch-action: none;
   transition: background var(--dur-fast) ease;
 }
@@ -314,7 +314,7 @@
   height: 2px;
   background: var(--accent);
   pointer-events: none;
-  z-index: 5;
+  z-index: var(--z-pane-indicator);
 }
 
 /* 桌面端侧栏折叠（Mod+B 切换）：仅保留 48px Activity Rail；移动端抽屉不受影响 */
@@ -584,7 +584,7 @@
   top: max(10px, env(safe-area-inset-top));
   left: 50%;
   transform: translateX(-50%);
-  z-index: 65;
+  z-index: var(--z-banner);
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
@@ -625,7 +625,7 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  z-index: 95;
+  z-index: var(--z-loading-overlay);
   flex: none;
   padding: 10px 16px;
   background: var(--bg-elevated);
@@ -646,7 +646,7 @@
 .lazy-load-error-overlay {
   position: fixed;
   inset: 0;
-  z-index: 105;
+  z-index: var(--z-error-overlay);
   background: var(--bg-backdrop);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);

@@ -20,16 +20,17 @@
  */
 
 import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { topDrawerFrame } from '../lib/drawer-stack-model.js'
 import type { ActiveModal, DrawerFrame, ResolvedTarget } from '../lib/types.js'
-import {
-  resolveStandingStatusIndicator,
-  type ConversationBackgroundIndex,
-} from './background-activity-model.js'
+import { resolveStandingStatusIndicator } from './background-activity-model.js'
 import { resolveNotificationRootId } from './quiet-notify-model.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
-import { collectEnabledPluginIds, isProfileVisible } from './sidebar-model.js'
+import {
+  collectEnabledPluginIds,
+  isProfileVisible,
+  type ConversationBackgroundIndex,
+} from './conversation-status-model.js'
 import type { PluginActivityLike } from '../lib/live-state.js'
 
 /** 态势三桶：需关注 > 运行中 > 未读完成。 */
@@ -252,9 +253,9 @@ export function composeHonestTreeSummary(input: {
   activeDescendantCount: number
   /** Root status prevents a descendant's local doing text from masquerading as the tree summary. */
   root?: ConversationSummary
-  t?: WebMessageTranslator
+  t: WebMessageTranslator
 }): string {
-  const t = input.t ?? englishWebTranslator
+  const { t } = input
   const representative = input.representative
   if (representative.status === 'error' && representative.lastError?.trim()) {
     return representative.lastError.trim()
@@ -316,7 +317,7 @@ const EMPTY_VIEWED: ReadonlySet<number> = new Set()
  */
 export function composeAttentionSummary(
   indicator: GlobalAttentionIndicator,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   const parts: string[] = []
   if (indicator.needsAttentionCount > 0) {

@@ -3,8 +3,6 @@ import type * as React from 'react'
 import {
   resolveLocalizedText,
   type AskAnswers,
-  type AskAnswerValue,
-  type AskFieldSpec,
   type AskKind,
   type AskSpec,
 } from '@helmx/protocol/browser'
@@ -15,19 +13,20 @@ import {
   Field,
   HelperText,
   HelmxIcon,
-  Input,
-  ModelPickerControl,
-  Select,
   Stack,
-  Textarea,
 } from '@helmx/plugin-client'
+import { isElementVisibleInDocument } from '../lib/dom-visibility.js'
 import { topDrawerFrame } from '../lib/drawer-stack-model.js'
+import { isImeComposing } from '../lib/ime.js'
+import { resolveFocusedPanel } from '../lib/panel-focus.js'
 import { HelmxExternalStoreContext, useConversations, usePendingAsks, useStoreActions } from '../lib/store-context.js'
-import { hasAnyOpenOverlay, isEditableShortcutTarget, resolveFocusedPanel } from '../shell/shortcuts-model.js'
-import { isElementVisibleInDocument } from '../shell/version-watch-model.js'
+import { hasAnyOpenOverlay, isEditableShortcutTarget } from '../shell/shortcuts-model.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { collectSubtreeIds } from './ancestry-model.js'
-import { useModelPickerControlAdapter } from './model-picker-adapter.js'
+import {
+  AskFieldInput,
+  type FocusChoiceOptionRequest,
+} from './AskDockFields.js'
 import {
   composeMultiChoiceValues,
   extractTerminalSnapshot,
@@ -59,11 +58,6 @@ interface AskSourceInfo {
   title: string
 }
 
-interface FocusChoiceOptionRequest {
-  index: number
-  seq: number
-}
-
 const FOCUSABLE_STEP_CONTROL_SELECTOR = [
   '[role="radio"][tabindex="0"]',
   '[role="checkbox"][tabindex="0"]',
@@ -72,622 +66,183 @@ const FOCUSABLE_STEP_CONTROL_SELECTOR = [
   'input:not(:disabled)',
   'textarea:not(:disabled)',
   '.ask-dock-confirm-actions button:not(:disabled)',
-  'select:not(:disabled)',
   'button.composer-model-button:not(:disabled)',
 ].join(', ')
 
-function AskChoiceGroup({
-  field,
-  fieldLabel,
-  value,
-  disabled,
+function AskCardHeader({
+  headerTitle,
   isStepper,
-  focusCustomSignal,
-  focusOptionReq,
-  onChange,
-  onSingleOptionEnter,
-  onEnterNextOrSubmit,
+  safeActiveStep,
+  lastStepIndex,
+  totalSteps,
+  disabled,
+  source,
+  onPrevStep,
+  onNextStep,
+  onOpenSource,
 }: {
-  field: AskFieldSpec
-  fieldLabel: string
-  value: AskAnswerValue | undefined
-  disabled: boolean
+  headerTitle: string
   isStepper: boolean
-  focusCustomSignal: number
-  focusOptionReq?: FocusChoiceOptionRequest
-  onChange: (next: AskAnswerValue, meta?: { fromPresetClick?: boolean }) => void
-  onSingleOptionEnter: (optValue: string) => void
-  onEnterNextOrSubmit: () => void
+  safeActiveStep: number
+  lastStepIndex: number
+  totalSteps: number
+  disabled: boolean
+  source?: AskSourceInfo
+  onPrevStep: () => void
+  onNextStep: () => void
+  onOpenSource: (conversationId: number) => void
 }) {
-  const { locale, t } = useWebLocale()
-  const options = field.options ?? []
-  const multiple = isMultiChoiceField(field)
-  const allowCustom = field.allowCustom === true
-  const customPlaceholder =
-    field.placeholder !== undefined ? resolveLocalizedText(field.placeholder, locale) : undefined
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const customInputRef = useRef<HTMLInputElement | null>(null)
-  const presetValues = useMemo(() => new Set(options.map((opt) => opt.value)), [options])
-
-  const singleStr = !multiple && typeof value === 'string' ? value : ''
-  const multiList = multiple && Array.isArray(value) ? value : []
-  const externalSingleCustom = !multiple && singleStr !== '' && !presetValues.has(singleStr)
-  const externalMultiCustom = multiple ? multiList.find((item) => !presetValues.has(item)) : undefined
-
-  const [customOpen, setCustomOpen] = useState<boolean>(
-    () => allowCustom && (multiple ? externalMultiCustom !== undefined : externalSingleCustom),
-  )
-  const [customDraft, setCustomDraft] = useState<string>(
-    () => (multiple ? externalMultiCustom : externalSingleCustom ? singleStr : '') ?? '',
-  )
-  const [focusRequestCount, setFocusRequestCount] = useState(0)
-  const [focusedMultiIndex, setFocusedMultiIndex] = useState(0)
-
-  const isCustomActive = allowCustom && (customOpen || (multiple ? externalMultiCustom !== undefined : externalSingleCustom))
-  const selectedPresets = useMemo(
-    () => (multiple ? multiList.filter((item) => presetValues.has(item)) : []),
-    [multiple, multiList, presetValues],
-  )
-  const selectedPresetSet = useMemo(() => new Set(selectedPresets), [selectedPresets])
-  const totalChoices = options.length + (allowCustom ? 1 : 0)
-  const clampedMultiIndex = Math.min(focusedMultiIndex, Math.max(0, totalChoices - 1))
-
-  const prevFocusCustomSignalRef = useRef(focusCustomSignal)
-  useEffect(() => {
-    if (focusCustomSignal > prevFocusCustomSignalRef.current && allowCustom) {
-      setCustomOpen(true)
-      setFocusRequestCount((n) => n + 1)
-      if (multiple) {
-        setFocusedMultiIndex(options.length)
-        onChange(composeMultiChoiceValues(field, selectedPresets, customDraft), { fromPresetClick: false })
-      } else {
-        onChange(customDraft, { fromPresetClick: false })
-      }
-    }
-    prevFocusCustomSignalRef.current = focusCustomSignal
-  }, [focusCustomSignal, allowCustom, multiple, options.length, field, selectedPresets, customDraft, onChange])
-
-  useEffect(() => {
-    if (focusRequestCount > 0 && isCustomActive) {
-      customInputRef.current?.focus()
-    }
-  }, [focusRequestCount, isCustomActive])
-
-  useEffect(() => {
-    if (focusOptionReq === undefined) return
-    const targetBtn = optionRefs.current[focusOptionReq.index]
-    if (targetBtn !== null && targetBtn !== undefined) {
-      if (multiple) setFocusedMultiIndex(focusOptionReq.index)
-      targetBtn.focus()
-    }
-  }, [focusOptionReq, multiple])
-
-  const selectedSingleIndex = multiple
-    ? -1
-    : isCustomActive
-      ? options.length
-      : options.findIndex((opt) => opt.value === singleStr)
-  const tabStopIndex = selectedSingleIndex >= 0 ? selectedSingleIndex : 0
-
-  const customInputValue = multiple
-    ? (externalMultiCustom !== undefined ? externalMultiCustom : customDraft)
-    : (externalSingleCustom ? singleStr : customDraft)
-
-  const handleChoiceKeyDown = (index: number, e: React.KeyboardEvent<HTMLButtonElement>): void => {
-    if (disabled || totalChoices === 0) return
-    if (e.altKey || e.ctrlKey || e.metaKey) return
-
-    if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-      e.preventDefault()
-      if (allowCustom && index === options.length) {
-        if (multiple) {
-          if (!isCustomActive) {
-            setCustomOpen(true)
-            setFocusRequestCount((n) => n + 1)
-            onChange(composeMultiChoiceValues(field, selectedPresets, customDraft), { fromPresetClick: false })
-            return
-          }
-          onEnterNextOrSubmit()
-          return
-        }
-        if (!isCustomActive || customInputValue.trim() === '') {
-          setCustomOpen(true)
-          setFocusRequestCount((n) => n + 1)
-          onChange(customDraft, { fromPresetClick: false })
-          return
-        }
-        onEnterNextOrSubmit()
-        return
-      }
-      if (multiple) {
-        onEnterNextOrSubmit()
-        return
-      }
-      const opt = options[index]
-      if (opt !== undefined) {
-        setCustomOpen(false)
-        onSingleOptionEnter(opt.value)
-      }
-      return
-    }
-
-    let nextIndex: number | null = null
-    if (e.key === 'ArrowDown' || (!isStepper && e.key === 'ArrowRight')) {
-      nextIndex = (index + 1) % totalChoices
-    } else if (e.key === 'ArrowUp' || (!isStepper && e.key === 'ArrowLeft')) {
-      nextIndex = (index - 1 + totalChoices) % totalChoices
-    } else if (e.key === 'Home') {
-      nextIndex = 0
-    } else if (e.key === 'End') {
-      nextIndex = totalChoices - 1
-    }
-    if (nextIndex === null) return
-
-    e.preventDefault()
-    if (multiple) {
-      setFocusedMultiIndex(nextIndex)
-      optionRefs.current[nextIndex]?.focus()
-      return
-    }
-
-    optionRefs.current[nextIndex]?.focus()
-    if (allowCustom && nextIndex === options.length) {
-      setCustomOpen(true)
-      onChange(customDraft, { fromPresetClick: false })
-      return
-    }
-    const nextOpt = options[nextIndex]
-    if (nextOpt === undefined) return
-    setCustomOpen(false)
-    onChange(nextOpt.value, { fromPresetClick: false })
-  }
-
-  const handlePresetClick = (optValue: string): void => {
-    if (multiple) {
-      const nextSet = new Set(selectedPresetSet)
-      if (nextSet.has(optValue)) nextSet.delete(optValue)
-      else nextSet.add(optValue)
-      onChange(
-        composeMultiChoiceValues(field, [...nextSet], isCustomActive ? (externalMultiCustom ?? customDraft) : undefined),
-        { fromPresetClick: false },
-      )
-      return
-    }
-    setCustomOpen(false)
-    onChange(optValue, { fromPresetClick: true })
-  }
-
-  const handleCustomButtonClick = (): void => {
-    if (!allowCustom) return
-    if (multiple) {
-      setFocusedMultiIndex(options.length)
-      if (isCustomActive) {
-        setCustomOpen(false)
-        onChange(composeMultiChoiceValues(field, selectedPresets, undefined), { fromPresetClick: false })
-      } else {
-        setCustomOpen(true)
-        setFocusRequestCount((n) => n + 1)
-        const nextArr = composeMultiChoiceValues(field, selectedPresets, customDraft)
-        onChange(nextArr, { fromPresetClick: false })
-      }
-      return
-    }
-    setCustomOpen(true)
-    setFocusRequestCount((n) => n + 1)
-    onChange(customDraft, { fromPresetClick: false })
-  }
-
+  const { t } = useWebLocale()
   return (
-    <div className="ask-dock-choice-wrap">
-      {multiple ? (
-        <div className="ask-dock-choice-meta">{t('composer.ask.multiHint')}</div>
+    <div className="ask-dock-header">
+      <span className="ask-dock-title">{headerTitle}</span>
+      {isStepper ? (
+        <div className="ask-dock-step-nav">
+          <button
+            type="button"
+            className="ask-dock-step-nav-btn"
+            aria-label={t('composer.ask.stepPrev')}
+            title={t('composer.ask.stepPrev')}
+            disabled={disabled || safeActiveStep === 0}
+            onClick={onPrevStep}
+          >
+            <HelmxIcon name="chevron-left" size={13} />
+          </button>
+          <span className="ask-dock-step-counter tabular-nums" aria-live="polite">
+            {t('composer.ask.stepCounter', {
+              current: safeActiveStep + 1,
+              total: totalSteps,
+            })}
+          </span>
+          <button
+            type="button"
+            className="ask-dock-step-nav-btn"
+            aria-label={t('composer.ask.stepNext')}
+            title={t('composer.ask.stepNext')}
+            disabled={disabled || safeActiveStep >= lastStepIndex}
+            onClick={onNextStep}
+          >
+            <HelmxIcon name="chevron-right" size={13} />
+          </button>
+        </div>
       ) : null}
-      <div
-        className="ask-dock-choice-group"
-        role={multiple ? 'group' : 'radiogroup'}
-        aria-label={fieldLabel}
-      >
-        {options.map((opt, index) => {
-          const selected = multiple ? selectedPresetSet.has(opt.value) : !isCustomActive && singleStr === opt.value
-          const optLabel = resolveLocalizedText(opt.label, locale)
-          const optDesc =
-            opt.description !== undefined ? resolveLocalizedText(opt.description, locale) : undefined
-          return (
-            <button
-              key={opt.value}
-              ref={(el) => {
-                optionRefs.current[index] = el
-              }}
-              type="button"
-              role={multiple ? 'checkbox' : 'radio'}
-              aria-checked={selected}
-              tabIndex={multiple ? (index === clampedMultiIndex ? 0 : -1) : index === tabStopIndex ? 0 : -1}
-              className={`ask-dock-choice-btn${selected ? ' ask-dock-choice-btn--selected' : ''}`}
-              disabled={disabled}
-              onFocus={() => {
-                if (multiple) setFocusedMultiIndex(index)
-              }}
-              onClick={() => handlePresetClick(opt.value)}
-              onKeyDown={(e) => handleChoiceKeyDown(index, e)}
-            >
-              <span className="ask-dock-choice-key" aria-hidden="true">
-                {index + 1}
-              </span>
-              <span className="ask-dock-choice-body">
-                <span className="ask-dock-choice-header">
-                  <span className="ask-dock-choice-label">{optLabel}</span>
-                  {opt.recommended === true ? (
-                    <span className="ask-dock-choice-badge">{t('composer.ask.recommended')}</span>
-                  ) : null}
-                </span>
-                {optDesc !== undefined && optDesc !== '' ? (
-                  <span className="ask-dock-choice-desc">{optDesc}</span>
-                ) : null}
-              </span>
-              {multiple || selected ? (
-                <span
-                  className={`ask-dock-choice-check${multiple ? ' ask-dock-choice-check--multi' : ''}${selected ? ' ask-dock-choice-check--active' : ''}`}
-                  aria-hidden="true"
-                >
-                  {selected ? <HelmxIcon name="check" size={13} /> : null}
-                </span>
-              ) : null}
-            </button>
-          )
-        })}
-        {allowCustom ? (
-          <>
-            <button
-              key="__custom__"
-              ref={(el) => {
-                optionRefs.current[options.length] = el
-              }}
-              type="button"
-              role={multiple ? 'checkbox' : 'radio'}
-              aria-checked={isCustomActive}
-              tabIndex={
-                multiple
-                  ? (options.length === clampedMultiIndex ? 0 : -1)
-                  : (options.length === tabStopIndex ? 0 : -1)
-              }
-              className={`ask-dock-choice-btn ask-dock-choice-btn--custom${isCustomActive ? ' ask-dock-choice-btn--selected' : ''}`}
-              disabled={disabled}
-              onFocus={() => {
-                if (multiple) setFocusedMultiIndex(options.length)
-              }}
-              onClick={handleCustomButtonClick}
-              onKeyDown={(e) => handleChoiceKeyDown(options.length, e)}
-            >
-              <span className="ask-dock-choice-key" aria-hidden="true">
-                {options.length + 1}
-              </span>
-              <span className="ask-dock-choice-body">
-                <span className="ask-dock-choice-header">
-                  <span className="ask-dock-choice-label">{t('composer.ask.otherOption')}</span>
-                </span>
-              </span>
-              {multiple || isCustomActive ? (
-                <span
-                  className={`ask-dock-choice-check${multiple ? ' ask-dock-choice-check--multi' : ''}${isCustomActive ? ' ask-dock-choice-check--active' : ''}`}
-                  aria-hidden="true"
-                >
-                  {isCustomActive ? <HelmxIcon name="check" size={13} /> : null}
-                </span>
-              ) : null}
-            </button>
-            {isCustomActive ? (
-              <div className="ask-dock-choice-custom">
-                <Input
-                  ref={customInputRef}
-                  type="text"
-                  size="sm"
-                  value={customInputValue}
-                  disabled={disabled}
-                  placeholder={customPlaceholder ?? t('composer.ask.otherPlaceholder')}
-                  aria-label={t('composer.ask.otherOption')}
-                  onChange={(e) => {
-                    const nextText = e.target.value
-                    setCustomDraft(nextText)
-                    if (multiple) {
-                      onChange(composeMultiChoiceValues(field, selectedPresets, nextText), {
-                        fromPresetClick: false,
-                      })
-                    } else {
-                      onChange(nextText, { fromPresetClick: false })
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      optionRefs.current[options.length]?.focus()
-                      return
-                    }
-                    if (
-                      !e.altKey &&
-                      !e.ctrlKey &&
-                      !e.metaKey &&
-                      !e.nativeEvent.isComposing &&
-                      e.keyCode !== 229 &&
-                      (e.key === 'ArrowUp' || e.key === 'ArrowDown')
-                    ) {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      if (e.key === 'ArrowUp') {
-                        if (customInputValue.trim() === '' && options.length > 0) {
-                          const prevIdx = options.length - 1
-                          if (multiple) {
-                            setFocusedMultiIndex(prevIdx)
-                          } else {
-                            setCustomOpen(false)
-                            onChange(options[prevIdx]!.value, { fromPresetClick: false })
-                          }
-                          optionRefs.current[prevIdx]?.focus()
-                        } else {
-                          optionRefs.current[options.length]?.focus()
-                        }
-                        return
-                      }
-                      if (options.length > 0) {
-                        if (multiple) {
-                          setFocusedMultiIndex(0)
-                        } else {
-                          setCustomOpen(false)
-                          onChange(options[0]!.value, { fromPresetClick: false })
-                        }
-                        optionRefs.current[0]?.focus()
-                      } else {
-                        optionRefs.current[options.length]?.focus()
-                      }
-                      return
-                    }
-                    if (e.key === 'Enter') {
-                      if (e.nativeEvent.isComposing || e.keyCode === 229) {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        return
-                      }
-                      e.preventDefault()
-                      onEnterNextOrSubmit()
-                    }
-                  }}
-                  autoComplete="off"
-                />
-              </div>
-            ) : null}
-          </>
-        ) : null}
-      </div>
+      {source !== undefined ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<HelmxIcon name="corner-down-right" size={11} />}
+          className="ask-dock-source-btn"
+          title={source.title !== ''
+            ? t('composer.ask.openChildTitle', { id: source.conversationId, title: source.title })
+            : t('composer.ask.openChildDrawer', { id: source.conversationId })}
+          aria-label={t('composer.ask.openChildDrawer', { id: source.conversationId })}
+          onClick={() => onOpenSource(source.conversationId)}
+        >
+          {t('composer.ask.fromSource', { id: source.conversationId })}
+        </Button>
+      ) : null}
     </div>
   )
 }
 
-function AskFieldInput({
-  conversationId,
-  askKind,
-  isStepper,
-  field,
-  fieldId,
-  fieldLabel,
-  value,
-  thinkingLevelValue,
-  focusCustomSignal,
-  focusOptionReq,
-  onPatchAnswers,
-  onSingleOptionEnter,
-  onEnterNextOrSubmit,
-  onExitTextToCard,
-  disabled,
+function AskCardSnapshot({
+  text,
+  open,
+  onToggle,
 }: {
-  conversationId: number
-  askKind: AskKind
-  isStepper: boolean
-  field: AskFieldSpec
-  fieldId: string
-  fieldLabel: string
-  value: AskAnswerValue | undefined
-  thinkingLevelValue?: string
-  focusCustomSignal: number
-  focusOptionReq?: FocusChoiceOptionRequest
-  onPatchAnswers: (patch: AskAnswers, meta?: { fromPresetClick?: boolean }) => void
-  onSingleOptionEnter: (optValue: string) => void
-  onEnterNextOrSubmit: () => void
-  onExitTextToCard: () => void
-  disabled: boolean
+  text: string
+  open: boolean
+  onToggle: () => void
 }) {
-  const { locale, t } = useWebLocale()
-  const pickerAdapter = useModelPickerControlAdapter(conversationId)
-  const stringValue = typeof value === 'string' ? value : ''
-  const onStringChange = (v: string): void => onPatchAnswers({ [field.name]: v })
-  const confirmYesRef = useRef<HTMLButtonElement | null>(null)
-  const confirmNoRef = useRef<HTMLButtonElement | null>(null)
+  const { t } = useWebLocale()
+  return (
+    <div className="ask-dock-snapshot">
+      <Button
+        variant="ghost"
+        size="sm"
+        icon={<HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />}
+        className="ask-dock-snapshot-btn"
+        onClick={onToggle}
+      >
+        {t('composer.ask.terminalSnapshot')}
+      </Button>
+      {open ? (
+        <pre className="code-block-pre selectable ask-dock-snapshot-pre">
+          <code>{text}</code>
+        </pre>
+      ) : null}
+    </div>
+  )
+}
 
-  if (field.type === 'select') {
-    const options = [
-      { value: '', label: t('composer.ask.selectPlaceholder') },
-      ...(field.options ?? []).map((opt) => ({
-        value: opt.value,
-        label: resolveLocalizedText(opt.label, locale),
-      })),
-    ]
-    return (
-      <Select
-        value={stringValue}
-        disabled={disabled}
-        options={options}
-        onChange={(e) => onStringChange(e.target.value)}
-      />
-    )
-  }
-  if (field.type === 'choice') {
-    return (
-      <AskChoiceGroup
-        field={field}
-        fieldLabel={fieldLabel}
-        value={value}
-        disabled={disabled}
-        isStepper={isStepper}
-        focusCustomSignal={focusCustomSignal}
-        focusOptionReq={focusOptionReq}
-        onChange={(nextVal, meta) => onPatchAnswers({ [field.name]: nextVal }, meta)}
-        onSingleOptionEnter={onSingleOptionEnter}
-        onEnterNextOrSubmit={onEnterNextOrSubmit}
-      />
-    )
-  }
-  if (field.type === 'model') {
-    const placeholder = t('composer.ask.modelKeepCurrent')
-    const thinkingField =
-      typeof field.thinkingLevelField === 'string' && field.thinkingLevelField !== ''
-        ? field.thinkingLevelField
-        : undefined
-    const activeThinking = thinkingField !== undefined ? (thinkingLevelValue ?? '') : ''
-    const displayTitle = stringValue
-      ? activeThinking !== ''
-        ? `${stringValue} · ${activeThinking}`
-        : stringValue
-      : placeholder
-    return (
-      <ModelPickerControl
-        buttonId={fieldId}
-        buttonAriaLabel={`${fieldLabel}: ${displayTitle}`}
-        buttonTitle={displayTitle}
-        placeholderLabel={placeholder}
-        effectiveModel={stringValue || undefined}
-        activeThinkingLevel={activeThinking}
-        resetLabel={placeholder}
-        resetTitle={t('composer.ask.modelResetTitle')}
-        popoverSide="top"
-        enableShortcut={false}
-        showThinkingLevels={thinkingField !== undefined}
-        disabled={disabled}
-        copy={pickerAdapter.copy}
-        onNotice={pickerAdapter.onNotice}
-        onOpenModelsCenter={pickerAdapter.onOpenModelsCenter}
-        onApply={(id, level) =>
-          onPatchAnswers(
-            thinkingField !== undefined
-              ? { [field.name]: id, [thinkingField]: level ?? '' }
-              : { [field.name]: id },
-          )
-        }
-        onResetDefault={() =>
-          onPatchAnswers(
-            thinkingField !== undefined
-              ? { [field.name]: '', [thinkingField]: '' }
-              : { [field.name]: '' },
-          )
-        }
-      />
-    )
-  }
-  if (field.type === 'confirm') {
-    const defaultConfirmText =
-      askKind === 'question' ? t('composer.ask.confirmYes') : t('composer.ask.approve')
-    const defaultRejectText =
-      askKind === 'question' ? t('composer.ask.confirmNo') : t('composer.ask.reject')
-    const yesText =
-      field.confirmLabel !== undefined ? resolveLocalizedText(field.confirmLabel, locale) : defaultConfirmText
-    const noText =
-      field.rejectLabel !== undefined ? resolveLocalizedText(field.rejectLabel, locale) : defaultRejectText
-    return (
-      <Stack direction="horizontal" inline gap="xs" className="ask-dock-confirm-actions">
+function AskCardFooter({
+  askKind,
+  isQuestion,
+  isSingleConfirm,
+  isStepper,
+  safeActiveStep,
+  lastStepIndex,
+  missingRequiredCount,
+  submitting,
+  shortcutHint,
+  cancelBtnRef,
+  onCancel,
+  onNextStep,
+}: {
+  askKind: AskKind
+  isQuestion: boolean
+  isSingleConfirm: boolean
+  isStepper: boolean
+  safeActiveStep: number
+  lastStepIndex: number
+  missingRequiredCount: number
+  submitting: 'answer' | 'cancel' | null
+  shortcutHint: string | null
+  cancelBtnRef: React.RefObject<HTMLButtonElement | null>
+  onCancel: () => void
+  onNextStep: () => void
+}) {
+  const { t } = useWebLocale()
+  void askKind
+  return (
+    <Stack direction="horizontal" justify="between" wrap gap="sm" className="ask-dock-actions">
+      <div className="ask-dock-actions-left">
         <Button
-          ref={confirmYesRef}
-          variant={stringValue === 'true' ? 'primary' : 'default'}
+          ref={cancelBtnRef}
+          variant="ghost"
+          size="sm"
+          pending={submitting === 'cancel'}
+          disabled={submitting !== null && submitting !== 'cancel'}
+          onClick={onCancel}
+        >
+          {t(isQuestion ? 'composer.ask.skip' : 'common.cancel')}
+        </Button>
+        {shortcutHint !== null ? (
+          <span className="ask-dock-shortcut-hint">{shortcutHint}</span>
+        ) : null}
+      </div>
+      {isSingleConfirm ? null : isStepper && safeActiveStep < lastStepIndex && missingRequiredCount > 0 ? (
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={submitting !== null}
+          onClick={onNextStep}
+        >
+          {t('composer.ask.stepNext')}
+        </Button>
+      ) : (
+        <Button
+          type="submit"
+          variant="primary"
           size="sm"
           icon={<HelmxIcon name="check" size={12} />}
-          disabled={disabled}
-          onClick={() => onStringChange('true')}
-          onKeyDown={(e) => {
-            if (
-              !e.altKey &&
-              !e.ctrlKey &&
-              !e.metaKey &&
-              (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowUp')
-            ) {
-              e.preventDefault()
-              confirmNoRef.current?.focus()
-            }
-          }}
+          pending={submitting === 'answer'}
+          disabled={(submitting !== null && submitting !== 'answer') || missingRequiredCount > 0}
         >
-          {yesText}
+          {t(isQuestion ? 'composer.ask.confirm' : 'composer.ask.submit')}
         </Button>
-        <Button
-          ref={confirmNoRef}
-          variant={stringValue === 'false' ? 'danger' : 'default'}
-          size="sm"
-          icon={<HelmxIcon name="x" size={12} />}
-          disabled={disabled}
-          onClick={() => onStringChange('false')}
-          onKeyDown={(e) => {
-            if (
-              !e.altKey &&
-              !e.ctrlKey &&
-              !e.metaKey &&
-              (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'ArrowRight' || e.key === 'ArrowDown')
-            ) {
-              e.preventDefault()
-              confirmYesRef.current?.focus()
-            }
-          }}
-        >
-          {noText}
-        </Button>
-      </Stack>
-    )
-  }
-  const placeholderText =
-    field.placeholder !== undefined ? resolveLocalizedText(field.placeholder, locale) : fieldLabel
-  if (field.multiline === true) {
-    return (
-      <Textarea
-        value={stringValue}
-        disabled={disabled}
-        placeholder={placeholderText}
-        rows={3}
-        onChange={(e) => onStringChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-            e.preventDefault()
-            e.stopPropagation()
-            onExitTextToCard()
-            return
-          }
-          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-            e.preventDefault()
-            onEnterNextOrSubmit()
-          }
-        }}
-      />
-    )
-  }
-  return (
-    <Input
-      type="text"
-      value={stringValue}
-      disabled={disabled}
-      placeholder={placeholderText}
-      onChange={(e) => onStringChange(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-          e.preventDefault()
-          e.stopPropagation()
-          onExitTextToCard()
-          return
-        }
-        if (e.key === 'Enter') {
-          if (e.nativeEvent.isComposing || e.keyCode === 229) {
-            e.preventDefault()
-            e.stopPropagation()
-            return
-          }
-          e.preventDefault()
-          onEnterNextOrSubmit()
-        }
-      }}
-      autoComplete="off"
-    />
+      )}
+    </Stack>
   )
 }
 
@@ -718,6 +273,14 @@ function AskCard({
   const formId = useId()
   const formRef = useRef<HTMLFormElement | null>(null)
   const cancelBtnRef = useRef<HTMLButtonElement | null>(null)
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
   const [answers, setAnswers] = useState<AskAnswers>(() => initialAskAnswers(ask.fields))
   const answersRef = useRef<AskAnswers>(answers)
   answersRef.current = answers
@@ -830,10 +393,14 @@ function AskCard({
           onFocusReturn?.()
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
+        if (mountedRef.current) {
+          setError(err instanceof Error ? err.message : String(err))
+        }
       } finally {
-        setSubmitting(null)
         submittingRef.current = null
+        if (mountedRef.current) {
+          setSubmitting(null)
+        }
       }
     },
     [ask.id, ask.expectedStateSeq, hasNextPendingAsk, onFocusReturn],
@@ -861,10 +428,14 @@ function AskCard({
         onFocusReturn?.()
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : String(err))
+      }
     } finally {
-      setSubmitting(null)
       submittingRef.current = null
+      if (mountedRef.current) {
+        setSubmitting(null)
+      }
     }
   }
 
@@ -908,10 +479,6 @@ function AskCard({
           setActiveStep(nextUnanswered)
           return
         }
-        if (fieldIndex < lastStepIndex && nextUnanswered > fieldIndex) {
-          setActiveStep(nextUnanswered)
-          return
-        }
         if (missingRequiredFields(ask, candidateAnswers).length === 0) {
           void submitAnswers(candidateAnswers)
           return
@@ -952,10 +519,7 @@ function AskCard({
 
   const handleSharedKeyDown = useCallback(
     (e: KeyboardEvent | React.KeyboardEvent, sourceOrigin: 'form' | 'window'): void => {
-      if (submittingRef.current !== null) return
-      if (e.defaultPrevented) return
-      const nativeEv = 'nativeEvent' in e ? e.nativeEvent : e
-      if (nativeEv.isComposing || nativeEv.keyCode === 229) return
+      if (submittingRef.current !== null || e.defaultPrevented || isImeComposing(e)) return
 
       const formEl = formRef.current
       if (formEl === null) return
@@ -979,9 +543,7 @@ function AskCard({
         return
       }
 
-      if (e.altKey || e.ctrlKey || e.metaKey) return
-
-      if (inEditable) return
+      if (e.altKey || e.ctrlKey || e.metaKey || inEditable) return
 
       if (sourceOrigin === 'form' && e.key === 'Escape' && !e.shiftKey) {
         if (
@@ -992,7 +554,6 @@ function AskCard({
           e.preventDefault()
           e.stopPropagation()
           cancelBtnRef.current.focus()
-          return
         }
         return
       }
@@ -1186,78 +747,27 @@ function AskCard({
         void submit()
       }}
     >
-      <div className="ask-dock-header">
-        <span className="ask-dock-title">{headerTitle}</span>
-        {isStepper ? (
-          <div className="ask-dock-step-nav">
-            <button
-              type="button"
-              className="ask-dock-step-nav-btn"
-              aria-label={t('composer.ask.stepPrev')}
-              title={t('composer.ask.stepPrev')}
-              disabled={submitting !== null || safeActiveStep === 0}
-              onClick={() => setActiveStep((s) => Math.max(0, s - 1))}
-            >
-              <HelmxIcon name="chevron-left" size={13} />
-            </button>
-            <span className="ask-dock-step-counter tabular-nums" aria-live="polite">
-              {t('composer.ask.stepCounter', {
-                current: safeActiveStep + 1,
-                total: ask.fields.length,
-              })}
-            </span>
-            <button
-              type="button"
-              className="ask-dock-step-nav-btn"
-              aria-label={t('composer.ask.stepNext')}
-              title={t('composer.ask.stepNext')}
-              disabled={submitting !== null || safeActiveStep >= lastStepIndex}
-              onClick={() => setActiveStep((s) => Math.min(lastStepIndex, s + 1))}
-            >
-              <HelmxIcon name="chevron-right" size={13} />
-            </button>
-          </div>
-        ) : null}
-        {source !== undefined ? (
-          <Button
-            ref={cancelBtnRef}
-            variant="ghost"
-            size="sm"
-            icon={<HelmxIcon name="corner-down-right" size={11} />}
-            className="ask-dock-source-btn"
-            title={source.title !== ''
-              ? t('composer.ask.openChildTitle', { id: source.conversationId, title: source.title })
-              : t('composer.ask.openChildDrawer', { id: source.conversationId })}
-            aria-label={t('composer.ask.openChildDrawer', { id: source.conversationId })}
-            onClick={() => openConversationDrawer(source.conversationId)}
-          >
-            {t('composer.ask.fromSource', { id: source.conversationId })}
-          </Button>
-        ) : null}
-      </div>
+      <AskCardHeader
+        headerTitle={headerTitle}
+        isStepper={isStepper}
+        safeActiveStep={safeActiveStep}
+        lastStepIndex={lastStepIndex}
+        totalSteps={ask.fields.length}
+        disabled={submitting !== null}
+        source={source}
+        onPrevStep={() => setActiveStep((s) => Math.max(0, s - 1))}
+        onNextStep={() => setActiveStep((s) => Math.min(lastStepIndex, s + 1))}
+        onOpenSource={openConversationDrawer}
+      />
       {visibleDescription !== undefined ? (
-        <div className="ask-dock-desc">
-          {visibleDescription}
-        </div>
+        <div className="ask-dock-desc">{visibleDescription}</div>
       ) : null}
       {snapshot !== undefined ? (
-        <div className="ask-dock-snapshot">
-          <Button
-            ref={cancelBtnRef}
-            variant="ghost"
-            size="sm"
-            icon={<HelmxIcon name={snapshotOpen ? 'chevron-down' : 'chevron-right'} size={12} />}
-            className="ask-dock-snapshot-btn"
-            onClick={() => setSnapshotOpen((v) => !v)}
-          >
-            {t('composer.ask.terminalSnapshot')}
-          </Button>
-          {snapshotOpen ? (
-            <pre className="code-block-pre selectable ask-dock-snapshot-pre">
-              <code>{snapshot.text}</code>
-            </pre>
-          ) : null}
-        </div>
+        <AskCardSnapshot
+          text={snapshot.text}
+          open={snapshotOpen}
+          onToggle={() => setSnapshotOpen((v) => !v)}
+        />
       ) : null}
       {ask.fields.length > 0 ? (
         <Stack gap="sm" className="ask-dock-fields">
@@ -1319,44 +829,20 @@ function AskCard({
           <span className="callout-text">{error}</span>
         </Callout>
       ) : null}
-      <Stack direction="horizontal" justify="between" wrap gap="sm" className="ask-dock-actions">
-        <div className="ask-dock-actions-left">
-          <Button
-            ref={cancelBtnRef}
-            variant="ghost"
-            size="sm"
-            pending={submitting === 'cancel'}
-            disabled={submitting !== null && submitting !== 'cancel'}
-            onClick={() => void cancel()}
-          >
-            {t(isQuestion ? 'composer.ask.skip' : 'common.cancel')}
-          </Button>
-          {showShortcutHint ? (
-            <span className="ask-dock-shortcut-hint">{t(shortcutHintKey)}</span>
-          ) : null}
-        </div>
-        {isSingleConfirm ? null : isStepper && safeActiveStep < lastStepIndex && missingRequired.length > 0 ? (
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={submitting !== null}
-            onClick={() => setActiveStep((s) => Math.min(lastStepIndex, s + 1))}
-          >
-            {t('composer.ask.stepNext')}
-          </Button>
-        ) : (
-          <Button
-            type="submit"
-            variant="primary"
-            size="sm"
-            icon={<HelmxIcon name="check" size={12} />}
-            pending={submitting === 'answer'}
-            disabled={(submitting !== null && submitting !== 'answer') || missingRequired.length > 0}
-          >
-            {t(isQuestion ? 'composer.ask.confirm' : 'composer.ask.submit')}
-          </Button>
-        )}
-      </Stack>
+      <AskCardFooter
+        askKind={askKind}
+        isQuestion={isQuestion}
+        isSingleConfirm={isSingleConfirm}
+        isStepper={isStepper}
+        safeActiveStep={safeActiveStep}
+        lastStepIndex={lastStepIndex}
+        missingRequiredCount={missingRequired.length}
+        submitting={submitting}
+        shortcutHint={showShortcutHint ? t(shortcutHintKey) : null}
+        cancelBtnRef={cancelBtnRef}
+        onCancel={() => void cancel()}
+        onNextStep={() => setActiveStep((s) => Math.min(lastStepIndex, s + 1))}
+      />
     </form>
   )
 }

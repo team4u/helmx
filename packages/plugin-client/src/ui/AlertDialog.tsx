@@ -274,12 +274,7 @@ export function ConfirmDialog({
       <AlertDialogPortal inline={inline}>
         <AlertDialogOverlay className="modal-backdrop">
           <AlertDialogContent
-            className={contentClassName ? `modal ${contentClassName}` : 'modal'}
-            style={{
-              maxWidth: 440,
-              background: 'var(--bg-elevated)',
-              border: '1px solid var(--border)',
-            }}
+            className={contentClassName ? `modal modal-confirm ${contentClassName}` : 'modal modal-confirm'}
             onEscapeKeyDown={(event) => {
               if (pending) {
                 event.preventDefault()
@@ -292,15 +287,7 @@ export function ConfirmDialog({
               <AlertDialogTitle className="modal-title">{title}</AlertDialogTitle>
             </div>
             {description ? (
-              <div
-                className="modal-body"
-                style={{
-                  color: 'var(--fg-muted)',
-                  fontSize: 13,
-                  lineHeight: 1.5,
-                  padding: '14px 16px',
-                }}
-              >
+              <div className="modal-body modal-confirm-body">
                 <AlertDialogDescription>{description}</AlertDialogDescription>
               </div>
             ) : null}

@@ -7,9 +7,12 @@ import type { Root } from 'react-dom/client'
 import type { ConversationSummary, PluginSummary, PluginUiContribution, Profile } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import {
+  activeTargetForPanel,
+  resolveFocusedPanel,
+} from '../src/lib/panel-focus.js'
+import {
   ESC_ABORT_WINDOW_MS,
   SIDEBAR_COLLAPSED_STORAGE_KEY,
-  activeTargetForPanel,
   buildShortcutCatalog,
   formatModShiftShortcut,
   formatModShortcut,
@@ -29,7 +32,6 @@ import {
   isSemicolonShortcutKey,
   isSlashShortcutKey,
   persistSidebarCollapsed,
-  resolveFocusedPanel,
   resolveNewTopicTarget,
   resolveShortcutKeyLower,
   type HelmxShortcutDetail,

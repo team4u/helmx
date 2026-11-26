@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { PluginConfigFieldSchema, Profile } from '@helmx/protocol'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import {
   buildEnumConfigOptions,
   buildPluginConfigPayload,
@@ -12,6 +13,8 @@ import {
 import {
   buildProfileSavePayload,
 } from '../src/profiles/profile-center-model.js'
+
+const enT = createWebTranslator('en')
 
 // ---------------------------------------------------------------------------
 // Plugin config form: the secret mask must never overwrite the real key
@@ -134,7 +137,7 @@ test('string[] and enum fields: initial value cloning, payload building, and enu
   assert.deepEqual(payload.scopes, ['read', 'write'], 'payload string[] must not alias caller array')
 
   // 4. Enum options preserve persisted-but-unlisted values honestly
-  const options = buildEnumConfigOptions(['read', 'write'], ['read', 'legacy'])
+  const options = buildEnumConfigOptions(['read', 'write'], ['read', 'legacy'], enT)
   assert.deepEqual(options.map((o) => o.value), ['read', 'write', 'legacy'])
   assert.match(String(options[2]!.label), /legacy/)
 })

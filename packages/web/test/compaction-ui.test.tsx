@@ -24,11 +24,14 @@ import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import type { ToastNotice } from '../src/lib/types.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import {
   getComposerPlaceholder,
   isSessionManageCommand,
   parseCompactSlashCommand,
 } from '../src/conversation/composer-model.js'
+
+const enT = createWebTranslator('en')
 
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
@@ -306,7 +309,7 @@ describe("compaction-ui", () => {
 
     // Placeholder switches to the busy variant
     const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
-    assert.equal(ta.placeholder, getComposerPlaceholder(true, false))
+    assert.equal(ta.placeholder, getComposerPlaceholder(true, false, enT))
 
     // Empty draft shows the stop button
     const abortBtn = host.querySelector<HTMLButtonElement>('button.composer-abort-button[aria-label="Stop the current execution"]')
@@ -401,7 +404,13 @@ describe("compaction-ui", () => {
     assert.equal(captured.length, 2, 'no duplicate /compact or /input request may be sent at compacting=true')
     assert.equal(ta.value, '', 'the draft must be cleared')
     assert.ok(
-      store.getNotices().some((n) => n.level === 'info' && n.title === 'Context compaction in progress' && n.conversationId === 1),
+      store.getNotices().some(
+        (n) =>
+          n.level === 'info' &&
+          n.title === 'Context compaction in progress' &&
+          n.target?.kind === 'conversation' &&
+          n.target.conversationId === 1,
+      ),
       'an info notice "Context compaction in progress" must be pushed',
     )
   })

@@ -1,20 +1,14 @@
-import { Activity } from 'react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Activity, useLayoutEffect, useRef, useState } from 'react'
 import { useConversations, useStoreActions } from '../lib/store-context.js'
 import { ConversationPane } from './ConversationPane.js'
-import {
-  clearComposerDirty,
-  isComposerDirtySnapshot,
-  setComposerDirty,
-} from './composer-dirty.js'
 import {
   ConversationDirtySinkContext,
   DEFAULT_CONVERSATION_WINDOW_LIMIT,
   pruneConversationWindows,
   touchConversationWindows,
-  type ConversationDirtySink,
   type ConversationWindowEntry,
 } from './conversation-window-model.js'
+import { useActivityFrameLifecycle } from './use-activity-frame-lifecycle.js'
 
 export interface ConversationWindowStageProps {
   /** Currently shown primary conversation; null while the primary target is not a conversation. */
@@ -85,53 +79,12 @@ interface ConversationWindowFrameProps {
 
 function ConversationWindowFrame({ conversationId, visible }: ConversationWindowFrameProps) {
   const { loadConversationDetail } = useStoreActions()
-  const frameDirtyKey = `conversation-window:${conversationId}`
-  const visibleRef = useRef(visible)
-  visibleRef.current = visible
-  const mountedRef = useRef(true)
-  useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-    }
-  }, [])
-  const dirtySinkRef = useRef<ConversationDirtySink | null>(null)
-  if (dirtySinkRef.current === null) {
-    dirtySinkRef.current = { current: null }
-  }
-  const dirtySink = dirtySinkRef.current
-  dirtySink.publish = (snapshot) => {
-    if (!mountedRef.current || visibleRef.current) return
-    if (isComposerDirtySnapshot(snapshot)) setComposerDirty(frameDirtyKey, snapshot, conversationId)
-    else clearComposerDirty(frameDirtyKey)
-  }
-  const wasVisibleRef = useRef(visible)
-
-  // Dirty-draft bridge across Activity hides: hiding destroys the Composer's effect-managed
-  // report while the draft survives in component state, so the frame (outside the Activity
-  // boundary) re-publishes the last visible snapshot until the window wakes or is evicted.
-  // Child effects settle before parent effects, so the wake path also clears this report
-  // after the Composer's own report has been re-created — the aggregate stays truthful.
-  useEffect(() => {
-    if (visible) {
-      clearComposerDirty(frameDirtyKey)
-      return
-    }
-    const snapshot = dirtySink.current
-    if (snapshot !== null && isComposerDirtySnapshot(snapshot)) setComposerDirty(frameDirtyKey, snapshot, conversationId)
-    else clearComposerDirty(frameDirtyKey)
-    return () => clearComposerDirty(frameDirtyKey)
-  }, [visible, frameDirtyKey, conversationId, dirtySink])
-
-  // Wake refresh: kept-alive (hidden) conversations sit outside the store's visible set, so a
-  // window can wake with a stale detail snapshot; refresh silently — the timeline's SWR anchor
-  // restore keeps the reading position stable across the background refresh.
-  useEffect(() => {
-    const wasVisible = wasVisibleRef.current
-    wasVisibleRef.current = visible
-    if (!visible || wasVisible) return
-    void loadConversationDetail(conversationId, true, { silent: true })
-  }, [visible, conversationId, loadConversationDetail])
+  const dirtySink = useActivityFrameLifecycle({
+    frameDirtyKey: `conversation-window:${conversationId}`,
+    conversationId,
+    visible,
+    loadConversationDetail,
+  })
 
   return (
     <ConversationDirtySinkContext.Provider value={dirtySink}>

@@ -30,6 +30,8 @@ export interface PaletteCommandRow {
   keywords?: ReadonlyArray<string>
   target?: ResolvedTarget
   run?: () => void
+  /** Keeps dialog close auto-focus from returning to the background trigger when the command moves focus itself (e.g. composer, shortcuts modal, model picker). */
+  skipCloseAutoFocus?: boolean
 }
 
 export interface PaletteSearchHitRow {

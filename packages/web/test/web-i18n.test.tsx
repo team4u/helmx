@@ -18,7 +18,6 @@ import type { HelmxLocale } from '@helmx/protocol/browser'
 import { formatMessage, translateMessage, type MessageTable } from '../src/i18n/messages.js'
 import {
   createWebTranslator,
-  englishWebTranslator,
   webMessages,
 } from '../src/i18n/catalog.js'
 import { commonMessages } from '../src/i18n/resources/common.js'
@@ -81,7 +80,6 @@ test('translator: locale resolution, memoized identity, interpolation, missing-k
   assert.equal(en('ui.split.sideBySide'), 'Side-by-side split')
   assert.equal(zh('ui.split.sideBySide'), '并排分屏')
   assert.equal(createWebTranslator('en'), en, 'translators are memoized per locale (stable identity)')
-  assert.equal(englishWebTranslator('ui.split.closeView'), 'Close split view', 'English bridge translator defaults to en')
 
   assert.equal(formatMessage('Conversation #{id} failed: {reason}', { id: 7, reason: 'gone' }), 'Conversation #7 failed: gone')
   assert.equal(formatMessage('Keep {unknown} verbatim', { known: 'x' }), 'Keep {unknown} verbatim')

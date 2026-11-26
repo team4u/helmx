@@ -449,7 +449,7 @@
   pointer-events: none;
   color: var(--fg-subtle);
   flex-shrink: 0;
-  z-index: 1;
+  z-index: var(--z-base);
 }
 
 .input.composer-env-cwd-input {
@@ -626,6 +626,10 @@ button.attachment-chip:disabled {
   width: 18px;
   height: 18px;
   border-radius: var(--radius-xs);
+}
+
+.composer-file-input {
+  display: none;
 }
 
 .composer-textarea {

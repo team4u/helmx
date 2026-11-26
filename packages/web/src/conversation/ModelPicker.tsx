@@ -46,7 +46,7 @@ export function ModelPicker({ conversation, onReturnFocus }: ModelPickerProps) {
         level: 'error',
         title: sameModel ? t('composer.model.thinkingSwitchFailed') : t('composer.model.switchFailed'),
         body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
+        target: { kind: 'conversation', conversationId: conversation.id },
       })
     } finally {
       setPending(false)
@@ -63,7 +63,7 @@ export function ModelPicker({ conversation, onReturnFocus }: ModelPickerProps) {
         level: 'error',
         title: t('composer.model.restoreFailed'),
         body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
+        target: { kind: 'conversation', conversationId: conversation.id },
       })
     } finally {
       setPending(false)

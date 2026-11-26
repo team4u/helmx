@@ -26,16 +26,13 @@ import type {
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { createWebTranslator, type WebMessageKey } from '../i18n/catalog.js'
 import { resetStandbyDrafts } from '../conversation/standby-model.js'
-import {
-  buildSameTreeWorkspacesMap,
-  type WorkspaceConversationNode,
-} from '../conversation/workspace-file-url.js'
+import type { WorkspaceConversationNode } from '../conversation/workspace-file-url.js'
 import { ESC_ABORT_WINDOW_MS, getStoredSidebarCollapsed } from '../shell/shortcuts-model.js'
-import { authApi, setStoredToken, type ModelCatalogDefaults, type ModelDescriptor } from './api.js'
+import { setStoredToken, type ModelCatalogDefaults, type ModelDescriptor } from './api.js'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
 import { DEFAULT_WORKBENCH_TAB, isSameDrawerStack, topDrawerFrame, type DrawerFrame } from './drawer-stack-model.js'
 import { errorText } from './error-text.js'
-import { emptyLiveState, type LiveState } from './live-state.js'
+import { emptyLiveState, type LiveState, type SseCursor } from './live-state.js'
 import { resetPluginClientCache } from './plugin-client.js'
 import { StoreRequestManager } from './request-manager.js'
 import { getSessionDocState, resetSessionDocSubscriptions, retrySessionDoc, subscribeSessionDoc } from './session-docs.js'
@@ -53,37 +50,30 @@ import {
   resolveLocale,
   resolveTheme,
 } from './theme-preferences.js'
-import {
-  groupUiContributions,
-  type ActiveModal,
-  type FocusedPanel,
-  type GroupedUiSpecs,
-  type HelmxStoreValue,
-  type LocalePreference,
-  type ResolvedTarget,
-  type ThemeMode,
-  type ThemePreference,
-  type ToastNotice,
+import type {
+  ActiveModal,
+  FocusedPanel,
+  GroupedUiSpecs,
+  HelmxStoreValue,
+  LocalePreference,
+  ResolvedTarget,
+  ThemeMode,
+  ThemePreference,
+  ToastNotice,
 } from './types.js'
-import { parseLocationHash, type WorkspaceLocationState } from './url-hash-model.js'
-import type { SseCursor } from './use-sse-events.js'
-import { recomputeConversationBackgroundSlice } from './store/background-slice.js'
+import { isSameLocationState, parseLocationHash, type WorkspaceLocationState } from './url-hash-model.js'
+import { StoreAuthController } from './store/auth-controller.js'
 import {
   addChangedRecordKeys,
   addChangedStringKeys,
   applyUpdater,
-  EMPTY_BACKGROUND_INDEX,
-  EMPTY_BADGE_DOCS,
-  EMPTY_PENDING_ASKS,
-  EMPTY_PENDING_BADGE_DOCS,
   emptyPlan,
-  ESC_ABORT_NOTICE_ID,
   hasNotifyChanges,
-  isSameAskArray,
   mergeNotifyPlan,
-  shallowEqualAuth,
 } from './store/helpers.js'
+import { StoreLiveController } from './store/live-index.js'
 import { createStoreNavActions, type StoreNavActions } from './store/nav-actions.js'
+import { StoreNoticeController } from './store/notice-timers.js'
 import { createStoreRequestActions, type StoreRequestActions } from './store/requests-actions.js'
 import { StoreSubscriptionBus } from './store/subscriptions.js'
 import type {
@@ -124,46 +114,23 @@ export type {
 }
 
 const INFO_NOTICE_DURATION_MS = 6000
-const NOTICE_RESUME_GRACE_MS = 800
-const EMPTY_TREE_WORKSPACES: ReadonlyArray<WorkspaceConversationNode> = Object.freeze([])
-
-function isSameWorkspaceNodeList(
-  a: ReadonlyArray<WorkspaceConversationNode>,
-  b: ReadonlyArray<WorkspaceConversationNode>,
-): boolean {
-  if (a === b) return true
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    const x = a[i]!
-    const y = b[i]!
-    if (x.id !== y.id || x.nodeId !== y.nodeId || x.cwd !== y.cwd) return false
-  }
-  return true
-}
-
-interface NoticeTimerEntry {
-  timer: ReturnType<typeof setTimeout> | null
-  remainingMs: number
-  startedAt: number | null
-}
 
 export class HelmxExternalStore {
   readonly requests = new StoreRequestManager()
   private readonly bus = new StoreSubscriptionBus()
+  private readonly notices: StoreNoticeController
+  private readonly auth: StoreAuthController
+  private readonly live: StoreLiveController
 
   sseCursor: SseCursor | null = null
   lastSyncedLocation: WorkspaceLocationState
   pendingHistoryMode: 'push' | 'replace' | null = null
 
-  private authState: AuthSlice = {
-    authReady: false,
-    authConfigured: false,
-    authenticated: false,
-    authError: null,
-    sseConnected: false,
-    connectionError: null,
-    kernelBootId: null,
-  }
+  private readonly bootInitialLocation: WorkspaceLocationState
+  private readonly bootNeedsHomeLanding: boolean
+  private homeLandingSettled: boolean
+  private homeLandingPendingCache: boolean
+
   private prefsState: PrefsSlice
   private catalogState: CatalogSlice = {
     profiles: [],
@@ -181,86 +148,31 @@ export class HelmxExternalStore {
     profilesLoaded: false,
     assetsLoaded: false,
   }
-  private liveState: LiveState = emptyLiveState()
-  private groupedUi: GroupedUiSpecs = groupUiContributions([])
-  private pluginsUiSlice: PluginsUiSlice
-  private pluginsSnapshot: UsePluginsResult
   private hostModelsSlice: HostModelsSlice | undefined = undefined
   private modelsLoaded = false
-  private hostNodesSlice: HostNodesSlice | undefined = undefined
   private hostProfilesSlice: HostProfilesSlice | undefined = undefined
-  private summaryById = new Map<number, ConversationSummary>()
-  private workspaceNodesById = new Map<number, WorkspaceConversationNode>()
-  private treeWorkspacesByConv = new Map<number, ReadonlyArray<WorkspaceConversationNode>>()
-  private pluginById = new Map<string, PluginSummary>()
-  private pendingAsksByConv = new Map<number, AskSpec[]>()
   private artifactsState: Record<number, ArtifactMetadata[]> = {}
   private loadErrorsState: Record<string, string> = {}
   private navState: NavSlice
   private locationTargetsSlice: LocationTargetsSlice
   private workbenchSlice: WorkbenchSlice
   private locationStateCache: WorkspaceLocationState
-  private backgroundBadgeDocKeys = new Set<string>()
-  private conversationBackgroundSlice: ConversationBackgroundSlice = {
-    badgeDocs: EMPTY_BADGE_DOCS,
-    pendingBadgeDocs: EMPTY_PENDING_BADGE_DOCS,
-    snapshot: Object.freeze({ unknown: false, byConversation: EMPTY_BACKGROUND_INDEX }),
-  }
-  private noticesState: ToastNotice[] = []
   private fullSnapshotCache: HelmxStoreValue | null = null
   private batchDepth = 0
   private batchPlan: NotifyPlan | null = null
 
-  private noticeSequence = 0
-  private authCheckEpoch = 0
-  private authCheckController: AbortController | null = null
-  private readonly infoNoticeDurationMs: number
-  private readonly noticeTimers = new Map<string, NoticeTimerEntry>()
-  private logoutImpl: (() => void) | null = null
-  private readonly requestActions: StoreRequestActions
-  private readonly navActions: StoreNavActions
-
-  // Bound public methods (delegated to domain action slices)
-  readonly refreshAssets: StoreRequestActions['refreshAssets']
-  readonly syncPlugins: StoreRequestActions['syncPlugins']
-  readonly refreshNodes: StoreRequestActions['refreshNodes']
-  readonly loadConversationDetail: StoreRequestActions['loadConversationDetail']
-  readonly loadEarlierEntries: StoreRequestActions['loadEarlierEntries']
-  readonly backfillConversationEntry: StoreRequestActions['backfillConversationEntry']
-  readonly loadConversationArtifacts: StoreRequestActions['loadConversationArtifacts']
-  readonly ensurePluginDoc: StoreRequestActions['ensurePluginDoc']
-  readonly retryPluginDoc: StoreRequestActions['retryPluginDoc']
-  readonly getPluginSessionDoc: StoreRequestActions['getPluginSessionDoc']
-  readonly invokePluginAction: StoreRequestActions['invokePluginAction']
-
-  readonly applyPrimaryTarget: StoreNavActions['applyPrimaryTarget']
-  readonly setSplitTarget: StoreNavActions['setSplitTarget']
-  readonly setFocusedPanel: StoreNavActions['setFocusedPanel']
-  readonly closeSplit: StoreNavActions['closeSplit']
-  readonly setSidebarCollapsed: StoreNavActions['setSidebarCollapsed']
-  readonly toggleSidebarCollapsed: StoreNavActions['toggleSidebarCollapsed']
-  readonly openConversationDrawer: StoreNavActions['openConversationDrawer']
-  readonly openWorkbenchDrawer: StoreNavActions['openWorkbenchDrawer']
-  readonly popDrawer: StoreNavActions['popDrawer']
-  readonly truncateDrawerStack: StoreNavActions['truncateDrawerStack']
-  readonly closeAllDrawers: StoreNavActions['closeAllDrawers']
-  readonly pruneConversationFromDrawerStack: StoreNavActions['pruneConversationFromDrawerStack']
-  readonly setWorkbenchOpen: StoreNavActions['setWorkbenchOpen']
-  readonly setWorkbenchTab: StoreNavActions['setWorkbenchTab']
-  readonly setActiveModal: StoreNavActions['setActiveModal']
-  readonly openTarget: StoreNavActions['openTarget']
-  readonly openSpace: StoreNavActions['openSpace']
-  readonly setScreenParams: StoreNavActions['setScreenParams']
-  readonly applyExternalLocation: StoreNavActions['applyExternalLocation']
-  readonly performHomeLanding: StoreNavActions['performHomeLanding']
-  readonly stepHighlightedEntry: StoreNavActions['stepHighlightedEntry']
-  readonly clearEscAbortPrompt: StoreNavActions['clearEscAbortPrompt']
-  readonly confirmOrArmEscAbort: StoreNavActions['confirmOrArmEscAbort']
-
+  readonly requestActions: StoreRequestActions
+  readonly navActions: StoreNavActions
   readonly actions: HelmxStoreActions
 
-  constructor(bootLocation: WorkspaceLocationState, options?: { escAbortWindowMs?: number; infoNoticeDurationMs?: number }) {
-    this.infoNoticeDurationMs = options?.infoNoticeDurationMs ?? INFO_NOTICE_DURATION_MS
+  constructor(
+    bootLocation: WorkspaceLocationState,
+    options?: { needsHomeLanding?: boolean; escAbortWindowMs?: number; infoNoticeDurationMs?: number },
+  ) {
+    this.bootInitialLocation = bootLocation
+    this.bootNeedsHomeLanding = options?.needsHomeLanding ?? false
+    this.homeLandingSettled = !this.bootNeedsHomeLanding
+
     const themePreference = getStoredPreference()
     const localePreference = getStoredLocalePreference()
     const locale = resolveLocale(localePreference)
@@ -271,15 +183,20 @@ export class HelmxExternalStore {
       locale,
       quietNotifyEnabled: getStoredQuietNotify(),
     }
-    this.pluginsUiSlice = {
-      plugins: this.liveState.plugins,
-      uiContributions: this.liveState.uiContributions,
-      groupedUi: this.groupedUi,
-    }
-    this.pluginsSnapshot = {
-      plugins: this.liveState.plugins,
-      screens: this.groupedUi.screens,
-    }
+
+    this.notices = new StoreNoticeController({
+      infoNoticeDurationMs: options?.infoNoticeDurationMs ?? INFO_NOTICE_DURATION_MS,
+      onEmit: this.emit,
+    })
+    this.auth = new StoreAuthController({
+      onEmit: this.emit,
+      tt: (key, params) => this.tt(key, params),
+    })
+    this.live = new StoreLiveController({
+      onEmit: this.emit,
+      getLocale: () => this.prefsState.locale,
+    })
+
     const initialTop = topDrawerFrame(bootLocation.drawerStack)
     const initialWbOpen = initialTop?.kind === 'workbench'
     const initialWbTab = initialTop?.kind === 'workbench' ? initialTop.tab : DEFAULT_WORKBENCH_TAB
@@ -313,6 +230,7 @@ export class HelmxExternalStore {
       activeModal: this.navState.activeModal,
     }
     this.lastSyncedLocation = bootLocation
+    this.homeLandingPendingCache = this.computeHomeLandingPending()
 
     this.requestActions = createStoreRequestActions({
       requests: this.requests,
@@ -321,6 +239,7 @@ export class HelmxExternalStore {
       getConversationArtifactsMap: this.getConversationArtifactsMap,
       getLoadErrorsMap: this.getLoadErrorsMap,
       translate: this.translate,
+      tt: (key, params) => this.tt(key, params),
       emit: this.emit,
       patchCatalog: (patch, plan, deferEmit) => this.patchCatalog(patch, plan, deferEmit),
       updateLive: this.updateLive,
@@ -329,18 +248,6 @@ export class HelmxExternalStore {
       reportLoad: this.reportLoad,
       pushNotice: this.pushNotice,
     })
-
-    this.refreshAssets = this.requestActions.refreshAssets
-    this.syncPlugins = this.requestActions.syncPlugins
-    this.refreshNodes = this.requestActions.refreshNodes
-    this.loadConversationDetail = this.requestActions.loadConversationDetail
-    this.loadEarlierEntries = this.requestActions.loadEarlierEntries
-    this.backfillConversationEntry = this.requestActions.backfillConversationEntry
-    this.loadConversationArtifacts = this.requestActions.loadConversationArtifacts
-    this.ensurePluginDoc = this.requestActions.ensurePluginDoc
-    this.retryPluginDoc = this.requestActions.retryPluginDoc
-    this.getPluginSessionDoc = this.requestActions.getPluginSessionDoc
-    this.invokePluginAction = this.requestActions.invokePluginAction
 
     this.navActions = createStoreNavActions(
       {
@@ -361,36 +268,12 @@ export class HelmxExternalStore {
         patchNav: (patch, plan, deferEmit) => this.patchNav(patch, plan, deferEmit),
         setNotices: this.setNotices,
         pushNotice: this.pushNotice,
-        loadEarlierEntries: this.loadEarlierEntries,
+        loadEarlierEntries: this.requestActions.loadEarlierEntries,
       },
       { escAbortWindowMs: options?.escAbortWindowMs ?? ESC_ABORT_WINDOW_MS },
     )
 
     this.navActions.rememberSpaceTarget(bootLocation.primaryTarget)
-
-    this.applyPrimaryTarget = this.navActions.applyPrimaryTarget
-    this.setSplitTarget = this.navActions.setSplitTarget
-    this.setFocusedPanel = this.navActions.setFocusedPanel
-    this.closeSplit = this.navActions.closeSplit
-    this.setSidebarCollapsed = this.navActions.setSidebarCollapsed
-    this.toggleSidebarCollapsed = this.navActions.toggleSidebarCollapsed
-    this.openConversationDrawer = this.navActions.openConversationDrawer
-    this.openWorkbenchDrawer = this.navActions.openWorkbenchDrawer
-    this.popDrawer = this.navActions.popDrawer
-    this.truncateDrawerStack = this.navActions.truncateDrawerStack
-    this.closeAllDrawers = this.navActions.closeAllDrawers
-    this.pruneConversationFromDrawerStack = this.navActions.pruneConversationFromDrawerStack
-    this.setWorkbenchOpen = this.navActions.setWorkbenchOpen
-    this.setWorkbenchTab = this.navActions.setWorkbenchTab
-    this.setActiveModal = this.navActions.setActiveModal
-    this.openTarget = this.navActions.openTarget
-    this.openSpace = this.navActions.openSpace
-    this.setScreenParams = this.navActions.setScreenParams
-    this.applyExternalLocation = this.navActions.applyExternalLocation
-    this.performHomeLanding = this.navActions.performHomeLanding
-    this.stepHighlightedEntry = this.navActions.stepHighlightedEntry
-    this.clearEscAbortPrompt = this.navActions.clearEscAbortPrompt
-    this.confirmOrArmEscAbort = this.navActions.confirmOrArmEscAbort
 
     this.actions = {
       setTheme: this.setTheme,
@@ -401,57 +284,51 @@ export class HelmxExternalStore {
       setQuietNotify: this.setQuietNotify,
       checkAuth: this.checkAuth,
       onAuthenticated: this.onAuthenticated,
-      logout: () => {
-        if (this.logoutImpl !== null) this.logoutImpl()
-        else {
-          this.prepareLogoutHistoryReset()
-          this.finishLogoutStateReset()
-        }
-      },
-      refreshAssets: this.refreshAssets,
-      syncPlugins: this.syncPlugins,
-      refreshNodes: this.refreshNodes,
-      loadConversationDetail: this.loadConversationDetail,
-      loadEarlierEntries: this.loadEarlierEntries,
-      backfillConversationEntry: this.backfillConversationEntry,
-      loadConversationArtifacts: this.loadConversationArtifacts,
-      ensurePluginDoc: this.ensurePluginDoc,
-      retryPluginDoc: this.retryPluginDoc,
+      logout: this.logout,
+      refreshAssets: this.requestActions.refreshAssets,
+      syncPlugins: this.requestActions.syncPlugins,
+      refreshNodes: this.requestActions.refreshNodes,
+      loadConversationDetail: this.requestActions.loadConversationDetail,
+      loadEarlierEntries: this.requestActions.loadEarlierEntries,
+      backfillConversationEntry: this.requestActions.backfillConversationEntry,
+      loadConversationArtifacts: this.requestActions.loadConversationArtifacts,
+      ensurePluginDoc: this.requestActions.ensurePluginDoc,
+      retryPluginDoc: this.requestActions.retryPluginDoc,
       subscribeSessionDoc,
       getSessionDocState,
-      getPluginSessionDoc: this.getPluginSessionDoc,
+      getPluginSessionDoc: this.requestActions.getPluginSessionDoc,
       retrySessionDoc,
-      openTarget: this.openTarget,
-      closeSplit: this.closeSplit,
-      setFocusedPanel: this.setFocusedPanel,
-      setSidebarCollapsed: this.setSidebarCollapsed,
-      toggleSidebarCollapsed: this.toggleSidebarCollapsed,
-      setScreenParams: this.setScreenParams,
-      setWorkbenchOpen: this.setWorkbenchOpen,
-      setWorkbenchTab: this.setWorkbenchTab,
-      openConversationDrawer: this.openConversationDrawer,
-      openWorkbenchDrawer: this.openWorkbenchDrawer,
-      popDrawer: this.popDrawer,
-      truncateDrawerStack: this.truncateDrawerStack,
-      closeAllDrawers: this.closeAllDrawers,
-      openSpace: this.openSpace,
-      setActiveModal: this.setActiveModal,
+      openTarget: this.navActions.openTarget,
+      closeSplit: this.navActions.closeSplit,
+      setFocusedPanel: this.navActions.setFocusedPanel,
+      setSidebarCollapsed: this.navActions.setSidebarCollapsed,
+      toggleSidebarCollapsed: this.navActions.toggleSidebarCollapsed,
+      setScreenParams: this.navActions.setScreenParams,
+      setWorkbenchOpen: this.navActions.setWorkbenchOpen,
+      setWorkbenchTab: this.navActions.setWorkbenchTab,
+      openConversationDrawer: this.navActions.openConversationDrawer,
+      openWorkbenchDrawer: this.navActions.openWorkbenchDrawer,
+      popDrawer: this.navActions.popDrawer,
+      truncateDrawerStack: this.navActions.truncateDrawerStack,
+      closeAllDrawers: this.navActions.closeAllDrawers,
+      openSpace: this.navActions.openSpace,
+      setActiveModal: this.navActions.setActiveModal,
       dismissNotice: this.dismissNotice,
       pauseNoticeTimer: this.pauseNoticeTimer,
       resumeNoticeTimer: this.resumeNoticeTimer,
       pushNotice: this.pushNotice,
-      invokePluginAction: this.invokePluginAction,
+      invokePluginAction: this.requestActions.invokePluginAction,
     }
   }
 
-  bindLogout(fn: () => void): void {
-    this.logoutImpl = fn
+  bindLogout(fn: () => void): () => void {
+    return this.auth.bindLogout(fn)
   }
 
   dispose(): void {
-    this.cancelInFlightAuthCheck()
+    this.auth.cancelInFlightAuthCheck()
     this.navActions.clearEscTimer()
-    this.clearAllNoticeTimers()
+    this.notices.clearAllTimers()
     this.requests.dispose()
   }
 
@@ -497,9 +374,9 @@ export class HelmxExternalStore {
 
   // ---- Cached Snapshot Getters ----------------------------------------------
 
-  getAuthSlice = (): AuthSlice => this.authState
-  getAuthenticated = (): boolean => this.authState.authenticated
-  getSseConnected = (): boolean => this.authState.sseConnected
+  getAuthSlice = (): AuthSlice => this.auth.getAuthSlice()
+  getAuthenticated = (): boolean => this.auth.getAuthenticated()
+  getSseConnected = (): boolean => this.auth.getSseConnected()
   getPrefsSlice = (): PrefsSlice => this.prefsState
   getTheme = (): ThemeMode => this.prefsState.theme
   getLocale = (): HelmxLocale => this.prefsState.locale
@@ -508,25 +385,25 @@ export class HelmxExternalStore {
   getModels = (): ModelDescriptor[] => this.catalogState.models
   getModelDefaults = (): ModelCatalogDefaults => this.catalogState.modelDefaults
   getHostModelsSlice = (): HostModelsSlice | undefined => this.hostModelsSlice
-  getHostNodesSlice = (): HostNodesSlice | undefined => this.hostNodesSlice
+  getHostNodesSlice = (): HostNodesSlice | undefined => this.live.getHostNodesSlice()
   getHostProfilesSlice = (): HostProfilesSlice | undefined => this.hostProfilesSlice
   getProviders = (): ProviderConfig[] => this.catalogState.providers
   getCredentials = (): CredentialSummary[] => this.catalogState.credentials
   getSkills = (): SkillSummary[] => this.catalogState.skills
   getActionsList = (): ActionManifest[] => this.catalogState.actions
-  getLiveState = (): LiveState => this.liveState
-  getConversations = (): ConversationSummary[] => this.liveState.conversations
-  getConversationDetailsMap = (): Record<number, ConversationDetail> => this.liveState.conversationDetails
-  getConversationLivesMap = (): Record<number, ConversationLive> => this.liveState.conversationLives
+  getLiveState = (): LiveState => this.live.getLiveState()
+  getConversations = (): ConversationSummary[] => this.live.getConversations()
+  getConversationDetailsMap = (): Record<number, ConversationDetail> => this.live.getConversationDetailsMap()
+  getConversationLivesMap = (): Record<number, ConversationLive> => this.live.getConversationLivesMap()
   getConversationArtifactsMap = (): Record<number, ArtifactMetadata[]> => this.artifactsState
-  getPendingAsks = (): AskSpec[] => this.liveState.pendingAsks
-  getPlugins = (): PluginSummary[] => this.liveState.plugins
-  getPluginSummary = (pluginId: string): PluginSummary | undefined => this.pluginById.get(pluginId)
-  getGroupedUi = (): GroupedUiSpecs => this.groupedUi
-  getPluginsUiSlice = (): PluginsUiSlice => this.pluginsUiSlice
-  getPluginsSnapshot = (): UsePluginsResult => this.pluginsSnapshot
-  getPluginDocsMap = (): Record<string, unknown> => this.liveState.pluginDocs
-  getNodes = (): NodeInfo[] => this.liveState.nodes
+  getPendingAsks = (): AskSpec[] => this.live.getPendingAsks()
+  getPlugins = (): PluginSummary[] => this.live.getPlugins()
+  getPluginSummary = (pluginId: string): PluginSummary | undefined => this.live.getPluginSummary(pluginId)
+  getGroupedUi = (): GroupedUiSpecs => this.live.getGroupedUi()
+  getPluginsUiSlice = (): PluginsUiSlice => this.live.getPluginsUiSlice()
+  getPluginsSnapshot = (): UsePluginsResult => this.live.getPluginsSnapshot()
+  getPluginDocsMap = (): Record<string, unknown> => this.live.getPluginDocsMap()
+  getNodes = (): NodeInfo[] => this.live.getNodes()
   getLoadErrorsMap = (): Record<string, string> => this.loadErrorsState
   getNavSlice = (): NavSlice => this.navState
   getLocationTargetsSlice = (): LocationTargetsSlice => this.locationTargetsSlice
@@ -539,59 +416,46 @@ export class HelmxExternalStore {
   getWorkbenchSlice = (): WorkbenchSlice => this.workbenchSlice
   getActiveModal = (): ActiveModal => this.navState.activeModal
   getLocationState = (): WorkspaceLocationState => this.locationStateCache
-  getConversationBackgroundSlice = (): ConversationBackgroundSlice => this.conversationBackgroundSlice
+  getConversationBackgroundSlice = (): ConversationBackgroundSlice => this.live.getConversationBackgroundSlice()
   getHighlightedEntry = (): { conversationId: number; entryId: string } | null => this.navState.highlightedEntry
-  getNotices = (): ToastNotice[] => this.noticesState
+  getHomeLandingPending = (): boolean => this.homeLandingPendingCache
+  getNotices = (): ToastNotice[] => this.notices.getNotices()
 
-  getConversationLive = (id: number): ConversationLive | undefined => this.liveState.conversationLives[id]
-  getConversationDetail = (id: number): ConversationDetail | undefined => this.liveState.conversationDetails[id]
-  getConversationSummary = (id: number): ConversationSummary | undefined => this.summaryById.get(id)
+  getConversationLive = (id: number): ConversationLive | undefined => this.live.getConversationLive(id)
+  getConversationDetail = (id: number): ConversationDetail | undefined => this.live.getConversationDetail(id)
+  getConversationSummary = (id: number): ConversationSummary | undefined => this.live.getConversationSummary(id)
   getConversationTreeWorkspaces = (id: number): ReadonlyArray<WorkspaceConversationNode> =>
-    this.treeWorkspacesByConv.get(id) ?? EMPTY_TREE_WORKSPACES
+    this.live.getConversationTreeWorkspaces(id)
   getConversationArtifacts = (id: number): ArtifactMetadata[] | undefined => this.artifactsState[id]
-  getConversationPendingAsks = (id: number): AskSpec[] => this.pendingAsksByConv.get(id) ?? EMPTY_PENDING_ASKS
+  getConversationPendingAsks = (id: number): AskSpec[] => this.live.getConversationPendingAsks(id)
   getHighlightedEntryForConversation = (id: number): { conversationId: number; entryId: string } | null =>
     this.navState.highlightedEntry?.conversationId === id ? this.navState.highlightedEntry : null
   getLoadError = (key: string): string | undefined => this.loadErrorsState[key]
-  hasPluginDoc = (docKey: string): boolean => Object.hasOwn(this.liveState.pluginDocs, docKey)
-  getPluginDoc = (docKey: string): unknown =>
-    Object.hasOwn(this.liveState.pluginDocs, docKey) ? this.liveState.pluginDocs[docKey] : undefined
+  hasPluginDoc = (docKey: string): boolean => this.live.hasPluginDoc(docKey)
+  getPluginDoc = (docKey: string): unknown => this.live.getPluginDoc(docKey)
 
   getSnapshot = (): HelmxStoreValue => {
     if (this.fullSnapshotCache !== null) return this.fullSnapshotCache
     const next: HelmxStoreValue = {
-      ...this.liveState,
-      ...this.authState,
+      ...this.live.getLiveSnapshotFields(),
+      ...this.auth.getAuthSlice(),
       ...this.prefsState,
-      ...this.catalogState,
-      groupedUi: this.groupedUi,
+      profiles: this.catalogState.profiles,
+      profilesLoaded: this.catalogState.profilesLoaded,
+      assetsLoaded: this.catalogState.assetsLoaded,
+      models: this.catalogState.models,
+      providers: this.catalogState.providers,
+      credentials: this.catalogState.credentials,
+      skills: this.catalogState.skills,
+      actions: this.catalogState.actions,
       conversationArtifacts: this.artifactsState,
       loadErrors: this.loadErrorsState,
       ...this.navState,
-      notices: this.noticesState,
+      notices: this.notices.getNotices(),
       ...this.actions,
     }
     this.fullSnapshotCache = next
     return next
-  }
-
-  private recomputeConversationBackground(
-    plan: NotifyPlan,
-    triggers: { panelsOrConversations: boolean; locale: boolean; changedDocKeys?: ReadonlySet<string> },
-  ): void {
-    const result = recomputeConversationBackgroundSlice({
-      prevSlice: this.conversationBackgroundSlice,
-      prevBadgeDocKeys: this.backgroundBadgeDocKeys,
-      workbenchPanels: this.groupedUi.workbenchPanels,
-      conversations: this.liveState.conversations,
-      pluginDocs: this.liveState.pluginDocs,
-      locale: this.prefsState.locale,
-      triggers,
-    })
-    this.backgroundBadgeDocKeys = result.badgeDocKeys
-    if (!result.changed) return
-    this.conversationBackgroundSlice = result.slice
-    plan.domains.add('conversationBackground')
   }
 
   // ---- Atomic Commit / Notification Engine ----------------------------------
@@ -630,27 +494,19 @@ export class HelmxExternalStore {
   // ---- Internal Mutators (also form the hydration surface for test/helpers/store.ts) ----
 
   private patchAuth(patch: Partial<AuthSlice>, plan = emptyPlan(), deferEmit = false): void {
-    const prev = this.authState
-    const next: AuthSlice = { ...prev, ...patch }
-    if (shallowEqualAuth(prev, next)) return
-    this.authState = next
-    plan.domains.add('auth')
-    plan.domains.add('all')
-    if (next.authenticated !== prev.authenticated) plan.domains.add('authenticated')
-    if (next.sseConnected !== prev.sseConnected) plan.domains.add('sseConnected')
-    if (!deferEmit) this.emit(plan)
+    this.auth.patchAuth(patch, plan, deferEmit)
   }
 
   setSseConnected = (update: StoreUpdater<boolean>): void => {
-    this.patchAuth({ sseConnected: applyUpdater(this.authState.sseConnected, update) })
+    this.auth.setSseConnected(update)
   }
 
   setConnectionError = (update: StoreUpdater<string | null>): void => {
-    this.patchAuth({ connectionError: applyUpdater(this.authState.connectionError, update) })
+    this.auth.setConnectionError(update)
   }
 
   setKernelBootId = (update: StoreUpdater<string | null>): void => {
-    this.patchAuth({ kernelBootId: applyUpdater(this.authState.kernelBootId, update) })
+    this.auth.setKernelBootId(update)
   }
 
   private patchPrefs(patch: Partial<PrefsSlice>, plan = emptyPlan()): void {
@@ -671,7 +527,7 @@ export class HelmxExternalStore {
     if (next.theme !== prev.theme || next.themePreference !== prev.themePreference) plan.domains.add('theme')
     if (next.locale !== prev.locale || next.localePreference !== prev.localePreference) plan.domains.add('locale')
     if (next.locale !== prev.locale) {
-      this.recomputeConversationBackground(plan, { panelsOrConversations: false, locale: true })
+      this.live.recomputeBackground(plan, { panelsOrConversations: false, locale: true })
     }
     if (next.quietNotifyEnabled !== prev.quietNotifyEnabled) plan.domains.add('quietNotify')
     this.emit(plan)
@@ -749,182 +605,7 @@ export class HelmxExternalStore {
   }
 
   updateLive = (update: (state: LiveState) => LiveState, plan = emptyPlan(), deferEmit = false): void => {
-    const prev = this.liveState
-    const next = update(prev)
-    if (next === prev) return
-    this.liveState = next
-
-    if (next.conversationLives !== prev.conversationLives) {
-      addChangedRecordKeys(prev.conversationLives, next.conversationLives, plan.liveIds)
-      if (plan.liveIds.size > 0) {
-        plan.domains.add('conversationLivesMap')
-        plan.domains.add('all')
-      }
-    }
-    if (next.conversationDetails !== prev.conversationDetails) {
-      addChangedRecordKeys(prev.conversationDetails, next.conversationDetails, plan.detailIds)
-      if (plan.detailIds.size > 0) {
-        plan.domains.add('conversationDetailsMap')
-        plan.domains.add('all')
-      }
-    }
-    const conversationsChanged = next.conversations !== prev.conversations
-    if (conversationsChanged) {
-      const nextMap = new Map<number, ConversationSummary>()
-      for (const conv of next.conversations) nextMap.set(conv.id, conv)
-      for (const [id, prevConv] of this.summaryById) {
-        if (nextMap.get(id) !== prevConv) plan.summaryIds.add(id)
-      }
-      for (const [id, nextConv] of nextMap) {
-        if (this.summaryById.get(id) !== nextConv) plan.summaryIds.add(id)
-      }
-      this.summaryById = nextMap
-      plan.domains.add('conversations')
-      plan.domains.add('all')
-
-      let topologyChanged = next.conversations.length !== this.workspaceNodesById.size
-      if (!topologyChanged) {
-        for (const conv of next.conversations) {
-          const prevNode = this.workspaceNodesById.get(conv.id)
-          const nextNodeId = conv.nodeId ?? 'local'
-          const nextCwd = typeof conv.cwd === 'string' ? conv.cwd : ''
-          if (
-            prevNode === undefined ||
-            prevNode.nodeId !== nextNodeId ||
-            prevNode.cwd !== nextCwd ||
-            prevNode.parentConversationId !== conv.parentConversationId
-          ) {
-            topologyChanged = true
-            break
-          }
-        }
-      }
-      if (topologyChanged) {
-        const nextNodesById = new Map<number, WorkspaceConversationNode>()
-        const nextNodes: WorkspaceConversationNode[] = []
-        for (const conv of next.conversations) {
-          const node: WorkspaceConversationNode = {
-            id: conv.id,
-            nodeId: conv.nodeId ?? 'local',
-            cwd: typeof conv.cwd === 'string' ? conv.cwd : '',
-            ...(conv.parentConversationId !== undefined
-              ? { parentConversationId: conv.parentConversationId }
-              : {}),
-          }
-          nextNodesById.set(conv.id, node)
-          nextNodes.push(node)
-        }
-        const nextTreeMap = buildSameTreeWorkspacesMap(nextNodes)
-        const groupCache = new Map<
-          ReadonlyArray<WorkspaceConversationNode>,
-          ReadonlyArray<WorkspaceConversationNode>
-        >()
-        for (const [id, nextList] of nextTreeMap) {
-          if (nextList.length === 0) {
-            if (nextList !== EMPTY_TREE_WORKSPACES) {
-              nextTreeMap.set(id, EMPTY_TREE_WORKSPACES)
-            }
-            continue
-          }
-          let stable = groupCache.get(nextList)
-          if (stable === undefined) {
-            const prevList = this.treeWorkspacesByConv.get(id)
-            stable = prevList !== undefined && isSameWorkspaceNodeList(prevList, nextList) ? prevList : nextList
-            groupCache.set(nextList, stable)
-          }
-          if (stable !== nextList) {
-            nextTreeMap.set(id, stable)
-          }
-        }
-        this.workspaceNodesById = nextNodesById
-        this.treeWorkspacesByConv = nextTreeMap
-        plan.domains.add('workspaceTopology')
-      }
-    }
-    if (next.pendingAsks !== prev.pendingAsks) {
-      const nextByConv = new Map<number, AskSpec[]>()
-      for (const ask of next.pendingAsks) {
-        const list = nextByConv.get(ask.conversationId)
-        if (list === undefined) nextByConv.set(ask.conversationId, [ask])
-        else list.push(ask)
-      }
-      for (const [convId, prevList] of this.pendingAsksByConv) {
-        const nextList = nextByConv.get(convId)
-        if (nextList === undefined) {
-          plan.pendingAskIds.add(convId)
-        } else if (isSameAskArray(prevList, nextList)) {
-          nextByConv.set(convId, prevList)
-        } else {
-          plan.pendingAskIds.add(convId)
-        }
-      }
-      for (const convId of nextByConv.keys()) {
-        if (!this.pendingAsksByConv.has(convId)) plan.pendingAskIds.add(convId)
-      }
-      this.pendingAsksByConv = nextByConv
-      plan.domains.add('pendingAsks')
-      plan.domains.add('asks')
-      plan.domains.add('all')
-    }
-    if (next.plugins !== prev.plugins) {
-      const nextPluginMap = new Map<string, PluginSummary>()
-      for (const plugin of next.plugins) nextPluginMap.set(plugin.id, plugin)
-      for (const [id, prevPlugin] of this.pluginById) {
-        if (nextPluginMap.get(id) !== prevPlugin) plan.pluginIds.add(id)
-      }
-      for (const [id, nextPlugin] of nextPluginMap) {
-        if (this.pluginById.get(id) !== nextPlugin) plan.pluginIds.add(id)
-      }
-      this.pluginById = nextPluginMap
-      plan.domains.add('plugins')
-      plan.domains.add('pluginsUi')
-      plan.domains.add('all')
-    }
-    const uiChanged = next.uiContributions !== prev.uiContributions
-    if (uiChanged) {
-      this.groupedUi = groupUiContributions(next.uiContributions)
-      plan.domains.add('groupedUi')
-      plan.domains.add('pluginsUi')
-      plan.domains.add('all')
-    }
-    if (next.plugins !== prev.plugins || uiChanged) {
-      this.pluginsUiSlice = {
-        plugins: next.plugins,
-        uiContributions: next.uiContributions,
-        groupedUi: this.groupedUi,
-      }
-      this.pluginsSnapshot = {
-        plugins: next.plugins,
-        screens: this.groupedUi.screens,
-      }
-    }
-    if (next.pluginDocs !== prev.pluginDocs) {
-      addChangedStringKeys(prev.pluginDocs, next.pluginDocs, plan.pluginDocKeys)
-      if (plan.pluginDocKeys.size > 0) {
-        plan.domains.add('pluginDocsMap')
-        plan.domains.add('all')
-      }
-    }
-    if (conversationsChanged || uiChanged || plan.pluginDocKeys.size > 0) {
-      this.recomputeConversationBackground(plan, {
-        panelsOrConversations: conversationsChanged || uiChanged,
-        locale: false,
-        changedDocKeys: plan.pluginDocKeys,
-      })
-    }
-    if (next.nodes !== prev.nodes) {
-      plan.domains.add('nodes')
-      plan.domains.add('all')
-    }
-    if (
-      next.nodesLoaded !== prev.nodesLoaded ||
-      (next.nodesLoaded && next.nodes !== prev.nodes)
-    ) {
-      this.hostNodesSlice = next.nodesLoaded ? next.nodes : undefined
-      plan.domains.add('hostNodes')
-      plan.domains.add('all')
-    }
-    if (!deferEmit) this.emit(plan)
+    this.live.updateLive(update, plan, deferEmit)
   }
 
   setConversationArtifacts = (
@@ -974,13 +655,26 @@ export class HelmxExternalStore {
     plan = emptyPlan(),
     deferEmit = false,
   ): void => {
-    const prev = this.noticesState
-    const next = applyUpdater(prev, update)
-    if (next === prev) return
-    this.noticesState = next
-    plan.domains.add('notices')
-    plan.domains.add('all')
-    if (!deferEmit) this.emit(plan)
+    this.notices.setNotices(update, plan, deferEmit)
+  }
+
+  private computeHomeLandingPending(): boolean {
+    if (this.homeLandingSettled || !this.bootNeedsHomeLanding) return false
+    return isSameLocationState(this.locationStateCache, this.bootInitialLocation)
+  }
+
+  settleHomeLanding = (): void => {
+    if (this.homeLandingSettled) return
+    this.runInBatch(() => {
+      this.homeLandingSettled = true
+      if (this.homeLandingPendingCache) {
+        this.homeLandingPendingCache = false
+        const plan = emptyPlan()
+        plan.domains.add('homeLanding')
+        this.emit(plan)
+      }
+      this.navActions.performHomeLanding(this.bootInitialLocation)
+    })
   }
 
   private patchNav(patch: Partial<NavSlice>, plan = emptyPlan(), deferEmit = false): void {
@@ -1059,6 +753,11 @@ export class HelmxExternalStore {
         activeModal: next.activeModal,
       }
       plan.domains.add('locationState')
+      const nextPending = this.computeHomeLandingPending()
+      if (nextPending !== this.homeLandingPendingCache) {
+        this.homeLandingPendingCache = nextPending
+        plan.domains.add('homeLanding')
+      }
     }
     if (highlightChanged) {
       plan.domains.add('highlightedEntry')
@@ -1107,11 +806,8 @@ export class HelmxExternalStore {
       this.pushNotice({
         type: 'notification',
         level: 'warning',
-        title: this.translate({ en: 'Notifications unsupported in this browser', 'zh-CN': '当前浏览器不支持通知' }),
-        body: this.translate({
-          en: 'The browser notification API is unavailable, so background notification alerts cannot be enabled.',
-          'zh-CN': '浏览器通知 API 不可用，无法开启后台通知提醒。',
-        }),
+        title: this.tt('shell.notify.unsupportedTitle'),
+        body: this.tt('shell.notify.unsupportedBody'),
       })
       return
     }
@@ -1119,11 +815,8 @@ export class HelmxExternalStore {
       this.pushNotice({
         type: 'notification',
         level: 'warning',
-        title: this.translate({ en: 'Browser notification permission not granted', 'zh-CN': '浏览器通知权限未授予' }),
-        body: this.translate({
-          en: 'Allow notifications in the browser site settings, then enable background notifications again.',
-          'zh-CN': '请在浏览器站点设置中允许通知后重新开启。',
-        }),
+        title: this.tt('shell.notify.permissionDeniedTitle'),
+        body: this.tt('shell.notify.permissionDeniedBody'),
       })
       return
     }
@@ -1133,120 +826,38 @@ export class HelmxExternalStore {
 
   // ---- Notices & Auth & Logout ----------------------------------------------
 
-  private clearNoticeTimer(id: string): void {
-    const entry = this.noticeTimers.get(id)
-    if (entry === undefined) return
-    if (entry.timer !== null) clearTimeout(entry.timer)
-    this.noticeTimers.delete(id)
-  }
-
-  private clearAllNoticeTimers(): void {
-    for (const entry of this.noticeTimers.values()) {
-      if (entry.timer !== null) clearTimeout(entry.timer)
-    }
-    this.noticeTimers.clear()
-  }
-
-  private scheduleNoticeTimer(id: string, delayMs: number): void {
-    this.clearNoticeTimer(id)
-    const entry: NoticeTimerEntry = {
-      timer: null,
-      remainingMs: delayMs,
-      startedAt: Date.now(),
-    }
-    entry.timer = setTimeout(() => {
-      this.noticeTimers.delete(id)
-      this.dismissNotice(id)
-    }, delayMs)
-    this.noticeTimers.set(id, entry)
-  }
-
   dismissNotice = (id: string): void => {
-    this.clearNoticeTimer(id)
-    if (!this.noticesState.some((item) => item.id === id)) return
-    this.setNotices((prev) => prev.filter((notice) => notice.id !== id))
+    this.notices.dismissNotice(id)
   }
 
   pauseNoticeTimer = (id: string): void => {
-    const entry = this.noticeTimers.get(id)
-    if (entry === undefined || entry.timer === null) return
-    clearTimeout(entry.timer)
-    entry.timer = null
-    const elapsed = entry.startedAt !== null ? Math.max(0, Date.now() - entry.startedAt) : 0
-    const minGrace = Math.min(this.infoNoticeDurationMs, NOTICE_RESUME_GRACE_MS)
-    entry.remainingMs = Math.max(minGrace, entry.remainingMs - elapsed)
-    entry.startedAt = null
+    this.notices.pauseNoticeTimer(id)
   }
 
   resumeNoticeTimer = (id: string): void => {
-    const entry = this.noticeTimers.get(id)
-    if (entry === undefined || entry.timer !== null) return
-    if (!this.noticesState.some((item) => item.id === id)) {
-      this.noticeTimers.delete(id)
-      return
-    }
-    this.scheduleNoticeTimer(id, entry.remainingMs)
+    this.notices.resumeNoticeTimer(id)
   }
 
   pushNotice = (notice: Omit<ToastNotice, 'id' | 'createdAt'>): void => {
-    const id = `notice-${++this.noticeSequence}`
-    for (const existing of this.noticesState) {
-      if (existing.title === notice.title && existing.body === notice.body) {
-        this.clearNoticeTimer(existing.id)
-      }
-    }
-    this.setNotices((prev) => [
-      ...prev.filter((item) => item.title !== notice.title || item.body !== notice.body),
-      { ...notice, id, createdAt: Date.now() },
-    ])
-    if (notice.level === 'info') {
-      this.scheduleNoticeTimer(id, this.infoNoticeDurationMs)
-    }
+    this.notices.pushNotice(notice)
   }
 
-  private cancelInFlightAuthCheck(): void {
-    this.authCheckEpoch += 1
-    this.authCheckController?.abort()
-    this.authCheckController = null
-  }
+  checkAuth = (): Promise<void> => this.auth.checkAuth()
 
-  checkAuth = async (): Promise<void> => {
-    this.cancelInFlightAuthCheck()
-    const epoch = this.authCheckEpoch
-    const controller = new AbortController()
-    this.authCheckController = controller
-    this.patchAuth({ authError: null })
-    try {
-      const status = await authApi.status({ signal: controller.signal })
-      if (epoch !== this.authCheckEpoch || controller.signal.aborted) return
-      this.patchAuth({ authConfigured: status.configured, authenticated: status.authenticated, authReady: true })
-    } catch (error) {
-      if (epoch !== this.authCheckEpoch || controller.signal.aborted) return
-      this.patchAuth({
-        authReady: true,
-        authError: this.translate({
-          en: `Cannot connect to the Helmx kernel: ${errorText(error)}`,
-          'zh-CN': `无法连接 Helmx 内核：${errorText(error)}`,
-        }),
-      })
-    } finally {
-      if (this.authCheckController === controller) {
-        this.authCheckController = null
-      }
-    }
-  }
+  onAuthenticated = (token: string): Promise<void> => this.auth.onAuthenticated(token)
 
-  onAuthenticated = async (token: string): Promise<void> => {
-    this.cancelInFlightAuthCheck()
-    setStoredToken(token)
-    this.patchAuth({ authConfigured: true, authError: null, authenticated: true })
+  logout = (): void => {
+    this.auth.logout(() => {
+      this.prepareLogoutHistoryReset()
+      this.finishLogoutStateReset()
+    })
   }
 
   /** Resets non-URL timers and caches before the provider resets window.history. */
   prepareLogoutHistoryReset(): void {
-    this.cancelInFlightAuthCheck()
+    this.auth.cancelInFlightAuthCheck()
     this.navActions.clearEscTimer()
-    this.clearAllNoticeTimers()
+    this.notices.clearAllTimers()
     this.requests.resetOnLogout()
     this.sseCursor = null
     resetStandbyDrafts()
@@ -1259,7 +870,7 @@ export class HelmxExternalStore {
 
   /** Clears all reactive store slices in one atomic batch on logout. */
   finishLogoutStateReset(): void {
-    this.cancelInFlightAuthCheck()
+    this.auth.cancelInFlightAuthCheck()
     const plan = emptyPlan()
     this.patchAuth({ authenticated: false, sseConnected: false, connectionError: null }, plan, true)
     this.navActions.resetSpaceMemory({ settings: { kind: 'profiles' } })
@@ -1281,9 +892,7 @@ export class HelmxExternalStore {
     this.updateLive(emptyLiveState, plan, true)
     this.setConversationArtifacts({}, plan, true)
     this.setLoadErrors({}, plan, true)
-    if (this.noticesState.some((item) => item.id === ESC_ABORT_NOTICE_ID)) {
-      this.setNotices((prev) => prev.filter((item) => item.id !== ESC_ABORT_NOTICE_ID), plan, true)
-    }
+    this.notices.clearEscAbortNotice(plan, true)
     this.patchCatalog(
       {
         profilesLoaded: false,

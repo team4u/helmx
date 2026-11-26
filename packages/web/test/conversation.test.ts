@@ -7,7 +7,10 @@ import { test } from 'node:test'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
 import { createTimelineToolCallsStore } from '@helmx/plugin-client'
 import { assetsApi, conversationsApi, searchApi, ApiClientError } from '../src/lib/api.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import { collectSubtreeIds } from '../src/conversation/ancestry-model.js'
+
+const enT = createWebTranslator('en')
 import {
   archiveBatchNotice,
   patchConversationArchived,
@@ -1418,7 +1421,7 @@ test('patchConversationsArchived 汇总批量部分失败，archiveBatchNotice �
       rejected: 1,
       firstError: '会话正在更新',
     })
-    assert.deepEqual(archiveBatchNotice(true, outcome), {
+    assert.deepEqual(archiveBatchNotice(true, outcome, enT), {
       type: 'notification',
       level: 'warning',
       title: 'Bulk Archive partially failed',
@@ -1456,19 +1459,19 @@ test('bulkDeleteConversations 单次 bulk-delete 请求并如实聚合逐项结�
     assert.equal(requests[0]?.method, 'POST')
     assert.ok(requests[0]?.url.endsWith('/api/conversations/bulk-delete'))
     assert.deepEqual(requests[0]?.body, { ids: [7, 9, 1] })
-    assert.deepEqual(bulkDeleteNotice(outcome), {
+    assert.deepEqual(bulkDeleteNotice(outcome, enT), {
       type: 'notification',
       level: 'warning',
       title: 'Bulk delete partially failed',
       body: 'Deleted 2, failed 1 (conversation_managed_by_plugin: managed by builtin:swarm)',
     })
-    assert.deepEqual(bulkDeleteNotice({ attempted: 2, deleted: 2, failed: 0 }), {
+    assert.deepEqual(bulkDeleteNotice({ attempted: 2, deleted: 2, failed: 0 }, enT), {
       type: 'notification',
       level: 'info',
       title: 'Bulk delete completed',
       body: 'Deleted 2 conversations',
     })
-    assert.equal(bulkDeleteNotice({ attempted: 1, deleted: 0, failed: 1, firstError: 'not_found: gone' }).level, 'error')
+    assert.equal(bulkDeleteNotice({ attempted: 1, deleted: 0, failed: 1, firstError: 'not_found: gone' }, enT).level, 'error')
   } finally {
     globalThis.fetch = originalFetch
   }

@@ -17,13 +17,11 @@ import {
 import {
   getStoredPreference,
   getStoredQuietNotify,
-  getStoredLocale,
   getStoredLocalePreference,
   getSystemTheme,
   nextThemePreference,
   persistQuietNotify,
   persistThemePreference,
-  persistLocale,
   persistLocalePreference,
   QUIET_NOTIFY_STORAGE_KEY,
   resolveBrowserLocale,
@@ -430,23 +428,13 @@ test('theme-preferences: quiet-notify toggle read/write and storage-failure-safe
 
 test('theme-preferences: UI language preference read/write, browser-default resolution and initial locale resolution', { timeout: 60_000 }, () => {
   const storage = createMemoryStorage()
-  // no stored preference: undefined (the caller falls back to the browser default)
-  assert.equal(getStoredLocale(storage), undefined)
-
-  persistLocale('zh-CN', storage)
-  assert.equal(storage.getItem(LOCALE_STORAGE_KEY), 'zh-CN')
-  assert.equal(getStoredLocale(storage), 'zh-CN')
-
-  persistLocale('en', storage)
-  assert.equal(getStoredLocale(storage), 'en')
-
   // stored values normalize through normalizeLocaleTag: zh-* -> zh-CN, illegal/unsupported -> en
   storage.setItem(LOCALE_STORAGE_KEY, 'zh-TW')
-  assert.equal(getStoredLocale(storage), 'zh-CN')
+  assert.equal(getStoredLocalePreference(storage), 'zh-CN')
   storage.setItem(LOCALE_STORAGE_KEY, 'fr')
-  assert.equal(getStoredLocale(storage), 'en')
+  assert.equal(getStoredLocalePreference(storage), 'en')
   storage.setItem(LOCALE_STORAGE_KEY, 'garbage')
-  assert.equal(getStoredLocale(storage), 'en')
+  assert.equal(getStoredLocalePreference(storage), 'en')
 
   // browser language list: the first usable tag normalizes (zh-* -> zh-CN, anything else -> en)
   assert.equal(resolveBrowserLocale(['zh-TW', 'en-US']), 'zh-CN')
@@ -455,21 +443,23 @@ test('theme-preferences: UI language preference read/write, browser-default reso
   assert.equal(resolveBrowserLocale(['fr-FR']), 'en')
   assert.equal(resolveBrowserLocale([]), 'en')
 
-  // initial locale: the persisted preference wins; the default goes through the browser default
+  // initial locale: the persisted preference wins; 'auto' delegates to the browser default
   assert.equal(resolveInitialLocale(storage, ['en-US']), 'en')
-  persistLocale('zh-CN', storage)
+  persistLocalePreference('zh-CN', storage)
   assert.equal(resolveInitialLocale(storage, ['en-US']), 'zh-CN')
+  persistLocalePreference('auto', storage)
+  assert.equal(resolveInitialLocale(storage, ['en-US']), 'en')
   assert.equal(resolveInitialLocale(createMemoryStorage(), ['zh-Hant']), 'zh-CN')
   assert.equal(resolveInitialLocale(createMemoryStorage(), ['ja-JP']), 'en')
 
-  // storage-failure safety: reads fall back to undefined; writes never throw
+  // storage-failure safety: reads fall back to 'auto'; writes never throw
   const brokenStorage = {
     getItem() { throw new Error('quota/security error') },
     setItem() { throw new Error('quota/security error') },
     removeItem() { throw new Error('quota/security error') },
   }
-  assert.equal(getStoredLocale(brokenStorage), undefined)
-  assert.doesNotThrow(() => persistLocale('zh-CN', brokenStorage))
+  assert.equal(getStoredLocalePreference(brokenStorage), 'auto')
+  assert.doesNotThrow(() => persistLocalePreference('zh-CN', brokenStorage))
 })
 
 test('theme-preferences: LocalePreference auto/manual read/write and resolveLocale', { timeout: 60_000 }, () => {

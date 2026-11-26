@@ -16,7 +16,6 @@ import {
   buildMergedProviders,
   buildProviderCategoryCounts,
   buildProviderFilterTabs,
-  DEFAULT_PROVIDERS,
   filterProviders,
   isProviderFilterEligible,
   parseCustomModelIds,
@@ -35,6 +34,8 @@ import { HostStoreProviders } from './helpers/host-store.js'
 ensureHappyDom()
 
 const e = React.createElement
+const enT = createWebTranslator('en')
+const DEFAULT_PROVIDERS = buildDefaultProviders(enT)
 
 // Emoji range matcher for the zero-Emoji assertions
 const EMOJI_REGEX =
@@ -71,11 +72,11 @@ test('model-center-model: default provider list covers the 8 mainstream presets 
   // Custom gateway helpers & filter eligibility
   assert.deepEqual(parseCustomModelIds('gpt-4o, claude-3\nqwen-72b, gpt-4o'), ['gpt-4o', 'claude-3', 'qwen-72b'])
   assert.equal(
-    validateCustomGatewayInput({ id: 'vllm-local', baseUrl: 'http://127.0.0.1:8000/v1', modelsText: 'qwen-72b', isNew: true, existingIds: [] }),
+    validateCustomGatewayInput({ id: 'vllm-local', baseUrl: 'http://127.0.0.1:8000/v1', modelsText: 'qwen-72b', isNew: true, existingIds: [] }, enT),
     null,
   )
   assert.notEqual(
-    validateCustomGatewayInput({ id: 'BAD ID', baseUrl: 'http://127.0.0.1:8000/v1', modelsText: 'qwen-72b', isNew: true, existingIds: [] }),
+    validateCustomGatewayInput({ id: 'BAD ID', baseUrl: 'http://127.0.0.1:8000/v1', modelsText: 'qwen-72b', isNew: true, existingIds: [] }, enT),
     null,
   )
   assert.equal(
@@ -202,6 +203,8 @@ test('buildMergedProviders: catalog-disabled models merge unchecked; enabled dec
     credentials,
     [],
     catalogModels,
+    undefined,
+    enT,
   )
   const faux = merged.find((p) => p.id === 'faux')
   assert.ok(faux)
@@ -241,7 +244,7 @@ test('buildMergedProviders: merges credentials, custom gateways and remote catal
     },
   ]
 
-  const merged = buildMergedProviders(DEFAULT_PROVIDERS, credentials, gateways, catalogModels)
+  const merged = buildMergedProviders(DEFAULT_PROVIDERS, credentials, gateways, catalogModels, undefined, enT)
   const anthropic = merged.find((p) => p.id === 'anthropic')
   assert.equal(anthropic?.configured, true)
   assert.equal(anthropic?.modelsCount, 1)
@@ -295,6 +298,8 @@ test('buildMergedProviders: known context windows produce an "N context" tag aft
     [{ id: 'magpie', configured: true }],
     [],
     catalogModels,
+    undefined,
+    enT,
   )
   const byId = new Map((merged.find((p) => p.id === 'magpie')?.models ?? []).map((m) => [m.id, m]))
 
@@ -330,7 +335,7 @@ test('buildDefaultModelOptions: unset sentinel entry, available-model filtering 
 
   // No current value: first entry is the non-empty sentinel (an empty string is
   // placeholder semantics in Radix Select); only available models are listed
-  const options = buildDefaultModelOptions(models, '')
+  const options = buildDefaultModelOptions(models, '', enT)
   const first = options[0]
   const second = options[1]
   assert.ok(first && second)
@@ -339,14 +344,14 @@ test('buildDefaultModelOptions: unset sentinel entry, available-model filtering 
   assert.equal(second.value, 'anthropic/claude-3-7-sonnet')
 
   // Current value outside the available catalog: kept and annotated as out-of-catalog
-  const stale = buildDefaultModelOptions(models, 'zhipu/glm-4.6')
+  const stale = buildDefaultModelOptions(models, 'zhipu/glm-4.6', enT)
   const last = stale[stale.length - 1]
   assert.ok(last)
   assert.equal(last.value, 'zhipu/glm-4.6')
   assert.equal(last.meta, 'Not in catalog')
 
   // The sentinel value itself never triggers out-of-catalog retention
-  const sentinel = buildDefaultModelOptions(models, UNSET_MODEL_VALUE)
+  const sentinel = buildDefaultModelOptions(models, UNSET_MODEL_VALUE, enT)
   const sentinelLast = sentinel[sentinel.length - 1]
   assert.ok(sentinelLast)
   assert.equal(sentinelLast.meta, 'anthropic')
@@ -374,7 +379,7 @@ test('buildDefaultModelOptions: disabled models are not regular options; a disab
   ]
 
   // No current value: disabled models never appear as options.
-  const options = buildDefaultModelOptions(models, '')
+  const options = buildDefaultModelOptions(models, '', enT)
   assert.equal(options.some((o) => o.value === 'faux/faux-2'), false)
   assert.deepEqual(
     options.map((o) => o.value),
@@ -383,7 +388,7 @@ test('buildDefaultModelOptions: disabled models are not regular options; a disab
 
   // Current default is exactly a disabled model: kept as the current entry
   // (never silently dropped), annotated as disabled, and not duplicated.
-  const withDisabled = buildDefaultModelOptions(models, 'faux/faux-2')
+  const withDisabled = buildDefaultModelOptions(models, 'faux/faux-2', enT)
   const hits = withDisabled.filter((o) => o.value === 'faux/faux-2')
   assert.equal(hits.length, 1, 'a disabled model must be retained exactly once (never duplicated across options and annotations)')
   assert.equal(hits[0]?.label, 'faux/faux-2 (disabled)')
@@ -404,9 +409,9 @@ test('model-center-model zh-CN: preset builders resolve descriptions, tags and o
     buildProviderFilterTabs(zh).map((tab) => tab.label),
     ['全部', '已配置'],
   )
-  // The untouched compatibility constants stay English
+  // English translator renders English filter labels
   assert.deepEqual(
-    buildProviderFilterTabs().map((tab) => tab.label),
+    buildProviderFilterTabs(enT).map((tab) => tab.label),
     ['All', 'Configured'],
   )
 
@@ -866,7 +871,7 @@ test('ModelCenter SSR: backend catalog plugin gateways render as dynamic provide
 
   // After merging the backend catalog the card appears and the drawer follows
   // (the "Dynamic sync" badge and refresh button)
-  const merged = buildMergedProviders(DEFAULT_PROVIDERS, [], [], [], catalog)
+  const merged = buildMergedProviders(DEFAULT_PROVIDERS, [], [], [], catalog, enT)
   const magpie = merged.find((p) => p.id === 'magpie')
   assert.equal(magpie?.pluginId, 'builtin:magpie')
   assert.equal(magpie?.dynamic, true)
@@ -896,7 +901,7 @@ test('buildMergedProviders: zero-model dynamic catalog providers stay in the lis
       authMethods: [{ type: 'api_key', label: 'API Key' }],
     },
   ]
-  const merged = buildMergedProviders([], [], [], [], emptyDynamic)
+  const merged = buildMergedProviders([], [], [], [], emptyDynamic, enT)
   assert.equal(merged.length, 1)
   assert.equal(merged[0]?.id, 'empty-dynamic')
   assert.equal(merged[0]?.dynamic, true)
@@ -1023,7 +1028,7 @@ test('ModelCenter: plugin gateway save triggers zero providers writes (endpoints
   const store = makeTestStore({
     primaryTarget: { kind: 'models', providerId: 'magpie' },
   })
-  const merged = buildMergedProviders(DEFAULT_PROVIDERS, [], [], [], catalog)
+  const merged = buildMergedProviders(DEFAULT_PROVIDERS, [], [], [], catalog, enT)
   const magpie = merged.find((p) => p.id === 'magpie')
   assert.equal(magpie?.pluginId, 'builtin:magpie')
 

@@ -13,10 +13,11 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { isImeComposing } from '../lib/ime.js'
 import type { MergedCompletionItem } from './composer-completion-model.js'
 import { COMPLETION_VISIBLE_LIMIT } from './composer-completion-model.js'
+import { ComposerPopoverShell } from './ComposerPopoverShell.js'
 import type { CompletionSourceSnapshot } from './use-composer-completion.js'
-import { Popover, PopoverAnchor, PopoverContent } from '@helmx/plugin-client'
 
 export interface CompletionPopoverProps {
   open: boolean
@@ -56,7 +57,7 @@ export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, an
     const onKey = (event: KeyboardEvent): void => {
       // Do not intercept any key during IME composition (syllables may contain
       // trigger symbols; Enter confirms the composition candidate).
-      if (event.isComposing || event.keyCode === 229) return
+      if (isImeComposing(event)) return
       if (event.key === 'Escape') {
         event.preventDefault()
         event.stopPropagation()
@@ -100,81 +101,68 @@ export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, an
   if (anchor === null) return null
 
   return (
-    <Popover open={open} onOpenChange={(next) => { if (!next) onClose() }}>
-      <PopoverAnchor virtualRef={{ current: anchor }} />
-      <PopoverContent
-        side="top"
-        align="start"
-        sideOffset={8}
-        className="composer-popover composer-completion-popover"
-        onOpenAutoFocus={(event) => event.preventDefault()}
-        onCloseAutoFocus={(event) => event.preventDefault()}
-        onInteractOutside={(event) => {
-          const inputEl = inputRef?.current
-          const target = event.target
-          if (inputEl !== null && inputEl !== undefined && target instanceof Node && inputEl.contains(target)) {
-            event.preventDefault()
-          }
-        }}
-        onEscapeKeyDown={(event) => event.stopPropagation()}
-        aria-label={t('composer.completion.candidatesAria', { title: triggerTitle })}
+    <ComposerPopoverShell
+      open={open}
+      anchor={anchor}
+      inputRef={inputRef}
+      ariaLabel={t('composer.completion.candidatesAria', { title: triggerTitle })}
+      onClose={onClose}
+    >
+      <div className="popover-header">
+        {triggerTitle}
+        <span className="kbd-hint popover-kbd-hint">{t('composer.kbd.navConfirmClose')}</span>
+      </div>
+      <div
+        ref={listRef}
+        role="listbox"
+        aria-label={t('composer.completion.listAria', { title: triggerTitle })}
+        className="composer-completion-list"
       >
-        <div className="popover-header">
-          {triggerTitle}
-          <span className="kbd-hint popover-kbd-hint">{t('composer.kbd.navConfirmClose')}</span>
-        </div>
-        <div
-          ref={listRef}
-          role="listbox"
-          aria-label={t('composer.completion.listAria', { title: triggerTitle })}
-          className="composer-completion-list"
-        >
-          {visible.map((entry, index) => (
-            <button
-              key={entry.key}
-              type="button"
-              role="option"
-              aria-selected={index === activeIndex}
-              className={`popover-item${index === activeIndex ? ' popover-item-active' : ''}`}
-              onMouseEnter={() => setActiveIndex(index)}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => onPick(entry)}
-            >
-              <span className="mono">{entry.item.label}</span>
-              {entry.item.hint !== undefined ? <span className="popover-item-meta">{entry.item.hint}</span> : null}
-            </button>
-          ))}
-          {visible.length === 0 ? (
-            snapshot.loading ? (
-              <div className="popover-item composer-completion-state" role="status">{t('composer.completion.querying')}</div>
-            ) : snapshot.errors.length > 0 ? (
-              <div className="popover-item composer-completion-state composer-completion-error" role="alert">
-                {snapshot.errors.map((err) => (
-                  <span
-                    key={`${err.source}:${err.message}`}
-                    title={`${err.source}: ${err.message}`}
-                  >
-                    {t('composer.completion.sourceError', { source: err.source, message: err.message })}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <div className="popover-item composer-completion-state">{t('composer.completion.noMatches')}</div>
-            )
-          ) : null}
-        </div>
-        {snapshot.total > visible.length ? (
-          <div
-            className="popover-item composer-completion-state"
-            role="status"
-            title={t('composer.completion.tooManyTitle', { limit: COMPLETION_VISIBLE_LIMIT })}
+        {visible.map((entry, index) => (
+          <button
+            key={entry.key}
+            type="button"
+            role="option"
+            aria-selected={index === activeIndex}
+            className={`popover-item${index === activeIndex ? ' popover-item-active' : ''}`}
+            onMouseEnter={() => setActiveIndex(index)}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onPick(entry)}
           >
-            {snapshot.truncated
-              ? t('composer.completion.tooManyTotal', { limit: COMPLETION_VISIBLE_LIMIT, total: snapshot.total })
-              : t('composer.completion.tooMany', { limit: COMPLETION_VISIBLE_LIMIT })}
-          </div>
+            <span className="mono">{entry.item.label}</span>
+            {entry.item.hint !== undefined ? <span className="popover-item-meta">{entry.item.hint}</span> : null}
+          </button>
+        ))}
+        {visible.length === 0 ? (
+          snapshot.loading ? (
+            <div className="popover-item composer-completion-state" role="status">{t('composer.completion.querying')}</div>
+          ) : snapshot.errors.length > 0 ? (
+            <div className="popover-item composer-completion-state composer-completion-error" role="alert">
+              {snapshot.errors.map((err) => (
+                <span
+                  key={`${err.source}:${err.message}`}
+                  title={`${err.source}: ${err.message}`}
+                >
+                  {t('composer.completion.sourceError', { source: err.source, message: err.message })}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div className="popover-item composer-completion-state">{t('composer.completion.noMatches')}</div>
+          )
         ) : null}
-      </PopoverContent>
-    </Popover>
+      </div>
+      {snapshot.total > visible.length ? (
+        <div
+          className="popover-item composer-completion-state"
+          role="status"
+          title={t('composer.completion.tooManyTitle', { limit: COMPLETION_VISIBLE_LIMIT })}
+        >
+          {snapshot.truncated
+            ? t('composer.completion.tooManyTotal', { limit: COMPLETION_VISIBLE_LIMIT, total: snapshot.total })
+            : t('composer.completion.tooMany', { limit: COMPLETION_VISIBLE_LIMIT })}
+        </div>
+      ) : null}
+    </ComposerPopoverShell>
   )
 }

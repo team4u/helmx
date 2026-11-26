@@ -258,7 +258,7 @@ test('ctx.openWorkbench(panelId, params)：自动补全短面板 ID、写入 wor
   assert.notEqual(store.getWorkbenchSlice().workbenchParams?.params, prevParamsRef)
 
   // 手动切换页签或关闭工作台自动清理过期 workbenchParams
-  store.setWorkbenchTab('artifacts')
+  store.actions.setWorkbenchTab('artifacts')
   assert.equal(store.getWorkbenchSlice().workbenchParams, null)
 
   ctx.openWorkbench('tasks', { runId: 'wf_100' })

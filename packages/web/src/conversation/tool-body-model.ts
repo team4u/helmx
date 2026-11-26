@@ -12,7 +12,7 @@
  *   separately labeled cumulative durations — eligible model-response time and tool execution time).
  */
 
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import type { FoldableStep, ToolResultTruncation, ToolTrace } from './timeline-model.js'
 import { languageFromFilename } from './code-language.js'
 import { buildPendingEditDiff, checkEditToolResult } from './edit-diff-model.js'
@@ -126,15 +126,14 @@ export function inputKvEntries(input: unknown): KvEntry[] {
  * Server-truncation preview note (pure function): never present preview line
  * counts as the full total; never fabricate totals the server did not report.
  */
-export function truncationPreviewNote(truncation: ToolResultTruncation, t?: WebMessageTranslator): string {
-  const tt = t ?? englishWebTranslator
+export function truncationPreviewNote(truncation: ToolResultTruncation, t: WebMessageTranslator): string {
   const total =
     truncation.totalLines !== undefined
-      ? tt('conv.trunc.linesTotal', { count: truncation.totalLines })
+      ? t('conv.trunc.linesTotal', { count: truncation.totalLines })
       : truncation.totalChars !== undefined
-        ? tt('conv.trunc.charsTotal', { count: truncation.totalChars })
+        ? t('conv.trunc.charsTotal', { count: truncation.totalChars })
         : ''
-  return total === '' ? tt('conv.trunc.previewOnly') : tt('conv.trunc.previewOnlyWithTotal', { total })
+  return total === '' ? t('conv.trunc.previewOnly') : t('conv.trunc.previewOnlyWithTotal', { total })
 }
 
 // ---------------------------------------------------------------------------
@@ -220,8 +219,7 @@ export interface ToolRowStats {
   title: string
 }
 
-export function toolRowStats(tool: ToolTrace, t?: WebMessageTranslator): ToolRowStats | undefined {
-  const tt = t ?? englishWebTranslator
+export function toolRowStats(tool: ToolTrace, t: WebMessageTranslator): ToolRowStats | undefined {
   // Rows taken over by a plugin tool.view are drawn by the plugin; the host adds no stats.
   if (tool.toolView !== undefined) return undefined
   if (tool.toolName === 'edit') {
@@ -231,7 +229,7 @@ export function toolRowStats(tool: ToolTrace, t?: WebMessageTranslator): ToolRow
         return {
           addCount: check.value.diff.addedLines,
           removeCount: check.value.diff.removedLines,
-          title: tt('conv.stats.appliedDiff'),
+          title: t('conv.stats.appliedDiff'),
         }
       }
       return undefined
@@ -242,7 +240,7 @@ export function toolRowStats(tool: ToolTrace, t?: WebMessageTranslator): ToolRow
         return {
           addCount: pending.addedLines,
           removeCount: pending.removedLines,
-          title: tt('conv.stats.pendingHunks'),
+          title: t('conv.stats.pendingHunks'),
         }
       }
     }
@@ -251,7 +249,7 @@ export function toolRowStats(tool: ToolTrace, t?: WebMessageTranslator): ToolRow
   if (tool.toolName === 'write') {
     const content = stringField(asRecord(tool.input), 'content')
     if (content === undefined) return undefined
-    return { text: tt('conv.stats.linesCount', { count: countLines(content) }), title: tt('conv.stats.writtenLines') }
+    return { text: t('conv.stats.linesCount', { count: countLines(content) }), title: t('conv.stats.writtenLines') }
   }
   return undefined
 }

@@ -135,7 +135,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
     position: fixed;
     left: 0;
     top: 0;
-    z-index: 72;
+    z-index: var(--z-mobile-drawer);
     transform: translateX(-100%);
     visibility: hidden;
     pointer-events: none;
@@ -153,7 +153,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .helmx-sidebar:focus-visible {
     outline: none;
   }
-  .sidebar-open .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 71; background: var(--bg-backdrop); border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .sidebar-open .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: var(--z-mobile-backdrop); background: var(--bg-backdrop); border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
   .mobile-nav-toggle {
     display: inline-flex;
     align-items: center;
@@ -162,7 +162,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
     /* 与 46px 会话顶栏垂直居中对齐（(46-36)/2 = 5px），叠加安全区偏移 */
     top: calc(max(5px, env(safe-area-inset-top)));
     left: max(8px, env(safe-area-inset-left));
-    z-index: 70;
+    z-index: var(--z-mobile-nav);
     width: 36px;
     height: 36px;
     padding: 0;
@@ -193,7 +193,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
     position: fixed;
     top: calc(max(5px, env(safe-area-inset-top)) + 3px);
     left: max(48px, calc(env(safe-area-inset-left) + 44px));
-    z-index: 70;
+    z-index: var(--z-mobile-nav);
   }
   .mobile-quick-btn {
     width: 30px;
@@ -352,7 +352,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .skill-drawer-content .primary-drawer-body { padding: 10px 12px; gap: 8px; }
   .skill-reader-body { min-height: 0; }
   .pane-action-label { display: none; }
-  .kbd-hint { display: none !important; }
   .primary-drawer-content,
   .plugin-drawer-content { width: 100vw; max-width: 100vw; left: 0; right: 0; border-left: none; }
   .primary-drawer-header,
@@ -374,8 +373,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .palette-modal .nav-item { min-height: 40px; }
 }
 
-/* 命令面板关闭按钮响应式 */
-.palette-close-btn { display: inline-flex; align-items: center; }
+/* 命令面板关闭按钮响应式（基础尺寸与对齐归属 primitives.css .palette-close-btn） */
 .palette-close-desktop { display: inline-flex; }
 .palette-close-mobile { display: none; align-items: center; gap: 4px; }
 .palette-close-mobile-label { font-size: 11.5px; }
@@ -394,7 +392,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .conversation-drawer-close-btn { min-height: 44px; min-width: 44px; margin-left: auto; flex-shrink: 0; }
 }
 
-@media (hover: none) and (pointer: coarse) {
+@media (max-width: 680px), (hover: none) and (pointer: coarse) {
   .kbd-hint { display: none !important; }
 }
 

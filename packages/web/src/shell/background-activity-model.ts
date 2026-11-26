@@ -35,25 +35,19 @@
 import type { ConversationSummary, HelmxLocale, WorkbenchPanelSpec } from '@helmx/protocol/browser'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { resolveWorkbenchPanelBadge } from '../conversation/workbench-model.js'
-import { conversationStatusDotClass, conversationStatusTooltip } from './sidebar-model.js'
+import {
+  conversationStatusDotClass,
+  conversationStatusTooltip,
+  type ConversationBackgroundActivity,
+  type ConversationBackgroundIndex,
+} from './conversation-status-model.js'
 
 /** Separator for summary fragments (matching the workbench footer join style). */
 const SUMMARY_SEPARATOR = ' · '
 
 // COMPACTING_SUMMARY was a constant; the copy now lives in the message catalog ('shell.background.compacting')
-
-/** One conversation's background in-flight summary (aggregated from hit panels' per-conversation badges and the compaction state). */
-export interface ConversationBackgroundActivity {
-  /** A background task is in flight (a hit panel's per-conversation badge tone = 'accent', or contextUsage.compacting = true). */
-  active: boolean
-  /** Run summary copy: hit badges' footerText and the compaction copy, deduplicated and joined (may be empty). */
-  summary: string
-}
-
-/** Per-conversation background in-flight index (key: conversationId; sidebar rows look up by id). */
-export type ConversationBackgroundIndex = ReadonlyMap<number, ConversationBackgroundActivity>
 
 /** Merge a non-empty, not-yet-seen summary fragment into the conversation's background entry. */
 function appendBackgroundSummary(
@@ -84,10 +78,10 @@ export function summarizeConversationBackgroundActivity(input: {
   pluginDocs: Record<string, unknown>
   /** Locale for resolving LocalizedText badge footerText (defaults to DEFAULT_HELMX_LOCALE). */
   locale?: HelmxLocale
-  /** Locale translator for the compaction summary; English bridge when omitted (not-yet-migrated callers). */
-  t?: WebMessageTranslator
+  /** Locale translator for the compaction summary. */
+  t: WebMessageTranslator
 }): Map<number, ConversationBackgroundActivity> {
-  const t = input.t ?? englishWebTranslator
+  const { t } = input
   const result = new Map<number, ConversationBackgroundActivity>()
   const perConversationPanels = input.panels.filter(
     (panel) => panel.spec.badge?.byConversationField !== undefined,
@@ -279,10 +273,10 @@ export function backgroundAwareStatusTooltip(input: {
   lastError?: string
   backgroundActive: boolean
   backgroundSummary?: string
-  /** Locale translator for the suffix copy; English bridge when omitted (not-yet-migrated callers). */
-  t?: WebMessageTranslator
+  /** Locale translator for the suffix copy. */
+  t: WebMessageTranslator
 }): string {
-  const t = input.t ?? englishWebTranslator
+  const { t } = input
   const base = conversationStatusTooltip(input.status, input.doing, input.lastError, t)
   const light = resolveStatusLight(input.status, input.backgroundActive)
   if (!light.background) return base

@@ -957,12 +957,12 @@ describe("agent-standby", () => {
     state.ui = [
       {
         pluginId: 'p1',
-        surface: 'command',
+        surface: 'commandPalette',
         spec: { id: 'ping', title: '全局诊断', slash: 'ping', description: '全局斜杠命令', actionId: 'ping' },
       },
       {
         pluginId: 'p1',
-        surface: 'command',
+        surface: 'commandPalette',
         spec: { id: 'scoped', title: '仅工作流会话', slash: 'wf-only', actionId: 'ping', scope: { tags: ['worker'] } },
       },
     ]
@@ -1053,7 +1053,7 @@ describe("agent-standby", () => {
     state.ui = [
       {
         pluginId: 'p1',
-        surface: 'command',
+        surface: 'commandPalette',
         spec: { id: 'ping', title: '诊断探针', slash: 'ping', actionId: 'ping', input: { source: 'standby' } },
       },
     ]
@@ -1097,7 +1097,7 @@ describe("agent-standby", () => {
     state.ui = [
       {
         pluginId: 'p1',
-        surface: 'command',
+        surface: 'commandPalette',
         spec: { id: 'ping', title: '诊断探针', slash: 'ping', actionId: 'ping' },
       },
     ]

@@ -8,7 +8,7 @@
  */
 import type { HelmxLocale, PluginSummary, ScreenSpec } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { isPluginSummaryActive, type PluginActivityLike } from '../lib/live-state.js'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
@@ -31,7 +31,7 @@ export function resolvePluginIcon(plugin?: Pick<PluginSummary, 'icon'> | null): 
 export function getPluginDescription(
   plugin: PluginSummary,
   locale: HelmxLocale,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   const declared = plugin.description !== undefined ? resolveLocalizedText(plugin.description, locale) : ''
   if (declared.trim() !== '') {
@@ -56,8 +56,8 @@ export function getPluginDescription(
 }
 
 export function pluginErrorStageLabel(
-  stage?: string,
-  t: WebMessageTranslator = englishWebTranslator,
+  stage: string | undefined,
+  t: WebMessageTranslator,
 ): string {
   switch (stage) {
     case 'scan':

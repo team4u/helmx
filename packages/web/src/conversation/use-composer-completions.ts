@@ -7,7 +7,7 @@ import type { ConversationSummary, HelmxLocale, Profile } from '@helmx/protocol/
 import { buildSlashMenuItems, type QualifiedCommand, type SlashMenuItem } from '../lib/commands-model.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useGroupedUi, usePlugins, useSkills, useStoreActions } from '../lib/store-context.js'
-import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
+import { collectEnabledPluginIds } from '../shell/conversation-status-model.js'
 import type { SkillScope } from '../skills/skill-scope-model.js'
 import { useScopedSkillCatalog } from '../skills/use-scoped-skills.js'
 import { slashMenuSkillsWithScope } from './slash-menu-skills.js'
@@ -77,7 +77,7 @@ export function useComposerCompletions({
   })
 
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(plugins), [plugins])
-  const scopedSkillCatalog = useScopedSkillCatalog(skillScope, invokePluginAction)
+  const scopedSkillCatalog = useScopedSkillCatalog(skillScope, invokePluginAction, t)
   const availableSkills = useMemo(
     () =>
       slashMenuSkillsWithScope(

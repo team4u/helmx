@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import { canConfigureSessionEnv, envDraftError, envDraftOnNodeChange, envDraftUnchanged, formatEnvSubtitle } from '../src/conversation/composer-model.js'
+
+const enT = createWebTranslator('en')
 
 const e = (kind: string) => ({ kind })
 
@@ -9,13 +12,14 @@ test('canConfigureSessionEnv: configurable only for empty conversations or after
   assert.equal(canConfigureSessionEnv([], 'idle'), true)
   // Not allowed while details are still loading (no flapping config UI in the gap).
   assert.equal(canConfigureSessionEnv(undefined, 'idle'), false)
-  // Any substantive conversational entry locks it (real SDK kinds use hyphens; legacy underscore spellings stay accepted).
+  // Any substantive conversational entry locks it (real SDK hyphenated kinds only; legacy underscore aliases retired).
   assert.equal(canConfigureSessionEnv([e('helmx.input')], 'idle'), false)
   assert.equal(canConfigureSessionEnv([e('pi.user')], 'idle'), false)
   assert.equal(canConfigureSessionEnv([e('pi.assistant')], 'idle'), false)
   assert.equal(canConfigureSessionEnv([e('pi.tool-call')], 'idle'), false)
   assert.equal(canConfigureSessionEnv([e('pi.tool-result')], 'idle'), false)
-  assert.equal(canConfigureSessionEnv([e('pi.tool_call')], 'idle'), false)
+  assert.equal(canConfigureSessionEnv([e('pi.tool_call')], 'idle'), true)
+  assert.equal(canConfigureSessionEnv([e('pi.tool_result')], 'idle'), true)
   // Compaction is substantive context: it must not become an unlock path.
   assert.equal(canConfigureSessionEnv([e('pi.reset'), e('pi.compaction')], 'idle'), false)
   // Working / blocked always forbids configuration.
@@ -78,12 +82,12 @@ test('starting-environment draft: switching nodes never keeps the old cwd; valid
     { nodeId: 'gpu-box', cwd: '' },
   )
   // Draft validation: empty and relative paths rejected; POSIX and Windows absolute paths pass.
-  assert.match(envDraftError({ nodeId: 'local', cwd: '' }) ?? '', /Enter the working directory/)
-  assert.match(envDraftError({ nodeId: 'local', cwd: '  ' }) ?? '', /Enter the working directory/)
-  assert.match(envDraftError({ nodeId: 'local', cwd: 'relative/path' }) ?? '', /absolute path/)
-  assert.equal(envDraftError({ nodeId: 'local', cwd: '/root/code/helm' }), null)
-  assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:\\workspace\\helmx' }), null)
-  assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:/workspace/helmx' }), null)
+  assert.match(envDraftError({ nodeId: 'local', cwd: '' }, enT) ?? '', /Enter the working directory/)
+  assert.match(envDraftError({ nodeId: 'local', cwd: '  ' }, enT) ?? '', /Enter the working directory/)
+  assert.match(envDraftError({ nodeId: 'local', cwd: 'relative/path' }, enT) ?? '', /absolute path/)
+  assert.equal(envDraftError({ nodeId: 'local', cwd: '/root/code/helm' }, enT), null)
+  assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:\\workspace\\helmx' }, enT), null)
+  assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:/workspace/helmx' }, enT), null)
   // Compared against the current coordinate: an absent nodeId counts as local.
   assert.equal(envDraftUnchanged({ nodeId: 'local', cwd: '/a' }, undefined, '/a'), true)
   assert.equal(envDraftUnchanged({ nodeId: 'local', cwd: '/a' }, 'local', '/a'), true)
@@ -93,25 +97,25 @@ test('starting-environment draft: switching nodes never keeps the old cwd; valid
 
 test('formatEnvSubtitle: local omits @local, remote carries the @node prefix, tooltip keeps full info', { timeout: 60_000 }, () => {
   // Local: omits @local, shows profileId · the last two cwd segments.
-  assert.deepEqual(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'local', cwd: '/root/code/helm' }), {
+  assert.deepEqual(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'local', cwd: '/root/code/helm' }, enT), {
     text: 'assistant · code/helm',
     tooltip: 'Agent: assistant · Node: local · Working directory: /root/code/helm',
   })
   // An absent nodeId counts as local.
-  assert.equal(formatEnvSubtitle({ profileId: 'assistant', cwd: '/root/code/helm' }).text, 'assistant · code/helm')
+  assert.equal(formatEnvSubtitle({ profileId: 'assistant', cwd: '/root/code/helm' }, enT).text, 'assistant · code/helm')
   // Remote node: @gpu-box:tail.
-  assert.deepEqual(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'gpu-box', cwd: '/home/user/code/helmx' }), {
+  assert.deepEqual(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'gpu-box', cwd: '/home/user/code/helmx' }, enT), {
     text: 'assistant · @gpu-box:code/helmx',
     tooltip: 'Agent: assistant · Node: gpu-box · Working directory: /home/user/code/helmx',
   })
   // Empty cwd: local shows only profileId; remote shows @node.
-  assert.equal(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'local', cwd: '' }).text, 'assistant')
-  assert.equal(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'gpu-box', cwd: '' }).text, 'assistant · @gpu-box')
+  assert.equal(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'local', cwd: '' }, enT).text, 'assistant')
+  assert.equal(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'gpu-box', cwd: '' }, enT).text, 'assistant · @gpu-box')
   // The trailing segment count is configurable.
-  assert.equal(formatEnvSubtitle({ profileId: 'p', cwd: '/a/b/c/d', segments: 3 }).text, 'p · b/c/d')
+  assert.equal(formatEnvSubtitle({ profileId: 'p', cwd: '/a/b/c/d', segments: 3 }, enT).text, 'p · b/c/d')
   // The tooltip of an empty cwd shows (not set).
   assert.equal(
-    formatEnvSubtitle({ profileId: 'p', cwd: '' }).tooltip,
+    formatEnvSubtitle({ profileId: 'p', cwd: '' }, enT).tooltip,
     'Agent: p · Node: local · Working directory: (not set)',
   )
 })
@@ -119,18 +123,18 @@ test('formatEnvSubtitle: local omits @local, remote carries the @node prefix, to
 test('formatEnvSubtitle: Windows backslashes and root paths; compact mode keeps only the remote node identity', { timeout: 60_000 }, () => {
   // Windows backslashes split into segments, still taking the last two.
   assert.equal(
-    formatEnvSubtitle({ profileId: 'p', nodeId: 'win-node', cwd: 'C:\\Users\\dev\\work\\helmx' }).text,
+    formatEnvSubtitle({ profileId: 'p', nodeId: 'win-node', cwd: 'C:\\Users\\dev\\work\\helmx' }, enT).text,
     'p · @win-node:work/helmx',
   )
   // Mixed separators.
-  assert.equal(formatEnvSubtitle({ profileId: 'p', cwd: 'C:\\a/b/c' }).text, 'p · b/c')
+  assert.equal(formatEnvSubtitle({ profileId: 'p', cwd: 'C:\\a/b/c' }, enT).text, 'p · b/c')
   // Root paths lose no segment: '/' stays as one; 'C:\\' keeps the drive segment after splitting (cwd shortening affects display only; the tooltip is always full).
-  assert.equal(formatEnvSubtitle({ profileId: 'p', cwd: '/' }).text, 'p · /')
-  assert.equal(formatEnvSubtitle({ profileId: 'p', nodeId: 'win', cwd: 'C:\\' }).text, 'p · @win:C:')
+  assert.equal(formatEnvSubtitle({ profileId: 'p', cwd: '/' }, enT).text, 'p · /')
+  assert.equal(formatEnvSubtitle({ profileId: 'p', nodeId: 'win', cwd: 'C:\\' }, enT).text, 'p · @win:C:')
   // Compact: remote shows only @node, local yields an empty string (callers skip rendering); the tooltip stays full.
-  assert.deepEqual(formatEnvSubtitle({ profileId: 'p', nodeId: 'gpu-box', cwd: '/x/y', compact: true }), {
+  assert.deepEqual(formatEnvSubtitle({ profileId: 'p', nodeId: 'gpu-box', cwd: '/x/y', compact: true }, enT), {
     text: '@gpu-box',
     tooltip: 'Agent: p · Node: gpu-box · Working directory: /x/y',
   })
-  assert.equal(formatEnvSubtitle({ profileId: 'p', nodeId: 'local', cwd: '/x/y', compact: true }).text, '')
+  assert.equal(formatEnvSubtitle({ profileId: 'p', nodeId: 'local', cwd: '/x/y', compact: true }, enT).text, '')
 })

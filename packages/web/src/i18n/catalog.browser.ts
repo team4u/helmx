@@ -76,9 +76,5 @@ export function createWebTranslator(locale: HelmxLocale): WebMessageTranslator {
   return created
 }
 
-/** Dynamic English bridge translator (always resolves against the loaded en pack). */
-export const englishWebTranslator: WebMessageTranslator = (key, params) =>
-  createWebTranslator('en')(key, params)
-
 export type { WebMessageKey, WebMessageTranslator }
 export type { MessageEntry, MessageTable, MessageParams } from './messages.js'

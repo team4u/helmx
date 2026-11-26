@@ -663,14 +663,14 @@ describe("helmx-store-rerender-isolation", () => {
 
     try {
       // 1. 首次失败后，冷却期内立即重试被抑制，防止渲染抖动打爆请求
-      assert.equal(await store.ensurePluginDoc('test:plugin', 'state'), undefined)
+      assert.equal(await store.actions.ensurePluginDoc('test:plugin', 'state'), undefined)
       assert.equal(calls, 1)
-      assert.equal(await store.ensurePluginDoc('test:plugin', 'state'), undefined)
+      assert.equal(await store.actions.ensurePluginDoc('test:plugin', 'state'), undefined)
       assert.equal(calls, 1, '冷却期内重复 ensurePluginDoc 应继续抑制')
 
       // 2. 显式 retryPluginDoc 绕过冷却立刻重试并恢复
       shouldFail = false
-      const recovered = await store.retryPluginDoc('test:plugin', 'state')
+      const recovered = await store.actions.retryPluginDoc('test:plugin', 'state')
       assert.deepEqual(recovered, { ok: true, attempt: 2 })
       assert.equal(calls, 2)
       assert.deepEqual(store.getPluginDoc('test:plugin/state'), { ok: true, attempt: 2 })
@@ -691,11 +691,11 @@ describe("helmx-store-rerender-isolation", () => {
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
       }) as typeof fetch
 
-      assert.equal(await store.ensurePluginDoc('test:plugin', 'later'), undefined)
+      assert.equal(await store.actions.ensurePluginDoc('test:plugin', 'later'), undefined)
       assert.equal(calls2, 1)
       shouldFail = false
       await new Promise((resolve) => setTimeout(resolve, 55))
-      assert.equal(await store.ensurePluginDoc('test:plugin', 'later'), 'recovered-after-cooldown')
+      assert.equal(await store.actions.ensurePluginDoc('test:plugin', 'later'), 'recovered-after-cooldown')
       assert.equal(calls2, 2, '冷却窗口到期后 ensurePluginDoc 应自动允许重试而非永久封锁')
     } finally {
       store.dispose()

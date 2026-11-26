@@ -14,9 +14,12 @@ import test from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
-import { conversationStatusTooltip } from '../src/shell/sidebar-model.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
+import { conversationStatusTooltip } from '../src/shell/conversation-status-model.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { makeTestStore } from './helpers/store.js'
+
+const enT = createWebTranslator('en')
 
 // 与 edit-resend SSR 测试一致：为 tsx 的 classic JSX 转换提供 React。
 ;(globalThis as Record<string, unknown>).React = React
@@ -116,14 +119,14 @@ test('timeline SSR：最新已完成助手回复展示一键重新生成操作�
 })
 
 test('conversationStatusTooltip：error 附带 lastError 诊断摘要', { timeout: 60_000 }, () => {
-  assert.equal(conversationStatusTooltip('error'), 'Error')
+  assert.equal(conversationStatusTooltip('error', undefined, undefined, enT), 'Error')
   assert.equal(
-    conversationStatusTooltip('error', undefined, 'model_error: provider 503'),
+    conversationStatusTooltip('error', undefined, 'model_error: provider 503', enT),
     'Error: model_error: provider 503',
   )
   // 非 error 状态不消费 lastError；working 仍以 doing 为准。
-  assert.equal(conversationStatusTooltip('idle', undefined, 'model_error: x'), 'Idle')
-  assert.equal(conversationStatusTooltip('working', 'bash: running', 'model_error: x'), 'Running: bash: running')
+  assert.equal(conversationStatusTooltip('idle', undefined, 'model_error: x', enT), 'Idle')
+  assert.equal(conversationStatusTooltip('working', 'bash: running', 'model_error: x', enT), 'Running: bash: running')
   // lastError 仅空白时不拼接空 detail。
-  assert.equal(conversationStatusTooltip('error', undefined, '   '), 'Error')
+  assert.equal(conversationStatusTooltip('error', undefined, '   ', enT), 'Error')
 })

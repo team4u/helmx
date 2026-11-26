@@ -19,7 +19,11 @@ import {
   type ProviderItem,
   type ProviderModelItem,
 } from './model-center-model.js'
-import { ProviderCredentialsSection, type ProviderTestResult } from './ProviderCredentialsSection.js'
+import {
+  ProviderCredentialsSection,
+  type ProviderCredentialsFormState,
+  type ProviderTestResult,
+} from './ProviderCredentialsSection.js'
 import { ProviderModelChipsSection } from './ProviderModelChipsSection.js'
 
 export interface ProviderSavePayload {
@@ -60,6 +64,56 @@ export interface ModelDetailDrawerProps {
   ) => Promise<{ success: boolean; latencyMs?: number; message?: string }>
 }
 
+interface ProviderDrawerDraft extends ProviderCredentialsFormState {
+  models: ProviderModelItem[]
+}
+
+interface ProviderAsyncState {
+  testing: boolean
+  refreshingCatalog: boolean
+  saving: boolean
+  deleting: boolean
+  testResult: ProviderTestResult | null
+  saveSuccess: boolean
+  saveError: string | null
+}
+
+const INITIAL_ASYNC_STATE: ProviderAsyncState = {
+  testing: false,
+  refreshingCatalog: false,
+  saving: false,
+  deleting: false,
+  testResult: null,
+  saveSuccess: false,
+  saveError: null,
+}
+
+function createInitialProviderDraft(
+  provider: ProviderItem | null,
+  isNewCustom: boolean,
+): ProviderDrawerDraft {
+  if (isNewCustom || !provider) {
+    return {
+      customId: '',
+      customLabel: '',
+      customProtocol: 'openai',
+      customModelsText: '',
+      apiKey: '',
+      baseUrl: '',
+      models: [],
+    }
+  }
+  return {
+    customId: provider.id,
+    customLabel: provider.name ?? '',
+    customProtocol: provider.protocol ?? 'openai',
+    customModelsText: (provider.gatewayModels ?? provider.models?.map((m) => m.id) ?? []).join('\n'),
+    apiKey: '',
+    baseUrl: provider.baseUrl ?? '',
+    models: provider.models ? provider.models.map((m) => ({ ...m })) : [],
+  }
+}
+
 /**
  * Provider details & credentials drawer of the Models & Credentials Center:
  * - built on Radix UI Dialog primitives as a 540px right slide-over;
@@ -84,156 +138,161 @@ export function ModelDetailDrawer({
   const actions = useOptionalStoreActions()
   const { t } = useWebLocale()
   const catalogModels = availableModels ?? storeModels ?? []
+  const providerId = provider?.id
+  const providerRef = useRef(provider)
+  providerRef.current = provider
 
-  const [customId, setCustomId] = useState('')
-  const [customLabel, setCustomLabel] = useState(() => provider?.name ?? '')
-  const [customProtocol, setCustomProtocol] = useState<'openai' | 'anthropic'>(() => provider?.protocol ?? 'openai')
-  const [customModelsText, setCustomModelsText] = useState(() => (provider?.gatewayModels ?? []).join('\n'))
-  const [apiKey, setApiKey] = useState('')
-  const [baseUrl, setBaseUrl] = useState(() => provider?.baseUrl ?? '')
-  const [models, setModels] = useState<ProviderModelItem[]>(() =>
-    provider?.models ? provider.models.map((m) => ({ ...m })) : [],
+  const [draft, setDraft] = useState<ProviderDrawerDraft>(() =>
+    createInitialProviderDraft(provider, isNewCustom),
   )
-  const [testing, setTesting] = useState(false)
-  const [refreshingCatalog, setRefreshingCatalog] = useState(false)
-  const [testResult, setTestResult] = useState<ProviderTestResult | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [saveSuccess, setSaveSuccess] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
-  const [deleteGatewayConfirmOpen, setDeleteGatewayConfirmOpen] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [modelFilter, setModelFilter] = useState('')
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [asyncState, setAsyncState] = useState<ProviderAsyncState>(INITIAL_ASYNC_STATE)
+  const [confirmDialog, setConfirmDialog] = useState<'none' | 'credential' | 'gateway'>('none')
+  const [catalogView, setCatalogView] = useState<{ filter: string; expanded: boolean }>({
+    filter: '',
+    expanded: false,
+  })
 
+  const mountedRef = useRef(true)
+  const scopeGenRef = useRef(0)
+  const opGenRef = useRef({ test: 0, refresh: 0, del: 0, save: 0 })
   const saveSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const clearSaveSuccessTimer = useCallback(() => {
     if (saveSuccessTimerRef.current !== null) {
       clearTimeout(saveSuccessTimerRef.current)
       saveSuccessTimerRef.current = null
     }
   }, [])
-  const flashSaveSuccess = useCallback(() => {
-    clearSaveSuccessTimer()
-    setSaveSuccess(true)
-    saveSuccessTimerRef.current = setTimeout(() => {
-      saveSuccessTimerRef.current = null
-      setSaveSuccess(false)
-    }, 2400)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      clearSaveSuccessTimer()
+    }
   }, [clearSaveSuccessTimer])
 
-  useEffect(() => clearSaveSuccessTimer, [clearSaveSuccessTimer])
+  const flashSaveSuccess = useCallback(
+    (scopeGen: number) => {
+      clearSaveSuccessTimer()
+      setAsyncState((prev) => ({ ...prev, saveSuccess: true }))
+      saveSuccessTimerRef.current = setTimeout(() => {
+        saveSuccessTimerRef.current = null
+        if (!mountedRef.current || scopeGenRef.current !== scopeGen) return
+        setAsyncState((prev) => ({ ...prev, saveSuccess: false }))
+      }, 2400)
+    },
+    [clearSaveSuccessTimer],
+  )
 
   const endpointEditable = isNewCustom || provider?.custom === true
   const canTestConnection = Boolean(!isNewCustom && provider && (onTestConnection || provider.dynamic))
   const filterEligible = isProviderFilterEligible(provider, catalogModels)
 
+  // Reset form ONLY on open transition, provider ID switch, or create-mode switch
+  // so background SSE refreshes of the same provider never wipe unsaved user edits.
   useEffect(() => {
+    scopeGenRef.current += 1
     clearSaveSuccessTimer()
-    if (isNewCustom || !provider) {
-      setCustomId('')
-      setCustomLabel('')
-      setCustomProtocol('openai')
-      setCustomModelsText('')
-      setApiKey('')
-      setBaseUrl('')
-      setModels([])
-    } else {
-      setCustomId(provider.id)
-      setCustomLabel(provider.name ?? '')
-      setCustomProtocol(provider.protocol ?? 'openai')
-      setCustomModelsText(
-        (provider.gatewayModels ?? provider.models?.map((m) => m.id) ?? []).join('\n'),
-      )
-      setApiKey('')
-      setBaseUrl(provider.baseUrl ?? '')
-      setModels(provider.models ? provider.models.map((m) => ({ ...m })) : [])
-    }
-    setTestResult(null)
-    setSaveError(null)
-    setSaveSuccess(false)
-    setModelFilter('')
-    setIsExpanded(false)
-  }, [provider, isNewCustom, clearSaveSuccessTimer])
+    setConfirmDialog('none')
+    setAsyncState(INITIAL_ASYNC_STATE)
+    if (!open) return
+    setDraft(createInitialProviderDraft(providerRef.current, isNewCustom))
+    setCatalogView({ filter: '', expanded: false })
+  }, [open, providerId, isNewCustom, clearSaveSuccessTimer])
+
+  const isCurrentScopeOp = useCallback(
+    (kind: keyof typeof opGenRef.current, seq: number, scopeGen: number): boolean =>
+      mountedRef.current && scopeGenRef.current === scopeGen && opGenRef.current[kind] === seq,
+    [],
+  )
+
+  const updateForm = useCallback((patch: Partial<ProviderCredentialsFormState>) => {
+    setDraft((prev) => ({ ...prev, ...patch }))
+  }, [])
 
   const handleToggleModel = (modelId: string) => {
-    setModels((prev) =>
-      prev.map((item) =>
+    setDraft((prev) => ({
+      ...prev,
+      models: prev.models.map((item) =>
         item.id === modelId ? { ...item, enabled: !item.enabled } : item,
       ),
-    )
+    }))
   }
 
   const handleSelectAll = (matchedIds: ReadonlySet<string> | null) => {
-    setModels((prev) =>
-      prev.map((item) =>
+    setDraft((prev) => ({
+      ...prev,
+      models: prev.models.map((item) =>
         matchedIds === null || matchedIds.has(item.id) ? { ...item, enabled: true } : item,
       ),
-    )
+    }))
   }
 
   const handleClearAll = (matchedIds: ReadonlySet<string> | null) => {
-    setModels((prev) =>
-      prev.map((item) =>
+    setDraft((prev) => ({
+      ...prev,
+      models: prev.models.map((item) =>
         matchedIds === null || matchedIds.has(item.id) ? { ...item, enabled: false } : item,
       ),
-    )
+    }))
   }
 
   const handleTest = async () => {
     if (!provider || !canTestConnection) return
-    setTesting(true)
-    setTestResult(null)
-    setSaveError(null)
+    const scopeGen = scopeGenRef.current
+    const opSeq = ++opGenRef.current.test
+    setAsyncState((prev) => ({ ...prev, testing: true, testResult: null, saveError: null }))
     try {
+      let nextResult: ProviderTestResult | null = null
       if (onTestConnection) {
-        const res = await onTestConnection(provider.id, baseUrl.trim() || undefined)
-        setTestResult(res)
+        nextResult = await onTestConnection(provider.id, draft.baseUrl.trim() || undefined)
       } else if (provider.dynamic) {
         const start = Date.now()
         const res = await assetsApi.refreshModels([provider.id])
         const latencyMs = Date.now() - start
         const refreshError = res.errors?.[provider.id]
-        if (refreshError) {
-          setTestResult({
-            success: false,
-            latencyMs,
-            message: t('models.test.failed', { error: refreshError }),
-          })
-        } else {
-          setTestResult({
-            success: true,
-            latencyMs,
-            message: t('models.test.ok'),
-          })
-        }
+        nextResult = refreshError
+          ? { success: false, latencyMs, message: t('models.test.failed', { error: refreshError }) }
+          : { success: true, latencyMs, message: t('models.test.ok') }
       }
+      if (!isCurrentScopeOp('test', opSeq, scopeGen)) return
+      setAsyncState((prev) => ({ ...prev, testResult: nextResult }))
     } catch (err) {
-      setTestResult({
-        success: false,
-        message: err instanceof Error ? err.message : String(err),
-      })
+      if (!isCurrentScopeOp('test', opSeq, scopeGen)) return
+      setAsyncState((prev) => ({
+        ...prev,
+        testResult: {
+          success: false,
+          message: err instanceof Error ? err.message : String(err),
+        },
+      }))
     } finally {
-      setTesting(false)
+      if (isCurrentScopeOp('test', opSeq, scopeGen)) {
+        setAsyncState((prev) => ({ ...prev, testing: false }))
+      }
     }
   }
 
   const handleRefreshCatalog = async () => {
     if (!provider) return
-    setRefreshingCatalog(true)
-    setSaveError(null)
+    const scopeGen = scopeGenRef.current
+    const opSeq = ++opGenRef.current.refresh
+    setAsyncState((prev) => ({ ...prev, refreshingCatalog: true, saveError: null }))
     try {
       const res = await assetsApi.refreshModels([provider.id])
+      if (!isCurrentScopeOp('refresh', opSeq, scopeGen)) return
       if (actions?.refreshAssets) {
         await actions.refreshAssets()
       }
+      if (!isCurrentScopeOp('refresh', opSeq, scopeGen)) return
       const refreshError = res.errors?.[provider.id]
       if (refreshError) {
-        setSaveError(refreshError)
+        setAsyncState((prev) => ({ ...prev, saveError: refreshError }))
       } else if (res.aborted) {
-        setSaveError(t('models.refresh.cancelled'))
+        setAsyncState((prev) => ({ ...prev, saveError: t('models.refresh.cancelled') }))
       } else {
-        flashSaveSuccess()
+        flashSaveSuccess(scopeGen)
         actions?.pushNotice?.({
           type: 'notification',
           level: 'info',
@@ -242,58 +301,84 @@ export function ModelDetailDrawer({
         })
       }
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err))
+      if (!isCurrentScopeOp('refresh', opSeq, scopeGen)) return
+      setAsyncState((prev) => ({
+        ...prev,
+        saveError: err instanceof Error ? err.message : String(err),
+      }))
     } finally {
-      setRefreshingCatalog(false)
+      if (isCurrentScopeOp('refresh', opSeq, scopeGen)) {
+        setAsyncState((prev) => ({ ...prev, refreshingCatalog: false }))
+      }
     }
   }
 
   const handleDeleteCredential = async () => {
     if (!provider) return
-    setDeleting(true)
-    setSaveError(null)
+    const scopeGen = scopeGenRef.current
+    const opSeq = ++opGenRef.current.del
+    setAsyncState((prev) => ({ ...prev, deleting: true, saveError: null }))
     try {
       await assetsApi.deleteCredential(provider.id)
-      setApiKey('')
+      if (!isCurrentScopeOp('del', opSeq, scopeGen)) return
+      setDraft((prev) => ({ ...prev, apiKey: '' }))
       if (actions?.refreshAssets) {
         await actions.refreshAssets()
       }
+      if (!isCurrentScopeOp('del', opSeq, scopeGen)) return
       actions?.pushNotice?.({
         type: 'notification',
         level: 'info',
         title: t('models.notice.secretDeleted'),
         body: t('models.notice.secretDeletedBody', { name: provider.name }),
       })
-      setDeleteConfirmOpen(false)
-      flashSaveSuccess()
+      setConfirmDialog('none')
+      flashSaveSuccess(scopeGen)
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err))
+      if (!isCurrentScopeOp('del', opSeq, scopeGen)) return
+      setAsyncState((prev) => ({
+        ...prev,
+        saveError: err instanceof Error ? err.message : String(err),
+      }))
     } finally {
-      setDeleting(false)
+      if (isCurrentScopeOp('del', opSeq, scopeGen)) {
+        setAsyncState((prev) => ({ ...prev, deleting: false }))
+      }
     }
   }
 
   const handleDeleteCustomGateway = async () => {
     if (!provider || provider.custom !== true || !onDeleteCustomGateway) return
-    setDeleting(true)
-    setSaveError(null)
+    const scopeGen = scopeGenRef.current
+    const opSeq = ++opGenRef.current.del
+    setAsyncState((prev) => ({ ...prev, deleting: true, saveError: null }))
     try {
       await onDeleteCustomGateway(provider.id)
-      setDeleteGatewayConfirmOpen(false)
+      if (!isCurrentScopeOp('del', opSeq, scopeGen)) return
+      setConfirmDialog('none')
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err))
+      if (!isCurrentScopeOp('del', opSeq, scopeGen)) return
+      setAsyncState((prev) => ({
+        ...prev,
+        saveError: err instanceof Error ? err.message : String(err),
+      }))
     } finally {
-      setDeleting(false)
+      if (isCurrentScopeOp('del', opSeq, scopeGen)) {
+        setAsyncState((prev) => ({ ...prev, deleting: false }))
+      }
     }
   }
 
   const handleSaveProvider = async () => {
+    const scopeGen = scopeGenRef.current
+    const opSeq = ++opGenRef.current.save
+
     if (isNewCustom) {
       const validationError = validateCustomGatewayInput(
         {
-          id: customId,
-          baseUrl,
-          modelsText: customModelsText,
+          id: draft.customId,
+          baseUrl: draft.baseUrl,
+          modelsText: draft.customModelsText,
           isNew: true,
           existingIds: existingProviderIds,
         },
@@ -301,26 +386,30 @@ export function ModelDetailDrawer({
       )
       if (validationError !== null) {
         clearSaveSuccessTimer()
-        setSaveSuccess(false)
-        setSaveError(validationError)
+        setAsyncState((prev) => ({ ...prev, saveSuccess: false, saveError: validationError }))
         return
       }
       if (!onCreateCustomGateway) return
-      setSaving(true)
-      setSaveError(null)
+      setAsyncState((prev) => ({ ...prev, saving: true, saveError: null }))
       try {
         await onCreateCustomGateway({
-          id: customId.trim().toLowerCase(),
-          label: customLabel.trim() || undefined,
-          protocol: customProtocol,
-          baseUrl: baseUrl.trim(),
-          models: parseCustomModelIds(customModelsText),
-          apiKey: apiKey.trim() ? apiKey.trim() : undefined,
+          id: draft.customId.trim().toLowerCase(),
+          label: draft.customLabel.trim() || undefined,
+          protocol: draft.customProtocol,
+          baseUrl: draft.baseUrl.trim(),
+          models: parseCustomModelIds(draft.customModelsText),
+          apiKey: draft.apiKey.trim() ? draft.apiKey.trim() : undefined,
         })
       } catch (err) {
-        setSaveError(err instanceof Error ? err.message : String(err))
+        if (!isCurrentScopeOp('save', opSeq, scopeGen)) return
+        setAsyncState((prev) => ({
+          ...prev,
+          saveError: err instanceof Error ? err.message : String(err),
+        }))
       } finally {
-        setSaving(false)
+        if (isCurrentScopeOp('save', opSeq, scopeGen)) {
+          setAsyncState((prev) => ({ ...prev, saving: false }))
+        }
       }
       return
     }
@@ -330,46 +419,53 @@ export function ModelDetailDrawer({
       const validationError = validateCustomGatewayInput(
         {
           id: provider.id,
-          baseUrl,
-          modelsText: customModelsText,
+          baseUrl: draft.baseUrl,
+          modelsText: draft.customModelsText,
           isNew: false,
         },
         t,
       )
       if (validationError !== null) {
         clearSaveSuccessTimer()
-        setSaveSuccess(false)
-        setSaveError(validationError)
+        setAsyncState((prev) => ({ ...prev, saveSuccess: false, saveError: validationError }))
         return
       }
     }
-    setSaving(true)
-    setSaveError(null)
+
+    setAsyncState((prev) => ({ ...prev, saving: true, saveError: null }))
     try {
       if (onSave) {
         await onSave(provider.id, {
-          apiKey: apiKey.trim() ? apiKey.trim() : undefined,
-          baseUrl: baseUrl.trim() ? baseUrl.trim() : undefined,
+          apiKey: draft.apiKey.trim() ? draft.apiKey.trim() : undefined,
+          baseUrl: draft.baseUrl.trim() ? draft.baseUrl.trim() : undefined,
           ...(provider.custom === true
             ? {
-                label: customLabel.trim(),
-                protocol: customProtocol,
-                customModelIds: parseCustomModelIds(customModelsText),
+                label: draft.customLabel.trim(),
+                protocol: draft.customProtocol,
+                customModelIds: parseCustomModelIds(draft.customModelsText),
               }
             : {}),
-          ...(filterEligible ? { models } : {}),
+          ...(filterEligible ? { models: draft.models } : {}),
         })
-      } else if (apiKey.trim()) {
-        await assetsApi.setCredential(provider.id, apiKey.trim())
+      } else if (draft.apiKey.trim()) {
+        await assetsApi.setCredential(provider.id, draft.apiKey.trim())
+        if (!isCurrentScopeOp('save', opSeq, scopeGen)) return
         if (actions?.refreshAssets) {
           await actions.refreshAssets()
         }
       }
-      flashSaveSuccess()
+      if (!isCurrentScopeOp('save', opSeq, scopeGen)) return
+      flashSaveSuccess(scopeGen)
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err))
+      if (!isCurrentScopeOp('save', opSeq, scopeGen)) return
+      setAsyncState((prev) => ({
+        ...prev,
+        saveError: err instanceof Error ? err.message : String(err),
+      }))
     } finally {
-      setSaving(false)
+      if (isCurrentScopeOp('save', opSeq, scopeGen)) {
+        setAsyncState((prev) => ({ ...prev, saving: false }))
+      }
     }
   }
 
@@ -409,25 +505,25 @@ export function ModelDetailDrawer({
         footer={
           <Stack direction="horizontal" gap="sm" align="center" justify="between" className="flex-1">
             <div className="flex-1">
-              {saveSuccess && (
+              {asyncState.saveSuccess && (
                 <span className="text-subtle" role="status">
                   {t('models.saveSuccess')}
                 </span>
               )}
-              {saveError && (
+              {asyncState.saveError && (
                 <Callout tone="err">
-                  <span className="callout-text" role="alert">{saveError}</span>
+                  <span className="callout-text" role="alert">{asyncState.saveError}</span>
                 </Callout>
               )}
             </div>
             <Button
               variant="primary"
               icon="check"
-              pending={saving}
+              pending={asyncState.saving}
               onClick={handleSaveProvider}
               disabled={!isNewCustom && !provider}
             >
-              {saving
+              {asyncState.saving
                 ? t('models.saving')
                 : isNewCustom
                   ? t('models.custom.createAction')
@@ -446,40 +542,37 @@ export function ModelDetailDrawer({
               endpointEditable={endpointEditable}
               canTestConnection={canTestConnection}
               inline={inline}
-              customId={customId}
-              customLabel={customLabel}
-              customProtocol={customProtocol}
-              customModelsText={customModelsText}
-              apiKey={apiKey}
-              baseUrl={baseUrl}
-              testing={testing}
-              refreshingCatalog={refreshingCatalog}
-              deleting={deleting}
-              testResult={testResult}
-              canOpenPluginSettings={actions !== null}
               hasDeleteCustomGateway={onDeleteCustomGateway !== undefined}
-              onCustomIdChange={setCustomId}
-              onCustomLabelChange={setCustomLabel}
-              onCustomProtocolChange={setCustomProtocol}
-              onCustomModelsTextChange={setCustomModelsText}
-              onApiKeyChange={setApiKey}
-              onBaseUrlChange={setBaseUrl}
-              onRefreshCatalog={() => void handleRefreshCatalog()}
-              onTest={() => void handleTest()}
-              onRequestDeleteCredential={() => setDeleteConfirmOpen(true)}
-              onRequestDeleteGateway={() => setDeleteGatewayConfirmOpen(true)}
-              onOpenPluginSettings={(pluginId) => actions?.openTarget({ kind: 'plugins', pluginId })}
+              form={draft}
+              status={{
+                testing: asyncState.testing,
+                refreshingCatalog: asyncState.refreshingCatalog,
+                deleting: asyncState.deleting,
+                testResult: asyncState.testResult,
+              }}
+              actions={{
+                onFormChange: updateForm,
+                onRefreshCatalog: () => void handleRefreshCatalog(),
+                onTest: () => void handleTest(),
+                onRequestDeleteCredential: () => setConfirmDialog('credential'),
+                onRequestDeleteGateway: () => setConfirmDialog('gateway'),
+                onOpenPluginSettings: actions !== null
+                  ? (pid) => actions.openTarget({ kind: 'plugins', pluginId: pid })
+                  : undefined,
+              }}
             />
 
             {!isNewCustom && provider && (
               <ProviderModelChipsSection
                 provider={provider}
-                models={models}
+                models={draft.models}
                 filterEligible={filterEligible}
-                modelFilter={modelFilter}
-                isExpanded={isExpanded}
-                onModelFilterChange={setModelFilter}
-                onToggleExpanded={() => setIsExpanded((prev) => !prev)}
+                modelFilter={catalogView.filter}
+                isExpanded={catalogView.expanded}
+                onModelFilterChange={(filter) => setCatalogView((prev) => ({ ...prev, filter }))}
+                onToggleExpanded={() =>
+                  setCatalogView((prev) => ({ ...prev, expanded: !prev.expanded }))
+                }
                 onToggleModel={handleToggleModel}
                 onSelectAll={handleSelectAll}
                 onClearAll={handleClearAll}
@@ -490,8 +583,10 @@ export function ModelDetailDrawer({
       </DetailDrawer>
 
       <ConfirmDialog
-        open={deleteConfirmOpen}
-        onOpenChange={setDeleteConfirmOpen}
+        open={confirmDialog === 'credential'}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setConfirmDialog('none')
+        }}
         title={t('models.confirm.title')}
         description={t('models.confirm.body', {
           name: provider?.name ?? t('models.confirm.thisProvider'),
@@ -501,12 +596,14 @@ export function ModelDetailDrawer({
         danger
         inline={inline}
         onConfirm={handleDeleteCredential}
-        onCancel={() => setDeleteConfirmOpen(false)}
+        onCancel={() => setConfirmDialog('none')}
       />
 
       <ConfirmDialog
-        open={deleteGatewayConfirmOpen}
-        onOpenChange={setDeleteGatewayConfirmOpen}
+        open={confirmDialog === 'gateway'}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setConfirmDialog('none')
+        }}
         title={t('models.custom.deleteConfirmTitle')}
         description={t('models.custom.deleteConfirmBody', {
           name: provider?.name ?? provider?.id ?? t('models.confirm.thisProvider'),
@@ -516,7 +613,7 @@ export function ModelDetailDrawer({
         danger
         inline={inline}
         onConfirm={handleDeleteCustomGateway}
-        onCancel={() => setDeleteGatewayConfirmOpen(false)}
+        onCancel={() => setConfirmDialog('none')}
       />
     </>
   )

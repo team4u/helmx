@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   PROFILE_DETAIL_SECTION_SLOT,
   PROFILE_STARTERS_MAX_ITEMS,
@@ -59,14 +59,11 @@ interface StarterFormItem extends StarterDraft {
   key: string
 }
 
-let nextStarterKeySeq = 0
-function createStarterKey(): string {
-  nextStarterKeySeq += 1
-  return `starter-${nextStarterKeySeq}`
-}
-
-function toStarterFormItems(starters: Profile['starters']): StarterFormItem[] {
-  return startersToDrafts(starters).map((item) => ({ ...item, key: createStarterKey() }))
+function toStarterFormItems(
+  starters: Profile['starters'],
+  nextKey: () => string,
+): StarterFormItem[] {
+  return startersToDrafts(starters).map((item) => ({ ...item, key: nextKey() }))
 }
 
 interface FormState {
@@ -88,7 +85,11 @@ interface FormState {
   source: Profile | null
 }
 
-function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
+function createInitialForm(
+  profile: Profile | null,
+  isNew: boolean,
+  nextKey: () => string,
+): FormState {
   if (isNew || !profile) {
     return {
       id: '',
@@ -119,12 +120,16 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
     systemEdited: false,
     useAllSkills: profile.skills === undefined,
     selectedSkillIds: Array.isArray(profile.skills) ? [...profile.skills] : [],
-    starters: toStarterFormItems(profile.starters),
+    starters: toStarterFormItems(profile.starters, nextKey),
     source: profile,
   }
 }
 
-function mergeProfileDetailIntoForm(base: FormState, detail: Profile): FormState {
+function mergeProfileDetailIntoForm(
+  base: FormState,
+  detail: Profile,
+  nextKey: () => string,
+): FormState {
   return {
     ...base,
     name: detail.name ?? base.name,
@@ -137,8 +142,35 @@ function mergeProfileDetailIntoForm(base: FormState, detail: Profile): FormState
     systemEdited: false,
     useAllSkills: detail.skills === undefined,
     selectedSkillIds: Array.isArray(detail.skills) ? [...detail.skills] : base.selectedSkillIds,
-    starters: toStarterFormItems(detail.starters),
+    starters: toStarterFormItems(detail.starters, nextKey),
     source: detail,
+  }
+}
+
+function sameStartersDraft(a: StarterDraft[], b: StarterDraft[]): boolean {
+  return a.length === b.length && a.every((item, idx) => item.label === b[idx]?.label && item.prompt === b[idx]?.prompt)
+}
+
+function mergeHydratedDetailPreservingEdits(
+  prev: FormState,
+  initial: FormState,
+  hydrated: FormState,
+): FormState {
+  const prevSkills = [...prev.selectedSkillIds].sort().join(',')
+  const initSkills = [...initial.selectedSkillIds].sort().join(',')
+  return {
+    ...prev,
+    name: prev.name === initial.name ? hydrated.name : prev.name,
+    model: prev.model === initial.model ? hydrated.model : prev.model,
+    thinkingLevel: prev.thinkingLevel === initial.thinkingLevel ? hydrated.thinkingLevel : prev.thinkingLevel,
+    nodeId: prev.nodeId === initial.nodeId ? hydrated.nodeId : prev.nodeId,
+    cwd: prev.cwd === initial.cwd ? hydrated.cwd : prev.cwd,
+    restrictToCwd: prev.restrictToCwd === initial.restrictToCwd ? hydrated.restrictToCwd : prev.restrictToCwd,
+    system: !prev.systemEdited && prev.system === initial.system ? hydrated.system : prev.system,
+    useAllSkills: prev.useAllSkills === initial.useAllSkills ? hydrated.useAllSkills : prev.useAllSkills,
+    selectedSkillIds: prevSkills === initSkills ? hydrated.selectedSkillIds : prev.selectedSkillIds,
+    starters: sameStartersDraft(prev.starters, initial.starters) ? hydrated.starters : prev.starters,
+    source: hydrated.source,
   }
 }
 
@@ -163,54 +195,78 @@ export function ProfileDetailDrawer({
   const hostModels = useHostModels()
   const pickerAdapter = useModelPickerControlAdapter()
   const { t } = useWebLocale()
-  const [form, setForm] = useState<FormState>(() => createInitialForm(profile, isNew))
-  const [baseline, setBaseline] = useState<FormState>(() => createInitialForm(profile, isNew))
+  const profileId = profile?.id
+  const profileRef = useRef(profile)
+  profileRef.current = profile
+  const starterKeySeqRef = useRef(0)
+  const createStarterKey = useCallback((): string => {
+    starterKeySeqRef.current += 1
+    return `starter-${starterKeySeqRef.current}`
+  }, [])
+
+  const [form, setForm] = useState<FormState>(() => createInitialForm(profile, isNew, createStarterKey))
+  const [baseline, setBaseline] = useState<FormState>(() => createInitialForm(profile, isNew, createStarterKey))
   const [isSaving, setIsSaving] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
 
-  const activeFetchIdRef = useRef<string | null>(null)
+  const mountedRef = useRef(true)
+  const formScopeGenRef = useRef(0)
+  const opGenRef = useRef({ fetch: 0, save: 0, del: 0 })
 
-  // 当 Drawer 打开或传入的目标 profile / isNew 变化时重置表单态
   useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  // Reset form ONLY when opening/closing, switching profile ID, or toggling create mode
+  // so SSE refreshes of the same profile never wipe unsaved edits.
+  useEffect(() => {
+    formScopeGenRef.current += 1
+    const scopeGen = formScopeGenRef.current
     if (!open) {
       setError(null)
       setShowDeleteConfirm(false)
       setShowDiscardConfirm(false)
-      activeFetchIdRef.current = null
+      setIsSaving(false)
+      setIsDeleting(false)
       return
     }
 
-    const initial = createInitialForm(profile, isNew)
+    const initial = createInitialForm(profileRef.current, isNew, createStarterKey)
     setForm(initial)
     setBaseline(initial)
     setError(null)
+    setIsSaving(false)
+    setIsDeleting(false)
 
     // 若编辑已有角色，尝试拉取全文详情（含完整 SYSTEM.md；MEMORY.md 由
     // builtin:memory 插件子插槽自治拉取，不经宿主 Profile 表单）
-    if (!isNew && profile?.id) {
-      const targetId = profile.id
-      activeFetchIdRef.current = targetId
+    if (!isNew && profileId) {
+      const fetchSeq = ++opGenRef.current.fetch
 
       void profilesApi
-        .get(targetId)
+        .get(profileId)
         .then((detail) => {
-          if (activeFetchIdRef.current !== targetId) return
-          const next = mergeProfileDetailIntoForm(initial, detail)
-          setForm(next)
-          setBaseline(next)
+          if (!mountedRef.current || formScopeGenRef.current !== scopeGen || opGenRef.current.fetch !== fetchSeq) {
+            return
+          }
+          const hydrated = mergeProfileDetailIntoForm(initial, detail, createStarterKey)
+          setBaseline(hydrated)
+          setForm((prev) => mergeHydratedDetailPreservingEdits(prev, initial, hydrated))
         })
         .catch((err) => {
-          if (activeFetchIdRef.current !== targetId) return
+          if (!mountedRef.current || formScopeGenRef.current !== scopeGen || opGenRef.current.fetch !== fetchSeq) {
+            return
+          }
           setError(err instanceof Error ? err.message : String(err))
         })
-      return () => {
-        activeFetchIdRef.current = null
-      }
     }
-  }, [open, profile, isNew])
+  }, [open, profileId, isNew, createStarterKey])
 
   const isSystem = Boolean(profile && isSystemProfile(profile))
   const canDelete = !isNew && !isSystem && Boolean(profile)
@@ -292,7 +348,8 @@ export function ProfileDetailDrawer({
   // 保存操作
   const handleSave = async () => {
     setError(null)
-    const normalizedId = form.id.trim()
+    const submittedForm = form
+    const normalizedId = submittedForm.id.trim()
     if (!normalizedId) {
       setError(t('profiles.drawer.error.idRequired'))
       return
@@ -303,28 +360,30 @@ export function ProfileDetailDrawer({
       return
     }
 
-    const starterError = validateStarterDrafts(form.starters, t)
+    const starterError = validateStarterDrafts(submittedForm.starters, t)
     if (starterError !== null) {
       setError(t('profiles.drawer.error.starterPrefix', { index: starterError.index + 1, error: starterError.error }))
       return
     }
 
+    const scopeGen = formScopeGenRef.current
+    const saveSeq = ++opGenRef.current.save
     setIsSaving(true)
     try {
       const payload = buildProfileSavePayload({
         id: normalizedId,
-        name: form.name,
-        model: form.model,
-        thinkingLevel: form.thinkingLevel,
-        nodeId: form.nodeId,
-        cwd: form.cwd,
-        restrictToCwd: form.restrictToCwd,
-        system: form.system,
-        skills: form.useAllSkills ? undefined : form.selectedSkillIds,
-        starters: form.starters,
-        source: form.source,
+        name: submittedForm.name,
+        model: submittedForm.model,
+        thinkingLevel: submittedForm.thinkingLevel,
+        nodeId: submittedForm.nodeId,
+        cwd: submittedForm.cwd,
+        restrictToCwd: submittedForm.restrictToCwd,
+        system: submittedForm.system,
+        skills: submittedForm.useAllSkills ? undefined : submittedForm.selectedSkillIds,
+        starters: submittedForm.starters,
+        source: submittedForm.source,
         isNew,
-        includeSystem: form.systemEdited,
+        includeSystem: submittedForm.systemEdited,
       })
 
       let saved: Profile
@@ -334,31 +393,56 @@ export function ProfileDetailDrawer({
         saved = await profilesApi.update(normalizedId, payload)
       }
 
-      const settled: FormState = { ...form, systemEdited: false, source: saved }
-      setForm(settled)
-      setBaseline(settled)
+      if (!mountedRef.current || formScopeGenRef.current !== scopeGen || opGenRef.current.save !== saveSeq) {
+        return
+      }
+
+      const nextBaseline: FormState = { ...submittedForm, systemEdited: false, source: saved }
+      setBaseline(nextBaseline)
+      // Preserve any edits made while awaiting save rather than overwriting `form` with pre-await closure.
+      setForm((prev) => ({
+        ...prev,
+        source: saved,
+        systemEdited: prev.system === submittedForm.system ? false : prev.systemEdited,
+      }))
       onSaved?.(saved)
     } catch (err) {
+      if (!mountedRef.current || formScopeGenRef.current !== scopeGen || opGenRef.current.save !== saveSeq) {
+        return
+      }
       setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setIsSaving(false)
+      if (mountedRef.current && formScopeGenRef.current === scopeGen && opGenRef.current.save === saveSeq) {
+        setIsSaving(false)
+      }
     }
   }
 
   // 删除操作
   const handleConfirmDelete = async () => {
     if (!profile || isNew) return
+    const targetId = profile.id
+    const scopeGen = formScopeGenRef.current
+    const deleteSeq = ++opGenRef.current.del
     setIsDeleting(true)
     setError(null)
     try {
-      await profilesApi.delete(profile.id)
+      await profilesApi.delete(targetId)
+      if (!mountedRef.current || formScopeGenRef.current !== scopeGen || opGenRef.current.del !== deleteSeq) {
+        return
+      }
       setShowDeleteConfirm(false)
-      onDeleted?.(profile.id)
+      onDeleted?.(targetId)
     } catch (err) {
+      if (!mountedRef.current || formScopeGenRef.current !== scopeGen || opGenRef.current.del !== deleteSeq) {
+        return
+      }
       setError(err instanceof Error ? err.message : String(err))
       setShowDeleteConfirm(false)
     } finally {
-      setIsDeleting(false)
+      if (mountedRef.current && formScopeGenRef.current === scopeGen && opGenRef.current.del === deleteSeq) {
+        setIsDeleting(false)
+      }
     }
   }
 

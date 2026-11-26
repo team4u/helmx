@@ -1,0 +1,598 @@
+/* ==========================================================================
+ * 工具调用 26px 无框单行静音轨迹、思考折叠块与 diff/bash 展开体
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 5. 工具调用 26px 无框单行静音轨迹（Single-line Quiet Trace）
+ * ========================================================================== */
+
+.trace-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+.trace-entry .trace-row {
+  width: 100%;
+}
+
+.trace-block {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+.trace-block-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+}
+
+.trace-block-view {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.trace-io-toggle {
+  height: 26px;
+  width: 26px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  opacity: 0.58;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease, opacity 120ms ease;
+}
+
+.trace-block-head:hover .trace-io-toggle {
+  opacity: 0.85;
+}
+
+.trace-io-toggle:hover,
+.trace-io-toggle:focus-visible {
+  background: var(--bg-hover);
+  color: var(--fg);
+  opacity: 1;
+}
+
+.trace-io-toggle:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.trace-io-toggle-open {
+  background: var(--bg-hover);
+  color: var(--accent);
+  opacity: 1;
+}
+
+.trace-section-label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  letter-spacing: 0.01em;
+  user-select: none;
+  overflow-wrap: anywhere;
+}
+
+/* 内嵌工具调用详情块（共享 SDK 原语 @helmx/plugin-client ToolCallDetails，
+   宿主公共 trace 词汇；原先散落在 workflow 插件私有样式、swarm 侧无样式）。 */
+.tool-call-details {
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.tool-call-details > summary { cursor: pointer; }
+.tool-call-details .code-block-pre { max-height: 220px; overflow: auto; }
+
+.trace-toolview {
+  margin: 2px 0;
+}
+
+.trace-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.trace-group-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 8px;
+}
+
+.trace-group-summary {
+  height: 26px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  width: fit-content;
+}
+
+.trace-group-summary-multi {
+  max-width: 100%;
+  min-width: 0;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+.trace-group-leading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.trace-group-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-group-summary-multi .trace-group-badge,
+.trace-group-meta {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.trace-group-summary:hover,
+.trace-group-summary:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--fg-secondary);
+  box-shadow: none;
+}
+
+/* 有异常的折叠标题保留语义类，但维持静音中性色，仅通过右侧轻量徽标提醒 */
+.trace-group-summary-error {
+  color: var(--fg-muted);
+}
+
+.trace-group-summary-error:hover,
+.trace-group-summary-error:focus-visible {
+  color: var(--fg-secondary);
+}
+
+.trace-group-badge-error {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  font-size: 10.5px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--err) 7%, transparent);
+  color: color-mix(in srgb, var(--err) 72%, var(--fg-muted));
+}
+
+.trace-group-summary-error:hover .trace-group-badge-error,
+.trace-group-summary-error:focus-visible .trace-group-badge-error {
+  background: color-mix(in srgb, var(--err) 11%, transparent);
+  color: color-mix(in srgb, var(--err) 84%, var(--fg-secondary));
+}
+
+.trace-group-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: color-mix(in srgb, var(--fg-muted) 88%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.helmx-tooltip-content.trace-group-time-tooltip {
+  white-space: pre-line;
+}
+
+.trace-row {
+  width: 100%;
+  min-width: 0;
+  min-height: 26px;
+  padding: 2px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  color: var(--fg-secondary);
+  box-sizing: border-box;
+  overflow: hidden;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.trace-row:hover,
+.trace-row:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+  box-shadow: none;
+}
+
+.trace-row-chevron {
+  color: var(--fg-muted);
+  opacity: 0.35;
+  transition: opacity 120ms ease;
+  flex-shrink: 0;
+}
+
+.trace-row:hover .trace-row-chevron,
+.trace-row:focus-visible .trace-row-chevron,
+.trace-row[aria-expanded="true"] .trace-row-chevron {
+  opacity: 0.9;
+}
+
+.trace-row-error .trace-row-left > svg {
+  color: var(--err);
+}
+
+.trace-row-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.trace-row-left > svg {
+  flex-shrink: 0;
+}
+
+.trace-tool-name {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--fg);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.trace-tool-summary {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.trace-row-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.trace-row .badge,
+.trace-row .btn-xs {
+  height: 18px;
+  padding: 0 5px;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.trace-expanded-body {
+  margin: 3px 0 8px 13px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--border-strong);
+  background: color-mix(in srgb, var(--bg-subtle) 78%, transparent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.trace-expanded-body.trace-expanded-body-flush {
+  margin-left: 0;
+}
+
+.trace-expanded-body.thinking-expanded-body {
+  font-family: inherit;
+  color: var(--fg-muted);
+  width: auto;
+  max-width: 100%;
+  max-height: min(420px, 52vh);
+  overflow-y: auto;
+  overscroll-behavior: auto;
+  box-sizing: border-box;
+}
+
+.thinking-expanded-body .msg-ai-body {
+  width: 100%;
+  max-width: 100%;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--fg-muted);
+}
+
+.thinking-expanded-body .msg-ai-body p,
+.thinking-expanded-body .msg-ai-body ul,
+.thinking-expanded-body .msg-ai-body ol,
+.thinking-expanded-body .msg-ai-body pre,
+.thinking-expanded-body .msg-ai-body blockquote {
+  margin: 0 0 8px;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.thinking-expanded-body .msg-ai-body .code-block-wrap .code-block-pre {
+  margin: 0;
+}
+
+.thinking-expanded-body .msg-ai-body h1,
+.thinking-expanded-body .msg-ai-body h2,
+.thinking-expanded-body .msg-ai-body h3,
+.thinking-expanded-body .msg-ai-body h4 {
+  margin: 10px 0 6px;
+  font-size: 13.5px;
+  color: var(--fg);
+  max-width: 100%;
+}
+
+.thinking-expanded-body .msg-ai-body > :is(h1, h2, h3, h4, p):first-child {
+  margin-top: 0;
+}
+
+.thinking-expanded-body .msg-ai-body > :is(p, ul, ol, pre, blockquote, .code-block-wrap):last-child {
+  margin-bottom: 0;
+}
+
+/* 思考过程整体弱化：加粗/行内代码/链接继承弱化色，仅靠字重与底色区分 */
+.thinking-expanded-body .msg-ai-body strong,
+.thinking-expanded-body .msg-ai-body code:not(pre code),
+.thinking-expanded-body .msg-ai-body a {
+  color: inherit;
+}
+
+.thinking-expanded-body .msg-ai-body a {
+  text-decoration-color: currentColor;
+}
+
+/* ==========================================================================
+ * 5.1 内置工具展开体（edit 差异 / write·read 源码 / bash 输出 / 通用键值）
+ * 仅在无插件 tool.view 接管时使用；展开体在 26px 轨迹行下方，信息密度克制。
+ * ========================================================================== */
+
+/* 单行极简统计：edit +N −N / write 行数，tabular 数字，不挤压摘要 */
+.trace-row-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.trace-row-stats-add { color: var(--code-token-addition); }
+.trace-row-stats-remove { color: var(--code-token-deletion); }
+
+.trace-tool-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.trace-expanded-body .trace-section-label,
+.trace-tool-body .trace-section-label {
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--fg-secondary);
+  text-transform: none;
+  letter-spacing: normal;
+  overflow-wrap: anywhere;
+}
+
+.trace-tool-note {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+/* 行差异表：旧/新行号 + 符号 + 内容；待执行片段形态无行号列 */
+.trace-diff {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-xs);
+  background: var(--code-bg);
+  overflow: hidden;
+}
+.trace-diff-row {
+  display: grid;
+  grid-template-columns: 3.4em 3.4em 1fr;
+  align-items: stretch;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.trace-diff-pending .trace-diff-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+.trace-diff-num {
+  text-align: right;
+  padding: 0 6px;
+  background: var(--diff-gutter-bg);
+  border-right: 1px solid var(--diff-gutter-border);
+  color: var(--fg-muted);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.trace-diff-content {
+  padding: 0 10px 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.trace-diff-sign {
+  display: inline-block;
+  width: 1.2em;
+  user-select: none;
+  flex-shrink: 0;
+}
+.trace-diff-row-add { background: var(--diff-add-bg); }
+.trace-diff-row-remove { background: var(--diff-remove-bg); }
+.trace-diff-row-context .trace-diff-content { color: var(--fg-muted); }
+.trace-diff-word-add { background: var(--diff-add-word-bg); border-radius: 2px; }
+.trace-diff-word-remove { background: var(--diff-remove-word-bg); border-radius: 2px; }
+.trace-diff-row-add > .trace-diff-content > .trace-diff-sign { color: var(--code-token-addition); }
+.trace-diff-row-remove > .trace-diff-content > .trace-diff-sign { color: var(--code-token-deletion); }
+.trace-diff-more {
+  margin: 2px;
+  align-self: flex-start;
+}
+.trace-diff-note {
+  padding: 5px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  border-top: 1px dashed var(--border-strong);
+}
+
+/* bash 命令头与输出折叠脚注 */
+.trace-cmd-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-xs);
+}
+.trace-cmd-head code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.trace-out-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 源码预览节（行数说明 + 复制） */
+.trace-code-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.trace-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 工具展开体内的代码块（输入/输出/原始数据/源码预览）统一带框与内边距；
+ * 思考过程内的 Markdown 代码块已有 .code-block-wrap 承载外框，保持原有内嵌样式不变。 */
+.trace-expanded-body .code-block-pre:not(.code-lines-pre),
+.trace-tool-body .code-block-pre:not(.code-lines-pre) {
+  padding: 8px 10px;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-xs);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.trace-expanded-body .code-block-wrap .code-block-pre:not(.code-lines-pre),
+.trace-tool-body .code-block-wrap .code-block-pre:not(.code-lines-pre) {
+  padding: 10px 12px;
+  border: none;
+  border-radius: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 错误输出（edit/read 失败详情） */
+.trace-error-pre {
+  color: var(--err);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 通用键值（短值内联，多行/嵌套值块状） */
+.trace-kv {
+  font-family: var(--font-mono);
+}
+.trace-kv .kv-key {
+  word-break: break-all;
+}
+.trace-kv .kv-val {
+  white-space: pre-wrap;
+  min-width: 0;
+}
+.trace-kv-block {
+  margin: 0;
+  min-width: 0;
+}
+
+/* 原始数据折叠入口（入参 JSON + 原始输出 + 结构化结果） */
+.trace-raw {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.trace-raw-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 2px;
+}
+.trace-raw-body > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+@media (max-width: 680px) {
+  .trace-diff-row { grid-template-columns: 2.6em 2.6em 1fr; }
+  .trace-diff-pending .trace-diff-row { grid-template-columns: minmax(0, 1fr); }
+  .trace-kv { grid-template-columns: 1fr; gap: 2px; }
+}
+

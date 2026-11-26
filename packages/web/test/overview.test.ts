@@ -18,11 +18,11 @@ import type { Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import type { ConversationSummary } from '@helmx/protocol'
 import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import type { ResolvedSidebarBadge, SidebarViewItem } from '../src/shell/sidebar-model.js'
-import type { ConversationBackgroundIndex } from '../src/shell/background-activity-model.js'
+import type { ConversationBackgroundIndex } from '../src/shell/conversation-status-model.js'
 import {
   buildArchivedOverviewCards,
-  buildNewTopicCandidates,
   buildOverviewCards,
   buildSidebarGroupedWorkingSet,
   buildSidebarWorkingSet,
@@ -31,7 +31,6 @@ import {
   isOverviewDescendantActive,
   loadSidebarGroupBy,
   overviewBucketCounts,
-  overviewCardsNeedLiveClock,
   overviewDescendantMatchesQuery,
   overviewFilterParamsRepair,
   overviewNodeKey,
@@ -44,7 +43,6 @@ import {
   resolveSidebarOverviewDescendants,
   resolveSidebarOverviewPrimaryTarget,
   saveSidebarGroupBy,
-  sidebarOverviewCardsNeedLiveClock,
   OVERVIEW_DESCENDANT_LIMIT,
   SIDEBAR_DESCENDANT_AUTO_LIMIT,
   SIDEBAR_GROUP_BY_STORAGE_KEY,
@@ -52,7 +50,7 @@ import {
   SIDEBAR_RECENT_QUIET_LIMIT,
   type OverviewCard,
 } from '../src/overview/overview-model.js'
-import { buildAgentStandings } from '../src/shell/sidebar-model.js'
+import { buildAgentStandings, buildNewTopicCandidates } from '../src/shell/sidebar-model.js'
 import { formatLocationHash, hashHasPrimaryTarget, parseLocationHash, shouldPushLocationHistory } from '../src/lib/url-hash-model.js'
 import { spaceForTarget } from '../src/lib/types.js'
 import { flushMacrotask, waitForCondition } from './helpers/dom-harness.js'
@@ -60,6 +58,7 @@ import { makeTestStore, HelmxExternalStoreContext, type TestStoreOverrides } fro
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 
 const e = React.createElement
+const enT = createWebTranslator('en')
 ;(globalThis as Record<string, unknown>).React = React
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -104,6 +103,7 @@ function buildCards(
     background,
     profiles: overrides.profiles ?? [],
     plugins: overrides.plugins ?? [],
+    t: enT,
   })
 }
 
@@ -348,7 +348,7 @@ test('groupOverviewCards / overviewShouldShowSectionHeaders: status, profile and
     },
   )
 
-  const byStatus = groupOverviewCards(cards, 'status')
+  const byStatus = groupOverviewCards(cards, 'status', enT)
   assert.deepEqual(
     byStatus.map((g) => [g.key, g.label, g.cards.map((c) => c.root.id)]),
     [
@@ -359,13 +359,13 @@ test('groupOverviewCards / overviewShouldShowSectionHeaders: status, profile and
     ],
   )
   assert.deepEqual(
-    groupOverviewCards(cards.filter((c) => c.bucket !== 'unread_done'), 'status').map((g) => g.key),
+    groupOverviewCards(cards.filter((c) => c.bucket !== 'unread_done'), 'status', enT).map((g) => g.key),
     ['bucket:needs_attention', 'bucket:running', 'bucket:quiet'],
     'empty buckets are omitted completely',
   )
 
   // profile grouping orders profiles by first appearance (urgency-first) and keeps per-profile bucket/createdAt order
-  const byProfile = groupOverviewCards(cards, 'profile')
+  const byProfile = groupOverviewCards(cards, 'profile', enT)
   assert.deepEqual(
     byProfile.map((g) => [g.key, g.label, g.cards.map((c) => c.root.id)]),
     [
@@ -375,7 +375,7 @@ test('groupOverviewCards / overviewShouldShowSectionHeaders: status, profile and
   )
 
   // node grouping normalizes missing nodeId to local and keeps urgency-first node order
-  const byNode = groupOverviewCards(cards, 'node')
+  const byNode = groupOverviewCards(cards, 'node', enT)
   assert.deepEqual(
     byNode.map((g) => [g.key, g.label, g.cards.map((c) => c.root.id)]),
     [
@@ -383,7 +383,7 @@ test('groupOverviewCards / overviewShouldShowSectionHeaders: status, profile and
       ['node:remote-1', 'remote-1', [2]],
     ],
   )
-  assert.deepEqual(groupOverviewCards([], 'status'), [])
+  assert.deepEqual(groupOverviewCards([], 'status', enT), [])
 
   assert.equal(overviewShouldShowSectionHeaders({ groupBy: 'status', bucket: 'all', profileId: '', nodeId: '' }), true)
   assert.equal(overviewShouldShowSectionHeaders({ groupBy: 'status', bucket: 'running', profileId: '', nodeId: '' }), false, 'single bucket under status grouping flattens')
@@ -666,7 +666,7 @@ test('ConversationOverview clears the unread completion light and bucket count i
     assert.ok(findCard(8)?.querySelector('.status-dot-done'), 'unread completed card has a done light')
     assert.ok(findCard(9)?.querySelector('.status-dot-done') === null, 'read completed card has no unread light')
     assert.ok(unreadTab()?.textContent?.includes('1'), 'unread bucket pill starts at 1 before viewing')
-    await act(async () => store.openTarget({ kind: 'conversation', conversationId: 8 }, { split: true }))
+    await act(async () => store.actions.openTarget({ kind: 'conversation', conversationId: 8 }, { split: true }))
     assert.ok(findCard(8)?.querySelector('.status-dot-done') === null, 'opening the conversation hides its light immediately before the PATCH response')
     assert.ok(unreadTab()?.textContent?.includes('0'), 'opening the conversation drops the overview unread bucket count to 0 immediately')
   } finally {
@@ -722,7 +722,7 @@ test('ConversationOverview bucket filter narrows the grid (segmented control) an
       runningTab.click()
     })
     await act(async () => {
-      store.applyExternalLocation(parseLocationHash('#/overview'))
+      store.navActions.applyExternalLocation(parseLocationHash('#/overview'))
     })
     assert.equal(container.querySelectorAll('.overview-card').length, 3, 'an external back-to-unfiltered location restores the full grid')
     assert.ok(store.getNavSlice().primaryTarget.kind === 'overview', 'the nav state follows the external location')
@@ -751,7 +751,7 @@ test('ConversationOverview restores filter state from a deep-linked #/overview?s
     assert.ok(mount.container.textContent?.includes('2 of 3 conversation groups'), 'the stats line states the filtered count over the total')
     // 未知参数键一次自愈删除（replace 修正地址栏，不产生额外历史项）。
     await act(async () => {
-      store.applyExternalLocation(parseLocationHash('#/overview?sp.bucket=bogus&sp.q=%E8%B0%83%E7%A0%94'))
+      store.navActions.applyExternalLocation(parseLocationHash('#/overview?sp.bucket=bogus&sp.q=%E8%B0%83%E7%A0%94'))
     })
     await overviewSettle()
     assert.deepEqual(
@@ -954,7 +954,7 @@ test('Sidebar overview & rail dot contract: no topbar overview button, archived 
 
     // 切去设置空间时，对话空间 Rail 图标浮现无数字态势染色圆点，Tooltip/aria-label 保留明细
     await act(async () => {
-      store.openSpace('settings')
+      store.actions.openSpace('settings')
     })
     assert.equal(store.getPrimaryTarget().kind, 'profiles')
     const convRailInSettings = container.querySelector<HTMLButtonElement>('.rail-space-btn')
@@ -970,7 +970,7 @@ test('Sidebar overview & rail dot contract: no topbar overview button, archived 
 
     // 再点回对话空间：从空间记忆原样恢复 #/overview?sp.bucket=archived，展开态下 Rail 圆点随之收起
     await act(async () => {
-      store.openSpace('conversations')
+      store.actions.openSpace('conversations')
     })
     assert.deepEqual(
       store.getPrimaryTarget(),
@@ -1611,7 +1611,7 @@ test('ConversationOverview empty semantics: filtered no-match offers clear filte
   const mount = await mountOverview(store)
   try {
     await act(async () => {
-      store.setScreenParams({ q: '不存在的词' }, {})
+      store.actions.setScreenParams({ q: '不存在的词' }, {})
     })
     await overviewSettle()
     assert.equal(mount.container.querySelectorAll('.overview-card').length, 0)
@@ -1741,7 +1741,7 @@ test('ConversationOverview batch boundary: selection stays within the visible se
 
     // 收窄筛选：常规根 A 出局（assistant），选择集合立即收敛到可见项。
     await act(async () => {
-      store.setScreenParams({ profile: 'coder' }, {})
+      store.actions.setScreenParams({ profile: 'coder' }, {})
     })
     await overviewSettle()
     assert.ok(mount.container.textContent?.includes('1 selected'), 'hidden selections drop out immediately')
@@ -1927,7 +1927,7 @@ test('ConversationOverview protected card keeps the view-only menu actions (peek
     // macrotask after the Portal unmounts. Flush those tasks first (same discipline as the other
     // menu tests' settle()), otherwise the next trigger's pointerdown is consumed as an outside
     // click and the second menu never opens. The modal drawer must also be closed first.
-    store.popDrawer()
+    store.actions.popDrawer()
     await waitForCondition(() => store.getDrawerStack().length === 0)
     await waitForCondition(() => document.querySelectorAll('.helmx-dropdown-content').length === 0)
     await flushMacrotask()
@@ -2112,7 +2112,7 @@ test('ConversationOverview grouped stage renders non-empty status sections, flat
 
     // 深链切换到 node 分组并校验无效 sp.group 自愈
     await act(async () => {
-      store.applyExternalLocation(parseLocationHash('#/overview?sp.group=node'))
+      store.navActions.applyExternalLocation(parseLocationHash('#/overview?sp.group=node'))
     })
     await overviewSettle()
     assert.deepEqual(
@@ -2120,7 +2120,7 @@ test('ConversationOverview grouped stage renders non-empty status sections, flat
       ['node:local', 'node:remote-1'],
     )
     await act(async () => {
-      store.applyExternalLocation(parseLocationHash('#/overview?sp.group=bogus'))
+      store.navActions.applyExternalLocation(parseLocationHash('#/overview?sp.group=bogus'))
     })
     await overviewSettle()
     assert.deepEqual(store.getNavSlice().primaryTarget, { kind: 'overview' }, 'invalid group param repairs to canonical clean target')
@@ -2241,11 +2241,6 @@ test('overview timing pure helpers: earliest pendingAskSince, root/descendant ru
   assert.deepEqual(resolveOverviewDescendantChipTiming(chip21, now), { kind: 'running', elapsedMs: 30_000 })
   const chip11 = byId.get(1)!.descendants.find((d) => d.conv.id === 11)!
   assert.deepEqual(resolveOverviewDescendantChipTiming(chip11, now), { kind: 'waiting', elapsedMs: 45_000 })
-
-  // 零定时器门控：全员安静/已完成（或缺少起点）返回 false；有任一活跃起点返回 true
-  assert.equal(overviewCardsNeedLiveClock([byId.get(4)!, byId.get(5)!, byId.get(6)!]), false)
-  assert.equal(overviewCardsNeedLiveClock([byId.get(1)!]), true)
-  assert.equal(overviewCardsNeedLiveClock([byId.get(2)!]), true)
 })
 
 test('ConversationOverview DOM: renders live waiting/running stopwatches, settled totals, active chip stopwatches, and uses 0 timers when quiet / 1 shared timer when active', { timeout: 60_000 }, async () => {
@@ -2551,29 +2546,6 @@ test('sidebar descendants stay bounded for wide and nested agent trees while pre
   assert.equal(expanded.visible.length, 18, 'manual expansion still renders direct children only')
 })
 
-test('sidebarOverviewCardsNeedLiveClock: returns false for quiet trees and true when visible card or descendant has stopwatch anchor', { timeout: 60_000 }, () => {
-  const quietCards = buildCards([
-    conv({ id: 1, status: 'idle', runDurationMs: 120_000 }),
-    conv({ id: 2, status: 'done', unread: true, runDurationMs: 60_000 }),
-  ])
-  assert.equal(sidebarOverviewCardsNeedLiveClock(quietCards, new Map()), false)
-
-  const runningCards = buildCards([
-    conv({ id: 3, status: 'working', runStartedAt: 10_000 }),
-  ])
-  assert.equal(sidebarOverviewCardsNeedLiveClock(runningCards, new Map()), true)
-
-  // 仅子会话有秒表起点（根会话为安静占位）时，只看可见子行决定是否开表
-  const childOnlyCards = buildCards([
-    conv({ id: 4, status: 'idle' }),
-    conv({ id: 41, parentConversationId: 4, status: 'working', runStartedAt: 20_000 }),
-  ])
-  assert.equal(
-    sidebarOverviewCardsNeedLiveClock(childOnlyCards, new Map([[4, childOnlyCards[0]!.descendants]])),
-    true,
-  )
-})
-
 test('buildSidebarWorkingSet: keeps all active trees, caps quiet by updatedAt desc, preserves viewed quiet root/descendant, and bypasses cap when searching', { timeout: 60_000 }, () => {
   const quietList = Array.from({ length: SIDEBAR_RECENT_QUIET_LIMIT + 4 }, (_, index) => {
     const id = 100 + index
@@ -2748,6 +2720,7 @@ test('buildSidebarGroupedWorkingSet and sidebar group-by persistence: per-group 
     cards,
     activeConversationIds: new Set([100]),
     agentStandings,
+    t: enT,
   })
   assert.deepEqual(
     byProfile.groups.map((g) => g.profileId),
@@ -2777,6 +2750,7 @@ test('buildSidebarGroupedWorkingSet and sidebar group-by persistence: per-group 
     cards: emptyAssistantCards,
     activeConversationIds: new Set(),
     agentStandings: emptyAssistantStandings,
+    t: enT,
   })
   assert.deepEqual(
     populatedFirst.groups.map((g) => g.profileId),
@@ -2791,6 +2765,7 @@ test('buildSidebarGroupedWorkingSet and sidebar group-by persistence: per-group 
     activeConversationIds: new Set(),
     agentStandings,
     query: 'Coder 历史 1',
+    t: enT,
   })
   assert.equal(profileSearch.searchActive, true)
   assert.equal(profileSearch.omittedQuietCount, 0)
@@ -2803,6 +2778,7 @@ test('buildSidebarGroupedWorkingSet and sidebar group-by persistence: per-group 
     cards,
     activeConversationIds: new Set(),
     agentStandings,
+    t: enT,
   })
   assert.deepEqual(byNode.groups.map((g) => g.nodeId).sort(), ['local', 'remote-gpu'])
   const localGroup = byNode.groups.find((g) => g.nodeId === 'local')!
