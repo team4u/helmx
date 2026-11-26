@@ -9,9 +9,11 @@ export interface ToolActivityRegistry {
 export const ToolActivityContext = createContext<ToolActivityRegistry | undefined>(undefined)
 
 /**
- * Reports real background tool activity to the containing timeline turn,
- * controlling the copy/fork affordances of that turn. When callId is missing,
- * or the component is not inside the timeline Provider, nothing is registered
+ * Reports real background tool activity to the containing timeline turn.
+ * While the turn still has registered activity, the host withholds only the
+ * history-rewriting "regenerate" affordance of that turn; copy and fork stay
+ * available because they are read-only. When callId is missing, or the
+ * component is not inside the timeline Provider, nothing is registered
  * and no global state is created. Changes of state or callId and unmounting
  * release this source automatically; components inside the workbench do not
  * affect the timeline.

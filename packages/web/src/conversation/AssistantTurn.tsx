@@ -135,7 +135,10 @@ function AssistantTurnContent({
   // 生成中（live / 父会话 working|blocked / 在途工具 / 激活步骤组）的页脚由实时秒表替代。
   // 插件登记的后台活动（如 subagent 后台句柄）只说明该回合的工具仍在后台运行，父回合自身
   // 已结算：其时间、耗时与模型标签是已确定的事实，若一并隐藏会让消息下方整行空白且没有
-  // 秒表兜底；因此后台活动只收起语义上会误导的复制/重新生成/分叉操作条。
+  // 秒表兜底；复制与分叉是只读操作（分叉在服务端复制出新会话，不改动原会话），同样照常
+  // 显示。后台活动期间唯一收起的是“重新生成”：它经 replaceFromEntryId 回退历史，而服务端
+  // 只校验父会话自身的活动回合，不知道仍在运行的后台任务，回退会让子代理的回报落进一个
+  // 已不记得派工的上下文。
   const isGenerating = isAssistantTurnBusy(turn, conversation, { isLatestTurn })
   const hasBackgroundActivity =
     !isGenerating && isAssistantTurnBusy(turn, conversation, { activeToolCallIds })
@@ -170,7 +173,7 @@ function AssistantTurnContent({
   const tooltipLines = [baseTooltipText, breakdownParts.join(' · ')].filter((line) => line !== '')
   const tooltipText = tooltipLines.join('\n')
 
-  const showHoverBar = !isGenerating && !hasBackgroundActivity && (lastText !== '' || turn.entryIds.length > 0)
+  const showHoverBar = !isGenerating && (lastText !== '' || turn.entryIds.length > 0)
   // 实际生成模型标签：仅来自本回合已落库 pi.assistant 的可信身份；生成中回合不展示，
   // 避免把待生成内容归到任何模型；缺失则不显示。
   const modelFull = turn.model !== undefined ? assistantModelFullLabel(turn.model, t) : ''
@@ -261,7 +264,7 @@ function AssistantTurnContent({
           {showHoverBar ? (
             <span className="msg-hover-bar">
               {lastText !== '' ? <CopyButton text={lastText} /> : null}
-              {isLatestTurn && onRegenerate !== undefined ? (
+              {isLatestTurn && onRegenerate !== undefined && !hasBackgroundActivity ? (
                 <IconButton
                   icon={<HelmxIcon name="rotate-cw" size={12} />}
                   variant="ghost"
