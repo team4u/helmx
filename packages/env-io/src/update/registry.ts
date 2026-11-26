@@ -8,7 +8,7 @@
  */
 import fs from 'node:fs/promises';
 import rawFs from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, type Hash } from 'node:crypto';
 import process from 'node:process';
 import { UpgradeRejectedError } from './errors.js';
 import { assertDistTag } from './semver.js';
@@ -125,6 +125,31 @@ export interface DownloadTarballOptions {
   timeoutMs?: number;
 }
 
+/** Write the whole chunk, retrying short writes (`FileHandle.write` may accept only part of a chunk). */
+async function writeChunkFully(handle: fs.FileHandle, chunk: Uint8Array): Promise<void> {
+  let written = 0;
+  while (written < chunk.byteLength) {
+    const { bytesWritten } = await handle.write(chunk, written, chunk.byteLength - written);
+    written += bytesWritten;
+  }
+}
+
+/** Stream `body` into the open `handle` while hashing every byte; the reader lock is always released. */
+async function writeBodyHashing(body: ReadableStream<Uint8Array>, handle: fs.FileHandle, hash: Hash): Promise<void> {
+  const reader = body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      if (value.byteLength === 0) continue;
+      hash.update(value);
+      await writeChunkFully(handle, value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function downloadTarballWithSri(
   url: string,
   destPath: string,
@@ -142,25 +167,7 @@ async function downloadTarballWithSri(
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     handle = await fs.open(destPath, 'w', 0o600);
     if (process.platform !== 'win32') await handle.chmod(0o600);
-    if (res.body !== null) {
-      const reader = res.body.getReader();
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value.byteLength > 0) {
-            hash.update(value);
-            let written = 0;
-            while (written < value.byteLength) {
-              const { bytesWritten } = await handle.write(value, written, value.byteLength - written);
-              written += bytesWritten;
-            }
-          }
-        }
-      } finally {
-        reader.releaseLock();
-      }
-    }
+    if (res.body !== null) await writeBodyHashing(res.body, handle, hash);
     await handle.close();
     handle = undefined;
     succeeded = true;
