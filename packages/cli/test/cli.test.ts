@@ -1811,6 +1811,8 @@ test('conversations get: --limit/--turns/--cursor map to query params; --current
   const hitsBeforeInvalid = hub.hits.length
   for (const args of [
     ['conversations', 'get', '7', '--limit', '0', '--json'],
+    ['conversations', 'get', '7', '--limit', '501', '--json'],
+    ['conversations', 'get', '7', '--limit', '1.5', '--json'],
     ['conversations', 'get', '7', '--turns', '0', '--json'],
     ['conversations', 'get', '7', '--turns', '51', '--json'],
     ['conversations', 'get', '7', '--turns', '1.5', '--json'],

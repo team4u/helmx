@@ -15,7 +15,14 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { CORE_CLI_COMMAND_PATHS, HelmxError, type ActionManifest, type ConversationSummary } from '@helmx/protocol'
+import {
+  assertSchemaCompilable,
+  CORE_CLI_COMMAND_PATHS,
+  HelmxError,
+  validateOrThrow,
+  type ActionManifest,
+  type ConversationSummary,
+} from '@helmx/protocol'
 import { handleApi } from '../src/http/routes.js'
 import { actionCliCommand } from '../src/runtime/action-prompts.js'
 import { systemSectionsOf } from '../src/runtime/hook-projection.js'
@@ -1689,7 +1696,20 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       assert.equal(actionNulSearch.status, 400)
       assert.equal(actionNulSearch.code, 'validation_error')
 
-      // 5. core:conversations.get supports turns (1..50) and rejects limit + turns conflict with 400 validation_error.
+      // 5. core:conversations.get supports turns (1..50) and enforces limit + turns mutual exclusion in its JSON Schema and HTTP boundary.
+      const getManifest = kernel.plugins
+        .listActions()
+        .find((m) => m.pluginId === 'core:conversations' && m.id === 'get')
+      assert.ok(getManifest !== undefined)
+      assertSchemaCompilable(getManifest.inputSchema)
+      validateOrThrow(getManifest.inputSchema, { conversationId: 1 }, 'core:conversations.get')
+      validateOrThrow(getManifest.inputSchema, { conversationId: 1, limit: 10 }, 'core:conversations.get')
+      validateOrThrow(getManifest.inputSchema, { conversationId: 1, turns: 2 }, 'core:conversations.get')
+      assert.throws(
+        () => validateOrThrow(getManifest.inputSchema, { conversationId: 1, limit: 10, turns: 2 }, 'core:conversations.get'),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      )
+
       const getByTurns = await postCoreAction(kernel, 'conversations', 'get', {
         conversationId: 1,
         turns: 2,

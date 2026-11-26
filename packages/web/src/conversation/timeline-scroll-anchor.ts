@@ -52,15 +52,23 @@ export function restoreTimelineScrollAnchor(
   anchor: TimelineScrollAnchor | undefined,
 ): void {
   if (anchor === undefined) return
-  const target =
-    anchor.element.isConnected && scroller.contains(anchor.element)
-      ? anchor.element
-      : findTimelineAnchorByAttr(scroller, '[data-turn-tail-id]', (el) => el.dataset.turnTailId, anchor.turnTailId) ??
-        findTimelineAnchorByAttr(scroller, '[data-entry-id]', (el) => el.dataset.entryId, anchor.entryId)
+  const wasConnected = anchor.element.isConnected && scroller.contains(anchor.element)
+  const target = wasConnected
+    ? anchor.element
+    : findTimelineAnchorByAttr(scroller, '[data-turn-tail-id]', (el) => el.dataset.turnTailId, anchor.turnTailId) ??
+      findTimelineAnchorByAttr(scroller, '[data-entry-id]', (el) => el.dataset.entryId, anchor.entryId)
   if (target === undefined) return
   const rect = target.getBoundingClientRect()
+  // Connected SSE growth appends at the tail while `entryId` stays unchanged, so compensating by `bottom` would push
+  // reading position downward; only a remounted turn or a connected mega-turn head-prepend (where `entryId` shifts
+  // older while `turnTailId` stays identical) should anchor by `bottom`.
+  const headPrependedIntoTurn =
+    anchor.turnTailId !== undefined &&
+    anchor.bottom !== undefined &&
+    target.dataset.turnTailId === anchor.turnTailId &&
+    (!wasConnected || (anchor.entryId !== undefined && target.dataset.entryId !== anchor.entryId))
   const delta =
-    anchor.turnTailId !== undefined && anchor.bottom !== undefined
+    headPrependedIntoTurn && anchor.bottom !== undefined
       ? rect.bottom - anchor.bottom
       : rect.top - anchor.top
   if (Math.abs(delta) > 1) scroller.scrollTop += delta

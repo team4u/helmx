@@ -360,7 +360,6 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
               signal,
             })
           } catch (error) {
-            release()
             if (!isAbortError(error) && !isStale()) {
               host.updateLive((state) => mergeConversationDetail(state, page1, true))
             }

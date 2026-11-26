@@ -84,3 +84,55 @@ test('restoreTimelineScrollAnchor recovers remounted assistant turn via data-tur
   })
   assert.deepEqual(writes, [320], 'compensates rect.bottom - anchor.bottom (380 - 260 = +120px)')
 })
+
+test('restoreTimelineScrollAnchor does not shift downward on connected SSE turn tail growth, but anchors bottom on connected headless mega-turn prepend', { timeout: 60_000 }, () => {
+  const scroller = document.createElement('div')
+  const turn = document.createElement('div')
+  turn.dataset.entryId = '20'
+  turn.dataset.turnTailId = '21'
+  scroller.append(turn)
+  document.body.append(scroller)
+
+  let top = 300
+  const writes: number[] = []
+  Object.defineProperty(scroller, 'scrollTop', {
+    configurable: true,
+    get: () => top,
+    set: (value: number) => { top = value; writes.push(value) },
+  })
+
+  // 1. Connected SSE turn growth at tail: top stays 120, bottom grows 260 -> 420, entryId stays '20', turnTailId advances '21' -> '22'
+  let rect = { top: 120, bottom: 420 }
+  turn.getBoundingClientRect = () => rect as DOMRect
+  turn.dataset.turnTailId = '22'
+  restoreTimelineScrollAnchor(scroller, {
+    element: turn,
+    top: 120,
+    bottom: 260,
+    entryId: '20',
+    turnTailId: '21',
+  })
+  // Also verify when turnTailId stays identical ('21' -> '21') while bottom grows from appended text
+  turn.dataset.turnTailId = '21'
+  restoreTimelineScrollAnchor(scroller, {
+    element: turn,
+    top: 120,
+    bottom: 260,
+    entryId: '20',
+    turnTailId: '21',
+  })
+  assert.deepEqual(writes, [], 'connected SSE tail growth must not push scrollTop downward')
+
+  // 2. Connected headless mega-turn (turn:root -> turn:root): earlier entries prepend at head -> entryId shifts '20' -> '11', turnTailId stays '21'
+  turn.dataset.entryId = '11'
+  turn.dataset.turnTailId = '21'
+  rect = { top: 150, bottom: 380 }
+  restoreTimelineScrollAnchor(scroller, {
+    element: turn,
+    top: 120,
+    bottom: 260,
+    entryId: '20',
+    turnTailId: '21',
+  })
+  assert.deepEqual(writes, [420], 'connected mega-turn head-prepend compensates rect.bottom - anchor.bottom (380 - 260 = +120px)')
+})

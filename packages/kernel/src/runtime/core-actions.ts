@@ -280,6 +280,7 @@ function registerConversationCoreActions(runtime: KernelRuntime, pluginHost: Cor
       },
       required: ['conversationId'],
       additionalProperties: false,
+      not: { type: 'object', required: ['limit', 'turns'] },
     },
     outputSchema: OBJECT_OUTPUT_SCHEMA,
     handler: async (input: { conversationId: number; limit?: number; turns?: number; cursor?: string }) =>

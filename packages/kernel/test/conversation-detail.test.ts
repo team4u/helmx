@@ -456,7 +456,8 @@ test('pageVisibleTurns: TURN_HARD_ENTRY_CAP performs bounded 1-displayable-entry
     withOlderEntries.push({ id: idB++, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: `rw-${i}` }] }] })
   }
   const rwThrough = idB - 1
-  withOlderEntries.push({ id: idB++, kind: 'helmx.rewind', data: { fromEntryId: rwFrom, throughEntryId: rwThrough } })
+  const rwMarkerId = idB++
+  withOlderEntries.push({ id: rwMarkerId, kind: 'helmx.rewind', data: { fromEntryId: rwFrom, throughEntryId: rwThrough } })
   for (let i = 0; i < TURN_HARD_ENTRY_CAP; i += 1) {
     withOlderEntries.push({ id: idB++, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: `step-${i}` }] }] })
   }
@@ -466,6 +467,10 @@ test('pageVisibleTurns: TURN_HARD_ENTRY_CAP performs bounded 1-displayable-entry
   assert.ok(page1B.nextCursor !== undefined, 'lookahead must surface nextCursor past hidden/rewind span')
 
   const page2B = await svcB.service.getConversationDetail(15, { turns: 1, cursor: page1B.nextCursor })
-  assert.deepEqual(page2B.entries.map((e) => e.id), ['1'])
+  assert.deepEqual(
+    page2B.entries.map((e) => e.id),
+    ['1', String(rwMarkerId)],
+    'next page must preserve helmx.rewind marker alongside older displayable entry while hiding rewound/system entries',
+  )
   assert.equal(page2B.nextCursor, undefined)
 })

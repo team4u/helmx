@@ -320,20 +320,27 @@ export class ConversationDetailService {
       remainingInPage: ReadonlyArray<RawEntry>,
       nextBatchCursor: unknown,
     ): Promise<{ collected: RawEntry[]; nextCursor: unknown }> => {
-      for (const item of remainingInPage) {
+      let seenRewindMarker = false
+      const inspectItem = (item: RawEntry): boolean => {
         const itemId = Number(item.id)
         if (item.kind === 'helmx.rewind') {
           recordRewind(item)
-          resumeAfterId = itemId
-          continue
+          seenRewindMarker = true
+          return false
         }
         if (item.kind === 'pi.system' || coveredByRewind(itemId, rewindCuts)) {
-          resumeAfterId = itemId
-          continue
+          if (!seenRewindMarker) resumeAfterId = itemId
+          return false
         }
-        return {
-          collected,
-          nextCursor: { after: resumeAfterId!, order: 'descending' },
+        return true
+      }
+
+      for (const item of remainingInPage) {
+        if (inspectItem(item)) {
+          return {
+            collected,
+            nextCursor: { after: resumeAfterId!, order: 'descending' },
+          }
         }
       }
       let lookCursor = nextBatchCursor
@@ -345,19 +352,11 @@ export class ConversationDetailService {
           BACKGROUND_CONTEXT,
         )
         for (const item of lookPage.items as never as RawEntry[]) {
-          const itemId = Number(item.id)
-          if (item.kind === 'helmx.rewind') {
-            recordRewind(item)
-            resumeAfterId = itemId
-            continue
-          }
-          if (item.kind === 'pi.system' || coveredByRewind(itemId, rewindCuts)) {
-            resumeAfterId = itemId
-            continue
-          }
-          return {
-            collected,
-            nextCursor: { after: resumeAfterId!, order: 'descending' },
+          if (inspectItem(item)) {
+            return {
+              collected,
+              nextCursor: { after: resumeAfterId!, order: 'descending' },
+            }
           }
         }
         lookCursor = lookPage.next

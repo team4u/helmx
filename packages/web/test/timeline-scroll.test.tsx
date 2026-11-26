@@ -707,4 +707,131 @@ describe("timeline-scroll", () => {
       document.elementFromPoint = origElementFromPoint
     }
   })
+
+  test('已连接助手回合因 SSE 尾部生长时保持 top 稳定不向下推；无边界巨型回合上翻同 key 头部插入时按 bottom 补偿', { timeout: 60_000 }, async () => {
+    const raf = installManualRaf()
+
+    // 1. Connected assistant turn receives new SSE entry at its tail while scrolled up -> scrollTop stays stable
+    const initialEntries: ConversationEntry[] = [
+      humanEntry('1', '提问'),
+      assistantEntry('2', '第一段回答'),
+    ]
+    const scrollerA = await renderTimeline(makeConv(13, { status: 'working' }), initialEntries)
+    const mockA = setupClampedScroll(scrollerA, { scrollHeight: 2000, clientHeight: 800, scrollTop: 0 })
+    await exhaustInitialWindow(raf)
+
+    scrollerA.dispatchEvent(wheelUpEvent())
+    mockA.setTopSilent(500)
+    scrollerA.dispatchEvent(new Event('scroll'))
+
+    const turnElA = host!.querySelector<HTMLElement>('[data-turn-tail-id="2"]')!
+    assert.ok(turnElA !== null)
+    scrollerA.getBoundingClientRect = () => ({ top: 0, bottom: 800, left: 0, width: 400, height: 800 } as DOMRect)
+    let sseGrown = false
+    turnElA.getBoundingClientRect = () => ({ top: 140, bottom: sseGrown ? 500 : 280 } as DOMRect)
+
+    const origElementFromPoint = document.elementFromPoint
+    document.elementFromPoint = () => turnElA
+    try {
+      mockA.setHeight(2400)
+      sseGrown = true
+      await rerenderTimeline({
+        conv: makeConv(13, { status: 'working' }),
+        entries: [...initialEntries, assistantEntry('3', 'SSE 追加第二段')],
+      })
+      assert.equal(host!.querySelector<HTMLElement>('[data-turn-tail-id="3"]') === turnElA, true, '同回合应复用同一 DOM wrapper')
+      assert.equal(mockA.top(), 500, '已连接回合尾部 SSE 生长绝不得按 bottom 向下推挤阅读位置')
+    } finally {
+      document.elementFromPoint = origElementFromPoint
+    }
+
+    act(() => root!.unmount())
+    root = undefined
+    host?.remove()
+    host = undefined
+
+    // 2. Connected headless mega-turn (turn:root -> turn:root) prepends earlier steps at head -> entryId shifts older while turnTailId unchanged -> bottom compensation
+    const tailEntries: ConversationEntry[] = [
+      assistantEntry('20', '尾段步骤 B'),
+      assistantEntry('21', '尾段结论'),
+    ]
+    const prependedHeadlessEntries: ConversationEntry[] = [
+      assistantEntry('11', '更早步骤 A'),
+      ...tailEntries,
+    ]
+    const convB = makeConv(14, { status: 'idle', lastEntryId: 21 })
+    const storeB = makeTestStore({
+      conversations: [convB],
+      conversationDetails: { [convB.id]: { ...convB, entries: tailEntries, nextCursor: 'older-headless' } },
+    })
+    let resolveOlderB!: () => void
+    const olderPromiseB = new Promise<void>((resolve) => {
+      resolveOlderB = resolve
+    })
+    ;(storeB.actions as unknown as { loadEarlierEntries: (id: number) => Promise<void> }).loadEarlierEntries = async (id: number) => {
+      await olderPromiseB
+      storeB.updateLive((state) => ({
+        ...state,
+        conversationDetails: {
+          ...state.conversationDetails,
+          [id]: { ...convB, entries: prependedHeadlessEntries, nextCursor: 'even-older' },
+        },
+      }))
+    }
+
+    function LiveTimelineB(): React.ReactNode {
+      const detail = useConversationDetail(convB.id)
+      return e(ConversationTimeline, {
+        conversation: convB,
+        detailEntries: detail?.entries ?? [],
+        onRequestEdit: () => {},
+      })
+    }
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    await act(async () => {
+      root!.render(e(HostStoreProviders, { value: storeB }, e(LiveTimelineB)))
+    })
+    const scrollerB = host.querySelector<HTMLElement>('.timeline-scroll')!
+    const mockB = setupClampedScroll(scrollerB, { scrollHeight: 1600, clientHeight: 800, scrollTop: 0 })
+    await exhaustInitialWindow(raf)
+
+    scrollerB.dispatchEvent(wheelUpEvent())
+    mockB.setTopSilent(400)
+    scrollerB.dispatchEvent(new Event('scroll'))
+
+    const turnElB = host.querySelector<HTMLElement>('[data-turn-tail-id="21"]')!
+    assert.ok(turnElB !== null)
+    assert.equal(turnElB.dataset.entryId, '20')
+    scrollerB.getBoundingClientRect = () => ({ top: 0, bottom: 800, left: 0, width: 400, height: 800 } as DOMRect)
+    turnElB.getBoundingClientRect = () => ({ top: 120, bottom: 320 } as DOMRect)
+
+    document.elementFromPoint = () => turnElB
+    try {
+      await act(async () => {
+        host!.querySelector<HTMLButtonElement>('.timeline-load-older-btn')!.click()
+      })
+      mockB.setHeight(2400)
+      await act(async () => {
+        resolveOlderB()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      const sameTurnElB = host.querySelector<HTMLElement>('[data-turn-tail-id="21"]')!
+      assert.ok(sameTurnElB === turnElB, '未到人类边界时仍为 turn:root，应复用同一 DOM wrapper')
+      assert.equal(sameTurnElB.dataset.entryId, '11')
+      sameTurnElB.getBoundingClientRect = () => ({ top: 120, bottom: 520 } as DOMRect)
+
+      await act(async () => {
+        raf.flush(2)
+      })
+      // bottom moved 320 -> 520 (+200px) -> scrollTop compensates 400 + 200 = 600
+      assert.equal(mockB.top(), 600, '同 key 无头巨型回合头部插入后应按 rect.bottom - anchor.bottom 补偿 +200px')
+    } finally {
+      document.elementFromPoint = origElementFromPoint
+    }
+  })
 })

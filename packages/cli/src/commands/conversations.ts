@@ -150,8 +150,8 @@ export function conversationsCommands(): CommandSpec[] {
         throw new CliError('--limit and --turns are mutually exclusive', 'invalid_flag_value')
       }
       if (limit !== undefined) {
-        if (!Number.isInteger(limit) || limit < 1) {
-          throw new CliError(`--limit must be a positive integer, got "${limit}"`, 'invalid_flag_value')
+        if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+          throw new CliError(`--limit must be an integer between 1 and 500, got "${limit}"`, 'invalid_flag_value')
         }
         query.set('limit', String(limit))
       }

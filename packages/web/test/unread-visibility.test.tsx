@@ -836,6 +836,7 @@ describe("unread-visibility", () => {
     const conv2Cursors: Array<string | null> = []
     const conv3Cursors: Array<string | null> = []
     const conv4Cursors: Array<string | null> = []
+    const conv5Cursors: Array<string | null> = []
 
     const toolCallOnly = (id: string) => ({
       id,
@@ -998,6 +999,36 @@ describe("unread-visibility", () => {
             })
           }
         }
+
+        if (path.startsWith('/api/conversations/5')) {
+          conv5Cursors.push(cursor)
+          if (cursor === null) {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 5, stateChangeSeq: 1, lastEntryId: 20 }),
+                entries: [{ id: '20', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'tail-5' }] }] }],
+                nextCursor: 'p1',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'p1') {
+            return new Response(
+              JSON.stringify({
+                ...makeConv({ id: 5, stateChangeSeq: 1, lastEntryId: 20 }),
+                entries: [toolResultOnly('19')],
+                nextCursor: 'p2',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            )
+          }
+          if (cursor === 'p2') {
+            return new Response(JSON.stringify({ error: { message: 'conv5 page2 boom' } }), {
+              status: 500,
+              headers: { 'content-type': 'application/json' },
+            })
+          }
+        }
         return undefined
       },
     })
@@ -1014,6 +1045,7 @@ describe("unread-visibility", () => {
               makeConv({ id: 2, stateChangeSeq: 1, lastEntryId: 10 }),
               makeConv({ id: 3, stateChangeSeq: 1, lastEntryId: 20 }),
               makeConv({ id: 4, stateChangeSeq: 1, lastEntryId: 5 }),
+              makeConv({ id: 5, stateChangeSeq: 1, lastEntryId: 20 }),
             ],
             pendingAsks: [],
             plugins: [],
@@ -1076,6 +1108,18 @@ describe("unread-visibility", () => {
       )
       assert.equal(h.store().conversationDetails[3]?.nextCursor, 'p2', 'nextCursor 应停留在 p2 以便重试')
       assert.ok(h.store().loadErrors['history:3'] !== undefined, 'page2 失败应记录 history:3 加载错误')
+
+      // 5. With active HighlightedEntry watcher subscribing to detail commits, page2 error must not allow re-entrant fetch before loadErrors is set
+      await act(async () => {
+        h.store().openTarget({ kind: 'conversation', conversationId: 5 }, { highlightEntryId: '999' })
+      })
+      await h.waitFor((s) => s.loadErrors['history:5'] !== undefined)
+      assert.deepEqual(conv5Cursors, [null, 'p1', 'p2'], 'page1 提交期间 inFlight 必须阻止重入拉取，仅尝试 1 次 p2')
+      assert.deepEqual(
+        h.store().conversationDetails[5]?.entries.map((e) => e.id),
+        ['19', '20'],
+      )
+      assert.equal(h.store().conversationDetails[5]?.nextCursor, 'p2')
     } finally {
       await h.close()
     }
