@@ -3,7 +3,7 @@
  */
 import { HelmxError } from '@helmx/protocol'
 import { readJournal, WorkflowMetaError, WorkflowRuntimeError, type JournalReadResult } from '../dsl/index.js'
-import type { RunDetail, RunHeader } from './types.js'
+import type { PersistedSubagentSpec, RunDetail, RunHeader } from './types.js'
 
 export const MAX_CRASH_RECOVERIES = 3
 
@@ -31,7 +31,8 @@ export function classifyRunFailureCode(
   }
   if (errorText !== undefined) {
     const bracketed = /^\[([a-z][a-z0-9_]*)\]/i.exec(errorText.trim())
-    if (bracketed !== null) return bracketed[1]!.toLowerCase()
+    const bracketCode = bracketed?.[1]
+    if (bracketCode !== undefined) return bracketCode.toLowerCase()
     const lower = errorText.toLowerCase()
     if (lower.includes('workflow_action_uncertain')) return 'workflow_action_uncertain'
     if (lower.includes('journal_read_failed')) return 'journal_read_failed'
@@ -53,10 +54,16 @@ export interface InspectResumabilityOptions {
 export type RunResumabilityVerdict =
   | {
       resumable: true
+      kind: 'workflow'
       script?: string
       scriptPath?: string
       savedName?: string
-      journal?: JournalReadResult
+      journal: JournalReadResult
+    }
+  | {
+      resumable: true
+      kind: 'subagent'
+      spec: PersistedSubagentSpec
       resumeRef?: string
     }
   | {
@@ -96,7 +103,10 @@ function resolvePersistedScript(
   return { ok: false }
 }
 
-function inspectJournalHealth(runId: string, journalPath: string): { ok: true; journal: JournalReadResult } | { ok: false; code: string; reason: string; journal: JournalReadResult } {
+function inspectJournalHealth(
+  runId: string,
+  journalPath: string,
+): { ok: true; journal: JournalReadResult } | { ok: false; code: string; reason: string; journal: JournalReadResult } {
   const journal = readJournal(journalPath)
   if (journal.readFailed !== undefined) {
     return {
@@ -149,7 +159,7 @@ export function inspectRunResumability(
           reason: 'subagent run interrupted by process restart（缺少持久化启动规格 subagentSpec，无法自动恢复）',
         }
       }
-      return { resumable: true }
+      return { resumable: true, kind: 'subagent', spec: detail.subagentSpec }
     }
     const scriptRes = resolvePersistedScript(header, detail, ctx)
     if (!scriptRes.ok) {
@@ -163,6 +173,7 @@ export function inspectRunResumability(
     if (!j.ok) return { resumable: false, code: j.code, reason: j.reason, journal: j.journal }
     return {
       resumable: true,
+      kind: 'workflow',
       script: scriptRes.script,
       ...(scriptRes.scriptPath !== undefined ? { scriptPath: scriptRes.scriptPath } : {}),
       ...(scriptRes.savedName !== undefined ? { savedName: scriptRes.savedName } : {}),
@@ -188,7 +199,7 @@ export function inspectRunResumability(
           reason: `后台子代理 ${header.id} 缺少可续接执行句柄或持久化规格（无法执行 resumeFromRunId）`,
         }
       }
-      return { resumable: true, resumeRef }
+      return { resumable: true, kind: 'subagent', spec: detail.subagentSpec, resumeRef }
     }
 
     let script: string | undefined
@@ -211,6 +222,7 @@ export function inspectRunResumability(
     if (!j.ok) return { resumable: false, code: j.code, reason: j.reason, journal: j.journal }
     return {
       resumable: true,
+      kind: 'workflow',
       ...(script !== undefined ? { script } : {}),
       ...(scriptPath !== undefined ? { scriptPath } : {}),
       ...(savedName !== undefined ? { savedName } : {}),
@@ -244,7 +256,7 @@ export function inspectRunResumability(
         reason: '缺少可续接执行句柄或持久化规格 subagentSpec',
       }
     }
-    return { resumable: true }
+    return { resumable: true, kind: 'subagent', spec: detail.subagentSpec }
   }
 
   const scriptRes = resolvePersistedScript(header, detail, ctx)
@@ -255,6 +267,7 @@ export function inspectRunResumability(
   if (!j.ok) return { resumable: false, code: j.code, reason: j.reason, journal: j.journal }
   return {
     resumable: true,
+    kind: 'workflow',
     script: scriptRes.script,
     ...(scriptRes.scriptPath !== undefined ? { scriptPath: scriptRes.scriptPath } : {}),
     ...(scriptRes.savedName !== undefined ? { savedName: scriptRes.savedName } : {}),

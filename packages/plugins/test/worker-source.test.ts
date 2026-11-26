@@ -238,4 +238,46 @@ describe('single-source host option validation & withMeta/goal schema parsing', 
     assert.equal(val.b.ok, true)
     assert.deepEqual(val.b.output, { done: true, count: 3 })
   })
+
+  it('aligns worker boundary errors on invalid opts/actions & redacts terminal agent and action failures', timeout, async () => {
+    const boundaryRes = await runWorkerRaw('await agent("x", { fn: () => {} }); return 1')
+    assert.equal(boundaryRes.status, 'error')
+    assert.match(boundaryRes.error ?? '', /Cannot pass a function across the workflow VM boundary \(at agent\(\) opts\.fn\)/)
+
+    const { host } = makeHost(async () => ({ ok: false, error: 'agent boom TOP_SECRET_KEY' }))
+    host.prepareAction = async (actionId) => {
+      if (actionId === 'prep-fail') throw new Error('prepare failed TOP_SECRET_KEY')
+      return { pluginId: 'p', actionId, idempotent: true }
+    }
+    host.invokeAction = async () => {
+      throw new Error('invoke failed TOP_SECRET_KEY')
+    }
+
+    const journalEntries: unknown[] = []
+    const res = await runWorkflow({
+      script:
+        META +
+        'const a = await agent.withMeta("work");\n' +
+        'await action("prep-fail", {});\n' +
+        'await action("run-fail", {});\n' +
+        'return a',
+      host,
+      redact: (text) => text.replaceAll('TOP_SECRET_KEY', '[REDACTED]'),
+      journal: {
+        entries: [],
+        append: async (entry) => {
+          journalEntries.push(entry)
+        },
+      },
+    })
+    assert.equal(res.status, 'completed', res.error)
+    const metaOut = res.value as AgentWithMetaResult
+    assert.equal(metaOut.ok, false)
+    assert.equal(metaOut.error, 'agent boom [REDACTED]')
+    assert.equal(res.nodes[0]?.error, 'agent boom [REDACTED]')
+    assert.equal(res.nodes[1]?.error, 'prepare failed [REDACTED]')
+    assert.equal(res.nodes[2]?.error, 'invoke failed [REDACTED]')
+    assert.equal(JSON.stringify(res).includes('TOP_SECRET_KEY'), false)
+    assert.equal(JSON.stringify(journalEntries).includes('TOP_SECRET_KEY'), false)
+  })
 })

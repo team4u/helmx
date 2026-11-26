@@ -2,7 +2,15 @@
  * runs/types.ts — Discriminated union RunHeader (compact KV row), RunDetail (lazy disk file),
  * explicit RunPhase state machine, and ActiveRun runtime handle.
  */
-import type { AgentExecutionInfo, JsonSchema } from '@helmx/protocol'
+import type {
+  ActionManifest,
+  AgentExecutionInfo,
+  AgentSpawnRequest,
+  ConversationSummary,
+  EnvExecRequest,
+  EnvExecResponse,
+  JsonSchema,
+} from '@helmx/protocol'
 import type {
   WorkflowNodeState,
   WorkflowProgressEntry,
@@ -10,6 +18,38 @@ import type {
   WorkflowRunSummary,
 } from '../../contracts.js'
 import type { JournalWriter, WorkflowPhaseMeta } from '../dsl/index.js'
+
+/** Test-injectable host seam for WorkflowService (shared leaf breaking spawn-bridge <-> action-bridge cycle). */
+export interface WorkflowServiceHost {
+  spawnAgent(request: AgentSpawnRequest): Promise<unknown>
+  abortConversationGuarded(id: number): Promise<void>
+  invokeAction(
+    pluginId: string,
+    actionId: string,
+    input: unknown,
+    context?: { conversationId?: number; signal?: AbortSignal },
+  ): Promise<unknown>
+  prepareAction?(
+    pluginId: string,
+    actionId: string,
+    input: unknown,
+    context?: { conversationId?: number },
+  ): { idempotent?: boolean }
+  execEnv?(req: Omit<EnvExecRequest, 'stream'>, signal?: AbortSignal): Promise<EnvExecResponse>
+  listActions(): ActionManifest[]
+  getConversation(id: number): ConversationSummary
+  emitEvent(type: string, payload: unknown): void
+  onRunSettled?(summary: WorkflowRunSummary): Promise<void> | void
+  onBackgroundAgentSettled?(
+    summary: WorkflowRunSummary,
+    info: { parentConversationId: number; agentType?: string; execution?: AgentExecutionInfo },
+  ): Promise<void> | void
+  runGate?(
+    command: string,
+    options: { cwd?: string; conversationId?: number; signal?: AbortSignal; gateTimeoutMs?: number },
+  ): Promise<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }>
+  isHostClosing?(): boolean
+}
 
 /** Explicit run lifecycle phase replacing legacy 3-boolean combinations (`suspendedCleanly`/`pendingChildCleanup`/`status`). */
 export type RunPhase = 'running' | 'suspended' | 'cleanup_pending' | 'settled'

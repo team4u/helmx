@@ -33,6 +33,27 @@ import type { PlanStateManager } from './state.js'
 
 const utf8Encoder = new TextEncoder()
 
+type AwaitPlanAskSettled =
+  | {
+      ok: true
+      askResult: AskResult
+      latest: PlanConversationRecord | undefined
+      clearPendingOnly: () => Promise<void>
+    }
+  | {
+      ok: false
+      error: unknown
+      latest: PlanConversationRecord | undefined
+      clearPendingOnly: () => Promise<void>
+    }
+
+interface ParsedProposalAnswers {
+  decision: string
+  feedback: string
+  selectedModel?: string
+  selectedThinkingLevel?: string
+}
+
 function errorMessageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
@@ -46,6 +67,23 @@ function toolError(
     isError: true,
     ...(presentationMeta !== undefined ? { presentationMeta } : {}),
   }
+}
+
+async function persistRecordOrRollback(
+  state: PlanStateManager,
+  conversationId: number,
+  prevRecord: PlanConversationRecord | undefined,
+  nextRecord: PlanConversationRecord,
+): Promise<void> {
+  state.writeRecord(conversationId, nextRecord)
+  try {
+    await state.flushKv()
+  } catch (err) {
+    if (prevRecord !== undefined) state.writeRecord(conversationId, prevRecord)
+    else state.deleteRecord(conversationId)
+    throw err
+  }
+  state.syncProjections(conversationId, nextRecord)
 }
 
 /** Truncate UTF-8 text cleanly without splitting multi-byte sequences or surrogate pairs. */
@@ -112,11 +150,7 @@ async function awaitPlanAsk(params: {
   askId: string
   askSpec: AskCreateSpec
   signal: AbortSignal | undefined
-  onSettled: (
-    outcome:
-      | { ok: true; askResult: AskResult; latest: PlanConversationRecord | undefined; clearPendingOnly: () => Promise<void> }
-      | { ok: false; error: unknown; latest: PlanConversationRecord | undefined; clearPendingOnly: () => Promise<void> },
-  ) => Promise<PluginToolResultEnvelope>
+  onSettled: (outcome: AwaitPlanAskSettled) => Promise<PluginToolResultEnvelope>
 }): Promise<PluginToolResultEnvelope> {
   const { ctx, state, conversationId, askId, askSpec, signal, onSettled } = params
 
@@ -146,9 +180,7 @@ async function awaitPlanAsk(params: {
       const clearPendingOnly = async (): Promise<void> => {
         if (latest === undefined || latest.pendingAskId !== askId) return
         const { pendingAskId: _cleared, ...rest } = latest
-        state.writeRecord(conversationId, rest)
-        await state.flushKv()
-        state.syncProjections(conversationId, rest)
+        await persistRecordOrRollback(state, conversationId, latest, rest)
       }
 
       if (hasCreateAskError || askResult === undefined) {
@@ -175,9 +207,7 @@ async function awaitPlanAsk(params: {
       const latest = state.getRecord(conversationId)
       if (latest?.pendingAskId === askId) {
         const { pendingAskId: _cleared, ...rest } = latest
-        state.writeRecord(conversationId, rest)
-        await state.flushKv()
-        state.syncProjections(conversationId, rest)
+        await persistRecordOrRollback(state, conversationId, latest, rest)
       }
     })
   } catch (cleanupErr) {
@@ -200,12 +230,17 @@ async function preparePlanningAsk(params: {
   state: PlanStateManager
   conversationId: number
   toolName: string
-  requireDraft?: boolean
 }): Promise<
-  | { ok: true; askId: string; expectedStateSeq: number; current: PlanConversationRecord }
+  | {
+      ok: true
+      askId: string
+      expectedStateSeq: number
+      current: PlanConversationRecord
+      draft: PlanDraftSummary
+    }
   | { ok: false; result: PluginToolResultEnvelope }
 > {
-  const { ctx, state, conversationId, toolName, requireDraft } = params
+  const { ctx, state, conversationId, toolName } = params
   return state.enqueueConversation(conversationId, async () => {
     if (state.isStopping()) {
       return {
@@ -221,66 +256,435 @@ async function preparePlanningAsk(params: {
       }
     }
     const current = state.getRecord(conversationId)
-    if ((current?.mode ?? 'normal') !== 'planning') {
+    if (current === undefined || current.mode !== 'planning') {
       return {
         ok: false as const,
         result: toolError(`${toolName} is only allowed while in planning mode.`),
       }
     }
-    if (requireDraft && current?.draft === undefined) {
+    const draft = current.draft
+    if (draft === undefined) {
       return {
         ok: false as const,
         result: toolError(`No plan draft exists yet. Call \`${PLAN_TOOL_SAVE}\` first.`),
       }
     }
-    if (current!.pendingAskId !== undefined || state.hasInFlightAsk(conversationId)) {
-      const activeMeta: PlanToolPresentationMeta | undefined =
-        current?.draft !== undefined
-          ? {
-              kind: 'propose',
-              title: current.draft.title,
-              version: current.draft.version,
-              outcome: 'error',
-            }
-          : undefined
+    if (current.pendingAskId !== undefined || state.hasInFlightAsk(conversationId)) {
       return {
         ok: false as const,
         result: toolError(
-          `A plan ask (${current!.pendingAskId ?? 'in-flight'}) is already pending for this conversation.`,
-          activeMeta,
+          `A plan ask (${current.pendingAskId ?? 'in-flight'}) is already pending for this conversation.`,
+          {
+            kind: 'propose',
+            title: draft.title,
+            version: draft.version,
+            outcome: 'error',
+          },
         ),
       }
     }
 
     const askId = randomUUID()
     const nextRecord: PlanConversationRecord = {
-      ...current!,
+      ...current,
       conversationId,
       mode: 'planning',
       pendingAskId: askId,
     }
-    state.writeRecord(conversationId, nextRecord)
-    try {
-      await state.flushKv()
-    } catch (err) {
-      state.writeRecord(conversationId, current!)
-      throw err
-    }
-    state.syncProjections(conversationId, nextRecord)
+    await persistRecordOrRollback(state, conversationId, current, nextRecord)
     return {
       ok: true as const,
       askId,
       expectedStateSeq: conv.stateChangeSeq,
       current: nextRecord,
+      draft,
     }
   })
 }
 
-export function registerPlanTools(
+function validateProposeSummary(
   ctx: HelmxPluginContext,
-  state: PlanStateManager,
-  getExecutionModel: () => string | undefined,
-): void {
+  rawInput: unknown,
+): { ok: true; summary: string } | { ok: false; result: PluginToolResultEnvelope } {
+  const rawSummary = typeof rawInput === 'string' ? rawInput.trim() : ''
+  if (rawSummary.length === 0 || rawSummary.length > PLAN_SUMMARY_MAX_CHARS) {
+    return {
+      ok: false,
+      result: toolError(
+        `plan_propose summary must be a non-empty string within ${PLAN_SUMMARY_MAX_CHARS} characters.`,
+      ),
+    }
+  }
+  if (rawSummary.includes('```')) {
+    return {
+      ok: false,
+      result: toolError(
+        'plan_propose summary must be plain text without triple-backtick code fences (```).',
+      ),
+    }
+  }
+  const safeSummary = ctx.host.redact(rawSummary).trim()
+  if (
+    safeSummary.length === 0 ||
+    safeSummary.length > PLAN_SUMMARY_MAX_CHARS ||
+    safeSummary.includes('```')
+  ) {
+    return {
+      ok: false,
+      result: toolError(
+        `plan_propose summary after redaction must be 1-${PLAN_SUMMARY_MAX_CHARS} plain-text characters without code fences.`,
+      ),
+    }
+  }
+  return { ok: true, summary: safeSummary }
+}
+
+function buildPlanApprovalAskSpec(params: {
+  askId: string
+  conversationId: number
+  expectedStateSeq: number
+  draft: PlanDraftSummary
+  summary: string
+  configuredExecutionModel?: string
+}): AskCreateSpec {
+  const { askId, conversationId, expectedStateSeq, draft, summary, configuredExecutionModel } = params
+  return {
+    id: askId,
+    conversationId,
+    ownerPluginId: PLAN_PLUGIN_ID,
+    kind: 'approval',
+    title: {
+      en: `Plan Approval v${draft.version}: ${draft.title}`,
+      'zh-CN': `计划审批 v${draft.version}：${draft.title}`,
+    },
+    description: summary,
+    hint: {
+      en: 'Tip: To request changes, you can also reply directly in the composer below.',
+      'zh-CN': '提示：如需修改计划，也可直接在下方输入框发送意见。',
+    },
+    expectedStateSeq,
+    fields: [
+      {
+        name: 'decision',
+        label: { en: 'Decision', 'zh-CN': '审批决定' },
+        type: 'choice',
+        required: true,
+        defaultValue: 'approve_handoff',
+        options: [
+          {
+            value: 'approve_handoff',
+            label: { en: 'Approve & start fresh context', 'zh-CN': '批准并在新上下文执行' },
+            recommended: true,
+            description: {
+              en: 'Archive plan and start execution with a clean context',
+              'zh-CN': '归档计划并以干净上下文开始执行',
+            },
+          },
+          {
+            value: 'approve',
+            label: { en: 'Approve & keep current context', 'zh-CN': '批准并在当前上下文继续' },
+          },
+          {
+            value: 'revise',
+            label: { en: 'Request revisions', 'zh-CN': '退回修改' },
+          },
+        ],
+      },
+      {
+        name: 'executionModel',
+        label: { en: 'Execution model (optional)', 'zh-CN': '执行模型（可选）' },
+        type: 'model',
+        required: false,
+        defaultValue: configuredExecutionModel ?? '',
+        thinkingLevelField: 'executionThinkingLevel',
+      },
+      {
+        name: 'feedback',
+        label: { en: 'Additional notes (optional)', 'zh-CN': '补充说明（可选）' },
+        type: 'text',
+        required: false,
+      },
+    ],
+  }
+}
+
+function parsePlanApprovalAnswers(
+  ctx: HelmxPluginContext,
+  answers: Readonly<Record<string, unknown>>,
+): ParsedProposalAnswers {
+  const decision = typeof answers['decision'] === 'string' ? answers['decision'] : ''
+  const rawFeedback = typeof answers['feedback'] === 'string' ? answers['feedback'] : ''
+  const feedback = ctx.host.redact(rawFeedback).trim()
+  const rawSelectedModel = answers['executionModel']
+  const selectedModel =
+    typeof rawSelectedModel === 'string' && rawSelectedModel.trim() !== ''
+      ? ctx.host.redact(rawSelectedModel.trim()).trim()
+      : undefined
+  const rawSelectedThinking = answers['executionThinkingLevel']
+  const redactedThinking =
+    typeof rawSelectedThinking === 'string' && rawSelectedThinking.trim() !== ''
+      ? ctx.host.redact(rawSelectedThinking.trim()).trim()
+      : ''
+  const selectedThinkingLevel = redactedThinking !== '' ? redactedThinking : undefined
+  return {
+    decision,
+    feedback,
+    ...(selectedModel !== undefined ? { selectedModel } : {}),
+    ...(selectedThinkingLevel !== undefined ? { selectedThinkingLevel } : {}),
+  }
+}
+
+async function applyApprovalModelSwitch(params: {
+  ctx: HelmxPluginContext
+  conversationId: number
+  effectiveDraft: PlanDraftSummary
+  selectedModel?: string
+  selectedThinkingLevel?: string
+  clearPendingOnly: () => Promise<void>
+}): Promise<{ ok: true; appliedExecutionModel?: string } | { ok: false; result: PluginToolResultEnvelope }> {
+  const { ctx, conversationId, effectiveDraft, selectedModel, selectedThinkingLevel, clearPendingOnly } = params
+  if (selectedModel === undefined) return { ok: true }
+  try {
+    await ctx.host.updateConversation(conversationId, {
+      model: selectedModel,
+      ...(selectedThinkingLevel !== undefined ? { thinkingLevel: selectedThinkingLevel } : {}),
+    })
+    return { ok: true, appliedExecutionModel: selectedModel }
+  } catch (err) {
+    await clearPendingOnly()
+    return {
+      ok: false,
+      result: toolError(
+        `Failed to switch conversation model to "${selectedModel}": ${ctx.host.redact(errorMessageOf(err))}. Staying in planning mode.`,
+        {
+          kind: 'propose',
+          title: effectiveDraft.title,
+          version: effectiveDraft.version,
+          outcome: 'error',
+          executionModel: selectedModel,
+        },
+      ),
+    }
+  }
+}
+
+async function createApprovedPlanArtifact(params: {
+  ctx: HelmxPluginContext
+  conversationId: number
+  effectiveDraft: PlanDraftSummary
+  appliedExecutionModel?: string
+  clearPendingOnly: () => Promise<void>
+}): Promise<
+  | { ok: true; artifact: Awaited<ReturnType<typeof params.ctx.host.createArtifact>> }
+  | { ok: false; result: PluginToolResultEnvelope }
+> {
+  const { ctx, conversationId, effectiveDraft, appliedExecutionModel, clearPendingOnly } = params
+  const artifactName = `plan-v${effectiveDraft.version}.md`
+  try {
+    const artifact = await ctx.host.createArtifact(conversationId, {
+      name: artifactName,
+      bytes: utf8Encoder.encode(effectiveDraft.markdown),
+      mimeType: 'text/markdown',
+    })
+    return { ok: true, artifact }
+  } catch (err) {
+    await clearPendingOnly()
+    return {
+      ok: false,
+      result: toolError(
+        `Failed to save approved plan artifact ${artifactName}: ${ctx.host.redact(errorMessageOf(err))}. Staying in planning mode.`,
+        {
+          kind: 'propose',
+          title: effectiveDraft.title,
+          version: effectiveDraft.version,
+          outcome: 'error',
+          ...(appliedExecutionModel !== undefined ? { executionModel: appliedExecutionModel } : {}),
+        },
+      ),
+    }
+  }
+}
+
+async function settlePlanProposal(params: {
+  ctx: HelmxPluginContext
+  state: PlanStateManager
+  conversationId: number
+  draft: PlanDraftSummary
+  settled: AwaitPlanAskSettled
+}): Promise<PluginToolResultEnvelope> {
+  const { ctx, state, conversationId, draft, settled } = params
+  const effectiveDraft = settled.latest?.draft ?? draft
+
+  if (!settled.ok) {
+    await settled.clearPendingOnly()
+    return toolError(
+      `Failed to create plan approval ask: ${ctx.host.redact(errorMessageOf(settled.error))}`,
+      {
+        kind: 'propose',
+        title: effectiveDraft.title,
+        version: effectiveDraft.version,
+        outcome: 'error',
+      },
+    )
+  }
+
+  const { askResult, latest, clearPendingOnly } = settled
+
+  if (askResult.status === 'superseded') {
+    await clearPendingOnly()
+    return {
+      output:
+        'Plan proposal was superseded because the conversation state changed before approval. Review the latest state and propose again when ready.',
+      presentationMeta: {
+        kind: 'propose',
+        title: effectiveDraft.title,
+        version: effectiveDraft.version,
+        outcome: 'superseded',
+      },
+    }
+  }
+
+  if (askResult.status === 'cancelled') {
+    await clearPendingOnly()
+    const exited = latest === undefined || latest.mode === 'normal'
+    return {
+      output: exited
+        ? 'Plan proposal was cancelled and plan mode was exited.'
+        : 'Plan proposal was cancelled. Remaining in plan mode so you can revise or ask the user how to proceed.',
+      presentationMeta: {
+        kind: 'propose',
+        title: effectiveDraft.title,
+        version: effectiveDraft.version,
+        outcome: 'cancelled',
+      },
+    }
+  }
+
+  const parsed = parsePlanApprovalAnswers(ctx, askResult.answers)
+
+  if (parsed.decision === 'revise') {
+    await clearPendingOnly()
+    return {
+      output:
+        parsed.feedback !== ''
+          ? `User requested revisions to plan v${effectiveDraft.version} ("${effectiveDraft.title}"):\n${parsed.feedback}\n\nUpdate the draft via \`${PLAN_TOOL_SAVE}\` and call \`${PLAN_TOOL_PROPOSE}\` again.`
+          : `User requested revisions to plan v${effectiveDraft.version} ("${effectiveDraft.title}"). Clarify any needed details or update the draft via \`${PLAN_TOOL_SAVE}\`.`,
+      presentationMeta: {
+        kind: 'propose',
+        title: effectiveDraft.title,
+        version: effectiveDraft.version,
+        outcome: 'revised',
+      },
+    }
+  }
+
+  if (parsed.decision !== 'approve' && parsed.decision !== 'approve_handoff') {
+    await clearPendingOnly()
+    return toolError(`Unsupported plan approval decision: ${String(parsed.decision)}`, {
+      kind: 'propose',
+      title: effectiveDraft.title,
+      version: effectiveDraft.version,
+      outcome: 'error',
+    })
+  }
+
+  const modelSwitch = await applyApprovalModelSwitch({
+    ctx,
+    conversationId,
+    effectiveDraft,
+    selectedModel: parsed.selectedModel,
+    selectedThinkingLevel: parsed.selectedThinkingLevel,
+    clearPendingOnly,
+  })
+  if (!modelSwitch.ok) return modelSwitch.result
+  const { appliedExecutionModel } = modelSwitch
+
+  const artifactRes = await createApprovedPlanArtifact({
+    ctx,
+    conversationId,
+    effectiveDraft,
+    appliedExecutionModel,
+    clearPendingOnly,
+  })
+  if (!artifactRes.ok) return artifactRes.result
+  const { artifact } = artifactRes
+
+  const handoffUsed = parsed.decision === 'approve_handoff'
+  const approved: PlanApprovedInfo = {
+    title: effectiveDraft.title,
+    version: effectiveDraft.version,
+    artifactId: artifact.id,
+    artifactName: artifact.name,
+    approvedAt: Date.now(),
+    handoffUsed,
+    ...(appliedExecutionModel !== undefined ? { executionModel: appliedExecutionModel } : {}),
+  }
+
+  if (latest !== undefined) {
+    const { pendingAskId: _cleared, ...rest } = latest
+    const nextRecord: PlanConversationRecord = {
+      ...rest,
+      conversationId,
+      mode: 'normal',
+      approved,
+    }
+    await persistRecordOrRollback(state, conversationId, latest, nextRecord)
+  }
+
+  if (!handoffUsed) {
+    const modelClause =
+      appliedExecutionModel !== undefined
+        ? ` Conversation model switched to ${appliedExecutionModel}.`
+        : ''
+    const output =
+      parsed.feedback !== ''
+        ? `Plan v${effectiveDraft.version} ("${effectiveDraft.title}") approved and saved as artifact ${artifact.name} (${artifact.id}).${modelClause} Plan mode exited.\nUser feedback: ${parsed.feedback}`
+        : `Plan v${effectiveDraft.version} ("${effectiveDraft.title}") approved and saved as artifact ${artifact.name} (${artifact.id}).${modelClause} Plan mode exited.`
+    return {
+      output,
+      presentationMeta: {
+        kind: 'propose',
+        title: effectiveDraft.title,
+        version: effectiveDraft.version,
+        outcome: 'approved',
+        artifactId: artifact.id,
+        artifactName: artifact.name,
+        ...(appliedExecutionModel !== undefined ? { executionModel: appliedExecutionModel } : {}),
+      },
+    }
+  }
+
+  const handoff = buildHandoffText({
+    draft: effectiveDraft,
+    artifactId: artifact.id,
+    artifactName: artifact.name,
+    feedback: parsed.feedback,
+    executionModel: appliedExecutionModel,
+    redact: (text) => ctx.host.redact(text),
+  })
+  const output =
+    appliedExecutionModel !== undefined
+      ? `Plan v${effectiveDraft.version} ("${effectiveDraft.title}") approved, saved as ${artifact.name} (${artifact.id}), and handing off to ${appliedExecutionModel}.`
+      : `Plan v${effectiveDraft.version} ("${effectiveDraft.title}") approved, saved as ${artifact.name} (${artifact.id}), and handing off to a fresh context.`
+
+  state.markExpectedHandoffReset(conversationId)
+
+  return {
+    output,
+    presentationMeta: {
+      kind: 'propose',
+      title: effectiveDraft.title,
+      version: effectiveDraft.version,
+      outcome: 'approved_handoff',
+      artifactId: artifact.id,
+      artifactName: artifact.name,
+      ...(appliedExecutionModel !== undefined ? { executionModel: appliedExecutionModel } : {}),
+    },
+    control: { handoff },
+  }
+}
+
+function registerPlanSaveTool(ctx: HelmxPluginContext, state: PlanStateManager): void {
   ctx.tool<{ title: string; markdown: string }>({
     name: PLAN_TOOL_SAVE,
     description:
@@ -313,9 +717,7 @@ export function registerPlanTools(
         input?.markdown,
         (text) => ctx.host.redact(text),
       )
-      if (!validated.ok) {
-        return toolError(validated.message)
-      }
+      if (!validated.ok) return toolError(validated.message)
       const { title, markdown } = validated
 
       const conversationId = context.conversationId
@@ -345,33 +747,30 @@ export function registerPlanTools(
           mode: 'planning',
           draft,
         }
-        state.writeRecord(conversationId, nextRecord)
-        try {
-          await state.flushKv()
-        } catch (err) {
-          if (current !== undefined) state.writeRecord(conversationId, current)
-          else state.deleteRecord(conversationId)
-          throw err
-        }
-        state.syncProjections(conversationId, nextRecord)
+        await persistRecordOrRollback(state, conversationId, current, nextRecord)
 
         const lineCount = markdown.split(/\r?\n/).length
         const charCount = markdown.length
-        const presentationMeta: PlanToolPresentationMeta = {
-          kind: 'save',
-          title,
-          version: nextVersion,
-          lineCount,
-          charCount,
-        }
         return {
           output: `Saved plan draft v${nextVersion}: "${title}" (${lineCount} lines, ${charCount} chars). Call \`${PLAN_TOOL_PROPOSE}\` when ready for user approval.`,
-          presentationMeta,
+          presentationMeta: {
+            kind: 'save',
+            title,
+            version: nextVersion,
+            lineCount,
+            charCount,
+          },
         }
       })
     },
   })
+}
 
+function registerPlanProposeTool(
+  ctx: HelmxPluginContext,
+  state: PlanStateManager,
+  getExecutionModel: () => string | undefined,
+): void {
   ctx.tool<{ summary: string }>({
     name: PLAN_TOOL_PROPOSE,
     description:
@@ -394,27 +793,8 @@ export function registerPlanTools(
     },
     presentationMetaSchema: PLAN_TOOL_META_SCHEMA,
     async execute(input, context): Promise<PluginToolResultEnvelope> {
-      const rawSummary = typeof input?.summary === 'string' ? input.summary.trim() : ''
-      if (rawSummary.length === 0 || rawSummary.length > PLAN_SUMMARY_MAX_CHARS) {
-        return toolError(
-          `plan_propose summary must be a non-empty string within ${PLAN_SUMMARY_MAX_CHARS} characters.`,
-        )
-      }
-      if (rawSummary.includes('```')) {
-        return toolError(
-          'plan_propose summary must be plain text without triple-backtick code fences (```).',
-        )
-      }
-      const safeSummary = ctx.host.redact(rawSummary).trim()
-      if (
-        safeSummary.length === 0 ||
-        safeSummary.length > PLAN_SUMMARY_MAX_CHARS ||
-        safeSummary.includes('```')
-      ) {
-        return toolError(
-          `plan_propose summary after redaction must be 1-${PLAN_SUMMARY_MAX_CHARS} plain-text characters without code fences.`,
-        )
-      }
+      const checkedSummary = validateProposeSummary(ctx, input?.summary)
+      if (!checkedSummary.ok) return checkedSummary.result
       if (context.signal?.aborted) {
         return toolError('plan_propose aborted before creating approval prompt.')
       }
@@ -425,74 +805,18 @@ export function registerPlanTools(
         state,
         conversationId,
         toolName: PLAN_TOOL_PROPOSE,
-        requireDraft: true,
       })
-      if (!prepared.ok) {
-        return prepared.result
-      }
+      if (!prepared.ok) return prepared.result
 
-      const { askId, expectedStateSeq, current } = prepared
-      const draft = current.draft!
-      const configuredExecutionModel = getExecutionModel()
-
-      const askSpec: AskCreateSpec = {
-        id: askId,
+      const { askId, expectedStateSeq, draft } = prepared
+      const askSpec = buildPlanApprovalAskSpec({
+        askId,
         conversationId,
-        ownerPluginId: PLAN_PLUGIN_ID,
-        kind: 'approval',
-        title: {
-          en: `Plan Approval v${draft.version}: ${draft.title}`,
-          'zh-CN': `计划审批 v${draft.version}：${draft.title}`,
-        },
-        description: safeSummary,
-        hint: {
-          en: 'Tip: To request changes, you can also reply directly in the composer below.',
-          'zh-CN': '提示：如需修改计划，也可直接在下方输入框发送意见。',
-        },
         expectedStateSeq,
-        fields: [
-          {
-            name: 'decision',
-            label: { en: 'Decision', 'zh-CN': '审批决定' },
-            type: 'choice',
-            required: true,
-            defaultValue: 'approve_handoff',
-            options: [
-              {
-                value: 'approve_handoff',
-                label: { en: 'Approve & start fresh context', 'zh-CN': '批准并在新上下文执行' },
-                recommended: true,
-                description: {
-                  en: 'Archive plan and start execution with a clean context',
-                  'zh-CN': '归档计划并以干净上下文开始执行',
-                },
-              },
-              {
-                value: 'approve',
-                label: { en: 'Approve & keep current context', 'zh-CN': '批准并在当前上下文继续' },
-              },
-              {
-                value: 'revise',
-                label: { en: 'Request revisions', 'zh-CN': '退回修改' },
-              },
-            ],
-          },
-          {
-            name: 'executionModel',
-            label: { en: 'Execution model (optional)', 'zh-CN': '执行模型（可选）' },
-            type: 'model',
-            required: false,
-            defaultValue: configuredExecutionModel ?? '',
-            thinkingLevelField: 'executionThinkingLevel',
-          },
-          {
-            name: 'feedback',
-            label: { en: 'Additional notes (optional)', 'zh-CN': '补充说明（可选）' },
-            type: 'text',
-            required: false,
-          },
-        ],
-      }
+        draft,
+        summary: checkedSummary.summary,
+        configuredExecutionModel: getExecutionModel(),
+      })
 
       return awaitPlanAsk({
         ctx,
@@ -501,231 +825,13 @@ export function registerPlanTools(
         askId,
         askSpec,
         signal: context.signal,
-        async onSettled(settled) {
-          const effectiveDraft = settled.latest?.draft ?? draft
-
-          if (!settled.ok) {
-            await settled.clearPendingOnly()
-            return toolError(
-              `Failed to create plan approval ask: ${ctx.host.redact(errorMessageOf(settled.error))}`,
-              {
-                kind: 'propose',
-                title: effectiveDraft.title,
-                version: effectiveDraft.version,
-                outcome: 'error',
-              },
-            )
-          }
-
-          const { askResult, latest, clearPendingOnly } = settled
-
-          if (askResult.status === 'superseded') {
-            await clearPendingOnly()
-            return {
-              output:
-                'Plan proposal was superseded because the conversation state changed before approval. Review the latest state and propose again when ready.',
-              presentationMeta: {
-                kind: 'propose',
-                title: effectiveDraft.title,
-                version: effectiveDraft.version,
-                outcome: 'superseded',
-              },
-            }
-          }
-
-          if (askResult.status === 'cancelled') {
-            await clearPendingOnly()
-            const exited = latest === undefined || latest.mode === 'normal'
-            return {
-              output: exited
-                ? 'Plan proposal was cancelled and plan mode was exited.'
-                : 'Plan proposal was cancelled. Remaining in plan mode so you can revise or ask the user how to proceed.',
-              presentationMeta: {
-                kind: 'propose',
-                title: effectiveDraft.title,
-                version: effectiveDraft.version,
-                outcome: 'cancelled',
-              },
-            }
-          }
-
-          const decision = askResult.answers['decision'] ?? ''
-          const rawFeedback =
-            typeof askResult.answers['feedback'] === 'string' ? askResult.answers['feedback'] : ''
-          const feedback = ctx.host.redact(rawFeedback).trim()
-          const rawSelectedModel = askResult.answers['executionModel']
-          const selectedModel =
-            typeof rawSelectedModel === 'string' && rawSelectedModel.trim() !== ''
-              ? ctx.host.redact(rawSelectedModel.trim()).trim()
-              : undefined
-          const rawSelectedThinking = askResult.answers['executionThinkingLevel']
-          const redactedThinking =
-            typeof rawSelectedThinking === 'string' && rawSelectedThinking.trim() !== ''
-              ? ctx.host.redact(rawSelectedThinking.trim()).trim()
-              : ''
-          const selectedThinkingLevel = redactedThinking !== '' ? redactedThinking : undefined
-
-          if (decision === 'revise') {
-            await clearPendingOnly()
-            return {
-              output:
-                feedback !== ''
-                  ? `User requested revisions to plan v${effectiveDraft.version} ("${effectiveDraft.title}"):\n${feedback}\n\nUpdate the draft via \`${PLAN_TOOL_SAVE}\` and call \`${PLAN_TOOL_PROPOSE}\` again.`
-                  : `User requested revisions to plan v${effectiveDraft.version} ("${effectiveDraft.title}"). Clarify any needed details or update the draft via \`${PLAN_TOOL_SAVE}\`.`,
-              presentationMeta: {
-                kind: 'propose',
-                title: effectiveDraft.title,
-                version: effectiveDraft.version,
-                outcome: 'revised',
-              },
-            }
-          }
-
-          if (decision !== 'approve' && decision !== 'approve_handoff') {
-            await clearPendingOnly()
-            return toolError(`Unsupported plan approval decision: ${String(decision)}`, {
-              kind: 'propose',
-              title: effectiveDraft.title,
-              version: effectiveDraft.version,
-              outcome: 'error',
-            })
-          }
-
-          let appliedExecutionModel: string | undefined
-          if (selectedModel !== undefined) {
-            try {
-              await ctx.host.updateConversation(conversationId, {
-                model: selectedModel,
-                ...(selectedThinkingLevel !== undefined
-                  ? { thinkingLevel: selectedThinkingLevel }
-                  : {}),
-              })
-              appliedExecutionModel = selectedModel
-            } catch (err) {
-              await clearPendingOnly()
-              return toolError(
-                `Failed to switch conversation model to "${selectedModel}": ${ctx.host.redact(errorMessageOf(err))}. Staying in planning mode.`,
-                {
-                  kind: 'propose',
-                  title: effectiveDraft.title,
-                  version: effectiveDraft.version,
-                  outcome: 'error',
-                  executionModel: selectedModel,
-                },
-              )
-            }
-          }
-
-          const artifactName = `plan-v${effectiveDraft.version}.md`
-          let artifact: Awaited<ReturnType<typeof ctx.host.createArtifact>>
-          try {
-            artifact = await ctx.host.createArtifact(conversationId, {
-              name: artifactName,
-              bytes: utf8Encoder.encode(effectiveDraft.markdown),
-              mimeType: 'text/markdown',
-            })
-          } catch (err) {
-            await clearPendingOnly()
-            return toolError(
-              `Failed to save approved plan artifact ${artifactName}: ${ctx.host.redact(errorMessageOf(err))}. Staying in planning mode.`,
-              {
-                kind: 'propose',
-                title: effectiveDraft.title,
-                version: effectiveDraft.version,
-                outcome: 'error',
-                ...(appliedExecutionModel !== undefined
-                  ? { executionModel: appliedExecutionModel }
-                  : {}),
-              },
-            )
-          }
-
-          const handoffUsed = decision === 'approve_handoff'
-          const approved: PlanApprovedInfo = {
-            title: effectiveDraft.title,
-            version: effectiveDraft.version,
-            artifactId: artifact.id,
-            artifactName: artifact.name,
-            approvedAt: Date.now(),
-            handoffUsed,
-            ...(appliedExecutionModel !== undefined
-              ? { executionModel: appliedExecutionModel }
-              : {}),
-          }
-
-          if (latest !== undefined) {
-            const { pendingAskId: _cleared, ...rest } = latest
-            const nextRecord: PlanConversationRecord = {
-              ...rest,
-              conversationId,
-              mode: 'normal',
-              approved,
-            }
-            state.writeRecord(conversationId, nextRecord)
-            await state.flushKv()
-            state.syncProjections(conversationId, nextRecord)
-          }
-
-          if (!handoffUsed) {
-            const modelClause =
-              appliedExecutionModel !== undefined
-                ? ` Conversation model switched to ${appliedExecutionModel}.`
-                : ''
-            const output =
-              feedback !== ''
-                ? `Plan v${effectiveDraft.version} ("${effectiveDraft.title}") approved and saved as artifact ${artifact.name} (${artifact.id}).${modelClause} Plan mode exited.\nUser feedback: ${feedback}`
-                : `Plan v${effectiveDraft.version} ("${effectiveDraft.title}") approved and saved as artifact ${artifact.name} (${artifact.id}).${modelClause} Plan mode exited.`
-            return {
-              output,
-              presentationMeta: {
-                kind: 'propose',
-                title: effectiveDraft.title,
-                version: effectiveDraft.version,
-                outcome: 'approved',
-                artifactId: artifact.id,
-                artifactName: artifact.name,
-                ...(appliedExecutionModel !== undefined
-                  ? { executionModel: appliedExecutionModel }
-                  : {}),
-              },
-            }
-          }
-
-          const handoff = buildHandoffText({
-            draft: effectiveDraft,
-            artifactId: artifact.id,
-            artifactName: artifact.name,
-            feedback,
-            executionModel: appliedExecutionModel,
-            redact: (text) => ctx.host.redact(text),
-          })
-          const output =
-            appliedExecutionModel !== undefined
-              ? `Plan v${effectiveDraft.version} ("${effectiveDraft.title}") approved, saved as ${artifact.name} (${artifact.id}), and handing off to ${appliedExecutionModel}.`
-              : `Plan v${effectiveDraft.version} ("${effectiveDraft.title}") approved, saved as ${artifact.name} (${artifact.id}), and handing off to a fresh context.`
-
-          state.markExpectedHandoffReset(conversationId)
-
-          return {
-            output,
-            presentationMeta: {
-              kind: 'propose',
-              title: effectiveDraft.title,
-              version: effectiveDraft.version,
-              outcome: 'approved_handoff',
-              artifactId: artifact.id,
-              artifactName: artifact.name,
-              ...(appliedExecutionModel !== undefined
-                ? { executionModel: appliedExecutionModel }
-                : {}),
-            },
-            control: { handoff },
-          }
-        },
+        onSettled: (settled) => settlePlanProposal({ ctx, state, conversationId, draft, settled }),
       })
     },
   })
+}
 
+function registerPlanBashTool(ctx: HelmxPluginContext, state: PlanStateManager): void {
   ctx.tool<{ command: string; timeoutMs?: number }>({
     name: PLAN_TOOL_BASH,
     description:
@@ -812,4 +918,14 @@ export function registerPlanTools(
       }
     },
   })
+}
+
+export function registerPlanTools(
+  ctx: HelmxPluginContext,
+  state: PlanStateManager,
+  getExecutionModel: () => string | undefined,
+): void {
+  registerPlanSaveTool(ctx, state)
+  registerPlanProposeTool(ctx, state, getExecutionModel)
+  registerPlanBashTool(ctx, state)
 }

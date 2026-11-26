@@ -13,6 +13,7 @@ import {
   type JsonSchema,
 } from '@helmx/protocol'
 import { HARD_MAX_SUBAGENT_DEPTH } from '../../contracts.js'
+import { assertBoundarySafe, WorkflowRuntimeError } from './boundary-safe.js'
 import { extractMeta } from './meta.js'
 import type {
   CompiledSchema,
@@ -23,6 +24,8 @@ import type {
   WorkflowMeta,
   WorkflowSpawnResult,
 } from './types.js'
+
+export { assertBoundarySafe, WorkflowRuntimeError } from './boundary-safe.js'
 
 export const MAX_SCRIPT_LENGTH = 524_288
 export const WORKFLOW_AGENT_CAP = 1000
@@ -61,65 +64,11 @@ const ACTION_OPTION_KEYS: ReadonlySet<string> = new Set(['idempotent', 'label', 
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/
 
-export class WorkflowRuntimeError extends Error {}
-
 /** Non-fatal option error returned to the script so try/catch & parallel/pipeline can handle it. */
 export class ScriptCallOptionError extends Error {}
 
 export function defaultWorkflowConcurrency(cpuCount = availableParallelism()): number {
   return Math.max(2, Math.min(32, cpuCount * 2))
-}
-
-function boundaryError(what: string, path: string): WorkflowRuntimeError {
-  return new WorkflowRuntimeError(`Cannot pass ${what} across the workflow VM boundary (at ${path}).`)
-}
-
-function walkBoundary(value: unknown, path: string, seen: Set<object>, allowRootUndefined: boolean): void {
-  if (value === null) return
-  const kind = typeof value
-  if (kind === 'string' || kind === 'boolean') return
-  if (kind === 'number') {
-    if (!Number.isFinite(value)) throw boundaryError('a non-finite number', path)
-    return
-  }
-  if (kind === 'undefined') {
-    if (allowRootUndefined) return
-    throw boundaryError('undefined', path)
-  }
-  if (kind === 'bigint') throw boundaryError('a BigInt', path)
-  if (kind === 'symbol') throw boundaryError('a symbol', path)
-  if (kind === 'function') throw boundaryError('a function', path)
-  if (kind !== 'object') throw boundaryError(`a ${kind}`, path)
-
-  const object = value as object
-  if (seen.has(object)) throw boundaryError('a circular structure', path)
-  seen.add(object)
-
-  if (Object.getOwnPropertySymbols(object).length > 0) {
-    throw boundaryError('an object with symbol keys', path)
-  }
-
-  if (Array.isArray(object)) {
-    for (let i = 0; i < object.length; i++) {
-      if (!Object.hasOwn(object, i)) throw boundaryError('a sparse array', `${path}[${i}]`)
-      walkBoundary(object[i], `${path}[${i}]`, seen, false)
-    }
-    seen.delete(object)
-    return
-  }
-
-  const prototype = Object.getPrototypeOf(object)
-  if (prototype !== null && prototype !== Object.prototype) {
-    throw boundaryError('a non-plain object', path)
-  }
-  for (const [key, entry] of Object.entries(object)) {
-    walkBoundary(entry, `${path}.${key}`, seen, false)
-  }
-  seen.delete(object)
-}
-
-export function assertBoundarySafe(value: unknown, path: string, allowRootUndefined = path === 'args'): void {
-  walkBoundary(value, path, new Set(), allowRootUndefined)
 }
 
 /** Deterministic key-sorted JSON serialization for journal fingerprint stability. */
@@ -181,7 +130,7 @@ export function preview(text: string): string {
 }
 
 export function derivedLabel(prompt: string): string {
-  const line = prompt.split('\n', 1)[0]!.trim()
+  const line = (prompt.split('\n', 1)[0] ?? '').trim()
   return line.length <= 60 ? line || 'agent' : `${line.slice(0, 59)}…`
 }
 
@@ -298,14 +247,17 @@ export async function applyGate(
   gateTimeoutMs?: number,
   effectiveCwd?: string,
 ): Promise<WorkflowSpawnResult> {
-  const outcome =
-    reported ??
-    result.gate ??
-    (await runGate!(command, {
+  let outcome = reported ?? result.gate
+  if (outcome === undefined) {
+    if (runGate === undefined) {
+      throw new WorkflowRuntimeError('This workflow host cannot run gate commands.')
+    }
+    outcome = await runGate(command, {
       agentId,
       ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
       ...(gateTimeoutMs !== undefined ? { gateTimeoutMs } : {}),
-    }))
+    })
+  }
   const kept = { ...result, gate: outcome, ...(outcome.timedOut === true ? { timedOut: true } : {}) }
   if (outcome.ok) return kept
   const { text: _discarded, ...rest } = kept

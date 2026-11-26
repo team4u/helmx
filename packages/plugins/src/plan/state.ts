@@ -144,6 +144,39 @@ function ignoreConversationNotFound(fn: () => void): void {
   }
 }
 
+export const MAX_PLAN_BADGE_ENTRIES = 200
+
+function planBadgeRecencyMs(record: PlanConversationRecord | undefined): number {
+  if (record === undefined) return 0
+  return Math.max(record.approved?.approvedAt ?? 0, record.draft?.updatedAt ?? 0)
+}
+
+function prunePlanBadgesMap(
+  badgesByConv: Record<string, PlanBadgeEntry>,
+  recencyByConv: Map<string, number>,
+  writtenJsonByConv: Map<string, string>,
+  maxEntries: number,
+): boolean {
+  const keys = Object.keys(badgesByConv)
+  if (keys.length <= maxEntries) return false
+
+  const terminalKeys = keys.filter((key) => badgesByConv[key]?.tone === 'neutral')
+  if (terminalKeys.length === 0) return false
+
+  terminalKeys.sort((a, b) => (recencyByConv.get(a) ?? 0) - (recencyByConv.get(b) ?? 0))
+  const excess = keys.length - maxEntries
+  let removedAny = false
+  for (let i = 0; i < terminalKeys.length && i < excess; i += 1) {
+    const key = terminalKeys[i]
+    if (key === undefined) continue
+    delete badgesByConv[key]
+    writtenJsonByConv.delete(key)
+    recencyByConv.delete(key)
+    removedAny = true
+  }
+  return removedAny
+}
+
 export function createPlanStateManager(deps: {
   ctx: HelmxPluginContext
   kv: PluginKvHandle<PlanConversationRecord>
@@ -157,6 +190,8 @@ export function createPlanStateManager(deps: {
   const inFlightAsks = new Map<string, PlanInFlightAsk>()
   const expectedHandoffResets = new Map<number, number>()
   const writtenBadgeJsonByConv = new Map<string, string>()
+  const badgeRecencyByConv = new Map<string, number>()
+  let badgeSequence = 0
   let badgesByConv: Record<string, PlanBadgeEntry> = {}
   let badgesHydrated = false
 
@@ -194,28 +229,46 @@ export function createPlanStateManager(deps: {
   }
 
   const listAllRecords = (): PlanConversationRecord[] => {
-    const records: PlanConversationRecord[] = []
+    const recordsByKey = new Map<string, PlanConversationRecord>()
+    const seenCursors = new Set<string>()
     let cursor: string | undefined
     for (;;) {
       const page = kv.list(cursor !== undefined ? { cursor } : undefined)
       for (const item of page.items) {
-        records.push(item.value)
+        recordsByKey.set(item.key, item.value)
       }
-      if (page.nextCursor === undefined) break
+      if (
+        page.nextCursor === undefined ||
+        page.nextCursor === '' ||
+        page.nextCursor === cursor ||
+        seenCursors.has(page.nextCursor)
+      ) {
+        break
+      }
+      seenCursors.add(page.nextCursor)
       cursor = page.nextCursor
     }
-    return records
+    return [...recordsByKey.values()]
   }
 
   const flushKv = (): Promise<void> => kv.flush()
 
-  const applyBadgeEntry = (conversationId: number, entry: PlanBadgeEntry | undefined): boolean => {
+  const applyBadgeEntry = (
+    conversationId: number,
+    entry: PlanBadgeEntry | undefined,
+    recencyMs: number,
+  ): boolean => {
     const key = kvKey(conversationId)
     const nextJson = entry === undefined ? '' : JSON.stringify(entry)
+    if (entry !== undefined) {
+      badgeSequence += 1
+      badgeRecencyByConv.set(key, recencyMs > 0 ? recencyMs : badgeSequence)
+    }
     if (writtenBadgeJsonByConv.get(key) === nextJson) return false
     if (entry === undefined) {
       delete badgesByConv[key]
       writtenBadgeJsonByConv.delete(key)
+      badgeRecencyByConv.delete(key)
     } else {
       badgesByConv[key] = entry
       writtenBadgeJsonByConv.set(key, nextJson)
@@ -227,12 +280,14 @@ export function createPlanStateManager(deps: {
     const records = listAllRecords()
     badgesByConv = {}
     writtenBadgeJsonByConv.clear()
+    badgeRecencyByConv.clear()
     for (const record of records) {
-      applyBadgeEntry(record.conversationId, toPlanBadgeEntry(record))
+      applyBadgeEntry(record.conversationId, toPlanBadgeEntry(record), planBadgeRecencyMs(record))
       ignoreConversationNotFound(() => {
         planDoc.set(record.conversationId, toPlanSessionView(record))
       })
     }
+    prunePlanBadgesMap(badgesByConv, badgeRecencyByConv, writtenBadgeJsonByConv, MAX_PLAN_BADGE_ENTRIES)
     badgesHydrated = true
     badgesDoc.set({ byConversation: { ...badgesByConv } })
   }
@@ -257,7 +312,14 @@ export function createPlanStateManager(deps: {
         planDoc.set(conversationId, toPlanSessionView(record))
       })
     }
-    if (applyBadgeEntry(conversationId, toPlanBadgeEntry(record))) {
+    const updated = applyBadgeEntry(conversationId, toPlanBadgeEntry(record), planBadgeRecencyMs(record))
+    const pruned = prunePlanBadgesMap(
+      badgesByConv,
+      badgeRecencyByConv,
+      writtenBadgeJsonByConv,
+      MAX_PLAN_BADGE_ENTRIES,
+    )
+    if (updated || pruned) {
       badgesDoc.set({ byConversation: { ...badgesByConv } })
     }
   }
@@ -484,8 +546,9 @@ export function createPlanStateManager(deps: {
     for (const candidate of candidates) {
       await enqueueConversation(candidate.conversationId, async () => {
         const latest = getRecord(candidate.conversationId)
-        if (latest === undefined || latest.pendingAskId !== candidate.pendingAskId) return
-        await cancelAskSafe(latest.pendingAskId!, 'superseded')
+        const pendingAskId = latest?.pendingAskId
+        if (latest === undefined || pendingAskId === undefined || pendingAskId !== candidate.pendingAskId) return
+        await cancelAskSafe(pendingAskId, 'superseded')
         const { pendingAskId: _removed, ...rest } = latest
         writeRecord(candidate.conversationId, rest)
         changed = true

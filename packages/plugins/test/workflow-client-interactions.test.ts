@@ -534,3 +534,45 @@ test('已结束的同步 isolation:worktree subagent 行在时间线直接挂载
     ui.unmount()
   }
 })
+
+test('SubagentToolView：受管 worktree 仅凭 descriptor.id 元数据即渲染紧凑徽章，不依赖私有分支前缀', { timeout: 60_000 }, () => {
+  const parent = makeConvSummary(1)
+  const child = makeConvSummary(701, { parentConversationId: 1, parentToolCallId: 'call-meta-wt', status: 'idle' })
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [parent, child],
+    runsByConversation: { 1: [] },
+    worktreeSlots,
+    locale: 'en',
+  })
+
+  const ui = h.mountNode(
+    e(SubagentToolView, {
+      callId: 'call-meta-wt',
+      toolName: 'subagent',
+      input: { prompt: '元数据判定受管工作树', isolation: 'worktree' },
+      status: 'done',
+      presentationMeta: {
+        ok: true,
+        status: 'completed',
+        execution: {
+          nodeId: 'local',
+          conversationId: 701,
+          worktree: {
+            id: 'local:/repo/.helmx-worktrees/meta-701',
+            path: '/repo/.helmx-worktrees/meta-701',
+            branch: 'worker/custom-managed-name',
+          },
+        },
+      },
+      conversationId: 1,
+    }),
+  )
+  try {
+    const wtBadge = ui.container.querySelector('.wf-wt-badge')
+    assert.ok(wtBadge !== null && wtBadge.classList.contains('wf-wt-badge-compact'))
+    assert.equal(wtBadge.textContent?.trim(), '')
+  } finally {
+    ui.unmount()
+  }
+})

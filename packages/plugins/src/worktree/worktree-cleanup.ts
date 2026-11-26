@@ -19,7 +19,7 @@ import {
 } from './worktree-git.js'
 import { validateWorktreeSelector, type ManagedWorktreeRecord, type WorktreeStore } from './worktree-store.js'
 import { ownerMismatchError } from './worktree-inspect.js'
-import type { CleanupInput, CleanupResult, WorktreeAllocatorDeps } from './worktree.js'
+import type { CleanupInput, CleanupResult, WorktreeAllocatorDeps } from './worktree-types.js'
 
 const MANAGED_BRANCH_PREFIX = 'helmx/spawn-'
 

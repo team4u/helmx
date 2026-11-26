@@ -49,7 +49,7 @@ import {
   extractToolMetaLabel,
   isBackgroundWorkflowResultHandle,
   isLatestSubagentCallForTarget,
-  isManagedSpawnBranch,
+  isManagedWorktree,
   resolveNodeTitle,
   resolveRunDisplayName,
   resolveSubagentConversationId,
@@ -235,8 +235,9 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       ? (backgroundRun?.status === 'running' ? backgroundRun.createdAt : props.startedAt ?? childSummary?.runStartedAt)
       : undefined
 
-  const worktreeBranch = execMeta?.worktree?.branch
-  const worktreeIsManaged = worktreeBranch !== undefined && isManagedSpawnBranch(worktreeBranch)
+  const worktree = execMeta?.worktree
+  const worktreeBranch = worktree?.branch
+  const worktreeIsManaged = worktree !== undefined && isManagedWorktree(worktree)
   const worktreeTooltip =
     worktreeBranch !== undefined ? worktreeBadgeTitle(worktreeBranch, execMeta?.worktree?.path, locale) : undefined
   const canNavigate = canOpenDrawer || canOpenWorkbench

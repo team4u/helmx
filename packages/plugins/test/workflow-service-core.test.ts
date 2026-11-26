@@ -1187,3 +1187,47 @@ test('停机结算排空：active 已移除但 onRunSettled 仍在途时，suspe
   assert.equal(settledDone, true)
   assert.equal(await waitPromise, 99)
 })
+
+test('onRunSettled 失败先脱敏再写入 process.stderr.write，绝不向 stderr 泄漏原始秘钥', timeout, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-wf-stderr-redact-'))
+  const stderrChunks: string[] = []
+  const origWrite = process.stderr.write.bind(process.stderr)
+  process.stderr.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    stderrChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'))
+    return (origWrite as (...args: unknown[]) => boolean)(chunk, ...rest)
+  }) as typeof process.stderr.write
+
+  const svc = new WorkflowService({
+    dataDir: dir,
+    redact: (text) => text.replaceAll('SUPER_SECRET_TOKEN', '[REDACTED]'),
+    host: {
+      spawnAgent: async () => 'ok',
+      invokeAction: async () => ({}),
+      listActions: () => [],
+      getConversation: (id: number) => makeParentSummary(id, dir),
+      abortConversationGuarded: async () => {},
+      emitEvent: () => {},
+      onRunSettled: async () => {
+        throw new Error('sink failed with SUPER_SECRET_TOKEN')
+      },
+    },
+  })
+  t.after(async () => {
+    process.stderr.write = origWrite
+    await svc.close()
+    rmSync(dir, { recursive: true, force: true })
+  }, { timeout: 60_000 })
+
+  const started = await svc.run({
+    conversationId: 77,
+    script: 'export const meta = { name: "stderr-redact", description: "d" }\nreturn 1',
+  })
+  await assert.rejects(() => svc.wait(started.id), /SUPER_SECRET_TOKEN/)
+
+  const stderrCombined = stderrChunks.join('')
+  assert.equal(stderrCombined.includes('SUPER_SECRET_TOKEN'), false, 'raw secret must not hit stderr')
+  assert.match(stderrCombined, /\[REDACTED\]/)
+  const finalSummary = svc.getRun(started.id)
+  assert.equal(finalSummary.error?.includes('SUPER_SECRET_TOKEN'), false)
+  assert.match(finalSummary.error ?? '', /\[REDACTED\]/)
+})
