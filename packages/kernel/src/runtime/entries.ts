@@ -300,8 +300,10 @@ export function deriveConversationLive(
   }
 }
 
-export function entryModelText(entry: { model?: ReadonlyArray<{ content?: unknown }> }): string {
-  const content = entry.model?.[0]?.content
+export function entryModelText(entry: { model?: ReadonlyArray<unknown> }): string {
+  const first = entry.model?.[0]
+  const content =
+    first !== null && typeof first === 'object' ? (first as { content?: unknown }).content : undefined
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
   return (content as Array<{ type?: string; text?: string }>)

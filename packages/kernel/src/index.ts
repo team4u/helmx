@@ -15,6 +15,7 @@ export {
   startHub,
   errorResponse,
   jsonOk,
+  readJsonBody,
   type HttpEventHub,
   type KernelHttpTarget,
   type StartHubOptions,

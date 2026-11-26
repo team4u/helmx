@@ -11,7 +11,7 @@ import { redactJsonValue } from '../redact.js'
 import { isAbsoluteTargetPath } from '@helmx/protocol'
 import { jsonOk, errorResponse, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
-import { assertBodySchema, requireUtf16LengthAtMost, ValidationError } from './validate.js'
+import { assertBodySchema, requireHttpUrl, requireUtf16LengthAtMost, ValidationError } from './validate.js'
 import type { RouteContext } from './route-context.js'
 import { parseOptionalJsonObjectBody } from './route-context.js'
 
@@ -150,24 +150,6 @@ function requireNodeSegment(raw: string): string {
     throw new ValidationError('nodeId must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/ (starts with an alphanumeric character, may contain . _ -)')
   }
   return decoded
-}
-
-/** Validate http(s) URL: restricted scheme, parseable, non-empty hostname. */
-function requireHttpUrl(raw: unknown, field: string): string {
-  if (typeof raw !== 'string') throw new ValidationError(`${field} must be an http(s) URL string`)
-  let parsed: URL
-  try {
-    parsed = new URL(raw)
-  } catch {
-    throw new ValidationError(`${field} must be a valid http(s) URL`)
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new ValidationError(`${field} must be an http(s) URL`)
-  }
-  if (parsed.hostname === '' || /^\s+$/.test(parsed.hostname)) {
-    throw new ValidationError(`${field} must contain a hostname`)
-  }
-  return raw
 }
 
 /** Boundary validation for targetVersion: optional single v/V prefix after trim, remainder must be strict SemVer (single implementation in @helmx/protocol/semver). */

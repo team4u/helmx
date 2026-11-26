@@ -7,7 +7,6 @@
  * and tracks handler execution in `liveTasks` (shared with actions/tools for disable blocking).
  */
 import { HelmxError, isPluginSummaryActive, REQUEST_SCHEMAS } from '@helmx/protocol'
-import type { PublicPluginSessionDoc } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
 import type { PluginHost } from '../plugins/index.js'
 import type { SecretStash } from '../services/index.js'
@@ -16,6 +15,8 @@ import { readSanitizedPluginConfig, resolvePluginDoctorTarget } from '../runtime
 import { compressGzip, markStreamingJsonBody } from './gzip.js'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
+import { snapshotDocOf } from './session-doc-routes.js'
+import { concatUint8Arrays, readBoundedChunks, stitchRemainingStream } from './stream-utils.js'
 import {
   assertBodySchema,
   parseActionInvokeBody,
@@ -299,29 +300,10 @@ async function sessionDocEventsResponse(
   }
   const target = { pluginId, name, conversationId }
   const snapshot = () => {
-    const doc = snapshotDocOf(kernel, pluginId, name, conversationId)
+    const doc = snapshotDocOf(kernel.plugins, pluginId, name, conversationId)
     return { seq: port.seq, doc }
   }
-  void redactor
   return port.response(ctx.request, { snapshot, target })
-}
-
-/** Ensures `getPublicSessionDoc` returns synchronously for atomic snapshot-after-subscribe semantics. */
-function snapshotDocOf(
-  kernel: Pick<PluginRoutesTarget, 'plugins'>,
-  pluginId: string,
-  name: string,
-  conversationId: number,
-): PublicPluginSessionDoc {
-  const result = kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId)
-  if ((result as unknown) instanceof Promise) {
-    throw new HelmxError(
-      'not_implemented',
-      'Current runtime getPublicSessionDoc is async and cannot provide synchronous sessionDoc snapshots',
-      501,
-    )
-  }
-  return result
 }
 
 /** GET/HEAD `/api/plugins/:id/client.mjs`: validates module/chunk/hash params and handles ETag/304 + gzip. */
@@ -370,11 +352,7 @@ async function serveClientModule(
   const isImmutable = hash !== undefined && hash.length > 0 && hash === compiled.contentHash
   const cacheControl = isImmutable ? 'private, max-age=31536000, immutable' : 'private, no-cache'
 
-  // chunk request only accept complete chunk ETag(hash:chunk) match - - bare contentHash will same hash under
-  // other chunk cache mistakenly judge is hit; main module request keep strong ETag / bare hash / W/ three form compatibility.
-  const etagMatched = chunk !== undefined
-    ? ifNoneMatch === etag || ifNoneMatch === `W/${etag}`
-    : ifNoneMatch === etag || ifNoneMatch === compiled.contentHash || ifNoneMatch === `W/${etag}`
+  const etagMatched = ifNoneMatch === etag || ifNoneMatch === `W/${etag}`
   if (ifNoneMatch && etagMatched) {
     return new Response(null, {
       status: 304,
@@ -695,18 +673,6 @@ function createRedactingTextStream(
   })
 }
 
-function concatUint8Arrays(chunks: readonly Uint8Array[], totalBytes: number): Uint8Array {
-  if (chunks.length === 0) return new Uint8Array(0)
-  if (chunks.length === 1) return chunks[0]!
-  const out = new Uint8Array(totalBytes)
-  let offset = 0
-  for (const chunk of chunks) {
-    out.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return out
-}
-
 /**
  * Automatically redacts text/JSON plugin route responses through `SecretStash` while preserving status
  * and headers:
@@ -741,25 +707,7 @@ async function redactPluginRouteResponse(
   }
 
   const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let totalBytes = 0
-  let exceeded = false
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (value === undefined || value.byteLength === 0) continue
-      chunks.push(value)
-      totalBytes += value.byteLength
-      if (totalBytes > maxJsonBytes) {
-        exceeded = true
-        break
-      }
-    }
-  } catch (err) {
-    await reader.cancel(err).catch(() => {})
-    throw err
-  }
+  const { chunks, totalBytes, exceeded } = await readBoundedChunks(reader, maxJsonBytes)
 
   if (!exceeded) {
     reader.releaseLock()
@@ -778,40 +726,7 @@ async function redactPluginRouteResponse(
     })
   }
 
-  let index = 0
-  const stitched = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (index < chunks.length) {
-        const next = chunks[index]!
-        chunks[index] = new Uint8Array(0)
-        index += 1
-        controller.enqueue(next)
-        return
-      }
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) {
-            reader.releaseLock()
-            controller.close()
-            return
-          }
-          if (value !== undefined && value.byteLength > 0) {
-            controller.enqueue(value)
-            return
-          }
-        }
-      } catch (err) {
-        reader.releaseLock()
-        controller.error(err)
-      }
-    },
-    async cancel(reason) {
-      chunks.length = 0
-      await reader.cancel(reason).catch(() => {})
-    },
-  })
-  return new Response(markStreamingJsonBody(createRedactingTextStream(stitched, stash)), {
+  return new Response(markStreamingJsonBody(createRedactingTextStream(stitchRemainingStream(chunks, reader), stash)), {
     status: response.status,
     statusText: response.statusText,
     headers,

@@ -22,7 +22,7 @@ import { WebSocket } from 'ws'
 import type { WebSocket as WsSocket } from 'ws'
 import { HelmxError } from '@helmx/protocol'
 import { NodeRegistry } from '../src/env/registry.js'
-import { attachNodeTunnelGateway } from '../src/env/ws-tunnel-gateway.js'
+import { attachNodeTunnelGateway, normalizeTunnelHelloFrame } from '../src/env/ws-tunnel-gateway.js'
 import { createEnvFabric, type EnvFabric } from '../src/env/fabric.js'
 
 class FakeSocket extends EventEmitter {
@@ -326,6 +326,57 @@ test('tunnel gateway: silent connection without hello closes after first-frame t
     const elapsed = Date.now() - startedAt
     assert.equal(closeCode, 4001, `silent connection should be closed by timeout (close code ${closeCode})`)
     assert.ok(elapsed >= 140 && elapsed < 5_000, `timeout should fire near threshold (actual ${elapsed}ms)`)
+  } finally {
+    await gateway.close()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await registry.close()
+  }
+})
+
+test('tunnel gateway: normalizes Buffer[], ArrayBuffer, and binary hello frames before size limit & JSON parse', { timeout: 60_000 }, async () => {
+  const hello = JSON.stringify({ tunnelId: 't-1', nodeId: 'node-x', token: 'node-x:secret' })
+  const buf = Buffer.from(hello, 'utf8')
+  const part1 = buf.subarray(0, 12)
+  const part2 = buf.subarray(12)
+  const arrayBuf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+
+  assert.deepEqual(normalizeTunnelHelloFrame([part1, part2]), { ok: true, text: hello })
+  assert.deepEqual(normalizeTunnelHelloFrame(arrayBuf), { ok: true, text: hello })
+  assert.deepEqual(normalizeTunnelHelloFrame(new Uint8Array(buf)), { ok: true, text: hello })
+  assert.equal(normalizeTunnelHelloFrame([part1, 'bad']).ok, false)
+  assert.equal(normalizeTunnelHelloFrame(Buffer.alloc(65 * 1024)).ok, false)
+
+  const registry = new NodeRegistry({ authenticate: () => true })
+  const server = http.createServer((_req, res) => { res.writeHead(404); res.end() })
+  const gateway = attachNodeTunnelGateway(server, { registry })
+  try {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    assert.ok(address !== null && typeof address === 'object')
+    const url = `ws://127.0.0.1:${address.port}/ws/node-tunnel`
+
+    const ws = new WebSocket(url)
+    const frames: string[] = []
+    await new Promise<void>((resolve) => {
+      ws.on('open', () => { ws.send(arrayBuf) })
+      ws.on('message', (raw) => { frames.push(raw.toString()) })
+      ws.on('close', () => resolve())
+    })
+    const rejected = JSON.parse(frames[0] ?? '{}') as { type?: string; code?: string }
+    assert.equal(rejected.type, 'error')
+    assert.equal(rejected.code, 'permission_denied')
+
+    const wsTooLarge = new WebSocket(url)
+    const oversizedFrames: string[] = []
+    await new Promise<void>((resolve) => {
+      wsTooLarge.on('open', () => { wsTooLarge.send(Buffer.alloc(65 * 1024, 0x61)) })
+      wsTooLarge.on('message', (raw) => { oversizedFrames.push(raw.toString()) })
+      wsTooLarge.on('close', () => resolve())
+    })
+    const tooLarge = JSON.parse(oversizedFrames[0] ?? '{}') as { type?: string; code?: string; message?: string }
+    assert.equal(tooLarge.type, 'error')
+    assert.equal(tooLarge.code, 'invalid')
+    assert.match(tooLarge.message ?? '', /exceeds/i)
   } finally {
     await gateway.close()
     await new Promise<void>((resolve) => server.close(() => resolve()))

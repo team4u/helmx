@@ -45,6 +45,42 @@ const isHello = (data: unknown): data is NodeTunnelHello =>
   typeof (data as Record<string, unknown>)['nodeId'] === 'string' &&
   typeof (data as Record<string, unknown>)['token'] === 'string'
 
+/** Normalize an inbound WebSocket `RawData` first hello frame and enforce `HELLO_MAX_BYTES`. */
+export function normalizeTunnelHelloFrame(
+  raw: unknown,
+  maxBytes = HELLO_MAX_BYTES,
+): { ok: true; text: string } | { ok: false; message: string } {
+  let bytes: number
+  let text: string
+  if (typeof raw === 'string') {
+    bytes = Buffer.byteLength(raw)
+    text = raw
+  } else if (Buffer.isBuffer(raw)) {
+    bytes = raw.length
+    text = raw.toString('utf8')
+  } else if (Array.isArray(raw)) {
+    const chunks = raw.filter((item): item is Buffer => Buffer.isBuffer(item))
+    if (chunks.length !== raw.length) {
+      return { ok: false, message: 'tunnel first frame has unsupported payload shape' }
+    }
+    const buf = Buffer.concat(chunks)
+    bytes = buf.length
+    text = buf.toString('utf8')
+  } else if (raw instanceof ArrayBuffer) {
+    bytes = raw.byteLength
+    text = Buffer.from(raw).toString('utf8')
+  } else if (ArrayBuffer.isView(raw)) {
+    bytes = raw.byteLength
+    text = Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString('utf8')
+  } else {
+    return { ok: false, message: 'tunnel first frame has unsupported payload shape' }
+  }
+  if (bytes > maxBytes) {
+    return { ok: false, message: `tunnel first frame exceeds ${maxBytes}-byte limit` }
+  }
+  return { ok: true, text }
+}
+
 export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelGatewayOptions): NodeTunnelGateway {
   const {
     registry,
@@ -88,15 +124,16 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
     helloTimer.unref()
     const onFirstFrame = (raw: unknown): void => {
       clearTimeout(helloTimer)
-      const bytes = typeof raw === 'string' ? Buffer.byteLength(raw) : (raw as Buffer).length
-      if (bytes > HELLO_MAX_BYTES) {
+      const normalized = normalizeTunnelHelloFrame(raw)
+      if (!normalized.ok) {
         ws.removeListener('message', onFirstFrame)
-        fail(ws, 'invalid', `tunnel first frame exceeds ${HELLO_MAX_BYTES}-byte limit`)
+        fail(ws, 'invalid', normalized.message)
         return
       }
+      const text = normalized.text
       let data: unknown
       try {
-        data = JSON.parse(typeof raw === 'string' ? raw : Buffer.from(raw as Buffer).toString('utf8'))
+        data = JSON.parse(text)
       } catch {
         ws.removeListener('message', onFirstFrame)
         fail(ws, 'invalid', 'tunnel first frame is not valid JSON')

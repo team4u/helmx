@@ -17,6 +17,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Models } from '@earendil-works/pi-ai'
 import type { Harness } from '@earendil-works/pi-durable'
 import { HelmxError, type AgentSpawnRequest } from '@helmx/protocol'
+import { getSdkConversation } from './sdk-ids.js'
 import {
   parseModelRef,
   resolveClampedThinkingLevel,
@@ -251,7 +252,7 @@ export async function resolveCleanForkAnchor(
   harness: Harness,
   parentConversationId: number,
 ): Promise<number> {
-  const conv = await harness.conversation(parentConversationId as never, BACKGROUND_CONTEXT)
+  const conv = await getSdkConversation(harness, parentConversationId, BACKGROUND_CONTEXT)
   if (!conv) {
     throw new HelmxError('not_found', `Parent conversation not found: ${parentConversationId}`, 404, {
       parentConversationId,

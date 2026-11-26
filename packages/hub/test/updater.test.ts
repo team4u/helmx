@@ -9,9 +9,10 @@ import { test } from 'node:test';
 import { join } from 'node:path';
 import { useTempDir } from '@helmx/test-kit/node';
 import { writeCurrentRelease } from '@helmx/env-io';
-import { readUpdateReady, writeUpdateReady, clearUpdateReady, type HubUpdateCore } from '@helmx/env-io/hub-payload';
+import { readUpdateReady, writeUpdateReady, clearUpdateReady, updateReadyPath, type HubUpdateCore } from '@helmx/env-io/hub-payload';
 import { isBlockedVersionActive, resolveUpdaterConfig, startHubUpdater } from '../src/updater.js';
 import { createHubUpdateRoutes } from '../src/updater-routes.js';
+import { hubControlRecordPath } from '../src/control.js';
 
 function fakeCore(spec: { latest: string; fail?: Error }): HubUpdateCore {
   return {
@@ -241,6 +242,52 @@ test('hub-update apply: enforces single-flight 409 lock, rejects >64KiB body wit
   assert.ok(noControl !== undefined && noControl.status === 500);
   assert.equal((await noControl.json()).error.code, 'handoff_spawn_failed');
   await clearUpdateReady(root);
+});
+
+test('hub-update routes & updater: handle case-insensitive content-type and surface corrupt state errors explicitly', { timeout: 60_000 }, async (t) => {
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const root = useTempDir(t, 'helmx-hub-corrupt-');
+  const dataDir = join(root, 'data');
+  await mkdir(dataDir, { recursive: true });
+  await writeCurrentRelease(root, { version: '1.0.0', updatedAt: new Date().toISOString(), entries: { entryPath: 'start.mjs' } });
+  await writeUpdateReady(root, { version: '1.1.0', entryPath: 'start.mjs', releaseDir: '/fake/releases/1.1.0/uuid', tag: 'latest', stagedAt: new Date().toISOString() });
+
+  let counts = { ...emptyCounts(), activeConversations: 1 };
+  const kernel = { activitySnapshot: () => counts, dataDir };
+  const updater = startHubUpdater({ root, pkgName: '@fake/hub', env: {}, dataDir, core: fakeCore({ latest: '1.1.0' }), intervalMs: 3_600_000 });
+  assert.ok(updater !== null);
+  t.after(() => updater.stop(), { timeout: 60_000 });
+
+  const routes = createHubUpdateRoutes({
+    updater,
+    kernel,
+    root,
+    changelog: { available: false, sourcePath: null, sections: [], version: '1.0.0' },
+    upgrade: { upgradedFrom: null },
+    spawnHandoff: async () => ({ pid: 7777 }),
+  });
+
+  // Case-insensitive media type with charset still parses `{ force: true }` via readJsonBody.
+  const mixedCaseRes = await routes(
+    new Request('http://x/api/hub-update/apply', {
+      method: 'POST',
+      headers: { 'content-type': 'Application/JSON; charset=utf-8' },
+      body: JSON.stringify({ force: true }),
+    }),
+  );
+  assert.ok(mixedCaseRes !== undefined && mixedCaseRes.status === 202);
+
+  // Corrupt hub-control.json is NOT masked as `control = null` in apply.
+  counts = emptyCounts();
+  await writeFile(hubControlRecordPath(dataDir), '{corrupt', 'utf8');
+  await assert.rejects(() => routes(makeApply()), /corrupt/);
+
+  // Corrupt update-ready.json is NOT masked as absent in status/apply or updater cycles.
+  await writeFile(updateReadyPath(root), '{not json', 'utf8');
+  await assert.rejects(() => routes(new Request('http://x/api/hub-update/status')), /update-ready\.json/);
+  await assert.rejects(() => routes(makeApply()), /update-ready\.json/);
+  await updater.triggerCheck();
+  assert.match(updater.status().lastError ?? '', /update-ready\.json/);
 });
 
 import { emptyCounts, makeApply } from './updater-helpers.js';

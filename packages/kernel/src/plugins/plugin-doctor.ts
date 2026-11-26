@@ -5,8 +5,8 @@
  * Pipeline:
  * 1. Manifest & entry resolution (`resolvePluginEntry`);
  * 2. Backend isolation import (`importPluginDefinition`);
- * 3. Temporary `PluginHost` registration (`definePlugin` checks with a `doctorBackend` whose
- *    runtime ports throw 501 explicitly);
+ * 3. Temporary host dry-run registration (`definePlugin` checks with a typed `doctorBackend` whose
+ *    runtime ports throw 501 explicitly, capturing manifest projection via explicit callback);
  * 4. Client module compilation & export check for all captured `ctx.ui.*` client refs.
  */
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
@@ -24,12 +24,15 @@ import {
   type PluginSummary,
 } from '@helmx/protocol';
 import {
-  PluginHost,
-  type PluginHostBackend,
-  type PluginKvStore,
-  type PluginSessionDocStore,
-} from './plugin-host.js';
-import { dryRunManifestSinks } from './plugin-host-lifecycle.js';
+  PluginHostCore,
+  type PluginRegisterOptions,
+} from './plugin-host-core.js';
+import type {
+  PluginHostBackend,
+  PluginHostOptions,
+  PluginKvStore,
+  PluginSessionDocStore,
+} from './types.js';
 import { nextPluginGeneration, registerPluginTsRoot } from './backend-ts-loader.js';
 import {
   importPluginDefinition,
@@ -37,6 +40,14 @@ import {
   resolvePluginEntry,
 } from './external-loader.js';
 import { readPrebuiltClientBundle, verifyPrebuiltClientDir } from './ui-registry.js';
+
+export interface PluginDoctorHost {
+  register(definition: PluginDefinition, options?: PluginRegisterOptions): Promise<void>;
+  list(): PluginSummary[];
+  dispose(): Promise<void>;
+}
+
+export type PluginDoctorHostFactory = (options: PluginHostOptions) => PluginDoctorHost;
 
 /** Ephemeral in-memory doc store used during `doctor` registration checks (touches no durable storage). */
 class DoctorDocStore {
@@ -126,8 +137,13 @@ class DoctorKvStore implements PluginKvStore {
       .sort(compareCodeUnit);
     const hasMore = opts?.limit !== undefined && keys.length > opts.limit;
     const pageKeys = hasMore ? keys.slice(0, opts.limit) : keys;
-    const items = pageKeys.map((key) => ({ key, ...byKey.get(key)! }));
-    return { items, ...(hasMore && items.length > 0 ? { nextCursor: items[items.length - 1]!.key } : {}) };
+    const items: Array<{ key: string; valueJson: string; updatedAt: number }> = [];
+    for (const key of pageKeys) {
+      const entry = byKey.get(key);
+      if (entry !== undefined) items.push({ key, ...entry });
+    }
+    const lastItem = items[items.length - 1];
+    return { items, ...(hasMore && lastItem !== undefined ? { nextCursor: lastItem.key } : {}) };
   }
   clearNamespace(pluginId: string, namespace: string): void {
     this.values.get(pluginId)?.delete(namespace);
@@ -139,10 +155,10 @@ class DoctorKvStore implements PluginKvStore {
 }
 
 /**
- * Doctor backend: every runtime `ctx.host.*` capability throws 501 explicitly (never mocks data).
- * Only read-only structural primitives required to construct/register (`isClosing`, identity `redact`,
- * no-op `onEvent` for top-level listener registration, and no-op `emitEvent` for registration summary
- * notifications) are provided.
+ * Typed Doctor host backend stub: every runtime `ctx.host.*` capability throws 501 `unsupported`
+ * explicitly (no `Proxy`, no `as unknown as` casts, never mocks data). Only structural primitives needed
+ * during dry-run registration (`isClosing`, identity `redact`, no-op `onEvent`/`emitEvent`, `withFileLock`,
+ * and empty `listActiveSpawnExecutions`) are active.
  */
 function doctorBackend(): PluginHostBackend {
   const unavailable = (what: string): never => {
@@ -152,31 +168,70 @@ function doctorBackend(): PluginHostBackend {
       501,
     );
   };
-  const port = (name: string) =>
-    new Proxy({} as Record<string, never>, {
-      get: (_t, prop) => () => unavailable(`host.${name}.${String(prop)}`),
-    });
-  const overrides: Record<PropertyKey, unknown> = {
+  return {
     isClosing: () => false,
     redact: (text: string) => text,
-    profiles: port('profiles'),
-    skills: port('skills'),
-    secrets: port('secrets'),
-    nodeIpc: undefined,
-    openTunnel: undefined,
     listActiveSpawnExecutions: () => [],
-    // Event subscription/emission during definePlugin & registration summary (plugin.changed): safe no-op with no SSE consumers.
     onEvent: () => () => {},
     emitEvent: () => {},
     withFileLock: <T,>(_path: string, fn: () => Promise<T>): Promise<T> => fn(),
-  };
-  return new Proxy(overrides, {
-    get(target, prop) {
-      if (Reflect.has(target, prop)) return Reflect.get(target, prop);
-      if (typeof prop === 'symbol' || prop === 'then') return undefined;
-      return () => unavailable(`host.${prop}`);
+    nodeIpc: undefined,
+    openTunnel: undefined,
+    profiles: {
+      list: () => unavailable('host.profiles.list'),
+      get: () => unavailable('host.profiles.get'),
+      getSystem: () => unavailable('host.profiles.getSystem'),
+      save: () => unavailable('host.profiles.save'),
+      directory: () => unavailable('host.profiles.directory'),
     },
-  }) as unknown as PluginHostBackend;
+    skills: {
+      list: () => unavailable('host.skills.list'),
+      readFile: () => unavailable('host.skills.readFile'),
+      ensureSkill: () => unavailable('host.skills.ensureSkill'),
+    },
+    secrets: {
+      get: () => unavailable('host.secrets.get'),
+      set: () => unavailable('host.secrets.set'),
+      delete: () => unavailable('host.secrets.delete'),
+      addRedaction: () => unavailable('host.secrets.addRedaction'),
+    },
+    dispatchTrigger: () => unavailable('host.dispatchTrigger'),
+    submitInput: () => unavailable('host.submitInput'),
+    submitInputGuarded: () => unavailable('host.submitInputGuarded'),
+    createConversation: () => unavailable('host.createConversation'),
+    forkConversation: () => unavailable('host.forkConversation'),
+    listConversations: () => unavailable('host.listConversations'),
+    searchConversations: () => unavailable('host.searchConversations'),
+    getConversation: () => unavailable('host.getConversation'),
+    getConversationDetail: () => unavailable('host.getConversationDetail'),
+    getConversationSubmission: () => unavailable('host.getConversationSubmission'),
+    updateConversation: () => unavailable('host.updateConversation'),
+    abortConversation: () => unavailable('host.abortConversation'),
+    abortConversationGuarded: () => unavailable('host.abortConversationGuarded'),
+    deleteConversationGuarded: () => unavailable('host.deleteConversationGuarded'),
+    resetConversation: () => unavailable('host.resetConversation'),
+    resetConversationGuarded: () => unavailable('host.resetConversationGuarded'),
+    compactConversation: () => unavailable('host.compactConversation'),
+    compactConversationGuarded: () => unavailable('host.compactConversationGuarded'),
+    getConversationOwnership: () => unavailable('host.getConversationOwnership'),
+    markConversationOwnership: () => unavailable('host.markConversationOwnership'),
+    spawnAgent: () => unavailable('host.spawnAgent'),
+    runGate: () => unavailable('host.runGate'),
+    resolveSpawnTarget: () => unavailable('host.resolveSpawnTarget'),
+    inspectNodePathUsage: () => unavailable('host.inspectNodePathUsage'),
+    atomicWriteFile: () => unavailable('host.atomicWriteFile'),
+    refreshModels: () => unavailable('host.refreshModels'),
+    listModels: () => unavailable('host.listModels'),
+    completeText: () => unavailable('host.completeText'),
+    executionEnv: () => unavailable('host.executionEnv'),
+    execEnv: () => unavailable('host.execEnv'),
+    listArtifacts: () => unavailable('host.listArtifacts'),
+    createArtifact: () => unavailable('host.createArtifact'),
+    readArtifact: () => unavailable('host.readArtifact'),
+    createAsk: () => unavailable('host.createAsk'),
+    cancelAsk: () => unavailable('host.cancelAsk'),
+    manageConversation: () => unavailable('host.manageConversation'),
+  };
 }
 
 /** Normalizes a thrown error into a serializable doctor diagnostic object. */
@@ -201,7 +256,10 @@ function toErrorInfo(err: unknown): { code: string; message: string; details?: u
  */
 export async function doctorPluginDir(
   dir: string,
-  options: { buildProvider?: PluginBuildProvider } = {},
+  options: {
+    buildProvider?: PluginBuildProvider;
+    hostFactory?: PluginDoctorHostFactory;
+  } = {},
 ): Promise<PluginDoctorReport> {
   let releaseTsRoot: (() => void) | undefined;
   try {
@@ -222,8 +280,12 @@ export async function doctorPluginDir(
 
 async function doctorPluginDirInternal(
   dir: string,
-  options: { buildProvider?: PluginBuildProvider },
+  options: {
+    buildProvider?: PluginBuildProvider;
+    hostFactory?: PluginDoctorHostFactory;
+  },
 ): Promise<PluginDoctorReport> {
+  const createHost: PluginDoctorHostFactory = options.hostFactory ?? ((opts) => new PluginHostCore(opts));
   const checks: PluginDoctorCheck[] = [];
   const push = (id: string, label: string, run: () => void | Promise<void>): Promise<boolean> =>
     (async () => {
@@ -241,15 +303,16 @@ async function doctorPluginDirInternal(
   const entryOk = await push('manifest', 'manifest and entry resolution', async () => {
     entryPath = await resolvePluginEntry(dir);
   });
+  const resolvedEntryPath = entryPath;
+  if (!entryOk || resolvedEntryPath === undefined) return report(dir, undefined, checks, undefined);
 
   let definition: PluginDefinition | undefined;
-  if (!entryOk) return report(dir, undefined, checks, undefined);
-
   const backendOk = await push('backend', 'backend module isolated import', async () => {
     const generation = nextPluginGeneration(dir);
-    definition = normalizeDefinition(await importPluginDefinition(dir, entryPath!, { generation }), dir);
+    definition = normalizeDefinition(await importPluginDefinition(dir, resolvedEntryPath, { generation }), dir);
   });
-  if (!backendOk || definition === undefined) return report(dir, undefined, checks, undefined);
+  const resolvedDef = definition;
+  if (!backendOk || resolvedDef === undefined) return report(dir, undefined, checks, undefined);
 
   const clientRefs: Array<{ module: string; export: string }> = [];
   const screenIds: string[] = [];
@@ -258,13 +321,10 @@ async function doctorPluginDirInternal(
   // Isolate registration and compilation checks inside a temporary scratch dir to avoid mutating host data.
   const registerOk = await withDoctorScratch(async (scratch) =>
     push('register', 'real registration dry-run', async () => {
-      let host: PluginHost | undefined;
-      const wrapped = withClientCapture(definition!, clientRefs, screenIds);
-      dryRunManifestSinks.set(wrapped, (projected) => {
-        manifest = projected;
-      });
+      let host: PluginDoctorHost | undefined;
+      const wrapped = withClientCapture(resolvedDef, clientRefs, screenIds);
       try {
-        host = new PluginHost({
+        host = createHost({
           dataDir: scratch,
           host: doctorBackend(),
           docs: new DoctorDocStore(),
@@ -273,46 +333,50 @@ async function doctorPluginDirInternal(
           deferServices: true,
           buildProvider: options.buildProvider,
         });
-        await host.register(wrapped, { enabled: false });
-        const found = host.list().find((s) => s.id === definition!.id);
+        await host.register(wrapped, {
+          enabled: false,
+          onManifestProjected: (projected) => {
+            manifest = projected;
+          },
+        });
+        const found = host.list().find((s) => s.id === resolvedDef.id);
         if (!found) {
           throw new HelmxError(
             'invalid_plugin_definition',
-            `Plugin ${definition!.id} not found in host summary after registration (inconsistent doctor state)`,
+            `Plugin ${resolvedDef.id} not found in host summary after registration (inconsistent doctor state)`,
             500,
-            { dir, pluginId: definition!.id },
+            { dir, pluginId: resolvedDef.id },
           );
         }
         summary = found;
       } finally {
-        dryRunManifestSinks.delete(wrapped);
         await host?.dispose().catch(() => {});
       }
     }),
   );
-  if (!registerOk) return report(dir, definition.id, checks, undefined);
+  if (!registerOk) return report(dir, resolvedDef.id, checks, undefined);
 
-  const clientOk = await withDoctorScratch(async (scratch) =>
+  await withDoctorScratch(async (scratch) =>
     push('client', 'frontend module compilation and export validation', async () => {
-      if (definition!.prebuiltClientDir !== undefined) {
-        verifyPrebuiltClientDir(definition!.prebuiltClientDir, definition!.id);
+      if (resolvedDef.prebuiltClientDir !== undefined) {
+        verifyPrebuiltClientDir(resolvedDef.prebuiltClientDir, resolvedDef.id);
         const seen = new Set<string>();
         for (const ref of clientRefs) {
           const key = `${ref.module}#${ref.export}`;
           if (seen.has(key)) continue;
           seen.add(key);
           const prebuilt = readPrebuiltClientBundle(
-            definition!.prebuiltClientDir,
+            resolvedDef.prebuiltClientDir,
             ref.module,
             undefined,
-            definition!.id,
+            resolvedDef.id,
           );
           if (!prebuilt.exports.includes(ref.export)) {
             throw new HelmxError(
               'invalid_client_export',
-              `Plugin ${definition!.id} client reference ${ref.module}#${ref.export} is dangling: module exports [${prebuilt.exports.join(', ') || 'none'}]`,
+              `Plugin ${resolvedDef.id} client reference ${ref.module}#${ref.export} is dangling: module exports [${prebuilt.exports.join(', ') || 'none'}]`,
               422,
-              { pluginId: definition!.id, module: ref.module, export: ref.export, exports: prebuilt.exports },
+              { pluginId: resolvedDef.id, module: ref.module, export: ref.export, exports: prebuilt.exports },
             );
           }
         }
@@ -327,34 +391,44 @@ async function doctorPluginDirInternal(
         );
       }
       if (options.buildProvider === undefined) return;
-      const npmRoots = clientNpmRootsOf(definition!.npmDependencies);
+      const clientRoot = resolvedDef.clientRoot;
+      if (clientRoot === undefined) {
+        if (clientRefs.length > 0) {
+          throw new HelmxError(
+            'invalid_plugin_definition',
+            `Plugin ${resolvedDef.id} declared client references without a resolved clientRoot`,
+            400,
+            { pluginId: resolvedDef.id, dir },
+          );
+        }
+        return;
+      }
+      const npmRoots = clientNpmRootsOf(resolvedDef.npmDependencies);
       const seen = new Set<string>();
       for (const ref of clientRefs) {
         const key = `${ref.module}#${ref.export}`;
         if (seen.has(key)) continue;
         seen.add(key);
         const compiled = await options.buildProvider.compileClientModule({
-          pluginId: definition!.id,
-          clientRoot: definition!.clientRoot!,
+          pluginId: resolvedDef.id,
+          clientRoot,
           moduleRef: ref.module,
           cacheDir: scratch,
           npmRoots,
         });
-        // Reject missing named exports so dangling UI declarations fail during doctor rather than silently rendering blank.
         if (!compiled.exports.includes(ref.export)) {
           throw new HelmxError(
             'invalid_client_export',
-            `Plugin ${definition!.id} client reference ${ref.module}#${ref.export} is dangling: module exports [${compiled.exports.join(', ') || 'none'}]`,
+            `Plugin ${resolvedDef.id} client reference ${ref.module}#${ref.export} is dangling: module exports [${compiled.exports.join(', ') || 'none'}]`,
             422,
-            { pluginId: definition!.id, module: ref.module, export: ref.export, exports: compiled.exports },
+            { pluginId: resolvedDef.id, module: ref.module, export: ref.export, exports: compiled.exports },
           );
         }
       }
     }),
   );
-  void clientOk;
 
-  return report(dir, definition.id, checks, summary, screenIds, manifest);
+  return report(dir, resolvedDef.id, checks, summary, screenIds, manifest);
 }
 
 function report(

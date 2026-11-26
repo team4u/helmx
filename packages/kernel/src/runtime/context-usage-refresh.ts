@@ -31,7 +31,7 @@ import {
   estimateContextUsage,
 } from './context-usage.js'
 import { emitDiagnostic, type KernelDiagnosticEmitter } from './diagnostics.js'
-import type { EntryRecordLike } from './entries.js'
+import { getSdkConversation } from './sdk-ids.js'
 
 /** Minimal port from refresh chain to host (ConversationTracker). */
 export interface ContextUsageHost {
@@ -201,16 +201,15 @@ export class ContextUsageRefresh {
     const old = this.entryWatermark.get(id) ?? 0
     let watermark = old
     let boundary = false
-    for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
+    for (const raw of view.entries) {
       const numeric = Number(raw.id)
       if (!Number.isFinite(numeric) || numeric <= old) continue
       if (numeric > watermark) watermark = numeric
-      const kind = (raw as { kind?: unknown }).kind
       if (
-        kind === 'pi.assistant' ||
-        kind === 'pi.compaction' ||
-        kind === 'pi.reset' ||
-        kind === 'helmx.rewind'
+        raw.kind === 'pi.assistant' ||
+        raw.kind === 'pi.compaction' ||
+        raw.kind === 'pi.reset' ||
+        raw.kind === 'helmx.rewind'
       ) {
         boundary = true
       }
@@ -245,7 +244,7 @@ export class ContextUsageRefresh {
     // Generation guard: captured before await (also catches unobserved = undefined); concurrent re-observe or
     // stopObserving changes it so stale completions discard cleanly.
     const generation = this.host.generationOf(conversationId)
-    const conversation = await this.host.harness.conversation(conversationId as never, BACKGROUND_CONTEXT)
+    const conversation = await getSdkConversation(this.host.harness, conversationId, BACKGROUND_CONTEXT)
     if (!conversation) return
     const view = await conversation.context(BACKGROUND_CONTEXT)
     if (this.host.generationOf(conversationId) !== generation) return

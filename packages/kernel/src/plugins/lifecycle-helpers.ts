@@ -4,6 +4,7 @@
  */
 import {
   HelmxError,
+  isAbsoluteTargetPath,
   parseNonEmptyLocalizedText,
   type PluginConfigFieldSchema,
   type PluginDefinition,
@@ -15,7 +16,6 @@ import type { CapabilityRegistry } from './capability-registry.js';
 import type { PluginTaskTracker } from './tracking.js';
 import type { UiRegistry } from './ui-registry.js';
 import {
-  isCrossPlatformAbsolutePath,
   jsonClone,
   toJsonSafeError,
   type JsonSafeErrorInfo,
@@ -57,7 +57,7 @@ export function assertDefinition(definition: PluginDefinition): void {
     if (
       value !== undefined &&
       (typeof value !== 'string' ||
-        !isCrossPlatformAbsolutePath(value) ||
+        !isAbsoluteTargetPath(value) ||
         value.split(/[\\/]/).includes('..'))
     ) {
       throw new HelmxError(
@@ -319,17 +319,19 @@ export async function teardownPlugin(
         : [{ providerId: '<unknown>', error: toJsonSafeError(err) }];
   }
 
-  const releaseErrors: Array<{ error: JsonSafeErrorInfo }> = [];
-  for (const release of [...state.hostReleases]) {
-    state.hostReleases.delete(release);
-    try {
-      release();
-    } catch (err) {
-      releaseErrors.push({ error: toJsonSafeError(err) });
+  let releaseErrors: Array<{ error: JsonSafeErrorInfo }> = [];
+  try {
+    for (const release of [...state.hostReleases]) {
+      state.hostReleases.delete(release);
+      try {
+        release();
+      } catch (err) {
+        releaseErrors.push({ error: toJsonSafeError(err) });
+      }
     }
+  } finally {
+    clearRegistrations?.(state);
   }
-
-  clearRegistrations?.(state);
 
   if (stopErrors.length > 0) {
     throw new HelmxError(

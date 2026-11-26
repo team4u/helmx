@@ -28,6 +28,7 @@ import type {
   PublicPluginSessionDoc,
 } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
+import { stripUndefinedProperties } from '../shared/json.js'
 
 const NonEmptyString = Type.String({ minLength: 1 })
 const SafePositiveInt = Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
@@ -35,35 +36,15 @@ const SafeNonNegativeInt = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_I
 
 /**
  * Recursively strip optional fields whose value is undefined.
- * Recurses only into plain objects and arrays; all other values (including non-JSON types like Date/Map) are returned
- * verbatim so redactJsonValue rejects them explicitly at the JSON boundary without silent conversion.
- * Objects already on the active traversal path are returned verbatim (true cycles are caught explicitly by redactJsonValue
- * instead of triggering unbounded recursion here).
+ * Recurses only into `Object.prototype` objects and arrays; all other values are returned verbatim
+ * so `redactJsonValue` rejects them explicitly at the JSON boundary without silent conversion.
  */
 export function pruneUndefined(value: unknown, visiting: WeakSet<object>): unknown {
-  if (Array.isArray(value)) {
-    if (visiting.has(value)) return value
-    visiting.add(value)
-    try {
-      return value.map((v) => pruneUndefined(v, visiting))
-    } finally {
-      visiting.delete(value)
-    }
-  }
-  if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
-    if (visiting.has(value)) return value
-    visiting.add(value)
-    try {
-      const out: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(value)) {
-        if (v !== undefined) out[k] = pruneUndefined(v, visiting)
-      }
-      return out
-    } finally {
-      visiting.delete(value)
-    }
-  }
-  return value
+  return stripUndefinedProperties(value, {
+    seen: visiting,
+    objectFilter: 'object-proto-only',
+    onCycle: 'keep',
+  })
 }
 
 function formatTypeBoxErrors(errors: readonly TLocalizedValidationError[]): string {

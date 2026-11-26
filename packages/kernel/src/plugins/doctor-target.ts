@@ -8,12 +8,11 @@
  * - Must not contain `..` traversal segments (split on both `/` and `\`).
  * Invalid paths fail explicitly with `HelmxError('validation_error', ..., 400)`.
  */
-import { HelmxError } from '@helmx/protocol';
-import { isCrossPlatformAbsolutePath } from './shared.js';
+import { HelmxError, isAbsoluteTargetPath } from '@helmx/protocol';
 
 /** Validates a doctor target directory path (`field` names the input field, e.g. `'dir'` / `'path'`). */
 export function assertDoctorTargetDir(dir: string, field: string): void {
-  if (!isCrossPlatformAbsolutePath(dir) || dir.split(/[\\/]/).includes('..')) {
+  if (!isAbsoluteTargetPath(dir) || dir.split(/[\\/]/).includes('..')) {
     throw new HelmxError(
       'validation_error',
       `Doctor target '${field}' must be a cross-platform absolute directory path without '..' segments (starting with '/' or drive letter): ${dir}`,

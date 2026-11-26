@@ -10,7 +10,6 @@
 import type { Provider } from '@earendil-works/pi-ai'
 import type {
   ConversationInput,
-  ConversationOwnership,
   ConversationSummary,
   ModelsChangedEvent,
   PluginBuildProvider,
@@ -48,7 +47,7 @@ import { RuntimeTriggerDispatcher } from './runtime-triggers.js'
 import { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
 import { trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { RuntimeOwnershipManager } from './runtime-ownership.js'
-import type { KernelRuntime } from './runtime.js'
+import type { RuntimeServicesHost } from './runtime-types.js'
 import type { BootstrappedKernelContext } from './runtime-bootstrap.js'
 
 export interface RuntimeServicesInit extends BootstrappedKernelContext {
@@ -101,7 +100,7 @@ export interface AssembledRuntimeServices {
 }
 
 export function assembleRuntimeServices(
-  runtime: KernelRuntime,
+  runtime: RuntimeServicesHost,
   init: RuntimeServicesInit,
   options: {
     store: HelmxStore
@@ -198,6 +197,7 @@ export function assembleRuntimeServices(
       alignAllConversations: () => conversations.alignAllConversations(),
       isClosed: () => runtime.isClosing,
       assertWritable: options.assertWritable,
+      emitDiagnostic: init.emitDiagnostic,
     },
     init.modelsInstance,
     { model: init.defaultModel },
@@ -393,7 +393,6 @@ export function assembleRuntimeServices(
     stashService: options.stashService,
     assertWritable: options.assertWritable,
     updateConversation: (id, patch) => conversations.updateConversation(id, patch),
-    markConversationOwnership: (id, owner: ConversationOwnership) => ownership.markOwnership(id, owner),
   })
 
   // ---- Trigger dispatch ----

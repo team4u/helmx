@@ -100,14 +100,20 @@ export async function rollbackIsolatedPlugin(
   state: PluginState,
   err: unknown,
   stage: PluginDiagnosticError['stage'],
-  ctx: PluginTransitionContext,
+  ctx: PluginTransitionContext & { onRollbackError?: (error: unknown) => void },
 ): Promise<void> {
   try {
     await teardownPluginState(state, { stopServices: stage === 'enable' }, ctx);
-  } catch {
-    // Do not mask the original failure during cleanup.
+  } catch (rollbackErr) {
+    // Do not mask the original failure during cleanup, though surface rollback teardown errors to diagnostics.
+    ctx.onRollbackError?.(rollbackErr);
+    if (ctx.onRollbackError === undefined) {
+      console.error(
+        `[helmx] [plugins.rollback] isolated teardown failed for ${state.definition.id}:`,
+        rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+      );
+    }
   }
-  clearPluginRegistrations(state, ctx);
   state.enabled = false;
   state.epoch += 1;
   state.phase = 'idle';
@@ -166,7 +172,6 @@ export async function rollbackEnablePlugin(
   } catch (teardownErr) {
     rollbackError = toJsonSafeError(teardownErr);
   }
-  clearPluginRegistrations(state, ctx);
   state.configSchema = prevConfigSchema;
   state.enabled = false;
   state.epoch += 1;

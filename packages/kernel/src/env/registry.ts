@@ -142,6 +142,8 @@ export interface NodeRegistryOptions {
    * **Defaults to rejecting all registrations (fail-closed)**.
    */
   authenticate: (nodeId: string, token: string) => boolean | Promise<boolean>
+  /** Optional diagnostic sink invoked on authentication, output sink, or listener errors. */
+  onError?: (context: string, error: unknown) => void
 }
 
 interface Waiter {
@@ -235,6 +237,7 @@ export class NodeRegistry {
   readonly #tunnels = new TunnelTable()
   /** Upgrade waiter set (registration/commit settlement/shutdown cleanup; see `upgrade-waiters.ts`). */
   readonly #upgrades = new UpgradeWaiterSet()
+  readonly #onError: (context: string, error: unknown) => void
   #sweeper: NodeJS.Timeout | undefined
   #closed = false
 
@@ -243,6 +246,9 @@ export class NodeRegistry {
     this.#heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 45_000
     // Fail-closed: reject everything if no auth callback is provided.
     this.#authenticate = options.authenticate ?? (() => false)
+    this.#onError = options.onError ?? ((context, error) => {
+      console.error(`[env.registry] ${context}:`, error instanceof Error ? error.message : String(error))
+    })
   }
 
   get heartbeatIntervalMs(): number {
@@ -317,7 +323,8 @@ export class NodeRegistry {
     let valid = false
     try {
       valid = await this.#authenticate(nodeId, token)
-    } catch {
+    } catch (error) {
+      this.#onError(`authenticate(${nodeId}) failed`, error)
       valid = false
     }
     if (!valid) return { accepted: false, reason: 'invalid token' }
@@ -404,7 +411,8 @@ export class NodeRegistry {
     if (this.#closed) return false
     try {
       return await this.#authenticate(nodeId, token)
-    } catch {
+    } catch (error) {
+      this.#onError(`authenticateToken(${nodeId}) failed`, error)
       return false
     }
   }
@@ -466,53 +474,51 @@ export class NodeRegistry {
       conn.rpc.nodeTunnelAbort?.(tunnelId).catch(() => undefined)
     }
 
-    const pending: PendingTunnel = {
-      tunnelId,
-      nodeId,
-      epoch,
-      timeoutMs,
-      timer: undefined as unknown as NodeJS.Timeout,
-      grant: undefined as unknown as (duplex: Duplex) => void,
-      reject: undefined as unknown as (error: HelmxError) => void,
-      settled: false,
-    }
+    let resolvePromise!: (duplex: Duplex) => void
+    let rejectPromise!: (error: HelmxError) => void
     const pendingPromise = new Promise<Duplex>((resolve, reject) => {
-      let granted: Duplex | undefined
-      const settle = (): void => {
-        const duplex = granted
-        if (pending.settled || duplex === undefined) return
-        pending.settled = true
-        clearTimeout(pending.timer)
-        // Remove pending, register active, and hook close cleanup (see `tunnel-table.ts`).
-        this.#tunnels.activate(tunnelId, nodeId, duplex)
-        resolve(duplex)
-      }
-      // Gateway calls `grantTunnel` after auth passes, handing over the ready Duplex and settling pending.
-      pending.grant = (duplex) => {
-        if (pending.settled) { duplex.destroy(); return }
-        granted = duplex
-        settle()
-      }
-      pending.reject = (error) => {
-        if (pending.settled) return
-        pending.settled = true
-        clearTimeout(pending.timer)
-        this.#tunnels.dropPending(tunnelId)
-        reject(error)
-      }
+      resolvePromise = resolve
+      rejectPromise = reject
     })
     // Prevent unhandledRejection when a synchronous rejection fires before caller awaits.
     pendingPromise.catch(() => undefined)
-    pending.timer = setTimeout(() => {
+
+    const rejectPending = (error: HelmxError): void => {
+      if (pending.settled) return
+      pending.settled = true
+      clearTimeout(timer)
+      this.#tunnels.dropPending(tunnelId)
+      rejectPromise(error)
+    }
+
+    const timer = setTimeout(() => {
       abortNode()
-      pending.reject(new HelmxError(
+      rejectPending(new HelmxError(
         'node_tunnel_timeout',
         `node ${nodeId} tunnel ${tunnelId} did not connect back within ${timeoutMs}ms`,
         504,
         { nodeId, tunnelId },
       ))
     }, timeoutMs)
-    pending.timer.unref?.()
+    timer.unref?.()
+
+    const pending: PendingTunnel = {
+      tunnelId,
+      nodeId,
+      epoch,
+      timeoutMs,
+      timer,
+      grant: (duplex) => {
+        if (pending.settled) { duplex.destroy(); return }
+        pending.settled = true
+        clearTimeout(timer)
+        // Remove pending, register active, and hook close cleanup (see `tunnel-table.ts`).
+        this.#tunnels.activate(tunnelId, nodeId, duplex)
+        resolvePromise(duplex)
+      },
+      reject: rejectPending,
+      settled: false,
+    }
     this.#tunnels.addPending(pending)
 
     const onAbort = (): void => {
@@ -623,8 +629,9 @@ export class NodeRegistry {
     for (const sink of sinks) {
       try {
         sink(event)
-      } catch {
+      } catch (error) {
         // One sink's error must not affect other sinks.
+        this.#onError(`output sink(${nodeId}) threw`, error)
       }
     }
   }
@@ -638,8 +645,9 @@ export class NodeRegistry {
     for (const listener of [...this.#nodeChangedListeners]) {
       try {
         listener(nodeId, online)
-      } catch {
+      } catch (error) {
         // Listener errors must not break the registry.
+        this.#onError(`nodeChanged listener(${nodeId}) threw`, error)
       }
     }
   }

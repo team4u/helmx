@@ -11,7 +11,7 @@ import { MAX_ARTIFACT_BYTES, type ArtifactService, type SkillService } from '../
 import type { ConversationService } from '../runtime/conversation-service.js'
 import { buildContentDisposition, errorResponse, jsonOk, readBinaryBodyWithLimit, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
-import { requireIdParam, ValidationError } from './validate.js'
+import { isSafeRelativePath, requireIdParam, ValidationError } from './validate.js'
 import type { RouteContext } from './route-context.js'
 
 export interface AssetRoutesTarget {
@@ -192,11 +192,4 @@ export async function handleSkillsDomain(
     return jsonOk(redactor, { text })
   }
   return errorResponse(redactor, 404, 'not_found', 'route not found')
-}
-
-function isSafeRelativePath(path: string): boolean {
-  if (path.length === 0 || path.length > 512) return false
-  if (path.startsWith('/') || path.includes('\\')) return false
-  const parts = path.split('/')
-  return parts.every((p) => p.length > 0 && p !== '.' && p !== '..')
 }

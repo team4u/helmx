@@ -135,7 +135,7 @@ export function startHubUpdater(options: HubUpdaterOptions): HubUpdaterHandle | 
       state.currentVersion = current?.version ?? null;
       const blocked = await readBlockedRelease(config.root);
       state.blocked = blocked;
-      const ready = await readUpdateReady(config.root).catch(() => null);
+      const ready = await readUpdateReady(config.root);
       state.readyVersion = ready?.version ?? null;
       if (current === null) return; // nothing committed to update from; the CLI owns bootstrap installs
       const latest = await core.fetchLatestVersion(options.pkgName, {

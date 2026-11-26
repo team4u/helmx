@@ -14,6 +14,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { Readable } from 'node:stream'
 import { createHubHandler, type KernelHttpTarget, type ProductRouteHandler } from './hub.js'
+import { describeError } from './http-utils.js'
 import { createStaticServe } from './static.js'
 import { HelmxError } from '@helmx/protocol'
 import { attachNodeWsGateway, attachNodeTunnelGateway, type EnvFabric, type NodeWsGateway } from '../env/index.js'
@@ -81,18 +82,66 @@ export async function writeWebResponse(webResponse: Response, res: http.ServerRe
   })
   res.writeHead(webResponse.status, webResponse.statusText || undefined, headers)
   if (webResponse.body === null) {
-    res.end()
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      const cleanup = () => {
+        res.off('finish', onDone)
+        res.off('close', onDone)
+        res.off('error', onError)
+      }
+      const onDone = () => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve()
+      }
+      const onError = (err: unknown) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(err)
+      }
+      res.on('finish', onDone)
+      res.on('close', onDone)
+      res.on('error', onError)
+      res.end()
+    })
     return
   }
   const nodeStream = Readable.fromWeb(webResponse.body as Parameters<typeof Readable.fromWeb>[0])
   await new Promise<void>((resolve, reject) => {
-    nodeStream.on('error', reject)
-    res.on('close', () => {
+    let settled = false
+    const cleanup = () => {
+      nodeStream.off('error', onError)
+      res.off('error', onError)
+      res.off('finish', onFinish)
+      res.off('close', onClose)
+    }
+    const onFinish = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve()
+    }
+    const onClose = () => {
+      if (settled) return
+      settled = true
+      cleanup()
       nodeStream.destroy()
       resolve()
-    })
+    }
+    const onError = (err: unknown) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      nodeStream.destroy()
+      reject(err)
+    }
+    nodeStream.on('error', onError)
+    res.on('error', onError)
+    res.on('finish', onFinish)
+    res.on('close', onClose)
     nodeStream.pipe(res)
-    nodeStream.on('end', () => resolve())
   })
 }
 
@@ -139,13 +188,15 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
       // Client disconnect: abort signal (cancels SSE subscriptions and body reads)
       res.on('close', () => controller.abort())
       try {
-        const webRequest = await toWebRequest(req, controller.signal)
+        const webRequest = toWebRequest(req, controller.signal)
         const webResponse = await handler(webRequest)
         await writeWebResponse(webResponse, res)
       } catch (error) {
         // Mid-connection failure or conversion error: best-effort 500 envelope; ignore writes if `res` is no longer writable,
-        // though still log server-side diagnostics.
-        console.error('[hub] node adapter error:', describeError(error))
+        // though still log redacted server-side diagnostics.
+        const rawDiag = describeError(error)
+        const diag = kernel.stash ? kernel.stash.redact(rawDiag) : rawDiag
+        console.error('[hub] node adapter error:', diag)
         if (!res.headersSent) {
           res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
         }
@@ -210,12 +261,4 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
       })
     },
   } satisfies NodeHubHandle
-}
-
-/** Printable error summary: name + message + stack for Error instances, String() otherwise. */
-function describeError(error: unknown): string {
-  if (error instanceof Error) {
-    return `${error.name}: ${error.message}\n${error.stack ?? ''}`
-  }
-  return String(error)
 }

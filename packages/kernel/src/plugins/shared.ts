@@ -126,11 +126,6 @@ export function toJsonSafeError(err: unknown): JsonSafeErrorInfo {
   return { name: 'NonError', message: String(err) };
 }
 
-/** Cross-platform absolute path check: POSIX `/`, Windows drive `^[a-zA-Z]:[\\/]`, or UNC `^\\\\[^\\]+\\[^\\]+`. */
-export function isCrossPlatformAbsolutePath(p: string): boolean {
-  return p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p) || /^\\\\[^\\]+\\[^\\]+/.test(p);
-}
-
 /** Strictly decodes a single URL path segment; invalid percent-encoding fails explicitly at registration. */
 export function decodeSegmentStrict(seg: string): string {
   if (!seg.includes('%')) return seg;

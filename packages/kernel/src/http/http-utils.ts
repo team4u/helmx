@@ -13,48 +13,18 @@ import { redactJsonValue } from '../redact.js'
 // BodyError/readBody are consolidated in @helmx/protocol (single shared implementation for kernel and plugins);
 // imported here for internal kernel use and re-exported to keep existing relative imports stable.
 import { BodyError, readBody } from '@helmx/protocol'
+import { stripUndefinedProperties } from '../shared/json.js'
+import { concatUint8Arrays, readBoundedChunks } from './stream-utils.js'
 
 export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024 // 1 MiB
 
 /** Identity redactor used when no secret stash is attached: values are already safe. */
 const identityRedact = (text: string): string => text
 
-/**
- * Recursively omit undefined properties on plain objects (matching JSON.stringify object semantics:
- * omitted optional fields). undefined array elements are NOT exempted here and are still explicitly
- * rejected by redactJsonValue as a contract violation.
- */
-function omitUndefinedProperties(value: unknown, seen: WeakSet<object>): unknown {
-  if (value === null || typeof value !== 'object') return value
-  if (seen.has(value)) return value // cycle detection is handled by redactJsonValue
-  if (Array.isArray(value)) {
-    seen.add(value)
-    try {
-      return value.map((item) => omitUndefinedProperties(item, seen))
-    } finally {
-      seen.delete(value)
-    }
-  }
-  const prototype = Object.getPrototypeOf(value)
-  if (prototype !== Object.prototype && prototype !== null) return value
-  seen.add(value)
-  try {
-    const out: Record<string, unknown> = {}
-    for (const [key, item] of Object.entries(value)) {
-      if (item === undefined) continue
-      out[key] = omitUndefinedProperties(item, seen)
-    }
-    return out
-  } finally {
-    seen.delete(value)
-  }
-}
-
 export function makeJsonRedactor(redact?: (text: string) => string): JsonRedactor {
-  if (redact === undefined) {
-    return (value: unknown): string => JSON.stringify(redactJsonValue(omitUndefinedProperties(value, new WeakSet()), identityRedact))
-  }
-  return (value: unknown): string => JSON.stringify(redactJsonValue(omitUndefinedProperties(value, new WeakSet()), redact))
+  const fn = redact ?? identityRedact
+  return (value: unknown): string =>
+    JSON.stringify(redactJsonValue(stripUndefinedProperties(value, { objectFilter: 'object-or-null', onCycle: 'keep' }), fn))
 }
 
 /** Outbound JSON redactor: recursively processes string values before serialization; rejects invalid JSON values (cycles/undefined/NaN/sparse arrays/non-plain objects) via redactJsonValue. */
@@ -106,11 +76,19 @@ export function errorToResponse(redactor: JsonRedactor | undefined, redactText: 
 }
 
 /** Printable error summary: name + message + stack for Error instances, String() otherwise. */
-function describeError(error: unknown): string {
+export function describeError(error: unknown): string {
   if (error instanceof Error) {
     return `${error.name}: ${error.message}\n${error.stack ?? ''}`
   }
   return String(error)
+}
+
+/** Extract Bearer token from the `Authorization` header (case-insensitive scheme), or `undefined`. */
+export function bearerToken(request: Request): string | undefined {
+  const header = request.headers.get('authorization')
+  if (header === null) return undefined
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim())
+  return match?.[1] ?? undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -192,27 +170,12 @@ export async function readBinaryBodyWithLimit(request: Request, maxBytes: number
   }
   const reader = request.body?.getReader()
   if (reader === undefined) return new Uint8Array(0)
-  const chunks: Uint8Array[] = []
-  let totalBytes = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value !== undefined) {
-      totalBytes += value.byteLength
-      if (totalBytes > maxBytes) {
-        await reader.cancel().catch(() => {})
-        throw new HelmxError('artifact_too_large', `request body exceeds ${maxBytes} byte limit`, 413, { maxBytes })
-      }
-      chunks.push(value)
-    }
+  const { chunks, totalBytes, exceeded } = await readBoundedChunks(reader, maxBytes, { cancelOnExceed: true })
+  if (exceeded) {
+    throw new HelmxError('artifact_too_large', `request body exceeds ${maxBytes} byte limit`, 413, { maxBytes })
   }
-  const out = new Uint8Array(totalBytes)
-  let offset = 0
-  for (const chunk of chunks) {
-    out.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return out
+  reader.releaseLock()
+  return concatUint8Arrays(chunks, totalBytes)
 }
 
 /** RFC 5987 / ASCII fallback content-disposition header for binary/file downloads. */

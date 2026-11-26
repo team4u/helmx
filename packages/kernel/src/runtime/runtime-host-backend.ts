@@ -13,7 +13,7 @@ import { FileNotFoundError, atomicWriteFile, withFileLock } from '../services/in
 import type { PluginHostBackend, PluginKvStore, PluginSessionDocStore } from '../plugins/index.js'
 import type { HelmxStore } from './store.js'
 import { profileDirectoryHelper } from './target-cwd.js'
-import type { KernelRuntime } from './runtime.js'
+import type { RuntimeHostBackendSource } from './runtime-types.js'
 
 /** Boundary normalization for `profiles.get/directory`: invalid id -> `400 validation_error`; rethrows all other errors as-is. */
 function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
@@ -24,7 +24,7 @@ function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
 /**
  * Construct the host backend interface required by `PluginHost` (`PluginHostBackend`).
  */
-export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBackend {
+export function createPluginHostBackend(runtime: RuntimeHostBackendSource): PluginHostBackend {
   return {
     isClosing: () => runtime.isClosing,
     profiles: {

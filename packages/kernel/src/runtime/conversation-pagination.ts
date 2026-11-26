@@ -12,6 +12,7 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
 import { coveredByRewind, rewindIntervalOf, type RewindInterval } from './conversation-rewind.js'
+import { scanSdkEntries } from './sdk-ids.js'
 
 /** Soft entry budget for turn-aligned paging: stops at next turn boundary once exceeded after >=1 complete turn. */
 export const TURN_SOFT_ENTRY_BUDGET = 200
@@ -131,13 +132,8 @@ export async function pageVisibleEntries(
   let nextCursor: unknown = undefined
   for (;;) {
     const remaining = limit - collected.length
-    const page = await conversation.entries(
-      { order: 'descending' },
-      remaining,
-      sdkCursor as never,
-      BACKGROUND_CONTEXT,
-    )
-    for (const raw of page.items as never as RawDetailEntry[]) {
+    const page = await scanSdkEntries(conversation, 'descending', remaining, sdkCursor, BACKGROUND_CONTEXT)
+    for (const raw of page.items) {
       if (classifyDescendingEntry(raw, rewindCuts, collectRewindsInline) === 'hidden') continue
       collected.push(raw)
     }
@@ -181,13 +177,8 @@ export async function pageVisibleTurns(
 
   for (;;) {
     const batchSize = lookingAhead ? TURN_LOOKAHEAD_BATCH_SIZE : TURN_SCAN_BATCH_SIZE
-    const page = await conversation.entries(
-      { order: 'descending' },
-      batchSize,
-      sdkCursor as never,
-      BACKGROUND_CONTEXT,
-    )
-    for (const raw of page.items as never as RawDetailEntry[]) {
+    const page = await scanSdkEntries(conversation, 'descending', batchSize, sdkCursor, BACKGROUND_CONTEXT)
+    for (const raw of page.items) {
       const numericId = Number(raw.id)
       const visibility = classifyDescendingEntry(raw, rewindCuts, collectRewindsInline)
       if (lookingAhead) {

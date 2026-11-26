@@ -21,14 +21,24 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ConversationAttachmentRef, ConversationInput } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
-import type { ConversationTracker } from './conversations.js'
 import { asConversationId, asEntryId } from './sdk-ids.js'
 import type { HelmxStore } from './store.js'
+
+/** Minimal tracker port consumed by history rewind (avoids circular dependency on `conversations.ts`). */
+export interface RewindTrackerPort {
+  hasLiveWork(conversationId: number): boolean
+  isCompacting(conversationId: number): boolean
+  waitTurnSettled(conversationId: number): Promise<void>
+  registerInput(conversationId: number, input: ConversationInput): void
+  bindSubmission(conversationId: number, requestId: string, submissionId: number): void
+  dropInput(conversationId: number, requestId: string): void
+  invalidateLastAssistantWithin(conversationId: number, fromEntryId: number, throughEntryId: number): void
+}
 
 interface ConversationRewindHost {
   readonly harness: Harness
   readonly store: HelmxStore
-  readonly tracker: ConversationTracker
+  readonly tracker: RewindTrackerPort
   readonly cancelPendingAsksForRewrite: (id: number) => Promise<void>
   readonly abortConversation: (id: number) => Promise<void>
 }

@@ -526,7 +526,7 @@ export class EventHub {
     if (resume.bootId !== this.bootId) return false
     const headSeq = this.seqValue
     if (resume.afterSeq > headSeq) return false
-    if (resume.afterSeq >= headSeq) return true
+    if (resume.afterSeq === headSeq) return true
     if (this.ring.length === 0) return false
     if (this.ring[0]!.seq > resume.afterSeq + 1) return false
     if (this.ring[this.ring.length - 1]!.seq !== headSeq) return false

@@ -21,6 +21,7 @@
  * subscriptions inside the events implementation.
  */
 import {
+  bearerToken,
   errorResponse,
   errorToResponse,
   makeJsonRedactor,
@@ -239,13 +240,6 @@ function jsonContentTypeOk(request: Request): boolean {
   const raw = request.headers.get('content-type')
   if (raw === null) return !requestHasBody(request)
   return raw.split(';')[0]!.trim().toLowerCase() === 'application/json'
-}
-
-function bearerToken(request: Request): string | undefined {
-  const header = request.headers.get('authorization')
-  if (header === null) return undefined
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim())
-  return match?.[1] ?? undefined
 }
 
 /** Check whether the decoded segments match a plugin route declared as public. */
