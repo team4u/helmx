@@ -16,7 +16,6 @@ import {
   WORKFLOW_RUN_BADGES_DOC,
   WORKFLOW_SKILL_ID,
   type ConversationDepthCapability,
-  type WorkflowRunBadgesDocState,
   type WorkflowRunSessionDocState,
 } from './contracts.js'
 import { registerWorkflowActions } from './workflow/actions.js'
@@ -31,7 +30,7 @@ import {
 } from './workflow/config.js'
 import { createManagedSubagentRegistry, type ManagedSubagentEntry } from './workflow/depth.js'
 import { registerWorkflowHooks } from './workflow/hooks.js'
-import { createRunsProjection } from './workflow/projection.js'
+import { createRunsProjection, type WorkflowLocalizedBadgesDocState } from './workflow/projection.js'
 import {
   createWorkflowEngineHost,
   WorkflowService,
@@ -60,7 +59,7 @@ export function createWorkflowPlugin(): PluginDefinition {
         { runs: [] },
         { public: true, durable: false },
       )
-      const badgesDoc = ctx.doc<WorkflowRunBadgesDocState>(
+      const badgesDoc = ctx.doc<WorkflowLocalizedBadgesDocState>(
         WORKFLOW_RUN_BADGES_DOC,
         { byConversation: {} },
         { public: true, durable: false },

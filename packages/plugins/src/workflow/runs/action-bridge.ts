@@ -8,8 +8,7 @@ import {
   isValidNodeId,
   type EnvExecResponse,
 } from '@helmx/protocol'
-import type { WorkflowServiceHost } from './spawn-bridge.js'
-import type { ActiveRun } from './types.js'
+import type { ActiveRun, WorkflowServiceHost } from './types.js'
 
 export const BUILTIN_ENV_EXEC_PLUGIN = 'env'
 export const BUILTIN_ENV_EXEC_ACTION = 'exec'

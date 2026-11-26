@@ -27,7 +27,6 @@ import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-h
 import {
   CONVERSATION_DEPTH_CAPABILITY_ID,
   type ConversationDepthCapability,
-  type WorkflowRunBadgesDocState,
   type WorkflowRunSessionDocState,
   type WorkflowRunSummary,
 } from '../src/contracts.js'
@@ -37,6 +36,8 @@ import {
   createRunsProjection,
   enforceRunsShardByteBudget,
   MAX_PROJECTED_RUNS_PER_CONVERSATION,
+  MAX_RUN_BADGE_ENTRIES,
+  type WorkflowLocalizedBadgesDocState,
 } from '../src/workflow/projection.js'
 import { createHelmx } from '../../hub/src/app.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
@@ -527,7 +528,7 @@ test('增量投影与 100 条滑窗：upsertRun 零 listRuns 磁盘读，超出 
   }
 
   let latestSessionDoc: WorkflowRunSessionDocState | undefined
-  let latestBadges: WorkflowRunBadgesDocState = { byConversation: {} }
+  let latestBadges: WorkflowLocalizedBadgesDocState = { byConversation: {} }
   const runsDoc = {
     set(_convId: number, value: WorkflowRunSessionDocState) {
       latestSessionDoc = value
@@ -543,7 +544,7 @@ test('增量投影与 100 条滑窗：upsertRun 零 listRuns 磁盘读，超出 
     runsDoc,
     badgesDoc: {
       get: () => latestBadges,
-      set: (value: WorkflowRunBadgesDocState) => { latestBadges = value },
+      set: (value: WorkflowLocalizedBadgesDocState) => { latestBadges = value },
       update: () => {},
       flush: async () => {},
     },
@@ -568,7 +569,10 @@ test('增量投影与 100 条滑窗：upsertRun 零 listRuns 磁盘读，超出 
   assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_done_11'), true)
   // 角标基于全量会话聚合计算，不受 100 条分片截断影响
   assert.equal(latestBadges.byConversation['1']?.count, 110)
-  assert.equal(latestBadges.byConversation['1']?.footerText, '2 运行中 · 1 失败')
+  assert.deepEqual(latestBadges.byConversation['1']?.footerText, {
+    en: '2 running · 1 failed',
+    'zh-CN': '2 运行中 · 1 失败',
+  })
 
   // 运行期 upsertRun 单条增量更新：零 listRuns 调用
   projection.upsertRun({
@@ -581,11 +585,69 @@ test('增量投影与 100 条滑窗：upsertRun 零 listRuns 磁盘读，超出 
     result: 'now-settled',
   })
   assert.equal(listRunsCalls, 1, 'upsertRun 绝不得触发 listRuns 全量磁盘重读')
-  assert.equal(latestBadges.byConversation['1']?.footerText, '1 运行中 · 1 失败')
+  assert.deepEqual(latestBadges.byConversation['1']?.footerText, {
+    en: '1 running · 1 failed',
+    'zh-CN': '1 运行中 · 1 失败',
+  })
   // wf_old_running_1 变为 createdAt=1 的终态后自然滑出 100 窗口，done_10 补位进入
   assert.equal(latestSessionDoc.runs.length, MAX_PROJECTED_RUNS_PER_CONVERSATION)
   assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_old_running_1'), false)
   assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_done_10'), true)
+})
+
+test('run-badges 上限裁剪：超限优先保留 running/failed 活跃会话并按时间淘汰最早 completed 会话', { timeout: 60_000 }, () => {
+  const total = MAX_RUN_BADGE_ENTRIES + 12
+  const conversations = Array.from({ length: total }, (_, idx) => ({ id: idx + 1 }))
+  const runs: WorkflowRunSummary[] = [
+    {
+      id: 'wf_active_running',
+      name: 'active-run',
+      conversationId: 1,
+      status: 'running',
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    ...Array.from({ length: total - 1 }, (_, idx) => {
+      const convId = idx + 2
+      return {
+        id: `wf_done_${convId}`,
+        name: `done-${convId}`,
+        conversationId: convId,
+        status: 'completed' as const,
+        createdAt: convId,
+        updatedAt: convId,
+      }
+    }),
+  ]
+
+  let badgesState: WorkflowLocalizedBadgesDocState = { byConversation: {} }
+  const projection = createRunsProjection({
+    runsDoc: {
+      set: () => {},
+      get: () => ({ runs: [] }),
+      update: () => {},
+      delete: () => {},
+      listConversationIds: () => [],
+      flush: async () => {},
+    } as unknown as PluginSessionDocHandle<WorkflowRunSessionDocState>,
+    badgesDoc: {
+      get: () => badgesState,
+      set: (value) => {
+        badgesState = value
+      },
+      update: () => {},
+      flush: async () => {},
+    },
+    listRuns: () => runs,
+    listConversations: () => conversations,
+  })
+
+  projection.sync()
+  assert.equal(Object.keys(badgesState.byConversation).length, MAX_RUN_BADGE_ENTRIES)
+  assert.equal(badgesState.byConversation['1']?.tone, 'accent')
+  assert.equal(badgesState.byConversation['2'], undefined, 'oldest completed badge evicted first')
+  assert.equal(badgesState.byConversation[String(total)]?.tone, 'neutral')
+  assert.equal(badgesState.byConversation[String(total)]?.footerText, undefined)
 })
 
 test('conversation.deleted 同时清理受管子代理登记表与已移除 worktree 绑定元数据（保留 active worktree；worktree 绑定归 builtin:worktree 裁剪）', { timeout: 60_000 }, async () => {

@@ -6,11 +6,11 @@
  * - `aroundSpawn` 编排新建 / resume / reattach / 外部运行时回填；
  * - `pruneConversation` 在会话删除时裁剪绑定与已 `removed` 记录（保留 `active` 记录与租约）。
  */
-import { HelmxError, isValidNodeId, NODE_ID_PATTERN, type AgentExecutionInfo, type AgentSpawnRequest, type NodePathUsage } from '@helmx/protocol'
+import { HelmxError, isValidNodeId, NODE_ID_PATTERN, type AgentSpawnRequest } from '@helmx/protocol'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { FileError, type ExecutionEnv, type Result } from '@earendil-works/pi-durable/env'
+import { FileError, type Result } from '@earendil-works/pi-durable/env'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from './worktree.js'
-import { WorktreeStore, type WorktreeKvHandles, type WorktreeLeaseRecord } from './worktree-store.js'
+import { WorktreeStore, type WorktreeLeaseRecord } from './worktree-store.js'
 import type { WorktreeExecOptions, WorktreeExecResult } from './worktree-git.js'
 import {
   reattachWithWorktree,
@@ -18,53 +18,14 @@ import {
   spawnWithWorktree,
   type IsolationSpawnContext,
 } from './isolation-spawn.js'
+import type {
+  AcquireWorktreeInput,
+  AcquireWorktreeResult,
+  WorktreeIsolationDeps,
+} from './isolation-types.js'
 
 export type { WorktreeLeaseRecord }
-
-export interface AcquireWorktreeInput {
-  conversationId: number
-  parentConversationId: number
-  profileId?: string
-  requestNodeId?: string
-  requestCwd?: string
-  fork?: boolean
-  hold: {
-    pluginId: string
-    holdId: string
-    label: string
-  }
-}
-
-export interface AcquireWorktreeResult {
-  worktreeId: string
-  path: string
-  branch: string
-  baseCommit: string
-  nodeId: string
-}
-
-export interface WorktreeIsolationDeps {
-  host: {
-    resolveSpawnTarget(input: {
-      parentConversationId: number
-      profileId?: string
-      requestNodeId?: string
-      requestCwd?: string
-      fork?: boolean
-    }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }>
-    execEnv(
-      req: { command: string | string[]; nodeId?: string; cwd?: string; timeoutMs?: number },
-      opts?: { signal?: AbortSignal },
-    ): Promise<{ ok: boolean; exitCode: number | null; output: string; timedOut: boolean }>
-    executionEnv(nodeId: string, cwd: string): ExecutionEnv
-    inspectNodePathUsage(input: { nodeId: string; path: string; signal?: AbortSignal }): Promise<NodePathUsage>
-    listActiveSpawnExecutions(): AgentExecutionInfo[]
-    redact(text: string): string
-    getConversation(id: number): { cwd: string; nodeId?: string; status: string; profileId?: string }
-    readonly isClosing?: boolean
-  }
-  kv: WorktreeKvHandles
-}
+export type { AcquireWorktreeInput, AcquireWorktreeResult, WorktreeIsolationDeps } from './isolation-types.js'
 
 export class WorktreeIsolation {
   readonly allocator: WorktreeAllocator

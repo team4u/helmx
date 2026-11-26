@@ -5,7 +5,7 @@
  * CopyButton, EmptyState, LoadingState, Callout, and usePluginAction.
  * Exports only React components and TS types (Fast Refresh compliant).
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol/browser'
 import {
@@ -86,6 +86,11 @@ function WorkflowLibraryDrawer(props: {
   const generation = useRef(0)
   const conversations = useConversations()
 
+  const ctxRef = useRef(ctx)
+  ctxRef.current = ctx
+  const localeRef = useRef(locale)
+  localeRef.current = locale
+
   const runCtl = usePluginAction({
     notifyError: true,
     formatError: (err) => actionFailedNotice(t(COPY.run), err instanceof Error ? err.message : String(err), locale),
@@ -93,16 +98,18 @@ function WorkflowLibraryDrawer(props: {
   const deleteCtl = usePluginAction({
     formatError: (err) => actionFailedNotice(t(COPY.delete), err instanceof Error ? err.message : String(err), locale),
   })
+  const clearDeleteErrorRef = useRef(deleteCtl.clearError)
+  clearDeleteErrorRef.current = deleteCtl.clearError
 
-  const loadDetail = async (): Promise<void> => {
+  const loadDetail = useCallback(async (): Promise<void> => {
     const current = ++generation.current
     setDetailLoading(true)
     setDetailError(undefined)
     try {
-      const raw = await ctx.callAction('get', { name: item.name })
+      const raw = await ctxRef.current.callAction('get', { name: item.name })
       if (generation.current !== current) return
       const parsed = parseWorkflowDetail(raw)
-      if (parsed === undefined) setDetailError(libDetailInvalid(locale))
+      if (parsed === undefined) setDetailError(libDetailInvalid(localeRef.current))
       else setDetail(parsed)
     } catch (err) {
       if (generation.current !== current) return
@@ -110,7 +117,7 @@ function WorkflowLibraryDrawer(props: {
     } finally {
       if (generation.current === current) setDetailLoading(false)
     }
-  }
+  }, [item.name])
 
   useEffect(() => {
     setDetail(undefined)
@@ -120,10 +127,9 @@ function WorkflowLibraryDrawer(props: {
     setArgsError(undefined)
     setConversationId('')
     setConfirmOpen(false)
-    deleteCtl.clearError()
+    clearDeleteErrorRef.current()
     void loadDetail()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.name])
+  }, [item.name, loadDetail])
 
   const conversationOptions = useMemo(() => buildWorkflowRunTargetOptions(conversations), [conversations])
   const editRequestText = useMemo(

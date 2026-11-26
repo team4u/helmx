@@ -28,6 +28,7 @@ import {
   usePluginAction,
   usePluginContext,
   usePluginLocale,
+  type HelmxLocale,
 } from '@helmx/plugin-client'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts-types.js'
 import {
@@ -66,6 +67,60 @@ import { asPlainRecord, parseResumeFailedResult, parseWorkflowArgsInput, stringi
 function nodeMatchesRunId(node: ExecutionNode, targetRunId: string): boolean {
   if (node.run?.id === targetRunId) return true
   return node.children.some((c) => nodeMatchesRunId(c, targetRunId))
+}
+
+function RunResultBody(props: {
+  resultOpen: boolean
+  inspected: {
+    loading: boolean
+    error?: string
+    result?: unknown
+    retry: () => void
+  }
+  conversationId: number
+  resultPretty?: string
+  collapsedPreview?: string
+  locale: HelmxLocale
+}): ReactNode {
+  const { resultOpen, inspected, conversationId, resultPretty, collapsedPreview, locale } = props
+  const t = (text: { en: string; 'zh-CN': string }) => resolveLocalizedText(text, locale)
+
+  if (!resultOpen) {
+    if (!collapsedPreview) return null
+    return (
+      <div className="wf-result-preview selectable" title={collapsedPreview}>
+        {collapsedPreview}
+      </div>
+    )
+  }
+  if (inspected.loading) return <LoadingState label={t(COPY.loading)} />
+  if (inspected.error) {
+    return (
+      <Callout tone="err">
+        <div>{inspected.error}</div>
+        <Button size="xs" onClick={inspected.retry}>
+          {t(COPY.retry)}
+        </Button>
+      </Callout>
+    )
+  }
+  if (typeof inspected.result === 'string') {
+    return (
+      <MarkdownView
+        text={inspected.result}
+        conversationId={conversationId}
+        className="wf-result-markdown selectable"
+      />
+    )
+  }
+  if (resultPretty !== undefined) {
+    return (
+      <pre className="code-block-pre wf-pre selectable">
+        <code>{resultPretty}</code>
+      </pre>
+    )
+  }
+  return null
 }
 
 interface WorkflowRunCardProps {
@@ -349,32 +404,14 @@ function WorkflowRunCard(props: WorkflowRunCardProps): ReactNode {
                     {t(resultOpen ? COPY.runCollapseResult : COPY.runExpandResult)}
                   </Button>
                 </div>
-                {resultOpen ? (
-                  inspected.loading ? (
-                    <LoadingState label={t(COPY.loading)} />
-                  ) : inspected.error ? (
-                    <Callout tone="err">
-                      <div>{inspected.error}</div>
-                      <Button size="xs" onClick={inspected.retry}>
-                        {t(COPY.retry)}
-                      </Button>
-                    </Callout>
-                  ) : typeof inspected.result === 'string' ? (
-                    <MarkdownView
-                      text={inspected.result}
-                      conversationId={displayRun.conversationId}
-                      className="wf-result-markdown selectable"
-                    />
-                  ) : resultPretty !== undefined ? (
-                    <pre className="code-block-pre wf-pre selectable">
-                      <code>{resultPretty}</code>
-                    </pre>
-                  ) : null
-                ) : collapsedPreview ? (
-                  <div className="wf-result-preview selectable" title={collapsedPreview}>
-                    {collapsedPreview}
-                  </div>
-                ) : null}
+                <RunResultBody
+                  resultOpen={resultOpen}
+                  inspected={inspected}
+                  conversationId={displayRun.conversationId}
+                  resultPretty={resultPretty}
+                  collapsedPreview={collapsedPreview}
+                  locale={locale}
+                />
               </div>
             ) : null}
           </div>
@@ -401,12 +438,20 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
   const [resultOpenIds, setResultOpenIds] = useState<Record<string, boolean>>({})
   const nodeRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const scrolledToken = useRef<unknown>(undefined)
+  const prevConversationId = useRef<number | undefined>(conversationId)
 
   useEffect(() => {
-    setFocusedRunId(requestedRunId)
-    if (requestedRunId !== undefined) {
+    const convChanged = prevConversationId.current !== conversationId
+    if (convChanged) {
+      prevConversationId.current = conversationId
+      nodeRefs.current = {}
+      scrolledToken.current = undefined
+      setResultOpenIds({})
+      setOpenRunIds(requestedRunId !== undefined ? { [requestedRunId]: true } : {})
+    } else if (requestedRunId !== undefined) {
       setOpenRunIds((prev) => ({ ...prev, [requestedRunId]: true }))
     }
+    setFocusedRunId(requestedRunId)
   }, [conversationId, props?.params, requestedRunId])
 
   const tree = useMemo(

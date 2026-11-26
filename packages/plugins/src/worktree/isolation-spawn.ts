@@ -13,7 +13,7 @@ import { worktreeExecutionMeta, type WorktreeExecutionDescriptor } from '../cont
 import { worktreeContextPrompt } from './worktree-context.js'
 import type { ManagedWorktreeRecord, WorktreeAllocator } from './worktree.js'
 import type { WorktreeStore } from './worktree-store.js'
-import type { WorktreeIsolationDeps } from './isolation.js'
+import type { WorktreeIsolationDeps } from './isolation-types.js'
 
 export interface IsolationSpawnContext {
   deps: WorktreeIsolationDeps

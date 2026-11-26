@@ -11,7 +11,7 @@
  * Exports only components and TS types (Fast Refresh compliant).
  */
 import './styles-worktree-inspect.css'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 import {
   Badge,
@@ -72,44 +72,68 @@ export function WorktreeInspectSlot(props: WorktreeInspectSlotProps): ReactNode 
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const { worktree, parentConversationId } = props
+  const worktreeId = worktree?.id
+  const worktreePath = worktree?.path
+  const targetKey = worktreePath === undefined ? '' : `${worktreeId ?? ''}\u0000${worktreePath}\u0000${props.nodeId ?? ''}`
+
   const [open, setOpen] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | undefined>(undefined)
-  const [data, setData] = useState<WorktreeInspectView | undefined>(undefined)
+  const [loadingKey, setLoadingKey] = useState<string | undefined>(undefined)
+  const [errorState, setErrorState] = useState<{ key: string; message: string } | undefined>(undefined)
+  const [dataState, setDataState] = useState<{ key: string; view: WorktreeInspectView } | undefined>(undefined)
   const [sending, setSending] = useState(false)
   const generation = useRef(0)
+  const ctxRef = useRef(ctx)
+  ctxRef.current = ctx
+  const localeRef = useRef(locale)
+  localeRef.current = locale
 
-  const load = async (): Promise<void> => {
-    if (worktree === undefined) return
+  const loading = targetKey !== '' && loadingKey === targetKey
+  const error = targetKey !== '' && errorState?.key === targetKey ? errorState.message : undefined
+  const data = targetKey !== '' && dataState?.key === targetKey ? dataState.view : undefined
+
+  const load = useCallback(async (): Promise<void> => {
+    if (worktreePath === undefined || targetKey === '') return
     const current = ++generation.current
-    setLoading(true)
-    setError(undefined)
+    setLoadingKey(targetKey)
+    setErrorState(undefined)
     try {
-      const raw = await ctx.callAction('inspect_worktree', buildWorktreeSelector(worktree, props.nodeId), {
+      const selector = buildWorktreeSelector({ id: worktreeId, path: worktreePath }, props.nodeId)
+      const raw = await ctxRef.current.callAction('inspect_worktree', selector, {
         pluginId: 'builtin:worktree',
       })
       if (generation.current !== current) return
       const parsed = parseWorktreeInspectResult(raw)
       if (parsed === undefined) {
-        setError(resolveLocalizedText(WT_COPY.inspectInvalid, locale))
+        setErrorState({ key: targetKey, message: resolveLocalizedText(WT_COPY.inspectInvalid, localeRef.current) })
       } else {
-        setData(parsed)
+        setDataState({ key: targetKey, view: parsed })
       }
     } catch (err) {
       if (generation.current !== current) return
-      setError(err instanceof Error ? err.message : String(err))
+      setErrorState({ key: targetKey, message: err instanceof Error ? err.message : String(err) })
     } finally {
-      if (generation.current === current) setLoading(false)
+      if (generation.current === current) {
+        setLoadingKey((cur) => (cur === targetKey ? undefined : cur))
+      }
     }
-  }
+  }, [worktreeId, worktreePath, props.nodeId, targetKey])
+
+  useEffect(() => {
+    generation.current += 1
+    setDataState((cur) => (cur?.key === targetKey ? cur : undefined))
+    setErrorState((cur) => (cur?.key === targetKey ? cur : undefined))
+    setLoadingKey((cur) => (cur === targetKey ? cur : undefined))
+    return () => {
+      generation.current += 1
+    }
+  }, [targetKey])
 
   useEffect(() => {
     // Fetch on first expansion only; re-expansions reuse the cached view.
-    if (worktree !== undefined && open && data === undefined && error === undefined && !loading) {
+    if (worktreePath !== undefined && open && data === undefined && error === undefined && !loading) {
       void load()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, worktree?.path, worktree?.id])
+  }, [worktreePath, open, data, error, loading, load])
 
   const reviewText = useMemo(
     () =>

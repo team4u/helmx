@@ -11,7 +11,7 @@
  *   blocking Date.now(), Math.random(), eval/Function, functions, symbols, and class instances.
  */
 import { createContext, Script } from 'node:vm'
-import { assertBoundarySafe } from './boundary.js'
+import { assertBoundarySafe } from './boundary-safe.js'
 import type { MetaExtraction, WorkflowMeta, WorkflowPhaseMeta } from './types.js'
 
 export class WorkflowMetaError extends Error {}
@@ -47,9 +47,9 @@ function isIdentChar(ch: string | undefined): boolean {
 
 function isRegexPosition(source: string, i: number): boolean {
   let j = i - 1
-  while (j >= 0 && /\s/.test(source[j]!)) j--
+  while (j >= 0 && /\s/.test(source.charAt(j))) j--
   if (j < 0) return true
-  return !/[\w$)\]]/.test(source[j]!)
+  return !/[\w$)\]]/.test(source.charAt(j))
 }
 
 function skipWhitespaceAndComments(source: string, start: number): number {

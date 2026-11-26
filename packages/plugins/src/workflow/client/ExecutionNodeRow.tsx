@@ -38,7 +38,7 @@ import {
   canResumeSubagentRun,
   executionLightStatus,
   formatNodeStats,
-  isManagedSpawnBranch,
+  isManagedWorktree,
   resolveLiveSnippet,
   resolveNodeElapsedMs,
   resolveNodeTitle,
@@ -232,7 +232,7 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
     .filter(Boolean)
     .join(' ')
 
-  const worktreeIsManaged = node.worktree !== undefined && isManagedSpawnBranch(node.worktree.branch)
+  const worktreeIsManaged = node.worktree !== undefined && isManagedWorktree(node.worktree)
   const worktreeTooltip =
     node.worktree !== undefined ? worktreeBadgeTitle(node.worktree.branch, node.worktree.path, locale) : undefined
   const hasMetaRow =

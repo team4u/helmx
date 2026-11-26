@@ -3,14 +3,14 @@
  *
  * - `runs`（ctx.sessionDoc，durable: false）：按会话子树分片，单分片上限 MAX_PROJECTED_RUNS_PER_CONVERSATION，
  *   始终保留全部 running，剩余槽位按 createdAt 倒序取最新终态，剥离原始 result 仅保留 hasResult + resultPreview；
- * - `run-badges`（ctx.doc，durable: false）：全局紧凑角标，仅统计本会话直接发起的 run（一级口径）；
+ * - `run-badges`（ctx.doc，durable: false）：全局紧凑角标，仅统计本会话直接发起的 run（一级口径），
+ *   带 `{ en, 'zh-CN' }` 本地化 `footerText` 与全局容量上限保护；
  * - `upsertRun(run)` 增量 O(depth) 更新：仅重算 `run.conversationId` 及其祖先链的 runs 分片与单条角标，
  *   零全局排序与全站 JSON 重序列化，值相等跳过不发多余 SSE 事件。
  */
 import { createHash } from 'node:crypto'
-import type { PluginDocHandle, PluginSessionDocHandle } from '@helmx/protocol'
+import type { LocalizedText, PluginDocHandle, PluginSessionDocHandle } from '@helmx/protocol'
 import {
-  type WorkflowRunBadgesDocState,
   type WorkflowRunSessionDocState,
   type WorkflowRunSummary,
 } from '../contracts.js'
@@ -24,10 +24,22 @@ import {
 export const MAX_PROJECTED_RUNS_PER_CONVERSATION = 100
 /** 单会话 runs sessionDoc 字节预算上限（严守宿主 2 MiB 硬顶之下，留出充裕余量）。 */
 export const MAX_RUNS_SHARD_BYTES = 1_536 * 1024
+/** 全局 run-badges 条目上限：优先保留 running/failed 活跃会话，超限按时间淘汰最早已完成会话条目。 */
+export const MAX_RUN_BADGE_ENTRIES = 200
 
 const RESULT_PREVIEW_MAX_CHARS = 200
 const ERROR_PREVIEW_MAX_CHARS = 1024
 const DESCRIPTION_PREVIEW_MAX_CHARS = 512
+
+export interface WorkflowLocalizedBadgeEntry {
+  count: number
+  tone: 'accent' | 'warn' | 'neutral'
+  footerText?: LocalizedText
+}
+
+export interface WorkflowLocalizedBadgesDocState {
+  byConversation: Record<string, WorkflowLocalizedBadgeEntry>
+}
 
 export interface RunsProjection {
   sync(): void
@@ -44,7 +56,7 @@ function truncateSingleLine(text: string, maxChars: number): string {
 
 function formatResultPreview(result: unknown): string {
   if (typeof result === 'string') {
-    const firstLine = result.trim().split(/\r?\n/, 1)[0]!.trim()
+    const firstLine = (result.trim().split(/\r?\n/, 1)[0] ?? '').trim()
     return truncateSingleLine(firstLine, RESULT_PREVIEW_MAX_CHARS)
   }
   const serialized = JSON.stringify(result) ?? String(result)
@@ -76,19 +88,11 @@ export function slimProjectedRun(run: WorkflowRunSummary): WorkflowRunSummary {
 const RUNS_SHARD_WRAPPER_BYTES = Buffer.byteLength('{"runs":[]}', 'utf8')
 const RUNS_SHARD_SEPARATOR_BYTES = 1
 
-/**
- * 字节账本而非反复整体序列化：分片 JSON 恒等于 `{"runs":[` + 各 run 自身 JSON 以逗号拼接 + `]}`，
- * 总字节数因此可加——每个 run 只序列化一次，删除/压缩时只重算那一个 run 并增量更新总量。
- * 旧实现在每个阶段每处理一个 run 就重新 stringify 整个分片（O(runs × 总量)），100 个超界 run
- * 要序列化上百次数十 MB；这里输出与旧实现字节级一致，调用方与 digest 不变。
- */
 export function enforceRunsShardByteBudget(
   runs: WorkflowRunSummary[],
   maxBytes = MAX_RUNS_SHARD_BYTES,
 ): { runs: WorkflowRunSummary[]; json: string } {
   const items = runs.map((run) => {
-    // `JSON.stringify(undefined)` yields the value undefined (not a string) whereas inside an array
-    // it serializes as `null`; normalize so the join below stays byte-identical for any input.
     const json = JSON.stringify(run) ?? 'null'
     return { run, json, bytes: Buffer.byteLength(json, 'utf8') }
   })
@@ -111,8 +115,9 @@ export function enforceRunsShardByteBudget(
 
   // Phase 1: drop oldest terminal runs first while keeping running runs intact.
   for (let i = items.length - 1; i >= 0 && totalBytes() > maxBytes; i--) {
-    if (items[i]!.run.status !== 'running') {
-      sum -= items[i]!.bytes
+    const item = items[i]
+    if (item !== undefined && item.run.status !== 'running') {
+      sum -= item.bytes
       items.splice(i, 1)
     }
   }
@@ -121,7 +126,8 @@ export function enforceRunsShardByteBudget(
   // Phase 2: strip progress and cap nodes on remaining runs from oldest to newest.
   for (const item of items) item.run = { ...item.run }
   for (let i = items.length - 1; i >= 0 && totalBytes() > maxBytes; i--) {
-    const item = items[i]!
+    const item = items[i]
+    if (item === undefined) continue
     const r = item.run
     delete r.progress
     if (r.nodes !== undefined && r.nodes.length > 16) {
@@ -130,12 +136,14 @@ export function enforceRunsShardByteBudget(
     resync(item)
   }
   for (let i = items.length - 1; i >= 0 && totalBytes() > maxBytes; i--) {
-    delete items[i]!.run.nodes
-    resync(items[i]!)
+    const item = items[i]
+    if (item === undefined) continue
+    delete item.run.nodes
+    resync(item)
   }
   while (items.length > 0 && totalBytes() > maxBytes) {
-    const popped = items.pop()!
-    sum -= popped.bytes
+    const popped = items.pop()
+    if (popped !== undefined) sum -= popped.bytes
   }
   return assemble()
 }
@@ -155,7 +163,7 @@ function selectProjectedRuns(convRuns: WorkflowRunSummary[]): WorkflowRunSummary
   return [...running, ...terminals].sort((a, b) => b.createdAt - a.createdAt)
 }
 
-function computeBadge(directRuns: WorkflowRunSummary[]) {
+function computeBadge(directRuns: WorkflowRunSummary[]): WorkflowLocalizedBadgeEntry | undefined {
   if (directRuns.length === 0) return undefined
   let running = 0
   let failed = 0
@@ -163,18 +171,27 @@ function computeBadge(directRuns: WorkflowRunSummary[]) {
     if (r.status === 'running') running++
     else if (r.status === 'failed') failed++
   }
+  const tone: WorkflowLocalizedBadgeEntry['tone'] =
+    running > 0 ? 'accent' : failed > 0 ? 'warn' : 'neutral'
+  if (running === 0 && failed === 0) {
+    return { count: directRuns.length, tone }
+  }
+  const en = [running > 0 ? `${running} running` : '', failed > 0 ? `${failed} failed` : '']
+    .filter((s) => s !== '')
+    .join(' · ')
+  const zh = [running > 0 ? `${running} 运行中` : '', failed > 0 ? `${failed} 失败` : '']
+    .filter((s) => s !== '')
+    .join(' · ')
   return {
     count: directRuns.length,
-    tone: (running > 0 ? 'accent' : failed > 0 ? 'warn' : 'neutral') as 'accent' | 'warn' | 'neutral',
-    footerText: [running > 0 ? `${running} 运行中` : '', failed > 0 ? `${failed} 失败` : '']
-      .filter((s) => s !== '')
-      .join(' · '),
+    tone,
+    footerText: { en, 'zh-CN': zh },
   }
 }
 
 export function createRunsProjection(deps: {
   runsDoc: PluginSessionDocHandle<WorkflowRunSessionDocState>
-  badgesDoc: PluginDocHandle<WorkflowRunBadgesDocState>
+  badgesDoc: PluginDocHandle<WorkflowLocalizedBadgesDocState>
   listRuns: () => WorkflowRunSummary[]
   listConversations: () => Array<{ id: number; parentConversationId?: number }>
 }): RunsProjection {
@@ -190,10 +207,11 @@ export function createRunsProjection(deps: {
   const childrenByConv = new Map<number, Set<number>>()
   let conversationTreeFingerprint = ''
 
-  // 幂等写缓存：每会话 runs SHA-256 摘要（避免常驻整份大 JSON 字符串）、每会话 badge 与整份 badges 对象。
+  // 幂等写缓存：每会话 runs SHA-256 摘要、每会话 badge 与最近活跃时间戳。
   const writtenRunsDigestByConv = new Map<number, string>()
-  const badgesByConv: WorkflowRunBadgesDocState['byConversation'] = {}
+  const badgesByConv: WorkflowLocalizedBadgesDocState['byConversation'] = {}
   const writtenBadgeJsonByConv = new Map<number, string>()
+  const badgeUpdatedAtByConv = new Map<number, number>()
   let badgesInitialized = false
 
   function evictRunFromIndex(runId: string): void {
@@ -284,7 +302,8 @@ export function createRunsProjection(deps: {
     const seenConvs = new Set<number>([rootConvId])
     const queue: number[] = [rootConvId]
     for (let head = 0; head < queue.length; head++) {
-      const id = queue[head]!
+      const id = queue[head]
+      if (id === undefined) continue
       const direct = directRunsByConv.get(id)
       if (direct !== undefined) {
         for (const runId of direct) {
@@ -321,24 +340,31 @@ export function createRunsProjection(deps: {
       if (key in badgesByConv) {
         delete badgesByConv[key]
         writtenBadgeJsonByConv.delete(convId)
+        badgeUpdatedAtByConv.delete(convId)
         return true
       }
       return false
     }
     const directIds = directRunsByConv.get(convId)
     const directRuns: WorkflowRunSummary[] = []
+    let latestMs = 0
     if (directIds !== undefined) {
       for (const runId of directIds) {
         const r = runsById.get(runId)
-        if (r !== undefined) directRuns.push(r)
+        if (r !== undefined) {
+          directRuns.push(r)
+          latestMs = Math.max(latestMs, r.updatedAt, r.createdAt)
+        }
       }
     }
     const next = computeBadge(directRuns)
     const nextJson = next === undefined ? '' : JSON.stringify(next)
+    if (next !== undefined) badgeUpdatedAtByConv.set(convId, latestMs)
     if (writtenBadgeJsonByConv.get(convId) === nextJson) return false
     if (next === undefined) {
       delete badgesByConv[key]
       writtenBadgeJsonByConv.delete(convId)
+      badgeUpdatedAtByConv.delete(convId)
     } else {
       badgesByConv[key] = next
       writtenBadgeJsonByConv.set(convId, nextJson)
@@ -346,8 +372,31 @@ export function createRunsProjection(deps: {
     return true
   }
 
+  function pruneExcessTerminalBadges(): boolean {
+    const keys = Object.keys(badgesByConv)
+    if (keys.length <= MAX_RUN_BADGE_ENTRIES) return false
+    const terminalKeys = keys.filter((key) => badgesByConv[key]?.tone === 'neutral')
+    if (terminalKeys.length === 0) return false
+    terminalKeys.sort(
+      (a, b) => (badgeUpdatedAtByConv.get(Number(a)) ?? 0) - (badgeUpdatedAtByConv.get(Number(b)) ?? 0),
+    )
+    const excess = keys.length - MAX_RUN_BADGE_ENTRIES
+    let evicted = false
+    for (let i = 0; i < terminalKeys.length && i < excess; i += 1) {
+      const key = terminalKeys[i]
+      if (key === undefined) continue
+      const convId = Number(key)
+      delete badgesByConv[key]
+      writtenBadgeJsonByConv.delete(convId)
+      badgeUpdatedAtByConv.delete(convId)
+      evicted = true
+    }
+    return evicted
+  }
+
   function flushBadges(dirty: boolean): void {
-    if (!dirty && badgesInitialized) return
+    const pruned = pruneExcessTerminalBadges()
+    if (!dirty && !pruned && badgesInitialized) return
     badgesInitialized = true
     badgesDoc.set({ byConversation: { ...badgesByConv } })
   }

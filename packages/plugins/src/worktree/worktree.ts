@@ -7,18 +7,15 @@
  *   独立 worktree 与 `helmx/spawn-<shortId>` 分支；
  * - `inspect` / `verifyForResume` / `cleanup`：转发至子模块并与统一 `WorktreeStore` 共享状态。
  */
-import type { FileError, Result } from '@earendil-works/pi-durable/env'
 import { randomUUID } from 'node:crypto'
-import { HelmxError, pathRulesForShape, targetPathShape, type NodePathUsage } from '@helmx/protocol'
+import { HelmxError, pathRulesForShape, targetPathShape } from '@helmx/protocol'
 import {
   gitExec,
   normalizePathValue,
   parseStatusPorcelainV2,
   resolveRepoAuthority,
-  type WorktreeExecOptions,
-  type WorktreeExecResult,
 } from './worktree-git.js'
-import { WorktreeStore, type ManagedWorktreeRecord, type WorktreeKvHandles, type WorktreeRecordSelector } from './worktree-store.js'
+import { WorktreeStore, type ManagedWorktreeRecord, type WorktreeRecordSelector } from './worktree-store.js'
 import {
   inspectWorktree,
   verifyWorktreeForResume,
@@ -26,81 +23,17 @@ import {
   type WorktreeInspectResult,
 } from './worktree-inspect.js'
 import { cleanupWorktree } from './worktree-cleanup.js'
+import type {
+  AllocateInput,
+  CleanupInput,
+  CleanupResult,
+  WorktreeAllocatorDeps,
+} from './worktree-types.js'
 
 /** 单条受管 worktree 记录与持久持有锁契约（登记形状与持久化见 worktree-store.ts）。 */
 export type { ManagedWorktreeHold, ManagedWorktreeRecord } from './worktree-store.js'
 export type { WorktreeInspectInput, WorktreeInspectResult } from './worktree-inspect.js'
-
-export interface WorktreeAllocatorDeps {
-  exec: (
-    nodeId: string,
-    cwd: string,
-    args: readonly string[],
-    options?: WorktreeExecOptions,
-  ) => Promise<WorktreeExecResult>
-  nodeExists: (nodeId: string, path: string) => Promise<Result<boolean, FileError>>
-  nodeCanonicalPath: (nodeId: string, path: string) => Promise<Result<string, FileError>>
-  /** 持久 KV 句柄（仅在未传 `store` 时用于构造默认 `WorktreeStore`）。 */
-  kv?: WorktreeKvHandles
-  /** 可选注入统一存储实例（WorktreeIsolation 共享同一存储，免循环引用）。 */
-  store?: WorktreeStore
-  redact?: (text: string) => string
-  isConversationWorking?: (conversationId: number) => boolean
-  isPathInUse?: (nodeId: string, path: string) => boolean
-  inspectPathUsage: (
-    nodeId: string,
-    path: string,
-    signal?: AbortSignal,
-  ) => Promise<NodePathUsage>
-}
-
-interface AllocateInput {
-  nodeId: string
-  sourceCwd: string
-  parentConversationId: number
-  labelHint?: string
-  signal?: AbortSignal
-  beforeCreate?: (pending: {
-    nodeId: string
-    repoRoot: string
-    path: string
-    branch: string
-    baseCommit: string
-    dirtySource: boolean
-  }) => Promise<void>
-}
-
-export interface CleanupInput {
-  worktreeId?: string
-  conversationId?: number
-  path?: string
-  nodeId?: string
-  mergedInto?: string
-  deleteBranch?: boolean
-  force?: boolean
-  /** 仅在目标节点不支持进程占用扫描（path_usage_not_supported）时显式承担风险放行；不会跳过 Linux 扫描或任何其他检查。 */
-  allowUnverifiedUsage?: boolean
-  /** 仅内部动作上下文注入的调用方插件 ID（由宿主盖章提供，不暴露在公开 Schema）。 */
-  callerPluginId?: string
-  signal?: AbortSignal
-}
-
-export interface CleanupResult {
-  removed: boolean
-  worktreeId: string
-  path: string
-  branch: string
-  nodeId: string
-  branchDeleted: boolean
-  /** 常规移除路径上的进程占用校验结果（幂等跳过与目录缺失恢复路径缺省）。 */
-  processUsage?: 'verified' | 'unverified'
-  /** 仅当 processUsage === 'unverified' 时的简短脱敏审计说明。 */
-  processUsageNote?: string
-  /** 登记清除原因（仅目录缺失下 force 恢复路径设置）。 */
-  removedReason?: 'directory_missing_forced'
-  /** `git worktree prune` 执行结果（仅目录缺失 force 恢复路径；ran=false 表示记录无 repoRoot 锚点未执行）。 */
-  prune?: { ran: boolean; ok: boolean; output?: string }
-}
+export type { CleanupInput, CleanupResult, WorktreeAllocatorDeps } from './worktree-types.js'
 
 export class WorktreeAllocator {
   private readonly repoLocks = new Map<string, Promise<unknown>>()

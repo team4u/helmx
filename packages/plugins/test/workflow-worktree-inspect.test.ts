@@ -364,3 +364,75 @@ test('WorktreeCleanupSlot：遇 worktree_usage_unverifiable 时弹出 ConfirmDia
     ui.unmount()
   }
 })
+
+test('WorktreeInspectSlot：worktree.path 或 worktree.id 变更时清空缓存的 data/error 并按新目标重新拉取', { timeout: 60_000 }, async () => {
+  const parent = makeConvSummary(1)
+  const WorktreeInspectSlot = worktreeSlots.WorktreeInspectSlot!
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [parent],
+    runsByConversation: { 1: [] },
+    worktreeSlots,
+    locale: 'en',
+    onAction: (_pluginId, actionId, input) => {
+      if (actionId !== 'inspect_worktree') return undefined
+      const sel = input as { path?: string; worktreeId?: string }
+      if (sel.path === '/wt/alpha') {
+        throw new Error('alpha offline')
+      }
+      if (sel.worktreeId === 'wt-beta-id') {
+        return {
+          ...INSPECT_RAW,
+          path: '/wt/beta',
+          branch: 'helmx/spawn-beta',
+          currentBranch: 'helmx/spawn-beta',
+          diffStat: 'beta.ts | 3 +++',
+        }
+      }
+      return {
+        ...INSPECT_RAW,
+        path: '/wt/gamma',
+        branch: 'helmx/spawn-gamma',
+        currentBranch: 'helmx/spawn-gamma',
+        diffStat: 'gamma.ts | 7 +++++++',
+      }
+    },
+  })
+  const ui = h.mountNode(
+    e(WorktreeInspectSlot, {
+      worktree: { path: '/wt/alpha', branch: 'helmx/spawn-alpha' },
+      nodeId: 'local',
+      parentConversationId: 1,
+    }),
+  )
+  try {
+    await act(async () => { buttonByText(ui.container, 'Change overview').click() })
+    assert.match(ui.container.textContent ?? '', /alpha offline/)
+
+    // Switch to beta with an id: stale alpha error must disappear and beta must be fetched.
+    ui.rerender(
+      e(WorktreeInspectSlot, {
+        worktree: { id: 'wt-beta-id', path: '/wt/beta', branch: 'helmx/spawn-beta' },
+        nodeId: 'local',
+        parentConversationId: 1,
+      }),
+    )
+    await act(async () => { await Promise.resolve() })
+    assert.doesNotMatch(ui.container.textContent ?? '', /alpha offline/)
+    assert.match(ui.container.textContent ?? '', /beta\.ts \| 3 \+\+\+/)
+
+    // Switch id/path again to gamma: cached beta data must clear and gamma must be fetched.
+    ui.rerender(
+      e(WorktreeInspectSlot, {
+        worktree: { id: 'wt-gamma-id', path: '/wt/gamma', branch: 'helmx/spawn-gamma' },
+        nodeId: 'local',
+        parentConversationId: 1,
+      }),
+    )
+    await act(async () => { await Promise.resolve() })
+    assert.doesNotMatch(ui.container.textContent ?? '', /beta\.ts/)
+    assert.match(ui.container.textContent ?? '', /gamma\.ts \| 7 \+\+\+\+\+\+\+/)
+  } finally {
+    ui.unmount()
+  }
+})

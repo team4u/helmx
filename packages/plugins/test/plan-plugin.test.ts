@@ -83,6 +83,7 @@ import {
   type PlanPluginOptions,
   type PlanSessionView,
 } from '../src/plan.js'
+import { MAX_PLAN_BADGE_ENTRIES, createPlanStateManager } from '../src/plan/state.js'
 import {
   MemoryConfigStore,
   MemoryDocStore,
@@ -2138,6 +2139,201 @@ test('conversation.entry handles manual pi.reset, handoff pi.reset exemption, tu
       outcome: 'completed',
       settledAt: Date.now(),
     })
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 12. P0 security regressions & state/KV safety guards
+// ---------------------------------------------------------------------------
+
+test('validateReadOnlyShellCommand: blocks arithmetic nested substitutions, pre-subcommand flag bypasses, and heredoc injections', TIMEOUT, () => {
+  const allowed = [
+    'echo $(( 1 + 2 ))',
+    'echo $(( (1 + 2) * 3 ))',
+    'echo "val=$(( 40 + 2 ))"',
+    'pnpm --dir /tmp/app list',
+    'pnpm -C /tmp/app --version',
+    'docker -H tcp://127.0.0.1:2375 ps',
+    'git -C /tmp/repo stash list',
+    'git stash show -p',
+    'git remote -v',
+    'uv pip list',
+    'curl -sSL https://example.com',
+    "cat <<'EOF'\nit's fine\nrm -rf /\necho hack > /tmp/x\n$(rm -rf /)\nEOF",
+    "cat <<-'EOF' | rg safe\n\t\trm -rf /\n\t\tEOF",
+    'cat <<EOF | wc -l\nhello world\nEOF',
+    'cat <<EOF\n\\$(rm -rf /)\nEOF',
+  ]
+  for (const cmd of allowed) {
+    assert.equal(validateReadOnlyShellCommand(cmd).ok, true, `expected allowed: ${cmd}`)
+  }
+
+  const blocked = [
+    // P0 arithmetic $((...)) bypasses
+    'echo $(( $(rm -rf /) + 1 ))',
+    'echo $(( $(( $(rm -rf /) )) + 1 ))',
+    'echo $(( "$(rm -rf /)" ))',
+    "echo $(( '$(rm -rf /)' ))",
+    'echo $(( `rm -rf /` + 1 ))',
+    'echo "sum=$(( $(rm -rf /) + 1 ))"',
+    'echo $((rm -rf /); echo hi)',
+    'echo $(( (rm -rf /) ) ; true)',
+    // P0 pre-subcommand flag bypasses & unknown pre-subcommand flags (fail-closed)
+    'pnpm --dir /x install',
+    'pnpm --dir=/x install',
+    'pnpm -C /x dlx evil',
+    'pnpm --unknown-flag /x install',
+    'npm --prefix /x ci',
+    'yarn --cwd /x add pkg',
+    'docker -H tcp://127.0.0.1:2375 rm c1',
+    'docker --host=tcp://127.0.0.1:2375 exec c1 sh',
+    'docker --context prod run alpine',
+    'docker --unknown /x rm c1',
+    'git stash -m msg push',
+    'git stash -m list push',
+    'git stash --message=show drop',
+    'git worktree --unknown list',
+    'git submodule --unknown status',
+    'git remote --unknown show origin',
+    'git --exec-path=/evil status',
+    'git branch -df feat/old',
+    'git tag -am msg v1.0.0',
+    'cargo -C /x build',
+    'cargo +nightly build',
+    'uv --directory /x pip install foo',
+    'uv pip --python /x install foo',
+    'brew --unknown install foo',
+    'time -o out.txt rm -rf /',
+    'command -x rm -rf /',
+    'curl -sLo out.txt https://example.com',
+    // P0 heredoc unquoted substitutions & fail-closed unterminated heredoc
+    'cat <<EOF\nhello\n$(rm -rf /)\nEOF',
+    "cat <<EOF\n'$(rm -rf /)'\nEOF",
+    'cat <<EOF\n`rm -rf /`\nEOF',
+    "cat <<'EOF'\nrm -rf /",
+    "cat <<'EOF' | rm -rf /\nsafe\nEOF",
+  ]
+  for (const cmd of blocked) {
+    const res = validateReadOnlyShellCommand(cmd)
+    assert.equal(res.ok, false, `expected blocked: ${cmd}`)
+  }
+})
+
+test('listAllRecords guards against stuck/cyclic cursors and bounds plan-badges while preserving active entries', TIMEOUT, () => {
+  const kvMap = new Map<string, PlanConversationRecord>()
+  kvMap.set('1', {
+    conversationId: 1,
+    mode: 'planning',
+    pendingAskId: 'ask-1',
+    draft: { title: 'Active Plan', markdown: '# A', version: 1, updatedAt: 10 },
+  })
+  for (let id = 2; id <= MAX_PLAN_BADGE_ENTRIES + 15; id += 1) {
+    kvMap.set(String(id), {
+      conversationId: id,
+      mode: 'normal',
+      approved: {
+        title: `Approved ${id}`,
+        version: 1,
+        artifactId: `art-${id}`,
+        artifactName: 'plan-v1.md',
+        approvedAt: id,
+        handoffUsed: false,
+      },
+    })
+  }
+
+  let listCalls = 0
+  let badgeState: PlanBadgesDoc = { byConversation: {} }
+  const fakeCtx = {
+    host: {
+      getConversation: (id: number) => makeConversationSummary({ id }),
+      cancelAsk: async () => {},
+    },
+  } as unknown as Parameters<typeof createPlanStateManager>[0]['ctx']
+  const fakeKv = {
+    get: (key: string) => kvMap.get(key),
+    set: (key: string, val: PlanConversationRecord) => {
+      kvMap.set(key, val)
+    },
+    delete: (key: string) => {
+      kvMap.delete(key)
+    },
+    list: () => {
+      listCalls += 1
+      return {
+        items: [...kvMap.entries()].map(([key, value]) => ({ key, value, updatedAt: 0 })),
+        nextCursor: 'stuck-cursor',
+      }
+    },
+    flush: async () => {},
+  } as unknown as Parameters<typeof createPlanStateManager>[0]['kv']
+  const fakePlanDoc = {
+    set: () => {},
+    delete: () => {},
+    get: () => undefined,
+  } as unknown as Parameters<typeof createPlanStateManager>[0]['planDoc']
+  const fakeBadgesDoc = {
+    set: (doc: PlanBadgesDoc) => {
+      badgeState = doc
+    },
+    get: () => badgeState,
+  } as unknown as Parameters<typeof createPlanStateManager>[0]['badgesDoc']
+
+  const state = createPlanStateManager({
+    ctx: fakeCtx,
+    kv: fakeKv,
+    planDoc: fakePlanDoc,
+    badgesDoc: fakeBadgesDoc,
+  })
+  const listed = state.listAllRecords()
+  assert.equal(listed.length, MAX_PLAN_BADGE_ENTRIES + 15)
+  assert.equal(listCalls, 2, 'stuck nextCursor === cursor must stop on second page')
+
+  state.hydrateProjections()
+  assert.equal(Object.keys(badgeState.byConversation).length, MAX_PLAN_BADGE_ENTRIES)
+  assert.equal(badgeState.byConversation['1']?.tone, 'warn', 'active planning badge must be retained')
+  assert.equal(badgeState.byConversation['2'], undefined, 'oldest terminal badge evicted first')
+  assert.equal(badgeState.byConversation[String(MAX_PLAN_BADGE_ENTRIES + 15)]?.tone, 'neutral')
+})
+
+test('plan_propose rolls back in-memory KV record if flushKv() throws during approval persistence', TIMEOUT, async () => {
+  const kvStore = new MemoryKvStore()
+  const harness = await openPlanHarness({
+    kvStore,
+    seedConversations: [makeConversationSummary({ id: 1, stateChangeSeq: 4 })],
+  })
+  try {
+    await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
+    await harness.host.executeTool(
+      PLAN_TOOL_SAVE,
+      { title: 'Rollback Plan', markdown: '# Safe' },
+      { conversationId: 1 },
+    )
+
+    const pPropose = harness.host.executeTool(
+      PLAN_TOOL_PROPOSE,
+      { summary: 'Rollback flush check' },
+      { conversationId: 1 },
+    )
+    await waitFor(() => harness.createdAsks.length === 1)
+
+    let failAllFlushes = true
+    const origFlush = kvStore.flush.bind(kvStore)
+    kvStore.flush = async () => {
+      if (failAllFlushes) throw new Error('simulated disk full')
+      return origFlush()
+    }
+
+    harness.answerAsk(harness.createdAsks[0]!.id!, { decision: 'approve' })
+    await assert.rejects(() => pPropose, /simulated disk full/)
+
+    failAllFlushes = false
+    const rolledBack = kvStore.getParsed<PlanConversationRecord>(PLAN_PLUGIN_ID, PLAN_KV_NAMESPACE, '1')
+    assert.equal(rolledBack?.mode, 'planning')
+    assert.equal(rolledBack?.approved, undefined)
+    assert.equal(typeof rolledBack?.pendingAskId, 'string')
   } finally {
     await harness.close()
   }

@@ -8,13 +8,10 @@ import {
   agentGateResultMissingError,
   sanitizeAgentExecutionInfo,
   sanitizeAgentGateResult,
-  type ActionManifest,
   type AgentExecutionInfo,
   type AgentGateResult,
   type AgentSpawnRequest,
   type ConversationSummary,
-  type EnvExecRequest,
-  type EnvExecResponse,
   type HelmxHostApi,
 } from '@helmx/protocol'
 import { withWorkflowSpawnMeta, type WorkflowRunSummary } from '../../contracts.js'
@@ -22,39 +19,9 @@ import type { WorkflowHost, WorkflowSpawnRequest, WorkflowSpawnResult } from '..
 import type { RunsProjection } from '../projection.js'
 import { invokeEngineAction, prepareEngineAction } from './action-bridge.js'
 import { errorMessage } from './run-repository.js'
-import type { ActiveRun } from './types.js'
+import type { ActiveRun, WorkflowServiceHost } from './types.js'
 
-/** Test-injectable host seam for WorkflowService. */
-export interface WorkflowServiceHost {
-  spawnAgent(request: AgentSpawnRequest): Promise<unknown>
-  abortConversationGuarded(id: number): Promise<void>
-  invokeAction(
-    pluginId: string,
-    actionId: string,
-    input: unknown,
-    context?: { conversationId?: number; signal?: AbortSignal },
-  ): Promise<unknown>
-  prepareAction?(
-    pluginId: string,
-    actionId: string,
-    input: unknown,
-    context?: { conversationId?: number },
-  ): { idempotent?: boolean }
-  execEnv?(req: Omit<EnvExecRequest, 'stream'>, signal?: AbortSignal): Promise<EnvExecResponse>
-  listActions(): ActionManifest[]
-  getConversation(id: number): ConversationSummary
-  emitEvent(type: string, payload: unknown): void
-  onRunSettled?(summary: WorkflowRunSummary): Promise<void> | void
-  onBackgroundAgentSettled?(
-    summary: WorkflowRunSummary,
-    info: { parentConversationId: number; agentType?: string; execution?: AgentExecutionInfo },
-  ): Promise<void> | void
-  runGate?(
-    command: string,
-    options: { cwd?: string; conversationId?: number; signal?: AbortSignal; gateTimeoutMs?: number },
-  ): Promise<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }>
-  isHostClosing?(): boolean
-}
+export type { WorkflowServiceHost } from './types.js'
 
 type EngineHostPorts = Pick<
   HelmxHostApi,

@@ -1,8 +1,11 @@
 /**
- * dsl/worker-source.ts — Ultra-thin dumb RPC worker (~185L inline JS, eval:true).
+ * dsl/worker-source.ts — Deterministic VM worker source (inline JS for Worker threads, eval: true).
  *
- * All option/schema/boundary validation lives in Host TypeScript (`boundary.ts`).
- * The worker only provides:
+ * Host TypeScript (`boundary.ts` + `boundary-safe.ts`) remains the single source of truth for
+ * option & schema rules; this module mirrors `assertBoundarySafe` (`checkBoundary`) before IPC
+ * so non-JSON values (functions, symbols, BigInt, NaN/Infinity, sparse arrays, non-plain objects)
+ * produce consistent `WorkflowRuntimeError`-compatible messages rather than raw `DataCloneError`.
+ * Also provides:
  * - Terminability via worker_threads (`worker.terminate()`);
  * - Determinism via a single root VM context with `DETERMINISM_PRELUDE` (never re-wrapped on nested workflow());
  * - Stable tree coordinates `(workflowRootPath, scopePath, scopeCallIndex)` via AsyncLocalStorage;
@@ -87,12 +90,12 @@ function boundaryError(what, path) {
   return new Error("Cannot pass " + what + " across the workflow VM boundary (at " + path + ").");
 }
 
-function checkBoundary(value, path, allowUndefined, seen) {
+function checkBoundary(value, path, allowRootUndefined, seen) {
   if (value === null) return value;
   const kind = typeof value;
   if (kind === "string" || kind === "boolean") return value;
   if (kind === "number") { if (!Number.isFinite(value)) throw boundaryError("a non-finite number", path); return value; }
-  if (kind === "undefined") { if (allowUndefined) return value; throw boundaryError("undefined", path); }
+  if (kind === "undefined") { if (allowRootUndefined) return value; throw boundaryError("undefined", path); }
   if (kind === "bigint") throw boundaryError("a BigInt", path);
   if (kind === "symbol") throw boundaryError("a symbol", path);
   if (kind === "function") throw boundaryError("a function", path);
@@ -103,7 +106,7 @@ function checkBoundary(value, path, allowUndefined, seen) {
   if (Object.getOwnPropertySymbols(value).length > 0) throw boundaryError("an object with symbol keys", path);
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
-      if (!Object.prototype.hasOwnProperty.call(value, i)) throw boundaryError("a sparse array", path + "[" + i + "]");
+      if (!Object.hasOwn(value, i)) throw boundaryError("a sparse array", path + "[" + i + "]");
       checkBoundary(value[i], path + "[" + i + "]", false, visited);
     }
     visited.delete(value);
@@ -111,9 +114,26 @@ function checkBoundary(value, path, allowUndefined, seen) {
   }
   const proto = Object.getPrototypeOf(value);
   if (proto !== null && proto !== realmObjectPrototype && proto !== Object.prototype) throw boundaryError("a non-plain object", path);
-  for (const k of Object.keys(value)) checkBoundary(value[k], path + "." + k, false, visited);
+  for (const [key, entry] of Object.entries(value)) {
+    checkBoundary(entry, path + "." + key, false, visited);
+  }
   visited.delete(value);
   return value;
+}
+
+function checkCallOptionsBoundary(rawOpts, optsPath, allowKeysWithUndefined) {
+  if (rawOpts === undefined || rawOpts === null || typeof rawOpts !== "object" || Array.isArray(rawOpts)) return;
+  const proto = Object.getPrototypeOf(rawOpts);
+  if (proto !== null && proto !== realmObjectPrototype && proto !== Object.prototype) {
+    throw boundaryError("a non-plain object", optsPath);
+  }
+  if (Object.getOwnPropertySymbols(rawOpts).length > 0) {
+    throw boundaryError("an object with symbol keys", optsPath);
+  }
+  for (const [key, entry] of Object.entries(rawOpts)) {
+    if (entry === undefined && allowKeysWithUndefined) continue;
+    checkBoundary(entry, optsPath + "." + key, false);
+  }
 }
 
 function describe(v) {
@@ -176,6 +196,7 @@ function makeScope(name, depth, rootPath) {
       if (opts.schema !== undefined && typeof opts.schema === "object" && opts.schema !== null) {
         checkBoundary(opts.schema, "agent() opts.schema", false);
       }
+      checkCallOptionsBoundary(opts, goalMode ? "goal() spec" : "agent() opts", true);
     }
     const st = activeState();
     const explicitPhase = opts && typeof opts === "object" && !Array.isArray(opts) ? opts.phase : undefined;
@@ -209,6 +230,7 @@ function makeScope(name, depth, rootPath) {
     if (input !== undefined && typeof input === "object" && input !== null && !Array.isArray(input)) {
       checkBoundary(input, "action('" + String(actionId) + "') input", false);
     }
+    checkCallOptionsBoundary(opts, "action() opts", true);
     const st = activeState();
     const explicitPhase = opts && typeof opts === "object" && !Array.isArray(opts) ? opts.phase : undefined;
     const ph = resolvePhase(explicitPhase);
@@ -243,7 +265,7 @@ function makeScope(name, depth, rootPath) {
       throw new Error("workflow(nameOrRef) expects a saved workflow name or { scriptPath }.");
     }
     const label = ref.name !== undefined ? ref.name : ref.scriptPath;
-    if (args !== undefined) checkBoundary(args, 'workflow("' + label + '") args', false);
+    if (args !== undefined) checkBoundary(args, 'workflow("' + label + '") args', true);
     if (nestedCount >= workerData.nestedCap) {
       const err = new Error("Workflow exceeded its cap of " + workerData.nestedCap + " nested workflow() calls.");
       err.workflowFatal = true;

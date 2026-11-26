@@ -472,3 +472,72 @@ test('DOM：ExecutionNodeRow 的 prompt 与字符串 output 走宿主 MarkdownVi
     ui.unmount()
   }
 })
+
+test('WorkflowWorkbenchPanel：切换 conversationId 时重置 openRunIds 与 resultOpenIds 折叠状态', { timeout: 60_000 }, async () => {
+  const conv1 = summary(1, 'idle')
+  const conv2 = summary(2, 'idle')
+  const makeCompleted = (convId: number, runId: string, resultText: string): WorkflowRunSummary => ({
+    id: runId,
+    name: `flow-${convId}`,
+    conversationId: convId,
+    kind: 'workflow',
+    status: 'completed',
+    createdAt: 100,
+    updatedAt: 200,
+    settledAt: 200,
+    hasResult: true,
+    result: resultText,
+    nodes: [node({ id: 'agent-1', kind: 'agent', status: 'done', label: 'worker' })],
+  })
+  const runsByConversation: Record<number, WorkflowRunSummary[]> = {
+    1: [makeCompleted(1, 'wf_conv1_a', 'conv1-result-body'), makeCompleted(1, 'wf_conv1_b', 'conv1-second-body')],
+    2: [makeCompleted(2, 'wf_conv2_a', 'conv2-result-body'), makeCompleted(2, 'wf_conv2_b', 'conv2-second-body')],
+  }
+
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [conv1, conv2],
+    runsByConversation,
+    locale: 'en',
+  })
+
+  const ui = h.mountNode(e(WorkflowWorkbenchPanel, { conversation: conv1 }))
+  try {
+    // Expand the second run card + result in conv1.
+    const toggles1 = [...ui.container.querySelectorAll<HTMLButtonElement>('.wf-run-toggle')]
+    assert.equal(toggles1.length, 2)
+    assert.equal(toggles1[1]?.getAttribute('aria-expanded'), 'false')
+    await act(async () => {
+      toggles1[1]!.click()
+    })
+    const expandResultBtn = [...ui.container.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => (b.textContent ?? '').includes('Expand') && b.closest('[data-run-id="wf_conv1_a"]') !== null,
+    )
+    assert.ok(expandResultBtn !== undefined)
+    await act(async () => {
+      expandResultBtn.click()
+    })
+    assert.ok(ui.container.querySelector('[data-run-id="wf_conv1_a"] .wf-result-markdown') !== null)
+
+    // Switch to conv2 and back to conv1: manual card open/resultOpen state must reset to defaults.
+    ui.rerender(e(WorkflowWorkbenchPanel, { conversation: conv2 }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    assert.match(ui.container.textContent ?? '', /flow-2/)
+
+    ui.rerender(e(WorkflowWorkbenchPanel, { conversation: conv1 }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const resetToggles = [...ui.container.querySelectorAll<HTMLButtonElement>('.wf-run-toggle')]
+    assert.equal(resetToggles[0]?.getAttribute('aria-expanded'), 'true', 'default first card stays open')
+    assert.equal(resetToggles[1]?.getAttribute('aria-expanded'), 'false', 'second card manual expand must reset on conv switch')
+    assert.ok(
+      ui.container.querySelector('[data-run-id="wf_conv1_a"] .wf-result-markdown') === null,
+      'resultOpenIds must reset on conv switch (back to collapsed preview)',
+    )
+  } finally {
+    ui.unmount()
+  }
+})
