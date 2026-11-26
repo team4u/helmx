@@ -365,13 +365,6 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .status-dot-working,
-  .status-dot-background {
-    animation: none;
-  }
-}
-
 /* 通用图标旋转动效（供 Button pending / LoadingState 等公共原语复用） */
 @keyframes convSpin360 {
   to {
@@ -389,6 +382,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .status-dot-working,
+  .status-dot-background,
   .spin,
   .spin-slow {
     animation: none;
@@ -550,6 +545,7 @@
   min-width: 0;
   width: 100%;
   height: auto;
+  min-height: 0;
   border: none;
   outline: none;
   background: transparent;
@@ -561,6 +557,7 @@
 .search-box > .input:focus,
 .search-box > input:focus {
   border-color: transparent;
+  background: transparent;
   box-shadow: none;
 }
 .search-box-toolbar {

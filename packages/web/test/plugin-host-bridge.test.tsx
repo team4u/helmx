@@ -477,7 +477,7 @@ describe('plugin-host-bridge', () => {
         headers: { 'Content-Type': 'application/json' },
       })) as typeof fetch
     await act(async () => {
-      await store.refreshNodes()
+      await store.actions.refreshNodes()
     })
     assert.deepEqual(readNodes()?.map((n) => n.id), ['local', 'gpu-1'], 'refreshNodes marks nodesLoaded=true and sorts local first')
   })
@@ -726,7 +726,7 @@ describe('plugin-host-bridge', () => {
 
     // 1. Initial refresh where /api/models fails: assetsLoaded finishes, but hostModels MUST stay undefined (NOT { models: [] })
     await act(async () => {
-      await store.refreshAssets()
+      await store.actions.refreshAssets()
     })
     assert.equal(store.getCatalogSlice().assetsLoaded, true)
     assert.ok(store.getHostModelsSlice() === undefined, 'failed initial /api/models must keep hostModelsSlice undefined')
@@ -736,7 +736,7 @@ describe('plugin-host-bridge', () => {
     // 2. Subsequent refresh where /api/models succeeds with genuinely empty list -> transitions to { models: [] }
     modelResponseMode = 'empty'
     await act(async () => {
-      await store.refreshAssets()
+      await store.actions.refreshAssets()
     })
     const emptyModels = readHostModels()
     assert.ok(emptyModels !== undefined && emptyModels.models.length === 0, 'genuinely empty 200 /api/models transitions to { models: [] }')
@@ -745,14 +745,14 @@ describe('plugin-host-bridge', () => {
     // 3. Populate models, then fail a later refresh -> preserves last known good catalog
     modelResponseMode = 'populated'
     await act(async () => {
-      await store.refreshAssets()
+      await store.actions.refreshAssets()
     })
     assert.equal(readHostModels()?.models.length, 1)
     assert.equal(readHostModels()?.defaultModel, 'openai/gpt-4o')
 
     modelResponseMode = 'fail'
     await act(async () => {
-      await store.refreshAssets()
+      await store.actions.refreshAssets()
     })
     assert.equal(readHostModels()?.models.length, 1, 'subsequent /api/models failure preserves previously loaded models')
     assert.equal(store.getLoadError('assets:models'), 'models backend down')

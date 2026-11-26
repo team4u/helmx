@@ -1,5 +1,5 @@
 import type { ConversationStatus } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { useMaxWidthMediaQuery } from '../lib/use-media-query.js'
 import type { EditRequestTarget } from '../conversation/timeline-model.js'
 
@@ -93,7 +93,7 @@ export function sendingPendingVisible(
 }
 
 /** Composer placeholder copy for idle vs busy, desktop vs mobile/small screens. */
-export function getComposerPlaceholder(working: boolean, isMobile: boolean, t: WebMessageTranslator = englishWebTranslator): string {
+export function getComposerPlaceholder(working: boolean, isMobile: boolean, t: WebMessageTranslator): string {
   if (working) {
     // Keep the mobile placeholder extremely short to avoid wrapping and
     // growing the input area on narrow screens.
@@ -131,14 +131,12 @@ export function busyEnterMode(modifier: boolean): 'steer' | 'followUp' {
 /** Substantive conversational entry kinds that count as "the chat has
  * started" (any of them locks the starting environment).
  * Real SDK kinds use hyphens (pi.tool-result, see the pi-durable README);
- * legacy underscore spellings stay accepted. pi.compaction is substantive
- * context: compaction must not become an environment unlock path. */
+ * pi.compaction is substantive context: compaction must not become an
+ * environment unlock path. */
 const CONVERSATIONAL_ENTRY_KINDS: ReadonlySet<string> = new Set([
   'helmx.input',
   'pi.user',
   'pi.assistant',
-  'pi.tool_call',
-  'pi.tool_result',
   'pi.tool-call',
   'pi.tool-result',
   'pi.compaction',
@@ -227,7 +225,7 @@ function splitPathSegments(cwd: string): string[] {
  * hover tooltip. Compact mode shows only `@node` (empty on local; callers do
  * not render it).
  */
-export function formatEnvSubtitle(input: EnvSubtitleInput, t: WebMessageTranslator = englishWebTranslator): { text: string; tooltip: string } {
+export function formatEnvSubtitle(input: EnvSubtitleInput, t: WebMessageTranslator): { text: string; tooltip: string } {
   const nodeId = input.nodeId !== undefined && input.nodeId !== '' ? input.nodeId : 'local'
   const cwd = input.cwd === '' ? t('composer.env.notSet') : input.cwd
   const tooltip = t('composer.env.subtitleTooltip', { profileId: input.profileId, nodeId, cwd })
@@ -267,7 +265,7 @@ export function envDraftOnNodeChange(current: EnvDraft, nextNodeId: string): Env
 }
 
 /** Pre-save validation: null means submittable, otherwise a user-readable error. */
-export function envDraftError(draft: EnvDraft, t: WebMessageTranslator = englishWebTranslator): string | null {
+export function envDraftError(draft: EnvDraft, t: WebMessageTranslator): string | null {
   if (draft.cwd.trim() === '') return t('composer.env.errorRequired')
   if (!draft.cwd.trim().startsWith('/') && !/^[A-Za-z]:[\\/]/.test(draft.cwd.trim())) {
     return t('composer.env.errorAbsolute')

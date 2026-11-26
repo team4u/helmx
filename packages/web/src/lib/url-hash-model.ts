@@ -440,6 +440,20 @@ function splitHash(rawHash: string): { path: string; params: URLSearchParams } {
  * decision consults only this function and modal deep links; the landing
  * policy itself belongs to the product layer (HelmxStoreProvider).
  */
+export interface StoreBootLocation {
+  location: WorkspaceLocationState
+  needsHomeLanding: boolean
+}
+
+export function readBootLocation(): StoreBootLocation {
+  const rawHash = typeof window !== 'undefined' ? window.location.hash : ''
+  const parsed = parseLocationHash(rawHash)
+  return {
+    location: parsed,
+    needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null && parsed.drawerStack.length === 0,
+  }
+}
+
 export function hashHasPrimaryTarget(rawHash: string): boolean {
   return parseTargetValue(splitHash(rawHash).path) !== null
 }

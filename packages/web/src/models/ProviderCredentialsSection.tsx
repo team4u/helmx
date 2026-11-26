@@ -19,35 +19,41 @@ export interface ProviderTestResult {
   message?: string
 }
 
-export interface ProviderCredentialsSectionProps {
-  provider: ProviderItem | null
-  isNewCustom: boolean
-  endpointEditable: boolean
-  canTestConnection: boolean
-  inline: boolean
+export interface ProviderCredentialsFormState {
   customId: string
   customLabel: string
   customProtocol: 'openai' | 'anthropic'
   customModelsText: string
   apiKey: string
   baseUrl: string
+}
+
+export interface ProviderCredentialsStatus {
   testing: boolean
   refreshingCatalog: boolean
   deleting: boolean
   testResult: ProviderTestResult | null
-  canOpenPluginSettings: boolean
-  hasDeleteCustomGateway: boolean
-  onCustomIdChange: (value: string) => void
-  onCustomLabelChange: (value: string) => void
-  onCustomProtocolChange: (value: 'openai' | 'anthropic') => void
-  onCustomModelsTextChange: (value: string) => void
-  onApiKeyChange: (value: string) => void
-  onBaseUrlChange: (value: string) => void
+}
+
+export interface ProviderCredentialsActions {
+  onFormChange: (patch: Partial<ProviderCredentialsFormState>) => void
   onRefreshCatalog: () => void
   onTest: () => void
   onRequestDeleteCredential: () => void
   onRequestDeleteGateway: () => void
-  onOpenPluginSettings: (pluginId: string) => void
+  onOpenPluginSettings?: (pluginId: string) => void
+}
+
+export interface ProviderCredentialsSectionProps {
+  provider: ProviderItem | null
+  isNewCustom: boolean
+  endpointEditable: boolean
+  canTestConnection: boolean
+  inline: boolean
+  hasDeleteCustomGateway: boolean
+  form: ProviderCredentialsFormState
+  status: ProviderCredentialsStatus
+  actions: ProviderCredentialsActions
 }
 
 /**
@@ -60,31 +66,22 @@ export function ProviderCredentialsSection({
   endpointEditable,
   canTestConnection,
   inline,
-  customId,
-  customLabel,
-  customProtocol,
-  customModelsText,
-  apiKey,
-  baseUrl,
-  testing,
-  refreshingCatalog,
-  deleting,
-  testResult,
-  canOpenPluginSettings,
   hasDeleteCustomGateway,
-  onCustomIdChange,
-  onCustomLabelChange,
-  onCustomProtocolChange,
-  onCustomModelsTextChange,
-  onApiKeyChange,
-  onBaseUrlChange,
-  onRefreshCatalog,
-  onTest,
-  onRequestDeleteCredential,
-  onRequestDeleteGateway,
-  onOpenPluginSettings,
+  form,
+  status,
+  actions,
 }: ProviderCredentialsSectionProps): React.JSX.Element {
   const { t } = useWebLocale()
+  const { customId, customLabel, customProtocol, customModelsText, apiKey, baseUrl } = form
+  const { testing, refreshingCatalog, deleting, testResult } = status
+  const {
+    onFormChange,
+    onRefreshCatalog,
+    onTest,
+    onRequestDeleteCredential,
+    onRequestDeleteGateway,
+    onOpenPluginSettings,
+  } = actions
 
   const endpointHint =
     endpointEditable === true
@@ -136,7 +133,7 @@ export function ProviderCredentialsSection({
             <Input
               mono
               value={customId}
-              onChange={(e) => onCustomIdChange(e.target.value)}
+              onChange={(e) => onFormChange({ customId: e.target.value })}
               placeholder={t('models.custom.idPlaceholder')}
               autoComplete="off"
             />
@@ -152,7 +149,7 @@ export function ProviderCredentialsSection({
             >
               <Input
                 value={customLabel}
-                onChange={(e) => onCustomLabelChange(e.target.value)}
+                onChange={(e) => onFormChange({ customLabel: e.target.value })}
                 placeholder={t('models.custom.labelPlaceholder')}
                 autoComplete="off"
               />
@@ -168,7 +165,9 @@ export function ProviderCredentialsSection({
                 options={protocolOptions}
                 inline={inline}
                 onChange={(e) =>
-                  onCustomProtocolChange(e.target.value === 'anthropic' ? 'anthropic' : 'openai')
+                  onFormChange({
+                    customProtocol: e.target.value === 'anthropic' ? 'anthropic' : 'openai',
+                  })
                 }
               />
             </Field>
@@ -186,7 +185,7 @@ export function ProviderCredentialsSection({
               <div className="form-grid-value" title={t('models.apiKey.pluginKeyTitle')}>
                 {t('models.apiKey.pluginManaged', { pluginId: provider.pluginId })}
               </div>
-              {canOpenPluginSettings ? (
+              {onOpenPluginSettings !== undefined ? (
                 <div>
                   <Button
                     variant="secondary"
@@ -210,7 +209,7 @@ export function ProviderCredentialsSection({
             <Input
               type="password"
               value={apiKey}
-              onChange={(e) => onApiKeyChange(e.target.value)}
+              onChange={(e) => onFormChange({ apiKey: e.target.value })}
               placeholder={
                 !isNewCustom && provider?.configured
                   ? t('models.apiKey.placeholderConfigured')
@@ -232,7 +231,7 @@ export function ProviderCredentialsSection({
             <Input
               mono
               value={baseUrl}
-              onChange={(e) => onBaseUrlChange(e.target.value)}
+              onChange={(e) => onFormChange({ baseUrl: e.target.value })}
               placeholder={
                 provider?.baseUrl ||
                 (provider?.type === 'local'
@@ -266,7 +265,7 @@ export function ProviderCredentialsSection({
               mono
               rows={4}
               value={customModelsText}
-              onChange={(e) => onCustomModelsTextChange(e.target.value)}
+              onChange={(e) => onFormChange({ customModelsText: e.target.value })}
               placeholder={t('models.custom.modelsPlaceholder')}
             />
           </Field>

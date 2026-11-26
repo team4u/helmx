@@ -7,14 +7,14 @@
  * and purely functional to keep Fast Refresh and unit tests deadlock-safe.
  *
  * i18n: display-copy-producing helpers take an optional trailing `t`
- * translator (English bridge by default).
+ * Node-center pure-function model helpers.
  */
 
 import type {
   NodeHealthSnapshot as ProtocolNodeHealthSnapshot,
   NodeInfo as ProtocolNodeInfo,
 } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 
 /** Node category pill tab type. */
 export type NodeCategoryTab = 'all' | 'local' | 'remote' | 'online' | 'offline'
@@ -94,7 +94,7 @@ export function isNodeLocal(node: NodeInfo): boolean {
  */
 export function getNodeDisplayName(
   node: NodeInfo,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   if (node.label && node.label.trim() !== '') {
     return node.label.trim()

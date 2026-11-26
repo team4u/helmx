@@ -22,7 +22,10 @@ import {
   toolRowStats,
   writeBodyData,
 } from '../src/conversation/tool-body-model.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import type { FoldableStep, ThinkingTrace, ToolTrace } from '../src/conversation/timeline-model.js'
+
+const enT = createWebTranslator('en')
 
 function trace(overrides: Partial<ToolTrace> = {}): ToolTrace {
   return { key: 't', toolName: 'bash', status: 'done', isError: false, ...overrides }
@@ -187,14 +190,14 @@ function validEditMeta(): Record<string, unknown> {
 }
 
 test('toolRowStats：edit 完成且元数据合法才报 +N −N（已应用语义）', { timeout: 60_000 }, () => {
-  const stats = toolRowStats(trace({ toolName: 'edit', presentationMeta: validEditMeta() }))
+  const stats = toolRowStats(trace({ toolName: 'edit', presentationMeta: validEditMeta() }), enT)
   assert.deepEqual(
     { add: stats?.addCount, remove: stats?.removeCount },
     { add: 2, remove: 1 },
   )
   assert.match(stats?.title ?? '', /Applied/)
   // 元数据非法：不给统计（不伪称已应用差异）
-  assert.equal(toolRowStats(trace({ toolName: 'edit', presentationMeta: { path: '/a', replaced: true } })), undefined)
+  assert.equal(toolRowStats(trace({ toolName: 'edit', presentationMeta: { path: '/a', replaced: true } }), enT), undefined)
 })
 
 test('toolRowStats：edit 运行中报待执行片段统计，标题明示未应用', { timeout: 60_000 }, () => {
@@ -204,33 +207,35 @@ test('toolRowStats：edit 运行中报待执行片段统计，标题明示未应
       status: 'running',
       input: { path: '/a.ts', oldText: 'x = 1', newText: 'x = 2' },
     }),
+    enT,
   )
   assert.equal(stats?.addCount, 1)
   assert.equal(stats?.removeCount, 1)
   assert.match(stats?.title ?? '', /Pending/)
   // 运行中缺入参不给统计
-  assert.equal(toolRowStats(trace({ toolName: 'edit', status: 'running' })), undefined)
+  assert.equal(toolRowStats(trace({ toolName: 'edit', status: 'running' }), enT), undefined)
   // 失败/未知不给统计
   assert.equal(
-    toolRowStats(trace({ toolName: 'edit', status: 'error', isError: true, input: { oldText: 'a', newText: 'b' } })),
+    toolRowStats(trace({ toolName: 'edit', status: 'error', isError: true, input: { oldText: 'a', newText: 'b' } }), enT),
     undefined,
   )
 })
 
 test('toolRowStats：write 报内容行数；插件 tool.view 接管不给宿主统计', { timeout: 60_000 }, () => {
-  const stats = toolRowStats(trace({ toolName: 'write', input: { path: '/a', content: 'a\nb\nc' } }))
+  const stats = toolRowStats(trace({ toolName: 'write', input: { path: '/a', content: 'a\nb\nc' } }), enT)
   assert.equal(stats?.text, '3 lines')
-  assert.equal(toolRowStats(trace({ toolName: 'write', input: { path: '/a' } })), undefined)
+  assert.equal(toolRowStats(trace({ toolName: 'write', input: { path: '/a' } }), enT), undefined)
   assert.equal(
     toolRowStats(
       trace({
         toolName: 'subagent',
         toolView: { pluginId: 'builtin:workflow', spec: { id: 'subagent-view', toolNames: ['subagent'] } },
       }),
+      enT,
     ),
     undefined,
   )
-  assert.equal(toolRowStats(trace({ toolName: 'bash', input: { command: 'ls' } })), undefined)
+  assert.equal(toolRowStats(trace({ toolName: 'bash', input: { command: 'ls' } }), enT), undefined)
 })
 
 // ---------------------------------------------------------------------------

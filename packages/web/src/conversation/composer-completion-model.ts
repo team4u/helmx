@@ -20,7 +20,7 @@ import type {
   ComposerCompletionItem,
   ConversationSummary,
 } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'
 
@@ -130,7 +130,7 @@ export interface ExtractedItems {
 export function extractCompletionItems(
   docValue: unknown,
   itemsField: string,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): ExtractedItems {
   if (docValue === undefined || docValue === null) return { items: null }
   if (typeof docValue !== 'object' || Array.isArray(docValue)) {
@@ -153,7 +153,7 @@ export function extractCompletionItems(
  * item by item. */
 export function parseCompletionActionResult(
   result: unknown,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): ExtractedItems {
   if (result === null || typeof result !== 'object' || Array.isArray(result)) {
     return { items: null, error: t('composer.completion.invalidActionResult') }
@@ -177,7 +177,7 @@ export function verifyCompletionActionManifest(
   actions: ReadonlyArray<ActionManifest> | undefined,
   pluginId: string,
   actionId: string,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string | null {
   const manifest = (actions ?? []).find((a) => a.pluginId === pluginId && a.id === actionId)
   if (manifest === undefined) return t('composer.completion.actionNotRegistered', { pluginId, actionId })
@@ -211,7 +211,7 @@ export function buildCompletionActionCall(
   manifest: ActionManifest,
   query: string,
   context: { conversationId?: number; profileId?: string },
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): CompletionActionCallPlan {
   if (context.conversationId !== undefined) {
     return {

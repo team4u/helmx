@@ -33,7 +33,7 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  z-index: 100;
+  z-index: var(--z-modal);
   animation: helmxOverlayFadeIn var(--dur-normal) var(--ease-out);
 }
 
@@ -49,6 +49,12 @@
   flex-direction: column;
   overflow: hidden;
   animation: helmxModalEnter var(--dur-normal) var(--ease-out);
+}
+
+.modal.modal-confirm {
+  max-width: 440px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
 }
 
 .modal-header {
@@ -75,6 +81,13 @@
   gap: 12px;
 }
 
+.modal-body.modal-confirm-body {
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 14px 16px;
+}
+
 /* 模态弹窗全屏覆盖模式（复合选择器高于基础 .modal / 移动端响应式规则，零 !important） */
 .modal-backdrop.modal-fullscreen-backdrop {
   position: fixed;
@@ -83,7 +96,7 @@
   height: 100dvh;
   padding: 0;
   background: var(--bg);
-  z-index: var(--dialog-layer-z, 120);
+  z-index: var(--dialog-layer-z, var(--z-dialog-top));
   animation: none;
 }
 

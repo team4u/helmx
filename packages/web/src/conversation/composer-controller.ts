@@ -18,8 +18,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ComposerController, WhenBusy } from '@helmx/protocol/browser'
+import { isElementVisibleInDocument } from '../lib/dom-visibility.js'
 import type { HelmxShortcutDetail } from '../shell/shortcuts-model.js'
-import { isElementVisibleInDocument } from '../shell/version-watch-model.js'
 
 const HELMX_SHORTCUT_EVENT = 'helmx:shortcut' as const
 
@@ -177,9 +177,5 @@ export function useComposerController(bindings: ComposerControllerBindings): Com
       insertText,
       submit,
     }
-    // Controller reads go through getters forwarding the latest ref, not the
-    // bindings identity; the three methods are reference-stable (useCallback
-    // with empty deps).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setDraft, insertText, submit])
 }

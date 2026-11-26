@@ -22,9 +22,12 @@ import { renderToString } from 'react-dom/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ConversationSummary, PluginUiContribution, ScreenSpec, SidebarItemBadgeSpec, SidebarItemSpec, WorkbenchPanelSpec } from '@helmx/protocol'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
+
+const enT = createWebTranslator('en')
 import type { SidebarViewItem } from '../src/shell/sidebar-model.js'
-import type { ConversationBackgroundIndex } from '../src/shell/background-activity-model.js'
+import type { ConversationBackgroundIndex } from '../src/shell/conversation-status-model.js'
 import {
   aggregateAttentionTrees,
   buildAttentionModel,
@@ -164,6 +167,7 @@ test('honest summaries: lastError / doing / background summary / descendant coun
       backgroundActive: false,
       backgroundSummary: '',
       activeDescendantCount: 0,
+      t: enT,
     })
   assert.equal(summarize({ id: 1, status: 'error', lastError: 'model_error: boom' }), 'model_error: boom')
   assert.equal(summarize({ id: 2, status: 'working', doing: '正在重构解析器' }), '正在重构解析器')
@@ -176,6 +180,7 @@ test('honest summaries: lastError / doing / background summary / descendant coun
       backgroundActive: true,
       backgroundSummary: '2 Running',
       activeDescendantCount: 0,
+      t: enT,
     }),
     '2 Running',
   )
@@ -186,6 +191,7 @@ test('honest summaries: lastError / doing / background summary / descendant coun
       backgroundActive: false,
       backgroundSummary: '',
       activeDescendantCount: 2,
+      t: enT,
     }),
     '2 sub-conversations active',
   )
@@ -248,6 +254,7 @@ test('buildAttentionModel: global counts stay invariant across viewed active ses
         profiles: [],
         plugins: [],
         viewedConversationIds: viewed,
+        t: enT,
       }),
     )
     assert.deepEqual(
@@ -296,6 +303,7 @@ test('buildAttentionModel: global counts stay invariant across viewed active ses
       profiles: [],
       plugins: [],
       viewedConversationIds: viewingUnreadRoot,
+      t: enT,
     }),
   )
   assert.deepEqual(
@@ -346,8 +354,8 @@ test('automated helmx top-level trees stay quiet on working/done and only alert 
 })
 
 test('composeAttentionSummary lists only non-zero buckets', { timeout: 60_000 }, () => {
-  assert.equal(composeAttentionSummary({ needsAttentionCount: 2, runningCount: 0, unreadDoneCount: 3, totalCount: 5, tone: 'error' }), '2 need attention · 3 unread completed')
-  assert.equal(composeAttentionSummary({ needsAttentionCount: 0, runningCount: 0, unreadDoneCount: 0, totalCount: 0, tone: null }), '')
+  assert.equal(composeAttentionSummary({ needsAttentionCount: 2, runningCount: 0, unreadDoneCount: 3, totalCount: 5, tone: 'error' }, enT), '2 need attention · 3 unread completed')
+  assert.equal(composeAttentionSummary({ needsAttentionCount: 0, runningCount: 0, unreadDoneCount: 0, totalCount: 0, tone: null }, enT), '')
 })
 
 // ---------------------------------------------------------------------------
@@ -438,7 +446,7 @@ test('Sidebar omits the topbar overview button and renders the numberless attent
 
   // Viewing another space (settings): conversations rail icon surfaces the numberless error dot + summary aria-label
   const inSettingsStore = attentionScenarioStore()
-  inSettingsStore.openSpace('settings')
+  inSettingsStore.actions.openSpace('settings')
   const inSettingsHtml = renderSidebar(inSettingsStore)
   assert.ok(
     inSettingsHtml.includes('class="attention-status-dot rail-space-dot" data-tone="error" aria-hidden="true"></span>'),
@@ -451,7 +459,7 @@ test('Sidebar omits the topbar overview button and renders the numberless attent
 
   // Collapsed desktop sidebar while viewing active running root (#2): collapsed-only dot & summary stay invariant
   const viewingRunningCollapsed = attentionScenarioStore()
-  viewingRunningCollapsed.openTarget({ kind: 'conversation', conversationId: 2 })
+  viewingRunningCollapsed.actions.openTarget({ kind: 'conversation', conversationId: 2 })
   viewingRunningCollapsed.actions.setSidebarCollapsed(true)
   const collapsedHtml = renderSidebar(viewingRunningCollapsed)
   assert.ok(
@@ -480,8 +488,8 @@ test('Sidebar omits the topbar overview button and renders the numberless attent
 
 test('interaction: conversations rail icon shows numberless dot outside conversations space and restores remembered #/overview on click', { timeout: 60_000 }, async () => {
   const store = attentionScenarioStore()
-  store.openTarget({ kind: 'overview' })
-  store.openSpace('settings')
+  store.actions.openTarget({ kind: 'overview' })
+  store.actions.openSpace('settings')
   const container = document.createElement('div')
   document.body.appendChild(container)
   let root: Root | undefined

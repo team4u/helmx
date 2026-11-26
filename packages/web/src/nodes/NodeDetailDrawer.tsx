@@ -4,7 +4,6 @@ import {
   Button,
   Callout,
   Card,
-  copyToClipboard,
   CopyButton,
   DetailDrawer,
   EmptyState,
@@ -79,8 +78,6 @@ export function NodeDetailDrawer({
   const [newNodeId, setNewNodeId] = useState('')
   const [tokenError, setTokenError] = useState<string | null>(null)
   const [issuing, setIssuing] = useState(false)
-  const [copiedCmd, setCopiedCmd] = useState(false)
-  const [copiedToken, setCopiedToken] = useState(false)
 
   const [checkingHealth, setCheckingHealth] = useState(false)
   const [healthState, setHealthState] = useState<{ nodeId: string; result: NodeUpgradeCheckResult } | null>(null)
@@ -89,8 +86,6 @@ export function NodeDetailDrawer({
   const mountedRef = useRef(true)
   const tokenGenerationRef = useRef(0)
   const healthGenerationRef = useRef(0)
-  const copiedCmdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const copiedTokenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isLocal = node ? isNodeLocal(node) : false
   const isOnline = node ? isNodeOnline(node) : false
@@ -101,10 +96,8 @@ export function NodeDetailDrawer({
       : t('nodes.drawer.titleFallback')
   const iconName = isLocal ? 'laptop' : 'server'
 
-  const hubOrigin =
-    typeof window !== 'undefined' && window.location?.origin
-      ? window.location.origin
-      : 'http://localhost:3202'
+  const rawOrigin = typeof window !== 'undefined' ? window.location?.origin : undefined
+  const hubOrigin = rawOrigin && rawOrigin !== 'null' ? rawOrigin : '<HUB_URL>'
 
   const targetNodeId = isNew ? newNodeId.trim() : node?.id ?? ''
   const issuedToken =
@@ -126,14 +119,6 @@ export function NodeDetailDrawer({
       mountedRef.current = false
       tokenGenerationRef.current += 1
       healthGenerationRef.current += 1
-      if (copiedCmdTimerRef.current !== null) {
-        clearTimeout(copiedCmdTimerRef.current)
-        copiedCmdTimerRef.current = null
-      }
-      if (copiedTokenTimerRef.current !== null) {
-        clearTimeout(copiedTokenTimerRef.current)
-        copiedTokenTimerRef.current = null
-      }
     }
   }, [])
 
@@ -144,16 +129,6 @@ export function NodeDetailDrawer({
     setIssuedTokenState(null)
     setTokenError(null)
     setIssuing(false)
-    setCopiedCmd(false)
-    setCopiedToken(false)
-    if (copiedCmdTimerRef.current !== null) {
-      clearTimeout(copiedCmdTimerRef.current)
-      copiedCmdTimerRef.current = null
-    }
-    if (copiedTokenTimerRef.current !== null) {
-      clearTimeout(copiedTokenTimerRef.current)
-      copiedTokenTimerRef.current = null
-    }
   }, [open, isNew, targetNodeId])
 
   useEffect(() => {
@@ -209,40 +184,6 @@ export function NodeDetailDrawer({
       if (mountedRef.current && tokenGenerationRef.current === generation) {
         setIssuing(false)
       }
-    }
-  }
-
-  const handleCopyCmd = async () => {
-    if (!guide) return
-    const generation = tokenGenerationRef.current
-    const ok = await copyToClipboard(guide.oneLineCommand)
-    if (!mountedRef.current || tokenGenerationRef.current !== generation) return
-    if (ok) {
-      setCopiedCmd(true)
-      if (copiedCmdTimerRef.current !== null) clearTimeout(copiedCmdTimerRef.current)
-      copiedCmdTimerRef.current = setTimeout(() => {
-        copiedCmdTimerRef.current = null
-        if (mountedRef.current && tokenGenerationRef.current === generation) {
-          setCopiedCmd(false)
-        }
-      }, 2000)
-    }
-  }
-
-  const handleCopyToken = async () => {
-    if (!issuedToken) return
-    const generation = tokenGenerationRef.current
-    const ok = await copyToClipboard(issuedToken)
-    if (!mountedRef.current || tokenGenerationRef.current !== generation) return
-    if (ok) {
-      setCopiedToken(true)
-      if (copiedTokenTimerRef.current !== null) clearTimeout(copiedTokenTimerRef.current)
-      copiedTokenTimerRef.current = setTimeout(() => {
-        copiedTokenTimerRef.current = null
-        if (mountedRef.current && tokenGenerationRef.current === generation) {
-          setCopiedToken(false)
-        }
-      }, 2000)
     }
   }
 
@@ -527,15 +468,7 @@ export function NodeDetailDrawer({
                     <code className="code-box selectable flex-1 mono">
                       {issuedToken}
                     </code>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      icon={copiedToken ? 'check' : 'copy'}
-                      onClick={() => void handleCopyToken()}
-                      title={t('nodes.drawer.copyToken')}
-                    >
-                      {copiedToken ? t('nodes.drawer.copied') : t('nodes.drawer.copyToken')}
-                    </Button>
+                    <CopyButton text={issuedToken} label={t('nodes.drawer.copyToken')} />
                   </Stack>
                 </Stack>
               )}
@@ -547,15 +480,7 @@ export function NodeDetailDrawer({
                     <code className="code-box selectable flex-1 mono">
                       {guide.oneLineCommand}
                     </code>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      icon={copiedCmd ? 'check' : 'copy'}
-                      onClick={() => void handleCopyCmd()}
-                      title={t('nodes.drawer.copyCommandTitle')}
-                    >
-                      {copiedCmd ? t('nodes.drawer.copied') : t('nodes.drawer.copyCommand')}
-                    </Button>
+                    <CopyButton text={guide.oneLineCommand} label={t('nodes.drawer.copyCommand')} />
                   </Stack>
 
                   <div className="text-subtle">

@@ -15,7 +15,7 @@ import {
 } from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 import type { ResolvedTarget } from '../lib/types.js'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { isNodeSourceSkill } from './skill-scope-model.js'
 
 export type SkillCategoryTab = 'all' | 'core' | 'builtin' | 'plugins' | 'agents' | 'node' | 'workspace'
@@ -197,48 +197,46 @@ export function summarizeSkills(skills: SkillSummary[]): SkillSummaryStats {
  */
 export function getSkillSourceBadge(
   skill: SkillSummary,
-  t?: WebMessageTranslator,
+  t: WebMessageTranslator,
 ): {
   label: string
   variant: 'core' | 'builtin' | 'workspace' | 'plugin' | 'agents' | 'node'
 } {
-  const tt = t ?? englishWebTranslator
   if (isNodeSourceSkill(skill)) {
-    return { label: tt('skills.category.node'), variant: 'node' }
+    return { label: t('skills.category.node'), variant: 'node' }
   }
   if (isSkillAgents(skill)) {
-    return { label: tt('skills.category.shared'), variant: 'agents' }
+    return { label: t('skills.category.shared'), variant: 'agents' }
   }
   if (isSkillCore(skill)) {
-    return { label: tt('skills.category.core'), variant: 'core' }
+    return { label: t('skills.category.core'), variant: 'core' }
   }
   if (isSkillBuiltin(skill)) {
-    return { label: tt('common.builtIn'), variant: 'builtin' }
+    return { label: t('common.builtIn'), variant: 'builtin' }
   }
   if (isSkillPlugin(skill)) {
-    return { label: skill.managedByPlugin ?? tt('skills.category.plugins'), variant: 'plugin' }
+    return { label: skill.managedByPlugin ?? t('skills.category.plugins'), variant: 'plugin' }
   }
-  return { label: tt('skills.category.workspace'), variant: 'workspace' }
+  return { label: t('skills.category.workspace'), variant: 'workspace' }
 }
 
 /** Localized category tab label ('all'/'builtin' reuse the common table). */
-export function skillCategoryTabLabel(tab: SkillCategoryTab, t?: WebMessageTranslator): string {
-  const tt = t ?? englishWebTranslator
+export function skillCategoryTabLabel(tab: SkillCategoryTab, t: WebMessageTranslator): string {
   switch (tab) {
     case 'all':
-      return tt('common.all')
+      return t('common.all')
     case 'core':
-      return tt('skills.category.core')
+      return t('skills.category.core')
     case 'builtin':
-      return tt('common.builtIn')
+      return t('common.builtIn')
     case 'plugins':
-      return tt('skills.category.plugins')
+      return t('skills.category.plugins')
     case 'agents':
-      return tt('skills.category.shared')
+      return t('skills.category.shared')
     case 'node':
-      return tt('skills.category.node')
+      return t('skills.category.node')
     case 'workspace':
-      return tt('skills.category.workspace')
+      return t('skills.category.workspace')
   }
 }
 

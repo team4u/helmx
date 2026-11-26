@@ -249,7 +249,7 @@ test('createPluginClientContext.openConversationDrawer：工作台打开时将�
     '打开子会话抽屉应压在工作台之上，而非销毁工作台',
   )
   assert.equal(store.getWorkbenchSlice().workbenchOpen, false, '栈顶为会话帧时 workbenchOpen 为 false')
-  store.popDrawer()
+  store.actions.popDrawer()
   assert.deepEqual(store.getDrawerStack(), [{ kind: 'workbench', tab: 'artifacts' }], '退一层后工作台完整恢复')
   assert.equal(store.getWorkbenchSlice().workbenchOpen, true)
 })

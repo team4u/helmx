@@ -19,6 +19,24 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --dur-fast: 120ms;
   --dur-normal: 180ms;
+  --z-base: 1;
+  --z-sticky: 2;
+  --z-pane-indicator: 5;
+  --z-resizer: 6;
+  --z-floating: 10;
+  --z-composer-popover: 40;
+  --z-pane-popover: 50;
+  --z-banner: 65;
+  --z-mobile-nav: 70;
+  --z-mobile-backdrop: 71;
+  --z-mobile-drawer: 72;
+  --z-popover: 80;
+  --z-loading-overlay: 95;
+  --z-modal: 100;
+  --z-tooltip: 100;
+  --z-error-overlay: 105;
+  --z-dialog-top: 120;
+  --z-toast: 9000;
 }
 
 :root,

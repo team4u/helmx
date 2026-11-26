@@ -7,7 +7,7 @@
  */
 import type { SelectOption } from '@helmx/plugin-client'
 import type { NodeInfo, SkillSummary } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 
 /** 技能目录作用域：节点必有值，cwd 仅会话/待命页补全时附带。 */
 export interface SkillScope {
@@ -73,15 +73,14 @@ function formatOnlineNodeMeta(node: NodeInfo, statusLabel: string): string {
 export function buildSkillNodeOptions(
   nodes: ReadonlyArray<NodeInfo>,
   selectedNodeId: string | undefined,
-  t?: WebMessageTranslator,
+  t: WebMessageTranslator,
 ): Array<SelectOption<string>> {
-  const tt = t ?? englishWebTranslator
   const options: Array<SelectOption<string>> = [
     {
       value: HUB_SKILL_NODE_ID,
-      label: tt('skills.scope.hub'),
+      label: t('skills.scope.hub'),
       icon: 'monitor',
-      meta: tt('skills.scope.hubMeta'),
+      meta: t('skills.scope.hubMeta'),
     },
   ]
   for (const node of nodes) {
@@ -90,7 +89,7 @@ export function buildSkillNodeOptions(
       value: node.id,
       label: node.id,
       icon: 'network',
-      meta: formatOnlineNodeMeta(node, tt('common.online')),
+      meta: formatOnlineNodeMeta(node, t('common.online')),
     })
   }
   if (
@@ -104,14 +103,14 @@ export function buildSkillNodeOptions(
         value: matched.id,
         label: matched.id,
         icon: 'network',
-        meta: formatOnlineNodeMeta(matched, tt('common.offline')),
+        meta: formatOnlineNodeMeta(matched, t('common.offline')),
       })
     } else {
       options.push({
         value: selectedNodeId,
         label: selectedNodeId,
         icon: 'alert-circle',
-        meta: tt('skills.scope.nodeUnavailableMeta'),
+        meta: t('skills.scope.nodeUnavailableMeta'),
       })
     }
   }

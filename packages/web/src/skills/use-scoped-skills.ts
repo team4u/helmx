@@ -9,6 +9,7 @@
  *   绝不静默降级为空目录。
  */
 import { useEffect, useRef, useState } from 'react'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import {
   fetchScopedSkillCatalog,
   type ScopedSkillCatalog,
@@ -27,6 +28,7 @@ const IDLE_STATE: ScopedSkillCatalogState = { loading: false, catalog: null, err
 export function useScopedSkillCatalog(
   scope: SkillScope | undefined,
   invoke: SkillActionInvoker,
+  t: WebMessageTranslator,
   reloadSeq: number = 0,
 ): ScopedSkillCatalogState {
   const [state, setState] = useState<ScopedSkillCatalogState>(IDLE_STATE)
@@ -50,7 +52,7 @@ export function useScopedSkillCatalog(
         ? prev
         : { loading: true, catalog: null, error: null },
     )
-    fetchScopedSkillCatalog(invoke, nextScope)
+    fetchScopedSkillCatalog(invoke, nextScope, t)
       .then((catalog) => {
         if (generationRef.current !== generation) return
         setState({ loading: false, catalog, error: null })
@@ -63,7 +65,7 @@ export function useScopedSkillCatalog(
           error: err instanceof Error ? err.message : String(err),
         })
       })
-  }, [scopeNodeId, scopeCwd, invoke, reloadSeq])
+  }, [scopeNodeId, scopeCwd, invoke, t, reloadSeq])
 
   return state
 }

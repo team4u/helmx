@@ -23,8 +23,9 @@ import type {
   ThemeMode,
   ThemePreference,
 } from '../types.js'
-import type { WorkspaceLocationState } from '../url-hash-model.js'
-import type { BackgroundBadgeDocRef, ConversationBackgroundIndex } from '../../shell/background-activity-model.js'
+import type { StoreBootLocation } from '../url-hash-model.js'
+import type { BackgroundBadgeDocRef } from '../../shell/background-activity-model.js'
+import type { ConversationBackgroundIndex } from '../../shell/conversation-status-model.js'
 
 export type StoreListener = () => void
 export type StoreUpdater<T> = T | ((prev: T) => T)
@@ -207,12 +208,10 @@ export type StoreDomainKey =
   | 'locationState'
   | 'conversationBackground'
   | 'highlightedEntry'
+  | 'homeLanding'
   | 'notices'
 
-export interface StoreBootLocation {
-  location: WorkspaceLocationState
-  needsHomeLanding: boolean
-}
+export type { StoreBootLocation }
 
 export interface NotifyPlan {
   domains: Set<StoreDomainKey>

@@ -13,10 +13,9 @@ import {
   type ConversationScopeTarget,
   type ConversationSummary,
   type HelmxLocale,
-  type NotificationEvent,
 } from '@helmx/protocol/browser'
 import { createWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
-import { matchesUiScope } from './types.js'
+import { matchesUiScope, type ToastNotice } from './types.js'
 import { summarizeSingleLine } from './format.js'
 
 /** 宿主保留的会话内管理命令斜杠词；插件 slash 声明不得覆盖（后端注册边界拒绝，前端防御性跳过）。 */
@@ -196,7 +195,7 @@ export function replaceSlashToken(
 
 export interface PluginSlashExecDeps {
   invokePluginAction: (pluginId: string, actionId: string, input: unknown, conversationId?: number) => Promise<unknown>
-  pushNotice: (notice: NotificationEvent) => void
+  pushNotice: (notice: Omit<ToastNotice, 'id' | 'createdAt'>) => void
   /** 通知正文中命令 title（LocalizedText 显示文案）的解析 locale。 */
   locale: HelmxLocale
   /** 可选显示文案翻译器；缺省按 deps.locale 解析。 */
@@ -209,6 +208,10 @@ export async function executePluginSlashAction(cmd: QualifiedCommand, deps: Plug
   const actionId = cmd.spec.actionId
   if (actionId === undefined) throw new Error('Plugin command has no bound action')
   const t = deps.t ?? createWebTranslator(deps.locale)
+  const target =
+    deps.conversationId !== undefined
+      ? ({ kind: 'conversation', conversationId: deps.conversationId } as const)
+      : undefined
   try {
     await deps.invokePluginAction(commandActionPluginId(cmd), actionId, cmd.spec.input, deps.conversationId)
     deps.pushNotice({
@@ -216,7 +219,7 @@ export async function executePluginSlashAction(cmd: QualifiedCommand, deps: Plug
       level: 'info',
       title: t('composer.command.executed'),
       body: formatPluginCommandLabel(cmd, deps.locale),
-      ...(deps.conversationId !== undefined ? { conversationId: deps.conversationId } : {}),
+      ...(target !== undefined ? { target } : {}),
     })
   } catch (err: unknown) {
     deps.pushNotice({
@@ -224,7 +227,7 @@ export async function executePluginSlashAction(cmd: QualifiedCommand, deps: Plug
       level: 'error',
       title: t('composer.command.failed', { command: `/${cmd.spec.slash ?? cmd.spec.id}` }),
       body: err instanceof Error ? err.message : String(err),
-      ...(deps.conversationId !== undefined ? { conversationId: deps.conversationId } : {}),
+      ...(target !== undefined ? { target } : {}),
     })
     throw err
   }

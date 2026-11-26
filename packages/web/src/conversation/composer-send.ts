@@ -18,13 +18,13 @@
  * This module exports only hooks and pure types (no components), honoring the
  * .ts Fast Refresh rule.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComposerCommandRegistry } from '@helmx/plugin-client'
 import type { ConversationAttachmentRef, ConversationSummary, QueuedConversationInput, WhenBusy } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
-  executePluginSlashAction,
   insertAtCaret,
   matchExactPluginSlash,
   removeTokenBeforeCaret,
@@ -36,6 +36,7 @@ import { useStableCallback } from '../lib/use-stable-callback.js'
 import { clearComposerDirty, setComposerDirty, type ComposerDirtySnapshot } from './composer-dirty.js'
 import type { ConversationDirtySink } from './conversation-window-model.js'
 import { focusWithCaret } from './composer-controller.js'
+import { dispatchPluginSlashCommand } from './plugin-command-exec.js'
 import {
   attachmentsOfEditTarget,
   draftVersionOf,
@@ -143,9 +144,11 @@ export interface ComposerSendApi {
   notifyError: (title: string, err: unknown) => void
 }
 
-export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslator = englishWebTranslator): ComposerSendApi {
+export function useComposerSend(input: ComposerSendInput, tOverride?: WebMessageTranslator): ComposerSendApi {
   const { conversation, prefill, onSendingChange, onNewThread, textareaRef, slashPluginCommands, envConfigurable, working, dirtyKey, dirtySink, commandRegistry } = input
   const { invokePluginAction, pushNotice } = useStoreActions()
+  const { t: localeT } = useWebLocale()
+  const t = tOverride ?? localeT
   const locale = useOptionalLocale() ?? DEFAULT_HELMX_LOCALE
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
@@ -214,6 +217,22 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
   const lastPrefillRef = useRef<ComposerPrefill | null>(null)
   const lastPrefillTickRef = useRef<number | null>(null)
   const prevConversationIdRef = useRef(conversation.id)
+  const activeConversationIdRef = useRef(conversation.id)
+
+  useLayoutEffect(() => {
+    activeConversationIdRef.current = conversation.id
+  }, [conversation.id])
+
+  const isActiveConversation = useCallback(
+    (targetConversationId: number): boolean => activeConversationIdRef.current === targetConversationId,
+    [],
+  )
+
+  const isActiveMountedConversation = useCallback(
+    (targetConversationId: number): boolean =>
+      mountedRef.current && activeConversationIdRef.current === targetConversationId,
+    [],
+  )
 
   // Leaving history-edit mode only when the conversation actually switches
   // (<Activity> wake re-runs effects for the same conversation.id and must
@@ -254,7 +273,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
           type: 'notification',
           level: 'warning',
           title: t('composer.draft.handleBeforeStarter'),
-          conversationId: conversation.id,
+          target: { kind: 'conversation', conversationId: conversation.id },
         })
         return
       }
@@ -276,27 +295,36 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     syncLiveDraft('', null, [])
   }, [syncLiveDraft])
 
-  const notifyError = useCallback(
-    (title: string, err: unknown) => {
+  const notifyErrorFor = useCallback(
+    (targetConversationId: number, title: string, err: unknown) => {
       pushNotice({
         type: 'notification',
         level: 'error',
         title,
         body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
+        target: { kind: 'conversation', conversationId: targetConversationId },
       })
     },
-    [pushNotice, conversation.id],
+    [pushNotice],
+  )
+
+  const notifyError = useCallback(
+    (title: string, err: unknown) => {
+      notifyErrorFor(conversation.id, title, err)
+    },
+    [notifyErrorFor, conversation.id],
   )
 
   const uploadFiles = useCallback(
     async (files: ReadonlyArray<File>): Promise<void> => {
+      const targetConversationId = conversation.id
       uploadingRef.current += files.length
       setUploading(uploadingRef.current)
       for (const file of files) {
         try {
-          if (file.size > 15 * 1024 * 1024) throw new Error('File exceeds the 15 MiB limit')
-          const meta = await conversationsApi.uploadArtifact(conversation.id, file)
+          if (file.size > 15 * 1024 * 1024) throw new Error(t('composer.attach.tooLarge'))
+          const meta = await conversationsApi.uploadArtifact(targetConversationId, file)
+          if (!isActiveConversation(targetConversationId)) continue
           const uploaded: PendingAttachment = { artifactId: meta.id, name: meta.name, size: meta.size, mimeType: meta.mimeType }
           liveDraftRef.current = {
             ...liveDraftRef.current,
@@ -304,29 +332,19 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
           }
           setAttachments((prev) => [...prev, uploaded])
         } catch (err) {
-          notifyError(t('composer.attach.uploadFailedTitle', { name: file.name }), err)
+          if (isActiveMountedConversation(targetConversationId)) {
+            notifyErrorFor(targetConversationId, t('composer.attach.uploadFailedTitle', { name: file.name }), err)
+          }
         } finally {
           uploadingRef.current--
-          setUploading(uploadingRef.current)
-          publishHiddenDirty()
+          if (isActiveConversation(targetConversationId)) {
+            setUploading(uploadingRef.current)
+            publishHiddenDirty()
+          }
         }
       }
     },
-    [conversation.id, notifyError, publishHiddenDirty, t],
-  )
-
-  // ⌘K and the slash menu share the same action addressing; failures must
-  // reach the submitter.
-  const runPluginCommandFrom = useCallback(
-    (cmd: QualifiedCommand): Promise<void> =>
-      executePluginSlashAction(cmd, {
-        invokePluginAction,
-        pushNotice,
-        locale,
-        t,
-        conversationId: conversation.id,
-      }),
-    [invokePluginAction, pushNotice, locale, t, conversation.id],
+    [conversation.id, isActiveConversation, isActiveMountedConversation, notifyErrorFor, publishHiddenDirty, t],
   )
 
   // Optimistically remove the trigger/command text while tracking an in-flight
@@ -335,9 +353,10 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
   const executePluginCommand = useCallback(
     async (cmd: QualifiedCommand, mode: 'token' | 'clear' | 'none', strict: boolean): Promise<void> => {
       if (commandPendingRef.current) {
-        if (strict) throw new Error('Current draft empty or a composer operation is already in flight')
+        if (strict) throw new Error(t('composer.send.busyOrEmpty'))
         return
       }
+      const targetConversationId = conversation.id
       const gen = ++commandGenRef.current
       const el = textareaRef.current
       const before = liveDraftRef.current
@@ -345,74 +364,66 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       const caret = el?.selectionStart ?? before.text.length
       const resolved = mode === 'token' ? removeTokenBeforeCaret(before.text, caret) : { next: '', nextCaret: 0 }
       const expectedAfterClear = draftVersionOf(resolved.next, currentTarget, attachments)
-      const applyTokenOrClear = (): void => {
-        if (mode !== 'none') {
-          setText(resolved.next)
-          syncLiveDraft(resolved.next, currentTarget, attachments)
-          if (mode === 'token' && el !== null && el.isConnected) {
-            focusWithCaret(el, resolved.nextCaret)
-          }
-        }
-      }
-      const restoreDraftIfUntouched = (): void => {
-        if (
-          mode !== 'none' &&
-          mountedRef.current &&
-          gen === commandGenRef.current &&
-          shouldRestoreEditOnFailure(liveDraftRef.current, expectedAfterClear)
-        ) {
-          setText(before.text)
-          syncLiveDraft(before.text, currentTarget, attachments)
-        }
-      }
 
-      if (commandRegistry?.has(cmd.pluginId, cmd.spec.id)) {
-        applyTokenOrClear()
-        publishHiddenDirty()
-        try {
-          const invoked = commandRegistry.invoke(cmd.pluginId, cmd.spec.id)
-          if (invoked.handled) {
-            if (
-              invoked.result !== undefined &&
-              invoked.result !== null &&
-              typeof (invoked.result as PromiseLike<void>).then === 'function'
-            ) {
-              await invoked.result
-            }
-            return
-          }
-        } catch (error) {
-          restoreDraftIfUntouched()
-          pushNotice({
-            type: 'notification',
-            level: 'error',
-            title: t('composer.command.failed', { command: `/${cmd.spec.slash ?? cmd.spec.id}` }),
-            body: error instanceof Error ? error.message : String(error),
-            conversationId: conversation.id,
-          })
-          if (strict) throw error
-          return
-        }
-      }
-
-      commandPendingRef.current = true
-      setRunningCommand(cmd)
-      applyTokenOrClear()
-      publishHiddenDirty()
       try {
-        await runPluginCommandFrom(cmd)
+        await dispatchPluginSlashCommand({
+          cmd,
+          generation: gen,
+          isCurrentGeneration: (currentGen) => currentGen === commandGenRef.current,
+          commandRegistry,
+          conversationId: targetConversationId,
+          invokePluginAction,
+          pushNotice,
+          locale,
+          t,
+          awaitLocalResult: true,
+          noticeTarget: { kind: 'conversation', conversationId: targetConversationId },
+          applyDraftUpdate: () => {
+            if (mode !== 'none' && isActiveMountedConversation(targetConversationId)) {
+              setText(resolved.next)
+              syncLiveDraft(resolved.next, currentTarget, attachments)
+              if (mode === 'token' && el !== null && el.isConnected) {
+                focusWithCaret(el, resolved.nextCaret)
+              }
+            }
+          },
+          restoreDraftIfUntouched: () => {
+            if (
+              mode !== 'none' &&
+              isActiveMountedConversation(targetConversationId) &&
+              gen === commandGenRef.current &&
+              shouldRestoreEditOnFailure(liveDraftRef.current, expectedAfterClear)
+            ) {
+              setText(before.text)
+              syncLiveDraft(before.text, currentTarget, attachments)
+            }
+          },
+          setPending: (pending, command) => {
+            commandPendingRef.current = pending
+            if (isActiveConversation(targetConversationId)) setRunningCommand(command)
+          },
+          afterStateChange: () => {
+            if (isActiveConversation(targetConversationId)) publishHiddenDirty()
+          },
+        })
       } catch (error) {
-        restoreDraftIfUntouched()
         if (strict) throw error
-      } finally {
-        if (gen === commandGenRef.current) {
-          commandPendingRef.current = false
-          if (mountedRef.current) setRunningCommand(null)
-          publishHiddenDirty()
-        }
       }
     },
-    [attachments, commandRegistry, conversation.id, publishHiddenDirty, pushNotice, runPluginCommandFrom, syncLiveDraft, t, textareaRef],
+    [
+      attachments,
+      commandRegistry,
+      conversation.id,
+      invokePluginAction,
+      isActiveConversation,
+      isActiveMountedConversation,
+      locale,
+      publishHiddenDirty,
+      pushNotice,
+      syncLiveDraft,
+      t,
+      textareaRef,
+    ],
   )
 
   const runPluginCommandImpl = useCallback((cmd: QualifiedCommand): void => {
@@ -442,18 +453,29 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
           type: 'notification',
           level: 'warning',
           title: t('composer.send.newTopicFromTopBar'),
-          conversationId: conversation.id,
+          target: { kind: 'conversation', conversationId: conversation.id },
         })
       }
       return true
     }
     if (cmd === '/clear') {
+      const targetConversationId = conversation.id
       void conversationsApi
-        .reset(conversation.id)
+        .reset(targetConversationId)
         .then(() => {
-          pushNotice({ type: 'notification', level: 'info', title: t('composer.compaction.resetDone'), conversationId: conversation.id })
+          if (!isActiveMountedConversation(targetConversationId)) return
+          pushNotice({
+            type: 'notification',
+            level: 'info',
+            title: t('composer.compaction.resetDone'),
+            target: { kind: 'conversation', conversationId: targetConversationId },
+          })
         })
-        .catch((err: unknown) => notifyError(t('composer.compaction.resetFailed'), err))
+        .catch((err: unknown) => {
+          if (isActiveMountedConversation(targetConversationId)) {
+            notifyErrorFor(targetConversationId, t('composer.compaction.resetFailed'), err)
+          }
+        })
       return true
     }
     const compactCmd = parseCompactSlashCommand(cmd)
@@ -463,16 +485,27 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
           type: 'notification',
           level: 'info',
           title: t('composer.compaction.inProgress'),
-          conversationId: conversation.id,
+          target: { kind: 'conversation', conversationId: conversation.id },
         })
         return true
       }
+      const targetConversationId = conversation.id
       void conversationsApi
-        .compact(conversation.id, compactCmd.instructions)
+        .compact(targetConversationId, compactCmd.instructions)
         .then(() => {
-          pushNotice({ type: 'notification', level: 'info', title: t('composer.compaction.submitted'), conversationId: conversation.id })
+          if (!isActiveMountedConversation(targetConversationId)) return
+          pushNotice({
+            type: 'notification',
+            level: 'info',
+            title: t('composer.compaction.submitted'),
+            target: { kind: 'conversation', conversationId: targetConversationId },
+          })
         })
-        .catch((err: unknown) => notifyError(t('composer.compaction.failed'), err))
+        .catch((err: unknown) => {
+          if (isActiveMountedConversation(targetConversationId)) {
+            notifyErrorFor(targetConversationId, t('composer.compaction.failed'), err)
+          }
+        })
       return true
     }
     return false
@@ -497,15 +530,15 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     setText(next)
     syncLiveDraft(next, editingEntryId, attachments)
     focusWithCaret(el, nextCaret)
-  }, [text, editingEntryId, attachments, syncLiveDraft, textareaRef])
+  }, [editingEntryId, attachments, syncLiveDraft, textareaRef])
 
   const removeAttachment = useCallback((artifactId: string): void => {
     setAttachments((prev) => {
       const next = prev.filter((a) => a.artifactId !== artifactId)
-      syncLiveDraft(text, editingEntryId, next)
+      syncLiveDraft(liveDraftRef.current.text, liveDraftRef.current.targetEntryId, next)
       return next
     })
-  }, [text, editingEntryId, syncLiveDraft])
+  }, [syncLiveDraft])
 
   /** ↑ history-edit wholesale replacement: text / anchor / attachments (no
    * attachments on the target clears the old draft residue). */
@@ -516,17 +549,20 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     // clears the old draft).
     setAttachments(attachmentsOfEditTarget(target))
     syncLiveDraft(target.text, target.entryId ?? null, attachmentsOfEditTarget(target))
-    requestAnimationFrame(() => textareaRef.current?.focus())
+    requestAnimationFrame(() => {
+      if (mountedRef.current) textareaRef.current?.focus()
+    })
   }, [syncLiveDraft, textareaRef])
 
   /** ↑ queued-withdraw re-edit: withdraw the newest human queued input from
    * pi.inbox first, then prefill text and attachments. */
   const withdrawQueuedInput = useCallback(async (queued: QueuedConversationInput): Promise<void> => {
     if (withdrawingRef.current || sendingRef.current || uploadingRef.current > 0 || commandPendingRef.current) return
+    const targetConversationId = conversation.id
     withdrawingRef.current = true
     try {
-      const res = await conversationsApi.withdraw(conversation.id, queued.submissionId)
-      if (!mountedRef.current) return
+      const res = await conversationsApi.withdraw(targetConversationId, queued.submissionId)
+      if (!isActiveMountedConversation(targetConversationId)) return
       const baseTarget: EditRequestTarget = {
         text: queued.text,
         ...(queued.attachments !== undefined && queued.attachments.length > 0
@@ -542,7 +578,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
             level: 'info',
             title: t('composer.send.withdrawnTitle'),
             body: t('composer.send.withdrawnBody', { text: queued.text }),
-            conversationId: conversation.id,
+            target: { kind: 'conversation', conversationId: targetConversationId },
           })
           return
         }
@@ -554,7 +590,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
             level: 'warning',
             title: t('composer.send.enteredExecutionTitle'),
             body: t('composer.send.enteredExecutionBody'),
-            conversationId: conversation.id,
+            target: { kind: 'conversation', conversationId: targetConversationId },
           })
           return
         }
@@ -565,25 +601,26 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
           level: 'warning',
           title: t('composer.send.cannotWithdrawTitle'),
           body: t('composer.send.cannotWithdrawBody', { status: res.status }),
-          conversationId: conversation.id,
+          target: { kind: 'conversation', conversationId: targetConversationId },
         })
       }
     } catch (err) {
-      if (mountedRef.current) {
-        notifyError(t('composer.send.withdrawFailed'), err)
+      if (isActiveMountedConversation(targetConversationId)) {
+        notifyErrorFor(targetConversationId, t('composer.send.withdrawFailed'), err)
       }
     } finally {
       withdrawingRef.current = false
     }
-  }, [conversation.id, applyHistoryEdit, notifyError, pushNotice, t])
+  }, [conversation.id, applyHistoryEdit, isActiveMountedConversation, notifyErrorFor, pushNotice, t])
 
   const send = useCallback(async (busyMode: WhenBusy = 'steer', strict = false): Promise<void> => {
     const draft = liveDraftRef.current.text
     const payload = draft.trim()
     if (payload === '' || sendingRef.current || uploadingRef.current > 0 || commandPendingRef.current) {
-      if (strict) throw new Error('Current draft empty or a composer operation is already in flight')
+      if (strict) throw new Error(t('composer.send.busyOrEmpty'))
       return
     }
+    const targetConversationId = conversation.id
     // Sending is disallowed while the environment is unsaved or still saving
     // (covers both Enter and the send button).
     if (envBlockedRef.current) {
@@ -592,9 +629,9 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
         level: 'warning',
         title: t('composer.env.saveOrCancelFirst'),
         body: envBlocker.reason ?? undefined,
-        conversationId: conversation.id,
+        target: { kind: 'conversation', conversationId: targetConversationId },
       })
-      if (strict) throw new Error('Save or cancel the starting environment changes first')
+      if (strict) throw new Error(t('composer.env.saveOrCancelFirst'))
       return
     }
     // Plugin slash commands: executed when the draft's first token exactly
@@ -630,37 +667,65 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     setEditingEntryId(null)
     syncLiveDraft('', null, attachments)
     try {
-      await conversationsApi.submitInput(conversation.id, {
+      await conversationsApi.submitInput(targetConversationId, {
         text: payload,
         origin: 'human',
         ...(targetEntryId !== null ? { replaceFromEntryId: targetEntryId } : working ? { whenBusy: busyMode } : {}),
         ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.artifactId) } : {}),
       })
-      liveDraftRef.current = {
-        ...liveDraftRef.current,
-        attachments: liveDraftRef.current.attachments.filter((artifactId) => !sentAttachments.has(artifactId)),
+      if (isActiveConversation(targetConversationId)) {
+        liveDraftRef.current = {
+          ...liveDraftRef.current,
+          attachments: liveDraftRef.current.attachments.filter((artifactId) => !sentAttachments.has(artifactId)),
+        }
+        setAttachments((current) => current.filter((attachment) => !sentAttachments.has(attachment.artifactId)))
       }
-      setAttachments((current) => current.filter((attachment) => !sentAttachments.has(attachment.artifactId)))
     } catch (err) {
       // Restore text and edit target only while the Composer is still in the
       // expected post-clear state; if the user already started new input or
       // picked another edit target, keep the present state — the old target
       // never flows back.
-      const restore = shouldRestoreEditOnFailure(liveDraftRef.current, expectedAfterClear)
-      if (restore) {
-        setText(draft)
-        if (frozenDraft.targetEntryId !== null) setEditingEntryId(frozenDraft.targetEntryId)
-        syncLiveDraft(draft, frozenDraft.targetEntryId, attachments)
+      if (isActiveConversation(targetConversationId)) {
+        const restore = shouldRestoreEditOnFailure(liveDraftRef.current, expectedAfterClear)
+        if (restore) {
+          setText(draft)
+          if (frozenDraft.targetEntryId !== null) setEditingEntryId(frozenDraft.targetEntryId)
+          syncLiveDraft(draft, frozenDraft.targetEntryId, attachments)
+        }
+        if (mountedRef.current) {
+          notifyErrorFor(
+            targetConversationId,
+            targetEntryId !== null ? t('composer.send.updateFailed') : t('composer.send.sendFailed'),
+            err,
+          )
+        }
       }
-      notifyError(targetEntryId !== null ? t('composer.send.updateFailed') : t('composer.send.sendFailed'), err)
       if (strict) throw err
     } finally {
       sendingRef.current = false
-      setSending(false)
+      if (isActiveConversation(targetConversationId)) {
+        setSending(false)
+        publishHiddenDirty()
+      }
       onSendingChange?.(false)
-      publishHiddenDirty()
     }
-  }, [text, attachments, editingEntryId, working, runSlashCommand, syncLiveDraft, onSendingChange, notifyError, pushNotice, conversation.id, uploadingRef, envBlocker, executePluginCommand, slashPluginCommands, publishHiddenDirty, t])
+  }, [
+    attachments,
+    editingEntryId,
+    working,
+    runSlashCommand,
+    syncLiveDraft,
+    onSendingChange,
+    notifyErrorFor,
+    pushNotice,
+    conversation.id,
+    envBlocker,
+    executePluginCommand,
+    isActiveConversation,
+    slashPluginCommands,
+    publishHiddenDirty,
+    t,
+  ])
 
   // Explicit text submission: consumes no draft / edit anchor / attachments
   // (content not typed by the user, e.g. plugin command output). Shares the
@@ -669,37 +734,42 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
   const sendExplicit = useCallback(async (raw: string, whenBusy?: WhenBusy): Promise<void> => {
     const payload = raw.trim()
     if (payload === '' || sendingRef.current || uploadingRef.current > 0) {
-      throw new Error('composer_send_invalid')
+      throw new Error(t('composer.send.busyOrEmpty'))
     }
+    const targetConversationId = conversation.id
     if (envBlockedRef.current) {
       pushNotice({
         type: 'notification',
         level: 'warning',
         title: t('composer.env.saveOrCancelFirst'),
         body: envBlocker.reason ?? undefined,
-        conversationId: conversation.id,
+        target: { kind: 'conversation', conversationId: targetConversationId },
       })
-      throw new Error('composer_env_blocked')
+      throw new Error(t('composer.env.saveOrCancelFirst'))
     }
     sendingRef.current = true
     setSending(true)
     onSendingChange?.(true)
     try {
-      await conversationsApi.submitInput(conversation.id, {
+      await conversationsApi.submitInput(targetConversationId, {
         text: payload,
         origin: 'human',
         ...(working ? { whenBusy: whenBusy ?? 'steer' } : {}),
       })
     } catch (err) {
-      notifyError(t('composer.send.sendFailed'), err)
+      if (isActiveMountedConversation(targetConversationId)) {
+        notifyErrorFor(targetConversationId, t('composer.send.sendFailed'), err)
+      }
       throw err
     } finally {
       sendingRef.current = false
-      setSending(false)
+      if (isActiveConversation(targetConversationId)) {
+        setSending(false)
+        publishHiddenDirty()
+      }
       onSendingChange?.(false)
-      publishHiddenDirty()
     }
-  }, [working, onSendingChange, notifyError, pushNotice, conversation.id, uploadingRef, envBlocker, publishHiddenDirty, t])
+  }, [working, onSendingChange, notifyErrorFor, pushNotice, conversation.id, envBlocker, isActiveConversation, isActiveMountedConversation, publishHiddenDirty, t])
 
   const readLiveDraft = useCallback((): string => liveDraftRef.current.text, [])
 

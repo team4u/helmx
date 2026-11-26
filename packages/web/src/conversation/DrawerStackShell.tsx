@@ -10,7 +10,7 @@
  * - Keeps the topmost 3 frames mounted under React 19 `<Activity>` so stepping
  *   back restores scroll position, expanded folds, and composer drafts.
  */
-import { Activity, Suspense, lazy, useEffect, useRef } from 'react'
+import { Activity, Suspense, lazy, useRef } from 'react'
 import {
   Button,
   Dialog,
@@ -37,15 +37,8 @@ import {
   useStoreActions,
 } from '../lib/store-context.js'
 import { ConversationPane } from './ConversationPane.js'
-import {
-  clearComposerDirty,
-  isComposerDirtySnapshot,
-  setComposerDirty,
-} from './composer-dirty.js'
-import {
-  ConversationDirtySinkContext,
-  type ConversationDirtySink,
-} from './conversation-window-model.js'
+import { ConversationDirtySinkContext } from './conversation-window-model.js'
+import { useActivityFrameLifecycle } from './use-activity-frame-lifecycle.js'
 import {
   resolveDrawerDialogAriaLabel,
   resolveDrawerFrameLabel,
@@ -70,49 +63,12 @@ function DrawerConversationFrame({
   visible: boolean
 }) {
   const { loadConversationDetail } = useStoreActions()
-  const frameDirtyKey = `drawer-conversation:${conversationId}`
-  const visibleRef = useRef(visible)
-  visibleRef.current = visible
-  const mountedRef = useRef(true)
-  useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-    }
-  }, [])
-  const dirtySinkRef = useRef<ConversationDirtySink | null>(null)
-  if (dirtySinkRef.current === null) {
-    dirtySinkRef.current = { current: null }
-  }
-  const dirtySink = dirtySinkRef.current
-  dirtySink.publish = (snapshot) => {
-    if (!mountedRef.current || visibleRef.current) return
-    if (isComposerDirtySnapshot(snapshot)) setComposerDirty(frameDirtyKey, snapshot, conversationId)
-    else clearComposerDirty(frameDirtyKey)
-  }
-  const wasVisibleRef = useRef(visible)
-
-  // Preserve dirty-draft visibility while hidden under another drawer layer.
-  useEffect(() => {
-    if (visible) {
-      clearComposerDirty(frameDirtyKey)
-      return
-    }
-    const snapshot = dirtySink.current
-    if (snapshot !== null && isComposerDirtySnapshot(snapshot)) {
-      setComposerDirty(frameDirtyKey, snapshot, conversationId)
-    } else {
-      clearComposerDirty(frameDirtyKey)
-    }
-    return () => clearComposerDirty(frameDirtyKey)
-  }, [visible, frameDirtyKey, conversationId, dirtySink])
-
-  useEffect(() => {
-    const wasVisible = wasVisibleRef.current
-    wasVisibleRef.current = visible
-    if (!visible || wasVisible) return
-    void loadConversationDetail(conversationId, true, { silent: true })
-  }, [visible, conversationId, loadConversationDetail])
+  const dirtySink = useActivityFrameLifecycle({
+    frameDirtyKey: `drawer-conversation:${conversationId}`,
+    conversationId,
+    visible,
+    loadConversationDetail,
+  })
 
   return (
     <ConversationDirtySinkContext.Provider value={dirtySink}>

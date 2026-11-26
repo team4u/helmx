@@ -20,7 +20,10 @@ import type {
   ResolvedTarget,
   ThemePreference,
 } from '../lib/types.js'
-import type { ConversationBackgroundIndex } from '../shell/background-activity-model.js'
+import {
+  isHumanSelectableProfile,
+  type ConversationBackgroundIndex,
+} from '../shell/conversation-status-model.js'
 import {
   formatModShiftShortcut,
   formatModShortcut,
@@ -28,7 +31,6 @@ import {
   selectRecentConversationsForPalette,
   type HelmxShortcutDetail,
 } from '../shell/shortcuts-model.js'
-import { isHumanSelectableProfile } from '../shell/sidebar-model.js'
 import type { PaletteCommandRow, PaletteSearchHitRow } from './command-palette-model.js'
 
 export function buildPaletteContextCommands(input: {
@@ -69,6 +71,7 @@ export function buildPaletteContextCommands(input: {
       shortcut: formatModShortcut('I'),
       icon: 'message-square',
       keywords: ['focus', 'composer', 'input', 'chat', 'message', '聚焦', '输入', '对话框'],
+      skipCloseAutoFocus: true,
       run: () => {
         const detail: HelmxShortcutDetail = { action: 'focus-composer', panel: activePanel }
         const dispatch = (): void => {
@@ -86,6 +89,7 @@ export function buildPaletteContextCommands(input: {
       shortcut: 'Ctrl+L',
       icon: 'sparkles',
       keywords: ['model', 'picker', 'Model', 'Switch model', '模型', '切换模型'],
+      skipCloseAutoFocus: true,
       run: () => {
         const detail: HelmxShortcutDetail = { action: 'toggle-model-picker', panel: activePanel }
         window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
@@ -358,6 +362,7 @@ export function buildPaletteUtilityCommands(input: {
       shortcut: formatModShortcut('/'),
       icon: 'terminal',
       keywords: ['shortcuts', 'keyboard', 'help', 'hotkey', 'hotkeys', '快捷键', '键盘', '帮助'],
+      skipCloseAutoFocus: true,
       run: () => openShortcuts(),
     },
     {

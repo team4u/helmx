@@ -496,7 +496,7 @@ describe("command-palette-modal", () => {
     const uiContributions: PluginUiContribution[] = [
       {
         pluginId: 'ext:diag',
-        surface: 'command',
+        surface: 'commandPalette',
         spec: {
           id: 'inspect',
           title: 'Inspect session state',
@@ -508,7 +508,7 @@ describe("command-palette-modal", () => {
       },
       {
         pluginId: 'ext:diag',
-        surface: 'command',
+        surface: 'commandPalette',
         spec: {
           id: 'other-only',
           title: 'Out of scope command',

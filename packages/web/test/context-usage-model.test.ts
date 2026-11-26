@@ -10,8 +10,11 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import { contextUsageLabel } from '../src/conversation/context-usage-model.js'
 import { formatTokens } from '../src/lib/format.js'
+
+const enT = createWebTranslator('en')
 
 test('formatTokens：pi footer 分档（<1000 原值；<10000 一位小数 k；<1M 取整 k；<10M 一位小数 M）', { timeout: 60_000 }, () => {
   assert.equal(formatTokens(0), '0')
@@ -31,45 +34,45 @@ test('formatTokens：pi footer 分档（<1000 原值；<10000 一位小数 k；<
 
 test('窗口已知：pi 同款百分比一位小数 + 窗口分母', { timeout: 60_000 }, () => {
   // 37.5%/200k（任务示例）
-  assert.equal(contextUsageLabel({ tokens: 75_000, contextWindow: 200_000 })?.text, '37.5%/200k')
-  assert.equal(contextUsageLabel({ tokens: 25_000, contextWindow: 100_000 })?.text, '25.0%/100k')
-  assert.equal(contextUsageLabel({ tokens: 1_200, contextWindow: 128_000 })?.text, '0.9%/128k')
+  assert.equal(contextUsageLabel({ tokens: 75_000, contextWindow: 200_000 }, enT)?.text, '37.5%/200k')
+  assert.equal(contextUsageLabel({ tokens: 25_000, contextWindow: 100_000 }, enT)?.text, '25.0%/100k')
+  assert.equal(contextUsageLabel({ tokens: 1_200, contextWindow: 128_000 }, enT)?.text, '0.9%/128k')
 })
 
 test('色调阈值严格 >90 / >70：90 与 70 本身不越档', { timeout: 60_000 }, () => {
-  assert.equal(contextUsageLabel({ tokens: 90_000, contextWindow: 100_000 })?.tone, 'warn')
-  assert.equal(contextUsageLabel({ tokens: 90_001, contextWindow: 100_000 })?.tone, 'high')
-  assert.equal(contextUsageLabel({ tokens: 70_000, contextWindow: 100_000 })?.tone, 'default')
-  assert.equal(contextUsageLabel({ tokens: 70_001, contextWindow: 100_000 })?.tone, 'warn')
-  assert.equal(contextUsageLabel({ tokens: 1_000, contextWindow: 100_000 })?.tone, 'default')
+  assert.equal(contextUsageLabel({ tokens: 90_000, contextWindow: 100_000 }, enT)?.tone, 'warn')
+  assert.equal(contextUsageLabel({ tokens: 90_001, contextWindow: 100_000 }, enT)?.tone, 'high')
+  assert.equal(contextUsageLabel({ tokens: 70_000, contextWindow: 100_000 }, enT)?.tone, 'default')
+  assert.equal(contextUsageLabel({ tokens: 70_001, contextWindow: 100_000 }, enT)?.tone, 'warn')
+  assert.equal(contextUsageLabel({ tokens: 1_000, contextWindow: 100_000 }, enT)?.tone, 'default')
 })
 
 test('tokens=null（压缩后尚无有效 usage）：窗口已知显示 ?/窗口，未知显示 ?', { timeout: 60_000 }, () => {
-  const known = contextUsageLabel({ tokens: null, contextWindow: 200_000 })
+  const known = contextUsageLabel({ tokens: null, contextWindow: 200_000 }, enT)
   assert.equal(known?.text, '?/200k')
   assert.equal(known?.tone, 'default', '未知占比不得着色为 warn/high')
-  const unknownWindow = contextUsageLabel({ tokens: null })
+  const unknownWindow = contextUsageLabel({ tokens: null }, enT)
   assert.equal(unknownWindow?.text, '?')
   assert.equal(unknownWindow?.tone, 'default')
 })
 
 test('窗口未知：只显示紧凑估算量，绝不显示伪百分比或伪分母', { timeout: 60_000 }, () => {
-  const label = contextUsageLabel({ tokens: 12_345 })
+  const label = contextUsageLabel({ tokens: 12_345 }, enT)
   assert.equal(label?.text, '12k')
   assert.ok(!label!.text.includes('%'), '窗口未知不得显示伪百分比')
   assert.equal(label?.tone, 'default', '窗口未知不得着色为 warn/high')
   // 高占用但窗口未知：同样只显示估算量且不着色。
-  const huge = contextUsageLabel({ tokens: 999_999 })
+  const huge = contextUsageLabel({ tokens: 999_999 }, enT)
   assert.equal(huge?.text, '1000k')
   assert.equal(huge?.tone, 'default')
 })
 
 test('tokens=0（空会话/刚 reset）与压缩中：0 不渲染；压缩中显示精简中', { timeout: 60_000 }, () => {
-  assert.equal(contextUsageLabel({ tokens: 0 }), null)
-  assert.equal(contextUsageLabel({ tokens: 0, contextWindow: 128_000 }), null)
-  const compacting = contextUsageLabel({ tokens: 0, contextWindow: 128_000, compacting: true })
+  assert.equal(contextUsageLabel({ tokens: 0 }, enT), null)
+  assert.equal(contextUsageLabel({ tokens: 0, contextWindow: 128_000 }, enT), null)
+  const compacting = contextUsageLabel({ tokens: 0, contextWindow: 128_000, compacting: true }, enT)
   assert.equal(compacting?.text, 'Compacting…')
   assert.equal(compacting?.tone, 'default')
   // tokens=null 但压缩进行中：同样显示精简中（压缩未完成时占比未知是常态）。
-  assert.equal(contextUsageLabel({ tokens: null, contextWindow: 128_000, compacting: true })?.text, 'Compacting…')
+  assert.equal(contextUsageLabel({ tokens: null, contextWindow: 128_000, compacting: true }, enT)?.text, 'Compacting…')
 })

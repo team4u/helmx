@@ -8,7 +8,7 @@
  */
 import type { ArtifactKind, ArtifactMetadata, HelmxLocale, WorkbenchPanelBadgeSpec, WorkbenchPanelSpec } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, parseLocalizedText, resolveLocalizedText } from '@helmx/protocol/browser'
-import { createWebTranslator, englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import { createWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
 export type WorkbenchBadgeTone = 'warn' | 'accent' | 'neutral'
@@ -208,7 +208,7 @@ export function countDeliverableArtifacts(artifacts: ReadonlyArray<ArtifactMetad
   return count
 }
 
-export function artifactKindLabel(kind: ArtifactKind, t: WebMessageTranslator = englishWebTranslator): string {
+export function artifactKindLabel(kind: ArtifactKind, t: WebMessageTranslator): string {
   if (kind === 'registered') return t('conv.workbench.kindRegistered')
   if (kind === 'upload') return t('conv.workbench.kindUpload')
   return t('conv.workbench.kindSpill')
@@ -221,7 +221,7 @@ export function isImageArtifact(mimeType: string): boolean {
 export function artifactFormatLabel(
   mimeType: string,
   filename: string,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   const mime = mimeType.toLowerCase()
   if (mime.startsWith('image/')) return t('conv.workbench.formatImage')

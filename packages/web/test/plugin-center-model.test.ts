@@ -303,7 +303,7 @@ test('pluginStatusTabLabel: en 与 zh-CN 状态筛选标签映射', { timeout: 6
   const en = createWebTranslator('en')
   const zh = createWebTranslator('zh-CN')
 
-  assert.equal(pluginStatusTabLabel('all'), 'All')
+  assert.equal(pluginStatusTabLabel('all', en), 'All')
   assert.equal(pluginStatusTabLabel('views', en), 'With views')
   assert.equal(pluginStatusTabLabel('enabled', en), 'Enabled')
   assert.equal(pluginStatusTabLabel('disabled', en), 'Disabled')

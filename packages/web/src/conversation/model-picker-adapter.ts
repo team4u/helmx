@@ -58,7 +58,7 @@ export function useModelPickerControlAdapter(conversationId?: number): {
         type: 'notification',
         level: tone,
         title: message,
-        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(conversationId !== undefined ? { target: { kind: 'conversation', conversationId } } : {}),
       })
     },
     [actions, conversationId],

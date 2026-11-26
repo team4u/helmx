@@ -40,7 +40,7 @@ export function useTimelineEntryActions(
         level: 'info',
         title: t('conv.fork.createdTitle'),
         body: `#${forked.id} ${forked.title}`,
-        conversationId: forked.id,
+        target: { kind: 'conversation', conversationId: forked.id },
       })
     } catch (err) {
       pushNotice({
@@ -48,7 +48,7 @@ export function useTimelineEntryActions(
         level: 'error',
         title: t('conv.fork.failedTitle'),
         body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
+        target: { kind: 'conversation', conversationId: conversation.id },
       })
     }
   })
@@ -66,7 +66,7 @@ export function useTimelineEntryActions(
           level: 'warning',
           title: t('conv.withdraw.cannotTitle'),
           body: t('conv.withdraw.enteredExecutionBody', { status: res.status }),
-          conversationId: conversation.id,
+          target: { kind: 'conversation', conversationId: conversation.id },
         })
       }
     } catch (err) {
@@ -75,7 +75,7 @@ export function useTimelineEntryActions(
         level: 'error',
         title: t('conv.withdraw.failedTitle'),
         body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
+        target: { kind: 'conversation', conversationId: conversation.id },
       })
     }
   })
@@ -95,7 +95,7 @@ export function useTimelineEntryActions(
         level: 'error',
         title: t('conv.turnFailed.retryFailedTitle'),
         body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
+        target: { kind: 'conversation', conversationId: conversation.id },
       })
     }
   })

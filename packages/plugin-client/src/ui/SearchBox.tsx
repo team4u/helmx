@@ -15,7 +15,7 @@
  *
  * This file only exports components and TS types (Fast Refresh friendly).
  */
-import { useContext, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from 'react'
+import { useContext, type AriaAttributes, type AriaRole, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import { HelmxIcon } from '../icons.js'
 import { usePluginTranslator } from '../i18n.js'
 import { uiCopy } from '../ui-copy.js'
@@ -77,6 +77,12 @@ export interface SearchBoxProps {
    * Defaults to `variant === 'toolbar'` or when rendered inside a `ScreenToolbar`.
    */
   clearOnEscape?: boolean
+  /** Optional combobox / listbox role and ARIA attributes forwarded to the inner text input. */
+  inputRole?: AriaRole
+  ariaAutocomplete?: AriaAttributes['aria-autocomplete']
+  ariaControls?: string
+  ariaExpanded?: boolean
+  ariaActiveDescendant?: string
 }
 
 /** Unified search input shell over the host container-class vocabulary; state stays with the caller. */
@@ -102,6 +108,11 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
     clearable = true,
     onCleared,
     clearOnEscape,
+    inputRole,
+    ariaAutocomplete,
+    ariaControls,
+    ariaExpanded,
+    ariaActiveDescendant,
   } = props
   const escapeClearEnabled = clearOnEscape ?? (variant === 'toolbar' || inScreenToolbar)
 
@@ -138,7 +149,12 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
         className={inputClassName}
         value={value}
         placeholder={placeholder}
+        role={inputRole}
         aria-label={ariaLabel}
+        aria-autocomplete={ariaAutocomplete}
+        aria-controls={ariaControls}
+        aria-expanded={ariaExpanded}
+        aria-activedescendant={ariaActiveDescendant}
         disabled={disabled}
         onChange={(event) => {
           onChange(event.target.value)

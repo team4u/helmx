@@ -1077,7 +1077,9 @@ describe("unread-visibility", () => {
       })
       assert.deepEqual(conv4Cursors, [null, 'c1', 'c2'], '最多补拉 1 页后停止在 c3')
       assert.equal(h.store().conversationDetails[4]?.nextCursor, 'c3')
-      const infoNotices = h.store().notices.filter((n) => n.level === 'info' && n.conversationId === 4)
+      const infoNotices = h
+        .store()
+        .notices.filter((n) => n.level === 'info' && n.target?.kind === 'conversation' && n.target.conversationId === 4)
       assert.equal(infoNotices.length, 1, '仅加载过程步骤且仍有更早页时应发出 1 条 info 提示')
 
       // 3. Search jump (stepHighlightedEntry -> loadEarlierEntries({ quiet: true })) never emits info notice
@@ -1087,7 +1089,10 @@ describe("unread-visibility", () => {
       await h.waitFor((s) => s.conversationDetails[2]?.entries.some((e) => e.id === '5') === true)
       assert.deepEqual(conv2Cursors, [null, 'c1', 'c2', 'c3'])
       assert.equal(
-        h.store().notices.filter((n) => n.level === 'info' && n.conversationId === 2).length,
+        h
+          .store()
+          .notices.filter((n) => n.level === 'info' && n.target?.kind === 'conversation' && n.target.conversationId === 2)
+          .length,
         0,
         '搜索跳转静默分页不得产生过程步骤 info 提示',
       )

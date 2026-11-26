@@ -8,13 +8,14 @@
  *   plugin changes never cascade-re-render mounted plugin views;
  * - component-function validation: a non-function export fails explicitly.
  */
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import type { ComponentType, ReactNode } from 'react'
+import { useSyncExternalStore } from 'react'
+import type { ReactNode } from 'react'
 import type { ClientComponentRef, ComposerController } from '@helmx/protocol/browser'
-import { Button, HelmxIcon, LoadingState, createPluginClientContext, PluginClientContext, PluginScope, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
+import { Button, HelmxIcon, LoadingState, PluginClientContext, PluginScope, ViewBoundary } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
+import { getPluginClientCacheRevision, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
 import { usePluginClientHash } from '../lib/store-context.js'
+import { usePluginClientComponent } from './use-plugin-client-component.js'
 
 export interface PluginUiViewProps {
   pluginId: string
@@ -30,11 +31,6 @@ export interface PluginUiViewProps {
   label?: string
 }
 
-type ClientState =
-  | { phase: 'loading' }
-  | { phase: 'error'; message: string }
-  | { phase: 'ready'; Component: ComponentType<Record<string, unknown>> }
-
 export function PluginUiView(props: PluginUiViewProps): ReactNode {
   const { pluginId, spec } = props
   const clientRef = spec.client
@@ -47,8 +43,6 @@ export function PluginUiView(props: PluginUiViewProps): ReactNode {
   if (clientRef === undefined) {
     return <MissingTrackError pluginId={pluginId} />
   }
-  // Snapshot rebuilds / per-plugin reconciliation invalidate the cache too:
-  // mounted views must reload instead of keeping the old component (or losing its styles).
   return (
     <ClientPluginUiView
       key={JSON.stringify([pluginId, clientRef.module, clientRef.export, revision])}
@@ -69,51 +63,13 @@ function ClientPluginUiView({
   label,
 }: PluginUiViewProps & { clientRef: ClientComponentRef; expectedHash?: string }): ReactNode {
   const { t } = useWebLocale()
-  const port = usePluginClientHost()
-  const [retry, setRetry] = useState(0)
-  const [client, setClient] = useState<ClientState>(() => {
-    const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export, expectedHash)
-    return cached !== undefined ? { phase: 'ready', Component: cached } : { phase: 'loading' }
+  const { ctx, client, retryModule } = usePluginClientComponent<Record<string, unknown>>({
+    pluginId,
+    clientRef,
+    expectedHash,
+    conversationId,
+    composer,
   })
-
-  const ctx = useMemo(
-    () => createPluginClientContext(port, pluginId, conversationId, composer),
-    [port, pluginId, conversationId, composer],
-  )
-
-  useEffect(() => {
-    let cancelled = false
-    if (getCachedClientComponent(pluginId, clientRef.module, clientRef.export, expectedHash) === undefined) {
-      setClient((prev) => (prev.phase === 'loading' ? prev : { phase: 'loading' }))
-    }
-    void (async () => {
-      try {
-        const loaded = await loadPluginClientModule(pluginId, clientRef.module, expectedHash)
-        const exported = requireClientExport(pluginId, clientRef.module, clientRef.export, loaded.module)
-        if (typeof exported !== 'function') {
-          throw new PluginClientError(
-            'client_export_not_component',
-            `Plugin ${pluginId} module ${clientRef.module} export ${clientRef.export} is not a component function`,
-            0,
-          )
-        }
-        if (!cancelled) {
-          const Component = exported as ComponentType<Record<string, unknown>>
-          setClient((prev) => (prev.phase === 'ready' && prev.Component === Component ? prev : { phase: 'ready', Component }))
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setClient({
-            phase: 'error',
-            message: err instanceof Error ? err.message : String(err),
-          })
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [pluginId, clientRef.module, clientRef.export, expectedHash, retry])
 
   if (client.phase === 'loading') {
     return (
@@ -129,7 +85,7 @@ function ClientPluginUiView({
         <div>
           <strong>{t('ui.pluginUi.loadFailedTitle', { pluginId })}</strong>
           <p className="selectable">{client.message}</p>
-          <Button size="sm" onClick={() => { setClient({ phase: 'loading' }); setRetry((value) => value + 1) }}>
+          <Button size="sm" onClick={retryModule}>
             {t('ui.pluginUi.retry')}
           </Button>
         </div>

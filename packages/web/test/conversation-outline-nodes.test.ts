@@ -13,6 +13,7 @@ import { test } from 'node:test'
 import type { ConversationEntry } from '@helmx/protocol'
 import type { QualifiedRenderer, QualifiedToolView } from '../src/conversation/timeline-model.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import {
   buildConversationOutline,
   filterOutlineNodes,
@@ -23,6 +24,8 @@ import {
   type OutlineCardNode,
   type OutlineHeadingNode,
 } from '../src/conversation/outline-model.js'
+
+const enT = createWebTranslator('en')
 
 // ---------------------------------------------------------------------------
 // 夹具
@@ -99,7 +102,7 @@ test('无标题正文回合：生成 assistant 摘要节点（首行摘要、全
     humanEntry('1', '帮我总结现状'),
     assistantTextEntry('2', '现状分三块：\n内核、插件与 Web。'),
   ])
-  const nodes = buildConversationOutline(items)
+  const nodes = buildConversationOutline(items, undefined, enT)
   assert.deepEqual(kindsOf(nodes), ['human', 'assistant'])
 
   const assistant = nodes[1] as OutlineAssistantNode
@@ -116,7 +119,7 @@ test('B 智能合并：有 Markdown 标题时不重复输出 assistant 摘要节
     humanEntry('1', '分析架构'),
     assistantTextEntry('2', '# 架构总览\n正文。\n## 内核模块\n正文。'),
   ])
-  const nodes = buildConversationOutline(items)
+  const nodes = buildConversationOutline(items, undefined, enT)
   assert.deepEqual(kindsOf(nodes), ['human', 'heading', 'heading'], '只有标题节点，无 assistant 摘要节点')
   assert.deepEqual(
     (nodes.slice(1) as OutlineHeadingNode[]).map((h) => [h.headingIndex, h.entryId]),
@@ -144,7 +147,7 @@ test('正文与顶层业务卡共存：assistant 摘要与卡片按段落真实�
     },
     toolResultEntry('3', 'call-1', 'subagent'),
   ], { toolViews: TOOL_VIEWS })
-  const nodesA = buildConversationOutline(textFirst)
+  const nodesA = buildConversationOutline(textFirst, undefined, enT)
   assert.deepEqual(kindsOf(nodesA), ['human', 'assistant', 'card'], '正文摘要先于卡片')
 
   // 卡片在前、正文在后
@@ -154,7 +157,7 @@ test('正文与顶层业务卡共存：assistant 摘要与卡片按段落真实�
     toolResultEntry('3', 'call-1', 'subagent'),
     assistantTextEntry('4', '构建已完成，产物就绪。'),
   ], { toolViews: TOOL_VIEWS })
-  const nodesB = buildConversationOutline(cardFirst)
+  const nodesB = buildConversationOutline(cardFirst, undefined, enT)
   assert.deepEqual(kindsOf(nodesB), ['human', 'card', 'assistant'], '卡片先于正文摘要')
 })
 
@@ -170,7 +173,7 @@ test('同一助手回合标题与业务卡按时间线真实顺序排列，headi
     toolResultEntry('4', 'call-1', 'subagent'),
     assistantTextEntry('5', '## 执行后总结'),
   ], { toolViews: TOOL_VIEWS })
-  const nodes = buildConversationOutline(items)
+  const nodes = buildConversationOutline(items, undefined, enT)
   assert.deepEqual(kindsOf(nodes), ['human', 'heading', 'card', 'heading'])
   assert.deepEqual(
     nodes.filter((node): node is OutlineHeadingNode => node.kind === 'heading').map((node) => [node.headingIndex, node.text]),
@@ -184,7 +187,7 @@ test('无正文有顶层 tool.view 业务卡：卡片代表回合，不产生空
     toolCallEntry('2', 'call-1', 'subagent', { prompt: '调研 outline 模块现状', description: '调研' }),
     toolResultEntry('3', 'call-1', 'subagent'),
   ], { toolViews: TOOL_VIEWS })
-  const nodes = buildConversationOutline(items)
+  const nodes = buildConversationOutline(items, undefined, enT)
   assert.deepEqual(kindsOf(nodes), ['human', 'card'], '无正文时不输出空 assistant 节点')
 
   const card = nodes[1] as OutlineCardNode
@@ -217,7 +220,7 @@ test('step-group 内普通工具与 thinking 不进大纲：只有命中 tool.vi
     toolResultEntry('4', 'call-edit', 'edit'),
     toolResultEntry('5', 'call-sub', 'subagent'),
   ], { toolViews: TOOL_VIEWS })
-  const nodes = buildConversationOutline(items)
+  const nodes = buildConversationOutline(items, undefined, enT)
   assert.deepEqual(kindsOf(nodes), ['human', 'card'], '普通 bash/read/edit 与 thinking 均不进大纲')
   const card = nodes[1] as OutlineCardNode
   assert.equal(card.cardId, 'tool:call-sub')
@@ -229,7 +232,7 @@ test('tool.view 业务卡运行中：状态 running 保留在节点数据中', {
     humanEntry('1', '跑一个后台工作流'),
     toolCallEntry('2', 'call-1', 'subagent', { prompt: '长任务' }),
   ], { toolViews: TOOL_VIEWS, working: true })
-  const nodes = buildConversationOutline(items)
+  const nodes = buildConversationOutline(items, undefined, enT)
   const card = nodes.find((n) => n.kind === 'card') as OutlineCardNode
   assert.ok(card !== undefined)
   assert.equal(card.status, 'running')
@@ -240,7 +243,7 @@ test('plugin-card（timeline.renderer 接管卡）：helmx.input 文本首行摘
     [humanEntry('1', '开始任务'), backgroundReportEntry],
     { timelineRenderers: RENDERERS },
   )
-  const nodes = buildConversationOutline(items)
+  const nodes = buildConversationOutline(items, undefined, enT)
   assert.deepEqual(kindsOf(nodes), ['human', 'card'])
 
   const card = nodes[1] as OutlineCardNode
@@ -252,9 +255,9 @@ test('plugin-card（timeline.renderer 接管卡）：helmx.input 文本首行摘
 })
 
 test('summarizePluginCardEntry：非 helmx.input 或空文本时回退稳定契约标识，绝不读插件私有渲染内容', { timeout: 60_000 }, () => {
-  const fallback = summarizePluginCardEntry({ id: '1', kind: 'helmx.report' })
+  const fallback = summarizePluginCardEntry({ id: '1', kind: 'helmx.report' }, enT)
   assert.equal(fallback.label, 'helmx.report')
-  const empty = summarizePluginCardEntry({ id: '2', kind: 'helmx.input', data: { text: '   ', origin: 'human' } })
+  const empty = summarizePluginCardEntry({ id: '2', kind: 'helmx.input', data: { text: '   ', origin: 'human' } }, enT)
   assert.equal(empty.label, 'helmx.input')
 })
 
@@ -268,7 +271,7 @@ test('无正文无卡片回合：live 标注生成中、最新失败回合标注
     working: true,
     live: { conversationId: 10, text: '', thinking: '思考中…', tools: [], updatedAt: 1 },
   })
-  const liveNodes = buildConversationOutline(liveItems)
+  const liveNodes = buildConversationOutline(liveItems, undefined, enT)
   const liveAssistant = liveNodes.find((n) => n.kind === 'assistant') as OutlineAssistantNode
   assert.ok(liveAssistant !== undefined)
   assert.equal(liveAssistant.status, 'generating')
@@ -281,7 +284,7 @@ test('无正文无卡片回合：live 标注生成中、最新失败回合标注
     toolCallEntry('2', 'call-1', 'bash', { command: 'ls' }),
     toolResultEntry('3', 'call-1', 'bash'),
   ])
-  const settledNodes = buildConversationOutline(settledItems)
+  const settledNodes = buildConversationOutline(settledItems, undefined, enT)
   const settledAssistant = settledNodes.find((n) => n.kind === 'assistant') as OutlineAssistantNode
   assert.ok(settledAssistant !== undefined)
   assert.equal(settledAssistant.status, 'no-content')
@@ -296,7 +299,7 @@ test('无正文无卡片回合：live 标注生成中、最新失败回合标注
     toolCallEntry('5', 'call-2', 'bash', { command: 'pwd' }),
     toolResultEntry('6', 'call-2', 'bash'),
   ])
-  const failedNodes = buildConversationOutline(failedItems, { latestAssistantTurnFailed: true })
+  const failedNodes = buildConversationOutline(failedItems, { latestAssistantTurnFailed: true }, enT)
   const assistants = failedNodes.filter((n) => n.kind === 'assistant') as OutlineAssistantNode[]
   assert.equal(assistants.length, 2)
   assert.equal(assistants[0]!.status, 'no-content', '失败标注只作用于最新回合')
@@ -320,7 +323,7 @@ function buildMixedNodes() {
     ],
     { toolViews: TOOL_VIEWS, timelineRenderers: RENDERERS },
   )
-  return buildConversationOutline(items)
+  return buildConversationOutline(items, undefined, enT)
 }
 
 test('搜索：助手全文、卡片摘要与标题均可命中，且保留父提问节点', { timeout: 60_000 }, () => {
@@ -367,7 +370,7 @@ test('三态过滤模式：dialogue 过滤 card 与 agent/trigger 输入；quest
     ],
     { toolViews: TOOL_VIEWS, timelineRenderers: RENDERERS },
   )
-  const nodes = buildConversationOutline(items)
+  const nodes = buildConversationOutline(items, undefined, enT)
   assert.deepEqual(kindsOf(nodes), ['human', 'card', 'human', 'human', 'human', 'assistant', 'card'])
 
   const dialogue = filterOutlineNodes(nodes, { mode: 'dialogue' })
@@ -395,7 +398,7 @@ test('搜索不引入普通工具与 thinking：step-group 过程细节不可搜
     toolCallEntry('2', 'call-1', 'bash', { command: 'ls -la /var/log/unique-marker' }),
     toolResultEntry('3', 'call-1', 'bash'),
   ])
-  const nodes = buildConversationOutline(items)
+  const nodes = buildConversationOutline(items, undefined, enT)
   const hit = filterOutlineNodes(nodes, { query: 'unique-marker' })
   assert.equal(hit.length, 0, '普通 bash 工具入参不进大纲，不可搜')
 })
@@ -436,7 +439,7 @@ test('OutlineAssistantNode 携带已结算单轮 durationMs，运行中与无耗
       model: [{ role: 'toolResult', toolCallId: 'c1', toolName: 'bash', content: [{ type: 'text', text: 'ok' }], durationMs: 3500 }],
     },
   ])
-  const settledNodes = buildConversationOutline(settledItems)
+  const settledNodes = buildConversationOutline(settledItems, undefined, enT)
   const assistants = settledNodes.filter((n): n is OutlineAssistantNode => n.kind === 'assistant')
   assert.equal(assistants.length, 2)
   assert.equal(assistants[0]!.durationMs, 2500)
@@ -453,7 +456,7 @@ test('OutlineAssistantNode 携带已结算单轮 durationMs，运行中与无耗
     ],
     { working: true },
   )
-  const liveNodes = buildConversationOutline(liveItems)
+  const liveNodes = buildConversationOutline(liveItems, undefined, enT)
   const liveAssistant = liveNodes.find((n): n is OutlineAssistantNode => n.kind === 'assistant')
   assert.ok(liveAssistant !== undefined)
   assert.equal(liveAssistant.durationMs, undefined, 'live assistant turn must not display a premature settled duration')
@@ -468,7 +471,7 @@ test('resolveOutlineNodeKey：标题锚点精确映射到该标题节点，同�
     humanEntry('1', '介绍一下架构'),
     assistantTextEntry('2', '# 架构总览\n正文。\n## 内核模块\n正文。\n### 状态机\n正文。'),
   ])
-  const nodes = buildConversationOutline(items)
+  const nodes = buildConversationOutline(items, undefined, enT)
   const headings = nodes.filter((node): node is OutlineHeadingNode => node.kind === 'heading')
   assert.deepEqual(
     headings.map((h) => [h.entryId, h.headingIndex]),
@@ -513,7 +516,7 @@ test('resolveOutlineNodeKey：正文摘要 / 首个业务卡 / 状态回合锚�
     toolResultEntry('3', 'call-1', 'subagent'),
     toolResultEntry('4', 'call-2', 'subagent'),
   ], { toolViews: TOOL_VIEWS })
-  const mixedNodes = buildConversationOutline(mixed)
+  const mixedNodes = buildConversationOutline(mixed, undefined, enT)
   assert.deepEqual(kindsOf(mixedNodes), ['human', 'assistant', 'card', 'card'])
   const turnNodes = mixedNodes.filter((node) => node.entryId === '2')
   assert.deepEqual(turnNodes.map((node) => node.kind), ['assistant', 'card', 'card'])
@@ -528,6 +531,8 @@ test('resolveOutlineNodeKey：正文摘要 / 首个业务卡 / 状态回合锚�
   // 无正文仅卡片：回合锚点 → 首个业务卡（不虚构 assistant 节点）
   const cardsOnly = buildConversationOutline(
     buildTimelineItems([humanEntry('1', '派子代理'), toolCallEntry('2', 'call-1', 'subagent', { prompt: '执行' })], { toolViews: TOOL_VIEWS }),
+    undefined,
+    enT,
   )
   assert.deepEqual(kindsOf(cardsOnly), ['human', 'card'])
   assert.equal(resolveOutlineNodeKey(cardsOnly, { entryId: '2' }), cardsOnly[1]!.key)
@@ -535,6 +540,8 @@ test('resolveOutlineNodeKey：正文摘要 / 首个业务卡 / 状态回合锚�
   // 无正文无卡片：回合锚点 → 诚实状态摘要节点
   const statusOnly = buildConversationOutline(
     buildTimelineItems([humanEntry('1', '查文件'), toolCallEntry('2', 'call-1', 'bash', { command: 'ls' }), toolResultEntry('3', 'call-1', 'bash')]),
+    undefined,
+    enT,
   )
   assert.deepEqual(kindsOf(statusOnly), ['human', 'assistant'])
   assert.equal(resolveOutlineNodeKey(statusOnly, { entryId: '2' }), statusOnly[1]!.key)
@@ -542,6 +549,8 @@ test('resolveOutlineNodeKey：正文摘要 / 首个业务卡 / 状态回合锚�
   // 分割线与 plugin-card 以自身 entryId 为锚
   const withDivider = buildConversationOutline(
     buildTimelineItems([humanEntry('1', '旧问题'), { id: '2', kind: 'pi.reset', data: {} }, backgroundReportEntry], { timelineRenderers: RENDERERS }),
+    undefined,
+    enT,
   )
   assert.equal(resolveOutlineNodeKey(withDivider, { entryId: '2' }), withDivider[1]!.key, '分割线锚点 → 分割线节点')
   assert.equal(resolveOutlineNodeKey(withDivider, { entryId: '9' }), withDivider[2]!.key, 'plugin-card 锚点 → 卡片节点')
@@ -565,7 +574,7 @@ test('多段助手正文单遍标题扫描：跨段代码围栏不误识别标�
     toolResultEntry('4', 'call-1', 'subagent'),
     assistantTextEntry('5', '# 仍处于未闭合围栏内的伪标题二\n```\n## 第二节\n正文。'),
   ], { toolViews: TOOL_VIEWS })
-  const nodes = buildConversationOutline(items)
+  const nodes = buildConversationOutline(items, undefined, enT)
   assert.deepEqual(kindsOf(nodes), ['human', 'heading', 'card', 'heading'])
   assert.deepEqual(
     nodes

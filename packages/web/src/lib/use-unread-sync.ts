@@ -3,42 +3,15 @@
  * first-load sync hook.
  */
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
-import type { ArtifactMetadata, ConversationSummary } from '@helmx/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { conversationsApi } from './api.js'
 import { isPageActive } from './browser-notification.js'
 import { topDrawerFrame } from './drawer-stack-model.js'
 import { errorText } from './error-text.js'
 import type { HelmxExternalStore } from './helmx-store.js'
+import { isArtifactsWatermarkCurrent } from './sync-watermarks.js'
 import type { ActiveModal, DrawerFrame, ResolvedTarget } from './types.js'
-
-export interface ArtifactsSyncWatermark {
-  stateChangeSeq: number
-  lastEntryId: number | undefined
-}
-
-/** 是否处于执行中（working 或 blocked 审批阻塞）：活跃期不作为产物稳定水位，也不在事件流中反复全量拉取产物。 */
-export function isConversationStatusActive(status: ConversationSummary['status']): boolean {
-  return status === 'working' || status === 'blocked'
-}
-
-/** 判定当前缓存的产物列表是否已对齐会话最新非活跃水位（stateChangeSeq + lastEntryId）。 */
-export function isArtifactsWatermarkCurrent(
-  cachedArtifacts: ReadonlyArray<ArtifactMetadata> | undefined,
-  summary: Pick<ConversationSummary, 'status' | 'stateChangeSeq' | 'lastEntryId'> | undefined,
-  watermark: ArtifactsSyncWatermark | undefined,
-): boolean {
-  return (
-    cachedArtifacts !== undefined &&
-    summary !== undefined &&
-    !isConversationStatusActive(summary.status) &&
-    watermark !== undefined &&
-    watermark.stateChangeSeq === summary.stateChangeSeq &&
-    watermark.lastEntryId !== undefined &&
-    summary.lastEntryId !== undefined &&
-    watermark.lastEntryId === summary.lastEntryId
-  )
-}
 
 export interface UseUnreadSyncOptions {
   store: HelmxExternalStore
@@ -164,12 +137,12 @@ export function useUnreadSync({
   useEffect(() => {
     if (!authenticated) return
     for (const id of visibleConversationIds()) {
-      void store.loadConversationDetail(id)
+      void store.actions.loadConversationDetail(id)
       const cachedArtifacts = store.getConversationArtifactsMap()[id]
       const summary = store.getConversationSummary(id)
       const wm = store.requests.artifactsWatermarks.get(id)
       if (!isArtifactsWatermarkCurrent(cachedArtifacts, summary, wm)) {
-        void store.loadConversationArtifacts(id)
+        void store.actions.loadConversationArtifacts(id)
       }
       clearVisibleConversationUnread(id)
     }

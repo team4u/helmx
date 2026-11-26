@@ -7,7 +7,7 @@
   position: fixed;
   top: 56px;
   right: 16px;
-  z-index: 9000;
+  z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -189,7 +189,7 @@
 /* 高于移动端侧边栏抽屉（.helmx-sidebar: 72 / .sidebar-backdrop: 71）与连接横幅（65），
  * 低于 Modal（100）与 Toast（9000，置顶于抽屉与模态之上）。内容类本身也必须声明 z-index 避免 Popper 内联 auto 覆盖。 */
 [data-radix-popper-content-wrapper] {
-  z-index: 80;
+  z-index: var(--z-popover);
 }
 
 .helmx-popover-content {
@@ -201,7 +201,7 @@
   outline: none;
   box-sizing: border-box;
   max-width: calc(100vw - 16px);
-  z-index: 80;
+  z-index: var(--z-popover);
   transform-origin: var(--radix-popper-transform-origin, center);
   animation: helmxPopoverEnter var(--dur-fast) var(--ease-out);
 }
@@ -223,7 +223,7 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  z-index: 80;
+  z-index: var(--z-popover);
   transform-origin: var(--radix-popper-transform-origin, center);
   animation: helmxPopoverEnter var(--dur-fast) var(--ease-out);
 }
@@ -315,7 +315,7 @@
   padding: 4px 8px;
   font-size: 11.5px;
   line-height: 1.3;
-  z-index: 100;
+  z-index: var(--z-tooltip);
   user-select: none;
   pointer-events: none;
   white-space: nowrap;
@@ -366,7 +366,7 @@
   max-width: var(--radix-select-content-available-width, 360px);
   max-height: var(--radix-select-content-available-height, 240px);
   border-radius: var(--radius-sm, 7px);
-  z-index: 120;
+  z-index: var(--z-dialog-top);
 }
 
 .helmx-select-popover-wide {

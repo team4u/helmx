@@ -10,6 +10,9 @@ import type {
   SkillSummary,
 } from '@helmx/protocol'
 import { resolveTargetString } from '../src/lib/types.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
+
+const enT = createWebTranslator('en')
 import {
   ARCHIVED_TAG,
   archiveConversationTags,
@@ -17,14 +20,19 @@ import {
   restoreConversationTags,
 } from '../src/conversation/archive-model.js'
 import {
-  type AgentStanding,
-  activeConversationIdsOf,
-  buildAgentStandings,
   collectEnabledPluginIds,
   conversationStatusBadgeClass,
   conversationStatusDotClass,
   conversationStatusLabel,
   conversationStatusTooltip,
+  isHumanSelectableProfile,
+  isProfileVisible,
+  isSkillVisible,
+} from '../src/shell/conversation-status-model.js'
+import {
+  type AgentStanding,
+  activeConversationIdsOf,
+  buildAgentStandings,
   extractSidebarViews,
   filterConversationsByTag,
   filterDeletableConversations,
@@ -34,9 +42,6 @@ import {
   isConversationBulkDeletable,
   isConversationBulkSelectable,
   isConversationDeletable,
-  isHumanSelectableProfile,
-  isProfileVisible,
-  isSkillVisible,
   partitionSidebarUi,
   resolveSidebarTargetPresence,
 } from '../src/shell/sidebar-model.js'
@@ -456,11 +461,11 @@ test('fuzzyMatchConversations 按标题、profileId 与纯数字 id 过滤', { t
 })
 
 test('conversationStatusLabel / BadgeClass 覆盖五态', { timeout: 60_000 }, () => {
-  assert.equal(conversationStatusLabel('working'), 'Running')
-  assert.equal(conversationStatusLabel('blocked'), 'Awaiting confirmation')
-  assert.equal(conversationStatusLabel('done'), 'Completed')
-  assert.equal(conversationStatusLabel('idle'), 'Idle')
-  assert.equal(conversationStatusLabel('error'), 'Error')
+  assert.equal(conversationStatusLabel('working', enT), 'Running')
+  assert.equal(conversationStatusLabel('blocked', enT), 'Awaiting confirmation')
+  assert.equal(conversationStatusLabel('done', enT), 'Completed')
+  assert.equal(conversationStatusLabel('idle', enT), 'Idle')
+  assert.equal(conversationStatusLabel('error', enT), 'Error')
   assert.equal(conversationStatusBadgeClass('working'), 'badge badge-accent')
   assert.equal(conversationStatusBadgeClass('blocked'), 'badge badge-warn')
   assert.equal(conversationStatusBadgeClass('done'), 'badge badge-ok')
@@ -477,12 +482,12 @@ test('conversationStatusDotClass 仅对非 idle 状态返回圆点类名', { tim
 })
 
 test('conversationStatusTooltip 生成准确悬停提示', { timeout: 60_000 }, () => {
-  assert.equal(conversationStatusTooltip('idle'), 'Idle')
-  assert.equal(conversationStatusTooltip('blocked'), 'Awaiting confirmation')
-  assert.equal(conversationStatusTooltip('done'), 'Completed')
-  assert.equal(conversationStatusTooltip('error'), 'Error')
-  assert.equal(conversationStatusTooltip('working'), 'Running')
-  assert.equal(conversationStatusTooltip('working', '正在分析代码'), 'Running: 正在分析代码')
+  assert.equal(conversationStatusTooltip('idle', undefined, undefined, enT), 'Idle')
+  assert.equal(conversationStatusTooltip('blocked', undefined, undefined, enT), 'Awaiting confirmation')
+  assert.equal(conversationStatusTooltip('done', undefined, undefined, enT), 'Completed')
+  assert.equal(conversationStatusTooltip('error', undefined, undefined, enT), 'Error')
+  assert.equal(conversationStatusTooltip('working', undefined, undefined, enT), 'Running')
+  assert.equal(conversationStatusTooltip('working', '正在分析代码', undefined, enT), 'Running: 正在分析代码')
 })
 
 test('resolveTargetString conversation:profile: 优先无父链常驻会话，不做标签硬编码', { timeout: 60_000 }, () => {

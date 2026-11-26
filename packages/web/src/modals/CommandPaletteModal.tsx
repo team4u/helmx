@@ -21,6 +21,7 @@ import {
   commandsForConversation,
   type QualifiedCommand,
 } from '../lib/commands-model.js'
+import { isImeComposing } from '../lib/ime.js'
 import { isAbortError } from '../lib/request-manager.js'
 import {
   useAuthConnection,
@@ -35,14 +36,10 @@ import {
   useThemePreferencesState,
   useWorkbenchState,
 } from '../lib/store-context.js'
+import { activeTargetForPanel, resolveFocusedPanel } from '../lib/panel-focus.js'
 import type { LocalePreference } from '../lib/types.js'
-import {
-  activeTargetForPanel,
-  formatModShortcut,
-  resolveFocusedPanel,
-} from '../shell/shortcuts-model.js'
-import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
-import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
+import { formatModShortcut } from '../shell/shortcuts-model.js'
+import { collectEnabledPluginIds } from '../shell/conversation-status-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import {
   buildPaletteContextCommands,
@@ -55,14 +52,12 @@ import {
   resolvePaletteEscapeAction,
   resolveRowNavigation,
   resolveSelectedIndex,
-  resolveSnippetHighlightSegments,
-  resolveTitleHighlightSegments,
-  type HighlightSegment,
   type PaletteGroupKey,
   type PaletteRow,
   type PaletteSearchHit,
   type PaletteSearchHitRow,
 } from './command-palette-model.js'
+import { CommandPaletteRowItem } from './CommandPaletteRows.js'
 
 const GROUP_LABEL_KEYS: Record<
   PaletteGroupKey,
@@ -72,22 +67,6 @@ const GROUP_LABEL_KEYS: Record<
   recent: 'modals.palette.group.recent',
   navigation: 'modals.palette.group.navigation',
   commands: 'modals.palette.group.commands',
-}
-
-function HighlightedText({ segments }: { segments: ReadonlyArray<HighlightSegment> }) {
-  return (
-    <>
-      {segments.map((segment, idx) =>
-        segment.highlighted ? (
-          <mark key={idx} className="palette-highlight">
-            {segment.text}
-          </mark>
-        ) : (
-          <Fragment key={idx}>{segment.text}</Fragment>
-        ),
-      )}
-    </>
-  )
 }
 
 export function CommandPaletteModal({
@@ -441,19 +420,6 @@ export function CommandPaletteModal({
     return map
   }, [rows])
 
-  useEffect(() => {
-    if (!inputEl) return
-    inputEl.setAttribute('role', 'combobox')
-    inputEl.setAttribute('aria-autocomplete', 'list')
-    inputEl.setAttribute('aria-controls', listboxId)
-    inputEl.setAttribute('aria-expanded', rows.length > 0 ? 'true' : 'false')
-    if (selectedIdx >= 0 && rows[selectedIdx] !== undefined) {
-      inputEl.setAttribute('aria-activedescendant', `${listboxId}-opt-${selectedIdx}`)
-    } else {
-      inputEl.removeAttribute('aria-activedescendant')
-    }
-  }, [inputEl, listboxId, rows, selectedIdx])
-
   const executeRow = useCallback(
     (row: PaletteRow, forceSplit: boolean) => {
       const nav = resolveRowNavigation(row, activePanel, forceSplit)
@@ -489,11 +455,7 @@ export function CommandPaletteModal({
           row.run?.()
           return
         }
-        if (
-          row.id === 'builtin:focus-composer' ||
-          row.id === 'builtin:toggle-model-picker' ||
-          row.id === 'builtin:open-shortcuts'
-        ) {
+        if (row.skipCloseAutoFocus) {
           skipCloseAutoFocusRef.current = true
         }
         close()
@@ -504,7 +466,7 @@ export function CommandPaletteModal({
   )
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return
+    if (composingRef.current || isImeComposing(e)) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       ignoreHoverRef.current = true
@@ -530,7 +492,7 @@ export function CommandPaletteModal({
 
   const handleEscapeKeyDown = (event: KeyboardEvent) => {
     const action = resolvePaletteEscapeAction({
-      isComposing: composingRef.current || event.isComposing || event.keyCode === 229,
+      isComposing: composingRef.current || isImeComposing(event),
       hasPreview: previewCmd !== null,
       query,
     })
@@ -582,107 +544,24 @@ export function CommandPaletteModal({
     [previewCmd, scopedPluginCommands],
   )
 
-  const renderRow = (row: PaletteRow, idx: number) => {
-    const isSelected = idx === selectedIdx
-    const optionId = `${listboxId}-opt-${idx}`
-    if (row.kind === 'command') {
-      const isNavigable = row.target !== undefined
-      return (
-        <button
-          key={row.id}
-          id={optionId}
-          type="button"
-          role="option"
-          tabIndex={-1}
-          aria-selected={isSelected}
-          data-idx={idx}
-          title={isNavigable ? navRowTitle : undefined}
-          className={`nav-item${isSelected ? ' nav-item-active' : ''}`}
-          onClick={(e) => executeRow(row, (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey)}
-          onMouseEnter={(e) => handleRowPointerHover(row.id, e.clientX, e.clientY, false)}
-          onMouseMove={(e) => handleRowPointerHover(row.id, e.clientX, e.clientY, true)}
-        >
-          <span className="nav-item-main">
-            <HelmxIcon name={row.icon} size={14} />
-            <span className="nav-item-label">
-              {trimmedQuery ? (
-                <HighlightedText segments={resolveTitleHighlightSegments(row.title, trimmedQuery)} />
-              ) : (
-                row.title
-              )}
-            </span>
-          </span>
-          {(row.hint || row.shortcut) && (
-            <span className="nav-item-meta">
-              {row.hint && <span className="mono">{row.hint}</span>}
-              {row.shortcut && <kbd className="kbd-hint">{row.shortcut}</kbd>}
-            </span>
-          )}
-        </button>
-      )
-    }
+  const activeDescendantId =
+    selectedIdx >= 0 && rows[selectedIdx] !== undefined ? `${listboxId}-opt-${selectedIdx}` : undefined
 
-    const displayTitle =
-      row.hit.title?.trim() ||
-      row.conv?.title?.trim() ||
-      t('shell.conversationFallback', { id: row.hit.conversationId })
-    const rawSnippet =
-      row.hit.snippet ||
-      (row.conv !== undefined
-        ? t('modals.palette.convSnippet', { id: row.hit.conversationId, profileId: row.conv.profileId })
-        : '')
-    const titleSegments = trimmedQuery
-      ? resolveTitleHighlightSegments(displayTitle, trimmedQuery)
-      : [{ text: displayTitle, highlighted: false }]
-    const snippetSegments =
-      trimmedQuery && rawSnippet !== ''
-        ? resolveSnippetHighlightSegments(
-            rawSnippet,
-            row.isLocalConversation ? undefined : row.hit.highlights,
-            trimmedQuery,
-          )
-        : rawSnippet !== ''
-          ? [{ text: rawSnippet, highlighted: false }]
-          : []
-
-    return (
-      <button
-        key={row.id}
-        id={optionId}
-        type="button"
-        role="option"
-        tabIndex={-1}
-        aria-selected={isSelected}
-        data-idx={idx}
-        title={navRowTitle}
-        className={`nav-item palette-hit-row${isSelected ? ' nav-item-active' : ''}`}
-        onClick={(e) => executeRow(row, (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey)}
-        onMouseEnter={(e) => handleRowPointerHover(row.id, e.clientX, e.clientY, false)}
-        onMouseMove={(e) => handleRowPointerHover(row.id, e.clientX, e.clientY, true)}
-      >
-        <span className="nav-item-main">
-          <span className="nav-status-slot">
-            {row.conv !== undefined ? (
-              <ConversationStatusDot conv={row.conv} background={background.get(row.conv.id)} />
-            ) : (
-              <HelmxIcon name="message-square" size={14} />
-            )}
-          </span>
-          <span className="palette-hit-content">
-            <span className="nav-item-label">
-              <HighlightedText segments={titleSegments} />
-            </span>
-            {snippetSegments.length > 0 && (
-              <span className="mono selectable palette-hit-snippet">
-                <HighlightedText segments={snippetSegments} />
-              </span>
-            )}
-          </span>
-        </span>
-        <span className="nav-item-meta tabular-nums">#{row.hit.conversationId}</span>
-      </button>
-    )
-  }
+  const renderRow = (row: PaletteRow, idx: number) => (
+    <CommandPaletteRowItem
+      key={row.id}
+      row={row}
+      idx={idx}
+      isSelected={idx === selectedIdx}
+      optionId={`${listboxId}-opt-${idx}`}
+      trimmedQuery={trimmedQuery}
+      navRowTitle={navRowTitle}
+      background={background}
+      t={t}
+      onExecute={executeRow}
+      onHover={handleRowPointerHover}
+    />
+  )
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -714,6 +593,11 @@ export function CommandPaletteModal({
                     inputRef.current?.focus()
                   }}
                   inputRef={attachInputRef}
+                  inputRole="combobox"
+                  ariaAutocomplete="list"
+                  ariaControls={listboxId}
+                  ariaExpanded={rows.length > 0}
+                  {...(activeDescendantId !== undefined ? { ariaActiveDescendant: activeDescendantId } : {})}
                   ariaLabel={t('modals.palette.searchAria')}
                   placeholder={t('modals.palette.searchPlaceholder')}
                   value={query}

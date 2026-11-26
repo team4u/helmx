@@ -31,6 +31,7 @@ import {
   sameClientHashes,
   SseParser,
   sseClientTimings,
+  type SseCursor,
 } from './live-state.js'
 import { evictPluginClientCache, reconcilePluginClientCache } from './plugin-client.js'
 import { observeServerEpoch } from './server-clock.js'
@@ -40,16 +41,8 @@ import {
   restoreSessionDocSubscriptions,
 } from './session-docs.js'
 import { standbyFallbackTarget } from './space-navigation.js'
-import {
-  isArtifactsWatermarkCurrent,
-  isConversationStatusActive,
-  type UseUnreadSyncResult,
-} from './use-unread-sync.js'
-
-export interface SseCursor {
-  bootId: string
-  seq: number
-}
+import { isArtifactsWatermarkCurrent, isConversationStatusActive } from './sync-watermarks.js'
+import type { UseUnreadSyncResult } from './use-unread-sync.js'
 
 export interface UseSseEventsOptions {
   store: HelmxExternalStore
@@ -106,10 +99,10 @@ function syncDeletedConversationNav(
     (activeModal?.kind === 'artifact-preview' || activeModal?.kind === 'workspace-file') &&
     activeModal.conversationId === deletedConversationId
   if (primaryHit || splitHit || drawerHit || modalHit) store.pendingHistoryMode = 'replace'
-  if (primaryHit) store.applyPrimaryTarget(fallback)
-  if (splitHit) store.setSplitTarget(null)
-  if (drawerHit) store.pruneConversationFromDrawerStack(deletedConversationId)
-  if (modalHit) store.setActiveModal(null)
+  if (primaryHit) store.navActions.applyPrimaryTarget(fallback)
+  if (splitHit) store.navActions.setSplitTarget(null)
+  if (drawerHit) store.navActions.pruneConversationFromDrawerStack(deletedConversationId)
+  if (modalHit) store.actions.setActiveModal(null)
 }
 
 function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
@@ -246,10 +239,10 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
       prevDetail.lastEntryId === nextSummary.lastEntryId
     if (!unchanged) {
       const silent = prevDetail !== undefined
-      void store.loadConversationDetail(id, true, silent ? { silent: true } : undefined)
-      void store.loadConversationArtifacts(id, silent ? { silent: true } : undefined)
+      void store.actions.loadConversationDetail(id, true, silent ? { silent: true } : undefined)
+      void store.actions.loadConversationArtifacts(id, silent ? { silent: true } : undefined)
     } else if (artifactsMap[id] === undefined) {
-      void store.loadConversationArtifacts(id, { silent: true })
+      void store.actions.loadConversationArtifacts(id, { silent: true })
     } else if (!store.requests.artifactsWatermarks.has(id)) {
       store.requests.artifactsWatermarks.set(id, {
         stateChangeSeq: nextSummary.stateChangeSeq,
@@ -320,7 +313,13 @@ function dispatchFrameSideEffects(
   ctx: FrameHandlerContext,
 ): void {
   const { store, unreadSync } = ctx
-  if (event.type === 'notification' && 'title' in event) store.pushNotice(event)
+  if (event.type === 'notification' && 'title' in event) {
+    const { conversationId, ...rest } = event
+    store.pushNotice({
+      ...rest,
+      ...(conversationId !== undefined ? { target: { kind: 'conversation', conversationId } } : {}),
+    })
+  }
   if (event.type === 'plugin.changed' && 'plugin' in event) {
     if (!configOnlyPluginChange) {
       store.requests.invalidatePluginDocRequests(event.plugin.id)
@@ -331,7 +330,7 @@ function dispatchFrameSideEffects(
       } else {
         restoreSessionDocSubscriptions(event.plugin.id)
       }
-      void store.refreshAssets()
+      void store.actions.refreshAssets()
     }
   }
   if (event.type === 'plugin.doc.updated' && 'doc' in event) {
@@ -346,8 +345,8 @@ function dispatchFrameSideEffects(
       })
     }
   }
-  if (event.type === 'models.changed') void store.refreshAssets()
-  if (event.type === 'profile.changed') void store.refreshAssets()
+  if (event.type === 'models.changed') void store.actions.refreshAssets()
+  if (event.type === 'profile.changed') void store.actions.refreshAssets()
   if (event.type === 'conversation.upsert' && 'conversation' in event) {
     const conv = event.conversation
     const clearedSeq = unreadSync.unreadClearedSeq.current.get(conv.id)
@@ -359,7 +358,7 @@ function dispatchFrameSideEffects(
       const cachedArtifacts = store.getConversationArtifactsMap()[conv.id]
       const wm = store.requests.artifactsWatermarks.get(conv.id)
       if (!isArtifactsWatermarkCurrent(cachedArtifacts, conv, wm)) {
-        void store.loadConversationArtifacts(conv.id)
+        void store.actions.loadConversationArtifacts(conv.id)
       }
     }
     if (visible && conv.unread) unreadSync.clearVisibleConversationUnread(conv.id, conv)
@@ -373,8 +372,8 @@ function dispatchFrameSideEffects(
     const splitHit =
       splitTarget?.kind === 'conversation' && splitTarget.conversationId === archivedSummary.id
     if (primaryHit || splitHit) store.pendingHistoryMode = 'replace'
-    if (primaryHit) store.applyPrimaryTarget(fallback)
-    if (splitHit) store.setSplitTarget(fallback)
+    if (primaryHit) store.navActions.applyPrimaryTarget(fallback)
+    if (splitHit) store.navActions.setSplitTarget(fallback)
   }
   if (deletedConversationId !== undefined) {
     unreadSync.unreadClearInFlight.current.delete(deletedConversationId)

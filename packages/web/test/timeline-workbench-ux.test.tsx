@@ -372,7 +372,7 @@ describe("timeline-workbench-ux", () => {
 
     // 2) 分屏激活态：分屏关闭按钮不被 .pane-split-btn 隐藏
     await act(async () => {
-      baseStore.setSplitTarget({ kind: 'conversation', conversationId: 99 })
+      baseStore.navActions.setSplitTarget({ kind: 'conversation', conversationId: 99 })
     })
     await ui.render(
       baseStore,

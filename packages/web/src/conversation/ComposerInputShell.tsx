@@ -20,9 +20,9 @@ import {
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { QualifiedCommand, SlashMenuItem } from '../lib/commands-model.js'
+import { isElementVisibleInDocument } from '../lib/dom-visibility.js'
 import { formatBytes } from '../lib/format.js'
 import type { HelmxShortcutDetail } from '../shell/shortcuts-model.js'
-import { isElementVisibleInDocument } from '../shell/version-watch-model.js'
 import { CommandPopover } from './CommandPopover.js'
 import { CompletionPopover } from './CompletionPopover.js'
 import type { MergedCompletionItem } from './composer-completion-model.js'
@@ -45,14 +45,9 @@ export interface ComposerAttachmentItem {
   onRemove: () => void
 }
 
-export interface ComposerInputShellProps {
-  /** Content mounted above `.composer-box` (PluginSlot / AskDock / EnvBar / anchored/error callouts). */
-  aboveBox?: React.ReactNode
-  /** Optional inline banner inside `.composer-box` above attachments (e.g. history-edit notice). */
-  boxBanner?: React.ReactNode
-  attachments: ReadonlyArray<ComposerAttachmentItem>
+export interface ComposerDraftGroupProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
-  textareaAriaLabel: string
+  ariaLabel: string
   value: string
   placeholder: string
   readOnly?: boolean
@@ -61,23 +56,30 @@ export interface ComposerInputShellProps {
   onClick: (e: React.MouseEvent<HTMLTextAreaElement>) => void
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
   onPaste: (e: React.ClipboardEvent) => void
+}
+
+export interface ComposerDndGroupProps {
   dragging: boolean
   onDragEnter: (e: React.DragEvent) => void
   onDragOver: (e: React.DragEvent) => void
   onDragLeave: (e: React.DragEvent) => void
   onDrop: (e: React.DragEvent) => void
+}
+
+export interface ComposerPlusMenuGroupProps {
   fileInputRef: React.RefObject<HTMLInputElement | null>
   uploadButtonLabel: string
   uploadDisabled?: boolean
-  plusMenuDisabled?: boolean
+  disabled?: boolean
   onOpenFilePicker: () => void
   onFileInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void
-  /** Plugin items mounted inside the unified `+` menu (`COMPOSER_MENU_SLOT`). */
-  renderMenuSlot?: (closeMenu: () => void) => React.ReactNode
-  /** Eligible plugin slash commands not already contributing to `COMPOSER_MENU_SLOT`. */
-  menuCommands?: ReadonlyArray<QualifiedCommand>
-  menuCommandsDisabled?: boolean
-  onRunMenuCommand?: (cmd: QualifiedCommand) => void
+  renderSlot?: (closeMenu: () => void) => React.ReactNode
+  commands?: ReadonlyArray<QualifiedCommand>
+  commandsDisabled?: boolean
+  onRunCommand?: (cmd: QualifiedCommand) => void
+}
+
+export interface ComposerCompletionGroupProps {
   slashOpen: boolean
   popoverQuery: string
   slashMenuItems: SlashMenuItem[]
@@ -88,65 +90,41 @@ export interface ComposerInputShellProps {
   completionSnapshot: CompletionSourceSnapshot
   onPickCompletion: (entry: MergedCompletionItem) => void
   onCloseCompletion: () => void
+}
+
+export interface ComposerSlotsProps {
+  aboveBox?: React.ReactNode
+  boxBanner?: React.ReactNode
   modelPicker: React.ReactNode
-  /** Compact interactive controls mounted inside `.composer-toolbar-left` after `modelPicker`. */
-  toolbarSlot?: React.ReactNode
+  toolbar?: React.ReactNode
   sendControls: React.ReactNode
   statusRow?: React.ReactNode
-  /** Owning shortcut panel scope (`primary` | `split` | `drawer`). */
-  shortcutPanel?: 'primary' | 'split' | 'drawer'
-  /** Conversation ID when mounted inside a conversation drawer. */
-  shortcutDrawerConversationId?: number
-  /** False when the owning pane/drawer frame is hidden in Activity keep-alive. */
-  shortcutActive?: boolean
+}
+
+export interface ComposerShortcutScopeProps {
+  panel?: 'primary' | 'split' | 'drawer'
+  drawerConversationId?: number
+  active?: boolean
+}
+
+export interface ComposerInputShellProps {
+  attachments: ReadonlyArray<ComposerAttachmentItem>
+  draft: ComposerDraftGroupProps
+  dnd: ComposerDndGroupProps
+  plusMenu: ComposerPlusMenuGroupProps
+  completions: ComposerCompletionGroupProps
+  slots: ComposerSlotsProps
+  shortcuts?: ComposerShortcutScopeProps
 }
 
 export function ComposerInputShell({
-  aboveBox,
-  boxBanner,
   attachments,
-  textareaRef,
-  textareaAriaLabel,
-  value,
-  placeholder,
-  readOnly = false,
-  onTextChange,
-  onKeyUp,
-  onClick,
-  onKeyDown,
-  onPaste,
-  dragging,
-  onDragEnter,
-  onDragOver,
-  onDragLeave,
-  onDrop,
-  fileInputRef,
-  uploadButtonLabel,
-  uploadDisabled = false,
-  plusMenuDisabled = false,
-  onOpenFilePicker,
-  onFileInputChange,
-  renderMenuSlot,
-  menuCommands,
-  menuCommandsDisabled = false,
-  onRunMenuCommand,
-  slashOpen,
-  popoverQuery,
-  slashMenuItems,
-  onPickSlash,
-  onCloseSlash,
-  completionOpen,
-  completionTrigger,
-  completionSnapshot,
-  onPickCompletion,
-  onCloseCompletion,
-  modelPicker,
-  toolbarSlot,
-  sendControls,
-  statusRow,
-  shortcutPanel = 'primary',
-  shortcutDrawerConversationId,
-  shortcutActive = true,
+  draft,
+  dnd,
+  plusMenu,
+  completions,
+  slots,
+  shortcuts,
 }: ComposerInputShellProps): React.JSX.Element {
   const { locale, t } = useWebLocale()
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
@@ -164,6 +142,14 @@ export function ComposerInputShell({
     plusMenuClosedByActionRef.current = true
     setPlusMenuOpen(false)
   }, [])
+
+  const shortcutPanel = shortcuts?.panel ?? 'primary'
+  const shortcutDrawerConversationId = shortcuts?.drawerConversationId
+  const shortcutActive = shortcuts?.active ?? true
+  const plusMenuDisabled = plusMenu.disabled ?? false
+  const uploadDisabled = plusMenu.uploadDisabled ?? false
+  const menuCommandsDisabled = plusMenu.commandsDisabled ?? false
+  const { textareaRef } = draft
 
   useEffect(() => {
     if (!shortcutActive || typeof window === 'undefined') return
@@ -226,22 +212,22 @@ export function ComposerInputShell({
     return () => window.cancelAnimationFrame(rafId)
   }, [plusMenuOpen])
   const hasToolsSection =
-    renderMenuSlot !== undefined || (menuCommands !== undefined && menuCommands.length > 0)
+    plusMenu.renderSlot !== undefined || (plusMenu.commands !== undefined && plusMenu.commands.length > 0)
 
   return (
     <div className="composer-shell">
       <div className="composer-inner">
-        {aboveBox}
+        {slots.aboveBox}
         <div
           className="composer-box"
           ref={composerBoxRef}
-          data-dragging={dragging ? 'true' : undefined}
-          onDragEnter={onDragEnter}
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
+          data-dragging={dnd.dragging ? 'true' : undefined}
+          onDragEnter={dnd.onDragEnter}
+          onDragOver={dnd.onDragOver}
+          onDragLeave={dnd.onDragLeave}
+          onDrop={dnd.onDrop}
         >
-          {boxBanner}
+          {slots.boxBanner}
           {attachments.length > 0 ? (
             <div className="composer-attachments">
               {attachments.map((att) => (
@@ -269,37 +255,37 @@ export function ComposerInputShell({
             </div>
           ) : null}
           <textarea
-            aria-label={textareaAriaLabel}
+            aria-label={draft.ariaLabel}
             ref={textareaRef}
             className="composer-textarea selectable"
             data-composer-draft-managed="true"
-            value={value}
+            value={draft.value}
             rows={1}
-            readOnly={readOnly}
-            placeholder={placeholder}
-            onChange={(e) => onTextChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
-            onKeyUp={onKeyUp}
-            onClick={onClick}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
+            readOnly={draft.readOnly ?? false}
+            placeholder={draft.placeholder}
+            onChange={(e) => draft.onTextChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+            onKeyUp={draft.onKeyUp}
+            onClick={draft.onClick}
+            onKeyDown={draft.onKeyDown}
+            onPaste={draft.onPaste}
             spellCheck={false}
           />
-          {slashOpen ? (
+          {completions.slashOpen ? (
             <CommandPopover
-              query={popoverQuery}
-              slashItems={slashMenuItems}
-              onPick={onPickSlash}
-              onClose={onCloseSlash}
+              query={completions.popoverQuery}
+              slashItems={completions.slashMenuItems}
+              onPick={completions.onPickSlash}
+              onClose={completions.onCloseSlash}
               anchorRef={composerBoxRef}
               inputRef={textareaRef}
             />
           ) : null}
           <CompletionPopover
-            open={completionOpen}
-            trigger={completionTrigger}
-            snapshot={completionSnapshot}
-            onPick={onPickCompletion}
-            onClose={onCloseCompletion}
+            open={completions.completionOpen}
+            trigger={completions.completionTrigger}
+            snapshot={completions.completionSnapshot}
+            onPick={completions.onPickCompletion}
+            onClose={completions.onCloseCompletion}
             anchorRef={composerBoxRef}
             inputRef={textareaRef}
           />
@@ -366,24 +352,24 @@ export function ComposerInputShell({
                     disabled={uploadDisabled}
                     onSelect={() => {
                       plusMenuClosedByActionRef.current = true
-                      onOpenFilePicker()
+                      plusMenu.onOpenFilePicker()
                     }}
                   >
                     <HelmxIcon name="paperclip" size={14} className="composer-plus-menu-icon" />
-                    <span className="composer-plus-menu-label">{uploadButtonLabel}</span>
+                    <span className="composer-plus-menu-label">{plusMenu.uploadButtonLabel}</span>
                   </DropdownMenuItem>
                   {hasToolsSection ? (
                     <div className="composer-plus-menu-group">
                       <DropdownMenuSeparator />
-                      {renderMenuSlot?.(closePlusMenu)}
-                      {menuCommands?.map((cmd) => (
+                      {plusMenu.renderSlot?.(closePlusMenu)}
+                      {plusMenu.commands?.map((cmd) => (
                         <DropdownMenuItem
                           key={`cmd:${cmd.pluginId}/${cmd.spec.id}`}
                           className="composer-plus-menu-item"
                           disabled={menuCommandsDisabled}
                           onSelect={() => {
                             plusMenuClosedByActionRef.current = true
-                            onRunMenuCommand?.(cmd)
+                            plusMenu.onRunCommand?.(cmd)
                           }}
                         >
                           <HelmxIcon
@@ -403,21 +389,21 @@ export function ComposerInputShell({
                   ) : null}
                 </DropdownMenuContent>
               </DropdownMenuRoot>
-              {modelPicker}
-              {toolbarSlot}
+              {slots.modelPicker}
+              {slots.toolbar}
               <input
-                ref={fileInputRef}
+                ref={plusMenu.fileInputRef}
                 type="file"
                 multiple
-                style={{ display: 'none' }}
+                className="composer-file-input"
                 disabled={uploadDisabled}
-                onChange={onFileInputChange}
+                onChange={plusMenu.onFileInputChange}
               />
             </div>
-            {sendControls}
+            {slots.sendControls}
           </div>
         </div>
-        {statusRow !== undefined ? <div className="composer-status-row">{statusRow}</div> : null}
+        {slots.statusRow !== undefined ? <div className="composer-status-row">{slots.statusRow}</div> : null}
       </div>
     </div>
   )

@@ -21,7 +21,7 @@
  */
 
 import type { ConversationEntry, InputOrigin } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import {
   parseHelmxInputData,
   toolSummaryText,
@@ -176,8 +176,7 @@ function truncateLabel(text: string, maxChars: number): string {
  * Condense a multi-line body into a one-line outline label (shared by human inputs and assistant bodies):
  * take the first non-empty line, strip heading/quote/list prefixes and inline formatting; fall back to an attachment-count hint when the text is empty but attachments exist.
  */
-export function summarizeOutlineText(text: string, attachmentCount = 0, t?: WebMessageTranslator): string {
-  const tt = t ?? englishWebTranslator
+export function summarizeOutlineText(text: string, attachmentCount: number, t: WebMessageTranslator): string {
   const lines = text.split(/\r?\n/)
   for (const rawLine of lines) {
     const cleaned = stripInlineMarkdown(
@@ -191,9 +190,9 @@ export function summarizeOutlineText(text: string, attachmentCount = 0, t?: WebM
     }
   }
   if (attachmentCount > 0) {
-    return tt('conv.outline.attachmentLabel', { count: attachmentCount })
+    return t('conv.outline.attachmentLabel', { count: attachmentCount })
   }
-  return tt('conv.outline.emptyMessage')
+  return t('conv.outline.emptyMessage')
 }
 
 /**
@@ -321,13 +320,12 @@ function buildToolCardNode(
  * Generic honest plugin-card summary: prefer the entry's helmx.input data text (normalized from the same
  * source as human questions), fall back to the stable contract identifier (entry kind); never read plugin-private React content.
  */
-export function summarizePluginCardEntry(entry: ConversationEntry, t?: WebMessageTranslator): { label: string; searchText: string } {
-  const tt = t ?? englishWebTranslator
+export function summarizePluginCardEntry(entry: ConversationEntry, t: WebMessageTranslator): { label: string; searchText: string } {
   if (entry.kind === 'helmx.input') {
     const data = parseHelmxInputData(entry.data)
     if (data !== undefined && data.text.trim() !== '') {
       return {
-        label: summarizeOutlineText(data.text, data.attachments?.length ?? 0, tt),
+        label: summarizeOutlineText(data.text, data.attachments?.length ?? 0, t),
         searchText: data.text,
       }
     }
@@ -465,9 +463,8 @@ export interface BuildConversationOutlineOptions {
 export function buildConversationOutline(
   items: ReadonlyArray<TimelineItem>,
   options: BuildConversationOutlineOptions = {},
-  t?: WebMessageTranslator,
+  t: WebMessageTranslator,
 ): OutlineNode[] {
-  const tt = t ?? englishWebTranslator
   const nodes: OutlineNode[] = []
   let humanTurnCount = 0
   let lastHumanKey: string | undefined
@@ -487,22 +484,22 @@ export function buildConversationOutline(
     const item = items[index]!
     if (item.kind === 'human') {
       humanTurnCount += 1
-      const node = buildHumanNode(item, humanTurnCount, tt)
+      const node = buildHumanNode(item, humanTurnCount, t)
       lastHumanKey = node.key
       nodes.push(node)
       continue
     }
     if (item.kind === 'assistant') {
-      appendAssistantNodes(item, lastHumanKey, index === lastAssistantIndex, nodes, tt)
+      appendAssistantNodes(item, lastHumanKey, index === lastAssistantIndex, nodes, t)
       continue
     }
     if (item.kind === 'plugin-card') {
-      nodes.push(buildPluginCardNode(item, lastHumanKey, tt))
+      nodes.push(buildPluginCardNode(item, lastHumanKey, t))
       continue
     }
     if (item.kind === 'divider') {
       lastHumanKey = undefined
-      nodes.push(buildDividerNode(item, tt))
+      nodes.push(buildDividerNode(item, t))
     }
   }
   return nodes

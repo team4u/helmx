@@ -451,10 +451,12 @@ const readSource = (relative: string): Promise<string> =>
 
 test('契约: HelmxStoreProvider 初始状态取自 Hash、监听外部变更、认证后才写回', { timeout: 60_000 }, async () => {
   const source = await readSource('../src/lib/HelmxStoreProvider.tsx')
-  // 初始状态从 window.location.hash 解析（含 SSR 安全守卫；boot 初始化器内
+  const urlHashModelSource = await readSource('../src/lib/url-hash-model.ts')
+  // 初始状态从 window.location.hash 解析（含 SSR 安全守卫；readBootLocation 内
   // 先取 rawHash 再 parseLocationHash，同源产出初始位置与首页落地判定）
-  assert.match(source, /const rawHash = typeof window !== 'undefined' \? window\.location\.hash : ''/)
-  assert.match(source, /parseLocationHash\(rawHash\)/)
+  assert.match(source, /useState<StoreBootLocation>\(readBootLocation\)/)
+  assert.match(urlHashModelSource, /const rawHash = typeof window !== 'undefined' \? window\.location\.hash : ''/)
+  assert.match(urlHashModelSource, /parseLocationHash\(rawHash\)/)
   // Listen for external URL changes (forward/back/manual hash edit)
   assert.match(source, /addEventListener\('hashchange'/)
   assert.match(source, /addEventListener\('popstate'/)

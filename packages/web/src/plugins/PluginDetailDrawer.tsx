@@ -282,12 +282,6 @@ export function PluginConfigForm({
                     step={schema.integer === true ? 1 : 'any'}
                     value={String(values[key] ?? '')}
                     onChange={(e) => setValues((prev) => ({ ...prev, [key]: Number(e.target.value) }))}
-                    onInput={(e) =>
-                      setValues((prev) => ({
-                        ...prev,
-                        [key]: Number((e.target as HTMLInputElement).value),
-                      }))
-                    }
                   />
                 ) : schema.format === 'model' ? (
                   <ModelPickerControl
@@ -338,12 +332,6 @@ export function PluginConfigForm({
                     }
                     value={String(values[key] ?? '')}
                     onChange={(e) => setValues((prev) => ({ ...prev, [key]: e.target.value }))}
-                    onInput={(e) =>
-                      setValues((prev) => ({
-                        ...prev,
-                        [key]: (e.target as HTMLInputElement).value,
-                      }))
-                    }
                   />
                 )}
                 {canReset && (

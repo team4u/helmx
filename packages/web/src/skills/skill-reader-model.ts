@@ -7,7 +7,7 @@
  * Refresh rule: pure functions and constants live here, never in components.
  */
 import { detectLanguage } from '../conversation/code-language.js'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 
 /** Main skill file name (read path convention is the empty string; displayed as SKILL.md). */
 export const SKILL_MAIN_FILENAME = 'SKILL.md'
@@ -37,17 +37,16 @@ export function skillFileBasename(path: string): string {
  * so the list is always valid.
  */
 export function buildSkillFileList(
-  references?: readonly string[] | null,
-  t?: WebMessageTranslator,
+  references: readonly string[] | null | undefined,
+  t: WebMessageTranslator,
 ): SkillFileEntry[] {
-  const tt = t ?? englishWebTranslator
   const refs = Array.isArray(references)
     ? references.filter((ref): ref is string => typeof ref === 'string' && ref.trim() !== '')
     : []
   const main: SkillFileEntry = {
     path: '',
     fileName: SKILL_MAIN_FILENAME,
-    meta: tt('skills.reader.mainFile'),
+    meta: t('skills.reader.mainFile'),
     displayPath: SKILL_MAIN_FILENAME,
   }
   const rest = refs.map((ref) => {
@@ -162,17 +161,16 @@ function escapeTableCellValue(value: string): string {
  * empty field sequence returns '' (nothing to render). */
 export function renderSkillFrontmatterTable(
   fields: readonly SkillFrontmatterField[],
-  t?: WebMessageTranslator,
+  t: WebMessageTranslator,
 ): string {
-  const tt = t ?? englishWebTranslator
   if (fields.length === 0) return ''
   const rows = fields.map(
     (f) => `| ${escapeTableCellValue(f.key)} | ${escapeTableCellValue(f.value)} |`,
   )
   return [
-    `## ${tt('skills.reader.metadataHeading')}`,
+    `## ${t('skills.reader.metadataHeading')}`,
     '',
-    `| ${tt('skills.reader.fieldHeader')} | ${tt('skills.reader.valueHeader')} |`,
+    `| ${t('skills.reader.fieldHeader')} | ${t('skills.reader.valueHeader')} |`,
     '| --- | --- |',
     ...rows,
   ].join('\n')
@@ -184,7 +182,7 @@ export function renderSkillFrontmatterTable(
  * and rendering logic). Without frontmatter the body returns verbatim; an
  * unclosed fence or a non-'---' first line falls back to the raw text — the
  * body is never truncated. Source mode bypasses this conversion. */
-export function renderSkillDocMarkdown(text: string, t?: WebMessageTranslator): string {
+export function renderSkillDocMarkdown(text: string, t: WebMessageTranslator): string {
   const parsed = extractSkillFrontmatter(text)
   if (parsed === null) return text
   const table = renderSkillFrontmatterTable(parsed.fields, t)

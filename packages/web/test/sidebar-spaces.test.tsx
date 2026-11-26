@@ -112,7 +112,7 @@ test('Sidebar 空间切换：顶栏移除常驻总览按钮，视图/设置空�
 
   // 进入 #/overview 后，对话空间 Rail 按钮保持激活高亮
   await act(async () => {
-    store.openTarget({ kind: 'overview' })
+    store.actions.openTarget({ kind: 'overview' })
   })
   assert.deepEqual(store.getPrimaryTarget(), { kind: 'overview' })
   const convSpaceBtn = body.querySelector<HTMLButtonElement>('button[aria-label="Conversations space"]')!
@@ -404,7 +404,7 @@ test('Sidebar 工作集态势分节、分屏焦点、后代展开、搜索防藏
 
   // 切焦点到分屏：子会话 #11 转为 active+focused，#20 转为 splitSecondary
   await act(async () => {
-    store.setFocusedPanel('split')
+    store.actions.setFocusedPanel('split')
   })
   assert.ok(document.body.querySelector('.sidebar-overview-descendant')!.className.includes('nav-item-active'))
   assert.ok(runningItem.className.includes('nav-item-split'))

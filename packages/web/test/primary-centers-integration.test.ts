@@ -55,7 +55,7 @@ function spyOpenTarget(store: import('../src/lib/helmx-store.js').HelmxExternalS
   ;(store.actions as unknown as { openTarget: (target: unknown) => void }).openTarget = (target) => {
     opened.push(target)
     if (typeof target !== 'string') {
-      store.applyPrimaryTarget(target as import('../src/lib/types.js').ResolvedTarget)
+      store.navActions.applyPrimaryTarget(target as import('../src/lib/types.js').ResolvedTarget)
     }
   }
 }

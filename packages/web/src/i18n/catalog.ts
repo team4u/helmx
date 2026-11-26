@@ -54,14 +54,6 @@ export function createWebTranslator(locale: HelmxLocale): WebMessageTranslator {
   return created
 }
 
-/**
- * English bridge translator: the explicit default for optional `t` params on
- * pure model functions whose owning call sites have not been migrated yet
- * (modules owned by other agents). Preserves the pre-i18n English behavior
- * exactly; owners pass a locale-bound translator when they migrate.
- */
-export const englishWebTranslator: WebMessageTranslator = createWebTranslator('en')
-
 /** No-op in Node/SSR/tests where all locale tables are already synchronously in memory. */
 export async function preloadWebLocale(_locale: HelmxLocale): Promise<void> {}
 

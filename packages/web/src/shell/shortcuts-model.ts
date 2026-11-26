@@ -15,11 +15,16 @@ import {
 } from '@helmx/protocol/browser'
 import { createWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
-import { buildNewTopicCandidates } from '../overview/overview-model.js'
-import type { ConversationBackgroundIndex } from './background-activity-model.js'
-import { collectEnabledPluginIds, isHumanSelectableProfile } from './sidebar-model.js'
-import { isElementVisibleInDocument } from './version-watch-model.js'
+import { isElementVisibleInDocument } from '../lib/dom-visibility.js'
+import { isImeComposing } from '../lib/ime.js'
+import { readStorageItem, writeStorageItem } from '../lib/storage.js'
 import type { ActiveModal, FocusedPanel, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
+import {
+  collectEnabledPluginIds,
+  isHumanSelectableProfile,
+  type ConversationBackgroundIndex,
+} from './conversation-status-model.js'
+import { buildNewTopicCandidates } from './sidebar-model.js'
 
 export const SIDEBAR_COLLAPSED_STORAGE_KEY = 'helmx:sidebar-collapsed'
 export const ESC_ABORT_WINDOW_MS = 1500
@@ -100,37 +105,12 @@ const NON_PROFILE_PICKER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"
 const NON_PLUS_MENU_OVERLAY_SELECTOR = '[role="menu"]:not(.composer-plus-menu), [role="listbox"]'
 
 export function getStoredSidebarCollapsed(): boolean {
-  try {
-    const saved = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
-    return saved === '1' || saved === 'true'
-  } catch {
-    return false
-  }
+  const saved = readStorageItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
+  return saved === '1' || saved === 'true'
 }
 
 export function persistSidebarCollapsed(collapsed: boolean): void {
-  try {
-    localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0')
-  } catch {
-    /* Keep the in-memory collapse state when storage is disabled */
-  }
-}
-
-export function resolveFocusedPanel(
-  focusedPanel: FocusedPanel,
-  splitTarget: ResolvedTarget | null,
-): FocusedPanel {
-  return splitTarget !== null && focusedPanel === 'split' ? 'split' : 'primary'
-}
-
-export function activeTargetForPanel(
-  primaryTarget: ResolvedTarget,
-  splitTarget: ResolvedTarget | null,
-  focusedPanel: FocusedPanel,
-): ResolvedTarget {
-  return resolveFocusedPanel(focusedPanel, splitTarget) === 'split' && splitTarget !== null
-    ? splitTarget
-    : primaryTarget
+  writeStorageItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0')
 }
 
 export function isConversationAbortable(
@@ -250,10 +230,6 @@ export interface SymbolShortcutMatchOptions {
   blockProcessKeyCode?: boolean
 }
 
-function isImeComposingEvent(event: ShortcutKeyEventShape, blockProcessKeyCode = false): boolean {
-  return event.isComposing === true || (blockProcessKeyCode && event.keyCode === 229)
-}
-
 /**
  * Resolve lowercase letter for letter-based global shortcuts, falling back to
  * physical `Key[A-Z]` when an active IME reports `key === 'Process'` or a
@@ -275,7 +251,7 @@ export function isSlashShortcutKey(
   event: ShortcutKeyEventShape,
   options?: SymbolShortcutMatchOptions,
 ): boolean {
-  if (isImeComposingEvent(event, options?.blockProcessKeyCode)) return false
+  if (isImeComposing(event, options?.blockProcessKeyCode ?? false)) return false
   return event.key === '/' || event.code === 'Slash'
 }
 
@@ -284,7 +260,7 @@ export function isPeriodShortcutKey(
   event: ShortcutKeyEventShape,
   options?: SymbolShortcutMatchOptions,
 ): boolean {
-  if (isImeComposingEvent(event, options?.blockProcessKeyCode)) return false
+  if (isImeComposing(event, options?.blockProcessKeyCode ?? false)) return false
   return event.key === '.' || event.code === 'Period'
 }
 
@@ -293,7 +269,7 @@ export function isSemicolonShortcutKey(
   event: ShortcutKeyEventShape,
   options?: SymbolShortcutMatchOptions,
 ): boolean {
-  if (isImeComposingEvent(event, options?.blockProcessKeyCode)) return false
+  if (isImeComposing(event, options?.blockProcessKeyCode ?? false)) return false
   return event.key === ';' || event.key === '；' || event.code === 'Semicolon'
 }
 

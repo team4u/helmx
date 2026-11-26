@@ -12,7 +12,7 @@ import {
 } from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 
 declare module '@helmx/protocol/browser' {
   interface Profile {
@@ -29,7 +29,7 @@ export type ProfileCategoryTab = 'all' | 'system' | 'custom'
 
 /** Build localized category tabs for ProfileCenter (`all`, `system`, `custom`). */
 export function buildProfileCategoryTabs(
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): Array<{ key: ProfileCategoryTab; label: string }> {
   return [
     { key: 'all', label: t('common.all') },
@@ -157,16 +157,15 @@ function starterCodePoints(text: string): number {
 }
 
 /** Validate one draft starter; returns the first error copy, or null when valid. */
-export function validateStarterDraft(draft: StarterDraft, t?: WebMessageTranslator): string | null {
-  const tt = t ?? englishWebTranslator
+export function validateStarterDraft(draft: StarterDraft, t: WebMessageTranslator): string | null {
   const label = draft.label.trim()
-  if (starterCodePoints(label) === 0) return tt('profiles.starter.error.titleEmpty')
+  if (starterCodePoints(label) === 0) return t('profiles.starter.error.titleEmpty')
   if (starterCodePoints(label) > PROFILE_STARTER_LABEL_MAX_LENGTH) {
-    return tt('profiles.starter.error.titleTooLong', { max: PROFILE_STARTER_LABEL_MAX_LENGTH })
+    return t('profiles.starter.error.titleTooLong', { max: PROFILE_STARTER_LABEL_MAX_LENGTH })
   }
-  if (draft.prompt.trim() === '') return tt('profiles.starter.error.promptWhitespace')
+  if (draft.prompt.trim() === '') return t('profiles.starter.error.promptWhitespace')
   if (starterCodePoints(draft.prompt) > PROFILE_STARTER_PROMPT_MAX_LENGTH) {
-    return tt('profiles.starter.error.promptTooLong', { max: PROFILE_STARTER_PROMPT_MAX_LENGTH })
+    return t('profiles.starter.error.promptTooLong', { max: PROFILE_STARTER_PROMPT_MAX_LENGTH })
   }
   return null
 }
@@ -174,7 +173,7 @@ export function validateStarterDraft(draft: StarterDraft, t?: WebMessageTranslat
 /** Validate the whole starters draft; null when valid, else (index, error). */
 export function validateStarterDrafts(
   drafts: StarterDraft[],
-  t?: WebMessageTranslator,
+  t: WebMessageTranslator,
 ): { index: number; error: string } | null {
   for (let i = 0; i < drafts.length; i++) {
     const error = validateStarterDraft(drafts[i]!, t)
@@ -273,9 +272,8 @@ export function summarizeProfileActivity(
   profile: Profile,
   conversations: ConversationSummary[] = [],
   plugins: PluginSummary[] = [],
-  t?: WebMessageTranslator,
+  t: WebMessageTranslator,
 ): ProfileActivitySummary {
-  const tt = t ?? englishWebTranslator
   let conversationCount = 0
   let workingCount = 0
   let blockedCount = 0
@@ -302,7 +300,7 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'plugin-disabled',
-      stateLabel: tt('profiles.activity.pluginDisabled'),
+      stateLabel: t('profiles.activity.pluginDisabled'),
     }
   }
   if (workingCount > 0) {
@@ -315,8 +313,8 @@ export function summarizeProfileActivity(
       stateKind: 'working',
       stateLabel:
         workingCount > 1
-          ? tt('profiles.activity.runningCount', { count: workingCount })
-          : tt('profiles.activity.running'),
+          ? t('profiles.activity.runningCount', { count: workingCount })
+          : t('profiles.activity.running'),
     }
   }
   if (blockedCount > 0) {
@@ -329,8 +327,8 @@ export function summarizeProfileActivity(
       stateKind: 'blocked',
       stateLabel:
         blockedCount > 1
-          ? tt('profiles.activity.pendingApprovalCount', { count: blockedCount })
-          : tt('profiles.activity.pendingApproval'),
+          ? t('profiles.activity.pendingApprovalCount', { count: blockedCount })
+          : t('profiles.activity.pendingApproval'),
     }
   }
   if (errorCount > 0) {
@@ -342,7 +340,7 @@ export function summarizeProfileActivity(
       managingPluginDisabled,
       stateKind: 'error',
       stateLabel:
-        errorCount > 1 ? tt('profiles.activity.errors', { count: errorCount }) : tt('profiles.activity.hasErrors'),
+        errorCount > 1 ? t('profiles.activity.errors', { count: errorCount }) : t('profiles.activity.hasErrors'),
     }
   }
   if (conversationCount > 0) {
@@ -353,7 +351,7 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'active',
-      stateLabel: tt('profiles.activity.conversations', { count: conversationCount }),
+      stateLabel: t('profiles.activity.conversations', { count: conversationCount }),
     }
   }
   return {
@@ -363,7 +361,7 @@ export function summarizeProfileActivity(
     errorCount,
     managingPluginDisabled,
     stateKind: 'idle',
-    stateLabel: tt('profiles.activity.standingBy'),
+    stateLabel: t('profiles.activity.standingBy'),
   }
 }
 

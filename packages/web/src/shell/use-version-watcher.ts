@@ -57,6 +57,7 @@ import {
   standbyDraftKey,
   subscribeStandbyDrafts,
 } from '../conversation/standby-model.js'
+import { isElementVisibleInDocument } from '../lib/dom-visibility.js'
 import {
   applyProbeResult,
   buildVersionReloadUrl,
@@ -64,7 +65,6 @@ import {
   detectDocumentProductionEntry,
   initialVersionWatchState,
   isComposerManagedInput,
-  isElementVisibleInDocument,
   isTextInputElement,
   probeAllowed,
   probeLatestIndexEntry,

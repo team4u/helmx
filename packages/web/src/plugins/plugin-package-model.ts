@@ -7,7 +7,7 @@
  */
 import type { HelmxLocale, PluginDoctorReport, PluginPackageSource, PluginSummary, PluginUpdateResult } from '@helmx/protocol/browser'
 import { isAbsoluteTargetPath } from '@helmx/protocol/browser'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 
 /** 安装来源的本地识别结果（仅用于输入引导与安全提示，不预判服务端行为）。 */
 export type PluginSourceKindHint = 'npm' | 'git' | 'local' | 'unknown'
@@ -40,32 +40,41 @@ export function isLocalSource(input: string): boolean {
   return value.startsWith('./') || value.startsWith('../')
 }
 
+/** Classify raw installation source text without formatting a localized label. */
+function classifyPluginSourceKind(input: string): PluginSourceKindHint {
+  const value = input.trim()
+  if (value === '') return 'unknown'
+  if (isNpmSource(value)) return 'npm'
+  if (isGitSource(value)) return 'git'
+  if (isLocalSource(value)) return 'local'
+  return 'unknown'
+}
+
 /**
  * 本地识别安装来源类别：仅用于输入框旁的即时来源提示，
  * 不替代服务端解析（非法输入最终由安装器返回结构化错误）。
  */
 export function detectPluginSourceKind(
   input: string,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): PluginSourceHint {
-  const value = input.trim()
-  if (value === '') return { kind: 'unknown', label: '' }
-  if (isNpmSource(value)) return { kind: 'npm', label: t('plugins.package.sourceKind.npm') }
-  if (isGitSource(value)) return { kind: 'git', label: t('plugins.package.sourceKind.git') }
-  if (isLocalSource(value)) return { kind: 'local', label: t('plugins.package.sourceKind.local') }
-  return { kind: 'unknown', label: t('plugins.package.sourceKind.unknown') }
+  const kind = classifyPluginSourceKind(input)
+  if (kind === 'npm') return { kind, label: t('plugins.package.sourceKind.npm') }
+  if (kind === 'git') return { kind, label: t('plugins.package.sourceKind.git') }
+  if (kind === 'local') return { kind, label: t('plugins.package.sourceKind.local') }
+  return { kind: 'unknown', label: input.trim() === '' ? '' : t('plugins.package.sourceKind.unknown') }
 }
 
 /** 来源是否可作为安装请求提交（unknown 时不允许提交，避免盲发）。 */
 export function isInstallSourceSubmittable(input: string): boolean {
-  const { kind } = detectPluginSourceKind(input)
+  const kind = classifyPluginSourceKind(input)
   return kind === 'npm' || kind === 'git' || kind === 'local'
 }
 
 /** 推导受管来源徽章的短标签（npm / git / 本地）。 */
 export function pluginSourceBadgeLabel(
   source: PluginPackageSource,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   if (source.kind === 'npm') return 'npm'
   if (source.kind === 'git') return 'git'
@@ -110,7 +119,7 @@ export function buildDoctorCheckItems(report: PluginDoctorReport): PluginDoctorC
 /** 从 doctor 报告中提取整体结论文案（存在失败项时逐项列出）。 */
 export function buildDoctorConclusion(
   report: PluginDoctorReport,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   const failed = (report.checks ?? []).filter((check) => check.error !== undefined)
   if (report.ok && failed.length === 0) return t('plugins.package.doctorPassed')
@@ -131,7 +140,7 @@ export function buildDoctorConclusion(
 export function pluginPackageErrorText(
   err: unknown,
   action: string,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   if (err instanceof Error && 'status' in err && (err as { status?: number }).status === 409) {
     const code = (err as { code?: string }).code ?? 'plugin_has_live_tasks'
@@ -183,7 +192,7 @@ export function listManagedPlugins(plugins: readonly PluginSummary[]): PluginSum
 /** 格式化单插件更新结果详情文案（区分真实升级与源无变化）。 */
 export function formatUpdateResultDetail(
   result: PluginUpdateResult,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   const versionLabel = result.record.version || t('plugins.package.unknownVersion')
   return result.changed
@@ -197,7 +206,7 @@ export function formatUpdateResultDetail(
 /** 格式化批量更新汇总文案（仅拼接非零项，全零兜底 0 个无变化）。 */
 export function formatBatchUpdateSummary(
   counts: { updated: number; unchanged: number; failed: number },
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string {
   const parts: string[] = []
   if (counts.updated > 0) parts.push(t('plugins.package.batchUpdatedCount', { count: counts.updated }))

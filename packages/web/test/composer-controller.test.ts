@@ -185,7 +185,7 @@ test('insertAtCaret / removeTokenBeforeCaret / replaceSlashToken: caret insertio
 })
 
 test('executePluginSlashAction: unified success/failure notices and optional conversationId passthrough', { timeout: 60_000 }, async () => {
-  const notices: Array<{ level: string; title: string; conversationId?: number }> = []
+  const notices: Array<{ level: string; title: string; target?: unknown }> = []
   const invoked: Array<{ pluginId: string; actionId: string; conversationId?: number }> = []
   await executePluginSlashAction(cmd('p1', { slash: 'ping', title: '诊断', actionId: 'ping' }), {
     invokePluginAction: async (pluginId, actionId, _input, conversationId) => {
@@ -197,7 +197,7 @@ test('executePluginSlashAction: unified success/failure notices and optional con
   })
   assert.deepEqual(invoked, [{ pluginId: 'p1', actionId: 'ping', conversationId: undefined }])
   assert.equal(notices[0]!.level, 'info')
-  assert.equal(notices[0]!.conversationId, undefined)
+  assert.equal(notices[0]!.target, undefined)
 
   await assert.rejects(
     executePluginSlashAction(cmd('p1', { slash: 'ping', title: '诊断', actionId: 'ping' }), {
@@ -209,7 +209,7 @@ test('executePluginSlashAction: unified success/failure notices and optional con
     /offline/,
   )
   assert.equal(notices[1]!.level, 'error')
-  assert.equal(notices[1]!.conversationId, 7)
+  assert.deepEqual(notices[1]!.target, { kind: 'conversation', conversationId: 7 })
   assert.match(notices[1]!.title, /\/ping/)
 })
 
@@ -543,7 +543,7 @@ test('interaction: unknown slash words never swallow the draft; they submit as p
 const archiveCommandUi: PluginUiContribution[] = [
   {
     pluginId: 'p1',
-    surface: 'command',
+    surface: 'commandPalette',
     spec: {
       id: 'arch',
       title: '归档当前会话',
@@ -556,7 +556,7 @@ const archiveCommandUi: PluginUiContribution[] = [
   },
   {
     pluginId: 'p2',
-    surface: 'command',
+    surface: 'commandPalette',
     spec: {
       id: 'cross',
       title: '跨插件路由命令',

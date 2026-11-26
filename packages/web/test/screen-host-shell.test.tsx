@@ -5,6 +5,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import type { ConversationSummary } from '@helmx/protocol'
+import type { ToastNotice } from '../src/lib/types.js'
 import { ensureHappyDom, flushMacrotask } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 
@@ -401,7 +402,7 @@ describe("screen-host-shell", () => {
       ['n-warn', 'n-err'],
     )
 
-    // 2b) 标准「查看」按钮：view 深链优先、conversationId 回退、非法 view 不渲染按钮；
+    // 2b) 标准「查看」按钮：显式 target / view 深链解析、忽略仅 conversationId 旧字段、非法 view 不渲染按钮；
     //     有 body 时位于 .toast-content，无 body 时紧凑行布局位于 .toast-trailing；
     //     关闭按钮常驻（右上角定位由样式承担，行为面断言其可点击关单）
     const openedTargets: unknown[] = []
@@ -417,7 +418,15 @@ describe("screen-host-shell", () => {
           createdAt: 3000,
           view: 'screen:demo-desk/main?app=demo-1',
         },
-        { id: 'n-conv', type: 'notification', level: 'info', title: 'legacy', createdAt: 3100, conversationId: 42 },
+        {
+          id: 'n-conv',
+          type: 'notification',
+          level: 'info',
+          title: 'explicit target',
+          createdAt: 3100,
+          target: { kind: 'conversation', conversationId: 42 },
+        },
+        { id: 'n-legacy', type: 'notification', level: 'info', title: 'legacy only', createdAt: 3150, conversationId: 42 } as unknown as ToastNotice,
         { id: 'n-bad', type: 'notification', level: 'info', title: 'broken target', createdAt: 3200, view: 'not-a-target' },
       ],
     })
@@ -463,12 +472,13 @@ describe("screen-host-shell", () => {
     assert.equal(dismissedIds[0], 'n-view', '点击查看后应关闭对应气泡')
 
     const convBtn = host?.querySelector<HTMLButtonElement>('[data-notice-id="n-conv"] .toast-action-btn')
-    assert.ok(convBtn, '仅 conversationId 的存量通知应回退到会话查看按钮')
+    assert.ok(convBtn, '显式 target 通知应渲染会话查看按钮')
     await act(async () => {
       convBtn.click()
     })
     assert.deepEqual(openedTargets[1], { kind: 'conversation', conversationId: 42 })
 
+    assert.ok(host?.querySelector('[data-notice-id="n-legacy"] .toast-action-btn') === null, '已退役的 legacy conversationId 不再自动路由')
     assert.ok(host?.querySelector('[data-notice-id="n-bad"] .toast-action-btn') === null, '非法 view 不得渲染假按钮')
     const closeBtn = host?.querySelector<HTMLButtonElement>('[data-notice-id="n-bad"] .toast-close-btn')
     assert.ok(closeBtn, '无动作通知仍有关闭按钮')
@@ -504,7 +514,7 @@ describe("screen-host-shell", () => {
     })
     ;(expandedStore.actions as unknown as { toggleSidebarCollapsed: () => void }).toggleSidebarCollapsed = () => {
       toggleCount += 1
-      expandedStore.setSidebarCollapsed(true)
+      expandedStore.actions.setSidebarCollapsed(true)
     }
     mount(
       <HostStoreProviders value={expandedStore}>
@@ -523,7 +533,7 @@ describe("screen-host-shell", () => {
     })
     ;(collapsedStore.actions as unknown as { toggleSidebarCollapsed: () => void }).toggleSidebarCollapsed = () => {
       toggleCount += 1
-      collapsedStore.setSidebarCollapsed(false)
+      collapsedStore.actions.setSidebarCollapsed(false)
     }
     mount(
       <HostStoreProviders value={collapsedStore}>

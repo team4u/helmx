@@ -21,14 +21,15 @@ import {
   useSseConnected,
   useThemePreferencesState,
 } from './store-context.js'
+import { registerBrowserNotificationNavigator } from './browser-notification.js'
 import { applyDocumentLocale } from './theme-preferences.js'
-import { formatLocationHash, hashHasPrimaryTarget, isSameLocationState, parseLocationHash, shouldPushLocationHistory } from './url-hash-model.js'
+import { formatLocationHash, isSameLocationState, parseLocationHash, readBootLocation, shouldPushLocationHistory } from './url-hash-model.js'
 import { useGlobalShortcuts } from './use-global-shortcuts.js'
 import { useSseEvents } from './use-sse-events.js'
 import { useUnreadSync } from './use-unread-sync.js'
 
-function HomeLandingWatcher({ store, boot }: { store: HelmxExternalStore; boot: StoreBootLocation }) {
-  const pendingRef = useRef(boot.needsHomeLanding)
+function HomeLandingWatcher({ store }: { store: HelmxExternalStore }) {
+  const pendingRef = useRef(true)
   const authenticated = useAuthenticated()
   const { profilesLoaded } = useProfilesSlice()
   const sseConnected = useSseConnected()
@@ -37,8 +38,8 @@ function HomeLandingWatcher({ store, boot }: { store: HelmxExternalStore; boot: 
     if (!pendingRef.current) return
     if (!authenticated || !profilesLoaded || !sseConnected) return
     pendingRef.current = false
-    store.performHomeLanding(boot.location)
-  }, [authenticated, profilesLoaded, sseConnected, store, boot])
+    store.settleHomeLanding()
+  }, [authenticated, profilesLoaded, sseConnected, store])
 
   return null
 }
@@ -56,7 +57,7 @@ function HighlightedEntryActiveWatcher({
   const historyError = useLoadError(`history:${conversationId}`)
 
   useEffect(() => {
-    store.stepHighlightedEntry()
+    store.navActions.stepHighlightedEntry()
   }, [store, highlightedEntry, detail, historyError])
 
   return null
@@ -80,7 +81,7 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
   const drawerStack = useDrawerStack()
   const activeModal = useActiveModal()
   const locationState = useLocationState()
-  const { locale, localePreference, themePreference } = useThemePreferencesState()
+  const { locale, localePreference } = useThemePreferencesState()
 
   useEffect(() => {
     applyDocumentLocale(locale)
@@ -99,10 +100,10 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
     const handler = (e: MediaQueryListEvent) => store.handleSystemThemeChange(e.matches)
     media.addEventListener('change', handler)
     return () => media.removeEventListener('change', handler)
-  }, [themePreference, store])
+  }, [store])
 
   useEffect(() => {
-    if (authenticated) void store.refreshAssets()
+    if (authenticated) void store.actions.refreshAssets()
   }, [authenticated, store])
 
   useEffect(() => {
@@ -140,7 +141,7 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
     window.history.replaceState(null, '', '#/settings/profiles')
     store.finishLogoutStateReset()
   }, [resetUnreadSync, store])
-  store.bindLogout(logout)
+  useEffect(() => store.bindLogout(logout), [store, logout])
 
   useEffect(() => {
     window.addEventListener('helmx:unauthorized', logout)
@@ -148,10 +149,19 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
   }, [logout])
 
   useEffect(() => {
+    return registerBrowserNotificationNavigator((url) => {
+      if (!url.startsWith('/#')) return
+      const parsed = parseLocationHash(url.slice(1))
+      if (isSameLocationState(parsed, store.lastSyncedLocation)) return
+      store.navActions.applyExternalLocation(parsed)
+    })
+  }, [store])
+
+  useEffect(() => {
     const applyUrlLocation = () => {
       const parsed = parseLocationHash(window.location.hash)
       if (isSameLocationState(parsed, store.lastSyncedLocation)) return
-      store.applyExternalLocation(parsed)
+      store.navActions.applyExternalLocation(parsed)
     }
     window.addEventListener('hashchange', applyUrlLocation)
     window.addEventListener('popstate', applyUrlLocation)
@@ -190,7 +200,7 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
 
   return (
     <>
-      {boot.needsHomeLanding ? <HomeLandingWatcher store={store} boot={boot} /> : null}
+      {boot.needsHomeLanding ? <HomeLandingWatcher store={store} /> : null}
       <HighlightedEntryWatcher store={store} />
     </>
   )
@@ -203,23 +213,15 @@ export function HelmxStoreProvider({
   children: React.ReactNode
   escAbortWindowMs?: number
 }) {
-  const [boot] = useState<StoreBootLocation>(() => {
-    const rawHash = typeof window !== 'undefined' ? window.location.hash : ''
-    const parsed = parseLocationHash(rawHash)
-    return {
-      location: parsed,
-      needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null && parsed.drawerStack.length === 0,
-    }
-  })
+  const [boot] = useState<StoreBootLocation>(readBootLocation)
 
-  const storeRef = useRef<HelmxExternalStore | null>(null)
-  if (storeRef.current === null) {
-    storeRef.current = new HelmxExternalStore(
-      boot.location,
-      escAbortWindowMs !== undefined ? { escAbortWindowMs } : undefined,
-    )
-  }
-  const store = storeRef.current
+  const [store] = useState(
+    () =>
+      new HelmxExternalStore(boot.location, {
+        needsHomeLanding: boot.needsHomeLanding,
+        ...(escAbortWindowMs !== undefined ? { escAbortWindowMs } : {}),
+      }),
+  )
 
   useEffect(() => {
     const w = window as unknown as Record<string, unknown>

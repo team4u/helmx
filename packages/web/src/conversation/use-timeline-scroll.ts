@@ -1,30 +1,24 @@
 /**
- * Scroll-follow, keep-alive Activity wake scroll restoration, IntersectionObserver
- * reading-anchor tracking (outline activation: turn wrapper + in-turn H1~H3 heading granularity),
- * ResizeObserver width/bottom tracking, outline locate (with a jump lock so the clicked node stays the
- * current one until the user scrolls), and SWR scroll-anchor preservation hook for ConversationTimeline.
+ * Scroll-follow, keep-alive Activity wake scroll restoration,
+ * ResizeObserver width/bottom tracking, and SWR scroll-anchor preservation hook for ConversationTimeline.
+ * Outline reading-anchor tracking and jump-lock logic live in use-timeline-outline-tracking.ts.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type * as React from 'react'
 import type { ConversationEntry } from '@helmx/protocol/browser'
 import { useStableCallback } from '../lib/use-stable-callback.js'
-import { sameOutlineAnchor, type OutlineAnchor } from './outline-model.js'
-import {
-  OUTLINE_ACTIVE_LINE_PX,
-  OUTLINE_BOTTOM_ZONE_PX,
-  resolveActiveAnchorIndex,
-  resolveCharsPerLine,
-  resolveOutlineReadingBaseline,
-} from './timeline-containment-model.js'
+import type { OutlineAnchor } from './outline-model.js'
+import { OUTLINE_BOTTOM_ZONE_PX, resolveCharsPerLine } from './timeline-containment-model.js'
 import { captureTimelineScrollAnchor, restoreTimelineScrollAnchor, type TimelineScrollAnchor } from './timeline-scroll-anchor.js'
 import {
   calibrateAnchorAfterSmoothScroll,
   calibrateInitialStickToBottom,
   type AnchorAlignment,
 } from './timeline-scroll-calibration.js'
+import { useTimelineOutlineTracking, type TimelineOutlineScrollRequest } from './use-timeline-outline-tracking.js'
 
-/** Same selector as the outline locate effect: H1~H3 inside the turn's own Markdown body (never nested trace/plugin cards), in DOM order (= headingIndex). */
-const TURN_HEADING_SELECTOR = '.msg-ai-block > .msg-ai-body h1, .msg-ai-block > .msg-ai-body h2, .msg-ai-block > .msg-ai-body h3'
+export type { TimelineOutlineScrollRequest }
+
 /** Keys that count as the user taking over the scroll position (releases the outline jump lock). */
 const JUMP_LOCK_RELEASE_KEYS: ReadonlySet<string> = new Set([
   'ArrowUp',
@@ -35,17 +29,6 @@ const JUMP_LOCK_RELEASE_KEYS: ReadonlySet<string> = new Set([
   'End',
   ' ',
 ])
-
-function escapeAttrSelectorValue(value: string): string {
-  return value.replace(/["\\]/g, (ch) => `\\${ch}`)
-}
-
-export interface TimelineOutlineScrollRequest {
-  entryId: string
-  headingIndex?: number
-  cardId?: string
-  tick: number
-}
 
 export interface UseTimelineScrollOptions {
   conversationId: number
@@ -102,7 +85,6 @@ export function useTimelineScroll({
   fetchEarlierEntries,
 }: UseTimelineScrollOptions): UseTimelineScrollResult {
   const [loadingOlder, setLoadingOlder] = useState(false)
-  const [localHighlightEntryId, setLocalHighlightEntryId] = useState<string | null>(null)
   const [showScrollBottom, setShowScrollBottom] = useState(false)
   const [hasUnreadScrollUpdates, setHasUnreadScrollUpdates] = useState(false)
   const [charsPerLine, setCharsPerLine] = useState<number>(() =>
@@ -112,27 +94,15 @@ export function useTimelineScroll({
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const innerRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  const mountedRef = useRef(true)
   const stickToBottomRef = useRef(true)
   const programmaticBottomScrollRef = useRef(false)
   const lastScrollTopRef = useRef(0)
   const prevFingerprintRef = useRef<{ conversationId: number; value: string } | null>(null)
   const lastHumanRef = useRef<{ conversationId: number; key: string | undefined } | null>(null)
   const prevEntrySpanRef = useRef<{ conversationId: number; headId: string | undefined; tailId: string | undefined } | null>(null)
-  const lastOutlineTickRef = useRef<number | null>(null)
-  const lastActiveAnchorRef = useRef<OutlineAnchor | undefined>(undefined)
-  /** Anchor wrappers (`[data-entry-id]`) in document order, refreshed whenever the anchor set changes. */
-  const anchorWrappersRef = useRef<HTMLElement[]>([])
-  /** IO path: indexes of wrappers currently intersecting the baseline zone (top passed container top + 96px). */
-  const passedAnchorsRef = useRef<Set<number>>(new Set())
-  /**
-   * Outline jump lock: after an explicit outline click the clicked node stays the current one (scroll-derived
-   * publications are withheld) until the user takes over the scroll position (wheel / touch / pointer / scroll keys)
-   * or another explicit navigation happens. Keeps the smooth-scroll animation and the settled position from
-   * flashing a different node (e.g. a near-bottom target whose followers are also on screen).
-   */
-  const outlineJumpLockRef = useRef(false)
-  const activationFrameRef = useRef(0)
-  const outlineHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const loadEarlierRafRef = useRef(0)
+  const loadEarlierGenRef = useRef(0)
   const activeCalibrationRef = useRef<{
     conversationId: number
     kind: 'anchor' | 'initial-bottom'
@@ -146,84 +116,17 @@ export function useTimelineScroll({
   const wakeScrollTopRef = useRef<number | null>(null)
 
   const notifySwitch = useStableCallback(onConversationSwitch)
-  const notifyActiveOutlineChange = useStableCallback((anchor: OutlineAnchor | undefined): void => {
-    onActiveOutlineChange?.(anchor)
-  })
-  const anchorTrackingEnabled = onActiveOutlineChange !== undefined
-  const outlineOpenRef = useRef(outlineOpen)
-  outlineOpenRef.current = outlineOpen
-  const anchorDirtyWhileClosedRef = useRef(false)
 
-  /**
-   * Resolve the reading anchor from the current scroll position (both IO and no-IO paths share it):
-   * 1. active wrapper = the last wrapper whose top passed the reading baseline. Far from the bottom the IO path
-   *    answers from the intersecting set (zero rect reads); when the baseline is widened (near the bottom) or IO is
-   *    unavailable, walk up from the last wrapper while its top is below the baseline — those rows are the ones on
-   *    screen below the baseline, so the walk is bounded by the viewport, never a whole-list scan;
-   * 2. inside the active wrapper, the last H1~H3 whose top passed the baseline pinpoints the heading section
-   *    (bounded by the turn's own heading count); with none passed the anchor stays at the wrapper (turn node).
-   */
-  const resolveReadingAnchor = useCallback(
-    (forceMeasure: boolean): OutlineAnchor | undefined => {
-      const scroller = scrollRef.current
-      const wrappers = anchorWrappersRef.current
-      if (scroller === null || wrappers.length === 0) return undefined
-      const baseline = resolveOutlineReadingBaseline(
-        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
-        scroller.clientHeight,
-      )
-      let activeIndex: number
-      let containerTop = 0
-      const measureRows = forceMeasure || baseline > OUTLINE_ACTIVE_LINE_PX
-      if (measureRows) {
-        containerTop = scroller.getBoundingClientRect().top
-        let index = wrappers.length - 1
-        while (index >= 0 && wrappers[index]!.getBoundingClientRect().top - containerTop > baseline) index -= 1
-        activeIndex = index >= 0 ? index : 0
-      } else {
-        activeIndex = resolveActiveAnchorIndex(passedAnchorsRef.current, wrappers.length)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (loadEarlierRafRef.current !== 0) {
+        cancelAnimationFrame(loadEarlierRafRef.current)
+        loadEarlierRafRef.current = 0
       }
-      if (activeIndex < 0) return undefined
-      const wrapper = wrappers[activeIndex]!
-      const entryId = wrapper.dataset.entryId
-      if (entryId === undefined || entryId === '') return undefined
-      const headings = wrapper.querySelectorAll<HTMLElement>(TURN_HEADING_SELECTOR)
-      if (headings.length === 0) return { entryId }
-      if (!measureRows) containerTop = scroller.getBoundingClientRect().top
-      let headingIndex = -1
-      for (let i = 0; i < headings.length; i++) {
-        if (headings[i]!.getBoundingClientRect().top - containerTop <= baseline) headingIndex = i
-      }
-      return headingIndex >= 0 ? { entryId, headingIndex } : { entryId }
-    },
-    [],
-  )
-
-  /** Publish a scroll-derived anchor; an active outline jump lock withholds it (the clicked node stays current). */
-  const publish = useCallback(
-    (next: OutlineAnchor | undefined): void => {
-      if (sameOutlineAnchor(next, lastActiveAnchorRef.current)) return
-      lastActiveAnchorRef.current = next
-      notifyActiveOutlineChange(next)
-    },
-    [notifyActiveOutlineChange],
-  )
-
-  /** rAF-throttled scroll-derived activation (scroll, resize and content changes all funnel through here). */
-  const scheduleActivation = useCallback((): void => {
-    if (!anchorTrackingEnabled) return
-    if (!outlineOpenRef.current) {
-      if (!initialBottomRef.current.active) anchorDirtyWhileClosedRef.current = true
-      return
     }
-    if (activationFrameRef.current !== 0) return
-    activationFrameRef.current = requestAnimationFrame(() => {
-      activationFrameRef.current = 0
-      if (!outlineOpenRef.current || outlineJumpLockRef.current) return
-      anchorDirtyWhileClosedRef.current = false
-      publish(resolveReadingAnchor(typeof IntersectionObserver === 'undefined'))
-    })
-  }, [anchorTrackingEnabled, publish, resolveReadingAnchor])
+  }, [])
 
   const syncScrollBottomVisibility = useCallback((el: HTMLElement): void => {
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
@@ -247,32 +150,9 @@ export function useTimelineScroll({
     if (activeCalibrationRef.current?.kind === 'initial-bottom') activeCalibrationRef.current.cancel()
   }, [])
 
-  const scrollToBottomAndFollow = useCallback((): void => {
-    activeCalibrationRef.current?.cancel()
-    activeCalibrationRef.current = null
-    initialBottomRef.current.active = false
-    initialBottomRef.current.consumed = true
-    stickToBottomRef.current = true
-    programmaticBottomScrollRef.current = true
-    outlineJumpLockRef.current = false
-    setShowScrollBottom(false)
-    setHasUnreadScrollUpdates(false)
-    const el = scrollRef.current
-    if (el === null) return
-    if (typeof el.scrollTo === 'function') {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-    } else {
-      el.scrollTop = el.scrollHeight
-    }
-    if (el.scrollHeight - el.scrollTop - el.clientHeight <= OUTLINE_BOTTOM_ZONE_PX) {
-      programmaticBottomScrollRef.current = false
-    }
-    lastScrollTopRef.current = el.scrollTop
-  }, [])
-
   const armScrollCalibration = useCallback(
     (target: HTMLElement, alignment: AnchorAlignment): void => {
-      const scroller = target.closest<HTMLElement>('.timeline-scroll')
+      const scroller = scrollRef.current ?? target.closest<HTMLElement>('.timeline-scroll')
       if (scroller === null) return
       stopFollowingBottom()
       activeCalibrationRef.current?.cancel()
@@ -285,27 +165,21 @@ export function useTimelineScroll({
     [conversationId, stopFollowingBottom],
   )
 
-  const highlightScrollRef = useCallback(
-    (node: HTMLDivElement | null): void => {
-      if (node === null || highlightedEntry?.conversationId !== conversationId) return
-      if (node.dataset.entryId !== highlightedEntry.entryId) return
-      node.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      armScrollCalibration(node, 'center')
-    },
-    [conversationId, highlightedEntry?.conversationId, highlightedEntry?.entryId, armScrollCalibration],
-  )
-
+  // Reset conversation-level scroll state BEFORE outline tracking / locate effects run
+  // so initial deep-link or same-render outline jumps are never clobbered by conversation init.
   useEffect(() => {
     if (conversationInitRef.current !== conversationId) {
       conversationInitRef.current = conversationId
+      loadEarlierGenRef.current += 1
+      if (loadEarlierRafRef.current !== 0) {
+        cancelAnimationFrame(loadEarlierRafRef.current)
+        loadEarlierRafRef.current = 0
+      }
+      setLoadingOlder(false)
       stickToBottomRef.current = true
       programmaticBottomScrollRef.current = false
       lastScrollTopRef.current = 0
       prevFingerprintRef.current = null
-      lastOutlineTickRef.current = null
-      lastActiveAnchorRef.current = undefined
-      anchorDirtyWhileClosedRef.current = false
-      outlineJumpLockRef.current = false
       initialBottomRef.current.active = false
       initialBottomRef.current.consumed = false
       notifySwitch()
@@ -319,16 +193,62 @@ export function useTimelineScroll({
         active.cancel()
         activeCalibrationRef.current = null
       }
-      if (outlineHighlightTimerRef.current !== null) {
-        clearTimeout(outlineHighlightTimerRef.current)
-        outlineHighlightTimerRef.current = null
-      }
-      if (activationFrameRef.current !== 0) {
-        cancelAnimationFrame(activationFrameRef.current)
-        activationFrameRef.current = 0
+      if (loadEarlierRafRef.current !== 0) {
+        cancelAnimationFrame(loadEarlierRafRef.current)
+        loadEarlierRafRef.current = 0
       }
     }
   }, [conversationId, notifySwitch])
+
+  const {
+    localHighlightEntryId,
+    scheduleActivation,
+    releaseOutlineJumpLock,
+  } = useTimelineOutlineTracking({
+    conversationId,
+    scrollRef,
+    innerRef,
+    anchorSignature,
+    outlineScrollRequest,
+    outlineOpen,
+    initialBottomActiveRef: initialBottomRef,
+    stickToBottomRef,
+    onActiveOutlineChange,
+    armScrollCalibration,
+  })
+
+  const scrollToBottomAndFollow = useCallback((): void => {
+    activeCalibrationRef.current?.cancel()
+    activeCalibrationRef.current = null
+    initialBottomRef.current.active = false
+    initialBottomRef.current.consumed = true
+    stickToBottomRef.current = true
+    programmaticBottomScrollRef.current = true
+    releaseOutlineJumpLock()
+    setShowScrollBottom(false)
+    setHasUnreadScrollUpdates(false)
+    const el = scrollRef.current
+    if (el === null) return
+    if (typeof el.scrollTo === 'function') {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    } else {
+      el.scrollTop = el.scrollHeight
+    }
+    if (el.scrollHeight - el.scrollTop - el.clientHeight <= OUTLINE_BOTTOM_ZONE_PX) {
+      programmaticBottomScrollRef.current = false
+    }
+    lastScrollTopRef.current = el.scrollTop
+  }, [releaseOutlineJumpLock])
+
+  const highlightScrollRef = useCallback(
+    (node: HTMLDivElement | null): void => {
+      if (node === null || highlightedEntry?.conversationId !== conversationId) return
+      if (node.dataset.entryId !== highlightedEntry.entryId) return
+      node.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      armScrollCalibration(node, 'center')
+    },
+    [conversationId, highlightedEntry?.conversationId, highlightedEntry?.entryId, armScrollCalibration],
+  )
 
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -393,17 +313,17 @@ export function useTimelineScroll({
     // Wheel / pointer / touch / scroll keys are user takeovers of the scroll position: the outline jump lock
     // is released so scroll-derived activation resumes (an upward wheel additionally drops bottom-follow).
     const onWheel = (event: WheelEvent): void => {
-      outlineJumpLockRef.current = false
+      releaseOutlineJumpLock()
       if (event.deltaY < 0) stopFollowingBottom()
     }
     const onUserPointer = (): void => {
-      outlineJumpLockRef.current = false
+      releaseOutlineJumpLock()
     }
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home') {
         stopFollowingBottom()
       }
-      if (JUMP_LOCK_RELEASE_KEYS.has(event.key)) outlineJumpLockRef.current = false
+      if (JUMP_LOCK_RELEASE_KEYS.has(event.key)) releaseOutlineJumpLock()
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     el.addEventListener('wheel', onWheel, { passive: true })
@@ -417,123 +337,7 @@ export function useTimelineScroll({
       el.removeEventListener('touchstart', onUserPointer)
       el.removeEventListener('keydown', onKeyDown)
     }
-  }, [stopFollowingBottom, syncScrollBottomVisibility, scheduleActivation])
-
-  // Anchor tracking: refresh the wrapper list on every anchor-set change, keep the IO intersecting set
-  // (baseline zone) up to date, and re-derive the reading anchor on scroll / resize / content changes.
-  useEffect(() => {
-    if (!anchorTrackingEnabled) return
-    const scroller = scrollRef.current
-    const inner = innerRef.current
-    if (scroller === null || inner === null) return
-
-    anchorWrappersRef.current = Array.from(inner.querySelectorAll<HTMLElement>('[data-entry-id]')).filter(
-      (el) => (el.dataset.entryId ?? '') !== '',
-    )
-    const anchors = anchorWrappersRef.current
-
-    if (typeof IntersectionObserver === 'undefined') {
-      // No IO: the shared resolver measures the on-screen rows itself (walk-up from the last wrapper).
-      scheduleActivation()
-      return () => {
-        anchorWrappersRef.current = []
-      }
-    }
-
-    const passed = passedAnchorsRef.current
-    const indexByEl = new Map<HTMLElement, number>()
-    anchors.forEach((el, index) => indexByEl.set(el, index))
-    const onEntries = (entries: IntersectionObserverEntry[]): void => {
-      for (const entry of entries) {
-        const idx = indexByEl.get(entry.target as HTMLElement)
-        if (idx === undefined) continue
-        if (entry.isIntersecting) passed.add(idx)
-        else passed.delete(idx)
-      }
-      if (outlineJumpLockRef.current) return
-      anchorDirtyWhileClosedRef.current = false
-      publish(resolveReadingAnchor(false))
-    }
-    let io: IntersectionObserver | null = null
-    const buildObserver = (): void => {
-      io?.disconnect()
-      passed.clear()
-      const bottomInset = Math.max(0, scroller.clientHeight - OUTLINE_ACTIVE_LINE_PX)
-      io = new IntersectionObserver(onEntries, { root: scroller, rootMargin: `0px 0px -${bottomInset}px 0px` })
-      for (const el of anchors) io.observe(el)
-    }
-    buildObserver()
-    let ro: ResizeObserver | null = null
-    if (typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(() => {
-        buildObserver()
-        scheduleActivation()
-      })
-      ro.observe(scroller)
-    }
-    return () => {
-      io?.disconnect()
-      ro?.disconnect()
-      passed.clear()
-      anchorWrappersRef.current = []
-    }
-  }, [anchorTrackingEnabled, anchorSignature, publish, resolveReadingAnchor, scheduleActivation])
-
-  // Compute reading anchor synchronously before paint when the outline popover opens after closed-state scroll/stream changes.
-  useLayoutEffect(() => {
-    if (!anchorTrackingEnabled || !outlineOpen || outlineJumpLockRef.current) return
-    if (!anchorDirtyWhileClosedRef.current && lastActiveAnchorRef.current !== undefined) return
-    anchorDirtyWhileClosedRef.current = false
-    publish(resolveReadingAnchor(typeof IntersectionObserver === 'undefined'))
-  }, [anchorTrackingEnabled, outlineOpen, anchorSignature, publish, resolveReadingAnchor])
-
-  useEffect(() => {
-    if (!outlineScrollRequest || outlineScrollRequest.tick === lastOutlineTickRef.current) return
-    const container = innerRef.current
-    if (container === null) return
-
-    let targetWrapper: HTMLElement | null = null
-    for (const el of container.querySelectorAll<HTMLElement>('[data-entry-id]')) {
-      if (el.dataset.entryId === outlineScrollRequest.entryId) {
-        targetWrapper = el
-        break
-      }
-    }
-    if (targetWrapper === null) return
-    lastOutlineTickRef.current = outlineScrollRequest.tick
-    stickToBottomRef.current = false
-
-    let scrollEl: HTMLElement = targetWrapper
-    if (outlineScrollRequest.cardId !== undefined) {
-      const cardEl = targetWrapper.querySelector<HTMLElement>(
-        `[data-outline-card-id="${escapeAttrSelectorValue(outlineScrollRequest.cardId)}"]`,
-      )
-      if (cardEl !== null) scrollEl = cardEl
-    } else if (outlineScrollRequest.headingIndex !== undefined) {
-      // Same selector as the reading-anchor resolver: headingIndex indexes this DOM-ordered list.
-      const headings = targetWrapper.querySelectorAll<HTMLElement>(TURN_HEADING_SELECTOR)
-      const matchedHeading = headings[outlineScrollRequest.headingIndex]
-      if (matchedHeading !== undefined) scrollEl = matchedHeading
-    }
-    scrollEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    armScrollCalibration(scrollEl, 'start')
-    setLocalHighlightEntryId(outlineScrollRequest.entryId)
-    if (anchorTrackingEnabled) {
-      // The clicked node is the current one from now on; the lock withholds scroll-derived publication
-      // during the smooth animation and at the settled position until the user takes over the scroll.
-      outlineJumpLockRef.current = true
-      publish({
-        entryId: outlineScrollRequest.entryId,
-        ...(outlineScrollRequest.headingIndex !== undefined ? { headingIndex: outlineScrollRequest.headingIndex } : {}),
-        ...(outlineScrollRequest.cardId !== undefined ? { cardId: outlineScrollRequest.cardId } : {}),
-      })
-    }
-    if (outlineHighlightTimerRef.current !== null) clearTimeout(outlineHighlightTimerRef.current)
-    outlineHighlightTimerRef.current = setTimeout(() => {
-      outlineHighlightTimerRef.current = null
-      setLocalHighlightEntryId((current) => (current === outlineScrollRequest.entryId ? null : current))
-    }, 2400)
-  }, [outlineScrollRequest, anchorTrackingEnabled, publish, anchorSignature, armScrollCalibration])
+  }, [stopFollowingBottom, syncScrollBottomVisibility, scheduleActivation, releaseOutlineJumpLock])
 
   useEffect(() => {
     const inner = innerRef.current
@@ -654,16 +458,24 @@ export function useTimelineScroll({
 
   const loadEarlierEntries = useCallback((): void => {
     stopFollowingBottom()
-    outlineJumpLockRef.current = false
+    releaseOutlineJumpLock()
     const scroller = scrollRef.current
     if (scroller === null) return
+    const targetConversationId = conversationId
+    const gen = ++loadEarlierGenRef.current
     const anchor = captureTimelineScrollAnchor(scroller)
     setLoadingOlder(true)
-    void fetchEarlierEntries(conversationId).finally(() => {
+    void fetchEarlierEntries(targetConversationId).finally(() => {
+      if (!mountedRef.current || conversationInitRef.current !== targetConversationId || gen !== loadEarlierGenRef.current) return
       setLoadingOlder(false)
-      requestAnimationFrame(() => restoreTimelineScrollAnchor(scroller, anchor))
+      if (loadEarlierRafRef.current !== 0) cancelAnimationFrame(loadEarlierRafRef.current)
+      loadEarlierRafRef.current = requestAnimationFrame(() => {
+        loadEarlierRafRef.current = 0
+        if (!mountedRef.current || conversationInitRef.current !== targetConversationId || gen !== loadEarlierGenRef.current) return
+        restoreTimelineScrollAnchor(scroller, anchor)
+      })
     })
-  }, [stopFollowingBottom, fetchEarlierEntries, conversationId])
+  }, [stopFollowingBottom, releaseOutlineJumpLock, fetchEarlierEntries, conversationId])
 
   return {
     scrollRef,

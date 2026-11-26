@@ -15,7 +15,7 @@
  */
 import type { ConversationBulkDeleteResponse } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 
 /** Bulk delete outcome: per-item counts + the first error summary (for notice copy). */
 export interface BulkDeleteOutcome {
@@ -47,7 +47,7 @@ export type BulkDeleteNotice = {
 /** Bulk delete outcome → notice (success / partial / total failure, with the first error summary). */
 export function bulkDeleteNotice(
   outcome: BulkDeleteOutcome,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): BulkDeleteNotice {
   if (outcome.failed === 0) {
     return {

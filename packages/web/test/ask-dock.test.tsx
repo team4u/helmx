@@ -1965,4 +1965,47 @@ describe("ask-dock", () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
     assert.equal(focusReturnCount, 1, 'onFocusReturn called once final ask resolves')
   })
+
+  test('Escape focuses only Cancel/Skip button even when source badge and terminal snapshot are rendered; IME composition ignores Enter/Escape', { timeout: 60_000 }, async () => {
+    const childAskWithSnapshot: AskSpec = {
+      id: 'ask-child-snap',
+      conversationId: 11,
+      kind: 'approval',
+      title: 'Run shell command',
+      description: 'Approval requested.\n```sh\nls -la\n```',
+      fields: [
+        {
+          name: 'note',
+          label: 'Note',
+          type: 'text',
+        },
+      ],
+      status: 'pending',
+      createdAt: 200,
+    }
+    await renderAskDock(makeStore({ pendingAsks: [childAskWithSnapshot] }), 1)
+
+    const sourceBtn = document.querySelector<HTMLButtonElement>('.ask-dock-source-btn')
+    const snapshotBtn = document.querySelector<HTMLButtonElement>('.ask-dock-snapshot-btn')
+    const cancelBtn = document.querySelector<HTMLButtonElement>('.ask-dock-actions-left > button')
+    const textInput = document.querySelector<HTMLInputElement>('.ask-dock-field input')
+    assert.ok(sourceBtn && snapshotBtn && cancelBtn && textInput, 'source, snapshot, cancel, and input should render')
+
+    // IME Enter (keyCode 229) inside text input must NOT submit the form
+    installFetch()
+    await act(async () => {
+      textInput.focus()
+      textInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true, cancelable: true }))
+    })
+    assert.equal(posts.length, 0, 'IME Enter must not trigger submit')
+
+    // Escape inside card moves focus strictly to Cancel button (not source or snapshot buttons)
+    await act(async () => {
+      sourceBtn.focus()
+      sourceBtn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    assert.ok(document.activeElement === cancelBtn, 'Escape must move focus to Cancel button only')
+    assert.ok(document.activeElement !== sourceBtn)
+    assert.ok(document.activeElement !== snapshotBtn)
+  })
 })

@@ -492,7 +492,7 @@
 .overview-batch-bar-wrap {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: var(--z-sticky);
   padding: 12px 20px;
   background: var(--bg);
   flex-shrink: 0;

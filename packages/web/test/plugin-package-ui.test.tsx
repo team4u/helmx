@@ -564,7 +564,7 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
   }
   ;(store.actions as unknown as { openTarget: (target: unknown) => void }).openTarget = (target) => {
     openedTargets.push(target)
-    store.applyPrimaryTarget(typeof target === 'string' ? { kind: 'plugins' } : target as import('../src/lib/types.js').ResolvedTarget)
+    store.navActions.applyPrimaryTarget(typeof target === 'string' ? { kind: 'plugins' } : target as import('../src/lib/types.js').ResolvedTarget)
   }
 
   try {

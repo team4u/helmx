@@ -269,6 +269,10 @@ export const composerMessages = {
   'composer.send.withdrawFailed': { en: 'Failed to withdraw queued message', 'zh-CN': '撤回排队消息失败' },
   'composer.send.updateFailed': { en: 'Failed to update message', 'zh-CN': '更新消息失败' },
   'composer.send.sendFailed': { en: 'Send failed', 'zh-CN': '发送失败' },
+  'composer.send.busyOrEmpty': {
+    en: 'Current draft empty or a composer operation is already in flight',
+    'zh-CN': '当前草稿为空或发送操作正在进行中',
+  },
 
   // ---- Slash command popover ----
   'composer.command.newHint': { en: 'Start new topic', 'zh-CN': '开始新话题' },

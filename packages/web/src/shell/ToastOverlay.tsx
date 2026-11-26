@@ -6,24 +6,16 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 
 /**
  * Resolve the single standard "View" action target of a notice:
- * - `view` (declarative deep-link) takes precedence; unresolvable strings warn
- *   and render no button (never a fake or guessed destination);
- * - legacy `conversationId` notices keep navigating to that conversation.
+ * - explicit `target` wins;
+ * - otherwise parses declarative `view` deep-link strings (returning null when unresolvable).
  */
 function resolveNoticeTarget(
-  notice: { id: string; title: string; view?: string; conversationId?: number },
+  notice: Pick<ToastNotice, 'target' | 'view'>,
   conversations: ConversationSummary[],
 ): ResolvedTarget | null {
+  if (notice.target !== undefined) return notice.target
   if (notice.view !== undefined) {
-    const resolved = resolveTargetString(notice.view, conversations)
-    if (resolved === null) {
-      console.warn(`[toast] notification "${notice.title}" carries an unresolvable view target: ${notice.view}`)
-      return null
-    }
-    return resolved
-  }
-  if (notice.conversationId !== undefined) {
-    return { kind: 'conversation', conversationId: notice.conversationId }
+    return resolveTargetString(notice.view, conversations)
   }
   return null
 }

@@ -530,3 +530,71 @@ test('populated catalog renders single-row header, current-row data attribute, a
     container.remove()
   }
 })
+
+test('refreshCatalog aborts state updates and notices cleanly when unmounted mid-flight', { timeout: 60_000 }, async () => {
+  const handle: CatalogHandle = { slice: { models: CATALOG_MODELS }, listeners: new Set() }
+  let resolveRefresh: ((value: { errors: Record<string, string> }) => void) | undefined
+  const notices: Array<{ message: string; tone: string }> = []
+  let refreshedCallbacks = 0
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          PluginClientHostContext.Provider,
+          {
+            value: makePort(handle, {
+              refreshModels: () =>
+                new Promise((resolve) => {
+                  resolveRefresh = resolve
+                }),
+            }),
+          },
+          e(ModelPickerControl, {
+            effectiveModel: 'openai/gpt-4o-mini',
+            activeThinkingLevel: 'medium',
+            resetLabel: 'Reset',
+            resetTitle: 'Reset',
+            buttonTitle: 'Current model',
+            onApply: () => {},
+            onResetDefault: () => {},
+            onCatalogRefreshed: () => {
+              refreshedCallbacks += 1
+            },
+            onNotice: (message, tone) => {
+              notices.push({ message, tone })
+            },
+          }),
+        ),
+      )
+    })
+    const trigger = container.querySelector<HTMLButtonElement>('button.composer-model-button')
+    assert.ok(trigger !== null)
+    await act(async () => {
+      trigger.click()
+    })
+    const refreshBtn = document.body.querySelector<HTMLButtonElement>('.composer-model-refresh-btn')
+    assert.ok(refreshBtn !== null)
+    await act(async () => {
+      refreshBtn.click()
+    })
+    assert.ok(resolveRefresh !== undefined, 'refreshModels invoked')
+
+    // Unmount before refresh resolves.
+    await act(async () => {
+      root.unmount()
+    })
+    await act(async () => {
+      resolveRefresh?.({ errors: {} })
+      await Promise.resolve()
+    })
+
+    assert.equal(refreshedCallbacks, 0, 'unmounted component skips onCatalogRefreshed')
+    assert.equal(notices.length, 0, 'unmounted component emits zero notices after unmount')
+  } finally {
+    container.remove()
+  }
+})

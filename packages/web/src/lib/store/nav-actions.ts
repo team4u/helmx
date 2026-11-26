@@ -5,11 +5,10 @@
 import type { ConversationSummary, LocalizedText } from '@helmx/protocol/browser'
 import type { WebMessageKey } from '../../i18n/catalog.js'
 import {
-  activeTargetForPanel,
   isConversationAbortable,
   persistSidebarCollapsed,
-  resolveFocusedPanel,
 } from '../../shell/shortcuts-model.js'
+import { activeTargetForPanel, resolveFocusedPanel } from '../panel-focus.js'
 import { conversationsApi } from '../api.js'
 import { clearStandbyFocusRequest } from '../../conversation/standby-model.js'
 import {
@@ -342,11 +341,8 @@ export function createStoreNavActions(
       host.pushNotice({
         type: 'notification',
         level: 'warning',
-        title: host.translate({ en: 'Ignored invalid Screen parameter key', 'zh-CN': '已忽略非法 Screen 参数键' }),
-        body: host.translate({
-          en: `Parameter ${key} must use a valid key and a string value`,
-          'zh-CN': `参数 ${key} 必须使用合法键和字符串值`,
-        }),
+        title: host.tt('shell.nav.invalidScreenParamTitle'),
+        body: host.tt('shell.nav.invalidScreenParamBody', { key }),
       })
     }
     const nav = host.getNavSlice()
@@ -406,7 +402,7 @@ export function createStoreNavActions(
         type: 'notification',
         level: 'warning',
         title: host.tt('shell.nav.searchEntryGone'),
-        conversationId: detail.id,
+        target: { kind: 'conversation', conversationId: detail.id },
       })
       host.patchNav({ highlightedEntry: null })
     }
@@ -437,7 +433,7 @@ export function createStoreNavActions(
           level: 'warning',
           title: host.tt('shell.esc.confirmTitle'),
           body: host.tt('shell.esc.confirmBody'),
-          conversationId,
+          target: { kind: 'conversation', conversationId },
           createdAt: Date.now(),
         },
       ],
@@ -461,7 +457,7 @@ export function createStoreNavActions(
           level: 'error',
           title: host.tt('shell.esc.abortFailedTitle'),
           body: errorText(error),
-          conversationId,
+          target: { kind: 'conversation', conversationId },
         })
       })
     } else {

@@ -115,6 +115,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     () => (active && trigger !== null ? completersForTrigger(completers, trigger, conversation) : []),
     [active, trigger, completers, conversation],
   )
+  const hasSources = sources.length > 0
   const sourceKey = useMemo(
     () => sources.map((s) => `${s.pluginId}/${s.spec.id}:${JSON.stringify(s.spec.source)}`).join('|'),
     [sources],
@@ -142,42 +143,47 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
 
   // ---- doc sources: trigger ensurePluginDoc on demand (values are read at
   // render time from pluginDocs) ----
-  const docKey = useMemo(() => docKeys.join('|'), [docKeys])
+  const pluginDocsRef = useRef(pluginDocs)
   useEffect(() => {
-    if (docKey === '') return
+    pluginDocsRef.current = pluginDocs
+  }, [pluginDocs])
+  useEffect(() => {
+    if (docSources.length === 0) return
     for (const src of docSources) {
       const name = (src.spec.source as { name: string }).name
-      if (!Object.hasOwn(pluginDocs, `${src.pluginId}/${name}`)) void ensurePluginDoc(src.pluginId, name)
+      if (!Object.hasOwn(pluginDocsRef.current, `${src.pluginId}/${name}`)) void ensurePluginDoc(src.pluginId, name)
     }
-    // Only the key set and stable callbacks are deps; pluginDocs value updates
-    // never re-trigger (values are read at render time).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docKey, ensurePluginDoc, pluginDocs])
+  }, [docSources, ensurePluginDoc])
 
   // ---- sessionDoc sources: dedicated SSE channel merged subscription
   // (stable snapshot identity; never subscribed without a conversation) ----
-  const tuplesKey = useMemo(() => JSON.stringify(sessionDocSources.map((s) => ({ pluginId: s.pluginId, docName: s.spec.source.name }))), [sessionDocSources])
+  const sessionTuples = useMemo<SessionDocTuple[]>(
+    () => sessionDocSources.map((s) => ({ pluginId: s.pluginId, docName: s.spec.source.name })),
+    [sessionDocSources],
+  )
+  const tuplesKey = useMemo(
+    () => sessionTuples.map((t) => `${t.pluginId.length}:${t.pluginId}/${t.docName}`).join('|'),
+    [sessionTuples],
+  )
   const subscribeSession = useCallback(
     (listener: () => void) => {
-      const list = JSON.parse(tuplesKey) as SessionDocTuple[]
-      if (list.length === 0 || conversationId === undefined) return () => {}
-      const offs = list.map((t) => subscribeSessionDoc({ ...t, conversationId }, listener))
+      if (sessionTuples.length === 0 || conversationId === undefined) return () => {}
+      const offs = sessionTuples.map((t) => subscribeSessionDoc({ ...t, conversationId }, listener))
       return () => { for (const off of offs) off() }
     },
-    [tuplesKey, conversationId, subscribeSessionDoc],
+    [sessionTuples, conversationId, subscribeSessionDoc],
   )
   const getSnapshot = useCallback(() => {
-    const list = JSON.parse(tuplesKey) as SessionDocTuple[]
-    if (list.length === 0 || conversationId === undefined) return EMPTY_SESSION_STATES
-    const states = list.map((t) => getSessionDocState({ ...t, conversationId }))
+    if (sessionTuples.length === 0 || conversationId === undefined) return EMPTY_SESSION_STATES
+    const states = sessionTuples.map((t) => getSessionDocState({ ...t, conversationId }))
     const cached = sessionSnapshotCache.get(subscribeSession)
     if (cached !== undefined && cached.keys === tuplesKey && states.every((s, i) => s === cached.states[i])) {
       return cached.result
     }
-    const result = list.map((t, i) => ({ tuple: t, state: states[i] }))
+    const result = sessionTuples.map((t, i) => ({ tuple: t, state: states[i] }))
     sessionSnapshotCache.set(subscribeSession, { keys: tuplesKey, states, result })
     return result
-  }, [tuplesKey, conversationId, getSessionDocState, subscribeSession])
+  }, [sessionTuples, tuplesKey, conversationId, getSessionDocState, subscribeSession])
   const sessionStates = useSyncExternalStore(subscribeSession, getSnapshot, () => EMPTY_SESSION_STATES)
 
   // ---- action sources: debounce + generation race guard ----
@@ -259,7 +265,6 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
       // The generation has already been advanced by the next effect run; this
       // cleanup only stops this timer.
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey, query, contextKey, conversationId, profileId, invokePluginAction, actions, actionSources, t])
 
   // ---- Merge (pure render-time computation): plugin sources in priority order ----
@@ -327,9 +332,8 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     }
 
     const merged = mergeCompletionItems(groups)
-    return { hasSources: sources.length > 0, items: merged.items, total: merged.total, truncated: merged.truncated, loading, errors }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, active, query, conversationId, contextKey, docSources, sessionDocSources, actionSources, pluginDocs, loadErrors, sessionStates, actionState, t])
+    return { hasSources, items: merged.items, total: merged.total, truncated: merged.truncated, loading, errors }
+  }, [token, active, query, conversationId, contextKey, hasSources, docSources, sessionDocSources, actionSources, pluginDocs, loadErrors, sessionStates, actionState, t])
 }
 
 function itemsFieldOf(

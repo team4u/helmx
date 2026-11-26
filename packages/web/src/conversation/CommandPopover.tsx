@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Popover, PopoverAnchor, PopoverContent } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { isImeComposing } from '../lib/ime.js'
+import { ComposerPopoverShell } from './ComposerPopoverShell.js'
 
 // ---------------------------------------------------------------------------
 // Slash command popover (Radix Popover over .composer-box anchor with WAI-ARIA
@@ -80,7 +81,7 @@ export function CommandPopover({
     const onKey = (e: KeyboardEvent): void => {
       // Never intercept while IME is composing (syllables may contain triggers;
       // Enter belongs to candidate confirmation).
-      if (e.isComposing || e.keyCode === 229) return
+      if (isImeComposing(e)) return
       if (visible.length === 0) {
         if (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape') {
           e.preventDefault()
@@ -155,28 +156,15 @@ export function CommandPopover({
   const anchor = anchorRef?.current ?? null
   if (anchor !== null) {
     return (
-      <Popover open onOpenChange={(next) => { if (!next) onClose() }}>
-        <PopoverAnchor virtualRef={{ current: anchor }} />
-        <PopoverContent
-          side="top"
-          align="start"
-          sideOffset={8}
-          className="composer-popover composer-completion-popover"
-          onOpenAutoFocus={(event) => event.preventDefault()}
-          onCloseAutoFocus={(event) => event.preventDefault()}
-          onInteractOutside={(event) => {
-            const inputEl = inputRef?.current
-            const target = event.target
-            if (inputEl !== null && inputEl !== undefined && target instanceof Node && inputEl.contains(target)) {
-              event.preventDefault()
-            }
-          }}
-          onEscapeKeyDown={(event) => event.stopPropagation()}
-          aria-label={t('composer.command.header')}
-        >
-          {body}
-        </PopoverContent>
-      </Popover>
+      <ComposerPopoverShell
+        open
+        anchor={anchor}
+        inputRef={inputRef}
+        ariaLabel={t('composer.command.header')}
+        onClose={onClose}
+      >
+        {body}
+      </ComposerPopoverShell>
     )
   }
 

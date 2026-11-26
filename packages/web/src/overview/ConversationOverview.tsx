@@ -37,15 +37,9 @@
  */
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ConversationSummary } from '@helmx/protocol/browser'
 import {
   Button,
   Checkbox,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuPortal,
-  DropdownMenuTrigger,
   HelmxIcon,
   IconButton,
   LoadingState,
@@ -53,9 +47,7 @@ import {
   SearchBox,
   SegmentedControl,
   Select,
-  Stack,
   Tooltip,
-  useSharedNowMs,
 } from '@helmx/plugin-client'
 import { OVERVIEW_CARD_META_SLOT } from '@helmx/protocol/browser'
 import {
@@ -73,16 +65,19 @@ import { BatchActionBar } from '../ui/BatchActionBar.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
-import { ConversationStatusDot, RemoteNodeTag } from '../shell/SidebarPrimitives.js'
-import { formatModShiftShortcut } from '../shell/shortcuts-model.js'
-import { isConversationArchivable, isConversationBulkSelectable, type AgentStanding } from '../shell/sidebar-model.js'
-import { archiveBatchNotice, patchConversationsArchived } from '../shell/archive-ops.js'
-import { useBatchConversationDelete } from '../shell/use-batch-conversation-delete.js'
+import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
+import {
+  buildNewTopicCandidates,
+  isConversationBulkSelectable,
+} from '../shell/sidebar-model.js'
+import { ElapsedTimer } from '../shell/ElapsedTimer.js'
+import { NewTopicButton } from '../shell/NewTopicButton.js'
+import { useBulkArchive } from '../shell/use-bulk-archive.js'
+import { useCollapsibleGroups } from '../shell/use-collapsible-groups.js'
 import { useGlobalAttention } from '../shell/use-attention-indicator.js'
-import { formatDurationMs, formatFullTimestamp, formatStopwatchMs } from '../lib/format.js'
+import { formatDurationMs, formatFullTimestamp } from '../lib/format.js'
 import {
   buildArchivedOverviewCards,
-  buildNewTopicCandidates,
   buildOverviewCards,
   filterOverviewCards,
   groupOverviewCards,
@@ -113,47 +108,6 @@ export interface ConversationOverviewProps {
 
 type BucketFilterValue = OverviewBucketFilter
 type SourceFilterValue = OverviewSourceFilter
-const EMPTY_COLLAPSED_KEYS: ReadonlySet<string> = new Set()
-
-/** 叶子秒表组件：将 1Hz `useSharedNowMs` 隔离到单枚计时节点，避免总览全屏卡片网格每秒重渲染。 */
-function ElapsedTimer({
-  since,
-  formatText,
-  className,
-  leadingSeparator = false,
-  trailingSeparator = false,
-}: {
-  since: number
-  formatText?: (formattedDuration: string) => string
-  className: string
-  leadingSeparator?: boolean
-  trailingSeparator?: boolean
-}): ReactNode {
-  const nowMs = useSharedNowMs(true)
-  if (nowMs === undefined) {
-    return leadingSeparator && trailingSeparator ? (
-      <span className="overview-card-sub-sep" aria-hidden="true">
-        ·
-      </span>
-    ) : null
-  }
-  const formatted = formatStopwatchMs(Math.max(0, nowMs - since))
-  return (
-    <>
-      {leadingSeparator && (
-        <span className="overview-card-sub-sep" aria-hidden="true">
-          ·
-        </span>
-      )}
-      <span className={className}>{formatText !== undefined ? formatText(formatted) : formatted}</span>
-      {trailingSeparator && (
-        <span className="overview-card-sub-sep" aria-hidden="true">
-          ·
-        </span>
-      )}
-    </>
-  )
-}
 
 /** 单卡：根会话树聚合卡（只读）；卡面/芯片直进主屏会话。
  * 可访问性结构：外层 div 仅承载鼠标整卡点击便利（不挂交互 ARIA 角色，
@@ -488,13 +442,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const { primaryTarget, splitTarget } = useLocationTargets()
   const { sseConnected } = useAuthConnection()
   const [expandedCardIds, setExpandedCardIds] = useState<Set<number>>(new Set())
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
-  const [searchCollapseState, setSearchCollapseState] = useState<{ query: string; keys: Set<string> }>({
-    query: '',
-    keys: new Set(),
-  })
-  const [archiving, setArchiving] = useState(false)
-  const newTopicPickedRef = useRef(false)
   const sectionIdPrefix = useId()
   const { isSplitActive, toggleSplit } = usePaneSplitToggle({
     isSplit,
@@ -509,7 +456,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   // 命名空间参数随之丢弃（重新进入总览即回到默认态）。
   const routeTarget = isSplit ? splitTarget : primaryTarget
   const overviewParams = routeTarget !== null && routeTarget.kind === 'overview' ? routeTarget.params : undefined
-  const filter = parseOverviewFilterParams(overviewParams)
+  const filter = useMemo(() => parseOverviewFilterParams(overviewParams), [overviewParams])
   const bucketFilter = filter.bucket
   const profileFilter = filter.profileId
   const nodeFilter = filter.nodeId
@@ -519,16 +466,15 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const [searchDraft, setSearchDraft] = useState(routeQueryFilter)
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prevRouteQueryRef = useRef(routeQueryFilter)
-  if (prevRouteQueryRef.current !== routeQueryFilter) {
+  useEffect(() => {
+    if (prevRouteQueryRef.current === routeQueryFilter) return
     prevRouteQueryRef.current = routeQueryFilter
     if (searchTimerRef.current !== null) {
       clearTimeout(searchTimerRef.current)
       searchTimerRef.current = null
     }
-    if (searchDraft !== routeQueryFilter) {
-      setSearchDraft(routeQueryFilter)
-    }
-  }
+    setSearchDraft((prev) => (prev === routeQueryFilter ? prev : routeQueryFilter))
+  }, [routeQueryFilter])
   useEffect(() => {
     return () => {
       if (searchTimerRef.current !== null) {
@@ -539,8 +485,15 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   }, [])
   const queryFilter = searchDraft
   const effectiveFilter = useMemo(
-    () => ({ ...filter, query: queryFilter }),
-    [filter, queryFilter],
+    () => ({
+      bucket: bucketFilter,
+      profileId: profileFilter,
+      nodeId: nodeFilter,
+      source: sourceFilter,
+      groupBy,
+      query: queryFilter,
+    }),
+    [bucketFilter, profileFilter, nodeFilter, sourceFilter, groupBy, queryFilter],
   )
   const applyFilterParam = useCallback(
     (patch: Partial<Record<OverviewFilterParamKey, string | undefined>>): void => {
@@ -616,33 +569,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     () => (showSectionHeaders ? groupOverviewCards(visibleCards, groupBy, t) : []),
     [showSectionHeaders, visibleCards, groupBy, t],
   )
-  const normalizedQuery = queryFilter.trim()
-  const searchActive = normalizedQuery !== ''
-  // 搜索防藏匿：搜索词非空时自动临时展开所有命中分节，避免匹配项被先前的
-  // 折叠遮蔽；搜索期间仍可手动收起，清空搜索后无损恢复原 collapsedGroups。
-  const activeCollapsedKeys = useMemo<ReadonlySet<string>>(() => {
-    if (searchActive) {
-      return searchCollapseState.query === normalizedQuery ? searchCollapseState.keys : EMPTY_COLLAPSED_KEYS
-    }
-    return collapsedGroups
-  }, [searchActive, searchCollapseState, normalizedQuery, collapsedGroups])
-  const toggleGroupCollapsed = (groupKey: string): void => {
-    if (searchActive) {
-      setSearchCollapseState((prev) => {
-        const nextKeys = prev.query === normalizedQuery ? new Set(prev.keys) : new Set<string>()
-        if (nextKeys.has(groupKey)) nextKeys.delete(groupKey)
-        else nextKeys.add(groupKey)
-        return { query: normalizedQuery, keys: nextKeys }
-      })
-      return
-    }
-    setCollapsedGroups((prev) => {
-      const next = new Set(prev)
-      if (next.has(groupKey)) next.delete(groupKey)
-      else next.add(groupKey)
-      return next
-    })
-  }
+  const { activeCollapsedKeys, toggleGroupCollapsed } = useCollapsibleGroups(queryFilter)
   const renderedCards = useMemo(() => {
     if (!showSectionHeaders) return visibleCards
     return cardGroups.flatMap((group) => (activeCollapsedKeys.has(group.key) ? [] : group.cards))
@@ -693,29 +620,16 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   // blocked）helmx 会话不参与勾选，插件 manageConversation 托管保护由服务端
   // bulk-delete 逐项权威判定。且收起分节内的卡片不可见，不得进入可勾选与
   // 有效选择集。
-  const isCardSelectable = useMemo(
-    () => (conv: ConversationSummary) => isConversationBulkSelectable(conv),
-    [],
-  )
-  const selectableCardIds = useMemo(
-    () => renderedCards.filter((card) => isCardSelectable(card.root)).map((card) => card.root.id),
-    [renderedCards, isCardSelectable],
-  )
-  const batch = useBatchConversationDelete({
-    selectableIds: selectableCardIds,
+  const renderedRoots = useMemo(() => renderedCards.map((card) => card.root), [renderedCards])
+  const archiveSourceRoots = useMemo(() => activePoolCards.map((card) => card.root), [activePoolCards])
+  const batch = useBulkArchive({
+    renderedRoots,
+    archiveSourceRoots,
+    targetArchived: !isArchivedView,
     pushNotice,
     t,
-    busy: archiving,
   })
-  // 归档有效子集：选择集中人类自有（可归档）部分——仅可批量删除的空闲自动化
-  // 会话留在选择集里但不进入批量归档（按钮计数与执行集合一致）。
-  const effectiveArchivableSelectedIds = useMemo(
-    () =>
-      renderedCards
-        .filter((card) => batch.selectedIds.has(card.root.id) && isConversationArchivable(card.root))
-        .map((card) => card.root.id),
-    [renderedCards, batch.selectedIds],
-  )
+  const { selectableIds: selectableCardIds, archiving, effectiveArchivableSelectedIds, executeBatchArchive } = batch
 
   const toggleCardExpanded = useCallback((rootConversationId: number): void => {
     setExpandedCardIds((prev) => {
@@ -728,23 +642,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       return next
     })
   }, [])
-
-  /** 批量归档或恢复：逐会话 PATCH 宿主归档 tag + allSettled 聚合（部分失败不掩盖成功）。 */
-  const executeBatchArchive = async (): Promise<void> => {
-    if (batch.selectedIds.size === 0 || archiving || batch.deleting) return
-    setArchiving(true)
-    try {
-      const targetArchived = !isArchivedView
-      const convs = activePoolCards
-        .filter((card) => batch.selectedIds.has(card.root.id) && isConversationArchivable(card.root))
-        .map((card) => card.root)
-      const outcome = await patchConversationsArchived(convs, targetArchived)
-      pushNotice(archiveBatchNotice(targetArchived, outcome, t))
-      batch.exitBatchMode()
-    } finally {
-      setArchiving(false)
-    }
-  }
 
   const openConversation = useCallback(
     (conversationId: number): void => {
@@ -782,18 +679,13 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     [profiles, conversations, plugins, groupedUi.sidebarItems, locale],
   )
 
-  const openNewTopic = (profileId: string, opts?: { flush?: boolean }): void => {
+  const openNewTopic = useCallback((profileId: string, opts?: { flush?: boolean }): void => {
     openStandbyWithFocus(
       { panel: isSplit ? 'split' : 'primary', profileId },
       () => openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined),
       opts,
     )
-  }
-
-  // 单候选直进按钮的稳定绑定（闭包内索引访问会丢失窄化，这里一次性收敛）。
-  const singleNewTopicCandidate: AgentStanding | null =
-    newTopicCandidates.length === 1 ? (newTopicCandidates[0] ?? null) : null
-  const newTopicShortcut = formatModShiftShortcut('O')
+  }, [isSplit, openTarget])
 
   // 数据就绪门：会话快照未到（且资产未齐/SSE 未连）时如实展示加载态，
   // 绝不把「还没加载」伪报成「没有会话」；一旦有任何会话或资产+SSE 双就绪，
@@ -818,77 +710,12 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           </span>
         </div>
         <div className="primary-center-topbar-actions pane-actions">
-          {singleNewTopicCandidate !== null && (
-            <Button
-              size="sm"
-              className="overview-newtopic-btn"
-              icon={<HelmxIcon name="plus" size={12} />}
-              aria-label={t('conv.pane.newTopic')}
-              title={t('shell.agents.newTopicUnderWithShortcut', { label: singleNewTopicCandidate.label, shortcut: newTopicShortcut })}
-              onClick={() => {
-                openNewTopic(singleNewTopicCandidate.profileId)
-              }}
-            >
-              <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
-            </Button>
-          )}
-          {newTopicCandidates.length > 1 && (
-            <DropdownMenu
-              onOpenChange={(open) => {
-                if (open) newTopicPickedRef.current = false
-              }}
-            >
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="sm"
-                  className="overview-newtopic-btn"
-                  icon={<HelmxIcon name="plus" size={12} />}
-                  aria-label={t('conv.pane.newTopic')}
-                  title={t('conv.pane.newTopicWithShortcut', { shortcut: newTopicShortcut })}
-                  aria-haspopup="menu"
-                >
-                  <Stack inline direction="horizontal" gap="xs" align="center">
-                    <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
-                    <HelmxIcon name="chevron-down" size={11} />
-                  </Stack>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuPortal>
-                <DropdownMenuContent
-                  className="pane-more-popover"
-                  align="end"
-                  sideOffset={4}
-                  onCloseAutoFocus={(e) => {
-                    if (newTopicPickedRef.current) {
-                      newTopicPickedRef.current = false
-                      e.preventDefault()
-                    }
-                  }}
-                >
-                  {newTopicCandidates.map((standing) => {
-                    const nodeId = standing.primaryConversation?.nodeId
-                    const remoteNodeId = nodeId !== undefined && nodeId !== '' && nodeId !== 'local' ? nodeId : null
-                    return (
-                      <DropdownMenuItem
-                        key={standing.profileId}
-                        title={t('shell.agents.newTopicUnder', { label: standing.label })}
-                        onSelect={() => {
-                          newTopicPickedRef.current = true
-                          openNewTopic(standing.profileId, { flush: false })
-                        }}
-                      >
-                        <span className="pane-more-item-label">
-                          <HelmxIcon name="bot" size={13} />
-                          {standing.label}
-                          {remoteNodeId !== null && <RemoteNodeTag nodeId={remoteNodeId} />}
-                        </span>
-                      </DropdownMenuItem>
-                    )
-                  })}
-                </DropdownMenuContent>
-              </DropdownMenuPortal>
-            </DropdownMenu>
-          )}
+          <NewTopicButton
+            variant="toolbar"
+            className="overview-newtopic-btn"
+            candidates={newTopicCandidates}
+            onSelectProfile={openNewTopic}
+          />
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
@@ -1149,7 +976,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                           onOpenSplit={openSplit}
                           viewedConversationIds={viewedConversationIds}
                           batchMode={batch.batchMode}
-                          selectable={isCardSelectable(card.root)}
+                          selectable={isConversationBulkSelectable(card.root)}
                           selected={batch.selectedIds.has(card.root.id)}
                           expanded={expandedCardIds.has(card.root.id)}
                           onToggleSelect={batch.toggleSelect}
@@ -1173,7 +1000,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                 onOpenSplit={openSplit}
                 viewedConversationIds={viewedConversationIds}
                 batchMode={batch.batchMode}
-                selectable={isCardSelectable(card.root)}
+                selectable={isConversationBulkSelectable(card.root)}
                 selected={batch.selectedIds.has(card.root.id)}
                 expanded={expandedCardIds.has(card.root.id)}
                 onToggleSelect={batch.toggleSelect}

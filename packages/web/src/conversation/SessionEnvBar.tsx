@@ -80,7 +80,7 @@ export function SessionEnvBar({
         level: 'info',
         title: t('composer.env.savedTitle'),
         body: `#${conversation.id} -> ${saved.nodeId || 'local'}:${saved.cwd}`,
-        conversationId: conversation.id,
+        target: { kind: 'conversation', conversationId: conversation.id },
       })
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
@@ -90,7 +90,7 @@ export function SessionEnvBar({
         level: 'error',
         title: t('composer.env.saveFailed'),
         body: message,
-        conversationId: conversation.id,
+        target: { kind: 'conversation', conversationId: conversation.id },
       })
     } finally {
       setSaving(false)

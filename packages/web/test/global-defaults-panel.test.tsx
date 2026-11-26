@@ -501,7 +501,7 @@ test('GlobalDefaultsPanel: external defaultModelInfo sync during in-flight PUT s
     // Trigger an external store refresh while the PUT is still pending.
     externalDefaultModel = 'openai/gpt-4o-mini'
     await act(async () => {
-      await panel.store.refreshAssets()
+      await panel.store.actions.refreshAssets()
     })
     assert.equal(findSaveBtn().disabled, true, 'button remains pending until the active PUT finishes')
     assert.match(panel.container.querySelector('.model-defaults-status')?.textContent ?? '', /openai\/gpt-4o-mini/)

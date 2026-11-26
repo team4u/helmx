@@ -280,7 +280,11 @@ test('after switching A -> B the B draft is fresh: prefill lands normally; onlyI
     assert.equal(app.ta().value, 'B 引导词', 'the non-empty draft is not overwritten')
     const notices = readNotices()
     assert.equal(notices.length, 1)
-    assert.equal(notices[0]!.conversationId, 2, 'the refusal warning belongs to the current conversation B')
+    assert.deepEqual(
+      notices[0]!.target,
+      { kind: 'conversation', conversationId: 2 },
+      'the refusal warning belongs to the current conversation B',
+    )
     assert.match(String(notices[0]!.title), /Handle the current draft before picking a starter/)
     // Switch back to A: a fresh draft, no old A text nor B residue
     app.show('composer-1', convA)

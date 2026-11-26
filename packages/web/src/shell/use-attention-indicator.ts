@@ -19,7 +19,7 @@ import {
   useProfilesSlice,
   useStoreActions,
 } from '../lib/store-context.js'
-import type { ConversationBackgroundIndex } from './background-activity-model.js'
+import type { ConversationBackgroundIndex } from './conversation-status-model.js'
 import {
   buildAttentionModel,
   collectViewedConversationIds,

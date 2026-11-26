@@ -5,6 +5,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import {
   buildConversationOutline,
   buildMarkdownOutline,
@@ -20,6 +21,8 @@ import { resetServerClock } from '../src/lib/server-clock.js'
 import { flushMacrotask } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
+
+const enT = createWebTranslator('en')
 
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
@@ -48,10 +51,10 @@ describe("conversation-outline", () => {
 
   test('stripInlineMarkdown 与 summarizeOutlineText：清理行内格式、取首个非空行并回退附件计数', { timeout: 60_000 }, () => {
     assert.equal(stripInlineMarkdown('**加粗** 与 `code` 及 [链接](https://example.com)'), '加粗 与 code 及 链接')
-    assert.equal(summarizeOutlineText('\n\n# 第一行标题\n第二行正文'), '第一行标题')
-    assert.equal(summarizeOutlineText('- 列表首项\n第二行'), '列表首项')
-    assert.equal(summarizeOutlineText('   ', 2), '[attachment ×2]')
-    assert.equal(summarizeOutlineText(''), '(empty message)')
+    assert.equal(summarizeOutlineText('\n\n# 第一行标题\n第二行正文', 0, enT), '第一行标题')
+    assert.equal(summarizeOutlineText('- 列表首项\n第二行', 0, enT), '列表首项')
+    assert.equal(summarizeOutlineText('   ', 2, enT), '[attachment ×2]')
+    assert.equal(summarizeOutlineText('', 0, enT), '(empty message)')
   })
 
   test('buildMarkdownOutline：为 Markdown H1~H3 生成稳定定位节点', { timeout: 60_000 }, () => {
@@ -116,7 +119,7 @@ describe("conversation-outline", () => {
     ]
 
     const items = buildTimelineItems(entries)
-    const nodes = buildConversationOutline(items)
+    const nodes = buildConversationOutline(items, undefined, enT)
 
     assert.equal(countOutlineTurns(nodes), 2)
     assert.deepEqual(
@@ -170,7 +173,7 @@ describe("conversation-outline", () => {
       { id: '2', kind: 'pi.compaction', model: [{ role: 'user', content: '摘要' }] },
     ]
     const items = buildTimelineItems(entries, { compacting: true })
-    const nodes = buildConversationOutline(items)
+    const nodes = buildConversationOutline(items, undefined, enT)
     const dividers = nodes.filter((n) => n.kind === 'divider')
     assert.equal(dividers.length, 2)
     assert.equal(dividers[0]!.label, 'Context compacted')
@@ -469,7 +472,7 @@ describe("conversation-outline", () => {
         ],
       },
     )
-    const nodes = buildConversationOutline(items)
+    const nodes = buildConversationOutline(items, undefined, enT)
 
     host = document.createElement('div')
     document.body.appendChild(host)

@@ -42,7 +42,8 @@ export function usePluginLocale(): HelmxLocale {
   const activePort = boundPort ?? (ctx === null ? (host ?? undefined) : undefined)
 
   const subscribe = useCallback(
-    (listener: () => void): (() => void) => (activePort !== undefined ? activePort.subscribePrefs(listener) : NOOP_UNSUBSCRIBE),
+    (listener: () => void): (() => void) =>
+      activePort?.subscribePrefs !== undefined ? activePort.subscribePrefs(listener) : NOOP_UNSUBSCRIBE,
     [activePort],
   )
   const getSnapshot = useCallback(

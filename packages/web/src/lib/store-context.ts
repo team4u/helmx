@@ -418,6 +418,10 @@ export function useHighlightedEntry(): { conversationId: number; entryId: string
   return useDomainSlice('highlightedEntry', (s) => s.getHighlightedEntry())
 }
 
+export function useHomeLandingPending(): boolean {
+  return useDomainSlice('homeLanding', (s) => s.getHomeLandingPending())
+}
+
 export function useNotices(): ToastNotice[] {
   return useDomainSlice('notices', (s) => s.getNotices())
 }

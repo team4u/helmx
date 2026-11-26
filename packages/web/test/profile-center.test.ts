@@ -25,6 +25,7 @@ import type { NodeInfo, PluginSummary, PluginUiContribution } from '@helmx/proto
 import type { ModelDescriptor } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import { PROFILE_DETAIL_SECTION_SLOT } from '@helmx/protocol'
@@ -32,6 +33,7 @@ import { PROFILE_DETAIL_SECTION_SLOT } from '@helmx/protocol'
 ensureHappyDom()
 
 const e = React.createElement
+const enT = createWebTranslator('en')
 
 const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
 
@@ -134,7 +136,7 @@ test('profile-center-model: isSystemProfile classification rules', { timeout: 60
 })
 
 test('profile-center-model: base category tabs', { timeout: 60_000 }, () => {
-  const baseTabs = buildProfileCategoryTabs()
+  const baseTabs = buildProfileCategoryTabs(enT)
   assert.deepEqual(baseTabs.map((t) => t.key), ['all', 'system', 'custom'])
 })
 
@@ -831,6 +833,7 @@ test('profile-center-model: effective model / global inheritance, node cwd and a
       },
     ],
     [],
+    enT,
   )
   assert.equal(workingActivity.conversationCount, 1)
   assert.equal(workingActivity.stateKind, 'working')
@@ -850,6 +853,7 @@ test('profile-center-model: effective model / global inheritance, node cwd and a
         hooks: [],
       },
     ],
+    enT,
   )
   assert.equal(disabledActivity.managingPluginDisabled, true)
   assert.equal(disabledActivity.stateKind, 'plugin-disabled')
@@ -872,6 +876,7 @@ test('profile-center-model: effective model / global inheritance, node cwd and a
         hooks: [],
       },
     ],
+    enT,
   )
   assert.equal(failedEnabledActivity.managingPluginDisabled, true)
   assert.equal(failedEnabledActivity.stateKind, 'plugin-disabled')
@@ -1045,4 +1050,128 @@ test('ProfileDetailDrawer: restrict-to-cwd switch renders with localized label a
   assert.match(html, /profile-form-restrict-cwd/)
   assert.match(html, /guardrail, not a sandbox/, 'the guardrail-not-sandbox hint keeps the honesty wording')
   assert.doesNotMatch(html, EMOJI_REGEX)
+})
+
+test('ProfileDetailDrawer: same profile.id SSE refresh keeps edits, and typing during async save is never clobbered', { timeout: 60_000 }, async () => {
+  const { act } = await import('react')
+  const ReactDOMClient = await import('react-dom/client')
+  const originalFetch = globalThis.fetch
+  let resolvePut!: (res: Response) => void
+  const putStarted = new Promise<void>((r) => {
+    void r
+  })
+  void putStarted
+
+  let resolveFirstGet!: (res: Response) => void
+  let getCount = 0
+  let putCalled = false
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input.toString()
+    const method = (init?.method ?? 'GET').toUpperCase()
+    if (method === 'GET' && url.includes('/api/profiles/custom-worker')) {
+      getCount += 1
+      if (getCount === 1) {
+        return new Promise<Response>((resolve) => {
+          resolveFirstGet = resolve
+        })
+      }
+      return new Response(JSON.stringify(mockProfiles[2]!), { status: 200 })
+    }
+    if (method === 'PUT' && url.includes('/api/profiles/custom-worker')) {
+      putCalled = true
+      return new Promise<Response>((resolve) => {
+        resolvePut = resolve
+      })
+    }
+    return new Response(JSON.stringify({}), { status: 200 })
+  }) as typeof fetch
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+  try {
+    const baseProfile: Profile = {
+      ...mockProfiles[2]!,
+      name: '初始名',
+      system: 'initial sys',
+    }
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeTestStore({ models: mockModels, skills: mockSkills }) },
+          e(ProfileDetailDrawer, {
+            profile: baseProfile,
+            isNew: false,
+            open: true,
+            inline: true,
+            onClose: () => {},
+          }),
+        ),
+      )
+    })
+
+    // Resolve initial GET with server detail
+    await act(async () => {
+      resolveFirstGet(new Response(JSON.stringify(baseProfile), { status: 200 }))
+      await Promise.resolve()
+    })
+
+    const nameInput = host.querySelector<HTMLInputElement>('#profile-form-name')!
+    assert.ok(nameInput)
+    await act(async () => {
+      typeIntoControl(nameInput, '编辑后名称')
+    })
+
+    // Re-render with a fresh object reference for the SAME profile.id -> edits stay intact
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeTestStore({ models: mockModels, skills: mockSkills }) },
+          e(ProfileDetailDrawer, {
+            profile: { ...baseProfile, cwd: '/sse/updated' },
+            isNew: false,
+            open: true,
+            inline: true,
+            onClose: () => {},
+          }),
+        ),
+      )
+    })
+    assert.equal(nameInput.value, '编辑后名称', 'same profile.id SSE refresh must not wipe unsaved edits')
+
+    // Click save -> edit name WHILE PUT is in flight -> resolve PUT -> typed edit survives!
+    const saveBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+      (b.textContent ?? '').includes('Save profile'),
+    )!
+    assert.ok(saveBtn)
+    await act(async () => {
+      saveBtn.click()
+    })
+    assert.equal(putCalled, true)
+
+    await act(async () => {
+      typeIntoControl(nameInput, '保存途中继续编辑')
+    })
+
+    await act(async () => {
+      resolvePut(
+        new Response(JSON.stringify({ ...baseProfile, name: '编辑后名称' }), { status: 200 }),
+      )
+      await Promise.resolve()
+    })
+    assert.equal(
+      nameInput.value,
+      '保存途中继续编辑',
+      'handleSave completion must not clobber edits made while save was in flight',
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
 })

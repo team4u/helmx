@@ -3,15 +3,12 @@
  * node ID validation, controlled-machine enrollment command generation,
  * usage and uptime formatting. All side-effect free for easy unit testing and
  * Fast Refresh isolation.
- *
- * Display-copy functions take an optional `t` and default to the English
- * bridge translator.
  */
 
 import type { NodeInfo } from '@helmx/protocol/browser'
 import type { SelectOption } from '@helmx/plugin-client'
 import { formatBytes } from '../lib/format.js'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 
 export { formatBytes }
 
@@ -21,13 +18,12 @@ export const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 export type NodeIdValidation = { ok: true; nodeId: string } | { ok: false; error: string }
 
 /** Validate an enrollment node ID input: trim, reserved names and charset rules. */
-export function validateNodeIdInput(raw: string, t?: WebMessageTranslator): NodeIdValidation {
-  const tt = t ?? englishWebTranslator
+export function validateNodeIdInput(raw: string, t: WebMessageTranslator): NodeIdValidation {
   const nodeId = raw.trim()
-  if (nodeId === '') return { ok: false, error: tt('modals.nodeId.empty') }
-  if (nodeId === 'local') return { ok: false, error: tt('modals.nodeId.localReserved') }
+  if (nodeId === '') return { ok: false, error: t('modals.nodeId.empty') }
+  if (nodeId === 'local') return { ok: false, error: t('modals.nodeId.localReserved') }
   if (!NODE_ID_PATTERN.test(nodeId)) {
-    return { ok: false, error: tt('modals.nodeId.invalidChars') }
+    return { ok: false, error: t('modals.nodeId.invalidChars') }
   }
   return { ok: true, nodeId }
 }
@@ -84,16 +80,15 @@ export interface NodeUsageInfo {
 }
 
 /** Node option label for conversation/profile pickers: id + local/offline annotation. */
-export function nodeOptionLabel(node: NodeInfo, t?: WebMessageTranslator): string {
-  const tt = t ?? englishWebTranslator
-  if (node.kind === 'local') return tt('modals.nodeOption.local', { id: node.id })
-  return node.online ? node.id : tt('modals.nodeOption.offline', { id: node.id })
+export function nodeOptionLabel(node: NodeInfo, t: WebMessageTranslator): string {
+  if (node.kind === 'local') return t('modals.nodeOption.local', { id: node.id })
+  return node.online ? node.id : t('modals.nodeOption.offline', { id: node.id })
 }
 
 export interface BuildNodeSelectOptionsInput {
   nodes: ReadonlyArray<NodeInfo>
   selectedNodeId?: string
-  t?: WebMessageTranslator
+  t: WebMessageTranslator
   /** Prepend an unbound empty-value option (used by ProfileDetailDrawer). */
   unboundLabel?: string
   /** Ensure a `local` fallback entry exists when `nodes` has not loaded `local` yet. */
@@ -115,7 +110,6 @@ export function buildNodeSelectOptions({
   ensureLocal = false,
   unknownNodeLabel,
 }: BuildNodeSelectOptionsInput): SelectOption<string>[] {
-  const tt = t ?? englishWebTranslator
   const seen = new Set<string>()
   const list: SelectOption<string>[] = []
   if (unboundLabel !== undefined) {
@@ -128,16 +122,16 @@ export function buildNodeSelectOptions({
     const isLocal = node.id === 'local' || node.kind === 'local'
     list.push({
       value: node.id,
-      label: nodeOptionLabel(node, tt),
+      label: nodeOptionLabel(node, t),
       icon: isLocal ? 'monitor' : 'network',
-      meta: isLocal ? undefined : node.online ? tt('common.online') : tt('common.offline'),
+      meta: isLocal ? undefined : node.online ? t('common.online') : t('common.offline'),
     })
   }
   if (ensureLocal && !seen.has('local')) {
     seen.add('local')
     list.unshift({
       value: 'local',
-      label: tt('modals.nodeOption.local', { id: 'local' }),
+      label: t('modals.nodeOption.local', { id: 'local' }),
       icon: 'monitor',
     })
   }
@@ -156,7 +150,7 @@ export function buildNodeSelectOptions({
 export function formatUsage(
   freeBytes: number | undefined,
   totalBytes: number | undefined,
-  t?: WebMessageTranslator,
+  t: WebMessageTranslator,
 ): NodeUsageInfo | null {
   if (
     freeBytes === undefined ||
@@ -169,14 +163,13 @@ export function formatUsage(
   ) {
     return null
   }
-  const tt = t ?? englishWebTranslator
   const usedBytes = totalBytes - freeBytes
   const percent = Math.round((usedBytes / totalBytes) * 100)
   return {
     usedBytes,
     totalBytes,
     percent,
-    label: tt('modals.nodeUsage.label', {
+    label: t('modals.nodeUsage.label', {
       used: formatBytes(usedBytes),
       total: formatBytes(totalBytes),
       percent,

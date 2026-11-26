@@ -27,6 +27,7 @@ import { HostStoreProviders } from './helpers/host-store.js'
 
 ;(globalThis as Record<string, unknown>).React = React
 const e = React.createElement
+const enT = createWebTranslator('en')
 const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}][\u{2600}-\u{26FF}]?[\u{2700}-\u{27BF}]?/u
 
 // ---------------------------------------------------------------------------
@@ -34,21 +35,24 @@ const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}][\u{2600}-\u{26FF}]?[\u{2700}-\u{27BF}
 // ---------------------------------------------------------------------------
 
 test('starters pure functions: validation edges and shape conversion', { timeout: 60_000 }, () => {
-  assert.equal(validateStarterDraft({ label: '标题', prompt: '内容' }), null)
-  assert.equal(validateStarterDraft({ label: '  带空白  ', prompt: '内容' }), null)
-  assert.match(validateStarterDraft({ label: '', prompt: 'x' })!, /Title/)
-  assert.match(validateStarterDraft({ label: '   ', prompt: 'x' })!, /Title/)
-  assert.match(validateStarterDraft({ label: 'x', prompt: '' })!, /whitespace only/)
-  assert.match(validateStarterDraft({ label: 'x', prompt: ' \n ' })!, /whitespace only/)
-  assert.equal(validateStarterDraft({ label: '🎉'.repeat(24), prompt: 'x' }), null)
-  assert.match(validateStarterDraft({ label: '🎉'.repeat(25), prompt: 'x' })!, /24/)
-  assert.match(validateStarterDraft({ label: 'x', prompt: 'y'.repeat(4001) })!, /4000/)
+  assert.equal(validateStarterDraft({ label: '标题', prompt: '内容' }, enT), null)
+  assert.equal(validateStarterDraft({ label: '  带空白  ', prompt: '内容' }, enT), null)
+  assert.match(validateStarterDraft({ label: '', prompt: 'x' }, enT)!, /Title/)
+  assert.match(validateStarterDraft({ label: '   ', prompt: 'x' }, enT)!, /Title/)
+  assert.match(validateStarterDraft({ label: 'x', prompt: '' }, enT)!, /whitespace only/)
+  assert.match(validateStarterDraft({ label: 'x', prompt: ' \n ' }, enT)!, /whitespace only/)
+  assert.equal(validateStarterDraft({ label: '🎉'.repeat(24), prompt: 'x' }, enT), null)
+  assert.match(validateStarterDraft({ label: '🎉'.repeat(25), prompt: 'x' }, enT)!, /24/)
+  assert.match(validateStarterDraft({ label: 'x', prompt: 'y'.repeat(4001) }, enT)!, /4000/)
 
-  assert.equal(validateStarterDrafts([{ label: 'a', prompt: 'b' }]), null)
-  const first = validateStarterDrafts([
-    { label: 'a', prompt: 'b' },
-    { label: '', prompt: 'c' },
-  ])
+  assert.equal(validateStarterDrafts([{ label: 'a', prompt: 'b' }], enT), null)
+  const first = validateStarterDrafts(
+    [
+      { label: 'a', prompt: 'b' },
+      { label: '', prompt: 'c' },
+    ],
+    enT,
+  )
   assert.equal(first!.index, 1)
 
   assert.deepEqual(startersToDrafts([{ label: 'L', prompt: 'P' }]), [{ label: 'L', prompt: 'P' }])

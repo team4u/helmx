@@ -803,3 +803,120 @@ test('ModelDetailDrawer: saving omits inline status text and standalone save pus
     container.remove()
   }
 })
+
+test('ModelDetailDrawer: SSE refresh with same provider.id preserves unsaved form edits and stale async test/save results are discarded', { timeout: 60_000 }, async () => {
+  let resolveTest!: (v: { success: boolean; message?: string }) => void
+  const firstTestPromise = new Promise<{ success: boolean; message?: string }>((r) => {
+    resolveTest = r
+  })
+  let testCallCount = 0
+
+  const makeCustom = (configured: boolean): ProviderItem => ({
+    id: 'local-vllm',
+    name: 'Local vLLM',
+    custom: true,
+    dynamic: true,
+    configured,
+    protocol: 'openai',
+    baseUrl: 'http://127.0.0.1:8000/v1',
+    gatewayModels: ['qwen-72b'],
+    modelsCount: 1,
+    models: [{ id: 'qwen-72b', name: 'qwen-72b', enabled: true }],
+  })
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeTestStore() },
+          e(ModelDetailDrawer, {
+            provider: makeCustom(false),
+            open: true,
+            inline: true,
+            onClose: () => {},
+            onTestConnection: () => {
+              testCallCount += 1
+              return testCallCount === 1
+                ? firstTestPromise
+                : Promise.resolve({ success: true, message: 'fresh ok' })
+            },
+          }),
+        ),
+      )
+    })
+
+    const apiKeyInput = container.querySelector<HTMLInputElement>('input#model-drawer-api-key')!
+    const urlInput = container.querySelector<HTMLInputElement>('input#model-drawer-base-url')!
+    const chip = container.querySelector<HTMLButtonElement>('button[role="checkbox"]')!
+    await act(async () => {
+      typeIntoInput(apiKeyInput, 'unsaved-secret-123')
+      typeIntoInput(urlInput, 'http://127.0.0.1:9009/v1')
+      chip.click()
+    })
+
+    // Start async test connection on provider 'local-vllm'
+    await act(async () => {
+      findButtonByText(container, 'Test connection')!.click()
+    })
+
+    // Background SSE re-render updates provider object ref (configured: false -> true) with SAME id
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeTestStore() },
+          e(ModelDetailDrawer, {
+            provider: makeCustom(true),
+            open: true,
+            inline: true,
+            onClose: () => {},
+            onTestConnection: () => firstTestPromise,
+          }),
+        ),
+      )
+    })
+
+    assert.equal(apiKeyInput.value, 'unsaved-secret-123', 'same provider.id refresh must preserve unsaved apiKey')
+    assert.equal(urlInput.value, 'http://127.0.0.1:9009/v1', 'same provider.id refresh must preserve unsaved baseUrl')
+    assert.equal(chip.getAttribute('aria-checked'), 'false', 'same provider.id refresh must preserve chip edits')
+
+    // Switch to another provider before firstTestPromise settles -> stale test result must be dropped
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeTestStore() },
+          e(ModelDetailDrawer, {
+            provider: {
+              id: 'other-gw',
+              name: 'Other GW',
+              custom: true,
+              dynamic: true,
+              configured: false,
+              modelsCount: 0,
+              baseUrl: 'http://127.0.0.1:8001/v1',
+            },
+            open: true,
+            inline: true,
+            onClose: () => {},
+          }),
+        ),
+      )
+    })
+
+    await act(async () => {
+      resolveTest({ success: false, message: 'stale provider failure' })
+      await Promise.resolve()
+    })
+    assert.doesNotMatch(container.textContent ?? '', /stale provider failure/)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})

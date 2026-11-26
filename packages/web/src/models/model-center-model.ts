@@ -12,13 +12,11 @@
  * - Front-end conventions: pure property-driven logic, zero ID-string guessing.
  *
  * i18n: functions that produce display copy take an optional trailing
- * `t` translator (English bridge by default); preset descriptions/tags are
- * constant-table labels and therefore resolved through `t` by the
- * `buildDefaultProviders` builder instead of living as raw literals.
+ * Model-center pure model builders, option selectors, and validation helpers.
  */
 import type { ModelProviderSummary, ProviderConfig } from '@helmx/protocol/browser'
 import type { ModelDescriptor } from '../lib/api.js'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { formatTokens } from '../lib/format.js'
 
 export interface ProviderModelItem {
@@ -71,7 +69,7 @@ export function validateCustomGatewayInput(
     isNew: boolean
     existingIds?: ReadonlyArray<string>
   },
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): string | null {
   const id = input.id.trim().toLowerCase()
   if (input.isNew) {
@@ -113,7 +111,7 @@ export type ProviderFilterTab = 'all' | 'configured'
  * domain copy).
  */
 export function buildProviderFilterTabs(
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): Array<{ key: ProviderFilterTab; label: string }> {
   return [
     { key: 'all', label: t('common.all') },
@@ -137,7 +135,7 @@ export interface ProviderSummaryStats {
  * locale-stable data and stay literal.
  */
 export function buildDefaultProviders(
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): ProviderItem[] {
   return [
     {
@@ -233,12 +231,6 @@ export function buildDefaultProviders(
     },
   ]
 }
-
-/**
- * English preset table kept as the pre-i18n compatibility export (also the
- * default `baseProviders` for `buildMergedProviders` at unmigrated call sites).
- */
-export const DEFAULT_PROVIDERS: ProviderItem[] = buildDefaultProviders()
 
 /**
  * Count total and configured providers.
@@ -345,8 +337,8 @@ export const UNSET_MODEL_VALUE = '__unset__'
  */
 export function buildDefaultModelOptions(
   models: ModelDescriptor[],
-  currentValue?: string,
-  t: WebMessageTranslator = englishWebTranslator,
+  currentValue: string | undefined,
+  t: WebMessageTranslator,
   unsetLabel: string = t('models.defaults.optionUnset'),
 ): Array<{ value: string; label: string; meta?: string }> {
   const options: Array<{ value: string; label: string; meta?: string }> = [
@@ -402,12 +394,12 @@ export function summarizeProviders(
  * credentials, custom gateways and catalog models.
  */
 export function buildMergedProviders(
-  baseProviders: ProviderItem[] = DEFAULT_PROVIDERS,
-  credentials?: Array<{ id: string; configured?: boolean }>,
-  gateways?: ProviderConfig[],
-  catalogModels?: ModelDescriptor[],
-  catalog?: ModelProviderSummary[],
-  t: WebMessageTranslator = englishWebTranslator,
+  baseProviders: ProviderItem[],
+  credentials: Array<{ id: string; configured?: boolean }> | undefined,
+  gateways: ProviderConfig[] | undefined,
+  catalogModels: ModelDescriptor[] | undefined,
+  catalog: ModelProviderSummary[] | undefined,
+  t: WebMessageTranslator,
 ): ProviderItem[] {
   const configuredIds = new Set(
     (credentials ?? [])

@@ -88,9 +88,11 @@ export interface GroupedUiSpecs {
   pluginSlots: Array<QualifiedUiSpec<PluginSlotContributionSpec>>
 }
 
-export interface ToastNotice extends NotificationEvent {
+export interface ToastNotice extends Omit<NotificationEvent, 'conversationId'> {
   id: string
   createdAt: number
+  /** Explicit structured navigation target rendered as the toast action button. */
+  target?: ResolvedTarget
 }
 
 /** Whether the conversation matches the plugin-declared ConversationScope. */
@@ -143,7 +145,6 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
         grouped.workbenchPanels.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'commandPalette':
-      case 'command':
         grouped.commands.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'plugin.slot':

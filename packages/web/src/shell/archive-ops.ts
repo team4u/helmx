@@ -21,7 +21,7 @@
  */
 import type { ConversationPatch, ConversationSummary } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { archiveConversationTags, restoreConversationTags } from '../conversation/archive-model.js'
 
 /** Archive/restore PATCH for one conversation (idempotent; failures propagate for the caller to notice). */
@@ -84,7 +84,7 @@ export type ArchiveBatchNotice = {
 export function archiveBatchNotice(
   archived: boolean,
   outcome: BatchArchiveOutcome,
-  t: WebMessageTranslator = englishWebTranslator,
+  t: WebMessageTranslator,
 ): ArchiveBatchNotice {
   const verb = archived ? t('shell.archive.verbArchive') : t('shell.archive.verbRestore')
   if (outcome.rejected === 0) {
