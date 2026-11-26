@@ -1013,7 +1013,7 @@ export interface HelmxPluginContext<TConfig = Record<string, unknown>> {
 }
 
 export interface PluginDefinition {
-  /** Plugin ID, e.g. 'builtin:profile', 'builtin:herdr'. */
+  /** Plugin ID, e.g. 'builtin:profile', 'builtin:triggers'. */
   id: string
   /**
    * Plugin display name (display copy, `LocalizedText`): a plain string or a

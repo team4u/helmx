@@ -70,6 +70,7 @@ export function modelsCommands(): CommandSpec[] {
       path: ['models', 'list'],
       description: 'List available models (GET /api/models)',
       async run(ctx: CommandContext) {
+        assertNoExtraPositionals(ctx.positionals, 0)
         const hub = await ctx.hub()
         const catalog = await hub.get<ModelCatalog>('/api/models')
         printResult(ctx, ctx.json ? catalog : catalog.models)
@@ -148,6 +149,7 @@ export function modelsCommands(): CommandSpec[] {
       path: ['models', 'providers'],
       description: 'List Pi providers and authentication methods (GET /api/models/providers)',
       async run(ctx: CommandContext) {
+        assertNoExtraPositionals(ctx.positionals, 0)
         const hub = await ctx.hub()
         const providers = await hub.get<ModelProviderSummary[]>('/api/models/providers')
         if (ctx.json || !Array.isArray(providers)) {
@@ -199,14 +201,24 @@ export function modelsCommands(): CommandSpec[] {
         const disable = (ctx.flags.get('disable') as string[] | undefined) ?? []
         const clear = ctx.flags.get('clear') === true
 
-        // Read mode: without any write flags, display disabled models from the current catalog.
-        if (provider === undefined && disable.length === 0 && !clear) {
+        // Read mode: without write flags (--disable / --clear), display disabled models (filtered by --provider if specified).
+        if (provider !== undefined && provider.trim() === '') {
+          throw new CliError('--provider must be a non-empty string', 'invalid_flag_value')
+        }
+        if (disable.length === 0 && !clear) {
           const catalog = await hub.get<ModelCatalog>('/api/models')
           if (ctx.json) {
-            printResult(ctx, catalog)
+            printResult(
+              ctx,
+              provider === undefined
+                ? catalog
+                : { ...catalog, models: catalog.models.filter((m) => m.provider === provider) },
+            )
             return
           }
-          const disabled = catalog.models.filter((m) => m.disabled === true)
+          const disabled = catalog.models.filter(
+            (m) => m.disabled === true && (provider === undefined || m.provider === provider),
+          )
           printResult(
             ctx,
             disabled.length === 0

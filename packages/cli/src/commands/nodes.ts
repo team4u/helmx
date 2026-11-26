@@ -227,6 +227,7 @@ export function nodesCommands(): CommandSpec[] {
     path: ['nodes', 'list'],
     description: 'List compute nodes, online status, and versions (GET /api/nodes)',
     async run(ctx: CommandContext) {
+      assertNoExtraPositionals(ctx.positionals, 0)
       const hub = await ctx.hub()
       const nodes = await hub.get<NodeInfo[]>('/api/nodes')
       if (!Array.isArray(nodes)) throw new CliError('Hub node list must be an array', 'invalid_response')
@@ -424,6 +425,7 @@ export function nodesCommands(): CommandSpec[] {
     path: ['nodes', 'forwards'],
     description: 'List active port forwards (GET /api/nodes/forward)',
     async run(ctx: CommandContext) {
+      assertNoExtraPositionals(ctx.positionals, 0)
       const hub = await ctx.hub()
       const forwards = await hub.get<NodeForwardSession[]>('/api/nodes/forward')
       if (!Array.isArray(forwards)) throw new CliError('Hub forward list must be an array', 'invalid_response')

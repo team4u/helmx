@@ -58,6 +58,7 @@ export function authCommands(): CommandSpec[] {
     path: ['status'],
     description: 'View authentication status (GET /api/auth/status) plus the local Hub lifecycle snapshot',
     async run(ctx: CommandContext) {
+      assertNoExtraPositionals(ctx.positionals, 0)
       const { readLocalHubSnapshot, resolveInstallRoot } = await import('../launcher/index.js')
       const installRoot = resolveInstallRoot(ctx.env)
       const readSnapshot = async (): Promise<LocalHubSnapshot | null> =>

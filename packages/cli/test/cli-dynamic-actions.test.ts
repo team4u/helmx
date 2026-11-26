@@ -886,3 +886,32 @@ test('core:* actions are never dynamically mounted by CLI, never conflict with s
   assert.ok(listed.out.includes('helmx conversations list'))
   assert.ok(!listed.out.includes('(hidden)'))
 })
+
+test('resolveReadFilePositional resolves relative file arguments against ctx.cwd (not process.cwd())', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-action-cwd-')
+  const workDir = useTempDir(t, 'helmx-cli-action-workdir-')
+  await fsp.mkdir(path.join(workDir, 'scripts'), { recursive: true })
+  await fsp.writeFile(path.join(workDir, 'scripts', 'flow.js'), 'export default 42\n', 'utf8')
+  const hub = await startActionsHub(
+    [
+      action(
+        {
+          command: ['gadget', 'run-script'],
+          positional: [{ field: 'target', required: true, readFileInto: 'script' }],
+        },
+        { target: { type: 'string' }, script: { type: 'string' } },
+        ['script'],
+      ),
+    ],
+    {
+      'POST /api/actions/builtin%3Agadget/deploy': (body) => ({ body: { received: body } }),
+    },
+    t,
+  )
+  const env = makeCliEnv(hub.url, dir)
+  const res = await runCliCaptured(['gadget', 'run-script', './scripts/flow.js', '--json'], env, { cwd: workDir })
+  assert.equal(res.code, 0, res.err)
+  assert.deepEqual(JSON.parse(res.out), {
+    received: { input: { script: 'export default 42\n' } },
+  })
+})

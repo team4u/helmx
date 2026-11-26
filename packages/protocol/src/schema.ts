@@ -7,6 +7,7 @@ import { Compile } from 'typebox/compile'
 import { Check, Errors } from 'typebox/value'
 import { HelmxError } from './error.js'
 import type { JsonSchema } from './plugin-dto.js'
+import { isPlainObject } from './utils.js'
 
 interface ValidationIssue {
   instancePath?: string
@@ -33,10 +34,6 @@ const BOUND_KEYS = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum'
 
 const compiledCache = new WeakMap<object, CompiledValidator>()
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 function invalidSchemaError(schema: unknown, reason: string): HelmxError {
   return new HelmxError('invalid_plugin_schema', `JSON Schema compilation failed: ${reason}`, 500, { schema })
 }
@@ -61,7 +58,7 @@ function assertValidSubschema(
     if (!allowBoolean) throw invalidSchemaError(root, `${path} must be a JSON Schema object`)
     return
   }
-  if (!isPlainRecord(node)) throw invalidSchemaError(root, `${path} must be a JSON Schema object`)
+  if (!isPlainObject(node)) throw invalidSchemaError(root, `${path} must be a JSON Schema object`)
   if (visited.has(node)) return
   visited.add(node)
 
@@ -116,7 +113,7 @@ function assertValidSubschema(
   for (const key of SCHEMA_MAP_KEYS) {
     const mapVal = node[key]
     if (mapVal === undefined) continue
-    if (!isPlainRecord(mapVal)) throw invalidSchemaError(root, `${path}.${key} must be an object`)
+    if (!isPlainObject(mapVal)) throw invalidSchemaError(root, `${path}.${key} must be an object`)
     for (const [propKey, propSchema] of Object.entries(mapVal)) {
       if (key === 'patternProperties') assertValidRegex(root, propKey, `${path}.patternProperties["${propKey}"]`)
       assertValidSubschema(root, propSchema, `${path}.${key}.${propKey}`, visited, true)
@@ -139,7 +136,7 @@ function assertValidSubschema(
 }
 
 function compile(schema: JsonSchema | TSchema): CompiledValidator {
-  if (!isPlainRecord(schema)) throw invalidSchemaError(schema, 'root schema must be a plain object')
+  if (!isPlainObject(schema)) throw invalidSchemaError(schema, 'root schema must be a plain object')
   const cached = compiledCache.get(schema)
   if (cached) return cached
 

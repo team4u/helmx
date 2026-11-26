@@ -133,7 +133,7 @@ export async function runHubForeground(options: RunHubOptions): Promise<number> 
     });
     const pidNote = outcome.pid !== undefined ? ` (pid ${outcome.pid}, ${outcome.url})` : '';
     io.out(`installed ${outcome.previousVersion ?? '(none)'} -> ${outcome.targetVersion}; hub started${pidNote}\n`);
-    if (outcome.pid === undefined || outcome.url === null) {
+    if (outcome.pid === undefined || !outcome.url) {
       throw new UsageError('bootstrap install finished without a running hub (internal error)', 'bootstrap_start_failed');
     }
     state = {

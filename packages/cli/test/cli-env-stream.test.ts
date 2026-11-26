@@ -215,4 +215,59 @@ test('HubClient streamNdjson & streamSse: connect timeout, index-cursor multi-fr
     () => hugeSseClient.streamSse('/api/events', { onFrame: () => {} }),
     (err: unknown) => err instanceof CliError && err.code === 'invalid_response' && /maximum size limit/.test(err.message),
   )
+
+  // 4. HubClient.parseEntity throws CliError on response.text() read/abort errors (never silently returning undefined)
+  const abortingTextClient = new HubClient(
+    { baseUrl: 'http://127.0.0.1:3202', token: 'tok' },
+    makeIo((async () => {
+      const resp = new Response('ok', { status: 200, headers: { 'content-type': 'application/json' } })
+      Object.defineProperty(resp, 'text', {
+        value: async () => {
+          const err = new Error('body aborted')
+          err.name = 'AbortError'
+          throw err
+        },
+      })
+      return resp
+    }) as typeof fetch),
+    5_000,
+  )
+  await assert.rejects(
+    () => abortingTextClient.get('/api/test'),
+    (err: unknown) => err instanceof CliError && err.code === 'aborted',
+  )
+
+  // 5. streamSse enforces content-type: text/event-stream (cancelling body) and strict UTF-8 decoding
+  let nonSseBodyCancelled = false
+  const wrongMimeSseClient = new HubClient(
+    { baseUrl: 'http://127.0.0.1:3202', token: 'tok' },
+    makeIo((async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        cancel() {
+          nonSseBodyCancelled = true
+        },
+      })
+      return new Response(stream, { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch),
+    5_000,
+  )
+  await assert.rejects(
+    () => wrongMimeSseClient.streamSse('/api/events', { onFrame: () => {} }),
+    (err: unknown) => err instanceof CliError && err.code === 'invalid_response' && /text\/event-stream/.test(err.message),
+  )
+  assert.equal(nonSseBodyCancelled, true)
+
+  const invalidUtf8SseClient = new HubClient(
+    { baseUrl: 'http://127.0.0.1:3202', token: 'tok' },
+    makeIo((async () =>
+      new Response(new Uint8Array([0x64, 0x61, 0x74, 0x61, 0x3a, 0x20, 0xff, 0xfe, 0x0a, 0x0a]), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })) as typeof fetch),
+    5_000,
+  )
+  await assert.rejects(
+    () => invalidUtf8SseClient.streamSse('/api/events', { onFrame: () => {} }),
+    (err: unknown) => err instanceof CliError && err.code === 'invalid_response' && /UTF-8/.test(err.message),
+  )
 })

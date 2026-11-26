@@ -2,6 +2,7 @@
 import {
   createLocaleTranslator,
   DEFAULT_HELMX_LOCALE,
+  isPlainObject,
   parseLocalizedText,
   type LocaleTranslator,
 } from '@helmx/protocol'
@@ -16,13 +17,6 @@ const CELL_LIMIT = 64
  */
 const humanDisplayCopy: LocaleTranslator = createLocaleTranslator(DEFAULT_HELMX_LOCALE)
 
-/** Plain JSON-shaped record (Object.prototype or null prototype) safe to rebuild for display. */
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
-  const proto = Object.getPrototypeOf(value)
-  return proto === Object.prototype || proto === null
-}
-
 /**
  * Deep display-copy resolution for human rendering only (never the --json
  * path): values shaped exactly as a LocalizedText map (validated by the
@@ -36,7 +30,7 @@ function resolveDisplayCopy(value: unknown): unknown {
   const parsed = parseLocalizedText(value)
   if (parsed !== undefined && typeof parsed !== 'string') return humanDisplayCopy(parsed)
   if (Array.isArray(value)) return value.map((item) => resolveDisplayCopy(item))
-  if (isPlainRecord(value)) {
+  if (isPlainObject(value)) {
     const out: Record<string, unknown> = {}
     for (const [key, entry] of Object.entries(value)) out[key] = resolveDisplayCopy(entry)
     return out
@@ -55,6 +49,15 @@ function truncate(text: string): string {
   return text.length > CELL_LIMIT ? `${text.slice(0, CELL_LIMIT - 1)}...` : text
 }
 
+function renderTable(io: Io, headers: readonly string[], cells: string[][]): void {
+  const widths = headers.map((header, i) => Math.min(80, Math.max(header.length, ...cells.map((r) => r[i]!.length))))
+  io.out(headers.map((header, i) => header.padEnd(widths[i]!)).join('  ') + '\n')
+  io.out(widths.map((width) => '-'.repeat(width)).join('  ') + '\n')
+  for (const row of cells) {
+    io.out(row.map((cell, i) => cell.padEnd(widths[i]!)).join('  ') + '\n')
+  }
+}
+
 function printTable(io: Io, rows: Record<string, unknown>[]): void {
   const keys: string[] = []
   for (const row of rows) {
@@ -66,13 +69,7 @@ function printTable(io: Io, rows: Record<string, unknown>[]): void {
     io.out('(empty)\n')
     return
   }
-  const cells = rows.map((row) => keys.map((key) => truncate(toCell(row[key]))))
-  const widths = keys.map((key, i) => Math.min(80, Math.max(key.length, ...cells.map((r) => r[i]!.length))))
-  io.out(keys.map((key, i) => key.padEnd(widths[i]!)).join('  ') + '\n')
-  io.out(widths.map((width) => '-'.repeat(width)).join('  ') + '\n')
-  for (const row of cells) {
-    io.out(row.map((cell, i) => cell.padEnd(widths[i]!)).join('  ') + '\n')
-  }
+  renderTable(io, keys, rows.map((row) => keys.map((key) => truncate(toCell(row[key])))))
 }
 
 /** Unified result output for entities/arrays returned directly by the API. */
@@ -135,13 +132,11 @@ export function printTableColumns<T>(io: Io, rows: readonly T[], columns: readon
     io.out('(empty)\n')
     return
   }
-  const cells = rows.map((row) => columns.map((col) => truncate(col.value(row))))
-  const widths = columns.map((col, i) => Math.min(80, Math.max(col.label.length, ...cells.map((r) => r[i]!.length))))
-  io.out(columns.map((col, i) => col.label.padEnd(widths[i]!)).join('  ') + '\n')
-  io.out(widths.map((w) => '-'.repeat(w)).join('  ') + '\n')
-  for (const row of cells) {
-    io.out(row.map((cell, i) => cell.padEnd(widths[i]!)).join('  ') + '\n')
-  }
+  renderTable(
+    io,
+    columns.map((col) => col.label),
+    rows.map((row) => columns.map((col) => truncate(col.value(row)))),
+  )
 }
 
 /** Raw text output (for skills read / text artifacts), ensuring a trailing newline. */

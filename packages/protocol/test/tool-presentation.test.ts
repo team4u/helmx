@@ -624,4 +624,37 @@ test('assertJsonSafe and REQUEST_SCHEMAS: shared strict JSON validation and comp
     () => validateOrThrow(REQUEST_SCHEMAS.conversationInput, { text: 'hello', unknown: 1 }, 'input body'),
     (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
   )
+
+  // PluginConfigPutSchema allows string[] in addition to string/number/boolean/null
+  assert.doesNotThrow(() =>
+    validateOrThrow(REQUEST_SCHEMAS.pluginConfigPut, { values: { tags: ['alpha', 'beta'], mode: 'fast', flag: true, count: 2, empty: null } }, 'plugin config'),
+  )
+  assert.throws(
+    () => validateOrThrow(REQUEST_SCHEMAS.pluginConfigPut, { values: { bad: [1] } }, 'plugin config'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+  )
+
+  // AuthPasswordSchema rejects unknown extra keys
+  assert.doesNotThrow(() => validateOrThrow(REQUEST_SCHEMAS.authPassword, { password: 'secret' }, 'auth password'))
+  assert.throws(
+    () => validateOrThrow(REQUEST_SCHEMAS.authPassword, { password: 'secret', extra: 1 }, 'auth password'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+  )
+
+  // SafePositiveInt enforces MAX_SAFE_INTEGER on actionInvoke & envExec conversationId, and envName enforces 128 chars
+  assert.throws(
+    () => validateOrThrow(REQUEST_SCHEMAS.actionInvoke, { input: {}, conversationId: Number.MAX_SAFE_INTEGER + 1 }, 'action invoke'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+  )
+  assert.throws(
+    () => validateOrThrow(REQUEST_SCHEMAS.envExec, { command: 'ls', conversationId: Number.MAX_SAFE_INTEGER + 1 }, 'env exec'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+  )
+  assert.doesNotThrow(() =>
+    validateOrThrow(REQUEST_SCHEMAS.envExec, { command: 'ls', env: { ['E'.repeat(128)]: 'ok' } }, 'env exec'),
+  )
+  assert.throws(
+    () => validateOrThrow(REQUEST_SCHEMAS.envExec, { command: 'ls', env: { ['E'.repeat(129)]: 'too-long' } }, 'env exec'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+  )
 })

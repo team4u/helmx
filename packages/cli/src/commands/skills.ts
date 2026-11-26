@@ -19,7 +19,7 @@ import { CliError } from '../errors.js'
 import { flagValue } from '../args.js'
 import type { HubClient } from '../hub-client.js'
 import type { CommandContext, CommandSpec } from './shared.js'
-import { printPlainText, printResult, requirePositional, resolveConversationTarget } from './shared.js'
+import { assertNoExtraPositionals, printPlainText, printResult, requirePositional, resolveConversationTarget } from './shared.js'
 import { printText } from '../output.js'
 
 /** Scoped skill access runs through builtin:profile plugin actions (no static server contract added by the CLI). */
@@ -143,6 +143,7 @@ export function skillsCommands(): CommandSpec[] {
     description: 'List available skills: Hub global catalog (GET /api/skills); --current or --node [--cwd] scope to a node (and optional workspace) via the builtin:profile skill_catalog action',
     flags: SKILL_SCOPE_FLAGS,
     async run(ctx: CommandContext) {
+      assertNoExtraPositionals(ctx.positionals, 0)
       const hub = await ctx.hub()
       const scope = await resolveSkillScope(ctx.flags, ctx.env, hub)
       if (scope === undefined) {
@@ -177,6 +178,7 @@ export function skillsCommands(): CommandSpec[] {
     positional: '<id>',
     async run(ctx: CommandContext) {
       const id = requirePositional(ctx.positionals, 0, 'id')
+      assertNoExtraPositionals(ctx.positionals, 1)
       const p = flagValue<string>(ctx.flags, 'path')
       const hub = await ctx.hub()
       const scope = await resolveSkillScope(ctx.flags, ctx.env, hub)

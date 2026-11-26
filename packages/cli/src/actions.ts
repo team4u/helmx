@@ -17,6 +17,7 @@
  * - Output is rendered via printValue with zero business-field hardcoding; --json preserves raw output.
  */
 import {
+  isAbsoluteTargetPath,
   isCoreNamespace,
   stripBuiltinNamespace,
   type ActionManifest,
@@ -321,16 +322,12 @@ function validateTimeoutMs(manifest: ActionManifest): number | undefined {
  * Everything else (e.g. demo, demo.js) is treated as a plain value (such as a saved workflow name).
  */
 function isPathLike(raw: string): boolean {
-  // Explicit relative prefixes (forward/backslashes) and ~ home expansion (both separators supported by expandHome)
   if (
     raw.startsWith('./') || raw.startsWith('../') ||
     raw.startsWith('.\\') || raw.startsWith('..\\') ||
     raw === '~' || raw.startsWith('~/') || raw.startsWith('~\\')
   ) return true
-  if (raw.startsWith('\\') || raw.startsWith('/')) return true // POSIX absolute; Windows root-relative \ and UNC \\ prefix
-  // Drive prefix (case-insensitive): C:\x or C:/x; drive-relative c:x counts only with an explicit separator
-  if (raw.length >= 3 && raw[1] === ':' && /[a-zA-Z]/.test(raw[0]!) && (raw[2] === '\\' || raw[2] === '/')) return true
-  return false
+  return isAbsoluteTargetPath(raw)
 }
 
 /** Expand leading ~ to the user's home directory; leave everything else untouched (Windows separators handled by fs). */
@@ -356,10 +353,12 @@ async function resolveReadFilePositional(
   pos: PluginActionCliPositionalSpec,
   raw: string,
   properties: Record<string, unknown>,
+  cwd: string,
   env: NodeJS.ProcessEnv,
 ): Promise<{ field: string; value: unknown }> {
   const fsp = await import('node:fs/promises')
-  const target = expandHome(raw, env)
+  const expanded = expandHome(raw, env)
+  const target = path.resolve(cwd, expanded)
   let stat: Awaited<ReturnType<typeof fsp.stat>>
   try {
     stat = await fsp.stat(target)
@@ -409,6 +408,7 @@ async function applyPositionals(
   input: Record<string, unknown>,
   hasWholeInput: boolean,
   properties: Record<string, unknown>,
+  cwd: string,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
   const specs: PluginActionCliPositionalSpec[] = manifest.cli?.positional ?? []
@@ -425,7 +425,7 @@ async function applyPositionals(
     }
     const resolved =
       pos.readFileInto !== undefined
-        ? await resolveReadFilePositional(manifest, pos, raw, properties, env)
+        ? await resolveReadFilePositional(manifest, pos, raw, properties, cwd, env)
         : { field: pos.field, value: coercePositionalValue(raw, pos.field, properties[pos.field]) }
     if (input[resolved.field] !== undefined) {
       throw new CliError(
@@ -561,6 +561,7 @@ export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
           obj,
           false,
           schemaPropertiesOf(manifest.inputSchema) ?? {},
+          ctx.cwd,
           ctx.env,
         )
         input = obj

@@ -9,6 +9,8 @@ export interface StdinSource {
   readAll(): Promise<string>;
   /** Prompt for a secret interactively without echoing characters to the terminal (used when `isTTY` is true). */
   readSecret?(prompt: string): Promise<string>;
+  /** Prompt for a single interactive confirmation line (used when `isTTY` is true). */
+  readLine?(prompt: string): Promise<string>;
 }
 
 /** Injection hooks for runCli: tests override streams and fetch to avoid touching real process I/O. */
@@ -106,6 +108,15 @@ function processStdin(): StdinSource {
       return Buffer.concat(chunks).toString('utf8');
     },
     readSecret: readSecretFromProcessTty,
+    async readLine(prompt: string): Promise<string> {
+      const { createInterface } = await import('node:readline/promises');
+      const rl = createInterface({ input: process.stdin, output: process.stderr });
+      try {
+        return await rl.question(prompt);
+      } finally {
+        rl.close();
+      }
+    },
   };
 }
 

@@ -9,6 +9,7 @@
  * keeping protocol free of heavy runtime dependencies and browser-safe.
  */
 import { HelmxError } from './error.js';
+import { isPlainObject } from './utils.js';
 
 /**
  * Controlled npm dependency declaration: `specifiers` are the allowed exact bare
@@ -71,32 +72,33 @@ export interface PluginBackendTsTransform {
 export interface PluginBuildProvider {
   /** Compile a plugin client.tsx module into browser ESM output (with disk/memory caching, concurrent merging, hash invalidation and gzip). */
   compileClientModule(request: PluginClientCompileRequest): Promise<PluginClientBundle>;
-  /** Synchronously transpile backend TS source text into ESM (jsx: automatic, target: node20; semantics match esbuild transformSync). */
+  /** Synchronously transpile backend TS source text into ESM (jsx: automatic, target: node24; semantics match esbuild transformSync). */
   transformBackendTs(transform: PluginBackendTsTransform): string;
 }
 
-/** Allowed character set for ClientComponentRef.module (relative path segments: alphanumeric . _ -; empty segments and .. forbidden). */
+/** Allowed character set for ClientComponentRef.module (relative path segments: alphanumeric . _ -; empty segments, ., and .. forbidden). */
 const MODULE_REF_PATTERN = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\.(ts|tsx)$/;
 
 /**
  * Validate the shape of ClientComponentRef.module (relative .ts/.tsx; no absolute,
- * root-escaping, or encoding escapes). The kernel registration boundary and the
- * build implementation share this validation (judged by the path's own form,
+ * root-escaping, '.' / '..', or encoding escapes). The kernel registration boundary
+ * and the build implementation share this validation (judged by the path's own form,
  * cross-platform).
  */
 export function assertModuleRefShape(pluginId: string, moduleRef: string): void {
+  const segments = typeof moduleRef === 'string' ? moduleRef.split('/') : [];
   if (
     typeof moduleRef !== 'string' ||
     moduleRef.startsWith('/') ||
     /^[A-Za-z]:[\\/]/.test(moduleRef) ||
     moduleRef.startsWith('\\') ||
     moduleRef.includes('\\') ||
-    moduleRef.split('/').includes('..') ||
+    segments.some((seg) => seg === '.' || seg === '..') ||
     !MODULE_REF_PATTERN.test(moduleRef)
   ) {
     throw new HelmxError(
       'invalid_client_module',
-      `client module reference of plugin ${pluginId} is invalid (must be a relative .ts/.tsx path inside clientRoot; absolute paths / .. root escapes / backslashes forbidden): ${String(moduleRef)}`,
+      `client module reference of plugin ${pluginId} is invalid (must be a relative .ts/.tsx path inside clientRoot; absolute paths / '.' or '..' segments / backslashes forbidden): ${String(moduleRef)}`,
       400,
       { pluginId, module: String(moduleRef) },
     );
@@ -226,13 +228,9 @@ export function assertPrebuiltRelativeFile(prebuiltDir: string, relPath: unknown
   return relPath;
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /** Validates and normalizes a parsed `dist-client/manifest.json` structure (pure, zero I/O). */
 export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string): PrebuiltClientManifest {
-  if (!isPlainRecord(raw)) {
+  if (!isPlainObject(raw)) {
     throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client manifest in ${prebuiltDir} must be a JSON object`,
@@ -249,7 +247,7 @@ export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string):
     );
   }
   const rawModules = raw['modules'];
-  if (!isPlainRecord(rawModules)) {
+  if (!isPlainObject(rawModules)) {
     throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client manifest in ${prebuiltDir} must declare a modules object`,
@@ -261,7 +259,7 @@ export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string):
   const modules: Record<string, PrebuiltClientModuleEntry> = {};
   for (const [moduleRef, rawEntry] of Object.entries(rawModules)) {
     assertModuleRefShape('prebuilt', moduleRef);
-    if (!isPlainRecord(rawEntry)) {
+    if (!isPlainObject(rawEntry)) {
       throw new HelmxError(
         'prebuilt_client_invalid',
         `Prebuilt client manifest entry for ${moduleRef} in ${prebuiltDir} must be an object`,

@@ -93,8 +93,8 @@ export function resolveConversationTarget(
 
 /**
  * Resolve multiple conversation targets (bulk commands): one or more explicit positional ids, or --current.
- * Mutually exclusive; each id must be a positive integer. Order is preserved and duplicates are kept
- * (the server deduplicates in first-seen order).
+ * Mutually exclusive; each id must be a positive integer. Order is preserved and duplicate IDs are removed
+ * in first-seen order.
  */
 export function resolveConversationTargets(
   flags: Map<string, unknown>,
@@ -119,6 +119,29 @@ export function resolveConversationTargets(
   throw new CliError('missing conversation target: pass one or more <id> arguments or --current (reads HELMX_CONVERSATION_ID)', 'missing_conversation_target')
 }
 
+/** Check whether `target` resolves outside `base` (using relative path inspection). */
+export function isOutsideDir(base: string, target: string): boolean {
+  const rel = path.relative(base, target)
+  return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)
+}
+
+/**
+ * Guard against operating on the executing conversation itself when running inside a
+ * Hub-managed tool process (`HELMX_ENV=1` + matching `HELMX_CONVERSATION_ID`).
+ */
+export function assertNotSelfTarget(
+  env: NodeJS.ProcessEnv,
+  targetIds: readonly number[],
+  code: 'self_delete_forbidden' | 'self_watch_forbidden',
+  messageFor: (selfId: number) => string,
+): void {
+  if (env['HELMX_ENV'] !== '1') return
+  const selfId = Number(env['HELMX_CONVERSATION_ID'])
+  if (Number.isSafeInteger(selfId) && selfId > 0 && targetIds.includes(selfId)) {
+    throw new CliError(messageFor(selfId), code)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Flag value normalization
 // ---------------------------------------------------------------------------
@@ -126,7 +149,15 @@ export function resolveConversationTargets(
 /** --tags: accepts a JSON string array or a comma-separated string. */
 export function coerceTags(raw: unknown): string[] {
   if (typeof raw === 'string' && raw.trim().startsWith('[')) {
-    const parsed = JSON.parse(raw) as unknown
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch (err) {
+      throw new CliError(
+        `--tags invalid JSON: ${err instanceof Error ? err.message : String(err)}`,
+        'invalid_flag_value',
+      )
+    }
     if (!Array.isArray(parsed) || !parsed.every((x) => typeof x === 'string')) {
       throw new CliError('--tags JSON must be a string array', 'invalid_flag_value')
     }
@@ -151,13 +182,14 @@ export function requireJsonInput(flags: Map<string, unknown>): unknown {
   return value
 }
 
-/** Read a local file as UTF-8 text (--system-file, etc.; fails explicitly on error). */
-export async function readTextFileFlag(filePath: string, flagName: string): Promise<string> {
+/** Read a local file as UTF-8 text (--system-file, etc.; resolved against `cwd`, fails explicitly on error). */
+export async function readTextFileFlag(filePath: string, flagName: string, cwd = process.cwd()): Promise<string> {
   const fsp = await import('node:fs/promises')
+  const resolved = path.resolve(cwd, filePath)
   try {
-    const st = await fsp.stat(filePath)
+    const st = await fsp.stat(resolved)
     if (!st.isFile()) throw new CliError(`--${flagName} does not point to a regular file: ${filePath}`, 'read_failed')
-    return await fsp.readFile(filePath, 'utf8')
+    return await fsp.readFile(resolved, 'utf8')
   } catch (err) {
     if (err instanceof CliError) throw err
     throw new CliError(
@@ -206,18 +238,6 @@ export function parseScalarValue(raw: string): string | number | boolean {
 // ---------------------------------------------------------------------------
 // Shared authentication helpers
 // ---------------------------------------------------------------------------
-
-/** Read one line of password from stdin (non-TTY only; TTY prompts callers to pass --password rather than blocking). */
-export async function readPasswordFromStdin(): Promise<string> {
-  const { createInterface } = await import('node:readline/promises')
-  const rl = createInterface({ input: process.stdin, output: process.stderr })
-  try {
-    // readline already strips the trailing newline; do not trim — leading/trailing spaces can be part of the password
-    return await rl.question('')
-  } finally {
-    rl.close()
-  }
-}
 
 /** Shared by setup/login: exchange password for token and atomically save CLI credentials to cli-token (unauthenticated request). */
 export async function authAndSave(ctx: CommandContext, path: '/api/auth/setup' | '/api/auth/login', password: string): Promise<void> {

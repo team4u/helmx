@@ -4,7 +4,7 @@ import { isStrictSemver } from '@helmx/protocol'
 import type { FlagSpec } from '../args.js'
 import { CliError } from '../errors.js'
 import { assertNoExtraPositionals, type CommandSpec } from './shared.js'
-import { LAUNCH_FLAGS, readLaunchOptions, readNonEmptyFlag } from './start.js'
+import { LAUNCH_FLAGS, readLaunchOptions, readNonEmptyFlag, runLauncherCommand } from './start.js'
 
 const flags = [
   { name: 'check', type: 'boolean', help: 'check the channel without installing or restarting' },
@@ -46,7 +46,6 @@ export const updateCommand: CommandSpec = {
       }
     }
 
-    const { cmdCheck, cmdUpdate, resolveInstallRoot, UsageError } = await import('../launcher/index.js')
     const commandFlags = {
       version,
       tag,
@@ -56,12 +55,8 @@ export const updateCommand: CommandSpec = {
       json: ctx.json,
       ...readLaunchOptions(ctx.flags, ctx.cwd),
     }
-    const launcherCtx = { io: ctx.io, root: resolveInstallRoot(ctx.env), ...(ctx.io.fetchImpl !== undefined ? { fetchFn: ctx.io.fetchImpl } : {}) }
-    try {
-      return await (checkOnly ? cmdCheck(launcherCtx, commandFlags) : cmdUpdate(launcherCtx, commandFlags))
-    } catch (error) {
-      if (error instanceof UsageError) throw new CliError(error.message, error.code)
-      throw error
-    }
+    return await runLauncherCommand(ctx, (launcher, launcherCtx) =>
+      checkOnly ? launcher.cmdCheck(launcherCtx, commandFlags) : launcher.cmdUpdate(launcherCtx, commandFlags),
+    )
   },
 }

@@ -46,9 +46,17 @@ export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return proto === Object.prototype || proto === null
 }
 
+/** Authoritative RegExp matching valid environment variable names (length 1..128, ASCII letter or underscore first). */
+export const ENV_NAME_REGEX = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
+
 /** Valid environment variable name: ASCII letter or underscore first, then alphanumerics/underscores; length 1..128 (cap from the kernel SecretStash boundary). */
 export function isValidEnvName(name: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name)
+  return ENV_NAME_REGEX.test(name)
+}
+
+/** Deterministic UTF-16 code-unit string comparator (locale-independent). */
+export function compareCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 /** Valid Profile ID predicate: lowercase alphanumeric + hyphen, must start alphanumeric, length 1..64 (prevents directory injection and path traversal). */

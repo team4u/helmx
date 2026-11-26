@@ -5,6 +5,7 @@ import { CliError } from '../errors.js'
 import { flagValue } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import {
+  assertNoExtraPositionals,
   pathDetails,
   pathDiagLines,
   printPlainText,
@@ -28,6 +29,7 @@ export function artifactsCommands(): CommandSpec[] {
     positional: '[id]',
     async run(ctx: CommandContext) {
       const id = resolveConversationTarget(ctx.flags, ctx.positionals[0], ctx.env)
+      assertNoExtraPositionals(ctx.positionals, 1)
       const hub = await ctx.hub()
       printResult(ctx, await hub.get<ArtifactMetadata[]>(`/api/conversations/${id}/artifacts`))
     },
@@ -90,6 +92,7 @@ export function artifactsCommands(): CommandSpec[] {
     positional: '<id>',
     async run(ctx: CommandContext) {
       const id = requirePositional(ctx.positionals, 0, 'id')
+      assertNoExtraPositionals(ctx.positionals, 1)
       const output = flagValue<string>(ctx.flags, 'output')
       const hub = await ctx.hub()
       const response = await hub.raw(`/api/artifacts/${encodeURIComponent(id)}/content`)
@@ -100,6 +103,7 @@ export function artifactsCommands(): CommandSpec[] {
         return
       }
       if (!isText) {
+        await response.body?.cancel().catch(() => {})
         throw new CliError(`artifact is binary (${contentType || 'unknown type'}): use --output <path>`, 'binary_content_requires_output')
       }
       const text = await response.text()

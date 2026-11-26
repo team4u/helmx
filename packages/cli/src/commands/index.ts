@@ -43,7 +43,6 @@ export {
   parseKeyValues,
   parseScalarValue,
   // -- authentication --
-  readPasswordFromStdin,
   authAndSave,
   resolvePasswordFlag,
   // -- output / enums --

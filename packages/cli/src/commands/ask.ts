@@ -82,7 +82,7 @@ export function askCommands(): CommandSpec[] {
       async run(ctx: CommandContext) {
         assertNoExtraPositionals(ctx.positionals, 1)
         const timeoutMs = flagValue<number>(ctx.flags, 'timeout')
-        if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs <= 0)) {
+        if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)) {
           throw new CliError(`--timeout must be a positive integer in milliseconds, got "${timeoutMs}"`, 'invalid_flag_value')
         }
         // prompt = positional arguments + piped stdin (read only when not a TTY; at least one non-whitespace part required)

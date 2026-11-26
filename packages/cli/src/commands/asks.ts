@@ -15,6 +15,7 @@ export function asksCommands(): CommandSpec[] {
     path: ['asks', 'list'],
     description: 'List pending asks (GET /api/asks)',
     async run(ctx: CommandContext) {
+      assertNoExtraPositionals(ctx.positionals, 0)
       const hub = await ctx.hub()
       const list = await hub.get<AskSpec[]>('/api/asks')
       if (ctx.json || !Array.isArray(list)) {

@@ -5,7 +5,6 @@
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { isReservedPluginNamespace } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import {
   SCAFFOLD_CLIENT_APP_TSX,
@@ -34,7 +33,7 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
   if (typeof name !== 'string' || name.length === 0) {
     throw new CliError('missing <name> (--name or positional argument)', 'missing_id')
   }
-  if (!PLUGIN_NAME_PATTERN.test(name) || isReservedPluginNamespace(name)) {
+  if (!PLUGIN_NAME_PATTERN.test(name)) {
     throw new CliError(
       `invalid plugin name: ${name} (must match ${PLUGIN_NAME_PATTERN}, and builtin:/core: reserved namespaces are forbidden)`,
       'invalid_flag_value',
@@ -149,7 +148,7 @@ export const pluginsInitCommand: CommandSpec = {
     'Local scaffold: generate an external plugin skeleton in the target directory without contacting Hub; --template app declares a Screen and passes helmx plugins doctor',
   flags: [
     { name: 'dir', type: 'string', help: 'target parent directory (defaults to <dataDir>/installed-plugins; must exist or be creatable)' },
-    { name: 'name', type: 'string', help: 'plugin directory name and default id (alphanumeric plus - _, defaults to sample-plugin)' },
+    { name: 'name', type: 'string', help: 'required plugin directory name and default id (alphanumeric plus - _)' },
     {
       name: 'template',
       type: 'string',

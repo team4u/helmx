@@ -240,7 +240,7 @@ export type NodeUpgradeErrorCode = 'source_mode'
 /**
  * Unified RPC error envelope: drain-period rejections of `envExec` and `nodeTunnelOpen`
  * carry `node_draining` through this union (file operations and read-only discovery RPCs
- * such as `envPathUsage` / `nodeHostEnv` are not drained).
+ * such as `envPathUsage` are not drained).
  */
 export interface RpcEnvError {
   code: RpcFileErrorCode | RpcExecutionErrorCode | NodeTunnelErrorCode | NodeUpgradeErrorCode
@@ -337,6 +337,9 @@ export interface EnvExecWindowOptions {
   minIntervalMs: number
   bytesPerSecond: number
 }
+
+/** Authoritative maximum per-command timeout in milliseconds shared across HTTP schemas, CLI validation, and node execution. */
+export const ENV_EXEC_MAX_TIMEOUT_MS = 600_000
 
 export interface EnvExecInput {
   execId: string
@@ -436,9 +439,9 @@ export interface NodeEnvRpcFunctions {
    * target absolute path; a read-only diagnostic surface, executed in-process,
    * never spawning a scan helper). Collects locating information only
    * (PID/process name/reference path), never cmdline/environ. Unsupported
-   * platforms (non-Linux /proc) explicitly return not_supported; when PIDs
-   * unreadable due to permissions exist, complete=false (never pretending to be
-   * complete). Older daemons lack this method (optional): the caller must fail
+   * platforms (non-Linux /proc) explicitly return not_supported; permission-unreadable
+   * PIDs (EACCES/EPERM) do not set complete=false and are instead counted into
+   * unobservable with diagnostics (see NodePathUsage). Older daemons lack this method (optional): the caller must fail
    * explicitly, never silently falling back to a local scan. Upgrade draining
    * does not reject it (same policy as read-only file operations).
    */
