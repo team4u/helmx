@@ -347,6 +347,7 @@ export function assembleRuntimeServices(
       const pendingAsks = asks.listPendingByConversation(id)
       await Promise.all(pendingAsks.map((ask) => asks.cancelAsk(ask.id, 'superseded')))
     },
+    listPendingAskIds: (id) => asks.listPendingByConversation(id).map((ask) => ask.id),
     supersedePendingAsks: async (id) => {
       const pendingAsks = asks.listPendingByConversation(id)
       for (const ask of pendingAsks) {

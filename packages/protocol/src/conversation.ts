@@ -21,6 +21,9 @@ export type InputOrigin = 'human' | 'agent' | 'trigger'
 /** Policy for new input while the conversation is busy; the kernel defaults to steer (steering interjection) when omitted. */
 export type WhenBusy = 'steer' | 'followUp' | 'reject'
 
+/** Policy for new human input while the conversation has pending AskDocs; defaults to supersede when omitted. */
+export type WhenPendingAsk = 'supersede' | 'reject'
+
 /** Valid thinking level enum values (aligned with pi-ai ModelThinkingLevel). */
 export const MODEL_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
@@ -179,6 +182,8 @@ export interface ConversationInput {
   origin: InputOrigin
   /** Busy policy; when omitted the kernel applies the effective default steer (steering interjection) before submission. */
   whenBusy?: WhenBusy
+  /** Pending-AskDoc policy; when omitted (or 'supersede'), direct human non-reject input supersedes pending AskDocs; 'reject' fails 409 ask_pending without side effects. */
+  whenPendingAsk?: WhenPendingAsk
   createdAt: number
   /** Free-form metadata already validated/redacted at the boundary; travels from CLI --meta / HTTP all the way to turn_settled. */
   meta?: Record<string, unknown>

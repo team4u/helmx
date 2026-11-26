@@ -78,11 +78,11 @@ stateDiagram-v2
 
 智能体或插件需要人类澄清或确认时创建 `AskDoc`（支持 `kind: 'question' | 'approval'`）并把会话置为 `blocked`。字段类型支持 `text`（含 `multiline`、`placeholder`）、`select`（单选列表）、`choice`（结构化选项卡片，支持 `recommended` 推荐徽标、`multiple` 多选返回 `string[]`、`allowCustom` 内联「其他」自定义输入）、`confirm`（确认框，支持 `confirmLabel`/`rejectLabel`）与 `model`。`ctx.host.createAsk(spec)` 返回 Promise，正常三态终局（`answered / cancelled / superseded`）均 resolve，只有验证/I/O/宿主失败才 reject——调用方无需区分「人取消了」与「系统坏了」；结算事件 `ask.resolved` 同步携带经 `SecretStash` 脱敏后的 `answers` 供时间线回看。
 
-内核提供内建工具 `ask_user`（`ownerPluginId = 'core:ask_user'`，仅注入顶层人类直连会话，自动从子代理与 `ownedBy: 'helmx'` 会话剥离），统一承接普通模式与计划模式下的结构化澄清提问；人类用户在 Composer 直接发送非 `whenBusy: 'reject'` 的新输入时，内核提交新输入后自动将同一会话的挂起 AskDoc 结算为 `superseded`，重启初始化时也会自动清理残留的孤儿 `core:ask_user` AskDoc，避免会话永久卡死在 `blocked`。
+内核提供内建工具 `ask_user`（`ownerPluginId = 'core:ask_user'`，仅注入顶层人类直连会话，自动从子代理与 `ownedBy: 'helmx'` 会话剥离），统一承接普通模式与计划模式下的结构化澄清提问；人类用户在 Composer 直接发送非 `whenBusy: 'reject'` 且非 `whenPendingAsk: 'reject'` 的新输入时，内核提交新输入后自动将同一会话的挂起 AskDoc 结算为 `superseded`，重启初始化时也会自动清理残留的孤儿 `core:ask_user` AskDoc，避免会话永久卡死在 `blocked`。IM 等纯文本通道可传入 `whenPendingAsk: 'reject'`（待答期间原子返回 `409 ask_pending`，不误作废卡片）并用 `GET /api/asks?conversationId=&status=pending` 恢复挂起项，完整接入约定见 [AskDoc 文本通道接入指南](ask-doc-channels.md)。
 
 ### expectedStateSeq 防竞态
 
-`AskDoc` 可携带持久化水位 `spec.expectedStateSeq` 防止迟到提交覆盖最新状态：
+`AskDoc` 可携带持久化水位 `spec.expectedStateSeq` 防止迟到提交覆盖最新状态（纯界面已读/置顶开关 `PATCH { unread/pinned }` 与 `blocked` 期间的 `doing` 摘要刷新不推进 `stateChangeSeq`，避免前端清未读或并行工具误杀挂起提问；而修改 `title` / `tags` / `model` / `thinkingLevel` / `profileId` / `nodeId` / `cwd` 仍正常推进 `stateChangeSeq`）：
 
 - 客户端提交审批时若提供的 `expectedStateSeq` 与审批记录不一致，返回 `409 ask_state_conflict`；
 - 会话当前 `stateChangeSeq` 已推进超过 `expectedStateSeq` 时，审批自动流转 `superseded` 销单，绝不重复提交；

@@ -36,6 +36,7 @@ import {
   isStrictSemver,
   stripSemverVPrefix,
   type AskAnswers,
+  type AskStatus,
   type ConversationOwnership,
   type ConversationScope,
   type ConversationStatus,
@@ -367,6 +368,7 @@ function registerConversationCoreActions(runtime: CoreActionsRuntimeHost, plugin
       const submitOpts = {
         ...(effectiveOrigin !== undefined ? { origin: effectiveOrigin } : {}),
         ...(parsed.whenBusy !== undefined ? { whenBusy: parsed.whenBusy } : {}),
+        ...(parsed.whenPendingAsk !== undefined ? { whenPendingAsk: parsed.whenPendingAsk } : {}),
         ...(parsed.meta !== undefined ? { meta: parsed.meta } : {}),
         ...(parsed.attachments !== undefined ? { attachments: parsed.attachments } : {}),
         ...(parsed.replaceFromEntryId !== undefined ? { replaceFromEntryId: parsed.replaceFromEntryId } : {}),
@@ -1075,11 +1077,13 @@ function registerAskCoreActions(runtime: CoreActionsRuntimeHost, pluginHost: Cor
     },
     outputSchema: ARRAY_OF_OBJECTS_OUTPUT_SCHEMA,
     handler: (input: { conversationId?: number; status?: string }) => {
-      const asks = runtime.asks.listAsks(input.status)
-      if (input.conversationId !== undefined) {
-        return asks.filter((ask) => ask.conversationId === input.conversationId)
+      if (input.conversationId === undefined && input.status === undefined) {
+        return runtime.asks.listAsks()
       }
-      return asks
+      return runtime.asks.listAsks({
+        ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
+        ...(input.status !== undefined ? { status: input.status as AskStatus } : {}),
+      })
     },
   })
 

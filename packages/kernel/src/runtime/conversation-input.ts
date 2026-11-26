@@ -19,6 +19,7 @@ import type {
   GuardedMutationExpectation,
   InputOrigin,
   WhenBusy,
+  WhenPendingAsk,
 } from '@helmx/protocol'
 import { HelmxError, isPlainObject } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
@@ -33,6 +34,7 @@ import type { ConvMeta, HelmxStore } from './store.js'
 export interface SubmitInputOptions {
   origin?: InputOrigin
   whenBusy?: WhenBusy
+  whenPendingAsk?: WhenPendingAsk
   /** @internal Guarded submissions may ask the SDK to atomically reject idle conversations; never exposed on HTTP/CLI. */
   whenIdle?: 'reject'
   meta?: Record<string, unknown>
@@ -107,6 +109,7 @@ export async function submitDurableInput(
       origin: input.origin,
       createdAt: input.createdAt,
       whenBusy,
+      ...(input.whenPendingAsk !== undefined ? { whenPendingAsk: input.whenPendingAsk } : {}),
       ...(input.meta !== undefined ? { meta: input.meta } : {}),
       ...(input.attachments !== undefined && input.attachments.length > 0
         ? { attachments: input.attachments }
@@ -235,6 +238,7 @@ type PreparedInputResult =
       kind: 'final'
       finalInput: ConversationInput
       finalWhenBusy: WhenBusy
+      finalWhenPendingAsk?: WhenPendingAsk
       effectiveText: string
       resolvedAttachments: Array<{ ref: ConversationAttachmentRef; metadata: ArtifactMetadata; absPath: string }> | undefined
     }
@@ -269,6 +273,7 @@ export class ConversationInputPipeline {
         text,
         origin,
         whenBusy: opts?.whenBusy,
+        ...(opts?.whenPendingAsk !== undefined ? { whenPendingAsk: opts.whenPendingAsk } : {}),
         createdAt,
         ...(safeMeta !== undefined ? { meta: safeMeta } : {}),
         ...(initialAttachments !== undefined
@@ -285,6 +290,7 @@ export class ConversationInputPipeline {
     }
     let finalInput: ConversationInput = payload.input
     let finalWhenBusy: WhenBusy | undefined = opts?.whenBusy
+    let finalWhenPendingAsk: WhenPendingAsk | undefined = opts?.whenPendingAsk
     if (hookOutcome?.action === 'transform') {
       const value = hookOutcome.value as Partial<typeof payload> | null | undefined
       if (!isPlainObject(value) || !isPlainObject(value.input)) {
@@ -306,9 +312,29 @@ export class ConversationInputPipeline {
         assertValidInputAttachments(finalInput.attachments)
       }
       finalWhenBusy = finalInput.whenBusy ?? finalWhenBusy
+      finalWhenPendingAsk = finalInput.whenPendingAsk ?? finalWhenPendingAsk
+      if (
+        finalWhenPendingAsk !== undefined &&
+        finalWhenPendingAsk !== 'supersede' &&
+        finalWhenPendingAsk !== 'reject'
+      ) {
+        throw new HelmxError(
+          'invalid_hook_result',
+          'input hook transform field whenPendingAsk must be supersede|reject',
+          500,
+        )
+      }
     }
     finalWhenBusy = finalWhenBusy ?? 'steer'
-    finalInput = { ...finalInput, whenBusy: finalWhenBusy }
+    const cleanInput = { ...finalInput }
+    if (finalWhenPendingAsk === undefined) {
+      delete cleanInput.whenPendingAsk
+    }
+    finalInput = {
+      ...cleanInput,
+      whenBusy: finalWhenBusy,
+      ...(finalWhenPendingAsk !== undefined ? { whenPendingAsk: finalWhenPendingAsk } : {}),
+    }
     const finalIds = finalInput.attachments?.map((a) => a.id) ?? []
     const resolvedAttachments =
       finalIds.length > 0
@@ -331,7 +357,14 @@ export class ConversationInputPipeline {
         ? { attachments: resolvedAttachments.map((r) => r.ref) }
         : { attachments: undefined }),
     }
-    return { kind: 'final', finalInput, finalWhenBusy, effectiveText, resolvedAttachments }
+    return {
+      kind: 'final',
+      finalInput,
+      finalWhenBusy,
+      ...(finalWhenPendingAsk !== undefined ? { finalWhenPendingAsk } : {}),
+      effectiveText,
+      resolvedAttachments,
+    }
   }
 
   /** Auto-title on first input (derived from redacted text; advances stateChangeSeq synchronously). */
@@ -355,9 +388,11 @@ export class ConversationInputPipeline {
       whenIdle?: 'reject'
       /** Guarded mutation commit-point atomic re-check payload (omitted for normal submissions). */
       mutationGuard?: GuardedMutationExpectation
+      /** Additional synchronous commit-point assertion (e.g. whenPendingAsk=reject). */
+      assertBeforeCommit?: () => void
     },
   ): Promise<{ submissionId: string }> {
-    const { finalInput, finalWhenBusy, effectiveText, resolvedAttachments, content, mutationGuard } = prepared
+    const { finalInput, finalWhenBusy, effectiveText, resolvedAttachments, content, mutationGuard, assertBeforeCommit } = prepared
     const input: ConversationInput = {
       ...finalInput,
       text: effectiveText,
@@ -366,6 +401,15 @@ export class ConversationInputPipeline {
         ? { attachments: resolvedAttachments.map((r) => r.ref) }
         : { attachments: undefined }),
     }
+    const assertGuard =
+      mutationGuard !== undefined || assertBeforeCommit !== undefined
+        ? () => {
+            if (mutationGuard !== undefined) {
+              this.host.assertMutationGuard(id, mutationGuard)
+            }
+            assertBeforeCommit?.()
+          }
+        : undefined
     const { submissionId } = await submitDurableInput({
       harness: this.host.harness,
       conversation,
@@ -376,10 +420,7 @@ export class ConversationInputPipeline {
       requestId: prepared.requestId ?? finalInput.id,
       whenIdle: prepared.whenIdle,
       tracker: this.host.tracker,
-      assertMutationGuard:
-        mutationGuard !== undefined
-          ? () => this.host.assertMutationGuard(id, mutationGuard)
-          : undefined,
+      assertMutationGuard: assertGuard,
     })
     return { submissionId }
   }

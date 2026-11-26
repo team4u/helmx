@@ -17,7 +17,7 @@
  * - after restart, pending asks remain and emit diagnostic notifications.
  */
 
-import type { AskAnswers, AskAnswerValue, AskCreateSpec, AskFieldSpec, AskResult, AskSpec } from '@helmx/protocol'
+import type { AskAnswers, AskAnswerValue, AskCreateSpec, AskFieldSpec, AskListFilter, AskResult, AskSpec } from '@helmx/protocol'
 import { HelmxError, isPlainObject, parseLocalizedText, parseNonEmptyLocalizedText } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 
@@ -68,8 +68,19 @@ export class AskService {
     this.redact = options.redact ?? ((text) => text)
   }
 
-  listAsks(status?: string): AskSpec[] {
-    return this.store.listAsks(status).map((row) => parseAskSpecRow(row))
+  listAsks(filter?: string | AskListFilter): AskSpec[] {
+    if (filter === undefined) {
+      return this.store.listAsks().map((row) => parseAskSpecRow(row))
+    }
+    if (typeof filter === 'string') {
+      return this.store.listAsks(filter).map((row) => parseAskSpecRow(row))
+    }
+    if (filter.conversationId !== undefined) {
+      return this.store
+        .listAsksByConversation(filter.conversationId, filter.status)
+        .map((row) => parseAskSpecRow(row))
+    }
+    return this.store.listAsks(filter.status).map((row) => parseAskSpecRow(row))
   }
 
   listPendingByConversation(conversationId: number): AskSpec[] {

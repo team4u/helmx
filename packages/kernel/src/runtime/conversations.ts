@@ -1421,9 +1421,14 @@ export class ConversationTracker {
     if (!mirror?.live?.run) return
     const meta = this.store.getConv(id)
     if (!meta) return
-    if (mirror.lastSummaryKey === summaryKeyOf(this.summaryOf(id))) return
-    this.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
-    const summary = this.summaryOf(id)
+    const candidate = this.summaryOf(id)
+    if (mirror.lastSummaryKey === summaryKeyOf(candidate)) return
+    // While blocked on a pending AskDoc, sibling tool `doing` transitions still emit refreshed summaries,
+    // without advancing `stateChangeSeq` past the pending AskDoc's CAS ceiling.
+    if (candidate.status !== 'blocked') {
+      this.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
+    }
+    const summary = candidate.status !== 'blocked' ? this.summaryOf(id) : candidate
     mirror.lastSummaryKey = summaryKeyOf(summary)
     this.events.onSummaryChanged(summary)
   }
