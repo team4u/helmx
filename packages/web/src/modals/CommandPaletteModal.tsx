@@ -1,74 +1,21 @@
-import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { resolveLocalizedText, type CommandSpec, type ConversationSummary } from '@helmx/protocol/browser'
-import {
-  Badge,
-  Button,
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-  HelmxIcon,
-  SearchBox,
-  Stack,
-} from '@helmx/plugin-client'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, HelmxIcon } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { openStandbyWithFocus } from '../conversation/standby-focus.js'
-import { searchApi } from '../lib/api.js'
-import {
-  commandActionPluginId,
-  commandsForConversation,
-  type QualifiedCommand,
-} from '../lib/commands-model.js'
 import { isImeComposing } from '../lib/ime.js'
-import { isAbortError } from '../lib/request-manager.js'
-import {
-  useAuthConnection,
-  useConversationBackgroundSlice,
-  useConversations,
-  useGroupedUi,
-  useLocationTargets,
-  usePlugins,
-  useProfilesSlice,
-  useSidebarCollapsed,
-  useStoreActions,
-  useThemePreferencesState,
-  useWorkbenchState,
-} from '../lib/store-context.js'
-import { activeTargetForPanel, resolveFocusedPanel } from '../lib/panel-focus.js'
-import type { LocalePreference } from '../lib/types.js'
 import { formatModShortcut } from '../shell/shortcuts-model.js'
-import { collectEnabledPluginIds } from '../shell/conversation-status-model.js'
-import { PluginUiView } from '../ui/PluginUiView.js'
-import {
-  buildPaletteContextCommands,
-  buildPaletteNavigationCommands,
-  buildPaletteRecentRows,
-  buildPaletteUtilityCommands,
-} from './command-palette-catalog.js'
-import {
-  buildPaletteRows,
-  resolvePaletteEscapeAction,
-  resolveRowNavigation,
-  resolveSelectedIndex,
-  type PaletteGroupKey,
-  type PaletteRow,
-  type PaletteSearchHit,
-  type PaletteSearchHitRow,
-} from './command-palette-model.js'
-import { CommandPaletteRowItem } from './CommandPaletteRows.js'
+import { resolvePaletteEscapeAction } from './command-palette-model.js'
+import { CommandPaletteFooter } from './command-palette/CommandPaletteFooter.js'
+import { CommandPaletteHeader } from './command-palette/CommandPaletteHeader.js'
+import { CommandPaletteList } from './command-palette/CommandPaletteList.js'
+import { CommandPalettePreview } from './command-palette/CommandPalettePreview.js'
+import { usePaletteCommands } from './command-palette/use-palette-commands.js'
+import { usePaletteSearch } from './command-palette/use-palette-search.js'
+import { usePaletteSelection } from './command-palette/use-palette-selection.js'
 
-const GROUP_LABEL_KEYS: Record<
-  PaletteGroupKey,
-  'modals.palette.group.context' | 'modals.palette.group.recent' | 'modals.palette.group.navigation' | 'modals.palette.group.commands'
-> = {
-  context: 'modals.palette.group.context',
-  recent: 'modals.palette.group.recent',
-  navigation: 'modals.palette.group.navigation',
-  commands: 'modals.palette.group.commands',
-}
-
+/**
+ * 全局命令面板（居中轻量模态）：FTS 检索、分组命令目录、键盘 / 悬停选中与分层 Esc。
+ * 检索、选中与命令装配分别在 ./command-palette/ 下的三个 Hook 中，本组件只负责编排与 DOM 骨架。
+ */
 export function CommandPaletteModal({
   onClose,
   searchDebounceMs = 200,
@@ -76,27 +23,7 @@ export function CommandPaletteModal({
   onClose: () => void
   searchDebounceMs?: number
 }) {
-  const conversations = useConversations()
-  const { authenticated } = useAuthConnection()
-  const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
-  const { workbenchOpen } = useWorkbenchState()
-  const sidebarCollapsed = useSidebarCollapsed()
-  const { themePreference, localePreference: storeLocalePref, quietNotifyEnabled } = useThemePreferencesState()
-  const groupedUi = useGroupedUi()
-  const plugins = usePlugins()
-  const { badgeDocs, pendingBadgeDocs, snapshot: backgroundSnapshot } = useConversationBackgroundSlice()
-  const { profiles } = useProfilesSlice()
-  const actions = useStoreActions()
   const { locale, t } = useWebLocale()
-
-  const [query, setQuery] = useState('')
-  const [isComposing, setIsComposing] = useState(false)
-  const [hits, setHits] = useState<PaletteSearchHit[]>([])
-  const [searching, setSearching] = useState(false)
-  const [searchFailed, setSearchFailed] = useState(false)
-  const [settledQuery, setSettledQuery] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [previewCmd, setPreviewCmd] = useState<{ pluginId: string; spec: CommandSpec } | null>(null)
   const [inputEl, setInputEl] = useState<HTMLInputElement | null>(null)
   const [modalEl, setModalEl] = useState<HTMLDivElement | null>(null)
 
@@ -106,40 +33,15 @@ export function CommandPaletteModal({
     inputRef.current = el
     setInputEl(el)
   }, [])
-  const listRef = useRef<HTMLDivElement | null>(null)
   const attachModalRef = useCallback((el: HTMLDivElement | null) => {
     setModalEl(el)
   }, [])
-  const composingRef = useRef(false)
-  const searchGenRef = useRef(0)
-  const searchAbortRef = useRef<AbortController | null>(null)
-  const settledQueryRef = useRef('')
-  const ignoreHoverRef = useRef(false)
-  const lastPointerPosRef = useRef<{ x: number; y: number } | null>(null)
-  const skipCloseAutoFocusRef = useRef(false)
 
   useEffect(() => {
     inputEl?.focus()
   }, [inputEl])
 
-  useEffect(() => {
-    if (!inputEl) return
-    const onCompositionStart = () => {
-      composingRef.current = true
-      setIsComposing(true)
-    }
-    const onCompositionEnd = () => {
-      composingRef.current = false
-      setIsComposing(false)
-    }
-    inputEl.addEventListener('compositionstart', onCompositionStart)
-    inputEl.addEventListener('compositionend', onCompositionEnd)
-    return () => {
-      inputEl.removeEventListener('compositionstart', onCompositionStart)
-      inputEl.removeEventListener('compositionend', onCompositionEnd)
-    }
-  }, [inputEl])
-
+  // 软键盘弹出时按 visualViewport 高度约束面板高度，避免输入框被遮挡。
   useEffect(() => {
     if (!modalEl) return
     const vv = typeof window !== 'undefined' ? window.visualViewport : null
@@ -157,344 +59,43 @@ export function CommandPaletteModal({
     }
   }, [modalEl])
 
-  const handleQueryChange = useCallback((next: string) => {
-    setQuery(next)
-    setSelectedId(null)
-    ignoreHoverRef.current = true
-  }, [])
+  const search = usePaletteSearch(inputEl, searchDebounceMs)
+  const { setQuery } = search
+  const commands = usePaletteCommands({ onClose, query: search.query, hits: search.hits })
+  const selection = usePaletteSelection(commands.rows)
+  const { rows, sections, scopedPluginCommands, previewCmd, setPreviewCmd, close, invokePluginCommand } = commands
+  const { selectedIdx, rowIndexById, listRef, resetSelection, moveSelection, handleRowPointerHover } = selection
 
-  // FTS5 full-text search: 200ms debounce + AbortController + generation guard + IME deferral.
-  useEffect(() => {
-    searchAbortRef.current?.abort()
-    searchAbortRef.current = null
-
-    const q = query.trim()
-    if (q === '') {
-      searchGenRef.current += 1
-      settledQueryRef.current = ''
-      setSettledQuery('')
-      setHits([])
-      setSearching(false)
-      setSearchFailed(false)
-      return
-    }
-
-    if (isComposing) {
-      setSearching(false)
-      return
-    }
-
-    const gen = ++searchGenRef.current
-    setSearching(true)
-    setSearchFailed(false)
-    if (settledQueryRef.current !== '' && !q.startsWith(settledQueryRef.current)) {
-      setHits([])
-    }
-
-    const timer = setTimeout(() => {
-      const controller = new AbortController()
-      searchAbortRef.current = controller
-      searchApi
-        .query(q, { signal: controller.signal })
-        .then((items) => {
-          if (gen !== searchGenRef.current || controller.signal.aborted) return
-          settledQueryRef.current = q
-          setSettledQuery(q)
-          setHits(items.slice(0, 8))
-          setSearchFailed(false)
-          setSearching(false)
-        })
-        .catch((err: unknown) => {
-          if (gen !== searchGenRef.current || controller.signal.aborted || isAbortError(err)) return
-          settledQueryRef.current = q
-          setSettledQuery(q)
-          setHits([])
-          setSearchFailed(true)
-          setSearching(false)
-        })
-    }, searchDebounceMs)
-
-    return () => {
-      clearTimeout(timer)
-      searchAbortRef.current?.abort()
-      searchAbortRef.current = null
-    }
-  }, [query, isComposing, searchDebounceMs])
-
-  const background = backgroundSnapshot.byConversation
-  useEffect(() => {
-    if (!authenticated) return
-    for (const ref of badgeDocs) {
-      if (pendingBadgeDocs.has(`${ref.pluginId}/${ref.doc}`)) {
-        void actions.ensurePluginDoc(ref.pluginId, ref.doc)
-      }
-    }
-  }, [badgeDocs, pendingBadgeDocs, authenticated, actions.ensurePluginDoc])
-
-  const close = useCallback(() => onClose(), [onClose])
-
-  const activePanel = resolveFocusedPanel(focusedPanel ?? 'primary', splitTarget)
-  const activeTarget = activeTargetForPanel(primaryTarget, splitTarget, activePanel)
-  const modEnterHint = formatModShortcut('Enter')
-  const shortcutsHint = formatModShortcut('/')
-  const navRowTitle = t('modals.palette.navRowTitle', { modEnter: modEnterHint })
-
-  const enabledPluginIds = useMemo(() => collectEnabledPluginIds(plugins), [plugins])
-
-  const paletteConversation = useMemo(() => {
-    if (activeTarget.kind !== 'conversation') return undefined
-    return conversations.find((c) => c.id === activeTarget.conversationId)
-  }, [activeTarget, conversations])
-
-  const openShortcutsModal = useCallback(() => {
-    skipCloseAutoFocusRef.current = true
-    actions.setActiveModal({ kind: 'shortcuts' })
-  }, [actions.setActiveModal])
-
-  const contextCommands = useMemo(
-    () =>
-      buildPaletteContextCommands({
-        activeTarget,
-        activePanel,
-        workbenchOpen,
-        conversations,
-        profiles,
-        plugins,
-        sidebarItems: groupedUi.sidebarItems,
-        locale,
-        splitTarget,
-        setWorkbenchOpen: actions.setWorkbenchOpen,
-        closeSplit: actions.closeSplit,
-        t,
-      }),
-    [
-      activePanel,
-      activeTarget,
-      actions.closeSplit,
-      actions.setWorkbenchOpen,
-      conversations,
-      groupedUi.sidebarItems,
-      locale,
-      plugins,
-      profiles,
-      splitTarget,
-      t,
-      workbenchOpen,
-    ],
-  )
-
-  const recentConversationRows = useMemo(
-    () => buildPaletteRecentRows(conversations, paletteConversation?.id, background, t),
-    [conversations, paletteConversation?.id, background, t],
-  )
-
-  const navigationCommands = useMemo(
-    () =>
-      buildPaletteNavigationCommands({
-        profiles,
-        enabledPluginIds,
-        screens: groupedUi.screens,
-        plugins,
-        locale,
-        t,
-      }),
-    [profiles, enabledPluginIds, groupedUi.screens, plugins, locale, t],
-  )
-
-  const invokePluginCommand = useCallback(
-    (cmd: QualifiedCommand) => {
-      const actionId = cmd.spec.actionId
-      if (!actionId) return
-      void actions
-        .invokePluginAction(commandActionPluginId(cmd), actionId, cmd.spec.input, paletteConversation?.id)
-        .then(() =>
-          actions.pushNotice({
-            type: 'notification',
-            level: 'info',
-            title: t('modals.palette.cmdExecuted'),
-            body: resolveLocalizedText(cmd.spec.title, locale),
-          }),
-        )
-        .catch((err: unknown) =>
-          actions.pushNotice({
-            type: 'notification',
-            level: 'error',
-            title: t('modals.palette.cmdFailed'),
-            body: err instanceof Error ? err.message : String(err),
-          }),
-        )
+  const handleQueryChange = useCallback(
+    (next: string) => {
+      setQuery(next)
+      resetSelection()
     },
-    [actions, locale, paletteConversation?.id, t],
-  )
-
-  const scopedPluginCommands = useMemo(
-    () => commandsForConversation(groupedUi.commands, paletteConversation),
-    [groupedUi.commands, paletteConversation],
-  )
-
-  const localePref: LocalePreference = storeLocalePref ?? 'auto'
-
-  const utilityCommands = useMemo(
-    () =>
-      buildPaletteUtilityCommands({
-        scopedPluginCommands,
-        locale,
-        sidebarCollapsed,
-        themePreference,
-        localePref,
-        quietNotifyEnabled,
-        onPreviewCommand: setPreviewCmd,
-        onInvokePluginCommand: invokePluginCommand,
-        openShortcuts: openShortcutsModal,
-        toggleSidebarCollapsed: actions.toggleSidebarCollapsed,
-        toggleTheme: actions.toggleTheme,
-        setLocalePreference: actions.setLocalePreference,
-        setLocale: actions.setLocale,
-        setQuietNotify: actions.setQuietNotify,
-        t,
-      }),
-    [
-      scopedPluginCommands,
-      locale,
-      sidebarCollapsed,
-      themePreference,
-      localePref,
-      quietNotifyEnabled,
-      invokePluginCommand,
-      openShortcutsModal,
-      actions.toggleSidebarCollapsed,
-      actions.toggleTheme,
-      actions.setLocalePreference,
-      actions.setLocale,
-      actions.setQuietNotify,
-      t,
-    ],
-  )
-
-  const makeConversationRow = useCallback(
-    (conv: ConversationSummary): PaletteSearchHitRow => ({
-      kind: 'search-hit',
-      id: `conv:${conv.id}`,
-      group: 'recent',
-      conv,
-      isLocalConversation: true,
-      hit: {
-        conversationId: conv.id,
-        title: conv.title,
-        entryId: '',
-        snippet: t('modals.palette.convSnippet', { id: conv.id, profileId: conv.profileId }),
-      },
-    }),
-    [t],
-  )
-
-  const { sections, rows } = useMemo(
-    () =>
-      buildPaletteRows({
-        query,
-        contextCommands,
-        recentConversations: recentConversationRows,
-        navigationCommands,
-        utilityCommands,
-        conversations,
-        ftsHits: hits,
-        makeConversationRow,
-      }),
-    [
-      query,
-      contextCommands,
-      recentConversationRows,
-      navigationCommands,
-      utilityCommands,
-      conversations,
-      hits,
-      makeConversationRow,
-    ],
-  )
-
-  const selectedIdx = useMemo(() => resolveSelectedIndex(rows, selectedId), [rows, selectedId])
-
-  const rowIndexById = useMemo(() => {
-    const map = new Map<string, number>()
-    rows.forEach((row, idx) => map.set(row.id, idx))
-    return map
-  }, [rows])
-
-  const executeRow = useCallback(
-    (row: PaletteRow, forceSplit: boolean) => {
-      const nav = resolveRowNavigation(row, activePanel, forceSplit)
-      if (nav !== null) {
-        skipCloseAutoFocusRef.current = true
-        const opts =
-          nav.split || nav.highlightEntryId !== undefined
-            ? {
-                ...(nav.split ? { split: true } : {}),
-                ...(nav.highlightEntryId !== undefined ? { highlightEntryId: nav.highlightEntryId } : {}),
-              }
-            : undefined
-        if (nav.target.kind === 'agent') {
-          const agentProfileId = nav.target.profileId
-          openStandbyWithFocus(
-            { panel: nav.split ? 'split' : 'primary', profileId: agentProfileId },
-            () => {
-              close()
-              actions.openTarget(nav.target, opts)
-            },
-          )
-          return
-        }
-        close()
-        actions.openTarget(nav.target, opts)
-        return
-      }
-      if (row.kind === 'command') {
-        const isClientPreview = scopedPluginCommands.some(
-          (c) => c.spec.client !== undefined && `plugin:${c.pluginId}/${c.spec.id}` === row.id,
-        )
-        if (isClientPreview) {
-          row.run?.()
-          return
-        }
-        if (row.skipCloseAutoFocus) {
-          skipCloseAutoFocusRef.current = true
-        }
-        close()
-        row.run?.()
-      }
-    },
-    [actions, activePanel, close, scopedPluginCommands],
+    [setQuery, resetSelection],
   )
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (composingRef.current || isImeComposing(e)) return
+    if (search.composingRef.current || isImeComposing(e)) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      ignoreHoverRef.current = true
-      if (rows.length === 0) return
-      const nextIdx = selectedIdx < 0 ? 0 : (selectedIdx + 1) % rows.length
-      const nextRow = rows[nextIdx]
-      if (nextRow) setSelectedId(nextRow.id)
+      moveSelection(1)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      ignoreHoverRef.current = true
-      if (rows.length === 0) return
-      const prevIdx = selectedIdx < 0 ? rows.length - 1 : (selectedIdx - 1 + rows.length) % rows.length
-      const prevRow = rows[prevIdx]
-      if (prevRow) setSelectedId(prevRow.id)
+      moveSelection(-1)
     } else if (e.key === 'Enter') {
       e.preventDefault()
       const row = selectedIdx >= 0 ? rows[selectedIdx] : undefined
       if (!row) return
       const forceSplit = (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey
-      executeRow(row, forceSplit)
+      commands.executeRow(row, forceSplit)
     }
   }
 
   const handleEscapeKeyDown = (event: KeyboardEvent) => {
     const action = resolvePaletteEscapeAction({
-      isComposing: composingRef.current || isImeComposing(event),
+      isComposing: search.composingRef.current || isImeComposing(event),
       hasPreview: previewCmd !== null,
-      query,
+      query: search.query,
     })
     if (action === 'ignore-ime') {
       event.preventDefault()
@@ -513,27 +114,9 @@ export function CommandPaletteModal({
     }
   }
 
-  useEffect(() => {
-    if (selectedIdx < 0) return
-    const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${selectedIdx}"]`)
-    el?.scrollIntoView({ block: 'nearest' })
-  }, [selectedIdx])
-
-  const handleRowPointerHover = (rowId: string, clientX: number, clientY: number, isMove: boolean) => {
-    const prev = lastPointerPosRef.current
-    if (isMove) {
-      if (prev === null || clientX !== prev.x || clientY !== prev.y) {
-        lastPointerPosRef.current = { x: clientX, y: clientY }
-        ignoreHoverRef.current = false
-        setSelectedId(rowId)
-      }
-      return
-    }
-    if (!ignoreHoverRef.current) setSelectedId(rowId)
-  }
-
-  const trimmedQuery = query.trim()
-  const isSearchPending = trimmedQuery !== '' && (isComposing || searching || settledQuery !== trimmedQuery)
+  const trimmedQuery = search.query.trim()
+  const isSearchPending =
+    trimmedQuery !== '' && (search.isComposing || search.searching || search.settledQuery !== trimmedQuery)
   const previewMatchingCommand = useMemo(
     () =>
       previewCmd !== null
@@ -547,21 +130,7 @@ export function CommandPaletteModal({
   const activeDescendantId =
     selectedIdx >= 0 && rows[selectedIdx] !== undefined ? `${listboxId}-opt-${selectedIdx}` : undefined
 
-  const renderRow = (row: PaletteRow, idx: number) => (
-    <CommandPaletteRowItem
-      key={row.id}
-      row={row}
-      idx={idx}
-      isSelected={idx === selectedIdx}
-      optionId={`${listboxId}-opt-${idx}`}
-      trimmedQuery={trimmedQuery}
-      navRowTitle={navRowTitle}
-      background={background}
-      t={t}
-      onExecute={executeRow}
-      onHover={handleRowPointerHover}
-    />
-  )
+  const searchUnavailable = search.searchFailed && search.settledQuery === trimmedQuery && trimmedQuery !== ''
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -573,102 +142,44 @@ export function CommandPaletteModal({
             aria-label={t('modals.palette.dialogTitle')}
             onKeyDown={onKeyDown}
             onEscapeKeyDown={handleEscapeKeyDown}
-            onCloseAutoFocus={(e) => {
-              if (skipCloseAutoFocusRef.current) {
-                skipCloseAutoFocusRef.current = false
-                e.preventDefault()
-              }
-            }}
+            onCloseAutoFocus={commands.handleCloseAutoFocus}
           >
             <DialogTitle className="helmx-sr-only">{t('modals.palette.dialogTitle')}</DialogTitle>
-            <div className="modal-header palette-header">
-              <div className="palette-search-wrap">
-                <SearchBox
-                  className="search-box palette-search-box"
-                  icon={<HelmxIcon name="search" size={15} />}
-                  clearable
-                  clearLabel={t('modals.palette.clearSearch')}
-                  onCleared={() => {
-                    setSelectedId(null)
-                    inputRef.current?.focus()
-                  }}
-                  inputRef={attachInputRef}
-                  inputRole="combobox"
-                  ariaAutocomplete="list"
-                  ariaControls={listboxId}
-                  ariaExpanded={rows.length > 0}
-                  {...(activeDescendantId !== undefined ? { ariaActiveDescendant: activeDescendantId } : {})}
-                  ariaLabel={t('modals.palette.searchAria')}
-                  placeholder={t('modals.palette.searchPlaceholder')}
-                  value={query}
-                  onChange={handleQueryChange}
-                />
-              </div>
-              {searching && (
-                <span className="palette-searching" role="status">
-                  <HelmxIcon name="loader" size={12} className="spin-slow" />
-                  {t('modals.palette.searching')}
-                </span>
-              )}
-              <DialogClose asChild>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="palette-close-btn"
-                  aria-label={t('common.close')}
-                >
-                  <Badge tone="neutral" className="palette-close-desktop">{t('modals.palette.escToClose')}</Badge>
-                  <span className="palette-close-mobile">
-                    <HelmxIcon name="x" size={13} />
-                    <span className="palette-close-mobile-label">{t('common.close')}</span>
-                  </span>
-                </Button>
-              </DialogClose>
-            </div>
+            <CommandPaletteHeader
+              query={search.query}
+              onQueryChange={handleQueryChange}
+              searching={search.searching}
+              listboxId={listboxId}
+              ariaExpanded={rows.length > 0}
+              activeDescendantId={activeDescendantId}
+              attachInputRef={attachInputRef}
+              onCleared={() => {
+                resetSelection()
+                inputRef.current?.focus()
+              }}
+            />
 
             <div className="modal-body palette-body" ref={listRef}>
               {previewCmd && (
-                <div className="palette-preview">
-                  <div className="palette-preview-header">
-                    <span className="palette-preview-title">
-                      {resolveLocalizedText(previewCmd.spec.title, locale)} · {previewCmd.pluginId}
-                    </span>
-                    <Stack direction="horizontal" gap="xs" align="center" className="palette-preview-actions">
-                      {previewCmd.spec.actionId !== undefined && previewMatchingCommand !== undefined && (
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          onClick={() => {
-                            close()
-                            invokePluginCommand(previewMatchingCommand)
-                          }}
-                        >
-                          {t('modals.palette.runAction')}
-                        </Button>
-                      )}
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          setPreviewCmd(null)
-                          inputRef.current?.focus()
-                        }}
-                        aria-label={t('modals.palette.closePreview')}
-                      >
-                        {t('common.collapse')}
-                      </Button>
-                    </Stack>
-                  </div>
-                  <PluginUiView
-                    pluginId={previewCmd.pluginId}
-                    spec={previewCmd.spec}
-                    conversationId={paletteConversation?.id}
-                    slotProps={paletteConversation !== undefined ? { conversationId: paletteConversation.id } : undefined}
-                    label={t('modals.palette.previewLabel', { id: previewCmd.spec.id })}
-                  />
-                </div>
+                <CommandPalettePreview
+                  pluginId={previewCmd.pluginId}
+                  spec={previewCmd.spec}
+                  matchingCommand={previewMatchingCommand}
+                  conversationId={commands.paletteConversation?.id}
+                  locale={locale}
+                  t={t}
+                  onRun={() => {
+                    close()
+                    if (previewMatchingCommand !== undefined) invokePluginCommand(previewMatchingCommand)
+                  }}
+                  onCollapse={() => {
+                    setPreviewCmd(null)
+                    inputRef.current?.focus()
+                  }}
+                />
               )}
 
-              {searchFailed && settledQuery === trimmedQuery && trimmedQuery !== '' && (
+              {searchUnavailable && (
                 <div className="callout callout-warn palette-status-notice" role="status">
                   <HelmxIcon name="alert-triangle" size={13} />
                   <span>{t('modals.palette.searchUnavailable')}</span>
@@ -679,7 +190,7 @@ export function CommandPaletteModal({
                 <div className="palette-empty" role="status">
                   {trimmedQuery === ''
                     ? t('modals.palette.emptyHint')
-                    : searchFailed && settledQuery === trimmedQuery
+                    : searchUnavailable
                       ? t('modals.palette.searchUnavailable')
                       : isSearchPending
                         ? t('modals.palette.searchingHint')
@@ -687,57 +198,22 @@ export function CommandPaletteModal({
                 </div>
               )}
 
-              <div
-                id={listboxId}
-                role="listbox"
-                aria-label={t('modals.palette.resultsAria')}
-                className="palette-listbox"
-              >
-                {trimmedQuery === ''
-                  ? sections.map((section) => (
-                      <Fragment key={section.key}>
-                        <div className="palette-group-header" role="presentation">
-                          {t(GROUP_LABEL_KEYS[section.key])}
-                        </div>
-                        {section.items.map((row) => {
-                          const idx = rowIndexById.get(row.id) ?? 0
-                          return renderRow(row, idx)
-                        })}
-                      </Fragment>
-                    ))
-                  : rows.map((row, idx) => renderRow(row, idx))}
-              </div>
+              <CommandPaletteList
+                listboxId={listboxId}
+                rows={rows}
+                sections={sections}
+                trimmedQuery={trimmedQuery}
+                selectedIdx={selectedIdx}
+                rowIndexById={rowIndexById}
+                navRowTitle={t('modals.palette.navRowTitle', { modEnter: formatModShortcut('Enter') })}
+                background={commands.background}
+                t={t}
+                onExecute={commands.executeRow}
+                onHover={handleRowPointerHover}
+              />
             </div>
 
-            <div className="palette-footer">
-              <div className="palette-footer-hints" aria-hidden="true">
-                <span className="palette-footer-hint">
-                  <kbd className="kbd-hint">↑↓</kbd>
-                  <span>{t('modals.palette.footerSelect')}</span>
-                </span>
-                <span className="palette-footer-hint">
-                  <kbd className="kbd-hint">Enter</kbd>
-                  <span>{t('modals.palette.footerOpen')}</span>
-                </span>
-                <span className="palette-footer-hint">
-                  <kbd className="kbd-hint">{modEnterHint}</kbd>
-                  <span>{t('modals.palette.footerSplit')}</span>
-                </span>
-                <span className="palette-footer-hint">
-                  <kbd className="kbd-hint">Esc</kbd>
-                  <span>{t('modals.palette.footerClose')}</span>
-                </span>
-              </div>
-              <Button
-                variant="ghost"
-                size="xs"
-                className="palette-footer-shortcuts-btn"
-                onClick={openShortcutsModal}
-              >
-                <span>{t('modals.palette.footerShortcuts')}</span>
-                <kbd className="kbd-hint">{shortcutsHint}</kbd>
-              </Button>
-            </div>
+            <CommandPaletteFooter onOpenShortcuts={commands.openShortcutsModal} />
           </DialogContent>
         </DialogOverlay>
       </DialogPortal>
