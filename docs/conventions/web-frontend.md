@@ -90,6 +90,7 @@ SDK 不导入 Web store、路由或渲染实现。`HelmxStoreProvider` 经 `Plug
 ## 会话工具展示
 
 - 常规工具保留 26px 单行轨迹与 `StepGroup` 折叠；专属展开体按工具语义呈现（`edit` 展示变更、`bash` 展示命令与输出尾部），提供原始数据入口；
+- 折叠开关统一为行首左侧 chevron：默认工具行、`ask_user` 行、思考/过程组与 `replaceRow` 插件卡的宿主 IO 开关同在 x=8px（≤450px 容器为 6px），其后才是状态图标；行尾只放状态/耗时/徽标，跳转提示用 `external-link`（`.trace-row-link`），行尾不得再出现 chevron 或其他折叠图标；`replaceRow` 卡的行主体仅在存在跳转目标时是导航按钮，入参/输出展开统一走宿主 IO 面板，插件不得再自建 `ToolCallDetails` 折叠入口；
 - 待执行、成功、失败与未知状态必须如实区分：`oldText / newText` 只是片段对比不代表已落盘；成功后的差异只消费内核实际执行结果，禁止重读当前文件冒充历史快照；失败态不承诺「未写入」；
 - `edit` 结果遵循 `@helmx/protocol` 的 `EditToolResult` 与 `EDIT_TOOL_RESULT_SCHEMA`，Web 在消费边界校验；
 - 内容折叠与数据截断须分清：折叠可展开已有全文，截断明确说明部分数据未传回，不提供虚假「展开全部」；脱敏影响行号映射时省略差异正文并明确标记。
