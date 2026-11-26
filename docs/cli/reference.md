@@ -90,6 +90,7 @@
 | `--current` | 读 `HELMX_CONVERSATION_ID` 解析会话目标，可省略位置 `id` |
 | `--wait` | 同步等待回答（`?wait=1`，无超时）；人类模式直出 assistant 文本 |
 | `--when-busy <mode>` | `steer`（默认）/ `followUp` / `reject` |
+| `--when-pending-ask <mode>` | 存在挂起 AskDoc 时的策略：`supersede`（默认）/ `reject`（返回 `409 ask_pending`） |
 | `--origin <src>` | `human`（默认）/ `agent` / `trigger` |
 | `--meta <json>` | 自由元数据，透传至 `turn_settled` |
 | `--attach <ids>` | 挂载产物 ID，逗号分隔 |
@@ -108,7 +109,7 @@
 
 ### 审批（AskDoc）
 
-**`helmx asks list`** — 列出待答提问。
+**`helmx asks list [--conversation <id> | --current] [--status pending|answered|cancelled|superseded]`** — 列出提问（可按会话或状态过滤；无参数返回全部）。
 
 **`helmx asks answer <id> --answers <json> [--expected-state-seq <n>]`** — 提交答案；`--expected-state-seq` 为 CAS 水位线，终端侧已推进时自动流转 `superseded` 销单。
 

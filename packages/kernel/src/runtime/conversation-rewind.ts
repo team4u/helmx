@@ -175,7 +175,9 @@ export class ConversationRewind {
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
     replaceFromEntryId: number,
     newInput: RewindNewInput,
+    assertBeforeRewrite?: () => void,
   ): Promise<{ submissionId: string }> {
+    assertBeforeRewrite?.()
     // Async preparation outside transaction: abort current turn or active compaction per user's authorized history edit.
     const hadLiveRun = this.host.tracker.hasLiveWork(id)
     if (hadLiveRun || this.host.tracker.isCompacting(id)) {
@@ -185,6 +187,8 @@ export class ConversationRewind {
         await this.host.tracker.waitTurnSettled(id)
       }
     }
+    // Re-check before superseding pending asks in case an AskDoc was created before the turn went idle.
+    assertBeforeRewrite?.()
     // Supersede pending asks: approval cards for overwritten turns are no longer valid;
     // cancellation failures must rethrow honestly (never swallow via .catch).
     await this.host.cancelPendingAsksForRewrite(id)
@@ -193,7 +197,7 @@ export class ConversationRewind {
     // Return covered range from inside transaction so post-tx cleanup removes only old FTS keys and stale
     // lastAssistant caches without touching the newly submitted input/response.
     const { submissionId, covered, ftsKeys } = await conversation.commit(
-      (tx) => this.rewriteTransaction(conversation, tx, id, replaceFromEntryId, createdAt, newInput),
+      (tx) => this.rewriteTransaction(conversation, tx, id, replaceFromEntryId, createdAt, newInput, assertBeforeRewrite),
       BACKGROUND_CONTEXT,
     )
     this.registerRewoundInput(id, newInput.finalInput, submissionId)
@@ -212,6 +216,7 @@ export class ConversationRewind {
     replaceFromEntryId: number,
     createdAt: number,
     newInput: RewindNewInput,
+    assertBeforeRewrite?: () => void,
   ): Promise<{ submissionId: SubmissionId; covered: { from: number; through: number }; ftsKeys: string[] }> {
     // -- Re-verify inside transaction (pure tx reads before any writes) --
     const { tailId, headLowerBound } = await this.assertRewriteIdle(tx, id, replaceFromEntryId)
@@ -237,6 +242,7 @@ export class ConversationRewind {
     }
     const baselineSystemNumericId = await this.findBaselineSystemId(tx, id, headLowerBound)
     const { omittedEntryIds, omittedInputIds, ftsKeys } = this.collectRewindOmissions(tailEntries, baselineSystemNumericId)
+    assertBeforeRewrite?.()
     // Submit replacement input (whenBusy='reject': any concurrent submission fails explicitly instead of queuing).
     // Note: submit(tx, draft) must precede the first tx write.
     const submissionId = await this.submitRewoundInput(conversation, tx, newInput)

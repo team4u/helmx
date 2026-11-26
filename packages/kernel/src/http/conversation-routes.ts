@@ -4,6 +4,7 @@
  * (approval queue), and /api/search (full-text index search).
  */
 import type {
+  AskStatus,
   ConversationListFilter,
   ConversationOwnership,
   ConversationSearchOptions,
@@ -109,11 +110,12 @@ export async function handleConversationsDomain(
   }
   if (third === 'input' && method === 'POST' && fourth === undefined) {
     const body = await readJsonBody(ctx.request)
-    const { text, whenBusy, origin, meta, attachments, replaceFromEntryId } = parseInputBody(body)
+    const { text, whenBusy, whenPendingAsk, origin, meta, attachments, replaceFromEntryId } = parseInputBody(body)
     const wait = parseWaitFlag(ctx.url)
     const { submissionId } = await kernel.conversations.submitInput(id, text, {
       ...(origin !== undefined ? { origin } : {}),
       ...(whenBusy !== undefined ? { whenBusy } : {}),
+      ...(whenPendingAsk !== undefined ? { whenPendingAsk } : {}),
       ...(meta !== undefined ? { meta } : {}),
       ...(attachments !== undefined ? { attachments } : {}),
       ...(replaceFromEntryId !== undefined ? { replaceFromEntryId } : {}),
@@ -181,6 +183,8 @@ export async function handleConversationsDomain(
 // /api/asks (approval queue, belongs to conversation domain alongside conversations)
 // ---------------------------------------------------------------------------
 
+const VALID_ASK_STATUSES = new Set<string>(['pending', 'answered', 'cancelled', 'superseded'])
+
 export async function handleAsksDomain(
   ctx: RouteContext,
   kernel: Pick<ConversationRoutesTarget, 'asks'>,
@@ -191,7 +195,29 @@ export async function handleAsksDomain(
   const third = segments[2]
   const fourth = segments[3]
   if (second === undefined && method === 'GET') {
-    return jsonOk(redactor, kernel.asks.listAsks())
+    const conversationId = parseOptionalStrictQueryInt(
+      ctx.url,
+      'conversationId',
+      'conversationId must be a positive integer',
+    )
+    if (conversationId !== undefined && (!Number.isSafeInteger(conversationId) || conversationId < 1)) {
+      throw new ValidationError('conversationId must be a positive integer')
+    }
+    const statusRaw = ctx.url.searchParams.get('status')
+    if (statusRaw !== null && !VALID_ASK_STATUSES.has(statusRaw)) {
+      throw new ValidationError('status must be pending|answered|cancelled|superseded')
+    }
+    const status = statusRaw === null ? undefined : (statusRaw as AskStatus)
+    if (conversationId === undefined && status === undefined) {
+      return jsonOk(redactor, kernel.asks.listAsks())
+    }
+    return jsonOk(
+      redactor,
+      kernel.asks.listAsks({
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(status !== undefined ? { status } : {}),
+      }),
+    )
   }
   const askId = requireIdParam(second ?? '', 'askId')
   if (third === 'answer' && method === 'POST' && fourth === undefined) {

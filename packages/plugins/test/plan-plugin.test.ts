@@ -830,6 +830,26 @@ test('hooks: onInput handles bare /plan and transforms /plan <task>, while ignor
     assert.equal(harness.cancelledAsks.length, 0)
     assert.equal(harness.readSessionDoc(1).awaitingApproval, true)
 
+    // Reject-policy human inputs (whenBusy='reject' or whenPendingAsk='reject', plain/meta/slash) must NOT prematurely supersede
+    for (const rejectInput of [
+      { id: 'i7-busy-reject', text: 'busy reject', origin: 'human' as const, whenBusy: 'reject' as const, createdAt: 7 },
+      { id: 'i7-ask-reject', text: 'ask reject', origin: 'human' as const, whenPendingAsk: 'reject' as const, createdAt: 7 },
+      {
+        id: 'i7-meta-reject',
+        text: 'meta reject',
+        origin: 'human' as const,
+        whenPendingAsk: 'reject' as const,
+        meta: { [PLAN_INPUT_META_KEY]: { mode: 'planning' } },
+        createdAt: 7,
+      },
+      { id: 'i7-slash-reject', text: '/plan continue', origin: 'human' as const, whenPendingAsk: 'reject' as const, createdAt: 7 },
+    ]) {
+      const outcome = await harness.host.runHook('input', { conversationId: 1, input: rejectInput })
+      assert.equal(outcome.action, 'transform')
+      assert.equal(harness.cancelledAsks.length, 0)
+      assert.equal(harness.readSessionDoc(1).awaitingApproval, true)
+    }
+
     // Human-origin non-slash input supersedes the pending approval ask cleanly
     const steerOutcome = await harness.host.runHook('input', {
       conversationId: 1,

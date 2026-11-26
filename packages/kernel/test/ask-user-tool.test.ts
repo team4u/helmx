@@ -15,7 +15,7 @@ import {
 } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { systemSectionsOf } from '../src/runtime/hook-projection.js'
-import { ASK_USER_OWNER_ID, ASK_USER_TOOL_NAME } from '../src/runtime/tools.js'
+import { ASK_USER_OWNER_ID, ASK_USER_PROMPT_SNIPPET, ASK_USER_TOOL_NAME } from '../src/runtime/tools.js'
 import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
@@ -307,7 +307,247 @@ describe('ask_user kernel tool lifecycle and scoping', { timeout: 60_000 }, () =
       assert.equal(runtime.asks.getAsk(pendingId)?.status, 'superseded')
       assert.equal(runtime.asks.listAsks('pending').length, 0)
       assert.match(resumedMessages, /superseded/i)
+      assert.match(resumedMessages, /do not treat this as confirmation/i)
       assert.match(resumedMessages, /Skip the options and use SQLite/)
+      assert.match(ASK_USER_PROMPT_SNIPPET, /superseded/i)
+      assert.match(ASK_USER_PROMPT_SNIPPET, /never treat `superseded` or `cancelled`/i)
+    } finally {
+      await runtime.close()
+    }
+  })
+
+  it('whenPendingAsk=reject atomically rejects with 409 ask_pending across fast check, hook race, and history rewind without side effects', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'when-pending-ask-reject')
+    const { models, faux } = makeFauxModels()
+    const runtime = await KernelRuntime.open({
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/faux-1',
+      models,
+    })
+
+    try {
+      // 1. Succeeds when no AskDoc is pending (and does not leak whenPendingAsk into entry when omitted).
+      faux.setResponses([
+        () => fauxAssistantMessage('First turn done.'),
+        () =>
+          fauxAssistantMessage(
+            [fauxToolCall(ASK_USER_TOOL_NAME, { questions: [{ id: 'q1', question: 'Proceed?', type: 'confirm' }] })],
+            { stopReason: 'toolUse' },
+          ),
+        () => fauxAssistantMessage('Second turn finished.'),
+      ])
+      await runtime.conversations.submitInput(1, 'Initial message', { whenPendingAsk: 'reject' })
+      await runtime.conversations.waitForIdle(1)
+
+      // 2. Fast pre-check when AskDoc is already pending on conversation 1: rejects 409 ask_pending and leaves ask pending.
+      await runtime.conversations.submitInput(1, 'Trigger ask')
+      await waitFor(() => runtime.asks.listAsks('pending').length === 1)
+      const activeAskId = runtime.asks.listAsks('pending')[0]!.id
+
+      let rejectedErr: unknown
+      await assert.rejects(
+        () => runtime.conversations.submitInput(1, 'Blocked while pending', { origin: 'human', whenPendingAsk: 'reject' }),
+        (err: unknown) => {
+          rejectedErr = err
+          return err instanceof HelmxError && err.status === 409 && err.code === 'ask_pending'
+        },
+      )
+      assert.deepEqual((rejectedErr as HelmxError).details, {
+        conversationId: 1,
+        pendingAskIds: [activeAskId],
+      })
+      assert.equal(runtime.asks.getAsk(activeAskId)?.status, 'pending')
+
+      // 3. Rewind (replaceFromEntryId) with whenPendingAsk=reject also fails 409 ask_pending without aborting or superseding.
+      const detailBeforeRewind = await runtime.conversations.getConversationDetail(1, { limit: 20 })
+      const firstInputEntry = detailBeforeRewind.entries.find((e) => e.kind === 'helmx.input')!
+      await assert.rejects(
+        () =>
+          runtime.conversations.submitInput(1, 'Edited message', {
+            origin: 'human',
+            whenPendingAsk: 'reject',
+            replaceFromEntryId: Number(firstInputEntry.id),
+          }),
+        (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'ask_pending',
+      )
+      assert.equal(runtime.asks.getAsk(activeAskId)?.status, 'pending')
+
+      await runtime.asks.answerAsk(activeAskId, { q1: 'true' })
+      await runtime.conversations.waitForIdle(1)
+
+      // 4. Commit-point TOCTOU race: untitled conversation #2 has zero pending asks at fast pre-check,
+      // then an AskDoc is created while an async onInput hook is suspended -> commit-point re-check rejects
+      // 409 ask_pending with zero entry persistence, zero title mutation, and zero stateChangeSeq bump.
+      const raceConv = await runtime.conversations.createConversation({ title: '' })
+      let enteredHook!: () => void
+      const hookEntered = new Promise<void>((resolve) => {
+        enteredHook = resolve
+      })
+      let releaseHook!: () => void
+      const hookGate = new Promise<void>((resolve) => {
+        releaseHook = resolve
+      })
+      await runtime.plugins.register({
+        id: 'test:ask-pending-race',
+        definePlugin: (ctx) => {
+          ctx.hook.onInput(async (payload) => {
+            if (payload.conversationId === raceConv.id) {
+              enteredHook()
+              await hookGate
+            }
+          })
+        },
+      })
+
+      const seqBeforeRace = runtime.conversations.getConversation(raceConv.id).stateChangeSeq
+      const raceInputP = runtime.conversations.submitInput(raceConv.id, 'Concurrent IM message', {
+        origin: 'human',
+        whenPendingAsk: 'reject',
+      })
+      await hookEntered
+      const raceAskP = runtime.asks.createAsk({
+        id: 'race-ask-1',
+        conversationId: raceConv.id,
+        title: 'Concurrent Ask',
+        fields: [{ name: 'ok', label: 'OK?', type: 'confirm' }],
+      })
+      void raceAskP.catch(() => {})
+      await waitFor(() => runtime.asks.listPendingByConversation(raceConv.id).length === 1)
+      const seqAfterAskCreated = runtime.conversations.getConversation(raceConv.id).stateChangeSeq
+      releaseHook()
+
+      await assert.rejects(
+        () => raceInputP,
+        (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'ask_pending',
+      )
+      assert.equal(runtime.asks.getAsk('race-ask-1')?.status, 'pending')
+      assert.equal(runtime.conversations.getConversation(raceConv.id).title, '')
+      assert.equal(runtime.conversations.getConversation(raceConv.id).stateChangeSeq, seqAfterAskCreated)
+      assert.ok(seqAfterAskCreated > seqBeforeRace)
+      const raceDetail = await runtime.conversations.getConversationDetail(raceConv.id)
+      assert.equal(raceDetail.entries.some((e) => e.kind === 'helmx.input'), false)
+      await runtime.asks.cancelAsk('race-ask-1')
+    } finally {
+      await runtime.close()
+    }
+  })
+
+  it('read/pin PATCH (unread/pinned) and sibling tool doing updates during blocked do not supersede pending AskDoc', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'cas-false-supersede')
+    const { models, faux } = makeFauxModels()
+    const runtime = await KernelRuntime.open({
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/faux-1',
+      models,
+    })
+
+    try {
+      // 1. Seed unread=true on a completed turn (also verify done->idle unread clear still bumps stateChangeSeq when no ask is pending).
+      faux.setResponses([
+        () => fauxAssistantMessage('First done.'),
+        () =>
+          fauxAssistantMessage(
+            [
+              fauxToolCall('read', { path: 'missing-or-noop' }),
+              fauxToolCall(ASK_USER_TOOL_NAME, { questions: [{ id: 'choice', question: 'Continue?', type: 'confirm' }] }),
+            ],
+            { stopReason: 'toolUse' },
+          ),
+        () => fauxAssistantMessage('All good after answer.'),
+      ])
+      await runtime.conversations.submitInput(1, 'Warm up')
+      await runtime.conversations.waitForIdle(1)
+      assert.equal(runtime.conversations.getConversation(1).unread, true)
+      const seqDone = runtime.conversations.getConversation(1).stateChangeSeq
+      await runtime.conversations.updateConversation(1, { unread: false })
+      assert.ok(
+        runtime.conversations.getConversation(1).stateChangeSeq > seqDone,
+        'unread=false when pendingAskCount===0 must still advance stateChangeSeq',
+      )
+
+      // 2. Leave unread=true by simulating a new round on an unread conversation where parallel `read` + `ask_user` run.
+      await runtime.conversations.updateConversation(1, { unread: true })
+      await runtime.conversations.submitInput(1, 'Ask alongside read')
+      await waitFor(() => runtime.asks.listAsks('pending').length === 1)
+      // Give the parallel `read` tool and tracker observer a brief moment to complete and emit `doing` updates.
+      await new Promise((r) => setTimeout(r, 150))
+
+      const ask = runtime.asks.listAsks('pending')[0]!
+      const seqWhileBlocked = runtime.conversations.getConversation(1).stateChangeSeq
+      // Simulate Web foreground focus clearing unread=false + pinning while AskDoc is pending.
+      await runtime.conversations.updateConversation(1, {
+        unread: false,
+        pinned: true,
+      })
+      assert.equal(
+        runtime.conversations.getConversation(1).stateChangeSeq,
+        seqWhileBlocked,
+        'read/pin PATCH while AskDoc is pending must not advance stateChangeSeq',
+      )
+      assert.equal(runtime.conversations.getConversation(1).unread, false)
+      assert.equal(runtime.conversations.getConversation(1).pinned, true)
+
+      const settled = await runtime.asks.answerAsk(ask.id, { choice: 'true' }, ask.expectedStateSeq)
+      assert.equal(settled.status, 'answered')
+      await runtime.conversations.waitForIdle(1)
+
+      // 3. Also verify mid-run doing transition (bash running -> done) while an AskDoc with expectedStateSeq is
+      // pending emits refreshed doing summary WITHOUT advancing stateChangeSeq or falsely superseding answerAsk.
+      let releaseSecondTurn!: () => void
+      const secondTurnGate = new Promise<void>((resolve) => {
+        releaseSecondTurn = resolve
+      })
+      faux.setResponses([
+        () => fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 0.1 && echo ok' })], { stopReason: 'toolUse' }),
+        async () => {
+          await secondTurnGate
+          return fauxAssistantMessage('Bash round completed.')
+        },
+      ])
+      const blockedUpserts: Array<{ status: string; doing?: string; stateChangeSeq: number }> = []
+      const unsubBlocked = runtime.events.subscribe((frame) => {
+        if (frame.event.type !== 'conversation.upsert') return
+        const conv = (frame.event as { conversation?: { id?: number; status?: string; doing?: string; stateChangeSeq?: number } }).conversation
+        if (conv?.id === 1 && conv.status === 'blocked') {
+          blockedUpserts.push({
+            status: conv.status,
+            doing: conv.doing,
+            stateChangeSeq: conv.stateChangeSeq ?? -1,
+          })
+        }
+      })
+      try {
+        await runtime.conversations.submitInput(1, 'Run bash while ask pending')
+        await waitFor(() => runtime.conversations.getConversation(1).doing?.startsWith('bash:') === true)
+        const convBeforeAsk = runtime.conversations.getConversation(1)
+        const liveAskP = runtime.asks.createAsk({
+          id: 'live-doing-ask',
+          conversationId: 1,
+          title: 'Live doing ask',
+          expectedStateSeq: convBeforeAsk.stateChangeSeq,
+          fields: [{ name: 'ok', label: 'OK?', type: 'confirm' }],
+        })
+        await waitFor(() => runtime.conversations.getConversation(1).status === 'blocked')
+        const seqAfterAskCreated = runtime.conversations.getConversation(1).stateChangeSeq
+        // Wait for bash tool call to finish and emit a refreshed doing frame while blocked.
+        await waitFor(() =>
+          blockedUpserts.some((u) => u.doing !== undefined && u.doing !== 'bash: running'),
+        )
+        assert.equal(
+          runtime.conversations.getConversation(1).stateChangeSeq,
+          seqAfterAskCreated,
+          'doing transition during blocked must not advance stateChangeSeq',
+        )
+        const liveSettled = await runtime.asks.answerAsk('live-doing-ask', { ok: 'true' }, convBeforeAsk.stateChangeSeq)
+        assert.equal(liveSettled.status, 'answered')
+        assert.equal((await liveAskP).status, 'answered')
+      } finally {
+        unsubBlocked()
+        releaseSecondTurn()
+        await runtime.conversations.waitForIdle(1)
+      }
     } finally {
       await runtime.close()
     }

@@ -37,7 +37,7 @@
 
 ## 开发 Helmx 和插件
 
-- [架构总览](architecture/overview.md) · [EnvFabric 节点执行](architecture/envfabric.md) · [持久会话与审批](architecture/pi-durable.md)
+- [架构总览](architecture/overview.md) · [EnvFabric 节点执行](architecture/envfabric.md) · [持久会话与审批](architecture/pi-durable.md) · [AskDoc 文本通道接入](architecture/ask-doc-channels.md)
 - [插件契约](plugins/overview.md) · [插件开发教程](plugins/plugin-development.md) · [后端 Hook 和前端扩展点](architecture/extension-points.md)
 - [前端组件和样式约定](conventions/web-frontend.md) · [导航和分屏约定](conventions/web-navigation.md)
 - [仓库开发约定](../AGENTS.md) · [发布流程](releasing.md) · [历史设计归档](archive/README.md)

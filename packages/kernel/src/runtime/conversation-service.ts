@@ -77,6 +77,8 @@ interface ConversationServiceOptions {
   readonly cancelAsksByConversation: (id: number) => Promise<void>
   /** Supersede pending asks before in-place rewrite+resend (host injects asks.listPendingByConversation + cancelAsk). */
   readonly cancelPendingAsksForRewrite: (id: number) => Promise<void>
+  /** Pending AskDoc IDs for `whenPendingAsk: 'reject'` atomic checks (host injects asks.listPendingByConversation). */
+  readonly listPendingAskIds?: (id: number) => string[]
   /** Supersede pending asks when direct human input arrives (host injects idempotent ask settlement). */
   readonly supersedePendingAsks?: (id: number) => Promise<void>
   /** Ownership annotation (host-injected). */
@@ -585,6 +587,21 @@ export class ConversationService {
   // submitInput / waitForInput / withdraw / abort
   // ------------------------------------------------------------------
 
+  private assertNoPendingAsks(id: number): void {
+    const pendingAskIds =
+      this.o.listPendingAskIds !== undefined
+        ? this.o.listPendingAskIds(id)
+        : this.store.listAsksByConversation(id, 'pending').map((ask) => ask.id)
+    if (pendingAskIds.length > 0) {
+      throw new HelmxError(
+        'ask_pending',
+        `conversation ${id} has ${pendingAskIds.length} pending AskDoc(s); rejecting submission (whenPendingAsk=reject)`,
+        409,
+        { conversationId: id, pendingAskIds },
+      )
+    }
+  }
+
   async submitInput(
     id: number,
     text: string,
@@ -592,6 +609,17 @@ export class ConversationService {
   ): Promise<{ submissionId: string }> {
     this.assertWritable()
     this.contextOps.assertOpen()
+    if (
+      opts?.whenPendingAsk !== undefined &&
+      opts.whenPendingAsk !== 'supersede' &&
+      opts.whenPendingAsk !== 'reject'
+    ) {
+      throw new HelmxError(
+        'validation_error',
+        `invalid whenPendingAsk: expected 'supersede' | 'reject', got ${String(opts.whenPendingAsk)}`,
+        400,
+      )
+    }
     const convMeta = requireConv(this.store, id)
     const conversation = await getSdkConversation(this.harness, id, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
@@ -635,6 +663,11 @@ export class ConversationService {
       this.o.assertModelEnabled(effectiveRef.provider, effectiveRef.modelId)
     }
 
+    // Fast pre-check before async rewind validation, attachment IO, and input hooks.
+    if (opts?.whenPendingAsk === 'reject') {
+      this.assertNoPendingAsks(id)
+    }
+
     const replaceFromEntryId = await this.rewind.validateReplaceTarget(conversation, id, opts?.replaceFromEntryId)
     const initialAttachments =
       opts?.attachments !== undefined && opts.attachments.length > 0
@@ -645,6 +678,9 @@ export class ConversationService {
       this.assertMutationGuard(id, opts.mutationGuard)
     }
     if (prepared.kind === 'handled') return { submissionId: prepared.submissionId }
+    if (prepared.finalWhenPendingAsk === 'reject') {
+      this.assertNoPendingAsks(id)
+    }
 
     this.contextOps.assertOpen()
 
@@ -654,19 +690,41 @@ export class ConversationService {
         : prepared.effectiveText
 
     if (replaceFromEntryId !== undefined) {
-      this.inputPipeline.applyFirstInputTitle(requireConv(this.store, id), prepared.effectiveText)
       const finalInput = { ...prepared.finalInput, whenBusy: 'reject' as const }
       const targetId = replaceFromEntryId
+      const assertPendingAsk =
+        prepared.finalWhenPendingAsk === 'reject' ? () => this.assertNoPendingAsks(id) : undefined
       return this.rewind.withHistoryEdit(id, async () => {
+        assertPendingAsk?.()
         await this.rewind.assertTargetStillCurrent(conversation, id, targetId)
-        return this.rewind.rewriteConversationFrom(id, conversation, targetId, {
-          finalInput,
-          effectiveText: prepared.effectiveText,
-          resolvedAttachments: prepared.resolvedAttachments,
-          content,
-        })
+        assertPendingAsk?.()
+        if (assertPendingAsk === undefined) {
+          // Re-read metadata after prepareInput so mutations performed by onInput hooks (e.g. tags) are preserved.
+          this.inputPipeline.applyFirstInputTitle(requireConv(this.store, id), prepared.effectiveText)
+        }
+        const result = await this.rewind.rewriteConversationFrom(
+          id,
+          conversation,
+          targetId,
+          {
+            finalInput,
+            effectiveText: prepared.effectiveText,
+            resolvedAttachments: prepared.resolvedAttachments,
+            content,
+          },
+          assertPendingAsk,
+        )
+        if (assertPendingAsk !== undefined) {
+          const latestMeta = this.store.getConv(id)
+          if (latestMeta !== undefined && !this.store.isDeleted(id)) {
+            this.inputPipeline.applyFirstInputTitle(latestMeta, prepared.effectiveText)
+          }
+        }
+        return result
       })
     }
+    const assertPendingAsk =
+      prepared.finalWhenPendingAsk === 'reject' ? () => this.assertNoPendingAsks(id) : undefined
     const freshSubmission = {
       finalInput: prepared.finalInput,
       finalWhenBusy: prepared.finalWhenBusy,
@@ -676,6 +734,7 @@ export class ConversationService {
       requestId: opts?.requestId,
       ...(opts?.whenIdle !== undefined ? { whenIdle: opts.whenIdle } : {}),
       ...(opts?.mutationGuard !== undefined ? { mutationGuard: opts.mutationGuard } : {}),
+      ...(assertPendingAsk !== undefined ? { assertBeforeCommit: assertPendingAsk } : {}),
     }
     if (opts?.mutationGuard !== undefined) {
       return this.withMutationGate(id, async () => {
@@ -687,6 +746,18 @@ export class ConversationService {
         return result
       })
     }
+    if (assertPendingAsk !== undefined) {
+      // Re-check before commit and again synchronously at commit point via assertBeforeCommit;
+      // defer title derivation until after commit succeeds so 409 ask_pending leaves zero side effects.
+      assertPendingAsk()
+      const submitted = await this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
+      const latestMeta = this.store.getConv(id)
+      if (latestMeta !== undefined && !this.store.isDeleted(id)) {
+        this.inputPipeline.applyFirstInputTitle(latestMeta, prepared.effectiveText)
+      }
+      return submitted
+    }
+    // Re-read metadata after prepareInput so mutations performed by onInput hooks (e.g. tags) are preserved.
     this.inputPipeline.applyFirstInputTitle(requireConv(this.store, id), prepared.effectiveText)
     const submitted = await this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
     if (prepared.finalInput.origin === 'human' && prepared.finalWhenBusy !== 'reject') {

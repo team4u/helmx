@@ -74,6 +74,7 @@ const ConversationInputSchema = Type.Object(
   {
     text: Type.String(),
     whenBusy: Type.Optional(Type.Enum(['steer', 'followUp', 'reject'] as const)),
+    whenPendingAsk: Type.Optional(Type.Enum(['supersede', 'reject'] as const)),
     origin: Type.Optional(Type.Enum(['human', 'agent', 'trigger'] as const)),
     meta: Type.Optional(Type.Object({}, { additionalProperties: true })),
     attachments: Type.Optional(Type.Array(IdString)),

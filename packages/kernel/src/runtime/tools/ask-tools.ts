@@ -32,6 +32,7 @@ export const ASK_USER_PROMPT_SNIPPET = [
   '- Do NOT call `ask_user` for trivial details you can safely infer from the codebase or standard conventions.',
   '- Pick the best-fitting question type: `single_select` (default when `options` are given), `multi_select`, `text` (open-ended or multiline input), or `confirm` (quick binary confirmation).',
   '- Mark at most one best default option with `recommended: true` when helpful; selection questions allow an inline custom "Other" answer by default unless you set `allowCustom: false`.',
+  '- If the user sends a new chat message instead of submitting the card, the pending ask resolves as `superseded` with empty answers. Never treat `superseded` or `cancelled` as user approval or confirmation — read the new user message first, continue directly if it already answered your question, and avoid re-asking the same prompt.',
   '</ask_user>',
 ].join('\n')
 
@@ -73,7 +74,12 @@ const askUserParameters = obj({
   title: opt(str({ minLength: 1, maxLength: ASK_TITLE_MAX_CHARS, description: 'Optional card title (1-120 chars)' })),
   questions: arr(
     obj({
-      id: str({ minLength: 1, maxLength: 40, description: 'Unique identifier (alphanumeric, _ or -)' }),
+      id: str({
+        minLength: 1,
+        maxLength: 40,
+        pattern: QUESTION_ID_RE.source,
+        description: 'Unique identifier matching ^[A-Za-z0-9_-]{1,40}$',
+      }),
       question: str({ minLength: 1, maxLength: ASK_QUESTION_MAX_CHARS, description: 'Concise question prompt (1-300 chars)' }),
       type: opt(
         oneOf(['single_select', 'multi_select', 'text', 'confirm'], {
@@ -428,7 +434,7 @@ export function createAskUserTool(deps: AskUserToolDeps): ToolRegistration<typeo
           output: [
             {
               type: 'text' as const,
-              text: 'Question prompt was superseded because a new user message arrived or the conversation state changed.',
+              text: 'Question prompt was superseded because a new user message arrived or the conversation state changed (no structured answers were received). Do not treat this as confirmation; read the subsequent user message first and only ask again if required information is still missing.',
             },
           ],
           details: {

@@ -272,6 +272,22 @@ export class ConversationLifecycleService {
     if (guard !== undefined) this.host.assertMutationGuard(id, guard)
     await conversation.configure(configureChange, BACKGROUND_CONTEXT)
     const latest = requireConv(this.host.store, id)
+    // Pure UI read/bookmark toggles (unread/pinned) must not advance stateChangeSeq while an AskDoc is
+    // pending, otherwise Web foreground unread clearing or sidebar pinning falsely triggers AskDoc CAS superseded.
+    // Substantive metadata/scope/execution patches (title/tags/profileId/nodeId/cwd/model/thinkingLevel) still advance it.
+    const isReadPinOnlyPatch =
+      patch.title === undefined &&
+      patch.tags === undefined &&
+      patch.model === undefined &&
+      patch.thinkingLevel === undefined &&
+      patch.profileId === undefined &&
+      patch.nodeId === undefined &&
+      patch.cwd === undefined
+    const hasPendingAsks = this.host.store.countAsksByConversation(id, 'pending') > 0
+    const nextStateChangeSeq =
+      guard === undefined && hasPendingAsks && isReadPinOnlyPatch
+        ? latest.stateChangeSeq
+        : latest.stateChangeSeq + 1
     const updated: ConvMeta = {
       ...latest,
       ...(patch.title !== undefined ? { title: patch.title } : {}),
@@ -285,7 +301,7 @@ export class ConversationLifecycleService {
       ...(nextOverride !== undefined ? { modelOverride: nextOverride } : { modelOverride: undefined }),
       ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
       ...(patch.unread !== undefined ? { unread: patch.unread } : {}),
-      stateChangeSeq: latest.stateChangeSeq + 1,
+      stateChangeSeq: nextStateChangeSeq,
       updatedAt: Date.now(),
     }
     this.host.store.upsertConv(updated)
