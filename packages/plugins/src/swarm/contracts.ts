@@ -103,6 +103,7 @@ export interface CollabGroupRuntime {
     | { group: CollabGroupRecord; role: 'coordinator' }
     | { group: CollabGroupRecord; role: 'worker'; member: GroupMemberState }
     | undefined
+  findWorkerMember(conversationId: number): { group: CollabGroupRecord; member: GroupMemberState } | undefined
   findLatestGroupForConversation(conversationId: number): CollabGroupRecord | undefined
   getPosts(groupId: string): readonly BoardPost[]
   ensurePostsLoaded(groupId: string): Promise<readonly BoardPost[]>

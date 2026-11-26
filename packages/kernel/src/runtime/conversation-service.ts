@@ -7,12 +7,10 @@
  * attachment resolution, detail pagination, profile alignment, and the input pipeline to dedicated submodules.
  */
 import { awaitWithContext, BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
-import { copyJson } from '@earendil-works/chord/json'
-import { InboxDoc, type Harness, type AgentChange } from '@earendil-works/pi-durable'
+import type { Harness, AgentChange } from '@earendil-works/pi-durable'
 import type { ModelThinkingLevel, Models } from '@earendil-works/pi-ai'
 import type {
   ArtifactMetadata,
-  ConversationAbortResponse,
   ConversationAttachmentRef,
   ConversationDetail,
   ConversationEntry,
@@ -30,7 +28,6 @@ import type {
   GuardedMutationExpectation,
   HubActivityCounts,
   InputOrigin,
-  QueuedConversationInput,
   SearchHit,
   WhenBusy,
 } from '@helmx/protocol'
@@ -44,12 +41,9 @@ import type { EventHub } from './events.js'
 import { requireConv } from './conversation-require.js'
 import {
   assistantTextOfModel,
-  deriveQueuedInputsFromInbox,
   readEntryById,
   toConversationEntry,
-  type InboxItemLike,
 } from './entries.js'
-import { asConversationId, asSubmissionId } from './sdk-ids.js'
 import {
   THINKING_LEVELS,
   clampThinkingLevelForModel,
@@ -200,9 +194,7 @@ export class ConversationService {
       store: this.store,
       tracker: this.tracker,
       cancelPendingAsksForRewrite: this.o.cancelPendingAsksForRewrite,
-      abortConversation: async (id) => {
-        await this.abortConversation(id)
-      },
+      abortConversation: (id) => this.abortConversation(id),
     })
 
     this.contextOps = new ConversationContextOps({
@@ -1396,40 +1388,14 @@ export class ConversationService {
     }
   }
 
-  async abortConversation(id: number): Promise<ConversationAbortResponse> {
+  async abortConversation(id: number): Promise<void> {
     this.assertWritable()
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-    const rawInboxItems = await conversation.commit(
-      async (tx) =>
-        (await tx.doc(InboxDoc, asConversationId(id))).items.map((item): InboxItemLike => ({
-          id: item.id,
-          mode: item.mode,
-          ...(item.entry !== undefined ? { entry: copyJson(item.entry) as InboxItemLike['entry'] } : {}),
-        })),
-      BACKGROUND_CONTEXT,
-    )
-    const candidates = deriveQueuedInputsFromInbox(rawInboxItems, Date.now())
     const wasBusy = this.tracker.hasLiveWork(id)
     await conversation.abort(BACKGROUND_CONTEXT)
     if (wasBusy) this.tracker.settleAborted(id)
     else this.tracker.clearQueuedTracking(id)
-    if (candidates.length === 0) {
-      return { ok: true, withdrawnInputs: [] }
-    }
-    const withdrawnInputs = await conversation.commit(async (tx) => {
-      const confirmed: QueuedConversationInput[] = []
-      for (const candidate of candidates) {
-        const numericId = Number(candidate.submissionId)
-        if (!Number.isSafeInteger(numericId) || numericId <= 0) continue
-        const rec = await tx.submission(asSubmissionId(numericId))
-        if (rec?.status === 'unanswered' && rec.reason === 'aborted' && rec.entry === undefined) {
-          confirmed.push(candidate)
-        }
-      }
-      return confirmed
-    }, BACKGROUND_CONTEXT)
-    return { ok: true, withdrawnInputs }
   }
 
   // ------------------------------------------------------------------

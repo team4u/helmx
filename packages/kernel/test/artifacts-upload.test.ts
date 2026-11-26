@@ -122,9 +122,7 @@ function makeKernel(): KernelHttpTarget {
       async waitForInput(id: number, submissionId: string) {
         return { conversationId: id, submissionId, text: '', entry: { id: 'e', kind: 'pi.assistant' } }
       },
-      async abortConversation() {
-        return { ok: true, withdrawnInputs: [] }
-      },
+      async abortConversation() {},
       async resetConversation(id: number) {
         return conversations.get(id) ?? summary(id, 'x')
       },

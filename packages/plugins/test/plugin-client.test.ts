@@ -116,7 +116,7 @@ function makeKernel(): KernelHttpTarget {
       deleteConversations: async (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
       submitInput: async () => ({ submissionId: 'sub' }),
       waitForInput: async (id: number) => ({ conversationId: id, submissionId: 'sub', text: '', entry: { id: 'e', kind: 'pi.assistant' } }),
-      abortConversation: async () => ({ ok: true, withdrawnInputs: [] }),
+      abortConversation: async () => {},
       resetConversation: async (id: number) => makeConversation(id),
       compactConversation: async (id: number) => ({ taskId: 1, conversation: makeConversation(id) }),
       forkConversation: async (id: number) => makeConversation(id + 100),

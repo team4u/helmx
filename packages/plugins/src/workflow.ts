@@ -10,10 +10,12 @@
 import type { DispatchToolsCapability, PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import {
+  CONVERSATION_DEPTH_CAPABILITY_ID,
   WORKFLOW_PLUGIN_ID,
   WORKFLOW_RUNS_DOC,
   WORKFLOW_RUN_BADGES_DOC,
   WORKFLOW_SKILL_ID,
+  type ConversationDepthCapability,
   type WorkflowRunBadgesDocState,
   type WorkflowRunSessionDocState,
 } from './contracts.js'
@@ -77,6 +79,7 @@ export function createWorkflowPlugin(): PluginDefinition {
       const registry = createManagedSubagentRegistry({
         kv: depthKv,
         configuredMaxSubagentDepth: () => readMaxSubagentDepth(ctx),
+        externalDepthSources: () => ctx.consume<ConversationDepthCapability>(CONVERSATION_DEPTH_CAPABILITY_ID),
       })
 
       const backgroundPolicy = createBackgroundPolicy({

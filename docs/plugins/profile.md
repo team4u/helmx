@@ -32,7 +32,7 @@
 
 `Profile.restrictToCwd`（`helmx profiles update <id> --restrict-to-cwd`）是模型护栏而非 OS 沙箱：内核文件工具（read/write/edit/register_artifact）在路径解析咽喉点做词法包含校验（绝对路径与 `../` 越界显式报 `path_outside_workspace`），`agent_spawn` 入口拒绝受限父会话的显式越界 `cwd`（插件经 hook 重写的受管 worktree 属宿主能力不受影响）；bash 保持自身权限边界（cwd 内符号链接仍是用户文件系统现实），硬隔离应绑定专用节点部署。
 
-目录注入钩子以低于默认值的 priority 运行（`-100`），看到的是默认优先级钩子收敛后的最终工具清单——无派工工具的回合（含达到深度上限的叶子子代理）不注入目录，避免教唆调用不存在的工具；不按 `parentConversationId` 一刀切排除（fork / Swarm worker 有父链但应保留协作能力）。
+目录注入钩子以低于默认值的 priority 运行（`-100`），看到的是默认优先级钩子收敛后的最终工具清单——无派工工具的回合（含达到深度上限的叶子子代理与默认第 1 层 Swarm 成员）不注入目录，避免教唆调用不存在的工具；不按 `parentConversationId` 一刀切排除（人工 `conversations fork` 与显式授予更深层级的子代理 / Swarm 成员仍保留协作能力）。
 
 **资产缺失自愈防线**：外部误删 SYSTEM.md 时按空处理但不静默换人格——先向人类发一次性 warning 通知（按 profileId 独立去重，恢复即停、再删可重新告警），再注入 `profile.assets-missing`；后续经 `helmx profiles update --system` 等写入自愈重建。`not_found` 之外的 IO/权限错误如实上抛。
 

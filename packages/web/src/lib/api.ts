@@ -5,7 +5,6 @@ import type {
   AskSpec,
   AuthStatus,
   AuthToken,
-  ConversationAbortResponse,
   ConversationCompactResponse,
   ConversationBulkDeleteResponse,
   ConversationDetail,
@@ -247,8 +246,8 @@ export const conversationsApi = {
       input,
     )
   },
-  abort(id: number): Promise<ConversationAbortResponse> {
-    return apiRequest<ConversationAbortResponse>('POST', `/api/conversations/${id}/abort`)
+  abort(id: number): Promise<{ ok: boolean }> {
+    return apiRequest<{ ok: boolean }>('POST', `/api/conversations/${id}/abort`)
   },
   reset(id: number, handoff?: string): Promise<ConversationSummary> {
     return apiRequest<ConversationSummary>(

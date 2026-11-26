@@ -130,7 +130,8 @@ export async function handleConversationsDomain(
     return jsonOk(redactor, await kernel.conversations.withdrawQueuedInput(id, parsed))
   }
   if (third === 'abort' && method === 'POST' && fourth === undefined) {
-    return jsonOk(redactor, await kernel.conversations.abortConversation(id))
+    await kernel.conversations.abortConversation(id)
+    return jsonOk(redactor, { ok: true })
   }
   if (third === 'reset' && method === 'POST' && fourth === undefined) {
     const opts = await parseOptionalJsonObjectBody(ctx.request, parseConversationResetBody)

@@ -24,7 +24,13 @@ import {
 } from '@helmx/protocol'
 import { PluginHost } from '@helmx/kernel'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
-import type { WorkflowRunBadgesDocState, WorkflowRunSessionDocState, WorkflowRunSummary } from '../src/contracts.js'
+import {
+  CONVERSATION_DEPTH_CAPABILITY_ID,
+  type ConversationDepthCapability,
+  type WorkflowRunBadgesDocState,
+  type WorkflowRunSessionDocState,
+  type WorkflowRunSummary,
+} from '../src/contracts.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
 import {
@@ -901,4 +907,39 @@ test('分片字节预算：字节账本实现在预算内/超界的每条路径�
   assert.ok(quadratic > 10 * totalBytes, `参考实现应体现重复整体序列化（quadratic=${quadratic}, total=${totalBytes}）`)
   assert.ok(linear <= 4 * totalBytes + 4096, `字节账本序列化总量必须与分片大小线性相关（linear=${linear}, total=${totalBytes}）`)
   assert.equal(enforceRunsShardByteBudget(runs, budget).json, legacyShardBudget(runs, budget).json)
+})
+
+test('外部 helmx.conversation-depth 提供方返回非法深度事实时显式抛 500 subagent_record_invalid，绝不静默退回 depth 0', { timeout: 60_000 }, async () => {
+  const host = makeHost()
+  let badFact: unknown = { depth: 0 }
+  await host.register({
+    id: 'test:bad-depth-provider',
+    name: 'bad depth provider',
+    definePlugin(ctx) {
+      ctx.provide<ConversationDepthCapability>(CONVERSATION_DEPTH_CAPABILITY_ID, {
+        depthOf: (id) => (id === 1 ? (badFact as { depth: number; leaf?: boolean }) : undefined),
+      })
+    },
+  })
+  await host.register(createWorkflowPlugin())
+
+  for (const invalid of [
+    { depth: 0 },
+    { depth: 6 },
+    { depth: 1.5 },
+    { depth: 1, leaf: 'yes' },
+    'corrupt',
+  ]) {
+    badFact = invalid
+    await assert.rejects(
+      () =>
+        host.invokeAction('builtin:workflow', 'run', {
+          script: `${META('bad-depth')}return 1`,
+          conversationId: 1,
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'subagent_record_invalid' && err.status === 500,
+    )
+  }
+
+  await host.dispose()
 })

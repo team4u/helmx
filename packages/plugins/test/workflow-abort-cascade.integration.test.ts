@@ -302,7 +302,7 @@ test('多级后台：中段会话 abort 级联取消其子树 run，深层 runs/
     // 一级：ROOT 派后台子代理（子会话 D 的模型调用挂起，保持后台 run 在途）。
     env.parentQueue.push(
       fauxAssistantMessage(
-        [fauxToolCall('subagent', { prompt: 'HANG-CHILD 一级后台', background: true }, { id: 'call-bg-l1' })],
+        [fauxToolCall('subagent', { prompt: 'HANG-CHILD 一级后台', background: true, maxSubagentDepth: 2 }, { id: 'call-bg-l1' })],
         { stopReason: 'toolUse' },
       ),
     )
