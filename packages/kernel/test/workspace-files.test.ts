@@ -348,7 +348,7 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
         deleteConversations: (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
         submitInput: () => ({ submissionId: 'x' }),
         waitForInput: () => { throw new Error('unused') },
-        abortConversation: () => {},
+        abortConversation: async () => ({ ok: true, withdrawnInputs: [] }),
         resetConversation: () => { throw new Error('unused') },
         compactConversation: () => { throw new Error('unused') },
         forkConversation: () => { throw new Error('unused') },

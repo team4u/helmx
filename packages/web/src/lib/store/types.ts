@@ -9,6 +9,7 @@ import type {
   PluginUiContribution,
   Profile,
   ProviderConfig,
+  QueuedConversationInput,
   SkillSummary,
 } from '@helmx/protocol/browser'
 import type { ModelCatalogDefaults, ModelDescriptor } from '../api.js'
@@ -118,6 +119,11 @@ export interface ConversationBackgroundSlice {
 
 export type ResolvedAskEntry = HelmxStoreValue['resolvedAsksByConv'][number][number]
 
+export interface AbortedComposerRestore {
+  items: QueuedConversationInput[]
+  seq: number
+}
+
 export type HelmxStoreActions = Pick<
   HelmxStoreValue,
   | 'setTheme'
@@ -162,6 +168,7 @@ export type HelmxStoreActions = Pick<
   | 'resumeNoticeTimer'
   | 'pushNotice'
   | 'invokePluginAction'
+  | 'abortConversation'
 >
 
 export type StoreDomainKey =
@@ -224,6 +231,7 @@ export interface NotifyPlan {
   artifactIds: Set<number>
   pendingAskIds: Set<number>
   resolvedAskIds: Set<number>
+  abortedRestoreIds: Set<number>
   highlightIds: Set<number>
   loadErrorKeys: Set<string>
   pluginDocKeys: Set<string>

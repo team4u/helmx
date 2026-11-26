@@ -5,6 +5,7 @@ import type {
   CommandSpec,
   ComposerCompleterSpec,
   MarkdownCodeBlockSpec,
+  ConversationAbortResponse,
   ConversationDetail,
   ConversationEntry,
   ConversationLive,
@@ -550,4 +551,5 @@ export interface HelmxStoreValue {
   resumeNoticeTimer(id: string): void
   pushNotice(notice: Omit<ToastNotice, 'id' | 'createdAt'>): void
   invokePluginAction(pluginId: string, actionId: string, input: unknown, conversationId?: number): Promise<unknown>
+  abortConversation(conversationId: number): Promise<ConversationAbortResponse>
 }

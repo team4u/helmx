@@ -30,7 +30,7 @@ import {
   removeTokenBeforeCaret,
   type QualifiedCommand,
 } from '../lib/commands-model.js'
-import { useOptionalLocale, useStoreActions } from '../lib/store-context.js'
+import { useOptionalLocale, useStoreActions, type AbortedComposerRestore } from '../lib/store-context.js'
 import { DEFAULT_HELMX_LOCALE } from '@helmx/protocol/browser'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { clearComposerDirty, setComposerDirty, type ComposerDirtySnapshot } from './composer-dirty.js'
@@ -40,6 +40,7 @@ import {
   attachmentsOfEditTarget,
   draftVersionOf,
   isHistoricalEdit,
+  mergeRestoredQueuedInputs,
   parseCompactSlashCommand,
   shouldRestoreEditOnFailure,
   type ComposerDraftVersion,
@@ -91,6 +92,12 @@ export interface ComposerSendInput {
   dirtySink?: ConversationDirtySink | null
   /** Panel-local command handler registry: claims interactive slash commands before falling back to action RPC. */
   commandRegistry?: ComposerCommandRegistry
+  /** Queued/steering inputs withdrawn by aborting this conversation, waiting to be restored into the composer. */
+  abortedRestore?: AbortedComposerRestore
+  /** Consumes one pending abortedRestore payload by `(conversationId, seq)`. */
+  onConsumeAbortedRestore?: (conversationId: number, seq: number) => void
+  /** False while hidden inside an inactive <Activity> pane; defers restore until visible. */
+  staged?: boolean
 }
 
 export interface ComposerSendApi {
@@ -144,11 +151,28 @@ export interface ComposerSendApi {
 }
 
 export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslator = englishWebTranslator): ComposerSendApi {
-  const { conversation, prefill, onSendingChange, onNewThread, textareaRef, slashPluginCommands, envConfigurable, working, dirtyKey, dirtySink, commandRegistry } = input
+  const {
+    conversation,
+    prefill,
+    onSendingChange,
+    onNewThread,
+    textareaRef,
+    slashPluginCommands,
+    envConfigurable,
+    working,
+    dirtyKey,
+    dirtySink,
+    commandRegistry,
+    abortedRestore,
+    onConsumeAbortedRestore,
+    staged,
+  } = input
   const { invokePluginAction, pushNotice } = useStoreActions()
   const locale = useOptionalLocale() ?? DEFAULT_HELMX_LOCALE
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const attachmentsRef = useRef<PendingAttachment[]>(attachments)
+  attachmentsRef.current = attachments
   const [editingEntryId, setEditingEntryId] = useState<number | null>(null)
   const [sending, setSending] = useState(false)
   const [uploading, setUploading] = useState(0)
@@ -268,6 +292,48 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     syncLiveDraft(prefill.text, nextEditing, nextAttachments)
     textareaRef.current?.focus()
   }, [prefill, syncLiveDraft, t, pushNotice, conversation.id, textareaRef])
+
+  useEffect(() => {
+    if (staged === false || abortedRestore === undefined) return
+    onConsumeAbortedRestore?.(conversation.id, abortedRestore.seq)
+    const live = liveDraftRef.current
+    if (live.targetEntryId !== null) {
+      const humanInputs = abortedRestore.items.filter((q) => q.origin === 'human')
+      if (humanInputs.length > 0) {
+        const preview = humanInputs
+          .map((q) => q.text)
+          .filter((s) => s !== '')
+          .join('\n\n')
+        pushNotice({
+          type: 'notification',
+          level: 'info',
+          title: t('composer.send.withdrawnTitle'),
+          body: t('composer.send.withdrawnBody', { text: preview }),
+          conversationId: conversation.id,
+        })
+      }
+      return
+    }
+    const merged = mergeRestoredQueuedInputs(live.text, attachmentsRef.current, abortedRestore.items)
+    if (merged === null) return
+    setText(merged.text)
+    setAttachments(merged.attachments)
+    attachmentsRef.current = merged.attachments
+    syncLiveDraft(merged.text, null, merged.attachments)
+    publishHiddenDirty()
+    const el = textareaRef.current
+    if (el !== null) focusWithCaret(el, merged.text.length)
+  }, [
+    abortedRestore,
+    staged,
+    conversation.id,
+    onConsumeAbortedRestore,
+    pushNotice,
+    publishHiddenDirty,
+    syncLiveDraft,
+    t,
+    textareaRef,
+  ])
 
   const cancelEdit = useCallback((): void => {
     setEditingEntryId(null)

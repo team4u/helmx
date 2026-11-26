@@ -200,7 +200,7 @@ function liveMessageOf(message: unknown): ConversationLiveMessage | undefined {
 export interface InboxItemLike {
   readonly id: number | string
   readonly mode?: string
-  readonly entry?: { kind?: string; data?: unknown }
+  readonly entry?: { readonly kind?: unknown; readonly data?: unknown }
 }
 
 /** Inbox queued item -> QueuedConversationInput; returns undefined for non-helmx.input or invalid payloads. */
@@ -230,6 +230,20 @@ function queuedInputOf(item: InboxItemLike, fallbackCreatedAt: number): QueuedCo
 function sortQueuedInputs(items: QueuedConversationInput[]): void {
   const rank = (mode: QueuedConversationInput['mode']): number => (mode === 'steer' ? 0 : 1)
   items.sort((a, b) => rank(a.mode) - rank(b.mode))
+}
+
+/** Derive ordered QueuedConversationInput items from pi.inbox items (steer ahead of followUp, preserving within-mode order). */
+export function deriveQueuedInputsFromInbox(
+  inboxItems: ReadonlyArray<InboxItemLike> | undefined,
+  fallbackCreatedAt: number,
+): QueuedConversationInput[] {
+  const queuedInputs: QueuedConversationInput[] = []
+  for (const item of inboxItems ?? []) {
+    const queued = queuedInputOf(item, fallbackCreatedAt)
+    if (queued !== undefined) queuedInputs.push(queued)
+  }
+  sortQueuedInputs(queuedInputs)
+  return queuedInputs
 }
 
 /**
@@ -283,12 +297,7 @@ export function deriveConversationLive(
   collect(source.nestedTools)
   const thinking = streamedThinkingOf(source.generation?.message)
   const generation = liveGenerationOf(source.generation, source.run?.taskId)
-  const queuedInputs: QueuedConversationInput[] = []
-  for (const item of inboxItems ?? []) {
-    const queued = queuedInputOf(item, updatedAt)
-    if (queued !== undefined) queuedInputs.push(queued)
-  }
-  sortQueuedInputs(queuedInputs)
+  const queuedInputs = deriveQueuedInputsFromInbox(inboxItems, updatedAt)
   return {
     conversationId,
     text: streamedTextOf(source.generation?.message),

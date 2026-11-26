@@ -64,6 +64,7 @@ export type TestStoreOverrides = Omit<
   | 'resumeNoticeTimer'
   | 'pushNotice'
   | 'invokePluginAction'
+  | 'abortConversation'
 > & {
   modelDefaults?: CatalogSlice['modelDefaults']
 }

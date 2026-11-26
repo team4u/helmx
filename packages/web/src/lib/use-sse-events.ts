@@ -403,6 +403,7 @@ function dispatchFrameSideEffects(
       return next
     })
     evictSessionDocsOfConversation(deletedConversationId)
+    store.clearAbortedRestore(deletedConversationId)
   }
 }
 

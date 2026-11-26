@@ -325,6 +325,12 @@ export interface QueuedConversationInput {
   attachments?: ConversationAttachmentRef[]
 }
 
+/** `POST /api/conversations/:id/abort` response: confirms abort and carries queued/steering inputs withdrawn by the abort. */
+export interface ConversationAbortResponse {
+  ok: boolean
+  withdrawnInputs: QueuedConversationInput[]
+}
+
 /** Conversation live incremental view (transient SSE `conversation.live` frame payload and snapshot/resumed `conversationLives`). */
 export interface ConversationLive {
   conversationId: number

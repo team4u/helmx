@@ -17,6 +17,7 @@ import type {
 import type { ModelCatalogDefaults, ModelDescriptor } from './api.js'
 import { isPluginSummaryActive } from './live-state.js'
 import type {
+  AbortedComposerRestore,
   AuthSlice,
   CatalogSlice,
   ConversationBackgroundSlice,
@@ -80,6 +81,13 @@ function subscribeResolvedAsksById(store: HelmxExternalStore, id: number, listen
 }
 function readResolvedAsksById(store: HelmxExternalStore, id: number): ResolvedAskEntry[] | undefined {
   return store.getResolvedAsks(id)
+}
+
+function subscribeAbortedRestoreById(store: HelmxExternalStore, id: number, listener: () => void): () => void {
+  return store.subscribeAbortedRestore(id, listener)
+}
+function readAbortedRestoreById(store: HelmxExternalStore, id: number): AbortedComposerRestore | undefined {
+  return store.getAbortedRestore(id)
 }
 
 function subscribeHighlightById(store: HelmxExternalStore, id: number, listener: () => void): () => void {
@@ -481,6 +489,10 @@ export function useResolvedAsks(conversationId: number | undefined): ResolvedAsk
   return useKeyedSlice(subscribeResolvedAsksById, readResolvedAsksById, conversationId, undefined)
 }
 
+export function useAbortedRestore(conversationId: number | undefined): AbortedComposerRestore | undefined {
+  return useKeyedSlice(subscribeAbortedRestoreById, readAbortedRestoreById, conversationId, undefined)
+}
+
 export function useHighlightedEntryForConversation(
   conversationId: number | undefined,
 ): { conversationId: number; entryId: string } | null {
@@ -601,6 +613,7 @@ function cacheSame(prev: Record<string, unknown>, next: Record<string, unknown>)
 
 export type { SessionDocKey }
 export type {
+  AbortedComposerRestore,
   AuthSlice,
   CatalogSlice,
   ConversationBackgroundSlice,

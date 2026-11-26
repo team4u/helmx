@@ -15,6 +15,7 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
 import { pluginSlashCommandsFor } from '../lib/commands-model.js'
 import {
+  useAbortedRestore,
   useConversationDetail,
   useGroupedUi,
   useHelmxExternalStore,
@@ -145,6 +146,7 @@ export const Composer = memo(function Composer({
 
   const composerDirtyKey = useId()
   const dirtySink = useConversationDirtySink()
+  const abortedRestore = useAbortedRestore(conversation.id)
   const [commandRegistry] = useState(() => createComposerCommandRegistry())
   const modelPickerModeRegistry = useMemo(() => createComposerModelPickerModeRegistry(), [])
   const {
@@ -183,6 +185,9 @@ export const Composer = memo(function Composer({
       dirtyKey: composerDirtyKey,
       dirtySink,
       commandRegistry,
+      abortedRestore,
+      onConsumeAbortedRestore: externalStore?.consumeAbortedRestore,
+      staged,
     },
     t,
   )
@@ -248,7 +253,11 @@ export const Composer = memo(function Composer({
 
   const abortTurn = async (): Promise<void> => {
     try {
-      await conversationsApi.abort(conversation.id)
+      if (externalStore !== null) {
+        await externalStore.abortConversation(conversation.id)
+      } else {
+        await conversationsApi.abort(conversation.id)
+      }
     } catch (err) {
       notifyError(t('conv.composer.abortFailed'), err)
     }

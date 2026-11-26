@@ -11,7 +11,7 @@ import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness } from '@earendil-works/pi-durable'
 import { createRegistry } from '@earendil-works/pi-durable'
 import type { ConversationLive } from '@helmx/protocol'
@@ -412,6 +412,148 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
         (snap.conversationLives ?? []).some((l) => l.conversationId === conv.id),
         false,
         'idle conversation must not appear in snapshot conversationLives',
+      )
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('abortConversation withdraws queued steer and followUp (with attachments) and returns them ordered steer-first', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'abort-withdraw')
+    const { models, faux } = makeFauxModels()
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    faux.setResponses([
+      async (_ctx, options) => {
+        entered()
+        return await new Promise((resolve) => {
+          if (options?.signal?.aborted) {
+            resolve(fauxAssistantMessage('', { stopReason: 'aborted' }))
+            return
+          }
+          options?.signal?.addEventListener(
+            'abort',
+            () => resolve(fauxAssistantMessage('', { stopReason: 'aborted' })),
+            { once: true },
+          )
+        })
+      },
+    ])
+    const kernel = await KernelRuntime.open({
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/faux-1',
+      models,
+    })
+    try {
+      const conv = await kernel.conversations.createConversation({ title: 'abort withdraw' })
+      const att = await kernel.conversations.createArtifact(conv.id, {
+        name: 'spec.txt',
+        bytes: Buffer.from('hello'),
+        mimeType: 'text/plain',
+      })
+      void kernel.conversations.submitInput(conv.id, 'initial run').catch(() => {})
+      await started
+
+      await kernel.conversations.submitInput(conv.id, 'queued follow-up', { whenBusy: 'followUp' })
+      await kernel.conversations.submitInput(conv.id, 'queued steer with file', {
+        whenBusy: 'steer',
+        attachments: [att.id],
+      })
+      await waitFor(() => {
+        const live = findLive(kernel, conv.id)
+        return live !== undefined && (live.queuedInputs?.length ?? 0) === 2
+      }, 5_000)
+
+      const abortRes = await kernel.conversations.abortConversation(conv.id)
+      assert.equal(abortRes.ok, true)
+      assert.equal(abortRes.withdrawnInputs.length, 2)
+      assert.deepEqual(
+        abortRes.withdrawnInputs.map((q) => ({ mode: q.mode, text: q.text })),
+        [
+          { mode: 'steer', text: 'queued steer with file' },
+          { mode: 'followUp', text: 'queued follow-up' },
+        ],
+      )
+      assert.deepEqual(
+        abortRes.withdrawnInputs[0]!.attachments?.map((a) => ({ id: a.id, name: a.name })),
+        [{ id: att.id, name: 'spec.txt' }],
+      )
+
+      await waitFor(() => {
+        const live = findLive(kernel, conv.id)
+        return live === undefined || (live.queuedInputs?.length ?? 0) === 0
+      }, 5_000)
+
+      const secondAbort = await kernel.conversations.abortConversation(conv.id)
+      assert.deepEqual(secondAbort, { ok: true, withdrawnInputs: [] })
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('abortConversation excludes steer already placed at a postTools boundary before abort', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'abort-post-tools')
+    const { models, faux } = makeFauxModels()
+    let entered1!: () => void
+    let answer1!: (message: ReturnType<typeof fauxAssistantMessage>) => void
+    let entered2!: () => void
+    const started1 = new Promise<void>((resolve) => { entered1 = resolve })
+    const held1 = new Promise<ReturnType<typeof fauxAssistantMessage>>((resolve) => { answer1 = resolve })
+    const started2 = new Promise<void>((resolve) => { entered2 = resolve })
+    faux.setResponses([
+      async () => { entered1(); return held1 },
+      async (_ctx, options) => {
+        entered2()
+        return await new Promise((resolve) => {
+          if (options?.signal?.aborted) {
+            resolve(fauxAssistantMessage('', { stopReason: 'aborted' }))
+            return
+          }
+          options?.signal?.addEventListener(
+            'abort',
+            () => resolve(fauxAssistantMessage('', { stopReason: 'aborted' })),
+            { once: true },
+          )
+        })
+      },
+    ])
+    const kernel = await KernelRuntime.open({
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/faux-1',
+      models,
+    })
+    try {
+      const conv = await kernel.conversations.createConversation({ title: 'abort postTools steer' })
+      void kernel.conversations.submitInput(conv.id, 'run with tool').catch(() => {})
+      await started1
+
+      await kernel.conversations.submitInput(conv.id, 'already placed steer', { whenBusy: 'steer' })
+      await kernel.conversations.submitInput(conv.id, 'still queued follow-up', { whenBusy: 'followUp' })
+      await waitFor(() => {
+        const live = findLive(kernel, conv.id)
+        return live !== undefined && (live.queuedInputs?.length ?? 0) === 2
+      }, 5_000)
+
+      answer1(
+        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo ok' })], {
+          stopReason: 'toolUse',
+        }),
+      )
+      await started2
+      // At started2, postTools boundary already placed 'already placed steer' into the transcript,
+      // while 'still queued follow-up' remains in pi.inbox.
+      await waitFor(() => {
+        const live = findLive(kernel, conv.id)
+        return (live?.queuedInputs?.length ?? 0) === 1
+      }, 5_000)
+
+      const abortRes = await kernel.conversations.abortConversation(conv.id)
+      assert.equal(abortRes.ok, true)
+      assert.deepEqual(
+        abortRes.withdrawnInputs.map((q) => ({ mode: q.mode, text: q.text })),
+        [{ mode: 'followUp', text: 'still queued follow-up' }],
       )
     } finally {
       await kernel.close()

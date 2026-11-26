@@ -249,6 +249,7 @@ function makeKernel(): KernelHttpTarget {
       },
       async abortConversation(id: number) {
         aborted.push(id)
+        return { ok: true, withdrawnInputs: [] }
       },
       async resetConversation(id: number) {
         const found = conversations.get(id)
@@ -1085,6 +1086,7 @@ test('POST /:id/abort invokes abortConversation', { timeout: 60_000 }, async () 
   const { handler } = makeHandlers()
   const res = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/abort`)
   assert.equal(res.status, 200)
+  assert.deepEqual(res.body, { ok: true, withdrawnInputs: [] })
   assert.ok(aborted.includes(ROOT_CONVERSATION_ID))
 })
 

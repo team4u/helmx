@@ -5,7 +5,7 @@
  * `SubmissionId`, `TaskId`); external protocol and store layers pass plain `number` values and validate
  * integer bounds at boundaries before narrowing here—replacing scattered `as never` casts.
  */
-import type { ConversationId, EntryId } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, SubmissionId } from '@earendil-works/pi-durable'
 
 export function asConversationId(id: number): ConversationId {
   return id as ConversationId
@@ -13,5 +13,9 @@ export function asConversationId(id: number): ConversationId {
 
 export function asEntryId(id: number): EntryId {
   return id as EntryId
+}
+
+export function asSubmissionId(id: number): SubmissionId {
+  return id as SubmissionId
 }
 

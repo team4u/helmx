@@ -126,7 +126,7 @@ function makeKernel(calls: CallLog = newCallLog()): CoreRoutesTarget {
         return { status: 'withdrawn' } as never
       },
       waitForInput: async () => { throw new HelmxError('not_found', 'x', 404) },
-      abortConversation: async () => {},
+      abortConversation: async () => ({ ok: true, withdrawnInputs: [] }),
       resetConversation: async (id: number, opts?: unknown) => {
         calls.resetConversation!.push([id, opts])
         return { id }
