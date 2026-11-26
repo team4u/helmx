@@ -551,21 +551,30 @@ test('通用工具：键值展示多行入参；原始数据展开保留完整 J
 // TraceRow 集成（无插件接管使用内置体；tool.view 接管行为不变）
 // ---------------------------------------------------------------------------
 
-test('TraceRow：无插件接管时点击展开内置展开体，再点击收起', { timeout: 60_000 }, async () => {
+test('TraceRow：无插件接管时点击在右侧抽屉打开内置详情体，再点击关闭按钮收起', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
     await m.render(rowUi(trace({ toolName: 'bash', input: { command: 'ls' }, resultText: 'a\nb' })))
     const row = m.host.querySelector('.trace-row') as HTMLElement
     assert.equal(row.getAttribute('role'), 'button')
+    assert.equal(row.getAttribute('aria-haspopup'), 'dialog')
+    assert.equal(row.getAttribute('aria-expanded'), 'false')
     await act(async () => {
       row.click()
     })
-    assert.ok(m.host.querySelector('.trace-expanded-body'), '展开内置体')
-    assert.match(m.host.textContent ?? '', /Raw data/)
+    assert.equal(row.getAttribute('aria-expanded'), 'true')
+    const drawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')
+    assert.ok(drawer !== null, '右侧检视抽屉打开')
+    assert.ok(drawer.querySelector('.trace-tool-body') !== null, '抽屉内展示内置工具详情体')
+    assert.match(drawer.textContent ?? '', /Raw data/)
+
+    const closeBtn = drawer.querySelector<HTMLButtonElement>('.process-drawer-close-btn')!
+    assert.ok(closeBtn !== null)
     await act(async () => {
-      row.click()
+      closeBtn.click()
     })
-    assert.ok(m.host.querySelector('.trace-expanded-body') === null, '再次点击收起')
+    assert.equal(row.getAttribute('aria-expanded'), 'false')
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null, '关闭抽屉后释放 DOM')
   } finally {
     m.unmount()
   }
@@ -597,7 +606,7 @@ test('TraceRow：运行中行右侧仅显示实时耗时秒表，无锚点留空
   }
 })
 
-test('TraceRow：tool.view inline 保留原始数据入口，不提供宿主专属展开体', { timeout: 60_000 }, async () => {
+test('TraceRow：tool.view inline 保留原始数据抽屉入口，不提供宿主专属展开体', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
     await m.render(
@@ -612,15 +621,16 @@ test('TraceRow：tool.view inline 保留原始数据入口，不提供宿主专�
     )
     const row = m.host.querySelector('.trace-row') as HTMLElement
     assert.ok(row)
-    assert.equal(row.getAttribute('role'), 'button', '保留原有可展开工具行')
+    assert.equal(row.getAttribute('role'), 'button', '保留原有可点击工具行')
     assert.ok(m.host.querySelector('.trace-toolview'), '插件视图仍在行下方渲染')
     await act(async () => {
       row.click()
     })
-    assert.ok(m.host.querySelector('.trace-expanded-body'), '可查看原始数据')
-    assert.ok(m.host.querySelector('.trace-tool-body') === null, '插件不被宿主专属展开体接管')
-    assert.match(m.host.textContent ?? '', /保留插件的原始输入/)
-    assert.match(m.host.textContent ?? '', /原始派工结果/)
+    const drawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')
+    assert.ok(drawer !== null, '可打开抽屉查看原始数据')
+    assert.ok(drawer.querySelector('.trace-tool-body') === null, '插件不被宿主专属展开体接管')
+    assert.match(drawer.textContent ?? '', /保留插件的原始输入/)
+    assert.match(drawer.textContent ?? '', /原始派工结果/)
   } finally {
     m.unmount()
   }
@@ -708,7 +718,7 @@ test('TraceRow：摘要完整渲染命令首行且不按字符数截断，宽度
 // TraceRow 右侧 chevron 指示器与 StepGroup 折叠错误徽标 / 总耗时
 // ---------------------------------------------------------------------------
 
-test('TraceRow：外层保持 div.trace-row[role="button"]，右侧显示 chevron 指示器并随展开切换且不污染耗时文本', { timeout: 60_000 }, async () => {
+test('TraceRow：外层保持 div.trace-row[role="button"]，右侧显示 chevron 指示器且抽屉开关不污染耗时文本', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
     await m.render(
@@ -717,20 +727,20 @@ test('TraceRow：外层保持 div.trace-row[role="button"]，右侧显示 chevro
     const row = m.host.querySelector('div.trace-row') as HTMLElement
     assert.ok(row !== null, '外层可点击元素必须保持 div.trace-row')
     assert.equal(row.getAttribute('role'), 'button')
+    assert.equal(row.getAttribute('aria-haspopup'), 'dialog')
     assert.equal(row.getAttribute('aria-expanded'), 'false')
     const rightEl = row.querySelector('.trace-row-right')
     assert.equal(rightEl?.textContent, '120ms', 'chevron SVG 不污染 .trace-row-right 纯文本')
-    const chevronCollapsed = rightEl?.querySelector('.trace-row-chevron')
-    assert.ok(chevronCollapsed !== null, '渲染 .trace-row-chevron')
-    assert.ok(chevronCollapsed.classList.contains('lucide-chevron-right'), '收起态为 chevron-right')
+    const chevron = rightEl?.querySelector('.trace-row-chevron')
+    assert.ok(chevron !== null, '渲染 .trace-row-chevron')
+    assert.ok(chevron.classList.contains('lucide-chevron-right'), '保持右向 chevron 指示器')
 
     await act(async () => {
       row.click()
     })
     assert.equal(row.getAttribute('aria-expanded'), 'true')
     assert.equal(rightEl?.textContent, '120ms')
-    const chevronExpanded = rightEl?.querySelector('.trace-row-chevron')
-    assert.ok(chevronExpanded?.classList.contains('lucide-chevron-down'), '展开态切换为 chevron-down')
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') !== null)
 
     // right 为空串（unknown 状态且无耗时）：仍保留 chevron 且不渲染多余空 span 文本
     await m.render(rowUi(trace({ toolName: 'bash', status: 'unknown', isError: false })))
@@ -742,7 +752,7 @@ test('TraceRow：外层保持 div.trace-row[role="button"]，右侧显示 chevro
   }
 })
 
-test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；展开后隐藏失败徽标并保留总耗时', { timeout: 60_000 }, async () => {
+test('StepGroup：落定态收为单行入口，失败徽标与总耗时在抽屉开合间始终可见', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
     const steps: FoldableStep[] = [
@@ -765,8 +775,9 @@ test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；�
 
     const summaryBtn = m.host.querySelector('button.trace-group-summary') as HTMLButtonElement
     assert.ok(summaryBtn !== null)
+    assert.equal(summaryBtn.getAttribute('aria-haspopup'), 'dialog')
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
-    assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), true, '收起且含失败时加错误修饰类')
+    assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), true, '含失败时加错误修饰类')
     assert.match(summaryBtn.textContent ?? '', /Thinking and execution \(3 steps\)/)
 
     const errorBadge = summaryBtn.querySelector('.trace-group-badge.trace-group-badge-error')
@@ -776,23 +787,24 @@ test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；�
     assert.equal(summaryBtn.querySelectorAll('.trace-group-meta').length, 1)
     assert.doesNotMatch(summaryBtn.textContent ?? '', /Model|Tools/)
 
-    // 展开后：隐藏组级失败徽标与错误修饰类（组内失败行直接标红），保留总耗时
+    // 打开右侧抽屉后：主时间线保持单行不撑长，摘要上仍保留失败徽标与总耗时
     await act(async () => {
       summaryBtn.click()
     })
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
-    assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), false)
-    assert.ok(summaryBtn.querySelector('.trace-group-badge-error') === null, '展开后隐藏失败徽标')
-    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, '1.5s', 'The cumulative total remains visible when expanded')
-    assert.ok(m.host.querySelector('.trace-group-steps .trace-row.trace-row-error') !== null)
+    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
+    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, '1.5s')
+    const drawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')
+    assert.ok(drawer !== null, '打开步骤抽屉')
+    assert.ok(drawer.querySelector('.process-step-item.is-error') !== null, '抽屉目录中标红失败步骤')
 
-    // 再次收起：恢复错误徽标与修饰类
+    // 关闭抽屉：恢复未检视态
+    const closeBtn = drawer.querySelector<HTMLButtonElement>('.process-drawer-close-btn')!
     await act(async () => {
-      summaryBtn.click()
+      closeBtn.click()
     })
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
-    assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), true)
-    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
   } finally {
     m.unmount()
   }
@@ -825,7 +837,7 @@ test('StepGroup: one total with localized timing details on hover and keyboard f
     assert.match(details.textContent ?? '', /Model 3\.2s/)
     assert.match(details.textContent ?? '', /Tools 10\.0s/)
     assert.match(details.textContent ?? '', /cumulative time, not elapsed time; parallel tools count separately/)
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false', 'Hover must not expand the steps')
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false', 'Hover must not open the drawer')
     assert.equal(summaryBtn.getAttribute('aria-describedby'), details.id)
 
     await act(async () => { localeStore.setLocale('zh-CN') })
@@ -837,20 +849,22 @@ test('StepGroup: one total with localized timing details on hover and keyboard f
     assert.match(localizedDetails.textContent ?? '', /工具 10\.0s/)
     assert.match(localizedDetails.textContent ?? '', /累计耗时/)
 
-    await act(async () => { summaryBtn.click() })
-    await waitForCondition(() => document.querySelector('[role="tooltip"]') === null)
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
     await act(async () => { summaryBtn.focus() })
     await waitForCondition(() => document.querySelector('[role="tooltip"]') !== null)
     assert.match(document.querySelector('[role="tooltip"]')?.textContent ?? '', /模型 3\.2s/)
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true', 'Keyboard focus must not toggle the steps')
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false', 'Keyboard focus must not open the drawer')
+
+    await act(async () => { summaryBtn.click() })
+    await waitForCondition(() => document.querySelector('[role="tooltip"]') === null)
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') !== null)
   } finally {
     localStorage.removeItem('helmx:locale')
     m.unmount()
   }
 })
 
-test('StepGroup：进行中（active=true）不显示总耗时，单思考步委派 ThinkingRow 不嵌套摘要', { timeout: 60_000 }, async () => {
+test('StepGroup：进行中（active=true）展示紧凑实时动态且不显示总耗时，单思考步委派 ThinkingRow 不嵌套摘要', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
     const steps: FoldableStep[] = [
@@ -860,25 +874,30 @@ test('StepGroup：进行中（active=true）不显示总耗时，单思考步委
       },
       {
         kind: 'tool',
-        tool: trace({ key: 't2', toolName: 'read', status: 'running' }),
+        tool: trace({ key: 't2', toolName: 'read', status: 'running', input: { path: '/repo/a.ts' } }),
       },
     ]
     await m.render(stepGroupUi(steps, true))
     const summaryBtn = m.host.querySelector('button.trace-group-summary') as HTMLButtonElement
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false', '初始抽屉关闭，不阻塞主视图')
     assert.match(summaryBtn.textContent ?? '', /Thinking and executing \(2 steps\)…/)
     assert.ok(summaryBtn.querySelector('.trace-group-meta') === null, '进行中不显示总耗时')
-    assert.ok(summaryBtn.querySelector('.trace-group-badge-error') === null, '展开态不显示失败徽标')
+    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed', '已有失败保留醒目提示')
+    assert.ok(m.host.querySelector('.trace-live-feed') !== null, '进行中保留紧凑实时动态')
+    assert.match(m.host.querySelector('.trace-live-feed')?.textContent ?? '', /read/)
+    assert.doesNotMatch(m.host.querySelector('.trace-live-feed')?.textContent ?? '', /\bbash\b/, '仅保留当前运行中步骤，不铺满历史步')
 
-    // 进行中手动收起：已有失败可显示失败徽标，但仍不显示总耗时
+    // 点击实时动态中的运行行：直接打开抽屉并定位到该运行步骤
+    const liveRow = m.host.querySelector<HTMLElement>('.trace-live-feed .trace-row')!
     await act(async () => {
-      summaryBtn.click()
+      liveRow.click()
     })
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
-    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
-    assert.ok(summaryBtn.querySelector('.trace-group-meta') === null, 'active=true 时收起仍不显示总耗时')
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
+    const drawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')!
+    assert.ok(drawer !== null)
+    assert.match(drawer.querySelector('.process-detail-title')?.textContent ?? '', /read/)
 
-    // Settled groups show one bare cumulative duration; the tooltip carries the breakdown.
+    // Settled groups show one bare cumulative duration; live feed disappears cleanly.
     await m.render(
       stepGroupUi(
         [
@@ -889,8 +908,9 @@ test('StepGroup：进行中（active=true）不显示总耗时，单思考步委
       ),
     )
     const settledBtn = m.host.querySelector<HTMLButtonElement>('button.trace-group-summary')!
-    assert.equal(settledBtn.getAttribute('aria-expanded'), 'false')
+    assert.ok(m.host.querySelector('.trace-live-feed') === null, '落定后收为单行入口')
     assert.equal(settledBtn.querySelector('.trace-group-meta')?.textContent, '500ms')
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') !== null, '已开抽屉无缝保持并更新')
 
     // 单步 thinking 保持早退 ThinkingRow，不出现 "(1 步)" 或组徽标
     await m.render(stepGroupUi([{ kind: 'thinking', thinking: { key: 'only', text: '单步思路' } }], false))
@@ -1268,13 +1288,10 @@ test('TraceRow：replaceRow=true 卡片统一提供宿主输入/输出展开开�
     assert.ok(m.host.querySelector('.trace-row') === null, 'replaceRow=true 仍不渲染宿主默认 .trace-row')
 
     const toggle = m.host.querySelector<HTMLButtonElement>('.trace-io-toggle')
-    assert.ok(toggle !== null, 'replaceRow=true 渲染统一输入/输出展开开关')
+    assert.ok(toggle !== null, 'replaceRow=true 渲染统一输入/输出抽屉开关')
+    assert.equal(toggle.getAttribute('aria-haspopup'), 'dialog')
     assert.equal(toggle.getAttribute('aria-expanded'), 'false')
     assert.match(toggle.getAttribute('aria-label') ?? '', /Show input & output for swarm_dispatch_worker/)
-    const panelId = toggle.getAttribute('aria-controls')
-    assert.ok(panelId !== null && panelId !== '')
-    const panel = document.getElementById(panelId)
-    assert.ok(panel !== null && panel.hidden === true, '折叠态 aria-controls 指向真实隐藏面板')
 
     // 点击卡片本身不触发展开，保留插件跳转语义
     await act(async () => {
@@ -1283,34 +1300,36 @@ test('TraceRow：replaceRow=true 卡片统一提供宿主输入/输出展开开�
     assert.equal(cardClicks, 1)
     assert.equal(toggle.getAttribute('aria-expanded'), 'false')
 
-    // 点击 I/O 开关展开：可见 KV 多行入参、输出、截断全文提示、产物入口与原始数据
+    // 点击 I/O 开关在右侧抽屉打开：可见 KV 多行入参、输出、截断全文提示、产物入口与原始数据
     await act(async () => {
       toggle.click()
     })
     assert.equal(toggle.getAttribute('aria-expanded'), 'true')
     assert.equal(toggle.classList.contains('trace-io-toggle-open'), true)
-    assert.equal(panel.hidden, false)
-    assert.ok(panel.querySelector('.trace-kv') !== null, '入参以可读键值形态展示')
-    assert.match(panel.textContent ?? '', /Line 1: audit auth\nLine 2: run tests/, '多行入参按真实换行展示')
-    assert.match(panel.textContent ?? '', /Dispatched @author \(#51\), brief=#1\./, '输出完整可见')
-    assert.match(panel.textContent ?? '', /Expand full text \(120 lines in total\)/, '服务端截断时保留展开全文取回入口')
-    assert.match(panel.textContent ?? '', /Open full artifact #art_sw_1/, 'Spill 产物入口保留')
-    const copyOut = [...panel.querySelectorAll('button')].find((b) => b.textContent?.includes('Copy output')) as HTMLButtonElement | undefined
+    const drawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')!
+    assert.ok(drawer !== null, '打开 I/O 检视抽屉')
+    assert.ok(drawer.querySelector('.trace-kv') !== null, '入参以可读键值形态展示')
+    assert.match(drawer.textContent ?? '', /Line 1: audit auth\nLine 2: run tests/, '多行入参按真实换行展示')
+    assert.match(drawer.textContent ?? '', /Dispatched @author \(#51\), brief=#1\./, '输出完整可见')
+    assert.match(drawer.textContent ?? '', /Expand full text \(120 lines in total\)/, '服务端截断时保留展开全文取回入口')
+    assert.match(drawer.textContent ?? '', /Open full artifact #art_sw_1/, 'Spill 产物入口保留')
+    const copyOut = [...drawer.querySelectorAll('button')].find((b) => b.textContent?.includes('Copy output')) as HTMLButtonElement | undefined
     assert.ok(copyOut !== undefined && copyOut.disabled === true, '截断态输出复制受门禁保护')
 
-    const rawBtn = panel.querySelector<HTMLButtonElement>('.trace-raw .btn-inline')
+    const rawBtn = drawer.querySelector<HTMLButtonElement>('.trace-raw .btn-inline')
     assert.ok(rawBtn !== null)
     await act(async () => {
       rawBtn.click()
     })
-    assert.match(panel.textContent ?? '', /"workerConversationId": 51/, '原始数据保留结构化 presentationMeta')
+    assert.match(drawer.textContent ?? '', /"workerConversationId": 51/, '原始数据保留结构化 presentationMeta')
 
-    // 再次点击收起
+    // 点击关闭按钮关闭抽屉
+    const closeIoDrawer = drawer.querySelector<HTMLButtonElement>('.process-drawer-close-btn')!
     await act(async () => {
-      toggle.click()
+      closeIoDrawer.click()
     })
     assert.equal(toggle.getAttribute('aria-expanded'), 'false')
-    assert.equal(panel.hidden, true)
+    assert.ok(document.querySelector('[role="dialog"].process-inspector-drawer') === null)
 
     // 2) 插件 replaceRow=true 接管 bash 且运行中无输出时：不越权渲染宿主 BashToolBody，也不呈现空白，且支持 zh-CN 文案
     await m.render(
@@ -1344,9 +1363,11 @@ test('TraceRow：replaceRow=true 卡片统一提供宿主输入/输出展开开�
     await act(async () => {
       if (zhToggle.getAttribute('aria-expanded') === 'false') zhToggle.click()
     })
-    assert.ok(m.host.querySelector('.trace-cmd-head') === null, '不越权渲染宿主专属 BashToolBody')
-    assert.ok(m.host.querySelector('.trace-kv') !== null, '使用通用键值入参视图')
-    assert.match(m.host.textContent ?? '', /执行中，暂无输出。/, '运行中无输出如实提示，不留空白')
+    const zhDrawer = document.querySelector<HTMLElement>('[role="dialog"].process-inspector-drawer')!
+    assert.ok(zhDrawer !== null)
+    assert.ok(zhDrawer.querySelector('.trace-cmd-head') === null, '不越权渲染宿主专属 BashToolBody')
+    assert.ok(zhDrawer.querySelector('.trace-kv') !== null, '使用通用键值入参视图')
+    assert.match(zhDrawer.textContent ?? '', /执行中，暂无输出。/, '运行中无输出如实提示，不留空白')
   } finally {
     m.unmount()
     resetPluginClientCache()

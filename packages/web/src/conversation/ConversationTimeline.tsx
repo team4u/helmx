@@ -23,6 +23,16 @@ import {
   type ResolvedAskEntry,
 } from '../lib/store-context.js'
 import { AssistantModelBoundary, AssistantTurnView } from './AssistantTurn.js'
+import { ProcessInspectorDrawer } from './ProcessInspectorDrawer.js'
+import { ProcessInspectorContext, type ProcessInspectorController } from './process-inspector-context.js'
+import {
+  findLatestProcessTarget,
+  resolveProcessInspection,
+  stepKeyOf,
+  type ProcessInspectMode,
+  type ProcessInspectTarget,
+  type ResolvedProcessInspection,
+} from './process-inspector-model.js'
 import {
   ContextDivider,
   PluginCard,
@@ -49,12 +59,13 @@ import {
   lastEditableHumanInput,
   resolveAssistantAnchorEntry,
   type EditRequestTarget,
-  type ProcessShortcutCommand,
+  type FoldableStep,
   type TimelineItem,
 } from './timeline-model.js'
 import { useTimelineScroll, type TimelineOutlineScrollRequest } from './use-timeline-scroll.js'
 
 const EMPTY_RESOLVED_ASKS: ResolvedAskEntry[] = []
+const EMPTY_STEPS: ReadonlyArray<FoldableStep> = []
 const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
 interface TimelineBeforeCommitSnapshotProps {
@@ -90,6 +101,7 @@ export interface ConversationTimelineProps {
   live?: ConversationLive
   timelineItems?: ReadonlyArray<TimelineItem>
   sendingPending?: boolean
+  staged?: boolean
   outlineOpen?: boolean
   outlineScrollRequest?: OutlineScrollRequest | null
   /** 当前阅读位置对应的大纲激活锚点（entryId + 回合内 headingIndex / 卡片 cardId）。 */
@@ -105,6 +117,7 @@ export function ConversationTimeline({
   live,
   timelineItems,
   sendingPending = false,
+  staged = true,
   outlineOpen = true,
   outlineScrollRequest,
   onActiveOutlineChange,
@@ -120,10 +133,10 @@ export function ConversationTimeline({
   const { loadEarlierEntries: fetchEarlierEntries } = useStoreActions()
   const { t } = useWebLocale()
   const entryActions = useTimelineEntryActions(conversation, onRequestEdit)
-  const [processToggle, setProcessToggle] = useState<{ turnKey: string; command: ProcessShortcutCommand } | null>(null)
+  const [inspectTarget, setInspectTarget] = useState<ProcessInspectTarget | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const processToggleSeqRef = useRef(0)
-  const latestProcessTurnKeyRef = useRef<string | undefined>(undefined)
+  const itemsRef = useRef<ReadonlyArray<TimelineItem>>([])
+  const resolvedInspectionRef = useRef<ResolvedProcessInspection | null>(null)
 
   const isWorking = conversation.status === 'working'
   const isCompacting = conversation.contextUsage?.compacting === true
@@ -176,7 +189,13 @@ export function ConversationTimeline({
   }, [items])
 
   const latestProcessTurnKey = useMemo(() => findLatestProcessTurnKey(items), [items])
-  latestProcessTurnKeyRef.current = latestProcessTurnKey
+  itemsRef.current = items
+
+  const resolvedInspection = useMemo(
+    () => resolveProcessInspection(items, inspectTarget),
+    [items, inspectTarget],
+  )
+  resolvedInspectionRef.current = resolvedInspection
 
   const lastHumanKey = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
@@ -197,7 +216,80 @@ export function ConversationTimeline({
   const contentFingerprint = `${items.length}:${detailEntries.length}:${conversation.status}:${conversation.contextUsage?.compacting === true ? 1 : 0}:${lastTurnSummary}:${live?.updatedAt ?? 0}:${live?.thinking?.length ?? 0}:${live?.text.length ?? 0}:${live?.queuedInputs?.map((q) => `${q.id}:${q.mode}`).join(',') ?? ''}:${resolvedAsks.length}`
   const detailsReady = conversationDetail !== undefined
   const anchorSignature = useMemo(() => items.map((item) => timelineAnchorId(item)).join('\n'), [items])
-  const clearProcessToggle = useCallback(() => setProcessToggle(null), [])
+  const closeInspector = useCallback(() => setInspectTarget(null), [])
+
+  const openStepGroup = useCallback(
+    (
+      turnKey: string,
+      segmentKey: string,
+      opts?: { stepKey?: string; stepIndex?: number; followLive?: boolean },
+    ): void => {
+      setInspectTarget({
+        kind: 'step-group',
+        turnKey,
+        segmentKey,
+        ...(opts?.stepKey !== undefined ? { selectedStepKey: opts.stepKey } : {}),
+        ...(opts?.stepIndex !== undefined ? { selectedStepIndex: opts.stepIndex } : {}),
+        ...(opts?.followLive !== undefined ? { followLive: opts.followLive } : {}),
+      })
+    },
+    [],
+  )
+
+  const openStandaloneTool = useCallback(
+    (turnKey: string, toolKey: string, mode: ProcessInspectMode): void => {
+      setInspectTarget({ kind: 'standalone-tool', turnKey, toolKey, mode })
+    },
+    [],
+  )
+
+  const inspectorController = useMemo<ProcessInspectorController>(
+    () => ({
+      activeTarget: inspectTarget,
+      openStepGroup,
+      openStandaloneTool,
+      close: closeInspector,
+    }),
+    [inspectTarget, openStepGroup, openStandaloneTool, closeInspector],
+  )
+
+  useEffect(() => {
+    if (!staged) {
+      setInspectTarget(null)
+    }
+  }, [staged])
+
+  useEffect(() => {
+    if (inspectTarget !== null && resolvedInspection === null) {
+      setInspectTarget(null)
+    }
+  }, [inspectTarget, resolvedInspection])
+
+  // Preserve the step being followed when a live step-group transitions to settled.
+  useEffect(() => {
+    if (
+      resolvedInspection === null ||
+      inspectTarget === null ||
+      inspectTarget.kind !== 'step-group' ||
+      inspectTarget.followLive !== true ||
+      !resolvedInspection.active
+    ) {
+      return
+    }
+    const nextKey = stepKeyOf(resolvedInspection.selectedStep, resolvedInspection.selectedIndex)
+    const nextIndex = resolvedInspection.selectedIndex
+    setInspectTarget((prev) => {
+      if (
+        prev === null ||
+        prev.kind !== 'step-group' ||
+        prev.followLive !== true ||
+        (prev.selectedStepKey === nextKey && prev.selectedStepIndex === nextIndex)
+      ) {
+        return prev
+      }
+      return { ...prev, selectedStepKey: nextKey, selectedStepIndex: nextIndex }
+    })
+  }, [inspectTarget, resolvedInspection])
 
   const {
     scrollRef,
@@ -225,11 +317,11 @@ export function ConversationTimeline({
     outlineScrollRequest,
     outlineOpen,
     onActiveOutlineChange,
-    onConversationSwitch: clearProcessToggle,
+    onConversationSwitch: closeInspector,
     fetchEarlierEntries,
   })
 
-  // Ctrl+O global shortcut dispatch: toggles the fold state of the latest assistant turn with process steps per pane.
+  // Ctrl+O global shortcut dispatch: opens or closes the latest process-group inspector drawer per pane.
   useEffect(() => {
     const onShortcut = (event: Event): void => {
       if (!(event instanceof CustomEvent)) return
@@ -242,22 +334,18 @@ export function ConversationTimeline({
       if (root.closest('.conversation-drawer') !== null) return
       const myPanel = root.closest('[data-helmx-panel]')?.getAttribute('data-helmx-panel') ?? 'primary'
       if (panel !== myPanel) return
-      const targetTurnKey = latestProcessTurnKeyRef.current
-      if (targetTurnKey === undefined) return
-      const turnEl = innerRef.current?.querySelector<HTMLElement>('[data-latest-process-turn="true"]')
-      const rootToggles = turnEl?.querySelectorAll<HTMLElement>('[data-process-toggle="root"]')
-      const anyOpen =
-        rootToggles !== undefined &&
-        Array.from(rootToggles).some((el) => el.getAttribute('aria-expanded') === 'true')
-      const nextSeq = ++processToggleSeqRef.current
-      setProcessToggle({
-        turnKey: targetTurnKey,
-        command: { open: !anyOpen, seq: nextSeq },
-      })
+      if (resolvedInspectionRef.current !== null) {
+        setInspectTarget(null)
+        return
+      }
+      const nextTarget = findLatestProcessTarget(itemsRef.current)
+      if (nextTarget !== null) {
+        setInspectTarget(nextTarget)
+      }
     }
     window.addEventListener('helmx:shortcut', onShortcut)
     return () => window.removeEventListener('helmx:shortcut', onShortcut)
-  }, [innerRef])
+  }, [])
 
   const highlightClass = (entryId: string): string => {
     const matchedStore = highlightedEntry !== null && highlightedEntry.conversationId === conversation.id && highlightedEntry.entryId === entryId
@@ -349,96 +437,97 @@ export function ConversationTimeline({
             ) : null}
           </div>
         ) : null}
-        <TimelineToolCallsContext.Provider value={toolCallsStore}>
-          <div ref={innerRef} className="timeline-inner">
-            {items.map((item) => {
-              const cvClass = resolveContainmentClass(item, cvExclusions, containmentEnabled)
-              if (item.kind === 'human') {
+        <ProcessInspectorContext.Provider value={inspectorController}>
+          <TimelineToolCallsContext.Provider value={toolCallsStore}>
+            <div ref={innerRef} className="timeline-inner">
+              {items.map((item) => {
+                const cvClass = resolveContainmentClass(item, cvExclusions, containmentEnabled)
+                if (item.kind === 'human') {
+                  return (
+                    <div
+                      key={item.key}
+                      className={`timeline-human-wrap ${highlightClass(item.entryId)}${cvClass !== '' ? ` ${cvClass}` : ''}`}
+                      ref={highlightScrollRef}
+                      data-entry-id={item.entryId}
+                    >
+                      <TimelineHumanMessage
+                        item={item}
+                        conversation={conversation}
+                        onRequestEdit={onRequestEdit}
+                        onForkFromHere={entryActions.forkFromHere}
+                        onWithdrawQueuedEdit={entryActions.withdrawQueuedForEdit}
+                      />
+                    </div>
+                  )
+                }
+                if (item.kind === 'divider') {
+                  return (
+                    <div
+                      key={item.key}
+                      className={`${highlightClass(item.entryId)}${cvClass !== '' ? ` ${cvClass}` : ''}`.trim()}
+                      ref={highlightScrollRef}
+                      data-entry-id={item.entryId}
+                    >
+                      <ContextDivider item={item} />
+                    </div>
+                  )
+                }
+                if (item.kind === 'plugin-card') {
+                  return (
+                    <div
+                      key={item.key}
+                      className={`${highlightClass(item.entryId)}${cvClass !== '' ? ` ${cvClass}` : ''}`.trim()}
+                      ref={highlightScrollRef}
+                      data-entry-id={item.entryId}
+                    >
+                      <PluginCard item={item} conversationId={conversation.id} />
+                    </div>
+                  )
+                }
+                const anchorId = timelineAnchorId(item)
+                const modelBoundary = modelBoundaries.get(item.key)
                 return (
                   <div
                     key={item.key}
-                    className={`timeline-human-wrap ${highlightClass(item.entryId)}${cvClass !== '' ? ` ${cvClass}` : ''}`}
+                    className={`${highlightClass(anchorId)}${cvClass !== '' ? ` ${cvClass}` : ''}`.trim()}
                     ref={highlightScrollRef}
-                    data-entry-id={item.entryId}
+                    data-entry-id={anchorId}
+                    data-latest-process-turn={item.key === latestProcessTurnKey ? 'true' : undefined}
                   >
-                    <TimelineHumanMessage
-                      item={item}
+                    {modelBoundary !== undefined ? <AssistantModelBoundary model={modelBoundary} /> : null}
+                    <AssistantTurnView
+                      turn={item}
                       conversation={conversation}
-                      onRequestEdit={onRequestEdit}
+                      anchorEntry={resolveAssistantAnchorEntry(item.entryIds, activeEntriesById)}
+                      isLatestTurn={item.key === lastAssistantKey}
+                      isTrailingTurn={item.key === trailingAssistantKey}
                       onForkFromHere={entryActions.forkFromHere}
-                      onWithdrawQueuedEdit={entryActions.withdrawQueuedForEdit}
+                      onRegenerate={
+                        item.key === lastAssistantKey && !isWorking && !sendingPending && latestRetryTarget !== undefined
+                          ? regenerateLatestTurn
+                          : undefined
+                      }
                     />
                   </div>
                 )
-              }
-              if (item.kind === 'divider') {
-                return (
-                  <div
-                    key={item.key}
-                    className={`${highlightClass(item.entryId)}${cvClass !== '' ? ` ${cvClass}` : ''}`.trim()}
-                    ref={highlightScrollRef}
-                    data-entry-id={item.entryId}
-                  >
-                    <ContextDivider item={item} />
-                  </div>
-                )
-              }
-              if (item.kind === 'plugin-card') {
-                return (
-                  <div
-                    key={item.key}
-                    className={`${highlightClass(item.entryId)}${cvClass !== '' ? ` ${cvClass}` : ''}`.trim()}
-                    ref={highlightScrollRef}
-                    data-entry-id={item.entryId}
-                  >
-                    <PluginCard item={item} conversationId={conversation.id} />
-                  </div>
-                )
-              }
-              const anchorId = timelineAnchorId(item)
-              const modelBoundary = modelBoundaries.get(item.key)
-              return (
-                <div
-                  key={item.key}
-                  className={`${highlightClass(anchorId)}${cvClass !== '' ? ` ${cvClass}` : ''}`.trim()}
-                  ref={highlightScrollRef}
-                  data-entry-id={anchorId}
-                  data-latest-process-turn={item.key === latestProcessTurnKey ? 'true' : undefined}
-                >
-                  {modelBoundary !== undefined ? <AssistantModelBoundary model={modelBoundary} /> : null}
-                  <AssistantTurnView
-                    turn={item}
-                    conversation={conversation}
-                    anchorEntry={resolveAssistantAnchorEntry(item.entryIds, activeEntriesById)}
-                    isLatestTurn={item.key === lastAssistantKey}
-                    isTrailingTurn={item.key === trailingAssistantKey}
-                    processShortcut={processToggle?.turnKey === item.key ? processToggle.command : undefined}
-                    onForkFromHere={entryActions.forkFromHere}
-                    onRegenerate={
-                      item.key === lastAssistantKey && !isWorking && !sendingPending && latestRetryTarget !== undefined
-                        ? regenerateLatestTurn
-                        : undefined
-                    }
-                  />
-                </div>
-              )
-            })}
-            {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
-              <TimelineLiveWaitingRow conversation={conversation} isWorking={isWorking} />
-            ) : null}
-            {resolvedAsks.map(({ ask, status }) => (
-              <ResolvedAskRow key={`ask:${ask.id}`} ask={ask} status={status} />
-            ))}
-            {conversation.status === 'error' ? (
-              <TurnErrorNotice
-                conversation={conversation}
-                editTarget={latestRetryTarget}
-                onRequestEdit={onRequestEdit}
-                onRetryTurn={entryActions.retryTurn}
-              />
-            ) : null}
-          </div>
-        </TimelineToolCallsContext.Provider>
+              })}
+              {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
+                <TimelineLiveWaitingRow conversation={conversation} isWorking={isWorking} />
+              ) : null}
+              {resolvedAsks.map(({ ask, status }) => (
+                <ResolvedAskRow key={`ask:${ask.id}`} ask={ask} status={status} />
+              ))}
+              {conversation.status === 'error' ? (
+                <TurnErrorNotice
+                  conversation={conversation}
+                  editTarget={latestRetryTarget}
+                  onRequestEdit={onRequestEdit}
+                  onRetryTurn={entryActions.retryTurn}
+                />
+              ) : null}
+            </div>
+          </TimelineToolCallsContext.Provider>
+        </ProcessInspectorContext.Provider>
         <div ref={bottomRef} className="timeline-scroll-anchor" />
       </div>
       {showScrollBottom ? (
@@ -455,6 +544,38 @@ export function ConversationTimeline({
           ) : null}
         </button>
       ) : null}
+      <ProcessInspectorDrawer
+        open={resolvedInspection !== null}
+        conversationId={conversation.id}
+        steps={resolvedInspection?.steps ?? EMPTY_STEPS}
+        active={resolvedInspection?.active ?? false}
+        selectedIndex={resolvedInspection?.selectedIndex ?? 0}
+        mode={resolvedInspection?.mode ?? 'default'}
+        followLive={inspectTarget?.kind === 'step-group' ? inspectTarget.followLive : undefined}
+        onSelectStep={(index, stepKey) => {
+          setInspectTarget((prev) => {
+            if (prev === null || prev.kind !== 'step-group') return prev
+            return {
+              ...prev,
+              selectedStepKey: stepKey,
+              selectedStepIndex: index,
+              followLive: false,
+            }
+          })
+        }}
+        onFollowLive={() => {
+          setInspectTarget((prev) => {
+            if (prev === null || prev.kind !== 'step-group') return prev
+            return {
+              kind: 'step-group',
+              turnKey: prev.turnKey,
+              segmentKey: prev.segmentKey,
+              followLive: true,
+            }
+          })
+        }}
+        onClose={closeInspector}
+      />
     </div>
   )
 }

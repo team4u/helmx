@@ -98,6 +98,7 @@ const NON_WORKBENCH_DIALOG_SELECTOR =
   '[role="alertdialog"], [role="dialog"]:not(.drawer-stack-dialog):not(.helmx-workbench):not(.conversation-drawer)'
 const NON_MODEL_PICKER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.composer-model-popover)'
 const NON_PROFILE_PICKER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.agent-standby-profile-popover)'
+const NON_PROCESS_DRAWER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.process-inspector-drawer)'
 const NON_PLUS_MENU_OVERLAY_SELECTOR = '[role="menu"]:not(.composer-plus-menu), [role="listbox"]'
 
 export function getStoredSidebarCollapsed(): boolean {
@@ -170,6 +171,12 @@ export function hasNonModelPickerDialogOpen(): boolean {
 export function hasNonProfilePickerDialogOpen(): boolean {
   if (typeof document === 'undefined') return false
   return document.querySelector(NON_PROFILE_PICKER_DIALOG_SELECTOR) !== null
+}
+
+/** Detect blocking dialogs other than the process inspector drawer (so a second Ctrl+O can toggle it closed). */
+export function hasNonProcessDrawerDialogOpen(): boolean {
+  if (typeof document === 'undefined') return false
+  return document.querySelector(NON_PROCESS_DRAWER_DIALOG_SELECTOR) !== null
 }
 
 /** Detect non-plus-menu menu/listbox overlays (keeps `.composer-plus-menu` toggleable by Ctrl+;). */

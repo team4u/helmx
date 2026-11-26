@@ -12,6 +12,7 @@ import {
   hasMultipleNewTopicProfiles,
   hasNonModelPickerDialogOpen,
   hasNonPlusMenuOverlayOpen,
+  hasNonProcessDrawerDialogOpen,
   hasNonProfilePickerDialogOpen,
   hasNonWorkbenchDialogOpen,
   isConversationAbortable,
@@ -218,6 +219,14 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         return
       }
 
+      if (isCtrlOnly && keyLower === 'o') {
+        if (hasNonProcessDrawerDialogOpen()) return
+        event.preventDefault()
+        const detail: HelmxShortcutDetail = { action: 'toggle-process-groups', panel }
+        window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
+        return
+      }
+
       if (hasDialogOpen()) return
 
       if (
@@ -238,13 +247,6 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
         if (shortcutEvent.defaultPrevented) {
           event.preventDefault()
         }
-        return
-      }
-
-      if (isCtrlOnly && keyLower === 'o') {
-        event.preventDefault()
-        const detail: HelmxShortcutDetail = { action: 'toggle-process-groups', panel }
-        window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
         return
       }
 

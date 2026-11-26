@@ -4,7 +4,7 @@ import { CopyButton, HelmxIcon, IconButton, ToolActivityContext, useSharedNowMs 
 import { MarkdownView } from './MarkdownView.js'
 import { StepGroup, TraceRow } from './TimelineRows.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'
-import { isAssistantTurnBusy, assistantModelFullLabel, assistantModelShortLabel, type AssistantModelIdentity, type AssistantTurn, type ProcessShortcutCommand } from './timeline-model.js'
+import { isAssistantTurnBusy, assistantModelFullLabel, assistantModelShortLabel, type AssistantModelIdentity, type AssistantTurn } from './timeline-model.js'
 import {
   formatDurationMs,
   formatFullTimestamp,
@@ -49,8 +49,6 @@ export interface AssistantTurnViewProps {
   isTrailingTurn?: boolean
   /** 回合锚点对应的真实持久化 pi.assistant 条目（见 resolveAssistantAnchorEntry）。 */
   anchorEntry?: ConversationEntry
-  /** Ctrl+O 过程步骤折叠指令（仅最新含过程步骤回合传入）。 */
-  processShortcut?: ProcessShortcutCommand
   /** 从回合末条目分叉新会话（ConversationTimeline 统一实例化的动作服务）。 */
   onForkFromHere: (entryId: string) => Promise<void>
   /** 一键重新生成最新已完成助手回合（重发其对应的最后一条可编辑人类消息）。 */
@@ -66,7 +64,6 @@ function AssistantTurnContent({
   conversation,
   isLatestTurn = false,
   isTrailingTurn,
-  processShortcut,
   onForkFromHere,
   onRegenerate,
 }: AssistantTurnViewProps) {
@@ -195,7 +192,8 @@ function AssistantTurnContent({
               steps={seg.steps}
               active={seg.active === true}
               conversationId={conversation.id}
-              shortcutToggle={processShortcut}
+              turnKey={turn.key}
+              segmentKey={seg.key}
             />
           )
         }
@@ -204,6 +202,7 @@ function AssistantTurnContent({
             key={seg.key}
             tool={seg.tool}
             conversationId={conversation.id}
+            turnKey={turn.key}
             defaultOpen={false}
           />
         )
