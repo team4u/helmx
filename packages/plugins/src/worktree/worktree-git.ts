@@ -75,6 +75,43 @@ interface GitCaptureLines {
 }
 export type GitCapture = GitCaptureChars | GitCaptureLines
 
+/** 单条 `git worktree list --porcelain` 记录行的解析规则。 */
+interface WorktreeTokenRule {
+  /** 记录关键字（首个空格之前）。 */
+  keyword: 'HEAD' | 'branch' | 'detached' | 'locked' | 'prunable'
+  /** 应用空格后的值；裸标志（如 `detached`）不带值。 */
+  apply: (entry: WorktreeEntry, value: string | undefined) => void
+}
+
+const WORKTREE_TOKEN_RULES: ReadonlyArray<WorktreeTokenRule> = [
+  { keyword: 'HEAD', apply: (entry, value) => { if (value !== undefined) entry.head = value } },
+  { keyword: 'branch', apply: (entry, value) => { if (value !== undefined) entry.branch = value } },
+  // git 只在 detached 时输出裸标志且不携带值；带值的 `detached` 不是合法记录，忽略。
+  { keyword: 'detached', apply: (entry, value) => { if (value === undefined) entry.detached = true } },
+  {
+    keyword: 'locked',
+    apply: (entry, value) => {
+      entry.locked = true
+      if (value !== undefined) entry.lockedReason = value
+    },
+  },
+  {
+    keyword: 'prunable',
+    apply: (entry, value) => {
+      entry.prunable = true
+      if (value !== undefined) entry.prunableReason = value
+    },
+  },
+]
+
+function applyWorktreeToken(entry: WorktreeEntry, token: string): void {
+  const space = token.indexOf(' ')
+  const keyword = space < 0 ? token : token.slice(0, space)
+  const rule = WORKTREE_TOKEN_RULES.find((candidate) => candidate.keyword === keyword)
+  if (rule === undefined) return
+  rule.apply(entry, space < 0 ? undefined : token.slice(space + 1))
+}
+
 /** 解析 `git worktree list --porcelain -z` 输出（NUL 分隔记录，空 token 分隔条目）。 */
 function parseWorktreeList(output: string): WorktreeEntry[] {
   const entries: WorktreeEntry[] = []
@@ -93,19 +130,7 @@ function parseWorktreeList(output: string): WorktreeEntry[] {
       current = { path: token.slice('worktree '.length), head: '', detached: false, locked: false, prunable: false }
       continue
     }
-    if (current === undefined) continue
-    if (token.startsWith('HEAD ')) current.head = token.slice('HEAD '.length)
-    else if (token.startsWith('branch ')) current.branch = token.slice('branch '.length)
-    else if (token === 'detached') current.detached = true
-    else if (token === 'locked') current.locked = true
-    else if (token.startsWith('locked ')) {
-      current.locked = true
-      current.lockedReason = token.slice('locked '.length)
-    } else if (token === 'prunable') current.prunable = true
-    else if (token.startsWith('prunable ')) {
-      current.prunable = true
-      current.prunableReason = token.slice('prunable '.length)
-    }
+    if (current !== undefined) applyWorktreeToken(current, token)
   }
   flush()
   return entries
@@ -381,7 +406,8 @@ export async function pruneWorktreeRegistrations(
 }
 
 /** 删除受管分支（幂等：分支已不存在视为已删除；失败返回真实输出供重试诊断）。 */
-export async function deleteManagedBranch(  ports: WorktreeNodePorts,
+export async function deleteManagedBranch(
+  ports: WorktreeNodePorts,
   nodeId: string,
   repoRoot: string,
   branch: string,
@@ -394,17 +420,20 @@ export async function deleteManagedBranch(  ports: WorktreeNodePorts,
   return del.ok ? { deleted: true } : { deleted: false, failureOutput: del.output }
 }
 
-/** 「已合入」参考提交解析：显式 mergedInto 严格校验 > baseBranch > 主工作树 HEAD。 */
-export async function resolveMergeReferenceHead(
-  ports: WorktreeNodePorts,
-  nodeId: string,
-  repoRoot: string,
-  mainHead: string,
-  mergedInto: string | undefined,
-  baseBranch: string | undefined,
-  signal?: AbortSignal,
-): Promise<string> {
+/** 「已合入」参考提交解析所需的位置与候选（显式 mergedInto 严格校验 > baseBranch > 主工作树 HEAD）。 */
+export interface MergeReferenceQuery {
+  nodeId: string
+  repoRoot: string
+  /** 主工作树 HEAD（最终兜底）。 */
+  mainHead: string
+  mergedInto: string | undefined
+  baseBranch: string | undefined
+  signal?: AbortSignal
+}
+
+export async function resolveMergeReferenceHead(ports: WorktreeNodePorts, query: MergeReferenceQuery): Promise<string> {
   const redact = ports.redact ?? ((t: string) => t)
+  const { nodeId, repoRoot, mainHead, mergedInto, baseBranch, signal } = query
   if (mergedInto !== undefined) {
     const verify = await gitExec(
       ports,

@@ -222,15 +222,14 @@ async function deleteBranchAgainstAuthority(
   mainHead: string,
   input: CleanupInput,
 ): Promise<{ deleted: boolean; failureOutput?: string }> {
-  const referenceHead = await resolveMergeReferenceHead(
-    deps,
-    record.nodeId,
-    mainPath,
+  const referenceHead = await resolveMergeReferenceHead(deps, {
+    nodeId: record.nodeId,
+    repoRoot: mainPath,
     mainHead,
-    input.mergedInto,
-    record.baseBranch,
-    input.signal,
-  )
+    mergedInto: input.mergedInto,
+    baseBranch: record.baseBranch,
+    signal: input.signal,
+  })
   const merged =
     (await countUnmergedCommits(deps, record.nodeId, mainPath, referenceHead, record.branch, input.signal)) === 0
   return deleteManagedBranch(deps, record.nodeId, mainPath, record.branch, input.force === true || merged, input.signal)
@@ -473,15 +472,14 @@ export async function cleanupWorktree(
         )
       }
       const dirtyFiles = status.output.trim().split('\n').map((l) => l.trim()).filter((l) => l !== '')
-      const referenceHead = await resolveMergeReferenceHead(
-        deps,
-        fresh.nodeId,
-        locked.mainPath,
-        mainEntry.head,
-        input.mergedInto,
-        fresh.baseBranch,
-        input.signal,
-      )
+      const referenceHead = await resolveMergeReferenceHead(deps, {
+        nodeId: fresh.nodeId,
+        repoRoot: locked.mainPath,
+        mainHead: mainEntry.head,
+        mergedInto: input.mergedInto,
+        baseBranch: fresh.baseBranch,
+        signal: input.signal,
+      })
       unmergedCommits = await countUnmergedCommits(deps, fresh.nodeId, locked.mainPath, referenceHead, fresh.branch, input.signal)
       if (dirtyFiles.length > 0 || unmergedCommits > 0) {
         throw new HelmxError(
