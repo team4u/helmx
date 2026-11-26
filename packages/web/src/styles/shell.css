@@ -70,13 +70,18 @@
   transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
 }
 
-.rail-btn:hover {
+.rail-btn:hover,
+.rail-btn:focus-visible {
+  outline: none;
   background: var(--bg-hover);
   color: var(--fg);
+  box-shadow: none;
 }
 
 .rail-btn-active,
-.rail-btn-active:hover {
+.rail-btn-active:hover,
+.rail-btn-active:focus-visible {
+  outline: none;
   background: var(--nav-active-bg);
   color: var(--nav-active-fg);
   box-shadow: var(--seg-edge);

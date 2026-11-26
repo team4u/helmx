@@ -363,9 +363,9 @@ export const composerMessages = {
   'composer.ask.stepPrev': { en: 'Previous', 'zh-CN': '上一题' },
   'composer.ask.stepNext': { en: 'Next', 'zh-CN': '下一题' },
   'composer.ask.multiHint': { en: 'Select one or more', 'zh-CN': '可多选' },
-  'composer.ask.shortcutHint': { en: '↑↓ · 1–9 · Enter', 'zh-CN': '↑↓ · 1–9 · Enter' },
-  'composer.ask.shortcutHintMulti': { en: '↑↓ · Space / 1–9 · Enter', 'zh-CN': '↑↓ · Space / 1–9 · Enter' },
-  'composer.ask.shortcutHintStepper': { en: '↑↓ · 1–9 · Enter · [ ] step', 'zh-CN': '↑↓ · 1–9 · Enter · [ ] 切题' },
+  'composer.ask.shortcutHint': { en: '↑↓ · 1–9 · Enter · Esc', 'zh-CN': '↑↓ · 1–9 · Enter · Esc' },
+  'composer.ask.shortcutHintMulti': { en: '↑↓ · Space / 1–9 · Enter · Esc', 'zh-CN': '↑↓ · Space / 1–9 · Enter · Esc' },
+  'composer.ask.shortcutHintStepper': { en: '↑↓ · ←→ step · Enter · Esc', 'zh-CN': '↑↓ · ←→ 切题 · Enter · Esc' },
   'composer.ask.secretPlaceholder': { en: 'Secret values go to the in-memory SecretStash only', 'zh-CN': '机密值仅入内存 SecretStash' },
   'composer.ask.secretHint': {
     en: 'Secrets stay in the in-memory SecretStash, never stored in the database',

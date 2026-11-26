@@ -49,6 +49,7 @@ export interface AskDockProps {
   conversationId: number
   shortcutPanel?: 'primary' | 'split' | 'drawer'
   shortcutActive?: boolean
+  onFocusReturn?: () => void
 }
 
 /** Source-conversation badge: shown when the ask belongs to another
@@ -80,6 +81,7 @@ function AskChoiceGroup({
   fieldLabel,
   value,
   disabled,
+  isStepper,
   focusCustomSignal,
   focusOptionReq,
   onChange,
@@ -90,6 +92,7 @@ function AskChoiceGroup({
   fieldLabel: string
   value: AskAnswerValue | undefined
   disabled: boolean
+  isStepper: boolean
   focusCustomSignal: number
   focusOptionReq?: FocusChoiceOptionRequest
   onChange: (next: AskAnswerValue, meta?: { fromPresetClick?: boolean }) => void
@@ -209,9 +212,9 @@ function AskChoiceGroup({
     }
 
     let nextIndex: number | null = null
-    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+    if (e.key === 'ArrowDown' || (!isStepper && e.key === 'ArrowRight')) {
       nextIndex = (index + 1) % totalChoices
-    } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+    } else if (e.key === 'ArrowUp' || (!isStepper && e.key === 'ArrowLeft')) {
       nextIndex = (index - 1 + totalChoices) % totalChoices
     } else if (e.key === 'Home') {
       nextIndex = 0
@@ -400,6 +403,44 @@ function AskChoiceGroup({
                       optionRefs.current[options.length]?.focus()
                       return
                     }
+                    if (
+                      !e.altKey &&
+                      !e.ctrlKey &&
+                      !e.metaKey &&
+                      !e.nativeEvent.isComposing &&
+                      e.keyCode !== 229 &&
+                      (e.key === 'ArrowUp' || e.key === 'ArrowDown')
+                    ) {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      if (e.key === 'ArrowUp') {
+                        if (customInputValue.trim() === '' && options.length > 0) {
+                          const prevIdx = options.length - 1
+                          if (multiple) {
+                            setFocusedMultiIndex(prevIdx)
+                          } else {
+                            setCustomOpen(false)
+                            onChange(options[prevIdx]!.value, { fromPresetClick: false })
+                          }
+                          optionRefs.current[prevIdx]?.focus()
+                        } else {
+                          optionRefs.current[options.length]?.focus()
+                        }
+                        return
+                      }
+                      if (options.length > 0) {
+                        if (multiple) {
+                          setFocusedMultiIndex(0)
+                        } else {
+                          setCustomOpen(false)
+                          onChange(options[0]!.value, { fromPresetClick: false })
+                        }
+                        optionRefs.current[0]?.focus()
+                      } else {
+                        optionRefs.current[options.length]?.focus()
+                      }
+                      return
+                    }
                     if (e.key === 'Enter') {
                       if (e.nativeEvent.isComposing || e.keyCode === 229) {
                         e.preventDefault()
@@ -424,6 +465,7 @@ function AskChoiceGroup({
 function AskFieldInput({
   conversationId,
   askKind,
+  isStepper,
   field,
   fieldId,
   fieldLabel,
@@ -439,6 +481,7 @@ function AskFieldInput({
 }: {
   conversationId: number
   askKind: AskKind
+  isStepper: boolean
   field: AskFieldSpec
   fieldId: string
   fieldLabel: string
@@ -483,6 +526,7 @@ function AskFieldInput({
         fieldLabel={fieldLabel}
         value={value}
         disabled={disabled}
+        isStepper={isStepper}
         focusCustomSignal={focusCustomSignal}
         focusOptionReq={focusOptionReq}
         onChange={(nextVal, meta) => onPatchAnswers({ [field.name]: nextVal }, meta)}
@@ -556,7 +600,12 @@ function AskFieldInput({
           disabled={disabled}
           onClick={() => onStringChange('true')}
           onKeyDown={(e) => {
-            if (!e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowRight' || e.key === 'ArrowDown')) {
+            if (
+              !e.altKey &&
+              !e.ctrlKey &&
+              !e.metaKey &&
+              (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowUp')
+            ) {
               e.preventDefault()
               confirmNoRef.current?.focus()
             }
@@ -572,7 +621,12 @@ function AskFieldInput({
           disabled={disabled}
           onClick={() => onStringChange('false')}
           onKeyDown={(e) => {
-            if (!e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowLeft' || e.key === 'ArrowUp')) {
+            if (
+              !e.altKey &&
+              !e.ctrlKey &&
+              !e.metaKey &&
+              (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'ArrowRight' || e.key === 'ArrowDown')
+            ) {
               e.preventDefault()
               confirmYesRef.current?.focus()
             }
@@ -642,15 +696,19 @@ function AskCard({
   source,
   hostConversationId,
   isPrimaryCard,
+  hasNextPendingAsk,
   shortcutPanel,
   shortcutActive,
+  onFocusReturn,
 }: {
   ask: AskSpec
   source?: AskSourceInfo
   hostConversationId: number
   isPrimaryCard: boolean
+  hasNextPendingAsk: boolean
   shortcutPanel: 'primary' | 'split' | 'drawer'
   shortcutActive: boolean
+  onFocusReturn?: () => void
 }) {
   const { openConversationDrawer } = useStoreActions()
   const externalStore = useContext(HelmxExternalStoreContext)
@@ -659,6 +717,7 @@ function AskCard({
   // conversation drawer; form labels associate with this instance only.
   const formId = useId()
   const formRef = useRef<HTMLFormElement | null>(null)
+  const cancelBtnRef = useRef<HTMLButtonElement | null>(null)
   const [answers, setAnswers] = useState<AskAnswers>(() => initialAskAnswers(ask.fields))
   const answersRef = useRef<AskAnswers>(answers)
   answersRef.current = answers
@@ -724,15 +783,20 @@ function AskCard({
     return true
   }, [])
 
-  // Auto-focus first control only on mount when current focus is neutral or inside an empty composer.
+  // Auto-focus first control on mount or when promoted to primary card while focus is neutral or inside an empty composer.
+  const prevAutoFocusKeyRef = useRef<string | null>(null)
   useEffect(() => {
+    const nextKey = isPrimaryCard ? ask.id : null
+    if (nextKey === null || prevAutoFocusKeyRef.current === nextKey) {
+      if (nextKey === null) prevAutoFocusKeyRef.current = null
+      return
+    }
+    prevAutoFocusKeyRef.current = nextKey
     if (!isWindowShortcutOwner()) return
     const formEl = formRef.current
     if (!shouldAutoFocusAskDock(document.activeElement, formEl)) return
     focusStepPrimaryControl(safeActiveStepRef.current)
-    // Intentionally scoped to card mount for ask.id.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ask.id])
+  }, [ask.id, isPrimaryCard, isWindowShortcutOwner, focusStepPrimaryControl])
 
   // Move focus into the newly revealed step whenever safeActiveStep advances or retreats.
   const prevStepEffectRef = useRef<number | null>(null)
@@ -753,11 +817,18 @@ function AskCard({
 
   const submitAnswers = useCallback(
     async (payload: AskAnswers): Promise<void> => {
+      const hadFocus = formRef.current?.contains(document.activeElement) ?? false
       setSubmitting('answer')
       submittingRef.current = 'answer'
       setError(null)
       try {
         await asksApi.answer(ask.id, payload, ask.expectedStateSeq)
+        if (
+          !hasNextPendingAsk &&
+          (hadFocus || document.activeElement === document.body || document.activeElement === null)
+        ) {
+          onFocusReturn?.()
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
       } finally {
@@ -765,7 +836,7 @@ function AskCard({
         submittingRef.current = null
       }
     },
-    [ask.id, ask.expectedStateSeq],
+    [ask.id, ask.expectedStateSeq, hasNextPendingAsk, onFocusReturn],
   )
 
   const submit = async (): Promise<void> => {
@@ -777,11 +848,18 @@ function AskCard({
   }
 
   const cancel = async (): Promise<void> => {
+    const hadFocus = formRef.current?.contains(document.activeElement) ?? false
     setSubmitting('cancel')
     submittingRef.current = 'cancel'
     setError(null)
     try {
       await asksApi.cancel(ask.id)
+      if (
+        !hasNextPendingAsk &&
+        (hadFocus || document.activeElement === document.body || document.activeElement === null)
+      ) {
+        onFocusReturn?.()
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -905,18 +983,52 @@ function AskCard({
 
       if (inEditable) return
 
-      if (isStepper && (e.key === 'PageUp' || e.key === '[')) {
+      if (sourceOrigin === 'form' && e.key === 'Escape' && !e.shiftKey) {
+        if (
+          targetEl !== cancelBtnRef.current &&
+          cancelBtnRef.current !== null &&
+          !cancelBtnRef.current.disabled
+        ) {
+          e.preventDefault()
+          e.stopPropagation()
+          cancelBtnRef.current.focus()
+          return
+        }
+        return
+      }
+
+      if (isStepper && (e.key === 'PageUp' || e.key === '[' || (!e.shiftKey && e.key === 'ArrowLeft'))) {
         e.preventDefault()
         setActiveStep((s) => Math.max(0, s - 1))
         return
       }
-      if (isStepper && (e.key === 'PageDown' || e.key === ']')) {
+      if (isStepper && (e.key === 'PageDown' || e.key === ']' || (!e.shiftKey && e.key === 'ArrowRight'))) {
         e.preventDefault()
         setActiveStep((s) => Math.min(lastStepIndex, s + 1))
         return
       }
 
       const choiceTarget = resolveAskKeyboardChoiceTarget(ask, isStepper, curStep)
+
+      if (choiceTarget === undefined && !e.shiftKey && (e.key === '1' || e.key === '2')) {
+        const confirmStepIdx = isStepper
+          ? (ask.fields[curStep]?.type === 'confirm' ? curStep : -1)
+          : (() => {
+              const indices = ask.fields.map((f, i) => (f.type === 'confirm' ? i : -1)).filter((i) => i >= 0)
+              return indices.length === 1 ? indices[0]! : -1
+            })()
+        if (confirmStepIdx >= 0) {
+          const panels = [...formEl.querySelectorAll<HTMLElement>('.ask-dock-step-panel')]
+          const panelEl = panels[confirmStepIdx] ?? formEl
+          const btns = [...panelEl.querySelectorAll<HTMLButtonElement>('.ask-dock-confirm-actions button:not(:disabled)')]
+          const targetBtn = btns[Number(e.key) - 1]
+          if (targetBtn !== undefined) {
+            e.preventDefault()
+            targetBtn.focus()
+            return
+          }
+        }
+      }
 
       if (!e.shiftKey && /^[1-9]$/.test(e.key) && choiceTarget !== undefined) {
         const { field: targetField, fieldIndex: targetIndex } = choiceTarget
@@ -1005,6 +1117,11 @@ function AskCard({
           }
           return
         }
+        if (sourceOrigin === 'window' || targetEl === formEl) {
+          e.preventDefault()
+          focusStepPrimaryControl(curStep)
+        }
+        return
       }
 
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -1023,6 +1140,7 @@ function AskCard({
       advanceOrSubmitFromStep,
       applyFieldPatch,
       ask,
+      focusStepPrimaryControl,
       isSingleConfirm,
       isStepper,
       isWindowShortcutOwner,
@@ -1102,6 +1220,7 @@ function AskCard({
         ) : null}
         {source !== undefined ? (
           <Button
+            ref={cancelBtnRef}
             variant="ghost"
             size="sm"
             icon={<HelmxIcon name="corner-down-right" size={11} />}
@@ -1124,6 +1243,7 @@ function AskCard({
       {snapshot !== undefined ? (
         <div className="ask-dock-snapshot">
           <Button
+            ref={cancelBtnRef}
             variant="ghost"
             size="sm"
             icon={<HelmxIcon name={snapshotOpen ? 'chevron-down' : 'chevron-right'} size={12} />}
@@ -1153,6 +1273,7 @@ function AskCard({
               <AskFieldInput
                 conversationId={ask.conversationId}
                 askKind={askKind}
+                isStepper={isStepper}
                 field={field}
                 fieldId={fieldId}
                 fieldLabel={fieldLabel}
@@ -1201,6 +1322,7 @@ function AskCard({
       <Stack direction="horizontal" justify="between" wrap gap="sm" className="ask-dock-actions">
         <div className="ask-dock-actions-left">
           <Button
+            ref={cancelBtnRef}
             variant="ghost"
             size="sm"
             pending={submitting === 'cancel'}
@@ -1244,11 +1366,13 @@ function AskDockActive({
   pendingAsks,
   shortcutPanel,
   shortcutActive,
+  onFocusReturn,
 }: {
   conversationId: number
   pendingAsks: ReadonlyArray<AskSpec>
   shortcutPanel: 'primary' | 'split' | 'drawer'
   shortcutActive: boolean
+  onFocusReturn?: () => void
 }) {
   const conversations = useConversations()
   // Ancestry derives purely from conversations; pending asks of
@@ -1269,8 +1393,10 @@ function AskDockActive({
           ask={ask}
           hostConversationId={conversationId}
           isPrimaryCard={cardIndex === 0}
+          hasNextPendingAsk={pending.length > 1}
           shortcutPanel={shortcutPanel}
           shortcutActive={shortcutActive}
+          onFocusReturn={onFocusReturn}
           {...(ask.conversationId !== conversationId
             ? {
                 source: {
@@ -1294,6 +1420,7 @@ export function AskDock({
   conversationId,
   shortcutPanel = 'primary',
   shortcutActive = true,
+  onFocusReturn,
 }: AskDockProps) {
   const pendingAsks = usePendingAsks()
   if (!pendingAsks.some((a) => a.status === 'pending')) return null
@@ -1303,6 +1430,7 @@ export function AskDock({
       pendingAsks={pendingAsks}
       shortcutPanel={shortcutPanel}
       shortcutActive={shortcutActive}
+      onFocusReturn={onFocusReturn}
     />
   )
 }
