@@ -2,10 +2,12 @@
  * Conversation service: CRUD / paginated details / input submission (submitInput) / in-place overwrite & resend
  * (rewrite) / fork / reset / compact / model inheritance alignment / attachment content assembly.
  *
- * Extracted from runtime.ts (splitting the largest responsibility cluster out of an oversized class). External behavior
- * matches the original KernelRuntime methods identically; delegates history rewrites, context operations,
- * attachment resolution, detail pagination, profile alignment, lifecycle CRUD, submission tracking, and the
- * input pipeline to dedicated submodules.
+ * Extracted from runtime.ts (splitting the largest responsibility cluster out of an oversized class). This class is the
+ * facade and composition root: it wires the dedicated submodules and exposes the public conversation API unchanged.
+ * Submodules: history rewrites, context operations, attachment resolution, detail pagination, profile alignment,
+ * lifecycle CRUD, submission tracking and the input pipeline (sibling files), plus — under conversation-service/ —
+ * the guarded-mutation primitives (single source of the automation red line), the submitInput orchestration and
+ * the startup recovery procedure.
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness, Storage } from '@earendil-works/pi-durable'
@@ -53,7 +55,10 @@ import { ConversationProfileService } from './conversation-profile.js'
 import { ConversationRewind, type RewindInterval } from './conversation-rewind.js'
 import { ConversationSubmissionService } from './conversation-submissions.js'
 import { normalizeConversationSearchInput } from './guards/conversation-guards.js'
-import { asConversationId, getSdkConversation, scanSdkConversations } from './sdk-ids.js'
+import { getSdkConversation } from './sdk-ids.js'
+import { ConversationSubmit } from './conversation-service/submit.js'
+import { recoverConversations } from './conversation-service/recovery.js'
+import { assertGuardedMutationTarget, assertGuardShape } from './conversation-service/guarded-mutations.js'
 import type { TrustedNodePlatformSource } from './target-cwd.js'
 
 interface ConversationServiceOptions {
@@ -125,14 +130,11 @@ interface ConversationServiceOptions {
 export type { ConversationFileContent, SubmitInputOptions }
 
 export class ConversationService {
-  private readonly harness: Harness
-  private readonly storage: Pick<Storage, 'scanConversations'>
+  /** Composition options: shared deps are read through `this.o` instead of being duplicated as fields. */
+  private readonly o: ConversationServiceOptions
   private readonly store: HelmxStore
   private readonly tracker: ConversationTracker
-  private readonly events: EventHub
-  private readonly artifactsSvc: SvcArtifactService
   private readonly stash: SecretStash
-  private readonly o: ConversationServiceOptions
 
   private readonly attachments: ConversationAttachments
   private readonly rewind: ConversationRewind
@@ -142,6 +144,8 @@ export class ConversationService {
   private readonly inputPipeline: ConversationInputPipeline
   private readonly lifecycle: ConversationLifecycleService
   private readonly submissionOps: ConversationSubmissionService
+  /** submitInput orchestration (validation, idempotency, hooks, guarded commit paths). */
+  private readonly submit: ConversationSubmit
   private readonly mutationMutex = createKeyedMutex<number>()
 
   private readonly withMutationGate = <T>(id: number, op: () => Promise<T>): Promise<T> =>
@@ -152,35 +156,32 @@ export class ConversationService {
   }
 
   constructor(options: ConversationServiceOptions) {
+    const { harness, store, tracker, events, artifactsSvc, stash } = options
     this.o = options
-    this.harness = options.harness
-    this.storage = options.storage
-    this.store = options.store
-    this.tracker = options.tracker
-    this.events = options.events
-    this.artifactsSvc = options.artifactsSvc
-    this.stash = options.stash
+    this.store = store
+    this.tracker = tracker
+    this.stash = stash
 
     this.attachments = new ConversationAttachments({
-      store: this.store,
-      artifactsSvc: this.artifactsSvc,
+      store,
+      artifactsSvc,
       dataDir: options.dataDir,
     })
 
     this.rewind = new ConversationRewind({
-      harness: this.harness,
-      store: this.store,
-      tracker: this.tracker,
+      harness,
+      store,
+      tracker,
       cancelPendingAsksForRewrite: this.o.cancelPendingAsksForRewrite,
       abortConversation: (id) => this.abortConversation(id),
     })
 
     this.contextOps = new ConversationContextOps({
-      harness: this.harness,
-      store: this.store,
-      tracker: this.tracker,
-      events: this.events,
-      stash: this.stash,
+      harness,
+      store,
+      tracker,
+      events,
+      stash,
       isClosed: this.o.isClosed,
       alignConversationModel: (id) => this.alignConversationModel(id),
       withOwnership: (summary) => this.withOwnership(summary),
@@ -188,18 +189,18 @@ export class ConversationService {
     })
 
     this.detailOps = new ConversationDetailService({
-      harness: this.harness,
-      store: this.store,
-      stash: this.stash,
+      harness,
+      store,
+      stash,
       getConversation: (id) => this.getConversation(id),
       collectRewindIntervals: (conv) => this.rewind.collectRewindIntervals(conv),
       ensureContextUsage: (id) => this.tracker.ensureContextUsage(id),
     })
 
     this.profileAlignment = new ConversationProfileService({
-      harness: this.harness,
-      store: this.store,
-      events: this.events,
+      harness,
+      store,
+      events,
       profilesSvc: options.profilesSvc,
       models: this.o.models,
       defaultModel: this.o.defaultModel,
@@ -213,21 +214,21 @@ export class ConversationService {
     })
 
     this.inputPipeline = new ConversationInputPipeline({
-      harness: this.harness,
-      store: this.store,
-      tracker: this.tracker,
-      stash: this.stash,
+      harness,
+      store,
+      tracker,
+      stash,
       runInputHook: this.o.runInputHook,
       resolveAuthorizedAttachments: (convId, ids) => this.attachments.resolveAuthorizedAttachments(convId, ids),
       assertMutationGuard: (id, guard) => this.assertMutationGuard(id, guard),
     })
 
     this.lifecycle = new ConversationLifecycleService({
-      harness: this.harness,
-      store: this.store,
-      tracker: this.tracker,
-      events: this.events,
-      artifactsSvc: this.artifactsSvc,
+      harness,
+      store,
+      tracker,
+      events,
+      artifactsSvc,
       profileAlignment: this.profileAlignment,
       defaultCwd: this.o.toolDeps.defaultCwd,
       models: this.o.models,
@@ -246,12 +247,31 @@ export class ConversationService {
     })
 
     this.submissionOps = new ConversationSubmissionService({
-      harness: this.harness,
-      store: this.store,
-      tracker: this.tracker,
-      stash: this.stash,
+      harness,
+      store,
+      tracker,
+      stash,
       isClosed: this.o.isClosed,
       isStarted: this.o.isStarted,
+      assertMutationGuard: (id, guard) => this.assertMutationGuard(id, guard),
+      withMutationGate: (id, op) => this.withMutationGate(id, op),
+    })
+
+    this.submit = new ConversationSubmit({
+      harness,
+      store,
+      rewind: this.rewind,
+      inputPipeline: this.inputPipeline,
+      resolveAuthorizedAttachments: (convId, ids) => this.attachments.resolveAuthorizedAttachments(convId, ids),
+      buildAttachmentContent: (effectiveText, resolved, options) =>
+        this.attachments.buildAttachmentContent(effectiveText, resolved, options),
+      resolveEffectiveModel: (override, profileId) => this.profileAlignment.resolveEffectiveModel(override, profileId),
+      parseModelRefOrThrow: this.o.parseModelRefOrThrow,
+      assertModelEnabled: this.o.assertModelEnabled,
+      supersedePendingAsks: this.o.supersedePendingAsks,
+      listPendingAskIds: this.o.listPendingAskIds,
+      assertWritable: () => this.assertWritable(),
+      assertOpen: () => this.contextOps.assertOpen(),
       assertMutationGuard: (id, guard) => this.assertMutationGuard(id, guard),
       withMutationGate: (id, op) => this.withMutationGate(id, op),
     })
@@ -261,65 +281,18 @@ export class ConversationService {
   // Guarded mutations (kernel-enforced automation invariants)
   // ------------------------------------------------------------------
 
-  /** Boundary validation for guard payload (throws 400 synchronously): expectedOwnership strictly forbids 'human'. */
+  /** Boundary validation for guard payload (throws 400 synchronously); single source in guarded-mutations.ts. */
   private assertGuardShape(guard: GuardedMutationExpectation): void {
-    if (typeof guard !== 'object' || guard === null) {
-      throw new HelmxError('validation_error', 'guarded mutation requires a guard object', 400)
-    }
-    if (guard.expectedOwnership !== undefined && guard.expectedOwnership !== 'helmx') {
-      throw new HelmxError(
-        'validation_error',
-        `expectedOwnership only allows 'helmx' (automation invariant forbids human): got ${String(guard.expectedOwnership)}`,
-        400,
-        { expectedOwnership: guard.expectedOwnership },
-      )
-    }
-    if (
-      guard.expectedStateSeq !== undefined &&
-      (!Number.isSafeInteger(guard.expectedStateSeq) || guard.expectedStateSeq < 0)
-    ) {
-      throw new HelmxError(
-        'validation_error',
-        `expectedStateSeq must be a non-negative safe integer: got ${String(guard.expectedStateSeq)}`,
-        400,
-        { expectedStateSeq: guard.expectedStateSeq },
-      )
-    }
+    assertGuardShape(guard)
   }
 
   /**
-   * Synchronous guard re-check (zero awaits): verifies conversation existence, ownership (always rejects 'human'),
+   * Synchronous guard re-check (zero awaits; see assertGuardedMutationTarget): ownership (always rejects 'human')
    * and optional CAS watermark. Callers guarantee zero event-loop yields between this check and the irreversible
    * SDK abort/submit call—in single-threaded JS, markOwnership cannot interleave, closing the human-ownership race window.
    */
   assertMutationGuard(id: number, guard: GuardedMutationExpectation): void {
-    const ownedBy = this.o.ownershipOf(id)
-    if (ownedBy === 'human' || (guard.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
-      throw new HelmxError(
-        'ownership_conflict',
-        `conversation ${id} is currently owned by ${ownedBy}${guard.expectedOwnership !== undefined ? ` (expected ${guard.expectedOwnership})` : ''}; refusing automated mutation (human-ownership invariant)`,
-        409,
-        {
-          conversationId: id,
-          currentOwnership: ownedBy,
-          ...(guard.expectedOwnership !== undefined ? { expectedOwnership: guard.expectedOwnership } : {}),
-        },
-      )
-    }
-    if (guard.expectedStateSeq !== undefined) {
-      const meta = this.store.getConv(id)
-      if (meta === undefined || this.store.isDeleted(id)) {
-        throw new HelmxError('not_found', `conversation not found: ${id}`, 404, { conversationId: id })
-      }
-      if (meta.stateChangeSeq !== guard.expectedStateSeq) {
-        throw new HelmxError(
-          'state_seq_conflict',
-          `conversation ${id} authoritative watermark ${meta.stateChangeSeq} does not match expected ${guard.expectedStateSeq} (stale probe snapshot; must not act on newer turn)`,
-          409,
-          { conversationId: id, currentSeq: meta.stateChangeSeq, expectedSeq: guard.expectedStateSeq },
-        )
-      }
-    }
+    assertGuardedMutationTarget(this.o, id, guard, { action: 'mutation' })
   }
 
   async abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void> {
@@ -561,7 +534,7 @@ export class ConversationService {
         conversationId,
       })
     }
-    return this.artifactsSvc.writeUploaded(conversationId, input, { conversationExists: exists })
+    return this.o.artifactsSvc.writeUploaded(conversationId, input, { conversationExists: exists })
   }
 
   async readAuthorizedArtifact(
@@ -587,183 +560,12 @@ export class ConversationService {
   // submitInput / waitForInput / withdraw / abort
   // ------------------------------------------------------------------
 
-  private assertNoPendingAsks(id: number): void {
-    const pendingAskIds =
-      this.o.listPendingAskIds !== undefined
-        ? this.o.listPendingAskIds(id)
-        : this.store.listAsksByConversation(id, 'pending').map((ask) => ask.id)
-    if (pendingAskIds.length > 0) {
-      throw new HelmxError(
-        'ask_pending',
-        `conversation ${id} has ${pendingAskIds.length} pending AskDoc(s); rejecting submission (whenPendingAsk=reject)`,
-        409,
-        { conversationId: id, pendingAskIds },
-      )
-    }
-  }
-
   async submitInput(
     id: number,
     text: string,
     opts?: SubmitInputOptions,
   ): Promise<{ submissionId: string }> {
-    this.assertWritable()
-    this.contextOps.assertOpen()
-    if (
-      opts?.whenPendingAsk !== undefined &&
-      opts.whenPendingAsk !== 'supersede' &&
-      opts.whenPendingAsk !== 'reject'
-    ) {
-      throw new HelmxError(
-        'validation_error',
-        `invalid whenPendingAsk: expected 'supersede' | 'reject', got ${String(opts.whenPendingAsk)}`,
-        400,
-      )
-    }
-    const convMeta = requireConv(this.store, id)
-    const conversation = await getSdkConversation(this.harness, id, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-
-    if (opts?.requestId !== undefined) {
-      if (typeof opts.requestId !== 'string' || opts.requestId.trim() === '') {
-        throw new HelmxError('validation_error', 'internal requestId must be a non-empty string', 400)
-      }
-      const reqId = opts.requestId
-      const previous = await this.harness.commit(
-        (tx) => tx.submissionByRequest(asConversationId(id), reqId),
-        BACKGROUND_CONTEXT,
-      )
-      if (previous !== undefined) return { submissionId: String(previous.id) }
-    }
-    if (opts?.attachments !== undefined) {
-      if (
-        !Array.isArray(opts.attachments) ||
-        opts.attachments.some((a) => typeof a !== 'string' || a.length === 0)
-      ) {
-        throw new HelmxError(
-          'validation_error',
-          'attachments must be an array of non-empty artifact ID strings',
-          400,
-          { conversationId: id },
-        )
-      }
-    }
-
-    const effectiveModelRef = await this.resolveEffectiveModel(convMeta.modelOverride, convMeta.profileId)
-    if (!effectiveModelRef) {
-      throw new HelmxError(
-        'model_not_configured',
-        `no model configured for conversation ${id} (profile ${convMeta.profileId}) or globally: configure a model on the Profile, HELMX_MODEL, config.json.model, or conversation`,
-        503,
-        { conversationId: id, profileId: convMeta.profileId },
-      )
-    }
-    {
-      const effectiveRef = this.o.parseModelRefOrThrow(effectiveModelRef)
-      this.o.assertModelEnabled(effectiveRef.provider, effectiveRef.modelId)
-    }
-
-    // Fast pre-check before async rewind validation, attachment IO, and input hooks.
-    if (opts?.whenPendingAsk === 'reject') {
-      this.assertNoPendingAsks(id)
-    }
-
-    const replaceFromEntryId = await this.rewind.validateReplaceTarget(conversation, id, opts?.replaceFromEntryId)
-    const initialAttachments =
-      opts?.attachments !== undefined && opts.attachments.length > 0
-        ? await this.resolveAuthorizedAttachments(id, opts.attachments)
-        : undefined
-    const prepared = await this.inputPipeline.prepareInput(id, text, opts, initialAttachments)
-    if (opts?.mutationGuard !== undefined) {
-      this.assertMutationGuard(id, opts.mutationGuard)
-    }
-    if (prepared.kind === 'handled') return { submissionId: prepared.submissionId }
-    if (prepared.finalWhenPendingAsk === 'reject') {
-      this.assertNoPendingAsks(id)
-    }
-
-    this.contextOps.assertOpen()
-
-    const content =
-      prepared.resolvedAttachments !== undefined
-        ? await this.buildAttachmentContent(prepared.effectiveText, prepared.resolvedAttachments)
-        : prepared.effectiveText
-
-    if (replaceFromEntryId !== undefined) {
-      const finalInput = { ...prepared.finalInput, whenBusy: 'reject' as const }
-      const targetId = replaceFromEntryId
-      const assertPendingAsk =
-        prepared.finalWhenPendingAsk === 'reject' ? () => this.assertNoPendingAsks(id) : undefined
-      return this.rewind.withHistoryEdit(id, async () => {
-        assertPendingAsk?.()
-        await this.rewind.assertTargetStillCurrent(conversation, id, targetId)
-        assertPendingAsk?.()
-        if (assertPendingAsk === undefined) {
-          // Re-read metadata after prepareInput so mutations performed by onInput hooks (e.g. tags) are preserved.
-          this.inputPipeline.applyFirstInputTitle(requireConv(this.store, id), prepared.effectiveText)
-        }
-        const result = await this.rewind.rewriteConversationFrom(
-          id,
-          conversation,
-          targetId,
-          {
-            finalInput,
-            effectiveText: prepared.effectiveText,
-            resolvedAttachments: prepared.resolvedAttachments,
-            content,
-          },
-          assertPendingAsk,
-        )
-        if (assertPendingAsk !== undefined) {
-          const latestMeta = this.store.getConv(id)
-          if (latestMeta !== undefined && !this.store.isDeleted(id)) {
-            this.inputPipeline.applyFirstInputTitle(latestMeta, prepared.effectiveText)
-          }
-        }
-        return result
-      })
-    }
-    const assertPendingAsk =
-      prepared.finalWhenPendingAsk === 'reject' ? () => this.assertNoPendingAsks(id) : undefined
-    const freshSubmission = {
-      finalInput: prepared.finalInput,
-      finalWhenBusy: prepared.finalWhenBusy,
-      effectiveText: prepared.effectiveText,
-      resolvedAttachments: prepared.resolvedAttachments,
-      content,
-      requestId: opts?.requestId,
-      ...(opts?.whenIdle !== undefined ? { whenIdle: opts.whenIdle } : {}),
-      ...(opts?.mutationGuard !== undefined ? { mutationGuard: opts.mutationGuard } : {}),
-      ...(assertPendingAsk !== undefined ? { assertBeforeCommit: assertPendingAsk } : {}),
-    }
-    if (opts?.mutationGuard !== undefined) {
-      return this.withMutationGate(id, async () => {
-        const result = await this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
-        const latestMeta = this.store.getConv(id)
-        if (latestMeta !== undefined && !this.store.isDeleted(id)) {
-          this.inputPipeline.applyFirstInputTitle(latestMeta, prepared.effectiveText)
-        }
-        return result
-      })
-    }
-    if (assertPendingAsk !== undefined) {
-      // Re-check before commit and again synchronously at commit point via assertBeforeCommit;
-      // defer title derivation until after commit succeeds so 409 ask_pending leaves zero side effects.
-      assertPendingAsk()
-      const submitted = await this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
-      const latestMeta = this.store.getConv(id)
-      if (latestMeta !== undefined && !this.store.isDeleted(id)) {
-        this.inputPipeline.applyFirstInputTitle(latestMeta, prepared.effectiveText)
-      }
-      return submitted
-    }
-    // Re-read metadata after prepareInput so mutations performed by onInput hooks (e.g. tags) are preserved.
-    this.inputPipeline.applyFirstInputTitle(requireConv(this.store, id), prepared.effectiveText)
-    const submitted = await this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
-    if (prepared.finalInput.origin === 'human' && prepared.finalWhenBusy !== 'reject') {
-      await this.o.supersedePendingAsks?.(id)
-    }
-    return submitted
+    return this.submit.submitInput(id, text, opts)
   }
 
   async waitForInput(
@@ -849,7 +651,7 @@ export class ConversationService {
   // ------------------------------------------------------------------
 
   async waitForIdle(id: number): Promise<void> {
-    const conversation = await getSdkConversation(this.harness, id, BACKGROUND_CONTEXT)
+    const conversation = await getSdkConversation(this.o.harness, id, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
     await conversation.waitForIdle(BACKGROUND_CONTEXT)
     await this.tracker.waitTurnSettled(id)
@@ -909,28 +711,14 @@ export class ConversationService {
   async recover(
     onMissingMirror: (id: number, parentConversationId: number | undefined) => Promise<void>,
   ): Promise<{ deferredTierAlignment: boolean }> {
-    const batchProfiles = new Map<string, Promise<Profile | undefined>>()
-    let deferredTierAlignment = false
-    let cursor: unknown = undefined
-    for (;;) {
-      const page = await scanSdkConversations(this.storage, 500, cursor, BACKGROUND_CONTEXT)
-      for (const record of page.items) {
-        const id = Number(record.id)
-        if (this.store.isDeleted(id)) continue
-        if (!this.store.getConv(id)) {
-          await onMissingMirror(id, record.parent?.conversationId)
-        }
-        try {
-          await this.alignConversationModel(id, false, batchProfiles)
-        } catch (err) {
-          if (!(err instanceof HelmxError && err.code === 'model_tier_not_found')) throw err
-          deferredTierAlignment = true
-        }
-        await this.tracker.observe(id)
-      }
-      if (!page.next) break
-      cursor = page.next
-    }
-    return { deferredTierAlignment }
+    return recoverConversations(
+      {
+        storage: this.o.storage,
+        store: this.store,
+        alignConversationModel: (id, emitEvent, profileCache) => this.alignConversationModel(id, emitEvent, profileCache),
+        tracker: this.tracker,
+      },
+      onMissingMirror,
+    )
   }
 }

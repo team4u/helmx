@@ -36,7 +36,8 @@ import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ConversationInput, TurnSettledPayload } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
-import { ConversationTracker } from '../src/runtime/conversations.js'
+import { ConversationTracker, type TrackerEvents } from '../src/runtime/conversations.js'
+import type { TrackerSettlement } from '../src/runtime/tracker/tracker-settlement.js'
 import { openHelmxDatabase } from '../src/runtime/sqlite.js'
 import { HelmxStore } from '../src/runtime/store.js'
 import { cleanupDir, deferred, makeFauxModels, makeTempDir, sleep, waitFor } from './helpers.js'
@@ -58,13 +59,29 @@ interface MirrorLike {
   settledError: unknown
 }
 
+/**
+ * Tracker internals used for observability: the facade exposes its collaborator modules as readonly fields, so the
+ * view below is a plain projection (mirrors / settledRuns / events by reference, settlement entry points as functions).
+ */
 interface TrackerInternals {
   mirrors: Map<number, MirrorLike>
   settledRuns: Set<string>
+  events: TrackerEvents
+  emitSettled: TrackerSettlement['emitSettled']
+  stopObserving(id: number): void
+  noteSettledRun(conversationId: number, runKey: string): void
 }
 
 function trackerOf(kernel: KernelRuntime): TrackerInternals {
-  return (kernel as unknown as { tracker: TrackerInternals }).tracker
+  const tracker = (kernel as unknown as { tracker: ConversationTracker }).tracker
+  return {
+    mirrors: tracker.core.mirrors,
+    settledRuns: tracker.settlement.settledRuns,
+    events: tracker.core.events,
+    emitSettled: (id, outcome, inputs, error) => tracker.settlement.emitSettled(id, outcome, inputs, error),
+    stopObserving: (id) => tracker.stopObserving(id),
+    noteSettledRun: (conversationId, runKey) => tracker.settlement.noteSettledRun(conversationId, runKey),
+  }
 }
 
 const timeout = { timeout: 60_000 } as const
@@ -351,14 +368,14 @@ describe('duplicate requestId submission and restart recovery', { timeout: 60_00
         const id = conv.id as number
         const tracker = trackerOfHarness(harness, store)
         await tracker.observe(id)
-        const map = (tracker as unknown as TrackerInternals).mirrors.get(id)?.trackedInputs
+        const map = tracker.core.mirrors.get(id)?.trackedInputs
         assert.ok(map !== undefined && map.size >= 1, 'tracked input must exist after mid-run restart recovery')
         const tracked = [...map.values()][0]!
         assert.equal(tracked.text, 'in-flight question before restart')
         assert.equal(tracked.origin, 'agent', 'origin should be reconciled authoritatively after restart')
         assert.deepEqual(tracked.meta, { from: 'test', seq: 7 }, 'meta should be reconciled authoritatively after restart')
         // submissionId->requestId index must be registered after restart recovery (so markConsumed hits without dropping inputs).
-        const index = (tracker as unknown as TrackerInternals).mirrors.get(id)?.submissionIndex
+        const index = tracker.core.mirrors.get(id)?.submissionIndex
         assert.ok(index !== undefined && index.size >= 1, 'submissionId->requestId index must be registered after restart')
         // Phase 2 sets response provider (run continues executing post-restart).
         faux.setResponses([fauxAssistantMessage('post-recovery answer')])
@@ -479,10 +496,10 @@ describe('duplicate requestId submission and restart recovery', { timeout: 60_00
           `${caseDir}: instantaneous ${expectedOutcome} turn must include this input once (no loss, no duplication)`,
         )
         // Zero leftover indices or tracking entries after settlement (late bind must not taint takeConsumed).
-        const internals = tracker as unknown as TrackerInternals
-        assert.equal(internals.mirrors.get(id)?.trackedInputs.size ?? 0, 0, `${caseDir}: tracking entries cleaned up`)
-        assert.equal(internals.mirrors.get(id)?.submissionIndex.size ?? 0, 0, `${caseDir}: index entries cleaned up`)
-        assert.equal(internals.mirrors.get(id)?.consumedInputs === undefined, true, `${caseDir}: consumed set cleaned up`)
+        const { mirrors } = tracker.core
+        assert.equal(mirrors.get(id)?.trackedInputs.size ?? 0, 0, `${caseDir}: tracking entries cleaned up`)
+        assert.equal(mirrors.get(id)?.submissionIndex.size ?? 0, 0, `${caseDir}: index entries cleaned up`)
+        assert.equal(mirrors.get(id)?.consumedInputs === undefined, true, `${caseDir}: consumed set cleaned up`)
       } finally {
         await harness.close(BACKGROUND_CONTEXT)
         await store.close()
@@ -537,11 +554,7 @@ describe('settledRuns capacity eviction and stopObserving cleanup', { timeout: 6
     const kernel = await openRuntime(join(root, 'late-settlement'))
     try {
       const conv = await kernel.conversations.createConversation({})
-      const tracker = trackerOf(kernel) as TrackerInternals & {
-        events: { onTurnSettled: (...args: unknown[]) => Promise<void> | void }
-        emitSettled(id: number, outcome: string, inputs: ConversationInput[], error: undefined): void
-        stopObserving(id: number): void
-      }
+      const tracker = trackerOf(kernel)
       let fail!: (error: Error) => void
       const pending = new Promise<void>((_resolve, reject) => { fail = reject })
       const original = tracker.events.onTurnSettled
@@ -570,9 +583,7 @@ describe('settledRuns capacity eviction and stopObserving cleanup', { timeout: 6
     try {
       const tracker = trackerOf(kernel)
       const conv = await kernel.conversations.createConversation({})
-      const note = (tracker as unknown as {
-        noteSettledRun: (conversationId: number, runKey: string) => void
-      }).noteSettledRun.bind(tracker)
+      const note = tracker.noteSettledRun
       for (let taskId = 1; taskId <= 70; taskId += 1) {
         note(conv.id, `${conv.id}:${taskId}`)
       }
@@ -626,9 +637,7 @@ describe('settledRuns capacity eviction and stopObserving cleanup', { timeout: 6
       const tracker = trackerOf(kernel)
       for (let i = 0; i < 50; i += 1) {
         const conv = await kernel.conversations.createConversation({})
-        const note = (tracker as unknown as {
-          noteSettledRun: (conversationId: number, runKey: string) => void
-        }).noteSettledRun.bind(tracker)
+        const note = tracker.noteSettledRun
         note(conv.id, `${conv.id}:1`)
         await kernel.conversations.deleteConversation(conv.id)
       }
