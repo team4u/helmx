@@ -5,7 +5,7 @@
  * Rules are documented in the scripts/lib/test-hygiene.mjs header comment:
  *   timeout-missing / skip-without-reason / suite-timeout-env / unsafe-dom-assert /
  *   hook-timeout-missing（AGENTS §5）。
- *   hover-media-gate（scripts/lib/css-hygiene.mjs，AGENTS §5：:hover 规则必须门禁进 @media (hover: hover) 或显式 (hover: none)）。
+ *   hover-media-gate（scripts/lib/css-hygiene.mjs，AGENTS §5：:hover 规则必须门禁进 @media (hover: hover) 或显式 (hover: none)；逗号 OR 列表与 not 分支不算门禁）。
  * Newly added t.test calls and cross-package test helper imports receive additional AST checks
  * in --changed/--files mode; existing code remains visible to the historical rules without
  * forcing a broad test rewrite.

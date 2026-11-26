@@ -876,7 +876,7 @@ test('hold-sigkill', { timeout: 60_000 }, () => {
 
 // ---------------------------------------------------------------- CSS :hover media gate (scripts/lib/css-hygiene.mjs)
 
-test('css-hygiene: findUngatedHoverRules reports every ungated :hover rule with exact line numbers, mixed selector lists counted once', { timeout: 60_000 }, () => {
+test('css-hygiene: findUngatedHoverRules reports every ungated :hover rule with exact line numbers, mixed selector lists counted once, comma-OR media lists and `not` branches never gate', { timeout: 60_000 }, () => {
   const violations = findUngatedHoverRules(`/* 1: a comment mentioning :hover is not a rule */
 .a:hover {
   color: red;
@@ -900,6 +900,19 @@ test('css-hygiene: findUngatedHoverRules reports every ungated :hover rule with 
 .c:focus-visible {
   color: purple;
 }
+/* 24: 逗号 OR 列表里任一分支不要求 hover 特征就不算门禁；not 前缀分支永不门禁 */
+@media (max-width: 680px), (hover: none) and (pointer: coarse) {
+  .a:hover { color: red; }
+}
+@media (max-width: 680px), (hover: hover) {
+  .b:hover { color: red; }
+}
+@media not all and (hover: hover) {
+  .c:hover { color: red; }
+}
+@media (hover: hover), (hover: none) {
+  .e:hover { color: red; }
+}
 `)
   assert.deepEqual(violations, [
     { line: 2, selector: '.a:hover' },
@@ -909,10 +922,14 @@ test('css-hygiene: findUngatedHoverRules reports every ungated :hover rule with 
     { line: 15, selector: '.any:hover' },
     { line: 17, selector: '.outer:has(.inner:hover)' },
     { line: 20, selector: '.b:hover, .c:focus-visible' },
+    { line: 26, selector: '.a:hover' },
+    { line: 29, selector: '.b:hover' },
+    { line: 32, selector: '.c:hover' },
+    { line: 35, selector: '.e:hover' },
   ])
 })
 
-test('css-hygiene: gated (hover: hover)/(hover: none) rules, :not(:hover), comments, string literals and @keyframes frames are not reported', { timeout: 60_000 }, () => {
+test('css-hygiene: rules gated by (hover: hover)/(hover: none) in every OR branch, :not(:hover), comments, string literals and @keyframes frames are not reported', { timeout: 60_000 }, () => {
   const violations = findUngatedHoverRules(`/* 1 */
 @media (hover: hover) {
   .g1:hover { color: red; }
@@ -920,8 +937,11 @@ test('css-hygiene: gated (hover: hover)/(hover: none) rules, :not(:hover), comme
 @media (max-width: 680px) and (hover: hover) {
   .g2:hover { color: blue; }
 }
-@media (max-width: 680px), (hover: none) and (pointer: coarse) {
+@media (hover: hover) and (pointer: fine), (hover: hover) and (min-width: 1200px) {
   .g5:hover { color: navy; }
+}
+@media screen and (hover: none), (hover: none) and (pointer: coarse) {
+  .g6:hover { background: transparent; }
 }
 @layer base {
   @media ( hover : hover ) {
