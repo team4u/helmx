@@ -460,8 +460,8 @@ export interface IntraPluginActionConflictInput {
   readonly exposeAsToolEnabled: boolean;
   readonly resolvedToolName: string;
   readonly cliCommand: readonly string[] | undefined;
-  /** Tool names already registered by the same plugin (`ctx.tool`); absent when the plugin has none. */
-  readonly existingTools: ReadonlyMap<string, unknown> | undefined;
+  /** Tool names already registered by the same plugin (`ctx.tool`); empty when the plugin has none. */
+  readonly existingTools: ReadonlyMap<string, unknown>;
   /** Actions already registered by the same plugin. */
   readonly existingActions: ReadonlyMap<string, SiblingActionView>;
 }
@@ -485,7 +485,7 @@ export function assertNoIntraPluginActionConflicts(input: IntraPluginActionConfl
         { pluginId, actionId: actionId, toolName: resolvedToolName, owner: 'kernel' },
       );
     }
-    if (existingTools?.has(resolvedToolName)) {
+    if (existingTools.has(resolvedToolName)) {
       throw new HelmxError(
         'duplicate_tool_name',
         `Plugin ${pluginId} action ${actionId} tool name "${resolvedToolName}" conflicts with existing tool "${resolvedToolName}"`,
