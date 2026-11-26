@@ -34,7 +34,7 @@ import {
   type TimelineRendererProps,
   type ToolViewProps,
 } from '@helmx/protocol'
-import type { PluginClientHostPort, PluginSessionDocKey } from '@helmx/plugin-client'
+import type { CodeBlockViewProps, MarkdownViewProps, PluginClientHostPort, PluginSessionDocKey } from '@helmx/plugin-client'
 import {
   boardProgressOf,
   isMemberDelivered,
@@ -56,7 +56,7 @@ import { ensureHappyDom } from './helpers/dom-harness.js'
 ensureHappyDom()
 
 const { createRoot } = await import('react-dom/client')
-const { PluginClientContext, PluginClientHostContext, resolveLocalizedText } = await import('@helmx/plugin-client')
+const { MarkdownText, PluginClientContext, PluginClientHostContext, resolveLocalizedText } = await import('@helmx/plugin-client')
 const { importBuiltinClientModule, mountSharedPluginNamespaces } = await import('./helpers/builtin-clients.js')
 
 const e = React.createElement
@@ -269,6 +269,18 @@ describe("swarm-client-interactions", () => {
       subscribeSessionDoc,
       getSessionDocState,
       loadConversationDetail: noopLoadConversationDetail,
+      markdown: {
+        view: ({ text, className, onLinkClick, conversationId }: MarkdownViewProps) =>
+          e(
+            'div',
+            {
+              className: className ? `msg-ai-body ${className}` : 'msg-ai-body',
+              ...(conversationId !== undefined ? { 'data-md-conv-id': String(conversationId) } : {}),
+            },
+            e(MarkdownText, { text, onLinkClick }),
+          ),
+        codeBlock: ({ code }: CodeBlockViewProps) => e('pre', null, code),
+      },
       ...(options?.serverNowMs !== undefined ? { getServerNow: () => options.serverNowMs! } : {}),
     } as unknown as PluginClientHostPort
     await act(async () => {
@@ -2424,6 +2436,42 @@ describe("swarm-client-interactions", () => {
       assert.equal(spy.notifyCalls.length, 1)
       assert.equal(spy.notifyCalls[0]!.tone, 'warning')
       assert.match(spy.notifyCalls[0]!.message, /--allow-unverified-usage/)
+    } finally {
+      panel.unmount()
+    }
+    resetDefaultStubs()
+  })
+
+  test('SwarmWorkbenchPanel 与 SwarmPostPeekPopover 向 MarkdownView 传入发帖者 conversationId（worker 传成员会话、coordinator 传主控会话）并保留 #seq 预览', { timeout: 60_000 }, async () => {
+    const board = boardViewFixture()
+    const posts = board.posts as Array<Record<string, unknown>>
+    posts[0]!['body'] = 'Coordinator brief referencing #2 and [file](/repo/README.md).'
+    posts[1]!['body'] = 'Worker finding at [conversations.ts:137](/repo-wt/author/conversations.ts:137), see #1.'
+    setStubState({
+      docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+      sessionDocs: { 'builtin:swarm/board-view/50': board },
+    })
+    const spy = makeSpyCtx({ conversationId: 50 })
+    const panel = await mount(
+      spy,
+      e(components.SwarmWorkbenchPanel, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+    )
+    try {
+      const seq1Body = panel.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="1"] .sw-panel-post-text')
+      const seq2Body = panel.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="2"] .sw-panel-post-text')
+      assert.ok(seq1Body !== null && seq2Body !== null)
+      assert.equal(seq1Body.getAttribute('data-md-conv-id'), '50', 'coordinator 帖传主控会话 ID')
+      assert.equal(seq2Body.getAttribute('data-md-conv-id'), '51', 'worker 帖传作者成员会话 ID')
+
+      // 点击 #2 帖子中的 #1 内联引用 -> 浮卡内的 MarkdownView 传被预览帖(#1 coordinator) 的 conversationId=50
+      const ref1 = seq2Body.querySelector<HTMLAnchorElement>('a[href="#swarm-post-1"]')
+      assert.ok(ref1 !== null)
+      await act(async () => {
+        ref1.click()
+      })
+      const peekBody = panel.host.querySelector<HTMLElement>('.sw-peek-popover .sw-panel-post-text')
+      assert.ok(peekBody !== null, '点击 #1 展开 peek 浮卡')
+      assert.equal(peekBody.getAttribute('data-md-conv-id'), '50', 'peek 浮卡按被预览帖发帖者传 conversationId')
     } finally {
       panel.unmount()
     }

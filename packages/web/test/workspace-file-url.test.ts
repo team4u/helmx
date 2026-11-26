@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test, { describe } from 'node:test'
-import { isDisallowedFileUrl, parseWorkspaceFileRef } from '../src/conversation/workspace-file-url.js'
+import {
+  buildSameTreeWorkspacesMap,
+  isDisallowedFileUrl,
+  parseWorkspaceFileRef,
+  resolveWorkspaceFileRef,
+  type WorkspaceConversationNode,
+} from '../src/conversation/workspace-file-url.js'
 
 describe('workspace-file-url: isDisallowedFileUrl', { timeout: 60_000 }, () => {
   test('recognizes file: scheme and bare Windows drive/UNC paths case-insensitively', { timeout: 60_000 }, () => {
@@ -187,5 +193,148 @@ describe('workspace-file-url: parseWorkspaceFileRef', { timeout: 60_000 }, () =>
     // Explicit ./ prefix still treats dot-TLD filenames as local files; nested segments like src/github.com/pkg.ts also work.
     assert.deepEqual(parseWorkspaceFileRef('./github.com/local.md'), { path: 'github.com/local.md' })
     assert.deepEqual(parseWorkspaceFileRef('src/github.com/pkg.ts'), { path: 'src/github.com/pkg.ts' })
+  })
+})
+
+describe('workspace-file-url: buildSameTreeWorkspacesMap & resolveWorkspaceFileRef', { timeout: 60_000 }, () => {
+  test('groups multi-level trees by rootConversationId and nodeId with cycle guard and empty cwd support', { timeout: 60_000 }, () => {
+    const nodes: WorkspaceConversationNode[] = [
+      { id: 1, nodeId: 'local', cwd: '/root/code/helm' },
+      { id: 2, nodeId: 'local', cwd: '/root/code/.helmx-worktrees/helm-bbcc88d1', parentConversationId: 1 },
+      { id: 3, nodeId: 'local', cwd: '/root/code/helm', parentConversationId: 1 },
+      { id: 4, nodeId: 'local', cwd: '/root/code/.helmx-worktrees/helm-child', parentConversationId: 2 },
+      // Empty cwd on node 5 in same tree should not appear as target, yet node 5 still receives its tree's workspaces.
+      { id: 5, nodeId: 'local', cwd: '   ', parentConversationId: 1 },
+      // Different compute node in same root tree stays isolated.
+      { id: 6, nodeId: 'remote-gpu', cwd: '/root/code/.helmx-worktrees/helm-bbcc88d1', parentConversationId: 1 },
+      // Separate root tree stays isolated.
+      { id: 99, nodeId: 'local', cwd: '/root/code/.helmx-worktrees/helm-other' },
+      // Cycle guard: 201 <-> 202 with child 203.
+      { id: 201, nodeId: 'local', cwd: '/cycle/a', parentConversationId: 202 },
+      { id: 202, nodeId: 'local', cwd: '/cycle/b', parentConversationId: 201 },
+      { id: 203, nodeId: 'local', cwd: '/cycle/c', parentConversationId: 202 },
+    ]
+
+    const map = buildSameTreeWorkspacesMap(nodes)
+    assert.deepEqual(
+      map.get(1)?.map((n) => n.id),
+      [1, 2, 3, 4],
+    )
+    assert.equal(map.get(1), map.get(3), 'same tree & nodeId share frozen array')
+    assert.equal(map.get(1), map.get(5), 'empty-cwd sibling inherits tree workspaces')
+    assert.deepEqual(
+      map.get(6)?.map((n) => n.id),
+      [6],
+    )
+    assert.deepEqual(
+      map.get(99)?.map((n) => n.id),
+      [99],
+    )
+    assert.deepEqual(
+      map.get(203)?.map((n) => n.id),
+      [201, 202, 203],
+    )
+    assert.equal(map.get(201), map.get(203))
+    assert.equal(Object.isFrozen(map.get(1)), true)
+  })
+
+  test('resolves worktree absolute paths and file:// URLs across same tree while isolating relative paths, external paths, and other trees/nodes', { timeout: 60_000 }, () => {
+    const nodes: WorkspaceConversationNode[] = [
+      { id: 1, nodeId: 'local', cwd: '/root/code/helm' },
+      { id: 2, nodeId: 'local', cwd: '/root/code/.helmx-worktrees/helm-bbcc88d1', parentConversationId: 1 },
+      { id: 3, nodeId: 'local', cwd: '/root/code/helm', parentConversationId: 1 },
+      { id: 4, nodeId: 'local', cwd: '/root/code/.helmx-worktrees/helm-bbcc88d1/packages/cli', parentConversationId: 2 },
+      { id: 5, nodeId: 'local', cwd: '/root/code/.helmx-worktrees/helm-dup', parentConversationId: 1 },
+      { id: 6, nodeId: 'local', cwd: '/root/code/.helmx-worktrees/helm-dup', parentConversationId: 1 },
+      { id: 7, nodeId: 'remote-1', cwd: '/remote/wt', parentConversationId: 1 },
+      { id: 99, nodeId: 'local', cwd: '/root/code/.helmx-worktrees/helm-other' },
+    ]
+    const treeMap = buildSameTreeWorkspacesMap(nodes)
+    const link = '/root/code/.helmx-worktrees/helm-bbcc88d1/packages/cli/src/commands/conversations.ts:137'
+
+    // Relative links NEVER resolve against sibling/child workspaces.
+    assert.equal(
+      resolveWorkspaceFileRef('../.helmx-worktrees/helm-bbcc88d1/packages/cli/src/commands/conversations.ts:137', {
+        conversationId: 1,
+        conversationCwd: '/root/code/helm',
+        treeWorkspaces: treeMap.get(1),
+      }),
+      null,
+    )
+    assert.deepEqual(
+      resolveWorkspaceFileRef('src/commands/conversations.ts:137', {
+        conversationId: 1,
+        conversationCwd: '/root/code/helm',
+        treeWorkspaces: treeMap.get(1),
+      }),
+      { conversationId: 1, path: 'src/commands/conversations.ts', startLine: 137 },
+    )
+
+    // Longest cwd prefix wins (id=4 '/.../packages/cli' beats id=2 '/.../helm-bbcc88d1') when viewing from parent #1 or reviewer #3.
+    assert.deepEqual(
+      resolveWorkspaceFileRef(link, {
+        conversationId: 1,
+        conversationCwd: '/root/code/helm',
+        treeWorkspaces: treeMap.get(1),
+      }),
+      { conversationId: 4, path: 'src/commands/conversations.ts', startLine: 137 },
+    )
+    assert.deepEqual(
+      resolveWorkspaceFileRef(
+        '/root/code/.helmx-worktrees/helm-bbcc88d1/packages/kernel/src/http/validate.ts:349',
+        {
+          conversationId: 3,
+          conversationCwd: '/root/code/helm',
+          treeWorkspaces: treeMap.get(3),
+        },
+      ),
+      { conversationId: 2, path: 'packages/kernel/src/http/validate.ts', startLine: 349 },
+    )
+
+    // Equal cwd ties break by highest conversationId (6 > 5).
+    assert.deepEqual(
+      resolveWorkspaceFileRef('/root/code/.helmx-worktrees/helm-dup/src/index.ts#L10', {
+        conversationId: 1,
+        conversationCwd: '/root/code/helm',
+        treeWorkspaces: treeMap.get(1),
+      }),
+      { conversationId: 6, path: 'src/index.ts', startLine: 10 },
+    )
+
+    // file:// URL resolves across same tree.
+    assert.deepEqual(
+      resolveWorkspaceFileRef('file:///root/code/.helmx-worktrees/helm-bbcc88d1/README.md#L5', {
+        conversationId: 1,
+        conversationCwd: '/root/code/helm',
+        treeWorkspaces: treeMap.get(1),
+      }),
+      { conversationId: 2, path: 'README.md', startLine: 5 },
+    )
+
+    // External paths, unrelated trees, and different nodeId stay rejected.
+    assert.equal(
+      resolveWorkspaceFileRef('/etc/passwd', {
+        conversationId: 1,
+        conversationCwd: '/root/code/helm',
+        treeWorkspaces: treeMap.get(1),
+      }),
+      null,
+    )
+    assert.equal(
+      resolveWorkspaceFileRef('/root/code/.helmx-worktrees/helm-other/secret.ts:12', {
+        conversationId: 1,
+        conversationCwd: '/root/code/helm',
+        treeWorkspaces: treeMap.get(1),
+      }),
+      null,
+    )
+    assert.equal(
+      resolveWorkspaceFileRef('/remote/wt/src/app.ts', {
+        conversationId: 1,
+        conversationCwd: '/root/code/helm',
+        treeWorkspaces: treeMap.get(1),
+      }),
+      null,
+    )
   })
 })

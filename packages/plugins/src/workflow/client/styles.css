@@ -478,6 +478,24 @@
   white-space: nowrap;
 }
 
+/* Compact Markdown inside workflow run results & background reports */
+.wf-result-markdown.msg-ai-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+.wf-result-markdown.msg-ai-body > :last-child { margin-bottom: 0; }
+.wf-result-markdown.msg-ai-body p { margin: 0 0 6px; }
+.wf-result-markdown.msg-ai-body :is(h1, h2, h3, h4) { margin: 10px 0 4px; font-size: 1em; }
+.wf-result-markdown.msg-ai-body :is(ul, ol) { margin: 0 0 6px; padding-left: 18px; }
+.wf-result-markdown.msg-ai-body li > p { margin: 0; }
+.wf-result-markdown.msg-ai-body :is(blockquote, pre, hr) { margin: 6px 0; }
+.wf-result-markdown.msg-ai-body code:not(pre code) { font-size: 12px; padding: 1px 4px; }
+.wf-result-markdown.msg-ai-body table:not(.helmx-table):not(.jr-table) { font-size: 12px; }
+.wf-result-markdown.msg-ai-body table:not(.helmx-table):not(.jr-table) :is(th, td) { padding: 4px 8px; }
+
 .wf-timing-tooltip {
   display: flex;
   flex-direction: column;

@@ -365,3 +365,50 @@ test('card: 损坏数据显式标注并默认展开保留原文，不伪造完�
     ui.unmount()
   }
 })
+
+test('card: 字符串汇报通过 MarkdownView 渲染，subagent_report 优先传 executionConversationId，workflow_report 回退宿主 conversationId', { timeout: 60_000 }, () => {
+  const h = createWorkflowHostHarness({ conversationId: 1, locale: 'en' })
+  const subUi = h.mountNode(
+    e(BackgroundReportCard, {
+      entry: makeReportEntry({
+        kind: 'subagent_report',
+        report: {
+          status: 'completed',
+          result: '结果详见 [conversations.ts:137](/wt/conversations.ts:137)',
+          execution: { conversationId: 77 },
+        },
+      }),
+      conversationId: 1,
+    }),
+  )
+  try {
+    clickToggle(subUi.container)
+    const mdEl = subUi.container.querySelector<HTMLElement>('[data-testid="markdown-view"]')
+    assert.ok(mdEl !== null, 'subagent_report 应通过 MarkdownView 渲染')
+    assert.equal(mdEl.getAttribute('data-conversation-id'), '77', 'subagent_report 应传入 execution.conversationId')
+    assert.ok(mdEl.classList.contains('wf-result-markdown'))
+  } finally {
+    subUi.unmount()
+  }
+
+  const wfUi = h.mountNode(
+    e(BackgroundReportCard, {
+      entry: makeReportEntry({
+        kind: 'workflow_report',
+        report: {
+          status: 'completed',
+          result: '汇总见 [validate.ts:349](/wt/validate.ts:349)',
+        },
+      }),
+      conversationId: 19,
+    }),
+  )
+  try {
+    clickToggle(wfUi.container)
+    const mdEl = wfUi.container.querySelector<HTMLElement>('[data-testid="markdown-view"]')
+    assert.ok(mdEl !== null, 'workflow_report 应通过 MarkdownView 渲染')
+    assert.equal(mdEl.getAttribute('data-conversation-id'), '19', 'workflow_report 无子会话时应回退卡片所属 conversationId')
+  } finally {
+    wfUi.unmount()
+  }
+})

@@ -13,7 +13,7 @@ import {
   Button,
   DockTray,
   DockTrayRow,
-  MarkdownText,
+  MarkdownView,
   formatCompactTimestamp,
   resolveLocalizedText,
   usePluginAction,
@@ -216,9 +216,11 @@ function PlanActiveTrayInner({ conversationId }: { conversationId: number }): Re
         }
       />
       {draft !== undefined && draft.markdown.trim() !== '' ? (
-        <div className="plan-tray-preview msg-ai-body selectable">
-          <MarkdownText text={draft.markdown} />
-        </div>
+        <MarkdownView
+          className="plan-tray-preview selectable"
+          text={draft.markdown}
+          conversationId={conversationId}
+        />
       ) : null}
     </DockTray>
   )

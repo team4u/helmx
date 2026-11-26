@@ -357,3 +357,36 @@ test('DOM：瘦身 run 折叠零 inspect 请求；点击 Expand 按需拉取并�
     ui.unmount()
   }
 })
+
+test('DOM：WorkflowRunCard 字符串结果通过 MarkdownView 渲染并携带 run.conversationId', { timeout: 60_000 }, async () => {
+  const mdRun = run({
+    id: 'wf_md',
+    kind: 'workflow',
+    name: 'Markdown 结果工作流',
+    conversationId: 42,
+    status: 'completed',
+    hasResult: true,
+    result: '结论见 [conversations.ts:137](/root/code/.helmx-worktrees/helm-bbcc88d1/packages/cli/src/commands/conversations.ts:137)',
+    nodes: [node({ id: 'a', status: 'done', label: '核查' })],
+  })
+  const h = createWorkflowHostHarness({
+    conversationId: 42,
+    conversations: [summary(42, 'idle')],
+    runsByConversation: { 42: [mdRun] },
+    locale: 'en',
+  })
+  const ui = h.mountNode(e(WorkflowWorkbenchPanel, { conversation: summary(42, 'idle') }))
+  try {
+    const expandBtn = [...ui.container.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('Expand'))!
+    await act(async () => {
+      expandBtn.click()
+    })
+    const mdEl = ui.container.querySelector<HTMLElement>('[data-testid="markdown-view"]')
+    assert.ok(mdEl !== null, '字符串结果应通过 MarkdownView 渲染')
+    assert.equal(mdEl.getAttribute('data-conversation-id'), '42', 'MarkdownView 应收到 run.conversationId')
+    assert.ok(mdEl.classList.contains('wf-result-markdown'), '应合并 wf-result-markdown 类')
+    assert.ok(mdEl.classList.contains('msg-ai-body'), '应合并 msg-ai-body 类')
+  } finally {
+    ui.unmount()
+  }
+})

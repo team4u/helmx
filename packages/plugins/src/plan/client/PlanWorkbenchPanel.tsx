@@ -20,7 +20,7 @@ import {
   Input,
   KvGrid,
   LoadingState,
-  MarkdownText,
+  MarkdownView,
   MonoId,
   Stack,
   Textarea,
@@ -361,9 +361,11 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
                   </div>
                 </form>
               ) : draft.markdown.trim() !== '' ? (
-                <div className="plan-markdown msg-ai-body selectable">
-                  <MarkdownText text={draft.markdown} />
-                </div>
+                <MarkdownView
+                  className="plan-markdown selectable"
+                  text={draft.markdown}
+                  conversationId={conversationId}
+                />
               ) : (
                 <div className="text-muted">{t(PLAN_COPY.draftEmptyMarkdown)}</div>
               )}

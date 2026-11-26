@@ -7,14 +7,14 @@ import { SyntaxCode } from './SyntaxCode.js'
 import type { CodeLineRange } from './syntax-code-model.js'
 import { CopyButton, HelmxIcon, markdownUrlTransform, parseArtifactUrl } from '@helmx/plugin-client'
 import type { MarkdownViewProps } from '@helmx/plugin-client'
-import { useConversationSummary, useStoreActions } from '../lib/store-context.js'
+import { useConversationSummary, useConversationTreeWorkspaces, useStoreActions } from '../lib/store-context.js'
 import { LazyMount } from '../ui/LazyMount.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CodeBlockRenderer } from './CodeBlockRenderer.js'
 import { artifactsApi, conversationsApi } from '../lib/api.js'
 import {
   isDisallowedFileUrl,
-  parseWorkspaceFileRef,
+  resolveWorkspaceFileRef,
   type WorkspaceFileRef,
 } from './workspace-file-url.js'
 import {
@@ -347,11 +347,17 @@ export const MarkdownView = memo(function MarkdownView({
   streaming,
   breaks,
   workspaceBaseDir,
+  className,
+  onLinkClick,
 }: MarkdownViewProps): ReactNode {
   const { setActiveModal } = useStoreActions()
   const summary = useConversationSummary(conversationId)
+  const treeWorkspaces = useConversationTreeWorkspaces(conversationId)
   const { t } = useWebLocale()
   const conversationCwd = summary?.cwd
+  const onLinkClickRef = useRef(onLinkClick)
+  onLinkClickRef.current = onLinkClick
+  const rootClass = className ? `msg-ai-body ${className}` : 'msg-ai-body'
 
   // 渲染器函数身份必须稳定，否则每次流式文本更新都会重挂载既有代码块。
   const components = useMemo<Components>(() => ({
@@ -408,7 +414,12 @@ export const MarkdownView = memo(function MarkdownView({
         )
       }
       if (conversationId !== undefined) {
-        const fileRef = parseWorkspaceFileRef(href, { conversationCwd, workspaceBaseDir })
+        const fileRef = resolveWorkspaceFileRef(href, {
+          conversationId,
+          conversationCwd,
+          workspaceBaseDir,
+          treeWorkspaces,
+        })
         if (fileRef !== null) {
           return (
             <button
@@ -418,7 +429,7 @@ export const MarkdownView = memo(function MarkdownView({
               onClick={() =>
                 setActiveModal({
                   kind: 'workspace-file',
-                  conversationId,
+                  conversationId: fileRef.conversationId,
                   path: fileRef.path,
                   ...(fileRef.startLine !== undefined ? { startLine: fileRef.startLine } : {}),
                   ...(fileRef.endLine !== undefined ? { endLine: fileRef.endLine } : {}),
@@ -434,8 +445,19 @@ export const MarkdownView = memo(function MarkdownView({
       if (isDisallowedFileUrl(href)) {
         return <span className="msg-md-disallowed-file">{children}</span>
       }
+      const isHashOnly = typeof href === 'string' && href.trim().startsWith('#')
       return (
-        <a href={href} target="_blank" rel="noreferrer noopener">
+        <a
+          href={href}
+          target={isHashOnly ? undefined : '_blank'}
+          rel={isHashOnly ? undefined : 'noreferrer noopener'}
+          onClick={(event) => {
+            const cb = onLinkClickRef.current
+            if (cb !== undefined && !event.defaultPrevented && typeof href === 'string') {
+              cb(href, event)
+            }
+          }}
+        >
           {children}
         </a>
       )
@@ -464,11 +486,16 @@ export const MarkdownView = memo(function MarkdownView({
         )
       }
       if (conversationId !== undefined) {
-        const fileRef = parseWorkspaceFileRef(src, { conversationCwd, workspaceBaseDir })
+        const fileRef = resolveWorkspaceFileRef(src, {
+          conversationId,
+          conversationCwd,
+          workspaceBaseDir,
+          treeWorkspaces,
+        })
         if (fileRef !== null) {
           return (
             <WorkspaceMediaGate
-              conversationId={conversationId}
+              conversationId={fileRef.conversationId}
               fileRef={fileRef}
               alt={alt}
               title={title}
@@ -487,7 +514,7 @@ export const MarkdownView = memo(function MarkdownView({
       }
       return <img src={src} alt={alt} title={title} loading="lazy" />
     },
-  }), [conversationId, conversationCwd, workspaceBaseDir, setActiveModal, t])
+  }), [conversationId, conversationCwd, workspaceBaseDir, treeWorkspaces, setActiveModal, t])
 
   const lastSplitTextRef = useRef<string | null>(null)
   const headingCacheRef = useRef<Map<string, number> | null>(null)
@@ -504,7 +531,7 @@ export const MarkdownView = memo(function MarkdownView({
     lastSplitTextRef.current = null
     headingCacheRef.current = null
     return (
-      <div className="msg-ai-body">
+      <div className={rootClass}>
         <Markdown
           remarkPlugins={breaks === true ? wholeDocumentBreaksRemarkPlugins : wholeDocumentRemarkPlugins}
           urlTransform={markdownUrlTransform}
@@ -545,7 +572,7 @@ export const MarkdownView = memo(function MarkdownView({
   // 整篇解析在顶层兄弟元素之间恰好生成一个 '\n' 文本节点（分隔空白折叠而来）；片段
   // 解析会丢弃自身首尾空白，故在块间显式补回，保证分块 DOM 与整篇逐字节等价。
   return (
-    <div className="msg-ai-body">
+    <div className={rootClass}>
       {blocks.map((block, index) => (
         <Fragment key={index}>
           {index > 0 && '\n'}

@@ -441,7 +441,16 @@ export function createWorkflowHostHarness(init: {
       },
     },
     markdown: {
-      view: ({ text }) => React.createElement('div', { 'data-testid': 'markdown-view' }, text),
+      view: ({ text, conversationId, className, onLinkClick }) =>
+        React.createElement(
+          'div',
+          {
+            'data-testid': 'markdown-view',
+            'data-conversation-id': conversationId !== undefined ? String(conversationId) : '',
+            className: className ? `msg-ai-body ${className}` : 'msg-ai-body',
+          },
+          React.createElement(SDK.MarkdownText, { text, onLinkClick }),
+        ),
       codeBlock: ({ code }) => React.createElement('pre', null, code),
     },
   }

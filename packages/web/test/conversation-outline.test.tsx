@@ -752,4 +752,86 @@ describe("conversation-outline", () => {
     assert.ok(assistantDuration !== null, 'settled assistant outline row renders turn duration')
     assert.equal(assistantDuration.textContent, '4.2s')
   })
+
+  test('ConversationPane 大纲仅索引 .msg-ai-block 直接子代 .msg-ai-body 标题，忽略嵌套卡片内的标题', { timeout: 60_000 }, async () => {
+    seedPluginClientModule('builtin:workflow', 'index.tsx', {
+      SubagentToolView: () =>
+        e(
+          'div',
+          { className: 'stub-nested-md-card' },
+          e('div', { className: 'msg-ai-body' }, e('h1', null, '嵌套卡片H1'), e('h2', null, '嵌套卡片H2')),
+        ),
+    })
+    const origFetch = globalThis.fetch
+    globalThis.fetch = async () => new Response('', { headers: { 'x-helmx-client-hash': 'seeded' } })
+
+    const conv = makeConv(21)
+    const entries: ConversationEntry[] = [
+      { id: '301', kind: 'helmx.input', data: { id: 'q1', text: '带嵌套卡片的回合', origin: 'human' }, createdAt: 1000 },
+      {
+        id: '302',
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'toolCall', id: 'call-nested', name: 'subagent', arguments: { prompt: 'nested' } },
+              { type: 'text', text: '# 回合主标题\n正文一\n## 回合子标题\n正文二' },
+            ],
+          },
+        ],
+      },
+      {
+        id: '303',
+        kind: 'pi.tool-result',
+        model: [{ role: 'toolResult', toolCallId: 'call-nested', toolName: 'subagent', content: [{ type: 'text', text: 'done' }] }],
+      },
+    ]
+
+    const store = makeTestStore({
+      conversations: [conv],
+      conversationDetails: { 21: { ...conv, entries } },
+      uiContributions: [
+        {
+          pluginId: 'builtin:workflow',
+          surface: 'tool.view',
+          spec: { id: 'subagent-card', toolNames: ['subagent'], replaceRow: true, client: { module: 'index.tsx', export: 'SubagentToolView' } },
+        },
+      ],
+    })
+
+    const scrolledElements: HTMLElement[] = []
+    const origScrollIntoView = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = function () {
+      scrolledElements.push(this)
+    }
+
+    try {
+      host = document.createElement('div')
+      document.body.appendChild(host)
+      await act(async () => {
+        root = createRoot(host!)
+        root.render(e(HostStoreProviders, { value: store }, e(ConversationPane, { conversationId: 21 })))
+      })
+
+      assert.ok(host.querySelector('.stub-nested-md-card h1') !== null, '嵌套卡片内确实存在标题 DOM')
+
+      await act(async () => {
+        host!.querySelector<HTMLButtonElement>('.conversation-outline-trigger')!.click()
+      })
+      const options = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')]
+      const h2Option = options.find((btn) => (btn.textContent ?? '').includes('回合子标题'))
+      assert.ok(h2Option, '大纲列表应包含「回合子标题」')
+
+      await act(async () => {
+        h2Option.click()
+      })
+      const lastScrolled = scrolledElements[scrolledElements.length - 1]
+      assert.ok(lastScrolled !== undefined, '点击大纲子标题应触发滚动')
+      assert.equal(lastScrolled.textContent, '回合子标题', '必须定位到回合自身 H2，绝不能被嵌套卡片的 H1/H2 偏移错位')
+    } finally {
+      HTMLElement.prototype.scrollIntoView = origScrollIntoView
+      globalThis.fetch = origFetch
+    }
+  })
 })

@@ -28,7 +28,7 @@ import type {
   ToolViewProps,
   WorkbenchPanelProps,
 } from '@helmx/protocol'
-import type { PluginClientHostPort, PluginSessionDocKey, PluginSessionDocState } from '@helmx/plugin-client'
+import type { CodeBlockViewProps, MarkdownViewProps, PluginClientHostPort, PluginSessionDocKey, PluginSessionDocState } from '@helmx/plugin-client'
 import {
   PLAN_BADGES_DOC,
   PLAN_COMMAND_ID,
@@ -59,6 +59,7 @@ const {
   ComposerCommandContext,
   DropdownMenuContent,
   DropdownMenuRoot,
+  MarkdownText,
   PluginClientContext,
   PluginClientHostContext,
   createComposerCommandRegistry,
@@ -240,6 +241,18 @@ describe('plan-client-interactions', () => {
         retriedKeys.push(key)
       },
       loadConversationDetail: async () => {},
+      markdown: {
+        view: ({ text, className, onLinkClick, conversationId }: MarkdownViewProps) =>
+          e(
+            'div',
+            {
+              className: className ? `msg-ai-body ${className}` : 'msg-ai-body',
+              ...(conversationId !== undefined ? { 'data-md-conv-id': String(conversationId) } : {}),
+            },
+            e(MarkdownText, { text, onLinkClick }),
+          ),
+        codeBlock: ({ code }: CodeBlockViewProps) => e('pre', null, code),
+      },
     } as unknown as PluginClientHostPort
 
     return { hostPort, subscribedKeys, retriedKeys, setDocValue, setDocError }

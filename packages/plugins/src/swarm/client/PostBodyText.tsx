@@ -3,7 +3,7 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
-import { Button, MarkdownText, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
+import { Button, MarkdownView, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
 import { previewPostBody } from './board-model.ts'
 import { SW_BODY_COLLAPSE, SW_BODY_EXPAND } from './copy.ts'
 import { linkifyPostRefs, parseSwarmPostHref } from './model-post-nav.ts'
@@ -12,6 +12,7 @@ export interface PostBodyTextProps {
   body: string
   collapsible: boolean
   selfSeq?: number
+  conversationId?: number
   onRefClick?: (seq: number, anchorEl: HTMLElement) => void
 }
 
@@ -35,9 +36,12 @@ export function PostBodyText(props: PostBodyTextProps): ReactNode {
 
   return (
     <div className="sw-panel-post-body">
-      <div className="sw-panel-post-text msg-ai-body">
-        <MarkdownText text={renderedText} onLinkClick={props.onRefClick ? handleLinkClick : undefined} />
-      </div>
+      <MarkdownView
+        className="sw-panel-post-text"
+        text={renderedText}
+        conversationId={props.conversationId}
+        onLinkClick={props.onRefClick ? handleLinkClick : undefined}
+      />
       {props.collapsible ? (
         <Button
           variant="ghost"

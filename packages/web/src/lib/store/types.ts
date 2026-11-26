@@ -181,6 +181,7 @@ export type StoreDomainKey =
   | 'skills'
   | 'actions'
   | 'conversations'
+  | 'workspaceTopology'
   | 'conversationDetailsMap'
   | 'conversationLivesMap'
   | 'conversationArtifactsMap'

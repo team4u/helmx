@@ -25,6 +25,8 @@ export function MarkdownView(props: MarkdownViewProps): ReactNode {
       streaming={props.streaming}
       breaks={props.breaks}
       workspaceBaseDir={props.workspaceBaseDir}
+      className={props.className}
+      onLinkClick={props.onLinkClick}
     />
   )
 }
