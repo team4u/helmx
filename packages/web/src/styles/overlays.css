@@ -150,11 +150,17 @@
   display: contents;
 }
 
-.btn.toast-action-btn:hover:not(:disabled),
 .btn.toast-action-btn:focus-visible:not(:disabled) {
   background: var(--bg-hover);
   border-color: var(--border-strong);
   color: var(--fg);
+}
+@media (hover: hover) {
+  .btn.toast-action-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--fg);
+  }
 }
 
 .toast-trailing {
@@ -175,11 +181,16 @@
   transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 
-.toast-item:hover .btn.toast-close-btn,
-.btn.toast-close-btn:hover:not(:disabled),
 .btn.toast-close-btn:focus-visible:not(:disabled) {
   opacity: 1;
   color: var(--fg);
+}
+@media (hover: hover) {
+  .toast-item:hover .btn.toast-close-btn,
+  .btn.toast-close-btn:hover:not(:disabled) {
+    opacity: 1;
+    color: var(--fg);
+  }
 }
 
 /* ==========================================================================
@@ -266,12 +277,19 @@
 }
 
 .helmx-dropdown-item[data-highlighted],
-.helmx-dropdown-item:hover:not([data-disabled]),
 .helmx-dropdown-item:focus-visible:not([data-disabled]) {
   background: var(--bg-hover);
   color: var(--fg);
   outline: none;
   box-shadow: none;
+}
+@media (hover: hover) {
+  .helmx-dropdown-item:hover:not([data-disabled]) {
+    background: var(--bg-hover);
+    color: var(--fg);
+    outline: none;
+    box-shadow: none;
+  }
 }
 
 .helmx-dropdown-item[data-disabled] {
@@ -284,12 +302,19 @@
 }
 
 .helmx-dropdown-item-danger[data-highlighted],
-.helmx-dropdown-item-danger:hover:not([data-disabled]),
 .helmx-dropdown-item-danger:focus-visible:not([data-disabled]) {
   background: var(--err-bg, rgba(224, 75, 59, 0.1));
   color: var(--err);
   outline: none;
   box-shadow: none;
+}
+@media (hover: hover) {
+  .helmx-dropdown-item-danger:hover:not([data-disabled]) {
+    background: var(--err-bg, rgba(224, 75, 59, 0.1));
+    color: var(--err);
+    outline: none;
+    box-shadow: none;
+  }
 }
 
 .helmx-dropdown-separator {

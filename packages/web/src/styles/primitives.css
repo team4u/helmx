@@ -23,10 +23,12 @@
   -webkit-user-select: none;
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 100ms ease, filter 120ms ease, transform 100ms var(--ease-out);
 }
-.btn:hover:not(:disabled) {
-  border-color: var(--fg-muted);
-  background: var(--bg-subtle);
-  color: var(--fg);
+@media (hover: hover) {
+  .btn:hover:not(:disabled) {
+    border-color: var(--fg-muted);
+    background: var(--bg-subtle);
+    color: var(--fg);
+  }
 }
 .btn:active:not(:disabled) {
   background: var(--bg-hover);
@@ -54,13 +56,21 @@
   color: var(--fg-secondary);
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
 }
-.btn-secondary:hover:not(:disabled),
 .btn-secondary:focus-visible:not(:disabled) {
   outline: none;
   border-color: var(--fg-muted);
   background: var(--bg-subtle);
   color: var(--fg);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .btn-secondary:hover:not(:disabled) {
+    outline: none;
+    border-color: var(--fg-muted);
+    background: var(--bg-subtle);
+    color: var(--fg);
+    box-shadow: none;
+  }
 }
 
 /* 主要操作按钮（Solid Accent） */
@@ -72,11 +82,13 @@
   font-weight: 500;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
-.btn-primary:hover:not(:disabled) {
-  filter: brightness(1.08);
-  background: var(--accent);
-  border: none;
-  color: var(--fg-on-solid);
+@media (hover: hover) {
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+    background: var(--accent);
+    border: none;
+    color: var(--fg-on-solid);
+  }
 }
 .btn-primary:active:not(:disabled) {
   filter: brightness(0.96);
@@ -96,7 +108,6 @@
   background: var(--err-bg);
   color: var(--err);
 }
-.btn-danger:hover:not(:disabled),
 .btn-danger:focus-visible:not(:disabled) {
   outline: none;
   background: var(--err);
@@ -104,6 +115,16 @@
   color: var(--fg-on-solid);
   filter: brightness(0.98);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .btn-danger:hover:not(:disabled) {
+    outline: none;
+    background: var(--err);
+    border-color: var(--err);
+    color: var(--fg-on-solid);
+    filter: brightness(0.98);
+    box-shadow: none;
+  }
 }
 
 /* 幽灵/文本操作按钮 */
@@ -114,10 +135,12 @@
   color: var(--fg-secondary);
   box-shadow: none;
 }
-.btn-ghost:hover:not(:disabled) {
-  background: var(--bg-muted);
-  color: var(--fg);
-  border: none;
+@media (hover: hover) {
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--bg-muted);
+    color: var(--fg);
+    border: none;
+  }
 }
 .btn-ghost:active:not(:disabled) {
   background: var(--bg-hover);
@@ -142,11 +165,13 @@
   background-color: var(--err, #ef4444);
   border-color: var(--err, #ef4444);
 }
-.btn-danger-sm:hover:not(:disabled) {
-  color: var(--fg-on-solid, #fff);
-  background-color: var(--err, #ef4444);
-  border-color: var(--err, #ef4444);
-  filter: brightness(0.95);
+@media (hover: hover) {
+  .btn-danger-sm:hover:not(:disabled) {
+    color: var(--fg-on-solid, #fff);
+    background-color: var(--err, #ef4444);
+    border-color: var(--err, #ef4444);
+    filter: brightness(0.95);
+  }
 }
 
 /* 紧凑小按钮：胶囊卡头部 / 工作台窄列内联动作 */
@@ -172,10 +197,12 @@
   font-weight: 400;
   border-radius: var(--radius-xs);
 }
-.btn-inline:hover:not(:disabled) {
-  color: var(--fg);
-  background: var(--bg-hover);
-  border: none;
+@media (hover: hover) {
+  .btn-inline:hover:not(:disabled) {
+    color: var(--fg);
+    background: var(--bg-hover);
+    border: none;
+  }
 }
 .btn-inline:active:not(:disabled) {
   background: var(--bg-hover);
@@ -205,13 +232,15 @@
   border-color: var(--accent-border);
   color: var(--accent);
 }
-.btn-ghost.is-active:hover:not(:disabled),
-.btn-icon.is-active:hover:not(:disabled),
-.btn-icon-sm.is-active:hover:not(:disabled),
-.btn-icon-xs.is-active:hover:not(:disabled) {
-  background: var(--accent-bg);
-  border-color: var(--accent-border);
-  color: var(--accent);
+@media (hover: hover) {
+  .btn-ghost.is-active:hover:not(:disabled),
+  .btn-icon.is-active:hover:not(:disabled),
+  .btn-icon-sm.is-active:hover:not(:disabled),
+  .btn-icon-xs.is-active:hover:not(:disabled) {
+    background: var(--accent-bg);
+    border-color: var(--accent-border);
+    color: var(--accent);
+  }
 }
 
 /* 紧凑原生图标按钮（26px x 26px，圆角 7px） */
@@ -233,10 +262,12 @@
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
 }
-.composer-icon-button:hover:not(:disabled),
-.composer-toolbar .composer-icon-button:hover:not(:disabled) {
-  background: var(--bg-muted);
-  color: var(--fg);
+@media (hover: hover) {
+  .composer-icon-button:hover:not(:disabled),
+  .composer-toolbar .composer-icon-button:hover:not(:disabled) {
+    background: var(--bg-muted);
+    color: var(--fg);
+  }
 }
 .composer-icon-button:disabled,
 .composer-toolbar .composer-icon-button:disabled {
@@ -575,8 +606,10 @@
   height: auto;
   color: var(--fg-subtle);
 }
-.search-box-clear:hover {
-  color: var(--fg);
+@media (hover: hover) {
+  .search-box-clear:hover {
+    color: var(--fg);
+  }
 }
 @media (max-width: 680px) {
   .search-box-toolbar {
@@ -766,8 +799,10 @@
   border-bottom: none;
 }
 
-.helmx-table tr:hover td {
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .helmx-table tr:hover td {
+    background: var(--bg-hover);
+  }
 }
 
 .cell-actions {
@@ -1380,12 +1415,19 @@ input::placeholder {
   box-sizing: border-box;
 }
 
-.helmx-select-card:hover:not(.is-disabled),
 .helmx-select-card:focus-visible:not(.is-disabled) {
   outline: none;
   border-color: var(--border-strong);
   background: var(--bg-subtle);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .helmx-select-card:hover:not(.is-disabled) {
+    outline: none;
+    border-color: var(--border-strong);
+    background: var(--bg-subtle);
+    box-shadow: none;
+  }
 }
 
 .helmx-select-card.is-selected,
@@ -1557,8 +1599,10 @@ input::placeholder {
   flex-shrink: 0;
 }
 
-.dock-tray-bar-toggle:hover {
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .dock-tray-bar-toggle:hover {
+    background: var(--bg-hover);
+  }
 }
 
 .dock-tray-bar-toggle:focus-visible {
@@ -1660,8 +1704,10 @@ button.dock-tray-row-clickable {
   cursor: pointer;
 }
 
-button.dock-tray-row-clickable:hover {
-  background: var(--bg-hover);
+@media (hover: hover) {
+  button.dock-tray-row-clickable:hover {
+    background: var(--bg-hover);
+  }
 }
 
 button.dock-tray-row-clickable:focus-visible {

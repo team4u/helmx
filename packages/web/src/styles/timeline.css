@@ -124,9 +124,11 @@
   transition: background-color 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
 }
 
-.timeline-scroll-bottom-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-focus);
+@media (hover: hover) {
+  .timeline-scroll-bottom-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-focus);
+  }
 }
 
 .timeline-scroll-bottom-btn:active {
@@ -313,12 +315,19 @@
   border-radius: var(--radius-xs);
 }
 
-.msg-human-collapse-btn:hover,
 .msg-human-collapse-btn:focus-visible {
   outline: none;
   color: var(--fg);
   background: var(--bg-hover);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .msg-human-collapse-btn:hover {
+    outline: none;
+    color: var(--fg);
+    background: var(--bg-hover);
+    box-shadow: none;
+  }
 }
 
 
@@ -438,10 +447,12 @@
   box-shadow: none;
 }
 
-.msg-hover-bar .btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--fg);
-  border: none;
+@media (hover: hover) {
+  .msg-hover-bar .btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--fg);
+    border: none;
+  }
 }
 
 .msg-hover-bar .btn:disabled {
@@ -457,9 +468,11 @@
   align-self: flex-start;
 }
 
-.msg-human-row:hover .msg-hover-bar,
-.msg-ai-block:hover .msg-hover-bar {
-  opacity: 1;
+@media (hover: hover) {
+  .msg-human-row:hover .msg-hover-bar,
+  .msg-ai-block:hover .msg-hover-bar {
+    opacity: 1;
+  }
 }
 
 /* 消息底部栏（时间元数据 + 悬停操作条） */

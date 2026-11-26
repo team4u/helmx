@@ -77,10 +77,15 @@
   transition: background 120ms ease, color 120ms ease;
 }
 
-.sidebar-group-by-btn:hover,
 .sidebar-group-by-btn[aria-expanded="true"] {
   background: var(--bg-hover);
   color: var(--fg);
+}
+@media (hover: hover) {
+  .sidebar-group-by-btn:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
 }
 
 .sidebar-group-by-btn:focus-visible {
@@ -101,9 +106,13 @@
   color: var(--fg-subtle);
 }
 
-.sidebar-group-by-btn:hover .sidebar-group-by-chevron,
 .sidebar-group-by-btn[aria-expanded="true"] .sidebar-group-by-chevron {
   color: var(--fg-secondary);
+}
+@media (hover: hover) {
+  .sidebar-group-by-btn:hover .sidebar-group-by-chevron {
+    color: var(--fg-secondary);
+  }
 }
 
 .sidebar-group-header-actions {
@@ -123,24 +132,41 @@
   color: var(--fg-muted);
 }
 
-.btn.sidebar-header-icon-btn:hover:not(:disabled),
 .btn.sidebar-header-icon-btn[aria-expanded="true"] {
   background: var(--bg-hover);
   color: var(--fg);
 }
+@media (hover: hover) {
+  .btn.sidebar-header-icon-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+}
 
-.btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-active,
-.btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-active:hover:not(:disabled) {
+.btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-active {
   background: var(--nav-active-bg);
   color: var(--nav-active-fg);
   box-shadow: var(--seg-edge);
 }
+@media (hover: hover) {
+  .btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-active:hover:not(:disabled) {
+    background: var(--nav-active-bg);
+    color: var(--nav-active-fg);
+    box-shadow: var(--seg-edge);
+  }
+}
 
-.btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-split,
-.btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-split:hover:not(:disabled) {
+.btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-split {
   background: var(--nav-split-bg);
   color: var(--fg);
   box-shadow: inset 0 0 0 1px var(--border);
+}
+@media (hover: hover) {
+  .btn.sidebar-header-icon-btn.sidebar-new-topic-btn.is-split:hover:not(:disabled) {
+    background: var(--nav-split-bg);
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
 }
 
 .btn.sidebar-header-icon-btn:focus-visible {
@@ -171,13 +197,20 @@
   width: 100%;
 }
 
-.nav-item:hover,
 .nav-item:focus-visible,
 .nav-item:has(.nav-open:focus-visible) {
   background: var(--bg-hover);
   color: var(--fg);
   outline: none;
   box-shadow: none;
+}
+@media (hover: hover) {
+  .nav-item:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+    outline: none;
+    box-shadow: none;
+  }
 }
 
 .nav-open:focus-visible {
@@ -191,10 +224,14 @@
   background: var(--nav-row-bg);
 }
 
-.sidebar-context .nav-item:hover,
 .sidebar-context .nav-item:focus-visible,
 .sidebar-context .nav-item:has(.nav-open:focus-visible) {
   --nav-row-bg: var(--nav-hover-bg);
+}
+@media (hover: hover) {
+  .sidebar-context .nav-item:hover {
+    --nav-row-bg: var(--nav-hover-bg);
+  }
 }
 
 .sidebar-context .nav-item:not(.nav-item-active):not(.nav-item-split):has([aria-expanded="true"]) {
@@ -204,10 +241,14 @@
 
 /* 工作集会话列表采用极简纸面分阶：Hover 轻垫层、Active 实底微垫层（无投影、无竖线），
  * 让对话行选中态克制且不与 Hover 撞色。 */
-.sidebar-context .sidebar-overview-group .nav-item:hover,
 .sidebar-context .sidebar-overview-group .nav-item:focus-visible,
 .sidebar-context .sidebar-overview-group .nav-item:has(.nav-open:focus-visible) {
   --nav-row-bg: var(--nav-list-hover-bg);
+}
+@media (hover: hover) {
+  .sidebar-context .sidebar-overview-group .nav-item:hover {
+    --nav-row-bg: var(--nav-list-hover-bg);
+  }
 }
 
 .sidebar-context .sidebar-overview-group .nav-item:not(.nav-item-active):not(.nav-item-split):has(.nav-item-row-actions [aria-expanded="true"]) {
@@ -216,20 +257,34 @@
 }
 
 /* 分屏非聚焦在场态：柔和底色 + 1px 内描边 */
-.nav-item-split:hover,
 .nav-item-split {
   --nav-row-bg: var(--nav-split-bg);
   background: var(--nav-row-bg);
   color: var(--fg);
   box-shadow: inset 0 0 0 1px var(--border);
 }
+@media (hover: hover) {
+  .nav-item-split:hover {
+    --nav-row-bg: var(--nav-split-bg);
+    background: var(--nav-row-bg);
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+}
 
-.sidebar-context .nav-item.nav-item-split:hover,
 .sidebar-context .nav-item.nav-item-split {
   --nav-row-bg: var(--nav-split-bg);
   background: var(--nav-row-bg);
   color: var(--fg);
   box-shadow: inset 0 0 0 1px var(--border);
+}
+@media (hover: hover) {
+  .sidebar-context .nav-item.nav-item-split:hover {
+    --nav-row-bg: var(--nav-split-bg);
+    background: var(--nav-row-bg);
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
 }
 
 .nav-item-split .nav-item-label {
@@ -237,7 +292,6 @@
 }
 
 /* 唯一高亮实心卡片：总览入口/视图/设置一级项 */
-.nav-item-active:hover,
 .nav-item-active {
   --nav-row-bg: var(--nav-active-bg);
   background: var(--nav-row-bg);
@@ -245,8 +299,16 @@
   box-shadow: var(--seg-edge);
   font-weight: 500;
 }
+@media (hover: hover) {
+  .nav-item-active:hover {
+    --nav-row-bg: var(--nav-active-bg);
+    background: var(--nav-row-bg);
+    color: var(--nav-active-fg);
+    box-shadow: var(--seg-edge);
+    font-weight: 500;
+  }
+}
 
-.sidebar-context .nav-item.nav-item-active:hover,
 .sidebar-context .nav-item.nav-item-active {
   --nav-row-bg: var(--nav-active-bg);
   background: var(--nav-row-bg);
@@ -254,20 +316,36 @@
   box-shadow: var(--seg-edge);
   font-weight: 500;
 }
+@media (hover: hover) {
+  .sidebar-context .nav-item.nav-item-active:hover {
+    --nav-row-bg: var(--nav-active-bg);
+    background: var(--nav-row-bg);
+    color: var(--nav-active-fg);
+    box-shadow: var(--seg-edge);
+    font-weight: 500;
+  }
+}
 
 .nav-item-active .nav-item-meta {
   color: var(--nav-active-muted);
 }
 
 /* 侧栏工作集选中态：统一扁平纸面高亮，无投影、无边框、无左侧竖线 */
-.sidebar-context .sidebar-overview-group .nav-item.nav-item-active:hover,
 .sidebar-context .sidebar-overview-group .nav-item.nav-item-active,
-.sidebar-context .nav-item.nav-item-sub.nav-item-active:hover,
 .sidebar-context .nav-item.nav-item-sub.nav-item-active {
   --nav-row-bg: var(--nav-list-active-bg);
   background: var(--nav-row-bg);
   color: var(--fg);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .sidebar-context .sidebar-overview-group .nav-item.nav-item-active:hover,
+  .sidebar-context .nav-item.nav-item-sub.nav-item-active:hover {
+    --nav-row-bg: var(--nav-list-active-bg);
+    background: var(--nav-row-bg);
+    color: var(--fg);
+    box-shadow: none;
+  }
 }
 
 /* 分屏焦点标识（仅通过行尾 .nav-pane-tag 着色体现，不渲染左侧竖线） */
@@ -537,20 +615,34 @@
   flex-shrink: 0;
 }
 
-.sidebar-search-clear:hover,
 .sidebar-search-clear:focus-visible:not(:disabled) {
   outline: none;
   color: var(--fg);
   background: var(--bg-hover);
   box-shadow: none;
 }
+@media (hover: hover) {
+  .sidebar-search-clear:hover {
+    outline: none;
+    color: var(--fg);
+    background: var(--bg-hover);
+    box-shadow: none;
+  }
+}
 
-.sidebar-search .sidebar-search-clear:hover:not(:disabled),
 .sidebar-search .sidebar-search-clear:focus-visible:not(:disabled) {
   outline: none;
   color: var(--fg);
   background: var(--bg-hover);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .sidebar-search .sidebar-search-clear:hover:not(:disabled) {
+    outline: none;
+    color: var(--fg);
+    background: var(--bg-hover);
+    box-shadow: none;
+  }
 }
 
 .sidebar-search-empty {
@@ -656,9 +748,11 @@
   transition: background 120ms ease, color 120ms ease;
 }
 
-.sidebar-overview-section-toggle:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
+@media (hover: hover) {
+  .sidebar-overview-section-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
 }
 
 .sidebar-overview-section-toggle:focus-visible {
@@ -675,8 +769,10 @@
   transition: color 120ms ease;
 }
 
-.sidebar-overview-section-toggle:hover .sidebar-overview-section-chevron {
-  color: var(--fg-secondary);
+@media (hover: hover) {
+  .sidebar-overview-section-toggle:hover .sidebar-overview-section-chevron {
+    color: var(--fg-secondary);
+  }
 }
 
 .sidebar-overview-section-empty-agent {
@@ -684,8 +780,10 @@
   color: var(--fg-muted);
 }
 
-.sidebar-overview-section-empty-agent:hover .sidebar-overview-section-plus {
-  color: var(--fg);
+@media (hover: hover) {
+  .sidebar-overview-section-empty-agent:hover .sidebar-overview-section-plus {
+    color: var(--fg);
+  }
 }
 
 .sidebar-section-plus-slot {
@@ -710,9 +808,11 @@
   color: var(--fg-subtle);
 }
 
-.btn.sidebar-section-new-topic-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--fg);
+@media (hover: hover) {
+  .btn.sidebar-section-new-topic-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
 }
 
 .btn.sidebar-section-new-topic-btn:focus-visible {
@@ -854,10 +954,12 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
-.sidebar-context .sidebar-overview-group .nav-item.sidebar-overview-item.is-selected:hover {
-  --nav-row-bg: color-mix(in srgb, var(--accent) 13%, var(--bg-subtle));
-  background: var(--nav-row-bg);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+@media (hover: hover) {
+  .sidebar-context .sidebar-overview-group .nav-item.sidebar-overview-item.is-selected:hover {
+    --nav-row-bg: color-mix(in srgb, var(--accent) 13%, var(--bg-subtle));
+    background: var(--nav-row-bg);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
 }
 
 /* 悬停菜单严格锚定在第一行（.sidebar-overview-head）右端，绝不跨行遮挡第二行元信息或子会话开关；
@@ -968,10 +1070,12 @@
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 
-.sidebar-overview-desc-toggle:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-  color: var(--fg);
+@media (hover: hover) {
+  .sidebar-overview-desc-toggle:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--fg);
+  }
 }
 
 .sidebar-overview-desc-toggle.is-expanded,
@@ -1069,9 +1173,11 @@
   margin-top: 0;
 }
 
-.sidebar-view-all-btn:hover {
-  background: var(--nav-list-hover-bg);
-  color: var(--fg);
+@media (hover: hover) {
+  .sidebar-view-all-btn:hover {
+    background: var(--nav-list-hover-bg);
+    color: var(--fg);
+  }
 }
 
 .sidebar-view-all-btn:focus-visible {

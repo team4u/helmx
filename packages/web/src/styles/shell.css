@@ -70,21 +70,35 @@
   transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
 }
 
-.rail-btn:hover,
 .rail-btn:focus-visible {
   outline: none;
   background: var(--bg-hover);
   color: var(--fg);
   box-shadow: none;
 }
+@media (hover: hover) {
+  .rail-btn:hover {
+    outline: none;
+    background: var(--bg-hover);
+    color: var(--fg);
+    box-shadow: none;
+  }
+}
 
 .rail-btn-active,
-.rail-btn-active:hover,
 .rail-btn-active:focus-visible {
   outline: none;
   background: var(--nav-active-bg);
   color: var(--nav-active-fg);
   box-shadow: var(--seg-edge);
+}
+@media (hover: hover) {
+  .rail-btn-active:hover {
+    outline: none;
+    background: var(--nav-active-bg);
+    color: var(--nav-active-fg);
+    box-shadow: var(--seg-edge);
+  }
 }
 
 /* 快捷入口计数徽标（sidebar.item 通用 badge 声明驱动）：紧凑计数 + 灯色，
@@ -293,10 +307,14 @@
   transition: opacity var(--dur-fast) ease;
 }
 
-.helmx-split-resizer:hover::after,
 .helmx-split-resizer:focus-visible::after,
 .helmx-split-resizer[data-dragging='true']::after {
   opacity: 1;
+}
+@media (hover: hover) {
+  .helmx-split-resizer:hover::after {
+    opacity: 1;
+  }
 }
 
 .helmx-split-resizer:focus-visible {
@@ -403,7 +421,6 @@
   -webkit-backdrop-filter: blur(8px) saturate(1.1);
   border: none;
   cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
   animation: helmxOverlayFadeIn var(--dur-normal) var(--ease-out);
 }
 
@@ -508,9 +525,11 @@
   max-width: 160px;
 }
 
-.drawer-stack-crumb-btn:hover {
-  color: var(--fg);
-  background: var(--bg-subtle);
+@media (hover: hover) {
+  .drawer-stack-crumb-btn:hover {
+    color: var(--fg);
+    background: var(--bg-subtle);
+  }
 }
 
 .drawer-stack-crumb-btn:focus-visible {

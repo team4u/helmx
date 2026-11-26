@@ -271,9 +271,11 @@ pre {
   color: var(--fg-muted);
 }
 
-.code-block-header .btn-ghost:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--fg);
+@media (hover: hover) {
+  .code-block-header .btn-ghost:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
 }
 
 .code-block-pre {

@@ -13,8 +13,10 @@
   cursor: pointer;
 }
 
-.helmx-select-card.plugin-card.is-disabled:hover {
-  opacity: 0.9;
+@media (hover: hover) {
+  .helmx-select-card.plugin-card.is-disabled:hover {
+    opacity: 0.9;
+  }
 }
 
 .plugin-card-version {

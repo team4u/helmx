@@ -121,10 +121,15 @@
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
-.agent-standby-profile-trigger:hover,
 .agent-standby-profile-trigger[aria-expanded="true"] {
   background: var(--bg-hover);
   border-color: var(--border-strong);
+}
+@media (hover: hover) {
+  .agent-standby-profile-trigger:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
 }
 
 .agent-standby-profile-trigger:focus-visible {
@@ -147,9 +152,13 @@
   transition: transform 120ms ease, color 120ms ease;
 }
 
-.agent-standby-profile-trigger:hover .agent-standby-profile-trigger-chevron,
 .agent-standby-profile-trigger[aria-expanded="true"] .agent-standby-profile-trigger-chevron {
   color: var(--fg);
+}
+@media (hover: hover) {
+  .agent-standby-profile-trigger:hover .agent-standby-profile-trigger-chevron {
+    color: var(--fg);
+  }
 }
 
 .agent-standby-profile-trigger[aria-expanded="true"] .agent-standby-profile-trigger-chevron {
@@ -186,13 +195,6 @@
   gap: 10px;
   min-height: 34px;
   padding: 6px 10px;
-}
-
-@media (hover: none) {
-  .composer-popover.agent-standby-profile-popover .popover-item.agent-standby-profile-item:hover:not(.popover-item-active) {
-    background: transparent;
-    color: var(--fg-secondary);
-  }
 }
 
 .agent-standby-profile-item-main {
@@ -281,9 +283,11 @@
   white-space: nowrap;
 }
 
-.agent-standby-shortcuts-all:hover {
-  color: var(--fg);
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .agent-standby-shortcuts-all:hover {
+    color: var(--fg);
+    background: var(--bg-hover);
+  }
 }
 
 .agent-standby-shortcuts-all:focus-visible {

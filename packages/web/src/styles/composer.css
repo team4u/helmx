@@ -59,8 +59,10 @@
   color: var(--fg-secondary);
 }
 
-.ask-dock-source-btn:hover {
-  color: var(--fg);
+@media (hover: hover) {
+  .ask-dock-source-btn:hover {
+    color: var(--fg);
+  }
 }
 
 .ask-dock-desc {
@@ -113,12 +115,19 @@
   transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 
-.ask-dock-step-nav-btn:hover:not(:disabled),
 .ask-dock-step-nav-btn:focus-visible:not(:disabled) {
   outline: none;
   background: var(--bg-hover);
   color: var(--fg);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .ask-dock-step-nav-btn:hover:not(:disabled) {
+    outline: none;
+    background: var(--bg-hover);
+    color: var(--fg);
+    box-shadow: none;
+  }
 }
 
 .ask-dock-step-nav-btn:disabled {
@@ -173,12 +182,19 @@
   transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 
-.ask-dock-choice-btn:hover:not(:disabled),
 .ask-dock-choice-btn:focus-visible:not(:disabled) {
   outline: none;
   background: var(--bg-hover);
   color: var(--fg);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .ask-dock-choice-btn:hover:not(:disabled) {
+    outline: none;
+    background: var(--bg-hover);
+    color: var(--fg);
+    box-shadow: none;
+  }
 }
 
 .ask-dock-choice-btn:disabled {
@@ -191,12 +207,19 @@
   color: var(--fg);
 }
 
-.ask-dock-choice-btn--selected:hover:not(:disabled),
 .ask-dock-choice-btn--selected:focus-visible:not(:disabled) {
   outline: none;
   background: var(--bg-hover);
   color: var(--fg);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .ask-dock-choice-btn--selected:hover:not(:disabled) {
+    outline: none;
+    background: var(--bg-hover);
+    color: var(--fg);
+    box-shadow: none;
+  }
 }
 
 .ask-dock-choice-key {
@@ -217,11 +240,16 @@
   line-height: 1;
 }
 
-.ask-dock-choice-btn:hover:not(:disabled) .ask-dock-choice-key,
 .ask-dock-choice-btn:focus-visible:not(:disabled) .ask-dock-choice-key,
 .ask-dock-choice-btn--selected .ask-dock-choice-key {
   background: var(--bg-elevated);
   color: var(--fg);
+}
+@media (hover: hover) {
+  .ask-dock-choice-btn:hover:not(:disabled) .ask-dock-choice-key {
+    background: var(--bg-elevated);
+    color: var(--fg);
+  }
 }
 
 .ask-dock-choice-body {
@@ -347,12 +375,19 @@
   gap: 8px;
 }
 
-.ask-dock .composer-model-button:hover:not(:disabled),
 .ask-dock .composer-model-button:focus-visible:not(:disabled) {
   outline: none;
   border-color: var(--border-strong);
   background: var(--bg-subtle);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .ask-dock .composer-model-button:hover:not(:disabled) {
+    outline: none;
+    border-color: var(--border-strong);
+    background: var(--bg-subtle);
+    box-shadow: none;
+  }
 }
 
 .ask-dock .composer-model-button .composer-model-label {
@@ -609,10 +644,12 @@ button.attachment-chip {
   cursor: pointer;
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
-button.attachment-chip:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-  color: var(--fg);
+@media (hover: hover) {
+  button.attachment-chip:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--fg);
+  }
 }
 button.attachment-chip:active:not(:disabled) {
   background: var(--bg-active);
@@ -717,9 +754,13 @@ button.attachment-chip:disabled {
   color: var(--fg-muted);
 }
 
-.composer-plus-menu-item[data-highlighted] .composer-plus-menu-icon,
-.composer-plus-menu-item:hover:not([data-disabled]) .composer-plus-menu-icon {
+.composer-plus-menu-item[data-highlighted] .composer-plus-menu-icon {
   color: var(--fg);
+}
+@media (hover: hover) {
+  .composer-plus-menu-item:hover:not([data-disabled]) .composer-plus-menu-icon {
+    color: var(--fg);
+  }
 }
 
 .composer-plus-menu-label {
@@ -814,7 +855,9 @@ button.attachment-chip:disabled {
   border-radius: 50%;
 }
 .composer-toolbar .btn-send.btn-primary { background: var(--fg); border-color: transparent; color: var(--fg-on-solid); }
-.composer-toolbar .btn-send.btn-primary:hover:not(:disabled) { background: var(--fg-secondary); color: var(--fg-on-solid); border-color: transparent; }
+@media (hover: hover) {
+  .composer-toolbar .btn-send.btn-primary:hover:not(:disabled) { background: var(--fg-secondary); color: var(--fg-on-solid); border-color: transparent; }
+}
 .composer-toolbar .btn-send.btn-primary:disabled { opacity: 1; background: var(--bg-muted); color: var(--fg-subtle); }
 
 /* 正忙态独立停止钮 + 分体引导/发送主按钮 */
@@ -866,8 +909,10 @@ button.attachment-chip:disabled {
   transition: background 100ms ease;
 }
 
-.composer-split-main.composer-steer-action:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--fg-on-solid) 14%, transparent);
+@media (hover: hover) {
+  .composer-split-main.composer-steer-action:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--fg-on-solid) 14%, transparent);
+  }
 }
 
 .composer-split-main.composer-steer-action:disabled {
@@ -902,9 +947,13 @@ button.attachment-chip:disabled {
   transition: background 100ms ease;
 }
 
-.composer-split-trigger:hover:not(:disabled),
 .composer-split-trigger[data-state="open"] {
   background: color-mix(in srgb, var(--fg-on-solid) 18%, transparent);
+}
+@media (hover: hover) {
+  .composer-split-trigger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--fg-on-solid) 18%, transparent);
+  }
 }
 
 .composer-split-trigger:disabled {
@@ -932,10 +981,15 @@ button.attachment-chip:disabled {
   user-select: none;
 }
 
-.composer-busy-menu-item[data-highlighted],
-.composer-busy-menu-item:hover:not(:disabled) {
+.composer-busy-menu-item[data-highlighted] {
   background: var(--bg-hover);
   outline: none;
+}
+@media (hover: hover) {
+  .composer-busy-menu-item:hover:not(:disabled) {
+    background: var(--bg-hover);
+    outline: none;
+  }
 }
 
 .composer-busy-menu-icon {
@@ -975,8 +1029,12 @@ button.attachment-chip:disabled {
   border: 1px solid var(--border);
 }
 
-.composer-busy-menu-item[data-highlighted] .composer-busy-menu-icon,
-.composer-busy-menu-item:hover:not(:disabled) .composer-busy-menu-icon {
+.composer-busy-menu-item[data-highlighted] .composer-busy-menu-icon {
   color: var(--fg);
+}
+@media (hover: hover) {
+  .composer-busy-menu-item:hover:not(:disabled) .composer-busy-menu-icon {
+    color: var(--fg);
+  }
 }
 

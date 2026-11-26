@@ -67,12 +67,13 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
   - 快速反馈：`pnpm test:unit` 或 `pnpm check:changed`（支持 `-- --base main --list`，仅补充，不替代分档必跑与合并前 `test:all`/`verify`）；
   - 单跑指定文件：`node scripts/run-tests.mjs <file...>`（禁裸跑 `node/tsx --test`、禁管道吞失败日志、不依赖 Unix `timeout`）；
   - 变更进程环境/信号的隔离测试文件头标 `// @test-isolation: process`。
-- **`pnpm check:hygiene` AST 五条红线**：
+- **`pnpm check:hygiene` 六条红线**：
   1. `test`/`it` 显式 `{ timeout: 60_000 }`；
   2. `skip` 必附理由字符串；
   3. **禁设 `HELMX_TEST_SUITE_TIMEOUT_MS`**（触发 `env-registry-races` 误报）；
   4. **禁对 DOM / `Window` 调 `assert.equal`/`deepEqual`**（防 Fiber 树 `util.inspect` OOM，用 `assert.ok(a === b)` 或标量断言）；
-  5. **钩子不受测试超时覆盖**：`before/beforeEach/after/afterEach`（含 `t.after`）调 `close/dispose/stop/kill` 等 teardown 必传 `{ timeout: 60_000 }`。
+  5. **钩子不受测试超时覆盖**：`before/beforeEach/after/afterEach`（含 `t.after`）调 `close/dispose/stop/kill` 等 teardown 必传 `{ timeout: 60_000 }`；
+  6. **CSS `:hover` 规则必须位于 `@media (hover: hover)` 内**（或显式 `@media (hover: none)` 覆盖）：触屏点按会粘滞 `:hover`；悬停才显露的控件须为 `(hover: none)` 提供常显或 `:focus-within` 替代。
 - **分档归属**（`all = unit ∪ integration`；新包同步 `scripts/test-suites.mjs` `SUITES` 与 `scripts/lib/workspace-meta.mjs` `PACKAGE_TIERS`）：
   - `unit`：`protocol + env-io + test-kit + cli + web + plugin-client`；
   - `integration`：`kernel + plugins + hub + plugin-build + node + payload`，含两条路径例外：`packages/cli/test/launcher/`、`packages/env-io/test/update/`；

@@ -159,7 +159,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .helmx-sidebar:focus-visible {
     outline: none;
   }
-  .sidebar-open .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: var(--z-mobile-backdrop); background: var(--bg-backdrop); border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .sidebar-open .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: var(--z-mobile-backdrop); background: var(--bg-backdrop); border: 0; cursor: pointer; }
   .mobile-nav-toggle {
     display: inline-flex;
     align-items: center;
@@ -178,7 +178,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
     box-shadow: none;
     color: var(--fg-secondary);
     border-radius: var(--radius-sm);
-    -webkit-tap-highlight-color: transparent;
   }
   .mobile-nav-toggle:active {
     background: var(--bg-hover);
@@ -214,7 +213,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
     box-shadow: none;
     color: var(--fg-secondary);
     border-radius: var(--radius-sm);
-    -webkit-tap-highlight-color: transparent;
   }
   .mobile-quick-btn:active {
     background: var(--bg-hover);

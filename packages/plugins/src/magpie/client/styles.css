@@ -29,10 +29,15 @@
   transition: background-color 120ms ease, color 120ms ease;
 }
 
-.magpie-quota-trigger:hover,
 .magpie-quota-trigger[data-state='open'] {
   background: var(--bg-hover);
   color: var(--fg);
+}
+@media (hover: hover) {
+  .magpie-quota-trigger:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
 }
 
 .magpie-quota-trigger:focus-visible {

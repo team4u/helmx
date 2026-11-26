@@ -48,12 +48,19 @@
   user-select: none;
 }
 
-.segmented-control-btn:hover:not(:disabled),
 .segmented-control-btn:focus-visible:not(:disabled) {
   outline: none;
   color: var(--fg);
   background: var(--bg-hover);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .segmented-control-btn:hover:not(:disabled) {
+    outline: none;
+    color: var(--fg);
+    background: var(--bg-hover);
+    box-shadow: none;
+  }
 }
 
 .segmented-control-btn.is-active,
@@ -123,9 +130,11 @@
   transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
-.tabs-pill:hover:not(:disabled) {
-  background: var(--bg-subtle);
-  color: var(--fg);
+@media (hover: hover) {
+  .tabs-pill:hover:not(:disabled) {
+    background: var(--bg-subtle);
+    color: var(--fg);
+  }
 }
 
 .tabs-pill.is-active,

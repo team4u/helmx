@@ -5,6 +5,7 @@
  * Rules are documented in the scripts/lib/test-hygiene.mjs header comment:
  *   timeout-missing / skip-without-reason / suite-timeout-env / unsafe-dom-assert /
  *   hook-timeout-missing（AGENTS §5）。
+ *   hover-media-gate（scripts/lib/css-hygiene.mjs，AGENTS §5：:hover 规则必须门禁进 @media (hover: hover) 或显式 (hover: none)）。
  * Newly added t.test calls and cross-package test helper imports receive additional AST checks
  * in --changed/--files mode; existing code remains visible to the historical rules without
  * forcing a broad test rewrite.
@@ -27,6 +28,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectChangedFiles, GitChangeError, resolveBaseline } from './lib/git-changes.mjs';
+import { collectSourceCssFiles, findUngatedHoverRules } from './lib/css-hygiene.mjs';
 import {
   analyzeTestSource,
   collectAllTestFiles,
@@ -373,6 +375,28 @@ for (const rel of files) {
   totals.helperImports += extraViolations.filter((v) => v.rule === 'cross-package-test-helper').length;
 }
 
+// CSS :hover 门禁与模式无关：源码样式表体量很小，--changed/--files 模式下同样全量扫描。
+const cssFiles = collectSourceCssFiles(repoRoot);
+let ungatedHoverRules = 0;
+for (const rel of cssFiles) {
+  let source;
+  try {
+    source = readFileSync(path.join(repoRoot, rel), 'utf8');
+  } catch (err) {
+    console.error(`[check-hygiene] cannot read ${rel}: ${err.message}`);
+    process.exit(2);
+  }
+  for (const violation of findUngatedHoverRules(source)) {
+    ungatedHoverRules += 1;
+    allViolations.push({
+      file: rel,
+      line: violation.line,
+      rule: 'hover-media-gate',
+      message: `":hover" rule must sit inside @media (hover: hover) (touch screens keep :hover stuck after a tap) or an explicit @media (hover: none) override: ${violation.selector}`,
+    });
+  }
+}
+
 allViolations.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
 for (const v of allViolations) {
   console.error(`[check-hygiene] ${v.file}:${v.line} [${v.rule}] ${v.message}`);
@@ -385,7 +409,8 @@ const ruleSummary = Object.entries(byRule)
   .join(' / ');
 console.error(
   `[check-hygiene] stats: test/it ${totals.testCalls} (skip ${totals.skipCalls}, todo ${totals.todoCalls});` +
-    ` t.test subtests: ${totals.subtestCalls}; hooks: ${totals.hookCalls}; cross-package test helper imports: ${totals.helperImports}`,
+    ` t.test subtests: ${totals.subtestCalls}; hooks: ${totals.hookCalls}; cross-package test helper imports: ${totals.helperImports};` +
+    ` css files: ${cssFiles.length}, css hover rules ungated: ${ungatedHoverRules}`,
 );
 if (allViolations.length > 0) {
   console.error(`[check-hygiene] ${allViolations.length} violation(s) (${ruleSummary}), exiting 1`);

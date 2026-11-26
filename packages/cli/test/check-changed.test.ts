@@ -6,8 +6,8 @@
  * reverse closure and full-tier triggers, hygiene AST analysis (default/named/aliased/namespace imports,
  * multiline options, shared const options, describe timeout inheritance, skip reasons, todo exemption,
  * HELMX_TEST_SUITE_TIMEOUT_MS assignment), CLI exit code propagation (including missing executables),
- * child process-tree signal forwarding without orphan processes, and PACKAGE_TIERS / test-suites.mjs
- * SUITES mirror synchronization.
+ * child process-tree signal forwarding without orphan processes, PACKAGE_TIERS / test-suites.mjs
+ * SUITES mirror synchronization, and the CSS :hover media gate scanner (scripts/lib/css-hygiene.mjs).
  *
  * Runner: node:test; every test sets an explicit timeout: 60_000.
  */
@@ -40,6 +40,7 @@ import {
   resolveInRepoRelativePath,
 } from '../../../scripts/lib/test-hygiene.mjs'
 import { resolvePackageManagerInvoke, runManagedCommand } from '../../../scripts/lib/spawn-checked.mjs'
+import { collectSourceCssFiles, findUngatedHoverRules } from '../../../scripts/lib/css-hygiene.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const scriptsDir = path.join(repoRoot, 'scripts')
@@ -871,6 +872,97 @@ test('hold-sigkill', { timeout: 60_000 }, () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+})
+
+// ---------------------------------------------------------------- CSS :hover media gate (scripts/lib/css-hygiene.mjs)
+
+test('css-hygiene: findUngatedHoverRules reports every ungated :hover rule with exact line numbers, mixed selector lists counted once', { timeout: 60_000 }, () => {
+  const violations = findUngatedHoverRules(`/* 1: a comment mentioning :hover is not a rule */
+.a:hover {
+  color: red;
+}
+@media (max-width: 680px) {
+  .m:hover { color: blue; }
+}
+@container card (min-width: 100px) {
+  .c:hover { color: green; }
+}
+@supports (display: grid) {
+  .s:hover { color: teal; }
+}
+@media (any-hover: hover) {
+  .any:hover { color: pink; }
+}
+.outer:has(.inner:hover) {
+  color: orange;
+}
+.b:hover,
+.c:focus-visible {
+  color: purple;
+}
+`)
+  assert.deepEqual(violations, [
+    { line: 2, selector: '.a:hover' },
+    { line: 6, selector: '.m:hover' },
+    { line: 9, selector: '.c:hover' },
+    { line: 12, selector: '.s:hover' },
+    { line: 15, selector: '.any:hover' },
+    { line: 17, selector: '.outer:has(.inner:hover)' },
+    { line: 20, selector: '.b:hover, .c:focus-visible' },
+  ])
+})
+
+test('css-hygiene: gated (hover: hover)/(hover: none) rules, :not(:hover), comments, string literals and @keyframes frames are not reported', { timeout: 60_000 }, () => {
+  const violations = findUngatedHoverRules(`/* 1 */
+@media (hover: hover) {
+  .g1:hover { color: red; }
+}
+@media (max-width: 680px) and (hover: hover) {
+  .g2:hover { color: blue; }
+}
+@media (max-width: 680px), (hover: none) and (pointer: coarse) {
+  .g5:hover { color: navy; }
+}
+@layer base {
+  @media ( hover : hover ) {
+    .g4:hover { color: green; }
+  }
+}
+@media (hover: none) {
+  .g3:hover { background: transparent; }
+}
+.x:not(:hover) { color: gray; }
+/* .commented:hover { color: black; } */
+.y::after { content: ':hover'; }
+.z[data-x="a:hover"] { color: olive; }
+@keyframes pulse {
+  0% { opacity: 0.4; }
+  .k:hover { color: red; }
+}
+`)
+  assert.deepEqual(violations, [])
+})
+
+test('css-hygiene: collectSourceCssFiles returns only packages/<pkg>/src/**/*.css, sorted, and tolerates a missing root', { timeout: 60_000 }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'helmx-css-hygiene-'))
+  try {
+    write(root, 'packages/web/src/a.css', '')
+    write(root, 'packages/web/src/deep/b.css', '')
+    write(root, 'packages/web/dist/x.css', '')
+    write(root, 'packages/web/test/fixtures/x.css', '')
+    write(root, 'packages/plugins/src/client/styles.css', '')
+    write(root, 'packages/kernel/package.json', '{}')
+    write(root, 'packages/not-a-dir.css', '')
+    write(root, 'docs/x.css', '')
+    assert.deepEqual(collectSourceCssFiles(root), [
+      'packages/plugins/src/client/styles.css',
+      'packages/web/src/a.css',
+      'packages/web/src/deep/b.css',
+    ])
+    assert.deepEqual(collectSourceCssFiles(path.join(root, 'missing')), [])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 // ---------------------------------------------------------------- unsafe-dom-assert / safe-test-assert / SIGKILL watchdog

@@ -46,11 +46,17 @@
   cursor: pointer;
 }
 
-.pane-parent-link:hover,
 .pane-parent-link:focus-visible {
   outline: none;
   color: var(--fg);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .pane-parent-link:hover {
+    outline: none;
+    color: var(--fg);
+    box-shadow: none;
+  }
 }
 
 .pane-title {
@@ -120,10 +126,15 @@
   text-align: left;
   cursor: pointer;
 }
-.pane-more-popover .popover-item:hover:not(:disabled),
 .pane-more-popover .popover-item:focus-visible:not(:disabled) {
   background: var(--bg-hover);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .pane-more-popover .popover-item:hover:not(:disabled) {
+    background: var(--bg-hover);
+    box-shadow: none;
+  }
 }
 .pane-more-popover .popover-item:disabled {
   opacity: 0.48;
@@ -138,10 +149,15 @@
 .pane-more-popover .popover-item-danger {
   color: var(--err);
 }
-.pane-more-popover .popover-item-danger:hover:not(:disabled),
 .pane-more-popover .popover-item-danger:focus-visible:not(:disabled) {
   background: var(--err-bg);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .pane-more-popover .popover-item-danger:hover:not(:disabled) {
+    background: var(--err-bg);
+    box-shadow: none;
+  }
 }
 .pane-more-item-label {
   display: inline-flex;
@@ -190,11 +206,17 @@
   border-radius: var(--radius-xs);
   cursor: pointer;
 }
-.pane-title-btn:hover,
 .pane-title-btn:focus-visible {
   outline: none;
   background: var(--bg-hover);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .pane-title-btn:hover {
+    outline: none;
+    background: var(--bg-hover);
+    box-shadow: none;
+  }
 }
 
 .pane-title-popover {
@@ -357,9 +379,11 @@
   background: var(--bg);
   transition: border-color 120ms ease, background 120ms ease;
 }
-.artifact-card:hover {
-  border-color: var(--border-strong, var(--border));
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .artifact-card:hover {
+    border-color: var(--border-strong, var(--border));
+    background: var(--bg-hover);
+  }
 }
 .artifact-card-compact {
   padding: 8px 10px;
@@ -414,8 +438,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.artifact-card-title-btn:hover .artifact-card-name {
-  text-decoration: underline;
+@media (hover: hover) {
+  .artifact-card-title-btn:hover .artifact-card-name {
+    text-decoration: underline;
+  }
 }
 .artifact-card-meta {
   display: flex;
@@ -462,12 +488,19 @@
   text-align: left;
   cursor: pointer;
 }
-.artifact-spill-toggle:hover,
 .artifact-spill-toggle:focus-visible {
   outline: none;
   background: var(--bg-hover);
   color: var(--fg);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .artifact-spill-toggle:hover {
+    outline: none;
+    background: var(--bg-hover);
+    color: var(--fg);
+    box-shadow: none;
+  }
 }
 .artifact-spill-title {
   font-weight: 500;
@@ -561,12 +594,19 @@
   cursor: pointer;
   text-align: left;
 }
-.timeline-starter-btn:hover,
 .timeline-starter-btn:focus-visible {
   outline: none;
   background: var(--nav-active-bg);
   border-color: var(--fg-muted);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .timeline-starter-btn:hover {
+    outline: none;
+    background: var(--nav-active-bg);
+    border-color: var(--fg-muted);
+    box-shadow: none;
+  }
 }
 .timeline-starter-btn .timeline-starter-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

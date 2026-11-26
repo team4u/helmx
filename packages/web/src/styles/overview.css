@@ -84,8 +84,10 @@
   transition: background 120ms ease, color 120ms ease;
 }
 
-.overview-section-toggle:hover {
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .overview-section-toggle:hover {
+    background: var(--bg-hover);
+  }
 }
 
 .overview-section-toggle:focus-visible {
@@ -187,10 +189,15 @@
   transition: border-color 120ms ease, background 120ms ease;
 }
 
-.overview-card:hover,
 .overview-card:has(.overview-card-open:focus-visible) {
   border-color: var(--border-strong);
   background: var(--bg-hover);
+}
+@media (hover: hover) {
+  .overview-card:hover {
+    border-color: var(--border-strong);
+    background: var(--bg-hover);
+  }
 }
 
 /* 保留通用灯位，需处理原因单独占一行，避免在窄卡上与角色和节点争宽度。 */
@@ -198,18 +205,26 @@
   border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
 }
 
-.overview-card-needs_attention:hover,
 .overview-card-needs_attention:has(.overview-card-open:focus-visible) {
   border-color: color-mix(in srgb, var(--warn) 60%, var(--border-strong));
+}
+@media (hover: hover) {
+  .overview-card-needs_attention:hover {
+    border-color: color-mix(in srgb, var(--warn) 60%, var(--border-strong));
+  }
 }
 
 .overview-card-running {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
 
-.overview-card-running:hover,
 .overview-card-running:has(.overview-card-open:focus-visible) {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
+}
+@media (hover: hover) {
+  .overview-card-running:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
+  }
 }
 
 /* 动静密度分层：安静卡与已归档卡底色退回 subtle、线框降权、标题降半档字重，突出上方活跃态势。 */
@@ -261,10 +276,15 @@
   background: color-mix(in srgb, var(--accent) 7%, var(--bg-subtle));
 }
 
-.overview-card.is-selected:hover,
 .overview-card.is-selected:has(.overview-card-open:focus-visible) {
   border-color: color-mix(in srgb, var(--accent) 65%, transparent);
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-hover));
+}
+@media (hover: hover) {
+  .overview-card.is-selected:hover {
+    border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-hover));
+  }
 }
 
 .overview-card-batch-check {
@@ -396,9 +416,11 @@
   cursor: pointer;
 }
 
-.overview-chip:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
+@media (hover: hover) {
+  .overview-chip:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
 }
 
 .overview-chip:focus-visible {
@@ -437,9 +459,11 @@
   cursor: pointer;
 }
 
-.overview-chip-more:hover {
-  color: var(--fg);
-  border-color: var(--border-strong);
+@media (hover: hover) {
+  .overview-chip-more:hover {
+    color: var(--fg);
+    border-color: var(--border-strong);
+  }
 }
 
 .overview-chip-more:focus-visible {

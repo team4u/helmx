@@ -13,8 +13,10 @@
   background: var(--bg-subtle);
   max-width: 200px;
 }
-.attachment-image-thumb:hover {
-  border-color: var(--border-strong);
+@media (hover: hover) {
+  .attachment-image-thumb:hover {
+    border-color: var(--border-strong);
+  }
 }
 .attachment-image-thumb img {
   display: block;
@@ -43,13 +45,20 @@
   text-align: left;
   cursor: pointer;
 }
-.composer-popover .popover-item:hover,
 .composer-popover .popover-item:focus-visible,
 .composer-popover .popover-item-active {
   background: var(--bg-hover);
   color: var(--fg);
   outline: none;
   box-shadow: none;
+}
+@media (hover: hover) {
+  .composer-popover .popover-item:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+    outline: none;
+    box-shadow: none;
+  }
 }
 .composer-popover .popover-item-meta {
   font-size: 11px;
@@ -163,9 +172,11 @@
   align-items: flex-start;
   gap: 6px;
 }
-.composer-popover .popover-item.composer-model-empty:hover {
-  background: transparent;
-  color: var(--fg-subtle);
+@media (hover: hover) {
+  .composer-popover .popover-item.composer-model-empty:hover {
+    background: transparent;
+    color: var(--fg-subtle);
+  }
 }
 
 .composer-popover {
@@ -259,16 +270,15 @@
 .composer-model-popover .popover-item.composer-model-row[data-current='true'] {
   background: var(--bg-subtle);
 }
-.composer-model-popover .popover-item.composer-model-row:hover,
 .composer-model-popover .popover-item.composer-model-row:has(.composer-model-row-main:focus-visible),
 .composer-model-popover .popover-item.composer-model-row.popover-item-active {
   background: var(--nav-list-hover-bg);
   color: var(--fg);
 }
-@media (hover: none) {
-  .composer-model-popover .popover-item.composer-model-row:hover:not(.popover-item-active):not([data-current='true']) {
-    background: transparent;
-    color: var(--fg-secondary);
+@media (hover: hover) {
+  .composer-model-popover .popover-item.composer-model-row:hover {
+    background: var(--nav-list-hover-bg);
+    color: var(--fg);
   }
 }
 .composer-model-row-main {
@@ -385,9 +395,11 @@
   max-width: 100%;
   transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
 }
-.composer-model-reset:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--fg);
+@media (hover: hover) {
+  .composer-model-reset:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
 }
 .composer-model-reset:disabled {
   opacity: 0.48;

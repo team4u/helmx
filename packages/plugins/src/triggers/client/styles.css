@@ -22,10 +22,14 @@
   cursor: pointer;
 }
 
-.tg-row:hover td,
 .tg-row:focus-visible td,
 .tg-row.is-selected td {
   background: var(--bg-subtle);
+}
+@media (hover: hover) {
+  .tg-row:hover td {
+    background: var(--bg-subtle);
+  }
 }
 
 .tg-id-cell {
@@ -69,12 +73,18 @@
   min-width: 0;
 }
 
-.tg-run-row:hover,
 .tg-run-row:focus-visible,
 .tg-run-row:has(.tg-run-main:focus-visible) {
   outline: none;
   background: var(--bg-hover);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .tg-run-row:hover {
+    outline: none;
+    background: var(--bg-hover);
+    box-shadow: none;
+  }
 }
 
 .tg-run-main {

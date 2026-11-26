@@ -36,9 +36,13 @@
 
 /* head 整行是唯一的悬停高亮区（与默认 .trace-row 一致）：内部插件行与折叠开关
  * 不再各自绘制背景，避免出现两块分离的高亮；键盘焦点落在任一内部控件时同样整行高亮 */
-.trace-block-head:hover,
 .trace-block-head:has(:focus-visible) {
   background: var(--bg-hover);
+}
+@media (hover: hover) {
+  .trace-block-head:hover {
+    background: var(--bg-hover);
+  }
 }
 
 .trace-block-view {
@@ -53,9 +57,13 @@
   padding-left: 0;
 }
 
-.trace-block-view .trace-row:hover,
 .trace-block-view .trace-row:focus-visible {
   background: transparent;
+}
+@media (hover: hover) {
+  .trace-block-view .trace-row:hover {
+    background: transparent;
+  }
 }
 
 /* 行首折叠开关：chevron 落在 x=8 与默认行 chevron 对齐；透明度沿用 .trace-row-chevron
@@ -77,10 +85,14 @@
   transition: color 100ms ease, opacity 120ms ease;
 }
 
-.trace-block-head:hover .trace-io-toggle,
 .trace-io-toggle:focus-visible,
 .trace-io-toggle[aria-expanded="true"] {
   opacity: 0.9;
+}
+@media (hover: hover) {
+  .trace-block-head:hover .trace-io-toggle {
+    opacity: 0.9;
+  }
 }
 
 .trace-io-toggle:focus-visible {
@@ -174,12 +186,19 @@
   white-space: nowrap;
 }
 
-.trace-group-summary:hover,
 .trace-group-summary:focus-visible {
   outline: none;
   background: var(--bg-hover);
   color: var(--fg-secondary);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .trace-group-summary:hover {
+    outline: none;
+    background: var(--bg-hover);
+    color: var(--fg-secondary);
+    box-shadow: none;
+  }
 }
 
 /* 有异常的折叠标题保留语义类，但维持静音中性色，仅通过右侧轻量徽标提醒 */
@@ -187,9 +206,13 @@
   color: var(--fg-muted);
 }
 
-.trace-group-summary-error:hover,
 .trace-group-summary-error:focus-visible {
   color: var(--fg-secondary);
+}
+@media (hover: hover) {
+  .trace-group-summary-error:hover {
+    color: var(--fg-secondary);
+  }
 }
 
 .trace-group-badge-error {
@@ -204,10 +227,15 @@
   color: color-mix(in srgb, var(--err) 72%, var(--fg-muted));
 }
 
-.trace-group-summary-error:hover .trace-group-badge-error,
 .trace-group-summary-error:focus-visible .trace-group-badge-error {
   background: color-mix(in srgb, var(--err) 11%, transparent);
   color: color-mix(in srgb, var(--err) 84%, var(--fg-secondary));
+}
+@media (hover: hover) {
+  .trace-group-summary-error:hover .trace-group-badge-error {
+    background: color-mix(in srgb, var(--err) 11%, transparent);
+    color: color-mix(in srgb, var(--err) 84%, var(--fg-secondary));
+  }
 }
 
 .trace-group-meta {
@@ -244,11 +272,17 @@
   transition: background 100ms ease;
 }
 
-.trace-row:hover,
 .trace-row:focus-visible {
   outline: none;
   background: var(--bg-hover);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .trace-row:hover {
+    outline: none;
+    background: var(--bg-hover);
+    box-shadow: none;
+  }
 }
 
 /* 左侧 .trace-row-chevron 只表折叠/展开；右侧 .trace-row-link 表「点击跳转」
@@ -261,12 +295,16 @@
   flex-shrink: 0;
 }
 
-.trace-row:hover .trace-row-chevron,
 .trace-row:focus-visible .trace-row-chevron,
 .trace-row[aria-expanded="true"] .trace-row-chevron,
-.trace-row:hover .trace-row-link,
 .trace-row:focus-visible .trace-row-link {
   opacity: 0.9;
+}
+@media (hover: hover) {
+  .trace-row:hover .trace-row-chevron,
+  .trace-row:hover .trace-row-link {
+    opacity: 0.9;
+  }
 }
 
 /* 错误行仅状态图标染红；左侧折叠 chevron 保持中性（折叠指示不携带状态语义） */

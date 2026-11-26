@@ -51,9 +51,11 @@
   border-bottom: none;
 }
 
-.jr-table tr:hover td,
-.msg-ai-body .jr-table tr:hover td {
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .jr-table tr:hover td,
+  .msg-ai-body .jr-table tr:hover td {
+    background: var(--bg-hover);
+  }
 }
 
 .jr-table th.jr-table-actions-col,

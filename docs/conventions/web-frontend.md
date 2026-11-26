@@ -77,6 +77,7 @@ SDK 不导入 Web store、路由或渲染实现。`HelmxStoreProvider` 经 `Plug
 - 弹窗与抽屉 `width: 100vw; max-width: 100vw; left: 0; right: 0;` 全宽自适应；
 - 头部容器 `flex-wrap: wrap`，标题截断保底，关闭按钮绝对可用；
 - **严禁任何输入框在移动端或分屏宽度下字号突兀放大**（平台点击放大渲染异常须用精确 CSS 覆盖消除）。
+- **悬停样式必须门禁**：所有 `:hover` 规则包在 `@media (hover: hover)` 内（`pnpm check:hygiene` 强制），`:focus-visible` / `[aria-expanded]` / `.is-active` 等持久态选择器留在门禁外；悬停才显露的控件在 `@media (hover: none)` 下常显或经 `:focus-within` 显露；系统原生点按高亮已在 `base.css` 全局关闭，按压反馈统一走 `:active`。
 
 ## 零 Emoji 铁律
 

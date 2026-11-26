@@ -380,13 +380,21 @@
   flex-shrink: 0;
   white-space: nowrap;
 }
-.tab-btn:hover,
 .tab-btn:focus-visible {
   outline: none;
   color: var(--fg);
   background: var(--bg-hover);
   border-radius: var(--radius-xs) var(--radius-xs) 0 0;
   box-shadow: none;
+}
+@media (hover: hover) {
+  .tab-btn:hover {
+    outline: none;
+    color: var(--fg);
+    background: var(--bg-hover);
+    border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+    box-shadow: none;
+  }
 }
 .tab-btn-active,
 .tab-btn[data-state='active'] {
@@ -489,14 +497,21 @@
   height: auto;
 }
 
-.palette-listbox .nav-item:hover,
 .palette-listbox .nav-item:focus-visible,
-.palette-listbox .nav-item.nav-item-active,
-.palette-listbox .nav-item.nav-item-active:hover {
+.palette-listbox .nav-item.nav-item-active {
   outline: none;
   background: var(--bg-hover);
   color: var(--fg);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .palette-listbox .nav-item:hover,
+  .palette-listbox .nav-item.nav-item-active:hover {
+    outline: none;
+    background: var(--bg-hover);
+    color: var(--fg);
+    box-shadow: none;
+  }
 }
 
 .palette-group-header {
@@ -636,11 +651,17 @@
   font-size: 11.5px;
 }
 
-.palette-footer-shortcuts-btn:hover,
 .palette-footer-shortcuts-btn:focus-visible {
   outline: none;
   color: var(--fg);
   box-shadow: none;
+}
+@media (hover: hover) {
+  .palette-footer-shortcuts-btn:hover {
+    outline: none;
+    color: var(--fg);
+    box-shadow: none;
+  }
 }
 
 @media (max-width: 680px), (hover: none) and (pointer: coarse) {
@@ -704,8 +725,10 @@
   font-size: 13px;
 }
 
-.shortcuts-row:hover {
-  background: var(--bg-subtle);
+@media (hover: hover) {
+  .shortcuts-row:hover {
+    background: var(--bg-subtle);
+  }
 }
 
 .shortcuts-row-label {

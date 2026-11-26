@@ -168,7 +168,7 @@ export function SampleWidget() {
 ctx.ui.workbenchPanel({ id: 'sample-widget-panel', label: '业务监控', client: { module: 'index.tsx', export: 'SampleWidget' } });
 ```
 
-- **样式托管链**：插件样式以 clientRoot 内本地 `.css` 导入（`import './styles.css'`），不得写进宿主样式表。编译器按依赖顺序合并 CSS（根内本地 `@import` 允许；根外、符号链接逃逸与远程 `@import` 拒绝），经保留导出 `__helmxClientCss` 内联进插件 JS；宿主注入 `<style data-helmx-plugin-css>`，停用/卸载或登出时回收。`url()` 支持 `data:` 内联与 HTTP(S) 绝对地址，本地相对与片段资源 URL 显式拒绝。可复用宿主设计变量（`var(--fg-muted)`）与通用类（`.badge`、`.btn`）。
+- **样式托管链**：插件样式以 clientRoot 内本地 `.css` 导入（`import './styles.css'`），不得写进宿主样式表。编译器按依赖顺序合并 CSS（根内本地 `@import` 允许；根外、符号链接逃逸与远程 `@import` 拒绝），经保留导出 `__helmxClientCss` 内联进插件 JS；宿主注入 `<style data-helmx-plugin-css>`，停用/卸载或登出时回收。`url()` 支持 `data:` 内联与 HTTP(S) 绝对地址，本地相对与片段资源 URL 显式拒绝。可复用宿主设计变量（`var(--fg-muted)`）与通用类（`.badge`、`.btn`）。插件私有样式表同样受 `:hover` 门禁约束（`:hover` 规则必须在 `@media (hover: hover)` 内，`pnpm check:hygiene` 对插件 CSS 一并检查）。
 - **两条硬纪律**：界面文案与状态徽标**严禁 Emoji**，图标统一 lucide 线性名；`client.tsx` 是可信代码而非沙箱——展示不可信 HTML 必须用 `<iframe sandbox srcDoc>` 且默认不授予脚本、同源、表单或导航权限，不得直接注入宿主 DOM。
 
 ### 自检、发现、启用与热重载
