@@ -130,37 +130,58 @@
   color: var(--fg-subtle);
 }
 
-/* ModelPicker 模式切换栏与搜索栏 */
-.composer-model-mode-bar {
+/* ModelPicker 顶栏、搜索与模式切换 */
+.composer-model-header {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 4px 4px 2px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px 6px 10px;
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-.composer-model-mode-bar .helmx-tabs-segmented,
-.composer-model-mode-bar .segmented-control {
-  width: 100%;
+.composer-model-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
-.composer-model-mode-bar .segmented-control-btn {
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.composer-model-header .btn-icon-sm {
+  width: 26px;
+  height: 26px;
+}
+.composer-model-mode-bar {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 .composer-model-mode-hint {
-  padding: 0 6px 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
   font-size: 11px;
-  line-height: 1.35;
-  color: var(--fg-muted);
+  line-height: 1.3;
+  color: var(--accent);
+}
+.composer-model-mode-hint > svg {
+  flex-shrink: 0;
+}
+.composer-model-mode-hint > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* ModelPicker 搜索栏与空态 */
+/* 基础搜索栏样式（StandbyProfilePicker 共用；ModelPicker 无框覆写限定在 .composer-model-popover 下） */
 .composer-model-search-bar {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 4px 4px 2px;
+  flex-shrink: 0;
 }
 .composer-model-search-input {
   flex: 1;
@@ -197,17 +218,37 @@
 }
 
 .composer-popover.composer-model-popover {
-  width: min(520px, calc(100vw - 24px));
+  width: min(460px, calc(100vw - 24px));
   max-width: calc(100vw - 24px);
   max-height: min(440px, 60dvh);
+  padding: 0;
+  border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 .composer-model-popover .input { width: 100%; }
-.composer-model-popover > .popover-item,
-.composer-model-search-bar {
-  flex-shrink: 0;
+.composer-model-popover .composer-model-search-bar {
+  flex: 1 1 150px;
+  min-width: 130px;
+  padding: 0;
+  gap: 0;
+}
+.composer-model-popover .composer-model-search-input {
+  height: 28px;
+  padding: 0 2px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.composer-model-popover .composer-model-search-input:focus-within {
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--fg);
+}
+.composer-model-popover .composer-model-search-input:focus-within > svg {
+  color: var(--fg);
 }
 .composer-model-scroll {
   flex: 1 1 auto;
@@ -216,9 +257,26 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  padding: 6px;
 }
 .composer-model-scroll > * {
   flex-shrink: 0;
+}
+.composer-model-scroll .popover-header {
+  padding: 5px 8px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg-muted);
+}
+.composer-model-scroll .composer-model-row + .popover-header {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-2);
+}
+.composer-model-tier-icon {
+  flex-shrink: 0;
+  color: var(--fg-muted);
 }
 .composer-model-popover .popover-item.composer-model-row {
   display: flex;
@@ -229,13 +287,16 @@
   padding: 5px 6px 5px 0;
   white-space: nowrap;
 }
+.composer-model-popover .popover-item.composer-model-row[data-current='true'] {
+  background: var(--bg-subtle);
+}
 .composer-model-popover .popover-item.composer-model-row:hover,
 .composer-model-popover .popover-item.composer-model-row.popover-item-active {
   background: var(--nav-list-hover-bg);
   color: var(--fg);
 }
 @media (hover: none) {
-  .composer-model-popover .popover-item.composer-model-row:hover:not(.popover-item-active) {
+  .composer-model-popover .popover-item.composer-model-row:hover:not(.popover-item-active):not([data-current='true']) {
     background: transparent;
     color: var(--fg-secondary);
   }
@@ -287,18 +348,93 @@
   max-width: 100%;
   line-height: 1.25;
 }
-.composer-model-row-levels {
+.composer-model-popover .composer-model-row-levels {
   flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
   max-width: 100%;
   margin-left: auto;
+  background: color-mix(in srgb, var(--seg-track) 55%, transparent);
+}
+@media (hover: hover) {
+  .composer-model-popover .composer-model-row-levels {
+    opacity: 0;
+    transition: opacity var(--dur-fast) ease;
+  }
+  .composer-model-popover .composer-model-row:hover .composer-model-row-levels,
+  .composer-model-popover .composer-model-row:focus-within .composer-model-row-levels,
+  .composer-model-popover .composer-model-row.popover-item-active .composer-model-row-levels,
+  .composer-model-popover .composer-model-row[data-current='true'] .composer-model-row-levels {
+    opacity: 1;
+  }
+}
+@media (hover: none) {
+  .composer-model-popover .composer-model-row-levels {
+    opacity: 1;
+  }
 }
 .composer-model-row-levels .segmented-control-btn {
   height: 18px;
   padding: 0 7px;
   font-size: 10.5px;
   border-radius: 4px;
+}
+.composer-model-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding: 5px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-subtle);
+  flex-shrink: 0;
+}
+.composer-model-footer[data-mode-active='true'] {
+  background: var(--accent-bg);
+  border-top-color: var(--accent-border);
+}
+.composer-model-reset {
+  height: 22px;
+  padding: 0 6px;
+  margin-left: -6px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  min-width: 0;
+  max-width: 100%;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.composer-model-reset:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.composer-model-reset:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+.composer-model-reset > svg {
+  flex-shrink: 0;
+}
+.composer-model-reset > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-model-footer .popover-kbd-hint {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+@media (max-width: 480px) {
+  .composer-model-footer .popover-kbd-hint {
+    display: none;
+  }
 }
 .composer-model-popover .popover-item {
   display: flex;

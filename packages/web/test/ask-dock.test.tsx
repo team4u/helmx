@@ -833,7 +833,7 @@ describe("ask-dock", () => {
     await act(async () => {
       modelBtn.click()
     })
-    const resetItem = [...document.querySelectorAll<HTMLButtonElement>('.composer-model-popover > button.popover-item')][0]!
+    const resetItem = [...document.querySelectorAll<HTMLButtonElement>('.composer-model-popover .composer-model-reset')][0]!
     assert.ok(resetItem !== undefined)
     await act(async () => {
       resetItem.click()
