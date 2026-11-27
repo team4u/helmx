@@ -144,129 +144,174 @@ export function hasMetaDeclaration(source: string): boolean {
   return findMetaDeclaration(source) !== undefined
 }
 
-function scanObjectLiteral(source: string, open: number): { end: number; sawInterpolation: boolean } {
-  let depth = 0
-  let i = open
-  let sawInterpolation = false
-  let mode: 'code' | 'line-comment' | 'block-comment' | 'single' | 'double' | 'template' | 'regex' = 'code'
-  let inRegexCharClass = false
-  const templateStack: number[] = []
+type ScanMode = 'code' | 'line-comment' | 'block-comment' | 'single' | 'double' | 'template' | 'regex'
 
-  while (i < source.length) {
-    const c = source[i]
-    const next = source[i + 1]
+interface LiteralScanResult {
+  end: number
+  sawInterpolation: boolean
+}
 
-    if (mode === 'line-comment') {
-      if (c === '\n') mode = 'code'
-      i++
-      continue
-    }
-    if (mode === 'block-comment') {
-      if (c === '*' && next === '/') {
-        mode = 'code'
-        i += 2
-        continue
-      }
-      i++
-      continue
-    }
-    if (mode === 'single' || mode === 'double') {
-      if (c === '\\') {
-        i += 2
-        continue
-      }
-      if ((mode === 'single' && c === "'") || (mode === 'double' && c === '"') || c === '\n') {
-        mode = 'code'
-      }
-      i++
-      continue
-    }
-    if (mode === 'regex') {
-      if (c === '\\') {
-        i += 2
-        continue
-      }
-      if (c === '[') inRegexCharClass = true
-      else if (c === ']') inRegexCharClass = false
-      else if ((c === '/' && !inRegexCharClass) || c === '\n') {
-        inRegexCharClass = false
-        mode = 'code'
-      }
-      i++
-      continue
-    }
-    if (mode === 'template') {
-      if (c === '\\') {
-        i += 2
-        continue
-      }
-      if (c === '`') {
-        mode = 'code'
-        i++
-        continue
-      }
-      if (c === '$' && next === '{') {
-        sawInterpolation = true
-        templateStack.push(depth)
-        depth++
-        mode = 'code'
-        i += 2
-        continue
-      }
-      i++
-      continue
-    }
+/**
+ * Mutable state of the object-literal scanner. One step function per lexical mode reads and
+ * advances it; the main loop only dispatches on the current mode.
+ */
+interface LiteralScannerState {
+  i: number
+  /** Nesting depth of `{` in code mode; back at 0 the literal is closed. */
+  depth: number
+  mode: ScanMode
+  inRegexCharClass: boolean
+  /** Depth recorded when a `${` interpolation opened, so its matching `}` resumes the template text. */
+  templateStack: number[]
+  sawInterpolation: boolean
+}
 
-    if (c === '/' && next === '/') {
-      mode = 'line-comment'
-      i += 2
-      continue
-    }
-    if (c === '/' && next === '*') {
-      mode = 'block-comment'
-      i += 2
-      continue
-    }
-    if (c === "'") {
-      mode = 'single'
-      i++
-      continue
-    }
-    if (c === '"') {
-      mode = 'double'
-      i++
-      continue
-    }
-    if (c === '`') {
-      mode = 'template'
-      i++
-      continue
-    }
-    if (c === '/' && isRegexPosition(source, i)) {
-      mode = 'regex'
-      inRegexCharClass = false
-      i++
-      continue
-    }
-    if (c === '{') {
-      depth++
-      i++
-      continue
-    }
-    if (c === '}') {
-      depth--
-      i++
-      if (templateStack.length > 0 && depth === templateStack[templateStack.length - 1]!) {
-        templateStack.pop()
-        mode = 'template'
-        continue
-      }
-      if (depth === 0) return { end: i, sawInterpolation }
-      continue
-    }
-    i++
+type ScanStep = (source: string, s: LiteralScannerState) => LiteralScanResult | undefined
+
+/** Switch lexical mode and advance `width` chars; `undefined` means the literal is not closed yet. */
+function enterMode(s: LiteralScannerState, mode: ScanMode, width: number): undefined {
+  s.mode = mode
+  s.i += width
+  return undefined
+}
+
+/** Line comment: the newline itself belongs to code. */
+function scanLineComment(source: string, s: LiteralScannerState): undefined {
+  if (source[s.i] === '\n') s.mode = 'code'
+  s.i++
+  return undefined
+}
+
+/** Block comment: ends at `*\/`; an unterminated one runs to end of input (reported as never closed). */
+function scanBlockComment(source: string, s: LiteralScannerState): undefined {
+  if (source[s.i] === '*' && source[s.i + 1] === '/') return enterMode(s, 'code', 2)
+  s.i++
+  return undefined
+}
+
+/** Single/double-quoted string: escapes advance as one unit; the matching quote or a newline returns to code. */
+function scanQuoted(source: string, s: LiteralScannerState): undefined {
+  const c = source[s.i]
+  if (c === '\\') {
+    s.i += 2
+    return undefined
   }
-  return { end: -1, sawInterpolation }
+  const closingQuote = s.mode === 'single' ? "'" : '"'
+  if (c === closingQuote || c === '\n') s.mode = 'code'
+  s.i++
+  return undefined
+}
+
+function setRegexCharClass(s: LiteralScannerState, inside: boolean): undefined {
+  s.inRegexCharClass = inside
+  s.i++
+  return undefined
+}
+
+/** Regex literal: `/` inside a character class does not close it; an unterminated regex ends at a newline. */
+function scanRegex(source: string, s: LiteralScannerState): undefined {
+  const c = source[s.i]
+  if (c === '\\') {
+    s.i += 2
+    return undefined
+  }
+  if (c === '[') return setRegexCharClass(s, true)
+  if (c === ']') return setRegexCharClass(s, false)
+  if ((c === '/' && !s.inRegexCharClass) || c === '\n') {
+    s.inRegexCharClass = false
+    return enterMode(s, 'code', 1)
+  }
+  s.i++
+  return undefined
+}
+
+/** Template string: a backquote returns to code; `${` opens interpolation code and records the depth to resume at. */
+function scanTemplate(source: string, s: LiteralScannerState): undefined {
+  const c = source[s.i]
+  if (c === '\\') {
+    s.i += 2
+    return undefined
+  }
+  if (c === '`') return enterMode(s, 'code', 1)
+  if (c === '$' && source[s.i + 1] === '{') {
+    s.sawInterpolation = true
+    s.templateStack.push(s.depth)
+    s.depth++
+    return enterMode(s, 'code', 2)
+  }
+  s.i++
+  return undefined
+}
+
+/** `}`: resume the enclosing template interpolation, or close the literal when the outermost depth is left. */
+function leaveBrace(s: LiteralScannerState): LiteralScanResult | undefined {
+  s.depth--
+  s.i++
+  const stack = s.templateStack
+  if (stack.length > 0 && s.depth === stack[stack.length - 1]) {
+    stack.pop()
+    s.mode = 'template'
+    return undefined
+  }
+  if (s.depth === 0) return { end: s.i, sawInterpolation: s.sawInterpolation }
+  return undefined
+}
+
+/**
+ * Code mode: enter comments / strings / templates / regexes and track `{` `}` depth.
+ * A `/` only starts a regex when the previous non-blank char cannot end an expression (else it is division).
+ */
+function scanCode(source: string, s: LiteralScannerState): LiteralScanResult | undefined {
+  const c = source[s.i]
+  const next = source[s.i + 1]
+  if (c === '/' && next === '/') return enterMode(s, 'line-comment', 2)
+  if (c === '/' && next === '*') return enterMode(s, 'block-comment', 2)
+  if (c === "'") return enterMode(s, 'single', 1)
+  if (c === '"') return enterMode(s, 'double', 1)
+  if (c === '`') return enterMode(s, 'template', 1)
+  if (c === '/' && isRegexPosition(source, s.i)) {
+    s.inRegexCharClass = false
+    return enterMode(s, 'regex', 1)
+  }
+  if (c === '{') {
+    s.depth++
+    s.i++
+    return undefined
+  }
+  if (c === '}') return leaveBrace(s)
+  s.i++
+  return undefined
+}
+
+const SCAN_STEPS: Record<ScanMode, ScanStep> = {
+  code: scanCode,
+  'line-comment': scanLineComment,
+  'block-comment': scanBlockComment,
+  single: scanQuoted,
+  double: scanQuoted,
+  template: scanTemplate,
+  regex: scanRegex,
+}
+
+/**
+ * Scan the object literal starting at `source[open] === '{'` lexically (comments / strings /
+ * templates / regexes never affect brace depth) and report the index just past its closing `}`
+ * (-1 when it is never closed) plus whether a template interpolation was seen.
+ */
+function scanObjectLiteral(source: string, open: number): LiteralScanResult {
+  const s: LiteralScannerState = {
+    i: open,
+    depth: 0,
+    mode: 'code',
+    inRegexCharClass: false,
+    templateStack: [],
+    sawInterpolation: false,
+  }
+  while (s.i < source.length) {
+    const closed = SCAN_STEPS[s.mode](source, s)
+    if (closed !== undefined) return closed
+  }
+  return { end: -1, sawInterpolation: s.sawInterpolation }
 }
 
 function assertPhases(value: unknown): WorkflowPhaseMeta[] | undefined {
