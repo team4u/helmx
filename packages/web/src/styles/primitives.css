@@ -587,10 +587,12 @@
   background: transparent;
   box-shadow: none;
 }
+/* flex-basis 保持 auto 复用 width 作为唯一宽度真源，避免 .screen-toolbar-actions
+   inline-flex 计算固有宽度与 flex-basis 冲突导致同行兄弟按钮被误折行。 */
 .search-box-toolbar {
   width: 220px;
   min-width: min(200px, 100%);
-  flex: 0 1 240px;
+  flex: 0 1 auto;
   max-width: 260px;
 }
 .search-box-sm {

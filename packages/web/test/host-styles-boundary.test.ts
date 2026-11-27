@@ -375,6 +375,19 @@ test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Ta
   ]) {
     assert.ok(ownsRule(primitives, selector), `primitives.css 应定义公共原语规则 ${selector}`)
   }
+  // .search-box-toolbar 位于 inline-flex(.screen-toolbar-actions) 内时，flex-basis 必须与 width 一致（auto 或 <= width），
+  // 否则 Chromium 按 width 算容器固有宽度、按更大的 flex-basis 排版会强制把同行兄弟按钮折到第二行。
+  const toolbarSearchBlock = strippedPrimitives.match(/(?:^|\n)\.search-box-toolbar\s*\{([^}]*)\}/)?.[1] ?? ''
+  const toolbarWidthPx = toolbarSearchBlock.match(/(?:^|[;\s])width:\s*(\d+(?:\.\d+)?)px\s*;/)?.[1]
+  const toolbarFlexBasis = toolbarSearchBlock.match(/(?:^|[;\s])flex:\s*\S+\s+\S+\s+([^;\s]+)\s*;/)?.[1]
+  assert.ok(toolbarWidthPx !== undefined && toolbarFlexBasis !== undefined, '.search-box-toolbar 应声明 width 与 flex')
+  if (toolbarFlexBasis !== 'auto') {
+    const basisPx = toolbarFlexBasis.match(/^(\d+(?:\.\d+)?)px$/)?.[1]
+    assert.ok(
+      basisPx !== undefined && Number(basisPx) <= Number(toolbarWidthPx),
+      `.search-box-toolbar 的 flex-basis (${toolbarFlexBasis}) 不得大于 width (${toolbarWidthPx}px)，避免 .screen-toolbar-actions 同行按钮误折行`,
+    )
+  }
   assert.ok(!strippedPrimitives.includes('.screen-host-stage'), 'primitives.css 不得再包含 .screen-host-stage')
   assert.ok(!strippedPrimitives.includes(':has('), 'primitives.css 不得再包含 :has() 舞台补丁')
 
