@@ -1087,7 +1087,6 @@ test('Profile HTTP accepts boolean restrictToCwd; non-boolean rejects', { timeou
   }
 })
 
-<<<<<<< HEAD
 test('conversations/asks router parity: strict ?wait=1, bodySchema separation, non-empty PATCH, 405 vs 404, and 501 optional ports', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
