@@ -10,6 +10,8 @@
 :root {
   --conversation-max-width: 960px;
   --conversation-gutter: 24px;
+  --helmx-drawer-narrow-width: clamp(380px, 36vw, 560px);
+  --helmx-drawer-wide-width: min(740px, 52vw);
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;

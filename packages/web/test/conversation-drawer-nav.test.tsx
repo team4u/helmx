@@ -1,5 +1,8 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
@@ -26,6 +29,7 @@ const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
 const { useHelmxStore } = await import('../src/lib/store-context.js')
 const { App: RealApp } = await import('../src/App.js')
 const e = React.createElement
+const __dirname = dirname(fileURLToPath(import.meta.url))
 const originalFetch = globalThis.fetch
 let root: Root | undefined
 let host: HTMLElement | undefined
@@ -547,6 +551,13 @@ describe('conversation-drawer-nav', () => {
 
   test('宽屏 (>=1280px 且无 splitTarget) 以非模态停靠展示右侧抽屉栈，Mod+I 可直达主区输入框，切入 split 后退回模态遮罩', { timeout: 60_000 }, async () => {
     const originalMatchMedia = window.matchMedia
+    const styleEl = document.createElement('style')
+    const tokensCss = readFileSync(join(__dirname, '../src/styles/tokens.css'), 'utf8')
+    const shellCss = readFileSync(join(__dirname, '../src/styles/shell.css'), 'utf8')
+    // happy-dom evaluates var(--token) to px but cannot resolve clamp()/min() in computed width;
+    // overriding the :root tokens with px values tests real cross-Portal inheritance against .helmx-shell.
+    styleEl.textContent = `${tokensCss}\n${shellCss}\n:root { --helmx-drawer-narrow-width: 480px; --helmx-drawer-wide-width: 700px; }`
+    document.head.appendChild(styleEl)
     window.matchMedia = ((query: string) => ({
       matches: query === '(min-width: 1280px)',
       media: query,
@@ -567,6 +578,14 @@ describe('conversation-drawer-nav', () => {
 
       const shell = host!.querySelector<HTMLElement>('.helmx-shell')!
       const mainStage = host!.querySelector<HTMLElement>('main.helmx-main-stage')!
+      const dialog = document.querySelector<HTMLElement>('.drawer-stack-dialog.is-docked[data-drawer-docked="true"]')!
+      assert.ok(dialog !== null)
+      assert.ok(dialog.parentElement === document.body, 'portaled docked dialog mounts directly under document.body outside .helmx-shell')
+      assert.ok(shell.contains(dialog) === false, 'portaled dialog lives outside .helmx-shell CSS custom property scope')
+      const narrowComputed = window.getComputedStyle(dialog)
+      assert.equal(narrowComputed.width, '480px')
+      assert.equal(narrowComputed.maxWidth, '480px')
+      assert.equal(window.getComputedStyle(mainStage).paddingRight, '480px')
       assert.ok(shell.classList.contains('drawer-docked'), 'wide desktop docks drawer beside main stage')
       assert.ok(!shell.classList.contains('drawer-docked-wide'), 'workbench drawer uses narrow docked width')
       assert.ok(document.querySelector('.drawer-stack-backdrop') === null, 'docked drawer renders without modal backdrop')
@@ -587,7 +606,12 @@ describe('conversation-drawer-nav', () => {
         window.dispatchEvent(new HashChangeEvent('hashchange'))
       })
       await waitForCondition(() => shell.classList.contains('drawer-docked-wide'))
-      assert.ok(document.querySelector('.drawer-stack-dialog.is-docked[data-drawer-docked="true"]') !== null)
+      const wideDialog = document.querySelector<HTMLElement>('.drawer-stack-dialog-wide.is-docked[data-drawer-docked="true"]')!
+      assert.ok(wideDialog !== null)
+      const wideComputed = window.getComputedStyle(wideDialog)
+      assert.equal(wideComputed.width, '700px')
+      assert.equal(wideComputed.maxWidth, '700px')
+      assert.equal(window.getComputedStyle(mainStage).paddingRight, '700px')
       assert.ok(document.querySelector('.drawer-stack-backdrop') === null)
 
       // Opening split pane immediately degrades docked drawer back to modal overlay with backdrop
@@ -598,7 +622,9 @@ describe('conversation-drawer-nav', () => {
       await waitForCondition(() => document.querySelector('.drawer-stack-backdrop') !== null)
       assert.ok(!shell.classList.contains('drawer-docked'), 'split view disables docked mode')
       assert.ok(document.querySelector('[data-drawer-docked="true"]') === null)
+      assert.equal(window.getComputedStyle(mainStage).paddingRight, '0px')
     } finally {
+      styleEl.remove()
       window.matchMedia = originalMatchMedia
     }
   })

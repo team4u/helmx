@@ -542,3 +542,20 @@ test('样式边界：tokens.css 明暗主题覆盖对称（dark 主题不漏定�
   assert.deepEqual(missingInDark, [], `dark 主题缺少 light 主题变量：${missingInDark.join(', ')}`)
   assert.deepEqual(extraInDark, [], `dark 主题多出未在 light 声明的变量：${extraInDark.join(', ')}`)
 })
+
+test('样式边界：Portal 挂载的停靠抽屉仅消费 :root 宽度 token，不得引用 .helmx-shell 私有 --helmx-drawer-width', { timeout: 60_000 }, () => {
+  const tokensCss = stripCssComments(readFileSync(join(STYLES_DIR, 'tokens.css'), 'utf8'))
+  const rootBlock = tokensCss.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+  assert.ok(rootBlock.includes('--helmx-drawer-narrow-width:'), 'tokens.css :root 必须定义 --helmx-drawer-narrow-width')
+  assert.ok(rootBlock.includes('--helmx-drawer-wide-width:'), 'tokens.css :root 必须定义 --helmx-drawer-wide-width')
+
+  const shellCss = stripCssComments(readFileSync(join(STYLES_DIR, 'shell.css'), 'utf8'))
+  const dialogRules = [...shellCss.matchAll(/\.drawer-stack-dialog[^{]*\{([^}]*)\}/g)]
+  assert.ok(dialogRules.length > 0, 'shell.css 应声明 .drawer-stack-dialog 相关规则')
+  for (const match of dialogRules) {
+    assert.ok(
+      !match[1]!.includes('--helmx-drawer-width'),
+      `Portal 到 document.body 的抽屉规则不得引用 .helmx-shell 作用域变量 --helmx-drawer-width:\n${match[0]}`,
+    )
+  }
+})
