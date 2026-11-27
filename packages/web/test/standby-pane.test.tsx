@@ -52,8 +52,10 @@ const defaultModels = [
   { id: 'openai/gpt-5', provider: 'openai', modelId: 'gpt-5', available: true, thinkingLevels: ['off', 'high'] },
 ]
 
+const createdStores: Array<ReturnType<typeof makeTestStore>> = []
+
 function makeStandbyStore(overrides: TestStoreOverrides = {}) {
-  return makeTestStore({
+  const store = makeTestStore({
     profiles: twoProfiles,
     models: defaultModels,
     nodes: [
@@ -65,6 +67,15 @@ function makeStandbyStore(overrides: TestStoreOverrides = {}) {
     focusedPanel: 'primary',
     ...overrides,
   })
+  createdStores.push(store)
+  return store
+}
+
+async function flushAnimationFrames(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  })
+  await flushMacrotask(0)
 }
 
 function stubMatchMedia(predicate: (query: string) => boolean): void {
@@ -85,12 +96,15 @@ let mounted: MountedDomRoot | undefined
 function cleanup(): void {
   mounted?.unmount()
   mounted = undefined
+  while (createdStores.length > 0) {
+    createdStores.pop()!.dispose()
+  }
   resetStandbyDrafts()
   resetHappyDom()
 }
 
 describe('standby-pane UX', () => {
-  afterEach(cleanup)
+  afterEach(cleanup, { timeout: 60_000 })
 
   test('4-guard auto-focus: focuses textarea on mount when focused desktop fine-pointer panel has no overlays or other focused input', { timeout: 60_000 }, async () => {
     stubMatchMedia(() => false)
@@ -120,7 +134,7 @@ describe('standby-pane UX', () => {
         e(HostStoreProviders, { value: splitStore }, e(AgentStandbyPane, { profileId: 'coder', isSplit: true })),
       ),
     )
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     const splitTa = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
     assert.ok(document.activeElement !== splitTa, 'unfocused split pane must never steal focus')
     cleanup()
@@ -131,7 +145,7 @@ describe('standby-pane UX', () => {
     mounted = await mountDomRoot(
       e(HostStoreProviders, { value: modalStore }, e(AgentStandbyPane, { profileId: 'assistant' })),
     )
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     assert.ok(
       document.activeElement !== mounted.host.querySelector('textarea.composer-textarea'),
       'open activeModal blocks auto-focus',
@@ -144,7 +158,7 @@ describe('standby-pane UX', () => {
     mounted = await mountDomRoot(
       e(HostStoreProviders, { value: drawerStore }, e(AgentStandbyPane, { profileId: 'assistant' })),
     )
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     assert.ok(
       document.activeElement !== mounted.host.querySelector('textarea.composer-textarea'),
       'open drawer stack blocks auto-focus',
@@ -159,7 +173,7 @@ describe('standby-pane UX', () => {
     mounted = await mountDomRoot(
       e(HostStoreProviders, { value: makeStandbyStore() }, e(AgentStandbyPane, { profileId: 'assistant' })),
     )
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     assert.ok(
       document.activeElement !== mounted.host.querySelector('textarea.composer-textarea'),
       'open DOM dialog blocks auto-focus',
@@ -171,7 +185,7 @@ describe('standby-pane UX', () => {
     mounted = await mountDomRoot(
       e(HostStoreProviders, { value: makeStandbyStore() }, e(AgentStandbyPane, { profileId: 'assistant' })),
     )
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     assert.ok(
       document.activeElement !== mounted.host.querySelector('textarea.composer-textarea'),
       'passive coarse touch mount blocks auto-focus',
@@ -240,7 +254,7 @@ describe('standby-pane UX', () => {
         e(HostStoreProviders, { value: oppositeFocusStore }, e(AgentStandbyPane, { profileId: 'coder', isSplit: true })),
       ),
     )
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     assert.ok(document.activeElement === oppositeInput, 'editable input in opposite split panel keeps focus')
   })
 
@@ -260,7 +274,7 @@ describe('standby-pane UX', () => {
         e(HostStoreProviders, { value: store }, e(AgentStandbyPane, { profileId: 'coder', isSplit: true })),
       ),
     )
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     const ta = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
     assert.ok(document.activeElement !== ta)
 
@@ -474,7 +488,7 @@ describe('standby-pane UX', () => {
     await act(async () => {
       touchTrigger.click()
     })
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     const touchSearch = document.querySelector<HTMLInputElement>('.agent-standby-profile-popover input')!
     assert.ok(touchSearch !== null)
     assert.ok(document.activeElement !== touchSearch, 'coarse touch skips focusing search input on open')
@@ -482,18 +496,18 @@ describe('standby-pane UX', () => {
     await act(async () => {
       touchSearch.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     assert.ok(document.activeElement !== touchTa, 'canceling picker on coarse touch does not force-focus textarea')
 
     await act(async () => {
       touchTrigger.click()
     })
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     const touchCoderItem = document.querySelector<HTMLElement>('.agent-standby-profile-item[data-profile-id="coder"]')!
     await act(async () => {
       touchCoderItem.click()
     })
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     assert.deepEqual(touchStore.getPrimaryTarget(), { kind: 'agent', profileId: 'coder' })
     assert.ok(document.activeElement === mounted.host.querySelector('textarea.composer-textarea'), 'explicitly picking profile on coarse touch focuses standby textarea')
   })
@@ -512,7 +526,7 @@ describe('standby-pane UX', () => {
         e(HostStoreProviders, { value: splitStore }, e(AgentStandbyPane, { profileId: 'assistant', isSplit: true })),
       ),
     )
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     const splitTa = mounted.host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
 
     // Primary shortcut ignored by split standby pane
@@ -702,7 +716,7 @@ describe('standby-pane UX', () => {
     await act(async () => {
       touchCustomBtn.click()
     })
-    await flushMacrotask(30)
+    await flushAnimationFrames()
     const touchCwdInput = mounted.host.querySelector<HTMLInputElement>('input.composer-env-cwd-input')!
     assert.ok(touchCwdInput !== null)
     assert.ok(document.activeElement !== touchCwdInput, 'coarse touch device does not auto-focus cwd input')

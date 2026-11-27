@@ -5,6 +5,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import type { ConversationSummary } from '@helmx/protocol'
+import { flushMacrotask, flushMicrotasks, waitForCondition } from './helpers/dom-harness.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import type { ResolvedTarget, ActiveModal, DrawerFrame } from '../src/lib/types.js'
 
@@ -145,8 +146,7 @@ function App(): React.ReactNode {
 }
 
 async function settle(): Promise<void> {
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  await flushMicrotasks()
 }
 
 async function mount(hash: string, fixture?: FetchFixture): Promise<void> {
@@ -159,7 +159,16 @@ async function mount(hash: string, fixture?: FetchFixture): Promise<void> {
     root = createRoot(host!)
     root.render(e(HelmxStoreProvider, null, e(App)))
   })
-  await settle()
+  await waitForCondition(() => {
+    if (storeHandle === undefined || !storeHandle.authReady || !storeHandle.sseConnected) return false
+    if (storeHandle.drawerStack.length === 0) return true
+    if (document.querySelector('.drawer-stack-dialog') === null) return false
+    const top = storeHandle.drawerStack[storeHandle.drawerStack.length - 1]
+    if (top?.kind === 'workbench') {
+      return document.querySelector('.helmx-workbench[data-drawer-frame-visible="true"]') !== null
+    }
+    return document.querySelector('.conversation-drawer[data-drawer-frame-visible="true"]') !== null
+  })
 }
 
 async function mountReal(hash: string, fixture?: FetchFixture): Promise<void> {
@@ -172,7 +181,7 @@ async function mountReal(hash: string, fixture?: FetchFixture): Promise<void> {
     root = createRoot(host!)
     root.render(e(RealApp))
   })
-  await settle()
+  await waitForCondition(() => host?.querySelector('.helmx-shell') !== null && document.querySelector('.drawer-stack-dialog') !== null)
 }
 
 function reset(): void {
@@ -212,7 +221,7 @@ function visibleWorkbenchTabTexts(): string[] {
 }
 
 describe('conversation-drawer-nav', () => {
-  afterEach(reset)
+  afterEach(reset, { timeout: 60_000 })
 
   test('多层抽屉栈逐层打开与逐层关闭：返回按钮、面包屑与 Escape 只剥顶层，[×] 一键收起全栈', { timeout: 60_000 }, async () => {
     await mount('#/c/1?drawer=wb/artifacts')
@@ -284,7 +293,7 @@ describe('conversation-drawer-nav', () => {
       { kind: 'conversation', conversationId: 11 },
     ])
     await act(async () => { window.history.back() })
-    await settle()
+    await waitForCondition(() => observed?.drawerStack.length === 1)
     assert.deepEqual(observed?.drawerStack, [{ kind: 'workbench', tab: 'artifacts' }], '后退应只关 #11 并保留工作台')
     assert.equal(observed?.workbenchOpen, true)
   })
@@ -343,8 +352,12 @@ describe('conversation-drawer-nav', () => {
   test('顶层预览弹窗（文件预览）与抽屉栈正交：在抽屉里开文件不破坏抽屉栈，关文件回到原抽屉', { timeout: 60_000 }, async () => {
     await mountReal('#/c/1?drawer=wb/artifacts&drawer=c/11')
     assert.ok(document.querySelector('.drawer-stack-dialog') !== null, '抽屉栈应打开')
-    // 经 URL 或真实按钮模拟打开文件预览（用深链 + 抽屉并存验证）
-    await mountReal('#/c/1?drawer=wb/artifacts&drawer=c/11&modal=file&conv=11&path=src/app.ts')
+    // 经 URL 变更叠加打开文件预览（在已挂载的 RealApp 上验证抽屉栈与预览框并存）
+    window.history.replaceState(null, '', '#/c/1?drawer=wb/artifacts&drawer=c/11&modal=file&conv=11&path=src/app.ts')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await waitForCondition(() => document.querySelector('.preview-modal-body') !== null)
     assert.ok(document.querySelector('.drawer-stack-dialog') !== null, '文件预览打开时抽屉栈应继续保留在下方')
     assert.ok(document.querySelector('.preview-modal-body') !== null, '文件预览弹窗应叠加显示在上方')
 
@@ -357,7 +370,7 @@ describe('conversation-drawer-nav', () => {
     const previewClose = document.querySelector<HTMLButtonElement>('.artifact-preview-header button[aria-label="Close preview"]')
     assert.ok(previewClose !== null)
     await act(async () => { previewClose!.click() })
-    await settle()
+    await waitForCondition(() => document.querySelector('.preview-modal-body') === null)
     assert.ok(document.querySelector('.preview-modal-body') === null, '预览弹窗应关闭')
     assert.ok(document.querySelector('.drawer-stack-dialog') !== null, '抽屉栈应完整保留')
     assert.equal(document.querySelector('.drawer-stack-dialog')?.getAttribute('data-drawer-depth'), '2')
@@ -365,32 +378,37 @@ describe('conversation-drawer-nav', () => {
 
   test('抽屉标题与 aria-label 展示有意义的会话标题，占位标题与空白回退默认文案', { timeout: 60_000 }, async () => {
     await mount('#/c/1?drawer=c/11', {
-      list: [summary(1), summary(11, 1, '排查构建失败')],
+      list: [
+        summary(1),
+        summary(11, 1, '排查构建失败'),
+        summary(12, 1, 'Subagent 12'),
+        summary(13, 1, '子代理 13'),
+        summary(14, 1, '子会话 14'),
+        summary(15, 1, '   '),
+      ],
+      detailMap: { 20: summary(20, 1, '详情兜底标题') },
     })
     const dialog = document.querySelector('.drawer-stack-dialog')
     assert.ok(dialog !== null)
     assert.equal(dialog!.getAttribute('aria-label'), 'Child conversation #11 · 排查构建失败 drawer')
-    reset()
 
-    for (const [id, placeholder] of [
-      [12, 'Subagent 12'],
-      [13, '子代理 13'],
-      [14, '子会话 14'],
-      [15, '   '],
-    ] as const) {
-      await mount(`#/c/1?drawer=c/${id}`, {
-        list: [summary(1), summary(id, 1, placeholder)],
+    for (const id of [12, 13, 14, 15] as const) {
+      await act(async () => {
+        storeHandle!.closeAllDrawers()
+        storeHandle!.openConversationDrawer(id)
       })
       const dlg = document.querySelector('.drawer-stack-dialog')
       assert.ok(dlg !== null)
       assert.equal(dlg!.getAttribute('aria-label'), `Child conversation #${id} drawer`)
-      reset()
     }
 
-    await mount('#/c/1?drawer=c/20', {
-      list: [summary(1)],
-      detailMap: { 20: summary(20, 1, '详情兜底标题') },
+    await act(async () => {
+      storeHandle!.closeAllDrawers()
+      storeHandle!.openConversationDrawer(20)
     })
+    await waitForCondition(
+      () => document.querySelector('.drawer-stack-dialog')?.getAttribute('aria-label') === 'Child conversation #20 · 详情兜底标题 drawer',
+    )
     const fallbackDlg = document.querySelector('.drawer-stack-dialog')
     assert.ok(fallbackDlg !== null)
     assert.equal(fallbackDlg!.getAttribute('aria-label'), 'Child conversation #20 · 详情兜底标题 drawer')
@@ -419,7 +437,7 @@ describe('conversation-drawer-nav', () => {
   })
 
   test('抽屉会话顶栏工作台按钮压入绑定该抽屉会话的工作台帧，退回后回到抽屉会话', { timeout: 60_000 }, async () => {
-    await mountReal('#/c/1?drawer=c/11', drawerWorkbenchFixture())
+    await mount('#/c/1?drawer=c/11', drawerWorkbenchFixture())
     assert.ok(document.querySelector('.conversation-drawer[data-drawer-frame-visible="true"]') !== null)
     assert.ok(document.querySelector('.helmx-workbench') === null)
 
@@ -429,7 +447,7 @@ describe('conversation-drawer-nav', () => {
     assert.ok(workbenchBtn !== null, '抽屉顶栏应有与主会话一致的工作台按钮')
 
     await act(async () => { workbenchBtn!.click() })
-    await settle()
+    await waitForCondition(() => visibleWorkbenchTabTexts().some((text) => text.includes('抽屉专属面板')))
     const tabs = visibleWorkbenchTabTexts()
     assert.ok(tabs.some((text) => text.includes('抽屉专属面板')), `工作台应绑定抽屉会话 #11，实际页签: ${JSON.stringify(tabs)}`)
     assert.ok(tabs.some((text) => text.includes('Artifacts')))
@@ -439,13 +457,13 @@ describe('conversation-drawer-nav', () => {
     const backBtn = document.querySelector<HTMLButtonElement>('.drawer-stack-back-btn')
     assert.ok(backBtn !== null)
     await act(async () => { backBtn!.click() })
-    await settle()
+    await flushMacrotask(0)
     assert.ok(document.querySelector('.conversation-drawer[data-drawer-frame-visible="true"]') !== null, '退回后 #11 会话抽屉应恢复可见')
     assert.match(window.location.hash, /drawer=c%2F11$/)
   })
 
   test('工作台打开时经总览卡「抽屉速览」压入子会话抽屉：旧工作台保留在下层，返回可直达', { timeout: 60_000 }, async () => {
-    await mountReal('#/overview?drawer=wb/artifacts', {
+    await mount('#/overview?drawer=wb/artifacts', {
       list: [summary(1), { ...summary(11, 1), tags: ['drawer-tagged'], status: 'blocked' as const }],
       ui: [DRAWER_ONLY_PANEL],
     })
@@ -453,7 +471,15 @@ describe('conversation-drawer-nav', () => {
 
     // 先关闭或直接用卡片菜单测试：抽屉打开时遮罩下无法直接点总览卡，故在关闭后或同源入口均验证；
     // 这里直接验证多层深链从工作台 -> #11 -> #11 工作台的完整恢复。
-    await mountReal('#/c/1?drawer=wb/artifacts&drawer=c/11&drawer=wb@11/artifacts', drawerWorkbenchFixture())
+    window.history.replaceState(null, '', '#/c/1?drawer=wb/artifacts&drawer=c/11&drawer=wb@11/artifacts')
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    await waitForCondition(
+      () =>
+        document.querySelector('.drawer-stack-dialog')?.getAttribute('data-drawer-depth') === '3' &&
+        visibleWorkbenchTabTexts().some((text) => text.includes('抽屉专属面板')),
+    )
     assert.equal(document.querySelector('.drawer-stack-dialog')?.getAttribute('data-drawer-depth'), '3')
     const tabs = visibleWorkbenchTabTexts()
     assert.ok(tabs.some((text) => text.includes('抽屉专属面板')), '第 3 层工作台应绑定 #11')

@@ -23,6 +23,7 @@ import {
   SWIPE_EDGE_GUARD_PX,
 } from '../src/shell/mobile-drawer-gesture.js'
 import { resetStandbyDrafts } from '../src/conversation/standby-model.js'
+import { flushMacrotask, waitForCondition } from './helpers/dom-harness.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -345,12 +346,7 @@ test('App mobile shell: hamburger button carries the numberless attention status
       root = createRoot(container)
       root.render(e(App))
     })
-    const deadline = Date.now() + 3000
-    while (container.querySelector('.mobile-nav-dot') === null && Date.now() < deadline) {
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 15))
-      })
-    }
+    await waitForCondition(() => container.querySelector('.mobile-nav-dot') !== null)
 
     const shell = container.querySelector<HTMLElement>('.helmx-shell')!
     assert.ok(shell !== null, 'App mounts the shell')
@@ -469,12 +465,7 @@ test('mobile sidebar drawer: closed inert/visibility reachability, modal focus e
       root = createRoot(container)
       root.render(e(App))
     })
-    const deadline = Date.now() + 3000
-    while (container.querySelector('.helmx-shell') === null && Date.now() < deadline) {
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 15))
-      })
-    }
+    await waitForCondition(() => container.querySelector('.helmx-shell') !== null)
 
     const shell = container.querySelector<HTMLElement>('.helmx-shell')!
     const toggleBtn = container.querySelector<HTMLButtonElement>('.mobile-nav-toggle')!
@@ -616,10 +607,11 @@ test('mobile coarse viewport (390x800): passive standby skips focus while all Ne
   const encoder = new TextEncoder()
   const jsonResponse = (body: unknown): Response =>
     new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
-  const settle = async (ms = 40): Promise<void> => {
+  const flushAnimationFrames = async (): Promise<void> => {
     await act(async () => {
-      await new Promise((r) => setTimeout(r, ms))
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
     })
+    await flushMacrotask(0)
   }
 
   happyDomWindow.happyDOM?.setViewport?.({ width: 390, height: 800 })
@@ -704,11 +696,8 @@ test('mobile coarse viewport (390x800): passive standby skips focus while all Ne
       root = createRoot(container)
       root.render(e(App))
     })
-    const deadline = Date.now() + 3000
-    while (container.querySelector('.agent-standby-pane textarea.composer-textarea') === null && Date.now() < deadline) {
-      await settle(15)
-    }
-    await settle(60)
+    await waitForCondition(() => container.querySelector('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea') !== null)
+    await flushAnimationFrames()
 
     const shell = container.querySelector<HTMLElement>('.helmx-shell')!
     const toggleBtn = container.querySelector<HTMLButtonElement>('.mobile-nav-toggle')!
@@ -726,14 +715,17 @@ test('mobile coarse viewport (390x800): passive standby skips focus while all Ne
     await act(async () => {
       sidebarNewBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
     })
-    await settle(30)
+    await waitForCondition(() => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].some((el) => el.textContent?.includes('Coder')))
     const sidebarCoderItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
       .find((el) => el.textContent?.includes('Coder'))!
     assert.ok(sidebarCoderItem !== undefined)
     await act(async () => {
       sidebarCoderItem.click()
     })
-    await settle(60)
+    await waitForCondition(() => {
+      const ta = container.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')
+      return !shell.classList.contains('sidebar-open') && ta !== null && document.activeElement === ta
+    })
     assert.ok(!shell.classList.contains('sidebar-open'), 'selecting New Topic closes mobile sidebar drawer')
     assert.equal(main.hasAttribute('inert'), false, 'main stage drops inert synchronously when drawer closes')
     const coderTa = container.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')!
@@ -752,13 +744,16 @@ test('mobile coarse viewport (390x800): passive standby skips focus while all Ne
         new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }),
       )
     })
-    await settle(30)
+    await waitForCondition(() => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].some((el) => el.textContent?.includes('Coder')))
     const reselectCoderItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
       .find((el) => el.textContent?.includes('Coder'))!
     await act(async () => {
       reselectCoderItem.click()
     })
-    await settle(60)
+    await waitForCondition(() => {
+      const ta = container.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')
+      return !shell.classList.contains('sidebar-open') && ta !== null && document.activeElement === ta
+    })
     assert.ok(!shell.classList.contains('sidebar-open'))
     assert.ok(
       document.activeElement === container.querySelector('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea'),
@@ -770,19 +765,22 @@ test('mobile coarse viewport (390x800): passive standby skips focus while all Ne
     await act(async () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
-    await settle(80)
+    await waitForCondition(() => container.querySelector('button.overview-newtopic-btn') !== null)
     const overviewNewBtn = container.querySelector<HTMLButtonElement>('button.overview-newtopic-btn')!
     assert.ok(overviewNewBtn !== null)
     await act(async () => {
       overviewNewBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
     })
-    await settle(30)
+    await waitForCondition(() => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].some((el) => el.textContent?.includes('Assistant')))
     const overviewAssistantItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
       .find((el) => el.textContent?.includes('Assistant'))!
     await act(async () => {
       overviewAssistantItem.click()
     })
-    await settle(60)
+    await waitForCondition(() => {
+      const ta = container.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea')
+      return ta !== null && document.activeElement === ta
+    })
     assert.ok(
       document.activeElement === container.querySelector('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea'),
       'Overview New Topic dropdown focuses standby textarea on mobile',
@@ -793,13 +791,18 @@ test('mobile coarse viewport (390x800): passive standby skips focus while all Ne
     await act(async () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
-    await settle(80)
+    await waitForCondition(() =>
+      container.querySelector('.conversation-topbar button[aria-label="New topic"], .conversation-topbar button[aria-label="新话题"]') !== null,
+    )
     const convNewBtn = container.querySelector<HTMLButtonElement>('.conversation-topbar button[aria-label="New topic"], .conversation-topbar button[aria-label="新话题"]')!
     assert.ok(convNewBtn !== null)
     await act(async () => {
       convNewBtn.click()
     })
-    await settle(60)
+    await waitForCondition(() => {
+      const ta = container.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea')
+      return ta !== null && document.activeElement === ta
+    })
     assert.ok(
       document.activeElement === container.querySelector('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea'),
       'Conversation topbar New Topic focuses standby textarea on mobile',
@@ -809,7 +812,11 @@ test('mobile coarse viewport (390x800): passive standby skips focus while all Ne
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true, cancelable: true }))
     })
-    await settle(60)
+    await waitForCondition(() =>
+      document.querySelector('.palette-modal') !== null &&
+      [...document.querySelectorAll<HTMLButtonElement>('.palette-listbox [data-idx].nav-item')]
+        .some((o) => o.textContent?.includes('Open agent: Coder')),
+    )
     const modal = document.querySelector<HTMLElement>('.palette-modal')!
     assert.ok(modal !== null, 'Command Palette opens on mobile')
     const allOpts = [...document.querySelectorAll<HTMLButtonElement>('.palette-listbox [data-idx].nav-item')]
@@ -823,7 +830,10 @@ test('mobile coarse viewport (390x800): passive standby skips focus while all Ne
     await act(async () => {
       modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
-    await settle(60)
+    await waitForCondition(() => {
+      const ta = container.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')
+      return ta !== null && document.activeElement === ta
+    })
     assert.ok(
       document.activeElement === container.querySelector('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea'),
       'Command Palette Open agent focuses standby textarea on mobile',

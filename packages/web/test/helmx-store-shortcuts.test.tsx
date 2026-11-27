@@ -6,6 +6,7 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import type { ConversationSummary, PluginSummary, PluginUiContribution, Profile } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
+import { flushMicrotasks, waitForCondition } from './helpers/dom-harness.js'
 import {
   activeTargetForPanel,
   resolveFocusedPanel,
@@ -257,12 +258,6 @@ function ShortcutHarness(): React.ReactNode {
   )
 }
 
-async function settle(ms = 30): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms))
-  })
-}
-
 async function mountProvider(
   hash: string,
   options: FetchHarnessOptions & { escAbortWindowMs?: number } = {},
@@ -279,9 +274,30 @@ async function mountProvider(
       </HelmxStoreProvider>,
     )
   })
-  await settle()
+  await waitForCondition(
+    () =>
+      capturedStore !== undefined &&
+      capturedStore.authReady &&
+      (options.authenticated === false || (capturedStore.sseConnected && capturedStore.profilesLoaded)),
+  )
   assert.ok(capturedStore, 'HelmxStoreProvider must supply the store to child components')
   return capturedStore
+}
+
+async function mountApp(
+  hash: string,
+  readyPred: () => boolean,
+  options: FetchHarnessOptions = {},
+): Promise<void> {
+  window.history.replaceState(null, '', hash)
+  installFetch(options)
+  host = document.createElement('div')
+  document.body.appendChild(host)
+  await act(async () => {
+    root = createRoot(host!)
+    root.render(<App />)
+  })
+  await waitForCondition(() => host?.querySelector('.helmx-shell') !== null && readyPred())
 }
 
 function dispatchWindowKey(
@@ -321,7 +337,7 @@ describe("helmx-store-shortcuts", () => {
     artifactRequests = []
     resetStandbyDrafts()
     window.localStorage.removeItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
-  })
+  }, { timeout: 60_000 })
 
   test('shortcuts-model pure functions: split focus, status checks and local persistence contracts', { timeout: 60_000 }, () => {
     assert.equal(SIDEBAR_COLLAPSED_STORAGE_KEY, 'helmx:sidebar-collapsed')
@@ -689,7 +705,7 @@ describe("helmx-store-shortcuts", () => {
       dispatchWindowKey({ key: ';', ctrlKey: true })
       dispatchWindowKey({ key: 'Escape' })
       dispatchWindowKey({ key: 'Escape' })
-      await settle(20)
+      await flushMicrotasks()
 
       assert.equal(fired.length, 0)
       act(() => {
@@ -712,7 +728,7 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       capturedStore?.openTarget({ kind: 'conversation', conversationId: 2 }, { split: true })
     })
-    await settle(20)
+    await flushMicrotasks()
     assert.deepEqual(capturedStore?.splitTarget, { kind: 'conversation', conversationId: 2 })
 
     const splitInput = document.querySelector<HTMLElement>('[data-testid="split-input"]')
@@ -840,7 +856,7 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       capturedStore?.openConversationDrawer(2)
     })
-    await settle()
+    await flushMicrotasks()
     assert.deepEqual(capturedStore?.drawerStack, [{ kind: 'conversation', conversationId: 2 }])
     dispatchWindowKey(modInit('j'))
     assert.equal(capturedStore?.workbenchOpen, true, '会话抽屉打开时 Mod+J 仍应开合工作台')
@@ -854,19 +870,19 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       capturedStore?.closeAllDrawers()
     })
-    await settle()
+    await flushMicrotasks()
 
     // Mod+J stays blocked behind a non-drawer modal (command palette)
     await act(async () => {
       capturedStore?.setActiveModal({ kind: 'command-palette' })
     })
-    await settle()
+    await flushMicrotasks()
     dispatchWindowKey(modInit('j'))
     assert.equal(capturedStore?.workbenchOpen, false, '命令面板打开时 Mod+J 应保持阻断')
     await act(async () => {
       capturedStore?.setActiveModal(null)
     })
-    await settle()
+    await flushMicrotasks()
 
     // Mod+B: toggle the desktop sidebar collapse and persist it to localStorage
     assert.equal(capturedStore?.sidebarCollapsed, false)
@@ -889,7 +905,7 @@ describe("helmx-store-shortcuts", () => {
   })
 
   test('HelmxStoreProvider double-Esc misfire-protection state machine (overlay interception / non-running skip / 1.5s timeout reset / double-tap abort)', { timeout: 60_000 }, async () => {
-    const escWindowMs = 60
+    const escWindowMs = 30
     await mountProvider('#/c/1', { escAbortWindowMs: escWindowMs })
 
     // 1) Pressing Esc on an idle conversation (#1) never arms or aborts
@@ -902,7 +918,7 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       capturedStore?.openTarget({ kind: 'conversation', conversationId: 2 }, { split: true })
     })
-    await settle(20)
+    await flushMicrotasks()
     await act(async () => {
       capturedStore?.setFocusedPanel?.('split')
     })
@@ -947,7 +963,7 @@ describe("helmx-store-shortcuts", () => {
     assert.equal(abortCalls.length, 0)
 
     // 5) Past the armed window it resets automatically
-    await settle(escWindowMs + 40)
+    await waitForCondition(() => (capturedStore?.pendingEscAbortConversationId ?? null) === null, 1_000, 2)
     assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
     assert.equal(abortCalls.length, 0)
 
@@ -955,7 +971,7 @@ describe("helmx-store-shortcuts", () => {
     dispatchWindowKey({ key: 'Escape' })
     assert.equal(capturedStore?.pendingEscAbortConversationId, 2)
     dispatchWindowKey({ key: 'Escape' })
-    await settle(20)
+    await waitForCondition(() => abortCalls.length === 1)
     assert.deepEqual(abortCalls, [2])
     assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
 
@@ -966,18 +982,15 @@ describe("helmx-store-shortcuts", () => {
 
   test('App split containers with data-helmx-panel capture focus and coordinate the WorkbenchDrawer and sidebar-collapsed', { timeout: 60_000 }, async () => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, '1')
-    window.history.replaceState(null, '', '#/c/1?split=c/2&drawer=wb/artifacts')
-    installFetch()
+    await mountApp(
+      '#/c/1?split=c/2&drawer=wb/artifacts',
+      () =>
+        host?.querySelector('[data-helmx-panel="split"]') !== null &&
+        document.querySelector('.helmx-workbench') !== null &&
+        artifactRequests.includes(1),
+    )
 
-    host = document.createElement('div')
-    document.body.appendChild(host)
-    await act(async () => {
-      root = createRoot(host!)
-      root.render(<App />)
-    })
-    await settle(60)
-
-    const shell = host.querySelector<HTMLElement>('.helmx-shell')
+    const shell = host!.querySelector<HTMLElement>('.helmx-shell')
     assert.ok(shell, 'App must render .helmx-shell')
     assert.equal(shell.classList.contains('sidebar-collapsed'), true, 'with the collapsed state saved in localStorage, App must attach .sidebar-collapsed')
 
@@ -985,8 +998,8 @@ describe("helmx-store-shortcuts", () => {
     dispatchWindowKey(modInit('b'))
     assert.equal(shell.classList.contains('sidebar-collapsed'), false, 'Mod+B must remove .sidebar-collapsed')
 
-    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')
-    const splitPane = host.querySelector<HTMLElement>('[data-helmx-panel="split"]')
+    const primaryPane = host!.querySelector<HTMLElement>('[data-helmx-panel="primary"]')
+    const splitPane = host!.querySelector<HTMLElement>('[data-helmx-panel="split"]')
     assert.ok(primaryPane, 'the primary pane must carry data-helmx-panel="primary"')
     assert.ok(splitPane, 'the split pane must carry data-helmx-panel="split"')
 
@@ -1011,7 +1024,11 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       splitPane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
     })
-    await settle(40)
+    await waitForCondition(
+      () =>
+        artifactRequests.includes(2) &&
+        (document.querySelector('.helmx-workbench')?.textContent ?? '').includes('split-artifact.md'),
+    )
     assert.equal(artifactRequests.includes(2), true, 'after focusing split, the WorkbenchDrawer must switch to conversation #2')
     assert.match(document.querySelector('.helmx-workbench')?.textContent ?? '', /split-artifact\.md/)
 
@@ -1019,7 +1036,7 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       primaryPane.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
     })
-    await settle(40)
+    await waitForCondition(() => (document.querySelector('.helmx-workbench')?.textContent ?? '').includes('primary-artifact.md'))
     assert.match(document.querySelector('.helmx-workbench')?.textContent ?? '', /primary-artifact\.md/)
   })
 
@@ -1143,33 +1160,31 @@ describe("helmx-store-shortcuts", () => {
   })
 
   test('App renders ShortcutsModal on Mod+/ with plugin-declared shortcuts and keeps URL hash clean', { timeout: 60_000 }, async () => {
-    window.history.replaceState(null, '', '#/overview')
-    installFetch({
-      ui: [
-        {
-          pluginId: 'ext:plan-like',
-          surface: 'commandPalette',
-          spec: {
-            id: 'toggle-mode',
-            title: { en: 'Toggle Plan mode', 'zh-CN': '切换计划模式' },
-            shortcut: 'Ctrl+.',
-            actionId: 'toggle',
-            scope: {},
+    await mountApp(
+      '#/overview',
+      () => host?.querySelector('.overview-card') !== null,
+      {
+        ui: [
+          {
+            pluginId: 'ext:plan-like',
+            surface: 'commandPalette',
+            spec: {
+              id: 'toggle-mode',
+              title: { en: 'Toggle Plan mode', 'zh-CN': '切换计划模式' },
+              shortcut: 'Ctrl+.',
+              actionId: 'toggle',
+              scope: {},
+            },
           },
-        },
-      ],
-    })
-
-    host = document.createElement('div')
-    document.body.appendChild(host)
-    await act(async () => {
-      root = createRoot(host!)
-      root.render(<App />)
-    })
-    await settle(60)
+        ],
+      },
+    )
 
     dispatchWindowKey(modInit('/'))
-    await settle(60)
+    await waitForCondition(() => {
+      const m = document.querySelector<HTMLElement>('.shortcuts-modal')
+      return m !== null && document.activeElement === m && (m.textContent ?? '').includes('Toggle Plan mode')
+    })
 
     const modal = document.querySelector<HTMLElement>('.shortcuts-modal')
     assert.ok(modal !== null, 'Mod+/ must render ShortcutsModal')
@@ -1204,25 +1219,20 @@ describe("helmx-store-shortcuts", () => {
       },
     ]
 
-    window.history.replaceState(null, '', '#/a/assistant')
-    installFetch({ ui: planCommandUi })
+    await mountApp(
+      '#/a/assistant',
+      () => host?.querySelector('button.agent-standby-shortcuts-all') !== null && sendEvent !== undefined,
+      { ui: planCommandUi },
+    )
 
-    host = document.createElement('div')
-    document.body.appendChild(host)
-    await act(async () => {
-      root = createRoot(host!)
-      root.render(<App />)
-    })
-    await settle(100)
-
-    const allShortcutsBtn = host.querySelector<HTMLButtonElement>('button.agent-standby-shortcuts-all')
+    const allShortcutsBtn = host!.querySelector<HTMLButtonElement>('button.agent-standby-shortcuts-all')
     assert.ok(allShortcutsBtn !== null, 'AgentStandbyPane must render the All shortcuts button')
 
     // Click All shortcuts -> opens ShortcutsModal displaying builtin:plan Ctrl+.
     await act(async () => {
       allShortcutsBtn.click()
     })
-    await settle(80)
+    await waitForCondition(() => (document.querySelector('.shortcuts-modal')?.textContent ?? '').includes('Toggle Plan mode'))
 
     const modalWithPlan = document.querySelector<HTMLElement>('.shortcuts-modal')
     assert.ok(modalWithPlan !== null, 'clicking All shortcuts inside AgentStandbyPane must open ShortcutsModal')
@@ -1232,11 +1242,11 @@ describe("helmx-store-shortcuts", () => {
 
     // Close ShortcutsModal via Mod+/
     dispatchWindowKey(modInit('/'))
-    await settle(40)
+    await waitForCondition(() => document.querySelector('.shortcuts-modal') === null)
     assert.ok(document.querySelector('.shortcuts-modal') === null, 'Mod+/ closes ShortcutsModal')
 
     // Type an unsent draft in the standby textarea, blur it, then press Mod+Shift+O -> focuses textarea without wiping draft
-    const textarea = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')
+    const textarea = host!.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')
     assert.ok(textarea !== null, 'standby composer textarea must exist')
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
@@ -1259,24 +1269,19 @@ describe("helmx-store-shortcuts", () => {
     // Remount without builtin:plan command -> ShortcutsModal omits Ctrl+.
     act(() => root?.unmount())
     root = undefined
-    host.remove()
-    host = document.createElement('div')
-    document.body.appendChild(host)
-    window.history.replaceState(null, '', '#/a/assistant')
-    installFetch({ ui: [] })
+    host!.remove()
+    await mountApp(
+      '#/a/assistant',
+      () => host?.querySelector('button.agent-standby-shortcuts-all') !== null && sendEvent !== undefined,
+      { ui: [] },
+    )
 
-    await act(async () => {
-      root = createRoot(host!)
-      root.render(<App />)
-    })
-    await settle(100)
-
-    const allShortcutsBtnNoPlan = host.querySelector<HTMLButtonElement>('button.agent-standby-shortcuts-all')
+    const allShortcutsBtnNoPlan = host!.querySelector<HTMLButtonElement>('button.agent-standby-shortcuts-all')
     assert.ok(allShortcutsBtnNoPlan !== null)
     await act(async () => {
       allShortcutsBtnNoPlan.click()
     })
-    await settle(80)
+    await waitForCondition(() => document.querySelector('.shortcuts-modal') !== null)
 
     const modalWithoutPlan = document.querySelector<HTMLElement>('.shortcuts-modal')
     assert.ok(modalWithoutPlan !== null, 'clicking All shortcuts opens ShortcutsModal when builtin:plan is disabled')
@@ -1287,24 +1292,21 @@ describe("helmx-store-shortcuts", () => {
   })
 
   test('App end-to-end: Mod+Shift+O on multi-profile standby toggles profile picker, navigates with arrows/Enter, migrates draft, and replaces history', { timeout: 60_000 }, async () => {
-    window.history.replaceState(null, '', '#/a/assistant')
-    installFetch({
-      profiles: [
-        { id: 'assistant', name: 'Assistant' },
-        { id: 'coder', name: 'Coder', nodeId: 'remote-1', cwd: '/remote/repo' },
-      ],
-      conversations: [],
-    })
+    await mountApp(
+      '#/a/assistant',
+      () =>
+        host?.querySelector('[data-helmx-panel="primary"] .agent-standby-pane[data-agent="assistant"] textarea.composer-textarea') !== null &&
+        host?.querySelector('button.agent-standby-profile-trigger') !== null,
+      {
+        profiles: [
+          { id: 'assistant', name: 'Assistant' },
+          { id: 'coder', name: 'Coder', nodeId: 'remote-1', cwd: '/remote/repo' },
+        ],
+        conversations: [],
+      },
+    )
 
-    host = document.createElement('div')
-    document.body.appendChild(host)
-    await act(async () => {
-      root = createRoot(host!)
-      root.render(<App />)
-    })
-    await settle(100)
-
-    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
+    const primaryPane = host!.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
     const textarea = primaryPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
     assert.ok(textarea !== null)
     await act(async () => {
@@ -1322,19 +1324,19 @@ describe("helmx-store-shortcuts", () => {
     // 1) First Mod+Shift+O on standby opens central profile picker
     const evOpen = dispatchWindowKey({ ...modInit('O'), shiftKey: true }, textarea)
     assert.equal(evOpen.defaultPrevented, true)
-    await settle(40)
+    await waitForCondition(() => document.querySelector('.agent-standby-profile-popover') !== null)
     assert.ok(document.querySelector('.agent-standby-profile-popover') !== null, 'Mod+Shift+O opens profile picker')
 
     // 2) Second Mod+Shift+O closes picker and restores textarea focus
     const evClose = dispatchWindowKey({ ...modInit('O'), shiftKey: true }, document.activeElement ?? undefined)
     assert.equal(evClose.defaultPrevented, true)
-    await settle(40)
+    await waitForCondition(() => document.querySelector('.agent-standby-profile-popover') === null && document.activeElement === textarea)
     assert.ok(document.querySelector('.agent-standby-profile-popover') === null, 'second Mod+Shift+O closes profile picker')
     assert.ok(document.activeElement === textarea, 'closing profile picker returns focus to textarea')
 
     // 3) Reopen with Mod+Shift+O, ArrowDown -> coder, Enter -> switches profile, migrates draft, replaces history
     dispatchWindowKey({ ...modInit('O'), shiftKey: true }, textarea)
-    await settle(40)
+    await waitForCondition(() => document.querySelector('.agent-standby-profile-popover') !== null)
     const popover = document.querySelector<HTMLElement>('.agent-standby-profile-popover')!
     assert.ok(popover !== null)
     await act(async () => {
@@ -1343,7 +1345,10 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       (document.activeElement ?? popover).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
-    await settle(100)
+    await waitForCondition(() => {
+      const ta = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')
+      return document.querySelector('.agent-standby-profile-popover') === null && window.location.hash === '#/a/coder' && ta !== null && document.activeElement === ta
+    })
 
     assert.ok(document.querySelector('.agent-standby-profile-popover') === null)
     assert.equal(window.location.hash, '#/a/coder')
@@ -1355,25 +1360,22 @@ describe("helmx-store-shortcuts", () => {
   })
 
   test('App end-to-end: Mod+I focuses active conversation, split, standby, or top drawer without touching hidden Activity; Cmd+K Focus message input works', { timeout: 60_000 }, async () => {
-    window.history.replaceState(null, '', '#/c/1?split=c/2')
-    installFetch({
-      conversations: [
-        makeConversation(1, { status: 'idle', title: 'Primary conv', profileId: 'assistant', cwd: '/repo-one' }),
-        makeConversation(2, { status: 'idle', title: 'Split conv', profileId: 'assistant', cwd: '/repo-two' }),
-        makeConversation(3, { status: 'idle', title: 'Drawer conv', profileId: 'assistant', cwd: '/repo-three' }),
-      ],
-    })
+    await mountApp(
+      '#/c/1?split=c/2',
+      () =>
+        host?.querySelector('[data-helmx-panel="primary"] textarea.composer-textarea') !== null &&
+        host?.querySelector('[data-helmx-panel="split"] textarea.composer-textarea') !== null,
+      {
+        conversations: [
+          makeConversation(1, { status: 'idle', title: 'Primary conv', profileId: 'assistant', cwd: '/repo-one' }),
+          makeConversation(2, { status: 'idle', title: 'Split conv', profileId: 'assistant', cwd: '/repo-two' }),
+          makeConversation(3, { status: 'idle', title: 'Drawer conv', profileId: 'assistant', cwd: '/repo-three' }),
+        ],
+      },
+    )
 
-    host = document.createElement('div')
-    document.body.appendChild(host)
-    await act(async () => {
-      root = createRoot(host!)
-      root.render(<App />)
-    })
-    await settle(100)
-
-    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
-    const splitPane = host.querySelector<HTMLElement>('[data-helmx-panel="split"]')!
+    const primaryPane = host!.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
+    const splitPane = host!.querySelector<HTMLElement>('[data-helmx-panel="split"]')!
     const primaryTa = primaryPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
     const splitTa = splitPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
     assert.ok(primaryTa !== null && splitTa !== null)
@@ -1403,7 +1405,7 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
-    await settle(100)
+    await waitForCondition(() => document.querySelector('.drawer-stack-dialog textarea.composer-textarea') !== null)
 
     const drawerDialog = document.querySelector<HTMLElement>('.drawer-stack-dialog')!
     assert.ok(drawerDialog !== null, 'conversation drawer #3 must open')
@@ -1422,7 +1424,11 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
-    await settle(100)
+    await waitForCondition(() =>
+      document.querySelector('.drawer-stack-dialog') === null &&
+      [...primaryPane.querySelectorAll<HTMLTextAreaElement>('textarea.composer-textarea')]
+        .some((ta) => ta !== primaryTa && ta.closest('.helmx-pane')?.getAttribute('style')?.includes('none') !== true),
+    )
     const conv2Ta = [...primaryPane.querySelectorAll<HTMLTextAreaElement>('textarea.composer-textarea')]
       .find((ta) => ta.closest('.helmx-pane')?.getAttribute('style')?.includes('none') !== true)!
     assert.ok(conv2Ta !== undefined)
@@ -1432,38 +1438,38 @@ describe("helmx-store-shortcuts", () => {
 
     // 5) Command palette `Focus message input` focuses composer after closing palette
     dispatchWindowKey(modInit('k'))
-    await settle(60)
+    await waitForCondition(() =>
+      [...document.querySelectorAll<HTMLButtonElement>('.palette-listbox [data-idx].nav-item')]
+        .some((btn) => btn.textContent?.includes('Focus message input')),
+    )
     const focusCmdRow = [...document.querySelectorAll<HTMLButtonElement>('.palette-listbox [data-idx].nav-item')]
       .find((btn) => btn.textContent?.includes('Focus message input'))!
     assert.ok(focusCmdRow !== undefined, 'CommandPalette exposes Focus message input row')
     await act(async () => {
       focusCmdRow.click()
     })
-    await settle(60)
+    await waitForCondition(() => document.activeElement === conv2Ta)
     assert.ok(document.activeElement === conv2Ta, 'CommandPalette Focus message input focuses active composer')
   })
 
   test('App end-to-end: New Topic focuses standby textarea from conversation Mod+Shift+O, Sidebar/Overview dropdowns, and Cmd+K without onCloseAutoFocus steal', { timeout: 60_000 }, async () => {
-    window.history.replaceState(null, '', '#/c/1')
-    installFetch({
-      profiles: [
-        { id: 'assistant', name: 'Assistant' },
-        { id: 'coder', name: 'Coder' },
-      ],
-      conversations: [
-        makeConversation(1, { status: 'idle', title: 'Primary conv', profileId: 'assistant', cwd: '/repo-one', updatedAt: 500 }),
-      ],
-    })
+    await mountApp(
+      '#/c/1',
+      () =>
+        host?.querySelector('[data-helmx-panel="primary"] textarea.composer-textarea') !== null &&
+        host?.querySelector('button.sidebar-new-topic-btn') !== null,
+      {
+        profiles: [
+          { id: 'assistant', name: 'Assistant' },
+          { id: 'coder', name: 'Coder' },
+        ],
+        conversations: [
+          makeConversation(1, { status: 'idle', title: 'Primary conv', profileId: 'assistant', cwd: '/repo-one', updatedAt: 500 }),
+        ],
+      },
+    )
 
-    host = document.createElement('div')
-    document.body.appendChild(host)
-    await act(async () => {
-      root = createRoot(host!)
-      root.render(<App />)
-    })
-    await settle(100)
-
-    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
+    const primaryPane = host!.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
     const convTa = primaryPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
     convTa.focus()
     assert.ok(document.activeElement === convTa)
@@ -1471,7 +1477,10 @@ describe("helmx-store-shortcuts", () => {
     // 1) Mod+Shift+O directly from focused conversation textarea -> standby textarea auto-focuses
     const evNewTopic = dispatchWindowKey({ ...modInit('O'), shiftKey: true }, convTa)
     assert.equal(evNewTopic.defaultPrevented, true)
-    await settle(100)
+    await waitForCondition(() => {
+      const ta = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane textarea.composer-textarea')
+      return ta !== null && document.activeElement === ta
+    })
     const standbyTa1 = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane textarea.composer-textarea')!
     assert.ok(standbyTa1 !== null, 'standby pane must mount')
     assert.ok(document.activeElement === standbyTa1, 'Mod+Shift+O from conversation textarea must auto-focus standby textarea')
@@ -1481,21 +1490,24 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
-    await settle(100)
+    await waitForCondition(() => primaryPane.querySelector('.overview-search-box input') !== null && host?.querySelector('button.sidebar-new-topic-btn') !== null)
 
-    const sidebarNewBtn = host.querySelector<HTMLButtonElement>('button.sidebar-new-topic-btn')!
+    const sidebarNewBtn = host!.querySelector<HTMLButtonElement>('button.sidebar-new-topic-btn')!
     assert.ok(sidebarNewBtn !== null)
     await act(async () => {
       sidebarNewBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
     })
-    await settle(40)
+    await waitForCondition(() => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].some((el) => el.textContent?.includes('Coder')))
     const sidebarCoderItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
       .find((el) => el.textContent?.includes('Coder'))!
     assert.ok(sidebarCoderItem !== undefined)
     await act(async () => {
       sidebarCoderItem.click()
     })
-    await settle(100)
+    await waitForCondition(() => {
+      const ta = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')
+      return ta !== null && document.activeElement === ta
+    })
     const standbyCoderTa = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')!
     assert.ok(standbyCoderTa !== null)
     assert.ok(document.activeElement === standbyCoderTa, 'Sidebar dropdown New topic must land focus in standby textarea')
@@ -1505,20 +1517,23 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
-    await settle(100)
+    await waitForCondition(() => primaryPane.querySelector('button.overview-newtopic-btn') !== null)
     const overviewNewBtn = primaryPane.querySelector<HTMLButtonElement>('button.overview-newtopic-btn')!
     assert.ok(overviewNewBtn !== null)
     await act(async () => {
       overviewNewBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
     })
-    await settle(40)
+    await waitForCondition(() => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].some((el) => el.textContent?.includes('Assistant')))
     const overviewAssistantItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
       .find((el) => el.textContent?.includes('Assistant'))!
     assert.ok(overviewAssistantItem !== undefined)
     await act(async () => {
       overviewAssistantItem.click()
     })
-    await settle(100)
+    await waitForCondition(() => {
+      const ta = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea')
+      return ta !== null && document.activeElement === ta
+    })
     const standbyAssistantTa = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="assistant"] textarea.composer-textarea')!
     assert.ok(standbyAssistantTa !== null)
     assert.ok(document.activeElement === standbyAssistantTa, 'Overview dropdown New topic must land focus in standby textarea')
@@ -1528,11 +1543,15 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
-    await settle(100)
+    await waitForCondition(() => primaryPane.querySelector('.overview-search-box input') !== null)
     const overviewSearch = primaryPane.querySelector<HTMLInputElement>('.overview-search-box input')!
     overviewSearch.focus()
     dispatchWindowKey(modInit('k'), overviewSearch)
-    await settle(60)
+    await waitForCondition(() =>
+      document.querySelector('.palette-modal') !== null &&
+      [...document.querySelectorAll<HTMLButtonElement>('.palette-listbox [data-idx].nav-item')]
+        .some((o) => o.textContent?.includes('Open agent: Coder')),
+    )
     const modal = document.querySelector<HTMLElement>('.palette-modal')!
     const allOpts = [...document.querySelectorAll<HTMLButtonElement>('.palette-listbox [data-idx].nav-item')]
     const coderOptIdx = allOpts.findIndex((o) => o.textContent?.includes('Open agent: Coder'))
@@ -1545,39 +1564,37 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
-    await settle(100)
+    await waitForCondition(() => {
+      const ta = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')
+      return ta !== null && document.activeElement === ta
+    })
     const standbyFromPalette = primaryPane.querySelector<HTMLTextAreaElement>('.agent-standby-pane[data-agent="coder"] textarea.composer-textarea')!
     assert.ok(standbyFromPalette !== null)
     assert.ok(document.activeElement === standbyFromPalette, 'Cmd+K Enter to standby must land focus in standby textarea')
   })
 
   test('App end-to-end: Chinese IME keyCode 229 allows modified shortcuts while remaining blocked during composition or plain typing inside visible inputs', { timeout: 60_000 }, async () => {
-    window.history.replaceState(null, '', '#/c/1')
-    installFetch({
-      ui: [
-        {
-          pluginId: 'ext:plan-like',
-          surface: 'commandPalette',
-          spec: {
-            id: 'toggle-mode',
-            title: { en: 'Toggle Plan mode', 'zh-CN': '切换计划模式' },
-            shortcut: 'Ctrl+.',
-            actionId: 'toggle',
-            scope: {},
+    await mountApp(
+      '#/c/1',
+      () => host?.querySelector('[data-helmx-panel="primary"] textarea.composer-textarea') !== null,
+      {
+        ui: [
+          {
+            pluginId: 'ext:plan-like',
+            surface: 'commandPalette',
+            spec: {
+              id: 'toggle-mode',
+              title: { en: 'Toggle Plan mode', 'zh-CN': '切换计划模式' },
+              shortcut: 'Ctrl+.',
+              actionId: 'toggle',
+              scope: {},
+            },
           },
-        },
-      ],
-    })
+        ],
+      },
+    )
 
-    host = document.createElement('div')
-    document.body.appendChild(host)
-    await act(async () => {
-      root = createRoot(host!)
-      root.render(<App />)
-    })
-    await settle(100)
-
-    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
+    const primaryPane = host!.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
     const convTa = primaryPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
     convTa.focus()
     assert.ok(document.activeElement === convTa)
@@ -1587,7 +1604,7 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
-    await settle(100)
+    await waitForCondition(() => primaryPane.querySelector('.overview-search-box input') !== null)
     const overviewSearch = primaryPane.querySelector<HTMLInputElement>('.overview-search-box input')!
     assert.ok(overviewSearch !== null)
 
@@ -1609,11 +1626,11 @@ describe("helmx-store-shortcuts", () => {
 
       const evImeModSlash = dispatchWindowKey({ ...modInit('Process'), code: 'Slash', keyCode: 229, isComposing: false }, overviewSearch)
       assert.equal(evImeModSlash.defaultPrevented, true, 'Mod+/ with IME keyCode 229 opens ShortcutsModal')
-      await settle(40)
+      await waitForCondition(() => document.querySelector('.shortcuts-modal') !== null)
       assert.ok(document.querySelector('.shortcuts-modal') !== null)
 
       dispatchWindowKey({ ...modInit('Process'), code: 'Slash', keyCode: 229, isComposing: false })
-      await settle(40)
+      await waitForCondition(() => document.querySelector('.shortcuts-modal') === null)
       assert.ok(document.querySelector('.shortcuts-modal') === null)
 
       const beforeDot = seenShortcuts.length
@@ -1626,26 +1643,23 @@ describe("helmx-store-shortcuts", () => {
   })
 
   test('App end-to-end: Ctrl+; toggles + menu open (focuses first enabled menuitem) and closed (restores textarea focus) across primary, split, standby, and top conversation drawer', { timeout: 60_000 }, async () => {
-    window.history.replaceState(null, '', '#/c/1?split=c/2')
-    installFetch({
-      profiles: [{ id: 'assistant', name: 'Assistant' }],
-      conversations: [
-        makeConversation(1, { status: 'idle', title: 'Primary conv', profileId: 'assistant', cwd: '/repo-one' }),
-        makeConversation(2, { status: 'idle', title: 'Split conv', profileId: 'assistant', cwd: '/repo-two' }),
-        makeConversation(3, { status: 'idle', title: 'Drawer conv', profileId: 'assistant', cwd: '/repo-three' }),
-      ],
-    })
+    await mountApp(
+      '#/c/1?split=c/2',
+      () =>
+        host?.querySelector('[data-helmx-panel="primary"] button.composer-plus-trigger') !== null &&
+        host?.querySelector('[data-helmx-panel="split"] button.composer-plus-trigger') !== null,
+      {
+        profiles: [{ id: 'assistant', name: 'Assistant' }],
+        conversations: [
+          makeConversation(1, { status: 'idle', title: 'Primary conv', profileId: 'assistant', cwd: '/repo-one' }),
+          makeConversation(2, { status: 'idle', title: 'Split conv', profileId: 'assistant', cwd: '/repo-two' }),
+          makeConversation(3, { status: 'idle', title: 'Drawer conv', profileId: 'assistant', cwd: '/repo-three' }),
+        ],
+      },
+    )
 
-    host = document.createElement('div')
-    document.body.appendChild(host)
-    await act(async () => {
-      root = createRoot(host!)
-      root.render(<App />)
-    })
-    await settle(100)
-
-    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
-    const splitPane = host.querySelector<HTMLElement>('[data-helmx-panel="split"]')!
+    const primaryPane = host!.querySelector<HTMLElement>('[data-helmx-panel="primary"]')!
+    const splitPane = host!.querySelector<HTMLElement>('[data-helmx-panel="split"]')!
     const primaryTa = primaryPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
     const splitTa = splitPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
     const primaryPlusTrigger = primaryPane.querySelector<HTMLButtonElement>('button.composer-plus-trigger')!
@@ -1655,13 +1669,21 @@ describe("helmx-store-shortcuts", () => {
     // Helper: first enabled [role="menuitem"] inside currently open .composer-plus-menu
     const firstEnabledPlusMenuItem = (menu: HTMLElement): HTMLElement | null =>
       menu.querySelector<HTMLElement>('[role="menuitem"]:not([data-disabled]):not([aria-disabled="true"])')
+    const waitPlusMenuOpen = () =>
+      waitForCondition(() => {
+        const menu = document.querySelector<HTMLElement>('.composer-plus-menu')
+        const item = menu ? firstEnabledPlusMenuItem(menu) : null
+        return item !== null && document.activeElement === item
+      })
+    const waitPlusMenuClosed = (expectedFocus: HTMLElement) =>
+      waitForCondition(() => document.querySelectorAll('.composer-plus-menu').length === 0 && document.activeElement === expectedFocus)
 
     // 1) Primary panel: Ctrl+; opens menu & focuses first enabled item; second Ctrl+; closes & restores focus to primaryTa
     primaryTa.focus()
     assert.ok(document.activeElement === primaryTa)
     const evPrimaryOpen = dispatchWindowKey({ key: ';', ctrlKey: true }, primaryTa)
     assert.equal(evPrimaryOpen.defaultPrevented, true)
-    await settle(60)
+    await waitPlusMenuOpen()
 
     let menus = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu')]
     assert.equal(menus.length, 1, 'primary Ctrl+; opens exactly one .composer-plus-menu')
@@ -1672,7 +1694,7 @@ describe("helmx-store-shortcuts", () => {
 
     const evPrimaryClose = dispatchWindowKey({ key: ';', ctrlKey: true }, document.activeElement ?? window)
     assert.equal(evPrimaryClose.defaultPrevented, true)
-    await settle(60)
+    await waitPlusMenuClosed(primaryTa)
     assert.equal(document.querySelectorAll('.composer-plus-menu').length, 0, 'second Ctrl+; closes primary + menu')
     assert.ok(document.activeElement === primaryTa, 'closing + menu via Ctrl+; restores focus to primary textarea (not trigger)')
 
@@ -1684,7 +1706,7 @@ describe("helmx-store-shortcuts", () => {
     const splitTrigger = splitPane.querySelector<HTMLButtonElement>('button.composer-plus-trigger')!
     const evSplitOpen = dispatchWindowKey({ key: 'Process', code: 'Semicolon', keyCode: 229, ctrlKey: true, isComposing: false }, splitTa)
     assert.equal(evSplitOpen.defaultPrevented, true)
-    await settle(60)
+    await waitPlusMenuOpen()
 
     menus = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu')]
     assert.equal(menus.length, 1, 'split Ctrl+; opens split + menu')
@@ -1694,7 +1716,7 @@ describe("helmx-store-shortcuts", () => {
     assert.ok(document.activeElement !== splitTrigger)
 
     dispatchWindowKey({ key: ';', ctrlKey: true }, document.activeElement ?? window)
-    await settle(60)
+    await waitPlusMenuClosed(splitTa)
     assert.equal(document.querySelectorAll('.composer-plus-menu').length, 0)
     assert.ok(document.activeElement === splitTa, 'closing split + menu returns focus to split textarea')
 
@@ -1706,7 +1728,7 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
-    await settle(100)
+    await waitForCondition(() => document.querySelector('.drawer-stack-dialog button.composer-plus-trigger') !== null)
 
     const drawerDialog = document.querySelector<HTMLElement>('.drawer-stack-dialog')!
     assert.ok(drawerDialog !== null)
@@ -1724,7 +1746,7 @@ describe("helmx-store-shortcuts", () => {
       drawerTa.focus()
       const evDrawerOpen = dispatchWindowKey({ key: ';', ctrlKey: true }, drawerTa)
       assert.equal(evDrawerOpen.defaultPrevented, true)
-      await settle(60)
+      await waitPlusMenuOpen()
       assert.deepEqual(seenDrawerEvents[0], {
         action: 'toggle-plus-menu',
         panel: 'drawer',
@@ -1738,19 +1760,19 @@ describe("helmx-store-shortcuts", () => {
       assert.ok(document.activeElement !== drawerTrigger)
 
       dispatchWindowKey({ key: ';', ctrlKey: true }, document.activeElement ?? window)
-      await settle(60)
+      await waitPlusMenuClosed(drawerTa)
       assert.equal(document.querySelectorAll('.composer-plus-menu').length, 0)
       assert.ok(document.activeElement === drawerTa, 'closing drawer + menu returns focus to drawer textarea')
 
       // Opening Workbench drawer over conversation drawer blocks Ctrl+; from reaching drawer composer beneath
       dispatchWindowKey(modInit('j'))
-      await settle(60)
+      await waitForCondition(() => document.querySelector('.helmx-workbench') !== null)
       const countBeforeWb = seenDrawerEvents.length
       const evBlockedByWb = dispatchWindowKey({ key: ';', ctrlKey: true })
       assert.equal(evBlockedByWb.defaultPrevented, false)
       assert.equal(seenDrawerEvents.length, countBeforeWb)
       dispatchWindowKey(modInit('j'))
-      await settle(40)
+      await waitForCondition(() => document.querySelector('.helmx-workbench') === null)
     } finally {
       window.removeEventListener('helmx:shortcut', onShortcut)
     }
@@ -1760,7 +1782,7 @@ describe("helmx-store-shortcuts", () => {
     await act(async () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
-    await settle(100)
+    await waitForCondition(() => primaryPane.querySelector('.agent-standby-pane[data-agent="assistant"] button.composer-plus-trigger') !== null)
 
     const standbyPane = primaryPane.querySelector<HTMLElement>('.agent-standby-pane[data-agent="assistant"]')!
     const standbyTa = standbyPane.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
@@ -1770,7 +1792,7 @@ describe("helmx-store-shortcuts", () => {
     standbyTa.focus()
     const evStandbyOpen = dispatchWindowKey({ key: ';', ctrlKey: true }, standbyTa)
     assert.equal(evStandbyOpen.defaultPrevented, true)
-    await settle(60)
+    await waitPlusMenuOpen()
 
     menus = [...document.querySelectorAll<HTMLElement>('.composer-plus-menu')]
     assert.equal(menus.length, 1, 'standby Ctrl+; ignores hidden Activity #1 and opens standby + menu')
@@ -1780,7 +1802,7 @@ describe("helmx-store-shortcuts", () => {
     assert.ok(document.activeElement !== standbyTrigger)
 
     dispatchWindowKey({ key: ';', ctrlKey: true }, document.activeElement ?? window)
-    await settle(60)
+    await waitPlusMenuClosed(standbyTa)
     assert.equal(document.querySelectorAll('.composer-plus-menu').length, 0)
     assert.ok(document.activeElement === standbyTa, 'closing standby + menu restores focus to standby textarea')
   })

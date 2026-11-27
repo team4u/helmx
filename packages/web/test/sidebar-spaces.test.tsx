@@ -8,12 +8,13 @@
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { afterEach, test } from 'node:test'
 import * as React from 'react'
 import type { ConversationSummary, PluginUiContribution } from '@helmx/protocol'
 import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 import type { LocalePreference } from '../src/lib/types.js'
 import { SIDEBAR_GROUP_BY_STORAGE_KEY, SIDEBAR_RECENT_QUIET_LIMIT } from '../src/overview/overview-model.js'
+import { flushMicrotasks } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 import type { HelmxExternalStore, HelmxStoreActions } from '../src/lib/helmx-store.js'
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -71,6 +72,7 @@ function makeStore(): HelmxExternalStore {
 }
 
 let root: ReturnType<typeof createRoot> | null = null
+let activeStore: HelmxExternalStore | null = null
 const container = () => document.body.querySelector('#test-root') as HTMLElement
 
 function setInputValue(input: HTMLInputElement, text: string): void {
@@ -86,16 +88,28 @@ function LiveSidebar({ onClose }: { onClose?: () => void }): React.ReactElement 
   return onClose ? e(Sidebar as React.ComponentType<{ onClose?: () => void }>, { onClose }) : e(Sidebar)
 }
 
-function render(store: HelmxExternalStore, element: React.ReactElement): void {
+function cleanup(): void {
   if (root) {
     act(() => {
       root!.unmount()
     })
     root = null
   }
+  activeStore?.dispose()
+  activeStore = null
+  document.body.innerHTML = ''
+}
+
+afterEach(cleanup, { timeout: 60_000 })
+
+function render(store: HelmxExternalStore, element: React.ReactElement): void {
+  cleanup()
+  activeStore = store
   document.body.innerHTML = '<div id="test-root"></div>'
-  root = createRoot(container())
-  root.render(e(HostStoreProviders, { value: store }, element))
+  act(() => {
+    root = createRoot(container())
+    root.render(e(HostStoreProviders, { value: store }, element))
+  })
 }
 
 test('Sidebar 空间切换：顶栏移除常驻总览按钮，视图/设置空间各自独立渲染且记住总览目标', { timeout: 60_000 }, async () => {
@@ -1009,8 +1023,8 @@ test('Sidebar 批量管理：全选归档与确认删除请求、通知及自动
     assert.ok(archiveBtn !== undefined && !archiveBtn.disabled)
     await act(async () => {
       archiveBtn.click()
-      await new Promise((resolve) => setTimeout(resolve, 0))
     })
+    await flushMicrotasks()
     assert.deepEqual(
       stub.patches.map((item) => ({ id: item.id, tags: item.tags })).sort((a, b) => a.id - b.id),
       [
@@ -1054,8 +1068,8 @@ test('Sidebar 批量管理：全选归档与确认删除请求、通知及自动
     assert.ok(confirmBtn !== undefined)
     await act(async () => {
       confirmBtn.click()
-      await new Promise((resolve) => setTimeout(resolve, 0))
     })
+    await flushMicrotasks()
     assert.equal(stub.bulkDeletes.length, 1, '确认删除发起单次 bulk-delete')
     assert.deepEqual([...stub.bulkDeletes[0]!].sort((a, b) => a - b), [1, 2])
     assert.ok(store.getNotices().some((n) => n.title === '批量删除完成'), '批量删除完成触发通知')
