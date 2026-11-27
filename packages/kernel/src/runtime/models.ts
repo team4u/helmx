@@ -261,6 +261,9 @@ export async function listModelCatalog(
 /** Valid `thinkingLevel` enum values (`pi-ai` `ModelThinkingLevel`; shared across conversation config, model defaults, and spawn `effort`). */
 export const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
+/** Model reference resolution mode controlling whether orchestrator tiers are allowed or unwrapped. */
+export type ModelRefResolutionMode = 'human_conversation' | 'single_only' | 'subagent_inherit'
+
 /** Resolved model reference returned by `ModelRegistry.resolveModelRef` / `resolveModelRefWith`. */
 export interface ResolvedModelRef extends ModelRefParts {
   /** Concrete canonical `'provider/modelId'` string. */
@@ -269,6 +272,12 @@ export interface ResolvedModelRef extends ModelRefParts {
   tierId?: string
   /** Preset thinking level carried by the resolved tier (if configured). */
   tierThinkingLevel?: string
+  /** True when the input resolved to a dual-phase orchestrator tier (`human_conversation` mode). */
+  isOrchestratorTier?: boolean
+  /** Concrete canonical executor `'provider/modelId'` when `isOrchestratorTier === true`. */
+  executorCanonicalRef?: string
+  /** Preset executor thinking level when `isOrchestratorTier === true`. */
+  executorThinkingLevel?: string
 }
 
 /** Resolve default model reference; missing config fails explicitly instead of fabricating a model. */
@@ -289,10 +298,11 @@ export function requireModelRef(ref: string | undefined): ModelRefParts {
  */
 export function resolveModelRefWith(
   ref: string,
-  resolveModelRef?: (ref: string) => ResolvedModelRef,
+  resolveModelRef?: (ref: string, opts?: { mode?: ModelRefResolutionMode }) => ResolvedModelRef,
   parseFallback: (ref: string) => ModelRefParts = parseModelRef,
+  opts?: { mode?: ModelRefResolutionMode },
 ): ResolvedModelRef {
-  if (resolveModelRef !== undefined) return resolveModelRef(ref)
+  if (resolveModelRef !== undefined) return resolveModelRef(ref, opts)
   const parts = parseFallback(ref)
   return { ...parts, canonicalRef: `${parts.provider}/${parts.modelId}` }
 }
@@ -303,10 +313,11 @@ export function resolveModelRefWith(
  */
 export function resolveDefaultModelRef(
   defaultModel: string | undefined,
-  resolveModelRef?: (ref: string) => ResolvedModelRef,
+  resolveModelRef?: (ref: string, opts?: { mode?: ModelRefResolutionMode }) => ResolvedModelRef,
+  opts?: { mode?: ModelRefResolutionMode },
 ): ResolvedModelRef {
   if (defaultModel !== undefined && defaultModel.trim() !== '' && resolveModelRef !== undefined) {
-    return resolveModelRef(defaultModel.trim())
+    return resolveModelRef(defaultModel.trim(), opts)
   }
   const parts = requireModelRef(defaultModel)
   return { ...parts, canonicalRef: `${parts.provider}/${parts.modelId}` }
@@ -369,7 +380,10 @@ export interface CompactionModelResolution {
   model: string | undefined
   thinkingLevel?: string | undefined
   /** Optional model-reference resolver (dereferences `tier/<id>` into concrete `{ provider, modelId, tierThinkingLevel }`). */
-  resolveModelRef?: (ref: string) => { provider: string; modelId: string; tierThinkingLevel?: string }
+  resolveModelRef?: (
+    ref: string,
+    opts?: { mode?: ModelRefResolutionMode },
+  ) => { provider: string; modelId: string; tierThinkingLevel?: string }
   /** Per-model thinking default lookup (`config.json.modelThinkingLevels`); used only when no explicit compaction level is set. */
   modelThinkingLevel?: (providerId: string, modelId: string) => string | undefined
   isDisabled: (providerId: string, modelId: string) => boolean
@@ -450,7 +464,7 @@ export function wrapModelsForCompaction(
             let ref: ModelRefParts
             try {
               if (resolveModelRef !== undefined) {
-                const resolvedRef = resolveModelRef(compactionRef)
+                const resolvedRef = resolveModelRef(compactionRef, { mode: 'single_only' })
                 ref = { provider: resolvedRef.provider, modelId: resolvedRef.modelId }
                 tierThinkingLevel = resolvedRef.tierThinkingLevel
               } else {

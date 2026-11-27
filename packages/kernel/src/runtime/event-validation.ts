@@ -100,6 +100,7 @@ const CONVERSATION_SUMMARY_SCHEMA = Type.Object({
   ownedBy: Type.Optional(Type.Enum(['human', 'helmx'] as const)),
   nodeId: Type.Optional(Type.String()),
   modelOverride: Type.Optional(Type.String()),
+  modelTier: Type.Optional(Type.String()),
   thinkingLevelOverride: Type.Optional(Type.String()),
   doing: Type.Optional(Type.String()),
   lastError: Type.Optional(Type.String()),

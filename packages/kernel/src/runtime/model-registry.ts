@@ -36,7 +36,7 @@ import {
 } from './model-config-helpers.js'
 import { ModelTiersCoordinator, type ModelTiersCapabilityHost } from './model-tiers-coordinator.js'
 import { RuntimeProviderTracker } from './model-runtime-providers.js'
-import { buildModels, listModelCatalog, listModelProviders, type ResolvedModelRef } from './models.js'
+import { buildModels, listModelCatalog, listModelProviders, type ModelRefResolutionMode, type ResolvedModelRef } from './models.js'
 
 export type {
   ModelDefaultsPatch,
@@ -200,8 +200,8 @@ export class ModelRegistry {
     return this.tiersCoordinator.getRegisteredTiers()
   }
 
-  resolveModelRef(ref: string): ResolvedModelRef {
-    return this.tiersCoordinator.resolveModelRef(ref)
+  resolveModelRef(ref: string, opts?: { mode?: ModelRefResolutionMode }): ResolvedModelRef {
+    return this.tiersCoordinator.resolveModelRef(ref, opts)
   }
 
   listModelProviders() {
@@ -265,12 +265,16 @@ export class ModelRegistry {
     const checkEnabled = (providerId: string, modelId: string): void => this.assertModelEnabled(providerId, modelId)
     const trimmed = model?.trim()
     if (trimmed !== undefined && trimmed !== '') {
-      const ref = this.resolveModelRef(trimmed)
-      checkEnabled(ref.provider, ref.modelId)
+      const ref = this.resolveModelRef(trimmed, { mode: 'human_conversation' })
+      if (ref.tierId !== undefined) {
+        checkEnabled(MODEL_TIER_PREFIX, ref.tierId)
+      } else {
+        checkEnabled(ref.provider, ref.modelId)
+      }
     }
     const trimmedCompaction = compactionModel?.trim()
     if (trimmedCompaction !== undefined && trimmedCompaction !== '') {
-      const ref = this.resolveModelRef(trimmedCompaction)
+      const ref = this.resolveModelRef(trimmedCompaction, { mode: 'single_only' })
       checkEnabled(ref.provider, ref.modelId)
     }
     const normalizeLevel = (rawLevel: string | undefined): string | undefined => {
@@ -391,21 +395,26 @@ export class ModelRegistry {
 
   /** Reject explicitly when a model is disabled (`409 model_disabled`), reused across explicit selection paths. */
   assertModelEnabled(providerId: string, modelId: string): void {
-    let targetProvider = providerId
-    let targetModelId = modelId
+    const assertConcreteEnabled = (targetProvider: string, targetModelId: string): void => {
+      if (this.isModelDisabled(targetProvider, targetModelId)) {
+        throw new HelmxError(
+          'model_disabled',
+          `Model ${targetProvider}/${targetModelId} is disabled; re-enable it in Settings -> Models or via 'helmx models filter' before selecting it`,
+          409,
+          { provider: targetProvider, modelId: targetModelId },
+        )
+      }
+    }
     if (providerId === MODEL_TIER_PREFIX) {
-      const resolved = this.resolveModelRef(`${MODEL_TIER_PREFIX}/${modelId}`)
-      targetProvider = resolved.provider
-      targetModelId = resolved.modelId
+      const resolved = this.resolveModelRef(`${MODEL_TIER_PREFIX}/${modelId}`, { mode: 'human_conversation' })
+      assertConcreteEnabled(resolved.provider, resolved.modelId)
+      if (resolved.executorCanonicalRef !== undefined) {
+        const execParts = parseModelRefOrThrow(resolved.executorCanonicalRef)
+        assertConcreteEnabled(execParts.provider, execParts.modelId)
+      }
+      return
     }
-    if (this.isModelDisabled(targetProvider, targetModelId)) {
-      throw new HelmxError(
-        'model_disabled',
-        `Model ${targetProvider}/${targetModelId} is disabled; re-enable it in Settings -> Models or via 'helmx models filter' before selecting it`,
-        409,
-        { provider: targetProvider, modelId: targetModelId },
-      )
-    }
+    assertConcreteEnabled(providerId, modelId)
   }
 
   /** Set disabled model list (`PUT /api/models/filter`) and return updated catalog. */

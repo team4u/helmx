@@ -100,6 +100,7 @@ function checkConversationSummary(v: unknown): string | null {
     reqArray(v, 'tags') ??
     reqString(v, 'cwd') ??
     strAllowEmpty(v, 'model') ??
+    optString(v, 'modelTier') ??
     (['working', 'blocked', 'done', 'idle', 'error'].includes(String(v.status))
       ? null
       : 'field status must be one of working|blocked|done|idle|error') ??

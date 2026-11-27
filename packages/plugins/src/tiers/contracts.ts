@@ -24,6 +24,32 @@ export const TIERS_BORROW_ELIGIBLE_SCOPE = {
   ownedBy: 'human',
 } as const satisfies ConversationScope
 
+export const TIERS_ORCHESTRATOR_KV = 'orchestrators' as const
+export const TIERS_ORCHESTRATOR_SESSION_DOC = 'orchestrator' as const
+export const TIERS_ORCH_BASH_TOOL = 'orch_bash' as const
+export const TIERS_EXIT_PLAN_MODE_TOOL = 'exit_plan_mode' as const
+export const TIERS_HAND_BACK_TOOL = 'hand_back_to_planner' as const
+export const ORCHESTRATOR_PLAN_SECTION_ID = 'tiers.orchestrator.plan' as const
+export const ORCHESTRATOR_EXECUTE_SECTION_ID = 'tiers.orchestrator.execute' as const
+export const ORCHESTRATOR_STEP_LIMIT_SECTION_ID = 'tiers.orchestrator.step_limit' as const
+export const ORCHESTRATOR_BASH_DEFAULT_TIMEOUT_MS = 60_000 as const
+export const ORCHESTRATOR_BASH_MAX_TIMEOUT_MS = 120_000 as const
+
+export const ORCHESTRATOR_PLAN_TOOL_WHITELIST: ReadonlySet<string> = new Set([
+  'read',
+  'read_artifact',
+  'load_skill',
+  'ask_user',
+  TIERS_ORCH_BASH_TOOL,
+  TIERS_EXIT_PLAN_MODE_TOOL,
+])
+
+export const ORCHESTRATOR_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  TIERS_ORCH_BASH_TOOL,
+  TIERS_EXIT_PLAN_MODE_TOOL,
+  TIERS_HAND_BACK_TOOL,
+])
+
 export const TIER_TEMPLATE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
 export const TIER_TEMPLATE_NAME_MAX_LENGTH = 80
 export const TIER_TEMPLATE_DESCRIPTION_MAX_LENGTH = 240
@@ -209,4 +235,104 @@ export function parseTiersBorrowInputMeta(meta: unknown): ParsedTiersBorrowInput
 
 export function createEmptyTiersState(): TiersStateDoc {
   return { tiers: {}, templates: {} }
+}
+
+export type TierOrchestratorPhase = 'planning' | 'execution'
+export type OrchestratorTransitionTool = 'exit_plan_mode' | 'hand_back_to_planner'
+
+/** Durable per-conversation state for dual-phase orchestrator tiers (`ctx.kv('orchestrators')`). */
+export interface TierOrchestratorRecord {
+  conversationId: number
+  tierId: string
+  phase: TierOrchestratorPhase
+  plannerModel: string
+  plannerThinkingLevel?: string
+  executorModel: string
+  executorThinkingLevel?: string
+  maxExecutionSteps: number
+  executionStepCount: number
+  stepLimitTriggered: boolean
+  handoffCount: number
+  activeRunKey?: string
+  updatedAt: number
+}
+
+/** Public session-scoped orchestrator view (`ctx.sessionDoc('orchestrator', null, { public: true, durable: false })`). */
+export interface TierOrchestratorSessionView {
+  tierId: string
+  phase: TierOrchestratorPhase
+  activeModel: string
+  plannerModel: string
+  executorModel: string
+  executionStepCount: number
+  maxExecutionSteps: number
+  updatedAt: number
+}
+
+export const TIER_ORCHESTRATOR_SESSION_VIEW_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    tierId: { type: 'string', minLength: 1 },
+    phase: { type: 'string', enum: ['planning', 'execution'] },
+    activeModel: { type: 'string', minLength: 1 },
+    plannerModel: { type: 'string', minLength: 1 },
+    executorModel: { type: 'string', minLength: 1 },
+    executionStepCount: { type: 'integer', minimum: 0 },
+    maxExecutionSteps: { type: 'integer', minimum: 1 },
+    updatedAt: { type: 'number' },
+  },
+  required: [
+    'tierId',
+    'phase',
+    'activeModel',
+    'plannerModel',
+    'executorModel',
+    'executionStepCount',
+    'maxExecutionSteps',
+    'updatedAt',
+  ],
+  additionalProperties: false,
+}
+
+/** Bounded UI presentation metadata persisted on orchestrator transition tool results. */
+export type OrchestratorTransitionMeta = {
+  tool: OrchestratorTransitionTool
+  fromPhase: TierOrchestratorPhase
+  toPhase: TierOrchestratorPhase
+  fromModel: string
+  toModel: string
+  tierId: string
+  reason?: string
+  executionSteps?: number
+  stepLimitReached?: boolean
+}
+
+export const ORCHESTRATOR_TRANSITION_META_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    tool: { type: 'string', enum: ['exit_plan_mode', 'hand_back_to_planner'] },
+    fromPhase: { type: 'string', enum: ['planning', 'execution'] },
+    toPhase: { type: 'string', enum: ['planning', 'execution'] },
+    fromModel: { type: 'string', minLength: 1 },
+    toModel: { type: 'string', minLength: 1 },
+    tierId: { type: 'string', minLength: 1 },
+    reason: { type: 'string' },
+    executionSteps: { type: 'integer', minimum: 0 },
+    stepLimitReached: { type: 'boolean' },
+  },
+  required: ['tool', 'fromPhase', 'toPhase', 'fromModel', 'toModel', 'tierId'],
+  additionalProperties: false,
+}
+
+export function toTierOrchestratorSessionView(record: TierOrchestratorRecord): TierOrchestratorSessionView {
+  return {
+    tierId: record.tierId,
+    phase: record.phase,
+    activeModel: record.phase === 'execution' ? record.executorModel : record.plannerModel,
+    plannerModel: record.plannerModel,
+    executorModel: record.executorModel,
+    executionStepCount: record.executionStepCount,
+    maxExecutionSteps: record.maxExecutionSteps,
+    updatedAt: record.updatedAt,
+  }
 }

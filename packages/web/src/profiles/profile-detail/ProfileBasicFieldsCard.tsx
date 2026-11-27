@@ -100,6 +100,7 @@ export function ProfileBasicFieldsCard({
             resetTitle={t('profiles.modelOption.followSystemDefault')}
             popoverSide={inline ? 'bottom' : 'top'}
             enableShortcut={false}
+            allowOrchestratorTiers={true}
             disabled={disabled}
             {...pickerAdapter}
             onApply={(model, level) =>

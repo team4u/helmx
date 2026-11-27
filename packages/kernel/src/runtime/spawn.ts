@@ -33,7 +33,7 @@ import type {
 import { HelmxError, parseModelTierRef, sanitizeAgentNamespacedMeta } from '@helmx/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
-import { THINKING_LEVELS, parseModelRef, type ModelRefParts, type ResolvedModelRef } from './models.js'
+import { THINKING_LEVELS, parseModelRef, type ModelRefParts, type ModelRefResolutionMode, type ResolvedModelRef } from './models.js'
 import type { PromptContent } from './conversation-attachments.js'
 import { submitDurableInput, type DurableInputTracker } from './conversation-input.js'
 import { asEntryId, asSdkThinkingLevel, getSdkConversation } from './sdk-ids.js'
@@ -140,7 +140,7 @@ export interface NativeSpawnDeps extends HelmxToolDeps {
   /** Global default model `'provider/model'` (throws `HelmxError` when unconfigured; carries `tierThinkingLevel` when resolved from a tier). */
   resolveModel(): { provider: string; modelId: string; tierThinkingLevel?: string }
   /** Optional model-reference resolver (`ModelRegistry.resolveModelRef`) to dereference `tier/<id>` into concrete `{ provider, modelId, tierThinkingLevel }`. */
-  resolveModelRef?(ref: string): ResolvedModelRef
+  resolveModelRef?(ref: string, opts?: { mode?: ModelRefResolutionMode }): ResolvedModelRef
   /**
    * Current `Models` catalog (used to clamp `thinkingLevel` capabilities; host injects `ModelRegistry.models`).
    * Unset skips clamping (unknown capabilities never break contracts).

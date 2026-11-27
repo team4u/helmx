@@ -6,6 +6,7 @@ import {
   HelmxError,
   MODEL_THINKING_LEVELS,
   MODEL_TIER_PREFIX,
+  isOrchestratorTier,
   type ConversationPatch,
   type ConversationSummary,
   type HelmxPluginContext,
@@ -135,6 +136,14 @@ function resolveTierById(
     )
   }
   const spec = tiersState.tiers[tierId]!
+  if (isOrchestratorTier(spec)) {
+    throw new HelmxError(
+      'orchestrator_tier_not_borrowable',
+      `Model tier '${tierId}' is a dual-phase orchestrator tier and cannot be used with one-turn borrow or switch_model`,
+      400,
+      { tierId, ref: requestedRef },
+    )
+  }
   const concrete = catalog.models.find((m) => `${m.provider}/${m.modelId}` === spec.model)
   if (concrete === undefined) {
     throw new HelmxError(
@@ -434,6 +443,14 @@ async function armConversationBorrow(
     throw new HelmxError('plugin_stopping', 'builtin:tiers is stopping', 409, { conversationId })
   }
   let conv = requireEligibleConversation(ctx, conversationId)
+  if (conv.modelTier !== undefined) {
+    throw new HelmxError(
+      'orchestrator_tier_active',
+      `Conversation #${conv.id} uses orchestrator tier '${conv.modelTier}' and manages model switching automatically`,
+      409,
+      { conversationId: conv.id, modelTier: conv.modelTier },
+    )
+  }
   assertNotBusyForBorrow(
     conv,
     `Conversation #${conversationId} is busy; cannot arm a one-turn model while a turn is active`,
@@ -480,6 +497,14 @@ async function activateConversationBorrow(
     throw new HelmxError('plugin_stopping', 'builtin:tiers is stopping', 409, { conversationId })
   }
   const conv = requireEligibleConversation(ctx, conversationId)
+  if (conv.modelTier !== undefined) {
+    throw new HelmxError(
+      'orchestrator_tier_active',
+      `Conversation #${conv.id} uses orchestrator tier '${conv.modelTier}' and manages model switching automatically`,
+      409,
+      { conversationId: conv.id, modelTier: conv.modelTier },
+    )
+  }
   if (opts.allowWhileBusy !== true) {
     assertNotBusyForBorrow(
       conv,

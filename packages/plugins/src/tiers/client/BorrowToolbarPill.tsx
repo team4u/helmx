@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ComposerToolbarSlotProps, ConversationSummary } from '@helmx/protocol/browser'
 import {
   HelmxIcon,
+  formatModelShortName,
   resolveLocalizedText,
   useComposerModelPickerMode,
   usePluginAction,
@@ -35,9 +36,16 @@ import {
   type TierBorrowSessionView,
 } from './borrow-models.ts'
 import {
+  TIERS_ORCHESTRATOR_SESSION_DOC,
+  formatOrchestratorPillModelLabel,
+  hasOrchestratorTierBound,
+  parseTierOrchestratorSessionView,
+} from './orchestrator-models.ts'
+import {
   TIERS_COPY as C,
   borrowActivePillTitle,
   borrowArmedPillTitle,
+  orchestratorPillTitle,
   tiersActionFailed,
 } from './copy.ts'
 import './styles.css'
@@ -57,8 +65,13 @@ function BorrowToolbarPillConversation({
   const rawDoc = usePluginSessionDoc<unknown>(TIERS_BORROW_SESSION_DOC, {
     conversationId: conversation.id,
   })
+  const rawOrchDoc = usePluginSessionDoc<unknown>(TIERS_ORCHESTRATOR_SESSION_DOC, {
+    conversationId: conversation.id,
+  })
   const rawDocRef = useRef<unknown>(rawDoc)
   rawDocRef.current = rawDoc
+  const hasOrchTier = hasOrchestratorTierBound(conversation)
+  const orchView = hasOrchTier ? parseTierOrchestratorSessionView(rawOrchDoc) : null
 
   const [optimistic, setOptimistic] = useState<{
     conversationId: number
@@ -129,7 +142,7 @@ function BorrowToolbarPillConversation({
 
   const isActive = effectiveBorrow?.phase === 'active'
   const modeSpec: ComposerModelPickerModeSpec | null =
-    !disabled && !busy && !isActive
+    !hasOrchTier && !disabled && !busy && !isActive
       ? {
           id: 'tiers:one-turn',
           label: t(C.oneTurnTabLabel),
@@ -142,6 +155,44 @@ function BorrowToolbarPillConversation({
       : null
 
   const { openMode } = useComposerModelPickerMode('tiers:one-turn', modeSpec)
+
+  if (hasOrchTier) {
+    const phase = orchView?.phase ?? 'planning'
+    const activeModel = orchView?.activeModel ?? (conversation.model || conversation.modelTier || '')
+    const stepCount = orchView?.executionStepCount ?? 0
+    const maxSteps = orchView?.maxExecutionSteps ?? 10
+    const prefix = phase === 'execution' ? t(C.orchestratorPillExecuting) : t(C.orchestratorPillPlanning)
+    const modelLabel =
+      orchView !== null
+        ? formatOrchestratorPillModelLabel(activeModel, phase, stepCount, maxSteps)
+        : (formatModelShortName(activeModel) || activeModel)
+    const tierId = orchView?.tierId ?? conversation.modelTier!.replace(/^tier\//, '')
+    const pillTitle = orchestratorPillTitle(
+      tierId,
+      phase,
+      orchView?.plannerModel ?? conversation.model,
+      orchView?.executorModel ?? '',
+      stepCount,
+      maxSteps,
+      locale,
+    )
+    return (
+      <span
+        className={`tiers-borrow-pill tiers-orchestrator-pill ${
+          phase === 'execution' ? 'tiers-borrow-pill--active' : 'tiers-borrow-pill--armed'
+        }`}
+        data-tiers-orchestrator-phase={phase}
+        data-tiers-orchestrator-tier={tierId}
+        title={pillTitle}
+      >
+        <span className="tiers-borrow-pill-main tiers-orchestrator-pill-body">
+          <HelmxIcon name="workflow" size={11} />
+          <span className="tiers-borrow-pill-prefix">{prefix}</span>
+          <span className="tiers-borrow-pill-model mono">{modelLabel}</span>
+        </span>
+      </span>
+    )
+  }
 
   if (effectiveBorrow === null) {
     return null

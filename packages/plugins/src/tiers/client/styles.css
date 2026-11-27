@@ -1,5 +1,14 @@
 /* builtin:tiers plugin-specific layout classes (.tiers-* prefix; cards, fields, stacks, and badges reuse @helmx/plugin-client primitives). */
 .tiers-card-top { display: grid; grid-template-columns: minmax(140px, 190px) minmax(220px, 1fr) auto; gap: var(--space-3); align-items: end; }
+.tiers-kind-row { margin-bottom: var(--space-3); }
+.tiers-orchestrator-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(120px, 160px);
+  gap: var(--space-3);
+  align-items: end;
+  margin-top: var(--space-3);
+  margin-bottom: var(--space-3);
+}
 .tiers-row-card .composer-picker-root { width: 100%; max-width: 100%; }
 .tiers-row-card .composer-model-button {
   width: 100%; min-width: 0; height: 30px; padding: 0 9px;
@@ -19,7 +28,7 @@
 }
 
 @media (max-width: 680px) {
-  .tiers-card-top, .tiers-template-form { grid-template-columns: 1fr; }
+  .tiers-card-top, .tiers-template-form, .tiers-orchestrator-row { grid-template-columns: 1fr; }
   .tiers-card-actions { justify-content: flex-start; }
 }
 
@@ -80,6 +89,11 @@
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.tiers-orchestrator-pill-body {
+  padding: 0 8px;
+  cursor: default;
 }
 
 .tiers-borrow-pill-main > svg {

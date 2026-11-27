@@ -598,3 +598,109 @@ test('refreshCatalog aborts state updates and notices cleanly when unmounted mid
     container.remove()
   }
 })
+
+test('allowOrchestratorTiers hides orchestrator tiers by default and suppresses them inside non-default mode tabs', { timeout: 60_000 }, async () => {
+  const { ComposerModelPickerModeContext, createComposerModelPickerModeRegistry } = await import('../src/composer-model-modes.js')
+  const modeRegistry = createComposerModelPickerModeRegistry()
+  const releaseMode = modeRegistry.register('tiers:one-turn', {
+    id: 'tiers:one-turn',
+    label: 'Next turn',
+    hint: 'Next turn only',
+    onApply: () => {},
+  })
+
+  const slice: HostModelsSlice = {
+    models: CATALOG_MODELS,
+    modelTiers: [
+      { id: 'coder', model: 'anthropic/claude-3-7-sonnet', available: true },
+      {
+        id: 'claude-auto',
+        kind: 'orchestrator',
+        model: 'anthropic/claude-3-7-sonnet',
+        executorModel: 'openai/gpt-4o-mini',
+        maxExecutionSteps: 10,
+        available: true,
+      },
+    ],
+  }
+  const handle: CatalogHandle = { slice, listeners: new Set() }
+
+  const renderAndOpen = async (props: Partial<ModelPickerControlProps>) => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = ReactDOMClient.createRoot(container)
+    await act(async () => {
+      root.render(
+        e(
+          PluginClientHostContext.Provider,
+          { value: makePort(handle) },
+          e(
+            ComposerModelPickerModeContext.Provider,
+            { value: modeRegistry },
+            e(ModelPickerControl, {
+              effectiveModel: 'openai/gpt-4o-mini',
+              activeThinkingLevel: '',
+              resetLabel: 'Reset',
+              resetTitle: 'Reset',
+              buttonTitle: 'Model',
+              enableRegisteredModes: true,
+              onApply: () => {},
+              onResetDefault: () => {},
+              ...props,
+            }),
+          ),
+        ),
+      )
+    })
+    const trigger = container.querySelector<HTMLButtonElement>('button.composer-model-button')
+    assert.ok(trigger !== null)
+    await act(async () => {
+      trigger.click()
+    })
+    return {
+      cleanup: async () => {
+        await act(async () => {
+          root.unmount()
+        })
+        container.remove()
+      },
+    }
+  }
+
+  try {
+    // 1. Default allowOrchestratorTiers=false hides tier/claude-auto while keeping single tier/coder
+    const defaultRun = await renderAndOpen({})
+    try {
+      const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+      assert.ok(popover !== null)
+      const text = popover.textContent ?? ''
+      assert.match(text, /tier\/coder/)
+      assert.doesNotMatch(text, /tier\/claude-auto/)
+    } finally {
+      await defaultRun.cleanup()
+    }
+
+    // 2. allowOrchestratorTiers=true reveals tier/claude-auto in default mode, then hides it under registered mode tab
+    const allowedRun = await renderAndOpen({ allowOrchestratorTiers: true })
+    try {
+      const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+      assert.ok(popover !== null)
+      const text = popover.textContent ?? ''
+      assert.match(text, /tier\/claude-auto/)
+      assert.match(text, /auto/)
+      const tabs = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-mode-bar [role="tab"]'))
+      const nextTurnTab = tabs.find((btn) => (btn.textContent ?? '').includes('Next turn'))
+      assert.ok(nextTurnTab !== undefined)
+      await act(async () => {
+        nextTurnTab.click()
+      })
+      const modeText = popover.textContent ?? ''
+      assert.match(modeText, /tier\/coder/)
+      assert.doesNotMatch(modeText, /tier\/claude-auto/)
+    } finally {
+      await allowedRun.cleanup()
+    }
+  } finally {
+    releaseMode()
+  }
+})

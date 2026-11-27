@@ -15,6 +15,7 @@ import {
   Screen,
   ScreenSection,
   ScreenToolbar,
+  SegmentedControl,
   Stack,
   formatModelShortName,
   formatTime,
@@ -42,7 +43,13 @@ const STATUS_BADGE: Readonly<Record<'available' | 'disabled' | 'unavailable' | '
   unavailable: { tone: 'warn', copy: C.statusUnavailable },
   draft: { tone: 'neutral', copy: C.statusDraft },
 }
-const VALIDATION_ERROR_COPY = { id_required: C.errIdRequired, duplicate_id: C.errDuplicateId, model_required: C.errModelRequired } as const
+const VALIDATION_ERROR_COPY = {
+  id_required: C.errIdRequired,
+  duplicate_id: C.errDuplicateId,
+  model_required: C.errModelRequired,
+  executor_required: C.errExecutorRequired,
+  max_steps_invalid: C.errMaxStepsInvalid,
+} as const
 
 export function TiersManagerScreen(_props: ScreenProps): ReactNode {
   const ctx = usePluginContext()
@@ -134,7 +141,22 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
               size="sm"
               icon="plus"
               disabled={busy}
-              onClick={() => mutateDraft((prev) => [...prev, { key: `new:${nextRowCounter.current++}`, id: '', model: '', thinkingLevel: '', description: '' }])}
+              onClick={() =>
+                mutateDraft((prev) => [
+                  ...prev,
+                  {
+                    key: `new:${nextRowCounter.current++}`,
+                    id: '',
+                    kind: 'single',
+                    model: '',
+                    thinkingLevel: '',
+                    executorModel: '',
+                    executorThinkingLevel: '',
+                    maxExecutionSteps: '10',
+                    description: '',
+                  },
+                ])
+              }
             >
               {t(C.addRow)}
             </Button>
@@ -160,12 +182,31 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
         ) : (
           <Stack gap="md">
             {draft.map((row) => {
-              const badge = STATUS_BADGE[resolveTierRowStatus(row.model, models)]
+              const badge = STATUS_BADGE[resolveTierRowStatus(row, models)]
+              const isOrch = row.kind === 'orchestrator'
               const placeholder = !row.model && row.thinkingLevel ? tiersPickModelWithHint(row.thinkingLevel, locale) : t(C.pickModel)
               const buttonTitle = row.model ? (row.thinkingLevel ? `${row.model} · ${row.thinkingLevel}` : row.model) : placeholder
+              const execButtonTitle = row.executorModel
+                ? (row.executorThinkingLevel ? `${row.executorModel} · ${row.executorThinkingLevel}` : row.executorModel)
+                : t(C.pickModel)
               const patch = (p: Partial<TierDraftRow>) => mutateDraft((prev) => prev.map((r) => (r.key === row.key ? { ...r, ...p } : r)))
               return (
                 <Card key={row.key} className="tiers-row-card">
+                  <div className="tiers-kind-row">
+                    <SegmentedControl
+                      size="sm"
+                      aria-label={`${t(C.tierKindAria)}${row.id.trim() ? ` · tier/${row.id.trim()}` : ''}`}
+                      value={row.kind}
+                      disabled={busy}
+                      onValueChange={(nextValue) =>
+                        patch({ kind: nextValue === 'orchestrator' ? 'orchestrator' : 'single' })
+                      }
+                      items={[
+                        { value: 'single', label: t(C.tierKindSingle) },
+                        { value: 'orchestrator', label: t(C.tierKindOrchestrator) },
+                      ]}
+                    />
+                  </div>
                   <div className="tiers-card-top">
                     <Field label={t(C.fieldId)}>
                       <div className="tiers-id-wrap">
@@ -180,9 +221,9 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                         />
                       </div>
                     </Field>
-                    <Field label={t(C.fieldModel)} htmlFor={false}>
+                    <Field label={t(isOrch ? C.fieldPlannerModel : C.fieldModel)} htmlFor={false}>
                       <ModelPickerControl
-                        buttonAriaLabel={`${t(C.fieldModel)}${row.id.trim() ? ` · tier/${row.id.trim()}` : ''}`}
+                        buttonAriaLabel={`${t(isOrch ? C.fieldPlannerModel : C.fieldModel)}${row.id.trim() ? ` · tier/${row.id.trim()}` : ''}`}
                         effectiveModel={row.model || undefined}
                         activeThinkingLevel={row.thinkingLevel}
                         placeholderLabel={placeholder}
@@ -212,6 +253,41 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                       </Button>
                     </div>
                   </div>
+                  {isOrch ? (
+                    <div className="tiers-orchestrator-row">
+                      <Field label={t(C.fieldExecutorModel)} htmlFor={false}>
+                        <ModelPickerControl
+                          buttonAriaLabel={`${t(C.fieldExecutorModel)}${row.id.trim() ? ` · tier/${row.id.trim()}` : ''}`}
+                          effectiveModel={row.executorModel || undefined}
+                          activeThinkingLevel={row.executorThinkingLevel}
+                          placeholderLabel={t(C.pickModel)}
+                          buttonTitle={execButtonTitle}
+                          resetLabel={t(C.clearModel)}
+                          resetTitle={t(C.clearModel)}
+                          popoverSide="bottom"
+                          enableShortcut={false}
+                          allowTiers={false}
+                          disabled={busy}
+                          copy={pickerCopy}
+                          onNotice={(msg, tone) => ctx.notify(msg, tone)}
+                          onApply={(model, level) => patch({ executorModel: model, executorThinkingLevel: level ?? '' })}
+                          onResetDefault={() => patch({ executorModel: '', executorThinkingLevel: '' })}
+                        />
+                      </Field>
+                      <Field label={t(C.fieldMaxSteps)}>
+                        <Input
+                          type="number"
+                          mono
+                          min={1}
+                          max={50}
+                          value={row.maxExecutionSteps}
+                          disabled={busy}
+                          placeholder={t(C.fieldMaxStepsPlaceholder)}
+                          onChange={(e) => patch({ maxExecutionSteps: e.target.value })}
+                        />
+                      </Field>
+                    </div>
+                  ) : null}
                   <Field label={t(C.fieldDescription)}>
                     <Input
                       type="text"

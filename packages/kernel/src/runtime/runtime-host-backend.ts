@@ -76,6 +76,7 @@ export function createPluginHostBackend(runtime: RuntimeHostBackendSource): Plug
     getConversationDetail: (id, options) => runtime.conversations.getConversationDetail(id, options),
     getConversationSubmission: (id, requestId) => runtime.conversations.getConversationSubmission(id, requestId),
     updateConversation: (id, patch) => runtime.conversations.updateConversation(id, patch),
+    setConversationRuntimeModel: (id, target) => runtime.conversations.setConversationRuntimeModel(id, target),
     abortConversation: (id) => runtime.conversations.abortConversation(id),
     abortConversationGuarded: (id, guard) => runtime.conversations.abortConversationGuarded(id, guard),
     deleteConversationGuarded: (id, guard, opts) => runtime.conversations.deleteConversationGuarded(id, guard, opts),

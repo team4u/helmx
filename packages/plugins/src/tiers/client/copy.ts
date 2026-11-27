@@ -78,6 +78,27 @@ export const TIERS_COPY = {
   toolStatusRunning: { en: 'Switching', 'zh-CN': '切换中' },
   toolStatusDone: { en: 'Switched', 'zh-CN': '已切换' },
   toolStatusError: { en: 'Failed', 'zh-CN': '失败' },
+  tierKindSingle: { en: 'Single model', 'zh-CN': '单模型' },
+  tierKindOrchestrator: { en: 'Dual-phase (Planner -> Executor)', 'zh-CN': '双相编排（规划 -> 执行）' },
+  tierKindAria: { en: 'Tier mode', 'zh-CN': '档位模式' },
+  fieldPlannerModel: { en: 'Planner model & thinking level', 'zh-CN': '规划模型（Planner）与思考档位' },
+  fieldExecutorModel: { en: 'Executor model & thinking level', 'zh-CN': '执行模型（Executor）与思考档位' },
+  fieldMaxSteps: { en: 'Max execution steps', 'zh-CN': '最大执行步数' },
+  fieldMaxStepsPlaceholder: { en: '10', 'zh-CN': '10' },
+  errExecutorRequired: {
+    en: 'Dual-phase tiers must bind an Executor model before saving.',
+    'zh-CN': '双相编排档位保存前必须绑定执行模型（Executor）。',
+  },
+  errMaxStepsInvalid: {
+    en: 'Max execution steps must be an integer between 1 and 50.',
+    'zh-CN': '最大执行步数必须为 1 到 50 之间的整数。',
+  },
+  orchestratorPillPlanning: { en: 'Planning:', 'zh-CN': '规划中:' },
+  orchestratorPillExecuting: { en: 'Executing:', 'zh-CN': '执行中:' },
+  toolExitPlanTitle: { en: 'Enter execution phase', 'zh-CN': '切换执行阶段' },
+  toolHandBackTitle: { en: 'Hand back to planner', 'zh-CN': '交回规划阶段' },
+  toolOrchPhaseExec: { en: 'Executor', 'zh-CN': '执行' },
+  toolOrchPhasePlan: { en: 'Planner', 'zh-CN': '规划' },
 } as const satisfies Record<string, LocalizedText>
 
 export const tiersTemplateDeleteConfirmBody = (name: string, id: string, locale: HelmxLocale): string =>
@@ -121,6 +142,40 @@ export const switchModelSummaryLabel = (
       : `Switched to ${target} (auto-restores after turn)`
   }
   return locale === 'zh-CN' ? `永久切换到 ${target}` : `Permanently switched to ${target}`
+}
+
+export const orchestratorPillTitle = (
+  tierId: string,
+  phase: 'planning' | 'execution',
+  plannerModel: string,
+  executorModel: string,
+  steps: number,
+  maxSteps: number,
+  locale: HelmxLocale,
+): string => {
+  if (locale === 'zh-CN') {
+    const phaseLabel = phase === 'execution' ? `执行阶段（${steps}/${maxSteps} 步）` : '规划阶段'
+    return `双相编排 tier/${tierId} · ${phaseLabel}（Planner: ${plannerModel} / Executor: ${executorModel}）`
+  }
+  const phaseLabel = phase === 'execution' ? `Execution (${steps}/${maxSteps} steps)` : 'Planning'
+  return `Dual-phase tier/${tierId} · ${phaseLabel} (Planner: ${plannerModel} / Executor: ${executorModel})`
+}
+
+export const orchestratorTransitionSummary = (
+  tool: 'exit_plan_mode' | 'hand_back_to_planner',
+  toModelShort: string,
+  reason: string | undefined,
+  locale: HelmxLocale,
+): string => {
+  if (tool === 'exit_plan_mode') {
+    return locale === 'zh-CN'
+      ? `切换至执行模型 ${toModelShort}`
+      : `Switched to executor ${toModelShort}`
+  }
+  const base = locale === 'zh-CN'
+    ? `交回规划模型 ${toModelShort}`
+    : `Returned to planner ${toModelShort}`
+  return reason !== undefined && reason !== '' ? `${base} · ${reason}` : base
 }
 
 const ZH_PICKER_COPY: Partial<ModelPickerControlCopy> = {

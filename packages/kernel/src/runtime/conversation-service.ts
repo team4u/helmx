@@ -40,7 +40,7 @@ import { readWorkspaceFile, type ConversationFileContent } from './workspace-fil
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
 import { requireConv } from './conversation-require.js'
-import type { ResolvedModelRef } from './models.js'
+import type { ModelRefResolutionMode, ResolvedModelRef } from './models.js'
 import type { HelmxStore } from './store.js'
 import {
   ConversationAttachments,
@@ -111,7 +111,9 @@ interface ConversationServiceOptions {
   readonly models: () => Models
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
   /** Optional model-reference resolver (`ModelRegistry.resolveModelRef`); dereferences `tier/<id>` into concrete model + tier preset thinking level. */
-  readonly resolveModelRef?: (ref: string) => ResolvedModelRef
+  readonly resolveModelRef?: (ref: string, opts?: { mode?: ModelRefResolutionMode }) => ResolvedModelRef
+  /** Live working-state probe so alignment avoids overriding active runtime models on orchestrator turns. */
+  readonly isConversationWorking?: (id: number) => boolean
   /** Disabled-model preflight check (ModelRegistry.assertModelEnabled; rejects selection and submission of disabled models). */
   readonly assertModelEnabled: (provider: string, modelId: string) => void
   /**
@@ -209,6 +211,7 @@ export class ConversationService {
       parseModelRefOrThrow: this.o.parseModelRefOrThrow,
       resolveModelRef: this.o.resolveModelRef,
       summaryWithOwnership: (id) => this.summaryWithOwnership(id),
+      isConversationWorking: this.o.isConversationWorking,
       // Context window and thresholds may change after model/Profile alignment: trigger context usage recalculation.
       scheduleContextUsageRefresh: (id) => this.tracker.scheduleContextUsageRefresh(id),
     })
@@ -265,7 +268,8 @@ export class ConversationService {
       resolveAuthorizedAttachments: (convId, ids) => this.attachments.resolveAuthorizedAttachments(convId, ids),
       buildAttachmentContent: (effectiveText, resolved, options) =>
         this.attachments.buildAttachmentContent(effectiveText, resolved, options),
-      resolveEffectiveModel: (override, profileId) => this.profileAlignment.resolveEffectiveModel(override, profileId),
+      resolveEffectiveModelDetails: (override, profileId, mode) =>
+        this.profileAlignment.resolveEffectiveModelDetails(override, profileId, undefined, mode),
       parseModelRefOrThrow: this.o.parseModelRefOrThrow,
       assertModelEnabled: this.o.assertModelEnabled,
       supersedePendingAsks: this.o.supersedePendingAsks,
@@ -414,12 +418,33 @@ export class ConversationService {
   async resolveEffectiveModelDetails(
     override: string | undefined,
     profileId: string,
+    mode?: ModelRefResolutionMode,
   ): Promise<ResolvedModelRef | undefined> {
-    return this.profileAlignment.resolveEffectiveModelDetails(override, profileId)
+    return this.profileAlignment.resolveEffectiveModelDetails(override, profileId, undefined, mode)
   }
 
-  async resolveEffectiveModel(override: string | undefined, profileId: string): Promise<string | undefined> {
-    return this.profileAlignment.resolveEffectiveModel(override, profileId)
+  async resolveEffectiveModel(
+    override: string | undefined,
+    profileId: string,
+    mode?: ModelRefResolutionMode,
+  ): Promise<string | undefined> {
+    return this.profileAlignment.resolveEffectiveModel(override, profileId, mode)
+  }
+
+  async setConversationRuntimeModel(
+    id: number,
+    target: { model: string; thinkingLevel?: string },
+  ): Promise<ConversationSummary> {
+    this.assertWritable()
+    return this.withMutationGate(id, () =>
+      this.profileAlignment.withConversationChange(id, () =>
+        this.lifecycle.setConversationRuntimeModel(id, target),
+      ),
+    )
+  }
+
+  async alignRuntimeModelOnRunEnd(id: number): Promise<void> {
+    return this.profileAlignment.alignRuntimeModelOnRunEnd(id)
   }
 
   async resolveEffectiveThinkingLevel(

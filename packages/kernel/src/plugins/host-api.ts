@@ -366,6 +366,21 @@ export function wrapHostApi(
       );
     },
     updateConversation: (id, patch) => tracked('host.updateConversation', () => backend.updateConversation(id, patch)),
+    setConversationRuntimeModel: (id, target) => {
+      guard('host.setConversationRuntimeModel');
+      const port = backend.setConversationRuntimeModel;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired runtime model switching (host.setConversationRuntimeModel)',
+          501,
+          { conversationId: id },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.setConversationRuntimeModel', () =>
+        Promise.resolve(port(id, target)),
+      );
+    },
     abortConversation: (id) => tracked('host.abortConversation', () => backend.abortConversation(id)),
     abortConversationGuarded: (id, mutationGuard) => {
       guard('host.abortConversationGuarded');

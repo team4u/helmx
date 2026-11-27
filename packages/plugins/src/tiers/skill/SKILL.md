@@ -11,8 +11,8 @@ Model tiers decouple **semantic capability tiers** (`tier/<id>`) from **concrete
 ## Core Mechanics
 
 1. **Symbolic in configuration & scripts, frozen on live instances**:
-   - Saved workflow scripts, `Profile.model`, global `defaultModel`, and `compactionModel` may store `tier/<id>` symbolically so switching a tier binding or applying a preset template upgrades future runs immediately.
-   - When a conversation, subagent, or worker is created (or explicitly switched to a tier), Helmx resolves `tier/<id>` once and freezes the concrete `provider/model` + preset `thinkingLevel` onto that instance. This protects Prompt Cache hit rates and guarantees deterministic resume/reattach.
+   - Saved workflow scripts, `Profile.model`, global `defaultModel`, and `compactionModel` may store single-model `tier/<id>` references symbolically so switching a tier binding or applying a preset template upgrades future runs immediately. (Dual-phase `orchestrator` tiers are reserved exclusively for top-level human sessions, never appear in `<available_model_tiers>`, and cannot be passed to `subagent`, `workflow`, `swarm`, `compactionModel`, or `switch_model`; child conversations inheriting a Profile bound to an orchestrator tier automatically resolve to its concrete `executorModel`.)
+   - When a conversation, subagent, or worker is created (or explicitly switched to a single tier), Helmx resolves `tier/<id>` once and freezes the concrete `provider/model` + preset `thinkingLevel` onto that instance. This protects Prompt Cache hit rates and guarantees deterministic resume/reattach.
 2. **Honest failure (never silent fallback)**:
    - If a referenced tier is missing or its underlying concrete model is disabled, execution fails explicitly (`404 model_tier_not_found` / `409 model_disabled`) instead of silently falling back to an unintended default model.
 3. **Native runtimes only**:

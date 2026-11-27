@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
-import { MODEL_TIER_PREFIX, type HostModelEntry, type ModelTierCatalogEntry } from '@helmx/protocol/browser'
+import { MODEL_TIER_PREFIX, isOrchestratorTier, type HostModelEntry, type ModelTierCatalogEntry } from '@helmx/protocol/browser'
 import {
   ComposerModelPickerModeContext,
   type ComposerModelPickerModeRegistration,
@@ -167,13 +167,19 @@ function ModelPickerTierRow({
   onSelect,
 }: ModelPickerTierRowProps): ReactNode {
   const tierRef = `${MODEL_TIER_PREFIX}/${tier.id}`
+  const orchestrator = isOrchestratorTier(tier)
   const targetShort = formatModelShortName(tier.model)
+  const executorShort = orchestrator ? formatModelShortName(tier.executorModel) : ''
   // The badge shows the level the kernel will actually run: a preset the
   // target model does not support clamps the same way as the trigger.
   const tierPresetBadge =
     tier.thinkingLevel !== undefined && tier.thinkingLevel !== ''
       ? resolveEffectiveThinkingLevel(tier.thinkingLevels ?? [tier.thinkingLevel], tier.thinkingLevel)
       : ''
+  const titleModel = orchestrator && tier.executorModel !== undefined && tier.executorModel !== ''
+    ? `${tier.model} -> ${tier.executorModel}`
+    : tier.model
+  const subtitle = tier.description || titleModel
 
   return (
     <div
@@ -185,20 +191,33 @@ function ModelPickerTierRow({
       <button
         type="button"
         className="composer-model-row-main"
-        title={formatModelPickerCopy(copy.tierRowTitle, { tier: tierRef, model: tier.model })}
+        title={formatModelPickerCopy(copy.tierRowTitle, { tier: tierRef, model: titleModel })}
         disabled={disabled}
         aria-current={isCurrent ? 'true' : undefined}
         onClick={() => onSelect(tierRef, null)}
       >
         <span className="composer-model-row-name-line">
-          <HelmxIcon name="layers" size={12} className="composer-model-tier-icon" />
+          <HelmxIcon name={orchestrator ? 'workflow' : 'layers'} size={12} className="composer-model-tier-icon" />
           <span className="mono composer-model-row-name">{tierRef}</span>
-          <span className="popover-item-meta">· {targetShort}</span>
+          {orchestrator ? (
+            <span className="popover-item-meta">
+              {' · '}
+              {targetShort}
+              {' -> '}
+              {executorShort}
+            </span>
+          ) : (
+            <span className="popover-item-meta">· {targetShort}</span>
+          )}
           {isCurrent ? <HelmxIcon name="check" size={12} className="composer-model-row-check" /> : null}
         </span>
-        <span className="popover-item-meta composer-model-row-source">{tier.description || tier.model}</span>
+        <span className="popover-item-meta composer-model-row-source">{subtitle}</span>
       </button>
-      {tierPresetBadge !== '' ? <span className="badge badge-neutral">{tierPresetBadge}</span> : null}
+      {orchestrator ? (
+        <span className="badge badge-accent">auto</span>
+      ) : tierPresetBadge !== '' ? (
+        <span className="badge badge-neutral">{tierPresetBadge}</span>
+      ) : null}
     </div>
   )
 }
@@ -418,6 +437,8 @@ export interface ModelPickerControlProps {
   showThinkingLevels?: boolean
   /** Include mounted runtime model tiers (`tier/<id>`) at the top of the picker (default `true`; pass `false` when selecting concrete models only). */
   allowTiers?: boolean
+  /** Include human-only dual-phase orchestrator tiers (`kind: 'orchestrator'`) when `allowTiers` is enabled (default `false`). */
+  allowOrchestratorTiers?: boolean
   disabled?: boolean
   pending?: boolean
   /**
@@ -460,6 +481,7 @@ export function ModelPickerControl({
   enableRegisteredModes = false,
   showThinkingLevels = true,
   allowTiers = true,
+  allowOrchestratorTiers = false,
   disabled = false,
   pending = false,
   onNotice,
@@ -584,13 +606,16 @@ export function ModelPickerControl({
       }
     }
     const queryLower = query.toLowerCase()
+    const canShowOrchestratorTiers = allowOrchestratorTiers && activeMode === null
     const nextTiers = rawTiers.filter((tier) => {
       if (!tier.available || tier.disabled === true) return false
+      if (isOrchestratorTier(tier) && !canShowOrchestratorTiers) return false
       if (queryLower === '') return true
       const tierRef = `${MODEL_TIER_PREFIX}/${tier.id}`
       return (
         tierRef.toLowerCase().includes(queryLower) ||
         tier.model.toLowerCase().includes(queryLower) ||
+        (tier.executorModel?.toLowerCase().includes(queryLower) ?? false) ||
         (tier.description?.toLowerCase().includes(queryLower) ?? false)
       )
     })
@@ -603,7 +628,7 @@ export function ModelPickerControl({
     ]
     const nextUnavailable =
       models.every((model) => !model.available || model.disabled === true) &&
-      rawTiers.every((tier) => !tier.available || tier.disabled === true)
+      rawTiers.every((tier) => !tier.available || tier.disabled === true || (isOrchestratorTier(tier) && !canShowOrchestratorTiers))
     const filteredKeys = nextNavItems.map((item) => item.id).join('|')
     return {
       filteredTiers: nextTiers,
@@ -613,7 +638,7 @@ export function ModelPickerControl({
       initialActiveIndex: initialModelActiveIndex(nextNavItems, query),
       allUnavailable: nextUnavailable,
     }
-  }, [open, query, rawTiers, models])
+  }, [open, query, rawTiers, models, allowOrchestratorTiers, activeMode])
   const [activeIndex, setActiveIndex] = useState(-1)
 
   useEffect(() => {

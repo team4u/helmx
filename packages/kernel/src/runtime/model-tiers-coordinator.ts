@@ -4,9 +4,16 @@
  * and conversation alignments with structured diagnostics.
  */
 import type { ModelTiersCapability, ModelTierSpec, ProvidedCapability } from '@helmx/protocol'
-import { HelmxError, MODEL_TIER_PREFIX, isValidModelTierId } from '@helmx/protocol'
+import {
+  HelmxError,
+  MODEL_TIER_PREFIX,
+  ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS,
+  ORCHESTRATOR_TIER_MAX_STEPS_LIMIT,
+  isOrchestratorTier,
+  isValidModelTierId,
+} from '@helmx/protocol'
 import type { KernelDiagnosticEmitter } from './diagnostics.js'
-import type { ResolvedModelRef } from './models.js'
+import type { ModelRefResolutionMode, ResolvedModelRef } from './models.js'
 import { parseModelRefOrThrow } from './model-config-helpers.js'
 
 const MODEL_TIERS_CAPABILITY_ID = 'helmx.model-tiers'
@@ -163,7 +170,7 @@ export class ModelTiersCoordinator {
         if (!isValidModelTierId(id) || spec === null || typeof spec !== 'object' || typeof spec.model !== 'string') {
           continue
         }
-        result[id] = {
+        const base: ModelTierSpec = {
           model: spec.model,
           ...(typeof spec.thinkingLevel === 'string' && spec.thinkingLevel !== ''
             ? { thinkingLevel: spec.thinkingLevel }
@@ -172,6 +179,27 @@ export class ModelTiersCoordinator {
             ? { description: spec.description }
             : {}),
         }
+        if (isOrchestratorTier(spec)) {
+          if (typeof spec.executorModel !== 'string' || spec.executorModel === '') continue
+          const maxSteps =
+            typeof spec.maxExecutionSteps === 'number' &&
+            Number.isInteger(spec.maxExecutionSteps) &&
+            spec.maxExecutionSteps >= 1 &&
+            spec.maxExecutionSteps <= ORCHESTRATOR_TIER_MAX_STEPS_LIMIT
+              ? spec.maxExecutionSteps
+              : ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS
+          result[id] = {
+            ...base,
+            kind: 'orchestrator',
+            executorModel: spec.executorModel,
+            ...(typeof spec.executorThinkingLevel === 'string' && spec.executorThinkingLevel !== ''
+              ? { executorThinkingLevel: spec.executorThinkingLevel }
+              : {}),
+            maxExecutionSteps: maxSteps,
+          }
+          continue
+        }
+        result[id] = base
       }
     }
     return result
@@ -181,9 +209,11 @@ export class ModelTiersCoordinator {
    * Single authoritative model-reference resolver:
    * - Concrete `'provider/modelId'` passes through unchanged;
    * - `'tier/<id>'` resolves against mounted runtime tiers, failing explicitly with `404 model_tier_not_found`
-   *   when unconfigured/disabled and rejecting nested `tier -> tier` chains with `400 validation_error`.
+   *   when unconfigured/disabled and rejecting nested `tier -> tier` chains with `400 validation_error`;
+   * - Dual-phase `'orchestrator'` tiers reject `'single_only'` with `400 orchestrator_tier_human_only`, unwrap
+   *   to concrete executor for `'subagent_inherit'`, and preserve planner + executor metadata for `'human_conversation'`.
    */
-  resolveModelRef(ref: string): ResolvedModelRef {
+  resolveModelRef(ref: string, opts?: { mode?: ModelRefResolutionMode }): ResolvedModelRef {
     const parsed = parseModelRefOrThrow(ref)
     if (parsed.provider !== MODEL_TIER_PREFIX) {
       return {
@@ -210,6 +240,47 @@ export class ModelTiersCoordinator {
         { tierId: parsed.modelId, target: tier.model },
       )
     }
+    if (!isOrchestratorTier(tier)) {
+      return {
+        provider: target.provider,
+        modelId: target.modelId,
+        canonicalRef: `${target.provider}/${target.modelId}`,
+        tierId: parsed.modelId,
+        ...(tier.thinkingLevel !== undefined && tier.thinkingLevel !== ''
+          ? { tierThinkingLevel: tier.thinkingLevel }
+          : {}),
+      }
+    }
+
+    const execTarget = parseModelRefOrThrow(tier.executorModel ?? '')
+    if (execTarget.provider === MODEL_TIER_PREFIX) {
+      throw new HelmxError(
+        'validation_error',
+        `Model tier '${ref}' cannot target another model tier '${tier.executorModel}' as executor`,
+        400,
+        { tierId: parsed.modelId, target: tier.executorModel },
+      )
+    }
+
+    const mode: ModelRefResolutionMode = opts?.mode ?? 'single_only'
+    if (mode === 'single_only') {
+      throw new HelmxError(
+        'orchestrator_tier_human_only',
+        `Model tier '${ref}' is an orchestrator tier restricted to top-level human conversations`,
+        400,
+        { tierId: parsed.modelId, ref },
+      )
+    }
+    if (mode === 'subagent_inherit') {
+      return {
+        provider: execTarget.provider,
+        modelId: execTarget.modelId,
+        canonicalRef: `${execTarget.provider}/${execTarget.modelId}`,
+        ...(tier.executorThinkingLevel !== undefined && tier.executorThinkingLevel !== ''
+          ? { tierThinkingLevel: tier.executorThinkingLevel }
+          : {}),
+      }
+    }
     return {
       provider: target.provider,
       modelId: target.modelId,
@@ -217,6 +288,11 @@ export class ModelTiersCoordinator {
       tierId: parsed.modelId,
       ...(tier.thinkingLevel !== undefined && tier.thinkingLevel !== ''
         ? { tierThinkingLevel: tier.thinkingLevel }
+        : {}),
+      isOrchestratorTier: true,
+      executorCanonicalRef: `${execTarget.provider}/${execTarget.modelId}`,
+      ...(tier.executorThinkingLevel !== undefined && tier.executorThinkingLevel !== ''
+        ? { executorThinkingLevel: tier.executorThinkingLevel }
         : {}),
     }
   }

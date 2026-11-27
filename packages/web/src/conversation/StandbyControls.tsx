@@ -78,6 +78,7 @@ export function StandbyModelPicker({
       activeThinkingLevel={effectiveThinkingLevel}
       fallbackPanel={isSplit ? 'split' : 'primary'}
       enableRegisteredModes={true}
+      allowOrchestratorTiers={true}
       resetLabel={
         profile.model !== undefined && profile.model !== ''
           ? t('composer.model.followProfileDefaultModel', { model: profile.model })

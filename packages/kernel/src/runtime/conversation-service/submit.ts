@@ -17,7 +17,8 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
 import type { GuardedMutationExpectation } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, MODEL_TIER_PREFIX } from '@helmx/protocol'
+import type { ResolvedModelRef, ModelRefResolutionMode } from '../models.js'
 import type { ConversationAttachments } from '../conversation-attachments.js'
 import type { ConversationInputPipeline } from '../conversation-input.js'
 import type { SubmitInputOptions } from '../conversation-input.js'
@@ -33,8 +34,12 @@ export interface ConversationSubmitHost {
   readonly inputPipeline: ConversationInputPipeline
   readonly resolveAuthorizedAttachments: ConversationAttachments['resolveAuthorizedAttachments']
   readonly buildAttachmentContent: ConversationAttachments['buildAttachmentContent']
-  /** Model resolution chain (profile / override → effective model ref). */
-  readonly resolveEffectiveModel: (override: string | undefined, profileId: string) => Promise<string | undefined>
+  /** Model resolution chain (profile / override → effective model details). */
+  readonly resolveEffectiveModelDetails: (
+    override: string | undefined,
+    profileId: string,
+    mode?: ModelRefResolutionMode,
+  ) => Promise<ResolvedModelRef | undefined>
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
   /** Disabled-model preflight check (ModelRegistry.assertModelEnabled). */
   readonly assertModelEnabled: (provider: string, modelId: string) => void
@@ -103,8 +108,13 @@ export class ConversationSubmit {
       }
     }
 
-    const effectiveModelRef = await host.resolveEffectiveModel(convMeta.modelOverride, convMeta.profileId)
-    if (!effectiveModelRef) {
+    const isTopLevelHuman = convMeta.parentConversationId === undefined && (convMeta.ownedBy ?? 'human') === 'human'
+    const effectiveDetails = await host.resolveEffectiveModelDetails(
+      convMeta.modelOverride,
+      convMeta.profileId,
+      isTopLevelHuman ? 'human_conversation' : 'subagent_inherit',
+    )
+    if (!effectiveDetails) {
       throw new HelmxError(
         'model_not_configured',
         `no model configured for conversation ${id} (profile ${convMeta.profileId}) or globally: configure a model on the Profile, HELMX_MODEL, config.json.model, or conversation`,
@@ -112,9 +122,10 @@ export class ConversationSubmit {
         { conversationId: id, profileId: convMeta.profileId },
       )
     }
-    {
-      const effectiveRef = host.parseModelRefOrThrow(effectiveModelRef)
-      host.assertModelEnabled(effectiveRef.provider, effectiveRef.modelId)
+    if (effectiveDetails.tierId !== undefined) {
+      host.assertModelEnabled(MODEL_TIER_PREFIX, effectiveDetails.tierId)
+    } else {
+      host.assertModelEnabled(effectiveDetails.provider, effectiveDetails.modelId)
     }
 
     // Fast pre-check before async rewind validation, attachment IO, and input hooks.

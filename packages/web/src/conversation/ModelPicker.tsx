@@ -27,11 +27,18 @@ export function ModelPicker({ conversation, onReturnFocus }: ModelPickerProps) {
   const { copy, onNotice } = useModelPickerControlAdapter(conversation.id)
   const [pending, setPending] = useState(false)
 
+  const displayEffectiveModel =
+    conversation.modelTier !== undefined && conversation.modelTier !== ''
+      ? conversation.modelTier
+      : conversation.model
+  const allowOrchestratorTiers =
+    conversation.parentConversationId === undefined && (conversation.ownedBy ?? 'human') === 'human'
+
   const apply = async (model: string, level: string | null): Promise<void> => {
     // Same model + null level only clears the thinking override (back to the
     // default chain); a model switch without an explicit level lets the kernel
     // drop the stale override automatically.
-    const sameModel = model === conversation.model
+    const sameModel = model === displayEffectiveModel
     const body = sameModel
       ? { thinkingLevel: level ?? '' }
       : level === null
@@ -75,16 +82,23 @@ export function ModelPicker({ conversation, onReturnFocus }: ModelPickerProps) {
   const supportsThinking = currentLevels.some((level) => level !== 'off')
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, conversation.thinkingLevel)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
+  const titleModel =
+    conversation.modelTier !== undefined &&
+    conversation.modelTier !== '' &&
+    conversation.model !== ''
+      ? `${conversation.modelTier} (${conversation.model})`
+      : displayEffectiveModel
 
   return (
     <ModelPickerControl
-      effectiveModel={conversation.model}
+      effectiveModel={displayEffectiveModel}
       activeThinkingLevel={conversation.thinkingLevel}
       enableRegisteredModes={true}
+      allowOrchestratorTiers={allowOrchestratorTiers}
       resetLabel={t('composer.model.clearOverride')}
       resetTitle={t('composer.model.clearOverride')}
       buttonTitle={t('composer.model.currentTitle', {
-        model: conversation.model,
+        model: titleModel,
         thinking: showLevel ? t('composer.model.thinkingSuffix', { level: effectiveLevel }) : '',
         shortcut: COMPOSER_SHORTCUTS.toggleModelPicker,
       })}

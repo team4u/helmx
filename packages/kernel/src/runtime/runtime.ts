@@ -234,7 +234,7 @@ export class KernelRuntime {
     this.init.setCompactionModelResolver(() => ({
       model: this.models.defaultCompactionModel,
       thinkingLevel: this.models.defaultCompactionThinkingLevel,
-      resolveModelRef: (ref) => this.models.resolveModelRef(ref),
+      resolveModelRef: (ref, opts) => this.models.resolveModelRef(ref, opts),
       modelThinkingLevel: (providerId, modelId) =>
         this.models.modelThinkingLevelOf({ provider: providerId, modelId }),
       isDisabled: (providerId, modelId) => this.models.isModelDisabled(providerId, modelId),

@@ -89,6 +89,10 @@ interface HookBridgeOptions {
   readonly artifacts: {
     spill(conversationId: number, id: string, text: string): Promise<{ artifact?: unknown; text: string }>
   }
+  /** Optional `afterResponse` boundary callback to restore planner runtime model before queued `followUp` turns start. */
+  readonly onAfterRunBoundary?: (conversationId: number) => Promise<void>
+  /** Optional diagnostic sink for non-fatal hook bridge boundary errors. */
+  readonly onHookDiagnostic?: (info: { source: string; message: string; error: unknown }) => void
 }
 
 export class HookBridge {
@@ -180,6 +184,30 @@ export class HookBridge {
               const summary = this.options.safeSummary(conversationId)
               if (!summary) return undefined
               return this.transformBeforeTurn(request, summary, conversationId)
+            },
+            afterResponse: (message, api) => {
+              const hasToolCalls =
+                message.stopReason === 'toolUse' &&
+                message.content.some((part) => part.type === 'toolCall')
+              if (hasToolCalls) return
+              if (
+                message.stopReason !== 'stop' &&
+                message.stopReason !== 'length' &&
+                message.stopReason !== 'toolUse'
+              ) {
+                return
+              }
+              const summary = this.options.safeSummary(api.conversationId)
+              if (summary?.modelTier === undefined || summary.modelTier === '') return
+              return this.options
+                .onAfterRunBoundary?.(api.conversationId)
+                .catch((error) => {
+                  this.options.onHookDiagnostic?.({
+                    source: 'hook_bridge.after_response',
+                    message: `failed to reset orchestrator runtime model before run end (conversation ${api.conversationId})`,
+                    error,
+                  })
+                })
             },
           }),
         ],

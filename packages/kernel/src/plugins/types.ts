@@ -148,6 +148,8 @@ export interface PluginHostBackend
   listModels?(): Promise<ModelCatalog>
   /** Optional: full-text search across conversations (501 when unwired). */
   searchConversations?: HelmxHostApi['searchConversations']
+  /** Optional: switch runtime SDK model/thinkingLevel without altering override/tier/stateChangeSeq (501 when unwired). */
+  setConversationRuntimeModel?: HelmxHostApi['setConversationRuntimeModel']
 }
 
 export interface PluginHostOptions {

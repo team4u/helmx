@@ -390,9 +390,10 @@ export class RuntimeAgentSpawn {
       resolveModel: () =>
         resolveDefaultModelRef(
           this.deps.models.defaultModel,
-          (ref) => this.deps.models.resolveModelRef(ref),
+          (ref, opts) => this.deps.models.resolveModelRef(ref, opts),
+          { mode: 'subagent_inherit' },
         ),
-      resolveModelRef: (ref) => this.deps.models.resolveModelRef(ref),
+      resolveModelRef: (ref, opts) => this.deps.models.resolveModelRef(ref, opts),
       assertModelEnabled: (provider, modelId) => this.deps.models.assertModelEnabled(provider, modelId),
       resolveThinkingLevel: () => this.deps.models.defaultThinkingLevel,
       modelThinkingLevelOf: (ref) => this.deps.models.modelThinkingLevelOf(ref),
@@ -450,6 +451,7 @@ export class RuntimeAgentSpawn {
           explicitModelOverride,
           forkSameProfile,
           parentMeta?.modelOverride,
+          parentMeta?.modelTier,
         )
         const now = Date.now()
         const normalizedTitle = normalizeSpawnTitle(

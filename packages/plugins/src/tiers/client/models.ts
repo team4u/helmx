@@ -5,6 +5,8 @@ export const TIERS_PLUGIN_ID = 'builtin:tiers' as const
 export const TIERS_STATE_DOC = 'state' as const
 export const TIERS_SCREEN_ID = 'main' as const
 const TIER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
+export const ORCHESTRATOR_DEFAULT_MAX_STEPS = 10
+export const ORCHESTRATOR_MAX_STEPS_LIMIT = 50
 
 export interface TierTemplateView {
   id: string
@@ -17,8 +19,12 @@ export interface TierTemplateView {
 export interface TierDraftRow {
   key: string
   id: string
+  kind: 'single' | 'orchestrator'
   model: string
   thinkingLevel: string
+  executorModel: string
+  executorThinkingLevel: string
+  maxExecutionSteps: string
   description: string
 }
 
@@ -36,10 +42,30 @@ export function parseTiersStateDoc(raw: unknown): ParsedTiersDoc {
   if (isRecord(raw.tiers)) {
     for (const [id, rawSpec] of Object.entries(raw.tiers)) {
       if (!isRecord(rawSpec) || typeof rawSpec.model !== 'string') continue
-      tiers[id] = {
+      const base: ModelTierSpec = {
         model: rawSpec.model,
         ...(typeof rawSpec.thinkingLevel === 'string' && rawSpec.thinkingLevel ? { thinkingLevel: rawSpec.thinkingLevel } : {}),
         ...(typeof rawSpec.description === 'string' && rawSpec.description ? { description: rawSpec.description } : {}),
+      }
+      if (rawSpec.kind === 'orchestrator' && typeof rawSpec.executorModel === 'string' && rawSpec.executorModel) {
+        const steps =
+          typeof rawSpec.maxExecutionSteps === 'number' &&
+          Number.isInteger(rawSpec.maxExecutionSteps) &&
+          rawSpec.maxExecutionSteps >= 1 &&
+          rawSpec.maxExecutionSteps <= ORCHESTRATOR_MAX_STEPS_LIMIT
+            ? rawSpec.maxExecutionSteps
+            : ORCHESTRATOR_DEFAULT_MAX_STEPS
+        tiers[id] = {
+          ...base,
+          kind: 'orchestrator',
+          executorModel: rawSpec.executorModel,
+          ...(typeof rawSpec.executorThinkingLevel === 'string' && rawSpec.executorThinkingLevel
+            ? { executorThinkingLevel: rawSpec.executorThinkingLevel }
+            : {}),
+          maxExecutionSteps: steps,
+        }
+      } else {
+        tiers[id] = base
       }
     }
   }
@@ -68,8 +94,12 @@ export function tiersRecordToDraftRows(tiers: Readonly<Record<string, ModelTierS
   return Object.entries(tiers).map(([id, spec], index) => ({
     key: `saved:${index}:${id}`,
     id,
+    kind: spec.kind === 'orchestrator' ? 'orchestrator' : 'single',
     model: spec.model,
     thinkingLevel: spec.thinkingLevel ?? '',
+    executorModel: spec.executorModel ?? '',
+    executorThinkingLevel: spec.executorThinkingLevel ?? '',
+    maxExecutionSteps: String(spec.maxExecutionSteps ?? ORCHESTRATOR_DEFAULT_MAX_STEPS),
     description: spec.description ?? '',
   }))
 }
@@ -87,8 +117,12 @@ export function buildStarterDraftRows(locale: HelmxLocale): TierDraftRow[] {
   return STARTER_TIERS.map(([id, thinkingLevel, zhDesc, enDesc], idx) => ({
     key: `starter:${idx}:${id}`,
     id,
+    kind: 'single',
     model: '',
     thinkingLevel,
+    executorModel: '',
+    executorThinkingLevel: '',
+    maxExecutionSteps: String(ORCHESTRATOR_DEFAULT_MAX_STEPS),
     description: zh ? zhDesc : enDesc,
   }))
 }
@@ -98,18 +132,39 @@ export function isDraftDirty(draft: ReadonlyArray<TierDraftRow>, saved: Readonly
   if (draft.length !== savedEntries.length) return true
   return draft.some((row, i) => {
     const [savedId, s] = savedEntries[i]!
-    return (
+    const savedKind: 'single' | 'orchestrator' = s.kind === 'orchestrator' ? 'orchestrator' : 'single'
+    if (
       row.id.trim() !== savedId ||
+      row.kind !== savedKind ||
       row.model.trim() !== s.model ||
       row.thinkingLevel.trim() !== (s.thinkingLevel ?? '') ||
       row.description.trim() !== (s.description ?? '')
-    )
+    ) {
+      return true
+    }
+    if (savedKind === 'orchestrator') {
+      const stepsRaw = row.maxExecutionSteps.trim()
+      const parsedSteps = stepsRaw === '' ? ORCHESTRATOR_DEFAULT_MAX_STEPS : Number.parseInt(stepsRaw, 10)
+      return (
+        row.executorModel.trim() !== (s.executorModel ?? '') ||
+        row.executorThinkingLevel.trim() !== (s.executorThinkingLevel ?? '') ||
+        parsedSteps !== (s.maxExecutionSteps ?? ORCHESTRATOR_DEFAULT_MAX_STEPS)
+      )
+    }
+    return false
   })
 }
 
+export type TierDraftValidationError =
+  | 'id_required'
+  | 'duplicate_id'
+  | 'model_required'
+  | 'executor_required'
+  | 'max_steps_invalid'
+
 export function validateDraftRows(
   draft: ReadonlyArray<TierDraftRow>,
-): { ok: true; tiers: Record<string, ModelTierSpec> } | { ok: false; code: 'id_required' | 'duplicate_id' | 'model_required' } {
+): { ok: true; tiers: Record<string, ModelTierSpec> } | { ok: false; code: TierDraftValidationError } {
   const tiers: Record<string, ModelTierSpec> = {}
   for (const row of draft) {
     const id = row.id.trim()
@@ -119,16 +174,57 @@ export function validateDraftRows(
     if (!model.includes('/')) return { ok: false, code: 'model_required' }
     const thinkingLevel = row.thinkingLevel.trim()
     const description = row.description.trim()
+    if (row.kind === 'orchestrator') {
+      const executorModel = row.executorModel.trim()
+      if (!executorModel.includes('/')) return { ok: false, code: 'executor_required' }
+      const executorThinkingLevel = row.executorThinkingLevel.trim()
+      const stepsRaw = row.maxExecutionSteps.trim()
+      let maxExecutionSteps = ORCHESTRATOR_DEFAULT_MAX_STEPS
+      if (stepsRaw !== '') {
+        if (!/^\d+$/.test(stepsRaw)) return { ok: false, code: 'max_steps_invalid' }
+        const parsed = Number.parseInt(stepsRaw, 10)
+        if (parsed < 1 || parsed > ORCHESTRATOR_MAX_STEPS_LIMIT) {
+          return { ok: false, code: 'max_steps_invalid' }
+        }
+        maxExecutionSteps = parsed
+      }
+      tiers[id] = {
+        kind: 'orchestrator',
+        model,
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+        executorModel,
+        ...(executorThinkingLevel ? { executorThinkingLevel } : {}),
+        maxExecutionSteps,
+        ...(description ? { description } : {}),
+      }
+      continue
+    }
     tiers[id] = { model, ...(thinkingLevel ? { thinkingLevel } : {}), ...(description ? { description } : {}) }
   }
   return { ok: true, tiers }
 }
 
-export function resolveTierRowStatus(modelRef: string, models: ReadonlyArray<HostModelEntry>): 'draft' | 'available' | 'disabled' | 'unavailable' {
+function resolveSingleRefStatus(modelRef: string, models: ReadonlyArray<HostModelEntry>): 'draft' | 'available' | 'disabled' | 'unavailable' {
   const trimmed = modelRef.trim()
   if (!trimmed) return 'draft'
   const entry = models.find((m) => m.id === trimmed)
   if (!entry) return 'unavailable'
   if (entry.disabled === true) return 'disabled'
   return entry.available ? 'available' : 'unavailable'
+}
+
+export function resolveTierRowStatus(
+  rowOrModel: string | Pick<TierDraftRow, 'kind' | 'model' | 'executorModel'>,
+  models: ReadonlyArray<HostModelEntry>,
+): 'draft' | 'available' | 'disabled' | 'unavailable' {
+  if (typeof rowOrModel === 'string') {
+    return resolveSingleRefStatus(rowOrModel, models)
+  }
+  const primary = resolveSingleRefStatus(rowOrModel.model, models)
+  if (rowOrModel.kind !== 'orchestrator') return primary
+  const executor = resolveSingleRefStatus(rowOrModel.executorModel, models)
+  if (primary === 'draft' || executor === 'draft') return 'draft'
+  if (primary === 'disabled' || executor === 'disabled') return 'disabled'
+  if (primary === 'unavailable' || executor === 'unavailable') return 'unavailable'
+  return 'available'
 }

@@ -2,8 +2,8 @@
  * Model configuration parsing, validation, and single-source defaults normalization helpers
  * (extracted from `model-registry.ts`).
  */
-import type { ModelCatalog, ModelTierCatalogEntry } from '@helmx/protocol'
-import { HelmxError, MODEL_TIER_PREFIX } from '@helmx/protocol'
+import type { ModelCatalog, ModelTierCatalogEntry, ModelTierSpec } from '@helmx/protocol'
+import { HelmxError, MODEL_TIER_PREFIX, isOrchestratorTier } from '@helmx/protocol'
 import { THINKING_LEVELS } from './models.js'
 
 /**
@@ -144,10 +144,17 @@ export function validateModelThinkingUpdate(
   return { model: update.model, level }
 }
 
+function parseConcreteTarget(ref: string | undefined): { provider: string; modelId: string } | undefined {
+  if (ref === undefined || ref === '') return undefined
+  const slash = ref.indexOf('/')
+  if (slash <= 0 || slash === ref.length - 1) return undefined
+  return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
+}
+
 /** Merge tier entries into an assembled `ModelCatalog`. */
 export function buildModelTierCatalogEntries(
   catalog: ModelCatalog,
-  tiers: Record<string, { model: string; thinkingLevel?: string; description?: string }>,
+  tiers: Record<string, ModelTierSpec>,
   isModelDisabled: (providerId: string, modelId: string) => boolean,
 ): ModelTierCatalogEntry[] {
   const modelMap = new Map<string, (typeof catalog.models)[number]>(
@@ -155,22 +162,49 @@ export function buildModelTierCatalogEntries(
   )
   const modelTiers: ModelTierCatalogEntry[] = []
   for (const [id, spec] of Object.entries(tiers)) {
-    const slash = spec.model.indexOf('/')
-    const targetProvider = slash > 0 ? spec.model.slice(0, slash) : ''
-    const targetModelId = slash > 0 ? spec.model.slice(slash + 1) : ''
-    const disabled = targetProvider !== '' && targetModelId !== ''
-      ? isModelDisabled(targetProvider, targetModelId)
-      : false
-    const targetEntry = modelMap.get(spec.model)
-    const available = targetEntry !== undefined && targetEntry.available === true && !disabled
+    const primaryTarget = parseConcreteTarget(spec.model)
+    const primaryDisabled = primaryTarget !== undefined && isModelDisabled(primaryTarget.provider, primaryTarget.modelId)
+    const primaryEntry = modelMap.get(spec.model)
     const thinkingLevels = catalog.thinkingLevels[spec.model]
+    if (isOrchestratorTier(spec)) {
+      const execRef = spec.executorModel ?? ''
+      const execTarget = parseConcreteTarget(execRef)
+      const execDisabled = execTarget !== undefined && isModelDisabled(execTarget.provider, execTarget.modelId)
+      const execEntry = modelMap.get(execRef)
+      const disabled = primaryDisabled || execDisabled
+      const available =
+        primaryEntry !== undefined &&
+        primaryEntry.available === true &&
+        execEntry !== undefined &&
+        execEntry.available === true &&
+        !disabled
+      const executorThinkingLevels = catalog.thinkingLevels[execRef]
+      modelTiers.push({
+        id,
+        kind: 'orchestrator',
+        model: spec.model,
+        ...(spec.thinkingLevel !== undefined && spec.thinkingLevel !== '' ? { thinkingLevel: spec.thinkingLevel } : {}),
+        executorModel: execRef,
+        ...(spec.executorThinkingLevel !== undefined && spec.executorThinkingLevel !== ''
+          ? { executorThinkingLevel: spec.executorThinkingLevel }
+          : {}),
+        ...(spec.maxExecutionSteps !== undefined ? { maxExecutionSteps: spec.maxExecutionSteps } : {}),
+        ...(spec.description !== undefined && spec.description !== '' ? { description: spec.description } : {}),
+        available,
+        ...(disabled ? { disabled: true } : {}),
+        ...(thinkingLevels !== undefined ? { thinkingLevels } : {}),
+        ...(executorThinkingLevels !== undefined ? { executorThinkingLevels } : {}),
+      })
+      continue
+    }
+    const available = primaryEntry !== undefined && primaryEntry.available === true && !primaryDisabled
     modelTiers.push({
       id,
       model: spec.model,
       ...(spec.thinkingLevel !== undefined && spec.thinkingLevel !== '' ? { thinkingLevel: spec.thinkingLevel } : {}),
       ...(spec.description !== undefined && spec.description !== '' ? { description: spec.description } : {}),
       available,
-      ...(disabled ? { disabled: true } : {}),
+      ...(primaryDisabled ? { disabled: true } : {}),
       ...(thinkingLevels !== undefined ? { thinkingLevels } : {}),
     })
   }

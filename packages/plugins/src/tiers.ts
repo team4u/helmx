@@ -3,7 +3,9 @@ import {
   COMPOSER_TOOLBAR_SLOT,
   HelmxError,
   MODEL_TIER_DESCRIPTION_MAX_LENGTH,
+  ORCHESTRATOR_TIER_MAX_STEPS_LIMIT,
   type ModelCatalog,
+  type ModelTierKind,
   type ModelTiersCapability,
   type ModelTierSpec,
   type PluginDefinition,
@@ -24,38 +26,57 @@ import {
   type SwitchModelToolInput,
 } from './tiers/borrow.js'
 import {
+  createTierOrchestratorManager,
+  type ExitPlanModeToolInput,
+  type HandBackToPlannerToolInput,
+  type OrchBashToolInput,
+} from './tiers/orchestrator.js'
+import {
   MAX_TIERS_COUNT,
   MODEL_TIERS_SKILL_ID,
+  ORCHESTRATOR_BASH_DEFAULT_TIMEOUT_MS,
+  ORCHESTRATOR_BASH_MAX_TIMEOUT_MS,
+  ORCHESTRATOR_TRANSITION_META_SCHEMA,
   SWITCH_MODEL_META_SCHEMA,
   TIERS_BORROW_ELIGIBLE_SCOPE,
   TIERS_BORROW_KV,
   TIERS_BORROW_SESSION_DOC,
+  TIERS_EXIT_PLAN_MODE_TOOL,
+  TIERS_HAND_BACK_TOOL,
   TIERS_INPUT_META_KEY,
+  TIERS_ORCHESTRATOR_KV,
+  TIERS_ORCHESTRATOR_SESSION_DOC,
+  TIERS_ORCH_BASH_TOOL,
   TIERS_PLUGIN_ID,
   TIERS_SCREEN_ID,
   TIERS_STATE_DOC,
   TIERS_SWITCH_MODEL_TOOL,
   TIER_BORROW_SESSION_VIEW_SCHEMA,
+  TIER_ORCHESTRATOR_SESSION_VIEW_SCHEMA,
   TIER_TEMPLATE_DESCRIPTION_MAX_LENGTH,
   TIER_TEMPLATE_NAME_MAX_LENGTH,
   TIER_THINKING_LEVELS,
   createEmptyTiersState,
   isTiersBorrowEligible,
   parseTiersBorrowInputMeta,
+  type OrchestratorTransitionMeta,
   type ParsedTiersBorrowInputMeta,
   type SwitchModelPresentationMeta,
   type TierBorrowPhase,
   type TierBorrowRecord,
   type TierBorrowSessionView,
   type TierBorrowSource,
+  type TierOrchestratorPhase,
+  type TierOrchestratorRecord,
+  type TierOrchestratorSessionView,
   type TierTemplate,
   type TierThinkingLevel,
   type TiersPluginConfig,
   type TiersStateDoc,
 } from './tiers/contracts.js'
 import {
-  assertConcreteModelRef, assertRemovedTiersNotInUse, assertTargetModelNotDisabled, assertTemplateCapacity,
-  assertTemplateId, assertTierId, findTierReferences, normalizeTemplateMeta, normalizeTierSpec,
+  assertConcreteModelRef, assertRemovedTiersNotInUse, assertTemplateCapacity,
+  assertTemplateId, assertTierId, assertTierSpecModelsNotDisabled, findTierReferences, normalizeTemplateMeta, normalizeTierSpec,
   normalizeTiersRecord, projectTierEntries, renderModelTiersCatalogSection, sanitizeStateDoc,
 } from './tiers/validation.js'
 
@@ -70,8 +91,15 @@ export {
   TIERS_SWITCH_MODEL_TOOL,
   TIERS_INPUT_META_KEY,
   TIERS_BORROW_ELIGIBLE_SCOPE,
+  TIERS_ORCHESTRATOR_KV,
+  TIERS_ORCHESTRATOR_SESSION_DOC,
+  TIERS_ORCH_BASH_TOOL,
+  TIERS_EXIT_PLAN_MODE_TOOL,
+  TIERS_HAND_BACK_TOOL,
   TIER_BORROW_SESSION_VIEW_SCHEMA,
+  TIER_ORCHESTRATOR_SESSION_VIEW_SCHEMA,
   SWITCH_MODEL_META_SCHEMA,
+  ORCHESTRATOR_TRANSITION_META_SCHEMA,
   isTiersBorrowEligible,
   parseTiersBorrowInputMeta,
   resolveBorrowTarget,
@@ -84,6 +112,10 @@ export {
   type TierBorrowSource,
   type TierBorrowRecord,
   type TierBorrowSessionView,
+  type TierOrchestratorPhase,
+  type TierOrchestratorRecord,
+  type TierOrchestratorSessionView,
+  type OrchestratorTransitionMeta,
   type SwitchModelPresentationMeta,
   type ParsedTiersBorrowInputMeta,
   type ResolvedBorrowTarget,
@@ -93,14 +125,31 @@ export {
 const ID_PROP = { type: 'string', minLength: 1, maxLength: 63 } as const
 const TIER_SPEC_SCHEMA = {
   type: 'object', required: ['model'], additionalProperties: false,
-  properties: { model: { type: 'string', minLength: 1 }, thinkingLevel: { type: 'string' }, description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH } },
+  properties: {
+    kind: { type: 'string', enum: ['single', 'orchestrator'] },
+    model: { type: 'string', minLength: 1 },
+    thinkingLevel: { type: 'string' },
+    executorModel: { type: 'string', minLength: 1 },
+    executorThinkingLevel: { type: 'string' },
+    maxExecutionSteps: { type: 'integer', minimum: 1, maximum: ORCHESTRATOR_TIER_MAX_STEPS_LIMIT },
+    description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH },
+  },
 } as const
 const TIER_ENTRY_SCHEMA = {
   type: 'object', required: ['id', 'model', 'available'], additionalProperties: false,
   properties: {
-    id: { type: 'string' }, model: { type: 'string' }, thinkingLevel: { type: 'string' },
-    description: { type: 'string' }, available: { type: 'boolean' }, disabled: { type: 'boolean' },
+    id: { type: 'string' },
+    kind: { type: 'string', enum: ['single', 'orchestrator'] },
+    model: { type: 'string' },
+    thinkingLevel: { type: 'string' },
+    executorModel: { type: 'string' },
+    executorThinkingLevel: { type: 'string' },
+    maxExecutionSteps: { type: 'integer' },
+    description: { type: 'string' },
+    available: { type: 'boolean' },
+    disabled: { type: 'boolean' },
     thinkingLevels: { type: 'array', items: { type: 'string' } },
+    executorThinkingLevels: { type: 'array', items: { type: 'string' } },
   },
 } as const
 const TEMPLATE_SCHEMA = {
@@ -145,6 +194,11 @@ export function createTiersPlugin(): PluginDefinition {
         public: true,
         durable: false,
       })
+      const orchestratorKv = ctx.kv<TierOrchestratorRecord>(TIERS_ORCHESTRATOR_KV)
+      const orchestratorDoc = ctx.sessionDoc<TierOrchestratorSessionView | null>(TIERS_ORCHESTRATOR_SESSION_DOC, null, {
+        public: true,
+        durable: false,
+      })
       const tierChangeListeners = new Set<() => Promise<void> | void>()
       let writeChain: Promise<unknown> = Promise.resolve()
       let cachedState: TiersStateDoc | undefined
@@ -164,6 +218,12 @@ export function createTiersPlugin(): PluginDefinition {
         ctx,
         kv: borrowKv,
         borrowDoc,
+        readTiersState: readState,
+      })
+      const orchestratorManager = createTierOrchestratorManager({
+        ctx,
+        kv: orchestratorKv,
+        orchestratorDoc,
         readTiersState: readState,
       })
       const autoInjectEnabled = (): boolean => (ctx.getConfig() as TiersPluginConfig).autoInjectCatalog !== false
@@ -209,7 +269,7 @@ export function createTiersPlugin(): PluginDefinition {
         const current = readState()
         const removed = new Set(Object.keys(current.tiers).filter((id) => !Object.hasOwn(nextTiers, id)))
         const [catalog, profiles] = await Promise.all([ctx.host.listModels(), ctx.host.profiles.list()])
-        for (const spec of Object.values(nextTiers)) assertTargetModelNotDisabled(catalog, spec.model)
+        for (const spec of Object.values(nextTiers)) assertTierSpecModelsNotDisabled(catalog, spec)
         assertRemovedTiersNotInUse(removed, catalog, profiles, opts.force)
         await persist({ tiers: nextTiers, templates: current.templates, ...(opts.activeTemplate ? { activeTemplate: opts.activeTemplate } : {}) })
         return buildListPayload(catalog)
@@ -219,30 +279,37 @@ export function createTiersPlugin(): PluginDefinition {
         id: 'tiers-runtime',
         prepare() {
           borrowManager.setStopping(false)
+          orchestratorManager.setStopping(false)
         },
         async start() {
           borrowManager.setStopping(false)
+          orchestratorManager.setStopping(false)
           cachedState = sanitizeStateDoc(stateDoc.get())
           await ctx.host.skills.ensureSkill(readTiersSkillAsset())
           borrowManager.hydrate()
+          orchestratorManager.hydrate()
           if (Object.keys(readState().tiers).length > 0) await notifyTiersChanged()
         },
         async reconcile() {
           await borrowManager.reconcile()
+          await orchestratorManager.reconcile()
         },
         async stop() {
           await borrowManager.stop()
+          await orchestratorManager.stop()
           await writeChain
           cachedState = undefined
         },
         async inUse() {
           const borrowItems = borrowManager.inUseItems()
-          if (Object.keys(readState().tiers).length === 0) return borrowItems
+          const orchestratorItems = orchestratorManager.inUseItems()
+          if (Object.keys(readState().tiers).length === 0) return [...borrowItems, ...orchestratorItems]
           const [catalog, profiles] = await Promise.all([ctx.host.listModels(), ctx.host.profiles.list()])
-          return [...findTierReferences(catalog, profiles), ...borrowItems]
+          return [...findTierReferences(catalog, profiles), ...borrowItems, ...orchestratorItems]
         },
       })
 
+      ctx.hook.onInput((payload) => orchestratorManager.handleInput(payload), { priority: -150 })
       ctx.hook.onInput((payload) => borrowManager.handleInput(payload), { priority: -200 })
 
       ctx.hook.onBeforeTurn(async (turn) => {
@@ -253,13 +320,22 @@ export function createTiersPlugin(): PluginDefinition {
         return text ? { action: 'transform', value: { ...turn, sections: [...turn.sections, { id: 'tiers.catalog', text }] } } : { action: 'continue' }
       })
 
+      // Run after builtin:plan (-50) so /plan retains precedence, and before profile (-100).
+      ctx.hook.onBeforeTurn((turn) => orchestratorManager.handleBeforeTurn(turn), { priority: -60 })
+
       ctx.hook.onTurnSettled(async (payload) => {
+        await orchestratorManager.handleTurnSettled(payload.conversation.id)
         await borrowManager.handleTurnSettled(payload.conversation.id)
+      })
+
+      ctx.host.onEvent('conversation.upsert', async (payload) => {
+        await orchestratorManager.handleConversationUpsert(payload)
       })
 
       ctx.host.onEvent('conversation.deleted', async (payload) => {
         const conversationId = asDeletedConversationId(payload)
         if (conversationId !== undefined) {
+          await orchestratorManager.handleConversationDeleted(conversationId)
           await borrowManager.handleConversationDeleted(conversationId)
         }
       })
@@ -267,8 +343,89 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.host.onEvent('conversation.entry', async (payload) => {
         const entry = asConversationEntryEvent(payload)
         if (entry !== undefined && entry.kind === 'pi.reset') {
+          await orchestratorManager.handleConversationReset(entry.conversationId)
           await borrowManager.handleConversationReset(entry.conversationId)
         }
+      })
+
+      ctx.tool<OrchBashToolInput>({
+        name: TIERS_ORCH_BASH_TOOL,
+        description:
+          'Execute a read-only inspection shell command on the conversation node during orchestrator planning phase (mutating commands and file redirects are blocked).',
+        promptGuidelines: [
+          'Use orch_bash strictly for read-only codebase inspection during the orchestrator planning phase (e.g., rg, ls, git status, git diff).',
+        ],
+        scope: TIERS_BORROW_ELIGIBLE_SCOPE,
+        inputSchema: {
+          type: 'object',
+          required: ['command'],
+          additionalProperties: false,
+          properties: {
+            command: { type: 'string', minLength: 1, description: 'Read-only shell command to execute' },
+            timeoutMs: {
+              type: 'integer',
+              minimum: 1,
+              maximum: ORCHESTRATOR_BASH_MAX_TIMEOUT_MS,
+              description: `Optional timeout in milliseconds (default ${ORCHESTRATOR_BASH_DEFAULT_TIMEOUT_MS}, max ${ORCHESTRATOR_BASH_MAX_TIMEOUT_MS})`,
+            },
+          },
+        },
+        structuredOutputSchema: {
+          type: 'object',
+          required: ['ok', 'exitCode', 'timedOut', 'output'],
+          properties: {
+            ok: { type: 'boolean' },
+            exitCode: { type: ['number', 'null'] },
+            timedOut: { type: 'boolean' },
+            output: { type: 'string' },
+          },
+        },
+        execute: (input, context) => orchestratorManager.executeOrchBashTool(input, context),
+      })
+
+      ctx.tool<ExitPlanModeToolInput>({
+        name: TIERS_EXIT_PLAN_MODE_TOOL,
+        description:
+          'Finish planning in an orchestrator tier session and switch this conversation in place to the Executor model with workspace write access.',
+        promptGuidelines: [
+          'In an orchestrator tier Planning Phase, call exit_plan_mode({ plan }) once you are ready to implement code changes so control transfers to the Executor model.',
+        ],
+        scope: TIERS_BORROW_ELIGIBLE_SCOPE,
+        inputSchema: {
+          type: 'object',
+          required: ['plan'],
+          additionalProperties: false,
+          properties: {
+            plan: {
+              type: 'string',
+              minLength: 1,
+              description: 'Concrete implementation plan (exact file paths, symbols, steps, and verification commands)',
+            },
+          },
+        },
+        presentationMetaSchema: ORCHESTRATOR_TRANSITION_META_SCHEMA,
+        execute: (input, context) => orchestratorManager.executeExitPlanModeTool(input, context),
+      })
+
+      ctx.tool<HandBackToPlannerToolInput>({
+        name: TIERS_HAND_BACK_TOOL,
+        description:
+          'Return control from the Executor model back to the Planner model inside an orchestrator tier session for replanning or final review.',
+        promptGuidelines: [
+          'In an orchestrator tier Execution Phase, call hand_back_to_planner({ reason, summary }) when blocked, discovering a design flaw, needing architectural arbitration, or reaching the execution step budget.',
+        ],
+        scope: TIERS_BORROW_ELIGIBLE_SCOPE,
+        inputSchema: {
+          type: 'object',
+          required: ['reason', 'summary'],
+          additionalProperties: false,
+          properties: {
+            reason: { type: 'string', minLength: 1, description: 'Concise reason for returning to the planner' },
+            summary: { type: 'string', minLength: 1, description: 'Summary of edits completed, verification outputs, and open issues' },
+          },
+        },
+        presentationMetaSchema: ORCHESTRATOR_TRANSITION_META_SCHEMA,
+        execute: (input, context) => orchestratorManager.executeHandBackTool(input, context),
       })
 
       ctx.tool<SwitchModelToolInput>({
@@ -318,19 +475,45 @@ export function createTiersPlugin(): PluginDefinition {
 
       ctx.action({
         id: 'set',
-        description: 'Create or update one model tier binding (tier/<id> -> concrete provider/model, optional thinkingLevel and description)',
+        description: 'Create or update one model tier binding (tier/<id> -> concrete single model or dual-phase planner/executor pair)',
         exposeToPrompt: false,
         inputSchema: {
           type: 'object', required: ['id', 'model'], additionalProperties: false,
-          properties: { id: ID_PROP, model: { type: 'string', minLength: 1 }, thinkingLevel: { type: 'string', enum: ['', ...TIER_THINKING_LEVELS] }, description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH } },
+          properties: {
+            id: ID_PROP,
+            kind: { type: 'string', enum: ['single', 'orchestrator'] },
+            model: { type: 'string', minLength: 1 },
+            thinkingLevel: { type: 'string', enum: ['', ...TIER_THINKING_LEVELS] },
+            executorModel: { type: 'string', minLength: 1 },
+            executorThinkingLevel: { type: 'string', enum: ['', ...TIER_THINKING_LEVELS] },
+            maxExecutionSteps: { type: 'integer', minimum: 1, maximum: ORCHESTRATOR_TIER_MAX_STEPS_LIMIT },
+            description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH },
+          },
         },
         outputSchema: { type: 'object', required: ['tier', 'tiers'], additionalProperties: false, properties: { tier: TIER_ENTRY_SCHEMA, tiers: { type: 'array', items: TIER_ENTRY_SCHEMA } } },
-        handler: (input: { id: string; model: string; thinkingLevel?: string; description?: string }) =>
+        handler: (input: {
+          id: string
+          kind?: ModelTierKind
+          model: string
+          thinkingLevel?: string
+          executorModel?: string
+          executorThinkingLevel?: string
+          maxExecutionSteps?: number
+          description?: string
+        }) =>
           enqueueWrite(async () => {
             const id = assertTierId(input.id)
-            const spec = normalizeTierSpec({ model: assertConcreteModelRef(input.model), ...(input.thinkingLevel !== undefined ? { thinkingLevel: input.thinkingLevel } : {}), ...(input.description !== undefined ? { description: input.description } : {}) }, id)
+            const spec = normalizeTierSpec({
+              ...(input.kind !== undefined ? { kind: input.kind } : {}),
+              model: assertConcreteModelRef(input.model),
+              ...(input.thinkingLevel !== undefined ? { thinkingLevel: input.thinkingLevel } : {}),
+              ...(input.executorModel !== undefined ? { executorModel: input.executorModel } : {}),
+              ...(input.executorThinkingLevel !== undefined ? { executorThinkingLevel: input.executorThinkingLevel } : {}),
+              ...(input.maxExecutionSteps !== undefined ? { maxExecutionSteps: input.maxExecutionSteps } : {}),
+              ...(input.description !== undefined ? { description: input.description } : {}),
+            }, id)
             const catalog = await ctx.host.listModels()
-            assertTargetModelNotDisabled(catalog, spec.model)
+            assertTierSpecModelsNotDisabled(catalog, spec)
             const cur = readState()
             if (!Object.hasOwn(cur.tiers, id) && Object.keys(cur.tiers).length >= MAX_TIERS_COUNT) {
               throw new HelmxError('validation_error', `At most ${MAX_TIERS_COUNT} model tiers are allowed`, 400, { maxTiers: MAX_TIERS_COUNT })
@@ -532,6 +715,12 @@ export function createTiersPlugin(): PluginDefinition {
         toolNames: [TIERS_SWITCH_MODEL_TOOL],
         replaceRow: true,
         client: { module: 'SwitchModelToolRow.tsx', export: 'SwitchModelToolRow' },
+      })
+      ctx.ui.toolView({
+        id: 'tiers-orchestrator-row',
+        toolNames: [TIERS_EXIT_PLAN_MODE_TOOL, TIERS_HAND_BACK_TOOL],
+        replaceRow: true,
+        client: { module: 'OrchestratorToolRow.tsx', export: 'OrchestratorToolRow' },
       })
     },
   }

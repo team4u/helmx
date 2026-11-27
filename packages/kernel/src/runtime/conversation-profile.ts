@@ -13,12 +13,13 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { AgentChange, Harness } from '@earendil-works/pi-durable'
 import type { ModelThinkingLevel, Models } from '@earendil-works/pi-ai'
 import type { ConversationSummary } from '@helmx/protocol'
-import { HelmxError, assertProfileId } from '@helmx/protocol'
+import { HelmxError, MODEL_TIER_PREFIX, assertProfileId } from '@helmx/protocol'
 import { type Profile, type ProfileService } from '../services/index.js'
 import {
   clampThinkingLevelForModel,
   resolveClampedThinkingLevel,
   resolveModelRefWith,
+  type ModelRefResolutionMode,
   type ResolvedModelRef,
 } from './models.js'
 import type { EventHub } from './events.js'
@@ -39,8 +40,10 @@ interface ConversationProfileHost {
   readonly modelThinkingLevelOf: (ref: { provider: string; modelId: string }) => string | undefined
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
   /** Optional model-reference resolver (`ModelRegistry.resolveModelRef`); dereferences `tier/<id>` into concrete model + tier preset thinking level. */
-  readonly resolveModelRef?: (ref: string) => ResolvedModelRef
+  readonly resolveModelRef?: (ref: string, opts?: { mode?: ModelRefResolutionMode }) => ResolvedModelRef
   readonly summaryWithOwnership: (id: number) => ConversationSummary
+  /** Live working-state probe; skips overriding active SDK runtime model on working orchestrator conversations during inheritance refreshes. */
+  readonly isConversationWorking?: (id: number) => boolean
   /** Schedule context usage recalculation after model/thinking alignment (window/threshold may change); omitted skips. */
   readonly scheduleContextUsageRefresh?: (id: number) => void
 }
@@ -81,8 +84,13 @@ export class ConversationProfileService {
   }
 
   /** Resolve a raw `'provider/model'` or `'tier/<id>'` reference into concrete parts + optional tier preset thinking level. */
-  resolveRef(ref: string): ResolvedModelRef {
-    return resolveModelRefWith(ref, this.host.resolveModelRef, this.host.parseModelRefOrThrow)
+  resolveRef(ref: string, mode?: ModelRefResolutionMode): ResolvedModelRef {
+    return resolveModelRefWith(
+      ref,
+      this.host.resolveModelRef,
+      this.host.parseModelRefOrThrow,
+      mode !== undefined ? { mode } : undefined,
+    )
   }
 
   /** Conversation override > Profile.model > global default, dereferencing any `tier/<id>` into concrete model + tier preset thinking level. */
@@ -90,6 +98,7 @@ export class ConversationProfileService {
     override: string | undefined,
     profileId: string,
     profileCache?: Map<string, Promise<Profile | undefined>>,
+    mode: ModelRefResolutionMode = 'human_conversation',
   ): Promise<ResolvedModelRef | undefined> {
     const profile = await this.readProfile(profileId, profileCache)
     if (profile === undefined) {
@@ -97,15 +106,16 @@ export class ConversationProfileService {
     }
     const raw = override || profile.model || this.host.defaultModel()
     if (!raw) return undefined
-    return this.resolveRef(raw)
+    return this.resolveRef(raw, mode)
   }
 
   /** Conversation override > Profile.model > global default (concrete `'provider/modelId'`); Profile files are read live on each lookup. */
   async resolveEffectiveModel(
     override: string | undefined,
     profileId: string,
+    mode: ModelRefResolutionMode = 'human_conversation',
   ): Promise<string | undefined> {
-    return (await this.resolveEffectiveModelDetails(override, profileId))?.canonicalRef
+    return (await this.resolveEffectiveModelDetails(override, profileId, undefined, mode))?.canonicalRef
   }
 
   /**
@@ -145,7 +155,25 @@ export class ConversationProfileService {
     await this.withConversationChange(id, async () => {
       const meta = this.host.store.getConv(id)
       if (!meta) return
-      const resolved = await this.resolveEffectiveModelDetails(meta.modelOverride, meta.profileId, batchProfiles)
+      const isTopLevelHuman = meta.parentConversationId === undefined && (meta.ownedBy ?? 'human') === 'human'
+      const mode: ModelRefResolutionMode = isTopLevelHuman ? 'human_conversation' : 'subagent_inherit'
+      const resolved = await this.resolveEffectiveModelDetails(meta.modelOverride, meta.profileId, batchProfiles, mode)
+      const nextModelTier =
+        resolved?.isOrchestratorTier && resolved.tierId !== undefined
+          ? `${MODEL_TIER_PREFIX}/${resolved.tierId}`
+          : undefined
+      if (resolved?.isOrchestratorTier === true && this.host.isConversationWorking?.(id) === true) {
+        if ((meta.modelTier ?? undefined) === nextModelTier) return
+        const latest = this.host.store.getConv(id)
+        if (!latest) return
+        this.host.store.upsertConv({
+          ...latest,
+          modelTier: nextModelTier,
+          updatedAt: Date.now(),
+        })
+        if (emitEvent) this.host.events.publish('conversation.upsert', this.host.summaryWithOwnership(id))
+        return
+      }
       const effective = resolved?.canonicalRef
       const ref = resolved ? { provider: resolved.provider, modelId: resolved.modelId } : undefined
       // Also persist the clamped result of an explicit override; otherwise SDK/summary converge while the mirror keeps
@@ -172,6 +200,7 @@ export class ConversationProfileService {
       if (
         !sdkChanged &&
         meta.model === (effective ?? '') &&
+        (meta.modelTier ?? undefined) === nextModelTier &&
         meta.thinkingLevel === (thinking ?? '') &&
         meta.thinkingLevelOverride === clampedOverride
       ) return
@@ -180,6 +209,7 @@ export class ConversationProfileService {
       this.host.store.upsertConv({
         ...latest,
         model: effective ?? '',
+        modelTier: nextModelTier,
         thinkingLevel: thinking ?? '',
         thinkingLevelOverride: clampedOverride,
         stateChangeSeq: latest.stateChangeSeq + 1,
@@ -189,6 +219,71 @@ export class ConversationProfileService {
       // covers forks and profile cascade refreshes, while initial observe uses adoptInitial as backstop).
       this.host.scheduleContextUsageRefresh?.(id)
       if (emitEvent) this.host.events.publish('conversation.upsert', this.host.summaryWithOwnership(id))
+    })
+  }
+
+  /**
+   * Reset runtime SDK model/thinkingLevel back to planner at `afterRun` boundary for orchestrator-tier
+   * conversations so queued `followUp` runs never start mid-execution on the executor model.
+   * Preserves `modelOverride`, `modelTier`, and `stateChangeSeq` (CAS watermarks stay intact).
+   */
+  async alignRuntimeModelOnRunEnd(id: number): Promise<void> {
+    const initial = this.host.store.getConv(id)
+    if (!initial || this.host.store.isDeleted(id)) return
+    if (initial.modelTier === undefined || initial.modelTier === '') return
+    await this.withConversationChange(id, async () => {
+      const meta = this.host.store.getConv(id)
+      if (!meta || this.host.store.isDeleted(id)) return
+      if (meta.modelTier === undefined || meta.modelTier === '') return
+      const isTopLevelHuman = meta.parentConversationId === undefined && (meta.ownedBy ?? 'human') === 'human'
+      if (!isTopLevelHuman) return
+      let resolved: ResolvedModelRef | undefined
+      try {
+        resolved = await this.resolveEffectiveModelDetails(
+          meta.modelOverride,
+          meta.profileId,
+          undefined,
+          'human_conversation',
+        )
+      } catch (err) {
+        if (err instanceof HelmxError && (err.code === 'model_tier_not_found' || err.code === 'orchestrator_tier_human_only')) {
+          return
+        }
+        throw err
+      }
+      if (!resolved?.isOrchestratorTier) return
+      const ref = { provider: resolved.provider, modelId: resolved.modelId }
+      const clampedOverride = clampThinkingLevelForModel(this.host.models(), ref, meta.thinkingLevelOverride)
+      const thinking = await this.resolveEffectiveThinkingLevel(
+        clampedOverride,
+        meta.profileId,
+        ref,
+        resolved.tierThinkingLevel,
+      )
+      const conversation = await getSdkConversation(this.host.harness, id, BACKGROUND_CONTEXT)
+      if (!conversation) return
+      const agent = await conversation.agent(BACKGROUND_CONTEXT)
+      const change: AgentChange = {
+        ...(agent.model?.provider !== ref.provider || agent.model?.modelId !== ref.modelId
+          ? { model: ref }
+          : {}),
+        ...(agent.thinkingLevel !== (thinking ?? 'off')
+          ? { thinkingLevel: (thinking as ModelThinkingLevel | undefined) ?? null }
+          : {}),
+      }
+      const sdkChanged = Object.keys(change).length > 0
+      if (sdkChanged) await conversation.configure(change, BACKGROUND_CONTEXT)
+      if (!sdkChanged && meta.model === resolved.canonicalRef && meta.thinkingLevel === (thinking ?? '')) return
+      const latest = this.host.store.getConv(id)
+      if (!latest || this.host.store.isDeleted(id)) return
+      this.host.store.upsertConv({
+        ...latest,
+        model: resolved.canonicalRef,
+        thinkingLevel: thinking ?? '',
+        updatedAt: Date.now(),
+      })
+      this.host.scheduleContextUsageRefresh?.(id)
+      this.host.events.publish('conversation.upsert', this.host.summaryWithOwnership(id))
     })
   }
 

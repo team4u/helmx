@@ -10,11 +10,20 @@ import type { HelmxStore } from './store.js'
 export async function completeConversationTextHelper(
   deps: {
     store: HelmxStore
-    conversations: { resolveEffectiveModel(modelOverride?: string, profileId?: string): Promise<string | undefined> }
+    conversations: {
+      resolveEffectiveModel(
+        modelOverride?: string,
+        profileId?: string,
+        mode?: 'human_conversation' | 'single_only' | 'subagent_inherit',
+      ): Promise<string | undefined>
+    }
     models: {
       models: Models
       isModelDisabled(providerId: string, modelId: string): boolean
-      resolveModelRef?(ref: string): { provider: string; modelId: string; canonicalRef: string; tierThinkingLevel?: string }
+      resolveModelRef?(
+        ref: string,
+        opts?: { mode?: 'human_conversation' | 'single_only' | 'subagent_inherit' },
+      ): { provider: string; modelId: string; canonicalRef: string; tierThinkingLevel?: string }
     }
     stash: { redact(text: string): string }
   },
@@ -33,15 +42,20 @@ export async function completeConversationTextHelper(
     throw new HelmxError('not_found', `Conversation not found: ${input.conversationId}`, 404, { conversationId: input.conversationId })
   }
   const explicitModel = input.model?.trim()
+  const isTopLevelHuman = meta.parentConversationId === undefined && (meta.ownedBy ?? 'human') === 'human'
   const effective =
     explicitModel !== undefined && explicitModel !== ''
       ? explicitModel
-      : await deps.conversations.resolveEffectiveModel(meta.modelOverride, meta.profileId)
+      : await deps.conversations.resolveEffectiveModel(
+          meta.modelOverride,
+          meta.profileId,
+          isTopLevelHuman ? 'human_conversation' : 'subagent_inherit',
+        )
   if (effective === undefined || effective === '') {
     throw new HelmxError('model_not_configured', `Conversation ${input.conversationId} has no effective model resolved; cannot run text completion`, 409, { conversationId: input.conversationId })
   }
   const ref = deps.models.resolveModelRef !== undefined
-    ? deps.models.resolveModelRef(effective)
+    ? deps.models.resolveModelRef(effective, { mode: 'single_only' })
     : requireModelRef(effective)
   const model = deps.models.models.getModel(ref.provider, ref.modelId)
   if (model === undefined) {

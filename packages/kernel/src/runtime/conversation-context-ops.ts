@@ -217,6 +217,12 @@ export class ConversationContextOps {
         : `${baseTitle} (fork)`
     const effectiveOwnedBy: ConversationOwnership =
       explicitOwnedBy ?? (sourceMeta.ownedBy === 'helmx' ? 'helmx' : 'human')
+    // Forked children always receive parentConversationId and therefore cannot be orchestrator-tier conversations:
+    // drop symbolic orchestrator `modelTier` / matching `modelOverride` so `alignConversationModel` unwraps via `subagent_inherit`.
+    const forkedModelOverride =
+      sourceMeta.modelOverride !== undefined && sourceMeta.modelOverride === sourceMeta.modelTier
+        ? undefined
+        : sourceMeta.modelOverride
     this.host.store.upsertConv({
       id: newId,
       title,
@@ -229,7 +235,7 @@ export class ConversationContextOps {
       model: sourceMeta.model,
       thinkingLevel: sourceMeta.thinkingLevel,
       thinkingLevelOverride: sourceMeta.thinkingLevelOverride,
-      ...(sourceMeta.modelOverride !== undefined ? { modelOverride: sourceMeta.modelOverride } : {}),
+      ...(forkedModelOverride !== undefined ? { modelOverride: forkedModelOverride } : {}),
       unread: false,
       pinned: false,
       stateChangeSeq: 1,

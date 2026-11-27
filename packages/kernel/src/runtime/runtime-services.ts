@@ -324,6 +324,10 @@ export function assembleRuntimeServices(
     currentRunInputs: (id) => tracker.currentRunInputs(id),
     redact: (t) => options.stashService.redact(t),
     artifacts: artifactsSvc,
+    onAfterRunBoundary: (id) => conversations.alignRuntimeModelOnRunEnd(id),
+    onHookDiagnostic: ({ source, message, error }) => {
+      init.emitDiagnostic({ level: 'warn', source, message, error })
+    },
   })
 
   // ---- conversation service ----
@@ -375,7 +379,8 @@ export function assembleRuntimeServices(
     modelThinkingLevelOf: (ref) => models.modelThinkingLevelOf(ref),
     models: () => models.models,
     parseModelRefOrThrow: (ref) => models.parseModelRefOrThrow(ref),
-    resolveModelRef: (ref) => models.resolveModelRef(ref),
+    resolveModelRef: (ref, opts) => models.resolveModelRef(ref, opts),
+    isConversationWorking: (id) => tracker.summaryOf(id).status === 'working',
     assertModelEnabled: (provider, modelId) => models.assertModelEnabled(provider, modelId),
     trustedPlatformOf: trustedPlatformFromEnvFabric(envFabric),
   })

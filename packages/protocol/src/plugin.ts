@@ -684,6 +684,14 @@ export interface HelmxHostApi {
   ): Promise<ConversationSubmissionInfo | undefined>
   /** 部分更新会话；返回更新后的摘要。 */
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
+  /**
+   * Switch a conversation's active SDK runtime model/thinkingLevel without overwriting symbolic
+   * `modelOverride` / `modelTier` or advancing `stateChangeSeq` (safe against pending AskDoc CAS).
+   */
+  setConversationRuntimeModel(
+    id: number,
+    target: { model: string; thinkingLevel?: string },
+  ): Promise<ConversationSummary>
   /** 中止指定会话的在途执行。 */
   abortConversation(id: number): Promise<void>
   /**

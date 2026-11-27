@@ -632,6 +632,7 @@ describe("tiers-client-interactions", () => {
     const exportNames = Object.keys(rawTiersModule).filter((k) => k !== '__helmxClientCss').sort()
     assert.deepEqual(exportNames, [
       'BorrowToolbarPill',
+      'OrchestratorToolRow',
       'SwitchModelToolRow',
       'TiersManagerScreen',
       'TiersSettingsPanel',
@@ -1562,6 +1563,192 @@ describe("tiers-client-interactions", () => {
       }
     } finally {
       window.matchMedia = originalMatchMedia
+    }
+  })
+
+  test('TiersManagerScreen: dual-phase orchestrator toggle, validation, and save payload', { timeout: 60_000 }, async () => {
+    const ctx = makeSpyCtx()
+    setBuiltinClientStub({
+      docs: {
+        state: {
+          tiers: {
+            'claude-auto': {
+              kind: 'orchestrator',
+              model: 'faux/flagship',
+              thinkingLevel: 'xhigh',
+              executorModel: 'faux/workhorse',
+              executorThinkingLevel: 'medium',
+              maxExecutionSteps: 12,
+              description: 'Planner -> Executor pair',
+            },
+          },
+          templates: {},
+        },
+      },
+    })
+    const mounted = await mountWithHost(
+      e(PluginClientContext.Provider, { value: ctx }, e(TiersManagerScreen, { screenId: 'main' })),
+    )
+    try {
+      const executorPicker = mounted.host.querySelector<HTMLButtonElement>(
+        'button[aria-label*="Executor model"][aria-label*="tier/claude-auto"]',
+      )
+      assert.ok(executorPicker !== null, 'hydrated orchestrator tier shows Executor picker')
+      const stepsInput = mounted.host.querySelector<HTMLInputElement>('input[type="number"][min="1"][max="50"]')
+      assert.ok(stepsInput !== null && stepsInput.value === '12')
+
+      // Switch row back to single mode, then back to orchestrator and set maxExecutionSteps invalid (0) -> validation blocks save
+      const segTabs = Array.from(mounted.host.querySelectorAll<HTMLButtonElement>('.tiers-kind-row [role="tab"]'))
+      assert.equal(segTabs.length, 2)
+      await act(async () => {
+        setInputValue(stepsInput, '0')
+      })
+      await act(async () => {
+        findButton(mounted.host, 'Save tiers').click()
+      })
+      assert.match(mounted.host.textContent ?? '', /between 1 and 50/i)
+      assert.equal(ctx.actionCalls.length, 0)
+
+      // Restore valid steps 15 and save -> calls replace with kind:'orchestrator', executorModel, and maxExecutionSteps:15
+      await act(async () => {
+        setInputValue(stepsInput, '15')
+      })
+      await act(async () => {
+        findButton(mounted.host, 'Save tiers').click()
+      })
+      assert.equal(ctx.actionCalls.length, 1)
+      assert.equal(ctx.actionCalls[0]?.actionId, 'replace')
+      const savedTiers = (ctx.actionCalls[0]?.input as { tiers: Record<string, Record<string, unknown>> }).tiers
+      assert.deepEqual(savedTiers['claude-auto'], {
+        kind: 'orchestrator',
+        model: 'faux/flagship',
+        thinkingLevel: 'xhigh',
+        executorModel: 'faux/workhorse',
+        executorThinkingLevel: 'medium',
+        maxExecutionSteps: 15,
+        description: 'Planner -> Executor pair',
+      })
+    } finally {
+      await mounted.unmount()
+    }
+  })
+
+  test('BorrowToolbarPill + OrchestratorToolRow: shows read-only phase pill, suppresses borrow mode on orchestrator conv, and renders transition trace rows', { timeout: 60_000 }, async () => {
+    const {
+      parseTierOrchestratorSessionView,
+      parseOrchestratorTransitionMeta,
+    } = await import('../../plugins/src/tiers/client/orchestrator-models.ts')
+    assert.equal(parseTierOrchestratorSessionView(null), null)
+    assert.equal(parseOrchestratorTransitionMeta({ tool: 'bogus' }), undefined)
+
+    mountSharedPluginNamespaces({ realHooks: true })
+    resetPluginClientCache()
+    const OrchestratorToolRow = rawTiersModule['OrchestratorToolRow'] as (props: ToolViewProps) => React.ReactElement
+    const modeRegistry = createComposerModelPickerModeRegistry()
+    const orchConv = makeConv(77, { model: 'faux/workhorse', modelTier: 'tier/claude-auto', modelOverride: 'tier/claude-auto' })
+    const sessionHarness = createSessionDocHarness({
+      'builtin:tiers/orchestrator/77': {
+        value: {
+          tierId: 'claude-auto',
+          phase: 'execution',
+          activeModel: 'faux/workhorse',
+          plannerModel: 'faux/flagship',
+          executorModel: 'faux/workhorse',
+          executionStepCount: 3,
+          maxExecutionSteps: 10,
+          updatedAt: 1000,
+        },
+        hasValue: true,
+        deleted: false,
+        connected: true,
+      },
+    })
+    const ctx = makeSpyCtx()
+    try {
+      const pillMount = await mountWithHost(
+        e(
+          WithSessionDocOverride,
+          { harness: sessionHarness },
+          e(
+            ComposerModelPickerModeContext.Provider,
+            { value: modeRegistry },
+            e(
+              PluginClientContext.Provider,
+              { value: ctx },
+              e(BorrowToolbarPill, { conversation: orchConv }),
+            ),
+          ),
+        ),
+      )
+      try {
+        const pill = pillMount.host.querySelector<HTMLElement>('.tiers-orchestrator-pill')
+        assert.ok(pill !== null, 'orchestrator tier conversation renders read-only phase pill')
+        assert.equal(pill.getAttribute('data-tiers-orchestrator-phase'), 'execution')
+        assert.match(pill.textContent ?? '', /Executing:.*workhorse.*3\/10/)
+        assert.equal(modeRegistry.getModes().length, 0, 'tiers:one-turn borrow mode must be suppressed on orchestrator conversations')
+        assert.equal(EMOJI_RE.test(pill.textContent ?? ''), false)
+      } finally {
+        await pillMount.unmount()
+      }
+
+      const rowMount = await mountWithHost(
+        e(
+          PluginClientContext.Provider,
+          { value: ctx },
+          e(
+            React.Fragment,
+            null,
+            e(OrchestratorToolRow, {
+              callId: 'c-exit',
+              conversationId: 77,
+              toolName: 'exit_plan_mode',
+              input: { plan: 'do it' },
+              status: 'done',
+              durationMs: 18,
+              presentationMeta: {
+                tool: 'exit_plan_mode',
+                fromPhase: 'planning',
+                toPhase: 'execution',
+                fromModel: 'faux/flagship',
+                toModel: 'faux/workhorse',
+                tierId: 'claude-auto',
+              },
+            }),
+            e(OrchestratorToolRow, {
+              callId: 'c-hand',
+              conversationId: 77,
+              toolName: 'hand_back_to_planner',
+              input: { reason: 'done milestone', summary: 'tests pass' },
+              status: 'done',
+              durationMs: 24,
+              presentationMeta: {
+                tool: 'hand_back_to_planner',
+                fromPhase: 'execution',
+                toPhase: 'planning',
+                fromModel: 'faux/workhorse',
+                toModel: 'faux/flagship',
+                tierId: 'claude-auto',
+                reason: 'done milestone',
+                executionSteps: 3,
+                stepLimitReached: false,
+              },
+            }),
+          ),
+        ),
+      )
+      try {
+        const text = rowMount.host.textContent ?? ''
+        assert.match(text, /Enter execution phase/)
+        assert.match(text, /Switched to executor workhorse/)
+        assert.match(text, /Hand back to planner/)
+        assert.match(text, /Returned to planner flagship/)
+        assert.equal(EMOJI_RE.test(text), false)
+      } finally {
+        await rowMount.unmount()
+      }
+    } finally {
+      resetPluginClientCache()
+      mountSharedPluginNamespaces({ realHooks: false })
     }
   })
 })

@@ -217,6 +217,7 @@ export function GlobalDefaultsPanel({
               resetTitle={t('models.defaults.optionUnset')}
               popoverSide="bottom"
               enableShortcut={false}
+              allowOrchestratorTiers={true}
               disabled={saving}
               copy={copy}
               onNotice={onNotice}
