@@ -9,7 +9,8 @@
 }
 
 .screen-pane .helmx-select-card > .helmx-card-footer {
-  min-height: var(--control-h-xs);
+  box-sizing: border-box;
+  min-height: calc(var(--control-h-xs) + var(--space-2) + 1px);
 }
 
 .node-card-runtime-meta {
