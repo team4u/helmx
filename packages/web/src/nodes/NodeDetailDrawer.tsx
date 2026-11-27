@@ -451,6 +451,9 @@ export function NodeDetailDrawer({
 
               {guide && (
                 <Stack direction="vertical" gap="xs">
+                  <div className="text-subtle">{t('nodes.drawer.installLabel')}</div>
+                  <CopyableCommandRow text={guide.installCommand} label={t('nodes.drawer.copyCommand')} />
+
                   <div className="text-subtle">{t('nodes.drawer.oneLineLabel')}</div>
                   <CopyableCommandRow text={guide.oneLineCommand} label={t('nodes.drawer.copyCommand')} />
 
@@ -458,6 +461,7 @@ export function NodeDetailDrawer({
                     {t('nodes.drawer.maintenanceLabel')}
                   </div>
                   <CopyableCommandRow text={guide.startDaemonCommand} />
+                  <CopyableCommandRow text={guide.serviceInstallCommand} />
                   <CopyableCommandRow text={guide.doctorCommand} />
                 </Stack>
               )}

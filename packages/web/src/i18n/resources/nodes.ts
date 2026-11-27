@@ -98,9 +98,13 @@ export const nodesMessages = {
   },
   'nodes.drawer.copyToken': { en: 'Copy token', 'zh-CN': '复制令牌' },
   'nodes.drawer.copied': { en: 'Copied', 'zh-CN': '已复制' },
+  'nodes.drawer.installLabel': {
+    en: '1. Install node daemon (first time only, requires Node.js >= 24.12):',
+    'zh-CN': '1. 安装节点客户端（首次需要，需 Node.js >= 24.12）：',
+  },
   'nodes.drawer.oneLineLabel': {
-    en: 'One-line enrollment command (background daemon start):',
-    'zh-CN': '一键接入命令行（后台守护进程启动）：',
+    en: '2. Connect and start background daemon:',
+    'zh-CN': '2. 接入并后台启动守护进程：',
   },
   'nodes.drawer.copyCommandTitle': { en: 'Copy command line', 'zh-CN': '复制命令行' },
   'nodes.drawer.copyCommand': { en: 'Copy command', 'zh-CN': '复制命令' },

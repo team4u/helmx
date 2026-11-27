@@ -382,9 +382,11 @@ test('NodeDetailDrawer: SSR renders system overview, health data, enrollment com
 
   // 4. Controlled machine enrollment command and one-line command
   assert.match(html, /Controlled machine enrollment command/)
+  assert.match(html, /npm install -g @helmx\/node/)
   assert.match(html, /helmx-node start -d/)
   assert.match(html, /--token/)
   assert.match(html, /Issue access token/)
+  assert.match(html, /helmx-node service install/)
   assert.match(html, /helmx-node doctor/)
 
   // 5. Registered tools
@@ -781,6 +783,8 @@ test('NodeDetailDrawer: binds one-time token to nodeId, clears on switch/close/i
       findIssueBtn()!.click()
     })
     assert.ok(container.textContent?.includes('new-tok-worker-one'))
+    assert.ok(container.textContent?.includes('npm install -g @helmx/node'))
+    assert.ok(container.textContent?.includes('helmx-node service install'))
 
     await act(async () => {
       setInputValue?.call(idInput, 'worker-two')

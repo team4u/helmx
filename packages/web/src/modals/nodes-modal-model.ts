@@ -29,6 +29,8 @@ export function validateNodeIdInput(raw: string, t: WebMessageTranslator): NodeI
 }
 
 export interface NodeConnectGuide {
+  /** First-time global install on the managed machine (Node.js >= 24.12). */
+  installCommand: string
   /** Foreground connection (debug): binds the JOIN token and stays in the foreground; Ctrl+C exits; no daemon installed. */
   connectCommand: string
   /** Start the daemon in the background: reuses the identity already bound on disk, no token needed. */
@@ -50,6 +52,7 @@ export function buildNodeConnectGuide(
   // the background daemon, and the child argv carries no token (avoiding
   // token leaks from long-running process command lines).
   return {
+    installCommand: 'npm install -g @helmx/node',
     connectCommand: `helmx-node connect ${hubOrigin} --token ${issued.token}`,
     startDaemonCommand: 'helmx-node start -d',
     oneLineCommand: `helmx-node start -d --hub ${hubOrigin} --token ${issued.token}`,
