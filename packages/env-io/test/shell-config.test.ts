@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
-import { useTempDir } from '@helmx/test-kit/node'
+import { useTempDir, waitFor } from '@helmx/test-kit/node'
 import {
   createNodeShellProbeIo,
   isLegacyWslBashPath,
@@ -233,12 +233,15 @@ describe('shell-config: Windows Git Bash detection and WSL filtering', { timeout
     // 2. Timeout settles promptly even when a detached grandchild inherits stdout.
     if (process.platform !== 'win32') {
       const grandPidFile = path.join(dir, 'grand.pid')
-      t.after(async () => {
-        const raw = await fsp.readFile(grandPidFile, 'utf8').catch(() => '')
-        const pid = Number(raw.trim())
-        if (Number.isInteger(pid) && pid > 0) {
+      // The grandchild pid must be captured after the probe settles, never inside the hook: node:test
+      // runs `after` hooks FIFO and `useTempDir` registered its rmSync first, so a hook re-reading the
+      // pid file always finds it gone and silently skips the kill, leaking the detached grandchild
+      // (it left the probe's process group, so `killProcessTree` cannot reach it either).
+      let grandPid = 0
+      t.after(() => {
+        if (Number.isInteger(grandPid) && grandPid > 0) {
           try {
-            process.kill(pid, 'SIGKILL')
+            process.kill(grandPid, 'SIGKILL')
           } catch {
             // already exited
           }
@@ -256,6 +259,18 @@ describe('shell-config: Windows Git Bash detection and WSL filtering', { timeout
       const startedAt = Date.now()
       const timedOut = await execProbe(process.execPath, ['-e', script], 200)
       const elapsed = Date.now() - startedAt
+      // The script writes the pid synchronously right after `spawn`, so this resolves immediately in
+      // the normal case; the bounded poll only covers a slow start. A timeout means the script was
+      // killed before it spawned the grandchild, so there is nothing to reap.
+      await waitFor(
+        async () => {
+          grandPid = Number((await fsp.readFile(grandPidFile, 'utf8').catch(() => '')).trim())
+          return Number.isInteger(grandPid) && grandPid > 0
+        },
+        { timeoutMs: 2_000 },
+      ).catch(() => {
+        grandPid = 0
+      })
       assert.equal(timedOut.status, null)
       assert.equal(timedOut.stdout, '')
       assert.ok(elapsed < 3_000, `execProbe should settle promptly on timeout (elapsed=${elapsed}ms)`)
