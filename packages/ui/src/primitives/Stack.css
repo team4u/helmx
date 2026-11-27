@@ -1,0 +1,48 @@
+/* ==========================================================================
+ * Stack 间距堆叠布局原语
+ * ========================================================================== */
+
+.stack-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.helmx-stack {
+  display: flex;
+  min-width: 0;
+}
+
+.helmx-stack-inline {
+  display: inline-flex;
+}
+
+.helmx-stack-vertical {
+  flex-direction: column;
+}
+
+.helmx-stack-horizontal {
+  flex-direction: row;
+}
+
+.helmx-stack-wrap {
+  flex-wrap: wrap;
+}
+
+.helmx-stack-gap-none { gap: 0; }
+.helmx-stack-gap-xs { gap: var(--space-1); }
+.helmx-stack-gap-sm { gap: var(--space-2); }
+.helmx-stack-gap-md { gap: var(--space-3); }
+.helmx-stack-gap-lg { gap: var(--space-4); }
+.helmx-stack-gap-xl { gap: var(--space-5); }
+
+.helmx-stack-align-start { align-items: flex-start; }
+.helmx-stack-align-center { align-items: center; }
+.helmx-stack-align-end { align-items: flex-end; }
+.helmx-stack-align-stretch { align-items: stretch; }
+.helmx-stack-align-baseline { align-items: baseline; }
+
+.helmx-stack-justify-start { justify-content: flex-start; }
+.helmx-stack-justify-center { justify-content: center; }
+.helmx-stack-justify-end { justify-content: flex-end; }
+.helmx-stack-justify-between { justify-content: space-between; }

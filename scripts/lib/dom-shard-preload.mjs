@@ -81,6 +81,7 @@ function descriptorsEqual(a, b) {
 function resolveGlobalRegistratorUrl() {
   const anchors = [
     path.join(repoRoot, 'packages', 'web', 'package.json'),
+    path.join(repoRoot, 'packages', 'ui', 'package.json'),
     path.join(repoRoot, 'packages', 'plugin-client', 'package.json'),
     path.join(repoRoot, 'package.json'),
   ];

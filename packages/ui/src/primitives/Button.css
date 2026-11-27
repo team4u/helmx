@@ -1,0 +1,239 @@
+/* ==========================================================================
+ * Button & IconButton 原语（md 32px / sm 28px / xs 22px，5 正交变体）
+ * ========================================================================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--control-h-md);
+  padding: 0 11px;
+  border-radius: var(--control-radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: var(--control-font-md);
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
+  box-sizing: border-box;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 100ms ease, filter 120ms ease, transform 100ms var(--ease-out);
+}
+@media (hover: hover) {
+  .btn:hover:not(:disabled) {
+    border-color: var(--fg-muted);
+    background: var(--bg-subtle);
+    color: var(--fg);
+  }
+}
+.btn:active:not(:disabled) {
+  background: var(--bg-hover);
+  transform: scale(0.98);
+}
+.btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+.btn:focus-visible:not(:disabled) {
+  outline: none;
+  border-color: var(--fg-muted);
+  background: var(--bg-subtle);
+  color: var(--fg);
+  box-shadow: none;
+}
+
+/* 次级/默认操作按钮（白底 1px 描边） */
+.btn-secondary {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
+}
+.btn-secondary:focus-visible:not(:disabled) {
+  outline: none;
+  border-color: var(--fg-muted);
+  background: var(--bg-subtle);
+  color: var(--fg);
+  box-shadow: none;
+}
+@media (hover: hover) {
+  .btn-secondary:hover:not(:disabled) {
+    outline: none;
+    border-color: var(--fg-muted);
+    background: var(--bg-subtle);
+    color: var(--fg);
+    box-shadow: none;
+  }
+}
+
+/* 主要操作按钮（Solid Accent） */
+.btn-primary {
+  border: none;
+  background: var(--accent);
+  color: var(--fg-on-solid);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+@media (hover: hover) {
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+    background: var(--accent);
+    border: none;
+    color: var(--fg-on-solid);
+  }
+}
+.btn-primary:active:not(:disabled) {
+  filter: brightness(0.96);
+}
+.btn-primary:focus-visible:not(:disabled) {
+  outline: none;
+  filter: brightness(1.08);
+  background: var(--accent);
+  border: none;
+  color: var(--fg-on-solid);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* 危险操作按钮（软底色 + 警示红） */
+.btn-danger {
+  border: 1px solid var(--err-border);
+  background: var(--err-bg);
+  color: var(--err);
+}
+.btn-danger:focus-visible:not(:disabled) {
+  outline: none;
+  background: var(--err);
+  border-color: var(--err);
+  color: var(--fg-on-solid);
+  filter: brightness(0.98);
+  box-shadow: none;
+}
+@media (hover: hover) {
+  .btn-danger:hover:not(:disabled) {
+    outline: none;
+    background: var(--err);
+    border-color: var(--err);
+    color: var(--fg-on-solid);
+    filter: brightness(0.98);
+    box-shadow: none;
+  }
+}
+
+/* 幽灵/文本操作按钮 */
+.btn-ghost {
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  box-shadow: none;
+}
+@media (hover: hover) {
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--bg-muted);
+    color: var(--fg);
+    border: none;
+  }
+}
+.btn-ghost:active:not(:disabled) {
+  background: var(--bg-hover);
+}
+.btn-ghost:focus-visible:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: none;
+}
+
+/* 尺寸阶梯修饰类（sm = 28px / xs = 22px，严格等高对齐） */
+.btn-sm {
+  height: var(--control-h-sm);
+  padding: 0 9px;
+  font-size: var(--control-font-sm);
+  border-radius: var(--control-radius-sm);
+}
+
+/* 实心小型危险按钮（批量操作栏删除动作等）：保留警示底色与可读反色 */
+.btn-danger-sm {
+  color: var(--fg-on-solid, #fff);
+  background-color: var(--err, #ef4444);
+  border-color: var(--err, #ef4444);
+}
+@media (hover: hover) {
+  .btn-danger-sm:hover:not(:disabled) {
+    color: var(--fg-on-solid, #fff);
+    background-color: var(--err, #ef4444);
+    border-color: var(--err, #ef4444);
+    filter: brightness(0.95);
+  }
+}
+
+/* 紧凑小按钮：列表行尾 / 胶囊卡头部 / 工作台窄列内联动作 */
+.btn-xs {
+  height: var(--control-h-xs);
+  padding: 0 6px;
+  font-size: var(--control-font-xs);
+  gap: 4px;
+  border-radius: var(--control-radius-xs);
+}
+
+/* 行内轻量文字微操作按钮（轨迹折叠、重试、原始数据切换等）：置于 .btn-xs 之后干净覆盖固高与内边距 */
+.btn-inline {
+  height: auto;
+  padding: 2px 4px;
+  gap: 4px;
+  width: fit-content;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  font-weight: 400;
+  border-radius: var(--control-radius-xs);
+}
+@media (hover: hover) {
+  .btn-inline:hover:not(:disabled) {
+    color: var(--fg);
+    background: var(--bg-hover);
+    border: none;
+  }
+}
+.btn-inline:active:not(:disabled) {
+  background: var(--bg-hover);
+  transform: none;
+}
+.btn-inline:focus-visible:not(:disabled) {
+  color: var(--fg);
+  background: var(--bg-hover);
+  box-shadow: none;
+}
+
+.btn-pill {
+  border-radius: var(--radius-pill);
+}
+
+/* 纯图标按钮原语：固定正方形与内边距归零，严格对齐三档高度与圆角 */
+.btn-icon { width: var(--control-h-md); height: var(--control-h-md); border-radius: var(--control-radius-md); padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.btn-icon-sm { width: var(--control-h-sm); height: var(--control-h-sm); border-radius: var(--control-radius-sm); padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.btn-icon-xs { width: var(--control-h-xs); height: var(--control-h-xs); border-radius: var(--control-radius-xs); padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+/* 幽灵与纯图标按钮开关激活态（IconButton active={true} 等）：悬停保持激活可读性 */
+.btn-ghost.is-active,
+.btn-icon.is-active,
+.btn-icon-sm.is-active,
+.btn-icon-xs.is-active {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+@media (hover: hover) {
+  .btn-ghost.is-active:hover:not(:disabled),
+  .btn-icon.is-active:hover:not(:disabled),
+  .btn-icon-sm.is-active:hover:not(:disabled),
+  .btn-icon-xs.is-active:hover:not(:disabled) {
+    background: var(--accent-bg);
+    border-color: var(--accent-border);
+    color: var(--accent);
+  }
+}

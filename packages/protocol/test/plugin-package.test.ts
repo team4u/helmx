@@ -17,6 +17,7 @@ import {
   HelmxError,
   PLUGIN_CLIENT_SHARED_EXPORTS,
   PREBUILT_CLIENT_MANIFEST_VERSION,
+  UI_SHARED_EXPORTS,
   assertModuleRefShape,
   assertPrebuiltChunkName,
   assertPrebuiltClientManifest,
@@ -110,10 +111,19 @@ test('CORE_CLI_COMMAND_PATHS includes plugins install/update/remove/build/manife
   }
   assert.equal(new Set(paths).size, paths.length, 'command paths must not repeat')
   const sharedExports: readonly string[] = PLUGIN_CLIENT_SHARED_EXPORTS
+  const uiExports: readonly string[] = UI_SHARED_EXPORTS
   assert.ok(sharedExports.includes('useHostModels'))
   assert.ok(sharedExports.includes('useHostNodes'))
   assert.ok(sharedExports.includes('useHostProfiles'))
+  assert.ok(uiExports.includes('Button'))
+  assert.ok(uiExports.includes('Screen'))
+  assert.ok(uiExports.includes('UiScope'))
+  assert.ok(uiExports.includes('UiLocaleProvider'))
   assert.equal(new Set(sharedExports).size, sharedExports.length, 'PLUGIN_CLIENT_SHARED_EXPORTS must not repeat')
+  assert.equal(new Set(uiExports).size, uiExports.length, 'UI_SHARED_EXPORTS must not repeat')
+  const uiSet = new Set(uiExports)
+  const overlap = sharedExports.filter((sym) => uiSet.has(sym))
+  assert.deepEqual(overlap, [], 'UI_SHARED_EXPORTS and PLUGIN_CLIENT_SHARED_EXPORTS must be strictly disjoint')
 })
 
 test('PrebuiltClientManifest validation and chunk path helpers enforce integrity and path containment', { timeout: 60_000 }, () => {

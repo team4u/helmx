@@ -39,10 +39,10 @@
  * dist/cli.js; the dual-package self-upgrade target). The Hub payload contract above is unchanged by
  * those artifacts except for the cli entry bytes; a missing CLI or node dist input aborts the build.
  *
- * Note: `@helmx/plugin-client` is a browser-only SDK already bundled into `web/dist` and virtualized by
- * `@helmx/plugin-build` via `globalThis.__helmx_shared_plugin_client`, so neither `@helmx/plugin-client`
- * nor its browser UI dependency tree (`react`, `lucide-react`, `@radix-ui/*`, markdown) enters the Hub
- * server payload.
+ * Note: `@helmx/ui` and `@helmx/plugin-client` are browser-only packages already bundled into `web/dist`
+ * and virtualized by `@helmx/plugin-build` via `globalThis.__helmx_shared_ui` and
+ * `globalThis.__helmx_shared_plugin_client`, so neither package nor its browser UI dependency tree
+ * (`react`, `lucide-react`, `@radix-ui/*`, markdown) enters the Hub server payload.
  *
  * Honesty boundary: this script does not bundle node_modules (platform-native binaries make
  * self-containment require per-platform vendoring, see README); the dependency-completion contract is

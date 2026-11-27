@@ -4,12 +4,20 @@ import {
   ComposerModelPickerModeContext,
   type ComposerModelPickerModeRegistration,
 } from '../composer-model-modes.js'
-import { HelmxIcon } from '../icons.js'
-import { Button, IconButton } from './Button.js'
-import { useFieldControlProps } from './field-context.js'
-import { Popover, PopoverAnchor, PopoverContent, PopoverPortal, PopoverTrigger } from './Popover.js'
-import { SearchBox } from './SearchBox.js'
-import { SegmentedControl } from './Tabs.js'
+import {
+  Button,
+  HelmxIcon,
+  IconButton,
+  Kbd,
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+  PopoverPortal,
+  PopoverTrigger,
+  SearchBox,
+  SegmentedControl,
+  useFieldControlProps,
+} from '@helmx/ui'
 import { usePluginClientHost } from '../host-port.js'
 import { useHostModels } from '../conversation-hooks.js'
 import {
@@ -399,7 +407,7 @@ function ModelPickerFooter({
           <span>{resetLabel}</span>
         </button>
       ) : null}
-      {hasNavItems ? <span className="kbd-hint popover-kbd-hint">{navHint}</span> : null}
+      {hasNavItems ? <Kbd size="sm" desktopOnly className="popover-kbd-hint">{navHint}</Kbd> : null}
     </div>
   )
 }

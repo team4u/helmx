@@ -1,0 +1,28 @@
+/* Helmx Design System (@helmx/ui) — aggregated primitive stylesheet.
+ * Every component stylesheet enters `layer(ui-primitives)` so host overrides
+ * (`layer(host-components)`) and plugin styles (`layer(plugin-ui)`) cascade
+ * cleanly above primitives without `!important`. */
+
+@import './primitives/Button.css' layer(ui-primitives);
+@import './primitives/Badge.css' layer(ui-primitives);
+@import './primitives/Kbd.css' layer(ui-primitives);
+@import './primitives/StatusLight.css' layer(ui-primitives);
+@import './primitives/Feedback.css' layer(ui-primitives);
+@import './primitives/Callout.css' layer(ui-primitives);
+@import './primitives/SearchBox.css' layer(ui-primitives);
+@import './primitives/Input.css' layer(ui-primitives);
+@import './primitives/Field.css' layer(ui-primitives);
+@import './primitives/Toggle.css' layer(ui-primitives);
+@import './primitives/Select.css' layer(ui-primitives);
+@import './primitives/Tabs.css' layer(ui-primitives);
+@import './primitives/Stack.css' layer(ui-primitives);
+@import './primitives/Card.css' layer(ui-primitives);
+@import './primitives/List.css' layer(ui-primitives);
+@import './primitives/MonoId.css' layer(ui-primitives);
+@import './primitives/DataTable.css' layer(ui-primitives);
+@import './primitives/Screen.css' layer(ui-primitives);
+@import './primitives/Overlays.css' layer(ui-primitives);
+@import './primitives/ModalDialog.css' layer(ui-primitives);
+@import './primitives/DetailDrawer.css' layer(ui-primitives);
+@import './primitives/DockTray.css' layer(ui-primitives);
+@import './primitives/Utilities.css' layer(ui-primitives);

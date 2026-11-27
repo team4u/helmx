@@ -5,7 +5,7 @@
  * Why: `packages/web` is built as part of `pnpm build` and `pnpm test:all` / `test:integration`.
  * Vite always re-bundles from scratch (~4.5s) even when zero inputs changed. This wrapper hashes
  * every real build input (web src/public/index.html/vite.config/package.json/tsconfig.json,
- * workspace browser inputs protocol/src & plugin-client/src, pnpm-lock.yaml, VITE_* build env,
+ * workspace browser inputs protocol/src, ui/src & plugin-client/src, pnpm-lock.yaml, VITE_* build env,
  * and this script) and verifies dist/index.html + every referenced asset + every previously
  * emitted dist file exists with matching byte size. Any input change, missing output, `--force`,
  * or `HELMX_CLEAN_DIST=1` runs a full `vite build`.
@@ -53,6 +53,8 @@ export function computeWebBuildFingerprint(options = {}) {
 
   hashDirectoryInto(hash, 'protocol/src', join(repoRoot, 'packages/protocol/src'), TREE_OPTIONS);
   hashFileInto(hash, 'protocol/package.json', join(repoRoot, 'packages/protocol/package.json'));
+  hashDirectoryInto(hash, 'ui/src', join(repoRoot, 'packages/ui/src'), TREE_OPTIONS);
+  hashFileInto(hash, 'ui/package.json', join(repoRoot, 'packages/ui/package.json'));
   hashDirectoryInto(hash, 'plugin-client/src', join(repoRoot, 'packages/plugin-client/src'), TREE_OPTIONS);
   hashFileInto(hash, 'plugin-client/package.json', join(repoRoot, 'packages/plugin-client/package.json'));
   hashFileInto(hash, 'pnpm-lock.yaml', join(repoRoot, 'pnpm-lock.yaml'));

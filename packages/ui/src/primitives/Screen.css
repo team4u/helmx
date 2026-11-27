@@ -1,0 +1,274 @@
+/* ==========================================================================
+ * Screen / ScreenSection / ScreenToolbar 全屏页面外壳与通栏工具条原语
+ * ========================================================================== */
+
+.helmx-pane {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+  position: relative;
+  container-type: inline-size;
+}
+
+.pane-topbar {
+  height: 46px;
+  min-height: 46px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  gap: 12px;
+}
+
+.pane-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.pane-title-group > .screen-subtitle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.pane-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--fg);
+  line-height: 46px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+  display: block;
+  min-width: 70px;
+  user-select: text;
+}
+
+.pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.screen-pane {
+  --screen-gutter: 24px;
+}
+
+.screen-host-toolbar-slot {
+  display: contents;
+}
+
+.screen-toolbar-bar {
+  width: 100%;
+  flex-shrink: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 8px var(--screen-gutter, 24px);
+  box-sizing: border-box;
+  z-index: var(--z-sticky);
+  container-type: inline-size;
+}
+
+.screen-toolbar-bar > .screen-toolbar {
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+}
+
+.screen-toolbar-bar[data-screen-layout="full-bleed"] > .screen-toolbar {
+  max-width: none;
+  margin: 0;
+}
+
+.screen-toolbar-bar-inline {
+  position: sticky;
+  top: 0;
+  padding: 8px 0;
+}
+
+.screen-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.screen-host-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  --screen-gutter: 24px;
+}
+
+.screen-host-body > .callout {
+  width: calc(100% - 2 * var(--screen-gutter));
+  max-width: 1480px;
+  margin: 20px auto;
+  box-sizing: border-box;
+}
+
+/* 未使用 <Screen>（无 data-screen-layout）的插件自定义根节点兜底留白与最大宽度 */
+.screen-host-body > [data-plugin-id] > :not([data-screen-layout]) {
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding-inline: var(--screen-gutter);
+  box-sizing: border-box;
+}
+
+.screen-host-body > [data-plugin-id] > :not([data-screen-layout]):first-child {
+  padding-top: 20px;
+}
+
+.screen-host-body > [data-plugin-id] > :not([data-screen-layout]):last-child {
+  padding-bottom: 28px;
+}
+
+.screen-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.screen-container[data-screen-layout="contained"] {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 20px var(--screen-gutter, 24px) 28px;
+}
+
+/* 全出血全屏视图（<Screen layout="full-bleed">）：释放舞台宽限与留白 */
+.screen-container[data-screen-layout="full-bleed"] {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  flex: 1 0 auto;
+}
+
+.screen-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.screen-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.screen-header > .screen-subtitle {
+  margin-right: auto;
+}
+
+.screen-header > .stack-row {
+  margin-left: auto;
+}
+
+.screen-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.screen-subtitle {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.screen-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.screen-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.screen-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.screen-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.screen-toolbar .search-box:not(.search-box-toolbar) {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+@container (max-width: 680px) {
+  .screen-host-body {
+    --screen-gutter: 14px;
+  }
+  .screen-pane {
+    --screen-gutter: 14px;
+  }
+  .screen-toolbar-bar {
+    padding: 8px 14px;
+  }
+  .screen-toolbar-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+  .screen-toolbar .search-box-toolbar,
+  .screen-toolbar-bar .search-box-toolbar {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+    flex: 1 1 100%;
+  }
+  .screen-container[data-screen-layout="contained"] {
+    padding: 16px var(--screen-gutter, 14px) 22px;
+  }
+}
+
+@media (max-width: 680px) {
+  .screen-toolbar-bar {
+    padding: 8px 14px;
+  }
+  .screen-toolbar-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+}

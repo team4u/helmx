@@ -1,11 +1,13 @@
 /* Helmx 宿主样式入口（Quiet Surface 设计系统）。
- * 显式级联层声明：`host-base < host-components < plugin-ui`，使插件注入的
- * `@layer plugin-ui` 样式无需 `!important` 即可可预测地覆盖宿主默认原语。
+ * 显式级联层声明：`ui-base < ui-primitives < host-components < plugin-ui`，
+ * 通用设计系统令牌/基线与原语样式来自独立 `@helmx/ui` 包，使宿主业务样式与
+ * 插件注入的 `@layer plugin-ui` 样式均无需 `!important` 即可可预测地层叠覆盖。
  * 窄面板、移动端与减少动画偏好见 responsive.css（由 main.tsx 在本入口之后引入，同样归入 host-components 层）。 */
-@layer host-base, host-components, plugin-ui;
+@layer ui-base, ui-primitives, host-components, plugin-ui;
 
-@import './styles/tokens.css' layer(host-base);
-@import './styles/base.css' layer(host-base);
+@import '@helmx/ui/tokens.css' layer(ui-base);
+@import '@helmx/ui/base.css' layer(ui-base);
+@import '@helmx/ui/styles.css';
 @import './styles/shell.css' layer(host-components);
 @import './styles/navigation.css' layer(host-components);
 @import './styles/conversation.css' layer(host-components);
@@ -20,9 +22,7 @@
 @import './styles/model-center.css' layer(host-components);
 @import './styles/plugin-center.css' layer(host-components);
 @import './styles/composer-widgets.css' layer(host-components);
-@import './styles/segmented.css' layer(host-components);
 @import './styles/overlays.css' layer(host-components);
 @import './styles/standby.css' layer(host-components);
 @import './styles/outline.css' layer(host-components);
 @import './styles/overview.css' layer(host-components);
-@import './styles/utilities.css' layer(host-components);

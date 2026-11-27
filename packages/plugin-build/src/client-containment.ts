@@ -30,6 +30,7 @@ export const CLIENT_SHARED_EXTERNALS = [
   'react-dom/client',
   'react/jsx-runtime',
   'lucide-react',
+  '@helmx/ui',
   '@helmx/plugin-client',
 ] as const;
 
@@ -40,6 +41,7 @@ export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.fr
   'react-dom/client': '__helmx_shared_react_dom_client',
   'react/jsx-runtime': '__helmx_shared_react_jsx_runtime',
   'lucide-react': '__helmx_shared_lucide_react',
+  '@helmx/ui': '__helmx_shared_ui',
   '@helmx/plugin-client': '__helmx_shared_plugin_client',
 });
 

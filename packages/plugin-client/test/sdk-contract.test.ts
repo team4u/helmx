@@ -32,6 +32,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import {
   PLUGIN_CLIENT_SHARED_EXPORTS,
+  UI_SHARED_EXPORTS,
   resolveLocalizedText,
   type AskSpec,
   type ConversationDetail,
@@ -43,6 +44,7 @@ import {
   type ScreenSpec,
   type UsePluginsResult,
 } from '@helmx/protocol'
+import { CopyButton } from '@helmx/ui'
 import * as SDK from '../src/index.js'
 import * as PureSDK from '../src/pure.js'
 
@@ -52,11 +54,28 @@ const e = React.createElement
 // 1. Bidirectional export-list locking
 // ---------------------------------------------------------------------------
 
-test('every symbol in PLUGIN_CLIENT_SHARED_EXPORTS actually exists in this package runtime namespace', { timeout: 60_000 }, () => {
+test('every symbol in PLUGIN_CLIENT_SHARED_EXPORTS actually exists in this package runtime namespace and zero @helmx/ui primitives are re-exported', { timeout: 60_000 }, () => {
   const exportedNames = new Set(Object.keys(SDK))
   for (const name of PLUGIN_CLIENT_SHARED_EXPORTS) {
     assert.ok(exportedNames.has(name), `@helmx/plugin-client is missing manifest symbol ${name} (PLUGIN_CLIENT_SHARED_EXPORTS drifted from the implementation)`)
     assert.ok((SDK as Record<string, unknown>)[name] !== undefined, `symbol ${name} must not be undefined`)
+  }
+  const uiSet = new Set<string>(UI_SHARED_EXPORTS)
+  for (const name of PLUGIN_CLIENT_SHARED_EXPORTS) {
+    assert.equal(uiSet.has(name), false, `PLUGIN_CLIENT_SHARED_EXPORTS must not overlap with UI_SHARED_EXPORTS (${name})`)
+  }
+  // Zero UI primitive re-exports: UI primitives belong strictly to @helmx/ui.
+  for (const forbidden of [
+    'Button', 'IconButton', 'Badge', 'Kbd', 'Stack', 'Input', 'Textarea', 'Field',
+    'Card', 'SelectCard', 'CardGrid', 'List', 'ListRow', 'MonoId', 'SearchBox',
+    'EmptyState', 'LoadingState', 'Screen', 'ScreenSection', 'ScreenToolbar',
+    'DataTable', 'KvGrid', 'DetailDrawer', 'DockTray', 'Dialog', 'ModalDialog',
+    'Popover', 'Tooltip', 'DropdownMenu', 'AlertDialog', 'ConfirmDialog',
+    'Switch', 'Checkbox', 'Select', 'MultiSelect', 'Tabs', 'SegmentedControl',
+    'StatusLight', 'Callout', 'ViewBoundary', 'CopyButton', 'copyToClipboard',
+    'HelmxIcon', 'ScreenHostContext', 'useScreenHost', 'formatTime', 'formatDurationMs',
+  ]) {
+    assert.equal(exportedNames.has(forbidden), false, `@helmx/plugin-client must not re-export @helmx/ui symbol ${forbidden}`)
   }
 })
 
@@ -90,8 +109,6 @@ test('host-facing symbols (port / context / factory / explicit-addressing hooks)
     'createComposerModelPickerModeRegistry',
     'useComposerModelPickerMode',
     'ScreenParamsContext',
-    'ScreenHostContext',
-    'useScreenHost',
   ] as const) {
     assert.ok(name in SDK, `host-facing symbol ${name} must be exported`)
     assert.ok((SDK as Record<string, unknown>)[name] !== undefined, `host-facing symbol ${name} must not be undefined`)
@@ -1089,75 +1106,32 @@ test('usePluginLocale / usePluginTranslator: context takes precedence over port,
   ])
 })
 
-test('shared primitives update labels with the host locale without changing selected values', { timeout: 60_000 }, () => {
+test('ToolCallDetails: bootstraps artifact trigger via @helmx/ui Button size="xs" (SSR)', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const reactive = createReactivePort(log, { locale: 'en' })
-  const options = Array.from({ length: 5 }, (_, index) => ({ value: `v${index}`, label: `Option ${index}` }))
-  const changes: string[][] = []
-  const { root, host } = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: reactive.port },
-      e('div', null,
-        e(SDK.CopyButton, { text: 'user text' }),
-        e(SDK.DataTable, { loading: true, children: null }),
-        e(SDK.DataTable, { empty: true, children: null }),
-        e(SDK.MultiSelect, { options, value: ['v0', 'v1'], open: true, inline: true, onValuesChange: (values: string[]) => changes.push(values) }))),
-  )
-  try {
-    assert.equal(host.querySelector('button')?.getAttribute('title'), 'Copy')
-    assert.equal(host.querySelector('[role="status"]')?.textContent, 'Loading…')
-    assert.equal(host.querySelector('.table-empty')?.textContent, 'No data')
-    assert.equal(host.querySelector('.helmx-select-label')?.textContent, '2 selected')
-    assert.equal(host.querySelector('input')?.getAttribute('placeholder'), 'Search options…')
-    act(() => reactive.setLocale('zh-CN'))
-    assert.equal(host.querySelector('button')?.getAttribute('title'), '复制')
-    assert.equal(host.querySelector('[role="status"]')?.textContent, '加载中…')
-    assert.equal(host.querySelector('.table-empty')?.textContent, '暂无数据')
-    assert.equal(host.querySelector('.helmx-select-label')?.textContent, '已选择 2 项')
-    assert.equal(host.querySelector('input')?.getAttribute('placeholder'), '搜索选项…')
-    assert.equal(host.querySelectorAll('[role="option"][aria-selected="true"]').length, 2)
-    assert.deepEqual(changes, [], 'changing locale never submits a selection change')
-    act(() => reactive.setLocale('en'))
-    assert.equal(host.querySelector('.helmx-select-label')?.textContent, '2 selected')
-    assert.equal(host.querySelector('button')?.getAttribute('title'), 'Copy')
-  } finally {
-    act(() => root.unmount())
-  }
-})
+  const port = makePort(log, { locale: 'en' })
+  const pluginCtx = SDK.createPluginClientContext(port, 'builtin:workflow', 7)
 
-test('ViewBoundary translates its retry UI while preserving the original diagnostic across locale changes', { timeout: 60_000 }, () => {
-  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const reactive = createReactivePort(log, { locale: 'en' })
-  let failing = true
-  function Content(): React.ReactNode {
-    if (failing) throw new Error('stable render diagnostic')
-    return e('span', null, 'restored user content')
-  }
-  const previousConsoleError = console.error
-  let mounted: ReturnType<typeof mount> | undefined
-  try {
-    console.error = () => {}
-    mounted = mount(
-      e(SDK.PluginClientHostContext.Provider, { value: reactive.port },
-        e(SDK.ViewBoundary, null, e(Content))),
-    )
-    const { host, root } = mounted
-    assert.equal(host.querySelector('strong')?.textContent, 'View failed to render')
-    assert.equal(host.querySelector('p')?.textContent, 'stable render diagnostic')
-    act(() => reactive.setLocale('zh-CN'))
-    assert.equal(host.querySelector('strong')?.textContent, '视图渲染失败')
-    assert.equal(host.querySelector('p')?.textContent, 'stable render diagnostic')
-    const retry = host.querySelector<HTMLButtonElement>('button')
-    assert.ok(retry)
-    assert.equal(retry.textContent, '重新渲染')
-    failing = false
-    act(() => retry.click())
-    assert.ok(host.querySelector('[role="alert"]') === null)
-    assert.equal(host.textContent, 'restored user content')
-  } finally {
-    const root = mounted?.root
-    if (root) act(() => root.unmount())
-    console.error = previousConsoleError
-  }
+  const withArtifact = renderToString(
+    e(
+      SDK.PluginClientContext.Provider,
+      { value: pluginCtx },
+      e(SDK.ToolCallDetails, { input: { cmd: 'ls' }, result: 'ok', artifactRef: 'art_42', defaultOpen: true }),
+    ),
+  )
+  assert.match(
+    withArtifact,
+    /<button[^>]*type="button"[^>]*class="btn btn-secondary btn-xs"[^>]*>[^<]*<!-- -->\s*#\s*<!-- -->art_42<\/button>/,
+    'ToolCallDetails artifact button must render through @helmx/ui Button size="xs"',
+  )
+
+  const withoutArtifact = renderToString(
+    e(
+      SDK.PluginClientContext.Provider,
+      { value: pluginCtx },
+      e(SDK.ToolCallDetails, { input: { cmd: 'ls' }, result: 'ok', artifactRef: '' }),
+    ),
+  )
+  assert.doesNotMatch(withoutArtifact, /<button/, 'empty artifactRef must not render an artifact button')
 })
 
 test('PluginSlot: short names qualify, lists render all matches, singles render the first, fallbacks render when empty, and missing owners warn', { timeout: 60_000 }, () => {
@@ -1619,171 +1593,6 @@ test('useSharedNowMs: consumes optional host port.getServerNow(), preserves this
   }
 })
 
-test('timing formatters (formatStopwatchMs / formatOffsetMs / formatDurationMs) and resolveConversationTiming contract + pure sub-entry exports', { timeout: 60_000 }, () => {
-  // Verify timing helpers are locked in PLUGIN_CLIENT_SHARED_EXPORTS and index.ts/pure.ts expose identical functions.
-  for (const name of ['formatStopwatchMs', 'formatOffsetMs', 'resolveConversationTiming'] as const) {
-    assert.ok(
-      (PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes(name),
-      `PLUGIN_CLIENT_SHARED_EXPORTS must include ${name}`,
-    )
-    assert.equal(typeof SDK[name], 'function', `@helmx/plugin-client must export ${name}`)
-  }
-  assert.ok(SDK.formatStopwatchMs === PureSDK.formatStopwatchMs)
-  assert.ok(SDK.formatOffsetMs === PureSDK.formatOffsetMs)
-  assert.ok(SDK.formatDurationMs === PureSDK.formatDurationMs)
-  assert.ok(SDK.resolveConversationTiming === PureSDK.resolveConversationTiming)
-
-  // formatDurationMs existing behavior stays unchanged.
-  assert.equal(SDK.formatDurationMs(undefined), '')
-  assert.equal(SDK.formatDurationMs(-1), '')
-  assert.equal(SDK.formatDurationMs(500), '500ms')
-  assert.equal(SDK.formatDurationMs(1500), '1.5s')
-  assert.equal(SDK.formatDurationMs(59_950), '1m0s')
-  assert.equal(SDK.formatDurationMs(125_000), '2m5s')
-  assert.equal(SDK.formatDurationMs(3_660_000), '1h1m')
-
-  // formatStopwatchMs: monotonic whole-second flooring + 2-digit minor unit padding.
-  for (const bad of [undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, -0.01]) {
-    assert.equal(SDK.formatStopwatchMs(bad), '')
-  }
-  assert.equal(SDK.formatStopwatchMs(0), '0s')
-  assert.equal(SDK.formatStopwatchMs(999), '0s')
-  assert.equal(SDK.formatStopwatchMs(1_000), '1s')
-  assert.equal(SDK.formatStopwatchMs(12_345), '12s')
-  assert.equal(SDK.formatStopwatchMs(59_999), '59s')
-  assert.equal(SDK.formatStopwatchMs(60_000), '1m00s')
-  assert.equal(SDK.formatStopwatchMs(65_999), '1m05s')
-  assert.equal(SDK.formatStopwatchMs(750_000), '12m30s')
-  assert.equal(SDK.formatStopwatchMs(3_599_999), '59m59s')
-  assert.equal(SDK.formatStopwatchMs(3_600_000), '1h00m')
-  assert.equal(SDK.formatStopwatchMs(3_900_000), '1h05m')
-  assert.equal(SDK.formatStopwatchMs(3_959_999), '1h05m')
-  assert.equal(SDK.formatStopwatchMs(36_000_000), '10h00m')
-
-  // formatOffsetMs: relative offset +MM:SS (<1h) and +H:MM:SS (>=1h).
-  for (const bad of [undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, -0.5]) {
-    assert.equal(SDK.formatOffsetMs(bad), '')
-  }
-  assert.equal(SDK.formatOffsetMs(0), '+00:00')
-  assert.equal(SDK.formatOffsetMs(999), '+00:00')
-  assert.equal(SDK.formatOffsetMs(15_000), '+00:15')
-  assert.equal(SDK.formatOffsetMs(15_999), '+00:15')
-  assert.equal(SDK.formatOffsetMs(135_000), '+02:15')
-  assert.equal(SDK.formatOffsetMs(3_599_999), '+59:59')
-  assert.equal(SDK.formatOffsetMs(3_600_000), '+1:00:00')
-  assert.equal(SDK.formatOffsetMs(3_735_000), '+1:02:15')
-  assert.equal(SDK.formatOffsetMs(36_000_000), '+10:00:00')
-
-  // resolveConversationTiming: honest timing across all 5 states and missing/skewed/invalid inputs.
-  // 1. Fresh idle conversation: nowMs ignored, totalRunMs omitted.
-  assert.deepEqual(
-    SDK.resolveConversationTiming({ status: 'idle', runDurationMs: 0, pendingAskCount: 0 }, 50_000),
-    { settledRunMs: 0, isRunning: false, isBlocked: false },
-  )
-
-  // 2. Settled done/error conversation with stale runStartedAt/pendingAskSince: nowMs still ignored.
-  assert.deepEqual(
-    SDK.resolveConversationTiming(
-      { status: 'done', runDurationMs: 4_200, runStartedAt: 10_000, pendingAskSince: 12_000, pendingAskCount: 0 },
-      50_000,
-    ),
-    { settledRunMs: 4_200, totalRunMs: 4_200, isRunning: false, isBlocked: false },
-  )
-  assert.deepEqual(
-    SDK.resolveConversationTiming({ status: 'error', runDurationMs: 1_500, runStartedAt: 10_000 }, 50_000),
-    { settledRunMs: 1_500, totalRunMs: 1_500, isRunning: false, isBlocked: false },
-  )
-
-  // 3. Working with runStartedAt + nowMs: computes currentRunMs and totalRunMs = settled + current.
-  assert.deepEqual(
-    SDK.resolveConversationTiming({ status: 'working', runDurationMs: 3_000, runStartedAt: 10_000 }, 14_500),
-    { settledRunMs: 3_000, currentRunMs: 4_500, totalRunMs: 7_500, isRunning: true, isBlocked: false },
-  )
-  // First-turn working right at t=0: totalRunMs is 0 (live stopwatch can render 0s).
-  assert.deepEqual(
-    SDK.resolveConversationTiming({ status: 'working', runDurationMs: 0, runStartedAt: 10_000 }, 10_000),
-    { settledRunMs: 0, currentRunMs: 0, totalRunMs: 0, isRunning: true, isBlocked: false },
-  )
-  // Slight negative clock skew clamps currentRunMs to 0 (never negative).
-  assert.deepEqual(
-    SDK.resolveConversationTiming({ status: 'working', runDurationMs: 2_000, runStartedAt: 10_500 }, 10_000),
-    { settledRunMs: 2_000, currentRunMs: 0, totalRunMs: 2_000, isRunning: true, isBlocked: false },
-  )
-
-  // 4. Working WITHOUT runStartedAt or WITHOUT nowMs (SSR): never fabricates currentRunMs.
-  assert.deepEqual(
-    SDK.resolveConversationTiming({ status: 'working', runDurationMs: 0 }, 50_000),
-    { settledRunMs: 0, isRunning: true, isBlocked: false },
-  )
-  assert.deepEqual(
-    SDK.resolveConversationTiming({ status: 'working', runDurationMs: 3_000, runStartedAt: 10_000 }, undefined),
-    { settledRunMs: 3_000, totalRunMs: 3_000, isRunning: true, isBlocked: false },
-  )
-
-  // 5. Blocked mid-run (both runStartedAt and pendingAskSince present): both isRunning and isBlocked true.
-  assert.deepEqual(
-    SDK.resolveConversationTiming(
-      {
-        status: 'blocked',
-        runDurationMs: 5_000,
-        runStartedAt: 10_000,
-        pendingAskCount: 1,
-        pendingAskSince: 14_000,
-      },
-      20_000,
-    ),
-    {
-      settledRunMs: 5_000,
-      currentRunMs: 10_000,
-      totalRunMs: 15_000,
-      waitingMs: 6_000,
-      isRunning: true,
-      isBlocked: true,
-    },
-  )
-
-  // 6. Blocked orphan ask without active run: isBlocked=true, isRunning=false, no currentRunMs.
-  assert.deepEqual(
-    SDK.resolveConversationTiming(
-      { status: 'blocked', runDurationMs: 5_000, pendingAskCount: 1, pendingAskSince: 14_000 },
-      20_000,
-    ),
-    {
-      settledRunMs: 5_000,
-      totalRunMs: 5_000,
-      waitingMs: 6_000,
-      isRunning: false,
-      isBlocked: true,
-    },
-  )
-
-  // 7. Blocked with pendingAskCount=0, negative, NaN, or Infinity: never fabricates waitingMs or NaN.
-  for (const invalidCount of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
-    assert.deepEqual(
-      SDK.resolveConversationTiming(
-        {
-          status: 'blocked',
-          runDurationMs: -100,
-          runStartedAt: Number.NaN,
-          pendingAskCount: invalidCount,
-          pendingAskSince: 14_000,
-        },
-        20_000,
-      ),
-      { settledRunMs: 0, isRunning: false, isBlocked: true },
-      `blocked with pendingAskCount=${String(invalidCount)} must omit waitingMs`,
-    )
-  }
-  // Blocked with omitted pendingAskCount and valid pendingAskSince still computes waitingMs honestly.
-  assert.deepEqual(
-    SDK.resolveConversationTiming(
-      { status: 'blocked', pendingAskSince: 14_000 },
-      20_000,
-    ),
-    { settledRunMs: 0, waitingMs: 6_000, isRunning: false, isBlocked: true },
-  )
-})
-
 // ---------------------------------------------------------------------------
 // 7. usePluginConfig contract
 // ---------------------------------------------------------------------------
@@ -2025,7 +1834,7 @@ test('streaming conversationLives frames only re-render the matching useConversa
   })
   const CopyBtnProbe = React.memo(function CopyBtnProbe(): React.ReactNode {
     counts.copyBtn += 1
-    return e(SDK.CopyButton, { text: 'hello' })
+    return e(CopyButton, { text: 'hello' })
   })
 
   const { root } = mount(

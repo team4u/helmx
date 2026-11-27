@@ -24,9 +24,10 @@ import { isInside, realpathOrNull, safeFileName, sha256 } from './client-paths.j
  * v3: native esbuild CSS bundling; v4: controlled npm dependencies; v5: minify + pre-gzip;
  * v6: code splitting + async chunk bridge; v7: isolated `__helmx_chunk_share` namespace bridge;
  * v8: controlled npm declaration set recorded in cache credentials;
- * v9: mtime/size stat fast-path on `npmDependencies` outside the 2s filesystem race window.
+ * v9: mtime/size stat fast-path on `npmDependencies` outside the 2s filesystem race window;
+ * v10: add `@helmx/ui` shared external virtualization (`globalThis.__helmx_shared_ui`).
  */
-export const DEPS_LIST_VERSION = 9;
+export const DEPS_LIST_VERSION = 10;
 const MAX_MEMORY_COMPILED_CACHE = 128;
 const CONTENT_HASH_PATTERN = /^[a-f0-9]{16,64}$/i;
 

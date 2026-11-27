@@ -8,7 +8,7 @@
  * units. To avoid misclassification, this script only does a [conservative package-level
  * split]:
  *
- *   unit        = protocol + env-io + test-kit + cli + web + plugin-client (env-io is in-process
+ *   unit        = protocol + env-io + test-kit + cli + web + ui + plugin-client (env-io is in-process
  *                 pure scan orchestrator injection tests; web covers happy-dom/React interaction
  *                 and SDK self-tests — none start real services);
  *   integration = plugin-build + kernel + plugins + hub + node + payload plus two path entries —
@@ -87,7 +87,7 @@ const packagesDir = path.join(repoRoot, 'packages');
 // tier changes must be mirrored in AGENTS.md's test tiering conventions and PACKAGE_TIERS in
 // scripts/lib/workspace-meta.mjs.
 const SUITES = {
-  unit: ['protocol', 'env-io', 'test-kit', 'cli', 'web', 'plugin-client'],
+  unit: ['protocol', 'env-io', 'test-kit', 'cli', 'web', 'ui', 'plugin-client'],
   integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'node', 'payload', 'cli/test/launcher', 'env-io/test/update'],
 };
 const ALL_PACKAGES = [...SUITES.unit, ...SUITES.integration];

@@ -208,17 +208,6 @@
   overflow: hidden;
 }
 
-.helmx-pane {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-  overflow: hidden;
-  position: relative;
-}
-
 .helmx-primary-pane {
   flex: 1;
   min-width: 0;
@@ -627,12 +616,6 @@
   flex-direction: column;
   background: var(--bg-elevated);
   overflow: hidden;
-}
-
-/* 右侧滑出抽屉通用入场动效（conversation / plugin / workbench / primary 抽屉共用） */
-@keyframes drawerSlideIn {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
 }
 
 /* ==========================================================================

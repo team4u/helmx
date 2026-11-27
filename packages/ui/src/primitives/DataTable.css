@@ -1,0 +1,112 @@
+/* ==========================================================================
+ * DataTable & KvGrid 表格与键值对概览原语
+ * ========================================================================== */
+
+.helmx-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-elevated);
+  box-sizing: border-box;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.helmx-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  table-layout: auto;
+}
+
+.helmx-table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.helmx-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  vertical-align: middle;
+  font-size: 12.5px;
+}
+
+.helmx-table tr:last-child td {
+  border-bottom: none;
+}
+
+@media (hover: hover) {
+  .helmx-table tr:hover td {
+    background: var(--bg-hover);
+  }
+  .helmx-table tr:hover td.table-empty {
+    background: transparent;
+  }
+}
+
+.cell-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.row-actions-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.table-empty {
+  color: var(--fg-muted);
+  text-align: center;
+  padding: 4px 10px;
+  font-size: 12.5px;
+}
+
+.cell-ellipsis {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-error {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--err);
+}
+
+/* Key-Value Grid 原语 */
+.kv-grid {
+  display: grid;
+  grid-template-columns: minmax(84px, auto) minmax(0, 1fr);
+  gap: 6px 14px;
+  font-size: 12.5px;
+  min-width: 0;
+}
+
+.kv-key {
+  color: var(--fg-muted);
+  user-select: none;
+  min-width: 0;
+}
+
+.kv-val {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

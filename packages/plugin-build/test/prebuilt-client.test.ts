@@ -41,8 +41,10 @@ test('buildPluginClientBundleDir: auto-scans non-declaration modules, writes man
     join(clientRoot, 'index.tsx'),
     [
       "import { useState } from 'react'",
+      "import { Button } from '@helmx/ui'",
+      "import { usePluginContext } from '@helmx/plugin-client'",
       "import './styles.css'",
-      'export function MainPanel() { return useState("ok")[0] }',
+      'export function MainPanel() { void Button; void usePluginContext; return useState("ok")[0] }',
     ].join('\n'),
   )
   writeFileSync(
@@ -71,6 +73,8 @@ test('buildPluginClientBundleDir: auto-scans non-declaration modules, writes man
   const gzBytes = readFileSync(join(outDir, `${indexEntry.entryFile}.gz`))
   assert.equal(gunzipSync(gzBytes).toString('utf8'), jsText)
   assert.match(jsText, /__helmx_shared_react/)
+  assert.match(jsText, /__helmx_shared_ui/)
+  assert.match(jsText, /__helmx_shared_plugin_client/)
   assert.match(jsText, /prebuilt-card/)
   if (process.platform !== 'win32') {
     assert.equal(statSync(join(outDir, indexEntry.entryFile)).mode & 0o777, 0o644)

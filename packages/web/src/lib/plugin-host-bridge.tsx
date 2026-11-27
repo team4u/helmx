@@ -9,13 +9,20 @@
  *   （helpers/host-store.tsx）静态引入本模块不会在 happy-dom 注册前加载
  *   react-dom/client；生产 HelmxStoreProvider 与测试共用同一实现。
  */
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import type { PluginClientHostPort } from '@helmx/plugin-client'
 import { PluginClientHostContext } from '@helmx/plugin-client'
+import { UiLocaleProvider } from '@helmx/ui'
 import type { HelmxExternalStore } from './helmx-store.js'
 import { createPluginClientHostPort } from './plugin-client-host.js'
 
 export function PluginClientHostBridge({ store, children }: { store: HelmxExternalStore; children: React.ReactNode }) {
   const port = useMemo<PluginClientHostPort>(() => createPluginClientHostPort(store), [store])
-  return <PluginClientHostContext.Provider value={port}>{children}</PluginClientHostContext.Provider>
+  const subscribeLocale = useCallback((listener: () => void) => store.subscribeDomain('locale', listener), [store])
+  const getLocale = useCallback(() => store.getLocale(), [store])
+  return (
+    <UiLocaleProvider subscribe={subscribeLocale} getLocale={getLocale}>
+      <PluginClientHostContext.Provider value={port}>{children}</PluginClientHostContext.Provider>
+    </UiLocaleProvider>
+  )
 }
