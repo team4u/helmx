@@ -59,6 +59,7 @@ export declare function emptyPurityCache(): PurityCacheStore
 export declare function loadPurityCache(cachePath: string): PurityCacheStore
 export declare function savePurityCache(cachePath: string, cache: PurityCacheStore): boolean
 export declare function shouldDisableSharding(extraArgs: string[]): boolean
+export declare function requiresNativeProcessIsolation(reasons: string[]): boolean
 export declare function balanceShardsLpt(
   files: string[],
   shardCount: number,
@@ -87,6 +88,7 @@ export declare function planFourPoolSchedule(input: {
   useCache?: boolean
 }): {
   pools: Record<TestPool, string[]>
+  processIsolatedFiles: string[]
   shardCounts: Record<TestPool, number>
   plans: ShardPlan[]
   cacheStats: { hits: number; misses: number }

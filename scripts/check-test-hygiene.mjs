@@ -12,6 +12,10 @@
  * Existing violations get no baseline exemption — every one is reported faithfully and the
  * run fails with exit code 1; each fixed is one fewer.
  *
+ * Static per-file AST and CSS results are cached on disk (`node_modules/.cache/helmx-test-hygiene-cache.json`)
+ * keyed by `(mtimeMs, size)` and invalidated automatically whenever the schema version or the
+ * hygiene rule scripts change. Warm whole-repo runs avoid loading TypeScript completely.
+ *
  * Usage (pnpm needs the -- separator; this script accepts and skips a leading literal --
  * that pnpm passes through verbatim):
  *   pnpm check:hygiene                       # every *.test.ts / *.test.tsx under all packages' test dirs
@@ -22,7 +26,7 @@
  * Exit codes: 0 clean; 1 violations found; 2 usage/baseline error. No HELMX_* env vars are
  * injected.
  */
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -40,6 +44,13 @@ import {
 } from './lib/test-hygiene.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const HYGIENE_CACHE_SCHEMA_VERSION = 1;
+const HYGIENE_CACHE_PATH = path.join(repoRoot, 'node_modules', '.cache', 'helmx-test-hygiene-cache.json');
+const RULE_SOURCE_FILES = [
+  'scripts/check-test-hygiene.mjs',
+  'scripts/lib/test-hygiene.mjs',
+  'scripts/lib/css-hygiene.mjs',
+];
 
 function tryRealpathNative(filePath) {
   try {
@@ -47,6 +58,113 @@ function tryRealpathNative(filePath) {
   } catch {
     return filePath;
   }
+}
+
+function statFingerprint(absPath) {
+  try {
+    const st = statSync(absPath);
+    if (!st.isFile()) return null;
+    return { mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    return null;
+  }
+}
+
+function computeRuleFingerprints() {
+  /** @type {Record<string, { mtimeMs: number, size: number }>} */
+  const out = {};
+  for (const rel of RULE_SOURCE_FILES) {
+    const fp = statFingerprint(path.join(repoRoot, rel));
+    if (!fp) return null;
+    out[rel] = fp;
+  }
+  return out;
+}
+
+function ruleFingerprintsMatch(expected, actual) {
+  if (!expected || !actual || typeof actual !== 'object') return false;
+  for (const rel of RULE_SOURCE_FILES) {
+    const a = expected[rel];
+    const b = actual[rel];
+    if (!a || !b || a.mtimeMs !== b.mtimeMs || a.size !== b.size) return false;
+  }
+  return true;
+}
+
+function loadHygieneCache(ruleFingerprints) {
+  const empty = {
+    schemaVersion: HYGIENE_CACHE_SCHEMA_VERSION,
+    ruleFingerprints,
+    testEntries: {},
+    cssEntries: {},
+  };
+  if (!ruleFingerprints || !existsSync(HYGIENE_CACHE_PATH)) return empty;
+  try {
+    const parsed = JSON.parse(readFileSync(HYGIENE_CACHE_PATH, 'utf8'));
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      parsed.schemaVersion !== HYGIENE_CACHE_SCHEMA_VERSION ||
+      !ruleFingerprintsMatch(ruleFingerprints, parsed.ruleFingerprints) ||
+      !parsed.testEntries ||
+      typeof parsed.testEntries !== 'object' ||
+      Array.isArray(parsed.testEntries) ||
+      !parsed.cssEntries ||
+      typeof parsed.cssEntries !== 'object' ||
+      Array.isArray(parsed.cssEntries)
+    ) {
+      return empty;
+    }
+    return {
+      schemaVersion: HYGIENE_CACHE_SCHEMA_VERSION,
+      ruleFingerprints,
+      testEntries: parsed.testEntries,
+      cssEntries: parsed.cssEntries,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+function saveHygieneCache(cache) {
+  if (!cache.ruleFingerprints) return;
+  try {
+    mkdirSync(path.dirname(HYGIENE_CACHE_PATH), { recursive: true });
+    const tmp = `${HYGIENE_CACHE_PATH}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    writeFileSync(tmp, JSON.stringify(cache), 'utf8');
+    renameSync(tmp, HYGIENE_CACHE_PATH);
+  } catch {
+    // Cache persistence is best-effort and must never fail the hygiene check.
+  }
+}
+
+function isValidTestCacheEntry(entry, fp) {
+  if (!entry || typeof entry !== 'object' || !fp) return false;
+  if (entry.mtimeMs !== fp.mtimeMs || entry.size !== fp.size) return false;
+  if (!Array.isArray(entry.violations) || !entry.stats || typeof entry.stats !== 'object') return false;
+  return (
+    typeof entry.stats.testCalls === 'number' &&
+    typeof entry.stats.skipCalls === 'number' &&
+    typeof entry.stats.todoCalls === 'number' &&
+    typeof entry.stats.subtestCalls === 'number' &&
+    typeof entry.stats.hookCalls === 'number'
+  );
+}
+
+function isValidCssCacheEntry(entry, fp) {
+  return Boolean(
+    entry &&
+      typeof entry === 'object' &&
+      fp &&
+      entry.mtimeMs === fp.mtimeMs &&
+      entry.size === fp.size &&
+      Array.isArray(entry.violations),
+  );
+}
+
+function isCacheableRepoFile(rel) {
+  const posix = toPosixPath(rel);
+  return !path.isAbsolute(rel) && !posix.startsWith('node_modules/');
 }
 
 /**
@@ -304,6 +422,7 @@ if (opts.base && !opts.changed) {
 // rejected; never silently check some other repository).
 let scopeLabel;
 let files;
+const isWholeRepoMode = opts.files.length === 0 && !opts.changed;
 if (opts.files.length > 0) {
   const repoRootReal = tryRealpathNative(repoRoot);
   files = opts.files.map((f) => {
@@ -342,30 +461,70 @@ if (opts.files.length > 0) {
 
 console.error(`[check-hygiene] scope: ${scopeLabel}`);
 
-// typescript comes from the repo root devDependency; createRequire anchors resolution there.
+// Lazy-load TypeScript only on cache miss or added-line diff analysis so warm whole-repo runs skip loading tsc.
 const requireFromRoot = createRequire(path.join(repoRoot, 'package.json'));
-const ts = requireFromRoot('typescript');
+let cachedTs = null;
+const getTs = () => {
+  if (!cachedTs) cachedTs = requireFromRoot('typescript');
+  return cachedTs;
+};
+
+const ruleFingerprints = computeRuleFingerprints();
+const cache = loadHygieneCache(ruleFingerprints);
+let cacheDirty = false;
 
 const shouldCheckNewRules = opts.changed || opts.files.length > 0;
 const addedLines = shouldCheckNewRules ? collectAddedLines({ base: opts.base, files }) : new Map();
 const allViolations = [];
 const totals = { testCalls: 0, skipCalls: 0, todoCalls: 0, subtestCalls: 0, hookCalls: 0, helperImports: 0 };
+
 for (const rel of files) {
   const abs = path.isAbsolute(rel) ? rel : path.join(repoRoot, rel);
-  let source;
-  try {
-    source = readFileSync(abs, 'utf8');
-  } catch (err) {
-    console.error(`[check-hygiene] cannot read ${rel}: ${err.message}`);
-    process.exit(2);
+  const cacheKey = toPosixPath(rel);
+  const canCache = isCacheableRepoFile(rel);
+  const fp = canCache ? statFingerprint(abs) : null;
+  const changedLines = addedLines.get(cacheKey);
+  const needsAddedLineAst = Boolean(changedLines && changedLines.size > 0);
+  const cachedEntry = canCache ? cache.testEntries[cacheKey] : null;
+  const staticHit = Boolean(canCache && isValidTestCacheEntry(cachedEntry, fp));
+
+  let report;
+  let extraViolations = [];
+
+  if (staticHit && !needsAddedLineAst) {
+    report = { violations: cachedEntry.violations, stats: cachedEntry.stats };
+  } else {
+    let source;
+    try {
+      source = readFileSync(abs, 'utf8');
+    } catch (err) {
+      console.error(`[check-hygiene] cannot read ${rel}: ${err.message}`);
+      process.exit(2);
+    }
+    const ts = getTs();
+    const sourceFile = parseTestSourceFile(ts, rel, source);
+    if (staticHit) {
+      report = { violations: cachedEntry.violations, stats: cachedEntry.stats };
+    } else {
+      report = analyzeTestSource(ts, rel, source, sourceFile);
+      if (canCache && fp) {
+        cache.testEntries[cacheKey] = {
+          mtimeMs: fp.mtimeMs,
+          size: fp.size,
+          violations: report.violations,
+          stats: report.stats,
+        };
+        cacheDirty = true;
+      }
+    }
+    if (needsAddedLineAst) {
+      extraViolations = [
+        ...analyzeAddedSubtests(ts, rel, sourceFile, changedLines),
+        ...analyzeAddedTestHelperImports(ts, rel, sourceFile, changedLines),
+      ];
+    }
   }
-  const sourceFile = parseTestSourceFile(ts, rel, source);
-  const report = analyzeTestSource(ts, rel, source, sourceFile);
-  const changedLines = addedLines.get(rel);
-  const extraViolations = [
-    ...analyzeAddedSubtests(ts, rel, sourceFile, changedLines),
-    ...analyzeAddedTestHelperImports(ts, rel, sourceFile, changedLines),
-  ];
+
   allViolations.push(...report.violations, ...extraViolations);
   totals.testCalls += report.stats.testCalls;
   totals.skipCalls += report.stats.skipCalls;
@@ -379,14 +538,32 @@ for (const rel of files) {
 const cssFiles = collectSourceCssFiles(repoRoot);
 let ungatedHoverRules = 0;
 for (const rel of cssFiles) {
-  let source;
-  try {
-    source = readFileSync(path.join(repoRoot, rel), 'utf8');
-  } catch (err) {
-    console.error(`[check-hygiene] cannot read ${rel}: ${err.message}`);
-    process.exit(2);
+  const abs = path.join(repoRoot, rel);
+  const cacheKey = toPosixPath(rel);
+  const fp = statFingerprint(abs);
+  const cachedCss = cache.cssEntries[cacheKey];
+  let cssViolations;
+  if (isValidCssCacheEntry(cachedCss, fp)) {
+    cssViolations = cachedCss.violations;
+  } else {
+    let source;
+    try {
+      source = readFileSync(abs, 'utf8');
+    } catch (err) {
+      console.error(`[check-hygiene] cannot read ${rel}: ${err.message}`);
+      process.exit(2);
+    }
+    cssViolations = findUngatedHoverRules(source);
+    if (fp) {
+      cache.cssEntries[cacheKey] = {
+        mtimeMs: fp.mtimeMs,
+        size: fp.size,
+        violations: cssViolations,
+      };
+      cacheDirty = true;
+    }
   }
-  for (const violation of findUngatedHoverRules(source)) {
+  for (const violation of cssViolations) {
     ungatedHoverRules += 1;
     allViolations.push({
       file: rel,
@@ -395,6 +572,27 @@ for (const rel of cssFiles) {
       message: `":hover" rule must sit inside @media (hover: hover) (touch screens keep :hover stuck after a tap) or an explicit @media (hover: none) override: ${violation.selector}`,
     });
   }
+}
+
+if (isWholeRepoMode) {
+  const activeTests = new Set(files.map(toPosixPath));
+  for (const key of Object.keys(cache.testEntries)) {
+    if (!activeTests.has(key)) {
+      delete cache.testEntries[key];
+      cacheDirty = true;
+    }
+  }
+  const activeCss = new Set(cssFiles.map(toPosixPath));
+  for (const key of Object.keys(cache.cssEntries)) {
+    if (!activeCss.has(key)) {
+      delete cache.cssEntries[key];
+      cacheDirty = true;
+    }
+  }
+}
+
+if (cacheDirty) {
+  saveHygieneCache(cache);
 }
 
 allViolations.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);

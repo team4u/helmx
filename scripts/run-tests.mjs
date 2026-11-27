@@ -90,20 +90,32 @@ const timeoutMs = suiteTimeoutMs();
 // - `--dom-preload`: injects `scripts/lib/dom-shard-preload.mjs` via NODE_OPTIONS (only for `dom-shared` shards)
 // - `--shard-worker`: runs `scripts/lib/shard-worker.mjs` directly via `tsx` loader without a nested CLI wrapper
 // - `--skip-cache-hygiene`: skips redundant `/tmp/tsx-*` scan when caller (`test-suites.mjs`) already pruned once
+// - `--kill-grace-ms=<ms>`: overrides the POSIX SIGTERM -> SIGKILL escalation grace period (positive integer ms)
 let enableDomPreload = false;
 let shardWorkerMode = false;
 let skipCacheHygiene = false;
+let killGraceMs = KILL_GRACE_MS;
 const rawArgs = process.argv.slice(2);
 let argIdx = 0;
 while (argIdx < rawArgs.length) {
-  if (rawArgs[argIdx] === '--dom-preload') {
+  const arg = rawArgs[argIdx];
+  if (arg === '--dom-preload') {
     enableDomPreload = true;
     argIdx += 1;
-  } else if (rawArgs[argIdx] === '--shard-worker') {
+  } else if (arg === '--shard-worker') {
     shardWorkerMode = true;
     argIdx += 1;
-  } else if (rawArgs[argIdx] === '--skip-cache-hygiene') {
+  } else if (arg === '--skip-cache-hygiene') {
     skipCacheHygiene = true;
+    argIdx += 1;
+  } else if (arg.startsWith('--kill-grace-ms=')) {
+    const rawGrace = arg.slice('--kill-grace-ms='.length);
+    const parsedGrace = Number(rawGrace);
+    if (!Number.isFinite(parsedGrace) || parsedGrace <= 0 || Math.floor(parsedGrace) !== parsedGrace) {
+      console.error(`[run-tests] invalid --kill-grace-ms (positive integer ms required): ${rawGrace}`);
+      process.exit(2);
+    }
+    killGraceMs = parsedGrace;
     argIdx += 1;
   } else {
     break;
@@ -128,6 +140,9 @@ if (fallback) {
 // instanceof errors mapping to 500s); build artifacts are unaffected.
 if (childEnv.TSX_TSCONFIG_PATH === undefined) {
   childEnv.TSX_TSCONFIG_PATH = path.join(repoRoot, 'tsconfig.dev.json');
+}
+if (childEnv.NODE_COMPILE_CACHE === undefined) {
+  childEnv.NODE_COMPILE_CACHE = path.join(repoRoot, 'node_modules', '.cache', 'v8-compile-cache');
 }
 
 // Inject the V8 heap cap, the safe-test-assert preload, and optional dom-shard preload (never inject any HELMX_* vars).
@@ -293,7 +308,7 @@ function killTree(signal) {
       } catch {
         // Same as above.
       }
-    }, KILL_GRACE_MS);
+    }, killGraceMs);
   }
 }
 
@@ -303,11 +318,12 @@ function terminate(reason, exitCode, signal = 'SIGTERM') {
   if (suiteTimer) clearTimeout(suiteTimer);
   console.error(`[run-tests] ${reason}; terminating the test process tree (pid ${child.pid})`);
   killTree(signal);
+  const lastResortMs = Math.max(LAST_RESORT_MS, killGraceMs + 10_000);
   lastResortTimer = setTimeout(() => {
     console.error('[run-tests] no exit event long after termination; forcing exit.');
     disarmWatchdog();
     process.exit(forcedExitCode);
-  }, LAST_RESORT_MS);
+  }, lastResortMs);
 }
 
 child.on('error', (err) => {
