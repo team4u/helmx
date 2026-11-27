@@ -19,8 +19,8 @@
    - **三类解析模式（机制级杜绝机器误用）**：
      - `'human_conversation'`：顶层人类会话（`parentConversationId === undefined && (ownedBy ?? 'human') === 'human'`）初始解析为 `Planner` 模型并投影 `modelTier`；
      - `'single_only'`（缺省安全模式）：显式传递到 `spawnAgent` / `workflow` / `swarm`、`defaultCompactionModel`、`completeText` 的显式 `model` 一律拒绝并报 `400 orchestrator_tier_human_only`；
-     - `'subagent_inherit'`：当子代理、后台会话或 `fork` 会话继承某绑定了编排档位的 `Profile.model` / 全局 `defaultModel` 时，自动透明解包为具体 `executorModel` 且不带 `modelTier`（保证不因绑错 Profile 而阻断子代理启动）。
-   - **目录与工具隐身**：`<available_model_tiers>` 系统提示词目录自动过滤一切 `kind: 'orchestrator'` 档位；管理动作保持 `exposeToPrompt: false`；`switch_model` / `set_borrow` 拒绝指向编排档位（`400 orchestrator_tier_not_borrowable`），且在已启用编排档位的会话中禁用单轮借用（`409 orchestrator_tier_active`）。
+     - `'subagent_inherit'`：当子代理、后台会话、`fork` 或旁路单次补全（如 `completeText` 生成标题/记忆整理）解析绑定了编排档位的 `Profile.model` / `modelOverride` / 全局 `defaultModel` 时，自动透明解包为具体 `executorModel` 且不带 `modelTier`（保证不因绑错 Profile 而阻断子代理启动，也避免旁路补全误用昂贵的 `Planner` 模型）。
+   - **会话树锁执行模型与目录隐身**：顶层人类会话激活 `kind: 'orchestrator'` 档位后，`agent_spawn` 钩子自动将整棵派生会话树（同步/后台 `subagent`、`SubagentWorkflow`、`fork: true` 及多层嵌套孙代理，除 `herdr:*` 外部运行时与 `reattach` 外）路由至当前编排档位的 `executorModel`（与 `executorThinkingLevel`），且整个编排会话树内跳过 `<available_model_tiers>` 目录注入；管理动作保持 `exposeToPrompt: false`；`switch_model` / `set_borrow` 拒绝指向编排档位（`400 orchestrator_tier_not_borrowable`），且在已启用编排档位的会话中禁用单轮借用（`409 orchestrator_tier_active`）。
    - **符号继承**：将 `Profile.model`、`defaultModel` 或 `defaultCompactionModel` 设为单模型 `tier/<id>` 时（`compactionModel` 禁设编排档位），保存的是符号引用；切换模板或改绑档位后，未设会话覆写的会话自动对齐到新模型。
    - **思考强度优先级**：显式传入（如 `effort` / `thinkingLevel`） > 档位预设 `tier.thinkingLevel` > 逐模型默认 `modelThinkingLevels` > `Profile.thinkingLevel` > 全局默认，并按底层模型实际能力裁剪（clamp）。
    - **诚实失败**：引用不存在的档位返回 `404 model_tier_not_found`（借用解析报 `404 tier_not_found`），目标模型被禁用返回 `409 model_disabled`，绝不静默回退到默认模型。
