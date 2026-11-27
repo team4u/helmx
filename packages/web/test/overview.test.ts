@@ -355,7 +355,7 @@ test('groupOverviewCards / overviewShouldShowSectionHeaders: status, profile and
       ['bucket:needs_attention', 'Needs attention', [1]],
       ['bucket:running', 'Running', [2]],
       ['bucket:unread_done', 'Unread completed', [3]],
-      ['bucket:quiet', 'Quiet', [4]],
+      ['bucket:quiet', 'Idle', [4]],
     ],
   )
   assert.deepEqual(
@@ -2096,7 +2096,7 @@ test('ConversationOverview grouped stage renders non-empty status sections, flat
     )
     assert.ok(sections[0]!.textContent?.includes('Needs attention'))
     assert.ok(sections[1]!.textContent?.includes('Running'))
-    assert.ok(sections[2]!.textContent?.includes('Quiet'))
+    assert.ok(sections[2]!.textContent?.includes('Idle'))
 
     // 切到单桶 Running：去套娃，不重复渲染「Running」单节头
     const runningTab = [...mount.container.querySelectorAll('.segmented-control-btn')].find((btn) =>

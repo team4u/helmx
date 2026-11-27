@@ -287,7 +287,7 @@ export const shellMessages = {
   'shell.overview.sectionNeeds': { en: 'Needs attention', 'zh-CN': '需处理' },
   'shell.overview.sectionRunning': { en: 'Running', 'zh-CN': '进行中' },
   'shell.overview.sectionUnread': { en: 'Unread completed', 'zh-CN': '未读完成' },
-  'shell.overview.sectionQuiet': { en: 'Quiet', 'zh-CN': '近期安静' },
+  'shell.overview.sectionQuiet': { en: 'Idle', 'zh-CN': '空闲' },
   'shell.overview.batchToggleCard': {
     en: 'Toggle selection for this conversation tree',
     'zh-CN': '切换选择此会话树',
