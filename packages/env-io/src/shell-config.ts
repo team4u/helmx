@@ -139,6 +139,104 @@ async function resolveWindowsWhereCommand(io: ShellProbeIo): Promise<string> {
   return 'where'
 }
 
+type ProbeOutput = { stdout: string; status: number | null };
+
+/** Non-empty trimmed lines of a successful probe's stdout; a failed probe yields no lines. */
+function probeOutputLines(probe: ProbeOutput): string[] {
+  if (probe.status !== 0 || !probe.stdout) return []
+  return probe.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+}
+
+/**
+ * First candidate that exists on disk and is not a WSL launcher; every candidate is recorded as searched
+ * (for the "no bash found" diagnostic) and `pathExists` is never probed for a launcher path.
+ */
+async function firstUsableCandidate(
+  candidates: Iterable<string>,
+  io: ShellProbeIo,
+  recordSearched: (candidate: string) => void,
+): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    recordSearched(candidate)
+    if (!isWslBashLauncherPath(candidate, io.env) && (await io.pathExists(candidate))) return candidate
+  }
+  return undefined;
+}
+
+/** Git Bash candidates derived from every `where.exe git.exe` hit and its realpath (e.g. Scoop shims), first-seen order preserved. */
+async function deriveGitBashCandidates(io: ShellProbeIo, gitWhere: ProbeOutput): Promise<string[]> {
+  const derived: string[] = []
+  const seen = new Set<string>()
+  for (const gitPath of probeOutputLines(gitWhere)) {
+    for (const candidate of gitBashCandidatesFromGitExe(gitPath)) pushUniqueWin32Path(derived, seen, candidate)
+    const realGit = await io.realpath(gitPath)
+    if (realGit && realGit !== gitPath) {
+      for (const candidate of gitBashCandidatesFromGitExe(realGit)) pushUniqueWin32Path(derived, seen, candidate)
+    }
+  }
+  return derived;
+}
+
+/** Scan `where.exe bash.exe` hits: WSL launchers are recorded (for the diagnostic) and skipped, the first existing path wins. */
+async function scanWhereBash(
+  io: ShellProbeIo,
+  whereCmd: string,
+): Promise<{ shell?: string; skippedWsl: string[] }> {
+  const skippedWsl: string[] = []
+  const bashWhere = await io.execProbe(whereCmd, ['bash.exe'], SHELL_PROBE_TIMEOUT_MS)
+  for (const line of probeOutputLines(bashWhere)) {
+    if (isWslBashLauncherPath(line, io.env)) {
+      if (!skippedWsl.includes(line)) skippedWsl.push(line)
+      continue
+    }
+    if (await io.pathExists(line)) return { shell: line, skippedWsl }
+  }
+  return { skippedWsl };
+}
+
+function noBashFoundMessage(checkedList: string[], skippedWsl: string[]): string {
+  const skippedNote =
+    skippedWsl.length > 0
+      ? `Skipped WSL launcher(s): ${skippedWsl.join(', ')} (Windows host sessions do not implicitly execute inside WSL)\n\n`
+      : '';
+  const searchedLines = checkedList.length > 0 ? checkedList.map((p) => `  ${p}`).join('\n') : '  (none)';
+  return (
+    `No bash shell found. Options:\n` +
+    `  1. Install Git for Windows: https://git-scm.com/download/win\n` +
+    `  2. Add your bash to PATH (Cygwin, MSYS2, etc.)\n` +
+    `  3. Configure an explicit shellPath\n\n` +
+    skippedNote +
+    `Searched Git Bash in:\n${searchedLines}`
+  );
+}
+
+/**
+ * Windows probing order: known Git Bash install locations, Git Bash derived from `where.exe git.exe`,
+ * then `where.exe bash.exe` (WSL launchers skipped). Never silently falls into WSL.
+ */
+async function resolveWindowsShellConfig(io: ShellProbeIo): Promise<ResolveShellResult> {
+  const checkedSeen = new Set<string>()
+  const checkedList: string[] = []
+  const recordSearched = (candidate: string): void => {
+    pushUniqueWin32Path(checkedList, checkedSeen, candidate)
+  }
+
+  const known = await firstUsableCandidate(collectKnownWindowsGitBashCandidates(io), io, recordSearched)
+  if (known !== undefined) return { ok: true, value: getBashShellConfig(known, io.env) }
+
+  const whereCmd = await resolveWindowsWhereCommand(io)
+  const gitWhere = await io.execProbe(whereCmd, ['git.exe'], SHELL_PROBE_TIMEOUT_MS)
+  const derived = await firstUsableCandidate(await deriveGitBashCandidates(io, gitWhere), io, recordSearched)
+  if (derived !== undefined) return { ok: true, value: getBashShellConfig(derived, io.env) }
+
+  const { shell, skippedWsl } = await scanWhereBash(io, whereCmd)
+  if (shell !== undefined) return { ok: true, value: getBashShellConfig(shell, io.env) }
+  return { ok: false, message: noBashFoundMessage(checkedList, skippedWsl) };
+}
+
 /** Resolve an available bash shell via injected `ShellProbeIo` (never silently falls back into WSL). */
 export async function resolveShellConfigWithIo(
   customShellPath: string | undefined,
@@ -151,83 +249,7 @@ export async function resolveShellConfigWithIo(
     return { ok: false, message: `Custom shell path not found: ${customShellPath}` }
   }
 
-  if (io.platform === 'win32') {
-    const knownCandidates = collectKnownWindowsGitBashCandidates(io)
-    const checkedSeen = new Set<string>()
-    const checkedList: string[] = []
-    const recordChecked = (candidate: string) => {
-      pushUniqueWin32Path(checkedList, checkedSeen, candidate)
-    }
-
-    for (const candidate of knownCandidates) {
-      recordChecked(candidate)
-      if (!isWslBashLauncherPath(candidate, io.env) && (await io.pathExists(candidate))) {
-        return { ok: true, value: getBashShellConfig(candidate, io.env) }
-      }
-    }
-
-    const whereCmd = await resolveWindowsWhereCommand(io)
-    const gitWhere = await io.execProbe(whereCmd, ['git.exe'], SHELL_PROBE_TIMEOUT_MS)
-    if (gitWhere.status === 0 && gitWhere.stdout) {
-      const derivedCandidates: string[] = []
-      const derivedSeen = new Set<string>()
-      const gitLines = gitWhere.stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line !== '')
-      for (const gitPath of gitLines) {
-        for (const c of gitBashCandidatesFromGitExe(gitPath)) {
-          pushUniqueWin32Path(derivedCandidates, derivedSeen, c)
-        }
-        const realGit = await io.realpath(gitPath)
-        if (realGit && realGit !== gitPath) {
-          for (const c of gitBashCandidatesFromGitExe(realGit)) {
-            pushUniqueWin32Path(derivedCandidates, derivedSeen, c)
-          }
-        }
-      }
-      for (const candidate of derivedCandidates) {
-        recordChecked(candidate)
-        if (!isWslBashLauncherPath(candidate, io.env) && (await io.pathExists(candidate))) {
-          return { ok: true, value: getBashShellConfig(candidate, io.env) }
-        }
-      }
-    }
-
-    const bashWhere = await io.execProbe(whereCmd, ['bash.exe'], SHELL_PROBE_TIMEOUT_MS)
-    const skippedWsl: string[] = []
-    if (bashWhere.status === 0 && bashWhere.stdout) {
-      const bashLines = bashWhere.stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line !== '')
-      for (const line of bashLines) {
-        if (isWslBashLauncherPath(line, io.env)) {
-          if (!skippedWsl.includes(line)) skippedWsl.push(line)
-          continue
-        }
-        if (await io.pathExists(line)) {
-          return { ok: true, value: getBashShellConfig(line, io.env) }
-        }
-      }
-    }
-
-    const skippedNote =
-      skippedWsl.length > 0
-        ? `Skipped WSL launcher(s): ${skippedWsl.join(', ')} (Windows host sessions do not implicitly execute inside WSL)\n\n`
-        : ''
-    const searchedLines = checkedList.length > 0 ? checkedList.map((p) => `  ${p}`).join('\n') : '  (none)'
-    return {
-      ok: false,
-      message:
-        `No bash shell found. Options:\n` +
-        `  1. Install Git for Windows: https://git-scm.com/download/win\n` +
-        `  2. Add your bash to PATH (Cygwin, MSYS2, etc.)\n` +
-        `  3. Configure an explicit shellPath\n\n` +
-        skippedNote +
-        `Searched Git Bash in:\n${searchedLines}`,
-    }
-  }
+  if (io.platform === 'win32') return resolveWindowsShellConfig(io);
 
   if (await io.pathExists('/bin/bash')) {
     return { ok: true, value: getBashShellConfig('/bin/bash', io.env) }
