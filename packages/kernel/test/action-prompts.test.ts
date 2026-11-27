@@ -109,6 +109,17 @@ test('catalog rendering: escaping, single-line normalization, no truncation, qua
   ])!
   assert.ok(text.startsWith('<available_actions>'))
   assert.ok(text.endsWith('</available_actions>'))
+  assert.ok(text.includes('run_action'), 'header should guide direct run_action invocation')
+  assert.ok(text.includes('describe: true'), 'header should guide read-only describe introspection')
+  assert.ok(text.includes('not via bash'), 'header should steer in-session turns away from bash CLI')
+  assert.ok(
+    !text.includes('helmx actions list --json'),
+    'header must not include bash-inducing helmx actions list --json guidance',
+  )
+  assert.ok(
+    text.includes('for humans or external scripts only'),
+    'header should clarify CLI lines are terminal/script reference only',
+  )
   assert.ok(text.includes('demo:probe.plain'), 'fully-qualified ID')
   assert.ok(text.includes('&lt;b&gt;bold&lt;/b&gt; &amp;'), 'XML escapes description')
   assert.ok(!/\nsecond line continues/.test(text), 'multi-line description collapsed onto single line')

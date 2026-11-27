@@ -436,6 +436,40 @@ test('helmx-cli skill assets stay synchronized with UI extensions and runtime ca
     'SKILL.md should direct dynamic discovery and describe introspection',
   )
 
+  for (const coreActionId of [
+    'core:models.list',
+    'core:models.providers',
+    'core:models.refresh',
+    'core:models.default_get',
+    'core:models.default',
+    'core:models.filter',
+    'core:nodes.list',
+    'core:nodes.endpoints',
+    'core:nodes.upgrade_check',
+    'core:nodes.upgrade',
+    'core:nodes.remove',
+    'core:nodes.forwards',
+    'core:nodes.forward_inspect',
+    'core:nodes.forward_stop',
+    'core:plugins.list',
+    'core:plugins.manifest',
+    'core:plugins.doc',
+    'core:plugins.config_get',
+    'core:plugins.doctor',
+    'core:plugins.config_set',
+    'core:plugins.enable',
+    'core:plugins.disable',
+    'core:plugins.reload',
+    'core:plugins.rescan',
+    'core:asks.list',
+    'core:asks.cancel',
+  ]) {
+    assert.ok(
+      HELMX_CLI_SKILL_MD.includes(coreActionId),
+      `SKILL.md should document in-session core action "${coreActionId}"`,
+    )
+  }
+
   assert.throws(
     () => renderSkillTemplate('hello {{UNKNOWN_VAR}}', {}),
     (err: unknown) => err instanceof HelmxError && err.code === 'unreplaced_skill_placeholder',

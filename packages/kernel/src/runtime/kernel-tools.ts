@@ -77,8 +77,8 @@ export function createRunActionTool(host: KernelToolHost): ToolRegistration<type
   return defineTool({
     name: 'run_action',
     description:
-      'Invoke, inspect, or discover plugin-declared and core actions. ' +
-      'Set list: true (with optional pluginId — exact ID like "core:conversations" or namespace prefix ending with ":" like "core:" / "builtin:") to list reachable public actions in this conversation (including actions omitted from <available_actions>) without executing. ' +
+      'Inside Agent turns, always prefer run_action over shelling out to the helmx CLI via bash whenever an equivalent core:* or plugin action exists (conversations, profiles, models, nodes, plugins, triggers, workflows, tiers, memory, worktrees, etc.); reserve helmx CLI in bash strictly for CLI-only operations without an action. ' +
+      'Set list: true (with optional pluginId — exact ID like "core:conversations" or namespace prefix ending with ":" like "core:" / "builtin:") to discover reachable public actions in this conversation (including actions omitted from <available_actions>) without executing. ' +
       'Set describe: true with actionId ("pluginId.actionId") to read the full action manifest (inputSchema/outputSchema) without executing. ' +
       'Otherwise pass actionId ("pluginId.actionId") and optional input to invoke the action; invalid inputs fail explicitly.',
     parameters: runActionParameters,

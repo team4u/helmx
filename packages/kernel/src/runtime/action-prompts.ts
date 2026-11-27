@@ -114,8 +114,8 @@ export function renderAvailableActionsSection(entries: readonly ActionDirectoryE
   if (entries.length === 0) return undefined
   const header = [
     '<available_actions>',
-    'Actions below can be invoked in this conversation via run_action({ actionId: "pluginId.actionId", input }); directly exposed actions are already listed in the model tools.',
-    'Parameters show a compact signature (required/optional and top-level types), leaving nested and complex structures collapsed: call run_action({ actionId, describe: true }) first to retrieve full input/outputSchema (read-only description; does not execute), or inspect via bash with helmx actions list --json. CLI shows the equivalent human command (even without bash in this conversation, run_action remains available).',
+    'Inside this turn, invoke and inspect actions below directly via run_action (not via bash): call run_action({ actionId: "pluginId.actionId", input }) to execute, or run_action({ list: true, pluginId? }) to discover additional reachable actions; directly exposed actions are already listed in the model tools.',
+    'Parameters show a compact signature (required/optional and top-level types), leaving nested and complex structures collapsed: call run_action({ actionId, describe: true }) first to retrieve full input/outputSchema (read-only; does not execute). CLI lists the equivalent terminal command for humans or external scripts only (do not shell out to it inside this turn; run_action remains available even without bash).',
   ]
   const groups = new Map<string, ActionDirectoryEntry[]>()
   for (const entry of entries) {

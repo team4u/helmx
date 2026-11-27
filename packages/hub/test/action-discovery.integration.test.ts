@@ -107,7 +107,8 @@ test('动作目录生命周期：普通插件启用即进目录、XML 转义与�
     assert.ok(section.includes('config: object(embed set)(describe query)(optional)'))
     assert.ok(section.includes('tags: string[](optional)'))
     assert.ok(section.includes('CLI: helmx demo:plain greet'))
-    assert.ok(section.includes('describe: true') && section.includes('helmx actions list --json'))
+    assert.ok(section.includes('describe: true') && section.includes('not via bash'))
+    assert.ok(!section.includes('helmx actions list --json'))
 
     await host.disable('demo:plain')
     requests.length = 0
