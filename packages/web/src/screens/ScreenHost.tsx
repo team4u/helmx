@@ -4,7 +4,7 @@
  * 组装为协议标准 ScreenProps 经 slotProps 注入插件组件。
  */
 import * as React from 'react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { HelmxIcon, ScreenHostContext, ScreenParamsContext, type ScreenHostState } from '@helmx/plugin-client'
 import { resolveLocalizedText, type ScreenParamsScope, type ScreenSpec } from '@helmx/protocol/browser'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -13,8 +13,6 @@ import type { ResolvedTarget } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
-
-const HOSTED_SCREEN_STATE: ScreenHostState = Object.freeze({ hosted: true })
 
 export interface ScreenHostProps {
   pluginId: string
@@ -25,6 +23,14 @@ export interface ScreenHostProps {
 
 export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: ScreenHostProps): React.JSX.Element {
   const groupedUi = useGroupedUi()
+  // 顶栏 `.pane-actions` 内的动作槽：宿主只提供 DOM 落点，插件 `<Screen actions>`
+  // 经 ScreenHostContext 把动作簇 portal 进来（与五大中心的页头动作同一位置），
+  // 没有动作的视图槽为空不占位。
+  const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLDivElement | null>(null)
+  const screenHostState = useMemo<ScreenHostState>(
+    () => ({ hosted: true, headerActionsSlot }),
+    [headerActionsSlot],
+  )
   const { primaryTarget, splitTarget } = useLocationTargets()
   const { setScreenParams } = useStoreActions()
   const { locale, t } = useWebLocale()
@@ -108,6 +114,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
           <span className="pane-title">{resolveLocalizedText(spec.label, locale) || `${pluginId}/${screenId}`}</span>
         </div>
         <div className="pane-actions">
+          <div ref={setHeaderActionsSlot} className="pane-actions-slot" />
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
@@ -119,7 +126,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
         </div>
       </div>
       <div className="screen-host-body" data-screen-host="true">
-        <ScreenHostContext.Provider value={HOSTED_SCREEN_STATE}>
+        <ScreenHostContext.Provider value={screenHostState}>
           <ScreenParamsContext.Provider value={screenScope}>
             <PluginUiView
               pluginId={pluginId}

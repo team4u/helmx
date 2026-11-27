@@ -26,6 +26,7 @@ import {
   LoadingState,
   MonoId,
   Screen,
+  ScreenToolbar,
   SearchBox,
   Select,
   SelectCard,
@@ -352,52 +353,12 @@ export function PortForwardManagerScreen(
   ]
 
   return (
-    <Screen layout="full-bleed" className="pf-screen" title={t(PF_SCREEN_TITLE)}>
-      <div className="pf-toolbar">
-        <div className="pf-toolbar-main">
-          <SearchBox
-            variant="toolbar"
-            value={query}
-            onChange={setQuery}
-            placeholder={t(PF_SEARCH_PLACEHOLDER)}
-            ariaLabel={t(PF_SEARCH_PLACEHOLDER)}
-          />
-          <Tabs
-            value={statusFilter}
-            onValueChange={(nextValue) => setStatusFilter(nextValue as StatusFilter)}
-            variant="pills"
-          >
-            <TabsList aria-label={t(PF_COL_STATUS)}>
-              {statusTabs.map((pill) => (
-                <TabsTrigger key={pill.value} value={pill.value}>
-                  <span>{pill.label}</span>
-                  <Badge className="tabular-nums">{pill.count}</Badge>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-          {nodeFilter !== '' && (
-            <Badge tone="accent" icon="server">
-              <span>{pfNodeFilterLabel(nodeFilter, locale)}</span>
-              <button
-                type="button"
-                className="btn btn-ghost btn-icon-xs"
-                aria-label={t(PF_CLEAR_NODE_FILTER)}
-                title={t(PF_CLEAR_NODE_FILTER)}
-                onClick={() => props.setParams({ node: undefined })}
-              >
-                <HelmxIcon name="x" size={11} />
-              </button>
-            </Badge>
-          )}
-          {counts.activeConnections > 0 && (
-            <Badge tone="accent" icon="activity" className="tabular-nums">
-              {pfActiveConnsPill(counts.activeConnections, locale)}
-            </Badge>
-          )}
-        </div>
-
-        <div className="pf-toolbar-actions">
+    <Screen
+      layout="full-bleed"
+      className="pf-screen"
+      title={t(PF_SCREEN_TITLE)}
+      actions={
+        <>
           {rules.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -429,17 +390,63 @@ export function PortForwardManagerScreen(
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+          {/* 页头主动作：窄屏经 .pane-action-label 收敛为纯图标，与各管理中心页头一致 */}
           <Button
             variant="primary"
             size="sm"
             icon="plus"
+            aria-label={t(PF_NEW_MAPPING)}
+            title={t(PF_NEW_MAPPING)}
             disabled={actions.pending}
             onClick={openCreateDrawer}
           >
-            {t(PF_NEW_MAPPING)}
+            <span className="pane-action-label">{t(PF_NEW_MAPPING)}</span>
           </Button>
-        </div>
-      </div>
+        </>
+      }
+    >
+      <ScreenToolbar className="pf-toolbar" label={t(PF_SEARCH_PLACEHOLDER)}>
+        <SearchBox
+          variant="toolbar"
+          value={query}
+          onChange={setQuery}
+          placeholder={t(PF_SEARCH_PLACEHOLDER)}
+          ariaLabel={t(PF_SEARCH_PLACEHOLDER)}
+        />
+        <Tabs
+          value={statusFilter}
+          onValueChange={(nextValue) => setStatusFilter(nextValue as StatusFilter)}
+          variant="pills"
+        >
+          <TabsList aria-label={t(PF_COL_STATUS)}>
+            {statusTabs.map((pill) => (
+              <TabsTrigger key={pill.value} value={pill.value}>
+                <span>{pill.label}</span>
+                <Badge className="tabular-nums">{pill.count}</Badge>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        {nodeFilter !== '' && (
+          <Badge tone="accent" icon="server">
+            <span>{pfNodeFilterLabel(nodeFilter, locale)}</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon-xs"
+              aria-label={t(PF_CLEAR_NODE_FILTER)}
+              title={t(PF_CLEAR_NODE_FILTER)}
+              onClick={() => props.setParams({ node: undefined })}
+            >
+              <HelmxIcon name="x" size={11} />
+            </button>
+          </Badge>
+        )}
+        {counts.activeConnections > 0 && (
+          <Badge tone="accent" icon="activity" className="tabular-nums">
+            {pfActiveConnsPill(counts.activeConnections, locale)}
+          </Badge>
+        )}
+      </ScreenToolbar>
 
       <div className="pf-stage">
         {actions.error !== undefined && !drawerOpen && (

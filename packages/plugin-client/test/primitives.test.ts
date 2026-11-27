@@ -452,7 +452,7 @@ test('StatusLight: explicit tone mode, connection aliases, pure exports, and pro
 test('Button and IconButton: variants, sizes, pending busy state, and required accessible name (SSR)', { timeout: 60_000 }, () => {
   const defaultBtn = renderToString(e(Button, null, 'Save'))
   assert.match(defaultBtn, /<button[^>]*type="button"[^>]*class="btn"/)
-  assert.match(defaultBtn, /<span>Save<\/span>/)
+  assert.match(defaultBtn, />Save<\/button>/, 'children render as direct flex items (no wrapper span)')
 
   const primarySm = renderToString(e(Button, { variant: 'primary', size: 'sm', pill: true, icon: 'check' }, 'Apply'))
   assert.match(primarySm, /class="btn btn-primary btn-sm btn-pill"/)
@@ -486,7 +486,7 @@ test('Button and IconButton: variants, sizes, pending busy state, and required a
   const inlineBtn = renderToString(e(Button, { variant: 'inline', icon: 'chevron-down' }, 'Expand'))
   assert.match(inlineBtn, /class="btn btn-inline"/)
   assert.match(inlineBtn, /width="11"/)
-  assert.match(inlineBtn, /<span>Expand<\/span>/)
+  assert.match(inlineBtn, /<\/svg>Expand<\/button>/, 'children render as direct flex items (no wrapper span)')
 
   const activeToggle = renderToString(e(IconButton, { icon: 'list-filter', label: 'Filter', size: 'xs', active: true }))
   assert.match(activeToggle, /class="btn btn-ghost btn-icon-xs is-active"/)
@@ -542,8 +542,8 @@ test('ToolCallDetails: bootstraps artifact trigger via SDK Button size="xs" (SSR
   )
   assert.match(
     withArtifact,
-    /<button[^>]*type="button"[^>]*class="btn btn-xs"[^>]*><span>[\s\S]*?#[\s\S]*?art_42<\/span><\/button>/,
-    'ToolCallDetails artifact button must render through SDK Button size="xs"',
+    /<button[^>]*type="button"[^>]*class="btn btn-xs"[^>]*>[^<]*<!-- -->\s*#\s*<!-- -->art_42<\/button>/,
+    'ToolCallDetails artifact button must render through SDK Button size="xs" (children are direct flex items)',
   )
 
   const withoutArtifact = renderToString(

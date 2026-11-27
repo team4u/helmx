@@ -572,10 +572,6 @@
   color: var(--fg-muted);
 }
 
-.composer-edit-cancel > span {
-  display: contents;
-}
-
 /* 插件斜杠命令执行中状态条：与历史编辑提示条保持统一几何结构 */
 .composer-command-banner {
   display: flex;

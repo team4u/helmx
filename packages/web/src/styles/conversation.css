@@ -181,17 +181,15 @@
   flex-shrink: 0;
 }
 
-.pane-title-rename-input {
-  max-width: 320px;
+/* ScreenHost 顶栏动作槽（ScreenHostContext.headerActionsSlot）：插件 `<Screen actions>`
+   portal 进来的 .stack-row 直接参与 .pane-actions 弹性排布，槽本身不产生盒子；
+   没有动作的视图槽为空，不占位也不留 gap。 */
+.pane-actions-slot {
+  display: contents;
 }
 
-/* SDK Button wraps children in a <span>; unwrap it in topbar & drawer-stack
-   action buttons so responsive .pane-action-label/.drawer-stack-back-label and
-   sibling <Badge> nodes participate directly in .btn's flex gap and collapse
-   with zero ghost gap on narrow viewports. */
-.conversation-topbar .pane-actions .btn > span,
-.drawer-stack-header .btn > span {
-  display: contents;
+.pane-title-rename-input {
+  max-width: 320px;
 }
 
 /* 顶栏标题点击详情浮层 / 分屏按钮容器 / 抽屉精简环境条 */
