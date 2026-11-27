@@ -111,7 +111,7 @@ export function ProviderModelChipsSection({
           <div className="mbulk model-chips-toolbar">
             <SearchBox
               size="sm"
-              className="search-box flex-1"
+              className="flex-1"
               value={modelFilter}
               onChange={onModelFilterChange}
               placeholder={t('models.models.filterPlaceholder')}

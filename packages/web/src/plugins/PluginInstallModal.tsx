@@ -6,16 +6,10 @@ import { useOptionalLocale } from '../lib/store-context.js'
 import {
   Button,
   Callout,
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
   Field,
-  IconButton,
   Input,
+  ModalDialog,
+  Stack,
   Switch,
 } from '@helmx/plugin-client'
 import {
@@ -93,118 +87,93 @@ export function PluginInstallModal({
   }
 
   return (
-    <Dialog
+    <ModalDialog
       open={open}
+      onClose={onClose}
+      size="md"
+      icon="download"
+      title={t('plugins.installPlugin')}
+      description={t('plugins.install.description')}
+      closeDisabled={installing}
+      closeLabel={t('common.close')}
       inline={inline}
-      onOpenChange={(isOpen) => {
-        if (!isOpen && !installing) onClose()
-      }}
-    >
-      <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop">
-          <DialogContent
-            className="modal plugin-install-modal"
-            role="dialog"
-            aria-label={t('plugins.installPlugin')}
+      className="plugin-install-modal"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" disabled={installing} onClick={onClose}>
+            {t('common.cancel')}
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            icon="download"
+            pending={installing}
+            disabled={!submittable}
+            onClick={() => void handleInstall()}
           >
-            <div className="modal-header">
-              <DialogTitle className="modal-title">{t('plugins.installPlugin')}</DialogTitle>
-              <DialogClose asChild>
-                <IconButton
-                  variant="ghost"
-                  size="sm"
-                  icon="x"
-                  label={t('common.close')}
-                  disabled={installing}
-                />
-              </DialogClose>
-            </div>
+            {installing ? t('plugins.install.installing') : t('plugins.install.submit')}
+          </Button>
+        </>
+      }
+    >
+      <Stack direction="vertical" gap="md">
+        <Field
+          label={t('plugins.install.sourceLabel')}
+          htmlFor="plugin-install-source"
+        >
+          <Input
+            mono
+            type="text"
+            placeholder="npm:pkg@1.0.0 / git:repo@ref / https://…git / /abs/path"
+            value={source}
+            invalid={trimmed !== '' && hint.kind === 'unknown'}
+            spellCheck={false}
+            autoComplete="off"
+            disabled={installing}
+            onChange={(e) => setSource(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && submittable) {
+                e.preventDefault()
+                void handleInstall()
+              }
+            }}
+          />
+          {trimmed !== '' && (
+            <span
+              className={`plugin-source-hint${hint.kind === 'unknown' ? ' is-unknown' : ''}`}
+              data-source-kind={hint.kind}
+            >
+              {hint.label}
+            </span>
+          )}
+        </Field>
 
-            <div className="modal-body plugin-install-form">
-              <DialogDescription className="visually-hidden">
-                {t('plugins.install.description')}
-              </DialogDescription>
+        <Field
+          label={t('plugins.install.enableAfterInstall')}
+          htmlFor={false}
+        >
+          <Switch
+            checked={enableAfterInstall}
+            onChange={setEnableAfterInstall}
+            disabled={installing}
+            label={enableAfterInstall ? t('plugins.install.enableNow') : t('plugins.install.keepDisabled')}
+          />
+        </Field>
 
-              <Field
-                label={t('plugins.install.sourceLabel')}
-                htmlFor="plugin-install-source"
-                layout="horizontal"
-              >
-                <Input
-                  mono
-                  type="text"
-                  placeholder="npm:pkg@1.0.0 / git:repo@ref / https://…git / /abs/path"
-                  value={source}
-                  invalid={trimmed !== '' && hint.kind === 'unknown'}
-                  spellCheck={false}
-                  autoComplete="off"
-                  disabled={installing}
-                  onChange={(e) => setSource(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && submittable) {
-                      e.preventDefault()
-                      void handleInstall()
-                    }
-                  }}
-                />
-                {trimmed !== '' && (
-                  <span
-                    className={`plugin-source-hint${hint.kind === 'unknown' ? ' is-unknown' : ''}`}
-                    data-source-kind={hint.kind}
-                  >
-                    {hint.label}
-                  </span>
-                )}
-              </Field>
+        <Callout tone="warn">
+          <span className="callout-text plugin-install-security" role="note">
+            {t('plugins.install.securityWarning')}
+          </span>
+        </Callout>
 
-              <Field
-                label={t('plugins.install.enableAfterInstall')}
-                htmlFor={false}
-                layout="horizontal"
-              >
-                <Switch
-                  checked={enableAfterInstall}
-                  onChange={setEnableAfterInstall}
-                  disabled={installing}
-                  label={enableAfterInstall ? t('plugins.install.enableNow') : t('plugins.install.keepDisabled')}
-                />
-              </Field>
+        {errorText && (
+          <Callout tone="err">
+            <span className="callout-text selectable" role="alert">{errorText}</span>
+          </Callout>
+        )}
 
-              <Callout tone="warn">
-                <span className="callout-text plugin-install-security" role="note">
-                  {t('plugins.install.securityWarning')}
-                </span>
-              </Callout>
-
-              {errorText && (
-                <Callout tone="err">
-                  <span className="callout-text selectable" role="alert">{errorText}</span>
-                </Callout>
-              )}
-
-              {doctorReport && <PluginDoctorChecks report={doctorReport} />}
-            </div>
-
-            <div className="modal-footer">
-              <DialogClose asChild>
-                <Button variant="ghost" size="sm" disabled={installing}>
-                  {t('common.cancel')}
-                </Button>
-              </DialogClose>
-              <Button
-                variant="primary"
-                size="sm"
-                icon="download"
-                pending={installing}
-                disabled={!submittable}
-                onClick={() => void handleInstall()}
-              >
-                {installing ? t('plugins.install.installing') : t('plugins.install.submit')}
-              </Button>
-            </div>
-          </DialogContent>
-        </DialogOverlay>
-      </DialogPortal>
-    </Dialog>
+        {doctorReport && <PluginDoctorChecks report={doctorReport} />}
+      </Stack>
+    </ModalDialog>
   )
 }

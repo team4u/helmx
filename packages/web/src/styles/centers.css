@@ -3,9 +3,24 @@
  * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
  * ========================================================================== */
 
-/* 五大中心主舞台卡片最小高度对齐（页面外壳与卡片骨架已收口至 SDK Screen / CardGrid / SelectCard） */
+/* 五大中心主舞台卡片最小高度与单行 xs 底栏对齐（页面外壳与卡片骨架已收口至 SDK Screen / CardGrid / SelectCard） */
 .screen-pane .helmx-select-card {
   min-height: 136px;
+}
+
+.screen-pane .helmx-select-card > .helmx-card-footer {
+  min-height: var(--control-h-xs);
+}
+
+.node-card-runtime-meta {
+  min-width: 0;
+}
+
+.node-card-hostname {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Profile 卡片专有坐标行与长模型名/思考档位分段截断 */
@@ -152,7 +167,35 @@
   flex-shrink: 0;
 }
 
-/* Profile 详情抽屉：空白会话引导词编辑区块与技能描述摘要 */
+/* Profile 详情抽屉：系统提示词编辑器、空白会话引导词编辑区块与技能描述摘要 */
+.profile-editor-textarea {
+  min-height: 280px;
+  max-height: 600px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-word;
+  resize: vertical;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.profile-editor-textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+  background: var(--bg-elevated);
+}
+
+.profile-editor-meta {
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+
 .profile-starters-header { justify-content: space-between; }
 .profile-starters-list { display: flex; flex-direction: column; gap: 8px; }
 .profile-starters-empty { padding: 2px 0; }
@@ -276,6 +319,177 @@
   color: var(--fg-muted);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* 技能详情抽屉：紧凑文件阅读器（自 modals.css 归位） */
+/* 抽屉主体外层不滚动，唯一滚动容器为阅读区 .skill-reader-scroll，
+   Avoid double scrollbars between the outer primary-drawer-body and the inner reading area */
+@media (min-width: 681px) {
+  .primary-drawer-content.skill-drawer-content {
+    width: min(680px, 92vw);
+  }
+}
+
+.skill-drawer-content .primary-drawer-body {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.skill-reader {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 单一滚动阅读区：占满剩余全部视口高度，元数据表格与正文同流滚动 */
+.skill-reader-scroll {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skill-reader-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  flex-shrink: 0;
+}
+
+.skill-reader-file {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.skill-file-select {
+  width: 100%;
+  min-width: 140px;
+  max-width: 240px;
+}
+
+.skill-reader-file-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--fg);
+}
+
+.skill-reader-file-label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-reader-toolbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.loading-state.skill-reader-loading {
+  display: inline-flex;
+  padding: 0;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.skill-reader-lines {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.skill-reader-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+
+.skill-reader-placeholder {
+  flex: 1;
+  justify-content: center;
+  padding: 32px 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* 富文本阅读区：随阅读区滚动流自然生长，自身不滚动；
+   The frontmatter metadata table and the body share this content flow */
+.skill-reader-doc {
+  padding: 14px 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.skill-reader-doc .msg-ai-body {
+  font-size: 13.5px;
+}
+
+/* 源码阅读区：代码块随阅读区滚动流自然生长，横向滚动由 code-block-pre 自理 */
+.skill-reader-code {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.skill-reader-code .code-block-wrap {
+  margin: 0;
+}
+
+/* 技能中心节点选择器与诊断横幅（自 modals.css 归位） */
+.skill-scope-picker {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.skill-scope-select {
+  width: min(220px, 60vw);
+}
+
+.skill-scope-select .helmx-select-trigger {
+  font-size: 12.5px;
+}
+
+.skill-scope-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+
+.skill-scope-diagnostics .callout {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.loading-state.skill-scope-loading {
+  padding: 0;
 }
 
 @media (max-width: 680px) {

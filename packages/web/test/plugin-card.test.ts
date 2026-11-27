@@ -121,14 +121,22 @@ test('PluginCard：SSR 渲染包含图标、名称、版本、常驻标签与能
   assert.match(html, /Resident/)
   assert.match(html, /class="[^"]*badge badge-neutral[^"]*"[^>]*title="Resident core plugin/)
 
-  // 5. 能力徽章（Tools / Actions / Hooks）
+  // 5. 能力徽章（Tools / Actions / Hooks）归属卡片正文 .helmx-card-body，底栏仅放操作与开关
   assert.match(html, /2 Tools/)
   assert.match(html, /2 Actions/)
   assert.match(html, /1 Hooks/)
   assert.match(html, /class="[^"]*badge badge-neutral mono[^"]*"/)
+  const bodyIdx = html.indexOf('helmx-card-body')
+  const footerIdx = html.indexOf('helmx-card-footer')
+  assert.ok(bodyIdx > 0 && footerIdx > bodyIdx, '卡片应同时包含 .helmx-card-body 与其后的 .helmx-card-footer')
+  const bodySlice = html.slice(bodyIdx, footerIdx)
+  const footerSlice = html.slice(footerIdx)
+  assert.match(bodySlice, /2 Tools[\s\S]*2 Actions[\s\S]*1 Hooks/, '能力计数徽章必须位于卡片正文 body')
+  assert.doesNotMatch(footerSlice, /2 Tools|2 Actions|1 Hooks/, '卡片底栏不得再堆放能力计数徽章')
+  assert.match(footerSlice, /plugin-card-actions/)
 
   // 6. Switch 开关渲染且因 locked 处于禁用态
-  assert.match(html, /role="switch"/)
+  assert.match(footerSlice, /role="switch"/)
   assert.match(html, /aria-checked="true"/)
   assert.match(html, /is-disabled|disabled/)
 })

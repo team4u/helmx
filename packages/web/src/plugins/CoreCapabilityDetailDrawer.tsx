@@ -122,10 +122,10 @@ export function CoreCapabilityDetailDrawer({
       closeLabel={t('common.close')}
     >
       {!owner ? (
-        <EmptyState>{t('plugins.core.noSelection')}</EmptyState>
+        <EmptyState compact title={t('plugins.core.noSelection')} />
       ) : (
         <>
-          <Card variant="subtle" className="plugin-drawer-action-card">
+          <Card variant="subtle">
             <Stack direction="horizontal" gap="sm" align="center" justify="between" wrap>
               <Stack direction="horizontal" gap="sm" align="center">
                 <Badge tone="ok" icon="check">
@@ -162,12 +162,13 @@ export function CoreCapabilityDetailDrawer({
                     const isSelected = selectedAction?.id === action.id
                     const cliCommand = formatCoreCliCommand(action)
                     return (
-                      <div
+                      <Card
                         key={action.id}
-                        className={isSelected ? 'section-flat border-accent' : 'section-flat'}
+                        variant="subtle"
+                        className={isSelected ? 'border-accent' : undefined}
                         data-core-action-item={action.id}
                       >
-                        <div className="flex-row-between">
+                        <Stack direction="horizontal" align="center" justify="between" gap="sm" wrap>
                           <Button
                             variant={isSelected ? 'secondary' : 'ghost'}
                             size="xs"
@@ -190,11 +191,11 @@ export function CoreCapabilityDetailDrawer({
                               <Badge tone="neutral">{action.visibility}</Badge>
                             )}
                           </Stack>
-                        </div>
+                        </Stack>
                         {action.description && (
                           <div className="text-muted break-word">{action.description}</div>
                         )}
-                      </div>
+                      </Card>
                     )
                   })}
                 </Stack>
@@ -333,12 +334,12 @@ export function CoreCapabilityDetailDrawer({
             ) : (
               <Stack direction="vertical" gap="xs">
                 {owner.skills.map((skill) => (
-                  <div
+                  <Card
                     key={skill.id}
-                    className="section-flat"
+                    variant="subtle"
                     data-core-managed-skill={skill.id}
                   >
-                    <div className="flex-row-between">
+                    <Stack direction="horizontal" align="center" justify="between" gap="sm" wrap>
                       <Stack direction="horizontal" gap="xs" align="center" wrap>
                         <strong className="helmx-card-title">{skill.name || skill.id}</strong>
                         <MonoId value={skill.id} />
@@ -359,11 +360,11 @@ export function CoreCapabilityDetailDrawer({
                           {t('plugins.core.openSkill')}
                         </Button>
                       )}
-                    </div>
+                    </Stack>
                     {skill.description && (
                       <div className="text-muted break-word">{skill.description}</div>
                     )}
-                  </div>
+                  </Card>
                 ))}
               </Stack>
             )}

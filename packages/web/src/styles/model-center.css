@@ -56,18 +56,25 @@
   min-width: 0;
 }
 
+/* 凭证与服务端点抽屉内的只读键值文本（与横向 Field 标签基线对齐） */
+.provider-readonly-value {
+  font-size: 12px;
+  line-height: 1.5;
+  padding-top: 6px;
+  color: var(--fg);
+  word-break: break-word;
+}
+
 /* ==========================================================================
  * 模型药丸选择器原语 (Model Chips)
  * ========================================================================== */
 
-.models,
 .model-chips-container {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.mbulk,
 .model-chips-toolbar {
   display: flex;
   align-items: center;
@@ -82,8 +89,7 @@
   margin-left: auto;
 }
 
-.mchips,
-.model-drawer-tags-wrap {
+.mchips {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -95,22 +101,18 @@
   border-radius: 0;
 }
 
-.mchips::-webkit-scrollbar,
-.model-drawer-tags-wrap::-webkit-scrollbar {
+.mchips::-webkit-scrollbar {
   width: 0;
   height: 0;
 }
 
-.mchips.open,
-.mchips.is-expanded,
-.model-drawer-tags-wrap.is-expanded {
+.mchips.is-expanded {
   max-height: none;
   overflow-y: visible;
 }
 
 /* 模型胶囊药丸（对齐 xs 22px 尺码；名称严格不加粗，选中态 hover 保持静止） */
-.mchip,
-.model-drawer-tag {
+.mchip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -130,21 +132,18 @@
   transition: background 120ms, color 120ms, border-color 120ms;
 }
 
-.mchip > span:not(.mtell):not(.badge):not(.mchip-tag):not(.mchip-check),
-.model-drawer-tag > span:not(.mtell):not(.badge):not(.mchip-tag):not(.mchip-check) {
+.mchip > span:not(.badge):not(.mchip-check) {
   font-weight: 400;
 }
 
-.mchip:not(.on):focus-visible:not(:disabled),
-.model-drawer-tag:not(.on):focus-visible:not(:disabled) {
+.mchip:not(.on):focus-visible:not(:disabled) {
   outline: none;
   color: var(--fg);
   border-color: var(--fg-muted);
   box-shadow: none;
 }
 @media (hover: hover) {
-  .mchip:not(.on):hover:not(:disabled),
-  .model-drawer-tag:not(.on):hover:not(:disabled) {
+  .mchip:not(.on):hover:not(:disabled) {
     outline: none;
     color: var(--fg);
     border-color: var(--fg-muted);
@@ -152,17 +151,12 @@
   }
 }
 
-.mchip:active,
-.model-drawer-tag:active {
+.mchip:active {
   transform: scale(0.96);
 }
 
 .mchip.on,
-.model-drawer-tag.on,
-.mchip.on:focus-visible,
-.model-drawer-tag.on:focus-visible,
-.mchip.on:focus-visible:not(:disabled),
-.model-drawer-tag.on:focus-visible:not(:disabled) {
+.mchip.on:focus-visible {
   outline: none;
   color: var(--accent);
   background: var(--accent-bg);
@@ -171,10 +165,7 @@
   box-shadow: none;
 }
 @media (hover: hover) {
-  .mchip.on:hover,
-  .model-drawer-tag.on:hover,
-  .mchip.on:hover:not(:disabled),
-  .model-drawer-tag.on:hover:not(:disabled) {
+  .mchip.on:hover {
     outline: none;
     color: var(--accent);
     background: var(--accent-bg);
@@ -184,14 +175,8 @@
   }
 }
 
-.mchip.pick,
-.model-drawer-tag.pick {
+.mchip.pick {
   padding-left: 7px;
-  font-weight: 400;
-}
-
-.mchip.pick.on,
-.model-drawer-tag.pick.on {
   font-weight: 400;
 }
 
@@ -211,25 +196,8 @@
   visibility: visible;
 }
 
-/* 药丸内标签（常规字重、中性底色；基线选择器已覆盖激活/focus 态，hover 无需再覆写） */
-.mchip .badge,
-.mchip .mchip-tag,
-.mchip .mtell,
-.model-drawer-tag .badge,
-.model-drawer-tag .mchip-tag,
-.model-drawer-tag .mtell,
-.mchip.on .badge,
-.mchip.on .mchip-tag,
-.mchip.on .mtell,
-.model-drawer-tag.on .badge,
-.model-drawer-tag.on .mchip-tag,
-.model-drawer-tag.on .mtell,
-.mchip:focus-visible .badge,
-.mchip:focus-visible .mchip-tag,
-.mchip:focus-visible .mtell,
-.mchip.on:focus-visible .badge,
-.mchip.on:focus-visible .mchip-tag,
-.mchip.on:focus-visible .mtell {
+/* 药丸内标签（常规字重、中性底色） */
+.mchip .badge {
   display: inline-flex;
   align-items: center;
   margin: 0 0 0 2px;

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { SkillSummary } from '@helmx/protocol/browser'
-import { Badge, Button, copyToClipboard, SelectCard, Stack, type BadgeTone } from '@helmx/plugin-client'
+import { Badge, Button, copyToClipboard, SelectCard, type BadgeTone } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { getSkillSourceBadge } from './skill-center-model.js'
 
@@ -81,11 +81,10 @@ export function SkillCard({
       }
       description={<span title={description}>{description}</span>}
       footer={
-        <Stack direction="horizontal" gap="xs" align="center" wrap>
+        <>
           <Button
             variant="secondary"
             size="xs"
-            pill
             icon={copied ? 'check' : 'copy'}
             className="mono"
             title={t('skills.card.copyCommandTitle', { command: slashCommand })}
@@ -105,7 +104,7 @@ export function SkillCard({
               <span aria-label={t('skills.card.referenceFiles', { count: refCount })}>{refCount}</span>
             </Badge>
           )}
-        </Stack>
+        </>
       }
     />
   )
