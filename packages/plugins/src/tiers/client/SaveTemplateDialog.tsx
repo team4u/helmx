@@ -100,31 +100,33 @@ export function SaveTemplateDialog({
                   <span>{displayError}</span>
                 </Callout>
               )}
-              <Field label={t(C.templateIdLabel)} required>
-                <Input
-                  type="text"
-                  mono
-                  value={form.id}
-                  disabled={pending}
-                  placeholder={t(C.templateIdPlaceholder)}
-                  onChange={(e) => {
-                    setLocalError(null)
-                    setForm((prev) => ({ ...prev, id: e.target.value }))
-                  }}
-                />
-              </Field>
-              <Field label={t(C.templateNameLabel)} required>
-                <Input
-                  type="text"
-                  value={form.name}
-                  disabled={pending}
-                  placeholder={t(C.templateNamePlaceholder)}
-                  onChange={(e) => {
-                    setLocalError(null)
-                    setForm((prev) => ({ ...prev, name: e.target.value }))
-                  }}
-                />
-              </Field>
+              <div className="tiers-form-pair">
+                <Field label={t(C.templateIdLabel)} required>
+                  <Input
+                    type="text"
+                    mono
+                    value={form.id}
+                    disabled={pending}
+                    placeholder={t(C.templateIdPlaceholder)}
+                    onChange={(e) => {
+                      setLocalError(null)
+                      setForm((prev) => ({ ...prev, id: e.target.value }))
+                    }}
+                  />
+                </Field>
+                <Field label={t(C.templateNameLabel)} required>
+                  <Input
+                    type="text"
+                    value={form.name}
+                    disabled={pending}
+                    placeholder={t(C.templateNamePlaceholder)}
+                    onChange={(e) => {
+                      setLocalError(null)
+                      setForm((prev) => ({ ...prev, name: e.target.value }))
+                    }}
+                  />
+                </Field>
+              </div>
               <Field label={t(C.templateDescLabel)}>
                 <Textarea
                   rows={2}

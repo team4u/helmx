@@ -1,12 +1,10 @@
 /** Dedicated full-screen management entrypoint for builtin:tiers (`TiersManagerScreen`). */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol/browser'
 import {
   Badge,
   Button,
   Callout,
-  Card,
-  CardGrid,
   ConfirmDialog,
   EmptyState,
   HelmxIcon,
@@ -16,8 +14,6 @@ import {
   ScreenSection,
   ScreenToolbar,
   SearchBox,
-  SelectCard,
-  Stack,
   StatusLight,
   Tabs,
   TabsList,
@@ -86,6 +82,20 @@ const VALIDATION_ERROR_COPY = {
   executor_required: C.errExecutorRequired,
   max_steps_invalid: C.errMaxStepsInvalid,
 } as const
+
+const INTERACTIVE_DESCENDANT_SELECTOR =
+  'button, a, input, select, textarea, label, summary, [contenteditable="true"], [contenteditable=""], [role="button"], [role="switch"], [role="checkbox"], [role="radio"], [role="combobox"], [role="option"], [role="tab"], [role="slider"], [role="menuitem"], [role="link"]'
+
+function hasSelectionInside(container: HTMLElement): boolean {
+  if (typeof window === 'undefined') return false
+  const selection = window.getSelection?.()
+  if (selection === null || selection === undefined || selection.isCollapsed === true) return false
+  if (selection.toString().length === 0) return false
+  const { anchorNode, focusNode } = selection
+  if (anchorNode !== null && container.contains(anchorNode)) return true
+  if (focusNode !== null && container.contains(focusNode)) return true
+  return false
+}
 
 export function TiersManagerScreen(
   props: Partial<ScreenProps> & { inlineDrawer?: boolean },
@@ -304,9 +314,19 @@ export function TiersManagerScreen(
     )
   }
 
+  const handleRowSurfaceClick = (e: MouseEvent<HTMLDivElement>, tierId: string): void => {
+    if (e.defaultPrevented || hasSelectionInside(e.currentTarget)) return
+    const target = e.target
+    if (target instanceof Element) {
+      const interactive = target.closest(INTERACTIVE_DESCENDANT_SELECTOR)
+      if (interactive !== null && e.currentTarget.contains(interactive)) return
+    }
+    openEditDrawer(tierId)
+  }
+
   if (rawDoc === undefined) {
     return (
-      <Screen layout="full-bleed" className="tiers-screen" title={t(C.screenTitle)}>
+      <Screen layout="contained" className="tiers-screen" title={t(C.screenTitle)}>
         <div className="tiers-stage">
           <LoadingState label={t(C.loading)} />
         </div>
@@ -318,7 +338,7 @@ export function TiersManagerScreen(
 
   return (
     <Screen
-      layout="full-bleed"
+      layout="contained"
       className="tiers-screen"
       title={t(C.screenTitle)}
       actions={
@@ -353,60 +373,64 @@ export function TiersManagerScreen(
         </>
       }
     >
-      <ScreenToolbar className="tiers-toolbar" label={t(C.screenTitle)}>
-        <Tabs
-          value={activeTab}
-          onValueChange={(nextValue) =>
-            setActiveTab(nextValue === 'templates' ? 'templates' : 'tiers')
-          }
-          variant="pills"
-        >
-          <TabsList aria-label={t(C.screenTitle)}>
-            <TabsTrigger value="tiers">
-              <span>{t(C.tabTiers)}</span>
-              <Badge className="tabular-nums">{savedCount}</Badge>
-            </TabsTrigger>
-            <TabsTrigger value="templates">
-              <span>{t(C.tabTemplates)}</span>
-              <Badge className="tabular-nums">{parsed.templates.length}</Badge>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-
-        {activeTab === 'tiers' && savedCount > 0 && (
-          <>
-            <SearchBox
-              variant="toolbar"
-              value={query}
-              onChange={setQuery}
-              placeholder={t(C.searchPlaceholder)}
-              ariaLabel={t(C.searchPlaceholder)}
-            />
-            <Tabs
-              value={kindFilter}
-              onValueChange={(nextValue) => setKindFilter(nextValue as TierKindFilter)}
-              variant="pills"
-            >
-              <TabsList aria-label={t(C.tierKindAria)}>
-                <TabsTrigger value="all">
-                  <span>{t(C.filterAll)}</span>
-                  <Badge className="tabular-nums">{kindCounts.all}</Badge>
-                </TabsTrigger>
-                <TabsTrigger value="single">
-                  <span>{t(C.filterSingle)}</span>
-                  <Badge className="tabular-nums">{kindCounts.single}</Badge>
-                </TabsTrigger>
-                <TabsTrigger value="orchestrator">
-                  <span>{t(C.filterOrchestrator)}</span>
-                  <Badge className="tabular-nums">{kindCounts.orchestrator}</Badge>
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </>
-        )}
-      </ScreenToolbar>
-
       <div className="tiers-stage">
+        <ScreenToolbar className="tiers-toolbar" label={t(C.screenTitle)}>
+          <Tabs
+            value={activeTab}
+            onValueChange={(nextValue) =>
+              setActiveTab(nextValue === 'templates' ? 'templates' : 'tiers')
+            }
+            variant="segmented"
+            size="sm"
+          >
+            <TabsList aria-label={t(C.screenTitle)}>
+              <TabsTrigger value="tiers">
+                <span>{t(C.tabTiers)}</span>
+                <span className="tiers-tab-count tabular-nums">{savedCount}</span>
+              </TabsTrigger>
+              <TabsTrigger value="templates">
+                <span>{t(C.tabTemplates)}</span>
+                <span className="tiers-tab-count tabular-nums">{parsed.templates.length}</span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          {activeTab === 'tiers' && savedCount > 0 && (
+            <div className="tiers-toolbar-filters">
+              <Tabs
+                value={kindFilter}
+                onValueChange={(nextValue) => setKindFilter(nextValue as TierKindFilter)}
+                variant="pills"
+                size="sm"
+                className="tiers-kind-tabs"
+              >
+                <TabsList aria-label={t(C.tierKindAria)}>
+                  <TabsTrigger value="all">
+                    <span>{t(C.filterAll)}</span>
+                    <span className="tiers-tab-count tabular-nums">{kindCounts.all}</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="single">
+                    <span>{t(C.filterSingle)}</span>
+                    <span className="tiers-tab-count tabular-nums">{kindCounts.single}</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="orchestrator">
+                    <span>{t(C.filterOrchestrator)}</span>
+                    <span className="tiers-tab-count tabular-nums">{kindCounts.orchestrator}</span>
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+              <SearchBox
+                variant="toolbar"
+                className="tiers-search"
+                value={query}
+                onChange={setQuery}
+                placeholder={t(C.searchPlaceholder)}
+                ariaLabel={t(C.searchPlaceholder)}
+              />
+            </div>
+          )}
+        </ScreenToolbar>
+
         {actions.error !== undefined && !drawerOpen && !saveTemplateOpen && (
           <Callout tone="err">
             <span>{actions.error}</span>
@@ -417,7 +441,7 @@ export function TiersManagerScreen(
           savedCount === 0 ? (
             <>
               <EmptyState
-                prominent
+                className="tiers-empty"
                 icon="layers"
                 title={t(C.emptyTitle)}
                 hint={t(C.emptyHint)}
@@ -435,43 +459,45 @@ export function TiersManagerScreen(
                 }
               />
               <ScreenSection title={t(C.starterSectionTitle)}>
-                <CardGrid minWidth="md" gap="md">
+                <div className="tiers-list">
                   {starterPresets.map((preset) => (
-                    <SelectCard
+                    <button
                       key={preset.id}
-                      className="tiers-starter-card"
+                      type="button"
+                      className={`tiers-starter-row${creating && pendingPreset?.id === preset.id ? ' is-selected' : ''}`}
                       data-starter-tier={preset.id}
-                      selected={creating && pendingPreset?.id === preset.id}
-                      onSelect={() => openCreateDrawer(preset)}
-                      title={
-                        <span className="tiers-card-title-row">
-                          <HelmxIcon name="sparkles" size={13} className="tiers-starter-icon" />
-                          <span className="mono tiers-card-id">tier/{preset.id}</span>
-                        </span>
-                      }
-                      actions={
-                        preset.suggestedThinkingLevel !== '' ? (
-                          <Badge tone="neutral">{tiersSuggestedLevelBadge(preset.suggestedThinkingLevel, locale)}</Badge>
-                        ) : undefined
-                      }
-                      footer={
-                        <span className="tiers-starter-cta">
-                          <span>{t(C.starterCardCta)}</span>
-                          <HelmxIcon name="arrow-right" size={12} />
-                        </span>
-                      }
+                      aria-pressed={creating && pendingPreset?.id === preset.id}
+                      onClick={() => openCreateDrawer(preset)}
                     >
-                      <p className="tiers-card-desc" title={preset.description}>
-                        {preset.description}
-                      </p>
-                    </SelectCard>
+                      <span className="tiers-row-id-col">
+                        <HelmxIcon name="sparkles" size={12} className="tiers-starter-icon" />
+                        <span className="mono tiers-row-id">
+                          <span className="tiers-prefix">tier/</span>
+                          {preset.id}
+                        </span>
+                      </span>
+                      <span className="tiers-starter-meta-col">
+                        {preset.suggestedThinkingLevel !== '' && (
+                          <span className="tiers-starter-level">
+                            {tiersSuggestedLevelBadge(preset.suggestedThinkingLevel, locale)}
+                          </span>
+                        )}
+                        <span className="tiers-row-desc" title={preset.description}>
+                          {preset.description}
+                        </span>
+                      </span>
+                      <span className="tiers-starter-cta">
+                        <span>{t(C.starterCardCta)}</span>
+                        <HelmxIcon name="arrow-right" size={12} />
+                      </span>
+                    </button>
                   ))}
-                </CardGrid>
+                </div>
               </ScreenSection>
             </>
           ) : filteredItems.length === 0 ? (
             <EmptyState
-              prominent
+              className="tiers-empty"
               icon="search"
               title={t(C.filterEmptyTitle)}
               action={
@@ -488,7 +514,7 @@ export function TiersManagerScreen(
               }
             />
           ) : (
-            <CardGrid minWidth="md" gap="md">
+            <div className="tiers-list">
               {filteredItems.map((item) => {
                 const statusMeta = STATUS_META[item.status]
                 const statusLabel = t(statusMeta.copy)
@@ -511,79 +537,85 @@ export function TiersManagerScreen(
                 const showExecLevel = execDisplayLevel !== '' && execDisplayLevel !== 'off'
 
                 return (
-                  <SelectCard
+                  <div
                     key={item.id}
-                    className="tiers-card"
+                    className={`tiers-row${editingId === item.id ? ' is-selected' : ''}${item.status !== 'available' ? ' is-warn' : ''}`}
                     data-tier-id={item.id}
-                    selected={editingId === item.id}
-                    tone={item.status === 'available' ? 'default' : 'warn'}
-                    onSelect={() => openEditDrawer(item.id)}
-                    title={
-                      <span className="tiers-card-title-row">
-                        <StatusLight tone={statusMeta.tone} label={statusLabel} />
-                        <span className="mono tiers-card-id">tier/{item.id}</span>
-                      </span>
-                    }
-                    actions={
-                      item.kind === 'orchestrator' ? (
-                        <Badge tone="accent" icon="workflow">
-                          {tiersOrchestratorStepsBadge(
-                            item.spec.maxExecutionSteps ?? ORCHESTRATOR_DEFAULT_MAX_STEPS,
-                            locale,
-                          )}
-                        </Badge>
-                      ) : showPrimaryLevel ? (
-                        <Badge tone="neutral">{primaryDisplayLevel}</Badge>
-                      ) : undefined
-                    }
-                    footer={
-                      <>
-                        <span className={`tiers-card-status tiers-status-${item.status}`}>{statusLabel}</span>
-                        <IconButton
-                          icon="trash-2"
-                          size="xs"
-                          variant="ghost"
-                          className="tiers-card-delete-btn"
-                          label={t(C.deleteTier)}
-                          disabled={actions.pending}
-                          pending={actions.pendingKey === `remove:${item.id}`}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setPendingDeleteTier(item)
-                          }}
-                          onKeyDown={(e) => e.stopPropagation()}
-                        />
-                      </>
-                    }
+                    onClick={(e) => handleRowSurfaceClick(e, item.id)}
                   >
-                    <div className="tiers-model-box">
-                      <span className="tiers-model-endpoint" title={item.spec.model}>
-                        <code className="tiers-model-name">{formatModelShortName(item.spec.model)}</code>
-                        {showPrimaryLevel && <span className="tiers-model-level">· {primaryDisplayLevel}</span>}
+                    <button
+                      type="button"
+                      className="tiers-row-trigger"
+                      aria-pressed={editingId === item.id}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openEditDrawer(item.id)
+                      }}
+                    >
+                      <span className="tiers-row-id-col">
+                        <StatusLight tone={statusMeta.tone} label={statusLabel} />
+                        <span className="mono tiers-row-id">
+                          <span className="tiers-prefix">tier/</span>
+                          {item.id}
+                        </span>
                       </span>
-                      {item.kind === 'orchestrator' && item.spec.executorModel !== undefined && (
-                        <>
-                          <HelmxIcon name="arrow-right" size={12} className="tiers-model-arrow" />
-                          <span className="tiers-model-endpoint" title={item.spec.executorModel}>
-                            <code className="tiers-model-name">{formatModelShortName(item.spec.executorModel)}</code>
-                            {showExecLevel && <span className="tiers-model-level">· {execDisplayLevel}</span>}
-                          </span>
-                        </>
-                      )}
+                      <span className="tiers-row-model-col">
+                        <span className="tiers-model-endpoint" title={item.spec.model}>
+                          <code className="tiers-model-name">{formatModelShortName(item.spec.model)}</code>
+                          {showPrimaryLevel && <span className="tiers-model-level">· {primaryDisplayLevel}</span>}
+                        </span>
+                        {item.kind === 'orchestrator' && item.spec.executorModel !== undefined && (
+                          <>
+                            <HelmxIcon name="arrow-right" size={11} className="tiers-model-arrow" />
+                            <span className="tiers-model-endpoint" title={item.spec.executorModel}>
+                              <code className="tiers-model-name">{formatModelShortName(item.spec.executorModel)}</code>
+                              {showExecLevel && <span className="tiers-model-level">· {execDisplayLevel}</span>}
+                            </span>
+                            <span className="tiers-kind-tag">
+                              {tiersOrchestratorStepsBadge(
+                                item.spec.maxExecutionSteps ?? ORCHESTRATOR_DEFAULT_MAX_STEPS,
+                                locale,
+                              )}
+                            </span>
+                          </>
+                        )}
+                        {item.status !== 'available' && (
+                          <Badge tone="warn">{statusLabel}</Badge>
+                        )}
+                      </span>
+                      <span className="tiers-row-desc-col">
+                        <span
+                          className={item.spec.description ? 'tiers-row-desc' : 'tiers-row-desc tiers-row-desc-empty'}
+                          title={item.spec.description || undefined}
+                        >
+                          {item.spec.description ?? ''}
+                        </span>
+                      </span>
+                    </button>
+                    <div
+                      className="tiers-row-actions"
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
+                      <IconButton
+                        icon="trash-2"
+                        size="xs"
+                        variant="ghost"
+                        className="tiers-row-delete-btn"
+                        label={t(C.deleteTier)}
+                        disabled={actions.pending}
+                        pending={actions.pendingKey === `remove:${item.id}`}
+                        onClick={() => setPendingDeleteTier(item)}
+                      />
                     </div>
-                    {item.spec.description !== undefined && item.spec.description !== '' && (
-                      <p className="tiers-card-desc" title={item.spec.description}>
-                        {item.spec.description}
-                      </p>
-                    )}
-                  </SelectCard>
+                  </div>
                 )
               })}
-            </CardGrid>
+            </div>
           )
         ) : parsed.templates.length === 0 ? (
           <EmptyState
-            prominent
+            className="tiers-empty"
             icon="layers"
             title={t(C.templateEmptyTitle)}
             hint={t(C.templateEmpty)}
@@ -606,62 +638,66 @@ export function TiersManagerScreen(
             }
           />
         ) : (
-          <CardGrid minWidth="lg" gap="md">
+          <div className="tiers-list">
             {parsed.templates.map((tpl) => (
-              <Card
-                key={tpl.id}
-                className="tiers-template-card"
-                data-template-id={tpl.id}
-                title={tpl.name}
-                subtitle={<span className="mono">{tpl.id}</span>}
-                actions={
-                  parsed.activeTemplate === tpl.id ? (
-                    <Badge tone="ok">{t(C.templateActiveBadge)}</Badge>
-                  ) : undefined
-                }
-                footer={
-                  <>
+              <div key={tpl.id} className="tiers-template-row" data-template-id={tpl.id}>
+                <div className="tiers-template-head">
+                  <div className="tiers-template-title-group">
+                    <span className="tiers-template-name">{tpl.name}</span>
+                    <span className="mono tiers-template-id">{tpl.id}</span>
+                    {parsed.activeTemplate === tpl.id && (
+                      <Badge tone="ok">{t(C.templateActiveBadge)}</Badge>
+                    )}
+                  </div>
+                  <div className="tiers-template-actions">
                     <span className="mono text-muted tiers-template-updated">
                       {tpl.updatedAt > 0 ? formatTime(tpl.updatedAt) : '—'}
                     </span>
-                    <Stack direction="horizontal" gap="xs" align="center">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={actions.pending}
-                        pending={actions.pendingKey === `apply-tpl:${tpl.id}`}
-                        onClick={() => handleApplyTemplate(tpl)}
-                      >
-                        {t(C.templateApply)}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={actions.pending}
-                        pending={actions.pendingKey === `delete-tpl:${tpl.id}`}
-                        onClick={() => setPendingDeleteTemplate(tpl)}
-                      >
-                        {t(C.templateDelete)}
-                      </Button>
-                    </Stack>
-                  </>
-                }
-              >
-                <Stack gap="sm">
-                  {tpl.description !== undefined && tpl.description !== '' && (
-                    <p className="text-subtle tiers-template-desc">{tpl.description}</p>
-                  )}
-                  <Stack direction="horizontal" gap="xs" wrap>
-                    {Object.entries(tpl.tiers).map(([tid, spec]) => (
-                      <Badge key={tid} tone="neutral" mono title={spec.model}>
-                        tier/{tid} → {formatModelShortName(spec.model)}{spec.thinkingLevel ? ` · ${spec.thinkingLevel}` : ''}
-                      </Badge>
-                    ))}
-                  </Stack>
-                </Stack>
-              </Card>
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      disabled={actions.pending}
+                      pending={actions.pendingKey === `apply-tpl:${tpl.id}`}
+                      onClick={() => handleApplyTemplate(tpl)}
+                    >
+                      {t(C.templateApply)}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      disabled={actions.pending}
+                      pending={actions.pendingKey === `delete-tpl:${tpl.id}`}
+                      onClick={() => setPendingDeleteTemplate(tpl)}
+                    >
+                      {t(C.templateDelete)}
+                    </Button>
+                  </div>
+                </div>
+                {tpl.description !== undefined && tpl.description !== '' && (
+                  <p className="tiers-template-desc">{tpl.description}</p>
+                )}
+                <div className="tiers-template-tiers">
+                  {Object.entries(tpl.tiers).map(([tid, spec]) => (
+                    <span
+                      key={tid}
+                      className="tiers-template-chip mono"
+                      title={
+                        spec.kind === 'orchestrator' && spec.executorModel
+                          ? `${spec.model} -> ${spec.executorModel}`
+                          : spec.model
+                      }
+                    >
+                      tier/{tid} → {formatModelShortName(spec.model)}
+                      {spec.thinkingLevel ? ` · ${spec.thinkingLevel}` : ''}
+                      {spec.kind === 'orchestrator' && spec.executorModel
+                        ? ` → ${formatModelShortName(spec.executorModel)}`
+                        : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
             ))}
-          </CardGrid>
+          </div>
         )}
       </div>
 

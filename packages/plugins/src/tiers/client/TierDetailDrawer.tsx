@@ -1,5 +1,5 @@
 /** Right-side detail drawer for creating or editing a single model tier (`builtin:tiers`). */
-import type { ReactNode } from 'react'
+import { useId, type KeyboardEvent, type ReactNode } from 'react'
 import type { HostModelsSlice } from '@helmx/protocol/browser'
 import {
   Badge,
@@ -80,6 +80,7 @@ export function TierDetailDrawer({
   onRequestDelete,
   onClose,
 }: TierDetailDrawerProps): ReactNode {
+  const maxStepsId = useId()
   const missingEditingTarget = mode === 'edit' && editingItem === undefined
   const isOrch = draft.kind === 'orchestrator'
   const availablePresets =
@@ -106,27 +107,39 @@ export function TierDetailDrawer({
     : t(C.pickModel)
 
   const statusBadge = editingItem !== undefined ? STATUS_BADGE[editingItem.status] : undefined
+  const canSave = !busy && (mode === 'create' || dirty)
+
+  const handleFormKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && canSave) {
+      e.preventDefault()
+      onSave()
+    }
+  }
 
   return (
     <DetailDrawer
       open={open}
       onClose={onClose}
       inline={inline}
+      className="tiers-drawer-shell"
       bodyClassName="tiers-drawer"
-      icon={<HelmxIcon name={isOrch ? 'workflow' : 'layers'} size={16} />}
       title={
-        mode === 'create'
-          ? t(C.drawerCreateTitle)
-          : editingItem !== undefined
-            ? t(C.drawerEditTitle)
-            : t(C.drawerNotFoundTitle)
+        mode === 'create' ? (
+          t(C.drawerCreateTitle)
+        ) : editingItem !== undefined ? (
+          <span className="mono tiers-drawer-title-id">
+            <span className="tiers-prefix">tier/</span>
+            {editingItem.id}
+          </span>
+        ) : (
+          t(C.drawerNotFoundTitle)
+        )
       }
       titleExtra={
         mode === 'edit' && statusBadge !== undefined ? (
           <Badge tone={statusBadge.tone}>{t(statusBadge.copy)}</Badge>
         ) : undefined
       }
-      meta={mode === 'edit' && editingItem !== undefined ? `tier/${editingItem.id}` : undefined}
       footer={
         missingEditingTarget ? (
           <Button variant="ghost" size="sm" onClick={onClose}>
@@ -154,7 +167,7 @@ export function TierDetailDrawer({
               size="sm"
               icon="check"
               pending={saving}
-              disabled={busy || (mode === 'edit' && !dirty)}
+              disabled={!canSave}
               onClick={onSave}
             >
               {saving ? t(C.saving) : mode === 'create' ? t(C.createTier) : t(C.saveTier)}
@@ -166,96 +179,92 @@ export function TierDetailDrawer({
       {missingEditingTarget ? (
         <Callout tone="warn">{t(C.drawerNotFoundBody)}</Callout>
       ) : (
-        <Stack gap="md">
-          {error !== null && (
-            <Callout tone="err">
-              <span>{error}</span>
-            </Callout>
-          )}
+        <div className="tiers-drawer-form" onKeyDown={handleFormKeyDown}>
+          <Stack gap="md">
+            {error !== null && (
+              <Callout tone="err">
+                <span>{error}</span>
+              </Callout>
+            )}
 
-          {availablePresets.length > 0 && (
-            <div className="tiers-starter-chips">
-              <span className="tiers-starter-chips-label">{t(C.starterPresetsLabel)}</span>
-              <div className="tiers-starter-chips-list">
-                {availablePresets.map((preset) => (
-                  <Button
-                    key={preset.id}
-                    size="xs"
-                    variant={draft.id.trim() === preset.id ? 'secondary' : 'ghost'}
-                    disabled={busy}
-                    onClick={() => onApplyPreset(preset)}
-                  >
-                    tier/{preset.id}
-                  </Button>
-                ))}
+            {availablePresets.length > 0 && (
+              <div className="tiers-starter-chips">
+                <span className="tiers-starter-chips-label">{t(C.starterPresetsLabel)}</span>
+                <div className="tiers-starter-chips-list">
+                  {availablePresets.map((preset) => (
+                    <Button
+                      key={preset.id}
+                      size="xs"
+                      variant={draft.id.trim() === preset.id ? 'secondary' : 'ghost'}
+                      disabled={busy}
+                      onClick={() => onApplyPreset(preset)}
+                    >
+                      {preset.id}
+                    </Button>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          <Field label={t(C.tierKindAria)} htmlFor={false}>
-            <SegmentedControl
-              size="sm"
-              aria-label={`${t(C.tierKindAria)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
-              value={draft.kind}
-              disabled={busy}
-              onValueChange={(nextValue) =>
-                onChange({ kind: nextValue === 'orchestrator' ? 'orchestrator' : 'single' })
-              }
-              items={[
-                { value: 'single', label: t(C.tierKindSingle) },
-                { value: 'orchestrator', label: t(C.tierKindOrchestrator) },
-              ]}
-            />
-          </Field>
+            {mode === 'create' ? (
+              <div className="tiers-form-head-row">
+                <Field label={t(C.fieldId)} required className="tiers-head-id-field">
+                  <div className="tiers-id-wrap">
+                    <span className="mono tiers-id-prefix">tier/</span>
+                    <Input
+                      type="text"
+                      mono
+                      className="tiers-id-input"
+                      value={draft.id}
+                      disabled={busy}
+                      placeholder={t(C.fieldIdPlaceholder)}
+                      onChange={(e) => onChange({ id: e.target.value })}
+                    />
+                  </div>
+                </Field>
+                <Field label={t(C.tierKindAria)} htmlFor={false} className="tiers-head-mode-field">
+                  <SegmentedControl
+                    size="sm"
+                    aria-label={`${t(C.tierKindAria)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
+                    value={draft.kind}
+                    disabled={busy}
+                    onValueChange={(nextValue) =>
+                      onChange({ kind: nextValue === 'orchestrator' ? 'orchestrator' : 'single' })
+                    }
+                    items={[
+                      { value: 'single', label: t(C.tierKindSingle) },
+                      { value: 'orchestrator', label: t(C.tierKindOrchestrator) },
+                    ]}
+                  />
+                </Field>
+              </div>
+            ) : (
+              <div className="tiers-mode-row" role="group" aria-label={t(C.tierKindAria)}>
+                <span className="helmx-field-label">{t(C.tierKindAria)}</span>
+                <SegmentedControl
+                  size="sm"
+                  aria-label={`${t(C.tierKindAria)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
+                  value={draft.kind}
+                  disabled={busy}
+                  onValueChange={(nextValue) =>
+                    onChange({ kind: nextValue === 'orchestrator' ? 'orchestrator' : 'single' })
+                  }
+                  items={[
+                    { value: 'single', label: t(C.tierKindSingle) },
+                    { value: 'orchestrator', label: t(C.tierKindOrchestrator) },
+                  ]}
+                />
+              </div>
+            )}
 
-          <Field
-            label={t(C.fieldId)}
-            hint={mode === 'create' ? t(C.fieldIdHint) : t(C.fieldIdLockedHint)}
-            required={mode === 'create'}
-          >
-            <div className="tiers-id-wrap">
-              <span className="mono tiers-id-prefix">tier/</span>
-              <Input
-                type="text"
-                mono
-                value={draft.id}
-                disabled={busy || mode === 'edit'}
-                readOnly={mode === 'edit'}
-                placeholder={t(C.fieldIdPlaceholder)}
-                onChange={(e) => onChange({ id: e.target.value })}
-              />
-            </div>
-          </Field>
-
-          <Field label={t(isOrch ? C.fieldPlannerModel : C.fieldModel)} htmlFor={false} required>
-            <ModelPickerControl
-              buttonAriaLabel={`${t(isOrch ? C.fieldPlannerModel : C.fieldModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
-              effectiveModel={draft.model || undefined}
-              activeThinkingLevel={displayThinkingLevel}
-              placeholderLabel={placeholder}
-              buttonTitle={buttonTitle}
-              resetLabel={t(C.clearModel)}
-              resetTitle={t(C.clearModel)}
-              popoverSide="bottom"
-              enableShortcut={false}
-              allowTiers={false}
-              disabled={busy}
-              copy={pickerCopy}
-              onNotice={onNotice}
-              onApply={(model, level) => onChange({ model, thinkingLevel: level ?? '' })}
-              onResetDefault={() => onChange({ model: '', thinkingLevel: '' })}
-            />
-          </Field>
-
-          {isOrch && (
-            <div className="tiers-orchestrator-fields">
-              <Field label={t(C.fieldExecutorModel)} htmlFor={false} required>
+            {!isOrch ? (
+              <Field label={t(C.fieldModel)} htmlFor={false} required>
                 <ModelPickerControl
-                  buttonAriaLabel={`${t(C.fieldExecutorModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
-                  effectiveModel={draft.executorModel || undefined}
-                  activeThinkingLevel={displayExecThinkingLevel}
-                  placeholderLabel={t(C.pickModel)}
-                  buttonTitle={execButtonTitle}
+                  buttonAriaLabel={`${t(C.fieldModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
+                  effectiveModel={draft.model || undefined}
+                  activeThinkingLevel={displayThinkingLevel}
+                  placeholderLabel={placeholder}
+                  buttonTitle={buttonTitle}
                   resetLabel={t(C.clearModel)}
                   resetTitle={t(C.clearModel)}
                   popoverSide="bottom"
@@ -264,36 +273,103 @@ export function TierDetailDrawer({
                   disabled={busy}
                   copy={pickerCopy}
                   onNotice={onNotice}
-                  onApply={(model, level) => onChange({ executorModel: model, executorThinkingLevel: level ?? '' })}
-                  onResetDefault={() => onChange({ executorModel: '', executorThinkingLevel: '' })}
+                  onApply={(model, level) => onChange({ model, thinkingLevel: level ?? '' })}
+                  onResetDefault={() => onChange({ model: '', thinkingLevel: '' })}
                 />
               </Field>
-              <Field label={t(C.fieldMaxSteps)}>
-                <Input
-                  type="number"
-                  mono
-                  min={0}
-                  max={ORCHESTRATOR_MAX_STEPS_LIMIT}
-                  value={draft.maxExecutionSteps}
-                  disabled={busy}
-                  placeholder={t(C.fieldMaxStepsPlaceholder)}
-                  onChange={(e) => onChange({ maxExecutionSteps: e.target.value })}
-                />
-              </Field>
-            </div>
-          )}
+            ) : (
+              <div className="tiers-orchestrator-fields">
+                <Field label={t(C.fieldPlannerModel)} htmlFor={false} required>
+                  <ModelPickerControl
+                    buttonAriaLabel={`${t(C.fieldPlannerModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
+                    effectiveModel={draft.model || undefined}
+                    activeThinkingLevel={displayThinkingLevel}
+                    placeholderLabel={placeholder}
+                    buttonTitle={buttonTitle}
+                    resetLabel={t(C.clearModel)}
+                    resetTitle={t(C.clearModel)}
+                    popoverSide="bottom"
+                    enableShortcut={false}
+                    allowTiers={false}
+                    disabled={busy}
+                    copy={pickerCopy}
+                    onNotice={onNotice}
+                    onApply={(model, level) => onChange({ model, thinkingLevel: level ?? '' })}
+                    onResetDefault={() => onChange({ model: '', thinkingLevel: '' })}
+                  />
+                </Field>
+                <div className="tiers-orch-connector" aria-hidden="true">
+                  <HelmxIcon name="arrow-down" size={12} />
+                </div>
+                <Field label={t(C.fieldExecutorModel)} htmlFor={false} required>
+                  <ModelPickerControl
+                    buttonAriaLabel={`${t(C.fieldExecutorModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
+                    effectiveModel={draft.executorModel || undefined}
+                    activeThinkingLevel={displayExecThinkingLevel}
+                    placeholderLabel={t(C.pickModel)}
+                    buttonTitle={execButtonTitle}
+                    resetLabel={t(C.clearModel)}
+                    resetTitle={t(C.clearModel)}
+                    popoverSide="bottom"
+                    enableShortcut={false}
+                    allowTiers={false}
+                    disabled={busy}
+                    copy={pickerCopy}
+                    onNotice={onNotice}
+                    onApply={(model, level) => onChange({ executorModel: model, executorThinkingLevel: level ?? '' })}
+                    onResetDefault={() => onChange({ executorModel: '', executorThinkingLevel: '' })}
+                  />
+                </Field>
+                <div className="tiers-steps-row">
+                  <div className="tiers-steps-label-col">
+                    <label htmlFor={maxStepsId} className="helmx-field-label">
+                      {t(C.fieldMaxSteps)}
+                    </label>
+                    <span className="tiers-steps-hint">{t(C.fieldMaxStepsHint)}</span>
+                  </div>
+                  <div className="tiers-steps-control">
+                    <Input
+                      id={maxStepsId}
+                      type="number"
+                      size="sm"
+                      mono
+                      className="tiers-steps-input"
+                      min={0}
+                      max={ORCHESTRATOR_MAX_STEPS_LIMIT}
+                      value={draft.maxExecutionSteps}
+                      disabled={busy}
+                      placeholder={t(C.fieldMaxStepsPlaceholder)}
+                      onChange={(e) => onChange({ maxExecutionSteps: e.target.value })}
+                    />
+                    <span className="tiers-steps-unit">{t(C.fieldMaxStepsUnit)}</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
-          <Field label={t(C.fieldDescription)}>
-            <Textarea
-              rows={3}
-              maxLength={240}
-              value={draft.description}
-              disabled={busy}
-              placeholder={t(C.fieldDescriptionPlaceholder)}
-              onChange={(e) => onChange({ description: e.target.value })}
-            />
-          </Field>
-        </Stack>
+            <Field
+              className="tiers-desc-field"
+              label={
+                <span className="tiers-desc-label-row">
+                  <span>{t(C.fieldDescription)}</span>
+                  {draft.description.length > 0 && (
+                    <span className="tiers-char-count tabular-nums">{draft.description.length}/240</span>
+                  )}
+                </span>
+              }
+            >
+              <Textarea
+                rows={2}
+                maxLength={240}
+                className="tiers-desc-textarea"
+                value={draft.description}
+                disabled={busy}
+                placeholder={t(C.fieldDescriptionPlaceholder)}
+                onChange={(e) => onChange({ description: e.target.value })}
+              />
+            </Field>
+          </Stack>
+        </div>
       )}
     </DetailDrawer>
   )
