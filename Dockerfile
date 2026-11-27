@@ -26,6 +26,8 @@ COPY packages/plugin-build/package.json packages/plugin-build/
 COPY packages/plugin-client/package.json packages/plugin-client/
 COPY packages/plugins/package.json packages/plugins/
 COPY packages/protocol/package.json packages/protocol/
+COPY packages/test-kit/package.json packages/test-kit/
+COPY packages/ui/package.json packages/ui/
 COPY packages/web/package.json packages/web/
 
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \

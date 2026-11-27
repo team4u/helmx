@@ -250,6 +250,25 @@ test('PACKAGE_TIERS mirrors test-suites.mjs SUITES; all workspace packages have 
   assert.ok(testFilesOfPackage(repoRoot, 'cli').some((f) => f.endsWith('.test.ts')))
 })
 
+test('Dockerfile copies every workspace package manifest before pnpm install', { timeout: 60_000 }, () => {
+  const dockerfile = readFileSync(path.join(repoRoot, 'Dockerfile'), 'utf8')
+  const lines = dockerfile.split(/\r?\n/)
+  const installLineIdx = lines.findIndex((line) => !/^\s*#/.test(line) && /\bpnpm install\b/.test(line))
+  assert.ok(installLineIdx > 0, 'Dockerfile must invoke pnpm install')
+  const preInstall = lines.slice(0, installLineIdx).join('\n')
+  const copiedDirs = [...preInstall.matchAll(/^COPY\s+packages\/([^/\s]+)\/package\.json\s+packages\/\1\/[ \t]*\r?$/gm)]
+    .map((m) => m[1] ?? '')
+    .sort()
+  const workspaceDirs = loadWorkspacePackages(repoRoot)
+    .map((p) => p.dir)
+    .sort()
+  assert.deepEqual(
+    copiedDirs,
+    workspaceDirs,
+    'Dockerfile must COPY packages/<dir>/package.json for every workspace package before pnpm install (and remove deleted packages)',
+  )
+})
+
 test('planCheckCommands: pre-runs check-hygiene, routes tests through test-suites --files, and builds cli/web when needed', { timeout: 60_000 }, () => {
   const pm = { cmd: 'node', args: ['/pnpm/bin/pnpm.cjs'] }
   const withTests = planCheckCommands({
