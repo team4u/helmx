@@ -13,24 +13,8 @@
   gap: 0;
 }
 
-.chg-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
+.chg-screen > .screen-toolbar-bar-inline {
   padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  flex-wrap: wrap;
-}
-
-.chg-topbar-left,
-.chg-topbar-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  min-width: 0;
 }
 
 .chg-target-select-wrap {
@@ -480,39 +464,11 @@
   font-size: 11.5px;
 }
 
-.chg-wb-files,
-.chg-wb-worktrees {
+.chg-wb-files {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-}
-
-.chg-wb-wt-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg-subtle);
-  flex-wrap: wrap;
-}
-
-.chg-wb-wt-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.chg-wb-wt-branch {
-  font-size: 12px;
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Sibling slots (Workflow & Swarm) */
@@ -554,12 +510,9 @@
     height: auto;
     overflow: visible;
   }
-  .chg-screen.chg-is-narrow-diff .chg-topbar {
+  .chg-screen.chg-is-narrow-diff > .screen-toolbar-bar,
+  .screen-toolbar-bar:has(.chg-toolbar-narrow-diff) {
     display: none;
-  }
-  .chg-topbar {
-    padding: 8px 10px;
-    gap: 6px 8px;
   }
   .chg-target-select-wrap,
   .chg-commit-select-wrap {

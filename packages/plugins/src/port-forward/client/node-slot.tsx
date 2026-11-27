@@ -6,9 +6,12 @@ import { useMemo, type ReactNode } from 'react'
 import './styles.css'
 import type { NodeDetailSlotProps } from '@helmx/protocol/browser'
 import {
+  Badge,
   Button,
   Card,
   HelmxIcon,
+  List,
+  ListRow,
   StatusLight,
   usePluginContext,
   usePluginDoc,
@@ -63,6 +66,7 @@ export function NodePortForwardsSection(props: NodeDetailSlotProps): ReactNode {
       actions={
         <div className="row-actions-group">
           <Button
+            variant="secondary"
             size="xs"
             icon="plus"
             onClick={() => ctx.openScreen(buildScreenTarget({ node: props.nodeId, create: true }))}
@@ -83,34 +87,38 @@ export function NodePortForwardsSection(props: NodeDetailSlotProps): ReactNode {
       {nodeRows.length === 0 ? (
         <span className="text-muted">{t(PF_NODE_SLOT_EMPTY)}</span>
       ) : (
-        <div className="pf-slot-list">
+        <List density="compact" label={t(PF_NODE_SLOT_TITLE)}>
           {nodeRows.map((row) => {
             const label = pfStatusLabel(row.statusKind, locale)
             return (
-              <div key={row.id} className="pf-slot-item">
-                <div className="pf-slot-endpoint">
-                  <StatusLight tone={row.displayTone} label={label} />
-                  <span className="pf-slot-name" title={row.name}>
-                    {row.name}
-                  </span>
-                  <span className="mono text-muted">
+              <ListRow
+                key={row.id}
+                tone={
+                  row.statusKind === 'error'
+                    ? 'danger'
+                    : row.statusKind === 'waiting_node'
+                      ? 'warn'
+                      : 'default'
+                }
+                leading={<StatusLight tone={row.displayTone} label={label} />}
+                title={row.name}
+                meta={
+                  <span className="mono">
                     {row.listenAddr} → {row.targetAddr}
                   </span>
-                </div>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  icon="external-link"
-                  onClick={() =>
-                    ctx.openScreen(buildScreenTarget({ node: props.nodeId, edit: row.id }))
-                  }
-                >
-                  {row.activeConnections > 0 ? String(row.activeConnections) : label}
-                </Button>
-              </div>
+                }
+                trailing={
+                  <Badge tone="neutral" mono>
+                    {row.activeConnections > 0 ? String(row.activeConnections) : label}
+                  </Badge>
+                }
+                onSelect={() =>
+                  ctx.openScreen(buildScreenTarget({ node: props.nodeId, edit: row.id }))
+                }
+              />
             )
           })}
-        </div>
+        </List>
       )}
     </Card>
   )

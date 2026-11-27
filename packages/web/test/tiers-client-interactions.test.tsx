@@ -214,13 +214,13 @@ describe("tiers-client-interactions", () => {
     try {
       assert.match(emptyMount.host.textContent ?? '', /No model tiers yet/i)
       assert.match(emptyMount.host.textContent ?? '', /Starter tiers/i)
-      const starterRows = Array.from(emptyMount.host.querySelectorAll<HTMLElement>('.tiers-starter-row'))
+      const starterRows = Array.from(emptyMount.host.querySelectorAll<HTMLElement>('.helmx-list-row[data-starter-tier]'))
       assert.deepEqual(
         starterRows.map((row) => row.getAttribute('data-starter-tier')),
         ['scout', 'coder', 'senior', 'architect', 'reviewer'],
       )
       const coderStarterTrigger = emptyMount.host.querySelector<HTMLButtonElement>(
-        'button.tiers-starter-row[data-starter-tier="coder"]',
+        '.helmx-list-row[data-starter-tier="coder"] .helmx-list-row-trigger',
       )
       assert.ok(coderStarterTrigger !== null, 'expected coder starter row trigger')
       await act(async () => {
@@ -228,7 +228,7 @@ describe("tiers-client-interactions", () => {
       })
       const drawer = document.body.querySelector<HTMLElement>('.tiers-drawer')
       assert.ok(drawer !== null, 'clicking starter row opens DetailDrawer')
-      const idInput = drawer.querySelector<HTMLInputElement>('.tiers-id-wrap input')
+      const idInput = drawer.querySelector<HTMLInputElement>('.helmx-input-wrap input')
       assert.ok(idInput !== null)
       assert.equal(idInput.value, 'coder')
       assert.equal(idInput.disabled, false)
@@ -237,7 +237,7 @@ describe("tiers-client-interactions", () => {
         0,
         'TiersManagerScreen drawer must reuse integrated ModelPickerControl instead of a separate thinking-level Select',
       )
-      const drawerPicker = drawer.querySelector<HTMLButtonElement>('button.composer-model-button')
+      const drawerPicker = drawer.querySelector<HTMLButtonElement>('button.helmx-model-picker-trigger')
       assert.ok(drawerPicker !== null)
       assert.match(drawerPicker.textContent ?? '', /suggested: high/, 'starter preset hints suggested thinking level')
 
@@ -305,7 +305,7 @@ describe("tiers-client-interactions", () => {
       await act(async () => {
         dualFilterTab.click()
       })
-      assert.equal(fullMount.host.querySelectorAll('.tiers-row').length, 1)
+      assert.equal(fullMount.host.querySelectorAll('.helmx-list-row[data-tier-id]').length, 1)
       assert.ok(fullMount.host.querySelector('[data-tier-id="orch-1"]') !== null)
 
       const allFilterTab = Array.from(fullMount.host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
@@ -315,23 +315,23 @@ describe("tiers-client-interactions", () => {
       await act(async () => {
         allFilterTab.click()
       })
-      assert.equal(fullMount.host.querySelectorAll('.tiers-row').length, 3)
+      assert.equal(fullMount.host.querySelectorAll('.helmx-list-row[data-tier-id]').length, 3)
 
       const searchInput = fullMount.host.querySelector<HTMLInputElement>('input[aria-label*="Search tiers"]')
       assert.ok(searchInput !== null)
       await act(async () => {
         setInputValue(searchInput, 'stale')
       })
-      assert.equal(fullMount.host.querySelectorAll('.tiers-row').length, 1)
+      assert.equal(fullMount.host.querySelectorAll('.helmx-list-row[data-tier-id]').length, 1)
       assert.ok(fullMount.host.querySelector('[data-tier-id="stale"]') !== null)
       await act(async () => {
         setInputValue(searchInput, '')
       })
-      assert.equal(fullMount.host.querySelectorAll('.tiers-row').length, 3)
+      assert.equal(fullMount.host.querySelectorAll('.helmx-list-row[data-tier-id]').length, 3)
 
       // Click `tier/coder` row -> opens edit DetailDrawer with ID in header & ModelPickerControl -> edit & save calls `set`
       const coderRowTrigger = fullMount.host.querySelector<HTMLButtonElement>(
-        '[data-tier-id="coder"] .tiers-row-trigger',
+        '[data-tier-id="coder"] .helmx-list-row-trigger',
       )
       assert.ok(coderRowTrigger !== null)
       await act(async () => {
@@ -343,13 +343,13 @@ describe("tiers-client-interactions", () => {
       assert.ok(drawer !== null)
       assert.match(drawerShell.querySelector('.primary-drawer-title')?.textContent ?? '', /^tier\/coder$/)
       assert.ok(
-        drawer.querySelector('.tiers-id-wrap input') === null,
+        drawer.querySelector('.helmx-input-wrap input') === null,
         'edit mode must omit redundant disabled ID field when tier/<id> is already in header',
       )
       const saveChangesBtn = findButton(drawerShell, 'Save')
       assert.equal(saveChangesBtn.disabled, true, 'Save stays disabled until draft is dirty')
 
-      const pickerBtn = drawer.querySelector<HTMLButtonElement>('button.composer-model-button')
+      const pickerBtn = drawer.querySelector<HTMLButtonElement>('button.helmx-model-picker-trigger')
       assert.ok(pickerBtn !== null, 'expected integrated ModelPickerControl button in drawer')
       assert.match(pickerBtn.textContent ?? '', /workhorse/)
       assert.match(pickerBtn.textContent ?? '', /high/)
@@ -869,13 +869,13 @@ describe("tiers-client-interactions", () => {
     )
     try {
       const coderRowTrigger = mounted.host.querySelector<HTMLButtonElement>(
-        '[data-tier-id="coder"] .tiers-row-trigger',
+        '[data-tier-id="coder"] .helmx-list-row-trigger',
       )
       assert.ok(coderRowTrigger !== null)
       await act(async () => {
         coderRowTrigger.click()
       })
-      const pickerBtn = document.body.querySelector<HTMLButtonElement>('.tiers-drawer button.composer-model-button')
+      const pickerBtn = document.body.querySelector<HTMLButtonElement>('.tiers-drawer button.helmx-model-picker-trigger')
       assert.ok(pickerBtn !== null)
       await act(async () => {
         pickerBtn.click()
@@ -1692,7 +1692,7 @@ describe("tiers-client-interactions", () => {
     )
     try {
       const rowTrigger = mounted.host.querySelector<HTMLButtonElement>(
-        '[data-tier-id="claude-auto"] .tiers-row-trigger',
+        '[data-tier-id="claude-auto"] .helmx-list-row-trigger',
       )
       assert.ok(rowTrigger !== null, 'expected orchestrator tier row trigger')
       await act(async () => {
@@ -2323,12 +2323,12 @@ describe("tiers-client-interactions", () => {
         })
         const drawer = document.body.querySelector<HTMLElement>('.tiers-drawer')
         assert.ok(drawer !== null, 'expected Create DetailDrawer')
-        const idInput = drawer.querySelector<HTMLInputElement>('.tiers-id-wrap input')
+        const idInput = drawer.querySelector<HTMLInputElement>('.helmx-input-wrap input')
         assert.ok(idInput !== null)
         await act(async () => {
           setInputValue(idInput, id)
         })
-        const primaryBtn = drawer.querySelector<HTMLButtonElement>('button.composer-model-button')
+        const primaryBtn = drawer.querySelector<HTMLButtonElement>('button.helmx-model-picker-trigger')
         assert.ok(primaryBtn !== null, 'expected primary ModelPickerControl button inside drawer')
         return primaryBtn
       }
@@ -2556,7 +2556,7 @@ describe("tiers-client-interactions", () => {
 
     try {
       await renderHosted()
-      const coderTrigger = host.querySelector<HTMLButtonElement>('[data-tier-id="coder"] .tiers-row-trigger')
+      const coderTrigger = host.querySelector<HTMLButtonElement>('[data-tier-id="coder"] .helmx-list-row-trigger')
       assert.ok(coderTrigger !== null)
 
       // 1) Closed -> edit coder: must push history
@@ -2571,7 +2571,7 @@ describe("tiers-client-interactions", () => {
       assert.ok(host.querySelector('.tiers-drawer') !== null)
 
       // 2) Open -> switch to architect: must replace (no push)
-      const architectTrigger = host.querySelector<HTMLButtonElement>('[data-tier-id="architect"] .tiers-row-trigger')
+      const architectTrigger = host.querySelector<HTMLButtonElement>('[data-tier-id="architect"] .helmx-list-row-trigger')
       assert.ok(architectTrigger !== null)
       await act(async () => {
         architectTrigger.click()

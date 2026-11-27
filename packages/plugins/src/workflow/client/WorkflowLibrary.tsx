@@ -12,7 +12,6 @@ import {
   Badge,
   Button,
   Callout,
-  CardGrid,
   ConfirmDialog,
   CopyButton,
   DetailDrawer,
@@ -20,13 +19,13 @@ import {
   HelmxIcon,
   Input,
   KvGrid,
+  List,
+  ListRow,
   LoadingState,
   Screen,
-  ScreenSection,
   ScreenToolbar,
   SearchBox,
   Select,
-  SelectCard,
   formatBytes,
   formatTime,
   resolveLocalizedText,
@@ -206,13 +205,8 @@ function WorkflowLibraryDrawer(props: {
         icon={<HelmxIcon name="workflow" size={18} />}
         meta={item.path ?? item.name}
         closeLabel={t(COPY.close)}
-        closeButtonClassName="btn btn-ghost btn-sm"
-        closeIcon={<HelmxIcon name="x" size={14} />}
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              {t(COPY.close)}
-            </Button>
             <Button
               variant="danger"
               size="sm"
@@ -221,6 +215,10 @@ function WorkflowLibraryDrawer(props: {
               onClick={() => setConfirmOpen(true)}
             >
               {t(COPY.delete)}
+            </Button>
+            <div className="flex-1" />
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              {t(COPY.close)}
             </Button>
           </>
         }
@@ -285,7 +283,8 @@ function WorkflowLibraryDrawer(props: {
               }}
             />
             <Button
-              size="sm"
+              variant="primary"
+              size="md"
               icon="play"
               pending={runCtl.pending}
               disabled={conversationOptions.length === 0}
@@ -348,102 +347,107 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
 
   return (
     <Screen
+      layout="contained"
       className="wf-lib-screen"
-      title={
-        <span className="wf-lib-title">
-          <HelmxIcon name="workflow" size={16} />
-          <span>{t(COPY.libTitle)}</span>
-        </span>
-      }
-      subtitle={libSubtitle(items?.length ?? 0, locale)}
+      title={t(COPY.libTitle)}
       actions={
         <Button
+          variant="secondary"
           size="sm"
           icon={<HelmxIcon name="rotate-cw" size={12} className={loading ? SPIN_CLASS : undefined} />}
           disabled={loading}
           onClick={() => void reload()}
         >
-          {t(COPY.refresh)}
+          <span className="pane-action-label">{t(COPY.refresh)}</span>
         </Button>
       }
-    >
-      <ScreenSection>
-        <ScreenToolbar label={t(COPY.libSearchAria)}>
-          <SearchBox
-            value={queryDraft}
-            onChange={(value) => {
-              setQueryDraft(value)
-              props.setParams({ q: value === '' ? undefined : value })
-            }}
-            placeholder={t(COPY.libSearchPlaceholder)}
-            ariaLabel={t(COPY.libSearchAria)}
-          />
+      toolbar={
+        <ScreenToolbar
+          label={t(COPY.libSearchAria)}
+          actions={
+            <SearchBox
+              variant="toolbar"
+              size="sm"
+              value={queryDraft}
+              onChange={(value) => {
+                setQueryDraft(value)
+                props.setParams({ q: value === '' ? undefined : value })
+              }}
+              placeholder={t(COPY.libSearchPlaceholder)}
+              ariaLabel={t(COPY.libSearchAria)}
+            />
+          }
+        >
+          <span className="text-muted tabular-nums wf-lib-count">
+            {libSubtitle(items?.length ?? 0, locale)}
+          </span>
         </ScreenToolbar>
+      }
+    >
+      {loading && items === undefined ? <LoadingState label={t(COPY.loading)} /> : null}
+      {error ? (
+        <Callout tone="err">
+          <div>{error}</div>
+          <Button variant="secondary" size="xs" onClick={() => void reload()}>
+            {t(COPY.retry)}
+          </Button>
+        </Callout>
+      ) : null}
+      {items !== undefined && items.length === 0 && !error ? (
+        <EmptyState
+          icon={<HelmxIcon name="workflow" size={20} />}
+          title={t(COPY.libEmptyTitle)}
+          hint={t(COPY.libEmptyHint)}
+        />
+      ) : null}
+      {filtered !== undefined && filtered.length === 0 && queryDraft.trim() !== '' ? (
+        <EmptyState compact title={libNoMatch(queryDraft.trim(), locale)} />
+      ) : null}
 
-        {loading && items === undefined ? <LoadingState label={t(COPY.loading)} /> : null}
-        {error ? (
-          <Callout tone="err">
-            <div>{error}</div>
-            <Button size="xs" onClick={() => void reload()}>
-              {t(COPY.retry)}
-            </Button>
-          </Callout>
-        ) : null}
-        {items !== undefined && items.length === 0 && !error ? (
-          <EmptyState
-            icon={<HelmxIcon name="workflow" size={20} />}
-            title={t(COPY.libEmptyTitle)}
-            hint={t(COPY.libEmptyHint)}
-          />
-        ) : null}
-        {filtered !== undefined && filtered.length === 0 && queryDraft.trim() !== '' ? (
-          <EmptyState compact title={libNoMatch(queryDraft.trim(), locale)} />
-        ) : null}
-
-        {filtered !== undefined && filtered.length > 0 ? (
-          <CardGrid className="wf-lib-grid">
-            {filtered.map((item) => (
-              <SelectCard
-                key={item.name}
-                selected={selectedName === item.name}
-                tone={item.metadataError ? 'warn' : 'default'}
-                onSelect={() => drawer.openItem(item.name)}
-                title={
-                  <span className="wf-lib-card-head">
-                    <HelmxIcon name="workflow" size={14} />
-                    <span className="wf-lib-card-name" title={item.path ?? item.name}>
-                      {item.name}
-                    </span>
+      {filtered !== undefined && filtered.length > 0 ? (
+        <List label={t(COPY.libTitle)}>
+          {filtered.map((item) => (
+            <ListRow
+              key={item.name}
+              data-workflow-name={item.name}
+              selected={selectedName === item.name}
+              tone={item.metadataError ? 'warn' : 'default'}
+              leading={<HelmxIcon name="workflow" size={14} className="text-muted" />}
+              title={
+                <span className="mono" title={item.path ?? item.name}>
+                  {item.name}
+                </span>
+              }
+              meta={
+                item.metadataError ? (
+                  <Badge tone="warn">{t(COPY.libMetadataBadge)}</Badge>
+                ) : item.phases ? (
+                  <Badge tone="neutral" title={item.phases.map((p) => p.title).join(' → ')}>
+                    {libPhasesSummary(item.phases.length, item.phases.map((p) => p.title).join(' / '), locale)}
+                  </Badge>
+                ) : undefined
+              }
+              description={
+                item.metadataError ? (
+                  <span className="wf-lib-row-warn">
+                    {libMetadataErrorText(firstLineOf(item.metadataError, 120), locale)}
                   </span>
-                }
-                footer={
-                  <>
-                    <span className="wf-lib-card-facts tabular-nums">
-                      {formatTime(item.updatedAt)} · {formatBytes(item.size)}
-                    </span>
-                    <HelmxIcon name="chevron-right" size={12} />
-                  </>
-                }
-              >
-                {item.metadataError ? (
-                  <div className="wf-lib-card-warn-text">{libMetadataErrorText(firstLineOf(item.metadataError, 120), locale)}</div>
+                ) : item.description ? (
+                  firstLineOf(item.description, 140)
                 ) : (
-                  <>
-                    <div className={`wf-lib-card-desc${item.description ? '' : ' wf-lib-card-desc-empty'}`}>
-                      {item.description ? firstLineOf(item.description, 140) : t(COPY.libNoDescription)}
-                    </div>
-                    {item.phases ? (
-                      <div className="wf-lib-card-phases" title={item.phases.map((p) => p.title).join(' → ')}>
-                        {libPhasesSummary(item.phases.length, item.phases.map((p) => p.title).join(' / '), locale)}
-                      </div>
-                    ) : null}
-                  </>
-                )}
-              </SelectCard>
-            ))}
-          </CardGrid>
-        ) : null}
-      </ScreenSection>
+                  t(COPY.libNoDescription)
+                )
+              }
+              trailing={
+                <span className="wf-lib-row-facts tabular-nums">
+                  {formatTime(item.updatedAt)} · {formatBytes(item.size)}
+                </span>
+              }
+              onSelect={() => drawer.openItem(item.name)}
+            />
+          ))}
+        </List>
+      ) : null}
 
       {selectedItem !== undefined ? (
         <WorkflowLibraryDrawer

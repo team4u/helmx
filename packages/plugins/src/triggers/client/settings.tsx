@@ -56,7 +56,8 @@ export function TriggersSettingsPanel(): ReactNode {
       <div className="tg-note">{t(TRIGGERS_SETTINGS_NOTE)}</div>
       <div>
         <Button
-          size="xs"
+          variant="secondary"
+          size="sm"
           icon="external-link"
           onClick={() => ctx.openScreen('screen:builtin:triggers/manager')}
         >

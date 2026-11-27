@@ -176,7 +176,7 @@ export function DiffViewer(props: DiffViewerProps): ReactNode {
           <div className="chg-state-stack">
             <div className="break-word">{error}</div>
             {onRetry !== undefined ? (
-              <Button size="xs" icon="rotate-cw" onClick={onRetry}>
+              <Button variant="secondary" size="xs" icon="rotate-cw" onClick={onRetry}>
                 {t(CHG_COPY.retry)}
               </Button>
             ) : null}
@@ -351,7 +351,7 @@ export function DiffViewer(props: DiffViewerProps): ReactNode {
             label={t(wrapLines ? CHG_COPY.unwrapLines : CHG_COPY.wrapLines)}
             onClick={() => setWrapLines((v) => !v)}
           />
-          <CopyButton text={filePath} label={t(CHG_COPY.copyPath)} />
+          <CopyButton text={filePath} label={t(CHG_COPY.copyPath)} className="btn btn-ghost btn-xs" />
         </div>
       </div>
       <div className="chg-viewer-body">{renderedBody}</div>
