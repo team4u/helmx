@@ -231,10 +231,16 @@ const TOOL_VIEW_CHECKER = Compile(UI_SPEC_SCHEMAS.toolView);
 function validateToolViewSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   runCompiledUiSchema(TOOL_VIEW_CHECKER, spec, id, ctx, (errors) => {
-    const err = findErrorByPathPrefix(errors, ['/replaceRow', '/toolNames']);
+    const err = findErrorByPathPrefix(errors, ['/replaceRow', '/foldable', '/toolNames']);
     if (err?.instancePath.startsWith('/replaceRow')) {
       return {
         message: `plugin ${pluginId} ui.toolView  replaceRow must be boolean value (actual:${typeof spec['replaceRow']})`,
+        details: { pluginId, id },
+      };
+    }
+    if (err?.instancePath.startsWith('/foldable')) {
+      return {
+        message: `plugin ${pluginId} ui.toolView foldable must be boolean value (actual:${typeof spec['foldable']})`,
         details: { pluginId, id },
       };
     }

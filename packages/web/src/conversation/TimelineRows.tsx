@@ -130,7 +130,9 @@ export const TraceRow = memo(function TraceRow({
   // 未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
   // inline 插件视图保留工具行的原始数据入口，专属展开体仅用于宿主工具。
   // 顶层业务卡标记 data-outline-card-id（tool.key）：会话大纲二级锚精确定位。
-  const replaceRow = toolView !== undefined && (toolView.spec as ToolViewSpec).replaceRow === true
+  const toolViewSpec = toolView !== undefined ? (toolView.spec as ToolViewSpec) : undefined
+  const replaceRow = toolViewSpec?.replaceRow === true
+  const outlineCardId = toolView !== undefined && toolViewSpec?.foldable !== true ? tool.key : undefined
   const toolViewProps = useMemo<Record<string, unknown> | undefined>(
     () => (toolView !== undefined ? { ...buildToolViewProps(tool, conversationId) } : undefined),
     [toolView, tool, conversationId],
@@ -188,7 +190,7 @@ export const TraceRow = memo(function TraceRow({
   return (
     <div
       className={`trace-entry${rowFailed ? ' trace-entry-error' : ''}`}
-      {...(toolView !== undefined ? { 'data-outline-card-id': tool.key } : {})}
+      {...(outlineCardId !== undefined ? { 'data-outline-card-id': outlineCardId } : {})}
     >
       {toolView !== undefined && replaceRow ? (
         <div className="trace-block">

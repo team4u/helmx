@@ -183,7 +183,8 @@ test('end-to-end update_steps persistence, disable cleanup, and rewind recovery'
 
     const detail2 = await kernel.conversations.getConversationDetail(1, { limit: 50 })
     const turn2Input = detail2.entries.filter((e) => e.kind === 'helmx.input')[1]!
-    assert.equal(readStepsDoc(kernel, 1)?.allTerminal, true)
+    // Cleanly completed checklists auto-clear immediately when the turn settles
+    await waitFor(() => readStepsDoc(kernel, 1) === null && kernel.kvStore.get(STEPS_PLUGIN_ID, STEPS_KV_NAMESPACE, '1') === undefined)
 
     // Rewind back to before Turn 2 -> restores Turn 1 incomplete checklist (`Inspect done, Edit in_progress`)
     env.faux.setResponses([
@@ -298,7 +299,16 @@ test('cross-plugin interop: tiers orchestrator strips update_steps in planning a
     assert.equal(captured[0]!.toolNames.includes(STEPS_TOOL_UPDATE), false, 'Orchestrator Planning Phase must strip update_steps')
     assert.ok(captured[0]!.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL), 'Orchestrator Planning Phase must keep exit_plan_mode')
     assert.ok(captured[1]!.toolNames.includes(STEPS_TOOL_UPDATE), 'Orchestrator Execution Phase must restore update_steps')
-    assert.equal(readStepsDoc(kernel, orchConv.id)?.allTerminal, true)
+    await waitFor(() => readStepsDoc(kernel, orchConv.id) === null)
+    const orchDetail = await kernel.conversations.getConversationDetail(orchConv.id, { limit: 50 })
+    const orchStepResults = orchDetail.entries
+      .filter((e) => e.kind === 'pi.tool-result')
+      .flatMap((e) => (Array.isArray(e.model) ? e.model : []))
+      .filter((m) => (m as { toolName?: string }).toolName === STEPS_TOOL_UPDATE)
+    const lastStepDetails = (orchStepResults[orchStepResults.length - 1] as { details?: { allTerminal?: boolean; done?: number; total?: number } } | undefined)?.details
+    assert.equal(lastStepDetails?.allTerminal, true)
+    assert.equal(lastStepDetails?.done, 3)
+    assert.equal(lastStepDetails?.total, 3)
 
     // /plan mode strips update_steps during strict read-only planning and restores it when exiting to normal
     const planConv = await kernel.conversations.createConversation({ title: 'plan-isolation', model: 'faux/workhorse' })

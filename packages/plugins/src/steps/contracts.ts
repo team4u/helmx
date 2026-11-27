@@ -208,6 +208,11 @@ export function isStepsAllTerminal(steps: ReadonlyArray<Pick<StepItem, 'status'>
   return steps.length > 0 && steps.every((step) => isStepTerminalStatus(step.status))
 }
 
+/** True when at least one step exists and every step settled cleanly (`done` or `skipped`, zero `failed`). */
+export function isStepsAllCompleted(steps: ReadonlyArray<Pick<StepItem, 'status'>>): boolean {
+  return steps.length > 0 && steps.every((step) => step.status === 'done' || step.status === 'skipped')
+}
+
 export function createEmptyStepsSessionView(): StepsSessionView {
   return {
     steps: [],

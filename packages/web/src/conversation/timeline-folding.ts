@@ -1,6 +1,7 @@
 /**
  * Step-group folding and thinking-activity invariant for assistant turns.
  */
+import type { ToolViewSpec } from '@helmx/protocol/browser'
 import type { AssistantSegment, FoldableStep, ToolTrace } from './timeline-types.js'
 
 export interface RawSegment {
@@ -14,10 +15,11 @@ export interface RawSegment {
   live?: 'generation' | 'flat'
 }
 
-/** Fold exemption: thinking and ordinary tool rows fold; tool.view cards and built-in `ask_user` prompts stay standalone in chronological order. */
+/** Fold exemption: thinking, ordinary tool rows, and `foldable: true` tool.views fold inside `<StepGroup>`; standalone tool.view cards and built-in `ask_user` prompts stay standalone in chronological order. */
 export function isFoldableStep(step: FoldableStep): boolean {
   if (step.kind === 'thinking') return true
-  return step.tool.toolView === undefined && step.tool.toolName !== 'ask_user'
+  if (step.tool.toolName === 'ask_user') return false
+  return step.tool.toolView === undefined || (step.tool.toolView.spec as ToolViewSpec).foldable === true
 }
 
 function foldableOfRaw(seg: RawSegment): FoldableStep {

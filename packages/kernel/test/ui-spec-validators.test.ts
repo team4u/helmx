@@ -120,12 +120,17 @@ test('markdown.codeBlock: valid languages+client passes; duplicate languages and
   );
 });
 
-test('tool.view: valid toolNames+replaceRow passes; non-boolean replaceRow rejects', { timeout: 60_000 }, () => {
-  validateUiSpecLate('tool.view', { id: 'v1', toolNames: ['bash'], replaceRow: true }, 'v1', makeCtx('tool.view'));
+test('tool.view: valid toolNames+replaceRow+foldable passes; non-boolean replaceRow or foldable rejects', { timeout: 60_000 }, () => {
+  validateUiSpecLate('tool.view', { id: 'v1', toolNames: ['bash'], replaceRow: true, foldable: true }, 'v1', makeCtx('tool.view'));
   expectThrow(
     () => validateUiSpecLate('tool.view', { id: 'v1', toolNames: ['bash'], replaceRow: 'yes' }, 'v1', makeCtx('tool.view')),
     'invalid_ui_spec',
     'replaceRow must be boolean value',
+  );
+  expectThrow(
+    () => validateUiSpecLate('tool.view', { id: 'v2', toolNames: ['update_steps'], foldable: 'yes' }, 'v2', makeCtx('tool.view')),
+    'invalid_ui_spec',
+    'foldable must be boolean value',
   );
 });
 

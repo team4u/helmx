@@ -77,6 +77,7 @@ const MarkdownCodeBlockSpecSchema = Type.Object({
 
 const ToolViewSpecSchema = Type.Object({
   replaceRow: Type.Optional(Type.Boolean()),
+  foldable: Type.Optional(Type.Boolean()),
   toolNames: Type.Array(NonEmptyString, { minItems: 1 }),
 })
 
@@ -160,7 +161,7 @@ const _uiSchemaParityLocks: [
   AssertExact<Static<typeof TimelineRendererMatchMetaSchema>, NonNullable<TimelineRendererSpec['matchMeta']>>,
   AssertExact<Static<typeof TimelineRendererSpecSchema>, Pick<TimelineRendererSpec, 'matchMeta'>>,
   AssertExact<Static<typeof MarkdownCodeBlockSpecSchema>, Pick<MarkdownCodeBlockSpec, 'languages'>>,
-  AssertExact<Static<typeof ToolViewSpecSchema>, Pick<ToolViewSpec, 'replaceRow' | 'toolNames'>>,
+  AssertExact<Static<typeof ToolViewSpecSchema>, Pick<ToolViewSpec, 'replaceRow' | 'foldable' | 'toolNames'>>,
   AssertExact<Static<typeof ComposerCompletionSourceSchema>, ComposerCompletionSource>,
   AssertExact<Static<typeof ComposerCompleterSpecSchema>, Pick<ComposerCompleterSpec, 'trigger' | 'source'>>,
   AssertExact<Static<typeof WorkbenchPanelBadgeSchema>, WorkbenchPanelBadgeSpec>,

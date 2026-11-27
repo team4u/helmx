@@ -22,8 +22,10 @@
 
 状态持久化至 `ctx.kv('steps')`（启动时 `hydrate()` 水合），并通过非持久公开会话文档 `ctx.sessionDoc('steps', null, { public: true, durable: false })` 实时推送：
 
+- **全部完成即刻关闭（`turn_settled`）**：若所有步骤均已为 `done` 或 `skipped`（零 `pending` / `in_progress` / `failed`），模型末次标齐后在输出最终总结期间托盘先自动折叠为单行摘要，**本轮结算（`turn_settled`）立即清空 KV 与 `steps` `sessionDoc` 并关闭托盘**；
+- **失败终态（含 `failed`）**：本轮结算仍保留清单展示失败项（直到用户点 `×` 或发起下一轮人类输入自动清空）；
 - **回合结束未完成（`turn_settled: completed | failed | aborted`）**：保留步骤列表与 `in_progress` 状态，仅记录 `settledOutcome`；当会话非 `working` 时，前端将 `in_progress` 派生显示为暂停/中断状态灯，而非继续转圈；
-- **下一轮人类输入（`input`, `origin === 'human'`）**：若全部步骤已达终态（`done | skipped | failed`），自动清空旧清单；若仍有未完成步骤，保留清单并清除旧 `settledOutcome` 跨轮续跑；
+- **下一轮人类输入（`input`, `origin === 'human'`）**：若仍有达终态清单（含 `failed`），自动清空旧清单；若仍有未完成步骤，保留清单并清除旧 `settledOutcome` 跨轮续跑；
 - **重置（`pi.reset`）与删除（`conversation.deleted`）**：立即清空 KV 与 `sessionDoc`；
 - **历史回滚（`helmx.rewind`）**：逆向扫描当前可见历史条目恢复回滚前的最近未完结 `update_steps` 列表（遇 `pi.reset` 或已完结清单则清空）。
 
@@ -38,7 +40,7 @@
 ## 前端界面（`packages/plugins/src/steps/client/`）
 
 - **`StepsActiveTray`（`COMPOSER_DOCK_SLOT`, `order: 15`）**：复用 `@helmx/plugin-client` 的 `DockTray` / `DockTrayRow` 原语；桌面端（`> 680px`）进行中默认展开、全部终态后自动折叠为 `32px` 单行摘要，移动端默认折叠，支持点击 `×` 触发 `dismiss`；
-- **`StepsToolRow`（`toolView`, `replaceRow: true`）**：仅消费 `props.presentationMeta`，将每次 `update_steps` 调用渲染为紧凑 `26px` `.trace-row`（`check-square` / `loader` 图标、进度摘要、`done/total` Badge 与 `StatusLight`）。
+- **`StepsToolRow`（`toolView`, `replaceRow: true`, `foldable: true`）**：仅消费 `props.presentationMeta`，将每次 `update_steps` 调用渲染为紧凑 `26px` `.trace-row`（`check-square` / `loader` 图标、进度摘要、`done/total` Badge 与 `StatusLight`）；因声明 `foldable: true` 而归入 `<StepGroup>` 过程折叠组内，不切碎思考/工具流、也不写入右侧会话大纲。
 
 ## 源码与测试入口
 

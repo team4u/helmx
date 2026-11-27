@@ -20,6 +20,7 @@ import {
   STEPS_TOOL_UPDATE,
   buildStepsPresentationMeta,
   createEmptyStepsSessionView,
+  isStepsAllCompleted,
   isStepsAllTerminal,
   isStepsConversationEligible,
   normalizeStepItems,
@@ -294,6 +295,11 @@ export function createStepsStateManager(deps: {
         if (stopping) return
         const current = records.get(conversationId)
         if (current === undefined) return
+        if (isStepsAllCompleted(current.steps)) {
+          // Cleanly completed checklists (done/skipped only) close immediately once the turn settles.
+          await persistRecord(conversationId, undefined)
+          return
+        }
         if (isStepsAllTerminal(current.steps)) {
           if (current.settledOutcome !== undefined) {
             const { settledOutcome: _cleared, ...rest } = current

@@ -488,6 +488,7 @@ test('createHelmx 全部 16 个内置插件的只读契约投影完整暴露 pre
     assert.equal(stepsManifest.actions.find((a) => a.id === 'dismiss')?.visibility, 'ui')
     assert.equal(stepsManifest.ui.find((u) => u.surface === 'plugin.slot')?.spec.target, 'builtin:composer/dock')
     assert.equal(stepsManifest.ui.find((u) => u.surface === 'tool.view')?.spec.id, 'steps-tool-row')
+    assert.equal(stepsManifest.ui.find((u) => u.surface === 'tool.view')?.spec.foldable, true)
 
     const pfManifest = kernel.plugins.getManifest('builtin:port-forward')
     assert.equal(pfManifest.docs.find((d) => d.name === 'rules')?.durable, true)
