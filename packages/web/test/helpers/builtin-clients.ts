@@ -110,6 +110,7 @@ const CLIENT_ROOTS: Record<string, string> = {
   'builtin:magpie': fileURLToPath(new URL('../../../plugins/src/magpie/client', import.meta.url)),
   'builtin:tiers': fileURLToPath(new URL('../../../plugins/src/tiers/client', import.meta.url)),
   'builtin:plan': fileURLToPath(new URL('../../../plugins/src/plan/client', import.meta.url)),
+  'builtin:steps': fileURLToPath(new URL('../../../plugins/src/steps/client', import.meta.url)),
   'builtin:port-forward': fileURLToPath(new URL('../../../plugins/src/port-forward/client', import.meta.url)),
 }
 
