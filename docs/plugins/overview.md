@@ -11,7 +11,7 @@
 | `builtin:profile` | 角色与技能底座 | 按会话 Profile 注入 SYSTEM.md / AGENTS.md 与技能目录，补写默认 `assistant` 托管声明并提供 `load_skill` 工具（内核核心技能由 `core:*` 直接自举） | 启用 | 是（常驻不可停用） |
 | `builtin:workflow` | 工作流与子代理编排 | `subagent` / `SubagentWorkflow` 工具、DSL 引擎与账本恢复 | 启用 | 否 |
 | `builtin:worktree` | 受管工作树 | 受管 Git Worktree 分配、持久租约与持有锁、两段式结构化探测、`cleanup_worktree` 工具与 `worktrees` CLI | 启用 | 否 |
-| `builtin:changes` | 通用改动检视 | 跨普通会话工作区与受管工作树的只读 Git 差异检视台、工作台 `Changes` 面板与跨插件检视插槽 | 启用 | 否 |
+| `builtin:changes` | 通用改动检视 | 跨普通会话工作区与受管工作树的纯只读 Git 差异检视台（桌面分栏与移动端 URL 单文件导航）、工作台 `Changes` 面板与跨插件只读检视插槽 | 启用 | 否 |
 | `builtin:swarm` | Swarm 对等协同看板 | 扁平对等序号黑板、正交唤醒、`turn_settled` 纯事件防掉棒自愈与自适应协同看板 | 启用 | 否 |
 | `builtin:memory` | 长期记忆 | 按 Profile 管理 MEMORY.md 注入与启停，提供 `update_memory` 工具与每日 Dream 自动整理（`dream` / `dream_status` / `dream_configure`） | 启用 | 否 |
 | `builtin:json-render` | JSON 卡片渲染 | 接管 ```ui 代码围栏渲染声明式 JSON Spec 卡片，自举 `generative-ui` 技能 | 启用 | 否 |

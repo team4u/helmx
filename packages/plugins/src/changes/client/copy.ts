@@ -13,10 +13,6 @@ const L = (en: string, zh: string): LocalizedText => ({ en, 'zh-CN': zh })
 
 export const CHG_COPY = {
   screenTitle: L('Changes', '改动'),
-  screenSubtitle: L(
-    'Read-only Git diff inspection across conversation workspaces and managed worktrees',
-    '跨普通会话工作区与受管工作树的只读 Git 差异检视',
-  ),
   targetPlaceholder: L('Select workspace or worktree', '选择会话工作区或受管工作树'),
   noTargetTitle: L('No workspace or worktree selected', '暂无可检视的工作区或工作树'),
   noTargetHint: L(
@@ -27,28 +23,22 @@ export const CHG_COPY = {
   loadingFile: L('Loading file diff…', '正在加载单文件差异…'),
   retry: L('Retry', '重试'),
   refresh: L('Refresh', '刷新'),
-  splitInspect: L('Inspect diff', '分屏检视'),
-  splitInspectTitle: L('Open read-only diff inspector in split pane', '在右分屏打开只读差异检视台'),
-  fullInspect: L('Open full view', '全屏检视'),
+  openChanges: L('Open changes', '打开改动'),
+  viewChanges: L('View changes', '查看改动'),
   searchFiles: L('Filter changed files…', '筛选变更文件…'),
   noFiles: L('No changes in this scope', '当前范围内无改动'),
   noMatchingFiles: L('No files match your filter', '没有匹配筛选条件的文件'),
   selectFileHint: L('Select a file to inspect its diff', '从左侧选择一个文件查看差异'),
   filesTruncatedNote: L('File list capped at 500 items; total stats still cover all files.', '文件列表已截断展示前 500 项；统计数字仍覆盖全部文件。'),
-  commitsTitle: L('Commits', '提交记录'),
-  commitsEmpty: L('No commits in this scope', '当前范围无提交记录'),
-  commitsTruncated: L('Showing latest commits only', '仅展示最近若干条提交'),
   allCommittedFilter: L('All committed', '全部已提交'),
-  compareSince: L('Compare to current', '设为基线对比当前'),
-  compareSinceActive: L('Baseline', '当前基线'),
-  inspectCommit: L('Inspect', '查看提交'),
-  scopeAll: L('All changes', '全部改动'),
-  scopeCommitted: L('Committed', '仅已提交'),
-  scopeUncommitted: L('Uncommitted', '仅未提交'),
+  commitSelectLabel: L('Inspect commit', '选择提交'),
+  scopeAll: L('All', '全部'),
+  scopeCommitted: L('Committed', '已提交'),
+  scopeUncommitted: L('Uncommitted', '未提交'),
   scopeWorking: L('Uncommitted', '未提交'),
   scopeUnpushed: L('Unpushed', '未推送'),
-  scopeCommit: L('Commits', '提交历史'),
-  scopeSince: L('Since commit', '自基线起'),
+  scopeCommit: L('Commits', '提交'),
+  scopeSince: L('Since', '基线起'),
   notGitTitle: L('Not a Git repository', '当前目录不是 Git 仓库'),
   notGitBody: L(
     'Git diff inspection is unavailable because this working directory is not inside a Git repository.',
@@ -65,8 +55,8 @@ export const CHG_COPY = {
   ),
   wtMissingTitle: L('Worktree directory missing', '工作树目录不存在'),
   wtMissingBody: L(
-    'Confirmed missing on the target node. You can inspect metadata or clean up the stale registration.',
-    '目标节点实测目录已不存在，可核对元数据后清理残留登记。',
+    'Confirmed missing on the target node. Ask an agent to clean up the stale registration if needed.',
+    '目标节点实测目录已不存在，可交由智能体清理残留登记。',
   ),
   branchMismatch: L('Switched branch', '分支已改签'),
   untrackedBadge: L('Untracked file (full bounded preview)', '未跟踪新文件（有界完整预览）'),
@@ -89,24 +79,18 @@ export const CHG_COPY = {
   unchangedFileTitle: L('No diff in the current scope', '当前范围内该文件无差异'),
   copyPath: L('Copy path', '复制路径'),
   copyCommand: L('Copy git command', '复制复核命令'),
-  reviewButton: L('Ask main to review & merge', '让主会话审阅并合入'),
-  reviewSwarmButton: L('Ask coordinator to review & merge', '让协调者审阅并合入'),
-  reviewShort: L('Review & merge', '审阅合入'),
-  copyReview: L('Copy review request', '复制审阅请求'),
-  mentionFile: L('Ask session about file', '在会话中引用此文件'),
-  reviewSubmitted: L('Review request submitted to the parent conversation', '已向主会话提交工作树审阅请求'),
-  mentionSubmitted: L('File reference sent to the conversation', '已将文件引用发送至当前会话'),
-  backToFiles: L('Back to files', '返回文件列表'),
+  backToFiles: L('Files', '文件'),
+  backToFilesTitle: L('Back to files', '返回文件列表'),
+  prevFile: L('Previous file', '上一个文件'),
+  nextFile: L('Next file', '下一个文件'),
+  wrapLines: L('Wrap lines', '自动换行'),
+  unwrapLines: L('Horizontal scroll', '横向滚动'),
   workbenchWorkspaceTitle: L('Workspace changes', '当前工作区改动'),
   workbenchWorktreesTitle: L('Managed worktrees', '关联受管工作树'),
   workbenchNoChanges: L('Working tree is clean', '工作区干净，暂无未提交改动'),
   workbenchViewCommits: L('Inspect recent commits', '查看最近提交'),
-  workbenchOpenFull: L('Full view', '全屏'),
-  workbenchOpenSplit: L('Split diff', '分屏检视'),
   workbenchTruncatedHint: L('Showing top files; open Changes view for full list.', '仅展示部分条目；打开检视台查看完整清单。'),
-  slotReviewSubmitted: L('Review request submitted to the main conversation', '已向主会话提交工作树审阅请求'),
   heldBadge: L('Held', '已加锁'),
-  copyWorktreePath: L('Copy path', '复制路径'),
 } as const
 
 export function statusLabelText(status: GitDiffFileStatus, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
@@ -165,10 +149,6 @@ export function chgCollapseDiff(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): str
   return resolveLocalizedText(L('Collapse lines', '收起长差异'), locale)
 }
 
-export function chgSubmitFailed(err: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  return resolveLocalizedText(L(`Submit failed: ${err}`, `发送失败：${err}`), locale)
-}
-
 export function chgSpecialFileDetail(fileKind: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   if (fileKind === 'symlink_outside_repo') {
     return resolveLocalizedText(
@@ -200,5 +180,5 @@ export function chgSlotBrief(
 }
 
 export function chgInspectTitle(targetLabel: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  return resolveLocalizedText(L(`Inspect diff: ${targetLabel}`, `分屏检视改动：${targetLabel}`), locale)
+  return resolveLocalizedText(L(`View changes: ${targetLabel}`, `查看改动：${targetLabel}`), locale)
 }

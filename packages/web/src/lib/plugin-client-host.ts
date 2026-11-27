@@ -130,8 +130,16 @@ export function createPluginClientHostPort(store: HelmxExternalStore): PluginCli
       })
     },
     // ---- Navigation & notifications ----
-    openTarget: (target, options) =>
-      store.actions.openTarget(target, options?.split === true ? { split: true } : undefined),
+    openTarget: (target, options) => {
+      const preferSplit = options?.split === true
+      const narrowViewport =
+        preferSplit &&
+        store.getSplitTarget() === null &&
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(max-width: 860px)').matches
+      return store.actions.openTarget(target, preferSplit && !narrowViewport ? { split: true } : undefined)
+    },
     openConversationDrawer: (conversationId) => store.actions.openConversationDrawer(conversationId),
     openArtifactPreview: (artifactId, conversationId) =>
       store.actions.setActiveModal({

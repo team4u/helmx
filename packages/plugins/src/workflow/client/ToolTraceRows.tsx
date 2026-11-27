@@ -265,13 +265,8 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const worktreeIsManaged = worktree !== undefined && isManagedWorktree(worktree)
   const worktreeTooltip =
     worktreeBranch !== undefined ? worktreeBadgeTitle(worktreeBranch, execMeta?.worktree?.path, locale) : undefined
-  const cleanupNodeId =
+  const traceNodeId =
     execMeta?.nodeId ?? (childSummary?.nodeId && childSummary.nodeId !== '' ? childSummary.nodeId : undefined)
-  const showSyncWorktreeCleanup =
-    backgroundRun === undefined &&
-    execMeta?.worktree !== undefined &&
-    isLatest &&
-    !isActive
 
   const rowBody = (
     <>
@@ -338,23 +333,8 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
                   branch: execMeta.worktree.branch,
                   ...(execMeta.worktree.id !== undefined ? { id: execMeta.worktree.id } : {}),
                 },
-                ...(cleanupNodeId !== undefined ? { nodeId: cleanupNodeId } : {}),
+                ...(traceNodeId !== undefined ? { nodeId: traceNodeId } : {}),
                 parentConversationId: viewerConversationId,
-              }}
-            />
-          ) : null}
-          {showSyncWorktreeCleanup && execMeta?.worktree !== undefined ? (
-            <PluginSlot
-              name="worktree-cleanup"
-              inline
-              slotProps={{
-                worktree: {
-                  path: execMeta.worktree.path,
-                  branch: execMeta.worktree.branch,
-                  ...(execMeta.worktree.id !== undefined ? { id: execMeta.worktree.id } : {}),
-                },
-                ...(cleanupNodeId !== undefined ? { nodeId: cleanupNodeId } : {}),
-                compact: true,
               }}
             />
           ) : null}

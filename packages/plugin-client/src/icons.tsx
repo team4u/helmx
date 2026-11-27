@@ -90,6 +90,7 @@ import {
   Upload,
   Webhook,
   Workflow,
+  WrapText,
   Wrench,
   X,
   Zap,
@@ -203,6 +204,7 @@ const ICON_MAP = {
   'moon-star': MoonStar,
   save: Save,
   gauge: Gauge,
+  'wrap-text': WrapText,
 } satisfies Record<string, LucideIcon>
 
 export type HelmxIconName = keyof typeof ICON_MAP

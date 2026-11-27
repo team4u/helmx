@@ -1,12 +1,15 @@
 /**
  * `builtin:changes` styles: fullscreen/split inspector, workbench panel, and sibling plugin slots.
  * All `:hover` rules stay strictly inside `@media (hover: hover)`.
+ * Narrow-pane layout responds to container width `@container (max-width: 680px)` on `.helmx-pane`.
  */
 .chg-screen {
   display: flex;
   flex-direction: column;
+  flex: 1 1 0%;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
   gap: 0;
 }
 
@@ -15,7 +18,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px 12px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
   flex-wrap: wrap;
@@ -31,8 +34,13 @@
 }
 
 .chg-target-select-wrap {
-  min-width: 220px;
-  max-width: 340px;
+  min-width: 210px;
+  max-width: 320px;
+}
+
+.chg-commit-select-wrap {
+  min-width: 190px;
+  max-width: 300px;
 }
 
 .chg-stage-state {
@@ -42,7 +50,7 @@
 .chg-split-stage {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
-  flex: 1 1 auto;
+  flex: 1 1 0%;
   min-height: 0;
   overflow: hidden;
 }
@@ -59,91 +67,6 @@
 .chg-sidebar-search {
   padding: 8px;
   border-bottom: 1px solid var(--border);
-}
-
-.chg-commits-section {
-  display: flex;
-  flex-direction: column;
-  border-bottom: 1px solid var(--border);
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.chg-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--fg-muted);
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-
-.chg-commits-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.chg-commit-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.chg-commit-item:last-child {
-  border-bottom: none;
-}
-
-.chg-commit-item.is-active {
-  background: var(--bg-active);
-}
-
-.chg-commit-btn {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border: none;
-  background: transparent;
-  padding: 0;
-  text-align: left;
-  cursor: pointer;
-  color: inherit;
-  font: inherit;
-}
-
-.chg-commit-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.chg-commit-sha {
-  font-size: 11px;
-  color: var(--accent);
-}
-
-.chg-commit-time {
-  margin-left: auto;
-  font-size: 10.5px;
-  color: var(--fg-muted);
-}
-
-.chg-commit-subject {
-  font-size: 12px;
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .chg-files-list {
@@ -274,8 +197,9 @@
 .chg-viewer {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
+  flex: 1 1 0%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .chg-viewer-empty,
@@ -298,13 +222,17 @@
 .chg-viewer-head-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   flex-wrap: wrap;
 }
 
 .chg-viewer-head-main {
   flex: 1 1 auto;
+}
+
+.chg-viewer-head-actions {
+  flex-shrink: 0;
 }
 
 .chg-viewer-path {
@@ -325,12 +253,26 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
+  flex-shrink: 0;
+}
+
+.chg-file-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.chg-file-pager-count {
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding: 0 2px;
 }
 
 .chg-viewer-body {
-  flex: 1 1 auto;
+  flex: 1 1 0%;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px;
 }
 
@@ -338,7 +280,12 @@
   border: 1px solid var(--code-border);
   border-radius: var(--radius-xs);
   background: var(--code-bg);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.chg-diff-surface.is-wrap {
+  overflow-x: hidden;
 }
 
 .chg-diff-banner {
@@ -352,9 +299,15 @@
 .chg-diff-table {
   display: flex;
   flex-direction: column;
+  min-width: 100%;
+  width: max-content;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.chg-diff-surface.is-wrap .chg-diff-table {
+  width: 100%;
 }
 
 .chg-diff-hunk {
@@ -364,6 +317,11 @@
   background: var(--diff-gutter-bg);
   border-top: 1px solid var(--diff-gutter-border);
   border-bottom: 1px solid var(--diff-gutter-border);
+  white-space: nowrap;
+}
+
+.chg-diff-surface.is-wrap .chg-diff-hunk {
+  white-space: pre-wrap;
 }
 
 .chg-diff-hunk:first-child {
@@ -387,12 +345,20 @@
   white-space: nowrap;
 }
 
+.chg-diff-num-single {
+  display: none;
+}
+
 .chg-diff-content {
-  padding: 0 10px 0 8px;
+  padding: 0 12px 0 8px;
+  white-space: pre;
+  min-width: 0;
+}
+
+.chg-diff-surface.is-wrap .chg-diff-content {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
-  min-width: 0;
 }
 
 .chg-diff-sign {
@@ -578,31 +544,98 @@
   white-space: nowrap;
 }
 
-.chg-swarm-slot-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
 .chg-compact-slot-btn {
   flex-shrink: 0;
 }
 
-@media (max-width: 680px) {
+@container (max-width: 680px) {
+  .chg-screen {
+    flex: 1 0 auto;
+    height: auto;
+    overflow: visible;
+  }
+  .chg-screen.chg-is-narrow-diff .chg-topbar {
+    display: none;
+  }
+  .chg-topbar {
+    padding: 8px 10px;
+    gap: 6px 8px;
+  }
+  .chg-target-select-wrap,
+  .chg-commit-select-wrap {
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 180px;
+  }
   .chg-split-stage {
     grid-template-columns: minmax(0, 1fr);
+    flex: 1 0 auto;
+    overflow: visible;
   }
-  .chg-split-stage.chg-mobile-list .chg-main-diff {
+  .chg-split-stage.chg-mode-list .chg-main-diff {
     display: none;
   }
-  .chg-split-stage.chg-mobile-diff .chg-sidebar {
+  .chg-split-stage.chg-mode-diff .chg-sidebar {
     display: none;
+  }
+  .chg-sidebar {
+    border-right: none;
+    overflow: visible;
+  }
+  .chg-files-list {
+    overflow: visible;
+  }
+  .chg-file-row {
+    min-height: 40px;
+    padding: 7px 10px;
+  }
+  .chg-main-diff,
+  .chg-viewer,
+  .chg-viewer-body {
+    flex: 1 0 auto;
+    height: auto;
+    overflow: visible;
+  }
+  .chg-viewer-body {
+    padding: 0;
+  }
+  .chg-diff-surface {
+    border-left: none;
+    border-right: none;
+    border-radius: 0;
+  }
+  .chg-viewer-head {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .chg-viewer-path {
+    flex: 1 1 80px;
   }
   .chg-mobile-back {
     display: inline-flex;
   }
   .chg-diff-row {
-    grid-template-columns: 2.6em 2.6em minmax(0, 1fr);
+    grid-template-columns: 2.8em minmax(0, 1fr);
+  }
+  .chg-diff-num-old,
+  .chg-diff-num-new {
+    display: none;
+  }
+  .chg-diff-num-single {
+    display: block;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    padding: 0 5px 0 3px;
+  }
+  .chg-diff-hunk {
+    padding: 4px 8px;
+  }
+  .chg-viewer-empty,
+  .chg-viewer-state {
+    padding: 14px 12px;
   }
 }

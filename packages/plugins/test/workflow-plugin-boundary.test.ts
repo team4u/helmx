@@ -759,7 +759,7 @@ test('工作流库动作注册：get/save/delete 三动作登记且 CLI 映射�
   await host.dispose()
 })
 
-test('builtin:worktree 注册工作树清理 UI 插槽，builtin:changes 注册通用差异 UI 与工作树检视插槽', { timeout: 60_000 }, async () => {
+test('builtin:worktree 不注册前端工作树 UI 插槽，builtin:changes 注册通用差异 UI 与工作树只读检视插槽', { timeout: 60_000 }, async () => {
   const host = makeHost()
   const { createWorktreePlugin } = await import('../src/worktree.js')
   const { createChangesPlugin } = await import('../src/changes.js')
@@ -773,18 +773,8 @@ test('builtin:worktree 注册工作树清理 UI 插槽，builtin:changes 注册�
     assert.equal(wtActions.get('inspect_worktree')?.idempotent, true, 'inspect_worktree 必须声明 idempotent: true')
     assert.equal(wtActions.get('inspect_worktree_file')?.idempotent, true, 'inspect_worktree_file 必须声明 idempotent: true')
     assert.notEqual(wtActions.get('cleanup_worktree')?.idempotent, true, 'cleanup_worktree 不得声明 idempotent: true')
-    const wtSlots = host
-      .listUi()
-      .filter((u) => u.pluginId === 'builtin:worktree' && u.surface === 'plugin.slot')
-      .map((u) => u.spec as { id: string; target: string; client?: { module: string; export: string } })
-    assert.deepEqual(
-      wtSlots.map((s) => [s.id, s.target, s.client?.module, s.client?.export]),
-      [
-        ['worktree-cleanup', 'builtin:workflow/worktree-cleanup', 'slots.tsx', 'WorktreeCleanupSlot'],
-        ['swarm-worktree-cleanup', 'builtin:swarm/worktree-cleanup', 'slots.tsx', 'WorktreeCleanupSlot'],
-        ['changes-worktree-cleanup', 'builtin:changes/worktree-cleanup', 'slots.tsx', 'WorktreeCleanupSlot'],
-      ],
-    )
+    const wtUi = host.listUi().filter((u) => u.pluginId === 'builtin:worktree')
+    assert.deepEqual(wtUi, [], 'builtin:worktree 仅提供纯后端能力与 CLI/工具，不贡献任何前端 UI')
 
     const chgActions = new Map(
       host.listActions().filter((m) => m.pluginId === 'builtin:changes').map((m) => [m.id, m]),

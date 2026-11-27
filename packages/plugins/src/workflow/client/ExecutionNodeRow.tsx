@@ -1,7 +1,6 @@
 /**
  * Unified Workbench execution node row (agent — native or external — and action)
- * plus single shared `<WorktreeSlots>` renderer for `builtin:workflow/worktree-inspect`
- * and `worktree-cleanup`.
+ * plus single shared `<WorktreeSlots>` renderer for `builtin:workflow/worktree-inspect`.
  * Exports only React components and TS types (Fast Refresh compliant).
  */
 import { useId, useMemo, useState } from 'react'
@@ -54,45 +53,26 @@ export interface WorktreeSlotsProps {
   nodeId?: string
   taskLabel?: string
   parentConversationId?: number
-  showCleanup?: boolean
-  compactCleanup?: boolean
 }
 
 export function WorktreeSlots(props: WorktreeSlotsProps): ReactNode {
   const { worktree } = props
   if (worktree === undefined) return null
   return (
-    <>
-      <PluginSlot
-        name="worktree-inspect"
-        slotProps={{
-          worktree: {
-            path: worktree.path,
-            branch: worktree.branch,
-            ...(worktree.id !== undefined ? { id: worktree.id } : {}),
-          },
-          nodeId: props.nodeId,
-          baseCommit: worktree.baseCommit,
-          taskLabel: !isPlaceholderNodeLabel(props.taskLabel) ? props.taskLabel : undefined,
-          parentConversationId: props.parentConversationId,
-        }}
-      />
-      {props.showCleanup ? (
-        <PluginSlot
-          name="worktree-cleanup"
-          inline
-          slotProps={{
-            worktree: {
-              path: worktree.path,
-              branch: worktree.branch,
-              ...(worktree.id !== undefined ? { id: worktree.id } : {}),
-            },
-            ...(props.nodeId !== undefined ? { nodeId: props.nodeId } : {}),
-            ...(props.compactCleanup ? { compact: true } : {}),
-          }}
-        />
-      ) : null}
-    </>
+    <PluginSlot
+      name="worktree-inspect"
+      slotProps={{
+        worktree: {
+          path: worktree.path,
+          branch: worktree.branch,
+          ...(worktree.id !== undefined ? { id: worktree.id } : {}),
+        },
+        nodeId: props.nodeId,
+        baseCommit: worktree.baseCommit,
+        taskLabel: !isPlaceholderNodeLabel(props.taskLabel) ? props.taskLabel : undefined,
+        parentConversationId: props.parentConversationId,
+      }}
+    />
   )
 }
 
@@ -349,21 +329,6 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
                   },
                 )
               }
-            />
-          ) : null}
-          {node.worktree !== undefined ? (
-            <PluginSlot
-              name="worktree-cleanup"
-              inline
-              slotProps={{
-                worktree: {
-                  path: node.worktree.path,
-                  branch: node.worktree.branch,
-                  ...(node.worktree.id !== undefined ? { id: node.worktree.id } : {}),
-                },
-                ...(inspectNodeId !== undefined ? { nodeId: inspectNodeId } : {}),
-                compact: true,
-              }}
             />
           ) : null}
         </div>

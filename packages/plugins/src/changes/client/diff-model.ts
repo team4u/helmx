@@ -1,14 +1,8 @@
 /**
- * Pure data models, boundary parsers, URL target builders, bounded word-diff
- * highlighter, and review prompt builders for `builtin:changes`.
+ * Pure data models, boundary parsers, URL target builders, and bounded word-diff
+ * highlighter for `builtin:changes`.
  * Zero React/DOM dependencies (Fast Refresh compliant).
  */
-import {
-  DEFAULT_HELMX_LOCALE,
-  resolveLocalizedText,
-  type HelmxLocale,
-  type LocalizedText,
-} from '@helmx/plugin-client'
 import type {
   GitDiffCommitEntry,
   GitDiffFileEntry,
@@ -24,8 +18,6 @@ import type {
 
 const CHANGES_PLUGIN_ID = 'builtin:changes' as const
 const CHANGES_SCREEN_ID = 'inspector' as const
-
-const L = (en: string, zh: string): LocalizedText => ({ en, 'zh-CN': zh })
 
 export interface ManagedWorktreeSummaryView {
   id: string
@@ -455,7 +447,6 @@ export function buildChangesScreenTarget(params: {
   commit?: string
   base?: string
   file?: string
-  parent?: number
 }): string {
   const pairs: Array<[string, string]> = []
   if (params.wt !== undefined && params.wt.trim() !== '') pairs.push(['wt', params.wt.trim()])
@@ -466,9 +457,6 @@ export function buildChangesScreenTarget(params: {
   if (params.commit !== undefined && params.commit.trim() !== '') pairs.push(['commit', params.commit.trim()])
   if (params.base !== undefined && params.base.trim() !== '') pairs.push(['base', params.base.trim()])
   if (params.file !== undefined && params.file.trim() !== '') pairs.push(['file', params.file.trim()])
-  if (params.parent !== undefined && Number.isSafeInteger(params.parent) && params.parent > 0) {
-    pairs.push(['parent', String(params.parent)])
-  }
   const base = `screen:${CHANGES_PLUGIN_ID}/${CHANGES_SCREEN_ID}`
   if (pairs.length === 0) return base
   return `${base}?${new URLSearchParams(pairs).toString()}`
@@ -608,111 +596,4 @@ export function formatInspectGitCommand(params: {
     return `git diff ${params.baseCommit.slice(0, 12)} -- ${quoted}`
   }
   return `git diff HEAD -- ${quoted}`
-}
-
-function firstLineOf(text: string, maxChars: number): string {
-  const line = (text.split(/\r?\n/, 1)[0] ?? '').trim()
-  if (line.length <= maxChars) return line
-  return `${line.slice(0, Math.max(0, maxChars - 1))}…`
-}
-
-/** Build the read-only review-and-merge request text submitted to the parent/coordinator conversation. */
-export function buildWorktreeReviewRequest(
-  input: {
-    path: string
-    branch: string
-    nodeId?: string
-    baseCommit?: string
-    taskLabel?: string
-    inspect?: WorktreeInspectView
-  },
-  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
-): string {
-  const t = (text: LocalizedText): string => resolveLocalizedText(text, locale)
-  const nodeSuffix =
-    input.nodeId !== undefined && input.nodeId !== ''
-      ? t(L(` (node ${input.nodeId})`, `（节点 ${input.nodeId}）`))
-      : ''
-  const baseSuffix =
-    input.baseCommit !== undefined && input.baseCommit !== ''
-      ? t(L(` (based on commit ${input.baseCommit.slice(0, 12)})`, `（基于提交 ${input.baseCommit.slice(0, 12)}）`))
-      : ''
-  const lines: string[] = [
-    t(
-      L(
-        'Please review and merge the changes of the following managed worktree (data comes from a read-only inspection; verify the actual content with git on the target node):',
-        '请审阅并合入以下受管工作树的改动（数据来自只读检视，实际内容请在目标节点以 git 复核）：',
-      ),
-    ),
-    t(L(`- Worktree: ${input.path}${nodeSuffix}`, `- 工作树：${input.path}${nodeSuffix}`)),
-    t(L(`- Branch: ${input.branch}${baseSuffix}`, `- 分支：${input.branch}${baseSuffix}`)),
-  ]
-  if (input.taskLabel !== undefined && input.taskLabel.trim() !== '') {
-    lines.push(t(L(`- Task: ${firstLineOf(input.taskLabel, 80)}`, `- 任务：${firstLineOf(input.taskLabel, 80)}`)))
-  }
-  const inspect = input.inspect
-  if (inspect !== undefined) {
-    if (!inspect.exists) {
-      const reason = t(inspect.unavailableReason === 'removed' ? L('registration cleaned up', '登记已清理') : L('directory missing', '不存在'))
-      lines.push(t(L(`- Inspection: ${reason}; nothing to inspect`, `- 检视：目录${reason}，无可检视改动`)))
-    } else {
-      lines.push(
-        t(
-          L(
-            `- Changed files: ${inspect.summary.totalFiles} (+${inspect.summary.additions} −${inspect.summary.deletions}; uncommitted: ${inspect.summary.dirtyFileCount})`,
-            `- 改动文件：${inspect.summary.totalFiles} 个（+${inspect.summary.additions} −${inspect.summary.deletions}；工作区未提交：${inspect.summary.dirtyFileCount} 个）`,
-          ),
-        ),
-      )
-      if (inspect.commitsAhead !== undefined) {
-        lines.push(t(L(`- Commits ahead of base: ${inspect.commitsAhead}`, `- 领先基线提交：${inspect.commitsAhead} 个`)))
-      }
-      if (inspect.branchChanged === true && inspect.currentBranch !== undefined) {
-        lines.push(
-          t(
-            L(
-              `- Note: the worktree is currently on branch ${inspect.currentBranch}, which differs from the registered branch — verify ownership first`,
-              `- 注意：工作树当前分支 ${inspect.currentBranch} 与登记分支不一致，可能已被改签，请先核实归属`,
-            ),
-          ),
-        )
-      }
-    }
-  }
-  lines.push(
-    t(
-      L(
-        'Review read-only first (git diff / status) and merge into the main worktree after confirming; state explicitly if the worktree should be discarded or cleaned up — never force-clean silently.',
-        '请先只读复核（git diff / status），确认后合入主工作树；需要丢弃或清理工作树时请明确说明，不要静默 force 清理。',
-      ),
-    ),
-  )
-  return lines.join('\n')
-}
-
-export function buildWorkspaceFilePrompt(
-  input: {
-    filePath: string
-    branch: string
-    scope: WorkspaceDiffScope
-    selectedCommit?: string
-    baseCommit?: string
-  },
-  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
-): string {
-  const scopeDesc =
-    input.scope === 'commit' && input.selectedCommit !== undefined
-      ? resolveLocalizedText(L(`in commit ${input.selectedCommit.slice(0, 12)}`, `在提交 ${input.selectedCommit.slice(0, 12)} 中`), locale)
-      : input.scope === 'since' && input.baseCommit !== undefined
-        ? resolveLocalizedText(L(`since commit ${input.baseCommit.slice(0, 12)}`, `自提交 ${input.baseCommit.slice(0, 12)} 起`), locale)
-        : input.scope === 'unpushed'
-          ? resolveLocalizedText(L('in unpushed commits', '在未推送提交中'), locale)
-          : resolveLocalizedText(L('in current working changes', '在当前未提交改动中'), locale)
-  return resolveLocalizedText(
-    L(
-      `Please review the changes to \`${input.filePath}\` on branch \`${input.branch}\` (${scopeDesc}) and tell me if anything needs adjustment.`,
-      `请查看分支 \`${input.branch}\` 上 \`${input.filePath}\` 的改动（${scopeDesc}），确认是否存在问题或需要继续调整的地方。`,
-    ),
-    locale,
-  )
 }

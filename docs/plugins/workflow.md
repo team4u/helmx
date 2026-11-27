@@ -36,7 +36,7 @@
 
 - `toolView`：`subagent-card`（`replaceRow: true`）与 `workflow-card`（`replaceRow: true`）；时间线单行收口为 26px `.trace-row`，`SubagentToolView` 通过 `{ includeDetail: false, includeLive: false }` 同时跳过子会话全量详情拉取与 60Hz 流式正文订阅；视图直接消费宿主持久化到 `details` 的有界 `presentationMeta`（配合 `useTimelineToolCalls('subagent')` 按工具名分片订阅续接关系，零 `JSON.parse` / 尾注文本刮取），并通过叶子组件 `ElapsedClock` / `WorkflowTimingClock` 隔离宿主共享 1Hz 时钟 `useSharedNowMs`；
 - `timelineRenderer` `background-report`：后台结算汇报折叠卡，基于 `KvGrid` / `Callout` 原语直接解析入口 `data.meta.report` 结构化载荷（完成默认折叠，失败/中止/损坏默认展开）；
-- `slot` `active-tray`（基于 `@helmx/plugin-client` `DockTray` / `DockTrayRow`，空闲返回 `null` 零 1Hz 计时渲染）与 `workbenchPanel` `tasks`（badge 绑定 `run-badges`，工作台与停靠区统一以 `runs` 为唯一执行树根来源，人类 `fork` 与 Swarm 成员会话不进入工作流树；工作台统一使用 `WorkflowRunCard` + `ExecutionNodeRow`，`aborted` 独立呈现不折算成完成；运行卡折叠仅渲染 `resultPreview`，点击展开结果才调 `inspect` 按需拉取并缓存完整 `result`）；工作树只读检视与清理按钮经 `<PluginSlot name="worktree-inspect" />` / `<PluginSlot name="worktree-cleanup" />` 开放给 [`builtin:worktree`](worktree.md) 贡献，停用 `builtin:worktree` 时自动隐去；
+- `slot` `active-tray`（基于 `@helmx/plugin-client` `DockTray` / `DockTrayRow`，空闲返回 `null` 零 1Hz 计时渲染）与 `workbenchPanel` `tasks`（badge 绑定 `run-badges`，工作台与停靠区统一以 `runs` 为唯一执行树根来源，人类 `fork` 与 Swarm 成员会话不进入工作流树；工作台统一使用 `WorkflowRunCard` + `ExecutionNodeRow`，`aborted` 独立呈现不折算成完成；运行卡折叠仅渲染 `resultPreview`，点击展开结果才调 `inspect` 按需拉取并缓存完整 `result`）；工作树只读差异检视入口经 `<PluginSlot name="worktree-inspect" />` / `<PluginSlot name="worktree-trace-inspect" />` 开放给 [`builtin:changes`](changes.md) 贡献，停用 `builtin:changes` 时自动隐去；
 - `sidebarItem` + `screen` `library`：工作流库全屏视图（基于 `Screen` / `SearchBox` / `DetailDrawer` / `ConfirmDialog` 原语，原生 `<button>` 卡片、只读浏览、显式选择目标会话运行、两步确认删除；无编辑器，「交由助手修改」仅提供可复制请求文本）。
 
 ## 配置与数据边界

@@ -29,15 +29,13 @@
 
 ## 前端贡献
 
-本插件通过 `ctx.ui.slot` 向 `builtin:workflow`、`builtin:swarm` 与 `builtin:changes` 贡献受管工作树清理插槽（`WorktreeCleanupSlot`，客户端源码位于 `packages/plugins/src/worktree/client/`）：
+本插件为纯后端机制插件，不贡献前端界面或清理按钮；受管工作树的创建、合入与清理均由智能体工具或 `helmx worktrees` CLI 完成。
 
-- **`worktree-cleanup`**（`builtin:workflow/worktree-cleanup`、`builtin:swarm/worktree-cleanup`、`builtin:changes/worktree-cleanup`）：受管工作树安全清理按钮（调用 `cleanup_worktree`）。
-
-改动检视界面（全屏/分屏检视台与快捷入口）由独立的 [`builtin:changes`](changes.md) 插件提供，与本插件零静态依赖。
+改动检视界面（全屏/分屏只读检视台与快捷入口）由独立的 [`builtin:changes`](changes.md) 插件提供，与本插件零静态依赖。
 
 ## 停用语义
 
-- 停用后 `cleanup_worktree` 工具、`worktrees` CLI、受管技能 `worktree` 与上述前端工作树清理插槽即时消失，不留幻影提示词或失效按钮；`builtin:changes` 对普通会话工作区的差异检视不受影响。
+- 停用后 `cleanup_worktree` 工具、`worktrees` CLI 与受管技能 `worktree` 即时消失，不留幻影提示词或失效动作；`builtin:changes` 对普通会话工作区的差异检视不受影响。
 - 仍有活跃 `ManagedWorktreeHold` 时停用被拒（`409 plugin_in_use`）；`--force` 可越过，磁盘登记保留。
 - 停用期间工作树登记与租约不清除，重新启用后 cleanup 仍可定位。此时请求 `isolation: 'worktree'` 在内核边界显式失败（`unsupported_runtime`），不静默降级；非隔离的 `subagent` 派生不受影响。
 
@@ -51,7 +49,7 @@
 | :--- | :--- |
 | 插件入口（组装与 KV 声明） | `packages/plugins/src/worktree.ts` |
 | 受管技能资产 | `packages/plugins/src/worktree/skill/SKILL.md` |
-| 隔离 / 分配 / 清理 / 检视 / 动作 / 工具 / 前端插槽 | `packages/plugins/src/worktree/`（`isolation*.ts`、`worktree*.ts`、`actions.ts`、`tools.ts`、`client/`） |
+| 隔离 / 分配 / 清理 / 检视 / 动作 / 工具 | `packages/plugins/src/worktree/`（`isolation*.ts`、`worktree*.ts`、`actions.ts`、`tools.ts`） |
 | 共享契约（meta 命名空间与执行描述） | `packages/plugins/src/contracts.ts` |
 | 主要测试 | `packages/plugins/test/native-worktree.test.ts`、`worktree-process-usage.test.ts`、`contracts.test.ts`、`packages/hub/test/worktree-inspect.integration.test.ts`、`worktree-runtime.integration.test.ts` |
 

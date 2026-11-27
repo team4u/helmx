@@ -56,18 +56,14 @@ export { SDK }
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const WORKFLOW_CLIENT_ROOT = resolve(HERE, '../../src/workflow/client')
 export const WORKFLOW_CLIENT_CACHE_DIR = resolve(HERE, '../../../../node_modules/.cache/helmx-test-workflow-clients')
-export const WORKTREE_CLIENT_ROOT = resolve(HERE, '../../src/worktree/client')
-export const WORKTREE_CLIENT_CACHE_DIR = resolve(HERE, '../../../../node_modules/.cache/helmx-test-worktree-clients')
 export const CHANGES_CLIENT_ROOT = resolve(HERE, '../../src/changes/client')
 export const CHANGES_CLIENT_CACHE_DIR = resolve(HERE, '../../../../node_modules/.cache/helmx-test-changes-clients')
 mkdirSync(WORKFLOW_CLIENT_CACHE_DIR, { recursive: true })
-mkdirSync(WORKTREE_CLIENT_CACHE_DIR, { recursive: true })
 mkdirSync(CHANGES_CLIENT_CACHE_DIR, { recursive: true })
 
 export interface WorktreeSlotComponents {
   WorktreeInspectSlot?: ReactTypes.ComponentType<Record<string, unknown>>
   WorktreeTraceInspectSlot?: ReactTypes.ComponentType<Record<string, unknown>>
-  WorktreeCleanupSlot?: ReactTypes.ComponentType<Record<string, unknown>>
 }
 
 export interface WorkflowClientStubOptions {
@@ -133,9 +129,7 @@ const stubPluginClientNamespace = {
         ? slots.WorktreeInspectSlot
         : shortName === 'worktree-trace-inspect'
           ? slots.WorktreeTraceInspectSlot
-          : shortName === 'worktree-cleanup'
-            ? slots.WorktreeCleanupSlot
-            : undefined
+          : undefined
     if (Component === undefined) {
       return props.fallback !== undefined ? React.createElement(React.Fragment, null, props.fallback) : null
     }
@@ -214,28 +208,6 @@ export async function importWorkflowModels(
     importWorkflowExecutionModel(cacheDir),
   ])
   return { ...parsers, ...executionModel }
-}
-
-export async function importWorktreeClientModule(
-  moduleRef = 'slots.tsx',
-  cacheDir = WORKTREE_CLIENT_CACHE_DIR,
-  options?: { realHooks?: boolean; scope?: string },
-): Promise<Record<string, unknown>> {
-  const mode: 'real' | 'stub' =
-    options?.realHooks !== undefined ? (options.realHooks ? 'real' : 'stub') : currentHookMode
-  syncSharedPluginGlobals(mode === 'real')
-  const { code } = await compilePluginClientModule('builtin:worktree', WORKTREE_CLIENT_ROOT, moduleRef, cacheDir)
-  const fragment = options?.scope ? `${mode}-${mountGen}-${options.scope}` : `${mode}-${mountGen}`
-  return (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}#${fragment}`)) as Record<
-    string,
-    unknown
-  >
-}
-
-export async function importWorktreeModels(
-  cacheDir = WORKTREE_CLIENT_CACHE_DIR,
-): Promise<typeof import('../../src/worktree/client/model-worktree.ts')> {
-  return (await importWorktreeClientModule('model-worktree.ts', cacheDir)) as unknown as typeof import('../../src/worktree/client/model-worktree.ts')
 }
 
 export async function importChangesClientModule(
@@ -455,9 +427,6 @@ export function createWorkflowHostHarness(init: {
         if (qualified === 'builtin:workflow/worktree-trace-inspect' && ws.WorktreeTraceInspectSlot !== undefined) {
           return [{ pluginId: 'builtin:changes', contributionId: 'workflow-trace-inspect', spec: { id: 'workflow-trace-inspect', target: qualified, client: { module: 'slots.tsx', export: 'WorktreeTraceInspectSlot' } } }]
         }
-        if (qualified === 'builtin:workflow/worktree-cleanup' && ws.WorktreeCleanupSlot !== undefined) {
-          return [{ pluginId: 'builtin:worktree', contributionId: 'worktree-cleanup', spec: { id: 'worktree-cleanup', target: qualified, client: { module: 'slots.tsx', export: 'WorktreeCleanupSlot' } } }]
-        }
         return []
       },
       renderItem: (item, options) => {
@@ -467,9 +436,7 @@ export function createWorkflowHostHarness(init: {
             ? ws?.WorktreeInspectSlot
             : item.contributionId === 'workflow-trace-inspect' || item.contributionId === 'worktree-trace-inspect'
               ? ws?.WorktreeTraceInspectSlot
-              : item.contributionId === 'worktree-cleanup'
-                ? ws?.WorktreeCleanupSlot
-                : undefined
+              : undefined
         if (Component === undefined) return null
         const slotCtx = SDK.createPluginClientContext(basePort, item.pluginId, options.conversationId ?? init.conversationId)
         return React.createElement(

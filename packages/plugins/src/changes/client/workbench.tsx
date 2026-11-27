@@ -1,7 +1,7 @@
 /**
  * Conversation right-hand Workbench `Changes` panel (`workbenchPanel` id `'changes'`).
- * Lazy-loads workspace summary on mount, auto-refreshes when the conversation round settles,
- * and opens the fullscreen/split Changes Inspector on demand.
+ * Read-only preview: lazy-loads workspace summary on mount, auto-refreshes when the
+ * conversation round settles, and opens the Changes Inspector on demand.
  * Exports only React components and TS types (Fast Refresh compliant).
  */
 import './styles.css'
@@ -14,7 +14,6 @@ import {
   EmptyState,
   HelmxIcon,
   LoadingState,
-  PluginSlot,
   Stack,
   resolveLocalizedText,
   useConversation,
@@ -140,18 +139,10 @@ export function ChangesWorkbenchPanel(props: Partial<WorkbenchPanelProps>): Reac
           <Button
             size="xs"
             variant="default"
-            icon="columns"
+            icon="file-diff"
             onClick={() => ctx.openSplitScreen(buildChangesScreenTarget({ conv: conversationId }))}
           >
-            {t(CHG_COPY.workbenchOpenSplit)}
-          </Button>
-          <Button
-            size="xs"
-            variant="ghost"
-            icon="maximize-2"
-            onClick={() => ctx.openScreen(buildChangesScreenTarget({ conv: conversationId }))}
-          >
-            {t(CHG_COPY.workbenchOpenFull)}
+            {t(CHG_COPY.openChanges)}
           </Button>
           <Button
             size="xs"
@@ -283,33 +274,14 @@ export function ChangesWorkbenchPanel(props: Partial<WorkbenchPanelProps>): Reac
                   <span className="mono chg-wb-wt-branch" title={`${wt.branch} · ${wt.path}`}>{wt.branch}</span>
                   <Badge tone="neutral" className="mono">{wt.nodeId}</Badge>
                 </div>
-                <Stack direction="horizontal" gap="xs" align="center">
-                  <Button
-                    size="xs"
-                    variant="default"
-                    icon="file-diff"
-                    onClick={() =>
-                      ctx.openSplitScreen(
-                        buildChangesScreenTarget({
-                          wt: wt.id,
-                          parent: wt.parentConversationId > 0 ? wt.parentConversationId : conversationId,
-                        }),
-                      )
-                    }
-                  >
-                    {t(CHG_COPY.splitInspect)}
-                  </Button>
-                  <PluginSlot
-                    name="worktree-cleanup"
-                    inline
-                    slotProps={{
-                      worktree: { id: wt.id, path: wt.path, branch: wt.branch },
-                      nodeId: wt.nodeId,
-                      compact: true,
-                      onCleaned: () => setRefreshSeq((n) => n + 1),
-                    }}
-                  />
-                </Stack>
+                <Button
+                  size="xs"
+                  variant="default"
+                  icon="file-diff"
+                  onClick={() => ctx.openSplitScreen(buildChangesScreenTarget({ wt: wt.id }))}
+                >
+                  {t(CHG_COPY.viewChanges)}
+                </Button>
               </div>
             ))}
           </div>

@@ -1,13 +1,14 @@
 /**
  * `builtin:changes` compiled client TSX interactive DOM tests:
  * - Zero Emoji across rendered Inspector screen, Workbench panel, and Slots;
- * - `ChangesInspectorScreen`: default workspace selection, scope switching
- *   (`working` / `unpushed` / `commit` / `since`), on-demand single-file load
- *   (`diff`, `untracked`, `binary`, `too_large`), baseline comparison button,
- *   ask-about-file submission, and worktree switching (`wt`) + review request;
- * - `ChangesWorkbenchPanel`: lazy summary load on mount, file click -> split screen,
- *   and related worktree split inspect button;
- * - `SwarmWorktreeActionsSlot`: compact split-inspect & retained review submission.
+ * - Pure read-only guarantee: zero session submissions, cleanup slots, or merge controls;
+ * - `ChangesInspectorScreen`: `<Screen actions>` Refresh, `< 8` vs `>= 8` SearchBox threshold,
+ *   scope switching (`working` / `unpushed` / `commit`) + compact Commit `Select`,
+ *   worktree (`wt`) `committed` Commit `Select`, on-demand `diff`/`untracked`/`binary`/`too_large`,
+ *   URL `sp.file` list/diff state transitions (`push` on file click, `replace` on prev/next step,
+ *   clear on `← Files`, single-file direct diff without `.chg-is-narrow-diff`),
+ *   `DiffViewer` wrap toggle (`wrap-text`) and single sticky gutter span (`.chg-diff-num-single`);
+ * - `ChangesWorkbenchPanel` & `SwarmWorktreeActionsSlot`: unified read-only single entry opening split preview.
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
@@ -91,6 +92,7 @@ interface HarnessLogs {
   submissions: Array<{ conversationId: number; text: string; whenBusy?: string }>
   screens: string[]
   splitScreens: string[]
+  paramUpdates: Array<{ patch: Record<string, string | undefined>; push?: boolean }>
   notices: Array<{ message: string; tone: string }>
 }
 
@@ -105,6 +107,7 @@ function createChangesHarness(options: {
     submissions: [],
     screens: [],
     splitScreens: [],
+    paramUpdates: [],
     notices: [],
   }
   const conversations = options.conversations ?? [makeConv(1)]
@@ -228,7 +231,8 @@ function createChangesHarness(options: {
       const scope = {
         params,
         isSplit: false,
-        setParams: (patch: Record<string, string | undefined>) => {
+        setParams: (patch: Record<string, string | undefined>, opts?: { push?: boolean }) => {
+          logs.paramUpdates.push({ patch, ...(opts?.push !== undefined ? { push: opts.push } : {}) })
           setParamsState((prev) => {
             const next = { ...prev }
             for (const [k, v] of Object.entries(patch)) {
@@ -298,6 +302,14 @@ const SAMPLE_WORKSPACE_WORKING = {
       committedAt: 1_700_000_000_000,
       unpushed: true,
     },
+    {
+      oid: '9999111122223333444455556666777788880000',
+      shortOid: '9999111',
+      subject: 'chore: earlier commit',
+      author: 'Dev',
+      committedAt: 1_699_999_000_000,
+      unpushed: false,
+    },
   ],
   commitsTruncated: false,
   summary: { totalFiles: 3, additions: 4, deletions: 1, untrackedCount: 1, dirtyFileCount: 3 },
@@ -361,14 +373,19 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
     }
   }, TIMEOUT)
 
-  test('ChangesInspectorScreen loads workspace summary & per-file diff/binary/too_large/untracked, switches scopes and worktrees with zero Emoji', TIMEOUT, async () => {
+  test('ChangesInspectorScreen：纯只读检视、URL sp.file 窄屏导航、Commit 下拉框、换行切换与 <8 搜索框阈值', TIMEOUT, async () => {
+    let summaryRefreshCount = 0
     const h = createChangesHarness({
       onAction: (pluginId, actionId, input) => {
         if (pluginId === 'builtin:worktree' && actionId === 'list_worktrees') {
           return { worktrees: [SAMPLE_WORKTREE_INSPECT.record] }
         }
         if (pluginId === 'builtin:worktree' && actionId === 'inspect_worktree') {
-          return SAMPLE_WORKTREE_INSPECT
+          return {
+            ...SAMPLE_WORKTREE_INSPECT,
+            scope: input['scope'] ?? 'all',
+            ...(input['commit'] !== undefined ? { selectedCommit: input['commit'] } : {}),
+          }
         }
         if (pluginId === 'builtin:worktree' && actionId === 'inspect_worktree_file') {
           return {
@@ -390,6 +407,7 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
           }
         }
         if (actionId === 'inspect_workspace') {
+          summaryRefreshCount += 1
           if (input['scope'] === 'unpushed') {
             return {
               ...SAMPLE_WORKSPACE_WORKING,
@@ -398,12 +416,12 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
               files: [{ path: 'unpushed-only.ts', status: 'A', additions: 5, deletions: 0, binary: false, untracked: false }],
             }
           }
-          if (input['scope'] === 'since') {
+          if (input['scope'] === 'commit') {
             return {
               ...SAMPLE_WORKSPACE_WORKING,
-              scope: 'since',
-              diffBase: 'baseCommit',
-              baseCommit: input['baseCommit'],
+              scope: 'commit',
+              diffBase: 'commit',
+              selectedCommit: String(input['commit'] ?? SAMPLE_WORKSPACE_WORKING.commits[0]!.oid),
             }
           }
           return SAMPLE_WORKSPACE_WORKING
@@ -459,47 +477,136 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
       assert.match(text, /const x = newVal/)
       assert.match(text, /1 unpushed/)
 
-      // Click binary file
+      // No write / cleanup / prompt buttons rendered
+      for (const forbidden of ['Ask session about file', 'Compare to current', 'Ask main to review', 'Clean up']) {
+        assert.equal(text.includes(forbidden), false, `Must omit write action UI: ${forbidden}`)
+      }
+
+      // `<Screen actions>` provides Refresh button and triggers manual reload
+      const refreshBtn = ui.container.querySelector('.screen-header button[aria-label="Refresh"]') as HTMLButtonElement | null
+      assert.ok(refreshBtn !== null, 'Refresh action must mount inside Screen header actions')
+      const beforeRefreshCount = summaryRefreshCount
+      await act(async () => { refreshBtn.click() })
+      await act(async () => { await flushMacrotask(0) })
+      assert.ok(summaryRefreshCount > beforeRefreshCount)
+
+      // 3 files (< 8) -> SearchBox hidden & no 220px commits box & no Commit Select in working scope
+      assert.ok(ui.container.querySelector('.chg-sidebar-search') === null)
+      assert.ok(ui.container.querySelector('.chg-commits-section') === null)
+      assert.ok(ui.container.querySelector('button[aria-label="Inspect commit"]') === null)
+
+      // Multi-file initial state without sp.file -> chg-mode-list, no chg-is-narrow-diff, no mobile back button
+      const screenEl = ui.container.querySelector('.chg-screen')
+      const stageEl = ui.container.querySelector('.chg-split-stage')
+      assert.ok(screenEl !== null && stageEl !== null)
+      assert.equal(screenEl.classList.contains('chg-is-narrow-diff'), false)
+      assert.equal(stageEl.classList.contains('chg-mode-list'), true)
+      assert.ok(ui.container.querySelector('.chg-mobile-back') === null)
+
+      // DiffViewer renders single sticky line number column alongside dual gutters & default horizontal scroll
+      assert.ok(ui.container.querySelectorAll('.chg-diff-num-single').length > 0)
+      const surfaceBefore = ui.container.querySelector('.chg-diff-surface')
+      assert.ok(surfaceBefore !== null)
+      assert.equal(surfaceBefore.classList.contains('is-wrap'), false)
+      const wrapBtn = ui.container.querySelector('button[aria-label="Wrap lines"]') as HTMLButtonElement | null
+      assert.ok(wrapBtn !== null)
+      assert.equal(wrapBtn.getAttribute('aria-pressed'), 'false')
+      await act(async () => { wrapBtn.click() })
+      const wrapBtnActive = ui.container.querySelector('button[aria-label="Horizontal scroll"]') as HTMLButtonElement | null
+      assert.ok(wrapBtnActive !== null)
+      assert.equal(wrapBtnActive.getAttribute('aria-pressed'), 'true')
+      assert.equal(ui.container.querySelector('.chg-diff-surface')?.classList.contains('is-wrap'), true)
+
+      // Click binary file -> pushes `file` to URL -> switches to chg-mode-diff + chg-is-narrow-diff + shows ← Files & 2/3 pager
       await act(async () => { buttonByText(ui.container, 'logo.png').click() })
       await act(async () => { await flushMacrotask(0) })
       assert.match(ui.container.textContent ?? '', /Binary file/)
+      assert.equal(screenEl.classList.contains('chg-is-narrow-diff'), true)
+      assert.equal(stageEl.classList.contains('chg-mode-diff'), true)
+      assert.equal(ui.container.querySelector('.chg-file-pager-count')?.textContent, '2/3')
+      assert.ok(ui.container.querySelector('.chg-mobile-back') !== null)
+      const filePushUpdate = h.logs.paramUpdates.find((u) => u.patch['file'] === 'assets/logo.png')
+      assert.equal(filePushUpdate?.push, true, 'Opening a file from list pushes history so swipe-back returns to list')
 
-      // Click too_large file
-      await act(async () => { buttonByText(ui.container, 'bundle.min.js').click() })
+      // Next file (`>`) uses replace (push !== true) and advances to too_large file
+      const nextBtn = ui.container.querySelector('button[aria-label="Next file"]') as HTMLButtonElement | null
+      assert.ok(nextBtn !== null)
+      await act(async () => { nextBtn.click() })
       await act(async () => { await flushMacrotask(0) })
       assert.match(ui.container.textContent ?? '', /Single-file diff exceeds preview budget/)
       assert.match(ui.container.textContent ?? '', /\+5200/)
+      assert.equal(ui.container.querySelector('.chg-file-pager-count')?.textContent, '3/3')
+      const stepUpdate = h.logs.paramUpdates.at(-1)
+      assert.equal(stepUpdate?.patch['file'], 'dist/bundle.min.js')
+      assert.notEqual(stepUpdate?.push, true, 'Stepping next/prev file replaces URL instead of pushing history')
 
-      // Ask session about file
-      await act(async () => { buttonByText(ui.container, 'Ask session about file').click() })
+      // Clicking `← Files` clears sp.file and restores chg-mode-list
+      const backBtn = ui.container.querySelector('.chg-mobile-back') as HTMLButtonElement
+      await act(async () => { backBtn.click() })
       await act(async () => { await flushMacrotask(0) })
-      assert.equal(h.logs.submissions.length, 1)
-      assert.match(h.logs.submissions[0]!.text, /dist\/bundle\.min\.js/)
+      assert.equal(stageEl.classList.contains('chg-mode-list'), true)
+      assert.equal(screenEl.classList.contains('chg-is-narrow-diff'), false)
 
-      // Switch to Compare to current (`since` scope)
-      await act(async () => { buttonByText(ui.container, 'Compare to current').click() })
+      // Switch to `Commits` scope -> compact Commit `Select` renders in toolbar
+      await act(async () => { buttonByText(ui.container, 'Commits').click() })
       await act(async () => { await flushMacrotask(0) })
-      assert.ok(h.logs.actions.some((a) => a.actionId === 'inspect_workspace' && (a.input as { scope?: string }).scope === 'since'))
+      const commitSelectTrigger = ui.container.querySelector('button[aria-label="Inspect commit"]') as HTMLButtonElement | null
+      assert.ok(commitSelectTrigger !== null, 'Commit Select must appear in commit scope')
+      assert.match(commitSelectTrigger.textContent ?? '', /aaaa111/)
 
-      // Switch to unpushed scope
+      // Switch to `Unpushed` scope -> single-file repo skips list on narrow containers without hiding topbar
       await act(async () => { buttonByText(ui.container, 'Unpushed').click() })
       await act(async () => { await flushMacrotask(0) })
       assert.match(ui.container.textContent ?? '', /unpushed-only\.ts/)
       assert.match(ui.container.textContent ?? '', /Untracked file \(full bounded preview\)/)
+      assert.equal(stageEl.classList.contains('chg-mode-diff'), true)
+      assert.equal(screenEl.classList.contains('chg-is-narrow-diff'), false, 'Single-file mode keeps topbar visible')
+      assert.ok(ui.container.querySelector('.chg-mobile-back') === null)
 
-      // Switch to managed worktree via params (`wt`)
-      await ui.setParams({ wt: SAMPLE_WORKTREE_INSPECT.record.id })
+      // Switch to managed worktree (`wt`) + `Committed` scope -> Commit Select shows `All committed`
+      await ui.setParams({ wt: SAMPLE_WORKTREE_INSPECT.record.id, scope: 'committed' })
       assert.match(ui.container.textContent ?? '', /export const wt = 1/)
-      await act(async () => { buttonByText(ui.container, 'Ask main to review & merge').click() })
-      await act(async () => { await flushMacrotask(0) })
-      assert.equal(h.logs.submissions.length, 2)
-      assert.match(h.logs.submissions[1]!.text, /helmx\/spawn-wt1/)
+      const wtCommitSelect = ui.container.querySelector('button[aria-label="Inspect commit"]')
+      assert.ok(wtCommitSelect !== null)
+      assert.match(wtCommitSelect.textContent ?? '', /All committed/)
+      assert.equal(h.logs.submissions.length, 0, 'Read-only screen must never submit prompts')
     } finally {
       ui.unmount()
     }
   })
 
-  test('ChangesWorkbenchPanel & SwarmWorktreeActionsSlot open split inspector and submit retained coordinator review', TIMEOUT, async () => {
+  test('ChangesInspectorScreen：文件数 >= 8 时展示搜索框并实时筛选', TIMEOUT, async () => {
+    const eightFiles = Array.from({ length: 8 }, (_, idx) => ({
+      path: `src/file-${idx + 1}.ts`,
+      status: 'M' as const,
+      additions: 1,
+      deletions: 0,
+      binary: false,
+      untracked: false,
+    }))
+    const h = createChangesHarness({
+      onAction: (_pluginId, actionId) => {
+        if (actionId === 'inspect_workspace') {
+          return {
+            ...SAMPLE_WORKSPACE_WORKING,
+            summary: { totalFiles: 8, additions: 8, deletions: 0, untrackedCount: 0, dirtyFileCount: 8 },
+            files: eightFiles,
+          }
+        }
+        return { kind: 'unchanged', filePath: 'src/file-1.ts' }
+      },
+    })
+    const ui = await h.mount(e(components.ChangesInspectorScreen, {}))
+    try {
+      const searchInput = ui.container.querySelector('.chg-sidebar-search input[aria-label="Filter changed files…"]') as HTMLInputElement | null
+      assert.ok(searchInput !== null, 'SearchBox should appear once changed files >= 8')
+      assert.equal(ui.container.querySelectorAll('.chg-file-row').length, 8)
+    } finally {
+      ui.unmount()
+    }
+  })
+
+  test('ChangesWorkbenchPanel & SwarmWorktreeActionsSlot：纯只读单一打开入口与文件跳转，无清理或审阅提交按钮', TIMEOUT, async () => {
     const conv = makeConv(1)
     const h = createChangesHarness({
       conversations: [conv],
@@ -507,9 +614,6 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
         if (pluginId === 'builtin:changes' && actionId === 'inspect_workspace') return SAMPLE_WORKSPACE_WORKING
         if (pluginId === 'builtin:worktree' && actionId === 'list_worktrees') {
           return { worktrees: [SAMPLE_WORKTREE_INSPECT.record] }
-        }
-        if (pluginId === 'builtin:worktree' && actionId === 'inspect_worktree') {
-          return SAMPLE_WORKTREE_INSPECT
         }
         return {}
       },
@@ -533,20 +637,32 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
       assert.equal(EMOJI_RE.test(text), false, 'Workbench & Swarm slot must stay Emoji-free')
       assert.match(text, /Workspace changes/)
       assert.match(text, /helmx\/spawn-wt1/)
+      assert.equal(text.includes('Full view'), false, 'Workbench removes dual Split/Full buttons')
+      assert.ok(wb.container.querySelector('button[aria-label="Ask coordinator to review & merge"]') === null)
 
-      // Click workspace file row -> opens split inspector at file
-      await act(async () => { buttonByText(wb.container, 'app.ts').click() })
+      // Click unified `Open changes` button
+      await act(async () => { buttonByText(wb.container, 'Open changes').click() })
       assert.equal(h.logs.splitScreens.length, 1)
-      assert.match(h.logs.splitScreens[0]!, /conv=1/)
-      assert.match(h.logs.splitScreens[0]!, /file=src%2Fapp\.ts/)
+      assert.equal(h.logs.splitScreens[0], 'screen:builtin:changes/inspector?conv=1')
 
-      // Click Swarm retained review button -> calls inspect_worktree lazily & submits to coordinator
-      const swarmReviewBtn = wb.container.querySelector('button[aria-label="Ask coordinator to review & merge"]') as HTMLButtonElement
-      assert.ok(swarmReviewBtn !== null)
-      await act(async () => { swarmReviewBtn.click() })
-      await act(async () => { await flushMacrotask(0) })
-      assert.equal(h.logs.submissions.length, 1)
-      assert.match(h.logs.submissions[0]!.text, /helmx\/spawn-wt1/)
+      // Click workspace file row -> opens inspector at file
+      await act(async () => { buttonByText(wb.container, 'app.ts').click() })
+      assert.equal(h.logs.splitScreens.length, 2)
+      assert.match(h.logs.splitScreens[1]!, /conv=1/)
+      assert.match(h.logs.splitScreens[1]!, /file=src%2Fapp\.ts/)
+
+      // Click worktree `View changes` row button -> omits parent param
+      await act(async () => { buttonByText(wb.container, 'View changes').click() })
+      assert.equal(h.logs.splitScreens.length, 3)
+      assert.equal(h.logs.splitScreens[2], 'screen:builtin:changes/inspector?wt=local%3A%2Frepo%2F.helmx-worktrees%2Fwt-1')
+
+      // Click Swarm read-only diff icon button -> opens inspector & never submits prompts
+      const swarmInspectBtn = wb.container.querySelector('button[aria-label="View changes: helmx/spawn-wt1"]') as HTMLButtonElement | null
+      assert.ok(swarmInspectBtn !== null)
+      await act(async () => { swarmInspectBtn.click() })
+      assert.equal(h.logs.splitScreens.length, 4)
+      assert.equal(h.logs.splitScreens[3], 'screen:builtin:changes/inspector?wt=local%3A%2Frepo%2F.helmx-worktrees%2Fwt-1')
+      assert.equal(h.logs.submissions.length, 0)
     } finally {
       wb.unmount()
     }

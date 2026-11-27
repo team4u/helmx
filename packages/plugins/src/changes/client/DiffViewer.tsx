@@ -9,6 +9,7 @@ import {
   Callout,
   CopyButton,
   EmptyState,
+  IconButton,
   LoadingState,
   resolveLocalizedText,
   usePluginLocale,
@@ -42,7 +43,10 @@ export interface DiffViewerProps {
   diffBase: 'baseCommit' | 'HEAD' | 'upstream' | 'commit'
   baseCommit?: string
   selectedCommit?: string
-  headerActions?: ReactNode
+  fileIndex?: number
+  totalFiles?: number
+  onPrevFile?: () => void
+  onNextFile?: () => void
   onRetry?: () => void
   onBack?: () => void
 }
@@ -73,11 +77,20 @@ function DiffLineRow({ row }: { row: DecoratedHunkRow }): ReactNode {
         ? 'chg-diff-row-remove'
         : 'chg-diff-row-context'
   const wordClass = row.kind === 'add' ? 'chg-diff-word-add' : 'chg-diff-word-remove'
+  const oldNum = row.kind !== 'add' && row.oldLine !== undefined ? String(row.oldLine) : ''
+  const newNum = row.kind !== 'remove' && row.newLine !== undefined ? String(row.newLine) : ''
+  const singleNum =
+    row.kind === 'remove'
+      ? oldNum
+      : newNum !== ''
+        ? newNum
+        : oldNum
 
   return (
     <div className={`chg-diff-row ${rowClass}`}>
-      <span className="chg-diff-num">{row.kind !== 'add' && row.oldLine !== undefined ? String(row.oldLine) : ''}</span>
-      <span className="chg-diff-num">{row.kind !== 'remove' && row.newLine !== undefined ? String(row.newLine) : ''}</span>
+      <span className="chg-diff-num chg-diff-num-old">{oldNum}</span>
+      <span className="chg-diff-num chg-diff-num-new">{newNum}</span>
+      <span className="chg-diff-num chg-diff-num-single">{singleNum}</span>
       <span className="chg-diff-content">
         <span className="chg-diff-sign">{sign}</span>
         {row.word !== undefined
@@ -99,8 +112,25 @@ function DiffLineRow({ row }: { row: DecoratedHunkRow }): ReactNode {
 export function DiffViewer(props: DiffViewerProps): ReactNode {
   const locale = usePluginLocale()
   const t = (text: LocalizedText): string => resolveLocalizedText(text, locale)
-  const { filePath, oldPath, status, loading, error, result, diffBase, baseCommit, selectedCommit, headerActions, onRetry, onBack } = props
+  const {
+    filePath,
+    oldPath,
+    status,
+    loading,
+    error,
+    result,
+    diffBase,
+    baseCommit,
+    selectedCommit,
+    fileIndex,
+    totalFiles,
+    onPrevFile,
+    onNextFile,
+    onRetry,
+    onBack,
+  } = props
   const [expandedFileKey, setExpandedFileKey] = useState<string | undefined>(undefined)
+  const [wrapLines, setWrapLines] = useState(false)
 
   const currentKey = `${filePath ?? ''}\u0000${diffBase}\u0000${baseCommit ?? ''}\u0000${selectedCommit ?? ''}`
   const expanded = expandedFileKey === currentKey
@@ -130,6 +160,7 @@ export function DiffViewer(props: DiffViewerProps): ReactNode {
   const deletions = result !== undefined && 'deletions' in result ? result.deletions : undefined
   const gitCommand =
     effectiveStatus === 'U' ? undefined : formatInspectGitCommand({ filePath, diffBase, baseCommit, selectedCommit })
+  const showPager = totalFiles !== undefined && totalFiles > 1 && fileIndex !== undefined && fileIndex >= 0
 
   let renderedBody: ReactNode = null
   if (loading && result === undefined) {
@@ -217,7 +248,7 @@ export function DiffViewer(props: DiffViewerProps): ReactNode {
       let remainingBudget = expanded ? Number.MAX_SAFE_INTEGER : FOLD_THRESHOLD_ROWS
       const hiddenCount = Math.max(0, totalRows - FOLD_THRESHOLD_ROWS)
       renderedBody = (
-        <div className="chg-diff-surface selectable">
+        <div className={`chg-diff-surface selectable${wrapLines ? ' is-wrap' : ''}`}>
           {result.kind === 'untracked' ? (
             <div className="chg-diff-banner">{t(CHG_COPY.untrackedBadge)}</div>
           ) : null}
@@ -263,6 +294,7 @@ export function DiffViewer(props: DiffViewerProps): ReactNode {
               size="xs"
               icon="arrow-left"
               className="chg-mobile-back"
+              title={t(CHG_COPY.backToFilesTitle)}
               onClick={onBack}
             >
               {t(CHG_COPY.backToFiles)}
@@ -290,8 +322,36 @@ export function DiffViewer(props: DiffViewerProps): ReactNode {
           ) : null}
         </div>
         <div className="chg-viewer-head-actions">
+          {showPager ? (
+            <div className="chg-file-pager">
+              <IconButton
+                variant="ghost"
+                size="xs"
+                icon="chevron-left"
+                disabled={onPrevFile === undefined}
+                label={t(CHG_COPY.prevFile)}
+                onClick={onPrevFile}
+              />
+              <span className="chg-file-pager-count mono tabular-nums">{`${fileIndex + 1}/${totalFiles}`}</span>
+              <IconButton
+                variant="ghost"
+                size="xs"
+                icon="chevron-right"
+                disabled={onNextFile === undefined}
+                label={t(CHG_COPY.nextFile)}
+                onClick={onNextFile}
+              />
+            </div>
+          ) : null}
+          <IconButton
+            variant="ghost"
+            size="xs"
+            icon="wrap-text"
+            active={wrapLines}
+            label={t(wrapLines ? CHG_COPY.unwrapLines : CHG_COPY.wrapLines)}
+            onClick={() => setWrapLines((v) => !v)}
+          />
           <CopyButton text={filePath} label={t(CHG_COPY.copyPath)} />
-          {headerActions}
         </div>
       </div>
       <div className="chg-viewer-body">{renderedBody}</div>

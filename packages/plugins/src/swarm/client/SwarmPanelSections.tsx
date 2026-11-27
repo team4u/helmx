@@ -176,15 +176,6 @@ export function SwarmRetainedWorktreesSection(props: SwarmRetainedWorktreesSecti
                   mode: 'retained',
                 }}
               />
-              <PluginSlot
-                name="worktree-cleanup"
-                inline
-                slotProps={{
-                  worktree: { id: item.worktreeId, path: item.path, branch: item.branch },
-                  nodeId: item.nodeId,
-                  compact: true,
-                }}
-              />
             </span>
           </li>
         ))}

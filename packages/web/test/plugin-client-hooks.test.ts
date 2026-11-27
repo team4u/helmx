@@ -262,3 +262,57 @@ test('createPluginClientContext.openConversationDrawer：工作台关闭时同�
   assert.deepEqual(store.getDrawerStack(), [{ kind: 'conversation', conversationId: 7 }])
   assert.equal(store.getWorkbenchSlice().workbenchOpen, false, '抽屉入口不得强制展开工作台')
 })
+
+test('createPluginClientHostPort.openTarget：宽视口保留 split，窄视口 (<=860px) 且未分屏时退化为主屏打开以防 50% 挤压', { timeout: 60_000 }, () => {
+  type RecordedCall = { target: Parameters<HelmxStoreActions['openTarget']>[0]; split?: boolean }
+  const installMatchMedia = (matches: boolean): (() => void) => {
+    const prev = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: () => ({ matches }),
+    })
+    return () => {
+      if (prev) Object.defineProperty(window, 'matchMedia', prev)
+      else delete (window as unknown as { matchMedia?: unknown }).matchMedia
+    }
+  }
+
+  // 1. Desktop width -> retains split: true
+  const desktopCalls: RecordedCall[] = []
+  const storeDesktop = makeStore({ splitTarget: null })
+  spyAction(storeDesktop, 'openTarget', (target, opts) => {
+    desktopCalls.push({ target, ...(opts?.split !== undefined ? { split: opts.split } : {}) })
+  })
+  const restoreDesktop = installMatchMedia(false)
+  try {
+    createPluginClientHostPort(storeDesktop).openTarget('screen:builtin:changes/inspector?conv=1', { split: true })
+  } finally {
+    restoreDesktop()
+  }
+  assert.deepEqual(desktopCalls, [{ target: 'screen:builtin:changes/inspector?conv=1', split: true }])
+
+  // 2. Narrow viewport (<= 860px) without active split -> omits split so primary navigation & drawer cleanup apply
+  const mobileNoSplitCalls: RecordedCall[] = []
+  const mobileActiveSplitCalls: RecordedCall[] = []
+  const storeMobileNoSplit = makeStore({ splitTarget: null })
+  spyAction(storeMobileNoSplit, 'openTarget', (target, opts) => {
+    mobileNoSplitCalls.push({ target, ...(opts?.split !== undefined ? { split: opts.split } : {}) })
+  })
+  const storeMobileActiveSplit = makeStore({
+    splitTarget: { kind: 'screen', pluginId: 'builtin:changes', screenId: 'inspector', params: {} },
+  })
+  spyAction(storeMobileActiveSplit, 'openTarget', (target, opts) => {
+    mobileActiveSplitCalls.push({ target, ...(opts?.split !== undefined ? { split: opts.split } : {}) })
+  })
+  const restoreMobile = installMatchMedia(true)
+  try {
+    createPluginClientHostPort(storeMobileNoSplit).openTarget('screen:builtin:changes/inspector?conv=1', { split: true })
+    // 3. Narrow viewport with split already active -> preserves split: true
+    createPluginClientHostPort(storeMobileActiveSplit).openTarget('screen:builtin:changes/inspector?conv=2', { split: true })
+  } finally {
+    restoreMobile()
+  }
+  assert.deepEqual(mobileNoSplitCalls, [{ target: 'screen:builtin:changes/inspector?conv=1' }])
+  assert.deepEqual(mobileActiveSplitCalls, [{ target: 'screen:builtin:changes/inspector?conv=2', split: true }])
+})

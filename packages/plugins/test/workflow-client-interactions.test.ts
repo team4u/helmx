@@ -3,7 +3,7 @@
  * - SubagentToolView / WorkflowToolView 点击导航抽屉或工作台；无导航目标（引擎未建出 run）时行不可点，
  *   折叠入口由宿主行首 chevron 提供；
  * - WorkflowWorkbenchPanel 顶栏状态（loading / error / empty）与「恢复失败 (N)」批量续跑（防连点 + skipped + 非法返回报错）；
- * - ExecutionNodeRow 主体 button 打开抽屉、同级动作区 Abort / Resume / worktree-cleanup 无嵌套交互不冒泡；
+ * - ExecutionNodeRow 主体 button 打开抽屉、同级动作区 Abort / Resume / View changes 无嵌套交互不冒泡；
  * - 单卡 Resume 防连点、传 { resumeFromRunId, conversationId } 且 resumedByRunId 接管后隐藏。
  */
 import assert from 'node:assert/strict'
@@ -13,9 +13,9 @@ import {
   React,
   act,
   createWorkflowHostHarness,
+  importChangesClientModule,
   importWorkflowClientModule,
   importWorkflowSurfaces,
-  importWorktreeClientModule,
   makeConvSummary,
   mountSharedPluginNamespaces,
   setWorkflowClientStub,
@@ -29,7 +29,11 @@ const mod = await importWorkflowSurfaces(['index.tsx', 'workbench.tsx'], undefin
 const SubagentToolView = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
 const WorkflowToolView = mod['WorkflowToolView'] as React.ComponentType<Record<string, unknown>>
 const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
-const worktreeSlots = (await importWorktreeClientModule('slots.tsx', undefined, { realHooks: true, scope: 'interactions-wt' })) as WorktreeSlotComponents
+const changesSlotsMod = await importChangesClientModule('slots.tsx', undefined, { realHooks: true, scope: 'interactions-chg' })
+const worktreeSlots: WorktreeSlotComponents = {
+  WorktreeInspectSlot: changesSlotsMod['WorkflowWorktreeInspectSlot'] as React.ComponentType<Record<string, unknown>>,
+  WorktreeTraceInspectSlot: changesSlotsMod['WorktreeTraceInspectSlot'] as React.ComponentType<Record<string, unknown>>,
+}
 
 function buttonByText(scope: ParentNode, text: string): HTMLButtonElement {
   const buttons = [...scope.querySelectorAll('button')] as HTMLButtonElement[]
@@ -80,7 +84,7 @@ test('时间线行与工作台节点主按钮点击触发 openConversationDrawer
     toolUi.unmount()
   }
 
-  // 2. WorkflowWorkbenchPanel 内 ExecutionNodeRow：主按钮打开抽屉、同级 Abort 与 worktree-cleanup 不触发抽屉
+  // 2. WorkflowWorkbenchPanel 内 ExecutionNodeRow：主按钮打开抽屉、同级 Abort 与只读 View changes 不触发抽屉
   h.log.drawers.length = 0
   const wbUi = h.mountNode(e(WorkflowWorkbenchPanel, { conversation: parent }))
   try {
@@ -94,16 +98,13 @@ test('时间线行与工作台节点主按钮点击触发 openConversationDrawer
     const abortBtn = wbUi.container.querySelector('.wf-node-actions .btn-danger') as HTMLButtonElement | null
     assert.ok(abortBtn !== null)
     await act(async () => { abortBtn.click() })
-    const cleanupBtn = wbUi.container.querySelector('[aria-label="Clean up isolated worktree"]') as HTMLButtonElement | null
-    assert.ok(cleanupBtn !== null, 'worktree-cleanup 插槽应在动作区立即可用')
-    await act(async () => { cleanupBtn.click() })
+    const inspectBtn = buttonByText(wbUi.container, 'View changes')
+    await act(async () => { inspectBtn.click() })
     assert.deepEqual(
       h.log.actions.map((a) => [a.pluginId, a.actionId, a.input]),
-      [
-        ['builtin:workflow', 'abort', { runId: 'wf_bg' }],
-        ['builtin:worktree', 'cleanup_worktree', { path: '/wt/x' }],
-      ],
+      [['builtin:workflow', 'abort', { runId: 'wf_bg' }]],
     )
+    assert.deepEqual(h.log.splitScreens, ['screen:builtin:changes/inspector?wt=local%3A%2Fwt%2Fx'])
     assert.deepEqual(h.log.drawers, [], '动作按钮点击绝不触发打开抽屉')
   } finally {
     wbUi.unmount()
@@ -429,9 +430,13 @@ test('时间线与工作台防撑爆契约：helmx/spawn-* 收为紧凑图标徽
     assert.match(wtBadge.getAttribute('title') ?? '', /helmx\/spawn-ef72f001/, '悬停提示须保留完整分支名')
     assert.match(wtBadge.getAttribute('title') ?? '', /\/repo\/\.helmx-worktrees\/ef72f001/, '悬停提示须保留路径')
     assert.equal(
-      managedToolUi.container.querySelectorAll('.wf-trace-right button').length,
+      managedToolUi.container.querySelectorAll('.wf-trace-right button:not(.chg-compact-slot-btn)').length,
       0,
       'replaceRow=true 可导航行右侧不得重复挂载第二枚展开按钮',
+    )
+    assert.ok(
+      managedToolUi.container.querySelector('.wf-trace-right .chg-compact-slot-btn') !== null,
+      '托管 worktree 行右侧应保留只读检视图标按钮',
     )
   } finally {
     managedToolUi.unmount()
@@ -486,15 +491,13 @@ test('时间线与工作台防撑爆契约：helmx/spawn-* 收为紧凑图标徽
     assert.match(metaRow.textContent ?? '', /Try #2/)
     assert.match(metaRow.textContent ?? '', /Gate passed/)
     assert.match(metaRow.textContent ?? '', /glm-5/)
-    const cleanupBtn = managedCard.querySelector('[aria-label="Clean up isolated worktree"]')
-    assert.ok(cleanupBtn !== null)
-    assert.equal(cleanupBtn.textContent?.trim(), '', 'compact worktree-cleanup 应渲染纯图标按钮')
+    assert.ok(managedCard.querySelector('[aria-label="Clean up isolated worktree"]') === null, '不渲染前端 worktree-cleanup 按钮')
   } finally {
     wbUi.unmount()
   }
 })
 
-test('已结束的同步 isolation:worktree subagent 行在时间线直接挂载紧凑 cleanup 按钮且点击不打开抽屉', { timeout: 60_000 }, async () => {
+test('已结束的同步 isolation:worktree subagent 行在时间线直接挂载只读分屏检视按钮且点击不打开抽屉', { timeout: 60_000 }, async () => {
   const parent = makeConvSummary(1)
   const abortedChild = makeConvSummary(601, {
     parentConversationId: 1,
@@ -537,17 +540,17 @@ test('已结束的同步 isolation:worktree subagent 行在时间线直接挂载
     assert.ok(statusNode !== null)
     assert.match(ui.container.querySelector('.wf-trace-right')?.textContent ?? '', /Aborted/)
     assert.ok(ui.container.querySelector('.wf-wt-badge') !== null, '同步中止隔离行应展示 worktree 徽章')
-    const cleanupBtn = ui.container.querySelector('.wf-trace-right [aria-label="Clean up isolated worktree"]') as HTMLButtonElement | null
-    assert.ok(cleanupBtn !== null, '无 WorkflowRun 的已结束同步隔离行应在右侧渲染紧凑 cleanup 按钮')
-    assert.equal(cleanupBtn.textContent?.trim(), '')
+    const inspectBtn = ui.container.querySelector('.wf-trace-right [aria-label="View changes: helmx/spawn-sync601"]') as HTMLButtonElement | null
+    assert.ok(inspectBtn !== null, '已结束同步隔离行应在右侧渲染只读检视图标按钮')
+    assert.equal(inspectBtn.textContent?.trim(), '')
     await act(async () => {
-      cleanupBtn.click()
+      inspectBtn.click()
     })
     assert.deepEqual(
-      h.log.actions.map((a) => [a.pluginId, a.actionId, a.input]),
-      [['builtin:worktree', 'cleanup_worktree', { worktreeId: 'local:/repo/.helmx-worktrees/sync-601' }]],
+      h.log.splitScreens,
+      ['screen:builtin:changes/inspector?wt=local%3A%2Frepo%2F.helmx-worktrees%2Fsync-601'],
     )
-    assert.deepEqual(h.log.drawers, [], '点击行内 cleanup 按钮绝不应触发打开子会话抽屉')
+    assert.deepEqual(h.log.drawers, [], '点击行内检视按钮绝不应触发打开子会话抽屉')
   } finally {
     ui.unmount()
   }

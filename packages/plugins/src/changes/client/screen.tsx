@@ -1,8 +1,8 @@
 /**
- * Full-screen / split-screen Git Diff Inspector (`screen:builtin:changes/inspector`).
+ * Full-screen / split-screen pure read-only Git Diff Inspector (`screen:builtin:changes/inspector`).
  * Supports both ordinary conversation workspaces (`conv`) and managed worktrees (`wt`),
- * with URL param sync via `useScreenParams()`, on-demand single-file loading, bounded
- * in-memory caching, and automatic follow-up refresh when the watched conversation settles.
+ * URL param sync via `useScreenParams()`, URL-driven narrow mobile navigation (`sp.file`),
+ * on-demand single-file loading, bounded in-memory caching, and auto-refresh on turn settle.
  * Exports only React components and TS types (Fast Refresh compliant).
  */
 import './styles.css'
@@ -12,10 +12,8 @@ import {
   Badge,
   Button,
   Callout,
-  CopyButton,
   EmptyState,
   LoadingState,
-  PluginSlot,
   Screen,
   SearchBox,
   SegmentedControl,
@@ -41,7 +39,6 @@ import type {
 import {
   CHG_COPY,
   chgCommitsAheadBadge,
-  chgSubmitFailed,
   chgSummaryText,
   chgUnmergedBadge,
   chgUnpushedBadge,
@@ -49,8 +46,6 @@ import {
 } from './copy.ts'
 import { DiffViewer } from './DiffViewer.tsx'
 import {
-  buildWorkspaceFilePrompt,
-  buildWorktreeReviewRequest,
   filterFiles,
   parseGitDiffFileResult,
   parseWorkspaceInspectResult,
@@ -63,6 +58,8 @@ import {
 } from './diff-model.ts'
 
 export interface ChangesInspectorScreenProps extends Partial<ScreenProps> {}
+
+const ALL_COMMITTED_VALUE = '__all__'
 
 function parsePositiveIntParam(raw: string | undefined): number | undefined {
   if (raw === undefined || !/^\d+$/.test(raw)) return undefined
@@ -138,13 +135,9 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
   const [worktrees, setWorktrees] = useState<ManagedWorktreeSummaryView[]>([])
   const [refreshSeq, setRefreshSeq] = useState(0)
   const [searchQuery, setSearchQuery] = useState('')
-  const [mobileView, setMobileView] = useState<'list' | 'diff'>('list')
-  const [sending, setSending] = useState(false)
 
   const ctxRef = useRef(ctx)
   ctxRef.current = ctx
-  const localeRef = useRef(locale)
-  localeRef.current = locale
 
   const listGen = useRef(0)
   useEffect(() => {
@@ -167,7 +160,6 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
 
   const paramWt = params['wt']?.trim() || undefined
   const paramConv = parsePositiveIntParam(params['conv'])
-  const paramParent = parsePositiveIntParam(params['parent'])
   const paramFile = params['file']?.trim() || undefined
   const paramCommit = params['commit']?.trim() || undefined
   const paramBase = params['base']?.trim() || undefined
@@ -255,7 +247,7 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
           {
             worktreeId: activeSelection.worktreeId,
             scope: worktreeScope,
-            ...(paramCommit !== undefined ? { commit: paramCommit } : {}),
+            ...(worktreeScope === 'committed' && paramCommit !== undefined ? { commit: paramCommit } : {}),
           },
           { pluginId: 'builtin:worktree' },
         )
@@ -351,14 +343,31 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
     return []
   }, [currentWorktree, currentWorkspace])
 
+  const explicitFile = useMemo(
+    () => (paramFile !== undefined ? activeFiles.find((f) => f.path === paramFile) : undefined),
+    [activeFiles, paramFile],
+  )
+  const isSingleFile = activeFiles.length === 1
+  const isNarrowDiff = !isSingleFile && explicitFile !== undefined
+  const showNarrowDiffPane = isSingleFile || isNarrowDiff
+
   const selectedFileEntry = useMemo(() => {
     if (activeFiles.length === 0) return undefined
-    if (paramFile !== undefined) {
-      const matched = activeFiles.find((f) => f.path === paramFile)
-      if (matched !== undefined) return matched
-    }
+    if (explicitFile !== undefined) return explicitFile
     return filteredFiles[0] ?? activeFiles[0]
-  }, [activeFiles, filteredFiles, paramFile])
+  }, [activeFiles, explicitFile, filteredFiles])
+
+  const navFiles = useMemo(() => {
+    if (selectedFileEntry !== undefined && filteredFiles.some((f) => f.path === selectedFileEntry.path)) {
+      return filteredFiles
+    }
+    return activeFiles
+  }, [activeFiles, filteredFiles, selectedFileEntry])
+
+  const selectedIndex = useMemo(
+    () => (selectedFileEntry !== undefined ? navFiles.findIndex((f) => f.path === selectedFileEntry.path) : -1),
+    [navFiles, selectedFileEntry],
+  )
 
   const activeSummaryHead =
     currentWorktree?.currentHead ?? (currentWorkspace?.isGitRepo ? currentWorkspace.currentHead : undefined)
@@ -413,7 +422,7 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
             filePath: selectedFileEntry.path,
             ...(selectedFileEntry.oldPath !== undefined ? { oldPath: selectedFileEntry.oldPath } : {}),
             scope: worktreeScope,
-            ...(paramCommit !== undefined ? { commit: paramCommit } : {}),
+            ...(worktreeScope === 'committed' && paramCommit !== undefined ? { commit: paramCommit } : {}),
           },
           { pluginId: 'builtin:worktree' },
         )
@@ -464,8 +473,19 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
   }, [loadSelectedFile])
 
   const selectFile = (filePath: string): void => {
-    updateParams({ file: filePath })
-    setMobileView('diff')
+    updateParams({ file: filePath }, paramFile === undefined ? { push: true } : undefined)
+  }
+
+  const backToFiles = (): void => {
+    updateParams({ file: undefined })
+  }
+
+  const stepFile = (delta: -1 | 1): void => {
+    if (selectedIndex < 0) return
+    const nextFile = navFiles[selectedIndex + delta]
+    if (nextFile !== undefined) {
+      updateParams({ file: nextFile.path })
+    }
   }
 
   const handleFileListKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
@@ -479,61 +499,8 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
         : Math.max(0, idx <= 0 ? 0 : idx - 1)
     const nextFile = filteredFiles[nextIdx]
     if (nextFile !== undefined) {
-      selectFile(nextFile.path)
+      updateParams({ file: nextFile.path })
     }
-  }
-
-  const reviewText = useMemo(() => {
-    if (currentWorktree === undefined) return ''
-    return buildWorktreeReviewRequest(
-      {
-        path: currentWorktree.record.path,
-        branch: currentWorktree.record.branch,
-        nodeId: currentWorktree.record.nodeId,
-        baseCommit: currentWorktree.record.baseCommit,
-        inspect: currentWorktree,
-      },
-      locale,
-    )
-  }, [currentWorktree, locale])
-
-  const reviewParentId = paramParent ?? currentWorktree?.record.parentConversationId
-
-  const submitReviewRequest = (): void => {
-    if (reviewParentId === undefined || reviewParentId <= 0 || reviewText === '') return
-    setSending(true)
-    ctx
-      .submitInput(reviewText, { conversationId: reviewParentId, whenBusy: 'steer' })
-      .then(() => ctx.notify(t(CHG_COPY.reviewSubmitted)))
-      .catch((err: unknown) => ctx.notify(chgSubmitFailed(err instanceof Error ? err.message : String(err), locale), 'error'))
-      .finally(() => setSending(false))
-  }
-
-  const mentionWorkspaceFile = (): void => {
-    if (
-      activeSelection?.kind !== 'workspace' ||
-      currentWorkspace === undefined ||
-      !currentWorkspace.isGitRepo ||
-      selectedFileEntry === undefined
-    ) {
-      return
-    }
-    const prompt = buildWorkspaceFilePrompt(
-      {
-        filePath: selectedFileEntry.path,
-        branch: currentWorkspace.currentBranch,
-        scope: currentWorkspace.scope,
-        selectedCommit: currentWorkspace.selectedCommit,
-        baseCommit: currentWorkspace.baseCommit,
-      },
-      locale,
-    )
-    setSending(true)
-    ctx
-      .submitInput(prompt, { conversationId: activeSelection.conversationId, whenBusy: 'followUp' })
-      .then(() => ctx.notify(t(CHG_COPY.mentionSubmitted)))
-      .catch((err: unknown) => ctx.notify(chgSubmitFailed(err instanceof Error ? err.message : String(err), locale), 'error'))
-      .finally(() => setSending(false))
   }
 
   const workspaceHasUnpushed =
@@ -570,20 +537,62 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
   const activeSelectedCommit =
     currentWorktree?.selectedCommit ?? (currentWorkspace?.isGitRepo ? currentWorkspace.selectedCommit : undefined)
 
-  const showCommitsList =
+  const showCommitSelector =
     activeCommits.length > 0 &&
     ((activeSelection?.kind === 'worktree' && worktreeScope === 'committed') ||
-      (activeSelection?.kind === 'workspace' && (workspaceScope === 'commit' || workspaceScope === 'since' || workspaceScope === 'working')))
+      (activeSelection?.kind === 'workspace' && workspaceScope === 'commit'))
+
+  const commitOptions = useMemo<SelectOption<string>[]>(() => {
+    if (!showCommitSelector) return []
+    const entries: SelectOption<string>[] = activeCommits.map((c) => ({
+      value: c.oid,
+      label: `${c.shortOid} · ${c.subject}`,
+      icon: 'git-commit',
+      meta: c.committedAt > 0 ? formatCompactTimestamp(c.committedAt) : undefined,
+    }))
+    if (activeSelection?.kind === 'worktree') {
+      return [{ value: ALL_COMMITTED_VALUE, label: t(CHG_COPY.allCommittedFilter), icon: 'git-branch' }, ...entries]
+    }
+    return entries
+  }, [showCommitSelector, activeCommits, activeSelection?.kind, locale])
+
+  const commitSelectValue =
+    activeSelection?.kind === 'worktree'
+      ? (paramCommit ?? ALL_COMMITTED_VALUE)
+      : (activeSelectedCommit ?? activeCommits[0]?.oid ?? '')
 
   const isUnavailableWorktree = currentWorktree !== undefined && !currentWorktree.exists
   const isNonGitWorkspace = currentWorkspace !== undefined && !currentWorkspace.isGitRepo
+  const hasStageContent =
+    activeSelection !== undefined &&
+    !(summaryLoading && currentWorktree === undefined && currentWorkspace === undefined) &&
+    summaryError === undefined &&
+    !isNonGitWorkspace &&
+    !isUnavailableWorktree
+
+  const showSearch = activeFiles.length >= 8 || searchQuery !== ''
+  const screenClass = hasStageContent && isNarrowDiff ? 'chg-screen chg-is-narrow-diff' : 'chg-screen'
+
+  const refreshAction = (
+    <Button
+      size="sm"
+      variant="ghost"
+      icon="rotate-cw"
+      pending={summaryLoading}
+      title={t(CHG_COPY.refresh)}
+      aria-label={t(CHG_COPY.refresh)}
+      onClick={triggerManualRefresh}
+    >
+      <span className="pane-action-label">{t(CHG_COPY.refresh)}</span>
+    </Button>
+  )
 
   return (
     <Screen
       layout="full-bleed"
-      className="chg-screen"
+      className={screenClass}
       title={t(CHG_COPY.screenTitle)}
-      subtitle={t(CHG_COPY.screenSubtitle)}
+      actions={refreshAction}
     >
       <div className="chg-topbar">
         <div className="chg-topbar-left">
@@ -597,6 +606,7 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
               popoverClassName="helmx-select-popover-wide"
               onChange={(ev) => {
                 const next = ev.target.value
+                setSearchQuery('')
                 if (next.startsWith('wt:')) {
                   updateParams(
                     { wt: next.slice(3), conv: undefined, scope: undefined, commit: undefined, base: undefined, file: undefined },
@@ -608,7 +618,6 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
                     { push: true },
                   )
                 }
-                setMobileView('list')
               }}
             />
           </div>
@@ -619,6 +628,7 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
               value={activeScope}
               items={scopeSegmentItems}
               onValueChange={(nextScope) => {
+                setSearchQuery('')
                 if (activeSelection.kind === 'worktree') {
                   updateParams({
                     scope: nextScope,
@@ -634,9 +644,37 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
                     file: undefined,
                   })
                 }
-                setMobileView('list')
               }}
             />
+          ) : null}
+          {showCommitSelector && commitOptions.length > 0 ? (
+            <div className="chg-commit-select-wrap">
+              <Select
+                size="sm"
+                aria-label={t(CHG_COPY.commitSelectLabel)}
+                value={commitSelectValue}
+                options={commitOptions}
+                popoverClassName="helmx-select-popover-wide"
+                onChange={(ev) => {
+                  const next = ev.target.value
+                  setSearchQuery('')
+                  if (activeSelection?.kind === 'worktree') {
+                    updateParams({
+                      scope: 'committed',
+                      commit: next === ALL_COMMITTED_VALUE ? undefined : next,
+                      file: undefined,
+                    })
+                  } else {
+                    updateParams({
+                      scope: 'commit',
+                      commit: next,
+                      base: undefined,
+                      file: undefined,
+                    })
+                  }
+                }}
+              />
+            </div>
           ) : null}
         </div>
 
@@ -692,46 +730,6 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
               ) : null}
             </>
           ) : null}
-
-          {currentWorktree !== undefined ? (
-            <>
-              {reviewParentId !== undefined && reviewParentId > 0 ? (
-                <Button
-                  size="xs"
-                  variant="primary"
-                  icon="git-pull-request"
-                  pending={sending}
-                  onClick={submitReviewRequest}
-                >
-                  {t(CHG_COPY.reviewButton)}
-                </Button>
-              ) : null}
-              <CopyButton text={reviewText} label={t(CHG_COPY.copyReview)} />
-              <PluginSlot
-                name="worktree-cleanup"
-                inline
-                slotProps={{
-                  worktree: {
-                    id: currentWorktree.record.id,
-                    path: currentWorktree.record.path,
-                    branch: currentWorktree.record.branch,
-                  },
-                  nodeId: currentWorktree.record.nodeId,
-                  onCleaned: triggerManualRefresh,
-                }}
-              />
-            </>
-          ) : null}
-
-          <Button
-            size="xs"
-            variant="ghost"
-            icon="rotate-cw"
-            pending={summaryLoading}
-            onClick={triggerManualRefresh}
-          >
-            {t(CHG_COPY.refresh)}
-          </Button>
         </div>
       </div>
 
@@ -782,82 +780,16 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
           </Callout>
         </div>
       ) : (
-        <div className={`chg-split-stage chg-mobile-${mobileView}`}>
+        <div className={`chg-split-stage ${showNarrowDiffPane ? 'chg-mode-diff' : 'chg-mode-list'}`}>
           <aside className="chg-sidebar">
-            <div className="chg-sidebar-search">
-              <SearchBox
-                value={searchQuery}
-                onChange={setSearchQuery}
-                placeholder={t(CHG_COPY.searchFiles)}
-                ariaLabel={t(CHG_COPY.searchFiles)}
-              />
-            </div>
-
-            {showCommitsList ? (
-              <div className="chg-commits-section">
-                <div className="chg-section-head">
-                  <span>{t(CHG_COPY.commitsTitle)}</span>
-                  <Stack direction="horizontal" gap="xs" align="center">
-                    {activeSelection?.kind === 'worktree' && worktreeScope === 'committed' && paramCommit !== undefined ? (
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        onClick={() => updateParams({ scope: 'committed', commit: undefined, file: undefined })}
-                      >
-                        {t(CHG_COPY.allCommittedFilter)}
-                      </Button>
-                    ) : null}
-                    <Badge tone="neutral" className="tabular-nums">{activeCommits.length}</Badge>
-                  </Stack>
-                </div>
-                <div className="chg-commits-list">
-                  {activeCommits.map((c) => {
-                    const isInspected =
-                      (activeScope === 'commit' || activeScope === 'committed') && activeSelectedCommit === c.oid
-                    const isBaseline = activeScope === 'since' && activeBaseCommit === c.oid
-                    return (
-                      <div key={c.oid} className={`chg-commit-item${isInspected || isBaseline ? ' is-active' : ''}`}>
-                        <button
-                          type="button"
-                          className="chg-commit-btn"
-                          onClick={() => {
-                            updateParams({
-                              scope: activeSelection?.kind === 'worktree' ? 'committed' : 'commit',
-                              commit: c.oid,
-                              base: undefined,
-                              file: undefined,
-                            })
-                          }}
-                        >
-                          <div className="chg-commit-top">
-                            <span className="mono chg-commit-sha">{c.shortOid}</span>
-                            {c.unpushed ? <Badge tone="accent">{t(CHG_COPY.scopeUnpushed)}</Badge> : null}
-                            <span className="chg-commit-time tabular-nums">
-                              {c.committedAt > 0 ? formatCompactTimestamp(c.committedAt) : ''}
-                            </span>
-                          </div>
-                          <div className="chg-commit-subject" title={c.subject}>{c.subject}</div>
-                        </button>
-                        {activeSelection?.kind === 'workspace' ? (
-                          <Button
-                            size="xs"
-                            variant={isBaseline ? 'primary' : 'ghost'}
-                            onClick={() => {
-                              updateParams({
-                                scope: 'since',
-                                base: c.oid,
-                                commit: undefined,
-                                file: undefined,
-                              })
-                            }}
-                          >
-                            {t(isBaseline ? CHG_COPY.compareSinceActive : CHG_COPY.compareSince)}
-                          </Button>
-                        ) : null}
-                      </div>
-                    )
-                  })}
-                </div>
+            {showSearch ? (
+              <div className="chg-sidebar-search">
+                <SearchBox
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  placeholder={t(CHG_COPY.searchFiles)}
+                  ariaLabel={t(CHG_COPY.searchFiles)}
+                />
               </div>
             ) : null}
 
@@ -923,21 +855,12 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
               diffBase={activeDiffBase}
               baseCommit={activeBaseCommit}
               selectedCommit={activeSelectedCommit}
+              fileIndex={selectedIndex}
+              totalFiles={navFiles.length}
+              onPrevFile={selectedIndex > 0 ? () => stepFile(-1) : undefined}
+              onNextFile={selectedIndex >= 0 && selectedIndex < navFiles.length - 1 ? () => stepFile(1) : undefined}
               onRetry={() => void loadSelectedFile(true)}
-              onBack={() => setMobileView('list')}
-              headerActions={
-                activeSelection?.kind === 'workspace' && selectedFileEntry !== undefined ? (
-                  <Button
-                    size="xs"
-                    variant="default"
-                    icon="message-square"
-                    pending={sending}
-                    onClick={mentionWorkspaceFile}
-                  >
-                    {t(CHG_COPY.mentionFile)}
-                  </Button>
-                ) : null
-              }
+              onBack={isNarrowDiff ? backToFiles : undefined}
             />
           </main>
         </div>

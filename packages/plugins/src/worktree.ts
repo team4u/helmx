@@ -1,23 +1,17 @@
 /**
- * builtin:worktree: the managed Git worktree plugin (default-enabled, zero static dep on workflow).
+ * builtin:worktree: the managed Git worktree backend plugin (default-enabled, zero static dep on workflow).
  *
  * Responsibilities:
  * - WorktreeAllocator / WorktreeStore / durable leases / ManagedWorktreeHold / agentId bindings
  *   persisted per-entry via `ctx.kv` (`worktrees`, `leases`, `agent-bindings`);
  * - agent_spawn around hook (priority 200) for allocation / resume / reattach;
  * - cleanup_worktree model tool + worktrees CLI family + internal acquire/release actions;
- * - UI slots (`builtin:workflow/worktree-inspect` & `builtin:workflow/worktree-cleanup`) so
- *   disabling this plugin cleanly removes all worktree inspect/cleanup UI from workflow cards;
  * - reconcileAfter: [WORKFLOW_PLUGIN_ID] soft ordering for post-restart native lease cleanup.
+ * Read-only change inspection UI is provided by `builtin:changes`; worktree mutations stay agent/CLI only.
  */
 import type { PluginDefinition } from '@helmx/protocol'
-import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
-import {
-  CHANGES_PLUGIN_ID,
-  SWARM_PLUGIN_ID,
-  WORKFLOW_PLUGIN_ID,
-  WORKTREE_PLUGIN_ID,
-} from './contracts.js'
+import { loadManagedSkillAsset } from './asset-paths.js'
+import { WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID } from './contracts.js'
 import { asDeletedConversationId } from './shared-helpers.js'
 import { WorktreeIsolation } from './worktree/isolation.js'
 import { registerWorktreeActions } from './worktree/actions.js'
@@ -53,7 +47,6 @@ export function createWorktreePlugin(): PluginDefinition {
     },
     icon: 'git-branch',
     version: '0.1.0',
-    ...resolvePluginClientAssets(WORKTREE_PLUGIN_ID, 'worktree', 'worktree_plugin_client_missing'),
     definePlugin(ctx) {
       const worktreeKv = {
         worktrees: ctx.kv<ManagedWorktreeRecord>(WORKTREES_KV_NAMESPACE),
@@ -137,25 +130,6 @@ export function createWorktreePlugin(): PluginDefinition {
       })
 
       registerWorktreeActions(ctx, { isolation })
-
-      ctx.ui.slot({
-        id: 'worktree-cleanup',
-        target: `${WORKFLOW_PLUGIN_ID}/worktree-cleanup`,
-        priority: 100,
-        client: { module: 'slots.tsx', export: 'WorktreeCleanupSlot' },
-      })
-      ctx.ui.slot({
-        id: 'swarm-worktree-cleanup',
-        target: `${SWARM_PLUGIN_ID}/worktree-cleanup`,
-        priority: 100,
-        client: { module: 'slots.tsx', export: 'WorktreeCleanupSlot' },
-      })
-      ctx.ui.slot({
-        id: 'changes-worktree-cleanup',
-        target: `${CHANGES_PLUGIN_ID}/worktree-cleanup`,
-        priority: 100,
-        client: { module: 'slots.tsx', export: 'WorktreeCleanupSlot' },
-      })
     },
   }
 }
