@@ -414,13 +414,35 @@ test('withCrossProcessFileLock never leaves its own break marker or published lo
     (error: unknown) => {
       assert.ok(error instanceof Error);
       assert.match(error.message, /^stale-lock recovery is in progress \(.*live-uuid\.stale \(pid \d+, \d+(ms|s|m|h|d) old\)\)/);
-      assert.match(error.message, new RegExp(`; releasing the published lock also failed \\(${escapeRegExp(lockPath)} still carries pid ${process.pid}: EBUSY: stubbed unlink failure`));
+      assert.match(error.message, new RegExp(`; releasing the published lock also failed \\(${escapeRegExp(lockPath)} may still carry pid ${process.pid}: EBUSY: stubbed unlink failure`));
       return true;
     },
   );
   const orphan = await fsp.readFile(lockPath, 'utf8');
   assert.ok(orphan.startsWith(`${process.pid} `), 'the reported unremovable lock is our own published lock');
   restoreRm5();
+  await fsp.rm(lockPath, { force: true });
+
+  // 6. Same path when the release cannot even read the lock back: not swallowed as "nothing to release",
+  //    because the file may still carry our pid.
+  const realReadFile = fsp.readFile;
+  fsp.readFile = (async (file: Parameters<typeof fsp.readFile>[0], options: Parameters<typeof fsp.readFile>[1]) => {
+    if (String(file) === lockPath) throw Object.assign(new Error('EACCES: stubbed permission denied, open'), { code: 'EACCES' });
+    return realReadFile(file, options);
+  }) as typeof fsp.readFile;
+  t.after(() => {
+    fsp.readFile = realReadFile;
+  }, { timeout: 60_000 });
+  await assert.rejects(
+    withCrossProcessFileLock(lockPath, async () => 'never', { waitMs: 0, pollMs: 5, settleGraceMs: 80, isAlive }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /^stale-lock recovery is in progress \(.*live-uuid\.stale/);
+      assert.match(error.message, new RegExp(`; releasing the published lock also failed \\(${escapeRegExp(lockPath)} may still carry pid ${process.pid}: EACCES: stubbed permission denied, open\\)$`));
+      return true;
+    },
+  );
+  fsp.readFile = realReadFile;
   await fsp.rm(liveMarker, { force: true });
 });
 

@@ -420,7 +420,7 @@ async function acquireLock(attempt: LockAttempt): Promise<void> {
         if (releaseFailure !== undefined) {
           annotateError(
             error,
-            `; releasing the published lock also failed (${attempt.lockPath} still carries pid ${process.pid}: ${describeError(releaseFailure)})`,
+            `; releasing the published lock also failed (${attempt.lockPath} may still carry pid ${process.pid}: ${describeError(releaseFailure)})`,
           );
         }
         throw error;
@@ -675,16 +675,20 @@ async function breakStaleLock(attempt: LockAttempt, pid: number): Promise<LockDe
  * Owner-checked release: remove the lock file only while it still carries our owner token. After
  * ownership confirmation no other process can delete or replace it while this PID lives (see
  * `confirmLockOwnership`), so the read/compare/remove sequence has no concurrent deleter. Returns the
- * removal error (after bounded retries) for callers to surface; never throws.
+ * failure whenever the release could not be proven (unreadable, or undeletable after bounded retries)
+ * for callers to surface; never throws.
  */
 async function releaseLock(attempt: LockAttempt): Promise<Error | undefined> {
+  let current: string;
   try {
-    const current = await fsp.readFile(attempt.lockPath, 'utf8');
-    if (current.trim() !== attempt.owner) return undefined;
-  } catch {
-    // Missing or unreadable: nothing of ours is left to remove.
-    return undefined;
+    current = await fsp.readFile(attempt.lockPath, 'utf8');
+  } catch (error) {
+    // Gone (deleted by a breaker inside its window): nothing of ours is left. Any other read failure is
+    // returned: the file may still carry our pid, so the caller decides whether to report it.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    return error instanceof Error ? error : new Error(describeError(error));
   }
+  if (current.trim() !== attempt.owner) return undefined;
   return await removeFileWithRetry(attempt.lockPath);
 }
 
