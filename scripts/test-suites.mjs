@@ -613,7 +613,7 @@ if (!shardingDisabled) {
 
   console.error(
     `[test-suites] schedule (${classifyMs}ms, astCache=${schedule.cacheStats.hits}/${files.length}, timings=${timingHits}/${files.length}, budget=${workerBudget}): ` +
-      `${scheduledPoolSummary} -> ${plans.length} concurrent shards`,
+      `${scheduledPoolSummary} -> ${plans.length} shards total, at most ${workerBudget} concurrent`,
   );
 } else {
   plans.push({
