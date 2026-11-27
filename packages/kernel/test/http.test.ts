@@ -781,6 +781,27 @@ test('conversation list noise-reduction contract: top-level by default, all=1 re
     const allWithAuto = await call(handler, 'GET', '/api/conversations?all=1')
     assert.equal(allWithAuto.status, 200)
     assert.equal(allWithAuto.body.some((c: ConversationSummary) => c.id === 50), true)
+    const topFalse = await call(handler, 'GET', '/api/conversations?topLevelOnly=false')
+    assert.equal(topFalse.status, 200)
+    assert.equal(topFalse.body.some((c: ConversationSummary) => c.id === 3), true, 'topLevelOnly=false includes child conversations')
+    assert.equal(topFalse.body.some((c: ConversationSummary) => c.id === 50), true, 'topLevelOnly=false lifts default ownedBy=human filter')
+    const topZero = await call(handler, 'GET', '/api/conversations?topLevelOnly=0&ownedBy=human')
+    assert.equal(topZero.status, 200)
+    assert.equal(topZero.body.some((c: ConversationSummary) => c.id === 4), true)
+    assert.equal(topZero.body.some((c: ConversationSummary) => c.id === 3), false)
+    assert.equal(topZero.body.some((c: ConversationSummary) => c.id === 50), false)
+    const topTrue = await call(handler, 'GET', '/api/conversations?topLevelOnly=1')
+    assert.equal(topTrue.status, 200)
+    assert.ok(topTrue.body.every((c: ConversationSummary) => c.parentConversationId === undefined))
+    for (const badTop of [
+      '/api/conversations?topLevelOnly=maybe',
+      '/api/conversations?topLevelOnly=1&all=1',
+      `/api/conversations?topLevelOnly=true&parent=${ROOT_CONVERSATION_ID}`,
+    ]) {
+      const badRes = await call(handler, 'GET', badTop)
+      assert.equal(badRes.status, 400, `${badTop} should return 400`)
+      assert.equal(badRes.body.error.code, 'validation_error')
+    }
     const badOwner = await call(handler, 'GET', '/api/conversations?ownedBy=bot')
     assert.equal(badOwner.status, 400)
     assert.equal(badOwner.body.error.code, 'validation_error')

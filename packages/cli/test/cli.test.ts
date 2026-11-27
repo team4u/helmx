@@ -98,6 +98,8 @@ test('conversations list noise-free query contract: omits default params, --all 
       'GET /api/conversations?parent=3&profileId=worker': () => ({ body: listBody }),
       'GET /api/conversations?ownedBy=helmx': () => ({ body: listBody }),
       'GET /api/conversations?all=1&ownedBy=human': () => ({ body: listBody }),
+      'GET /api/conversations?topLevelOnly=1': () => ({ body: listBody }),
+      'GET /api/conversations?topLevelOnly=0': () => ({ body: listBody }),
     },
     { autoRegisterCleanup: t },
   )
@@ -139,6 +141,19 @@ test('conversations list noise-free query contract: omits default params, --all 
   const badOwner = await runCliCaptured(['conversations', 'list', '--owned-by', 'bot', '--json'], env)
   assert.equal(badOwner.code, 1)
   assert.ok(badOwner.err.includes('owned-by'), `error should mention owned-by: ${badOwner.err}`)
+  // --top-level passes topLevelOnly=1/0 and rejects mutual exclusion with --all / --parent
+  const topTrue = await runCliCaptured(['conversations', 'list', '--top-level', '--json'], env)
+  assert.equal(topTrue.code, 0, topTrue.err)
+  assert.equal(hub.hits.at(-1)?.path, '/api/conversations?topLevelOnly=1')
+  const topFalse = await runCliCaptured(['conversations', 'list', '--top-level=false', '--json'], env)
+  assert.equal(topFalse.code, 0, topFalse.err)
+  assert.equal(hub.hits.at(-1)?.path, '/api/conversations?topLevelOnly=0')
+  const topAllConflict = await runCliCaptured(['conversations', 'list', '--top-level', '--all', '--json'], env)
+  assert.equal(topAllConflict.code, 1)
+  assert.ok(topAllConflict.err.includes('mutually exclusive'))
+  const topParentConflict = await runCliCaptured(['conversations', 'list', '--top-level', '--parent', '3', '--json'], env)
+  assert.equal(topParentConflict.code, 1)
+  assert.ok(topParentConflict.err.includes('mutually exclusive'))
 })
 
 test('thinkingLevel CLI passthrough: global default, current conversation override, and Profile merge', { timeout: 60_000 }, async (t) => {
@@ -2813,10 +2828,7 @@ const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
   },
   conversationListQuery: {
     command: ['conversations', 'list'],
-    aliases: { profileId: 'profile', parentConversationId: 'parent' },
-    exempt: {
-      topLevelOnly: 'Derived server-side when --all and --parent are omitted.',
-    },
+    aliases: { profileId: 'profile', parentConversationId: 'parent', topLevelOnly: 'top-level' },
   },
   profileCreate: {
     command: ['profiles', 'create'],

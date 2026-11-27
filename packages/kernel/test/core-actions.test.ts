@@ -422,6 +422,12 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       assert.equal(conflictList.status, 400)
       assert.equal(conflictList.code, 'validation_error')
 
+      const includeChildrenList = await postCoreAction(kernel, 'conversations', 'list', {
+        topLevelOnly: false,
+      })
+      assert.equal(includeChildrenList.status, 200)
+      assert.ok((includeChildrenList.body as ConversationSummary[]).some((c) => c.id === childHelmx.id))
+
       // core:conversations.fork
       const forkRes = await postCoreAction(kernel, 'conversations', 'fork', {
         conversationId: convA.id,

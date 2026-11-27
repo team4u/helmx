@@ -1086,3 +1086,40 @@ test('Profile HTTP accepts boolean restrictToCwd; non-boolean rejects', { timeou
     assert.throws(() => parseProfileBody({ id: 'worker', restrictToCwd }, { requireId: true }))
   }
 })
+
+test('conversations/asks router parity: strict ?wait=1, bodySchema separation, non-empty PATCH, 405 vs 404, and 501 optional ports', { timeout: 60_000 }, async () => {
+  const calls = newCallLog()
+  const kernel = makeKernel(calls)
+
+  // 1. POST /api/conversations/:id/input rejects `wait` in JSON body and `?wait=0` / `?wait=false`.
+  await expect400(kernel, 'POST', '/api/conversations/1/input', { text: 'hi', wait: true })
+  await expect400(kernel, 'POST', '/api/conversations/1/input?wait=0', { text: 'hi' })
+  await expect400(kernel, 'POST', '/api/conversations/1/input?wait=false', { text: 'hi' })
+
+  // 2. PATCH /api/conversations/:id rejects empty {} body and path-param `conversationId` in body.
+  await expect400(kernel, 'PATCH', '/api/conversations/1', {})
+  await expect400(kernel, 'PATCH', '/api/conversations/1', { conversationId: 1, title: 'x' })
+
+  // 3. 405 on /api/conversations/bulk-delete and /api/conversations/:id/files/content; 404 on asks/cancel wrong method.
+  for (const [m, p] of [
+    ['GET', '/api/conversations/bulk-delete'],
+    ['POST', '/api/conversations/1/files/content'],
+  ] as const) {
+    const res = await call(kernel, m, p)
+    assert.equal(res.status, 405, `${m} ${p} should 405`)
+    assert.equal(res.code, 'method_not_allowed')
+  }
+  const getCancel = await call(kernel, 'GET', '/api/asks/ask-1/cancel')
+  assert.equal(getCancel.status, 404)
+
+  // 4. Optional conversation ports (getConversationEntry, withdrawQueuedInput) return 501 not_implemented when omitted.
+  const bareKernel = makeKernel(calls)
+  delete (bareKernel.conversations as { getConversationEntry?: unknown }).getConversationEntry
+  delete (bareKernel.conversations as { withdrawQueuedInput?: unknown }).withdrawQueuedInput
+  const entry501 = await call(bareKernel, 'GET', '/api/conversations/1/entries/1')
+  assert.equal(entry501.status, 501)
+  assert.equal(entry501.code, 'not_implemented')
+  const withdraw501 = await call(bareKernel, 'POST', '/api/conversations/1/withdraw', { submissionId: 1 })
+  assert.equal(withdraw501.status, 501)
+  assert.equal(withdraw501.code, 'not_implemented')
+})

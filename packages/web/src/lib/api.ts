@@ -4,6 +4,7 @@ import type {
   ActionManifest,
   ArtifactMetadata,
   AskAnswers,
+  AskListFilter,
   AskSpec,
   AuthStatus,
   AuthToken,
@@ -49,12 +50,14 @@ import type {
   ConversationWithdrawRequest,
   ConversationWithdrawResponse,
   WhenBusy,
+  WhenPendingAsk,
 } from '@helmx/protocol/browser'
 
 export interface SubmitInputPayload {
   text: string
   origin?: InputOrigin
   whenBusy?: WhenBusy
+  whenPendingAsk?: WhenPendingAsk
   meta?: Record<string, unknown>
   attachments?: string[]
   /** 历史编辑重发：覆盖该 entry 及其后全部条目（服务端执行 rewind 重放）。 */
@@ -183,6 +186,7 @@ export interface ConversationListFilter {
   tag?: string
   status?: ConversationStatus
   ownedBy?: ConversationOwnership
+  topLevelOnly?: boolean
   all?: boolean
   parent?: number
 }
@@ -194,6 +198,7 @@ export const conversationsApi = {
     if (filter?.tag) params.set('tag', filter.tag)
     if (filter?.status) params.set('status', filter.status)
     if (filter?.ownedBy !== undefined) params.set('ownedBy', filter.ownedBy)
+    if (filter?.topLevelOnly !== undefined) params.set('topLevelOnly', filter.topLevelOnly ? '1' : '0')
     if (filter?.all !== undefined) params.set('all', filter.all ? '1' : '0')
     if (filter?.parent !== undefined) params.set('parent', String(filter.parent))
     const qs = params.toString()
@@ -267,22 +272,24 @@ export const conversationsApi = {
       instructions !== undefined && instructions.trim() !== '' ? { instructions } : {},
     )
   },
-  fork(id: number, entryId: string | number, title?: string): Promise<ConversationSummary> {
-    // 契约 ConversationForkRequest 要求 entryId 为安全正整数；ConversationEntry.id 是数字字符串。
+  fork(id: number, entryId?: string | number, title?: string): Promise<ConversationSummary> {
+    // 契约 ConversationForkRequest 要求 entryId 为安全正整数（可选，省略时由服务端取最新安全锚点）；
     // 严格整数字符串正则：拒绝空白/小数/指数/尾杂字符（Number.parseInt('3oops')===3 属错锚点，绝不容忍）。
-    const raw = String(entryId)
-    const numericEntryId = typeof entryId === 'number' ? entryId : /^[0-9]+$/.test(raw) ? Number(raw) : NaN
-    if (!Number.isInteger(numericEntryId) || !Number.isSafeInteger(numericEntryId) || numericEntryId <= 0) {
-      throw new ApiClientError(
-        'validation_error',
-        `entryId must be a safe positive integer (got ${String(entryId)})`,
-        400,
-        { entryId },
-      )
-    }
     const body: ConversationForkRequest = {
-      entryId: numericEntryId,
       ...(title !== undefined && title.trim() !== '' ? { title } : {}),
+    }
+    if (entryId !== undefined) {
+      const raw = String(entryId)
+      const numericEntryId = typeof entryId === 'number' ? entryId : /^[0-9]+$/.test(raw) ? Number(raw) : NaN
+      if (!Number.isInteger(numericEntryId) || !Number.isSafeInteger(numericEntryId) || numericEntryId <= 0) {
+        throw new ApiClientError(
+          'validation_error',
+          `entryId must be a safe positive integer (got ${String(entryId)})`,
+          400,
+          { entryId },
+        )
+      }
+      body.entryId = numericEntryId
     }
     return apiRequest<ConversationSummary>('POST', `/api/conversations/${id}/fork`, body)
   },
@@ -421,7 +428,18 @@ export const nodesApi = {
 // ---------------------------------------------------------------------------
 
 export const asksApi = {
-  list: (opts?: { signal?: AbortSignal }) => apiRequest<AskSpec[]>('GET', '/api/asks', undefined, opts?.signal),
+  list: (filter?: AskListFilter & { signal?: AbortSignal }, opts?: { signal?: AbortSignal }) => {
+    const params = new URLSearchParams()
+    if (filter?.conversationId !== undefined) params.set('conversationId', String(filter.conversationId))
+    if (filter?.status !== undefined) params.set('status', filter.status)
+    const qs = params.toString()
+    return apiRequest<AskSpec[]>(
+      'GET',
+      `/api/asks${qs ? `?${qs}` : ''}`,
+      undefined,
+      opts?.signal ?? filter?.signal,
+    )
+  },
   answer: (askId: string, answers: AskAnswers, expectedStateSeq?: number) =>
     apiRequest<{ ok: boolean }>('POST', `/api/asks/${encodeURIComponent(askId)}/answer`, {
       answers,
