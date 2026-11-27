@@ -4,16 +4,9 @@ import type { HelmxLocale, LocalizedText } from '@helmx/protocol/browser'
 import {
   Button,
   Callout,
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
   Field,
-  IconButton,
   Input,
+  ModalDialog,
   Stack,
   Textarea,
 } from '@helmx/plugin-client'
@@ -80,92 +73,76 @@ export function SaveTemplateDialog({
   }
 
   return (
-    <Dialog
+    <ModalDialog
       open={open}
       inline={inline}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen && !pending) onClose()
-      }}
+      onClose={onClose}
+      size="md"
+      title={t(C.templateSaveTitle)}
+      description={tiersTemplateCountSummary(activeTierCount, locale)}
+      closeDisabled={pending}
+      closeLabel={t(C.close)}
+      footer={
+        <>
+          <Button variant="ghost" size="sm" disabled={pending} onClick={onClose}>
+            {t(C.cancel)}
+          </Button>
+          <Button variant="primary" size="sm" icon="layers" pending={pending} disabled={pending} onClick={handleSubmit}>
+            {pending ? t(C.saving) : t(C.templateSaveBtn)}
+          </Button>
+        </>
+      }
     >
-      <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop">
-          <DialogContent className="modal tiers-template-dialog">
-            <div className="modal-header">
-              <DialogTitle className="modal-title">{t(C.templateSaveTitle)}</DialogTitle>
-              <DialogClose asChild>
-                <IconButton
-                  variant="ghost"
-                  size="sm"
-                  icon="x"
-                  label={t(C.close)}
-                  disabled={pending}
-                />
-              </DialogClose>
-            </div>
-            <div className="modal-body" onKeyDown={handleBodyKeyDown}>
-              <Stack gap="md">
-                <DialogDescription className="text-muted">
-                  {tiersTemplateCountSummary(activeTierCount, locale)}
-                </DialogDescription>
-                {displayError !== null && (
-                  <Callout tone="err">
-                    <span>{displayError}</span>
-                  </Callout>
-                )}
-                <div className="tiers-form-pair">
-                  <Field label={t(C.templateIdLabel)} required>
-                    <Input
-                      type="text"
-                      mono
-                      value={form.id}
-                      disabled={pending}
-                      placeholder={t(C.templateIdPlaceholder)}
-                      onKeyDown={handleInputKeyDown}
-                      onChange={(e) => {
-                        setLocalError(null)
-                        setForm((prev) => ({ ...prev, id: e.target.value }))
-                      }}
-                    />
-                  </Field>
-                  <Field label={t(C.templateNameLabel)} required>
-                    <Input
-                      type="text"
-                      value={form.name}
-                      disabled={pending}
-                      placeholder={t(C.templateNamePlaceholder)}
-                      onKeyDown={handleInputKeyDown}
-                      onChange={(e) => {
-                        setLocalError(null)
-                        setForm((prev) => ({ ...prev, name: e.target.value }))
-                      }}
-                    />
-                  </Field>
-                </div>
-                <Field label={t(C.templateDescLabel)}>
-                  <Textarea
-                    rows={2}
-                    value={form.description}
-                    disabled={pending}
-                    placeholder={t(C.templateDescPlaceholder)}
-                    onChange={(e) => {
-                      setLocalError(null)
-                      setForm((prev) => ({ ...prev, description: e.target.value }))
-                    }}
-                  />
-                </Field>
-              </Stack>
-            </div>
-            <div className="modal-footer">
-              <Button variant="ghost" size="sm" disabled={pending} onClick={onClose}>
-                {t(C.cancel)}
-              </Button>
-              <Button variant="primary" size="sm" icon="layers" pending={pending} disabled={pending} onClick={handleSubmit}>
-                {pending ? t(C.saving) : t(C.templateSaveBtn)}
-              </Button>
-            </div>
-          </DialogContent>
-        </DialogOverlay>
-      </DialogPortal>
-    </Dialog>
+      <div onKeyDown={handleBodyKeyDown}>
+        <Stack gap="md">
+          {displayError !== null && (
+            <Callout tone="err">
+              <span>{displayError}</span>
+            </Callout>
+          )}
+          <div className="tiers-form-pair">
+            <Field label={t(C.templateIdLabel)} required>
+              <Input
+                type="text"
+                mono
+                value={form.id}
+                disabled={pending}
+                placeholder={t(C.templateIdPlaceholder)}
+                onKeyDown={handleInputKeyDown}
+                onChange={(e) => {
+                  setLocalError(null)
+                  setForm((prev) => ({ ...prev, id: e.target.value }))
+                }}
+              />
+            </Field>
+            <Field label={t(C.templateNameLabel)} required>
+              <Input
+                type="text"
+                value={form.name}
+                disabled={pending}
+                placeholder={t(C.templateNamePlaceholder)}
+                onKeyDown={handleInputKeyDown}
+                onChange={(e) => {
+                  setLocalError(null)
+                  setForm((prev) => ({ ...prev, name: e.target.value }))
+                }}
+              />
+            </Field>
+          </div>
+          <Field label={t(C.templateDescLabel)}>
+            <Textarea
+              rows={2}
+              value={form.description}
+              disabled={pending}
+              placeholder={t(C.templateDescPlaceholder)}
+              onChange={(e) => {
+                setLocalError(null)
+                setForm((prev) => ({ ...prev, description: e.target.value }))
+              }}
+            />
+          </Field>
+        </Stack>
+      </div>
+    </ModalDialog>
   )
 }

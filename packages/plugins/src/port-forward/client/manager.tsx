@@ -375,19 +375,19 @@ export function PortForwardManagerScreen(
               </DropdownMenuTrigger>
               <DropdownMenuContent portalled inline={props.inlineDrawer} align="end">
                 <DropdownMenuItem
+                  icon="rotate-ccw"
                   disabled={actions.pending || (counts.active === 0 && counts.activeConnections === 0)}
                   onSelect={() => setPendingBulkConfirm('pause')}
                 >
-                  <HelmxIcon name="rotate-ccw" size={13} />
-                  <span>{t(PF_DISCONNECT_ALL)}</span>
+                  {t(PF_DISCONNECT_ALL)}
                 </DropdownMenuItem>
                 <DropdownMenuItem
+                  icon="square"
                   danger
                   disabled={actions.pending || (counts.enabled === 0 && counts.active === 0)}
                   onSelect={() => setPendingBulkConfirm('stop_all')}
                 >
-                  <HelmxIcon name="square" size={13} />
-                  <span>{t(PF_STOP_ALL)}</span>
+                  {t(PF_STOP_ALL)}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

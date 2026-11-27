@@ -208,6 +208,10 @@
   overflow: hidden;
 }
 
+.jr-accordion > .helmx-card-body {
+  gap: 0;
+}
+
 .jr-accordion-trigger {
   width: 100%;
   display: flex;
@@ -260,7 +264,6 @@
   width: 100%;
 }
 
-.jr-card-wrap > .card,
 .jr-card-wrap > .helmx-card {
   margin: 0;
   width: 100%;

@@ -1,8 +1,8 @@
-/** Fullscreen zoom/pan Mermaid preview modal (Radix Dialog, wheel zoom, pointer-capture pan, Esc close). */
+/** Fullscreen zoom/pan Mermaid preview modal (ModalDialog, wheel zoom, pointer-capture pan, Esc close). */
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode, type WheelEvent } from 'react'
 import {
-  Badge, Button, Callout, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle,
-  HelmxIcon, IconButton, usePluginContext, usePluginLocale, usePluginTranslator,
+  Badge, Button, Callout, CopyButton, IconButton, LoadingState, ModalDialog,
+  usePluginContext, usePluginLocale, usePluginTranslator,
 } from '@helmx/plugin-client'
 import { renderMermaidSvg } from './mermaid-loader.ts'
 import { MERMAID_COPY as C, mermaidModalStatus } from './copy.ts'
@@ -85,65 +85,61 @@ export function MermaidPreviewModal({ code, svg, onClose }: { code: string; svg?
   }
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogPortal>
-        <DialogOverlay className="modal-backdrop modal-fullscreen-backdrop">
-          <DialogContent className="modal modal-fullscreen" aria-label={t(C.previewTitle)}>
-            <div className="modal-header mermaid-modal-header">
-              <DialogTitle className="modal-title mermaid-modal-title">{t(C.previewTitle)}</DialogTitle>
-              <div className="mermaid-modal-actions">
-                <Badge tone="neutral" mono className="tabular-nums">{Math.round(scale * 100)}%</Badge>
-                <IconButton variant="secondary" size="sm" icon="zoom-in" onClick={() => zoomBy(STEP)} label={t(C.zoomInTitle)} />
-                <IconButton variant="secondary" size="sm" icon="zoom-out" onClick={() => zoomBy(-STEP)} label={t(C.zoomOutTitle)} />
-                <Button variant="secondary" size="sm" onClick={resetView} title={t(C.resetTitle)}>{t(C.reset)}</Button>
-                <Button variant="secondary" size="sm" onClick={() => setView((v) => (v === 'diagram' ? 'source' : 'diagram'))}>
-                  {view === 'diagram' ? t(C.viewSource) : t(C.viewDiagram)}
+    <ModalDialog
+      open
+      onClose={onClose}
+      size="fullscreen"
+      flushBody
+      title={t(C.previewTitle)}
+      closeLabel={t(C.closeTitle)}
+      className="mermaid-preview-modal"
+      headerActions={
+        <div className="mermaid-modal-actions">
+          <Badge tone="neutral" mono className="tabular-nums">{Math.round(scale * 100)}%</Badge>
+          <IconButton variant="secondary" size="sm" icon="zoom-in" onClick={() => zoomBy(STEP)} label={t(C.zoomInTitle)} />
+          <IconButton variant="secondary" size="sm" icon="zoom-out" onClick={() => zoomBy(-STEP)} label={t(C.zoomOutTitle)} />
+          <Button variant="secondary" size="sm" onClick={resetView} title={t(C.resetTitle)}>{t(C.reset)}</Button>
+          <Button variant="secondary" size="sm" onClick={() => setView((v) => (v === 'diagram' ? 'source' : 'diagram'))}>
+            {view === 'diagram' ? t(C.viewSource) : t(C.viewDiagram)}
+          </Button>
+          <CopyButton text={code} label={t(C.copySource)} />
+        </div>
+      }
+    >
+      {view === 'source' ? (
+        <pre className="code-block-pre selectable mermaid-source-pre"><code>{code}</code></pre>
+      ) : renderedSvg !== null ? (
+        <div
+          className={`mermaid-modal-stage${dragging ? ' is-dragging' : ''}`}
+          onDoubleClick={resetView}
+          onWheel={onWheel}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+        >
+          <div className="mermaid-transform-plane" style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})` }}>
+            <div className="mermaid-svg-layer" dangerouslySetInnerHTML={{ __html: renderedSvg }} />
+          </div>
+        </div>
+      ) : error !== null ? (
+        <div className="mermaid-modal-status">
+          <Callout tone="err" title={t(C.renderFailed)}>
+            <div className="mermaid-error-body">
+              <span className="selectable">{error}</span>
+              <div className="mermaid-error-actions">
+                <Button variant="secondary" size="sm" icon="refresh-cw" onClick={() => { setError(null); setRenderedSvg(null); setRetryCount((n) => n + 1) }}>
+                  {t(C.retry)}
                 </Button>
-                <CopyButton text={code} label={t(C.copySource)} />
               </div>
-              <DialogClose asChild>
-                <IconButton variant="ghost" size="sm" icon="x" className="mermaid-modal-close" label={t(C.close)} title={t(C.closeTitle)} />
-              </DialogClose>
             </div>
-            <div className="modal-body modal-body-flush">
-              {view === 'source' ? (
-                <pre className="code-block-pre selectable mermaid-source-pre"><code>{code}</code></pre>
-              ) : renderedSvg !== null ? (
-                <div
-                  className={`mermaid-modal-stage${dragging ? ' is-dragging' : ''}`}
-                  onDoubleClick={resetView}
-                  onWheel={onWheel}
-                  onPointerDown={onPointerDown}
-                  onPointerMove={onPointerMove}
-                  onPointerUp={endDrag}
-                  onPointerCancel={endDrag}
-                >
-                  <div className="mermaid-transform-plane" style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})` }}>
-                    <div className="mermaid-svg-layer" dangerouslySetInnerHTML={{ __html: renderedSvg }} />
-                  </div>
-                </div>
-              ) : error !== null ? (
-                <div className="mermaid-modal-status">
-                  <Callout tone="err" title={t(C.renderFailed)}>
-                    <div className="mermaid-error-body">
-                      <span className="selectable">{error}</span>
-                      <div className="mermaid-error-actions">
-                        <Button variant="secondary" size="sm" icon="refresh-cw" onClick={() => { setError(null); setRenderedSvg(null); setRetryCount((n) => n + 1) }}>
-                          {t(C.retry)}
-                        </Button>
-                      </div>
-                    </div>
-                  </Callout>
-                </div>
-              ) : (
-                <div className="mermaid-modal-status">
-                  <span className="mermaid-status-hint"><HelmxIcon name="loader" size={14} className="spin-slow" />{mermaidModalStatus(null, locale)}</span>
-                </div>
-              )}
-            </div>
-          </DialogContent>
-        </DialogOverlay>
-      </DialogPortal>
-    </Dialog>
+          </Callout>
+        </div>
+      ) : (
+        <div className="mermaid-modal-status">
+          <LoadingState label={mermaidModalStatus(null, locale)} />
+        </div>
+      )}
+    </ModalDialog>
   )
 }

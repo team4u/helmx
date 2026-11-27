@@ -278,7 +278,7 @@ export function TabsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRen
   const active = tabs.find((t) => t.id === activeId) ?? tabs[0]
   return (
     <Tabs value={active?.id} onValueChange={(val) => setActiveId(val)} variant="underline" size="sm" className="jr-tabs">
-      <TabsList>
+      <TabsList scrollable>
         {tabs.map((t) => (
           <TabsTrigger key={t.id} value={t.id}>
             {t.label}

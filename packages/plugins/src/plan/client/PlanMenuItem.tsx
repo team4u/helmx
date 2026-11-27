@@ -10,6 +10,7 @@ import type { ComposerMenuSlotProps } from '@helmx/protocol/browser'
 import {
   DropdownMenuItem,
   HelmxIcon,
+  Kbd,
   resolveLocalizedText,
   usePluginLocale,
 } from '@helmx/plugin-client'
@@ -35,6 +36,9 @@ function PlanMenuItemConversation({
   return (
     <DropdownMenuItem
       className={`plan-menu-item${active ? ' plan-menu-item--active' : ''}`}
+      icon={pending ? <HelmxIcon name="loader" size={14} className="spin-slow" /> : 'list-tree'}
+      shortcut={<Kbd size="sm" desktopOnly>Ctrl+.</Kbd>}
+      checked={active}
       disabled={disabled || pending}
       data-plan-mode={effectiveView.mode}
       data-plan-awaiting={effectiveView.awaitingApproval ? 'true' : 'false'}
@@ -43,16 +47,7 @@ function PlanMenuItemConversation({
         onCloseMenu?.()
       }}
     >
-      <HelmxIcon
-        name={pending ? 'loader' : 'list-tree'}
-        size={14}
-        className={pending ? 'plan-menu-item-icon spin-slow' : 'plan-menu-item-icon'}
-      />
-      <span className="plan-menu-item-label">{t(PLAN_COPY.menuLabel)}</span>
-      <span className="plan-menu-item-trailing">
-        {active ? <HelmxIcon name="check" size={13} className="plan-menu-item-check" /> : null}
-        <span className="plan-menu-item-kbd mono">Ctrl+.</span>
-      </span>
+      {t(PLAN_COPY.menuLabel)}
     </DropdownMenuItem>
   )
 }
@@ -75,6 +70,9 @@ function PlanMenuItemStandby({
   return (
     <DropdownMenuItem
       className={`plan-menu-item${armed ? ' plan-menu-item--active' : ''}`}
+      icon="list-tree"
+      shortcut={<Kbd size="sm" desktopOnly>Ctrl+.</Kbd>}
+      checked={armed}
       disabled={disabled}
       data-plan-mode={armed ? 'planning' : 'normal'}
       data-plan-awaiting="false"
@@ -83,12 +81,7 @@ function PlanMenuItemStandby({
         onCloseMenu?.()
       }}
     >
-      <HelmxIcon name="list-tree" size={14} className="plan-menu-item-icon" />
-      <span className="plan-menu-item-label">{t(PLAN_COPY.menuLabel)}</span>
-      <span className="plan-menu-item-trailing">
-        {armed ? <HelmxIcon name="check" size={13} className="plan-menu-item-check" /> : null}
-        <span className="plan-menu-item-kbd mono">Ctrl+.</span>
-      </span>
+      {t(PLAN_COPY.menuLabel)}
     </DropdownMenuItem>
   )
 }

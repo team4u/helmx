@@ -8,6 +8,7 @@ import {
   Callout,
   Card,
   HelmxIcon,
+  KvGrid,
   MarkdownText,
   Stack,
   type BadgeTone,
@@ -140,22 +141,7 @@ export function MetricCardImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: S
 export function KeyValueListImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
   // Keep pointer keys ('/$docs/...') as raw templates until resolution here.
   const items = resolveKeyValueItems(node.props['items'], (expr) => evaluateSpecValue(expr, ctx.scope))
-  return (
-    <div className="kv-list">
-      {items.map((item, i) => (
-        <KeyValueRow key={i} label={item.label} value={item.value} />
-      ))}
-    </div>
-  )
-}
-
-function KeyValueRow({ label, value }: { label: string; value: string }) {
-  return (
-    <>
-      <div className="kv-key">{label}</div>
-      <div className="kv-val">{value}</div>
-    </>
-  )
+  return <KvGrid items={items.map((item) => ({ key: item.label, value: item.value }))} />
 }
 
 const VALID_CALLOUT_TONES: Readonly<Record<string, NonNullable<CalloutProps['tone']>>> = {
@@ -363,12 +349,12 @@ export function AccordionImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: Sp
   const [open, setOpen] = useState(defaultOpenRaw === undefined ? true : bool(evalIn(defaultOpenRaw, ctx.scope)))
   const title = str(evalIn(node.props['title'], ctx.scope))
   return (
-    <div className="card jr-accordion">
-      <button type="button" className="jr-accordion-trigger" onClick={() => setOpen((v) => !v)}>
+    <Card className="jr-accordion">
+      <button type="button" className="jr-accordion-trigger" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={13} />
         {title}
       </button>
       {open && <div className="jr-accordion-body">{ctx.renderChildren(node.children)}</div>}
-    </div>
+    </Card>
   )
 }

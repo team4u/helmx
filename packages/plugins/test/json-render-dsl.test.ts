@@ -568,6 +568,11 @@ test('spec-primitives: 原型链查表拦截、组件切换 Hook 数量稳定，
             items: [{ key: '/$docs/status/total', label: 'Total' }],
           },
           {
+            component: 'Accordion',
+            title: 'Details',
+            children: [{ component: 'Text', text: 'accordion body' }],
+          },
+          {
             component: 'Table',
             columns: [{ key: 'name', label: 'Worker' }],
             rows: [{ name: 'w1', conversationId: 42 }],
@@ -617,6 +622,9 @@ test('spec-primitives: 原型链查表拦截、组件切换 Hook 数量稳定，
   })
   assert.match(container.textContent ?? '', /Total/, 'KeyValueList 在 Tab 内正常渲染')
   assert.match(container.textContent ?? '', /7/, 'KeyValueList pointer key 未被 Tabs 提前求值破坏')
+  assert.ok(container.querySelector('.kv-grid') !== null && container.querySelector('.kv-list') === null, 'KeyValueList 复用 SDK KvGrid (.kv-grid)')
+  assert.ok(container.querySelector('section.helmx-card.jr-accordion') !== null, 'Accordion 复用 SDK Card (.helmx-card)')
+  assert.match(container.textContent ?? '', /accordion body/, 'Accordion 默认展开渲染子节点')
 
   // 点击 Table rowAction：验证 $row 模板保留未提前破坏
   const inspectBtn = [...container.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('Inspect Row'))

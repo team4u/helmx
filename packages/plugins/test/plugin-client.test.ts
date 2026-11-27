@@ -778,6 +778,7 @@ function createComponentHarness<P>(initialProps: P) {
     IconButton: (props: Record<string, unknown>) => ({ type: 'IconButton', props }),
     Badge: (props: Record<string, unknown>) => ({ type: 'Badge', props }),
     LoadingState: (props: Record<string, unknown>) => ({ type: 'LoadingState', props }),
+    ModalDialog: (props: Record<string, unknown>) => ({ type: 'ModalDialog', props }),
     Dialog: (props: Record<string, unknown>) => ({ type: 'Dialog', props }),
     DialogPortal: (props: Record<string, unknown>) => ({ type: 'DialogPortal', props }),
     DialogOverlay: (props: Record<string, unknown>) => ({ type: 'DialogOverlay', props }),
@@ -1040,11 +1041,11 @@ test('MermaidCodeBlock 编译产物交互状态：加载态、chunk 失败后展
       MermaidCodeBlock: (props: { language: string; code: string }) => unknown
     }
 
-    // 1. 首次渲染呈现清晰加载态
+    // 1. 首次渲染呈现清晰加载态（复用 SDK LoadingState）
     let tree = harness.render(mod.MermaidCodeBlock)
-    const loadingIcons = collectNodes(tree, (n) => n.type === harness.ui.HelmxIcon && n.props.name === 'loader')
-    assert.ok(loadingIcons.length > 0, '加载期间应显示 loader 图标')
-    assert.match(collectText(tree), /Rendering Mermaid diagram/)
+    const loadingStates = collectNodes(tree, (n) => n.type === harness.ui.LoadingState)
+    assert.ok(loadingStates.length > 0, '加载期间应显示 LoadingState')
+    assert.match(String(loadingStates[0]?.props.label ?? ''), /Rendering Mermaid diagram/)
 
     // 等待首次 chunk 加载失败并更新状态
     await callDeferred.promise
@@ -1068,7 +1069,9 @@ test('MermaidCodeBlock 编译产物交互状态：加载态、chunk 失败后展
     ;(retryBtn.props.onClick as () => void)()
 
     tree = harness.render(mod.MermaidCodeBlock)
-    assert.match(collectText(tree), /Rendering Mermaid diagram/, '点击重试后应立即回到加载态')
+    const retryLoading = collectNodes(tree, (n) => n.type === harness.ui.LoadingState)
+    assert.ok(retryLoading.length > 0, '点击重试后应立即回到加载态')
+    assert.match(String(retryLoading[0]?.props.label ?? ''), /Rendering Mermaid diagram/, '点击重试后应立即回到加载态')
     const updatesAfterRetryStart = harness.getStateUpdates()
 
     await callDeferred.promise
@@ -1174,7 +1177,13 @@ test('MermaidPreviewModal 编译产物状态：独立按需加载 mermaid，失�
       }
 
       let tree = harness.render(mod.MermaidPreviewModal)
-      assert.match(collectText(tree), /Rendering/, '弹窗无 svg 时应展示加载提示')
+      const modalNodes = collectNodes(tree, (n) => n.type === harness.ui.ModalDialog)
+      assert.equal(modalNodes.length, 1, '弹窗必须使用统一 ModalDialog')
+      assert.equal(modalNodes[0]?.props.size, 'fullscreen')
+      assert.equal(modalNodes[0]?.props.flushBody, true)
+      const initialLoading = collectNodes(tree, (n) => n.type === harness.ui.LoadingState)
+      assert.ok(initialLoading.length > 0, '弹窗无 svg 时应展示 LoadingState')
+      assert.match(String(initialLoading[0]?.props.label ?? ''), /Rendering/, '弹窗无 svg 时应展示加载提示')
 
       await callDeferred.promise
       await waitFor(() => harness.getStateUpdates() >= 1)
@@ -1195,7 +1204,9 @@ test('MermaidPreviewModal 编译产物状态：独立按需加载 mermaid，失�
       callDeferred = deferred<void>()
       ;(retryBtn.props.onClick as () => void)()
       tree = harness.render(mod.MermaidPreviewModal)
-      assert.match(collectText(tree), /Rendering/, '点击弹窗重试后应回到加载态')
+      const retryLoading = collectNodes(tree, (n) => n.type === harness.ui.LoadingState)
+      assert.ok(retryLoading.length > 0, '点击弹窗重试后应回到 LoadingState')
+      assert.match(String(retryLoading[0]?.props.label ?? ''), /Rendering/, '点击弹窗重试后应回到加载态')
       const updatesAfterRetryStart = harness.getStateUpdates()
 
       await callDeferred.promise

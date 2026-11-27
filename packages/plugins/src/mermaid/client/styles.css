@@ -13,7 +13,6 @@
 
 .mermaid-source-pre { padding: 14px; height: 100%; overflow: auto; margin: 0; }
 .mermaid-source-dim { opacity: 0.5; }
-.mermaid-loading-row { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--fg-secondary); padding: 4px 0 8px; }
 .mermaid-error-body { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; min-width: 0; }
 .mermaid-error-actions { display: flex; align-items: center; gap: 8px; }
 
@@ -36,16 +35,11 @@
   align-items: center; justify-content: center; padding: 24px; background: var(--bg);
 }
 .mermaid-modal-status .callout { max-width: 560px; width: 100%; }
-.mermaid-status-hint { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-muted); font-size: 12px; }
 
-.mermaid-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; }
-.mermaid-modal-title { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mermaid-preview-modal .helmx-modal-header { align-items: center; }
 .mermaid-modal-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.mermaid-modal-close { flex-shrink: 0; }
 
 @media (max-width: 680px) {
-  .mermaid-modal-header { flex-wrap: wrap; padding: 10px 12px; gap: 8px; }
-  .mermaid-modal-title { order: 1; flex: 1; min-width: 0; }
-  .mermaid-modal-close { order: 2; margin-left: auto; }
-  .mermaid-modal-actions { order: 3; width: 100%; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-start; }
+  .mermaid-preview-modal .helmx-modal-header { flex-wrap: wrap; padding-inline: 12px; gap: 8px; }
+  .mermaid-preview-modal .helmx-modal-header-actions { flex-wrap: wrap; justify-content: flex-end; max-width: 100%; }
 }

@@ -62,13 +62,14 @@ function PlanToolbarButtonConversation({ conversationId }: { conversationId: num
   const baseTitle =
     visual === 'awaiting' ? t(PLAN_COPY.toolbarTitleAwaiting) : t(PLAN_COPY.toolbarTitlePlanning)
   const title = docError ? `${baseTitle} (${docError})` : baseTitle
+  const toneClass = visual === 'awaiting' ? 'helmx-toolbar-pill--warn' : 'helmx-toolbar-pill--accent'
   const stateClass = visual === 'awaiting' ? 'plan-toolbar-btn--awaiting' : 'plan-toolbar-btn--planning'
 
   return (
     <button
       ref={setAnchorRef}
       type="button"
-      className={`plan-toolbar-btn ${stateClass}`}
+      className={`helmx-toolbar-pill ${toneClass} plan-toolbar-btn ${stateClass}`}
       aria-pressed="true"
       aria-busy={pending || undefined}
       aria-label={title}
@@ -136,7 +137,7 @@ function PlanToolbarButtonStandby({
     <button
       ref={setAnchorRef}
       type="button"
-      className="plan-toolbar-btn plan-toolbar-btn--planning"
+      className="helmx-toolbar-pill helmx-toolbar-pill--accent plan-toolbar-btn plan-toolbar-btn--planning"
       aria-pressed="true"
       aria-label={title}
       title={title}

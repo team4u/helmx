@@ -4,10 +4,10 @@
  * - Registers the `tiers:one-turn` mode in the host `ModelPickerControl` via
  *   `useComposerModelPickerMode` when eligible and idle (not `active` / `busy` / `disabled`);
  * - Idle & unarmed: returns `null` (zero DOM / zero Tab stops);
- * - Armed (`armed` or standby `draftMeta`): compact 24px pill `[ Next turn: <label> × ]`
+ * - Armed (`armed` or standby `draftMeta`): compact 22px pill `[ Next turn: <label> × ]`
  *   where clicking the pill opens the host `ModelPicker` straight to the `Next turn` tab
  *   and clicking sibling `×` clears the armed borrow;
- * - Active (`active`): compact 24px pill `[ This turn: <label> × ]` with main button
+ * - Active (`active`): compact 22px pill `[ This turn: <label> × ]` with main button
  *   disabled and sibling `×` still enabled even while busy to cancel auto-restore.
  * Exports only React components (Fast Refresh compliant).
  */
@@ -158,13 +158,13 @@ function BorrowToolbarPillConversation({
 
   return (
     <span
-      className={`tiers-borrow-pill ${isActive ? 'tiers-borrow-pill--active' : 'tiers-borrow-pill--armed'}`}
+      className={`helmx-toolbar-pill ${isActive ? 'helmx-toolbar-pill--warn' : 'helmx-toolbar-pill--accent'} tiers-borrow-pill ${isActive ? 'tiers-borrow-pill--active' : 'tiers-borrow-pill--armed'}`}
       data-tiers-borrow-phase={effectiveBorrow.phase}
       data-tiers-borrow-model={effectiveBorrow.targetModel}
     >
       <button
         type="button"
-        className="tiers-borrow-pill-main"
+        className="helmx-toolbar-pill-main tiers-borrow-pill-main"
         disabled={mainDisabled}
         title={mainTitle}
         onClick={() => {
@@ -183,7 +183,7 @@ function BorrowToolbarPillConversation({
       </button>
       <button
         type="button"
-        className="tiers-borrow-pill-clear"
+        className="helmx-toolbar-pill-clear tiers-borrow-pill-clear"
         aria-label={clearAria}
         title={clearAria}
         disabled={clearDisabled}
@@ -246,13 +246,13 @@ function BorrowToolbarPillStandby({
 
   return (
     <span
-      className="tiers-borrow-pill tiers-borrow-pill--armed"
+      className="helmx-toolbar-pill helmx-toolbar-pill--accent tiers-borrow-pill tiers-borrow-pill--armed"
       data-tiers-borrow-phase="armed"
       data-tiers-borrow-model={standbyBorrow.borrowModel}
     >
       <button
         type="button"
-        className="tiers-borrow-pill-main"
+        className="helmx-toolbar-pill-main tiers-borrow-pill-main"
         disabled={disabled}
         title={mainTitle}
         onClick={() => {
@@ -267,7 +267,7 @@ function BorrowToolbarPillStandby({
       </button>
       <button
         type="button"
-        className="tiers-borrow-pill-clear"
+        className="helmx-toolbar-pill-clear tiers-borrow-pill-clear"
         aria-label={clearAria}
         title={clearAria}
         disabled={disabled}

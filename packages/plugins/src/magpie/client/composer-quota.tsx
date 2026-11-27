@@ -202,9 +202,9 @@ export function MagpieComposerQuotaStatus(props: ComposerStatusSlotProps): React
   const ageLabel = magpieRelativeAgeLabel(freshnessAt, nowMs, locale)
   const triggerToneClass =
     summary.triggerTone === 'err'
-      ? ' magpie-quota-trigger--err'
+      ? ' helmx-toolbar-pill--err magpie-quota-trigger--err'
       : summary.triggerTone === 'warn'
-        ? ' magpie-quota-trigger--warn'
+        ? ' helmx-toolbar-pill--warn magpie-quota-trigger--warn'
         : ''
   const hasMultipleAccounts = summary.extraAccountCount > 0
   const triggerTitle = hasMultipleAccounts
@@ -216,7 +216,7 @@ export function MagpieComposerQuotaStatus(props: ComposerStatusSlotProps): React
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`magpie-quota-trigger${triggerToneClass}`}
+          className={`helmx-toolbar-pill magpie-quota-trigger${triggerToneClass}`}
           aria-label={triggerTitle}
           title={triggerTitle}
           data-magpie-model={activeModel.bareModelId}
