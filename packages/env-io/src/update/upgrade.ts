@@ -163,10 +163,11 @@ export async function withUpdateLock<T>(
     new UpgradeRejectedError(
       `upgrade already in progress (${ownerPid !== undefined ? `held by pid ${ownerPid}, ` : ''}lock file exists: ${file})`,
     );
-  // Recovery in progress leaves a break marker rather than a lock file, so `busyError`'s wording would be wrong here.
+  // What blocks here is a live break marker (recovery in progress, or one left by a crashed recovery),
+  // not a lock file, so `busyError`'s wording would be wrong.
   const recoveringError = (_file: string, markers: string[]): Error =>
     new UpgradeRejectedError(
-      `stale upgrade lock is being recovered (${markers.join(', ')}): another upgrade is clearing a dead owner's lock; retry shortly; if no upgrade is running, remove the stale marker file(s)`,
+      `stale upgrade lock recovery is unresolved (${markers.join(', ')}): a recovery may still be in progress, or the marker was left behind by a crashed one; retry shortly; if no upgrade is running, remove the stale marker file(s)`,
     );
   return withCrossProcessFileLock(lockPath, fn, {
     waitMs: 0,
@@ -174,10 +175,15 @@ export async function withUpdateLock<T>(
     onBusy: busyError,
     onCorrupt: (file) => busyError(file),
     onRecovering: recoveringError,
-    onError: (file, error, phase) =>
-      new Error(
-        `failed to ${phase} upgrade lock (${file}): ${(error as NodeJS.ErrnoException)?.code ?? (error instanceof Error ? error.message : String(error))}`,
-      ),
+    // Keep the errno code (when present) and the full core diagnostic: the message carries the actionable
+    // part (e.g. which break marker to remove by hand), not just the code. Node syscall messages already
+    // start with their code, so the code is prefixed only when the message does not carry it.
+    onError: (file, error, phase) => {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      const message = error instanceof Error ? error.message : String(error);
+      const codePrefix = typeof code === 'string' && !message.startsWith(`${code}: `) ? `${code}: ` : '';
+      return new Error(`failed to ${phase} upgrade lock (${file}): ${codePrefix}${message}`);
+    },
   });
 }
 

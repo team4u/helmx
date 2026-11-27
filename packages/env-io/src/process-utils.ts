@@ -243,9 +243,9 @@ export interface CrossProcessFileLockOptions {
   /** Custom error when lock file has non-numeric/corrupt contents (file is preserved, never deleted). */
   onCorrupt?: (lockPath: string) => Error;
   /**
-   * Custom error when the wait budget expires while stale-lock recovery is still in progress (live
-   * break markers remain; `markers` are described as `<path> (pid N, 3h old)`). Falls back to
-   * `onBusy(lockPath, undefined)`, then to the built-in message.
+   * Custom error when the wait budget expires while live break markers remain (a recovery may still be
+   * in progress, or a crashed one left its marker behind; `markers` are described as
+   * `<path> (pid N, 3h old)`). Falls back to `onBusy(lockPath, undefined)`, then to the built-in message.
    */
   onRecovering?: (lockPath: string, markers: string[]) => Error;
   /** Custom error on unexpected create/read I/O failures (file is preserved). */
@@ -659,12 +659,11 @@ async function breakStaleLock(attempt: LockAttempt, pid: number): Promise<LockDe
     if (bodyError !== undefined) {
       annotateError(bodyError, `; removing the break marker also failed (${marker}: ${describeError(markerFailure)}); ${consequence}`);
     } else {
-      bodyError = lockIoError(
-        attempt,
-        markerFailure,
-        'create',
-        `${staleRemoved ? 'stale lock removed but the' : 'the'} break marker cannot be deleted (${marker}: ${describeError(markerFailure)}); ${consequence}`,
-      );
+      const headline = `${staleRemoved ? 'stale lock removed but the' : 'the'} break marker cannot be deleted`;
+      const cause = describeError(markerFailure);
+      // `onError` hooks receive the error object rather than the fallback text: carry the same context on it.
+      annotateError(markerFailure, `; ${headline} (${marker}); ${consequence}`);
+      bodyError = lockIoError(attempt, markerFailure, 'create', `${headline} (${marker}: ${cause}); ${consequence}`);
     }
   }
   if (bodyError !== undefined) throw bodyError;
@@ -710,7 +709,9 @@ async function releaseLock(attempt: LockAttempt): Promise<Error | undefined> {
  * - Break markers carry only a PID: a breaker that crashes inside its window and whose PID is later
  *   reused keeps a "live" marker until that PID exits or the marker is removed by hand; acquirers then
  *   fail explicitly naming it (`onRecovering`). Deliberate fail-closed, never auto-deleted;
- * - Never ignores non-`ENOENT` read errors such as `EACCES`.
+ * - Never ignores non-`ENOENT` read errors such as `EACCES` while acquiring; the release that follows
+ *   the critical section is the one exception (its failures are never thrown over the section's own
+ *   result, see the `finally` below);
  */
 export async function withCrossProcessFileLock<T>(
   lockPath: string,

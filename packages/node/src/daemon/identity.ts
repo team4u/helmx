@@ -145,10 +145,11 @@ async function withIdentityLock<T>(dataDir: string, fn: () => Promise<T>): Promi
     new Error(
       `concurrent identity bind conflict: ${file} already exists${ownerPid !== undefined ? ` (held by pid ${ownerPid})` : ''} (another helmx-node connect is writing, or a previous bind crashed); confirm no bind is active and remove the lock file before retrying`,
     );
-  // Recovery in progress leaves a break marker rather than a lock file, so `busyError`'s advice would be wrong here.
+  // What blocks here is a live break marker (recovery in progress, or one left by a crashed recovery),
+  // not a lock file, so `busyError`'s advice would be wrong.
   const recoveringError = (_file: string, markers: string[]): Error =>
     new Error(
-      `stale identity lock is being recovered (${markers.join(', ')}): another bind is clearing a dead owner's lock; retry shortly; if no bind is active, remove the stale marker file(s)`,
+      `stale identity lock recovery is unresolved (${markers.join(', ')}): a recovery may still be in progress, or the marker was left behind by a crashed one; retry shortly; if no bind is active, remove the stale marker file(s)`,
     );
   try {
     return await withCrossProcessFileLock(lockPath, fn, {

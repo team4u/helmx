@@ -87,10 +87,11 @@ export async function withLifecycleLock<T>(root: string, fn: () => Promise<T>): 
       `concurrent lifecycle operation conflict: ${file} already exists${ownerPid !== undefined ? ` (held by pid ${ownerPid})` : ''} (another start/stop/update is in progress, or a previous one crashed); confirm nothing is running and remove the lock file before retrying`,
       'lifecycle_lock_busy',
     );
-  // Recovery in progress leaves a break marker rather than a lock file, so `busyError`'s advice would be wrong here.
+  // What blocks here is a live break marker (recovery in progress, or one left by a crashed recovery),
+  // not a lock file, so `busyError`'s advice would be wrong.
   const recoveringError = (_file: string, markers: string[]): Error =>
     new UsageError(
-      `stale lifecycle lock is being recovered: ${markers.join(', ')} (another start/stop/update is clearing a dead owner's lock); retry in a moment; if no helmx process is running, remove the stale marker file(s) named above`,
+      `stale lifecycle lock recovery is unresolved: ${markers.join(', ')} (a recovery may still be in progress, or the marker was left behind by a crashed one); retry in a moment; if no start/stop/update is running, remove the stale marker file(s) named above`,
       'lifecycle_lock_recovering',
     );
   return await withCrossProcessFileLock(lockPath, fn, {

@@ -1316,6 +1316,38 @@ test('withUpdateLock: recovers confirmed-dead stale PID locks, rejects live lock
       (error: unknown) => error instanceof UpgradeRejectedError && /upgrade already in progress/.test(error.message),
     );
     assert.equal(rawFs.existsSync(lockPath), true, 'corrupt/empty lock must not be silently deleted');
+    await fs.rm(lockPath, { force: true });
+
+    // 4. `onError` keeps the errno code and the full core diagnostic (here: which break marker to remove
+    //    by hand when the stale lock was cleared but its marker could not be deleted).
+    await fs.writeFile(lockPath, '999999999 dead-owner-uuid\n', 'utf8');
+    const realRm = fs.rm;
+    fs.rm = (async (file: Parameters<typeof fs.rm>[0], options?: Parameters<typeof fs.rm>[1]) => {
+      if (String(file).endsWith('.stale')) throw Object.assign(new Error('EBUSY: stubbed unlink failure'), { code: 'EBUSY' });
+      await realRm(file, options);
+    }) as typeof fs.rm;
+    try {
+      await assert.rejects(
+        () => withUpdateLock(dir, async () => undefined, { isAlive: (pid) => pid === process.pid }),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.match(
+            error.message,
+            new RegExp(
+              `^failed to create upgrade lock \\(.*upgrade\\.lock\\): EBUSY: stubbed unlink failure .*; stale lock removed but the break marker cannot be deleted \\(.*upgrade\\.lock\\.\\d+\\.[0-9a-f-]+\\.stale\\); ` +
+                `acquirers will keep waiting for it while pid ${process.pid} is alive; remove it manually$`,
+            ),
+          );
+          return true;
+        },
+      );
+      assert.equal(rawFs.existsSync(lockPath), false, 'stale lock was removed before the marker cleanup failed');
+    } finally {
+      fs.rm = realRm;
+      for (const name of await fs.readdir(dir)) {
+        if (name.endsWith('.stale')) await fs.rm(path.join(dir, name), { force: true });
+      }
+    }
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
