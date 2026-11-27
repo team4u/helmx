@@ -13,7 +13,6 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { KernelRuntime } from '@helmx/kernel'
-import { createHelmx } from '../../hub/src/app.js'
 import { createProfilePlugin } from '../src/profile.js'
 import { createSwarmPlugin } from '../src/swarm.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
@@ -26,11 +25,11 @@ import {
   waitFor,
 } from './helpers/plugin-test-env.js'
 import {
-  HUB_APP_URL,
   PI_AI_FAUX_URL,
-  PLUGIN_BUILD_URL,
+  buildSwarmSeederOpenSnippet,
   isSettledStatus,
   openSwarmEnv,
+  openSwarmRuntime,
   setSwarmRoleResponses,
   spawnSigkillSeeder,
 } from './helpers/swarm-integration-env.js'
@@ -43,9 +42,9 @@ import {
   type CollabGroupRecord,
 } from '../src/swarm.js'
 
-describe('builtin:swarm crash replay & boot reconciliation', () => {
+describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, timeout: 60_000 }, () => {
   const gitTemplate = createGitTemplate()
-  after(() => gitTemplate.cleanup())
+  after(() => gitTemplate.cleanup(), { timeout: 60_000 })
 
   // ---------------------------------------------------------------------------
   // int8: replay:'safe' 工具在 tool_result 强杀窗口下的端到端去重重放（dispatch_worker 与 board_post）
@@ -64,9 +63,8 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
 
       const seedDispatchScript = `
         import { writeSync } from 'node:fs'
-        import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
         import { fauxProvider, fauxAssistantMessage, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-        import { createHelmx } from ${JSON.stringify(HUB_APP_URL)}
+        ${buildSwarmSeederOpenSnippet()}
 
         const faux = fauxProvider({ models: [{ id: 'faux-1' }], tokensPerSecond: 500 })
         let coordId = 0
@@ -93,8 +91,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
           () => new Promise(() => {}),
         ])
 
-        const app = await createHelmx({
-          buildProvider: createPluginBuildProvider(),
+        const app = await openSwarmApp({
           dataDir: ${JSON.stringify(dataDirA)},
           cwd: ${JSON.stringify(repoDirA)},
           model: 'faux/faux-1',
@@ -115,16 +112,16 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
           cwd: ${JSON.stringify(repoDirA)},
         })
         coordId = coord.id
-        const { groupId } = (await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID_LITERAL, 'create_group', {
+        const { groupId } = await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID_LITERAL, 'create_group', {
           title: 'Replay Dispatch Squad',
           conversationId: coord.id,
-        })) as { groupId: string }
+        })
         writeSync(1, 'GROUP_INFO=' + JSON.stringify({ coordId: coord.id, groupId }) + '\\n')
         await app.kernel.conversations.submitInput(coord.id, 'Dispatch coder worker.')
         await new Promise(() => {})
       `.replace('SWARM_PLUGIN_ID_LITERAL', JSON.stringify(SWARM_PLUGIN_ID))
 
-      const resA = await spawnSigkillSeeder(t, rootA, 'seed-dispatch-kill.mts', seedDispatchScript)
+      const resA = await spawnSigkillSeeder(t, rootA, 'seed-dispatch-kill.mjs', seedDispatchScript)
       const groupLineA = resA.stdout.split(/\r?\n/).find((l) => l.startsWith('GROUP_INFO='))
       assert.ok(groupLineA !== undefined && resA.stdout.includes('TRAPPED_DISPATCH='), `unexpected stdout: ${resA.stdout}`)
       const infoA = JSON.parse(groupLineA.slice('GROUP_INFO='.length)) as { coordId: number; groupId: string }
@@ -144,12 +141,10 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         ],
       })
 
-      const appA = await createHelmx({
-        buildProvider: createPluginBuildProvider(),
+      const appA = await openSwarmRuntime({
         dataDir: dataDirA,
         cwd: repoDirA,
-        model: 'faux/faux-1',
-        providers: [fauxA.provider],
+        faux: fauxA,
       })
       try {
         try {
@@ -207,9 +202,8 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
 
       const seedPostScript = `
         import { writeSync } from 'node:fs'
-        import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
         import { fauxProvider, fauxAssistantMessage, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-        import { createHelmx } from ${JSON.stringify(HUB_APP_URL)}
+        ${buildSwarmSeederOpenSnippet()}
 
         const faux = fauxProvider({ models: [{ id: 'faux-1' }], tokensPerSecond: 500 })
         faux.setResponses([
@@ -219,8 +213,7 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
           ),
           () => new Promise(() => {}),
         ])
-        const app = await createHelmx({
-          buildProvider: createPluginBuildProvider(),
+        const app = await openSwarmApp({
           dataDir: ${JSON.stringify(dataDirB)},
           cwd: ${JSON.stringify(repoDirB)},
           model: 'faux/faux-1',
@@ -240,20 +233,20 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
           profileId: 'assistant',
           cwd: ${JSON.stringify(repoDirB)},
         })
-        const { groupId } = (await app.kernel.plugins.invokeAction('builtin:swarm', 'create_group', {
+        const { groupId } = await app.kernel.plugins.invokeAction('builtin:swarm', 'create_group', {
           title: 'Post Replay Squad',
           conversationId: coord.id,
-        })) as { groupId: string }
-        const worker = (await app.kernel.plugins.invokeAction(
+        })
+        const worker = await app.kernel.plugins.invokeAction(
           'builtin:swarm',
           'dispatch_worker',
           { prompt: 'Post done once.', name: 'coder' },
           { conversationId: coord.id },
-        )) as { workerConversationId: number }
+        )
         writeSync(1, 'POST_INFO=' + JSON.stringify({ coordId: coord.id, groupId, workerId: worker.workerConversationId }) + '\\n')
         await new Promise(() => {})
       `
-      const resB = await spawnSigkillSeeder(t, rootB, 'seed-post-kill.mts', seedPostScript)
+      const resB = await spawnSigkillSeeder(t, rootB, 'seed-post-kill.mjs', seedPostScript)
       const postLineB = resB.stdout.split(/\r?\n/).find((l) => l.startsWith('POST_INFO='))
       assert.ok(postLineB !== undefined && resB.stdout.includes('TRAPPED_POST=1'), `unexpected stdout: ${resB.stdout}`)
       const infoB = JSON.parse(postLineB.slice('POST_INFO='.length)) as {
@@ -267,12 +260,10 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         coder: [fauxAssistantMessage('Coder completed after board_post replay.')],
         coordinator: [fauxAssistantMessage('Coordinator acknowledged single done report.')],
       })
-      const appB = await createHelmx({
-        buildProvider: createPluginBuildProvider(),
+      const appB = await openSwarmRuntime({
         dataDir: dataDirB,
         cwd: repoDirB,
-        model: 'faux/faux-1',
-        providers: [fauxB.provider],
+        faux: fauxB,
       })
       try {
         await waitFor(
@@ -451,12 +442,10 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
     )
 
     const faux2 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
-    const app2 = await createHelmx({
-      buildProvider: createPluginBuildProvider(),
+    const app2 = await openSwarmRuntime({
       dataDir: env1.dataDir,
       cwd: env1.repoDir,
-      model: 'faux/faux-1',
-      providers: [faux2.provider],
+      faux: faux2,
     })
     try {
       await waitFor(() => app2.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
@@ -686,12 +675,10 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       ],
     })
 
-    const app2 = await createHelmx({
-      buildProvider: createPluginBuildProvider(),
+    const app2 = await openSwarmRuntime({
       dataDir: env1.dataDir,
       cwd: env1.repoDir,
-      model: 'faux/faux-1',
-      providers: [faux2.provider],
+      faux: faux2,
     })
     try {
       try {
@@ -1016,12 +1003,10 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       ],
     })
 
-    const app2 = await createHelmx({
-      buildProvider: createPluginBuildProvider(),
+    const app2 = await openSwarmRuntime({
       dataDir: env1.dataDir,
       cwd: env1.repoDir,
-      model: 'faux/faux-1',
-      providers: [faux2.provider],
+      faux: faux2,
       autoStart: false,
     })
     const errorNotifications: Array<{ title?: string; body?: string; level?: string }> = []
@@ -1106,12 +1091,10 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
     // Restart 2: verify zero infinite loop (no new wakeup to workerB, no new report to soloExhaustCoord, no duplicate blocker)
     const faux3 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
     faux3.setResponses([])
-    const app3 = await createHelmx({
-      buildProvider: createPluginBuildProvider(),
+    const app3 = await openSwarmRuntime({
       dataDir: env1.dataDir,
       cwd: env1.repoDir,
-      model: 'faux/faux-1',
-      providers: [faux3.provider],
+      faux: faux3,
     })
     try {
       await waitFor(() => app3.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)

@@ -10,9 +10,7 @@ import { join } from 'node:path'
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
-import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { startHub } from '@helmx/kernel'
-import { createHelmx } from '../../hub/src/app.js'
 import { createNodeDaemon, type NodeDaemon } from '../../node/src/index.js'
 import {
   createGitTemplate,
@@ -21,12 +19,12 @@ import {
   waitFor,
 } from './helpers/plugin-test-env.js'
 import {
-  HUB_APP_URL,
   PI_AI_FAUX_URL,
-  PLUGIN_BUILD_URL,
   WORKTREE_ID,
+  buildSwarmSeederOpenSnippet,
   isSettledStatus,
   openSwarmEnv,
+  openSwarmRuntime,
   setSwarmRoleResponses,
   spawnSigkillSeeder,
 } from './helpers/swarm-integration-env.js'
@@ -41,7 +39,7 @@ import {
   type CollabGroupRecord,
 } from '../src/swarm.js'
 
-describe('builtin:swarm worktree SIGKILL recovery & remote node worktrees', () => {
+describe('builtin:swarm worktree SIGKILL recovery & remote node worktrees', { concurrency: 2, timeout: 60_000 }, () => {
   const gitTemplate = createGitTemplate()
   after(() => gitTemplate.cleanup(), { timeout: 60_000 })
 
@@ -53,9 +51,8 @@ describe('builtin:swarm worktree SIGKILL recovery & remote node worktrees', () =
 
     const seederScript = `
       import { writeSync } from 'node:fs'
-      import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
       import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(PI_AI_FAUX_URL)}
-      import { createHelmx } from ${JSON.stringify(HUB_APP_URL)}
+      ${buildSwarmSeederOpenSnippet()}
 
       const faux = fauxProvider({
         models: [{ id: 'faux-1' }],
@@ -65,8 +62,7 @@ describe('builtin:swarm worktree SIGKILL recovery & remote node worktrees', () =
       faux.setResponses([
         fauxAssistantMessage('这是一段Swarm成员在隔离worktree中慢速流式执行任务确保被真实SIGKILL中断的输出内容'),
       ])
-      const app = await createHelmx({
-        buildProvider: createPluginBuildProvider(),
+      const app = await openSwarmApp({
         dataDir: ${JSON.stringify(dataDir)},
         cwd: ${JSON.stringify(repoDir)},
         model: 'faux/faux-1',
@@ -81,16 +77,16 @@ describe('builtin:swarm worktree SIGKILL recovery & remote node worktrees', () =
         'builtin:swarm',
         'create_group',
         { title: 'Kill Recovery Squad', conversationId: coord.id },
-      ) as { groupId: string }
+      )
       const worker = await app.kernel.plugins.invokeAction(
         'builtin:swarm',
         'dispatch_worker',
         { prompt: 'Execute task inside isolated worktree and post done.', name: 'coder', isolation: 'worktree' },
         { conversationId: coord.id },
-      ) as { workerConversationId: number }
+      )
 
-      for (let i = 0; i < 400; i += 1) {
-        await new Promise((r) => setTimeout(r, 10))
+      for (let i = 0; i < 1000; i += 1) {
+        await new Promise((r) => setTimeout(r, 2))
         if (
           faux.state.callCount >= 1 &&
           app.kernel.conversations.getConversation(worker.workerConversationId).status === 'working'
@@ -105,7 +101,7 @@ describe('builtin:swarm worktree SIGKILL recovery & remote node worktrees', () =
       writeSync(1, 'SEED_RESULT=' + JSON.stringify({ coordId: coord.id, groupId, workerId: worker.workerConversationId }) + '\\n')
       process.kill(process.pid, 'SIGKILL')
     `
-    const { stdout } = await spawnSigkillSeeder(t, root, 'seed-worker-kill.mts', seederScript)
+    const { stdout } = await spawnSigkillSeeder(t, root, 'seed-worker-kill.mjs', seederScript)
     const seedLine = stdout
       .split(/\r?\n/)
       .find((line) => line.startsWith('SEED_RESULT='))
@@ -133,12 +129,10 @@ describe('builtin:swarm worktree SIGKILL recovery & remote node worktrees', () =
       coordinator: [fauxAssistantMessage('Coordinator received recovery done report.')],
     })
 
-    const app = await createHelmx({
-      buildProvider: createPluginBuildProvider(),
+    const app = await openSwarmRuntime({
       dataDir,
       cwd: repoDir,
-      model: 'faux/faux-1',
-      providers: [faux.provider],
+      faux,
     })
     try {
       try {

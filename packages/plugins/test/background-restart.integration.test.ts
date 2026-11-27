@@ -22,13 +22,13 @@
  * 每用例 timeout: 60_000；运行命令带总超时（timeout 50s tsx --test 本文件）。
  */
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { after, test } from 'node:test'
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { after, describe, test } from 'node:test'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { setTimeout as delay } from 'node:timers/promises'
 import assert from 'node:assert/strict'
@@ -44,14 +44,74 @@ import { openHelmxDatabase } from '@helmx/kernel/testing'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
 import { createMemoryKvStore, WorkflowService, type RunHeader, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
-import { makeFauxProvider } from './helpers/plugin-test-env.js'
+import { createGitTemplate, makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const require = createRequire(import.meta.url)
 const PLUGINS_PKG_DIR = new URL('../', import.meta.url).pathname
 const REPO_ROOT = resolve(PLUGINS_PKG_DIR, '../..')
 const TSX_TSCONFIG_PATH = join(REPO_ROOT, 'tsconfig.dev.json')
 const PI_AI_FAUX_URL = import.meta.resolve('@earendil-works/pi-ai/providers/faux')
-const KERNEL_URL = import.meta.resolve('@helmx/kernel')
+
+const DIST_DEPS = [
+  join(REPO_ROOT, 'packages/protocol/dist/index.js'),
+  join(REPO_ROOT, 'packages/env-io/dist/index.js'),
+  join(REPO_ROOT, 'packages/kernel/dist/index.js'),
+  join(REPO_ROOT, 'packages/plugin-build/dist/index.js'),
+  join(REPO_ROOT, 'packages/plugins/dist/workflow.js'),
+  join(REPO_ROOT, 'packages/plugins/dist/worktree.js'),
+]
+const SEEDER_USE_DIST = DIST_DEPS.every((p) => existsSync(p))
+const KERNEL_URL = SEEDER_USE_DIST
+  ? pathToFileURL(join(REPO_ROOT, 'packages/kernel/dist/index.js')).href
+  : import.meta.resolve('@helmx/kernel')
+const PLUGIN_BUILD_URL = SEEDER_USE_DIST
+  ? pathToFileURL(join(REPO_ROOT, 'packages/plugin-build/dist/index.js')).href
+  : import.meta.resolve('@helmx/plugin-build')
+const WORKFLOW_URL = pathToFileURL(
+  SEEDER_USE_DIST
+    ? join(REPO_ROOT, 'packages/plugins/dist/workflow.js')
+    : join(REPO_ROOT, 'packages/plugins/src/workflow.ts'),
+).href
+const WORKTREE_URL = pathToFileURL(
+  SEEDER_USE_DIST
+    ? join(REPO_ROOT, 'packages/plugins/dist/worktree.js')
+    : join(REPO_ROOT, 'packages/plugins/src/worktree.ts'),
+).href
+
+let cachedTsxLoaderArgs: readonly string[] | undefined
+function tsxDirectArgs(): readonly string[] {
+  if (cachedTsxLoaderArgs === undefined) {
+    const preflight = require.resolve('tsx/preflight')
+    const loader = pathToFileURL(require.resolve('tsx')).href
+    cachedTsxLoaderArgs = ['--require', preflight, '--import', loader]
+  }
+  return cachedTsxLoaderArgs
+}
+
+function spawnSeederProcess(
+  scriptDir: string,
+  baseName: string,
+  scriptBody: string,
+  env: Record<string, string>,
+): ReturnType<typeof spawn> {
+  const scriptPath = join(scriptDir, `${baseName}.${SEEDER_USE_DIST ? 'mjs' : 'mts'}`)
+  writeFileSync(scriptPath, scriptBody, 'utf8')
+  const spawnArgs = SEEDER_USE_DIST ? [scriptPath] : [...tsxDirectArgs(), scriptPath]
+  return spawn(process.execPath, spawnArgs, {
+    cwd: PLUGINS_PKG_DIR,
+    env: {
+      PATH: process.env.PATH ?? '',
+      HOME: scriptDir,
+      ...(SEEDER_USE_DIST ? {} : { TSX_TSCONFIG_PATH }),
+      HELMX_WATCHDOG_INTERVAL_MS: '0',
+      ...env,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+}
+
+const gitTemplate = createGitTemplate()
+after(() => gitTemplate.cleanup(), { timeout: 60_000 })
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -67,7 +127,7 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-order-'))
   t.after(() => {
     rmSync(dataDir, { recursive: true, force: true })
-  })
+  }, { timeout: 60_000 })
   const CHILD = 42
   const now = Date.now()
   kv.set('wf_seed_order', {
@@ -126,13 +186,13 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
 // 真实遗留制造：子进程真 KernelRuntime + 慢速 faux 流式中途 SIGKILL
 // ---------------------------------------------------------------------------
 
-/** 子进程 seeder 源码（真实 SDK 持久任务；写临时 .mts 由 tsx 直跑，不注册插件）。 */
+/** 子进程 seeder 源码（真实 SDK 持久任务；dist 存在时写 .mjs 由 plain node 直跑，否则回落 tsx loader）。 */
 function seederSource(kernelSrc: string, piAiFauxSrc: string): string {
   return `import { setTimeout as delay } from 'node:timers/promises'
 import { fauxAssistantMessage, fauxProvider } from '${piAiFauxSrc}'
 import { KernelRuntime } from '${kernelSrc}'
 
-const dataDir = process.env.HELMX_SEED_DIR!
+const dataDir = process.env.HELMX_SEED_DIR
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段被慢速流式输出的长文本用于确保 SIGKILL 时模型回合仍在流式中')])
 const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
@@ -145,8 +205,8 @@ void kernel.agentSpawn.spawnAgent({
   signal: AbortSignal.timeout(120_000),
 }).catch((e) => { process.stderr.write('seed spawn error: ' + e + '\\n') })
 // 等子会话真正进入 working 且模型流式调用已发起（prepare/request 检查点已落盘）
-for (let i = 0; i < 400; i++) {
-  await delay(10)
+for (let i = 0; i < 1000; i++) {
+  await delay(2)
   if (childId && faux.state.callCount >= 1 && kernel.conversations.listConversations().some((c) => c.id === childId && c.status === 'working')) break
 }
 if (!childId || faux.state.callCount < 1) { process.stderr.write('seed: no child\\n'); process.exit(3) }
@@ -190,22 +250,11 @@ async function getSharedSigkillSeed(): Promise<{ dataDir: string; childId: numbe
     const templateDataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed-tpl-'))
     sharedSeedDir = templateDataDir
     const scriptDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed-'))
-    const seederPath = join(scriptDir, 'seed.mts')
-    writeFileSync(seederPath, seederSource(KERNEL_URL, PI_AI_FAUX_URL), 'utf8')
-    const tsxCli = require.resolve('tsx/cli')
     let child: ReturnType<typeof spawn> | undefined
     try {
-      child = spawn(process.execPath, [tsxCli, seederPath], {
-        cwd: PLUGINS_PKG_DIR,
-        env: {
-          PATH: process.env.PATH ?? '',
-          HOME: scriptDir,
-          TSX_TSCONFIG_PATH,
-          HELMX_SEED_DIR: templateDataDir,
-          HELMX_DATA_DIR: templateDataDir,
-          HELMX_WATCHDOG_INTERVAL_MS: '0',
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
+      child = spawnSeederProcess(scriptDir, 'seed', seederSource(KERNEL_URL, PI_AI_FAUX_URL), {
+        HELMX_SEED_DIR: templateDataDir,
+        HELMX_DATA_DIR: templateDataDir,
       })
       let childId = 0
       await Promise.race([
@@ -261,6 +310,7 @@ async function readOnlyInspect(dataDir: string): Promise<{ scheduling: string; t
   }
 }
 
+describe('后台子代理与工作流 SIGKILL 恢复（并发隔离用例）', { concurrency: 3, timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 // 用例 2（真实端到端）：SIGKILL 遗留 -> prepareRecovery 只落标记 -> init 终止
 // -> 父收 failed/interrupted -> resume 原子会话执行新输入
@@ -434,21 +484,17 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
 
 test('同步工作流全覆盖收敛：SIGKILL 与 graceful close() 均回收遗留原生子会话、清 pendingChildCleanup 且绝不通知父会话', { timeout: 60_000 }, async (t) => {
   // ---- A) SIGKILL 中断同步工作流 ----
-  const sigkillDir = mkdtempSync(join(tmpdir(), 'helmx-sync-sigkill-'))
-  const seedDir = mkdtempSync(join(tmpdir(), 'helmx-sync-seed-'))
-  const seederPath = join(seedDir, 'sync-seed.mts')
-  const workflowSrc = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
-  const worktreeSrc = pathToFileURL(new URL('../src/worktree.ts', import.meta.url).pathname).href
-  writeFileSync(
-    seederPath,
-    `import { setTimeout as delay } from 'node:timers/promises'
+  const runSigkillSync = async (): Promise<void> => {
+    const sigkillDir = mkdtempSync(join(tmpdir(), 'helmx-sync-sigkill-'))
+    const seedDir = mkdtempSync(join(tmpdir(), 'helmx-sync-seed-'))
+    const syncScript = `import { setTimeout as delay } from 'node:timers/promises'
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_URL)}
-import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))}
-import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
-import { createWorktreePlugin } from ${JSON.stringify(worktreeSrc)}
+import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
+import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_URL)}
+import { createWorktreePlugin } from ${JSON.stringify(WORKTREE_URL)}
 
-const dataDir = process.env.HELMX_SEED_DIR!
+const dataDir = process.env.HELMX_SEED_DIR
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段慢速同步工作流输出确保在进程被强杀前子会话仍处于工作状态')])
 const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
@@ -458,10 +504,10 @@ await kernel.start()
 const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
   conversationId: 1,
   script: 'export const meta = { name: "sync-sigkill", description: "test" }\\nreturn await agent("slow-sync-step")',
-}) as { run: { id: string } }
+})
 let childId = 0
-for (let i = 0; i < 400; i++) {
-  await delay(10)
+for (let i = 0; i < 1000; i++) {
+  await delay(2)
   const working = kernel.conversations.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
   if (working && faux.state.callCount >= 1) {
     childId = working.id
@@ -473,164 +519,158 @@ await kernel.documentStore.flush()
 await kernel.kvStore.flush()
 await new Promise((resolve) => process.stdout.write('CHILD=' + childId + ',RUN=' + run.id + '\\n', resolve))
 process.kill(process.pid, 'SIGKILL')
-`,
-    'utf8',
-  )
-  const tsxCli = require.resolve('tsx/cli')
-  let child: ReturnType<typeof spawn> | undefined
-  let kernelAfterKill: KernelRuntime | undefined
-  t.after(async () => {
-    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
-    await kernelAfterKill?.close().catch(() => {})
-    rmSync(seedDir, { recursive: true, force: true })
-    rmSync(sigkillDir, { recursive: true, force: true })
-  }, { timeout: 60_000 })
+`
+    let child: ReturnType<typeof spawn> | undefined
+    let kernelAfterKill: KernelRuntime | undefined
+    t.after(async () => {
+      if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
+      await kernelAfterKill?.close().catch(() => {})
+      rmSync(seedDir, { recursive: true, force: true })
+      rmSync(sigkillDir, { recursive: true, force: true })
+    }, { timeout: 60_000 })
 
-  try {
-    child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: PLUGINS_PKG_DIR,
-      env: {
-        PATH: process.env.PATH ?? '',
-        HOME: seedDir,
-        TSX_TSCONFIG_PATH,
+    try {
+      child = spawnSeederProcess(seedDir, 'sync-seed', syncScript, {
         HELMX_SEED_DIR: sigkillDir,
         HELMX_DATA_DIR: sigkillDir,
-        HELMX_WATCHDOG_INTERVAL_MS: '0',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let childId = 0
-    let runId = ''
-    await Promise.race([
-      new Promise<void>((resolve, reject) => {
-        let out = ''
-        let err = ''
-        child!.stdout!.on('data', (d: Buffer) => {
-          out += d.toString()
-          const m = /CHILD=(\d+),RUN=([^\s]+)/.exec(out)
-          if (m) {
-            childId = Number(m[1])
-            runId = m[2]!
-          }
-        })
-        child!.stderr!.on('data', (d: Buffer) => { err += d.toString() })
-        child!.on('exit', (code, signal) => {
-          if (signal === 'SIGKILL' || code === 137) resolve()
-          else reject(new Error(`sync seeder exit code=${code} signal=${signal}: ${out}${err}`.slice(0, 2000)))
-        })
-        child!.on('error', reject)
-      }),
-      delay(30_000, undefined, { ref: false }).then(() => {
-        throw new Error('sync seeder 30s 未退出')
-      }),
-    ])
-    assert.ok(childId > 1 && runId !== '')
+      })
+      let childId = 0
+      let runId = ''
+      await Promise.race([
+        new Promise<void>((resolve, reject) => {
+          let out = ''
+          let err = ''
+          child!.stdout!.on('data', (d: Buffer) => {
+            out += d.toString()
+            const m = /CHILD=(\d+),RUN=([^\s]+)/.exec(out)
+            if (m) {
+              childId = Number(m[1])
+              runId = m[2]!
+            }
+          })
+          child!.stderr!.on('data', (d: Buffer) => { err += d.toString() })
+          child!.on('exit', (code, signal) => {
+            if (signal === 'SIGKILL' || code === 137) resolve()
+            else reject(new Error(`sync seeder exit code=${code} signal=${signal}: ${out}${err}`.slice(0, 2000)))
+          })
+          child!.on('error', reject)
+        }),
+        delay(30_000, undefined, { ref: false }).then(() => {
+          throw new Error('sync seeder 30s 未退出')
+        }),
+      ])
+      assert.ok(childId > 1 && runId !== '')
 
-    const faux = makeFauxProvider()
-    const kernel = await KernelRuntime.open({
-      buildProvider: createPluginBuildProvider(),
-      dataDir: sigkillDir,
-      cwd: sigkillDir,
-      model: 'faux/faux-1',
-      providers: [faux.provider],
-      autoResume: false,
-    })
-    kernelAfterKill = kernel
-    const rootInputs: unknown[] = []
-    kernel.events.subscribe((frame: HelmxEventFrame) => {
-      const e = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string } }
-      if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helmx.input') {
-        rootInputs.push(e.entry)
+      const faux = makeFauxProvider()
+      const kernel = await KernelRuntime.open({
+        buildProvider: createPluginBuildProvider(),
+        dataDir: sigkillDir,
+        cwd: sigkillDir,
+        model: 'faux/faux-1',
+        providers: [faux.provider],
+        autoResume: false,
+      })
+      kernelAfterKill = kernel
+      const rootInputs: unknown[] = []
+      kernel.events.subscribe((frame: HelmxEventFrame) => {
+        const e = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string } }
+        if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helmx.input') {
+          rootInputs.push(e.entry)
+        }
+      })
+      await kernel.plugins.register(createWorkflowPlugin())
+      await kernel.plugins.register(createWorktreePlugin())
+      await kernel.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
+      await kernel.start()
+
+      assert.equal(faux.state.callCount, 0, '同步工作流重启恢复不得新增模型调用（子会话与父会话均零调用）')
+      assert.equal(kernel.conversations.getConversation(childId).status, 'idle', '同步工作流遗留子会话必须收敛为 idle')
+      assert.equal(rootInputs.length, 0, '同步工作流恢复不得向父会话投递通知')
+      const runs = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as {
+        runs: Array<{ id: string; status: string; error?: string }>
       }
-    })
-    await kernel.plugins.register(createWorkflowPlugin())
-    await kernel.plugins.register(createWorktreePlugin())
-    await kernel.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
-    await kernel.start()
-
-    assert.equal(faux.state.callCount, 0, '同步工作流重启恢复不得新增模型调用（子会话与父会话均零调用）')
-    assert.equal(kernel.conversations.getConversation(childId).status, 'idle', '同步工作流遗留子会话必须收敛为 idle')
-    assert.equal(rootInputs.length, 0, '同步工作流恢复不得向父会话投递通知')
-    const runs = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as {
-      runs: Array<{ id: string; status: string; error?: string }>
+      const settled = runs.runs.find((r) => r.id === runId)
+      assert.equal(settled?.status, 'failed')
+      assert.match(settled?.error ?? '', /interrupted/)
+    } finally {
+      if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
     }
-    const settled = runs.runs.find((r) => r.id === runId)
-    assert.equal(settled?.status, 'failed')
-    assert.match(settled?.error ?? '', /interrupted/)
-  } finally {
-    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
   }
 
   // ---- B) graceful kernel.close() 中断同步工作流 ----
-  const closeDir = mkdtempSync(join(tmpdir(), 'helmx-sync-close-'))
-  const fauxC1 = makeFauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
-  fauxC1.setResponses([fauxAssistantMessage('优雅关停期缓慢输出的同步子会话长回复内容确保仍在执行中')])
-  const k1 = await KernelRuntime.open({
-    buildProvider: createPluginBuildProvider(),
-    dataDir: closeDir,
-    cwd: closeDir,
-    model: 'faux/faux-1',
-    providers: [fauxC1.provider],
-    autoResume: false,
-  })
-  let k2: KernelRuntime | undefined
-  t.after(async () => {
-    await k1.close().catch(() => {})
-    await k2?.close().catch(() => {})
-    rmSync(closeDir, { recursive: true, force: true })
-  }, { timeout: 60_000 })
-  await k1.plugins.register(createWorkflowPlugin())
-  await k1.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
-  await k1.start()
+  const runGracefulSync = async (): Promise<void> => {
+    const closeDir = mkdtempSync(join(tmpdir(), 'helmx-sync-close-'))
+    const fauxC1 = makeFauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
+    fauxC1.setResponses([fauxAssistantMessage('优雅关停期缓慢输出的同步子会话长回复内容确保仍在执行中')])
+    const k1 = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: closeDir,
+      cwd: closeDir,
+      model: 'faux/faux-1',
+      providers: [fauxC1.provider],
+      autoResume: false,
+    })
+    let k2: KernelRuntime | undefined
+    t.after(async () => {
+      await k1.close().catch(() => {})
+      await k2?.close().catch(() => {})
+      rmSync(closeDir, { recursive: true, force: true })
+    }, { timeout: 60_000 })
+    await k1.plugins.register(createWorkflowPlugin())
+    await k1.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
+    await k1.start()
 
-  const { run: closeRun } = (await k1.plugins.invokeAction('builtin:workflow', 'run', {
-    conversationId: ROOT,
-    script: 'export const meta = { name: "sync-graceful", description: "test" }\nreturn await agent("slow-sync-close")',
-  })) as { run: { id: string } }
-  let closeChildId = 0
-  for (let i = 0; i < 400; i++) {
-    await delay(10)
-    const working = k1.conversations.listConversations().find((c) => c.parentConversationId === ROOT && c.status === 'working')
-    if (working) {
-      closeChildId = working.id
-      break
+    const { run: closeRun } = (await k1.plugins.invokeAction('builtin:workflow', 'run', {
+      conversationId: ROOT,
+      script: 'export const meta = { name: "sync-graceful", description: "test" }\nreturn await agent("slow-sync-close")',
+    })) as { run: { id: string } }
+    let closeChildId = 0
+    for (let i = 0; i < 1000; i++) {
+      await delay(2)
+      const working = k1.conversations.listConversations().find((c) => c.parentConversationId === ROOT && c.status === 'working')
+      if (working) {
+        closeChildId = working.id
+        break
+      }
     }
+    assert.ok(closeChildId > 1, '同步子会话必须进入 working')
+    await k1.close()
+
+    const kvEntryAfterClose = k1.kvStore.get('builtin:workflow', 'runs', closeRun.id)
+    assert.ok(kvEntryAfterClose !== undefined, 'close 后 runs KV 应含该 RunHeader')
+    const headerAfterClose = JSON.parse(kvEntryAfterClose.valueJson) as { status?: string; phase?: string }
+    assert.equal(headerAfterClose.status, 'aborted')
+    assert.equal(headerAfterClose.phase, 'cleanup_pending', 'host closing 时存在子会话必须落 phase=cleanup_pending')
+
+    const fauxC2 = makeFauxProvider()
+    k2 = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: closeDir,
+      cwd: closeDir,
+      model: 'faux/faux-1',
+      providers: [fauxC2.provider],
+      autoResume: false,
+    })
+    const rootInputs2: unknown[] = []
+    k2.events.subscribe((frame: HelmxEventFrame) => {
+      const e = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string } }
+      if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helmx.input') {
+        rootInputs2.push(e.entry)
+      }
+    })
+    await k2.plugins.register(createWorkflowPlugin())
+    await k2.start()
+
+    assert.equal(fauxC2.state.callCount, 0, '关停残留子会话重启不得继续执行或发父通知')
+    assert.equal(k2.conversations.getConversation(closeChildId).status, 'idle')
+    assert.equal(rootInputs2.length, 0)
+    const kvEntryAfterRestart = k2.kvStore.get('builtin:workflow', 'runs', closeRun.id)
+    assert.ok(kvEntryAfterRestart !== undefined)
+    const headerAfterRestart = JSON.parse(kvEntryAfterRestart.valueJson) as { phase?: string }
+    assert.equal(headerAfterRestart.phase, 'settled', 'init() 恢复后必须收敛 phase=settled')
   }
-  assert.ok(closeChildId > 1, '同步子会话必须进入 working')
-  await k1.close()
 
-  const kvEntryAfterClose = k1.kvStore.get('builtin:workflow', 'runs', closeRun.id)
-  assert.ok(kvEntryAfterClose !== undefined, 'close 后 runs KV 应含该 RunHeader')
-  const headerAfterClose = JSON.parse(kvEntryAfterClose.valueJson) as { status?: string; phase?: string }
-  assert.equal(headerAfterClose.status, 'aborted')
-  assert.equal(headerAfterClose.phase, 'cleanup_pending', 'host closing 时存在子会话必须落 phase=cleanup_pending')
-
-  const fauxC2 = makeFauxProvider()
-  k2 = await KernelRuntime.open({
-    buildProvider: createPluginBuildProvider(),
-    dataDir: closeDir,
-    cwd: closeDir,
-    model: 'faux/faux-1',
-    providers: [fauxC2.provider],
-    autoResume: false,
-  })
-  const rootInputs2: unknown[] = []
-  k2.events.subscribe((frame: HelmxEventFrame) => {
-    const e = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string } }
-    if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helmx.input') {
-      rootInputs2.push(e.entry)
-    }
-  })
-  await k2.plugins.register(createWorkflowPlugin())
-  await k2.start()
-
-  assert.equal(fauxC2.state.callCount, 0, '关停残留子会话重启不得继续执行或发父通知')
-  assert.equal(k2.conversations.getConversation(closeChildId).status, 'idle')
-  assert.equal(rootInputs2.length, 0)
-  const kvEntryAfterRestart = k2.kvStore.get('builtin:workflow', 'runs', closeRun.id)
-  assert.ok(kvEntryAfterRestart !== undefined)
-  const headerAfterRestart = JSON.parse(kvEntryAfterRestart.valueJson) as { phase?: string }
-  assert.equal(headerAfterRestart.phase, 'settled', 'init() 恢复后必须收敛 phase=settled')
+  await Promise.all([runSigkillSync(), runGracefulSync()])
 })
 
 // ---------------------------------------------------------------------------
@@ -639,36 +679,23 @@ process.kill(process.pid, 'SIGKILL')
 
 test('原生 isolation:worktree SIGKILL 崩溃租约在重启 runtime.started 后自动回收并放行 cleanup_worktree；外部 executionId 租约保持 fail-closed', { timeout: 60_000 }, async (t) => {
   const baseDir = mkdtempSync(join(tmpdir(), 'helmx-wt-sigkill-'))
-  const repoDir = join(baseDir, 'repo')
+  const repoDir = gitTemplate.cloneTo(join(baseDir, 'repo'))
   const dataDir = join(baseDir, 'data')
   const seedDir = join(baseDir, 'seed')
-  mkdirSync(repoDir, { recursive: true })
   mkdirSync(dataDir, { recursive: true })
   mkdirSync(seedDir, { recursive: true })
 
-  execFileSync('git', ['init'], { cwd: repoDir })
-  execFileSync('git', ['config', 'user.email', 'test@helmx.local'], { cwd: repoDir })
-  execFileSync('git', ['config', 'user.name', 'Helmx Test'], { cwd: repoDir })
-  writeFileSync(join(repoDir, 'README.md'), 'init\n', 'utf8')
-  execFileSync('git', ['add', '.'], { cwd: repoDir })
-  execFileSync('git', ['commit', '-m', 'init'], { cwd: repoDir })
-
-  const workflowSrc = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
-  const worktreeSrc = pathToFileURL(new URL('../src/worktree.ts', import.meta.url).pathname).href
-  const seederPath = join(seedDir, 'wt-seed.mts')
-  writeFileSync(
-    seederPath,
-    `import { join } from 'node:path'
+  const wtScript = `import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_URL)}
-import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))}
-import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
-import { createWorktreePlugin } from ${JSON.stringify(worktreeSrc)}
+import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
+import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_URL)}
+import { createWorktreePlugin } from ${JSON.stringify(WORKTREE_URL)}
 
-const dataDir = process.env.HELMX_SEED_DIR!
-const repoDir = process.env.HELMX_REPO_DIR!
+const dataDir = process.env.HELMX_SEED_DIR
+const repoDir = process.env.HELMX_REPO_DIR
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段慢速工作树隔离子代理流式文本确保进程崩溃时原生租约仍在运行中')])
 const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: repoDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
@@ -678,19 +705,19 @@ await kernel.start()
 const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
   conversationId: 1,
   script: 'export const meta = { name: "wt-sigkill", description: "test" }\\nreturn await agent("wt-slow", { isolation: "worktree" })',
-}) as { run: { id: string } }
+})
 let childId = 0
-for (let i = 0; i < 400; i++) {
-  await delay(10)
+for (let i = 0; i < 1000; i++) {
+  await delay(2)
   const working = kernel.conversations.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
   if (!working || faux.state.callCount < 1) continue
   await kernel.documentStore.flush()
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
   let hasLease = false
   try {
-    const rows = db.prepare("SELECT value_json FROM helmx_plugin_kv WHERE plugin_id = 'builtin:worktree' AND namespace = 'leases'").all() as Array<{ value_json: string }>
+    const rows = db.prepare("SELECT value_json FROM helmx_plugin_kv WHERE plugin_id = 'builtin:worktree' AND namespace = 'leases'").all()
     hasLease = rows.some((row) => {
-      const lease = JSON.parse(row.value_json) as { info?: { conversationId?: number } }
+      const lease = JSON.parse(row.value_json)
       return lease?.info?.conversationId === working.id
     })
   } finally {
@@ -706,11 +733,8 @@ await kernel.documentStore.flush()
 await kernel.kvStore.flush()
 await new Promise((resolve) => process.stdout.write('CHILD=' + childId + ',RUN=' + run.id + '\\n', resolve))
 process.kill(process.pid, 'SIGKILL')
-`,
-    'utf8',
-  )
+`
 
-  const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
   let recoveredKernel: KernelRuntime | undefined
   t.after(async () => {
@@ -720,18 +744,10 @@ process.kill(process.pid, 'SIGKILL')
   }, { timeout: 60_000 })
 
   try {
-    child = spawn(process.execPath, [tsxCli, seederPath], {
-      cwd: PLUGINS_PKG_DIR,
-      env: {
-        PATH: process.env.PATH ?? '',
-        HOME: seedDir,
-        TSX_TSCONFIG_PATH,
-        HELMX_SEED_DIR: dataDir,
-        HELMX_REPO_DIR: repoDir,
-        HELMX_DATA_DIR: dataDir,
-        HELMX_WATCHDOG_INTERVAL_MS: '0',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
+    child = spawnSeederProcess(seedDir, 'wt-seed', wtScript, {
+      HELMX_SEED_DIR: dataDir,
+      HELMX_REPO_DIR: repoDir,
+      HELMX_DATA_DIR: dataDir,
     })
     let childId = 0
     await Promise.race([
@@ -844,4 +860,5 @@ process.kill(process.pid, 'SIGKILL')
   } finally {
     if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
   }
+})
 })

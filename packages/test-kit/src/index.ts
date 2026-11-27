@@ -107,20 +107,27 @@ export interface WaitForOptions {
   message?: string
 }
 
+const DEFAULT_WAIT_FOR_BACKOFF_MS = [2, 5, 10, 25] as const
+
 /** Poll until the condition holds; on timeout throw an Error carrying context information. */
 export async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   options: WaitForOptions = {},
 ): Promise<void> {
   const timeoutMs = options.timeoutMs ?? 5_000
-  const intervalMs = options.intervalMs ?? 25
+  const fixedIntervalMs = options.intervalMs
   const deadline = Date.now() + timeoutMs
+  let attempt = 0
   for (;;) {
     if (await predicate()) return
     const remaining = deadline - Date.now()
     if (remaining <= 0) {
       throw new Error(options.message ?? `waitFor timed out after ${timeoutMs}ms (condition never held)`)
     }
+    const intervalMs =
+      fixedIntervalMs ??
+      DEFAULT_WAIT_FOR_BACKOFF_MS[Math.min(attempt, DEFAULT_WAIT_FOR_BACKOFF_MS.length - 1)]!
+    attempt += 1
     await sleep(Math.max(0, Math.min(intervalMs, remaining)))
   }
 }
