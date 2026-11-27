@@ -1,6 +1,6 @@
 # Canonical JSX Patterns (Helmx UI HIG)
 
-All recipes below compile against `@helmx/plugin-client` with zero private stylesheet, zero `variant="default"`, zero Emoji, and full SSR (`renderToString`) and Fast Refresh compliance.
+All recipes below compile against `@helmx/plugin-client` with zero private stylesheet, zero `variant="default"`, zero retired legacy container/modal/tab/kbd classes, zero Emoji, and full SSR (`renderToString`) and Fast Refresh compliance.
 
 ## 1. Management Screen with Hairline Roster List
 
@@ -226,7 +226,7 @@ export function RulesManagerScreen(props: Partial<ScreenProps>): ReactNode {
 
 ## 2. Catalog Screen with Object Card Grid
 
-Use for browsable asset or marketplace catalogs (Profiles, Model Providers, Plugins, Skills, Nodes) that benefit from a `32x32` icon box, inline badges, and a 2-line clamped description.
+Use for browsable asset or marketplace catalogs (Profiles, Model Providers, Plugins, Skills, Nodes). Follow `SelectCard` anatomy discipline: put domain capability/status tags inside the card body (`children`) using sharp `5px` `<Badge>` (no pill mixing), and keep `footer` strictly single-line with `size="xs"` actions so cards in the same row align horizontally.
 
 ```tsx
 import { useMemo, useState, type ReactNode } from 'react'
@@ -240,6 +240,7 @@ import {
   SearchBox,
   Select,
   SelectCard,
+  Stack,
   TabCount,
   Tabs,
   TabsList,
@@ -253,6 +254,7 @@ interface CatalogEntry {
   scope: string
   icon: string
   description: string
+  capabilities: ReadonlyArray<string>
   enabled: boolean
 }
 
@@ -260,10 +262,11 @@ interface CatalogScreenProps {
   entries: ReadonlyArray<CatalogEntry>
   selectedId?: string
   onSelect: (id: string) => void
+  onOpenView: (id: string) => void
   onInstall: () => void
 }
 
-export function CatalogScreen({ entries, selectedId, onSelect, onInstall }: CatalogScreenProps): ReactNode {
+export function CatalogScreen({ entries, selectedId, onSelect, onOpenView, onInstall }: CatalogScreenProps): ReactNode {
   const [category, setCategory] = useState<'all' | 'core' | 'community'>('all')
   const [scope, setScope] = useState('all')
   const [query, setQuery] = useState('')
@@ -352,8 +355,30 @@ export function CatalogScreen({ entries, selectedId, onSelect, onInstall }: Cata
               description={entry.description}
               selected={selectedId === entry.id}
               onSelect={() => onSelect(entry.id)}
-              footer={<span className="text-muted mono">{entry.scope}</span>}
-            />
+              footer={
+                <Stack direction="horizontal" align="center" justify="between" gap="sm">
+                  <span className="text-muted mono">{entry.scope}</span>
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    icon="external-link"
+                    onClick={() => onOpenView(entry.id)}
+                  >
+                    Open
+                  </Button>
+                </Stack>
+              }
+            >
+              {entry.capabilities.length > 0 && (
+                <Stack direction="horizontal" gap="xs" wrap>
+                  {entry.capabilities.map((cap) => (
+                    <Badge key={cap} tone="neutral">
+                      {cap}
+                    </Badge>
+                  ))}
+                </Stack>
+              )}
+            </SelectCard>
           ))}
         </CardGrid>
       )}
@@ -531,7 +556,7 @@ export function TierFormDrawer({
 
 ## 4. Narrow `settingsPanel`, `workbenchPanel`, or Drawer `slot`
 
-In narrow containers (`360–520px`), lock controls to `sm (28px)` and `xs (22px)`, omit redundant view-level headers, and compose with `Card(variant="subtle")`, `KvGrid`, and `List(density="compact")`—never `CardGrid` or `> 3`-column `DataTable`.
+In narrow containers (`360–520px`), lock controls to `sm (28px)` and `xs (22px)`, omit redundant view-level headers, and compose with `Card(variant="subtle")`, `KvGrid`, and `List(density="compact")`—never `CardGrid` or `> 3`-column `DataTable`. When a narrow drawer/container needs divider tabs, use `Tabs(variant="underline")` with `<TabsList scrollable>` and `<TabCount>`.
 
 ```tsx
 import type { ReactNode } from 'react'
@@ -630,6 +655,155 @@ export function NodeTunnelsSlot({
         </List>
       )}
     </Stack>
+  )
+}
+```
+
+## 5. Centered `ModalDialog`, Structured `DropdownMenuItem`, Subtle `SearchBox`, and `Kbd`
+
+Use `<ModalDialog size="sm|md|lg|fullscreen">` for short forms and dialogs (never raw `.modal-backdrop`/`.modal-header`/`.modal-footer`), `<DropdownMenuItem>` structured slots for action menus, `<SearchBox surface="subtle">` inside narrow pickers/popovers, `<Tabs variant="underline"><TabsList scrollable>` for divider tab bars, and `<Kbd>` for keyboard shortcut hints.
+
+```tsx
+import { useState, type ReactNode } from 'react'
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  Field,
+  IconButton,
+  Input,
+  Kbd,
+  ModalDialog,
+  SearchBox,
+  Stack,
+  TabCount,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from '@helmx/plugin-client'
+
+interface SavePresetModalProps {
+  open: boolean
+  saving: boolean
+  activeMode: 'compact' | 'detailed'
+  onModeChange: (next: 'compact' | 'detailed') => void
+  onSave: (name: string) => void
+  onReset: () => void
+  onClose: () => void
+}
+
+export function SavePresetModal({
+  open,
+  saving,
+  activeMode,
+  onModeChange,
+  onSave,
+  onReset,
+  onClose,
+}: SavePresetModalProps): ReactNode {
+  const [tab, setTab] = useState<'save' | 'browse'>('save')
+  const [name, setName] = useState('')
+  const [filter, setFilter] = useState('')
+
+  return (
+    <ModalDialog
+      open={open}
+      onClose={onClose}
+      size="sm"
+      icon="bookmark-plus"
+      title="Save Preset"
+      description="Store the current filter set for quick reuse."
+      closeDisabled={saving}
+      headerActions={
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <IconButton icon="more-horizontal" size="sm" variant="ghost" label="Preset options" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent portalled align="end">
+            <DropdownMenuItem
+              icon="layout-list"
+              description="Dense single-line rows"
+              shortcut={<Kbd size="sm" desktopOnly>1</Kbd>}
+              checked={activeMode === 'compact'}
+              onSelect={() => onModeChange('compact')}
+            >
+              Compact density
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              icon="rows-3"
+              description="Show descriptions and tags"
+              shortcut={<Kbd size="sm" desktopOnly>2</Kbd>}
+              checked={activeMode === 'detailed'}
+              onSelect={() => onModeChange('detailed')}
+            >
+              Detailed density
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem icon="rotate-ccw" danger onSelect={onReset}>
+              Reset to defaults
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      }
+      footer={
+        <>
+          <span className="text-muted">
+            Press <Kbd size="sm" desktopOnly>Esc</Kbd> to close
+          </span>
+          <div className="flex-1" />
+          <Button variant="ghost" size="sm" disabled={saving} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            icon="check"
+            pending={saving}
+            disabled={name.trim() === ''}
+            onClick={() => onSave(name.trim())}
+          >
+            Save
+          </Button>
+        </>
+      }
+    >
+      <Stack gap="md">
+        <Tabs value={tab} onValueChange={(next) => setTab(next === 'browse' ? 'browse' : 'save')} variant="underline">
+          <TabsList scrollable aria-label="Preset sections">
+            <TabsTrigger value="save">
+              <span>New</span>
+            </TabsTrigger>
+            <TabsTrigger value="browse">
+              <span>Existing</span>
+              <TabCount>3</TabCount>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        {tab === 'save' ? (
+          <Field label="Preset Name" required>
+            <Input
+              value={name}
+              disabled={saving}
+              placeholder="e.g. active-errors"
+              onChange={(e) => setName(e.target.value)}
+            />
+          </Field>
+        ) : (
+          <SearchBox
+            size="sm"
+            surface="subtle"
+            value={filter}
+            onChange={setFilter}
+            placeholder="Filter saved presets..."
+            ariaLabel="Filter saved presets"
+          />
+        )}
+      </Stack>
+    </ModalDialog>
   )
 }
 ```

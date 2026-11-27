@@ -48,6 +48,7 @@ import {
   renderSkillTemplate,
 } from '../src/runtime/core-skills/index.js'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { scanPluginTsxUiHygiene } from '../src/plugins/plugin-ui-hygiene.js'
 import { MANAGED_EXEC_ENV_VARS } from '../src/env/scoped-env.js'
 import { MemoryStore } from '../../plugins/src/memory/store.js'
 import { createProfileFileHost } from './helpers/profile-file-host.js'
@@ -529,11 +530,36 @@ test('helmx-ui HIG single-source sync: repo skill (.helmx/skills/helmx-ui) match
     'app-builder Step 2 must require loading helmx-cli references/ui-hig.md before writing client/*.tsx',
   )
 
-  // Phase 1 shared SDK exports documented in plugin-dev manual
-  for (const symbol of ['List', 'ListRow', 'TabCount']) {
+  // Phase 1 & Round 2 shared SDK exports documented across plugin-dev and app-builder manuals
+  for (const symbol of ['List', 'ListRow', 'TabCount', 'ModalDialog', 'Kbd']) {
     assert.ok(
       HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(symbol),
-      `helmx-cli skill-and-plugin-dev.md must document Phase 1 export ${symbol}`,
+      `helmx-cli skill-and-plugin-dev.md must document shared SDK export ${symbol}`,
+    )
+    assert.ok(
+      APP_BUILDER_SKILL_MD.includes(symbol),
+      `app-builder SKILL.md must document shared SDK export ${symbol}`,
+    )
+  }
+
+  // Round 2 HIG rules codified in SKILL.md single source
+  for (const ruleMarker of [
+    '<TabsList scrollable>',
+    '<DropdownMenuItem icon description shortcut trailing checked danger>',
+    'surface="subtle"',
+    'surface="frameless"',
+    '<ModalDialog size="sm|md|lg|fullscreen">',
+    '<Kbd',
+    '.helmx-toolbar-pill',
+    '.section-flat',
+    '.modal-header',
+    '.kbd-hint',
+    '<EmptyState compact|prominent>',
+    '<LoadingState>',
+  ]) {
+    assert.ok(
+      HELMX_UI_HIG_BODY_MD.includes(ruleMarker),
+      `HELMX_UI_HIG_BODY_MD must codify Round 2 HIG contract marker ${ruleMarker}`,
     )
   }
 
@@ -557,6 +583,11 @@ test('helmx-ui HIG single-source sync: repo skill (.helmx/skills/helmx-ui) match
       !counterBlock.includes('direction="row"'),
     'CounterScreen example in skill-and-plugin-dev.md must use valid SDK primitives (<Screen>/<Card>/<Stack direction="horizontal">/<Button variant="primary">)',
   )
+  assert.deepEqual(
+    scanPluginTsxUiHygiene('skill-and-plugin-dev.tsx', counterBlock),
+    [],
+    'CounterScreen example must pass static UI hygiene scanner',
+  )
 
   const appTsxBlocks = extractTsxBlocks(APP_BUILDER_FULLSTACK_TEMPLATE_MD)
   assert.ok(appTsxBlocks.length >= 1, 'app-builder fullstack template must include a tsx client example')
@@ -575,17 +606,27 @@ test('helmx-ui HIG single-source sync: repo skill (.helmx/skills/helmx-ui) match
       appClientTsx.includes('<DetailDrawer'),
     'app-builder fullstack template tsx must follow the unified Screen toolbar + List + DetailDrawer HIG',
   )
+  assert.deepEqual(
+    scanPluginTsxUiHygiene('app-builder-template.tsx', appClientTsx),
+    [],
+    'app-builder fullstack template tsx must pass static UI hygiene scanner',
+  )
 
   const patternTsxBlocks = extractTsxBlocks(patternsRaw)
-  assert.equal(patternTsxBlocks.length, 4, '.helmx/skills/helmx-ui/references/patterns.md must provide all 4 canonical tsx recipes')
-  for (const block of patternTsxBlocks) {
+  assert.equal(patternTsxBlocks.length, 5, '.helmx/skills/helmx-ui/references/patterns.md must provide all 5 canonical tsx recipes')
+  for (const [index, block] of patternTsxBlocks.entries()) {
     assert.ok(
       !block.includes('variant="default"') &&
         !block.includes('direction="row"') &&
         !block.includes('<select') &&
         !block.includes('type="search"') &&
         !block.includes('<button type="button" className="btn'),
-      'HIG canonical tsx patterns must stay free of deprecated Button default variant, invalid Stack direction="row", native controls, and raw .btn markup',
+      'HIG canonical tsx patterns must stay free of deprecated Button/Tabs default variant, invalid Stack direction="row", native controls, and raw .btn markup',
+    )
+    assert.deepEqual(
+      scanPluginTsxUiHygiene(`patterns-${index + 1}.tsx`, block),
+      [],
+      `HIG canonical tsx pattern #${index + 1} must pass static UI hygiene scanner`,
     )
   }
 })

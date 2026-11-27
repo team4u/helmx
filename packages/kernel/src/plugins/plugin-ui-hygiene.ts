@@ -8,8 +8,10 @@
  *   1. `no-native-select`: native `<select>` forbidden;
  *   2. `no-search-input`: `<input type="search">` forbidden;
  *   3. `no-ui-emoji`: UI Emoji in JSX text or string/template literals (excluding comments & imports) forbidden;
- *   4. `no-raw-control-class`: raw `.btn` / `.btn-*` / `.input` / `.input-sm` class tokens forbidden on
- *      intrinsic lowercase JSX elements (`<button>`, `<input>`, `<a>`, `<div>`, `<span>`, ...);
+ *   4. `no-raw-control-class`: raw `.btn` / `.btn-*` / `.input` / `.input-sm` and retired legacy container/modal/tab/kbd
+ *      class tokens (`section-flat`, `form-grid`, `kv-list`, `tabs-bar`, `tab-btn`, `modal-header`, `modal-footer`,
+ *      `dropdown-panel`, `kbd-hint`, `card`) forbidden on intrinsic lowercase JSX elements (`<button>`, `<input>`, `<a>`,
+ *      `<div>`, `<span>`, `<kbd>`, ...);
  *   5. `hover-media-gate`: `:hover` CSS rule outside `@media (hover: hover)` or `@media (hover: none)` forbidden.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -32,7 +34,8 @@ export interface PluginUiHygieneViolation {
 const UI_EMOJI_PATTERN =
   /(?:\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F|[\u{1F1E6}-\u{1F1FF}]{2}|[0-9#*]\uFE0F?\u20E3|[\u{1F000}-\u{1FAFF}\u{2600}-\u{26FF}\u{2764}])/u;
 
-const RAW_CONTROL_CLASS_TOKEN_RE = /^(?:btn(?:-[a-z0-9_-]+)?|input(?:-sm)?)$/;
+const RAW_CONTROL_CLASS_TOKEN_RE =
+  /^(?:btn(?:-[a-z0-9_-]+)?|input(?:-sm)?|section-flat|form-grid|kv-list|tabs-bar|tab-btn|modal-header|modal-footer|dropdown-panel|kbd-hint|card)$/;
 const TEMPLATE_EXPR_PLACEHOLDER = '___expr___';
 
 // ---------------------------------------------------------------------------
@@ -252,7 +255,8 @@ function extractExprStringValues(exprSource: string, baseLine: number): Array<{ 
     kind: 'string' | 'template' | 'ident' | 'punct' | 'other';
     value: string;
     line: number;
-    templateParts?: Array<{ expr: string; line: number }>;
+    templateHead?: string;
+    templateSpans?: Array<{ expr: string; line: number; literal: string }>;
   }
 
   const tokens: MiniToken[] = [];
@@ -309,17 +313,22 @@ function extractExprStringValues(exprSource: string, baseLine: number): Array<{ 
     if (ch === '`') {
       const startLine = line;
       i += 1;
-      let synthetic = '';
-      const subExprs: Array<{ expr: string; line: number }> = [];
+      let chunk = '';
+      let head: string | null = null;
+      const spans: Array<{ expr: string; line: number; literal: string }> = [];
+      let pendingExpr: { expr: string; line: number } | null = null;
       while (i < len && exprSource[i] !== '`') {
         if (exprSource[i] === '\\' && i + 1 < len) {
           const next = exprSource[i + 1]!;
           if (next === '\n') line += 1;
-          synthetic += next;
+          chunk += next;
           i += 2;
           continue;
         }
         if (exprSource[i] === '$' && exprSource[i + 1] === '{') {
+          if (head === null) head = chunk;
+          else if (pendingExpr !== null) spans.push({ ...pendingExpr, literal: chunk });
+          chunk = '';
           i += 2;
           const exprStart = i;
           const exprStartLine = line;
@@ -339,16 +348,17 @@ function extractExprStringValues(exprSource: string, baseLine: number): Array<{ 
             else if (c === '}') depth -= 1;
             i += 1;
           }
-          subExprs.push({ expr: exprSource.slice(exprStart, Math.max(exprStart, i - 1)), line: exprStartLine });
-          synthetic += TEMPLATE_EXPR_PLACEHOLDER;
+          pendingExpr = { expr: exprSource.slice(exprStart, Math.max(exprStart, i - 1)), line: exprStartLine };
           continue;
         }
         if (exprSource[i] === '\n') line += 1;
-        synthetic += exprSource[i]!;
+        chunk += exprSource[i]!;
         i += 1;
       }
+      if (head === null) head = chunk;
+      else if (pendingExpr !== null) spans.push({ ...pendingExpr, literal: chunk });
       i += 1;
-      tokens.push({ kind: 'template', value: synthetic, line: startLine, templateParts: subExprs });
+      tokens.push({ kind: 'template', value: head, line: startLine, templateHead: head, templateSpans: spans });
       continue;
     }
     if (isIdentStart(ch)) {
@@ -422,9 +432,42 @@ function extractExprStringValues(exprSource: string, baseLine: number): Array<{ 
       if (t.kind === 'string') {
         out.push({ text: t.value, line: t.line });
       } else if (t.kind === 'template') {
-        out.push({ text: t.value, line: t.line });
-        for (const sub of t.templateParts ?? []) {
-          out.push(...extractExprStringValues(sub.expr, sub.line));
+        const headText = t.templateHead ?? t.value;
+        const spans = t.templateSpans ?? [];
+        if (spans.length === 0) {
+          out.push({ text: headText, line: t.line });
+        } else {
+          let synthetic = headText;
+          let prevEndsAttached = headText.length > 0 && !/\s$/.test(headText);
+          for (const span of spans) {
+            const spanValues = extractExprStringValues(span.expr, span.line);
+            const literalText = span.literal;
+            const nextStartsAttached = literalText.length > 0 && !/^\s/.test(literalText);
+            const startsWithBoundary =
+              spanValues.length > 0 && spanValues.every((v) => v.text === '' || /^\s/.test(v.text));
+            const endsWithBoundary =
+              spanValues.length > 0 && spanValues.every((v) => v.text === '' || /\s$/.test(v.text));
+
+            for (const v of spanValues) {
+              let text = v.text;
+              if (prevEndsAttached && text !== '' && !/^\s/.test(text)) {
+                text = TEMPLATE_EXPR_PLACEHOLDER + text;
+              }
+              if (nextStartsAttached && text !== '' && !/\s$/.test(text)) {
+                text = text + TEMPLATE_EXPR_PLACEHOLDER;
+              }
+              out.push({ text, line: v.line });
+            }
+
+            synthetic +=
+              (startsWithBoundary ? ' ' : '') +
+              TEMPLATE_EXPR_PLACEHOLDER +
+              (endsWithBoundary ? ' ' : '') +
+              literalText;
+
+            prevEndsAttached = literalText.length > 0 ? !/\s$/.test(literalText) : !endsWithBoundary;
+          }
+          out.push({ text: synthetic, line: t.line });
         }
       }
       return;
@@ -838,7 +881,7 @@ export function scanPluginTsxUiHygiene(filePath: string, source: string): Plugin
                 file: filePath,
                 line: startLine,
                 rule: 'no-raw-control-class',
-                message: `raw control class token(s) [${[...new Set(badTokens)].join(', ')}] on intrinsic <${tagName}> bypass @helmx/plugin-client primitives (use <Button>, <IconButton>, or <Input>)`,
+                message: `raw/legacy UI class token(s) [${[...new Set(badTokens)].join(', ')}] on intrinsic <${tagName}> bypass @helmx/plugin-client primitives (use <Button>, <IconButton>, <Input>, <Card>, <Field>, <KvGrid>, <Tabs>, <ModalDialog>, <DropdownMenu>, or <Kbd>)`,
               });
             }
           }
@@ -868,7 +911,7 @@ export function scanPluginTsxUiHygiene(filePath: string, source: string): Plugin
               for (const value of values) {
                 const found = findRawControlTokens(value.text);
                 if (found.length > 0) {
-                  if (badTokens.size === 0) firstLine = value.line;
+                  if (badTokens.size === 0 || value.line < firstLine) firstLine = value.line;
                   for (const token of found) badTokens.add(token);
                 }
               }
@@ -877,7 +920,7 @@ export function scanPluginTsxUiHygiene(filePath: string, source: string): Plugin
                   file: filePath,
                   line: firstLine,
                   rule: 'no-raw-control-class',
-                  message: `raw control class token(s) [${[...badTokens].join(', ')}] on intrinsic <${tagName}> bypass @helmx/plugin-client primitives (use <Button>, <IconButton>, or <Input>)`,
+                  message: `raw/legacy UI class token(s) [${[...badTokens].join(', ')}] on intrinsic <${tagName}> bypass @helmx/plugin-client primitives (use <Button>, <IconButton>, <Input>, <Card>, <Field>, <KvGrid>, <Tabs>, <ModalDialog>, <DropdownMenu>, or <Kbd>)`,
                 });
               }
             }

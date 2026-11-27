@@ -1,6 +1,6 @@
 ---
 name: helmx-ui
-description: Use when designing, implementing, or refactoring any Helmx Web UI—core @helmx/web pages (Five System Centers, Conversation Overview, workbench, modals), built-in plugins, or external micro-apps and plugin client/*.tsx views. Defines the single Helmx UI Human Interface Guidelines (Quiet Surface principles, 32/28/22px control scale, 5-variant Button, selector and stage archetypes, unified Screen toolbar shell, container density rules, Creative Zone boundaries, and pre-delivery checklist).
+description: Use when designing, implementing, or refactoring any Helmx Web UI—core @helmx/web pages (Five System Centers, Conversation Overview, workbench, modals), built-in plugins, or external micro-apps and plugin client/*.tsx views. Defines the single Helmx UI Human Interface Guidelines (Quiet Surface principles, 32/28/22px control scale, 5-variant Button, physical-location Tabs, unified overlay & DropdownMenuItem, SearchBox surfaces, ModalDialog & Kbd, SelectCard anatomy, legacy container retirement, composer toolbar pills, EmptyState/LoadingState, unified Screen toolbar shell, container density rules, Creative Zone boundaries, and pre-delivery checklist).
 ---
 
 # Helmx UI Human Interface Guidelines (HIG)
@@ -27,13 +27,13 @@ All interactive controls share three locked height tiers defined in `tokens.css`
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`md`** | `--control-h-md: 32px` | `--control-radius-md` (`--radius-sm`, 7px) | `--control-font-md: 13px` / 14px | Drawer and modal form fields, standalone input rows, dialog footers | `Button`, `IconButton`, `Input`, `Select`, `MultiSelect`, `SearchBox`, `SegmentedControl`, `ModelPickerControl(variant="field")` |
 | **`sm`** | `--control-h-sm: 28px` | `--control-radius-sm` (`--radius-xs`, 5px) | `--control-font-sm: 12px` / 13px | **Topbar actions, `ScreenToolbar`, narrow panels, list/card inline controls** | All controls above + `Tabs(variant="pills")` (radius `999px`) |
-| **`xs`** | `--control-h-xs: 22px` | `--control-radius-xs` (`--radius-xs`, 5px) | `--control-font-xs: 11px` / 12px | List/table trailing micro-buttons, tool trace actions, inline copy/clear | `Button`, `IconButton` (`Badge` is a fixed 20px read-only tag) |
+| **`xs`** | `--control-h-xs: 22px` | `--control-radius-xs` (`--radius-xs`, 5px) | `--control-font-xs: 11px` / 12px | List/table trailing micro-buttons, `SelectCard` single-line footer actions, composer toolbar pills, tool trace actions | `Button`, `IconButton`, `.helmx-toolbar-pill` (`Badge` is a fixed `20px` sharp `5px` tag; `Kbd` is `20px` `md` / `18px` `sm`) |
 
 ## 3. Base Controls Contract
 
 ### 5-Variant `Button` and `IconButton`
 
-The ambiguous `'default'` variant is **removed**—never write `variant="default"`. `Button` defaults to `variant="secondary"`, `size="md"`; `IconButton` defaults to `variant="ghost"`, `size="md"`.
+The ambiguous `'default'` variant is **removed** from `Button`, `IconButton`, and `Tabs`—never write `variant="default"`. `Button` defaults to `variant="secondary"`, `size="md"`; `IconButton` defaults to `variant="ghost"`, `size="md"`.
 
 | Variant | Role | Hard Rules |
 | :--- | :--- | :--- |
@@ -49,18 +49,34 @@ The ambiguous `'default'` variant is **removed**—never write `variant="default
 
 ### `SearchBox`, `Input`, and `ModelPickerControl`
 
-- **`SearchBox`**: Accepts `variant?: 'default' | 'toolbar'` and `size?: 'sm' | 'md'` (default `'md'`). In toolbars, always use `<SearchBox variant="toolbar" size="sm" value={...} onChange={...} />` (`28px` height, `200–260px` adaptive on the right, auto-expands to `100%` at `<= 680px` `@container`/`@media`, single clear button, built-in `Esc` clear-then-blur inside `ScreenToolbar`). **Never use `<input type="search">`**.
+- **`SearchBox`**: Accepts `variant?: 'default' | 'toolbar'`, `surface?: 'default' | 'subtle' | 'frameless'` (default `'default'`), and `size?: 'sm' | 'md'` (default `'md'`).
+  - `surface="default"`: elevated bordered input for toolbars (`<SearchBox variant="toolbar" size="sm" />`: `28px` height, `200–260px` adaptive on the right, auto-expands to `100%` at `<= 680px` `@container`/`@media`, single clear button, built-in `Esc` clear-then-blur inside `ScreenToolbar`).
+  - `surface="subtle"`: muted fill for sidebars, popovers, and searchable selects (also used internally by `MultiSelect`).
+  - `surface="frameless"`: borderless transparent input for command palettes and modal header search rows.
+  - **Never hand-roll search inputs in sidebars, popovers, or modals, and never use `<input type="search">`**.
 - **`Input`**: Supports `size?: 'sm' | 'md'`, `prefix?: ReactNode` (e.g. `prefix="tier/"`), `suffix?: ReactNode` (e.g. `suffix="s"`), `inputClassName?: string`, `mono`, and `invalid`. The outer `.helmx-input-wrap` carries the border and `:focus-within` ring with full `FieldContext` wiring—never build ad-hoc prefix wrapper divs.
 - **`ModelPickerControl`**: Supports `variant?: 'composer' | 'field'` (default `'composer'`), `size?: 'sm' | 'md'` (default `'md'`), `invalid?: boolean`, and `className?: string`. Use `variant="field"` inside all forms and drawers (`32px`/`28px` bordered trigger matching `Select`, defaults `popoverSide="bottom"`, auto-connects to enclosing `<Field>`). Never restyle `.composer-model-button` locally.
 
-### 4-Way Selector Decision Table
+### Selector & Physical-Location Tab Rules
 
-| Scenario | Required Primitive | Hard Rules |
+Choose the selector strictly by physical placement and cardinality. `TabsVariant` is `'underline' | 'segmented' | 'pills'`—**zero `variant="default"`**.
+
+| Scenario / Physical Placement | Required Primitive | Hard Rules |
 | :--- | :--- | :--- |
-| **2–4 mutually exclusive sub-views or modes** | `SegmentedControl(size="sm")` or `Tabs(variant="segmented", size="sm")` | Keep labels short; place on the left of `ScreenToolbar`. |
-| **Status/category filters with live counts** | `Tabs(variant="pills", size="sm")` + `<TabCount>` (or `Tabs.Count`) | Uses borderless soft `--bg-muted` active fill + inline `tabular-nums` count; never nest bordered `<Badge>` inside triggers. |
+| **Container or drawer divider tab bars** (e.g. Workbench drawer tabs, inspector sub-panes) | `Tabs(variant="underline")` + `<TabsList scrollable>` + `<TabCount>` | **Use `underline` ONLY for container/drawer divider tab bars** (`36px` Quiet Surface bar with crisp `2px` bottom indicator and built-in SSR-safe overflow fade masks via `scrollable`). Never stack an underline bar above `ScreenToolbar`. |
+| **2–5 mutually exclusive views or modes** | `SegmentedControl(size="sm")` or `Tabs(variant="segmented", size="sm")` | Keep labels short; place on the left of `ScreenToolbar` or inline in form fields. |
+| **Multi-filter status/category bars with live counts** | `Tabs(variant="pills", size="sm")` + `<TabCount>` (or `Tabs.Count`) | Uses borderless soft `--bg-muted` active fill + inline `tabular-nums` count; never nest bordered `<Badge>` inside triggers. |
 | **5+ options or dynamic resources (nodes, profiles, scopes)** | Radix `Select` / `MultiSelect` (`searchable` for long lists) | **Native `<select>` is strictly forbidden repo-wide.** |
 | **Boolean state** | `Switch` (immediate effect) or `Checkbox` (deferred submit / batch selection) | Pair with `<Field htmlFor={false}>` when rendering a self-labeled control or multi-control group. |
+
+### Overlays, Modals, Shortcuts, Composer Pills, and Empty / Loading States
+
+- **Unified Overlay Surface & `<DropdownMenuItem>`**: `Popover`, `DropdownMenu`, `Select`, and `ModelPicker` share ONE canonical overlay surface (`var(--pop-bg)` backdrop-blur, `1px solid var(--border)`, `var(--radius-md)` `10px`, `var(--shadow-lg)`). Never hand-roll popover or menu item CSS; use `<DropdownMenuItem icon description shortcut trailing checked danger>` for structured rows (`icon` accepts a `HelmxIcon` name string or `ReactNode`; `checked` renders the check indicator and `data-checked`).
+- **`<ModalDialog>` & `<Kbd>`**:
+  - Use `<ModalDialog size="sm|md|lg|fullscreen">` (`open`, `onClose`, `title`, `icon?`, `titleExtra?`, `description?`, `flushBody?`, `headerActions?`, `footer?`, `closeDisabled?`, `closeLabel?`, `inline?`, `onOpenAutoFocus?`, `onEscapeKeyDown?`) for all centered modals instead of raw `.modal-backdrop`, `.modal-header`, or `.modal-footer`.
+  - Use `<Kbd size="sm|md" desktopOnly?>` (`20px` `md` / `18px` `sm`, monospace shortcut badge) for keyboard shortcuts instead of raw `<kbd className="kbd-hint">` or `<span className="kbd-hint">`.
+- **Composer Toolbar Pills**: Composer status pills (e.g. plan mode, active tier, mode indicators) MUST use the shared `22px` (`--control-h-xs`) `.helmx-toolbar-pill` CSS family (`.helmx-toolbar-pill`, `.helmx-toolbar-pill--accent|--warn|--err`, `.helmx-toolbar-pill-main`, `.helmx-toolbar-pill-clear`) instead of per-plugin pill geometry.
+- **Empty & Loading States**: Always use `<EmptyState compact|prominent>` and `<LoadingState>` for empty/loading placeholders (`DataTable` empty rows render `<EmptyState compact>` automatically). Ban ad-hoc empty or loading boxes.
 
 ## 4. Stage and List Archetypes (5 First-Class + Domain-Extensible)
 
@@ -69,9 +85,9 @@ Choose the stage/list layout that best serves the domain's information model. **
 | Archetype | Shared SDK / Shell Primitive | Best Fit | Structure & Guardrails |
 | :--- | :--- | :--- | :--- |
 | **1. Hairline Roster List** | `<List density="default\|compact">` + `<ListRow>` | Rules, configs, port mappings, scheduled triggers, workflow libraries, run histories, templates, narrow-panel item lists | `1px` bordered container + hairline dividers; sibling-slot a11y (`<button aria-pressed>` main trigger + always-visible `trailing` + hover/focus-revealed `actions` inside `@media (hover: hover)`, always visible on touch); collapses to single column at `@container (max-width: 680px)` and `@media (max-width: 680px)`. |
-| **2. Object Card Grid** | `<CardGrid minWidth="sm\|md\|lg">` + `<SelectCard>` | Browsable asset and marketplace catalogs (Profiles, Model Providers, Plugins/Core Capabilities, Skills, Nodes) | Built-in `32x32` rounded `icon` box (string resolves via `HelmxIcon`), inline `badges`, 2-line clamped `description`, sibling `actions` and `footer`. Zero per-page card CSS clones. |
+| **2. Object Card Grid** | `<CardGrid minWidth="sm\|md\|lg">` + `<SelectCard>` | Browsable asset and marketplace catalogs (Profiles, Model Providers, Plugins/Core Capabilities, Skills, Nodes) | Built-in `32x32` rounded `icon` box (string resolves via `HelmxIcon`), inline header `badges`, 2-line clamped `description`, sibling `actions`, body `children`, and `footer`. **Anatomy discipline**: put domain capability/status tags inside card body (`children`) using sharp `5px` (`--radius-xs`) `<Badge>` (never mix rounded `pill` chips with sharp `<Badge>`); keep `footer` strictly single-line with `size="xs"` actions so cards in the same row align horizontally. Zero per-page card CSS clones. |
 | **3. Grouped Triage Stage** | `<Screen toolbar>` + collapsible domain sections + SDK controls | Multi-dimension operational boards (exemplar: `ConversationOverview`) with status/dimension groups, bulk governance, and aggregate cards with sub-chips | Uses the unified `<Screen toolbar>` shell, `sm (28px)` filter controls, `sp.*` URL params, and SDK buttons/menus/badges. |
-| **4. Structured Data Table** | `<DataTable loading empty columns label>` | **Only** multi-column horizontal numeric comparison and aligned scanning (quota matrices, ledgers, billing reports) | `--bg-subtle` header, `tabular-nums` numbers. **Hard rule**: narrow panels/drawers (`< 560px`) MUST NEVER exceed 3 columns—use `<List>` instead. |
+| **4. Structured Data Table** | `<DataTable loading empty columns label>` | **Only** multi-column horizontal numeric comparison and aligned scanning (quota matrices, ledgers, billing reports) | `--bg-subtle` header, `tabular-nums` numbers, automatic `<LoadingState>` and `<EmptyState compact>` rows. **Hard rule**: narrow panels/drawers (`< 560px`) MUST NEVER exceed 3 columns—use `<List>` instead. |
 | **5. Master-Detail / Full-Bleed Canvas** | `<Screen layout="full-bleed">` | Side-by-side Diff inspectors (`builtin:changes`), DAG/topology canvases, zoomable diagrams (`builtin:mermaid`), custom multi-pane workbenches | Edge-to-edge stage below the unified 46px topbar and optional sticky `toolbar`. |
 
 **New domain-specific patterns are explicitly welcome**: when none of the 5 archetypes fits (e.g., Kanban lanes, calendar matrix, waterfall trace), design a domain-native stage while composing exclusively from the unified `<Screen>` topbar/toolbar/drawer shell, `32/28/22px` SDK controls, semantic tokens, and standard interaction grammar.
@@ -100,23 +116,27 @@ Core System Centers, Conversation Overview, and Plugin Screens share ONE `<Scree
 ### 4 Container Density Boundaries
 
 1. **Full-Screen Stage (`Screen`)**: Topbar and toolbar locked to `sm (28px)`. Selecting or creating an item opens a right-side `<DetailDrawer>` (`520–560px` desktop, `100vw` at `<= 680px`) paired with `useScreenDrawer` for URL-hash and browser/mobile Back sync. Drawer forms use `md (32px)` fields, `Cmd/Ctrl + Enter` submit, dirty-state gating on edit, and a sticky footer: left `danger` delete (edit mode) + `<div className="flex-1" />` + `ghost` cancel + rightmost `primary` save.
-2. **Narrow Side Panels (`workbenchPanel`, `settingsPanel`, drawer `slot`, `360–520px`)**: Use `sm (28px)` and `xs (22px)` controls only. Never render multi-column `<CardGrid>` or `> 3`-column `<DataTable>`; compose with `<KvGrid>`, `<List density="compact">`, and single-column `<Card variant="subtle">`. Never repeat a redundant top-level screen title.
+2. **Narrow Side Panels (`workbenchPanel`, `settingsPanel`, drawer `slot`, `360–520px`)**: Use `sm (28px)` and `xs (22px)` controls only. Never render multi-column `<CardGrid>` or `> 3`-column `<DataTable>`; compose with `<KvGrid>`, `<List density="compact">`, and single-column `<Card variant="subtle">`. Use `Tabs(variant="underline")` + `<TabsList scrollable>` for divider tab bars. Never repeat a redundant top-level screen title.
 3. **Timeline Inline Blocks (`toolView`, `timelineRenderer`, `json-render`)**: Follow Quiet Surface `26px` single-line traces with left chevron at `x=8px` (`6px` in `<= 450px` panes). Keep inline cards compact; on `replaceRow` cards, let the host IO panel handle input/output disclosure instead of rendering duplicate `ToolCallDetails`.
-4. **Centered Modals (`Dialog` / `ConfirmDialog`)**: Width `440–560px`. Strictly limited to destructive confirmation, short forms (`<= 4` fields, e.g., Save Template or Install Plugin), single-credential entry, and media preview. Never cram catalogs, multi-dimensional search, or management lists into a modal.
+4. **Centered Modals (`<ModalDialog>` / `<ConfirmDialog>`)**: Use `<ModalDialog size="sm|md|lg|fullscreen">` (`sm`/`md` cover standard `440–560px` modals; `lg`/`fullscreen` are reserved for rich previews or diff/diagram inspection). Strictly limited to destructive confirmation, short forms (`<= 4` fields, e.g., Save Template or Install Plugin), single-credential entry, keyboard cheat sheets, and media preview. Never cram catalogs, multi-dimensional search, or management lists into a modal.
 
 ## 6. Creative Zone Boundaries and CSS Hygiene
 
 - **Where to express domain craft**: Inside `<Screen layout="full-bleed">` canvases (Diff viewers, DAGs, zoomable diagrams, charts) and domain micro-visuals inside cards or `ListRow` slots (`meta`, `leading`, `trailing`).
-- **Zero private CSS by default**: Compose with SDK primitives and host tokens (`--space-1..6`, `--bg-*`, `--fg-*`, `--border`, `--radius-*`). Add a local `styles.css` only when host primitives do not cover a domain structure. Never copy host button/input/table/card CSS or edit `packages/web/src/styles.css` from a plugin.
-- **Mandatory `:hover` gate**: Every `:hover` rule MUST sit inside `@media (hover: hover)` (enforced by `pnpm check:hygiene`). Any hover-revealed control MUST remain visible under `@media (hover: none)` or via `:focus-within`.
+- **Zero private CSS by default**: Compose with SDK primitives and host tokens (`--space-1..6`, `--bg-*`, `--fg-*`, `--border`, `--radius-*`). Add a local `styles.css` only when host primitives do not cover a domain structure. Never copy host button/input/table/card/popover/modal CSS or edit `packages/web/src/styles.css` from a plugin.
+- **Legacy container & control class retirement (statically enforced)**: Raw `.btn`, `.btn-*`, `.input`, `.input-sm`, `.section-flat`, `.form-grid`, `.kv-list`, `.card`, `.tabs-bar`, `.tab-btn`, `.modal-header`, `.modal-footer`, `.dropdown-panel`, and `.kbd-hint` are strictly forbidden on intrinsic lowercase JSX elements (`<div>`, `<span>`, `<button>`, `<input>`, `<kbd>`, etc.; enforced by `pnpm check:hygiene` and `helmx plugins doctor`). Always use `<Button>`, `<IconButton>`, `<Input>`, `<Card variant="subtle">`, `<Field>`, `<KvGrid>`, `<List>`, `<ModalDialog>`, `<Tabs>`, `<DropdownMenu>`, and `<Kbd>`.
+- **Mandatory `:hover` gate**: Every `:hover` rule MUST sit inside `@media (hover: hover)` (enforced by `pnpm check:hygiene` and `helmx plugins doctor`). Any hover-revealed control MUST remain visible under `@media (hover: none)` or via `:focus-within`.
 - **No bulk inline styles**: Avoid `style` objects except dynamic coordinates/dimensions; use SDK primitives (`Stack`, `Card`, `List`, `KvGrid`, `Field`) and tokens.
 
 ## 7. Pre-Delivery Checklist
 
 - [ ] **Zero Emoji** across all UI copy, titles, icons, badges, and empty states.
-- [ ] **Zero `variant="default"`** on `Button`/`IconButton`; at most **1 `primary`** per focus zone, placed rightmost.
-- [ ] **Zero native `<select>`** and **zero `<input type="search">`**; zero hand-rolled absolute-positioned popovers or modals.
-- [ ] **Exact height parity**: `md (32px)` in drawer/modal forms, `sm (28px)` in topbars/toolbars/narrow panels, `xs (22px)` for row micro-actions.
+- [ ] **Zero `variant="default"`** on `Button`, `IconButton`, or `Tabs`; at most **1 `primary`** per focus zone, placed rightmost.
+- [ ] **Physical-location Tabs**: `underline` + `<TabsList scrollable>` ONLY for container/drawer divider bars; `segmented` for 2–5 modes; `pills` + `<TabCount>` for multi-filter bars.
+- [ ] **Zero native `<select>`**, **zero `<input type="search">`**, and **zero hand-rolled search/popover/modal/kbd markup**: use `<Select>`/`<MultiSelect>`, `<SearchBox surface="default|subtle|frameless">`, `<DropdownMenuItem icon description shortcut trailing checked danger>`, `<ModalDialog size="sm|md|lg|fullscreen">`, and `<Kbd>`.
+- [ ] **Zero retired legacy classes on intrinsic tags**: no raw `.btn*`, `.input*`, `.section-flat`, `.form-grid`, `.kv-list`, `.card`, `.tabs-bar`, `.tab-btn`, `.modal-header`, `.modal-footer`, `.dropdown-panel`, or `.kbd-hint`.
+- [ ] **Exact height parity**: `md (32px)` in drawer/modal forms, `sm (28px)` in topbars/toolbars/narrow panels, `xs (22px)` for row micro-actions, `SelectCard` single-line footers, and `.helmx-toolbar-pill` composer pills.
+- [ ] **`SelectCard` anatomy & Empty/Loading discipline**: domain capability/status tags live inside card body (`children`) as sharp `5px` `<Badge>` (no pill mixing); card `footer` stays single-line at `size="xs"`; empty/loading states use `<EmptyState compact|prominent>` and `<LoadingState>`.
 - [ ] **Single-layer `<Screen toolbar={<ScreenToolbar />}>`**: left switch/filter, right `SearchBox(variant="toolbar", size="sm")`; view-level Create/Refresh in `<Screen actions>` with `<span className="pane-action-label">`.
 - [ ] **Right-side `DetailDrawer` + `useScreenDrawer`** for deep item inspection/editing; `ConfirmDialog(danger)` for irreversible deletes; `< 560px` panels have no `CardGrid` and `<= 3` `DataTable` columns.
 - [ ] **CSS & runtime hygiene**: all `:hover` inside `@media (hover: hover)`, light + dark semantic tokens only, Fast Refresh compliant (`.tsx` exports components and types only), SSR `renderToString` safe.
