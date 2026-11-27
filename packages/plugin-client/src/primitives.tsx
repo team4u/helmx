@@ -5,11 +5,15 @@
  *   .helmx-table / .table-empty / .loading-state / .kv-grid, etc.). No new CSS theme is
  *   introduced and there is no opaque columns/data table — structure and cells
  *   are still expressed as JSX;
- * - No Portal, no document / window access, renderToString works directly;
+ * - No document / window access, renderToString works directly. The single
+ *   portal is `Screen actions` into the host-provided top bar slot
+ *   (`ScreenHostContext.headerActionsSlot`); without a slot the actions render
+ *   inline, so SSR and unhosted mounts never touch a Portal;
  * - This file only exports components and TS types (same contract as the host
  *   Fast Refresh rule).
  */
 import { Children, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { usePluginTranslator } from './i18n.js'
 import { useScreenHost } from './screen-host.js'
 import { uiCopy } from './ui-copy.js'
@@ -47,7 +51,12 @@ export interface ScreenProps {
   title?: ReactNode
   /** Subtitle text (right of the title or below it, wrapping naturally). */
   subtitle?: ReactNode
-  /** Action area on the right of the header (buttons etc.). */
+  /**
+   * Action area on the right of the header (buttons etc.). Inside a host
+   * ScreenHost it is rendered into the host top bar `.pane-actions` (before the
+   * split controls); otherwise it sits at the right of the inline `.screen-header`.
+   * Ignored when a custom `header` is passed.
+   */
   actions?: ReactNode
   children?: ReactNode
 }
@@ -57,21 +66,32 @@ export interface ScreenProps {
  * layout. header/title/subtitle/actions are composable — passing header ignores
  * the other three; when none is passed, no header is rendered.
  * When mounted inside the host ScreenHost (ScreenHostContext.hosted === true)
- * without a custom `header`, omits the duplicate `.screen-title` structurally
- * and collapses `.screen-header` entirely when neither `subtitle` nor `actions`
- * remain (zero hidden DOM, zero CSS `:has()` patching).
+ * without a custom `header`, omits the duplicate `.screen-title` structurally,
+ * portals `actions` into the host top bar when it offers a slot, and collapses
+ * `.screen-header` entirely when nothing else remains (zero hidden DOM, zero
+ * CSS `:has()` patching).
  * Stamps data-screen-layout (contained | full-bleed) and, when rendered inside
  * a plugin PluginClientContext, data-plugin-id so scoped plugin CSS matches.
  */
 export function Screen(props: ScreenProps): ReactNode {
   const { className, layout = 'contained', header, title, subtitle, actions, children } = props
   const pluginScopeId = usePluginScopeId()
-  const { hosted } = useScreenHost()
+  const { hosted, headerActionsSlot } = useScreenHost()
   const hasCustomHeader = hasRenderable(header)
   const showTitle = !hosted && hasRenderable(title)
   const showSubtitle = hasRenderable(subtitle)
-  const showActions = hasRenderable(actions)
-  const hasHeader = hasCustomHeader || showTitle || showSubtitle || showActions
+  const showActions = !hasCustomHeader && hasRenderable(actions)
+  // Hosted with a top bar slot: the action cluster is portalled into the host
+  // `.pane-topbar .pane-actions` (React tree stays here, so plugin context and
+  // `data-plugin-id` scoped CSS keep working); the inline header row then only
+  // remains for a subtitle.
+  const actionsInHostTopbar = hosted && headerActionsSlot != null && showActions
+  const hasHeader = hasCustomHeader || showTitle || showSubtitle || (showActions && !actionsInHostTopbar)
+  const actionsCluster = showActions ? (
+    <div className="stack-row" data-plugin-id={pluginScopeId}>
+      {actions}
+    </div>
+  ) : null
   return (
     <div
       className={joinClass('screen-container', className)}
@@ -87,9 +107,10 @@ export function Screen(props: ScreenProps): ReactNode {
               {showTitle && <div className="screen-title">{title}</div>}
               {showSubtitle && <span className="screen-subtitle">{subtitle}</span>}
             </div>
-            {showActions && <div className="stack-row">{actions}</div>}
+            {!actionsInHostTopbar && actionsCluster}
           </div>
         ))}
+      {actionsInHostTopbar && headerActionsSlot ? createPortal(actionsCluster, headerActionsSlot) : null}
       {children}
     </div>
   )

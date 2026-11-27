@@ -126,6 +126,8 @@ function ArtifactCard({
         </div>
       </div>
       <div className="artifact-card-actions">
+        {/* 标签显式包一层 <span>：窄屏由 .artifact-action-btn > span 收敛为纯图标
+            （SDK Button 子节点直接参与 .btn flex，不再自带包裹层） */}
         <Button
           variant="ghost"
           size="xs"
@@ -135,7 +137,7 @@ function ArtifactCard({
           title={t('conv.workbench.preview')}
           onClick={() => onPreview(artifact)}
         >
-          {t('conv.workbench.preview')}
+          <span>{t('conv.workbench.preview')}</span>
         </Button>
         <Button
           variant="ghost"
@@ -147,7 +149,7 @@ function ArtifactCard({
           title={t('common.download')}
           onClick={() => onDownload(artifact)}
         >
-          {isDownloading ? t('conv.workbench.downloading') : t('common.download')}
+          <span>{isDownloading ? t('conv.workbench.downloading') : t('common.download')}</span>
         </Button>
       </div>
     </div>

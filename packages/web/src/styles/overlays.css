@@ -146,10 +146,6 @@
   box-shadow: none;
 }
 
-.btn.toast-action-btn > span {
-  display: contents;
-}
-
 .btn.toast-action-btn:focus-visible:not(:disabled) {
   background: var(--bg-hover);
   border-color: var(--border-strong);

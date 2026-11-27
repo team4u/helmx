@@ -1249,7 +1249,7 @@ test('Button variant="inline" and IconButton active: inline compact icon sizing 
     const inlineDefault = container.querySelector<HTMLButtonElement>('#inline-default')!
     assert.equal(inlineDefault.className, 'btn btn-inline')
     assert.equal(inlineDefault.querySelector('svg')?.getAttribute('width'), '11', 'inline Button defaults to 11px compact icon')
-    assert.equal(inlineDefault.querySelector('span')?.textContent, 'Expand')
+    assert.equal(inlineDefault.textContent, 'Expand', 'children render directly inside the button (no wrapper span)')
 
     const inlinePending = container.querySelector<HTMLButtonElement>('#inline-pending')!
     assert.equal(inlinePending.className, 'btn btn-inline')
@@ -1520,5 +1520,72 @@ test('Switch / Checkbox: Space and Enter toggle once with preventDefault, other 
       root.unmount()
     })
     container.remove()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Screen header actions → host top bar slot
+// ---------------------------------------------------------------------------
+
+test('Screen DOM: hosted with a header actions slot portals actions into the slot (zero inline duplicate); without a slot actions stay inline', { timeout: 60_000 }, async () => {
+  const { Screen } = await import('../src/primitives.js')
+  const { ScreenHostContext } = await import('../src/screen-host.js')
+  const slot = document.createElement('div')
+  document.body.appendChild(slot)
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  const clicks: string[] = []
+  const actions = e('button', { type: 'button', onClick: () => clicks.push('refresh') }, 'Refresh')
+  try {
+    // 1) hosted + slot: actions land in the host top bar slot only; plugin React tree is
+    //    preserved, so the click handler still fires through the portal
+    await act(async () => {
+      root.render(
+        e(ScreenHostContext.Provider, { value: { hosted: true, headerActionsSlot: slot } },
+          e(Screen, { title: 'Board', actions }, e('div', { 'data-testid': 'body' }, 'body'))),
+      )
+    })
+    const slotted = slot.querySelector<HTMLButtonElement>('.stack-row > button')
+    assert.ok(slotted !== null, 'action cluster (.stack-row) is portalled into the host slot')
+    assert.equal(slot.querySelectorAll('button').length, 1)
+    assert.ok(container.querySelector('.screen-header') === null, 'no inline .screen-header row remains when only actions were passed')
+    assert.ok(container.querySelector('button') === null, 'no duplicate action button inside the screen body')
+    assert.ok(container.querySelector('.screen-title') === null, 'hosted title stays omitted')
+    assert.equal(container.querySelector('[data-testid="body"]')?.textContent, 'body')
+    await act(async () => {
+      slotted!.click()
+    })
+    assert.deepEqual(clicks, ['refresh'], 'portalled actions keep their plugin-side event handlers')
+
+    // 2) hosted without a slot (or unhosted): actions render inline at the right of .screen-header
+    await act(async () => {
+      root.render(
+        e(ScreenHostContext.Provider, { value: { hosted: true } },
+          e(Screen, { title: 'Board', actions }, e('div', null, 'body'))),
+      )
+    })
+    assert.equal(slot.querySelectorAll('button').length, 0, 'slot is released when no portal target is provided')
+    const inline = container.querySelector<HTMLButtonElement>('.screen-header > .stack-row > button')
+    assert.ok(inline !== null, 'actions fall back to the inline .screen-header action cluster')
+
+    // 3) unmount releases the portal content from the host slot
+    await act(async () => {
+      root.render(
+        e(ScreenHostContext.Provider, { value: { hosted: true, headerActionsSlot: slot } },
+          e(Screen, { title: 'Board', actions }, e('div', null, 'body'))),
+      )
+    })
+    assert.equal(slot.querySelectorAll('button').length, 1)
+    await act(async () => {
+      root.render(null)
+    })
+    assert.equal(slot.querySelectorAll('button').length, 0, 'unmounting the screen clears the host slot')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+    slot.remove()
   }
 })

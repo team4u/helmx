@@ -6,7 +6,10 @@
  *   both components compose cleanly inside Radix `asChild` triggers
  *   (TooltipTrigger, PopoverTrigger, DialogClose);
  * - `pending` automatically disables interaction, marks `aria-busy`, and shows
- *   a subtle spinning loader icon (seamless pairing with `usePluginAction`).
+ *   a subtle spinning loader icon (seamless pairing with `usePluginAction`);
+ * - Children are direct flex items of `.btn` (no wrapper element): a label
+ *   hidden by responsive CSS (`.pane-action-label { display: none }`) leaves
+ *   zero ghost gap, so icon-only collapses stay centered in every container.
  */
 import * as React from 'react'
 import { HelmxIcon } from '../icons.js'
@@ -139,7 +142,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       aria-busy={pending ? true : ariaBusy}
     >
       {leading}
-      {children !== undefined && children !== null && children !== false ? <span>{children}</span> : null}
+      {children}
     </button>
   )
 })

@@ -262,7 +262,12 @@ describe('port-forward-client-interactions', () => {
       const newButtons = [...emptyMount.host.querySelectorAll('button')].filter((b) =>
         /New mapping/i.test(b.textContent ?? ''),
       )
-      assert.equal(newButtons.length, 1, 'must render only one New mapping button (top-right toolbar)')
+      assert.equal(newButtons.length, 1, 'must render only one New mapping button (screen header actions)')
+      assert.ok(
+        emptyMount.host.querySelector('.screen-header .stack-row button') !== null,
+        'New mapping is a screen header action (hosted: host top bar slot), not a toolbar button',
+      )
+      assert.ok(emptyMount.host.querySelector('.screen-toolbar .btn-primary') === null, 'toolbar carries no primary create button')
       assert.equal(
         emptyMount.host.querySelectorAll('.empty-state button').length,
         0,

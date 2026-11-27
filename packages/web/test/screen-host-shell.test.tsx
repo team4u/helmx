@@ -168,10 +168,15 @@ describe("screen-host-shell", () => {
     assert.ok(stage, 'ScreenHost 应渲染单一滚动舞台 .screen-host-body[data-screen-host="true"]')
     assert.ok(host?.querySelector('.timeline-scroll') === null, 'ScreenHost 不再嵌套 .timeline-scroll')
     assert.ok(host?.querySelector('.timeline-inner') === null, 'ScreenHost 不再嵌套 .timeline-inner')
-    assert.ok(stage.querySelector('.screen-header') !== null, '存在 subtitle/actions 时保留 .screen-header')
+    assert.ok(stage.querySelector('.screen-header') !== null, '存在 subtitle 时保留 .screen-header')
     assert.ok(stage.querySelector('.screen-title') === null, 'hosted 下内层 Screen 结构化省略重复 .screen-title（零 CSS display:none 补丁）')
     assert.ok(stage.querySelector('.screen-subtitle'), '副标题应保留')
-    assert.ok(stage.querySelector('button'), '右侧动作按钮应保留')
+    // Screen actions 经 ScreenHostContext.headerActionsSlot portal 进宿主顶栏 .pane-actions 动作槽
+    // （位于分屏按钮之前，与五大中心页头动作同一位置），舞台内零重复渲染
+    const topbarActions = topbar?.querySelector('.pane-actions')
+    assert.ok(topbarActions?.querySelector('.pane-actions-slot .stack-row button'), 'Screen actions 应落入宿主顶栏 .pane-actions 动作槽')
+    assert.ok(stage.querySelector('button') === null, '动作按钮不再在舞台 .screen-header 内重复渲染')
+    assert.ok(topbarActions?.querySelector('.split-toggle-btn'), '分屏按钮仍位于动作槽之后')
     assert.ok(stage.querySelector('[data-nested-scope="yes"]'), '嵌套子组件经 useScreenParams 读到宿主建立的屏内 scope')
     const primaryScope = receivedScopes[receivedScopes.length - 1]!
     assert.equal(primaryScope.hasScope, true)
@@ -226,6 +231,11 @@ describe("screen-host-shell", () => {
             <div data-testid="canvas-body">宽画布</div>
           </Screen>
         ),
+        ActionsOnly: () => (
+          <Screen layout="full-bleed" title="仅动作" actions={<button type="button">新建映射</button>}>
+            <div data-testid="actions-only-body">正文</div>
+          </Screen>
+        ),
       },
       'demo-hash-2',
     )
@@ -248,6 +258,11 @@ describe("screen-host-shell", () => {
           pluginId: 'ext-demo',
           surface: 'screen',
           spec: { id: 'full-bleed', label: '全出血画布', client: { module: 'modes.tsx', export: 'FullBleed' } },
+        },
+        {
+          pluginId: 'ext-demo',
+          surface: 'screen',
+          spec: { id: 'actions-only', label: '仅动作', client: { module: 'modes.tsx', export: 'ActionsOnly' } },
         },
       ],
     })
@@ -277,6 +292,21 @@ describe("screen-host-shell", () => {
     assert.ok(fullBleedStage.querySelector('.screen-header') === null)
     assert.equal(fullBleedStage.querySelector('.screen-container')?.getAttribute('data-screen-layout'), 'full-bleed')
     assert.equal(fullBleedStage.querySelector('[data-testid="canvas-body"]')?.textContent, '宽画布')
+
+    // 4) 仅传 actions（无 subtitle）：动作全部进顶栏槽，舞台内不再残留只有动作的空 .screen-header 行
+    mount(
+      <HostStoreProviders value={modesStore}>
+        <ScreenHost pluginId="ext-demo" screenId="actions-only" />
+      </HostStoreProviders>,
+    )
+    await flushMacrotask(0)
+    const actionsOnlyStage = host?.querySelector<HTMLElement>('.screen-host-body[data-screen-host="true"]')
+    assert.ok(actionsOnlyStage !== null && actionsOnlyStage !== undefined)
+    assert.ok(actionsOnlyStage.querySelector('.screen-header') === null, '仅传 actions 时 hosted Screen 不渲染空 .screen-header 行')
+    assert.ok(actionsOnlyStage.querySelector('button') === null, '舞台内零动作按钮')
+    assert.equal(host?.querySelector('.pane-topbar .pane-actions-slot .stack-row button')?.textContent, '新建映射')
+    assert.ok(host?.querySelector('.pane-topbar .pane-actions-slot')?.nextElementSibling?.classList.contains('split-toggle-btn') === true, '动作槽紧邻分屏按钮之前')
+    assert.equal(actionsOnlyStage.querySelector('[data-testid="actions-only-body"]')?.textContent, '正文')
   })
 
   test('CommandPaletteModal 单键快捷键徽章、聚焦分屏上下文与空查询排序', { timeout: 60_000 }, async () => {
