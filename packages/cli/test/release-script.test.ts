@@ -75,6 +75,9 @@ function getFixtureTemplate(initialVersion: string, withChangelog: boolean): str
     writeFileSync(path.join(dir, 'CHANGELOG.md'), `# Changelog\n\n## v${initialVersion} (2026-01-01)\n\n- init\n`)
   }
   gitIn(dir, ['init', '-b', 'main'], env)
+  // `git commit` 派生分离的 `git maintenance run --auto`，会在 `.git/objects/` 下创建并释放 `maintenance.lock`，
+  // 与 `makeFixtureRepo` 的 `cpSync` 遍历竞争导致 ENOENT；关闭后不再派生后台进程。
+  gitIn(dir, ['config', 'maintenance.auto', 'false'], env)
   gitIn(dir, ['config', 'user.email', 'release-test@example.com'], env)
   gitIn(dir, ['config', 'user.name', 'Release Test'], env)
   gitIn(dir, ['config', 'commit.gpgsign', 'false'], env)
