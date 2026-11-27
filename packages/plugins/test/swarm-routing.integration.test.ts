@@ -43,6 +43,10 @@ import {
   type CollabGroupRecord,
 } from '../src/swarm.js'
 
+// 跨多个真实模型回合的链式等待（dispatch → 回合 → 续催/主控唤醒）：CI 在 4 vCPU 上并发 ~28 分片，
+// 链路可超过 waitFor 默认 5s；与 workflow/subagent 测试的链式等待惯例一致。
+const CHAIN_WAIT_MS = 20_000
+
 describe('builtin:swarm board routing, settlement & self-healing', { concurrency: 2, timeout: 60_000 }, () => {
   const gitTemplate = createGitTemplate()
   after(() => gitTemplate.cleanup(), { timeout: 60_000 })
@@ -164,7 +168,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
         kind: 'handoff',
         body: 'Active QA handoff #B',
       })
-      await waitFor(() => sweptPrompt !== '')
+      await waitFor(() => sweptPrompt !== '', { timeoutMs: CHAIN_WAIT_MS })
       assert.match(sweptPrompt, /Passive heads-up note #A/, 'wakeup envelope must sweep prior wake=false comment')
       assert.match(sweptPrompt, /Active QA handoff #B/)
 
@@ -364,7 +368,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
       )
       assert.equal(replayRes.structuredOutput.postSeq, switchToolRes.structuredOutput.postSeq)
 
-      await waitFor(() => resumedOnNewModel)
+      await waitFor(() => resumedOnNewModel, { timeoutMs: CHAIN_WAIT_MS })
       await kernel.conversations.waitForIdle(alpha.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.conversations.waitForIdle(coord.id)
@@ -442,7 +446,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
       await waitFor(async () => {
         const read = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
         return read.posts.some((p) => p.from === 'system' && p.kind === 'blocker' && p.body.includes('circuit breaker tripped'))
-      })
+      }, { timeoutMs: CHAIN_WAIT_MS })
       await kernel.conversations.waitForIdle(p1.workerConversationId)
       await kernel.conversations.waitForIdle(p2.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
@@ -612,7 +616,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
         { groupId, name: 'delegating_rw', prompt: 'Run non-forked worker under global depth-2 ceiling.' },
         { conversationId: coord.id },
       )
-      await waitFor(() => delegatingRwMeta !== undefined && kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await waitFor(() => delegatingRwMeta !== undefined && kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0, { timeoutMs: CHAIN_WAIT_MS })
       await kernel.conversations.waitForIdle(coord.id)
 
       assert.ok(delegatingRwMeta, 'must capture delegating_rw request metadata')
@@ -703,7 +707,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
           posts: BoardPost[]
         }
         return read.posts.some((p) => p.from === 'system' && p.kind === 'blocker' && p.body.includes('@mute'))
-      })
+      }, { timeoutMs: CHAIN_WAIT_MS })
       await inst.app.kernel.conversations.waitForIdle(muteWorker.workerConversationId)
       await waitFor(() => inst.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await inst.app.kernel.conversations.waitForIdle(coord.id)
@@ -732,7 +736,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
         return read.posts.some(
           (p) => p.from === 'system' && p.kind === 'blocker' && p.body.includes('@flaky') && p.body.includes('faux/faux-1'),
         )
-      })
+      }, { timeoutMs: CHAIN_WAIT_MS })
       await inst.app.kernel.conversations.waitForIdle(flakyWorker.workerConversationId)
       await waitFor(() => inst.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await inst.app.kernel.conversations.waitForIdle(coord.id)
@@ -760,7 +764,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
           posts: BoardPost[]
         }
         return read.posts.some((p) => p.from === 'system' && p.kind === 'stall' && p.body.includes('wake=false'))
-      })
+      }, { timeoutMs: CHAIN_WAIT_MS })
       await inst.app.kernel.conversations.waitForIdle(muteWorker.workerConversationId)
       await waitFor(() => inst.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await inst.app.kernel.conversations.waitForIdle(coord.id)
@@ -793,7 +797,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
           coordinator: [fauxAssistantMessage('Coordinator received recovered done.')],
         })
       })
-      await waitFor(() => recoveredWakeupDelivered, { timeoutMs: 10_000 })
+      await waitFor(() => recoveredWakeupDelivered, { timeoutMs: CHAIN_WAIT_MS })
       await inst.app.kernel.conversations.waitForIdle(muteWorker.workerConversationId)
       await waitFor(() => inst.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await inst.app.kernel.conversations.waitForIdle(coord.id)
@@ -936,7 +940,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
         { groupId, to: ['gamma'], kind: 'brief', body: 'Run failing turn' },
         { conversationId: coord.id },
       )
-      await waitFor(() => gammaRecoveredDelivered === true)
+      await waitFor(() => gammaRecoveredDelivered === true, { timeoutMs: CHAIN_WAIT_MS })
       await kernel.conversations.waitForIdle(failingWorker.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.conversations.waitForIdle(coord.id)
@@ -1195,7 +1199,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
           posts: BoardPost[]
         }
         return read.posts.some((p) => p.from === 'system' && p.kind === 'stall' && p.body.includes('wake=false'))
-      })
+      }, { timeoutMs: CHAIN_WAIT_MS })
       await kernel.conversations.waitForIdle(solo.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.conversations.waitForIdle(coord2.id)
