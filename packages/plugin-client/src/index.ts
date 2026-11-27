@@ -112,7 +112,7 @@ export type {
 
 // ---- Model picker (shared host/plugin model + thinking-level control) ----
 export { ModelPickerControl } from './ui/ModelPicker.js'
-export type { ModelPickerControlProps } from './ui/ModelPicker.js'
+export type { ModelPickerControlProps, ModelPickerSize, ModelPickerVariant } from './ui/ModelPicker.js'
 export {
   formatModelShortName,
   initialModelActiveIndex,
@@ -131,8 +131,8 @@ export type { CheckboxProps } from './ui/Checkbox.js'
 export { Select } from './ui/Select.js'
 export type { SelectProps, SelectOption, SelectChangeEvent, MultiSelectChangeEvent, BaseSelectProps, SingleSelectProps, MultiSelectProps } from './ui/Select.js'
 export { MultiSelect } from './ui/Select.js'
-export { Tabs, TabsList, TabsTrigger, TabsContent, SegmentedControl } from './ui/Tabs.js'
-export type { TabsProps, TabsListProps, TabsTriggerProps, TabsContentProps, TabsVariant, TabsSize, SegmentedControlItem, SegmentedControlProps } from './ui/Tabs.js'
+export { Tabs, TabsList, TabsTrigger, TabsContent, TabCount, SegmentedControl } from './ui/Tabs.js'
+export type { TabsProps, TabsListProps, TabsTriggerProps, TabsContentProps, TabCountProps, TabsVariant, TabsSize, SegmentedControlItem, SegmentedControlProps } from './ui/Tabs.js'
 export { Dialog, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogTrigger } from './ui/Dialog.js'
 export type { DialogProps, DialogPortalProps, DialogOverlayProps, DialogContentProps, DialogTitleProps, DialogDescriptionProps, DialogCloseProps, DialogTriggerProps } from './ui/Dialog.js'
 export { Popover, PopoverRoot, PopoverTrigger, PopoverAnchor, PopoverClose, PopoverContent } from './ui/Popover.js'
@@ -195,10 +195,12 @@ export type {
   CardVariant,
   SelectCardProps,
 } from './ui/Card.js'
+export { List, ListRow } from './ui/List.js'
+export type { ListDensity, ListProps, ListRowProps, ListRowTone } from './ui/List.js'
 export { MonoId } from './ui/MonoId.js'
 export type { MonoIdProps } from './ui/MonoId.js'
 export { SearchBox } from './ui/SearchBox.js'
-export type { SearchBoxProps, SearchBoxVariant } from './ui/SearchBox.js'
+export type { SearchBoxProps, SearchBoxSize, SearchBoxVariant } from './ui/SearchBox.js'
 export { EmptyState } from './ui/EmptyState.js'
 export type { EmptyStateProps } from './ui/EmptyState.js'
 export { LoadingState } from './ui/LoadingState.js'

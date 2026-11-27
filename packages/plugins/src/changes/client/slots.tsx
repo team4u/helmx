@@ -75,7 +75,7 @@ export function WorkflowWorktreeInspectSlot(props: WorkflowWorktreeInspectSlotPr
         </span>
       </div>
       <Button
-        variant="default"
+        variant="secondary"
         size="xs"
         icon="file-diff"
         onClick={() => ctx.openSplitScreen(target)}

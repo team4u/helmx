@@ -138,7 +138,7 @@ export function ChangesWorkbenchPanel(props: Partial<WorkbenchPanelProps>): Reac
         <Stack direction="horizontal" gap="xs" align="center">
           <Button
             size="xs"
-            variant="default"
+            variant="secondary"
             icon="file-diff"
             onClick={() => ctx.openSplitScreen(buildChangesScreenTarget({ conv: conversationId }))}
           >
@@ -276,7 +276,7 @@ export function ChangesWorkbenchPanel(props: Partial<WorkbenchPanelProps>): Reac
                 </div>
                 <Button
                   size="xs"
-                  variant="default"
+                  variant="secondary"
                   icon="file-diff"
                   onClick={() => ctx.openSplitScreen(buildChangesScreenTarget({ wt: wt.id }))}
                 >

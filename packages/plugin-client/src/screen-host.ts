@@ -20,6 +20,13 @@ export interface ScreenHostState {
    * context and scoped CSS keep working). `undefined`/`null` → inline header.
    */
   readonly headerActionsSlot?: HTMLElement | null
+  /**
+   * DOM node of the host toolbar slot directly below `.pane-topbar` and above
+   * `.screen-host-body`. A hosted `<Screen toolbar>` portals its hairline toolbar
+   * bar here so it stays fixed while the stage body scrolls; `undefined`/`null`
+   * falls back to sticky inline rendering (SSR-safe).
+   */
+  readonly toolbarSlot?: HTMLElement | null
 }
 
 const DEFAULT_SCREEN_HOST_STATE: ScreenHostState = Object.freeze({ hosted: false })

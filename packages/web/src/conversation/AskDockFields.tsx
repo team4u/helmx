@@ -533,7 +533,7 @@ function AskConfirmButtons({
     <Stack direction="horizontal" inline gap="xs" className="ask-dock-confirm-actions">
       <Button
         ref={confirmYesRef}
-        variant={stringValue === 'true' ? 'primary' : 'default'}
+        variant={stringValue === 'true' ? 'primary' : 'secondary'}
         size="sm"
         icon={<HelmxIcon name="check" size={12} />}
         disabled={disabled}
@@ -544,7 +544,7 @@ function AskConfirmButtons({
       </Button>
       <Button
         ref={confirmNoRef}
-        variant={stringValue === 'false' ? 'danger' : 'default'}
+        variant={stringValue === 'false' ? 'danger' : 'secondary'}
         size="sm"
         icon={<HelmxIcon name="x" size={12} />}
         disabled={disabled}

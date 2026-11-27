@@ -2,14 +2,16 @@
  * Shared Card, SelectCard, and CardGrid primitives (SSR safe, Fast Refresh compliant):
  * - `Card`: pure static structural container (`elevated | subtle`, `default | warn | danger`),
  *   naming its `<section>` via `aria-labelledby` when `title` is present;
- * - `SelectCard`: stage-grid selectable object card matching the host PluginCard
- *   sibling-slot accessibility pattern (`<article>` pointer hit area + dedicated
- *   `<button aria-pressed>` main trigger + sibling `actions` / `footer` slots —
- *   never nesting buttons inside `role="button"`);
+ * - `SelectCard`: stage-grid selectable object card matching the host sibling-slot
+ *   accessibility pattern (`<article>` pointer hit area + dedicated `<button aria-pressed>`
+ *   main trigger with optional `icon` 32x32 box and inline `badges` + optional 2-line clamped
+ *   `description` + sibling `actions` / `footer` slots — never nesting buttons inside `role="button"`);
  * - `CardGrid`: responsive auto-fill grid using `minmax(min(100%, ...), 1fr)` so
  *   narrow split panes and mobile viewports never overflow horizontally.
  */
 import * as React from 'react'
+import { HelmxIcon } from '../icons.js'
+import { shouldTriggerSurfaceClick } from './interactive-surface.js'
 
 export type CardVariant = 'elevated' | 'subtle'
 export type CardTone = 'default' | 'warn' | 'danger'
@@ -34,8 +36,14 @@ export interface CardProps extends Omit<React.ComponentPropsWithoutRef<'section'
 export interface SelectCardProps extends Omit<React.ComponentPropsWithoutRef<'article'>, 'title' | 'onSelect' | 'onClick'> {
   /** Required primary card title (forms the accessible main trigger button). */
   title: React.ReactNode
+  /** Optional leading 32x32 rounded icon box: HelmxIcon name string or custom ReactNode. */
+  icon?: string | React.ReactNode
+  /** Optional inline non-interactive badges/status lights rendered right next to `title`. */
+  badges?: React.ReactNode
   /** Optional secondary line rendered inside the trigger below `title`. */
   subtitle?: React.ReactNode
+  /** Optional 2-line clamped natural-language description rendered below the header. */
+  description?: React.ReactNode
   /** Optional right-aligned header actions (sibling of the main trigger button; never nested inside it). */
   actions?: React.ReactNode
   /** Optional footer slot (pills, timestamps, secondary actions). */
@@ -88,32 +96,19 @@ const CARD_GRID_GAP_CLASS: Record<CardGridGap, string> = {
   lg: 'helmx-card-grid-gap-lg',
 }
 
-const INTERACTIVE_DESCENDANT_SELECTOR =
-  'button, a, input, select, textarea, label, summary, [contenteditable="true"], [contenteditable=""], [role="button"], [role="switch"], [role="checkbox"], [role="radio"], [role="combobox"], [role="option"], [role="tab"], [role="slider"], [role="menuitem"], [role="link"]'
-
-function hasSelectionInside(container: HTMLElement): boolean {
-  if (typeof window === 'undefined') return false
-  const selection = window.getSelection?.()
-  if (selection === null || selection === undefined || selection.isCollapsed === true) return false
-  if (selection.toString().length === 0) return false
-  const { anchorNode, focusNode } = selection
-  if (anchorNode !== null && container.contains(anchorNode)) return true
-  if (focusNode !== null && container.contains(focusNode)) return true
-  if (typeof selection.rangeCount === 'number' && selection.rangeCount > 0) {
-    for (let i = 0; i < selection.rangeCount; i++) {
-      const range = selection.getRangeAt(i)
-      if (container.contains(range.commonAncestorContainer)) return true
-    }
-  }
-  return false
-}
-
 function joinClass(...parts: Array<string | undefined>): string {
   return parts.filter(Boolean).join(' ')
 }
 
 function hasNode(node: React.ReactNode): boolean {
   return node !== undefined && node !== null && node !== false && node !== ''
+}
+
+function renderCardIcon(icon: string | React.ReactNode): React.ReactNode {
+  if (typeof icon === 'string') {
+    return <HelmxIcon name={icon} size={16} />
+  }
+  return icon
 }
 
 export const Card = React.forwardRef<HTMLElement, CardProps>(function Card(
@@ -175,7 +170,10 @@ export const Card = React.forwardRef<HTMLElement, CardProps>(function Card(
 export const SelectCard = React.forwardRef<HTMLElement, SelectCardProps>(function SelectCard(
   {
     title,
+    icon,
+    badges,
     subtitle,
+    description,
     actions,
     footer,
     selected = false,
@@ -189,21 +187,17 @@ export const SelectCard = React.forwardRef<HTMLElement, SelectCardProps>(functio
   },
   ref,
 ) {
+  const hasIcon = hasNode(icon)
+  const hasBadges = hasNode(badges)
   const hasSubtitle = hasNode(subtitle)
+  const hasDescription = hasNode(description)
   const hasActions = hasNode(actions)
   const hasBody = hasNode(children)
   const hasFooter = hasNode(footer)
 
   const handleArticleClick = (e: React.MouseEvent<HTMLElement>): void => {
-    if (disabled || e.defaultPrevented) return
-    if (hasSelectionInside(e.currentTarget)) return
-    const target = e.target
-    if (target instanceof Element) {
-      const interactive = target.closest(INTERACTIVE_DESCENDANT_SELECTOR)
-      if (interactive !== null && e.currentTarget.contains(interactive)) {
-        return
-      }
-    }
+    if (disabled) return
+    if (!shouldTriggerSurfaceClick(e)) return
     onSelect()
   }
 
@@ -232,8 +226,18 @@ export const SelectCard = React.forwardRef<HTMLElement, SelectCardProps>(functio
             if (!disabled) onSelect()
           }}
         >
-          <span className="helmx-card-title">{title}</span>
-          {hasSubtitle ? <span className="helmx-card-subtitle">{subtitle}</span> : null}
+          {hasIcon ? (
+            <span className="helmx-select-card-icon" aria-hidden="true">
+              {renderCardIcon(icon)}
+            </span>
+          ) : null}
+          <span className="helmx-select-card-heading">
+            <span className="helmx-select-card-title-row">
+              <span className="helmx-card-title">{title}</span>
+              {hasBadges ? <span className="helmx-select-card-badges">{badges}</span> : null}
+            </span>
+            {hasSubtitle ? <span className="helmx-card-subtitle">{subtitle}</span> : null}
+          </span>
         </button>
         {hasActions ? (
           <div
@@ -245,6 +249,7 @@ export const SelectCard = React.forwardRef<HTMLElement, SelectCardProps>(functio
           </div>
         ) : null}
       </div>
+      {hasDescription ? <div className="helmx-select-card-desc">{description}</div> : null}
       {hasBody ? <div className="helmx-card-body">{children}</div> : null}
       {hasFooter ? <div className="helmx-card-footer">{footer}</div> : null}
     </article>

@@ -87,7 +87,7 @@ export function PluginDrawerActionBar({
             </>
           )}
           <Button
-            variant={plugin.enabled ? 'default' : 'primary'}
+            variant={plugin.enabled ? 'secondary' : 'primary'}
             size="sm"
             icon={plugin.enabled ? 'square' : 'play'}
             disabled={plugin.locked || toggling}

@@ -159,7 +159,7 @@ function RowAction({
   return (
     <Button
       size="xs"
-      variant={danger === true ? 'danger' : 'default'}
+      variant={danger === true ? 'danger' : 'secondary'}
       icon={iconName}
       disabled={disabled === true}
       pending={pending === true}

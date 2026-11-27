@@ -368,7 +368,7 @@ export function PortForwardManagerScreen(
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <IconButton
-                  variant="default"
+                  variant="secondary"
                   size="sm"
                   icon="more-horizontal"
                   label={t(PF_MORE_ACTIONS)}

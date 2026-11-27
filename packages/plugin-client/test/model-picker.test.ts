@@ -750,3 +750,52 @@ test('allowOrchestratorTiers hides orchestrator tiers by default and suppresses 
     releaseMode()
   }
 })
+
+test('ModelPickerControl SSR: variant="field" renders standard 32px/28px bordered form trigger wired to FieldContext', { timeout: 60_000 }, async () => {
+  const { Field } = await import('../src/ui/Field.js')
+  const handle: CatalogHandle = {
+    slice: { models: CATALOG_MODELS },
+    listeners: new Set(),
+  }
+
+  const fieldHtml = renderToString(
+    e(
+      PluginClientHostContext.Provider,
+      { value: makePort(handle) },
+      e(
+        Field,
+        { label: 'Planner model', error: 'Model is required' },
+        e(ModelPickerControl, {
+          variant: 'field',
+          size: 'sm',
+          effectiveModel: undefined,
+          activeThinkingLevel: '',
+          placeholderLabel: 'Pick a model',
+          onApply: () => {},
+        }),
+      ),
+    ),
+  )
+  assert.match(fieldHtml, /composer-picker-root helmx-model-picker-field helmx-model-picker-sm/)
+  assert.match(fieldHtml, /class="helmx-model-picker-trigger composer-model-button"/)
+  assert.doesNotMatch(fieldHtml, /btn-ghost/, 'field variant must not wear ghost button classes')
+  assert.match(fieldHtml, /helmx-model-picker-placeholder">Pick a model<\/span>/)
+  assert.match(fieldHtml, /helmx-model-picker-chevron/)
+  assert.match(fieldHtml, /data-invalid="true"/, 'field variant reflects invalid state from enclosing Field via data-invalid')
+  assert.match(fieldHtml, /aria-describedby="[^"]*-error"/, 'field variant inherits aria-describedby from enclosing Field')
+
+  // Default variant="composer" preserves compact ghost button classes unchanged
+  const composerHtml = renderToString(
+    e(
+      PluginClientHostContext.Provider,
+      { value: makePort(handle) },
+      e(ModelPickerControl, {
+        effectiveModel: 'openai/gpt-4o-mini',
+        activeThinkingLevel: 'medium',
+        onApply: () => {},
+      }),
+    ),
+  )
+  assert.match(composerHtml, /class="btn btn-ghost btn-sm composer-model-button"/)
+  assert.doesNotMatch(composerHtml, /helmx-model-picker-field/)
+})

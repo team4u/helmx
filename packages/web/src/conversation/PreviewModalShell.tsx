@@ -112,7 +112,7 @@ export function PreviewModalShell({
                 ) : null}
                 {isMobile ? (
                   <IconButton
-                    variant="default"
+                    variant="secondary"
                     size="sm"
                     icon={<HelmxIcon name="download" size={12} />}
                     label={t('common.download')}

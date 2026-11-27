@@ -350,7 +350,7 @@ function RowActionButton({
   succeeded: boolean
   onClick: () => void
 }) {
-  const variant = ownProp(VALID_ROW_ACTION_VARIANTS, tone) ?? 'default'
+  const variant = ownProp(VALID_ROW_ACTION_VARIANTS, tone) ?? 'secondary'
   return (
     <Button variant={variant} size="sm" pending={pending} icon={succeeded ? 'check' : undefined} onClick={onClick}>
       {label}

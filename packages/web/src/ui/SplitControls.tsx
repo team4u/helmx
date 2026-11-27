@@ -57,7 +57,7 @@ export function SplitToggleButton({
   return (
     <Tooltip content={tooltipLabel} side="bottom">
       <IconButton
-        variant={isSplitActive ? 'primary' : 'default'}
+        variant={isSplitActive ? 'primary' : 'secondary'}
         size="sm"
         className={`split-toggle-btn${isSplitActive ? ' split-active' : ''}`}
         icon={<HelmxIcon name="columns" size={12} />}

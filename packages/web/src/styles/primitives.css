@@ -2,21 +2,22 @@
  * 通用设计系统原语：按钮、徽章、行、卡片、表格、分屏与输入框
  * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
  * ========================================================================== */
-/* 基础操作按钮 */
+/* 基础操作按钮（默认尺码 md = 32px，圆角 7px，字号 13px） */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 30px;
-  padding: 0 10px;
-  border-radius: 6px;
+  height: var(--control-h-md);
+  padding: 0 11px;
+  border-radius: var(--control-radius-md);
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: var(--control-font-md);
   font-weight: 500;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-sm);
+  box-sizing: border-box;
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
@@ -46,15 +47,12 @@
   box-shadow: none;
 }
 
-/* 次级/轮廓操作按钮 */
+/* 次级/默认操作按钮（白底 1px 描边） */
 .btn-secondary {
-  height: 30px;
-  padding: 0 10px;
-  border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
-  color: var(--fg-secondary);
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
 }
 .btn-secondary:focus-visible:not(:disabled) {
   outline: none;
@@ -75,7 +73,6 @@
 
 /* 主要操作按钮（Solid Accent） */
 .btn-primary {
-  height: 30px;
   border: none;
   background: var(--accent);
   color: var(--fg-on-solid);
@@ -129,7 +126,6 @@
 
 /* 幽灵/文本操作按钮 */
 .btn-ghost {
-  height: 30px;
   border: none;
   background: transparent;
   color: var(--fg-secondary);
@@ -151,12 +147,12 @@
   box-shadow: none;
 }
 
-/* 尺寸阶梯修饰类 */
+/* 尺寸阶梯修饰类（sm = 28px / xs = 22px，严格等高对齐） */
 .btn-sm {
-  height: 28px;
-  padding: 0 8px;
-  font-size: 11.5px;
-  border-radius: var(--radius-xs);
+  height: var(--control-h-sm);
+  padding: 0 9px;
+  font-size: var(--control-font-sm);
+  border-radius: var(--control-radius-sm);
 }
 
 /* 实心小型危险按钮（批量操作栏删除动作等）：保留警示底色与可读反色 */
@@ -174,13 +170,13 @@
   }
 }
 
-/* 紧凑小按钮：胶囊卡头部 / 工作台窄列内联动作 */
+/* 紧凑小按钮：列表行尾 / 胶囊卡头部 / 工作台窄列内联动作 */
 .btn-xs {
-  height: 22px;
+  height: var(--control-h-xs);
   padding: 0 6px;
-  font-size: 11px;
+  font-size: var(--control-font-xs);
   gap: 4px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--control-radius-xs);
 }
 
 /* 行内轻量文字微操作按钮（轨迹折叠、重试、原始数据切换等）：置于 .btn-xs 之后干净覆盖固高与内边距 */
@@ -195,7 +191,7 @@
   color: var(--fg-muted);
   font-size: 11.5px;
   font-weight: 400;
-  border-radius: var(--radius-xs);
+  border-radius: var(--control-radius-xs);
 }
 @media (hover: hover) {
   .btn-inline:hover:not(:disabled) {
@@ -218,10 +214,10 @@
   border-radius: var(--radius-pill);
 }
 
-/* 纯图标按钮原语：固定正方形与内边距归零 */
-.btn-icon { width: 32px; height: 32px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.btn-icon-sm { width: 28px; height: 28px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.btn-icon-xs { width: 22px; height: 22px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+/* 纯图标按钮原语：固定正方形与内边距归零，严格对齐三档高度与圆角 */
+.btn-icon { width: var(--control-h-md); height: var(--control-h-md); border-radius: var(--control-radius-md); padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.btn-icon-sm { width: var(--control-h-sm); height: var(--control-h-sm); border-radius: var(--control-radius-sm); padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.btn-icon-xs { width: var(--control-h-xs); height: var(--control-h-xs); border-radius: var(--control-radius-xs); padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
 /* 幽灵与纯图标按钮开关激活态（IconButton active={true} 等）：悬停保持激活可读性 */
 .btn-ghost.is-active,
@@ -551,14 +547,14 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 32px;
+  height: var(--control-h-md);
   padding: 0 10px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--control-radius-md);
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--fg-muted);
   box-sizing: border-box;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .search-box:focus-within {
   border-color: var(--border-focus);
@@ -581,7 +577,7 @@
   outline: none;
   background: transparent;
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: var(--control-font-md);
   padding: 0;
   box-shadow: none;
 }
@@ -592,18 +588,26 @@
   box-shadow: none;
 }
 .search-box-toolbar {
-  min-width: min(260px, 100%);
-  flex: 1;
-  max-width: 420px;
+  width: 220px;
+  min-width: min(200px, 100%);
+  flex: 0 1 240px;
+  max-width: 260px;
 }
-.search-box-toolbar > .input,
-.search-box-toolbar > input {
-  font-size: 13px;
+.search-box-sm {
+  height: var(--control-h-sm);
+  padding: 0 8px;
+  gap: 6px;
+  border-radius: var(--control-radius-sm);
+}
+.search-box-sm > .input,
+.search-box-sm > input {
+  font-size: var(--control-font-sm);
 }
 .search-box-clear {
   flex-shrink: 0;
-  padding: 2px;
-  height: auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   color: var(--fg-subtle);
 }
 @media (hover: hover) {
@@ -844,9 +848,50 @@
  * 供全屏一级主舞台、扩展插件视图（Herdr / Swarm / Triggers / Magpie）统一排版
  * ========================================================================== */
 
-/* ScreenHost 唯一垂直滚动舞台（替代借穿会话专用 .timeline-scroll + .timeline-inner）：
+/* ScreenHost 唯一垂直滚动舞台与全站统一页面外壳（核心中心 / 总览 / 插件 Screen 共用）：
    容器自身不设 padding，由内层 .screen-container 按 data-screen-layout 决定留白与最大宽度；
-   标题去重与空页头收敛由 ScreenHostContext 结构化完成，零双滚动条，零 :has() 补丁。 */
+   标题去重与固定通栏工具栏由 ScreenHostContext / Screen topbar 结构化完成，零双滚动条。 */
+.screen-pane {
+  --screen-gutter: 24px;
+}
+
+.screen-host-toolbar-slot {
+  display: contents;
+}
+
+.screen-toolbar-bar {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 8px var(--screen-gutter, 24px);
+  box-sizing: border-box;
+  z-index: var(--z-sticky);
+}
+
+.screen-toolbar-bar > .screen-toolbar {
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+}
+
+.screen-toolbar-bar[data-screen-layout="full-bleed"] > .screen-toolbar {
+  max-width: none;
+  margin: 0;
+}
+
+.screen-toolbar-bar-inline {
+  position: sticky;
+  top: 0;
+  padding: 8px 0;
+}
+
+.screen-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .screen-host-body {
   flex: 1;
   min-height: 0;
@@ -955,28 +1000,40 @@
   color: var(--fg);
 }
 
-/* 全屏视图标准工具栏行（页头与正文之间的搜索/筛选/动作行）：
+/* 全屏视图标准单层工具栏行（左视图切换/筛选，右辅筛选与 28px 搜索框）：
    宿主与插件共用（@helmx/plugin-client ScreenToolbar）；主区居左、
-   .screen-toolbar-actions 右贴（margin-left:auto），窄屏自然换行不溢出。
-   工具栏内的 .search-box 获得标准伸展权重（替代各插件自立门户的 flex 规则）。 */
+   .screen-toolbar-actions 右贴（margin-left:auto），窄屏自然换行不溢出。 */
 .screen-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px 12px;
+  gap: 8px 12px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .screen-toolbar-actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
   margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
-.screen-toolbar .search-box {
+.screen-toolbar .search-box:not(.search-box-toolbar) {
   flex: 1 1 200px;
   min-width: 0;
+}
+
+@media (max-width: 680px) {
+  .screen-toolbar-bar {
+    padding: 8px 14px;
+  }
+  .screen-toolbar-actions {
+    margin-left: 0;
+    width: 100%;
+  }
 }
 
 /* ==========================================================================
@@ -1103,12 +1160,12 @@
 .textarea {
   width: 100%;
   padding: 0 9px;
-  border-radius: 7px;
+  border-radius: var(--control-radius-md);
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--fg);
   outline: none;
-  font-size: 12.5px;
+  font-size: var(--control-font-md);
   font-family: inherit;
   transition: border-color 100ms ease, box-shadow 100ms ease, background 100ms ease;
   box-sizing: border-box;
@@ -1116,16 +1173,99 @@
 
 .input,
 .select {
-  height: 30px;
-  line-height: 28px;
+  height: var(--control-h-md);
+  line-height: normal;
 }
 
 .input-sm {
-  height: 26px;
-  line-height: 24px;
-  padding: 0 7px;
-  font-size: 12px;
-  border-radius: var(--radius-xs);
+  height: var(--control-h-sm);
+  line-height: normal;
+  padding: 0 8px;
+  font-size: var(--control-font-sm);
+  border-radius: var(--control-radius-sm);
+}
+
+/* 带内联前缀/后缀的组合输入框容器（<Input prefix="..." suffix="..." />） */
+.helmx-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: var(--control-h-md);
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius-md);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: var(--control-font-md);
+  box-sizing: border-box;
+  transition: border-color 100ms ease, box-shadow 100ms ease, background 100ms ease;
+}
+
+.helmx-input-wrap-sm {
+  height: var(--control-h-sm);
+  padding: 0 8px;
+  font-size: var(--control-font-sm);
+  border-radius: var(--control-radius-sm);
+}
+
+.helmx-input-wrap:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+}
+
+.helmx-input-wrap.is-invalid {
+  border-color: var(--err);
+  background: color-mix(in srgb, var(--err-bg) 35%, var(--bg-elevated));
+}
+
+.helmx-input-wrap.is-invalid:focus-within {
+  border-color: var(--err);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 22%, transparent);
+}
+
+.helmx-input-wrap.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.helmx-input-prefix,
+.helmx-input-suffix {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  font-size: inherit;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.helmx-input-inner {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+  box-shadow: none;
+  box-sizing: border-box;
+}
+
+.helmx-input-inner:focus {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.helmx-input-inner:disabled {
+  opacity: 1;
+  cursor: not-allowed;
 }
 
 textarea.input,
@@ -1465,8 +1605,9 @@ input::placeholder {
 
 .helmx-select-card-trigger {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
   flex: 1 1 auto;
   min-width: 0;
   padding: 0;
@@ -1479,6 +1620,55 @@ input::placeholder {
   border-radius: var(--radius-xs);
 }
 
+.helmx-select-card-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--fg);
+}
+
+.helmx-select-card-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.helmx-select-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.helmx-select-card-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.helmx-select-card-desc {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.45;
+  min-height: 34px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 .helmx-select-card-trigger:disabled {
   cursor: not-allowed;
 }
@@ -1487,6 +1677,240 @@ input::placeholder {
   outline: none;
   background: var(--bg-hover);
   box-shadow: none;
+}
+
+/* Hairline Roster List 原语（<List> / <ListRow>）：圆角 1px 白底容器 + 发丝行分割 + 容器自适应折行 */
+.helmx-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  overflow: hidden;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  container-type: inline-size;
+}
+
+.helmx-list-row {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  transition: background-color var(--dur-fast) ease;
+}
+
+.helmx-list-row + .helmx-list-row {
+  border-top: 1px solid var(--line-2);
+}
+
+.helmx-list-row-interactive {
+  cursor: pointer;
+}
+
+.helmx-list-row.is-selected {
+  background: var(--accent-bg);
+}
+
+.helmx-list-row-warn {
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+
+.helmx-list-row-danger {
+  box-shadow: inset 2px 0 0 var(--err);
+}
+
+.helmx-list-row.is-disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.helmx-list-row-interactive:focus-within:not(.is-disabled) {
+  background: var(--bg-subtle);
+}
+
+.helmx-list-row-interactive.is-selected:focus-within:not(.is-disabled) {
+  background: var(--accent-bg);
+}
+
+.helmx-list-row-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.helmx-list-row-trigger,
+.helmx-list-row-static {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  align-items: center;
+  gap: 6px 14px;
+  min-height: 44px;
+  padding: 10px 10px 10px 14px;
+  box-sizing: border-box;
+}
+
+.helmx-list-row-trigger {
+  appearance: none;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.helmx-list-row-trigger:disabled {
+  cursor: not-allowed;
+}
+
+.helmx-list-row-trigger:focus-visible {
+  outline: none;
+}
+
+.helmx-list-compact .helmx-list-row-trigger,
+.helmx-list-compact .helmx-list-row-static {
+  min-height: 36px;
+  padding: 7px 10px 7px 12px;
+  gap: 4px 10px;
+}
+
+.helmx-list-row-cols-1 {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.helmx-list-row-cols-2 {
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
+}
+
+.helmx-list-row-cols-3 {
+  grid-template-columns: minmax(140px, 196px) minmax(200px, 1.25fr) minmax(0, 1fr);
+}
+
+.helmx-list-row-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.helmx-list-row-leading {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.helmx-list-row-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.helmx-list-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.helmx-list-row-desc {
+  display: block;
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.helmx-list-row-trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 12px;
+  flex-shrink: 0;
+}
+
+.helmx-list-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 10px;
+  flex-shrink: 0;
+  opacity: 0.78;
+}
+
+.helmx-list-row:focus-within .helmx-list-row-actions {
+  opacity: 1;
+}
+
+.helmx-list-row-extra {
+  padding: 0 14px 10px;
+  min-width: 0;
+}
+
+@media (hover: hover) {
+  .helmx-list-row-interactive:hover:not(.is-disabled) {
+    background: var(--bg-subtle);
+  }
+
+  .helmx-list-row-interactive.is-selected:hover:not(.is-disabled) {
+    background: var(--accent-bg);
+  }
+
+  .helmx-list-row .helmx-list-row-actions {
+    opacity: 0;
+    transition: opacity var(--dur-fast) ease;
+  }
+
+  .helmx-list-row:hover .helmx-list-row-actions,
+  .helmx-list-row:focus-within .helmx-list-row-actions {
+    opacity: 1;
+  }
+}
+
+@container (max-width: 680px) {
+  .helmx-list-row-cols-2,
+  .helmx-list-row-cols-3 {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    padding: 10px 8px 10px 12px;
+  }
+
+  .helmx-list-compact .helmx-list-row-cols-2,
+  .helmx-list-compact .helmx-list-row-cols-3 {
+    padding: 8px 8px 8px 12px;
+  }
+
+  .helmx-list-row-extra {
+    padding: 0 12px 10px;
+  }
+}
+
+@media (max-width: 680px) {
+  .helmx-list-row-cols-2,
+  .helmx-list-row-cols-3 {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    padding: 10px 8px 10px 12px;
+  }
+
+  .helmx-list-compact .helmx-list-row-cols-2,
+  .helmx-list-compact .helmx-list-row-cols-3 {
+    padding: 8px 8px 8px 12px;
+  }
+
+  .helmx-list-row-extra {
+    padding: 0 12px 10px;
+  }
 }
 
 /* CardGrid：响应式卡片网格，min(100%, ...) 保证窄分屏/移动端不横向溢出 */

@@ -93,8 +93,8 @@ export function MermaidPreviewModal({ code, svg, onClose }: { code: string; svg?
               <DialogTitle className="modal-title mermaid-modal-title">{t(C.previewTitle)}</DialogTitle>
               <div className="mermaid-modal-actions">
                 <Badge tone="neutral" mono className="tabular-nums">{Math.round(scale * 100)}%</Badge>
-                <IconButton variant="default" size="sm" icon="zoom-in" onClick={() => zoomBy(STEP)} label={t(C.zoomInTitle)} />
-                <IconButton variant="default" size="sm" icon="zoom-out" onClick={() => zoomBy(-STEP)} label={t(C.zoomOutTitle)} />
+                <IconButton variant="secondary" size="sm" icon="zoom-in" onClick={() => zoomBy(STEP)} label={t(C.zoomInTitle)} />
+                <IconButton variant="secondary" size="sm" icon="zoom-out" onClick={() => zoomBy(-STEP)} label={t(C.zoomOutTitle)} />
                 <Button size="sm" onClick={resetView} title={t(C.resetTitle)}>{t(C.reset)}</Button>
                 <Button size="sm" onClick={() => setView((v) => (v === 'diagram' ? 'source' : 'diagram'))}>
                   {view === 'diagram' ? t(C.viewSource) : t(C.viewDiagram)}

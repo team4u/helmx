@@ -14,13 +14,13 @@
 import * as React from 'react'
 import { HelmxIcon } from '../icons.js'
 
-export type ButtonVariant = 'default' | 'primary' | 'secondary' | 'ghost' | 'danger' | 'inline'
+export type ButtonVariant = 'secondary' | 'primary' | 'ghost' | 'danger' | 'inline'
 export type ButtonSize = 'xs' | 'sm' | 'md'
 
 export interface ButtonProps extends React.ComponentPropsWithoutRef<'button'> {
-  /** Visual prominence variant (default `'default'` uses primary ink `.btn`; `'inline'` renders a compact borderless text micro-action). */
+  /** Visual prominence variant (default `'secondary'` bordered button; `'inline'` renders a compact borderless text micro-action). */
   variant?: ButtonVariant
-  /** Control height / density tier (default `'md'`; omitted on `'inline'` keeps compact inline typography and 11px icons). */
+  /** Control height / density tier (default `'md'`: 32px / `'sm'`: 28px / `'xs'`: 22px; omitted on `'inline'` keeps compact inline typography and 11px icons). */
   size?: ButtonSize
   /** Render pill-shaped corners (`.btn-pill`). */
   pill?: boolean
@@ -59,9 +59,8 @@ export type IconButtonProps = Omit<React.ComponentPropsWithoutRef<'button'>, 'ch
   }
 
 const VARIANT_CLASS: Record<ButtonVariant, string> = {
-  default: 'btn',
-  primary: 'btn btn-primary',
   secondary: 'btn btn-secondary',
+  primary: 'btn btn-primary',
   ghost: 'btn btn-ghost',
   danger: 'btn btn-danger',
   inline: 'btn btn-inline',
@@ -109,7 +108,7 @@ function renderIconNode(
 /** Standard action button wrapping the host `.btn` family with ref forwarding and `pending` state. */
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   {
-    variant = 'default',
+    variant = 'secondary',
     size,
     pill = false,
     icon,

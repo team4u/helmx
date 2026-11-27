@@ -22,6 +22,7 @@ import { uiCopy } from '../ui-copy.js'
 import { ScreenToolbarContext } from './screen-toolbar-context.js'
 
 export type SearchBoxVariant = 'default' | 'toolbar'
+export type SearchBoxSize = 'sm' | 'md'
 
 const VARIANT_CONTAINER_CLASS: Record<SearchBoxVariant, string> = {
   default: 'search-box',
@@ -46,6 +47,8 @@ export interface SearchBoxProps {
   onChange: (nextValue: string) => void
   /** Visual density/width variant ('default' compact .search-box, 'toolbar' primary-stage toolbar spec). */
   variant?: SearchBoxVariant
+  /** Control height tier (default `'md'`: 32px; `'sm'`: 28px for compact toolbars and narrow panels). */
+  size?: SearchBoxSize
   placeholder?: string
   /** Accessible name of the input (mirrors the visible placeholder intent). */
   ariaLabel?: string
@@ -93,13 +96,14 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
     value,
     onChange,
     variant = 'default',
+    size = 'md',
     placeholder,
     ariaLabel,
     clearLabel = t(uiCopy.clear),
     className,
     inputClassName,
     clearButtonClassName,
-    icon = <HelmxIcon name="search" size={14} />,
+    icon,
     clearIcon = <HelmxIcon name="x" size={12} />,
     inputRef,
     onKeyDown,
@@ -115,11 +119,14 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
     ariaActiveDescendant,
   } = props
   const escapeClearEnabled = clearOnEscape ?? (variant === 'toolbar' || inScreenToolbar)
+  const resolvedIcon = icon !== undefined ? icon : <HelmxIcon name="search" size={size === 'sm' ? 13 : 14} />
 
-  const containerClass =
+  const baseContainerClass =
     variant === 'toolbar'
       ? mergeClassTokens(VARIANT_CONTAINER_CLASS.toolbar, className)
       : (className ?? VARIANT_CONTAINER_CLASS[variant])
+  const containerClass =
+    size === 'sm' ? mergeClassTokens(baseContainerClass, 'search-box-sm') : baseContainerClass
   const clearClass = clearButtonClassName ?? DEFAULT_CLEAR_BUTTON_CLASS
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
@@ -140,7 +147,7 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
 
   return (
     <div className={containerClass} style={style}>
-      {icon}
+      {resolvedIcon}
       <input
         ref={inputRef}
         // Shared search-box spec: never type="search" (native clear X would

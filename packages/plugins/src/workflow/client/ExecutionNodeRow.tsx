@@ -310,7 +310,7 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
           ) : null}
           {showResume && run !== undefined ? (
             <IconButton
-              variant="default"
+              variant="secondary"
               size="xs"
               icon="rotate-cw"
               pending={actionCtl.pendingKey === `resume:${run.id}`}

@@ -12,9 +12,10 @@
  * - This file only exports components and TS types (same contract as the host
  *   Fast Refresh rule).
  */
-import { Children, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
+import { Children, Fragment, isValidElement, type AriaRole, type ReactElement, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { usePluginTranslator } from './i18n.js'
+import { HelmxIcon } from './icons.js'
 import { useScreenHost } from './screen-host.js'
 import { uiCopy } from './ui-copy.js'
 import { LoadingState } from './ui/LoadingState.js'
@@ -30,7 +31,7 @@ function hasRenderable(node: ReactNode): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Screen: page container / header / title / subtitle
+// Screen: unified full-screen page shell (topbar / sticky toolbar / scroll stage)
 // ---------------------------------------------------------------------------
 
 /**
@@ -41,42 +42,163 @@ function hasRenderable(node: ReactNode): boolean {
 export type ScreenLayout = 'contained' | 'full-bleed'
 
 export interface ScreenProps {
-  /** Extra container class name (extension point for custom layouts). */
+  /** Extra container class name (`.screen-container`, or `.helmx-pane.screen-pane` when `topbar` is enabled). */
   className?: string
+  /** Extra class name appended to the inner `.screen-container` when `topbar` is enabled. */
+  contentClassName?: string
   /** Page layout mode ('contained' default, or 'full-bleed' for edge-to-edge screens). */
   layout?: ScreenLayout
-  /** Page header content: defaults to the title/subtitle/actions composition. */
+  /**
+   * Optional host-pane topbar mode for core full-screen views (System Centers, Overview)
+   * that are not mounted inside `ScreenHost`:
+   * - `true`: renders `.helmx-pane.screen-pane` + 46px `.pane-topbar` (`icon`, `title`,
+   *   `subtitle`, `actions`, `topbarEnd`) + fixed `.screen-toolbar-bar` + `.screen-host-body`;
+   * - custom `ReactNode`: renders that node directly as the topbar inside `.helmx-pane.screen-pane`;
+   * - omitted / `false` (default): standard `<Screen>` for `ScreenHost` and standalone/SSR views.
+   */
+  topbar?: boolean | ReactNode
+  /** Optional leading icon for the 46px topbar (HelmxIcon name string or custom ReactNode). */
+  icon?: string | ReactNode
+  /** Page header content (inline mode): defaults to the title/subtitle/actions composition. */
   header?: ReactNode
-  /** Main title text; use a custom header when an icon is needed. */
+  /** Main title text; rendered in `.pane-topbar .pane-title` in `topbar={true}` mode. */
   title?: ReactNode
-  /** Subtitle text (right of the title or below it, wrapping naturally). */
+  /** Subtitle text (inline header, or beside the title in `topbar={true}` mode). */
   subtitle?: ReactNode
   /**
-   * Action area on the right of the header (buttons etc.). Inside a host
-   * ScreenHost it is rendered into the host top bar `.pane-actions` (before the
-   * split controls); otherwise it sits at the right of the inline `.screen-header`.
-   * Ignored when a custom `header` is passed.
+   * Action area on the right of the header/topbar (buttons etc.). Inside a host
+   * ScreenHost it portals into `.pane-topbar .pane-actions` (before split controls);
+   * in `topbar={true}` mode it sits inside `.pane-topbar .pane-actions` before `topbarEnd`;
+   * otherwise it sits at the right of the inline `.screen-header`.
+   * Ignored when a custom `header` is passed in inline mode.
    */
   actions?: ReactNode
+  /**
+   * Trailing host controls rendered at the far right of `.pane-topbar .pane-actions`
+   * (after `actions`) in `topbar={true}` mode (e.g. split toggle / close-split button).
+   */
+  topbarEnd?: ReactNode
+  /**
+   * Fixed single-row toolbar rendered directly below the 46px topbar with a hairline
+   * bottom border (`.screen-toolbar-bar`). Inside `ScreenHost` with `toolbarSlot`,
+   * portals above `.screen-host-body`; in `topbar` mode renders directly between
+   * `.pane-topbar` and `.screen-host-body`; otherwise renders sticky inline (SSR-safe).
+   */
+  toolbar?: ReactNode
+  /** Optional diagnostics / notice banner rendered above the main body content. */
+  banner?: ReactNode
+  /** Optional overlays (DetailDrawer, Dialog, ConfirmDialog) rendered outside the scroll body. */
+  overlays?: ReactNode
+  /** Optional `data-view` attribute stamped on the outer root element. */
+  dataView?: string
+  /** Optional `id` forwarded to the scrollable `.screen-host-body` in `topbar` mode. */
+  bodyId?: string
+  /** Optional ARIA `role` forwarded to the scrollable `.screen-host-body` in `topbar` mode. */
+  bodyRole?: AriaRole
   children?: ReactNode
 }
 
+function renderTopbarIcon(icon: string | ReactNode): ReactNode {
+  if (typeof icon === 'string') {
+    return <HelmxIcon name={icon} size={14} />
+  }
+  return icon
+}
+
 /**
- * Full-screen page container: unified vertical rhythm, layout width and header
- * layout. header/title/subtitle/actions are composable — passing header ignores
- * the other three; when none is passed, no header is rendered.
- * When mounted inside the host ScreenHost (ScreenHostContext.hosted === true)
+ * Full-screen page shell: unified vertical rhythm, layout width, topbar, sticky
+ * hairline toolbar, and scroll stage shared by core centers and plugin screens.
+ *
+ * When mounted inside the host ScreenHost (`ScreenHostContext.hosted === true`)
  * without a custom `header`, omits the duplicate `.screen-title` structurally,
- * portals `actions` into the host top bar when it offers a slot, and collapses
- * `.screen-header` entirely when nothing else remains (zero hidden DOM, zero
- * CSS `:has()` patching).
- * Stamps data-screen-layout (contained | full-bleed) and, when rendered inside
- * a plugin PluginClientContext, data-plugin-id so scoped plugin CSS matches.
+ * portals `actions` into `headerActionsSlot` and `toolbar` into `toolbarSlot`
+ * when provided, and collapses `.screen-header` when nothing remains.
+ * When `topbar` is enabled (core centers / overview), renders the identical
+ * `.helmx-pane` + `.pane-topbar` + `.screen-toolbar-bar` + `.screen-host-body`
+ * skeleton without importing any web store or routing code.
  */
 export function Screen(props: ScreenProps): ReactNode {
-  const { className, layout = 'contained', header, title, subtitle, actions, children } = props
+  const {
+    className,
+    contentClassName,
+    layout = 'contained',
+    topbar,
+    icon,
+    header,
+    title,
+    subtitle,
+    actions,
+    topbarEnd,
+    toolbar,
+    banner,
+    overlays,
+    dataView,
+    bodyId,
+    bodyRole,
+    children,
+  } = props
   const pluginScopeId = usePluginScopeId()
-  const { hosted, headerActionsSlot } = useScreenHost()
+  const { hosted, headerActionsSlot, toolbarSlot } = useScreenHost()
+  const hasToolbar = hasRenderable(toolbar)
+  const hasBanner = hasRenderable(banner)
+  const hasOverlays = hasRenderable(overlays)
+
+  if (topbar !== undefined && topbar !== false) {
+    const hasIcon = hasRenderable(icon)
+    const hasTitle = hasRenderable(title)
+    const hasSubtitle = hasRenderable(subtitle)
+    const hasActions = hasRenderable(actions)
+    const hasTopbarEnd = hasRenderable(topbarEnd)
+    const customTopbar = topbar !== true ? topbar : null
+
+    return (
+      <div
+        className={joinClass('helmx-pane', 'screen-pane', className)}
+        data-view={dataView}
+        data-plugin-id={pluginScopeId}
+      >
+        {customTopbar !== null ? (
+          customTopbar
+        ) : (
+          <div className="pane-topbar">
+            <div className="pane-title-group">
+              {hasIcon && renderTopbarIcon(icon)}
+              {hasTitle && <span className="pane-title">{title}</span>}
+              {hasSubtitle && <span className="screen-subtitle">{subtitle}</span>}
+            </div>
+            {(hasActions || hasTopbarEnd) && (
+              <div className="pane-actions">
+                {actions}
+                {topbarEnd}
+              </div>
+            )}
+          </div>
+        )}
+        {hasToolbar && (
+          <div className="screen-toolbar-bar" data-screen-layout={layout} data-plugin-id={pluginScopeId}>
+            {toolbar}
+          </div>
+        )}
+        <div
+          id={bodyId}
+          role={bodyRole}
+          className="screen-host-body"
+          data-screen-host="true"
+        >
+          <div
+            className={joinClass('screen-container', contentClassName)}
+            data-screen-layout={layout}
+            data-plugin-id={pluginScopeId}
+          >
+            {hasBanner && <div className="screen-banner">{banner}</div>}
+            {children}
+          </div>
+        </div>
+        {hasOverlays ? overlays : null}
+      </div>
+    )
+  }
+
   const hasCustomHeader = hasRenderable(header)
   const showTitle = !hosted && hasRenderable(title)
   const showSubtitle = hasRenderable(subtitle)
@@ -86,16 +208,28 @@ export function Screen(props: ScreenProps): ReactNode {
   // `data-plugin-id` scoped CSS keep working); the inline header row then only
   // remains for a subtitle.
   const actionsInHostTopbar = hosted && headerActionsSlot != null && showActions
+  const toolbarInHostSlot = hosted && toolbarSlot != null && hasToolbar
   const hasHeader = hasCustomHeader || showTitle || showSubtitle || (showActions && !actionsInHostTopbar)
   const actionsCluster = showActions ? (
     <div className="stack-row" data-plugin-id={pluginScopeId}>
       {actions}
     </div>
   ) : null
+  const toolbarBar = hasToolbar ? (
+    <div
+      className={joinClass('screen-toolbar-bar', !toolbarInHostSlot ? 'screen-toolbar-bar-inline' : undefined)}
+      data-screen-layout={layout}
+      data-plugin-id={pluginScopeId}
+    >
+      {toolbar}
+    </div>
+  ) : null
+
   return (
     <div
       className={joinClass('screen-container', className)}
       data-screen-layout={layout}
+      data-view={dataView}
       data-plugin-id={pluginScopeId}
     >
       {hasHeader &&
@@ -111,7 +245,10 @@ export function Screen(props: ScreenProps): ReactNode {
           </div>
         ))}
       {actionsInHostTopbar && headerActionsSlot ? createPortal(actionsCluster, headerActionsSlot) : null}
+      {toolbarInHostSlot && toolbarSlot ? createPortal(toolbarBar, toolbarSlot) : toolbarBar}
+      {hasBanner && <div className="screen-banner">{banner}</div>}
       {children}
+      {hasOverlays ? overlays : null}
     </div>
   )
 }
@@ -170,8 +307,10 @@ export function ScreenToolbar(props: ScreenToolbarProps): ReactNode {
   const { children, actions, label, className } = props
   return (
     <div className={joinClass('screen-toolbar', className)} aria-label={label}>
-      <ScreenToolbarContext.Provider value={true}>{children}</ScreenToolbarContext.Provider>
-      {actions !== undefined && <div className="screen-toolbar-actions">{actions}</div>}
+      <ScreenToolbarContext.Provider value={true}>
+        {children}
+        {actions !== undefined && <div className="screen-toolbar-actions">{actions}</div>}
+      </ScreenToolbarContext.Provider>
     </div>
   )
 }

@@ -117,6 +117,15 @@ test('SearchBox SSR: toolbar variant renders search-box-toolbar and standard sea
   assert.ok(custom.includes('class="sidebar-search"'), 'default variant preserves custom container override')
   assert.ok(custom.includes('sidebar-search-input'), 'input class extension lands on the inner input')
   assert.ok(custom.includes('sidebar-search-clear'), 'clear button class override lands')
+
+  const compactToolbar = renderToString(
+    e(SearchBox, { variant: 'toolbar', size: 'sm', value: '', onChange: () => {}, placeholder: 'Filter...' }),
+  )
+  assert.ok(
+    compactToolbar.includes('class="search-box search-box-toolbar search-box-sm"'),
+    'size="sm" appends search-box-sm alongside search-box-toolbar',
+  )
+  assert.ok(compactToolbar.includes('width="13"'), 'size="sm" uses 13px search icon')
 })
 
 test('SearchBox DOM: typing emits unwrapped values and the clear button resets to empty string', { timeout: 60_000 }, async () => {
@@ -1587,5 +1596,119 @@ test('Screen DOM: hosted with a header actions slot portals actions into the slo
     })
     container.remove()
     slot.remove()
+  }
+})
+
+test('Screen DOM: hosted toolbarSlot portals sticky hairline toolbar bar above scroll body; unhosted renders inline sticky bar', { timeout: 60_000 }, async () => {
+  const { Screen } = await import('../src/primitives.js')
+  const { ScreenHostContext } = await import('../src/screen-host.js')
+  const toolbarSlot = document.createElement('div')
+  document.body.appendChild(toolbarSlot)
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  const toolbar = e(
+    ScreenToolbar,
+    {
+      label: 'Rules filter',
+      actions: e(SearchBox, { variant: 'toolbar', size: 'sm', value: 'abc', onChange: () => {}, ariaLabel: 'Filter rules' }),
+    },
+    e('span', null, 'Segments'),
+  )
+  try {
+    // 1) Hosted with toolbarSlot: portals into host slot above scroll body
+    await act(async () => {
+      root.render(
+        e(ScreenHostContext.Provider, { value: { hosted: true, toolbarSlot } },
+          e(Screen, { title: 'Rules', toolbar }, e('div', null, 'Body'))),
+      )
+    })
+    assert.ok(toolbarSlot.querySelector('.screen-toolbar-bar > .screen-toolbar') !== null, 'toolbar portals into host toolbarSlot')
+    assert.ok(toolbarSlot.querySelector('.screen-toolbar-bar-inline') === null, 'portalled toolbar omits inline modifier')
+    assert.ok(container.querySelector('.screen-toolbar-bar') === null, 'no duplicate toolbar inside scroll body')
+
+    // 2) Hosted without toolbarSlot: falls back to inline sticky toolbar bar
+    await act(async () => {
+      root.render(
+        e(ScreenHostContext.Provider, { value: { hosted: true } },
+          e(Screen, { title: 'Rules', toolbar }, e('div', null, 'Body'))),
+      )
+    })
+    assert.equal(toolbarSlot.children.length, 0, 'toolbarSlot clears when no slot target is passed')
+    assert.ok(container.querySelector('.screen-toolbar-bar.screen-toolbar-bar-inline > .screen-toolbar') !== null)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+    toolbarSlot.remove()
+  }
+})
+
+test('ListRow DOM: surface and trigger clicks invoke onSelect once; sibling trailing/actions clicks and disabled rows never invoke onSelect', { timeout: 60_000 }, async () => {
+  const { List, ListRow } = await import('../src/ui/List.js')
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  const events: string[] = []
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          List,
+          { label: 'Rules' },
+          e(ListRow, {
+            title: 'rule-1',
+            description: 'Enabled rule',
+            trailing: e(Switch, {
+              checked: true,
+              onChange: () => events.push('toggle'),
+              'aria-label': 'Toggle rule-1',
+            }),
+            actions: e(IconButton, {
+              icon: 'trash-2',
+              size: 'xs',
+              label: 'Delete rule-1',
+              onClick: () => events.push('delete'),
+            }),
+            onSelect: () => events.push('select-1'),
+          }),
+          e(ListRow, {
+            title: 'rule-2',
+            disabled: true,
+            onSelect: () => events.push('select-2'),
+          }),
+        ),
+      )
+    })
+    const rows = [...container.querySelectorAll<HTMLElement>('.helmx-list-row')]
+    assert.equal(rows.length, 2)
+    const row1 = rows[0]!
+    const trigger1 = row1.querySelector<HTMLButtonElement>('button.helmx-list-row-trigger')!
+    const switch1 = row1.querySelector<HTMLButtonElement>('[role="switch"]')!
+    const delete1 = row1.querySelector<HTMLButtonElement>('.helmx-list-row-actions button')!
+    const row2 = rows[1]!
+
+    await act(async () => {
+      trigger1.click()
+    })
+    assert.deepEqual(events, ['select-1'], 'trigger button fires onSelect exactly once')
+
+    await act(async () => {
+      row1.click()
+    })
+    assert.deepEqual(events, ['select-1', 'select-1'], 'clicking row surface invokes onSelect')
+
+    await act(async () => {
+      switch1.click()
+      delete1.click()
+      row2.click()
+    })
+    assert.deepEqual(events, ['select-1', 'select-1', 'toggle', 'delete'], 'sibling trailing/actions never trigger row select, and disabled row stays inert')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
   }
 })

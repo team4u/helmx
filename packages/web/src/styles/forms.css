@@ -16,19 +16,19 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: 30px;
+  height: var(--control-h-md);
   padding: 0 8px 0 9px;
-  border-radius: 7px;
+  border-radius: var(--control-radius-md);
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: var(--control-font-md);
   font-family: inherit;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-sm);
   transition: background 100ms ease, border-color 100ms ease, box-shadow 100ms ease;
   min-width: 0;
   width: 100%;
@@ -188,18 +188,110 @@
 }
 
 .helmx-select-sm .helmx-select-trigger {
-  height: 24px;
-  padding: 0 6px;
-  font-size: 11px;
-  border-radius: 5px;
+  height: var(--control-h-sm);
+  padding: 0 7px 0 8px;
+  font-size: var(--control-font-sm);
+  border-radius: var(--control-radius-sm);
   border-color: var(--border);
 }
 
 .helmx-select-sm .helmx-select-option {
-  height: 24px;
-  padding: 0 6px;
-  font-size: 11px;
-  border-radius: 4px;
+  height: var(--control-h-sm);
+  padding: 0 8px;
+  font-size: var(--control-font-sm);
+  border-radius: var(--radius-xs);
+}
+
+/* 表单态 ModelPickerControl (variant="field")：与 Select 共享 32px/28px 几何尺码与交互反馈 */
+.helmx-model-picker-field {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.helmx-model-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h-md);
+  padding: 0 8px 0 9px;
+  border-radius: var(--control-radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: var(--control-font-md);
+  font-weight: 400;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  box-shadow: var(--shadow-sm);
+  box-sizing: border-box;
+  transition: background 100ms ease, border-color 100ms ease, box-shadow 100ms ease;
+}
+
+.helmx-model-picker-sm .helmx-model-picker-trigger {
+  height: var(--control-h-sm);
+  padding: 0 7px 0 8px;
+  font-size: var(--control-font-sm);
+  border-radius: var(--control-radius-sm);
+}
+
+@media (hover: hover) {
+  .helmx-model-picker-trigger:hover:not(:disabled) {
+    background: var(--bg-subtle);
+    border-color: var(--border-strong);
+    color: var(--fg);
+  }
+}
+
+.helmx-model-picker-trigger:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.helmx-model-picker-trigger:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+}
+
+.helmx-model-picker-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.helmx-model-picker-trigger[data-invalid='true'] {
+  border-color: var(--err);
+  background: color-mix(in srgb, var(--err-bg) 35%, var(--bg-elevated));
+}
+
+.helmx-model-picker-trigger[data-invalid='true']:focus-visible {
+  outline: none;
+  border-color: var(--err);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--err) 22%, transparent);
+}
+
+.helmx-model-picker-trigger .composer-model-label {
+  margin-right: auto;
+  text-align: left;
+}
+
+.helmx-model-picker-placeholder {
+  color: var(--fg-muted);
+}
+
+.helmx-model-picker-chevron {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  transition: transform 120ms ease;
+}
+
+.helmx-model-picker-trigger[aria-expanded='true'] .helmx-model-picker-chevron {
+  transform: rotate(180deg);
 }
 
 .helmx-select.mono .helmx-select-trigger,

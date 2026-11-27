@@ -345,7 +345,7 @@ export function TiersManagerScreen(
         <>
           {savedCount > 0 && (
             <Button
-              variant="default"
+              variant="secondary"
               size="sm"
               icon="layers"
               aria-label={t(C.saveAsTemplate)}

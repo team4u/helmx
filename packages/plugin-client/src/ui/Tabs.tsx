@@ -78,7 +78,7 @@ export interface TabsProps extends React.ComponentPropsWithoutRef<typeof TabsPri
   size?: TabsSize
 }
 
-export const Tabs = forwardRef<React.ComponentRef<typeof TabsPrimitive.Root>, TabsProps>(
+const TabsRoot = forwardRef<React.ComponentRef<typeof TabsPrimitive.Root>, TabsProps>(
   function Tabs({ variant = 'underline', size, value, defaultValue, onValueChange, className, ...props }, ref) {
     const isControlled = value !== undefined
     const [uncontrolledValue, setUncontrolledValue] = useState(defaultValue ?? '')
@@ -251,6 +251,31 @@ export const TabsContent = forwardRef<React.ComponentRef<typeof TabsPrimitive.Co
   },
 )
 
+export interface TabCountProps extends React.ComponentPropsWithoutRef<'span'> {}
+
+/** Lightweight inline tabular-nums count rendered inside tab triggers (`TabsTrigger` / `SegmentedControl`). */
+export const TabCount = forwardRef<HTMLSpanElement, TabCountProps>(function TabCount(
+  { className = '', ...props },
+  ref,
+) {
+  const countClass = ['helmx-tab-count', 'tabular-nums', className].filter(Boolean).join(' ')
+  return <span ref={ref} className={countClass} {...props} />
+})
+
+export type TabsCompoundComponent = typeof TabsRoot & {
+  List: typeof TabsList
+  Trigger: typeof TabsTrigger
+  Content: typeof TabsContent
+  Count: typeof TabCount
+}
+
+export const Tabs: TabsCompoundComponent = Object.assign(TabsRoot, {
+  List: TabsList,
+  Trigger: TabsTrigger,
+  Content: TabsContent,
+  Count: TabCount,
+})
+
 export function SegmentedControl<T extends string = string>({
   value,
   defaultValue,
@@ -293,14 +318,3 @@ export function SegmentedControl<T extends string = string>({
     </Tabs>
   )
 }
-
-// Compound component attachments
-type TabsCompound = typeof Tabs & {
-  List: typeof TabsList
-  Trigger: typeof TabsTrigger
-  Content: typeof TabsContent
-}
-
-;(Tabs as TabsCompound).List = TabsList
-;(Tabs as TabsCompound).Trigger = TabsTrigger
-;(Tabs as TabsCompound).Content = TabsContent

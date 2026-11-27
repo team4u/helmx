@@ -281,7 +281,7 @@ export function ConversationPaneActions({
       {showWorkbench ? (
         <Button
           size="sm"
-          variant={workbench.active ? 'primary' : 'default'}
+          variant={workbench.active ? 'primary' : 'secondary'}
           icon={<HelmxIcon name="panel-right" size={12} />}
           aria-label={workbenchCount > 0 ? t('conv.pane.workbenchWithCount', { count: workbenchCount }) : t('conv.pane.workbench')}
           title={t('conv.pane.workbenchTitle', { shortcut: formatModShortcut('J') })}

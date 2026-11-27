@@ -148,7 +148,7 @@ export function PluginCard({
           <Stack direction="horizontal" gap="xs" align="center" className="plugin-card-actions">
             {plugin.managed !== undefined && onUpdate !== undefined && (
               <IconButton
-                variant="default"
+                variant="secondary"
                 size="xs"
                 icon={<HelmxIcon name="refresh-cw" size={10} className={updating ? 'spin' : undefined} />}
                 className="plugin-card-update-btn"
@@ -187,7 +187,7 @@ export function PluginCard({
                   {t('plugins.openView')}
                 </Button>
                 <IconButton
-                  variant="default"
+                  variant="secondary"
                   size="xs"
                   icon="columns"
                   className="split-toggle-btn plugin-card-split-btn"
