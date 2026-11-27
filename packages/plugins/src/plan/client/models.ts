@@ -2,7 +2,7 @@
  * Pure runtime parsers, eligibility guards, and presentation helpers for builtin:plan client.
  * Zero React or DOM dependencies (Fast Refresh friendly).
  */
-import type { BadgeTone, StatusLightTone } from '@helmx/plugin-client'
+import type { BadgeTone, StatusLightTone } from '@helmx/ui'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import {
   PLAN_PLUGIN_ID,

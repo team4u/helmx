@@ -1,11 +1,7 @@
 /**
  * Unified workflow status and title resolution model (`aborted` preserved honestly — never collapsed to done).
  */
-import {
-  DEFAULT_HELMX_LOCALE,
-  resolveLocalizedText,
-  type HelmxLocale,
-} from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/ui'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts-types.js'
 import {

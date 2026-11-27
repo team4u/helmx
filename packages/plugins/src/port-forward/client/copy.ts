@@ -2,8 +2,7 @@
  * Display copy for `builtin:port-forward` UI surfaces (pure copy table + builders,
  * no component exports — Fast Refresh friendly; zero Emoji).
  */
-import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
-import { resolveLocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/ui'
 import type { DraftValidationErrorCode, PortForwardViewStatusKind } from './models.ts'
 
 export const PF_SCREEN_TITLE: LocalizedText = { en: 'Port Forwarding', 'zh-CN': '端口映射' }

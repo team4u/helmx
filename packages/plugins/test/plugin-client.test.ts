@@ -477,11 +477,12 @@ test('default+named / as 别名 import：共享 shim 生成合法 ESM 绑定（�
     [
       "import ReactDef, { useState as state, useMemo } from 'react'",
       "import * as Lucide from 'lucide-react'",
+      "import { Button as UiButton } from '@helmx/ui'",
       "import { usePluginContext } from '@helmx/plugin-client'",
       'export function AliasPanel() {',
       '  const [n] = state(1)',
       '  const doubled = useMemo(() => n * 2, [n])',
-      '  if (typeof usePluginContext !== \'function\') return null',
+      '  if (typeof usePluginContext !== \'function\' || typeof UiButton !== \'function\') return null',
       '  return ReactDef.createElement(\'div\', null, `alias:${doubled}:${typeof Lucide.Save}`)',
       '}',
       'export const reactDefaultIsObject = typeof ReactDef.createElement',
@@ -501,6 +502,7 @@ test('default+named / as 别名 import：共享 shim 生成合法 ESM 绑定（�
     const g2 = globalThis as unknown as Record<string, unknown>
     g2.__helmx_shared_react = fakeReact
     g2.__helmx_shared_lucide_react = { Save: () => null, Activity: () => null }
+    g2.__helmx_shared_ui = { Button: () => null }
     g2.__helmx_shared_plugin_client = { usePluginContext: () => null, usePluginDoc: () => undefined }
     const url = `data:text/javascript;base64,${Buffer.from(result.code, 'utf8').toString('base64')}`
     const mod = (await import(url)) as Record<string, unknown>
@@ -712,6 +714,7 @@ function createComponentHarness<P>(initialProps: P) {
   const g = globalThis as Record<string, unknown>
   const prevReact = g.__helmx_shared_react
   const prevJsx = g.__helmx_shared_react_jsx_runtime
+  const prevUi = g.__helmx_shared_ui
   const prevClient = g.__helmx_shared_plugin_client
 
   const depsChanged = (a?: unknown[], b?: unknown[]): boolean => {
@@ -787,12 +790,14 @@ function createComponentHarness<P>(initialProps: P) {
     DialogClose: (props: Record<string, unknown>) => ({ type: 'DialogClose', props }),
   }
   g.__helmx_shared_react_jsx_runtime = { jsx: makeEl, jsxs: makeEl }
+  g.__helmx_shared_ui = {
+    resolveLocalizedText: (lt: Record<string, string>, locale: string) => lt[locale] ?? lt.en ?? '',
+    ...ui,
+  }
   g.__helmx_shared_plugin_client = {
     usePluginContext: () => ({ theme: 'dark' }),
     usePluginLocale: () => 'en',
     usePluginTranslator: () => (lt: Record<string, string>) => lt.en ?? '',
-    resolveLocalizedText: (lt: Record<string, string>, locale: string) => lt[locale] ?? lt.en ?? '',
-    ...ui,
   }
 
   const render = (Component: (props: P) => unknown, nextProps: P = currentProps): unknown => {
@@ -825,6 +830,7 @@ function createComponentHarness<P>(initialProps: P) {
     unmount()
     g.__helmx_shared_react = prevReact
     g.__helmx_shared_react_jsx_runtime = prevJsx
+    g.__helmx_shared_ui = prevUi
     g.__helmx_shared_plugin_client = prevClient
   }
 

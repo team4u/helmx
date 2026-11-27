@@ -2,7 +2,7 @@
  * `builtin:port-forward` domain styles.
  *
  * Page shell, toolbar, Hairline Roster List, compact node-slot list, and drawers
- * come from `@helmx/plugin-client`; all `:hover` rules sit inside `@media (hover: hover)`.
+ * come from `@helmx/ui`; all `:hover` rules sit inside `@media (hover: hover)`.
  */
 .pf-route-box {
   display: inline-flex;

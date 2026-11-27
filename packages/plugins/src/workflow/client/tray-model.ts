@@ -1,7 +1,7 @@
 /**
  * Active tray projection & worktree badge display helpers.
  */
-import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/ui'
 import { buildExecutionTree, type BuildExecutionTreeInput } from './execution-tree.js'
 import {
   resolveNodeTitle,

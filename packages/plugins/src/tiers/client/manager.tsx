@@ -22,8 +22,12 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-  formatModelShortName,
   formatTime,
+  type LocalizedText,
+  type StatusLightTone,
+} from '@helmx/ui'
+import {
+  formatModelShortName,
   resolveDefaultChainThinkingLevel,
   useHostModels,
   usePluginAction,
@@ -32,8 +36,6 @@ import {
   usePluginLocale,
   usePluginTranslator,
   useScreenDrawer,
-  type LocalizedText,
-  type StatusLightTone,
 } from '@helmx/plugin-client'
 import {
   ORCHESTRATOR_DEFAULT_MAX_STEPS,

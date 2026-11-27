@@ -77,12 +77,14 @@ test('SwarmWorkbenchPanel: unmount and conversationId change guard stale abort_w
     createRoot: (container: Element) => { render(node: import('react').ReactNode): void; unmount(): void }
   }
   const LucideReact = req('lucide-react') as unknown
+  const HelmxUi = await import('@helmx/ui')
   const HelmxPluginClient = await import('@helmx/plugin-client')
   const { PluginClientContext, PluginClientHostContext } = HelmxPluginClient
 
   const g = globalThis as Record<string, unknown>
   g[CLIENT_SHARED_GLOBALS['react']!] = React
   g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+  g[CLIENT_SHARED_GLOBALS['@helmx/ui']!] = HelmxUi
   g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = HelmxPluginClient
   g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
   g['IS_REACT_ACT_ENVIRONMENT'] = true
@@ -187,10 +189,14 @@ test('SwarmWorkbenchPanel: unmount and conversationId change guard stale abort_w
   const root = ReactDOMClient.createRoot(host)
   const renderPanel = (conv: ConversationSummary) =>
     React.createElement(
-      PluginClientHostContext.Provider,
-      { value: hostPort },
-      React.createElement(PluginClientContext.Provider, { value: { ...ctx, conversationId: conv.id } },
-        React.createElement(SwarmWorkbenchPanel, { conversation: conv }),
+      HelmxUi.UiLocaleProvider,
+      { locale: 'en' },
+      React.createElement(
+        PluginClientHostContext.Provider,
+        { value: hostPort },
+        React.createElement(PluginClientContext.Provider, { value: { ...ctx, conversationId: conv.id } },
+          React.createElement(SwarmWorkbenchPanel, { conversation: conv }),
+        ),
       ),
     )
 

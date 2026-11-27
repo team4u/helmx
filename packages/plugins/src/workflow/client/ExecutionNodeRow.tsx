@@ -11,12 +11,14 @@ import {
   HelmxIcon,
   IconButton,
   KvGrid,
-  MarkdownView,
-  PluginSlot,
   StatusLight,
   formatCompactTimestamp,
   formatDurationMs,
   resolveLocalizedText,
+} from '@helmx/ui'
+import {
+  MarkdownView,
+  PluginSlot,
   useConversation,
   usePluginAction,
   usePluginContext,

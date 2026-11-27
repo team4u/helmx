@@ -15,6 +15,8 @@ import {
   PopoverClose,
   PopoverContent,
   PopoverTrigger,
+} from '@helmx/ui'
+import {
   useHostModels,
   usePluginAction,
   usePluginConfig,

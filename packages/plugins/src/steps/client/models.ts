@@ -2,7 +2,7 @@
  * Pure runtime parsers, eligibility guards, and presentation view models for builtin:steps client.
  * Zero React or DOM dependencies (Fast Refresh friendly).
  */
-import type { BadgeTone, StatusLightTone } from '@helmx/plugin-client'
+import type { BadgeTone, StatusLightTone } from '@helmx/ui'
 import type { ConversationStatus, ConversationSummary } from '@helmx/protocol/browser'
 import type {
   StepItem,

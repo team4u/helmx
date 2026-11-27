@@ -2,7 +2,7 @@
  * @json-render standard primitive dispatcher (21 built-in components, Fast Refresh compliant).
  */
 import type { ComponentType, ReactNode } from 'react'
-import { Callout } from '@helmx/plugin-client'
+import { Callout } from '@helmx/ui'
 import { jsonRenderUnknownComponent } from './copy.ts'
 import type { NormalizedSpecNode } from './spec-normalize.ts'
 import type { SpecRenderContext } from './primitive-context.ts'

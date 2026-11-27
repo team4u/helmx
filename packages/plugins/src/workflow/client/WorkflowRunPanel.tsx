@@ -15,7 +15,6 @@ import {
   Input,
   KvGrid,
   LoadingState,
-  MarkdownView,
   PopoverContent,
   PopoverRoot,
   PopoverTrigger,
@@ -24,11 +23,14 @@ import {
   formatCompactTimestamp,
   formatOffsetMs,
   resolveLocalizedText,
+  type HelmxLocale,
+} from '@helmx/ui'
+import {
+  MarkdownView,
   useConversations,
   usePluginAction,
   usePluginContext,
   usePluginLocale,
-  type HelmxLocale,
 } from '@helmx/plugin-client'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts-types.js'
 import {

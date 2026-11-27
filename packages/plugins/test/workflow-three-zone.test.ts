@@ -1,6 +1,6 @@
 /**
  * builtin:workflow 三区零重复与无损信息客户端全链路验收测试：
- * 1. 底部活动托盘（WorkflowActiveTray，基于 @helmx/plugin-client DockTray / DockTrayRow）：
+ * 1. 底部活动托盘（WorkflowActiveTray，基于 @helmx/ui DockTray / DockTrayRow）：
  *    - 无在途任务返回 null（0px，零 1Hz 计时器挂载）；
  *    - 在途展示单行 HUD，展开列任务清单并支持中止、工作台跳转、子会话抽屉导航，收敛后归零；
  *    - 容器行与嵌套子代理行在 blocked 审批态优先展示审批标题（压过 working 命令）；

@@ -1,11 +1,7 @@
 /**
  * Live one-line activity snippet shared by ActiveTray and Workbench rows.
  */
-import {
-  DEFAULT_HELMX_LOCALE,
-  resolveLocalizedText,
-  type HelmxLocale,
-} from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/ui'
 import type { AskSpec, ConversationLive, ConversationSummary } from '@helmx/protocol/browser'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts-types.js'
 import { COPY, STATUS_COPY } from './copy.js'

@@ -1,5 +1,5 @@
 /**
- * 后台结算汇报折叠展示测试（builtin:workflow 真实 client 编译产物 + @helmx/plugin-client）：
+ * 后台结算汇报折叠展示测试（builtin:workflow 真实 client 编译产物 + @helmx/ui / @helmx/plugin-client）：
  * 1. 纯解析 parsers.ts：直读 meta.report（保留 string/JSON/null/false/0/空串、failed/aborted、
  *    execution.conversationId、otherRunningTasks）；缺失/损坏返回 invalid 且保留原文，绝不刮文本；
  * 2. BackgroundReportCard DOM：完成态默认收起，失败/中止/损坏默认展开；复制原文实写剪贴板、

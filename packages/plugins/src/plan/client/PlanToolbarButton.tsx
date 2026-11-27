@@ -10,14 +10,8 @@
 import { useCallback, useRef } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerToolbarSlotProps } from '@helmx/protocol/browser'
-import {
-  HelmxIcon,
-  StatusLight,
-  resolveLocalizedText,
-  useComposerCommand,
-  usePanelShortcut,
-  usePluginLocale,
-} from '@helmx/plugin-client'
+import { HelmxIcon, StatusLight, resolveLocalizedText } from '@helmx/ui'
+import { useComposerCommand, usePanelShortcut, usePluginLocale } from '@helmx/plugin-client'
 import { PLAN_COPY } from './copy.ts'
 import {
   isPlanEligibleConversation,

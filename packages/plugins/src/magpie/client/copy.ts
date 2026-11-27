@@ -5,8 +5,7 @@
  * Every human-visible string resolves against the active host locale; gateway
  * diagnostics, lastError and quota data from the status doc pass through unchanged.
  */
-import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
-import { resolveLocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/ui'
 
 /** Panel header and refresh action. */
 export const MAGPIE_TITLE: LocalizedText = { en: 'Magpie Gateway', 'zh-CN': 'Magpie 网关' }

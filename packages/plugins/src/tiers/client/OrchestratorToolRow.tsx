@@ -11,12 +11,10 @@ import {
   HelmxIcon,
   StatusLight,
   formatDurationMs,
-  formatModelShortName,
   resolveLocalizedText,
-  usePluginLocale,
-  useToolActivity,
   type StatusLightTone,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { formatModelShortName, usePluginLocale, useToolActivity } from '@helmx/plugin-client'
 import { extractFirstErrorLine } from './borrow-models.ts'
 import { TIERS_COPY as C, orchestratorTransitionSummary } from './copy.ts'
 import { TIERS_EXIT_PLAN_MODE_TOOL, parseOrchestratorTransitionMeta } from './orchestrator-models.ts'

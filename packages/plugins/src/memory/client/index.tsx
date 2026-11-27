@@ -17,10 +17,8 @@ import {
   Stack,
   Switch,
   Textarea,
-  usePluginContext,
-  usePluginLocale,
-  usePluginTranslator,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 import {
   MEMORY_COPY as C,
   memoryCharCount,

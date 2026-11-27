@@ -11,8 +11,7 @@
  * errors are never silently swallowed). Degraded reasons are display copy and
  * resolve against the active host locale.
  */
-import type { HelmxLocale } from '@helmx/plugin-client'
-import { DEFAULT_HELMX_LOCALE } from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/ui'
 import {
   jsonRenderElementCycle,
   jsonRenderElementReused,

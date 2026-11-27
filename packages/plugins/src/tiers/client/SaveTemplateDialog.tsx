@@ -9,7 +9,7 @@ import {
   ModalDialog,
   Stack,
   Textarea,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { validateTemplateForm } from './models.ts'
 import { TIERS_COPY as C, tiersTemplateCountSummary } from './copy.ts'
 

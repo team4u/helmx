@@ -4,9 +4,19 @@
 import type { ReactNode } from 'react'
 import type { WorkbenchPanelProps } from '@helmx/protocol/browser'
 import {
-  Badge, Button, Callout, EmptyState, LoadingState, Stack, StatusLight, Tooltip, resolveLocalizedText,
-  type BadgeTone, type LocalizedText, type StatusLightTone,
-} from '@helmx/plugin-client'
+  Badge,
+  Button,
+  Callout,
+  EmptyState,
+  LoadingState,
+  Stack,
+  StatusLight,
+  Tooltip,
+  resolveLocalizedText,
+  type BadgeTone,
+  type LocalizedText,
+  type StatusLightTone,
+} from '@helmx/ui'
 import * as C from './copy.ts'
 import { useSwarmPanelController } from './useSwarmPanelController.ts'
 import {

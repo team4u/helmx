@@ -6,7 +6,7 @@
  * parsing is lenient: when the doc has not arrived we return safe defaults
  * instead of fabricating data.
  */
-import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/ui'
 import { magpieBoolLabel } from './copy.ts'
 
 export interface MagpieStatusQuotaView {

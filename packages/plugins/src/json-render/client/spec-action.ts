@@ -23,8 +23,7 @@
  * notifications, so they resolve against the host locale (execution errors
  * from the host pass through unchanged).
  */
-import type { HelmxLocale } from '@helmx/plugin-client'
-import { DEFAULT_HELMX_LOCALE } from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/ui'
 import { evaluateSpecValue, type EvalScope } from './evaluator.js'
 import {
   jsonRenderActionMissingActionId,

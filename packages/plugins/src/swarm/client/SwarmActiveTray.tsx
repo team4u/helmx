@@ -4,8 +4,21 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helmx/protocol/browser'
 import {
-  Badge, Button, DockTray, DockTrayRow, IconButton, Tooltip, resolveLocalizedText,
-  useConversation, useConversations, usePluginContext, usePluginDoc, usePluginLocale, usePluginSessionDoc,
+  Badge,
+  Button,
+  DockTray,
+  DockTrayRow,
+  IconButton,
+  Tooltip,
+  resolveLocalizedText,
+} from '@helmx/ui'
+import {
+  useConversation,
+  useConversations,
+  usePluginContext,
+  usePluginDoc,
+  usePluginLocale,
+  usePluginSessionDoc,
 } from '@helmx/plugin-client'
 import { SWARM_WORKBENCH_PANEL_ID, type SwarmIndexDoc } from './models.ts'
 import { buildSwarmTraySummary, resolveSwarmTrayLiveSnippet, type SwarmTrayItem } from './model-tray.ts'

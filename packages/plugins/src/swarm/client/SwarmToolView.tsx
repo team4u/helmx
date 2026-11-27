@@ -4,8 +4,19 @@
 import { useMemo, type ReactNode } from 'react'
 import type { ToolViewProps } from '@helmx/protocol/browser'
 import {
-  Badge, HelmxIcon, StatusLight, formatDurationMs, resolveLocalizedText,
-  usePluginContext, usePluginDoc, usePluginLocale, useToolActivity, type HelmxLocale, type StatusLightTone,
+  Badge,
+  HelmxIcon,
+  StatusLight,
+  formatDurationMs,
+  resolveLocalizedText,
+  type HelmxLocale,
+  type StatusLightTone,
+} from '@helmx/ui'
+import {
+  usePluginContext,
+  usePluginDoc,
+  usePluginLocale,
+  useToolActivity,
 } from '@helmx/plugin-client'
 import { SWARM_WORKBENCH_PANEL_ID, type SwarmIndexDoc } from './models.ts'
 import { isPlainObject, resolveConversationBoardLink } from './board-model.ts'

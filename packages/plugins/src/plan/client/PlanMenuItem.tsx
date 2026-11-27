@@ -7,13 +7,8 @@
  */
 import type { ReactNode } from 'react'
 import type { ComposerMenuSlotProps } from '@helmx/protocol/browser'
-import {
-  DropdownMenuItem,
-  HelmxIcon,
-  Kbd,
-  resolveLocalizedText,
-  usePluginLocale,
-} from '@helmx/plugin-client'
+import { DropdownMenuItem, HelmxIcon, Kbd, resolveLocalizedText } from '@helmx/ui'
+import { usePluginLocale } from '@helmx/plugin-client'
 import { PLAN_COPY } from './copy.ts'
 import { isPlanEligibleConversation, isStandbyPlanArmed } from './models.ts'
 import { PLAN_PLUGIN_ID } from './types.ts'

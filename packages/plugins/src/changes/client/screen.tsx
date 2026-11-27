@@ -22,14 +22,16 @@ import {
   Stack,
   formatCompactTimestamp,
   resolveLocalizedText,
+  type LocalizedText,
+  type SelectOption,
+} from '@helmx/ui'
+import {
   useConversation,
   useConversations,
   usePluginContext,
   usePluginLocale,
   usePlugins,
   useScreenParams,
-  type LocalizedText,
-  type SelectOption,
 } from '@helmx/plugin-client'
 import type {
   GitDiffFileResult,

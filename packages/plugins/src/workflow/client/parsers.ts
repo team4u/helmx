@@ -2,7 +2,7 @@
  * Pure boundary parsers and text formatting helpers for builtin:workflow UI
  * (zero React/DOM dependencies; strict validation at every external boundary).
  */
-import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/ui'
 import type { ConversationEntry, ConversationSummary, ToolViewProps } from '@helmx/protocol/browser'
 import {
   buildWorkflowEditRequestLines,

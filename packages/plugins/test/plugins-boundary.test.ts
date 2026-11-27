@@ -1,6 +1,6 @@
 /**
  * 架构边界守护：@helmx/plugins 源码只能依赖「包内相对导入 + 公开包
- * （@helmx/protocol / @helmx/plugin-client / SDK / 前端受控依赖 / node 内置）」，
+ * （@helmx/protocol / @helmx/ui / @helmx/plugin-client / SDK / 前端受控依赖 / node 内置）」，
  * 不得越出本包 src 目录，也不得经包名或相对路径导入 @helmx/kernel /
  * @helmx/hub（插件不依赖内核实现，产品组合归组合根）。
  *

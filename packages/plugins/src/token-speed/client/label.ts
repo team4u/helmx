@@ -1,5 +1,10 @@
 /** Pure display model and copy for the builtin:token-speed badge (Fast Refresh friendly). */
-import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/plugin-client'
+import {
+  DEFAULT_HELMX_LOCALE,
+  resolveLocalizedText,
+  type HelmxLocale,
+  type LocalizedText,
+} from '@helmx/ui'
 
 const SOURCE_LABELS: Record<string, LocalizedText> = {
   provider: { en: 'provider usage', 'zh-CN': '供应商 usage' },

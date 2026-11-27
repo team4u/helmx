@@ -11,12 +11,12 @@ import {
   KvGrid,
   List,
   ListRow,
-  MarkdownText,
   Stack,
   type BadgeTone,
   type ButtonVariant,
   type CalloutProps,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { MarkdownText } from '@helmx/plugin-client'
 import { evaluateSpecValue, type EvalScope } from './evaluator.ts'
 import {
   JSON_RENDER_ACTION_LABEL_FALLBACK,

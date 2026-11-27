@@ -1,11 +1,7 @@
 /**
  * Phase sections, timeline logs, node stat chips, and resumability helpers.
  */
-import {
-  DEFAULT_HELMX_LOCALE,
-  resolveLocalizedText,
-  type HelmxLocale,
-} from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/ui'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts-types.js'
 import { COPY } from './copy.js'
 import { formatShortModelName } from './parsers.js'

@@ -36,6 +36,8 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
+} from '@helmx/ui'
+import {
   useHostNodes,
   usePluginAction,
   usePluginConfig,

@@ -7,7 +7,7 @@ import {
   resolveLocalizedText,
   type HelmxLocale,
   type LocalizedText,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 
 const zh = (locale: HelmxLocale): boolean => locale === 'zh-CN'
 

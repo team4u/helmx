@@ -6,7 +6,7 @@ import {
   resolveLocalizedText,
   type HelmxLocale,
   type LocalizedText,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import type { GitDiffFileStatus } from '../../contracts-types.js'
 
 const L = (en: string, zh: string): LocalizedText => ({ en, 'zh-CN': zh })

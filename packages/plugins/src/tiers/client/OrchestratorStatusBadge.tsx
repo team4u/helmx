@@ -21,10 +21,8 @@ import {
   PopoverContent,
   PopoverTrigger,
   resolveLocalizedText,
-  useHostModels,
-  usePluginLocale,
-  usePluginSessionDoc,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { useHostModels, usePluginLocale, usePluginSessionDoc } from '@helmx/plugin-client'
 import {
   TIERS_BORROW_SESSION_DOC,
   isTiersBorrowEligibleConversation,

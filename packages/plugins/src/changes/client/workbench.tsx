@@ -18,11 +18,13 @@ import {
   LoadingState,
   Stack,
   resolveLocalizedText,
+  type LocalizedText,
+} from '@helmx/ui'
+import {
   useConversation,
   usePluginContext,
   usePluginLocale,
   usePlugins,
-  type LocalizedText,
 } from '@helmx/plugin-client'
 import type { WorkspaceInspectResult } from '../../contracts-types.js'
 import { CHG_COPY, chgSummaryText, chgUnpushedBadge } from './copy.ts'

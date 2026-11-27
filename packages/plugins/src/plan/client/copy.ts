@@ -7,7 +7,7 @@ import {
   resolveLocalizedText,
   type HelmxLocale,
   type LocalizedText,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import type { PlanMode, PlanProposeOutcome } from './types.ts'
 
 const isZh = (locale: HelmxLocale): boolean => locale === 'zh-CN'

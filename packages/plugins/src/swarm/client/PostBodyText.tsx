@@ -3,7 +3,8 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
-import { Button, MarkdownView, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
+import { Button, resolveLocalizedText } from '@helmx/ui'
+import { MarkdownView, usePluginLocale } from '@helmx/plugin-client'
 import { previewPostBody } from './board-model.ts'
 import { SW_BODY_COLLAPSE, SW_BODY_EXPAND } from './copy.ts'
 import { linkifyPostRefs, parseSwarmPostHref } from './model-post-nav.ts'
