@@ -84,7 +84,7 @@ function baseOptions(h: FlowHarness) {
     registryUrl: 'https://registry.example.com',
     // Outside the install root on purpose: the program/data separation guard rejects nesting.
     dataDir: path.join(path.dirname(h.root), `${path.basename(h.root)}-user-data`),
-    pollMs: 100,
+    pollMs: 20,
   };
 }
 
@@ -186,7 +186,7 @@ test('staging failures change no state and write no blocked marker', { timeout: 
   // A hanging self-check hits the staging timeout and terminates the check child.
   await h.addPayload('1.2.0', 'check-hang');
   await assert.rejects(
-    performHubUpdate({ ...baseOptions(h), targetVersion: '1.2.0', payloadCheckTimeoutMs: 1_500 }),
+    performHubUpdate({ ...baseOptions(h), targetVersion: '1.2.0', payloadCheckTimeoutMs: 350 }),
     /payload self-check timed out/,
   );
   assert.equal(await readCurrentRelease(h.root), null);
@@ -227,7 +227,7 @@ test('running update: old hub stops, new hub serves, pid/launch records follow',
   const { dataDir } = baseOptions(h);
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0', launchFlags: { port, dataDir } });
   // Start the old release through the lifecycle path, then update across it.
-  const started = await startHub(h.root, h.io, { flags: { port, dataDir }, pollMs: 100 });
+  const started = await startHub(h.root, h.io, { flags: { port, dataDir }, pollMs: 20 });
   t.after(() => cleanupPid(started.pid));
   assert.deepEqual(await getJson(port, '/__version'), { version: '1.0.0' });
 
@@ -252,11 +252,11 @@ test('failed candidate readiness rolls the pointer back, restarts the old hub, a
   const port = await freePort();
   const { dataDir } = baseOptions(h);
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0', launchFlags: { port, dataDir } });
-  const old = await startHub(h.root, h.io, { flags: { port, dataDir }, pollMs: 100 });
+  const old = await startHub(h.root, h.io, { flags: { port, dataDir }, pollMs: 20 });
   t.after(() => cleanupPid(old.pid));
 
   await assert.rejects(
-    performHubUpdate({ ...baseOptions(h), healthTimeoutMs: 1_500 }),
+    performHubUpdate({ ...baseOptions(h), healthTimeoutMs: 800 }),
     /rolled back to 1\.0\.0/,
   );
   // Pointer restored, old hub restarted on the same port and serving again.
@@ -441,20 +441,29 @@ test('check reports current/latest/blocked without touching state', { timeout: 6
 
 test('golden path: real npm pack tarball stages through the production extractor (registry channel)', { timeout: 60_000 }, async (t) => {
   const root = useTempDir(t, 'helmx-launcher-golden-');
-  const registry = await createFakeRegistry(PKG, '2.1.0');
-  const payloadDir = await writeFakePayload({ dir: path.join(root, 'fixture-payload'), pkgName: PKG, version: '2.1.0' });
+  const [registry, payloadDir, tamperedPayload] = await Promise.all([
+    createFakeRegistry(PKG, '2.1.0'),
+    writeFakePayload({ dir: path.join(root, 'fixture-payload'), pkgName: PKG, version: '2.1.0' }),
+    writeFakePayload({ dir: path.join(root, 'fixture-221'), pkgName: PKG, version: '2.2.0' }),
+  ]);
+  const badSri = 'sha512-' + 'A'.repeat(86) + '=';
+  const tamperedPackPromise = packPayloadTarball(tamperedPayload);
   await registry.serve('2.1.0', await packPayloadTarball(payloadDir));
   const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
+  const dataDir = path.join(path.dirname(root), `${path.basename(root)}-user-data`);
 
-  const staged = await stageHubRelease({
-    env: io.env,
-    root,
-    version: '2.1.0',
-    pkgName: PKG,
-    dataDir: path.join(path.dirname(root), `${path.basename(root)}-user-data`),
-    registryUrl: registry.registryUrl,
-    fetchFn: registry.fetchImpl,
-  });
+  const [staged, tamperedTarball] = await Promise.all([
+    stageHubRelease({
+      env: io.env,
+      root,
+      version: '2.1.0',
+      pkgName: PKG,
+      dataDir,
+      registryUrl: registry.registryUrl,
+      fetchFn: registry.fetchImpl,
+    }),
+    tamperedPackPromise,
+  ]);
   assert.equal(staged.version, '2.1.0');
   assert.ok(existsSync(staged.entryPath));
   // The packed artifact was unpacked to the candidate root (npm-pack layout, stripped prefix).
@@ -462,16 +471,14 @@ test('golden path: real npm pack tarball stages through the production extractor
   assert.equal(staged.reusedCached, false);
 
   // Corrupt-integrity metadata is rejected by the production verification chain.
-  const badSri = 'sha512-' + 'A'.repeat(86) + '=';
-  const tamperedPayload = await writeFakePayload({ dir: path.join(root, 'fixture-221'), pkgName: PKG, version: '2.2.0' });
-  await registry.serve('2.2.0', await packPayloadTarball(tamperedPayload), { integrity: badSri });
+  await registry.serve('2.2.0', tamperedTarball, { integrity: badSri });
   await assert.rejects(
     stageHubRelease({
       env: io.env,
       root,
       version: '2.2.0',
       pkgName: PKG,
-      dataDir: path.join(path.dirname(root), `${path.basename(root)}-user-data`),
+      dataDir,
       registryUrl: registry.registryUrl,
       fetchFn: registry.fetchImpl,
     }),
@@ -503,7 +510,7 @@ test('golden path: local --tarball of a real npm pack artifact installs and self
     entries: { entryPath: staged.entryPath },
   });
   const port = await freePort();
-  const started = await startHub(root, io, { flags: { port }, pollMs: 100 });
+  const started = await startHub(root, io, { flags: { port }, pollMs: 20 });
   t.after(() => cleanupPid(started.pid));
   assert.deepEqual(await getJson(port, '/__version'), { version: '3.0.0' });
   await stopHub(root, io);
@@ -532,7 +539,11 @@ async function setupGate(t: import('node:test').TestContext, root: string, lates
   const core = createFakeCore({ pkgName: PKG, latest, payloads });
   const statePath = path.join(root, 'activity-state.json');
   const dataDir = path.join(path.dirname(root), `${path.basename(root)}-user-data`);
-  const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG, HELMX_FIXTURE_ACTIVITY_STATE: statePath }));
+  const { io } = captureIo(sanitizedHostEnv({
+    HELMX_PAYLOAD_PACKAGE: PKG,
+    HELMX_FIXTURE_ACTIVITY_STATE: statePath,
+    FIXTURE_ACTIVITY_INTERVAL_MS: '30',
+  }));
   return {
     root,
     io,
@@ -551,14 +562,14 @@ async function setupGate(t: import('node:test').TestContext, root: string, lates
       root,
       pkgName: PKG,
       registryUrl: 'https://registry.example.com',
-      pollMs: 100,
+      pollMs: 20,
       launchFlags: { dataDir },
       ...extra,
     }),
   };
 }
 
-/** Poll the fixture heartbeat until it reports idle counts (the fixture re-reads its state every 300ms). */
+/** Poll the fixture heartbeat until it reports idle counts (the fixture re-reads its state every 30ms here). */
 async function waitForActivityIdle(dataDir: string, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -572,7 +583,7 @@ async function waitForActivityIdle(dataDir: string, timeoutMs = 10_000): Promise
       // not written yet
     }
     if (Date.now() >= deadline) throw new Error(`activity heartbeat did not report idle within ${timeoutMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
 
@@ -586,7 +597,7 @@ async function waitForActivityMissing(dataDir: string, timeoutMs = 10_000): Prom
       return;
     }
     if (Date.now() >= deadline) throw new Error(`activity heartbeat did not disappear within ${timeoutMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
 
@@ -614,7 +625,7 @@ test('a busy Hub stages a candidate without stopping or committing', { timeout: 
     mode: 'busy',
     counts: { activeConversations: 2, activeCompactions: 1, queuedConversations: 3, settlingConversations: 0 },
   });
-  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 100 });
+  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 20 });
   t.after(() => cleanupPid(started.pid));
 
   h.core.npmCalls.length = 0;
@@ -650,7 +661,7 @@ test('a Hub that becomes busy during staging defers the switch and reuses the ca
   const port = await freePort();
   await performHubUpdate({ ...h.options(), targetVersion: '1.0.0', launchFlags: { port, dataDir: h.dataDir } });
   await h.setState({ mode: 'idle' });
-  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 100 });
+  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 20 });
   t.after(() => cleanupPid(started.pid));
 
   // Flip busy inside the npm install seam to exercise the final check.
@@ -699,7 +710,7 @@ test('a stale or missing heartbeat fails closed (unknown) and keeps the hub serv
   const port = await freePort();
   await performHubUpdate({ ...h.options(), targetVersion: '1.0.0', launchFlags: { port, dataDir: h.dataDir } });
   await h.setState({ mode: 'stale' });
-  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 100 });
+  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 20 });
   t.after(() => cleanupPid(started.pid));
 
   await assert.rejects(
@@ -750,7 +761,7 @@ test('--force bypasses a busy hub explicitly', { timeout: 60_000 }, async (t) =>
   const port = await freePort();
   await performHubUpdate({ ...h.options(), targetVersion: '1.0.0', launchFlags: { port, dataDir: h.dataDir } });
   await h.setState({ mode: 'busy', counts: { activeConversations: 5 } });
-  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 100 });
+  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 20 });
   t.after(() => cleanupPid(started.pid));
 
   const forced = await performHubUpdate({

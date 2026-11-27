@@ -6,10 +6,11 @@
  * 3) close_group force 出口（ignored 构建产物默认可收尾、真实脏成员默认拒绝、force: true 强制清理）；
  * 4) 真实子进程 SIGKILL 中断 worktree 成员生成 -> 重启无缝续跑、保留 worktree 并正常关组回收。
  */
-import { after, describe, test } from 'node:test'
+import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -26,26 +27,41 @@ import {
   captureRequestMeta,
   openSwarmEnv,
   setSwarmRoleResponses,
+  type SwarmTestEnv,
 } from './helpers/swarm-integration-env.js'
 import {
   ARCHIVED_COORDINATOR_TAG,
   COORDINATOR_TAG,
   SWARM_PLUGIN_ID,
-  WORKER_TAG,
   type BoardBadgesDoc,
   type BoardPost,
   type BoardViewDoc,
 } from '../src/swarm.js'
 
-describe('builtin:swarm worktree isolation, handoff & close_group recovery', () => {
+describe('builtin:swarm worktree isolation, handoff & close_group recovery', { concurrency: 2, timeout: 60_000 }, () => {
   const gitTemplate = createGitTemplate()
   after(() => gitTemplate.cleanup(), { timeout: 60_000 })
 
+  describe('shared worktree runtime', { concurrency: false, timeout: 60_000 }, () => {
+    let sharedRoot = ''
+    let sharedEnv: SwarmTestEnv | undefined
+
+    before(async () => {
+      sharedRoot = mkdtempSync(join(tmpdir(), 'helmx-swarm-wt-shared-'))
+      sharedEnv = await openSwarmEnv(sharedRoot, gitTemplate)
+    }, { timeout: 60_000 })
+
+    after(async () => {
+      await sharedEnv?.close().catch(() => {})
+      if (sharedRoot) rmSync(sharedRoot, { recursive: true, force: true })
+    }, { timeout: 60_000 })
+
   test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks workflow disable & cleanup_worktree, two-mode close_group retain & merge, and closed/detached board_status', { timeout: 60_000 }, async (t) => {
-    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'), gitTemplate)
+    const env = sharedEnv!
+    const repoDir = gitTemplate.cloneTo(join(useTempDir(t, 'helmx-swarm-int2-repo-'), 'repo'))
     try {
       const { kernel } = env.app
-      const coord = await kernel.conversations.createConversation({ title: 'Release Coordinator', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'Release Coordinator', profileId: 'assistant', cwd: repoDir })
 
       const { groupId } = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
@@ -262,7 +278,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       await kernel.conversations.submitInput(coord.id, 'Post-close tool probe')
       await kernel.conversations.waitForIdle(coord.id)
 
-      assert.equal(readFileSync(join(env.repoDir, 'feature.txt'), 'utf8').trim(), 'verified-payload')
+      assert.equal(readFileSync(join(repoDir, 'feature.txt'), 'utf8').trim(), 'verified-payload')
       assert.equal(existsSync(retained.path), false, 'worktree directory must be removed after merge + cleanup_worktree')
 
       // History-tag tool semantics: after close the archived tag unlocks swarm_create_group again
@@ -295,10 +311,13 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
             { stopReason: 'toolUse' },
           )
         }
-        return fauxAssistantMessage(
-          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Committed kept.txt.' })],
-          { stopReason: 'toolUse' },
-        )
+        if (keptStep === 2) {
+          return fauxAssistantMessage(
+            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Committed kept.txt.' })],
+            { stopReason: 'toolUse' },
+          )
+        }
+        return fauxAssistantMessage('Kept worker finished.')
       }))
       const keptWorker = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
@@ -347,19 +366,20 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       const finalPosts = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
       assert.ok(finalPosts.posts.length >= 4)
     } finally {
-      await env.close()
+      env.faux.setResponses([])
     }
   })
 
   test('swarm-int13: builtin:workflow 停用 + builtin:worktree 启用 —— swarm 隔离派工、交接快照与释放清理完全正常（零静态依赖）', { timeout: 60_000 }, async (t) => {
-    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-no-workflow-'), gitTemplate)
+    const env = sharedEnv!
+    const repoDir = gitTemplate.cloneTo(join(useTempDir(t, 'helmx-swarm-no-workflow-repo-'), 'repo'))
     try {
       const { kernel } = env.app
       // 前置：builtin:workflow 停用（swarm 与其零静态依赖），builtin:worktree 保持启用。
       await kernel.plugins.disable(WORKFLOW_ID)
       assert.equal(kernel.plugins.list().find((p) => p.id === WORKFLOW_ID)?.enabled, false)
 
-      const coord = await kernel.conversations.createConversation({ title: 'No-Workflow Coord', profileId: 'assistant', cwd: env.repoDir })
+      const coord = await kernel.conversations.createConversation({ title: 'No-Workflow Coord', profileId: 'assistant', cwd: repoDir })
       const { groupId } = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
         'create_group',
@@ -379,10 +399,13 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
             { stopReason: 'toolUse' },
           )
         }
-        return fauxAssistantMessage(
-          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Committed feature.txt in isolated worktree.' })],
-          { stopReason: 'toolUse' },
-        )
+        if (coderStep === 2) {
+          return fauxAssistantMessage(
+            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Committed feature.txt in isolated worktree.' })],
+            { stopReason: 'toolUse' },
+          )
+        }
+        return fauxAssistantMessage('Coder finished.')
       }))
 
       const coder = (await kernel.plugins.invokeAction(
@@ -435,15 +458,15 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       assert.equal(afterInspect.exists, false)
     } finally {
       await env.app.kernel.plugins.enable(WORKFLOW_ID).catch(() => {})
-      await env.close()
+      env.faux.setResponses([])
     }
   })
 
   test('swarm-int14: close_group force 出口 —— ignored 产物成员默认即可收尾；真实脏成员默认拒绝、force: true 放弃内容直接收尾', { timeout: 60_000 }, async (t) => {
-    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'), gitTemplate)
+    const env = sharedEnv!
+    const repoDir = gitTemplate.cloneTo(join(useTempDir(t, 'helmx-swarm-int14-repo-'), 'repo'))
     try {
       const { kernel } = env.app
-      const repoDir = env.repoDir
       // 基线先含 .gitignore（忽略 dist/），worktree 派生自该基线。
       writeFileSync(join(repoDir, '.gitignore'), 'dist/\n')
       execFileSync('git', ['add', '.gitignore'], { cwd: repoDir })
@@ -556,8 +579,75 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         'removed',
       )
     } finally {
-      await env.close()
+      env.faux.setResponses([])
     }
+  })
+
+  test('swarm-int20: archive_worker & close_group never leak ManagedWorktreeHold when cleanup_worktree fails (e.g. worktree_locked)', { timeout: 60_000 }, async (t) => {
+    const env = sharedEnv!
+    const repoDir = gitTemplate.cloneTo(join(useTempDir(t, 'helmx-swarm-hold-atomicity-repo-'), 'repo'))
+    try {
+      const { kernel } = env.app
+      const coord = await kernel.conversations.createConversation({ title: 'Hold Atomicity Coord', profileId: 'assistant', cwd: repoDir })
+      const g = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Hold Atomicity Squad',
+        conversationId: coord.id,
+      })) as { groupId: string }
+
+      setSwarmRoleResponses(env.faux, {
+        locked_w: [fauxAssistantMessage('Done.')],
+        coordinator: [fauxAssistantMessage('Noted.')],
+      })
+      const worker = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: g.groupId, name: 'locked_w', prompt: 'Finish.', access: 'readwrite', isolation: 'worktree' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; worktreeId: string }
+      await kernel.conversations.waitForIdle(worker.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      const wtPath = worker.worktreeId.slice('local:'.length)
+      execFileSync('git', ['worktree', 'lock', '--reason', 'manual hold test', wtPath], { cwd: repoDir })
+
+      await assert.rejects(
+        () => kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'archive_worker', { groupId: g.groupId, name: 'locked_w' }, { conversationId: coord.id }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_locked',
+      )
+      await assert.rejects(
+        () => kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g.groupId }, { conversationId: coord.id }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_locked',
+      )
+
+      const listed = (await kernel.plugins.invokeAction(WORKTREE_ID, 'list_worktrees', {})) as {
+        worktrees: Array<{ id: string; status: string; hold?: { pluginId: string } }>
+      }
+      assert.equal(listed.worktrees.find((w) => w.id === worker.worktreeId)?.hold?.pluginId, SWARM_PLUGIN_ID, 'hold must stay intact after failed cleanup')
+
+      await assert.rejects(
+        () => kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', { worktreeId: worker.worktreeId, force: true }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_in_use',
+        'external cleanup must still see the intact hold',
+      )
+
+      execFileSync('git', ['worktree', 'unlock', wtPath], { cwd: repoDir })
+      const closed = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g.groupId }, { conversationId: coord.id })) as {
+        closed: boolean
+        uncleanedWorktrees?: Array<{ worktreeId: string }>
+      }
+      assert.equal(closed.closed, true)
+      if (closed.uncleanedWorktrees?.length) {
+        await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', {
+          worktreeId: worker.worktreeId,
+          deleteBranch: true,
+          allowUnverifiedUsage: true,
+        })
+      }
+    } finally {
+      env.faux.setResponses([])
+    }
+  })
   })
 
   test('swarm-int19: simulated non-Linux hubPlatform=darwin close_group & archive_worker settle holds and report uncleanedWorktrees without false unmerged entries, while allowUnverifiedUsage cleans immediately', { timeout: 60_000 }, async (t) => {
@@ -753,71 +843,6 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', {
           worktreeId: wtId,
           force: true,
-          deleteBranch: true,
-          allowUnverifiedUsage: true,
-        })
-      }
-    } finally {
-      await env.close()
-    }
-  })
-
-  test('swarm-int20: archive_worker & close_group never leak ManagedWorktreeHold when cleanup_worktree fails (e.g. worktree_locked)', { timeout: 60_000 }, async (t) => {
-    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-hold-atomicity-'), gitTemplate)
-    try {
-      const { kernel } = env.app
-      const coord = await kernel.conversations.createConversation({ title: 'Hold Atomicity Coord', profileId: 'assistant', cwd: env.repoDir })
-      const g = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
-        title: 'Hold Atomicity Squad',
-        conversationId: coord.id,
-      })) as { groupId: string }
-
-      setSwarmRoleResponses(env.faux, {
-        locked_w: [fauxAssistantMessage('Done.')],
-        coordinator: [fauxAssistantMessage('Noted.')],
-      })
-      const worker = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { groupId: g.groupId, name: 'locked_w', prompt: 'Finish.', access: 'readwrite', isolation: 'worktree' },
-        { conversationId: coord.id },
-      )) as { workerConversationId: number; worktreeId: string }
-      await kernel.conversations.waitForIdle(worker.workerConversationId)
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.conversations.waitForIdle(coord.id)
-
-      const wtPath = worker.worktreeId.slice('local:'.length)
-      execFileSync('git', ['worktree', 'lock', '--reason', 'manual hold test', wtPath], { cwd: env.repoDir })
-
-      await assert.rejects(
-        () => kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'archive_worker', { groupId: g.groupId, name: 'locked_w' }, { conversationId: coord.id }),
-        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_locked',
-      )
-      await assert.rejects(
-        () => kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g.groupId }, { conversationId: coord.id }),
-        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_locked',
-      )
-
-      const listed = (await kernel.plugins.invokeAction(WORKTREE_ID, 'list_worktrees', {})) as {
-        worktrees: Array<{ id: string; status: string; hold?: { pluginId: string } }>
-      }
-      assert.equal(listed.worktrees.find((w) => w.id === worker.worktreeId)?.hold?.pluginId, SWARM_PLUGIN_ID, 'hold must stay intact after failed cleanup')
-
-      await assert.rejects(
-        () => kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', { worktreeId: worker.worktreeId, force: true }),
-        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_in_use',
-        'external cleanup must still see the intact hold',
-      )
-
-      execFileSync('git', ['worktree', 'unlock', wtPath], { cwd: env.repoDir })
-      const closed = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g.groupId }, { conversationId: coord.id })) as {
-        closed: boolean
-        uncleanedWorktrees?: Array<{ worktreeId: string }>
-      }
-      assert.equal(closed.closed, true)
-      if (closed.uncleanedWorktrees?.length) {
-        await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', {
-          worktreeId: worker.worktreeId,
           deleteBranch: true,
           allowUnverifiedUsage: true,
         })

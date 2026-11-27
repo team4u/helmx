@@ -10,13 +10,14 @@ import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
 import { access, chmod, mkdir, readFile, statfs, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmxError, isValidNodeId, type EnvExecRequest, type EnvExecResponse, type NodeAutoUpgradeStatus, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeInstallMode, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helmx/protocol'
+import { HelmxError, isValidNodeId, type EnvExecRequest, type EnvExecResponse, type HubAccessInfo, type NodeAutoUpgradeStatus, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeInstallMode, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helmx/protocol'
 import { HelmxUpgradeBusyError, sha256hex, type EnvFabric, type NodeConnection } from '../env/index.js'
 import type { ConfigService } from '../services/index.js'
 import type { SecretStash } from '../services/index.js'
 import { isAbsoluteTargetPath, runShell } from './tools.js'
 import { normalizePathForTarget, targetPlatformForNode } from './target-platform.js'
 import { buildPosixHostShim, buildWindowsCmdWrapper, buildWindowsPosixShim, type CliShimPlan } from './cli-shim.js'
+import { buildHubAccessInfo, type HubListenInfo } from './hub-access.js'
 import type { HelmxToolDeps } from './tool-deps.js'
 import { hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmxError, safeJson, unwrapUpgradeCheckRpc, validateUpgradeResult } from './semver.js'
 
@@ -29,6 +30,7 @@ interface NodeManagerOptions {
   readonly configSvc: ConfigService
   readonly stash: SecretStash
   readonly toolDeps: HelmxToolDeps
+  readonly hubListenInfo?: () => HubListenInfo | undefined
   readonly events: { publish(type: 'notification', payload: unknown): void; publish(type: 'node.changed', payload: unknown): void }
   /** Node upgrade confirmation timeout in milliseconds (default 120000). */
   readonly nodeUpgradeTimeoutMs: number
@@ -48,6 +50,7 @@ export class NodeManager {
   private readonly configSvc: ConfigService
   private readonly stash: SecretStash
   private readonly toolDeps: HelmxToolDeps
+  private readonly hubListenInfo?: () => HubListenInfo | undefined
   private readonly events: NodeManagerOptions['events']
   readonly NODE_UPGRADE_TIMEOUT_MS: number
   /** Node token index registered in config.json (nodeId -> sha256(token)). */
@@ -81,6 +84,7 @@ export class NodeManager {
     this.configSvc = options.configSvc
     this.stash = options.stash
     this.toolDeps = options.toolDeps
+    this.hubListenInfo = options.hubListenInfo
     this.events = options.events
     this.NODE_UPGRADE_TIMEOUT_MS = options.nodeUpgradeTimeoutMs
     this.convOf = options.convOf
@@ -193,6 +197,13 @@ export class NodeManager {
     for (const dispose of disposers) dispose()
   }
 
+  private hubAccessInfo(): HubAccessInfo | undefined {
+    return buildHubAccessInfo({
+      listen: this.hubListenInfo?.(),
+      hubUrl: this.toolDeps.hubUrl,
+    })
+  }
+
   /** Issue a node access token: plaintext token is returned only this once; the server retains only sha256. */
   async issueNodeToken(nodeId: string): Promise<NodeIssuedToken> {
     this.assertWritable()
@@ -222,7 +233,13 @@ export class NodeManager {
       type: 'node.changed',
       node: { id: nodeId, kind: 'byom', online: this.envFabric.isOnline(nodeId) },
     })
-    return { nodeId, token, createdAt: Date.now() }
+    const hubAccess = this.hubAccessInfo()
+    return {
+      nodeId,
+      token,
+      createdAt: Date.now(),
+      ...(hubAccess !== undefined ? { hubAccess } : {}),
+    }
   }
 
   /** Remove a node: deletes from token table and immediately severs any in-flight WS connection. */
@@ -411,6 +428,7 @@ export class NodeManager {
 
   /** Local node NodeInfo (version always comes from Hub itself; health is a live snapshot). */
   localNodeInfo(): NodeInfo {
+    const hubAccess = this.hubAccessInfo()
     return {
       id: 'local',
       kind: 'local',
@@ -418,6 +436,7 @@ export class NodeManager {
       hostname: hostname(),
       platform: process.platform,
       version: hubVersion(),
+      ...(hubAccess !== undefined ? { hubAccess } : {}),
       health: this.localHealthSnapshot(),
     }
   }

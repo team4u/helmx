@@ -23,6 +23,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { killProcessTree } from '@helmx/env-io';
 import { defaultHubUpdateCore, type HubUpdateCore } from '@helmx/env-io/hub-payload';
@@ -137,7 +138,11 @@ else {
     // post-readiness gate (health probe) walks the launcher into recording an already-dead hub.
     setTimeout(() => process.exit(9), 150);
   }
-  if (activityFile !== null && mode !== 'ignore-signal') setInterval(writeActivity, 300).unref?.();
+  const activityIntervalMs = (() => {
+    const raw = Number(process.env.FIXTURE_ACTIVITY_INTERVAL_MS);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 300;
+  })();
+  if (activityFile !== null && mode !== 'ignore-signal') setInterval(writeActivity, activityIntervalMs).unref?.();
   if (mode !== 'ignore-signal') {
     const shutdown = () => { if (activityFile !== null) { try { unlinkSync(activityFile); } catch {} } process.exit(0); };
     process.on('SIGTERM', shutdown);
@@ -157,6 +162,37 @@ export interface FakePayloadOptions {
   dependencies?: Record<string, string>;
 }
 
+/** Cached constant `fixture-inner-dep.tgz` bytes so every fake payload skips redundant tar+gzip packing. */
+let cachedInnerDepTgz: Promise<Buffer> | undefined;
+
+function getInnerDepTarballBytes(): Promise<Buffer> {
+  if (cachedInnerDepTgz === undefined) {
+    cachedInnerDepTgz = (async () => {
+      const scratch = await fsp.mkdtemp(path.join(os.tmpdir(), 'helmx-fixture-inner-dep-'));
+      try {
+        const innerSrc = path.join(scratch, 'src');
+        await fsp.mkdir(innerSrc, { recursive: true });
+        await Promise.all([
+          fsp.writeFile(
+            path.join(innerSrc, 'package.json'),
+            `${JSON.stringify({ name: 'fixture-inner-dep', version: '1.0.0', type: 'module', main: 'index.js' }, null, 2)}\n`,
+          ),
+          fsp.writeFile(path.join(innerSrc, 'index.js'), 'export const marker = "inner-dep";\n'),
+        ]);
+        const archivePath = path.join(scratch, 'fixture-inner-dep.tgz');
+        await tar.create(
+          { cwd: innerSrc, file: archivePath, gzip: true, portable: true, prefix: 'package' },
+          ['package.json', 'index.js'],
+        );
+        return await fsp.readFile(archivePath);
+      } finally {
+        await fsp.rm(scratch, { recursive: true, force: true }).catch(() => undefined);
+      }
+    })();
+  }
+  return cachedInnerDepTgz;
+}
+
 /**
  * Materialize a fake payload package directory (package.json + manifest.json + start.mjs + mode).
  * A real inner `file:./fixture-inner-dep.tgz` archive is always bundled (mirroring the real
@@ -166,53 +202,47 @@ export interface FakePayloadOptions {
 export async function writeFakePayload(options: FakePayloadOptions): Promise<string> {
   const { dir, pkgName, version } = options;
   const mode = options.mode ?? 'ok';
-  await fsp.mkdir(dir, { recursive: true });
-  const innerSrc = path.join(dir, '.fixture-inner-src');
-  await fsp.mkdir(innerSrc, { recursive: true });
-  await fsp.writeFile(
-    path.join(innerSrc, 'package.json'),
-    `${JSON.stringify({ name: 'fixture-inner-dep', version: '1.0.0', type: 'module', main: 'index.js' }, null, 2)}\n`,
-  );
-  await fsp.writeFile(path.join(innerSrc, 'index.js'), 'export const marker = "inner-dep";\n');
-  await tar.create(
-    { cwd: innerSrc, file: path.join(dir, 'fixture-inner-dep.tgz'), gzip: true, portable: true, prefix: 'package' },
-    ['package.json', 'index.js'],
-  );
-  await fsp.rm(innerSrc, { recursive: true, force: true });
-  await fsp.writeFile(
-    path.join(dir, 'package.json'),
-    `${JSON.stringify(
-      {
-        name: pkgName,
-        version,
-        private: true,
-        dependencies: {
-          'fixture-inner-dep': 'file:./fixture-inner-dep.tgz',
-          ...(options.dependencies ?? {}),
+  const [innerDepBytes] = await Promise.all([
+    getInnerDepTarballBytes(),
+    fsp.mkdir(dir, { recursive: true }),
+  ]);
+  await Promise.all([
+    fsp.writeFile(path.join(dir, 'fixture-inner-dep.tgz'), innerDepBytes),
+    fsp.writeFile(
+      path.join(dir, 'package.json'),
+      `${JSON.stringify(
+        {
+          name: pkgName,
+          version,
+          private: true,
+          dependencies: {
+            'fixture-inner-dep': 'file:./fixture-inner-dep.tgz',
+            ...(options.dependencies ?? {}),
+          },
         },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await fsp.writeFile(
-    path.join(dir, 'manifest.json'),
-    `${JSON.stringify(
-      {
-        formatVersion: 1,
-        name: pkgName,
-        version,
-        builtAt: new Date().toISOString(),
-        nodeEngines: options.nodeEngines ?? '>=18.0.0',
-        entries: { launcher: 'start.mjs' },
-        entryChecksums: { launcher: '0'.repeat(64) },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await fsp.writeFile(path.join(dir, 'payload-mode.txt'), mode, 'utf8');
-  await fsp.writeFile(path.join(dir, 'start.mjs'), START_MJS, 'utf8');
+        null,
+        2,
+      )}\n`,
+    ),
+    fsp.writeFile(
+      path.join(dir, 'manifest.json'),
+      `${JSON.stringify(
+        {
+          formatVersion: 1,
+          name: pkgName,
+          version,
+          builtAt: new Date().toISOString(),
+          nodeEngines: options.nodeEngines ?? '>=18.0.0',
+          entries: { launcher: 'start.mjs' },
+          entryChecksums: { launcher: '0'.repeat(64) },
+        },
+        null,
+        2,
+      )}\n`,
+    ),
+    fsp.writeFile(path.join(dir, 'payload-mode.txt'), mode, 'utf8'),
+    fsp.writeFile(path.join(dir, 'start.mjs'), START_MJS, 'utf8'),
+  ]);
   return dir;
 }
 
@@ -326,7 +356,7 @@ export async function getJson(port: number, pathname: string, timeoutMs = 10_000
       // not listening yet
     }
     if (Date.now() >= deadline) throw new Error(`GET :${port}${pathname} did not answer within ${timeoutMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
 
@@ -340,7 +370,7 @@ export async function waitUntilDead(pid: number, timeoutMs = 10_000): Promise<vo
       return;
     }
     if (Date.now() >= deadline) throw new Error(`pid ${pid} still alive after ${timeoutMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
 

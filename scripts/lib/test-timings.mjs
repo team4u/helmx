@@ -179,6 +179,26 @@ export function mergeTestTimings(store, observed, options = {}) {
 }
 
 /**
+ * Drop timing entries whose test file no longer exists on disk (e.g. deleted or renamed tests).
+ * Keeps valid entries from other suites intact (e.g. running `unit` never drops `integration` timings).
+ * @param {{ schemaVersion: number, files: Record<string, { durationMs: number, runs: number, updatedAt: number }> }} store
+ * @param {string} repoRoot
+ */
+export function pruneStaleTestTimings(store, repoRoot) {
+  /** @type {Record<string, { durationMs: number, runs: number, updatedAt: number }>} */
+  const nextFiles = {};
+  for (const [key, entry] of Object.entries(store.files ?? {})) {
+    if (existsSync(path.join(repoRoot, key))) {
+      nextFiles[key] = entry;
+    }
+  }
+  return {
+    schemaVersion: TEST_TIMINGS_SCHEMA_VERSION,
+    files: nextFiles,
+  };
+}
+
+/**
  * Atomically persist the timing store to disk. Best-effort: never throws on IO errors.
  * @param {string} cachePath
  * @param {{ schemaVersion: number, files: Record<string, { durationMs: number, runs: number, updatedAt: number }> }} store

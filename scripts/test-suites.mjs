@@ -26,10 +26,18 @@
  *
  * Implementation: Node fs enumerates *.test.ts(x) under <root>/packages/<pkg>/test/ (or the
  * entry subdirectory itself). Cached AST classification (`scripts/lib/test-sharding.mjs`)
- * partitions files into 4 pools (`pure`, `dom-shared`, `node-shared`, `isolated`), balanced
- * by auto-recorded millisecond timings (`scripts/lib/test-timings.mjs`) via LPT into
- * `permits: 1` shards launched concurrently across `workerBudget` (default 16, capped by
- * available CPUs; override via `TEST_CONCURRENCY`) with zero serial pure barrier.
+ * partitions files into 4 logical pools (`pure`, `dom-shared`, `node-shared`, `isolated`),
+ * balanced by auto-recorded millisecond timings (`scripts/lib/test-timings.mjs`):
+ * - `pure` and `node-shared` share one unified Node IPC worker queue (identical env, zero
+ *   DOM preload) sorted heaviest-first so pure files naturally fill tails with zero idle cores;
+ * - `dom-shared` runs in persistent happy-dom IPC workers (uncapped up to `sharedBudget`);
+ * - when isolated shards finish or a shared queue drains and releases permits, extra workers
+ *   are dynamically spawned for any remaining shared queue with meaningful unbooked work;
+ * - `isolated` files run as 1-file shards sorted heaviest-first, spawned directly via
+ *   `node --require tsx/preflight --import tsx --test --test-isolation=none` (each shard is
+ *   already a dedicated OS process, avoiding `run-tests.mjs` + per-shard watchdog + `tsx/cli`
+ *   + nested `--test-isolation=process` overhead) under one shared parent-death watchdog and
+ *   unified suite timeout/process-group cleanup.
  *
  * Invariants (defensive assertions; any failure exits 2 rather than silently running the
  * wrong set):
@@ -51,6 +59,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import {
+  balanceShardsLpt,
   DEFAULT_PURITY_CACHE_REL,
   planFourPoolSchedule,
   shouldDisableSharding,
@@ -61,6 +70,7 @@ import {
   loadTestTimings,
   mergeTestTimings,
   normalizeTimingKey,
+  pruneStaleTestTimings,
   saveTestTimings,
 } from './lib/test-timings.mjs';
 import {
@@ -84,6 +94,12 @@ const ALL_PACKAGES = [...SUITES.unit, ...SUITES.integration];
 
 const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];
 const SIGNAL_EXIT_CODES = { SIGHUP: 129, SIGINT: 130, SIGQUIT: 131, SIGTERM: 143 };
+const DEFAULT_SUITE_TIMEOUT_MS = 10 * 60 * 1000;
+const KILL_GRACE_MS = 5_000;
+const LAST_RESORT_MS = 15_000;
+const GROUP_POLL_MS = 100;
+const ISO_COLD_START_MS = 1_500;
+const DYNAMIC_SPAWN_MIN_WEIGHT_MS = 2_000;
 
 const testFilesCache = new Map();
 
@@ -108,6 +124,22 @@ function testFilesOf(entry) {
     .sort();
   testFilesCache.set(entry, result);
   return result;
+}
+
+function suiteTimeoutMs() {
+  const raw = process.env.HELMX_TEST_SUITE_TIMEOUT_MS;
+  if (raw === undefined || raw === '') return DEFAULT_SUITE_TIMEOUT_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || Math.floor(n) !== n) {
+    console.error(`[test-suites] invalid HELMX_TEST_SUITE_TIMEOUT_MS (positive integer ms required): ${raw}`);
+    process.exit(2);
+  }
+  return n;
+}
+
+function pnpmFallbackNodePath() {
+  const fallback = path.join(repoRoot, 'node_modules', '.pnpm', 'node_modules');
+  return existsSync(fallback) ? fallback : '';
 }
 
 const rawArgv = process.argv[2] === '--' ? process.argv.slice(3) : process.argv.slice(2);
@@ -238,18 +270,21 @@ try {
   process.exit(2);
 }
 if (workerBudgetOverride !== undefined) workerBudget = workerBudgetOverride;
+
 // `shard-worker.mjs` drives `node:test`'s programmatic `run()` API rather than `tsx --test` CLI
-// parsing, so any non-empty pass-through CLI arguments fall back to a single native `tsx --test`
+// parsing, so any non-empty pass-through CLI arguments fall back to a single native `run-tests.mjs`
 // invocation — ensuring flags like `--test-rerun-failures`, `--test-global-setup`, or invalid
 // flags are never silently dropped on shared-pool files.
 const shardingDisabled = extraArgs.length > 0 || shouldDisableSharding(extraArgs) || workerBudgetOverride !== undefined;
 
+const timeoutMs = suiteTimeoutMs();
 const timingsCachePath = path.join(repoRoot, DEFAULT_TIMINGS_CACHE_REL);
 const purityCachePath = path.join(repoRoot, DEFAULT_PURITY_CACHE_REL);
 const timingsStore = loadTestTimings(timingsCachePath);
 const { weightFn, recordedCount } = createTestWeightFn({ repoRoot, timings: timingsStore });
 
-const sortedAllFiles = [...files].sort((a, b) => weightFn(b) - weightFn(a) || a.localeCompare(b));
+const byWeightDesc = (a, b) => weightFn(b) - weightFn(a) || a.localeCompare(b);
+const sortedAllFiles = [...files].sort(byWeightDesc);
 
 const requireFromRoot = createRequire(path.join(repoRoot, 'package.json'));
 let cachedTs = null;
@@ -258,7 +293,51 @@ const getTs = () => {
   return cachedTs;
 };
 
+const tsxPreflightPath = requireFromRoot.resolve('tsx/preflight');
+const tsxLoaderUrl = pathToFileURL(requireFromRoot.resolve('tsx')).href;
+const tsxDirectArgs = ['--require', tsxPreflightPath, '--import', tsxLoaderUrl];
+const shardWorkerPath = path.join(repoRoot, 'scripts', 'lib', 'shard-worker.mjs');
+const safeTestAssertUrl = pathToFileURL(path.join(repoRoot, 'scripts', 'lib', 'safe-test-assert.mjs')).href;
+const domShardPreloadUrl = pathToFileURL(path.join(repoRoot, 'scripts', 'lib', 'dom-shard-preload.mjs')).href;
 const timingReporterUrl = pathToFileURL(path.join(repoRoot, 'scripts', 'lib', 'timing-reporter.mjs')).href;
+const runTestsPath = path.join(repoRoot, 'scripts', 'run-tests.mjs');
+
+function buildWorkerEnv({ enableDomPreload }) {
+  const env = { ...process.env };
+  const fallback = pnpmFallbackNodePath();
+  if (fallback) {
+    env.NODE_PATH = process.env.NODE_PATH
+      ? fallback + path.delimiter + process.env.NODE_PATH
+      : fallback;
+  }
+  if (env.TSX_TSCONFIG_PATH === undefined) {
+    env.TSX_TSCONFIG_PATH = path.join(repoRoot, 'tsconfig.dev.json');
+  }
+  if (env.NODE_COMPILE_CACHE === undefined) {
+    env.NODE_COMPILE_CACHE = path.join(repoRoot, 'node_modules', '.cache', 'v8-compile-cache');
+  }
+  const existing = env.NODE_OPTIONS?.trim() ?? '';
+  const parts = existing ? [existing] : [];
+  if (!/(?:^|\s)--max-old-space-size(?:=|\s|$)/.test(existing)) {
+    parts.push('--max-old-space-size=1536');
+  }
+  const safeImportFlag = `--import=${safeTestAssertUrl}`;
+  if (!existing.includes(safeImportFlag)) {
+    parts.push(safeImportFlag);
+  }
+  if (enableDomPreload) {
+    const domImportFlag = `--import=${domShardPreloadUrl}`;
+    if (!existing.includes(domImportFlag)) {
+      parts.push(domImportFlag);
+    }
+  }
+  env.NODE_OPTIONS = parts.join(' ');
+  return env;
+}
+
+const nodeWorkerEnv = buildWorkerEnv({ enableDomPreload: false });
+const domWorkerEnv = buildWorkerEnv({ enableDomPreload: true });
+
 const runTempDir = path.join(
   repoRoot,
   'node_modules',
@@ -272,39 +351,86 @@ if (tsxPrune.pruned > 0) {
   console.error(`[test-suites] pruned ${tsxPrune.pruned} stale tsx cache entries (${tsxPrune.cacheDir})`);
 }
 
-/** @type {Array<{ label: string, args: string[], permits: number, timingOutputPath: string | null, ipcPool?: 'pure' | 'dom-shared' | 'node-shared' }>} */
-const plans = [];
-/** @type {Record<string, { files: string[], cursor: number }>} */
-const ipcQueues = {};
+/**
+ * @typedef {{
+ *   kind: 'shard-worker' | 'isolated-direct' | 'run-tests-fallback',
+ *   label: string,
+ *   args: string[],
+ *   permits: number,
+ *   timingOutputPath: string | null,
+ *   enableDomPreload?: boolean,
+ *   ipcPool?: 'node-shared' | 'dom-shared',
+ * }} ExecPlan
+ */
 
-function makeIsolatedShardPlans(isoFiles, weightFn, runTempDir, timingReporterUrl, extraArgs, offsetIndex) {
-  const heavy = [];
-  const light = [];
-  for (const rel of isoFiles) {
-    if (weightFn(rel) > 1_000) heavy.push(rel);
-    else light.push(rel);
-  }
-  /** @type {string[][]} */
-  const groups = heavy.map((rel) => [rel]);
-  for (let i = 0; i < light.length; i += 4) {
-    groups.push(light.slice(i, i + 4));
-  }
-  return groups.map((group, idx) => {
-    const timingOutputPath = path.join(runTempDir, `timings-iso-${offsetIndex + idx}.json`);
+/** @type {ExecPlan[]} */
+const plans = [];
+/** @type {Record<string, { files: string[], cursor: number, activeWorkers: number, bootingWorkers: number, spawnedCount: number }>} */
+const ipcQueues = {};
+let ipcDynamicScale = false;
+let nextIpcWorkerSeq = 0;
+
+/**
+ * Create an IPC-backed shard-worker plan (used both for initial workers and dynamic scale-up).
+ * @param {'node-shared' | 'dom-shared'} pool
+ * @param {string} workerLabel
+ * @returns {ExecPlan}
+ */
+function createIpcWorkerPlan(pool, workerLabel) {
+  const seq = nextIpcWorkerSeq;
+  nextIpcWorkerSeq += 1;
+  const timingOutputPath = path.join(runTempDir, `timings-ipc-${seq}.json`);
+  const manifestPath = path.join(runTempDir, `manifest-ipc-${seq}.json`);
+  writeFileSync(
+    manifestPath,
+    JSON.stringify({
+      pool,
+      repoRoot,
+      ipcQueue: true,
+      timingOutputPath,
+      testTimeoutMs: 20_000,
+    }),
+    'utf8',
+  );
+  return {
+    kind: 'shard-worker',
+    label: workerLabel,
+    args: [...tsxDirectArgs, shardWorkerPath, manifestPath],
+    permits: 1,
+    timingOutputPath,
+    enableDomPreload: pool === 'dom-shared',
+    ipcPool: pool,
+  };
+}
+
+/**
+ * Build 1-file direct isolated plans sorted heaviest-first (zero 4-file tail grouping).
+ * Most isolated files run with `--test-isolation=none` because each shard is already its own
+ * dedicated OS process; files requiring native child-process isolation (explicit
+ * `@test-isolation: process` pragma or self-signaling `process.kill(process.pid, ...)`) keep
+ * `--test-isolation=process` so self-signals never cancel Node's outer `--test` runner.
+ */
+function makeIsolatedShardPlans(isoFiles, outDir, processIsolatedSet) {
+  return isoFiles.map((rel, idx) => {
+    const timingOutputPath = path.join(outDir, `timings-iso-${idx}.json`);
+    const isolationMode = processIsolatedSet.has(rel) ? 'process' : 'none';
     return {
-      label: `isolated-${idx + 1}/${groups.length}`,
+      kind: /** @type {const} */ ('isolated-direct'),
+      label: `isolated-${idx + 1}/${isoFiles.length}`,
       args: [
-        '--skip-cache-hygiene',
-        '--test-concurrency=1',
+        ...tsxDirectArgs,
+        '--test',
+        `--test-isolation=${isolationMode}`,
+        '--test-timeout=20000',
         '--test-reporter=spec',
         '--test-reporter-destination=stdout',
         `--test-reporter=${timingReporterUrl}`,
         `--test-reporter-destination=${timingOutputPath}`,
-        ...extraArgs,
-        ...group,
+        rel,
       ],
       permits: 1,
       timingOutputPath,
+      enableDomPreload: false,
     };
   });
 }
@@ -324,109 +450,102 @@ if (!shardingDisabled) {
   const timingHits = recordedCount(files);
 
   mkdirSync(runTempDir, { recursive: true });
-  const sharedPools = /** @type {const} */ (['pure', 'dom-shared', 'node-shared']).filter(
-    (pool) => schedule.pools[pool].length > 0,
-  );
-  const minRequiredForIpc = sharedPools.length + (schedule.pools.isolated.length > 0 ? 1 : 0);
 
-  let scheduledPoolSummary =
-    `pure=${schedule.pools.pure.length}(${schedule.shardCounts.pure}) ` +
-    `dom-shared=${schedule.pools['dom-shared'].length}(${schedule.shardCounts['dom-shared']}) ` +
-    `node-shared=${schedule.pools['node-shared'].length}(${schedule.shardCounts['node-shared']}) ` +
-    `isolated=${schedule.pools.isolated.length}(${schedule.shardCounts.isolated})`;
+  // Unify `pure` and `node-shared` into one shared Node IPC queue (identical worker env, zero DOM preload).
+  const unifiedNodeFiles = [...schedule.pools['node-shared'], ...schedule.pools.pure].sort(byWeightDesc);
+  const domFiles = [...schedule.pools['dom-shared']];
+  const isoFiles = [...schedule.pools.isolated];
 
-  if (workerBudget >= 3 && sharedPools.length > 0 && workerBudget >= minRequiredForIpc) {
+  const activeSharedPools = /** @type {Array<'node-shared' | 'dom-shared'>} */ ([]);
+  if (unifiedNodeFiles.length > 0) activeSharedPools.push('node-shared');
+  if (domFiles.length > 0) activeSharedPools.push('dom-shared');
+
+  const processIsolatedSet = new Set(schedule.processIsolatedFiles ?? []);
+  const isoPlans = makeIsolatedShardPlans(isoFiles, runTempDir, processIsolatedSet);
+  const minRequiredForIpc = activeSharedPools.length + (isoPlans.length > 0 ? 1 : 0);
+
+  let scheduledPoolSummary = '';
+
+  if (activeSharedPools.length > 0 && workerBudget >= minRequiredForIpc) {
+    ipcDynamicScale = true;
     const poolWeights = {
-      pure: schedule.pools.pure.reduce((s, f) => s + Math.max(1, weightFn(f)), 0),
-      'dom-shared': schedule.pools['dom-shared'].reduce((s, f) => s + Math.max(1, weightFn(f)), 0),
-      'node-shared': schedule.pools['node-shared'].reduce((s, f) => s + Math.max(1, weightFn(f)), 0),
-      isolated: schedule.pools.isolated.reduce((s, f) => s + Math.max(1, weightFn(f)), 0),
+      'node-shared': unifiedNodeFiles.reduce((s, f) => s + Math.max(1, weightFn(f)), 0),
+      'dom-shared': domFiles.reduce((s, f) => s + Math.max(1, weightFn(f)), 0),
+      isolated: isoFiles.reduce((s, f) => s + Math.max(1, weightFn(f)) + ISO_COLD_START_MS, 0),
     };
-    const totalWeight =
-      poolWeights.pure + poolWeights['dom-shared'] + poolWeights['node-shared'] + poolWeights.isolated;
-    const rawIsoReserve =
-      schedule.pools.isolated.length === 0
-        ? 0
-        : Math.min(schedule.pools.isolated.length, Math.max(1, Math.round(workerBudget * (poolWeights.isolated / Math.max(1, totalWeight)))));
-    const isolatedReserve = Math.min(rawIsoReserve, Math.max(0, workerBudget - sharedPools.length));
-    const sharedBudget = Math.max(sharedPools.length, workerBudget - isolatedReserve);
-
+    const activeAllPools = /** @type {Array<'node-shared' | 'dom-shared' | 'isolated'>} */ ([
+      ...activeSharedPools,
+      ...(isoPlans.length > 0 ? [/** @type {const} */ ('isolated')] : []),
+    ]);
     const caps = {
-      pure: Math.min(schedule.pools.pure.length, Math.min(2, Math.max(1, Math.ceil(schedule.pools.pure.length / 10)))),
-      'dom-shared': Math.min(schedule.pools['dom-shared'].length, Math.min(8, sharedBudget)),
-      'node-shared': Math.min(schedule.pools['node-shared'].length, sharedBudget),
+      'node-shared': unifiedNodeFiles.length,
+      'dom-shared': domFiles.length,
+      isolated: isoPlans.length,
     };
-    const sharedTotalWeight = sharedPools.reduce((s, p) => s + poolWeights[p], 0);
-    /** @type {Record<'pure' | 'dom-shared' | 'node-shared', number>} */
-    const workerCounts = { pure: 0, 'dom-shared': 0, 'node-shared': 0 };
-    let usedShared = 0;
-    for (const pool of sharedPools) {
-      const n = Math.max(
-        1,
-        Math.min(caps[pool], Math.round(sharedBudget * (poolWeights[pool] / Math.max(1, sharedTotalWeight)))),
-      );
-      workerCounts[pool] = n;
-      usedShared += n;
+    // Minimax makespan allocation: start every active pool at 1 worker and greedily assign
+    // each remaining permit to the pool with the largest current average load (weight / workers).
+    // This prevents small-share rounding starvation (e.g. giving `node-shared` only 1 worker
+    // in `unit` while `dom-shared` has 10) and eliminates artificial per-pool caps.
+    /** @type {Record<'node-shared' | 'dom-shared' | 'isolated', number>} */
+    const alloc = { 'node-shared': 0, 'dom-shared': 0, isolated: 0 };
+    let used = 0;
+    for (const pool of activeAllPools) {
+      alloc[pool] = 1;
+      used += 1;
     }
-    while (usedShared > sharedBudget) {
-      const shrinkPool = sharedPools
-        .filter((p) => workerCounts[p] > 1)
-        .sort((a, b) => workerCounts[b] - workerCounts[a])[0];
-      if (!shrinkPool) break;
-      workerCounts[shrinkPool] -= 1;
-      usedShared -= 1;
-    }
-    for (const pool of /** @type {const} */ (['node-shared', 'dom-shared', 'pure'])) {
-      if (!sharedPools.includes(pool)) continue;
-      while (usedShared < sharedBudget && workerCounts[pool] < caps[pool]) {
-        workerCounts[pool] += 1;
-        usedShared += 1;
+    while (used < workerBudget) {
+      let bestPool = null;
+      let bestLoad = -1;
+      for (const pool of activeAllPools) {
+        if (alloc[pool] >= caps[pool]) continue;
+        const avgLoad = poolWeights[pool] / alloc[pool];
+        if (avgLoad > bestLoad) {
+          bestLoad = avgLoad;
+          bestPool = pool;
+        }
       }
+      if (!bestPool) break;
+      alloc[bestPool] += 1;
+      used += 1;
     }
 
-    const isoPlans = makeIsolatedShardPlans(
-      schedule.pools.isolated,
-      weightFn,
-      runTempDir,
-      timingReporterUrl,
-      extraArgs,
-      0,
-    );
+    const isolatedReserve = alloc.isolated;
+    const workerCounts = {
+      'node-shared': alloc['node-shared'],
+      'dom-shared': alloc['dom-shared'],
+    };
+    const refillOrder = [...activeSharedPools].sort((a, b) => poolWeights[b] - poolWeights[a]);
+
     const frontIsoCount = Math.min(isolatedReserve, isoPlans.length);
     for (let i = 0; i < frontIsoCount; i += 1) {
       plans.push(isoPlans[i]);
     }
 
-    let workerIdx = 0;
-    for (const pool of /** @type {const} */ (['node-shared', 'dom-shared', 'pure'])) {
+    if (unifiedNodeFiles.length > 0) {
+      ipcQueues['node-shared'] = {
+        files: unifiedNodeFiles,
+        cursor: 0,
+        activeWorkers: 0,
+        bootingWorkers: 0,
+        spawnedCount: 0,
+      };
+    }
+    if (domFiles.length > 0) {
+      ipcQueues['dom-shared'] = {
+        files: domFiles,
+        cursor: 0,
+        activeWorkers: 0,
+        bootingWorkers: 0,
+        spawnedCount: 0,
+      };
+    }
+
+    for (const pool of refillOrder) {
       const count = workerCounts[pool];
       if (count <= 0) continue;
-      ipcQueues[pool] = { files: [...schedule.pools[pool]], cursor: 0 };
       for (let i = 0; i < count; i += 1) {
-        const timingOutputPath = path.join(runTempDir, `timings-ipc-${workerIdx}.json`);
-        const manifestPath = path.join(runTempDir, `manifest-ipc-${workerIdx}.json`);
-        workerIdx += 1;
-        writeFileSync(
-          manifestPath,
-          JSON.stringify({
-            pool,
-            repoRoot,
-            ipcQueue: true,
-            timingOutputPath,
-            testTimeoutMs: 20_000,
-          }),
-          'utf8',
-        );
-        const args = ['--skip-cache-hygiene'];
-        if (pool === 'dom-shared') args.push('--dom-preload');
-        args.push('--shard-worker', manifestPath);
-        plans.push({
-          label: `${pool}-w${i + 1}/${count}`,
-          args,
-          permits: 1,
-          timingOutputPath,
-          ipcPool: pool,
-        });
+        ipcQueues[pool].spawnedCount += 1;
+        plans.push(createIpcWorkerPlan(pool, `${pool}-w${i + 1}/${count}`));
       }
     }
 
@@ -435,56 +554,61 @@ if (!shardingDisabled) {
     }
 
     scheduledPoolSummary =
-      `pure=${schedule.pools.pure.length}(${workerCounts.pure}) ` +
-      `dom-shared=${schedule.pools['dom-shared'].length}(${workerCounts['dom-shared']}) ` +
-      `node-shared=${schedule.pools['node-shared'].length}(${workerCounts['node-shared']}) ` +
-      `isolated=${schedule.pools.isolated.length}(${isoPlans.length})`;
+      `node-shared=${unifiedNodeFiles.length}(pure=${schedule.pools.pure.length}+node=${schedule.pools['node-shared'].length},w=${workerCounts['node-shared']}) ` +
+      `dom-shared=${domFiles.length}(w=${workerCounts['dom-shared']}) ` +
+      `isolated=${isoFiles.length}(${isoPlans.length},front=${frontIsoCount})`;
   } else {
-    schedule.plans.forEach((plan, index) => {
-      const timingOutputPath = path.join(runTempDir, `timings-${index}.json`);
-      if (plan.mode === 'shard-worker') {
-        const manifestPath = path.join(runTempDir, `manifest-${index}.json`);
+    // Low-budget or isolated-only path: static shard-worker plans + 1-file direct isolated shards.
+    /** @type {Array<{ weight: number, plan: ExecPlan }>} */
+    const weighted = [];
+    let staticIdx = 0;
+    const addStaticPool = (pool, poolFiles) => {
+      if (poolFiles.length === 0) return;
+      const shardCount = Math.min(poolFiles.length, workerBudget);
+      const buckets = balanceShardsLpt(poolFiles, shardCount, weightFn);
+      buckets.forEach((bucket, idx) => {
+        const timingOutputPath = path.join(runTempDir, `timings-static-${staticIdx}.json`);
+        const manifestPath = path.join(runTempDir, `manifest-static-${staticIdx}.json`);
+        staticIdx += 1;
         writeFileSync(
           manifestPath,
           JSON.stringify({
-            pool: plan.pool,
+            pool,
             repoRoot,
-            files: plan.files,
+            files: bucket.files,
             timingOutputPath,
             testTimeoutMs: 20_000,
           }),
           'utf8',
         );
-        const args = ['--skip-cache-hygiene'];
-        if (plan.pool === 'dom-shared') args.push('--dom-preload');
-        args.push('--shard-worker', manifestPath);
-        plans.push({
-          label: plan.label,
-          args,
-          permits: plan.permits,
-          timingOutputPath,
+        weighted.push({
+          weight: bucket.weight,
+          plan: {
+            kind: 'shard-worker',
+            label: `${pool}-${idx + 1}/${buckets.length}`,
+            args: [...tsxDirectArgs, shardWorkerPath, manifestPath],
+            permits: 1,
+            timingOutputPath,
+            enableDomPreload: pool === 'dom-shared',
+          },
         });
-      } else {
-        // Isolated shards use native process isolation with dual reporters so spec stays
-        // on stdout while per-file durations land in timingOutputPath.
-        const args = [
-          '--skip-cache-hygiene',
-          '--test-concurrency=1',
-          '--test-reporter=spec',
-          '--test-reporter-destination=stdout',
-          `--test-reporter=${timingReporterUrl}`,
-          `--test-reporter-destination=${timingOutputPath}`,
-          ...extraArgs,
-          ...plan.files,
-        ];
-        plans.push({
-          label: plan.label,
-          args,
-          permits: plan.permits,
-          timingOutputPath,
-        });
-      }
-    });
+      });
+    };
+    addStaticPool('node-shared', unifiedNodeFiles);
+    addStaticPool('dom-shared', domFiles);
+    for (let i = 0; i < isoPlans.length; i += 1) {
+      weighted.push({
+        weight: Math.max(1, weightFn(isoFiles[i])) + ISO_COLD_START_MS,
+        plan: isoPlans[i],
+      });
+    }
+    weighted.sort((a, b) => b.weight - a.weight || a.plan.label.localeCompare(b.plan.label));
+    for (const entry of weighted) plans.push(entry.plan);
+
+    scheduledPoolSummary =
+      `node-shared=${unifiedNodeFiles.length}(pure=${schedule.pools.pure.length}+node=${schedule.pools['node-shared'].length}) ` +
+      `dom-shared=${domFiles.length} ` +
+      `isolated=${isoFiles.length}(${isoPlans.length})`;
   }
 
   console.error(
@@ -493,44 +617,237 @@ if (!shardingDisabled) {
   );
 } else {
   plans.push({
+    kind: 'run-tests-fallback',
     label: 'single',
-    args: ['--skip-cache-hygiene', ...withDefaultTestConcurrency(extraArgs, workerBudget).concat(sortedAllFiles)],
+    args: [runTestsPath, '--skip-cache-hygiene', ...withDefaultTestConcurrency(extraArgs, workerBudget).concat(sortedAllFiles)],
     permits: workerBudget,
     timingOutputPath: null,
   });
 }
 
-// Reuse run-tests.mjs: cross-platform tsx spawn, per-test/total timeouts, and process-tree
-// cleanup all live there. All 4 pools run concurrently under the permit cap with zero serial barrier.
-const runTestsPath = path.join(repoRoot, 'scripts', 'run-tests.mjs');
-const suiteStartMs = Date.now();
-/** @type {Set<import('node:child_process').ChildProcess>} */
-const activeChildren = new Set();
-let receivedSignal = null;
+// ---------------------------------------------------------------------------
+// Unified single parent-death watchdog, timeout, signal forwarding & group drainage
+// ---------------------------------------------------------------------------
 
-for (const signal of ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGTERM']) {
-  process.on(signal, () => {
-    if (!receivedSignal) receivedSignal = signal;
-    for (const child of activeChildren) {
+const suiteStartMs = Date.now();
+/** @type {Set<{ child: import('node:child_process').ChildProcess, isDirect: boolean, detached: boolean }>} */
+const activeChildren = new Set();
+/** @type {Set<number>} */
+const drainingPgids = new Set();
+let forcedExitCode = null;
+let suiteTimer = null;
+let graceTimer = null;
+let lastResortTimer = null;
+let groupWatchTimer = null;
+let drainResolve = null;
+
+// Single POSIX parent-death watchdog for the entire suite (replaces 50+ per-shard watchdogs).
+// Tracks live detached child PGIDs via `+pid\n` / `-pid\n` / `ok\n` on stdin so if test-suites.mjs
+// itself is SIGKILLed, every active shard process group is still terminated cleanly.
+let watchdog = null;
+if (!shardingDisabled && process.platform !== 'win32') {
+  const watchdogEnv = { ...process.env };
+  delete watchdogEnv.NODE_OPTIONS;
+  const watchdogScript = `
+    const pids = new Set();
+    let ok = false;
+    let buf = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+      buf += chunk;
+      let nl;
+      while ((nl = buf.indexOf('\\n')) !== -1) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line === 'ok') {
+          ok = true;
+          process.exit(0);
+        } else if (line.startsWith('+')) {
+          const p = Number(line.slice(1));
+          if (Number.isInteger(p) && p > 0) pids.add(p);
+        } else if (line.startsWith('-')) {
+          const p = Number(line.slice(1));
+          pids.delete(p);
+        }
+      }
+    });
+    process.stdin.on('end', () => {
+      if (ok || pids.size === 0) process.exit(0);
+      for (const pid of pids) {
+        try { process.kill(-pid, 'SIGTERM'); } catch {}
+      }
+      setTimeout(() => {
+        for (const pid of pids) {
+          try { process.kill(-pid, 'SIGKILL'); } catch {}
+        }
+        process.exit(0);
+      }, 1000);
+    });
+  `;
+  watchdog = spawn(process.execPath, ['-e', watchdogScript], {
+    stdio: ['pipe', 'ignore', 'ignore'],
+    env: watchdogEnv,
+    detached: true,
+  });
+  watchdog.on('error', () => {});
+  watchdog.stdin?.on('error', () => {});
+  watchdog.unref();
+}
+
+function watchdogWrite(line) {
+  if (!watchdog?.stdin || watchdog.stdin.destroyed) return;
+  try {
+    watchdog.stdin.write(`${line}\n`);
+  } catch {
+    // Ignore closed pipes
+  }
+}
+
+function disarmWatchdog() {
+  if (!watchdog?.stdin || watchdog.stdin.destroyed) return;
+  try {
+    watchdog.stdin.end('ok\n');
+  } catch {
+    // Ignore closed pipes
+  }
+}
+
+function groupAlive(pid) {
+  if (process.platform === 'win32') return false;
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code !== 'ESRCH';
+  }
+}
+
+function anyDrainingGroupAlive() {
+  for (const pid of drainingPgids) {
+    if (groupAlive(pid)) return true;
+  }
+  return false;
+}
+
+function clearSuiteTimers() {
+  for (const t of [suiteTimer, graceTimer, lastResortTimer]) {
+    if (t) clearTimeout(t);
+  }
+  if (groupWatchTimer) clearInterval(groupWatchTimer);
+  suiteTimer = graceTimer = lastResortTimer = groupWatchTimer = null;
+}
+
+function cleanupRunTempDir() {
+  if (existsSync(runTempDir)) {
+    try {
+      rmSync(runTempDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup of per-run manifest/timing scratch dir
+    }
+  }
+}
+
+function checkDrainComplete() {
+  if (forcedExitCode === null) return;
+  if (activeChildren.size > 0) return;
+  if (process.platform !== 'win32' && anyDrainingGroupAlive()) return;
+  clearSuiteTimers();
+  if (drainResolve) {
+    const fn = drainResolve;
+    drainResolve = null;
+    fn();
+  }
+}
+
+function terminateAll(reason, exitCode, signal = 'SIGTERM') {
+  if (forcedExitCode !== null) return;
+  forcedExitCode = exitCode;
+  if (suiteTimer) {
+    clearTimeout(suiteTimer);
+    suiteTimer = null;
+  }
+  console.error(`[test-suites] ${reason}; terminating ${activeChildren.size} active test shard(s)`);
+
+  for (const entry of activeChildren) {
+    const { child, isDirect } = entry;
+    if (child.pid == null) continue;
+    if (!isDirect) {
       if (child.exitCode === null && child.signalCode === null) {
-        child.kill(signal);
+        try {
+          child.kill(signal);
+        } catch {
+          // Ignore already exited child
+        }
+      }
+      continue;
+    }
+    if (process.platform === 'win32') {
+      const tk = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      tk.on('error', (err) => console.error('[test-suites] taskkill failed to start:', err.message));
+    } else {
+      drainingPgids.add(child.pid);
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        // Process group already gone
       }
     }
-  });
+  }
+
+  if (process.platform !== 'win32' && drainingPgids.size > 0) {
+    graceTimer = setTimeout(() => {
+      for (const pid of drainingPgids) {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          // Process group drained
+        }
+      }
+    }, KILL_GRACE_MS);
+    graceTimer.unref?.();
+    groupWatchTimer = setInterval(checkDrainComplete, GROUP_POLL_MS);
+  }
+
+  lastResortTimer = setTimeout(() => {
+    console.error('[test-suites] shards did not drain after termination; forcing exit.');
+    cleanupRunTempDir();
+    disarmWatchdog();
+    process.exit(forcedExitCode);
+  }, LAST_RESORT_MS);
+  lastResortTimer.unref?.();
+
+  checkDrainComplete();
+}
+
+for (const signal of ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGTERM']) {
+  process.on(signal, () => terminateAll(`received ${signal}`, SIGNAL_EXIT_CODES[signal] ?? 1, signal));
+}
+
+if (!shardingDisabled) {
+  suiteTimer = setTimeout(() => {
+    terminateAll(
+      `suite total timeout (${timeoutMs}ms; tunable via HELMX_TEST_SUITE_TIMEOUT_MS); look for the last "[shard-worker] file i/N <path>" line above`,
+      124,
+      'SIGTERM',
+    );
+  }, timeoutMs);
+  suiteTimer.unref?.();
 }
 
 /**
  * Schedule queued test plans under the concurrency permit cap, keeping active test
- * processes <= maxPermits at any moment.
- * @param {Array<{ label: string, args: string[], permits: number, timingOutputPath: string | null }>} queue
+ * processes <= maxPermits at any moment and dynamically scaling shared IPC workers
+ * onto freed permits when another pool finishes early.
+ * @param {ExecPlan[]} initialPlans
  * @param {number} maxPermits
- * @returns {Promise<number[]>}
+ * @returns {Promise<{ allPlans: ExecPlan[], exitCodes: number[] }>}
  */
-function runPlanPool(queue, maxPermits) {
-  if (queue.length === 0) return Promise.resolve([]);
+function runPlanPool(initialPlans, maxPermits) {
+  if (initialPlans.length === 0) return Promise.resolve({ allPlans: [], exitCodes: [] });
   const cap = Math.max(1, maxPermits);
-  const results = new Array(queue.length).fill(0);
-  const pending = queue.map((plan, index) => ({
+  const allPlans = [...initialPlans];
+  const results = new Array(initialPlans.length).fill(0);
+  const pending = initialPlans.map((plan, index) => ({
     plan,
     index,
     cost: Math.max(1, Math.min(cap, plan.permits)),
@@ -539,60 +856,158 @@ function runPlanPool(queue, maxPermits) {
   let running = 0;
 
   return new Promise((resolve) => {
+    let resolved = false;
+    const finishPool = () => {
+      if (resolved) return;
+      resolved = true;
+      resolve({ allPlans, exitCodes: results });
+    };
+
+    const pickDynamicSharedPool = () => {
+      let bestPool = null;
+      let bestScore = 0;
+      for (const poolName of /** @type {const} */ (['dom-shared', 'node-shared'])) {
+        const q = ipcQueues[poolName];
+        if (!q) continue;
+        const remaining = q.files.length - q.cursor;
+        const unbookedStart = q.cursor + q.bootingWorkers;
+        const unbookedFiles = q.files.length - unbookedStart;
+        if (remaining <= 0 || unbookedFiles < 1) continue;
+        if (q.activeWorkers >= q.files.length) continue;
+        let unbookedWeight = 0;
+        for (let k = unbookedStart; k < q.files.length; k += 1) {
+          unbookedWeight += Math.max(1, weightFn(q.files[k]));
+        }
+        if (unbookedWeight < DYNAMIC_SPAWN_MIN_WEIGHT_MS) continue;
+        const score = unbookedWeight / Math.max(1, q.activeWorkers);
+        if (score > bestScore) {
+          bestScore = score;
+          bestPool = poolName;
+        }
+      }
+      return bestPool;
+    };
+
     const spawnOne = (item) =>
       new Promise((done) => {
-        const useIpc = Boolean(item.plan.ipcPool);
-        const child = spawn(process.execPath, [runTestsPath, ...item.plan.args], {
+        const { plan } = item;
+        const useIpc = Boolean(plan.ipcPool);
+        const isDirect = plan.kind !== 'run-tests-fallback';
+        const detached = isDirect && process.platform !== 'win32';
+        const env =
+          !isDirect
+            ? process.env
+            : plan.enableDomPreload
+              ? domWorkerEnv
+              : nodeWorkerEnv;
+
+        const q = useIpc ? ipcQueues[plan.ipcPool] : null;
+        let seenFirstNext = false;
+        if (q) {
+          q.activeWorkers += 1;
+          q.bootingWorkers += 1;
+        }
+
+        const child = spawn(process.execPath, plan.args, {
           stdio: useIpc ? ['inherit', 'inherit', 'inherit', 'ipc'] : 'inherit',
-          env: process.env,
+          env,
           cwd: repoRoot,
+          detached,
         });
-        if (useIpc) {
+        const entry = { child, isDirect, detached };
+        activeChildren.add(entry);
+        const childPid = child.pid;
+        if (detached && childPid != null) {
+          watchdogWrite(`+${childPid}`);
+        }
+
+        if (useIpc && q) {
           child.on('message', (msg) => {
             if (!msg || msg.type !== 'next' || !child.connected) return;
-            const queue = ipcQueues[item.plan.ipcPool];
-            if (queue && queue.cursor < queue.files.length) {
-              const file = queue.files[queue.cursor];
-              queue.cursor += 1;
-              child.send({ type: 'run', file, index: queue.cursor, total: queue.files.length });
+            if (!seenFirstNext) {
+              seenFirstNext = true;
+              q.bootingWorkers = Math.max(0, q.bootingWorkers - 1);
+            }
+            if (forcedExitCode === null && q.cursor < q.files.length) {
+              const file = q.files[q.cursor];
+              q.cursor += 1;
+              child.send({ type: 'run', file, index: q.cursor, total: q.files.length });
             } else {
               child.send({ type: 'done' });
             }
           });
         }
-        activeChildren.add(child);
+
+        let settled = false;
+        const settle = (code) => {
+          if (settled) return;
+          settled = true;
+          activeChildren.delete(entry);
+          if (q) {
+            if (!seenFirstNext) {
+              seenFirstNext = true;
+              q.bootingWorkers = Math.max(0, q.bootingWorkers - 1);
+            }
+            q.activeWorkers = Math.max(0, q.activeWorkers - 1);
+          }
+          if (detached && childPid != null && forcedExitCode === null) {
+            watchdogWrite(`-${childPid}`);
+          }
+          done(code);
+        };
+
         child.on('error', (err) => {
-          activeChildren.delete(child);
-          console.error(`[test-suites] failed to start ${item.plan.label}: ${err.message}`);
-          done(1);
+          console.error(`[test-suites] failed to start ${plan.label}: ${err.message}`);
+          settle(1);
         });
         child.on('exit', (code, signal) => {
-          activeChildren.delete(child);
-          if (code !== null) done(code);
-          else done(SIGNAL_EXIT_CODES[signal] ?? 1);
+          if (code !== null) settle(code);
+          else settle(SIGNAL_EXIT_CODES[signal] ?? 1);
         });
       });
 
+    const launchItem = (item) => {
+      available -= item.cost;
+      running += 1;
+      void spawnOne(item).then((code) => {
+        results[item.index] = code;
+        available += item.cost;
+        running -= 1;
+        pump();
+      });
+    };
+
     const pump = () => {
-      if (!receivedSignal) {
+      if (forcedExitCode === null) {
         for (let i = 0; i < pending.length; ) {
           if (pending[i].cost <= available) {
             const [item] = pending.splice(i, 1);
-            available -= item.cost;
-            running += 1;
-            void spawnOne(item).then((code) => {
-              results[item.index] = code;
-              available += item.cost;
-              running -= 1;
-              pump();
-            });
+            launchItem(item);
           } else {
             i += 1;
           }
         }
+        // Once all initial/isolated shards are in flight, redeploy freed permits onto any
+        // remaining shared IPC queue that still has meaningful unbooked queued work.
+        while (ipcDynamicScale && pending.length === 0 && available > 0) {
+          const poolName = pickDynamicSharedPool();
+          if (!poolName) break;
+          const q = ipcQueues[poolName];
+          q.spawnedCount += 1;
+          const dynPlan = createIpcWorkerPlan(poolName, `${poolName}-dyn${q.spawnedCount}`);
+          const index = allPlans.length;
+          allPlans.push(dynPlan);
+          results.push(0);
+          launchItem({ plan: dynPlan, index, cost: 1 });
+        }
       }
-      if (running === 0 && (receivedSignal || pending.length === 0)) {
-        resolve(results);
+      if (running === 0 && (forcedExitCode !== null || pending.length === 0)) {
+        if (forcedExitCode !== null && process.platform !== 'win32' && anyDrainingGroupAlive()) {
+          drainResolve = finishPool;
+          checkDrainComplete();
+        } else {
+          finishPool();
+        }
       }
     };
 
@@ -601,15 +1016,18 @@ function runPlanPool(queue, maxPermits) {
 }
 
 let exitCodes = [];
+let executedPlans = plans;
 try {
-  exitCodes = await runPlanPool(plans, workerBudget);
+  const outcome = await runPlanPool(plans, workerBudget);
+  executedPlans = outcome.allPlans;
+  exitCodes = outcome.exitCodes;
 
-  if (!receivedSignal && !shardingDisabled) {
+  if (forcedExitCode === null && !shardingDisabled) {
     /** @type {Record<string, number>} */
     const observed = {};
-    for (let i = 0; i < plans.length; i += 1) {
+    for (let i = 0; i < executedPlans.length; i += 1) {
       if (exitCodes[i] !== 0) continue;
-      const outPath = plans[i].timingOutputPath;
+      const outPath = executedPlans[i].timingOutputPath;
       if (!outPath || !existsSync(outPath)) continue;
       try {
         const parsed = JSON.parse(readFileSync(outPath, 'utf8'));
@@ -626,24 +1044,20 @@ try {
       }
     }
     if (Object.keys(observed).length > 0) {
-      const updated = mergeTestTimings(timingsStore, observed);
+      const updated = pruneStaleTestTimings(mergeTestTimings(timingsStore, observed), repoRoot);
       saveTestTimings(timingsCachePath, updated);
     }
   }
 } finally {
-  if (existsSync(runTempDir)) {
-    try {
-      rmSync(runTempDir, { recursive: true, force: true });
-    } catch {
-      // Best-effort cleanup of per-run manifest/timing scratch dir
-    }
-  }
+  clearSuiteTimers();
+  disarmWatchdog();
+  cleanupRunTempDir();
 }
 
 const elapsed = ((Date.now() - suiteStartMs) / 1000).toFixed(1);
 let finalCode = 0;
-if (receivedSignal) {
-  finalCode = SIGNAL_EXIT_CODES[receivedSignal] ?? 1;
+if (forcedExitCode !== null) {
+  finalCode = forcedExitCode;
 } else {
   const firstFailure = exitCodes.find((c) => c !== 0);
   if (firstFailure !== undefined) finalCode = firstFailure;

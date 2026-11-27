@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { withTimeout } from '@helmx/test-kit'
+import { waitFor, withTimeout } from '@helmx/test-kit'
 import { attachNodeWsGateway, attachNodeTunnelGateway, createEnvFabric, NodeForwardService } from '../src/env/index.js'
 import { createNodeDaemon } from '@helmx/node'
 
@@ -20,11 +20,11 @@ let rootDir: string
 
 before(async () => {
   rootDir = mkdtempSync(join(tmpdir(), 'helmx-forward-'))
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   rmSync(rootDir, { recursive: true, force: true })
-})
+}, { timeout: 60_000 })
 
 async function startStack(leaseTimeoutMs?: number) {
   const fabric = createEnvFabric({
@@ -49,6 +49,7 @@ async function startStack(leaseTimeoutMs?: number) {
   })
   const ready = await daemon.waitUntilRegistered(10_000)
   return {
+    fabric,
     forward,
     ready,
     close: async () => {
@@ -112,7 +113,10 @@ test('port forwarding: start/list/get/event + tears down listeners and tunnels a
     const payload = Buffer.from('forward-payload-hello')
     const echoed = await tcRequest(session.listenPort, payload)
     assert.ok(echoed.equals(payload), 'echoed bytes must match across forward tunnel')
-    await delay(100)
+    await waitFor(
+      () => events.includes('connection') && stack.forward.get(session.forwardId)?.activeConnections === 0,
+      { timeoutMs: 5_000, intervalMs: 10 },
+    )
     assert.ok(events.includes('connection'), 'connection event emitted')
     assert.equal(stack.forward.get(session.forwardId)?.activeConnections, 0, 'active counter resets to zero on socket close')
 
@@ -188,8 +192,15 @@ test('port forwarding: client disconnect mid-handshake cancels tunnel establishm
     const socket = net.connect({ host: '127.0.0.1', port: session.listenPort })
     await new Promise<void>((resolve) => socket.once('connect', resolve))
     socket.destroy()
-    // Wait beyond setup window: late-arriving tunnel gets destroyed cleanly without bumping activeConnections.
-    await delay(600)
+    // Deterministically wait until the connection is observed and TunnelTable has zero pending/active entries.
+    await waitFor(
+      () => {
+        const counts = stack.fabric.registry.debugTunnelCounts()
+        return (stack.forward.get(session.forwardId)?.totalConnections ?? 0) >= 1 && counts.pending === 0 && counts.active === 0
+      },
+      { timeoutMs: 5_000, intervalMs: 10 },
+    )
+    await delay(30)
     const current = stack.forward.get(session.forwardId)
     assert.ok(current !== undefined)
     assert.equal(current.activeConnections, 0, 'mid-handshake disconnect must not leave lingering activeConnections')
@@ -290,7 +301,10 @@ test('port forwarding: closing multiple concurrent connections decrements active
     for (let i = 0; i < payloads.length; i++) {
       assert.ok(echoed[i]!.equals(payloads[i]!), `echo mismatch on connection ${i + 1}`)
     }
-    await delay(150)
+    await waitFor(
+      () => stack.forward.get(session.forwardId)?.activeConnections === 0,
+      { timeoutMs: 5_000, intervalMs: 10 },
+    )
     const current = stack.forward.get(session.forwardId)
     assert.ok(current !== undefined)
     assert.equal(current.activeConnections, 0, 'active counter must settle back to zero without double-decrement skewing other connections')
@@ -298,7 +312,10 @@ test('port forwarding: closing multiple concurrent connections decrements active
     // Open two sequential connections afterwards to confirm counters stayed accurate.
     const again = await tcConcurrent(session.listenPort, [Buffer.from('a'.repeat(3000)), Buffer.from('b'.repeat(3000))])
     assert.equal(again.length, 2)
-    await delay(150)
+    await waitFor(
+      () => stack.forward.get(session.forwardId)?.activeConnections === 0,
+      { timeoutMs: 5_000, intervalMs: 10 },
+    )
     assert.equal(stack.forward.get(session.forwardId)?.activeConnections, 0, 'counters remain exact on subsequent connections')
   } finally {
     await stack.close()
@@ -336,7 +353,7 @@ test('port forwarding: stop is idempotent and concurrent calls await the same cl
 
 test('port forwarding: foreground lease expires cleanly if unattached, and holds open until final lease releases', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
-  const stack = await startStack(150) // Short 150ms lease timeout
+  const stack = await startStack(80) // Short 80ms lease timeout
   try {
     assert.equal(stack.ready, true)
     // 1) Never attached by client: expires automatically on lease timeout (avoids leaks if CLI dies/DELETE fails).
@@ -345,7 +362,10 @@ test('port forwarding: foreground lease expires cleanly if unattached, and holds
       listenPort: await freePort(),
       targetPort: echo.port,
     })
-    await delay(400)
+    await waitFor(
+      () => stack.forward.get(orphan.forwardId) === undefined,
+      { timeoutMs: 5_000, intervalMs: 10 },
+    )
     assert.equal(stack.forward.get(orphan.forwardId), undefined, 'unattached forward stops automatically after lease expires')
     await assert.rejects(
       tcRequest(orphan.listenPort, Buffer.from('x')).then(() => undefined, (e) => { throw e }),
@@ -359,16 +379,19 @@ test('port forwarding: foreground lease expires cleanly if unattached, and holds
       targetPort: echo.port,
     })
     const release1 = stack.forward.acquireLease(session.forwardId)
-    await delay(400) // Past lease window, yet holder keeps it alive.
+    await delay(130) // Past 80ms lease window, yet holder keeps it alive.
     assert.ok(stack.forward.get(session.forwardId) !== undefined, 'must not expire while a lease holder remains')
     const payload = Buffer.from('lease-alive')
     assert.ok((await tcRequest(session.listenPort, payload)).equals(payload), 'forwarding works while lease held')
     const release2 = stack.forward.acquireLease(session.forwardId)
     release1()
-    await delay(100)
+    await delay(30)
     assert.ok(stack.forward.get(session.forwardId) !== undefined, 'still held by second lease')
     release2()
-    await delay(200)
+    await waitFor(
+      () => stack.forward.get(session.forwardId) === undefined,
+      { timeoutMs: 5_000, intervalMs: 10 },
+    )
     assert.equal(stack.forward.get(session.forwardId), undefined, 'stops immediately once final lease releases')
     await assert.rejects(
       stack.forward.stop(session.forwardId),

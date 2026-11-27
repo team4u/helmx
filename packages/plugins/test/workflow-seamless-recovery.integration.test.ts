@@ -15,19 +15,19 @@
 
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
-import { test } from 'node:test'
+import { after, describe, test } from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { HelmxError, type AgentSpawnRequest, type HelmxEventFrame } from '@helmx/protocol'
-import { createHelmx } from '../../hub/src/app.js'
 import { KernelRuntime, startHub } from '@helmx/kernel'
 import type { WorkflowRunSummary } from '../src/contracts.js'
+import { createProfilePlugin } from '../src/profile.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
 import { readJournal } from '../src/workflow/dsl/index.js'
@@ -50,15 +50,52 @@ import {
 
 const require = createRequire(import.meta.url)
 const PLUGINS_PKG_DIR = new URL('../', import.meta.url).pathname
-const KERNEL_URL = import.meta.resolve('@helmx/kernel')
+const REPO_ROOT = resolve(PLUGINS_PKG_DIR, '../..')
+const TSX_TSCONFIG_PATH = join(REPO_ROOT, 'tsconfig.dev.json')
 const PI_AI_FAUX_URL = import.meta.resolve('@earendil-works/pi-ai/providers/faux')
-const WORKFLOW_SRC = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
-const WORKTREE_SRC = pathToFileURL(new URL('../src/worktree.ts', import.meta.url).pathname).href
-const PLUGIN_BUILD_URL = import.meta.resolve('@helmx/plugin-build')
-const CLI_ENTRY = new URL('../../cli/src/index.ts', import.meta.url).pathname
-const TSX_CLI = require.resolve('tsx/cli')
+
+const DIST_DEPS = [
+  join(REPO_ROOT, 'packages/protocol/dist/index.js'),
+  join(REPO_ROOT, 'packages/env-io/dist/index.js'),
+  join(REPO_ROOT, 'packages/kernel/dist/index.js'),
+  join(REPO_ROOT, 'packages/plugin-build/dist/index.js'),
+  join(REPO_ROOT, 'packages/plugins/dist/workflow.js'),
+  join(REPO_ROOT, 'packages/plugins/dist/worktree.js'),
+]
+const SEEDER_USE_DIST = DIST_DEPS.every((p) => existsSync(p))
+const CLI_DIST_ENTRY = join(REPO_ROOT, 'packages/cli/dist/index.js')
+const CLI_SRC_ENTRY = join(REPO_ROOT, 'packages/cli/src/index.ts')
+const CLI_USE_DIST = SEEDER_USE_DIST && existsSync(CLI_DIST_ENTRY)
+
+const KERNEL_URL = SEEDER_USE_DIST
+  ? pathToFileURL(join(REPO_ROOT, 'packages/kernel/dist/index.js')).href
+  : import.meta.resolve('@helmx/kernel')
+const WORKFLOW_URL = pathToFileURL(
+  SEEDER_USE_DIST
+    ? join(REPO_ROOT, 'packages/plugins/dist/workflow.js')
+    : join(REPO_ROOT, 'packages/plugins/src/workflow.ts'),
+).href
+const WORKTREE_URL = pathToFileURL(
+  SEEDER_USE_DIST
+    ? join(REPO_ROOT, 'packages/plugins/dist/worktree.js')
+    : join(REPO_ROOT, 'packages/plugins/src/worktree.ts'),
+).href
+const PLUGIN_BUILD_URL = SEEDER_USE_DIST
+  ? pathToFileURL(join(REPO_ROOT, 'packages/plugin-build/dist/index.js')).href
+  : import.meta.resolve('@helmx/plugin-build')
+
+let cachedTsxLoaderArgs: readonly string[] | undefined
+function tsxDirectArgs(): readonly string[] {
+  if (cachedTsxLoaderArgs === undefined) {
+    const preflight = require.resolve('tsx/preflight')
+    const loader = pathToFileURL(require.resolve('tsx')).href
+    cachedTsxLoaderArgs = ['--require', preflight, '--import', loader]
+  }
+  return cachedTsxLoaderArgs
+}
 
 const gitTemplate = createGitTemplate()
+after(() => gitTemplate.cleanup(), { timeout: 60_000 })
 
 function detailPathOf(dataDir: string, convId: number, runId: string): string {
   return join(
@@ -82,9 +119,15 @@ function readPersistedHeader(kernel: KernelRuntime, runId: string): RunHeader {
 }
 
 async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | null; out: string; err: string }> {
+  const spawnArgs = CLI_USE_DIST
+    ? [CLI_DIST_ENTRY, ...args]
+    : [...tsxDirectArgs(), CLI_SRC_ENTRY, ...args]
+  const spawnEnv = CLI_USE_DIST
+    ? sanitizedHostEnv(env)
+    : sanitizedHostEnv({ ...env, TSX_TSCONFIG_PATH })
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [TSX_CLI, CLI_ENTRY, ...args], {
-      env: sanitizedHostEnv(env),
+    const child = spawn(process.execPath, spawnArgs, {
+      env: spawnEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let out = ''
@@ -105,13 +148,15 @@ async function spawnSigkillSeeder(
   scriptBody: string,
   extraEnv: Record<string, string>,
 ): Promise<string> {
-  const scriptPath = join(seedDir, 'seeder.mts')
+  const scriptPath = join(seedDir, SEEDER_USE_DIST ? 'seeder.mjs' : 'seeder.mts')
   writeFileSync(scriptPath, scriptBody, 'utf8')
-  const child = spawn(process.execPath, [TSX_CLI, scriptPath], {
+  const spawnArgs = SEEDER_USE_DIST ? [scriptPath] : [...tsxDirectArgs(), scriptPath]
+  const child = spawn(process.execPath, spawnArgs, {
     cwd: PLUGINS_PKG_DIR,
     env: sanitizedHostEnv({
       HOME: seedDir,
       HELMX_WATCHDOG_INTERVAL_MS: '0',
+      ...(SEEDER_USE_DIST ? {} : { TSX_TSCONFIG_PATH }),
       ...extraEnv,
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -139,6 +184,31 @@ async function spawnSigkillSeeder(
   ])
 }
 
+async function openWorkflowHubRuntime(dataDir: string, faux: ReturnType<typeof makeFauxProvider>): Promise<{
+  kernel: KernelRuntime
+  close(): Promise<void>
+}> {
+  const kernel = await KernelRuntime.open({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    cwd: dataDir,
+    model: 'faux/faux-1',
+    providers: [faux.provider],
+    autoResume: false,
+  })
+  try {
+    await kernel.plugins.register(createProfilePlugin())
+    await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.plugins.register(createWorktreePlugin())
+    await kernel.start()
+    return { kernel, close: () => kernel.close() }
+  } catch (err) {
+    await kernel.close().catch(() => {})
+    throw err
+  }
+}
+
+describe('Hub 重启任务无感恢复与批量续跑（并发隔离用例）', { concurrency: 4, timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 // T1：原生后台单子代理（Worktree + Schema + Gate）close() 与 SIGKILL 无感恢复
 // ---------------------------------------------------------------------------
@@ -336,11 +406,11 @@ test('T1-B: 原生后台单子代理经真实子进程 SIGKILL 强杀后重启�
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_URL)}
 import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
-import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_SRC)}
-import { createWorktreePlugin } from ${JSON.stringify(WORKTREE_SRC)}
+import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_URL)}
+import { createWorktreePlugin } from ${JSON.stringify(WORKTREE_URL)}
 
-const dataDir = process.env.HELMX_DATA_DIR!
-const repoDir = process.env.HELMX_REPO_DIR!
+const dataDir = process.env.HELMX_DATA_DIR
+const repoDir = process.env.HELMX_REPO_DIR
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段极慢速流式回复用于在流式中途触发真实SIGKILL强杀现场验证后台子代理原位重挂恢复')])
 const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: repoDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
@@ -350,8 +420,8 @@ await kernel.start()
 const res = await kernel.plugins.executeTool('subagent', { prompt: '慢任务', isolation: 'worktree' }, { conversationId: 1, callId: 'call-sigkill-t1' })
 const runId = res.structuredOutput.runId
 const childId = res.structuredOutput.execution.conversationId
-for (let i = 0; i < 400; i++) {
-  await delay(10)
+for (let i = 0; i < 1000; i++) {
+  await delay(2)
   if (faux.state.callCount >= 1 && kernel.conversations.getConversation(childId).status === 'working') break
 }
 await kernel.documentStore.flush()
@@ -582,9 +652,9 @@ import { join } from 'node:path'
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_URL)}
 import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
-import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_SRC)}
+import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_URL)}
 
-const dataDir = process.env.HELMX_DATA_DIR!
+const dataDir = process.env.HELMX_DATA_DIR
 const faux = fauxProvider({ tokensPerSecond: 2, tokenSize: { min: 2, max: 2 } })
 let callIdx = 0
 faux.setResponses([
@@ -601,8 +671,8 @@ await kernel.start()
 const script = 'export const meta = { name: "t2-kill", description: "sigkill" }\\nconst a = await agent("s1")\\nconst b = await agent("s2:" + a)\\nreturn a + "|" + b'
 const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', { conversationId: 1, script })
 const jPath = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', 'workflow-' + run.id + '.jsonl')
-for (let i = 0; i < 400; i++) {
-  await delay(15)
+for (let i = 0; i < 1500; i++) {
+  await delay(2)
   if (callIdx >= 1) {
     try {
       const jContent = readFileSync(jPath, 'utf8')
@@ -708,7 +778,7 @@ process.kill(process.pid, 'SIGKILL')
 // ---------------------------------------------------------------------------
 
 test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执行中遇 close() 重启后按 (conversationId, callId) 幂等重放，零重复派生', { timeout: 60_000 }, async (t) => {
-  for (const mode of ['subagent', 'SubagentWorkflow'] as const) {
+  await Promise.all((['subagent', 'SubagentWorkflow'] as const).map(async (mode) => {
     const dataDir = useTempDir(t, `helmx-t3-${mode}-`)
     const enteredChildHold = deferred<void>()
 
@@ -853,7 +923,7 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
       await k1?.close().catch(() => {})
       await k2?.close().catch(() => {})
     }
-  }
+  }))
 })
 
 // ---------------------------------------------------------------------------
@@ -886,13 +956,7 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
     })
   }
 
-  let app = await createHelmx({
-    buildProvider: createPluginBuildProvider(),
-    dataDir,
-    cwd: dataDir,
-    model: 'faux/faux-1',
-    providers: [faux.provider],
-  })
+  let app = await openWorkflowHubRuntime(dataDir, faux)
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
     await registerExtRuntime(app.kernel)
@@ -1064,13 +1128,7 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
   await app.kernel.kvStore.flush()
   // 重启 Hub 以便 builtin:workflow 从刚种下的 SQLite KV 行 hydrate
   await app.close()
-  app = await createHelmx({
-    buildProvider: createPluginBuildProvider(),
-    dataDir,
-    cwd: dataDir,
-    model: 'faux/faux-1',
-    providers: [faux.provider],
-  })
+  app = await openWorkflowHubRuntime(dataDir, faux)
   await registerExtRuntime(app.kernel)
 
   hub = await startHub({ kernel: app.kernel as never, port: 0 })
@@ -1088,9 +1146,11 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
   }
 
   // 1) 参数互斥与缺失校验
-  const badConflict = await runCli(['workflows', 'resume-failed', '--conversation-id', '1', '--all', '--json'], cliEnv)
+  const [badConflict, badMissing] = await Promise.all([
+    runCli(['workflows', 'resume-failed', '--conversation-id', '1', '--all', '--json'], cliEnv),
+    runCli(['workflows', 'resume-failed', '--json'], cliEnv),
+  ])
   assert.notEqual(badConflict.code, 0, 'conversationId 与 --all 互斥必须报错')
-  const badMissing = await runCli(['workflows', 'resume-failed', '--json'], cliEnv)
   assert.notEqual(badMissing.code, 0, '未提供范围参数必须报错')
 
   // 2) 对 conv1 执行 CLI `--current`：5 个失败任务拉起 4 个、跳过 1 个（且不影响 conv2）
@@ -1147,6 +1207,7 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
     await hub?.close().catch(() => {})
     await app.close().catch(() => {})
   }
+})
 })
 
 test('安全红线：crashRecoveries > 3 熔断、配置校验与 HELMX_AUTO_RECOVER=0 逃生阀', { timeout: 60_000 }, async (t) => {

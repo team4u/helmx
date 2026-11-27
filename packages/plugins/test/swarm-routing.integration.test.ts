@@ -8,16 +8,15 @@
  * 4) done 非竞态补报、失败回合排队唤醒送达、活跃成员删锁与停用期对账；
  * 5) 主控分层唤醒（review 越过长跑成员、无唤醒 done 触发 stall、inflightReport 权威恢复、跨重启补报）。
  */
-import { after, describe, test } from 'node:test'
+import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
 import { HelmxError } from '@helmx/protocol'
-import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { createHelmx } from '../../hub/src/app.js'
 import { actionToolResult } from '@helmx/kernel/testing'
 import {
   createGitTemplate,
@@ -32,7 +31,9 @@ import {
   WORKTREE_ID,
   captureRequestMeta,
   openSwarmEnv,
+  openSwarmRuntime,
   setSwarmRoleResponses,
+  type SwarmTestEnv,
 } from './helpers/swarm-integration-env.js'
 import {
   SWARM_PLUGIN_ID,
@@ -42,12 +43,26 @@ import {
   type CollabGroupRecord,
 } from '../src/swarm.js'
 
-describe('builtin:swarm board routing, settlement & self-healing', () => {
+describe('builtin:swarm board routing, settlement & self-healing', { concurrency: 2, timeout: 60_000 }, () => {
   const gitTemplate = createGitTemplate()
-  after(() => gitTemplate.cleanup())
+  after(() => gitTemplate.cleanup(), { timeout: 60_000 })
 
-  test('swarm-int3: forkFrom clean anchor, direct targeting & passive wake=false coalescing, abort_worker brake, switch_worker_model, inspect_worker, and @ completions', { timeout: 60_000 }, async (t) => {
-    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'), gitTemplate)
+  describe('shared routing runtime', { concurrency: false, timeout: 60_000 }, () => {
+    let sharedRoot = ''
+    let sharedEnv: SwarmTestEnv | undefined
+
+    before(async () => {
+      sharedRoot = mkdtempSync(join(tmpdir(), 'helmx-swarm-routing-shared-'))
+      sharedEnv = await openSwarmEnv(sharedRoot, gitTemplate)
+    }, { timeout: 60_000 })
+
+    after(async () => {
+      await sharedEnv?.close().catch(() => {})
+      if (sharedRoot) rmSync(sharedRoot, { recursive: true, force: true })
+    }, { timeout: 60_000 })
+
+  test('swarm-int3: forkFrom clean anchor, direct targeting & passive wake=false coalescing, abort_worker brake, switch_worker_model, inspect_worker, and @ completions', { timeout: 60_000 }, async () => {
+    const env = sharedEnv!
     try {
       const { kernel } = env.app
       const coord = await kernel.conversations.createConversation({ title: 'Context Coordinator', profileId: 'assistant', cwd: env.repoDir })
@@ -189,8 +204,446 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
     } finally {
-      await env.close()
+      env.faux.setResponses([])
     }
+  })
+
+  test('swarm-int6: multi-tool-round worker turn settles once — no mid-turn silent-exit nudge, no false system blocker, single post-done coordinator report', { timeout: 60_000 }, async () => {
+    const env = sharedEnv!
+    const { app, faux, repoDir } = env
+    let groupId = ''
+    let coordId = 0
+    try {
+      const coord = await app.kernel.conversations.createConversation({ title: 'Handover Coord', profileId: 'assistant', cwd: repoDir })
+      coordId = coord.id
+      const created = (await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Handover Squad',
+        conversationId: coord.id,
+      })) as { groupId: string }
+      groupId = created.groupId
+
+      // Worker turn: two plain bash rounds (each ends in a pi-durable run handOver to a new generation task),
+      // then the done post, then the final answer text. Pre-fix every handOver emitted a spurious turn_settled:
+      // the first fired a silent-exit nudge mid-turn and the second auto-posted a false system [blocker].
+      setSwarmRoleResponses(faux, {
+        coder: [
+          fauxAssistantMessage([fauxToolCall('bash', { command: 'echo step one' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage([fauxToolCall('bash', { command: 'echo step two' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage(
+            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Shipped after two tool rounds.' })],
+            { stopReason: 'toolUse' },
+          ),
+          fauxAssistantMessage('Final summary after the done post.'),
+        ],
+        coordinator: [fauxAssistantMessage('Coordinator received the final done report.')],
+      })
+
+      const worker = (await app.kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { prompt: 'Run two tool steps, then post done.', name: 'coder' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+
+      await app.kernel.conversations.waitForIdle(worker.workerConversationId)
+      await waitFor(() => app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await app.kernel.conversations.waitForIdle(coord.id)
+
+      // 1) Board carries only the coordinator brief and the worker done — no system blocker, no stall, no echo posts.
+      const read = (await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
+      assert.equal(
+        read.posts.filter((p) => p.from === 'system').length,
+        0,
+        `system posts must stay empty, got ${JSON.stringify(read.posts.filter((p) => p.from === 'system'))}`,
+      )
+      assert.equal(read.posts.filter((p) => p.kind === 'done' && p.from === 'coder').length, 1)
+
+      // 2) The worker conversation never received a silent-exit nudge (mid-turn settlement misfire).
+      const workerDetail = await app.kernel.conversations.getConversationDetail(worker.workerConversationId, { limit: 50 })
+      assert.equal(
+        workerDetail.entries.some((e) => JSON.stringify(e.data ?? '').includes('swarm_silent_exit_nudge')),
+        false,
+        'no silent-exit nudge may be queued while the worker is mid-turn',
+      )
+
+      // 3) The coordinator received exactly one board report, covering the done post.
+      const coordDetail = await app.kernel.conversations.getConversationDetail(coord.id, { limit: 50 })
+      const reportInputs = coordDetail.entries.filter(
+        (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
+      )
+      assert.equal(reportInputs.length, 1, `expected exactly one coordinator report, got ${reportInputs.length}`)
+      assert.match(JSON.stringify(reportInputs[0]!.data ?? ''), /\[done\] @coder/)
+    } finally {
+      if (groupId && coordId) {
+        await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coordId }).catch(() => {})
+      }
+      faux.setResponses([])
+    }
+  })
+
+  test('swarm-int16: switch_worker_model effort+prompt one-shot resume, board_status model summary, and 0-token peer hop circuit breaker', { timeout: 60_000 }, async () => {
+    const env = sharedEnv!
+    try {
+      const { kernel } = env.app
+      await kernel.plugins.setConfig(SWARM_PLUGIN_ID, { maxPeerHopsWithoutCoordinator: 2 })
+      const coord = await kernel.conversations.createConversation({ title: 'Swarm Polish Coord', profileId: 'assistant', cwd: env.repoDir })
+      const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Polish Squad',
+        conversationId: coord.id,
+      })) as { groupId: string }
+
+      const execSwarmDerived = async <TOut>(
+        toolName: string,
+        input: Record<string, unknown>,
+        ctx: { conversationId: number; callId?: string },
+      ): Promise<{ output: string; structuredOutput: TOut }> => {
+        const spec = kernel.plugins.listTools().find((t) => t.name === toolName)
+        assert.ok(spec && spec.sourceKind === 'action', `expected derived action tool ${toolName}`)
+        const raw = await kernel.plugins.executeTool(toolName, input, ctx)
+        const normalized = actionToolResult(raw, input, (text) => text, {
+          structuredOutputSchema: spec.structuredOutputSchema,
+          presentationMetaSchema: spec.presentationMetaSchema,
+          projectPresentationMeta: spec.projectPresentationMeta,
+          formatOutput: spec.formatOutput,
+          toolName: spec.name,
+        })
+        return {
+          output: normalized.output.map((b) => b.text).join(''),
+          structuredOutput: normalized.structuredOutput as TOut,
+        }
+      }
+
+      // 1) switch_worker_model with effort + prompt switches model & thinkingLevel and wakes worker in one step (idempotent replay)
+      let resumedOnNewModel = false
+      setSwarmRoleResponses(env.faux, {
+        alpha: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'alpha parked' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('alpha parked'),
+          () => {
+            resumedOnNewModel = true
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'alpha resumed on faux-2' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('alpha resumed done'),
+        ],
+        coordinator: [
+          fauxAssistantMessage('Coordinator noted stall.'),
+          fauxAssistantMessage('Coordinator noted resumed alpha done.'),
+        ],
+      })
+
+      const alpha = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'alpha', prompt: 'Initial turn on faux-1' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(alpha.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      const switchToolRes = await execSwarmDerived<{ model: string; effort?: string; postSeq?: number }>(
+        'swarm_switch_worker_model',
+        { groupId, name: 'alpha', model: 'faux/faux-2', effort: 'high', prompt: 'Continue task on stronger model.' },
+        { conversationId: coord.id, callId: 'call-switch-resume-1' },
+      )
+      assert.equal(switchToolRes.structuredOutput.model, 'faux/faux-2')
+      assert.equal(switchToolRes.structuredOutput.effort, 'high')
+      assert.ok(typeof switchToolRes.structuredOutput.postSeq === 'number')
+      assert.match(switchToolRes.output, /effort=high/)
+      assert.match(switchToolRes.output, /brief #/)
+      assert.equal(kernel.conversations.getConversation(alpha.workerConversationId).thinkingLevel, 'high')
+
+      // Replay with same callId must deduplicate and return the same postSeq without waking twice
+      const replayRes = await execSwarmDerived<{ postSeq?: number }>(
+        'swarm_switch_worker_model',
+        { groupId, name: 'alpha', model: 'faux/faux-2', effort: 'high', prompt: 'Continue task on stronger model.' },
+        { conversationId: coord.id, callId: 'call-switch-resume-1' },
+      )
+      assert.equal(replayRes.structuredOutput.postSeq, switchToolRes.structuredOutput.postSeq)
+
+      await waitFor(() => resumedOnNewModel)
+      await kernel.conversations.waitForIdle(alpha.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      // board_status text summary surfaces member model=
+      const statusTool = await execSwarmDerived<{ members: Array<{ name: string }> }>(
+        'swarm_board_status',
+        { groupId },
+        { conversationId: coord.id },
+      )
+      assert.match(statusTool.output, /model=faux\/faux-2/)
+
+      // 2) 0-Token peer-to-peer hop circuit breaker (maxPeerHopsWithoutCoordinator = 2):
+      //    p1 -> p2 (hop 1) -> p1 (hop 2) -> p2 (hop 3 > 2 => trips breaker, pauses p2 wake, escalates system [blocker] to coordinator!)
+      let p1Turns = 0
+      let p2Turns = 0
+      setSwarmRoleResponses(env.faux, {
+        p1: [
+          () => {
+            p1Turns += 1
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['p2'], kind: 'handoff', body: 'Ping #1 to p2' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('p1 sent ping 1'),
+          () => {
+            p1Turns += 1
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['p2'], kind: 'handoff', body: 'Ping #2 to p2 (should trip breaker)' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('p1 sent ping 2'),
+        ],
+        p2: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'p2 ready' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('p2 ready'),
+          () => {
+            p2Turns += 1
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['p1'], kind: 'review', body: 'Pong #1 back to p1' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('p2 sent pong 1'),
+          () => {
+            p2Turns += 1
+            return fauxAssistantMessage('p2 should NOT be woken on tripped hop 3')
+          },
+        ],
+        coordinator: [
+          fauxAssistantMessage('Coordinator noted p2 ready stall.'),
+          fauxAssistantMessage('Coordinator received circuit breaker blocker.'),
+        ],
+      })
+
+      const p2 = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'p2', prompt: 'Stand by as reviewer' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(p2.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      const p1 = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'p1', prompt: 'Start ping-pong loop with p2' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+
+      await waitFor(async () => {
+        const read = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
+        return read.posts.some((p) => p.from === 'system' && p.kind === 'blocker' && p.body.includes('circuit breaker tripped'))
+      })
+      await kernel.conversations.waitForIdle(p1.workerConversationId)
+      await kernel.conversations.waitForIdle(p2.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      assert.equal(p1Turns, 2, 'p1 ran initial brief + 1 review pong')
+      assert.equal(p2Turns, 1, 'p2 must NOT be woken on the 3rd consecutive peer hop after breaker tripped')
+
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
+    } finally {
+      await env.app.kernel.plugins.setConfig(SWARM_PLUGIN_ID, { maxPeerHopsWithoutCoordinator: 16 }).catch(() => {})
+      env.faux.setResponses([])
+    }
+  })
+
+  test('swarm-int18: forkFrom worker persists forked=true & context boundary, non-forked worker follows builtin:workflow.maxSubagentDepth (default 1, opt-in 2)', { timeout: 60_000 }, async () => {
+    const env = sharedEnv!
+    try {
+      const { kernel } = env.app
+      await kernel.services.profiles.save({ id: 'reviewer', name: 'Reviewer', skills: [] })
+
+      const coord = await kernel.conversations.createConversation({ title: 'Fork Guard Coord', profileId: 'assistant', cwd: env.repoDir })
+      env.faux.setResponses([fauxAssistantMessage('Stored parent context FK-88.')])
+      await kernel.conversations.submitInput(coord.id, 'Remember context FK-88 and do not re-delegate it.')
+      await kernel.conversations.waitForIdle(coord.id)
+
+      const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Fork Guard Squad',
+        conversationId: coord.id,
+      })) as { groupId: string }
+
+      let forkedRwMeta: ReturnType<typeof captureRequestMeta> | undefined
+      let forkedRwSawHistory = false
+      let forkedRoMeta: ReturnType<typeof captureRequestMeta> | undefined
+      let plainRwMeta: ReturnType<typeof captureRequestMeta> | undefined
+      let delegatingRwMeta: ReturnType<typeof captureRequestMeta> | undefined
+
+      setSwarmRoleResponses(env.faux, {
+        forked_rw: [
+          (ctx) => {
+            forkedRwMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+            forkedRwSawHistory = JSON.stringify(ctx.messages).includes('FK-88')
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'forked_rw done' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('forked_rw settled'),
+        ],
+        forked_ro: [
+          (ctx) => {
+            forkedRoMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'forked_ro done' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('forked_ro settled'),
+        ],
+        plain_rw: [
+          (ctx) => {
+            plainRwMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'plain_rw done' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('plain_rw settled'),
+        ],
+        delegating_rw: [
+          (ctx) => {
+            delegatingRwMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'delegating_rw done' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('delegating_rw settled'),
+        ],
+        coordinator: [
+          fauxAssistantMessage('Coordinator noted forked_rw done.'),
+          fauxAssistantMessage('Coordinator noted forked_ro done.'),
+          fauxAssistantMessage('Coordinator noted plain_rw done.'),
+          fauxAssistantMessage('Coordinator noted delegating_rw done.'),
+        ],
+      })
+
+      const forkedRw = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'forked_rw', prompt: 'Execute forked readwrite task directly.', forkFrom: 'coordinator' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(forkedRw.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      const forkedRo = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'forked_ro', prompt: 'Verify readonly forked slice.', forkFrom: 'coordinator', access: 'readonly' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(forkedRo.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      const plainRw = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'plain_rw', prompt: 'Run standard non-forked worker.' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(plainRw.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      // 1) Forked readwrite worker: inherits context, gets rule 4 boundary, strips dispatch tools & profile.catalog, keeps work tools
+      assert.equal(forkedRwSawHistory, true, 'forked_rw must inherit fork source history')
+      assert.ok(forkedRwMeta, 'must capture forked_rw request metadata')
+      const rwSec = forkedRwMeta.sectionsById['swarm.active_group'] ?? ''
+      assert.match(rwSec, /^<active_swarm_group[\s\S]*4\. Context boundary:/, 'forked readwrite worker must receive rule 4 context boundary')
+      assert.ok(rwSec.includes('ALREADY fulfilled by dispatching you'))
+      for (const stripped of ['subagent', 'SubagentWorkflow', 'swarm_create_group', 'swarm_dispatch_worker']) {
+        assert.equal(forkedRwMeta.toolNames.includes(stripped), false, `forked_rw must strip ${stripped}`)
+      }
+      for (const kept of ['swarm_board_post', 'bash', 'read', 'write']) {
+        assert.equal(forkedRwMeta.toolNames.includes(kept), true, `forked_rw must retain ${kept}`)
+      }
+      assert.equal(forkedRwMeta.sectionsById['profile.catalog'], undefined, 'forked_rw must suppress profile.catalog')
+
+      // 2) Forked readonly worker: keeps rule 4 readonly + rule 5 boundary, strips dispatch tools & profile.catalog
+      assert.ok(forkedRoMeta, 'must capture forked_ro request metadata')
+      const roSec = forkedRoMeta.sectionsById['swarm.active_group'] ?? ''
+      assert.ok(roSec.includes('4. Your access is readonly:'), 'forked readonly worker must keep rule 4 readonly')
+      assert.ok(roSec.includes('5. Context boundary:'), 'forked readonly worker must append rule 5 context boundary')
+      assert.equal(forkedRoMeta.toolNames.includes('subagent'), false)
+      assert.equal(forkedRoMeta.toolNames.includes('SubagentWorkflow'), false)
+      assert.equal(forkedRoMeta.sectionsById['profile.catalog'], undefined)
+
+      // 3) Default non-forked worker: NO context boundary clause, defaults to depth-1 leaf (strips dispatch tools & profile.catalog, rejects workflow.run)
+      assert.ok(plainRwMeta, 'must capture plain_rw request metadata')
+      const plainSec = plainRwMeta.sectionsById['swarm.active_group'] ?? ''
+      assert.equal(plainSec.includes('Context boundary:'), false, 'non-forked worker must not get forked context boundary')
+      assert.equal(plainSec.includes('ALREADY fulfilled'), false)
+      for (const stripped of ['subagent', 'SubagentWorkflow', 'swarm_create_group', 'swarm_dispatch_worker']) {
+        assert.equal(plainRwMeta.toolNames.includes(stripped), false, `default non-forked worker strips ${stripped}`)
+      }
+      for (const kept of ['swarm_board_post', 'bash', 'read', 'write']) {
+        assert.equal(plainRwMeta.toolNames.includes(kept), true, `default non-forked worker retains ${kept}`)
+      }
+      assert.equal(plainRwMeta.sectionsById['profile.catalog'], undefined, 'default non-forked worker suppresses profile.catalog')
+      await assert.rejects(
+        () =>
+          kernel.plugins.invokeAction(WORKFLOW_ID, 'run', {
+            script: 'export const meta = { name: "blocked", description: "d" }\nreturn 1',
+            conversationId: plainRw.workerConversationId,
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
+      )
+
+      // 4) Raising single-source config `builtin:workflow.maxSubagentDepth` to 2 unlocks non-forked worker dispatch tools & catalog
+      await kernel.plugins.setConfig(WORKFLOW_ID, { maxSubagentDepth: 2 })
+      await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'delegating_rw', prompt: 'Run non-forked worker under global depth-2 ceiling.' },
+        { conversationId: coord.id },
+      )
+      await waitFor(() => delegatingRwMeta !== undefined && kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      assert.ok(delegatingRwMeta, 'must capture delegating_rw request metadata')
+      const delegSec = delegatingRwMeta.sectionsById['swarm.active_group'] ?? ''
+      assert.equal(delegSec.includes('Context boundary:'), false, 'non-forked delegating worker must not get forked context boundary')
+      assert.equal(delegatingRwMeta.toolNames.includes('subagent'), true, 'non-forked worker retains subagent under ceiling 2')
+      assert.equal(delegatingRwMeta.toolNames.includes('SubagentWorkflow'), true, 'non-forked worker retains SubagentWorkflow under ceiling 2')
+      assert.equal(delegatingRwMeta.toolNames.includes('swarm_board_post'), true)
+      assert.ok(typeof delegatingRwMeta.sectionsById['profile.catalog'] === 'string', 'non-forked worker retains profile.catalog under ceiling 2')
+      assert.ok(delegatingRwMeta.sectionsById['profile.catalog'].includes('id="reviewer"'))
+
+      // 5) Persisted forked=true in board_status and meta.json (no extra maxSubagentDepth field)
+      const status = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId }, { conversationId: coord.id })) as BoardViewDoc
+      assert.equal(status.members.find((m) => m.name === 'forked_rw')?.forked, true)
+      assert.equal(status.members.find((m) => m.name === 'forked_ro')?.forked, true)
+      assert.equal(status.members.find((m) => m.name === 'plain_rw')?.forked, undefined)
+      assert.equal(status.members.find((m) => m.name === 'delegating_rw')?.forked, undefined)
+
+      const metaPath = join(env.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId, 'meta.json')
+      const persistedMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
+      assert.equal(persistedMeta.members.find((m) => m.name === 'forked_rw')?.forked, true)
+      assert.equal(persistedMeta.members.find((m) => m.name === 'forked_ro')?.forked, true)
+      assert.equal(persistedMeta.members.find((m) => m.name === 'plain_rw')?.forked, undefined)
+      assert.equal(persistedMeta.members.find((m) => m.name === 'delegating_rw')?.forked, undefined)
+
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
+    } finally {
+      await env.app.kernel.plugins.setConfig(WORKFLOW_ID, { maxSubagentDepth: 1 }).catch(() => {})
+      env.faux.setResponses([])
+    }
+  })
   })
 
   test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> fallback [blocker], 0-Token [stall], and Hub restart recovery', { timeout: 60_000 }, async (t) => {
@@ -206,12 +659,10 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       } else {
         faux.setResponses([])
       }
-      const app = await createHelmx({
-        buildProvider: createPluginBuildProvider(),
+      const app = await openSwarmRuntime({
         dataDir,
         cwd: repoDir,
-        model: 'faux/faux-1',
-        providers: [faux.provider],
+        faux,
       })
       return { faux, app }
     }
@@ -348,87 +799,6 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       await inst.app.kernel.conversations.waitForIdle(coord.id)
     } finally {
       await inst.app.close()
-    }
-  })
-
-  // ---------------------------------------------------------------------------
-  // int6: 多工具轮成员回合的精确结算（回归：handOver 曾被误判为 run 结束）
-  // ---------------------------------------------------------------------------
-
-  test('swarm-int6: multi-tool-round worker turn settles once — no mid-turn silent-exit nudge, no false system blocker, single post-done coordinator report', { timeout: 60_000 }, async (t) => {
-    const root = useTempDir(t, 'helmx-swarm-handover-')
-    const dataDir = join(root, 'data')
-    const repoDir = join(root, 'repo')
-    gitTemplate.cloneTo(repoDir)
-
-    const faux = makeFauxProvider({ models: [{ id: 'faux-1' }] })
-    const app = await createHelmx({
-      buildProvider: createPluginBuildProvider(),
-      dataDir,
-      cwd: repoDir,
-      model: 'faux/faux-1',
-      providers: [faux.provider],
-    })
-    try {
-      const coord = await app.kernel.conversations.createConversation({ title: 'Handover Coord', profileId: 'assistant', cwd: repoDir })
-      const { groupId } = (await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
-        title: 'Handover Squad',
-        conversationId: coord.id,
-      })) as { groupId: string }
-
-      // Worker turn: two plain bash rounds (each ends in a pi-durable run handOver to a new generation task),
-      // then the done post, then the final answer text. Pre-fix every handOver emitted a spurious turn_settled:
-      // the first fired a silent-exit nudge mid-turn and the second auto-posted a false system [blocker].
-      setSwarmRoleResponses(faux, {
-        coder: [
-          fauxAssistantMessage([fauxToolCall('bash', { command: 'echo step one' })], { stopReason: 'toolUse' }),
-          fauxAssistantMessage([fauxToolCall('bash', { command: 'echo step two' })], { stopReason: 'toolUse' }),
-          fauxAssistantMessage(
-            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Shipped after two tool rounds.' })],
-            { stopReason: 'toolUse' },
-          ),
-          fauxAssistantMessage('Final summary after the done post.'),
-        ],
-        coordinator: [fauxAssistantMessage('Coordinator received the final done report.')],
-      })
-
-      const worker = (await app.kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { prompt: 'Run two tool steps, then post done.', name: 'coder' },
-        { conversationId: coord.id },
-      )) as { workerConversationId: number }
-
-      await app.kernel.conversations.waitForIdle(worker.workerConversationId)
-      await waitFor(() => app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await app.kernel.conversations.waitForIdle(coord.id)
-
-      // 1) Board carries only the coordinator brief and the worker done — no system blocker, no stall, no echo posts.
-      const read = (await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
-      assert.equal(
-        read.posts.filter((p) => p.from === 'system').length,
-        0,
-        `system posts must stay empty, got ${JSON.stringify(read.posts.filter((p) => p.from === 'system'))}`,
-      )
-      assert.equal(read.posts.filter((p) => p.kind === 'done' && p.from === 'coder').length, 1)
-
-      // 2) The worker conversation never received a silent-exit nudge (mid-turn settlement misfire).
-      const workerDetail = await app.kernel.conversations.getConversationDetail(worker.workerConversationId, { limit: 50 })
-      assert.equal(
-        workerDetail.entries.some((e) => JSON.stringify(e.data ?? '').includes('swarm_silent_exit_nudge')),
-        false,
-        'no silent-exit nudge may be queued while the worker is mid-turn',
-      )
-
-      // 3) The coordinator received exactly one board report, covering the done post.
-      const coordDetail = await app.kernel.conversations.getConversationDetail(coord.id, { limit: 50 })
-      const reportInputs = coordDetail.entries.filter(
-        (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
-      )
-      assert.equal(reportInputs.length, 1, `expected exactly one coordinator report, got ${reportInputs.length}`)
-      assert.match(JSON.stringify(reportInputs[0]!.data ?? ''), /\[done\] @coder/)
-    } finally {
-      await app.close()
     }
   })
 
@@ -923,12 +1293,10 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         return fauxAssistantMessage('Coordinator processed recovered uncommitted report.')
       },
     ])
-    const app2 = await createHelmx({
-      buildProvider: createPluginBuildProvider(),
+    const app2 = await openSwarmRuntime({
       dataDir: env1.dataDir,
       cwd: env1.repoDir,
-      model: 'faux/faux-1',
-      providers: [faux2.provider],
+      faux: faux2,
     })
     try {
       const recoveredText = await recoveredReportSeen.promise
@@ -981,12 +1349,10 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         return fauxAssistantMessage('Coordinator received restarted idle catch-up.')
       },
     ])
-    const app3 = await createHelmx({
-      buildProvider: createPluginBuildProvider(),
+    const app3 = await openSwarmRuntime({
       dataDir: env1.dataDir,
       cwd: env1.repoDir,
-      model: 'faux/faux-1',
-      providers: [faux3.provider],
+      faux: faux3,
     })
     try {
       const catchupText = await catchupSeen.promise
@@ -1015,368 +1381,6 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       assert.ok(catchupPosts.some((p) => p.kind === 'comment' && p.body === 'Trailing passive comment after done.'))
     } finally {
       await app3.close()
-    }
-  })
-
-  test('swarm-int16: switch_worker_model effort+prompt one-shot resume, board_status model summary, and 0-token peer hop circuit breaker', { timeout: 60_000 }, async (t) => {
-    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int16-'), gitTemplate)
-    try {
-      const { kernel } = env.app
-      await kernel.plugins.setConfig(SWARM_PLUGIN_ID, { maxPeerHopsWithoutCoordinator: 2 })
-      const coord = await kernel.conversations.createConversation({ title: 'Swarm Polish Coord', profileId: 'assistant', cwd: env.repoDir })
-      const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
-        title: 'Polish Squad',
-        conversationId: coord.id,
-      })) as { groupId: string }
-
-      const execSwarmDerived = async <TOut>(
-        toolName: string,
-        input: Record<string, unknown>,
-        ctx: { conversationId: number; callId?: string },
-      ): Promise<{ output: string; structuredOutput: TOut }> => {
-        const spec = kernel.plugins.listTools().find((t) => t.name === toolName)
-        assert.ok(spec && spec.sourceKind === 'action', `expected derived action tool ${toolName}`)
-        const raw = await kernel.plugins.executeTool(toolName, input, ctx)
-        const normalized = actionToolResult(raw, input, (text) => text, {
-          structuredOutputSchema: spec.structuredOutputSchema,
-          presentationMetaSchema: spec.presentationMetaSchema,
-          projectPresentationMeta: spec.projectPresentationMeta,
-          formatOutput: spec.formatOutput,
-          toolName: spec.name,
-        })
-        return {
-          output: normalized.output.map((b) => b.text).join(''),
-          structuredOutput: normalized.structuredOutput as TOut,
-        }
-      }
-
-      // 1) switch_worker_model with effort + prompt switches model & thinkingLevel and wakes worker in one step (idempotent replay)
-      let resumedOnNewModel = false
-      setSwarmRoleResponses(env.faux, {
-        alpha: [
-          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'alpha parked' })], { stopReason: 'toolUse' }),
-          fauxAssistantMessage('alpha parked'),
-          () => {
-            resumedOnNewModel = true
-            return fauxAssistantMessage(
-              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'alpha resumed on faux-2' })],
-              { stopReason: 'toolUse' },
-            )
-          },
-          fauxAssistantMessage('alpha resumed done'),
-        ],
-        coordinator: [
-          fauxAssistantMessage('Coordinator noted stall.'),
-          fauxAssistantMessage('Coordinator noted resumed alpha done.'),
-        ],
-      })
-
-      const alpha = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { groupId, name: 'alpha', prompt: 'Initial turn on faux-1' },
-        { conversationId: coord.id },
-      )) as { workerConversationId: number }
-      await kernel.conversations.waitForIdle(alpha.workerConversationId)
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.conversations.waitForIdle(coord.id)
-
-      const switchToolRes = await execSwarmDerived<{ model: string; effort?: string; postSeq?: number }>(
-        'swarm_switch_worker_model',
-        { groupId, name: 'alpha', model: 'faux/faux-2', effort: 'high', prompt: 'Continue task on stronger model.' },
-        { conversationId: coord.id, callId: 'call-switch-resume-1' },
-      )
-      assert.equal(switchToolRes.structuredOutput.model, 'faux/faux-2')
-      assert.equal(switchToolRes.structuredOutput.effort, 'high')
-      assert.ok(typeof switchToolRes.structuredOutput.postSeq === 'number')
-      assert.match(switchToolRes.output, /effort=high/)
-      assert.match(switchToolRes.output, /brief #/)
-      assert.equal(kernel.conversations.getConversation(alpha.workerConversationId).thinkingLevel, 'high')
-
-      // Replay with same callId must deduplicate and return the same postSeq without waking twice
-      const replayRes = await execSwarmDerived<{ postSeq?: number }>(
-        'swarm_switch_worker_model',
-        { groupId, name: 'alpha', model: 'faux/faux-2', effort: 'high', prompt: 'Continue task on stronger model.' },
-        { conversationId: coord.id, callId: 'call-switch-resume-1' },
-      )
-      assert.equal(replayRes.structuredOutput.postSeq, switchToolRes.structuredOutput.postSeq)
-
-      await waitFor(() => resumedOnNewModel)
-      await kernel.conversations.waitForIdle(alpha.workerConversationId)
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.conversations.waitForIdle(coord.id)
-
-      // board_status text summary surfaces member model=
-      const statusTool = await execSwarmDerived<{ members: Array<{ name: string }> }>(
-        'swarm_board_status',
-        { groupId },
-        { conversationId: coord.id },
-      )
-      assert.match(statusTool.output, /model=faux\/faux-2/)
-
-      // 2) 0-Token peer-to-peer hop circuit breaker (maxPeerHopsWithoutCoordinator = 2):
-      //    p1 -> p2 (hop 1) -> p1 (hop 2) -> p2 (hop 3 > 2 => trips breaker, pauses p2 wake, escalates system [blocker] to coordinator!)
-      let p1Turns = 0
-      let p2Turns = 0
-      setSwarmRoleResponses(env.faux, {
-        p1: [
-          () => {
-            p1Turns += 1
-            return fauxAssistantMessage(
-              [fauxToolCall('swarm_board_post', { to: ['p2'], kind: 'handoff', body: 'Ping #1 to p2' })],
-              { stopReason: 'toolUse' },
-            )
-          },
-          fauxAssistantMessage('p1 sent ping 1'),
-          () => {
-            p1Turns += 1
-            return fauxAssistantMessage(
-              [fauxToolCall('swarm_board_post', { to: ['p2'], kind: 'handoff', body: 'Ping #2 to p2 (should trip breaker)' })],
-              { stopReason: 'toolUse' },
-            )
-          },
-          fauxAssistantMessage('p1 sent ping 2'),
-        ],
-        p2: [
-          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'p2 ready' })], { stopReason: 'toolUse' }),
-          fauxAssistantMessage('p2 ready'),
-          () => {
-            p2Turns += 1
-            return fauxAssistantMessage(
-              [fauxToolCall('swarm_board_post', { to: ['p1'], kind: 'review', body: 'Pong #1 back to p1' })],
-              { stopReason: 'toolUse' },
-            )
-          },
-          fauxAssistantMessage('p2 sent pong 1'),
-          () => {
-            p2Turns += 1
-            return fauxAssistantMessage('p2 should NOT be woken on tripped hop 3')
-          },
-        ],
-        coordinator: [
-          fauxAssistantMessage('Coordinator noted p2 ready stall.'),
-          fauxAssistantMessage('Coordinator received circuit breaker blocker.'),
-        ],
-      })
-
-      const p2 = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { groupId, name: 'p2', prompt: 'Stand by as reviewer' },
-        { conversationId: coord.id },
-      )) as { workerConversationId: number }
-      await kernel.conversations.waitForIdle(p2.workerConversationId)
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.conversations.waitForIdle(coord.id)
-
-      const p1 = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { groupId, name: 'p1', prompt: 'Start ping-pong loop with p2' },
-        { conversationId: coord.id },
-      )) as { workerConversationId: number }
-
-      await waitFor(async () => {
-        const read = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
-        return read.posts.some((p) => p.from === 'system' && p.kind === 'blocker' && p.body.includes('circuit breaker tripped'))
-      })
-      await kernel.conversations.waitForIdle(p1.workerConversationId)
-      await kernel.conversations.waitForIdle(p2.workerConversationId)
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.conversations.waitForIdle(coord.id)
-
-      assert.equal(p1Turns, 2, 'p1 ran initial brief + 1 review pong')
-      assert.equal(p2Turns, 1, 'p2 must NOT be woken on the 3rd consecutive peer hop after breaker tripped')
-
-      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
-    } finally {
-      await env.close()
-    }
-  })
-
-  test('swarm-int18: forkFrom worker persists forked=true & context boundary, non-forked worker follows builtin:workflow.maxSubagentDepth (default 1, opt-in 2)', { timeout: 60_000 }, async (t) => {
-    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-fork-guard-'), gitTemplate)
-    try {
-      const { kernel } = env.app
-      await kernel.services.profiles.save({ id: 'reviewer', name: 'Reviewer', skills: [] })
-
-      const coord = await kernel.conversations.createConversation({ title: 'Fork Guard Coord', profileId: 'assistant', cwd: env.repoDir })
-      env.faux.setResponses([fauxAssistantMessage('Stored parent context FK-88.')])
-      await kernel.conversations.submitInput(coord.id, 'Remember context FK-88 and do not re-delegate it.')
-      await kernel.conversations.waitForIdle(coord.id)
-
-      const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
-        title: 'Fork Guard Squad',
-        conversationId: coord.id,
-      })) as { groupId: string }
-
-      let forkedRwMeta: ReturnType<typeof captureRequestMeta> | undefined
-      let forkedRwSawHistory = false
-      let forkedRoMeta: ReturnType<typeof captureRequestMeta> | undefined
-      let plainRwMeta: ReturnType<typeof captureRequestMeta> | undefined
-      let delegatingRwMeta: ReturnType<typeof captureRequestMeta> | undefined
-
-      setSwarmRoleResponses(env.faux, {
-        forked_rw: [
-          (ctx) => {
-            forkedRwMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
-            forkedRwSawHistory = JSON.stringify(ctx.messages).includes('FK-88')
-            return fauxAssistantMessage(
-              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'forked_rw done' })],
-              { stopReason: 'toolUse' },
-            )
-          },
-          fauxAssistantMessage('forked_rw settled'),
-        ],
-        forked_ro: [
-          (ctx) => {
-            forkedRoMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
-            return fauxAssistantMessage(
-              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'forked_ro done' })],
-              { stopReason: 'toolUse' },
-            )
-          },
-          fauxAssistantMessage('forked_ro settled'),
-        ],
-        plain_rw: [
-          (ctx) => {
-            plainRwMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
-            return fauxAssistantMessage(
-              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'plain_rw done' })],
-              { stopReason: 'toolUse' },
-            )
-          },
-          fauxAssistantMessage('plain_rw settled'),
-        ],
-        delegating_rw: [
-          (ctx) => {
-            delegatingRwMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
-            return fauxAssistantMessage(
-              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'delegating_rw done' })],
-              { stopReason: 'toolUse' },
-            )
-          },
-          fauxAssistantMessage('delegating_rw settled'),
-        ],
-        coordinator: [
-          fauxAssistantMessage('Coordinator noted forked_rw done.'),
-          fauxAssistantMessage('Coordinator noted forked_ro done.'),
-          fauxAssistantMessage('Coordinator noted plain_rw done.'),
-          fauxAssistantMessage('Coordinator noted delegating_rw done.'),
-        ],
-      })
-
-      const forkedRw = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { groupId, name: 'forked_rw', prompt: 'Execute forked readwrite task directly.', forkFrom: 'coordinator' },
-        { conversationId: coord.id },
-      )) as { workerConversationId: number }
-      await kernel.conversations.waitForIdle(forkedRw.workerConversationId)
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.conversations.waitForIdle(coord.id)
-
-      const forkedRo = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { groupId, name: 'forked_ro', prompt: 'Verify readonly forked slice.', forkFrom: 'coordinator', access: 'readonly' },
-        { conversationId: coord.id },
-      )) as { workerConversationId: number }
-      await kernel.conversations.waitForIdle(forkedRo.workerConversationId)
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.conversations.waitForIdle(coord.id)
-
-      const plainRw = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { groupId, name: 'plain_rw', prompt: 'Run standard non-forked worker.' },
-        { conversationId: coord.id },
-      )) as { workerConversationId: number }
-      await kernel.conversations.waitForIdle(plainRw.workerConversationId)
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.conversations.waitForIdle(coord.id)
-
-      // 1) Forked readwrite worker: inherits context, gets rule 4 boundary, strips dispatch tools & profile.catalog, keeps work tools
-      assert.equal(forkedRwSawHistory, true, 'forked_rw must inherit fork source history')
-      assert.ok(forkedRwMeta, 'must capture forked_rw request metadata')
-      const rwSec = forkedRwMeta.sectionsById['swarm.active_group'] ?? ''
-      assert.match(rwSec, /^<active_swarm_group[\s\S]*4\. Context boundary:/, 'forked readwrite worker must receive rule 4 context boundary')
-      assert.ok(rwSec.includes('ALREADY fulfilled by dispatching you'))
-      for (const stripped of ['subagent', 'SubagentWorkflow', 'swarm_create_group', 'swarm_dispatch_worker']) {
-        assert.equal(forkedRwMeta.toolNames.includes(stripped), false, `forked_rw must strip ${stripped}`)
-      }
-      for (const kept of ['swarm_board_post', 'bash', 'read', 'write']) {
-        assert.equal(forkedRwMeta.toolNames.includes(kept), true, `forked_rw must retain ${kept}`)
-      }
-      assert.equal(forkedRwMeta.sectionsById['profile.catalog'], undefined, 'forked_rw must suppress profile.catalog')
-
-      // 2) Forked readonly worker: keeps rule 4 readonly + rule 5 boundary, strips dispatch tools & profile.catalog
-      assert.ok(forkedRoMeta, 'must capture forked_ro request metadata')
-      const roSec = forkedRoMeta.sectionsById['swarm.active_group'] ?? ''
-      assert.ok(roSec.includes('4. Your access is readonly:'), 'forked readonly worker must keep rule 4 readonly')
-      assert.ok(roSec.includes('5. Context boundary:'), 'forked readonly worker must append rule 5 context boundary')
-      assert.equal(forkedRoMeta.toolNames.includes('subagent'), false)
-      assert.equal(forkedRoMeta.toolNames.includes('SubagentWorkflow'), false)
-      assert.equal(forkedRoMeta.sectionsById['profile.catalog'], undefined)
-
-      // 3) Default non-forked worker: NO context boundary clause, defaults to depth-1 leaf (strips dispatch tools & profile.catalog, rejects workflow.run)
-      assert.ok(plainRwMeta, 'must capture plain_rw request metadata')
-      const plainSec = plainRwMeta.sectionsById['swarm.active_group'] ?? ''
-      assert.equal(plainSec.includes('Context boundary:'), false, 'non-forked worker must not get forked context boundary')
-      assert.equal(plainSec.includes('ALREADY fulfilled'), false)
-      for (const stripped of ['subagent', 'SubagentWorkflow', 'swarm_create_group', 'swarm_dispatch_worker']) {
-        assert.equal(plainRwMeta.toolNames.includes(stripped), false, `default non-forked worker strips ${stripped}`)
-      }
-      for (const kept of ['swarm_board_post', 'bash', 'read', 'write']) {
-        assert.equal(plainRwMeta.toolNames.includes(kept), true, `default non-forked worker retains ${kept}`)
-      }
-      assert.equal(plainRwMeta.sectionsById['profile.catalog'], undefined, 'default non-forked worker suppresses profile.catalog')
-      await assert.rejects(
-        () =>
-          kernel.plugins.invokeAction(WORKFLOW_ID, 'run', {
-            script: 'export const meta = { name: "blocked", description: "d" }\nreturn 1',
-            conversationId: plainRw.workerConversationId,
-          }),
-        (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,
-      )
-
-      // 4) Raising single-source config `builtin:workflow.maxSubagentDepth` to 2 unlocks non-forked worker dispatch tools & catalog
-      await kernel.plugins.setConfig(WORKFLOW_ID, { maxSubagentDepth: 2 })
-      await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { groupId, name: 'delegating_rw', prompt: 'Run non-forked worker under global depth-2 ceiling.' },
-        { conversationId: coord.id },
-      )
-      await waitFor(() => delegatingRwMeta !== undefined && kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.conversations.waitForIdle(coord.id)
-
-      assert.ok(delegatingRwMeta, 'must capture delegating_rw request metadata')
-      const delegSec = delegatingRwMeta.sectionsById['swarm.active_group'] ?? ''
-      assert.equal(delegSec.includes('Context boundary:'), false, 'non-forked delegating worker must not get forked context boundary')
-      assert.equal(delegatingRwMeta.toolNames.includes('subagent'), true, 'non-forked worker retains subagent under ceiling 2')
-      assert.equal(delegatingRwMeta.toolNames.includes('SubagentWorkflow'), true, 'non-forked worker retains SubagentWorkflow under ceiling 2')
-      assert.equal(delegatingRwMeta.toolNames.includes('swarm_board_post'), true)
-      assert.ok(typeof delegatingRwMeta.sectionsById['profile.catalog'] === 'string', 'non-forked worker retains profile.catalog under ceiling 2')
-      assert.ok(delegatingRwMeta.sectionsById['profile.catalog'].includes('id="reviewer"'))
-
-      // 5) Persisted forked=true in board_status and meta.json (no extra maxSubagentDepth field)
-      const status = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId }, { conversationId: coord.id })) as BoardViewDoc
-      assert.equal(status.members.find((m) => m.name === 'forked_rw')?.forked, true)
-      assert.equal(status.members.find((m) => m.name === 'forked_ro')?.forked, true)
-      assert.equal(status.members.find((m) => m.name === 'plain_rw')?.forked, undefined)
-      assert.equal(status.members.find((m) => m.name === 'delegating_rw')?.forked, undefined)
-
-      const metaPath = join(env.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId, 'meta.json')
-      const persistedMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
-      assert.equal(persistedMeta.members.find((m) => m.name === 'forked_rw')?.forked, true)
-      assert.equal(persistedMeta.members.find((m) => m.name === 'forked_ro')?.forked, true)
-      assert.equal(persistedMeta.members.find((m) => m.name === 'plain_rw')?.forked, undefined)
-      assert.equal(persistedMeta.members.find((m) => m.name === 'delegating_rw')?.forked, undefined)
-
-      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
-    } finally {
-      await env.close()
     }
   })
 })

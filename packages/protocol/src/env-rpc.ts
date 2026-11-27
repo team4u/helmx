@@ -49,6 +49,42 @@ export interface NodeAutoUpgradeStatus {
   reason?: string
 }
 
+/** Reachability classification for a Hub endpoint exposed to remote nodes. */
+export type HubEndpointKind =
+  | 'lan'
+  | 'vpn'
+  | 'public'
+  | 'hostname'
+  | 'ipv6'
+  | 'virtual'
+  | 'loopback'
+
+/** Single candidate Hub URL derived from the Hub listener and host network configuration. */
+export interface HubAccessEndpoint {
+  /** Complete reachable HTTP URL (e.g. `http://192.168.1.10:3202`, `http://dev-box.local:3202`, `http://[fd00::1]:3202`). */
+  url: string
+  /** Bare host portion (IPv4, unbracketed IPv6, or hostname). */
+  host: string
+  /** Classification used for UI ordering, grouping, and labeling. */
+  kind: HubEndpointKind
+  /** OS network interface name when derived from a NIC (e.g. `en0`, `eth0`, `tailscale0`, `docker0`). */
+  interface?: string
+}
+
+/** Hub listener and reachable address summary (populated on the `local` NodeInfo and `POST /api/nodes/issue`). */
+export interface HubAccessInfo {
+  /** Configured bind host (e.g. `0.0.0.0`, `::`, `192.168.1.10`, `dev-box.local`, `127.0.0.1`). */
+  listenHost: string
+  /** Actual bound TCP port. */
+  listenPort: number
+  /** True when bound to a wildcard address (`0.0.0.0` or `::`). */
+  wildcard: boolean
+  /** True when bound strictly to a loopback address (`127.0.0.1`, `::1`, or `localhost`). */
+  loopbackOnly: boolean
+  /** Sorted, deduplicated candidate Hub URLs derived from the real socket binding + host NICs + OS hostname. */
+  endpoints: HubAccessEndpoint[]
+}
+
 /** Node summary (`GET /api/nodes` and SSE `snapshot.nodes` / `node.changed`). */
 export interface NodeInfo {
   id: string
@@ -64,6 +100,8 @@ export interface NodeInfo {
   lastSeenAt?: number
   /** The real reachable address the node used to connect to the Hub (for remote managed processes to dial back). */
   hubUrl?: string
+  /** Hub listener and reachable address summary (populated on the `local` node only). */
+  hubAccess?: HubAccessInfo
   /** Node health snapshot piggybacked on the latest register or heartbeat. */
   health?: NodeHealthSnapshot
   /** Hub-side automatic version-follow state when an auto-upgrade is pending, running, failed, or terminally skipped. */
@@ -118,6 +156,8 @@ export interface NodeIssuedToken {
   /** Format is `<nodeId>:<secret>`. */
   token: string
   createdAt: number
+  /** Reachable Hub access summary when known by the server. */
+  hubAccess?: HubAccessInfo
 }
 
 /** `helmx-node connect` input. */

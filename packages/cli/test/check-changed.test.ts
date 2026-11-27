@@ -565,9 +565,16 @@ test('check-test-hygiene CLI: exits 2 for out-of-repo paths and empty --files ra
   assert.equal(r2.status, 2, `stderr: ${r2.stderr}`)
   assert.ok(r2.stderr.includes('[check-hygiene] --files requires at least one in-repository test path (refusing to scan the whole repository)'), 'empty --files must report a usage error instead of falling back to a whole-repo scan')
 
-  // Leading -- separator (pnpm passthrough style) is equivalent to passing explicit in-repo paths.
+  // Leading -- separator (pnpm passthrough style) is equivalent to passing explicit in-repo paths,
+  // and populates the static hygiene disk cache with matching stats on warm re-runs.
   const r3 = runScript('check-test-hygiene.mjs', ['--', '--files', 'packages/cli/test/cli.test.ts'])
   assert.equal(r3.status, 0, `stderr: ${r3.stderr}`)
+  const hygieneCachePath = path.join(repoRoot, 'node_modules', '.cache', 'helmx-test-hygiene-cache.json')
+  assert.ok(existsSync(hygieneCachePath), 'hygiene disk cache must be persisted after analyzing repo files')
+  const r4 = runScript('check-test-hygiene.mjs', ['--files', 'packages/cli/test/cli.test.ts'])
+  assert.equal(r4.status, 0, `warm hygiene stderr: ${r4.stderr}`)
+  const statsLine = (stderr: string) => stderr.split('\n').find((l) => l.includes('[check-hygiene] stats:'))
+  assert.equal(statsLine(r4.stderr), statsLine(r3.stderr), 'warm cache stats must match cold AST analysis exactly')
 })
 
 test('pnpm real invocation: pnpm check:changed -- --base HEAD --list strips leading -- separator', { timeout: 60_000 }, () => {
@@ -721,11 +728,17 @@ describe('process discipline and concurrent watchdog teardown', { concurrency: t
   })
 
   test('regression: runManagedCommand -> run-tests.mjs -> SIGTERM-ignoring grandchild leaves no orphans in live topology', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX process group signal semantics (128+n / kill(-pid)); Windows uses taskkill' : false }, async () => {
-    // Full real chain: outer managed command = node scripts/run-tests.mjs <holder>; holder is a
-    // never-ending *.test.ts that spawns a SIGTERM-ignoring grandchild (writing PID marker).
+    // Full real chain: outer managed command = node scripts/run-tests.mjs --kill-grace-ms=400 <holder>;
+    // holder is a never-ending *.test.ts that spawns a SIGTERM-ignoring grandchild (writing PID marker).
     // On outer cancel: run-tests (G1 leader) gets SIGTERM -> forwards to owned G2 -> tsx leader exits while
-    // G2 grandchild remains alive -> run-tests must wait until G2 drains (5s SIGKILL escalation)
-    // before exiting 143 -> outer G1 drains and exits 143. Uses production default timings to verify real topology.
+    // G2 grandchild remains alive -> run-tests must wait until G2 drains (400ms SIGKILL escalation)
+    // before exiting 143 -> outer G1 drains and exits 143.
+    const invalidGrace = spawnSync(
+      process.execPath,
+      [path.join(scriptsDir, 'run-tests.mjs'), '--kill-grace-ms=0'],
+      { cwd: repoRoot, encoding: 'utf8', timeout: 30_000 },
+    )
+    assert.equal(invalidGrace.status, 2, `invalid --kill-grace-ms must exit 2; stderr: ${invalidGrace.stderr}`)
     const dir = path.join(repoRoot, 'node_modules', '.helmx-runtests-regression')
     rmSync(dir, { recursive: true, force: true })
     mkdirSync(dir, { recursive: true })
@@ -755,7 +768,7 @@ delete env.NODE_TEST_CONTEXT
 const code = await m.runManagedCommand(
   {
     cmd: process.execPath,
-    args: [${JSON.stringify(path.join(scriptsDir, 'run-tests.mjs'))}, ${JSON.stringify(holder)}],
+    args: [${JSON.stringify(path.join(scriptsDir, 'run-tests.mjs'))}, '--kill-grace-ms=400', ${JSON.stringify(holder)}],
     label: 't-runtests',
   },
   { cwd: ${JSON.stringify(repoRoot)}, env },

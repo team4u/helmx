@@ -121,6 +121,89 @@ test('nodes issue: POST /api/nodes/issue {nodeId}; --json prints full object, hu
   assert.equal(parseCliError(missing).code, 'missing_id')
 })
 
+test('nodes issue with hubAccess: chooses reachable primary URL, lists alternative IPs/hostname, and suppresses false loopback warning', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-nodes-access-')
+  const wildcardIssued = {
+    nodeId: 'gpu-1',
+    token: 'gpu-1:sec-xyz',
+    createdAt: 456,
+    hubAccess: {
+      listenHost: '0.0.0.0',
+      listenPort: 3202,
+      wildcard: true,
+      loopbackOnly: false,
+      endpoints: [
+        { url: 'http://192.168.1.10:3202', host: '192.168.1.10', kind: 'lan', interface: 'eth0' },
+        { url: 'http://100.88.1.5:3202', host: '100.88.1.5', kind: 'vpn', interface: 'tailscale0' },
+        { url: 'http://dev-box.local:3202', host: 'dev-box.local', kind: 'hostname' },
+        { url: 'http://172.17.0.1:3202', host: '172.17.0.1', kind: 'virtual', interface: 'docker0' },
+        { url: 'http://127.0.0.1:3202', host: '127.0.0.1', kind: 'loopback' },
+      ],
+    },
+  }
+  let currentResponse: unknown = wildcardIssued
+  const hub = await startMockHub({ 'POST /api/nodes/issue': () => ({ body: currentResponse }) }, { autoRegisterCleanup: t })
+  const env = makeCliEnv(hub.url, dir)
+
+  // 1. Wildcard 0.0.0.0 with loopback CLI hub URL: promotes primary LAN IP and lists alternatives
+  const json = await runCliCaptured(['nodes', 'issue', 'gpu-1', '--json'], env)
+  assert.equal(json.code, 0, json.err)
+  assert.deepEqual(JSON.parse(json.out), wildcardIssued)
+
+  const human = await runCliCaptured(['nodes', 'issue', 'gpu-1'], env)
+  assert.equal(human.code, 0, human.err)
+  assert.match(human.out, /helmx-node start -d --hub 'http:\/\/192\.168\.1\.10:3202' --token 'gpu-1:sec-xyz'/)
+  assert.match(human.out, /Other reachable Hub URLs \(listening on 0\.0\.0\.0:3202\):/)
+  assert.match(human.out, /http:\/\/100\.88\.1\.5:3202\s+\(vpn, tailscale0\)/)
+  assert.match(human.out, /http:\/\/dev-box\.local:3202\s+\(hostname\)/)
+  assert.match(human.out, /http:\/\/172\.17\.0\.1:3202\s+\(virtual, docker0\)/)
+  assert.doesNotMatch(human.out, /http:\/\/127\.0\.0\.1:3202/)
+  assert.doesNotMatch(human.out, /loopback address/i)
+
+  // 2. Specific IP binding: promotes bound IP and lists OS hostname
+  currentResponse = {
+    nodeId: 'gpu-1',
+    token: 'gpu-1:sec-spec',
+    createdAt: 789,
+    hubAccess: {
+      listenHost: '192.168.1.10',
+      listenPort: 3202,
+      wildcard: false,
+      loopbackOnly: false,
+      endpoints: [
+        { url: 'http://192.168.1.10:3202', host: '192.168.1.10', kind: 'lan', interface: 'eth0' },
+        { url: 'http://dev-box.local:3202', host: 'dev-box.local', kind: 'hostname' },
+      ],
+    },
+  }
+  const specificHuman = await runCliCaptured(['nodes', 'issue', 'gpu-1'], env)
+  assert.equal(specificHuman.code, 0, specificHuman.err)
+  assert.match(specificHuman.out, /helmx-node start -d --hub 'http:\/\/192\.168\.1\.10:3202'/)
+  assert.match(specificHuman.out, /Other reachable Hub URLs \(listening on 192\.168\.1\.10:3202\):/)
+  assert.match(specificHuman.out, /http:\/\/dev-box\.local:3202\s+\(hostname\)/)
+  assert.doesNotMatch(specificHuman.out, /loopback address/i)
+
+  // 3. Loopback-only binding: preserves loopback warning and omits Other reachable URLs
+  currentResponse = {
+    nodeId: 'gpu-1',
+    token: 'gpu-1:sec-lo',
+    createdAt: 999,
+    hubAccess: {
+      listenHost: '127.0.0.1',
+      listenPort: 3202,
+      wildcard: false,
+      loopbackOnly: true,
+      endpoints: [
+        { url: 'http://127.0.0.1:3202', host: '127.0.0.1', kind: 'loopback' },
+      ],
+    },
+  }
+  const loopbackHuman = await runCliCaptured(['nodes', 'issue', 'gpu-1'], env)
+  assert.equal(loopbackHuman.code, 0, loopbackHuman.err)
+  assert.doesNotMatch(loopbackHuman.out, /Other reachable Hub URLs/)
+  assert.match(loopbackHuman.out, /loopback address/i)
+})
+
 test('nodes remove: DELETE /api/nodes/:id; rejects extra positional arguments', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub({ 'DELETE /api/nodes/gpu-box': () => ({ status: 204 }) }, { autoRegisterCleanup: t })

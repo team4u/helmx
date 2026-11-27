@@ -19,12 +19,85 @@ import { once } from 'node:events';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { finished } from 'node:stream/promises';
-import { run } from 'node:test';
+import { mock, run } from 'node:test';
 import { spec } from 'node:test/reporters';
 
 const ROOT_SUMMARY_DIAGNOSTIC_RE = /^(tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)\s/;
 /** Default silence window before the stall watchdog warns; manifest `stallWarnMs` overrides (0 disables). */
 const DEFAULT_STALL_WARN_MS = 120_000;
+const RESTORED_CONSOLE_METHODS = ['error', 'warn', 'log'];
+
+function snapshotProcessEnv() {
+  return { ...process.env };
+}
+
+function restoreProcessEnv(snapshot) {
+  for (const key of Object.keys(process.env)) {
+    if (!Object.hasOwn(snapshot, key)) {
+      delete process.env[key];
+    }
+  }
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else if (process.env[key] !== value) {
+      process.env[key] = value;
+    }
+  }
+}
+
+function snapshotConsoleMethods() {
+  return RESTORED_CONSOLE_METHODS.map((name) => ({
+    name,
+    desc: Object.getOwnPropertyDescriptor(console, name),
+    value: console[name],
+  }));
+}
+
+function restoreConsoleMethods(snapshots) {
+  for (const snap of snapshots) {
+    const curDesc = Object.getOwnPropertyDescriptor(console, snap.name);
+    if (console[snap.name] !== snap.value || Boolean(curDesc) !== Boolean(snap.desc)) {
+      try {
+        if (snap.desc) {
+          Object.defineProperty(console, snap.name, snap.desc);
+        } else {
+          delete console[snap.name];
+        }
+      } catch {
+        try {
+          console[snap.name] = snap.value;
+        } catch {
+          // Ignore read-only console property
+        }
+      }
+    }
+  }
+}
+
+function restoreDescriptor(target, prop, snapshotDesc) {
+  const curDesc = Object.getOwnPropertyDescriptor(target, prop);
+  const same =
+    snapshotDesc === curDesc ||
+    (Boolean(snapshotDesc) &&
+      Boolean(curDesc) &&
+      snapshotDesc.value === curDesc.value &&
+      snapshotDesc.get === curDesc.get &&
+      snapshotDesc.set === curDesc.set &&
+      snapshotDesc.writable === curDesc.writable &&
+      snapshotDesc.enumerable === curDesc.enumerable &&
+      snapshotDesc.configurable === curDesc.configurable);
+  if (same) return;
+  try {
+    if (snapshotDesc) {
+      Object.defineProperty(target, prop, snapshotDesc);
+    } else {
+      delete target[prop];
+    }
+  } catch {
+    // Ignore non-configurable property
+  }
+}
 
 function writeJsonAtomic(filePath, data) {
   try {
@@ -182,6 +255,9 @@ async function main() {
       dispatchedFiles += 1;
 
       const absPath = path.isAbsolute(relPath) ? relPath : path.join(repoRoot, relPath);
+      const envSnapshot = snapshotProcessEnv();
+      const consoleSnapshots = snapshotConsoleMethods();
+      const fetchDescSnapshot = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
       const fileStartMs = performance.now();
       let fileSuccess = true;
       let sawSummary = false;
@@ -252,6 +328,14 @@ async function main() {
         if (fileSuccess) {
           perFileTimings[relPath.split(path.sep).join('/')] = elapsedMs;
         }
+        try {
+          mock.restoreAll();
+        } catch {
+          // Best-effort mock teardown between sequential files
+        }
+        restoreProcessEnv(envSnapshot);
+        restoreConsoleMethods(consoleSnapshots);
+        restoreDescriptor(globalThis, 'fetch', fetchDescSnapshot);
         if (resetDomFn) {
           resetDomFn();
         }

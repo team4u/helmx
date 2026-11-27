@@ -246,6 +246,7 @@ export function assembleRuntimeServices(
     configSvc,
     stash: options.stashService,
     toolDeps,
+    hubListenInfo: () => runtime.hubListenInfo,
     events,
     nodeUpgradeTimeoutMs: init.nodeUpgradeTimeoutMs,
     convOf: (id) => requireConv(options.store, id),

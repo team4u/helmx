@@ -28,6 +28,7 @@ import {
   loadPurityCache,
   partitionFilesForSharding,
   planFourPoolSchedule,
+  requiresNativeProcessIsolation,
   savePurityCache,
   shouldDisableSharding,
 } from '../../../scripts/lib/test-sharding.mjs'
@@ -37,6 +38,7 @@ import {
   estimateFallbackDurationMs,
   loadTestTimings,
   mergeTestTimings,
+  pruneStaleTestTimings,
   saveTestTimings,
 } from '../../../scripts/lib/test-timings.mjs'
 import {
@@ -248,8 +250,8 @@ test('ok', { timeout: 60_000 }, () => {
   }
 })
 
-test('test concurrency: defaults to sixteen workers, honors explicit overrides, and rejects invalid values', { timeout: 60_000 }, () => {
-  assert.equal(resolveTestConcurrency(undefined, 16), 16)
+test('test concurrency: defaults to fourteen workers, honors explicit overrides, and rejects invalid values', { timeout: 60_000 }, () => {
+  assert.equal(resolveTestConcurrency(undefined, 16), 14)
   assert.equal(resolveTestConcurrency(undefined, 2), 2)
   assert.equal(resolveTestConcurrency('7', 16), 7)
   assert.equal(explicitTestConcurrency([]), undefined)
@@ -335,11 +337,12 @@ test('ok', { timeout: 60_000 }, () => {
   assert.equal(pureRes.pool, 'pure', `expected pure, got ${pureRes.pool} (${pureRes.reasons.join(', ')})`)
   assert.equal(pureRes.pure, true)
 
-  // dom-shared: happy-dom, React DOM, Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT }), client compile, scoped unhandledRejection
+  // dom-shared: happy-dom, React DOM, Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT }), client compile, scoped unhandledRejection, restored console overrides
   const domCases: Array<[string, string]> = [
     ['happy-dom register + document', `import { GlobalRegistrator } from '@happy-dom/global-registrator'\nGlobalRegistrator.register()\ndocument.createElement('div')`],
     ['React SSR globalThis.React', `import * as React from 'react'\nObject.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })`],
     ['dom + plugin-build client compile + scoped unhandledRejection', `import { GlobalRegistrator } from '@happy-dom/global-registrator'\nimport { compilePluginClientModule } from '@helmx/plugin-build'\nimport { mkdirSync } from 'node:fs'\nGlobalRegistrator.register()\nmkdirSync('/tmp/x')\nconst fn = () => {}\nprocess.on('unhandledRejection', fn)\nprocess.off('unhandledRejection', fn)\nvoid compilePluginClientModule`],
+    ['dom + console.error override', `import { GlobalRegistrator } from '@happy-dom/global-registrator'\nGlobalRegistrator.register()\nconsole.error = () => {}`],
   ]
   for (const [label, code] of domCases) {
     const r = analyzeTestSourcePurity(ts, 'dom.test.tsx', code)
@@ -347,12 +350,19 @@ test('ok', { timeout: 60_000 }, () => {
     assert.equal(r.pure, false)
   }
 
-  // node-shared: temp dirs, SQLite, HTTP/net, subprocess, createHelmx, KernelRuntime, env.exec(), process.kill(pid, 0), scoped unhandledRejection
+  // node-shared: temp dirs, SQLite, HTTP/net, subprocess, createHelmx, KernelRuntime, env.exec(),
+  // process.kill(pid, 0) / child-PID process.kill(child.pid, sig), per-key process.env, mock.method,
+  // console.error/warn/log override, globalThis.fetch override, scoped unhandledRejection
   const nodeCases: Array<[string, string]> = [
     ['fs temp dir writes', `import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'\nconst d = mkdtempSync('x')\nwriteFileSync(d, '1')\nrmSync(d)`],
     ['SQLite + HTTP + createHelmx', `import { DatabaseSync } from 'node:sqlite'\nimport http from 'node:http'\nnew DatabaseSync(':memory:')\nhttp.createServer().listen(0)\ncreateHelmx({})`],
     ['env.exec + read-only liveness probe', `async function run(env: { exec: (c: string) => void }, pid: number) { env.exec('echo hi'); process.kill(pid, 0) }`],
     ['scoped unhandledRejection cleanup + fs', `import { mkdirSync } from 'node:fs'\nmkdirSync('x')\nconst onU = () => {}\nprocess.on('unhandledRejection', onU)\ntry {} finally { process.off('unhandledRejection', onU) }`],
+    ['per-key process.env assign and delete', `process.env.FOO = 'bar'\ndelete process.env.FOO`],
+    ['mock.method', `import { mock } from 'node:test'\nmock.method(console, 'log', () => {})`],
+    ['console.error override', `console.error = () => {}`],
+    ['globalThis.fetch override', `globalThis.fetch = (async () => new Response('ok')) as typeof fetch`],
+    ['positive child-PID process.kill', `function stop(child: { pid?: number }) { process.kill(child.pid!, 'SIGTERM') }`],
   ]
   for (const [label, code] of nodeCases) {
     const r = analyzeTestSourcePurity(ts, 'node.test.ts', code)
@@ -360,17 +370,20 @@ test('ok', { timeout: 60_000 }, () => {
     assert.equal(r.pure, false)
   }
 
-  // isolated: pragma override, process.env/chdir/stdin/stderr/kill(SIGKILL), unpaired process.on, unregister, mock.timers/method, worker_threads, DOM+backend mix, non-DOM globalThis write
+  // isolated: pragma override, whole process.env replacement, chdir/stdin/stderr, self/PGID process.kill,
+  // unpaired process.on, unregister, mock.timers, worker_threads, DOM+backend mix, non-DOM globalThis write
   const isoCases: Array<[string, string]> = [
     ['pragma opt-out', `// @test-isolation: process\nimport test from 'node:test'\ntest('x', { timeout: 60_000 }, () => {})`],
     ['block-comment pragma opt-out', `/*\n * @test-isolation: process\n */\nimport test from 'node:test'\ntest('x', { timeout: 60_000 }, () => {})`],
-    ['process.env write', `process.env.FOO = 'bar'`],
-    ['non-zero process.kill', `process.kill(1234, 'SIGKILL')`],
+    ['whole process.env replacement', `process.env = {} as NodeJS.ProcessEnv`],
+    ['self process.kill(process.pid)', `process.kill(process.pid, 'SIGTERM')`],
+    ['negative PGID process.kill(-child.pid)', `function killGroup(child: { pid: number }) { process.kill(-child.pid, 'SIGKILL') }`],
+    ['aliased negative PGID process.kill', `function killGroup(child: { pid: number }) { const pgid = -child.pid; process.kill(pgid, 'SIGKILL') }`],
+    ['zero PGID process.kill(0)', `process.kill(0, 'SIGTERM')`],
     ['unpaired process.on', `process.on('SIGTERM', () => {})`],
     ['unpaired process.on unhandledRejection', `process.on('unhandledRejection', () => {})`],
     ['GlobalRegistrator.unregister', `import { GlobalRegistrator } from '@happy-dom/global-registrator'\nGlobalRegistrator.register()\nGlobalRegistrator.unregister()`],
     ['mock.timers', `test('x', { timeout: 60_000 }, (t) => { t.mock.timers.enable() })`],
-    ['mock.method', `import { mock } from 'node:test'\nmock.method(console, 'log', () => {})`],
     ['worker_threads', `import { Worker } from 'node:worker_threads'\nnew Worker('')`],
     ['DOM mixed with createHelmx', `import { GlobalRegistrator } from '@happy-dom/global-registrator'\nGlobalRegistrator.register()\ncreateHelmx({})`],
     ['delete globalThis.window', `delete (globalThis as Record<string, unknown>).window`],
@@ -382,6 +395,17 @@ test('ok', { timeout: 60_000 }, () => {
     assert.equal(r.pool, 'isolated', `${label}: expected isolated, got ${r.pool} (${r.reasons.join(', ')})`)
     assert.equal(r.pure, false)
   }
+
+  // requiresNativeProcessIsolation keeps --test-isolation=process for pragma/self-signal files only
+  assert.equal(requiresNativeProcessIsolation(['pragma:test-isolation:process']), true)
+  assert.equal(requiresNativeProcessIsolation(['process.kill:self']), true)
+  assert.equal(requiresNativeProcessIsolation(['process.on']), true)
+  assert.equal(requiresNativeProcessIsolation(['process.kill']), false)
+  assert.equal(requiresNativeProcessIsolation(['mock.timers']), false)
+  assert.ok(
+    analyzeTestSourcePurity(ts, 'self-kill.test.ts', `process.kill(process.pid, 'SIGTERM')`).reasons.includes('process.kill:self'),
+    'self-signaling process.kill(process.pid) must tag process.kill:self',
+  )
 
   // Pragma text embedded inside string literals after imports must NOT force isolation (rescuing build-runner.test.ts itself)
   const selfClassification = analyzeTestFilePurity(ts, fileURLToPath(import.meta.url))
@@ -497,6 +521,12 @@ test('test-timings: loads, merges EMA durations, persists atomically, and shares
       'fallback ms heuristic must rank swarm above tiny files on the same ms scale',
     )
     assert.equal(recordedCount(['packages/a/test/slow.test.ts', path.relative(root, smallFile)]), 1)
+
+    // pruneStaleTestTimings drops deleted files while preserving existing files across suites
+    touch(root, 'packages/a/test/slow.test.ts', 'export {}')
+    const pruned = pruneStaleTestTimings(loaded, root)
+    assert.equal(pruned.files['packages/a/test/slow.test.ts']?.durationMs, 16_500)
+    assert.equal(pruned.files['packages/a/test/fast.test.ts'], undefined, 'non-existent test file timing must be pruned')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -528,7 +558,7 @@ test('planFourPoolSchedule: creates concurrent permits=1 shards across all 4 poo
     }
     for (let i = 0; i < 3; i += 1) {
       const rel = `packages/kernel/test/i${i}.test.ts`
-      touch(root, rel, `process.env.TEST_ISO = '1'`)
+      touch(root, rel, `// @test-isolation: process\nimport test from 'node:test'\ntest('i${i}', { timeout: 60_000 }, () => {})`)
       files.push(rel)
       weights.set(rel, i === 0 ? 25_000 : 2_000)
     }
@@ -548,6 +578,7 @@ test('planFourPoolSchedule: creates concurrent permits=1 shards across all 4 poo
     assert.equal(schedule.pools['dom-shared'].length, 6)
     assert.equal(schedule.pools['node-shared'].length, 6)
     assert.equal(schedule.pools.isolated.length, 3)
+    assert.equal(schedule.processIsolatedFiles.length, 3)
 
     // Every file appears exactly once across all plans
     const allPlanned = schedule.plans.flatMap((p) => p.files)
@@ -764,6 +795,117 @@ test('S1', { timeout: 60_000 }, async () => { await delay(450) })
       /\[shard-worker\] stall: no test event for \d+ms while running file 1\/1 slow\.test\.ts \(last event: [a-z:]+\)/,
       `stall warning must name the silent file:\n${slowRes.stderr}`,
     )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('shard-worker: restores process.env, mock.method, console.error/warn/log, and globalThis.fetch between sequential files', { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'helmx-shard-restore-'))
+  try {
+    writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}')
+    const manifestPath = path.join(dir, 'manifest.json')
+    writeFileSync(
+      path.join(dir, 'mutator.test.ts'),
+      `import test, { mock } from 'node:test'
+import assert from 'node:assert/strict'
+test('mutates env, mock, console, fetch without restoring', { timeout: 60_000 }, () => {
+  process.env.SHARD_RESTORE_LEAKED_KEY = 'leaked'
+  process.env.SHARD_RESTORE_ORIG_KEY = 'mutated'
+  delete process.env.SHARD_RESTORE_DELETED_KEY
+  mock.method(Date, 'now', () => 12345)
+  console.error = () => { throw new Error('leaked console.error') }
+  console.warn = () => { throw new Error('leaked console.warn') }
+  globalThis.fetch = (async () => new Response('leaked')) as typeof fetch
+  assert.equal(Date.now(), 12345)
+})
+`,
+    )
+    writeFileSync(
+      path.join(dir, 'verifier.test.ts'),
+      `import test from 'node:test'
+import assert from 'node:assert/strict'
+test('observes clean env, Date.now, console, and fetch after prior file', { timeout: 60_000 }, () => {
+  assert.equal(process.env.SHARD_RESTORE_LEAKED_KEY, undefined)
+  assert.equal(process.env.SHARD_RESTORE_ORIG_KEY, 'original')
+  assert.equal(process.env.SHARD_RESTORE_DELETED_KEY, 'keepme')
+  assert.ok(Date.now() > 1_000_000_000_000, 'mock.restoreAll must restore Date.now')
+  assert.doesNotThrow(() => console.error('ok'))
+  assert.doesNotThrow(() => console.warn('ok'))
+  assert.equal(globalThis.fetch.name, 'fetch')
+})
+`,
+    )
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        pool: 'node-shared',
+        repoRoot: dir,
+        files: ['mutator.test.ts', 'verifier.test.ts'],
+        testTimeoutMs: 20_000,
+      }),
+    )
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      SHARD_RESTORE_ORIG_KEY: 'original',
+      SHARD_RESTORE_DELETED_KEY: 'keepme',
+    }
+    delete env.NODE_TEST_CONTEXT
+    const res = await runChildAsync(
+      process.execPath,
+      [path.join(repoRoot, 'scripts', 'run-tests.mjs'), '--skip-cache-hygiene', '--shard-worker', manifestPath],
+      { cwd: repoRoot, env },
+    )
+    assert.equal(res.status, 0, `shard-worker restore test failed:\n${res.stderr}\n${res.stdout}`)
+
+    // Also verify dom-shard-preload restores console.error/warn and globalThis.Notification (descriptor-preserving)
+    const domManifestPath = path.join(dir, 'dom-manifest.json')
+    writeFileSync(
+      path.join(dir, 'dom-mutator.test.ts'),
+      `import test from 'node:test'
+import assert from 'node:assert/strict'
+test('mutates Notification, console.error/warn, and DOM without restoring', { timeout: 60_000 }, () => {
+  Object.defineProperty(globalThis, 'Notification', {
+    configurable: true,
+    writable: true,
+    enumerable: true,
+    value: class FakeNotification {},
+  })
+  console.error = () => { throw new Error('leaked dom console.error') }
+  console.warn = () => { throw new Error('leaked dom console.warn') }
+  document.body.innerHTML = '<div id="leaked">dirty</div>'
+  assert.ok('Notification' in globalThis)
+})
+`,
+    )
+    writeFileSync(
+      path.join(dir, 'dom-verifier.test.ts'),
+      `import test from 'node:test'
+import assert from 'node:assert/strict'
+test('observes clean Notification descriptor, console, and DOM after prior file', { timeout: 60_000 }, () => {
+  assert.equal(Object.getOwnPropertyDescriptor(globalThis, 'Notification'), undefined)
+  assert.equal(document.body.innerHTML, '')
+  assert.doesNotThrow(() => console.error('ok'))
+  assert.doesNotThrow(() => console.warn('ok'))
+})
+`,
+    )
+    writeFileSync(
+      domManifestPath,
+      JSON.stringify({
+        pool: 'dom-shared',
+        repoRoot: dir,
+        files: ['dom-mutator.test.ts', 'dom-verifier.test.ts'],
+        testTimeoutMs: 20_000,
+      }),
+    )
+    const domRes = await runChildAsync(
+      process.execPath,
+      [path.join(repoRoot, 'scripts', 'run-tests.mjs'), '--skip-cache-hygiene', '--dom-preload', '--shard-worker', domManifestPath],
+      { cwd: repoRoot, env },
+    )
+    assert.equal(domRes.status, 0, `dom-shard-preload restore test failed:\n${domRes.stderr}\n${domRes.stdout}`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -5,18 +5,20 @@
  * Pools:
  * - `pure`: strictly pure in-memory tests (zero DOM, zero fs writes, zero network/sqlite/
  *   subprocess/global mutation). Runs in persistent `--test-isolation=none` workers.
- * - `dom-shared`: happy-dom / React DOM / client-compile tests without process-global
- *   mutations, `GlobalRegistrator.unregister`, `mock.timers`/`mock.method`, or backend
- *   subprocess/SQLite/KernelRuntime/createHelmx usage. Runs in persistent workers with
- *   `dom-shard-preload.mjs` + inter-file DOM reset.
+ * - `dom-shared`: happy-dom / React DOM / client-compile tests without destructive
+ *   DOM global redefinitions (`document`/`window`/`navigator`), `GlobalRegistrator.unregister`,
+ *   `mock.timers`, or backend subprocess/SQLite/KernelRuntime/createHelmx usage. Runs in
+ *   persistent workers with `dom-shard-preload.mjs` + inter-file DOM/console/Notification/env/mock reset.
  * - `node-shared`: Node tests using isolated temp dirs, SQLite, ephemeral HTTP/net,
- *   `KernelRuntime`, `createHelmx`, or `@helmx/plugin-build` without process-global
- *   mutations (`process.env`, `process.chdir`, `process.argv`, `process.exit`, non-0
- *   `process.kill`, `process.stdin/stdout/stderr`, unpaired `process.on`, `globalThis`
- *   writes, `mock.timers`/`mock.method`, `worker_threads`/`cluster`). Runs in persistent
- *   `--test-isolation=none` workers (each file gets its own fresh `node:test` root suite).
+ *   `KernelRuntime`, `createHelmx`, `@helmx/plugin-build`, per-key `process.env` mutations,
+ *   `mock.method`, `console.error/warn/log` overrides, `globalThis.fetch` overrides, or
+ *   positive child-PID `process.kill(childPid, sig)` (without full `process.env = ...`,
+ *   `process.chdir`, `process.argv`, `process.exit`, self/PGID `process.kill`,
+ *   `process.stdin/stdout/stderr`, unpaired `process.on`, other `globalThis` writes,
+ *   `mock.timers`, or `worker_threads`/`cluster`). Runs in persistent `--test-isolation=none`
+ *   workers with inter-file `process.env`, `mock.restoreAll()`, `console`, and `fetch` reset.
  * - `isolated`: remaining files (or files containing `// @test-isolation: process`) that
- *   genuinely require `--test-isolation=process`.
+ *   genuinely require dedicated OS process isolation.
  *
  * When pass-through args explicitly set semantics-sensitive switches like
  * `--test-isolation` / `--test-reporter` / `--test-name-pattern` / `--test-concurrency`,
@@ -25,8 +27,27 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-export const TEST_POOL_CACHE_SCHEMA_VERSION = 2;
+export const TEST_POOL_CACHE_SCHEMA_VERSION = 4;
 export const DEFAULT_PURITY_CACHE_REL = path.join('node_modules', '.cache', 'helmx-test-purity-cache.json');
+
+const NATIVE_PROCESS_ISOLATION_REASONS = new Set([
+  'pragma:test-isolation:process',
+  'process.kill:self',
+  'process.exit',
+  'process.on',
+  'process.once',
+]);
+
+/**
+ * Return true when an isolated file must keep Node's `--test-isolation=process` child process
+ * (e.g. explicit `// @test-isolation: process` pragma or self-signaling `process.kill(process.pid, ...)`),
+ * rather than running directly under `--test-isolation=none` inside a dedicated single-file OS process.
+ * @param {string[]} reasons
+ * @returns {boolean}
+ */
+export function requiresNativeProcessIsolation(reasons) {
+  return Array.isArray(reasons) && reasons.some((r) => NATIVE_PROCESS_ISOLATION_REASONS.has(r));
+}
 
 const ISOLATION_PROCESS_PRAGMA_RE = /@test-isolation\s*:\s*process\b/;
 
@@ -172,6 +193,8 @@ const MUTATED_GLOBAL_IDENTIFIERS = new Set([
   'console',
 ]);
 
+const RESTORED_CONSOLE_METHODS = new Set(['error', 'warn', 'log']);
+
 const DESTRUCTIVE_DOM_GLOBAL_PROPS = new Set(['window', 'document', 'navigator']);
 
 const DOM_SAFE_GLOBAL_PROPS = new Set([
@@ -314,6 +337,8 @@ function collectFileBindings(ts, sourceFile) {
   }
 
   const regexBindings = new Set();
+  const selfPidBindings = new Set();
+  const unsafePidBindings = new Set();
   let hasUnhandledRejectionOff = false;
 
   const scan = (node) => {
@@ -328,6 +353,15 @@ function collectFileBindings(ts, sourceFile) {
             unwrapExpr(ts, init.expression).text === 'RegExp'))
       ) {
         regexBindings.add(node.name.text);
+      } else if (init && (isProcessPropExpr(ts, init, 'pid') || isProcessPropExpr(ts, init, 'ppid'))) {
+        selfPidBindings.add(node.name.text);
+        unsafePidBindings.add(node.name.text);
+      } else if (
+        init &&
+        ((ts.isPrefixUnaryExpression(init) && init.operator === ts.SyntaxKind.MinusToken) ||
+          (ts.isNumericLiteral(init) && Number(init.text) <= 0))
+      ) {
+        unsafePidBindings.add(node.name.text);
       }
     }
     if (ts.isCallExpression(node)) {
@@ -363,8 +397,37 @@ function collectFileBindings(ts, sourceFile) {
     cpExecBindings,
     importsChildProcess,
     regexBindings,
+    selfPidBindings,
+    unsafePidBindings,
     hasUnhandledRejectionOff,
   };
+}
+
+function isSelfPidTarget(ts, target, selfPidBindings) {
+  if (!target) return false;
+  if (isProcessPropExpr(ts, target, 'pid') || isProcessPropExpr(ts, target, 'ppid')) return true;
+  return ts.isIdentifier(target) && selfPidBindings.has(target.text);
+}
+
+/**
+ * Determine whether the first argument of `process.kill(target, sig)` could target the current
+ * shared worker process, its parent, or a process group (negative PGID / 0).
+ */
+function isUnsafeProcessKillTarget(ts, target, unsafePidBindings) {
+  if (!target) return true;
+  if (ts.isPrefixUnaryExpression(target) && target.operator === ts.SyntaxKind.MinusToken) return true;
+  if (ts.isNumericLiteral(target)) {
+    const n = Number(target.text);
+    return !Number.isFinite(n) || n <= 0;
+  }
+  if (isProcessPropExpr(ts, target, 'pid') || isProcessPropExpr(ts, target, 'ppid')) return true;
+  if (ts.isIdentifier(target)) {
+    return unsafePidBindings.has(target.text);
+  }
+  if (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) {
+    return false;
+  }
+  return true;
 }
 
 /** Resolve a same-repo test-directory relative helper module path from a test file path. */
@@ -568,7 +631,8 @@ export function analyzeTestSourcePurity(
         ts.isPropertyAccessExpression(obj) &&
         obj.name.text === 'mock'
       ) {
-        strictIsolated.add(`mock.${prop}`);
+        if (prop === 'method') nodeFs.add('mock.method');
+        else strictIsolated.add(`mock.${prop}`);
       }
       if (
         ts.isPropertyAccessExpression(node) &&
@@ -577,14 +641,15 @@ export function analyzeTestSourcePurity(
         ts.isIdentifier(obj) &&
         obj.text === 'mock'
       ) {
-        strictIsolated.add(`mock.${prop}`);
+        if (prop === 'method') nodeFs.add('mock.method');
+        else strictIsolated.add(`mock.${prop}`);
       }
     }
 
     if (ts.isDeleteExpression(node)) {
       const expr = unwrapExpr(ts, node.expression);
       if (isProcessEnvMemberExpr(ts, expr)) {
-        strictIsolated.add('delete:process.env');
+        nodeFs.add('delete:process.env');
       } else if (expr && (ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr))) {
         const host = unwrapExpr(ts, expr.expression);
         const prop = ts.isPropertyAccessExpression(expr) ? expr.name.text : undefined;
@@ -600,21 +665,29 @@ export function analyzeTestSourcePurity(
 
     if (isAssignmentExpr(ts, node)) {
       const left = unwrapExpr(ts, node.left);
-      if (isProcessPropExpr(ts, left, 'env') || isProcessEnvMemberExpr(ts, left)) {
+      if (isProcessPropExpr(ts, left, 'env')) {
         strictIsolated.add('assign:process.env');
+      } else if (isProcessEnvMemberExpr(ts, left)) {
+        nodeFs.add('assign:process.env');
       } else if (isProcessPropExpr(ts, left, 'argv')) {
         strictIsolated.add('assign:process.argv');
       } else if (left && ts.isIdentifier(left) && MUTATED_GLOBAL_IDENTIFIERS.has(left.text)) {
         strictIsolated.add(`override:${left.text}`);
       } else if (left && ts.isIdentifier(left) && left.text === 'fetch') {
-        nodeGlobal.add('override:fetch');
+        nodeFs.add('override:fetch');
       } else if (
         left &&
         ts.isPropertyAccessExpression(left) &&
         ts.isIdentifier(unwrapExpr(ts, left.expression)) &&
         MUTATED_GLOBAL_IDENTIFIERS.has(unwrapExpr(ts, left.expression).text)
       ) {
-        strictIsolated.add(`override:${unwrapExpr(ts, left.expression).text}.${left.name.text}`);
+        const baseName = unwrapExpr(ts, left.expression).text;
+        const propName = left.name.text;
+        if (baseName === 'console' && RESTORED_CONSOLE_METHODS.has(propName)) {
+          nodeFs.add(`override:console.${propName}`);
+        } else {
+          strictIsolated.add(`override:${baseName}.${propName}`);
+        }
       } else if (left && (ts.isPropertyAccessExpression(left) || ts.isElementAccessExpression(left))) {
         const host = unwrapExpr(ts, left.expression);
         const prop = ts.isPropertyAccessExpression(left) ? left.name.text : undefined;
@@ -623,6 +696,8 @@ export function analyzeTestSourcePurity(
             dom.add(`global:globalThis.${prop}`);
           } else if (ts.isElementAccessExpression(left) && isClientSharedGlobalIndexExpr(ts, left.argumentExpression)) {
             dom.add('global:globalThis[CLIENT_SHARED_GLOBALS]');
+          } else if (prop === 'fetch') {
+            nodeFs.add('assign:globalThis.fetch');
           } else if (prop === 'setInterval' || prop === 'clearInterval') {
             // Reset between `dom-shared` files by dom-shard-preload; non-DOM files still isolate via `nodeGlobal`.
             nodeGlobal.add(`assign:globalThis.${prop}`);
@@ -691,10 +766,16 @@ export function analyzeTestSourcePurity(
           else if (method === 'unregister') strictIsolated.add('call:GlobalRegistrator.unregister');
         } else if (host && ts.isIdentifier(host) && host.text === 'process') {
           if (method === 'kill') {
-            // `process.kill(pid, 0)` is a read-only liveness probe; actual signals stay isolated.
+            // `process.kill(pid, 0)` is a read-only liveness probe; killing a test-spawned child PID
+            // (not `process.pid`/`process.ppid`, not negative PGID `-pid`, not `0`) stays in `node-shared`.
+            const targetArg = node.arguments[0] ? unwrapExpr(ts, node.arguments[0]) : null;
             const sigArg = node.arguments[1] ? unwrapExpr(ts, node.arguments[1]) : null;
             if (sigArg && ts.isNumericLiteral(sigArg) && sigArg.text === '0') {
               nodeFs.add('process.kill:probe');
+            } else if (isSelfPidTarget(ts, targetArg, bindings.selfPidBindings)) {
+              strictIsolated.add('process.kill:self');
+            } else if (!isUnsafeProcessKillTarget(ts, targetArg, bindings.unsafePidBindings)) {
+              nodeBackend.add('process.kill:child');
             } else {
               strictIsolated.add('process.kill');
             }
@@ -1101,6 +1182,8 @@ export function planFourPoolSchedule({
     isolated: [],
   };
 
+  /** @type {string[]} */
+  const processIsolatedFiles = [];
   let cacheHits = 0;
   let cacheMisses = 0;
   for (const rel of files) {
@@ -1113,6 +1196,9 @@ export function planFourPoolSchedule({
     if (res.cacheHit) cacheHits += 1;
     else cacheMisses += 1;
     pools[res.pool].push(rel);
+    if (res.pool === 'isolated' && requiresNativeProcessIsolation(res.reasons)) {
+      processIsolatedFiles.push(rel);
+    }
   }
 
   if (cache && cacheMisses > 0) {
@@ -1208,6 +1294,7 @@ export function planFourPoolSchedule({
 
   return {
     pools,
+    processIsolatedFiles,
     shardCounts,
     plans,
     cacheStats: { hits: cacheHits, misses: cacheMisses },

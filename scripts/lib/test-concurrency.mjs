@@ -1,6 +1,8 @@
 /** Shared test-runner concurrency policy. */
 
-export const DEFAULT_TEST_CONCURRENCY = 16;
+// 14 workers saturates 8-core/16-SMT hosts while leaving 2 hardware threads of headroom for
+// V8 GC, libuv, SQLite, and child process spawns (faster than 12 and flake-free vs 16).
+export const DEFAULT_TEST_CONCURRENCY = 14;
 
 /**
  * Resolve the default worker budget for one worktree.

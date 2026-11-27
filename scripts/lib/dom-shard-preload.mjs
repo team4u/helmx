@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const STATE_KEY = '__helmxDomShardPreloadState';
+const RESTORED_CONSOLE_METHODS = ['error', 'warn', 'log'];
 
 function getState() {
   const g = globalThis;
@@ -31,9 +32,49 @@ function getState() {
       baselineSetInterval: undefined,
       baselineClearInterval: undefined,
       baselineGlobalsCaptured: false,
+      baselineConsole: null,
+      baselineNotificationDesc: undefined,
+      baselineNotificationCaptured: false,
     };
   }
   return g[STATE_KEY];
+}
+
+function captureBaselineGlobals(state) {
+  if (!state.baselineFetchCaptured) {
+    state.baselineFetch = globalThis.fetch;
+    state.baselineFetchCaptured = true;
+  }
+  if (!state.baselineGlobalsCaptured) {
+    state.baselineBlob = globalThis.Blob;
+    state.baselineSetInterval = globalThis.setInterval;
+    state.baselineClearInterval = globalThis.clearInterval;
+    state.baselineGlobalsCaptured = true;
+  }
+  if (!state.baselineConsole) {
+    state.baselineConsole = RESTORED_CONSOLE_METHODS.map((name) => ({
+      name,
+      desc: Object.getOwnPropertyDescriptor(console, name),
+      value: console[name],
+    }));
+  }
+  if (!state.baselineNotificationCaptured) {
+    state.baselineNotificationDesc = Object.getOwnPropertyDescriptor(globalThis, 'Notification');
+    state.baselineNotificationCaptured = true;
+  }
+}
+
+function descriptorsEqual(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.value === b.value &&
+    a.get === b.get &&
+    a.set === b.set &&
+    a.writable === b.writable &&
+    a.enumerable === b.enumerable &&
+    a.configurable === b.configurable
+  );
 }
 
 function resolveGlobalRegistratorUrl() {
@@ -75,32 +116,14 @@ export async function installDomShardPreload() {
     if (!GlobalRegistrator.isRegistered) {
       origRegister();
     }
-    if (!state.baselineFetchCaptured) {
-      state.baselineFetch = globalThis.fetch;
-      state.baselineFetchCaptured = true;
-    }
-    if (!state.baselineGlobalsCaptured) {
-      state.baselineBlob = globalThis.Blob;
-      state.baselineSetInterval = globalThis.setInterval;
-      state.baselineClearInterval = globalThis.clearInterval;
-      state.baselineGlobalsCaptured = true;
-    }
+    captureBaselineGlobals(state);
 
     GlobalRegistrator.register = function idempotentRegister(options) {
       if (GlobalRegistrator.isRegistered) {
         return;
       }
       const res = origRegister(options);
-      if (!state.baselineFetchCaptured) {
-        state.baselineFetch = globalThis.fetch;
-        state.baselineFetchCaptured = true;
-      }
-      if (!state.baselineGlobalsCaptured) {
-        state.baselineBlob = globalThis.Blob;
-        state.baselineSetInterval = globalThis.setInterval;
-        state.baselineClearInterval = globalThis.clearInterval;
-        state.baselineGlobalsCaptured = true;
-      }
+      captureBaselineGlobals(state);
       return res;
     };
   } catch {
@@ -180,6 +203,40 @@ export function resetSharedHappyDom() {
         } catch {
           // Ignore read-only globals
         }
+      }
+    }
+  }
+  if (state.baselineConsole) {
+    for (const snap of state.baselineConsole) {
+      const curDesc = Object.getOwnPropertyDescriptor(console, snap.name);
+      if (console[snap.name] !== snap.value || !descriptorsEqual(curDesc, snap.desc)) {
+        try {
+          if (snap.desc) {
+            Object.defineProperty(console, snap.name, snap.desc);
+          } else {
+            delete console[snap.name];
+          }
+        } catch {
+          try {
+            console[snap.name] = snap.value;
+          } catch {
+            // Ignore read-only console property
+          }
+        }
+      }
+    }
+  }
+  if (state.baselineNotificationCaptured) {
+    const curDesc = Object.getOwnPropertyDescriptor(globalThis, 'Notification');
+    if (!descriptorsEqual(curDesc, state.baselineNotificationDesc)) {
+      try {
+        if (state.baselineNotificationDesc) {
+          Object.defineProperty(globalThis, 'Notification', state.baselineNotificationDesc);
+        } else {
+          delete globalThis.Notification;
+        }
+      } catch {
+        // Ignore non-configurable Notification
       }
     }
   }

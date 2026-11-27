@@ -106,6 +106,41 @@ export const nodesMessages = {
     en: '2. Connect and start background daemon:',
     'zh-CN': '2. 接入并后台启动守护进程：',
   },
+  'nodes.drawer.hubUrlLabel': {
+    en: 'Hub access address',
+    'zh-CN': 'Hub 访问地址',
+  },
+  'nodes.drawer.listenSummary': {
+    en: 'listening on {addr}',
+    'zh-CN': '监听 {addr}',
+  },
+  'nodes.drawer.endpointKind.current': { en: 'Current', 'zh-CN': '当前访问' },
+  'nodes.drawer.endpointKind.lan': { en: 'LAN', 'zh-CN': '局域网' },
+  'nodes.drawer.endpointKind.vpn': { en: 'VPN', 'zh-CN': 'VPN' },
+  'nodes.drawer.endpointKind.public': { en: 'Public', 'zh-CN': '公网' },
+  'nodes.drawer.endpointKind.hostname': { en: 'Hostname', 'zh-CN': '主机名' },
+  'nodes.drawer.endpointKind.ipv6': { en: 'IPv6', 'zh-CN': 'IPv6' },
+  'nodes.drawer.endpointKind.virtual': { en: 'Virtual', 'zh-CN': '虚拟网卡' },
+  'nodes.drawer.endpointKind.loopback': { en: 'Loopback', 'zh-CN': '本机回环' },
+  'nodes.drawer.moreEndpoints': { en: 'More ({count})', 'zh-CN': '更多 ({count})' },
+  'nodes.drawer.lessEndpoints': { en: 'Collapse', 'zh-CN': '收起' },
+  'nodes.drawer.customEndpoint': { en: 'Custom', 'zh-CN': '自定义' },
+  'nodes.drawer.customEndpointPlaceholder': {
+    en: 'e.g. https://hub.example.com',
+    'zh-CN': '例如 https://hub.example.com',
+  },
+  'nodes.drawer.customEndpointAria': {
+    en: 'Custom Hub URL',
+    'zh-CN': '自定义 Hub 地址',
+  },
+  'nodes.drawer.loopbackOnlyWarning': {
+    en: 'Hub is listening on loopback only; remote machines cannot reach it directly. Start with HELMX_HOST=0.0.0.0 or enter a reverse-proxy URL via Custom.',
+    'zh-CN': '当前 Hub 仅监听本机回环地址，远端机器无法直连；请以 HELMX_HOST=0.0.0.0 启动，或点「自定义」填写反向代理地址。',
+  },
+  'nodes.drawer.loopbackSelectedWarning': {
+    en: 'Loopback address is selected (local testing only). For remote machines, pick a LAN, VPN, or hostname address above.',
+    'zh-CN': '当前所选为本机回环地址（仅限本机测试）；远端机器请切换为上方局域网、VPN 或主机名地址。',
+  },
   'nodes.drawer.copyCommandTitle': { en: 'Copy command line', 'zh-CN': '复制命令行' },
   'nodes.drawer.copyCommand': { en: 'Copy command', 'zh-CN': '复制命令' },
   'nodes.drawer.maintenanceLabel': {

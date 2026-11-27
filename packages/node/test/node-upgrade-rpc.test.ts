@@ -20,7 +20,7 @@ import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
 import process from 'node:process';
-import { sleep as delay } from '@helmx/test-kit';
+import { deferred, sleep as delay, withTimeout } from '@helmx/test-kit';
 import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helmx/test-kit/node';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc, type BirpcReturn } from 'birpc';
@@ -45,7 +45,7 @@ import {
 
 /** Poll until an observable condition holds (instead of fixed sleeps), failing explicitly on timeout. */
 const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
-  kitWaitFor(condition, { timeoutMs, message: `wait timed out: ${what}` });
+  kitWaitFor(condition, { timeoutMs, intervalMs: 10, message: `wait timed out: ${what}` });
 
 // ---------------------------------------------------------------------------
 // 1. Env server draining gate and active exec counting (guard entry)
@@ -53,10 +53,21 @@ const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number,
 
 test('setDraining(true) rejects new envExec synchronously, false restores it, and in-flight execs finish normally', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helmx-node-drain-');
-  const server = createNodeEnvRpcServer({ defaultCwd: dir });
+  const ready = deferred<void>();
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    onExecOutput: (event) => {
+      if (event.execId === 'e-slow' && event.text.includes('READY')) ready.resolve();
+    },
+  });
   try {
-    const slow = server.envExec({ execId: 'e-slow', command: 'sleep 1', timeout: 30 });
-    await delay(150);
+    const releaseFlag = path.join(dir, 'release.flag');
+    const slow = server.envExec({
+      execId: 'e-slow',
+      command: `node -e "const fs=require('fs'); console.log('READY'); const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseFlag)})){clearInterval(t);process.exit(0)}},10)"`,
+      timeout: 30,
+    });
+    await withTimeout(ready.promise, 5_000, 'in-flight exec did not start');
     assert.equal(server.getActiveExecCount(), 1, 'accepted incomplete exec counts toward getActiveExecCount');
 
     server.setDraining(true);
@@ -64,6 +75,7 @@ test('setDraining(true) rejects new envExec synchronously, false restores it, an
     assert.equal(rejected.ok, false);
     assert.equal(!rejected.ok && rejected.error.code, 'node_draining');
 
+    await fs.writeFile(releaseFlag, 'go');
     const done = await slow;
     assert.equal(done.ok, true);
     assert.equal(server.getActiveExecCount(), 0);
@@ -81,7 +93,7 @@ test('guard entry registers synchronously before spawn and subsequent setDrainin
   const dir = await tempDir('helmx-node-count-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   try {
-    const jobs = [1, 2, 3].map((i) => server.envExec({ execId: `e-${i}`, command: 'sleep 0.3', timeout: 30 }));
+    const jobs = [1, 2, 3].map((i) => server.envExec({ execId: `e-${i}`, command: 'sleep 0.05', timeout: 30 }));
     // No delay needed: guard entry registers synchronously so all 3 count immediately before spawn
     assert.equal(server.getActiveExecCount(), 3);
     // Already-accepted calls complete normally despite subsequent setDraining
@@ -233,8 +245,8 @@ async function startManagedDaemon(options: {
     dataDir: options.dataDir,
     // Existing upgrade RPC wiring tests exercise release-mode behavior; source-mode exemption is tested explicitly below.
     installMode: options.installMode ?? 'release',
-    reconnectBaseDelayMs: 60,
-    reconnectMaxDelayMs: 250,
+    reconnectBaseDelayMs: 30,
+    reconnectMaxDelayMs: 120,
     ...(options.withPrepare
       ? {
           prepareUpgradeReplacement: async (release, context) => {
@@ -299,7 +311,7 @@ async function waitUntilDraining(rpc: BirpcReturn<NodeEnvRpcFunctions, object>, 
     const r = await rpc.envExec({ execId: `probe-${tag}-${i}`, command: 'echo hi', timeout: 10 });
     if (!r.ok && r.error.code === 'node_draining') return;
     lastCode = r.ok ? 'ok' : r.error.code;
-    await delay(100);
+    await delay(15);
   }
   assert.fail(`draining gate did not activate (last state ${lastCode})`);
 }
@@ -512,7 +524,7 @@ test('upgrade success path: draining gate activates, commits once, invokes host 
   // Upgrade committed: after disconnect old daemon must not reconnect (awaiting host exit)
   await hub.close();
   const hub2 = await startHubFixture({ expectedToken: 'up-a:secret-a', port: hub.port });
-  await delay(500);
+  await delay(180);
   assert.equal(hub2.registrations.length, 0, 'old daemon must not reconnect after upgrade commit');
   await hub2.close();
 });
@@ -547,8 +559,11 @@ test('upgrade same-version no-op (upgraded:false) restores flags/gate and stays 
 
   await hub.close();
   const hub2 = await startHubFixture({ expectedToken: 'up-a:secret-a', port: hub.port });
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline && hub2.registrations.length === 0) await delay(200);
+  await waitFor(
+    () => hub2.registrations.length === 1 && stub.daemon.isConnected(),
+    15_000,
+    'should remain reconnectable after no-op',
+  );
   assert.equal(hub2.registrations.length, 1, 'should remain reconnectable after no-op');
   await hub2.close();
 });
@@ -583,8 +598,11 @@ test('upgrade failure rolls back, clears gate, restores reconnect, and accepts c
   assert.equal((await readBlockedRelease(dir))?.version, '8.8.8');
 
   hub = await startHubFixture({ expectedToken: 'up-a:secret-a', port });
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline && hub.registrations.length === 0) await delay(200);
+  await waitFor(
+    () => hub.registrations.length === 1 && stub.daemon.isConnected(),
+    15_000,
+    'should resume reconnecting after failure',
+  );
   assert.equal(hub.registrations.length, 1, 'should resume reconnecting after failure');
 
   const rpc = hub.nodeRpc()!;
@@ -694,7 +712,7 @@ test('concurrent upgrade rejects as busy without sharing result; retryable after
 
 test('pendingActivation candidate rejects new commands until confirmUpgrade reconciles identity and reports commit', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helmx-node-pending-');
-  const hub = await startHubFixture({ expectedToken: 'up-a:secret-a', heartbeatMs: 300 });
+  const hub = await startHubFixture({ expectedToken: 'up-a:secret-a', heartbeatMs: 60 });
   const stub = await startManagedDaemon({
     hubUrl: hub.url,
     dataDir: dir,
@@ -750,7 +768,7 @@ test('pendingActivation candidate rejects new commands until confirmUpgrade reco
 
 test('commit survives disconnect in memory and retries in heartbeats on new connection', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helmx-node-commitretry-');
-  let hub = await startHubFixture({ expectedToken: 'up-a:secret-a', heartbeatMs: 300 });
+  let hub = await startHubFixture({ expectedToken: 'up-a:secret-a', heartbeatMs: 60 });
   const stub = await startManagedDaemon({ hubUrl: hub.url, dataDir: dir, withPrepare: false });
   t.after(async () => {
     await stub.daemon.close().catch(() => undefined);
@@ -768,9 +786,12 @@ test('commit survives disconnect in memory and retries in heartbeats on new conn
   assert.ok(hub.heartbeatInputs.some((input) => input.upgradeCommit?.attemptId === 'att-retry-1'));
 
   await hub.close();
-  hub = await startHubFixture({ expectedToken: 'up-a:secret-a', heartbeatMs: 300, port: hub.port });
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline && hub.registrations.length === 0) await delay(200);
+  hub = await startHubFixture({ expectedToken: 'up-a:secret-a', heartbeatMs: 60, port: hub.port });
+  await waitFor(
+    () => hub.registrations.length === 1 && stub.daemon.isConnected(),
+    15_000,
+    'should reconnect successfully',
+  );
   assert.equal(hub.registrations.length, 1, 'should reconnect successfully');
   await waitFor(
     () => hub.heartbeatInputs.some((input) => input.upgradeCommit?.attemptId === 'att-retry-1'),
@@ -806,7 +827,7 @@ test('pushHeartbeatSoon coordinates with in-flight heartbeat without overlapping
       }>(
         {
           async register() {
-            return { ok: true, heartbeatMs: 120 };
+            return { ok: true, heartbeatMs: 40 };
           },
           async heartbeat(_nodeId, input) {
             inFlightCount += 1;

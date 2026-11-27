@@ -242,6 +242,33 @@ test('deferred / sleep / waitFor / jsonResponse isomorphic async and response ut
   assert.equal(await emptyRes.text(), '')
 })
 
+test('waitFor uses fast exponential backoff by default and honors explicit intervalMs', { timeout: 60_000 }, async () => {
+  const origSetTimeout = globalThis.setTimeout
+  const recordedDelays: number[] = []
+  globalThis.setTimeout = ((fn: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    recordedDelays.push(Number(delay ?? 0))
+    return origSetTimeout(fn, 0, ...args)
+  }) as typeof globalThis.setTimeout
+  try {
+    let defaultCalls = 0
+    await waitFor(() => {
+      defaultCalls += 1
+      return defaultCalls > 5
+    }, { timeoutMs: 5_000 })
+    assert.deepEqual(recordedDelays, [2, 5, 10, 25, 25], 'default polling should back off 2 -> 5 -> 10 -> 25ms and cap at 25ms')
+
+    recordedDelays.length = 0
+    let explicitCalls = 0
+    await waitFor(() => {
+      explicitCalls += 1
+      return explicitCalls > 3
+    }, { timeoutMs: 5_000, intervalMs: 12 })
+    assert.deepEqual(recordedDelays, [12, 12, 12], 'explicit intervalMs should bypass backoff and poll at fixed intervals')
+  } finally {
+    globalThis.setTimeout = origSetTimeout
+  }
+})
+
 test('assertRejectsCode (isomorphic and node:assert variants) strictly validates error code and status', { timeout: 60_000 }, async () => {
   class CodedError extends Error {
     readonly code: string

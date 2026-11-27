@@ -5,10 +5,14 @@
  * Fast Refresh isolation.
  */
 
-import type { NodeInfo } from '@helmx/protocol/browser'
+import type {
+  HubAccessInfo,
+  HubEndpointKind,
+  NodeInfo,
+} from '@helmx/protocol/browser'
 import type { SelectOption } from '@helmx/plugin-client'
 import { formatBytes } from '../lib/format.js'
-import type { WebMessageTranslator } from '../i18n/catalog.js'
+import type { WebMessageKey, WebMessageTranslator } from '../i18n/catalog.js'
 
 export { formatBytes }
 
@@ -58,6 +62,180 @@ export function buildNodeConnectGuide(
     oneLineCommand: `helmx-node start -d --hub ${hubOrigin} --token ${issued.token}`,
     serviceInstallCommand: 'helmx-node service install',
     doctorCommand: 'helmx-node doctor',
+  }
+}
+
+export type HubEndpointOptionKind = HubEndpointKind | 'current'
+
+export interface HubEndpointOption {
+  url: string
+  displayLabel: string
+  kind: HubEndpointOptionKind
+  interface?: string
+  secondary: boolean
+}
+
+export interface ResolvedHubEndpoints {
+  primary: HubEndpointOption[]
+  more: HubEndpointOption[]
+  all: HubEndpointOption[]
+  defaultUrl: string
+  loopbackWarning: boolean
+  listenSummary?: string
+}
+
+const ENDPOINT_KIND_MESSAGE_KEYS: Readonly<Record<HubEndpointOptionKind, WebMessageKey>> = {
+  current: 'nodes.drawer.endpointKind.current',
+  lan: 'nodes.drawer.endpointKind.lan',
+  vpn: 'nodes.drawer.endpointKind.vpn',
+  public: 'nodes.drawer.endpointKind.public',
+  hostname: 'nodes.drawer.endpointKind.hostname',
+  ipv6: 'nodes.drawer.endpointKind.ipv6',
+  virtual: 'nodes.drawer.endpointKind.virtual',
+  loopback: 'nodes.drawer.endpointKind.loopback',
+}
+
+function normalizeCandidateUrl(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined
+  const trimmed = raw.trim()
+  if (trimmed === '' || trimmed === 'null') return undefined
+  return trimmed.replace(/\/+$/, '')
+}
+
+function candidateUrlKey(raw: string): string {
+  return raw.replace(/\/+$/, '').toLowerCase()
+}
+
+/** Returns true when a URL targets a loopback address (`localhost`, `127.*`, `::1`). */
+export function isLoopbackHubUrl(raw: string): boolean {
+  try {
+    const host = new URL(raw).hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    return host === 'localhost' || host === '::1' || host.startsWith('127.') || host.startsWith('::ffff:127.')
+  } catch {
+    return false
+  }
+}
+
+/** Compact display label for endpoint chips (drops plain `http://`, preserves `https://` for TLS visibility). */
+export function formatHubEndpointDisplayLabel(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl)
+    return parsed.protocol === 'https:' ? `https://${parsed.host}` : parsed.host
+  } catch {
+    return rawUrl
+  }
+}
+
+/** Format listen host + port for header display (brackets IPv6 literals). */
+export function formatHubListenSummary(hubAccess: HubAccessInfo): string {
+  const host = hubAccess.listenHost.includes(':') && !hubAccess.listenHost.startsWith('[')
+    ? `[${hubAccess.listenHost}]`
+    : hubAccess.listenHost
+  return `${host}:${hubAccess.listenPort}`
+}
+
+/** Format localized endpoint classification tag (`kind` or `kind · interface`). */
+export function formatHubEndpointTag(option: HubEndpointOption, t: WebMessageTranslator): string {
+  const label = t(ENDPOINT_KIND_MESSAGE_KEYS[option.kind])
+  return option.interface ? `${label} · ${option.interface}` : label
+}
+
+/**
+ * Resolve deduplicated, tiered Hub endpoint options for `NodeDetailDrawer`:
+ * - Non-loopback `browserOrigin` is placed first as `current` (inheriting interface metadata if matched);
+ * - Server-discovered `hubAccess.endpoints` follow in reachability priority order;
+ * - Virtual bridges, loopback addresses, and overflow primary items collapse into `more`;
+ * - Falls back to `<HUB_URL>` when neither server metadata nor a valid browser origin is present.
+ */
+export function resolveHubEndpointOptions(input: {
+  hubAccess?: HubAccessInfo
+  browserOrigin?: string
+  preferredUrl?: string
+  primaryCap?: number
+}): ResolvedHubEndpoints {
+  const primaryCap = input.primaryCap ?? 4
+  const browserUrl = normalizeCandidateUrl(input.browserOrigin)
+  const byKey = new Map<string, HubEndpointOption>()
+
+  const pushOption = (
+    url: string,
+    kind: HubEndpointOptionKind,
+    iface: string | undefined,
+    secondary: boolean,
+  ): void => {
+    const key = candidateUrlKey(url)
+    const existing = byKey.get(key)
+    if (existing !== undefined) {
+      if (existing.interface === undefined && iface !== undefined) {
+        existing.interface = iface
+      }
+      return
+    }
+    byKey.set(key, {
+      url,
+      displayLabel: formatHubEndpointDisplayLabel(url),
+      kind,
+      ...(iface !== undefined ? { interface: iface } : {}),
+      secondary,
+    })
+  }
+
+  if (browserUrl !== undefined && !isLoopbackHubUrl(browserUrl)) {
+    pushOption(browserUrl, 'current', undefined, false)
+  }
+
+  for (const ep of input.hubAccess?.endpoints ?? []) {
+    const clean = normalizeCandidateUrl(ep.url)
+    if (clean === undefined) continue
+    pushOption(clean, ep.kind, ep.interface, ep.kind === 'virtual' || ep.kind === 'loopback')
+  }
+
+  if (browserUrl !== undefined && isLoopbackHubUrl(browserUrl)) {
+    pushOption(browserUrl, 'loopback', undefined, true)
+  }
+
+  if (byKey.size === 0) {
+    pushOption('<HUB_URL>', 'current', undefined, false)
+  }
+
+  const primary: HubEndpointOption[] = []
+  const more: HubEndpointOption[] = []
+  for (const opt of byKey.values()) {
+    if (!opt.secondary && primary.length < primaryCap) {
+      primary.push(opt)
+    } else {
+      more.push(opt)
+    }
+  }
+  if (primary.length === 0 && more.length > 0) {
+    const promoted = more.shift()!
+    primary.push({ ...promoted, secondary: false })
+  }
+
+  let defaultUrl = primary[0]!.url
+  const pref = normalizeCandidateUrl(input.preferredUrl)
+  if (pref !== undefined && !isLoopbackHubUrl(pref)) {
+    const prefKey = candidateUrlKey(pref)
+    const inPrimary = primary.find((opt) => candidateUrlKey(opt.url) === prefKey)
+    if (inPrimary !== undefined) {
+      defaultUrl = inPrimary.url
+    } else {
+      const moreIdx = more.findIndex((opt) => candidateUrlKey(opt.url) === prefKey)
+      if (moreIdx !== -1) {
+        const [promoted] = more.splice(moreIdx, 1)
+        primary.push({ ...promoted!, secondary: false })
+        defaultUrl = promoted!.url
+      }
+    }
+  }
+
+  return {
+    primary,
+    more,
+    all: [...primary, ...more],
+    defaultUrl,
+    loopbackWarning: defaultUrl !== '<HUB_URL>' && isLoopbackHubUrl(defaultUrl),
+    ...(input.hubAccess ? { listenSummary: formatHubListenSummary(input.hubAccess) } : {}),
   }
 }
 

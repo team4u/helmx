@@ -42,6 +42,7 @@ import type { HelmxDatabase } from './sqlite.js'
 import { summaryOf, type HelmxStore } from './store.js'
 import type { HelmxPluginConfigStore } from './plugin-config-store.js'
 import type { ConversationService } from './conversation-service.js'
+import type { HubListenInfo } from './hub-access.js'
 import type { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
 import type { RuntimeOwnershipManager } from './runtime-ownership.js'
 import type { RuntimeTriggerDispatcher } from './runtime-triggers.js'
@@ -93,6 +94,7 @@ export class KernelRuntime {
   readonly nodeForward: NodeForwardService
   private processTokenHandle: { tokenOf(): string | undefined; dispose(): void } | undefined
   private hubUrlValue: string
+  private hubListenInfoValue: HubListenInfo | undefined
   private pluginHost: PluginHost | undefined
   /** Startup lifecycle fact (read-only for service wiring; flipped once `resume` and `reconcile` both complete — see `start()`). */
   #started = false
@@ -582,6 +584,11 @@ export class KernelRuntime {
       throw new HelmxError('validation_error', `Hub URL must be a non-empty string: ${String(url)}`, 400)
     }
     this.hubUrlValue = url
+    this.hubListenInfoValue = undefined
+  }
+
+  setHubListenInfo(info: HubListenInfo): void {
+    this.hubListenInfoValue = info
   }
 
   // ------------------------------------------------------------------
@@ -670,6 +677,7 @@ export class KernelRuntime {
   // ------------------------------------------------------------------
 
   get hubUrl(): string { return this.hubUrlValue }
+  get hubListenInfo(): HubListenInfo | undefined { return this.hubListenInfoValue }
   get processToken(): string | undefined { return this.processTokenHandle?.tokenOf() }
   get pluginConfigStore(): HelmxPluginConfigStore { return this.svc.pluginConfig }
   get profiles(): ProfileService { return this.svc.profilesSvc }

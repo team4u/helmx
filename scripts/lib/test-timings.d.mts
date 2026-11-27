@@ -22,6 +22,7 @@ export declare function mergeTestTimings(
   observed: Record<string, number> | Map<string, number>,
   options?: { alpha?: number; now?: number },
 ): TestTimingsStore
+export declare function pruneStaleTestTimings(store: TestTimingsStore, repoRoot: string): TestTimingsStore
 export declare function saveTestTimings(cachePath: string, store: TestTimingsStore): boolean
 export declare function estimateFallbackDurationMs(repoRoot: string, relPath: string): number
 export declare function createTestWeightFn(input: {

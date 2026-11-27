@@ -139,15 +139,18 @@ function mountHarness(options: HarnessOptions): Harness {
   })
   return {
     rerender: (next: HarnessOptions) => {
+      const prevStore = currentStore
       currentStore = buildStore(next)
       act(() => {
         root!.render(renderTree())
       })
+      prevStore.dispose()
     },
     unmount: () => {
       act(() => {
         root!.unmount()
       })
+      currentStore.dispose()
       host.remove()
     },
     store: () => currentStore,
@@ -204,7 +207,7 @@ function shrinkTimings(settleMs: number, blockedSettleMs = settleMs): () => void
 test('主回合忙碌 → 完成：防抖满窗投递一次（tag=helmx-conv-5），点击聚焦并跳转根会话', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(15, 10)
+  const restoreTimings = shrinkTimings(5, 3)
   const focusedSpy: boolean[] = []
   const originalFocus = window.focus
   window.focus = () => focusedSpy.push(true)
@@ -237,7 +240,7 @@ test('主回合忙碌 → 完成：防抖满窗投递一次（tag=helmx-conv-5�
 test('多根树并行隔离：树 A 仍在 working / 后台跑，树 B 结束后按时独立通知且 tag 互不覆盖', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(15, 10)
+  const restoreTimings = shrinkTimings(5, 3)
   try {
     const harness = mountHarness({
       conversations: [
@@ -300,7 +303,7 @@ test('多根树并行隔离：树 A 仍在 working / 后台跑，树 B 结束后
 test('后台在途结束（父会话全程 idle，accent 角标归零）同样投递', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(15, 10)
+  const restoreTimings = shrinkTimings(5, 3)
   try {
     const harness = mountHarness({
       conversations: [conv({ id: 7, title: '大规模重构' })],
@@ -326,16 +329,15 @@ test('后台在途结束（父会话全程 idle，accent 角标归零）同样�
 test('防抖窗口内同树活动恢复即取消；再次安静重新计窗投递', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(45, 15)
+  const restoreTimings = shrinkTimings(15, 8)
   try {
     const harness = mountHarness({
       conversations: [conv({ id: 5, status: 'working' })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
     harness.rerender({ conversations: [conv({ id: 5, status: 'idle' })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
-    await sleep(10)
     harness.rerender({ conversations: [conv({ id: 5, status: 'working', updatedAt: 2_000 })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
-    await sleep(60)
+    await sleep(22)
     assert.equal(notifications.length, 0, '窗口内恢复忙碌不得投递')
     harness.rerender({ conversations: [conv({ id: 5, status: 'done', updatedAt: 3_000 })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
     await waitForCondition(() => notifications.length === 1)
@@ -352,7 +354,7 @@ test('防抖窗口内同树活动恢复即取消；再次安静重新计窗投�
 test('同树多阶段收尾：子代理唤醒父会话取消防抖并保留早期失败参与者，最终报「已结束 · 有失败」', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(45, 15)
+  const restoreTimings = shrinkTimings(15, 8)
   try {
     const harness = mountHarness({
       conversations: [
@@ -369,7 +371,6 @@ test('同树多阶段收尾：子代理唤醒父会话取消防抖并保留早�
       ],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(10)
     // 防抖窗口内父会话被唤醒汇总：取消计时但保留 #12 失败参与者
     harness.rerender({
       conversations: [
@@ -378,7 +379,6 @@ test('同树多阶段收尾：子代理唤醒父会话取消防抖并保留早�
       ],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(10)
     // 阶段二：父会话收尾 done，周期包含早期失败子代理 #12
     harness.rerender({
       conversations: [
@@ -403,7 +403,7 @@ test('同树多阶段收尾：子代理唤醒父会话取消防抖并保留早�
 test('派生子会话归并：子会话活动不污染正文、不抢跳转，通知只列根会话', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(15, 10)
+  const restoreTimings = shrinkTimings(5, 3)
   try {
     const harness = mountHarness({
       conversations: [
@@ -439,7 +439,7 @@ test('派生子会话归并：子会话活动不污染正文、不抢跳转，�
 test('新进入 blocked：经 blockedSettleMs 投递「等待你的处理」（tag=helmx-conv-3）并跳转该会话', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(60, 15)
+  const restoreTimings = shrinkTimings(40, 5)
   try {
     const harness = mountHarness({
       conversations: [conv({ id: 3, title: '部署检查', status: 'working' })],
@@ -467,7 +467,7 @@ test('新进入 blocked：经 blockedSettleMs 投递「等待你的处理」（t
 test('同树仍有并行后台任务且 badge doc 未知时，子会话 blocked 仍经 blockedSettleMs 立即弹出「等待你的处理」', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(80, 15)
+  const restoreTimings = shrinkTimings(50, 5)
   try {
     // 初始 badge doc 未知，根会话 5 本身仍在 working
     const harness = mountHarness({
@@ -503,7 +503,7 @@ test('同树仍有并行后台任务且 badge doc 未知时，子会话 blocked 
 test('同树完成防抖窗口内新出现 blocked：取消完成计时改发「等待你的处理」；跨树互相独立', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(50, 15)
+  const restoreTimings = shrinkTimings(20, 6)
   try {
     const harness = mountHarness({
       conversations: [
@@ -522,7 +522,6 @@ test('同树完成防抖窗口内新出现 blocked：取消完成计时改发「
       ],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(10)
     // 窗口内树五子代理进入 blocked：打断树五完成结算，不影响树一
     harness.rerender({
       conversations: [
@@ -553,7 +552,7 @@ test('同树完成防抖窗口内新出现 blocked：取消完成计时改发「
 test('blocked 水位防重与推进：同水位不重复；推进再提醒；前台已处理切后台不滞后补弹', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(true)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(50, 15)
+  const restoreTimings = shrinkTimings(20, 6)
   try {
     const harness = mountHarness({
       conversations: [conv({ id: 4, title: '审批会话', status: 'working', stateChangeSeq: 1 })],
@@ -564,7 +563,7 @@ test('blocked 水位防重与推进：同水位不重复；推进再提醒；前
       conversations: [conv({ id: 4, title: '审批会话', status: 'blocked', pendingAskCount: 1, stateChangeSeq: 2 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(30)
+    await sleep(15)
     assert.equal(notifications.length, 0, '前台时不得弹出')
 
     // 切到后台并触发一次无关重渲染：同一水位不得滞后补弹
@@ -573,7 +572,7 @@ test('blocked 水位防重与推进：同水位不重复；推进再提醒；前
       conversations: [conv({ id: 4, title: '审批会话', status: 'blocked', pendingAskCount: 1, stateChangeSeq: 2, updatedAt: 9_000 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(30)
+    await sleep(15)
     assert.equal(notifications.length, 0, '前台已处理的 blocked 水位切后台后不得滞后补弹')
 
     // 水位推进（新审批 3:2）：在后台时立即提醒一次，同水位再次渲染不重复
@@ -589,7 +588,7 @@ test('blocked 水位防重与推进：同水位不重复；推进再提醒；前
       conversations: [conv({ id: 4, title: '审批会话', status: 'blocked', pendingAskCount: 2, stateChangeSeq: 3, updatedAt: 11_000 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(30)
+    await sleep(15)
     assert.equal(notifications.length, 1, '同一水位不得重复弹')
     harness.unmount()
   } finally {
@@ -602,14 +601,14 @@ test('blocked 水位防重与推进：同水位不重复；推进再提醒；前
 test('blocked 基线与短时撤销：打开页面/重新开启时已 blocked 不误报；短于防抖撤销不误报', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(50, 25)
+  const restoreTimings = shrinkTimings(20, 8)
   try {
     // 1. 挂载初始即处于 blocked：登记基线，不误报
     const initialBlocked = mountHarness({
       conversations: [conv({ id: 1, title: '历史待审批', status: 'blocked', pendingAskCount: 1, stateChangeSeq: 3 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(45)
+    await sleep(18)
     assert.equal(notifications.length, 0, '页面打开时本来就处于 blocked 不得误报')
     initialBlocked.unmount()
 
@@ -624,7 +623,7 @@ test('blocked 基线与短时撤销：打开页面/重新开启时已 blocked �
       conversations: [conv({ id: 2, title: '关闭前已阻塞', status: 'blocked', pendingAskCount: 1, stateChangeSeq: 4 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(45)
+    await sleep(18)
     assert.equal(notifications.length, 0, '从关闭开启时已存在 blocked 不得误报')
     toggled.unmount()
 
@@ -637,12 +636,11 @@ test('blocked 基线与短时撤销：打开页面/重新开启时已 blocked �
       conversations: [conv({ id: 3, title: '瞬时阻塞', status: 'blocked', pendingAskCount: 1, stateChangeSeq: 2 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(6)
     transient.rerender({
       conversations: [conv({ id: 3, title: '瞬时阻塞', status: 'idle', pendingAskCount: 0, stateChangeSeq: 3 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(45)
+    await sleep(18)
     assert.equal(notifications.length, 0, '短于 blockedSettleMs 被外部取消不得误报')
     transient.unmount()
   } finally {
@@ -655,7 +653,7 @@ test('blocked 基线与短时撤销：打开页面/重新开启时已 blocked �
 test('blocked 结算后清空完成累计：直接取消不误报完成；人类回答再 working → done 正常发完成通知', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(25, 12)
+  const restoreTimings = shrinkTimings(10, 5)
   try {
     const harness = mountHarness({
       conversations: [conv({ id: 8, title: '人工审批任务', status: 'working', stateChangeSeq: 1 })],
@@ -675,7 +673,7 @@ test('blocked 结算后清空完成累计：直接取消不误报完成；人类
       conversations: [conv({ id: 8, title: '人工审批任务', status: 'idle', pendingAskCount: 0, stateChangeSeq: 3 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(40)
+    await sleep(18)
     assert.equal(notifications.length, 1, 'blocked 停下并直接取消不得误报已完成')
 
     // 场景二：重新发起新一轮 working -> done：正常发完成通知，tag 同为 helmx-conv-8
@@ -702,18 +700,18 @@ test('blocked 结算后清空完成累计：直接取消不误报完成；人类
 test('badge doc 未加载时保持未知：不弹假「已完成」；ensure 加载后在途 accent 阻止完成通知，归零后才结算', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(15, 10)
+  const restoreTimings = shrinkTimings(6, 5)
   try {
     const harness = mountHarness({ conversations: [conv({ id: 5, title: '后台任务', status: 'working' })], pluginDocs: {} })
     harness.rerender({ conversations: [conv({ id: 5, title: '后台任务', status: 'done', updatedAt: 2_000 })], pluginDocs: {} })
-    await sleep(35)
+    await sleep(15)
     assert.equal(notifications.length, 0, 'badge doc 未知期间不得弹假「会话已完成」')
 
     harness.rerender({
       conversations: [conv({ id: 5, title: '后台任务', status: 'done', updatedAt: 2_000 })],
       pluginDocs: { [BADGE_DOC_KEY]: accentBadgeDoc(5) },
     })
-    await sleep(35)
+    await sleep(15)
     assert.equal(notifications.length, 0, '在途 accent 角标阻止完成通知')
 
     harness.rerender({
@@ -735,21 +733,20 @@ test('badge doc 未加载时保持未知：不弹假「已完成」；ensure 加
 test('SSE 断流时完成防抖到期不按陈旧状态投递；重连后按最新事实结算一次', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(45, 15)
+  const restoreTimings = shrinkTimings(10, 6)
   try {
     const harness = mountHarness({
       conversations: [conv({ id: 5, status: 'working' })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
     harness.rerender({ conversations: [conv({ id: 5, status: 'done', updatedAt: 2_000 })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
-    await sleep(10)
     harness.rerender({ conversations: [conv({ id: 5, status: 'done', updatedAt: 2_000 })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC }, sseConnected: false })
-    await sleep(60)
+    await sleep(18)
     assert.equal(notifications.length, 0, '断流期间状态陈旧，不投递也不静默丢掉周期')
     harness.rerender({ conversations: [conv({ id: 5, status: 'done', updatedAt: 2_000 })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC }, sseConnected: true })
     await waitForCondition(() => notifications.length === 1)
     assert.equal(notifications.length, 1, '重连后按最新事实结算投递一次')
-    await sleep(35)
+    await sleep(16)
     assert.equal(notifications.length, 1, '不重复投递')
     harness.unmount()
   } finally {
@@ -762,7 +759,7 @@ test('SSE 断流时完成防抖到期不按陈旧状态投递；重连后按最�
 test('blocked 断流挂起：到期时断流不投递，重连仍 blocked 补发一次，重连已解决则不误报等待', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(50, 30)
+  const restoreTimings = shrinkTimings(15, 8)
   try {
     // 场景一：断流挂起 → 重连仍 blocked → 立即补发一次
     const hold = mountHarness({
@@ -773,13 +770,12 @@ test('blocked 断流挂起：到期时断流不投递，重连仍 blocked 补发
       conversations: [conv({ id: 9, title: '断流待审批', status: 'blocked', pendingAskCount: 1, stateChangeSeq: 2 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(10)
     hold.rerender({
       conversations: [conv({ id: 9, title: '断流待审批', status: 'blocked', pendingAskCount: 1, stateChangeSeq: 2 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
       sseConnected: false,
     })
-    await sleep(50)
+    await sleep(18)
     assert.equal(notifications.length, 0, '断流期间不得按陈旧态投递 blocked 通知')
 
     hold.rerender({
@@ -791,7 +787,7 @@ test('blocked 断流挂起：到期时断流不投递，重连仍 blocked 补发
     assert.equal(notifications.length, 1, '重连仍 blocked 应立即补发一次')
     assert.equal(notifications[0]!.title, WAITING_NOTIFICATION_TITLE)
     assert.equal(notifications[0]!.options.tag, 'helmx-conv-9')
-    await sleep(45)
+    await sleep(20)
     assert.equal(notifications.length, 1, '不重复补发')
     hold.unmount()
 
@@ -804,13 +800,12 @@ test('blocked 断流挂起：到期时断流不投递，重连仍 blocked 补发
       conversations: [conv({ id: 10, title: '断流期间已解决', status: 'blocked', pendingAskCount: 1, stateChangeSeq: 2 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(10)
     resolvedOffline.rerender({
       conversations: [conv({ id: 10, title: '断流期间已解决', status: 'blocked', pendingAskCount: 1, stateChangeSeq: 2 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
       sseConnected: false,
     })
-    await sleep(50)
+    await sleep(18)
     resolvedOffline.rerender({
       conversations: [conv({ id: 10, title: '断流期间已解决', status: 'done', pendingAskCount: 0, stateChangeSeq: 3, updatedAt: 9_000 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
@@ -831,7 +826,7 @@ test('blocked 断流挂起：到期时断流不投递，重连仍 blocked 补发
 test('断流挂起期间同树活动恢复：丢弃待结算、周期继续，下次停机完整结算', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(45, 15)
+  const restoreTimings = shrinkTimings(12, 6)
   try {
     const harness = mountHarness({
       conversations: [conv({ id: 1, title: '主任务', status: 'working' })],
@@ -841,13 +836,12 @@ test('断流挂起期间同树活动恢复：丢弃待结算、周期继续，�
       conversations: [conv({ id: 1, title: '主任务', status: 'done', updatedAt: 1_000 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
-    await sleep(10)
     harness.rerender({
       conversations: [conv({ id: 1, title: '主任务', status: 'done', updatedAt: 1_000 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
       sseConnected: false,
     })
-    await sleep(60)
+    await sleep(20)
     assert.equal(notifications.length, 0)
     // 重连带回同树子代理继续工作（且失败）：丢弃旧待结算，保留累计
     harness.rerender({
@@ -858,7 +852,7 @@ test('断流挂起期间同树活动恢复：丢弃待结算、周期继续，�
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
       sseConnected: true,
     })
-    await sleep(65)
+    await sleep(20)
     assert.equal(notifications.length, 0, '同树活动恢复后不得按旧周期投递')
     harness.rerender({
       conversations: [
@@ -884,11 +878,11 @@ test('断流挂起期间同树活动恢复：丢弃待结算、周期继续，�
 test('页面聚焦（用户正看着页面）不投递', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(true)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(15, 10)
+  const restoreTimings = shrinkTimings(6, 5)
   try {
     const harness = mountHarness({ conversations: [conv({ id: 5, status: 'working' })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
     harness.rerender({ conversations: [conv({ id: 5, status: 'idle' })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
-    await sleep(35)
+    await sleep(15)
     assert.equal(notifications.length, 0)
     harness.unmount()
   } finally {
@@ -901,16 +895,16 @@ test('页面聚焦（用户正看着页面）不投递', { timeout: 60_000 }, as
 test('偏好关闭、打开页面即安静、偏好中途关闭放弃周期：均不投递', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(15, 10)
+  const restoreTimings = shrinkTimings(6, 5)
   try {
     const disabled = mountHarness({ quietNotifyEnabled: false, conversations: [conv({ id: 5, status: 'working' })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
     disabled.rerender({ quietNotifyEnabled: false, conversations: [conv({ id: 5, status: 'idle' })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
-    await sleep(35)
+    await sleep(15)
     assert.equal(notifications.length, 0, '偏好关闭不得投递')
     disabled.unmount()
 
     const initialQuiet = mountHarness({ conversations: [conv({ id: 6, status: 'idle' })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
-    await sleep(35)
+    await sleep(15)
     assert.equal(notifications.length, 0, '打开页面即安静不构成转移')
     initialQuiet.unmount()
 
@@ -918,7 +912,7 @@ test('偏好关闭、打开页面即安静、偏好中途关闭放弃周期：�
     abandoned.rerender({ quietNotifyEnabled: false, conversations: [conv({ id: 7, title: '被放弃的任务', status: 'working' })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
     abandoned.rerender({ quietNotifyEnabled: false, conversations: [conv({ id: 7, title: '被放弃的任务', status: 'done', updatedAt: 2_000 })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
     abandoned.rerender({ quietNotifyEnabled: true, conversations: [conv({ id: 7, title: '被放弃的任务', status: 'done', updatedAt: 2_000 })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
-    await sleep(35)
+    await sleep(15)
     assert.equal(notifications.length, 0, '被放弃的周期不得在重新开启后补发')
     abandoned.unmount()
   } finally {
@@ -931,12 +925,12 @@ test('偏好关闭、打开页面即安静、偏好中途关闭放弃周期：�
 test('卸载清理：防抖窗口内卸载不投递', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(35, 20)
+  const restoreTimings = shrinkTimings(10, 6)
   try {
     const harness = mountHarness({ conversations: [conv({ id: 5, status: 'working' })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
     harness.rerender({ conversations: [conv({ id: 5, status: 'idle' })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
     harness.unmount()
-    await sleep(55)
+    await sleep(18)
     assert.equal(notifications.length, 0)
   } finally {
     restoreTimings()
@@ -948,14 +942,14 @@ test('卸载清理：防抖窗口内卸载不投递', { timeout: 60_000 }, async
 test('插件热重载清空已加载 badge doc 时重新保持未知，直到新 doc 到达再结算', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(15, 10)
+  const restoreTimings = shrinkTimings(6, 5)
   try {
     const harness = mountHarness({
       conversations: [conv({ id: 7, title: '插件重载期间', status: 'idle' })],
       pluginDocs: { [BADGE_DOC_KEY]: accentBadgeDoc(7) },
     })
     harness.rerender({ conversations: [conv({ id: 7, title: '插件重载期间', status: 'idle' })], pluginDocs: {} })
-    await sleep(35)
+    await sleep(15)
     assert.equal(notifications.length, 0, '重载期间 doc 缺失不得按安静结算')
 
     harness.rerender({
@@ -978,7 +972,7 @@ test('插件热重载清空已加载 badge doc 时重新保持未知，直到新
 test('SW 激活时 completion 与 blocked 通知透传目标会话 url（/#/c/<id>）并可经点击消息跳转', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(15, 10)
+  const restoreTimings = shrinkTimings(5, 3)
   const originalSwDesc = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker')
   const shown: Array<{ title: string; options: NotificationOptions & { badge?: string; data?: { url?: string; clickId?: string } } }> = []
   const listeners = new Set<(event: MessageEvent) => void>()
@@ -1110,7 +1104,7 @@ test('通知文案纯函数：composeTree* 直接走 shell.quiet.* i18n 词条�
 test('通知投递双语：zh-CN locale 下完成/失败/等待处理的 title 与 body 均随 locale', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(15, 10)
+  const restoreTimings = shrinkTimings(5, 3)
   try {
     // 完成（无失败）
     const harness = mountHarness({
@@ -1165,7 +1159,7 @@ test('通知投递双语：zh-CN locale 下完成/失败/等待处理的 title �
 test('通知投递无陈旧闭包：活动开始后切换语言，防抖到期的投递用切换后的 locale', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
-  const restoreTimings = shrinkTimings(15, 10)
+  const restoreTimings = shrinkTimings(5, 3)
   try {
     const harness = mountHarness({
       locale: 'en',

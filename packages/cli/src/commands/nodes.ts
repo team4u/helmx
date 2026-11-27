@@ -4,6 +4,8 @@
  */
 import { CliError } from '../errors.js'
 import type {
+  HubAccessEndpoint,
+  HubAccessInfo,
   NodeForwardSession,
   NodeInfo,
   NodeIssuedToken,
@@ -69,17 +71,42 @@ function printForwardsTable(io: Io, forwards: NodeForwardSession[]): void {
   ])
 }
 
+function stripTrailingSlashes(url: string): string {
+  return url.replace(/\/+$/, '')
+}
+
 function isLoopbackUrl(url: string): boolean {
   try {
     const host = new URL(url).hostname.replace(/^\[|\]$/g, '').toLowerCase()
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1'
+    return host === 'localhost' || host === '::1' || host.startsWith('127.') || host.startsWith('::ffff:127.')
   } catch {
     return false
   }
 }
 
+function formatEndpointMeta(endpoint: HubAccessEndpoint): string {
+  return endpoint.interface ? `${endpoint.kind}, ${endpoint.interface}` : endpoint.kind
+}
+
+function formatListenSummary(hubAccess: HubAccessInfo): string {
+  const host = hubAccess.listenHost.includes(':') && !hubAccess.listenHost.startsWith('[')
+    ? `[${hubAccess.listenHost}]`
+    : hubAccess.listenHost
+  return `${host}:${hubAccess.listenPort}`
+}
+
 /** Human output for nodes issue: plaintext token is shown once, so provide copy-pasteable onboarding commands. */
 function printIssuedToken(io: Io, issued: NodeIssuedToken, hubUrl: string): void {
+  const normalizedHub = stripTrailingSlashes(hubUrl)
+  const endpoints = issued.hubAccess?.endpoints ?? []
+  const nonLoopback = endpoints.filter((ep) => ep.kind !== 'loopback')
+  const primaryHubUrl =
+    isLoopbackUrl(normalizedHub) && nonLoopback.length > 0
+      ? nonLoopback[0]!.url
+      : normalizedHub
+  const primaryKey = primaryHubUrl.toLowerCase()
+  const otherUrls = nonLoopback.filter((ep) => stripTrailingSlashes(ep.url).toLowerCase() !== primaryKey)
+
   const lines = [
     `Access token for node ${issued.nodeId} (shown once; server only stores its digest):`,
     '',
@@ -89,16 +116,28 @@ function printIssuedToken(io: Io, issued: NodeIssuedToken, hubUrl: string): void
     '  npm install -g @helmx/node',
     '',
     'Start and connect on the managed machine:',
-    `  helmx-node start -d --hub '${hubUrl}' --token '${issued.token}'`,
+    `  helmx-node start -d --hub '${primaryHubUrl}' --token '${issued.token}'`,
+  ]
+  if (otherUrls.length > 0) {
+    const maxLen = otherUrls.reduce((max, ep) => Math.max(max, ep.url.length), 0)
+    lines.push(
+      '',
+      issued.hubAccess
+        ? `Other reachable Hub URLs (listening on ${formatListenSummary(issued.hubAccess)}):`
+        : 'Other reachable Hub URLs:',
+      ...otherUrls.map((ep) => `  ${ep.url.padEnd(maxLen + 2)}(${formatEndpointMeta(ep)})`),
+    )
+  }
+  lines.push(
     '',
     'Optional next steps on the managed machine:',
     '  helmx-node doctor            # verify identity permissions and Hub reachability',
     '  helmx-node service install   # auto-start on boot (launchd / systemd --user / schtasks)',
-  ]
-  if (isLoopbackUrl(hubUrl)) {
+  )
+  if (isLoopbackUrl(primaryHubUrl)) {
     lines.push(
       '',
-      `Warning: ${hubUrl} is a loopback address and is unreachable from remote machines.`,
+      `Warning: ${primaryHubUrl} is a loopback address and is unreachable from remote machines.`,
       'Replace --hub with a reachable Hub URL (e.g. start the Hub with HELMX_HOST=0.0.0.0 or front it with a TLS reverse proxy).',
     )
   }

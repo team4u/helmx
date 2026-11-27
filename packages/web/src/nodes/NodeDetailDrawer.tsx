@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Badge,
   Button,
@@ -15,12 +15,16 @@ import {
   Stack,
 } from '@helmx/plugin-client'
 import { nodesApi } from '../lib/api.js'
+import { useOptionalNodes } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   buildNodeConnectGuide,
   formatBytes,
+  formatHubEndpointTag,
   formatUptime,
   formatUsage,
+  isLoopbackHubUrl,
+  resolveHubEndpointOptions,
   validateNodeIdInput,
 } from '../modals/nodes-modal-model.js'
 import {
@@ -29,7 +33,7 @@ import {
   isNodeOnline,
   type NodeInfo,
 } from './node-center-model.js'
-import { NODE_DETAIL_SECTION_SLOT, type NodeUpgradeCheckResult } from '@helmx/protocol/browser'
+import { NODE_DETAIL_SECTION_SLOT, type HubAccessInfo, type NodeUpgradeCheckResult } from '@helmx/protocol/browser'
 import { CopyableCommandRow, MonoValue, NodeSectionTitle } from './node-detail/NodeDetailPrimitives.js'
 
 export interface NodeDetailDrawerProps {
@@ -40,6 +44,8 @@ export interface NodeDetailDrawerProps {
   inline?: boolean
   /** Whether the drawer is in the new-node enrollment mode. */
   isNew?: boolean
+  /** Optional Hub reachable address summary override (defaults to `local` node `hubAccess`). */
+  hubAccess?: HubAccessInfo
   onTokenIssued?: (token: string) => void
   onRefresh?: () => Promise<unknown> | void
 }
@@ -70,14 +76,21 @@ export function NodeDetailDrawer({
   onClose,
   inline = false,
   isNew = false,
+  hubAccess: hubAccessProp,
   onTokenIssued,
   onRefresh,
 }: NodeDetailDrawerProps): React.JSX.Element {
   const { t } = useWebLocale()
+  const storeNodes = useOptionalNodes()
   const [issuedTokenState, setIssuedTokenState] = useState<{ nodeId: string; token: string } | null>(null)
+  const [issuedHubAccess, setIssuedHubAccess] = useState<HubAccessInfo | null>(null)
   const [newNodeId, setNewNodeId] = useState('')
   const [tokenError, setTokenError] = useState<string | null>(null)
   const [issuing, setIssuing] = useState(false)
+  const [selectedEndpointUrl, setSelectedEndpointUrl] = useState<string | null>(null)
+  const [customMode, setCustomMode] = useState(false)
+  const [customHubUrl, setCustomHubUrl] = useState('')
+  const [showMoreEndpoints, setShowMoreEndpoints] = useState(false)
 
   const [checkingHealth, setCheckingHealth] = useState(false)
   const [healthState, setHealthState] = useState<{ nodeId: string; result: NodeUpgradeCheckResult } | null>(null)
@@ -97,7 +110,38 @@ export function NodeDetailDrawer({
   const iconName = isLocal ? 'laptop' : 'server'
 
   const rawOrigin = typeof window !== 'undefined' ? window.location?.origin : undefined
-  const hubOrigin = rawOrigin && rawOrigin !== 'null' ? rawOrigin : '<HUB_URL>'
+  const localHubAccess = useMemo(
+    () => storeNodes?.find((n) => n.id === 'local' || n.kind === 'local')?.hubAccess,
+    [storeNodes],
+  )
+  const effectiveHubAccess = issuedHubAccess ?? hubAccessProp ?? localHubAccess
+
+  const resolvedEndpoints = useMemo(
+    () =>
+      resolveHubEndpointOptions({
+        hubAccess: effectiveHubAccess,
+        browserOrigin: rawOrigin,
+        preferredUrl: !isNew ? node?.hubUrl : undefined,
+      }),
+    [effectiveHubAccess, rawOrigin, isNew, node?.hubUrl],
+  )
+
+  const activeEndpointUrl = useMemo(() => {
+    if (
+      selectedEndpointUrl !== null &&
+      resolvedEndpoints.all.some((opt) => opt.url === selectedEndpointUrl)
+    ) {
+      return selectedEndpointUrl
+    }
+    return resolvedEndpoints.defaultUrl
+  }, [selectedEndpointUrl, resolvedEndpoints])
+
+  const effectiveHubUrl = customMode
+    ? customHubUrl.trim() || resolvedEndpoints.defaultUrl
+    : activeEndpointUrl
+
+  const isLoopbackEffective =
+    effectiveHubUrl !== '<HUB_URL>' && isLoopbackHubUrl(effectiveHubUrl)
 
   const targetNodeId = isNew ? newNodeId.trim() : node?.id ?? ''
   const issuedToken =
@@ -136,13 +180,18 @@ export function NodeDetailDrawer({
     setHealthState(null)
     setHealthErrorState(null)
     setCheckingHealth(false)
+    setIssuedHubAccess(null)
+    setSelectedEndpointUrl(null)
+    setCustomMode(false)
+    setCustomHubUrl('')
+    setShowMoreEndpoints(false)
     if (!open || !isNew) {
       setNewNodeId('')
     }
   }, [open, isNew, node?.id])
 
   const guide = targetNodeId
-    ? buildNodeConnectGuide(hubOrigin, {
+    ? buildNodeConnectGuide(effectiveHubUrl, {
         nodeId: targetNodeId,
         token: issuedToken || '<TOKEN>',
       })
@@ -171,6 +220,9 @@ export function NodeDetailDrawer({
       const res = await nodesApi.issueToken(requestedNodeId)
       if (!mountedRef.current || tokenGenerationRef.current !== generation) return
       setIssuedTokenState({ nodeId: requestedNodeId, token: res.token })
+      if (res.hubAccess !== undefined) {
+        setIssuedHubAccess(res.hubAccess)
+      }
       if (onTokenIssued) {
         onTokenIssued(res.token)
       }
@@ -455,6 +507,87 @@ export function NodeDetailDrawer({
                   <CopyableCommandRow text={guide.installCommand} label={t('nodes.drawer.copyCommand')} />
 
                   <div className="text-subtle">{t('nodes.drawer.oneLineLabel')}</div>
+                  <div className="node-endpoint-picker">
+                    <div className="node-endpoint-header">
+                      <span className="text-subtle">{t('nodes.drawer.hubUrlLabel')}</span>
+                      {resolvedEndpoints.listenSummary && (
+                        <span className="node-endpoint-listen mono">
+                          {t('nodes.drawer.listenSummary', { addr: resolvedEndpoints.listenSummary })}
+                        </span>
+                      )}
+                    </div>
+                    <div className="node-endpoint-chips" role="group" aria-label={t('nodes.drawer.hubUrlLabel')}>
+                      {(showMoreEndpoints ? resolvedEndpoints.all : resolvedEndpoints.primary).map((opt) => {
+                        const selected = !customMode && activeEndpointUrl === opt.url
+                        return (
+                          <button
+                            key={opt.url}
+                            type="button"
+                            className={`node-endpoint-chip${selected ? ' is-active' : ''}`}
+                            aria-pressed={selected}
+                            onClick={() => {
+                              setCustomMode(false)
+                              setSelectedEndpointUrl(opt.url)
+                            }}
+                          >
+                            <span className="node-endpoint-chip-host">{opt.displayLabel}</span>
+                            <span className="node-endpoint-chip-tag">
+                              {formatHubEndpointTag(opt, t)}
+                            </span>
+                          </button>
+                        )
+                      })}
+                      {resolvedEndpoints.more.length > 0 && (
+                        <button
+                          type="button"
+                          className="node-endpoint-chip"
+                          aria-expanded={showMoreEndpoints}
+                          onClick={() => setShowMoreEndpoints((v) => !v)}
+                        >
+                          <HelmxIcon name={showMoreEndpoints ? 'chevron-up' : 'chevron-down'} size={12} />
+                          <span>
+                            {showMoreEndpoints
+                              ? t('nodes.drawer.lessEndpoints')
+                              : t('nodes.drawer.moreEndpoints', { count: resolvedEndpoints.more.length })}
+                          </span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className={`node-endpoint-chip${customMode ? ' is-active' : ''}`}
+                        aria-pressed={customMode}
+                        onClick={() => {
+                          if (!customMode) {
+                            setCustomHubUrl((prev) => prev || activeEndpointUrl)
+                            setCustomMode(true)
+                          } else {
+                            setCustomMode(false)
+                          }
+                        }}
+                      >
+                        <HelmxIcon name="edit" size={12} />
+                        <span>{t('nodes.drawer.customEndpoint')}</span>
+                      </button>
+                    </div>
+                    {customMode && (
+                      <Input
+                        mono
+                        aria-label={t('nodes.drawer.customEndpointAria')}
+                        placeholder={t('nodes.drawer.customEndpointPlaceholder')}
+                        value={customHubUrl}
+                        onChange={(e) => setCustomHubUrl(e.target.value)}
+                      />
+                    )}
+                    {isLoopbackEffective && (
+                      <Callout tone="warn">
+                        <span className="callout-text">
+                          {effectiveHubAccess?.loopbackOnly
+                            ? t('nodes.drawer.loopbackOnlyWarning')
+                            : t('nodes.drawer.loopbackSelectedWarning')}
+                        </span>
+                      </Callout>
+                    )}
+                  </div>
                   <CopyableCommandRow text={guide.oneLineCommand} label={t('nodes.drawer.copyCommand')} />
 
                   <div className="text-subtle">
