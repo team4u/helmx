@@ -4,6 +4,7 @@
  */
 import { UsageError } from '../cli-context.js';
 import { readPidRecord } from '../cli-context.js';
+import { controlRequest } from '../control.js';
 import { startDaemon } from '../launcher.js';
 import { runDaemonProcess } from '../daemon-process.js';
 import { detectNodeInstallMode } from '../service-entry.js';
@@ -50,13 +51,22 @@ export async function connectCommand(ctx: CommandContext): Promise<number> {
   return await runDaemonProcess({ io, json: parsed.json, dataDir, hubUrl, token, nodeId: identity.nodeId });
 }
 
-/** `start -d`: bind identity (optional) -> spawn detached daemon -> record `node.pid`. */
+/** `start -d`: bind identity (optional) -> replace verified running daemon on `--token` -> spawn detached daemon -> record `node.pid`. */
 async function startDetached(ctx: CommandContext, token: string | undefined, hubUrl: string): Promise<number> {
   const { io, parsed, dataDir, emit } = ctx;
   const { bindIdentityFromJoinToken } = await import('../daemon/index.js');
+  let previousPid: number | null = null;
   if (token !== undefined) {
-    // Empty hubUrl is explicitly rejected by bindIdentityFromJoinToken.
+    // Bind first so invalid tokens, invalid Hub URLs, or cross-nodeId mismatches fail before stopping a running daemon.
     await bindIdentityFromJoinToken(dataDir, token, hubUrl);
+    const existing = await readPidRecord(dataDir);
+    if (existing !== null) {
+      const status = await controlRequest(existing.endpoint, { type: 'status', instanceId: existing.instanceId });
+      if (status !== null && status.ok === true) {
+        await stopDaemon(io, dataDir);
+        previousPid = existing.pid;
+      }
+    }
   }
   const identity = await readNodeIdentityStrict(dataDir);
   const effectiveHub = hubUrl !== '' ? hubUrl : identity.hubUrl ?? '';
@@ -67,10 +77,21 @@ async function startDetached(ctx: CommandContext, token: string | undefined, hub
       ? `daemon started and registered with Hub (pid ${pid})`
       : `daemon started (pid ${pid}), registration not yet complete: will keep reconnecting with backoff if Hub is unreachable; check logs at ${logPath}`;
   if (parsed.json) {
-    emit({ ok: true, pid, dataDir, hubUrl: effectiveHub, nodeId: identity.nodeId, logPath, state: readyState, message });
+    emit({
+      ok: true,
+      pid,
+      dataDir,
+      hubUrl: effectiveHub,
+      nodeId: identity.nodeId,
+      logPath,
+      state: readyState,
+      message,
+      ...(previousPid !== null ? { previousPid } : {}),
+    });
   } else {
     io.out(
       [
+        ...(previousPid !== null ? [`stopped previous daemon (pid ${previousPid})`] : []),
         message,
         `node:     ${identity.nodeId}`,
         `hub:      ${effectiveHub}`,
@@ -149,7 +170,15 @@ export async function stopCommand(ctx: CommandContext): Promise<number> {
 
 export async function restartCommand(ctx: CommandContext): Promise<number> {
   const { io, parsed, dataDir, emit } = ctx;
+  const { bindIdentityFromJoinToken, readNodeIdentity } = await import('../daemon/index.js');
   const hubUrl = await resolveHubUrl(io, parsed, false);
+  const token = flagString(parsed, 'token');
+  if (token !== undefined) {
+    // Validate and bind new token/Hub before stopping the existing daemon.
+    const existingIdentity = await readNodeIdentity(dataDir);
+    const bindHub = hubUrl !== '' ? hubUrl : existingIdentity?.hubUrl ?? '';
+    await bindIdentityFromJoinToken(dataDir, token, bindHub);
+  }
   const identity = await readNodeIdentityStrict(dataDir);
   const effectiveHub = hubUrl !== '' ? hubUrl : identity.hubUrl ?? '';
   if (effectiveHub === '') throw new UsageError('restart requires a bound Hub URL (run helmx-node start -d --hub <url> --token <token> first)', 'missing_identity');

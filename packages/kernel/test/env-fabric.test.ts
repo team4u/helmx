@@ -584,6 +584,67 @@ describe('node management and env/exec HTTP routes', { timeout: 60_000 }, () => 
     }
   })
 
+  it('POST /api/nodes/issue (re-issue): revokes old connection cleanly, emits single offline node.changed, and brings replacement online', { timeout: 60_000 }, async () => {
+    const dir = await mkdtemp(join(rootDir, 'http-reissue-'))
+    const nodeDir1 = await mkdtemp(join(rootDir, 'http-reissue-n1-'))
+    const nodeDir2 = await mkdtemp(join(rootDir, 'http-reissue-n2-'))
+    const app = await openApp(dir)
+    let daemon1: NodeDaemon | undefined
+    let daemon2: NodeDaemon | undefined
+    try {
+      const issue1 = await call(app, 'POST', '/api/nodes/issue', { nodeId: 'reissue-node' })
+      assert.equal(issue1.status, 201)
+      daemon1 = await startNode({ url: app.hub.url, nodeId: 'reissue-node', token: issue1.json.token, dataDir: nodeDir1 })
+      assert.ok(await daemon1.waitUntilRegistered())
+
+      const listOnline1 = await call(app, 'GET', '/api/nodes')
+      const entryOnline1 = (listOnline1.json as Array<{ id: string; online: boolean; hostname?: string }>).find((n) => n.id === 'reissue-node')
+      assert.equal(entryOnline1?.online, true)
+      assert.ok(typeof entryOnline1?.hostname === 'string' && entryOnline1.hostname.length > 0)
+
+      const nodeEvents: Array<{ node: { id: string; online: boolean; hostname?: string }; removed?: boolean }> = []
+      const releaseEvents = app.kernel.events.subscribe((frame) => {
+        if (frame.event.type === 'node.changed' && 'node' in frame.event && frame.event.node.id === 'reissue-node') {
+          nodeEvents.push({
+            node: frame.event.node,
+            ...(frame.event.removed !== undefined ? { removed: frame.event.removed } : {}),
+          })
+        }
+      })
+
+      const issue2 = await call(app, 'POST', '/api/nodes/issue', { nodeId: 'reissue-node' })
+      assert.equal(issue2.status, 201)
+      assert.notEqual(issue2.json.token, issue1.json.token)
+
+      await waitFor(() => !daemon1!.isConnected(), 5_000, 10)
+      await daemon1.close()
+      daemon1 = undefined
+
+      const listAfterRevoke = await call(app, 'GET', '/api/nodes')
+      const entryOffline = (listAfterRevoke.json as Array<{ id: string; online: boolean }>).find((n) => n.id === 'reissue-node')
+      assert.equal(entryOffline?.online, false, 're-issuing token must immediately mark old connection offline')
+      assert.equal(nodeEvents.length, 1, `expected single offline node.changed event on re-issue, got ${JSON.stringify(nodeEvents)}`)
+      assert.equal(nodeEvents[0]?.node.online, false)
+
+      daemon2 = await startNode({ url: app.hub.url, nodeId: 'reissue-node', token: issue2.json.token, dataDir: nodeDir2 })
+      assert.ok(await daemon2.waitUntilRegistered())
+
+      const listOnline2 = await call(app, 'GET', '/api/nodes')
+      const entryOnline2 = (listOnline2.json as Array<{ id: string; online: boolean; hostname?: string }>).find((n) => n.id === 'reissue-node')
+      assert.equal(entryOnline2?.online, true, 'node re-connecting with re-issued token must report online: true')
+      assert.ok(typeof entryOnline2?.hostname === 'string' && entryOnline2.hostname.length > 0)
+
+      releaseEvents()
+      assert.equal(nodeEvents.length, 2, `expected offline then online node.changed events, got ${JSON.stringify(nodeEvents)}`)
+      assert.equal(nodeEvents[1]?.node.online, true)
+      assert.ok(typeof nodeEvents[1]?.node.hostname === 'string' && nodeEvents[1].node.hostname.length > 0)
+    } finally {
+      await daemon1?.close().catch(() => undefined)
+      await daemon2?.close().catch(() => undefined)
+      await app.close().catch(() => undefined)
+    }
+  })
+
   it('POST /api/env/exec: local JSON, remote streaming NDJSON frames, offline 409, conversation target inheritance', { timeout: 60_000 }, async () => {
     const dir = await mkdtemp(join(rootDir, 'http-exec-'))
     const app = await openApp(dir)

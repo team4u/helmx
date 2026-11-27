@@ -17,7 +17,7 @@ import type { SecretStash } from '../services/index.js'
 import { isAbsoluteTargetPath, runShell } from './tools.js'
 import { normalizePathForTarget, targetPlatformForNode } from './target-platform.js'
 import { buildPosixHostShim, buildWindowsCmdWrapper, buildWindowsPosixShim, type CliShimPlan } from './cli-shim.js'
-import { buildHubAccessInfo, type HubListenInfo } from './hub-access.js'
+import { buildHubAccessInfo, resolveHostFqdn, type HubListenInfo } from './hub-access.js'
 import type { HelmxToolDeps } from './tool-deps.js'
 import { hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmxError, safeJson, unwrapUpgradeCheckRpc, validateUpgradeResult } from './semver.js'
 
@@ -65,6 +65,10 @@ export class NodeManager {
   private localDiskRefreshTimer: NodeJS.Timeout | undefined
   /** In-flight local disk stats refresh (singleflight to prevent stacking). */
   private localDiskRefreshing: Promise<void> = Promise.resolve()
+  /** Cached canonical FQDN for Hub host access URLs when `os.hostname()` is a short label. */
+  private hostFqdn: string | undefined
+  /** Whether `bindEvents()` has wired `envFabric.registry.onNodeChanged` to `node.changed` publishing. */
+  private eventsBound = false
   /** In-flight `execEnv` counts per nodeId (backs busy checks for standalone remote execs). */
   private readonly activeExecCounts = new Map<string, number>()
   /** Optional external status projection provider for `NodeInfo.autoUpgrade` (`undefined` on bare kernel). */
@@ -201,7 +205,13 @@ export class NodeManager {
     return buildHubAccessInfo({
       listen: this.hubListenInfo?.(),
       hubUrl: this.toolDeps.hubUrl,
+      ...(this.hostFqdn !== undefined ? { hostFqdn: this.hostFqdn } : {}),
     })
+  }
+
+  /** Refresh cached canonical host FQDN (best-effort; short `os.hostname()` remains fallback). */
+  private async refreshHostFqdn(): Promise<void> {
+    this.hostFqdn = await resolveHostFqdn().catch(() => undefined)
   }
 
   /** Issue a node access token: plaintext token is returned only this once; the server retains only sha256. */
@@ -229,10 +239,19 @@ export class NodeManager {
       this.stash.addRedaction(token),
       this.stash.addRedaction(secret),
     ])
-    this.events.publish('node.changed', {
-      type: 'node.changed',
-      node: { id: nodeId, kind: 'byom', online: this.envFabric.isOnline(nodeId) },
-    })
+    // Revoke any active connection authenticated with the previous token and bump the revocation epoch
+    // so in-flight registrations using the old token are rejected as superseded.
+    const wasOnline = this.envFabric.isOnline(nodeId)
+    this.envFabric.registry.disconnect(nodeId)
+    // When an online connection was evicted and bindEvents() is attached, onNodeChanged(nodeId, false)
+    // already published the offline node.changed event; publish explicitly otherwise so newly created
+    // or previously offline nodes emit exactly one node.changed event with complete NodeInfo.
+    if (!wasOnline || !this.eventsBound) {
+      this.events.publish('node.changed', {
+        type: 'node.changed',
+        node: this.byomNodeInfo(nodeId, undefined),
+      })
+    }
     const hubAccess = this.hubAccessInfo()
     return {
       nodeId,
@@ -851,6 +870,7 @@ export class NodeManager {
    * - When removeNode severs a connection, it clears the index first so the offline callback is skipped.
    */
   bindEvents(): void {
+    this.eventsBound = true
     this.envFabric.registry.onNodeChanged((nodeId, online) => {
       if (!online && !this.hasNode(nodeId)) return
       if (!online) {
@@ -888,7 +908,7 @@ export class NodeManager {
   async initialize(): Promise<void> {
     await this.loadNodeTokens()
     await this.ensureCliBinDir()
-    await this.ensureLocalDiskStats()
+    await Promise.all([this.ensureLocalDiskStats(), this.refreshHostFqdn()])
   }
 
   /** Dispose: clear listeners/status provider, clear disk stats timer, release token redactions, and await any in-flight refresh. */

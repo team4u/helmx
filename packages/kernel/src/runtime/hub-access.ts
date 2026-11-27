@@ -11,6 +11,8 @@
  * - Loopback-only listener (`127.0.0.1` / `::1` / `localhost`): expose only the loopback URL and
  *   mark `loopbackOnly: true` without fabricating unreachable LAN/hostname entries.
  */
+import { lookup as dnsLookup, lookupService as dnsLookupService } from 'node:dns/promises'
+import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { hostname as getOsHostname, networkInterfaces, type NetworkInterfaceInfo } from 'node:os'
 import type { HubAccessEndpoint, HubAccessInfo, HubEndpointKind } from '@helmx/protocol'
@@ -143,9 +145,139 @@ function classifyIpv6(rawIp: string, ifaceName?: string): HubEndpointKind | null
   return 'ipv6'
 }
 
+function normalizeHostname(name: string): string {
+  return name.trim().replace(/\.+$/, '')
+}
+
+function isLoopbackStubHostname(lower: string): boolean {
+  return (
+    lower === 'localhost' ||
+    lower === 'localhost.localdomain' ||
+    lower === 'ip6-localhost' ||
+    lower === 'ip6-loopback' ||
+    lower.endsWith('.localdomain')
+  )
+}
+
 function isUsableHostname(name: string): boolean {
-  const trimmed = name.trim()
-  return trimmed !== '' && trimmed.toLowerCase() !== 'localhost' && !/\s/.test(trimmed) && isIP(trimmed) === 0
+  const trimmed = normalizeHostname(name)
+  return (
+    trimmed !== '' &&
+    !isLoopbackStubHostname(trimmed.toLowerCase()) &&
+    !/\s/.test(trimmed) &&
+    isIP(trimmed) === 0
+  )
+}
+
+/** Whether a candidate hostname is a non-loopback FQDN (contains at least one domain separator). */
+export function isUsableFqdn(name: string): boolean {
+  const trimmed = normalizeHostname(name)
+  return isUsableHostname(trimmed) && trimmed.includes('.')
+}
+
+/**
+ * Parse `/etc/hosts` for a canonical FQDN alias paired with `shortHost`, ignoring comments and
+ * loopback stubs (`localhost.localdomain`, `*.localdomain`). Prefers aliases starting with
+ * `<shortHost>.`, falling back to the first valid FQDN alias on a matching line.
+ */
+export function parseHostsFileForFqdn(content: string, shortHost: string): string | undefined {
+  const targetLower = normalizeHostname(shortHost).toLowerCase()
+  if (targetLower === '') return undefined
+  const targetPrefix = `${targetLower}.`
+  let fallback: string | undefined
+  for (const rawLine of content.split(/\r?\n/)) {
+    const clean = rawLine.replace(/#.*$/, '').trim()
+    if (clean === '') continue
+    const tokens = clean.split(/\s+/)
+    if (tokens.length < 2) continue
+    const aliases = tokens.slice(1)
+    if (!aliases.some((alias) => normalizeHostname(alias).toLowerCase() === targetLower)) {
+      continue
+    }
+    for (const rawAlias of aliases) {
+      const alias = normalizeHostname(rawAlias)
+      if (!isUsableFqdn(alias)) continue
+      if (alias.toLowerCase().startsWith(targetPrefix)) return alias
+      if (fallback === undefined) fallback = alias
+    }
+  }
+  return fallback
+}
+
+export interface ResolveHostFqdnDeps {
+  osHostname?: () => string
+  lookup?: (host: string) => Promise<Array<{ address: string; family: number }>>
+  lookupService?: (address: string, port: number) => Promise<{ hostname: string; service: string }>
+  readHostsFile?: () => Promise<string>
+  env?: NodeJS.ProcessEnv
+  platform?: NodeJS.Platform
+  timeoutMs?: number
+}
+
+/**
+ * Discover the host's canonical FQDN when `os.hostname()` only reports a short label:
+ * `/etc/hosts` -> bounded DNS canonical/reverse lookup -> Windows `USERDNSDOMAIN`.
+ * Never fabricates domains from interface state; returns `undefined` if unavailable.
+ */
+export async function resolveHostFqdn(deps: ResolveHostFqdnDeps = {}): Promise<string | undefined> {
+  const shortHost = normalizeHostname((deps.osHostname ?? getOsHostname)())
+  if (!isUsableHostname(shortHost)) return undefined
+  if (shortHost.includes('.')) {
+    return isUsableFqdn(shortHost) ? shortHost : undefined
+  }
+
+  const platform = deps.platform ?? process.platform
+  if (platform !== 'win32' || deps.readHostsFile !== undefined) {
+    const readHosts = deps.readHostsFile ?? (() => readFile('/etc/hosts', 'utf8'))
+    const content = await readHosts().catch(() => undefined)
+    if (content !== undefined) {
+      const fromHosts = parseHostsFileForFqdn(content, shortHost)
+      if (fromHosts !== undefined) return fromHosts
+    }
+  }
+
+  const timeoutMs = deps.timeoutMs ?? 1_500
+  const lookup = deps.lookup ?? ((host: string) => dnsLookup(host, { all: true }))
+  const lookupService = deps.lookupService ?? dnsLookupService
+  const resolveViaDns = async (): Promise<string | undefined> => {
+    const entries = await lookup(shortHost).catch(() => [])
+    const shortPrefix = `${shortHost.toLowerCase()}.`
+    let fallback: string | undefined
+    for (const entry of entries) {
+      const rev = await lookupService(entry.address, 0).catch(() => undefined)
+      const candidate = rev?.hostname !== undefined ? normalizeHostname(rev.hostname) : ''
+      if (!isUsableFqdn(candidate)) continue
+      if (candidate.toLowerCase().startsWith(shortPrefix)) return candidate
+      if (fallback === undefined) fallback = candidate
+    }
+    return fallback
+  }
+
+  let timer: NodeJS.Timeout | undefined
+  const dnsFqdn = await (
+    timeoutMs > 0
+      ? Promise.race([
+          resolveViaDns(),
+          new Promise<undefined>((resolve) => {
+            timer = setTimeout(() => resolve(undefined), timeoutMs)
+            timer.unref?.()
+          }),
+        ]).finally(() => {
+          if (timer !== undefined) clearTimeout(timer)
+        })
+      : resolveViaDns()
+  ).catch(() => undefined)
+  if (dnsFqdn !== undefined) return dnsFqdn
+
+  if (platform === 'win32') {
+    const rawDomain = (deps.env ?? process.env)['USERDNSDOMAIN']?.trim().replace(/^\.+|\.+$/g, '') ?? ''
+    if (rawDomain !== '') {
+      const combined = normalizeHostname(`${shortHost}.${rawDomain.toLowerCase()}`)
+      if (isUsableFqdn(combined)) return combined
+    }
+  }
+
+  return undefined
 }
 
 function familyOf(entry: NetworkInterfaceInfo): 'IPv4' | 'IPv6' | null {
@@ -218,6 +350,7 @@ export interface BuildHubAccessOptions {
   hubUrl?: string
   interfaces?: NodeJS.Dict<NetworkInterfaceInfo[]>
   osHostname?: string
+  hostFqdn?: string
 }
 
 /**
@@ -233,7 +366,9 @@ export function buildHubAccessInfo(options: BuildHubAccessOptions): HubAccessInf
   const listenHost = rawHost === '' ? '0.0.0.0' : rawHost
   const port = listen.port
   const interfaces = options.interfaces ?? networkInterfaces()
-  const hostName = (options.osHostname ?? getOsHostname()).trim()
+  const rawOsHostname = normalizeHostname(options.osHostname ?? getOsHostname())
+  const rawFqdn = normalizeHostname(options.hostFqdn ?? '')
+  const hostName = isUsableFqdn(rawFqdn) ? rawFqdn : rawOsHostname
   const map = new Map<string, HubAccessEndpoint>()
 
   const pushAddress = (host: string, kind: HubEndpointKind, ifaceName?: string): void => {

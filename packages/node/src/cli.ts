@@ -36,7 +36,7 @@ Commands:
   connect <hubUrl> --token <token>      Bind JOIN token and run in foreground (--once exits after one attempt)
   start [-d|--daemon]                   Start daemon (-d runs detached in background, writing <dataDir>/node.pid)
   stop                                  Stop background daemon gracefully via verified control channel
-  restart                               Restart background daemon (stops cleanly before starting replacement)
+  restart [--hub <url>] [--token <tok>] Restart background daemon (optionally rebind token/Hub before starting)
   status                                Show identity binding, background process, and runtime state summary
   upgrade [--check] [--version <ver>]   Self-upgrade (--check only queries; executing requires a managed daemon)
   doctor                                Read-only diagnostics (identity 0600 / privileges / Hub reachability)
@@ -64,7 +64,7 @@ const COMMAND_FLAGS: Record<string, ReadonlySet<string>> = {
   connect: new Set(['token', 'hub', 'data-dir', 'json', 'once']),
   start: new Set(['token', 'hub', 'data-dir', 'json', 'daemon', 'd']),
   stop: new Set(['data-dir', 'json']),
-  restart: new Set(['hub', 'data-dir', 'json']),
+  restart: new Set(['token', 'hub', 'data-dir', 'json']),
   status: new Set(['data-dir', 'json']),
   upgrade: new Set(['version', 'registry', 'check', 'force', 'data-dir', 'json']),
   doctor: new Set(['hub', 'data-dir', 'json']),
