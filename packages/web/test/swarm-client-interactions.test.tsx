@@ -803,8 +803,9 @@ describe("swarm-client-interactions", () => {
         row.click()
       })
       assert.deepEqual(coordSpy.drawerCalls, [52], '成员行打开 ConversationDrawer')
-      const abortBtn = coordMount.host.querySelector<HTMLButtonElement>('.sw-tray-row-actions .btn-danger')
+      const abortBtn = coordMount.host.querySelector<HTMLButtonElement>('.sw-tray-row-actions .dock-tray-row-abort')
       assert.ok(abortBtn !== null, '主控视角对运行中成员提供真实中止动作')
+      assert.equal(abortBtn.getAttribute('aria-label'), 'Abort')
       await act(async () => {
         abortBtn.click()
       })
@@ -852,8 +853,9 @@ describe("swarm-client-interactions", () => {
       await act(async () => {
         toggle.click()
       })
-      const abortBtn = blockedMount.host.querySelector<HTMLButtonElement>('.sw-tray-row-actions .btn-danger')
+      const abortBtn = blockedMount.host.querySelector<HTMLButtonElement>('.sw-tray-row-actions .dock-tray-row-abort')
       assert.ok(abortBtn !== null, '主控视角对 blocked 成员同样提供中止动作')
+      assert.equal(abortBtn.getAttribute('aria-label'), 'Abort')
       await act(async () => {
         abortBtn.click()
       })
@@ -898,6 +900,118 @@ describe("swarm-client-interactions", () => {
     }
 
     resetDefaultStubs()
+  })
+
+  test('SwarmActiveTray：12 名并发成员展开后全量渲染、耗时右置且第 12 名成员可跳转与中止', { timeout: 60_000 }, async () => {
+    const T0 = 1_700_000_000_000
+    const NOW = T0 + 95_000
+    const members = Array.from({ length: 12 }, (_, idx) => {
+      const n = String(idx + 1).padStart(2, '0')
+      const isBlocked = idx === 0
+      return {
+        name: `worker-${n}`,
+        conversationId: 101 + idx,
+        profileId: 'coder',
+        access: 'readwrite',
+        isolation: 'worktree',
+        nodeId: 'local',
+        cwd: `/repo-wt/worker-${n}`,
+        worktreeId: `local:/repo-wt/worker-${n}`,
+        lifecycle: 'active',
+        readCursorSeq: 1,
+        pendingWakeupSeq: 1,
+        createdAt: T0 + idx * 1_000,
+        liveState: isBlocked ? 'blocked' : 'working',
+        runStartedAt: NOW - (idx + 5) * 1_000,
+        ...(isBlocked ? { pendingAskSince: NOW - 15_000 } : {}),
+        turnCount: 0,
+      }
+    })
+    const conversations = [
+      convSummary(50, '主控', { tags: ['swarm-coordinator'] }),
+      ...members.map((m, idx) =>
+        convSummary(m.conversationId, m.name, {
+          tags: ['swarm-worker'],
+          status: idx === 0 ? 'blocked' : 'working',
+          doing: `handling slice ${idx + 1}`,
+          runStartedAt: m.runStartedAt,
+          ...(idx === 0 ? { pendingAskCount: 1, pendingAskSince: NOW - 15_000 } : {}),
+        }),
+      ),
+    ]
+    const twelveBoard = boardViewFixture({
+      group: {
+        id: 'grp-live',
+        title: '12 并发协同组',
+        coordinatorConversationId: 50,
+        status: 'active',
+        activeWorkerCount: 12,
+        headSeq: 1,
+        createdAt: T0,
+        updatedAt: NOW,
+      },
+      members,
+      posts: [],
+      activeWorkingMembers: members.map((m) => m.name),
+    })
+
+    setStubState({
+      docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+      sessionDocs: { 'builtin:swarm/board-view/50': twelveBoard },
+    })
+
+    const traySpy = makeSpyCtx({ conversationId: 50 })
+    const trayMount = await mount(
+      traySpy,
+      e(components.SwarmActiveTray, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+      conversations,
+      { serverNowMs: NOW },
+    )
+    try {
+      const toggle = trayMount.host.querySelector<HTMLButtonElement>('.sw-tray-bar-toggle')!
+      await act(async () => {
+        toggle.click()
+      })
+
+      const rows = [...trayMount.host.querySelectorAll<HTMLElement>('.sw-tray-row')]
+      assert.equal(rows.length, 12, '展开后应渲染全部 12 名并发成员')
+
+      for (const row of rows) {
+        const main = row.querySelector<HTMLElement>('.sw-tray-row-main')
+        const liveEl = main?.querySelector<HTMLElement>('.sw-tray-row-live') ?? null
+        const elapsedEl = main?.querySelector<HTMLElement>('.sw-tray-row-elapsed') ?? null
+        const abortBtn = row.querySelector<HTMLButtonElement>('.sw-tray-row-actions .dock-tray-row-abort')
+        assert.ok(main !== null, '每行均渲染 .sw-tray-row-main')
+        assert.ok(liveEl !== null, '每行均渲染 .sw-tray-row-live')
+        assert.ok(elapsedEl !== null, '每行均渲染 .sw-tray-row-elapsed')
+        assert.ok(abortBtn !== null, '每行均渲染轻量中止图标按钮')
+        const children = [...main.children]
+        const liveIdx = children.findIndex((el) => el.classList.contains('sw-tray-row-live'))
+        const elapsedIdx = children.findIndex((el) => el.classList.contains('sw-tray-row-elapsed'))
+        assert.ok(liveIdx >= 0 && elapsedIdx > liveIdx, '耗时元素必须位于实时动态之后')
+      }
+
+      const twelfthRow = rows[11]!
+      assert.match(twelfthRow.textContent ?? '', /@worker-12/, '第 12 行为 worker-12')
+      await act(async () => {
+        twelfthRow.querySelector<HTMLButtonElement>('.sw-tray-row-main')!.click()
+      })
+      assert.deepEqual(traySpy.drawerCalls, [112], '点击第 12 行应打开对应子会话抽屉')
+
+      const twelfthAbort = twelfthRow.querySelector<HTMLButtonElement>('.sw-tray-row-actions .dock-tray-row-abort')!
+      assert.equal(twelfthAbort.getAttribute('aria-label'), 'Abort')
+      await act(async () => {
+        twelfthAbort.click()
+      })
+      assert.deepEqual(
+        traySpy.actionCalls.map((c) => ({ actionId: c.actionId, input: c.input })),
+        [{ actionId: 'abort_worker', input: { groupId: 'grp-live', name: 'worker-12' } }],
+        '点击第 12 行中止图标应触发 worker-12 的 abort_worker',
+      )
+    } finally {
+      trayMount.unmount()
+      resetDefaultStubs()
+    }
   })
 
   // ---------------------------------------------------------------------------
