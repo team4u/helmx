@@ -10,7 +10,7 @@ import type { Root } from 'react-dom/client'
 import type { ConversationSummary } from '@helmx/protocol'
 import { flushMacrotask, flushMicrotasks, waitForCondition } from './helpers/dom-harness.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
-import type { ResolvedTarget, ActiveModal, DrawerFrame } from '../src/lib/types.js'
+import { isWideDesktopViewport, type ResolvedTarget, type ActiveModal, type DrawerFrame } from '../src/lib/types.js'
 
 /**
  * 统一右侧抽屉栈（DrawerStackShell）导航与叠层回归：
@@ -68,6 +68,7 @@ function summary(id: number, parentConversationId?: number, title = `会话 ${id
 const conversations = [summary(1), summary(11, 1), summary(111, 11), summary(999)]
 
 let storeHandle: ReturnType<typeof useHelmxStore> | undefined
+let sendSseEvent: ((chunk: Uint8Array) => void) | undefined
 
 interface FetchFixture {
   list?: ConversationSummary[]
@@ -89,6 +90,7 @@ function installFetch(fixture: FetchFixture = {}): void {
     }
     if (url === '/api/events') {
       return new Response(hangingEventStream((send) => {
+        sendSseEvent = send
         send(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify({
           bootId: 'test-boot',
           seq: 1,
@@ -128,6 +130,11 @@ function App(): React.ReactNode {
   const primary = store.primaryTarget.kind === 'conversation' ? store.primaryTarget : null
   const split = store.splitTarget?.kind === 'conversation' ? store.splitTarget : null
   const activeConversationId = primary?.conversationId ?? split?.conversationId
+  const dockablePrimary =
+    store.primaryTarget.kind === 'conversation' ||
+    store.primaryTarget.kind === 'agent' ||
+    store.primaryTarget.kind === 'overview'
+  const drawerDocked = store.splitTarget === null && dockablePrimary && isWideDesktopViewport()
   return e(React.Fragment, null,
     e('div', { className: 'helmx-panes' },
       primary !== null
@@ -144,7 +151,7 @@ function App(): React.ReactNode {
         : null,
     ),
     store.drawerStack.length > 0
-      ? e(DrawerStackShell, { activeConversationId })
+      ? e(DrawerStackShell, { activeConversationId, docked: drawerDocked })
       : null,
   )
 }
@@ -198,6 +205,7 @@ function reset(): void {
   globalThis.fetch = originalFetch
   observed = undefined
   storeHandle = undefined
+  sendSseEvent = undefined
 }
 
 const DRAWER_ONLY_PANEL = {
@@ -636,6 +644,218 @@ describe('conversation-drawer-nav', () => {
       assert.ok(document.querySelector('[data-drawer-docked="true"]') === null)
     } finally {
       styleEl.remove()
+      window.matchMedia = originalMatchMedia
+    }
+  })
+
+  test('drawer-stack-model 按会话记忆纯函数契约：LRU 淘汰、浅拷贝隔离、空栈清理与删除级联裁剪', { timeout: 60_000 }, async () => {
+    const {
+      getRememberedConversationDrawer,
+      pruneConversationFromDrawerMemory,
+      setRememberedConversationDrawer,
+    } = await import('../src/lib/drawer-stack-model.js')
+
+    const memory = new Map<number, DrawerFrame[]>()
+    setRememberedConversationDrawer(memory, 1, [{ kind: 'workbench', tab: ' artifacts ' }], 2)
+    setRememberedConversationDrawer(memory, 2, [{ kind: 'conversation', conversationId: 22 }], 2)
+
+    // 读取 #1 会刷新其 LRU 热度，并只返回浅拷贝
+    const copy1 = getRememberedConversationDrawer(memory, 1)
+    assert.deepEqual(copy1, [{ kind: 'workbench', tab: 'artifacts' }])
+    copy1!.push({ kind: 'conversation', conversationId: 999 })
+    assert.deepEqual(getRememberedConversationDrawer(memory, 1), [{ kind: 'workbench', tab: 'artifacts' }])
+
+    // 写入 #3 超出上限 2，应淘汰最久未用的 #2 而保留 #1
+    setRememberedConversationDrawer(memory, 3, [{ kind: 'workbench', tab: 'changes' }, { kind: 'conversation', conversationId: 33 }], 2)
+    assert.equal(getRememberedConversationDrawer(memory, 2), undefined)
+    assert.deepEqual(getRememberedConversationDrawer(memory, 1), [{ kind: 'workbench', tab: 'artifacts' }])
+
+    // 传入空栈应删除对应会话记忆
+    setRememberedConversationDrawer(memory, 1, [], 2)
+    assert.equal(getRememberedConversationDrawer(memory, 1), undefined)
+
+    // 删除会话时：自身条目移除、他人栈中绑定该会话的帧裁剪、变空条目一并移除
+    setRememberedConversationDrawer(memory, 10, [
+      { kind: 'workbench', tab: 'artifacts' },
+      { kind: 'conversation', conversationId: 33 },
+      { kind: 'workbench', conversationId: 33, tab: 'changes' },
+    ], 10)
+    setRememberedConversationDrawer(memory, 20, [
+      { kind: 'conversation', conversationId: 33 },
+    ], 10)
+    pruneConversationFromDrawerMemory(memory, 33)
+    assert.equal(getRememberedConversationDrawer(memory, 33), undefined)
+    assert.deepEqual(getRememberedConversationDrawer(memory, 10), [{ kind: 'workbench', tab: 'artifacts' }])
+    assert.equal(getRememberedConversationDrawer(memory, 20), undefined)
+  })
+
+  test('宽屏 (>=1280px 且无 splitTarget) 切换会话按会话独立记忆并恢复停靠工作台与子会话多屏，分屏/窄屏/显式关闭/外链覆写不误恢复', { timeout: 60_000 }, async () => {
+    const originalMatchMedia = window.matchMedia
+    const mockMatchMedia = (wide: boolean): void => {
+      window.matchMedia = ((query: string) => ({
+        matches: wide && query === '(min-width: 1280px)',
+        media: query,
+        onchange: null,
+        addEventListener() {},
+        removeEventListener() {},
+        addListener() {},
+        removeListener() {},
+        dispatchEvent() { return false },
+      })) as typeof window.matchMedia
+    }
+
+    try {
+      mockMatchMedia(true)
+      await mount('#/c/1?drawer=wb/artifacts&drawer=c/11')
+      assert.deepEqual(observed?.drawerStack, [
+        { kind: 'workbench', tab: 'artifacts' },
+        { kind: 'conversation', conversationId: 11 },
+      ])
+      assert.ok(document.querySelector('[data-drawer-docked="true"]') !== null, '宽屏初始即应停靠渲染')
+
+      // 1. 切到 #999（干净打开），切回 #1 自动恢复 [wb/artifacts, c/11] 与 URL / 停靠态
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 }) })
+      await settle()
+      assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 999 })
+      assert.deepEqual(observed?.drawerStack, [], '#999 无记忆时应保持干净')
+      assert.equal(window.location.hash, '#/c/999')
+
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }) })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [
+        { kind: 'workbench', tab: 'artifacts' },
+        { kind: 'conversation', conversationId: 11 },
+      ], '切回 #1 应自动恢复其工作台与子会话栈')
+      assert.match(window.location.hash, /drawer=wb%2Fartifacts&drawer=c%2F11/)
+      assert.ok(document.querySelector('[data-drawer-docked="true"]') !== null)
+
+      // 2. 各会话独立记忆：#999 打开工作台后，#999 <-> #1 各自独立恢复
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 }) })
+      await settle()
+      await act(async () => { storeHandle!.openWorkbenchDrawer({ tab: 'artifacts' }) })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [{ kind: 'workbench', tab: 'artifacts' }])
+
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }) })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [
+        { kind: 'workbench', tab: 'artifacts' },
+        { kind: 'conversation', conversationId: 11 },
+      ])
+
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 }) })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [{ kind: 'workbench', tab: 'artifacts' }])
+
+      // 3. 切往设置页后经 openSpace('conversations') 返回 #1，仍自动恢复停靠抽屉栈
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }) })
+      await settle()
+      await act(async () => { storeHandle!.openTarget({ kind: 'profiles' }) })
+      await settle()
+      assert.deepEqual(observed?.primary, { kind: 'profiles' })
+      assert.deepEqual(observed?.drawerStack, [], '离开会话进入设置页应收起抽屉')
+
+      await act(async () => { storeHandle!.openSpace('conversations') })
+      await settle()
+      assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
+      assert.deepEqual(observed?.drawerStack, [
+        { kind: 'workbench', tab: 'artifacts' },
+        { kind: 'conversation', conversationId: 11 },
+      ])
+      assert.ok(document.querySelector('[data-drawer-docked="true"]') !== null)
+
+      // 4. 在 #1 停靠态再次点击 #1 自身，抽屉保持打开
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }) })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [
+        { kind: 'workbench', tab: 'artifacts' },
+        { kind: 'conversation', conversationId: 11 },
+      ])
+      assert.ok(document.querySelector('[data-drawer-docked="true"]') !== null)
+
+      // 5. popDrawer 更新记忆、closeAllDrawers 清空记忆
+      await act(async () => { storeHandle!.popDrawer() })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [{ kind: 'workbench', tab: 'artifacts' }])
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 }) })
+      await settle()
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }) })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [{ kind: 'workbench', tab: 'artifacts' }], 'popDrawer 退层后切换回来应保持更新后的栈')
+
+      await act(async () => { storeHandle!.openConversationDrawer(11) })
+      await settle()
+      await act(async () => { storeHandle!.closeAllDrawers() })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [])
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 }) })
+      await settle()
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }) })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [], 'closeAllDrawers 显式关闭后切换回来不得自动复活')
+
+      // 6. 在 #999 浏览期间后台删除子会话 #11（SSE conversation.deleted），切回 #1 时不应复活已删 #11
+      await act(async () => {
+        storeHandle!.openWorkbenchDrawer({ tab: 'artifacts' })
+        storeHandle!.openConversationDrawer(11)
+      })
+      await settle()
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 }) })
+      await settle()
+      assert.ok(sendSseEvent !== undefined)
+      await act(async () => {
+        sendSseEvent!(new TextEncoder().encode(`event: message\ndata: ${JSON.stringify({
+          seq: 2,
+          event: { type: 'conversation.deleted', conversationId: 11 },
+        })}\n\n`))
+      })
+      await settle()
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }) })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [{ kind: 'workbench', tab: 'artifacts' }], '已删除的子会话 #11 应从 #1 记忆中裁剪')
+
+      // 7. 分屏守卫：#1 记忆为 [wb/artifacts] 时，在分屏模式下切到 #1 不得自动弹出模态遮罩，关闭分屏后记忆仍可恢复
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 }) })
+      await settle()
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 }, { split: true }) })
+      await settle()
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }) })
+      await settle()
+      assert.deepEqual(observed?.split, { kind: 'conversation', conversationId: 999 })
+      assert.deepEqual(observed?.drawerStack, [], '分屏态切回 #1 不得自动打开遮罩抽屉')
+
+      await act(async () => { storeHandle!.closeSplit() })
+      await settle()
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 }) })
+      await settle()
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }) })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [{ kind: 'workbench', tab: 'artifacts' }], '关闭分屏后 #1 原停靠记忆应完好保留并恢复')
+
+      // 9. URL 外链真源：hashchange 跳转到无 drawer 的 #/c/1 时关闭抽屉并清空 #1 记忆
+      window.history.replaceState(null, '', '#/c/1')
+      await act(async () => {
+        window.dispatchEvent(new HashChangeEvent('hashchange'))
+      })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [])
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 }) })
+      await settle()
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }) })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [], '外部无 drawer 导航后 #1 记忆应已清空')
+
+      // 8. 窄屏守卫（< 1280px）：模态抽屉下切走再切回保持收起，不自动弹出
+      mockMatchMedia(false)
+      await mount('#/c/1?drawer=wb/artifacts')
+      assert.ok(document.querySelector('[data-drawer-docked="true"]') === null, '窄屏应为模态抽屉而非停靠')
+      assert.deepEqual(observed?.drawerStack, [{ kind: 'workbench', tab: 'artifacts' }])
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 }) })
+      await settle()
+      await act(async () => { storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }) })
+      await settle()
+      assert.deepEqual(observed?.drawerStack, [], '窄屏切走再切回不得自动弹出模态抽屉')
+    } finally {
       window.matchMedia = originalMatchMedia
     }
   })

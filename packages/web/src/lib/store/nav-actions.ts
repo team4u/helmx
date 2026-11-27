@@ -12,10 +12,14 @@ import { activeTargetForPanel, resolveFocusedPanel } from '../panel-focus.js'
 import { conversationsApi } from '../api.js'
 import { clearStandbyFocusRequest } from '../../conversation/standby-model.js'
 import {
+  getRememberedConversationDrawer,
+  isSameDrawerStack,
   normalizeWorkbenchTab,
   popDrawerFrame,
+  pruneConversationFromDrawerMemory,
   pushDrawerFrame,
   removeConversationFromDrawerStack,
+  setRememberedConversationDrawer,
   topConversationDrawerId,
   topDrawerFrame,
   truncateDrawerStackTo,
@@ -33,6 +37,8 @@ import {
   type SpaceTargetInput,
 } from '../space-navigation.js'
 import {
+  isSameResolvedTarget,
+  isWideDesktopViewport,
   resolveTargetString,
   spaceForTarget,
   type ActiveModal,
@@ -70,6 +76,8 @@ export interface StoreNavHost {
 export interface StoreNavActions {
   rememberSpaceTarget: (target: ResolvedTarget) => void
   resetSpaceMemory: (initial?: Partial<Record<SidebarSpace, ResolvedTarget>>) => void
+  rememberConversationDrawer: (conversationId: number, stack: readonly DrawerFrame[]) => void
+  resetConversationDrawerMemory: () => void
   clearEscTimer: () => void
   reconcileEscAbort: (plan: NotifyPlan) => void
   applyPrimaryTarget: (target: ResolvedTarget) => void
@@ -108,6 +116,7 @@ export function createStoreNavActions(
   options: { escAbortWindowMs: number },
 ): StoreNavActions {
   let spaceMemory: Partial<Record<SidebarSpace, ResolvedTarget>> = {}
+  const conversationDrawerMemory = new Map<number, DrawerFrame[]>()
   let escAbortTimer: ReturnType<typeof setTimeout> | null = null
 
   const clearEscTimer = (): void => {
@@ -127,6 +136,25 @@ export function createStoreNavActions(
 
   const resetSpaceMemory = (initial: Partial<Record<SidebarSpace, ResolvedTarget>> = {}): void => {
     spaceMemory = { ...initial }
+  }
+
+  const rememberConversationDrawer = (conversationId: number, stack: readonly DrawerFrame[]): void => {
+    setRememberedConversationDrawer(conversationDrawerMemory, conversationId, stack)
+  }
+
+  const resetConversationDrawerMemory = (): void => {
+    conversationDrawerMemory.clear()
+  }
+
+  const syncCurrentConversationDrawer = (nav: NavSlice, nextStack: readonly DrawerFrame[]): void => {
+    if (nav.primaryTarget.kind !== 'conversation') return
+    if (nextStack.length === 0) {
+      conversationDrawerMemory.delete(nav.primaryTarget.conversationId)
+      return
+    }
+    if (nav.splitTarget === null && isWideDesktopViewport()) {
+      setRememberedConversationDrawer(conversationDrawerMemory, nav.primaryTarget.conversationId, nextStack)
+    }
   }
 
   const resolveActiveStageConversationId = (): number | undefined => {
@@ -186,7 +214,9 @@ export function createStoreNavActions(
   }
 
   const openConversationDrawer = (conversationId: number): void => {
-    const nextStack = pushDrawerFrame(host.getNavSlice().drawerStack, { kind: 'conversation', conversationId })
+    const nav = host.getNavSlice()
+    const nextStack = pushDrawerFrame(nav.drawerStack, { kind: 'conversation', conversationId })
+    syncCurrentConversationDrawer(nav, nextStack)
     host.patchNav({ drawerStack: nextStack })
   }
 
@@ -222,30 +252,39 @@ export function createStoreNavActions(
             params: Object.freeze({ ...opts.params }),
           }
         : null
+    syncCurrentConversationDrawer(nav, nextStack)
     host.patchNav({ drawerStack: nextStack, workbenchTab: tab, workbenchParams: nextParams })
   }
 
   const popDrawer = (): void => {
-    const stack = host.getNavSlice().drawerStack
-    if (stack.length === 0) return
-    host.patchNav({ drawerStack: popDrawerFrame(stack) })
+    const nav = host.getNavSlice()
+    if (nav.drawerStack.length === 0) return
+    const nextStack = popDrawerFrame(nav.drawerStack)
+    syncCurrentConversationDrawer(nav, nextStack)
+    host.patchNav({ drawerStack: nextStack })
   }
 
   const truncateDrawerStack = (index: number): void => {
-    const stack = host.getNavSlice().drawerStack
-    if (stack.length === 0) return
-    host.patchNav({ drawerStack: truncateDrawerStackTo(stack, index) })
+    const nav = host.getNavSlice()
+    if (nav.drawerStack.length === 0) return
+    const nextStack = truncateDrawerStackTo(nav.drawerStack, index)
+    syncCurrentConversationDrawer(nav, nextStack)
+    host.patchNav({ drawerStack: nextStack })
   }
 
   const closeAllDrawers = (): void => {
-    if (host.getNavSlice().drawerStack.length === 0) return
+    const nav = host.getNavSlice()
+    if (nav.drawerStack.length === 0) return
+    syncCurrentConversationDrawer(nav, [])
     host.patchNav({ drawerStack: [] })
   }
 
   const pruneConversationFromDrawerStack = (conversationId: number): void => {
-    const stack = host.getNavSlice().drawerStack
-    const nextStack = removeConversationFromDrawerStack(stack, conversationId)
-    if (nextStack !== stack) {
+    pruneConversationFromDrawerMemory(conversationDrawerMemory, conversationId)
+    const nav = host.getNavSlice()
+    const nextStack = removeConversationFromDrawerStack(nav.drawerStack, conversationId)
+    if (nextStack !== nav.drawerStack) {
+      syncCurrentConversationDrawer(nav, nextStack)
       host.patchNav({ drawerStack: nextStack })
     }
   }
@@ -264,6 +303,9 @@ export function createStoreNavActions(
     const currentTab = top?.kind === 'workbench' ? top.tab : nav.workbenchTab
     const nextTab = normalizeWorkbenchTab(applyUpdater(currentTab, update))
     const nextStack = updateTopWorkbenchTab(nav.drawerStack, nextTab)
+    if (nextStack !== nav.drawerStack) {
+      syncCurrentConversationDrawer(nav, nextStack)
+    }
     host.patchNav({ drawerStack: nextStack, workbenchTab: nextTab })
   }
 
@@ -293,10 +335,28 @@ export function createStoreNavActions(
     if (opts?.split) {
       patch.splitTarget = resolved
     } else {
+      const nav = host.getNavSlice()
+      if (!isSameResolvedTarget(nav.primaryTarget, resolved)) {
+        patch.workbenchParams = null
+      }
       rememberSpaceTarget(resolved)
       patch.primaryTarget = resolved
-      // 主屏导航离开当前视图时收起覆盖型抽屉栈；深链恢复（applyExternalLocation）不走此路径。
-      if (host.getNavSlice().drawerStack.length > 0) patch.drawerStack = []
+      // 宽屏无分屏时按会话独立记忆并恢复停靠抽屉栈；窄屏、分屏或非会话目标仍自动收起抽屉栈避免遮挡。
+      const canDock = nav.splitTarget === null && isWideDesktopViewport()
+      if (canDock && nav.primaryTarget.kind === 'conversation' && nav.drawerStack.length > 0) {
+        setRememberedConversationDrawer(
+          conversationDrawerMemory,
+          nav.primaryTarget.conversationId,
+          nav.drawerStack,
+        )
+      }
+      const nextDrawerStack =
+        canDock && resolved.kind === 'conversation'
+          ? (getRememberedConversationDrawer(conversationDrawerMemory, resolved.conversationId) ?? [])
+          : []
+      if (!isSameDrawerStack(nav.drawerStack, nextDrawerStack)) {
+        patch.drawerStack = nextDrawerStack
+      }
     }
     if (resolved.kind === 'conversation' && opts?.highlightEntryId) {
       patch.highlightedEntry = { conversationId: resolved.conversationId, entryId: opts.highlightEntryId }
@@ -361,6 +421,17 @@ export function createStoreNavActions(
     host.setPendingHistoryMode(null)
     host.setLastSyncedLocation(parsed)
     rememberSpaceTarget(parsed.primaryTarget)
+    if (
+      parsed.primaryTarget.kind === 'conversation' &&
+      parsed.splitTarget === null &&
+      isWideDesktopViewport()
+    ) {
+      setRememberedConversationDrawer(
+        conversationDrawerMemory,
+        parsed.primaryTarget.conversationId,
+        parsed.drawerStack,
+      )
+    }
     const top = topDrawerFrame(parsed.drawerStack)
     host.patchNav({
       primaryTarget: parsed.primaryTarget,
@@ -470,6 +541,8 @@ export function createStoreNavActions(
   return {
     rememberSpaceTarget,
     resetSpaceMemory,
+    rememberConversationDrawer,
+    resetConversationDrawerMemory,
     clearEscTimer,
     reconcileEscAbort,
     applyPrimaryTarget,

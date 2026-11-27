@@ -393,6 +393,8 @@ export function spaceForTarget(target: ResolvedTarget): SidebarSpace {
 export const COMPACT_MOBILE_MAX_WIDTH = 680
 export const COMPACT_MOBILE_DETAIL_TURNS = 5
 export const DESKTOP_DETAIL_TURNS = 10
+/** Minimum desktop viewport width at which the right drawer docks non-modally beside the main stage. */
+export const WORKBENCH_DOCK_MIN_WIDTH = 1280
 
 /** Whether the current viewport is a compact mobile layout (`<= 680px`). */
 export function isCompactMobileViewport(): boolean {
@@ -401,6 +403,15 @@ export function isCompactMobileViewport(): boolean {
     return window.matchMedia(`(max-width: ${COMPACT_MOBILE_MAX_WIDTH}px)`).matches
   }
   return typeof window.innerWidth === 'number' && window.innerWidth > 0 && window.innerWidth <= COMPACT_MOBILE_MAX_WIDTH
+}
+
+/** Whether the current viewport supports non-modal wide-desktop drawer docking (`>= 1280px`). */
+export function isWideDesktopViewport(): boolean {
+  if (typeof window === 'undefined') return false
+  if (typeof window.matchMedia === 'function') {
+    return window.matchMedia(`(min-width: ${WORKBENCH_DOCK_MIN_WIDTH}px)`).matches
+  }
+  return typeof window.innerWidth === 'number' && window.innerWidth >= WORKBENCH_DOCK_MIN_WIDTH
 }
 
 /** Default turn count for conversation detail requests based on current viewport width. */

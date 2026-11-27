@@ -55,7 +55,7 @@
 - 访问已删除会话的深链显式提示不存在，不得路由循环或静默跳转；
 - **抽屉栈与顶层模态正交**：右侧抽屉栈通过重复查询参数 `drawer=wb/<tab>`、`drawer=wb@<convId>/<tab>`、`drawer=c/<id>` 按底到顶序列化（同帧去重截断、上限 5 层），与顶层居中预览模态（`modal=artifact` / `modal=file`）完全正交、互不覆盖；
 - **宽屏非模态停靠与窄屏叠加退化**：在非分屏（`splitTarget === null`）、主屏为可停靠视图（`conversation` / `agent` / `overview`）且桌面视口宽于 `1280px` 时，`DrawerStackShell` 直接在 `.helmx-shell` 内作为 flex 兄弟流内停靠（`modal={false}`、无遮罩、`46px` 顶栏高度与主栏对齐）：工作台栈顶按 `--helmx-drawer-narrow-width` 固定侧栏列宽，子会话/子代理栈顶以 `flex: 1 1 0%` 与 `.helmx-main-stage` 实现与 Split View 一致的 50/50 均分分屏；不足 `1280px`、处于分屏或位于设置/插件屏（`models` / `profiles` / `nodes` / `skills` / `plugins` / `screen`）时自动退回挂载在 `document.body` 顶层的带遮罩叠加模态抽屉，确保 `DetailDrawer` 与子会话抽屉互不遮挡；
-- **主屏导航自动收起抽屉栈**：非 split 的 `openTarget` 推进主屏目标时若抽屉栈非空，顺手清空 `drawerStack`——否则抽屉内徽标/通知触发的深链被全高抽屉自身遮挡，表现为「点击无反应」；分屏导航不遮挡不收；深链恢复（`applyExternalLocation`）不走此路径，`drawer` + `modal` 组合态仍可精确还原。
+- **主屏导航抽屉栈收起与宽屏停靠记忆**：在宽屏非分屏停靠态（`>= 1280px` 且 `splitTarget === null`）下，非 split 的 `openTarget` 按会话独立记忆停靠的 `drawerStack`（有界 LRU；显式关闭、会话删除或登出时清空）：切离会话 A 时保存 A 的停靠抽屉栈，切入会话 B 时按 B 自己的记忆恢复（无记忆则为空 `[]`），再切回 A（含经 `openSpace('conversations')` 返回）自动恢复 A 的工作台与已下钻子会话多屏；切往非会话目标（`overview` / `agent` / `settings` / `screen`），或在窄屏（`< 1280px`）/ 分屏（`splitTarget !== null`）下推进主屏目标时仍清空 `drawerStack` 为 `[]`，避免模态抽屉遮挡新主屏；分屏导航（`{ split: true }`）不改变 `drawerStack`；深链恢复（`applyExternalLocation`）仍以 URL 为唯一事实来源。
 
 ## 目标路由参数（Screen 与总览共用 `sp.*` / `ssp.*` 机制）
 

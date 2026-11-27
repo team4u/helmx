@@ -7,6 +7,7 @@
 export const DEFAULT_WORKBENCH_TAB = 'artifacts'
 export const MAX_DRAWER_STACK_DEPTH = 5
 export const MAX_DRAWER_KEEPALIVE_FRAMES = 3
+export const MAX_REMEMBERED_CONVERSATION_DRAWERS = 30
 
 export type DrawerFrame =
   | { kind: 'workbench'; conversationId?: number; tab: string }
@@ -124,6 +125,64 @@ export function removeConversationFromDrawerStack(
 ): DrawerFrame[] {
   const filtered = stack.filter((frame) => frame.conversationId !== conversationId)
   return filtered.length === stack.length ? (stack as DrawerFrame[]) : filtered
+}
+
+/**
+ * Remember a conversation's docked drawer stack in a bounded LRU map.
+ * Empty stacks delete the entry so closed drawers stay closed on return.
+ */
+export function setRememberedConversationDrawer(
+  memory: Map<number, DrawerFrame[]>,
+  conversationId: number,
+  stack: readonly DrawerFrame[],
+  maxEntries = MAX_REMEMBERED_CONVERSATION_DRAWERS,
+): void {
+  if (stack.length === 0) {
+    memory.delete(conversationId)
+    return
+  }
+  const normalized = stack.map(normalizeDrawerFrame)
+  memory.delete(conversationId)
+  memory.set(conversationId, normalized)
+  const cap = Math.max(0, maxEntries)
+  while (memory.size > cap) {
+    const oldest = memory.keys().next().value
+    if (oldest === undefined) break
+    memory.delete(oldest)
+  }
+}
+
+/**
+ * Read a conversation's remembered docked drawer stack (refreshing LRU recency)
+ * and return a shallow copy so callers cannot mutate cached entries.
+ */
+export function getRememberedConversationDrawer(
+  memory: Map<number, DrawerFrame[]>,
+  conversationId: number,
+): DrawerFrame[] | undefined {
+  const saved = memory.get(conversationId)
+  if (saved === undefined || saved.length === 0) return undefined
+  memory.delete(conversationId)
+  memory.set(conversationId, saved)
+  return [...saved]
+}
+
+/**
+ * Remove a deleted conversation from the drawer memory: drop its own entry and
+ * strip any frame bound to it from other conversations' remembered stacks.
+ */
+export function pruneConversationFromDrawerMemory(
+  memory: Map<number, DrawerFrame[]>,
+  deletedConversationId: number,
+): void {
+  memory.delete(deletedConversationId)
+  for (const [ownerId, stack] of [...memory.entries()]) {
+    const pruned = removeConversationFromDrawerStack(stack, deletedConversationId)
+    if (pruned !== stack) {
+      if (pruned.length === 0) memory.delete(ownerId)
+      else memory.set(ownerId, pruned)
+    }
+  }
 }
 
 export function topDrawerFrame(stack: readonly DrawerFrame[]): DrawerFrame | undefined {

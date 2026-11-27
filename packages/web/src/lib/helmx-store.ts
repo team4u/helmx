@@ -50,16 +50,17 @@ import {
   resolveLocale,
   resolveTheme,
 } from './theme-preferences.js'
-import type {
-  ActiveModal,
-  FocusedPanel,
-  GroupedUiSpecs,
-  HelmxStoreValue,
-  LocalePreference,
-  ResolvedTarget,
-  ThemeMode,
-  ThemePreference,
-  ToastNotice,
+import {
+  isWideDesktopViewport,
+  type ActiveModal,
+  type FocusedPanel,
+  type GroupedUiSpecs,
+  type HelmxStoreValue,
+  type LocalePreference,
+  type ResolvedTarget,
+  type ThemeMode,
+  type ThemePreference,
+  type ToastNotice,
 } from './types.js'
 import { isSameLocationState, parseLocationHash, type WorkspaceLocationState } from './url-hash-model.js'
 import { StoreAuthController } from './store/auth-controller.js'
@@ -274,6 +275,17 @@ export class HelmxExternalStore {
     )
 
     this.navActions.rememberSpaceTarget(bootLocation.primaryTarget)
+    if (
+      bootLocation.primaryTarget.kind === 'conversation' &&
+      bootLocation.drawerStack.length > 0 &&
+      bootLocation.splitTarget === null &&
+      isWideDesktopViewport()
+    ) {
+      this.navActions.rememberConversationDrawer(
+        bootLocation.primaryTarget.conversationId,
+        bootLocation.drawerStack,
+      )
+    }
 
     this.actions = {
       setTheme: this.setTheme,
@@ -874,6 +886,7 @@ export class HelmxExternalStore {
     const plan = emptyPlan()
     this.patchAuth({ authenticated: false, sseConnected: false, connectionError: null }, plan, true)
     this.navActions.resetSpaceMemory({ settings: { kind: 'profiles' } })
+    this.navActions.resetConversationDrawerMemory()
     this.patchNav(
       {
         activeModal: null,

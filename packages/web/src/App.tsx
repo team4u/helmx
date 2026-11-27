@@ -33,7 +33,7 @@ import {
   useSidebarCollapsed,
   useStoreActions,
 } from './lib/store-context.js'
-import { type ResolvedTarget } from './lib/types.js'
+import { WORKBENCH_DOCK_MIN_WIDTH, type ResolvedTarget } from './lib/types.js'
 import { ScreenHost } from './screens/ScreenHost.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
@@ -56,8 +56,6 @@ const CONNECTION_BANNER_DELAY_MS = 1500
 
 /** Matches `@media (max-width: 860px)` off-canvas mobile sidebar breakpoint in `responsive.css`. */
 const MOBILE_DRAWER_MAX_WIDTH = 860
-/** Minimum desktop viewport width at which the right drawer docks non-modally beside the main stage. */
-const WORKBENCH_DOCK_MIN_WIDTH = 1280
 const MOBILE_SIDEBAR_ID = 'helmx-mobile-sidebar'
 const FOCUSABLE_SELECTOR = [
   'a[href]',

@@ -101,7 +101,7 @@ function syncDeletedConversationNav(
   if (primaryHit || splitHit || drawerHit || modalHit) store.pendingHistoryMode = 'replace'
   if (primaryHit) store.navActions.applyPrimaryTarget(fallback)
   if (splitHit) store.navActions.setSplitTarget(null)
-  if (drawerHit) store.navActions.pruneConversationFromDrawerStack(deletedConversationId)
+  store.navActions.pruneConversationFromDrawerStack(deletedConversationId)
   if (modalHit) store.actions.setActiveModal(null)
 }
 
