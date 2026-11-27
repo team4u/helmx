@@ -99,6 +99,16 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Best-effort recursive directory removal; resolves to the failure message (undefined on success) so callers fold it into rollback diagnostics. */
+async function removeDirectoryOrReport(target: string): Promise<string | undefined> {
+  try {
+    await rm(target, { recursive: true, force: true });
+    return undefined;
+  } catch (err) {
+    return errorMessage(err);
+  }
+}
+
 /**
  * Plugin package manager: all install/update/remove operations are serialized through a manager-level queue,
  * while PluginHost maintains its own per-plugin lifecycle queue.
@@ -366,56 +376,82 @@ export class PluginPackageManager implements PluginPackageManagerPort {
     target: string,
     options: { enable?: boolean },
   ): Promise<PluginInstallResult> {
-    let registered: Awaited<ReturnType<PackageManagerHost['registerManagedPlugin']>>;
-    try {
-      registered = await this.host.registerManagedPlugin(target, { enabled: false });
-    } catch (err) {
-      if (this.host.listSummaries().some((s) => s.id === pluginId)) {
-        throw new HelmxError(
-          'plugin_package_install_failed',
-          `Plugin ${pluginId} registration failed after install: same name plugin registered concurrently; keeping existing directory and instance without managed record: ${errorMessage(err)}`,
-          500,
-          { pluginId, target, rolledBack: false, cause: errorDetail(err) },
-        );
-      }
-      let rmError: unknown;
-      try {
-        await rm(target, { recursive: true, force: true });
-      } catch (e) {
-        rmError = e;
-      }
-      if (rmError !== undefined) {
-        throw new HelmxError(
-          'plugin_package_install_failed',
-          `Plugin ${pluginId} registration failed and rollback directory removal failed (${errorMessage(rmError)}): ${errorMessage(err)}`,
-          500,
-          {
-            pluginId,
-            target,
-            rolledBack: false,
-            rollbackError: { message: errorMessage(rmError) },
-            cause: errorDetail(err),
-          },
-        );
-      }
-      throw new HelmxError(
-        'plugin_package_install_failed',
-        `Plugin ${pluginId} registration failed after install; rolled back and deleted directory: ${errorMessage(err)}`,
-        500,
-        { pluginId, target, rolledBack: true, cause: errorDetail(err) },
-      );
-    }
-
+    const registered = await this.registerInstalledPlugin(pluginId, target);
     let summary = registered.summary;
     let enableError: { message: string; code: string } | undefined;
     if (options.enable === true) {
       ({ summary, enableError } = await this.tryEnablePlugin(registered.pluginId, summary));
     }
 
-    let record: PluginPackageRecord;
+    const record = await this.persistInstallRecord(pluginId, parsed, target, registered.pluginId, summary);
+    this.host.notifyManagedPluginChanged(registered.pluginId);
+    return {
+      record,
+      summary: this.attachManaged(summary, record),
+      ...(enableError !== undefined ? { enableError } : {}),
+    };
+  }
+
+  /** Register the moved-in directory disabled; a failed registration rolls the directory back before surfacing. */
+  private async registerInstalledPlugin(
+    pluginId: string,
+    target: string,
+  ): Promise<Awaited<ReturnType<PackageManagerHost['registerManagedPlugin']>>> {
     try {
-      record = await this.store.save({
-        pluginId: registered.pluginId,
+      return await this.host.registerManagedPlugin(target, { enabled: false });
+    } catch (err) {
+      throw await this.rollbackFailedRegistration(err, pluginId, target);
+    }
+  }
+
+  /**
+   * Rollback after a failed registration and build the resulting error. A same-name plugin registered
+   * concurrently is the one case that keeps the directory (it is that instance's home); otherwise the
+   * directory is deleted and a failed deletion is reported instead of hidden.
+   */
+  private async rollbackFailedRegistration(err: unknown, pluginId: string, target: string): Promise<HelmxError> {
+    if (this.host.listSummaries().some((s) => s.id === pluginId)) {
+      return new HelmxError(
+        'plugin_package_install_failed',
+        `Plugin ${pluginId} registration failed after install: same name plugin registered concurrently; keeping existing directory and instance without managed record: ${errorMessage(err)}`,
+        500,
+        { pluginId, target, rolledBack: false, cause: errorDetail(err) },
+      );
+    }
+    const rmErrorMessage = await removeDirectoryOrReport(target);
+    if (rmErrorMessage !== undefined) {
+      return new HelmxError(
+        'plugin_package_install_failed',
+        `Plugin ${pluginId} registration failed and rollback directory removal failed (${rmErrorMessage}): ${errorMessage(err)}`,
+        500,
+        {
+          pluginId,
+          target,
+          rolledBack: false,
+          rollbackError: { message: rmErrorMessage },
+          cause: errorDetail(err),
+        },
+      );
+    }
+    return new HelmxError(
+      'plugin_package_install_failed',
+      `Plugin ${pluginId} registration failed after install; rolled back and deleted directory: ${errorMessage(err)}`,
+      500,
+      { pluginId, target, rolledBack: true, cause: errorDetail(err) },
+    );
+  }
+
+  /** Persist the install record; a failed save rolls the instance and directory back before surfacing. */
+  private async persistInstallRecord(
+    pluginId: string,
+    parsed: PluginPackageSource,
+    target: string,
+    registeredId: string,
+    summary: PluginSummary,
+  ): Promise<PluginPackageRecord> {
+    try {
+      return await this.store.save({
+        pluginId: registeredId,
         source: parsed,
         installPath: target,
         version: summary.version ?? '',
@@ -423,41 +459,24 @@ export class PluginPackageManager implements PluginPackageManagerPort {
         updatedAt: Date.now(),
       });
     } catch (err) {
-      let unregisterError: unknown;
-      try {
-        await this.host.removeManagedPlugin(registered.pluginId);
-      } catch (removeErr) {
-        unregisterError = removeErr;
-      }
-      if (unregisterError === undefined) {
-        let rmError: unknown;
-        try {
-          await rm(target, { recursive: true, force: true });
-        } catch (e) {
-          rmError = e;
-        }
-        if (rmError !== undefined) {
-          throw new HelmxError(
-            'plugin_package_install_failed',
-            `Plugin ${pluginId} failed to persist install record, unregistered instance, but failed to delete directory (${errorMessage(rmError)}): ${errorMessage(err)}`,
-            500,
-            {
-              pluginId,
-              target,
-              rolledBack: false,
-              rollbackError: { message: errorMessage(rmError) },
-              cause: errorDetail(err),
-            },
-          );
-        }
-        throw new HelmxError(
-          'plugin_package_install_failed',
-          `Plugin ${pluginId} failed to persist install record; rolled back (unregistered and deleted directory): ${errorMessage(err)}`,
-          500,
-          { pluginId, target, rolledBack: true, cause: errorDetail(err) },
-        );
-      }
-      throw new HelmxError(
+      throw await this.rollbackFailedRecordPersistence(err, pluginId, target, registeredId);
+    }
+  }
+
+  /**
+   * Rollback after a failed record persistence, unwinding in install order: unregister the instance,
+   * then delete the directory. Each step that fails is reported in the resulting error so the operator
+   * knows exactly what state the managed directory is in.
+   */
+  private async rollbackFailedRecordPersistence(
+    err: unknown,
+    pluginId: string,
+    target: string,
+    registeredId: string,
+  ): Promise<HelmxError> {
+    const unregisterError = await this.unregisterInstalledPlugin(registeredId);
+    if (unregisterError !== undefined) {
+      return new HelmxError(
         'plugin_package_install_failed',
         `Plugin ${pluginId} failed to persist install record, and rollback unregister failed (${errorMessage(unregisterError)}); directory and instance preserved for manual recovery`,
         500,
@@ -475,13 +494,37 @@ export class PluginPackageManager implements PluginPackageManagerPort {
         },
       );
     }
+    const rmErrorMessage = await removeDirectoryOrReport(target);
+    if (rmErrorMessage !== undefined) {
+      return new HelmxError(
+        'plugin_package_install_failed',
+        `Plugin ${pluginId} failed to persist install record, unregistered instance, but failed to delete directory (${rmErrorMessage}): ${errorMessage(err)}`,
+        500,
+        {
+          pluginId,
+          target,
+          rolledBack: false,
+          rollbackError: { message: rmErrorMessage },
+          cause: errorDetail(err),
+        },
+      );
+    }
+    return new HelmxError(
+      'plugin_package_install_failed',
+      `Plugin ${pluginId} failed to persist install record; rolled back (unregistered and deleted directory): ${errorMessage(err)}`,
+      500,
+      { pluginId, target, rolledBack: true, cause: errorDetail(err) },
+    );
+  }
 
-    this.host.notifyManagedPluginChanged(registered.pluginId);
-    return {
-      record,
-      summary: this.attachManaged(summary, record),
-      ...(enableError !== undefined ? { enableError } : {}),
-    };
+  /** Unregister a freshly registered instance; resolves to the raw failure (undefined on success) so callers can attach its stack. */
+  private async unregisterInstalledPlugin(pluginId: string): Promise<unknown> {
+    try {
+      await this.host.removeManagedPlugin(pluginId);
+      return undefined;
+    } catch (err) {
+      return err;
+    }
   }
 
   /** Idempotent hot update/reinstall for an already-installed plugin from the same canonical local directory. */
