@@ -15,6 +15,7 @@ import {
   Card,
   CopyButton,
   EmptyState,
+  ErrorText,
   Field,
   HelmxIcon,
   Input,
@@ -219,15 +220,15 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
       : undefined
 
   return (
-    <div className="plan-workbench">
-      <div className="plan-workbench-head">
+    <Stack gap="md" className="plan-workbench">
+      <Stack direction="horizontal" align="center" justify="between" gap="sm" wrap>
         <span className="plan-workbench-title">
           <HelmxIcon name="list-tree" size={14} />
           <span>{t(PLAN_COPY.panelTitle)}</span>
           <Badge tone={modeTone}>{modeText}</Badge>
         </span>
         <Button
-          size="xs"
+          size="sm"
           variant={isPlanning ? 'secondary' : 'primary'}
           icon={isPlanning ? 'x' : 'list-tree'}
           pending={toggleAction.pending}
@@ -236,16 +237,20 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
         >
           {t(isPlanning ? PLAN_COPY.exitPlanning : PLAN_COPY.enterPlanning)}
         </Button>
-      </div>
+      </Stack>
 
       {docState.status === 'loading' && docView === undefined && !hasActionOverride ? (
         <LoadingState label={t(PLAN_COPY.loading)} />
       ) : docState.status === 'error' && docView === undefined ? (
         <Callout tone="err" title={t(PLAN_COPY.loadError)}>
-          {docState.error ? <p className="plan-error-text">{docState.error}</p> : null}
-          <Button size="xs" icon="rotate-cw" onClick={docState.retry}>
-            {t(PLAN_COPY.retry)}
-          </Button>
+          <Stack gap="xs">
+            {docState.error ? <ErrorText>{docState.error}</ErrorText> : null}
+            <div>
+              <Button variant="secondary" size="xs" icon="rotate-cw" onClick={docState.retry}>
+                {t(PLAN_COPY.retry)}
+              </Button>
+            </div>
+          </Stack>
         </Callout>
       ) : (
         <>
@@ -260,7 +265,7 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
                   <Stack direction="horizontal" gap="xs" align="center">
                     <Button
                       variant="ghost"
-                      size="xs"
+                      size="sm"
                       icon="edit-3"
                       onClick={() =>
                         setEditing({
@@ -273,11 +278,7 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
                       {t(PLAN_COPY.editDraft)}
                     </Button>
                     {draft.markdown.trim() !== '' ? (
-                      <CopyButton
-                        text={draft.markdown}
-                        label={t(PLAN_COPY.copyDraft)}
-                        className="btn btn-ghost btn-xs"
-                      />
+                      <CopyButton text={draft.markdown} label={t(PLAN_COPY.copyDraft)} />
                     ) : null}
                   </Stack>
                 ) : undefined
@@ -317,6 +318,7 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
                   ) : null}
                   <Field label={t(PLAN_COPY.editTitleLabel)} required>
                     <Input
+                      size="sm"
                       value={editing.title}
                       disabled={saveDraftAction.pending}
                       onChange={(e) =>
@@ -334,11 +336,11 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
                       }
                     />
                   </Field>
-                  <div className="plan-editor-actions">
+                  <Stack direction="horizontal" align="center" justify="end" gap="sm">
                     <Button
                       type="button"
                       variant="ghost"
-                      size="xs"
+                      size="sm"
                       disabled={saveDraftAction.pending}
                       onClick={() => setEditing(null)}
                     >
@@ -347,7 +349,7 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
                     <Button
                       type="submit"
                       variant="primary"
-                      size="xs"
+                      size="sm"
                       icon="save"
                       pending={saveDraftAction.pending}
                       disabled={
@@ -358,7 +360,7 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
                     >
                       {t(PLAN_COPY.saveDraft)}
                     </Button>
-                  </div>
+                  </Stack>
                 </form>
               ) : draft.markdown.trim() !== '' ? (
                 <MarkdownView
@@ -386,7 +388,7 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
           ) : null}
         </>
       )}
-    </div>
+    </Stack>
   )
 }
 

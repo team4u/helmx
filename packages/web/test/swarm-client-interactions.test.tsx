@@ -1046,7 +1046,8 @@ describe("swarm-client-interactions", () => {
       assert.match(text, /#2/, '#seq 辅助信息')
       assert.equal(mountPanel.host.querySelector('.sw-panel-fallback-note') !== null, false, '实时模式不标注快照来源')
 
-      const memberRow = mountPanel.host.querySelector<HTMLButtonElement>('.sw-panel-member-row')!
+      assert.ok(mountPanel.host.querySelector('.sw-panel-members.helmx-list.helmx-list-compact') !== null, '成员列表复用 compact List 原语')
+      const memberRow = mountPanel.host.querySelector<HTMLButtonElement>('.sw-panel-member-item .helmx-list-row-trigger')!
       await act(async () => {
         memberRow.click()
       })

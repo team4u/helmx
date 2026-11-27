@@ -5,7 +5,7 @@ import type { MutableRefObject, ReactNode } from 'react'
 import type { HelmxLocale } from '@helmx/protocol/browser'
 import {
   Badge, Button, Callout, Checkbox, Dialog, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle,
-  HelmxIcon, IconButton, PluginSlot, Stack, StatusLight, Tooltip, formatModelShortName, resolveLocalizedText,
+  HelmxIcon, IconButton, List, ListRow, PluginSlot, Stack, StatusLight, Tooltip, formatModelShortName, resolveLocalizedText,
   type LocalizedText, type StatusLightTone,
 } from '@helmx/plugin-client'
 import { extractPostRefs, postDigestLine, postKindBadgeTone, type BoardPost } from './board-model.ts'
@@ -51,7 +51,7 @@ export function SwarmMembersSection(props: SwarmMembersSectionProps): ReactNode 
       {model.rows.length === 0 ? (
         <div className="sw-panel-empty-hint">{t(C.PANEL_MEMBERS_EMPTY)}</div>
       ) : (
-        <div className="sw-panel-members">
+        <List density="compact" label={t(C.PANEL_MEMBERS_TITLE)} className="sw-panel-members">
           {model.rows.map((row) => {
             const activityText = row.latestActivity
               ? `${t(row.latestActivity.direction === 'received' ? C.PANEL_ACTIVITY_RECEIVED : C.PANEL_ACTIVITY_AUTHORED)} · ${C.postKindLabel(row.latestActivity.post.kind, locale)}: ${postDigestLine(row.latestActivity.post.body, 90)}`
@@ -59,20 +59,24 @@ export function SwarmMembersSection(props: SwarmMembersSectionProps): ReactNode 
             const canAbort =
               isCoordinatorActive && row.lifecycle === 'active' && (row.liveState === 'working' || row.liveState === 'blocked')
             const timing = resolvePanelMemberTimingView(row, effectiveBoard.group.status, nowMs, locale)
+            const rowTone = row.liveState === 'error' ? 'danger' : row.liveState === 'blocked' ? 'warn' : 'default'
+            const hasTrailing = row.worktreeId !== undefined || canAbort
             return (
-              <div key={row.name} className="sw-panel-member-item">
-                <button
-                  type="button"
-                  className="sw-panel-member-row"
-                  aria-label={`@${row.name} — ${C.panelRowOpenLabel(row.name, locale)}`}
-                  onClick={() => onOpenConversation(row.conversationId)}
-                >
-                  <span className="sw-panel-member-main">
-                    <StatusLight
-                      tone={LIVE_STATE_LIGHT[row.liveState] ?? 'pending'}
-                      label={C.memberLiveStateLabel(row.liveState, locale)}
-                    />
-                    <span className="sw-panel-member-name">@{row.name}</span>
+              <ListRow
+                key={row.name}
+                className="sw-panel-member-item"
+                tone={rowTone}
+                aria-label={`@${row.name} — ${C.panelRowOpenLabel(row.name, locale)}`}
+                onSelect={() => onOpenConversation(row.conversationId)}
+                leading={
+                  <StatusLight
+                    tone={LIVE_STATE_LIGHT[row.liveState] ?? 'pending'}
+                    label={C.memberLiveStateLabel(row.liveState, locale)}
+                  />
+                }
+                title={<span className="sw-panel-member-name">@{row.name}</span>}
+                meta={
+                  <>
                     {row.lifecycle === 'archived' ? <Badge tone="neutral">{t(C.PANEL_MEMBER_ARCHIVED)}</Badge> : null}
                     <Badge tone="neutral">{C.memberAccessLabel(row.access, locale)}</Badge>
                     {row.model ? (
@@ -90,51 +94,54 @@ export function SwarmMembersSection(props: SwarmMembersSectionProps): ReactNode 
                         </span>
                       </Tooltip>
                     ) : null}
+                  </>
+                }
+                description={activityText ?? `#${row.conversationId}`}
+                trailing={
+                  hasTrailing ? (
+                    <>
+                      {row.worktreeId !== undefined ? (
+                        <PluginSlot
+                          name="worktree-actions"
+                          inline
+                          slotProps={{
+                            worktreeId: row.worktreeId,
+                            ...(row.worktree?.branch !== undefined ? { branch: row.worktree.branch } : {}),
+                            nodeId: row.nodeId,
+                            parentConversationId: effectiveBoard.group.coordinatorConversationId,
+                            mode: 'member',
+                          }}
+                        />
+                      ) : null}
+                      {canAbort ? (
+                        <Button
+                          variant="danger"
+                          size="xs"
+                          icon="square"
+                          className="sw-panel-member-abort"
+                          disabled={busyAction !== undefined}
+                          onClick={() => onAbortMember(row.name)}
+                        >
+                          {t(C.ACTION_ABORT)}
+                        </Button>
+                      ) : null}
+                    </>
+                  ) : undefined
+                }
+              >
+                {row.worktree ? (
+                  <span
+                    className="sw-panel-member-worktree"
+                    title={`${row.worktree.worktreeId}${row.worktree.branch ? ` · ${row.worktree.branch}` : ''}`}
+                  >
+                    <HelmxIcon name="git-branch" size={11} />
+                    <span>{C.panelWorktreeSummary(row.worktree, locale)}</span>
                   </span>
-                  <span className="sw-panel-member-activity" title={activityText}>{activityText ?? `#${row.conversationId}`}</span>
-                  {row.worktree ? (
-                    <span
-                      className="sw-panel-member-worktree"
-                      title={`${row.worktree.worktreeId}${row.worktree.branch ? ` · ${row.worktree.branch}` : ''}`}
-                    >
-                      <HelmxIcon name="git-branch" size={11} />
-                      <span>{C.panelWorktreeSummary(row.worktree, locale)}</span>
-                    </span>
-                  ) : null}
-                </button>
-                {row.worktreeId !== undefined || canAbort ? (
-                  <div className="sw-panel-member-actions">
-                    {row.worktreeId !== undefined ? (
-                      <PluginSlot
-                        name="worktree-actions"
-                        inline
-                        slotProps={{
-                          worktreeId: row.worktreeId,
-                          ...(row.worktree?.branch !== undefined ? { branch: row.worktree.branch } : {}),
-                          nodeId: row.nodeId,
-                          parentConversationId: effectiveBoard.group.coordinatorConversationId,
-                          mode: 'member',
-                        }}
-                      />
-                    ) : null}
-                    {canAbort ? (
-                      <Button
-                        variant="danger"
-                        size="xs"
-                        icon="square"
-                        className="sw-panel-member-abort"
-                        disabled={busyAction !== undefined}
-                        onClick={() => onAbortMember(row.name)}
-                      >
-                        {t(C.ACTION_ABORT)}
-                      </Button>
-                    ) : null}
-                  </div>
                 ) : null}
-              </div>
+              </ListRow>
             )
           })}
-        </div>
+        </List>
       )}
     </div>
   )
@@ -249,7 +256,7 @@ export function SwarmBoardPostsSection(props: SwarmBoardPostsSectionProps): Reac
           </Button>
           <IconButton
             variant="ghost"
-            size="sm"
+            size="xs"
             icon="x"
             className="sw-panel-jump-back-clear"
             label={t(C.JUMP_BACK_DISMISS)}
@@ -335,7 +342,7 @@ export function SwarmBoardPostsSection(props: SwarmBoardPostsSectionProps): Reac
       {readError ? (
         <Stack direction="horizontal" gap="sm" align="center" className="sw-panel-empty-hint">
           <span>{readError}</span>
-          <Button size="xs" icon="rotate-cw" onClick={onRetryRead}>
+          <Button variant="secondary" size="xs" icon="rotate-cw" onClick={onRetryRead}>
             {t(C.PANEL_RETRY)}
           </Button>
         </Stack>
@@ -384,7 +391,7 @@ export function SwarmCloseGroupDialog(props: SwarmCloseGroupDialogProps): ReactN
               {error ? <Callout tone="err" title={t(C.PANEL_CLOSE_DIALOG_TITLE)}><p className="sw-panel-error-text">{error}</p></Callout> : null}
             </div>
             <div className="modal-footer sw-close-dialog-actions">
-              <Button size="sm" disabled={closing} onClick={onClose}>{t(C.PANEL_CANCEL)}</Button>
+              <Button variant="ghost" size="sm" disabled={closing} onClick={onClose}>{t(C.PANEL_CANCEL)}</Button>
               <Button variant="primary" size="sm" pending={closing} className="sw-close-dialog-confirm" onClick={onConfirm}>
                 {t(C.PANEL_CLOSE_CONFIRM)}
               </Button>

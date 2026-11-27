@@ -10,7 +10,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 24px;
+  height: var(--control-h-xs, 22px);
   padding: 0 7px;
   margin: 0;
   border: 1px solid transparent;
@@ -18,7 +18,7 @@
   background: transparent;
   color: var(--fg-secondary);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--control-font-xs, 11px);
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
@@ -92,18 +92,14 @@
 
 @media (max-width: 680px) {
   .plan-toolbar-btn {
-    height: 22px;
     padding: 0 6px;
-    font-size: 11px;
     max-width: 120px;
   }
 }
 
 @container (max-width: 450px) {
   .plan-toolbar-btn {
-    height: 22px;
     padding: 0 6px;
-    font-size: 11px;
     max-width: 120px;
   }
 }
@@ -195,19 +191,7 @@
 
 /* ---- Workbench panel ---- */
 .plan-workbench {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
   padding: 2px 4px;
-  min-width: 0;
-}
-
-.plan-workbench-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -219,13 +203,6 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--fg);
-}
-
-.plan-error-text {
-  margin: 0 0 var(--space-2);
-  font-size: 12px;
-  color: var(--fg-secondary);
-  overflow-wrap: anywhere;
 }
 
 /* Workbench markdown typography (compound selector overrides host .msg-ai-body cleanly) */
@@ -270,13 +247,6 @@
   font-size: 12.5px;
   line-height: 1.55;
   resize: vertical;
-}
-
-.plan-editor-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
 }
 
 /* ---- Timeline 26px tool trace row（悬停/焦点高亮由宿主 .trace-block-head 整行提供） ---- */

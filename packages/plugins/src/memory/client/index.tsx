@@ -7,8 +7,14 @@ import type { ReactNode } from 'react'
 import type { ProfileDetailSlotProps } from '@helmx/protocol/browser'
 import {
   Button,
+  Callout,
+  Card,
   ErrorText,
+  Field,
   HelmxIcon,
+  HelperText,
+  LoadingState,
+  Stack,
   Switch,
   Textarea,
   usePluginContext,
@@ -281,10 +287,9 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
 
   if (isNew) {
     return (
-      <section className="section-flat">
-        <div className="section-flat-header"><span className="section-flat-title">{t(C.sectionTitle)}</span></div>
-        <div className="text-subtle">{t(C.newProfileHint)}</div>
-      </section>
+      <Card variant="subtle" title={t(C.sectionTitle)}>
+        <HelperText>{t(C.newProfileHint)}</HelperText>
+      </Card>
     )
   }
   if (effectiveId === '') return null
@@ -295,85 +300,94 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
   const dirty = view.draft !== null && view.draft !== view.memory?.content
 
   return (
-    <section className="section-flat">
-      <div className="section-flat-header memory-section-header">
-        <span className="section-flat-title">{t(C.sectionTitle)}</span>
-        {view.memory !== null && (
-          <Switch
-            checked={view.memory.enabled}
-            disabled={disabled || view.busy !== null || dreamLocksContent}
-            onChange={(next) => void handleToggle(next)}
-            label={t(C.switchLabel)}
-          />
+    <Stack gap="md">
+      <Card
+        variant="subtle"
+        title={t(C.sectionTitle)}
+        actions={
+          view.memory !== null ? (
+            <Switch
+              checked={view.memory.enabled}
+              disabled={disabled || view.busy !== null || dreamLocksContent}
+              onChange={(next) => void handleToggle(next)}
+              label={t(C.switchLabel)}
+            />
+          ) : undefined
+        }
+      >
+        {view.error !== null && (
+          <Callout tone="err">
+            <ErrorText live>{view.error}</ErrorText>
+          </Callout>
         )}
-      </div>
 
-      {view.error !== null && (
-        <ErrorText live className="memory-section-error">{view.error}</ErrorText>
-      )}
-
-      {view.memory === null ? (
-        <div className="memory-section-load">
-          {view.busy === 'load' && <HelmxIcon name="loader" size={12} className="spin-slow" />}
-          {view.error === null ? (
-            <span>{view.busy === 'load' ? t(C.loading) : t(C.notLoaded)}</span>
+        {view.memory === null ? (
+          view.busy === 'load' ? (
+            <LoadingState label={t(C.loading)} />
+          ) : view.error === null ? (
+            <HelperText>{t(C.notLoaded)}</HelperText>
           ) : (
-            <>
-              <span>{t(C.loadFailed)}</span>
+            <Stack direction="horizontal" align="center" gap="sm" wrap>
+              <HelperText>{t(C.loadFailed)}</HelperText>
               <Button variant="secondary" size="sm" disabled={view.busy !== null} onClick={() => void load(effectiveId, token)}>
                 {t(C.retry)}
               </Button>
-            </>
-          )}
-        </div>
-      ) : !view.memory.enabled ? (
-        <div className="text-subtle">{t(C.disabledHint)}</div>
-      ) : (
-        <>
-          <div className="flex-row-between memory-section-meta">
-            <span className="mono">
-              {memoryCharCount(effectiveDraft.length, locale)}
-              {effectiveDraft ? memoryLineCount(effectiveDraft.split('\n').length, locale) : ''}
-            </span>
-          </div>
-          <Textarea
-            mono
-            className="memory-section-textarea"
-            rows={8}
-            placeholder={t(C.placeholder)}
-            value={effectiveDraft}
-            disabled={disabled}
-            onChange={(e) => patchPanel(effectiveId, token, { draft: e.target.value })}
-            aria-label={t(C.textareaLabel)}
-          />
-          <div className="flex-row memory-section-actions">
-            <Button
-              variant="primary"
-              size="sm"
-              icon="save"
-              pending={view.busy === 'save'}
-              disabled={disabled || (view.busy !== null && view.busy !== 'save') || dreamLocksContent || !dirty}
-              onClick={() => void handleSave()}
+            </Stack>
+          )
+        ) : !view.memory.enabled ? (
+          <HelperText>{t(C.disabledHint)}</HelperText>
+        ) : (
+          <Stack gap="sm">
+            <Field
+              label={
+                <span className="mono tabular-nums text-subtle">
+                  {memoryCharCount(effectiveDraft.length, locale)}
+                  {effectiveDraft ? memoryLineCount(effectiveDraft.split('\n').length, locale) : ''}
+                </span>
+              }
+              hint={dirty ? t(C.dirtyHint) : undefined}
             >
-              {view.busy === 'save' ? t(C.saving) : t(C.save)}
-            </Button>
-            {dirty && <span className="text-subtle">{t(C.dirtyHint)}</span>}
-          </div>
-          <MemoryDreamBlock
-            targetId={effectiveId}
-            disabled={disabled}
-            status={view.dreamStatus}
-            error={view.dreamError}
-            busy={view.dreamBusy}
-            refreshFailed={view.dreamRefreshFailed}
-            memoryBusy={view.busy !== null}
-            onRun={() => void handleDreamRun()}
-            onAutoToggle={() => void handleDreamAutoToggle()}
-            onRefreshRetry={() => void handleDreamRefreshRetry()}
-          />
-        </>
-      )}
-    </section>
+              <Textarea
+                mono
+                className="memory-section-textarea"
+                rows={8}
+                placeholder={t(C.placeholder)}
+                value={effectiveDraft}
+                disabled={disabled}
+                onChange={(e) => patchPanel(effectiveId, token, { draft: e.target.value })}
+                aria-label={t(C.textareaLabel)}
+              />
+            </Field>
+            <Stack direction="horizontal" align="center" gap="sm" wrap>
+              <Button
+                variant="primary"
+                size="sm"
+                icon="save"
+                pending={view.busy === 'save'}
+                disabled={disabled || (view.busy !== null && view.busy !== 'save') || dreamLocksContent || !dirty}
+                onClick={() => void handleSave()}
+              >
+                {view.busy === 'save' ? t(C.saving) : t(C.save)}
+              </Button>
+            </Stack>
+          </Stack>
+        )}
+      </Card>
+      {view.memory !== null && view.memory.enabled ? (
+        <MemoryDreamBlock
+          targetId={effectiveId}
+          disabled={disabled}
+          status={view.dreamStatus}
+          error={view.dreamError}
+          busy={view.dreamBusy}
+          refreshFailed={view.dreamRefreshFailed}
+          memoryBusy={view.busy !== null}
+          onRun={() => void handleDreamRun()}
+          onAutoToggle={() => void handleDreamAutoToggle()}
+          onRefreshRetry={() => void handleDreamRefreshRetry()}
+        />
+      ) : null}
+    </Stack>
   )
 }
 
@@ -399,13 +413,16 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
   const statusLoading = status === null && error === null
   const lastError = row?.lastRun?.error
   return (
-    <div className="memory-dream-block">
-      <div className="flex-row-between memory-section-header">
-        <span className="text-subtle memory-dream-title">
+    <Card
+      variant="subtle"
+      title={
+        <Stack direction="horizontal" align="center" gap="xs" inline>
           <HelmxIcon name="moon-star" size={12} />
           <span>{t(C.dreamTitle)}</span>
-        </span>
-        <div className="flex-row memory-dream-actions">
+        </Stack>
+      }
+      actions={
+        <Stack direction="horizontal" align="center" gap="xs" wrap>
           <Button
             variant="secondary"
             size="sm"
@@ -421,31 +438,46 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
               {autoConfig.enabled ? t(C.dreamPause) : t(C.dreamResume)}
             </Button>
           )}
-        </div>
-      </div>
-      <div className="memory-dream-meta">
-        {autoConfig !== null ? (
-          <>
-            <span className="mono">{memoryDreamSchedule(autoConfig, locale)}</span>
-            {autoConfig.enabled && status?.nextRunAt !== undefined && <span className="text-subtle">{memoryDreamNextRun(status.nextRunAt, locale)}</span>}
-            {row !== undefined && <span className="text-subtle">{memoryDreamCandidates(row.candidateCount, locale)}</span>}
-            {row?.lastRun !== undefined && <span className="text-subtle">{memoryDreamLastRun(row.lastRun, locale)}</span>}
-          </>
-        ) : (
-          <span className="text-subtle">{t(error !== null ? C.dreamLoadFailed : C.dreamStatusLoading)}</span>
-        )}
-      </div>
-      {lastError && <div className="text-subtle memory-dream-diag">{memoryDreamLastError(lastError, locale)}</div>}
-      {props.refreshFailed && (
-        <div className="memory-dream-refresh-error" role="alert">
-          <span>{t(C.dreamRefreshFailed)}</span>
-          <Button variant="secondary" size="sm" disabled={disabled || busy !== null || props.memoryBusy} onClick={props.onRefreshRetry}>
-            {t(C.retry)}
-          </Button>
-        </div>
+        </Stack>
+      }
+    >
+      {statusLoading ? (
+        <LoadingState label={t(C.dreamStatusLoading)} />
+      ) : autoConfig !== null ? (
+        <Stack direction="horizontal" align="center" gap="sm" wrap className="memory-dream-meta">
+          <span className="mono tabular-nums">{memoryDreamSchedule(autoConfig, locale)}</span>
+          {autoConfig.enabled && status?.nextRunAt !== undefined && (
+            <span className="text-subtle tabular-nums">{memoryDreamNextRun(status.nextRunAt, locale)}</span>
+          )}
+          {row !== undefined && (
+            <span className="text-subtle tabular-nums">{memoryDreamCandidates(row.candidateCount, locale)}</span>
+          )}
+          {row?.lastRun !== undefined && (
+            <span className="text-subtle tabular-nums">{memoryDreamLastRun(row.lastRun, locale)}</span>
+          )}
+        </Stack>
+      ) : (
+        <HelperText>{t(C.dreamLoadFailed)}</HelperText>
       )}
-      {error !== null && <ErrorText live className="memory-section-error">{error}</ErrorText>}
-      <div className="text-subtle">{t(C.dreamGlobalHint)}</div>
-    </div>
+      {lastError && <HelperText className="memory-dream-diag">{memoryDreamLastError(lastError, locale)}</HelperText>}
+      {props.refreshFailed && (
+        <Callout tone="warn">
+          <div className="memory-dream-refresh-error" role="alert">
+            <Stack direction="horizontal" align="center" gap="sm" wrap>
+              <span>{t(C.dreamRefreshFailed)}</span>
+              <Button variant="secondary" size="sm" disabled={disabled || busy !== null || props.memoryBusy} onClick={props.onRefreshRetry}>
+                {t(C.retry)}
+              </Button>
+            </Stack>
+          </div>
+        </Callout>
+      )}
+      {error !== null && (
+        <Callout tone="err">
+          <ErrorText live>{error}</ErrorText>
+        </Callout>
+      )}
+      <HelperText>{t(C.dreamGlobalHint)}</HelperText>
+    </Card>
   )
 }

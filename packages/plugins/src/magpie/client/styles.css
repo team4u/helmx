@@ -1,10 +1,19 @@
 /**
  * builtin:magpie plugin styles.
  *
- * Generic structure reuses host design-system primitives (.screen-container / .helmx-table-wrap /
- * .helmx-table / .kv-list / .callout / .loading-state / .helmx-popover-content, etc.).
- * This stylesheet contains only Magpie composer quota trigger & popover layout rules.
+ * Generic settings-panel structure reuses host SDK primitives (<ScreenSection>, <KvGrid>,
+ * <List>, <ListRow>, <Callout>, <EmptyState>, <LoadingState>, <Popover>, etc.).
+ * This stylesheet contains only Magpie composer quota trigger/popover layout rules and
+ * multi-line diagnostic text wrapping inside compact list rows.
  */
+
+.magpie-diag-row .helmx-list-row-title {
+  white-space: normal;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
 
 .magpie-quota-trigger {
   appearance: none;

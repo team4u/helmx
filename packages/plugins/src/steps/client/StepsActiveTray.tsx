@@ -173,6 +173,7 @@ function StepsActiveTrayInner({
       }
       barAction={
         <IconButton
+          variant="ghost"
           icon="x"
           size="xs"
           label={t(STEPS_COPY.trayDismiss)}
