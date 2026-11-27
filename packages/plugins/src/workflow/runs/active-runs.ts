@@ -119,7 +119,9 @@ export class RunCoordinatorCore {
   isRunSuspending(run: ActiveRun): boolean {
     return (
       run.suspended === true ||
-      (this.isAutoRecoverOnRestart() && this.isHostClosing() && run.userAborted !== true)
+      // Why: 仅在宿主确实关停时才现读配置（唯一需要它裁决的场景）：`ctx.getConfig()` 在 PluginHost dispose 后抛
+      // `plugin_host_disposed`，而 run.abort 监听器等调用方运行在可能晚于 dispose 的异步结算尾部。
+      (run.userAborted !== true && this.isHostClosing() && this.isAutoRecoverOnRestart())
     )
   }
 
