@@ -11,6 +11,11 @@ import {
   DialogPortal,
   DialogTitle,
 } from '../src/ui/Dialog.js'
+import { ModalDialog } from '../src/ui/ModalDialog.js'
+import { Kbd } from '../src/ui/Kbd.js'
+import { Tabs, TabsList, TabsTrigger } from '../src/ui/Tabs.js'
+import { SearchBox } from '../src/ui/SearchBox.js'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from '../src/ui/DropdownMenu.js'
 
 const e = React.createElement
 
@@ -86,4 +91,71 @@ test('Dialog compound properties (Dialog.Portal, Dialog.Content, etc.) behave id
   assert.ok(html.includes('role="dialog"'))
   assert.ok(html.includes('Compound title'))
   assert.ok(html.includes('Compound description'))
+})
+
+test('Pure-Node SSR (window === undefined): ModalDialog, Kbd, TabsList scrollable, SearchBox surface, and DropdownMenuItem slots render cleanly', { timeout: 60_000 }, () => {
+  assert.equal(typeof window, 'undefined', 'pure Node SSR environment must not define window')
+
+  const modalHtml = renderToString(
+    e(
+      ModalDialog,
+      {
+        open: true,
+        onClose: () => {},
+        title: 'Save template',
+        icon: 'bookmark',
+        description: 'Reusable model tier preset.',
+        size: 'sm',
+        footer: e('button', { type: 'button', className: 'btn btn-primary btn-sm' }, 'Save'),
+        children: e('div', null, 'Modal body'),
+      },
+    ),
+  )
+  assert.ok(modalHtml.includes('helmx-modal-backdrop'), 'ModalDialog must inline portal in pure Node SSR')
+  assert.ok(modalHtml.includes('helmx-modal helmx-modal-sm'), 'ModalDialog size="sm" class lands')
+  assert.ok(modalHtml.includes('Save template') && modalHtml.includes('Reusable model tier preset.'))
+  assert.ok(modalHtml.includes('helmx-modal-footer'))
+
+  const kbdHtml = renderToString(e(Kbd, { size: 'sm', desktopOnly: true }, 'Ctrl+.'))
+  assert.ok(kbdHtml.includes('<kbd class="helmx-kbd helmx-kbd-sm helmx-kbd-desktop-only">Ctrl+.</kbd>'))
+
+  const tabsHtml = renderToString(
+    e(
+      Tabs,
+      { value: 'a', variant: 'underline', size: 'sm' },
+      e(
+        TabsList,
+        { scrollable: true, 'aria-label': 'Scrollable tabs' },
+        e(TabsTrigger, { value: 'a' }, 'Tab A'),
+        e(TabsTrigger, { value: 'b' }, 'Tab B'),
+      ),
+    ),
+  )
+  assert.ok(tabsHtml.includes('tabs-bar helmx-tabs-scrollable'), 'TabsList scrollable renders .helmx-tabs-scrollable in SSR')
+  assert.ok(!tabsHtml.includes('data-overflow-left='), 'no overflow attrs in pure SSR')
+
+  const searchHtml = renderToString(
+    e(SearchBox, { value: '', onChange: () => {}, surface: 'frameless', placeholder: 'Jump...' }),
+  )
+  assert.ok(searchHtml.includes('search-box search-box-frameless'))
+
+  const menuHtml = renderToString(
+    e(
+      DropdownMenu,
+      { open: true },
+      e(
+        DropdownMenuContent,
+        null,
+        e(
+          DropdownMenuItem,
+          { icon: 'list-tree', description: 'Draft plan before editing', shortcut: 'Ctrl+.', checked: true },
+          'Plan mode',
+        ),
+      ),
+    ),
+  )
+  assert.ok(menuHtml.includes('helmx-dropdown-item-has-desc'))
+  assert.ok(menuHtml.includes('data-checked="true"'))
+  assert.ok(menuHtml.includes('helmx-dropdown-item-shortcut'))
+  assert.ok(menuHtml.includes('helmx-dropdown-item-check'))
 })

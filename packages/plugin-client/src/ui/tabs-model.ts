@@ -1,6 +1,6 @@
 import type React from 'react'
 
-export type TabsVariant = 'underline' | 'segmented' | 'pills' | 'default'
+export type TabsVariant = 'underline' | 'segmented' | 'pills'
 export type TabsSize = 'sm' | 'md'
 
 export interface SegmentedControlItem<T extends string = string> {

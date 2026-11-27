@@ -763,13 +763,13 @@ export interface PluginClientContext {
  * - ModelPickerControl: shared model + thinking-level picker (reads the catalog via the useHostModels
  *   host port slice; apply/reset callbacks keep the PI follow-default semantics);
  * - model formatting pure functions: formatModelShortName / resolveEffectiveThinkingLevel / resolveDefaultChainThinkingLevel (kernel-ordered `conversation` / `compaction` / `tier` level resolution);
- * - form, card & layout primitives: Button / IconButton / Badge / Stack / Input / Textarea /
+ * - form, card & layout primitives: Button / IconButton / Badge / Kbd / Stack / Input / Textarea /
  *   Field / HelperText / ErrorText / Card / SelectCard / CardGrid / MonoId;
  * - accessibility & overlay components: Switch / Select / MultiSelect / Checkbox / Tabs family
  *   (Tabs / TabsList / TabsTrigger / TabsContent) / SegmentedControl / HelmxIcon / ViewBoundary /
  *   Callout / Dialog family (Dialog / DialogPortal / DialogOverlay / DialogContent / DialogTitle /
- *   DialogDescription / DialogClose / DialogTrigger) / Popover family (Popover / PopoverTrigger /
- *   PopoverContent / PopoverClose) / Tooltip family (Tooltip / TooltipProvider / TooltipRoot /
+ *   DialogDescription / DialogClose / DialogTrigger) / ModalDialog (centered modal shell) /
+ *   Popover family (Popover / PopoverTrigger / PopoverContent / PopoverClose) / Tooltip family (Tooltip / TooltipProvider / TooltipRoot /
  *   TooltipTrigger / TooltipContent) / DropdownMenu family (DropdownMenu / DropdownMenuRoot /
  *   DropdownMenuTrigger / DropdownMenuPortal / DropdownMenuContent / DropdownMenuItem /
  *   DropdownMenuSeparator / DropdownMenuLabel / DropdownMenuGroup) / AlertDialog family (AlertDialog /
@@ -995,6 +995,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'Button',
   'IconButton',
   'Badge',
+  'Kbd',
   'Stack',
   'Input',
   'Textarea',
@@ -1015,6 +1016,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'DialogDescription',
   'DialogClose',
   'DialogTrigger',
+  'ModalDialog',
   'Popover',
   'PopoverTrigger',
   'PopoverContent',

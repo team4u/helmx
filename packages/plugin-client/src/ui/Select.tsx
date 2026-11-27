@@ -6,6 +6,7 @@ import { uiCopy } from '../ui-copy.js'
 import { Checkbox } from './Checkbox.js'
 import { FieldContext, mergeAriaDescribedBy, useFieldContext } from './field-context.js'
 import { Popover, PopoverContent, PopoverTrigger } from './Popover.js'
+import { SearchBox } from './SearchBox.js'
 import { useOverlayChildStyle } from './overlay-stack.js'
 import { usePluginScopeId } from './plugin-scope.js'
 import type {
@@ -191,7 +192,7 @@ function SingleSelectInner<T extends string = string>({
               sideOffset={4}
               avoidCollisions
               data-plugin-id={pluginScopeId}
-              className={`helmx-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
+              className={`helmx-select-popover${popoverClassName ? ` ${popoverClassName}` : ''}`}
               style={layeredPopoverStyle}
             >
               <RadixSelect.Viewport className="helmx-select-viewport">
@@ -441,20 +442,22 @@ function MultiSelectInner<T extends string = string>({
       {/* Search box */}
       {searchable && options.length > 4 && (
         <div className="helmx-select-search" onClick={(e) => e.stopPropagation()}>
-          <input
-            type="text"
-            role="combobox"
-            aria-expanded={isOpen}
-            aria-controls={listboxId}
-            aria-autocomplete="list"
-            aria-activedescendant={activeOptionId}
+          <SearchBox
+            size="sm"
+            surface="subtle"
+            clearOnEscape={false}
+            inputRole="combobox"
+            ariaExpanded={isOpen}
+            ariaControls={listboxId}
+            ariaAutocomplete="list"
+            ariaActiveDescendant={activeOptionId}
             value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value)
+            onChange={(nextValue) => {
+              setSearchTerm(nextValue)
               setActiveIndex(-1)
             }}
             placeholder={t(uiCopy.searchPlaceholder)}
-            aria-label={t(uiCopy.searchOptions)}
+            ariaLabel={t(uiCopy.searchOptions)}
           />
         </div>
       )}
@@ -581,7 +584,7 @@ function MultiSelectInner<T extends string = string>({
 
         {inline ? (
           <div
-            className={`helmx-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
+            className={`helmx-select-popover${popoverClassName ? ` ${popoverClassName}` : ''}`}
             style={{ position: 'relative', marginTop: 4, ...layeredPopoverStyle }}
           >
             <FieldContext.Provider value={null}>{contentNode}</FieldContext.Provider>
@@ -591,7 +594,7 @@ function MultiSelectInner<T extends string = string>({
             side={popperSide}
             sideOffset={4}
             avoidCollisions
-            className={`helmx-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
+            className={`helmx-select-popover${popoverClassName ? ` ${popoverClassName}` : ''}`}
           >
             <FieldContext.Provider value={null}>{contentNode}</FieldContext.Provider>
           </PopoverContent>

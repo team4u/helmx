@@ -18,6 +18,7 @@ import { usePluginTranslator } from './i18n.js'
 import { HelmxIcon } from './icons.js'
 import { useScreenHost } from './screen-host.js'
 import { uiCopy } from './ui-copy.js'
+import { EmptyState } from './ui/EmptyState.js'
 import { LoadingState } from './ui/LoadingState.js'
 import { usePluginScopeId } from './ui/plugin-scope.js'
 import { ScreenToolbarContext } from './ui/screen-toolbar-context.js'
@@ -420,7 +421,7 @@ export function DataTable(props: DataTableProps): ReactNode {
           <tbody>
             <tr>
               <td colSpan={colSpan} className="table-empty">
-                {emptyLabel}
+                <EmptyState compact title={emptyLabel} />
               </td>
             </tr>
           </tbody>

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useRef, useState, forwardRef } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState, forwardRef } from 'react'
 import * as TabsPrimitive from '@radix-ui/react-tabs'
 import type {
   TabsVariant,
@@ -16,11 +16,8 @@ export type {
   TabsContextValue,
 }
 
-type ResolvedTabsVariant = 'underline' | 'segmented' | 'pills'
-
 const ROOT_VARIANT_CLASS: Record<TabsVariant, string> = {
   underline: 'helmx-tabs-underline',
-  default: 'helmx-tabs-underline',
   segmented: 'helmx-tabs-segmented',
   pills: 'helmx-tabs-pills',
 }
@@ -30,19 +27,19 @@ const ROOT_SIZE_CLASS: Record<TabsSize, string> = {
   md: 'helmx-tabs-md',
 }
 
-const LIST_VARIANT_CLASS: Record<ResolvedTabsVariant, string> = {
+const LIST_VARIANT_CLASS: Record<TabsVariant, string> = {
   underline: 'tabs-bar',
   segmented: 'segmented-control',
   pills: 'tabs-pills',
 }
 
-const TRIGGER_VARIANT_CLASS: Record<ResolvedTabsVariant, string> = {
+const TRIGGER_VARIANT_CLASS: Record<TabsVariant, string> = {
   underline: 'tab-btn',
   segmented: 'segmented-control-btn',
   pills: 'tabs-pill',
 }
 
-const TRIGGER_ACTIVE_CLASS: Record<ResolvedTabsVariant, string> = {
+const TRIGGER_ACTIVE_CLASS: Record<TabsVariant, string> = {
   underline: 'tab-btn-active',
   segmented: 'is-active',
   pills: 'is-active',
@@ -53,13 +50,13 @@ function hasClassToken(className: string, token: string): boolean {
   return className.split(/\s+/).includes(token)
 }
 
-function resolveListVariant(variant: TabsVariant, className: string): ResolvedTabsVariant {
+function resolveListVariant(variant: TabsVariant, className: string): TabsVariant {
   if (variant === 'segmented' || hasClassToken(className, 'segmented-control')) return 'segmented'
   if (variant === 'pills' || hasClassToken(className, 'tabs-pills')) return 'pills'
   return 'underline'
 }
 
-function resolveTriggerVariant(variant: TabsVariant, className: string): ResolvedTabsVariant {
+function resolveTriggerVariant(variant: TabsVariant, className: string): TabsVariant {
   if (variant === 'segmented' || hasClassToken(className, 'segmented-control-btn')) return 'segmented'
   if (variant === 'pills' || hasClassToken(className, 'tabs-pill')) return 'pills'
   return 'underline'
@@ -69,7 +66,7 @@ const TabsContext = createContext<TabsContextValue>({
   variant: 'underline',
 })
 
-const TabsListContext = createContext<{ variant: ResolvedTabsVariant }>({
+const TabsListContext = createContext<{ variant: TabsVariant }>({
   variant: 'underline',
 })
 
@@ -138,22 +135,84 @@ const TabsRoot = forwardRef<React.ComponentRef<typeof TabsPrimitive.Root>, TabsP
 export interface TabsListProps extends React.ComponentPropsWithoutRef<typeof TabsPrimitive.List> {
   variant?: TabsVariant
   size?: TabsSize
+  /** Enable horizontal overflow scrolling with CSS edge fade masks (`data-overflow-left` / `data-overflow-right`). */
+  scrollable?: boolean
 }
 
 export const TabsList = forwardRef<React.ComponentRef<typeof TabsPrimitive.List>, TabsListProps>(
-  function TabsList({ variant: variantProp, size: _size, className = '', ...props }, ref) {
+  function TabsList({ variant: variantProp, size: _size, scrollable = false, className = '', children, ...props }, ref) {
     const context = useContext(TabsContext)
     const variant = variantProp ?? context.variant
     const resolvedVariant = resolveListVariant(variant, className)
+    const localRef = useRef<HTMLDivElement | null>(null)
+    const [overflow, setOverflow] = useState<{ left: boolean; right: boolean }>({ left: false, right: false })
+
+    const setMergedRef = useCallback(
+      (node: HTMLDivElement | null) => {
+        localRef.current = node
+        if (typeof ref === 'function') {
+          ref(node)
+        } else if (ref !== null) {
+          ref.current = node
+        }
+      },
+      [ref],
+    )
+
+    const syncOverflow = useCallback(() => {
+      const el = localRef.current
+      if (el === null) return
+      const left = el.scrollLeft > 2
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+      setOverflow((prev) => (prev.left === left && prev.right === right ? prev : { left, right }))
+    }, [])
+
+    const childCount = React.Children.count(children)
+
+    useEffect(() => {
+      if (!scrollable) {
+        setOverflow((prev) => (prev.left || prev.right ? { left: false, right: false } : prev))
+        return
+      }
+      const el = localRef.current
+      if (el === null) return
+      syncOverflow()
+      el.addEventListener('scroll', syncOverflow, { passive: true })
+      const hasWindow = typeof window !== 'undefined'
+      if (hasWindow) {
+        window.addEventListener('resize', syncOverflow)
+      }
+      const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(syncOverflow) : null
+      ro?.observe(el)
+      return () => {
+        el.removeEventListener('scroll', syncOverflow)
+        if (hasWindow) {
+          window.removeEventListener('resize', syncOverflow)
+        }
+        ro?.disconnect()
+      }
+    }, [scrollable, syncOverflow, childCount])
 
     const defaultBaseClass = LIST_VARIANT_CLASS[resolvedVariant]
-    const listClass = hasClassToken(className, defaultBaseClass)
-      ? className
-      : [defaultBaseClass, className].filter(Boolean).join(' ')
+    const listClass = [
+      hasClassToken(className, defaultBaseClass) ? undefined : defaultBaseClass,
+      scrollable && !hasClassToken(className, 'helmx-tabs-scrollable') ? 'helmx-tabs-scrollable' : undefined,
+      className || undefined,
+    ]
+      .filter(Boolean)
+      .join(' ')
 
     return (
       <TabsListContext.Provider value={{ variant: resolvedVariant }}>
-        <TabsPrimitive.List ref={ref} className={listClass} {...props} />
+        <TabsPrimitive.List
+          ref={setMergedRef}
+          className={listClass}
+          data-overflow-left={scrollable && overflow.left ? 'true' : undefined}
+          data-overflow-right={scrollable && overflow.right ? 'true' : undefined}
+          {...props}
+        >
+          {children}
+        </TabsPrimitive.List>
       </TabsListContext.Provider>
     )
   },

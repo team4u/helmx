@@ -12,6 +12,7 @@
  */
 import * as React from 'react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
+import { HelmxIcon } from '../icons.js'
 import { useOverlayChildStyle } from './overlay-stack.js'
 import { usePluginScopeId } from './plugin-scope.js'
 
@@ -76,19 +77,88 @@ export const DropdownMenuContent = React.forwardRef<
 DropdownMenuContent.displayName = 'DropdownMenuContent'
 
 export interface DropdownMenuItemProps extends React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item> {
+  /** Optional leading icon: HelmxIcon name string or custom ReactNode. */
+  icon?: string | React.ReactNode
+  /** Optional secondary muted description line rendered beneath the label. */
+  description?: React.ReactNode
+  /** Optional right-aligned keyboard shortcut hint. */
+  shortcut?: React.ReactNode
+  /** Optional right-aligned trailing slot (badges, status indicators, etc.). */
+  trailing?: React.ReactNode
+  /** Optional checked / active state: stamps `data-checked` and renders a trailing check glyph when `true`. */
+  checked?: boolean
+  /** Destructive action tone. */
   danger?: boolean
+}
+
+function hasRenderable(node: React.ReactNode): boolean {
+  return node !== undefined && node !== null && typeof node !== 'boolean'
 }
 
 export const DropdownMenuItem = React.forwardRef<
   React.ComponentRef<typeof DropdownMenuPrimitive.Item>,
   DropdownMenuItemProps
->(({ className = '', danger = false, ...props }, ref) => (
-  <DropdownMenuPrimitive.Item
-    ref={ref}
-    className={`helmx-dropdown-item popover-item ${danger ? 'helmx-dropdown-item-danger popover-item-danger' : ''} ${className}`.trim()}
-    {...props}
-  />
-))
+>(({ className = '', icon, description, shortcut, trailing, checked, danger = false, children, ...props }, ref) => {
+  const hasStructuredSlots =
+    icon !== undefined ||
+    description !== undefined ||
+    shortcut !== undefined ||
+    trailing !== undefined ||
+    checked !== undefined
+  const hasDesc = hasRenderable(description)
+  const hasShortcut = hasRenderable(shortcut)
+  const hasTrailing = hasRenderable(trailing)
+  const renderedIcon =
+    typeof icon === 'string'
+      ? icon !== ''
+        ? <HelmxIcon name={icon} size={14} />
+        : null
+      : hasRenderable(icon)
+        ? icon
+        : null
+
+  const itemClass = [
+    'helmx-dropdown-item',
+    'popover-item',
+    danger ? 'helmx-dropdown-item-danger popover-item-danger' : undefined,
+    hasDesc ? 'helmx-dropdown-item-has-desc' : undefined,
+    className || undefined,
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  return (
+    <DropdownMenuPrimitive.Item
+      ref={ref}
+      className={itemClass}
+      data-checked={checked !== undefined ? (checked ? 'true' : 'false') : undefined}
+      {...props}
+    >
+      {hasStructuredSlots ? (
+        <>
+          {renderedIcon !== null ? (
+            <span className="helmx-dropdown-item-icon" aria-hidden="true">
+              {renderedIcon}
+            </span>
+          ) : null}
+          <span className="helmx-dropdown-item-body">
+            <span className="helmx-dropdown-item-label">{children}</span>
+            {hasDesc ? <span className="helmx-dropdown-item-desc">{description}</span> : null}
+          </span>
+          {hasTrailing || hasShortcut || checked === true ? (
+            <span className="helmx-dropdown-item-trailing">
+              {hasTrailing ? trailing : null}
+              {hasShortcut ? <span className="helmx-dropdown-item-shortcut">{shortcut}</span> : null}
+              {checked === true ? <HelmxIcon name="check" size={13} className="helmx-dropdown-item-check" /> : null}
+            </span>
+          ) : null}
+        </>
+      ) : (
+        children
+      )}
+    </DropdownMenuPrimitive.Item>
+  )
+})
 DropdownMenuItem.displayName = 'DropdownMenuItem'
 
 export interface DropdownMenuSeparatorProps extends React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator> {}

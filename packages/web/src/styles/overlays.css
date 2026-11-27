@@ -200,10 +200,12 @@
 }
 
 .helmx-popover-content {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm, 7px);
-  box-shadow: var(--shadow-lg, 0 10px 28px rgba(0, 0, 0, 0.16));
+  background: var(--pop-bg);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
   padding: 4px;
   outline: none;
   box-sizing: border-box;
@@ -214,17 +216,19 @@
 }
 
 .helmx-popover-arrow {
-  fill: var(--bg-elevated);
-  stroke: var(--border-strong);
+  fill: var(--pop-bg);
+  stroke: var(--border);
   stroke-width: 1px;
 }
 
 .helmx-dropdown-content {
   min-width: 180px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm, 7px);
-  box-shadow: var(--shadow-lg, 0 10px 28px rgba(0, 0, 0, 0.16));
+  background: var(--pop-bg);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
   padding: 4px;
   outline: none;
   box-sizing: border-box;
@@ -248,8 +252,8 @@
 }
 
 .helmx-dropdown-arrow {
-  fill: var(--bg-elevated);
-  stroke: var(--border-strong);
+  fill: var(--pop-bg);
+  stroke: var(--border);
   stroke-width: 1px;
 }
 
@@ -270,6 +274,78 @@
   user-select: none;
   box-sizing: border-box;
   transition: background 80ms ease, color 80ms ease;
+}
+
+.helmx-dropdown-item-has-desc {
+  align-items: flex-start;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.helmx-dropdown-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.helmx-dropdown-item-has-desc .helmx-dropdown-item-icon {
+  margin-top: 1px;
+}
+
+.helmx-dropdown-item[data-checked='true'] .helmx-dropdown-item-icon {
+  color: var(--accent);
+}
+
+.helmx-dropdown-item-danger .helmx-dropdown-item-icon {
+  color: currentColor;
+}
+
+.helmx-dropdown-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.helmx-dropdown-item-label {
+  min-width: 0;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.helmx-dropdown-item-desc {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--fg-muted);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.helmx-dropdown-item-trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 8px;
+}
+
+.helmx-dropdown-item-shortcut {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.helmx-dropdown-item-check {
+  flex-shrink: 0;
+  color: var(--accent);
 }
 
 .helmx-dropdown-item[data-highlighted],
@@ -356,26 +432,36 @@
   stroke-width: 1px;
 }
 
-/* Radix Popper Wrapper 嵌套适配 */
+/* Radix Popper Wrapper 嵌套适配与统一浮层材质（Select / DropdownMenu / Popover / ModelPicker） */
+.helmx-popover-content.composer-popover,
+.helmx-popover-content.composer-model-popover {
+  background: var(--pop-bg);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
 [data-radix-popper-content-wrapper] .pane-more-popover {
   position: static;
   top: auto;
   right: auto;
-  border-radius: var(--radius-sm, 7px);
+  border-radius: var(--radius-md);
 }
 
 [data-radix-popper-content-wrapper] .composer-model-popover {
   position: static;
   bottom: auto;
   left: auto;
-  border-radius: var(--radius-md, 10px);
+  border-radius: var(--radius-md);
 }
 
 [data-radix-popper-content-wrapper] .agent-standby-profile-popover {
   position: static;
   bottom: auto;
   left: auto;
-  border-radius: var(--radius-sm, 7px);
+  border-radius: var(--radius-md);
 }
 
 [data-radix-popper-content-wrapper] .helmx-select-popover {
@@ -386,7 +472,7 @@
   min-width: var(--radix-select-trigger-width, 100%);
   max-width: var(--radix-select-content-available-width, 360px);
   max-height: var(--radix-select-content-available-height, 240px);
-  border-radius: var(--radius-sm, 7px);
+  border-radius: var(--radius-md);
   z-index: var(--z-dialog-top);
 }
 

@@ -10,6 +10,103 @@
 }
 
 /* ==========================================================================
+ * 下划线页签原语（Tabs variant="underline"）与横向溢出渐变遮罩
+ * ========================================================================== */
+
+.tabs-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  height: 36px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.tab-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 10px;
+  font-size: var(--control-font-md);
+  font-weight: 500;
+  color: var(--fg-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+  user-select: none;
+  box-sizing: border-box;
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+.tab-btn:focus-visible:not(:disabled):not([data-disabled]) {
+  outline: none;
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1.5px var(--border-focus);
+  border-radius: var(--radius-xs);
+}
+
+@media (hover: hover) {
+  .tab-btn:hover:not(:disabled):not([data-disabled]) {
+    color: var(--fg);
+  }
+}
+
+.tab-btn-active,
+.tab-btn[data-state='active'] {
+  color: var(--fg);
+  border-bottom-color: var(--fg);
+}
+
+.tab-btn:disabled,
+.tab-btn[data-disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.helmx-tabs-sm .tab-btn {
+  padding: 0 8px;
+  font-size: var(--control-font-sm);
+}
+
+.helmx-tabs-md .tab-btn {
+  padding: 0 10px;
+  font-size: var(--control-font-md);
+}
+
+/* 可横向滚动页签条（TabsList scrollable）：隐藏原生滚动条并按左右溢出态显示边缘淡出遮罩 */
+.helmx-tabs-scrollable {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.helmx-tabs-scrollable::-webkit-scrollbar {
+  display: none;
+}
+
+.helmx-tabs-scrollable[data-overflow-left='true']:not([data-overflow-right='true']) {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 100%);
+}
+
+.helmx-tabs-scrollable[data-overflow-right='true']:not([data-overflow-left='true']) {
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 18px), transparent 100%);
+}
+
+.helmx-tabs-scrollable[data-overflow-left='true'][data-overflow-right='true'] {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+}
+
+/* ==========================================================================
  * 分段控制器原语（SegmentedControl & Tabs variant="segmented"）
  * ========================================================================== */
 

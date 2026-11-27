@@ -23,10 +23,17 @@ import { ScreenToolbarContext } from './screen-toolbar-context.js'
 
 export type SearchBoxVariant = 'default' | 'toolbar'
 export type SearchBoxSize = 'sm' | 'md'
+export type SearchBoxSurface = 'default' | 'subtle' | 'frameless'
 
 const VARIANT_CONTAINER_CLASS: Record<SearchBoxVariant, string> = {
   default: 'search-box',
   toolbar: 'search-box search-box-toolbar',
+}
+
+const SURFACE_CLASS: Record<SearchBoxSurface, string | undefined> = {
+  default: undefined,
+  subtle: 'search-box-subtle',
+  frameless: 'search-box-frameless',
 }
 
 const DEFAULT_CLEAR_BUTTON_CLASS = 'btn btn-ghost btn-sm search-box-clear'
@@ -49,6 +56,8 @@ export interface SearchBoxProps {
   variant?: SearchBoxVariant
   /** Control height tier (default `'md'`: 32px; `'sm'`: 28px for compact toolbars and narrow panels). */
   size?: SearchBoxSize
+  /** Container surface material: `'default'` (elevated bordered), `'subtle'` (muted fill), or `'frameless'` (transparent borderless). */
+  surface?: SearchBoxSurface
   placeholder?: string
   /** Accessible name of the input (mirrors the visible placeholder intent). */
   ariaLabel?: string
@@ -97,6 +106,7 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
     onChange,
     variant = 'default',
     size = 'md',
+    surface,
     placeholder,
     ariaLabel,
     clearLabel = t(uiCopy.clear),
@@ -121,9 +131,14 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
   const escapeClearEnabled = clearOnEscape ?? (variant === 'toolbar' || inScreenToolbar)
   const resolvedIcon = icon !== undefined ? icon : <HelmxIcon name="search" size={size === 'sm' ? 13 : 14} />
 
+  const resolvedSurface: SearchBoxSurface = surface ?? 'default'
+  const surfaceClass = SURFACE_CLASS[resolvedSurface]
   const baseContainerClass =
-    variant === 'toolbar'
-      ? mergeClassTokens(VARIANT_CONTAINER_CLASS.toolbar, className)
+    variant === 'toolbar' || surface !== undefined
+      ? mergeClassTokens(
+          mergeClassTokens(VARIANT_CONTAINER_CLASS[variant], surfaceClass),
+          className,
+        )
       : (className ?? VARIANT_CONTAINER_CLASS[variant])
   const containerClass =
     size === 'sm' ? mergeClassTokens(baseContainerClass, 'search-box-sm') : baseContainerClass

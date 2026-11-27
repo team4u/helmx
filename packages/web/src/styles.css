@@ -22,7 +22,6 @@
 @import './styles/composer-widgets.css' layer(host-components);
 @import './styles/segmented.css' layer(host-components);
 @import './styles/overlays.css' layer(host-components);
-@import './styles/search-box.css' layer(host-components);
 @import './styles/standby.css' layer(host-components);
 @import './styles/outline.css' layer(host-components);
 @import './styles/overview.css' layer(host-components);

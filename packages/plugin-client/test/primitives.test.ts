@@ -49,7 +49,7 @@ const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
 test('layout primitives are in the shared SDK and the protocol manifest, and every manifest symbol is really exported (bidirectional locking)', { timeout: 60_000 }, () => {
-  for (const name of ['Screen', 'ScreenSection', 'ScreenToolbar', 'DataTable', 'KvGrid', 'List', 'ListRow', 'TabCount']) {
+  for (const name of ['Screen', 'ScreenSection', 'ScreenToolbar', 'DataTable', 'KvGrid', 'List', 'ListRow', 'TabCount', 'ModalDialog', 'Kbd']) {
     assert.ok(
       (PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes(name),
       `PLUGIN_CLIENT_SHARED_EXPORTS must include ${name}`,
@@ -279,6 +279,8 @@ test('DataTable: the empty state renders the .table-empty placeholder row; the d
     }),
   )
   assert.match(empty, /table-empty/)
+  assert.match(empty, /empty-state empty-state-compact/)
+  assert.match(empty, /empty-state-title/)
   assert.match(empty, /No records/)
   assert.doesNotMatch(empty, /<thead/)
 
