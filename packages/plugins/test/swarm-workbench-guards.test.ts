@@ -223,6 +223,7 @@ test('SwarmWorkbenchPanel: unmount and conversationId change guard stale abort_w
   })
   const confirmBtn = document.querySelector('.sw-close-dialog-confirm') as HTMLButtonElement | null
   assert.ok(confirmBtn !== null)
+  assert.ok(confirmBtn.closest('.modal-backdrop .modal.sw-close-dialog') !== null, 'SwarmCloseGroupDialog must nest DialogContent inside .modal-backdrop')
   await React.act(async () => {
     confirmBtn.click()
   })

@@ -9,7 +9,6 @@
 .sw-panel-post-body,
 .sw-peek-popover,
 .sw-peek-body,
-.sw-close-dialog,
 .sw-close-dialog-options {
   display: flex;
   flex-direction: column;
@@ -212,7 +211,7 @@
 .sw-peek-refs { padding-top: 4px; border-top: 1px solid var(--border); }
 .sw-peek-status, .sw-peek-not-found { font-size: 12.5px; color: var(--fg-secondary); padding: 6px 2px; }
 
-.sw-close-dialog { max-width: 440px; gap: 12px; }
+.sw-close-dialog { max-width: 440px; }
 .sw-close-dialog-desc { font-size: 13px; color: var(--fg-secondary); }
 .sw-close-dialog-options { gap: 8px; }
 .sw-close-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }

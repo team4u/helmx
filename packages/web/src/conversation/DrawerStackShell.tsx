@@ -125,18 +125,19 @@ export function DrawerStackShell({ activeConversationId, docked = false, inline 
     t,
   })
   const isWide = topFrame.kind === 'conversation'
-  const isDocked = docked === true && !inline
+  const isDocked = docked === true
+  const renderInline = inline || isDocked
 
   return (
     <Dialog
       open
       modal={!isDocked}
-      inline={inline}
+      inline={renderInline}
       onOpenChange={(open) => {
         if (!open) closeAllDrawers()
       }}
     >
-      <DialogPortal inline={inline}>
+      <DialogPortal inline={renderInline}>
         {!isDocked ? (
           <DialogOverlay
             className="drawer-stack-backdrop"

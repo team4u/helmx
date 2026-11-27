@@ -135,6 +135,12 @@
 /* 技能详情抽屉：紧凑文件阅读器 */
 /* 抽屉主体外层不滚动，唯一滚动容器为阅读区 .skill-reader-scroll，
    Avoid double scrollbars between the outer primary-drawer-body and the inner reading area */
+@media (min-width: 681px) {
+  .primary-drawer-content.skill-drawer-content {
+    width: min(680px, 92vw);
+  }
+}
+
 .skill-drawer-content .primary-drawer-body {
   overflow: hidden;
   display: flex;

@@ -202,7 +202,8 @@
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(540px, 100vw);
+  width: min(540px, 94vw);
+  box-sizing: border-box;
   background: var(--bg-elevated);
   border-left: 1px solid var(--border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
@@ -272,7 +273,10 @@
 
 .primary-drawer-body {
   flex: 1;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -288,13 +292,6 @@
   border-top: 1px solid var(--line-2);
   background: var(--bg-elevated);
   flex-shrink: 0;
-}
-
-@media (max-width: 640px) {
-  .primary-drawer-content {
-    width: 100vw;
-    border-left: none;
-  }
 }
 
 /* Profile 详情抽屉：空白会话引导词编辑区块与技能描述摘要 */

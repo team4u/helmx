@@ -368,24 +368,29 @@ export function SwarmCloseGroupDialog(props: SwarmCloseGroupDialogProps): ReactN
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose() }}>
       <DialogPortal>
-        <DialogOverlay />
-        <DialogContent className="modal sw-close-dialog">
-          <DialogTitle>{t(C.PANEL_CLOSE_DIALOG_TITLE)}</DialogTitle>
-          <DialogDescription className="sw-close-dialog-desc">{t(C.PANEL_CLOSE_DIALOG_DESC)}</DialogDescription>
-          <div className="sw-close-dialog-options">
-            <Checkbox checked={keepWorktree} onChange={onKeepWorktreeChange} disabled={closing} label={t(C.PANEL_CLOSE_KEEP_WORKTREE)} />
-            {hasActiveWorkingMembers ? (
-              <Checkbox checked={abortRunning} onChange={onAbortRunningChange} disabled={closing} label={t(C.PANEL_CLOSE_ABORT_RUNNING)} />
-            ) : null}
-          </div>
-          {error ? <Callout tone="err" title={t(C.PANEL_CLOSE_DIALOG_TITLE)}><p className="sw-panel-error-text">{error}</p></Callout> : null}
-          <div className="sw-close-dialog-actions">
-            <Button size="sm" disabled={closing} onClick={onClose}>{t(C.PANEL_CANCEL)}</Button>
-            <Button variant="primary" size="sm" pending={closing} className="sw-close-dialog-confirm" onClick={onConfirm}>
-              {t(C.PANEL_CLOSE_CONFIRM)}
-            </Button>
-          </div>
-        </DialogContent>
+        <DialogOverlay className="modal-backdrop">
+          <DialogContent className="modal sw-close-dialog">
+            <div className="modal-header">
+              <DialogTitle className="modal-title">{t(C.PANEL_CLOSE_DIALOG_TITLE)}</DialogTitle>
+            </div>
+            <div className="modal-body">
+              <DialogDescription className="sw-close-dialog-desc">{t(C.PANEL_CLOSE_DIALOG_DESC)}</DialogDescription>
+              <div className="sw-close-dialog-options">
+                <Checkbox checked={keepWorktree} onChange={onKeepWorktreeChange} disabled={closing} label={t(C.PANEL_CLOSE_KEEP_WORKTREE)} />
+                {hasActiveWorkingMembers ? (
+                  <Checkbox checked={abortRunning} onChange={onAbortRunningChange} disabled={closing} label={t(C.PANEL_CLOSE_ABORT_RUNNING)} />
+                ) : null}
+              </div>
+              {error ? <Callout tone="err" title={t(C.PANEL_CLOSE_DIALOG_TITLE)}><p className="sw-panel-error-text">{error}</p></Callout> : null}
+            </div>
+            <div className="modal-footer sw-close-dialog-actions">
+              <Button size="sm" disabled={closing} onClick={onClose}>{t(C.PANEL_CANCEL)}</Button>
+              <Button variant="primary" size="sm" pending={closing} className="sw-close-dialog-confirm" onClick={onConfirm}>
+                {t(C.PANEL_CLOSE_CONFIRM)}
+              </Button>
+            </div>
+          </DialogContent>
+        </DialogOverlay>
       </DialogPortal>
     </Dialog>
   )

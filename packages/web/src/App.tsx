@@ -415,8 +415,12 @@ function HelmxShellInner({
   const wasMobileDrawerOpenRef = useRef(false)
   const isDrawerViewport = useMaxWidthMediaQuery(MOBILE_DRAWER_MAX_WIDTH)
   const isWideDesktop = useMinWidthMediaQuery(WORKBENCH_DOCK_MIN_WIDTH)
-  const isDrawerDocked = drawerStack.length > 0 && isWideDesktop && splitTarget === null
-  const isDockedWide = isDrawerDocked && drawerStack[drawerStack.length - 1]?.kind === 'conversation'
+  const isDockablePrimaryTarget =
+    primaryTarget.kind === 'conversation' ||
+    primaryTarget.kind === 'agent' ||
+    primaryTarget.kind === 'overview'
+  const isDrawerDocked =
+    drawerStack.length > 0 && isWideDesktop && splitTarget === null && isDockablePrimaryTarget
   const isMobileDrawerOpen = isDrawerViewport && sidebarOpen
   const openMobileSidebar = useCallback(() => setSidebarOpen(true), [])
   const closeMobileSidebar = useCallback(() => setSidebarOpen(false), [])
@@ -567,7 +571,7 @@ function HelmxShellInner({
   return (
       <div
         ref={shellRef}
-        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${mobileQuickEntryVisible ? ' mq-quick-on' : ''}${isDrawerDocked ? ' drawer-docked' : ''}${isDockedWide ? ' drawer-docked-wide' : ''}`}
+        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${mobileQuickEntryVisible ? ' mq-quick-on' : ''}${isDrawerDocked ? ' drawer-docked' : ''}`}
         onClick={(event) => {
           const target = event.target as HTMLElement
           if (target.closest('.nav-item')) {

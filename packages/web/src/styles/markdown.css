@@ -449,6 +449,7 @@ pre {
 @media (min-width: 681px) {
   .modal-body.preview-modal-body {
     padding: 28px 40px;
+    min-height: min(320px, 50vh);
   }
 }
 

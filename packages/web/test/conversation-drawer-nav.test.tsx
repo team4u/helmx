@@ -549,14 +549,14 @@ describe('conversation-drawer-nav', () => {
     assert.deepEqual(pruned, [{ kind: 'workbench', tab: 'artifacts' }])
   })
 
-  test('宽屏 (>=1280px 且无 splitTarget) 以非模态停靠展示右侧抽屉栈，Mod+I 可直达主区输入框，切入 split 后退回模态遮罩', { timeout: 60_000 }, async () => {
+  test('宽屏 (>=1280px 且无 splitTarget) 流内停靠右侧抽屉栈，子会话 50/50 等分、Mod+I 直达主区、设置页/split 退回顶层模态遮罩', { timeout: 60_000 }, async () => {
     const originalMatchMedia = window.matchMedia
     const styleEl = document.createElement('style')
     const tokensCss = readFileSync(join(__dirname, '../src/styles/tokens.css'), 'utf8')
     const shellCss = readFileSync(join(__dirname, '../src/styles/shell.css'), 'utf8')
     // happy-dom evaluates var(--token) to px but cannot resolve clamp()/min() in computed width;
-    // overriding the :root tokens with px values tests real cross-Portal inheritance against .helmx-shell.
-    styleEl.textContent = `${tokensCss}\n${shellCss}\n:root { --helmx-drawer-narrow-width: 480px; --helmx-drawer-wide-width: 700px; }`
+    // overriding :root --helmx-drawer-narrow-width with a px value tests exact in-flow sizing.
+    styleEl.textContent = `${tokensCss}\n${shellCss}\n:root { --helmx-drawer-narrow-width: 480px; }`
     document.head.appendChild(styleEl)
     window.matchMedia = ((query: string) => ({
       matches: query === '(min-width: 1280px)',
@@ -580,14 +580,15 @@ describe('conversation-drawer-nav', () => {
       const mainStage = host!.querySelector<HTMLElement>('main.helmx-main-stage')!
       const dialog = document.querySelector<HTMLElement>('.drawer-stack-dialog.is-docked[data-drawer-docked="true"]')!
       assert.ok(dialog !== null)
-      assert.ok(dialog.parentElement === document.body, 'portaled docked dialog mounts directly under document.body outside .helmx-shell')
-      assert.ok(shell.contains(dialog) === false, 'portaled dialog lives outside .helmx-shell CSS custom property scope')
+      assert.ok(dialog.parentElement === shell, 'docked dialog mounts in-flow inside .helmx-shell as a sibling of main stage')
       const narrowComputed = window.getComputedStyle(dialog)
+      assert.equal(narrowComputed.position, 'relative')
       assert.equal(narrowComputed.width, '480px')
       assert.equal(narrowComputed.maxWidth, '480px')
-      assert.equal(window.getComputedStyle(mainStage).paddingRight, '480px')
+      const stageComputed = window.getComputedStyle(mainStage)
+      assert.equal(stageComputed.flexGrow, '1')
+      assert.equal(stageComputed.flexBasis, '0%')
       assert.ok(shell.classList.contains('drawer-docked'), 'wide desktop docks drawer beside main stage')
-      assert.ok(!shell.classList.contains('drawer-docked-wide'), 'workbench drawer uses narrow docked width')
       assert.ok(document.querySelector('.drawer-stack-backdrop') === null, 'docked drawer renders without modal backdrop')
       assert.equal(mainStage.hasAttribute('inert'), false, 'docked non-modal drawer keeps main stage interactive')
 
@@ -600,29 +601,39 @@ describe('conversation-drawer-nav', () => {
       })
       assert.ok(document.activeElement === primaryTextarea, 'Mod+I focuses primary composer when workbench is docked')
 
-      // Pushing a child conversation switches to wide docked width while remaining non-modal
+      // Pushing a child conversation switches to 50/50 equal split (flex: 1 1 0%, matching .helmx-main-stage)
       window.history.replaceState(null, '', '#/c/1?drawer=wb/artifacts&drawer=c/11')
       await act(async () => {
         window.dispatchEvent(new HashChangeEvent('hashchange'))
       })
-      await waitForCondition(() => shell.classList.contains('drawer-docked-wide'))
+      await waitForCondition(() => document.querySelector('.drawer-stack-dialog-wide.is-docked[data-drawer-docked="true"]') !== null)
       const wideDialog = document.querySelector<HTMLElement>('.drawer-stack-dialog-wide.is-docked[data-drawer-docked="true"]')!
-      assert.ok(wideDialog !== null)
+      assert.ok(wideDialog.parentElement === shell, 'docked child conversation stays in-flow inside .helmx-shell')
       const wideComputed = window.getComputedStyle(wideDialog)
-      assert.equal(wideComputed.width, '700px')
-      assert.equal(wideComputed.maxWidth, '700px')
-      assert.equal(window.getComputedStyle(mainStage).paddingRight, '700px')
+      assert.equal(wideComputed.flexGrow, '1')
+      assert.equal(wideComputed.flexBasis, '0%')
       assert.ok(document.querySelector('.drawer-stack-backdrop') === null)
 
-      // Opening split pane immediately degrades docked drawer back to modal overlay with backdrop
-      window.history.replaceState(null, '', '#/c/1?split=c/999&drawer=wb/artifacts')
+      // Navigating to a non-dockable settings center degrades drawer to a top-layer Portal modal under document.body
+      window.history.replaceState(null, '', '#/settings/profiles?drawer=c/11')
       await act(async () => {
         window.dispatchEvent(new HashChangeEvent('hashchange'))
       })
       await waitForCondition(() => document.querySelector('.drawer-stack-backdrop') !== null)
-      assert.ok(!shell.classList.contains('drawer-docked'), 'split view disables docked mode')
+      const settingsDialog = document.querySelector<HTMLElement>('.drawer-stack-dialog')!
+      assert.ok(!shell.classList.contains('drawer-docked'), 'settings center disables docked mode so DetailDrawer cannot cover drawer stack')
+      assert.ok(settingsDialog.parentElement === document.body, 'settings center drawer portals to document.body above backdrops')
       assert.ok(document.querySelector('[data-drawer-docked="true"]') === null)
-      assert.equal(window.getComputedStyle(mainStage).paddingRight, '0px')
+
+      // Opening split pane immediately degrades docked drawer back to Portal modal overlay with backdrop
+      window.history.replaceState(null, '', '#/c/1?split=c/999&drawer=wb/artifacts')
+      await act(async () => {
+        window.dispatchEvent(new HashChangeEvent('hashchange'))
+      })
+      await waitForCondition(() => document.querySelector('.drawer-stack-backdrop') !== null && !shell.classList.contains('drawer-docked'))
+      const splitModalDialog = document.querySelector<HTMLElement>('.drawer-stack-dialog')!
+      assert.ok(splitModalDialog.parentElement === document.body, 'split view portals drawer to document.body')
+      assert.ok(document.querySelector('[data-drawer-docked="true"]') === null)
     } finally {
       styleEl.remove()
       window.matchMedia = originalMatchMedia

@@ -543,19 +543,17 @@ test('样式边界：tokens.css 明暗主题覆盖对称（dark 主题不漏定�
   assert.deepEqual(extraInDark, [], `dark 主题多出未在 light 声明的变量：${extraInDark.join(', ')}`)
 })
 
-test('样式边界：Portal 挂载的停靠抽屉仅消费 :root 宽度 token，不得引用 .helmx-shell 私有 --helmx-drawer-width', { timeout: 60_000 }, () => {
+test('样式边界：流内停靠工作台固定窄列与子会话 50/50 等分 flex 契约（零跨 Portal 变量依赖）', { timeout: 60_000 }, () => {
   const tokensCss = stripCssComments(readFileSync(join(STYLES_DIR, 'tokens.css'), 'utf8'))
   const rootBlock = tokensCss.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
   assert.ok(rootBlock.includes('--helmx-drawer-narrow-width:'), 'tokens.css :root 必须定义 --helmx-drawer-narrow-width')
-  assert.ok(rootBlock.includes('--helmx-drawer-wide-width:'), 'tokens.css :root 必须定义 --helmx-drawer-wide-width')
 
   const shellCss = stripCssComments(readFileSync(join(STYLES_DIR, 'shell.css'), 'utf8'))
-  const dialogRules = [...shellCss.matchAll(/\.drawer-stack-dialog[^{]*\{([^}]*)\}/g)]
-  assert.ok(dialogRules.length > 0, 'shell.css 应声明 .drawer-stack-dialog 相关规则')
-  for (const match of dialogRules) {
-    assert.ok(
-      !match[1]!.includes('--helmx-drawer-width'),
-      `Portal 到 document.body 的抽屉规则不得引用 .helmx-shell 作用域变量 --helmx-drawer-width:\n${match[0]}`,
-    )
-  }
+  assert.ok(!shellCss.includes('--helmx-drawer-width'), 'shell.css 不再使用跨 Portal 的 --helmx-drawer-width')
+  const mainStageBlock = shellCss.match(/\.helmx-main-stage\s*\{([^}]*)\}/)?.[1] ?? ''
+  assert.ok(/flex:\s*1 1 0%;/.test(mainStageBlock), '.helmx-main-stage 必须声明 flex: 1 1 0% 以与子会话等分')
+  const dockedBlock = shellCss.match(/\.drawer-stack-dialog\.is-docked\s*\{([^}]*)\}/)?.[1] ?? ''
+  assert.ok(/position:\s*relative;/.test(dockedBlock), '.drawer-stack-dialog.is-docked 必须为流内 position: relative')
+  const wideDockedBlock = shellCss.match(/\.drawer-stack-dialog-wide\.is-docked\s*\{([^}]*)\}/)?.[1] ?? ''
+  assert.ok(/flex:\s*1 1 0%;/.test(wideDockedBlock), '.drawer-stack-dialog-wide.is-docked 必须声明 flex: 1 1 0% 实现 50/50 等分')
 })
