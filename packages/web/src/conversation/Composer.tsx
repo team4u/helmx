@@ -24,6 +24,12 @@ import { conversationSkillScope } from '../skills/skill-scope-model.js'
 import { AskDock } from './AskDock.js'
 import { ComposerCommandBanner } from './ComposerCommandBanner.js'
 import { ComposerInputShell, type ComposerAttachmentItem } from './ComposerInputShell.js'
+import {
+  buildComposerCompletionGroup,
+  buildComposerDndGroup,
+  buildComposerDraftGroup,
+  buildComposerPlusMenuGroup,
+} from './composer-shell-props.js'
 import { ComposerSendControls } from './ComposerSendControls.js'
 import { ModelPicker } from './ModelPicker.js'
 import { SessionEnvBar } from './SessionEnvBar.js'
@@ -315,32 +321,19 @@ export const Composer = memo(function Composer({
             drawerConversationId: isDrawer ? conversation.id : undefined,
             active: staged,
           }}
-          draft={{
+          draft={buildComposerDraftGroup({
             textareaRef,
             ariaLabel: t('conv.composer.inputAria'),
             value: text,
             placeholder: getComposerPlaceholder(working, isMobile, t),
-            onTextChange: (nextValue, caret) => {
-              setDraftState(nextValue)
-              completions.detectPopover(nextValue, caret)
-            },
-            onKeyUp: completions.handleTextareaKeyUp,
-            onClick: completions.handleTextareaClick,
+            onDraftTextChange: setDraftState,
             onKeyDown,
-            onPaste: fileHandlers.onPaste,
-          }}
-          dnd={{
-            dragging: fileHandlers.dragging,
-            onDragEnter: fileHandlers.onDragEnter,
-            onDragOver: fileHandlers.onDragOver,
-            onDragLeave: fileHandlers.onDragLeave,
-            onDrop: fileHandlers.onDrop,
-          }}
-          plusMenu={{
-            fileInputRef: fileHandlers.fileInputRef,
+            completions,
+            fileHandlers,
+          })}
+          dnd={buildComposerDndGroup(fileHandlers)}
+          plusMenu={buildComposerPlusMenuGroup(fileHandlers, {
             uploadButtonLabel: t('composer.plusMenu.upload'),
-            onOpenFilePicker: fileHandlers.openFilePicker,
-            onFileInputChange: fileHandlers.onFileInputChange,
             renderSlot: (closeMenu) => (
               <PluginSlot
                 ownerPluginId="builtin:composer"
@@ -353,19 +346,8 @@ export const Composer = memo(function Composer({
             commands: plusMenuCommands,
             commandsDisabled: runningCommand !== null,
             onRunCommand: runPluginCommandDirect,
-          }}
-          completions={{
-            slashOpen: completions.slashOpen,
-            popoverQuery: completions.popoverQuery,
-            slashMenuItems: completions.slashMenuItems,
-            onPickSlash: completions.applySlashPick,
-            onCloseSlash: completions.closeSlashPopover,
-            completionOpen: completions.completionOpen,
-            completionTrigger: completions.completionTrigger,
-            completionSnapshot: completions.completionSnapshot,
-            onPickCompletion: completions.applyCompletionPick,
-            onCloseCompletion: completions.closeCompletionPopover,
-          }}
+          })}
+          completions={buildComposerCompletionGroup(completions)}
           slots={{
             aboveBox: (
               <>

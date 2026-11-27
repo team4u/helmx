@@ -5,7 +5,7 @@
  * - workspace built-in shared cache directory discovery (`resolveProviderCacheDir`).
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, type Stats } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -236,16 +236,18 @@ function readTextIfPresent(filePath: string): string | undefined {
   }
 }
 
-export function readCachedResult(
-  stagingDir: string,
-  depsListPath: string,
-  rootReal: string,
+/**
+ * Header/shape validation of a `deps.json` against the current request; any mismatch is an ordinary
+ * stale-cache condition (rebuild), never an error: version bumps, moved roots, a changed npm
+ * specifier set and malformed optional fields all simply miss.
+ */
+function isDepsListStale(
+  list: DepsListFile,
   moduleRef: string,
+  rootReal: string,
   npmRoots: ReadonlyArray<PluginClientNpmRoot>,
-): CachedDiskHit | undefined {
-  const list = readDepsListOrMiss(depsListPath);
-  if (list === undefined) return undefined;
-  if (
+): boolean {
+  return (
     list.version !== DEPS_LIST_VERSION ||
     list.module !== moduleRef ||
     list.root !== rootReal ||
@@ -257,87 +259,145 @@ export function readCachedResult(
     (list.exports !== undefined && !isValidStringArray(list.exports)) ||
     (list.chunks !== undefined && (!Array.isArray(list.chunks) || !list.chunks.every(isSafeChunkName))) ||
     JSON.stringify(list.npmSpecifiers ?? []) !== JSON.stringify(npmSpecifiersKey(npmRoots))
-  ) {
-    return undefined;
+  );
+}
+
+function statIfPresent(path: string): Stats | undefined {
+  try {
+    return statSync(path);
+  } catch (err) {
+    if (isAbsentFsError(err)) return undefined;
+    throw err;
   }
+}
+
+/**
+ * Local dependency check: every recorded file must still resolve inside `rootReal` (no symlink escape)
+ * and hash to its recorded content sha256.
+ */
+function localDependenciesMatch(list: DepsListFile, rootReal: string): boolean {
   for (const dep of list.dependencies) {
-    if (!isJsonObject(dep) || typeof dep.path !== 'string' || dep.path.length === 0 || isAbsolute(dep.path) || typeof dep.sha256 !== 'string' || dep.sha256.length === 0) {
-      return undefined;
+    if (
+      !isJsonObject(dep) ||
+      typeof dep.path !== 'string' ||
+      dep.path.length === 0 ||
+      isAbsolute(dep.path) ||
+      typeof dep.sha256 !== 'string' ||
+      dep.sha256.length === 0
+    ) {
+      return false;
     }
     const abs = resolve(rootReal, dep.path);
-    if (!isInside(rootReal, abs)) return undefined;
+    if (!isInside(rootReal, abs)) return false;
     const real = realpathOrNull(abs);
-    if (real === null || !isInside(rootReal, real)) return undefined;
+    if (real === null || !isInside(rootReal, real)) return false;
     const source = readTextIfPresent(abs);
-    if (source === undefined || sha256(source) !== dep.sha256) return undefined;
+    if (source === undefined || sha256(source) !== dep.sha256) return false;
   }
+  return true;
+}
+
+/** mtime/size fast path: valid only with a fully recorded fingerprint on a file older than the 2s filesystem race window. */
+function hasStableStatFingerprint(dep: { mtimeMs?: number; size?: number }, st: Stats, now: number): boolean {
+  return (
+    typeof dep.mtimeMs === 'number' &&
+    typeof dep.size === 'number' &&
+    st.mtimeMs === dep.mtimeMs &&
+    st.size === dep.size &&
+    now - st.mtimeMs > 2_000
+  );
+}
+
+/**
+ * npm dependency check: an unchanged mtime/size fingerprint outside the race window skips the content
+ * hash; otherwise (fingerprint absent, changed, or too fresh) the content sha256 must still match.
+ */
+function npmDependenciesMatch(list: DepsListFile): boolean {
   const now = Date.now();
   for (const dep of list.npmDependencies ?? []) {
     if (!isJsonObject(dep) || typeof dep.path !== 'string' || !isAbsolute(dep.path) || typeof dep.sha256 !== 'string' || dep.sha256.length === 0) {
-      return undefined;
+      return false;
     }
-    let st;
-    try {
-      st = statSync(dep.path);
-    } catch (err) {
-      if (isAbsentFsError(err)) return undefined;
-      throw err;
-    }
-    if (
-      typeof dep.mtimeMs === 'number' &&
-      typeof dep.size === 'number' &&
-      st.mtimeMs === dep.mtimeMs &&
-      st.size === dep.size &&
-      now - st.mtimeMs > 2_000
-    ) {
-      continue;
-    }
+    const st = statIfPresent(dep.path);
+    if (st === undefined) return false;
+    if (hasStableStatFingerprint(dep, st, now)) continue;
     const source = readTextIfPresent(dep.path);
-    if (source === undefined || sha256(source) !== dep.sha256) return undefined;
+    if (source === undefined || sha256(source) !== dep.sha256) return false;
   }
+  return true;
+}
+
+/** Every declared async chunk file must exist: a missing chunk is a stale cache, not a late runtime 404. */
+function allChunksPresent(
+  stagingReal: string,
+  stagingDir: string,
+  baseName: string,
+  contentHash: string,
+  chunkNames: ReadonlyArray<string>,
+): boolean {
+  for (const chunkName of chunkNames) {
+    const chunkPath = join(stagingDir, `${baseName}.${contentHash}.chunk.${chunkName}`);
+    if (!isInside(stagingReal, resolve(chunkPath)) || statIfPresent(chunkPath) === undefined) return false;
+  }
+  return true;
+}
+
+/**
+ * Lazy per-chunk reader: a main-module cache hit must not pre-read every async chunk, so the first
+ * property access loads it; a chunk missing at that late point is a hard error rather than a cache miss.
+ */
+function lazyCachedChunk(
+  stagingDir: string,
+  baseName: string,
+  contentHash: string,
+  moduleRef: string,
+  chunkName: string,
+): () => { code: string; gzipped?: Uint8Array } {
+  let cached: { code: string; gzipped?: Uint8Array } | undefined;
+  return () => {
+    if (cached !== undefined) return cached;
+    const loaded = readCachedChunk(stagingDir, baseName, contentHash, chunkName);
+    if (loaded === undefined) {
+      throw new HelmxError(
+        'client_chunk_not_found',
+        `Cached client chunk ${chunkName} (${contentHash}) is missing for ${moduleRef}`,
+        404,
+        { module: moduleRef, contentHash, chunkName },
+      );
+    }
+    cached = loaded;
+    return cached;
+  };
+}
+
+export function readCachedResult(
+  stagingDir: string,
+  depsListPath: string,
+  rootReal: string,
+  moduleRef: string,
+  npmRoots: ReadonlyArray<PluginClientNpmRoot>,
+): CachedDiskHit | undefined {
+  const list = readDepsListOrMiss(depsListPath);
+  if (list === undefined) return undefined;
+  if (isDepsListStale(list, moduleRef, rootReal, npmRoots)) return undefined;
+  if (!localDependenciesMatch(list, rootReal)) return undefined;
+  if (!npmDependenciesMatch(list)) return undefined;
   const stagingReal = resolve(stagingDir);
   const baseName = safeFileName(moduleRef);
   const codePath = join(stagingDir, `${baseName}.${list.contentHash}.mjs`);
   if (!isInside(stagingReal, resolve(codePath))) return undefined;
-  if (list.chunks && list.chunks.length > 0) {
-    for (const chunkName of list.chunks) {
-      const chunkPath = join(stagingDir, `${baseName}.${list.contentHash}.chunk.${chunkName}`);
-      if (!isInside(stagingReal, resolve(chunkPath))) return undefined;
-      try {
-        statSync(chunkPath);
-      } catch (err) {
-        if (isAbsentFsError(err)) return undefined;
-        throw err;
-      }
-    }
-  }
+  const chunkNames = list.chunks ?? [];
+  if (!allChunksPresent(stagingReal, stagingDir, baseName, list.contentHash, chunkNames)) return undefined;
   const code = readTextIfPresent(codePath);
   if (code === undefined) return undefined;
   const gzipped = readOptionalGzip(join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`));
+  // Lazy getters avoid pre-reading all async chunks on a main-module cache hit.
   const chunks: Record<string, { code: string; gzipped?: Uint8Array }> = {};
-  if (list.chunks && list.chunks.length > 0) {
-    // Lazy getters avoid pre-reading all async chunks on a main-module cache hit.
-    for (const chunkName of list.chunks) {
-      let cached: { code: string; gzipped?: Uint8Array } | null = null;
-      Object.defineProperty(chunks, chunkName, {
-        enumerable: true,
-        get: () => {
-          if (cached === null) {
-            const loaded = readCachedChunk(stagingDir, baseName, list.contentHash, chunkName);
-            if (loaded === undefined) {
-              throw new HelmxError(
-                'client_chunk_not_found',
-                `Cached client chunk ${chunkName} (${list.contentHash}) is missing for ${moduleRef}`,
-                404,
-                { module: moduleRef, contentHash: list.contentHash, chunkName },
-              );
-            }
-            cached = loaded;
-          }
-          return cached;
-        },
-      });
-    }
+  for (const chunkName of chunkNames) {
+    Object.defineProperty(chunks, chunkName, {
+      enumerable: true,
+      get: lazyCachedChunk(stagingDir, baseName, list.contentHash, moduleRef, chunkName),
+    });
   }
   return {
     result: { code, contentHash: list.contentHash, gzipped, exports: list.exports ?? [], chunks },

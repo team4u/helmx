@@ -22,6 +22,12 @@ import type { QualifiedCommand } from '../../lib/commands-model.js'
 import { isImeComposing } from '../../lib/ime.js'
 import { ComposerCommandBanner } from '../ComposerCommandBanner.js'
 import { ComposerInputShell, type ComposerAttachmentItem } from '../ComposerInputShell.js'
+import {
+  buildComposerCompletionGroup,
+  buildComposerDndGroup,
+  buildComposerDraftGroup,
+  buildComposerPlusMenuGroup,
+} from '../composer-shell-props.js'
 import { useIsMobile } from '../composer-model.js'
 import { StandbyModelPicker } from '../StandbyControls.js'
 import { resolveStandbyEffectiveModel, setStandbyDraftInputMeta, updateStandbyDraft, getStandbyDraft, type StandbyDraftState } from '../standby-model.js'
@@ -135,35 +141,22 @@ export function StandbyComposer({
     <ComposerInputShell
       attachments={attachmentItems}
       shortcuts={{ panel: isSplit ? 'split' : 'primary' }}
-      draft={{
+      draft={buildComposerDraftGroup({
         textareaRef,
         ariaLabel: t('composer.standby.firstMessageAria', { name: profile.name || profile.id }),
         value: draft.text,
         readOnly: busy,
         placeholder: isMobile ? t('composer.standby.placeholderMobile') : t('composer.standby.placeholder'),
-        onTextChange: (nextValue, caret) => {
-          updateStandbyDraft(draftKey, { text: nextValue })
-          completions.detectPopover(nextValue, caret)
-        },
-        onKeyUp: completions.handleTextareaKeyUp,
-        onClick: completions.handleTextareaClick,
+        onDraftTextChange: setDraftState,
         onKeyDown,
-        onPaste: fileHandlers.onPaste,
-      }}
-      dnd={{
-        dragging: fileHandlers.dragging,
-        onDragEnter: fileHandlers.onDragEnter,
-        onDragOver: fileHandlers.onDragOver,
-        onDragLeave: fileHandlers.onDragLeave,
-        onDrop: fileHandlers.onDrop,
-      }}
-      plusMenu={{
-        fileInputRef: fileHandlers.fileInputRef,
+        completions,
+        fileHandlers,
+      })}
+      dnd={buildComposerDndGroup(fileHandlers)}
+      plusMenu={buildComposerPlusMenuGroup(fileHandlers, {
         uploadButtonLabel: t('composer.standby.chooseAttachments'),
         uploadDisabled: busy,
         disabled: busy,
-        onOpenFilePicker: fileHandlers.openFilePicker,
-        onFileInputChange: fileHandlers.onFileInputChange,
         renderSlot: (closeMenu) => (
           <PluginSlot
             ownerPluginId="builtin:composer"
@@ -178,19 +171,8 @@ export function StandbyComposer({
             } satisfies ComposerMenuSlotProps}
           />
         ),
-      }}
-      completions={{
-        slashOpen: completions.slashOpen,
-        popoverQuery: completions.popoverQuery,
-        slashMenuItems: completions.slashMenuItems,
-        onPickSlash: completions.applySlashPick,
-        onCloseSlash: completions.closeSlashPopover,
-        completionOpen: completions.completionOpen,
-        completionTrigger: completions.completionTrigger,
-        completionSnapshot: completions.completionSnapshot,
-        onPickCompletion: completions.applyCompletionPick,
-        onCloseCompletion: completions.closeCompletionPopover,
-      }}
+      })}
+      completions={buildComposerCompletionGroup(completions)}
       slots={{
         aboveBox: (
           <StandbyComposerAboveBox
